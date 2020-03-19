@@ -1,0 +1,29 @@
+// ***************************************************************
+// Copyright (c) 2020 Jittor. Authors: 
+//     Guoye Yang <498731903@qq.com>
+//     Dun Liang <randonlang@gmail.com>. 
+// All Rights Reserved.
+// This file is subject to the terms and conditions defined in
+// file 'LICENSE.txt', which is part of this source code package.
+// ***************************************************************
+#include "cublas_warper.h"
+
+namespace jittor {
+
+cublasHandle_t cublas_handle;
+
+struct cublas_initer {
+
+inline cublas_initer() {
+    checkCudaErrors(cublasCreate(&cublas_handle));
+    LOGv << "cublasCreate finished";
+}
+
+inline ~cublas_initer() {
+    checkCudaErrors(cublasDestroy(cublas_handle));
+    LOGv << "cublasDestroy finished";
+}
+
+} init;
+
+} // jittor

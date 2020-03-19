@@ -1,0 +1,84 @@
+// ***************************************************************
+// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// This file is subject to the terms and conditions defined in
+// file 'LICENSE.txt', which is part of this source code package.
+// ***************************************************************
+#pragma once
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include "common.h"
+
+namespace jittor {
+
+struct EventQueue {
+    typedef void(*Func)();
+    struct Worker {
+        Func todo;
+        std::condition_variable cv;
+        std::mutex mtx;
+        std::thread thread = std::thread(Worker::start);
+
+        static void start();
+
+        inline void run(Func func) {
+            {
+                std::lock_guard<std::mutex> l(mtx);
+                todo = func;
+            }
+            cv.notify_one();
+        }
+
+        inline ~Worker() {
+            run(nullptr);
+            thread.join();
+        }
+    } worker;
+
+    list<Func> tasks;
+    std::condition_variable cv;
+    std::mutex mtx;
+    Func func;
+    volatile bool run_sync_done;
+
+    inline void flush() {
+        list<Func> ts;
+        {
+            std::lock_guard<std::mutex> g(mtx);
+            ts = move(tasks);
+        }
+        for (auto func : ts)
+            func();
+    }
+
+    static void worker_caller();
+
+    void run_sync(Func func) {
+        std::unique_lock<std::mutex> l(mtx);
+        this->func = func;
+        run_sync_done = false;
+        worker.run(worker_caller);
+        while (1) {
+            cv.wait(l);
+            list<Func> ts = move(tasks);
+            l.unlock();
+            for (auto func : ts)
+                func();
+            l.lock();
+            if (run_sync_done)
+                return;
+        }
+    }
+
+    inline void push(Func func) {
+        {
+            std::lock_guard<std::mutex> g(mtx);
+            tasks.push_back(func);
+        }
+        cv.notify_one();
+    }
+};
+
+extern EventQueue event_queue;
+
+} // jittor
