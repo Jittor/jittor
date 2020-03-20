@@ -120,7 +120,7 @@ class Resize:
         assert isinstance(size, tuple)
         self.size = size
     def __call__(self, img:Image.Image):
-        return img.resize(self.size)
+        return img.resize(self.size, Image.BILINEAR)
 
 class Gray:
     def __call__(self, img:Image.Image):
