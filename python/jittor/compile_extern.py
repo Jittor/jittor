@@ -162,6 +162,7 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
     LOG.vv(f"Get {lib_name}_ops: "+str(dir(culib_ops)))
 
 def install_cutt(root_folder):
+    # Modified from: https://github.com/ap-hynninen/cutt
     url = "https://cloud.tsinghua.edu.cn/f/4be7e1dd51c6459aa119/?dl=1"
     filename = "cutt.tgz"
     fullname = os.path.join(root_folder, filename)
@@ -176,7 +177,7 @@ def install_cutt(root_folder):
         os.system('rm ' + fullname)
         os.system('rm -rf ' + dirname)
     if not os.path.isfile(os.path.join(dirname, "bin", "cutt_test")):
-        LOG.i("Downloading cub...")
+        LOG.i("Downloading cutt...")
         download_url_to_local(url, filename, root_folder, true_md5)
 
         import tarfile
