@@ -250,3 +250,7 @@ with open(report[1][1], 'r') as f:
 Even faster than the previous implementation! From the output we can look at the function definition of func0. This is the main code of our convolution kernel, which is generated Just-in-time. Because the compiler knows the shapes of the kernel and more optimizations are used. 
 
 比之前的实现还要更快！ 从输出中我们可以看一看`func0`的函数定义，这是我们卷积内核的主要代码，该内核代码是即时生成的。因为编译器知道内核的形状，所以使用了更多的优化方法。
+
+在这个教程中，Jittor简单演示了元算子的使用，并不是正真的性能测试，所以使用了比较小的数据规模进行测试，如果需要性能测试，请打开`jt.flags.enable_tuner = 1`，会启动使用专门的硬件库加速。
+
+In this tutorial, Jittor simply demonstrated the use of meta-operators, which is not a performance test. If you need a performance test, `jt.flags.enable_tuner = 1` will try to use the dedicated hardware library.
