@@ -6,7 +6,7 @@
 Jittor is a high-performance deep learning framework based on JIT compiling and meta-operators. The whole framework and meta-operators are compiled just-in-time. A powerful op compiler and tuner are integrated into Jittor. It allowed us to generate high-performance code with specialized for your model.
 
 
-The front-end language is Python. Module Design is used in the front-end, like PyTorch and Keras. The back-end is implemented with high performance languages, such as CUDA,C++.
+The front-end language is Python. Module Design is used in the front-end, like PyTorch and Keras. The back-end is implemented py high performance language, such as CUDA,C++.
 
 
 The following example shows how to model a two-layer neural network step by step and train from scratch In a few lines of Python code.
@@ -88,13 +88,13 @@ Jittor offers three ways to install: pip, script or manual.
 
 
 ```bash
-sudo apt install python-dev libomp-dev
-sudo pip install git+https://github.com/Jittor/jittor.git
+sudo apt install python3.7-dev libomp-dev
+sudo python3.7 -m pip install git+https://github.com/Jittor/jittor.git
 # if you cannot access github, please download code from our website:
 #     wget https://cg.cs.tsinghua.edu.cn/jittor/assets/build/jittor.tgz
 #     mkdir -p jittor && tar -xvf ./jittor.tgz -C jittor
 #     sudo pip install ./jittor
-python3 -m jittor.test.test_example
+python3.7 -m jittor.test.test_example
 ```
 
 
@@ -235,7 +235,7 @@ print(c.name())
 # Output: c
 ```
 
-### Operations
+###Operations
 
 
 Jittor'op is simular with numpy. Let's try some operations. We create Var `a` and `b` via operation `jt.float32`, and add them. Printing those variables shows they have the same shape and dtype.
