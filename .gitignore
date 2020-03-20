@@ -17,3 +17,5 @@ data/
 build/
 *.md
 !*.src.md
+!README.md
+!README.cn.md
