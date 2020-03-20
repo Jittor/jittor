@@ -166,7 +166,7 @@ def install_cutt(root_folder):
     filename = "cutt.tgz"
     fullname = os.path.join(root_folder, filename)
     dirname = os.path.join(root_folder, filename.replace(".tgz",""))
-    true_md5 = "c79ad93b76544d598eb250ec749c492c"
+    true_md5 = "28a67bb3a713e29ce434303df6577507"
 
     if os.path.exists(fullname):
         md5 = os.popen('md5sum ' + fullname).read().split()[0]
@@ -178,6 +178,7 @@ def install_cutt(root_folder):
     if not os.path.isfile(os.path.join(dirname, "bin", "cutt_test")):
         LOG.i("Downloading cub...")
         download_url_to_local(url, filename, root_folder, true_md5)
+
         import tarfile
     
         with tarfile.open(fullname, "r") as tar:

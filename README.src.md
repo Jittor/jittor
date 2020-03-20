@@ -104,8 +104,9 @@ Jittor使用Python和C++编写。 它需要用于即时编译的编译器。当�
 
 Jittor的环境要求如下:
 
-* 操作系统: Ubuntu>=16.04
-* Python >= 3.7
+* 操作系统: Ubuntu >= 16.04
+* Python版本 >= 3.7
+* C++编译器（g++ or clang）
 
 Jittor offers three ways to install: pip, script or manual.
 
@@ -115,7 +116,7 @@ Jittor 一共提供三种方式安装: pip安装, 一键脚本安装 和 手动�
 
 ## Pip install
 
-如果您已经装好编译器和对应版本的Python,我们强烈推荐您使用这种方法
+如果您没有准备好环境，欢迎使用我们提供的一键安装脚本， 如果您已经装好编译器和对应版本的Python,我们强烈推荐您使用这种方法
 (如果无法访问github, 可以通过jittor主页下载):
 
 ```bash
@@ -134,7 +135,7 @@ jittor会自动在路径中寻找合适的编译器, 如果您希望手动指定
 ## 一键脚本安装
 ## single line script install
 
-一键脚本安装会帮您安装好所需的编译器.
+一键脚本安装会帮您安装好所需的编译器以及对应的Python版本.
 
 We provide single line command for quick installation the latest version of Jittor(Ubuntu>=16.04):
 
@@ -142,13 +143,13 @@ We provide single line command for quick installation the latest version of Jitt
 
 ```bash
 # install with clang and cuda
-git clone https://github.com/Jittor/jittor.git && with_clang=1 with_cuda=1 bash ./jittor/script/install.sh
+wget https://cg.cs.tsinghua.edu.cn/jittor/assets/build/jittor.tgz && mkdir -p jittor && tar -xvf ./jittor.tgz -C jittor && with_clang=1 with_cuda=1 bash ./jittor/script/install.sh
 # install with clang
-git clone https://github.com/Jittor/jittor.git && with_clang=1 bash ./jittor/script/install.sh
+wget https://cg.cs.tsinghua.edu.cn/jittor/assets/build/jittor.tgz && mkdir -p jittor && tar -xvf ./jittor.tgz -C jittor && with_clang=1 bash ./jittor/script/install.sh
 # install with g++ and cuda
-git clone https://github.com/Jittor/jittor.git && with_gcc=1 with_cuda=1 bash ./jittor/script/install.sh
+wget https://cg.cs.tsinghua.edu.cn/jittor/assets/build/jittor.tgz && mkdir -p jittor && tar -xvf ./jittor.tgz -C jittor && with_gcc=1 with_cuda=1 bash ./jittor/script/install.sh
 # install with g++
-git clone https://github.com/Jittor/jittor.git && with_gcc=1 bash ./jittor/script/install.sh
+wget https://cg.cs.tsinghua.edu.cn/jittor/assets/build/jittor.tgz && mkdir -p jittor && tar -xvf ./jittor.tgz -C jittor && with_gcc=1 bash ./jittor/script/install.sh
 ```
 After execution, the script will show some environment variables you need to export.
 

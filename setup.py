@@ -28,5 +28,7 @@ setuptools.setup(
         "pybind11",
         "numpy",
         "tqdm",
+        "pillow",
+        "astunparse",
     ],
  )

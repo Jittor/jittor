@@ -5,7 +5,6 @@
 # ***************************************************************
 import unittest
 import jittor as jt
-from jittor.utils import pytorch_converter
 import math
 import numpy as np
 
@@ -13,6 +12,7 @@ try:
     jt.dirty_fix_pytorch_runtime_error()
     import torch
     from torch import nn
+    from jittor.utils import pytorch_converter
 except:
     torch = None
 

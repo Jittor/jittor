@@ -50,8 +50,10 @@ wget -O - https://bootstrap.pypa.io/get-pip.py | sudo -H python$py_version
 
 # Step 3: Run jittor
 
-sudo apt install git -y
-git clone https://github.com/Jittor/jittor.git
+if [ ! -d jittor ]; then
+wget https://cg.cs.tsinghua.edu.cn/jittor/assets/build/jittor.tgz
+mkdir -p jittor && tar -xvf ./jittor.tgz -C jittor
+fi
 
 sudo python$py_version -m pip install ./jittor
 

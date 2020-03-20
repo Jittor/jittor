@@ -46,7 +46,7 @@ run_cmd(f"git rev-parse HEAD > {polish_path}/python/jittor/version", jittor_path
 files = jt.compiler.files
 file_to_delete = [ name for name in files
     if name.startswith("src") and \
-        len(name.split("/"))==2
+        len(name.split("/"))==2 and name.endswith("node.cc")
 ]
 LOG.i("file_to_delete", file_to_delete)
 run_cmd(f"rm {' '.join(file_to_delete)}", polish_path)
@@ -97,6 +97,7 @@ assert os.system(f"cd {polish_path} && tar -cvzf build/jittor.tgz . --exclude bu
 jittor_web_base_dir = "Documents/jittor-blog/assets/"
 jittor_web_build_dir = jittor_web_base_dir + "build/"
 assert os.system(f"rsync -avPu {polish_path}/build/ jittor-web:{jittor_web_build_dir}")==0
+assert os.system(f"ssh jittor@166.111.68.30 Documents/jittor-blog.git/hooks/post-update")==0
 
 # push to github
 assert os.system(f"cd {polish_path} && git push -f origin master")==0
