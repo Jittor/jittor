@@ -204,7 +204,7 @@ for i0 in range(shape[0]):
                 for i4 in range(shape[4]):
                     for i5 in range(shape[5]):
                         for i6 in range(shape[6]):
-                            y[i0,i1,i2,i6] += yy[i0,i1,i2,i3,i4,i5,i6]
+                            y[i0,i1,i2,i6] += x[i0,i1+i3,i2+i4,i5] * w[i3,i4,i5,i6]
 ```
 
 **After loop fusion:**
