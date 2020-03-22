@@ -235,7 +235,7 @@ print(c.name())
 # Output: c
 ```
 
-### Operations
+###Operations
 
 
 Jittor'op is simular with numpy. Let's try some operations. We create Var `a` and `b` via operation `jt.float32`, and add them. Printing those variables shows they have the same shape and dtype.
@@ -289,11 +289,11 @@ If you want to know more about Jittor, please check out the notebooks below:
 
 
 
-[1]: notebook/example.src.md	"example"
-[2]: notebook/basics.src.md	"basics"
-[3]: notebook/meta_op.src.md	"meta_op"
-[4]: notebook/custom_op.src.md	"custom_op"
-[5]: notebook/profiler.src.md	"profiler"
+[1]: notebook/example.md	"example"
+[2]: notebook/basics.md	"basics"
+[3]: notebook/meta_op.md	"meta_op"
+[4]: notebook/custom_op.md	"custom_op"
+[5]: notebook/profiler.md	"profiler"
 
 Those notebooks can be started in your own computer by `python3.7 -m jittor.notebook`
 

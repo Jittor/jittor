@@ -298,11 +298,11 @@ help(jt.ops)
 
 
 
-[1]: notebooks/example.md	"示例"
-[2]: notebooks/basics.md	"基本概念"
-[3]: notebooks/meta_op.md	"元算子"
-[4]: notebooks/custom_op.md	"自定义算子"
-[5]: notebooks/profiler.md	"性能分析器"
+[1]: notebook/example.md	"示例"
+[2]: notebook/basics.md	"基本概念"
+[3]: notebook/meta_op.md	"元算子"
+[4]: notebook/custom_op.md	"自定义算子"
+[5]: notebook/profiler.md	"性能分析器"
 
 
 这些notebooks可以通过python3.7 -m jittor.notebook在您自己的计算机中运行。
