@@ -159,7 +159,7 @@ y = yy.sum([3,4,5]) # Kh, Kw, Kc
 
 ```
 py
-shape = [N,H+Kh-1,W+Kw-1,Kh,Kw,C,Kc]
+shape = [N,H-Kh+1,W-Kw+1,Kh,Kw,C,Kc]
 # expansion of x.reindex
 xx = np.zeros(shape, x.dtype)
 for i0 in range(shape[0]):
@@ -204,7 +204,7 @@ for i0 in range(shape[0]):
                 for i4 in range(shape[4]):
                     for i5 in range(shape[5]):
                         for i6 in range(shape[6]):
-                            y[i0,i1,i2,i6] += x[i0,i1+i3,i2+i4,i5] * w[i3,i4,i5,i6]
+                            y[i0,i1,i2,i6] += yy[i0,i1,i2,i3,i4,i5,i6]
 ```
 
 **After loop fusion:**
@@ -223,7 +223,7 @@ for i0 in range(shape[0]):
                     for i5 in range(shape[5]):
                         for i6 in range(shape[6]):
                             if not is_overflow(i0,i1,i2,i3,i4,i5,i6):
-                                y[i0,i1,i2,i6] += x[i0,i1+i3,i2+i4,i5]
+                                y[i0,i1,i2,i6] += x[i0,i1+i3,i2+i4,i5] * w[i3,i4,i5,i6]
 ```
 
 This is the trick of meta-operator, It can fused multiple operator into a complicated operation, including many variation of convolution (e.g. group conv, seperate conv,...).
