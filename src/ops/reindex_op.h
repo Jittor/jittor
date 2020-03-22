@@ -78,10 +78,10 @@ struct ReindexOp : Op {
         N,H,W,C = x.shape
         Kh, Kw, _C, Kc = w.shape
         assert C==_C
-        xx = x.reindex([N,H+Kh-1,W+Kw-1,Kh,Kw,C,Kc], [
+        xx = x.reindex([N,H-Kh+1,W-Kw+1,Kh,Kw,C,Kc], [
             'i0', # Nid
-            'i1-i3', # Hid+Khid
-            'i2-i4', # Wid+KWid
+            'i1+i3', # Hid+Khid
+            'i2+i4', # Wid+KWid
             'i5', # Cid
         ])
         ww = w.broadcast_var(xx)
