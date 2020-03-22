@@ -170,9 +170,9 @@ for i0 in range(shape[0]):
                     for i5 in range(shape[5]):
                         for i6 in range(shape[6]):
                             if is_overflow(i0,i1,i2,i3,i4,i5,i6):
-                                y[i0,i1,...,in] = 0
+                                xx[i0,i1,...,in] = 0
                             else:
-                                y[i0,i1,i2,i3,i4,i5,i6] = x[i0,i1+i3,i2+i4,i5]
+                                xx[i0,i1,i2,i3,i4,i5,i6] = x[i0,i1+i3,i2+i4,i5]
 
 # expansion of w.broadcast_var(xx)
 ww = np.zeros(shape, x.dtype)
