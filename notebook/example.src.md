@@ -59,7 +59,7 @@ optim = nn.SGD (model.parameters(), learning_rate)
 
 for i,(x,y) in enumerate(get_data(n)):
     pred_y = model(x)
-    loss = ((pred_y - y)**2)
+    loss = jt.sqr(pred_y - y)
     loss_mean = loss.mean()
     optim.step (loss_mean)
     print(f"step {i}, loss = {loss_mean.data.sum()}")
