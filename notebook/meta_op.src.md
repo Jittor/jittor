@@ -102,7 +102,7 @@ def conv(x, w):
     ])
     ww = w.broadcast_var(xx)
     yy = xx*ww
-    y = yy.sum([3,4,5]) # Kh, Kw, Kc
+    y = yy.sum([3,4,5]) # Kh, Kw, c
     return y
 
 # Let's disable tuner. This will cause jittor not to use mkl for convolution
@@ -150,7 +150,7 @@ xx = x.reindex([N,H-Kh+1,W-Kw+1,Kh,Kw,C,Kc], [
 ])
 ww = w.broadcast_var(xx)
 yy = xx*ww
-y = yy.sum([3,4,5]) # Kh, Kw, Kc
+y = yy.sum([3,4,5]) # Kh, Kw, C
 ```
 
 **After expansion:**
