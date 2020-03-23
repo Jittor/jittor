@@ -108,6 +108,12 @@ Jittor的环境要求如下:
 * Python版本 >= 3.7
 * C++编译器（g++ or clang）
 
+Jittor environment requirements:
+
+* System: Ubuntu >= 16.04
+* Python version >= 3.7
+* C++ compiler(g++ or clang)
+
 Jittor offers three ways to install: pip, script or manual.
 
 Jittor 一共提供三种方式安装: pip安装, 一键脚本安装 和 手动安装.

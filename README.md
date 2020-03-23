@@ -80,6 +80,12 @@ Jittor is written in Python and C++. It requires a compiler for JIT compilation,
 
 
 
+Jittor environment requirements:
+
+* System: Ubuntu >= 16.04
+* Python version >= 3.7
+* C++ compiler(g++ or clang)
+
 Jittor offers three ways to install: pip, script or manual.
 
 
