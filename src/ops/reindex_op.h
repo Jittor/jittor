@@ -86,7 +86,7 @@ struct ReindexOp : Op {
         ])
         ww = w.broadcast_var(xx)
         yy = xx*ww
-        y = yy.sum([3,4,5]) # Kh, Kw, Kc
+        y = yy.sum([3,4,5]) # Kh, Kw, C
         return y, yy
     ```
      */
