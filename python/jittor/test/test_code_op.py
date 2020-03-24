@@ -45,14 +45,14 @@ class TestCodeOp(unittest.TestCase):
                 }
             '''])
         da, db = jt.grad(c, [a, b])
-        assert np.allclose(c.data, a.data*b.data)
+        assert np.allclose(c.data, a.data*b.data), (c.data, a.data*b.data)
         assert np.allclose(da.data, b.data)
         assert np.allclose(db.data, a.data)
 
     def test_header(self):
         a = jt.array([3,2,1])
         b = jt.code(a.shape, a.dtype, [a],
-            header='#include <algorithm>',
+            cpu_header='#include <algorithm>',
             cpu_src="""
                 for (int i=0; i<in0shape0; i++)
                     @out(i) = @in0(i);
@@ -60,6 +60,98 @@ class TestCodeOp(unittest.TestCase):
             """
         )
         assert (b.data==[1,2,3]).all()
+
+    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @jt.flag_scope(use_cuda=1)
+    def test_cuda(self):
+        a = jt.random([100000])
+        b = jt.random([100000])
+        c = jt.code(a.shape, a.dtype, [a,b],
+            cuda_header='''
+            namespace jittor {
+            __global__ static void kernel1(@ARGS_DEF) {
+                @PRECALC
+                int i = threadIdx.x + blockIdx.x * blockDim.x;
+                int stride = blockDim.x * gridDim.x;
+                for (int i=0; i<in0shape0; i++)
+                    @out(i) = @in0(i)*@in1(i);
+            }
+
+            __global__ static void kernel2(@ARGS_DEF) {
+                @PRECALC
+                int i = threadIdx.x + blockIdx.x * blockDim.x;
+                int stride = blockDim.x * gridDim.x;
+                for (int i=0; i<in0shape0; i++)
+                    @out(i) = @dout(i)*@in1(i);
+            }
+
+            __global__ static void kernel3(@ARGS_DEF) {
+                @PRECALC
+                int i = threadIdx.x + blockIdx.x * blockDim.x;
+                int stride = blockDim.x * gridDim.x;
+                for (int i=0; i<in0shape0; i++)
+                    @out(i) = @dout(i)*@in0(i);
+            }
+
+            }
+            ''',
+            cuda_src='''
+                kernel1<<<(in0shape0-1)/1024+1, 1024>>>(@ARGS);
+            ''',
+            cuda_grad_src = ['''
+                kernel2<<<(in0shape0-1)/1024+1, 1024>>>(@ARGS);
+            ''', '''
+                kernel3<<<(in0shape0-1)/1024+1, 1024>>>(@ARGS);
+            '''])
+        da, db = jt.grad(c, [a, b])
+        assert np.allclose(c.data, a.data*b.data), (c.data, a.data*b.data)
+        assert np.allclose(da.data, b.data)
+        assert np.allclose(db.data, a.data)
+
+    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @jt.flag_scope(use_cuda=1)
+    def test_cuda2(self):
+        a = jt.random((100,100))
+        b = jt.random((100,100))
+        c = jt.code(a.shape, a.dtype, [a,b],
+            cuda_header='''
+            namespace jittor {
+            __global__ static void kernel1(@ARGS_DEF) {
+                @PRECALC
+                for (int i=blockIdx.x; i<in0shape0; i+=gridDim.x)
+                for (int j=threadIdx.x; j<in0shape1; j+=blockDim.x)
+                    @out(i,j) = @in0(i,j)*@in1(i,j);
+            }
+
+            __global__ static void kernel2(@ARGS_DEF) {
+                @PRECALC
+                for (int i=blockIdx.x; i<in0shape0; i+=gridDim.x)
+                for (int j=threadIdx.x; j<in0shape1; j+=blockDim.x)
+                    @out(i,j) = @dout(i,j)*@in1(i,j);
+            }
+
+            __global__ static void kernel3(@ARGS_DEF) {
+                @PRECALC
+                for (int i=blockIdx.x; i<in0shape0; i+=gridDim.x)
+                for (int j=threadIdx.x; j<in0shape1; j+=blockDim.x)
+                    @out(i,j) = @dout(i,j)*@in0(i,j);
+            }
+
+            }
+            ''',
+            cuda_src='''
+                kernel1<<<32, 32>>>(@ARGS);
+            ''',
+            cuda_grad_src = ['''
+                kernel2<<<32, 32>>>(@ARGS);
+            ''', '''
+                kernel3<<<32, 32>>>(@ARGS);
+            '''])
+        da, db = jt.grad(c, [a, b])
+        assert np.allclose(c.data, a.data*b.data), (c.data, a.data*b.data)
+        assert np.allclose(da.data, b.data)
+        assert np.allclose(db.data, a.data)
+
 
 if __name__ == "__main__":
     unittest.main()

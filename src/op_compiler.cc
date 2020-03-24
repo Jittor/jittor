@@ -176,7 +176,7 @@ int64_t OpCompiler::eval(const string& expr, const unordered_map<string,string>&
                     while (k<expr.size() && isvar(expr[k])) k++;
                     string var = expr.substr(j, k-j);
                     auto iter = vars.find(var);
-                    ASSERT(iter!=vars.end()) << "Jit var " << var << " not found.";
+                    ASSERT(iter!=vars.end()) << "Jit var " << var << " not found." << vars;
                     new_expr += iter->second;
                     i = k-1;
                 }
@@ -451,6 +451,22 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                 new_src += S(OpCompiler::eval(src.substr(j+1, k-j-2), defs));
                 i = k-1;
                 continue;
+            } else if (src[j] == '(') {
+            // syntax @(...)
+            //        ij    k
+                size_t k=j+1;
+                int presum = 1;
+                while (k<src.size() && presum) {
+                    if (src[k] == ')')
+                        presum--;
+                    else if (src[k] == '(')
+                        presum++;
+                    k++;
+                }
+                ASSERT(presum==0) << "Jit error: braces are not matched.";
+                new_src += precompile(defs, src.substr(j+1, k-j-2), macros);
+                i = k-1;
+                continue;
             } else if (isvar(src[j])) {
                 size_t k=j+1;
                 while (k<src.size() && isvar(src[k])) k++;
@@ -538,6 +554,36 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                         expand_macro(iter->second, args, ns);
                     }
                     new_src += precompile(defs, ns, macros);
+                    i = l-1;
+                    continue;
+                } else
+                if (expr == "define") {
+                    // syntax: @define(macro, value)
+                    //         ij     k             l
+                    ASSERT(args.size()>=1u)
+                        << "Jit error: define wrong arguments.";
+                    new_src += "#define ";
+                    auto key = precompile(defs, args[0], macros);
+                    string value, src;
+                    new_src += key;
+                    if (args.size()>=2) {
+                        new_src += " ";
+                        string all_args = args[1];
+                        for (int i=2; i<args.size(); i++) {
+                            all_args += ',';
+                            all_args += args[i];
+                        }
+                        src = precompile(defs, all_args, macros);
+                        for (auto c : src) {
+                            if (c == '\n')
+                                value += " \\";
+                            value += c;
+                        }
+                        new_src += value;
+                    }
+                    ASSERT(macros.count(key)==0) << "Macro" << key << "redefined.";
+                    defs[key] = src;
+                    macros[key] = value;
                     i = l-1;
                     continue;
                 } else

@@ -94,7 +94,7 @@ jt.mkl_ops.mkl_conv(x, w, 1, 2).sync()
         a = jt.code([4], "int", cpu_src="""
             #pragma omp parallel num_threads(4)
             @out(omp_get_thread_num()) = 456;
-        """, header='#include <omp.h>').data
+        """, cpu_header='#include <omp.h>').data
         assert (a==[456]*4).all(), a
 
     @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
