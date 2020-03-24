@@ -1,7 +1,6 @@
 #!/bin/bash
 # Single line install script
-# git clone https://github.com/Jittor/jittor.git && with_clang=1 with_cuda=1 bash ./jittor/script/install.sh
-
+# wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.sh | with_clang=1 with_cuda=1 bash
 set -ex
 
 if [ "$is_docker" = "1" ]; then
@@ -50,12 +49,7 @@ wget -O - https://bootstrap.pypa.io/get-pip.py | sudo -H python$py_version
 
 # Step 3: Run jittor
 
-if [ ! -d jittor ]; then
-wget https://cg.cs.tsinghua.edu.cn/jittor/assets/build/jittor.tgz
-mkdir -p jittor && tar -xvf ./jittor.tgz -C jittor
-fi
-
-sudo python$py_version -m pip install ./jittor
+sudo python$py_version -m pip install git+https://github.com/Jittor/jittor.git
 
 if [ "$with_cuda" = "1" ]; then
 export nvcc_path="/usr/local/cuda/bin/nvcc"
