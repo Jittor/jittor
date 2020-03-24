@@ -7,27 +7,32 @@
 #include "var.h"
 #include "ops/code_op.h"
 #include "ops/op_register.h"
+#include "misc/cuda_flags.h"
 
 #ifndef JIT
 
 namespace jittor {
 
 static auto make_code = get_op_info("code")
-    .get_constructor<VarPtr, NanoVector, NanoString, vector<Var*>&&, string&&, vector<string>&&, string&&>();
+    .get_constructor<VarPtr, NanoVector, NanoString, vector<Var*>&&, string&&, vector<string>&&, string&&, string&&, vector<string>&&, string&&>();
     
-CodeOp::CodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs, string&& cpu_src, vector<string>&& cpu_grad_src, string&& header)
-    : in(inputs), cpu_src(move(cpu_src)), cpu_grad_src(move(cpu_grad_src)), header(move(header)) {
-    flags.set(NodeFlags::_cpu);
+CodeOp::CodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs, 
+    string&& cpu_src, vector<string>&& cpu_grad_src, string&& cpu_header, 
+    string&& cuda_src, vector<string>&& cuda_grad_src, string&& cuda_header)
+    : in(inputs), cpu_src(move(cpu_src)), cpu_grad_src(move(cpu_grad_src)), cpu_header(move(cpu_header)),
+    cuda_src(move(cuda_src)), cuda_grad_src(move(cuda_grad_src)), cuda_header(move(cuda_header))
+{
+    flags.set(NodeFlags::_cpu, !!this->cpu_src.size());
+    flags.set(NodeFlags::_cuda, !!this->cuda_src.size());
     out = create_output(shape, dtype);
-    ASSERT(this->cpu_src.size());
     ASSERTop(inputs.size(),<=,10);
 }
 
 VarPtr CodeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     // Do not have grad to extras input
-    if (cpu_grad_src.size() <= v_index) return nullptr;
-    auto src = cpu_grad_src[v_index];
-    if (!src.size()) return nullptr;
+    string cpu_src = v_index < cpu_grad_src.size() ? cpu_grad_src[v_index] : "";
+    string cuda_src = v_index < cuda_grad_src.size() ? cuda_grad_src[v_index] : "";
+    if (!cuda_src.size() && !cpu_src.size()) return nullptr;
     auto inputs = clone(in);
     inputs.push_back(out);
     inputs.push_back(dout);
@@ -35,7 +40,8 @@ VarPtr CodeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
         in[v_index]->shape,
         in[v_index]->dtype(),
         move(inputs),
-        move(src), {}, clone(header)
+        move(cpu_src), {}, clone(cpu_header),
+        move(cuda_src), {}, clone(cuda_header)
     );
 }
 
@@ -55,47 +61,84 @@ void CodeOp::jit_prepare() {
         add_jit_define("INDIM", JK::hex1(i), JK::hex1(in[i]->shape.size()));
         add_jit_define("Tin", JK::hex1(i), in[i]->dtype());
     }
-    add_jit_define("HEADER", header);
-    add_jit_define("CODE", cpu_src);
+    if (use_cuda) {
+        add_jit_define("HEADER", cuda_header);
+        add_jit_define("CODE", cuda_src);
+        ASSERT(cuda_src.size());
+    } else {
+        add_jit_define("HEADER", cpu_header);
+        add_jit_define("CODE", cpu_src);
+        ASSERT(cpu_src.size());
+    }
 }
 
 } // jittor
 
 #else // JIT
 
+#pragma GCC diagnostic ignored "-Wunused-variable"
+
+@for(i, 0, INSIZE,
+    @define(in@i@@stride@{INDIM@i-1},1)
+)
+@define(outstride@{OUTDIM-1},1)
+@if(INSIZE>=2,
+    @define(poutstride@{POUTDIM-1},1)
+    @define(doutstride@{DOUTDIM-1},1)
+,)
+
+@define(ARGS_DEF, 
+@for(i, 0, INSIZE, @(
+    Tin@i* __restrict__ in@i@@p,
+    @for(j, 0, INDIM@i, @(index_t in@i@@shape@j,))
+))
+@for(i, 0, OUTDIM, @(index_t outshape@i,))
+Tout* __restrict__ outp
+)
+
+@define(ARGS, 
+@for(i, 0, INSIZE, @(
+    in@i@@p,
+    @for(j, 0, INDIM@i, @(in@i@@shape@j,))
+))
+@for(i, 0, OUTDIM, @(outshape@i,))
+outp
+)
+
+@define(PRECALC,
+@for(i, 0, INSIZE,
+    @for(j, INDIM@i-2, -1, -1, auto in@i@@stride@j = in@i@@stride@{j+1} * in@i@@shape@{j+1};)
+)
+@for(i, OUTDIM-2, -1, -1, auto outstride@i = outstride@{i+1} * outshape@{i+1};)
+@if(INSIZE>=2,
+    auto* __restrict__ poutp = in@{INSIZE-2}@@p;
+    @for(i, 0, POUTDIM, index_t poutshape@i = in@{INSIZE-2}@@shape@i;)
+    @for(i, POUTDIM-2, -1, -1, auto poutstride@i = in@{INSIZE-2}@@stride@i;)
+
+    auto* __restrict__ doutp = in@{INSIZE-1}@@p;
+    @for(i, 0, DOUTDIM, index_t doutshape@i = in@{INSIZE-1}@@shape@i;)
+    @for(i, DOUTDIM-2, -1, -1, auto doutstride@i = in@{INSIZE-1}@@stride@i;)
+,)
+)
+
+
 @HEADER
 
 namespace jittor {
 
-#pragma GCC diagnostic ignored "-Wunused-variable"
 void CodeOp::jit_run() {
     // define inputs
     @for(i, 0, INSIZE,
         auto in@i = in[@i];
         auto* __restrict__ in@i@@p = in[@i]->ptr<Tin@i>();
         @for(j, 0, INDIM@i, index_t in@i@@shape@j = in[@i]->shape[@j];)
-        index_t in@i@@stride@{INDIM@i-1} = 1;
-        @for(j, INDIM@i-2, -1, -1, auto in@i@@stride@j = in@i@@stride@{j+1} * in@i@@shape@{j+1};)
     )
     // define out
     auto* __restrict__ outp = out->ptr<Tout>();
     @for(i, 0, OUTDIM, index_t outshape@i = out->shape[@i];)
-    index_t outstride@{OUTDIM-1} = 1;
-    @for(i, OUTDIM-2, -1, -1, auto outstride@i = outstride@{i+1} * outshape@{i+1};)
 
-    @if(INSIZE>=2,
-        auto pout = in[@{INSIZE-2}];
-        auto* __restrict__ poutp = pout->ptr<Tpout>();
-        @for(i, 0, POUTDIM, index_t poutshape@i = pout->shape[@i];)
-        index_t poutstride@{POUTDIM-1} = 1;
-        @for(i, POUTDIM-2, -1, -1, auto poutstride@i = poutstride@{i+1} * poutshape@{i+1};)
+    @PRECALC
 
-        auto dout = in[@{INSIZE-1}];
-        auto* __restrict__ doutp = dout->ptr<Tdout>();
-        @for(i, 0, DOUTDIM, index_t doutshape@i = dout->shape[@i];)
-        index_t doutstride@{DOUTDIM-1} = 1;
-        @for(i, DOUTDIM-2, -1, -1, auto doutstride@i = doutstride@{i+1} * doutshape@{i+1};)
-    ,)
     @CODE
 }
 

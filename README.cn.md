@@ -117,13 +117,13 @@ jittor会自动在路径中寻找合适的编译器, 如果您希望手动指定
 
 ```bash
 # install with clang and cuda
-wget https://cg.cs.tsinghua.edu.cn/jittor/assets/build/jittor.tgz && mkdir -p jittor && tar -xvf ./jittor.tgz -C jittor && with_clang=1 with_cuda=1 bash ./jittor/script/install.sh
+wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.sh | with_clang=1 with_cuda=1 bash
 # install with clang
-wget https://cg.cs.tsinghua.edu.cn/jittor/assets/build/jittor.tgz && mkdir -p jittor && tar -xvf ./jittor.tgz -C jittor && with_clang=1 bash ./jittor/script/install.sh
+wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.sh | with_clang=1 bash
 # install with g++ and cuda
-wget https://cg.cs.tsinghua.edu.cn/jittor/assets/build/jittor.tgz && mkdir -p jittor && tar -xvf ./jittor.tgz -C jittor && with_gcc=1 with_cuda=1 bash ./jittor/script/install.sh
+wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.sh | with_gcc=1 with_cuda=1 bash
 # install with g++
-wget https://cg.cs.tsinghua.edu.cn/jittor/assets/build/jittor.tgz && mkdir -p jittor && tar -xvf ./jittor.tgz -C jittor && with_gcc=1 bash ./jittor/script/install.sh
+wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.sh | with_gcc=1 bash
 ```
 
 执行后，脚本将显示一些需要导出的环境变量。

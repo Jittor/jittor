@@ -112,13 +112,13 @@ We provide single line command for quick installation the latest version of Jitt
 
 ```bash
 # install with clang and cuda
-wget https://cg.cs.tsinghua.edu.cn/jittor/assets/build/jittor.tgz && mkdir -p jittor && tar -xvf ./jittor.tgz -C jittor && with_clang=1 with_cuda=1 bash ./jittor/script/install.sh
+wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.sh | with_clang=1 with_cuda=1 bash
 # install with clang
-wget https://cg.cs.tsinghua.edu.cn/jittor/assets/build/jittor.tgz && mkdir -p jittor && tar -xvf ./jittor.tgz -C jittor && with_clang=1 bash ./jittor/script/install.sh
+wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.sh | with_clang=1 bash
 # install with g++ and cuda
-wget https://cg.cs.tsinghua.edu.cn/jittor/assets/build/jittor.tgz && mkdir -p jittor && tar -xvf ./jittor.tgz -C jittor && with_gcc=1 with_cuda=1 bash ./jittor/script/install.sh
+wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.sh | with_gcc=1 with_cuda=1 bash
 # install with g++
-wget https://cg.cs.tsinghua.edu.cn/jittor/assets/build/jittor.tgz && mkdir -p jittor && tar -xvf ./jittor.tgz -C jittor && with_gcc=1 bash ./jittor/script/install.sh
+wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.sh | with_gcc=1 bash
 ```
 After execution, the script will show some environment variables you need to export.
 
