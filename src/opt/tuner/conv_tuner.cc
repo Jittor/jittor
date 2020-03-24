@@ -166,11 +166,11 @@ void ConvTuner::forwardTune(FusedOp* fop) {
     for (Op* op : fop->ops)
     if (op->name_ex()=="reduce.add") {
         auto rop = (ReduceOp*)op;
-        if (!(rop->x->input() && rop->x->input()->name_ex()=="binary.multiply"))
+        if (!(rop->x->input() && rop->x->input()->name_ex()=="binary.multiply" && rop->x->input()->tflag==op->tflag))
             continue;
         auto bop = (BinaryOp*)(rop->x->input());
 
-        if (!(bop->y->input() && bop->x->input())) continue;
+        if (!(bop->y->input() && bop->x->input() && bop->x->input()->tflag==op->tflag && bop->y->input()->tflag==op->tflag)) continue;
         if (!((bop->x->input()->name_ex()=="reindex" && bop->y->input()->name_ex()=="broadcast_to") || 
         (bop->y->input()->name_ex()=="reindex" && bop->x->input()->name_ex()=="broadcast_to"))) return;
         // riop1 reindex -> xx
@@ -290,11 +290,11 @@ void ConvTuner::backwardTune(FusedOp* fop) {
     string xformat, yformat, wformat;
     if (op->name_ex() == "reduce.add") {
         auto rop = (ReduceOp*)op;
-        if (!(rop->x->input() && rop->x->input()->name_ex()=="binary.multiply"))
+        if (!(rop->x->input() && rop->x->input()->name_ex()=="binary.multiply" && rop->x->input()->tflag==op->tflag))
             continue;
         auto bop = (BinaryOp*)(rop->x->input());
 
-        if (!(bop->y->input() && bop->x->input())) continue;
+        if (!(bop->y->input() && bop->x->input() && bop->x->input()->tflag==op->tflag && bop->y->input()->tflag==op->tflag)) continue;
         if (!((bop->x->input()->name_ex()=="reindex" && bop->y->input()->name_ex()=="broadcast_to") || 
         (bop->y->input()->name_ex()=="reindex" && bop->x->input()->name_ex()=="broadcast_to"))) continue;
         auto riop1 = bop->x->input()->name_ex()=="reindex" ? (ReindexOp*)(bop->x->input()) : (ReindexOp*)(bop->y->input());
@@ -365,11 +365,11 @@ void ConvTuner::backwardTune(FusedOp* fop) {
         bo++;
     } else if (op->name_ex() == "reindex_reduce.add") {
         auto rop = (ReindexReduceOp*)op;
-        if (!(rop->y->input() && rop->y->input()->name_ex()=="binary.multiply"))
+        if (!(rop->y->input() && rop->y->input()->name_ex()=="binary.multiply" && rop->x->input()->tflag==op->tflag))
             continue;
         auto bop = (BinaryOp*)(rop->y->input());
         
-        if (!(bop->y->input() && bop->x->input())) continue;
+        if (!(bop->y->input() && bop->x->input() && bop->x->input()->tflag==op->tflag && bop->y->input()->tflag==op->tflag)) continue;
         if (!((bop->x->input()->name_ex()=="broadcast_to" && bop->y->input()->name_ex()=="broadcast_to"))) return;
         auto riop1 = (BroadcastToOp*)(bop->x->input());
         auto riop2 = (BroadcastToOp*)(bop->y->input());
