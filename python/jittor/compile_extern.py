@@ -163,11 +163,12 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
 
 def install_cutt(root_folder):
     # Modified from: https://github.com/ap-hynninen/cutt
-    url = "https://cloud.tsinghua.edu.cn/f/4be7e1dd51c6459aa119/?dl=1"
-    filename = "cutt.tgz"
+    url = "https://github.com/Jittor/cutt/archive/master.zip"
+
+    filename = "cutt-master.zip"
     fullname = os.path.join(root_folder, filename)
-    dirname = os.path.join(root_folder, filename.replace(".tgz",""))
-    true_md5 = "28a67bb3a713e29ce434303df6577507"
+    dirname = os.path.join(root_folder, filename.replace(".zip",""))
+    true_md5 = "a6f4f7f75310a69b131e21f1ebec768a"
 
     if os.path.exists(fullname):
         md5 = os.popen('md5sum ' + fullname).read().split()[0]
@@ -180,10 +181,14 @@ def install_cutt(root_folder):
         LOG.i("Downloading cutt...")
         download_url_to_local(url, filename, root_folder, true_md5)
 
-        import tarfile
-    
-        with tarfile.open(fullname, "r") as tar:
-            tar.extractall(root_folder)
+        import zipfile
+
+        zf = zipfile.ZipFile(fullname)
+        try:
+            zf.extractall(path=root_folder)
+        except RuntimeError as e:
+            print(e)
+        zf.close()
 
         from jittor_utils import run_cmd
         LOG.i("installing cutt...")
@@ -209,7 +214,7 @@ def setup_cutt():
         
         make_cache_dir(cutt_path)
         install_cutt(cutt_path)
-        cutt_home = os.path.join(cutt_path, "cutt")
+        cutt_home = os.path.join(cutt_path, "cutt-master")
         cutt_include_path = os.path.join(cutt_home, "src")
         cutt_lib_path = os.path.join(cutt_home, "lib")
 
