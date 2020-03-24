@@ -80,6 +80,12 @@ Jittor is written in Python and C++. It requires a compiler for JIT compilation,
 
 
 
+Jittor environment requirements:
+
+* System: Ubuntu >= 16.04
+* Python version >= 3.7
+* C++ compiler(g++ or clang)
+
 Jittor offers three ways to install: pip, script or manual.
 
 
@@ -88,13 +94,13 @@ Jittor offers three ways to install: pip, script or manual.
 
 
 ```bash
-sudo apt install python-dev libomp-dev
-sudo pip install https://github.com/Jittor/jittor.git
+sudo apt install python3.7-dev libomp-dev
+sudo python3.7 -m pip install git+https://github.com/Jittor/jittor.git
 # if you cannot access github, please download code from our website:
 #     wget https://cg.cs.tsinghua.edu.cn/jittor/assets/build/jittor.tgz
 #     mkdir -p jittor && tar -xvf ./jittor.tgz -C jittor
 #     sudo pip install ./jittor
-python3 -m jittor.test.test_example
+python3.7 -m jittor.test.test_example
 ```
 
 
@@ -235,7 +241,7 @@ print(c.name())
 # Output: c
 ```
 
-### Operations
+###Operations
 
 
 Jittor'op is simular with numpy. Let's try some operations. We create Var `a` and `b` via operation `jt.float32`, and add them. Printing those variables shows they have the same shape and dtype.
@@ -289,11 +295,11 @@ If you want to know more about Jittor, please check out the notebooks below:
 
 
 
-[1]: notebooks/example.md	"example"
-[2]: notebooks/basics.md	"basics"
-[3]: notebooks/meta_op.md	"meta_op"
-[4]: notebooks/custom_op.md	"custom_op"
-[5]: notebooks/profiler.md	"profiler"
+[1]: notebook/example.src.md	"example"
+[2]: notebook/basics.src.md	"basics"
+[3]: notebook/meta_op.src.md	"meta_op"
+[4]: notebook/custom_op.src.md	"custom_op"
+[5]: notebook/profiler.src.md	"profiler"
 
 Those notebooks can be started in your own computer by `python3.7 -m jittor.notebook`
 

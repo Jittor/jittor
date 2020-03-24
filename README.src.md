@@ -108,6 +108,12 @@ Jittor的环境要求如下:
 * Python版本 >= 3.7
 * C++编译器（g++ or clang）
 
+Jittor environment requirements:
+
+* System: Ubuntu >= 16.04
+* Python version >= 3.7
+* C++ compiler(g++ or clang)
+
 Jittor offers three ways to install: pip, script or manual.
 
 Jittor 一共提供三种方式安装: pip安装, 一键脚本安装 和 手动安装.
@@ -120,13 +126,13 @@ Jittor 一共提供三种方式安装: pip安装, 一键脚本安装 和 手动�
 (如果无法访问github, 可以通过jittor主页下载):
 
 ```bash
-sudo apt install python-dev libomp-dev
-sudo pip install https://github.com/Jittor/jittor.git
+sudo apt install python3.7-dev libomp-dev
+sudo python3.7 -m pip install git+https://github.com/Jittor/jittor.git
 # if you cannot access github, please download code from our website:
 #     wget https://cg.cs.tsinghua.edu.cn/jittor/assets/build/jittor.tgz
 #     mkdir -p jittor && tar -xvf ./jittor.tgz -C jittor
 #     sudo pip install ./jittor
-python3 -m jittor.test.test_example
+python3.7 -m jittor.test.test_example
 ```
 
 如果测试运行通过,恭喜你已经安装完成.
@@ -364,16 +370,16 @@ If you want to know more about Jittor, please check out the notebooks below:
 
 
 
-[1]: notebooks/example.md	"example"
-[2]: notebooks/basics.md	"basics"
-[3]: notebooks/meta_op.md	"meta_op"
-[4]: notebooks/custom_op.md	"custom_op"
-[5]: notebooks/profiler.md	"profiler"
-[1]: notebooks/example.md	"示例"
-[2]: notebooks/basics.md	"基本概念"
-[3]: notebooks/meta_op.md	"元算子"
-[4]: notebooks/custom_op.md	"自定义算子"
-[5]: notebooks/profiler.md	"性能分析器"
+[1]: notebook/example.src.md	"example"
+[2]: notebook/basics.src.md	"basics"
+[3]: notebook/meta_op.src.md	"meta_op"
+[4]: notebook/custom_op.src.md	"custom_op"
+[5]: notebook/profiler.src.md	"profiler"
+[1]: notebook/example.src.md	"示例"
+[2]: notebook/basics.src.md	"基本概念"
+[3]: notebook/meta_op.src.md	"元算子"
+[4]: notebook/custom_op.src.md	"自定义算子"
+[5]: notebook/profiler.src.md	"性能分析器"
 
 Those notebooks can be started in your own computer by `python3.7 -m jittor.notebook`
 

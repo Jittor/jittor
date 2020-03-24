@@ -85,6 +85,8 @@ Jittor的环境要求如下:
 * C++编译器（g++ or clang）
 
 
+
+
 Jittor 一共提供三种方式安装: pip安装, 一键脚本安装 和 手动安装.
 
 ## Pip 安装
@@ -94,13 +96,13 @@ Jittor 一共提供三种方式安装: pip安装, 一键脚本安装 和 手动�
 (如果无法访问github, 可以通过jittor主页下载):
 
 ```bash
-sudo apt install python-dev libomp-dev
-sudo pip install https://github.com/Jittor/jittor.git
+sudo apt install python3.7-dev libomp-dev
+sudo python3.7 -m pip install git+https://github.com/Jittor/jittor.git
 # if you cannot access github, please download code from our website:
 #     wget https://cg.cs.tsinghua.edu.cn/jittor/assets/build/jittor.tgz
 #     mkdir -p jittor && tar -xvf ./jittor.tgz -C jittor
 #     sudo pip install ./jittor
-python3 -m jittor.test.test_example
+python3.7 -m jittor.test.test_example
 ```
 
 如果测试运行通过,恭喜你已经安装完成.
@@ -298,11 +300,11 @@ help(jt.ops)
 
 
 
-[1]: notebooks/example.md	"示例"
-[2]: notebooks/basics.md	"基本概念"
-[3]: notebooks/meta_op.md	"元算子"
-[4]: notebooks/custom_op.md	"自定义算子"
-[5]: notebooks/profiler.md	"性能分析器"
+[1]: notebook/example.src.md	"示例"
+[2]: notebook/basics.src.md	"基本概念"
+[3]: notebook/meta_op.src.md	"元算子"
+[4]: notebook/custom_op.src.md	"自定义算子"
+[5]: notebook/profiler.src.md	"性能分析器"
 
 
 这些notebooks可以通过python3.7 -m jittor.notebook在您自己的计算机中运行。

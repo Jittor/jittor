@@ -691,7 +691,7 @@ def check_cuda():
         return
     global cc_flags, has_cuda, core_link_flags, cuda_dir, cuda_lib, cuda_include
     cuda_dir = os.path.dirname(get_full_path_of_executable(nvcc_path))
-    assert cuda_dir.endswith("bin") and "cuda" in cuda_dir, f"Wrong cuda_dir: {cuda_dir}"
+    assert cuda_dir.endswith("bin") and "cuda" in cuda_dir.lower(), f"Wrong cuda_dir: {cuda_dir}"
     cuda_include = os.path.abspath(os.path.join(cuda_dir, "..", "include"))
     cuda_lib = os.path.abspath(os.path.join(cuda_dir, "..", "lib64"))
     cuda_include2 = os.path.join(jittor_path, "extern","cuda","inc")

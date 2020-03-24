@@ -134,9 +134,9 @@ def download(url, filename):
     if os.path.isfile(filename):
         if os.path.getsize(filename) > 100:
             return
-    LOG.i("Downloading", url)
+    LOG.v("Downloading", url)
     urllib.request.urlretrieve(url, filename)
-    LOG.i("Download finished")
+    LOG.v("Download finished")
 
 def find_cache_path():
     from pathlib import Path

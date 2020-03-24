@@ -21,7 +21,7 @@ def conv(x, w):
     ])
     ww = w.broadcast_var(xx)
     yy = xx*ww
-    y = yy.sum([3,4,5]) # Kh, Kw, Kc
+    y = yy.sum([3,4,5]) # Kh, Kw, C
     return y, yy
 
 def conv_naive(x, w):
@@ -52,7 +52,7 @@ def conv_transpose(x, w):
     ], 0, ['(i1-i3)%2', '(i2-i4)%2'])
     ww = w.broadcast_var(xx)
     yy = xx*ww
-    y = yy.sum([3,4,5]) # Kh, Kw, Kc
+    y = yy.sum([3,4,5]) # Kh, Kw, C
     return y, yy
 
 def conv_transpose_naive(x, w):

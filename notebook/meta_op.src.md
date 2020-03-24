@@ -102,7 +102,7 @@ def conv(x, w):
     ])
     ww = w.broadcast_var(xx)
     yy = xx*ww
-    y = yy.sum([3,4,5]) # Kh, Kw, Kc
+    y = yy.sum([3,4,5]) # Kh, Kw, c
     return y
 
 # Let's disable tuner. This will cause jittor not to use mkl for convolution
@@ -150,7 +150,7 @@ xx = x.reindex([N,H-Kh+1,W-Kw+1,Kh,Kw,C,Kc], [
 ])
 ww = w.broadcast_var(xx)
 yy = xx*ww
-y = yy.sum([3,4,5]) # Kh, Kw, Kc
+y = yy.sum([3,4,5]) # Kh, Kw, C
 ```
 
 **After expansion:**
@@ -159,7 +159,7 @@ y = yy.sum([3,4,5]) # Kh, Kw, Kc
 
 ```
 py
-shape = [N,H+Kh-1,W+Kw-1,Kh,Kw,C,Kc]
+shape = [N,H-Kh+1,W-Kw+1,Kh,Kw,C,Kc]
 # expansion of x.reindex
 xx = np.zeros(shape, x.dtype)
 for i0 in range(shape[0]):
@@ -170,9 +170,9 @@ for i0 in range(shape[0]):
                     for i5 in range(shape[5]):
                         for i6 in range(shape[6]):
                             if is_overflow(i0,i1,i2,i3,i4,i5,i6):
-                                y[i0,i1,...,in] = 0
+                                xx[i0,i1,...,in] = 0
                             else:
-                                y[i0,i1,i2,i3,i4,i5,i6] = x[i0,i1+i3,i2+i4,i5]
+                                xx[i0,i1,i2,i3,i4,i5,i6] = x[i0,i1+i3,i2+i4,i5]
 
 # expansion of w.broadcast_var(xx)
 ww = np.zeros(shape, x.dtype)
@@ -223,7 +223,7 @@ for i0 in range(shape[0]):
                     for i5 in range(shape[5]):
                         for i6 in range(shape[6]):
                             if not is_overflow(i0,i1,i2,i3,i4,i5,i6):
-                                y[i0,i1,i2,i6] += x[i0,i1+i3,i2+i4,i5]
+                                y[i0,i1,i2,i6] += x[i0,i1+i3,i2+i4,i5] * w[i3,i4,i5,i6]
 ```
 
 This is the trick of meta-operator, It can fused multiple operator into a complicated operation, including many variation of convolution (e.g. group conv, seperate conv,...).
@@ -250,3 +250,7 @@ with open(report[1][1], 'r') as f:
 Even faster than the previous implementation! From the output we can look at the function definition of func0. This is the main code of our convolution kernel, which is generated Just-in-time. Because the compiler knows the shapes of the kernel and more optimizations are used. 
 
 比之前的实现还要更快！ 从输出中我们可以看一看`func0`的函数定义，这是我们卷积内核的主要代码，该内核代码是即时生成的。因为编译器知道内核的形状，所以使用了更多的优化方法。
+
+在这个教程中，Jittor简单演示了元算子的使用，并不是正真的性能测试，所以使用了比较小的数据规模进行测试，如果需要性能测试，请打开`jt.flags.enable_tuner = 1`，会启动使用专门的硬件库加速。
+
+In this tutorial, Jittor simply demonstrated the use of meta-operators, which is not a performance test. If you need a performance test, `jt.flags.enable_tuner = 1` will try to use the dedicated hardware library.
