@@ -1,11 +1,14 @@
 error_msg = "Jittor only supports Ubuntu>=16.04 currently."
 
-with open("/etc/os-release") as f:
-    s = f.read().splitlines()
-    m = {}
-    for line in s:
-        a = line.split('=')
-        m[a[0]] = a[1].replace("\"", "")
+try:
+    with open("/etc/os-release") as f:
+        s = f.read().splitlines()
+        m = {}
+        for line in s:
+            a = line.split('=')
+            m[a[0]] = a[1].replace("\"", "")
+except:
+    raise RuntimeError(error_msg)
 assert m["NAME"] == "Ubuntu" and float(m["VERSION_ID"])>16, error_msg
 
 import setuptools
