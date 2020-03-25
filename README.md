@@ -1,6 +1,6 @@
 # Jittor: a Just-in-time(JIT) deep learning framework
 
-[Quickstart](#quickstart) | [Install](#install) | [Tutorial](#tutorial)
+[Quickstart](#quickstart) | [Install](#install) | [Tutorial](#tutorial) | [Chinese](./README.cn.md)
 
 
 Jittor is a high-performance deep learning framework based on JIT compiling and meta-operators. The whole framework and meta-operators are compiled just-in-time. A powerful op compiler and tuner are integrated into Jittor. It allowed us to generate high-performance code with specialized for your model.

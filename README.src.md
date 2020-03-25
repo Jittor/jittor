@@ -1,7 +1,7 @@
 # Jittor: a Just-in-time(JIT) deep learning framework
 # Jittor: 即时编译深度学习框架
 
-[Quickstart](#quickstart) | [Install](#install) | [Tutorial](#tutorial)
+[Quickstart](#quickstart) | [Install](#install) | [Tutorial](#tutorial) | [Chinese](./README.cn.md)
 
 [快速开始](#快速开始) | [安装](#安装) | [教程](#教程)
 
