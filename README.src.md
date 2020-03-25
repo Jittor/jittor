@@ -9,9 +9,9 @@ Jittor is a high-performance deep learning framework based on JIT compiling and 
 
 Jittor 是一个基于即时编译和元算子的高性能深度学习框架，整个框架在即时编译的同时，还集成了强大的Op编译器和调优器，为您的模型生成定制化的高性能代码。
 
-The front-end language is Python. Module Design is used in the front-end, like PyTorch and Keras. The back-end is implemented py high performance language, such as CUDA,C++.
+The front-end language is Python. Module Design is used in the front-end, which is the most popular design for deeplearning framework interface. The back-end is implemented by high performance language, such as CUDA,C++.
 
-Jittor前端语言为Python。前端使用了模块化的设计，类似于PyTorch，Keras，后端则使用高性能语言编写，如CUDA，C++。
+Jittor前端语言为Python。前端使用了模块化的设计，这是目前最主流的深度学习框架接口设计。后端则使用高性能语言编写，如CUDA，C++。
 
 The following example shows how to model a two-layer neural network step by step and train from scratch In a few lines of Python code.
 
@@ -46,7 +46,7 @@ for i,(x,y) in enumerate(get_data(n)):
     pred_y = model(x)
     loss = ((pred_y - y)**2)
     loss_mean = loss.mean()
-    optim.step (loss_mean)
+    optim.step(loss_mean)
     print(f"step {i}, loss = {loss_mean.data.sum()}")
 ```
 

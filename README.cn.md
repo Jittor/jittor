@@ -7,7 +7,7 @@
 Jittor 是一个基于即时编译和元算子的高性能深度学习框架，整个框架在即时编译的同时，还集成了强大的Op编译器和调优器，为您的模型生成定制化的高性能代码。
 
 
-Jittor前端语言为Python。前端使用了模块化的设计，类似于PyTorch，Keras，后端则使用高性能语言编写，如CUDA，C++。
+Jittor前端语言为Python。前端使用了模块化的设计，这是目前最主流的深度学习框架接口设计。后端则使用高性能语言编写，如CUDA，C++。
 
 
 下面的代码演示了如何一步一步使用Python代码，从头对一个双层神经网络建模。
@@ -41,7 +41,7 @@ for i,(x,y) in enumerate(get_data(n)):
     pred_y = model(x)
     loss = ((pred_y - y)**2)
     loss_mean = loss.mean()
-    optim.step (loss_mean)
+    optim.step(loss_mean)
     print(f"step {i}, loss = {loss_mean.data.sum()}")
 ```
 
