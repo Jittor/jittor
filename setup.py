@@ -1,10 +1,12 @@
-import platform
-
 error_msg = "Jittor only supports Ubuntu>=16.04 currently."
-assert hasattr(platform, "dist"), error_msg
-dis_name = platform.dist()[0].lower()
-version = float(platform.dist()[1])
-assert "ubuntu" in dis_name and version >= 16, error_msg
+
+with open("/etc/os-release") as f:
+    s = f.read().splitlines()
+    m = {}
+    for line in s:
+        a = line.split('=')
+        m[a[0]] = a[1].replace("\"", "")
+assert m["NAME"] == "Ubuntu" and float(m["VERSION_ID"])>16, error_msg
 
 import setuptools
 from setuptools import setup, find_packages
