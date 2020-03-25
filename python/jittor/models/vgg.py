@@ -11,8 +11,8 @@ from jittor import nn
 
 
 __all__ = [
-    'VGG', 'vgg11', 'vgg11_bn', 'vgg13', 'vgg13_bn', 'vgg16', 'vgg16_bn',
-    'vgg19_bn', 'vgg19',
+    'VGG', 'VGG11', 'VGG11_bn', 'VGG13', 'VGG13_bn', 'VGG16', 'VGG16_bn',
+    'VGG19_bn', 'VGG19',
 ]
 
 

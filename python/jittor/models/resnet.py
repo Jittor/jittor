@@ -109,7 +109,7 @@ def resnet152(x, is_train):
 class BasicBlock(Module):
     expansion = 1
 
-    def __init__(self, inplanes, planes, stride=1, downsample=None):
+    def __init__(self, inplanes, planes, stride=1, downsample=None, base_width=64):
         self.conv1 = nn.Conv(inplanes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
         self.bn1 = nn.BatchNorm(planes)
         self.relu = nn.Relu()
@@ -137,12 +137,13 @@ class BasicBlock(Module):
 class Bottleneck(Module):
     expansion = 4
  
-    def __init__(self, inplanes, planes, stride=1, downsample=None):
-        self.conv1 = nn.Conv(inplanes, planes, kernel_size=1, bias=False)
-        self.bn1 = nn.BatchNorm(planes)
-        self.conv2 = nn.Conv(planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
-        self.bn2 = nn.BatchNorm(planes)
-        self.conv3 = nn.Conv(planes, planes * self.expansion, kernel_size=1, bias=False)
+    def __init__(self, inplanes, planes, stride=1, downsample=None, base_width=64):
+        width = int((planes * (base_width / 64.0)))
+        self.conv1 = nn.Conv(inplanes, width, kernel_size=1, bias=False)
+        self.bn1 = nn.BatchNorm(width)
+        self.conv2 = nn.Conv(width, width, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm(width)
+        self.conv3 = nn.Conv(width, planes * self.expansion, kernel_size=1, bias=False)
         self.bn3 = nn.BatchNorm(planes * self.expansion)
         self.relu = nn.Relu()
         self.downsample = downsample
@@ -150,7 +151,6 @@ class Bottleneck(Module):
  
     def execute(self, x):
         residual = x
- 
         out = self.conv1(x)
         out = self.bn1(out)
         out = self.relu(out)
@@ -170,8 +170,9 @@ class Bottleneck(Module):
         return out
 
 class ResNet(Module):
-    def __init__(self, block, layers, num_classes=1000):
+    def __init__(self, block, layers, num_classes=1000, width_per_group=64):
         self.inplanes = 64
+        self.base_width = width_per_group
         self.conv1 = nn.Conv(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
         self.bn1 = nn.BatchNorm(64)
         self.relu = nn.Relu()
@@ -193,10 +194,10 @@ class ResNet(Module):
             )
  
         layers = []
-        layers.append(block(self.inplanes, planes, stride, downsample))
+        layers.append(block(self.inplanes, planes, stride, downsample, base_width=self.base_width))
         self.inplanes = planes * block.expansion
         for i in range(1, blocks):
-            layers.append(block(self.inplanes, planes))
+            layers.append(block(self.inplanes, planes, base_width=self.base_width))
  
         return nn.Sequential(*layers)
  
@@ -234,4 +235,12 @@ def Resnet101():
 
 def Resnet152():
     model = ResNet(Bottleneck, [3,8,36,3])
+    return model
+
+def wide_resnet50_2():
+    model = ResNet(Bottleneck, [3, 4, 6, 3], width_per_group=128)
+    return model
+
+def wide_resnet101_2():
+    model = ResNet(Bottleneck, [3, 4, 23, 3], width_per_group=128)
     return model
