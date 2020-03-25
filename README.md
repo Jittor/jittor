@@ -310,6 +310,32 @@ Those notebooks can be started in your own computer by `python3.7 -m jittor.note
 Jittor is still young. It may contain bugs and issues. Please report them in our bug track system. Contributions are welcome. Besides, if you have any ideas about Jittor, please let us know.
 
 
+
+
+You can help Jittor in the following ways:
+
+* Citing Jittor in your paper
+* recommend Jittor to your friends
+* Contributing code
+* Contributed tutorials and documentation
+* File an issue
+* Answer jittor related questions
+* Light up the stars
+* Keep an eye on jittor
+* ......
+
+## Contact Us
+
+
+
+
+
+Website: http://cg.cs.tsinghua.edu.cn/jittor/
+
+Email: jittor@qq.com
+
+File an issue: https://github.com/Jittor/jittor/issues
+
 ## The Team
 
 

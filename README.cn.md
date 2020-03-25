@@ -315,6 +315,32 @@ help(jt.ops)
 
 Jittor还很年轻。 它可能存在错误和问题。 请在我们的错误跟踪系统中报告它们。 我们欢迎您为Jittor做出贡献。 此外，如果您对Jittor有任何想法，请告诉我们。
 
+您可以用以下方式帮助Jittor：
+
+* 在论文中引用 Jittor
+* 向身边的好朋友推荐 Jittor
+* 贡献代码
+* 贡献教程和文档
+* 提出issue
+* 回答 jittor 相关问题
+* 点亮小星星
+* 持续关注 jittor
+* ……
+
+
+
+
+## 联系我们
+
+官方主页： http://cg.cs.tsinghua.edu.cn/jittor/
+
+电子邮件：jittor@qq.com
+
+提出issue：https://github.com/Jittor/jittor/issues
+
+
+
+
 
 ## 团队
 
