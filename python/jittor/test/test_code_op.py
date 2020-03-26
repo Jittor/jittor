@@ -67,40 +67,33 @@ class TestCodeOp(unittest.TestCase):
         a = jt.random([100000])
         b = jt.random([100000])
         c = jt.code(a.shape, a.dtype, [a,b],
-            cuda_header='''
-            namespace jittor {
+            cuda_src='''
             __global__ static void kernel1(@ARGS_DEF) {
                 @PRECALC
                 int i = threadIdx.x + blockIdx.x * blockDim.x;
                 int stride = blockDim.x * gridDim.x;
-                for (int i=0; i<in0shape0; i++)
+                for (; i<in0shape0; i+=stride)
                     @out(i) = @in0(i)*@in1(i);
             }
-
+                kernel1<<<(in0shape0-1)/1024+1, 1024>>>(@ARGS);
+            ''',
+            cuda_grad_src = ['''
             __global__ static void kernel2(@ARGS_DEF) {
                 @PRECALC
                 int i = threadIdx.x + blockIdx.x * blockDim.x;
                 int stride = blockDim.x * gridDim.x;
-                for (int i=0; i<in0shape0; i++)
+                for (; i<in0shape0; i+=stride)
                     @out(i) = @dout(i)*@in1(i);
             }
-
+                kernel2<<<(in0shape0-1)/1024+1, 1024>>>(@ARGS);
+            ''', '''
             __global__ static void kernel3(@ARGS_DEF) {
                 @PRECALC
                 int i = threadIdx.x + blockIdx.x * blockDim.x;
                 int stride = blockDim.x * gridDim.x;
-                for (int i=0; i<in0shape0; i++)
+                for (; i<in0shape0; i+=stride)
                     @out(i) = @dout(i)*@in0(i);
             }
-
-            }
-            ''',
-            cuda_src='''
-                kernel1<<<(in0shape0-1)/1024+1, 1024>>>(@ARGS);
-            ''',
-            cuda_grad_src = ['''
-                kernel2<<<(in0shape0-1)/1024+1, 1024>>>(@ARGS);
-            ''', '''
                 kernel3<<<(in0shape0-1)/1024+1, 1024>>>(@ARGS);
             '''])
         da, db = jt.grad(c, [a, b])
@@ -114,38 +107,32 @@ class TestCodeOp(unittest.TestCase):
         a = jt.random((100,100))
         b = jt.random((100,100))
         c = jt.code(a.shape, a.dtype, [a,b],
-            cuda_header='''
-            namespace jittor {
-            __global__ static void kernel1(@ARGS_DEF) {
-                @PRECALC
-                for (int i=blockIdx.x; i<in0shape0; i+=gridDim.x)
-                for (int j=threadIdx.x; j<in0shape1; j+=blockDim.x)
-                    @out(i,j) = @in0(i,j)*@in1(i,j);
-            }
-
-            __global__ static void kernel2(@ARGS_DEF) {
-                @PRECALC
-                for (int i=blockIdx.x; i<in0shape0; i+=gridDim.x)
-                for (int j=threadIdx.x; j<in0shape1; j+=blockDim.x)
-                    @out(i,j) = @dout(i,j)*@in1(i,j);
-            }
-
-            __global__ static void kernel3(@ARGS_DEF) {
-                @PRECALC
-                for (int i=blockIdx.x; i<in0shape0; i+=gridDim.x)
-                for (int j=threadIdx.x; j<in0shape1; j+=blockDim.x)
-                    @out(i,j) = @dout(i,j)*@in0(i,j);
-            }
-
-            }
-            ''',
             cuda_src='''
+                __global__ static void kernel1(@ARGS_DEF) {
+                    @PRECALC
+                    for (int i=blockIdx.x; i<in0shape0; i+=gridDim.x)
+                    for (int j=threadIdx.x; j<in0shape1; j+=blockDim.x)
+                        @out(i,j) = @in0(i,j)*@in1(i,j);
+                }
                 kernel1<<<32, 32>>>(@ARGS);
             ''',
             cuda_grad_src = ['''
-                kernel2<<<32, 32>>>(@ARGS);
+                __global__ static void kernel(@ARGS_DEF) {
+                    @PRECALC
+                    for (int i=blockIdx.x; i<in0shape0; i+=gridDim.x)
+                    for (int j=threadIdx.x; j<in0shape1; j+=blockDim.x)
+                        @out(i,j) = @dout(i,j)*@in1(i,j);
+                }
+                kernel<<<32, 32>>>(@ARGS);
             ''', '''
-                kernel3<<<32, 32>>>(@ARGS);
+                __global__ static void kernel(@ARGS_DEF) {
+                    @PRECALC
+                    @pout(0,0);
+                    for (int i=blockIdx.x; i<in0shape0; i+=gridDim.x)
+                    for (int j=threadIdx.x; j<in0shape1; j+=blockDim.x)
+                        @out(i,j) = @dout(i,j)*@in0(i,j);
+                }
+                kernel<<<32, 32>>>(@ARGS);
             '''])
         da, db = jt.grad(c, [a, b])
         assert np.allclose(c.data, a.data*b.data), (c.data, a.data*b.data)
