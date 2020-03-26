@@ -150,7 +150,10 @@ def find_cache_path():
             cache_name = os.environ["cache_name"]
         else:
             # try to get branch name from git
-            bs = run_cmd("git branch 2>&1", os.path.dirname(__file__)).splitlines()
+            r = sp.run("git branch", cwd=os.path.dirname(__file__), stdout=sp.PIPE,
+                   stderr=sp.PIPE)
+            assert r.returncode == 0
+            bs = r.stdout.decode()
             for b in bs:
                 if b.startswith("* "): break
             cache_name = b[2:]
