@@ -6,7 +6,6 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-import numpy as np
 import unittest
 import jittor as jt
 import numpy as np
@@ -25,10 +24,10 @@ skip_this_test = False
 
 
 @unittest.skipIf(skip_this_test, "skip_this_test")
-class TestModels(unittest.TestCase):
+class test_models(unittest.TestCase):
     @classmethod
     def setUpClass(self):
-        self.testmodels = [
+        self.test_models = [
             ['squeezenet1_0', 'squeezenet1_0'],
             ['squeezenet1_1', 'squeezenet1_1'],
             ['alexnet', 'alexnet'],
@@ -55,35 +54,35 @@ class TestModels(unittest.TestCase):
         # Define numpy input image
         bs = 1
         turns = 100
-        testimg = np.random.random((bs,3,224,224)).astype('float32')
+        test_img = np.random.random((bs,3,224,224)).astype('float32')
         # Define pytorch & jittor input image
-        pytorchtestimg = torch.Tensor(testimg).cuda()
-        jittortestimg = jt.array(testimg)
-        for testmodel in self.testmodels:
+        pytorch_test_img = torch.Tensor(test_img).cuda()
+        jittor_test_img = jt.array(test_img)
+        for test_model in self.test_models:
             # Define pytorch & jittor model
-            pytorchmodel = tcmodels.__dict__[testmodel[0]]().cuda()
-            if 'resnet' in testmodel[0]:
-                jittormodel = jtmodels.resnet.__dict__[testmodel[1]]()
-            elif 'vgg' in testmodel[0]:
-                jittormodel = jtmodels.vgg.__dict__[testmodel[1]]()
-            elif 'alexnet' in testmodel[0]:
-                jittormodel = jtmodels.alexnet.__dict__[testmodel[1]]()
-            elif 'squeezenet' in testmodel[0]:
-                jittormodel = jtmodels.squeezenet.__dict__[testmodel[1]]()
+            pytorch_model = tcmodels.__dict__[test_model[0]]().cuda()
+            if 'resnet' in test_model[0]:
+                jittor_model = jtmodels.resnet.__dict__[test_model[1]]()
+            elif 'vgg' in test_model[0]:
+                jittor_model = jtmodels.vgg.__dict__[test_model[1]]()
+            elif 'alexnet' in test_model[0]:
+                jittor_model = jtmodels.alexnet.__dict__[test_model[1]]()
+            elif 'squeezenet' in test_model[0]:
+                jittor_model = jtmodels.squeezenet.__dict__[test_model[1]]()
             # Set eval to avoid dropout layer
-            pytorchmodel.eval()
-            jittormodel.eval()
+            pytorch_model.eval()
+            jittor_model.eval()
             # Jittor loads pytorch parameters to ensure forward alignment
-            jittormodel.load_parameters(pytorchmodel.state_dict())
+            jittor_model.load_parameters(pytorch_model.state_dict())
             # Judge pytorch & jittor forward relative error. If the differece is lower than threshold, this test passes.
-            pytorchresult = pytorchmodel(pytorchtestimg)
-            jittorresult = jittormodel(jittortestimg)
-            x = pytorchresult.detach().cpu().numpy() + 1
-            y = jittorresult.data + 1
+            pytorch_result = pytorch_model(pytorchtestimg)
+            jittor_result = jittor_model(jittortestimg)
+            x = pytorch_result.detach().cpu().numpy() + 1
+            y = jittor_result.data + 1
             relative_error = abs(x - y) / abs(y)
             diff = relative_error.mean()
-            assert diff < threshold, f"[*] {testmodel[1]} forward fails..., Relative Error: {diff}"
-            print(f"[*] {testmodel[1]} forword passes with Relative Error {diff}")
+            assert diff < threshold, f"[*] {test_model[1]} forward fails..., Relative Error: {diff}"
+            print(f"[*] {test_model[1]} forword passes with Relative Error {diff}")
         print('all models pass test.')
         
 if __name__ == "__main__":

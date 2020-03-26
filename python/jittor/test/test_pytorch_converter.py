@@ -51,20 +51,15 @@ class BasicBlock(nn.Module):
  
     def forward(self, x):
         residual = x
- 
         out = self.conv1(x)
         out = self.bn1(out)
         out = self.relu(out)
- 
         out = self.conv2(out)
         out = self.bn2(out)
- 
         if self.downsample is not None:
             residual = self.downsample(x)
- 
         out += residual
         out = self.relu(out)
- 
         return out
         
 class Bottleneck(nn.Module):
@@ -85,24 +80,18 @@ class Bottleneck(nn.Module):
  
     def forward(self, x):
         residual = x
- 
         out = self.conv1(x)
         out = self.bn1(out)
         out = self.relu(out)
- 
         out = self.conv2(out)
         out = self.bn2(out)
         out = self.relu(out)
- 
         out = self.conv3(out)
         out = self.bn3(out)
- 
         if self.downsample is not None:
             residual = self.downsample(x)
- 
         out += residual
         out = self.relu(out)
- 
         return out
         
         
@@ -216,19 +205,6 @@ def resnet152(pretrained=False, **kwargs):
     if pretrained:
         model.load_state_dict(model_zoo.load_url(model_urls['resnet152']))
     return model
-    
-import numpy as np
-import torch
-import random
-
-# setup random seed
-def setup_seed(seed):
-    np.random.seed(seed)
-    random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = True
 """
 
 @unittest.skipIf(torch is None, "pytorch not found.")
