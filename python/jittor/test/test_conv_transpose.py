@@ -14,6 +14,7 @@ from jittor.test.test_log import find_log_with_re
 skip_this_test = False
 
 try:
+    jt.dirty_fix_pytorch_runtime_error()
     import torch
 except:
     skip_this_test = True

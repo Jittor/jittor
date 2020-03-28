@@ -98,23 +98,26 @@ def collate_batch(batch):
         return jt.array(temp_data)
     if elem_type is np.ndarray:
         temp_data = np.stack([data for data in batch], 0)
-        return jt.array(temp_data)
+        return temp_data
     elif np.issubdtype(elem_type, np.integer):
-        return jt.array(batch)
+        return np.int32(batch)
     elif isinstance(elem, int):
-        return jt.array(batch)
+        return np.int32(batch)
     elif isinstance(elem, float):
-        return jt.array(batch)
+        return np.float32(batch)
     elif isinstance(elem, str):
         return batch
     elif isinstance(elem, Mapping):
         return {key: collate_batch([d[key] for d in batch]) for key in elem}
+    elif isinstance(elem, tuple):
+        transposed = zip(*batch)
+        return tuple(collate_batch(samples) for samples in transposed)
     elif isinstance(elem, Sequence):
         transposed = zip(*batch)
         return [collate_batch(samples) for samples in transposed]
     elif isinstance(elem, Image.Image):
         temp_data = np.stack([np.array(data) for data in batch], 0)
-        return jt.array(temp_data)
+        return temp_data
     else:
         raise TypeError(f"Not support type <{elem_type.__name__}>")
 
