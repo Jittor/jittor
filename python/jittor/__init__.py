@@ -506,6 +506,8 @@ class Module:
         return cd
 
     def extra_repr(self):
+        if self.__init__.__defaults__ is None:
+            return ""
         ss = []
         n = len(self.__init__.__code__.co_varnames) - \
             len(self.__init__.__defaults__)
