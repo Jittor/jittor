@@ -19,7 +19,6 @@ def test_ring_buffer():
             assert (recv == data).all()
         else:
             assert data == recv
-    print(buffer)
     test_send_recv("float32")
     test_send_recv("")
     test_send_recv("xxxxxxxxxx")
@@ -53,7 +52,6 @@ def test_ring_buffer_allocator(p=0.7):
                 for j in range(location, location+size):
                     a[j] = r
                 r += 1
-                # print(r-l, buffer)
                 continue
         assert l<r
         size = sizes[l]
@@ -62,7 +60,6 @@ def test_ring_buffer_allocator(p=0.7):
         for j in range(location, location+size):
             assert a[j] == l
         l += 1
-        # print(r-l, buffer)
 
 
 class TestReindexOp(unittest.TestCase):

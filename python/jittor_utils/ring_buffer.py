@@ -20,6 +20,7 @@ class RingBufferAllocator:
         self.is_full = mp.Value(ctypes.c_bool, False, lock=False)
         self.lock = mp.Lock()
         self.cv = mp.Condition(self.lock)
+        
     def __repr__(self):
         l = self.l.value
         r = self.r.value
@@ -36,7 +37,6 @@ class RingBufferAllocator:
             while True:
                 location = self.alloc(size)
                 if location is not None: break
-                # print("alloc wait", size, self)
                 self.cv.wait()
         return location
     
@@ -204,7 +204,6 @@ class RingBuffer:
     def send_pickle(self, data):
         # pickle: int64[1] char[len]
         #         len     data
-        # print("send pickle")
         data = pickle.dumps(data)
         data = np.frombuffer(data, dtype='c')
         self.send_int(data.nbytes)
@@ -220,32 +219,25 @@ class RingBuffer:
     
     def send_raw(self, data):
         assert isinstance(data, np.ndarray) # and data.flags.c_contiguous
-        # print("send raw", data.shape, data.dtype, data.nbytes)
         with self.allocator.lock:
             location = self.allocator.alloc(data.nbytes)
             while location is None:
-                # print("send wait")
                 self.allocator.cv.wait()
                 location = self.allocator.alloc(data.nbytes)
             window = np.ndarray(shape=data.shape, dtype=data.dtype, 
                                 buffer=self.buffer, offset=location)
             window[:] = data
-            # print("send notify")
             self.allocator.cv.notify()
             assert window.nbytes == data.nbytes
         
     def recv_raw(self, nbytes, shape, dtype):
-        # print("recv raw", shape, dtype, nbytes)
         with self.allocator.lock:
             location = self.allocator.free(nbytes)
-            # print("recv get location", location)
             while location is None:
-                # print("recv wait")
                 self.allocator.cv.wait()
                 location = self.allocator.free(nbytes)
             data = np.ndarray(shape=shape, dtype=dtype, 
                               buffer=self.buffer, offset=location).copy()
-            # print("recv notify")
             self.allocator.cv.notify()
             assert data.nbytes == nbytes
             return data
@@ -266,7 +258,6 @@ class RingBuffer:
     
     def recv(self):
         ts = self.recv_fix_len_str()
-        # print("recv", ts)
         recv = getattr(self, "recv_"+ts, self.recv_pickle)
         return recv()    
     

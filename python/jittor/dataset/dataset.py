@@ -49,16 +49,19 @@ class Dataset(object):
         for x, y in dataset:
             ......
     '''
-    def __init__(self):
+    def __init__(self,
+                 batch_size = 16,
+                 shuffle = False,
+                 drop_last = False,
+                 num_workers = 0,
+                 buffer_size = 512*1024*1024):
         super().__init__()
-        self.batch_size = 16
         self.total_len = None
-        self.shuffle = False
-        self.drop_last = False
-        self.num_workers = 0
-        self.buffer_size = 512*1024*1024
-        if "num_workers" in os.environ:
-            self.num_workers = int(os.environ["num_workers"])
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.drop_last = drop_last
+        self.num_workers = num_workers
+        self.buffer_size = buffer_size
 
     def __getitem__(self, index):
         raise NotImplementedError
@@ -76,10 +79,12 @@ class Dataset(object):
         Attrs:
             batch_size(int): batch size, default 16.
             totol_len(int): totol lenght.
-            num_workers: number of workers for loading data
             shuffle(bool): shuffle at each epoch, default False.
             drop_last(bool): if true, the last batch of dataset
                 might smaller than batch_size, default True.
+            num_workers: number of workers for loading data
+            buffer_size: buffer size for each worker in bytes,
+                default(512MB).
         '''
         for k,v in kw.items():
             assert hasattr(self, k), k
@@ -156,9 +161,13 @@ class Dataset(object):
         workers = []
         # batch id to worker id
         self.idmap = mp.Array('i', self.batch_len, lock=False)
+        # global token index
         self.gid = mp.Value('i', self.batch_len)
+        # global token index condition
         self.gidc = mp.Condition(self.gid.get_lock())
+        # number of idle workers
         self.num_idle = mp.Value('i', 0, lock=False)
+        # number of idle workers condition
         self.num_idle_c = mp.Condition(self.gid.get_lock())
         for i in range(self.num_workers):
             w = Worker(target=self._worker_main, args=(i,), 
