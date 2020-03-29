@@ -10,6 +10,7 @@
 #include <cstring>
 #include <cuda_runtime.h>
 #include <helper_cuda.h>
+#include "misc/cuda_flags.h"
 #include "var.h"
 #include "mem/allocator.h"
 #include "mem/allocator/sfrl_allocator.h"
@@ -79,11 +80,7 @@ extern list<Allocation> allocations;
 
 }
 
-#if CUDA_VERSION < 10000
-void to_free_allocation(cudaStream_t stream, cudaError_t status, void*);
-#else
-void to_free_allocation(void*);
-#endif
+void to_free_allocation(CUDA_HOST_FUNC_ARGS);
 
 struct DelayFree final : Allocator {
     inline uint64 flags() const override { return _cuda; };
@@ -98,11 +95,7 @@ struct DelayFree final : Allocator {
     void free(void* mem_ptr, size_t size, const size_t& allocation) override {
         using namespace cuda_dual_local;
         allocations.emplace_back(mem_ptr, allocation, size, &cuda_dual_allocator);
-#if CUDA_VERSION < 10000
-        checkCudaErrors(cudaStreamAddCallback(0, &to_free_allocation, 0, 0));
-#else
-        checkCudaErrors(cudaLaunchHostFunc(0, &to_free_allocation, 0));
-#endif
+        checkCudaErrors(_cudaLaunchHostFunc(0, &to_free_allocation, 0));
     }
 
     void migrate_to_cpu(void*& mem_ptr, size_t& allocation, size_t size, Allocator* allocator) {

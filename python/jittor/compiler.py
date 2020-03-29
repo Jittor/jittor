@@ -724,8 +724,9 @@ def check_cache_compile():
 def env_or_try_find(name, bname):
     if name in os.environ:
         path = os.environ[name]
-        version = jit_utils.get_version(path)
-        LOG.i(f"Found {bname}{version} at {path}")
+        if path != "":
+            version = jit_utils.get_version(path)
+            LOG.i(f"Found {bname}{version} at {path}")
         return path
     return try_find_exe(bname)
 

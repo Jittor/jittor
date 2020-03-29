@@ -7,6 +7,7 @@
 #include <cuda_runtime.h>
 #include <helper_cuda.h>
 #include <mutex>
+#include "misc/cuda_flags.h"
 #include "mem/allocator/sfrl_allocator.h"
 #include "mem/allocator/cuda_dual_allocator.h"
 #include "event_queue.h"
@@ -33,12 +34,7 @@ static void fetch_caller() {
     fetch_tasks.pop_front();
 }
 
-
-#if CUDA_VERSION < 10000
-static void to_fetch(cudaStream_t stream, cudaError_t status, void*) {
-#else
-static void to_fetch(void*) {
-#endif
+static void to_fetch(CUDA_HOST_FUNC_ARGS) {
     event_queue.push(fetch_caller);
 }
 
@@ -101,11 +97,7 @@ void fetch(const vector<VarHolder*>& vh, FetchFunc&& func) {
     #ifdef HAS_CUDA
     if (has_cuda_memcpy) {
         fetch_tasks.push_back({move(func), move(allocations), move(arrays)});
-#if CUDA_VERSION < 10000
-        checkCudaErrors(cudaStreamAddCallback(stream, &to_fetch, 0, 0));
-#else
-        checkCudaErrors(cudaLaunchHostFunc(stream, &to_fetch, 0));
-#endif
+        checkCudaErrors(_cudaLaunchHostFunc(stream, &to_fetch, 0));
     } else
     #endif
     {

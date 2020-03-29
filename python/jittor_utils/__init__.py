@@ -193,8 +193,9 @@ def find_exe(name, check_version=True):
 def env_or_find(name, bname):
     if name in os.environ:
         path = os.environ[name]
-        version = get_version(path)
-        LOG.i(f"Found {bname}{version} at {path}")
+        if path != "":
+            version = get_version(path)
+            LOG.i(f"Found {bname}{version} at {path}")
         return path
     return find_exe(bname)
 

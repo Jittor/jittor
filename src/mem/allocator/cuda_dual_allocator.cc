@@ -4,6 +4,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #ifdef HAS_CUDA
+#include "misc/cuda_flags.h"
 #include "mem/allocator/cuda_dual_allocator.h"
 #include "mem/allocator/cuda_host_allocator.h"
 #include "mem/allocator/cuda_device_allocator.h"
@@ -26,11 +27,7 @@ static void free_caller() {
 
 }
 
-#if CUDA_VERSION < 10000
-void to_free_allocation(cudaStream_t stream, cudaError_t status, void*) {
-#else
-void to_free_allocation(void*) {
-#endif
+void to_free_allocation(CUDA_HOST_FUNC_ARGS) {
     using namespace cuda_dual_local;
     event_queue.push(free_caller);
 }
