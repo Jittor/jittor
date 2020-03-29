@@ -16,7 +16,7 @@ from setuptools import setup, find_packages
 import os
 
 path = os.path.dirname(__file__)
-with open(path + "/README.src.md", "r") as fh:
+with open(os.path.join(path, "README.src.md")) as fh:
     long_description = fh.read()
 
 setuptools.setup(
@@ -33,7 +33,7 @@ setuptools.setup(
     python_requires='>=3.7',
 
     packages=["jittor", "jittor.test", "jittor.models", "jittor.utils", "jittor_utils"],
-    package_dir={'':path+'/python'},
+    package_dir={'': os.path.join(path, 'python')},
     package_data={'': ['*', '*/*', '*/*/*','*/*/*/*','*/*/*/*/*','*/*/*/*/*/*']},
     # include_package_data=True,
     install_requires=[
