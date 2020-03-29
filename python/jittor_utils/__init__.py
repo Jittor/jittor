@@ -172,15 +172,19 @@ def find_cache_path():
         sys.path.append(path)
     return path
 
+def get_version(output):
+    version = run_cmd(output+" --version")
+    v = re.findall("[0-9]+\\.[0-9]+\\.[0-9]+", version)
+    if len(v) == 0:
+        v = re.findall("[0-9]+\\.[0-9]+", version)
+    assert len(v) != 0, f"Can not find version number from: {version}"
+    version = "("+v[-1]+")"
+    return version
+
 def find_exe(name, check_version=True):
     output = run_cmd(f'which {name}', err_msg=f'{name} not found')
     if check_version:
-        version = run_cmd(output+" --version")
-        v = re.findall("[0-9]+\\.[0-9]+\\.[0-9]+", version)
-        if len(v) == 0:
-            v = re.findall("[0-9]+\\.[0-9]+", version)
-        assert len(v) != 0, f"Can not find version number from: {version}"
-        version = "("+v[-1]+")"
+        version = get_version(name)
     else:
         version = ""
     LOG.i(f"Found {name}{version} at {output}.")
@@ -188,7 +192,10 @@ def find_exe(name, check_version=True):
 
 def env_or_find(name, bname):
     if name in os.environ:
-        return os.environ[name]
+        path = os.environ[name]
+        version = get_version(path)
+        LOG.i(f"Found {bname}{version} at {path}")
+        return path
     return find_exe(bname)
 
 def get_cc_type(cc_path):

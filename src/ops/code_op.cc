@@ -61,7 +61,7 @@ void CodeOp::jit_prepare() {
         add_jit_define("INDIM", JK::hex1(i), JK::hex1(in[i]->shape.size()));
         add_jit_define("Tin", JK::hex1(i), in[i]->dtype());
     }
-    if (use_cuda) {
+    if (flags.get(NodeFlags::_cuda)) {
         jk << JK::key << "HEADER" << JK::val << cuda_header;
         ASSERT(cuda_src.size());
         jk << "\nnamespace jittor {\n";
