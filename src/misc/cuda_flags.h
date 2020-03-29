@@ -11,8 +11,7 @@ namespace jittor {
 #ifdef HAS_CUDA
 DECLARE_FLAG(int, use_cuda);
 
-// #if CUDA_VERSION < 10000
-#if 1
+#if CUDA_VERSION < 10000
     #define _cudaLaunchHostFunc(a,b,c) \
         cudaStreamAddCallback(a,b,c,0)
     #define CUDA_HOST_FUNC_ARGS cudaStream_t stream, cudaError_t status, void*
