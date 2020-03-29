@@ -26,7 +26,11 @@ static void free_caller() {
 
 }
 
+#if CUDA_VERSION < 10000
+void to_free_allocation(cudaStream_t stream, cudaError_t status, void*) {
+#else
 void to_free_allocation(void*) {
+#endif
     using namespace cuda_dual_local;
     event_queue.push(free_caller);
 }
