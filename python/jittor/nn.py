@@ -13,6 +13,7 @@ import jittor as jt
 from jittor import init, Module
 import numpy as np
 import math
+from jittor.pool import Pool, pool
 
 def matmul_transpose(a, b):
     '''
@@ -63,18 +64,6 @@ def batch_norm(x, is_train, eps=1e-5, momentum=0.1):
         norm_x = (x-running_mean)/jt.sqrt(running_var+eps)
 
     return norm_x * w + b
-
-def pool(x, size, op, padding, stride = 1):
-    N,C,H,W = x.shape
-    h = (H+padding*2-size)//stride+1
-    w = (W+padding*2-size)//stride+1
-    xx = x.reindex([N,C,h,w,size,size], [
-        "i0", # Nid
-        "i1", # Cid
-        f"i2*{stride}-{padding}+i4", # Hid
-        f"i3*{stride}-{padding}+i5", # Wid
-    ])
-    return xx.reduce(op, [4,5])
 
 @jt.var_scope('conv')
 def conv(x, in_planes, out_planes, kernel_size, padding, stride = 1, init_method=None):
@@ -278,33 +267,6 @@ class BatchNorm(Module):
         w = self.weight.broadcast(x, [0,2,3])
         b = self.bias.broadcast(x, [0,2,3])
         return norm_x * w + b
-
-class Pool(Module):
-    def __init__(self, kernel_size, stride=None, padding=0, dilation=None, return_indices=None, ceil_mode=False, op="maximum"):
-        assert dilation == None
-        assert return_indices == None
-        self.kernel_size = kernel_size
-        self.op = op
-        self.stride = stride if stride else kernel_size
-        self.padding = padding
-        self.ceil_mode = ceil_mode
-
-    def execute(self, x):
-        N,C,H,W = x.shape
-        if (self.ceil_mode == False):
-            h = (H+self.padding*2-self.kernel_size)//self.stride+1
-            w = (W+self.padding*2-self.kernel_size)//self.stride+1
-        else:
-            h = (H+self.padding*2-self.kernel_size + self.stride - 1)//self.stride+1
-            w = (W+self.padding*2-self.kernel_size + self.stride - 1)//self.stride+1
-
-        xx = x.reindex([N,C,h,w,self.kernel_size,self.kernel_size], [
-            "i0", # Nid
-            "i1", # Cid
-            f"i2*{self.stride}-{self.padding}+i4", # Hid
-            f"i3*{self.stride}-{self.padding}+i5", # Wid
-        ])
-        return xx.reduce(self.op, [4,5])
 
 Relu = jt.make_module(relu)
 ReLU = Relu
