@@ -6,12 +6,17 @@
 #pragma once
 #include "common.h"
 
-namespace jittor {
 
 #ifdef HAS_CUDA
+#include <cuda_runtime.h>
+
+namespace jittor {
+
 DECLARE_FLAG(int, use_cuda);
 
-#if CUDA_VERSION < 10000
+} // jittor
+
+#if CUDART_VERSION < 10000
     #define _cudaLaunchHostFunc(a,b,c) \
         cudaStreamAddCallback(a,b,c,0)
     #define CUDA_HOST_FUNC_ARGS cudaStream_t stream, cudaError_t status, void*
@@ -22,7 +27,10 @@ DECLARE_FLAG(int, use_cuda);
 #endif
 
 #else
+
+namespace jittor {
+
 constexpr int use_cuda = 0;
-#endif
 
 } // jittor
+#endif
