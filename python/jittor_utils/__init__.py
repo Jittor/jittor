@@ -103,8 +103,10 @@ def try_import_jit_utils_core(silent=None):
 
 def run_cmd(cmd, cwd=None, err_msg=None, print_error=True):
     LOG.v(f"Run cmd: {cmd}")
-    if cwd: cmd = f"cd {cwd} && {cmd}"
-    r = sp.run(cmd, shell=True, stdout=sp.PIPE, stderr=sp.STDOUT)
+    if cwd:
+        r = sp.run(cmd, cwd=cwd, shell=True, stdout=sp.PIPE, stderr=sp.STDOUT)
+    else:
+        r = sp.run(cmd, shell=True, stdout=sp.PIPE, stderr=sp.STDOUT)
     s = r.stdout.decode('utf8')
     if r.returncode != 0:
         if print_error:

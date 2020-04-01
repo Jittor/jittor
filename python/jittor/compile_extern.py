@@ -190,7 +190,7 @@ def install_cutt(root_folder):
 
         from jittor_utils import run_cmd
         LOG.i("installing cutt...")
-        run_cmd(f"cd {dirname} && make")
+        run_cmd(f"make", cwd=dirname)
     return dirname
 
 def setup_cutt():
