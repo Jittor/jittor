@@ -27,7 +27,7 @@ skip_this_test = False
 class test_models(unittest.TestCase):
     @classmethod
     def setUpClass(self):
-        self.test_models = [
+        self.models = [
             ['squeezenet1_0', 'squeezenet1_0'],
             ['squeezenet1_1', 'squeezenet1_1'],
             ['alexnet', 'alexnet'],
@@ -58,7 +58,7 @@ class test_models(unittest.TestCase):
         # Define pytorch & jittor input image
         pytorch_test_img = torch.Tensor(test_img).cuda()
         jittor_test_img = jt.array(test_img)
-        for test_model in self.test_models:
+        for test_model in self.models:
             # Define pytorch & jittor model
             pytorch_model = tcmodels.__dict__[test_model[0]]().cuda()
             if 'resnet' in test_model[0]:
@@ -75,8 +75,8 @@ class test_models(unittest.TestCase):
             # Jittor loads pytorch parameters to ensure forward alignment
             jittor_model.load_parameters(pytorch_model.state_dict())
             # Judge pytorch & jittor forward relative error. If the differece is lower than threshold, this test passes.
-            pytorch_result = pytorch_model(pytorchtestimg)
-            jittor_result = jittor_model(jittortestimg)
+            pytorch_result = pytorch_model(pytorch_test_img)
+            jittor_result = jittor_model(jittor_test_img)
             x = pytorch_result.detach().cpu().numpy() + 1
             y = jittor_result.data + 1
             relative_error = abs(x - y) / abs(y)
