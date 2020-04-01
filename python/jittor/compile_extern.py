@@ -172,11 +172,9 @@ def install_cutt(root_folder):
 
     if os.path.exists(fullname):
         md5 = os.popen('md5sum ' + fullname).read().split()[0]
-    else:
-        md5 = '233'
-    if md5 != true_md5:
-        os.system('rm ' + fullname)
-        os.system('rm -rf ' + dirname)
+        if md5 != true_md5:
+            os.system('rm ' + fullname)
+            os.system('rm -rf ' + dirname)
     if not os.path.isfile(os.path.join(dirname, "bin", "cutt_test")):
         LOG.i("Downloading cutt...")
         download_url_to_local(url, filename, root_folder, true_md5)

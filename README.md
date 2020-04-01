@@ -1,12 +1,12 @@
 # Jittor: a Just-in-time(JIT) deep learning framework
 
-[Quickstart](#quickstart) | [Install](#install) | [Tutorial](#tutorial)
+[Quickstart](#quickstart) | [Install](#install) | [Tutorial](#tutorial) | [Chinese](./README.cn.md)
 
 
 Jittor is a high-performance deep learning framework based on JIT compiling and meta-operators. The whole framework and meta-operators are compiled just-in-time. A powerful op compiler and tuner are integrated into Jittor. It allowed us to generate high-performance code with specialized for your model.
 
 
-The front-end language is Python. Module Design is used in the front-end, like PyTorch and Keras. The back-end is implemented py high performance language, such as CUDA,C++.
+The front-end language is Python. Module Design is used in the front-end, which is the most popular design for deeplearning framework interface. The back-end is implemented by high performance language, such as CUDA,C++.
 
 
 The following example shows how to model a two-layer neural network step by step and train from scratch In a few lines of Python code.
@@ -41,7 +41,7 @@ for i,(x,y) in enumerate(get_data(n)):
     pred_y = model(x)
     loss = ((pred_y - y)**2)
     loss_mean = loss.mean()
-    optim.step (loss_mean)
+    optim.step(loss_mean)
     print(f"step {i}, loss = {loss_mean.data.sum()}")
 ```
 
@@ -309,6 +309,32 @@ Those notebooks can be started in your own computer by `python3.7 -m jittor.note
 
 Jittor is still young. It may contain bugs and issues. Please report them in our bug track system. Contributions are welcome. Besides, if you have any ideas about Jittor, please let us know.
 
+
+
+
+You can help Jittor in the following ways:
+
+* Citing Jittor in your paper
+* recommend Jittor to your friends
+* Contributing code
+* Contributed tutorials and documentation
+* File an issue
+* Answer jittor related questions
+* Light up the stars
+* Keep an eye on jittor
+* ......
+
+## Contact Us
+
+
+
+
+
+Website: http://cg.cs.tsinghua.edu.cn/jittor/
+
+Email: jittor@qq.com
+
+File an issue: https://github.com/Jittor/jittor/issues
 
 ## The Team
 

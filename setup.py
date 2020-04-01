@@ -1,17 +1,22 @@
-import platform
-
 error_msg = "Jittor only supports Ubuntu>=16.04 currently."
-assert hasattr(platform, "linux_distribution"), error_msg
-dis_name = platform.linux_distribution()[0].lower()
-version = float(platform.linux_distribution()[1])
-assert "ubuntu" in dis_name and version >= 16, error_msg
+
+try:
+    with open("/etc/os-release") as f:
+        s = f.read().splitlines()
+        m = {}
+        for line in s:
+            a = line.split('=')
+            m[a[0]] = a[1].replace("\"", "")
+except:
+    raise RuntimeError(error_msg)
+assert m["NAME"] == "Ubuntu" and float(m["VERSION_ID"])>16, error_msg
 
 import setuptools
 from setuptools import setup, find_packages
 import os
 
 path = os.path.dirname(__file__)
-with open(path + "/README.src.md", "r") as fh:
+with open(os.path.join(path, "README.src.md")) as fh:
     long_description = fh.read()
 
 setuptools.setup(
@@ -28,7 +33,7 @@ setuptools.setup(
     python_requires='>=3.7',
 
     packages=["jittor", "jittor.test", "jittor.models", "jittor.utils", "jittor_utils"],
-    package_dir={'':path+'/python'},
+    package_dir={'': os.path.join(path, 'python')},
     package_data={'': ['*', '*/*', '*/*/*','*/*/*/*','*/*/*/*/*','*/*/*/*/*/*']},
     # include_package_data=True,
     install_requires=[

@@ -1,0 +1,46 @@
+test_clang_8_cuda_10:
+  tags:
+    - clang
+    - cuda
+  script:
+    - export cache_name=$CI_COMMIT_REF_NAME
+    - export cc_path="clang-8"
+    - export cc_flags=" -g "
+    - export log_sync=0
+    - export log_v=0
+    - export PYTHONIOENCODING=utf8
+    - export PYTHONPATH=`pwd`/python
+    - export nvcc_path=/usr/local/cuda/bin/nvcc
+    - python3.7 -c "import jittor"
+    - python3.7 -m jittor.test -v
+    
+# test_icc_19:
+#   tags:
+#     - icc
+#   script:
+#     - export cache_name=$CI_COMMIT_REF_NAME
+#     - export cc_path="/opt/intel/system_studio_2019/bin/icc"
+#     - export cc_flags=" -g "
+#     - export log_sync=0
+#     - export log_v=0
+#     - export PYTHONIOENCODING=utf8
+#     - export PYTHONPATH=`pwd`/python
+#     - export LD_LIBRARY_PATH="/opt/intel/system_studio_2019/compilers_and_libraries/linux/lib/intel64"
+#     - python3.7 -c "import jittor"
+#     - python3.7 -m jittor.test -v
+    
+test_g++:
+  tags:
+    - gcc
+  script:
+    - export cache_name=$CI_COMMIT_REF_NAME
+    - export cc_path="g++"
+    - export cc_flags=" -g "
+    - export log_sync=0
+    - export log_v=0
+    - export PYTHONIOENCODING=utf8
+    - export PYTHONPATH=`pwd`/python
+    - export nvcc_path=
+    - python3.7 -c "import jittor"
+    - python3.7 -m jittor.test -v
+    

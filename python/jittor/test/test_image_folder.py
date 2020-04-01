@@ -20,6 +20,7 @@ if os.uname()[1] == "jittor-ce":
 try:
     # check can we run this test
     # test code
+    jt.dirty_fix_pytorch_runtime_error()
     import torchvision.datasets as datasets
     import torchvision.transforms as transforms
     import torch
@@ -29,7 +30,7 @@ try:
     assert os.path.isdir(traindir)
 
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                    std=[0.229, 0.224, 0.225])
+                                     std=[0.229, 0.224, 0.225])
     train_dataset = datasets.ImageFolder(
         traindir,
         transforms.Compose([

@@ -61,10 +61,33 @@ void CodeOp::jit_prepare() {
         add_jit_define("INDIM", JK::hex1(i), JK::hex1(in[i]->shape.size()));
         add_jit_define("Tin", JK::hex1(i), in[i]->dtype());
     }
-    if (use_cuda) {
-        add_jit_define("HEADER", cuda_header);
-        add_jit_define("CODE", cuda_src);
+    if (flags.get(NodeFlags::_cuda)) {
+        jk << JK::key << "HEADER" << JK::val << cuda_header;
         ASSERT(cuda_src.size());
+        jk << "\nnamespace jittor {\n";
+        int i=0;
+        // move cuda kernel function into header
+        for (; i<cuda_src.size(); i++) {
+            if (cuda_src[i] == ' ' || cuda_src[i] == '\t' || cuda_src[i] == '\n') {
+                jk << cuda_src[i];
+            } else
+            if (cuda_src[i] == '_') {
+                int presum = 0;
+                while (i < cuda_src.size()) {
+                    jk << cuda_src[i];
+                    if (cuda_src[i] == '{') presum ++;
+                    else if (cuda_src[i] == '}') {
+                        presum--;
+                        if (presum==0)
+                            break;
+                    }
+                    i++;
+                }
+            } else break;
+        }
+        jk << "}" << JK::end << JK::key << "CODE" << JK::val;
+        for (; i<cuda_src.size(); i++) jk << cuda_src[i];
+        jk << JK::end;
     } else {
         add_jit_define("HEADER", cpu_header);
         add_jit_define("CODE", cpu_src);

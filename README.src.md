@@ -1,7 +1,7 @@
 # Jittor: a Just-in-time(JIT) deep learning framework
 # Jittor: 即时编译深度学习框架
 
-[Quickstart](#quickstart) | [Install](#install) | [Tutorial](#tutorial)
+[Quickstart](#quickstart) | [Install](#install) | [Tutorial](#tutorial) | [Chinese](./README.cn.md)
 
 [快速开始](#快速开始) | [安装](#安装) | [教程](#教程)
 
@@ -9,9 +9,9 @@ Jittor is a high-performance deep learning framework based on JIT compiling and 
 
 Jittor 是一个基于即时编译和元算子的高性能深度学习框架，整个框架在即时编译的同时，还集成了强大的Op编译器和调优器，为您的模型生成定制化的高性能代码。
 
-The front-end language is Python. Module Design is used in the front-end, like PyTorch and Keras. The back-end is implemented py high performance language, such as CUDA,C++.
+The front-end language is Python. Module Design is used in the front-end, which is the most popular design for deeplearning framework interface. The back-end is implemented by high performance language, such as CUDA,C++.
 
-Jittor前端语言为Python。前端使用了模块化的设计，类似于PyTorch，Keras，后端则使用高性能语言编写，如CUDA，C++。
+Jittor前端语言为Python。前端使用了模块化的设计，这是目前最主流的深度学习框架接口设计。后端则使用高性能语言编写，如CUDA，C++。
 
 The following example shows how to model a two-layer neural network step by step and train from scratch In a few lines of Python code.
 
@@ -46,7 +46,7 @@ for i,(x,y) in enumerate(get_data(n)):
     pred_y = model(x)
     loss = ((pred_y - y)**2)
     loss_mean = loss.mean()
-    optim.step (loss_mean)
+    optim.step(loss_mean)
     print(f"step {i}, loss = {loss_mean.data.sum()}")
 ```
 
@@ -392,6 +392,46 @@ Those notebooks can be started in your own computer by `python3.7 -m jittor.note
 Jittor is still young. It may contain bugs and issues. Please report them in our bug track system. Contributions are welcome. Besides, if you have any ideas about Jittor, please let us know.
 
 Jittor还很年轻。 它可能存在错误和问题。 请在我们的错误跟踪系统中报告它们。 我们欢迎您为Jittor做出贡献。 此外，如果您对Jittor有任何想法，请告诉我们。
+
+您可以用以下方式帮助Jittor：
+
+* 在论文中引用 Jittor
+* 向身边的好朋友推荐 Jittor
+* 贡献代码
+* 贡献教程和文档
+* 提出issue
+* 回答 jittor 相关问题
+* 点亮小星星
+* 持续关注 jittor
+* ……
+
+You can help Jittor in the following ways:
+
+* Citing Jittor in your paper
+* recommend Jittor to your friends
+* Contributing code
+* Contributed tutorials and documentation
+* File an issue
+* Answer jittor related questions
+* Light up the stars
+* Keep an eye on jittor
+* ......
+
+## Contact Us
+
+## 联系我们
+
+官方主页： http://cg.cs.tsinghua.edu.cn/jittor/
+
+电子邮件：jittor@qq.com
+
+提出issue：https://github.com/Jittor/jittor/issues
+
+Website: http://cg.cs.tsinghua.edu.cn/jittor/
+
+Email: jittor@qq.com
+
+File an issue: https://github.com/Jittor/jittor/issues
 
 ## The Team
 
