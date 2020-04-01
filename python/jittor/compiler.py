@@ -914,7 +914,11 @@ compile_extern()
 
 with jit_utils.import_scope(import_flags):
     import jittor_core as core
+
 flags = core.flags()
+if has_cuda:
+    nvcc_flags += f" -arch={','.join(map(lambda x:'sm_'+str(x),flags.cuda_archs))} "
+
 flags.cc_path = cc_path
 flags.cc_type = cc_type
 flags.cc_flags = cc_flags + link_flags + kernel_opt_flags

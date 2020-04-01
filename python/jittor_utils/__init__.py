@@ -17,7 +17,8 @@ from ctypes import cdll
 
 class LogWarper:
     def __init__(self):
-        pass
+        self.log_silent = int(os.environ.get("log_silent", "0"))
+        self.log_v = int(os.environ.get("log_v", "0"))
 
     def log_capture_start(self):
         cc.log_capture_start()
@@ -39,6 +40,8 @@ class LogWarper:
         if cc and hasattr(cc, "log"):
             cc.log(fileline, level, verbose, msg)
         else:
+            if self.log_silent or verbose > self.log_v:
+                return
             time = datetime.datetime.now().strftime("%m%d %H:%M:%S.%f")
             tid = threading.get_ident()%100
             v = f" v{verbose}" if verbose else ""
@@ -150,7 +153,7 @@ def find_cache_path():
             cache_name = os.environ["cache_name"]
         else:
             # try to get branch name from git
-            r = sp.run("git branch", cwd=os.path.dirname(__file__), stdout=sp.PIPE,
+            r = sp.run(["git","branch"], cwd=os.path.dirname(__file__), stdout=sp.PIPE,
                    stderr=sp.PIPE)
             assert r.returncode == 0
             bs = r.stdout.decode()

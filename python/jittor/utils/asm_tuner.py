@@ -9,6 +9,7 @@
 # ***************************************************************
 import sys
 import os
+os.environ["log_silent"] = "1"
 import re
 import jittor_utils as jit_utils
 from jittor_utils import LOG
