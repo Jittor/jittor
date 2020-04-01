@@ -79,6 +79,11 @@ const char *_cudaGetErrorEnum(cusolverStatus_t error);
 const char *_cudaGetErrorEnum(curandStatus_t error);
 #endif
 
+#ifdef NCCL_H_
+// cuRAND API errors
+const char *_cudaGetErrorEnum(ncclResult_t error);
+#endif
+
 #ifdef NV_NPPIDEFS_H
 // NPP API errors
 const char *_cudaGetErrorEnum(NppStatus error);

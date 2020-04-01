@@ -689,8 +689,9 @@ def compile_extern():
 def check_cuda():
     if nvcc_path == "":
         return
-    global cc_flags, has_cuda, core_link_flags, cuda_dir, cuda_lib, cuda_include
+    global cc_flags, has_cuda, core_link_flags, cuda_dir, cuda_lib, cuda_include, cuda_home
     cuda_dir = os.path.dirname(get_full_path_of_executable(nvcc_path))
+    cuda_home = os.path.abspath(os.path.join(cuda_dir, ".."))
     assert cuda_dir.endswith("bin") and "cuda" in cuda_dir.lower(), f"Wrong cuda_dir: {cuda_dir}"
     cuda_include = os.path.abspath(os.path.join(cuda_dir, "..", "include"))
     cuda_lib = os.path.abspath(os.path.join(cuda_dir, "..", "lib64"))
