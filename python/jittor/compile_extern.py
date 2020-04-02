@@ -263,11 +263,11 @@ def install_nccl(root_folder):
 
 def setup_nccl():
     global nccl_ops, use_nccl
+    use_nccl = os.environ.get("use_nccl", "1")=="1"
+    nccl_ops = None
     if not has_cuda:
         use_nccl = False
         return
-    use_nccl = os.environ.get("use_nccl", "1")=="1"
-    nccl_ops = None
     if not use_nccl: return
     nccl_include_path = os.environ.get("nccl_include_path")
     nccl_lib_path = os.environ.get("nccl_lib_path")
