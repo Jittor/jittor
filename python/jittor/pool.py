@@ -182,7 +182,6 @@ class AdaptiveAvgPool2d(Module):
         self.ksw = W - (ow - 1) * self.sw
         h = (H-self.ksh)//self.sh+1
         w = (W-self.ksw)//self.sw+1
-        # print(H / oh,math.floor(1.5),self.sh,self.sw,self.ksh,self.ksw,h,w)
         xx = x.reindex([N,C,h,w,self.ksh,self.ksw], [
             "i0", # Nid
             "i1", # Cid
@@ -191,5 +190,5 @@ class AdaptiveAvgPool2d(Module):
         ])
         return xx.reduce("mean", [4,5])
 
-def pool(x, size, op, padding, stride = 1):
-    return Pool(size, stride, padding, op=op)(x)
+def pool(x, kernel_size, op, padding=0, stride = 1):
+    return Pool(kernel_size, stride, padding, op=op)(x)

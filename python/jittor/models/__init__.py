@@ -2,3 +2,8 @@ from . import resnet
 from . import vgg
 from . import alexnet
 from . import squeezenet
+from . import inception
+from . import googlenet
+from . import mobilenet
+from . import mnasnet
+from . import shufflenetv2
