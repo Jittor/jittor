@@ -100,6 +100,7 @@ void NcclTestOp::jit_run() {
     //finalizing NCCL
     for(int i = 0; i < nDev; ++i)
     ncclCommDestroy(comms[i]);
+    checkCudaErrors(cudaSetDevice(0));
 }
 
 #endif

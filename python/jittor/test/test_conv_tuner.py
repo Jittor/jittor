@@ -133,8 +133,8 @@ def check_backward(xshape, wshape, stride, padding, dilation, use_cuda, nhwc):
         jt.sync([cy, closs, cdx, cdw])
     logs = find_log_with_re(raw_log, "(Jit op key (not )?found: " + op_name + ".*)")
     assert len(logs)==3 and "oihw" in logs[0][0], (logs)
-    assert np.allclose(y.data, cy.data)
-    assert np.allclose(dw.data, cdw.data), (dw.data, cdw.data)
+    assert np.allclose(y.data, cy.data, 1e-3)
+    assert np.allclose(dw.data, cdw.data, 1e-3), (dw.data, cdw.data)
     assert np.allclose(dx.data, cdx.data, 1e-3), (dx.data, cdx.data, np.abs(cdx.data).max(), np.abs(dx.data - cdx.data).max())
 
 class TestConvTuner(unittest.TestCase):
