@@ -12,7 +12,12 @@ import jittor as jt
 import numpy as np
 
 def main():
-    jt.compile_extern.mpi_ops.mpi_test("").data == 123
+    print("test mpi_test")
+    assert jt.compile_extern.mpi_ops.mpi_test("").data == 123
+    if jt.compile_extern.nccl_ops:
+        print("test test_with_mpi")
+        with jt.flag_scope(use_cuda=1):
+            assert jt.compile_extern.nccl_ops.nccl_test("test_with_mpi").data == 123
 
 @unittest.skipIf(jt.compile_extern.mpi_ops is None, "no mpi found")
 class TestMpi(unittest.TestCase):

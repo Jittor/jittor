@@ -7,15 +7,8 @@
 #include "nccl_test_op.h"
 #include "misc/str_utils.h"
 
-#include <nccl.h>
-#include <cuda_runtime.h>
-#include <helper_cuda.h>
+#include "nccl_warper.h"
 
-#ifndef JIT
-const char *_cudaGetErrorEnum(ncclResult_t error) {
-    return ncclGetErrorString(error);
-}
-#endif
 
 namespace jittor {
 
@@ -33,16 +26,41 @@ void NcclTestOp::jit_prepare() {
 #else // JIT
 #ifdef JIT_cuda
 
+static void test_with_mpi() {
+    int size = 32*1024*1024;
+    int myRank = mpi_world_rank;
+    int nRanks = mpi_world_size;
+    int localRank = mpi_local_rank;
+
+    float *sendbuff, *recvbuff;
+    cudaStream_t s;
+    checkCudaErrors(cudaMalloc(&sendbuff, size * sizeof(float)));
+    checkCudaErrors(cudaMalloc(&recvbuff, size * sizeof(float)));
+    checkCudaErrors(cudaStreamCreate(&s));
+
+    //communicating using NCCL
+    checkCudaErrors(ncclAllReduce((const void*)sendbuff, (void*)recvbuff, size, ncclFloat, ncclSum,
+        comm, s));
+
+    //completing NCCL operation by synchronizing on the CUDA stream
+    checkCudaErrors(cudaStreamSynchronize(s));
+
+    //free device buffers
+    checkCudaErrors(cudaFree(sendbuff));
+    checkCudaErrors(cudaFree(recvbuff));
+    checkCudaErrors(cudaStreamDestroy(s));
+
+    LOGi << "MPI rank" << myRank << "Success";
+}
+
 void NcclTestOp::jit_run() {
-    auto args = split(cmd, " ");
-    if (!cmd.size()) args.clear();
-    vector<char*> v(args.size());
-    for (uint i=0; i<args.size(); i++)
-        v[i] = &args[i][0];
     output->ptr<T>()[0] = 123;
+    if (cmd == "test_with_mpi") {
+        test_with_mpi();
+        return;
+    }
+
     
-
-
     //managing 4 devices
     int nDev;
     checkCudaErrors(cudaGetDeviceCount(&nDev));

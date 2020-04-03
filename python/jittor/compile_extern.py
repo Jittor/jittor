@@ -265,7 +265,7 @@ def setup_nccl():
     global nccl_ops, use_nccl
     use_nccl = os.environ.get("use_nccl", "1")=="1"
     nccl_ops = None
-    if not has_cuda:
+    if not has_cuda or mpi is None:
         use_nccl = False
         return
     if not use_nccl: return
@@ -293,9 +293,13 @@ def setup_nccl():
     # We do not link manualy, link in custom ops
     ctypes.CDLL(nccl_lib_name, dlopen_flags)
 
-    nccl_op_dir = os.path.join(jittor_path, "extern", "cuda", "nccl", "ops")
-    nccl_op_files = [os.path.join(nccl_op_dir, name) for name in os.listdir(nccl_op_dir)]
-    nccl_ops = compile_custom_ops(nccl_op_files, 
+    nccl_src_dir = os.path.join(jittor_path, "extern", "cuda", "nccl")
+    nccl_src_files = []
+    for r, _, f in os.walk(nccl_src_dir):
+        for fname in f:
+            nccl_src_files.append(os.path.join(r, fname))
+
+    nccl_ops = compile_custom_ops(nccl_src_files, 
         extra_flags=f" -I'{nccl_include_path}' {mpi_compile_flags} ")
     LOG.vv("Get nccl_ops: "+str(dir(nccl_ops)))
 
@@ -353,6 +357,7 @@ def setup_mpi():
 
     # mpi compile flags add for nccl
     mpi_compile_flags += f" -I'{os.path.join(mpi_src_dir, 'inc')}' "
+    mpi_compile_flags = mpi_compile_flags.replace("-pthread", "")
 
     mpi = compile_custom_ops(mpi_src_files, 
         extra_flags=f" {mpi_flags} ", return_module=True)

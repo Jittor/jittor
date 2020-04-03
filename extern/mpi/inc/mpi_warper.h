@@ -6,6 +6,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#pragma once
 #define OMPI_SKIP_MPICXX
 #include <mpi.h>
 
@@ -25,11 +26,15 @@ namespace jittor {
 
 extern int mpi_world_size;
 extern int mpi_world_rank;
+extern int mpi_local_rank;
 
 // @pyjt(world_size)
 int _mpi_world_size();
 
 // @pyjt(world_rank)
 int _mpi_world_rank();
+
+// @pyjt(local_rank)
+int _mpi_local_rank();
 
 } // jittor
