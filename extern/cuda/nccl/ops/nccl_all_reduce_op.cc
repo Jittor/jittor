@@ -42,7 +42,6 @@ void NcclAllReduceOp::jit_run() {
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
     checkCudaErrors(ncclAllReduce(xp, yp, size, ncclFloat, ncclSum, comm, 0));
-    checkCudaErrors(cudaStreamSynchronize(0));
 }
 
 #endif
