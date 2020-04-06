@@ -45,7 +45,7 @@ jit_op_entry_t load_jit_lib(string name, string symbol_name="jit_entry") {
 }
 
 void run_cmd(string cmd, string cwd="") {
-    if (cwd.size()) cmd = "cd "+cwd + " && " + cmd;
+    if (cwd.size()) cmd = "cd '"+cwd + "' && " + cmd;
     LOGvvv << "Run cmd:" << cmd;
     system_with_check(cmd.c_str());
 }

@@ -116,7 +116,7 @@ class TestResnet(unittest.TestCase):
             assert jt.core.number_of_lived_vars() < 3500
 
         jt.sync_all(True)
-        assert np.mean(loss_list[-50:])<0.2
+        assert np.mean(loss_list[-50:])<0.3
         
 if __name__ == "__main__":
     unittest.main()
