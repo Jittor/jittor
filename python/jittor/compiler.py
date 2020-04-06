@@ -781,6 +781,12 @@ if not os.path.isfile(py3_config_path) :
 
 assert os.path.isfile(py3_config_path)
 nvcc_path = env_or_try_find('nvcc_path', '/usr/local/cuda/bin/nvcc')
+if 'mpi_path' in os.environ:
+    mpi_path = os.environ['mpi_path']
+else:
+    mpi_path = '/usr/local/openmpi'
+assert os.path.isfile(os.path.join(mpi_path,"include","mpi.h"))
+assert os.path.isfile(os.path.join(mpi_path,"lib","libmpi.so"))
 gdb_path = try_find_exe('gdb')
 addr2line_path = try_find_exe('addr2line')
 has_pybt = check_pybt(gdb_path, python_path)
@@ -924,6 +930,7 @@ flags.cc_path = cc_path
 flags.cc_type = cc_type
 flags.cc_flags = cc_flags + link_flags + kernel_opt_flags
 flags.nvcc_path = nvcc_path
+flags.mpi_path = mpi_path
 flags.nvcc_flags = nvcc_flags
 flags.python_path = python_path
 flags.cache_path = cache_path
