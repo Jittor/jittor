@@ -28,6 +28,14 @@ def test_broadcast():
     y = jt.compile_extern.nccl_ops.nccl_broadcast(x, 0)
     assert np.allclose(y.data, data.data)
 
+def test_reduce():
+    print("test reduce")
+    mpi = jt.compile_extern.mpi
+    x = jt.random([5, 5])
+    y = jt.compile_extern.nccl_ops.nccl_all_reduce(x)
+    if mpi.world_rank() == 0:
+        assert np.allclose(y.data, (x*3).data)
+
 def main():
     np.random.seed(0)
     jt.set_seed(3)
@@ -35,6 +43,7 @@ def main():
         if jt.compile_extern.nccl_ops:
             test_all_reduce()
             test_broadcast()
+            test_reduce()
 
 @unittest.skipIf(jt.compile_extern.mpi_ops is None, "no mpi found")
 class TestNcclOps(unittest.TestCase):
