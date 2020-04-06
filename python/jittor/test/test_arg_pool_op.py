@@ -45,6 +45,7 @@ def check(jt_model, torch_model, shape, near_data):
 
 @unittest.skipIf(skip_this_test, "No Torch found")
 class TestArgPoolOp(unittest.TestCase):
+    @unittest.skipIf(jt.compiler.has_cuda, "No cuda found")
     @jt.flag_scope(use_cuda=1)
     def test_cuda(self):
         jt_model = jt.nn.Sequential(Pool(2, 2, 0), Pool(2, 2, 0), Pool(2, 2, 0, ceil_mode=True), Pool(2, 2, 0), Pool(2, 2, 0), Pool(3, 1, 1))

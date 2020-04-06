@@ -31,7 +31,7 @@ class MnistNet(Module):
         x = self.layer(x)
         return x
 
-@unittest.skipIf(skip_model_test, "skip_this_test")
+@unittest.skipIf(skip_model_test, "skip_this_test, model_test != 1")
 class TestVGGClass(unittest.TestCase):
     @classmethod
     def setUpClass(self):
