@@ -1,6 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor.
-// Authors:
+// Copyright (c) 2020 
 //     Dun Liang <randonlang@gmail.com>. 
 // All Rights Reserved.
 // This file is subject to the terms and conditions defined in
@@ -11,13 +10,13 @@
 
 namespace jittor {
 
-struct NcclTestOp : Op {
+struct MpiTestOp : Op {
     Var* output;
     string cmd;
 
-    NcclTestOp(string cmd);
+    MpiTestOp(string cmd);
     
-    const char* name() const override { return "nccl_test"; }
+    const char* name() const override { return "mpi_test"; }
     DECLARE_jit_run;
 };
 

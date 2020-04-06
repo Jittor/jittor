@@ -7,18 +7,15 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
-#include "op.h"
+#include "mpi_warper.h"
+
+#include <cuda_runtime.h>
+#include <nccl.h>
+#include <helper_cuda.h>
 
 namespace jittor {
 
-struct NcclTestOp : Op {
-    Var* output;
-    string cmd;
-
-    NcclTestOp(string cmd);
-    
-    const char* name() const override { return "nccl_test"; }
-    DECLARE_jit_run;
-};
+extern ncclComm_t comm;
+extern ncclUniqueId id;
 
 } // jittor
