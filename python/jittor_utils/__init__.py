@@ -171,7 +171,10 @@ def find_cache_path():
     for d in dirs:
         path = os.path.join(path, d)
         if not os.path.isdir(path):
-            os.mkdir(path)
+            try:
+                os.mkdir(path)
+            except:
+                pass
         assert os.path.isdir(path)
     if path not in sys.path:
         sys.path.append(path)

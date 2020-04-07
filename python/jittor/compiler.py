@@ -17,6 +17,7 @@ from ctypes.util import find_library
 import jittor_utils as jit_utils
 from jittor_utils import LOG, run_cmd, cache_path, find_exe, cc_path, cc_type, cache_path
 from . import pyjt_compiler
+from jittor.lock import jittor_lock
 
 def find_jittor_path():
     return os.path.dirname(__file__)
@@ -798,15 +799,20 @@ import_flags = os.RTLD_NOW | os.RTLD_GLOBAL | os.RTLD_DEEPBIND
 #     import_flags = os.RTLD_NOW | os.RTLD_GLOBAL
 dlopen_flags = os.RTLD_NOW | os.RTLD_GLOBAL | os.RTLD_DEEPBIND
 
+jittor_lock.lock()
 with jit_utils.import_scope(import_flags):
     jit_utils.try_import_jit_utils_core()
+jittor_lock.unlock()
+
 jittor_path = find_jittor_path()
 check_debug_flags()
 
 sys.path.append(cache_path)
 
+jittor_lock.lock()
 with jit_utils.import_scope(import_flags):
     jit_utils.try_import_jit_utils_core()
+jittor_lock.unlock()
 
 python_path = sys.executable
 py3_config_path = sys.executable+"-config"
@@ -848,11 +854,13 @@ make_cache_dir(os.path.join(cache_path, "jit"))
 make_cache_dir(os.path.join(cache_path, "obj_files"))
 make_cache_dir(os.path.join(cache_path, "gen"))
 
+jittor_lock.lock()
 # build cache_compile
 cc_flags += pybind_include
 cc_flags += f" -I{jittor_path}/src "
 check_cache_compile()
 LOG.v(f"Get cache_compile: {jit_utils.cc}")
+jittor_lock.unlock()
 
 # check cuda
 has_cuda = 0
@@ -877,6 +885,7 @@ if has_cuda:
         return nvcc_flags
     nvcc_flags = convert_nvcc_flags(nvcc_flags)
 
+jittor_lock.lock()
 # build core
 gen_jit_flags()
 gen_jit_tests()
@@ -966,3 +975,4 @@ flags.jittor_path = jittor_path
 flags.gdb_path = gdb_path
 flags.addr2line_path = addr2line_path
 flags.has_pybt = has_pybt
+jittor_lock.unlock()
