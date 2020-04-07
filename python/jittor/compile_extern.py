@@ -7,6 +7,7 @@ import os, sys, shutil
 from .compiler import *
 from jittor_utils import run_cmd
 from jittor.dataset.utils import download_url_to_local
+from jittor.lock import jittor_lock
 
 def search_file(dirs, name):
     for d in dirs:
@@ -299,8 +300,10 @@ def setup_nccl():
         extra_flags=f" -I'{nccl_include_path}'")
     LOG.vv("Get nccl_ops: "+str(dir(nccl_ops)))
 
+jittor_lock.lock()
 setup_cutt()
 setup_mkl()
 setup_nccl()
 
 setup_cuda_extern()
+jittor_lock.unlock()

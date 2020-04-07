@@ -14,6 +14,7 @@
 #include "misc/str_utils.h"
 #include "ops/op_register.h"
 #include "ops/array_op.h"
+#include "lock.h"
 
 namespace jittor {
 
@@ -945,6 +946,7 @@ jit_op_entry_t OpCompiler::compile(const string& jit_key, const string& src) {
 }
 
 jit_op_entry_t OpCompiler::do_compile(Op* op) {
+    lock();
     OpCompiler oc(op);
     string* src = &oc.src;
     string src_after_passes;
@@ -954,8 +956,9 @@ jit_op_entry_t OpCompiler::do_compile(Op* op) {
         src_after_passes = tm.tune();
         src = &src_after_passes;
     }
-    return oc.compile(op->get_jit_key(), *src);
+    auto ret = oc.compile(op->get_jit_key(), *src);
+    unlock();
+    return ret;
 }
-
 
 }
