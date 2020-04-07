@@ -266,7 +266,7 @@ def setup_nccl():
     global nccl_ops, use_nccl
     use_nccl = os.environ.get("use_nccl", "1")=="1"
     nccl_ops = None
-    if not has_cuda:
+    if not has_cuda or mpi is None:
         use_nccl = False
         return
     if not use_nccl: return
@@ -294,16 +294,84 @@ def setup_nccl():
     # We do not link manualy, link in custom ops
     ctypes.CDLL(nccl_lib_name, dlopen_flags)
 
-    nccl_op_dir = os.path.join(jittor_path, "extern", "cuda", "nccl", "ops")
-    nccl_op_files = [os.path.join(nccl_op_dir, name) for name in os.listdir(nccl_op_dir)]
-    nccl_ops = compile_custom_ops(nccl_op_files, 
-        extra_flags=f" -I'{nccl_include_path}'")
+    nccl_src_dir = os.path.join(jittor_path, "extern", "cuda", "nccl")
+    nccl_src_files = []
+    for r, _, f in os.walk(nccl_src_dir):
+        for fname in f:
+            nccl_src_files.append(os.path.join(r, fname))
+
+    nccl_ops = compile_custom_ops(nccl_src_files, 
+        extra_flags=f" -I'{nccl_include_path}' {mpi_compile_flags} ")
     LOG.vv("Get nccl_ops: "+str(dir(nccl_ops)))
 
+def manual_link(flags):
+    lib_dirs = []
+    libs = []
+    for f in flags.split():
+        if f.startswith("-l"):
+            libs.append(f[2:])
+        elif f.startswith("-L"):
+            lib_dirs.append(f[2:])
+    LOG.v("manual_link:", flags)
+    LOG.v("lib_dirs:", lib_dirs)
+    LOG.v("libs:", libs)
+    for lib in libs:
+        for d in lib_dirs:
+            libname = os.path.join(d, f"lib{lib}.so")
+            if os.path.isfile(libname):
+                LOG.v("link:", libname)
+                ctypes.CDLL(libname, dlopen_flags)
+                break
+
+
+def setup_mpi():
+    global mpi_ops, mpi, use_mpi
+    global mpicc_path, has_mpi
+    use_mpi = os.environ.get("use_mpi", "1")=="1"
+    mpi_ops = None
+    mpi = None
+    has_mpi = False
+    if not use_mpi: return
+    mpicc_path = env_or_try_find('mpicc_path', 'mpicc')
+    if mpicc_path == "":
+        LOG.i("mpicc not found, distribution disabled.")
+        use_mpi = False
+    else:
+        use_mpi = True
+        has_mpi = True
+    if not use_mpi:
+        return
+
+    global mpi_compile_flags, mpi_link_flags, mpi_flags
+    mpi_compile_flags = run_cmd(mpicc_path+" --showme:compile")
+    mpi_link_flags = run_cmd(mpicc_path+" --showme:link")
+    mpi_flags = mpi_compile_flags + " " + mpi_link_flags
+    LOG.i("mpi_flags: "+mpi_flags)
+    manual_link(mpi_flags)
+
+    # find all source files
+    mpi_src_dir = os.path.join(jittor_path, "extern", "mpi")
+    mpi_src_files = []
+    for r, _, f in os.walk(mpi_src_dir):
+        for fname in f:
+            mpi_src_files.append(os.path.join(r, fname))
+
+    # mpi compile flags add for nccl
+    mpi_compile_flags += f" -I'{os.path.join(mpi_src_dir, 'inc')}' "
+    mpi_compile_flags = mpi_compile_flags.replace("-pthread", "")
+
+    mpi = compile_custom_ops(mpi_src_files, 
+        extra_flags=f" {mpi_flags} ", return_module=True)
+    mpi_ops = mpi.ops
+    LOG.vv("Get mpi: "+str(mpi.__dict__.keys()))
+    LOG.vv("Get mpi_ops: "+str(mpi_ops.__dict__.keys()))
+
 jittor_lock.lock()
+setup_mpi()
+setup_nccl()
+
 setup_cutt()
 setup_mkl()
-setup_nccl()
 
 setup_cuda_extern()
 jittor_lock.unlock()

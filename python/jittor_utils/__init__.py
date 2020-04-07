@@ -181,7 +181,10 @@ def find_cache_path():
     return path
 
 def get_version(output):
-    version = run_cmd(output+" --version")
+    if output.endswith("mpicc"):
+        version = run_cmd(output+" --showme:version")
+    else:
+        version = run_cmd(output+" --version")
     v = re.findall("[0-9]+\\.[0-9]+\\.[0-9]+", version)
     if len(v) == 0:
         v = re.findall("[0-9]+\\.[0-9]+", version)

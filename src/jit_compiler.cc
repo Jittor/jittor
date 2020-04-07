@@ -20,7 +20,6 @@ DEFINE_FLAG(string, jittor_path, "", "Source path of jittor");
 DEFINE_FLAG(string, cc_path, "", "Path of C++ compiler");
 DEFINE_FLAG(string, cc_type, "", "Type of C++ compiler(clang, icc, g++)");
 DEFINE_FLAG(string, cc_flags, "", "Flags of C++ compiler");
-DEFINE_FLAG(string, mpi_path, "", "Path of mpi dir");
 DEFINE_FLAG(string, nvcc_path, "", "Path of CUDA C++ compiler");
 DEFINE_FLAG(string, nvcc_flags, "", "Flags of CUDA C++ compiler");
 DEFINE_FLAG(string, python_path, "", "Path of python interpreter");
