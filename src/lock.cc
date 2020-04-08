@@ -40,7 +40,7 @@ int lock()
     {
         return -1;
     }
-    printf("Pid: %ld process lock to write the file.\n", (long)getpid());
+    // printf("Pid: %ld process lock to write the file.\n", (long)getpid());
     return 0;
 }
  
@@ -59,7 +59,7 @@ int unlock()
     {
         return -1;
     }
-    printf("Pid: %ld process release the file.\n", (long)getpid());
+    // printf("Pid: %ld process release the file.\n", (long)getpid());
     return 0;
 }
 
