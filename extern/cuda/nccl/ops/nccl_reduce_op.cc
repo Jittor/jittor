@@ -41,8 +41,7 @@ void NcclReduceOp::jit_run() {
     int size = 1 @for(i, 0, XDIM,  * xshape@{i});
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
-    checkCudaErrors(ncclReduce(xp, yp, size, ncclFloat, root, comm, 0));
-    checkCudaErrors(cudaStreamSynchronize(0));
+    checkCudaErrors(ncclReduce(xp, yp, size, ncclFloat, ncclSum, root, comm, 0));
 }
 
 #endif

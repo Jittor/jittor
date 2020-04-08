@@ -32,7 +32,8 @@ def test_reduce():
     print("test reduce")
     mpi = jt.compile_extern.mpi
     x = jt.random([5, 5])
-    y = jt.compile_extern.nccl_ops.nccl_all_reduce(x)
+    y = jt.compile_extern.nccl_ops.nccl_reduce(x, 0)
+    y.sync()
     if mpi.world_rank() == 0:
         assert np.allclose(y.data, (x*3).data)
 
