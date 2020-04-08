@@ -640,8 +640,10 @@ def compile_custom_ops(filenames, extra_flags="", return_module=False):
     lib_path = os.path.join(cache_path, "custom_ops")
     if lib_path not in os.sys.path:
         os.sys.path.append(lib_path)
+    jittor_lock.unlock()
     with jit_utils.import_scope(os.RTLD_GLOBAL | os.RTLD_NOW | os.RTLD_DEEPBIND):
         exec(f"import {gen_name}")
+    jittor_lock.lock()
     mod = locals()[gen_name]
     if return_module:
         return mod
@@ -796,7 +798,6 @@ import_flags = os.RTLD_NOW | os.RTLD_GLOBAL | os.RTLD_DEEPBIND
 dlopen_flags = os.RTLD_NOW | os.RTLD_GLOBAL | os.RTLD_DEEPBIND
 
 jittor_lock.lock()
-print('jit_utils.try_import_jit_utils_core() 799 ...')
 with jit_utils.import_scope(import_flags):
     jit_utils.try_import_jit_utils_core()
 jittor_lock.unlock()
@@ -807,7 +808,6 @@ check_debug_flags()
 sys.path.append(cache_path)
 
 jittor_lock.lock()
-print('jit_utils.try_import_jit_utils_core() 810 ...')
 with jit_utils.import_scope(import_flags):
     jit_utils.try_import_jit_utils_core()
 jittor_lock.unlock()
@@ -853,7 +853,6 @@ make_cache_dir(os.path.join(cache_path, "obj_files"))
 make_cache_dir(os.path.join(cache_path, "gen"))
 
 jittor_lock.lock()
-print('check_cache_compile() 856 ...')
 # build cache_compile
 cc_flags += pybind_include
 cc_flags += f" -I{jittor_path}/src "
@@ -885,7 +884,6 @@ if has_cuda:
     nvcc_flags = convert_nvcc_flags(nvcc_flags)
 
 jittor_lock.lock()
-print('build core 888 ...')
 # build core
 gen_jit_flags()
 gen_jit_tests()
