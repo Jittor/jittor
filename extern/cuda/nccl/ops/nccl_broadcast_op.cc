@@ -42,7 +42,6 @@ void NcclBroadcastOp::jit_run() {
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
     checkCudaErrors(ncclBroadcast(xp, yp, size, ncclFloat, root, comm, 0));
-    checkCudaErrors(cudaStreamSynchronize(0));
 }
 
 #endif

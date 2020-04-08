@@ -162,6 +162,14 @@ class SGD(object):
         # sync such parameters to reduce memory consumption
         jt.sync(self.no_grad_parameters)
 
+    def sync(self):
+        ps = self.parameters
+        for p in ps:
+            temp = jt.compile_extern.nccl_ops.nccl_broadcast(p, 0)
+            p -= p
+            p += temp
+            p.detach_inplace()
+
 class Adam(object):
     """ Usage:
     optimizer = nn.Adam(model.parameters(), lr)
