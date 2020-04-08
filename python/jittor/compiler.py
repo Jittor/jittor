@@ -555,7 +555,11 @@ def compile_custom_op(header, source, op_name, warp=True):
     m = compile_custom_ops([hname, ccname])
     return getattr(m, op_name)
 
-def compile_custom_ops(filenames, extra_flags="", return_module=False):
+def compile_custom_ops(
+    filenames, 
+    extra_flags="", 
+    return_module=False,
+    dlopen_flags=os.RTLD_GLOBAL | os.RTLD_NOW | os.RTLD_DEEPBIND):
     """Compile custom ops
     filenames: path of op source files, filenames must be
         pairs of xxx_xxx_op.cc and xxx_xxx_op.h, and the 
@@ -641,7 +645,7 @@ def compile_custom_ops(filenames, extra_flags="", return_module=False):
     if lib_path not in os.sys.path:
         os.sys.path.append(lib_path)
     jittor_lock.unlock()
-    with jit_utils.import_scope(os.RTLD_GLOBAL | os.RTLD_NOW | os.RTLD_DEEPBIND):
+    with jit_utils.import_scope(dlopen_flags):
         exec(f"import {gen_name}")
     jittor_lock.lock()
     mod = locals()[gen_name]

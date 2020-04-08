@@ -19,15 +19,13 @@ def main():
         with jt.flag_scope(use_cuda=1):
             assert jt.compile_extern.nccl_ops.nccl_test("test_with_mpi").data == 123
 
-@unittest.skipIf(jt.compile_extern.mpi_ops is None, "no mpi found")
+@unittest.skipIf(jt.compile_extern.has_mpi is None, "no mpi found")
 class TestMpi(unittest.TestCase):
     def test(self):
-        mpi = jt.compile_extern.mpi
-        if mpi.world_size() == 1:
-            mpirun_path = jt.compiler.env_or_try_find('mpirun_path', 'mpirun')
+        if not jt.compile_extern.inside_mpi():
+            mpirun_path = jt.compile_extern.mpicc_path.replace("mpicc", "mpirun")
             cmd = f"{mpirun_path} -np 2 {sys.executable} -m jittor.test.test_mpi"
-            print("run cmd", cmd)
-            jt.compiler.run_cmd(cmd)
+            assert os.system(cmd)==0, "run cmd failed: "+cmd
         else:
             main()
 
