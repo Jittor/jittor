@@ -800,6 +800,7 @@ import_flags = os.RTLD_NOW | os.RTLD_GLOBAL | os.RTLD_DEEPBIND
 dlopen_flags = os.RTLD_NOW | os.RTLD_GLOBAL | os.RTLD_DEEPBIND
 
 jittor_lock.lock()
+print('jit_utils.try_import_jit_utils_core() 799 ...')
 with jit_utils.import_scope(import_flags):
     jit_utils.try_import_jit_utils_core()
 jittor_lock.unlock()
@@ -810,6 +811,7 @@ check_debug_flags()
 sys.path.append(cache_path)
 
 jittor_lock.lock()
+print('jit_utils.try_import_jit_utils_core() 810 ...')
 with jit_utils.import_scope(import_flags):
     jit_utils.try_import_jit_utils_core()
 jittor_lock.unlock()
@@ -855,6 +857,7 @@ make_cache_dir(os.path.join(cache_path, "obj_files"))
 make_cache_dir(os.path.join(cache_path, "gen"))
 
 jittor_lock.lock()
+print('check_cache_compile() 856 ...')
 # build cache_compile
 cc_flags += pybind_include
 cc_flags += f" -I{jittor_path}/src "
@@ -886,6 +889,7 @@ if has_cuda:
     nvcc_flags = convert_nvcc_flags(nvcc_flags)
 
 jittor_lock.lock()
+print('build core 888 ...')
 # build core
 gen_jit_flags()
 gen_jit_tests()
