@@ -367,6 +367,7 @@ def setup_mpi():
     LOG.vv("Get mpi_ops: "+str(mpi_ops.__dict__.keys()))
 
 jittor_lock.lock()
+print('setup_mpi ...')
 setup_mpi()
 setup_nccl()
 
