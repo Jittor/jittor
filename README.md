@@ -261,7 +261,7 @@ Beside that, All the operators we used `jt.xxx(Var, ...)` have alias `Var.xxx(..
 
 
 ```python
-c.max() # alias of jt.max(a)
+c.max() # alias of jt.max(c)
 c.add(a) # alias of jt.add(c, a)
 c.min(keepdims=True) # alias of jt.min(c, keepdims=True)
 ```

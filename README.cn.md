@@ -266,7 +266,7 @@ print(type(a), type(b), type(c))
 除此之外，我们使用的所有算子`jt.xxx(Var,...)`都具有别名`Var.xxx(...)`。 例如：
 
 ```python
-c.max() # alias of jt.max(a)
+c.max() # alias of jt.max(c)
 c.add(a) # alias of jt.add(c, a)
 c.min(keepdims=True) # alias of jt.min(c, keepdims=True)
 ```
