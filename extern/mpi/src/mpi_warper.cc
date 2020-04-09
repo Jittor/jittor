@@ -12,6 +12,7 @@
 
 #include "mpi_warper.h"
 #include "common.h"
+#include "ops/array_op.h"
 
 char jt_mpi_err_buffer[MPI_MAX_ERROR_STRING];
 
@@ -44,7 +45,12 @@ int _mpi_local_rank() {
     return mpi_local_rank;
 }
 
-
+void _mpi_broadcast(ArrayArgs&& args, int i) {
+    int64 size = args.dtype.dsize();
+    for (auto i : args.shape)
+        size *= i;
+    MPI_CHECK(MPI_Bcast((void *)args.ptr, size, MPI_BYTE, 0, MPI_COMM_WORLD));
+}
 
 static uint64_t getHostHash(const char* string) {
   // Based on DJB2, result = result * 33 + char

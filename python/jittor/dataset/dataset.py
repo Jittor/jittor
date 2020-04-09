@@ -23,6 +23,7 @@ import jittor as jt
 
 dataset_root = os.path.join(pathlib.Path.home(), ".cache", "jittor", "dataset")
 mp_log_v = os.environ.get("mp_log_v", 0) 
+mpi = jt.compile_extern.mpi
 
 class Worker:
     def __init__(self, target, args, buffer_size):
@@ -186,6 +187,17 @@ class Dataset(object):
             index_list = get_order_list(self.total_len)
         else:
             index_list = get_random_list(self.total_len)
+        
+        # scatter index_list for all mpi process
+        # scatter rule:
+        # [000000000111111111222222222]
+        if mpi:
+            index_list = np.int32(index_list)
+            mpi.broadcast(index_list, 0)
+            new_len = (self.total_len - 1) // mpi.world_size() + 1
+            offset = mpi.world_rank() * new_len
+            index_list = index_list[offset:offset+new_len]
+            self.total_len = len(index_list)
             
         self.batch_len = len(self)
         if "batch_len" in os.environ:
