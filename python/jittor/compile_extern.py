@@ -5,7 +5,7 @@
 # ***************************************************************
 import os, sys, shutil
 from .compiler import *
-from jittor_utils import run_cmd
+from jittor_utils import run_cmd, get_version
 from jittor.dataset.utils import download_url_to_local
 
 def search_file(dirs, name):
@@ -349,7 +349,6 @@ def setup_mpi():
     mpi_link_flags = run_cmd(mpicc_path+" --showme:link")
     mpi_flags = mpi_compile_flags + " " + mpi_link_flags
     LOG.v("mpi_flags: "+mpi_flags)
-    # manual_link(mpi_flags)
 
     # find all source files
     mpi_src_dir = os.path.join(jittor_path, "extern", "mpi")
@@ -362,7 +361,10 @@ def setup_mpi():
     mpi_compile_flags += f" -I'{os.path.join(mpi_src_dir, 'inc')}' "
     mpi_compile_flags = mpi_compile_flags.replace("-pthread", "")
 
-    # libmpi cannot use deepbind, it need to
+    if get_version(mpicc_path).startswith("(1."):
+        # mpi version 1.x need to link like this
+        manual_link(mpi_flags)
+    # mpi(4.x) cannot use deepbind, it need to
     # share the 'environ' symbol.
     mpi = compile_custom_ops(mpi_src_files, 
         extra_flags=f" {mpi_flags} ", return_module=True,
