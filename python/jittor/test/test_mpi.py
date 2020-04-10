@@ -40,10 +40,11 @@ class TestMpi(unittest.TestCase):
         toy = ToyDataset()
         offset = ((toy.total_len-1) // mpi.world_size() + 1) * mpi.world_rank()
 
-        for i,(a,b) in enumerate(toy):
-            assert (a.data*a.data == b.data).all()
-            c = np.array(range(offset+i*toy.batch_size, offset+(i+1)*toy.batch_size))
-            assert (c==a.data).all()
+        for _ in range(2):
+            for i,(a,b) in enumerate(toy):
+                assert (a.data*a.data == b.data).all()
+                c = np.array(range(offset+i*toy.batch_size, offset+(i+1)*toy.batch_size))
+                assert (c==a.data).all()
 
 @unittest.skipIf(not jt.compile_extern.has_mpi, "no mpi found")
 class TestMpiEntry(unittest.TestCase):
