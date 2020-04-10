@@ -47,9 +47,9 @@ int _mpi_local_rank() {
 
 void _mpi_broadcast(ArrayArgs&& args, int i) {
     int64 size = args.dtype.dsize();
-    for (auto i : args.shape)
-        size *= i;
-    MPI_CHECK(MPI_Bcast((void *)args.ptr, size, MPI_BYTE, 0, MPI_COMM_WORLD));
+    for (auto j : args.shape)
+        size *= j;
+    MPI_CHECK(MPI_Bcast((void *)args.ptr, size, MPI_BYTE, i, MPI_COMM_WORLD));
 }
 
 static uint64_t getHostHash(const char* string) {
