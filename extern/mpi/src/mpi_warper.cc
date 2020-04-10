@@ -28,9 +28,9 @@ void throw_mpi_error(int result,
 namespace jittor {
 
 
-int mpi_world_size;
-int mpi_world_rank;
-int mpi_local_rank;
+int mpi_world_size = 1;
+int mpi_world_rank = 0;
+int mpi_local_rank = 0;
 
 int _mpi_world_size() {
     return mpi_world_size;
@@ -69,6 +69,7 @@ static void getHostName(char* hostname, int maxlen) {
 struct mpi_initer {
 
 mpi_initer() {
+    LOGvv << "MPI init...";
     MPI_CHECK(MPI_Init(NULL, NULL));
     MPI_CHECK(MPI_Comm_size(MPI_COMM_WORLD, &mpi_world_size));
     MPI_CHECK(MPI_Comm_rank(MPI_COMM_WORLD, &mpi_world_rank));
@@ -84,6 +85,9 @@ mpi_initer() {
         if (p == mpi_world_rank) break;
         if (hostHashs[p] == hostHashs[mpi_world_rank]) mpi_local_rank++;
     }
+    LOGv << "MPI init finished: local" << mpi_local_rank
+        << "global" << mpi_world_rank
+        << "size" << mpi_world_size;
 }
 
 ~mpi_initer() {
