@@ -645,7 +645,7 @@ def compile_custom_ops(
     if lib_path not in os.sys.path:
         os.sys.path.append(lib_path)
     
-    # free lock when init
+    # release lock when init
     jittor_lock.unlock()
     with jit_utils.import_scope(dlopen_flags):
         exec(f"import {gen_name}")
