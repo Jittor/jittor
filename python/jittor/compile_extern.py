@@ -7,7 +7,6 @@ import os, sys, shutil
 from .compiler import *
 from jittor_utils import run_cmd, get_version
 from jittor.dataset.utils import download_url_to_local
-from jittor.lock import jittor_lock
 
 def search_file(dirs, name):
     for d in dirs:
@@ -374,8 +373,6 @@ def setup_mpi():
     LOG.vv("Get mpi: "+str(mpi.__dict__.keys()))
     LOG.vv("Get mpi_ops: "+str(mpi_ops.__dict__.keys()))
 
-jittor_lock.lock()
-
 setup_mpi()
 setup_nccl()
 
@@ -383,5 +380,3 @@ setup_cutt()
 setup_mkl()
 
 setup_cuda_extern()
-
-jittor_lock.unlock()

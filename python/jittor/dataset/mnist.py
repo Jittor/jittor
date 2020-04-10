@@ -15,7 +15,6 @@ from jittor.dataset.dataset import Dataset, dataset_root
 from jittor.dataset.utils import ensure_dir, download_url_to_local
 import jittor as jt 
 import jittor.transform as trans
-from jittor.lock import jittor_lock
 
 class MNIST(Dataset):
     def __init__(self, data_root=dataset_root+"/mnist_data/", train=True ,download=True, transform=None):
@@ -65,6 +64,4 @@ class MNIST(Dataset):
 
         for url, md5 in resources:
             filename = url.rpartition('/')[2]
-            jittor_lock.lock()
             download_url_to_local(url, filename, self.data_root, md5)
-            jittor_lock.unlock()

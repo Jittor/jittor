@@ -1,66 +1,50 @@
 // ***************************************************************
 // Copyright (c) 2020 Jittor. Authors: 
-// Dun Liang <randonlang@gmail.com>. 
-// Wenyang Zhou <576825820@qq.com>. 
+//     Wenyang Zhou <576825820@qq.com>
+//     Dun Liang <randonlang@gmail.com>
 // All Rights Reserved.
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include <stdio.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
+
 #include "lock.h"
-#include "jit_compiler.h"
-#include "utils/cache_compile.h"
 
 namespace jittor {
 
-DECLARE_FLAG(string, cache_path);
+static int lock_fd = -1;
 
-void lock_init(struct flock *lock, short type, short whence, off_t start, off_t len)
-{
-    if (lock == NULL)
-        return;
- 
-    lock->l_type = type;
-    lock->l_whence = whence;
-    lock->l_start = start;
-    lock->l_len = len;
+void set_lock_path(string path) {
+    lock_fd = open(path.c_str(), O_RDWR);
+    ASSERT(lock_fd >= 0);
+    LOGv << "OPEN LOCK path:" << path << "Pid:" << getpid();
 }
  
-int lock()
-{
-    auto lock_path = jittor::jit_compiler::join(cache_path, "../jittor.lock");
-    const char* lockfilepath = lock_path.c_str();
-    int fd = open(lockfilepath, O_RDWR);
-    if (fd < 0)
-    {
-        return -1;
-    }
-    struct flock lock;
-    lock_init(&lock, F_WRLCK, SEEK_SET, 0, 0);
-    if (fcntl(fd, F_SETLKW, &lock) != 0)
-    {
-        return -1;
-    }
-    // printf("Pid: %ld process lock to write the file.\n", (long)getpid());
-    return 0;
+void lock() {
+    ASSERT(lock_fd >= 0);
+    struct flock lock = {
+        .l_type = F_WRLCK,
+        .l_whence = SEEK_SET,
+        .l_start = 0,
+        .l_len = 0
+    };
+    ASSERT(fcntl(lock_fd, F_SETLKW, &lock) == 0);
+    LOGvv << "LOCK Pid:" << getpid();
 }
  
-int unlock()
-{
-    auto lock_path = jittor::jit_compiler::join(cache_path, "../jittor.lock");
-    const char* lockfilepath = lock_path.c_str();
-    int fd = open(lockfilepath, O_RDWR);
-    if (fd < 0)
-    {
-        return -1;
-    }
-    struct flock lock;
-    lock_init(&lock, F_UNLCK, SEEK_SET, 0, 0);
-    if (fcntl(fd, F_SETLKW, &lock) != 0)
-    {
-        return -1;
-    }
-    // printf("Pid: %ld process release the file.\n", (long)getpid());
-    return 0;
+void unlock() {
+    ASSERT(lock_fd >= 0);
+    struct flock lock = {
+        .l_type = F_UNLCK,
+        .l_whence = SEEK_SET,
+        .l_start = 0,
+        .l_len = 0
+    };
+    ASSERT(fcntl(lock_fd, F_SETLKW, &lock) == 0);
+    LOGvv << "UNLOCK Pid:" << getpid();
 }
 
 } // jittor

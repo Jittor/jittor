@@ -673,7 +673,7 @@ string OpCompiler::get_jit_src(Op* op) {
         else
             after_include_src += src;
     }
-    ASSERT(file_exist(src_path));
+    ASSERT(file_exist(src_path)) << src_path;
     LOGvvv << "Read from" << src_path; 
     string src = read_all(src_path);
     ASSERT(src.size()) << "Source read failed:" << src_path;
@@ -946,7 +946,7 @@ jit_op_entry_t OpCompiler::compile(const string& jit_key, const string& src) {
 }
 
 jit_op_entry_t OpCompiler::do_compile(Op* op) {
-    lock();
+    jittor::lock_guard lg;
     OpCompiler oc(op);
     string* src = &oc.src;
     string src_after_passes;
@@ -957,7 +957,6 @@ jit_op_entry_t OpCompiler::do_compile(Op* op) {
         src = &src_after_passes;
     }
     auto ret = oc.compile(op->get_jit_key(), *src);
-    unlock();
     return ret;
 }
 
