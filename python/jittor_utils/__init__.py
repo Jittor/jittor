@@ -158,9 +158,10 @@ def find_cache_path():
             r = sp.run(["git","branch"], cwd=os.path.dirname(__file__), stdout=sp.PIPE,
                    stderr=sp.PIPE)
             assert r.returncode == 0
-            bs = r.stdout.decode()
+            bs = r.stdout.decode().splitlines()
             for b in bs:
                 if b.startswith("* "): break
+            
             cache_name = b[2:]
         for c in " (){}": cache_name = cache_name.replace(c, "_")
     except:
@@ -168,10 +169,14 @@ def find_cache_path():
     for name in cache_name.split("/"):
         dirs.insert(-1, name)
     os.environ["cache_name"] = cache_name
+    LOG.v("cache_name", cache_name)
     for d in dirs:
         path = os.path.join(path, d)
         if not os.path.isdir(path):
-            os.mkdir(path)
+            try:
+                os.mkdir(path)
+            except:
+                pass
         assert os.path.isdir(path)
     if path not in sys.path:
         sys.path.append(path)

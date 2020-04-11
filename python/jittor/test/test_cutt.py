@@ -22,7 +22,6 @@ class TestCutt(unittest.TestCase):
     @jt.flag_scope(use_cuda=1)
     def test(self):
         t = cutt_ops.cutt_test("213")
-        jt.sync_all(True)
-        print(t.data)
+        assert t.data == 123
 if __name__ == "__main__":
     unittest.main()

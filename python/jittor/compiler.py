@@ -17,6 +17,7 @@ from ctypes.util import find_library
 import jittor_utils as jit_utils
 from jittor_utils import LOG, run_cmd, cache_path, find_exe, cc_path, cc_type, cache_path
 from . import pyjt_compiler
+from . import lock
 
 def find_jittor_path():
     return os.path.dirname(__file__)
@@ -518,6 +519,7 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
     """
     return jit_src
 
+@lock.lock_scope()
 def compile_custom_op(header, source, op_name, warp=True):
     """Compile a single custom op
     header: code of op header, not path
@@ -554,6 +556,7 @@ def compile_custom_op(header, source, op_name, warp=True):
     m = compile_custom_ops([hname, ccname])
     return getattr(m, op_name)
 
+@lock.lock_scope()
 def compile_custom_ops(
     filenames, 
     extra_flags="", 
@@ -643,8 +646,10 @@ def compile_custom_ops(
     lib_path = os.path.join(cache_path, "custom_ops")
     if lib_path not in os.sys.path:
         os.sys.path.append(lib_path)
-    with jit_utils.import_scope(dlopen_flags):
-        exec(f"import {gen_name}")
+    # unlock scope when initialize
+    with lock.unlock_scope():
+        with jit_utils.import_scope(dlopen_flags):
+            exec(f"import {gen_name}")
     mod = locals()[gen_name]
     if return_module:
         return mod
@@ -800,6 +805,7 @@ dlopen_flags = os.RTLD_NOW | os.RTLD_GLOBAL | os.RTLD_DEEPBIND
 
 with jit_utils.import_scope(import_flags):
     jit_utils.try_import_jit_utils_core()
+
 jittor_path = find_jittor_path()
 check_debug_flags()
 
@@ -966,3 +972,5 @@ flags.jittor_path = jittor_path
 flags.gdb_path = gdb_path
 flags.addr2line_path = addr2line_path
 flags.has_pybt = has_pybt
+
+core.set_lock_path(lock.lock_path)
