@@ -519,6 +519,7 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
     """
     return jit_src
 
+@lock.lock_scope()
 def compile_custom_op(header, source, op_name, warp=True):
     """Compile a single custom op
     header: code of op header, not path

@@ -11,6 +11,7 @@ import numpy as np
 class TestMiscIssue(unittest.TestCase):
     def test_issue4(self):
         try:
+            jt.dirty_fix_pytorch_runtime_error()
             import torch
         except:
             return
@@ -42,6 +43,7 @@ b.sync()
 
     def test_mkl_conflict1(self):
         try:
+            jt.dirty_fix_pytorch_runtime_error()
             import torch
         except:
             return
@@ -67,6 +69,7 @@ m(torch.rand(*nchw))
 
     def test_mkl_conflict2(self):
         try:
+            jt.dirty_fix_pytorch_runtime_error()
             import torch
         except:
             return
