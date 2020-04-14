@@ -7,14 +7,16 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-from . import compiler
-from .compiler import LOG, has_cuda
-from .compiler import compile_custom_ops, compile_custom_op
-import jittor_core as core
-from jittor_core import *
-from jittor_core.ops import *
-from . import compile_extern
-from .compile_extern import mkl_ops
+from . import lock
+with lock.lock_scope():
+    from . import compiler
+    from .compiler import LOG, has_cuda
+    from .compiler import compile_custom_ops, compile_custom_op
+    import jittor_core as core
+    from jittor_core import *
+    from jittor_core.ops import *
+    from . import compile_extern
+    from .compile_extern import mkl_ops
 
 import contextlib
 import numpy as np

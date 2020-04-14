@@ -15,6 +15,7 @@ from tqdm import tqdm
 import numpy as np
 from collections.abc import Sequence, Mapping
 from PIL import Image
+from .. import lock
 
 def ensure_dir(dir_path):
     if not os.path.isdir(dir_path):
@@ -36,7 +37,7 @@ def _progress():
 
     return bar_update
 
-
+@lock.lock_scope()
 def download_url_to_local(url, filename, root_folder, md5):
     ensure_dir(root_folder)
     file_path = os.path.join(root_folder, filename)
