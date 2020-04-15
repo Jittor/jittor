@@ -361,7 +361,8 @@ def setup_mpi():
     mpi_compile_flags += f" -I'{os.path.join(mpi_src_dir, 'inc')}' "
     mpi_compile_flags = mpi_compile_flags.replace("-pthread", "")
 
-    if get_version(mpicc_path).startswith("(1."):
+    mpi_version = get_version(mpicc_path)
+    if mpi_version.startswith("(1.") or mpi_version.startswith("(2."):
         # mpi version 1.x need to link like this
         manual_link(mpi_flags)
     # mpi(4.x) cannot use deepbind, it need to
