@@ -54,17 +54,22 @@ struct EventQueue {
     static void worker_caller();
 
     void run_sync(Func func) {
+        // send work to worker and do something by self
         std::unique_lock<std::mutex> l(mtx);
         this->func = func;
         run_sync_done = false;
+        // send func to worker
         worker.run(worker_caller);
         while (1) {
+            // check self work or worker's status
             cv.wait(l);
             list<Func> ts = move(tasks);
             l.unlock();
+            // do self works
             for (auto func : ts)
                 func();
             l.lock();
+            // worker is finished
             if (run_sync_done)
                 return;
         }

@@ -12,6 +12,7 @@
 
 #include "mpi_warper.h"
 #include "common.h"
+#include "ops/array_op.h"
 
 char jt_mpi_err_buffer[MPI_MAX_ERROR_STRING];
 
@@ -28,9 +29,9 @@ void throw_mpi_error(int result,
 namespace jittor {
 
 
-int mpi_world_size;
-int mpi_world_rank;
-int mpi_local_rank;
+int mpi_world_size = 1;
+int mpi_world_rank = 0;
+int mpi_local_rank = 0;
 
 int _mpi_world_size() {
     return mpi_world_size;
@@ -44,7 +45,12 @@ int _mpi_local_rank() {
     return mpi_local_rank;
 }
 
-
+void _mpi_broadcast(ArrayArgs&& args, int i) {
+    int64 size = args.dtype.dsize();
+    for (auto j : args.shape)
+        size *= j;
+    MPI_CHECK(MPI_Bcast((void *)args.ptr, size, MPI_BYTE, i, MPI_COMM_WORLD));
+}
 
 static uint64_t getHostHash(const char* string) {
   // Based on DJB2, result = result * 33 + char
@@ -69,6 +75,7 @@ static void getHostName(char* hostname, int maxlen) {
 struct mpi_initer {
 
 mpi_initer() {
+    LOGvv << "MPI init...";
     MPI_CHECK(MPI_Init(NULL, NULL));
     MPI_CHECK(MPI_Comm_size(MPI_COMM_WORLD, &mpi_world_size));
     MPI_CHECK(MPI_Comm_rank(MPI_COMM_WORLD, &mpi_world_rank));
@@ -84,6 +91,9 @@ mpi_initer() {
         if (p == mpi_world_rank) break;
         if (hostHashs[p] == hostHashs[mpi_world_rank]) mpi_local_rank++;
     }
+    LOGv << "MPI init finished: local" << mpi_local_rank
+        << "global" << mpi_world_rank
+        << "size" << mpi_world_size;
 }
 
 ~mpi_initer() {

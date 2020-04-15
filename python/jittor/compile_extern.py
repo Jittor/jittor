@@ -5,7 +5,7 @@
 # ***************************************************************
 import os, sys, shutil
 from .compiler import *
-from jittor_utils import run_cmd
+from jittor_utils import run_cmd, get_version
 from jittor.dataset.utils import download_url_to_local
 
 def search_file(dirs, name):
@@ -322,6 +322,8 @@ def manual_link(flags):
                 ctypes.CDLL(libname, dlopen_flags)
                 break
 
+def inside_mpi():
+    return "OMPI_COMM_WORLD_SIZE" in os.environ
 
 def setup_mpi():
     global mpi_ops, mpi, use_mpi
@@ -330,7 +332,6 @@ def setup_mpi():
     mpi_ops = None
     mpi = None
     has_mpi = False
-    if not use_mpi: return
     mpicc_path = env_or_try_find('mpicc_path', 'mpicc')
     if mpicc_path == "":
         LOG.i("mpicc not found, distribution disabled.")
@@ -338,6 +339,8 @@ def setup_mpi():
     else:
         use_mpi = True
         has_mpi = True
+    if not inside_mpi():
+        use_mpi = False
     if not use_mpi:
         return
 
@@ -345,8 +348,7 @@ def setup_mpi():
     mpi_compile_flags = run_cmd(mpicc_path+" --showme:compile")
     mpi_link_flags = run_cmd(mpicc_path+" --showme:link")
     mpi_flags = mpi_compile_flags + " " + mpi_link_flags
-    LOG.i("mpi_flags: "+mpi_flags)
-    manual_link(mpi_flags)
+    LOG.v("mpi_flags: "+mpi_flags)
 
     # find all source files
     mpi_src_dir = os.path.join(jittor_path, "extern", "mpi")
@@ -359,8 +361,15 @@ def setup_mpi():
     mpi_compile_flags += f" -I'{os.path.join(mpi_src_dir, 'inc')}' "
     mpi_compile_flags = mpi_compile_flags.replace("-pthread", "")
 
+    mpi_version = get_version(mpicc_path)
+    if mpi_version.startswith("(1.") or mpi_version.startswith("(2."):
+        # mpi version 1.x need to link like this
+        manual_link(mpi_flags)
+    # mpi(4.x) cannot use deepbind, it need to
+    # share the 'environ' symbol.
     mpi = compile_custom_ops(mpi_src_files, 
-        extra_flags=f" {mpi_flags} ", return_module=True)
+        extra_flags=f" {mpi_flags} ", return_module=True,
+        dlopen_flags=os.RTLD_GLOBAL | os.RTLD_NOW)
     mpi_ops = mpi.ops
     LOG.vv("Get mpi: "+str(mpi.__dict__.keys()))
     LOG.vv("Get mpi_ops: "+str(mpi_ops.__dict__.keys()))

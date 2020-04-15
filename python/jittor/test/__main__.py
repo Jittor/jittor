@@ -5,23 +5,33 @@
 # ***************************************************************
 
 if __name__ == "__main__":
-    import unittest
+    import unittest, os
 
     suffix = "__main__.py"
     assert __file__.endswith(suffix)
     test_dir = __file__[:-len(suffix)]
-    import os
+
+    skip_l = int(os.environ.get("test_skip_l", "0"))
+    skip_r = int(os.environ.get("test_skip_r", "1000000"))
+    test_only = None
+    if "test_only" in os.environ:
+        test_only = set(os.environ.get("test_only").split(","))
+
     test_files = os.listdir(test_dir)
-    for test_file in test_files:
+    test_files = sorted(test_files)
+    suite = unittest.TestSuite()
+    
+    for _, test_file in enumerate(test_files):
         if not test_file.startswith("test_"):
             continue
+        if _ < skip_l or _ > skip_r:
+            continue
         test_name = test_file.split(".")[0]
-        exec(f"from . import {test_name}")
-        test_mod = globals()[test_name]
-        print(test_name)
-        for i in dir(test_mod):
-            obj = getattr(test_mod, i)
-            if isinstance(obj, type) and issubclass(obj, unittest.TestCase):
-                globals()[test_name+"_"+i] = obj
+        if test_only and test_name not in test_only:
+            continue
 
-    unittest.main()
+        print("Add Test", _, test_name)
+        suite.addTest(unittest.defaultTestLoader.loadTestsFromName(
+            "jittor.test."+test_name))
+
+    unittest.TextTestRunner(verbosity=3).run(suite)

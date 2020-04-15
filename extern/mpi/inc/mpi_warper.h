@@ -37,4 +37,9 @@ int _mpi_world_rank();
 // @pyjt(local_rank)
 int _mpi_local_rank();
 
+struct ArrayArgs;
+
+// @pyjt(broadcast)
+void _mpi_broadcast(ArrayArgs&& args, int i);
+
 } // jittor

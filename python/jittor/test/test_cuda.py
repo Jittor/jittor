@@ -18,11 +18,12 @@ def test_cuda(use_cuda=1):
 
 @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
 class TestCuda(unittest.TestCase):
+    @jt.flag_scope(use_cuda=1)
     def test_cuda_flags(self):
-        with jt.var_scope(use_cuda=1):
-            a = jt.random((10, 10))
-            a.sync()
+        a = jt.random((10, 10))
+        a.sync()
 
+    @jt.flag_scope(use_cuda=2)
     def test_no_cuda_op(self):
         no_cuda_op = jt.compile_custom_op("""
         struct NoCudaOp : Op {
@@ -49,10 +50,10 @@ class TestCuda(unittest.TestCase):
         """,
         "no_cuda")
         # force use cuda
-        with jt.var_scope(use_cuda=2):
-            a = no_cuda_op([3,4,5], 'float')
-            expect_error(lambda: a())
+        a = no_cuda_op([3,4,5], 'float')
+        expect_error(lambda: a())
 
+    @jt.flag_scope(use_cuda=1)
     def test_cuda_custom_op(self):
         my_op = jt.compile_custom_op("""
         struct MyCudaOp : Op {
@@ -94,9 +95,8 @@ class TestCuda(unittest.TestCase):
         #endif // JIT
         """,
         "my_cuda")
-        with jt.var_scope(use_cuda=1):
-            a = my_op([3,4,5], 'float')
-            na = a.data
+        a = my_op([3,4,5], 'float')
+        na = a.data
         assert a.shape == [3,4,5] and a.dtype == 'float'
         assert (-na.flatten() == range(3*4*5)).all(), na
 

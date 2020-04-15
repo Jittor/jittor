@@ -11,6 +11,7 @@ import numpy as np
 class TestMiscIssue(unittest.TestCase):
     def test_issue4(self):
         try:
+            jt.dirty_fix_pytorch_runtime_error()
             import torch
         except:
             return
@@ -42,6 +43,7 @@ b.sync()
 
     def test_mkl_conflict1(self):
         try:
+            jt.dirty_fix_pytorch_runtime_error()
             import torch
         except:
             return
@@ -67,6 +69,7 @@ m(torch.rand(*nchw))
 
     def test_mkl_conflict2(self):
         try:
+            jt.dirty_fix_pytorch_runtime_error()
             import torch
         except:
             return
@@ -125,6 +128,14 @@ jt.mkl_ops.mkl_conv(x, w, 1, 2).sync()
         a = jt.random((10,)) - 2
         assert a.min().data == a.data.min(), (a.min(), a.data.min())
         assert a.max().data == a.data.max(), (a.max(), a.data.max())
+
+    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @jt.flag_scope(use_cuda=1)
+    def test_cuda_pow_grad_nan(self):
+        a = jt.float32([1,-1, -1000.1])
+        da = jt.grad(a**2, a)
+        assert np.isnan(da.data).sum()==0, da.data
+
 
 if __name__ == "__main__":
     unittest.main()
