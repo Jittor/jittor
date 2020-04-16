@@ -1,6 +1,7 @@
 # ***************************************************************
 # Copyright (c) 2020 Jittor. Authors:
 #     Guowei Yang <471184555@qq.com>
+#     Guoye Yang <498731903@qq.com>
 #     Wenyang Zhou <576825820@qq.com>
 #     Meng-Hao Guo <guomenghao1997@gmail.com>
 #     Dun Liang <randonlang@gmail.com>.
