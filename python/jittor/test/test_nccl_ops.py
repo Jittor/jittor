@@ -25,7 +25,6 @@ def test_all_reduce():
 
 def test_broadcast():
     print("test broadcast")
-    mpi = jt.compile_extern.mpi
     data = jt.random([5, 5])
     if mpi.world_rank() == 0:
         x = data
@@ -36,7 +35,6 @@ def test_broadcast():
 
 def test_reduce():
     print("test reduce")
-    mpi = jt.compile_extern.mpi
     x = jt.random([5, 5])
     y = jt.compile_extern.nccl_ops.nccl_reduce(x, 0)
     y_ = y.data
@@ -55,9 +53,8 @@ class Model(Module):
         return self.linear2(x)
 
 def test_sync():
-    mpi = jt.compile_extern.mpi
+    print("test mpi_sync")
     net = Model()
-    SGD = nn.SGD(net.parameters(), 0.1, 0.9, 0.00001)
     if mpi.world_rank() == 0:
         net.linear1.weight *= 0
         net.linear2.weight *= 0
@@ -65,11 +62,10 @@ def test_sync():
         net.linear1.weight += 1
         net.linear2.weight += 1
         net.linear1.bias += 1
-    SGD.sync()
+    net.mpi_sync()
     assert np.allclose(net.linear1.weight.data, jt.ones(net.linear1.weight.shape).data)
     assert np.allclose(net.linear2.weight.data, jt.ones(net.linear2.weight.shape).data)
     assert np.allclose(net.linear1.bias.data, jt.ones(net.linear1.bias.shape).data)
-
 
 def main():
     np.random.seed(0)

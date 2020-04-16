@@ -175,6 +175,9 @@ class SGD(object):
     def step(self, loss):
         ps = self.parameters
         gs = jt.grad(loss, ps)
+        if jt.compile_extern.inside_mpi():
+            for g in gs:
+                g.assign(jt.compile_extern.mpi_ops.mpi_all_reduce(g))
         for p, g, v in zip(ps, gs, self.values):
             dp = p * self.weight_decay + g
             v.assign(self.momentum * v + dp * (1 - self.dampening))
@@ -188,14 +191,6 @@ class SGD(object):
         # moving_mean and moving_var in batch_norm
         # sync such parameters to reduce memory consumption
         jt.sync(self.no_grad_parameters)
-
-    def sync(self):
-        ps = self.parameters
-        for p in ps:
-            temp = jt.compile_extern.nccl_ops.nccl_broadcast(p, 0)
-            p -= p
-            p += temp
-            p.detach_inplace()
 
 class Adam(object):
     """ Usage:
@@ -225,6 +220,9 @@ class Adam(object):
     def step(self, loss):
         ps = self.parameters
         gs = jt.grad(loss, ps)
+        if jt.compile_extern.inside_mpi():
+            for g in gs:
+                g.assign(jt.compile_extern.mpi_ops.mpi_all_reduce(g))
         self.adam_step += 1
         n, (b0, b1) = float(self.adam_step), self.betas
         for p, g, v, m in zip(ps, gs, self.values, self.m):
