@@ -40,6 +40,12 @@ void MpiReduceOp::infer_shape() {
     y->set_shape(x->shape);
 }
 
+VarPtr MpiReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
+    static VarPtr(*mpi_broadcast)(Var*, int) = 
+        get_op_info("mpi_broadcast").get_constructor<VarPtr, Var*, int>();
+    return mpi_broadcast(dout,root);
+}
+
 void MpiReduceOp::jit_prepare() {
     add_jit_define("Tx", x->dtype());
     add_jit_define("XDIM", JK::hex1(x->shape.size()));
