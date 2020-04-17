@@ -33,6 +33,8 @@ def test_broadcast():
     g = jt.grad(y,x)
     if mpi.world_rank() == 0:
         assert np.allclose(g.data, np.ones([5,5])*3)
+    else:
+        assert np.allclose(g.data, np.zeros([5,5]))
 
 def test_reduce():
     print("test reduce")
@@ -42,6 +44,8 @@ def test_reduce():
     y.sync()
     if mpi.world_rank() == 0:
         assert np.allclose(y.data, (x*3).data)
+    else:
+        assert np.allclose(y.data, np.zeros([5,5]))
     g = jt.grad(y,x)
     assert np.allclose(g.data, np.ones([5,5]))
 
