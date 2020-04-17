@@ -13,9 +13,12 @@ import numpy as np
 
 def test_all_reduce():
     print("test all_reduce")
+    mpi = jt.compile_extern.mpi
     x = jt.random([5, 5])
     y = jt.compile_extern.mpi_ops.mpi_all_reduce(x)
     assert np.allclose(y.data, (x*3).data)
+    g = jt.grad(y,x)
+    assert np.allclose(g.data, np.ones([5,5])*3)
 
 def test_broadcast():
     print("test broadcast")
@@ -27,6 +30,9 @@ def test_broadcast():
         x = jt.zeros([5, 5])
     y = jt.compile_extern.mpi_ops.mpi_broadcast(x, 0)
     assert np.allclose(y.data, data.data)
+    g = jt.grad(y,x)
+    if mpi.world_rank() == 0:
+        assert np.allclose(g.data, np.ones([5,5])*3)
 
 def test_reduce():
     print("test reduce")
@@ -36,16 +42,13 @@ def test_reduce():
     y.sync()
     if mpi.world_rank() == 0:
         assert np.allclose(y.data, (x*3).data)
+    g = jt.grad(y,x)
+    assert np.allclose(g.data, np.ones([5,5]))
 
 def main():
     np.random.seed(0)
     jt.set_seed(3)
     with jt.flag_scope(use_cuda=0):
-        if jt.compile_extern.mpi_ops:
-            test_all_reduce()
-            test_broadcast()
-            test_reduce()
-    with jt.flag_scope(use_cuda=1):
         if jt.compile_extern.mpi_ops:
             test_all_reduce()
             test_broadcast()
