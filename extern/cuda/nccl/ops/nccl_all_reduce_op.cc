@@ -14,6 +14,7 @@
 #include <cuda_runtime.h>
 #include <helper_cuda.h>
 #include "nccl_warper.h"
+#include "ops/op_register.h"
 namespace jittor {
 
 #ifndef JIT
@@ -25,6 +26,12 @@ NcclAllReduceOp::NcclAllReduceOp(Var* x) : x(x) {
 
 void NcclAllReduceOp::infer_shape() {
     y->set_shape(x->shape);
+}
+
+VarPtr NcclAllReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
+    static VarPtr(*nccl_all_reduce)(Var*) = 
+        get_op_info("nccl_all_reduce").get_constructor<VarPtr, Var*>();
+    return nccl_all_reduce(dout);
 }
 
 void NcclAllReduceOp::jit_prepare() {
