@@ -178,7 +178,7 @@ pjmap = {
             'args_prefix': 'input, start_dim=0, end_dim=-1',
             'args': 'start_dim=0, end_dim=-1'
         },
-        'links': {'aaaaa': 'bbbb'},
+        'links': {},
         'extras': {},
     },
     'reshape': {
