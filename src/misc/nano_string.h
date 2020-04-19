@@ -63,6 +63,19 @@ namespace jittor {
     m(floor) \
     m(ceil) \
     m(cast) \
+    \
+    m(sin) \
+    m(asin) \
+    m(sinh) \
+    m(asinh) \
+    m(tan) \
+    m(atan) \
+    m(tanh) \
+    m(atanh) \
+    m(cos) \
+    m(acos) \
+    m(cosh) \
+    m(acosh) \
 
 struct NanoString;
 #define DECLEAR_NS(T) extern NanoString ns_##T;

@@ -61,6 +61,18 @@ static unordered_set<string> unary_ops = {
     "floor",
     "ceil",
     "cast",
+    "sin",
+    "asin",
+    "sinh",
+    "asinh",
+    "tan",
+    "atan",
+    "tanh",
+    "atanh",
+    "cos",
+    "acos",
+    "cosh",
+    "acosh",
 };
 
 static unordered_set<string> unary_float_ops = {

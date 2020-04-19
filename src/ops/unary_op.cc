@@ -49,6 +49,18 @@ static unordered_set<string> unary_ops = {
     "round",
     "floor",
     "ceil",
+    "sin",
+    "asin",
+    "sinh",
+    "asinh",
+    "tan",
+    "atan",
+    "tanh",
+    "atanh",
+    "cos",
+    "acos",
+    "cosh",
+    "acosh",
 };
 
 UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {

@@ -367,7 +367,7 @@ class Tanh(Module):
     def __init__(self):
         super().__init__()
     def execute(self, x) :
-        return ((jt.exp (x) - jt.exp(-x)) / (jt.exp(x) + jt.exp (-x)))
+        return x.tanh()
 
 class Sigmoid(Module):
     def __init__(self):
