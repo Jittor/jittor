@@ -271,7 +271,8 @@ class BatchNorm(Module):
 
 Relu = jt.make_module(relu)
 ReLU = Relu
-Leaky_relu = jt.make_module(leaky_relu, 2)
+Leaky_relu = jt.make_module(leaky_relu, 0.01)
+LeakyReLU = Leaky_relu
 ReLU6 = jt.make_module(relu6)
 Softmax = jt.make_module(softmax, 2)
 

@@ -77,14 +77,14 @@ pjmap = {
         'links': {},
         'extras': {},
     },
-    'BatchNorm2d': {
+    'ReLU6': {
         'pytorch': {
-            'args': 'num_features, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True', 
+            'args': 'inplace=False', 
         },
         'jittor': {
             'module': 'nn',
-            'name': 'BatchNorm',
-            'args': 'num_features, eps=1e-5, momentum=0.1, affine=None, is_train=True'
+            'name': 'ReLU6',
+            'args': ''
         },
         'links': {},
         'extras': {},
@@ -95,8 +95,20 @@ pjmap = {
         },
         'jittor': {
             'module': 'nn',
-            'name': 'Leaky_relu',
-            'args': ''
+            'name': 'LeakyReLU',
+            'args': 'scale'
+        },
+        'links': {'negative_slope': 'scale'},
+        'extras': {},
+    },
+    'BatchNorm2d': {
+        'pytorch': {
+            'args': 'num_features, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True', 
+        },
+        'jittor': {
+            'module': 'nn',
+            'name': 'BatchNorm',
+            'args': 'num_features, eps=1e-5, momentum=0.1, affine=None, is_train=True'
         },
         'links': {},
         'extras': {},
@@ -227,7 +239,7 @@ unsupport_ops = [
     'Parameter', 'ModuleList', 'ModuleDict', 'ParameterList', 'ParameterDict', 
     'Conv1d', 'Conv3d', 'ConvTranspose1d', 'ConvTranspose3d', 'Unfold', 'Fold', 
     'MaxPool1d', 'MaxPool3d', 'MaxUnpool1d', 'MaxUnpool2d', 'MaxUnpool3d', 'AvgPool1d', 'AvgPool3d', 'FractionalMaxPool2d', 'LPPool1d', 'LPPool2d', 'AdaptiveMaxPool1d', 'AdaptiveMaxPool2d', 'AdaptiveMaxPool3d', 'AdaptiveAvgPool1d', 'AdaptiveAvgPool3d', 
-    'ReflectionPad1d', 'ReflectionPad2d', 'ReplicationPad1d', 'ReplicationPad2d', 'ReplicationPad3d', 'ZeroPad2d', 'ConstantPad1d', 'ConstantPad2d', 'ConstantPad3d', 'ELU', 'Hardshrink', 'Hardtanh', 'LeakyReLU', 'LogSigmoid', 'MultiheadAttention', 
+    'ReflectionPad1d', 'ReflectionPad2d', 'ReplicationPad1d', 'ReplicationPad2d', 'ReplicationPad3d', 'ZeroPad2d', 'ConstantPad1d', 'ConstantPad2d', 'ConstantPad3d', 'ELU', 'Hardshrink', 'Hardtanh', 'LogSigmoid', 'MultiheadAttention', 
     'PReLU', 'RReLU', 'SELU', 'CELU', 'GELU', 'Softplus', 'Softshrink', 'Softsign', 'Tanhshrink', 'Threshold', 'Softmin', 'Softmax2d', 'LogSoftmax', 'AdaptiveLogSoftmaxWithLoss', 'BatchNorm1d', 'BatchNorm3d', 'GroupNorm', 'SyncBatchNorm', 'InstanceNorm1d', 'InstanceNorm2d', 'InstanceNorm3d', 'LayerNorm', 'LocalResponseNorm', 'RNNBase', 'RNN', 'LSTM', 'GRU', 'RNNCell', 'LSTMCell', 'GRUCell', 'Transformer', 'TransformerEncoder', 'TransformerDecoder', 'TransformerEncoderLayer', 'TransformerDecoderLayer', 'Identity', 'Bilinear', 'Dropout2d', 'Dropout3d', 'AlphaDropout', 'Embedding', 'EmbeddingBag', 'CosineSimilarity', 'PairwiseDistance', 'L1Loss', 'MSELoss', 'CTCLoss', 'NLLLoss', 'PoissonNLLLoss', 'KLDivLoss', 'BCELoss', 'BCEWithLogitsLoss', 'MarginRankingLoss', 'HingeEmbeddingLoss', 'MultiLabelMarginLoss', 'SmoothL1Loss', 'SoftMarginLoss', 'MultiLabelSoftMarginLoss', 'CosineEmbeddingLoss', 'MultiMarginLoss', 'TripletMarginLoss', 'PixelShuffle', 'Upsample', 'UpsamplingNearest2d', 'UpsamplingBilinear2d', 'DataParallel', 'DistributedDataParallel', 'clip_grad_norm_', 'clip_grad_value_', 'parameters_to_vector', 'vector_to_parameters', 'BasePruningMethod', 'PruningContainer', 'Identity', 'RandomUnstructured', 'L1Unstructured', 'RandomStructured', 'LnStructured', 'CustomFromMask', 'identity', 'random_unstructured', 'l1_unstructured', 'random_structured', 'ln_structured', 'global_unstructured', 'custom_from_mask', 'remove', 'is_pruned', 'weight_norm', 'remove_weight_norm', 'spectral_norm', 'remove_spectral_norm', 'PackedSequence', 'pack_padded_sequence', 'pad_packed_sequence', 'pad_sequence', 'pack_sequence'
 ]
 
