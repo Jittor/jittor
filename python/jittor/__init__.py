@@ -340,6 +340,32 @@ def detach(x):
     return x.clone().stop_grad().clone()
 Var.detach = detach
 
+def view(x, *shape):
+    if isinstance(shape[0], tuple):
+        shape = shape[0]
+    return x.reshape(shape)
+Var.view = view
+
+def permute(x, *dim):
+    if isinstance(dim[0], tuple):
+        dim = dim[0]
+    return transpose(x, dim)
+Var.permute = permute
+
+def flatten(input, start_dim=0, end_dim=-1):
+    in_shape = input.shape
+    start_dim = len(in_shape) + start_dim if start_dim < 0 else start_dim
+    end_dim = len(in_shape) + end_dim if end_dim < 0 else end_dim
+    assert end_dim > start_dim, "end_dim should be larger than start_dim for flatten function"
+    out_shape = []
+    for i in range(0,start_dim,1): out_shape.append(in_shape[i])
+    dims = 1
+    for i in range(start_dim, end_dim+1, 1): dims *= in_shape[i]
+    out_shape.append(dims)
+    for i in range(end_dim+1,len(in_shape),1): out_shape.append(in_shape[i])
+    return input.reshape(out_shape)
+Var.flatten = flatten
+
 def detach_inplace(x):
     return x.swap(x.stop_grad().clone())
 Var.start_grad = Var.detach_inplace = detach_inplace
@@ -537,7 +563,8 @@ class Module:
                         end = 1
                         break
             if end ==1:
-                print(f'init {key} fail ...')
+                # print(f'init {key} fail ...')
+                pass
             else:
                 # print(f'init {key} success ...')
                 if isinstance(params[key], np.ndarray) or isinstance(params[key], list):
