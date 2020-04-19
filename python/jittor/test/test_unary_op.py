@@ -34,11 +34,19 @@ class TestUnaryOp(unittest.TestCase):
         check("sqrt", a)
         
     def test_grad(self):
-        ops = ["abs", "negative", "log", "exp", "sqrt"]
+        ops = ["abs", "negative", "log", "exp", "sqrt",
+            "sin", "arcsin", "sinh", "arcsinh", 
+            "tan", "arctan", "tanh", "arctanh", 
+            "cos", "arccos", "cosh", "arccosh", 
+        ]
         a = [1.1, 2.2, 3.3, 4.4]
         for op in ops:
             if op == "abs":
                 b = np.array(a+[-1,])
+            elif op == "arccosh":
+                b = np.array(a)
+            elif "sin" in op or "cos" in op or "tan" in op:
+                b = np.array(a) / 5
             else:
                 b = np.array(a)
             func = lambda x: eval(f"np.{op}(x[0]).sum()")
