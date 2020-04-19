@@ -136,6 +136,11 @@ jt.mkl_ops.mkl_conv(x, w, 1, 2).sync()
         da = jt.grad(a**2, a)
         assert np.isnan(da.data).sum()==0, da.data
 
+    def test_tanh_nan(self):
+        m=jt.nn.Tanh()
+        a = m(jt.array([1000]))
+        assert np.isnan(a.data).sum()==0, a
+
 
 if __name__ == "__main__":
     unittest.main()
