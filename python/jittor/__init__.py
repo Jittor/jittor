@@ -541,8 +541,9 @@ class Module:
 
     def extra_repr(self):
         ss = []
-        n = len(self.__init__.__code__.co_varnames) - \
-            len(self.__init__.__defaults__)
+        n = len(self.__init__.__code__.co_varnames)
+        if self.__init__.__defaults__ is not None:
+            n -= len(self.__init__.__defaults__)
         for i, k in enumerate(self.__init__.__code__.co_varnames[1:]):
             v = getattr(self, k) if hasattr(self, k) else None
             if isinstance(v, Var): v = v.peek()
