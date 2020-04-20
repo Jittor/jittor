@@ -11,8 +11,8 @@ import jittor as jt
 from jittor import nn
 
 __all__ = [
-    'VGG', 'VGG11', 'VGG11_bn', 'VGG13', 'VGG13_bn', 'VGG16', 'VGG16_bn',
-    'VGG19_bn', 'VGG19',
+    'VGG', 'vgg11', 'vgg11_bn', 'vgg13', 'vgg13_bn', 'vgg16', 'vgg16_bn',
+    'vgg19_bn', 'vgg19',
 ]
 
 class VGG(nn.Module):
@@ -67,33 +67,33 @@ def _vgg(arch, cfg, batch_norm, **kwargs):
     return model
 
 
-def VGG11(**kwargs):
+def vgg11(**kwargs):
     return _vgg('vgg11', 'A', False, **kwargs)
 
 
-def VGG11_bn(**kwargs):
+def vgg11_bn(**kwargs):
     return _vgg('vgg11_bn', 'A', True, **kwargs)
 
 
-def VGG13(**kwargs):
+def vgg13(**kwargs):
     return _vgg('vgg13', 'B', False, **kwargs)
 
 
-def VGG13_bn(**kwargs):
+def vgg13_bn(**kwargs):
     return _vgg('vgg13_bn', 'B', True, **kwargs)
 
 
-def VGG16(**kwargs):
+def vgg16(**kwargs):
     return _vgg('vgg16', 'D', False, **kwargs)
 
 
-def VGG16_bn(**kwargs):
+def vgg16_bn(**kwargs):
     return _vgg('vgg16_bn', 'D', True, **kwargs)
 
 
-def VGG19(**kwargs):
+def vgg19(**kwargs):
     return _vgg('vgg19', 'E', False, **kwargs)
 
 
-def VGG19_bn(**kwargs):
+def vgg19_bn(**kwargs):
     return _vgg('vgg19_bn', 'E', True, **kwargs)
