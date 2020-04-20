@@ -18,6 +18,7 @@ struct NcclAllReduceOp : Op {
     void infer_shape() override;
     
     const char* name() const override { return "nccl_all_reduce"; }
+    VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;
     DECLARE_jit_run;
 };
 

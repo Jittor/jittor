@@ -1,6 +1,7 @@
 # ***************************************************************
 # Copyright (c) 2020 Jittor. Authors:
 #     Guowei Yang <471184555@qq.com>
+#     Guoye Yang <498731903@qq.com>
 #     Wenyang Zhou <576825820@qq.com>
 #     Meng-Hao Guo <guomenghao1997@gmail.com>
 #     Dun Liang <randonlang@gmail.com>.
@@ -154,6 +155,9 @@ class SGD(object):
     def step(self, loss):
         ps = self.parameters
         gs = jt.grad(loss, ps)
+        if jt.compile_extern.inside_mpi():
+            for g in gs:
+                g.assign(jt.compile_extern.mpi_ops.mpi_all_reduce(g))
         for p, g, v in zip(ps, gs, self.values):
             dp = p * self.weight_decay + g
             v.assign(self.momentum * v + dp * (1 - self.dampening))
@@ -196,6 +200,9 @@ class Adam(object):
     def step(self, loss):
         ps = self.parameters
         gs = jt.grad(loss, ps)
+        if jt.compile_extern.inside_mpi():
+            for g in gs:
+                g.assign(jt.compile_extern.mpi_ops.mpi_all_reduce(g))
         self.adam_step += 1
         n, (b0, b1) = float(self.adam_step), self.betas
         for p, g, v, m in zip(ps, gs, self.values, self.m):
