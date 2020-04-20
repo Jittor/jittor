@@ -21,6 +21,7 @@ with lock.lock_scope():
 import contextlib
 import numpy as np
 from collections import OrderedDict
+from collections.abc import Sequence, Mapping
 import types
 import pickle
 import sys
@@ -340,6 +341,37 @@ def detach(x):
     return x.clone().stop_grad().clone()
 Var.detach = detach
 
+origin_reshape = reshape
+def reshape(x, *shape):
+    if len(shape) == 1 and isinstance(shape[0], Sequence):
+        shape = shape[0]
+    return origin_reshape(x, shape)
+reshape.__doc__ = origin_reshape.__doc__
+Var.view = Var.reshape = view = reshape
+
+origin_transpose = transpose
+def transpose(x, *dim):
+    if len(dim) == 1 and isinstance(dim[0], Sequence):
+        dim = dim[0]
+    return origin_transpose(x, dim)
+transpose.__doc__ = origin_transpose.__doc__
+Var.transpose = Var.permute = permute = transpose
+
+def flatten(input, start_dim=0, end_dim=-1):
+    '''flatten dimentions by reshape'''
+    in_shape = input.shape
+    start_dim = len(in_shape) + start_dim if start_dim < 0 else start_dim
+    end_dim = len(in_shape) + end_dim if end_dim < 0 else end_dim
+    assert end_dim > start_dim, "end_dim should be larger than start_dim for flatten function"
+    out_shape = []
+    for i in range(0,start_dim,1): out_shape.append(in_shape[i])
+    dims = 1
+    for i in range(start_dim, end_dim+1, 1): dims *= in_shape[i]
+    out_shape.append(dims)
+    for i in range(end_dim+1,len(in_shape),1): out_shape.append(in_shape[i])
+    return input.reshape(out_shape)
+Var.flatten = flatten
+
 def detach_inplace(x):
     return x.swap(x.stop_grad().clone())
 Var.start_grad = Var.detach_inplace = detach_inplace
@@ -509,8 +541,9 @@ class Module:
 
     def extra_repr(self):
         ss = []
-        n = len(self.__init__.__code__.co_varnames) - \
-            len(self.__init__.__defaults__)
+        n = len(self.__init__.__code__.co_varnames)
+        if self.__init__.__defaults__ is not None:
+            n -= len(self.__init__.__defaults__)
         for i, k in enumerate(self.__init__.__code__.co_varnames[1:]):
             v = getattr(self, k) if hasattr(self, k) else None
             if isinstance(v, Var): v = v.peek()
@@ -537,7 +570,8 @@ class Module:
                         end = 1
                         break
             if end ==1:
-                print(f'init {key} fail ...')
+                # print(f'init {key} fail ...')
+                pass
             else:
                 # print(f'init {key} success ...')
                 if isinstance(params[key], np.ndarray) or isinstance(params[key], list):
@@ -650,8 +684,9 @@ def jittor_exit():
         core.sync_all(True)
 atexit.register(jittor_exit)
 
-Var.__repr__ = Var.__str__ = lambda x: str(x.data)
-Var.peek = lambda x: str(x.dtype)+str(x.shape)
+Var.__str__ = lambda x: str(x.data)
+Var.__repr__ = lambda x: f"jt.Var:{x.dtype}{x.uncertain_shape}"
+Var.peek = lambda x: f"{x.dtype}{x.shape}"
 
 from . import nn
 from .nn import matmul

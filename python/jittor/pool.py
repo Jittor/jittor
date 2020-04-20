@@ -161,5 +161,34 @@ class Pool(Module):
             ])
             return xx.reduce(self.op, [4,5])
 
-def pool(x, size, op, padding, stride = 1):
-    return Pool(size, stride, padding, op=op)(x)
+
+class AdaptiveAvgPool2d(Module):
+    def __init__(self, output_size):
+        self.output_size = output_size
+
+    def execute(self, x):
+        if isinstance(self.output_size, int):
+            oh = self.output_size
+            ow = self.output_size
+        elif isinstance(self.output_size, tuple) or isinstance(self.output_size, list):
+            oh = x.shape[2] if self.output_size[0] is None else self.output_size[0]
+            ow = x.shape[3] if self.output_size[1] is None else self.output_size[1]
+        else:
+            raise TypeError(f"AdaptiveAvgPool2d only support int, typle or list input. Not support {type(self.output_size)} yet.")
+        N,C,H,W = x.shape
+        self.sh = math.floor(H / oh)
+        self.sw = math.floor(W / ow)
+        self.ksh = H - (oh - 1) * self.sh
+        self.ksw = W - (ow - 1) * self.sw
+        h = (H-self.ksh)//self.sh+1
+        w = (W-self.ksw)//self.sw+1
+        xx = x.reindex([N,C,h,w,self.ksh,self.ksw], [
+            "i0", # Nid
+            "i1", # Cid
+            f"i2*{self.sh}+i4", # Hid
+            f"i3*{self.sw}+i5", # Wid
+        ])
+        return xx.reduce("mean", [4,5])
+
+def pool(x, kernel_size, op, padding=0, stride = 1):
+    return Pool(kernel_size, stride, padding, op=op)(x)
