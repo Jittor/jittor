@@ -17,7 +17,7 @@ class TestMpi(unittest.TestCase):
     def test_mpi_test_op(self):
         assert jt.compile_extern.mpi_ops.mpi_test("").data == 123
 
-    @unittest.skipIf(jt.compile_extern.nccl_ops is None, "no inccl")
+    @unittest.skipIf(jt.compile_extern.nccl_ops is None, "no nccl")
     @jt.flag_scope(use_cuda=1)
     def test_nccl_with_mpi(self):
         assert jt.compile_extern.nccl_ops.nccl_test("test_with_mpi").data == 123
@@ -47,14 +47,17 @@ class TestMpi(unittest.TestCase):
                 c = np.array(range(offset+i*toy.batch_size, offset+(i+1)*toy.batch_size))
                 assert (c==a.data).all()
 
+def run_mpi_test(num_procs, name):
+    if not jt.compile_extern.inside_mpi():
+        mpirun_path = jt.compile_extern.mpicc_path.replace("mpicc", "mpirun")
+        cmd = f"{mpirun_path} -np {num_procs} {sys.executable} -m jittor.test.{name} -v"
+        print("run cmd:", cmd)
+        assert os.system(cmd)==0, "run cmd failed: "+cmd
+
 @unittest.skipIf(not jt.compile_extern.has_mpi, "no mpi found")
 class TestMpiEntry(unittest.TestCase):
     def test_entry(self):
-        if not jt.compile_extern.inside_mpi():
-            mpirun_path = jt.compile_extern.mpicc_path.replace("mpicc", "mpirun")
-            cmd = f"{mpirun_path} -np 2 {sys.executable} -m jittor.test.test_mpi -v"
-            print("run cmd:", cmd)
-            assert os.system(cmd)==0, "run cmd failed: "+cmd
+        run_mpi_test(2, "test_mpi")
 
 if __name__ == "__main__":
     unittest.main()

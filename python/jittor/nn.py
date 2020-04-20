@@ -271,7 +271,7 @@ class BatchNorm(Module):
 
     def execute(self, x):
         if self.is_train:
-            if self.sync and not (jt.compile_extern.mpi_ops is None):
+            if self.sync and jt.compile_extern.mpi_ops is not None:
                 tmpx =  jt.compile_extern.mpi_ops.mpi_all_reduce(x)/jt.compile_extern.mpi.world_size()
                 tmpx2 =  jt.compile_extern.mpi_ops.mpi_all_reduce(x*x)/jt.compile_extern.mpi.world_size()
                 xmean = jt.mean(tmpx, dims=[0,2,3], keepdims=1)
