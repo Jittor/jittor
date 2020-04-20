@@ -13,7 +13,7 @@ import jittor as jt
 from jittor import init, Module
 import numpy as np
 import math
-from jittor.pool import Pool, pool
+from jittor.pool import Pool, pool, AdaptiveAvgPool2d
 
 def matmul_transpose(a, b):
     '''
@@ -99,6 +99,7 @@ def linear(x, n):
 
 def relu(x): return jt.maximum(x, 0)
 def leaky_relu(x, scale): return jt.ternary(x>0, x, x*scale)
+def relu6(x): return jt.minimum(jt.maximum(x, 0), 6)
 
 #TODO dims is 4 will cause slowly execution
 def cross_entropy_loss(output, target, ignore_index=None):
@@ -219,10 +220,11 @@ class Dropout(Module):
         if self.p > 0 and self.is_train:
             if self.p == 1:
                 noise = jt.zeros(input.shape)
+                output = output * noise
             else:
                 noise = jt.random(input.shape)
                 noise = (noise > self.p).int()
-            output = output * noise
+                output = output * noise / (1.0 - self.p) # div keep prob
         return output
 
 class Linear(Module):
@@ -270,22 +272,24 @@ class BatchNorm(Module):
 
 Relu = jt.make_module(relu)
 ReLU = Relu
-Leaky_relu = jt.make_module(leaky_relu, 2)
+Leaky_relu = jt.make_module(leaky_relu, 0.01)
+LeakyReLU = Leaky_relu
+ReLU6 = jt.make_module(relu6)
 Softmax = jt.make_module(softmax, 2)
 
 class Conv(Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
-        assert groups == 1
-
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.kernel_size = kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size)
         self.stride = stride if isinstance(stride, tuple) else (stride, stride)
         self.padding = padding if isinstance(padding, tuple) else (padding, padding)
         self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
+        self.groups = groups
+        assert in_channels % groups == 0, 'in_channels must be divisible by groups'
+        assert out_channels % groups == 0, 'out_channels must be divisible by groups'
         Kh, Kw = self.kernel_size
-        assert groups==1, "Group conv not supported yet."
-        self.weight = init.relu_invariant_gauss([out_channels, in_channels, Kh, Kw], dtype="float", mode="fan_out")
+        self.weight = init.relu_invariant_gauss([out_channels, in_channels // groups, Kh, Kw], dtype="float", mode="fan_out")
         if bias:
             self.bias = init.uniform([out_channels], dtype="float", low=-1, high=1)
         else:
@@ -295,17 +299,36 @@ class Conv(Module):
         N,C,H,W = x.shape
         Kh, Kw = self.kernel_size
         assert C==self.in_channels
-        oh = (H+self.padding[0]*2-Kh*self.dilation[0]+self.dilation[0]-1)//self.stride[0]+1
-        ow = (W+self.padding[1]*2-Kw*self.dilation[1]+self.dilation[1]-1)//self.stride[1]+1
-        xx = x.reindex([N,self.out_channels,C,oh,ow,Kh,Kw], [
-            'i0', # Nid
-            'i2', # Cid
-            f'i3*{self.stride[0]}-{self.padding[0]}+i5*{self.dilation[0]}', # Hid+Khid
-            f'i4*{self.stride[1]}-{self.padding[1]}+i6*{self.dilation[1]}', # Wid+KWid
-        ])
-        ww = self.weight.broadcast(xx.shape, [0,3,4])
-        yy = xx*ww
-        y = yy.sum([2,5,6]) # Kc, Kh, Kw
+        if self.groups == 1:
+            oh = (H+self.padding[0]*2-Kh*self.dilation[0]+self.dilation[0]-1)//self.stride[0]+1
+            ow = (W+self.padding[1]*2-Kw*self.dilation[1]+self.dilation[1]-1)//self.stride[1]+1
+            xx = x.reindex([N,self.out_channels,C,oh,ow,Kh,Kw], [
+                'i0', # Nid
+                'i2', # Cid
+                f'i3*{self.stride[0]}-{self.padding[0]}+i5*{self.dilation[0]}', # Hid+Khid
+                f'i4*{self.stride[1]}-{self.padding[1]}+i6*{self.dilation[1]}', # Wid+KWid
+            ])
+            ww = self.weight.broadcast(xx.shape, [0,3,4])
+            yy = xx*ww
+            y = yy.sum([2,5,6]) # Kc, Kh, Kw
+        else:
+            G = self.groups
+            oc = self.out_channels
+            oh = (H+self.padding[0]*2-Kh*self.dilation[0]+self.dilation[0]-1)//self.stride[0]+1
+            ow = (W+self.padding[1]*2-Kw*self.dilation[1]+self.dilation[1]-1)//self.stride[1]+1
+            xx = x.reshape((N, G, C//G, H, W))
+            xx = xx.reindex([N,G,oc//G,C//G,oh,ow,Kh,Kw], [
+                'i0', # Nid
+                'i1', # Gid
+                'i3', # C//G id
+                f'i4*{self.stride[0]}-{self.padding[0]}+i6*{self.dilation[0]}', # Hid+Khid
+                f'i5*{self.stride[1]}-{self.padding[1]}+i7*{self.dilation[1]}', # Wid+KWid
+            ])
+            ww = self.weight.reshape((G, oc//G, C//G, Kh, Kw))
+            ww = ww.broadcast(xx.shape, [0,4,5])
+            yy = xx*ww
+            yy = yy.sum([3,6,7]) # oc//G, Kh, Kw
+            y = yy.reshape((N, oc, oh, ow))
         if self.bias is not None:
             b = self.bias.broadcast(y.shape, [0,2,3])
             y = y + b
