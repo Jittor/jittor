@@ -61,5 +61,10 @@ class TestTransposeOp(unittest.TestCase):
             assert ((da-jda.data)<1e-5).all(), (da, jda.data, da-jda.data)
             assert ((db-jdb.data)<1e-5).all(), (db-jdb.data)
 
+    def test_permute(self):
+        a = jt.ones([2,3,4])
+        assert a.permute().shape == [4,3,2]
+        assert a.permute(0,2,1).shape == [2,4,3]
+
 if __name__ == "__main__":
     unittest.main()

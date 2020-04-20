@@ -21,6 +21,7 @@ with lock.lock_scope():
 import contextlib
 import numpy as np
 from collections import OrderedDict
+from collections.abc import Sequence, Mapping
 import types
 import pickle
 import sys
@@ -340,19 +341,24 @@ def detach(x):
     return x.clone().stop_grad().clone()
 Var.detach = detach
 
-def view(x, *shape):
-    if isinstance(shape[0], tuple):
+origin_reshape = reshape
+def reshape(x, *shape):
+    if len(shape) == 1 and isinstance(shape[0], Sequence):
         shape = shape[0]
-    return x.reshape(shape)
-Var.view = view
+    return origin_reshape(x, shape)
+reshape.__doc__ = origin_reshape.__doc__
+Var.view = Var.reshape = view = reshape
 
-def permute(x, *dim):
-    if isinstance(dim[0], tuple):
+origin_transpose = transpose
+def transpose(x, *dim):
+    if len(dim) == 1 and isinstance(dim[0], Sequence):
         dim = dim[0]
-    return transpose(x, dim)
-Var.permute = permute
+    return origin_transpose(x, dim)
+transpose.__doc__ = origin_transpose.__doc__
+Var.transpose = Var.permute = permute = transpose
 
 def flatten(input, start_dim=0, end_dim=-1):
+    '''flatten dimentions by reshape'''
     in_shape = input.shape
     start_dim = len(in_shape) + start_dim if start_dim < 0 else start_dim
     end_dim = len(in_shape) + end_dim if end_dim < 0 else end_dim
@@ -668,8 +674,9 @@ def jittor_exit():
         core.sync_all(True)
 atexit.register(jittor_exit)
 
-Var.__repr__ = Var.__str__ = lambda x: str(x.data)
-Var.peek = lambda x: str(x.dtype)+str(x.shape)
+Var.__str__ = lambda x: str(x.data)
+Var.__repr__ = lambda x: f"jt.Var:{x.dtype}{x.uncertain_shape}"
+Var.peek = lambda x: f"{x.dtype}{x.shape}"
 
 from . import nn
 from .nn import matmul

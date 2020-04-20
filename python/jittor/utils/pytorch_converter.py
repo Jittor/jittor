@@ -250,13 +250,15 @@ for key in pjmap.keys():
     if module == 'nn':
         support_ops[key] = name
 
+def raise_unspoort(name):
+    raise RuntimeError(f'{a.attr} is not supported in Jittor yet. We will appreciate it if you provide an implementation of {a.attr} and make pull request at https://github.com/Jittor/jittor.')
 
 def replace(a):
     if hasattr(a, "attr") and a.attr in unsupport_ops:
-        raise RuntimeError(f'{a.attr} is not supported in Jittor yet. We will appreciate it if you code {a.attr} function and make pull request at https://github.com/Jittor/jittor.')
+        raise_unspoort(a.attr)
     
     if hasattr(a, "id") and a.id in unsupport_ops:
-        raise RuntimeError(f'{a.id} is not supported in Jittor yet. We will appreciate it if you code {a.id} function and make pull request at https://github.com/Jittor/jittor.')
+        raise_unspoort(a.id)
 
     if hasattr(a, "attr"):
         if a.attr in support_ops.keys(): a.attr = support_ops[a.attr]
@@ -419,7 +421,7 @@ def dfs(a):
         prefix = '.'.join(func[0:-1])
         func_name = func[-1]
         if func_name in unsupport_ops:
-            raise RuntimeError(f'{func_name} is not supported in Jittor yet. We will appreciate it if you code {func_name} function and make pull request at https://github.com/Jittor/jittor.')
+            raise_unspoort(func_name)
         if func_name in pjmap.keys():
             ags = [astunparse.unparse(ag).strip('\n') for ag in a.args]
             kws = [astunparse.unparse(kw).strip('\n') for kw in a.keywords]
