@@ -8,6 +8,7 @@
 #include "pybind/py_var_tracer.h"
 #include "misc/str_utils.h"
 #include "op.h"
+#include "var.h"
 
 namespace py = pybind11;
 using namespace pybind11::literals;

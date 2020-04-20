@@ -7,6 +7,7 @@
 #include "common.h"
 #include "misc/nano_string.h"
 #include "misc/nano_vector.h"
+#include "pybind/py_var_tracer.h"
 
 namespace jittor {
 
@@ -105,8 +106,15 @@ struct Node {
     list<output_t> _outputs;
 
 #ifdef NODE_MEMCHECK
-    Node();
-    virtual ~Node();
+    inline Node() {
+        lived_nodes[(void*)this] = lived_nodes.size()+1;
+        registe_node_trace(this);
+    }
+
+    inline virtual ~Node() {
+        lived_nodes.erase((void*)this);
+        unregiste_node_trace(this);
+    }
 #else
     inline Node() {};
     inline virtual ~Node() {};
