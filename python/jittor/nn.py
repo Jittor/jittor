@@ -270,15 +270,13 @@ class BatchNorm(Module):
         self.running_var = init.constant((num_features,), "float32", 1.0).stop_grad()
 
     def execute(self, x):
+        mpi = jt.compile_extern.mpi
         if self.is_train:
+            xmean = jt.mean(x, dims=[0,2,3], keepdims=1)
+            x2mean = jt.mean(x*x, dims=[0,2,3], keepdims=1)
             if self.sync and jt.compile_extern.mpi_ops is not None:
-                tmpx =  jt.compile_extern.mpi_ops.mpi_all_reduce(x)/jt.compile_extern.mpi.world_size()
-                tmpx2 =  jt.compile_extern.mpi_ops.mpi_all_reduce(x*x)/jt.compile_extern.mpi.world_size()
-                xmean = jt.mean(tmpx, dims=[0,2,3], keepdims=1)
-                x2mean = jt.mean(tmpx2, dims=[0,2,3], keepdims=1)
-            else:
-                xmean = jt.mean(x, dims=[0,2,3], keepdims=1)
-                x2mean = jt.mean(x*x, dims=[0,2,3], keepdims=1)
+                xmean =  jt.compile_extern.mpi_ops.mpi_all_reduce(xmean)/jt.compile_extern.mpi.world_size()
+                x2mean =  jt.compile_extern.mpi_ops.mpi_all_reduce(x2mean)/jt.compile_extern.mpi.world_size()
 
             xvar = x2mean-xmean*xmean
             norm_x = (x-xmean)/jt.sqrt(xvar+self.eps)

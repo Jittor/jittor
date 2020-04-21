@@ -38,6 +38,8 @@ MpiBroadcastOp::MpiBroadcastOp(Var* x, int root) : x(x), root(root) {
 
 void MpiBroadcastOp::infer_shape() {
     y->set_shape(x->shape);
+    if (root == mpi_world_rank)
+        y->share_with(x);
 }
 
 VarPtr MpiBroadcastOp::grad(Var* out, Var* dout, Var* v, int v_index) {
@@ -56,14 +58,8 @@ void MpiBroadcastOp::jit_prepare() {
 void MpiBroadcastOp::jit_run() {
     @for(i, 0, XDIM, index_t xshape@i = x->shape[@i];)
     int size = 1 @for(i, 0, XDIM,  * xshape@{i});
-    auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
-    if (mpi_world_rank == root) {
-        for (int i = 0; i < mpi_world_size; i++) {
-            MPI_Send(xp, size, MPI_FLOAT, i, 0, MPI_COMM_WORLD);
-        }
-    }
-    MPI_Recv(yp, size, MPI_FLOAT, root, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    MPI_Bcast(yp, size, MPI_FLOAT, root, MPI_COMM_WORLD);
 }
 #else
 void MpiBroadcastOp::jit_run() {

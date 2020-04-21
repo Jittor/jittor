@@ -78,7 +78,8 @@ void MpiReduceOp::jit_run() {
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
     index_t num = y->num;
-    for (index_t i=0; i<num; i++) yp[i] = 0;
+    if (root != mpi_world_rank)
+        for (index_t i=0; i<num; i++) yp[i] = 0;
     MPI_CHECK(MPI_Reduce(xp, yp, num, T_MPI, OP_MPI, root, MPI_COMM_WORLD));
 }
 #else
