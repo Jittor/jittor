@@ -65,7 +65,7 @@ class TestNcclOps(unittest.TestCase):
             log_v=1, log_vprefix="op.cc=100,exe=1000"
         ) as raw_log:
             x = jt.random([5, 5])
-            y = jt.compile_extern.mpi_ops.mpi_reduce(x, 0)
+            y = jt.compile_extern.mpi_ops.mpi_reduce(x, root=0)
             y_ = y.data
             x_ = (x*n).data
             if mpi.world_rank() == 0:

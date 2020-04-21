@@ -16,16 +16,28 @@
 namespace jittor {
 
 #ifndef JIT
-MpiReduceOp::MpiReduceOp(Var* x, int root) : x(x), root(root) {
+
+static auto make_array = get_op_info("array")
+    .get_constructor<VarPtr, const void*, NanoVector, NanoString>();
+static auto make_binary = get_op_info("binary")
+    .get_constructor<VarPtr, Var*, Var*, NanoString>();
+static auto make_mpi_reduce = get_op_info("mpi_reduce")
+    .get_constructor<VarPtr, Var*, NanoString, int>();
+
+MpiReduceOp::MpiReduceOp(Var* x, NanoString op, int root) : x(x), op(op), root(root) {
+    if (op == ns_mean) {
+        auto var = make_mpi_reduce(x, ns_add, root);
+        var = make_binary(var, make_array(&mpi_world_size, 1, ns_int32), ns_divide);
+        forward(var);
+        return;
+    }
+    ASSERT(op == ns_add) << "Not supported MPI op" << op;
     #ifdef HAS_CUDA
     if (use_cuda) {
-        static VarPtr(*nccl_reduce)(Var*, int) = nullptr;
-        if (!nccl_reduce && has_op("nccl_reduce")) {
-            nccl_reduce = get_op_info("nccl_reduce")
-                .get_constructor<VarPtr, Var*, int>();
-        }
+        static VarPtr(*nccl_reduce)(Var*, int) = has_op("nccl_reduce")
+            ? get_op_info("nccl_reduce").get_constructor<VarPtr, Var*, int>();
+            : nullptr;
         if (nccl_reduce) {
-            LOGr << "nccl";
             auto var = nccl_reduce(x, root);
             forward(var);
             return;
@@ -48,20 +60,26 @@ VarPtr MpiReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 
 void MpiReduceOp::jit_prepare() {
     add_jit_define("Tx", x->dtype());
-    add_jit_define("XDIM", JK::hex1(x->shape.size()));
+    add_jit_define("OP", op.to_cstring());
 }
 
 #else // JIT
 #ifdef JIT_cpu
 void MpiReduceOp::jit_run() {
-    @for(i, 0, XDIM, index_t xshape@i = x->shape[@i];)
-    int size = 1 @for(i, 0, XDIM,  * xshape@{i});
+    @define(T_MPI,
+        @if(@strcmp(@Tx,float)==0 || @strcmp(@Tx,float32)==0, MPI_FLOAT)
+        @if(@strcmp(@Tx,int)==0 || @strcmp(@Tx,int32)==0, MPI_INT)
+        @if(@strcmp(@Tx,float64)==0 || @strcmp(@Tx,double)==0, MPI_DOUBLE)
+        @if(@strcmp(@Tx,int64)==0, MPI_DOUBLE_INT)
+    )
+    @define(OP_MPI,
+        @if(@strcmp(@OP,add)==0, MPI_SUM)
+    )
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
     index_t num = y->num;
-    for (index_t i=0; i<num; i++)
-        yp[i] = 0;
-    MPI_Reduce(xp, yp, size, MPI_FLOAT, MPI_SUM, root, MPI_COMM_WORLD);
+    for (index_t i=0; i<num; i++) yp[i] = 0;
+    MPI_CHECK(MPI_Reduce(xp, yp, num, T_MPI, OP_MPI, root, MPI_COMM_WORLD));
 }
 #else
 void MpiReduceOp::jit_run() {

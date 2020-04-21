@@ -13,8 +13,9 @@ namespace jittor {
 
 struct MpiAllReduceOp : Op {
     Var* x, * y;
+    NanoString op;
 
-    MpiAllReduceOp(Var* x);
+    MpiAllReduceOp(Var* x, NanoString op=ns_add);
     void infer_shape() override;
     
     const char* name() const override { return "mpi_all_reduce"; }
