@@ -33,19 +33,33 @@ class TestMpi(unittest.TestCase):
         class ToyDataset(Dataset):
             def __init__(self):
                 super().__init__()
-                self.set_attrs(total_len=1024)
+                self.set_attrs(batch_size=21, total_len=211)
 
             def __getitem__(self, index):
                 return index, index*index
         
         toy = ToyDataset()
-        offset = ((toy.total_len-1) // mpi.world_size() + 1) * mpi.world_rank()
+        offset = ((toy.batch_size-1) // mpi.world_size() + 1) * mpi.world_rank()
 
         for _ in range(2):
             for i,(a,b) in enumerate(toy):
                 assert (a.data*a.data == b.data).all()
-                c = np.array(range(offset+i*toy.batch_size, offset+(i+1)*toy.batch_size))
-                assert (c==a.data).all()
+                if mpi.world_rank() == 0:
+                    if i == len(toy)-1:
+                        assert a.shape[0] == 1
+                        c = np.array([210])
+                    else:
+                        assert toy.real_batch_size == 11
+                        c = np.array(range(offset+i*toy.batch_size, offset+i*toy.batch_size + toy.real_batch_size))
+                else:
+                    if i == len(toy)-1:
+                        assert a.shape[0] == 1
+                        c = np.array([210])
+                    else:
+                        assert toy.real_batch_size == 10
+                        c = np.array(range(offset+i*toy.batch_size, offset+i*toy.batch_size + toy.real_batch_size))
+
+                assert (c==a.data).all(), (c, a.data)
 
 def run_mpi_test(num_procs, name):
     if not jt.compile_extern.inside_mpi():
