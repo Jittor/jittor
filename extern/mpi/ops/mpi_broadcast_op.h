@@ -15,7 +15,7 @@ struct MpiBroadcastOp : Op {
     Var* x, * y;
     int root;
 
-    MpiBroadcastOp(Var* x, int root);
+    MpiBroadcastOp(Var* x, int root=0);
     void infer_shape() override;
     
     const char* name() const override { return "mpi_broadcast"; }

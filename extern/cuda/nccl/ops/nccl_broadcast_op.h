@@ -15,7 +15,7 @@ struct NcclBroadcastOp : Op {
     Var* x, * y;
     int root;
 
-    NcclBroadcastOp(Var* x, int root);
+    NcclBroadcastOp(Var* x, int root=0);
     void infer_shape() override;
     
     const char* name() const override { return "nccl_broadcast"; }

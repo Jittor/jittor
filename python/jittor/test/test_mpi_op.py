@@ -23,14 +23,14 @@ class TestMpiOps(unittest.TestCase):
 
     def test_all_reduce(self):
         x = jt.random([5, 5])
-        y = jt.compile_extern.mpi_ops.mpi_all_reduce(x)
+        y = x.mpi_all_reduce()
         assert np.allclose(y.data, (x*3).data)
         g = jt.grad(y,x)
         assert np.allclose(g.data, np.ones([5,5])*3)
 
     def test_all_reduce_mean(self):
         x = jt.random([5, 5])
-        y = jt.compile_extern.mpi_ops.mpi_all_reduce(x, "mean")
+        y = x.mpi_all_reduce("mean")
         assert np.allclose(y.data, x.data)
         g = jt.grad(y,x)
         assert np.allclose(g.data, np.ones([5,5]))
@@ -41,7 +41,7 @@ class TestMpiOps(unittest.TestCase):
             x = data
         else:
             x = jt.zeros([5, 5])
-        y = jt.compile_extern.mpi_ops.mpi_broadcast(x, 0)
+        y = x.mpi_broadcast(0)
         assert np.allclose(y.data, data.data)
         g = jt.grad(y,x)
         if mpi.world_rank() == 0:
@@ -51,7 +51,7 @@ class TestMpiOps(unittest.TestCase):
 
     def test_reduce(self):
         x = jt.random([5, 5])
-        y = jt.compile_extern.mpi_ops.mpi_reduce(x, root=0)
+        y = x.mpi_reduce(root=0)
         y.sync()
         if mpi.world_rank() == 0:
             assert np.allclose(y.data, (x*3).data)

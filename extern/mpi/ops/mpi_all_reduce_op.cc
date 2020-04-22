@@ -45,7 +45,6 @@ MpiAllReduceOp::MpiAllReduceOp(Var* x, NanoString op) : x(x), op(op) {
     }
     #endif
     y = create_output(nullptr, x->dtype());
-    ASSERT(x->dtype().is_float());
 }
 
 void MpiAllReduceOp::infer_shape() {
@@ -79,10 +78,6 @@ void MpiAllReduceOp::jit_run() {
     auto* __restrict__ yp = y->ptr<Tx>();
     index_t num = y->num;
     MPI_Allreduce(xp, yp, num, T_MPI, OP_MPI, MPI_COMM_WORLD);
-}
-#else
-void MpiAllReduceOp::jit_run() {
-    // cuda device code
 }
 #endif // JIT_cpu
 #endif // JIT

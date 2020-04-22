@@ -15,7 +15,7 @@ struct NcclReduceOp : Op {
     Var* x, * y;
     int root;
 
-    NcclReduceOp(Var* x, int root);
+    NcclReduceOp(Var* x, int root=0);
     void infer_shape() override;
     
     const char* name() const override { return "nccl_reduce"; }

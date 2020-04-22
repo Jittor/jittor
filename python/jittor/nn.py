@@ -42,37 +42,6 @@ jt.Var.__imatmul__ = lambda a,b: a.assign(matmul(a,b))
 def get_init_var_rand(shape, dtype):
     return jt.array(np.random.normal(0.0, 1.0, shape).astype(np.float32))
 
-@jt.var_scope('batch_norm')
-def batch_norm(x, is_train, eps=1e-5, momentum=0.1, sync=True):
-    assert not (jt.compile_extern.mpi_ops is None)
-    w = jt.make_var([x.shape[1]], init=lambda *a: init.constant(*a, 1.0))
-    b = jt.make_var([x.shape[1]], init=lambda *a: init.constant(*a, 0.0))
-    running_mean = jt.make_var([x.shape[1]], init=lambda *a: init.constant(*a, 0.0))
-    running_var = jt.make_var([x.shape[1]], init=lambda *a: init.constant(*a, 1.0))
-
-    w = w.broadcast(x, [0,2,3])
-    b = b.broadcast(x, [0,2,3])
-    if is_train:
-        if self.sync and not (jt.compile_extern.mpi_ops is None):
-            tmpx =  jt.compile_extern.mpi_ops.mpi_all_reduce(x)/jt.compile_extern.mpi.world_size()
-            tmpx2 =  jt.compile_extern.mpi_ops.mpi_all_reduce(x*x)/jt.compile_extern.mpi.world_size()
-            xmean = jt.mean(tmpx, dims=[0,2,3], keepdims=1)
-            x2mean = jt.mean(tmpx2, dims=[0,2,3], keepdims=1)
-        else:
-            xmean = jt.mean(x, dims=[0,2,3], keepdims=1)
-            x2mean = jt.mean(x*x, dims=[0,2,3], keepdims=1)
-        xvar = x2mean-xmean*xmean
-        norm_x = (x-xmean)/jt.sqrt(xvar+eps)
-
-        running_mean += (xmean.sum([0,2,3])-running_mean)*momentum
-        running_var += (xvar.sum([0,2,3])-running_var)*momentum
-    else:
-        running_mean = running_mean.broadcast(x, [0,2,3])
-        running_var = running_var.broadcast(x, [0,2,3])
-        norm_x = (x-running_mean)/jt.sqrt(running_var+eps)
-
-    return norm_x * w + b
-
 @jt.var_scope('conv')
 def conv(x, in_planes, out_planes, kernel_size, padding, stride = 1, init_method=None):
     Kw = kernel_size
@@ -147,6 +116,9 @@ class SGD(object):
         self.parameters = []
         self.values = []
         for p in parameters:
+            # broadcast parameter from 0 node when init
+            if jt.mpi:
+                p.assign(p.mpi_broadcast().detach())
             if p.is_stop_grad():
                 self.no_grad_parameters.append(p)
                 continue
@@ -156,9 +128,9 @@ class SGD(object):
     def step(self, loss):
         ps = self.parameters
         gs = jt.grad(loss, ps)
-        if jt.compile_extern.inside_mpi():
+        if jt.mpi:
             for g in gs:
-                g.assign(jt.compile_extern.mpi_ops.mpi_all_reduce(g))
+                g.assign(g.mpi_all_reduce("mean"))
         for p, g, v in zip(ps, gs, self.values):
             dp = p * self.weight_decay + g
             v.assign(self.momentum * v + dp * (1 - self.dampening))
@@ -191,6 +163,8 @@ class Adam(object):
         self.values = []
         self.m = []
         for p in parameters:
+            if jt.mpi:
+                p.assign(p.mpi_broadcast().detach())
             if p.is_stop_grad():
                 self.no_grad_parameters.append(p)
                 continue
@@ -201,9 +175,9 @@ class Adam(object):
     def step(self, loss):
         ps = self.parameters
         gs = jt.grad(loss, ps)
-        if jt.compile_extern.inside_mpi():
+        if jt.mpi:
             for g in gs:
-                g.assign(jt.compile_extern.mpi_ops.mpi_all_reduce(g))
+                g.assign(g.mpi_all_reduce("mean"))
         self.adam_step += 1
         n, (b0, b1) = float(self.adam_step), self.betas
         for p, g, v, m in zip(ps, gs, self.values, self.m):
@@ -270,13 +244,12 @@ class BatchNorm(Module):
         self.running_var = init.constant((num_features,), "float32", 1.0).stop_grad()
 
     def execute(self, x):
-        mpi = jt.compile_extern.mpi
         if self.is_train:
             xmean = jt.mean(x, dims=[0,2,3], keepdims=1)
             x2mean = jt.mean(x*x, dims=[0,2,3], keepdims=1)
-            if self.sync and jt.compile_extern.mpi_ops is not None:
-                xmean =  jt.compile_extern.mpi_ops.mpi_all_reduce(xmean)/jt.compile_extern.mpi.world_size()
-                x2mean =  jt.compile_extern.mpi_ops.mpi_all_reduce(x2mean)/jt.compile_extern.mpi.world_size()
+            if self.sync and jt.mpi:
+                xmean = xmean.mpi_all_reduce("mean")
+                x2mean = x2mean.mpi_all_reduce("mean")
 
             xvar = x2mean-xmean*xmean
             norm_x = (x-xmean)/jt.sqrt(xvar+self.eps)

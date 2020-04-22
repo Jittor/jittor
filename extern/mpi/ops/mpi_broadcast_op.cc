@@ -30,7 +30,6 @@ MpiBroadcastOp::MpiBroadcastOp(Var* x, int root) : x(x), root(root) {
     }
     #endif
     y = create_output(nullptr, x->dtype());
-    ASSERT(x->dtype().is_float());
 }
 
 void MpiBroadcastOp::infer_shape() {
@@ -60,10 +59,6 @@ void MpiBroadcastOp::jit_run() {
     )
     auto* __restrict__ yp = y->ptr<Tx>();
     MPI_Bcast(yp, y->num, T_MPI, root, MPI_COMM_WORLD);
-}
-#else
-void MpiBroadcastOp::jit_run() {
-    // cuda device code
 }
 #endif // JIT_cpu
 #endif // JIT

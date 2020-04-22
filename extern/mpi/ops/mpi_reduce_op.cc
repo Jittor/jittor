@@ -45,7 +45,6 @@ MpiReduceOp::MpiReduceOp(Var* x, NanoString op, int root) : x(x), op(op), root(r
     }
     #endif
     y = create_output(nullptr, x->dtype());
-    ASSERT(x->dtype().is_float());
 }
 
 void MpiReduceOp::infer_shape() {
@@ -81,10 +80,6 @@ void MpiReduceOp::jit_run() {
     MPI_CHECK(MPI_Reduce(xp, yp, num, T_MPI, OP_MPI, root, MPI_COMM_WORLD));
     if (root != mpi_world_rank)
         for (index_t i=0; i<num; i++) yp[i] = 0;
-}
-#else
-void MpiReduceOp::jit_run() {
-    // cuda device code
 }
 #endif // JIT_cpu
 #endif // JIT

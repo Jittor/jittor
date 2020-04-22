@@ -16,7 +16,7 @@ with lock.lock_scope():
     from jittor_core import *
     from jittor_core.ops import *
     from . import compile_extern
-    from .compile_extern import mkl_ops, inside_mpi, mpi_ops
+    from .compile_extern import mkl_ops, mpi, mpi_ops
 
 import contextlib
 import numpy as np
@@ -614,14 +614,10 @@ class Module:
                 if id(p) in self.backup_grad_state and self.backup_grad_state[id(p)]:
                     p.start_grad()
     
-    def mpi_sync(self):
-        if not inside_mpi():
-            return
-        ps = self.parameters()
-        for p in ps:
-            temp = mpi_ops.mpi_broadcast(p, 0)
-            p.assign(temp.detach())
-            p.detach_inplace()
+    def mpi_param_broadcast(self, root=0):
+        if mpi is None: return
+        for p in self.parameters():
+            p.assign(p.mpi_broadcast(root).detach())
 
 def make_module(func, exec_n_args=1):
     class MakeModule(Module):

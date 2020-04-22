@@ -16,7 +16,7 @@ from jittor import nn, Module
 import copy
 from jittor.test.test_log import find_log_with_re
 from jittor.test.test_mpi import run_mpi_test
-from jittor.compile_extern import mpi, mpi_ops, nccl_ops
+from jittor.compile_extern import mpi, nccl_ops
 n = 2
 
 @unittest.skipIf(nccl_ops is None, "nccl not found")
@@ -32,7 +32,7 @@ class TestNcclOps(unittest.TestCase):
             log_v=1, log_vprefix="op.cc=100,exe=1000"
         ) as raw_log:
             x = jt.random([5, 5])
-            y = jt.compile_extern.mpi_ops.mpi_all_reduce(x)
+            y = x.mpi_all_reduce()
             assert np.allclose(y.data, (x*n).data)
             g = jt.grad(y,x)
             assert np.allclose(g.data, np.ones([5,5])*n)
@@ -50,7 +50,7 @@ class TestNcclOps(unittest.TestCase):
                 x = data
             else:
                 x = jt.zeros([5, 5])
-            y = jt.compile_extern.mpi_ops.mpi_broadcast(x, 0)
+            y = x.mpi_broadcast(0)
             assert np.allclose(y.data, data.data)
             g = jt.grad(y.sum(),x)
             g_ = g.data
@@ -65,7 +65,7 @@ class TestNcclOps(unittest.TestCase):
             log_v=1, log_vprefix="op.cc=100,exe=1000"
         ) as raw_log:
             x = jt.random([5, 5])
-            y = jt.compile_extern.mpi_ops.mpi_reduce(x, root=0)
+            y = x.mpi_reduce(root=0)
             y_ = y.data
             x_ = (x*n).data
             if mpi.world_rank() == 0:
@@ -96,7 +96,7 @@ class TestNcclOps(unittest.TestCase):
             net.linear1.weight += 1
             net.linear2.weight += 1
             net.linear1.bias += 1
-        net.mpi_sync()
+        net.mpi_param_broadcast()
         assert np.allclose(net.linear1.weight.data, jt.ones(net.linear1.weight.shape).data)
         assert np.allclose(net.linear2.weight.data, jt.ones(net.linear2.weight.shape).data)
         assert np.allclose(net.linear1.bias.data, jt.ones(net.linear1.bias.shape).data)
@@ -122,16 +122,16 @@ class TestNcclOps(unittest.TestCase):
 
         num = 2000
         model = Model2(1)
-        model.mpi_sync()
-        optimizer = nn.SGD(model.parameters(), 0.05)
+        model.mpi_param_broadcast()
+        optimizer = nn.SGD(model.parameters(), 0.1)
         dataset = list(enumerate(get_data(num)))
         for i in range(mpi.world_rank(), num, n):
             id, (x, y) = dataset[i]
             pred_y = model(x)
-            loss = (pred_y - y)*(pred_y - y)
+            loss = (pred_y - y)**2
             loss_mean = loss.mean()
             optimizer.step(loss_mean)
-        assert loss_mean.data < 0.0025
+        assert loss_mean.data < 0.0025, loss_mean.data
         jt.clean()
 
 @unittest.skipIf(not jt.compile_extern.has_mpi, "no mpi found")
