@@ -111,15 +111,19 @@ Jittor使用Python和C++编写。 它需要用于即时编译的编译器。当�
 
 Jittor的环境要求如下:
 
-* 操作系统: Ubuntu >= 16.04
+* 操作系统: **Ubuntu** >= 16.04 (or **Windows** Subsystem of Linux)
 * Python版本 >= 3.7
 * C++编译器（g++ or clang）
 
+注意：目前Jittor通过WSL的方式在Windows操作系统上运行，WSL的安装方法请参考[微软官网](https://docs.microsoft.com/en-us/windows/wsl/install-win10)，目前WSL尚不支持CUDA。
+
 Jittor environment requirements:
 
-* System: Ubuntu >= 16.04
+* System: **Ubuntu** >= 16.04 (or **Windows** Subsystem of Linux)
 * Python version >= 3.7
 * C++ compiler(g++ or clang)
+
+Note: Currently Jittor runs on the Windows operating system through WSL. For the installation method of WSL, please refer to [Microsoft official website](https://docs.microsoft.com/en-us/windows/wsl/install-win10). WSL does not yet support CUDA.
 
 Jittor offers three ways to install: pip, script or manual.
 

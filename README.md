@@ -87,11 +87,14 @@ Jittor is written in Python and C++. It requires a compiler for JIT compilation,
 
 
 
+
 Jittor environment requirements:
 
-* System: Ubuntu >= 16.04
+* System: **Ubuntu** >= 16.04 (or **Windows** Subsystem of Linux)
 * Python version >= 3.7
 * C++ compiler(g++ or clang)
+
+Note: Currently Jittor runs on the Windows operating system through WSL. For the installation method of WSL, please refer to [Microsoft official website](https://docs.microsoft.com/en-us/windows/wsl/install-win10). WSL does not yet support CUDA.
 
 Jittor offers three ways to install: pip, script or manual.
 
