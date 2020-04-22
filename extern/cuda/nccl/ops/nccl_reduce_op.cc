@@ -29,14 +29,13 @@ void NcclReduceOp::infer_shape() {
 }
 
 VarPtr NcclReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
-    static VarPtr(*nccl_broadcast)(Var*, int) = 
+    static auto nccl_broadcast = 
         get_op_info("nccl_broadcast").get_constructor<VarPtr, Var*, int>();
     return nccl_broadcast(dout,root);
 }
 
 void NcclReduceOp::jit_prepare() {
     add_jit_define("Tx", x->dtype());
-    add_jit_define("XDIM", JK::hex1(x->shape.size()));
 }
 
 #else // JIT
@@ -49,11 +48,11 @@ void NcclReduceOp::jit_run() {
         @if(@strcmp(@Tx,float64)==0, ncclFloat64)
         @if(@strcmp(@Tx,int64)==0, ncclInt64)
     )
-    @for(i, 0, XDIM, index_t xshape@i = x->shape[@i];)
-    int size = 1 @for(i, 0, XDIM,  * xshape@{i});
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
-    checkCudaErrors(ncclReduce(xp, yp, size, @T_NCCL, ncclSum, root, comm, 0));
+    checkCudaErrors(ncclReduce(xp, yp, y->num, @T_NCCL, ncclSum, root, comm, 0));
+    if (root != mpi_world_rank)
+        checkCudaErrors(cudaMemsetAsync(yp, 0, y->size));
 }
 
 #endif

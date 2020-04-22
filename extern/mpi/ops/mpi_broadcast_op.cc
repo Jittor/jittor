@@ -19,13 +19,10 @@ namespace jittor {
 MpiBroadcastOp::MpiBroadcastOp(Var* x, int root) : x(x), root(root) {
     #ifdef HAS_CUDA
     if (use_cuda) {
-        static VarPtr(*nccl_broadcast)(Var*, int) = nullptr;
-        if (!nccl_broadcast && has_op("nccl_broadcast")) {
-            nccl_broadcast = get_op_info("nccl_broadcast")
-                .get_constructor<VarPtr, Var*, int>();
-        }
+        static auto nccl_broadcast = has_op("nccl_broadcast")
+            ? get_op_info("nccl_broadcast").get_constructor<VarPtr, Var*, int>()
+            : nullptr;
         if (nccl_broadcast) {
-            LOGr << "nccl";
             auto var = nccl_broadcast(x, root);
             forward(var);
             return;
@@ -50,16 +47,19 @@ VarPtr MpiBroadcastOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 
 void MpiBroadcastOp::jit_prepare() {
     add_jit_define("Tx", x->dtype());
-    add_jit_define("XDIM", JK::hex1(x->shape.size()));
 }
 
 #else // JIT
 #ifdef JIT_cpu
 void MpiBroadcastOp::jit_run() {
-    @for(i, 0, XDIM, index_t xshape@i = x->shape[@i];)
-    int size = 1 @for(i, 0, XDIM,  * xshape@{i});
+    @define(T_MPI,
+        @if(@strcmp(@Tx,float)==0 || @strcmp(@Tx,float32)==0, MPI_FLOAT)
+        @if(@strcmp(@Tx,int)==0 || @strcmp(@Tx,int32)==0, MPI_INT)
+        @if(@strcmp(@Tx,float64)==0 || @strcmp(@Tx,double)==0, MPI_DOUBLE)
+        @if(@strcmp(@Tx,int64)==0, MPI_DOUBLE_INT)
+    )
     auto* __restrict__ yp = y->ptr<Tx>();
-    MPI_Bcast(yp, size, MPI_FLOAT, root, MPI_COMM_WORLD);
+    MPI_Bcast(yp, y->num, T_MPI, root, MPI_COMM_WORLD);
 }
 #else
 void MpiBroadcastOp::jit_run() {

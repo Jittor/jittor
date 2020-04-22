@@ -29,14 +29,13 @@ void NcclBroadcastOp::infer_shape() {
 }
 
 VarPtr NcclBroadcastOp::grad(Var* out, Var* dout, Var* v, int v_index) {
-    static VarPtr(*nccl_reduce)(Var*, int) = 
+    static auto nccl_reduce = 
         get_op_info("nccl_reduce").get_constructor<VarPtr, Var*, int>();
     return nccl_reduce(dout,root);
 }
 
 void NcclBroadcastOp::jit_prepare() {
     add_jit_define("Tx", x->dtype());
-    add_jit_define("XDIM", JK::hex1(x->shape.size()));
 }
 
 #else // JIT
@@ -49,11 +48,9 @@ void NcclBroadcastOp::jit_run() {
         @if(@strcmp(@Tx,float64)==0, ncclFloat64)
         @if(@strcmp(@Tx,int64)==0, ncclInt64)
     )
-    @for(i, 0, XDIM, index_t xshape@i = x->shape[@i];)
-    int size = 1 @for(i, 0, XDIM,  * xshape@{i});
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
-    checkCudaErrors(ncclBroadcast(xp, yp, size, @T_NCCL, root, comm, 0));
+    checkCudaErrors(ncclBroadcast(xp, yp, y->num, @T_NCCL, root, comm, 0));
 }
 
 #endif

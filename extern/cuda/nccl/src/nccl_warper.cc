@@ -25,12 +25,11 @@ nccl_initer() {
     if (mpi_world_rank == 0)
         checkCudaErrors(ncclGetUniqueId(&id));
     MPI_CHECK(MPI_Bcast((void *)&id, sizeof(id), MPI_BYTE, 0, MPI_COMM_WORLD));
+    LOGv << "NCCL init in device" << mpi_local_rank;
     checkCudaErrors(cudaSetDevice(mpi_local_rank));
-    #ifdef HAS_CUDA
     event_queue.run_sync([]() {
         checkCudaErrors(cudaSetDevice(mpi_local_rank));
     });
-    #endif
     checkCudaErrors(ncclCommInitRank(&comm, mpi_world_size, id, mpi_world_rank));
 }
 

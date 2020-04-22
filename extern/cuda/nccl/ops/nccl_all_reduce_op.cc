@@ -18,6 +18,10 @@
 namespace jittor {
 
 #ifndef JIT
+
+static auto nccl_all_reduce = 
+    get_op_info("nccl_all_reduce").get_constructor<VarPtr, Var*>();
+
 NcclAllReduceOp::NcclAllReduceOp(Var* x) : x(x) {
     flags.set(NodeFlags::_cpu, 0);
     flags.set(NodeFlags::_cuda, 1);
@@ -29,14 +33,11 @@ void NcclAllReduceOp::infer_shape() {
 }
 
 VarPtr NcclAllReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
-    static VarPtr(*nccl_all_reduce)(Var*) = 
-        get_op_info("nccl_all_reduce").get_constructor<VarPtr, Var*>();
     return nccl_all_reduce(dout);
 }
 
 void NcclAllReduceOp::jit_prepare() {
     add_jit_define("Tx", x->dtype());
-    add_jit_define("XDIM", JK::hex1(x->shape.size()));
 }
 
 #else // JIT
@@ -49,11 +50,9 @@ void NcclAllReduceOp::jit_run() {
         @if(@strcmp(@Tx,float64)==0, ncclFloat64)
         @if(@strcmp(@Tx,int64)==0, ncclInt64)
     )
-    @for(i, 0, XDIM, index_t xshape@i = x->shape[@i];)
-    int size = 1 @for(i, 0, XDIM,  * xshape@{i});
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
-    checkCudaErrors(ncclAllReduce(xp, yp, size, @T_NCCL, ncclSum, comm, 0));
+    checkCudaErrors(ncclAllReduce(xp, yp, y->num, @T_NCCL, ncclSum, comm, 0));
 }
 
 #endif

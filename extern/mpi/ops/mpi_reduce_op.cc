@@ -34,8 +34,8 @@ MpiReduceOp::MpiReduceOp(Var* x, NanoString op, int root) : x(x), op(op), root(r
     ASSERT(op == ns_add) << "Not supported MPI op" << op;
     #ifdef HAS_CUDA
     if (use_cuda) {
-        static VarPtr(*nccl_reduce)(Var*, int) = has_op("nccl_reduce")
-            ? get_op_info("nccl_reduce").get_constructor<VarPtr, Var*, int>();
+        static auto nccl_reduce = has_op("nccl_reduce")
+            ? get_op_info("nccl_reduce").get_constructor<VarPtr, Var*, int>()
             : nullptr;
         if (nccl_reduce) {
             auto var = nccl_reduce(x, root);
@@ -78,9 +78,9 @@ void MpiReduceOp::jit_run() {
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
     index_t num = y->num;
+    MPI_CHECK(MPI_Reduce(xp, yp, num, T_MPI, OP_MPI, root, MPI_COMM_WORLD));
     if (root != mpi_world_rank)
         for (index_t i=0; i<num; i++) yp[i] = 0;
-    MPI_CHECK(MPI_Reduce(xp, yp, num, T_MPI, OP_MPI, root, MPI_COMM_WORLD));
 }
 #else
 void MpiReduceOp::jit_run() {
