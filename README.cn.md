@@ -81,9 +81,9 @@ Jittor使用Python和C++编写。 它需要用于即时编译的编译器。当�
 
 * CPU 编译器 （需要下列至少一个）
     - g++ （>=5.4.0）
-    - clang （>=8.0）推荐
+    - clang （>=8.0）
 * GPU 编译器（可选）
-    - nvcc（>=10.0）
+    - nvcc (>=10.0 for g++ 或者 >=10.2 for clang)
 
 Jittor的环境要求如下:
 
@@ -108,10 +108,6 @@ Jittor 一共提供三种方式安装: pip安装, 一键脚本安装 和 手动�
 ```bash
 sudo apt install python3.7-dev libomp-dev
 sudo python3.7 -m pip install git+https://github.com/Jittor/jittor.git
-# if you cannot access github, please download code from our website:
-#     wget https://cg.cs.tsinghua.edu.cn/jittor/assets/build/jittor.tgz
-#     mkdir -p jittor && tar -xvf ./jittor.tgz -C jittor
-#     sudo pip install ./jittor
 python3.7 -m jittor.test.test_example
 ```
 
@@ -155,7 +151,7 @@ wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.
 sudo apt install g++ build-essential libomp-dev
 
 # OR clang++-8
-wget -O - https://apt.llvm.org/llvm.sh > /tmp/llvm.sh
+wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install_llvm.sh > /tmp/llvm.sh
 bash /tmp/llvm.sh 8
 ```
 
