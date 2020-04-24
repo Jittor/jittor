@@ -84,7 +84,6 @@ Jittor is written in Python and C++. It requires a compiler for JIT compilation,
     * clang (>=8.0)
 * GPU compiler (optional)
     * nvcc (>=10.0 for g++ or >=10.2 for clang)
-    - nvcc (>=10.0 for g++ or >=10.2 for clang)
 
 
 

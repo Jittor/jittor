@@ -107,7 +107,7 @@ Jittor使用Python和C++编写。 它需要用于即时编译的编译器。当�
 * GPU compiler (optional)
     * nvcc (>=10.0 for g++ or >=10.2 for clang)
 * GPU 编译器（可选）
-    - nvcc (>=10.0 for g++ or >=10.2 for clang)
+    - nvcc (>=10.0 for g++ 或者 >=10.2 for clang)
 
 Jittor的环境要求如下:
 
