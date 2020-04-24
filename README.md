@@ -81,9 +81,10 @@ Jittor is written in Python and C++. It requires a compiler for JIT compilation,
 
 * CPU compiler (require at least one of the following)
     * g++ (>=5.4.0)
-    * clang (>=8.0) recommend
+    * clang (>=8.0)
 * GPU compiler (optional)
-    * nvcc (>=10.0)
+    * nvcc (>=10.0 for g++ or >=10.2 for clang)
+    - nvcc (>=10.0 for g++ or >=10.2 for clang)
 
 
 
@@ -106,10 +107,6 @@ Jittor offers three ways to install: pip, script or manual.
 ```bash
 sudo apt install python3.7-dev libomp-dev
 sudo python3.7 -m pip install git+https://github.com/Jittor/jittor.git
-# if you cannot access github, please download code from our website:
-#     wget https://cg.cs.tsinghua.edu.cn/jittor/assets/build/jittor.tgz
-#     mkdir -p jittor && tar -xvf ./jittor.tgz -C jittor
-#     sudo pip install ./jittor
 python3.7 -m jittor.test.test_example
 ```
 
@@ -150,7 +147,7 @@ We will show how to install Jittor in Ubuntu 16.04 step by step, Other Linux dis
 sudo apt install g++ build-essential libomp-dev
 
 # OR clang++-8
-wget -O - https://apt.llvm.org/llvm.sh > /tmp/llvm.sh
+wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install_llvm.sh > /tmp/llvm.sh
 bash /tmp/llvm.sh 8
 ```
 ### Step 2: Install Python and python-dev
