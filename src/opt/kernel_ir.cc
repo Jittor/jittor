@@ -57,6 +57,14 @@ vector<string> split(const string& s, const string& sep, int max_split) {
     return ret;
 }
 
+string strip(const string& s) {
+    int i=0;
+    while (i<s.size() && (s[i]==' ' || s[i]=='\t' || s[i]=='\n')) i++;
+    int j = s.size();
+    while (j>i && (s[j]==' ' || s[j]=='\t' || s[j]=='\n')) j--;
+    return s.substr(i,j-i);
+}
+
 void KernelIR::del_scope() {
     if (father && (type=="define" || type=="func")) {
         father->scope[attrs["lvalue"]].remove(this);

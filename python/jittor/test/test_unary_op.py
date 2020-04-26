@@ -16,7 +16,9 @@ def check(op, *args):
     x = convert(x)
     y = convert(y)
     # str match nan and inf
-    assert x.dtype == y.dtype and x.shape == y.shape and str(x)==str(y), f"{x}\n{y}"
+    assert x.dtype == y.dtype and x.shape == y.shape
+    for a,b in zip(x.flatten(), y.flatten()):
+        assert str(a)[:5] == str(b)[:5], (a,b)
 
 class TestUnaryOp(unittest.TestCase):
     def test_unary_op(self):
@@ -54,7 +56,7 @@ class TestUnaryOp(unittest.TestCase):
             ja = jt.array(b)
             jb = eval(f"jt.{op}(ja)")
             jda = jt.grad(jb, ja)
-            assert (np.abs(jda.data-da)<1e-5).all(), (jda.data,da,op)
+            assert (np.allclose(jda.data, da)), (jda.data,da,op)
 
 class TestUnaryOpCuda(TestUnaryOp, test_cuda(2)):
     pass

@@ -60,7 +60,8 @@ for mdname in all_md:
         "metadata": {
         },
     }
-    ipynb_name = mdname[:-2]+"ipynb"
+    ipynb_name = os.path.basename(mdname[:-2])+"ipynb"
+    ipynb_name = os.path.join(notebook_dir, ipynb_name)
     print(mdname, len(src), len(blocks), len(cells), "--->", ipynb_name)
-    with open(os.path.join(notebook_dir, ipynb_name), "w") as f:
+    with open(ipynb_name, "w") as f:
         f.write(json.dumps(ipynb))

@@ -12,11 +12,11 @@ class TestCodeOp(unittest.TestCase):
         a = jt.random([10])
         b = jt.code(a.shape, a.dtype, [a],
             cpu_src='''
-                for (int i=0; i<in0shape0; i++)
+                for (int i=0; i<in0_shape0; i++)
                     @out(i) = @in0(i)*@in0(i)*2;
             ''',
             cpu_grad_src = ['''
-                for (int i=0; i<in0shape0; i++) {
+                for (int i=0; i<in0_shape0; i++) {
                     @out(i) = @dout(i)*@in0(i)*4;
                 }
             '''])
@@ -32,15 +32,15 @@ class TestCodeOp(unittest.TestCase):
         b = jt.random([10])
         c = jt.code(a.shape, a.dtype, [a,b],
             cpu_src='''
-                for (int i=0; i<in0shape0; i++)
+                for (int i=0; i<in0_shape0; i++)
                     @out(i) = @in0(i)*@in1(i);
             ''',
             cpu_grad_src = ['''
-                for (int i=0; i<in0shape0; i++) {
+                for (int i=0; i<in0_shape0; i++) {
                     @out(i) = @dout(i)*@in1(i);
                 }
             ''', '''
-                for (int i=0; i<in0shape0; i++) {
+                for (int i=0; i<in0_shape0; i++) {
                     @out(i) = @dout(i)*@in0(i);
                 }
             '''])
@@ -52,11 +52,102 @@ class TestCodeOp(unittest.TestCase):
     def test_header(self):
         a = jt.array([3,2,1])
         b = jt.code(a.shape, a.dtype, [a],
-            cpu_header='#include <algorithm>',
+            cpu_header="""
+                #include <algorithm>
+                @alias(a, in0)
+                @alias(b, out)
+            """,
             cpu_src="""
-                for (int i=0; i<in0shape0; i++)
-                    @out(i) = @in0(i);
-                std::sort(&@out(0), &@out(in0shape0));
+                for (int i=0; i<a_shape0; i++)
+                    @b(i) = @a(i);
+                std::sort(&@b(0), &@b(in0_shape0));
+            """
+        )
+        assert (b.data==[1,2,3]).all()
+
+    def test_multi_output(self):
+        a = jt.array([3,2,1])
+        b,c = jt.code([[2],[4]], ["float32", "float64"], [a],
+            cpu_src="""
+                @alias(a, in0)
+                @alias(b, out0)
+                @alias(c, out1)
+                for (int i=0; i<a_shape0; i++) {
+                    if (i<b_shape0) @b(i) = @a(i);
+                    if (i<c_shape0) @c(i) = @a(i);
+                }
+            """
+        )
+        assert b.shape == [2]
+        assert c.shape == [4]
+        assert b.dtype == "float32"
+        assert c.dtype == "float64"
+        assert (b.data == [3,2]).all()
+        assert (c.data[:3] == [3,2,1]).all()
+
+    def test_multi_output2(self):
+        a = jt.array([3,2,1])
+        b,c = jt.code([(1,), (1,)], [a.dtype, a.dtype], [a],
+            cpu_header="""
+                #include <iostream>
+                using namespace std;
+            """,
+            cpu_src="""
+                @alias(a, in0)
+                @alias(b, out0)
+                @alias(c, out1)
+                @b(0) = @c(0) = @a(0);
+                for (int i=0; i<a_shape0; i++) {
+                    @b(0) = std::min(@b(0), @a(i));
+                    @c(0) = std::max(@c(0), @a(i));
+                }
+                cout << "min:" << @b(0) << " max:" << @c(0) << endl;
+            """
+        )
+        assert b.data == 1, b
+        assert c.data == 3, c
+
+    def test_vary_shape(self):
+        a = jt.array([5,-4,3,-2,1])
+        
+        # negtive shape for max size of vary dimension
+        b,c = jt.code([(-5,), (-5,)], [a.dtype, a.dtype], [a],
+            cpu_src="""
+                @alias(a, in0)
+                @alias(b, out0)
+                @alias(c, out1)
+                int num_b=0, num_c=0;
+                for (int i=0; i<a_shape0; i++) {
+                    if (@a(i)>0)
+                        @b(num_b++) = @a(i);
+                    else
+                        @c(num_c++) = @a(i);
+                }
+                b->set_shape({num_b});
+                c->set_shape({num_c});
+            """
+        )
+        assert (b.data == [5,3,1]).all()
+        assert (c.data == [-4,-2]).all()
+
+    def test_comment(self):
+        a = jt.array([3,2,1])
+        b = jt.code(a.shape, a.dtype, [a],
+            cpu_header='''
+            #include <algorithm>
+            // asd
+            /* asd
+            */
+            ''',
+            cpu_src="""
+                // test comment
+                /*
+                multi line
+                */
+                @alias(a, in0)
+                for (int i=0; i<a_shape0; i++)
+                    @out(i) = @a(i);
+                std::sort(&@out(0), &@out(a_shape0));
             """
         )
         assert (b.data==[1,2,3]).all()
@@ -72,29 +163,29 @@ class TestCodeOp(unittest.TestCase):
                 @PRECALC
                 int i = threadIdx.x + blockIdx.x * blockDim.x;
                 int stride = blockDim.x * gridDim.x;
-                for (; i<in0shape0; i+=stride)
+                for (; i<in0_shape0; i+=stride)
                     @out(i) = @in0(i)*@in1(i);
             }
-                kernel1<<<(in0shape0-1)/1024+1, 1024>>>(@ARGS);
+                kernel1<<<(in0_shape0-1)/1024+1, 1024>>>(@ARGS);
             ''',
             cuda_grad_src = ['''
             __global__ static void kernel2(@ARGS_DEF) {
                 @PRECALC
                 int i = threadIdx.x + blockIdx.x * blockDim.x;
                 int stride = blockDim.x * gridDim.x;
-                for (; i<in0shape0; i+=stride)
+                for (; i<in0_shape0; i+=stride)
                     @out(i) = @dout(i)*@in1(i);
             }
-                kernel2<<<(in0shape0-1)/1024+1, 1024>>>(@ARGS);
+                kernel2<<<(in0_shape0-1)/1024+1, 1024>>>(@ARGS);
             ''', '''
             __global__ static void kernel3(@ARGS_DEF) {
                 @PRECALC
                 int i = threadIdx.x + blockIdx.x * blockDim.x;
                 int stride = blockDim.x * gridDim.x;
-                for (; i<in0shape0; i+=stride)
+                for (; i<in0_shape0; i+=stride)
                     @out(i) = @dout(i)*@in0(i);
             }
-                kernel3<<<(in0shape0-1)/1024+1, 1024>>>(@ARGS);
+                kernel3<<<(in0_shape0-1)/1024+1, 1024>>>(@ARGS);
             '''])
         da, db = jt.grad(c, [a, b])
         assert np.allclose(c.data, a.data*b.data), (c.data, a.data*b.data)
@@ -110,8 +201,8 @@ class TestCodeOp(unittest.TestCase):
             cuda_src='''
                 __global__ static void kernel1(@ARGS_DEF) {
                     @PRECALC
-                    for (int i=blockIdx.x; i<in0shape0; i+=gridDim.x)
-                    for (int j=threadIdx.x; j<in0shape1; j+=blockDim.x)
+                    for (int i=blockIdx.x; i<in0_shape0; i+=gridDim.x)
+                    for (int j=threadIdx.x; j<in0_shape1; j+=blockDim.x)
                         @out(i,j) = @in0(i,j)*@in1(i,j);
                 }
                 kernel1<<<32, 32>>>(@ARGS);
@@ -119,8 +210,8 @@ class TestCodeOp(unittest.TestCase):
             cuda_grad_src = ['''
                 __global__ static void kernel(@ARGS_DEF) {
                     @PRECALC
-                    for (int i=blockIdx.x; i<in0shape0; i+=gridDim.x)
-                    for (int j=threadIdx.x; j<in0shape1; j+=blockDim.x)
+                    for (int i=blockIdx.x; i<in0_shape0; i+=gridDim.x)
+                    for (int j=threadIdx.x; j<in0_shape1; j+=blockDim.x)
                         @out(i,j) = @dout(i,j)*@in1(i,j);
                 }
                 kernel<<<32, 32>>>(@ARGS);
@@ -128,8 +219,8 @@ class TestCodeOp(unittest.TestCase):
                 __global__ static void kernel(@ARGS_DEF) {
                     @PRECALC
                     @pout(0,0);
-                    for (int i=blockIdx.x; i<in0shape0; i+=gridDim.x)
-                    for (int j=threadIdx.x; j<in0shape1; j+=blockDim.x)
+                    for (int i=blockIdx.x; i<in0_shape0; i+=gridDim.x)
+                    for (int j=threadIdx.x; j<in0_shape1; j+=blockDim.x)
                         @out(i,j) = @dout(i,j)*@in0(i,j);
                 }
                 kernel<<<32, 32>>>(@ARGS);

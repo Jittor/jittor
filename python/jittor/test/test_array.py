@@ -106,7 +106,7 @@ class TestArray(unittest.TestCase):
         with jt.flag_scope(use_cuda=1):
             a = jt.array(np.float32([1,2,3]))
             b = jt.code(a.shape, a.dtype, [a], cpu_src="""
-                for (int i=0; i<in0shape0; i++)
+                for (int i=0; i<in0_shape0; i++)
                     @out(i) = @in0(i)*@in0(i)*2;
             """)
             assert (b.data==[2,8,18]).all()

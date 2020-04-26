@@ -125,13 +125,18 @@ int64_t OpCompiler::eval(const string& expr, const unordered_map<string,string>&
                             presum++;
                         k++;
                     }
-                    ASSERT(presum==0) << "Jit error: braces are not matched.";
+                    CHECK(presum==0) << "Jit error: braces are not matched.";
                     new_expr += S(eval(expr.substr(j+1, k-j-2), vars));
                     i = k-1;
                     continue;
                 } else {
+                    if (expr[j] == '@') {
+                        // syntax @@
+                        i = j;
+                        continue;
+                    }
                     // syntax: @x
-                    ASSERT(isvar(expr[j]));
+                    CHECK(isvar(expr[j])) << expr[j] << "is not var";
                     size_t k=j+1;
                     while (k<expr.size() && isvar(expr[k])) k++;
                     if (k<expr.size() && expr[k]=='(') {
@@ -200,7 +205,9 @@ void load_macros(const string& src, unordered_map<string,string>& macros) {
             auto r=k;
             while (r<l && src[r] != '(') r++;
             auto body = q>p ? src.substr(p,q-p) : "";
-            body = (r<l?src.substr(r,l-r):"()") + body;
+            auto args = "<"+ (r+1<l?src.substr(r+1,l-r-2):"") + ">";
+            // header <args>body
+            body = args + body;
             auto header = src.substr(k,r-k);
             LOGvvvv << "header:" << header << "body:" << body;
             macros[header] = body;
@@ -211,9 +218,13 @@ void load_macros(const string& src, unordered_map<string,string>& macros) {
 
 void expand_macro(const string& macro, const vector<string>& args, string& new_src) {
     LOGvvvv << "expand_macro" << macro << "args:" << args;
-    auto i = macro.find(")");
+    if (macro.size() == 0 || macro[0] != '<') {
+        new_src += macro;
+        return;
+    }
+    auto i = macro.find(">");
     ASSERT(i != string::npos);
-    // (a1, a2, ...)body
+    // <a1, a2, ...>body
     //  j k        i
     unordered_map<string, int> args_map;
     for (uint j=1, l=0; j<i; l++) {
@@ -373,7 +384,7 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                         presum++;
                     k++;
                 }
-                ASSERT(presum==0) << "Jit error: braces are not matched.";
+                CHECK(presum==0) << "Jit error: braces are not matched.";
                 new_src += S(OpCompiler::eval(src.substr(j+1, k-j-2), defs));
                 i = k-1;
                 continue;
@@ -389,7 +400,7 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                         presum++;
                     k++;
                 }
-                ASSERT(presum==0) << "Jit error: braces are not matched.";
+                CHECK(presum==0) << "Jit error: braces are not matched.";
                 new_src += precompile(defs, src.substr(j+1, k-j-2), macros);
                 i = k-1;
                 continue;
@@ -414,7 +425,7 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                             comma.push_back(l);
                         l++;
                     }
-                    ASSERT(presum==0) << "Jit error: braces are not matched.";
+                    CHECK(presum==0) << "Jit error: braces are not matched.";
                     comma.push_back(l-1);
                     for (uint i=0; i+1<comma.size(); i++)
                         args.push_back(src.substr(comma[i]+1, comma[i+1]-comma[i]-1));
@@ -516,7 +527,7 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                 if (expr == "strcmp") {
                     // syntax: @strcmp(s1,s2)
                     //         ij     k      l
-                    ASSERT(args.size()==2u)
+                    CHECK(args.size()==2u)
                         << "Jit error: strcmp wrong arguments.";
                     auto s1 = precompile(defs, args[0], macros);
                     auto s2 = precompile(defs, args[1], macros);
@@ -526,27 +537,76 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                     i = l-1;
                     continue;
                 } else
+                if (expr == "alias") {
+                    // syntax: @alias(s1,s2)
+                    //         ij    k     l
+
+                    // alias(a,b)
+                    // a->b
+                    // a_type->b_type
+                    // a_dim -> b_dim
+                    // for i in a_dim:
+                    //   a_shapei -> b_shapei
+                    //   a_stridei -> b_stridei
+                    CHECK(args.size()==2u)
+                        << "Jit error: alias wrong arguments.";
+                    auto key = strip(precompile(defs, args[0], macros));
+                    auto value = strip(precompile(defs, args[1], macros));
+                    CHECK(defs.count(value+"_dim")) << '"' >> value >> '"' << "not exsit";
+                    int dim = std::stoi(defs.at(value+"_dim"));
+                    vector<string> keys = {"", "p", "dim", "type"};
+                    for (int i=0; i<dim; i++) {
+                        keys.push_back("stride"+S(i));
+                        keys.push_back("shape"+S(i));
+                    }
+                    new_src += '\n';
+                    for (auto& s : keys) {
+                        string from = value+"_"+s;
+                        string to = key+"_"+s;
+                        if (!s.size()) {
+                            from = value;
+                            to = key;
+                        }
+                        if (defs.count(from))
+                            from = defs.at(from);
+                        else if (macros.count(from))
+                            from = macros.at(from);
+                        defs[to] = from;
+                        macros[to] = from;
+                        new_src += "#define "+to+" "+from+"\n";
+                    }
+                    i = l-1;
+                    continue;
+                } else
                 if (args.size()) {
-                    // syntax: @e0(i0,i1,...,in) -> e0p[i0*e0stride0+i1*e0stride1+...]
+                    // syntax: @e0(i0,i1,...,in) -> e0_p[i0*e0_stride0+i1*e0_stride1+...]
+                    ASSERT(expr.size());
+
                     int nid=(int)expr.size();
                     while (nid && isdigit(expr[nid-1])) nid--;
-                    // xyz123 ---> prefix: xxx; suffix: 123
                     string prefix = expr.substr(0, nid);
                     string suffix = expr.substr(nid);
-                    string up_prefix = prefix;
-                    for (auto& c : up_prefix)
-                        if (c>='a' && c<='z') c = c-'a'+'A';
-                    string dim = up_prefix + "DIM" + suffix;
-                    if (prefix == "e") prefix = "extras";
-                    ASSERT(defs.count(dim)) << dim;
-                    ASSERTop(defs.at(dim),==,S(args.size()));
-                    expr = prefix + suffix; // e0 ->extras0
+                    string dim;
+                    if (expr == "x" && defs.count("XDIM")) {
+                        dim = "XDIM";
+                        prefix = "x";
+                    } else
+                    if (prefix == "e") {
+                        // TODO: unify interface
+                        prefix = "extras" + suffix;
+                        dim = "EDIM" + suffix;
+                    } else {
+                        prefix = expr+"_";
+                        dim = prefix + "dim";
+                    }
+                    CHECK(macros.count(dim)) << expr << "not exsit" << macros;
+                    CHECKop(macros.at(dim),==,S(args.size())) << expr << "dimension not matched";
                     std::stringstream ss;
-                    ss << expr << "p[";
+                    ss << prefix << "p[";
                     for (uint ii=0; ii<args.size(); ii++) {
                         string arg = precompile(defs, args[ii], macros);
                         if (ii) ss << "+";
-                        ss << '(' << arg << ")*" << expr << "stride" << ii;
+                        ss << '(' << arg << ")*" << prefix << "stride" << ii;
                     }
                     ss << ']';
                     new_src += ss.str();
@@ -568,10 +628,10 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
         } else
             new_src += src[i];
         } catch (std::exception& e) {
-            uint il = i, ir = i;
-            while (il && src[il] != '\n') il--;
-            while (ir<src.size() && src[ir] != '\n') ir++;
-            string this_line = src.substr(il+1, ir-il-1);
+            int il = i, ir = i;
+            while (il>0 && src[il-1] != '\n') il--;
+            while (ir+1<src.size() && src[ir+1] != '\n') ir++;
+            string this_line = src.substr(il, ir-il+1);
             LOGf << e.what() >> "\nJit compiler error:\n" >> this_line;
         }
     }
@@ -579,7 +639,7 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
 }
 
 string OpCompiler::precompile(const unordered_map<string,string>& defs, const string& src) {
-    unordered_map<string, string> macros;
+    unordered_map<string, string> macros = defs;
     return jittor::precompile(defs, src, macros);
 }
 
@@ -600,6 +660,10 @@ string OpCompiler::get_jit_src(Op* op) {
     string after_include_src = "";
     auto jit_define = op->get_jit_define();
     for (auto &t : jit_define) {
+        // don't add CODE in define
+        // this allowed comment exsit in CODE
+        if (t.first == "CODE" || t.first == "HEADER")
+            continue;
         string src = "#define " + t.first + " ";
         for (char c : t.second) {
             if (c=='\n') src += '\\';
@@ -798,7 +862,7 @@ string OpCompiler::__get_fused_src(
                     presum++;
                 k++;
             }
-            ASSERT(presum==0) << "Jit error: braces are not matched.";
+            CHECK(presum==0) << "Jit error: braces are not matched.";
             for (;j < k-2; j++) {
                 if (isvar(src[j])) {
                     uint l=j;

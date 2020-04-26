@@ -6,13 +6,16 @@
 import unittest, os
 import jittor as jt
 from jittor import LOG
-import json
+import sys
+from pathlib import Path
 
 dirname = os.path.join(jt.flags.jittor_path, "notebook")
-notebook_dir = os.path.join(jt.flags.cache_path, "notebook")
+notebook_dir = os.path.join(str(Path.home()), ".cache","jittor","notebook")
 tests = []
 for mdname in os.listdir(dirname):
     if not mdname.endswith(".src.md"): continue
+    # temporary disable model_test
+    if "LSGAN" in mdname: continue
     tests.append(mdname[:-3])
 
 try:
@@ -27,7 +30,9 @@ def test(name):
     jt.compiler.run_cmd("ipython "+ipynb_name)
 
 def init():
-    jt.compiler.run_cmd("python3 "+os.path.join(dirname, "md_to_ipynb.py"))
+    cmd = sys.executable+" "+os.path.join(dirname, "md_to_ipynb.py")
+    LOG.i("init notebooks:", cmd)
+    jt.compiler.run_cmd(cmd)
 
 src = """class TestNodebooks(unittest.TestCase):
     @classmethod

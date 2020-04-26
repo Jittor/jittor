@@ -11,6 +11,7 @@ import jittor as jt
 import numpy as np
 import jittor.models as jtmodels
 
+skip_this_test = False
 try:
     jt.dirty_fix_pytorch_runtime_error()
     import torch
@@ -18,10 +19,7 @@ try:
     from torch import nn
 except:
     torch = None
-    
-
-skip_this_test = False
-
+    skip_this_test = True
 
 @unittest.skipIf(skip_this_test, "skip_this_test")
 class test_models(unittest.TestCase):
