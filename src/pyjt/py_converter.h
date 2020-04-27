@@ -159,7 +159,10 @@ struct NanoString;
 extern PyTypeObject PyjtNanoString;
 DEF_IS(NanoString, bool) is_type(PyObject* obj) {
     return Py_TYPE(obj) == &PyjtNanoString ||
-        PyUnicode_CheckExact(obj);
+        PyUnicode_CheckExact(obj) ||
+        PyType_CheckExact(obj) ||
+        // numpy.dtype.type
+        PyObject_HasAttrString(obj, "type");
 }
 
 DEF_IS(NanoString, PyObject*) to_py_object(T a) {
@@ -172,7 +175,14 @@ DEF_IS(NanoString, PyObject*) to_py_object(T a) {
 DEF_IS(NanoString, T) from_py_object(PyObject* obj) {
     if (Py_TYPE(obj) == &PyjtNanoString)
         return *GET_RAW_PTR(T, obj);
-    return T(PyUnicode_AsUTF8(obj));
+    if (PyUnicode_CheckExact(obj))
+        return T(PyUnicode_AsUTF8(obj));
+    // PyType
+    if (PyType_CheckExact(obj))
+        return T(_PyType_Name((PyTypeObject *)obj));
+    PyObjHolder t(PyObject_GetAttrString(obj, "type"));
+    CHECK(PyType_CheckExact(t.obj)) << "Not a valid type:" << t.obj;
+    return T(_PyType_Name((PyTypeObject *)t.obj));
 }
 
 // NanoVector

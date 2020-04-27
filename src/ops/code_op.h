@@ -57,7 +57,7 @@ struct CodeOp : Op {
     
     ```
     a = jt.random([10])
-    b = jt.code(a.shape, a.dtype, [a],
+    b = jt.code(a.shape, "float32", [a],
         cpu_src='''
             for (int i=0; i<in0_shape0; i++)
                 @out(i) = @in0(i)*@in0(i)*2;
