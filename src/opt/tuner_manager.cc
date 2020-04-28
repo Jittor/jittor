@@ -43,6 +43,7 @@ string TunerManager::tune() {
     run_tuner<ReduceTuner>(&pm);
     run_tuner<MatmulTuner>(&pm);
     run_tuner<ConvTuner>(&pm);
+    run_tuner<GroupConvTuner>(&pm);
 
     // use the best tuner if it is confidence enough
     if (best_tuner && best_tuner->confidence) {
