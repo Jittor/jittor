@@ -123,7 +123,7 @@ class TestCudnnConvOp(unittest.TestCase):
             assert len(logs)==3 and "oihw" in logs[0][0], logs
             assert np.allclose(y.data, cy.data)
             assert np.allclose(dx.data, cdx.data, 1e-2)
-            assert np.allclose(dw.data, cdw.data)
+            assert np.allclose(dw.data, cdw.data, 1e-2)
         check([10,3,100,100], [5,3,3,3], stride=2, padding=0, dilation=1)
         check([10,4,40,50], [5,4,5,5], stride=1, padding=1, dilation=1)
         check([10,4,40,50], [5,4,4,4], stride=3, padding=1, dilation=1)

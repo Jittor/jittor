@@ -23,6 +23,7 @@ import jittor as jt
 
 dataset_root = os.path.join(pathlib.Path.home(), ".cache", "jittor", "dataset")
 mp_log_v = os.environ.get("mp_log_v", 0) 
+mpi = jt.compile_extern.mpi
 
 class Worker:
     def __init__(self, target, args, buffer_size):
@@ -130,8 +131,8 @@ class Dataset(object):
                     self.gidc.notify()
                 batch = []
                 if mp_log_v:
-                    print(f"#{worker_id} {os.getpid()} load batch", cid*self.batch_size, min(self.total_len, (cid+1)*self.batch_size))
-                for i in range(cid*self.batch_size, min(self.total_len, (cid+1)*self.batch_size)):
+                    print(f"#{worker_id} {os.getpid()} load batch", cid*self.real_batch_size, min(self.real_len, (cid+1)*self.real_batch_size))
+                for i in range(cid*self.real_batch_size, min(self.real_len, (cid+1)*self.real_batch_size)):
                     batch.append(self[self.index_list[i]])
                 batch = self.collate_batch(batch)
                 if mp_log_v:
@@ -157,7 +158,7 @@ class Dataset(object):
             w.buffer.clear()
             
     def _init_workers(self):
-        self.index_list = mp.Array('i', self.total_len, lock=False)
+        self.index_list = mp.Array('i', self.real_len, lock=False)
         workers = []
         # batch id to worker id
         self.idmap = mp.Array('i', self.batch_len, lock=False)
@@ -174,7 +175,7 @@ class Dataset(object):
                        buffer_size=self.buffer_size)
             workers.append(w)
         self.workers = workers
-        self.index_list_numpy = np.ndarray(dtype='int32', shape=self.total_len, buffer=self.index_list)
+        self.index_list_numpy = np.ndarray(dtype='int32', shape=self.real_len, buffer=self.index_list)
 
     def __del__(self):
         if mp_log_v:
@@ -186,10 +187,57 @@ class Dataset(object):
             index_list = get_order_list(self.total_len)
         else:
             index_list = get_random_list(self.total_len)
+        
+        # scatter index_list for all mpi process
+        # scatter rule:
+        #   batch 1   batch 2
+        # [........] [........] ...
+        #  00011122   00011122
+        # if last batch is smaller than world_size
+        # pad to world_size
+        #  last batch
+        # [.] -> [012]
+        if mpi:
+            world_size = mpi.world_size()
+            world_rank = mpi.world_rank()
+            index_list = np.int32(index_list)
+            mpi.broadcast(index_list, 0)
+
+            assert self.batch_size >= world_size, \
+                f"Batch size({self.batch_size}) is smaller than MPI world_size({world_size})"
+            real_batch_size = (self.batch_size-1) // world_size + 1
+            if real_batch_size * world_size != self.batch_size:
+                LOG.w("Batch size is not divisible by MPI world size, "
+                      "The distributed version may be different from "
+                      "the single-process version.")
+            fix_batch = self.total_len // self.batch_size
+            last_batch = self.total_len - fix_batch * self.batch_size
+            fix_batch_l = index_list[0:fix_batch*self.batch_size] \
+                .reshape(-1,self.batch_size)
+            fix_batch_l = fix_batch_l[
+                :,real_batch_size*world_rank:real_batch_size*(world_rank+1)]
+            real_batch_size = fix_batch_l.shape[1]
+            fix_batch_l = fix_batch_l.flatten()
+            if not self.drop_last and last_batch > 0:
+                last_batch_l = index_list[-last_batch:]
+                real_last_batch = (last_batch-1)//world_size+1
+                l = real_last_batch * world_rank
+                r = l + real_last_batch
+                if r > last_batch: r = last_batch
+                if l >= r: l = r-1
+                index_list = np.concatenate([fix_batch_l, last_batch_l[l:r]])
+            else:
+                index_list = fix_batch_l
+
+            self.real_len = len(index_list)
+            self.real_batch_size = real_batch_size
+            assert self.total_len // self.batch_size == \
+                self.real_len // self.real_batch_size
+        else:
+            self.real_len = self.total_len
+            self.real_batch_size = self.batch_size
             
         self.batch_len = len(self)
-        if "batch_len" in os.environ:
-            self.batch_len = int(os.environ["batch_len"])
         
         if not hasattr(self, "workers") and self.num_workers:
             self._init_workers()
@@ -223,7 +271,7 @@ class Dataset(object):
             batch_data = []
             for idx in index_list:
                 batch_data.append(self[int(idx)])
-                if len(batch_data) == self.batch_size:
+                if len(batch_data) == self.real_batch_size:
                     batch_data = self.collate_batch(batch_data)
                     batch_data = self.to_jittor(batch_data)
                     yield batch_data

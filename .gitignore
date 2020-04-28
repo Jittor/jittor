@@ -20,3 +20,5 @@ venv/
 !*.src.md
 !README.md
 !README.cn.md
+python/jittor.egg-info
+dist/

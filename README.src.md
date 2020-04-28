@@ -21,6 +21,8 @@ The following example shows how to model a two-layer neural network step by step
 import jittor as jt
 from jittor import Module
 from jittor import nn
+import numpy as np
+
 class Model(Module):
     def __init__(self):
         self.layer1 = nn.Linear(1, 10)
@@ -38,13 +40,18 @@ def get_data(n): # generate random data for training test.
         y = x*x
         yield jt.float32(x), jt.float32(y)
 
-model = Model()
+
 learning_rate = 0.1
+batch_size = 50
+n = 1000
+
+model = Model()
 optim = nn.SGD(model.parameters(), learning_rate)
 
 for i,(x,y) in enumerate(get_data(n)):
     pred_y = model(x)
-    loss = ((pred_y - y)**2)
+    dy = pred_y - y
+    loss = dy * dy
     loss_mean = loss.mean()
     optim.step(loss_mean)
     print(f"step {i}, loss = {loss_mean.data.sum()}")
@@ -93,26 +100,30 @@ Jittor使用Python和C++编写。 它需要用于即时编译的编译器。当�
 
 * CPU compiler (require at least one of the following)
     * g++ (>=5.4.0)
-    * clang (>=8.0) recommend
+    * clang (>=8.0)
 * CPU 编译器 （需要下列至少一个）
     - g++ （>=5.4.0）
-    - clang （>=8.0）推荐
+    - clang （>=8.0）
 * GPU compiler (optional)
-    * nvcc (>=10.0)
+    * nvcc (>=10.0 for g++ or >=10.2 for clang)
 * GPU 编译器（可选）
-    - nvcc（>=10.0）
+    - nvcc (>=10.0 for g++ 或者 >=10.2 for clang)
 
 Jittor的环境要求如下:
 
-* 操作系统: Ubuntu >= 16.04
+* 操作系统: **Ubuntu** >= 16.04 (or **Windows** Subsystem of Linux)
 * Python版本 >= 3.7
 * C++编译器（g++ or clang）
 
+注意：目前Jittor通过WSL的方式在Windows操作系统上运行，WSL的安装方法请参考[微软官网](https://docs.microsoft.com/en-us/windows/wsl/install-win10)，目前WSL尚不支持CUDA。
+
 Jittor environment requirements:
 
-* System: Ubuntu >= 16.04
+* System: **Ubuntu** >= 16.04 (or **Windows** Subsystem of Linux)
 * Python version >= 3.7
 * C++ compiler(g++ or clang)
+
+Note: Currently Jittor runs on the Windows operating system through WSL. For the installation method of WSL, please refer to [Microsoft official website](https://docs.microsoft.com/en-us/windows/wsl/install-win10). WSL does not yet support CUDA.
 
 Jittor offers three ways to install: pip, script or manual.
 
@@ -128,10 +139,6 @@ Jittor 一共提供三种方式安装: pip安装, 一键脚本安装 和 手动�
 ```bash
 sudo apt install python3.7-dev libomp-dev
 sudo python3.7 -m pip install git+https://github.com/Jittor/jittor.git
-# if you cannot access github, please download code from our website:
-#     wget https://cg.cs.tsinghua.edu.cn/jittor/assets/build/jittor.tgz
-#     mkdir -p jittor && tar -xvf ./jittor.tgz -C jittor
-#     sudo pip install ./jittor
 python3.7 -m jittor.test.test_example
 ```
 
@@ -182,7 +189,7 @@ We will show how to install Jittor in Ubuntu 16.04 step by step, Other Linux dis
 sudo apt install g++ build-essential libomp-dev
 
 # OR clang++-8
-wget -O - https://apt.llvm.org/llvm.sh > /tmp/llvm.sh
+wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install_llvm.sh > /tmp/llvm.sh
 bash /tmp/llvm.sh 8
 ```
 ### Step 2: Install Python and python-dev
@@ -325,7 +332,7 @@ Beside that, All the operators we used `jt.xxx(Var, ...)` have alias `Var.xxx(..
 除此之外，我们使用的所有算子`jt.xxx(Var,...)`都具有别名`Var.xxx(...)`。 例如：
 
 ```python
-c.max() # alias of jt.max(a)
+c.max() # alias of jt.max(c)
 c.add(a) # alias of jt.add(c, a)
 c.min(keepdims=True) # alias of jt.min(c, keepdims=True)
 ```

@@ -62,6 +62,19 @@ struct VarHolder {
         return var->name.c_str();
     }
 
+    // @pyjt(size)
+    inline NanoVector size() {
+        if (var->num<0) sync();
+        return var->shape;
+    }
+
+    // @pyjt(size)
+    inline int64 size(int64 dim) {
+        if (var->num<0) sync();
+        ASSERT(dim>=0 && dim<var->shape.size()) << "dim is out of index";
+        return var->shape[dim];
+    }
+
     // @pyjt(stop_grad)
     // @attrs(return_self)
     inline VarHolder* stop_grad() {

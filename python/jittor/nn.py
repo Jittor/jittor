@@ -1,6 +1,7 @@
 # ***************************************************************
 # Copyright (c) 2020 Jittor. Authors:
 #     Guowei Yang <471184555@qq.com>
+#     Guoye Yang <498731903@qq.com>
 #     Wenyang Zhou <576825820@qq.com>
 #     Meng-Hao Guo <guomenghao1997@gmail.com>
 #     Dun Liang <randonlang@gmail.com>.
@@ -13,7 +14,7 @@ import jittor as jt
 from jittor import init, Module
 import numpy as np
 import math
-from jittor.pool import Pool, pool
+from jittor.pool import Pool, pool, AdaptiveAvgPool2d
 
 def matmul_transpose(a, b):
     '''
@@ -40,30 +41,6 @@ jt.Var.__imatmul__ = lambda a,b: a.assign(matmul(a,b))
 
 def get_init_var_rand(shape, dtype):
     return jt.array(np.random.normal(0.0, 1.0, shape).astype(np.float32))
-
-@jt.var_scope('batch_norm')
-def batch_norm(x, is_train, eps=1e-5, momentum=0.1):
-    w = jt.make_var([x.shape[1]], init=lambda *a: init.constant(*a, 1.0))
-    b = jt.make_var([x.shape[1]], init=lambda *a: init.constant(*a, 0.0))
-    running_mean = jt.make_var([x.shape[1]], init=lambda *a: init.constant(*a, 0.0))
-    running_var = jt.make_var([x.shape[1]], init=lambda *a: init.constant(*a, 1.0))
-
-    w = w.broadcast(x, [0,2,3])
-    b = b.broadcast(x, [0,2,3])
-    if is_train:
-        xmean = jt.mean(x, dims=[0,2,3], keepdims=1)
-        x2mean = jt.mean(x*x, dims=[0,2,3], keepdims=1)
-        xvar = x2mean-xmean*xmean
-        norm_x = (x-xmean)/jt.sqrt(xvar+eps)
-
-        running_mean += (xmean.sum([0,2,3])-running_mean)*momentum
-        running_var += (xvar.sum([0,2,3])-running_var)*momentum
-    else:
-        running_mean = running_mean.broadcast(x, [0,2,3])
-        running_var = running_var.broadcast(x, [0,2,3])
-        norm_x = (x-running_mean)/jt.sqrt(running_var+eps)
-
-    return norm_x * w + b
 
 @jt.var_scope('conv')
 def conv(x, in_planes, out_planes, kernel_size, padding, stride = 1, init_method=None):
@@ -99,6 +76,7 @@ def linear(x, n):
 
 def relu(x): return jt.maximum(x, 0)
 def leaky_relu(x, scale): return jt.ternary(x>0, x, x*scale)
+def relu6(x): return jt.minimum(jt.maximum(x, 0), 6)
 
 #TODO dims is 4 will cause slowly execution
 def cross_entropy_loss(output, target, ignore_index=None):
@@ -113,7 +91,7 @@ def cross_entropy_loss(output, target, ignore_index=None):
     target = target.reshape((-1, ))
     target = target.broadcast(output, [1])
     target = target.index(1) == target
-
+    
     output = output - output.max([1], keepdims=True)
     loss = output.exp().sum(1).log()
     loss = loss - (output*target).sum(1)
@@ -127,17 +105,22 @@ class SGD(object):
     optimizer = nn.SGD(model.parameters(), lr)
     optimizer.step(loss)
     """
-    def __init__(self, parameters, lr, momentum=0, weight_decay=0, dampening=0, nesterov=False):
+    def __init__(self, parameters, lr, momentum=0, weight_decay=0, dampening=0, nesterov=False, param_sync_iter=10000):
         self.lr = lr
         self.momentum = momentum
         self.weight_decay = weight_decay
         self.dampening = dampening
         self.nesterov = nesterov
+        self.sgd_step = 0
+        self.param_sync_iter = param_sync_iter
 
         self.no_grad_parameters = []
         self.parameters = []
         self.values = []
         for p in parameters:
+            # broadcast parameter from 0 node when init
+            if jt.mpi:
+                p.assign(p.mpi_broadcast().detach())
             if p.is_stop_grad():
                 self.no_grad_parameters.append(p)
                 continue
@@ -145,8 +128,15 @@ class SGD(object):
             self.values.append(jt.zeros(p.shape, p.dtype).stop_fuse().stop_grad())
 
     def step(self, loss):
+        self.sgd_step += 1
         ps = self.parameters
         gs = jt.grad(loss, ps)
+        if jt.mpi:
+            for g in gs:
+                g.assign(g.mpi_all_reduce("mean"))
+            if self.sgd_step%self.param_sync_iter==0:
+                for p in ps:
+                    p.assign(p.mpi_all_reduce("mean"))
         for p, g, v in zip(ps, gs, self.values):
             dp = p * self.weight_decay + g
             v.assign(self.momentum * v + dp * (1 - self.dampening))
@@ -166,19 +156,22 @@ class Adam(object):
     optimizer = nn.Adam(model.parameters(), lr)
     optimizer.step(loss)
     """
-    def __init__(self, parameters, lr, eps=1e-8, betas=(0.9, 0.999), weight_decay=0):
+    def __init__(self, parameters, lr, eps=1e-8, betas=(0.9, 0.999), weight_decay=0, param_sync_iter=10000):
         self.lr = lr
         self.eps = eps
         self.betas = betas
         # self.weight_decay = weight_decay
         assert weight_decay==0, "weight_decay is not supported yet"
         self.adam_step = 0
+        self.param_sync_iter = param_sync_iter
         
         self.no_grad_parameters = []
         self.parameters = []
         self.values = []
         self.m = []
         for p in parameters:
+            if jt.mpi:
+                p.assign(p.mpi_broadcast().detach())
             if p.is_stop_grad():
                 self.no_grad_parameters.append(p)
                 continue
@@ -187,9 +180,15 @@ class Adam(object):
             self.m.append(jt.zeros(p.shape, p.dtype).stop_fuse().stop_grad())
 
     def step(self, loss):
+        self.adam_step += 1
         ps = self.parameters
         gs = jt.grad(loss, ps)
-        self.adam_step += 1
+        if jt.mpi:
+            for g in gs:
+                g.assign(g.mpi_all_reduce("mean"))
+            if self.adam_step%self.param_sync_iter==0:
+                for p in ps:
+                    p.assign(p.mpi_all_reduce("mean"))
         n, (b0, b1) = float(self.adam_step), self.betas
         for p, g, v, m in zip(ps, gs, self.values, self.m):
             m.assign(b0 * m + (1-b0) * g)
@@ -219,10 +218,11 @@ class Dropout(Module):
         if self.p > 0 and self.is_train:
             if self.p == 1:
                 noise = jt.zeros(input.shape)
+                output = output * noise
             else:
                 noise = jt.random(input.shape)
                 noise = (noise > self.p).int()
-            output = output * noise
+                output = output * noise / (1.0 - self.p) # div keep prob
         return output
 
 class Linear(Module):
@@ -240,9 +240,10 @@ class Linear(Module):
         return x
 
 class BatchNorm(Module):
-    def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=None, is_train=True):
+    def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=None, is_train=True, sync=True):
         assert affine == None
 
+        self.sync = sync
         self.num_features = num_features
         self.is_train = is_train
         self.eps = eps
@@ -256,6 +257,10 @@ class BatchNorm(Module):
         if self.is_train:
             xmean = jt.mean(x, dims=[0,2,3], keepdims=1)
             x2mean = jt.mean(x*x, dims=[0,2,3], keepdims=1)
+            if self.sync and jt.mpi:
+                xmean = xmean.mpi_all_reduce("mean")
+                x2mean = x2mean.mpi_all_reduce("mean")
+
             xvar = x2mean-xmean*xmean
             norm_x = (x-xmean)/jt.sqrt(xvar+self.eps)
             self.running_mean += (xmean.sum([0,2,3])-self.running_mean)*self.momentum
@@ -270,7 +275,9 @@ class BatchNorm(Module):
 
 Relu = jt.make_module(relu)
 ReLU = Relu
-Leaky_relu = jt.make_module(leaky_relu, 2)
+Leaky_relu = jt.make_module(leaky_relu, 0.01)
+LeakyReLU = Leaky_relu
+ReLU6 = jt.make_module(relu6)
 Softmax = jt.make_module(softmax, 2)
 
 class Conv(Module):
@@ -281,6 +288,9 @@ class Conv(Module):
         self.stride = stride if isinstance(stride, tuple) else (stride, stride)
         self.padding = padding if isinstance(padding, tuple) else (padding, padding)
         self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
+        self.groups = groups
+        assert in_channels % groups == 0, 'in_channels must be divisible by groups'
+        assert out_channels % groups == 0, 'out_channels must be divisible by groups'
         Kh, Kw = self.kernel_size
         self.groups = groups
         assert in_channels % groups == 0, 'in_channels must be divisible by groups'
@@ -403,7 +413,7 @@ class Tanh(Module):
     def __init__(self):
         super().__init__()
     def execute(self, x) :
-        return ((jt.exp (x) - jt.exp(-x)) / (jt.exp(x) + jt.exp (-x)))
+        return x.tanh()
 
 class Sigmoid(Module):
     def __init__(self):

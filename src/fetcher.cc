@@ -51,7 +51,7 @@ Init() {
     checkCudaErrors(cudaStreamDestroy(stream));
     checkCudaErrors(cudaEventDestroy(event));
 }
-} init;
+};
 
 }
 using namespace fetcher_local;
@@ -59,6 +59,9 @@ using namespace fetcher_local;
 #endif
 
 void fetch(const vector<VarHolder*>& vh, FetchFunc&& func) {
+    #ifdef HAS_CUDA
+    static Init init;
+    #endif
     sync(vh);
     vector<Allocation> allocations(vh.size());
     vector<ArrayArgs> arrays(vh.size());

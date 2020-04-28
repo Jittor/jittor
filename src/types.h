@@ -10,6 +10,7 @@
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
+#include <memory>
 
 namespace jittor {
 
@@ -160,6 +161,14 @@ std::ostream& operator<<(std::ostream& os, const set<T>& input) {
     os << '[';
     for (auto const& i: input) os << i << ",";
     return os << ']';
+}
+
+template <class T>
+std::istream& operator>>(std::istream& is, vector<T>& out) {
+    T value;
+    while (is >> value)
+        out.push_back(value);
+    return is;
 }
 
 template <class Ta, class Tb>

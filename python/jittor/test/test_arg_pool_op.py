@@ -18,6 +18,7 @@ import pickle as pk
 skip_this_test = False
 
 try:
+    jt.dirty_fix_pytorch_runtime_error()
     import torch
     from torch.nn import MaxPool2d, Sequential
 except:
@@ -45,6 +46,7 @@ def check(jt_model, torch_model, shape, near_data):
 
 @unittest.skipIf(skip_this_test, "No Torch found")
 class TestArgPoolOp(unittest.TestCase):
+    @unittest.skipIf(not jt.compiler.has_cuda, "No cuda found")
     @jt.flag_scope(use_cuda=1)
     def test_cuda(self):
         jt_model = jt.nn.Sequential(Pool(2, 2, 0), Pool(2, 2, 0), Pool(2, 2, 0, ceil_mode=True), Pool(2, 2, 0), Pool(2, 2, 0), Pool(3, 1, 1))
@@ -57,15 +59,18 @@ class TestArgPoolOp(unittest.TestCase):
             check(jt_model, torch_model, [1,1,300,300], True)
             
     def test_cpu_(self):
-        x = jt.random([32, 128, 157, 300])
+        # x = jt.random([32, 128, 157, 300])
+        x = jt.random([4, 128, 157, 300])
         x = jt.nn.pool(x, 2, "maximum", 0, 2)
 
     def test_cpu(self):
         jt_model = jt.nn.Sequential(Pool(2, 2, 0), Pool(2, 2, 0), Pool(2, 2, 0, ceil_mode=True), Pool(2, 2, 0), Pool(2, 2, 0), Pool(3, 1, 1))
         torch_model = Sequential(MaxPool2d(2, 2, 0), MaxPool2d(2, 2, 0), MaxPool2d(2, 2, 0, ceil_mode=True), MaxPool2d(2, 2, 0), MaxPool2d(2, 2, 0), MaxPool2d(3, 1, 1))
-        shape = [64, 64, 300, 300]
+        # shape = [64, 64, 300, 300]
+        shape = [4, 64, 300, 300]
         check(jt_model, torch_model, shape, False)
-        shape = [32, 128, 157, 300]
+        # shape = [32, 128, 157, 300]
+        shape = [4, 128, 157, 300]
         check(jt_model, torch_model, shape, False)
         for i in range(10):
             check(jt_model, torch_model, [1,1,300,300], True)

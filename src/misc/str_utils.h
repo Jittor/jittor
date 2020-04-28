@@ -24,4 +24,6 @@ bool endswith(const string& a, const string& b);
 // max_split: maximun split number(include)
 vector<string> split(const string& s, const string& sep, int max_split=0);
 
+string strip(const string& s);
+
 } // jittor

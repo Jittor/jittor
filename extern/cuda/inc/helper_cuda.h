@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include "utils/log.h"
+
 #include <stdexcept>
 #include <stdint.h>
 #include <stdio.h>
@@ -79,6 +81,11 @@ const char *_cudaGetErrorEnum(cusolverStatus_t error);
 const char *_cudaGetErrorEnum(curandStatus_t error);
 #endif
 
+#ifdef NCCL_H_
+// cuRAND API errors
+const char *_cudaGetErrorEnum(ncclResult_t error);
+#endif
+
 #ifdef NV_NPPIDEFS_H
 // NPP API errors
 const char *_cudaGetErrorEnum(NppStatus error);
@@ -98,10 +105,10 @@ template <typename T>
 void check(T result, char const *const func, const char *const file,
            int const line) {
   if (result) {
-    fprintf(stderr, "CUDA error at %s:%d code=%d(%s) \"%s\" \n", file, line,
-            static_cast<unsigned int>(result), _cudaGetErrorEnum(result), func);
     DEVICE_RESET
-    throw std::runtime_error("CUDA error");
+    LOGf << "CUDA error at" << file >> ":" >> line << " code="
+      >> static_cast<unsigned int>(result) >> "(" << _cudaGetErrorEnum(result) << ")"
+      << func;
   }
 }
 
@@ -118,13 +125,10 @@ inline void __getLastCudaError(const char *errorMessage, const char *file,
   cudaError_t err = cudaGetLastError();
 
   if (cudaSuccess != err) {
-    fprintf(stderr,
-            "%s(%i) : getLastCudaError() CUDA error :"
-            " %s : (%d) %s.\n",
-            file, line, errorMessage, static_cast<int>(err),
-            cudaGetErrorString(err));
     DEVICE_RESET
-    exit(EXIT_FAILURE);
+    LOGf << "CUDA error at" << file >> ":" >> line << " code="
+      >> static_cast<unsigned int>(err) >> "(" << _cudaGetErrorEnum(err) << ")"
+      << errorMessage;
   }
 }
 
@@ -137,11 +141,10 @@ inline void __printLastCudaError(const char *errorMessage, const char *file,
   cudaError_t err = cudaGetLastError();
 
   if (cudaSuccess != err) {
-    fprintf(stderr,
-            "%s(%i) : getLastCudaError() CUDA error :"
-            " %s : (%d) %s.\n",
-            file, line, errorMessage, static_cast<int>(err),
-            cudaGetErrorString(err));
+    DEVICE_RESET
+    LOGf << "CUDA error at" << file >> ":" >> line << " code="
+      >> static_cast<unsigned int>(err) >> "(" << _cudaGetErrorEnum(err) << ")"
+      << errorMessage;
   }
 }
 #endif

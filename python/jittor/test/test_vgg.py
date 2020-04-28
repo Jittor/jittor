@@ -24,14 +24,14 @@ skip_model_test = not model_test
 
 class MnistNet(Module):
     def __init__(self):
-        self.model = vgg.VGG16_bn()
+        self.model = vgg.vgg16_bn()
         self.layer = nn.Linear(1000,10)
     def execute(self, x):
         x = self.model(x)
         x = self.layer(x)
         return x
 
-@unittest.skipIf(skip_model_test, "skip_this_test")
+@unittest.skipIf(skip_model_test, "skip_this_test, model_test != 1")
 class TestVGGClass(unittest.TestCase):
     @classmethod
     def setUpClass(self):

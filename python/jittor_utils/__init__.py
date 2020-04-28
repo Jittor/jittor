@@ -17,7 +17,8 @@ from ctypes import cdll
 
 class LogWarper:
     def __init__(self):
-        pass
+        self.log_silent = int(os.environ.get("log_silent", "0"))
+        self.log_v = int(os.environ.get("log_v", "0"))
 
     def log_capture_start(self):
         cc.log_capture_start()
@@ -39,6 +40,8 @@ class LogWarper:
         if cc and hasattr(cc, "log"):
             cc.log(fileline, level, verbose, msg)
         else:
+            if self.log_silent or verbose > self.log_v:
+                return
             time = datetime.datetime.now().strftime("%m%d %H:%M:%S.%f")
             tid = threading.get_ident()%100
             v = f" v{verbose}" if verbose else ""
@@ -100,8 +103,10 @@ def try_import_jit_utils_core(silent=None):
 
 def run_cmd(cmd, cwd=None, err_msg=None, print_error=True):
     LOG.v(f"Run cmd: {cmd}")
-    if cwd: cmd = f"cd {cwd} && {cmd}"
-    r = sp.run(cmd, shell=True, stdout=sp.PIPE, stderr=sp.STDOUT)
+    if cwd:
+        r = sp.run(cmd, cwd=cwd, shell=True, stdout=sp.PIPE, stderr=sp.STDOUT)
+    else:
+        r = sp.run(cmd, shell=True, stdout=sp.PIPE, stderr=sp.STDOUT)
     s = r.stdout.decode('utf8')
     if r.returncode != 0:
         if print_error:
@@ -150,12 +155,13 @@ def find_cache_path():
             cache_name = os.environ["cache_name"]
         else:
             # try to get branch name from git
-            r = sp.run("git branch", cwd=os.path.dirname(__file__), stdout=sp.PIPE,
+            r = sp.run(["git","branch"], cwd=os.path.dirname(__file__), stdout=sp.PIPE,
                    stderr=sp.PIPE)
             assert r.returncode == 0
-            bs = r.stdout.decode()
+            bs = r.stdout.decode().splitlines()
             for b in bs:
                 if b.startswith("* "): break
+            
             cache_name = b[2:]
         for c in " (){}": cache_name = cache_name.replace(c, "_")
     except:
@@ -163,17 +169,24 @@ def find_cache_path():
     for name in cache_name.split("/"):
         dirs.insert(-1, name)
     os.environ["cache_name"] = cache_name
+    LOG.v("cache_name", cache_name)
     for d in dirs:
         path = os.path.join(path, d)
         if not os.path.isdir(path):
-            os.mkdir(path)
+            try:
+                os.mkdir(path)
+            except:
+                pass
         assert os.path.isdir(path)
     if path not in sys.path:
         sys.path.append(path)
     return path
 
 def get_version(output):
-    version = run_cmd(output+" --version")
+    if output.endswith("mpicc"):
+        version = run_cmd(output+" --showme:version")
+    else:
+        version = run_cmd(output+" --version")
     v = re.findall("[0-9]+\\.[0-9]+\\.[0-9]+", version)
     if len(v) == 0:
         v = re.findall("[0-9]+\\.[0-9]+", version)

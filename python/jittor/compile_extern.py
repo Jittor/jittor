@@ -3,8 +3,9 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-import os, sys
+import os, sys, shutil
 from .compiler import *
+from jittor_utils import run_cmd, get_version
 from jittor.dataset.utils import download_url_to_local
 
 def search_file(dirs, name):
@@ -171,10 +172,10 @@ def install_cutt(root_folder):
     true_md5 = "a6f4f7f75310a69b131e21f1ebec768a"
 
     if os.path.exists(fullname):
-        md5 = os.popen('md5sum ' + fullname).read().split()[0]
+        md5 = run_cmd('md5sum '+fullname).split()[0]
         if md5 != true_md5:
-            os.system('rm ' + fullname)
-            os.system('rm -rf ' + dirname)
+            os.remove(fullname)
+            shutil.rmtree(dirname)
     if not os.path.isfile(os.path.join(dirname, "bin", "cutt_test")):
         LOG.i("Downloading cutt...")
         download_url_to_local(url, filename, root_folder, true_md5)
@@ -186,11 +187,11 @@ def install_cutt(root_folder):
             zf.extractall(path=root_folder)
         except RuntimeError as e:
             print(e)
+            raise
         zf.close()
 
-        from jittor_utils import run_cmd
         LOG.i("installing cutt...")
-        run_cmd(f"cd {dirname} && make")
+        run_cmd(f"make", cwd=dirname)
     return dirname
 
 def setup_cutt():
@@ -232,6 +233,158 @@ def setup_cutt():
         extra_flags=f" -I'{cutt_include_path}'")
     LOG.vv("Get cutt_ops: "+str(dir(cutt_ops)))
 
+
+def install_nccl(root_folder):
+    url = "https://github.com/NVIDIA/nccl/archive/v2.6.4-1.tar.gz"
+
+    filename = "nccl.tgz"
+    fullname = os.path.join(root_folder, filename)
+    dirname = os.path.join(root_folder, "nccl-2.6.4-1")
+    true_md5 = "38d7a9e98d95a99df0a4f1ad6fb50fa7"
+
+    if os.path.exists(fullname):
+        md5 = run_cmd('md5sum '+fullname).split()[0]
+        if md5 != true_md5:
+            os.remove(fullname)
+            if os.path.isdir(dirname):
+                shutil.rmtree(dirname)
+    if not os.path.isfile(os.path.join(dirname, "build", "lib", "libnccl.so")):
+        LOG.i("Downloading nccl...")
+        download_url_to_local(url, filename, root_folder, true_md5)
+
+        import tarfile
+        with tarfile.open(fullname, "r") as tar:
+            tar.extractall(root_folder)
+
+        LOG.i("installing nccl...")
+        arch_flag = f" -arch={','.join(map(lambda x:'sm_'+str(x),flags.cuda_archs))} "
+        run_cmd(f"make -j8 src.build CUDA_HOME='{cuda_home}' NVCC_GENCODE='{arch_flag}' ", cwd=dirname)
+    return dirname
+
+def setup_nccl():
+    global nccl_ops, use_nccl
+    use_nccl = os.environ.get("use_nccl", "1")=="1"
+    nccl_ops = None
+    if not has_cuda or mpi is None:
+        use_nccl = False
+        return
+    if not use_nccl: return
+    nccl_include_path = os.environ.get("nccl_include_path")
+    nccl_lib_path = os.environ.get("nccl_lib_path")
+    
+    if nccl_lib_path is None or nccl_include_path is None:
+        LOG.v("setup nccl...")
+        # nccl_path decouple with cc_path
+        from pathlib import Path
+        nccl_path = os.path.join(str(Path.home()), ".cache", "jittor", "nccl")
+        
+        make_cache_dir(nccl_path)
+        nccl_home = install_nccl(nccl_path)
+        nccl_include_path = os.path.join(nccl_home, "build", "include")
+        nccl_lib_path = os.path.join(nccl_home, "build", "lib")
+
+    nccl_lib_name = os.path.join(nccl_lib_path, "libnccl.so")
+    assert os.path.isdir(nccl_include_path)
+    assert os.path.isdir(nccl_lib_path)
+    assert os.path.isfile(nccl_lib_name), nccl_lib_name
+    LOG.v(f"nccl_include_path: {nccl_include_path}")
+    LOG.v(f"nccl_lib_path: {nccl_lib_path}")
+    LOG.v(f"nccl_lib_name: {nccl_lib_name}")
+    # We do not link manualy, link in custom ops
+    ctypes.CDLL(nccl_lib_name, dlopen_flags)
+
+    nccl_src_dir = os.path.join(jittor_path, "extern", "cuda", "nccl")
+    nccl_src_files = []
+    for r, _, f in os.walk(nccl_src_dir):
+        for fname in f:
+            nccl_src_files.append(os.path.join(r, fname))
+
+    nccl_ops = compile_custom_ops(nccl_src_files, 
+        extra_flags=f" -I'{nccl_include_path}' {mpi_compile_flags} ")
+    LOG.vv("Get nccl_ops: "+str(dir(nccl_ops)))
+
+def manual_link(flags):
+    lib_dirs = []
+    libs = []
+    for f in flags.split():
+        if f.startswith("-l"):
+            libs.append(f[2:])
+        elif f.startswith("-L"):
+            lib_dirs.append(f[2:])
+    LOG.v("manual_link:", flags)
+    LOG.v("lib_dirs:", lib_dirs)
+    LOG.v("libs:", libs)
+    for lib in libs:
+        for d in lib_dirs:
+            libname = os.path.join(d, f"lib{lib}.so")
+            if os.path.isfile(libname):
+                LOG.v("link:", libname)
+                ctypes.CDLL(libname, dlopen_flags)
+                break
+
+def inside_mpi():
+    return "OMPI_COMM_WORLD_SIZE" in os.environ
+
+def setup_mpi():
+    global mpi_ops, mpi, use_mpi
+    global mpicc_path, has_mpi
+    use_mpi = os.environ.get("use_mpi", "1")=="1"
+    mpi_ops = None
+    mpi = None
+    has_mpi = False
+    mpicc_path = env_or_try_find('mpicc_path', 'mpicc')
+    if mpicc_path == "":
+        LOG.i("mpicc not found, distribution disabled.")
+        use_mpi = False
+    else:
+        use_mpi = True
+        has_mpi = True
+    if not inside_mpi():
+        use_mpi = False
+    if not use_mpi:
+        return
+
+    global mpi_compile_flags, mpi_link_flags, mpi_flags
+    mpi_compile_flags = run_cmd(mpicc_path+" --showme:compile")
+    mpi_link_flags = run_cmd(mpicc_path+" --showme:link")
+    mpi_flags = mpi_compile_flags + " " + mpi_link_flags
+    LOG.v("mpi_flags: "+mpi_flags)
+
+    # find all source files
+    mpi_src_dir = os.path.join(jittor_path, "extern", "mpi")
+    mpi_src_files = []
+    for r, _, f in os.walk(mpi_src_dir):
+        for fname in f:
+            mpi_src_files.append(os.path.join(r, fname))
+
+    # mpi compile flags add for nccl
+    mpi_compile_flags += f" -I'{os.path.join(mpi_src_dir, 'inc')}' "
+    mpi_compile_flags = mpi_compile_flags.replace("-pthread", "")
+
+    mpi_version = get_version(mpicc_path)
+    if mpi_version.startswith("(1.") or mpi_version.startswith("(2."):
+        # mpi version 1.x need to link like this
+        manual_link(mpi_flags)
+    # mpi(4.x) cannot use deepbind, it need to
+    # share the 'environ' symbol.
+    mpi = compile_custom_ops(mpi_src_files, 
+        extra_flags=f" {mpi_flags} ", return_module=True,
+        dlopen_flags=os.RTLD_GLOBAL | os.RTLD_NOW)
+    mpi_ops = mpi.ops
+    LOG.vv("Get mpi: "+str(mpi.__dict__.keys()))
+    LOG.vv("Get mpi_ops: "+str(mpi_ops.__dict__.keys()))
+    def warper(func):
+        def inner(self, *args, **kw):
+            return func(self, *args, **kw)
+        inner.__doc__ = func.__doc__
+        return inner
+    for k in mpi_ops.__dict__:
+        if not k.startswith("mpi_"): continue
+        if k == "mpi_test": continue
+        setattr(core.Var, k, warper(mpi_ops.__dict__[k]))
+
+setup_mpi()
+setup_nccl()
 
 setup_cutt()
 setup_mkl()

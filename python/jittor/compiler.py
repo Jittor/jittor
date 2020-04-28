@@ -17,6 +17,7 @@ from ctypes.util import find_library
 import jittor_utils as jit_utils
 from jittor_utils import LOG, run_cmd, cache_path, find_exe, cc_path, cc_type, cache_path
 from . import pyjt_compiler
+from . import lock
 
 def find_jittor_path():
     return os.path.dirname(__file__)
@@ -518,6 +519,7 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
     """
     return jit_src
 
+@lock.lock_scope()
 def compile_custom_op(header, source, op_name, warp=True):
     """Compile a single custom op
     header: code of op header, not path
@@ -554,22 +556,36 @@ def compile_custom_op(header, source, op_name, warp=True):
     m = compile_custom_ops([hname, ccname])
     return getattr(m, op_name)
 
-def compile_custom_ops(filenames, extra_flags=""):
+@lock.lock_scope()
+def compile_custom_ops(
+    filenames, 
+    extra_flags="", 
+    return_module=False,
+    dlopen_flags=os.RTLD_GLOBAL | os.RTLD_NOW | os.RTLD_DEEPBIND):
     """Compile custom ops
     filenames: path of op source files, filenames must be
         pairs of xxx_xxx_op.cc and xxx_xxx_op.h, and the 
         type name of op must be XxxXxxOp.
     extra_flags: extra compile flags
+    return_module: return module rather than ops(default: False)
     return: compiled ops
     """
     srcs = {}
     headers = {}
     builds = []
     includes = []
+    pyjt_includes = []
     for name in filenames:
         name = os.path.realpath(name)
         if name.endswith(".cc") or name.endswith(".cpp") or name.endswith(".cu"):
             builds.append(name)
+        if name.endswith(".h"):
+            dirname = os.path.dirname(name)
+            if dirname.endswith("inc"):
+                includes.append(dirname)
+            with open(name, "r") as f:
+                if "@pyjt" in f.read():
+                    pyjt_includes.append(name)
         bname = os.path.basename(name)
         bname = os.path.splitext(bname)[0]
         if bname.endswith("_op"):
@@ -597,23 +613,47 @@ def compile_custom_ops(filenames, extra_flags=""):
     gen_src_fname = os.path.join(cache_path, "custom_ops", gen_name+".cc")
     gen_head_fname = os.path.join(cache_path, "custom_ops", gen_name+".h")
     gen_lib = os.path.join("custom_ops", gen_name+extension_suffix)
-    with open(gen_head_fname, "w") as f:
-        f.write(gen_src)
-    pyjt_compiler.compile_single(gen_head_fname, gen_src_fname)
+    pyjt_compiler.compile_single(gen_head_fname, gen_src_fname, src=gen_src)
     # gen src initialize first
     builds.insert(0, gen_src_fname)
+
+    def insert_anchor(gen_src, anchor_str, insert_str):
+        # insert insert_str after anchor_str into gen_src
+        return gen_src.replace(anchor_str, anchor_str+insert_str, 1)
+
+    for name in pyjt_includes:
+        LOG.i("handle pyjt_include", name)
+        bname = name.split("/")[-1].split(".")[0]
+        gen_src_fname = os.path.join(cache_path, "custom_ops", gen_name+"_"+bname+".cc")
+        pyjt_compiler.compile_single(name, gen_src_fname)
+        builds.insert(1, gen_src_fname)
+        gen_src = insert_anchor(gen_src,
+            "namespace jittor {",
+            f"extern void pyjt_def_{bname}(PyObject* m);")
+        gen_src = insert_anchor(gen_src,
+            "init_module(PyModuleDef* mdef, PyObject* m) {",
+            f"jittor::pyjt_def_{bname}(m);")
+
+    with open(gen_head_fname, "w") as f:
+        f.write(gen_src)
+
     LOG.vvv(f"Build custum ops lib:{gen_lib}")
     LOG.vvvv(f"Build sources:{builds}")
-    compile(cc_path, cc_flags+opt_flags+includes+extra_flags, builds, gen_lib)
+    compile(cc_path, extra_flags+cc_flags+opt_flags+includes, builds, gen_lib)
 
     # add python path and import
     LOG.vvv(f"Import custum ops lib:{gen_lib}")
     lib_path = os.path.join(cache_path, "custom_ops")
     if lib_path not in os.sys.path:
         os.sys.path.append(lib_path)
-    with jit_utils.import_scope(os.RTLD_GLOBAL | os.RTLD_NOW | os.RTLD_DEEPBIND):
-        exec(f"import {gen_name}")
-    return (locals()[gen_name]).ops
+    # unlock scope when initialize
+    with lock.unlock_scope():
+        with jit_utils.import_scope(dlopen_flags):
+            exec(f"import {gen_name}")
+    mod = locals()[gen_name]
+    if return_module:
+        return mod
+    return mod.ops
 
 
 def get_full_path_of_executable(name):
@@ -689,8 +729,9 @@ def compile_extern():
 def check_cuda():
     if nvcc_path == "":
         return
-    global cc_flags, has_cuda, core_link_flags, cuda_dir, cuda_lib, cuda_include
+    global cc_flags, has_cuda, core_link_flags, cuda_dir, cuda_lib, cuda_include, cuda_home
     cuda_dir = os.path.dirname(get_full_path_of_executable(nvcc_path))
+    cuda_home = os.path.abspath(os.path.join(cuda_dir, ".."))
     assert cuda_dir.endswith("bin") and "cuda" in cuda_dir.lower(), f"Wrong cuda_dir: {cuda_dir}"
     cuda_include = os.path.abspath(os.path.join(cuda_dir, "..", "include"))
     cuda_lib = os.path.abspath(os.path.join(cuda_dir, "..", "lib64"))
@@ -764,6 +805,7 @@ dlopen_flags = os.RTLD_NOW | os.RTLD_GLOBAL | os.RTLD_DEEPBIND
 
 with jit_utils.import_scope(import_flags):
     jit_utils.try_import_jit_utils_core()
+
 jittor_path = find_jittor_path()
 check_debug_flags()
 
@@ -785,6 +827,7 @@ addr2line_path = try_find_exe('addr2line')
 has_pybt = check_pybt(gdb_path, python_path)
 
 cc_flags += " -Wall -Werror -Wno-unknown-pragmas -std=c++14 -fPIC -march=native "
+cc_flags += " -fdiagnostics-color=always "
 link_flags = " -lstdc++ -ldl -shared "
 core_link_flags = ""
 opt_flags = ""
@@ -832,6 +875,7 @@ if has_cuda:
         nvcc_flags = nvcc_flags.replace("-march", "-Xcompiler -march")
         nvcc_flags = nvcc_flags.replace("-Werror", "")
         nvcc_flags = nvcc_flags.replace("-fPIC", "-Xcompiler -fPIC")
+        nvcc_flags = nvcc_flags.replace("-fdiagnostics", "-Xcompiler -fdiagnostics")
         nvcc_flags += f" -x cu --cudart=shared -ccbin='{cc_path}' --use_fast_math "
         # nvcc warning is noise
         nvcc_flags += " -w "
@@ -914,7 +958,11 @@ compile_extern()
 
 with jit_utils.import_scope(import_flags):
     import jittor_core as core
+
 flags = core.flags()
+if has_cuda:
+    nvcc_flags += f" -arch={','.join(map(lambda x:'sm_'+str(x),flags.cuda_archs))} "
+
 flags.cc_path = cc_path
 flags.cc_type = cc_type
 flags.cc_flags = cc_flags + link_flags + kernel_opt_flags
@@ -926,3 +974,5 @@ flags.jittor_path = jittor_path
 flags.gdb_path = gdb_path
 flags.addr2line_path = addr2line_path
 flags.has_pybt = has_pybt
+
+core.set_lock_path(lock.lock_path)
