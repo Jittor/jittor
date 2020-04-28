@@ -51,7 +51,7 @@ for mdname in all_md:
         else:
             cell["cell_type"] = "code"
             cell["outputs"] = []
-            cell["execution_count"] = None
+            cell["execution_count"] = 0
         cells.append(cell)
     ipynb = {
         "cells":cells,

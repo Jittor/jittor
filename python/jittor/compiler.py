@@ -827,6 +827,7 @@ addr2line_path = try_find_exe('addr2line')
 has_pybt = check_pybt(gdb_path, python_path)
 
 cc_flags += " -Wall -Werror -Wno-unknown-pragmas -std=c++14 -fPIC -march=native "
+cc_flags += " -fdiagnostics-color=always "
 link_flags = " -lstdc++ -ldl -shared "
 core_link_flags = ""
 opt_flags = ""
@@ -874,6 +875,7 @@ if has_cuda:
         nvcc_flags = nvcc_flags.replace("-march", "-Xcompiler -march")
         nvcc_flags = nvcc_flags.replace("-Werror", "")
         nvcc_flags = nvcc_flags.replace("-fPIC", "-Xcompiler -fPIC")
+        nvcc_flags = nvcc_flags.replace("-fdiagnostics", "-Xcompiler -fdiagnostics")
         nvcc_flags += f" -x cu --cudart=shared -ccbin='{cc_path}' --use_fast_math "
         # nvcc warning is noise
         nvcc_flags += " -w "

@@ -20,10 +20,8 @@ void throw_mpi_error(int result,
     char const *const func, const char *const file, int const line) {
     int resultlen;
     MPI_Error_string(result, jt_mpi_err_buffer, &resultlen);
-    fprintf(stderr, "MPI error at %s:%d code=%d(%s) \"%s\" \n", 
-        file, line,
-        static_cast<unsigned int>(result), jt_mpi_err_buffer, func);
-    throw std::runtime_error("MPI error");
+    LOGf << "MPI error at " >> file >> ":" >> line << "code="
+        >> result >> '(' >> jt_mpi_err_buffer >> ')' << func;
 }
 
 namespace jittor {
