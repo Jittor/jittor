@@ -75,8 +75,20 @@ def linear(x, n):
     return jt.matmul(x, w) + b
 
 def relu(x): return jt.maximum(x, 0)
-def leaky_relu(x, scale): return jt.ternary(x>0, x, x*scale)
+def leaky_relu(x, scale=0.01): return jt.ternary(x>0, x, x*scale)
 def relu6(x): return jt.minimum(jt.maximum(x, 0), 6)
+
+class PReLU(Module):
+    def __init__(self, num_parameters=1, init_=0.25):
+        self.num_parameters = num_parameters
+        self.a = init.constant((num_parameters,), "float32", init_)
+
+    def execute(self, x):
+        if self.num_parameters != 1:
+            assert self.num_parameters == x.size(1), f"num_parameters does not match input channels in PReLU"
+            return jt.maximum(0, x) + self.a.broadcast(x, [0,2,3]) * jt.minimum(0, x)
+        else:
+            return jt.maximum(0, x) + self.a * jt.minimum(0, x)
 
 #TODO dims is 4 will cause slowly execution
 def cross_entropy_loss(output, target, ignore_index=None):
@@ -273,9 +285,76 @@ class BatchNorm(Module):
         b = self.bias.broadcast(x, [0,2,3])
         return norm_x * w + b
 
+class InstanceNorm2d(Module):
+    def __init__(self, num_features, eps=1e-05, momentum=0.1, affine=None, is_train=True, sync=True):
+        assert affine == None
+        self.sync = sync
+        self.num_features = num_features
+        self.is_train = is_train
+        self.eps = eps
+        self.momentum = momentum
+        self.weight = init.constant((num_features,), "float32", 1.0)
+        self.bias = init.constant((num_features,), "float32", 0.0)
+        self.running_mean = init.constant((num_features,), "float32", 0.0).stop_grad()
+        self.running_var = init.constant((num_features,), "float32", 1.0).stop_grad()
+
+    def execute(self, x):
+        if self.is_train:
+            xmean = jt.mean(x, dims=[2,3], keepdims=1)
+            x2mean = jt.mean(x*x, dims=[2,3], keepdims=1)
+            if self.sync and jt.mpi:
+                xmean = xmean.mpi_all_reduce("mean")
+                x2mean = x2mean.mpi_all_reduce("mean")
+
+            xvar = x2mean-xmean*xmean
+            norm_x = (x-xmean)/jt.sqrt(xvar+self.eps)
+            self.running_mean += (xmean.sum([0,2,3])-self.running_mean)*self.momentum
+            self.running_var += (xvar.sum([0,2,3])-self.running_var)*self.momentum
+        else:
+            running_mean = self.running_mean.broadcast(x, [0,2,3])
+            running_var = self.running_var.broadcast(x, [0,2,3])
+            norm_x = (x-running_mean)/jt.sqrt(running_var+self.eps)
+        w = self.weight.broadcast(x, [0,2,3])
+        b = self.bias.broadcast(x, [0,2,3])
+        return norm_x * w + b
+
+class BatchNorm1d(Module):
+    def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=None, is_train=True, sync=True):
+        assert affine == None
+        self.sync = sync
+        self.num_features = num_features
+        self.is_train = is_train
+        self.eps = eps
+        self.momentum = momentum
+        self.weight = init.constant((num_features,), "float32", 1.0)
+        self.bias = init.constant((num_features,), "float32", 0.0)
+        self.running_mean = init.constant((num_features,), "float32", 0.0).stop_grad()
+        self.running_var = init.constant((num_features,), "float32", 1.0).stop_grad()
+
+    def execute(self, x):
+        if self.is_train:
+            xmean = jt.mean(x, dims=[0], keepdims=1)
+            x2mean = jt.mean(x*x, dims=[0], keepdims=1)
+
+            if self.sync and jt.mpi:
+                xmean = xmean.mpi_all_reduce("mean")
+                x2mean = x2mean.mpi_all_reduce("mean")
+
+            xvar = x2mean-xmean*xmean
+            norm_x = (x-xmean)/jt.sqrt(xvar+self.eps)
+            self.running_mean += (xmean.sum([0])-self.running_mean)*self.momentum
+            self.running_var += (xvar.sum([0])-self.running_var)*self.momentum
+        else:
+            running_mean = self.running_mean.broadcast(x, [0])
+            running_var = self.running_var.broadcast(x, [0])
+            norm_x = (x-running_mean)/jt.sqrt(running_var+self.eps)
+        w = self.weight.broadcast(x, [0])
+        b = self.bias.broadcast(x, [0])
+        return norm_x * w + b
+
 Relu = jt.make_module(relu)
 ReLU = Relu
-Leaky_relu = jt.make_module(leaky_relu, 0.01)
+Leaky_relu = jt.make_module(leaky_relu, 2)
 LeakyReLU = Leaky_relu
 ReLU6 = jt.make_module(relu6)
 Softmax = jt.make_module(softmax, 2)
@@ -389,6 +468,151 @@ class ConvTranspose(Module):
         return y
 
 
+class ReflectionPad2d(Module):
+    def __init__(self, padding):
+        self.padding = padding
+        if isinstance(self.padding, int):
+            self.pl = self.padding
+            self.pr = self.padding
+            self.pt = self.padding
+            self.pb = self.padding
+        elif isinstance(self.padding, tuple):
+            self.pl, self.pr, self.pt, self.pb = self.padding
+        else:
+            raise TypeError(f"ReflectionPad2d padding just support int or tuple, but found {type(padding)}")
+
+    def execute(self, x):
+        n,c,h,w = x.shape
+        assert (self.pl < w and self.pr < w), f"padding_left and padding_right should be smaller than input width"
+        assert (self.pt < h and self.pb < h), f"padding_top and padding_bottom should be smaller than input height"
+        oh=h+self.pt+self.pb
+        ow=w+self.pl+self.pr
+        l = self.pl
+        r = self.pl + w - 1
+        t = self.pt
+        b = self.pt + h - 1
+        x_idx = np.zeros((oh,ow))
+        y_idx = np.zeros((oh,ow))
+        for j in range(oh):
+            for i in range(ow):
+                if i >= l and i <= r and j >= t and j <= b:
+                    x_idx[j,i] = i
+                    y_idx[j,i] = j
+                elif i < l and j < t:
+                    x_idx[j,i] = 2 * l - i
+                    y_idx[j,i] = 2 * t - j
+                elif i < l and j > b:
+                    x_idx[j,i] = 2 * l - i
+                    y_idx[j,i] = 2 * b - j
+                elif i > r and j < t:
+                    x_idx[j,i] = 2 * r - i
+                    y_idx[j,i] = 2 * t - j
+                elif i > r and j > b:
+                    x_idx[j,i] = 2 * r - i
+                    y_idx[j,i] = 2 * b - j
+                elif i < l:
+                    x_idx[j,i] = 2 * l - i
+                    y_idx[j,i] = j
+                elif i > r:
+                    x_idx[j,i] = 2 * r - i
+                    y_idx[j,i] = j
+                elif j < t:
+                    x_idx[j,i] = i
+                    y_idx[j,i] = 2 * t - j
+                elif j > b:
+                    x_idx[j,i] = i
+                    y_idx[j,i] = 2 * b - j
+        return x.reindex([n,c,oh,ow], ["i0","i1","@e1(i2,i3)","@e0(i2,i3)"], extras=[jt.array(x_idx - self.pl), jt.array(y_idx - self.pt)])
+
+class ZeroPad2d(Module):
+    def __init__(self, padding):
+        self.padding = padding
+        if isinstance(self.padding, int):
+            self.pl = self.padding
+            self.pr = self.padding
+            self.pt = self.padding
+            self.pb = self.padding
+        elif isinstance(self.padding, tuple):
+            self.pl, self.pr, self.pt, self.pb = self.padding
+        else:
+            raise TypeError(f"ZeroPad2d padding just support int or tuple, but found {type(padding)}")
+
+    def execute(self, x):
+        n,c,h,w = x.shape
+        return x.reindex([n,c,h+self.pt+self.pb,w+self.pl+self.pr], ["i0","i1",f"i2-{self.pt}",f"i3-{self.pl}"])
+
+class ConstantPad2d(Module):
+    def __init__(self, padding, value):
+        self.padding = padding
+        if isinstance(self.padding, int):
+            self.pl = self.padding
+            self.pr = self.padding
+            self.pt = self.padding
+            self.pb = self.padding
+        elif isinstance(self.padding, tuple):
+            self.pl, self.pr, self.pt, self.pb = self.padding
+        else:
+            raise TypeError(f"ConstantPad2d padding just support int or tuple, but found {type(padding)}")
+        self.value = value
+
+    def execute(self, x):
+        n,c,h,w = x.shape
+        return x.reindex([n,c,h+self.pt+self.pb,w+self.pl+self.pr], ["i0","i1",f"i2-{self.pt}",f"i3-{self.pl}"], overflow_value=self.value)
+
+class ReplicationPad2d(Module):
+    def __init__(self, padding):
+        self.padding = padding
+        if isinstance(self.padding, int):
+            self.pl = self.padding
+            self.pr = self.padding
+            self.pt = self.padding
+            self.pb = self.padding
+        elif isinstance(self.padding, tuple):
+            self.pl, self.pr, self.pt, self.pb = self.padding
+        else:
+            raise TypeError(f"ReplicationPad2d padding just support int or tuple, but found {type(padding)}")
+
+    def execute(self, x):
+        n,c,h,w = x.shape
+        oh=h+self.pt+self.pb
+        ow=w+self.pl+self.pr
+        l = self.pl
+        r = self.pl + w - 1
+        t = self.pt
+        b = self.pt + h - 1
+        x_idx = np.zeros((oh,ow))
+        y_idx = np.zeros((oh,ow))
+        for j in range(oh):
+            for i in range(ow):
+                if i >= l and i <= r and j >= t and j <= b:
+                    x_idx[j,i] = i
+                    y_idx[j,i] = j
+                elif i < l and j < t:
+                    x_idx[j,i] = l
+                    y_idx[j,i] = t
+                elif i < l and j > b:
+                    x_idx[j,i] = l
+                    y_idx[j,i] = b
+                elif i > r and j < t:
+                    x_idx[j,i] = r
+                    y_idx[j,i] = t
+                elif i > r and j > b:
+                    x_idx[j,i] = r
+                    y_idx[j,i] = b
+                elif i < l:
+                    x_idx[j,i] = l
+                    y_idx[j,i] = j
+                elif i > r:
+                    x_idx[j,i] = r
+                    y_idx[j,i] = j
+                elif j < t:
+                    x_idx[j,i] = i
+                    y_idx[j,i] = t
+                elif j > b:
+                    x_idx[j,i] = i
+                    y_idx[j,i] = b
+        return x.reindex([n,c,oh,ow], ["i0","i1","@e1(i2,i3)","@e0(i2,i3)"], extras=[jt.array(x_idx - self.pl), jt.array(y_idx - self.pt)])
+
 class Tanh(Module):
     def __init__(self):
         super().__init__()
@@ -407,8 +631,8 @@ def resize(x, size, mode="nearest"):
     H,W = size
     new_size = [n,c,H,W]
     nid, cid, hid, wid = jt.index(new_size)
-    x = hid * ((h-1)/(H-1))
-    y = wid * ((w-1)/(W-1))
+    x = hid * h / H
+    y = wid * w / W
     if mode=="nearest":
         return img.reindex([nid, cid, x.floor(), y.floor()])
     if mode=="bilinear":
@@ -426,7 +650,13 @@ def resize(x, size, mode="nearest"):
         return o
     raise(f"Not support {interpolation}")
 
-
+class Upsample(Module):
+    def __init__(self, scale_factor=None, mode='nearest'):
+        self.scale_factor = scale_factor if isinstance(scale_factor, tuple) else (scale_factor, scale_factor)
+        self.mode = mode
+    
+    def execute(self, x):
+        return resize(x, size=(int(x.shape[2]*self.scale_factor[0]), int(x.shape[3]*self.scale_factor[1])), mode=self.mode)
 
 class Sequential(Module):
     def __init__(self, *args):

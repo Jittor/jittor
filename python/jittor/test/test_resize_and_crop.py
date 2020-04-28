@@ -11,6 +11,16 @@ import jittor as jt
 import random
 import os
 
+import numpy as np
+import jittor.nn as jnn
+try:
+    jt.dirty_fix_pytorch_runtime_error()
+    import torch
+    import torch.nn as tnn
+except:
+    torch = None
+    tnn = None
+
 mid = 0
 if os.uname()[1] == "jittor-ce":
     mid = 1
@@ -74,12 +84,36 @@ def test_case(box_num, out_size, time_limit):
     assert fused_op_num == 1, fused_op_num
     assert t <= time_limit, t
 
+def check_equal(a, b):
+    eps = 1e-1 # icc error almost reaches 1e-1
+    relative_error = (abs(a - b) / abs(b + 1)).mean()
+    print(f"relative_error: {relative_error}")
+    return relative_error < eps
+
 class TestResizeAndCrop(unittest.TestCase):
     def test(self):
         test_case(100, [224, 224], 0.45)
         test_case(100, [180, 224], 0.3)
         test_case(20, [1024, 1024], [1.2, 1.8][mid])
         test_case(20, [1024, 666], [0.8,1.0][mid])
+
+    def test_upsample(self):
+        # ***************************************************************
+        # Define jittor & pytorch array
+        # ***************************************************************
+        arr = np.random.randn(16,10,224,224)
+        jittor_arr = jt.array(arr)
+        pytorch_arr = torch.Tensor(arr)
+        # ***************************************************************
+        # Test Upsample Layer
+        # ***************************************************************
+        pytorch_result = tnn.Upsample(scale_factor=2)(pytorch_arr)
+        jittor_result = jnn.Upsample(scale_factor=2)(jittor_arr)
+        assert check_equal(pytorch_result.numpy(), jittor_result.numpy()), f"{pytorch_result.mean()} || {jittor_result.mean()}"
+       
+        pytorch_result = tnn.Upsample(scale_factor=0.2)(pytorch_arr)
+        jittor_result = jnn.Upsample(scale_factor=0.2)(jittor_arr)
+        assert check_equal(pytorch_result.numpy(), jittor_result.numpy()), f"{pytorch_result.mean()} || {jittor_result.mean()}"
 
 if __name__ == "__main__":
     unittest.main()
