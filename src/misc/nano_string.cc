@@ -147,6 +147,7 @@ static void init_ns() {
     #define INIT_NS(T) func(#T, ns_##T);
     FOR_ALL_NS(INIT_NS);
     ASSERT(NanoString::__ns_to_string.size()<=(1<<NanoString::_index_nbits));
+    NanoString::__string_to_ns["sum"] = ns_add;
     LOGvv << "init __string_to_ns" << NanoString::__string_to_ns;
     LOGvv << "init __ns_to_string" << NanoString::__ns_to_string;
 }
