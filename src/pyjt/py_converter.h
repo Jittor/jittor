@@ -123,8 +123,13 @@ DEF_IS(Slice, bool) is_type(PyObject* obj) {
 }
 DEF_IS(Slice, T) from_py_object(PyObject* obj) {
     Py_ssize_t start, stop, step;
+    auto slice = (PySliceObject*)obj;
+
     PySlice_Unpack(obj, &start, &stop, &step);
-    return {(int)start, (int)stop, (int)step};
+    return {start, stop, step, 
+        (slice->start == Py_None) |
+        ((slice->stop == Py_None) << 1) |
+        ((slice->step == Py_None) << 2)};
 }
 
 #define GET_RAW_PTR(T, obj) ((T*)(((char*)obj) + sizeof(PyObject)))
@@ -161,6 +166,8 @@ DEF_IS(NanoString, bool) is_type(PyObject* obj) {
     return Py_TYPE(obj) == &PyjtNanoString ||
         PyUnicode_CheckExact(obj) ||
         PyType_CheckExact(obj) ||
+        // jt.float.__name__
+        PyCallable_Check(obj) ||
         // numpy.dtype.type
         PyObject_HasAttrString(obj, "type");
 }
@@ -180,6 +187,11 @@ DEF_IS(NanoString, T) from_py_object(PyObject* obj) {
     // PyType
     if (PyType_CheckExact(obj))
         return T(_PyType_Name((PyTypeObject *)obj));
+    // jt.float.__name__
+    if (PyCallable_Check(obj)) {
+        PyObjHolder t(PyObject_GetAttrString(obj, "__name__"));
+        return T(PyUnicode_AsUTF8(t.obj));
+    }
     PyObjHolder t(PyObject_GetAttrString(obj, "type"));
     CHECK(PyType_CheckExact(t.obj)) << "Not a valid type:" << t.obj;
     return T(_PyType_Name((PyTypeObject *)t.obj));

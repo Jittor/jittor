@@ -15,6 +15,7 @@ test.py
 extern/mkl/mkldnn_lnx*/*
 data/
 build/
+venv/
 *.md
 !*.src.md
 !README.md

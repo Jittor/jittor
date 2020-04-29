@@ -41,8 +41,8 @@ static inline void set_shape(Var* x, const char* f, const string& format, int a,
         shape[0], shape[1], shape[2], shape[3]));
 }
 
-CudnnConvOp::CudnnConvOp(Var* x, Var* w, int stride, int padding, int dilation, string xformat, string wformat, string yformat)
-    : x(x), w(w), stride(stride), padding(padding), dilation(dilation), 
+CudnnConvOp::CudnnConvOp(Var* x, Var* w, int stride, int padding, int dilation, int groups, string xformat, string wformat, string yformat)
+    : x(x), w(w), stride(stride), padding(padding), dilation(dilation), groups(groups),
       xformat(move(xformat)), wformat(move(wformat)), yformat(move(yformat)) {
     flags.set(NodeFlags::_cuda, 1);
     flags.set(NodeFlags::_cpu, 0);
@@ -57,7 +57,7 @@ void CudnnConvOp::infer_shape() {
     int xn, xc, xh, xw, wh, ww, wci, wco, yn, yc, yh, yw;
     get_shape(x, "abcd", xformat, xn, xc, xh, xw);
     get_shape(w, "oihw", wformat, wco, wci, wh, ww);
-    ASSERTop(wci,==,xc);
+    ASSERTop(wci * groups,==,xc);
     yn = xn, yc = wco;
     yh = (xh+padding*2-wh*dilation+dilation-1)/stride+1;
     yw = (xw+padding*2-ww*dilation+dilation-1)/stride+1;
@@ -97,6 +97,8 @@ void CudnnConvOp::jit_run() {
     checkCudaErrors(cudnnCreateFilterDescriptor( &cudnnFdesc ));
     checkCudaErrors(cudnnCreateTensorDescriptor( &cudnnOdesc ));
     checkCudaErrors(cudnnCreateConvolutionDescriptor( &cudnnConvDesc ));
+    checkCudaErrors(cudnnSetConvolutionGroupCount( cudnnConvDesc, groups ));
+
 
     int dimX[] = {
         (int)x->shape[findc("@XFORMAT", 'a')], // n
@@ -240,7 +242,7 @@ void CudnnConvOp::jit_run() {
                 LOGw << "forward_ algorithm cache is full";
         }
     }
-    
+
     // TODO: warp work space
     void *workSpace = 0;
     size_t workSpaceSize;

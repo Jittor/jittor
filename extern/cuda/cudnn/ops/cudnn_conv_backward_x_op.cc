@@ -43,8 +43,8 @@ static inline void set_shape(Var* x, const char* f, const string& format, int a,
         shape[0], shape[1], shape[2], shape[3]));
 }
 
-CudnnConvBackwardXOp::CudnnConvBackwardXOp(Var* w, Var* dy, int height, int width, int stride, int padding, int dilation, string xformat, string wformat, string yformat) 
-        : w(w), dy(dy), xh(height), xw(width), stride(stride), padding(padding), dilation(dilation), 
+CudnnConvBackwardXOp::CudnnConvBackwardXOp(Var* w, Var* dy, int height, int width, int stride, int padding, int dilation, int groups, string xformat, string wformat, string yformat) 
+        : w(w), dy(dy), xh(height), xw(width), stride(stride), padding(padding), dilation(dilation), groups(groups),
       xformat(move(xformat)), wformat(move(wformat)), yformat(move(yformat)) {
     flags.set(NodeFlags::_cuda, 1);
     flags.set(NodeFlags::_cpu, 0);
@@ -57,7 +57,7 @@ void CudnnConvBackwardXOp::infer_shape() {
     int xn, xc, wh, ww, wci, wco, yn, yc, yh, yw;
     get_shape(w, "oihw", wformat, wco, wci, wh, ww);
     get_shape(dy, "abcd", yformat, yn, yc, yh, yw);
-    xn = yn, xc = wci;
+    xn = yn, xc = wci * groups;
     set_shape(dx, "abcd", xformat, xn, xc, xh, xw);
 }
 
@@ -96,6 +96,7 @@ void CudnnConvBackwardXOp::jit_run() {
     checkCudaErrors(cudnnCreateFilterDescriptor( &cudnnFdesc ));
     checkCudaErrors(cudnnCreateTensorDescriptor( &cudnnOdesc ));
     checkCudaErrors(cudnnCreateConvolutionDescriptor( &cudnnConvDesc ));
+    checkCudaErrors(cudnnSetConvolutionGroupCount( cudnnConvDesc, groups ));
 
     int dimX[] = {
         (int)x->shape[findc("@XFORMAT", 'a')], // n
