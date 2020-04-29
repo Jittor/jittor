@@ -12,6 +12,8 @@ import jittor as jt
 import numpy as np
 import jittor.nn as jnn
 
+skip_this_test = False
+
 try:
     jt.dirty_fix_pytorch_runtime_error()
     import torch
