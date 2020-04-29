@@ -310,9 +310,7 @@ class Conv(Module):
 
         self.weight = init.relu_invariant_gauss([out_channels, in_channels//groups, Kh, Kw], dtype="float", mode="fan_out")
         if bias:
-            shape = self.weight.shape
-            bound = 1 / math.sqrt(shape[1] * shape[2] * shape[3])
-            self.bias = init.uniform([out_channels], dtype="float", low=-bound, high=bound)
+            self.bias = init.invariant_uniform(self.weight.shape, "float")
         else:
             self.bias = None
 
