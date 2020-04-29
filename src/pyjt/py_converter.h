@@ -123,8 +123,13 @@ DEF_IS(Slice, bool) is_type(PyObject* obj) {
 }
 DEF_IS(Slice, T) from_py_object(PyObject* obj) {
     Py_ssize_t start, stop, step;
+    auto slice = (PySliceObject*)obj;
+
     PySlice_Unpack(obj, &start, &stop, &step);
-    return {(int)start, (int)stop, (int)step};
+    return {start, stop, step, 
+        (slice->start == Py_None) |
+        ((slice->stop == Py_None) << 1) |
+        ((slice->step == Py_None) << 2)};
 }
 
 #define GET_RAW_PTR(T, obj) ((T*)(((char*)obj) + sizeof(PyObject)))
