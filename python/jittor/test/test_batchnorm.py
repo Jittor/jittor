@@ -19,6 +19,7 @@ try:
 except:
     torch = None
     tnn = None
+    skip_this_test = True
 
 def check_equal(arr, j_layer, p_layer, threshold=1e-5):
     jittor_arr = jt.array(arr)
@@ -27,6 +28,7 @@ def check_equal(arr, j_layer, p_layer, threshold=1e-5):
     pytorch_result = p_layer(pytorch_arr)
     assert np.allclose(pytorch_result.detach().numpy(), jittor_result.numpy(), threshold)
 
+@unittest.skipIf(skip_this_test, "No Torch found")
 class TestBatchNorm(unittest.TestCase):
     def test_batchnorm(self):
         # ***************************************************************

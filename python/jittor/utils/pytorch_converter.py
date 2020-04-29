@@ -141,18 +141,6 @@ pjmap = {
         'extras': {'affine': 'None'},
         'delete': ['track_running_stats'],
     },
-    'InstanceNorm2d': {
-        'pytorch': {
-            'args': "num_features, eps=1e-05, momentum=0.1, affine=False, track_running_stats=False"
-        },
-        'jittor': {
-            'module': 'nn',
-            'name': 'InstanceNorm2d',
-            'args': 'num_features, eps=1e-05, momentum=0.1, affine=None, is_train=True, sync=True'
-        },
-        'links': {},
-        'extras': {'affine': 'None'},
-    },
     'Dropout2d': {
         'pytorch': {
             'args': 'p=0.5, inplace=False', 
@@ -212,6 +200,18 @@ pjmap = {
             'args': 'var, mean=0.0, std=1.0'
         },
         'links': {'tensor': 'var'},
+        'extras': {},
+    },
+    'uniform_': {
+        'pytorch': {
+            'args': "tensor, a=0.0, b=1.0", 
+        },
+        'jittor': {
+            'module': 'init',
+            'name': 'uniform_',
+            'args': 'var, low, high'
+        },
+        'links': {'tensor': 'var', 'a': 'low', 'b': 'high'},
         'extras': {},
     },
     'cat': {
@@ -278,7 +278,6 @@ pjmap = {
         'links': {},
         'extras': {},
     },
-    # 好像不需要如果一毛一样的话
     'view': {
         'pytorch': {
             'prefix': [],

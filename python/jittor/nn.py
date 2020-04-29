@@ -602,6 +602,21 @@ class ReplicationPad2d(Module):
                     y_idx[j,i] = b
         return x.reindex([n,c,oh,ow], ["i0","i1","@e1(i2,i3)","@e0(i2,i3)"], extras=[jt.array(x_idx - self.pl), jt.array(y_idx - self.pt)])
 
+class PixelShuffle(Module):
+    def __init__(self, upscale_factor):
+        self.upscale_factor = upscale_factor
+
+    def execute(self, x):
+        n,c,h,w = x.shape
+        r = self.upscale_factor
+        assert c%(r**2)==0, f"input channel needs to be divided by upscale_factor's square in PixelShuffle"
+        return x.reindex([n,int(c/r**2),h*r,w*r], [
+            "i0",
+            f"i1*{r**2}+i2%{r}*{r}+i3%{r}",
+            f"i2/{r}",
+            f"i3/{r}"
+        ])
+
 class Tanh(Module):
     def __init__(self):
         super().__init__()
