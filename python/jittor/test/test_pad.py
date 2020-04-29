@@ -20,56 +20,42 @@ except:
     torch = None
     tnn = None
 
-def check_equal(a, b):
-    eps = 1e-1 # icc error almost reaches 1e-1
-    relative_error = (abs(a - b) / abs(b + 1)).mean()
-    print(f"relative_error: {relative_error}")
-    return relative_error < eps
+def check_equal(arr, j_layer, p_layer):
+    jittor_arr = jt.array(arr)
+    pytorch_arr = torch.Tensor(arr)
+    jittor_result = j_layer(jittor_arr)
+    pytorch_result = p_layer(pytorch_arr)
+    assert np.allclose(pytorch_result.detach().numpy(), jittor_result.numpy())
 
 class TestPad(unittest.TestCase):
     def test_pad(self):
         # ***************************************************************
-        # Define jittor & pytorch array
-        # ***************************************************************
-        arr = np.random.randn(16,3,224,224)
-        jittor_arr = jt.array(arr)
-        pytorch_arr = torch.Tensor(arr)
-        # ***************************************************************
         # Test ReplicationPad2d Layer
         # ***************************************************************
-        pytorch_result = tnn.ReplicationPad2d(10)(pytorch_arr)
-        jittor_result = jnn.ReplicationPad2d(10)(jittor_arr)
-        assert check_equal(pytorch_result.numpy(), jittor_result.numpy()), f"{pytorch_result.mean()} || {jittor_result.mean()}"
-        pytorch_result = tnn.ReplicationPad2d((1,23,4,5))(pytorch_arr)
-        jittor_result = jnn.ReplicationPad2d((1,23,4,5))(jittor_arr)
-        assert check_equal(pytorch_result.numpy(), jittor_result.numpy()), f"{pytorch_result.mean()} || {jittor_result.mean()}"
+        arr = np.random.randn(16,3,224,224)
+        check_equal(arr, jnn.ReplicationPad2d(10), tnn.ReplicationPad2d(10))
+        check_equal(arr, jnn.ReplicationPad2d((1,23,4,5)), tnn.ReplicationPad2d((1,23,4,5)))
+
         # ***************************************************************
         # Test ConstantPad2d Layer
         # ***************************************************************
-        pytorch_result = tnn.ConstantPad2d(10,-2)(pytorch_arr)
-        jittor_result = jnn.ConstantPad2d(10,-2)(jittor_arr)
-        assert check_equal(pytorch_result.numpy(), jittor_result.numpy()), f"{pytorch_result.mean()} || {jittor_result.mean()}"
-        pytorch_result = tnn.ConstantPad2d((2,3,34,1),10.2)(pytorch_arr)
-        jittor_result = jnn.ConstantPad2d((2,3,34,1),10.2)(jittor_arr)
-        assert check_equal(pytorch_result.numpy(), jittor_result.numpy()), f"{pytorch_result.mean()} || {jittor_result.mean()}"
+        arr = np.random.randn(16,3,224,224)
+        check_equal(arr, jnn.ConstantPad2d(10,-2), tnn.ConstantPad2d(10,-2))
+        check_equal(arr, jnn.ConstantPad2d((2,3,34,1),10.2), tnn.ConstantPad2d((2,3,34,1),10.2))
+
         # ***************************************************************
         # Test ZeroPad2d Layer
         # ***************************************************************
-        pytorch_result = tnn.ZeroPad2d(1)(pytorch_arr)
-        jittor_result = jnn.ZeroPad2d(1)(jittor_arr)
-        assert check_equal(pytorch_result.numpy(), jittor_result.numpy()), f"{pytorch_result.mean()} || {jittor_result.mean()}"
-        pytorch_result = tnn.ZeroPad2d((2,3,34,1))(pytorch_arr)
-        jittor_result = jnn.ZeroPad2d((2,3,34,1))(jittor_arr)
-        assert check_equal(pytorch_result.numpy(), jittor_result.numpy()), f"{pytorch_result.mean()} || {jittor_result.mean()}"
+        arr = np.random.randn(16,3,224,224)
+        check_equal(arr, jnn.ZeroPad2d(1), tnn.ZeroPad2d(1))
+        check_equal(arr, jnn.ZeroPad2d((2,3,34,1)), tnn.ZeroPad2d((2,3,34,1)))
+
         # ***************************************************************
         # Test ReflectionPad2d Layer
         # ***************************************************************
-        pytorch_result = tnn.ReflectionPad2d(20)(pytorch_arr)
-        jittor_result = jnn.ReflectionPad2d(20)(jittor_arr)
-        assert check_equal(pytorch_result.numpy(), jittor_result.numpy()), f"{pytorch_result.mean()} || {jittor_result.mean()}"
-        pytorch_result = tnn.ReflectionPad2d((2,3,34,1))(pytorch_arr)
-        jittor_result = jnn.ReflectionPad2d((2,3,34,1))(jittor_arr)
-        assert check_equal(pytorch_result.numpy(), jittor_result.numpy()), f"{pytorch_result.mean()} || {jittor_result.mean()}"
+        arr = np.random.randn(16,3,224,224)
+        check_equal(arr, jnn.ReflectionPad2d(20), tnn.ReflectionPad2d(20))
+        check_equal(arr, jnn.ReflectionPad2d((2,3,34,1)), tnn.ReflectionPad2d((2,3,34,1)))
 
 if __name__ == "__main__":
     unittest.main()

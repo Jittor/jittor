@@ -20,52 +20,43 @@ except:
     torch = None
     tnn = None
 
-def check_equal(a, b):
-    eps = 1e-1 # icc error almost reaches 1e-1
-    relative_error = (abs(a - b) / abs(b + 1)).mean()
-    print(f"relative_error: {relative_error}")
-    return relative_error < eps
+def check_equal(arr, j_layer, p_layer):
+    jittor_arr = jt.array(arr)
+    pytorch_arr = torch.Tensor(arr)
+    jittor_result = j_layer(jittor_arr)
+    pytorch_result = p_layer(pytorch_arr)
+    assert np.allclose(pytorch_result.detach().numpy(), jittor_result.numpy())
 
 class TestRelu(unittest.TestCase):
     def test_relu(self):
         # ***************************************************************
-        # Define jittor & pytorch array
+        # Test ReLU Layer
         # ***************************************************************
         arr = np.random.randn(16,10,224,224)
-        jittor_arr = jt.array(arr)
-        pytorch_arr = torch.Tensor(arr)
+        check_equal(arr, jnn.ReLU(), tnn.ReLU())
+
         # ***************************************************************
         # Test PReLU Layer
         # ***************************************************************
-        pytorch_result = tnn.PReLU(10, 2)(pytorch_arr)
-        jittor_result = jnn.PReLU(10, 2)(jittor_arr)
-        assert check_equal(pytorch_result.detach().numpy(), jittor_result.numpy()), f"{pytorch_result.mean()} || {jittor_result.mean()}"
-        pytorch_result = tnn.PReLU(10, -0.2)(pytorch_arr)
-        jittor_result = jnn.PReLU(10, -0.2)(jittor_arr)
-        assert check_equal(pytorch_result.detach().numpy(), jittor_result.numpy()), f"{pytorch_result.mean()} || {jittor_result.mean()}"
-        pytorch_result = tnn.PReLU(10, 99.9)(pytorch_arr)
-        jittor_result = jnn.PReLU(10, 99.9)(jittor_arr)
-        assert check_equal(pytorch_result.detach().numpy(), jittor_result.numpy()), f"{pytorch_result.mean()} || {jittor_result.mean()}"
+        arr = np.random.randn(16,10,224,224)
+        check_equal(arr, jnn.PReLU(), tnn.PReLU())
+        check_equal(arr, jnn.PReLU(10, 99.9), tnn.PReLU(10, 99.9))
+        check_equal(arr, jnn.PReLU(10, 2), tnn.PReLU(10, 2))
+        check_equal(arr, jnn.PReLU(10, -0.2), tnn.PReLU(10, -0.2))
         
         # ***************************************************************
         # Test ReLU6 Layer
         # ***************************************************************
-        pytorch_result = tnn.ReLU6()(pytorch_arr)
-        jittor_result = jnn.ReLU6()(jittor_arr)
-        assert check_equal(pytorch_result.detach().numpy(), jittor_result.numpy()), f"{pytorch_result.mean()} || {jittor_result.mean()}"
+        arr = np.random.randn(16,10,224,224)
+        check_equal(arr, jnn.ReLU6(), tnn.ReLU6())
 
         # ***************************************************************
         # Test LeakyReLU Layer
         # ***************************************************************
-        pytorch_result = tnn.LeakyReLU(2)(pytorch_arr)
-        jittor_result = jnn.LeakyReLU(2)(jittor_arr)
-        assert check_equal(pytorch_result.detach().numpy(), jittor_result.numpy()), f"{pytorch_result.mean()} || {jittor_result.mean()}"
-        pytorch_result = tnn.LeakyReLU()(pytorch_arr)
-        jittor_result = jnn.LeakyReLU()(jittor_arr)
-        assert check_equal(pytorch_result.detach().numpy(), jittor_result.numpy()), f"{pytorch_result.mean()} || {jittor_result.mean()}"
-        pytorch_result = tnn.LeakyReLU(99.9)(pytorch_arr)
-        jittor_result = jnn.LeakyReLU(99.9)(jittor_arr)
-        assert check_equal(pytorch_result.detach().numpy(), jittor_result.numpy()), f"{pytorch_result.mean()} || {jittor_result.mean()}"
-
+        arr = np.random.randn(16,10,224,224)
+        check_equal(arr, jnn.LeakyReLU(), tnn.LeakyReLU())
+        check_equal(arr, jnn.LeakyReLU(2), tnn.LeakyReLU(2))
+        check_equal(arr, jnn.LeakyReLU(99.9), tnn.LeakyReLU(99.9))
+        
 if __name__ == "__main__":
     unittest.main()

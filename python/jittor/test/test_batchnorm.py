@@ -20,39 +20,46 @@ except:
     torch = None
     tnn = None
 
-def check_equal(a, b):
-    eps = 1e-1 # icc error almost reaches 1e-1
-    relative_error = (abs(a - b) / abs(b + 1)).mean()
-    print(f"relative_error: {relative_error}")
-    return relative_error < eps
+def check_equal(arr, j_layer, p_layer, threshold=1e-5):
+    jittor_arr = jt.array(arr)
+    pytorch_arr = torch.Tensor(arr)
+    jittor_result = j_layer(jittor_arr)
+    pytorch_result = p_layer(pytorch_arr)
+    assert np.allclose(pytorch_result.detach().numpy(), jittor_result.numpy(), threshold)
 
 class TestBatchNorm(unittest.TestCase):
     def test_batchnorm(self):
         # ***************************************************************
-        # Define jittor & pytorch array
+        # Test BatchNorm Layer
         # ***************************************************************
         arr = np.random.randn(16,10,224,224)
-        jittor_arr = jt.array(arr)
-        pytorch_arr = torch.Tensor(arr)
-        # ***************************************************************
-        # Test InstanceNorm2d Layer
-        # ***************************************************************
-        pytorch_result = tnn.InstanceNorm2d(10)(pytorch_arr)
-        jittor_result = jnn.InstanceNorm2d(10)(jittor_arr)
-        assert check_equal(pytorch_result.numpy(), jittor_result.numpy()), f"{pytorch_result.mean()} || {jittor_result.mean()}"
+        check_equal(arr, jnn.BatchNorm(10, is_train=True), tnn.BatchNorm2d(10))
 
+        class Model(tnn.Module):
+            def __init__(self):
+                super(Model, self).__init__()
+                self.layer = tnn.BatchNorm2d(10)
+            def forward(self, x):
+                return self.layer(x)
+        model = Model()
+        model.eval()
+        check_equal(arr, jnn.BatchNorm(10, is_train=False), model)
+        
         # ***************************************************************
-        # Define jittor & pytorch array
+        # Test BatchNorm1d Layer
         # ***************************************************************
         arr = np.random.randn(16,1000)
-        jittor_arr = jt.array(arr)
-        pytorch_arr = torch.Tensor(arr)
-        # ***************************************************************
-        # Test InstanceNorm2d Layer
-        # ***************************************************************
-        pytorch_result = tnn.BatchNorm1d(1000)(pytorch_arr)
-        jittor_result = jnn.BatchNorm1d(1000)(jittor_arr)
-        assert check_equal(pytorch_result.detach().numpy(), jittor_result.numpy()), f"{pytorch_result.mean()} || {jittor_result.mean()}"
+        check_equal(arr, jnn.BatchNorm1d(1000), tnn.BatchNorm1d(1000), 1e-3)
+
+        class Model(tnn.Module):
+            def __init__(self):
+                super(Model, self).__init__()
+                self.layer = tnn.BatchNorm1d(1000)
+            def forward(self, x):
+                return self.layer(x)
+        model = Model()
+        model.eval()
+        check_equal(arr, jnn.BatchNorm1d(1000, is_train=False), model, 1e-3)
 
 if __name__ == "__main__":
     unittest.main()

@@ -138,7 +138,7 @@ class RandomCrop:
     def __call__(self, img:Image.Image):
         width, height = img.size
         assert self.size[0] <= height and self.size[1] <= width, f"crop size exceeds the input image in RandomCrop"
-        top = np.random.randint(0,height-self.size[0])
-        left = np.random.randint(0,width-self.size[1])
+        top = np.random.randint(0,height-self.size[0]+1)
+        left = np.random.randint(0,width-self.size[1]+1)
         return crop(img, top, left, self.size[0], self.size[1])
         

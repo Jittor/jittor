@@ -84,12 +84,6 @@ def test_case(box_num, out_size, time_limit):
     assert fused_op_num == 1, fused_op_num
     assert t <= time_limit, t
 
-def check_equal(a, b):
-    eps = 1e-1 # icc error almost reaches 1e-1
-    relative_error = (abs(a - b) / abs(b + 1)).mean()
-    print(f"relative_error: {relative_error}")
-    return relative_error < eps
-
 class TestResizeAndCrop(unittest.TestCase):
     def test(self):
         test_case(100, [224, 224], 0.45)
@@ -109,11 +103,11 @@ class TestResizeAndCrop(unittest.TestCase):
         # ***************************************************************
         pytorch_result = tnn.Upsample(scale_factor=2)(pytorch_arr)
         jittor_result = jnn.Upsample(scale_factor=2)(jittor_arr)
-        assert check_equal(pytorch_result.numpy(), jittor_result.numpy()), f"{pytorch_result.mean()} || {jittor_result.mean()}"
+        assert np.allclose(pytorch_result.numpy(), jittor_result.numpy())
        
         pytorch_result = tnn.Upsample(scale_factor=0.2)(pytorch_arr)
         jittor_result = jnn.Upsample(scale_factor=0.2)(jittor_arr)
-        assert check_equal(pytorch_result.numpy(), jittor_result.numpy()), f"{pytorch_result.mean()} || {jittor_result.mean()}"
+        assert np.allclose(pytorch_result.numpy(), jittor_result.numpy())
 
 if __name__ == "__main__":
     unittest.main()
