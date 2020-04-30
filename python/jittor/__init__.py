@@ -341,6 +341,24 @@ def detach(x):
     return x.clone().stop_grad().clone()
 Var.detach = detach
 
+def std(x):
+    matsize=1
+    for i in x.shape:
+        matsize *= i
+    out=(x-x.mean()).sqr().sum()
+    out=out/(matsize-1)
+    out=out.sqrt()
+    return out
+Var.std = std
+
+def norm(x, k, dim):
+    assert k==1 or k==2
+    if k==1:
+        return x.abs().sum(dim)
+    if k==2:
+        return (x**2).sum(dim).sqrt()
+Var.norm = norm
+
 origin_reshape = reshape
 def reshape(x, *shape):
     if len(shape) == 1 and isinstance(shape[0], Sequence):

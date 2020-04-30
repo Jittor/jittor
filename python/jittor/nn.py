@@ -112,6 +112,48 @@ def cross_entropy_loss(output, target, ignore_index=None):
     else:
         return loss.sum() / jt.maximum(mask.int().sum(), 1)
 
+def mse_loss(output, target):
+    return (output-target).sqr().mean()
+
+def bce_loss(output, target):
+    return - (target * jt.log(jt.maximum(output, 1e-20)) + (1 - target) * jt.log(jt.maximum(1 - output, 1e-20))).mean()
+
+def l1_loss(output, target):
+    return (output-target).abs().mean()
+
+class CrossEntropyLoss(Module):
+    def __init__(self):
+        pass
+    def execute(self, output, target):
+        return cross_entropy_loss(output, target)
+
+class MSELoss(Module):
+    def __init__(self):
+        pass
+    def execute(self, output, target):
+        return mse_loss(output, target)
+
+class BCELoss(Module):
+    def __init__(self):
+        pass
+    def execute(self, output, target):
+        return bce_loss(output, target)
+
+class L1Loss(Module):
+    def __init__(self):
+        pass
+    def execute(self, output, target):
+        return l1_loss(output, target)
+
+class BCEWithLogitsLoss(Module):
+    def __init__(self):
+        self.sigmoid = Sigmoid()
+        self.bce = BCELoss()
+    def execute(self, output, target):
+        output = self.sigmoid(output)
+        output = self.bce(output, target)
+        return output
+
 class SGD(object):
     """ Usage:
     optimizer = nn.SGD(model.parameters(), lr)
