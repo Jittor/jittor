@@ -296,6 +296,28 @@ pjmap = {
     }
 }
 
+
+def pjmap_append(pytorch_func_name, pytorch_args, jittor_func_module, jittor_func_name, jittor_args, extras=None, links=None, delete=None):
+    if links == None: links = {}
+    if extras == None: extras = {}
+    if delete == None: delete = []
+    assert isinstance(links, dict)
+    assert isinstance(extras, dict)
+    assert isinstance(delete, list)
+    pjmap[pytorch_func_name] = {
+        'pytorch': {
+            'args': pytorch_args,
+        },
+        'jittor': {
+            'module': jittor_func_module,
+            'name': jittor_func_name,
+            'args': jittor_args,
+        },
+        'links': links,
+        'extras': extras,
+        'delete': delete,
+    }
+
 unsupport_ops = [
     # ***************************************************************
     # torch.nn
