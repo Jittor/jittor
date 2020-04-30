@@ -58,6 +58,7 @@ def argmax_pool(x, size, stride, padding=0):
 def concat(arr, dim):
     # TODO: low performance when concat lots of vars
     total_dim = 0
+    if dim < 0: dim += len(arr[0].shape)
     for a in arr:
         total_dim += a.shape[dim]
     cdim = 0

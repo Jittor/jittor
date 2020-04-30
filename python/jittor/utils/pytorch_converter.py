@@ -76,6 +76,7 @@ pjmap = {
         },
         'links': {},
         'extras': {},
+        'delete': ['inplace'],
     },
     'ReLU6': {
         'pytorch': {
@@ -88,6 +89,19 @@ pjmap = {
         },
         'links': {},
         'extras': {},
+        'delete': ['inplace'],
+    },
+    'PReLU': {
+        'pytorch': {
+            'args': 'num_parameters=1, init=0.25', 
+        },
+        'jittor': {
+            'module': 'nn',
+            'name': 'PReLU',
+            'args': 'num_parameters=1, init_=0.25'
+        },
+        'links': {'init': 'init_'},
+        'extras': {},
     },
     'LeakyReLU': {
         'pytorch': {
@@ -96,10 +110,11 @@ pjmap = {
         'jittor': {
             'module': 'nn',
             'name': 'LeakyReLU',
-            'args': 'scale'
+            'args': 'scale=0.01'
         },
         'links': {'negative_slope': 'scale'},
         'extras': {},
+        'delete': ['inplace'],
     },
     'BatchNorm2d': {
         'pytorch': {
@@ -113,6 +128,19 @@ pjmap = {
         'links': {},
         'extras': {},
     },
+    'BatchNorm1d': {
+        'pytorch': {
+            'args': "num_features, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True"
+        },
+        'jittor': {
+            'module': 'nn',
+            'name': 'BatchNorm1d',
+            'args': 'num_features, eps=1e-5, momentum=0.1, affine=None, is_train=True, sync=True',
+        },
+        'links': {},
+        'extras': {'affine': 'None'},
+        'delete': ['track_running_stats'],
+    },
     'Dropout2d': {
         'pytorch': {
             'args': 'p=0.5, inplace=False', 
@@ -121,6 +149,19 @@ pjmap = {
             'module': 'nn',
             'name': 'Dropout',
             'args': 'p=0.5, is_train=False'
+        },
+        'links': {},
+        'extras': {},
+        'delete': ['inplace'],
+    },
+    'Upsample': {
+        'pytorch': {
+            'args': "size=None, scale_factor=None, mode='nearest', align_corners=None", 
+        },
+        'jittor': {
+            'module': 'nn',
+            'name': 'Upsample',
+            'args': "scale_factor=None, mode='nearest'"
         },
         'links': {},
         'extras': {},
@@ -159,6 +200,18 @@ pjmap = {
             'args': 'var, mean=0.0, std=1.0'
         },
         'links': {'tensor': 'var'},
+        'extras': {},
+    },
+    'uniform_': {
+        'pytorch': {
+            'args': "tensor, a=0.0, b=1.0", 
+        },
+        'jittor': {
+            'module': 'init',
+            'name': 'uniform_',
+            'args': 'var, low, high'
+        },
+        'links': {'tensor': 'var', 'a': 'low', 'b': 'high'},
         'extras': {},
     },
     'cat': {
@@ -225,7 +278,6 @@ pjmap = {
         'links': {},
         'extras': {},
     },
-    # 好像不需要如果一毛一样的话
     'view': {
         'pytorch': {
             'prefix': [],
@@ -250,9 +302,26 @@ unsupport_ops = [
     # ***************************************************************
     'Parameter', 'ModuleList', 'ModuleDict', 'ParameterList', 'ParameterDict', 
     'Conv1d', 'Conv3d', 'ConvTranspose1d', 'ConvTranspose3d', 'Unfold', 'Fold', 
-    'MaxPool1d', 'MaxPool3d', 'MaxUnpool1d', 'MaxUnpool2d', 'MaxUnpool3d', 'AvgPool1d', 'AvgPool3d', 'FractionalMaxPool2d', 'LPPool1d', 'LPPool2d', 'AdaptiveMaxPool1d', 'AdaptiveMaxPool2d', 'AdaptiveMaxPool3d', 'AdaptiveAvgPool1d', 'AdaptiveAvgPool3d', 
-    'ReflectionPad1d', 'ReflectionPad2d', 'ReplicationPad1d', 'ReplicationPad2d', 'ReplicationPad3d', 'ZeroPad2d', 'ConstantPad1d', 'ConstantPad2d', 'ConstantPad3d', 'ELU', 'Hardshrink', 'Hardtanh', 'LogSigmoid', 'MultiheadAttention', 
-    'PReLU', 'RReLU', 'SELU', 'CELU', 'GELU', 'Softplus', 'Softshrink', 'Softsign', 'Tanhshrink', 'Threshold', 'Softmin', 'Softmax2d', 'LogSoftmax', 'AdaptiveLogSoftmaxWithLoss', 'BatchNorm1d', 'BatchNorm3d', 'GroupNorm', 'SyncBatchNorm', 'InstanceNorm1d', 'InstanceNorm2d', 'InstanceNorm3d', 'LayerNorm', 'LocalResponseNorm', 'RNNBase', 'RNN', 'LSTM', 'GRU', 'RNNCell', 'LSTMCell', 'GRUCell', 'Transformer', 'TransformerEncoder', 'TransformerDecoder', 'TransformerEncoderLayer', 'TransformerDecoderLayer', 'Identity', 'Bilinear', 'Dropout3d', 'AlphaDropout', 'Embedding', 'EmbeddingBag', 'CosineSimilarity', 'PairwiseDistance', 'L1Loss', 'MSELoss', 'CTCLoss', 'NLLLoss', 'PoissonNLLLoss', 'KLDivLoss', 'BCELoss', 'BCEWithLogitsLoss', 'MarginRankingLoss', 'HingeEmbeddingLoss', 'MultiLabelMarginLoss', 'SmoothL1Loss', 'SoftMarginLoss', 'MultiLabelSoftMarginLoss', 'CosineEmbeddingLoss', 'MultiMarginLoss', 'TripletMarginLoss', 'PixelShuffle', 'Upsample', 'UpsamplingNearest2d', 'UpsamplingBilinear2d', 'DataParallel', 'DistributedDataParallel', 'clip_grad_norm_', 'clip_grad_value_', 'parameters_to_vector', 'vector_to_parameters', 'BasePruningMethod', 'PruningContainer', 'Identity', 'RandomUnstructured', 'L1Unstructured', 'RandomStructured', 'LnStructured', 'CustomFromMask', 'identity', 'random_unstructured', 'l1_unstructured', 'random_structured', 'ln_structured', 'global_unstructured', 'custom_from_mask', 'remove', 'is_pruned', 'weight_norm', 'remove_weight_norm', 'spectral_norm', 'remove_spectral_norm', 'PackedSequence', 'pack_padded_sequence', 'pad_packed_sequence', 'pad_sequence', 'pack_sequence'
+    'MaxPool1d', 'MaxPool3d', 'MaxUnpool1d', 'MaxUnpool2d', 'MaxUnpool3d', 'AvgPool1d', 
+    'AvgPool3d', 'FractionalMaxPool2d', 'LPPool1d', 'LPPool2d', 'AdaptiveMaxPool1d', 
+    'AdaptiveMaxPool2d', 'AdaptiveMaxPool3d', 'AdaptiveAvgPool1d', 'AdaptiveAvgPool3d', 
+    'ReflectionPad1d', 'ReplicationPad1d', 'ReplicationPad3d', 'ConstantPad1d', 'ConstantPad3d', 
+    'ELU', 'Hardshrink', 'Hardtanh', 'LogSigmoid', 'MultiheadAttention', 
+    'RReLU', 'SELU', 'CELU', 'GELU', 'Softplus', 'Softshrink', 'Softsign', 'Tanhshrink', 
+    'Threshold', 'Softmin', 'Softmax2d', 'LogSoftmax', 'AdaptiveLogSoftmaxWithLoss', 
+    'BatchNorm3d', 'GroupNorm', 'SyncBatchNorm', 'InstanceNorm1d', 'InstanceNorm3d', 'LocalResponseNorm', 
+    'RNNBase', 'RNN', 'LSTM', 'GRU', 'RNNCell', 'LSTMCell', 'GRUCell', 'Transformer', 'TransformerEncoder', 
+    'TransformerDecoder', 'TransformerEncoderLayer', 'TransformerDecoderLayer', 'Identity', 'Bilinear', 
+    'Dropout3d', 'AlphaDropout', 'EmbeddingBag', 'CosineSimilarity', 'PairwiseDistance', 'L1Loss', 
+    'MSELoss', 'CTCLoss', 'NLLLoss', 'PoissonNLLLoss', 'KLDivLoss', 'BCELoss', 'BCEWithLogitsLoss', 
+    'MarginRankingLoss', 'HingeEmbeddingLoss', 'MultiLabelMarginLoss', 'SmoothL1Loss', 'SoftMarginLoss', 
+    'MultiLabelSoftMarginLoss', 'CosineEmbeddingLoss', 'MultiMarginLoss', 'TripletMarginLoss', 'UpsamplingNearest2d', 
+    'UpsamplingBilinear2d', 'DataParallel', 'DistributedDataParallel', 'clip_grad_norm_', 'clip_grad_value_', 
+    'parameters_to_vector', 'vector_to_parameters', 'BasePruningMethod', 'PruningContainer', 'Identity', 
+    'RandomUnstructured', 'L1Unstructured', 'RandomStructured', 'LnStructured', 'CustomFromMask', 'identity', 
+    'random_unstructured', 'l1_unstructured', 'random_structured', 'ln_structured', 'global_unstructured', 
+    'custom_from_mask', 'remove', 'is_pruned', 'weight_norm', 'remove_weight_norm', 'spectral_norm', 
+    'remove_spectral_norm', 'PackedSequence', 'pack_padded_sequence', 'pad_packed_sequence', 'pad_sequence', 'pack_sequence'
 ]
 
 support_ops = {}
@@ -298,6 +367,10 @@ def convert_(prefix, func_name, ags, kws):
     else:
         p_ags = info['pytorch']['args']
         j_ags = info['jittor']['args']
+    if 'delete' in info.keys():
+        delete = info['delete']
+    else:
+        delete = None
     j_prefix = info['jittor']['prefix'] if 'prefix' in info['jittor'].keys() else None
     j_module = info['jittor']['module']
     j_name = info['jittor']['name']
@@ -333,6 +406,12 @@ def convert_(prefix, func_name, ags, kws):
                 pp_ags.append(p_ag)
         if len(jj_ags) == 0 and len(pp_ags) != 0:
             raise AttributeError(f"{func_name} in Jittor has no Attribute {pp_ags[0]}")
+    if delete is not None:
+        for d in delete:
+            if d in pp_ags:
+                jj_ags.append(d)
+            if d in pp_kws.keys():
+                jj_kws[d] = None
     if len(pp_ags) > len(ags) + len(kws):
         raise RuntimeError(f'There are needed {len(pp_ags) + len(list(pp_kws.keys()))} args in Pytorch {func_name} function, but you only provide {len(ags) + len(kws)}')
     ags_ = []
@@ -395,6 +474,12 @@ def convert_(prefix, func_name, ags, kws):
                 j_kws_values[k] = extras[k]
             else:
                 raise AttributeError(f"there is not attribute named {k} in Jittor {func_name}, you should delete it in {func_name} extras.")
+    if delete is not None:
+        for d in delete:
+            if d in j_ags_values:
+                j_ags_values.remove(d)
+            if d in j_kws_values.keys():
+                j_kws_values.pop(d)
     j_ags_ = [j_ags_values[str(i)] for i in range(len(list(j_ags_values.keys())))]
     j_kws_ = [key + "=" + j_kws_values[key] for key in j_kws_values.keys()]
     j_func = f"{j_module}.{j_name}({', '.join(j_ags_+j_kws_)})"
@@ -412,10 +497,10 @@ def dfs(a):
         if 'torch' in astunparse.unparse(a) and 'init' in astunparse.unparse(a):
             import_flag.append('init')
             return ast.parse('from jittor import init').body[0]
-        if 'torch' in astunparse.unparse(a) and 'nn' in astunparse.unparse(a):
+        if 'torch' in astunparse.unparse(a) and a.names[0].asname == 'nn':
             import_flag.append('nn')
             return ast.parse('from jittor import nn').body[0]
-        if a.names[0].name == 'torch': 
+        if 'torch' in a.names[0].name: 
             return 'delete'
     elif isinstance(a, ast.ImportFrom):
         if 'torch' in a.module:
@@ -460,7 +545,6 @@ def dfs(a):
                     ret = dfs(a_)
                     if ret is 'delete':
                         delete_flag.append(True)
-                        del a.__dict__[k][i]
                         continue
                     if ret is not None:
                         a.__dict__[k][i] = ret
