@@ -20,7 +20,7 @@ except Exception as e:
 def get_error(a, b):
     return np.abs(a-b) / max(np.abs(a), np.abs(b), 1e-5) , np.abs(a-b)
 
-def check(jt_mod, torch_mod, rtol=1e-2, atol=1e-5):
+def check(jt_mod, torch_mod, rtol=1e-2, atol=1e-5, mean_atol=1e-5):
     pa = [ p for p in jt_mod.parameters() if not p.is_stop_grad() ]
     pb = list(torch_mod.parameters())
     assert len(pa) == len(pb)
@@ -36,7 +36,7 @@ def check(jt_mod, torch_mod, rtol=1e-2, atol=1e-5):
             print("compare std error", stda, stdb, r_err, a_err, a.name(), a.shape)
 
         r_err, a_err = get_error(meana, meanb)
-        if r_err > rtol and a_err > atol:
+        if r_err > rtol and a_err > mean_atol:
             error_count += 1
             print("compare mean error", meana, meanb, r_err, a_err, a.name(), a.shape)
     assert error_count == 0
@@ -50,10 +50,10 @@ class TestInit(unittest.TestCase):
         torch.manual_seed(0)
 
     def test_conv(self):
-        check(jt.nn.Conv(64, 256, 3), torch.nn.Conv2d(64, 256, 3))
+        check(jt.nn.Conv(64, 256, 3), torch.nn.Conv2d(64, 256, 3), rtol=1e-1, mean_atol=1e-3)
 
     def test_resnet(self):
-        check(models.resnet152(), torchvision.models.resnet152(), rtol=2e-2)
+        check(models.resnet152(), torchvision.models.resnet152(), rtol=2e-2, mean_atol=1e-2)
 
 if __name__ == "__main__":
     unittest.main()

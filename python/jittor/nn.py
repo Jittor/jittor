@@ -338,9 +338,14 @@ class Conv(Module):
         assert in_channels % groups == 0, 'in_channels must be divisible by groups'
         assert out_channels % groups == 0, 'out_channels must be divisible by groups'
 
-        self.weight = init.relu_invariant_gauss([out_channels, in_channels//groups, Kh, Kw], dtype="float", mode="fan_out")
+        # self.weight = init.relu_invariant_gauss([out_channels, in_channels//groups, Kh, Kw], dtype="float", mode="fan_out")
+        self.weight = init.invariant_uniform([out_channels, in_channels//groups, Kh, Kw], dtype="float")
         if bias:
-            self.bias = init.uniform([out_channels], dtype="float", low=-1, high=1)
+            fan=1
+            for i in self.weight.shape[1:]:
+                fan *= i
+            bound = 1 / math.sqrt(fan)
+            self.bias = init.uniform([out_channels], dtype="float", low=-bound, high=bound)
         else:
             self.bias = None
 
