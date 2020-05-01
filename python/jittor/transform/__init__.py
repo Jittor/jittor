@@ -114,16 +114,31 @@ class Compose:
         return data
 
 class Resize:
-    def __init__(self, size):
+    def __init__(self, size, mode=Image.BILINEAR):
         if isinstance(size, int):
             size = (size, size)
         assert isinstance(size, tuple)
         self.size = size
+        self.mode = mode
     def __call__(self, img:Image.Image):
-        return img.resize(self.size, Image.BILINEAR)
+        return img.resize(self.size, self.mode)
 
 class Gray:
     def __call__(self, img:Image.Image):
         img = np.array(img.convert('L'))
         img = img[np.newaxis, :]
         return np.array((img / 255.0), dtype = np.float32)
+
+class RandomCrop:
+    def __init__(self, size):
+        if isinstance(size, int):
+            size = (size, size)
+        assert isinstance(size, tuple)
+        self.size = size
+    def __call__(self, img:Image.Image):
+        width, height = img.size
+        assert self.size[0] <= height and self.size[1] <= width, f"crop size exceeds the input image in RandomCrop"
+        top = np.random.randint(0,height-self.size[0]+1)
+        left = np.random.randint(0,width-self.size[1]+1)
+        return crop(img, top, left, self.size[0], self.size[1])
+        

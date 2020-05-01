@@ -16,7 +16,8 @@ with lock.lock_scope():
     from jittor_core import *
     from jittor_core.ops import *
     from . import compile_extern
-    from .compile_extern import mkl_ops, mpi, mpi_ops
+    from .compile_extern import mkl_ops, mpi, mpi_ops, \
+        cudnn, curand, cublas
 
 import contextlib
 import numpy as np
@@ -699,7 +700,7 @@ def jittor_exit():
 atexit.register(jittor_exit)
 
 Var.__str__ = lambda x: str(x.data)
-Var.__repr__ = lambda x: f"jt.Var:{x.dtype}{x.uncertain_shape}"
+Var.__repr__ = lambda x: str(x.data)
 Var.peek = lambda x: f"{x.dtype}{x.shape}"
 
 from . import nn

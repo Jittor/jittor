@@ -11,6 +11,17 @@ import jittor as jt
 import random
 import os
 
+import numpy as np
+import jittor.nn as jnn
+try:
+    jt.dirty_fix_pytorch_runtime_error()
+    import torch
+    import torch.nn as tnn
+except:
+    torch = None
+    tnn = None
+    skip_this_test = True
+
 mid = 0
 if os.uname()[1] == "jittor-ce":
     mid = 1
@@ -74,12 +85,30 @@ def test_case(box_num, out_size, time_limit):
     assert fused_op_num == 1, fused_op_num
     assert t <= time_limit, t
 
+def check_equal(arr, j_layer, p_layer):
+    jittor_arr = jt.array(arr)
+    pytorch_arr = torch.Tensor(arr)
+    jittor_result = j_layer(jittor_arr)
+    pytorch_result = p_layer(pytorch_arr)
+    assert np.allclose(pytorch_result.detach().numpy(), jittor_result.numpy())
+
 class TestResizeAndCrop(unittest.TestCase):
     def test(self):
         test_case(100, [224, 224], 0.45)
         test_case(100, [180, 224], 0.3)
         test_case(20, [1024, 1024], [1.2, 1.8][mid])
         test_case(20, [1024, 666], [0.8,1.0][mid])
+
+    def test_upsample(self):
+        arr = np.random.randn(16,10,224,224)
+        check_equal(arr, jnn.Upsample(scale_factor=2), tnn.Upsample(scale_factor=2))
+        check_equal(arr, jnn.Upsample(scale_factor=0.2), tnn.Upsample(scale_factor=0.2))
+
+    def test_pixelshuffle(self):
+        arr = np.random.randn(16,16,224,224)
+        check_equal(arr, jnn.PixelShuffle(upscale_factor=2), tnn.PixelShuffle(upscale_factor=2))
+        arr = np.random.randn(1,16*16,224,224)
+        check_equal(arr, jnn.PixelShuffle(upscale_factor=16), tnn.PixelShuffle(upscale_factor=16))
 
 if __name__ == "__main__":
     unittest.main()

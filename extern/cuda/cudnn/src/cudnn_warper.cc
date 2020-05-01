@@ -8,6 +8,11 @@
 namespace jittor {
 
 cudnnHandle_t cudnn_handle;
+int max_cache_size = 100;
+
+void set_algorithm_cache_size(int size) {
+    max_cache_size = size;
+}
 
 struct cudnn_initer {
 
