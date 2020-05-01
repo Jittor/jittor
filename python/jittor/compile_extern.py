@@ -132,6 +132,7 @@ def setup_cuda_extern():
 
 def setup_cuda_lib(lib_name, link=True, extra_flags=""):
     globals()[lib_name+"_ops"] = None
+    globals()[lib_name] = None
     if not has_cuda: return
     LOG.v(f"setup {lib_name}...")
 
@@ -157,9 +158,11 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
         return
 
     # compile and get operators
-    culib_ops = compile_custom_ops(culib_src_files, 
+    culib = compile_custom_ops(culib_src_files, return_module=True,
         extra_flags=f" -I'{jt_cuda_include}' -I'{jt_culib_include}' {link_flags} {extra_flags} ")
+    culib_ops = culib.ops
     globals()[lib_name+"_ops"] = culib_ops
+    globals()[lib_name] = culib
     LOG.vv(f"Get {lib_name}_ops: "+str(dir(culib_ops)))
 
 def install_cutt(root_folder):
