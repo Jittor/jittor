@@ -45,7 +45,7 @@ static inline void set_shape(Var* x, const char* f, const string& format, int a,
         shape[0], shape[1], shape[2], shape[3]));
 }
 
-MklConvBackwardWOp::MklConvBackwardWOp(Var* x, Var* dy, int kernel_size, int stride, int padding, int dilation, string xformat, string wformat, string yformat)
+MklConvBackwardWOp::MklConvBackwardWOp(Var* x, Var* dy, int kernel_size, int stride, int padding, int dilation, int groups, string xformat, string wformat, string yformat)
         : x(x), dy(dy), kernel_size(kernel_size), stride(stride), padding(padding), dilation(dilation),
       xformat(move(xformat)), wformat(move(wformat)), yformat(move(yformat)) {
     dw = create_output(nullptr, dtype_infer(dy->ns, x->ns));

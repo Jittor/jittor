@@ -22,7 +22,7 @@ struct OpInfo {
         for (uint i=0; i<constructors.size(); i++)
             if (std::type_index(*(constructors[i].first)) == std::type_index(tid))
                 return func_t(constructors[i].second);
-        LOGf << "constructor" << tid.name() << "not found.";
+        LOGf << "constructor" << name << tid.name() << "not found.";
         return func_t(nullptr);
     }
 };

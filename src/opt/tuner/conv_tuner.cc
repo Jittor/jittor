@@ -160,6 +160,24 @@ struct OpInspector {
         return 0;
     }
 
+    string format2(const string& fmt, const vector<int>& order) {
+        string new_fmt = fmt;
+        if (order.size() != fmt.size()) {
+            failed = 1;
+            return "";
+        }
+        if (check_overlap(order))
+            return "";
+        for (uint i=0; i<order.size(); i++) {
+            if (order[i]>=(int)new_fmt.size()) {
+                failed = 1;
+                return "";
+            }
+            new_fmt[order[i]] = fmt[i];
+        }
+        return new_fmt;
+    }
+
     string format(const string& fmt, const vector<int>& order) {
         string new_fmt = fmt;
         if (order.size() != fmt.size()) {
@@ -234,19 +252,19 @@ void ConvTuner::forwardTune(FusedOp* fop) {
         xh = xoi.mm[zh];
         xw = xoi.mm[zw];
         LOGvvvv << "xnchw =" << vector<int>{xn,xc,xh,xw};
-        auto xformat = xoi.format("abcd", {xn, xc, xh, xw});
+        auto xformat = xoi.format2("abcd", {xn, xc, xh, xw});
         LOGvvvv << "xformat =" << xformat;
         wci = woi.mm[zci];
         wco = woi.mm[zco];
         wh = woi.mm[zwh];
         ww = woi.mm[zww];
-        auto wformat = xoi.format("iohw", {wci, wco, wh, ww});
+        auto wformat = xoi.format2("iohw", {wci, wco, wh, ww});
         LOGvvvv << "wformat =" << wformat;
         yn = yoi.mm[zn];
         yc = yoi.mm[zco];
         yh = yoi.mm[zh];
         yw = yoi.mm[zw];
-        auto yformat = xoi.format("abcd", {yn, yc, yh, yw});
+        auto yformat = xoi.format2("abcd", {yn, yc, yh, yw});
         LOGvvvv << "yformat =" << yformat;
         // mkl doesn't support "cdab" format
         if (yformat == "cdab") continue;
@@ -307,7 +325,7 @@ void ConvTuner::forwardTune(FusedOp* fop) {
             continue;
         auto make_conv = get_op_info(relay_conv_name)
                 .get_constructor<VarPtr, Var*, Var*, int, int, int, int, string, string, string>();
-            auto rvar = make_conv(x, w, stride, padding, dilation, 1, xformat, wformat, yformat);
+        auto rvar = make_conv(x, w, stride, padding, dilation, 1, xformat, wformat, yformat);
         auto rid = fop->context->vrm.add_relay_group({{rvar, rop->y}});
         if (rid>=0) {
             auto srid = "relay"+S(rid);
@@ -359,19 +377,19 @@ void ConvTuner::backwardTune(FusedOp* fop) {
         xh = xoi.mm[zh];
         xw = xoi.mm[zw];
         LOGvvvv << "xnchw =" << vector<int>{xn,xc,xh,xw};
-        xformat = xoi.format("abcd", {xn, xc, xh, xw});
+        xformat = xoi.format2("abcd", {xn, xc, xh, xw});
         LOGvvvv << "xformat =" << xformat;
         wci = woi.mm[zci];
         wco = woi.mm[zco];
         wh = woi.mm[zwh];
         ww = woi.mm[zww];
-        wformat = xoi.format("iohw", {wci, wco, wh, ww});
+        wformat = xoi.format2("iohw", {wci, wco, wh, ww});
         LOGvvvv << "wformat =" << wformat;
         yn = yoi.mm[zn];
         yc = yoi.mm[zco];
         yh = yoi.mm[zh];
         yw = yoi.mm[zw];
-        yformat = xoi.format("abcd", {yn, yc, yh, yw});
+        yformat = xoi.format2("abcd", {yn, yc, yh, yw});
         LOGvvvv << "yformat =" << yformat;
         // mkl doesn't support "cdab" format
         if (yformat == "cdab") continue;
@@ -434,19 +452,19 @@ void ConvTuner::backwardTune(FusedOp* fop) {
         xh = xoi.mm[zh];
         xw = xoi.mm[zw];
         LOGvvvv << "xnchw =" << vector<int>{xn,xc,xh,xw};
-        xformat = xoi.format("abcd", {xn, xc, xh, xw});
+        xformat = xoi.format2("abcd", {xn, xc, xh, xw});
         LOGvvvv << "xformat =" << xformat;
         wci = woi.mm[zci];
         wco = woi.mm[zco];
         wh = woi.mm[zwh];
         ww = woi.mm[zww];
-        wformat = xoi.format("iohw", {wci, wco, wh, ww});
+        wformat = xoi.format2("iohw", {wci, wco, wh, ww});
         LOGvvvv << "wformat =" << wformat;
         yn = yoi.mm[zn];
         yc = yoi.mm[zco];
         yh = yoi.mm[zh];
         yw = yoi.mm[zw];
-        yformat = xoi.format("abcd", {yn, yc, yh, yw});
+        yformat = xoi.format2("abcd", {yn, yc, yh, yw});
         LOGvvvv << "yformat =" << yformat;
         // mkl doesn't support "cdab" format
         if (yformat == "cdab") continue;
