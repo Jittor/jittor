@@ -16,8 +16,9 @@ with lock.lock_scope():
     from jittor_core import *
     from jittor_core.ops import *
     from . import compile_extern
-    from .compile_extern import mkl_ops, mpi, mpi_ops, \
-        cudnn, curand, cublas
+    from .compile_extern import mkl_ops, mpi, mpi_ops
+    if has_cuda:
+        from .compile_extern import cudnn, curand, cublas
 
 import contextlib
 import numpy as np
