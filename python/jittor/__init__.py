@@ -404,7 +404,8 @@ Var.unsqueeze = unsqueeze
 
 def squeeze(x, dim):
     shape = list(x.shape)
-    assert dim < len(shape)
+    if dim < 0: dim += len(shape)
+    assert dim < len(shape) and dim >= 0
     assert shape[dim] == 1
     return x.reshape(shape[:dim] + shape[dim+1:])
 Var.squeeze = squeeze
