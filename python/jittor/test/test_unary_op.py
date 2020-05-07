@@ -40,6 +40,7 @@ class TestUnaryOp(unittest.TestCase):
             "sin", "arcsin", "sinh", "arcsinh", 
             "tan", "arctan", "tanh", "arctanh", 
             "cos", "arccos", "cosh", "arccosh", 
+            "sigmoid", 
         ]
         a = [1.1, 2.2, 3.3, 4.4]
         for op in ops:
@@ -52,6 +53,8 @@ class TestUnaryOp(unittest.TestCase):
             else:
                 b = np.array(a)
             func = lambda x: eval(f"np.{op}(x[0]).sum()")
+            if op == "sigmoid":
+                func = lambda x: (1/(1+np.exp(-x[0]))).sum()
             x, (da,) = ngrad(func, [b], 1e-8)
             ja = jt.array(b)
             jb = eval(f"jt.{op}(ja)")

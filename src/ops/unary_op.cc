@@ -67,6 +67,7 @@ static unordered_set<string> unary_ops = {
     "cosh",
     // @pybind(acosh, arccosh)
     "acosh",
+    "sigmoid",
 };
 
 UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
@@ -182,6 +183,12 @@ VarPtr UnaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
         auto x2 = make_binary(x, x, ns_multiply);
         x2 = make_binary(one, x2, ns_subtract);
         return make_binary(dout, x2, ns_divide);
+    }
+    // dsigmoid(x) = sigmoid(x) - sigmoid(x)^2
+    if (ns == ns_sigmoid) {
+        auto r = make_binary(out, out, ns_multiply);
+        r = make_binary(out, r, ns_subtract);
+        return make_binary(dout, r, ns_multiply);
     }
     return nullptr;
 }
