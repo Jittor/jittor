@@ -633,7 +633,7 @@ class Sigmoid(Module):
     def __init__(self):
         super().__init__()
     def execute(self, x) :
-        return 1 / (1 + jt.exp(-x))
+        return x.sigmoid()
 
 def resize(x, size, mode="nearest"):
     img = x
