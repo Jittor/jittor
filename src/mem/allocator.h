@@ -51,4 +51,7 @@ Allocator* get_allocator();
 // @pyjt(gc)
 void gc_all();
 
+// @pyjt(display_memory_info)
+void display_memory_info(const char* fileline="");
+
 } // jittor

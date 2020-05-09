@@ -449,6 +449,13 @@ def fetch_var(var, func, *args, **kw):
 Var.fetch = fetch_var
 del fetch_var
 
+def display_memory_info():
+    import inspect, os
+    f = inspect.currentframe()
+    fileline = inspect.getframeinfo(f.f_back)
+    fileline = f"{os.path.basename(fileline.filename)}:{fileline.lineno}"
+    core.display_memory_info(fileline)
+
 def import_vars(data):
     ''' Load variables into current scopes
     example:
