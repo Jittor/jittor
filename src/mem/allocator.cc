@@ -5,6 +5,7 @@
 // ***************************************************************
 #include <typeinfo>
 #include <iomanip>
+#include <sys/sysinfo.h>
 
 #include "var.h"
 #include "op.h"
@@ -140,5 +141,18 @@ void display_memory_info(const char* fileline) {
     log.end();
 }
 
+MemInfo::MemInfo() {
+    struct sysinfo info = {0};
+    sysinfo(&info);
+    total_cpu_ram = info.totalram;
+    total_cuda_ram = 0;
+#ifdef HAS_CUDA
+    cudaDeviceProp prop = {0};
+    cudaGetDeviceProperties(&prop, 0);
+    total_cuda_ram = prop.totalGlobalMem;
+#endif
+}
+
+MemInfo mem_info;
 
 } // jittor

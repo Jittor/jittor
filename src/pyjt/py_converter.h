@@ -158,6 +158,25 @@ DEF_IS(DumpGraphs, const T&) from_py_object(PyObject* obj) {
     return GET_RAW_PTR(T, obj);
 }
 
+// MemInfo
+struct MemInfo;
+extern PyTypeObject PyjtMemInfo;
+DEF_IS(MemInfo, bool) is_type(PyObject* obj) {
+    return Py_TYPE(obj) == &PyjtMemInfo;
+}
+
+
+DEF_IS(MemInfo, PyObject*) to_py_object(const T& a) {
+    PyObjHolder obj(_PyObject_New(&PyjtMemInfo));
+    auto ptr = GET_RAW_PTR(T, obj.obj);
+    new (ptr) T(a);
+    return obj.release();
+}
+
+DEF_IS(MemInfo, const T&) from_py_object(PyObject* obj) {
+    return GET_RAW_PTR(T, obj);
+}
+
 
 // NanoString
 struct NanoString;
