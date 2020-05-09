@@ -39,6 +39,8 @@ class TestPad(unittest.TestCase):
         arr = np.random.randn(16,3,224,224)
         check_equal(arr, jnn.ReplicationPad2d(10), tnn.ReplicationPad2d(10))
         check_equal(arr, jnn.ReplicationPad2d((1,23,4,5)), tnn.ReplicationPad2d((1,23,4,5)))
+        check_equal(arr, jnn.ReplicationPad2d((1,0,1,5)), tnn.ReplicationPad2d((1,0,1,5)))
+        check_equal(arr, jnn.ReplicationPad2d((100)), tnn.ReplicationPad2d((100)))
 
         # ***************************************************************
         # Test ConstantPad2d Layer
@@ -60,6 +62,8 @@ class TestPad(unittest.TestCase):
         arr = np.random.randn(16,3,224,224)
         check_equal(arr, jnn.ReflectionPad2d(20), tnn.ReflectionPad2d(20))
         check_equal(arr, jnn.ReflectionPad2d((2,3,34,1)), tnn.ReflectionPad2d((2,3,34,1)))
+        check_equal(arr, jnn.ReflectionPad2d((10,123,34,1)), tnn.ReflectionPad2d((10,123,34,1)))
+        check_equal(arr, jnn.ReflectionPad2d((100)), tnn.ReflectionPad2d((100)))
 
 if __name__ == "__main__":
     unittest.main()
