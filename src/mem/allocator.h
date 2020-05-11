@@ -5,6 +5,7 @@
 // ***************************************************************
 #pragma once
 #include "common.h"
+#include "mem/mem_info.h"
 
 namespace jittor {
 
@@ -50,25 +51,5 @@ extern Allocator* cpu_allocator;
 Allocator* get_allocator();
 // @pyjt(gc)
 void gc_all();
-
-// @pyjt(display_memory_info)
-void display_memory_info(const char* fileline="");
-
-// @pyjt(MemInfo)
-struct MemInfo {
-    // @pyjt(total_cpu_ram)
-    int64 total_cpu_ram;
-    // @pyjt(total_cuda_ram)
-    int64 total_cuda_ram;
-
-    inline MemInfo(const MemInfo&) = default;
-
-    MemInfo();
-};
-
-extern MemInfo mem_info;
-
-// @pyjt(get_mem_info)
-inline MemInfo get_mem_info() { return mem_info; }
 
 } // jittor

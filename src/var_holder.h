@@ -154,6 +154,9 @@ struct VarHolder {
         #endif
         std::memcpy(var->mem_ptr, array.ptr, size);
     }
+
+    // @pyjt(debug_msg)
+    string debug_msg();
 };
 
 // @pyjt(sync)
