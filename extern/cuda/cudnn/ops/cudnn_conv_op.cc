@@ -199,9 +199,11 @@ void CudnnConvOp::jit_run() {
             for (int i = 0; i < num_algos; i++) {
                 size_t sz;
                 cudnnStatus_t ret = cudnnGetConvolutionForwardWorkspaceSize(
-            handle_, cudnnIdesc, cudnnFdesc, cudnnConvDesc, 
-            cudnnOdesc, algos[i], &sz);
-                if (CUDNN_STATUS_SUCCESS == ret && sz > max_ws_size && sz<512*1024*1024) max_ws_size = sz;
+                    handle_, cudnnIdesc, cudnnFdesc, cudnnConvDesc, 
+                    cudnnOdesc, algos[i], &sz);
+                // continue if use too much workspace
+                if (sz*4 > mem_info.total_cuda_ram) continue;
+                if (CUDNN_STATUS_SUCCESS == ret && sz > max_ws_size) max_ws_size = sz;
             } 
             size_t allocation;
             void* ws = exe.allocator->alloc(max_ws_size, allocation);

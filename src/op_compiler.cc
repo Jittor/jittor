@@ -758,7 +758,7 @@ string OpCompiler::__get_fused_src(
         "for", "const", "auto", "get_random_engine",
         "int", "float", "bool", "CHECK", "STRINGIZE",
         "void", "__restrict__", "if", "true", "false",
-        "Op", "Var", "Node", "itof"
+        "Op", "Var", "Node", "itof", "assert", "ASSERT"
     };
     auto not_change = [&](const string& s) -> bool {
         if (unchanged.count(s)) return true;
@@ -914,7 +914,9 @@ string OpCompiler::__get_fused_src(
     fused_kernel = fused_kernel_args + "\n" + fused_kernel;
     LOGvvvv << "Fused kernel:\n" >> fused_kernel;
     
-    auto fused_src = fused_begin + fused_includes + "\n#include \"fused_op.h\"\n" + 
+    auto fused_src = fused_begin + fused_includes +
+        "\n#include <assert.h>\n" + 
+        "\n#include \"fused_op.h\"\n" + 
         fused_defines + '\n' +
         "void jittor::FusedOp::jit_run() {\n" + fused_kernel + "\n}\n";
         

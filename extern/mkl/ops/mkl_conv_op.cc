@@ -44,7 +44,7 @@ static inline void set_shape(Var* x, const char* f, const string& format, int a,
         shape[0], shape[1], shape[2], shape[3]));
 }
 
-MklConvOp::MklConvOp(Var* x, Var* w, int stride, int padding, int dilation, string xformat, string wformat, string yformat)
+MklConvOp::MklConvOp(Var* x, Var* w, int stride, int padding, int dilation, int groups, string xformat, string wformat, string yformat)
     : x(x), w(w), stride(stride), padding(padding), dilation(dilation), 
       xformat(move(xformat)), wformat(move(wformat)), yformat(move(yformat)) {
     y = create_output(nullptr, dtype_infer(x->ns, w->ns));

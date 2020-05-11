@@ -35,6 +35,8 @@ namespace jittor {
 #define tanh(T,x) ((T) ::tanhf((x)))
 #define atanh(T,x) ((T) ::atanhf((x)))
 
+#define sigmoid(T,x) ((T) (1.0f/(1.0f+::expf(-(x)))))
+
 #else
 #define abs(T,x) std::abs(x)
 #define log(T,x) std::log((T)(x))
@@ -58,6 +60,8 @@ namespace jittor {
 #define atan(T,x) ((T) std::atan((x)))
 #define tanh(T,x) ((T) std::tanh((x)))
 #define atanh(T,x) ((T) std::atanh((x)))
+
+#define sigmoid(T,x) ((T) (1.0f/(1.0f+std::exp(-(x)))))
 
 #endif
 

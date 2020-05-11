@@ -16,8 +16,9 @@ with lock.lock_scope():
     from jittor_core import *
     from jittor_core.ops import *
     from . import compile_extern
-    from .compile_extern import mkl_ops, mpi, mpi_ops, \
-        cudnn, curand, cublas
+    from .compile_extern import mkl_ops, mpi, mpi_ops
+    if has_cuda:
+        from .compile_extern import cudnn, curand, cublas
 
 import contextlib
 import numpy as np
@@ -403,7 +404,8 @@ Var.unsqueeze = unsqueeze
 
 def squeeze(x, dim):
     shape = list(x.shape)
-    assert dim < len(shape)
+    if dim < 0: dim += len(shape)
+    assert dim < len(shape) and dim >= 0
     assert shape[dim] == 1
     return x.reshape(shape[:dim] + shape[dim+1:])
 Var.squeeze = squeeze
@@ -446,6 +448,13 @@ def fetch_var(var, func, *args, **kw):
     core.fetch([var], lambda a: func(a, *args, **kw))
 Var.fetch = fetch_var
 del fetch_var
+
+def display_memory_info():
+    import inspect, os
+    f = inspect.currentframe()
+    fileline = inspect.getframeinfo(f.f_back)
+    fileline = f"{os.path.basename(fileline.filename)}:{fileline.lineno}"
+    core.display_memory_info(fileline)
 
 def import_vars(data):
     ''' Load variables into current scopes

@@ -108,7 +108,12 @@ struct NanoVector {
 
     // @pyjt(__map_getitem__)
     inline NanoVector slice(Slice slice) {
-        if (slice.mask&2) slice.stop = size();
+        if (slice.step>0) {
+            if (slice.mask&2) slice.stop = size();
+        } else {
+            if (slice.mask&1) slice.start = size()-1;
+            if (slice.mask&2) slice.stop = 0;
+        }
         if (slice.start<0) slice.start += size();
         if (slice.stop<0) slice.stop += size();
         ASSERT(slice.start>=0 && slice.stop>=0 && slice.start<size() && slice.stop<=size())

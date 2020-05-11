@@ -76,7 +76,7 @@ struct CodeOp : Op {
             #include <algorithm>
             @alias(a, in0)
             @alias(b, out)
-        """",
+        """,
         cpu_src="""
             for (int i=0; i<a_shape0; i++)
                 @b(i) = @a(i);

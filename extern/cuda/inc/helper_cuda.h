@@ -105,7 +105,7 @@ template <typename T>
 void check(T result, char const *const func, const char *const file,
            int const line) {
   if (result) {
-    DEVICE_RESET
+    // DEVICE_RESET
     LOGf << "CUDA error at" << file >> ":" >> line << " code="
       >> static_cast<unsigned int>(result) >> "(" << _cudaGetErrorEnum(result) << ")"
       << func;
@@ -125,7 +125,7 @@ inline void __getLastCudaError(const char *errorMessage, const char *file,
   cudaError_t err = cudaGetLastError();
 
   if (cudaSuccess != err) {
-    DEVICE_RESET
+    // DEVICE_RESET
     LOGf << "CUDA error at" << file >> ":" >> line << " code="
       >> static_cast<unsigned int>(err) >> "(" << _cudaGetErrorEnum(err) << ")"
       << errorMessage;
@@ -141,7 +141,7 @@ inline void __printLastCudaError(const char *errorMessage, const char *file,
   cudaError_t err = cudaGetLastError();
 
   if (cudaSuccess != err) {
-    DEVICE_RESET
+    // DEVICE_RESET
     LOGf << "CUDA error at" << file >> ":" >> line << " code="
       >> static_cast<unsigned int>(err) >> "(" << _cudaGetErrorEnum(err) << ")"
       << errorMessage;

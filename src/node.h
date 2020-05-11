@@ -12,6 +12,7 @@
 namespace jittor {
 
 extern unordered_map<void*, int64> lived_nodes;
+extern int64 total_node;
 
 struct NodeFlags {
     typedef uint16 nf_t;
@@ -107,7 +108,7 @@ struct Node {
 
 #ifdef NODE_MEMCHECK
     inline Node() {
-        lived_nodes[(void*)this] = lived_nodes.size()+1;
+        lived_nodes[(void*)this] = ++total_node;
         registe_node_trace(this);
     }
 
@@ -132,7 +133,13 @@ struct Node {
     #endif
     }
     void memcheck_all_exist() const;
-    int64 __id() const;
+    inline int64 __id() const {
+    #ifdef NODE_MEMCHECK
+        return lived_nodes.at((void*)this);
+    #else
+        return 0;
+    #endif
+    }
     // release from counter and memory checker
     void __release();
     #define CHECK_NODE_EXIST(node) \

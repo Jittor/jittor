@@ -76,6 +76,7 @@ namespace jittor {
     m(acos) \
     m(cosh) \
     m(acosh) \
+    m(sigmoid) \
 
 struct NanoString;
 #define DECLEAR_NS(T) extern NanoString ns_##T;

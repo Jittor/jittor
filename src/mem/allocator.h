@@ -5,6 +5,7 @@
 // ***************************************************************
 #pragma once
 #include "common.h"
+#include "mem/mem_info.h"
 
 namespace jittor {
 

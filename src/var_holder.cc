@@ -3,6 +3,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include <sstream>
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>
 #include <helper_cuda.h>
@@ -120,6 +121,12 @@ vector<ArrayArgs> fetch_sync(const vector<VarHolder*>& vh) {
         ret[i].dtype = vh[i]->var->dtype();
     }
     return ret;
+}
+
+string VarHolder::debug_msg() {
+    std::stringstream ss;
+    ss << var;
+    return ss.str();
 }
 
 } // jittor

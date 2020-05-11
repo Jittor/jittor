@@ -16,7 +16,14 @@ const char* CudaDeviceAllocator::name() const {return "cuda_device";}
 
 void* CudaDeviceAllocator::alloc(size_t size, size_t& allocation) {
     void* ptr;
-    checkCudaErrors(cudaMalloc(&ptr, size));
+    try {
+        checkCudaErrors(cudaMalloc(&ptr, size));
+        return ptr;
+    } catch (...) {}
+    LOGw << "Unable to alloc cuda device memory, use unify memory instead. "
+        "This may cause low performance.";
+    display_memory_info(__FILELINE__);
+    checkCudaErrors(cudaMallocManaged(&ptr, size));
     return ptr;
 }
 

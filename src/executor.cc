@@ -380,6 +380,12 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
             // var->finish_pending_liveness();
             var->finish_pending_liveness();
         } catch (const std::exception& e) {
+            // log memory info
+            display_memory_info(__FILELINE__);
+            // log jit_key and file location
+            op->do_prepare();
+            string jit_src_path = Op::get_filename_from_jit_key(jk.to_cstring(), ".cc");
+            LOGe << "[Error] source file location:" << jit_src_path;
             if (is_fused_op) {
                 LOGf << "Execute fused operator(" >> rid >> '/' >> queue.size() >> ")"
                     << "failed:" << fused_op.ops << "\n\nReason: " >> e.what();

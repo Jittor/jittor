@@ -16,7 +16,7 @@ struct MklConvBackwardWOp : Op {
     int kernel_size, stride, padding, dilation;
     string xformat, wformat, yformat;
 
-    MklConvBackwardWOp(Var* x, Var* y, int kernel_size, int stride, int padding, int dilation, string xformat="abcd", string wformat="oihw", string yformat="abcd");
+    MklConvBackwardWOp(Var* x, Var* y, int kernel_size, int stride, int padding, int dilation, int groups, string xformat="abcd", string wformat="oihw", string yformat="abcd");
     
     const char* name() const override { return "mkl_conv_backward_w"; }
     void infer_shape() override;

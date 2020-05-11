@@ -6,6 +6,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include "mem/allocator.h"
 #include "var.h"
 #include "cudnn_conv_backward_x_op.h"
 #include "cudnn_warper.h"
@@ -196,6 +197,8 @@ void CudnnConvBackwardXOp::jit_run() {
             for (int i = 0; i < num_algos; i++) {
                 size_t sz;
                 cudnnStatus_t ret = cudnnGetConvolutionBackwardDataWorkspaceSize(handle_, cudnnFdesc, cudnnOdesc, cudnnConvDesc, cudnnIdesc, algos[i], &sz);
+                // continue if use too much workspace
+                if (sz*4 > mem_info.total_cuda_ram) continue;
                 if (CUDNN_STATUS_SUCCESS == ret && sz > max_ws_size) max_ws_size = sz;
             } 
             size_t allocation;
