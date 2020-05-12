@@ -16,7 +16,7 @@ struct CudnnConvBackwardXOp : Op {
     int xh, xw, stride, padding, dilation, groups;
     string xformat, wformat, yformat;
 
-    CudnnConvBackwardXOp(Var* w, Var* y, int height, int width, int stride, int padding, int dilation, int groups, string xformat="abcd", string wformat="oihw", string yformat="abcd");
+    CudnnConvBackwardXOp(Var* w, Var* y, int height, int width, int stride, int padding, int dilation, int groups=1, string xformat="abcd", string wformat="oihw", string yformat="abcd");
     
     const char* name() const override { return "cudnn_conv_backward_x"; }
     void infer_shape() override;

@@ -77,7 +77,7 @@ def check_forward(xshape, wshape, stride, padding, dilation, groups, use_cuda, n
 
     # only check cudnn
     with jt.log_capture_scope(use_cuda=use_cuda, enable_tuner=1,
-        log_v=10, log_vprefix="conv_tuner.cc=1000"
+        log_v=10, log_vprefix="op.cc=100,conv_tuner=1000"
     ) as raw_log:
         x = jt.random(xshape)
         w = jt.random(wshape)
@@ -87,6 +87,8 @@ def check_forward(xshape, wshape, stride, padding, dilation, groups, use_cuda, n
         cy = test_func(x, w, stride, padding, dilation, groups)
         cy.sync()
 
+    logs = find_log_with_re(raw_log, "(Jit op key (not )?found: .*conv.*)")
+    assert len(logs)==1
     assert np.allclose(y.data, cy.data)
 
 
@@ -96,11 +98,12 @@ def check_backward(xshape, wshape, stride, padding, dilation, groups, use_cuda, 
 
     # only check cudnn
     with jt.log_capture_scope(use_cuda=use_cuda, enable_tuner=1,
-        log_v=10, log_vprefix="conv_tuner.cc=1000"
+        log_v=10, log_vprefix="op.cc=100,conv_tuner=1000"
     ) as raw_log:
         x = jt.random(xshape)
         w = jt.random(wshape)
         y = test_func(x, w, stride, padding, dilation, groups)
+        y.sync()
         dx, dw = jt.grad(y, [x, w])
         jt.sync([y, dx, dw])
     with jt.flag_scope(use_cuda=0, enable_tuner=0, compile_options={"test":233}):
@@ -108,6 +111,8 @@ def check_backward(xshape, wshape, stride, padding, dilation, groups, use_cuda, 
         cdx, cdw = jt.grad(cy, [x, w])
         jt.sync([cy, cdx, cdw])
 
+    logs = find_log_with_re(raw_log, "(Jit op key (not )?found: .*conv.*)")
+    assert len(logs)==3
     assert np.allclose(y.data, cy.data)
     assert np.allclose(dw.data, cdw.data, 1e-3), (dw.data, cdw.data, np.abs(dw.data - cdw.data).max())
     assert np.allclose(dx.data, cdx.data, 1e-3), (dx.data, cdx.data, np.abs(dx.data - cdx.data).max())
@@ -121,12 +126,24 @@ class TestGroupConvTuner(unittest.TestCase):
             check_forward([10,8,40,50], [16,8//groups,5,5], 1, 1, 2, groups, 1, False)
             check_forward([10,8,40,50], [16,8//groups,4,4], 3, 1, 3, groups, 1, False)
 
+    def test_forward(self):
+        for groups in [2, 4, 8]:
+            check_forward([10,8,100,100], [8,8//groups,3,3], 1, 0, 1, groups, 0, False)
+            check_forward([10,8,40,50], [16,8//groups,5,5], 1, 1, 2, groups, 0, False)
+            check_forward([10,8,40,50], [16,8//groups,4,4], 3, 1, 3, groups, 0, False)
+
     @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
     def test_backward_cuda(self):
         for groups in [2, 4, 8]:
             check_backward([10,8,100,100], [8,8//groups,3,3], 1, 0, 1, groups, 1, False)
             check_backward([10,8,40,50], [16,8//groups,5,5], 1, 1, 2, groups, 1, False)
             check_backward([10,8,40,50], [16,8//groups,4,4], 3, 1, 3, groups, 1, False)
+
+    def test_backward(self):
+        for groups in [2, 4, 8]:
+            check_backward([10,8,100,100], [8,8//groups,3,3], 1, 0, 1, groups, 0, False)
+            check_backward([10,8,40,50], [16,8//groups,5,5], 1, 1, 2, groups, 0, False)
+            check_backward([10,8,40,50], [16,8//groups,4,4], 3, 1, 3, groups, 0, False)
             
         
 if __name__ == "__main__":

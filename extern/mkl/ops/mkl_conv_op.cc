@@ -45,7 +45,7 @@ static inline void set_shape(Var* x, const char* f, const string& format, int a,
 }
 
 MklConvOp::MklConvOp(Var* x, Var* w, int stride, int padding, int dilation, int groups, string xformat, string wformat, string yformat)
-    : x(x), w(w), stride(stride), padding(padding), dilation(dilation), 
+    : x(x), w(w), stride(stride), padding(padding), dilation(dilation), groups(groups),
       xformat(move(xformat)), wformat(move(wformat)), yformat(move(yformat)) {
     y = create_output(nullptr, dtype_infer(x->ns, w->ns));
     if (!this->yformat.size())
@@ -58,7 +58,7 @@ void MklConvOp::infer_shape() {
     int xn, xc, xh, xw, wh, ww, wci, wco, yn, yc, yh, yw;
     get_shape(x, "abcd", xformat, xn, xc, xh, xw);
     get_shape(w, "oihw", wformat, wco, wci, wh, ww);
-    ASSERTop(wci,==,xc);
+    ASSERTop(wci * groups,==,xc);
     yn = xn, yc = wco;
     yh = (xh+padding*2-wh*dilation+dilation-1)/stride+1;
     yw = (xw+padding*2-ww*dilation+dilation-1)/stride+1;
@@ -124,18 +124,22 @@ void MklConvOp::jit_run() {
     get_shape(y, "abcd", yformat, yn, yc, yh, yw);
 
     memory::dims conv1_src_tz = {xn, xc, xh, xw};
-    memory::dims conv1_weights_tz = {wco, wci, wh, ww};
+    memory::dims conv1_weights_tz = groups>1
+        ? memory::dims{groups, wco/groups, wci, wh, ww} 
+        : memory::dims{wco, wci, wh, ww};
     memory::dims conv1_dst_tz = {yn, yc, yh, yw};
     memory::dims conv1_strides = { stride, stride };
     memory::dims conv1_padding = { padding, padding };
     memory::dims conv1_dilation = { dilation-1, dilation-1 };
+
+    if (groups>1) ASSERT(tag::@WFORMAT == tag::oihw);
 
     auto user_src_memory = memory(
             { { conv1_src_tz }, dt::@Tx, tag::@XFORMAT }, eng, x->mem_ptr);
     auto user_dst_memory = memory(
             { { conv1_dst_tz }, dt::@Ty, tag::@YFORMAT }, eng, y->mem_ptr);
     auto user_weights_memory = memory(
-        { { conv1_weights_tz }, dt::@Tw, tag::@WFORMAT }, eng, w->mem_ptr);
+        { { conv1_weights_tz }, dt::@Tw, groups>1 ? tag::goihw : tag::@WFORMAT }, eng, w->mem_ptr);
             
     auto conv1_src_md = memory::desc({ conv1_src_tz }, dt::@Tx, tag::any);
     auto conv1_weights_md
