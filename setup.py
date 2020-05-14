@@ -1,7 +1,7 @@
 error_msg = "Jittor only supports Ubuntu>=16.04 currently."
 
 try:
-    with open("/etc/os-release") as f:
+    with open("/etc/os-release", "r", encoding='utf8') as f:
         s = f.read().splitlines()
         m = {}
         for line in s:
@@ -16,7 +16,7 @@ from setuptools import setup, find_packages
 import os
 
 path = os.path.dirname(__file__)
-with open(os.path.join(path, "README.src.md")) as fh:
+with open(os.path.join(path, "README.src.md"), "r", encoding='utf8') as fh:
     long_description = fh.read()
 
 setuptools.setup(
