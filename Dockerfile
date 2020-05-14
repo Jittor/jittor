@@ -1,17 +1,27 @@
-FROM ubuntu:20.04
+# docker build commands
+#    docker build --tag jittor/jittor:latest . --network host
+#    docker build --tag jittor/jittor-cuda:latest --build-arg FROM_IMAGE="nvidia/cuda:10.2-cudnn7-devel-ubuntu18.04" . --network host
+ARG FROM_IMAGE=ubuntu:18.04
+
+FROM ${FROM_IMAGE}
 
 RUN apt update && apt install ca-certificates -y
 
 # change tsinghua mirror
 RUN echo \
-"deb [trusted=yes] https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ focal main restricted universe multiverse\n\
-deb [trusted=yes] https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ focal-updates main restricted universe multiverse\n\
-deb [trusted=yes] https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ focal-backports main restricted universe multiverse\n\
-deb [trusted=yes] https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ focal-security main restricted universe multiverse" > /etc/apt/sources.list
+"deb [trusted=yes] https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ bionic main restricted universe multiverse\n\
+deb [trusted=yes] https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ bionic-updates main restricted universe multiverse\n\
+deb [trusted=yes] https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ bionic-backports main restricted universe multiverse\n\
+deb [trusted=yes] https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ bionic-security main restricted universe multiverse" > /etc/apt/sources.list
 
 RUN apt update && apt install wget \
-        python3 python3-dev python3-pip \
+        python3.7 python3.7-dev \
         g++ build-essential -y
+
+WORKDIR /usr/src/jittor
+
+RUN apt download python3-distutils && dpkg-deb -x ./python3-distutils* / \
+    && wget -O - https://bootstrap.pypa.io/get-pip.py | python3.7
 
 ENV PYTHONIOENCODING utf8
 
@@ -23,13 +33,15 @@ RUN pip3 install  \
         numpy \
         tqdm \
         pillow \
-        astunparse
+        astunparse \
+        notebook
 
-WORKDIR /usr/src/jittor
 COPY . .
 
 RUN pip3 install . --timeout 100
 
-RUN python3 -m jittor.test.test_example
+RUN python3.7 -m jittor.test.test_example
 
 RUN rm -rf ~/.cache/jittor/default
+
+CMD python3.7 -m jittor.notebook --allow-root
