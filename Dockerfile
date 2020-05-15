@@ -42,4 +42,4 @@ RUN python3.7 -m jittor.test.test_example
 
 RUN rm -rf ~/.cache/jittor/default
 
-CMD python3.7 -m jittor.notebook --allow-root
+CMD python3.7 -m jittor.notebook --allow-root --ip=0.0.0.0
