@@ -76,6 +76,17 @@ We provide some jupyter notebooks to help you quick start with Jittor.
 ## Install
 
 
+
+We provide a Docker installation method to save you from configuring the environment. The Docker installation method is as follows:
+
+```
+# CPU only
+docker run -it --network host jittor/jittor
+# CPU and CUDA
+docker run -it --network host jittor/jittor-cuda
+```
+
+
 Jittor is written in Python and C++. It requires a compiler for JIT compilation, Currently, we support four compilers:
 
 

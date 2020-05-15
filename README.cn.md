@@ -76,6 +76,18 @@ for i,(x,y) in enumerate(get_data(n)):
 
 ## 安装
 
+我们提供了Docker安装方式，免去您配置环境，Docker安装方法如下：
+
+
+```
+# CPU only
+docker run -it --network host jittor/jittor
+# CPU and CUDA
+docker run -it --network host jittor/jittor-cuda
+```
+
+关于Docker安装的详细教程，可以参考[Windows/Mac/Linux通过Docker安装计图](https://cg.cs.tsinghua.edu.cn/jittor/tutorial/2020-5-15-00-00-docker/)
+
 
 Jittor使用Python和C++编写。 它需要用于即时编译的编译器。当前，我们支持三种编译器：
 

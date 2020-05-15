@@ -90,9 +90,10 @@ def install_cub(root_folder):
     
         with tarfile.open(fullname, "r") as tar:
             tar.extractall(root_folder)
-    
         assert 0 == os.system(f"cd {dirname}/examples && "
-            f"{nvcc_path} device/example_device_radix_sort.cu -O2 -I.. -o test && ./test")
+                    f"{nvcc_path} device/example_device_radix_sort.cu -O2 -I.. -o test")
+        if core.get_device_count():
+            assert 0 == os.system(f"cd {dirname}/examples && ./test")
     return dirname
 
 def setup_cub():

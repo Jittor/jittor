@@ -1,6 +1,4 @@
 # docker build commands
-#    docker build --tag jittor/jittor:latest . --network host
-#    docker build --tag jittor/jittor-cuda:latest --build-arg FROM_IMAGE="nvidia/cuda:10.2-cudnn7-devel-ubuntu18.04" . --network host
 ARG FROM_IMAGE=ubuntu:18.04
 
 FROM ${FROM_IMAGE}
