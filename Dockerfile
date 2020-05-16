@@ -34,6 +34,8 @@ RUN pip3 install  \
         astunparse \
         notebook
 
+RUN pip3 install matplotlib
+
 COPY . .
 
 RUN pip3 install . --timeout 100
