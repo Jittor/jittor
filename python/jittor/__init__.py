@@ -616,6 +616,10 @@ class Module:
         with open(path, 'wb') as f:
             pickle.dump(params_dict, f, pickle.HIGHEST_PROTOCOL)
 
+    def load(self, path):
+        with open(path, 'rb') as f:
+            self.load_parameters(pickle.load(f))
+
     def eval(self):
         def callback(parents, k, v, n):
             if isinstance(v, Module) and hasattr(v, "is_train"):
