@@ -21,7 +21,7 @@ with open(os.path.join(path, "README.src.md"), "r", encoding='utf8') as fh:
 
 setuptools.setup(
     name='jittor',  
-    version='1.1.1',
+    version='1.1.2',
     # scripts=[],
     author="Jittor Group",
     author_email="ran.donglang@gmail.com",
