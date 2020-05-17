@@ -603,3 +603,7 @@ class Sequential(Module):
             parents.pop()
         if callback_leave:
             callback_leave(parents, k, self, n_children)
+    def append(mod):
+        self.layers.append(mod)
+
+ModuleList = Sequential
