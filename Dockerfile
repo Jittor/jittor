@@ -36,6 +36,8 @@ RUN pip3 install  \
 
 RUN pip3 install matplotlib
 
+RUN apt install openmpi-bin openmpi-common libopenmpi-dev -y
+
 COPY . .
 
 RUN pip3 install . --timeout 100
