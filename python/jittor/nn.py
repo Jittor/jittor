@@ -585,7 +585,7 @@ class Upsample(Module):
 
 class Sequential(Module):
     def __init__(self, *args):
-        self.layers = args
+        self.layers = list(args)
     def __getitem__(self, idx):
         return self.layers[idx]
     def execute(self, x):
