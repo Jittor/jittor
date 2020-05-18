@@ -21,7 +21,7 @@ with open(os.path.join(path, "README.md"), "r", encoding='utf8') as fh:
 
 setuptools.setup(
     name='jittor',  
-    version='1.1.3',
+    version='1.1.3.1',
     # scripts=[],
     author="Jittor Group",
     author_email="ran.donglang@gmail.com",
@@ -44,3 +44,6 @@ setuptools.setup(
         "astunparse",
     ],
  )
+
+# python3.7 setup.py sdist
+# python3.7 -m twine upload dist/*
