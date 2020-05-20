@@ -252,6 +252,47 @@ class Adam(object):
             p.detach_inplace()
         jt.sync(self.no_grad_parameters)
 
+class RMSprop(object):
+    """ Usage:
+    optimizer = nn.Adam(model.parameters(), lr)
+    optimizer.step(loss)
+    """
+    def __init__(self, parameters, lr=1e-2, eps=1e-8, alpha=0.99, param_sync_iter=10000):
+        self.lr = lr
+        self.eps = eps
+        self.alpha = alpha
+        self.rmsp_step = 0
+        self.param_sync_iter = param_sync_iter
+        
+        self.no_grad_parameters = []
+        self.parameters = []
+        self.values = []
+        for p in parameters:
+            if jt.mpi:
+                p.assign(p.mpi_broadcast().detach())
+            if p.is_stop_grad():
+                self.no_grad_parameters.append(p)
+                continue
+            self.parameters.append(p)
+            self.values.append(jt.zeros(p.shape, p.dtype).stop_fuse().stop_grad())
+
+    def step(self, loss):
+        self.rmsp_step += 1
+        ps = self.parameters
+        gs = jt.grad(loss, ps)
+        if jt.mpi:
+            for g in gs:
+                g.assign(g.mpi_all_reduce("mean"))
+            if self.rmsp_step%self.param_sync_iter==0:
+                for p in ps:
+                    p.assign(p.mpi_all_reduce("mean"))
+        n, alpha = float(self.rmsp_step), self.alpha
+        for p, g, v in zip(ps, gs, self.values):
+            v.assign(alpha * v + (1-alpha) * g * g)
+            p -= self.lr * g / (jt.sqrt(v) + self.eps)
+            p.detach_inplace()
+        jt.sync(self.no_grad_parameters)
+
 def softmax(x, dim = None):
     if dim is None:
         x = (x - x.max()).exp()
