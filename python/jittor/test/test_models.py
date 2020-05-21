@@ -74,6 +74,7 @@ class test_models(unittest.TestCase):
         pytorch_test_img = to_cuda(torch.Tensor(test_img))
         jittor_test_img = jt.array(test_img)
         for test_model in self.models:
+            print("test model", test_model)
             if test_model == "inception_v3":
                 test_img = np.random.random((bs,3,300,300)).astype('float32')
                 pytorch_test_img = to_cuda(torch.Tensor(test_img))

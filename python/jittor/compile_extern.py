@@ -292,6 +292,9 @@ def setup_nccl():
         if nccl_home is None: return
         nccl_include_path = os.path.join(nccl_home, "build", "include")
         nccl_lib_path = os.path.join(nccl_home, "build", "lib")
+        
+    if not inside_mpi():
+        return
 
     nccl_lib_name = os.path.join(nccl_lib_path, "libnccl.so")
     assert os.path.isdir(nccl_include_path)

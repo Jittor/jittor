@@ -320,6 +320,7 @@ class Conv(Module):
                 f'i4*{self.stride[0]}-{self.padding[0]}+i6*{self.dilation[0]}', # Hid+Khid
                 f'i5*{self.stride[1]}-{self.padding[1]}+i7*{self.dilation[1]}', # Wid+KWid
             ])
+            xx.compile_options = {"G":G}
             # w: [oc, CpG, Kh, Kw]
             ww = self.weight.reindex([N, G, oc//G, CpG, oh, ow, Kh, Kw], [
                 f'i1*{oc//G}+i2',
