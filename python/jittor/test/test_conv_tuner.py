@@ -14,7 +14,7 @@ from jittor import compile_extern
 # TODO: compare with pytorch
 
 from jittor.test.test_log import find_log_with_re
-if compile_extern.has_cuda:
+if jt.has_cuda:
     from jittor.compile_extern import cublas_ops, cudnn_ops
 else:
     cublas_ops = cudnn_ops = None
@@ -28,10 +28,7 @@ def conv_nchw(x, in_planes, out_planes, kernel_size, padding, stride = 1, dilati
     
     assert C==_C
     if w_ is None:
-        if init_method==None:
-            w = jt.make_var([Kc, _C, Kh, Kw], init=lambda *a: init.relu_invariant_gauss(*a, mode="fan_out"))
-        else:
-            w = jt.make_var([Kc, _C, Kh, Kw], init=init_method)
+        assert 0
     else:
         w = w_
     oh = (H-Kh*dilation+dilation-1+padding*2)//stride+1
@@ -56,10 +53,7 @@ def conv_nhwc(x, in_planes, out_planes, kernel_size, padding, stride = 1, dilati
     
     assert C==_C
     if w_ is None:
-        if init_method==None:
-            w = jt.make_var([Kc, _C, Kh, Kw], init=lambda *a: init.relu_invariant_gauss(*a, mode="fan_out"))
-        else:
-            w = jt.make_var([Kc, _C, Kh, Kw], init=init_method)
+        assert 0
     else:
         w = w_
     oh = (H-Kh*dilation+dilation-1+padding*2)//stride+1

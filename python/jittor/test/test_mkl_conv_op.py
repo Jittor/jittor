@@ -59,7 +59,7 @@ class TestMklConvOp(unittest.TestCase):
 
         a_jt = jt.array(a)
         b_jt = jt.array(b)
-        with jt.var_scope(enable_tuner=0,compile_options={"test_mkl_conv":1}):
+        with jt.flag_scope(enable_tuner=0,compile_options={"test_mkl_conv":1}):
             c_jt = conv(a_jt, b_jt, 3, 2).data
         with jt.log_capture_scope(
             enable_tuner=1,
@@ -84,7 +84,7 @@ class TestMklConvOp(unittest.TestCase):
 
             a_jt = jt.array(a)
             b_jt = jt.array(b)
-            with jt.var_scope(enable_tuner=0,
+            with jt.flag_scope(enable_tuner=0,
                 compile_options={"test_mkl_conv":uid[0]}):
                 c_jt = conv_nhwc_hwio(a_jt, b_jt, stride, pad).data
             with jt.log_capture_scope(
@@ -118,7 +118,7 @@ class TestMklConvOp(unittest.TestCase):
         a_jt = jt.array(a)
         b_jt = jt.array(b)
 
-        with jt.var_scope(
+        with jt.flag_scope(
             enable_tuner=0,
             compile_options={"test_mkl_conv":1}
         ):
@@ -164,7 +164,7 @@ class TestMklConvOp(unittest.TestCase):
         a_jt = jt.array(a)
         b_jt = jt.array(b)
 
-        with jt.var_scope(
+        with jt.flag_scope(
             enable_tuner=0,
             compile_options={"test_mkl_conv":1}
         ):

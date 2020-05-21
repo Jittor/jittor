@@ -12,7 +12,7 @@ import os
 from PIL import Image
 import matplotlib.pyplot as plt
 import cv2
-from dataset import Dataset, dataset_root
+from .dataset import Dataset, dataset_root
 
 class VOC(Dataset):
     NUM_CLASSES = 21

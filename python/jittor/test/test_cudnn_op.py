@@ -10,7 +10,7 @@ import numpy as np
 from jittor import compile_extern
 
 from jittor.test.test_log import find_log_with_re
-if compile_extern.has_cuda:
+if jt.has_cuda:
     from jittor.compile_extern import cublas_ops, cudnn_ops
 else:
     cublas_ops = cudnn_ops = None

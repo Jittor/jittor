@@ -15,6 +15,8 @@ import numpy as np
 from jittor.test.test_mpi import run_mpi_test
 
 mpi = jt.compile_extern.mpi
+if mpi:
+    n = mpi.world_size()
 
 class FakeMpiBatchNorm(nn.Module):
     def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=None, is_train=True):
@@ -57,7 +59,8 @@ class TestMpiBatchnorm(unittest.TestCase):
         mpi = jt.compile_extern.mpi
         data = np.random.rand(30,3,10,10).astype("float32")
         x1 = jt.array(data)
-        x2 = jt.array(data[mpi.world_rank()*10:(mpi.world_rank()+1)*10,...])
+        stride = 30//n
+        x2 = jt.array(data[mpi.world_rank()*stride:(mpi.world_rank()+1)*stride,...])
         
         bn1 = nn.BatchNorm(3, sync=False)
         bn2 = nn.BatchNorm(3, sync=True)
@@ -75,7 +78,8 @@ class TestMpiBatchnorm(unittest.TestCase):
         mpi = jt.compile_extern.mpi
         data = np.random.rand(30,3,10,10).astype("float32")
         global_x = jt.array(data)
-        x = jt.array(data[mpi.world_rank()*10:(mpi.world_rank()+1)*10,...])
+        stride = 30//n
+        x = jt.array(data[mpi.world_rank()*stride:(mpi.world_rank()+1)*stride,...])
         
         bn1 = nn.BatchNorm(3, sync=True)
         bn2 = FakeMpiBatchNorm(3)
@@ -98,7 +102,7 @@ class TestMpiBatchnorm(unittest.TestCase):
 @unittest.skipIf(not jt.compile_extern.has_mpi, "no mpi found")
 class TestMpiBatchnormEntry(unittest.TestCase):
     def test(self):
-        run_mpi_test(3, "test_mpi_batchnorm")
+        run_mpi_test(2, "test_mpi_batchnorm")
 
 if __name__ == "__main__":
     unittest.main()

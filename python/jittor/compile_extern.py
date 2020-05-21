@@ -6,7 +6,7 @@
 import os, sys, shutil
 from .compiler import *
 from jittor_utils import run_cmd, get_version
-from jittor.dataset.utils import download_url_to_local
+from jittor.utils.misc import download_url_to_local
 
 def search_file(dirs, name):
     for d in dirs:
@@ -256,6 +256,11 @@ def install_nccl(root_folder):
         LOG.i("Downloading nccl...")
         download_url_to_local(url, filename, root_folder, true_md5)
 
+        if core.get_device_count() == 0:
+            return
+        if not inside_mpi():
+            return
+
         import tarfile
         with tarfile.open(fullname, "r") as tar:
             tar.extractall(root_folder)
@@ -269,7 +274,7 @@ def setup_nccl():
     global nccl_ops, use_nccl
     use_nccl = os.environ.get("use_nccl", "1")=="1"
     nccl_ops = None
-    if not has_cuda or mpi is None:
+    if not has_cuda or not has_mpi:
         use_nccl = False
         return
     if not use_nccl: return
@@ -284,6 +289,7 @@ def setup_nccl():
         
         make_cache_dir(nccl_path)
         nccl_home = install_nccl(nccl_path)
+        if nccl_home is None: return
         nccl_include_path = os.path.join(nccl_home, "build", "include")
         nccl_lib_path = os.path.join(nccl_home, "build", "lib")
 
@@ -343,8 +349,6 @@ def setup_mpi():
     else:
         use_mpi = True
         has_mpi = True
-    if not inside_mpi():
-        use_mpi = False
     if not use_mpi:
         return
 
@@ -388,6 +392,8 @@ def setup_mpi():
         setattr(core.Var, k, warper(mpi_ops.__dict__[k]))
 
 setup_mpi()
+if not inside_mpi():
+    mpi = None
 setup_nccl()
 
 setup_cutt()

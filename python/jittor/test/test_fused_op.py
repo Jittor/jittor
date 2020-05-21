@@ -32,7 +32,7 @@ def performance_test_scope(warmup=0, rerun=0, **args):
         jt.profiler.start(warmup, rerun)
     report = []
     try:
-        with jt.var_scope(**args):
+        with jt.flag_scope(**args):
             yield report
     finally:
         jt.profiler.stop()

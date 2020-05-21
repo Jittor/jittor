@@ -17,6 +17,8 @@ with lock.lock_scope():
     from jittor_core.ops import *
     from . import compile_extern
     from .compile_extern import mkl_ops, mpi, mpi_ops
+    if core.get_device_count() == 0:
+        has_cuda = compile_extern.has_cuda = compiler.has_cuda = False
     if has_cuda:
         from .compile_extern import cudnn, curand, cublas
 
@@ -28,92 +30,6 @@ import types
 import pickle
 import sys
 import traceback
-
-def dfs(scope, vars):
-    for v in scope.children.values():
-        if type(v) == Scope:
-            dfs(v, vars)
-        else:
-            vars.append(v)
-
-def dfs_records(scope, records):
-    for v in scope.children.values():
-        if type(v) == Scope:
-            dfs_records(v, records)
-    for v in scope.records.values():
-        records.append(v)
-
-class Scope:
-    def __init__(self, parent=None, name=None):
-        self.children = OrderedDict()
-        self.index = {}
-        self.records = OrderedDict()
-        if name == None:
-            self.name = self.full_name = ""
-        else:
-            self.name = name
-            self.full_name = parent.full_name + name + "/"
-
-    def get_scope(self, name, unique=True):
-        if not unique:
-            index = self.index.get(name, 0)
-            self.index[name] = index+1
-            name = name + f'_{index}'
-        if name not in self.children:
-            sub_scope = Scope(self, name)
-            self.children[name] = sub_scope
-        else:
-            sub_scope = self.children[name]
-            assert type(sub_scope) == Scope, f"Name {name} is a Var: {sub_scope}"
-        return sub_scope
-
-    def make_var(self, shape, dtype, init, name, unique):
-        if not unique:
-            index = self.index.get(name, 0)
-            self.index[name] = index+1
-            name = name + f'_{index}'
-        if name in self.children:
-            var = self.children[name]
-            assert type(var) == core.Var, f"Name {name} exist: {var}"
-            assert (shape is None or var.shape == shape) and var.dtype == dtype, f"Shape or dtype not match {var} != {dtype}{shape}"
-            return var
-        else:
-            full_name = self.full_name + name
-            if type(init) != core.Var:
-                if callable(init):
-                    var = init(shape, dtype)
-                    if type(var) != core.Var:
-                        var = array(var)
-                else:
-                    assert init != None
-                    var = array(init)
-            else:
-                var = init
-            var.stop_fuse()
-            self.children[name] = var
-            var.name(full_name)
-            return var
-
-    def clean_index(self): self.index.clear()
-
-    def clean(self):
-        self.children.clear()
-        self.records.clear()
-        self.index.clear()
-
-current_scope = Scope()
-root_scope = current_scope
-
-class _call_record_scope:
-    def __enter__(self): pass
-    def __exit__(self, *exc): pass
-    def __call__(self, func):
-        def inner(*args, **kw):
-            with self:
-                ret = func(*args, **kw)
-                record_in_scope(ret, "output")
-            return ret
-        return inner
 
 class _call_no_record_scope:
     def __enter__(self): pass
@@ -142,30 +58,6 @@ class flag_scope(_call_no_record_scope):
     def __exit__(self, *exc):
         for k,v in self.flags_bk.items():
             setattr(flags, k, v)
-
-class var_scope(_call_record_scope):
-    def __init__(self, name="scope", unique=False, **jt_flags):
-        self.fs = flag_scope(**jt_flags)
-        self.name = name
-        self.unique = unique
-
-    def __enter__(self):
-        global current_scope
-        self.prev = current_scope
-        try:
-            current_scope = current_scope.get_scope(self.name, self.unique)
-            current_scope.clean_index()
-            self.fs.__enter__()
-        except:
-            current_scope = self.prev
-            del self.prev
-            raise
-
-    def __exit__(self, *exc):
-        self.fs.__exit__(*exc)
-        global current_scope
-        current_scope = self.prev
-        del self.prev
 
 single_log_capture = None
 
@@ -229,75 +121,7 @@ class profile_scope(_call_no_record_scope):
         profiler.stop()
         self.report.extend(profiler.report())
 
-def make_var(shape=None, dtype="float32", init=None, name='var', unique=False):
-    return current_scope.make_var(shape, dtype, init, name, unique)
-
-def find_vars(path=None):
-    scope = current_scope
-    if path is not None:
-        assert isinstance(path, str)
-        ns = path.split("/")
-        if ns[-1] == "":
-            ns.pop()
-        for n in ns: scope = scope.children[n]
-    if not isinstance(scope, Scope):
-        return [scope]
-    vars = []
-    dfs(scope, vars)
-    return vars
-
-def find_var(path):
-    scope = current_scope
-    if path is not None:
-        assert isinstance(path, str)
-        ns = path.split("/")
-        for n in ns: scope = scope.children[n]
-    assert not isinstance(scope, Scope)
-    return scope
-
-def find_records(path=None):
-    scope = current_scope
-    if path is not None:
-        assert isinstance(path, str)
-        ns = path.split("/")
-        if ns[-1] == "":
-            ns.pop()
-        for n in ns: scope = scope.children[n]
-    assert isinstance(scope, Scope)
-    records = []
-    dfs_records(scope, records)
-    return records
-
-def find_record(path):
-    scope = current_scope
-    assert isinstance(path, str)
-    ns = path.split("/")
-    for n in ns[:-1]: scope = scope.children[n]
-    assert isinstance(scope, Scope)
-    return scope.records[ns[-1]]
-
-def find_scope(path):
-    scope = current_scope
-    if path is not None:
-        assert isinstance(path, str)
-        ns = path.split("/")
-        if ns[-1] == "":
-            ns.pop()
-        for n in ns: scope = scope.children[n]
-    assert isinstance(scope, Scope)
-    return scope
-
-def record_in_scope(self, name):
-    current_scope.records[name] = self
-    if isinstance(self, Var):
-        full_name = current_scope.full_name + name
-        self.name(full_name)
-    return self
-
-Var.record_in_scope = record_in_scope
-
 def clean():
-    current_scope.clean()
     import gc
     # make sure python do a full collection
     gc.collect()
@@ -411,11 +235,8 @@ def squeeze(x, dim):
 Var.squeeze = squeeze
 
 def clamp(x, min_v, max_v):
-    # TODO: change to x.maximum(min_v).minimum(max_v)
     assert min_v <= max_v
-    min_b = (x < min_v).int()
-    max_b = (x > max_v).int()
-    return x * (1 - min_b - max_b) + min_v * min_b + max_v * max_b
+    return x.maximum(min_v).minimum(max_v)
 Var.clamp = clamp
 
 def type_as(a, b):
@@ -456,32 +277,6 @@ def display_memory_info():
     fileline = f"{os.path.basename(fileline.filename)}:{fileline.lineno}"
     core.display_memory_info(fileline)
 
-def import_vars(data):
-    ''' Load variables into current scopes
-    example:
-        import_vars({"w":[1.0,2.0,3.0]})
-        jt.get_var([3], "float64", name="w", gen_index=False)
-    '''
-    for k in data:
-        v = data[k]
-        if type(v) != core.Var:
-            v = array(v).stop_fuse()
-        scopes = k.split("/")
-        scope = current_scope
-        for i in range(len(scopes)-1):
-            scope = scope.get_scope(scopes[i])
-        vname = scopes[-1]
-        assert vname not in scope.children, f"Var {k} exists. Please load_vars at the beginning"
-        v.name(k)
-        scope.children[vname] = v
-
-def export_vars():
-    ''' Export all vars into a dictionary
-    return: a dictionary, key is var name, value is numpy array
-    '''
-    data = { v.name():v.fetch_sync() for v in find_vars() }
-    return data
-
 def load(path):
     pkl_file = open(path, 'rb')
     model_dict = pickle.load(pkl_file)
@@ -489,7 +284,7 @@ def load(path):
 
 class Module:
     def __init__(self, *args, **kw):
-        __doc__ == 'doc'
+        pass
     def execute(self, *args, **kw):
         pass
     def __call__(self, *args, **kw):
@@ -498,8 +293,6 @@ class Module:
         return self.__str__()
     def _get_name(self):
         return self.__class__.__name__
-    def __doc__(self):
-        pass
     def __name__(self):
         pass
 
@@ -670,16 +463,12 @@ def make_module(func, exec_n_args=1):
         def __init__(self, *args, **kw):
             self.args = args
             self.kw = kw
-            self.__doc__ == 'doc'
         def execute(self, *args):
             return func(*args, *self.args, **self.kw)
         def __str__(self):
-            return 'str'
-        def __repr__(self):
-            return self.__str__()
+            return f"{func.__name__}({self.extra_repr()})"
         def extra_repr(self):
-            return ''
-
+            return ",".join(map(str, self.args))
     return MakeModule
 
 

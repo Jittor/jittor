@@ -187,19 +187,3 @@ def setitem(x, slices, value):
 
 jt.Var.__getitem__ = jt.Var.slice_var = slice_var
 jt.Var.__setitem__ = setitem
-
-def adam(model, loss, lr=3e-4, betas=[0.9, 0.999], eps=1e-8):
-    ps = jt.find_vars(model)
-    gs = jt.grad(loss, ps)
-    with jt.var_scope('_'.join([model, 'adam']), unique=True):
-        adam_step = jt.make_var([1], init=jt.zeros)
-        adam_step += 1
-        for p,g in zip(ps,gs):
-            m = jt.make_var(p.shape, init=jt.zeros)
-            v = jt.make_var(p.shape, init=jt.zeros)
-            
-            m.assign(betas[0] * m + (1-betas[0]) * g)
-            v.assign(betas[1] * v + (1-betas[1]) * g * g)
-            step_size = lr * jt.sqrt(1-betas[1]**adam_step) / (1-betas[0] ** adam_step)
-            p -= m * step_size / (jt.sqrt(v) + eps)
-
