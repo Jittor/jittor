@@ -30,7 +30,6 @@ def check(jt_model, torch_model, shape, near_data):
         data = list(range(8)) * int((shape[0] * shape[1] * shape[2] * shape[3]) / 8)
         random.shuffle(data)
         x = jt.array(data).float32().reshape(shape)
-        x.data
     else:
         x = jt.random(shape)
     y = jt_model(x)
