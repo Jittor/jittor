@@ -33,7 +33,7 @@ nccl_initer() {
     if (mpi_local_rank >= device_count)
         LOGf << "mpi_local_rank(">>mpi_local_rank>>") is larger than device_count("
             >>device_count>>")";
-    nccl_device_id = mpi_local_rank; // % device_count;
+    nccl_device_id = mpi_local_rank;
     LOGv << "NCCL init in device" << nccl_device_id << "local_rank" << mpi_local_rank;
     checkCudaErrors(cudaSetDevice(nccl_device_id));
     event_queue.run_sync([]() {
