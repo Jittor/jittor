@@ -74,6 +74,7 @@ void FakeMainPass::run() {
                     "ptr[0] = 0;\n"
                 "}\n"
             );
+            main->push_back("ArrayOp* op"+S(i)+"=((ArrayOp*)(ops["+S(i)+"]));");
         }
     }
     // fake vars

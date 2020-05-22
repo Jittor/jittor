@@ -6,6 +6,7 @@
 # ***************************************************************
 from ctypes import cdll
 import sys
+import jittor
 
 lib_path = sys.argv[1]
 cmd = sys.argv[2]
