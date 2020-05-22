@@ -61,6 +61,7 @@ class test_models(unittest.TestCase):
 
     @unittest.skipIf(not jt.has_cuda, "Cuda not found")
     @jt.flag_scope(use_cuda=1)
+    @torch.no_grad()
     def test_models(self):
         def to_cuda(x):
             if jt.has_cuda:
@@ -96,6 +97,9 @@ class test_models(unittest.TestCase):
             diff = relative_error.mean()
             assert diff < threshold, f"[*] {test_model} forward fails..., Relative Error: {diff}"
             print(f"[*] {test_model} forword passes with Relative Error {diff}")
+            jt.clean()
+            jt.gc()
+            torch.cuda.empty_cache()
         print('all models pass test.')
         
 if __name__ == "__main__":
