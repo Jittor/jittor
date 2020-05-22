@@ -261,7 +261,6 @@ void ParallelPass::run() {
             nums += rv;
             if (j!=0) {nums += "*";}
         }
-
         new_block.push_back("int thread_num=min(1<<(NanoVector::get_nbits("+nums+")-2)," + S(thread_num) + ");");
         new_block.push_back("int thread_num_left=thread_num;");
         for (int j=ncs.size()-1; j>=0; j--) {
@@ -342,11 +341,9 @@ void ParallelPass::run() {
         }
         LOGvvvv << "new_tid_def:" << new_tid_def.to_string();
         check_atomic(new_func_def.get(), is_cuda, ncs.size());
-        
         new_func_def->insert(0, new_tid_def.children);
         new_func_def->swap(*func_def, true);
         new_block.swap(*func_call, true);
-
     }
     ir->remove_all_unused();
 }
