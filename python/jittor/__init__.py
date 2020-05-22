@@ -580,6 +580,7 @@ class Module:
         return ", ".join(ss)
 
     def load_parameters(self, params):
+        n_failed = 0
         for key in params.keys():
             v = self
             key_ = key.split('.')
@@ -598,16 +599,21 @@ class Module:
                         end = 1
                         break
             if end ==1:
-                # print(f'init {key} fail ...')
+                n_failed += 1
+                LOG.w(f'load parameter {key} failed ...')
                 pass
             else:
-                # print(f'init {key} success ...')
+                LOG.v(f'load parameter {key} success ...')
                 if isinstance(params[key], np.ndarray) or isinstance(params[key], list):
                     v.assign(array(params[key]))
                 elif isinstance(params[key], Var):
                     v.assign(params[key])
                 else:
-                    v.assign(array(params[key].cpu( ).detach().numpy()))
+                    # assume is pytorch tensor
+                    v.assign(array(params[key].cpu().detach().numpy()))
+        if n_failed:
+            LOG.w(f"load total {len(params)} params, {n_failed} failed")
+
     def save(self, path):
         params = self.parameters()
         params_dict = {}
@@ -615,6 +621,18 @@ class Module:
             params_dict[p.name()] = p.data
         with open(path, 'wb') as f:
             pickle.dump(params_dict, f, pickle.HIGHEST_PROTOCOL)
+
+    def load(self, path):
+        if path.endswith(".pth"):
+            try:
+                dirty_fix_pytorch_runtime_error()
+                import torch
+            except:
+                raise RuntimeError("pytorch need to be installed when load pth format.")
+            self.load_parameters(torch.load(path, map_location=torch.device('cpu')))
+            return
+        with open(path, 'rb') as f:
+            self.load_parameters(pickle.load(f))
 
     def eval(self):
         def callback(parents, k, v, n):

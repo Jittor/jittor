@@ -99,7 +99,7 @@ MemInfo::MemInfo() {
     total_cpu_ram = info.totalram;
     total_cuda_ram = 0;
 #ifdef HAS_CUDA
-    cudaDeviceProp prop = {0};
+    cudaDeviceProp prop;
     cudaGetDeviceProperties(&prop, 0);
     total_cuda_ram = prop.totalGlobalMem;
 #endif

@@ -585,7 +585,7 @@ class Upsample(Module):
 
 class Sequential(Module):
     def __init__(self, *args):
-        self.layers = args
+        self.layers = list(args)
     def __getitem__(self, idx):
         return self.layers[idx]
     def execute(self, x):
@@ -603,3 +603,7 @@ class Sequential(Module):
             parents.pop()
         if callback_leave:
             callback_leave(parents, k, self, n_children)
+    def append(self, mod):
+        self.layers.append(mod)
+
+ModuleList = Sequential

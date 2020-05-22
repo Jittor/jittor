@@ -16,12 +16,12 @@ from setuptools import setup, find_packages
 import os
 
 path = os.path.dirname(__file__)
-with open(os.path.join(path, "README.src.md"), "r", encoding='utf8') as fh:
+with open(os.path.join(path, "README.md"), "r", encoding='utf8') as fh:
     long_description = fh.read()
 
 setuptools.setup(
     name='jittor',  
-    version='1.1.1',
+    version='1.1.3.1',
     # scripts=[],
     author="Jittor Group",
     author_email="ran.donglang@gmail.com",
@@ -44,3 +44,6 @@ setuptools.setup(
         "astunparse",
     ],
  )
+
+# python3.7 setup.py sdist
+# python3.7 -m twine upload dist/*

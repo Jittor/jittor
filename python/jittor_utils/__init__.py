@@ -129,9 +129,17 @@ def do_compile(args):
         run_cmd(cmd)
         return True
 
+pool_size = 0
+
 def run_cmds(cmds, cache_path, jittor_path):
+    global pool_size
+    if pool_size == 0:
+        mem_bytes = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
+        mem_gib = mem_bytes/(1024.**3)
+        pool_size = min(8,max(int(mem_gib // 3), 1))
+        LOG.i(f"Total mem: {mem_gib:.2f}GB, using {pool_size} procs for compiling.")
     cmds = [ [cmd, cache_path, jittor_path] for cmd in cmds ]
-    with Pool(8) as p:
+    with Pool(pool_size) as p:
         p.map(do_compile, cmds)
 
 def download(url, filename):

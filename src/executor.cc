@@ -397,7 +397,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
     LOGvv << "All" << op_num << "ops finished, return vars:" << vars;
     for (Var* v : vars) ASSERT(v->mem_ptr);
     #ifdef HAS_CUDA
-    if (device_sync) {
+    if (device_sync && use_cuda) {
         last_is_cuda = false;
         sync_times++;
         event_queue.run_sync([]() {
