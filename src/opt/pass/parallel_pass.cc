@@ -251,13 +251,6 @@ void ParallelPass::run() {
         string nums = "";
         for (int j=ncs.size()-1; j>=0; j--) {
             auto rv = rvalues[j];
-            auto e = expr::make(rv);
-            if (!e->is(expr::_number)) {
-                auto rdef = func_def->find_define(rv);
-                ASSERT(rdef);
-                if (rdef->has_attr("rvalue"))
-                    rv = rdef->attrs["rvalue"];
-            }
             nums += rv;
             if (j!=0) {nums += "*";}
         }
