@@ -250,8 +250,7 @@ void ParallelPass::run() {
             : cpu_thread_num;
         string nums = "";
         for (int j=ncs.size()-1; j>=0; j--) {
-            auto rv = rvalues[j];
-            nums += rv;
+            nums += rvalues[j];
             if (j!=0) {nums += "*";}
         }
         new_block.push_back("int thread_num=min(1<<(NanoVector::get_nbits("+nums+")-2)," + S(thread_num) + ");");
