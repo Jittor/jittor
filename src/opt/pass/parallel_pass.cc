@@ -347,13 +347,6 @@ void ParallelPass::run() {
         new_func_def->swap(*func_def, true);
         new_block.swap(*func_call, true);
 
-        if (is_cuda) {
-            auto code = func_def->to_string(); 
-            bool has_atomic = code.find("atomicAdd") != string::npos;
-            if (has_atomic) {
-                func_call->find_define("thread_num")->attrs["rvalue"] = "min(1<<(NanoVector::get_nbits(max(" + nums + "/16,1))-2)," + S(thread_num) + ")";
-            }
-        }
     }
     ir->remove_all_unused();
 }
