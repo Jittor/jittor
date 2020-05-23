@@ -163,6 +163,7 @@ int to_pow(int x) {
 
 void ParallelPass::run() {
     auto choice = op->get_loop_option("parallel");
+    auto fix_thread_num = op->get_loop_option("fix_thread_num", 0);
     bool is_cuda = op->flags.get(NodeFlags::_cuda);
     if (is_cuda) choice=1;
     if (!choice) return;
@@ -248,15 +249,8 @@ void ParallelPass::run() {
         int thread_num = is_cuda ?
             cuda_block_num * cuda_thread_num
             : cpu_thread_num;
-        string nums = "";
-        for (int j=ncs.size()-1; j>=0; j--) {
-            nums += rvalues[j];
-            if (j!=0) {nums += "*";}
-        }
-        new_block.push_back("int thread_num=min(1<<(NanoVector::get_nbits("+nums+")-2)," + S(thread_num) + ");");
-        new_block.push_back("int thread_num_left=thread_num;");
-        for (int j=ncs.size()-1; j>=0; j--) {
-            auto rv = rvalues[j];
+        // resolve undefined rvalues
+        for (auto& rv : rvalues) {
             auto e = expr::make(rv);
             if (!e->is(expr::_number)) {
                 auto rdef = func_def->find_define(rv);
@@ -264,6 +258,20 @@ void ParallelPass::run() {
                 if (rdef->has_attr("rvalue"))
                     rv = rdef->attrs["rvalue"];
             }
+        }
+
+        // calc max thread num
+        string nums = rvalues.at(0);
+        for (int i=1; i<rvalues.size(); i++)
+            nums+="*"+rvalues[i];
+        if (fix_thread_num)
+            new_block.push_back("int thread_num=" + S(thread_num) + ");");
+        else
+            new_block.push_back("int thread_num=min(1<<(NanoVector::get_nbits("+nums+")-2)," + S(thread_num) + ");");
+        
+        new_block.push_back("int thread_num_left=thread_num;");
+        for (int j=ncs.size()-1; j>=0; j--) {
+            auto& rv = rvalues[j];
             new_block.push_back("int tn"+S(j)+
             "=get_thread_range_log(thread_num_left, "+rv+");");
             func_call_code = func_call_code.substr(0, func_call_code.size()-2)
