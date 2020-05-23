@@ -248,7 +248,12 @@ void ParallelPass::run() {
         int thread_num = is_cuda ?
             cuda_block_num * cuda_thread_num
             : cpu_thread_num;
-        new_block.push_back("int thread_num="+S(thread_num)+";");
+        string nums = "";
+        for (int j=ncs.size()-1; j>=0; j--) {
+            nums += rvalues[j];
+            if (j!=0) {nums += "*";}
+        }
+        new_block.push_back("int thread_num=min(1<<(NanoVector::get_nbits("+nums+")-2)," + S(thread_num) + ");");
         new_block.push_back("int thread_num_left=thread_num;");
         for (int j=ncs.size()-1; j>=0; j--) {
             auto rv = rvalues[j];
@@ -269,6 +274,8 @@ void ParallelPass::run() {
             new_block.push_back("tn"+S(j)+"=tn"+S(j)+"+tn"+S(j+1)+";");
         }
         new_block.push_back("tn0=NanoVector::get_nbits(thread_num)-2;");
+        new_block.push_back("int p1 = std::max(thread_num/1024, 1);");
+        new_block.push_back("int p2 = std::min(thread_num, 1024);");
         KernelIR new_tid_def("{}");
         if (!is_cuda) {
             // omp thread id
@@ -287,7 +294,7 @@ void ParallelPass::run() {
             auto pos = code.find("(");
             ASSERT(pos != string::npos);
             code = code.substr(0, pos) +
-                "<<<" + S(cuda_block_num) + "," + S(cuda_thread_num) + ">>>" +
+                "<<<p1,p2>>>" +
                 code.substr(pos);
         }
 
