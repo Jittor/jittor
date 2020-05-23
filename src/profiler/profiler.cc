@@ -153,9 +153,9 @@ vector<vector<string>> Profiler::report(const string& sort_key) {
             (double)kinfo.compute_total*1e9 / kinfo.time_total, // Compute
         });
     }
-    if (sort_key_id)
+    if (sort_key_id>=2)
         std::sort(order.begin(), order.end(), [&](int i, int j) {
-            return info[i][sort_key_id-1] > info[j][sort_key_id-1];
+            return info[i][sort_key_id-2] > info[j][sort_key_id-2];
         });
     else
         std::sort(order.begin(), order.end(), [&](int i, int j) {
