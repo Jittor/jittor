@@ -274,8 +274,8 @@ void ParallelPass::run() {
             new_block.push_back("tn"+S(j)+"=tn"+S(j)+"+tn"+S(j+1)+";");
         }
         new_block.push_back("tn0=NanoVector::get_nbits(thread_num)-2;");
-        new_block.push_back("int p1 = thread_num < 1024 ? 1:ceil((thread_num/1024));");
-        new_block.push_back("int p2 = thread_num < 1024 ? thread_num:1024;");
+        new_block.push_back("int p1 = std::max(thread_num/1024, 1);");
+        new_block.push_back("int p2 = std::min(thread_num, 1024);");
         KernelIR new_tid_def("{}");
         if (!is_cuda) {
             // omp thread id

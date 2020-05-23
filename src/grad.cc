@@ -122,7 +122,7 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets) {
         if (var->tflag == nt)
             grad = move(grads[var->custom_data]);
         if (!grad) {
-            // LOGw << "grads[">>i>>"] doesn't have gradient. It will be set to zero:" << var;
+            LOGw << "grads[">>i>>"] doesn't have gradient. It will be set to zero:" << var;
             grad = make_number(0.f, var);
             assign_attrs(grad.ptr, var);
             registe_node_trace_grad(grad.ptr, var, 0);
