@@ -19,7 +19,7 @@ static auto make_code = get_op_info("code")
 static inline void check_vary_shape(NanoVector v) {
     ASSERT(v.size()) << "Vary shape should not be zero dimension";
     for (int i=0; i<v.size(); i++)
-        ASSERT((i == 0) ^ (v[0] >= 0))
+        ASSERT((i == 0) ^ (v[i] >= 0))
             << "Vary shape should only occur in the first dimension:" << v;
 }
 
