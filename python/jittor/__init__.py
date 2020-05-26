@@ -358,7 +358,7 @@ def norm(x, k, dim):
     if k==1:
         return x.abs().sum(dim)
     if k==2:
-        return (x**2).sum(dim).maximum(1e-6).sqrt()
+        return (x.sqr()).sum(dim).maximum(1e-6).sqrt()
 Var.norm = norm
 
 origin_reshape = reshape

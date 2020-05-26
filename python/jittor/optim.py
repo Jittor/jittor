@@ -132,6 +132,39 @@ class SGD(Optimizer):
                     p -= v * lr
                 p.detach_inplace()
 
+class RMSprop(Optimizer):
+    """ RMSprop Optimizer.
+    Example:
+    ```
+    optimizer = nn.RMSprop(model.parameters(), lr, eps=1e-8, betas=(0.9, 0.999))
+    optimizer.step(loss)
+    ```
+    """
+    def __init__(self, params, lr=1e-2, eps=1e-8, alpha=0.99):
+    # def __init__(self, params, lr, eps=1e-8, betas=(0.9, 0.999), weight_decay=0):
+        super().__init__(params, lr)
+        self.eps = eps
+        self.alpha = alpha
+        
+        # initialize required arguments for each param_groups
+        for pg in self.param_groups:
+            values = pg["values"] = []
+            for p in pg["params"]:
+                values.append(jt.zeros(p.shape, p.dtype).stop_fuse().stop_grad())
+
+    def step(self, loss):
+        self.pre_step(loss)
+        for pg in self.param_groups:
+            # get arguments from each param_groups
+            lr = pg.get("lr", self.lr)
+            eps = pg.get("eps", self.eps)
+            alpha = pg.get("alpha", self.alpha)
+            for p, g, v in zip(pg["params"], pg["grads"], pg["values"]):
+                if p.is_stop_grad(): continue
+                v.assign(alpha * v + (1-alpha) * g * g)
+                p -= lr * g / (jt.sqrt(v) + eps)
+                p.detach_inplace()
+
 class Adam(Optimizer):
     """ Adam Optimizer.
     Example:
