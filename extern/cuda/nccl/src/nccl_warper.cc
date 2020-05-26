@@ -22,6 +22,7 @@ ncclUniqueId id;
 struct nccl_initer {
 
 nccl_initer() {
+    if (!get_device_count()) return;
     if (mpi_world_rank == 0)
         checkCudaErrors(ncclGetUniqueId(&id));
     MPI_CHECK(MPI_Bcast((void *)&id, sizeof(id), MPI_BYTE, 0, MPI_COMM_WORLD));
@@ -34,6 +35,7 @@ nccl_initer() {
 }
 
 ~nccl_initer() {
+    if (!get_device_count()) return;
     checkCudaErrors(ncclCommDestroy(comm));
 }
 

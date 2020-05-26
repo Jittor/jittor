@@ -26,10 +26,12 @@ cudaEvent_t event;
 
 struct Init {
 Init() {
+    if (!get_device_count()) return;
     checkCudaErrors(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
     checkCudaErrors(cudaEventCreate(&event, cudaEventDisableTiming));
 }
 ~Init() {
+    if (!get_device_count()) return;
     checkCudaErrors(cudaDeviceSynchronize());
     checkCudaErrors(cudaStreamDestroy(stream));
     checkCudaErrors(cudaEventDestroy(event));

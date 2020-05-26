@@ -40,10 +40,12 @@ static void to_fetch(CUDA_HOST_FUNC_ARGS) {
 
 struct Init {
 Init() {
+    if (!get_device_count()) return;
     checkCudaErrors(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
     checkCudaErrors(cudaEventCreate(&event, cudaEventDisableTiming));
 }
 ~Init() {
+    if (!get_device_count()) return;
     // do not call deleter on exit
     for (auto& f : fetch_tasks)
         f.func.deleter = nullptr;

@@ -80,7 +80,7 @@ class TestMklConvOp(unittest.TestCase):
         def check(xshape, wshape, stride, pad):
             a = np.random.rand(*xshape).astype(np.float32)
             b = np.random.rand(*wshape).astype(np.float32)
-            c = jt.mkl_ops.mkl_conv(a,b,stride,pad,1,"acdb","hwio").data
+            c = jt.mkl_ops.mkl_conv(a,b,stride,pad,1,xformat="acdb",wformat="hwio").data
 
             a_jt = jt.array(a)
             b_jt = jt.array(b)
@@ -159,8 +159,8 @@ class TestMklConvOp(unittest.TestCase):
         a = np.random.rand(n,H,W,c).astype(np.float32)
         b = np.random.rand(h,w,i,o).astype(np.float32)
         da = np.random.rand(n,H,W,o).astype(np.float32)
-        dx = jt.mkl_ops.mkl_conv_backward_x(b,da,H,W,1,1,1,"acdb","hwio","acdb").data
-        dw = jt.mkl_ops.mkl_conv_backward_w(a,da,h,1,1,1,"acdb","hwio","acdb").data
+        dx = jt.mkl_ops.mkl_conv_backward_x(b,da,H,W,1,1,1,xformat="acdb",wformat="hwio",yformat="acdb").data
+        dw = jt.mkl_ops.mkl_conv_backward_w(a,da,h,1,1,1,xformat="acdb",wformat="hwio",yformat="acdb").data
         a_jt = jt.array(a)
         b_jt = jt.array(b)
 
