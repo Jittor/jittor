@@ -253,7 +253,7 @@ void ParallelPass::run() {
             nums += rvalues[j];
             if (j!=0) {nums += "*";}
         }
-        new_block.push_back("int thread_num=min(1<<(NanoVector::get_nbits("+nums+")-2)," + S(thread_num) + ");");
+        new_block.push_back("int thread_num=" + S(thread_num) + ";");
         new_block.push_back("int thread_num_left=thread_num;");
         for (int j=ncs.size()-1; j>=0; j--) {
             auto rv = rvalues[j];
@@ -336,6 +336,11 @@ void ParallelPass::run() {
         new_func_def->insert(0, new_tid_def.children);
         new_func_def->swap(*func_def, true);
         new_block.swap(*func_call, true);
+        auto code = func_def->to_string(); 
+        bool has_atomic = code.find("atomic") != string::npos;
+        if (has_atomic) {
+            func_call->find_define("thread_num")->attrs["rvalue"] = "min(1<<max((NanoVector::get_nbits(" + nums + "/16)-2),0)," + S(thread_num) + ")";
+        }
     }
     ir->remove_all_unused();
 }
