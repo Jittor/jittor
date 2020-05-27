@@ -19,7 +19,10 @@ void* CudaDeviceAllocator::alloc(size_t size, size_t& allocation) {
     try {
         checkCudaErrors(cudaMalloc(&ptr, size));
         return ptr;
-    } catch (...) {}
+    } catch (...) {
+        // clean the last error
+        cudaGetLastError();
+    }
     LOGw << "Unable to alloc cuda device memory, use unify memory instead. "
         "This may cause low performance.";
     display_memory_info(__FILELINE__);

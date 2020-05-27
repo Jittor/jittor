@@ -12,13 +12,6 @@ import numpy as np
 from .test_log import find_log_with_re
 f32 = jt.float32
 from jittor import nn, Module
-
-@jt.var_scope('linear')
-def linear(x, n):
-    w = jt.make_var([x.shape[-1], n], init=lambda *a:
-            (jt.random(*a)-f32(0.5)) / f32(x.shape[-1])**f32(0.5))
-    b = jt.make_var([n], init=lambda *a: jt.random(*a)-f32(0.5))
-    return jt.nn.matmul(x, w) + b
     
 def relu(x): return jt.maximum(x, f32(0))
 

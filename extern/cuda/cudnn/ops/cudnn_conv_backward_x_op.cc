@@ -186,7 +186,7 @@ void CudnnConvBackwardXOp::jit_run() {
     jk.clear();
     jk << dimX[0] << "," << dimX[1] << "," << dimX[2] << "," << dimX[3] << ",";
     jk << dimW[0] << "," << dimW[1] << "," << dimW[2] << "," << dimW[3] << ",";
-    jk << padding << "," <<stride << "," << dilation << ".";
+    jk << padding << "," <<stride << "," << dilation << "," << groups << ".";
     auto iter = bwdx_algo_cache.find(jk.to_string());
     
     if (iter!=bwdx_algo_cache.end()) algo = iter->second;

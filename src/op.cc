@@ -91,7 +91,14 @@ void Op::do_jit_prepare() {
     memcheck_all_exist();
     jk << name();
     jit_prepare();
-    if (!jk.empty()) {
+    if (jk.empty()) {
+        // not a jit op
+        bool has_cuda = flags.get(NodeFlags::_cuda);
+        bool has_cpu = flags.get(NodeFlags::_cpu);
+        CHECK(has_cuda || has_cpu);
+        if (has_cuda && has_cpu && !use_cuda)
+            flags.set(NodeFlags::_cuda, 0);
+    } else {
         // check use int64_t as index_t if array is too big
         int in_id=0, out_id=0;
         bool use_int64_t = false;

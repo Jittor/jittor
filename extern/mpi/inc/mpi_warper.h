@@ -27,6 +27,7 @@ namespace jittor {
 extern int mpi_world_size;
 extern int mpi_world_rank;
 extern int mpi_local_rank;
+extern bool inside_mpi;
 
 // @pyjt(world_size)
 int _mpi_world_size();

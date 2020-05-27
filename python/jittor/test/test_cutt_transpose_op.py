@@ -11,7 +11,7 @@ from .test_grad import ngrad
 from itertools import permutations
 from jittor import compile_extern
 from .test_log import find_log_with_re
-if compile_extern.has_cuda:
+if jt.has_cuda:
     from jittor.compile_extern import cutt_ops
 else:
     cutt_ops = None

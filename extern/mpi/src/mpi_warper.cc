@@ -30,6 +30,7 @@ namespace jittor {
 int mpi_world_size = 1;
 int mpi_world_rank = 0;
 int mpi_local_rank = 0;
+bool inside_mpi = false;
 
 int _mpi_world_size() {
     return mpi_world_size;
@@ -73,6 +74,8 @@ static void getHostName(char* hostname, int maxlen) {
 struct mpi_initer {
 
 mpi_initer() {
+    inside_mpi = !!getenv("OMPI_COMM_WORLD_SIZE");
+    if (!inside_mpi) return;
     LOGvv << "MPI init...";
     MPI_CHECK(MPI_Init(NULL, NULL));
     MPI_CHECK(MPI_Comm_size(MPI_COMM_WORLD, &mpi_world_size));
@@ -95,6 +98,7 @@ mpi_initer() {
 }
 
 ~mpi_initer() {
+    if (!inside_mpi) return;
     MPI_CHECK(MPI_Finalize());
 }
 

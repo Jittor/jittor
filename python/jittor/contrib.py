@@ -9,51 +9,10 @@
 # ***************************************************************
 import jittor as jt
 import numpy as np
+from jittor import pool
 
 def argmax_pool(x, size, stride, padding=0):
-    y_shape = list(x.shape)
-    y_shape[2]=(x.shape[2]+padding*2-size)//stride+1
-    y_shape[3]=(x.shape[3]+padding*2-size)//stride+1
-    
-    y = jt.code(y_shape, x.dtype, [x],
-        cpu_src=f'''
-            for (int i=0; i<out_shape0; i++)
-            for (int j=0; j<out_shape1; j++)
-            for (int k=0; k<out_shape2; k++)
-            for (int l=0; l<out_shape3; l++) {{
-                int kx=k*{stride}+{size}/2-{padding};
-                int ky=l*{stride}+{size}/2-{padding};
-                @out(i,j,k,l) = @in0(i,j,kx,ky);
-                for (int p=kx-{size}/2;p<=kx+{size}/2;p++)
-                for (int q=ky-{size}/2;q<=ky+{size}/2;q++)
-                    if (p>=0 && q>=0 && p<in0_shape2 && q<in0_shape3)
-                    if (@out(i,j,k,l) < @in0(i,j,p,q))
-                        @out(i,j,k,l) = @in0(i,j,p,q);
-            }}
-        ''',
-        cpu_grad_src = [f'''
-            for (int i=0; i<out_shape0; i++)
-            for (int j=0; j<out_shape1; j++)
-            for (int k=0; k<out_shape2; k++)
-            for (int l=0; l<out_shape3; l++) @out(i,j,k,l) = 0;
-
-            for (int i=0; i<pout_shape0; i++)
-            for (int j=0; j<pout_shape1; j++)
-            for (int k=0; k<pout_shape2; k++)
-            for (int l=0; l<pout_shape3; l++) {{
-                int kx=k*{stride}+{size}/2-{padding};
-                int ky=l*{stride}+{size}/2-{padding};
-                int bo=1;
-                for (int p=kx-{size}/2;p<=kx+{size}/2 && bo;p++)
-                for (int q=ky-{size}/2;q<=ky+{size}/2 && bo;q++)
-                    if (p>=0 && q>=0 && p<in0_shape2 && q<in0_shape3)
-                    if (@pout(i,j,k,l) == @in0(i,j,p,q)) {{
-                        @out(i,j,p,q) += @dout(i,j,k,l);
-                        bo=0;
-                    }}
-            }}
-        '''])
-    return y
+    return pool.pool(x, size, 'maximum', padding, stride)
 
 def concat(arr, dim):
     # TODO: low performance when concat lots of vars
@@ -187,19 +146,3 @@ def setitem(x, slices, value):
 
 jt.Var.__getitem__ = jt.Var.slice_var = slice_var
 jt.Var.__setitem__ = setitem
-
-def adam(model, loss, lr=3e-4, betas=[0.9, 0.999], eps=1e-8):
-    ps = jt.find_vars(model)
-    gs = jt.grad(loss, ps)
-    with jt.var_scope('_'.join([model, 'adam']), unique=True):
-        adam_step = jt.make_var([1], init=jt.zeros)
-        adam_step += 1
-        for p,g in zip(ps,gs):
-            m = jt.make_var(p.shape, init=jt.zeros)
-            v = jt.make_var(p.shape, init=jt.zeros)
-            
-            m.assign(betas[0] * m + (1-betas[0]) * g)
-            v.assign(betas[1] * v + (1-betas[1]) * g * g)
-            step_size = lr * jt.sqrt(1-betas[1]**adam_step) / (1-betas[0] ** adam_step)
-            p -= m * step_size / (jt.sqrt(v) + eps)
-

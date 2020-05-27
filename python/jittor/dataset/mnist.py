@@ -12,7 +12,7 @@ import gzip
 from PIL import Image
 # our lib jittor import
 from jittor.dataset.dataset import Dataset, dataset_root
-from jittor.dataset.utils import ensure_dir, download_url_to_local
+from jittor.utils.misc import ensure_dir, download_url_to_local
 import jittor as jt 
 import jittor.transform as trans
 

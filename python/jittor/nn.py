@@ -43,38 +43,6 @@ jt.Var.__imatmul__ = lambda a,b: a.assign(matmul(a,b))
 def get_init_var_rand(shape, dtype):
     return jt.array(np.random.normal(0.0, 1.0, shape).astype(np.float32))
 
-@jt.var_scope('conv')
-def conv(x, in_planes, out_planes, kernel_size, padding, stride = 1, init_method=None):
-    Kw = kernel_size
-    Kh = kernel_size
-    _C = in_planes
-    Kc = out_planes
-    N,C,H,W = x.shape
-
-    assert C==_C
-    if init_method==None:
-        w = jt.make_var([Kc, _C, Kh, Kw], init=lambda *a: init.relu_invariant_gauss(*a, mode="fan_out"))
-    else:
-        w = jt.make_var([Kc, _C, Kh, Kw], init=init_method)
-    xx = x.reindex([N,Kc,C,(H+padding*2-kernel_size)//stride+1,(W+padding*2-kernel_size)//stride+1,Kh,Kw], [
-        'i0', # Nid
-        'i2', # Cid
-        f'i3*{stride}-{padding}+i5', # Hid+Khid
-        f'i4*{stride}-{padding}+i6', # Wid+KWid
-    ])
-    ww = w.broadcast(xx.shape, [0,3,4])
-    yy = xx*ww
-    y = yy.sum([2,5,6]) # C, Kh, Kw
-    return y
-
-@jt.var_scope('linear')
-def linear(x, n):
-    w = jt.make_var([n, x.shape[-1]], init=lambda *a: init.invariant_uniform(*a))
-    w = w.reindex([w.shape[1], w.shape[0]],["i1","i0"])
-    bound = 1.0/math.sqrt(w.shape[0])
-    b = jt.make_var([n], init=lambda *a: init.uniform(*a,-bound,bound))
-    return jt.matmul(x, w) + b
-
 def relu(x): return jt.maximum(x, 0)
 def leaky_relu(x, scale=0.01): return jt.ternary(x>0, x, x*scale)
 def relu6(x): return jt.minimum(jt.maximum(x, 0), 6)
@@ -360,6 +328,7 @@ class Conv(Module):
                 f'i4*{self.stride[0]}-{self.padding[0]}+i6*{self.dilation[0]}', # Hid+Khid
                 f'i5*{self.stride[1]}-{self.padding[1]}+i7*{self.dilation[1]}', # Wid+KWid
             ])
+            xx.compile_options = {"G":G}
             # w: [oc, CpG, Kh, Kw]
             ww = self.weight.reindex([N, G, oc//G, CpG, oh, ow, Kh, Kw], [
                 f'i1*{oc//G}+i2',

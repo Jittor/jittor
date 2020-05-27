@@ -23,7 +23,7 @@ int current_seed;
 
 static void init_cuda_devices() {
 #ifdef HAS_CUDA
-    int count;
+    int count=0;
     cudaGetDeviceCount(&count);
     for (int i=0; i<count; i++) {
         cudaDeviceProp devProp;

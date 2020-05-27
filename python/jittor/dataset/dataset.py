@@ -23,7 +23,7 @@ import jittor as jt
 
 dataset_root = os.path.join(pathlib.Path.home(), ".cache", "jittor", "dataset")
 mp_log_v = os.environ.get("mp_log_v", 0) 
-mpi = jt.compile_extern.mpi
+mpi = jt.mpi
 
 class Worker:
     def __init__(self, target, args, buffer_size):
