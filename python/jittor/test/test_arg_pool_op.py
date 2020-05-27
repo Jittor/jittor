@@ -84,7 +84,13 @@ class TestArgPoolOp(unittest.TestCase):
         from torch.nn import AvgPool2d
         jt_model = Pool(2, 2, 0, op="mean", ceil_mode=True)
         torch_model = AvgPool2d(2, 2, 0, ceil_mode=True)
-        # shape = [64, 64, 300, 300]
+        shape = (2, 16, 33, 33)
+        check(jt_model, torch_model, shape, False)
+
+    def test_cpu_avg_pool2(self):
+        from torch.nn import AvgPool2d
+        jt_model = Pool(3, 1, 1, op="mean", ceil_mode=True)
+        torch_model = AvgPool2d(3, 1, 1, ceil_mode=True)
         shape = (2, 16, 33, 33)
         check(jt_model, torch_model, shape, False)
 

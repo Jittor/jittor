@@ -15,7 +15,7 @@ import numpy as np
 import math
 
 class Pool(Module):
-    def __init__(self, kernel_size, stride=None, padding=0, dilation=None, return_indices=None, ceil_mode=False, op="maximum"):
+    def __init__(self, kernel_size, stride=None, padding=0, dilation=None, return_indices=None, ceil_mode=False, count_include_pad=True, op="maximum"):
         assert dilation == None
         assert return_indices == None
         self.kernel_size = kernel_size
@@ -23,6 +23,7 @@ class Pool(Module):
         self.stride = stride if stride else kernel_size
         self.padding = padding
         self.ceil_mode = ceil_mode
+        self.count_include_pad = count_include_pad and padding != 0
 
     def execute(self, x):
         N,C,H,W = x.shape
@@ -33,7 +34,7 @@ class Pool(Module):
             h = (H+self.padding*2-self.kernel_size + self.stride - 1)//self.stride+1
             w = (W+self.padding*2-self.kernel_size + self.stride - 1)//self.stride+1
 
-        if self.op in ['maximum', 'minimum', 'mean']:
+        if self.op in ['maximum', 'minimum', 'mean'] and not self.count_include_pad:
             forward_body = f'''{{
                 int k3 = i3*{self.stride}-{self.padding};
                 int k2 = i2*{self.stride}-{self.padding};
