@@ -116,8 +116,11 @@ def cross_entropy_loss(output, target, ignore_index=None):
 def mse_loss(output, target):
     return (output-target).sqr().mean()
 
-def bce_loss(output, target):
-    return - (target * jt.log(jt.maximum(output, 1e-20)) + (1 - target) * jt.log(jt.maximum(1 - output, 1e-20))).mean()
+def bce_loss(output, target, size_average=True):
+    if size_average:
+        return - (target * jt.log(jt.maximum(output, 1e-20)) + (1 - target) * jt.log(jt.maximum(1 - output, 1e-20))).mean()
+    else:
+        return - (target * jt.log(jt.maximum(output, 1e-20)) + (1 - target) * jt.log(jt.maximum(1 - output, 1e-20))).sum()
 
 def l1_loss(output, target):
     return (output-target).abs().mean()
@@ -137,8 +140,8 @@ class MSELoss(Module):
 class BCELoss(Module):
     def __init__(self):
         pass
-    def execute(self, output, target):
-        return bce_loss(output, target)
+    def execute(self, output, target, size_average=True):
+        return bce_loss(output, target, size_average)
 
 class L1Loss(Module):
     def __init__(self):
@@ -150,10 +153,149 @@ class BCEWithLogitsLoss(Module):
     def __init__(self):
         self.sigmoid = Sigmoid()
         self.bce = BCELoss()
-    def execute(self, output, target):
+    def execute(self, output, target, size_average=True):
         output = self.sigmoid(output)
-        output = self.bce(output, target)
+        output = self.bce(output, target, size_average)
         return output
+
+class SGD(object):
+    """ Usage:
+    optimizer = nn.SGD(model.parameters(), lr)
+    optimizer.step(loss)
+    """
+    def __init__(self, parameters, lr, momentum=0, weight_decay=0, dampening=0, nesterov=False, param_sync_iter=10000):
+        self.lr = lr
+        self.momentum = momentum
+        self.weight_decay = weight_decay
+        self.dampening = dampening
+        self.nesterov = nesterov
+        self.sgd_step = 0
+        self.param_sync_iter = param_sync_iter
+
+        self.no_grad_parameters = []
+        self.parameters = []
+        self.values = []
+        for p in parameters:
+            # broadcast parameter from 0 node when init
+            if jt.mpi:
+                p.assign(p.mpi_broadcast().detach())
+            if p.is_stop_grad():
+                self.no_grad_parameters.append(p)
+                continue
+            self.parameters.append(p)
+            self.values.append(jt.zeros(p.shape, p.dtype).stop_fuse().stop_grad())
+
+    def step(self, loss):
+        self.sgd_step += 1
+        ps = self.parameters
+        gs = jt.grad(loss, ps)
+        if jt.mpi:
+            for g in gs:
+                g.assign(g.mpi_all_reduce("mean"))
+            if self.sgd_step%self.param_sync_iter==0:
+                for p in ps:
+                    p.assign(p.mpi_all_reduce("mean"))
+        for p, g, v in zip(ps, gs, self.values):
+            dp = p * self.weight_decay + g
+            v.assign(self.momentum * v + dp * (1 - self.dampening))
+            if self.nesterov:
+                p -= (dp + self.momentum * v) * self.lr
+            else:
+                p -= v * self.lr
+            # detach with the prev graph to reduce memory consumption
+            p.detach_inplace()
+        # sync all no grad parameters, such as
+        # moving_mean and moving_var in batch_norm
+        # sync such parameters to reduce memory consumption
+        jt.sync(self.no_grad_parameters)
+
+class Adam(object):
+    """ Usage:
+    optimizer = nn.Adam(model.parameters(), lr)
+    optimizer.step(loss)
+    """
+    def __init__(self, parameters, lr, eps=1e-8, betas=(0.9, 0.999), weight_decay=0, param_sync_iter=10000):
+        self.lr = lr
+        self.eps = eps
+        self.betas = betas
+        # self.weight_decay = weight_decay
+        assert weight_decay==0, "weight_decay is not supported yet"
+        self.adam_step = 0
+        self.param_sync_iter = param_sync_iter
+        
+        self.no_grad_parameters = []
+        self.parameters = []
+        self.values = []
+        self.m = []
+        for p in parameters:
+            if jt.mpi:
+                p.assign(p.mpi_broadcast().detach())
+            if p.is_stop_grad():
+                self.no_grad_parameters.append(p)
+                continue
+            self.parameters.append(p)
+            self.values.append(jt.zeros(p.shape, p.dtype).stop_fuse().stop_grad())
+            self.m.append(jt.zeros(p.shape, p.dtype).stop_fuse().stop_grad())
+
+    def step(self, loss):
+        self.adam_step += 1
+        ps = self.parameters
+        gs = jt.grad(loss, ps)
+        if jt.mpi:
+            for g in gs:
+                g.assign(g.mpi_all_reduce("mean"))
+            if self.adam_step%self.param_sync_iter==0:
+                for p in ps:
+                    p.assign(p.mpi_all_reduce("mean"))
+        n, (b0, b1) = float(self.adam_step), self.betas
+        for p, g, v, m in zip(ps, gs, self.values, self.m):
+            m.assign(b0 * m + (1-b0) * g)
+            v.assign(b1 * v + (1-b1) * g * g)
+            step_size = self.lr * jt.sqrt(1-b1**n) / (1-b0 ** n)
+            p -= m * step_size / (jt.sqrt(v) + self.eps)
+            p.detach_inplace()
+        jt.sync(self.no_grad_parameters)
+
+class RMSprop(object):
+    """ Usage:
+    optimizer = nn.Adam(model.parameters(), lr)
+    optimizer.step(loss)
+    """
+    def __init__(self, parameters, lr=1e-2, eps=1e-8, alpha=0.99, param_sync_iter=10000):
+        self.lr = lr
+        self.eps = eps
+        self.alpha = alpha
+        self.rmsp_step = 0
+        self.param_sync_iter = param_sync_iter
+        
+        self.no_grad_parameters = []
+        self.parameters = []
+        self.values = []
+        for p in parameters:
+            if jt.mpi:
+                p.assign(p.mpi_broadcast().detach())
+            if p.is_stop_grad():
+                self.no_grad_parameters.append(p)
+                continue
+            self.parameters.append(p)
+            self.values.append(jt.zeros(p.shape, p.dtype).stop_fuse().stop_grad())
+
+    def step(self, loss):
+        self.rmsp_step += 1
+        ps = self.parameters
+        gs = jt.grad(loss, ps)
+        if jt.mpi:
+            for g in gs:
+                g.assign(g.mpi_all_reduce("mean"))
+            if self.rmsp_step%self.param_sync_iter==0:
+                for p in ps:
+                    p.assign(p.mpi_all_reduce("mean"))
+        n, alpha = float(self.rmsp_step), self.alpha
+        for p, g, v in zip(ps, gs, self.values):
+            v.assign(alpha * v + (1-alpha) * g * g)
+            p -= self.lr * g / (jt.sqrt(v) + self.eps)
+            p.detach_inplace()
+        jt.sync(self.no_grad_parameters)
 
 def softmax(x, dim = None):
     if dim is None:
@@ -311,9 +453,14 @@ class Conv(Module):
         assert in_channels % groups == 0, 'in_channels must be divisible by groups'
         assert out_channels % groups == 0, 'out_channels must be divisible by groups'
 
-        self.weight = init.relu_invariant_gauss([out_channels, in_channels//groups, Kh, Kw], dtype="float", mode="fan_out")
+        # self.weight = init.relu_invariant_gauss([out_channels, in_channels//groups, Kh, Kw], dtype="float", mode="fan_out")
+        self.weight = init.invariant_uniform([out_channels, in_channels//groups, Kh, Kw], dtype="float")
         if bias:
-            self.bias = init.uniform([out_channels], dtype="float", low=-1, high=1)
+            fan=1
+            for i in self.weight.shape[1:]:
+                fan *= i
+            bound = 1 / math.sqrt(fan)
+            self.bias = init.uniform([out_channels], dtype="float", low=-bound, high=bound)
         else:
             self.bias = None
 
