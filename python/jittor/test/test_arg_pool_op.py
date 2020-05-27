@@ -75,5 +75,13 @@ class TestArgPoolOp(unittest.TestCase):
         for i in range(10):
             check(jt_model, torch_model, [1,1,300,300], True)
 
+    def test_cpu_avg_pool(self):
+        from torch.nn import AvgPool2d
+        jt_model = Pool(2, 2, 0, op="mean", ceil_mode=True)
+        torch_model = AvgPool2d(2, 2, 0, ceil_mode=True)
+        # shape = [64, 64, 300, 300]
+        shape = (2, 16, 33, 33)
+        check(jt_model, torch_model, shape, False)
+
 if __name__ == "__main__":
     unittest.main()
