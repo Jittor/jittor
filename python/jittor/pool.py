@@ -67,7 +67,10 @@ class Pool(Module):
                     }}
             }}'''
             out = jt.code([N,C,h,w], x.dtype, [x],
-                cuda_header='#include <ops/binary_op_defs.h>',
+                cuda_header="""
+                    #include <ops/binary_op_defs.h>
+                    #include <misc/cuda_limits.h>
+                """,
                 cuda_src=f'''
                     __global__ static void kernel1(@ARGS_DEF) {{
                         @PRECALC

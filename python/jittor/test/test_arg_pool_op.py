@@ -75,6 +75,11 @@ class TestArgPoolOp(unittest.TestCase):
         for i in range(10):
             check(jt_model, torch_model, [1,1,300,300], True)
 
+    @unittest.skipIf(not jt.compiler.has_cuda, "No cuda found")
+    @jt.flag_scope(use_cuda=1)
+    def test_cuda_avg_pool(self):
+        self.test_cpu_avg_pool()
+
     def test_cpu_avg_pool(self):
         from torch.nn import AvgPool2d
         jt_model = Pool(2, 2, 0, op="mean", ceil_mode=True)
