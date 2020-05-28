@@ -15,17 +15,16 @@ struct WhereOp : Op {
     /**
     Where Operator generate index of true condition.
 
-    @param[in]	cond    condition for index generation
+    * [in] cond:    condition for index generation
 
-    @param[in]	dtype   type of return indexes
+    * [in] dtype:   type of return indexes
     
-    @param[out]	out  return an array of indexes, same length with number of dims of cond 
+    * [out] out:  return an array of indexes, same length with number of dims of cond 
     
-    Example
-    ```
-    jt.where([[0,0,1],[1,0,0]])
-    # return ( [0,2], [1,0] )
-    ```
+    Example::
+
+        jt.where([[0,0,1],[1,0,0]])
+        # return ( [0,2], [1,0] )
      */
     // @attrs(multiple_outputs)
     WhereOp(Var* cond, NanoString dtype=ns_int32);

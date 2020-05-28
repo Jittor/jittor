@@ -23,9 +23,9 @@ typedef struct {
 
 /* Parse the pagemap entry for the given virtual address.
  *
- * @param[out] entry      the parsed entry
- * @param[in]  pagemap_fd file descriptor to an open /proc/pid/pagemap file
- * @param[in]  vaddr      virtual address to get entry for
+ * * [out] entry:      the parsed entry
+ * * [in] pagemap_fd: file descriptor to an open /proc/pid/pagemap file
+ * * [in] vaddr:      virtual address to get entry for
  * @return 0 for success, 1 for failure
  */
 int pagemap_get_entry(PagemapEntry* entry, int pagemap_fd, uintptr_t vaddr)
@@ -55,8 +55,8 @@ int pagemap_get_entry(PagemapEntry* entry, int pagemap_fd, uintptr_t vaddr)
 
 /* Convert the given virtual address to physical using /proc/self/pagemap.
  *
- * @param[out] paddr physical address
- * @param[in] vaddr virtual address to get entry for
+ * * [out] paddr: physical address
+ * * [in] vaddr: virtual address to get entry for
  * @return 0 for success, 1 for failure
  */
 int virt_to_phys_user(uintptr_t* paddr, uintptr_t vaddr)
