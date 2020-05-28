@@ -32,28 +32,28 @@ struct ArgsortOp : Op {
 
         compare(y[0], y[1]) && compare(y[1], y[2]) && ...
 
-    @param[in]	x input var for sort
+    * [in] x: input var for sort
 
-    @param[in]	dim sort alone which dim
+    * [in] dim: sort alone which dim
 
-    @param[in]	dtype type of return indexes
+    * [in] dtype: type of return indexes
 
-    @param[in]	key code for sorted key
+    * [in] key: code for sorted key
 
-    @param[in]	compare code for compare
+    * [in] compare: code for compare
 
-    @param[out]	index index have the same size with sorted dim
+    * [out] index: index have the same size with sorted dim
 
         
-    Example
-    ```
-    jt.sort([11,13,12])
-    # return [0,2,1]
-    jt.sort([11,13,12], key='-@x(i)')
-    # return [1,2,0]
-    jt.sort([11,13,12], key='@x(i)<@x(j)')
-    # return [0,2,1]
-    ```
+    Example::
+
+            jt.sort([11,13,12])
+            # return [0,2,1]
+            jt.sort([11,13,12], key='-@x(i)')
+            # return [1,2,0]
+            jt.sort([11,13,12], key='@x(i)<@x(j)')
+            # return [0,2,1]
+
      */
     // @attrs(multiple_outputs)
     ArgsortOp(Var* x, int dim=-1, bool descending=false, NanoString dtype=ns_int32);

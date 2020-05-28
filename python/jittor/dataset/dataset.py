@@ -37,7 +37,8 @@ class Dataset(object):
     '''
     base class for reading data
     
-    Example:
+    Example::
+
         class YourDataset(Dataset):
             def __init__(self):
                 super().__init__()
@@ -75,17 +76,16 @@ class Dataset(object):
         return (self.total_len-1) // self.batch_size + 1
 
     def set_attrs(self, **kw):
-        '''set attributes of dataset, equivalent to setattr
+        '''set attributes of dataset, equivalent to set_attr
         
         Attrs:
-            batch_size(int): batch size, default 16.
-            totol_len(int): totol lenght.
-            shuffle(bool): shuffle at each epoch, default False.
-            drop_last(bool): if true, the last batch of dataset
-                might smaller than batch_size, default True.
-            num_workers: number of workers for loading data
-            buffer_size: buffer size for each worker in bytes,
-                default(512MB).
+
+            * batch_size(int): batch size, default 16.
+            * totol_len(int): totol lenght.
+            * shuffle(bool): shuffle at each epoch, default False.
+            * drop_last(bool): if true, the last batch of dataset might smaller than batch_size, default True.
+            * num_workers: number of workers for loading data
+            * buffer_size: buffer size for each worker in bytes, default(512MB).
         '''
         for k,v in kw.items():
             assert hasattr(self, k), k
@@ -287,19 +287,22 @@ class Dataset(object):
 class ImageFolder(Dataset):
     """A image classify dataset, load image and label from directory:
     
-        root/label1/img1.png
-        root/label1/img2.png
-        ...
-        root/label2/img1.png
-        root/label2/img2.png
-        ...
-    Args:
-        root(string): Root directory path.
+        * root/label1/img1.png
+        * root/label1/img2.png
+        * ...
+        * root/label2/img1.png
+        * root/label2/img2.png
+        * ...
 
-     Attributes:
-        classes(list): List of the class names.
-        class_to_idx(dict): map from class_name to class_index.
-        imgs(list): List of (image_path, class_index) tuples
+    Args:
+
+        * root(string): Root directory path.
+
+    Attributes:
+
+        * classes(list): List of the class names.
+        * class_to_idx(dict): map from class_name to class_index.
+        * imgs(list): List of (image_path, class_index) tuples
     """
     def __init__(self, root, transform=None):
         # import ipdb; ipdb.set_trace()

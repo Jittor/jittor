@@ -63,7 +63,9 @@ single_log_capture = None
 
 class log_capture_scope(_call_no_record_scope):
     """log capture scope
-    example:
+
+    example::
+
         with jt.log_capture_scope(log_v=0) as logs:
             LOG.v("...")
         print(logs)
@@ -95,7 +97,9 @@ class log_capture_scope(_call_no_record_scope):
 
 class profile_scope(_call_no_record_scope):
     """ profile scope
-    example:
+
+    example::
+    
         with jt.profile_scope() as report:
             ......
         print(report)
@@ -474,7 +478,9 @@ def make_module(func, exec_n_args=1):
 
 def dirty_fix_pytorch_runtime_error():
     ''' This funtion should be called before pytorch.
-    Example:
+    
+    Example::
+
         import jittor as jt
         jt.dirty_fix_pytorch_runtime_error()
         import torch

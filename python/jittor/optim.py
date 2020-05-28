@@ -15,11 +15,11 @@ import numpy as np
 
 class Optimizer(object):
     """ Basic class of Optimizer.
-    Example:
-    ```
-    optimizer = nn.SGD(model.parameters(), lr)
-    optimizer.step(loss)
-    ```
+
+    Example::
+
+        optimizer = nn.SGD(model.parameters(), lr)
+        optimizer.step(loss)
     """
     def __init__(self, params, lr, param_sync_iter=10000):
         self.param_groups = []
@@ -35,15 +35,14 @@ class Optimizer(object):
         self.n_step = 0
 
     def pre_step(self, loss):
-        """ something should be done before step, 
-        such as calc gradients, mpi sync, and so on.
-        Example:
-        ```
-        class MyOptimizer(Optimizer):
-            def step(self, loss):
-                self.post_step(loss)
-                ...
-        ```
+        """ something should be done before step, such as calc gradients, mpi sync, and so on.
+
+        Example::
+
+            class MyOptimizer(Optimizer):
+                def step(self, loss):
+                    self.post_step(loss)
+                    ...
         """
         # clean prev grads
         params = []
@@ -92,11 +91,11 @@ class Optimizer(object):
 
 class SGD(Optimizer):
     """ SGD Optimizer.
-    Example:
-    ```
-    optimizer = nn.SGD(model.parameters(), lr, momentum=0.9)
-    optimizer.step(loss)
-    ```
+
+    Example::
+
+        optimizer = nn.SGD(model.parameters(), lr, momentum=0.9)
+        optimizer.step(loss)
     """
     def __init__(self, params, lr, momentum=0, weight_decay=0, dampening=0, nesterov=False):
         super().__init__(params, lr)
@@ -134,11 +133,11 @@ class SGD(Optimizer):
 
 class Adam(Optimizer):
     """ Adam Optimizer.
-    Example:
-    ```
-    optimizer = nn.Adam(model.parameters(), lr, eps=1e-8, betas=(0.9, 0.999))
-    optimizer.step(loss)
-    ```
+    
+    Example::
+
+        optimizer = nn.Adam(model.parameters(), lr, eps=1e-8, betas=(0.9, 0.999))
+        optimizer.step(loss)
     """
     def __init__(self, params, lr, eps=1e-8, betas=(0.9, 0.999), weight_decay=0):
         super().__init__(params, lr)
