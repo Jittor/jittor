@@ -27,10 +27,11 @@ class RandomCropAndResize:
     """Random crop and resize the given PIL Image to given size.
 
     Args:
-        size(int or tuple): width and height of the output image
-        scale(tuple): range of scale ratio of the area
-        ratio(tuple): range of aspect ratio
-        interpolation: Default: PIL.Image.BILINEAR
+
+        * size(int or tuple): width and height of the output image
+        * scale(tuple): range of scale ratio of the area
+        * ratio(tuple): range of aspect ratio
+        * interpolation: Default: PIL.Image.BILINEAR
     """
     def __init__(self, size, scale:tuple=(0.08, 1.0), ratio:tuple=(3. / 4., 4. / 3.), interpolation=Image.BILINEAR):
         if isinstance(size, int):

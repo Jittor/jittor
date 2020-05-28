@@ -15,29 +15,26 @@ struct IndexOp : Op {
     /** 
     Index Operator generate index of shape.
     
-    It performs equivalent Python-pseudo implementation below:
+    It performs equivalent Python-pseudo implementation below::
     
-    ```
-    n = len(shape)-1
-    x = np.zeros(shape, dtype)
-    for i0 in range(shape[0]): # 1-st loop
-        for i1 in range(shape[1]): # 2-nd loop
-            ...... # many loops
-            for in in range(shape[n]) # n+1 -th loop
-                x[i0,i1,...,in] = i@dim
-    ```
+        n = len(shape)-1
+        x = np.zeros(shape, dtype)
+        for i0 in range(shape[0]): # 1-st loop
+            for i1 in range(shape[1]): # 2-nd loop
+                ...... # many loops
+                for in in range(shape[n]) # n+1 -th loop
+                    x[i0,i1,...,in] = i@dim
     
-    @param[in]	shape   the output shape, a integer array
-    @param[in]	dim the dim of the index.
-    @param[in]	dtype   the data type string, default int32
+    * [in] shape:   the output shape, a integer array
+    * [in] dim: the dim of the index.
+    * [in] dtype:   the data type string, default int32
 
-    Example
-    ```
-    print(jt.index([2,2], 0)())
-    # output: [[0,0],[1,1]]
-    print(jt.index([2,2], 1)())
-    # output: [[0,1],[0,1]]
-    ```
+    Example::
+
+        print(jt.index([2,2], 0)())
+        # output: [[0,0],[1,1]]
+        print(jt.index([2,2], 1)())
+        # output: [[0,1],[0,1]]
      */
     IndexOp(NanoVector shape, int64 dim, NanoString dtype=ns_int32);
     // @attrs(multiple_outputs)
