@@ -34,7 +34,14 @@ class Pool(Module):
             h = (H+self.padding*2-self.kernel_size + self.stride - 1)//self.stride+1
             w = (W+self.padding*2-self.kernel_size + self.stride - 1)//self.stride+1
 
-        if self.op in ['maximum', 'minimum', 'mean'] and not self.count_include_pad:
+        if self.op in ['maximum', 'minimum', 'mean']:
+            if self.op == 'mean':
+                if self.count_include_pad:
+                    count = f"int count = {self.kernel_size*self.kernel_size};"
+                else:
+                    count = "int count = (k2_ - k2) * (k3_ - k3);"
+            else:
+                count = ""
             forward_body = f'''{{
                 int k3 = i3*{self.stride}-{self.padding};
                 int k2 = i2*{self.stride}-{self.padding};
@@ -43,7 +50,7 @@ class Pool(Module):
                 k3 = max(0, k3);
                 k2 = max(0, k2);
                 @out(i0, i1, i2, i3) = init_{self.op}(out_type);
-                {"int count = (k2_ - k2) * (k3_ - k3);" if self.op == "mean" else ""}
+                {count}
                 for (int p = k2; p < k2_; ++p)
                     for (int q = k3; q < k3_; ++q)
                         @out(i0, i1, i2, i3) = {self.op}(out_type, @out(i0, i1, i2, i3), @in0(i0, i1, p, q));
@@ -55,7 +62,7 @@ class Pool(Module):
                 int k2_ = min(k2 + {self.kernel_size}, in0_shape2);
                 k3 = max(0, k3);
                 k2 = max(0, k2);
-                {"int count = (k2_ - k2) * (k3_ - k3);" if self.op == "mean" else ""}
+                {count}
                 int bo=1;
                 for (int p = k2; p < k2_ && bo; ++p)
                     for (int q = k3; q < k3_ && bo; ++q) {{
@@ -139,6 +146,7 @@ class Pool(Module):
                 '''])
             return out
         else:
+            # TODO: backward 
             xx = x.reindex([N,C,h,w,self.kernel_size,self.kernel_size], [
                 "i0", # Nid
                 "i1", # Cid

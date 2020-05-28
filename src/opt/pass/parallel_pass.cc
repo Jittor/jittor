@@ -291,7 +291,7 @@ void ParallelPass::run() {
             // omp func call
             // we set num_threads in code
             new_func_call->push_back(
-                "#pragma omp parallel num_threads("+S(thread_num)+")", 
+                "#pragma omp parallel num_threads(thread_num)", 
                 &new_func_call->before
             );
         } else {

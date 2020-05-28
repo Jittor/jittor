@@ -23,13 +23,14 @@ class TestMem(unittest.TestCase):
         one_g = np.ones((1024*1024*1024//4,), "float32")
 
         meminfo = jt.get_mem_info()
-        n = int(meminfo.total_cuda_ram // (1024**3) * 1.5)
+        n = int(meminfo.total_cuda_ram // (1024**3) * 0.6)
 
         for i in range(n):
             a = jt.array(one_g)
             b = a + 1
             b.sync()
             backups.append((a,b))
+        jt.sync_all(True)
         backups = []
 
 
