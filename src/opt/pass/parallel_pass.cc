@@ -264,9 +264,9 @@ void ParallelPass::run() {
         string nums = rvalues.at(0);
         for (int i=1; i<rvalues.size(); i++)
             nums+="*"+rvalues[i];
-        new_block.push_back("int thread_num=" + S(thread_num) + ");");
+        new_block.push_back("int thread_num=" + S(thread_num) + ";");
         new_block.push_back("int thread_num_left=thread_num;");
-        
+
         for (int j=ncs.size()-1; j>=0; j--) {
             auto& rv = rvalues[j];
             new_block.push_back("int tn"+S(j)+
