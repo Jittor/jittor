@@ -16,3 +16,4 @@ from . import mnasnet
 from .mnasnet import *
 from . import shufflenetv2
 from .shufflenetv2 import *
+from .res2net import res2net50, res2net101
