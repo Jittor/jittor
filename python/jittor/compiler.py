@@ -561,7 +561,8 @@ def compile_custom_ops(
     filenames, 
     extra_flags="", 
     return_module=False,
-    dlopen_flags=os.RTLD_GLOBAL | os.RTLD_NOW | os.RTLD_DEEPBIND):
+    dlopen_flags=os.RTLD_GLOBAL | os.RTLD_NOW | os.RTLD_DEEPBIND,
+    gen_name_ = ""):
     """Compile custom ops
     filenames: path of op source files, filenames must be
         pairs of xxx_xxx_op.cc and xxx_xxx_op.h, and the 
@@ -599,6 +600,8 @@ def compile_custom_ops(
     for name in srcs:
         assert name in headers, f"Header of op {name} not found"
     gen_name = "gen_ops_" + "_".join(headers.keys())
+    if gen_name_ != "":
+        gen_name = gen_name_
     if len(gen_name) > 100:
         gen_name = gen_name[:80] + "___hash" + str(hash(gen_name))
 
