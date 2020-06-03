@@ -349,6 +349,7 @@ void ParallelPass::run() {
             } else {
                 func_call->find_define("thread_num")->attrs["rvalue"] = "min(1<<max((NanoVector::get_nbits(" + nums + ")-2),0)," + S(thread_num) + ")";
             }
+        }
     }
     ir->remove_all_unused();
 }
