@@ -229,9 +229,9 @@ void AtomicTunerPass::run() {
 
     // Re-adjust the allocation order of "tn" according to the situation of atomic coverage, preferentially allocate the range not covered by atomic, for example:
     // for (op0_index_t id0 = tid0; id0<range0; id0+=tnum0) {
-    //     for (op0_index_t id1 = tid1; id1<range1; id1+=tnum1) {
-    //         for (op0_index_t id1 = tid1; id1<range1; id1+=tnum1) {
-    //             for (op0_index_t id1 = tid1; id1<range1; id1+=tnum1) {
+    //     for (op1_index_t id1 = tid1; id1<range1; id1+=tnum1) {
+    //         for (op2_index_t id2 = tid2; id2<range2; id2+=tnum2) {
+    //             for (op3_index_t id3 = tid3; id3<range3; id3+=tnum3) {
     //                 ...
     //             }
     //         }
