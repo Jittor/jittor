@@ -125,8 +125,6 @@ class profile_scope(_call_no_record_scope):
         profiler.stop()
         self.report.extend(profiler.report())
 
-import jittor as jt
-from jittor.dataset import dataset
 class single_process_scope(_call_no_record_scope):
     """ single_process_scope
     
@@ -145,15 +143,20 @@ class single_process_scope(_call_no_record_scope):
         self.rank = rank
 
     def __enter__(self):
-        self.mpi_backup = jt.mpi
-        jt.mpi = dataset.mpi = None
+        global mpi
+        from jittor.dataset import dataset
+        self.mpi_backup = mpi
+        mpi = dataset.mpi = None
 
     def __exit__(self, *exc):
-        jt.mpi = dataset.mpi = self.mpi_backup
+        global mpi
+        from jittor.dataset import dataset
+        mpi = dataset.mpi = self.mpi_backup
         
     def __call__(self, func):
+        global mpi
         def inner(*args, **kw):
-            if jt.mpi and jt.mpi.world_rank() != self.rank:
+            if mpi and mpi.world_rank() != self.rank:
                 return
             with self:
                 ret = func(*args, **kw)
