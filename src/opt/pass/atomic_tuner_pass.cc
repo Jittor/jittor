@@ -41,6 +41,8 @@ static void move_rely(KernelIR* inner_loop, KernelIR* outer_loop, KernelIR* def)
     }
 }
 
+// sorder: Array that saves the allocation order of "tn"
+// sfunc: Array of function names
 static void tune_atomic(Pass* pass, KernelIR* ir, bool is_cuda, int tdim, vector<vector<int>> &sorder, vector<string> &sfunc) {
     LOGvvvv << "tune_atomic" << ir->children;
     vector<string> relys;
@@ -224,6 +226,19 @@ void AtomicTunerPass::run() {
         if (func_call->get_attr("dtype") != "__global__ void") continue;
         tune_atomic(this, func_call.get(), is_cuda, 4, sorder, sfunc);
     }
+
+    // Re-adjust the allocation order of "tn" according to the situation of atomic coverage, preferentially allocate the range not covered by atomic, for example:
+    // for (op0_index_t id0 = tid0; id0<range0; id0+=tnum0) {
+    //     for (op0_index_t id1 = tid1; id1<range1; id1+=tnum1) {
+    //         for (op0_index_t id1 = tid1; id1<range1; id1+=tnum1) {
+    //             for (op0_index_t id1 = tid1; id1<range1; id1+=tnum1) {
+    //                 ...
+    //             }
+    //         }
+    //         atomicAdd(...);
+    //     }
+    // }
+    // The allocation order of "tn" will be: tn1, tn0, tn3, tn2
     for (uint j=0;j<sfunc.size();j++)
         for (uint i=0; i<ir->children.size(); i++) {
             auto& func_call = ir->children[i];

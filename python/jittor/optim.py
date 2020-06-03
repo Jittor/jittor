@@ -134,14 +134,17 @@ class SGD(Optimizer):
 
 class RMSprop(Optimizer):
     """ RMSprop Optimizer.
+    Args:
+        params(list): parameters of model.
+        lr(float): learning rate.
+        eps(float): term added to the denominator to avoid division by zero, default 1e-8.
+        alpha(float): smoothing constant, default 0.99.
+
     Example:
-    ```
-    optimizer = nn.RMSprop(model.parameters(), lr, eps=1e-8, betas=(0.9, 0.999))
-    optimizer.step(loss)
-    ```
+        optimizer = nn.RMSprop(model.parameters(), lr)
+        optimizer.step(loss)
     """
     def __init__(self, params, lr=1e-2, eps=1e-8, alpha=0.99):
-    # def __init__(self, params, lr, eps=1e-8, betas=(0.9, 0.999), weight_decay=0):
         super().__init__(params, lr)
         self.eps = eps
         self.alpha = alpha

@@ -343,9 +343,12 @@ void ParallelPass::run() {
         new_block.swap(*func_call, true);
         auto code = func_def->to_string(); 
         bool has_atomic = code.find("atomic") != string::npos;
-        if (has_atomic && !fix_thread_num) {
-            func_call->find_define("thread_num")->attrs["rvalue"] = "min(1<<max((NanoVector::get_nbits(" + nums + "/16)-2),0)," + S(thread_num) + ")";
-        }
+        if (!fix_thread_num) {
+            if (has_atomic) {
+                func_call->find_define("thread_num")->attrs["rvalue"] = "min(1<<max((NanoVector::get_nbits(" + nums + "/16)-2),0)," + S(thread_num) + ")";
+            } else {
+                func_call->find_define("thread_num")->attrs["rvalue"] = "min(1<<max((NanoVector::get_nbits(" + nums + ")-2),0)," + S(thread_num) + ")";
+            }
     }
     ir->remove_all_unused();
 }
