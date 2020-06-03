@@ -125,6 +125,38 @@ class profile_scope(_call_no_record_scope):
         profiler.stop()
         self.report.extend(profiler.report())
 
+import jittor as jt
+from jittor.dataset import dataset
+class single_process_scope(_call_no_record_scope):
+    """ single_process_scope
+    
+    Code in this scope will only be executed by single
+    process.
+
+    example::
+    
+        with jt.single_process_scope(root=0):
+            ......
+    """
+    def __init__(self, rank=0):
+        self.rank = rank
+
+    def __enter__(self):
+        self.mpi_backup = jt.mpi
+        jt.mpi = dataset.mpi = None
+
+    def __exit__(self, *exc):
+        jt.mpi = dataset.mpi = self.mpi_backup
+        
+    def __call__(self, func):
+        def inner(*args, **kw):
+            if jt.mpi and jt.mpi.world_rank() != self.rank:
+                return
+            with self:
+                ret = func(*args, **kw)
+            return ret
+        return inner
+
 def clean():
     import gc
     # make sure python do a full collection
