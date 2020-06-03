@@ -177,7 +177,7 @@ def std(x):
         matsize *= i
     out=(x-x.mean()).sqr().sum()
     out=out/(matsize-1)
-    out=out.sqrt()
+    out=out.maximum(1e-6).sqrt()
     return out
 Var.std = std
 
@@ -186,7 +186,7 @@ def norm(x, k, dim):
     if k==1:
         return x.abs().sum(dim)
     if k==2:
-        return x.sqr().sum(dim).sqrt()
+        return (x.sqr()).sum(dim).maximum(1e-6).sqrt()
 Var.norm = norm
 
 origin_reshape = reshape

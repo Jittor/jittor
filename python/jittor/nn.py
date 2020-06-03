@@ -84,8 +84,11 @@ def cross_entropy_loss(output, target, ignore_index=None):
 def mse_loss(output, target):
     return (output-target).sqr().mean()
 
-def bce_loss(output, target):
-    return - (target * jt.log(jt.maximum(output, 1e-20)) + (1 - target) * jt.log(jt.maximum(1 - output, 1e-20))).mean()
+def bce_loss(output, target, size_average=True):
+    if size_average:
+        return - (target * jt.log(jt.maximum(output, 1e-20)) + (1 - target) * jt.log(jt.maximum(1 - output, 1e-20))).mean()
+    else:
+        return - (target * jt.log(jt.maximum(output, 1e-20)) + (1 - target) * jt.log(jt.maximum(1 - output, 1e-20))).sum()
 
 def l1_loss(output, target):
     return (output-target).abs().mean()
@@ -105,8 +108,8 @@ class MSELoss(Module):
 class BCELoss(Module):
     def __init__(self):
         pass
-    def execute(self, output, target):
-        return bce_loss(output, target)
+    def execute(self, output, target, size_average=True):
+        return bce_loss(output, target, size_average)
 
 class L1Loss(Module):
     def __init__(self):
@@ -118,9 +121,9 @@ class BCEWithLogitsLoss(Module):
     def __init__(self):
         self.sigmoid = Sigmoid()
         self.bce = BCELoss()
-    def execute(self, output, target):
+    def execute(self, output, target, size_average=True):
         output = self.sigmoid(output)
-        output = self.bce(output, target)
+        output = self.bce(output, target, size_average)
         return output
 
 def softmax(x, dim = None):
@@ -279,9 +282,14 @@ class Conv(Module):
         assert in_channels % groups == 0, 'in_channels must be divisible by groups'
         assert out_channels % groups == 0, 'out_channels must be divisible by groups'
 
-        self.weight = init.relu_invariant_gauss([out_channels, in_channels//groups, Kh, Kw], dtype="float", mode="fan_out")
+        # self.weight = init.relu_invariant_gauss([out_channels, in_channels//groups, Kh, Kw], dtype="float", mode="fan_out")
+        self.weight = init.invariant_uniform([out_channels, in_channels//groups, Kh, Kw], dtype="float")
         if bias:
-            self.bias = init.uniform([out_channels], dtype="float", low=-1, high=1)
+            fan=1
+            for i in self.weight.shape[1:]:
+                fan *= i
+            bound = 1 / math.sqrt(fan)
+            self.bias = init.uniform([out_channels], dtype="float", low=-bound, high=bound)
         else:
             self.bias = None
 
