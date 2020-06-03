@@ -23,8 +23,8 @@ struct MpiReduceOp : Op {
     Args:
 
     * x: variable to be reduced.
-    * op: 'sum' or 'add' means sum all [x], 'mean' means average all [x].
-    * root: ID of MPI node to output.
+    * op: 'sum' or 'add' means sum all [x], 'mean' means average all [x]. Default: 'add'.
+    * root: ID of MPI node to output. Default: 0.
      */
     MpiReduceOp(Var* x, NanoString op=ns_add, int root=0);
     void infer_shape() override;

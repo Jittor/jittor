@@ -22,7 +22,7 @@ struct MpiBroadcastOp : Op {
     Args:
 
     * x: variable to be broadcasted.
-    * root: ID of MPI node to be broadcasted.
+    * root: ID of MPI node to be broadcasted. Default: 0.
      */
     MpiBroadcastOp(Var* x, int root=0);
     void infer_shape() override;

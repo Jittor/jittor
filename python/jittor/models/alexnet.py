@@ -13,6 +13,19 @@ import jittor.nn as nn
 __all__ = ['AlexNet', 'alexnet']
 
 class AlexNet(nn.Module):
+    """ AlexNet model architecture.
+
+    Args:
+
+    * num_classes: Number of classes. Default: 1000.
+
+    Example::
+    
+        model = jittor.models.AlexNet(500)
+        x = jittor.random([10,224,224,3])
+        y = model(x) # [10, 500]
+
+    """
 
     def __init__(self, num_classes=1000):
         super(AlexNet, self).__init__()

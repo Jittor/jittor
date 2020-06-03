@@ -162,6 +162,16 @@ def Resnet50(**kwargs):
 resnet50 = Resnet50
 
 def Resnet101(**kwargs):
+    """
+    ResNet-101 model architecture.
+
+    Example::
+
+        model = jittor.models.Resnet101()
+        x = jittor.random([10,224,224,3])
+        y = model(x) # [10, 1000]
+
+    """
     return _resnet(Bottleneck, [3, 4, 23, 3], **kwargs)
 resnet101 = Resnet101
 
