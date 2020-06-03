@@ -130,13 +130,16 @@ from jittor.dataset import dataset
 class single_process_scope(_call_no_record_scope):
     """ single_process_scope
     
-    Code in this scope will only be executed by single
-    process.
+    Code in this scope will only be executed by single process.
 
     example::
     
         with jt.single_process_scope(root=0):
             ......
+
+        @jt.single_process_scope(root=0)
+        def xxx():
+            ...
     """
     def __init__(self, rank=0):
         self.rank = rank
