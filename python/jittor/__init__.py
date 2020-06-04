@@ -125,6 +125,44 @@ class profile_scope(_call_no_record_scope):
         profiler.stop()
         self.report.extend(profiler.report())
 
+class single_process_scope(_call_no_record_scope):
+    """ single_process_scope
+    
+    Code in this scope will only be executed by single process.
+
+    example::
+    
+        with jt.single_process_scope(root=0):
+            ......
+
+        @jt.single_process_scope(root=0)
+        def xxx():
+            ...
+    """
+    def __init__(self, rank=0):
+        self.rank = rank
+
+    def __enter__(self):
+        global mpi
+        from jittor.dataset import dataset
+        self.mpi_backup = mpi
+        mpi = dataset.mpi = None
+
+    def __exit__(self, *exc):
+        global mpi
+        from jittor.dataset import dataset
+        mpi = dataset.mpi = self.mpi_backup
+        
+    def __call__(self, func):
+        global mpi
+        def inner(*args, **kw):
+            if mpi and mpi.world_rank() != self.rank:
+                return
+            with self:
+                ret = func(*args, **kw)
+            return ret
+        return inner
+
 def clean():
     import gc
     # make sure python do a full collection
@@ -177,7 +215,7 @@ def std(x):
         matsize *= i
     out=(x-x.mean()).sqr().sum()
     out=out/(matsize-1)
-    out=out.sqrt()
+    out=out.maximum(1e-6).sqrt()
     return out
 Var.std = std
 
@@ -186,7 +224,7 @@ def norm(x, k, dim):
     if k==1:
         return x.abs().sum(dim)
     if k==2:
-        return x.sqr().sum(dim).sqrt()
+        return (x.sqr()).sum(dim).maximum(1e-6).sqrt()
 Var.norm = norm
 
 origin_reshape = reshape
