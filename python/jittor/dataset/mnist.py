@@ -17,12 +17,19 @@ import jittor as jt
 import jittor.transform as trans
 
 class MNIST(Dataset):
-    def __init__(self, data_root=dataset_root+"/mnist_data/", train=True ,download=True, transform=None):
+    def __init__(self, data_root=dataset_root+"/mnist_data/", 
+                 train=True, 
+                 download=True, 
+                 batch_size = 16,
+                 shuffle = False,
+                 transform=None):
         # if you want to test resnet etc you should set input_channel = 3, because the net set 3 as the input dimensions
         super().__init__()
         self.data_root = data_root
         self.is_train = train
         self.transform = transform
+        self.batch_size = batch_size
+        self.shuffle = shuffle
         if download == True:
             self.download_url()
 

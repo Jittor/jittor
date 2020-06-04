@@ -15,7 +15,7 @@ tests = []
 for mdname in os.listdir(dirname):
     if not mdname.endswith(".src.md"): continue
     # temporary disable model_test
-    if "LSGAN" in mdname: continue
+    if "GAN" in mdname: continue
     tests.append(mdname[:-3])
 
 try:
