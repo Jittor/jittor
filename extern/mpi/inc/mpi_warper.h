@@ -53,6 +53,7 @@ struct ArrayArgs;
 
 Use jt.Module.mpi_param_broadcast(root=0) to broadcast all moudule parameters of this module in [root] MPI node to all MPI nodes.
 
+This operation has no gradient, and the input parameter type is numpy array.
 */
 // @pyjt(broadcast)
 void _mpi_broadcast(ArrayArgs&& args, int root);
