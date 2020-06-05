@@ -81,9 +81,9 @@ class TestArgPoolOp(unittest.TestCase):
     def test_cuda(self):
         jt_model = jt.nn.Sequential(Pool(2, 2, 0), Pool(2, 2, 0), Pool(2, 2, 0, ceil_mode=True), Pool(2, 2, 0), Pool(2, 2, 0), Pool(3, 1, 1))
         torch_model = Sequential(MaxPool2d(2, 2, 0), MaxPool2d(2, 2, 0), MaxPool2d(2, 2, 0, ceil_mode=True), MaxPool2d(2, 2, 0), MaxPool2d(2, 2, 0), MaxPool2d(3, 1, 1))
-        shape = [64, 64, 300, 300]
+        shape = [2, 3, 300, 300]
         check(jt_model, torch_model, shape, False)
-        shape = [32, 128, 157, 300]
+        shape = [2, 3, 157, 300]
         check(jt_model, torch_model, shape, False)
         for i in range(10):
             check(jt_model, torch_model, [1,1,300,300], True)

@@ -10,6 +10,8 @@
 # Publish steps:
 # 1. build,push,upload docker image[jittor/jittor]
 # 2. build,push,upload docker image[jittor/jittor-cuda]
+# upload to pip:
+# rm -rf dist && python3.7 ./setup.py sdist && python3.7 -m twine upload dist/*
 import os
 
 def run_cmd(cmd):
