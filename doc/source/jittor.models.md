@@ -6,8 +6,9 @@ jittor.models
 ```eval_rst
 
 .. automodule:: jittor.models
-   :members:
+   :members: 
    :imported-members:
    :undoc-members:
+   :exclude-members: ResNet,ShuffleNetV2,SqueezeNet,VGG
 ```
 

@@ -15,6 +15,15 @@ struct MpiAllReduceOp : Op {
     Var* x, * y;
     NanoString op;
 
+    /**
+
+    Mpi All Reduce Operator uses the operator [op] to reduce variable [x] in all MPI nodes and broadcast to all MPI nodes.
+
+    Args:
+
+    * x: variable to be all reduced.
+    * op: 'sum' or 'add' means sum all [x], 'mean' means average all [x]. Default: 'add'.
+     */
     MpiAllReduceOp(Var* x, NanoString op=ns_add);
     void infer_shape() override;
     

@@ -48,6 +48,17 @@ class InvertedResidual(nn.Module):
             return self.conv(x)
 
 class MobileNetV2(nn.Module):
+    """ MobileNetV2 model architecture.
+
+    Args:
+
+    * num_classes: Number of classes. Default: 1000.
+    * width_mult: Width multiplier - adjusts number of channels in each layer by this amount. Default: 1.0.
+    * init_weights: Defualt: True.
+    * inverted_residual_setting: Network structure
+    * round_nearest: Round the number of channels in each layer to be a multiple of this number. Set to 1 to turn off rounding. Default: 8.
+    * block: Module specifying inverted residual building block for mobilenet. If None, use InvertedResidual instead. Default: None.
+    """
 
     def __init__(self, num_classes=1000, width_mult=1.0, inverted_residual_setting=None, round_nearest=8, block=None):
         super(MobileNetV2, self).__init__()

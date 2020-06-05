@@ -44,11 +44,11 @@ int _mpi_local_rank() {
     return mpi_local_rank;
 }
 
-void _mpi_broadcast(ArrayArgs&& args, int i) {
+void _mpi_broadcast(ArrayArgs&& args, int root) {
     int64 size = args.dtype.dsize();
     for (auto j : args.shape)
         size *= j;
-    MPI_CHECK(MPI_Bcast((void *)args.ptr, size, MPI_BYTE, i, MPI_COMM_WORLD));
+    MPI_CHECK(MPI_Bcast((void *)args.ptr, size, MPI_BYTE, root, MPI_COMM_WORLD));
 }
 
 static uint64_t getHostHash(const char* string) {
