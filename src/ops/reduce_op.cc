@@ -61,7 +61,10 @@ ReduceOp::ReduceOp(Var* x, NanoString op, NanoVector dims, bool keepdims)
             reduce_mask |= 1<<dim;
         }
     }
-    y = create_output(nullptr, binary_dtype_infer(ns, x, x));
+    if (x->dtype() == ns_bool && ns == ns_add)
+        y = create_output(nullptr, ns_int32);
+    else
+        y = create_output(nullptr, binary_dtype_infer(ns, x, x));
 }
 
 ReduceOp::ReduceOp(Var* x, NanoString op, uint dims_mask, bool keepdims)

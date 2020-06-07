@@ -20,7 +20,7 @@
 namespace jittor {
 
 #ifndef JIT
-CubArgReduceOp::CubArgReduceOp(Var* x, Var* offsets, string op, bool keepdims)
+CubArgReduceOp::CubArgReduceOp(Var* x, Var* offsets, NanoString op, bool keepdims)
     : x(x), offsets(offsets), op(op), keepdims(keepdims) {
     flags.set(NodeFlags::_cpu, 0);
     flags.set(NodeFlags::_cuda, 1);
@@ -56,7 +56,7 @@ void CubArgReduceOp::infer_shape() {
 void CubArgReduceOp::jit_prepare() {
     add_jit_define("Tx", x->dtype());
     add_jit_define("Toffsets", offsets->dtype());
-    add_jit_define("FUNC", op=="min" ? "ArgMin" : "ArgMax");
+    add_jit_define("FUNC", op==ns_minimum ? "ArgMin" : "ArgMax");
 }
 
 #else // JIT

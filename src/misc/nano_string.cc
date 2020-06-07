@@ -149,6 +149,8 @@ static void init_ns() {
     FOR_ALL_NS(INIT_NS);
     ASSERT(NanoString::__ns_to_string.size()<=(1<<NanoString::_index_nbits));
     NanoString::__string_to_ns["sum"] = ns_add;
+    NanoString::__string_to_ns["min"] = ns_minimum;
+    NanoString::__string_to_ns["max"] = ns_maximum;
     LOGvv << "init __string_to_ns" << NanoString::__string_to_ns;
     LOGvv << "init __ns_to_string" << NanoString::__ns_to_string;
 }

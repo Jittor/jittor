@@ -14,11 +14,11 @@ namespace jittor {
 
 struct ArgReduceOp : Op {
     Var* x, * y, * y_key;
-    string op;
+    NanoString op;
     int dim;
     bool keepdims;
     // @attrs(multiple_outputs)
-    ArgReduceOp(Var* x, string op, int dim, bool keepdims);
+    ArgReduceOp(Var* x, NanoString op, int dim, bool keepdims);
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;
     static VarPtr get_grad(Var* out, Var* dout, Var* v, int v_index, int dim, Var* y);
     void infer_shape() override;

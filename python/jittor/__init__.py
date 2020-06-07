@@ -295,6 +295,14 @@ Var.masked_fill = masked_fill
 def sqr(x): return x*x
 Var.sqr = sqr
 
+def argmax(x, dim:int, keepdims:bool=False):
+    return x.arg_reduce("max", dim, keepdims)
+Var.argmax = argmax
+
+def argmin(x, dim:int, keepdims:bool=False):
+    return x.arg_reduce("min", dim, keepdims)
+Var.argmin = argmin
+
 def attrs(var):
     return {
         "is_stop_fuse": var.is_stop_fuse(),
