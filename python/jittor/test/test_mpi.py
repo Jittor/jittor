@@ -72,6 +72,10 @@ def run_mpi_test(num_procs, name):
 class TestMpiEntry(unittest.TestCase):
     def test_entry(self):
         run_mpi_test(2, "test_mpi")
+        
+    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    def test_mpi_resnet_entry(self):
+        run_mpi_test(2, "test_resnet")
 
 if __name__ == "__main__":
     unittest.main()

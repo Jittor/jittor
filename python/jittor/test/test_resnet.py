@@ -76,7 +76,7 @@ class TestResnet(unittest.TestCase):
                     # print train info
                     global prev
                     pred = np.argmax(output, axis=1)
-                    acc = np.sum(target==pred)/self.batch_size
+                    acc = np.mean(target==pred)
                     loss_list.append(loss[0])
                     acc_list.append(acc)
                     print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}\tAcc: {:.6f} \tTime:{:.3f}'
@@ -113,10 +113,14 @@ class TestResnet(unittest.TestCase):
             # Train Epoch: 0 [40/100 (40%)]   Loss: 2.286762  Acc: 0.130000
             # Train Epoch: 0 [50/100 (50%)]   Loss: 2.055014  Acc: 0.290000
 
-            assert jt.core.number_of_lived_vars() < 3500
+            if jt.mpi:
+                assert jt.core.number_of_lived_vars() < 3900, jt.core.number_of_lived_vars()
+            else:
+                assert jt.core.number_of_lived_vars() < 3500, jt.core.number_of_lived_vars()
 
         jt.sync_all(True)
         assert np.mean(loss_list[-50:])<0.3
+        assert np.mean(acc_list[-50:])>0.8
         
 if __name__ == "__main__":
     unittest.main()

@@ -66,7 +66,7 @@ class Optimizer(object):
                 g.assign(g.mpi_all_reduce("mean"))
             if self.n_step % self.param_sync_iter == 0:
                 for p in params:
-                    p.assign(p.mpi_all_reduce("mean"))
+                    p.assign(p.mpi_broadcast())
         self.n_step += 1
 
         # set up grads in param_groups

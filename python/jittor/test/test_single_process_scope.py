@@ -10,12 +10,13 @@ import unittest
 import os, sys
 import jittor as jt
 import numpy as np
+from jittor.test.test_mpi import run_mpi_test
 mpi = jt.compile_extern.mpi
 
 from jittor.dataset.mnist import MNIST
-dataloader = MNIST(train=False).set_attrs(batch_size=16)
 
 def val1():
+    dataloader = MNIST(train=False).set_attrs(batch_size=16)
     for i, (imgs, labels) in enumerate(dataloader):
         assert(imgs.shape[0]==8)
         if i == 5:
@@ -23,6 +24,7 @@ def val1():
 
 @jt.single_process_scope(rank=0)
 def val2():
+    dataloader = MNIST(train=False).set_attrs(batch_size=16)
     for i, (imgs, labels) in enumerate(dataloader):
         assert(imgs.shape[0]==16)
         if i == 5:
@@ -34,17 +36,10 @@ class TestSingleProcessScope(unittest.TestCase):
         val1()
         val2()
 
-def run_single_process_scope_test(num_procs, name):
-    if not jt.compile_extern.inside_mpi():
-        mpirun_path = jt.compile_extern.mpicc_path.replace("mpicc", "mpirun")
-        cmd = f"{mpirun_path} -np {num_procs} {sys.executable} -m jittor.test.{name} -v"
-        print("run cmd:", cmd)
-        assert os.system(cmd)==0, "run cmd failed: "+cmd
-
 @unittest.skipIf(not jt.compile_extern.has_mpi, "no mpi found")
 class TestSingleProcessScopeEntry(unittest.TestCase):
     def test_entry(self):
-        run_single_process_scope_test(2, "test_single_process_scope")
+        run_mpi_test(2, "test_single_process_scope")
 
 if __name__ == "__main__":
     unittest.main()
