@@ -29,18 +29,33 @@ extern int mpi_world_rank;
 extern int mpi_local_rank;
 extern bool inside_mpi;
 
+/**
+Return number of MPI nodes.
+*/
 // @pyjt(world_size)
 int _mpi_world_size();
 
+/**
+Return global ID of this MPI node.
+*/
 // @pyjt(world_rank)
 int _mpi_world_rank();
 
+/**
+Return local ID of this MPI node.
+*/
 // @pyjt(local_rank)
 int _mpi_local_rank();
 
 struct ArrayArgs;
 
+/**
+
+Use jt.Module.mpi_param_broadcast(root=0) to broadcast all moudule parameters of this module in [root] MPI node to all MPI nodes.
+
+This operation has no gradient, and the input parameter type is numpy array.
+*/
 // @pyjt(broadcast)
-void _mpi_broadcast(ArrayArgs&& args, int i);
+void _mpi_broadcast(ArrayArgs&& args, int root);
 
 } // jittor

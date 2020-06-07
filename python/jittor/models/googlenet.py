@@ -16,6 +16,15 @@ def googlenet(**kwargs):
     return GoogLeNet(**kwargs)
 
 class GoogLeNet(nn.Module):
+    """ GoogLeNet model architecture.
+
+    Args:
+
+    * num_classes: Number of classes. Default: 1000.
+    * aux_logits: If True, add an auxiliary branch that can improve training. Default: True
+    * init_weights: Defualt: True.
+    * blocks: List of three blocks, [conv_block, inception_block, inception_aux_block]. If None, will use [BasicConv2d, Inception, InceptionAux] instead. Default: None.
+    """
 
     def __init__(self, num_classes=1000, aux_logits=True, init_weights=True, blocks=None):
         super(GoogLeNet, self).__init__()

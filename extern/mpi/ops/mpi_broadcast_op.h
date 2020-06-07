@@ -15,6 +15,15 @@ struct MpiBroadcastOp : Op {
     Var* x, * y;
     int root;
 
+    /**
+
+    Mpi Broadcast Operator broadcasts variable [x] in [root] MPI nodes to all MPI nodes.
+
+    Args:
+
+    * x: variable to be broadcasted.
+    * root: ID of MPI node to be broadcasted. Default: 0.
+     */
     MpiBroadcastOp(Var* x, int root=0);
     void infer_shape() override;
     

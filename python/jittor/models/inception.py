@@ -7,7 +7,16 @@ def inception_v3(pretrained=False, progress=True, **kwargs):
     return Inception3(**kwargs)
 
 class Inception3(nn.Module):
+    """ Inceptionv3 model architecture.
 
+    Args:
+
+    * num_classes: Number of classes. Default: 1000.
+    * aux_logits: If True, add an auxiliary branch that can improve training. Default: True
+    * inception_blocks: List of seven blocks, [conv_block, inception_a, inception_b, inception_c, inception_d, inception_e, inception_aux]. If None, will use [BasicConv2d, InceptionA, InceptionB, InceptionC, InceptionD, InceptionE, InceptionAux] instead. Default: None.
+    * init_weights: Defualt: True.
+    """
+    
     def __init__(self, num_classes=1000, aux_logits=True, inception_blocks=None, init_weights=True):
         super(Inception3, self).__init__()
         if (inception_blocks is None):
