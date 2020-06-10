@@ -594,7 +594,9 @@ class Upsample(Module):
 
 class Sequential(Module):
     def __init__(self, *args):
-        self.layers = list(args)
+        self.layers = []
+        for mod in args:
+            self.append(mod)
     def __getitem__(self, idx):
         return self.layers[idx]
     def execute(self, x):
@@ -613,6 +615,8 @@ class Sequential(Module):
         if callback_leave:
             callback_leave(parents, k, self, n_children)
     def append(self, mod):
+        assert callable(mod), f"Module <{type(mod)}> is not callable"
+        assert not isinstance(mod, type), f"Module is not a type"
         self.layers.append(mod)
 
 ModuleList = Sequential

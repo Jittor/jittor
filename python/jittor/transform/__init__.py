@@ -23,6 +23,25 @@ def crop_and_resize(img, top, left, height, width, size, interpolation=Image.BIL
     img = resize(img, size, interpolation)
     return img
 
+class Crop:
+    """Crop and the PIL Image to given size.
+
+    Args:
+
+        * top(int): top pixel indexes
+        * left(int): left pixel indexes
+        * height(int): image height
+        * width(int): image width
+    """
+    def __init__(self, top, left, height, width):
+        self.top = top
+        self.left = left
+        self.height = height
+        self.width = width
+    def __call__(self, img):
+        return crop(img, self.top, self.left, self.height, self.width)
+
+
 class RandomCropAndResize:
     """Random crop and resize the given PIL Image to given size.
 

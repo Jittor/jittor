@@ -10,7 +10,6 @@
 import numpy as np
 import os
 from PIL import Image
-import matplotlib.pyplot as plt
 from .dataset import Dataset, dataset_root
 
 class VOC(Dataset):
