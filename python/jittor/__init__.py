@@ -132,10 +132,10 @@ class single_process_scope(_call_no_record_scope):
 
     example::
     
-        with jt.single_process_scope(root=0):
+        with jt.single_process_scope(rank=0):
             ......
 
-        @jt.single_process_scope(root=0)
+        @jt.single_process_scope(rank=0)
         def xxx():
             ...
     """
