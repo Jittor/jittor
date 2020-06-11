@@ -18,5 +18,6 @@ namespace jittor {
 extern ncclComm_t comm;
 extern ncclUniqueId id;
 extern int nccl_device_id;
+extern cudaStream_t all_reduce_s;
 
 } // jittor

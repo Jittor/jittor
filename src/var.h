@@ -8,6 +8,10 @@
 #include "node.h"
 #include "misc/cstr.h"
 #include "misc/fast_shared_ptr.h"
+#ifdef HAS_CUDA
+#include <vector>
+#include <cuda_runtime.h>
+#endif // JIT
 
 namespace jittor {
 
@@ -18,6 +22,9 @@ struct Var : Node {
     cstr name;
     fast_shared_ptr<loop_options_t> loop_options;
     static int64_t number_of_lived_vars;
+    #ifdef HAS_CUDA
+    vector<cudaEvent_t> wait_event_list;
+    #endif // JIT
 
     // this var will be generated after alloc.
     void* mem_ptr = nullptr;

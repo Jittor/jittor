@@ -19,6 +19,7 @@ namespace jittor {
 ncclComm_t comm;
 ncclUniqueId id;
 int nccl_device_id = 0;
+cudaStream_t all_reduce_s;
 
 
 struct nccl_initer {
@@ -39,6 +40,7 @@ nccl_initer() {
     event_queue.run_sync([]() {
         checkCudaErrors(cudaSetDevice(nccl_device_id));
     });
+    checkCudaErrors(cudaStreamCreateWithFlags(&all_reduce_s, cudaStreamNonBlocking));
     checkCudaErrors(ncclCommInitRank(&comm, mpi_world_size, id, mpi_world_rank));
 }
 

@@ -350,6 +350,14 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
                 migrate_to_cpu(v, allocator);
             }
         }
+        
+        for (auto* var : op->inputs()) {
+            while (var->wait_event_list.size()) {
+                checkCudaErrors(cudaStreamWaitEvent(0, var->wait_event_list.back(), 0));
+                cudaEventDestroy(var->wait_event_list.back());
+                var->wait_event_list.pop_back();
+            }
+        }
         #endif
         #ifdef NODE_MEMCHECK
         if (is_fused_op) {
