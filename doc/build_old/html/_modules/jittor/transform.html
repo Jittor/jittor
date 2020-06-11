@@ -1,0 +1,493 @@
+
+
+<!DOCTYPE html>
+<!--[if IE 8]><html class="no-js lt-ie9" lang="zh-CN" > <![endif]-->
+<!--[if gt IE 8]><!--> <html class="no-js" lang="zh-CN" > <!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <title>jittor.transform &mdash; Jittor 1.1.3.1 文档</title>
+  
+
+  
+  
+  
+  
+
+  
+  <script type="text/javascript" src="../../_static/js/modernizr.min.js"></script>
+  
+    
+      <script type="text/javascript" id="documentation_options" data-url_root="../../" src="../../_static/documentation_options.js"></script>
+        <script src="../../_static/jquery.js"></script>
+        <script src="../../_static/underscore.js"></script>
+        <script src="../../_static/doctools.js"></script>
+        <script src="../../_static/language_data.js"></script>
+        <script src="../../_static/translations.js"></script>
+    
+    <script type="text/javascript" src="../../_static/js/theme.js"></script>
+
+    
+
+  
+  <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+  <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+    <link rel="index" title="索引" href="../../genindex.html" />
+    <link rel="search" title="搜索" href="../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav">
+
+   
+  <div class="wy-grid-for-nav">
+    
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+          
+
+          
+            <a href="../../index.html" class="icon icon-home"> Jittor
+          
+
+          
+          </a>
+
+          
+            
+            
+          
+
+          
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+
+          
+        </div>
+
+        <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="main navigation">
+          
+            
+            
+              
+            
+            
+              <p class="caption"><span class="caption-text">内容一览:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../README.cn.html">Jittor: 即时编译深度学习框架</a></li>
+</ul>
+<p class="caption"><span class="caption-text">模块API:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../jittor.html">jittor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../jittor.nn.html">jittor.nn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../jittor.models.html">jittor.models</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../jittor.optim.html">jittor.optim</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../jittor.init.html">jittor.init</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../jittor.contrib.html">jittor.contrib</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../jittor.dataset.html">jittor.dataset</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../jittor.transform.html">jittor.transform</a></li>
+</ul>
+<p class="caption"><span class="caption-text">其他:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference external" href="https://cg.cs.tsinghua.edu.cn/jittor/tutorial/">教程</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://cg.cs.tsinghua.edu.cn/jittor/tutorial/">教程1</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../todo.html">TODO</a></li>
+</ul>
+
+            
+          
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+
+      
+      <nav class="wy-nav-top" aria-label="top navigation">
+        
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">Jittor</a>
+        
+      </nav>
+
+
+      <div class="wy-nav-content">
+        
+        <div class="rst-content">
+        
+          
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div role="navigation" aria-label="breadcrumbs navigation">
+
+  <ul class="wy-breadcrumbs">
+    
+      <li><a href="../../index.html">Docs</a> &raquo;</li>
+        
+          <li><a href="../index.html">模块代码</a> &raquo;</li>
+        
+          <li><a href="../jittor.html">jittor</a> &raquo;</li>
+        
+      <li>jittor.transform</li>
+    
+    
+      <li class="wy-breadcrumbs-aside">
+        
+      </li>
+    
+  </ul>
+
+  
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+            
+  <h1>jittor.transform 源代码</h1><div class="highlight"><pre>
+<span></span><span class="c1"># ***************************************************************</span>
+<span class="c1"># Copyright (c) 2020</span>
+<span class="c1">#     Dun Liang &lt;randonlang@gmail.com&gt;. </span>
+<span class="c1"># All Rights Reserved.</span>
+<span class="c1"># This file is subject to the terms and conditions defined in</span>
+<span class="c1"># file &#39;LICENSE.txt&#39;, which is part of this source code package.</span>
+<span class="c1"># ***************************************************************</span>
+<span class="kn">from</span> <span class="nn">PIL</span> <span class="kn">import</span> <span class="n">Image</span>
+<span class="kn">import</span> <span class="nn">random</span>
+<span class="kn">import</span> <span class="nn">math</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">warnings</span>
+<span class="kn">from</span> <span class="nn">collections.abc</span> <span class="kn">import</span> <span class="n">Sequence</span><span class="p">,</span> <span class="n">Mapping</span>
+
+<div class="viewcode-block" id="crop"><a class="viewcode-back" href="../../jittor.transform.html#jittor.transform.crop">[文档]</a><span class="k">def</span> <span class="nf">crop</span><span class="p">(</span><span class="n">img</span><span class="p">,</span> <span class="n">top</span><span class="p">,</span> <span class="n">left</span><span class="p">,</span> <span class="n">height</span><span class="p">,</span> <span class="n">width</span><span class="p">):</span>
+    <span class="sd">&#39;&#39;&#39;</span>
+<span class="sd">    Function for cropping image.</span>
+
+<span class="sd">    Args::</span>
+
+<span class="sd">        [in] img(Image.Image): Input image.</span>
+<span class="sd">        [in] top(int): the top boundary of the cropping box.</span>
+<span class="sd">        [in] left(int): the left boundary of the cropping box.</span>
+<span class="sd">        [in] height(int): height of the cropping box.</span>
+<span class="sd">        [in] width(int): width of the cropping box.</span>
+
+<span class="sd">    Example::</span>
+<span class="sd">        </span>
+<span class="sd">        img = Image.open(...)</span>
+<span class="sd">        img_ = transform.crop(img, 10, 10, 100, 100)</span>
+<span class="sd">    &#39;&#39;&#39;</span>
+    <span class="k">return</span> <span class="n">img</span><span class="o">.</span><span class="n">crop</span><span class="p">((</span><span class="n">left</span><span class="p">,</span> <span class="n">top</span><span class="p">,</span> <span class="n">left</span> <span class="o">+</span> <span class="n">width</span><span class="p">,</span> <span class="n">top</span> <span class="o">+</span> <span class="n">height</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="resize"><a class="viewcode-back" href="../../jittor.transform.html#jittor.transform.resize">[文档]</a><span class="k">def</span> <span class="nf">resize</span><span class="p">(</span><span class="n">img</span><span class="p">,</span> <span class="n">size</span><span class="p">,</span> <span class="n">interpolation</span><span class="o">=</span><span class="n">Image</span><span class="o">.</span><span class="n">BILINEAR</span><span class="p">):</span>
+    <span class="sd">&#39;&#39;&#39;</span>
+<span class="sd">    Function for resizing image.</span>
+
+<span class="sd">    Args::</span>
+
+<span class="sd">        [in] img(Image.Image): Input image.</span>
+<span class="sd">        [in] size: resize size.</span>
+<span class="sd">        [in] interpolation(int): type of resize. default: PIL.Image.BILINEAR</span>
+
+<span class="sd">    Example::</span>
+<span class="sd">        </span>
+<span class="sd">        img = Image.open(...)</span>
+<span class="sd">        img_ = transform.resize(img, (100, 100))</span>
+<span class="sd">    &#39;&#39;&#39;</span>
+    <span class="k">return</span> <span class="n">img</span><span class="o">.</span><span class="n">resize</span><span class="p">(</span><span class="n">size</span><span class="p">[::</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="n">interpolation</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="crop_and_resize"><a class="viewcode-back" href="../../jittor.transform.html#jittor.transform.crop_and_resize">[文档]</a><span class="k">def</span> <span class="nf">crop_and_resize</span><span class="p">(</span><span class="n">img</span><span class="p">,</span> <span class="n">top</span><span class="p">,</span> <span class="n">left</span><span class="p">,</span> <span class="n">height</span><span class="p">,</span> <span class="n">width</span><span class="p">,</span> <span class="n">size</span><span class="p">,</span> <span class="n">interpolation</span><span class="o">=</span><span class="n">Image</span><span class="o">.</span><span class="n">BILINEAR</span><span class="p">):</span>
+    <span class="sd">&#39;&#39;&#39;</span>
+<span class="sd">    Function for cropping and resizing image.</span>
+
+<span class="sd">    Args::</span>
+
+<span class="sd">        [in] img(Image.Image): Input image.</span>
+<span class="sd">        [in] top(int): the top boundary of the cropping box.</span>
+<span class="sd">        [in] left(int): the left boundary of the cropping box.</span>
+<span class="sd">        [in] height(int): height of the cropping box.</span>
+<span class="sd">        [in] width(int): width of the cropping box.</span>
+<span class="sd">        [in] size: resize size.</span>
+<span class="sd">        [in] interpolation(int): type of resize. default: PIL.Image.BILINEAR</span>
+
+<span class="sd">    Example::</span>
+<span class="sd">        </span>
+<span class="sd">        img = Image.open(...)</span>
+<span class="sd">        img_ = transform.resize(img, 10，10，200，200，100)</span>
+<span class="sd">    &#39;&#39;&#39;</span>
+    <span class="n">img</span> <span class="o">=</span> <span class="n">crop</span><span class="p">(</span><span class="n">img</span><span class="p">,</span> <span class="n">top</span><span class="p">,</span> <span class="n">left</span><span class="p">,</span> <span class="n">height</span><span class="p">,</span> <span class="n">width</span><span class="p">)</span>
+    <span class="n">img</span> <span class="o">=</span> <span class="n">resize</span><span class="p">(</span><span class="n">img</span><span class="p">,</span> <span class="n">size</span><span class="p">,</span> <span class="n">interpolation</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">img</span></div>
+
+<div class="viewcode-block" id="RandomCropAndResize"><a class="viewcode-back" href="../../jittor.transform.html#jittor.transform.RandomCropAndResize">[文档]</a><span class="k">class</span> <span class="nc">RandomCropAndResize</span><span class="p">:</span>
+    <span class="sd">&quot;&quot;&quot;Random crop and resize the given PIL Image to given size.</span>
+
+<span class="sd">    Args::</span>
+
+<span class="sd">        [in] size(int or tuple): width and height of the output image.</span>
+<span class="sd">        [in] scale(tuple): range of scale ratio of the area.</span>
+<span class="sd">        [in] ratio(tuple): range of aspect ratio.</span>
+<span class="sd">        [in] interpolation: type of resize. default: PIL.Image.BILINEAR.</span>
+
+<span class="sd">    Example::</span>
+
+<span class="sd">        transform = transform.RandomCropAndResize(224)</span>
+<span class="sd">        img_ = transform(img)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">size</span><span class="p">,</span> <span class="n">scale</span><span class="p">:</span><span class="nb">tuple</span><span class="o">=</span><span class="p">(</span><span class="mf">0.08</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">),</span> <span class="n">ratio</span><span class="p">:</span><span class="nb">tuple</span><span class="o">=</span><span class="p">(</span><span class="mf">3.</span> <span class="o">/</span> <span class="mf">4.</span><span class="p">,</span> <span class="mf">4.</span> <span class="o">/</span> <span class="mf">3.</span><span class="p">),</span> <span class="n">interpolation</span><span class="o">=</span><span class="n">Image</span><span class="o">.</span><span class="n">BILINEAR</span><span class="p">):</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">size</span><span class="p">,</span> <span class="nb">int</span><span class="p">):</span>
+            <span class="n">size</span> <span class="o">=</span> <span class="p">(</span><span class="n">size</span><span class="p">,</span> <span class="n">size</span><span class="p">)</span>
+        <span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">size</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">)</span>
+        <span class="k">assert</span> <span class="n">scale</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">scale</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="ow">and</span> <span class="n">ratio</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">ratio</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">size</span> <span class="o">=</span> <span class="n">size</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">scale</span> <span class="o">=</span> <span class="n">scale</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ratio</span> <span class="o">=</span> <span class="n">ratio</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">interpolation</span> <span class="o">=</span> <span class="n">interpolation</span>
+
+    <span class="k">def</span> <span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">img</span><span class="p">:</span><span class="n">Image</span><span class="o">.</span><span class="n">Image</span><span class="p">):</span>
+        <span class="n">width</span><span class="p">,</span> <span class="n">height</span> <span class="o">=</span> <span class="n">img</span><span class="o">.</span><span class="n">size</span>
+        <span class="n">scale</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">scale</span>
+        <span class="n">ratio</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ratio</span>
+        <span class="n">area</span> <span class="o">=</span> <span class="n">height</span> <span class="o">*</span> <span class="n">width</span>
+
+        <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">10</span><span class="p">):</span>
+            <span class="n">target_area</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="o">*</span><span class="n">scale</span><span class="p">)</span> <span class="o">*</span> <span class="n">area</span>
+            <span class="n">log_ratio</span> <span class="o">=</span> <span class="p">(</span><span class="n">math</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">ratio</span><span class="p">[</span><span class="mi">0</span><span class="p">]),</span> <span class="n">math</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">ratio</span><span class="p">[</span><span class="mi">1</span><span class="p">]))</span>
+            <span class="n">aspect_ratio</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="n">random</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="o">*</span><span class="n">log_ratio</span><span class="p">))</span>
+
+            <span class="n">w</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="nb">round</span><span class="p">(</span><span class="n">math</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">target_area</span> <span class="o">*</span> <span class="n">aspect_ratio</span><span class="p">)))</span>
+            <span class="n">h</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="nb">round</span><span class="p">(</span><span class="n">math</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">target_area</span> <span class="o">/</span> <span class="n">aspect_ratio</span><span class="p">)))</span>
+
+            <span class="k">if</span> <span class="mi">0</span> <span class="o">&lt;</span> <span class="n">w</span> <span class="o">&lt;=</span> <span class="n">width</span> <span class="ow">and</span> <span class="mi">0</span> <span class="o">&lt;</span> <span class="n">h</span> <span class="o">&lt;=</span> <span class="n">height</span><span class="p">:</span>
+                <span class="n">i</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">height</span> <span class="o">-</span> <span class="n">h</span><span class="p">)</span>
+                <span class="n">j</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">width</span> <span class="o">-</span> <span class="n">w</span><span class="p">)</span>
+                <span class="k">break</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># Fallback to central crop</span>
+            <span class="n">in_ratio</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">width</span><span class="p">)</span> <span class="o">/</span> <span class="nb">float</span><span class="p">(</span><span class="n">height</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">in_ratio</span> <span class="o">&lt;</span> <span class="nb">min</span><span class="p">(</span><span class="n">ratio</span><span class="p">):</span>
+                <span class="n">w</span> <span class="o">=</span> <span class="n">width</span>
+                <span class="n">h</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="nb">round</span><span class="p">(</span><span class="n">w</span> <span class="o">/</span> <span class="nb">min</span><span class="p">(</span><span class="n">ratio</span><span class="p">)))</span>
+            <span class="k">elif</span> <span class="n">in_ratio</span> <span class="o">&gt;</span> <span class="nb">max</span><span class="p">(</span><span class="n">ratio</span><span class="p">):</span>
+                <span class="n">h</span> <span class="o">=</span> <span class="n">height</span>
+                <span class="n">w</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="nb">round</span><span class="p">(</span><span class="n">h</span> <span class="o">*</span> <span class="nb">max</span><span class="p">(</span><span class="n">ratio</span><span class="p">)))</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">w</span> <span class="o">=</span> <span class="n">width</span>
+                <span class="n">h</span> <span class="o">=</span> <span class="n">height</span>
+            <span class="n">i</span> <span class="o">=</span> <span class="p">(</span><span class="n">height</span> <span class="o">-</span> <span class="n">h</span><span class="p">)</span> <span class="o">//</span> <span class="mi">2</span>
+            <span class="n">j</span> <span class="o">=</span> <span class="p">(</span><span class="n">width</span> <span class="o">-</span> <span class="n">w</span><span class="p">)</span> <span class="o">//</span> <span class="mi">2</span>
+        <span class="k">return</span> <span class="n">crop_and_resize</span><span class="p">(</span><span class="n">img</span><span class="p">,</span> <span class="n">i</span><span class="p">,</span> <span class="n">j</span><span class="p">,</span> <span class="n">h</span><span class="p">,</span> <span class="n">w</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">size</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">interpolation</span><span class="p">)</span></div>
+    
+<div class="viewcode-block" id="RandomHorizontalFlip"><a class="viewcode-back" href="../../jittor.transform.html#jittor.transform.RandomHorizontalFlip">[文档]</a><span class="k">class</span> <span class="nc">RandomHorizontalFlip</span><span class="p">:</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Random flip the image horizontally.</span>
+
+<span class="sd">    Args::</span>
+
+<span class="sd">        [in] p(float): The probability of image flip, default: 0.5.</span>
+
+<span class="sd">    Example::</span>
+
+<span class="sd">        transform = transform.RandomHorizontalFlip(0.6)</span>
+<span class="sd">        img_ = transform(img)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">p</span><span class="o">=</span><span class="mf">0.5</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">p</span> <span class="o">=</span> <span class="n">p</span>
+        
+    <span class="k">def</span> <span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">img</span><span class="p">:</span><span class="n">Image</span><span class="o">.</span><span class="n">Image</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">random</span><span class="o">.</span><span class="n">random</span><span class="p">()</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">p</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">img</span><span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="n">Image</span><span class="o">.</span><span class="n">FLIP_LEFT_RIGHT</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">img</span></div>
+    
+<div class="viewcode-block" id="to_tensor"><a class="viewcode-back" href="../../jittor.transform.html#jittor.transform.to_tensor">[文档]</a><span class="k">def</span> <span class="nf">to_tensor</span><span class="p">(</span><span class="n">img</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Function for turning Image.Image to jt.array.</span>
+
+<span class="sd">    Args::</span>
+
+<span class="sd">        [in] img(Image.Image): Input image.</span>
+<span class="sd">    </span>
+<span class="sd">    Example::</span>
+<span class="sd">        </span>
+<span class="sd">        img = Image.open(...)</span>
+<span class="sd">        img_ = transform.to_tensor(img)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">img</span><span class="p">,</span> <span class="n">Image</span><span class="o">.</span><span class="n">Image</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">img</span><span class="p">)</span><span class="o">.</span><span class="n">transpose</span><span class="p">((</span><span class="mi">2</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">1</span><span class="p">))</span> <span class="o">/</span> <span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">img</span></div>
+
+<div class="viewcode-block" id="ImageNormalize"><a class="viewcode-back" href="../../jittor.transform.html#jittor.transform.ImageNormalize">[文档]</a><span class="k">class</span> <span class="nc">ImageNormalize</span><span class="p">:</span>
+    <span class="sd">&#39;&#39;&#39;</span>
+<span class="sd">    Class for normalizing the input image.</span>
+
+<span class="sd">    Args::</span>
+
+<span class="sd">    [in] mean(list): the mean value of Normalization.</span>
+<span class="sd">    [in] std(list): the std value of Normalization.</span>
+
+<span class="sd">    Example::</span>
+
+<span class="sd">        transform = transform.ImageNormalize(mean=[0.5], std=[0.5])</span>
+<span class="sd">        img_ = transform(img)</span>
+<span class="sd">    &#39;&#39;&#39;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">mean</span><span class="p">,</span> <span class="n">std</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">mean</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">(</span><span class="n">mean</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">std</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">(</span><span class="n">std</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">)</span>
+        
+    <span class="k">def</span> <span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">img</span><span class="p">):</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">img</span><span class="p">,</span> <span class="n">Image</span><span class="o">.</span><span class="n">Image</span><span class="p">):</span>
+            <span class="n">img</span> <span class="o">=</span> <span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">img</span><span class="p">)</span><span class="o">.</span><span class="n">transpose</span><span class="p">((</span><span class="mi">2</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">1</span><span class="p">))</span> \
+                <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">mean</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">(</span><span class="mf">255.</span><span class="p">))</span> \
+                <span class="o">/</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">std</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">(</span><span class="mf">255.</span><span class="p">))</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">img</span> <span class="o">=</span> <span class="p">(</span><span class="n">img</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">mean</span><span class="p">)</span> <span class="o">/</span> <span class="bp">self</span><span class="o">.</span><span class="n">std</span>
+        <span class="k">return</span> <span class="n">img</span></div>
+    
+<div class="viewcode-block" id="Compose"><a class="viewcode-back" href="../../jittor.transform.html#jittor.transform.Compose">[文档]</a><span class="k">class</span> <span class="nc">Compose</span><span class="p">:</span>
+    <span class="sd">&#39;&#39;&#39;</span>
+<span class="sd">    Base class for combining various transformations.</span>
+
+<span class="sd">    Args::</span>
+
+<span class="sd">    [in] transforms(list): a list of transform.</span>
+
+<span class="sd">    Example::</span>
+
+<span class="sd">        transform = transform.Compose([</span>
+<span class="sd">            transform.Resize(opt.img_size),</span>
+<span class="sd">            transform.Gray(),</span>
+<span class="sd">            transform.ImageNormalize(mean=[0.5], std=[0.5]),</span>
+<span class="sd">        ])</span>
+<span class="sd">        img_ = transform(img)</span>
+<span class="sd">    &#39;&#39;&#39;</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">transforms</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">transforms</span> <span class="o">=</span> <span class="n">transforms</span>
+    <span class="k">def</span> <span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">transforms</span><span class="p">:</span>
+            <span class="n">data</span> <span class="o">=</span> <span class="n">t</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">data</span></div>
+
+<div class="viewcode-block" id="Resize"><a class="viewcode-back" href="../../jittor.transform.html#jittor.transform.Resize">[文档]</a><span class="k">class</span> <span class="nc">Resize</span><span class="p">:</span>
+    <span class="sd">&#39;&#39;&#39;</span>
+<span class="sd">    Class for resizing image.</span>
+
+<span class="sd">    Args::</span>
+
+<span class="sd">    [in] size(int or tuple): Size want to resize.</span>
+<span class="sd">    [in] mode(int): type of resize.</span>
+
+<span class="sd">    Example::</span>
+
+<span class="sd">        transform = transform.Resize(224)</span>
+<span class="sd">        img_ = transform(img)</span>
+<span class="sd">    &#39;&#39;&#39;</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">size</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="n">Image</span><span class="o">.</span><span class="n">BILINEAR</span><span class="p">):</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">size</span><span class="p">,</span> <span class="nb">int</span><span class="p">):</span>
+            <span class="n">size</span> <span class="o">=</span> <span class="p">(</span><span class="n">size</span><span class="p">,</span> <span class="n">size</span><span class="p">)</span>
+        <span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">size</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">size</span> <span class="o">=</span> <span class="n">size</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">mode</span> <span class="o">=</span> <span class="n">mode</span>
+    <span class="k">def</span> <span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">img</span><span class="p">:</span><span class="n">Image</span><span class="o">.</span><span class="n">Image</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">img</span><span class="o">.</span><span class="n">resize</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">size</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">mode</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="Gray"><a class="viewcode-back" href="../../jittor.transform.html#jittor.transform.Gray">[文档]</a><span class="k">class</span> <span class="nc">Gray</span><span class="p">:</span>
+    <span class="sd">&#39;&#39;&#39;</span>
+<span class="sd">    Convert image to grayscale.</span>
+
+<span class="sd">    Example::</span>
+
+<span class="sd">        transform = transform.Gray()</span>
+<span class="sd">        img_ = transform(img)</span>
+<span class="sd">    &#39;&#39;&#39;</span>
+    <span class="k">def</span> <span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">img</span><span class="p">:</span><span class="n">Image</span><span class="o">.</span><span class="n">Image</span><span class="p">):</span>
+        <span class="n">img</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">img</span><span class="o">.</span><span class="n">convert</span><span class="p">(</span><span class="s1">&#39;L&#39;</span><span class="p">))</span>
+        <span class="n">img</span> <span class="o">=</span> <span class="n">img</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">newaxis</span><span class="p">,</span> <span class="p">:]</span>
+        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">((</span><span class="n">img</span> <span class="o">/</span> <span class="mf">255.0</span><span class="p">),</span> <span class="n">dtype</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="RandomCrop"><a class="viewcode-back" href="../../jittor.transform.html#jittor.transform.RandomCrop">[文档]</a><span class="k">class</span> <span class="nc">RandomCrop</span><span class="p">:</span>
+    <span class="sd">&#39;&#39;&#39;</span>
+<span class="sd">    Class for randomly cropping the input image.</span>
+
+<span class="sd">    Args::</span>
+
+<span class="sd">    [in] size(tuple or int): the size want to crop.</span>
+
+<span class="sd">    Example::</span>
+
+<span class="sd">        transform = transform.RandomCrop(128)</span>
+<span class="sd">        img_ = transform(img)</span>
+<span class="sd">    &#39;&#39;&#39;</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">size</span><span class="p">):</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">size</span><span class="p">,</span> <span class="nb">int</span><span class="p">):</span>
+            <span class="n">size</span> <span class="o">=</span> <span class="p">(</span><span class="n">size</span><span class="p">,</span> <span class="n">size</span><span class="p">)</span>
+        <span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">size</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">size</span> <span class="o">=</span> <span class="n">size</span>
+    <span class="k">def</span> <span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">img</span><span class="p">:</span><span class="n">Image</span><span class="o">.</span><span class="n">Image</span><span class="p">):</span>
+        <span class="n">width</span><span class="p">,</span> <span class="n">height</span> <span class="o">=</span> <span class="n">img</span><span class="o">.</span><span class="n">size</span>
+        <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">size</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">height</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">size</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">width</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;crop size exceeds the input image in RandomCrop&quot;</span>
+        <span class="n">top</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="n">height</span><span class="o">-</span><span class="bp">self</span><span class="o">.</span><span class="n">size</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">left</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="n">width</span><span class="o">-</span><span class="bp">self</span><span class="o">.</span><span class="n">size</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">crop</span><span class="p">(</span><span class="n">img</span><span class="p">,</span> <span class="n">top</span><span class="p">,</span> <span class="n">left</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">size</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="bp">self</span><span class="o">.</span><span class="n">size</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span></div>
+        
+</pre></div>
+
+           </div>
+           
+          </div>
+          <footer>
+  
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>
+        &copy; Copyright 2020, Jittor
+
+    </p>
+  </div>
+  Built with <a href="http://sphinx-doc.org/">Sphinx</a> using a <a href="https://github.com/rtfd/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>. 
+
+</footer>
+
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+  
+
+
+  <script type="text/javascript">
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script>
+
+  
+  
+    
+   
+
+</body>
+</html>

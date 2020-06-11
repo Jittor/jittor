@@ -1,0 +1,272 @@
+
+
+<!DOCTYPE html>
+<!--[if IE 8]><html class="no-js lt-ie9" lang="zh-CN" > <![endif]-->
+<!--[if gt IE 8]><!--> <html class="no-js" lang="zh-CN" > <!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <title>jittor.init &mdash; Jittor 1.1.3.1 文档</title>
+  
+
+  
+  
+  
+  
+
+  
+  <script type="text/javascript" src="_static/js/modernizr.min.js"></script>
+  
+    
+      <script type="text/javascript" id="documentation_options" data-url_root="./" src="_static/documentation_options.js"></script>
+        <script src="_static/jquery.js"></script>
+        <script src="_static/underscore.js"></script>
+        <script src="_static/doctools.js"></script>
+        <script src="_static/language_data.js"></script>
+        <script src="_static/translations.js"></script>
+    
+    <script type="text/javascript" src="_static/js/theme.js"></script>
+
+    
+
+  
+  <link rel="stylesheet" href="_static/css/theme.css" type="text/css" />
+  <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
+    <link rel="index" title="索引" href="genindex.html" />
+    <link rel="search" title="搜索" href="search.html" />
+    <link rel="next" title="jittor.contrib" href="jittor.contrib.html" />
+    <link rel="prev" title="jittor.optim" href="jittor.optim.html" /> 
+</head>
+
+<body class="wy-body-for-nav">
+
+   
+  <div class="wy-grid-for-nav">
+    
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+          
+
+          
+            <a href="index.html" class="icon icon-home"> Jittor
+          
+
+          
+          </a>
+
+          
+            
+            
+          
+
+          
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+
+          
+        </div>
+
+        <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="main navigation">
+          
+            
+            
+              
+            
+            
+              <p class="caption"><span class="caption-text">内容一览:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="README.cn.html">Jittor: 即时编译深度学习框架</a></li>
+</ul>
+<p class="caption"><span class="caption-text">模块API:</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="jittor.html">jittor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="jittor.nn.html">jittor.nn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="jittor.models.html">jittor.models</a></li>
+<li class="toctree-l1"><a class="reference internal" href="jittor.optim.html">jittor.optim</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">jittor.init</a></li>
+<li class="toctree-l1"><a class="reference internal" href="jittor.contrib.html">jittor.contrib</a></li>
+<li class="toctree-l1"><a class="reference internal" href="jittor.dataset.html">jittor.dataset</a></li>
+<li class="toctree-l1"><a class="reference internal" href="jittor.transform.html">jittor.transform</a></li>
+</ul>
+<p class="caption"><span class="caption-text">其他:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference external" href="https://cg.cs.tsinghua.edu.cn/jittor/tutorial/">教程</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://cg.cs.tsinghua.edu.cn/jittor/tutorial/">教程1</a></li>
+<li class="toctree-l1"><a class="reference internal" href="todo.html">TODO</a></li>
+</ul>
+
+            
+          
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+
+      
+      <nav class="wy-nav-top" aria-label="top navigation">
+        
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="index.html">Jittor</a>
+        
+      </nav>
+
+
+      <div class="wy-nav-content">
+        
+        <div class="rst-content">
+        
+          
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div role="navigation" aria-label="breadcrumbs navigation">
+
+  <ul class="wy-breadcrumbs">
+    
+      <li><a href="index.html">Docs</a> &raquo;</li>
+        
+      <li>jittor.init</li>
+    
+    
+      <li class="wy-breadcrumbs-aside">
+        
+            
+            <a href="_sources/jittor.init.md.txt" rel="nofollow"> View page source</a>
+          
+        
+      </li>
+    
+  </ul>
+
+  
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+            
+  <div class="section" id="jittor-init">
+<h1>jittor.init<a class="headerlink" href="#jittor-init" title="永久链接至标题">¶</a></h1>
+<p>这里是Jittor的参数初始化模块的API文档，您可以通过<code class="docutils literal notranslate"><span class="pre">from</span> <span class="pre">jittor</span> <span class="pre">import</span> <span class="pre">init</span></code>来获取该模块。</p>
+<span class="target" id="module-jittor.init"></span><dl class="py function">
+<dt id="jittor.init.constant">
+<code class="sig-prename descclassname">jittor.init.</code><code class="sig-name descname">constant</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">shape</span></em>, <em class="sig-param"><span class="n">dtype</span></em>, <em class="sig-param"><span class="n">value</span><span class="o">=</span><span class="default_value">0.0</span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/jittor/init.html#constant"><span class="viewcode-link">[源代码]</span></a><a class="headerlink" href="#jittor.init.constant" title="永久链接至目标">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt id="jittor.init.constant_">
+<code class="sig-prename descclassname">jittor.init.</code><code class="sig-name descname">constant_</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">var</span></em>, <em class="sig-param"><span class="n">value</span><span class="o">=</span><span class="default_value">0.0</span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/jittor/init.html#constant_"><span class="viewcode-link">[源代码]</span></a><a class="headerlink" href="#jittor.init.constant_" title="永久链接至目标">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt id="jittor.init.gauss">
+<code class="sig-prename descclassname">jittor.init.</code><code class="sig-name descname">gauss</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">shape</span></em>, <em class="sig-param"><span class="n">dtype</span></em>, <em class="sig-param"><span class="n">mean</span><span class="o">=</span><span class="default_value">0.0</span></em>, <em class="sig-param"><span class="n">std</span><span class="o">=</span><span class="default_value">1.0</span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/jittor/init.html#gauss"><span class="viewcode-link">[源代码]</span></a><a class="headerlink" href="#jittor.init.gauss" title="永久链接至目标">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt id="jittor.init.gauss_">
+<code class="sig-prename descclassname">jittor.init.</code><code class="sig-name descname">gauss_</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">var</span></em>, <em class="sig-param"><span class="n">mean</span><span class="o">=</span><span class="default_value">0.0</span></em>, <em class="sig-param"><span class="n">std</span><span class="o">=</span><span class="default_value">1.0</span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/jittor/init.html#gauss_"><span class="viewcode-link">[源代码]</span></a><a class="headerlink" href="#jittor.init.gauss_" title="永久链接至目标">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt id="jittor.init.invariant_uniform">
+<code class="sig-prename descclassname">jittor.init.</code><code class="sig-name descname">invariant_uniform</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">shape</span></em>, <em class="sig-param"><span class="n">dtype</span></em>, <em class="sig-param"><span class="n">mode</span><span class="o">=</span><span class="default_value">'fan_in'</span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/jittor/init.html#invariant_uniform"><span class="viewcode-link">[源代码]</span></a><a class="headerlink" href="#jittor.init.invariant_uniform" title="永久链接至目标">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt id="jittor.init.invariant_uniform_">
+<code class="sig-prename descclassname">jittor.init.</code><code class="sig-name descname">invariant_uniform_</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">var</span></em>, <em class="sig-param"><span class="n">mode</span><span class="o">=</span><span class="default_value">'fan_in'</span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/jittor/init.html#invariant_uniform_"><span class="viewcode-link">[源代码]</span></a><a class="headerlink" href="#jittor.init.invariant_uniform_" title="永久链接至目标">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt id="jittor.init.relu_invariant_gauss">
+<code class="sig-prename descclassname">jittor.init.</code><code class="sig-name descname">relu_invariant_gauss</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">shape</span></em>, <em class="sig-param"><span class="n">dtype</span></em>, <em class="sig-param"><span class="n">mode</span><span class="o">=</span><span class="default_value">'fan_in'</span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/jittor/init.html#relu_invariant_gauss"><span class="viewcode-link">[源代码]</span></a><a class="headerlink" href="#jittor.init.relu_invariant_gauss" title="永久链接至目标">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt id="jittor.init.relu_invariant_gauss_">
+<code class="sig-prename descclassname">jittor.init.</code><code class="sig-name descname">relu_invariant_gauss_</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">var</span></em>, <em class="sig-param"><span class="n">mode</span><span class="o">=</span><span class="default_value">'fan_in'</span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/jittor/init.html#relu_invariant_gauss_"><span class="viewcode-link">[源代码]</span></a><a class="headerlink" href="#jittor.init.relu_invariant_gauss_" title="永久链接至目标">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt id="jittor.init.uniform">
+<code class="sig-prename descclassname">jittor.init.</code><code class="sig-name descname">uniform</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">shape</span></em>, <em class="sig-param"><span class="n">dtype</span></em>, <em class="sig-param"><span class="n">low</span></em>, <em class="sig-param"><span class="n">high</span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/jittor/init.html#uniform"><span class="viewcode-link">[源代码]</span></a><a class="headerlink" href="#jittor.init.uniform" title="永久链接至目标">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt id="jittor.init.uniform_">
+<code class="sig-prename descclassname">jittor.init.</code><code class="sig-name descname">uniform_</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">var</span></em>, <em class="sig-param"><span class="n">low</span></em>, <em class="sig-param"><span class="n">high</span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/jittor/init.html#uniform_"><span class="viewcode-link">[源代码]</span></a><a class="headerlink" href="#jittor.init.uniform_" title="永久链接至目标">¶</a></dt>
+<dd></dd></dl>
+
+</div>
+
+
+           </div>
+           
+          </div>
+          <footer>
+  
+    <div class="rst-footer-buttons" role="navigation" aria-label="footer navigation">
+      
+        <a href="jittor.contrib.html" class="btn btn-neutral float-right" title="jittor.contrib" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right"></span></a>
+      
+      
+        <a href="jittor.optim.html" class="btn btn-neutral float-left" title="jittor.optim" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left"></span> Previous</a>
+      
+    </div>
+  
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>
+        &copy; Copyright 2020, Jittor
+
+    </p>
+  </div>
+  Built with <a href="http://sphinx-doc.org/">Sphinx</a> using a <a href="https://github.com/rtfd/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>. 
+
+</footer>
+
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+  
+
+
+  <script type="text/javascript">
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script>
+
+  
+  
+    
+   
+
+</body>
+</html>

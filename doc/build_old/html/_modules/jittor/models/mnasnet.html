@@ -1,0 +1,307 @@
+
+
+<!DOCTYPE html>
+<!--[if IE 8]><html class="no-js lt-ie9" lang="zh-CN" > <![endif]-->
+<!--[if gt IE 8]><!--> <html class="no-js" lang="zh-CN" > <!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <title>jittor.models.mnasnet &mdash; Jittor 1.1.3.1 文档</title>
+  
+
+  
+  
+  
+  
+
+  
+  <script type="text/javascript" src="../../../_static/js/modernizr.min.js"></script>
+  
+    
+      <script type="text/javascript" id="documentation_options" data-url_root="../../../" src="../../../_static/documentation_options.js"></script>
+        <script src="../../../_static/jquery.js"></script>
+        <script src="../../../_static/underscore.js"></script>
+        <script src="../../../_static/doctools.js"></script>
+        <script src="../../../_static/language_data.js"></script>
+        <script src="../../../_static/translations.js"></script>
+    
+    <script type="text/javascript" src="../../../_static/js/theme.js"></script>
+
+    
+
+  
+  <link rel="stylesheet" href="../../../_static/css/theme.css" type="text/css" />
+  <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+    <link rel="index" title="索引" href="../../../genindex.html" />
+    <link rel="search" title="搜索" href="../../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav">
+
+   
+  <div class="wy-grid-for-nav">
+    
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+          
+
+          
+            <a href="../../../index.html" class="icon icon-home"> Jittor
+          
+
+          
+          </a>
+
+          
+            
+            
+          
+
+          
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+
+          
+        </div>
+
+        <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="main navigation">
+          
+            
+            
+              
+            
+            
+              <p class="caption"><span class="caption-text">内容一览:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../README.cn.html">Jittor: 即时编译深度学习框架</a></li>
+</ul>
+<p class="caption"><span class="caption-text">模块API:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../jittor.html">jittor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../jittor.nn.html">jittor.nn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../jittor.models.html">jittor.models</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../jittor.optim.html">jittor.optim</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../jittor.init.html">jittor.init</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../jittor.contrib.html">jittor.contrib</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../jittor.dataset.html">jittor.dataset</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../jittor.transform.html">jittor.transform</a></li>
+</ul>
+<p class="caption"><span class="caption-text">其他:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference external" href="https://cg.cs.tsinghua.edu.cn/jittor/tutorial/">教程</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://cg.cs.tsinghua.edu.cn/jittor/tutorial/">教程1</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../todo.html">TODO</a></li>
+</ul>
+
+            
+          
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+
+      
+      <nav class="wy-nav-top" aria-label="top navigation">
+        
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">Jittor</a>
+        
+      </nav>
+
+
+      <div class="wy-nav-content">
+        
+        <div class="rst-content">
+        
+          
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div role="navigation" aria-label="breadcrumbs navigation">
+
+  <ul class="wy-breadcrumbs">
+    
+      <li><a href="../../../index.html">Docs</a> &raquo;</li>
+        
+          <li><a href="../../index.html">模块代码</a> &raquo;</li>
+        
+          <li><a href="../../jittor.html">jittor</a> &raquo;</li>
+        
+      <li>jittor.models.mnasnet</li>
+    
+    
+      <li class="wy-breadcrumbs-aside">
+        
+      </li>
+    
+  </ul>
+
+  
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+            
+  <h1>jittor.models.mnasnet 源代码</h1><div class="highlight"><pre>
+<span></span><span class="c1"># ***************************************************************</span>
+<span class="c1"># Copyright (c) 2020 Jittor. Authors: </span>
+<span class="c1">#     Wenyang Zhou &lt;576825820@qq.com&gt;</span>
+<span class="c1">#     Dun Liang &lt;randonlang@gmail.com&gt;. </span>
+<span class="c1"># All Rights Reserved.</span>
+<span class="c1"># This file is subject to the terms and conditions defined in</span>
+<span class="c1"># file &#39;LICENSE.txt&#39;, which is part of this source code package.</span>
+<span class="c1"># ***************************************************************</span>
+<span class="c1"># This model is generated by pytorch converter.</span>
+
+<span class="kn">import</span> <span class="nn">jittor</span> <span class="k">as</span> <span class="nn">jt</span>
+<span class="kn">from</span> <span class="nn">jittor</span> <span class="kn">import</span> <span class="n">nn</span>
+<span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;MNASNet&#39;</span><span class="p">,</span> <span class="s1">&#39;mnasnet0_5&#39;</span><span class="p">,</span> <span class="s1">&#39;mnasnet0_75&#39;</span><span class="p">,</span> <span class="s1">&#39;mnasnet1_0&#39;</span><span class="p">,</span> <span class="s1">&#39;mnasnet1_3&#39;</span><span class="p">]</span>
+<span class="n">_BN_MOMENTUM</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="mf">0.9997</span><span class="p">)</span>
+
+<span class="k">class</span> <span class="nc">_InvertedResidual</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">in_ch</span><span class="p">,</span> <span class="n">out_ch</span><span class="p">,</span> <span class="n">kernel_size</span><span class="p">,</span> <span class="n">stride</span><span class="p">,</span> <span class="n">expansion_factor</span><span class="p">,</span> <span class="n">bn_momentum</span><span class="o">=</span><span class="mf">0.1</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">_InvertedResidual</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+        <span class="k">assert</span> <span class="p">(</span><span class="n">stride</span> <span class="ow">in</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">])</span>
+        <span class="k">assert</span> <span class="p">(</span><span class="n">kernel_size</span> <span class="ow">in</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">5</span><span class="p">])</span>
+        <span class="n">mid_ch</span> <span class="o">=</span> <span class="p">(</span><span class="n">in_ch</span> <span class="o">*</span> <span class="n">expansion_factor</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">apply_residual</span> <span class="o">=</span> <span class="p">((</span><span class="n">in_ch</span> <span class="o">==</span> <span class="n">out_ch</span><span class="p">)</span> <span class="ow">and</span> <span class="p">(</span><span class="n">stride</span> <span class="o">==</span> <span class="mi">1</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">layers</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Sequential</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Conv</span><span class="p">(</span><span class="n">in_ch</span><span class="p">,</span> <span class="n">mid_ch</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span> <span class="n">nn</span><span class="o">.</span><span class="n">BatchNorm</span><span class="p">(</span><span class="n">mid_ch</span><span class="p">,</span> <span class="n">momentum</span><span class="o">=</span><span class="n">bn_momentum</span><span class="p">),</span> <span class="n">nn</span><span class="o">.</span><span class="n">Relu</span><span class="p">(),</span> <span class="n">nn</span><span class="o">.</span><span class="n">Conv</span><span class="p">(</span><span class="n">mid_ch</span><span class="p">,</span> <span class="n">mid_ch</span><span class="p">,</span> <span class="n">kernel_size</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="p">(</span><span class="n">kernel_size</span> <span class="o">//</span> <span class="mi">2</span><span class="p">),</span> <span class="n">stride</span><span class="o">=</span><span class="n">stride</span><span class="p">,</span> <span class="n">groups</span><span class="o">=</span><span class="n">mid_ch</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span> <span class="n">nn</span><span class="o">.</span><span class="n">BatchNorm</span><span class="p">(</span><span class="n">mid_ch</span><span class="p">,</span> <span class="n">momentum</span><span class="o">=</span><span class="n">bn_momentum</span><span class="p">),</span> <span class="n">nn</span><span class="o">.</span><span class="n">Relu</span><span class="p">(),</span> <span class="n">nn</span><span class="o">.</span><span class="n">Conv</span><span class="p">(</span><span class="n">mid_ch</span><span class="p">,</span> <span class="n">out_ch</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span> <span class="n">nn</span><span class="o">.</span><span class="n">BatchNorm</span><span class="p">(</span><span class="n">out_ch</span><span class="p">,</span> <span class="n">momentum</span><span class="o">=</span><span class="n">bn_momentum</span><span class="p">))</span>
+
+    <span class="k">def</span> <span class="nf">execute</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">input</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">apply_residual</span><span class="p">:</span>
+            <span class="k">return</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">layers</span><span class="p">(</span><span class="nb">input</span><span class="p">)</span> <span class="o">+</span> <span class="nb">input</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">layers</span><span class="p">(</span><span class="nb">input</span><span class="p">)</span>
+
+<span class="k">def</span> <span class="nf">_stack</span><span class="p">(</span><span class="n">in_ch</span><span class="p">,</span> <span class="n">out_ch</span><span class="p">,</span> <span class="n">kernel_size</span><span class="p">,</span> <span class="n">stride</span><span class="p">,</span> <span class="n">exp_factor</span><span class="p">,</span> <span class="n">repeats</span><span class="p">,</span> <span class="n">bn_momentum</span><span class="p">):</span>
+    <span class="k">assert</span> <span class="p">(</span><span class="n">repeats</span> <span class="o">&gt;=</span> <span class="mi">1</span><span class="p">)</span>
+    <span class="n">first</span> <span class="o">=</span> <span class="n">_InvertedResidual</span><span class="p">(</span><span class="n">in_ch</span><span class="p">,</span> <span class="n">out_ch</span><span class="p">,</span> <span class="n">kernel_size</span><span class="p">,</span> <span class="n">stride</span><span class="p">,</span> <span class="n">exp_factor</span><span class="p">,</span> <span class="n">bn_momentum</span><span class="o">=</span><span class="n">bn_momentum</span><span class="p">)</span>
+    <span class="n">remaining</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">repeats</span><span class="p">):</span>
+        <span class="n">remaining</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">_InvertedResidual</span><span class="p">(</span><span class="n">out_ch</span><span class="p">,</span> <span class="n">out_ch</span><span class="p">,</span> <span class="n">kernel_size</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">exp_factor</span><span class="p">,</span> <span class="n">bn_momentum</span><span class="o">=</span><span class="n">bn_momentum</span><span class="p">))</span>
+    <span class="k">return</span> <span class="n">nn</span><span class="o">.</span><span class="n">Sequential</span><span class="p">(</span><span class="n">first</span><span class="p">,</span> <span class="o">*</span><span class="n">remaining</span><span class="p">)</span>
+
+<span class="k">def</span> <span class="nf">_round_to_multiple_of</span><span class="p">(</span><span class="n">val</span><span class="p">,</span> <span class="n">divisor</span><span class="p">,</span> <span class="n">round_up_bias</span><span class="o">=</span><span class="mf">0.9</span><span class="p">):</span>
+    <span class="k">assert</span> <span class="p">(</span><span class="mf">0.0</span> <span class="o">&lt;</span> <span class="n">round_up_bias</span> <span class="o">&lt;</span> <span class="mf">1.0</span><span class="p">)</span>
+    <span class="n">new_val</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">divisor</span><span class="p">,</span> <span class="p">((</span><span class="nb">int</span><span class="p">((</span><span class="n">val</span> <span class="o">+</span> <span class="p">(</span><span class="n">divisor</span> <span class="o">/</span> <span class="mi">2</span><span class="p">)))</span> <span class="o">//</span> <span class="n">divisor</span><span class="p">)</span> <span class="o">*</span> <span class="n">divisor</span><span class="p">))</span>
+    <span class="k">return</span> <span class="p">(</span><span class="n">new_val</span> <span class="k">if</span> <span class="p">(</span><span class="n">new_val</span> <span class="o">&gt;=</span> <span class="p">(</span><span class="n">round_up_bias</span> <span class="o">*</span> <span class="n">val</span><span class="p">))</span> <span class="k">else</span> <span class="p">(</span><span class="n">new_val</span> <span class="o">+</span> <span class="n">divisor</span><span class="p">))</span>
+
+<span class="k">def</span> <span class="nf">_get_depths</span><span class="p">(</span><span class="n">alpha</span><span class="p">):</span>
+    <span class="n">depths</span> <span class="o">=</span> <span class="p">[</span><span class="mi">24</span><span class="p">,</span> <span class="mi">40</span><span class="p">,</span> <span class="mi">80</span><span class="p">,</span> <span class="mi">96</span><span class="p">,</span> <span class="mi">192</span><span class="p">,</span> <span class="mi">320</span><span class="p">]</span>
+    <span class="k">return</span> <span class="p">[</span><span class="n">_round_to_multiple_of</span><span class="p">((</span><span class="n">depth</span> <span class="o">*</span> <span class="n">alpha</span><span class="p">),</span> <span class="mi">8</span><span class="p">)</span> <span class="k">for</span> <span class="n">depth</span> <span class="ow">in</span> <span class="n">depths</span><span class="p">]</span>
+
+<div class="viewcode-block" id="MNASNet"><a class="viewcode-back" href="../../../jittor.models.html#jittor.models.MNASNet">[文档]</a><span class="k">class</span> <span class="nc">MNASNet</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+    <span class="n">_version</span> <span class="o">=</span> <span class="mi">2</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">alpha</span><span class="p">,</span> <span class="n">num_classes</span><span class="o">=</span><span class="mi">1000</span><span class="p">,</span> <span class="n">dropout</span><span class="o">=</span><span class="mf">0.2</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">MNASNet</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+        <span class="k">assert</span> <span class="p">(</span><span class="n">alpha</span> <span class="o">&gt;</span> <span class="mf">0.0</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">alpha</span> <span class="o">=</span> <span class="n">alpha</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_classes</span> <span class="o">=</span> <span class="n">num_classes</span>
+        <span class="n">depths</span> <span class="o">=</span> <span class="n">_get_depths</span><span class="p">(</span><span class="n">alpha</span><span class="p">)</span>
+        <span class="n">layers</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">nn</span><span class="o">.</span><span class="n">Conv</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">stride</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span> 
+            <span class="n">nn</span><span class="o">.</span><span class="n">BatchNorm</span><span class="p">(</span><span class="mi">32</span><span class="p">,</span> <span class="n">momentum</span><span class="o">=</span><span class="n">_BN_MOMENTUM</span><span class="p">),</span> 
+            <span class="n">nn</span><span class="o">.</span><span class="n">Relu</span><span class="p">(),</span> 
+            <span class="n">nn</span><span class="o">.</span><span class="n">Conv</span><span class="p">(</span><span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">stride</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">groups</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span> 
+            <span class="n">nn</span><span class="o">.</span><span class="n">BatchNorm</span><span class="p">(</span><span class="mi">32</span><span class="p">,</span> <span class="n">momentum</span><span class="o">=</span><span class="n">_BN_MOMENTUM</span><span class="p">),</span> 
+            <span class="n">nn</span><span class="o">.</span><span class="n">Relu</span><span class="p">(),</span> 
+            <span class="n">nn</span><span class="o">.</span><span class="n">Conv</span><span class="p">(</span><span class="mi">32</span><span class="p">,</span> <span class="mi">16</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">stride</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span> 
+            <span class="n">nn</span><span class="o">.</span><span class="n">BatchNorm</span><span class="p">(</span><span class="mi">16</span><span class="p">,</span> <span class="n">momentum</span><span class="o">=</span><span class="n">_BN_MOMENTUM</span><span class="p">),</span> 
+            <span class="n">_stack</span><span class="p">(</span><span class="mi">16</span><span class="p">,</span> <span class="n">depths</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="n">_BN_MOMENTUM</span><span class="p">),</span>
+            <span class="n">_stack</span><span class="p">(</span><span class="n">depths</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">depths</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="n">_BN_MOMENTUM</span><span class="p">),</span>
+            <span class="n">_stack</span><span class="p">(</span><span class="n">depths</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">depths</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="n">_BN_MOMENTUM</span><span class="p">),</span>
+            <span class="n">_stack</span><span class="p">(</span><span class="n">depths</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span> <span class="n">depths</span><span class="p">[</span><span class="mi">3</span><span class="p">],</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="n">_BN_MOMENTUM</span><span class="p">),</span>
+            <span class="n">_stack</span><span class="p">(</span><span class="n">depths</span><span class="p">[</span><span class="mi">3</span><span class="p">],</span> <span class="n">depths</span><span class="p">[</span><span class="mi">4</span><span class="p">],</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="n">_BN_MOMENTUM</span><span class="p">),</span>
+            <span class="n">_stack</span><span class="p">(</span><span class="n">depths</span><span class="p">[</span><span class="mi">4</span><span class="p">],</span> <span class="n">depths</span><span class="p">[</span><span class="mi">5</span><span class="p">],</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">_BN_MOMENTUM</span><span class="p">),</span>
+            <span class="n">nn</span><span class="o">.</span><span class="n">Conv</span><span class="p">(</span><span class="n">depths</span><span class="p">[</span><span class="mi">5</span><span class="p">],</span> <span class="mi">1280</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">stride</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span> 
+            <span class="n">nn</span><span class="o">.</span><span class="n">BatchNorm</span><span class="p">(</span><span class="mi">1280</span><span class="p">,</span> <span class="n">momentum</span><span class="o">=</span><span class="n">_BN_MOMENTUM</span><span class="p">),</span> 
+            <span class="n">nn</span><span class="o">.</span><span class="n">Relu</span><span class="p">()</span>
+        <span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">layers</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Sequential</span><span class="p">(</span><span class="o">*</span><span class="n">layers</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">classifier</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Sequential</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Dropout</span><span class="p">(</span><span class="n">p</span><span class="o">=</span><span class="n">dropout</span><span class="p">),</span> <span class="n">nn</span><span class="o">.</span><span class="n">Linear</span><span class="p">(</span><span class="mi">1280</span><span class="p">,</span> <span class="n">num_classes</span><span class="p">))</span>
+
+<div class="viewcode-block" id="MNASNet.execute"><a class="viewcode-back" href="../../../jittor.models.html#jittor.models.MNASNet.execute">[文档]</a>    <span class="k">def</span> <span class="nf">execute</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">layers</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">mean</span><span class="p">([</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">])</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">classifier</span><span class="p">(</span><span class="n">x</span><span class="p">)</span></div></div>
+
+<div class="viewcode-block" id="mnasnet0_5"><a class="viewcode-back" href="../../../jittor.models.html#jittor.models.mnasnet0_5">[文档]</a><span class="k">def</span> <span class="nf">mnasnet0_5</span><span class="p">(</span><span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+    <span class="n">model</span> <span class="o">=</span> <span class="n">MNASNet</span><span class="p">(</span><span class="mf">0.5</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">model</span></div>
+
+<div class="viewcode-block" id="mnasnet0_75"><a class="viewcode-back" href="../../../jittor.models.html#jittor.models.mnasnet0_75">[文档]</a><span class="k">def</span> <span class="nf">mnasnet0_75</span><span class="p">(</span><span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+    <span class="n">model</span> <span class="o">=</span> <span class="n">MNASNet</span><span class="p">(</span><span class="mf">0.75</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">model</span></div>
+
+<div class="viewcode-block" id="mnasnet1_0"><a class="viewcode-back" href="../../../jittor.models.html#jittor.models.mnasnet1_0">[文档]</a><span class="k">def</span> <span class="nf">mnasnet1_0</span><span class="p">(</span><span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+    <span class="n">model</span> <span class="o">=</span> <span class="n">MNASNet</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">model</span></div>
+
+<div class="viewcode-block" id="mnasnet1_3"><a class="viewcode-back" href="../../../jittor.models.html#jittor.models.mnasnet1_3">[文档]</a><span class="k">def</span> <span class="nf">mnasnet1_3</span><span class="p">(</span><span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+    <span class="n">model</span> <span class="o">=</span> <span class="n">MNASNet</span><span class="p">(</span><span class="mf">1.3</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">model</span></div>
+</pre></div>
+
+           </div>
+           
+          </div>
+          <footer>
+  
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>
+        &copy; Copyright 2020, Jittor
+
+    </p>
+  </div>
+  Built with <a href="http://sphinx-doc.org/">Sphinx</a> using a <a href="https://github.com/rtfd/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>. 
+
+</footer>
+
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+  
+
+
+  <script type="text/javascript">
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script>
+
+  
+  
+    
+   
+
+</body>
+</html>

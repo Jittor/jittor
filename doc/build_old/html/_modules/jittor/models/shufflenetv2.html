@@ -1,0 +1,314 @@
+
+
+<!DOCTYPE html>
+<!--[if IE 8]><html class="no-js lt-ie9" lang="zh-CN" > <![endif]-->
+<!--[if gt IE 8]><!--> <html class="no-js" lang="zh-CN" > <!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <title>jittor.models.shufflenetv2 &mdash; Jittor 1.1.3.1 文档</title>
+  
+
+  
+  
+  
+  
+
+  
+  <script type="text/javascript" src="../../../_static/js/modernizr.min.js"></script>
+  
+    
+      <script type="text/javascript" id="documentation_options" data-url_root="../../../" src="../../../_static/documentation_options.js"></script>
+        <script src="../../../_static/jquery.js"></script>
+        <script src="../../../_static/underscore.js"></script>
+        <script src="../../../_static/doctools.js"></script>
+        <script src="../../../_static/language_data.js"></script>
+        <script src="../../../_static/translations.js"></script>
+    
+    <script type="text/javascript" src="../../../_static/js/theme.js"></script>
+
+    
+
+  
+  <link rel="stylesheet" href="../../../_static/css/theme.css" type="text/css" />
+  <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+    <link rel="index" title="索引" href="../../../genindex.html" />
+    <link rel="search" title="搜索" href="../../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav">
+
+   
+  <div class="wy-grid-for-nav">
+    
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+          
+
+          
+            <a href="../../../index.html" class="icon icon-home"> Jittor
+          
+
+          
+          </a>
+
+          
+            
+            
+          
+
+          
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+
+          
+        </div>
+
+        <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="main navigation">
+          
+            
+            
+              
+            
+            
+              <p class="caption"><span class="caption-text">内容一览:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../README.cn.html">Jittor: 即时编译深度学习框架</a></li>
+</ul>
+<p class="caption"><span class="caption-text">模块API:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../jittor.html">jittor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../jittor.nn.html">jittor.nn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../jittor.models.html">jittor.models</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../jittor.optim.html">jittor.optim</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../jittor.init.html">jittor.init</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../jittor.contrib.html">jittor.contrib</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../jittor.dataset.html">jittor.dataset</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../jittor.transform.html">jittor.transform</a></li>
+</ul>
+<p class="caption"><span class="caption-text">其他:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference external" href="https://cg.cs.tsinghua.edu.cn/jittor/tutorial/">教程</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://cg.cs.tsinghua.edu.cn/jittor/tutorial/">教程1</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../todo.html">TODO</a></li>
+</ul>
+
+            
+          
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+
+      
+      <nav class="wy-nav-top" aria-label="top navigation">
+        
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">Jittor</a>
+        
+      </nav>
+
+
+      <div class="wy-nav-content">
+        
+        <div class="rst-content">
+        
+          
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div role="navigation" aria-label="breadcrumbs navigation">
+
+  <ul class="wy-breadcrumbs">
+    
+      <li><a href="../../../index.html">Docs</a> &raquo;</li>
+        
+          <li><a href="../../index.html">模块代码</a> &raquo;</li>
+        
+          <li><a href="../../jittor.html">jittor</a> &raquo;</li>
+        
+      <li>jittor.models.shufflenetv2</li>
+    
+    
+      <li class="wy-breadcrumbs-aside">
+        
+      </li>
+    
+  </ul>
+
+  
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+            
+  <h1>jittor.models.shufflenetv2 源代码</h1><div class="highlight"><pre>
+<span></span>
+<span class="c1"># ***************************************************************</span>
+<span class="c1"># Copyright (c) 2020 Jittor. Authors: </span>
+<span class="c1">#     Wenyang Zhou &lt;576825820@qq.com&gt;</span>
+<span class="c1">#     Dun Liang &lt;randonlang@gmail.com&gt;. </span>
+<span class="c1"># All Rights Reserved.</span>
+<span class="c1"># This file is subject to the terms and conditions defined in</span>
+<span class="c1"># file &#39;LICENSE.txt&#39;, which is part of this source code package.</span>
+<span class="c1"># ***************************************************************</span>
+<span class="c1"># This model is generated by pytorch converter.</span>
+<span class="kn">import</span> <span class="nn">jittor</span> <span class="k">as</span> <span class="nn">jt</span>
+<span class="kn">from</span> <span class="nn">jittor</span> <span class="kn">import</span> <span class="n">nn</span>
+
+<span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;ShuffleNetV2&#39;</span><span class="p">,</span> <span class="s1">&#39;shufflenet_v2_x0_5&#39;</span><span class="p">,</span> <span class="s1">&#39;shufflenet_v2_x1_0&#39;</span><span class="p">,</span> <span class="s1">&#39;shufflenet_v2_x1_5&#39;</span><span class="p">,</span> <span class="s1">&#39;shufflenet_v2_x2_0&#39;</span><span class="p">]</span>
+
+<span class="k">def</span> <span class="nf">channel_shuffle</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">groups</span><span class="p">):</span>
+    <span class="p">(</span><span class="n">batchsize</span><span class="p">,</span> <span class="n">num_channels</span><span class="p">,</span> <span class="n">height</span><span class="p">,</span> <span class="n">width</span><span class="p">)</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">shape</span>
+    <span class="n">channels_per_group</span> <span class="o">=</span> <span class="p">(</span><span class="n">num_channels</span> <span class="o">//</span> <span class="n">groups</span><span class="p">)</span>
+    <span class="n">x</span> <span class="o">=</span> <span class="n">jt</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="p">[</span><span class="n">batchsize</span><span class="p">,</span> <span class="n">groups</span><span class="p">,</span> <span class="n">channels_per_group</span><span class="p">,</span> <span class="n">height</span><span class="p">,</span> <span class="n">width</span><span class="p">])</span>
+    <span class="n">x</span> <span class="o">=</span> <span class="n">jt</span><span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">))</span>
+    <span class="n">x</span> <span class="o">=</span> <span class="n">jt</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="p">[</span><span class="n">batchsize</span><span class="p">,</span> <span class="p">(</span><span class="o">-</span> <span class="mi">1</span><span class="p">),</span> <span class="n">height</span><span class="p">,</span> <span class="n">width</span><span class="p">])</span>
+    <span class="k">return</span> <span class="n">x</span>
+
+<span class="k">class</span> <span class="nc">InvertedResidual</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">inp</span><span class="p">,</span> <span class="n">oup</span><span class="p">,</span> <span class="n">stride</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">InvertedResidual</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+        <span class="k">if</span> <span class="p">(</span><span class="ow">not</span> <span class="p">(</span><span class="mi">1</span> <span class="o">&lt;=</span> <span class="n">stride</span> <span class="o">&lt;=</span> <span class="mi">3</span><span class="p">)):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s1">&#39;illegal stride value&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stride</span> <span class="o">=</span> <span class="n">stride</span>
+        <span class="n">branch_features</span> <span class="o">=</span> <span class="p">(</span><span class="n">oup</span> <span class="o">//</span> <span class="mi">2</span><span class="p">)</span>
+        <span class="k">assert</span> <span class="p">((</span><span class="bp">self</span><span class="o">.</span><span class="n">stride</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">)</span> <span class="ow">or</span> <span class="p">(</span><span class="n">inp</span> <span class="o">==</span> <span class="p">(</span><span class="n">branch_features</span> <span class="o">&lt;&lt;</span> <span class="mi">1</span><span class="p">)))</span>
+        <span class="k">if</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">stride</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">branch1</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Sequential</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">depthwise_conv</span><span class="p">(</span><span class="n">inp</span><span class="p">,</span> <span class="n">inp</span><span class="p">,</span> <span class="n">kernel_size</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">stride</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">stride</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="mi">1</span><span class="p">),</span> <span class="n">nn</span><span class="o">.</span><span class="n">BatchNorm</span><span class="p">(</span><span class="n">inp</span><span class="p">),</span> <span class="n">nn</span><span class="o">.</span><span class="n">Conv</span><span class="p">(</span><span class="n">inp</span><span class="p">,</span> <span class="n">branch_features</span><span class="p">,</span> <span class="n">kernel_size</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">stride</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span> <span class="n">nn</span><span class="o">.</span><span class="n">BatchNorm</span><span class="p">(</span><span class="n">branch_features</span><span class="p">),</span> <span class="n">nn</span><span class="o">.</span><span class="n">Relu</span><span class="p">())</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">branch1</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Sequential</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">branch2</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Sequential</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Conv</span><span class="p">((</span><span class="n">inp</span> <span class="k">if</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">stride</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">)</span> <span class="k">else</span> <span class="n">branch_features</span><span class="p">),</span> <span class="n">branch_features</span><span class="p">,</span> <span class="n">kernel_size</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">stride</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span> <span class="n">nn</span><span class="o">.</span><span class="n">BatchNorm</span><span class="p">(</span><span class="n">branch_features</span><span class="p">),</span> <span class="n">nn</span><span class="o">.</span><span class="n">Relu</span><span class="p">(),</span> <span class="bp">self</span><span class="o">.</span><span class="n">depthwise_conv</span><span class="p">(</span><span class="n">branch_features</span><span class="p">,</span> <span class="n">branch_features</span><span class="p">,</span> <span class="n">kernel_size</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">stride</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">stride</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="mi">1</span><span class="p">),</span> <span class="n">nn</span><span class="o">.</span><span class="n">BatchNorm</span><span class="p">(</span><span class="n">branch_features</span><span class="p">),</span> <span class="n">nn</span><span class="o">.</span><span class="n">Conv</span><span class="p">(</span><span class="n">branch_features</span><span class="p">,</span> <span class="n">branch_features</span><span class="p">,</span> <span class="n">kernel_size</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">stride</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span> <span class="n">nn</span><span class="o">.</span><span class="n">BatchNorm</span><span class="p">(</span><span class="n">branch_features</span><span class="p">),</span> <span class="n">nn</span><span class="o">.</span><span class="n">Relu</span><span class="p">())</span>
+
+    <span class="nd">@staticmethod</span>
+    <span class="k">def</span> <span class="nf">depthwise_conv</span><span class="p">(</span><span class="n">i</span><span class="p">,</span> <span class="n">o</span><span class="p">,</span> <span class="n">kernel_size</span><span class="p">,</span> <span class="n">stride</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">nn</span><span class="o">.</span><span class="n">Conv</span><span class="p">(</span><span class="n">i</span><span class="p">,</span> <span class="n">o</span><span class="p">,</span> <span class="n">kernel_size</span><span class="p">,</span> <span class="n">stride</span><span class="p">,</span> <span class="n">padding</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="n">bias</span><span class="p">,</span> <span class="n">groups</span><span class="o">=</span><span class="n">i</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">execute</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+        <span class="k">if</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">stride</span> <span class="o">==</span> <span class="mi">1</span><span class="p">):</span>
+            <span class="n">x1</span> <span class="o">=</span> <span class="n">x</span><span class="p">[:,</span><span class="mi">0</span><span class="p">:</span><span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">//</span><span class="mi">2</span><span class="p">]</span>
+            <span class="n">x2</span> <span class="o">=</span> <span class="n">x</span><span class="p">[:,</span><span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">//</span><span class="mi">2</span><span class="p">:</span><span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]]</span>
+            <span class="n">out</span> <span class="o">=</span> <span class="n">jt</span><span class="o">.</span><span class="n">contrib</span><span class="o">.</span><span class="n">concat</span><span class="p">([</span><span class="n">x1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">branch2</span><span class="p">(</span><span class="n">x2</span><span class="p">)],</span> <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">out</span> <span class="o">=</span> <span class="n">jt</span><span class="o">.</span><span class="n">contrib</span><span class="o">.</span><span class="n">concat</span><span class="p">([</span><span class="bp">self</span><span class="o">.</span><span class="n">branch1</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">branch2</span><span class="p">(</span><span class="n">x</span><span class="p">)],</span> <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">out</span> <span class="o">=</span> <span class="n">channel_shuffle</span><span class="p">(</span><span class="n">out</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">out</span>
+
+<div class="viewcode-block" id="ShuffleNetV2"><a class="viewcode-back" href="../../../jittor.models.html#jittor.models.ShuffleNetV2">[文档]</a><span class="k">class</span> <span class="nc">ShuffleNetV2</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">stages_repeats</span><span class="p">,</span> <span class="n">stages_out_channels</span><span class="p">,</span> <span class="n">num_classes</span><span class="o">=</span><span class="mi">1000</span><span class="p">,</span> <span class="n">inverted_residual</span><span class="o">=</span><span class="n">InvertedResidual</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">(</span><span class="n">ShuffleNetV2</span><span class="p">,</span> <span class="bp">self</span><span class="p">)</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+        <span class="k">if</span> <span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">stages_repeats</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">3</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s1">&#39;expected stages_repeats as list of 3 positive ints&#39;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">stages_out_channels</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">5</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s1">&#39;expected stages_out_channels as list of 5 positive ints&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_stage_out_channels</span> <span class="o">=</span> <span class="n">stages_out_channels</span>
+        <span class="n">input_channels</span> <span class="o">=</span> <span class="mi">3</span>
+        <span class="n">output_channels</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_stage_out_channels</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">conv1</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Sequential</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Conv</span><span class="p">(</span><span class="n">input_channels</span><span class="p">,</span> <span class="n">output_channels</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span> <span class="n">nn</span><span class="o">.</span><span class="n">BatchNorm</span><span class="p">(</span><span class="n">output_channels</span><span class="p">),</span> <span class="n">nn</span><span class="o">.</span><span class="n">Relu</span><span class="p">())</span>
+        <span class="n">input_channels</span> <span class="o">=</span> <span class="n">output_channels</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">maxpool</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Pool</span><span class="p">(</span><span class="n">kernel_size</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">stride</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">op</span><span class="o">=</span><span class="s1">&#39;maximum&#39;</span><span class="p">)</span>
+        <span class="n">stage_names</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;stage</span><span class="si">{}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">i</span><span class="p">)</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]]</span>
+        <span class="k">for</span> <span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">repeats</span><span class="p">,</span> <span class="n">output_channels</span><span class="p">)</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">stage_names</span><span class="p">,</span> <span class="n">stages_repeats</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">_stage_out_channels</span><span class="p">[</span><span class="mi">1</span><span class="p">:]):</span>
+            <span class="n">seq</span> <span class="o">=</span> <span class="p">[</span><span class="n">inverted_residual</span><span class="p">(</span><span class="n">input_channels</span><span class="p">,</span> <span class="n">output_channels</span><span class="p">,</span> <span class="mi">2</span><span class="p">)]</span>
+            <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">((</span><span class="n">repeats</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)):</span>
+                <span class="n">seq</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">inverted_residual</span><span class="p">(</span><span class="n">output_channels</span><span class="p">,</span> <span class="n">output_channels</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+            <span class="nb">setattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="n">nn</span><span class="o">.</span><span class="n">Sequential</span><span class="p">(</span><span class="o">*</span><span class="n">seq</span><span class="p">))</span>
+            <span class="n">input_channels</span> <span class="o">=</span> <span class="n">output_channels</span>
+        <span class="n">output_channels</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_stage_out_channels</span><span class="p">[(</span><span class="o">-</span> <span class="mi">1</span><span class="p">)]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">conv5</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Sequential</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Conv</span><span class="p">(</span><span class="n">input_channels</span><span class="p">,</span> <span class="n">output_channels</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span> <span class="n">nn</span><span class="o">.</span><span class="n">BatchNorm</span><span class="p">(</span><span class="n">output_channels</span><span class="p">),</span> <span class="n">nn</span><span class="o">.</span><span class="n">Relu</span><span class="p">())</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">fc</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Linear</span><span class="p">(</span><span class="n">output_channels</span><span class="p">,</span> <span class="n">num_classes</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_forward_impl</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">conv1</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">maxpool</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">stage2</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">stage3</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">stage4</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">conv5</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">mean</span><span class="p">([</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">])</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">fc</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">x</span>
+
+<div class="viewcode-block" id="ShuffleNetV2.execute"><a class="viewcode-back" href="../../../jittor.models.html#jittor.models.ShuffleNetV2.execute">[文档]</a>    <span class="k">def</span> <span class="nf">execute</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_forward_impl</span><span class="p">(</span><span class="n">x</span><span class="p">)</span></div></div>
+
+<span class="k">def</span> <span class="nf">_shufflenetv2</span><span class="p">(</span><span class="n">arch</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">):</span>
+    <span class="n">model</span> <span class="o">=</span> <span class="n">ShuffleNetV2</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">model</span>
+
+<div class="viewcode-block" id="shufflenet_v2_x0_5"><a class="viewcode-back" href="../../../jittor.models.html#jittor.models.shufflenet_v2_x0_5">[文档]</a><span class="k">def</span> <span class="nf">shufflenet_v2_x0_5</span><span class="p">():</span>
+    <span class="k">return</span> <span class="n">_shufflenetv2</span><span class="p">(</span><span class="s1">&#39;shufflenetv2_x0.5&#39;</span><span class="p">,</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="p">[</span><span class="mi">24</span><span class="p">,</span> <span class="mi">48</span><span class="p">,</span> <span class="mi">96</span><span class="p">,</span> <span class="mi">192</span><span class="p">,</span> <span class="mi">1024</span><span class="p">])</span></div>
+
+<div class="viewcode-block" id="shufflenet_v2_x1_0"><a class="viewcode-back" href="../../../jittor.models.html#jittor.models.shufflenet_v2_x1_0">[文档]</a><span class="k">def</span> <span class="nf">shufflenet_v2_x1_0</span><span class="p">():</span>
+    <span class="k">return</span> <span class="n">_shufflenetv2</span><span class="p">(</span><span class="s1">&#39;shufflenetv2_x1.0&#39;</span><span class="p">,</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="p">[</span><span class="mi">24</span><span class="p">,</span> <span class="mi">116</span><span class="p">,</span> <span class="mi">232</span><span class="p">,</span> <span class="mi">464</span><span class="p">,</span> <span class="mi">1024</span><span class="p">])</span></div>
+
+<div class="viewcode-block" id="shufflenet_v2_x1_5"><a class="viewcode-back" href="../../../jittor.models.html#jittor.models.shufflenet_v2_x1_5">[文档]</a><span class="k">def</span> <span class="nf">shufflenet_v2_x1_5</span><span class="p">():</span>
+    <span class="k">return</span> <span class="n">_shufflenetv2</span><span class="p">(</span><span class="s1">&#39;shufflenetv2_x1.5&#39;</span><span class="p">,</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="p">[</span><span class="mi">24</span><span class="p">,</span> <span class="mi">176</span><span class="p">,</span> <span class="mi">352</span><span class="p">,</span> <span class="mi">704</span><span class="p">,</span> <span class="mi">1024</span><span class="p">])</span></div>
+
+<div class="viewcode-block" id="shufflenet_v2_x2_0"><a class="viewcode-back" href="../../../jittor.models.html#jittor.models.shufflenet_v2_x2_0">[文档]</a><span class="k">def</span> <span class="nf">shufflenet_v2_x2_0</span><span class="p">():</span>
+    <span class="k">return</span> <span class="n">_shufflenetv2</span><span class="p">(</span><span class="s1">&#39;shufflenetv2_x2.0&#39;</span><span class="p">,</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="p">[</span><span class="mi">24</span><span class="p">,</span> <span class="mi">244</span><span class="p">,</span> <span class="mi">488</span><span class="p">,</span> <span class="mi">976</span><span class="p">,</span> <span class="mi">2048</span><span class="p">])</span></div>
+</pre></div>
+
+           </div>
+           
+          </div>
+          <footer>
+  
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>
+        &copy; Copyright 2020, Jittor
+
+    </p>
+  </div>
+  Built with <a href="http://sphinx-doc.org/">Sphinx</a> using a <a href="https://github.com/rtfd/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>. 
+
+</footer>
+
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+  
+
+
+  <script type="text/javascript">
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script>
+
+  
+  
+    
+   
+
+</body>
+</html>

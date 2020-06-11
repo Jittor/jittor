@@ -1,0 +1,786 @@
+
+
+<!DOCTYPE html>
+<!--[if IE 8]><html class="no-js lt-ie9" lang="zh-CN" > <![endif]-->
+<!--[if gt IE 8]><!--> <html class="no-js" lang="zh-CN" > <!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <title>jittor.nn &mdash; Jittor 1.1.3.1 文档</title>
+  
+
+  
+  
+  
+  
+
+  
+  <script type="text/javascript" src="../../_static/js/modernizr.min.js"></script>
+  
+    
+      <script type="text/javascript" id="documentation_options" data-url_root="../../" src="../../_static/documentation_options.js"></script>
+        <script src="../../_static/jquery.js"></script>
+        <script src="../../_static/underscore.js"></script>
+        <script src="../../_static/doctools.js"></script>
+        <script src="../../_static/language_data.js"></script>
+        <script src="../../_static/translations.js"></script>
+    
+    <script type="text/javascript" src="../../_static/js/theme.js"></script>
+
+    
+
+  
+  <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+  <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+    <link rel="index" title="索引" href="../../genindex.html" />
+    <link rel="search" title="搜索" href="../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav">
+
+   
+  <div class="wy-grid-for-nav">
+    
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+          
+
+          
+            <a href="../../index.html" class="icon icon-home"> Jittor
+          
+
+          
+          </a>
+
+          
+            
+            
+          
+
+          
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+
+          
+        </div>
+
+        <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="main navigation">
+          
+            
+            
+              
+            
+            
+              <p class="caption"><span class="caption-text">内容一览:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../README.cn.html">Jittor: 即时编译深度学习框架</a></li>
+</ul>
+<p class="caption"><span class="caption-text">模块API:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../jittor.html">jittor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../jittor.nn.html">jittor.nn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../jittor.models.html">jittor.models</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../jittor.optim.html">jittor.optim</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../jittor.init.html">jittor.init</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../jittor.contrib.html">jittor.contrib</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../jittor.dataset.html">jittor.dataset</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../jittor.transform.html">jittor.transform</a></li>
+</ul>
+<p class="caption"><span class="caption-text">其他:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference external" href="https://cg.cs.tsinghua.edu.cn/jittor/tutorial/">教程</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://cg.cs.tsinghua.edu.cn/jittor/tutorial/">教程1</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../todo.html">TODO</a></li>
+</ul>
+
+            
+          
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+
+      
+      <nav class="wy-nav-top" aria-label="top navigation">
+        
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">Jittor</a>
+        
+      </nav>
+
+
+      <div class="wy-nav-content">
+        
+        <div class="rst-content">
+        
+          
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div role="navigation" aria-label="breadcrumbs navigation">
+
+  <ul class="wy-breadcrumbs">
+    
+      <li><a href="../../index.html">Docs</a> &raquo;</li>
+        
+          <li><a href="../index.html">模块代码</a> &raquo;</li>
+        
+          <li><a href="../jittor.html">jittor</a> &raquo;</li>
+        
+      <li>jittor.nn</li>
+    
+    
+      <li class="wy-breadcrumbs-aside">
+        
+      </li>
+    
+  </ul>
+
+  
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+            
+  <h1>jittor.nn 源代码</h1><div class="highlight"><pre>
+<span></span><span class="c1"># ***************************************************************</span>
+<span class="c1"># Copyright (c) 2020 Jittor. Authors:</span>
+<span class="c1">#     Guowei Yang &lt;471184555@qq.com&gt;</span>
+<span class="c1">#     Guoye Yang &lt;498731903@qq.com&gt;</span>
+<span class="c1">#     Wenyang Zhou &lt;576825820@qq.com&gt;</span>
+<span class="c1">#     Meng-Hao Guo &lt;guomenghao1997@gmail.com&gt;</span>
+<span class="c1">#     Dun Liang &lt;randonlang@gmail.com&gt;.</span>
+<span class="c1">#</span>
+<span class="c1"># All Rights Reserved.</span>
+<span class="c1"># This file is subject to the terms and conditions defined in</span>
+<span class="c1"># file &#39;LICENSE.txt&#39;, which is part of this source code package.</span>
+<span class="c1"># ***************************************************************</span>
+<span class="kn">import</span> <span class="nn">jittor</span> <span class="k">as</span> <span class="nn">jt</span>
+<span class="kn">from</span> <span class="nn">jittor</span> <span class="kn">import</span> <span class="n">init</span><span class="p">,</span> <span class="n">Module</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">math</span>
+<span class="kn">from</span> <span class="nn">jittor.pool</span> <span class="kn">import</span> <span class="n">Pool</span><span class="p">,</span> <span class="n">pool</span><span class="p">,</span> <span class="n">AdaptiveAvgPool2d</span>
+<span class="kn">from</span> <span class="nn">jittor.optim</span> <span class="kn">import</span> <span class="o">*</span>
+
+<div class="viewcode-block" id="matmul_transpose"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.matmul_transpose">[文档]</a><span class="k">def</span> <span class="nf">matmul_transpose</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">):</span>
+    <span class="sd">&#39;&#39;&#39;</span>
+<span class="sd">    returns a * b^T</span>
+<span class="sd">    &#39;&#39;&#39;</span>
+    <span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">a</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="mi">2</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">b</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">==</span> <span class="mi">2</span>
+    <span class="k">assert</span> <span class="n">a</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="n">b</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+
+    <span class="n">shape</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">a</span><span class="o">.</span><span class="n">shape</span><span class="p">)[:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="nb">list</span><span class="p">(</span><span class="n">b</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+    <span class="n">a</span> <span class="o">=</span> <span class="n">a</span><span class="o">.</span><span class="n">broadcast</span><span class="p">(</span><span class="n">shape</span><span class="p">,</span> <span class="p">[</span><span class="nb">len</span><span class="p">(</span><span class="n">shape</span><span class="p">)</span><span class="o">-</span><span class="mi">2</span><span class="p">])</span>
+    <span class="n">b</span> <span class="o">=</span> <span class="n">b</span><span class="o">.</span><span class="n">broadcast</span><span class="p">(</span><span class="n">shape</span><span class="p">)</span>
+    <span class="k">return</span> <span class="p">(</span><span class="n">a</span><span class="o">*</span><span class="n">b</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">shape</span><span class="p">)</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="matmul"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.matmul">[文档]</a><span class="k">def</span> <span class="nf">matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">):</span>
+    <span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">a</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="mi">2</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">b</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">==</span> <span class="mi">2</span>
+    <span class="k">assert</span> <span class="n">a</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="n">b</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span>
+
+    <span class="n">shape</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">a</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">+</span> <span class="p">[</span><span class="n">b</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]]</span>
+    <span class="n">a</span> <span class="o">=</span> <span class="n">a</span><span class="o">.</span><span class="n">broadcast</span><span class="p">(</span><span class="n">shape</span><span class="p">,</span> <span class="p">[</span><span class="nb">len</span><span class="p">(</span><span class="n">shape</span><span class="p">)</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+    <span class="n">b</span> <span class="o">=</span> <span class="n">b</span><span class="o">.</span><span class="n">broadcast</span><span class="p">(</span><span class="n">shape</span><span class="p">)</span>
+    <span class="k">return</span> <span class="p">(</span><span class="n">a</span><span class="o">*</span><span class="n">b</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">shape</span><span class="p">)</span><span class="o">-</span><span class="mi">2</span><span class="p">)</span></div>
+<span class="n">jt</span><span class="o">.</span><span class="n">Var</span><span class="o">.</span><span class="n">matmul</span> <span class="o">=</span> <span class="n">jt</span><span class="o">.</span><span class="n">Var</span><span class="o">.</span><span class="fm">__matmul__</span> <span class="o">=</span> <span class="n">matmul</span>
+<span class="n">jt</span><span class="o">.</span><span class="n">Var</span><span class="o">.</span><span class="fm">__imatmul__</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">a</span><span class="p">,</span><span class="n">b</span><span class="p">:</span> <span class="n">a</span><span class="o">.</span><span class="n">assign</span><span class="p">(</span><span class="n">matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="n">b</span><span class="p">))</span>
+
+<div class="viewcode-block" id="get_init_var_rand"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.get_init_var_rand">[文档]</a><span class="k">def</span> <span class="nf">get_init_var_rand</span><span class="p">(</span><span class="n">shape</span><span class="p">,</span> <span class="n">dtype</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">jt</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">normal</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">,</span> <span class="n">shape</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="relu"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.relu">[文档]</a><span class="k">def</span> <span class="nf">relu</span><span class="p">(</span><span class="n">x</span><span class="p">):</span> <span class="k">return</span> <span class="n">jt</span><span class="o">.</span><span class="n">maximum</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span></div>
+<div class="viewcode-block" id="leaky_relu"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.leaky_relu">[文档]</a><span class="k">def</span> <span class="nf">leaky_relu</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">scale</span><span class="o">=</span><span class="mf">0.01</span><span class="p">):</span> <span class="k">return</span> <span class="n">jt</span><span class="o">.</span><span class="n">ternary</span><span class="p">(</span><span class="n">x</span><span class="o">&gt;</span><span class="mi">0</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">x</span><span class="o">*</span><span class="n">scale</span><span class="p">)</span></div>
+<div class="viewcode-block" id="relu6"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.relu6">[文档]</a><span class="k">def</span> <span class="nf">relu6</span><span class="p">(</span><span class="n">x</span><span class="p">):</span> <span class="k">return</span> <span class="n">jt</span><span class="o">.</span><span class="n">minimum</span><span class="p">(</span><span class="n">jt</span><span class="o">.</span><span class="n">maximum</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="mi">6</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="PReLU"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.PReLU">[文档]</a><span class="k">class</span> <span class="nc">PReLU</span><span class="p">(</span><span class="n">Module</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">num_parameters</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">init_</span><span class="o">=</span><span class="mf">0.25</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_parameters</span> <span class="o">=</span> <span class="n">num_parameters</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">a</span> <span class="o">=</span> <span class="n">init</span><span class="o">.</span><span class="n">constant</span><span class="p">((</span><span class="n">num_parameters</span><span class="p">,),</span> <span class="s2">&quot;float32&quot;</span><span class="p">,</span> <span class="n">init_</span><span class="p">)</span>
+
+<div class="viewcode-block" id="PReLU.execute"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.PReLU.execute">[文档]</a>    <span class="k">def</span> <span class="nf">execute</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_parameters</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_parameters</span> <span class="o">==</span> <span class="n">x</span><span class="o">.</span><span class="n">size</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;num_parameters does not match input channels in PReLU&quot;</span>
+            <span class="k">return</span> <span class="n">jt</span><span class="o">.</span><span class="n">maximum</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">x</span><span class="p">)</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">a</span><span class="o">.</span><span class="n">broadcast</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">])</span> <span class="o">*</span> <span class="n">jt</span><span class="o">.</span><span class="n">minimum</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">x</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">jt</span><span class="o">.</span><span class="n">maximum</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">x</span><span class="p">)</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">a</span> <span class="o">*</span> <span class="n">jt</span><span class="o">.</span><span class="n">minimum</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">x</span><span class="p">)</span></div></div>
+
+<span class="c1">#TODO dims is 4 will cause slowly execution</span>
+<div class="viewcode-block" id="cross_entropy_loss"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.cross_entropy_loss">[文档]</a><span class="k">def</span> <span class="nf">cross_entropy_loss</span><span class="p">(</span><span class="n">output</span><span class="p">,</span> <span class="n">target</span><span class="p">,</span> <span class="n">ignore_index</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">output</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">==</span> <span class="mi">4</span><span class="p">:</span>
+        <span class="n">c_dim</span> <span class="o">=</span> <span class="n">output</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+        <span class="n">output</span> <span class="o">=</span> <span class="n">output</span><span class="o">.</span><span class="n">transpose</span><span class="p">((</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+        <span class="n">output</span> <span class="o">=</span> <span class="n">output</span><span class="o">.</span><span class="n">reshape</span><span class="p">((</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="n">c_dim</span><span class="p">))</span>
+    <span class="k">if</span> <span class="n">ignore_index</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">target</span> <span class="o">=</span> <span class="n">jt</span><span class="o">.</span><span class="n">ternary</span><span class="p">(</span><span class="n">target</span><span class="o">==</span><span class="n">ignore_index</span><span class="p">,</span>
+            <span class="n">jt</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">broadcast</span><span class="p">(</span><span class="n">target</span><span class="p">),</span> <span class="n">target</span><span class="p">)</span>
+        <span class="n">mask</span> <span class="o">=</span> <span class="n">jt</span><span class="o">.</span><span class="n">logical_and</span><span class="p">(</span><span class="n">target</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">target</span> <span class="o">&lt;</span> <span class="n">output</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+    <span class="n">target</span> <span class="o">=</span> <span class="n">target</span><span class="o">.</span><span class="n">reshape</span><span class="p">((</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="p">))</span>
+    <span class="n">target</span> <span class="o">=</span> <span class="n">target</span><span class="o">.</span><span class="n">broadcast</span><span class="p">(</span><span class="n">output</span><span class="p">,</span> <span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+    <span class="n">target</span> <span class="o">=</span> <span class="n">target</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span> <span class="o">==</span> <span class="n">target</span>
+    
+    <span class="n">output</span> <span class="o">=</span> <span class="n">output</span> <span class="o">-</span> <span class="n">output</span><span class="o">.</span><span class="n">max</span><span class="p">([</span><span class="mi">1</span><span class="p">],</span> <span class="n">keepdims</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">loss</span> <span class="o">=</span> <span class="n">output</span><span class="o">.</span><span class="n">exp</span><span class="p">()</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">log</span><span class="p">()</span>
+    <span class="n">loss</span> <span class="o">=</span> <span class="n">loss</span> <span class="o">-</span> <span class="p">(</span><span class="n">output</span><span class="o">*</span><span class="n">target</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">ignore_index</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">loss</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">loss</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span> <span class="o">/</span> <span class="n">jt</span><span class="o">.</span><span class="n">maximum</span><span class="p">(</span><span class="n">mask</span><span class="o">.</span><span class="n">int</span><span class="p">()</span><span class="o">.</span><span class="n">sum</span><span class="p">(),</span> <span class="mi">1</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="mse_loss"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.mse_loss">[文档]</a><span class="k">def</span> <span class="nf">mse_loss</span><span class="p">(</span><span class="n">output</span><span class="p">,</span> <span class="n">target</span><span class="p">):</span>
+    <span class="k">return</span> <span class="p">(</span><span class="n">output</span><span class="o">-</span><span class="n">target</span><span class="p">)</span><span class="o">.</span><span class="n">sqr</span><span class="p">()</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="bce_loss"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.bce_loss">[文档]</a><span class="k">def</span> <span class="nf">bce_loss</span><span class="p">(</span><span class="n">output</span><span class="p">,</span> <span class="n">target</span><span class="p">):</span>
+    <span class="k">return</span> <span class="o">-</span> <span class="p">(</span><span class="n">target</span> <span class="o">*</span> <span class="n">jt</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">jt</span><span class="o">.</span><span class="n">maximum</span><span class="p">(</span><span class="n">output</span><span class="p">,</span> <span class="mf">1e-20</span><span class="p">))</span> <span class="o">+</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="n">target</span><span class="p">)</span> <span class="o">*</span> <span class="n">jt</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">jt</span><span class="o">.</span><span class="n">maximum</span><span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="n">output</span><span class="p">,</span> <span class="mf">1e-20</span><span class="p">)))</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="l1_loss"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.l1_loss">[文档]</a><span class="k">def</span> <span class="nf">l1_loss</span><span class="p">(</span><span class="n">output</span><span class="p">,</span> <span class="n">target</span><span class="p">):</span>
+    <span class="k">return</span> <span class="p">(</span><span class="n">output</span><span class="o">-</span><span class="n">target</span><span class="p">)</span><span class="o">.</span><span class="n">abs</span><span class="p">()</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="CrossEntropyLoss"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.CrossEntropyLoss">[文档]</a><span class="k">class</span> <span class="nc">CrossEntropyLoss</span><span class="p">(</span><span class="n">Module</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">pass</span>
+<div class="viewcode-block" id="CrossEntropyLoss.execute"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.CrossEntropyLoss.execute">[文档]</a>    <span class="k">def</span> <span class="nf">execute</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">target</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">cross_entropy_loss</span><span class="p">(</span><span class="n">output</span><span class="p">,</span> <span class="n">target</span><span class="p">)</span></div></div>
+
+<div class="viewcode-block" id="MSELoss"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.MSELoss">[文档]</a><span class="k">class</span> <span class="nc">MSELoss</span><span class="p">(</span><span class="n">Module</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">pass</span>
+<div class="viewcode-block" id="MSELoss.execute"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.MSELoss.execute">[文档]</a>    <span class="k">def</span> <span class="nf">execute</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">target</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">mse_loss</span><span class="p">(</span><span class="n">output</span><span class="p">,</span> <span class="n">target</span><span class="p">)</span></div></div>
+
+<div class="viewcode-block" id="BCELoss"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.BCELoss">[文档]</a><span class="k">class</span> <span class="nc">BCELoss</span><span class="p">(</span><span class="n">Module</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">pass</span>
+<div class="viewcode-block" id="BCELoss.execute"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.BCELoss.execute">[文档]</a>    <span class="k">def</span> <span class="nf">execute</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">target</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">bce_loss</span><span class="p">(</span><span class="n">output</span><span class="p">,</span> <span class="n">target</span><span class="p">)</span></div></div>
+
+<div class="viewcode-block" id="L1Loss"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.L1Loss">[文档]</a><span class="k">class</span> <span class="nc">L1Loss</span><span class="p">(</span><span class="n">Module</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">pass</span>
+<div class="viewcode-block" id="L1Loss.execute"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.L1Loss.execute">[文档]</a>    <span class="k">def</span> <span class="nf">execute</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">target</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">l1_loss</span><span class="p">(</span><span class="n">output</span><span class="p">,</span> <span class="n">target</span><span class="p">)</span></div></div>
+
+<div class="viewcode-block" id="BCEWithLogitsLoss"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.BCEWithLogitsLoss">[文档]</a><span class="k">class</span> <span class="nc">BCEWithLogitsLoss</span><span class="p">(</span><span class="n">Module</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sigmoid</span> <span class="o">=</span> <span class="n">Sigmoid</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">bce</span> <span class="o">=</span> <span class="n">BCELoss</span><span class="p">()</span>
+<div class="viewcode-block" id="BCEWithLogitsLoss.execute"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.BCEWithLogitsLoss.execute">[文档]</a>    <span class="k">def</span> <span class="nf">execute</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="n">target</span><span class="p">):</span>
+        <span class="n">output</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">sigmoid</span><span class="p">(</span><span class="n">output</span><span class="p">)</span>
+        <span class="n">output</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">bce</span><span class="p">(</span><span class="n">output</span><span class="p">,</span> <span class="n">target</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">output</span></div></div>
+
+<div class="viewcode-block" id="softmax"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.softmax">[文档]</a><span class="k">def</span> <span class="nf">softmax</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">dim</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+    <span class="k">if</span> <span class="n">dim</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="p">(</span><span class="n">x</span> <span class="o">-</span> <span class="n">x</span><span class="o">.</span><span class="n">max</span><span class="p">())</span><span class="o">.</span><span class="n">exp</span><span class="p">()</span>
+        <span class="n">ret</span> <span class="o">=</span> <span class="n">x</span> <span class="o">/</span> <span class="n">x</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="p">(</span><span class="n">x</span><span class="o">-</span><span class="n">x</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">dim</span><span class="p">,</span> <span class="n">keepdims</span><span class="o">=</span><span class="kc">True</span><span class="p">))</span><span class="o">.</span><span class="n">exp</span><span class="p">()</span>
+        <span class="n">ret</span> <span class="o">=</span> <span class="n">x</span> <span class="o">/</span> <span class="n">x</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">dim</span><span class="p">,</span> <span class="n">keepdims</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">ret</span></div>
+
+<div class="viewcode-block" id="Dropout"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.Dropout">[文档]</a><span class="k">class</span> <span class="nc">Dropout</span><span class="p">(</span><span class="n">Module</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">p</span><span class="o">=</span><span class="mf">0.5</span><span class="p">,</span> <span class="n">is_train</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+        <span class="k">assert</span> <span class="n">p</span> <span class="o">&gt;=</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">p</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;dropout probability has to be between 0 and 1, but got </span><span class="si">{}</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">p</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">p</span> <span class="o">=</span> <span class="n">p</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">is_train</span> <span class="o">=</span> <span class="n">is_train</span>
+        <span class="c1">#TODO: test model.train() to change self.is_train</span>
+<div class="viewcode-block" id="Dropout.execute"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.Dropout.execute">[文档]</a>    <span class="k">def</span> <span class="nf">execute</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="nb">input</span><span class="p">):</span>
+        <span class="n">output</span> <span class="o">=</span> <span class="nb">input</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">p</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_train</span><span class="p">:</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">p</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+                <span class="n">noise</span> <span class="o">=</span> <span class="n">jt</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="nb">input</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+                <span class="n">output</span> <span class="o">=</span> <span class="n">output</span> <span class="o">*</span> <span class="n">noise</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">noise</span> <span class="o">=</span> <span class="n">jt</span><span class="o">.</span><span class="n">random</span><span class="p">(</span><span class="nb">input</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+                <span class="n">noise</span> <span class="o">=</span> <span class="p">(</span><span class="n">noise</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">p</span><span class="p">)</span><span class="o">.</span><span class="n">int</span><span class="p">()</span>
+                <span class="n">output</span> <span class="o">=</span> <span class="n">output</span> <span class="o">*</span> <span class="n">noise</span> <span class="o">/</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">p</span><span class="p">)</span> <span class="c1"># div keep prob</span>
+        <span class="k">return</span> <span class="n">output</span></div></div>
+
+<div class="viewcode-block" id="Linear"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.Linear">[文档]</a><span class="k">class</span> <span class="nc">Linear</span><span class="p">(</span><span class="n">Module</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">in_features</span><span class="p">,</span> <span class="n">out_features</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">in_features</span> <span class="o">=</span> <span class="n">in_features</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">out_features</span> <span class="o">=</span> <span class="n">out_features</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">weight</span> <span class="o">=</span> <span class="n">init</span><span class="o">.</span><span class="n">invariant_uniform</span><span class="p">((</span><span class="n">out_features</span><span class="p">,</span> <span class="n">in_features</span><span class="p">),</span> <span class="s2">&quot;float32&quot;</span><span class="p">)</span>
+        <span class="n">bound</span> <span class="o">=</span> <span class="mf">1.0</span><span class="o">/</span><span class="n">math</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">in_features</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">bias</span> <span class="o">=</span> <span class="n">init</span><span class="o">.</span><span class="n">uniform</span><span class="p">((</span><span class="n">out_features</span><span class="p">,),</span> <span class="s2">&quot;float32&quot;</span><span class="p">,</span><span class="o">-</span><span class="n">bound</span><span class="p">,</span><span class="n">bound</span><span class="p">)</span> <span class="k">if</span> <span class="n">bias</span> <span class="k">else</span> <span class="kc">None</span>
+
+<div class="viewcode-block" id="Linear.execute"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.Linear.execute">[文档]</a>    <span class="k">def</span> <span class="nf">execute</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">matmul_transpose</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">weight</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">bias</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">x</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">bias</span>
+        <span class="k">return</span> <span class="n">x</span></div></div>
+
+<div class="viewcode-block" id="BatchNorm"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.BatchNorm">[文档]</a><span class="k">class</span> <span class="nc">BatchNorm</span><span class="p">(</span><span class="n">Module</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">num_features</span><span class="p">,</span> <span class="n">eps</span><span class="o">=</span><span class="mf">1e-5</span><span class="p">,</span> <span class="n">momentum</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> <span class="n">affine</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">is_train</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">sync</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="k">assert</span> <span class="n">affine</span> <span class="o">==</span> <span class="kc">None</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">sync</span> <span class="o">=</span> <span class="n">sync</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_features</span> <span class="o">=</span> <span class="n">num_features</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">is_train</span> <span class="o">=</span> <span class="n">is_train</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">eps</span> <span class="o">=</span> <span class="n">eps</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">momentum</span> <span class="o">=</span> <span class="n">momentum</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">weight</span> <span class="o">=</span> <span class="n">init</span><span class="o">.</span><span class="n">constant</span><span class="p">((</span><span class="n">num_features</span><span class="p">,),</span> <span class="s2">&quot;float32&quot;</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">bias</span> <span class="o">=</span> <span class="n">init</span><span class="o">.</span><span class="n">constant</span><span class="p">((</span><span class="n">num_features</span><span class="p">,),</span> <span class="s2">&quot;float32&quot;</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">running_mean</span> <span class="o">=</span> <span class="n">init</span><span class="o">.</span><span class="n">constant</span><span class="p">((</span><span class="n">num_features</span><span class="p">,),</span> <span class="s2">&quot;float32&quot;</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span><span class="o">.</span><span class="n">stop_grad</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">running_var</span> <span class="o">=</span> <span class="n">init</span><span class="o">.</span><span class="n">constant</span><span class="p">((</span><span class="n">num_features</span><span class="p">,),</span> <span class="s2">&quot;float32&quot;</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">)</span><span class="o">.</span><span class="n">stop_grad</span><span class="p">()</span>
+
+<div class="viewcode-block" id="BatchNorm.execute"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.BatchNorm.execute">[文档]</a>    <span class="k">def</span> <span class="nf">execute</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_train</span><span class="p">:</span>
+            <span class="n">xmean</span> <span class="o">=</span> <span class="n">jt</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">dims</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">],</span> <span class="n">keepdims</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+            <span class="n">x2mean</span> <span class="o">=</span> <span class="n">jt</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">x</span><span class="o">*</span><span class="n">x</span><span class="p">,</span> <span class="n">dims</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">],</span> <span class="n">keepdims</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">sync</span> <span class="ow">and</span> <span class="n">jt</span><span class="o">.</span><span class="n">mpi</span><span class="p">:</span>
+                <span class="n">xmean</span> <span class="o">=</span> <span class="n">xmean</span><span class="o">.</span><span class="n">mpi_all_reduce</span><span class="p">(</span><span class="s2">&quot;mean&quot;</span><span class="p">)</span>
+                <span class="n">x2mean</span> <span class="o">=</span> <span class="n">x2mean</span><span class="o">.</span><span class="n">mpi_all_reduce</span><span class="p">(</span><span class="s2">&quot;mean&quot;</span><span class="p">)</span>
+
+            <span class="n">xvar</span> <span class="o">=</span> <span class="n">x2mean</span><span class="o">-</span><span class="n">xmean</span><span class="o">*</span><span class="n">xmean</span>
+            <span class="n">norm_x</span> <span class="o">=</span> <span class="p">(</span><span class="n">x</span><span class="o">-</span><span class="n">xmean</span><span class="p">)</span><span class="o">/</span><span class="n">jt</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">xvar</span><span class="o">+</span><span class="bp">self</span><span class="o">.</span><span class="n">eps</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">running_mean</span> <span class="o">+=</span> <span class="p">(</span><span class="n">xmean</span><span class="o">.</span><span class="n">sum</span><span class="p">([</span><span class="mi">0</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">])</span><span class="o">-</span><span class="bp">self</span><span class="o">.</span><span class="n">running_mean</span><span class="p">)</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">momentum</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">running_var</span> <span class="o">+=</span> <span class="p">(</span><span class="n">xvar</span><span class="o">.</span><span class="n">sum</span><span class="p">([</span><span class="mi">0</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">])</span><span class="o">-</span><span class="bp">self</span><span class="o">.</span><span class="n">running_var</span><span class="p">)</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">momentum</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">running_mean</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">running_mean</span><span class="o">.</span><span class="n">broadcast</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">])</span>
+            <span class="n">running_var</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">running_var</span><span class="o">.</span><span class="n">broadcast</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">])</span>
+            <span class="n">norm_x</span> <span class="o">=</span> <span class="p">(</span><span class="n">x</span><span class="o">-</span><span class="n">running_mean</span><span class="p">)</span><span class="o">/</span><span class="n">jt</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">running_var</span><span class="o">+</span><span class="bp">self</span><span class="o">.</span><span class="n">eps</span><span class="p">)</span>
+        <span class="n">w</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">weight</span><span class="o">.</span><span class="n">broadcast</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">])</span>
+        <span class="n">b</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">bias</span><span class="o">.</span><span class="n">broadcast</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">])</span>
+        <span class="k">return</span> <span class="n">norm_x</span> <span class="o">*</span> <span class="n">w</span> <span class="o">+</span> <span class="n">b</span></div></div>
+        
+<div class="viewcode-block" id="BatchNorm1d"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.BatchNorm1d">[文档]</a><span class="k">class</span> <span class="nc">BatchNorm1d</span><span class="p">(</span><span class="n">Module</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">num_features</span><span class="p">,</span> <span class="n">eps</span><span class="o">=</span><span class="mf">1e-5</span><span class="p">,</span> <span class="n">momentum</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> <span class="n">affine</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">is_train</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">sync</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="k">assert</span> <span class="n">affine</span> <span class="o">==</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sync</span> <span class="o">=</span> <span class="n">sync</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_features</span> <span class="o">=</span> <span class="n">num_features</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">is_train</span> <span class="o">=</span> <span class="n">is_train</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">eps</span> <span class="o">=</span> <span class="n">eps</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">momentum</span> <span class="o">=</span> <span class="n">momentum</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">weight</span> <span class="o">=</span> <span class="n">init</span><span class="o">.</span><span class="n">constant</span><span class="p">((</span><span class="n">num_features</span><span class="p">,),</span> <span class="s2">&quot;float32&quot;</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">bias</span> <span class="o">=</span> <span class="n">init</span><span class="o">.</span><span class="n">constant</span><span class="p">((</span><span class="n">num_features</span><span class="p">,),</span> <span class="s2">&quot;float32&quot;</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">running_mean</span> <span class="o">=</span> <span class="n">init</span><span class="o">.</span><span class="n">constant</span><span class="p">((</span><span class="n">num_features</span><span class="p">,),</span> <span class="s2">&quot;float32&quot;</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span><span class="o">.</span><span class="n">stop_grad</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">running_var</span> <span class="o">=</span> <span class="n">init</span><span class="o">.</span><span class="n">constant</span><span class="p">((</span><span class="n">num_features</span><span class="p">,),</span> <span class="s2">&quot;float32&quot;</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">)</span><span class="o">.</span><span class="n">stop_grad</span><span class="p">()</span>
+
+<div class="viewcode-block" id="BatchNorm1d.execute"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.BatchNorm1d.execute">[文档]</a>    <span class="k">def</span> <span class="nf">execute</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">is_train</span><span class="p">:</span>
+            <span class="n">xmean</span> <span class="o">=</span> <span class="n">jt</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">dims</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">keepdims</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+            <span class="n">x2mean</span> <span class="o">=</span> <span class="n">jt</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">x</span><span class="o">*</span><span class="n">x</span><span class="p">,</span> <span class="n">dims</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">keepdims</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">sync</span> <span class="ow">and</span> <span class="n">jt</span><span class="o">.</span><span class="n">mpi</span><span class="p">:</span>
+                <span class="n">xmean</span> <span class="o">=</span> <span class="n">xmean</span><span class="o">.</span><span class="n">mpi_all_reduce</span><span class="p">(</span><span class="s2">&quot;mean&quot;</span><span class="p">)</span>
+                <span class="n">x2mean</span> <span class="o">=</span> <span class="n">x2mean</span><span class="o">.</span><span class="n">mpi_all_reduce</span><span class="p">(</span><span class="s2">&quot;mean&quot;</span><span class="p">)</span>
+
+            <span class="n">xvar</span> <span class="o">=</span> <span class="n">x2mean</span><span class="o">-</span><span class="n">xmean</span><span class="o">*</span><span class="n">xmean</span>
+            <span class="n">norm_x</span> <span class="o">=</span> <span class="p">(</span><span class="n">x</span><span class="o">-</span><span class="n">xmean</span><span class="p">)</span><span class="o">/</span><span class="n">jt</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">xvar</span><span class="o">+</span><span class="bp">self</span><span class="o">.</span><span class="n">eps</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">running_mean</span> <span class="o">+=</span> <span class="p">(</span><span class="n">xmean</span><span class="o">.</span><span class="n">sum</span><span class="p">([</span><span class="mi">0</span><span class="p">])</span><span class="o">-</span><span class="bp">self</span><span class="o">.</span><span class="n">running_mean</span><span class="p">)</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">momentum</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">running_var</span> <span class="o">+=</span> <span class="p">(</span><span class="n">xvar</span><span class="o">.</span><span class="n">sum</span><span class="p">([</span><span class="mi">0</span><span class="p">])</span><span class="o">-</span><span class="bp">self</span><span class="o">.</span><span class="n">running_var</span><span class="p">)</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">momentum</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">running_mean</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">running_mean</span><span class="o">.</span><span class="n">broadcast</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+            <span class="n">running_var</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">running_var</span><span class="o">.</span><span class="n">broadcast</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+            <span class="n">norm_x</span> <span class="o">=</span> <span class="p">(</span><span class="n">x</span><span class="o">-</span><span class="n">running_mean</span><span class="p">)</span><span class="o">/</span><span class="n">jt</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">running_var</span><span class="o">+</span><span class="bp">self</span><span class="o">.</span><span class="n">eps</span><span class="p">)</span>
+        <span class="n">w</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">weight</span><span class="o">.</span><span class="n">broadcast</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+        <span class="n">b</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">bias</span><span class="o">.</span><span class="n">broadcast</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+        <span class="k">return</span> <span class="n">norm_x</span> <span class="o">*</span> <span class="n">w</span> <span class="o">+</span> <span class="n">b</span></div></div>
+
+<div class="viewcode-block" id="InstanceNorm2d"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.InstanceNorm2d">[文档]</a><span class="k">class</span> <span class="nc">InstanceNorm2d</span><span class="p">(</span><span class="n">Module</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">num_features</span><span class="p">,</span> <span class="n">eps</span><span class="o">=</span><span class="mf">1e-05</span><span class="p">,</span> <span class="n">momentum</span><span class="o">=</span><span class="mf">0.1</span><span class="p">,</span> <span class="n">affine</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">is_train</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">sync</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="k">assert</span> <span class="n">affine</span> <span class="o">==</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sync</span> <span class="o">=</span> <span class="n">sync</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_features</span> <span class="o">=</span> <span class="n">num_features</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">is_train</span> <span class="o">=</span> <span class="n">is_train</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">eps</span> <span class="o">=</span> <span class="n">eps</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">momentum</span> <span class="o">=</span> <span class="n">momentum</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">weight</span> <span class="o">=</span> <span class="n">init</span><span class="o">.</span><span class="n">constant</span><span class="p">((</span><span class="n">num_features</span><span class="p">,),</span> <span class="s2">&quot;float32&quot;</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">bias</span> <span class="o">=</span> <span class="n">init</span><span class="o">.</span><span class="n">constant</span><span class="p">((</span><span class="n">num_features</span><span class="p">,),</span> <span class="s2">&quot;float32&quot;</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span>
+
+<div class="viewcode-block" id="InstanceNorm2d.execute"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.InstanceNorm2d.execute">[文档]</a>    <span class="k">def</span> <span class="nf">execute</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+        <span class="n">xmean</span> <span class="o">=</span> <span class="n">jt</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">dims</span><span class="o">=</span><span class="p">[</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">],</span> <span class="n">keepdims</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">x2mean</span> <span class="o">=</span> <span class="n">jt</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">x</span><span class="o">*</span><span class="n">x</span><span class="p">,</span> <span class="n">dims</span><span class="o">=</span><span class="p">[</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">],</span> <span class="n">keepdims</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">sync</span> <span class="ow">and</span> <span class="n">jt</span><span class="o">.</span><span class="n">mpi</span><span class="p">:</span>
+            <span class="n">xmean</span> <span class="o">=</span> <span class="n">xmean</span><span class="o">.</span><span class="n">mpi_all_reduce</span><span class="p">(</span><span class="s2">&quot;mean&quot;</span><span class="p">)</span>
+            <span class="n">x2mean</span> <span class="o">=</span> <span class="n">x2mean</span><span class="o">.</span><span class="n">mpi_all_reduce</span><span class="p">(</span><span class="s2">&quot;mean&quot;</span><span class="p">)</span>
+
+        <span class="n">xvar</span> <span class="o">=</span> <span class="n">jt</span><span class="o">.</span><span class="n">maximum</span><span class="p">(</span><span class="n">x2mean</span><span class="o">-</span><span class="n">xmean</span><span class="o">*</span><span class="n">xmean</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+        <span class="n">norm_x</span> <span class="o">=</span> <span class="p">(</span><span class="n">x</span><span class="o">-</span><span class="n">xmean</span><span class="p">)</span><span class="o">/</span><span class="n">jt</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">xvar</span><span class="o">+</span><span class="bp">self</span><span class="o">.</span><span class="n">eps</span><span class="p">)</span>
+        <span class="n">w</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">weight</span><span class="o">.</span><span class="n">broadcast</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">])</span>
+        <span class="n">b</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">bias</span><span class="o">.</span><span class="n">broadcast</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">])</span>
+        <span class="k">return</span> <span class="n">norm_x</span> <span class="o">*</span> <span class="n">w</span> <span class="o">+</span> <span class="n">b</span></div></div>
+
+<span class="n">Relu</span> <span class="o">=</span> <span class="n">jt</span><span class="o">.</span><span class="n">make_module</span><span class="p">(</span><span class="n">relu</span><span class="p">)</span>
+<span class="n">ReLU</span> <span class="o">=</span> <span class="n">Relu</span>
+<span class="n">Leaky_relu</span> <span class="o">=</span> <span class="n">jt</span><span class="o">.</span><span class="n">make_module</span><span class="p">(</span><span class="n">leaky_relu</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
+<span class="n">LeakyReLU</span> <span class="o">=</span> <span class="n">Leaky_relu</span>
+<span class="n">ReLU6</span> <span class="o">=</span> <span class="n">jt</span><span class="o">.</span><span class="n">make_module</span><span class="p">(</span><span class="n">relu6</span><span class="p">)</span>
+<span class="n">Softmax</span> <span class="o">=</span> <span class="n">jt</span><span class="o">.</span><span class="n">make_module</span><span class="p">(</span><span class="n">softmax</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
+
+<div class="viewcode-block" id="Conv"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.Conv">[文档]</a><span class="k">class</span> <span class="nc">Conv</span><span class="p">(</span><span class="n">Module</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">in_channels</span><span class="p">,</span> <span class="n">out_channels</span><span class="p">,</span> <span class="n">kernel_size</span><span class="p">,</span> <span class="n">stride</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">dilation</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">groups</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">in_channels</span> <span class="o">=</span> <span class="n">in_channels</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">out_channels</span> <span class="o">=</span> <span class="n">out_channels</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">kernel_size</span> <span class="o">=</span> <span class="n">kernel_size</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">kernel_size</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">)</span> <span class="k">else</span> <span class="p">(</span><span class="n">kernel_size</span><span class="p">,</span> <span class="n">kernel_size</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stride</span> <span class="o">=</span> <span class="n">stride</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">stride</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">)</span> <span class="k">else</span> <span class="p">(</span><span class="n">stride</span><span class="p">,</span> <span class="n">stride</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">padding</span> <span class="o">=</span> <span class="n">padding</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">padding</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">)</span> <span class="k">else</span> <span class="p">(</span><span class="n">padding</span><span class="p">,</span> <span class="n">padding</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">dilation</span> <span class="o">=</span> <span class="n">dilation</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">dilation</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">)</span> <span class="k">else</span> <span class="p">(</span><span class="n">dilation</span><span class="p">,</span> <span class="n">dilation</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">groups</span> <span class="o">=</span> <span class="n">groups</span>
+        <span class="k">assert</span> <span class="n">in_channels</span> <span class="o">%</span> <span class="n">groups</span> <span class="o">==</span> <span class="mi">0</span><span class="p">,</span> <span class="s1">&#39;in_channels must be divisible by groups&#39;</span>
+        <span class="k">assert</span> <span class="n">out_channels</span> <span class="o">%</span> <span class="n">groups</span> <span class="o">==</span> <span class="mi">0</span><span class="p">,</span> <span class="s1">&#39;out_channels must be divisible by groups&#39;</span>
+        <span class="n">Kh</span><span class="p">,</span> <span class="n">Kw</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">kernel_size</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">groups</span> <span class="o">=</span> <span class="n">groups</span>
+        <span class="k">assert</span> <span class="n">in_channels</span> <span class="o">%</span> <span class="n">groups</span> <span class="o">==</span> <span class="mi">0</span><span class="p">,</span> <span class="s1">&#39;in_channels must be divisible by groups&#39;</span>
+        <span class="k">assert</span> <span class="n">out_channels</span> <span class="o">%</span> <span class="n">groups</span> <span class="o">==</span> <span class="mi">0</span><span class="p">,</span> <span class="s1">&#39;out_channels must be divisible by groups&#39;</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">weight</span> <span class="o">=</span> <span class="n">init</span><span class="o">.</span><span class="n">relu_invariant_gauss</span><span class="p">([</span><span class="n">out_channels</span><span class="p">,</span> <span class="n">in_channels</span><span class="o">//</span><span class="n">groups</span><span class="p">,</span> <span class="n">Kh</span><span class="p">,</span> <span class="n">Kw</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;float&quot;</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;fan_out&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">bias</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">bias</span> <span class="o">=</span> <span class="n">init</span><span class="o">.</span><span class="n">uniform</span><span class="p">([</span><span class="n">out_channels</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;float&quot;</span><span class="p">,</span> <span class="n">low</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span> <span class="n">high</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">bias</span> <span class="o">=</span> <span class="kc">None</span>
+
+<div class="viewcode-block" id="Conv.execute"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.Conv.execute">[文档]</a>    <span class="k">def</span> <span class="nf">execute</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">groups</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="n">N</span><span class="p">,</span><span class="n">C</span><span class="p">,</span><span class="n">H</span><span class="p">,</span><span class="n">W</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span>
+            <span class="n">Kh</span><span class="p">,</span> <span class="n">Kw</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">kernel_size</span>
+            <span class="k">assert</span> <span class="n">C</span><span class="o">==</span><span class="bp">self</span><span class="o">.</span><span class="n">in_channels</span>
+            <span class="n">oh</span> <span class="o">=</span> <span class="p">(</span><span class="n">H</span><span class="o">+</span><span class="bp">self</span><span class="o">.</span><span class="n">padding</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">*</span><span class="mi">2</span><span class="o">-</span><span class="n">Kh</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">dilation</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">+</span><span class="bp">self</span><span class="o">.</span><span class="n">dilation</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="o">//</span><span class="bp">self</span><span class="o">.</span><span class="n">stride</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">+</span><span class="mi">1</span>
+            <span class="n">ow</span> <span class="o">=</span> <span class="p">(</span><span class="n">W</span><span class="o">+</span><span class="bp">self</span><span class="o">.</span><span class="n">padding</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">*</span><span class="mi">2</span><span class="o">-</span><span class="n">Kw</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">dilation</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">+</span><span class="bp">self</span><span class="o">.</span><span class="n">dilation</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="o">//</span><span class="bp">self</span><span class="o">.</span><span class="n">stride</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">+</span><span class="mi">1</span>
+            <span class="n">xx</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">reindex</span><span class="p">([</span><span class="n">N</span><span class="p">,</span><span class="bp">self</span><span class="o">.</span><span class="n">out_channels</span><span class="p">,</span><span class="n">C</span><span class="p">,</span><span class="n">oh</span><span class="p">,</span><span class="n">ow</span><span class="p">,</span><span class="n">Kh</span><span class="p">,</span><span class="n">Kw</span><span class="p">],</span> <span class="p">[</span>
+                <span class="s1">&#39;i0&#39;</span><span class="p">,</span> <span class="c1"># Nid</span>
+                <span class="s1">&#39;i2&#39;</span><span class="p">,</span> <span class="c1"># Cid</span>
+                <span class="sa">f</span><span class="s1">&#39;i3*</span><span class="si">{self.stride[0]}</span><span class="s1">-</span><span class="si">{self.padding[0]}</span><span class="s1">+i5*</span><span class="si">{self.dilation[0]}</span><span class="s1">&#39;</span><span class="p">,</span> <span class="c1"># Hid+Khid</span>
+                <span class="sa">f</span><span class="s1">&#39;i4*</span><span class="si">{self.stride[1]}</span><span class="s1">-</span><span class="si">{self.padding[1]}</span><span class="s1">+i6*</span><span class="si">{self.dilation[1]}</span><span class="s1">&#39;</span><span class="p">,</span> <span class="c1"># Wid+KWid</span>
+            <span class="p">])</span>
+            <span class="n">ww</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">weight</span><span class="o">.</span><span class="n">broadcast</span><span class="p">(</span><span class="n">xx</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">4</span><span class="p">])</span>
+            <span class="n">yy</span> <span class="o">=</span> <span class="n">xx</span><span class="o">*</span><span class="n">ww</span>
+            <span class="n">y</span> <span class="o">=</span> <span class="n">yy</span><span class="o">.</span><span class="n">sum</span><span class="p">([</span><span class="mi">2</span><span class="p">,</span><span class="mi">5</span><span class="p">,</span><span class="mi">6</span><span class="p">])</span> <span class="c1"># Kc, Kh, Kw</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">bias</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">b</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">bias</span><span class="o">.</span><span class="n">broadcast</span><span class="p">(</span><span class="n">y</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">])</span>
+                <span class="n">y</span> <span class="o">=</span> <span class="n">y</span> <span class="o">+</span> <span class="n">b</span>
+            <span class="k">return</span> <span class="n">y</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">N</span><span class="p">,</span><span class="n">C</span><span class="p">,</span><span class="n">H</span><span class="p">,</span><span class="n">W</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span>
+            <span class="n">Kh</span><span class="p">,</span> <span class="n">Kw</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">kernel_size</span>
+            <span class="n">G</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">groups</span>
+            <span class="n">CpG</span> <span class="o">=</span> <span class="n">C</span> <span class="o">//</span> <span class="n">G</span> <span class="c1"># channels per group</span>
+            <span class="k">assert</span> <span class="n">C</span><span class="o">==</span><span class="bp">self</span><span class="o">.</span><span class="n">in_channels</span>
+            <span class="n">oc</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">out_channels</span>
+            <span class="n">oh</span> <span class="o">=</span> <span class="p">(</span><span class="n">H</span><span class="o">+</span><span class="bp">self</span><span class="o">.</span><span class="n">padding</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">*</span><span class="mi">2</span><span class="o">-</span><span class="n">Kh</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">dilation</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">+</span><span class="bp">self</span><span class="o">.</span><span class="n">dilation</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="o">//</span><span class="bp">self</span><span class="o">.</span><span class="n">stride</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">+</span><span class="mi">1</span>
+            <span class="n">ow</span> <span class="o">=</span> <span class="p">(</span><span class="n">W</span><span class="o">+</span><span class="bp">self</span><span class="o">.</span><span class="n">padding</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">*</span><span class="mi">2</span><span class="o">-</span><span class="n">Kw</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">dilation</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">+</span><span class="bp">self</span><span class="o">.</span><span class="n">dilation</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="o">//</span><span class="bp">self</span><span class="o">.</span><span class="n">stride</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">+</span><span class="mi">1</span>
+            <span class="n">xx</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">reindex</span><span class="p">([</span><span class="n">N</span><span class="p">,</span><span class="n">G</span><span class="p">,</span><span class="n">oc</span><span class="o">//</span><span class="n">G</span><span class="p">,</span><span class="n">CpG</span><span class="p">,</span><span class="n">oh</span><span class="p">,</span><span class="n">ow</span><span class="p">,</span><span class="n">Kh</span><span class="p">,</span><span class="n">Kw</span><span class="p">],</span> <span class="p">[</span>
+                <span class="s1">&#39;i0&#39;</span><span class="p">,</span> <span class="c1"># Nid</span>
+                <span class="sa">f</span><span class="s1">&#39;i1*</span><span class="si">{CpG}</span><span class="s1">+i3&#39;</span><span class="p">,</span> <span class="c1"># Gid</span>
+                <span class="sa">f</span><span class="s1">&#39;i4*</span><span class="si">{self.stride[0]}</span><span class="s1">-</span><span class="si">{self.padding[0]}</span><span class="s1">+i6*</span><span class="si">{self.dilation[0]}</span><span class="s1">&#39;</span><span class="p">,</span> <span class="c1"># Hid+Khid</span>
+                <span class="sa">f</span><span class="s1">&#39;i5*</span><span class="si">{self.stride[1]}</span><span class="s1">-</span><span class="si">{self.padding[1]}</span><span class="s1">+i7*</span><span class="si">{self.dilation[1]}</span><span class="s1">&#39;</span><span class="p">,</span> <span class="c1"># Wid+KWid</span>
+            <span class="p">])</span>
+            <span class="n">xx</span><span class="o">.</span><span class="n">compile_options</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;G&quot;</span><span class="p">:</span><span class="n">G</span><span class="p">}</span>
+            <span class="c1"># w: [oc, CpG, Kh, Kw]</span>
+            <span class="n">ww</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">weight</span><span class="o">.</span><span class="n">reindex</span><span class="p">([</span><span class="n">N</span><span class="p">,</span> <span class="n">G</span><span class="p">,</span> <span class="n">oc</span><span class="o">//</span><span class="n">G</span><span class="p">,</span> <span class="n">CpG</span><span class="p">,</span> <span class="n">oh</span><span class="p">,</span> <span class="n">ow</span><span class="p">,</span> <span class="n">Kh</span><span class="p">,</span> <span class="n">Kw</span><span class="p">],</span> <span class="p">[</span>
+                <span class="sa">f</span><span class="s1">&#39;i1*{oc//G}+i2&#39;</span><span class="p">,</span>
+                <span class="s1">&#39;i3&#39;</span><span class="p">,</span>
+                <span class="s1">&#39;i6&#39;</span><span class="p">,</span>
+                <span class="s1">&#39;i7&#39;</span>
+            <span class="p">])</span>
+            <span class="n">yy</span> <span class="o">=</span> <span class="n">xx</span><span class="o">*</span><span class="n">ww</span>
+            <span class="n">y</span> <span class="o">=</span> <span class="n">yy</span><span class="o">.</span><span class="n">reindex_reduce</span><span class="p">(</span><span class="s1">&#39;add&#39;</span><span class="p">,</span> <span class="p">[</span><span class="n">N</span><span class="p">,</span> <span class="n">oc</span><span class="p">,</span> <span class="n">oh</span><span class="p">,</span> <span class="n">ow</span><span class="p">],</span> <span class="p">[</span>
+                <span class="s1">&#39;i0&#39;</span><span class="p">,</span>
+                <span class="sa">f</span><span class="s1">&#39;i1*{oc//G}+i2&#39;</span><span class="p">,</span>
+                <span class="s1">&#39;i4&#39;</span><span class="p">,</span>
+                <span class="s1">&#39;i5&#39;</span>
+            <span class="p">])</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">bias</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">b</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">bias</span><span class="o">.</span><span class="n">broadcast</span><span class="p">(</span><span class="n">y</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">])</span>
+                <span class="n">y</span> <span class="o">=</span> <span class="n">y</span> <span class="o">+</span> <span class="n">b</span>
+            <span class="k">return</span> <span class="n">y</span>          </div></div>
+
+
+<div class="viewcode-block" id="ConvTranspose"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.ConvTranspose">[文档]</a><span class="k">class</span> <span class="nc">ConvTranspose</span><span class="p">(</span><span class="n">Module</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">in_channels</span><span class="p">,</span> <span class="n">out_channels</span><span class="p">,</span> <span class="n">kernel_size</span><span class="p">,</span> <span class="n">stride</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> \
+                 <span class="n">padding</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">output_padding</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">groups</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">dilation</span><span class="o">=</span><span class="mi">1</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">in_channels</span> <span class="o">=</span> <span class="n">in_channels</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">out_channels</span> <span class="o">=</span> <span class="n">out_channels</span>
+
+        <span class="c1"># added</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">dilation</span> <span class="o">=</span> <span class="n">dilation</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">group</span> <span class="o">=</span> <span class="n">groups</span>
+        <span class="k">assert</span> <span class="n">groups</span><span class="o">==</span><span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;Group conv not supported yet.&quot;</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">kernel_size</span> <span class="o">=</span> <span class="n">kernel_size</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">kernel_size</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">)</span> <span class="k">else</span> <span class="p">(</span><span class="n">kernel_size</span><span class="p">,</span> <span class="n">kernel_size</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stride</span> <span class="o">=</span> <span class="n">stride</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">stride</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">)</span> <span class="k">else</span> <span class="p">(</span><span class="n">stride</span><span class="p">,</span> <span class="n">stride</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">dilation</span> <span class="o">=</span> <span class="n">dilation</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">dilation</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">)</span> <span class="k">else</span> <span class="p">(</span><span class="n">dilation</span><span class="p">,</span> <span class="n">dilation</span><span class="p">)</span>
+        <span class="c1"># added</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">padding</span> <span class="o">=</span> <span class="n">padding</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">padding</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">)</span> <span class="k">else</span> <span class="p">(</span><span class="n">padding</span><span class="p">,</span> <span class="n">padding</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">real_padding</span> <span class="o">=</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">dilation</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">*</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">kernel_size</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">padding</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">dilation</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">*</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">kernel_size</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">padding</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">output_padding</span> <span class="o">=</span> <span class="n">output_padding</span> <span class="k">if</span> <span class="nb">isinstance</span> <span class="p">(</span><span class="n">output_padding</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">)</span> <span class="k">else</span> <span class="p">(</span><span class="n">output_padding</span><span class="p">,</span> <span class="n">output_padding</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">weight</span> <span class="o">=</span> <span class="n">init</span><span class="o">.</span><span class="n">relu_invariant_gauss</span><span class="p">((</span><span class="n">in_channels</span><span class="p">,</span> <span class="n">out_channels</span><span class="p">)</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">kernel_size</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;float&quot;</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;fan_out&quot;</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">bias</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">bias</span> <span class="o">=</span> <span class="n">init</span><span class="o">.</span><span class="n">uniform</span><span class="p">([</span><span class="n">out_channels</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;float&quot;</span><span class="p">,</span> <span class="n">low</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span> <span class="n">high</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">bias</span> <span class="o">=</span> <span class="kc">None</span>
+
+<div class="viewcode-block" id="ConvTranspose.execute"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.ConvTranspose.execute">[文档]</a>    <span class="k">def</span> <span class="nf">execute</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+        <span class="n">N</span><span class="p">,</span><span class="n">C</span><span class="p">,</span><span class="n">H</span><span class="p">,</span><span class="n">W</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span>
+        <span class="n">i</span><span class="p">,</span><span class="n">o</span><span class="p">,</span><span class="n">h</span><span class="p">,</span><span class="n">w</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">weight</span><span class="o">.</span><span class="n">shape</span>
+        <span class="k">assert</span> <span class="n">C</span><span class="o">==</span><span class="n">i</span>
+        <span class="n">stride_h</span><span class="p">,</span> <span class="n">stride_w</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">stride</span>
+        <span class="n">padding_h</span><span class="p">,</span> <span class="n">padding_w</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">padding</span>
+        <span class="n">dilation_h</span><span class="p">,</span> <span class="n">dilation_w</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">dilation</span>
+
+        <span class="n">h_out</span> <span class="o">=</span> <span class="p">(</span><span class="n">H</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span> <span class="o">*</span> <span class="n">stride_h</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">output_padding</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">-</span> <span class="mi">2</span><span class="o">*</span><span class="n">padding_h</span> <span class="o">+</span> <span class="mi">1</span> <span class="o">+</span> <span class="p">(</span><span class="n">h</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="o">*</span><span class="n">dilation_h</span>
+        <span class="n">w_out</span> <span class="o">=</span> <span class="p">(</span><span class="n">W</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span> <span class="o">*</span> <span class="n">stride_w</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">output_padding</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">-</span> <span class="mi">2</span><span class="o">*</span><span class="n">padding_w</span> <span class="o">+</span> <span class="mi">1</span> <span class="o">+</span> <span class="p">(</span><span class="n">w</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="o">*</span><span class="n">dilation_w</span>
+        <span class="n">out_shape</span> <span class="o">=</span> <span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">o</span><span class="p">,</span> <span class="n">h_out</span><span class="p">,</span> <span class="n">w_out</span><span class="p">)</span>
+        <span class="n">shape</span> <span class="o">=</span> <span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">i</span><span class="p">,</span> <span class="n">o</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span><span class="p">,</span> <span class="n">h</span><span class="p">,</span> <span class="n">w</span><span class="p">)</span>
+        <span class="n">xx</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">broadcast</span><span class="p">(</span><span class="n">shape</span><span class="p">,</span> <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">))</span> <span class="c1"># i,h,w</span>
+        <span class="n">ww</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">weight</span><span class="o">.</span><span class="n">broadcast</span><span class="p">(</span><span class="n">shape</span><span class="p">,</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">))</span> <span class="c1"># N,H,W</span>
+        <span class="n">y</span> <span class="o">=</span> <span class="p">(</span><span class="n">ww</span><span class="o">*</span><span class="n">xx</span><span class="p">)</span><span class="o">.</span><span class="n">reindex_reduce</span><span class="p">(</span><span class="s2">&quot;add&quot;</span><span class="p">,</span> <span class="n">out_shape</span><span class="p">,</span> <span class="p">[</span>
+            <span class="s1">&#39;i0&#39;</span><span class="p">,</span> <span class="c1"># N</span>
+            <span class="s1">&#39;i2&#39;</span><span class="p">,</span> <span class="c1"># o</span>
+            <span class="sa">f</span><span class="s1">&#39;i3*</span><span class="si">{stride_h}</span><span class="s1">-</span><span class="si">{padding_h}</span><span class="s1">+i5*</span><span class="si">{dilation_h}</span><span class="s1">&#39;</span><span class="p">,</span> <span class="c1"># Hid+Khid</span>
+            <span class="sa">f</span><span class="s1">&#39;i4*</span><span class="si">{stride_w}</span><span class="s1">-</span><span class="si">{padding_w}</span><span class="s1">+i6*</span><span class="si">{dilation_w}</span><span class="s1">&#39;</span><span class="p">,</span> <span class="c1"># Wid+KWid</span>
+        <span class="p">])</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">bias</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">b</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">bias</span><span class="o">.</span><span class="n">broadcast</span><span class="p">(</span><span class="n">y</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">])</span>
+            <span class="n">y</span> <span class="o">=</span> <span class="n">y</span> <span class="o">+</span> <span class="n">b</span>
+        <span class="k">return</span> <span class="n">y</span></div></div>
+
+
+<div class="viewcode-block" id="ReflectionPad2d"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.ReflectionPad2d">[文档]</a><span class="k">class</span> <span class="nc">ReflectionPad2d</span><span class="p">(</span><span class="n">Module</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">padding</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">padding</span> <span class="o">=</span> <span class="n">padding</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">padding</span><span class="p">,</span> <span class="nb">int</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">pl</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">padding</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">pr</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">padding</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">pt</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">padding</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">pb</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">padding</span>
+        <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">padding</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">pl</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">pr</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">pt</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">pb</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">padding</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;ReflectionPad2d padding just support int or tuple, but found {type(padding)}&quot;</span><span class="p">)</span>
+
+<div class="viewcode-block" id="ReflectionPad2d.execute"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.ReflectionPad2d.execute">[文档]</a>    <span class="k">def</span> <span class="nf">execute</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+        <span class="n">n</span><span class="p">,</span><span class="n">c</span><span class="p">,</span><span class="n">h</span><span class="p">,</span><span class="n">w</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span>
+        <span class="k">assert</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">pl</span> <span class="o">&lt;</span> <span class="n">w</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">pr</span> <span class="o">&lt;</span> <span class="n">w</span><span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;padding_left and padding_right should be smaller than input width&quot;</span>
+        <span class="k">assert</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">pt</span> <span class="o">&lt;</span> <span class="n">h</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">pb</span> <span class="o">&lt;</span> <span class="n">h</span><span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;padding_top and padding_bottom should be smaller than input height&quot;</span>
+        <span class="n">oh</span><span class="o">=</span><span class="n">h</span><span class="o">+</span><span class="bp">self</span><span class="o">.</span><span class="n">pt</span><span class="o">+</span><span class="bp">self</span><span class="o">.</span><span class="n">pb</span>
+        <span class="n">ow</span><span class="o">=</span><span class="n">w</span><span class="o">+</span><span class="bp">self</span><span class="o">.</span><span class="n">pl</span><span class="o">+</span><span class="bp">self</span><span class="o">.</span><span class="n">pr</span>
+        <span class="n">l</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">pl</span>
+        <span class="n">r</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">pl</span> <span class="o">+</span> <span class="n">w</span> <span class="o">-</span> <span class="mi">1</span>
+        <span class="n">t</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">pt</span>
+        <span class="n">b</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">pt</span> <span class="o">+</span> <span class="n">h</span> <span class="o">-</span> <span class="mi">1</span>
+        <span class="k">return</span> <span class="n">x</span><span class="o">.</span><span class="n">reindex</span><span class="p">([</span><span class="n">n</span><span class="p">,</span><span class="n">c</span><span class="p">,</span><span class="n">oh</span><span class="p">,</span><span class="n">ow</span><span class="p">],</span> <span class="p">[</span><span class="s2">&quot;i0&quot;</span><span class="p">,</span><span class="s2">&quot;i1&quot;</span><span class="p">,</span>
+            <span class="sa">f</span><span class="s2">&quot;i2&lt;</span><span class="si">{t}</span><span class="s2"> ? </span><span class="si">{t}</span><span class="s2">-i2 : i2 &gt; </span><span class="si">{b}</span><span class="s2"> ? {h-1+b}-i2 : i2-</span><span class="si">{t}</span><span class="s2">&quot;</span><span class="p">,</span>
+            <span class="sa">f</span><span class="s2">&quot;i3&lt;</span><span class="si">{l}</span><span class="s2"> ? </span><span class="si">{l}</span><span class="s2">-i3 : i3 &gt; </span><span class="si">{r}</span><span class="s2"> ? {w-1+r}-i3 : i3-</span><span class="si">{l}</span><span class="s2">&quot;</span><span class="p">,</span>
+        <span class="p">])</span></div></div>
+
+<div class="viewcode-block" id="ZeroPad2d"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.ZeroPad2d">[文档]</a><span class="k">class</span> <span class="nc">ZeroPad2d</span><span class="p">(</span><span class="n">Module</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">padding</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">padding</span> <span class="o">=</span> <span class="n">padding</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">padding</span><span class="p">,</span> <span class="nb">int</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">pl</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">padding</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">pr</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">padding</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">pt</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">padding</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">pb</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">padding</span>
+        <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">padding</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">pl</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">pr</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">pt</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">pb</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">padding</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;ZeroPad2d padding just support int or tuple, but found {type(padding)}&quot;</span><span class="p">)</span>
+
+<div class="viewcode-block" id="ZeroPad2d.execute"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.ZeroPad2d.execute">[文档]</a>    <span class="k">def</span> <span class="nf">execute</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+        <span class="n">n</span><span class="p">,</span><span class="n">c</span><span class="p">,</span><span class="n">h</span><span class="p">,</span><span class="n">w</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span>
+        <span class="k">return</span> <span class="n">x</span><span class="o">.</span><span class="n">reindex</span><span class="p">([</span><span class="n">n</span><span class="p">,</span><span class="n">c</span><span class="p">,</span><span class="n">h</span><span class="o">+</span><span class="bp">self</span><span class="o">.</span><span class="n">pt</span><span class="o">+</span><span class="bp">self</span><span class="o">.</span><span class="n">pb</span><span class="p">,</span><span class="n">w</span><span class="o">+</span><span class="bp">self</span><span class="o">.</span><span class="n">pl</span><span class="o">+</span><span class="bp">self</span><span class="o">.</span><span class="n">pr</span><span class="p">],</span> <span class="p">[</span><span class="s2">&quot;i0&quot;</span><span class="p">,</span><span class="s2">&quot;i1&quot;</span><span class="p">,</span><span class="sa">f</span><span class="s2">&quot;i2-</span><span class="si">{self.pt}</span><span class="s2">&quot;</span><span class="p">,</span><span class="sa">f</span><span class="s2">&quot;i3-</span><span class="si">{self.pl}</span><span class="s2">&quot;</span><span class="p">])</span></div></div>
+
+<div class="viewcode-block" id="ConstantPad2d"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.ConstantPad2d">[文档]</a><span class="k">class</span> <span class="nc">ConstantPad2d</span><span class="p">(</span><span class="n">Module</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">padding</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">padding</span> <span class="o">=</span> <span class="n">padding</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">padding</span><span class="p">,</span> <span class="nb">int</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">pl</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">padding</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">pr</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">padding</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">pt</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">padding</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">pb</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">padding</span>
+        <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">padding</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">pl</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">pr</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">pt</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">pb</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">padding</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;ConstantPad2d padding just support int or tuple, but found {type(padding)}&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">value</span> <span class="o">=</span> <span class="n">value</span>
+
+<div class="viewcode-block" id="ConstantPad2d.execute"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.ConstantPad2d.execute">[文档]</a>    <span class="k">def</span> <span class="nf">execute</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+        <span class="n">n</span><span class="p">,</span><span class="n">c</span><span class="p">,</span><span class="n">h</span><span class="p">,</span><span class="n">w</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span>
+        <span class="k">return</span> <span class="n">x</span><span class="o">.</span><span class="n">reindex</span><span class="p">([</span><span class="n">n</span><span class="p">,</span><span class="n">c</span><span class="p">,</span><span class="n">h</span><span class="o">+</span><span class="bp">self</span><span class="o">.</span><span class="n">pt</span><span class="o">+</span><span class="bp">self</span><span class="o">.</span><span class="n">pb</span><span class="p">,</span><span class="n">w</span><span class="o">+</span><span class="bp">self</span><span class="o">.</span><span class="n">pl</span><span class="o">+</span><span class="bp">self</span><span class="o">.</span><span class="n">pr</span><span class="p">],</span> <span class="p">[</span><span class="s2">&quot;i0&quot;</span><span class="p">,</span><span class="s2">&quot;i1&quot;</span><span class="p">,</span><span class="sa">f</span><span class="s2">&quot;i2-</span><span class="si">{self.pt}</span><span class="s2">&quot;</span><span class="p">,</span><span class="sa">f</span><span class="s2">&quot;i3-</span><span class="si">{self.pl}</span><span class="s2">&quot;</span><span class="p">],</span> <span class="n">overflow_value</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">value</span><span class="p">)</span></div></div>
+
+<div class="viewcode-block" id="ReplicationPad2d"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.ReplicationPad2d">[文档]</a><span class="k">class</span> <span class="nc">ReplicationPad2d</span><span class="p">(</span><span class="n">Module</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">padding</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">padding</span> <span class="o">=</span> <span class="n">padding</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">padding</span><span class="p">,</span> <span class="nb">int</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">pl</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">padding</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">pr</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">padding</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">pt</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">padding</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">pb</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">padding</span>
+        <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">padding</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">pl</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">pr</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">pt</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">pb</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">padding</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;ReplicationPad2d padding just support int or tuple, but found {type(padding)}&quot;</span><span class="p">)</span>
+
+<div class="viewcode-block" id="ReplicationPad2d.execute"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.ReplicationPad2d.execute">[文档]</a>    <span class="k">def</span> <span class="nf">execute</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+        <span class="n">n</span><span class="p">,</span><span class="n">c</span><span class="p">,</span><span class="n">h</span><span class="p">,</span><span class="n">w</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span>
+        <span class="n">oh</span><span class="o">=</span><span class="n">h</span><span class="o">+</span><span class="bp">self</span><span class="o">.</span><span class="n">pt</span><span class="o">+</span><span class="bp">self</span><span class="o">.</span><span class="n">pb</span>
+        <span class="n">ow</span><span class="o">=</span><span class="n">w</span><span class="o">+</span><span class="bp">self</span><span class="o">.</span><span class="n">pl</span><span class="o">+</span><span class="bp">self</span><span class="o">.</span><span class="n">pr</span>
+        <span class="n">l</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">pl</span>
+        <span class="n">r</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">pl</span> <span class="o">+</span> <span class="n">w</span> <span class="o">-</span> <span class="mi">1</span>
+        <span class="n">t</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">pt</span>
+        <span class="n">b</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">pt</span> <span class="o">+</span> <span class="n">h</span> <span class="o">-</span> <span class="mi">1</span>
+        <span class="k">return</span> <span class="n">x</span><span class="o">.</span><span class="n">reindex</span><span class="p">([</span><span class="n">n</span><span class="p">,</span><span class="n">c</span><span class="p">,</span><span class="n">oh</span><span class="p">,</span><span class="n">ow</span><span class="p">],</span> <span class="p">[</span><span class="s2">&quot;i0&quot;</span><span class="p">,</span><span class="s2">&quot;i1&quot;</span><span class="p">,</span>
+            <span class="sa">f</span><span class="s2">&quot;i2&lt;</span><span class="si">{t}</span><span class="s2"> ? 0 : i2 &gt; </span><span class="si">{b}</span><span class="s2"> ? {h-1} : i2-</span><span class="si">{t}</span><span class="s2">&quot;</span><span class="p">,</span>
+            <span class="sa">f</span><span class="s2">&quot;i3&lt;</span><span class="si">{l}</span><span class="s2"> ? 0 : i3 &gt; </span><span class="si">{r}</span><span class="s2"> ? {w-1} : i3-</span><span class="si">{l}</span><span class="s2">&quot;</span>
+        <span class="p">])</span></div></div>
+
+<div class="viewcode-block" id="Embedding"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.Embedding">[文档]</a><span class="k">class</span> <span class="nc">Embedding</span><span class="p">(</span><span class="n">Module</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">num</span><span class="p">,</span> <span class="n">dim</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num</span> <span class="o">=</span> <span class="n">num</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">dim</span> <span class="o">=</span> <span class="n">dim</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">weight</span> <span class="o">=</span> <span class="n">jt</span><span class="o">.</span><span class="n">init</span><span class="o">.</span><span class="n">gauss</span><span class="p">([</span><span class="n">num</span><span class="p">,</span><span class="n">dim</span><span class="p">],</span><span class="s1">&#39;float32&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">stop_grad</span><span class="p">()</span>
+
+<div class="viewcode-block" id="Embedding.execute"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.Embedding.execute">[文档]</a>    <span class="k">def</span> <span class="nf">execute</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+        <span class="n">res</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">weight</span><span class="p">[</span><span class="n">x</span><span class="p">]</span><span class="o">.</span><span class="n">reshape</span><span class="p">([</span><span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span><span class="bp">self</span><span class="o">.</span><span class="n">dim</span><span class="p">])</span>
+        <span class="k">return</span> <span class="n">res</span></div></div>
+
+<div class="viewcode-block" id="PixelShuffle"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.PixelShuffle">[文档]</a><span class="k">class</span> <span class="nc">PixelShuffle</span><span class="p">(</span><span class="n">Module</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">upscale_factor</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">upscale_factor</span> <span class="o">=</span> <span class="n">upscale_factor</span>
+
+<div class="viewcode-block" id="PixelShuffle.execute"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.PixelShuffle.execute">[文档]</a>    <span class="k">def</span> <span class="nf">execute</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+        <span class="n">n</span><span class="p">,</span><span class="n">c</span><span class="p">,</span><span class="n">h</span><span class="p">,</span><span class="n">w</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span>
+        <span class="n">r</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">upscale_factor</span>
+        <span class="k">assert</span> <span class="n">c</span><span class="o">%</span><span class="p">(</span><span class="n">r</span><span class="o">**</span><span class="mi">2</span><span class="p">)</span><span class="o">==</span><span class="mi">0</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;input channel needs to be divided by upscale_factor&#39;s square in PixelShuffle&quot;</span>
+        <span class="k">return</span> <span class="n">x</span><span class="o">.</span><span class="n">reindex</span><span class="p">([</span><span class="n">n</span><span class="p">,</span><span class="nb">int</span><span class="p">(</span><span class="n">c</span><span class="o">/</span><span class="n">r</span><span class="o">**</span><span class="mi">2</span><span class="p">),</span><span class="n">h</span><span class="o">*</span><span class="n">r</span><span class="p">,</span><span class="n">w</span><span class="o">*</span><span class="n">r</span><span class="p">],</span> <span class="p">[</span>
+            <span class="s2">&quot;i0&quot;</span><span class="p">,</span>
+            <span class="sa">f</span><span class="s2">&quot;i1*{r**2}+i2%</span><span class="si">{r}</span><span class="s2">*</span><span class="si">{r}</span><span class="s2">+i3%</span><span class="si">{r}</span><span class="s2">&quot;</span><span class="p">,</span>
+            <span class="sa">f</span><span class="s2">&quot;i2/</span><span class="si">{r}</span><span class="s2">&quot;</span><span class="p">,</span>
+            <span class="sa">f</span><span class="s2">&quot;i3/</span><span class="si">{r}</span><span class="s2">&quot;</span>
+        <span class="p">])</span></div></div>
+
+<div class="viewcode-block" id="Tanh"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.Tanh">[文档]</a><span class="k">class</span> <span class="nc">Tanh</span><span class="p">(</span><span class="n">Module</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+<div class="viewcode-block" id="Tanh.execute"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.Tanh.execute">[文档]</a>    <span class="k">def</span> <span class="nf">execute</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">)</span> <span class="p">:</span>
+        <span class="k">return</span> <span class="n">x</span><span class="o">.</span><span class="n">tanh</span><span class="p">()</span></div></div>
+
+<div class="viewcode-block" id="Sigmoid"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.Sigmoid">[文档]</a><span class="k">class</span> <span class="nc">Sigmoid</span><span class="p">(</span><span class="n">Module</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+<div class="viewcode-block" id="Sigmoid.execute"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.Sigmoid.execute">[文档]</a>    <span class="k">def</span> <span class="nf">execute</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">)</span> <span class="p">:</span>
+        <span class="k">return</span> <span class="n">x</span><span class="o">.</span><span class="n">sigmoid</span><span class="p">()</span></div></div>
+
+<div class="viewcode-block" id="resize"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.resize">[文档]</a><span class="k">def</span> <span class="nf">resize</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">size</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;nearest&quot;</span><span class="p">):</span>
+    <span class="n">img</span> <span class="o">=</span> <span class="n">x</span>
+    <span class="n">n</span><span class="p">,</span><span class="n">c</span><span class="p">,</span><span class="n">h</span><span class="p">,</span><span class="n">w</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span>
+    <span class="n">H</span><span class="p">,</span><span class="n">W</span> <span class="o">=</span> <span class="n">size</span>
+    <span class="n">new_size</span> <span class="o">=</span> <span class="p">[</span><span class="n">n</span><span class="p">,</span><span class="n">c</span><span class="p">,</span><span class="n">H</span><span class="p">,</span><span class="n">W</span><span class="p">]</span>
+    <span class="n">nid</span><span class="p">,</span> <span class="n">cid</span><span class="p">,</span> <span class="n">hid</span><span class="p">,</span> <span class="n">wid</span> <span class="o">=</span> <span class="n">jt</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">new_size</span><span class="p">)</span>
+    <span class="n">x</span> <span class="o">=</span> <span class="n">hid</span> <span class="o">*</span> <span class="n">h</span> <span class="o">/</span> <span class="n">H</span>
+    <span class="n">y</span> <span class="o">=</span> <span class="n">wid</span> <span class="o">*</span> <span class="n">w</span> <span class="o">/</span> <span class="n">W</span>
+    <span class="k">if</span> <span class="n">mode</span><span class="o">==</span><span class="s2">&quot;nearest&quot;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">img</span><span class="o">.</span><span class="n">reindex</span><span class="p">([</span><span class="n">nid</span><span class="p">,</span> <span class="n">cid</span><span class="p">,</span> <span class="n">x</span><span class="o">.</span><span class="n">floor</span><span class="p">(),</span> <span class="n">y</span><span class="o">.</span><span class="n">floor</span><span class="p">()])</span>
+    <span class="k">if</span> <span class="n">mode</span><span class="o">==</span><span class="s2">&quot;bilinear&quot;</span><span class="p">:</span>
+        <span class="n">fx</span><span class="p">,</span> <span class="n">fy</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">floor</span><span class="p">(),</span> <span class="n">y</span><span class="o">.</span><span class="n">floor</span><span class="p">()</span>
+        <span class="n">cx</span><span class="p">,</span> <span class="n">cy</span> <span class="o">=</span> <span class="n">fx</span><span class="o">+</span><span class="mi">1</span><span class="p">,</span> <span class="n">fy</span><span class="o">+</span><span class="mi">1</span>
+        <span class="n">dx</span><span class="p">,</span> <span class="n">dy</span> <span class="o">=</span> <span class="n">x</span><span class="o">-</span><span class="n">fx</span><span class="p">,</span> <span class="n">y</span><span class="o">-</span><span class="n">fy</span>
+        <span class="n">a</span> <span class="o">=</span> <span class="n">img</span><span class="o">.</span><span class="n">reindex_var</span><span class="p">([</span><span class="n">nid</span><span class="p">,</span> <span class="n">cid</span><span class="p">,</span> <span class="n">fx</span><span class="p">,</span> <span class="n">fy</span><span class="p">])</span>
+        <span class="n">b</span> <span class="o">=</span> <span class="n">img</span><span class="o">.</span><span class="n">reindex_var</span><span class="p">([</span><span class="n">nid</span><span class="p">,</span> <span class="n">cid</span><span class="p">,</span> <span class="n">cx</span><span class="p">,</span> <span class="n">fy</span><span class="p">])</span>
+        <span class="n">c</span> <span class="o">=</span> <span class="n">img</span><span class="o">.</span><span class="n">reindex_var</span><span class="p">([</span><span class="n">nid</span><span class="p">,</span> <span class="n">cid</span><span class="p">,</span> <span class="n">fx</span><span class="p">,</span> <span class="n">cy</span><span class="p">])</span>
+        <span class="n">d</span> <span class="o">=</span> <span class="n">img</span><span class="o">.</span><span class="n">reindex_var</span><span class="p">([</span><span class="n">nid</span><span class="p">,</span> <span class="n">cid</span><span class="p">,</span> <span class="n">cx</span><span class="p">,</span> <span class="n">cy</span><span class="p">])</span>
+        <span class="n">dnx</span><span class="p">,</span> <span class="n">dny</span> <span class="o">=</span> <span class="mi">1</span><span class="o">-</span><span class="n">dx</span><span class="p">,</span> <span class="mi">1</span><span class="o">-</span><span class="n">dy</span>
+        <span class="n">ab</span> <span class="o">=</span> <span class="n">dx</span><span class="o">*</span><span class="n">b</span> <span class="o">+</span> <span class="n">dnx</span><span class="o">*</span><span class="n">a</span>
+        <span class="n">cd</span> <span class="o">=</span> <span class="n">dx</span><span class="o">*</span><span class="n">d</span> <span class="o">+</span> <span class="n">dnx</span><span class="o">*</span><span class="n">c</span>
+        <span class="n">o</span> <span class="o">=</span> <span class="n">ab</span><span class="o">*</span><span class="n">dny</span> <span class="o">+</span> <span class="n">cd</span><span class="o">*</span><span class="n">dy</span>
+        <span class="k">return</span> <span class="n">o</span>
+    <span class="k">raise</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Not support </span><span class="si">{interpolation}</span><span class="s2">&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="Upsample"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.Upsample">[文档]</a><span class="k">class</span> <span class="nc">Upsample</span><span class="p">(</span><span class="n">Module</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">scale_factor</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s1">&#39;nearest&#39;</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">scale_factor</span> <span class="o">=</span> <span class="n">scale_factor</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">scale_factor</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">)</span> <span class="k">else</span> <span class="p">(</span><span class="n">scale_factor</span><span class="p">,</span> <span class="n">scale_factor</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">mode</span> <span class="o">=</span> <span class="n">mode</span>
+    
+<div class="viewcode-block" id="Upsample.execute"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.Upsample.execute">[文档]</a>    <span class="k">def</span> <span class="nf">execute</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">resize</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">size</span><span class="o">=</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">scale_factor</span><span class="p">[</span><span class="mi">0</span><span class="p">]),</span> <span class="nb">int</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">scale_factor</span><span class="p">[</span><span class="mi">1</span><span class="p">])),</span> <span class="n">mode</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">mode</span><span class="p">)</span></div></div>
+
+<div class="viewcode-block" id="Sequential"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.Sequential">[文档]</a><span class="k">class</span> <span class="nc">Sequential</span><span class="p">(</span><span class="n">Module</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">layers</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">args</span><span class="p">)</span>
+    <span class="k">def</span> <span class="fm">__getitem__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">idx</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">layers</span><span class="p">[</span><span class="n">idx</span><span class="p">]</span>
+<div class="viewcode-block" id="Sequential.execute"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.Sequential.execute">[文档]</a>    <span class="k">def</span> <span class="nf">execute</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">layer</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">layers</span><span class="p">:</span>
+            <span class="n">x</span> <span class="o">=</span> <span class="n">layer</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">x</span></div>
+<div class="viewcode-block" id="Sequential.dfs"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.Sequential.dfs">[文档]</a>    <span class="k">def</span> <span class="nf">dfs</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">parents</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">callback</span><span class="p">,</span> <span class="n">callback_leave</span><span class="p">):</span>
+        <span class="n">n_children</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">layers</span><span class="p">)</span>
+        <span class="n">ret</span> <span class="o">=</span> <span class="n">callback</span><span class="p">(</span><span class="n">parents</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="bp">self</span><span class="p">,</span> <span class="n">n_children</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">ret</span> <span class="o">==</span> <span class="kc">False</span><span class="p">:</span>
+            <span class="k">return</span>
+        <span class="k">for</span> <span class="n">k</span><span class="p">,</span><span class="n">v</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">layers</span><span class="p">):</span>
+            <span class="n">parents</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
+            <span class="n">v</span><span class="o">.</span><span class="n">dfs</span><span class="p">(</span><span class="n">parents</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">callback</span><span class="p">,</span> <span class="n">callback_leave</span><span class="p">)</span>
+            <span class="n">parents</span><span class="o">.</span><span class="n">pop</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">callback_leave</span><span class="p">:</span>
+            <span class="n">callback_leave</span><span class="p">(</span><span class="n">parents</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="bp">self</span><span class="p">,</span> <span class="n">n_children</span><span class="p">)</span></div>
+<div class="viewcode-block" id="Sequential.append"><a class="viewcode-back" href="../../jittor.nn.html#jittor.nn.Sequential.append">[文档]</a>    <span class="k">def</span> <span class="nf">append</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">mod</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">layers</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">mod</span><span class="p">)</span></div></div>
+
+<span class="n">ModuleList</span> <span class="o">=</span> <span class="n">Sequential</span>
+</pre></div>
+
+           </div>
+           
+          </div>
+          <footer>
+  
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>
+        &copy; Copyright 2020, Jittor
+
+    </p>
+  </div>
+  Built with <a href="http://sphinx-doc.org/">Sphinx</a> using a <a href="https://github.com/rtfd/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>. 
+
+</footer>
+
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+  
+
+
+  <script type="text/javascript">
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script>
+
+  
+  
+    
+   
+
+</body>
+</html>

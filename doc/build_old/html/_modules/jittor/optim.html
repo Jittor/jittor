@@ -1,0 +1,379 @@
+
+
+<!DOCTYPE html>
+<!--[if IE 8]><html class="no-js lt-ie9" lang="zh-CN" > <![endif]-->
+<!--[if gt IE 8]><!--> <html class="no-js" lang="zh-CN" > <!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <title>jittor.optim &mdash; Jittor 1.1.3.1 文档</title>
+  
+
+  
+  
+  
+  
+
+  
+  <script type="text/javascript" src="../../_static/js/modernizr.min.js"></script>
+  
+    
+      <script type="text/javascript" id="documentation_options" data-url_root="../../" src="../../_static/documentation_options.js"></script>
+        <script src="../../_static/jquery.js"></script>
+        <script src="../../_static/underscore.js"></script>
+        <script src="../../_static/doctools.js"></script>
+        <script src="../../_static/language_data.js"></script>
+        <script src="../../_static/translations.js"></script>
+    
+    <script type="text/javascript" src="../../_static/js/theme.js"></script>
+
+    
+
+  
+  <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+  <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+    <link rel="index" title="索引" href="../../genindex.html" />
+    <link rel="search" title="搜索" href="../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav">
+
+   
+  <div class="wy-grid-for-nav">
+    
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+          
+
+          
+            <a href="../../index.html" class="icon icon-home"> Jittor
+          
+
+          
+          </a>
+
+          
+            
+            
+          
+
+          
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+
+          
+        </div>
+
+        <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="main navigation">
+          
+            
+            
+              
+            
+            
+              <p class="caption"><span class="caption-text">内容一览:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../README.cn.html">Jittor: 即时编译深度学习框架</a></li>
+</ul>
+<p class="caption"><span class="caption-text">模块API:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../jittor.html">jittor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../jittor.nn.html">jittor.nn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../jittor.models.html">jittor.models</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../jittor.optim.html">jittor.optim</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../jittor.init.html">jittor.init</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../jittor.contrib.html">jittor.contrib</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../jittor.dataset.html">jittor.dataset</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../jittor.transform.html">jittor.transform</a></li>
+</ul>
+<p class="caption"><span class="caption-text">其他:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference external" href="https://cg.cs.tsinghua.edu.cn/jittor/tutorial/">教程</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://cg.cs.tsinghua.edu.cn/jittor/tutorial/">教程1</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../todo.html">TODO</a></li>
+</ul>
+
+            
+          
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+
+      
+      <nav class="wy-nav-top" aria-label="top navigation">
+        
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">Jittor</a>
+        
+      </nav>
+
+
+      <div class="wy-nav-content">
+        
+        <div class="rst-content">
+        
+          
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div role="navigation" aria-label="breadcrumbs navigation">
+
+  <ul class="wy-breadcrumbs">
+    
+      <li><a href="../../index.html">Docs</a> &raquo;</li>
+        
+          <li><a href="../index.html">模块代码</a> &raquo;</li>
+        
+          <li><a href="../jittor.html">jittor</a> &raquo;</li>
+        
+      <li>jittor.optim</li>
+    
+    
+      <li class="wy-breadcrumbs-aside">
+        
+      </li>
+    
+  </ul>
+
+  
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+            
+  <h1>jittor.optim 源代码</h1><div class="highlight"><pre>
+<span></span><span class="c1"># ***************************************************************</span>
+<span class="c1"># Copyright (c) 2020 Jittor. Authors:</span>
+<span class="c1">#     Guowei Yang &lt;471184555@qq.com&gt;</span>
+<span class="c1">#     Guoye Yang &lt;498731903@qq.com&gt;</span>
+<span class="c1">#     Wenyang Zhou &lt;576825820@qq.com&gt;</span>
+<span class="c1">#     Meng-Hao Guo &lt;guomenghao1997@gmail.com&gt;</span>
+<span class="c1">#     Dun Liang &lt;randonlang@gmail.com&gt;.</span>
+<span class="c1">#</span>
+<span class="c1"># All Rights Reserved.</span>
+<span class="c1"># This file is subject to the terms and conditions defined in</span>
+<span class="c1"># file &#39;LICENSE.txt&#39;, which is part of this source code package.</span>
+<span class="c1"># ***************************************************************</span>
+<span class="kn">import</span> <span class="nn">jittor</span> <span class="k">as</span> <span class="nn">jt</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+
+<div class="viewcode-block" id="Optimizer"><a class="viewcode-back" href="../../jittor.optim.html#jittor.optim.Optimizer">[文档]</a><span class="k">class</span> <span class="nc">Optimizer</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot; Basic class of Optimizer.</span>
+
+<span class="sd">    Example::</span>
+
+<span class="sd">        optimizer = nn.SGD(model.parameters(), lr)</span>
+<span class="sd">        optimizer.step(loss)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">params</span><span class="p">,</span> <span class="n">lr</span><span class="p">,</span> <span class="n">param_sync_iter</span><span class="o">=</span><span class="mi">10000</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">param_groups</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">lr</span> <span class="o">=</span> <span class="n">lr</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">param_sync_iter</span> <span class="o">=</span> <span class="n">param_sync_iter</span>
+
+        <span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">params</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;Length of parameters should not be zero&quot;</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">params</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="nb">dict</span><span class="p">):</span>
+            <span class="n">params</span> <span class="o">=</span> <span class="p">[{</span><span class="s1">&#39;params&#39;</span><span class="p">:</span> <span class="n">params</span><span class="p">}]</span>
+        <span class="k">for</span> <span class="n">pg</span> <span class="ow">in</span> <span class="n">params</span><span class="p">:</span>
+            <span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">pg</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">param_groups</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">pg</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">n_step</span> <span class="o">=</span> <span class="mi">0</span>
+
+<div class="viewcode-block" id="Optimizer.pre_step"><a class="viewcode-back" href="../../jittor.optim.html#jittor.optim.Optimizer.pre_step">[文档]</a>    <span class="k">def</span> <span class="nf">pre_step</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">loss</span><span class="p">):</span>
+        <span class="sd">&quot;&quot;&quot; something should be done before step, such as calc gradients, mpi sync, and so on.</span>
+
+<span class="sd">        Example::</span>
+
+<span class="sd">            class MyOptimizer(Optimizer):</span>
+<span class="sd">                def step(self, loss):</span>
+<span class="sd">                    self.post_step(loss)</span>
+<span class="sd">                    ...</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="c1"># clean prev grads</span>
+        <span class="n">params</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">params_has_grad</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">pg</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">param_groups</span><span class="p">:</span>
+            <span class="n">pg</span><span class="p">[</span><span class="s2">&quot;grads&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="kc">None</span><span class="p">]</span> <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="n">pg</span><span class="p">[</span><span class="s1">&#39;params&#39;</span><span class="p">])</span>
+            <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">pg</span><span class="p">[</span><span class="s1">&#39;params&#39;</span><span class="p">]:</span>
+                <span class="n">params</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">p</span><span class="p">)</span>
+                <span class="k">if</span> <span class="ow">not</span> <span class="n">p</span><span class="o">.</span><span class="n">is_stop_grad</span><span class="p">():</span>
+                    <span class="n">params_has_grad</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">p</span><span class="p">)</span>
+        
+        <span class="c1"># sync params, reduce computing graph size</span>
+        <span class="n">jt</span><span class="o">.</span><span class="n">sync</span><span class="p">(</span><span class="n">params</span><span class="p">)</span>
+
+        <span class="c1"># get gradient</span>
+        <span class="n">grads</span> <span class="o">=</span> <span class="n">jt</span><span class="o">.</span><span class="n">grad</span><span class="p">(</span><span class="n">loss</span><span class="p">,</span> <span class="n">params_has_grad</span><span class="p">)</span>
+
+        <span class="c1"># sync grads and model if in mpi</span>
+        <span class="k">if</span> <span class="n">jt</span><span class="o">.</span><span class="n">mpi</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">g</span> <span class="ow">in</span> <span class="n">grads</span><span class="p">:</span>
+                <span class="n">g</span><span class="o">.</span><span class="n">assign</span><span class="p">(</span><span class="n">g</span><span class="o">.</span><span class="n">mpi_all_reduce</span><span class="p">(</span><span class="s2">&quot;mean&quot;</span><span class="p">))</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_step</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">param_sync_iter</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">params</span><span class="p">:</span>
+                    <span class="n">p</span><span class="o">.</span><span class="n">assign</span><span class="p">(</span><span class="n">p</span><span class="o">.</span><span class="n">mpi_all_reduce</span><span class="p">(</span><span class="s2">&quot;mean&quot;</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">n_step</span> <span class="o">+=</span> <span class="mi">1</span>
+
+        <span class="c1"># set up grads in param_groups</span>
+        <span class="n">pid</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">for</span> <span class="n">pg</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">param_groups</span><span class="p">:</span>
+            <span class="n">pg_grads</span> <span class="o">=</span> <span class="n">pg</span><span class="p">[</span><span class="s2">&quot;grads&quot;</span><span class="p">]</span>
+            <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">p</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">pg</span><span class="p">[</span><span class="s1">&#39;params&#39;</span><span class="p">]):</span>
+                <span class="k">if</span> <span class="ow">not</span> <span class="n">p</span><span class="o">.</span><span class="n">is_stop_grad</span><span class="p">():</span>
+                    <span class="n">pg_grads</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">grads</span><span class="p">[</span><span class="n">pid</span><span class="p">]</span>
+                    <span class="n">pid</span> <span class="o">+=</span> <span class="mi">1</span></div>
+        
+<div class="viewcode-block" id="Optimizer.step"><a class="viewcode-back" href="../../jittor.optim.html#jittor.optim.Optimizer.step">[文档]</a>    <span class="k">def</span> <span class="nf">step</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">loss</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">pre_step</span><span class="p">(</span><span class="n">loss</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">pg</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">param_groups</span><span class="p">:</span>
+            <span class="n">lr</span> <span class="o">=</span> <span class="n">pg</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;lr&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">lr</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">p</span><span class="p">,</span> <span class="n">g</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">pg</span><span class="p">[</span><span class="s2">&quot;params&quot;</span><span class="p">],</span> <span class="n">pg</span><span class="p">[</span><span class="s2">&quot;grads&quot;</span><span class="p">]):</span>
+                <span class="k">if</span> <span class="n">p</span><span class="o">.</span><span class="n">is_stop_grad</span><span class="p">():</span> <span class="k">continue</span>
+                <span class="n">p</span> <span class="o">-=</span> <span class="n">g</span> <span class="o">*</span> <span class="n">lr</span>
+                <span class="c1"># detach with the prev graph to reduce memory consumption</span>
+                <span class="n">p</span><span class="o">.</span><span class="n">detach_inplace</span><span class="p">()</span></div></div>
+
+
+<div class="viewcode-block" id="SGD"><a class="viewcode-back" href="../../jittor.optim.html#jittor.optim.SGD">[文档]</a><span class="k">class</span> <span class="nc">SGD</span><span class="p">(</span><span class="n">Optimizer</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot; SGD Optimizer.</span>
+
+<span class="sd">    Example::</span>
+
+<span class="sd">        optimizer = nn.SGD(model.parameters(), lr, momentum=0.9)</span>
+<span class="sd">        optimizer.step(loss)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">params</span><span class="p">,</span> <span class="n">lr</span><span class="p">,</span> <span class="n">momentum</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">weight_decay</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">dampening</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">nesterov</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">params</span><span class="p">,</span> <span class="n">lr</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">momentum</span> <span class="o">=</span> <span class="n">momentum</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">weight_decay</span> <span class="o">=</span> <span class="n">weight_decay</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">dampening</span> <span class="o">=</span> <span class="n">dampening</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">nesterov</span> <span class="o">=</span> <span class="n">nesterov</span>
+
+        <span class="c1"># initialize required arguments</span>
+        <span class="k">for</span> <span class="n">pg</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">param_groups</span><span class="p">:</span>
+            <span class="n">values</span> <span class="o">=</span> <span class="n">pg</span><span class="p">[</span><span class="s2">&quot;values&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+            <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">pg</span><span class="p">[</span><span class="s2">&quot;params&quot;</span><span class="p">]:</span>
+                <span class="n">values</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">jt</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">p</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">p</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">stop_fuse</span><span class="p">()</span><span class="o">.</span><span class="n">stop_grad</span><span class="p">())</span>
+
+<div class="viewcode-block" id="SGD.step"><a class="viewcode-back" href="../../jittor.optim.html#jittor.optim.SGD.step">[文档]</a>    <span class="k">def</span> <span class="nf">step</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">loss</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">pre_step</span><span class="p">(</span><span class="n">loss</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">pg</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">param_groups</span><span class="p">:</span>
+            <span class="c1"># get arguments from each param_groups</span>
+            <span class="n">lr</span> <span class="o">=</span> <span class="n">pg</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;lr&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">lr</span><span class="p">)</span>
+            <span class="n">momentum</span> <span class="o">=</span> <span class="n">pg</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;momentum&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">momentum</span><span class="p">)</span>
+            <span class="n">weight_decay</span> <span class="o">=</span> <span class="n">pg</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;weight_decay&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">weight_decay</span><span class="p">)</span>
+            <span class="n">dampening</span> <span class="o">=</span> <span class="n">pg</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;dampening&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">dampening</span><span class="p">)</span>
+            <span class="n">nesterov</span> <span class="o">=</span> <span class="n">pg</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;nesterov&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">nesterov</span><span class="p">)</span>
+
+            <span class="c1"># optimize main body</span>
+            <span class="k">for</span> <span class="n">p</span><span class="p">,</span> <span class="n">g</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">pg</span><span class="p">[</span><span class="s2">&quot;params&quot;</span><span class="p">],</span> <span class="n">pg</span><span class="p">[</span><span class="s2">&quot;grads&quot;</span><span class="p">],</span> <span class="n">pg</span><span class="p">[</span><span class="s2">&quot;values&quot;</span><span class="p">]):</span>
+                <span class="k">if</span> <span class="n">p</span><span class="o">.</span><span class="n">is_stop_grad</span><span class="p">():</span> <span class="k">continue</span>
+                <span class="n">dp</span> <span class="o">=</span> <span class="n">p</span> <span class="o">*</span> <span class="n">weight_decay</span> <span class="o">+</span> <span class="n">g</span>
+                <span class="n">v</span><span class="o">.</span><span class="n">assign</span><span class="p">(</span><span class="n">momentum</span> <span class="o">*</span> <span class="n">v</span> <span class="o">+</span> <span class="n">dp</span> <span class="o">*</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="n">dampening</span><span class="p">))</span>
+                <span class="k">if</span> <span class="n">nesterov</span><span class="p">:</span>
+                    <span class="n">p</span> <span class="o">-=</span> <span class="p">(</span><span class="n">dp</span> <span class="o">+</span> <span class="n">momentum</span> <span class="o">*</span> <span class="n">v</span><span class="p">)</span> <span class="o">*</span> <span class="n">lr</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="n">p</span> <span class="o">-=</span> <span class="n">v</span> <span class="o">*</span> <span class="n">lr</span>
+                <span class="n">p</span><span class="o">.</span><span class="n">detach_inplace</span><span class="p">()</span></div></div>
+
+<div class="viewcode-block" id="Adam"><a class="viewcode-back" href="../../jittor.optim.html#jittor.optim.Adam">[文档]</a><span class="k">class</span> <span class="nc">Adam</span><span class="p">(</span><span class="n">Optimizer</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot; Adam Optimizer.</span>
+<span class="sd">    </span>
+<span class="sd">    Example::</span>
+
+<span class="sd">        optimizer = nn.Adam(model.parameters(), lr, eps=1e-8, betas=(0.9, 0.999))</span>
+<span class="sd">        optimizer.step(loss)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">params</span><span class="p">,</span> <span class="n">lr</span><span class="p">,</span> <span class="n">eps</span><span class="o">=</span><span class="mf">1e-8</span><span class="p">,</span> <span class="n">betas</span><span class="o">=</span><span class="p">(</span><span class="mf">0.9</span><span class="p">,</span> <span class="mf">0.999</span><span class="p">),</span> <span class="n">weight_decay</span><span class="o">=</span><span class="mi">0</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">params</span><span class="p">,</span> <span class="n">lr</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">eps</span> <span class="o">=</span> <span class="n">eps</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">betas</span> <span class="o">=</span> <span class="n">betas</span>
+        <span class="c1"># self.weight_decay = weight_decay</span>
+        <span class="k">assert</span> <span class="n">weight_decay</span><span class="o">==</span><span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;weight_decay is not supported yet&quot;</span>
+        
+        <span class="c1"># initialize required arguments for each param_groups</span>
+        <span class="k">for</span> <span class="n">pg</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">param_groups</span><span class="p">:</span>
+            <span class="n">values</span> <span class="o">=</span> <span class="n">pg</span><span class="p">[</span><span class="s2">&quot;values&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+            <span class="n">m</span> <span class="o">=</span> <span class="n">pg</span><span class="p">[</span><span class="s2">&quot;m&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+            <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">pg</span><span class="p">[</span><span class="s2">&quot;params&quot;</span><span class="p">]:</span>
+                <span class="n">values</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">jt</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">p</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">p</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">stop_fuse</span><span class="p">()</span><span class="o">.</span><span class="n">stop_grad</span><span class="p">())</span>
+                <span class="n">m</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">jt</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">p</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">p</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">stop_fuse</span><span class="p">()</span><span class="o">.</span><span class="n">stop_grad</span><span class="p">())</span>
+
+<div class="viewcode-block" id="Adam.step"><a class="viewcode-back" href="../../jittor.optim.html#jittor.optim.Adam.step">[文档]</a>    <span class="k">def</span> <span class="nf">step</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">loss</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">pre_step</span><span class="p">(</span><span class="n">loss</span><span class="p">)</span>
+        <span class="n">n</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">n_step</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">pg</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">param_groups</span><span class="p">:</span>
+            <span class="c1"># get arguments from each param_groups</span>
+            <span class="n">lr</span> <span class="o">=</span> <span class="n">pg</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;lr&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">lr</span><span class="p">)</span>
+            <span class="n">eps</span> <span class="o">=</span> <span class="n">pg</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;eps&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">eps</span><span class="p">)</span>
+            <span class="n">b0</span><span class="p">,</span> <span class="n">b1</span> <span class="o">=</span> <span class="n">pg</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;betas&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">betas</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">p</span><span class="p">,</span> <span class="n">g</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">m</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">pg</span><span class="p">[</span><span class="s2">&quot;params&quot;</span><span class="p">],</span> <span class="n">pg</span><span class="p">[</span><span class="s2">&quot;grads&quot;</span><span class="p">],</span> <span class="n">pg</span><span class="p">[</span><span class="s2">&quot;values&quot;</span><span class="p">],</span> <span class="n">pg</span><span class="p">[</span><span class="s2">&quot;m&quot;</span><span class="p">]):</span>
+                <span class="k">if</span> <span class="n">p</span><span class="o">.</span><span class="n">is_stop_grad</span><span class="p">():</span> <span class="k">continue</span>
+                <span class="n">m</span><span class="o">.</span><span class="n">assign</span><span class="p">(</span><span class="n">b0</span> <span class="o">*</span> <span class="n">m</span> <span class="o">+</span> <span class="p">(</span><span class="mi">1</span><span class="o">-</span><span class="n">b0</span><span class="p">)</span> <span class="o">*</span> <span class="n">g</span><span class="p">)</span>
+                <span class="n">v</span><span class="o">.</span><span class="n">assign</span><span class="p">(</span><span class="n">b1</span> <span class="o">*</span> <span class="n">v</span> <span class="o">+</span> <span class="p">(</span><span class="mi">1</span><span class="o">-</span><span class="n">b1</span><span class="p">)</span> <span class="o">*</span> <span class="n">g</span> <span class="o">*</span> <span class="n">g</span><span class="p">)</span>
+                <span class="n">step_size</span> <span class="o">=</span> <span class="n">lr</span> <span class="o">*</span> <span class="n">jt</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="mi">1</span><span class="o">-</span><span class="n">b1</span><span class="o">**</span><span class="n">n</span><span class="p">)</span> <span class="o">/</span> <span class="p">(</span><span class="mi">1</span><span class="o">-</span><span class="n">b0</span> <span class="o">**</span> <span class="n">n</span><span class="p">)</span>
+                <span class="n">p</span> <span class="o">-=</span> <span class="n">m</span> <span class="o">*</span> <span class="n">step_size</span> <span class="o">/</span> <span class="p">(</span><span class="n">jt</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">v</span><span class="p">)</span> <span class="o">+</span> <span class="n">eps</span><span class="p">)</span>
+                <span class="n">p</span><span class="o">.</span><span class="n">detach_inplace</span><span class="p">()</span></div></div>
+</pre></div>
+
+           </div>
+           
+          </div>
+          <footer>
+  
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>
+        &copy; Copyright 2020, Jittor
+
+    </p>
+  </div>
+  Built with <a href="http://sphinx-doc.org/">Sphinx</a> using a <a href="https://github.com/rtfd/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>. 
+
+</footer>
+
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+  
+
+
+  <script type="text/javascript">
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script>
+
+  
+  
+    
+   
+
+</body>
+</html>

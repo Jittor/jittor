@@ -1,0 +1,568 @@
+
+
+<!DOCTYPE html>
+<!--[if IE 8]><html class="no-js lt-ie9" lang="zh-CN" > <![endif]-->
+<!--[if gt IE 8]><!--> <html class="no-js" lang="zh-CN" > <!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <title>jittor.dataset.dataset &mdash; Jittor 1.1.3.1 文档</title>
+  
+
+  
+  
+  
+  
+
+  
+  <script type="text/javascript" src="../../../_static/js/modernizr.min.js"></script>
+  
+    
+      <script type="text/javascript" id="documentation_options" data-url_root="../../../" src="../../../_static/documentation_options.js"></script>
+        <script src="../../../_static/jquery.js"></script>
+        <script src="../../../_static/underscore.js"></script>
+        <script src="../../../_static/doctools.js"></script>
+        <script src="../../../_static/language_data.js"></script>
+        <script src="../../../_static/translations.js"></script>
+    
+    <script type="text/javascript" src="../../../_static/js/theme.js"></script>
+
+    
+
+  
+  <link rel="stylesheet" href="../../../_static/css/theme.css" type="text/css" />
+  <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+    <link rel="index" title="索引" href="../../../genindex.html" />
+    <link rel="search" title="搜索" href="../../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav">
+
+   
+  <div class="wy-grid-for-nav">
+    
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+          
+
+          
+            <a href="../../../index.html" class="icon icon-home"> Jittor
+          
+
+          
+          </a>
+
+          
+            
+            
+          
+
+          
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+
+          
+        </div>
+
+        <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="main navigation">
+          
+            
+            
+              
+            
+            
+              <p class="caption"><span class="caption-text">内容一览:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../README.cn.html">Jittor: 即时编译深度学习框架</a></li>
+</ul>
+<p class="caption"><span class="caption-text">模块API:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../jittor.html">jittor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../jittor.nn.html">jittor.nn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../jittor.models.html">jittor.models</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../jittor.optim.html">jittor.optim</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../jittor.init.html">jittor.init</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../jittor.contrib.html">jittor.contrib</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../jittor.dataset.html">jittor.dataset</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../jittor.transform.html">jittor.transform</a></li>
+</ul>
+<p class="caption"><span class="caption-text">其他:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference external" href="https://cg.cs.tsinghua.edu.cn/jittor/tutorial/">教程</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://cg.cs.tsinghua.edu.cn/jittor/tutorial/">教程1</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../todo.html">TODO</a></li>
+</ul>
+
+            
+          
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+
+      
+      <nav class="wy-nav-top" aria-label="top navigation">
+        
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">Jittor</a>
+        
+      </nav>
+
+
+      <div class="wy-nav-content">
+        
+        <div class="rst-content">
+        
+          
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div role="navigation" aria-label="breadcrumbs navigation">
+
+  <ul class="wy-breadcrumbs">
+    
+      <li><a href="../../../index.html">Docs</a> &raquo;</li>
+        
+          <li><a href="../../index.html">模块代码</a> &raquo;</li>
+        
+          <li><a href="../../jittor.html">jittor</a> &raquo;</li>
+        
+      <li>jittor.dataset.dataset</li>
+    
+    
+      <li class="wy-breadcrumbs-aside">
+        
+      </li>
+    
+  </ul>
+
+  
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+            
+  <h1>jittor.dataset.dataset 源代码</h1><div class="highlight"><pre>
+<span></span><span class="c1"># ***************************************************************</span>
+<span class="c1"># Copyright (c) 2020 Jittor. Authors: </span>
+<span class="c1">#     Meng-Hao Guo &lt;guomenghao1997@gmail.com&gt;</span>
+<span class="c1">#     Dun Liang &lt;randonlang@gmail.com&gt;. </span>
+<span class="c1"># All Rights Reserved.</span>
+<span class="c1"># This file is subject to the terms and conditions defined in</span>
+<span class="c1"># file &#39;LICENSE.txt&#39;, which is part of this source code package.</span>
+<span class="c1"># ***************************************************************</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">from</span> <span class="nn">urllib</span> <span class="kn">import</span> <span class="n">request</span>
+<span class="kn">import</span> <span class="nn">gzip</span>
+<span class="kn">import</span> <span class="nn">pickle</span>
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">from</span> <span class="nn">jittor.dataset.utils</span> <span class="kn">import</span> <span class="n">get_random_list</span><span class="p">,</span> <span class="n">get_order_list</span><span class="p">,</span> <span class="n">collate_batch</span>
+<span class="kn">from</span> <span class="nn">collections.abc</span> <span class="kn">import</span> <span class="n">Sequence</span><span class="p">,</span> <span class="n">Mapping</span>
+<span class="kn">import</span> <span class="nn">pathlib</span>
+<span class="kn">from</span> <span class="nn">PIL</span> <span class="kn">import</span> <span class="n">Image</span>
+<span class="kn">from</span> <span class="nn">jittor_utils.ring_buffer</span> <span class="kn">import</span> <span class="n">RingBuffer</span>
+<span class="kn">import</span> <span class="nn">multiprocessing</span> <span class="k">as</span> <span class="nn">mp</span>
+<span class="kn">import</span> <span class="nn">signal</span>
+<span class="kn">from</span> <span class="nn">jittor_utils</span> <span class="kn">import</span> <span class="n">LOG</span>
+<span class="kn">import</span> <span class="nn">jittor</span> <span class="k">as</span> <span class="nn">jt</span>
+
+<span class="n">dataset_root</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">pathlib</span><span class="o">.</span><span class="n">Path</span><span class="o">.</span><span class="n">home</span><span class="p">(),</span> <span class="s2">&quot;.cache&quot;</span><span class="p">,</span> <span class="s2">&quot;jittor&quot;</span><span class="p">,</span> <span class="s2">&quot;dataset&quot;</span><span class="p">)</span>
+<span class="n">mp_log_v</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;mp_log_v&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span> 
+<span class="n">mpi</span> <span class="o">=</span> <span class="n">jt</span><span class="o">.</span><span class="n">mpi</span>
+
+<span class="k">class</span> <span class="nc">Worker</span><span class="p">:</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">target</span><span class="p">,</span> <span class="n">args</span><span class="p">,</span> <span class="n">buffer_size</span><span class="p">):</span>
+        <span class="n">buffer</span> <span class="o">=</span> <span class="n">mp</span><span class="o">.</span><span class="n">Array</span><span class="p">(</span><span class="s1">&#39;c&#39;</span><span class="p">,</span> <span class="n">buffer_size</span><span class="p">,</span> <span class="n">lock</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">buffer</span> <span class="o">=</span> <span class="n">RingBuffer</span><span class="p">(</span><span class="n">buffer</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">p</span> <span class="o">=</span> <span class="n">mp</span><span class="o">.</span><span class="n">Process</span><span class="p">(</span><span class="n">target</span><span class="o">=</span><span class="n">target</span><span class="p">,</span> <span class="n">args</span><span class="o">=</span><span class="n">args</span><span class="o">+</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">buffer</span><span class="p">,))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">p</span><span class="o">.</span><span class="n">daemon</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">p</span><span class="o">.</span><span class="n">start</span><span class="p">()</span>
+
+<div class="viewcode-block" id="Dataset"><a class="viewcode-back" href="../../../jittor.dataset.html#jittor.dataset.Dataset">[文档]</a><span class="k">class</span> <span class="nc">Dataset</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="sd">&#39;&#39;&#39;</span>
+<span class="sd">    Base class for reading data.</span>
+
+<span class="sd">    Args::</span>
+
+<span class="sd">        [in] batch_size(int): batch size, default 16.</span>
+<span class="sd">        [in] shuffle(bool): shuffle at each epoch, default False.</span>
+<span class="sd">        [in] drop_last(bool): if true, the last batch of dataset might smaller than batch_size, default True.</span>
+<span class="sd">        [in] num_workers(int): number of workers for loading data.</span>
+<span class="sd">        [in] buffer_size(int): buffer size for each worker in bytes, default(512MB).</span>
+<span class="sd">    </span>
+<span class="sd">    Example::</span>
+
+<span class="sd">        class YourDataset(Dataset):</span>
+<span class="sd">            def __init__(self):</span>
+<span class="sd">                super().__init__()</span>
+<span class="sd">                self.set_attrs(total_len=1024)</span>
+
+<span class="sd">            def __getitem__(self, k):</span>
+<span class="sd">                return k, k*k</span>
+
+<span class="sd">        dataset = YourDataset().set_attrs(batch_size=256, shuffle=True)</span>
+<span class="sd">        for x, y in dataset:</span>
+<span class="sd">            ......</span>
+<span class="sd">    &#39;&#39;&#39;</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span>
+                 <span class="n">batch_size</span> <span class="o">=</span> <span class="mi">16</span><span class="p">,</span>
+                 <span class="n">shuffle</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+                 <span class="n">drop_last</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+                 <span class="n">num_workers</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
+                 <span class="n">buffer_size</span> <span class="o">=</span> <span class="mi">512</span><span class="o">*</span><span class="mi">1024</span><span class="o">*</span><span class="mi">1024</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">total_len</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span> <span class="o">=</span> <span class="n">batch_size</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">shuffle</span> <span class="o">=</span> <span class="n">shuffle</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">drop_last</span> <span class="o">=</span> <span class="n">drop_last</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_workers</span> <span class="o">=</span> <span class="n">num_workers</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">buffer_size</span> <span class="o">=</span> <span class="n">buffer_size</span>
+
+    <span class="k">def</span> <span class="fm">__getitem__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">index</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span>
+
+    <span class="k">def</span> <span class="fm">__len__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">total_len</span> <span class="o">&gt;=</span> <span class="mi">0</span>
+        <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span> <span class="o">&gt;</span> <span class="mi">0</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">drop_last</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">total_len</span> <span class="o">//</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span>
+        <span class="k">return</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">total_len</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span> <span class="o">//</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span> <span class="o">+</span> <span class="mi">1</span>
+
+<div class="viewcode-block" id="Dataset.set_attrs"><a class="viewcode-back" href="../../../jittor.dataset.html#jittor.dataset.Dataset.set_attrs">[文档]</a>    <span class="k">def</span> <span class="nf">set_attrs</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">**</span><span class="n">kw</span><span class="p">):</span>
+        <span class="sd">&#39;&#39;&#39; </span>
+<span class="sd">        You can set attributes of dataset by using set_attrs function, including total_len, batch_size, shuffle, drop_last, num_workers, buffer_size.</span>
+<span class="sd">        </span>
+<span class="sd">        Example::</span>
+
+<span class="sd">            dataset = YourDataset().set_attrs(batch_size=256, shuffle=True)</span>
+<span class="sd">        &#39;&#39;&#39;</span>
+        <span class="k">for</span> <span class="n">k</span><span class="p">,</span><span class="n">v</span> <span class="ow">in</span> <span class="n">kw</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="k">assert</span> <span class="nb">hasattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">k</span><span class="p">),</span> <span class="n">k</span>
+            <span class="nb">setattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span></div>
+
+<div class="viewcode-block" id="Dataset.to_jittor"><a class="viewcode-back" href="../../../jittor.dataset.html#jittor.dataset.Dataset.to_jittor">[文档]</a>    <span class="k">def</span> <span class="nf">to_jittor</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">batch</span><span class="p">):</span>
+        <span class="sd">&#39;&#39;&#39;</span>
+<span class="sd">        Change batch data to jittor array, such as np.ndarray, int, and float.</span>
+<span class="sd">        &#39;&#39;&#39;</span>
+
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">batch</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">):</span>
+            <span class="k">return</span> <span class="n">jt</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">batch</span><span class="p">)</span>
+        <span class="k">assert</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">batch</span><span class="p">,</span> <span class="n">Sequence</span><span class="p">)</span>
+        <span class="n">new_batch</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">batch</span><span class="p">:</span>
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="ow">or</span> \
+                <span class="nb">isinstance</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="nb">int</span><span class="p">)</span> <span class="ow">or</span> \
+                <span class="nb">isinstance</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="nb">float</span><span class="p">):</span>
+                <span class="n">new_batch</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">jt</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">a</span><span class="p">))</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">new_batch</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">a</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">new_batch</span></div>
+
+<div class="viewcode-block" id="Dataset.collate_batch"><a class="viewcode-back" href="../../../jittor.dataset.html#jittor.dataset.Dataset.collate_batch">[文档]</a>    <span class="k">def</span> <span class="nf">collate_batch</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">batch</span><span class="p">):</span>
+        <span class="sd">&#39;&#39;&#39;</span>
+<span class="sd">        Puts each data field into a tensor with outer dimension batch size.</span>
+
+<span class="sd">        Args::</span>
+
+<span class="sd">        [in] batch(list): A list of variables, such as jt.var, Image.Image, np.ndarray, int, float, str and so on.</span>
+
+<span class="sd">        &#39;&#39;&#39;</span>
+        <span class="k">return</span> <span class="n">collate_batch</span><span class="p">(</span><span class="n">batch</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="Dataset.terminate"><a class="viewcode-back" href="../../../jittor.dataset.html#jittor.dataset.Dataset.terminate">[文档]</a>    <span class="k">def</span> <span class="nf">terminate</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="sd">&#39;&#39;&#39;</span>
+<span class="sd">        Terminate is used to terminate multi-process worker reading data.</span>
+<span class="sd">        &#39;&#39;&#39;</span>
+        <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;workers&quot;</span><span class="p">):</span>
+            <span class="k">for</span> <span class="n">w</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">workers</span><span class="p">:</span>
+                <span class="n">w</span><span class="o">.</span><span class="n">p</span><span class="o">.</span><span class="n">terminate</span><span class="p">()</span></div>
+    
+    <span class="k">def</span> <span class="nf">_worker_main</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">worker_id</span><span class="p">,</span> <span class="n">buffer</span><span class="p">):</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">gid_obj</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="o">.</span><span class="n">get_obj</span><span class="p">()</span>
+            <span class="n">gid_lock</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="o">.</span><span class="n">get_lock</span><span class="p">()</span>
+            <span class="k">while</span> <span class="kc">True</span><span class="p">:</span>
+                <span class="k">with</span> <span class="n">gid_lock</span><span class="p">:</span>
+                    <span class="k">while</span> <span class="n">gid_obj</span><span class="o">.</span><span class="n">value</span> <span class="o">&gt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_len</span><span class="p">:</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">num_idle</span><span class="o">.</span><span class="n">value</span> <span class="o">+=</span> <span class="mi">1</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">num_idle_c</span><span class="o">.</span><span class="n">notify</span><span class="p">()</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">gidc</span><span class="o">.</span><span class="n">wait</span><span class="p">()</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">num_idle</span><span class="o">.</span><span class="n">value</span> <span class="o">-=</span> <span class="mi">1</span>
+                    <span class="n">cid</span> <span class="o">=</span> <span class="n">gid_obj</span><span class="o">.</span><span class="n">value</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">idmap</span><span class="p">[</span><span class="n">cid</span><span class="p">]</span> <span class="o">=</span> <span class="n">worker_id</span>
+                    <span class="n">gid_obj</span><span class="o">.</span><span class="n">value</span> <span class="o">+=</span> <span class="mi">1</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">gidc</span><span class="o">.</span><span class="n">notify</span><span class="p">()</span>
+                <span class="n">batch</span> <span class="o">=</span> <span class="p">[]</span>
+                <span class="k">if</span> <span class="n">mp_log_v</span><span class="p">:</span>
+                    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;#</span><span class="si">{worker_id}</span><span class="s2"> {os.getpid()} load batch&quot;</span><span class="p">,</span> <span class="n">cid</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">real_batch_size</span><span class="p">,</span> <span class="nb">min</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">real_len</span><span class="p">,</span> <span class="p">(</span><span class="n">cid</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">real_batch_size</span><span class="p">))</span>
+                <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">cid</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">real_batch_size</span><span class="p">,</span> <span class="nb">min</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">real_len</span><span class="p">,</span> <span class="p">(</span><span class="n">cid</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">real_batch_size</span><span class="p">)):</span>
+                    <span class="n">batch</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="bp">self</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">index_list</span><span class="p">[</span><span class="n">i</span><span class="p">]])</span>
+                <span class="n">batch</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">collate_batch</span><span class="p">(</span><span class="n">batch</span><span class="p">)</span>
+                <span class="k">if</span> <span class="n">mp_log_v</span><span class="p">:</span>
+                    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;#</span><span class="si">{worker_id}</span><span class="s2"> {os.getpid()} send&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="p">(</span><span class="n">batch</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="p">,</span> <span class="p">[</span> <span class="nb">type</span><span class="p">(</span><span class="n">b</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span> <span class="k">for</span> <span class="n">b</span> <span class="ow">in</span> <span class="n">batch</span> <span class="p">],</span> <span class="n">buffer</span><span class="p">)</span>
+                <span class="n">buffer</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">batch</span><span class="p">)</span>
+        <span class="k">except</span><span class="p">:</span>
+            <span class="n">os</span><span class="o">.</span><span class="n">kill</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">getppid</span><span class="p">(),</span> <span class="n">signal</span><span class="o">.</span><span class="n">SIGINT</span><span class="p">)</span>
+            <span class="k">raise</span>
+
+    <span class="k">def</span> <span class="nf">_stop_all_workers</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="c1"># wait until all workers idle</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_idle</span><span class="o">.</span><span class="n">value</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_workers</span><span class="p">:</span>
+            <span class="k">with</span> <span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="o">.</span><span class="n">get_lock</span><span class="p">():</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="o">.</span><span class="n">get_obj</span><span class="p">()</span><span class="o">.</span><span class="n">value</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_len</span>
+                <span class="k">if</span> <span class="n">mp_log_v</span><span class="p">:</span>
+                    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;idle num&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_idle</span><span class="o">.</span><span class="n">value</span><span class="p">)</span>
+                <span class="k">while</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_idle</span><span class="o">.</span><span class="n">value</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_workers</span><span class="p">:</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">num_idle_c</span><span class="o">.</span><span class="n">wait</span><span class="p">()</span>
+                    <span class="k">if</span> <span class="n">mp_log_v</span><span class="p">:</span>
+                        <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;idle num&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_idle</span><span class="o">.</span><span class="n">value</span><span class="p">)</span>
+        <span class="c1"># clean workers&#39; buffer</span>
+        <span class="k">for</span> <span class="n">w</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">workers</span><span class="p">:</span>
+            <span class="n">w</span><span class="o">.</span><span class="n">buffer</span><span class="o">.</span><span class="n">clear</span><span class="p">()</span>
+            
+    <span class="k">def</span> <span class="nf">_init_workers</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">index_list</span> <span class="o">=</span> <span class="n">mp</span><span class="o">.</span><span class="n">Array</span><span class="p">(</span><span class="s1">&#39;i&#39;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">real_len</span><span class="p">,</span> <span class="n">lock</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="n">workers</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="c1"># batch id to worker id</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">idmap</span> <span class="o">=</span> <span class="n">mp</span><span class="o">.</span><span class="n">Array</span><span class="p">(</span><span class="s1">&#39;i&#39;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_len</span><span class="p">,</span> <span class="n">lock</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="c1"># global token index</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">gid</span> <span class="o">=</span> <span class="n">mp</span><span class="o">.</span><span class="n">Value</span><span class="p">(</span><span class="s1">&#39;i&#39;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_len</span><span class="p">)</span>
+        <span class="c1"># global token index condition</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">gidc</span> <span class="o">=</span> <span class="n">mp</span><span class="o">.</span><span class="n">Condition</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="o">.</span><span class="n">get_lock</span><span class="p">())</span>
+        <span class="c1"># number of idle workers</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_idle</span> <span class="o">=</span> <span class="n">mp</span><span class="o">.</span><span class="n">Value</span><span class="p">(</span><span class="s1">&#39;i&#39;</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">lock</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="c1"># number of idle workers condition</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_idle_c</span> <span class="o">=</span> <span class="n">mp</span><span class="o">.</span><span class="n">Condition</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="o">.</span><span class="n">get_lock</span><span class="p">())</span>
+        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_workers</span><span class="p">):</span>
+            <span class="n">w</span> <span class="o">=</span> <span class="n">Worker</span><span class="p">(</span><span class="n">target</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_worker_main</span><span class="p">,</span> <span class="n">args</span><span class="o">=</span><span class="p">(</span><span class="n">i</span><span class="p">,),</span> 
+                       <span class="n">buffer_size</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">buffer_size</span><span class="p">)</span>
+            <span class="n">workers</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">w</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">workers</span> <span class="o">=</span> <span class="n">workers</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">index_list_numpy</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="s1">&#39;int32&#39;</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">real_len</span><span class="p">,</span> <span class="n">buffer</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">index_list</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="fm">__del__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">mp_log_v</span><span class="p">:</span>
+            <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;dataset deleted&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">terminate</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="fm">__iter__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">shuffle</span> <span class="o">==</span> <span class="kc">False</span><span class="p">:</span>
+            <span class="n">index_list</span> <span class="o">=</span> <span class="n">get_order_list</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">total_len</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">index_list</span> <span class="o">=</span> <span class="n">get_random_list</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">total_len</span><span class="p">)</span>
+        
+        <span class="c1"># scatter index_list for all mpi process</span>
+        <span class="c1"># scatter rule:</span>
+        <span class="c1">#   batch 1   batch 2</span>
+        <span class="c1"># [........] [........] ...</span>
+        <span class="c1">#  00011122   00011122</span>
+        <span class="c1"># if last batch is smaller than world_size</span>
+        <span class="c1"># pad to world_size</span>
+        <span class="c1">#  last batch</span>
+        <span class="c1"># [.] -&gt; [012]</span>
+        <span class="k">if</span> <span class="n">mpi</span><span class="p">:</span>
+            <span class="n">world_size</span> <span class="o">=</span> <span class="n">mpi</span><span class="o">.</span><span class="n">world_size</span><span class="p">()</span>
+            <span class="n">world_rank</span> <span class="o">=</span> <span class="n">mpi</span><span class="o">.</span><span class="n">world_rank</span><span class="p">()</span>
+            <span class="n">index_list</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">int32</span><span class="p">(</span><span class="n">index_list</span><span class="p">)</span>
+            <span class="n">mpi</span><span class="o">.</span><span class="n">broadcast</span><span class="p">(</span><span class="n">index_list</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+
+            <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span> <span class="o">&gt;=</span> <span class="n">world_size</span><span class="p">,</span> \
+                <span class="sa">f</span><span class="s2">&quot;Batch size(</span><span class="si">{self.batch_size}</span><span class="s2">) is smaller than MPI world_size(</span><span class="si">{world_size}</span><span class="s2">)&quot;</span>
+            <span class="n">real_batch_size</span> <span class="o">=</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span> <span class="o">//</span> <span class="n">world_size</span> <span class="o">+</span> <span class="mi">1</span>
+            <span class="k">if</span> <span class="n">real_batch_size</span> <span class="o">*</span> <span class="n">world_size</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span><span class="p">:</span>
+                <span class="n">LOG</span><span class="o">.</span><span class="n">w</span><span class="p">(</span><span class="s2">&quot;Batch size is not divisible by MPI world size, &quot;</span>
+                      <span class="s2">&quot;The distributed version may be different from &quot;</span>
+                      <span class="s2">&quot;the single-process version.&quot;</span><span class="p">)</span>
+            <span class="n">fix_batch</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">total_len</span> <span class="o">//</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span>
+            <span class="n">last_batch</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">total_len</span> <span class="o">-</span> <span class="n">fix_batch</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span>
+            <span class="n">fix_batch_l</span> <span class="o">=</span> <span class="n">index_list</span><span class="p">[</span><span class="mi">0</span><span class="p">:</span><span class="n">fix_batch</span><span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span><span class="p">]</span> \
+                <span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span><span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span><span class="p">)</span>
+            <span class="n">fix_batch_l</span> <span class="o">=</span> <span class="n">fix_batch_l</span><span class="p">[</span>
+                <span class="p">:,</span><span class="n">real_batch_size</span><span class="o">*</span><span class="n">world_rank</span><span class="p">:</span><span class="n">real_batch_size</span><span class="o">*</span><span class="p">(</span><span class="n">world_rank</span><span class="o">+</span><span class="mi">1</span><span class="p">)]</span>
+            <span class="n">real_batch_size</span> <span class="o">=</span> <span class="n">fix_batch_l</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+            <span class="n">fix_batch_l</span> <span class="o">=</span> <span class="n">fix_batch_l</span><span class="o">.</span><span class="n">flatten</span><span class="p">()</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">drop_last</span> <span class="ow">and</span> <span class="n">last_batch</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="n">last_batch_l</span> <span class="o">=</span> <span class="n">index_list</span><span class="p">[</span><span class="o">-</span><span class="n">last_batch</span><span class="p">:]</span>
+                <span class="n">real_last_batch</span> <span class="o">=</span> <span class="p">(</span><span class="n">last_batch</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="o">//</span><span class="n">world_size</span><span class="o">+</span><span class="mi">1</span>
+                <span class="n">l</span> <span class="o">=</span> <span class="n">real_last_batch</span> <span class="o">*</span> <span class="n">world_rank</span>
+                <span class="n">r</span> <span class="o">=</span> <span class="n">l</span> <span class="o">+</span> <span class="n">real_last_batch</span>
+                <span class="k">if</span> <span class="n">r</span> <span class="o">&gt;</span> <span class="n">last_batch</span><span class="p">:</span> <span class="n">r</span> <span class="o">=</span> <span class="n">last_batch</span>
+                <span class="k">if</span> <span class="n">l</span> <span class="o">&gt;=</span> <span class="n">r</span><span class="p">:</span> <span class="n">l</span> <span class="o">=</span> <span class="n">r</span><span class="o">-</span><span class="mi">1</span>
+                <span class="n">index_list</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">([</span><span class="n">fix_batch_l</span><span class="p">,</span> <span class="n">last_batch_l</span><span class="p">[</span><span class="n">l</span><span class="p">:</span><span class="n">r</span><span class="p">]])</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">index_list</span> <span class="o">=</span> <span class="n">fix_batch_l</span>
+
+            <span class="bp">self</span><span class="o">.</span><span class="n">real_len</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">index_list</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">real_batch_size</span> <span class="o">=</span> <span class="n">real_batch_size</span>
+            <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">total_len</span> <span class="o">//</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span> <span class="o">==</span> \
+                <span class="bp">self</span><span class="o">.</span><span class="n">real_len</span> <span class="o">//</span> <span class="bp">self</span><span class="o">.</span><span class="n">real_batch_size</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">real_len</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">total_len</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">real_batch_size</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span>
+            
+        <span class="bp">self</span><span class="o">.</span><span class="n">batch_len</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
+        
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">hasattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;workers&quot;</span><span class="p">)</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_workers</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_init_workers</span><span class="p">()</span>
+        
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_workers</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_stop_all_workers</span><span class="p">()</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">index_list_numpy</span><span class="p">[:]</span> <span class="o">=</span> <span class="n">index_list</span>
+            <span class="n">gid_obj</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="o">.</span><span class="n">get_obj</span><span class="p">()</span>
+            <span class="n">gid_lock</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">gid</span><span class="o">.</span><span class="n">get_lock</span><span class="p">()</span>
+            <span class="k">with</span> <span class="n">gid_lock</span><span class="p">:</span>
+                <span class="n">gid_obj</span><span class="o">.</span><span class="n">value</span> <span class="o">=</span> <span class="mi">0</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">gidc</span><span class="o">.</span><span class="n">notify_all</span><span class="p">()</span>
+            <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">batch_len</span><span class="p">):</span>
+                <span class="c1"># try not get lock first</span>
+                <span class="k">if</span> <span class="n">gid_obj</span><span class="o">.</span><span class="n">value</span> <span class="o">&lt;=</span> <span class="n">i</span><span class="p">:</span>
+                    <span class="k">with</span> <span class="n">gid_lock</span><span class="p">:</span>
+                        <span class="k">if</span> <span class="n">gid_obj</span><span class="o">.</span><span class="n">value</span> <span class="o">&lt;=</span> <span class="n">i</span><span class="p">:</span>
+                            <span class="k">if</span> <span class="n">mp_log_v</span><span class="p">:</span>
+                                <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;wait&quot;</span><span class="p">)</span>
+                            <span class="bp">self</span><span class="o">.</span><span class="n">gidc</span><span class="o">.</span><span class="n">wait</span><span class="p">()</span>
+                <span class="n">worker_id</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">idmap</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+                <span class="n">w</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">workers</span><span class="p">[</span><span class="n">worker_id</span><span class="p">]</span>
+                <span class="k">if</span> <span class="n">mp_log_v</span><span class="p">:</span>
+                    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;#</span><span class="si">{worker_id}</span><span class="s2"> {os.getpid()} recv buffer&quot;</span><span class="p">,</span> <span class="n">w</span><span class="o">.</span><span class="n">buffer</span><span class="p">)</span>
+                <span class="n">batch</span> <span class="o">=</span> <span class="n">w</span><span class="o">.</span><span class="n">buffer</span><span class="o">.</span><span class="n">recv</span><span class="p">()</span>
+                <span class="k">if</span> <span class="n">mp_log_v</span><span class="p">:</span>
+                    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;#</span><span class="si">{worker_id}</span><span class="s2"> {os.getpid()} recv&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="p">(</span><span class="n">batch</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="p">,</span> <span class="p">[</span> <span class="nb">type</span><span class="p">(</span><span class="n">b</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span> <span class="k">for</span> <span class="n">b</span> <span class="ow">in</span> <span class="n">batch</span> <span class="p">])</span>
+                <span class="n">batch</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">to_jittor</span><span class="p">(</span><span class="n">batch</span><span class="p">)</span>
+                <span class="k">yield</span> <span class="n">batch</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">batch_data</span> <span class="o">=</span> <span class="p">[]</span>
+            <span class="k">for</span> <span class="n">idx</span> <span class="ow">in</span> <span class="n">index_list</span><span class="p">:</span>
+                <span class="n">batch_data</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="bp">self</span><span class="p">[</span><span class="nb">int</span><span class="p">(</span><span class="n">idx</span><span class="p">)])</span>
+                <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">batch_data</span><span class="p">)</span> <span class="o">==</span> <span class="bp">self</span><span class="o">.</span><span class="n">real_batch_size</span><span class="p">:</span>
+                    <span class="n">batch_data</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">collate_batch</span><span class="p">(</span><span class="n">batch_data</span><span class="p">)</span>
+                    <span class="n">batch_data</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">to_jittor</span><span class="p">(</span><span class="n">batch_data</span><span class="p">)</span>
+                    <span class="k">yield</span> <span class="n">batch_data</span>
+                    <span class="n">batch_data</span> <span class="o">=</span> <span class="p">[]</span>
+
+            <span class="c1"># depend on drop_last</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">drop_last</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">batch_data</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+                <span class="n">batch_data</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">collate_batch</span><span class="p">(</span><span class="n">batch_data</span><span class="p">)</span>
+                <span class="n">batch_data</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">to_jittor</span><span class="p">(</span><span class="n">batch_data</span><span class="p">)</span>
+                <span class="k">yield</span> <span class="n">batch_data</span></div>
+
+
+<div class="viewcode-block" id="ImageFolder"><a class="viewcode-back" href="../../../jittor.dataset.html#jittor.dataset.ImageFolder">[文档]</a><span class="k">class</span> <span class="nc">ImageFolder</span><span class="p">(</span><span class="n">Dataset</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    A image classify dataset, load image and label from directory::</span>
+<span class="sd">    </span>
+<span class="sd">        * root/label1/img1.png</span>
+<span class="sd">        * root/label1/img2.png</span>
+<span class="sd">        * ...</span>
+<span class="sd">        * root/label2/img1.png</span>
+<span class="sd">        * root/label2/img2.png</span>
+<span class="sd">        * ...</span>
+
+<span class="sd">    Args::</span>
+
+<span class="sd">        [in] root(string): Root directory path.</span>
+
+<span class="sd">    Attributes::</span>
+
+<span class="sd">        * classes(list): List of the class names.</span>
+<span class="sd">        * class_to_idx(dict): map from class_name to class_index.</span>
+<span class="sd">        * imgs(list): List of (image_path, class_index) tuples</span>
+
+<span class="sd">    Example::</span>
+
+<span class="sd">        train_dir = &#39;./data/celebA_train&#39;</span>
+<span class="sd">        train_loader = ImageFolder(train_dir).set_attrs(batch_size=batch_size, shuffle=True)</span>
+<span class="sd">        for batch_idx, (x_, target) in enumerate(train_loader):</span>
+<span class="sd">            ...</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">root</span><span class="p">,</span> <span class="n">transform</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="c1"># import ipdb; ipdb.set_trace()</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">root</span> <span class="o">=</span> <span class="n">root</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">transform</span> <span class="o">=</span> <span class="n">transform</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">classes</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">([</span><span class="n">d</span><span class="o">.</span><span class="n">name</span> <span class="k">for</span> <span class="n">d</span> <span class="ow">in</span> <span class="n">os</span><span class="o">.</span><span class="n">scandir</span><span class="p">(</span><span class="n">root</span><span class="p">)</span> <span class="k">if</span> <span class="n">d</span><span class="o">.</span><span class="n">is_dir</span><span class="p">()])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">class_to_idx</span> <span class="o">=</span> <span class="p">{</span><span class="n">v</span><span class="p">:</span><span class="n">k</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span><span class="n">v</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">classes</span><span class="p">)}</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">imgs</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">image_exts</span> <span class="o">=</span> <span class="nb">set</span><span class="p">((</span><span class="s1">&#39;.jpg&#39;</span><span class="p">,</span> <span class="s1">&#39;.jpeg&#39;</span><span class="p">,</span> <span class="s1">&#39;.png&#39;</span><span class="p">,</span> <span class="s1">&#39;.bmp&#39;</span><span class="p">,</span> <span class="s1">&#39;.tif&#39;</span><span class="p">,</span> <span class="s1">&#39;.tiff&#39;</span><span class="p">))</span>
+        
+        <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">class_name</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">classes</span><span class="p">):</span>
+            <span class="n">class_dir</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">root</span><span class="p">,</span> <span class="n">class_name</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">dname</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">fnames</span> <span class="ow">in</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">walk</span><span class="p">(</span><span class="n">class_dir</span><span class="p">,</span> <span class="n">followlinks</span><span class="o">=</span><span class="kc">True</span><span class="p">)):</span>
+                <span class="k">for</span> <span class="n">fname</span> <span class="ow">in</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">fnames</span><span class="p">):</span>
+                    <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">splitext</span><span class="p">(</span><span class="n">fname</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span> <span class="ow">in</span> <span class="n">image_exts</span><span class="p">:</span>
+                        <span class="n">path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">class_dir</span><span class="p">,</span> <span class="n">fname</span><span class="p">)</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">imgs</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">path</span><span class="p">,</span> <span class="n">i</span><span class="p">))</span>
+        <span class="n">LOG</span><span class="o">.</span><span class="n">i</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Found {len(self.classes)} classes and {len(self.imgs)} images.&quot;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">set_attrs</span><span class="p">(</span><span class="n">total_len</span><span class="o">=</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">imgs</span><span class="p">))</span>
+        
+    <span class="k">def</span> <span class="fm">__getitem__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">k</span><span class="p">):</span>
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">imgs</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="mi">0</span><span class="p">],</span> <span class="s1">&#39;rb&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+            <span class="n">img</span> <span class="o">=</span> <span class="n">Image</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">f</span><span class="p">)</span><span class="o">.</span><span class="n">convert</span><span class="p">(</span><span class="s1">&#39;RGB&#39;</span><span class="p">)</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">transform</span><span class="p">:</span>
+                <span class="n">img</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">transform</span><span class="p">(</span><span class="n">img</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">img</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">imgs</span><span class="p">[</span><span class="n">k</span><span class="p">][</span><span class="mi">1</span><span class="p">]</span></div>
+</pre></div>
+
+           </div>
+           
+          </div>
+          <footer>
+  
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>
+        &copy; Copyright 2020, Jittor
+
+    </p>
+  </div>
+  Built with <a href="http://sphinx-doc.org/">Sphinx</a> using a <a href="https://github.com/rtfd/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>. 
+
+</footer>
+
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+  
+
+
+  <script type="text/javascript">
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script>
+
+  
+  
+    
+   
+
+</body>
+</html>

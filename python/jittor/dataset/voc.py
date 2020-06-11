@@ -15,6 +15,25 @@ import cv2
 from .dataset import Dataset, dataset_root
 
 class VOC(Dataset):
+    '''
+    Jittor's own class for loading VOC dataset.
+
+    Args::
+
+        [in] data_root(str): your data root.
+        [in] split(str): which split you want to use, train or val.
+    
+    Attribute::
+
+        NUM_CLASSES: Number of total categories, default is 21.
+
+    Example::
+
+        from jittor.dataset.voc import VOC
+        train_loader = VOC(data_root='...').set_attrs(batch_size=16, shuffle=True)
+        for i, (imgs, target) in enumerate(train_loader):
+            ...
+    '''
     NUM_CLASSES = 21
     def __init__(self, data_root=dataset_root+'/voc/', split='train'):
         super().__init__()

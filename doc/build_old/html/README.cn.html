@@ -1,0 +1,545 @@
+
+
+<!DOCTYPE html>
+<!--[if IE 8]><html class="no-js lt-ie9" lang="zh-CN" > <![endif]-->
+<!--[if gt IE 8]><!--> <html class="no-js" lang="zh-CN" > <!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <title>Jittor: 即时编译深度学习框架 &mdash; Jittor 1.1.3.1 文档</title>
+  
+
+  
+  
+  
+  
+
+  
+  <script type="text/javascript" src="_static/js/modernizr.min.js"></script>
+  
+    
+      <script type="text/javascript" id="documentation_options" data-url_root="./" src="_static/documentation_options.js"></script>
+        <script src="_static/jquery.js"></script>
+        <script src="_static/underscore.js"></script>
+        <script src="_static/doctools.js"></script>
+        <script src="_static/language_data.js"></script>
+        <script src="_static/translations.js"></script>
+    
+    <script type="text/javascript" src="_static/js/theme.js"></script>
+
+    
+
+  
+  <link rel="stylesheet" href="_static/css/theme.css" type="text/css" />
+  <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
+    <link rel="index" title="索引" href="genindex.html" />
+    <link rel="search" title="搜索" href="search.html" />
+    <link rel="next" title="jittor" href="jittor.html" />
+    <link rel="prev" title="欢迎查阅计图文档" href="index.html" /> 
+</head>
+
+<body class="wy-body-for-nav">
+
+   
+  <div class="wy-grid-for-nav">
+    
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+          
+
+          
+            <a href="index.html" class="icon icon-home"> Jittor
+          
+
+          
+          </a>
+
+          
+            
+            
+          
+
+          
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+
+          
+        </div>
+
+        <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="main navigation">
+          
+            
+            
+              
+            
+            
+              <p class="caption"><span class="caption-text">内容一览:</span></p>
+<ul class="current">
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Jittor: 即时编译深度学习框架</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#id1">大纲</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id2">快速开始</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id3">安装</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#pip">Pip 安装</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id4">一键脚本安装</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id5">手动安装</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#id6">步骤一：选择您的后端编译器</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#pythonpython-dev">步骤二：安装Python和python-dev</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#id7">步骤三：运行Jittor</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#cuda">可选步骤四：启用CUDA</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#id8">可选步骤五：进行完整测试</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#id9">教程</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#id10">数据类型</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#id11">数据运算</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#id12">更多教程</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#id13">贡献</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id14">联系我们</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id15">团队</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#id16">版权声明</a></li>
+</ul>
+</li>
+</ul>
+<p class="caption"><span class="caption-text">模块API:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="jittor.html">jittor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="jittor.nn.html">jittor.nn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="jittor.models.html">jittor.models</a></li>
+<li class="toctree-l1"><a class="reference internal" href="jittor.optim.html">jittor.optim</a></li>
+<li class="toctree-l1"><a class="reference internal" href="jittor.init.html">jittor.init</a></li>
+<li class="toctree-l1"><a class="reference internal" href="jittor.contrib.html">jittor.contrib</a></li>
+<li class="toctree-l1"><a class="reference internal" href="jittor.dataset.html">jittor.dataset</a></li>
+<li class="toctree-l1"><a class="reference internal" href="jittor.transform.html">jittor.transform</a></li>
+</ul>
+<p class="caption"><span class="caption-text">其他:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference external" href="https://cg.cs.tsinghua.edu.cn/jittor/tutorial/">教程</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://cg.cs.tsinghua.edu.cn/jittor/tutorial/">教程1</a></li>
+<li class="toctree-l1"><a class="reference internal" href="todo.html">TODO</a></li>
+</ul>
+
+            
+          
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+
+      
+      <nav class="wy-nav-top" aria-label="top navigation">
+        
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="index.html">Jittor</a>
+        
+      </nav>
+
+
+      <div class="wy-nav-content">
+        
+        <div class="rst-content">
+        
+          
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div role="navigation" aria-label="breadcrumbs navigation">
+
+  <ul class="wy-breadcrumbs">
+    
+      <li><a href="index.html">Docs</a> &raquo;</li>
+        
+      <li>Jittor: 即时编译深度学习框架</li>
+    
+    
+      <li class="wy-breadcrumbs-aside">
+        
+            
+            <a href="_sources/README.cn.md.txt" rel="nofollow"> View page source</a>
+          
+        
+      </li>
+    
+  </ul>
+
+  
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+            
+  <div class="section" id="jittor">
+<h1>Jittor: 即时编译深度学习框架<a class="headerlink" href="#jittor" title="永久链接至标题">¶</a></h1>
+<p><a class="reference external" href="#%E5%BF%AB%E9%80%9F%E5%BC%80%E5%A7%8B">快速开始</a> | <a class="reference external" href="#%E5%AE%89%E8%A3%85">安装</a> | <a class="reference external" href="#%E6%95%99%E7%A8%8B">教程</a></p>
+<p>Jittor 是一个基于即时编译和元算子的高性能深度学习框架，整个框架在即时编译的同时，还集成了强大的Op编译器和调优器，为您的模型生成定制化的高性能代码。</p>
+<p>Jittor前端语言为Python。前端使用了模块化的设计，这是目前最主流的深度学习框架接口设计。后端则使用高性能语言编写，如CUDA，C++。</p>
+<p>下面的代码演示了如何一步一步使用Python代码，从头对一个双层神经网络建模。</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">jittor</span> <span class="k">as</span> <span class="nn">jt</span>
+<span class="kn">from</span> <span class="nn">jittor</span> <span class="kn">import</span> <span class="n">Module</span>
+<span class="kn">from</span> <span class="nn">jittor</span> <span class="kn">import</span> <span class="n">nn</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+
+<span class="k">class</span> <span class="nc">Model</span><span class="p">(</span><span class="n">Module</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">layer1</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Linear</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">10</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">relu</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Relu</span><span class="p">()</span> 
+        <span class="bp">self</span><span class="o">.</span><span class="n">layer2</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Linear</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+    <span class="k">def</span> <span class="nf">execute</span> <span class="p">(</span><span class="bp">self</span><span class="p">,</span><span class="n">x</span><span class="p">)</span> <span class="p">:</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">layer1</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">relu</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">layer2</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">x</span>
+
+<span class="k">def</span> <span class="nf">get_data</span><span class="p">(</span><span class="n">n</span><span class="p">):</span> <span class="c1"># generate random data for training test.</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n</span><span class="p">):</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">batch_size</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="n">y</span> <span class="o">=</span> <span class="n">x</span><span class="o">*</span><span class="n">x</span>
+        <span class="k">yield</span> <span class="n">jt</span><span class="o">.</span><span class="n">float32</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="n">jt</span><span class="o">.</span><span class="n">float32</span><span class="p">(</span><span class="n">y</span><span class="p">)</span>
+
+
+<span class="n">learning_rate</span> <span class="o">=</span> <span class="mf">0.1</span>
+<span class="n">batch_size</span> <span class="o">=</span> <span class="mi">50</span>
+<span class="n">n</span> <span class="o">=</span> <span class="mi">1000</span>
+
+<span class="n">model</span> <span class="o">=</span> <span class="n">Model</span><span class="p">()</span>
+<span class="n">optim</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">SGD</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">parameters</span><span class="p">(),</span> <span class="n">learning_rate</span><span class="p">)</span>
+
+<span class="k">for</span> <span class="n">i</span><span class="p">,(</span><span class="n">x</span><span class="p">,</span><span class="n">y</span><span class="p">)</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">get_data</span><span class="p">(</span><span class="n">n</span><span class="p">)):</span>
+    <span class="n">pred_y</span> <span class="o">=</span> <span class="n">model</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+    <span class="n">dy</span> <span class="o">=</span> <span class="n">pred_y</span> <span class="o">-</span> <span class="n">y</span>
+    <span class="n">loss</span> <span class="o">=</span> <span class="n">dy</span> <span class="o">*</span> <span class="n">dy</span>
+    <span class="n">loss_mean</span> <span class="o">=</span> <span class="n">loss</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
+    <span class="n">optim</span><span class="o">.</span><span class="n">step</span><span class="p">(</span><span class="n">loss_mean</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;step </span><span class="si">{i}</span><span class="s2">, loss = {loss_mean.data.sum()}&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<div class="section" id="id1">
+<h2>大纲<a class="headerlink" href="#id1" title="永久链接至标题">¶</a></h2>
+<ul class="simple">
+<li><p><a class="reference external" href="#%E5%BF%AB%E9%80%9F%E5%BC%80%E5%A7%8B">快速开始</a></p></li>
+<li><p><a class="reference external" href="#%E5%AE%89%E8%A3%85">安装</a></p></li>
+<li><p><a class="reference external" href="#%E6%95%99%E7%A8%8B">教程</a></p></li>
+<li><p><a class="reference external" href="#%E8%B4%A1%E7%8C%AE">贡献</a></p></li>
+<li><p><a class="reference external" href="#%E5%9B%A2%E9%98%9F">团队</a></p></li>
+<li><p><a class="reference external" href="#%E7%89%88%E6%9D%83%E5%A3%B0%E6%98%8E">版权声明</a></p></li>
+</ul>
+</div>
+<div class="section" id="id2">
+<h2>快速开始<a class="headerlink" href="#id2" title="永久链接至标题">¶</a></h2>
+<p>我们提供了一些jupyterr notebooks来帮助您快速入门Jittor。</p>
+<ul class="simple">
+<li><p>[示例：模型定义与训练][1]</p></li>
+<li><p>[基础：Op, Var][2]</p></li>
+<li><p>[元算子：通过元算子实现自己的卷积层][3]</p></li>
+</ul>
+</div>
+<div class="section" id="id3">
+<h2>安装<a class="headerlink" href="#id3" title="永久链接至标题">¶</a></h2>
+<p>我们提供了Docker安装方式，免去您配置环境，Docker安装方法如下：</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="c1"># CPU only</span>
+<span class="n">docker</span> <span class="n">run</span> <span class="o">-</span><span class="n">it</span> <span class="o">--</span><span class="n">network</span> <span class="n">host</span> <span class="n">jittor</span><span class="o">/</span><span class="n">jittor</span>
+<span class="c1"># CPU and CUDA</span>
+<span class="n">docker</span> <span class="n">run</span> <span class="o">-</span><span class="n">it</span> <span class="o">--</span><span class="n">network</span> <span class="n">host</span> <span class="n">jittor</span><span class="o">/</span><span class="n">jittor</span><span class="o">-</span><span class="n">cuda</span>
+</pre></div>
+</div>
+<p>关于Docker安装的详细教程，可以参考<a class="reference external" href="https://cg.cs.tsinghua.edu.cn/jittor/tutorial/2020-5-15-00-00-docker/">Windows/Mac/Linux通过Docker安装计图</a></p>
+<p>Jittor使用Python和C++编写。 它需要用于即时编译的编译器。当前，我们支持三种编译器：</p>
+<ul class="simple">
+<li><p>CPU 编译器 （需要下列至少一个）</p>
+<ul>
+<li><p>g++ （&gt;=5.4.0）</p></li>
+<li><p>clang （&gt;=8.0）</p></li>
+</ul>
+</li>
+<li><p>GPU 编译器（可选）</p>
+<ul>
+<li><p>nvcc (&gt;=10.0 for g++ 或者 &gt;=10.2 for clang)</p></li>
+</ul>
+</li>
+</ul>
+<p>Jittor的环境要求如下:</p>
+<ul class="simple">
+<li><p>操作系统: <strong>Ubuntu</strong> &gt;= 16.04 (or <strong>Windows</strong> Subsystem of Linux)</p></li>
+<li><p>Python版本 &gt;= 3.7</p></li>
+<li><p>C++编译器（g++ or clang）</p></li>
+</ul>
+<p>注意：目前Jittor通过WSL的方式在Windows操作系统上运行，WSL的安装方法请参考<a class="reference external" href="https://docs.microsoft.com/en-us/windows/wsl/install-win10">微软官网</a>，目前WSL尚不支持CUDA。</p>
+<p>Jittor 一共提供三种方式安装: pip安装, 一键脚本安装 和 手动安装.</p>
+</div>
+<div class="section" id="pip">
+<h2>Pip 安装<a class="headerlink" href="#pip" title="永久链接至标题">¶</a></h2>
+<p>如果您没有准备好环境，欢迎使用我们提供的一键安装脚本， 如果您已经装好编译器和对应版本的Python,我们强烈推荐您使用这种方法
+(如果无法访问github, 可以通过jittor主页下载):</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>sudo apt install python3.7-dev libomp-dev
+sudo python3.7 -m pip install git+https://github.com/Jittor/jittor.git
+python3.7 -m jittor.test.test_example
+</pre></div>
+</div>
+<p>如果测试运行通过,恭喜你已经安装完成.
+jittor会自动在路径中寻找合适的编译器, 如果您希望手动指定编译器, 请使用环境变量 <code class="docutils literal notranslate"><span class="pre">cc_path</span></code> 和 <code class="docutils literal notranslate"><span class="pre">nvcc_path</span></code>(可选).</p>
+</div>
+<div class="section" id="id4">
+<h2>一键脚本安装<a class="headerlink" href="#id4" title="永久链接至标题">¶</a></h2>
+<p>一键脚本安装会帮您安装好所需的编译器以及对应的Python版本.</p>
+<p>我们提供能快速安装最新版本Jittor的单行命令（Ubuntu&gt; = 16.04）：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># install with clang and cuda</span>
+wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.sh <span class="p">|</span> <span class="nv">with_clang</span><span class="o">=</span><span class="m">1</span> <span class="nv">with_cuda</span><span class="o">=</span><span class="m">1</span> bash
+<span class="c1"># install with clang</span>
+wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.sh <span class="p">|</span> <span class="nv">with_clang</span><span class="o">=</span><span class="m">1</span> bash
+<span class="c1"># install with g++ and cuda</span>
+wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.sh <span class="p">|</span> <span class="nv">with_gcc</span><span class="o">=</span><span class="m">1</span> <span class="nv">with_cuda</span><span class="o">=</span><span class="m">1</span> bash
+<span class="c1"># install with g++</span>
+wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.sh <span class="p">|</span> <span class="nv">with_gcc</span><span class="o">=</span><span class="m">1</span> bash
+</pre></div>
+</div>
+<p>执行后，脚本将显示一些需要导出的环境变量。</p>
+<p>如果将Jittor用于CPU计算，则强烈建议使用clang（&gt; = 8.0）作为Jittor的后端编译器。 因为Jittor会用到其中一些定制的优化。</p>
+</div>
+<div class="section" id="id5">
+<h2>手动安装<a class="headerlink" href="#id5" title="永久链接至标题">¶</a></h2>
+<p>我们将逐步演示如何在Ubuntu 16.04中安装Jittor，其他Linux发行版可能可以使用类似的命令。</p>
+<div class="section" id="id6">
+<h3>步骤一：选择您的后端编译器<a class="headerlink" href="#id6" title="永久链接至标题">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># g++</span>
+sudo apt install g++ build-essential libomp-dev
+
+<span class="c1"># OR clang++-8</span>
+wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install_llvm.sh &gt; /tmp/llvm.sh
+bash /tmp/llvm.sh <span class="m">8</span>
+</pre></div>
+</div>
+</div>
+<div class="section" id="pythonpython-dev">
+<h3>步骤二：安装Python和python-dev<a class="headerlink" href="#pythonpython-dev" title="永久链接至标题">¶</a></h3>
+<p>Jittor需要python的版本&gt;=3.7。</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>sudo apt install python3.7 python3.7-dev
+</pre></div>
+</div>
+</div>
+<div class="section" id="id7">
+<h3>步骤三：运行Jittor<a class="headerlink" href="#id7" title="永久链接至标题">¶</a></h3>
+<p>整个框架是及时编译的。 让我们通过pip安装jittor</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git clone https://github.com/Jittor/jittor.git
+sudo pip3.7 install ./jittor
+<span class="nb">export</span> <span class="nv">cc_path</span><span class="o">=</span><span class="s2">&quot;clang++-8&quot;</span>
+<span class="c1"># if other compiler is used, change cc_path</span>
+<span class="c1"># export cc_path=&quot;g++&quot;</span>
+<span class="c1"># export cc_path=&quot;icc&quot;</span>
+
+<span class="c1"># run a simple test</span>
+python3.7 -m jittor.test.test_example
+</pre></div>
+</div>
+<p>如果通过了测试，那么您的Jittor已经准备就绪。</p>
+</div>
+<div class="section" id="cuda">
+<h3>可选步骤四：启用CUDA<a class="headerlink" href="#cuda" title="永久链接至标题">¶</a></h3>
+<p>在Jittor中使用CUDA非常简单，只需设置环境值<code class="docutils literal notranslate"><span class="pre">nvcc_path</span></code></p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># replace this var with your nvcc location </span>
+<span class="nb">export</span> <span class="nv">nvcc_path</span><span class="o">=</span><span class="s2">&quot;/usr/local/cuda/bin/nvcc&quot;</span> 
+<span class="c1"># run a simple cuda test</span>
+python3.7 -m jittor.test.test_cuda 
+</pre></div>
+</div>
+<p>如果测试通过，则可以通过设置<code class="docutils literal notranslate"><span class="pre">use_cuda</span></code>标识符在Jittor中启用CUDA。</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">jittor</span> <span class="k">as</span> <span class="nn">jt</span>
+<span class="n">jt</span><span class="o">.</span><span class="n">flags</span><span class="o">.</span><span class="n">use_cuda</span> <span class="o">=</span> <span class="mi">1</span>
+</pre></div>
+</div>
+</div>
+<div class="section" id="id8">
+<h3>可选步骤五：进行完整测试<a class="headerlink" href="#id8" title="永久链接至标题">¶</a></h3>
+<p>要检查Jittor的完整性，您可以运行完整的测试。</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python3.7 -m jittor.test -v
+</pre></div>
+</div>
+<p>如果这些测试失败，请为我们报告错误，我们十分欢迎您为Jittor做出贡献^ _ ^</p>
+</div>
+</div>
+<div class="section" id="id9">
+<h2>教程<a class="headerlink" href="#id9" title="永久链接至标题">¶</a></h2>
+<p>在教程部分，我们将简要解释Jittor的基本概念。</p>
+<p>要使用Jittor训练模型，您需要了解两个主要概念：</p>
+<ul class="simple">
+<li><p>Var：Jittor的基本数据类型</p></li>
+<li><p>Operations：Jittor的算子与numpy类似</p></li>
+</ul>
+<div class="section" id="id10">
+<h3>数据类型<a class="headerlink" href="#id10" title="永久链接至标题">¶</a></h3>
+<p>首先，让我们开始使用Var。Var是jittor的基本数据类型，为了运算更加高效Jittor中的计算过程是异步的。 如果要访问数据，可以使用<code class="docutils literal notranslate"><span class="pre">Var.data</span></code>进行同步数据访问。</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">jittor</span> <span class="k">as</span> <span class="nn">jt</span>
+<span class="n">a</span> <span class="o">=</span> <span class="n">jt</span><span class="o">.</span><span class="n">float32</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">])</span>
+<span class="nb">print</span> <span class="p">(</span><span class="n">a</span><span class="p">)</span>
+<span class="nb">print</span> <span class="p">(</span><span class="n">a</span><span class="o">.</span><span class="n">data</span><span class="p">)</span>
+<span class="c1"># Output: float32[3,]</span>
+<span class="c1"># Output: [ 1. 2. 3.]</span>
+</pre></div>
+</div>
+<p>此外我们可以给变量起一个名字。</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">c</span><span class="o">.</span><span class="n">name</span><span class="p">(</span><span class="s1">&#39;c&#39;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">c</span><span class="o">.</span><span class="n">name</span><span class="p">())</span>
+<span class="c1"># Output: c</span>
+</pre></div>
+</div>
+</div>
+<div class="section" id="id11">
+<h3>数据运算<a class="headerlink" href="#id11" title="永久链接至标题">¶</a></h3>
+<p>Jittor的算子与numpy类似。 让我们尝试一些运算， 我们通过Op<code class="docutils literal notranslate"><span class="pre">jt.float32</span></code>创建Var <code class="docutils literal notranslate"><span class="pre">a</span></code>和<code class="docutils literal notranslate"><span class="pre">b</span></code>，并将它们相加。 输出这些变量相关信息，可以看出它们具有相同的形状和类型。</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">jittor</span> <span class="k">as</span> <span class="nn">jt</span>
+<span class="n">a</span> <span class="o">=</span> <span class="n">jt</span><span class="o">.</span><span class="n">float32</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">])</span>
+<span class="n">b</span> <span class="o">=</span> <span class="n">jt</span><span class="o">.</span><span class="n">float32</span><span class="p">([</span><span class="mi">4</span><span class="p">,</span><span class="mi">5</span><span class="p">,</span><span class="mi">6</span><span class="p">])</span>
+<span class="n">c</span> <span class="o">=</span> <span class="n">a</span><span class="o">*</span><span class="n">b</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">a</span><span class="p">,</span><span class="n">b</span><span class="p">,</span><span class="n">c</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="nb">type</span><span class="p">(</span><span class="n">a</span><span class="p">),</span> <span class="nb">type</span><span class="p">(</span><span class="n">b</span><span class="p">),</span> <span class="nb">type</span><span class="p">(</span><span class="n">c</span><span class="p">))</span>
+<span class="c1"># Output: float32[3,] float32[3,] float32[3,]</span>
+<span class="c1"># Output: &lt;class &#39;jittor_core.Var&#39;&gt; &lt;class &#39;jittor_core.Var&#39;&gt; &lt;class &#39;jittor_core.Var&#39;&gt;</span>
+</pre></div>
+</div>
+<p>除此之外，我们使用的所有算子<code class="docutils literal notranslate"><span class="pre">jt.xxx(Var,...)</span></code>都具有别名<code class="docutils literal notranslate"><span class="pre">Var.xxx(...)</span></code>。 例如：</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">c</span><span class="o">.</span><span class="n">max</span><span class="p">()</span> <span class="c1"># alias of jt.max(c)</span>
+<span class="n">c</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="n">a</span><span class="p">)</span> <span class="c1"># alias of jt.add(c, a)</span>
+<span class="n">c</span><span class="o">.</span><span class="n">min</span><span class="p">(</span><span class="n">keepdims</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="c1"># alias of jt.min(c, keepdims=True)</span>
+</pre></div>
+</div>
+<p>如果您想知道Jittor支持的所有运算，可以运行<code class="docutils literal notranslate"><span class="pre">help(jt.ops)</span></code>。 您在<code class="docutils literal notranslate"><span class="pre">jt.ops.xxx</span></code>中找到的所有运算都可以通过别名<code class="docutils literal notranslate"><span class="pre">jt.xxx</span></code>。</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">help</span><span class="p">(</span><span class="n">jt</span><span class="o">.</span><span class="n">ops</span><span class="p">)</span>
+<span class="c1"># Output:</span>
+<span class="c1">#   abs(x: core.Var) -&gt; core.Var</span>
+<span class="c1">#   add(x: core.Var, y: core.Var) -&gt; core.Var</span>
+<span class="c1">#   array(data: array) -&gt; core.Var</span>
+<span class="c1">#   binary(x: core.Var, y: core.Var, op: str) -&gt; core.Var</span>
+<span class="c1">#   ......</span>
+</pre></div>
+</div>
+</div>
+<div class="section" id="id12">
+<h3>更多教程<a class="headerlink" href="#id12" title="永久链接至标题">¶</a></h3>
+<p>如果您想进一步了解Jittor，请查看以下notebooks：</p>
+<ul class="simple">
+<li><p>快速开始</p>
+<ul>
+<li><p>[示例：模型定义与训练][1]</p></li>
+<li><p>[基本概念：Op, Var][2]</p></li>
+<li><p>[元算子：通过元算子实现自己的卷积层][3]</p></li>
+</ul>
+</li>
+<li><p>进阶</p>
+<ul>
+<li><p>[自定义算子：使用C ++和CUDA编写您的算子，并其进行即时编译][4]</p></li>
+<li><p>[性能分析器：分析您的模型][5]</p></li>
+<li><p>Jtune：性能调优工具</p></li>
+</ul>
+</li>
+</ul>
+<p>[1]: notebook/example.src.md	“示例”
+[2]: notebook/basics.src.md	“基本概念”
+[3]: notebook/meta_op.src.md	“元算子”
+[4]: notebook/custom_op.src.md	“自定义算子”
+[5]: notebook/profiler.src.md	“性能分析器”</p>
+<p>这些notebooks可以通过python3.7 -m jittor.notebook在您自己的计算机中运行。</p>
+</div>
+</div>
+<div class="section" id="id13">
+<h2>贡献<a class="headerlink" href="#id13" title="永久链接至标题">¶</a></h2>
+<p>Jittor还很年轻。 它可能存在错误和问题。 请在我们的错误跟踪系统中报告它们。 我们欢迎您为Jittor做出贡献。 此外，如果您对Jittor有任何想法，请告诉我们。</p>
+<p>您可以用以下方式帮助Jittor：</p>
+<ul class="simple">
+<li><p>在论文中引用 Jittor</p></li>
+<li><p>向身边的好朋友推荐 Jittor</p></li>
+<li><p>贡献代码</p></li>
+<li><p>贡献教程和文档</p></li>
+<li><p>提出issue</p></li>
+<li><p>回答 jittor 相关问题</p></li>
+<li><p>点亮小星星</p></li>
+<li><p>持续关注 jittor</p></li>
+<li><p>……</p></li>
+</ul>
+</div>
+<div class="section" id="id14">
+<h2>联系我们<a class="headerlink" href="#id14" title="永久链接至标题">¶</a></h2>
+<p>官方主页： http://cg.cs.tsinghua.edu.cn/jittor/</p>
+<p>电子邮件：jittor&#64;qq.com</p>
+<p>提出issue：https://github.com/Jittor/jittor/issues</p>
+</div>
+<div class="section" id="id15">
+<h2>团队<a class="headerlink" href="#id15" title="永久链接至标题">¶</a></h2>
+<p>Jittor目前由来自<a class="reference external" href="https://cg.cs.tsinghua.edu.cn/">清华大学计算机图形学组</a>的梁盾，杨国烨，杨国炜和周文洋等博士生维护。 如果您也对Jittor感兴趣并希望对其进行改进，请加入我们！</p>
+</div>
+<div class="section" id="id16">
+<h2>版权声明<a class="headerlink" href="#id16" title="永久链接至标题">¶</a></h2>
+<p>如LICENSE.txt文件中所示，Jittor使用Apache 2.0版权协议。</p>
+</div>
+</div>
+
+
+           </div>
+           
+          </div>
+          <footer>
+  
+    <div class="rst-footer-buttons" role="navigation" aria-label="footer navigation">
+      
+        <a href="jittor.html" class="btn btn-neutral float-right" title="jittor" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right"></span></a>
+      
+      
+        <a href="index.html" class="btn btn-neutral float-left" title="欢迎查阅计图文档" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left"></span> Previous</a>
+      
+    </div>
+  
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>
+        &copy; Copyright 2020, Jittor
+
+    </p>
+  </div>
+  Built with <a href="http://sphinx-doc.org/">Sphinx</a> using a <a href="https://github.com/rtfd/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>. 
+
+</footer>
+
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+  
+
+
+  <script type="text/javascript">
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script>
+
+  
+  
+    
+   
+
+</body>
+</html>

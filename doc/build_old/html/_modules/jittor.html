@@ -1,0 +1,736 @@
+
+
+<!DOCTYPE html>
+<!--[if IE 8]><html class="no-js lt-ie9" lang="zh-CN" > <![endif]-->
+<!--[if gt IE 8]><!--> <html class="no-js" lang="zh-CN" > <!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <title>jittor &mdash; Jittor 1.1.3.1 文档</title>
+  
+
+  
+  
+  
+  
+
+  
+  <script type="text/javascript" src="../_static/js/modernizr.min.js"></script>
+  
+    
+      <script type="text/javascript" id="documentation_options" data-url_root="../" src="../_static/documentation_options.js"></script>
+        <script src="../_static/jquery.js"></script>
+        <script src="../_static/underscore.js"></script>
+        <script src="../_static/doctools.js"></script>
+        <script src="../_static/language_data.js"></script>
+        <script src="../_static/translations.js"></script>
+    
+    <script type="text/javascript" src="../_static/js/theme.js"></script>
+
+    
+
+  
+  <link rel="stylesheet" href="../_static/css/theme.css" type="text/css" />
+  <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
+    <link rel="index" title="索引" href="../genindex.html" />
+    <link rel="search" title="搜索" href="../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav">
+
+   
+  <div class="wy-grid-for-nav">
+    
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+          
+
+          
+            <a href="../index.html" class="icon icon-home"> Jittor
+          
+
+          
+          </a>
+
+          
+            
+            
+          
+
+          
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+
+          
+        </div>
+
+        <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="main navigation">
+          
+            
+            
+              
+            
+            
+              <p class="caption"><span class="caption-text">内容一览:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../README.cn.html">Jittor: 即时编译深度学习框架</a></li>
+</ul>
+<p class="caption"><span class="caption-text">模块API:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../jittor.html">jittor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../jittor.nn.html">jittor.nn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../jittor.models.html">jittor.models</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../jittor.optim.html">jittor.optim</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../jittor.init.html">jittor.init</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../jittor.contrib.html">jittor.contrib</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../jittor.dataset.html">jittor.dataset</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../jittor.transform.html">jittor.transform</a></li>
+</ul>
+<p class="caption"><span class="caption-text">其他:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference external" href="https://cg.cs.tsinghua.edu.cn/jittor/tutorial/">教程</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://cg.cs.tsinghua.edu.cn/jittor/tutorial/">教程1</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../todo.html">TODO</a></li>
+</ul>
+
+            
+          
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+
+      
+      <nav class="wy-nav-top" aria-label="top navigation">
+        
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">Jittor</a>
+        
+      </nav>
+
+
+      <div class="wy-nav-content">
+        
+        <div class="rst-content">
+        
+          
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div role="navigation" aria-label="breadcrumbs navigation">
+
+  <ul class="wy-breadcrumbs">
+    
+      <li><a href="../index.html">Docs</a> &raquo;</li>
+        
+          <li><a href="index.html">模块代码</a> &raquo;</li>
+        
+      <li>jittor</li>
+    
+    
+      <li class="wy-breadcrumbs-aside">
+        
+      </li>
+    
+  </ul>
+
+  
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+            
+  <h1>jittor 源代码</h1><div class="highlight"><pre>
+<span></span><span class="c1"># ***************************************************************</span>
+<span class="c1"># Copyright (c) 2020 Jittor. Authors:</span>
+<span class="c1">#   Dun Liang &lt;randonlang@gmail.com&gt;.</span>
+<span class="c1">#   Meng-Hao Guo &lt;guomenghao1997@gmail.com&gt;</span>
+<span class="c1">#</span>
+<span class="c1"># All Rights Reserved.</span>
+<span class="c1"># This file is subject to the terms and conditions defined in</span>
+<span class="c1"># file &#39;LICENSE.txt&#39;, which is part of this source code package.</span>
+<span class="c1"># ***************************************************************</span>
+<span class="kn">from</span> <span class="nn">.</span> <span class="kn">import</span> <span class="n">lock</span>
+<span class="k">with</span> <span class="n">lock</span><span class="o">.</span><span class="n">lock_scope</span><span class="p">():</span>
+    <span class="kn">from</span> <span class="nn">.</span> <span class="kn">import</span> <span class="n">compiler</span>
+    <span class="kn">from</span> <span class="nn">.compiler</span> <span class="kn">import</span> <span class="n">LOG</span><span class="p">,</span> <span class="n">has_cuda</span>
+    <span class="kn">from</span> <span class="nn">.compiler</span> <span class="kn">import</span> <span class="n">compile_custom_ops</span><span class="p">,</span> <span class="n">compile_custom_op</span>
+    <span class="kn">import</span> <span class="nn">jittor_core</span> <span class="k">as</span> <span class="nn">core</span>
+    <span class="kn">from</span> <span class="nn">jittor_core</span> <span class="kn">import</span> <span class="o">*</span>
+    <span class="kn">from</span> <span class="nn">jittor_core.ops</span> <span class="kn">import</span> <span class="o">*</span>
+    <span class="kn">from</span> <span class="nn">.</span> <span class="kn">import</span> <span class="n">compile_extern</span>
+    <span class="kn">from</span> <span class="nn">.compile_extern</span> <span class="kn">import</span> <span class="n">mkl_ops</span><span class="p">,</span> <span class="n">mpi</span><span class="p">,</span> <span class="n">mpi_ops</span>
+    <span class="k">if</span> <span class="n">core</span><span class="o">.</span><span class="n">get_device_count</span><span class="p">()</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="n">has_cuda</span> <span class="o">=</span> <span class="n">compile_extern</span><span class="o">.</span><span class="n">has_cuda</span> <span class="o">=</span> <span class="n">compiler</span><span class="o">.</span><span class="n">has_cuda</span> <span class="o">=</span> <span class="kc">False</span>
+    <span class="k">if</span> <span class="n">has_cuda</span><span class="p">:</span>
+        <span class="kn">from</span> <span class="nn">.compile_extern</span> <span class="kn">import</span> <span class="n">cudnn</span><span class="p">,</span> <span class="n">curand</span><span class="p">,</span> <span class="n">cublas</span>
+
+<span class="kn">import</span> <span class="nn">contextlib</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">from</span> <span class="nn">collections</span> <span class="kn">import</span> <span class="n">OrderedDict</span>
+<span class="kn">from</span> <span class="nn">collections.abc</span> <span class="kn">import</span> <span class="n">Sequence</span><span class="p">,</span> <span class="n">Mapping</span>
+<span class="kn">import</span> <span class="nn">types</span>
+<span class="kn">import</span> <span class="nn">pickle</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+<span class="kn">import</span> <span class="nn">traceback</span>
+
+<span class="k">class</span> <span class="nc">_call_no_record_scope</span><span class="p">:</span>
+    <span class="k">def</span> <span class="fm">__enter__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span> <span class="k">pass</span>
+    <span class="k">def</span> <span class="fm">__exit__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">exc</span><span class="p">):</span> <span class="k">pass</span>
+    <span class="k">def</span> <span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">func</span><span class="p">):</span>
+        <span class="k">def</span> <span class="nf">inner</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kw</span><span class="p">):</span>
+            <span class="k">with</span> <span class="bp">self</span><span class="p">:</span>
+                <span class="n">ret</span> <span class="o">=</span> <span class="n">func</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kw</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">ret</span>
+        <span class="k">return</span> <span class="n">inner</span>
+
+<div class="viewcode-block" id="flag_scope"><a class="viewcode-back" href="../jittor.html#jittor.flag_scope">[文档]</a><span class="k">class</span> <span class="nc">flag_scope</span><span class="p">(</span><span class="n">_call_no_record_scope</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">**</span><span class="n">jt_flags</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">jt_flags</span> <span class="o">=</span> <span class="n">jt_flags</span>
+
+    <span class="k">def</span> <span class="fm">__enter__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">flags_bk</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">flags_bk</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="k">for</span> <span class="n">k</span><span class="p">,</span><span class="n">v</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">jt_flags</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+                <span class="n">flags_bk</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">flags</span><span class="p">,</span> <span class="n">k</span><span class="p">)</span>
+                <span class="nb">setattr</span><span class="p">(</span><span class="n">flags</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">)</span>
+        <span class="k">except</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="fm">__exit__</span><span class="p">()</span>
+            <span class="k">raise</span>
+
+    <span class="k">def</span> <span class="fm">__exit__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">exc</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">k</span><span class="p">,</span><span class="n">v</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">flags_bk</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="nb">setattr</span><span class="p">(</span><span class="n">flags</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">)</span></div>
+
+<span class="n">single_log_capture</span> <span class="o">=</span> <span class="kc">None</span>
+
+<div class="viewcode-block" id="log_capture_scope"><a class="viewcode-back" href="../jittor.html#jittor.log_capture_scope">[文档]</a><span class="k">class</span> <span class="nc">log_capture_scope</span><span class="p">(</span><span class="n">_call_no_record_scope</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;log capture scope</span>
+
+<span class="sd">    example::</span>
+
+<span class="sd">        with jt.log_capture_scope(log_v=0) as logs:</span>
+<span class="sd">            LOG.v(&quot;...&quot;)</span>
+<span class="sd">        print(logs)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">**</span><span class="n">jt_flags</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">fs</span> <span class="o">=</span> <span class="n">flag_scope</span><span class="p">(</span><span class="o">**</span><span class="n">jt_flags</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="fm">__enter__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">global</span> <span class="n">single_log_capture</span>
+        <span class="k">assert</span> <span class="ow">not</span> <span class="n">single_log_capture</span>
+        <span class="n">single_log_capture</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logs</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">LOG</span><span class="o">.</span><span class="n">log_capture_start</span><span class="p">()</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">fs</span><span class="o">.</span><span class="fm">__enter__</span><span class="p">()</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">logs</span>
+        <span class="k">except</span><span class="p">:</span>
+            <span class="n">LOG</span><span class="o">.</span><span class="n">log_capture_stop</span><span class="p">()</span>
+            <span class="n">single_log_capture</span> <span class="o">=</span> <span class="kc">None</span>
+            <span class="k">raise</span>
+
+    <span class="k">def</span> <span class="fm">__exit__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">exc</span><span class="p">):</span>
+        <span class="k">global</span> <span class="n">single_log_capture</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">fs</span><span class="o">.</span><span class="fm">__exit__</span><span class="p">(</span><span class="o">*</span><span class="n">exc</span><span class="p">)</span>
+        <span class="n">LOG</span><span class="o">.</span><span class="n">log_capture_stop</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">logs</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">LOG</span><span class="o">.</span><span class="n">log_capture_read</span><span class="p">())</span>
+        <span class="n">single_log_capture</span> <span class="o">=</span> <span class="kc">None</span></div>
+
+
+<div class="viewcode-block" id="profile_scope"><a class="viewcode-back" href="../jittor.html#jittor.profile_scope">[文档]</a><span class="k">class</span> <span class="nc">profile_scope</span><span class="p">(</span><span class="n">_call_no_record_scope</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot; profile scope</span>
+
+<span class="sd">    example::</span>
+<span class="sd">    </span>
+<span class="sd">        with jt.profile_scope() as report:</span>
+<span class="sd">            ......</span>
+<span class="sd">        print(report)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">warmup</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">rerun</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="o">**</span><span class="n">jt_flags</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">fs</span> <span class="o">=</span> <span class="n">flag_scope</span><span class="p">(</span><span class="o">**</span><span class="n">jt_flags</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">warmup</span> <span class="o">=</span> <span class="n">warmup</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">rerun</span> <span class="o">=</span> <span class="n">rerun</span>
+
+    <span class="k">def</span> <span class="fm">__enter__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">assert</span> <span class="ow">not</span> <span class="n">flags</span><span class="o">.</span><span class="n">profiler_enable</span>
+        <span class="n">profiler</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">warmup</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">rerun</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">report</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">fs</span><span class="o">.</span><span class="fm">__enter__</span><span class="p">()</span>
+            <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">report</span>
+        <span class="k">except</span><span class="p">:</span>
+            <span class="n">profiler</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span>
+            <span class="k">raise</span>
+
+    <span class="k">def</span> <span class="fm">__exit__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">exc</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">fs</span><span class="o">.</span><span class="fm">__exit__</span><span class="p">(</span><span class="o">*</span><span class="n">exc</span><span class="p">)</span>
+        <span class="n">profiler</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">report</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">profiler</span><span class="o">.</span><span class="n">report</span><span class="p">())</span></div>
+
+<div class="viewcode-block" id="clean"><a class="viewcode-back" href="../jittor.html#jittor.clean">[文档]</a><span class="k">def</span> <span class="nf">clean</span><span class="p">():</span>
+    <span class="kn">import</span> <span class="nn">gc</span>
+    <span class="c1"># make sure python do a full collection</span>
+    <span class="n">gc</span><span class="o">.</span><span class="n">collect</span><span class="p">()</span></div>
+
+<span class="n">cast</span> <span class="o">=</span> <span class="n">unary</span>
+
+<div class="viewcode-block" id="array"><a class="viewcode-back" href="../jittor.html#jittor.array">[文档]</a><span class="k">def</span> <span class="nf">array</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+    <span class="k">if</span> <span class="nb">type</span><span class="p">(</span><span class="n">data</span><span class="p">)</span> <span class="o">==</span> <span class="n">core</span><span class="o">.</span><span class="n">Var</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">dtype</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">cast</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">data</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">cast</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">dtype</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">dtype</span> <span class="o">!=</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">ops</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">dtype</span><span class="p">))</span>
+    <span class="k">if</span> <span class="nb">type</span><span class="p">(</span><span class="n">data</span><span class="p">)</span> <span class="o">==</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">data</span><span class="o">.</span><span class="n">flags</span><span class="o">.</span><span class="n">c_contiguous</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">ops</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">ops</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">data</span><span class="o">.</span><span class="n">copy</span><span class="p">())</span>
+    <span class="k">return</span> <span class="n">ops</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">data</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="grad"><a class="viewcode-back" href="../jittor.html#jittor.grad">[文档]</a><span class="k">def</span> <span class="nf">grad</span><span class="p">(</span><span class="n">loss</span><span class="p">,</span> <span class="n">targets</span><span class="p">):</span>
+    <span class="k">if</span> <span class="nb">type</span><span class="p">(</span><span class="n">targets</span><span class="p">)</span> <span class="o">==</span> <span class="n">core</span><span class="o">.</span><span class="n">Var</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">core</span><span class="o">.</span><span class="n">grad</span><span class="p">(</span><span class="n">loss</span><span class="p">,</span> <span class="p">[</span><span class="n">targets</span><span class="p">])[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="k">return</span> <span class="n">core</span><span class="o">.</span><span class="n">grad</span><span class="p">(</span><span class="n">loss</span><span class="p">,</span> <span class="n">targets</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="liveness_info"><a class="viewcode-back" href="../jittor.html#jittor.liveness_info">[文档]</a><span class="k">def</span> <span class="nf">liveness_info</span><span class="p">():</span>
+    <span class="k">return</span> <span class="p">{</span>
+        <span class="s2">&quot;hold_vars&quot;</span><span class="p">:</span> <span class="n">core</span><span class="o">.</span><span class="n">number_of_hold_vars</span><span class="p">(),</span>
+        <span class="s2">&quot;lived_vars&quot;</span><span class="p">:</span> <span class="n">core</span><span class="o">.</span><span class="n">number_of_lived_vars</span><span class="p">(),</span>
+        <span class="s2">&quot;lived_ops&quot;</span><span class="p">:</span> <span class="n">core</span><span class="o">.</span><span class="n">number_of_lived_ops</span><span class="p">(),</span>
+    <span class="p">}</span></div>
+
+<div class="viewcode-block" id="ones"><a class="viewcode-back" href="../jittor.html#jittor.ones">[文档]</a><span class="k">def</span> <span class="nf">ones</span><span class="p">(</span><span class="n">shape</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;float32&quot;</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">unary</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">broadcast</span><span class="p">(</span><span class="n">shape</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="zeros"><a class="viewcode-back" href="../jittor.html#jittor.zeros">[文档]</a><span class="k">def</span> <span class="nf">zeros</span><span class="p">(</span><span class="n">shape</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;float32&quot;</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">unary</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">broadcast</span><span class="p">(</span><span class="n">shape</span><span class="p">)</span></div>
+
+<span class="n">flags</span> <span class="o">=</span> <span class="n">core</span><span class="o">.</span><span class="n">flags</span><span class="p">()</span>
+
+<div class="viewcode-block" id="detach"><a class="viewcode-back" href="../jittor.html#jittor.detach">[文档]</a><span class="k">def</span> <span class="nf">detach</span><span class="p">(</span><span class="n">x</span><span class="p">):</span>
+    <span class="sd">&quot;&quot;&quot;return detached var&quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">x</span><span class="o">.</span><span class="n">clone</span><span class="p">()</span><span class="o">.</span><span class="n">stop_grad</span><span class="p">()</span><span class="o">.</span><span class="n">clone</span><span class="p">()</span></div>
+<span class="n">Var</span><span class="o">.</span><span class="n">detach</span> <span class="o">=</span> <span class="n">detach</span>
+
+<div class="viewcode-block" id="std"><a class="viewcode-back" href="../jittor.html#jittor.std">[文档]</a><span class="k">def</span> <span class="nf">std</span><span class="p">(</span><span class="n">x</span><span class="p">):</span>
+    <span class="n">matsize</span><span class="o">=</span><span class="mi">1</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">:</span>
+        <span class="n">matsize</span> <span class="o">*=</span> <span class="n">i</span>
+    <span class="n">out</span><span class="o">=</span><span class="p">(</span><span class="n">x</span><span class="o">-</span><span class="n">x</span><span class="o">.</span><span class="n">mean</span><span class="p">())</span><span class="o">.</span><span class="n">sqr</span><span class="p">()</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+    <span class="n">out</span><span class="o">=</span><span class="n">out</span><span class="o">/</span><span class="p">(</span><span class="n">matsize</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">out</span><span class="o">=</span><span class="n">out</span><span class="o">.</span><span class="n">sqrt</span><span class="p">()</span>
+    <span class="k">return</span> <span class="n">out</span></div>
+<span class="n">Var</span><span class="o">.</span><span class="n">std</span> <span class="o">=</span> <span class="n">std</span>
+
+<div class="viewcode-block" id="norm"><a class="viewcode-back" href="../jittor.html#jittor.norm">[文档]</a><span class="k">def</span> <span class="nf">norm</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">dim</span><span class="p">):</span>
+    <span class="k">assert</span> <span class="n">k</span><span class="o">==</span><span class="mi">1</span> <span class="ow">or</span> <span class="n">k</span><span class="o">==</span><span class="mi">2</span>
+    <span class="k">if</span> <span class="n">k</span><span class="o">==</span><span class="mi">1</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">x</span><span class="o">.</span><span class="n">abs</span><span class="p">()</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">dim</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">k</span><span class="o">==</span><span class="mi">2</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">x</span><span class="o">.</span><span class="n">sqr</span><span class="p">()</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">dim</span><span class="p">)</span><span class="o">.</span><span class="n">sqrt</span><span class="p">()</span></div>
+<span class="n">Var</span><span class="o">.</span><span class="n">norm</span> <span class="o">=</span> <span class="n">norm</span>
+
+<span class="n">origin_reshape</span> <span class="o">=</span> <span class="n">reshape</span>
+<div class="viewcode-block" id="reshape"><a class="viewcode-back" href="../jittor.html#jittor.reshape">[文档]</a><span class="k">def</span> <span class="nf">reshape</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="o">*</span><span class="n">shape</span><span class="p">):</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">shape</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span> <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">Sequence</span><span class="p">):</span>
+        <span class="n">shape</span> <span class="o">=</span> <span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="k">return</span> <span class="n">origin_reshape</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">shape</span><span class="p">)</span></div>
+<span class="n">reshape</span><span class="o">.</span><span class="vm">__doc__</span> <span class="o">=</span> <span class="n">origin_reshape</span><span class="o">.</span><span class="vm">__doc__</span>
+<span class="n">Var</span><span class="o">.</span><span class="n">view</span> <span class="o">=</span> <span class="n">Var</span><span class="o">.</span><span class="n">reshape</span> <span class="o">=</span> <span class="n">view</span> <span class="o">=</span> <span class="n">reshape</span>
+
+<span class="n">origin_transpose</span> <span class="o">=</span> <span class="n">transpose</span>
+<div class="viewcode-block" id="transpose"><a class="viewcode-back" href="../jittor.html#jittor.transpose">[文档]</a><span class="k">def</span> <span class="nf">transpose</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="o">*</span><span class="n">dim</span><span class="p">):</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">dim</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span> <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">dim</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">Sequence</span><span class="p">):</span>
+        <span class="n">dim</span> <span class="o">=</span> <span class="n">dim</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="k">return</span> <span class="n">origin_transpose</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">dim</span><span class="p">)</span></div>
+<span class="n">transpose</span><span class="o">.</span><span class="vm">__doc__</span> <span class="o">=</span> <span class="n">origin_transpose</span><span class="o">.</span><span class="vm">__doc__</span>
+<span class="n">Var</span><span class="o">.</span><span class="n">transpose</span> <span class="o">=</span> <span class="n">Var</span><span class="o">.</span><span class="n">permute</span> <span class="o">=</span> <span class="n">permute</span> <span class="o">=</span> <span class="n">transpose</span>
+
+<div class="viewcode-block" id="flatten"><a class="viewcode-back" href="../jittor.html#jittor.flatten">[文档]</a><span class="k">def</span> <span class="nf">flatten</span><span class="p">(</span><span class="nb">input</span><span class="p">,</span> <span class="n">start_dim</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">end_dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">):</span>
+    <span class="sd">&#39;&#39;&#39;flatten dimentions by reshape&#39;&#39;&#39;</span>
+    <span class="n">in_shape</span> <span class="o">=</span> <span class="nb">input</span><span class="o">.</span><span class="n">shape</span>
+    <span class="n">start_dim</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">in_shape</span><span class="p">)</span> <span class="o">+</span> <span class="n">start_dim</span> <span class="k">if</span> <span class="n">start_dim</span> <span class="o">&lt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="n">start_dim</span>
+    <span class="n">end_dim</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">in_shape</span><span class="p">)</span> <span class="o">+</span> <span class="n">end_dim</span> <span class="k">if</span> <span class="n">end_dim</span> <span class="o">&lt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="n">end_dim</span>
+    <span class="k">assert</span> <span class="n">end_dim</span> <span class="o">&gt;</span> <span class="n">start_dim</span><span class="p">,</span> <span class="s2">&quot;end_dim should be larger than start_dim for flatten function&quot;</span>
+    <span class="n">out_shape</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="n">start_dim</span><span class="p">,</span><span class="mi">1</span><span class="p">):</span> <span class="n">out_shape</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">in_shape</span><span class="p">[</span><span class="n">i</span><span class="p">])</span>
+    <span class="n">dims</span> <span class="o">=</span> <span class="mi">1</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">start_dim</span><span class="p">,</span> <span class="n">end_dim</span><span class="o">+</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">):</span> <span class="n">dims</span> <span class="o">*=</span> <span class="n">in_shape</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+    <span class="n">out_shape</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">dims</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">end_dim</span><span class="o">+</span><span class="mi">1</span><span class="p">,</span><span class="nb">len</span><span class="p">(</span><span class="n">in_shape</span><span class="p">),</span><span class="mi">1</span><span class="p">):</span> <span class="n">out_shape</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">in_shape</span><span class="p">[</span><span class="n">i</span><span class="p">])</span>
+    <span class="k">return</span> <span class="nb">input</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">out_shape</span><span class="p">)</span></div>
+<span class="n">Var</span><span class="o">.</span><span class="n">flatten</span> <span class="o">=</span> <span class="n">flatten</span>
+
+<div class="viewcode-block" id="detach_inplace"><a class="viewcode-back" href="../jittor.html#jittor.detach_inplace">[文档]</a><span class="k">def</span> <span class="nf">detach_inplace</span><span class="p">(</span><span class="n">x</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">x</span><span class="o">.</span><span class="n">swap</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">stop_grad</span><span class="p">()</span><span class="o">.</span><span class="n">clone</span><span class="p">())</span></div>
+<span class="n">Var</span><span class="o">.</span><span class="n">start_grad</span> <span class="o">=</span> <span class="n">Var</span><span class="o">.</span><span class="n">detach_inplace</span> <span class="o">=</span> <span class="n">detach_inplace</span>
+
+<div class="viewcode-block" id="unsqueeze"><a class="viewcode-back" href="../jittor.html#jittor.unsqueeze">[文档]</a><span class="k">def</span> <span class="nf">unsqueeze</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">dim</span><span class="p">):</span>
+    <span class="n">shape</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+    <span class="k">assert</span> <span class="n">dim</span> <span class="o">&lt;=</span> <span class="nb">len</span><span class="p">(</span><span class="n">shape</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">x</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">shape</span><span class="p">[:</span><span class="n">dim</span><span class="p">]</span> <span class="o">+</span> <span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="n">shape</span><span class="p">[</span><span class="n">dim</span><span class="p">:])</span></div>
+<span class="n">Var</span><span class="o">.</span><span class="n">unsqueeze</span> <span class="o">=</span> <span class="n">unsqueeze</span>
+
+<div class="viewcode-block" id="squeeze"><a class="viewcode-back" href="../jittor.html#jittor.squeeze">[文档]</a><span class="k">def</span> <span class="nf">squeeze</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">dim</span><span class="p">):</span>
+    <span class="n">shape</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">dim</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span> <span class="n">dim</span> <span class="o">+=</span> <span class="nb">len</span><span class="p">(</span><span class="n">shape</span><span class="p">)</span>
+    <span class="k">assert</span> <span class="n">dim</span> <span class="o">&lt;</span> <span class="nb">len</span><span class="p">(</span><span class="n">shape</span><span class="p">)</span> <span class="ow">and</span> <span class="n">dim</span> <span class="o">&gt;=</span> <span class="mi">0</span>
+    <span class="k">assert</span> <span class="n">shape</span><span class="p">[</span><span class="n">dim</span><span class="p">]</span> <span class="o">==</span> <span class="mi">1</span>
+    <span class="k">return</span> <span class="n">x</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">shape</span><span class="p">[:</span><span class="n">dim</span><span class="p">]</span> <span class="o">+</span> <span class="n">shape</span><span class="p">[</span><span class="n">dim</span><span class="o">+</span><span class="mi">1</span><span class="p">:])</span></div>
+<span class="n">Var</span><span class="o">.</span><span class="n">squeeze</span> <span class="o">=</span> <span class="n">squeeze</span>
+
+<div class="viewcode-block" id="clamp"><a class="viewcode-back" href="../jittor.html#jittor.clamp">[文档]</a><span class="k">def</span> <span class="nf">clamp</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">min_v</span><span class="p">,</span> <span class="n">max_v</span><span class="p">):</span>
+    <span class="k">assert</span> <span class="n">min_v</span> <span class="o">&lt;=</span> <span class="n">max_v</span>
+    <span class="k">return</span> <span class="n">x</span><span class="o">.</span><span class="n">maximum</span><span class="p">(</span><span class="n">min_v</span><span class="p">)</span><span class="o">.</span><span class="n">minimum</span><span class="p">(</span><span class="n">max_v</span><span class="p">)</span></div>
+<span class="n">Var</span><span class="o">.</span><span class="n">clamp</span> <span class="o">=</span> <span class="n">clamp</span>
+
+<div class="viewcode-block" id="type_as"><a class="viewcode-back" href="../jittor.html#jittor.type_as">[文档]</a><span class="k">def</span> <span class="nf">type_as</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">a</span><span class="o">.</span><span class="n">unary</span><span class="p">(</span><span class="n">op</span><span class="o">=</span><span class="n">b</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span></div>
+<span class="n">Var</span><span class="o">.</span><span class="n">type_as</span> <span class="o">=</span> <span class="n">type_as</span>
+
+<div class="viewcode-block" id="masked_fill"><a class="viewcode-back" href="../jittor.html#jittor.masked_fill">[文档]</a><span class="k">def</span> <span class="nf">masked_fill</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">mask</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
+    <span class="k">assert</span> <span class="nb">list</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">==</span> <span class="nb">list</span><span class="p">(</span><span class="n">mask</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+    <span class="c1"># TODO: assert mask = 0 or 1</span>
+    <span class="k">return</span> <span class="n">x</span> <span class="o">*</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="n">mask</span><span class="p">)</span> <span class="o">+</span> <span class="n">mask</span> <span class="o">*</span> <span class="n">value</span></div>
+<span class="n">Var</span><span class="o">.</span><span class="n">masked_fill</span> <span class="o">=</span> <span class="n">masked_fill</span>
+
+
+<div class="viewcode-block" id="sqr"><a class="viewcode-back" href="../jittor.html#jittor.sqr">[文档]</a><span class="k">def</span> <span class="nf">sqr</span><span class="p">(</span><span class="n">x</span><span class="p">):</span> <span class="k">return</span> <span class="n">x</span><span class="o">*</span><span class="n">x</span></div>
+<span class="n">Var</span><span class="o">.</span><span class="n">sqr</span> <span class="o">=</span> <span class="n">sqr</span>
+
+<div class="viewcode-block" id="attrs"><a class="viewcode-back" href="../jittor.html#jittor.attrs">[文档]</a><span class="k">def</span> <span class="nf">attrs</span><span class="p">(</span><span class="n">var</span><span class="p">):</span>
+    <span class="k">return</span> <span class="p">{</span>
+        <span class="s2">&quot;is_stop_fuse&quot;</span><span class="p">:</span> <span class="n">var</span><span class="o">.</span><span class="n">is_stop_fuse</span><span class="p">(),</span>
+        <span class="s2">&quot;is_stop_grad&quot;</span><span class="p">:</span> <span class="n">var</span><span class="o">.</span><span class="n">is_stop_grad</span><span class="p">(),</span>
+        <span class="s2">&quot;shape&quot;</span><span class="p">:</span> <span class="n">var</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span>
+        <span class="s2">&quot;dtype&quot;</span><span class="p">:</span> <span class="n">var</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span>
+    <span class="p">}</span></div>
+<span class="n">Var</span><span class="o">.</span><span class="n">attrs</span> <span class="o">=</span> <span class="n">attrs</span>
+
+<div class="viewcode-block" id="fetch"><a class="viewcode-back" href="../jittor.html#jittor.fetch">[文档]</a><span class="k">def</span> <span class="nf">fetch</span><span class="p">(</span><span class="nb">vars</span><span class="p">,</span> <span class="n">func</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kw</span><span class="p">):</span>
+    <span class="n">core</span><span class="o">.</span><span class="n">fetch</span><span class="p">(</span><span class="nb">vars</span><span class="p">,</span> <span class="k">lambda</span> <span class="o">*</span><span class="n">results</span><span class="p">:</span> <span class="n">func</span><span class="p">(</span><span class="o">*</span><span class="n">results</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kw</span><span class="p">))</span></div>
+
+<span class="k">def</span> <span class="nf">fetch_var</span><span class="p">(</span><span class="n">var</span><span class="p">,</span> <span class="n">func</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kw</span><span class="p">):</span>
+    <span class="n">core</span><span class="o">.</span><span class="n">fetch</span><span class="p">([</span><span class="n">var</span><span class="p">],</span> <span class="k">lambda</span> <span class="n">a</span><span class="p">:</span> <span class="n">func</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kw</span><span class="p">))</span>
+<span class="n">Var</span><span class="o">.</span><span class="n">fetch</span> <span class="o">=</span> <span class="n">fetch_var</span>
+<span class="k">del</span> <span class="n">fetch_var</span>
+
+<div class="viewcode-block" id="display_memory_info"><a class="viewcode-back" href="../jittor.html#jittor.display_memory_info">[文档]</a><span class="k">def</span> <span class="nf">display_memory_info</span><span class="p">():</span>
+    <span class="kn">import</span> <span class="nn">inspect</span><span class="o">,</span> <span class="nn">os</span>
+    <span class="n">f</span> <span class="o">=</span> <span class="n">inspect</span><span class="o">.</span><span class="n">currentframe</span><span class="p">()</span>
+    <span class="n">fileline</span> <span class="o">=</span> <span class="n">inspect</span><span class="o">.</span><span class="n">getframeinfo</span><span class="p">(</span><span class="n">f</span><span class="o">.</span><span class="n">f_back</span><span class="p">)</span>
+    <span class="n">fileline</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;{os.path.basename(fileline.filename)}:</span><span class="si">{fileline.lineno}</span><span class="s2">&quot;</span>
+    <span class="n">core</span><span class="o">.</span><span class="n">display_memory_info</span><span class="p">(</span><span class="n">fileline</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="load"><a class="viewcode-back" href="../jittor.html#jittor.load">[文档]</a><span class="k">def</span> <span class="nf">load</span><span class="p">(</span><span class="n">path</span><span class="p">):</span>
+    <span class="n">pkl_file</span> <span class="o">=</span> <span class="nb">open</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="s1">&#39;rb&#39;</span><span class="p">)</span>
+    <span class="n">model_dict</span> <span class="o">=</span> <span class="n">pickle</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">pkl_file</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">model_dict</span></div>
+
+<div class="viewcode-block" id="Module"><a class="viewcode-back" href="../jittor.html#jittor.Module">[文档]</a><span class="k">class</span> <span class="nc">Module</span><span class="p">:</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kw</span><span class="p">):</span>
+        <span class="k">pass</span>
+<div class="viewcode-block" id="Module.execute"><a class="viewcode-back" href="../jittor.html#jittor.Module.execute">[文档]</a>    <span class="k">def</span> <span class="nf">execute</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kw</span><span class="p">):</span>
+        <span class="k">pass</span></div>
+    <span class="k">def</span> <span class="fm">__call__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kw</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kw</span><span class="p">)</span>
+    <span class="k">def</span> <span class="fm">__repr__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="fm">__str__</span><span class="p">()</span>
+    <span class="k">def</span> <span class="nf">_get_name</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="vm">__name__</span>
+    <span class="k">def</span> <span class="nf">__name__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">pass</span>
+
+<div class="viewcode-block" id="Module.dfs"><a class="viewcode-back" href="../jittor.html#jittor.Module.dfs">[文档]</a>    <span class="k">def</span> <span class="nf">dfs</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">parents</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">callback</span><span class="p">,</span> <span class="n">callback_leave</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="n">n_children</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__dict__</span><span class="o">.</span><span class="n">values</span><span class="p">():</span>
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">Module</span><span class="p">):</span>
+                <span class="n">n_children</span> <span class="o">+=</span> <span class="mi">1</span>
+        <span class="n">ret</span> <span class="o">=</span> <span class="n">callback</span><span class="p">(</span><span class="n">parents</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="bp">self</span><span class="p">,</span> <span class="n">n_children</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">ret</span> <span class="o">==</span> <span class="kc">False</span><span class="p">:</span> <span class="k">return</span>
+        <span class="k">for</span> <span class="n">k</span><span class="p">,</span><span class="n">v</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="vm">__dict__</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">Module</span><span class="p">):</span>
+                <span class="k">continue</span>
+            <span class="n">parents</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
+            <span class="n">v</span><span class="o">.</span><span class="n">dfs</span><span class="p">(</span><span class="n">parents</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">callback</span><span class="p">,</span> <span class="n">callback_leave</span><span class="p">)</span>
+            <span class="n">parents</span><span class="o">.</span><span class="n">pop</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">callback_leave</span><span class="p">:</span>
+            <span class="n">callback_leave</span><span class="p">(</span><span class="n">parents</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="bp">self</span><span class="p">,</span> <span class="n">n_children</span><span class="p">)</span></div>
+
+    <span class="k">def</span> <span class="fm">__str__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">ss</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">def</span> <span class="nf">callback</span><span class="p">(</span><span class="n">parents</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">n</span><span class="p">):</span>
+            <span class="c1"># indent key:class_name(extra_repr)</span>
+            <span class="n">k</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{k}</span><span class="s2">: &quot;</span> <span class="k">if</span> <span class="n">k</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="s2">&quot;&quot;</span>
+            <span class="n">s</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;{&#39; &#39;*(len(parents)*4)}</span><span class="si">{k}{v.__class__.__name__}</span><span class="s2">&quot;</span>
+            <span class="k">if</span> <span class="n">n</span><span class="p">:</span>
+                <span class="n">s</span> <span class="o">+=</span> <span class="s1">&#39;(&#39;</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">s</span> <span class="o">+=</span> <span class="sa">f</span><span class="s2">&quot;({v.extra_repr()})&quot;</span>
+            <span class="n">ss</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">s</span><span class="p">)</span>
+        <span class="k">def</span> <span class="nf">callback_leave</span><span class="p">(</span><span class="n">parents</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">n</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">n</span><span class="p">:</span>
+                <span class="n">ss</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s1">&#39; &#39;</span><span class="o">*</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">parents</span><span class="p">)</span><span class="o">*</span><span class="mi">4</span><span class="p">)</span><span class="o">+</span><span class="s1">&#39;)&#39;</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">dfs</span><span class="p">([],</span> <span class="kc">None</span><span class="p">,</span> <span class="n">callback</span><span class="p">,</span> <span class="n">callback_leave</span><span class="p">)</span>
+        <span class="k">return</span> <span class="s2">&quot;</span><span class="se">\n</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">ss</span><span class="p">)</span>
+
+<div class="viewcode-block" id="Module.parameters"><a class="viewcode-back" href="../jittor.html#jittor.Module.parameters">[文档]</a>    <span class="k">def</span> <span class="nf">parameters</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">ps</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">stack</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">def</span> <span class="nf">callback</span><span class="p">(</span><span class="n">parents</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">n</span><span class="p">):</span>
+            <span class="n">stack</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">k</span><span class="p">))</span>
+            <span class="k">for</span> <span class="n">k2</span><span class="p">,</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">v</span><span class="o">.</span><span class="vm">__dict__</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+                <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">p</span><span class="p">,</span> <span class="n">Var</span><span class="p">):</span>
+                    <span class="n">ps</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">p</span><span class="p">)</span>
+                    <span class="n">p</span><span class="o">.</span><span class="n">name</span><span class="p">(</span><span class="s2">&quot;.&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">stack</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span><span class="o">+</span><span class="p">[</span><span class="nb">str</span><span class="p">(</span><span class="n">k2</span><span class="p">)]))</span>
+        <span class="k">def</span> <span class="nf">callback_leave</span><span class="p">(</span><span class="n">parents</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">n</span><span class="p">):</span>
+            <span class="n">stack</span><span class="o">.</span><span class="n">pop</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">dfs</span><span class="p">([],</span> <span class="kc">None</span><span class="p">,</span> <span class="n">callback</span><span class="p">,</span> <span class="n">callback_leave</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">ps</span></div>
+
+<div class="viewcode-block" id="Module.modules"><a class="viewcode-back" href="../jittor.html#jittor.Module.modules">[文档]</a>    <span class="k">def</span> <span class="nf">modules</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">ms</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">def</span> <span class="nf">callback</span><span class="p">(</span><span class="n">parents</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">n</span><span class="p">):</span>
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">Module</span><span class="p">):</span>
+                <span class="n">ms</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">v</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">dfs</span><span class="p">([],</span> <span class="kc">None</span><span class="p">,</span> <span class="n">callback</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">ms</span></div>
+
+<div class="viewcode-block" id="Module.children"><a class="viewcode-back" href="../jittor.html#jittor.Module.children">[文档]</a>    <span class="k">def</span> <span class="nf">children</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">cd</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">def</span> <span class="nf">callback</span><span class="p">(</span><span class="n">parents</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">n</span><span class="p">):</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">parents</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span> <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">Module</span><span class="p">):</span>
+                <span class="n">cd</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">v</span><span class="p">)</span>
+                <span class="k">return</span> <span class="kc">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">dfs</span><span class="p">([],</span> <span class="kc">None</span><span class="p">,</span> <span class="n">callback</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">cd</span></div>
+
+<div class="viewcode-block" id="Module.extra_repr"><a class="viewcode-back" href="../jittor.html#jittor.Module.extra_repr">[文档]</a>    <span class="k">def</span> <span class="nf">extra_repr</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">ss</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">n</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="fm">__init__</span><span class="o">.</span><span class="vm">__code__</span><span class="o">.</span><span class="n">co_varnames</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="fm">__init__</span><span class="o">.</span><span class="vm">__defaults__</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">n</span> <span class="o">-=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="fm">__init__</span><span class="o">.</span><span class="vm">__defaults__</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">k</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="fm">__init__</span><span class="o">.</span><span class="vm">__code__</span><span class="o">.</span><span class="n">co_varnames</span><span class="p">[</span><span class="mi">1</span><span class="p">:]):</span>
+            <span class="n">v</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">k</span><span class="p">)</span> <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">k</span><span class="p">)</span> <span class="k">else</span> <span class="kc">None</span>
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">Var</span><span class="p">):</span> <span class="n">v</span> <span class="o">=</span> <span class="n">v</span><span class="o">.</span><span class="n">peek</span><span class="p">()</span>
+            <span class="n">s</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{k}</span><span class="s2">=</span><span class="si">{v}</span><span class="s2">&quot;</span> <span class="k">if</span> <span class="n">i</span> <span class="o">&gt;=</span> <span class="n">n</span> <span class="k">else</span> <span class="nb">str</span><span class="p">(</span><span class="n">v</span><span class="p">)</span>
+            <span class="n">ss</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">s</span><span class="p">)</span>
+        <span class="k">return</span> <span class="s2">&quot;, &quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">ss</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="Module.load_parameters"><a class="viewcode-back" href="../jittor.html#jittor.Module.load_parameters">[文档]</a>    <span class="k">def</span> <span class="nf">load_parameters</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">params</span><span class="p">):</span>
+        <span class="n">n_failed</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="n">params</span><span class="o">.</span><span class="n">keys</span><span class="p">():</span>
+            <span class="n">v</span> <span class="o">=</span> <span class="bp">self</span>
+            <span class="n">key_</span> <span class="o">=</span> <span class="n">key</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;.&#39;</span><span class="p">)</span>
+            <span class="n">end</span> <span class="o">=</span> <span class="mi">0</span>
+            <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">key_</span><span class="p">:</span>
+                <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">nn</span><span class="o">.</span><span class="n">Sequential</span><span class="p">):</span>
+                    <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">int</span><span class="p">(</span><span class="n">k</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="nb">len</span><span class="p">(</span><span class="n">v</span><span class="o">.</span><span class="n">layers</span><span class="p">):</span>
+                        <span class="n">end</span> <span class="o">=</span> <span class="mi">1</span>
+                        <span class="k">break</span>
+                    <span class="k">else</span><span class="p">:</span>
+                        <span class="n">v</span> <span class="o">=</span> <span class="n">v</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">int</span><span class="p">(</span><span class="n">k</span><span class="p">)]</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">k</span><span class="p">):</span>
+                        <span class="n">v</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">k</span><span class="p">)</span>
+                    <span class="k">else</span><span class="p">:</span>
+                        <span class="n">end</span> <span class="o">=</span> <span class="mi">1</span>
+                        <span class="k">break</span>
+            <span class="k">if</span> <span class="n">end</span> <span class="o">==</span><span class="mi">1</span><span class="p">:</span>
+                <span class="n">n_failed</span> <span class="o">+=</span> <span class="mi">1</span>
+                <span class="n">LOG</span><span class="o">.</span><span class="n">w</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;load parameter </span><span class="si">{key}</span><span class="s1"> failed ...&#39;</span><span class="p">)</span>
+                <span class="k">pass</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">LOG</span><span class="o">.</span><span class="n">v</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;load parameter </span><span class="si">{key}</span><span class="s1"> success ...&#39;</span><span class="p">)</span>
+                <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">params</span><span class="p">[</span><span class="n">key</span><span class="p">],</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="ow">or</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">params</span><span class="p">[</span><span class="n">key</span><span class="p">],</span> <span class="nb">list</span><span class="p">):</span>
+                    <span class="n">v</span><span class="o">.</span><span class="n">assign</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="n">params</span><span class="p">[</span><span class="n">key</span><span class="p">]))</span>
+                <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">params</span><span class="p">[</span><span class="n">key</span><span class="p">],</span> <span class="n">Var</span><span class="p">):</span>
+                    <span class="n">v</span><span class="o">.</span><span class="n">assign</span><span class="p">(</span><span class="n">params</span><span class="p">[</span><span class="n">key</span><span class="p">])</span>
+                <span class="k">else</span><span class="p">:</span>
+                    <span class="c1"># assume is pytorch tensor</span>
+                    <span class="n">v</span><span class="o">.</span><span class="n">assign</span><span class="p">(</span><span class="n">array</span><span class="p">(</span><span class="n">params</span><span class="p">[</span><span class="n">key</span><span class="p">]</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span><span class="o">.</span><span class="n">detach</span><span class="p">()</span><span class="o">.</span><span class="n">numpy</span><span class="p">()))</span>
+        <span class="k">if</span> <span class="n">n_failed</span><span class="p">:</span>
+            <span class="n">LOG</span><span class="o">.</span><span class="n">w</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;load total {len(params)} params, </span><span class="si">{n_failed}</span><span class="s2"> failed&quot;</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="Module.save"><a class="viewcode-back" href="../jittor.html#jittor.Module.save">[文档]</a>    <span class="k">def</span> <span class="nf">save</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">path</span><span class="p">):</span>
+        <span class="n">params</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">parameters</span><span class="p">()</span>
+        <span class="n">params_dict</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">params</span><span class="p">:</span>
+            <span class="n">params_dict</span><span class="p">[</span><span class="n">p</span><span class="o">.</span><span class="n">name</span><span class="p">()]</span> <span class="o">=</span> <span class="n">p</span><span class="o">.</span><span class="n">data</span>
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="s1">&#39;wb&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+            <span class="n">pickle</span><span class="o">.</span><span class="n">dump</span><span class="p">(</span><span class="n">params_dict</span><span class="p">,</span> <span class="n">f</span><span class="p">,</span> <span class="n">pickle</span><span class="o">.</span><span class="n">HIGHEST_PROTOCOL</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="Module.load"><a class="viewcode-back" href="../jittor.html#jittor.Module.load">[文档]</a>    <span class="k">def</span> <span class="nf">load</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">path</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">path</span><span class="o">.</span><span class="n">endswith</span><span class="p">(</span><span class="s2">&quot;.pth&quot;</span><span class="p">):</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">dirty_fix_pytorch_runtime_error</span><span class="p">()</span>
+                <span class="kn">import</span> <span class="nn">torch</span>
+            <span class="k">except</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;pytorch need to be installed when load pth format.&quot;</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">load_parameters</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="n">map_location</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">device</span><span class="p">(</span><span class="s1">&#39;cpu&#39;</span><span class="p">)))</span>
+            <span class="k">return</span>
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="s1">&#39;rb&#39;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">load_parameters</span><span class="p">(</span><span class="n">pickle</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">f</span><span class="p">))</span></div>
+
+<div class="viewcode-block" id="Module.eval"><a class="viewcode-back" href="../jittor.html#jittor.Module.eval">[文档]</a>    <span class="k">def</span> <span class="nf">eval</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">def</span> <span class="nf">callback</span><span class="p">(</span><span class="n">parents</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">n</span><span class="p">):</span>
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">Module</span><span class="p">)</span> <span class="ow">and</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="s2">&quot;is_train&quot;</span><span class="p">):</span>
+                <span class="n">v</span><span class="o">.</span><span class="n">is_train</span> <span class="o">=</span> <span class="kc">False</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">dfs</span><span class="p">([],</span> <span class="kc">None</span><span class="p">,</span> <span class="n">callback</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+
+        <span class="c1"># backup stop grad or not</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">hasattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;backup_grad_state&quot;</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">backup_grad_state</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">parameters</span><span class="p">():</span>
+            <span class="k">if</span> <span class="nb">id</span><span class="p">(</span><span class="n">p</span><span class="p">)</span> <span class="ow">not</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">backup_grad_state</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">backup_grad_state</span><span class="p">[</span><span class="nb">id</span><span class="p">(</span><span class="n">p</span><span class="p">)]</span> <span class="o">=</span> <span class="ow">not</span> <span class="n">p</span><span class="o">.</span><span class="n">is_stop_grad</span><span class="p">()</span>
+            <span class="n">p</span><span class="o">.</span><span class="n">stop_grad</span><span class="p">()</span></div>
+
+<div class="viewcode-block" id="Module.train"><a class="viewcode-back" href="../jittor.html#jittor.Module.train">[文档]</a>    <span class="k">def</span> <span class="nf">train</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">def</span> <span class="nf">callback</span><span class="p">(</span><span class="n">parents</span><span class="p">,</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">n</span><span class="p">):</span>
+            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="n">Module</span><span class="p">)</span> <span class="ow">and</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="s2">&quot;is_train&quot;</span><span class="p">):</span>
+                <span class="n">v</span><span class="o">.</span><span class="n">is_train</span> <span class="o">=</span> <span class="kc">True</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">dfs</span><span class="p">([],</span> <span class="kc">None</span><span class="p">,</span> <span class="n">callback</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+
+        <span class="c1"># backup stop grad or not</span>
+        <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="s2">&quot;backup_grad_state&quot;</span><span class="p">):</span>
+            <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">parameters</span><span class="p">():</span>
+                <span class="k">if</span> <span class="nb">id</span><span class="p">(</span><span class="n">p</span><span class="p">)</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">backup_grad_state</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">backup_grad_state</span><span class="p">[</span><span class="nb">id</span><span class="p">(</span><span class="n">p</span><span class="p">)]:</span>
+                    <span class="n">p</span><span class="o">.</span><span class="n">start_grad</span><span class="p">()</span></div>
+    
+<div class="viewcode-block" id="Module.mpi_param_broadcast"><a class="viewcode-back" href="../jittor.html#jittor.Module.mpi_param_broadcast">[文档]</a>    <span class="k">def</span> <span class="nf">mpi_param_broadcast</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">root</span><span class="o">=</span><span class="mi">0</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">mpi</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span> <span class="k">return</span>
+        <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">parameters</span><span class="p">():</span>
+            <span class="n">p</span><span class="o">.</span><span class="n">assign</span><span class="p">(</span><span class="n">p</span><span class="o">.</span><span class="n">mpi_broadcast</span><span class="p">(</span><span class="n">root</span><span class="p">)</span><span class="o">.</span><span class="n">detach</span><span class="p">())</span></div></div>
+
+<div class="viewcode-block" id="make_module"><a class="viewcode-back" href="../jittor.html#jittor.make_module">[文档]</a><span class="k">def</span> <span class="nf">make_module</span><span class="p">(</span><span class="n">func</span><span class="p">,</span> <span class="n">exec_n_args</span><span class="o">=</span><span class="mi">1</span><span class="p">):</span>
+    <span class="k">class</span> <span class="nc">MakeModule</span><span class="p">(</span><span class="n">Module</span><span class="p">):</span>
+        <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kw</span><span class="p">):</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">args</span> <span class="o">=</span> <span class="n">args</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">kw</span> <span class="o">=</span> <span class="n">kw</span>
+        <span class="k">def</span> <span class="nf">execute</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">):</span>
+            <span class="k">return</span> <span class="n">func</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">*</span><span class="bp">self</span><span class="o">.</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">kw</span><span class="p">)</span>
+        <span class="k">def</span> <span class="fm">__str__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+            <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{func.__name__}</span><span class="s2">({self.extra_repr()})&quot;</span>
+        <span class="k">def</span> <span class="nf">extra_repr</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+            <span class="k">return</span> <span class="s2">&quot;,&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="nb">map</span><span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">args</span><span class="p">))</span>
+    <span class="k">return</span> <span class="n">MakeModule</span></div>
+
+
+<div class="viewcode-block" id="dirty_fix_pytorch_runtime_error"><a class="viewcode-back" href="../jittor.html#jittor.dirty_fix_pytorch_runtime_error">[文档]</a><span class="k">def</span> <span class="nf">dirty_fix_pytorch_runtime_error</span><span class="p">():</span>
+    <span class="sd">&#39;&#39;&#39; This funtion should be called before pytorch.</span>
+<span class="sd">    </span>
+<span class="sd">    Example::</span>
+
+<span class="sd">        import jittor as jt</span>
+<span class="sd">        jt.dirty_fix_pytorch_runtime_error()</span>
+<span class="sd">        import torch</span>
+<span class="sd">    &#39;&#39;&#39;</span>
+    <span class="kn">import</span> <span class="nn">os</span>
+    <span class="n">os</span><span class="o">.</span><span class="n">RTLD_GLOBAL</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">RTLD_GLOBAL</span> <span class="o">|</span> <span class="n">os</span><span class="o">.</span><span class="n">RTLD_DEEPBIND</span></div>
+
+
+<span class="kn">import</span> <span class="nn">atexit</span>
+
+<div class="viewcode-block" id="ExitHooks"><a class="viewcode-back" href="../jittor.html#jittor.ExitHooks">[文档]</a><span class="k">class</span> <span class="nc">ExitHooks</span><span class="p">(</span><span class="nb">object</span><span class="p">):</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">exit_code</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">exception</span> <span class="o">=</span> <span class="kc">None</span>
+
+<div class="viewcode-block" id="ExitHooks.hook"><a class="viewcode-back" href="../jittor.html#jittor.ExitHooks.hook">[文档]</a>    <span class="k">def</span> <span class="nf">hook</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_orig_exit</span> <span class="o">=</span> <span class="n">sys</span><span class="o">.</span><span class="n">exit</span>
+        <span class="n">sys</span><span class="o">.</span><span class="n">exit</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">exit</span>
+        <span class="n">sys</span><span class="o">.</span><span class="n">excepthook</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">exc_handler</span></div>
+
+<div class="viewcode-block" id="ExitHooks.exit"><a class="viewcode-back" href="../jittor.html#jittor.ExitHooks.exit">[文档]</a>    <span class="k">def</span> <span class="nf">exit</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">code</span><span class="o">=</span><span class="mi">0</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">exit_code</span> <span class="o">=</span> <span class="n">code</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_orig_exit</span><span class="p">(</span><span class="n">code</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="ExitHooks.exc_handler"><a class="viewcode-back" href="../jittor.html#jittor.ExitHooks.exc_handler">[文档]</a>    <span class="k">def</span> <span class="nf">exc_handler</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">exc_type</span><span class="p">,</span> <span class="n">exc</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">exception</span> <span class="o">=</span> <span class="n">exc</span>
+        <span class="n">traceback</span><span class="o">.</span><span class="n">print_exception</span><span class="p">(</span><span class="n">exc_type</span><span class="p">,</span> <span class="n">exc</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">)</span></div></div>
+
+<span class="n">hooks</span> <span class="o">=</span> <span class="n">ExitHooks</span><span class="p">()</span>
+<span class="n">hooks</span><span class="o">.</span><span class="n">hook</span><span class="p">()</span>
+
+<div class="viewcode-block" id="jittor_exit"><a class="viewcode-back" href="../jittor.html#jittor.jittor_exit">[文档]</a><span class="k">def</span> <span class="nf">jittor_exit</span><span class="p">():</span>
+    <span class="k">if</span> <span class="n">hooks</span><span class="o">.</span><span class="n">exit_code</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">pass</span>
+    <span class="k">elif</span> <span class="n">hooks</span><span class="o">.</span><span class="n">exception</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">pass</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">core</span><span class="o">.</span><span class="n">sync_all</span><span class="p">(</span><span class="kc">True</span><span class="p">)</span></div>
+<span class="n">atexit</span><span class="o">.</span><span class="n">register</span><span class="p">(</span><span class="n">jittor_exit</span><span class="p">)</span>
+
+<span class="n">Var</span><span class="o">.</span><span class="fm">__str__</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">data</span><span class="p">)</span>
+<span class="n">Var</span><span class="o">.</span><span class="fm">__repr__</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">data</span><span class="p">)</span>
+<span class="n">Var</span><span class="o">.</span><span class="n">peek</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{x.dtype}{x.shape}</span><span class="s2">&quot;</span>
+
+<span class="kn">from</span> <span class="nn">.</span> <span class="kn">import</span> <span class="n">nn</span>
+<span class="kn">from</span> <span class="nn">.nn</span> <span class="kn">import</span> <span class="n">matmul</span>
+<span class="kn">from</span> <span class="nn">.</span> <span class="kn">import</span> <span class="n">contrib</span>
+</pre></div>
+
+           </div>
+           
+          </div>
+          <footer>
+  
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>
+        &copy; Copyright 2020, Jittor
+
+    </p>
+  </div>
+  Built with <a href="http://sphinx-doc.org/">Sphinx</a> using a <a href="https://github.com/rtfd/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>. 
+
+</footer>
+
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+  
+
+
+  <script type="text/javascript">
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script>
+
+  
+  
+    
+   
+
+</body>
+</html>
