@@ -61,7 +61,7 @@ class Optimizer(object):
         grads = jt.grad(loss, params_has_grad)
 
         # sync grads and model if in mpi
-        if jt.mpi:
+        if jt.in_mpi:
             for g in grads:
                 g.assign(g.mpi_all_reduce("mean"))
             if self.n_step % self.param_sync_iter == 0:

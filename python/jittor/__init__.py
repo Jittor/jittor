@@ -16,7 +16,7 @@ with lock.lock_scope():
     from jittor_core import *
     from jittor_core.ops import *
     from . import compile_extern
-    from .compile_extern import mkl_ops, mpi, mpi_ops
+    from .compile_extern import mkl_ops, mpi, mpi_ops, in_mpi
     if core.get_device_count() == 0:
         has_cuda = compile_extern.has_cuda = compiler.has_cuda = False
     if has_cuda:
@@ -125,17 +125,21 @@ class profile_scope(_call_no_record_scope):
         profiler.stop()
         self.report.extend(profiler.report())
 
-class single_process_scope(_call_no_record_scope):
+class single_process_scope:
     """ single_process_scope
     
     Code in this scope will only be executed by single process.
 
+    All the mpi code inside this scope will have not affect.
+    mpi.world_rank() and mpi.local_rank() will return 0, world_size() will return 1,
+
     example::
     
-        with jt.single_process_scope(root=0):
-            ......
+        with jt.single_process_scope(rank=0) as flag:
+            if flag:
+                ......
 
-        @jt.single_process_scope(root=0)
+        @jt.single_process_scope(rank=0)
         def xxx():
             ...
     """
@@ -143,23 +147,31 @@ class single_process_scope(_call_no_record_scope):
         self.rank = rank
 
     def __enter__(self):
-        global mpi
-        from jittor.dataset import dataset
-        self.mpi_backup = mpi
-        mpi = dataset.mpi = None
+        global in_mpi
+        self.bk_in_mpi = in_mpi
+        if mpi:
+            self.bk_mpi_state = mpi.get_state()
+        if not in_mpi:
+            return True
+        
+        ret = self.rank == mpi.world_rank()
+        in_mpi = compile_extern.in_mpi = False
+        mpi.set_state(False)
+        return ret
 
     def __exit__(self, *exc):
-        global mpi
-        from jittor.dataset import dataset
-        mpi = dataset.mpi = self.mpi_backup
+        global in_mpi
+        in_mpi = compile_extern.in_mpi = self.bk_in_mpi
+        if mpi:
+            mpi.set_state(self.bk_mpi_state)
         
     def __call__(self, func):
         global mpi
         def inner(*args, **kw):
-            if mpi and mpi.world_rank() != self.rank:
-                return
-            with self:
-                ret = func(*args, **kw)
+            ret = None
+            with self as flag:
+                if flag:
+                    ret = func(*args, **kw)
             return ret
         return inner
 
@@ -504,7 +516,7 @@ class Module:
                     p.start_grad()
     
     def mpi_param_broadcast(self, root=0):
-        if mpi is None: return
+        if not in_mpi: return
         for p in self.parameters():
             p.assign(p.mpi_broadcast(root).detach())
 

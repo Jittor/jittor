@@ -17,6 +17,10 @@ namespace jittor {
 
 #ifndef JIT
 MpiBroadcastOp::MpiBroadcastOp(Var* x, int root) : x(x), root(root) {
+    if (!mpi_enabled) {
+        forward(x);
+        return;
+    }
     #ifdef HAS_CUDA
     if (use_cuda) {
         static auto nccl_broadcast = has_op("nccl_broadcast")

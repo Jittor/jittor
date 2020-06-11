@@ -30,7 +30,7 @@ def val2():
         if i == 5:
             break
 
-@unittest.skipIf(mpi is None, "no inside mpirun")
+@unittest.skipIf(not jt.in_mpi, "no inside mpirun")
 class TestSingleProcessScope(unittest.TestCase):
     def test_single_process_scope(self):
         val1()
