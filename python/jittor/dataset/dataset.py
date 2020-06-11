@@ -197,7 +197,7 @@ class Dataset(object):
         # pad to world_size
         #  last batch
         # [.] -> [012]
-        if mpi:
+        if jt.in_mpi:
             world_size = mpi.world_size()
             world_rank = mpi.world_rank()
             index_list = np.int32(index_list)

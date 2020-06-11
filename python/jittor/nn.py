@@ -185,7 +185,7 @@ class BatchNorm(Module):
         if self.is_train:
             xmean = jt.mean(x, dims=[0,2,3], keepdims=1)
             x2mean = jt.mean(x*x, dims=[0,2,3], keepdims=1)
-            if self.sync and jt.mpi:
+            if self.sync and jt.in_mpi:
                 xmean = xmean.mpi_all_reduce("mean")
                 x2mean = x2mean.mpi_all_reduce("mean")
 
@@ -219,7 +219,7 @@ class BatchNorm1d(Module):
             xmean = jt.mean(x, dims=[0], keepdims=1)
             x2mean = jt.mean(x*x, dims=[0], keepdims=1)
 
-            if self.sync and jt.mpi:
+            if self.sync and jt.in_mpi:
                 xmean = xmean.mpi_all_reduce("mean")
                 x2mean = x2mean.mpi_all_reduce("mean")
 
@@ -249,7 +249,7 @@ class InstanceNorm2d(Module):
     def execute(self, x):
         xmean = jt.mean(x, dims=[2,3], keepdims=1)
         x2mean = jt.mean(x*x, dims=[2,3], keepdims=1)
-        if self.sync and jt.mpi:
+        if self.sync and jt.in_mpi:
             xmean = xmean.mpi_all_reduce("mean")
             x2mean = x2mean.mpi_all_reduce("mean")
 

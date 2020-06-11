@@ -395,8 +395,7 @@ def setup_mpi():
         setattr(core.Var, k, warper(mpi_ops.__dict__[k]))
 
 setup_mpi()
-if not inside_mpi():
-    mpi = None
+in_mpi = inside_mpi()
 setup_nccl()
 
 setup_cutt()

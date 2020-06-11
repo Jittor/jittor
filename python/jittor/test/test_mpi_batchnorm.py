@@ -48,7 +48,7 @@ class FakeMpiBatchNorm(nn.Module):
         b = self.bias.broadcast(x, [0,2,3])
         return norm_x * w + b
 
-@unittest.skipIf(mpi is None, "no inside mpirun")
+@unittest.skipIf(not jt.in_mpi, "no inside mpirun")
 class TestMpiBatchnorm(unittest.TestCase):
     @classmethod
     def setUpClass(self):

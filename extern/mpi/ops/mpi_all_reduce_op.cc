@@ -25,6 +25,10 @@ static auto make_mpi_all_reduce = get_op_info("mpi_all_reduce")
     .get_constructor<VarPtr, Var*, NanoString>();
 
 MpiAllReduceOp::MpiAllReduceOp(Var* x, NanoString op) : x(x), op(op) {
+    if (!mpi_enabled) {
+        forward(x);
+        return;
+    }
     if (op == ns_mean) {
         auto var = make_mpi_all_reduce(x, ns_add);
         var = make_binary(var, make_array(&mpi_world_size, 1, ns_int32), ns_divide);

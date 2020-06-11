@@ -12,7 +12,7 @@ import jittor as jt
 import numpy as np
 mpi = jt.compile_extern.mpi
 
-@unittest.skipIf(mpi is None, "no inside mpirun")
+@unittest.skipIf(not jt.in_mpi, "no inside mpirun")
 class TestMpi(unittest.TestCase):
     def test_mpi_test_op(self):
         assert jt.compile_extern.mpi_ops.mpi_test("").data == 123

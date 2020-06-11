@@ -113,7 +113,7 @@ class TestResnet(unittest.TestCase):
             # Train Epoch: 0 [40/100 (40%)]   Loss: 2.286762  Acc: 0.130000
             # Train Epoch: 0 [50/100 (50%)]   Loss: 2.055014  Acc: 0.290000
 
-            if jt.mpi:
+            if jt.in_mpi:
                 assert jt.core.number_of_lived_vars() < 3900, jt.core.number_of_lived_vars()
             else:
                 assert jt.core.number_of_lived_vars() < 3500, jt.core.number_of_lived_vars()
