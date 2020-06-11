@@ -47,6 +47,14 @@ def _get_depths(alpha):
     return [_round_to_multiple_of((depth * alpha), 8) for depth in depths]
 
 class MNASNet(nn.Module):
+    """ MNASNet model architecture. version=2.
+
+    Args:
+    
+    * alpha: Depth multiplier.
+    * num_classes: Number of classes. Default: 1000.
+    * dropout: Dropout probability of dropout layer.
+    """
     _version = 2
 
     def __init__(self, alpha, num_classes=1000, dropout=0.2):

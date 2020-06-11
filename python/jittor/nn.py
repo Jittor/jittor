@@ -84,8 +84,11 @@ def cross_entropy_loss(output, target, ignore_index=None):
 def mse_loss(output, target):
     return (output-target).sqr().mean()
 
-def bce_loss(output, target):
-    return - (target * jt.log(jt.maximum(output, 1e-20)) + (1 - target) * jt.log(jt.maximum(1 - output, 1e-20))).mean()
+def bce_loss(output, target, size_average=True):
+    if size_average:
+        return - (target * jt.log(jt.maximum(output, 1e-20)) + (1 - target) * jt.log(jt.maximum(1 - output, 1e-20))).mean()
+    else:
+        return - (target * jt.log(jt.maximum(output, 1e-20)) + (1 - target) * jt.log(jt.maximum(1 - output, 1e-20))).sum()
 
 def l1_loss(output, target):
     return (output-target).abs().mean()
@@ -105,8 +108,8 @@ class MSELoss(Module):
 class BCELoss(Module):
     def __init__(self):
         pass
-    def execute(self, output, target):
-        return bce_loss(output, target)
+    def execute(self, output, target, size_average=True):
+        return bce_loss(output, target, size_average)
 
 class L1Loss(Module):
     def __init__(self):
@@ -118,9 +121,9 @@ class BCEWithLogitsLoss(Module):
     def __init__(self):
         self.sigmoid = Sigmoid()
         self.bce = BCELoss()
-    def execute(self, output, target):
+    def execute(self, output, target, size_average=True):
         output = self.sigmoid(output)
-        output = self.bce(output, target)
+        output = self.bce(output, target, size_average)
         return output
 
 def softmax(x, dim = None):
@@ -279,9 +282,14 @@ class Conv(Module):
         assert in_channels % groups == 0, 'in_channels must be divisible by groups'
         assert out_channels % groups == 0, 'out_channels must be divisible by groups'
 
-        self.weight = init.relu_invariant_gauss([out_channels, in_channels//groups, Kh, Kw], dtype="float", mode="fan_out")
+        # self.weight = init.relu_invariant_gauss([out_channels, in_channels//groups, Kh, Kw], dtype="float", mode="fan_out")
+        self.weight = init.invariant_uniform([out_channels, in_channels//groups, Kh, Kw], dtype="float")
         if bias:
-            self.bias = init.uniform([out_channels], dtype="float", low=-1, high=1)
+            fan=1
+            for i in self.weight.shape[1:]:
+                fan *= i
+            bound = 1 / math.sqrt(fan)
+            self.bias = init.uniform([out_channels], dtype="float", low=-bound, high=bound)
         else:
             self.bias = None
 
@@ -499,10 +507,10 @@ class PixelShuffle(Module):
     def execute(self, x):
         n,c,h,w = x.shape
         r = self.upscale_factor
-        assert c%(r**2)==0, f"input channel needs to be divided by upscale_factor's square in PixelShuffle"
+        assert c%(r*r)==0, f"input channel needs to be divided by upscale_factor's square in PixelShuffle"
         return x.reindex([n,int(c/r**2),h*r,w*r], [
             "i0",
-            f"i1*{r**2}+i2%{r}*{r}+i3%{r}",
+            f"i1*{r*r}+i2%{r}*{r}+i3%{r}",
             f"i2/{r}",
             f"i3/{r}"
         ])
@@ -519,30 +527,58 @@ class Sigmoid(Module):
     def execute(self, x) :
         return x.sigmoid()
 
-def resize(x, size, mode="nearest"):
-    img = x
-    n,c,h,w = x.shape
-    H,W = size
-    new_size = [n,c,H,W]
-    nid, cid, hid, wid = jt.index(new_size)
-    x = hid * h / H
-    y = wid * w / W
+class Resize(Module):
+    def __init__(self, size, mode="nearest", align_corners=False):
+        super().__init__()
+        self.size = size
+        self.mode = mode
+        self.align_corners = align_corners
+    def execute(self, x):
+        return resize(x, self.size, self.mode, self.align_corners)
+
+def _interpolate(img, x, y, ids, mode):
     if mode=="nearest":
-        return img.reindex([nid, cid, x.floor(), y.floor()])
+        return img.reindex([*ids, x.floor(), y.floor()])
     if mode=="bilinear":
         fx, fy = x.floor(), y.floor()
         cx, cy = fx+1, fy+1
         dx, dy = x-fx, y-fy
-        a = img.reindex_var([nid, cid, fx, fy])
-        b = img.reindex_var([nid, cid, cx, fy])
-        c = img.reindex_var([nid, cid, fx, cy])
-        d = img.reindex_var([nid, cid, cx, cy])
+        a = img.reindex_var([*ids, fx, fy])
+        b = img.reindex_var([*ids, cx, fy])
+        c = img.reindex_var([*ids, fx, cy])
+        d = img.reindex_var([*ids, cx, cy])
         dnx, dny = 1-dx, 1-dy
         ab = dx*b + dnx*a
         cd = dx*d + dnx*c
         o = ab*dny + cd*dy
         return o
-    raise(f"Not support {interpolation}")
+    raise(f"Not support interpolation mode: {mode}")
+
+def resize(img, size, mode="nearest", align_corners=False):
+    n,c,h,w = img.shape
+    H,W = size
+    nid, cid, hid, wid = jt.index((n,c,H,W))
+    if align_corners:
+        x = hid * ((h-1) / max(1, H-1))
+        y = wid * ((w-1) / max(1, W-1))
+    else:
+        x = hid * (h / H) + (h/H*0.5 - 0.5)
+        if H>h: x = x.clamp(0, h-1)
+        y = wid * (w / W) + (w/W*0.5 - 0.5)
+        if W>w: y = y.clamp(0, w-1)
+    return _interpolate(img, x, y, (nid,cid), mode)
+
+def upsample(img, size, mode="nearest", align_corners=False):
+    n,c,h,w = img.shape
+    H,W = size
+    nid, cid, hid, wid = jt.index((n,c,H,W))
+    if align_corners:
+        x = hid * ((h-1) / max(1, H-1))
+        y = wid * ((w-1) / max(1, W-1))
+    else:
+        x = hid * (h / H)
+        y = wid * (w / W)
+    return _interpolate(img, x, y, (nid,cid), mode)
 
 class Upsample(Module):
     def __init__(self, scale_factor=None, mode='nearest'):
@@ -550,11 +586,17 @@ class Upsample(Module):
         self.mode = mode
     
     def execute(self, x):
-        return resize(x, size=(int(x.shape[2]*self.scale_factor[0]), int(x.shape[3]*self.scale_factor[1])), mode=self.mode)
+        return upsample(x,
+            size=(
+                int(x.shape[2]*self.scale_factor[0]), 
+                int(x.shape[3]*self.scale_factor[1])),
+            mode=self.mode)
 
 class Sequential(Module):
     def __init__(self, *args):
-        self.layers = list(args)
+        self.layers = []
+        for mod in args:
+            self.append(mod)
     def __getitem__(self, idx):
         return self.layers[idx]
     def execute(self, x):
@@ -573,6 +615,8 @@ class Sequential(Module):
         if callback_leave:
             callback_leave(parents, k, self, n_children)
     def append(self, mod):
+        assert callable(mod), f"Module <{type(mod)}> is not callable"
+        assert not isinstance(mod, type), f"Module is not a type"
         self.layers.append(mod)
 
 ModuleList = Sequential

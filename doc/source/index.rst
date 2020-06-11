@@ -24,6 +24,7 @@
    jittor.contrib
    jittor.dataset
    jittor.transform
+   jittor.mpi
 
 
 .. toctree::

@@ -99,16 +99,25 @@ class TestResizeAndCrop(unittest.TestCase):
         test_case(20, [1024, 1024], [1.2, 1.8][mid])
         test_case(20, [1024, 666], [0.8,1.0][mid])
 
+    def test_resize(self):
+        import torch.nn.functional as F
+        x = np.array(range(2*3*25)).reshape(2,3,5,5).astype("float32")
+        for r_size in [3,4,5,6]:
+            for align_corners in [True,False]:
+                check_equal(x,
+                    jnn.Resize((r_size, r_size), 'bilinear', align_corners),
+                    lambda x: F.interpolate(x, size=(r_size, r_size), mode='bilinear',align_corners=align_corners))
+
     def test_upsample(self):
-        arr = np.random.randn(16,10,224,224)
+        arr = np.random.randn(2,3,224,224)
         check_equal(arr, jnn.Upsample(scale_factor=2), tnn.Upsample(scale_factor=2))
         check_equal(arr, jnn.Upsample(scale_factor=0.2), tnn.Upsample(scale_factor=0.2))
 
     def test_pixelshuffle(self):
-        arr = np.random.randn(16,16,224,224)
+        arr = np.random.randn(2,4,224,224)
         check_equal(arr, jnn.PixelShuffle(upscale_factor=2), tnn.PixelShuffle(upscale_factor=2))
-        arr = np.random.randn(1,16*16,224,224)
-        check_equal(arr, jnn.PixelShuffle(upscale_factor=16), tnn.PixelShuffle(upscale_factor=16))
+        arr = np.random.randn(1,3*3,224,224)
+        check_equal(arr, jnn.PixelShuffle(upscale_factor=3), tnn.PixelShuffle(upscale_factor=3))
 
 if __name__ == "__main__":
     unittest.main()

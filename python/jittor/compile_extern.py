@@ -380,7 +380,7 @@ def setup_mpi():
     # share the 'environ' symbol.
     mpi = compile_custom_ops(mpi_src_files, 
         extra_flags=f" {mpi_flags} ", return_module=True,
-        dlopen_flags=os.RTLD_GLOBAL | os.RTLD_NOW)
+        dlopen_flags=os.RTLD_GLOBAL | os.RTLD_NOW, gen_name_="jittor_mpi_core")
     mpi_ops = mpi.ops
     LOG.vv("Get mpi: "+str(mpi.__dict__.keys()))
     LOG.vv("Get mpi_ops: "+str(mpi_ops.__dict__.keys()))

@@ -3,12 +3,13 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#pragma once
 #include "common.h"
 
 namespace jittor {
 
 #ifdef JIT_cuda
-#define pow(T,a,b) ::powf(a,b)
+#define pow(T,a,b) ::pow(a,b)
 #define maximum(T,a,b) ::max(T(a), T(b))
 #define minimum(T,a,b) ::min(T(a), T(b))
 #else // JIT_cpu

@@ -15,10 +15,14 @@ __all__ = ['ResNet', 'Resnet18', 'Resnet34', 'Resnet50', 'Resnet101', 'Resnet152
     'resnet18', 'resnet34', 'resnet50', 'resnet101', 'resnet152', 'resnext50_32x4d', 'resnext101_32x8d', 'wide_resnet50_2', 'wide_resnet101_2']
 
 def conv3x3(in_planes, out_planes, stride=1, groups=1, dilation=1):
-    return nn.Conv(in_planes, out_planes, kernel_size=3, stride=stride, padding=dilation, groups=groups, bias=False, dilation=dilation)
+    conv=nn.Conv(in_planes, out_planes, kernel_size=3, stride=stride, padding=dilation, groups=groups, bias=False, dilation=dilation)
+    jt.init.relu_invariant_gauss_(conv.weight, mode="fan_out")
+    return conv
 
 def conv1x1(in_planes, out_planes, stride=1):
-    return nn.Conv(in_planes, out_planes, kernel_size=1, stride=stride, bias=False)
+    conv=nn.Conv(in_planes, out_planes, kernel_size=1, stride=stride, bias=False)
+    jt.init.relu_invariant_gauss_(conv.weight, mode="fan_out")
+    return conv
 
 class BasicBlock(nn.Module):
     expansion = 1
@@ -102,6 +106,7 @@ class ResNet(nn.Module):
         self.groups = groups
         self.base_width = width_per_group
         self.conv1 = nn.Conv(3, self.inplanes, kernel_size=7, stride=2, padding=3, bias=False)
+        jt.init.relu_invariant_gauss_(self.conv1.weight, mode="fan_out")
         self.bn1 = norm_layer(self.inplanes)
         self.relu = nn.Relu()
         self.maxpool = nn.Pool(kernel_size=3, stride=2, padding=1, op='maximum')
@@ -162,6 +167,16 @@ def Resnet50(**kwargs):
 resnet50 = Resnet50
 
 def Resnet101(**kwargs):
+    """
+    ResNet-101 model architecture.
+
+    Example::
+
+        model = jittor.models.Resnet101()
+        x = jittor.random([10,224,224,3])
+        y = model(x) # [10, 1000]
+
+    """
     return _resnet(Bottleneck, [3, 4, 23, 3], **kwargs)
 resnet101 = Resnet101
 

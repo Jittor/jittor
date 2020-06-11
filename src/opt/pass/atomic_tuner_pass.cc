@@ -41,12 +41,15 @@ static void move_rely(KernelIR* inner_loop, KernelIR* outer_loop, KernelIR* def)
     }
 }
 
-static void tune_atomic(Pass* pass, KernelIR* ir, bool is_cuda, int tdim) {
+// sorder: Array that saves the allocation order of "tn"
+// sfunc: Array of function names
+static void tune_atomic(Pass* pass, KernelIR* ir, bool is_cuda, int tdim, vector<vector<int>> &sorder, vector<string> &sfunc) {
     LOGvvvv << "tune_atomic" << ir->children;
     vector<string> relys;
     vector<string> idx_name;
     vector<KernelIR*> atomics;
     vector<KernelIR*> loops;
+    vector<int> nrely;
     vector<int> order;
     int tmp_cnt=0;
     for (uint i=0; i<ir->children.size(); i++) {
@@ -57,6 +60,7 @@ static void tune_atomic(Pass* pass, KernelIR* ir, bool is_cuda, int tdim) {
         atomics.clear();
         loops.clear();
         order.clear();
+        nrely.clear();
 
         c->dfs([&](unique_ptr<KernelIR>& p) {
             auto& code = p->attrs["code"];
@@ -71,6 +75,7 @@ static void tune_atomic(Pass* pass, KernelIR* ir, bool is_cuda, int tdim) {
         loops.push_back(loop);
         idx_name.push_back(loop->attrs["lvalue"]);
         order.push_back(loops.size()-1);
+        nrely.push_back(-1);
         bool ok = true;
         while (1) {
             loop = loops.back();
@@ -90,6 +95,7 @@ static void tune_atomic(Pass* pass, KernelIR* ir, bool is_cuda, int tdim) {
             loops.push_back(loop2);
             idx_name.push_back(loop2->attrs["lvalue"]);
             order.push_back(loops.size()-1);
+            nrely.push_back(-1);
         }
         // TODO: only support single loop children
         if (!ok) continue;
@@ -107,11 +113,24 @@ static void tune_atomic(Pass* pass, KernelIR* ir, bool is_cuda, int tdim) {
                 for (uint l=0;l<order.size();l++)
                     if (order[l]==sidx) sord=l;
                 ASSERT(sord != -1);
-                for (int l=sord;l;l--) order[l]=order[l-1];
+                for (int l=sord;l;l--){
+                    order[l]=order[l-1];
+                    nrely[l]=nrely[l-1];
+                }
                 order[0]=sidx;
+                nrely[0]=j;
             }
         }
         LOGvvvv << "atomic tuner order" << order;
+
+        vector<int> tnorder;
+        uint si;
+        for (si=0;si<order.size();si++)
+            if (nrely[si]!=nrely[0]) break;
+        for (int j=si-1;j>=0;j--) tnorder.push_back(order[j]);
+        for (int j=order.size()-1;j>=si;j--) tnorder.push_back(order[j]);
+        sorder.push_back(tnorder);
+        sfunc.push_back(ir->attrs["lvalue"]);
 
         // sort loop with order
         int count=0;
@@ -199,12 +218,54 @@ void AtomicTunerPass::run() {
     if (is_cuda) choice=1;
     if (!choice) return;
 
+    vector<vector<int>> sorder;
+    vector<string> sfunc;
     for (uint i=0; i<ir->before.size(); i++) {
         auto& func_call = ir->before[i];
         // TODO: remove this if
         if (func_call->get_attr("dtype") != "__global__ void") continue;
-        tune_atomic(this, func_call.get(), is_cuda, 4);
+        tune_atomic(this, func_call.get(), is_cuda, 4, sorder, sfunc);
     }
+
+    // Re-adjust the allocation order of "tn" according to the situation of atomic coverage, preferentially allocate the range not covered by atomic, for example:
+    // for (op0_index_t id0 = tid0; id0<range0; id0+=tnum0) {
+    //     for (op1_index_t id1 = tid1; id1<range1; id1+=tnum1) {
+    //         for (op2_index_t id2 = tid2; id2<range2; id2+=tnum2) {
+    //             for (op3_index_t id3 = tid3; id3<range3; id3+=tnum3) {
+    //                 ...
+    //             }
+    //         }
+    //         atomicAdd(...);
+    //     }
+    // }
+    // The allocation order of "tn" will be: tn1, tn0, tn3, tn2
+    for (uint j=0;j<sfunc.size();j++)
+        for (uint i=0; i<ir->children.size(); i++) {
+            auto& func_call = ir->children[i];
+            int bo=0;
+            for (uint k=0; k<func_call->children.size(); k++){
+                auto& save = func_call->children[k];
+                if (save->has_attr("loop_func") && save->attrs["loop_func"]==sfunc[j]){
+                    bo=1;
+                    break;
+                }
+            }
+            if (!bo) continue;
+            uint k;
+            for (k=0; k<func_call->children.size(); k++){
+                auto& save = func_call->children[k];
+                if (save->has_attr("lvalue") && save->attrs["lvalue"].find("tn")==0) break;
+            }
+            for (uint l=0;l<sorder[j].size();l++){
+                for (uint p=0; p<func_call->children.size(); p++){
+                    auto& save = func_call->children[p];
+                    if (save->has_attr("lvalue") && save->attrs["lvalue"].find("tn"+S(sorder[j][l]))==0){
+                        func_call->children[p]->swap(*func_call->children[k++]);
+                        break;
+                    }
+                }
+            }
+        }
     ir->remove_all_unused();
 }
 

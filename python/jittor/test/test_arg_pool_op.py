@@ -24,6 +24,36 @@ try:
 except:
     skip_this_test = True
 
+class OldPool(Module):
+    def __init__(self, kernel_size, stride=None, padding=0, dilation=None, return_indices=None, ceil_mode=False, count_include_pad=True, op="maximum"):
+        assert dilation == None
+        assert return_indices == None
+        self.kernel_size = kernel_size
+        self.op = op
+        self.stride = stride if stride else kernel_size
+        self.padding = padding
+        self.ceil_mode = ceil_mode
+        self.count_include_pad = count_include_pad and padding != 0
+
+    def execute(self, x):
+        N,C,H,W = x.shape
+        if self.ceil_mode == False:
+            h = (H+self.padding*2-self.kernel_size)//self.stride+1
+            w = (W+self.padding*2-self.kernel_size)//self.stride+1
+        else:
+            h = (H+self.padding*2-self.kernel_size + self.stride - 1)//self.stride+1
+            w = (W+self.padding*2-self.kernel_size + self.stride - 1)//self.stride+1
+
+        # TODO: backward 
+        xx = x.reindex([N,C,h,w,self.kernel_size,self.kernel_size], [
+            "i0", # Nid
+            "i1", # Cid
+            f"i2*{self.stride}-{self.padding}+i4", # Hid
+            f"i3*{self.stride}-{self.padding}+i5", # Wid
+        ])
+        return xx.reduce(self.op, [4,5])
+
+
 def check(jt_model, torch_model, shape, near_data):
     if (near_data):
         assert shape[0] * shape[1] * shape[2] * shape[3] % 8 == 0
@@ -51,6 +81,20 @@ class TestArgPoolOp(unittest.TestCase):
     def test_cuda(self):
         jt_model = jt.nn.Sequential(Pool(2, 2, 0), Pool(2, 2, 0), Pool(2, 2, 0, ceil_mode=True), Pool(2, 2, 0), Pool(2, 2, 0), Pool(3, 1, 1))
         torch_model = Sequential(MaxPool2d(2, 2, 0), MaxPool2d(2, 2, 0), MaxPool2d(2, 2, 0, ceil_mode=True), MaxPool2d(2, 2, 0), MaxPool2d(2, 2, 0), MaxPool2d(3, 1, 1))
+        shape = [2, 3, 300, 300]
+        check(jt_model, torch_model, shape, False)
+        shape = [2, 3, 157, 300]
+        check(jt_model, torch_model, shape, False)
+        for i in range(10):
+            check(jt_model, torch_model, [1,1,300,300], True)
+
+    @unittest.skipIf(True, "TODO: cannot pass this test, fix me")
+    @unittest.skipIf(not jt.compiler.has_cuda, "No cuda found")
+    @jt.flag_scope(use_cuda=1)
+    def test_cuda_old_pool(self):
+        from torch.nn import AvgPool2d
+        jt_model = OldPool(3, 1, 1, op="mean")
+        torch_model = AvgPool2d(3, 1, 1)
         shape = [64, 64, 300, 300]
         check(jt_model, torch_model, shape, False)
         shape = [32, 128, 157, 300]
