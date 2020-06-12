@@ -15,6 +15,7 @@
 #include <helper_cuda.h>
 #include "nccl_warper.h"
 #include "ops/op_register.h"
+#include "nccl_delay_free.h"
 namespace jittor {
 
 #ifndef JIT
@@ -52,6 +53,7 @@ void NcclAllReduceOp::jit_run() {
     )
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
+    
     cudaEvent_t temp_event, temp_event2;
     checkCudaErrors(cudaEventCreate(&temp_event));
     checkCudaErrors(cudaEventCreate(&temp_event2));
@@ -62,6 +64,8 @@ void NcclAllReduceOp::jit_run() {
     x->wait_event_list.push_back(temp_event2);
     cudaEventDestroy(temp_event);
     // checkCudaErrors(ncclAllReduce(xp, yp, y->num, @T_NCCL, ncclSum, comm, 0));
+    
+    nccl_delay_free.registe(x->allocator, x->allocation);
 }
 
 #endif
