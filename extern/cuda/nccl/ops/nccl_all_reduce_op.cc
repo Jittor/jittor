@@ -63,9 +63,11 @@ void NcclAllReduceOp::jit_run() {
     checkCudaErrors(cudaEventRecord(temp_event2, all_reduce_s));
     x->wait_event_list.push_back(temp_event2);
     cudaEventDestroy(temp_event);
+    nccl_delay_free.registe(x->allocator, x->allocation);
+    nccl_delay_free.registe(y->allocator, y->allocation);
+    event_queue.flush();
     // checkCudaErrors(ncclAllReduce(xp, yp, y->num, @T_NCCL, ncclSum, comm, 0));
     
-    nccl_delay_free.registe(x->allocator, x->allocation);
 }
 
 #endif
