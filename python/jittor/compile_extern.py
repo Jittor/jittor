@@ -396,6 +396,7 @@ def setup_mpi():
 
 setup_mpi()
 in_mpi = inside_mpi()
+rank = mpi.world_rank() if in_mpi else 0
 setup_nccl()
 
 setup_cutt()

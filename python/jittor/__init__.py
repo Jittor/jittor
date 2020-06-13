@@ -16,7 +16,7 @@ with lock.lock_scope():
     from jittor_core import *
     from jittor_core.ops import *
     from . import compile_extern
-    from .compile_extern import mkl_ops, mpi, mpi_ops, in_mpi
+    from .compile_extern import mkl_ops, mpi, mpi_ops, in_mpi, rank
     if core.get_device_count() == 0:
         has_cuda = compile_extern.has_cuda = compiler.has_cuda = False
     if has_cuda:
@@ -125,24 +125,7 @@ class profile_scope(_call_no_record_scope):
         profiler.stop()
         self.report.extend(profiler.report())
 
-class single_process_scope:
-    """ single_process_scope
-    
-    Code in this scope will only be executed by single process.
-
-    All the mpi code inside this scope will have not affect.
-    mpi.world_rank() and mpi.local_rank() will return 0, world_size() will return 1,
-
-    example::
-    
-        with jt.single_process_scope(rank=0) as flag:
-            if flag:
-                ......
-
-        @jt.single_process_scope(rank=0)
-        def xxx():
-            ...
-    """
+class __single_process_scope:
     def __init__(self, rank=0):
         self.rank = rank
 
@@ -165,15 +148,30 @@ class single_process_scope:
         if mpi:
             mpi.set_state(self.bk_mpi_state)
         
-    def __call__(self, func):
-        global mpi
+def single_process_scope(rank=0):
+    """ single_process_scope
+    
+    Code in this scope will only be executed by single process.
+
+    All the mpi code inside this scope will have not affect.
+    mpi.world_rank() and mpi.local_rank() will return 0, world_size() will return 1,
+
+    example::
+    
+        @jt.single_process_scope(rank=0)
+        def xxx():
+            ...
+    """
+    def outer(func):
         def inner(*args, **kw):
             ret = None
-            with self as flag:
+            sync_all()
+            with __single_process_scope(rank) as flag:
                 if flag:
                     ret = func(*args, **kw)
             return ret
         return inner
+    return outer
 
 def clean():
     import gc
