@@ -75,6 +75,11 @@ struct VarHolder {
         return var->shape[dim];
     }
 
+    inline int64 numel() {
+        if (var->num<0) sync();
+        return var->num;
+    }
+
     // @pyjt(stop_grad)
     // @attrs(return_self)
     inline VarHolder* stop_grad() {
