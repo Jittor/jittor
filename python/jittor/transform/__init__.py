@@ -173,6 +173,18 @@ class RandomHorizontalFlip:
         return img
 
 class CenterCrop:
+    '''
+    Class for cropping image centrally.
+
+    Args::
+
+    [in] size(int or tuple): Size want to crop.
+
+    Example::
+
+        transform = transform.CenterCrop(224)
+        img_ = transform(img)
+    '''
     def __init__(self, size):
         if isinstance(size, int):
             size = (size, size)
