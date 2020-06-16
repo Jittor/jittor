@@ -500,6 +500,7 @@ def compile_src(src, h, basename):
         slot_name = None
         func_cast = ""
         func_fill = ""
+        before_return = ""
         if name == "__init__":
             slot_name = "tp_init"
             func_head = "(PyObject* self, PyObject* _args, PyObject* kw) -> int"
@@ -547,6 +548,7 @@ def compile_src(src, h, basename):
             slot_name = "tp_dealloc"
             func_head = "(PyObject* self) -> void"
             func_fill = "int64 n = 0"
+            before_return = "Py_TYPE(self)->tp_free((PyObject *) self);"
         
         elif name in binary_number_slots:
             slot_name = "tp_as_number->"+binary_number_slots[name]
@@ -656,7 +658,7 @@ def compile_src(src, h, basename):
                     func_return_failed = "return -1"
                 else:
                     assert "-> void" in func_head
-                    arr_func_return.append(f"{func_call};return")
+                    arr_func_return.append(f"{func_call};{before_return}return")
                     func_return_failed = "return"
         # generate error msg when not a valid call
         error_log_code = generate_error_code_from_func_header(func_head, target_scope_name, name, dfs, basename ,h, class_info)
