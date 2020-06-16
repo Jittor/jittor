@@ -171,7 +171,18 @@ class RandomHorizontalFlip:
         if random.random() < self.p:
             return img.transpose(Image.FLIP_LEFT_RIGHT)
         return img
+
+class CenterCrop:
+    def __init__(self, size):
+        if isinstance(size, int):
+            size = (size, size)
+        assert isinstance(size, tuple)
+        self.size = size
     
+    def __call__(self, img:Image.Image):
+        width, height = img.size
+        return crop(img, (height - self.size[0]) / 2, (width - self.size[1]) / 2, self.size[0], self.size[1])
+
 def to_tensor(img):
     """
     Function for turning Image.Image to jt.array.
