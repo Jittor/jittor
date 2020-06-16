@@ -197,6 +197,36 @@ class Dataset(object):
             raise
 
     def display_worker_status(self):
+        ''' Display dataset worker status, when dataset.num_workers > 0,
+        it will display infomation blow:
+
+        progress:479/5005
+        batch(s): 0.302 wait(s):0.000
+        recv(s): 0.069  to_jittor(s):0.021
+        recv_raw_call: 6720.0
+        last 10 workers: [6, 7, 3, 0, 2, 4, 7, 5, 6, 1]
+        ID      wait(s) load(s) send(s) total
+        #0      0.000   1.340   2.026   3.366   Buffer(free=0.000% l=462425368 r=462425368 size=536870912)
+        #1      0.000   1.451   3.607   5.058   Buffer(free=0.000% l=462425368 r=462425368 size=536870912)
+        #2      0.000   1.278   1.235   2.513   Buffer(free=0.000% l=462425368 r=462425368 size=536870912)
+        #3      0.000   1.426   1.927   3.353   Buffer(free=0.000% l=462425368 r=462425368 size=536870912)
+        #4      0.000   1.452   1.074   2.526   Buffer(free=0.000% l=462425368 r=462425368 size=536870912)
+        #5      0.000   1.422   3.204   4.625   Buffer(free=0.000% l=462425368 r=462425368 size=536870912)
+        #6      0.000   1.445   1.953   3.398   Buffer(free=0.000% l=462425368 r=462425368 size=536870912)
+        #7      0.000   1.582   0.507   2.090   Buffer(free=0.000% l=308283552 r=308283552 size=536870912)
+
+        progress: dataset loading progress (current/total)
+        batch: batch time, exclude data loading time
+        wait: time of main proc wait worker proc
+        recv: time of recv batch data
+        to_jittor: time of batch data to jittor variable
+        recv_raw_call: total number of underlying recv_raw called
+        last 10 workers: id of last 10 workers which main proc load from.
+        ID: worker id
+        wait: worker wait time
+        load: worker load time
+        buffer: ring buffer status, such as how many free space, left index, right index, total size(bytes).
+        '''
         if not hasattr(self, "workers"):
             return
         msg = [""]
