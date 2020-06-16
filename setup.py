@@ -45,5 +45,5 @@ setuptools.setup(
     ],
  )
 
-# python3.7 setup.py sdist
-# python3.7 -m twine upload dist/*
+# upload to pip:
+# rm -rf dist && python3.7 ./setup.py sdist && python3.7 -m twine upload dist/*
