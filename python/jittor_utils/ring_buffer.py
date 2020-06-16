@@ -12,6 +12,8 @@ import random
 import pickle
 import ctypes
 
+recv_raw_call = 0.0
+
 class RingBufferAllocator:
     def __init__(self, size):
         self.size = size
@@ -28,9 +30,9 @@ class RingBufferAllocator:
         if is_full:
             cap = 0
         else:
-            cap = int((r - l) / self.size * 100)
-            if cap<=0: cap += 100
-        return f"Buffer(free={int(cap)}%)"
+            cap = (r - l) / self.size
+            if cap<=0: cap += 1
+        return f"Buffer(free={cap*100:.3f}% l={l} r={r} size={self.size})"
     
     def alloc_with_lock(self, size):
         with self.lock:
@@ -231,6 +233,8 @@ class RingBuffer:
             assert window.nbytes == data.nbytes
         
     def recv_raw(self, nbytes, shape, dtype):
+        global recv_raw_call
+        recv_raw_call += 1
         with self.allocator.lock:
             location = self.allocator.free(nbytes)
             while location is None:
