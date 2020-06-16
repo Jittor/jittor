@@ -197,8 +197,9 @@ class Dataset(object):
             raise
 
     def display_worker_status(self):
-        ''' Display dataset worker status, when dataset.num_workers > 0,
-        it will display infomation blow:
+        ''' Display dataset worker status, when dataset.num_workers > 0, it will display infomation blow:
+
+.. code-block:: console
 
         progress:479/5005
         batch(s): 0.302 wait(s):0.000
@@ -215,17 +216,29 @@ class Dataset(object):
         #6      0.000   1.445   1.953   3.398   Buffer(free=0.000% l=462425368 r=462425368 size=536870912)
         #7      0.000   1.582   0.507   2.090   Buffer(free=0.000% l=308283552 r=308283552 size=536870912)
 
-        progress: dataset loading progress (current/total)
-        batch: batch time, exclude data loading time
-        wait: time of main proc wait worker proc
-        recv: time of recv batch data
-        to_jittor: time of batch data to jittor variable
-        recv_raw_call: total number of underlying recv_raw called
-        last 10 workers: id of last 10 workers which main proc load from.
-        ID: worker id
-        wait: worker wait time
-        load: worker load time
-        buffer: ring buffer status, such as how many free space, left index, right index, total size(bytes).
+Meaning of the outputs:
+
+* progress: dataset loading progress (current/total)
+* batch: batch time, exclude data loading time
+* wait: time of main proc wait worker proc
+* recv: time of recv batch data
+* to_jittor: time of batch data to jittor variable
+* recv_raw_call: total number of underlying recv_raw called
+* last 10 workers: id of last 10 workers which main proc load from.
+* table meaning
+    * ID: worker id
+    * wait: worker wait time
+    * load: worker load time
+    * buffer: ring buffer status, such as how many free space, left index, right index, total size(bytes).
+
+Example::
+  
+  from jittor.dataset import Dataset
+  class YourDataset(Dataset):
+      pass
+  dataset = YourDataset().set_attrs(num_workers=8)
+  for x, y in dataset:
+      dataset.display_worker_status()
         '''
         if not hasattr(self, "workers"):
             return
