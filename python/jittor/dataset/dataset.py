@@ -35,7 +35,15 @@ class Worker:
 
 class Dataset(object):
     '''
-    base class for reading data
+    Base class for reading data.
+
+    Args::
+
+        [in] batch_size(int): batch size, default 16.
+        [in] shuffle(bool): shuffle at each epoch, default False.
+        [in] drop_last(bool): if true, the last batch of dataset might smaller than batch_size, default True.
+        [in] num_workers(int): number of workers for loading data.
+        [in] buffer_size(int): buffer size for each worker in bytes, default(512MB).
     
     Example::
 
@@ -76,16 +84,12 @@ class Dataset(object):
         return (self.total_len-1) // self.batch_size + 1
 
     def set_attrs(self, **kw):
-        '''set attributes of dataset, equivalent to set_attr
+        ''' 
+        You can set attributes of dataset by using set_attrs function, including total_len, batch_size, shuffle, drop_last, num_workers, buffer_size.
         
-        Attrs:
+        Example::
 
-            * batch_size(int): batch size, default 16.
-            * totol_len(int): totol lenght.
-            * shuffle(bool): shuffle at each epoch, default False.
-            * drop_last(bool): if true, the last batch of dataset might smaller than batch_size, default True.
-            * num_workers: number of workers for loading data
-            * buffer_size: buffer size for each worker in bytes, default(512MB).
+            dataset = YourDataset().set_attrs(batch_size=256, shuffle=True)
         '''
         for k,v in kw.items():
             assert hasattr(self, k), k
@@ -93,6 +97,10 @@ class Dataset(object):
         return self
 
     def to_jittor(self, batch):
+        '''
+        Change batch data to jittor array, such as np.ndarray, int, and float.
+        '''
+
         if isinstance(batch, np.ndarray):
             return jt.array(batch)
         assert isinstance(batch, Sequence)
@@ -107,9 +115,20 @@ class Dataset(object):
         return new_batch
 
     def collate_batch(self, batch):
+        '''
+        Puts each data field into a tensor with outer dimension batch size.
+
+        Args::
+
+        [in] batch(list): A list of variables, such as jt.var, Image.Image, np.ndarray, int, float, str and so on.
+
+        '''
         return collate_batch(batch)
 
     def terminate(self):
+        '''
+        Terminate is used to terminate multi-process worker reading data.
+        '''
         if hasattr(self, "workers"):
             for w in self.workers:
                 w.p.terminate()
@@ -285,7 +304,8 @@ class Dataset(object):
 
 
 class ImageFolder(Dataset):
-    """A image classify dataset, load image and label from directory:
+    """
+    A image classify dataset, load image and label from directory::
     
         * root/label1/img1.png
         * root/label1/img2.png
@@ -294,15 +314,23 @@ class ImageFolder(Dataset):
         * root/label2/img2.png
         * ...
 
-    Args:
+    Args::
 
-        * root(string): Root directory path.
+        [in] root(string): Root directory path.
 
-    Attributes:
+    Attributes::
 
         * classes(list): List of the class names.
         * class_to_idx(dict): map from class_name to class_index.
         * imgs(list): List of (image_path, class_index) tuples
+
+    Example::
+
+        train_dir = './data/celebA_train'
+        train_loader = ImageFolder(train_dir).set_attrs(batch_size=batch_size, shuffle=True)
+        for batch_idx, (x_, target) in enumerate(train_loader):
+            ...
+
     """
     def __init__(self, root, transform=None):
         # import ipdb; ipdb.set_trace()

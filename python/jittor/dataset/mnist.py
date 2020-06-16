@@ -17,6 +17,25 @@ import jittor as jt
 import jittor.transform as trans
 
 class MNIST(Dataset):
+    '''
+    Jittor's own class for loading MNIST dataset.
+
+    Args::
+
+        [in] data_root(str): your data root.
+        [in] train(bool): choose model train or val.
+        [in] download(bool): Download data automatically if download is Ture.
+        [in] batch_size(int): Data batch size.
+        [in] shuffle(bool): Shuffle data if true.
+        [in] transform(jittor.transform): transform data.
+
+    Example::
+
+        from jittor.dataset.mnist import MNIST
+        train_loader = MNIST(train=True).set_attrs(batch_size=16, shuffle=True)
+        for i, (imgs, target) in enumerate(train_loader):
+            ...
+    '''
     def __init__(self, data_root=dataset_root+"/mnist_data/", 
                  train=True, 
                  download=True, 
@@ -62,6 +81,9 @@ class MNIST(Dataset):
         return trans.to_tensor(img), self.mnist['labels'][index]
 
     def download_url(self):
+        '''
+        Download mnist data set function, this function will be called when download is True.
+        '''
         resources = [
             ("http://yann.lecun.com/exdb/mnist/train-images-idx3-ubyte.gz", "f68b3c2dcbeaaa9fbdd348bbdeb94873"),
             ("http://yann.lecun.com/exdb/mnist/train-labels-idx1-ubyte.gz", "d53e105ee54ea40749a09fcbcd1e9432"),

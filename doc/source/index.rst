@@ -31,6 +31,7 @@
    :maxdepth: 1
    :caption: 其他:
    
+   教程 <https://cg.cs.tsinghua.edu.cn/jittor/tutorial/>
    todo
 
 Indices and tables
