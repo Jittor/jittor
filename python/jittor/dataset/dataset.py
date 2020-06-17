@@ -11,7 +11,7 @@ from urllib import request
 import gzip
 import pickle
 import os
-from jittor.dataset.utils import get_random_list, get_order_list, collate_batch
+from jittor.dataset.utils import get_random_list, get_order_list, collate_batch, HookTimer
 from collections.abc import Sequence, Mapping
 import pathlib
 from PIL import Image
@@ -26,12 +26,13 @@ import time
 dataset_root = os.path.join(pathlib.Path.home(), ".cache", "jittor", "dataset")
 mp_log_v = os.environ.get("mp_log_v", 0) 
 mpi = jt.mpi
+img_open_hook = HookTimer(Image, "open")
 
 class Worker:
     def __init__(self, target, args, buffer_size):
         buffer = mp.Array('c', buffer_size, lock=False)
         self.buffer = RingBuffer(buffer)
-        self.status = mp.Array('f', 4, lock=False)
+        self.status = mp.Array('f', 5, lock=False)
         self.p = mp.Process(target=target, args=args+(self.buffer,self.status))
         self.p.daemon = True
         self.p.start()
@@ -189,9 +190,11 @@ class Dataset(object):
                 now = time.time()
                 send_time = now - start
                 start = now
-                status[0], status[1], status[2], status[3] = \
+                status[0], status[1], status[2], status[3], status[4] = \
                     other_time, data_time, send_time, \
-                    other_time + data_time + send_time
+                    other_time + data_time + send_time, \
+                    img_open_hook.duration
+                img_open_hook.duration = 0.0
         except:
             os.kill(os.getppid(), signal.SIGINT)
             raise
@@ -228,6 +231,7 @@ Meaning of the outputs:
 * table meaning
     * ID: worker id
     * wait: worker wait time
+    * open: worker image open time
     * load: worker load time
     * buffer: ring buffer status, such as how many free space, left index, right index, total size(bytes).
 
@@ -248,11 +252,11 @@ Example::
         msg.append(f"recv(s): {self.recv_time:.3f}\tto_jittor(s):{self.to_jittor_time:.3f}")
         msg.append(f"recv_raw_call: {ring_buffer.recv_raw_call}")
         msg.append(f"last 10 workers: {self.idmap[max(0, self.last_id-9):self.last_id+1]}")
-        msg.append(f"ID\twait(s)\tload(s)\tsend(s)")
+        msg.append(f"ID\twait(s)\topen(s)\tload(s)\tsend(s)\ttotal(s)")
         for i in range(self.num_workers):
             w = self.workers[i]
             s = w.status
-            msg.append(f"#{i}\t{s[0]:.3f}\t{s[1]:.3f}\t{s[2]:.3f}\t{s[3]:.3f}\t{w.buffer.allocator}")
+            msg.append(f"#{i}\t{s[0]:.3f}\t{s[4]:.3f}\t{s[1]:.3f}\t{s[2]:.3f}\t{s[3]:.3f}\t{w.buffer.allocator}")
         LOG.i('\n'.join(msg))
 
     def _stop_all_workers(self):
