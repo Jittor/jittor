@@ -450,7 +450,6 @@ class ImageFolder(Dataset):
 
     """
     def __init__(self, root, transform=None):
-        # import ipdb; ipdb.set_trace()
         super().__init__()
         self.root = root
         self.transform = transform
