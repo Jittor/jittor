@@ -214,11 +214,6 @@ def zeros(shape, dtype="float32"):
 
 flags = core.flags()
 
-def detach(x):
-    """return detached var"""
-    return x.clone().stop_grad().clone()
-Var.detach = detach
-
 def std(x):
     matsize=1
     for i in x.shape:

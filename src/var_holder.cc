@@ -28,8 +28,9 @@ VarHolder::VarHolder(Var* v) : var(v) {
     var->own_both_liveness();
 }
 
-VarHolder::VarHolder(VarPtr&& v) : VarHolder(v.ptr) {
-    v.free_liveness();
+VarHolder::VarHolder(VarPtr&& v) {
+    add_hold_vars(this);
+    var = v.ptr;
     v.ptr = nullptr;
 }
 
