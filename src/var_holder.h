@@ -43,6 +43,15 @@ struct VarHolder {
     // @attrs(return_self)
     VarHolder* assign(VarHolder* v);
 
+    /* update parameter and global variable,
+       different from assign, it will
+       stop grad between origin var and assigned var, and
+       will update in the background
+     */
+    // @pyjt(update)
+    // @attrs(return_self)
+    VarHolder* update(VarHolder* v);
+
     // @pyjt(swap)
     // @attrs(return_self)
     inline VarHolder* swap(VarHolder* v) { std::swap(var, v->var); return this; };

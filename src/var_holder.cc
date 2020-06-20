@@ -12,6 +12,7 @@
 #include "var.h"
 #include "executor.h"
 #include "graph.h"
+#include "update_queue.h"
 
 namespace jittor {
     
@@ -72,6 +73,13 @@ VarHolder* VarHolder::assign(VarHolder* v) {
     var->release_both_liveness();
     var = v->var;
     var->own_both_liveness();
+    return this;
+}
+
+VarHolder* VarHolder::update(VarHolder* v) {
+    auto dv = jittor::detach(v->var);
+    update_queue.push(dv.ptr, var);
+    *this = move(dv);
     return this;
 }
 

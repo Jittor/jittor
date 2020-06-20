@@ -191,8 +191,10 @@ class BatchNorm(Module):
 
             xvar = x2mean-xmean*xmean
             norm_x = (x-xmean)/jt.sqrt(xvar+self.eps)
-            self.running_mean += (xmean.sum([0,2,3])-self.running_mean)*self.momentum
-            self.running_var += (xvar.sum([0,2,3])-self.running_var)*self.momentum
+            self.running_mean.update(self.running_mean +
+                (xmean.sum([0,2,3]) - self.running_mean) * self.momentum)
+            self.running_var.update(self.running_var +
+                (xvar.sum([0,2,3])-self.running_var)*self.momentum)
         else:
             running_mean = self.running_mean.broadcast(x, [0,2,3])
             running_var = self.running_var.broadcast(x, [0,2,3])
@@ -225,8 +227,10 @@ class BatchNorm1d(Module):
 
             xvar = x2mean-xmean*xmean
             norm_x = (x-xmean)/jt.sqrt(xvar+self.eps)
-            self.running_mean += (xmean.sum([0])-self.running_mean)*self.momentum
-            self.running_var += (xvar.sum([0])-self.running_var)*self.momentum
+            self.running_mean.update(self.running_mean + 
+                (xmean.sum([0])-self.running_mean)*self.momentum)
+            self.running_var.update(self.running_var + 
+                (xvar.sum([0])-self.running_var)*self.momentum)
         else:
             running_mean = self.running_mean.broadcast(x, [0])
             running_var = self.running_var.broadcast(x, [0])

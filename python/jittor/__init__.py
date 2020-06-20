@@ -453,12 +453,12 @@ class Module:
             else:
                 LOG.v(f'load parameter {key} success ...')
                 if isinstance(params[key], np.ndarray) or isinstance(params[key], list):
-                    v.assign(array(params[key]))
+                    v.update(array(params[key]))
                 elif isinstance(params[key], Var):
-                    v.assign(params[key])
+                    v.update(params[key])
                 else:
                     # assume is pytorch tensor
-                    v.assign(array(params[key].cpu().detach().numpy()))
+                    v.update(array(params[key].cpu().detach().numpy()))
         if n_failed:
             LOG.w(f"load total {len(params)} params, {n_failed} failed")
 
@@ -511,7 +511,7 @@ class Module:
     def mpi_param_broadcast(self, root=0):
         if not in_mpi: return
         for p in self.parameters():
-            p.assign(p.mpi_broadcast(root).detach())
+            p.update(p.mpi_broadcast(root))
 
 def make_module(func, exec_n_args=1):
     class MakeModule(Module):

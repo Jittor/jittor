@@ -26,9 +26,10 @@ struct NodeFlags {
         _stop_grad=2,
         _n=3,
 
-        // op related flags
+        // var related flags
         _force_fuse=_n+0,
         _stop_fuse=_n+1,
+        _in_update_queue=_n+2,
 
         // op related flags
         // bit0: support cpu

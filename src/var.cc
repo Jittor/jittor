@@ -9,6 +9,7 @@
 #include "op.h"
 #include "mem/allocator.h"
 #include "pybind/py_var_tracer.h"
+#include "update_queue.h"
 
 namespace jittor {
 
@@ -30,6 +31,8 @@ Var::~Var() {
     if (mem_ptr != nullptr)
         allocator->free(mem_ptr, size, allocation);
     number_of_lived_vars--;
+    if (flags.get(NodeFlags::_in_update_queue))
+        update_queue.pop(this);
 }
     
 string Var::to_string() {
