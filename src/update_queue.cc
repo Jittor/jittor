@@ -101,7 +101,7 @@ void UpdateQueue::auto_flush() {
     vector<Var*> vars;
     vars.reserve(queue.size());
     for (auto& l : queue) {
-        while (l.size() && l.size() >= update_queue_auto_flush_depth) {
+        while (l.size() && l.size() >= update_queue_auto_flush_delay) {
             auto iter = l.end(); iter--;
             auto v = iter->v;
             vars.push_back(v);
@@ -128,7 +128,7 @@ void UpdateQueue::push(Var* v, Var* prev) {
         queue.emplace_front();
         owner = queue.begin();
     }
-    if (owner->size() >= update_queue_auto_flush_depth)
+    if (owner->size() >= update_queue_auto_flush_delay)
         auto_flush();
     owner->emplace_front(UpdateQueue::Item{owner, v});
     map[v] = owner->begin();
