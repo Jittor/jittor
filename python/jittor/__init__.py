@@ -207,9 +207,13 @@ def liveness_info():
     }
 
 def ones(shape, dtype="float32"):
+    if not isinstance(shape, (NanoVector, Sequence)):
+        shape = (shape,)
     return unary(1, dtype).broadcast(shape)
 
 def zeros(shape, dtype="float32"):
+    if not isinstance(shape, (NanoVector, Sequence)):
+        shape = (shape,)
     return unary(0, dtype).broadcast(shape)
 
 flags = core.flags()
