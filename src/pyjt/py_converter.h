@@ -455,6 +455,42 @@ DEF_IS(FetchFunc, T) from_py_object(PyObject* obj) {
     return func;
 }
 
+struct NumpyFunc;
+
+DEF_IS(NumpyFunc, bool) is_type(PyObject* obj) {
+    return PyCallable_Check(obj);
+}
+
+DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj) {
+    // PyObject_Call
+    Py_INCREF(obj);
+    T func(
+        // callback
+        [obj](typename T::R* result) {
+            // import numpy
+            PyObjHolder np(PyImport_ImportModule("numpy"));
+            // data = {}
+            PyObjHolder data(to_py_object(results->varrays));
+            PyObjHolder data2(to_py_object(results->ints));
+            PyObjHolder data3(to_py_object(results->arrays));
+            // data.update(data2)
+            PyDict_Update(data.obj, data2.obj);
+            // data.update(data3)
+            PyDict_Update(data.obj, data3.obj);
+            // args = []
+            PyObjHolder args(PyList_new());
+            auto ok = PyList_Append(args.obj, np.obj);
+            ASSERT(ok);
+            auto ok = PyList_Append(args.obj, data.obj);
+            ASSERT(ok);
+            PyObjHolder ret(PyObject_Call(obj, args.obj/* PyObject* */, nullptr));
+        },
+        // deleter
+        [obj]() { Py_DECREF(obj); }
+    );
+    return func;
+}
+
 #define CHECK_IS_2(check_type) \
     template<typename T> struct is_##check_type : public std::false_type {}; \
     template<typename Ta, typename Tb> \
