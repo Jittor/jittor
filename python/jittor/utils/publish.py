@@ -25,8 +25,8 @@ def docker_task(name, build_cmd):
     run_cmd(build_cmd)
     run_cmd(f"sudo docker push {name}")
     bname = os.path.basename(name)
-    run_cmd(f"docker save {name}:latest -o /tmp/{bname}.tgz && chmod 666 /tmp/{bname}.tgz")
-    upload_file(f" /tmp/{bname}.tgz")
+    run_cmd(f"sudo docker save {name}:latest -o /tmp/{bname}.tgz && sudo chmod 666 /tmp/{bname}.tgz")
+    upload_file(f"/tmp/{bname}.tgz")
 
 docker_task(
     "jittor/jittor", 
