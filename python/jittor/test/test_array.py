@@ -60,6 +60,7 @@ class TestArray(unittest.TestCase):
         for i in range(3):
             x = jt.array(im)
             b = net(x)
+            b.fetch(lambda b: None)
             b.sync()
         jt.sync(device_sync=True)
 
@@ -70,6 +71,7 @@ class TestArray(unittest.TestCase):
             x = jt.array(im)
             b = net(x)
             b.fetch(lambda b: results.append(b))
+            b.sync()
             # del c
         jt.sync(device_sync=True)
         t2 = time.time() - time_start

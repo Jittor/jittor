@@ -27,7 +27,7 @@ VarPtr make_grad(Op* op, Var* out, Var* dout, Var* x, int x_index) {
     auto dx = op->grad(out, dout, x, x_index);
     if (x->loop_options)
         dx->loop_options = x->loop_options;
-    return move(dx);
+    return dx;
 }
 
 inline static void assign_attrs(Var* a, Var* b) {

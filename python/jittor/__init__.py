@@ -321,13 +321,54 @@ def attrs(var):
     }
 Var.attrs = attrs
 
-def fetch(vars, func, *args, **kw):
-    core.fetch(vars, lambda *results: func(*results, *args, **kw))
+def fetch(*args):
+    ''' Async fetch vars with function closure.
+    
+Example 1::
 
-def fetch_var(var, func, *args, **kw):
-    core.fetch([var], lambda a: func(a, *args, **kw))
-Var.fetch = fetch_var
-del fetch_var
+    for img,label in enumerate(your_dataset):
+        pred = your_model(img)
+        loss = critic(pred, label)
+        acc = accuracy(pred, label) 
+        jt.fetch(acc, loss, 
+            lambda acc, loss:
+                print(f"loss:{loss} acc:{acc}"
+        )
+
+Example 2::
+
+    for i,(img,label) in enumerate(your_dataset):
+        pred = your_model(img)
+        loss = critic(pred, label)
+        acc = accuracy(pred, label) 
+        # variable i will be bind into function closure
+        jt.fetch(i, acc, loss, 
+            lambda i, acc, loss:
+                print(f"#{i}, loss:{loss} acc:{acc}"
+        )
+    '''
+    assert len(args)>=1
+    func = args[-1]
+    assert callable(func)
+    args = list(args[:-1])
+    if len(args)>0 and isinstance(args[0], Sequence) \
+        and len(args[0])>=1 and isinstance(args[0][0], Var):
+        raise TypeError("jt.Var should not inside a list or tuple.")
+    
+    var_map = []
+    variables = []
+    for i, v in enumerate(args):
+        if isinstance(v, Var):
+            variables.append(v)
+            var_map.append(i)
+            args[i] = None
+    def callback(*results):
+        for i,v in enumerate(results):
+            args[var_map[i]] = v
+        func(*args)
+    core.ops.fetch(variables, callback)
+
+Var.fetch = fetch
 
 def display_memory_info():
     import inspect, os
@@ -574,6 +615,7 @@ def jittor_exit():
         pass
     else:
         core.sync_all(True)
+    core.cleanup()
 atexit.register(jittor_exit)
 
 Var.__str__ = lambda x: str(x.data)

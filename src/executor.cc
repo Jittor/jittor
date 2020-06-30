@@ -9,7 +9,6 @@
 #include <cuda_runtime.h>
 #include <helper_cuda.h>
 #include "mem/allocator/cuda_dual_allocator.h"
-#include "fetcher.h"
 #include "event_queue.h"
 #endif
 #include "misc/cuda_flags.h"
@@ -26,6 +25,9 @@ namespace jittor {
 
 Executor exe;
 
+// from fetch_op.cc
+extern list<VarPtr> fetcher_to_free;
+
 void Executor::run_sync(vector<Var*> vars, bool device_sync) {
     auto allocator = get_allocator();
     this->allocator = allocator;
@@ -33,22 +35,43 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
     int op_num = 0;
     vector<Node*> bfs_q;
     bfs_q.reserve(vars.size());
-    auto nodes = (vector<Node*>*)&vars;
     int start_var_num = 0;
-    for (Var* v : vars)
-        if (!v->is_finished())
-            start_var_num++;
-    bfs_backward(*nodes, bfs_q, [&](Node *node) -> bool {
-        node->custom_data = 0;
-        if (node->is_finished())
-            return false;
-        op_num += !node->is_var();
-        return true;
-    });
+    {
+        // get all nodes need to be executed
+        auto t = ++Node::tflag_count;
+        for (Var* v : vars)
+            if (!v->is_finished() && v->tflag != t) {
+                v->tflag = t;
+                start_var_num++;
+                bfs_q.push_back(v);
+            }
+        for (int i=0; i<bfs_q.size(); i++) {
+            auto node = bfs_q[i];
+            op_num += !node->is_var();
+            for (auto i : node->_inputs)
+                if (i.node->tflag != t && !i.node->is_finished()) {
+                    i.node->tflag = t;
+                    bfs_q.push_back(i.node);
+                }
+            // this var has been fetched
+            if (node->flags.get(NodeFlags::_fetch)) {
+                for (auto& n : node->_outputs) {
+                    // if not in queue and is fetch op
+                    if (n.node->tflag != t &&
+                        !n.node->is_finished() &&
+                        n.node->flags.get(NodeFlags::_fetch)) {
+                        n.node->tflag = t;
+                        bfs_q.push_back(n.node);
+                    }
+                }
+            }
+        }
+    }
     auto tt = Node::tflag_count;
     vector<Op*> ops;
     vector<Var*> all_vars;
     ops.reserve(op_num);
+    all_vars.reserve(bfs_q.size() - op_num);
     for (Node* node : bfs_q)
         if (!node->is_var()) {
             node->custom_data = ops.size();
@@ -391,7 +414,6 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
             outputs_bk.push_back(var);
         op->finish_pending_liveness();
         for (Var* var : outputs_bk)
-            // var->finish_pending_liveness();
             var->finish_pending_liveness();
         } catch (const std::exception& e) {
             // log memory info
@@ -410,6 +432,8 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
     }
     LOGvv << "All" << op_num << "ops finished, return vars:" << vars;
     for (Var* v : vars) ASSERT(v->mem_ptr);
+    // clean fetcher free buffer
+    fetcher_to_free.clear();
     #ifdef HAS_CUDA
     if (device_sync && use_cuda) {
         last_is_cuda = false;

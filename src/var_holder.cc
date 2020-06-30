@@ -97,6 +97,9 @@ ArrayArgs VarHolder::fetch_sync() {
     return {var->mem_ptr, var->shape, var->dtype()};
 }
 
+// from fetch_op.cc
+extern list<VarPtr> fetcher;
+
 void sync_all(bool device_sync) {
     vector<Var*> vars;
     vars.reserve(VarHolder::hold_vars.size());
@@ -104,6 +107,8 @@ void sync_all(bool device_sync) {
         if (!v->var->_outputs.size())
             vars.push_back(v->var);
     }
+    for (auto& v :fetcher)
+        vars.push_back(v.ptr);
     graph_check();
     exe.run_sync(vars, device_sync); //need sync at last
     graph_check();
