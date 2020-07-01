@@ -113,6 +113,12 @@ class TestArray(unittest.TestCase):
             """)
             assert (b.data==[2,8,18]).all()
         
+    def test_not_c_style(self):
+        a = np.array([1,2,3])
+        b = a[::-1]
+        x = jt.array(b)
+        x = x + b
+        assert (x.data == [6,4,2]).all()
 
 
 
