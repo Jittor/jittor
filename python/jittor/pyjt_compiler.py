@@ -258,7 +258,7 @@ def generate_error_code_from_func_header(func_head, target_scope_name, name, dfs
 
     LOG.vvv("gen err from func_head", func_head)
     args = func_head[1:].split(")")[0].split(",")
-    error_code = f" << \"Wrong inputs arguments, Please refer to examples(e.g. {help_cmd}).\""
+    error_code = f" << \"Wrong inputs arguments, Please refer to examples({help_cmd}).\""
     error_code += r' << "\n\nTypes of your inputs are:\n"'
     for arg in args:
         arg = arg.strip()
