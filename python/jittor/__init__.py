@@ -304,11 +304,11 @@ Var.masked_fill = masked_fill
 def sqr(x): return x*x
 Var.sqr = sqr
 
-def argmax(x, dim:int, keepdims:bool=False):
+def argmax(x, dim, keepdims:bool=False):
     return x.arg_reduce("max", dim, keepdims)
 Var.argmax = argmax
 
-def argmin(x, dim:int, keepdims:bool=False):
+def argmin(x, dim, keepdims:bool=False):
     return x.arg_reduce("min", dim, keepdims)
 Var.argmin = argmin
 
@@ -480,11 +480,11 @@ class Module:
             end = 0
             for k in key_:
                 if isinstance(v, nn.Sequential):
-                    if np.int(k) >= len(v.layers):
+                    if ori_int(k) >= len(v.layers):
                         end = 1
                         break
                     else:
-                        v = v[np.int(k)]
+                        v = v[ori_int(k)]
                 else:
                     if hasattr(v, k):
                         v = getattr(v, k)
@@ -621,6 +621,16 @@ atexit.register(jittor_exit)
 Var.__str__ = lambda x: str(x.data)
 Var.__repr__ = lambda x: str(x.data)
 Var.peek = lambda x: f"{x.dtype}{x.shape}"
+
+
+ori_int = int
+
+int = int32
+Var.int = Var.int32
+float = float32
+Var.float = Var.float32
+double = float64
+Var.double = Var.float64
 
 from . import nn
 from .nn import matmul

@@ -12,9 +12,6 @@ namespace jittor {
 #define FOR_ALL_NS(m) \
 \
     m(void) \
-    m(float) \
-    m(double) \
-    m(int) \
     m(bool) \
     m(int8) \
     m(int16) \

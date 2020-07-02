@@ -73,7 +73,7 @@ FetchOp::FetchOp(vector<Var*>&& inputs, FetchFunc&& func)
     // stream needs to be created after nccl plugin
     static Init init_fetch;
     #endif
-    VarPtr vp(0, ns_int);
+    VarPtr vp(0, ns_int32);
     outputs_holder.emplace_back(vp);
     fetcher.emplace_front(move(vp));
     fetcher_iter = fetcher.begin();

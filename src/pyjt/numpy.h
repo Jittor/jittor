@@ -76,12 +76,12 @@ inline int get_typenum(NanoString ns) {
     if (ns == ns_uint8) return 2;
     if (ns == ns_int16) return 3;
     if (ns == ns_uint16) return 4;
-    if (ns == ns_int32 || ns == ns_int) return 5;
+    if (ns == ns_int32) return 5;
     if (ns == ns_uint32) return 6;
     if (ns == ns_int64) return 7;
     if (ns == ns_uint64) return 8;
-    if (ns == ns_float32 || ns == ns_float) return 11;
-    if (ns == ns_float64 || ns == ns_double) return 12;
+    if (ns == ns_float32) return 11;
+    if (ns == ns_float64) return 12;
     LOGf << ns;
     return -1;
 }

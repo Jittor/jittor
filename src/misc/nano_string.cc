@@ -9,9 +9,6 @@
 namespace jittor {
 
 #define FOR_ALL_TYPES(m) \
-    m(float) \
-    m(double) \
-    m(int) \
     m(bool) \
     m(int8) \
     m(int16) \
@@ -151,6 +148,10 @@ static void init_ns() {
     NanoString::__string_to_ns["sum"] = ns_add;
     NanoString::__string_to_ns["min"] = ns_minimum;
     NanoString::__string_to_ns["max"] = ns_maximum;
+    NanoString::__string_to_ns["float"] = ns_float32;
+    NanoString::__string_to_ns["double"] = ns_float64;
+    NanoString::__string_to_ns["int"] = ns_int32;
+    NanoString::__string_to_ns["uint"] = ns_uint32;
     LOGvv << "init __string_to_ns" << NanoString::__string_to_ns;
     LOGvv << "init __ns_to_string" << NanoString::__ns_to_string;
 }

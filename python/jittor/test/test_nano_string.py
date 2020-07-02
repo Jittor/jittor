@@ -10,7 +10,7 @@ from .test_core import expect_error
 import os
 
 mid = 0
-if os.uname()[1] == "jittor-ce":
+if "jittor" in os.uname()[1]:
     mid = 1
 
 class TestNanoString(unittest.TestCase):
@@ -27,7 +27,8 @@ class TestNanoString(unittest.TestCase):
         assert t < [1.5e-7, 1.7e-7][mid], t
 
         assert (jt.hash("asdasd") == 4152566416)
-        assert str(jt.NanoString("float"))=="float"
+        assert str(jt.NanoString("float"))=="float32"
+        assert jt.NanoString("float")=="float32"
         # pybind11: 7
         # Tuple call: 1.3
         # fast call (with or with not): 0.9
@@ -38,14 +39,14 @@ class TestNanoString(unittest.TestCase):
     
     def test_type(self):
         import numpy as np
-        assert str(jt.NanoString(float)) == "float"
-        assert str(jt.NanoString(np.float)) == "float"
+        assert str(jt.NanoString(float)) == "float32"
+        assert str(jt.NanoString(np.float)) == "float32"
         assert str(jt.NanoString(np.float32)) == "float32"
         assert str(jt.NanoString(np.float64)) == "float64"
         assert str(jt.NanoString(np.int8)) == "int8"
         assert str(jt.NanoString(np.array([1,2,3]).dtype)) == "int64"
 
-        assert str(jt.NanoString(jt.float)) == "float"
+        assert str(jt.NanoString(jt.float)) == "float32"
         assert str(jt.NanoString(jt.float32)) == "float32"
         assert str(jt.NanoString(jt.float64)) == "float64"
         assert str(jt.NanoString(jt.int8)) == "int8"
