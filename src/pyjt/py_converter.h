@@ -67,7 +67,7 @@ DEF_IS(int, bool) is_type(PyObject* obj) {
     return PyLong_CheckExact(obj);
 }
 
-DEF_IS(int, PyObject*) to_py_object(const T& a) {
+DEF_IS(int, PyObject*) to_py_object(const int& a) {
     return PyLong_FromLong(a);
 }
 
@@ -374,6 +374,14 @@ DEF_IS(DataView, PyObject*) to_py_object(T a) {
     return oh.release();
 }
 
+struct NumpyFunc;
+
+DEF_IS(NumpyFunc, bool) is_type(PyObject* obj) {
+    return PyCallable_Check(obj);
+}
+
+DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj);
+
 #define CHECK_IS_1(check_type) \
     template<typename T> struct is_##check_type : public std::false_type {}; \
     template<typename T> \
@@ -455,41 +463,6 @@ DEF_IS(FetchFunc, T) from_py_object(PyObject* obj) {
     return func;
 }
 
-struct NumpyFunc;
-
-DEF_IS(NumpyFunc, bool) is_type(PyObject* obj) {
-    return PyCallable_Check(obj);
-}
-
-DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj) {
-    // PyObject_Call
-    Py_INCREF(obj);
-    T func(
-        // callback
-        [obj](typename T::R* result) {
-            // import numpy
-            PyObjHolder np(PyImport_ImportModule("numpy"));
-            // data = {}
-            PyObjHolder data(to_py_object(results->varrays));
-            PyObjHolder data2(to_py_object(results->ints));
-            PyObjHolder data3(to_py_object(results->arrays));
-            // data.update(data2)
-            PyDict_Update(data.obj, data2.obj);
-            // data.update(data3)
-            PyDict_Update(data.obj, data3.obj);
-            // args = []
-            PyObjHolder args(PyList_new());
-            auto ok = PyList_Append(args.obj, np.obj);
-            ASSERT(ok);
-            auto ok = PyList_Append(args.obj, data.obj);
-            ASSERT(ok);
-            PyObjHolder ret(PyObject_Call(obj, args.obj/* PyObject* */, nullptr));
-        },
-        // deleter
-        [obj]() { Py_DECREF(obj); }
-    );
-    return func;
-}
 
 #define CHECK_IS_2(check_type) \
     template<typename T> struct is_##check_type : public std::false_type {}; \
@@ -582,5 +555,37 @@ DEF_IS_1(fast_shared_ptr, T) from_py_object(PyObject* obj) {
     return from_py_object<typename T::value_type>(obj);
 }
 
+
+
+DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj) {
+    // PyObject_Call
+    Py_INCREF(obj);
+    T func(
+        // callback
+        [obj](typename T::R* result) {
+            // import numpy
+            PyObjHolder np(PyImport_ImportModule("numpy"));
+            // data = {}
+            //PyObjHolder data(to_py_object<map<string, vector<ArrayArgs>>>(result->varrays));
+            PyObjHolder data(to_py_object(result->varrays));
+            PyObjHolder data2(to_py_object(result->ints));
+            PyObjHolder data3(to_py_object(result->arrays));
+            // data.update(data2)
+            PyDict_Update(data.obj, data2.obj);
+            // data.update(data3)
+            PyDict_Update(data.obj, data3.obj);
+            // args = []
+            PyObjHolder args(PyList_New(0));
+            int ok = PyList_Append(args.obj, np.obj);
+            ASSERT(ok);
+            ok = PyList_Append(args.obj, data.obj);
+            ASSERT(ok);
+            PyObjHolder ret(PyObject_Call(obj, args.obj, nullptr));
+        },
+        // deleter
+        [obj]() { Py_DECREF(obj); }
+    );
+    return func;
+}
 
 } // jittor

@@ -5,6 +5,7 @@
 // ***************************************************************
 #pragma once
 #include "op.h"
+#include "numpy_func.h"
 
 namespace jittor {
 
@@ -15,13 +16,13 @@ struct NumpyCodeOp : Op {
     vector<NumpyFunc> backward;
     NumpyResult _results;
 
-    NumpyCodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs={}, NumpyFunc&& forward, vector<NumpyFunc>&& backward);
+    NumpyCodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs, NumpyFunc&& forward, vector<NumpyFunc>&& backward);
 
     // @attrs(multiple_outputs)
-    NumpyCodeOp(vector<NanoVector>&& shapes, vector<NanoString>&& dtypes, vector<Var*>&& inputs={}, NumpyFunc&& forward, vector<NumpyFunc>&& backward);
+    NumpyCodeOp(vector<NanoVector>&& shapes, vector<NanoString>&& dtypes, vector<Var*>&& inputs, NumpyFunc&& forward, vector<NumpyFunc>&& backward);
 	
 	// @pybind(None)
-	NumpyCodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs={}, NumpyFunc&& forward, NumpyResults&& results);
+	NumpyCodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs, NumpyFunc&& forward, NumpyResult&& results);
 
     const char* name() const override { return "numpy_code"; }
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;
