@@ -53,9 +53,6 @@ class Optimizer(object):
                 params.append(p)
                 if not p.is_stop_grad():
                     params_has_grad.append(p)
-        
-        # sync params, reduce computing graph size
-        jt.sync(params)
 
         # get gradient
         grads = jt.grad(loss, params_has_grad)
@@ -75,7 +72,8 @@ class Optimizer(object):
             pg_grads = pg["grads"]
             for i, p in enumerate(pg['params']):
                 if not p.is_stop_grad():
-                    pg_grads[i] = grads[pid]
+                    # stop grad of grad
+                    pg_grads[i] = grads[pid].stop_grad()
                     pid += 1
         
     def step(self, loss):
@@ -84,9 +82,7 @@ class Optimizer(object):
             lr = pg.get("lr", self.lr)
             for p, g in zip(pg["params"], pg["grads"]):
                 if p.is_stop_grad(): continue
-                p -= g * lr
-                # detach with the prev graph to reduce memory consumption
-                p.detach_inplace()
+                p.update(p - g * lr)
 
 
 class SGD(Optimizer):
@@ -108,7 +104,7 @@ class SGD(Optimizer):
         for pg in self.param_groups:
             values = pg["values"] = []
             for p in pg["params"]:
-                values.append(jt.zeros(p.shape, p.dtype).stop_fuse().stop_grad())
+                values.append(jt.zeros(p.shape, p.dtype).stop_grad())
 
     def step(self, loss):
         self.pre_step(loss)
@@ -124,12 +120,11 @@ class SGD(Optimizer):
             for p, g, v in zip(pg["params"], pg["grads"], pg["values"]):
                 if p.is_stop_grad(): continue
                 dp = p * weight_decay + g
-                v.assign(momentum * v + dp * (1 - dampening))
+                v.update(momentum * v + dp * (1 - dampening))
                 if nesterov:
-                    p -= (dp + momentum * v) * lr
+                    p.update(p - (dp + momentum * v) * lr)
                 else:
-                    p -= v * lr
-                p.detach_inplace()
+                    p.update(p - v * lr)
 
 class RMSprop(Optimizer):
     """ RMSprop Optimizer.
@@ -152,7 +147,7 @@ class RMSprop(Optimizer):
         for pg in self.param_groups:
             values = pg["values"] = []
             for p in pg["params"]:
-                values.append(jt.zeros(p.shape, p.dtype).stop_fuse().stop_grad())
+                values.append(jt.zeros(p.shape, p.dtype).stop_grad())
 
     def step(self, loss):
         self.pre_step(loss)
@@ -163,9 +158,8 @@ class RMSprop(Optimizer):
             alpha = pg.get("alpha", self.alpha)
             for p, g, v in zip(pg["params"], pg["grads"], pg["values"]):
                 if p.is_stop_grad(): continue
-                v.assign(alpha * v + (1-alpha) * g * g)
-                p -= lr * g / (jt.sqrt(v) + eps)
-                p.detach_inplace()
+                v.update(alpha * v + (1-alpha) * g * g)
+                p.update(p - lr * g / (jt.sqrt(v) + eps))
 
 class Adam(Optimizer):
     """ Adam Optimizer.
@@ -187,8 +181,8 @@ class Adam(Optimizer):
             values = pg["values"] = []
             m = pg["m"] = []
             for p in pg["params"]:
-                values.append(jt.zeros(p.shape, p.dtype).stop_fuse().stop_grad())
-                m.append(jt.zeros(p.shape, p.dtype).stop_fuse().stop_grad())
+                values.append(jt.zeros(p.shape, p.dtype).stop_grad())
+                m.append(jt.zeros(p.shape, p.dtype).stop_grad())
 
     def step(self, loss):
         self.pre_step(loss)
@@ -200,8 +194,7 @@ class Adam(Optimizer):
             b0, b1 = pg.get("betas", self.betas)
             for p, g, v, m in zip(pg["params"], pg["grads"], pg["values"], pg["m"]):
                 if p.is_stop_grad(): continue
-                m.assign(b0 * m + (1-b0) * g)
-                v.assign(b1 * v + (1-b1) * g * g)
+                m.update(b0 * m + (1-b0) * g)
+                v.update(b1 * v + (1-b1) * g * g)
                 step_size = lr * jt.sqrt(1-b1**n) / (1-b0 ** n)
-                p -= m * step_size / (jt.sqrt(v) + eps)
-                p.detach_inplace()
+                p.update(p - m * step_size / (jt.sqrt(v) + eps))

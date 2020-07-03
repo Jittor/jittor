@@ -15,6 +15,7 @@ PyObject* (*PyArray_New)(PyTypeObject *, int, npy_intp const *, int, npy_intp co
 PyObject* (*PyArray_FromAny)(PyObject *, PyArrayDescr_Proxy *, int, int, int, PyObject *);
 unsigned int (*PyArray_GetNDArrayCFeatureVersion)();
 int (*PyArray_SetBaseObject)(PyObject *arr, PyObject *obj);
+PyObject* (*PyArray_NewCopy)(PyObject *, int);
 
 tmp_data_t tmp_data;
 
@@ -30,6 +31,7 @@ void numpy_init() {
     fill(PyArray_New, 93);
     fill(PyArray_GetNDArrayCFeatureVersion, 211);
     fill(PyArray_SetBaseObject, 282);
+    fill(PyArray_NewCopy, 85);
 
     ASSERT(PyArray_GetNDArrayCFeatureVersion()>=7);
 }

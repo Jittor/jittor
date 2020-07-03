@@ -13,6 +13,7 @@
 namespace jittor {
 
 struct VarHolder;
+VarPtr detach(Var* x);
 
 struct DataView {
     VarHolder* vh;
@@ -41,6 +42,15 @@ struct VarHolder {
     // @pyjt(assign)
     // @attrs(return_self)
     VarHolder* assign(VarHolder* v);
+
+    /* update parameter and global variable,
+       different from assign, it will
+       stop grad between origin var and assigned var, and
+       will update in the background
+     */
+    // @pyjt(update)
+    // @attrs(return_self)
+    VarHolder* update(VarHolder* v);
 
     // @pyjt(swap)
     // @attrs(return_self)
@@ -92,6 +102,13 @@ struct VarHolder {
     inline bool is_stop_grad() {
         return var->is_stop_grad();
     }
+
+    /* detach the grad */
+    // @pyjt(detach)
+    inline VarHolder* detach() {
+        return new VarHolder(move(jittor::detach(var)));
+    }
+
 
     // @pyjt(stop_fuse)
     // @attrs(return_self)

@@ -4,24 +4,24 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
-#include <random>
 #include "common.h"
 
 namespace jittor {
 
-typedef void (*set_seed_callback)(int);
+struct UpdateQueue {
+    struct Item {
+        list<list<Item>>::iterator owner;
+        Var* v;
+    };
+    list<list<Item>> queue;
+    unordered_map<Var*, list<Item>::iterator> map;
 
-void init();
-// @pyjt(set_seed, seed)
-void set_seed(int seed);
+    void push(Var* v, Var* prev);
+    void pop(Var* v);
+    void auto_flush();
+};
 
-void add_set_seed_callback(set_seed_callback callback);
-
-extern "C"
-std::default_random_engine* get_random_engine();
-
-// things need to be clean before python exit
-// @pyjt(cleanup)
-void cleanup();
+extern UpdateQueue update_queue;
 
 } // jittor
+

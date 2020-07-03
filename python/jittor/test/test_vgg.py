@@ -77,7 +77,7 @@ class TestVGGClass(unittest.TestCase):
                     acc_list.append(acc)
                     print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}\tAcc: {:.6f}'
                         .format(0, batch_idx, 100,1. * batch_idx, loss[0], acc))
-                jt.fetch([loss, output, target], callback, batch_idx)
+                jt.fetch(batch_idx, loss, output, target, callback)
 
             log_conv = find_log_with_re(logs, 
                 "Jit op key (not )?found: ((mkl)|(cudnn))_conv.*")

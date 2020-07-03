@@ -24,7 +24,7 @@ CubArgReduceOp::CubArgReduceOp(Var* x, Var* offsets, NanoString op, bool keepdim
     : x(x), offsets(offsets), op(op), keepdims(keepdims) {
     flags.set(NodeFlags::_cpu, 0);
     flags.set(NodeFlags::_cuda, 1);
-    ASSERT(offsets->dtype()==ns_int || offsets->dtype()==ns_int32);
+    ASSERT(offsets->dtype()==ns_int32);
     y = create_output(nullptr, ns_int32);
     y_key = create_output(nullptr, x->dtype());
 }

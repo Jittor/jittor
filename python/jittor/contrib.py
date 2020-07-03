@@ -50,7 +50,7 @@ def slice_var_index(x, slices):
         slices = (slices,)
     if isinstance(slices[0], jt.Var):
         if len(slices) == 1 and slices[0].dtype == "bool":
-            return (slices[0].where(),)
+            return slice_var_index(x, tuple(slices[0].where()))
     bc = []
     ml = -1
     for idx, s in enumerate(slices):

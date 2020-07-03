@@ -12,6 +12,7 @@
 #include "var.h"
 #include "executor.h"
 #include "graph.h"
+#include "update_queue.h"
 
 namespace jittor {
     
@@ -28,8 +29,9 @@ VarHolder::VarHolder(Var* v) : var(v) {
     var->own_both_liveness();
 }
 
-VarHolder::VarHolder(VarPtr&& v) : VarHolder(v.ptr) {
-    v.free_liveness();
+VarHolder::VarHolder(VarPtr&& v) {
+    add_hold_vars(this);
+    var = v.ptr;
     v.ptr = nullptr;
 }
 
@@ -74,6 +76,13 @@ VarHolder* VarHolder::assign(VarHolder* v) {
     return this;
 }
 
+VarHolder* VarHolder::update(VarHolder* v) {
+    auto dv = jittor::detach(v->var);
+    update_queue.push(dv.ptr, var);
+    *this = move(dv);
+    return this;
+}
+
 extern Executor exe;
 
 void VarHolder::sync(bool device_sync) {
@@ -88,6 +97,9 @@ ArrayArgs VarHolder::fetch_sync() {
     return {var->mem_ptr, var->shape, var->dtype()};
 }
 
+// from fetch_op.cc
+extern list<VarPtr> fetcher;
+
 void sync_all(bool device_sync) {
     vector<Var*> vars;
     vars.reserve(VarHolder::hold_vars.size());
@@ -95,6 +107,8 @@ void sync_all(bool device_sync) {
         if (!v->var->_outputs.size())
             vars.push_back(v->var);
     }
+    for (auto& v :fetcher)
+        vars.push_back(v.ptr);
     graph_check();
     exe.run_sync(vars, device_sync); //need sync at last
     graph_check();

@@ -38,12 +38,14 @@ RUN pip3 install matplotlib
 
 RUN apt install openmpi-bin openmpi-common libopenmpi-dev -y
 
+RUN pip3 install jittor --timeout 100 && python3.7 -m jittor.test.test_example
+
+RUN pip3 uninstall jittor -y
+
 COPY . .
 
 RUN pip3 install . --timeout 100
 
 RUN python3.7 -m jittor.test.test_example
-
-RUN rm -rf ~/.cache/jittor/default
 
 CMD python3.7 -m jittor.notebook --allow-root --ip=0.0.0.0

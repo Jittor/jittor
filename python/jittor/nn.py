@@ -29,6 +29,16 @@ def matmul_transpose(a, b):
     b = b.broadcast(shape)
     return (a*b).sum(len(shape)-1)
 
+
+def bmm(a, b):
+    assert len(a.shape) >= 2 and len(b.shape) >= 2
+    assert a.shape[-1] == b.shape[-2]
+
+    shape = list(a.shape) + [b.shape[-1]]
+    a = a.broadcast(shape, [len(shape)-1])
+    b = b.broadcast(shape, [len(shape)-3])
+    return (a*b).sum(len(shape)-2)
+
 def matmul(a, b):
     assert len(a.shape) >= 2 and len(b.shape) == 2
     assert a.shape[-1] == b.shape[-2]
@@ -191,8 +201,10 @@ class BatchNorm(Module):
 
             xvar = x2mean-xmean*xmean
             norm_x = (x-xmean)/jt.sqrt(xvar+self.eps)
-            self.running_mean += (xmean.sum([0,2,3])-self.running_mean)*self.momentum
-            self.running_var += (xvar.sum([0,2,3])-self.running_var)*self.momentum
+            self.running_mean.update(self.running_mean +
+                (xmean.reshape((-1,)) - self.running_mean) * self.momentum)
+            self.running_var.update(self.running_var +
+                (xvar.reshape((-1,))-self.running_var)*self.momentum)
         else:
             running_mean = self.running_mean.broadcast(x, [0,2,3])
             running_var = self.running_var.broadcast(x, [0,2,3])
@@ -225,8 +237,10 @@ class BatchNorm1d(Module):
 
             xvar = x2mean-xmean*xmean
             norm_x = (x-xmean)/jt.sqrt(xvar+self.eps)
-            self.running_mean += (xmean.sum([0])-self.running_mean)*self.momentum
-            self.running_var += (xvar.sum([0])-self.running_var)*self.momentum
+            self.running_mean.update(self.running_mean + 
+                (xmean.sum([0])-self.running_mean)*self.momentum)
+            self.running_var.update(self.running_var + 
+                (xvar.sum([0])-self.running_var)*self.momentum)
         else:
             running_mean = self.running_mean.broadcast(x, [0])
             running_var = self.running_var.broadcast(x, [0])

@@ -207,17 +207,16 @@ def liveness_info():
     }
 
 def ones(shape, dtype="float32"):
+    if not isinstance(shape, (NanoVector, Sequence)):
+        shape = (shape,)
     return unary(1, dtype).broadcast(shape)
 
 def zeros(shape, dtype="float32"):
+    if not isinstance(shape, (NanoVector, Sequence)):
+        shape = (shape,)
     return unary(0, dtype).broadcast(shape)
 
 flags = core.flags()
-
-def detach(x):
-    """return detached var"""
-    return x.clone().stop_grad().clone()
-Var.detach = detach
 
 def std(x):
     matsize=1
@@ -305,11 +304,11 @@ Var.masked_fill = masked_fill
 def sqr(x): return x*x
 Var.sqr = sqr
 
-def argmax(x, dim:int, keepdims:bool=False):
+def argmax(x, dim, keepdims:bool=False):
     return x.arg_reduce("max", dim, keepdims)
 Var.argmax = argmax
 
-def argmin(x, dim:int, keepdims:bool=False):
+def argmin(x, dim, keepdims:bool=False):
     return x.arg_reduce("min", dim, keepdims)
 Var.argmin = argmin
 
@@ -322,13 +321,54 @@ def attrs(var):
     }
 Var.attrs = attrs
 
-def fetch(vars, func, *args, **kw):
-    core.fetch(vars, lambda *results: func(*results, *args, **kw))
+def fetch(*args):
+    ''' Async fetch vars with function closure.
+    
+Example 1::
 
-def fetch_var(var, func, *args, **kw):
-    core.fetch([var], lambda a: func(a, *args, **kw))
-Var.fetch = fetch_var
-del fetch_var
+    for img,label in enumerate(your_dataset):
+        pred = your_model(img)
+        loss = critic(pred, label)
+        acc = accuracy(pred, label) 
+        jt.fetch(acc, loss, 
+            lambda acc, loss:
+                print(f"loss:{loss} acc:{acc}"
+        )
+
+Example 2::
+
+    for i,(img,label) in enumerate(your_dataset):
+        pred = your_model(img)
+        loss = critic(pred, label)
+        acc = accuracy(pred, label) 
+        # variable i will be bind into function closure
+        jt.fetch(i, acc, loss, 
+            lambda i, acc, loss:
+                print(f"#{i}, loss:{loss} acc:{acc}"
+        )
+    '''
+    assert len(args)>=1
+    func = args[-1]
+    assert callable(func)
+    args = list(args[:-1])
+    if len(args)>0 and isinstance(args[0], Sequence) \
+        and len(args[0])>=1 and isinstance(args[0][0], Var):
+        raise TypeError("jt.Var should not inside a list or tuple.")
+    
+    var_map = []
+    variables = []
+    for i, v in enumerate(args):
+        if isinstance(v, Var):
+            variables.append(v)
+            var_map.append(i)
+            args[i] = None
+    def callback(*results):
+        for i,v in enumerate(results):
+            args[var_map[i]] = v
+        func(*args)
+    core.ops.fetch(variables, callback)
+
+Var.fetch = fetch
 
 def display_memory_info():
     import inspect, os
@@ -440,11 +480,11 @@ class Module:
             end = 0
             for k in key_:
                 if isinstance(v, nn.Sequential):
-                    if np.int(k) >= len(v.layers):
+                    if ori_int(k) >= len(v.layers):
                         end = 1
                         break
                     else:
-                        v = v[np.int(k)]
+                        v = v[ori_int(k)]
                 else:
                     if hasattr(v, k):
                         v = getattr(v, k)
@@ -458,12 +498,12 @@ class Module:
             else:
                 LOG.v(f'load parameter {key} success ...')
                 if isinstance(params[key], np.ndarray) or isinstance(params[key], list):
-                    v.assign(array(params[key]))
+                    v.update(array(params[key]))
                 elif isinstance(params[key], Var):
-                    v.assign(params[key])
+                    v.update(params[key])
                 else:
                     # assume is pytorch tensor
-                    v.assign(array(params[key].cpu().detach().numpy()))
+                    v.update(array(params[key].cpu().detach().numpy()))
         if n_failed:
             LOG.w(f"load total {len(params)} params, {n_failed} failed")
 
@@ -516,7 +556,7 @@ class Module:
     def mpi_param_broadcast(self, root=0):
         if not in_mpi: return
         for p in self.parameters():
-            p.assign(p.mpi_broadcast(root).detach())
+            p.update(p.mpi_broadcast(root))
 
 def make_module(func, exec_n_args=1):
     class MakeModule(Module):
@@ -575,11 +615,22 @@ def jittor_exit():
         pass
     else:
         core.sync_all(True)
+    core.cleanup()
 atexit.register(jittor_exit)
 
 Var.__str__ = lambda x: str(x.data)
 Var.__repr__ = lambda x: str(x.data)
 Var.peek = lambda x: f"{x.dtype}{x.shape}"
+
+
+ori_int = int
+
+int = int32
+Var.int = Var.int32
+float = float32
+Var.float = Var.float32
+double = float64
+Var.double = Var.float64
 
 from . import nn
 from .nn import matmul

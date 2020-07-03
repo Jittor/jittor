@@ -24,11 +24,14 @@ struct NodeFlags {
         _finished=1,
         // bit2: stop grad
         _stop_grad=2,
-        _n=3,
+        // bit3: is fetch
+        _fetch=3,
+        _n=4,
 
-        // op related flags
+        // var related flags
         _force_fuse=_n+0,
         _stop_fuse=_n+1,
+        _in_update_queue=_n+2,
 
         // op related flags
         // bit0: support cpu
