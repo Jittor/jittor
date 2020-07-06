@@ -354,7 +354,6 @@ DEF_IS(VarHolder*, T) from_py_object(PyObject* obj, unique_ptr<VarHolder>& holde
 
 struct DataView;
 DEF_IS(DataView, PyObject*) to_py_object(T a) {
-    auto obj = GET_OBJ_FROM_RAW_PTR(a.vh);
     int64 dims[a.shape.size()];
     for (int i=0; i<a.shape.size(); i++)
         dims[i] = a.shape[i];
@@ -369,10 +368,13 @@ DEF_IS(DataView, PyObject*) to_py_object(T a) {
         NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_WRITEABLE, // flags
         NULL // obj
     ));
-    Py_INCREF(obj);
-    PyObjHolder oh2(obj);
-    ASSERT(PyArray_SetBaseObject(oh.obj, oh2.obj)==0);
-    oh2.release();
+    if (a.vh) {
+        auto obj = GET_OBJ_FROM_RAW_PTR(a.vh);
+        PyObjHolder oh2(obj);
+        Py_INCREF(obj);
+        ASSERT(PyArray_SetBaseObject(oh.obj, oh2.obj)==0);
+        oh2.release();
+    }
     return oh.release();
 }
 
@@ -568,24 +570,22 @@ DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj) {
             // import numpy
             PyObjHolder np(PyImport_ImportModule("numpy"));
             // data = {}
-            //PyObjHolder data(to_py_object<map<string, vector<ArrayArgs>>>(result->varrays));
             PyObjHolder data(to_py_object(result->varrays));
             PyObjHolder data2(to_py_object(result->ints));
             PyObjHolder data3(to_py_object(result->arrays));
-            // data.update(data2)
             PyDict_Update(data.obj, data2.obj);
-            // data.update(data3)
             PyDict_Update(data.obj, data3.obj);
+
             // args = []
-            PyObjHolder args(PyList_New(0));
-            int ok = PyList_Append(args.obj, np.obj);
-            ASSERT(ok);
-            ok = PyList_Append(args.obj, data.obj);
-            ASSERT(ok);
+            PyObjHolder args(PyTuple_New(2));
+            PyTuple_SET_ITEM(args.obj, 0, np.obj);
+            PyTuple_SET_ITEM(args.obj, 1, data.obj);
             PyObjHolder ret(PyObject_Call(obj, args.obj, nullptr));
         },
         // deleter
-        [obj]() { Py_DECREF(obj); }
+        [obj]() { Py_DECREF(obj); },
+        // inc_ref
+        [obj]() { Py_INCREF(obj); }
     );
     return func;
 }

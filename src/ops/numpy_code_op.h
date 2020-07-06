@@ -1,5 +1,8 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2020 Jittor. Authors: 
+//     Guowei Yang <471184555@qq.com>
+//     Dun Liang <randonlang@gmail.com>. 
+// All Rights Reserved.
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -22,7 +25,7 @@ struct NumpyCodeOp : Op {
     NumpyCodeOp(vector<NanoVector>&& shapes, vector<NanoString>&& dtypes, vector<Var*>&& inputs, NumpyFunc&& forward, vector<NumpyFunc>&& backward);
 	
 	// @pybind(None)
-	NumpyCodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs, NumpyFunc&& forward, NumpyResult&& results);
+	NumpyCodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs, NumpyFunc forward, NumpyResult&& results);
 
     const char* name() const override { return "numpy_code"; }
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;

@@ -1,5 +1,8 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2020 Jittor. Authors: 
+//     Guowei Yang <471184555@qq.com>
+//     Dun Liang <randonlang@gmail.com>. 
+// All Rights Reserved.
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -13,7 +16,7 @@
 namespace jittor {
     
 static auto make_numpy_code = get_op_info("numpy_code")
-    .get_constructor<VarPtr, NanoVector, NanoString, vector<Var*>&&, NumpyFunc&&, NumpyResult&&>();
+    .get_constructor<VarPtr, NanoVector, NanoString, vector<Var*>&&, NumpyFunc, NumpyResult&&>();
     
 static inline void check_vary_shape(NanoVector v) {
     ASSERT(v.size()) << "Vary shape should not be zero dimension";
@@ -33,7 +36,7 @@ NumpyCodeOp::NumpyCodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inpu
         check_vary_shape(_outputs[0]->shape);
     }
     for (int i=0; i<sbackward.size(); i++) {
-        backward.push_back(move(sbackward[i]));
+        backward.push_back(sbackward[i]);
     }
 }
 
@@ -53,12 +56,12 @@ NumpyCodeOp::NumpyCodeOp(vector<NanoVector>&& shapes, vector<NanoString>&& dtype
         }
     }
     for (int i=0; i<sbackward.size(); i++) {
-        backward.push_back(move(sbackward[i]));
+        backward.push_back(sbackward[i]);
     }
 }
 
-NumpyCodeOp::NumpyCodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs, NumpyFunc&& forward, NumpyResult&& results)
-    : _inputs(inputs), forward(move(forward)), _results(move(results))
+NumpyCodeOp::NumpyCodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs, NumpyFunc forward, NumpyResult&& results)
+    : _inputs(inputs), forward(forward), _results(move(results))
 {
     _outputs.push_back(create_output(shape, dtype));
     CHECKop(_inputs.size(),<=,10);
@@ -71,55 +74,48 @@ NumpyCodeOp::NumpyCodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inpu
 
 VarPtr NumpyCodeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 	NumpyResult result;
-	// set results
-	// set dout index
-	// result.ints["dout_index"] = _outputs.find(out);
+    
+    int out_index=-1;
     for (int i=0; i<_outputs.size(); i++) {
         if (_outputs[i] == out) {
-            result.ints["dout_index"] = i;
+            out_index = i;
             break;
         }
     }
+    ASSERT(out_index!=-1);
+    result.ints["out_index"] = out_index;
 	result.arrays["dout"].ptr=dout;
     result.arrays["dout"].shape=dout->shape;
     result.arrays["dout"].dtype=dout->dtype();
     auto inputs = clone(_inputs);
     inputs.push_back(dout);
 
-	// code op:
-	/*
-    return make_code(
-        _inputs[v_index]->shape,
-        _inputs[v_index]->dtype(),
-        move(inputs),
-        move(cpu_src), {}, alias+cpu_header,
-        move(cuda_src), {}, alias+cuda_header
-    );
-	*/
 	return make_numpy_code(
         _inputs[v_index]->shape,
         _inputs[v_index]->dtype(),
-		move(inputs), 
-		move(backward[v_index]),
+		move(inputs),
+		backward[v_index],
 		move(result));
 }
 
 void NumpyCodeOp::run() {
-    NumpyResult result=move(_results);
-    vector<ArrayArgs> inputs(_inputs.size());
-    vector<ArrayArgs> outputs(_outputs.size());
-    /*
-    const void* ptr;
-    NanoVector shape;
-    NanoString dtype;
-    */
+    NumpyResult result;
+    result.varrays = _results.varrays;
+    result.ints = _results.ints;
+    result.arrays = _results.arrays;
+    
+    if (result.arrays.count("dout") > 0){
+        result.arrays["dout"].ptr=((Var*)result.arrays["dout"].ptr)->ptr<DataView>();
+    }
+    vector<DataView> inputs(_inputs.size());
+    vector<DataView> outputs(_outputs.size());
     for (int i=0; i<inputs.size(); i++) {
-        inputs[i].ptr=_inputs[i]->ptr<ArrayArgs>();
+        inputs[i].ptr=_inputs[i]->ptr<DataView>();
         inputs[i].shape=_inputs[i]->shape;
         inputs[i].dtype=_inputs[i]->dtype();
     }
     for (int i=0; i<outputs.size(); i++) {
-        outputs[i].ptr=_outputs[i]->ptr<ArrayArgs>();
+        outputs[i].ptr=_outputs[i]->ptr<DataView>();
         outputs[i].shape=_outputs[i]->shape;
         outputs[i].dtype=_outputs[i]->dtype();
     }

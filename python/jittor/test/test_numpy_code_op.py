@@ -1,5 +1,8 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+# Copyright (c) 2020 Jittor. Authors: 
+#     Guowei Yang <471184555@qq.com>
+#     Dun Liang <randonlang@gmail.com>. 
+# All Rights Reserved.
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -8,23 +11,27 @@ import jittor as jt
 import numpy as np
 
 class TestCodeOp(unittest.TestCase):
-    def forward_code(np, data):
+    def forward_code(self, np, data):
         a,b = data["inputs"]
         c,d = data["outputs"]
         np.add(a,b,out=c)
-        np.substract(a,b,out=d)
+        np.subtract(a,b,out=d)
+        p, r = c.__array_interface__['data']
 
-    def backward_code1(np, data):
+    def backward_code1(self, np, data):
         dout = data["dout"]
-        da, db = data["outputs"]
-        np.copyto(dout, da)
-        np.copyto(dout, db)
+        a,b,dout = data["inputs"]
+        out = data["outputs"][0]
+        np.copyto(out, dout)
 
-    def backward_code2(np, data):
+    def backward_code2(self, np, data):
         dout = data["dout"]
-        da, db = data["outputs"]
-        np.copyto(dout, da)
-        np.negtive(dout, db)
+        out_index = data["out_index"]
+        out = data["outputs"][0]
+        if out_index==0:
+            np.copyto(out, dout)
+        else:
+            np.negative(dout, out)
 
     def test(self):
         a = jt.random((5,1))
@@ -38,10 +45,16 @@ class TestCodeOp(unittest.TestCase):
             [self.backward_code1,self.backward_code2],
         )
 
-        print("a:",a)
-        print("b:",b)
-        print("a+b:",c)
-        print("a-b:",d)
+        assert np.allclose(c.data,(a+b).data)
+        assert np.allclose(d.data,(a-b).data)
+        dca, dcb = jt.grad(c,[a,b])
+        dda, ddb = jt.grad(d,[a,b])
+        one=np.ones(a.shape)
+        mone=one*-1.0
+        assert np.allclose(dca.data,one)
+        assert np.allclose(dcb.data,one)
+        assert np.allclose(dda.data,one)
+        assert np.allclose(ddb.data,mone)
 
 if __name__ == "__main__":
     unittest.main()

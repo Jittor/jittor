@@ -1,5 +1,8 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2020 Jittor. Authors: 
+//     Guowei Yang <471184555@qq.com>
+//     Dun Liang <randonlang@gmail.com>. 
+// All Rights Reserved.
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -17,15 +20,21 @@ struct NumpyFunc {
     typedef NumpyResult R;
     std::function<void(R*)> callback;
     std::function<void()> deleter;
+    std::function<void()> inc_ref;
     NumpyFunc() = default;
-    NumpyFunc(NumpyFunc&& other) : callback(other.callback), deleter(other.deleter) {
+    NumpyFunc(NumpyFunc&& other) : callback(other.callback), deleter(other.deleter), inc_ref(other.inc_ref) {
         other.callback = nullptr;
         other.deleter = nullptr;
+        other.inc_ref = nullptr;
     };
-    NumpyFunc(const NumpyFunc&) = delete;
+    NumpyFunc(const NumpyFunc& other) : callback(other.callback), deleter(other.deleter), inc_ref(other.inc_ref) {
+        inc_ref();
+    };
     NumpyFunc(std::function<void(R*)>&& callback) : callback(move(callback)) {}
     NumpyFunc(std::function<void(R*)>&& callback, std::function<void()>&& deleter)
     : callback(move(callback)), deleter(move(deleter)) {};
+    NumpyFunc(std::function<void(R*)>&& callback, std::function<void()>&& deleter, std::function<void()>&& inc_ref)
+    : callback(move(callback)), deleter(move(deleter)), inc_ref(move(inc_ref)) {};
     ~NumpyFunc() {
         if (deleter) {
             deleter();
@@ -36,9 +45,9 @@ struct NumpyFunc {
 
 struct NumpyResult {
     // vector<Allocation> allocations;
-    map<string, vector<ArrayArgs>> varrays;
+    map<string, vector<DataView>> varrays;
     map<string, int> ints;
-    map<string, ArrayArgs> arrays;
+    map<string, DataView> arrays;
     // mem ptr, dtype, shape --> numpy array
 };
 

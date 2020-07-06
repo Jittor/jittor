@@ -93,28 +93,30 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets) {
             auto index = it.index;
             if (op->tflag != nt) continue;
             // TODO: support two outputs backprop.
-            Var* out = op->outputs().back();
-            Var* dout = grads[out->custom_data];
-            VarPtr dvar = make_grad(op, out, dout, var, index);
-            registe_node_trace_grad(dvar.ptr, op, index);
-            if (dvar)
-                ASSERT(dvar->num==var->num && dvar->shape.size()==var->shape.size())
-                << "dvar" << dvar << "var" << var;
-            if (!grad)
-                grad = move(dvar);
-            else if (dvar) {
-                grad = make_binary(grad, dvar, ns_add);
-                #ifdef PREVENT_LARGE_FUSED_OP
-                gsum ++;
-                if (gsum>=PREVENT_LARGE_FUSED_OP) {
-                    // TODO: this is a dirty fix for
-                    // stopping fuse lots of op together,
-                    // try to find a better solution
-                    grad->flags.set(NodeFlags::_stop_fuse);
+            for (Var* out : op->outputs()) {
+                if (out->tflag != nt) continue;
+                Var* dout = grads[out->custom_data];
+                VarPtr dvar = make_grad(op, out, dout, var, index);
+                registe_node_trace_grad(dvar.ptr, op, index);
+                if (dvar)
+                    ASSERT(dvar->num==var->num && dvar->shape.size()==var->shape.size())
+                    << "dvar" << dvar << "var" << var;
+                if (!grad)
+                    grad = move(dvar);
+                else if (dvar) {
+                    grad = make_binary(grad, dvar, ns_add);
+                    #ifdef PREVENT_LARGE_FUSED_OP
+                    gsum ++;
+                    if (gsum>=PREVENT_LARGE_FUSED_OP) {
+                        // TODO: this is a dirty fix for
+                        // stopping fuse lots of op together,
+                        // try to find a better solution
+                        grad->flags.set(NodeFlags::_stop_fuse);
+                    }
+                    #endif
+                    assign_attrs(grad.ptr, var);
+                    registe_node_trace_grad(grad.ptr, var, index);
                 }
-                #endif
-                assign_attrs(grad.ptr, var);
-                registe_node_trace_grad(grad.ptr, var, index);
             }
         }
     }
