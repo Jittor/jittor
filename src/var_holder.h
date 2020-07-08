@@ -106,7 +106,7 @@ struct VarHolder {
     /* detach the grad */
     // @pyjt(detach)
     inline VarHolder* detach() {
-        return new VarHolder(move(jittor::detach(var)));
+        return new VarHolder(jittor::detach(var));
     }
 
 
