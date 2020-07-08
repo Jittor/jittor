@@ -303,10 +303,10 @@ DEF_IS(ArrayArgs, T) from_py_object(PyObject* obj) {
         auto arr = (PyArray_Proxy*)holder.obj;
         int64 size = PyArray_Size(arr);
         T args;
-        args.ptr = arr->data;
         args.shape = vector<int64>(arr->dimensions, arr->dimensions+arr->nd);
         args.dtype = get_type_str(arr);
         args.buffer.reset(new char[size]);
+        args.ptr = (void*)args.buffer.get();
         memcpy((void*)args.buffer.get(), (void*)arr->data, size);
         return args;
     }
