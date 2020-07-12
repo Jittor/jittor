@@ -111,18 +111,4 @@ void CublasBatchedMatmulOp::jit_run() {
 
 } // jittor
 
-// nn.py
-// def bmm(a, b):
-//     from compile_extern import cublas_ops
-//     if jt.flags.use_cuda and cublas_ops:
-//         return cublas_ops.cublas_batched_matmul(a, b, 0, 0)
-//     assert len(a.shape) >= 2 and len(b.shape) >= 2
-//     assert a.shape[-1] == b.shape[-2]
-
-//     shape = list(a.shape) + [b.shape[-1]]
-//     a = a.broadcast(shape, [len(shape)-1])
-//     b = b.broadcast(shape, [len(shape)-3])
-//     return (a*b).sum(len(shape)-2)
-
-
 
