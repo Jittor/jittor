@@ -20,7 +20,7 @@ struct ArrayOp : Op {
     Var* output;
     Allocation allocation;
     // @pybind(None)
-    ArrayOp(const void* ptr, NanoVector shape, NanoString dtype=ns_float);
+    ArrayOp(const void* ptr, NanoVector shape, NanoString dtype=ns_float32);
 
     ArrayOp(ArrayArgs&& args);
     template<class T>

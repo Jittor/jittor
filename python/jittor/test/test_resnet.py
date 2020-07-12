@@ -64,16 +64,16 @@ class TestResnet(unittest.TestCase):
         SGD = nn.SGD(mnist_net.parameters(), self.learning_rate, self.momentum, self.weight_decay)
 
         for batch_idx, (data, target) in enumerate(self.train_loader):
-            output = mnist_net(data)
-            loss = nn.cross_entropy_loss(output, target)
 
             # train step
             with jt.log_capture_scope(
                 log_silent=1,
                 log_v=1, log_vprefix="op.cc=100,exe=10",
             ) as logs:
+                output = mnist_net(data)
+                loss = nn.cross_entropy_loss(output, target)
                 SGD.step(loss)
-                def callback(loss, output, target, batch_idx):
+                def callback(batch_idx, loss, output, target):
                     # print train info
                     global prev
                     pred = np.argmax(output, axis=1)
@@ -83,13 +83,13 @@ class TestResnet(unittest.TestCase):
                     print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}\tAcc: {:.6f} \tTime:{:.3f}'
                         .format(0, batch_idx, 600,1. * batch_idx / 6.0, loss[0], acc, time.time()-prev))
                     # prev = time.time()
-                jt.fetch([loss, output, target], callback, batch_idx)
-
+                jt.fetch(batch_idx, loss, output, target, callback)
+            
             log_conv = find_log_with_re(logs, 
                 "Jit op key (not )?found: ((mkl)|(cudnn))_conv.*")
             log_matmul = find_log_with_re(logs, 
                 "Jit op key (not )?found: ((mkl)|(cublas))_matmul.*")
-            if batch_idx:
+            if batch_idx > 2:
                 assert len(log_conv)==59 and len(log_matmul)==6, (len(log_conv), len(log_matmul))
 
             mem_used = jt.flags.stat_allocator_total_alloc_byte \
@@ -114,15 +114,13 @@ class TestResnet(unittest.TestCase):
             # Train Epoch: 0 [40/100 (40%)]   Loss: 2.286762  Acc: 0.130000
             # Train Epoch: 0 [50/100 (50%)]   Loss: 2.055014  Acc: 0.290000
 
-            # print(jt.core.number_of_lived_vars(), mem_used)
-            jt.display_memory_info()
-            # if jt.in_mpi:
-            #     assert jt.core.number_of_lived_vars() < 3900, jt.core.number_of_lived_vars()
-            # else:
-            #     assert jt.core.number_of_lived_vars() < 3500, jt.core.number_of_lived_vars()
+            if jt.in_mpi:
+                assert jt.core.number_of_lived_vars() < 7500, jt.core.number_of_lived_vars()
+            else:
+                assert jt.core.number_of_lived_vars() < 6500, jt.core.number_of_lived_vars()
 
         jt.sync_all(True)
-        assert np.mean(loss_list[-50:])<0.3
+        assert np.mean(loss_list[-50:])<0.5
         assert np.mean(acc_list[-50:])>0.8
         
 if __name__ == "__main__":

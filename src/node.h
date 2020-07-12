@@ -24,7 +24,9 @@ struct NodeFlags {
         _finished=1,
         // bit2: stop grad
         _stop_grad=2,
-        _n=3,
+        // bit3: is fetch
+        _fetch=3,
+        _n=4,
 
         // var related flags
         _force_fuse=_n+0,

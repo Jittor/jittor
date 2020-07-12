@@ -16,7 +16,7 @@ def expect_error(func):
 
 class TestCore(unittest.TestCase):
     def test_number_of_hold_vars(self):
-        assert jt.random([1,2,3]).peek() == "float[1,2,3,]"
+        assert jt.random([1,2,3]).peek() == "float32[1,2,3,]"
         assert jt.core.number_of_hold_vars() == 0
         x = jt.random([1,2,3])
         assert jt.core.number_of_hold_vars() == 1

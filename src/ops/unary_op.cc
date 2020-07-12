@@ -22,9 +22,6 @@ static auto make_number = get_op_info("number")
     .get_constructor<VarPtr, float, Var*>();
 
 static unordered_set<string> unary_ops = {
-    "float",
-    "double",
-    "int",
     "bool",
     "int8",
     "int16",

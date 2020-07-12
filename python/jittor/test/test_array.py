@@ -60,6 +60,7 @@ class TestArray(unittest.TestCase):
         for i in range(3):
             x = jt.array(im)
             b = net(x)
+            b.fetch(lambda b: None)
             b.sync()
         jt.sync(device_sync=True)
 
@@ -70,6 +71,7 @@ class TestArray(unittest.TestCase):
             x = jt.array(im)
             b = net(x)
             b.fetch(lambda b: results.append(b))
+            b.sync()
             # del c
         jt.sync(device_sync=True)
         t2 = time.time() - time_start
@@ -111,6 +113,12 @@ class TestArray(unittest.TestCase):
             """)
             assert (b.data==[2,8,18]).all()
         
+    def test_not_c_style(self):
+        a = np.array([1,2,3])
+        b = a[::-1]
+        x = jt.array(b)
+        x = x + b
+        assert (x.data == [6,4,2]).all()
 
 
 

@@ -16,7 +16,7 @@ namespace jittor {
 
 struct CustomOp : Op {
     Var* output;
-    CustomOp(NanoVector shape, NanoString dtype=ns_float);
+    CustomOp(NanoVector shape, NanoString dtype=ns_float32);
     
     const char* name() const override { return "custom"; }
     DECLARE_jit_run;
@@ -75,7 +75,7 @@ class TestCustomOp(unittest.TestCase):
         my_op = jt.compile_custom_op("""
         struct MyOp : Op {
             Var* output;
-            MyOp(NanoVector shape, NanoString dtype=ns_float);
+            MyOp(NanoVector shape, NanoString dtype=ns_float32);
             
             const char* name() const override { return "my"; }
             DECLARE_jit_run;

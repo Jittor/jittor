@@ -258,7 +258,7 @@ def generate_error_code_from_func_header(func_head, target_scope_name, name, dfs
 
     LOG.vvv("gen err from func_head", func_head)
     args = func_head[1:].split(")")[0].split(",")
-    error_code = f" << \"Wrong inputs arguments, Please refer to examples(e.g. {help_cmd}).\""
+    error_code = f" << \"Wrong inputs arguments, Please refer to examples({help_cmd}).\""
     error_code += r' << "\n\nTypes of your inputs are:\n"'
     for arg in args:
         arg = arg.strip()
@@ -849,6 +849,7 @@ def compile(cache_path, jittor_path):
     headers = [ os.path.join(jittor_path, h) for h in headers1 ] + \
         [ os.path.join(cache_path, h) for h in headers2 ]
     basenames = []
+    pyjt_names = []
     for h in headers:
         with open(h, 'r') as f:
             src = f.read()
@@ -866,6 +867,7 @@ def compile(cache_path, jittor_path):
         if not check: continue
 
         basenames.append(basename)
+        pyjt_names.append(fname)
     
     code = f"""
     #include "pyjt/numpy.h"
@@ -888,3 +890,5 @@ def compile(cache_path, jittor_path):
     LOG.vvvv(code)
     with open(fname, "w") as f:
         f.write(code)
+    pyjt_names.append(fname)
+    return pyjt_names

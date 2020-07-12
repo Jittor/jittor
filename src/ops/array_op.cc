@@ -32,9 +32,9 @@ Init() {
 }
 ~Init() {
     if (!get_device_count()) return;
-    checkCudaErrors(cudaDeviceSynchronize());
-    checkCudaErrors(cudaStreamDestroy(stream));
-    checkCudaErrors(cudaEventDestroy(event));
+    peekCudaErrors(cudaDeviceSynchronize());
+    peekCudaErrors(cudaStreamDestroy(stream));
+    peekCudaErrors(cudaEventDestroy(event));
 }
 } init;
 

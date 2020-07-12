@@ -273,6 +273,7 @@ Var.start_grad = Var.detach_inplace = detach_inplace
 
 def unsqueeze(x, dim):
     shape = list(x.shape)
+    if dim < 0: dim += len(shape) + 1
     assert dim <= len(shape)
     return x.reshape(shape[:dim] + [1] + shape[dim:])
 Var.unsqueeze = unsqueeze
@@ -304,11 +305,11 @@ Var.masked_fill = masked_fill
 def sqr(x): return x*x
 Var.sqr = sqr
 
-def argmax(x, dim:int, keepdims:bool=False):
+def argmax(x, dim, keepdims:bool=False):
     return x.arg_reduce("max", dim, keepdims)
 Var.argmax = argmax
 
-def argmin(x, dim:int, keepdims:bool=False):
+def argmin(x, dim, keepdims:bool=False):
     return x.arg_reduce("min", dim, keepdims)
 Var.argmin = argmin
 
@@ -321,13 +322,54 @@ def attrs(var):
     }
 Var.attrs = attrs
 
-def fetch(vars, func, *args, **kw):
-    core.fetch(vars, lambda *results: func(*results, *args, **kw))
+def fetch(*args):
+    ''' Async fetch vars with function closure.
+    
+Example 1::
 
-def fetch_var(var, func, *args, **kw):
-    core.fetch([var], lambda a: func(a, *args, **kw))
-Var.fetch = fetch_var
-del fetch_var
+    for img,label in enumerate(your_dataset):
+        pred = your_model(img)
+        loss = critic(pred, label)
+        acc = accuracy(pred, label) 
+        jt.fetch(acc, loss, 
+            lambda acc, loss:
+                print(f"loss:{loss} acc:{acc}"
+        )
+
+Example 2::
+
+    for i,(img,label) in enumerate(your_dataset):
+        pred = your_model(img)
+        loss = critic(pred, label)
+        acc = accuracy(pred, label) 
+        # variable i will be bind into function closure
+        jt.fetch(i, acc, loss, 
+            lambda i, acc, loss:
+                print(f"#{i}, loss:{loss} acc:{acc}"
+        )
+    '''
+    assert len(args)>=1
+    func = args[-1]
+    assert callable(func)
+    args = list(args[:-1])
+    if len(args)>0 and isinstance(args[0], Sequence) \
+        and len(args[0])>=1 and isinstance(args[0][0], Var):
+        raise TypeError("jt.Var should not inside a list or tuple.")
+    
+    var_map = []
+    variables = []
+    for i, v in enumerate(args):
+        if isinstance(v, Var):
+            variables.append(v)
+            var_map.append(i)
+            args[i] = None
+    def callback(*results):
+        for i,v in enumerate(results):
+            args[var_map[i]] = v
+        func(*args)
+    core.ops.fetch(variables, callback)
+
+Var.fetch = fetch
 
 def display_memory_info():
     import inspect, os
@@ -439,11 +481,11 @@ class Module:
             end = 0
             for k in key_:
                 if isinstance(v, nn.Sequential):
-                    if np.int(k) >= len(v.layers):
+                    if ori_int(k) >= len(v.layers):
                         end = 1
                         break
                     else:
-                        v = v[np.int(k)]
+                        v = v[ori_int(k)]
                 else:
                     if hasattr(v, k):
                         v = getattr(v, k)
@@ -574,11 +616,22 @@ def jittor_exit():
         pass
     else:
         core.sync_all(True)
+    core.cleanup()
 atexit.register(jittor_exit)
 
 Var.__str__ = lambda x: str(x.data)
 Var.__repr__ = lambda x: str(x.data)
 Var.peek = lambda x: f"{x.dtype}{x.shape}"
+
+
+ori_int = int
+
+int = int32
+Var.int = Var.int32
+float = float32
+Var.float = Var.float32
+double = float64
+Var.double = Var.float64
 
 from . import nn
 from .nn import matmul

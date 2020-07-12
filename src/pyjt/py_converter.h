@@ -293,21 +293,23 @@ DEF_IS(ArrayArgs, T) from_py_object(PyObject* obj) {
         auto ptr = GET_RAW_PTR(VarHolder, obj);
         return move(fetch_sync({ptr}).at(0));
     }
-    if (Py_TYPE(obj) != PyArray_Type) {
-        PyObjHolder holder(PyArray_FROM_O(obj));
+    // PyArray_Type
+    auto arr = (PyArray_Proxy*)obj;
+    if (Py_TYPE(obj) != PyArray_Type || !is_c_style(arr)) {
+        PyObjHolder holder(
+            Py_TYPE(obj) != PyArray_Type ? 
+                PyArray_FROM_O(obj) :
+                PyArray_Copy(obj));
         auto arr = (PyArray_Proxy*)holder.obj;
         int64 size = PyArray_Size(arr);
         T args;
-        args.ptr = arr->data;
         args.shape = vector<int64>(arr->dimensions, arr->dimensions+arr->nd);
         args.dtype = get_type_str(arr);
         args.buffer.reset(new char[size]);
+        args.ptr = (void*)args.buffer.get();
         memcpy((void*)args.buffer.get(), (void*)arr->data, size);
         return args;
     }
-    // PyArray_Type
-    auto arr = (PyArray_Proxy*)obj;
-    CHECK(is_c_style(arr));
     T args;
     args.ptr = arr->data;
     if (arr->dimensions)

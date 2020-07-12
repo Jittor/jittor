@@ -229,7 +229,7 @@ void ConvTuner::forwardTune(FusedOp* fop) {
         if (!(bop->x->input()->type()==OpType::broadcast && bop->y->input()->type()==OpType::broadcast)) return;
 
         // only support float32 currently
-        if (bop->z->dtype() != ns_float && bop->z->dtype() != ns_float32)
+        if (bop->z->dtype() != ns_float32)
             continue;
         Op* ops[3] = {op, bop->x->input(), bop->y->input()};
         int ok = 0;

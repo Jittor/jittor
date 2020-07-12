@@ -345,7 +345,7 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
         with open(os.path.join(jittor_path, header), encoding='utf8') as f:
             src = f.read()
         # XxxXxxOp(args)
-        res = re.findall(pybind_attrs_reg + '('+name2+"\\([^\\n]*\\))", src, re.S)
+        res = re.findall(pybind_attrs_reg + '[^~]('+name2+"\\([^\\n]*\\))", src, re.S)
         assert len(res) >= 1, "Wrong op args in " + header
         # registe op
         cc_name = os.path.join(jittor_path, header[:-2] + ".cc")
@@ -908,14 +908,14 @@ with open(os.path.join(cache_path, "gen", "jit_op_maker.h"), 'w') as f:
     f.write(jit_src)
 cc_flags += f' -I{cache_path} '
 # gen pyjt
-pyjt_compiler.compile(cache_path, jittor_path)
+pyjt_gen_src = pyjt_compiler.compile(cache_path, jittor_path)
 
 # initialize order:
 # 1. registers
 # 2. generate source
 # 3. op_utils
 # 4. other
-files2 = run_cmd(f'find "{os.path.join(cache_path, "gen")}" | grep "cc$"').splitlines()
+files2 = pyjt_gen_src
 files4 = run_cmd('find -L src | grep "cc$"', jittor_path).splitlines()
 at_beginning = [
     "src/ops/op_utils.cc",

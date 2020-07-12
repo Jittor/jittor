@@ -83,7 +83,7 @@ mpi_initer() {
     MPI_CHECK(MPI_Init(NULL, NULL));
     MPI_CHECK(MPI_Comm_size(MPI_COMM_WORLD, &mpi_world_size));
     MPI_CHECK(MPI_Comm_rank(MPI_COMM_WORLD, &mpi_world_rank));
-    
+
     //calculating localRank based on hostname which is used in selecting a GPU
     uint64_t hostHashs[mpi_world_rank];
     char hostname[1024];
