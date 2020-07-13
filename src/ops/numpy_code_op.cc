@@ -30,11 +30,7 @@ NumpyCodeOp::NumpyCodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inpu
 {
     _outputs.push_back(create_output(shape, dtype));
     CHECKop(_inputs.size(),<=,10);
-
-    if (_outputs[0]->num < 0) {
-        flags.set(NodeFlags::_vary_shape);
-        check_vary_shape(_outputs[0]->shape);
-    }
+    ASSERT(_outputs[0]->num >= 0);
     for (int i=0; i<sbackward.size(); i++) {
         backward.push_back(sbackward[i]);
     }
@@ -50,10 +46,7 @@ NumpyCodeOp::NumpyCodeOp(vector<NanoVector>&& shapes, vector<NanoString>&& dtype
     CHECKop(_outputs.size(),>,0);
     for (int i=0; i<shapes.size(); i++) {
         _outputs[i] = create_output(shapes[i], dtypes[i]);
-        if (_outputs[i]->num < 0) {
-            flags.set(NodeFlags::_vary_shape);
-            check_vary_shape(_outputs[i]->shape);
-        }
+        ASSERT(_outputs[i]->num >= 0);
     }
     for (int i=0; i<sbackward.size(); i++) {
         backward.push_back(sbackward[i]);
@@ -64,16 +57,12 @@ NumpyCodeOp::NumpyCodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inpu
     : _inputs(inputs), forward(forward), _results(move(results))
 {
     _outputs.push_back(create_output(shape, dtype));
-    CHECKop(_inputs.size(),<=,10);
-
-    if (_outputs[0]->num < 0) {
-        flags.set(NodeFlags::_vary_shape);
-        check_vary_shape(_outputs[0]->shape);
-    }
+    CHECKop(_inputs.size(),<=,10)
+    ASSERT(_outputs[0]->num >= 0);
 }
 
 VarPtr NumpyCodeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
-	NumpyResult result;
+    NumpyResult result;
     
     int out_index=-1;
     for (int i=0; i<_outputs.size(); i++) {
@@ -84,18 +73,18 @@ VarPtr NumpyCodeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     }
     ASSERT(out_index!=-1);
     result.ints["out_index"] = out_index;
-	result.arrays["dout"].ptr=dout;
+    result.arrays["dout"].ptr=dout;
     result.arrays["dout"].shape=dout->shape;
     result.arrays["dout"].dtype=dout->dtype();
     auto inputs = clone(_inputs);
     inputs.push_back(dout);
 
-	return make_numpy_code(
+    return make_numpy_code(
         _inputs[v_index]->shape,
         _inputs[v_index]->dtype(),
-		move(inputs),
-		backward[v_index],
-		move(result));
+        move(inputs),
+        backward[v_index],
+        move(result));
 }
 
 void NumpyCodeOp::run() {
@@ -121,7 +110,7 @@ void NumpyCodeOp::run() {
     }
     result.varrays["inputs"] = move(inputs);
     result.varrays["outputs"] = move(outputs);
-	forward.callback(&result);
+    forward.callback(&result);
 }
 
 } // jittor

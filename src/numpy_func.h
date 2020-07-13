@@ -44,11 +44,9 @@ struct NumpyFunc {
 };
 
 struct NumpyResult {
-    // vector<Allocation> allocations;
     map<string, vector<DataView>> varrays;
     map<string, int> ints;
     map<string, DataView> arrays;
-    // mem ptr, dtype, shape --> numpy array
 };
 
 } // jittor

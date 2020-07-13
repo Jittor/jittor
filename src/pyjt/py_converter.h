@@ -67,7 +67,7 @@ DEF_IS(int, bool) is_type(PyObject* obj) {
     return PyLong_CheckExact(obj);
 }
 
-DEF_IS(int, PyObject*) to_py_object(const int& a) {
+DEF_IS(int, PyObject*) to_py_object(const T& a) {
     return PyLong_FromLong(a);
 }
 

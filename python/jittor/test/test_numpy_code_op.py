@@ -16,11 +16,9 @@ class TestCodeOp(unittest.TestCase):
         c,d = data["outputs"]
         np.add(a,b,out=c)
         np.subtract(a,b,out=d)
-        p, r = c.__array_interface__['data']
 
     def backward_code1(self, np, data):
         dout = data["dout"]
-        a,b,dout = data["inputs"]
         out = data["outputs"][0]
         np.copyto(out, dout)
 
