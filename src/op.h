@@ -37,6 +37,7 @@ struct Op : Node {
     ~Op();
     
     virtual VarPtr grad(Var* out, Var* dout, Var* v, int v_index);
+    virtual void grads(Var** douts, VarPtr* dins);
     virtual void infer_shape() {}
     virtual void run() {};
     virtual void jit_prepare() {};

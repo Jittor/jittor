@@ -59,6 +59,11 @@ class flag_scope(_call_no_record_scope):
         for k,v in self.flags_bk.items():
             setattr(flags, k, v)
 
+class no_grad(flag_scope):
+    def __init__(self, **jt_flags):
+        self.jt_flags = jt_flags
+        jt_flags["no_grad"] = 1
+
 single_log_capture = None
 
 class log_capture_scope(_call_no_record_scope):
@@ -558,6 +563,92 @@ class Module:
         if not in_mpi: return
         for p in self.parameters():
             p.update(p.mpi_broadcast(root))
+
+class Function(Module):
+    ''' Function Module for customized backward operations
+
+Example 1 (Function can have multiple input and multiple output, and user
+can store value for backward computation)::
+
+    import jittor as jt
+    from jittor import Function
+
+    class MyFunc(Function):
+        def execute(self, x, y):
+            self.x = x
+            self.y = y
+            return x*y, x/y
+
+        def grad(self, grads):
+            return grads[0] * self.y, grads[1] * self.x
+    a = jt.array(3.0)
+    b = jt.array(4.0)
+    func = MyFunc()
+    c,d = func(a, b)
+    da, db = jt.grad(c+d*3, [a, b])
+    assert da.data == 4
+    assert db.data == 9
+
+Example 2(Function can return None for no gradiant, and gradiant
+can also be None)::
+
+    import jittor as jt
+    from jittor import Function
+    
+    class MyFunc(Function):
+        def execute(self, x, y):
+            self.x = x
+            self.y = y
+            return x*y, x/y
+
+        def grad(self, grads):
+            assert grads[1] is None
+            return grads[0] * self.y, None
+    a = jt.array(3.0)
+    b = jt.array(4.0)
+    func = MyFunc()
+    c,d = func(a, b)
+    d.stop_grad()
+    da, db = jt.grad(c+d*3, [a, b])
+    assert da.data == 4
+    assert db.data == 0
+
+    '''
+    def __call__(self, *args, **kw):
+        args2 = list(args)
+        kw = dict(kw)
+        taped_inputs = []
+        taped_outputs = []
+        for i,v in enumerate(args2):
+            if isinstance(v, Var):
+                v = v.tape()
+                args2[i] = v
+                taped_inputs.append(v)
+        for k,v in kw.items():
+            if isinstance(v, Var):
+                v = v.tape()
+                kw[k] = v
+                taped_inputs.append(v)
+        res = self.execute(*args2, **kw)
+        if isinstance(res, Var):
+            res = res.tape()
+            taped_outputs.append(res)
+        else:
+            assert isinstance(res, Sequence)
+            res = list(res)
+            for i,v in enumerate(res):
+                if isinstance(v, Var):
+                    v = v.tape()
+                    res[i] = v
+                    taped_outputs.append(v)
+        # tape output and input together so
+        # backward treat them as one operator
+        tape_together(taped_inputs, taped_outputs, lambda args: self.grad(args))
+        return res
+
+    def dfs(self, parents, k, callback, callback_leave=None):
+        pass
+
 
 def make_module(func, exec_n_args=1):
     class MakeModule(Module):

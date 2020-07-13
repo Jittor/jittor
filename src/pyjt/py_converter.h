@@ -549,4 +549,62 @@ DEF_IS_1(fast_shared_ptr, T) from_py_object(PyObject* obj) {
 }
 
 
+struct GradCallback;
+
+DEF_IS(GradCallback, bool) is_type(PyObject* obj) {
+    return PyCallable_Check(obj);
+}
+
+DEF_IS(GradCallback, T) from_py_object(PyObject* obj) {
+    // PyObject_Call
+    Py_INCREF(obj);
+    T func(
+        // callback
+        [obj](int n_o, Var** douts, int n_i, VarPtr* dins) {
+            PyObjHolder list(PyTuple_New(n_o));
+            for (int i=0; i<n_o; i++) {
+                if (douts[i]) {
+                    PyTuple_SET_ITEM(list.obj, i, 
+                        to_py_object(new typename T::VarHolder(douts[i])));
+                } else {
+                    Py_INCREF(Py_None);
+                    PyTuple_SET_ITEM(list.obj, i, Py_None);
+                }
+            }
+            PyObjHolder args(PyTuple_New(1));
+            PyTuple_SET_ITEM(args.obj, 0, list.release());
+
+            PyObjHolder ret(PyObject_Call(obj, args.obj, nullptr));
+            auto is_seq = PyList_CheckExact(ret.obj) || PyTuple_CheckExact(ret.obj);
+            auto check = [&](int i, PyObject* obj) {
+                if (obj == Py_None) {
+                    dins[i] = nullptr;
+                } else {
+                    CHECK(Py_TYPE(obj) == &PyjtVarHolder.ht_type) << "returned grad("<<Py_TYPE(obj)->tp_name<<") is not jittor variable";
+                    auto vh = from_py_object<typename T::VarHolderPtr>(obj);
+                    dins[i] = vh->var;
+                }
+            };
+            if (!is_seq) {
+                CHECKop(n_i,==,1) << "returned grad size not match";
+                check(0, ret.obj);
+            } else {
+                auto size = Py_SIZE(ret.obj);
+                CHECKop(n_i,==,size) << "returned grad size not match";
+                auto arr = PySequence_Fast_ITEMS(ret.obj);
+                for (int i=0; i<size; i++) {
+                    auto oi = arr[i]; 
+                    check(i, oi);
+                }
+            }
+        },
+        // deleter
+        [obj]() { 
+            Py_DECREF(obj); 
+        }
+    );
+    return func;
+}
+
+
 } // jittor
