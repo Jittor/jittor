@@ -57,18 +57,18 @@ struct NumpyCodeOp : Op {
     
     Example-1::
 
-        def forward_code(self, np, data):
-            a = data["inputs"]
-            b = data["outputs"]
+        def forward_code(np, data):
+            a = data["inputs"][0]
+            b = data["outputs"][0]
             np.add(a,a,out=b)
 
-        def backward_code(self, np, data):
+        def backward_code(np, data):
             dout = data["dout"]
             out = data["outputs"][0]
-            np.copyto(out, dout)
+            np.copyto(out, dout*2.0)
 
         a = jt.random((5,1))
-        c, d = jt.numpy_code(
+        b = jt.numpy_code(
             a.shape,
             a.dtype,
             [a],
@@ -78,18 +78,18 @@ struct NumpyCodeOp : Op {
 
     Example-2::
     
-        def forward_code(self, np, data):
+        def forward_code(np, data):
             a,b = data["inputs"]
             c,d = data["outputs"]
             np.add(a,b,out=c)
             np.subtract(a,b,out=d)
 
-        def backward_code1(self, np, data):
+        def backward_code1(np, data):
             dout = data["dout"]
             out = data["outputs"][0]
             np.copyto(out, dout)
 
-        def backward_code2(self, np, data):
+        def backward_code2(np, data):
             dout = data["dout"]
             out_index = data["out_index"]
             out = data["outputs"][0]

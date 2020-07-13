@@ -57,7 +57,7 @@ NumpyCodeOp::NumpyCodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inpu
     : _inputs(inputs), forward(forward), _results(move(results))
 {
     _outputs.push_back(create_output(shape, dtype));
-    CHECKop(_inputs.size(),<=,10)
+    CHECKop(_inputs.size(),<=,10);
     ASSERT(_outputs[0]->num >= 0);
 }
 

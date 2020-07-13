@@ -578,8 +578,8 @@ DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj) {
 
             // args = []
             PyObjHolder args(PyTuple_New(2));
-            PyTuple_SET_ITEM(args.obj, 0, np.obj);
-            PyTuple_SET_ITEM(args.obj, 1, data.obj);
+            PyTuple_SET_ITEM(args.obj, 0, np.release());
+            PyTuple_SET_ITEM(args.obj, 1, data.release());
             PyObjHolder ret(PyObject_Call(obj, args.obj, nullptr));
         },
         // deleter
