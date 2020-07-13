@@ -151,7 +151,16 @@ class TestGrad(unittest.TestCase):
         self.assertEqual(dx.data, 4*2**3)
         self.assertEqual(ddx.data, 4*3*2**2)
         self.assertEqual(dddx.data, 4*3*2*2**1)
-        
+
+    def test_no_grad(self):
+        a = jt.array(1.0)
+        with jt.no_grad():
+            b = a
+            for i in range(10):
+                b = b.clone() + 1
+        assert b.data == 11
+        jt.clean()
+        assert jt.liveness_info()["lived_vars"] == 2
 
 if __name__ == "__main__":
     unittest.main()

@@ -46,7 +46,7 @@ JIT_TEST(sfrl_allocator_time) {
                 std::chrono::steady_clock::now().time_since_epoch()).count();
         
         LOGvv << "Use time " << float(end - begin) / 1000 << "ms\n";
-        ASSERT(float(end - begin) / 1000 < tasks[i].time_limit);
+        ASSERTop(float(end - begin) / 1000, <, tasks[i].time_limit);
     }
 }
 
@@ -84,7 +84,7 @@ JIT_TEST(sfrl_allocator_share) {
                 std::chrono::steady_clock::now().time_since_epoch()).count();
         
         LOGvvv << "Use time " << float(end - begin) / 1000 << "ms\n";
-        ASSERT(float(end - begin) / 1000 < tasks[i].time_limit);
+        ASSERTop(float(end - begin) / 1000, <, tasks[i].time_limit);
     }
 }
 
