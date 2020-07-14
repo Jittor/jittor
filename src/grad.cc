@@ -35,125 +35,6 @@ inline static void assign_attrs(Var* a, Var* b) {
         a->flags.set(NodeFlags::_stop_fuse);
 }
 
-void tape_together(
-    const vector<VarHolder*>& taped_inputs,
-    const vector<VarHolder*>& taped_outputs,
-    GradCallback&& grad_callback
-) {
-    auto tapes = new Tapes();
-    tapes->total = tapes->ref = taped_inputs.size() + taped_outputs.size();
-    tapes->callback = move(grad_callback);
-    tapes->flags.set(NodeFlags::_grads);
-    for (int i=0; i<taped_inputs.size(); i++) {
-        auto v = taped_inputs[i]->var;
-        auto op = (TapeOp*)v->input();
-        ASSERT(op);
-        op->flags.set(NodeFlags::_tape);
-        tapes->_inputs.emplace_back(op->inputs().front());
-        op->tapes = tapes;
-    }
-    for (int i=0; i<taped_outputs.size(); i++) {
-        auto v = taped_outputs[i]->var;
-        auto op = (TapeOp*)v->input();
-        ASSERT(op);
-        op->flags.set(NodeFlags::_tape);
-        tapes->_outputs.emplace_back(v,0);
-        op->tapes = tapes;
-    }
-}
-
-
-template <typename Func>
-void bfs_backward_with_tape(vector<Node*>& queue, Func&& func) {
-    auto t = ++Node::tflag_count;
-    size_t i=0;
-    for (Node* node : queue) node->tflag = t;
-    while (i < queue.size()) {
-        Node* node = queue[i++];
-        for (auto i : node->_inputs) {
-            auto inode = i.node;
-            if (inode->flags.get(NodeFlags::_tape)) {
-                Tapes* t = ((TapeOp*)inode)->tapes;
-                inode = t;
-                ASSERT(t->ref == t->total);
-            }
-            if (inode->tflag != t && func(inode)) {
-                inode->tflag = t;
-                queue.push_back(inode);
-            }
-        }
-    }
-}
-
-template <typename Func>
-void bfs_backward_with_tape(vector<Node*>& seed, vector<Node*>& queue, Func&& func) {
-    for (Node* node : seed)
-        if (func(node)) queue.push_back(node);
-    bfs_backward_with_tape(queue, func);
-}
-
-template <typename Func>
-void bfs_forward_with_tape(vector<Node*>& queue, Func&& func) {
-    auto t = ++Node::tflag_count;
-    size_t i=0;
-    for (Node* node : queue) node->tflag = t;
-    while (i < queue.size()) {
-        Node* node = queue[i++];
-        for (auto o : node->_outputs) {
-            auto onode = o.node;
-            if (onode->flags.get(NodeFlags::_tape)) {
-                Tapes* t = ((TapeOp*)onode)->tapes;
-                ASSERT(t->ref == t->total) << t->ref << t->total;
-                onode = t;
-            }
-            if (onode->tflag != t && func(onode)) {
-                onode->tflag = t;
-                queue.push_back(onode);
-            }
-        }
-    }
-}
-
-
-template <typename Func>
-void toplogical_sort_backward_with_tape(vector<Node*>& nodes, vector<Node*>& sorted, Func&& func) {
-    auto t = ++Node::tflag_count;
-    sorted.reserve(nodes.size());
-    for (auto node : nodes) node->tflag = t;
-    for (auto node : nodes) {
-        auto& deps = node->custom_data;
-        deps = 0;
-        for (auto o : node->_outputs) {
-            auto onode = o.node;
-            if (onode->flags.get(NodeFlags::_tape)) {
-                Tapes* t = ((TapeOp*)onode)->tapes;
-                onode = t;
-            }
-            if (onode->tflag == t)
-                deps++;
-        }
-        if (deps == 0) sorted.push_back(node);
-    }
-    size_t i=0;
-    while (i < sorted.size()) {
-        Node* node = sorted[i++];
-        for (auto i : node->_inputs) {
-            auto inode = i.node;
-            if (inode->flags.get(NodeFlags::_tape)) {
-                Tapes* t = ((TapeOp*)inode)->tapes;
-                inode = t;
-            }
-            if (inode->tflag == t) {
-                inode->custom_data--;
-                if (inode->custom_data == 0)
-                    sorted.push_back(inode);
-            }
-        }
-        func(node);
-    }
-    ASSERTop(nodes.size(),==,sorted.size());
-}
-
 vector<VarPtr> grad(Var* loss, vector<Var*> targets) {
     LOGvv << "loss:" >> loss << "targets:" >> targets;
     CHECK(loss->is_float()) << "Loss should be float";
@@ -163,13 +44,13 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets) {
     vector<Node*> ts(targets.begin(), targets.end());
     // bfs visit find all successors of targets
     LOGvv << "Size of successors:" << ts.size();
-    bfs_forward_with_tape(ts, [](Node*){ return true; });
+    bfs_forward(ts, [](Node*){ return true; });
     vector<Node*> gnodes;
     gnodes.reserve(ts.size());
     auto nt = Node::tflag_count;
     if (loss->tflag == nt)
         gnodes.push_back(loss);
-    bfs_backward_with_tape(gnodes, [&](Node* node) {
+    bfs_backward(gnodes, [&](Node* node) {
         if (node->tflag != nt)
             return false;
         if (node->is_stop_grad())
@@ -182,7 +63,7 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets) {
     LOGvv << "Size of grad nodes:" << gnodes.size();
     
     vector<Node*> sorted;
-    toplogical_sort_backward_with_tape(gnodes, sorted, [](Node*){});
+    toplogical_sort_backward(gnodes, sorted, [](Node*){});
     nt = Node::tflag_count;
     vector<Var*> gvars;
     gvars.reserve(sorted.size());
@@ -217,9 +98,6 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets) {
         Var* var = gvars[i];
         for (auto it : var->outputs_with_index()) {
             Op* op = it.op;
-            if (op->flags.get(NodeFlags::_tape)) {
-                op = ((TapeOp*)op)->tapes;
-            }
             auto index = it.index;
             if (op->tflag != nt) continue;
             id_buffer.emplace_back(op, index);
@@ -302,7 +180,7 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets) {
                     Var* dout = grads[id];
                     VarPtr dvar = make_grad(op, out, dout, var, index);
                     registe_node_trace_grad(dvar.ptr, op, index);
-                    if (dvar)
+                    if (dvar && var->num)
                         ASSERT(dvar->num==var->num && dvar->shape.size()==var->shape.size())
                         << "dvar" << dvar << "var" << var;
                     if (!grad)

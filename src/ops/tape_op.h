@@ -33,9 +33,7 @@ struct GradCallback {
 };
 
 struct TapeOp final : Op {
-    Tapes* tapes;
     TapeOp(Var* x);
-    ~TapeOp();
     
     const char* name() const override { return "tape"; }
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;
@@ -44,8 +42,12 @@ struct TapeOp final : Op {
 
 
 struct Tapes final : Op {
-    int ref, total;
     GradCallback callback;
+    Tapes(
+        const vector<VarHolder*>& taped_inputs,
+        const vector<VarHolder*>& taped_outputs,
+        GradCallback&& grad_callback
+    );
     const char* name() const override { return "tapes"; }
     void grads(Var** douts, VarPtr* dins) override;
 };

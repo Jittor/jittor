@@ -162,5 +162,23 @@ class TestFunction(unittest.TestCase):
         assert da.data == 4, da.data
         assert db.data == 9
 
+    def test_multi_grads_multi_out3(self):
+        class MyFunc(Function):
+            def execute(self, x, y):
+                self.x = x
+                self.y = y
+                return x*y, x/y
+
+            def grad(self, grads):
+                res = (grads[0] * self.y, grads[1] * self.x)
+                print(res)
+                return res
+        a = jt.array(3.0)
+        b = jt.array(4.0)
+        c,d = MyFunc()(a, b)
+        da, db = jt.grad(c+d*3, [a, b])
+        assert da.data == 4, da.data
+        assert db.data == 9
+
 if __name__ == "__main__":
     unittest.main()
