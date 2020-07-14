@@ -92,7 +92,10 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets) {
             Op* op = it.op;
             auto index = it.index;
             if (op->tflag != nt) continue;
+<<<<<<< HEAD
             // TODO: support two outputs backprop.
+=======
+>>>>>>> b27082f9444a4e627f7dfc574d0114302ba27b5e
             for (Var* out : op->outputs()) {
                 if (out->tflag != nt) continue;
                 Var* dout = grads[out->custom_data];
