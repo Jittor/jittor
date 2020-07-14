@@ -614,37 +614,53 @@ can also be None)::
     assert db.data == 0
 
     '''
-    def __call__(self, *args, **kw):
-        args2 = list(args)
-        kw = dict(kw)
+    def __call__(self, *args):
+        args = list(args)
         taped_inputs = []
         taped_outputs = []
-        for i,v in enumerate(args2):
+        input_mask = [-1] * len(args)
+        for i,v in enumerate(args):
             if isinstance(v, Var):
                 v = v.tape()
-                args2[i] = v
+                input_mask[i] = len(taped_inputs)
+                args[i] = v
                 taped_inputs.append(v)
-        for k,v in kw.items():
-            if isinstance(v, Var):
-                v = v.tape()
-                kw[k] = v
-                taped_inputs.append(v)
-        res = self.execute(*args2, **kw)
-        if isinstance(res, Var):
-            res = res.tape()
-            taped_outputs.append(res)
+        ori_res = self.execute(*args)
+        if not isinstance(ori_res, Sequence):
+            res = [ori_res]
         else:
-            assert isinstance(res, Sequence)
-            res = list(res)
-            for i,v in enumerate(res):
-                if isinstance(v, Var):
-                    v = v.tape()
-                    res[i] = v
-                    taped_outputs.append(v)
+            res = list(ori_res)
+        output_mask = [-1] * len(res)
+        for i,v in enumerate(res):
+            if isinstance(v, Var):
+                v = v.tape()
+                output_mask[i] = len(taped_outputs)
+                res[i] = v
+                taped_outputs.append(v)
+        self.input_mask = input_mask
+        self.output_mask = output_mask
         # tape output and input together so
         # backward treat them as one operator
-        tape_together(taped_inputs, taped_outputs, lambda *args: self.grad(*args))
-        return res
+        tape_together(taped_inputs, taped_outputs, self._grad)
+        if isinstance(ori_res, Sequence):
+            return res
+        else:
+            return res[0]
+
+    def _grad(self, *args):
+        new_args = ( (args[i] if i>=0 else None) for i in self.output_mask )
+        ret = self.grad(*new_args)
+        if not isinstance(ret, Sequence):
+            ret = (ret,)
+        new_ret = []
+        for i, r in enumerate(ret):
+            j = self.input_mask[i]
+            if j<0:
+                assert r is None, f"The {i}-th returned grad should be None, "\
+                    "because the input value is not jittor variable."
+            else:
+                new_ret.append(r)
+        return new_ret
 
     def dfs(self, parents, k, callback, callback_leave=None):
         pass

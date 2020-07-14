@@ -626,11 +626,11 @@ DEF_IS(GradCallback, T) from_py_object(PyObject* obj) {
                 }
             };
             if (!is_seq) {
-                CHECKop(n_i,==,1) << "returned grad size not match";
+                CHECKop(n_i,==,1) << n_i >> " returned grad required, but 1 given.";
                 check(0, ret.obj);
             } else {
                 auto size = Py_SIZE(ret.obj);
-                CHECKop(n_i,==,size) << "returned grad size not match";
+                CHECKop(n_i,==,size) << n_i >> " returned grad required, but " >> size >> " given.";
                 auto arr = PySequence_Fast_ITEMS(ret.obj);
                 for (int i=0; i<size; i++) {
                     auto oi = arr[i]; 
