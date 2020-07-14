@@ -18,8 +18,8 @@ class TestFunction(unittest.TestCase):
             def execute(self, x):
                 return x+1
 
-            def grad(self, grads):
-                return grads[0]-2
+            def grad(self, grad):
+                return grad-2
         a = jt.ones(1)
         func = MyFunc()
         b = func(a)
@@ -32,8 +32,8 @@ class TestFunction(unittest.TestCase):
                 self.x = x
                 return x+1
 
-            def grad(self, grads):
-                return (grads[0]-2) * self.x
+            def grad(self, grad):
+                return (grad-2) * self.x
         a = jt.ones(1) * 10
         func = MyFunc()
         b = func(a)
@@ -47,8 +47,8 @@ class TestFunction(unittest.TestCase):
                 self.y = y
                 return x*y
 
-            def grad(self, grads):
-                return (grads[0]-2) * self.x
+            def grad(self, grad):
+                return (grad-2) * self.x
         a = jt.array(3.0)
         b = jt.array(4.0)
         func = MyFunc()
@@ -62,8 +62,8 @@ class TestFunction(unittest.TestCase):
                 self.y = y
                 return x*y
 
-            def grad(self, grads):
-                return (grads[0]-2) * self.y, (grads[0]-2) * self.x
+            def grad(self, grad):
+                return (grad-2) * self.y, (grad-2) * self.x
         a = jt.array(3.0)
         b = jt.array(4.0)
         func = MyFunc()
@@ -79,8 +79,8 @@ class TestFunction(unittest.TestCase):
                 self.y = y
                 return x*y
 
-            def grad(self, grads):
-                return (grads[0]-2) * self.y, None
+            def grad(self, grad):
+                return (grad-2) * self.y, None
         a = jt.array(3.0)
         b = jt.array(4.0)
         func = MyFunc()
@@ -96,8 +96,8 @@ class TestFunction(unittest.TestCase):
                 self.y = y
                 return x*y, x/y
 
-            def grad(self, grads):
-                return grads[0] * self.y, grads[1] * self.x
+            def grad(self, grad0, grad1):
+                return grad0 * self.y, grad1 * self.x
         a = jt.array(3.0)
         b = jt.array(4.0)
         func = MyFunc()
@@ -113,8 +113,8 @@ class TestFunction(unittest.TestCase):
                 self.y = y
                 return x*y, x/y
 
-            def grad(self, grads):
-                return grads[0] * self.y, grads[1] * self.x
+            def grad(self, grad0, grad1):
+                return grad0 * self.y, grad1 * self.x
         a = jt.array(3.0)
         b = jt.array(4.0)
         b.stop_grad()
@@ -131,9 +131,9 @@ class TestFunction(unittest.TestCase):
                 self.y = y
                 return x*y, x/y
 
-            def grad(self, grads):
-                assert grads[1] is None
-                return grads[0] * self.y, None
+            def grad(self, grad0, grad1):
+                assert grad1 is None
+                return grad0 * self.y, None
         a = jt.array(3.0)
         b = jt.array(4.0)
         func = MyFunc()
@@ -150,8 +150,8 @@ class TestFunction(unittest.TestCase):
                 self.y = y
                 return x*y, x/y
 
-            def grad(self, grads):
-                res = (grads[0] * self.y, grads[1] * self.x)
+            def grad(self, grad0, grad1):
+                res = (grad0 * self.y, grad1 * self.x)
                 print(res)
                 return res
         a = jt.array(3.0)
@@ -169,8 +169,8 @@ class TestFunction(unittest.TestCase):
                 self.y = y
                 return x*y, x/y
 
-            def grad(self, grads):
-                res = (grads[0] * self.y, grads[1] * self.x)
+            def grad(self, grad0, grad1):
+                res = (grad0 * self.y, grad1 * self.x)
                 print(res)
                 return res
         a = jt.array(3.0)

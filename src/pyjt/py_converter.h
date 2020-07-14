@@ -571,10 +571,8 @@ DEF_IS(GradCallback, T) from_py_object(PyObject* obj) {
                     PyTuple_SET_ITEM(list.obj, i, Py_None);
                 }
             }
-            PyObjHolder args(PyTuple_New(1));
-            PyTuple_SET_ITEM(args.obj, 0, list.release());
 
-            PyObjHolder ret(PyObject_Call(obj, args.obj, nullptr));
+            PyObjHolder ret(PyObject_Call(obj, list.obj, nullptr));
             auto is_seq = PyList_CheckExact(ret.obj) || PyTuple_CheckExact(ret.obj);
             auto check = [&](int i, PyObject* obj) {
                 if (obj == Py_None) {
