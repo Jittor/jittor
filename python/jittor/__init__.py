@@ -579,8 +579,8 @@ can store value for backward computation)::
             self.y = y
             return x*y, x/y
 
-        def grad(self, grads):
-            return grads[0] * self.y, grads[1] * self.x
+        def grad(self, grad0, grad1):
+            return grad0 * self.y, grad1 * self.x
     a = jt.array(3.0)
     b = jt.array(4.0)
     func = MyFunc()
@@ -601,9 +601,9 @@ can also be None)::
             self.y = y
             return x*y, x/y
 
-        def grad(self, grads):
-            assert grads[1] is None
-            return grads[0] * self.y, None
+        def grad(self, grad0, grad1):
+            assert grad1 is None
+            return grad0 * self.y, None
     a = jt.array(3.0)
     b = jt.array(4.0)
     func = MyFunc()
@@ -643,7 +643,7 @@ can also be None)::
                     taped_outputs.append(v)
         # tape output and input together so
         # backward treat them as one operator
-        tape_together(taped_inputs, taped_outputs, lambda args: self.grad(args))
+        tape_together(taped_inputs, taped_outputs, lambda *args: self.grad(*args))
         return res
 
     def dfs(self, parents, k, callback, callback_leave=None):
