@@ -18,9 +18,7 @@ static auto make_tape = get_op_info("tape")
 TapeOp::TapeOp(Var* x) {
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
-    auto y = create_output(nullptr, x->dtype());
-    if (x->name.ptr)
-        y->name = x->name;
+    create_output(nullptr, x->dtype());
 }
 
 VarPtr TapeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
@@ -35,7 +33,18 @@ void TapeOp::infer_shape() {
 }
 
 void Tapes::grads(Var** douts, VarPtr* dins) {
-    callback.func(_outputs.size(), douts, _inputs.size(), dins);
+    CHECK(callback.deleter);
+    try {
+        callback.func(_outputs.size(), douts, _inputs.size(), dins);
+    } catch (...) {
+        // if error occur in callback, we need to
+        // free it to prevent memory leak, but this is still
+        // not enough, error may occur outside. please
+        // find a better solution
+        callback.deleter();
+        callback.deleter = nullptr;
+        throw;
+    }
 }
 
 Tapes::Tapes(

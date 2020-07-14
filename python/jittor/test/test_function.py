@@ -203,8 +203,8 @@ class TestFunction(unittest.TestCase):
     def test_multi_grads_multi_out5(self):
         class MyFunc(Function):
             def execute(self, x, z, y):
-                self.x = x
-                self.y = y
+                self.x = x.name("x")
+                self.y = y.name("y")
                 return x*y, "test", x/y
 
             def grad(self, grad0, _, grad1):
@@ -212,12 +212,72 @@ class TestFunction(unittest.TestCase):
                 res = (grad0 * self.y, 1, grad1 * self.x)
                 print(res)
                 return res
-        a = jt.array(3.0)
-        b = jt.array(4.0)
+        a = jt.array(3.0).name('a')
+        b = jt.array(4.0).name('b')
         c,_,d = MyFunc()(a, "a", b)
+        c.name('c'), d.name('d')
         expect_error(lambda : jt.grad(c+d*3, [a, b]))
 
-    def test_zz_last_test(self):
+    def test_zmem_leak(self):
+        def test():
+            self.test_multi_grads_multi_out5()
+        test()
+        jt.clean()
+        self.assertEqual(jt.liveness_info()["lived_vars"], 0)
+
+    def test_zmem_leak2(self):
+        def test():
+            class MyFunc(Function):
+                def execute(self, x, z, y):
+                    self.x = x.name("x")
+                    self.y = y.name("y")
+                    return x*y, "test", x/y
+
+                def grad(self, grad0, _, grad1):
+                    assert _ is None
+                    res = (grad0 * self.y, None, grad1 * self.x)
+                    return res
+            a = jt.array(3.0).name('a')
+            b = jt.array(4.0).name('b')
+            c,_,d = MyFunc()(a, "a", b)
+            c.name('c'), d.name('d')
+            g = jt.grad(c+d*3, [a, b])
+        test()
+        jt.clean()
+        self.assertEqual(jt.liveness_info()["lived_vars"], 0)
+
+    @unittest.skipIf(True, "skip memleak test")
+    def test_zmem_leak3(self):
+        def test():
+            class MyFunc(Function):
+                def execute(self, x, z, y):
+                    self.x = x
+                    self.y = y
+                    return x*y, "test", x/y
+
+                def grad(self, grad0, _, grad1):
+                    assert _ is None
+                    res = (grad0 * self.y, None, grad1 * self.x)
+                    return res
+            a = jt.array(3.0)
+            b = jt.array(4.0)
+            c,_,d = MyFunc()(a, "a", b)
+            g = jt.grad(c+d*3, [a, b])
+            jt.sync(g)
+        import resource
+        t1 = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        for i in range(100000):
+            test()
+            if i % 10000 == 0:
+                jt.clean()
+        t2 = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        for i in range(1000000):
+            test()
+            if i % 10000 == 0:
+                jt.clean()
+        t3 = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        print(t1,t2,t3)
+        assert t3 < t2 + 10, (t1,t2,t3)
         self.assertEqual(jt.liveness_info()["lived_vars"], 0)
 
 if __name__ == "__main__":

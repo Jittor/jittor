@@ -656,7 +656,7 @@ can also be None)::
         for i, r in enumerate(ret):
             j = self.input_mask[i]
             if j<0:
-                assert r is None, f"The {i}-th returned grad should be None, "\
+                assert r is None, f"{type(self)}'s {i}-th returned grad should be None, "\
                     "because the input value is not jittor variable."
             else:
                 new_ret.append(r)
