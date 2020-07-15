@@ -31,6 +31,23 @@ def matmul_transpose(a, b):
 
 
 def bmm(a, b):
+    ''' batch matrix multiply, 
+shape of input a is [batch, n, m],
+shape of input b is [batch, m, k],
+return shape is [batch, n, k]
+
+Example::
+
+    import jittor as jt
+    from jittor import nn
+
+    batch, n, m, k = 100, 5, 6, 7
+
+    a = jt.random((batch, n, m))
+    b = jt.random((batch, m, k))
+    c = nn.bmm(a, b)
+
+    '''
     assert len(a.shape) >= 2 and len(b.shape) >= 2
     assert a.shape[-1] == b.shape[-2]
 

@@ -60,6 +60,17 @@ class flag_scope(_call_no_record_scope):
             setattr(flags, k, v)
 
 class no_grad(flag_scope):
+    ''' no_grad scope, all variable created inside this
+scope will stop grad.
+
+Example::
+
+    import jittor as jt
+
+    with jt.no_grad():
+        ...
+
+    '''
     def __init__(self, **jt_flags):
         self.jt_flags = jt_flags
         jt_flags["no_grad"] = 1
