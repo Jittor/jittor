@@ -38,4 +38,9 @@ docker_task(
     "sudo docker build --tag jittor/jittor-cuda:latest --build-arg FROM_IMAGE='nvidia/cuda:10.2-cudnn7-devel-ubuntu18.04' . --network host"
 )
 
+docker_task(
+    "jittor/jittor-cuda-10-1", 
+    "sudo docker build --tag jittor/jittor-cuda-10-1:latest --build-arg FROM_IMAGE='nvidia/cuda:10.1-cudnn7-devel-ubuntu18.04' . --network host"
+)
+
 run_cmd("ssh jittor-web Documents/jittor-blog.git/hooks/post-update")
