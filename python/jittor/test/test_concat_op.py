@@ -11,7 +11,7 @@ import numpy as np
 class TestConcatOp(unittest.TestCase):
     def test_concat_op(self):
         def check(tmp, dim=0):
-            res1 = jt.concat(tmp, dim=dim)
+            res1 = jt.WIP_concat(tmp, dim=dim)
             res2 = jt.contrib.concat(tmp, dim=dim)
             assert (res1!=res2).data.sum()==0, "concat fail..."
         check([jt.array([[1],[2]]), jt.array([[2],[2]])])
