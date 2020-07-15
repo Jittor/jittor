@@ -61,7 +61,7 @@ with jt.no_grad():
 
 * 新增 bmm（batch matrix multiply） 支持:
 
-```
+```python
 import jittor as jt
 from jittor import nn
 
