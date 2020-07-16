@@ -7,6 +7,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
+__version__ = '1.1.5.6'
 from . import lock
 with lock.lock_scope():
     from . import compiler
@@ -60,6 +61,17 @@ class flag_scope(_call_no_record_scope):
             setattr(flags, k, v)
 
 class no_grad(flag_scope):
+    ''' no_grad scope, all variable created inside this
+scope will stop grad.
+
+Example::
+
+    import jittor as jt
+
+    with jt.no_grad():
+        ...
+
+    '''
     def __init__(self, **jt_flags):
         self.jt_flags = jt_flags
         jt_flags["no_grad"] = 1
@@ -656,7 +668,7 @@ can also be None)::
         for i, r in enumerate(ret):
             j = self.input_mask[i]
             if j<0:
-                assert r is None, f"The {i}-th returned grad should be None, "\
+                assert r is None, f"{type(self)}'s {i}-th returned grad should be None, "\
                     "because the input value is not jittor variable."
             else:
                 new_ret.append(r)
@@ -743,4 +755,4 @@ Var.double = Var.float64
 from . import nn
 from .nn import matmul
 from . import contrib
-from . import hub
+from .contrib import concat

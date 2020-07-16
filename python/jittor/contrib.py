@@ -15,6 +15,19 @@ def argmax_pool(x, size, stride, padding=0):
     return pool.pool(x, size, 'maximum', padding, stride)
 
 def concat(arr, dim):
+    '''Concat Operator can concat a list of jt Var at a specfic dimension.
+    
+    * [in] x:   input var list for concat
+
+    * [in] dim: concat which dim
+
+    * [out] out:  concat result
+
+Example::
+
+        jt.concat([jt.array([[1],[2]]), jt.array([[2],[2]])], dim=1)
+        # return [[1],[2],[2],[2]]
+    '''
     # TODO: low performance when concat lots of vars
     total_dim = 0
     if dim < 0: dim += len(arr[0].shape)

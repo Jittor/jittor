@@ -354,7 +354,6 @@ DEF_IS(VarHolder*, T) from_py_object(PyObject* obj, unique_ptr<VarHolder>& holde
 
 struct DataView;
 DEF_IS(DataView, PyObject*) to_py_object(T a) {
-    auto obj = GET_OBJ_FROM_RAW_PTR(a.vh);
     int64 dims[a.shape.size()];
     for (int i=0; i<a.shape.size(); i++)
         dims[i] = a.shape[i];
@@ -369,12 +368,23 @@ DEF_IS(DataView, PyObject*) to_py_object(T a) {
         NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_WRITEABLE, // flags
         NULL // obj
     ));
-    Py_INCREF(obj);
-    PyObjHolder oh2(obj);
-    ASSERT(PyArray_SetBaseObject(oh.obj, oh2.obj)==0);
-    oh2.release();
+    if (a.vh) {
+        auto obj = GET_OBJ_FROM_RAW_PTR(a.vh);
+        PyObjHolder oh2(obj);
+        Py_INCREF(obj);
+        ASSERT(PyArray_SetBaseObject(oh.obj, oh2.obj)==0);
+        oh2.release();
+    }
     return oh.release();
 }
+
+struct NumpyFunc;
+
+DEF_IS(NumpyFunc, bool) is_type(PyObject* obj) {
+    return PyCallable_Check(obj);
+}
+
+DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj);
 
 #define CHECK_IS_1(check_type) \
     template<typename T> struct is_##check_type : public std::false_type {}; \
@@ -456,6 +466,7 @@ DEF_IS(FetchFunc, T) from_py_object(PyObject* obj) {
     );
     return func;
 }
+
 
 #define CHECK_IS_2(check_type) \
     template<typename T> struct is_##check_type : public std::false_type {}; \
@@ -549,6 +560,37 @@ DEF_IS_1(fast_shared_ptr, T) from_py_object(PyObject* obj) {
 }
 
 
+
+DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj) {
+    // PyObject_Call
+    Py_INCREF(obj);
+    T func(
+        // callback
+        [obj](typename T::R* result) {
+            // import numpy
+            PyObjHolder np(PyImport_ImportModule("numpy"));
+            // data = {}
+            PyObjHolder data(to_py_object(result->varrays));
+            PyObjHolder data2(to_py_object(result->ints));
+            PyObjHolder data3(to_py_object(result->arrays));
+            PyDict_Update(data.obj, data2.obj);
+            PyDict_Update(data.obj, data3.obj);
+
+            // args = []
+            PyObjHolder args(PyTuple_New(2));
+            PyTuple_SET_ITEM(args.obj, 0, np.release());
+            PyTuple_SET_ITEM(args.obj, 1, data.release());
+            PyObjHolder ret(PyObject_Call(obj, args.obj, nullptr));
+        },
+        // deleter
+        [obj]() { Py_DECREF(obj); },
+        // inc_ref
+        [obj]() { Py_INCREF(obj); }
+    );
+    return func;
+}
+
+
 struct GradCallback;
 
 DEF_IS(GradCallback, bool) is_type(PyObject* obj) {
@@ -603,6 +645,5 @@ DEF_IS(GradCallback, T) from_py_object(PyObject* obj) {
     );
     return func;
 }
-
 
 } // jittor
