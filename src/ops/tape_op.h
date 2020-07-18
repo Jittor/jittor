@@ -17,6 +17,8 @@ struct Tapes;
 struct GradCallback {
     typedef jittor::VarHolder VarHolder;
     typedef VarHolder* VarHolderPtr;
+    typedef jittor::Var Var;
+    typedef jittor::VarPtr VarPtr;
     std::function<void(int,Var**,int,VarPtr*)> func;
     std::function<void()> deleter;
     inline ~GradCallback() { if (deleter) deleter(); }

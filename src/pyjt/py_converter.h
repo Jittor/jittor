@@ -602,7 +602,7 @@ DEF_IS(GradCallback, T) from_py_object(PyObject* obj) {
     Py_INCREF(obj);
     T func(
         // callback
-        [obj](int n_o, Var** douts, int n_i, VarPtr* dins) {
+        [obj](int n_o, typename T::Var** douts, int n_i, typename T::VarPtr* dins) {
             PyObjHolder list(PyTuple_New(n_o));
             for (int i=0; i<n_o; i++) {
                 if (douts[i]) {
