@@ -12,9 +12,6 @@
 
 namespace jittor {
 
-static auto make_tape = get_op_info("tape")
-    .get_constructor<VarPtr, Var*>();
-
 TapeOp::TapeOp(Var* x) {
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
