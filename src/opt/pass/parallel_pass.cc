@@ -299,7 +299,7 @@ void ParallelPass::run() {
             auto pos = code.find("(");
             ASSERT(pos != string::npos);
             code = code.substr(0, pos) +
-                "<<<p1,p2>>>" +
+                "<<<p1,p2,0,*cuda_stream>>>" +
                 code.substr(pos);
         }
 

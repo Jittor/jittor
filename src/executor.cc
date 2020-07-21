@@ -5,7 +5,9 @@
 // ***************************************************************
 #include <algorithm>
 #include <functional>
+#include <cmath>
 #ifdef HAS_CUDA
+#include "mem/allocator/mssfrl_allocator.h"
 #include <cuda_runtime.h>
 #include <helper_cuda.h>
 #include "mem/allocator/cuda_dual_allocator.h"
@@ -29,6 +31,10 @@ Executor exe;
 void Executor::run_sync(vector<Var*> vars, bool device_sync) {
     auto allocator = get_allocator();
     this->allocator = allocator;
+    #ifdef HAS_CUDA
+    if (use_cuda)
+        if (!cuda_streams_initialized) cuda_streams_init();
+    #endif
     // bfs find all ops need to run
     int op_num = 0;
     vector<Node*> bfs_q;
@@ -286,6 +292,8 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
     #ifdef HAS_CUDA
     int sync_times = 0;
     #endif
+    int all_reduce_cnt = 0;
+    // Op* temp = nullptr;
     for (uint rid=0; rid<queue.size(); rid++) {
         int root = queue[rid];
         Op* op = ops[root];
@@ -331,10 +339,146 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
             fused_op.update_ops();
         }
         LOGvvv << "Run" << op;
+        //debug
+        // std::cout << std::endl << op->name() << std::endl;
+        // if (string(op->name()) == "fused")
+        //     for (int i = 0; i < fused_op.ops.size(); ++i)
+        //         std::cout << fused_op.ops[i]->name() << " " << fused_op.ops[i] << " ";
+
+                    
+        //             for (auto& vi : fused_op.vars) {
+        //                 if (vi.type != 0) continue;
+        //                 Var* var = vi.var;
+        //                 std::cout << var << std::endl;
+        //                 Op* op2 = var->input();
+        //                 if (op2 != nullptr)
+        //                 std::cout << op2->name() << std::endl;
+        //             }
+        //             std::cout << "end!" << std::endl;
+        //             exit(0);
+        //         }
+        //     }
+        // std::cout << std::endl;
+
         if (!op->shape_infered()) op->infer_shape();
         ASSERT(op->shape_infered()) << "Shape of(" >> op->name() >> ") not solved.";
+        
+        // std::cout << std::endl << op->name() << std::endl; 
+        // std::cout << "op:" << op << std::endl;
+        // std::cout << "input:";
+        // if (is_fused_op) {
+        //     for (auto& vi : fused_op.vars) {
+        //         if (vi.type != 0) continue;
+        //         std::cout << vi.var->allocation << " ";
+        //     }
+        // } else {
+        //     for (Var* var : op->inputs()) {
+        //         std::cout << var->allocation << " ";
+        //     }
+        // }
+
+        #ifdef HAS_CUDA
+        // TODO define op cuda_stream in other place
+        if (use_cuda) {
+            bool output_is_all_reduce = false, input_is_all_reduce = false;
+            int all_reduce_id = -1;
+            if (is_fused_op) {
+                for (auto& vi : fused_op.vars) {
+                    if (vi.type != 0) continue;
+                    Var* var = vi.var;
+                    if (var->all_reduce_id != -1) {
+                        input_is_all_reduce = true;
+                        all_reduce_id = var->all_reduce_id;
+                    }
+                }
+            } else {
+                for (Var* var : op->inputs()) {
+                    Op* op2 = var->input();
+                    if (op2 != nullptr && ((string)op2->name()) == "nccl_all_reduce") {
+                        input_is_all_reduce = true;
+                        all_reduce_id = op2->all_reduce_id;
+                    }
+                }
+            }
+            
+            for (Var* var : op->outputs()) {
+                for (Op* op2 :var->outputs()) {
+                    if (((string)op2->name()) == "nccl_all_reduce") {
+                        output_is_all_reduce = true;
+                        if (op2->all_reduce_id == -1)
+                            op2->all_reduce_id = ++all_reduce_cnt;
+                        all_reduce_id = op2->all_reduce_id;
+                    }
+                }
+            }
+
+            if (((string)op->name()) == "nccl_all_reduce") {
+                bool have_input = false;
+                for (Var* var : op->inputs()) {
+                    Op* op2 = var->input();
+                    if (op2 == nullptr) continue;
+                    have_input = true;
+                }
+                if (!have_input) {
+                    if (op->all_reduce_id == -1)
+                        op->all_reduce_id = ++all_reduce_cnt;
+                    all_reduce_id = op->all_reduce_id;
+                } else {
+                    all_reduce_id = op->all_reduce_id;
+                }
+                for (Var* var : op->outputs()) {
+                    var->all_reduce_id = all_reduce_id;
+                }
+            }
+
+            int exp = 4;
+            if (exp == 1) {
+                op->cuda_stream = &cuda_streams[0];
+            } else if (exp == 2) {
+                if (((string)op->name()) == "nccl_all_reduce") 
+                    op->cuda_stream = &cuda_streams[1];
+                else 
+                    op->cuda_stream = &cuda_streams[0];
+            } else if (exp == 3) {
+                if (((string)op->name()) == "nccl_all_reduce") 
+                    op->cuda_stream = &cuda_streams[1];
+                else if (input_is_all_reduce)
+                    op->cuda_stream = &cuda_streams[2];
+                else if (output_is_all_reduce)
+                    op->cuda_stream = &cuda_streams[3];
+                else
+                    op->cuda_stream = &cuda_streams[0]; //change
+            } else if (exp == 4) {
+                if ((((string)op->name()) == "nccl_all_reduce") || input_is_all_reduce || output_is_all_reduce) {
+                    ASSERT(all_reduce_id != -1);
+                    op->cuda_stream = &cuda_streams[all_reduce_id % (CUDA_STREAM_NUM - 1) + 1]; //TODO change 31 to 63
+                } else {
+                    op->cuda_stream = &cuda_streams[0];
+                }
+            }
+
+            for (auto* var : op->outputs())
+                var->cuda_stream = op->cuda_stream;
+
+            if (is_fused_op) {
+                for (auto& vi : fused_op.vars) {
+                    if (vi.type != 0) continue;
+                    if (vi.var->cuda_stream == op->cuda_stream) continue;
+                    //TODO do not direct cast
+                    ((MSSFRLAllocator*)allocator)->record_rely(op->cuda_stream, vi.var->cuda_stream, vi.var->free_time_stamp);
+                }
+            } else {
+                for (Var* var : op->inputs()) {
+                    if (var->cuda_stream == op->cuda_stream) continue;
+                    ((MSSFRLAllocator*)allocator)->record_rely(op->cuda_stream, var->cuda_stream, var->free_time_stamp);
+                }
+            }
+        }
+        #endif
+
         for (auto* var : op->outputs())
             var->alloc(allocator);
+        // std::cout << "end alloc output" << std::endl;
         LOGvvv << "Run" << op << "inputs:" << op->inputs() << "outputs:" << op->outputs();
         op->do_prepare();
         bool is_cuda = op->flags.get(NodeFlags::_cuda);
@@ -344,18 +488,36 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
                 // if prev op in gpu and this op in cpu
                 //  cuda sync
                 checkCudaErrors(cudaDeviceSynchronize());
+                // TODO sync allocator
                 sync_times++;
             }
-            for (Var* v : op->inputs()) {
-                migrate_to_cpu(v, allocator);
+            if (is_fused_op) {
+                for (auto& vi : fused_op.vars) {
+                    if (vi.type != 0) continue;
+                    migrate_to_cpu(vi.var, allocator);
+                }
+            } else {
+                for (Var* v : op->inputs()) {
+                    migrate_to_cpu(v, allocator);
+                }
             }
         }
         
-        for (auto* var : op->inputs()) {
-            while (var->wait_event_list.size()) {
-                checkCudaErrors(cudaStreamWaitEvent(0, var->wait_event_list.back(), 0));
-                cudaEventDestroy(var->wait_event_list.back());
-                var->wait_event_list.pop_back();
+        if (is_cuda) {
+            if (is_fused_op) {
+                for (auto& vi : fused_op.vars) {
+                    if (vi.type != 0) continue;
+                    auto* var = vi.var;
+                    if (var->cuda_stream != op->cuda_stream) {
+                        checkCudaErrors(cudaStreamWaitEvent(*op->cuda_stream, *(var->wait_event), 0));
+                    }
+                }
+            } else {
+                for (auto* var : op->inputs()) {
+                    if (var->cuda_stream != op->cuda_stream) {
+                        checkCudaErrors(cudaStreamWaitEvent(*op->cuda_stream, *(var->wait_event), 0));
+                    }
+                }
             }
         }
         #endif
@@ -373,6 +535,58 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         op->do_run_after_prepare();
         LOGvvv << "Finished Op(" >> op->name() << rid >> 
             "/" >> queue.size() >> ") output:" << op->outputs();
+
+        #ifdef HAS_CUDA
+        if (use_cuda) {
+            for (Var* var : op->outputs()) {
+                // bool need_wait = false;
+                // for (Op* op_ :var->outputs()) {
+                //     if (op_->cuda_stream != op->cuda_stream) {
+                //         need_wait = true;
+                //     }
+                // }
+                // TODO check is var holder & need wait.
+                // if (!need_wait && !isvarholder) continue;
+
+                var->wait_event = cuda_event_pool.get_event();
+                checkCudaErrors(cudaEventRecord(*(var->wait_event), *op->cuda_stream));
+            }
+            
+
+            // for (Var* var : op->outputs()) {
+            //     if (var->allocation == 17 || var->allocation == 16) {
+            //         std::cout << "========show========\n";
+            //         Op* op_ = var->input();
+            //         std::cout << op_ << " ";
+            //         for (Var* var_ : op_->inputs()) {
+            //             std::cout << var_->allocation << " " << var_->mem_ptr << " " << var_ << " ";
+            //         }
+            //         std::cout << std::endl;
+            //         std::cout << "========end show========\n";
+            //     }
+            // }
+
+            long long time_stamp = -1;
+            if (is_fused_op) {
+                for (auto& vi : fused_op.vars) {
+                    if (vi.type != 0) continue;
+                    if (vi.var->allocator != allocator) continue;
+                    // std::cout << "input " << vi.var << " " << vi.var->allocation << std::endl;
+                    time_stamp = std::max(time_stamp, ((MSSFRLAllocator*)allocator)->record_free(vi.var->mem_ptr, vi.var->size, vi.var->allocation, fused_op.cuda_stream));
+                }
+            } else {
+                for (auto* var : op->inputs()) {
+                    if (var->allocator != allocator) continue;
+                    // std::cout << "input " << var << " " << var->allocation << std::endl;
+                    time_stamp = std::max(time_stamp, ((MSSFRLAllocator*)allocator)->record_free(var->mem_ptr, var->size, var->allocation, op->cuda_stream));
+                }
+            }
+            for (Var* var : op->outputs()) {
+                // std::cout << "output " <<  var << " " << var->allocation << std::endl;
+                var->free_time_stamp = time_stamp;
+            }
+        }
+        #endif
         if (is_fused_op) {
             for (Var* var : op->outputs())
                 var->finish_pending_liveness();
@@ -411,6 +625,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         event_queue.run_sync([]() {
             checkCudaErrors(cudaDeviceSynchronize());
         });
+                // TODO sync allocator
     }
     LOGvv << "cudaDeviceSynchronize times:" << sync_times << "/" <<queue.size();
     #endif

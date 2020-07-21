@@ -17,7 +17,7 @@ const char* CudaManagedAllocator::name() const {return "cuda_managed";}
 
 void* CudaManagedAllocator::alloc(size_t size, size_t& allocation) {
     void* ptr;
-    checkCudaErrors(cudaMallocManaged(&ptr, size));
+    checkCudaErrors(cudaMalloc(&ptr, size));
     return ptr;
 }
 

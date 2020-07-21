@@ -8,6 +8,10 @@
 #include "mem/allocator.h"
 
 namespace jittor {
+namespace array_local {
+extern cudaStream_t stream;
+extern cudaEvent_t event;
+}
 
 struct ArrayArgs {
     const void* ptr;

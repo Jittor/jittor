@@ -23,8 +23,11 @@ struct Var : Node {
     fast_shared_ptr<loop_options_t> loop_options;
     static int64_t number_of_lived_vars;
     #ifdef HAS_CUDA
-    vector<cudaEvent_t> wait_event_list;
-    #endif // JIT
+    long long free_time_stamp;
+    cudaStream_t* cuda_stream = NULL;
+    cudaEvent_t* wait_event;
+    int all_reduce_id = -1;
+    #endif
 
     // this var will be generated after alloc.
     void* mem_ptr = nullptr;

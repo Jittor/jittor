@@ -9,6 +9,14 @@
 #include "op.h"
 #include "mem/allocator.h"
 #include "pybind/py_var_tracer.h"
+#include "executor.h"
+#include "ops/array_op.h"
+#ifdef HAS_CUDA
+#include "mem/allocator/mssfrl_allocator.h"
+#include <cuda_runtime.h>
+#include <helper_cuda.h>
+#include "misc/cuda_flags.h"
+#endif
 
 namespace jittor {
 
@@ -25,11 +33,20 @@ Var::Var(NanoVector shape, NanoString dtype)
     ASSERT(ns.is_dtype());
     number_of_lived_vars++;
     numel();
+    wait_event = NULL;
 }
 Var::~Var() {
-    if (mem_ptr != nullptr)
-        allocator->free(mem_ptr, size, allocation);
+    if (mem_ptr != nullptr) {
+        if (((string)allocator->name()) == "mssfrl")
+            allocator->free(mem_ptr, size, allocation, cuda_stream);
+        else
+            allocator->free(mem_ptr, size, allocation);
+    }
     number_of_lived_vars--;
+    if (wait_event != NULL && wait_event != &array_local::event) {
+        exe.cuda_event_pool.recycle_event(wait_event);
+    }
+    free_time_stamp = 0;
 }
     
 string Var::to_string() {
@@ -70,7 +87,18 @@ bool Var::alloc(Allocator* allocator) {
             return true;
         }
     }
+
+    #ifdef HAS_CUDA
+    if (use_cuda) {
+        ASSERT(cuda_stream != NULL);
+        mem_ptr = ((MSSFRLAllocator*)allocator)->alloc(size, allocation, cuda_stream);
+    } else {
+        mem_ptr = allocator->alloc(size, allocation);
+    }
+    #endif
+    #ifndef HAS_CUDA
     mem_ptr = allocator->alloc(size, allocation);
+    #endif
     this->allocator = allocator;
     return mem_ptr;
 }

@@ -80,7 +80,7 @@ void CubArgReduceOp::jit_run() {
         num_segments *= x->shape[i];
     }
     size_t allocation_dout;
-    cub::KeyValuePair<int, Tx> *d_out = (cub::KeyValuePair<int, Tx> *)exe.allocator->alloc(sizeof(cub::KeyValuePair<int, Tx>) * num_segments, allocation_dout);
+    cub::KeyValuePair<int, Tx> *d_out = (cub::KeyValuePair<int, Tx> *)exe.allocator->alloc(sizeof(cub::KeyValuePair<int, Tx>) * num_segments, allocation_dout, cuda_stream);
 
     // Determine temporary device storage requirementse = NULL;
     void     *d_temp_storage = NULL;
@@ -89,17 +89,17 @@ void CubArgReduceOp::jit_run() {
         xp, d_out, num_segments, offsetsp, offsetsp + 1);
     // Allocate temporary storage
     size_t allocation;
-    d_temp_storage = exe.allocator->alloc(temp_storage_bytes, allocation);
+    d_temp_storage = exe.allocator->alloc(temp_storage_bytes, allocation, cuda_stream);
     // Run sorting operation
     cub::DeviceSegmentedReduce::@FUNC@@(d_temp_storage, temp_storage_bytes,
         xp, d_out, num_segments, offsetsp, offsetsp + 1);
 
     auto* __restrict__ yp = y->ptr<int>();
     auto* __restrict__ y_keyp = y_key->ptr<Tx>();
-    split<<<max(1,num_segments/1024),1024>>>(d_out, y_keyp, yp, num_segments);
+    split<<<max(1,num_segments/1024),1024, 0,*cuda_stream>>>(d_out, y_keyp, yp, num_segments);
 
-    exe.allocator->free(d_temp_storage, temp_storage_bytes, allocation);
-    exe.allocator->free(d_out, sizeof(cub::KeyValuePair<int, Tx>) * num_segments, allocation_dout);
+    exe.allocator->free(d_temp_storage, temp_storage_bytes, allocation, cuda_stream);
+    exe.allocator->free(d_out, sizeof(cub::KeyValuePair<int, Tx>) * num_segments, allocation_dout, cuda_stream);
 }
 #endif // JIT_cuda
 #endif // JIT

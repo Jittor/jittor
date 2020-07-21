@@ -192,6 +192,7 @@ string VarRelayManager::get_relay_src(int group_id, int op_id) {
         ss << "    GET_VAR_MEMBER("<<relay_op_name<<
             ", "<<offset<<") = vars["<<j<<"].var;\n";
     }
+    ss << "    "<<relay_op_name<<"->cuda_stream = this->cuda_stream;\n";
     ss << "    "<<relay_op_name<<"->do_run();\n";
     LOGvvv << "get_relay_src\n" << ss.str();
     return ss.str();

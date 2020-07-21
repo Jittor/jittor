@@ -99,7 +99,7 @@ class Pool(Module):
                     int bz = out_shape0;
                     dim3 s1(bx, by, bz);
                     dim3 s2(tx, ty);
-                    kernel1<<<s1, s2>>>(@ARGS);
+                    kernel1<<<s1, s2, 0, *cuda_stream>>>(@ARGS);
                 ''',
                 cuda_grad_src=[f'''
                     __global__ static void kernel3(@ARGS_DEF) {{
@@ -122,7 +122,7 @@ class Pool(Module):
                     int bz = pout_shape0;
                     dim3 s1_(bx, by, bz);
                     dim3 s2_(tx, ty);
-                    kernel3<<<s1_, s2_>>>(@ARGS);
+                    kernel3<<<s1_, s2_, 0, *cuda_stream>>>(@ARGS);
                 '''],
                 cpu_header='#include <ops/binary_op_defs.h>',
                 cpu_src=f'''

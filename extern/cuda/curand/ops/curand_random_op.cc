@@ -33,6 +33,7 @@ void CurandRandomOp::jit_run() {
 void CurandRandomOp::jit_run() {
     auto* __restrict__ x = output->ptr<T>();
     index_t num = output->num;
+    curandSetStream(gen, *cuda_stream);
     if (sizeof(T) == 4) {
         checkCudaErrors( curandGenerateUniform(gen, (float*)x, num) );
     } else {

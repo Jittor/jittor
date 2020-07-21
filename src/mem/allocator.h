@@ -6,6 +6,7 @@
 #pragma once
 #include "common.h"
 #include "mem/mem_info.h"
+#include <cuda_runtime.h>
 
 namespace jittor {
 
@@ -20,6 +21,15 @@ struct Allocator {
     virtual const char* name() const = 0;
     virtual void* alloc(size_t size, size_t& allocation) = 0;
     virtual void free(void* mem_ptr, size_t size, const size_t& allocation) = 0;
+    #ifdef HAS_CUDA
+    virtual void* alloc(size_t size, size_t& allocation, cudaStream_t* stream) { 
+        ASSERT(false);
+        return nullptr; 
+    };
+    virtual void free(void* mem_ptr, size_t size, const size_t& allocation, cudaStream_t* stream) {
+        ASSERT(false);
+    };
+    #endif
     inline virtual void gc() {};
     inline virtual bool share_with(size_t size, size_t allocation) { return false; };
     inline virtual ~Allocator() {}

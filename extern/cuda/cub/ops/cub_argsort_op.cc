@@ -77,15 +77,15 @@ void CubArgsortOp::jit_run() {
     size_t   temp_storage_bytes = 0;
     cub::DeviceSegmentedRadixSort::@FUNC@@(d_temp_storage, temp_storage_bytes,
         xp, y_keyp, indexesp, yp,
-        num_items, num_segments, offsetsp, offsetsp + 1);
+        num_items, num_segments, offsetsp, offsetsp + 1, 0, 8*sizeof(Tx), *cuda_stream);
     // Allocate temporary storage
     size_t allocation;
-    d_temp_storage = exe.allocator->alloc(temp_storage_bytes, allocation);
+    d_temp_storage = exe.allocator->alloc(temp_storage_bytes, allocation, cuda_stream);
     // Run sorting operation
     cub::DeviceSegmentedRadixSort::@FUNC@@(d_temp_storage, temp_storage_bytes,
         xp, y_keyp, indexesp, yp,
-        num_items, num_segments, offsetsp, offsetsp + 1);
-    exe.allocator->free(d_temp_storage, temp_storage_bytes, allocation);
+        num_items, num_segments, offsetsp, offsetsp + 1, 0, 8*sizeof(Tx), *cuda_stream);
+    exe.allocator->free(d_temp_storage, temp_storage_bytes, allocation, cuda_stream);
 }
 #endif // JIT_cuda
 #endif // JIT

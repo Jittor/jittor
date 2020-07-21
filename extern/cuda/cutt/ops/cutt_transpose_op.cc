@@ -97,7 +97,7 @@ void CuttTransposeOp::jit_run() {
         cuttExecute(iter->second, xp, yp);
     } else {
         cuttHandle plan;
-        cuttPlan(&plan, @DIM, x_shape.data(), reverse.data(), sizeof(Tx), 0);
+        cuttPlan(&plan, @DIM, x_shape.data(), reverse.data(), sizeof(Tx), *cuda_stream);
         cutt_plan_cache[jk.to_string()] = plan;
         cuttExecute(plan, xp, yp);
     }

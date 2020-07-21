@@ -13,6 +13,7 @@
 #endif
 #include "mem/allocator/stat_allocator.h"
 #include "mem/allocator/sfrl_allocator.h"
+#include "mem/allocator/mssfrl_allocator.h"
 #include "mem/allocator/nfef_allocator.h"
 
 namespace jittor {
@@ -71,10 +72,21 @@ Allocator* get_allocator() {
         allocator = setup_allocator<NFEFAllocator>(allocator);
         return allocator;
     }
+#ifdef HAS_CUDA
+    if (use_mssfrl_allocator && use_cuda) {
+        LOGvv << "Using mssfrl_allocator";
+        allocator = setup_allocator<MSSFRLAllocator>(allocator);
+    } else if (use_sfrl_allocator) {
+        LOGvv << "Using sfrl_allocator";
+        allocator = setup_allocator<SFRLAllocator>(allocator);
+    }
+#endif
+#ifndef HAS_CUDA
     if (use_sfrl_allocator) {
         LOGvv << "Using sfrl_allocator";
         allocator = setup_allocator<SFRLAllocator>(allocator);
     }
+#endif
     if (use_stat_allocator==2) {
         LOGvv << "Using stat_allocator at last";
         allocator = setup_allocator<StatAllocator>(allocator);

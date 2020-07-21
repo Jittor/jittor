@@ -13,6 +13,7 @@
 #include "graph.h"
 #include "misc/cuda_flags.h"
 #include "mem/allocator/sfrl_allocator.h"
+#include "mem/allocator/mssfrl_allocator.h"
 #include "mem/allocator/stat_allocator.h"
 #include "mem/mem_info.h"
 
@@ -81,6 +82,15 @@ void display_memory_info(const char* fileline) {
                         - stat_allocator_total_free_call), " KMG", 1000, ""} >> '\n';
     }
     for (auto& a : SFRLAllocator::sfrl_allocators) {
+        auto total = a->used_memory + a->unused_memory;
+        log << "name:" << a->name() << "is_cuda:" << a->is_cuda()
+            << "used:" << FloatOutput{(double)a->used_memory, " KMG", 1024, "B"}
+                >> "(" >> std::setprecision(p) >> a->used_memory*100.0 / total >> "%)"
+            << "unused:" << FloatOutput{(double)a->unused_memory, " KMG", 1024, "B"} 
+                >> "(" >> std::setprecision(p) >> a->unused_memory*100.0 / total >> "%)"
+            << "total:" << FloatOutput{(double)total, " KMG", 1024, "B"} >> "\n";
+    }
+    for (auto& a : MSSFRLAllocator::mssfrl_allocators) {
         auto total = a->used_memory + a->unused_memory;
         log << "name:" << a->name() << "is_cuda:" << a->is_cuda()
             << "used:" << FloatOutput{(double)a->used_memory, " KMG", 1024, "B"}

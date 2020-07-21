@@ -81,14 +81,18 @@ void ArrayOp::run() {
         checkCudaErrors(cudaMemcpyAsync(
             allocation.ptr, host_ptr, allocation.size, cudaMemcpyHostToDevice, stream));
         checkCudaErrors(cudaEventRecord(event, stream));
-        checkCudaErrors(cudaStreamWaitEvent(0, event, 0));
+        output->cuda_stream = &stream;
+        output->wait_event = &event;
         // delay free this allocation
         allocation.allocator = &delay_free;
     }
     #endif
     // free prev allocation and move into it
     auto o = output;
-    o->allocator->free(o->mem_ptr, o->size, o->allocation);
+    if (((string)o->allocator->name()) == "mssfrl")
+        o->allocator->free(o->mem_ptr, o->size, o->allocation, cuda_stream);
+    else
+        o->allocator->free(o->mem_ptr, o->size, o->allocation);
     o->mem_ptr = allocation.ptr;
     allocation.ptr = nullptr;
     o->allocator = allocation.allocator;

@@ -87,6 +87,7 @@ void CudnnConvBackwardWOp::jit_run() {
     auto w = dw;
     auto y = dy;        
     cudnnHandle_t& handle_ = cudnn_handle;
+    cudnnSetStream(handle_, *cuda_stream);
 
     cudnnTensorDescriptor_t cudnnIdesc;
     cudnnFilterDescriptor_t cudnnFdesc;
@@ -201,7 +202,7 @@ void CudnnConvBackwardWOp::jit_run() {
                 if (CUDNN_STATUS_SUCCESS == ret && sz > max_ws_size) max_ws_size = sz;
             } 
             size_t allocation;
-            void* ws = exe.allocator->alloc(max_ws_size, allocation);
+            void* ws = exe.allocator->alloc(max_ws_size, allocation, cuda_stream);
             checkCudaErrors(cudnnFindConvolutionBackwardFilterAlgorithmEx(
                 handle_,
                 cudnnIdesc, x->ptr<Tx>(),
@@ -213,7 +214,7 @@ void CudnnConvBackwardWOp::jit_run() {
                 perf_results,
                 ws,
                 max_ws_size));
-            exe.allocator->free(ws, max_ws_size, allocation);
+            exe.allocator->free(ws, max_ws_size, allocation, cuda_stream);
         } else {
             checkCudaErrors(cudnnGetConvolutionBackwardFilterAlgorithm_v7(
                 handle_,
@@ -248,7 +249,7 @@ void CudnnConvBackwardWOp::jit_run() {
         cudnnFdesc, algo, &workSpaceSize));
     size_t allocation;
     if (workSpaceSize > 0) {
-        workSpace = exe.allocator->alloc(workSpaceSize, allocation);
+        workSpace = exe.allocator->alloc(workSpaceSize, allocation, cuda_stream);
     }
     float alpha=1, beta=0;
     checkCudaErrors(cudnnConvolutionBackwardFilter(
@@ -263,7 +264,7 @@ void CudnnConvBackwardWOp::jit_run() {
         cudnnFdesc,  w->ptr<Tw>())
     );
     if (workSpace)
-        exe.allocator->free(workSpace, workSpaceSize, allocation);
+        exe.allocator->free(workSpace, workSpaceSize, allocation, cuda_stream);
         
     checkCudaErrors(cudnnDestroyTensorDescriptor( cudnnIdesc ));
     checkCudaErrors(cudnnDestroyFilterDescriptor( cudnnFdesc ));

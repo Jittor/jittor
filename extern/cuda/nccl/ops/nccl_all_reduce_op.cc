@@ -54,19 +54,7 @@ void NcclAllReduceOp::jit_run() {
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
     
-    cudaEvent_t temp_event, temp_event2;
-    checkCudaErrors(cudaEventCreate(&temp_event));
-    checkCudaErrors(cudaEventCreate(&temp_event2));
-    checkCudaErrors(cudaEventRecord(temp_event, 0));
-    checkCudaErrors(cudaStreamWaitEvent(all_reduce_s, temp_event, 0));
-    checkCudaErrors(ncclAllReduce(xp, yp, y->num, @T_NCCL, ncclSum, comm, all_reduce_s));
-    checkCudaErrors(cudaEventRecord(temp_event2, all_reduce_s));
-    x->wait_event_list.push_back(temp_event2);
-    cudaEventDestroy(temp_event);
-    nccl_delay_free.registe(x->allocator, x->allocation);
-    nccl_delay_free.registe(y->allocator, y->allocation);
-    event_queue.flush();
-    // checkCudaErrors(ncclAllReduce(xp, yp, y->num, @T_NCCL, ncclSum, comm, 0));
+    checkCudaErrors(ncclAllReduce(xp, yp, y->num, @T_NCCL, ncclSum, comm, *cuda_stream));
     
 }
 

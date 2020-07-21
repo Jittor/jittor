@@ -50,7 +50,7 @@ void NcclReduceOp::jit_run() {
     )
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
-    checkCudaErrors(ncclReduce(xp, yp, y->num, @T_NCCL, ncclSum, root, comm, 0));
+    checkCudaErrors(ncclReduce(xp, yp, y->num, @T_NCCL, ncclSum, root, comm, *cuda_stream));
     if (root != mpi_world_rank)
         checkCudaErrors(cudaMemsetAsync(yp, 0, y->size));
 }

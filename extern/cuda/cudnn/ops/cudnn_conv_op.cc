@@ -87,6 +87,7 @@ template <> __inline__ cudnnDataType_t getDataType<float>() { return CUDNN_DATA_
 
 void CudnnConvOp::jit_run() {
     cudnnHandle_t& handle_ = cudnn_handle;
+    cudnnSetStream(handle_, *cuda_stream);
 
     cudnnTensorDescriptor_t cudnnIdesc;
     cudnnFilterDescriptor_t cudnnFdesc;
@@ -206,7 +207,7 @@ void CudnnConvOp::jit_run() {
                 if (CUDNN_STATUS_SUCCESS == ret && sz > max_ws_size) max_ws_size = sz;
             } 
             size_t allocation;
-            void* ws = exe.allocator->alloc(max_ws_size, allocation);
+            void* ws = exe.allocator->alloc(max_ws_size, allocation, cuda_stream);
             checkCudaErrors(cudnnFindConvolutionForwardAlgorithmEx(
                 handle_,
                 cudnnIdesc, x->ptr<Tx>(),
@@ -218,7 +219,7 @@ void CudnnConvOp::jit_run() {
                 perf_results,
                 ws,
                 max_ws_size));
-            exe.allocator->free(ws, max_ws_size, allocation);
+            exe.allocator->free(ws, max_ws_size, allocation, cuda_stream);
         } else {
             checkCudaErrors(cudnnGetConvolutionForwardAlgorithm_v7(
                 handle_,
@@ -253,7 +254,7 @@ void CudnnConvOp::jit_run() {
         cudnnOdesc, algo, &workSpaceSize) );
     size_t allocation;
     if (workSpaceSize > 0) {
-        workSpace = exe.allocator->alloc(workSpaceSize, allocation);
+        workSpace = exe.allocator->alloc(workSpaceSize, allocation, cuda_stream);
     }
     float alpha=1, beta=0;
     checkCudaErrors(cudnnConvolutionForward(
@@ -268,7 +269,7 @@ void CudnnConvOp::jit_run() {
         cudnnOdesc, y->ptr<Ty>())
     );
     if (workSpace)
-        exe.allocator->free(workSpace, workSpaceSize, allocation);
+        exe.allocator->free(workSpace, workSpaceSize, allocation, cuda_stream);
 
     checkCudaErrors(cudnnDestroyTensorDescriptor( cudnnIdesc ));
     checkCudaErrors(cudnnDestroyFilterDescriptor( cudnnFdesc ));

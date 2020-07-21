@@ -50,7 +50,7 @@ void NcclBroadcastOp::jit_run() {
     )
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
-    checkCudaErrors(ncclBroadcast(xp, yp, y->num, @T_NCCL, root, comm, 0));
+    checkCudaErrors(ncclBroadcast(xp, yp, y->num, @T_NCCL, root, comm, *cuda_stream));
 }
 
 #endif

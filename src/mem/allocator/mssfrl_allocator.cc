@@ -7,33 +7,38 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 
-#include "mem/allocator/sfrl_allocator.h"
+#include "mem/allocator/mssfrl_allocator.h"
+#include <cstring>
 
 namespace jittor {
 
-DEFINE_FLAG(int, use_sfrl_allocator, 1, "Enable sfrl allocator");
+DEFINE_FLAG(int, use_mssfrl_allocator, 1, "Enable mssfrl allocator");
 
-//CachingBlock
-CachingBlock::CachingBlock(size_t size) : 
-    size(size), id(0), share_times(0), memory_ptr(nullptr), blocks(nullptr), prev(nullptr), next(nullptr), occupied(false) {}
+//MSCachingBlock
+MSCachingBlock::MSCachingBlock(size_t size) : 
+    size(size), id(0), share_times(0), free_times(0), memory_ptr(nullptr), blocks(nullptr), prev(nullptr), next(nullptr), occupied(false), stream_mask(0) {
+        memset(visit_free_times, 0, sizeof(visit_free_times));
+    }
 
-CachingBlock::CachingBlock(size_t size, CachingBlockPool* blocks, void* memory_ptr) : 
-    size(size), id(0), share_times(0), memory_ptr(memory_ptr), blocks(blocks), prev(nullptr), next(nullptr), occupied(false) {}
+MSCachingBlock::MSCachingBlock(size_t size, MSCachingBlockPool* blocks, void* memory_ptr) : 
+    size(size), id(0), share_times(0), free_times(0), memory_ptr(memory_ptr), blocks(blocks), prev(nullptr), next(nullptr), occupied(false), stream_mask(0) {
+        memset(visit_free_times, 0, sizeof(visit_free_times));
+    }
 
-//CachingBlockPool
-CachingBlockPool::CachingBlockPool() : tot_block_id(0), occupied_id_mapper(new CachingBlock*[ID_LIMIT]) {}
+//MSCachingBlockPool
+MSCachingBlockPool::MSCachingBlockPool(size_t stream_n) : tot_block_id(0), occupied_id_mapper(new MSCachingBlock*[ID_LIMIT]), stream_n(stream_n) {}
 
-CachingBlockPool::~CachingBlockPool() {
+MSCachingBlockPool::~MSCachingBlockPool() {
     for (auto it = blocks.begin(); it != blocks.end(); ++it) {
         delete it->second;
     }
 }
 
-unsigned long long CachingBlockPool::get_key(CachingBlock* block) {
+unsigned long long MSCachingBlockPool::get_key(MSCachingBlock* block) {
     return ((unsigned long long)block->size) * ID_LIMIT + block->id;
 }
 
-void CachingBlockPool::insert(CachingBlock* block) {
+void MSCachingBlockPool::insert(MSCachingBlock* block) {
     size_t id;
     if (!block_ids.empty()) {
         id = block_ids.back();
@@ -42,16 +47,40 @@ void CachingBlockPool::insert(CachingBlock* block) {
         ASSERT(tot_block_id < ID_LIMIT - 1) << "block id limit extended.";
         id = ++tot_block_id;
     }
+    
+    // std::cout << "insert_" << id << " " << block << " ";
+    // std::cout << block->size << std::endl;
+    
     block->id = id;
-    blocks[get_key(block)] = block;
+    unsigned long long key = get_key(block);
+    blocks[key] = block;
+    for (int i = 0; i < stream_n; ++i) {
+        if ((1ULL << i) & block->stream_mask) {
+            stream_blocks[i][key] = block;
+        }
+    }
 }
 
-void CachingBlockPool::erase(CachingBlock* block) {
+void MSCachingBlockPool::erase(MSCachingBlock* block) {
     block_ids.push_back(block->id);
-    blocks.erase(get_key(block));
+    unsigned long long key = get_key(block);
+    // std::cout << "erase " << key << " " << block->stream_mask << std::endl;
+    blocks.erase(key);
+    for (int i = 0; i < stream_n; ++i) {
+        if ((1ULL << i) & block->stream_mask) {
+            stream_blocks[i].erase(key);
+        }
+        block->visit_free_times[i] = 0;
+    }
+    block->free_times = 0;
+    block->stream_mask = 0;
+    for (int i = 0; i < block->free_events.size(); ++i) {
+        block->free_events[i]->active = false;
+    }
+    block->free_events.clear();
 }
 
-size_t CachingBlockPool::insert_occupied(CachingBlock* block) {
+size_t MSCachingBlockPool::insert_occupied(MSCachingBlock* block) {
     size_t id;
     if (!block_ids.empty()) {
         id = block_ids.back();
@@ -60,57 +89,63 @@ size_t CachingBlockPool::insert_occupied(CachingBlock* block) {
         ASSERT(tot_block_id < ID_LIMIT - 1) << "block id limit extended.";
         id = ++tot_block_id;
     }
+
+    // std::cout << "insert_occ_" << id << " " << block << " " << block->size << std::endl;
+
     block->id = id;
     occupied_id_mapper[id] = block;
     return id;
 }
 
-CachingBlock* CachingBlockPool::erase_occupied(size_t allocation) {
+MSCachingBlock* MSCachingBlockPool::erase_occupied(size_t allocation) {
     ASSERT(occupied_id_mapper[allocation] != nullptr) << "allocation not found";
     block_ids.push_back(allocation);
-    CachingBlock* block = occupied_id_mapper[allocation];
+    MSCachingBlock* block = occupied_id_mapper[allocation];
     occupied_id_mapper[allocation] = nullptr;
     return block;
 }
 
-CachingBlock* CachingBlockPool::get_occupied(size_t allocation) {
-    ASSERT(occupied_id_mapper[allocation] != nullptr) << "allocation not found";
-    CachingBlock* block = occupied_id_mapper[allocation];
+MSCachingBlock* MSCachingBlockPool::get_occupied(size_t allocation) {
+    ASSERT(occupied_id_mapper[allocation] != nullptr) << "allocation not found" << allocation;
+    MSCachingBlock* block = occupied_id_mapper[allocation];
     return block;
 }
 
-CachingBlock* CachingBlockPool::pop_block(size_t size) {
-    auto temp = CachingBlock(size);
-    auto it = blocks.lower_bound(get_key(&temp));
-    CachingBlock* block = nullptr;
-    if (it != blocks.end()) {
+MSCachingBlock* MSCachingBlockPool::pop_block(size_t size, size_t stream_id, unsigned long long& stream_mask) {
+    auto temp = MSCachingBlock(size);
+    auto it = stream_blocks[stream_id].lower_bound(get_key(&temp));
+    MSCachingBlock* block = nullptr;
+    stream_mask = stream_n == 64 ? 0xffffffffffffffffULL : (1ULL << stream_n) - 1;
+    if (it != stream_blocks[stream_id].end()) {
         block = it->second;
-        block_ids.push_back(block->id);
-        blocks.erase(it);
+        stream_mask = block->stream_mask;
+        erase(block);
     }
     return block;
 }
 
-list<SFRLAllocator*> SFRLAllocator::sfrl_allocators;
-//SFRLAllocator
-SFRLAllocator::~SFRLAllocator() {
-    sfrl_allocators.erase(iter);
-    for (auto it = occupied_blocks.begin(); it != occupied_blocks.end(); ++it) {
-        delete it->second;
-    }
+void MSCachingBlockPool::insert_stream(MSCachingBlock* block, size_t stream_id) {
+    unsigned long long key = get_key(block);
+    stream_blocks[stream_id][key] = block;
 }
 
-const char* SFRLAllocator::name() const {return "sfrl";}
+list<MSSFRLAllocator*> MSSFRLAllocator::mssfrl_allocators;
+//MSSFRLAllocator
+MSSFRLAllocator::~MSSFRLAllocator() {
+    mssfrl_allocators.erase(iter);
+}
 
-size_t SFRLAllocator::align_size(size_t size) {
+const char* MSSFRLAllocator::name() const {return "mssfrl";}
+
+size_t MSSFRLAllocator::align_size(size_t size) {
     return (size + ALIGN_SIZE - 1) / ALIGN_SIZE * ALIGN_SIZE;
 }
 
-void SFRLAllocator::setup(Allocator* underlying) {
+void MSSFRLAllocator::setup(Allocator* underlying) {
     this->underlying = underlying;
 }
 
-size_t SFRLAllocator::allocation_size(size_t size) {
+size_t MSSFRLAllocator::allocation_size(size_t size) {
     if (size <= SMALL_BLOCK_SIZE)
         return SMALL_BLOCK_SIZE;
     else if (size <= LARGE_BLOCK_SIZE)
@@ -119,7 +154,7 @@ size_t SFRLAllocator::allocation_size(size_t size) {
         return (size + LARGE_ALIGN_SIZE - 1) / LARGE_ALIGN_SIZE * LARGE_ALIGN_SIZE;
 }
 
-bool SFRLAllocator::should_split(CachingBlock* block, size_t size) {
+bool MSSFRLAllocator::should_split(MSCachingBlock* block, size_t size) {
     size_t rest = block->size - size;
     if (block->blocks == &small_blocks) {
         return rest >= ALIGN_SIZE;
@@ -128,20 +163,18 @@ bool SFRLAllocator::should_split(CachingBlock* block, size_t size) {
     }
 }
 
-size_t CachingBlockPool::free_all_cached_blocks(Allocator* underlying, long long free_size) {
+size_t MSCachingBlockPool::free_all_cached_blocks(Allocator* underlying, long long free_size) {
     auto it = blocks.begin();
     size_t freed_memory = 0;
     while (it != blocks.end()) {
         if (free_size != -1 && freed_memory >= free_size)
             break;
-        CachingBlock* block = it->second;
+        MSCachingBlock* block = it->second;
         if (!block->prev && !block->next) {
             underlying->free((void*)block->memory_ptr, block->size, 0);
             freed_memory += block->size;
-            auto cur = it;
             ++it;
-            block_ids.push_back(cur->second->id);
-            blocks.erase(cur);
+            erase(block);
             delete block;
         } else {
             ++it;
@@ -150,8 +183,8 @@ size_t CachingBlockPool::free_all_cached_blocks(Allocator* underlying, long long
     return freed_memory;
 }
 
-void SFRLAllocator::try_merge_two_blocks(CachingBlock* dst, CachingBlock* src, CachingBlockPool& blocks) {
-    if (!src || src->occupied) {
+void MSSFRLAllocator::try_merge_two_blocks(MSCachingBlock* dst, MSCachingBlock* src, MSCachingBlockPool& blocks) {
+    if (!src || src->occupied || ((src->stream_mask & dst->stream_mask) == 0)) {
         return;
     }
     if (dst->prev == src) {
@@ -167,19 +200,27 @@ void SFRLAllocator::try_merge_two_blocks(CachingBlock* dst, CachingBlock* src, C
         }
     }
     dst->size += src->size;
+    dst->stream_mask = src->stream_mask & dst->stream_mask;
     blocks.erase(src);
     delete src;
 }
 
-CachingBlockPool* SFRLAllocator::get_blocks(size_t size) {
+MSCachingBlockPool* MSSFRLAllocator::get_blocks(size_t size) {
     if (size <= SMALL_BLOCK_SIZE)
         return &small_blocks;
     else
         return &large_blocks;
 }
 
-void SFRLAllocator::free_all_sfrl_allocators() {
-    for (auto i : sfrl_allocators) {
+void MSSFRLAllocator::set_stream_n(size_t n) {
+    stream_n = n;
+    event_pool.stream_n = n;
+    small_blocks.stream_n = n;
+    large_blocks.stream_n = n;
+}
+
+void MSSFRLAllocator::free_all_mssfrl_allocators() {
+    for (auto i : mssfrl_allocators) {
         if (float(i->unused_memory) > i->free_ratio * float(i->unused_memory + i->used_memory) && i->unused_memory > i->min_free_size) {
             i->unused_memory -= i->large_blocks.free_all_cached_blocks(i->underlying, i->unused_memory - i->min_free_size);
             i->unused_memory -= i->small_blocks.free_all_cached_blocks(i->underlying, i->unused_memory - i->min_free_size);
@@ -187,21 +228,25 @@ void SFRLAllocator::free_all_sfrl_allocators() {
     }
 }
 
-inline void SFRLAllocator::try_free_this_allocators() {
+inline void MSSFRLAllocator::try_free_this_allocators() {
     if (float(unused_memory) > free_ratio * float(unused_memory + used_memory)) {
             unused_memory -= large_blocks.free_all_cached_blocks(underlying);
             unused_memory -= small_blocks.free_all_cached_blocks(underlying);
     }
 }
 
-void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
+void* MSSFRLAllocator::alloc(size_t size, size_t& allocation, cudaStream_t* stream) {
+    size_t stream_id = streams_id_mapper[stream];
+    if (debug)
+        std::cout << "start alloc " << size << " " << stream << std::endl;
     size = align_size(size);
-    CachingBlockPool* blocks = get_blocks(size);
+    MSCachingBlockPool* blocks = get_blocks(size);
+    unsigned long long stream_mask;
     //search cached block
-    CachingBlock* block = blocks->pop_block(size);
+    MSCachingBlock* block = blocks->pop_block(size, stream_id, stream_mask);
     //alloc from GPU
     if (block == nullptr) {
-        free_all_sfrl_allocators();
+        free_all_mssfrl_allocators();
         size_t alloc_size = allocation_size(size);
         void* ptr = underlying->alloc(alloc_size, allocation);
         if (ptr == nullptr) {
@@ -212,12 +257,12 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
                 return nullptr;
             }
         }
-        block = new CachingBlock(alloc_size, blocks, ptr);
+        block = new MSCachingBlock(alloc_size, blocks, ptr);
     } else {
         unused_memory -= block->size;
     }
     if (should_split(block, size)) {
-        CachingBlock* rest = new CachingBlock(block->size - size, block->blocks, static_cast<char*>(block->memory_ptr) + size);
+        MSCachingBlock* rest = new MSCachingBlock(block->size - size, block->blocks, static_cast<char*>(block->memory_ptr) + size);
         block->size = size;
         if (block->next) {
             block->next->prev = rest;
@@ -225,43 +270,158 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
         rest->next = block->next;
         rest->prev = block;
         block->next = rest;
+        rest->stream_mask = stream_mask;
+        ASSERT(stream_mask > 0);
+        // TODO swap rest and block to avoid reset
         blocks->insert(rest);
+        reset_stream_events(rest);
         unused_memory += rest->size;
     }
     block->occupied = true;
     allocation = blocks->insert_occupied(block);
     used_memory += block->size;
+
+    if (debug)
+        std::cout << "alloc " << allocation << " " << stream_id << std::endl;
     return block->memory_ptr;
 }
 
-void SFRLAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
-    CachingBlockPool* blocks = get_blocks(size);
-    CachingBlock* block = blocks->get_occupied(allocation);
+void* MSSFRLAllocator::alloc(size_t size, size_t& allocation) {
+    ASSERT(false);
+    return nullptr;
+    // return alloc(size, allocation, 0);
+}
+
+void MSSFRLAllocator::free(void* mem_ptr, size_t size, const size_t& allocation, cudaStream_t* stream) {
+    size_t stream_id = (stream == nullptr) ? 0 : streams_id_mapper[stream];
+    if (debug)
+        std::cout << "free " << allocation << " " << stream_id << std::endl;
+    MSCachingBlockPool* blocks = get_blocks(size);
+    MSCachingBlock* block = blocks->get_occupied(allocation);
     if (block->share_times == 0) {
         blocks->erase_occupied(allocation);
         used_memory -= block->size;
         unused_memory += block->size;
         block->occupied = false;
+        block->stream_mask = 0;
+        bool need_reset = false;
+        if (block->free_times > 0) {
+            for (int i = 0; i < stream_n; ++i) 
+                if (block->visit_free_times[i] == block->free_times) {
+                    block->stream_mask += 1ULL << i;
+                }
+        } else { // for temp alloc & temp free
+            ASSERT(stream != nullptr);
+            need_reset = true;
+            block->stream_mask = 1ULL << stream_id;
+        }
         auto& block_list = *block->blocks;
+        size_t s = block->size;
         try_merge_two_blocks(block, block->prev, block_list);
         try_merge_two_blocks(block, block->next, block_list);
         block_list.insert(block);
+        if (need_reset || block->size != s) {
+            reset_stream_events(block);
+        }
     } else {
         --block->share_times;
     }
+    // event_pool.print(2);
+    if (debug)
+        std::cout << "freeover " << allocation << " " << this << std::endl;
 }
 
-void SFRLAllocator::gc() {
+void MSSFRLAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
+    free(mem_ptr, size, allocation, nullptr);
+}
+
+void MSSFRLAllocator::gc() {
     unused_memory -= small_blocks.free_all_cached_blocks(underlying);
     unused_memory -= large_blocks.free_all_cached_blocks(underlying);
 }
 
-bool SFRLAllocator::share_with(size_t size, size_t allocation) {
-    CachingBlockPool* blocks = get_blocks(size);
-    CachingBlock* block = blocks->get_occupied(allocation);
+bool MSSFRLAllocator::share_with(size_t size, size_t allocation) {
+    if (debug)
+        std::cout << "share with" << " " << this << std::endl;
+    MSCachingBlockPool* blocks = get_blocks(size);
+    MSCachingBlock* block = blocks->get_occupied(allocation);
     ++block->share_times;
     return true;
 }
 
+void MSSFRLAllocator::update_mask(size_t stream_id, const vector<MSCachingBlock*>& add_mask) {
+    for (int i = 0; i < add_mask.size(); ++i) {
+        MSCachingBlock* b = add_mask[i];
+        if (b->stream_mask & (1ULL << stream_id)) 
+            continue;
+        if (!b->occupied) {
+            b->stream_mask |= (1ULL << stream_id);
+            b->blocks->insert_stream(b, stream_id);
+            // if (check_merge_block(b)) {
+            //     erase(b);
+            //     try_merge_two_blocks(block, block->prev, block_list);
+            //     try_merge_two_blocks(block, block->next, block_list);
+            //     block_list.insert(block);
+            //     if (need_reset || block->size != s) {
+            //         reset_stream_events(block);
+            //     }
+            // }
+            // TODO try merge blocks?
+        }
+    }
+}
+
+long long MSSFRLAllocator::record_free(void* mem_ptr, size_t size, const size_t& allocation, cudaStream_t* stream) {
+    size_t stream_id = streams_id_mapper[stream];
+    if (debug)
+        std::cout << "record free " <<allocation << " " << this << std::endl;
+    MSCachingBlockPool* blocks = get_blocks(size);
+    MSCachingBlock* block = blocks->get_occupied(allocation);
+    ++(block->free_times);
+
+    Event* event = new Event();
+    event->event_type = 0;
+    event->block = block;
+    event->stream_id = stream_id;
+    vector<MSCachingBlock*> add_mask;
+    long long ts = event_pool.add_event(event, add_mask);
+    update_mask(stream_id, add_mask);
+    // event_pool.print(2);
+    return ts;
+}
+
+long long MSSFRLAllocator::record_rely(cudaStream_t* stream_s, cudaStream_t* stream_t, long long time_stamp) {
+    size_t stream_id_s = streams_id_mapper[stream_s];
+    size_t stream_id_t = streams_id_mapper[stream_t];
+    if (debug)
+        std::cout << "record rely " <<stream_id_s << " " << stream_id_t << " " << time_stamp << this << std::endl;
+    Event* event = new Event();
+    event->event_type = 1;
+    event->rely_time_stamp = time_stamp;
+    event->rely_stream_id = stream_id_t;
+    event->stream_id = stream_id_s;
+    vector<MSCachingBlock*> add_mask;
+    long long ts = event_pool.add_event(event, add_mask);
+    update_mask(stream_id_s, add_mask);
+    // event_pool.print(2);
+    return ts;
+}
+
+void MSSFRLAllocator::reset_stream_events(MSCachingBlock* block) {
+    for (int i = 0; i < block->free_events.size(); ++i) {
+        block->free_events[i]->active = false;
+    }
+    block->free_events.clear();
+    for (int i = 0; i < stream_n; ++i) {
+        if ((1ULL << i) & block->stream_mask) {
+            Event* event = new Event();
+            event->event_type = 2;
+            event->block = block;
+            event->stream_id = i;
+            vector<MSCachingBlock*> add_mask;
+            event_pool.add_event(event, add_mask);
+        }
+    }
+}
 } // jittor
 

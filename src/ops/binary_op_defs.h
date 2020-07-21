@@ -27,7 +27,7 @@ namespace jittor {
 #define less_equal(T,a,b) ((a)<=(b))
 #define greater(T,a,b) ((a)>(b))
 #define greater_equal(T,a,b) ((a)>=(b))
-#define equal(T,a,b) ((a)==(b))
+// #define equal(T,a,b) ((a)==(b))
 #define not_equal(T,a,b) ((a)!=(b))
 #define left_shift(T,a,b) ((a)<<(b))
 #define right_shift(T,a,b) ((a)>>(b))
