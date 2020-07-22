@@ -69,6 +69,13 @@ VarPtr NumpyCodeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     result.arrays["dout"].ptr=dout;
     result.arrays["dout"].shape=dout->shape;
     result.arrays["dout"].dtype=dout->dtype();
+    vector<DataView> outputs(_outputs.size());
+    for (int i=0; i<outputs.size(); i++) {
+        outputs[i].ptr=_outputs[i]->ptr<DataView>();
+        outputs[i].shape=_outputs[i]->shape;
+        outputs[i].dtype=_outputs[i]->dtype();
+    }
+    result.varrays["f_outputs"] = move(outputs);
     auto inputs = clone(_inputs);
     inputs.push_back(dout);
 
