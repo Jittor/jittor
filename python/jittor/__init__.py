@@ -198,18 +198,13 @@ def clean():
 cast = unary
 
 def array(data, dtype=None):
-    if type(data) == core.Var:
+    if isinstance(data, core.Var):
         if dtype is None:
-            return cast(data, data.dtype)
+            return data.clone()
         return cast(data, dtype)
     if dtype != None:
         return ops.array(np.array(data, dtype))
-    if type(data) == np.ndarray:
-        if data.flags.c_contiguous:
-            return ops.array(data)
-        else:
-            return ops.array(data.copy())
-    return ops.array(np.array(data))
+    return ops.array(data)
 
 def grad(loss, targets):
     if type(targets) == core.Var:
