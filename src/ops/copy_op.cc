@@ -8,6 +8,10 @@
 #include "var.h"
 #include "ops/op_register.h"
 #include "ops/copy_op.h"
+#ifdef HAS_CUDA
+#include <cuda_runtime.h>
+#include <helper_cuda.h>
+#endif
 
 namespace jittor {
 
@@ -37,7 +41,7 @@ void CopyOp::run() {
     }
     #ifdef HAS_CUDA
     else {
-        std::cudaMemcpyAsync(y_ptr, x_ptr, size, cudaMemcpyDefault, 0);
+        checkCudaErrors(cudaMemcpyAsync(y_ptr, x_ptr, size, cudaMemcpyDefault, 0));
     }
     #endif
 }
