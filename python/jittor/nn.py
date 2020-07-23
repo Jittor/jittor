@@ -611,6 +611,7 @@ def upsample(img, size, mode="nearest", align_corners=False):
         y = wid * (w / W)
     return _interpolate(img, x, y, (nid,cid), mode)
 
+#TODO:full_matrices=1
 def svd(x):
     from functools import partial
     import copy
