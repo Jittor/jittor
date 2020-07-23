@@ -292,7 +292,7 @@ void ParallelPass::run() {
                 &new_func_call->before
             );
         } else {
-            new_func_def->get_attr("dtype") = "__global__ void";
+            new_func_def->get_attr("dtype") = "__launch_bounds__("+S(cuda_thread_num)+") __global__ void";
             new_tid_def.push_front("int thread_id = blockIdx.x * blockDim.x + threadIdx.x;");
             // cuda kernel launch
             auto& code = func_call_code;
