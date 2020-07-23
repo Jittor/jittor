@@ -31,7 +31,7 @@ def matmul_transpose(a, b):
     return (a*b).sum(len(shape)-1)
 
 def bmm(a, b):
-    ''' batch matrix multiply, 
+    ''' batch matrix multiply,
 shape of input a is [batch, n, m],
 shape of input b is [batch, m, k],
 return shape is [batch, n, k]
@@ -99,7 +99,7 @@ def cross_entropy_loss(output, target, ignore_index=None):
     target = target.reshape((-1, ))
     target = target.broadcast(output, [1])
     target = target.index(1) == target
-    
+
     output = output - output.max([1], keepdims=True)
     loss = output.exp().sum(1).log()
     loss = loss - (output*target).sum(1)
@@ -229,7 +229,7 @@ class BatchNorm(Module):
         w = self.weight.broadcast(x, [0,2,3])
         b = self.bias.broadcast(x, [0,2,3])
         return norm_x * w + b
-        
+
 class BatchNorm1d(Module):
     def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=None, is_train=True, sync=True):
         assert affine == None
@@ -254,9 +254,9 @@ class BatchNorm1d(Module):
 
             xvar = x2mean-xmean*xmean
             norm_x = (x-xmean)/jt.sqrt(xvar+self.eps)
-            self.running_mean.update(self.running_mean + 
+            self.running_mean.update(self.running_mean +
                 (xmean.sum([0])-self.running_mean)*self.momentum)
-            self.running_var.update(self.running_var + 
+            self.running_var.update(self.running_var +
                 (xvar.sum([0])-self.running_var)*self.momentum)
         else:
             running_mean = self.running_mean.broadcast(x, [0])
@@ -377,7 +377,7 @@ class Conv(Module):
             if self.bias is not None:
                 b = self.bias.broadcast(y.shape, [0,2,3])
                 y = y + b
-            return y          
+            return y
 
 
 class ConvTranspose(Module):
@@ -621,6 +621,7 @@ def svd(x):
     def forward_code(np, data):
         a = data["inputs"][0]
         u, s, v = data["outputs"]
+        #TODO:remove copyto
         tu, ts, tv = np.linalg.svd(a, full_matrices=0)
         np.copyto(u, tu)
         np.copyto(s, ts)
@@ -672,7 +673,8 @@ def svd(x):
     s1[-1] = k
     s2 = copy.deepcopy(s)
     s2[-2] = k
-    s3 = [k]
+    s3 = s[:-2]
+    s3.append(k)
     u, s, v = jt.numpy_code(
         [s1, s3, s2],
         [x.dtype, x.dtype, x.dtype],
@@ -686,11 +688,11 @@ class Upsample(Module):
     def __init__(self, scale_factor=None, mode='nearest'):
         self.scale_factor = scale_factor if isinstance(scale_factor, tuple) else (scale_factor, scale_factor)
         self.mode = mode
-    
+
     def execute(self, x):
         return upsample(x,
             size=(
-                int(x.shape[2]*self.scale_factor[0]), 
+                int(x.shape[2]*self.scale_factor[0]),
                 int(x.shape[3]*self.scale_factor[1])),
             mode=self.mode)
 
