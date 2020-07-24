@@ -5,6 +5,7 @@
 #     Wenyang Zhou <576825820@qq.com>
 #     Meng-Hao Guo <guomenghao1997@gmail.com>
 #     Dun Liang <randonlang@gmail.com>.
+#     Haoyang Peng<2247838039@qq.com>
 #
 # All Rights Reserved.
 # This file is subject to the terms and conditions defined in
@@ -685,7 +686,6 @@ def svd(x):
     )
     return u, s, v
 
-#TODO: tril
 def eigh(x):
     from functools import partial
     import copy
