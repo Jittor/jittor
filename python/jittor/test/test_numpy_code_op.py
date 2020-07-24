@@ -8,13 +8,20 @@
 # ***************************************************************
 import unittest
 import jittor as jt
-import numpy as np
+import numpy
+import cupy
+import ctypes
+import sys
 
 class TestCodeOp(unittest.TestCase):
     def test(self):
         def forward_code(np, data):
             a = data["inputs"][0]
             b = data["outputs"][0]
+            if (jt.flags.use_cuda==0):
+                assert isinstance(a,numpy.ndarray)
+            else:
+                assert isinstance(a,cupy.core.core.ndarray)
             np.add(a,a,out=b)
 
         def backward_code(np, data):
@@ -22,18 +29,24 @@ class TestCodeOp(unittest.TestCase):
             out = data["outputs"][0]
             np.copyto(out, dout*2.0)
 
-        a = jt.random((5,1))
-        b = jt.numpy_code(
-            a.shape,
-            a.dtype,
-            [a],
-            forward_code,
-            [backward_code],
-        )
-        assert np.allclose(b.data,(a+a).data)
-        da = jt.grad(b,a)
-        one=np.ones(a.shape)
-        assert np.allclose(da.data,one*2.0)
+        def check():
+            a = jt.random((5,1))
+            b = jt.numpy_code(
+                a.shape,
+                a.dtype,
+                [a],
+                forward_code,
+                [backward_code],
+            )
+            assert numpy.allclose(b.data,(a+a).data)
+            da = jt.grad(b,a)
+            one=numpy.ones(a.shape)
+            assert numpy.allclose(da.data,one*2.0)
+
+        jt.flags.use_cuda = 0
+        check()
+        jt.flags.use_cuda = 1
+        check()
 
     def test_multi_input(self):
         def forward_code(np, data):
@@ -56,25 +69,31 @@ class TestCodeOp(unittest.TestCase):
             else:
                 np.negative(dout, out)
 
-        a = jt.random((5,1))
-        b = jt.random((5,1))
-        c, d = jt.numpy_code(
-            [a.shape, a.shape],
-            [a.dtype, a.dtype],
-            [a, b],
-            forward_code,
-            [backward_code1,backward_code2],
-        )
-        assert np.allclose(c.data,(a+b).data)
-        assert np.allclose(d.data,(a-b).data)
-        dca, dcb = jt.grad(c,[a,b])
-        dda, ddb = jt.grad(d,[a,b])
-        one=np.ones(a.shape)
-        mone=one*-1.0
-        assert np.allclose(dca.data,one)
-        assert np.allclose(dcb.data,one)
-        assert np.allclose(dda.data,one)
-        assert np.allclose(ddb.data,mone)
+        def check():
+            a = jt.random((5,1))
+            b = jt.random((5,1))
+            c, d = jt.numpy_code(
+                [a.shape, a.shape],
+                [a.dtype, a.dtype],
+                [a, b],
+                forward_code,
+                [backward_code1,backward_code2],
+            )
+            assert numpy.allclose(c.data,(a+b).data)
+            assert numpy.allclose(d.data,(a-b).data)
+            dca, dcb = jt.grad(c,[a,b])
+            dda, ddb = jt.grad(d,[a,b])
+            one=numpy.ones(a.shape)
+            mone=one*-1.0
+            assert numpy.allclose(dca.data,one)
+            assert numpy.allclose(dcb.data,one)
+            assert numpy.allclose(dda.data,one)
+            assert numpy.allclose(ddb.data,mone)
+        
+        jt.flags.use_cuda = 0
+        check()
+        jt.flags.use_cuda = 1
+        check()
 
     @unittest.skipIf(True, "Memory leak testing is not in progress, Skip")
     def test_memory_leak(self):
@@ -108,16 +127,16 @@ class TestCodeOp(unittest.TestCase):
                 forward_code,
                 [backward_code1,backward_code2],
             )
-            assert np.allclose(c.data,(a+b).data)
-            assert np.allclose(d.data,(a-b).data)
+            assert numpy.allclose(c.data,(a+b).data)
+            assert numpy.allclose(d.data,(a-b).data)
             dca, dcb = jt.grad(c,[a,b])
             dda, ddb = jt.grad(d,[a,b])
-            one=np.ones(a.shape)
+            one=numpy.ones(a.shape)
             mone=one*-1.0
-            assert np.allclose(dca.data,one)
-            assert np.allclose(dcb.data,one)
-            assert np.allclose(dda.data,one)
-            assert np.allclose(ddb.data,mone)
+            assert numpy.allclose(dca.data,one)
+            assert numpy.allclose(dcb.data,one)
+            assert numpy.allclose(dda.data,one)
+            assert numpy.allclose(ddb.data,mone)
 
 if __name__ == "__main__":
     unittest.main()

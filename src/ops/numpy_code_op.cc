@@ -21,6 +21,8 @@ static auto make_numpy_code = get_op_info("numpy_code")
 NumpyCodeOp::NumpyCodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs, NumpyFunc&& forward, vector<NumpyFunc>&& sbackward)
     : _inputs(inputs), forward(move(forward))
 {
+    flags.set(NodeFlags::_cpu);
+    flags.set(NodeFlags::_cuda);
     _outputs.push_back(create_output(shape, dtype));
     CHECKop(_inputs.size(),<=,10);
     ASSERT(_outputs[0]->num >= 0);
@@ -32,6 +34,8 @@ NumpyCodeOp::NumpyCodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inpu
 NumpyCodeOp::NumpyCodeOp(vector<NanoVector>&& shapes, vector<NanoString>&& dtypes, vector<Var*>&& inputs, NumpyFunc&& forward, vector<NumpyFunc>&& sbackward)
     : _inputs(inputs), forward(move(forward))
 {
+    flags.set(NodeFlags::_cpu);
+    flags.set(NodeFlags::_cuda);
     CHECKop(shapes.size(),==,dtypes.size()) << "Number of outputs' shapes and dtypes should be the same";
     _outputs.resize(shapes.size());
     CHECKop(_inputs.size(),<=,10);
@@ -49,6 +53,8 @@ NumpyCodeOp::NumpyCodeOp(vector<NanoVector>&& shapes, vector<NanoString>&& dtype
 NumpyCodeOp::NumpyCodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs, NumpyFunc forward, NumpyResult&& results)
     : _inputs(inputs), forward(forward), _results(move(results))
 {
+    flags.set(NodeFlags::_cpu);
+    flags.set(NodeFlags::_cuda);
     _outputs.push_back(create_output(shape, dtype));
     CHECKop(_inputs.size(),<=,10);
     ASSERT(_outputs[0]->num >= 0);
