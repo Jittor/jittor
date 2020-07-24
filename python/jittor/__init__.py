@@ -643,5 +643,6 @@ Var.__repr__ = Var.__str__ = lambda x: str(x.data)
 Var.peek = lambda x: str(x.dtype)+str(x.shape)
 
 from . import nn
+from . import linalg
 from .nn import matmul
 from . import contrib
