@@ -685,6 +685,52 @@ def svd(x):
     )
     return u, s, v
 
+#TODO: tril
+def eigh(x):
+    from functools import partial
+    import copy
+    def T(x):
+        return np.swapaxes(x, -1, -2)
+    _dot = partial(np.einsum, '...ij,...jk->...ik')
+
+    def forward_code(np, data):
+        a = data["inputs"][0]
+        w, v = data["outputs"]
+        tw, tv = np.linalg.eigh(a, UPLO='L')
+        np.copyto(w, tw)
+        np.copyto(v, tv)
+
+    def backward_code(np, data):
+        dout = data["dout"]
+        out = data["outputs"][0]
+        inp = data["inputs"][0]
+        out_index = data["out_index"]
+        w, v = data["f_outputs"]
+        k = int(inp.shape[-1])
+        w_repeated = np.repeat(w[..., np.newaxis], k, axis=-1)
+        if out_index == 0:
+            t = _dot(v * dout[..., np.newaxis, :], T(v))
+            np.copyto(out, t)
+        elif out_index == 1:
+            if np.any(dout):
+                off_diag = np.ones((k, k)) - np.eye(k)
+                F = off_diag / (T(w_repeated) - w_repeated + np.eye(k))
+                t = _dot(_dot(v, F * _dot(T(v), dout)), T(v))
+                np.copyto(out, t)
+
+    s = jt.array(x.shape).data.tolist()
+    sw = s[:-2]
+    sw.append(s[-1])
+    sv = copy.deepcopy(s)
+    w, v = jt.numpy_code(
+        [sw, sv],
+        [x.dtype, x.dtype],
+        [x],
+        forward_code,
+        [backward_code],
+    )
+    return w, v
+
 class Upsample(Module):
     def __init__(self, scale_factor=None, mode='nearest'):
         self.scale_factor = scale_factor if isinstance(scale_factor, tuple) else (scale_factor, scale_factor)
