@@ -91,15 +91,15 @@ for cc_type in ["g++", "clang"]:
 # compress source
 # tar -cvzf build/jittor.tgz . --exclude build --exclude .git --exclude .ipynb_checkpoints --exclude __pycache__
 # mkdir -p jittor && tar -xvf ./jittor.tgz -C jittor
-assert os.system(f"cd {polish_path} && tar -cvzf build/jittor.tgz . --exclude build --exclude .git --exclude .ipynb_checkpoints --exclude __pycache__")==0
+assert os.system(f"cd {polish_path} && tar --exclude=build --exclude=.git --exclude=.ipynb_checkpoints --exclude=__pycache__ -cvzf build/jittor.tgz . ")==0
 
 # rsync to build-server
 jittor_web_base_dir = "Documents/jittor-blog/assets/"
 jittor_web_build_dir = jittor_web_base_dir + "build/"
 assert os.system(f"rsync -avPu {polish_path}/build/ jittor-web:{jittor_web_build_dir}")==0
-assert os.system(f"ssh jittor@166.111.68.30 Documents/jittor-blog.git/hooks/post-update")==0
+assert os.system(f"ssh jittor-web Documents/jittor-blog.git/hooks/post-update")==0
 
 # push to github
-assert os.system(f"cd {polish_path} && git push -f origin master")==0
+# assert os.system(f"cd {polish_path} && git push -f origin master")==0
 
 # push to pip

@@ -312,6 +312,23 @@ DEF_IS(ArrayArgs, T) from_py_object(PyObject* obj) {
         args.buffer.reset(new char[size]);
         args.ptr = (void*)args.buffer.get();
         memcpy((void*)args.buffer.get(), (void*)arr->data, size);
+        if (Py_TYPE(obj) != PyArray_Type && args.dtype.dsize()==8) {
+            // convert to 32bit
+            auto num = size/8;
+            if (args.dtype.is_int()) {
+                auto* __restrict__ i64 = (int64*)args.ptr;
+                auto* __restrict__ i32 = (int32*)args.ptr;
+                for (int i=0; i<num; i++)
+                    i32[i] = (int32)i64[i];
+                args.dtype = ns_int32;
+            } else if (args.dtype.is_float()) {
+                auto* __restrict__ f64 = (float64*)args.ptr;
+                auto* __restrict__ f32 = (float32*)args.ptr;
+                for (int i=0; i<num; i++)
+                    f32[i] = (float32)f64[i];
+                args.dtype = ns_float32;
+            }
+        }
         return args;
     }
     T args;
@@ -601,6 +618,62 @@ DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj) {
         [obj]() { Py_DECREF(obj); },
         // inc_ref
         [obj]() { Py_INCREF(obj); }
+    );
+    return func;
+}
+
+
+struct GradCallback;
+
+DEF_IS(GradCallback, bool) is_type(PyObject* obj) {
+    return PyCallable_Check(obj);
+}
+
+DEF_IS(GradCallback, T) from_py_object(PyObject* obj) {
+    // PyObject_Call
+    Py_INCREF(obj);
+    T func(
+        // callback
+        [obj](int n_o, typename T::Var** douts, int n_i, typename T::VarPtr* dins) {
+            PyObjHolder list(PyTuple_New(n_o));
+            for (int i=0; i<n_o; i++) {
+                if (douts[i]) {
+                    PyTuple_SET_ITEM(list.obj, i, 
+                        to_py_object(new typename T::VarHolder(douts[i])));
+                } else {
+                    Py_INCREF(Py_None);
+                    PyTuple_SET_ITEM(list.obj, i, Py_None);
+                }
+            }
+
+            PyObjHolder ret(PyObject_Call(obj, list.obj, nullptr));
+            auto is_seq = PyList_CheckExact(ret.obj) || PyTuple_CheckExact(ret.obj);
+            auto check = [&](int i, PyObject* obj) {
+                if (obj == Py_None) {
+                    dins[i] = nullptr;
+                } else {
+                    CHECK(Py_TYPE(obj) == &PyjtVarHolder.ht_type) << "returned grad("<<Py_TYPE(obj)->tp_name<<") is not jittor variable";
+                    auto vh = from_py_object<typename T::VarHolderPtr>(obj);
+                    dins[i] = vh->var;
+                }
+            };
+            if (!is_seq) {
+                CHECKop(n_i,==,1) << n_i >> " returned grad required, but 1 given.";
+                check(0, ret.obj);
+            } else {
+                auto size = Py_SIZE(ret.obj);
+                CHECKop(n_i,==,size) << n_i >> " returned grad required, but " >> size >> " given.";
+                auto arr = PySequence_Fast_ITEMS(ret.obj);
+                for (int i=0; i<size; i++) {
+                    auto oi = arr[i]; 
+                    check(i, oi);
+                }
+            }
+        },
+        // deleter
+        [obj]() { 
+            Py_DECREF(obj); 
+        }
     );
     return func;
 }

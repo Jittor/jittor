@@ -17,6 +17,7 @@ import math
 from jittor.pool import Pool, pool, AdaptiveAvgPool2d
 from jittor.optim import *
 
+
 def matmul_transpose(a, b):
     '''
     returns a * b^T
@@ -29,11 +30,27 @@ def matmul_transpose(a, b):
     b = b.broadcast(shape)
     return (a*b).sum(len(shape)-1)
 
-
 def bmm(a, b):
+    ''' batch matrix multiply, 
+shape of input a is [batch, n, m],
+shape of input b is [batch, m, k],
+return shape is [batch, n, k]
+
+Example::
+
+    import jittor as jt
+    from jittor import nn
+
+    batch, n, m, k = 100, 5, 6, 7
+
+    a = jt.random((batch, n, m))
+    b = jt.random((batch, m, k))
+    c = nn.bmm(a, b)
+    '''
     assert len(a.shape) >= 2 and len(b.shape) >= 2
     assert a.shape[-1] == b.shape[-2]
-
+    if jt.flags.use_cuda:
+        return jt.compile_extern.cublas_ops.cublas_batched_matmul(a, b, 0, 0)
     shape = list(a.shape) + [b.shape[-1]]
     a = a.broadcast(shape, [len(shape)-1])
     b = b.broadcast(shape, [len(shape)-3])

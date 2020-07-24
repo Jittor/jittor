@@ -679,14 +679,16 @@ def compile_src(src, h, basename):
                 ])}
                 LOGf << "Not a valid call.";
             }} catch (const std::exception& e) {{
-                std::stringstream ss;
-                ss {error_log_code};
-                PyErr_Format(PyExc_RuntimeError, 
-                    "%s\\n%s\\nFailed reason:%s",
-                    ss.str().c_str(),
-                    R""({decs})"",
-                    e.what()
-                );
+                if (!PyErr_Occurred()) {{
+                    std::stringstream ss;
+                    ss {error_log_code};
+                    PyErr_Format(PyExc_RuntimeError, 
+                        "%s\\n%s\\nFailed reason:%s",
+                        ss.str().c_str(),
+                        R""({decs})"",
+                        e.what()
+                    );
+                }}
             }}
             {func_return_failed};
         }}

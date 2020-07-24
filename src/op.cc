@@ -46,6 +46,10 @@ VarPtr Op::grad(Var* out, Var* dout, Var* v, int v_index) {
     return nullptr;
 }
 
+void Op::grads(Var** douts, VarPtr* dins) {
+    LOGw << "Grads of" << name() << "return zeros";
+}
+
 Var* Op::create_output(NanoVector shape, NanoString dtype) {
     VarPtr vp(shape, dtype);
     Var* output = vp.ptr;

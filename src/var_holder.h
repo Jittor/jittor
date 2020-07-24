@@ -178,6 +178,14 @@ struct VarHolder {
         std::memcpy(var->mem_ptr, array.ptr, size);
     }
 
+    // @pyjt(share_with)
+    // @attrs(return_self)
+    inline VarHolder* share_with(VarHolder* other) {
+        CHECK(!var->allocator) << "This var is already executed or shared.";
+        var->allocator = (Allocator*)(other->var);
+        return this;
+    }
+
     // @pyjt(debug_msg)
     string debug_msg();
 };

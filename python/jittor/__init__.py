@@ -7,6 +7,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
+__version__ = '1.1.6.5'
 from . import lock
 with lock.lock_scope():
     from . import compiler
@@ -59,6 +60,22 @@ class flag_scope(_call_no_record_scope):
     def __exit__(self, *exc):
         for k,v in self.flags_bk.items():
             setattr(flags, k, v)
+
+class no_grad(flag_scope):
+    ''' no_grad scope, all variable created inside this
+scope will stop grad.
+
+Example::
+
+    import jittor as jt
+
+    with jt.no_grad():
+        ...
+
+    '''
+    def __init__(self, **jt_flags):
+        self.jt_flags = jt_flags
+        jt_flags["no_grad"] = 1
 
 single_log_capture = None
 
@@ -182,18 +199,13 @@ def clean():
 cast = unary
 
 def array(data, dtype=None):
-    if type(data) == core.Var:
+    if isinstance(data, core.Var):
         if dtype is None:
-            return cast(data, data.dtype)
+            return data.clone()
         return cast(data, dtype)
     if dtype != None:
         return ops.array(np.array(data, dtype))
-    if type(data) == np.ndarray:
-        if data.flags.c_contiguous:
-            return ops.array(data)
-        else:
-            return ops.array(data.copy())
-    return ops.array(np.array(data))
+    return ops.array(data)
 
 def grad(loss, targets):
     if type(targets) == core.Var:
@@ -560,6 +572,108 @@ class Module:
         for p in self.parameters():
             p.update(p.mpi_broadcast(root))
 
+class Function(Module):
+    ''' Function Module for customized backward operations
+
+Example 1 (Function can have multiple input and multiple output, and user
+can store value for backward computation)::
+
+    import jittor as jt
+    from jittor import Function
+
+    class MyFunc(Function):
+        def execute(self, x, y):
+            self.x = x
+            self.y = y
+            return x*y, x/y
+
+        def grad(self, grad0, grad1):
+            return grad0 * self.y, grad1 * self.x
+    a = jt.array(3.0)
+    b = jt.array(4.0)
+    func = MyFunc()
+    c,d = func(a, b)
+    da, db = jt.grad(c+d*3, [a, b])
+    assert da.data == 4
+    assert db.data == 9
+
+Example 2(Function can return None for no gradiant, and gradiant
+can also be None)::
+
+    import jittor as jt
+    from jittor import Function
+    
+    class MyFunc(Function):
+        def execute(self, x, y):
+            self.x = x
+            self.y = y
+            return x*y, x/y
+
+        def grad(self, grad0, grad1):
+            assert grad1 is None
+            return grad0 * self.y, None
+    a = jt.array(3.0)
+    b = jt.array(4.0)
+    func = MyFunc()
+    c,d = func(a, b)
+    d.stop_grad()
+    da, db = jt.grad(c+d*3, [a, b])
+    assert da.data == 4
+    assert db.data == 0
+
+    '''
+    def __call__(self, *args):
+        args = list(args)
+        taped_inputs = []
+        taped_outputs = []
+        input_mask = [-1] * len(args)
+        for i,v in enumerate(args):
+            if isinstance(v, Var):
+                v = v.tape()
+                input_mask[i] = len(taped_inputs)
+                args[i] = v
+                taped_inputs.append(v)
+        ori_res = self.execute(*args)
+        if not isinstance(ori_res, Sequence):
+            res = [ori_res]
+        else:
+            res = list(ori_res)
+        output_mask = [-1] * len(res)
+        for i,v in enumerate(res):
+            if isinstance(v, Var):
+                v = v.tape()
+                output_mask[i] = len(taped_outputs)
+                res[i] = v
+                taped_outputs.append(v)
+        self.input_mask = input_mask
+        self.output_mask = output_mask
+        # tape output and input together so
+        # backward treat them as one operator
+        tape_together(taped_inputs, taped_outputs, self._grad)
+        if isinstance(ori_res, Sequence):
+            return res
+        else:
+            return res[0]
+
+    def _grad(self, *args):
+        new_args = ( (args[i] if i>=0 else None) for i in self.output_mask )
+        ret = self.grad(*new_args)
+        if not isinstance(ret, Sequence):
+            ret = (ret,)
+        new_ret = []
+        for i, r in enumerate(ret):
+            j = self.input_mask[i]
+            if j<0:
+                assert r is None, f"{type(self)}'s {i}-th returned grad should be None, "\
+                    "because the input value is not jittor variable."
+            else:
+                new_ret.append(r)
+        return new_ret
+
+    def dfs(self, parents, k, callback, callback_leave=None):
+        pass
+
+
 def make_module(func, exec_n_args=1):
     class MakeModule(Module):
         def __init__(self, *args, **kw):
@@ -638,3 +752,4 @@ from . import nn
 from .nn import matmul
 from . import contrib
 from . import numpy2cupy
+from .contrib import concat

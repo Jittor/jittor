@@ -12,7 +12,7 @@ import numpy as np
 class TestClone(unittest.TestCase):
     def test(self):
         jt.clean()
-        b = a = jt.array(1)
+        b = a = jt.array(1.0)
         for i in range(10):
             b = b.clone()
             if i==5: c=b
