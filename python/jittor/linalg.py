@@ -119,3 +119,105 @@ def eigh(x):
         [backward_code],
     )
     return w, v
+
+def inv(x):
+    from functools import partial
+    def T(x):
+        return np.swapaxes(x, -1, -2)
+    _dot = partial(np.einsum, '...ij,...jk->...ik')
+
+    def forward_code(np, data):
+        a = data["inputs"][0]
+        m_a = data["outputs"][0]
+        t_a = np.linalg.inv(a)
+        np.copyto(m_a, t_a)
+
+    def backward_code(np, data):
+        dout = data["dout"]
+        out = data["outputs"][0]
+        lmx = data["f_outputs"]
+        mx = lmx[0]
+        t = -_dot(_dot(T(mx), dout), T(mx))
+        np.copyto(out, t)
+
+    lmx = jt.numpy_code(
+        [x.shape],
+        [x.dtype],
+        [x],
+        forward_code,
+        [backward_code],
+    )
+    mx = lmx[0]
+    return mx
+
+def pinv(x):
+    from functools import partial
+    def T(x):
+        return np.swapaxes(x, -1, -2)
+    _dot = partial(np.einsum, '...ij,...jk->...ik')
+
+    def forward_code(np, data):
+        a = data["inputs"][0]
+        m_a = data["outputs"][0]
+        t_a = np.linalg.pinv(a)
+        np.copyto(m_a, t_a)
+
+    def backward_code(np, data):
+        dout = data["dout"]
+        out = data["outputs"][0]
+        inp = data["inputs"][0]
+        lmx = data["f_outputs"]
+        mx = lmx[0]
+        t = T(
+            -_dot(_dot(mx, T(dout)), mx)
+            + _dot(_dot(_dot(mx, T(mx)), dout), np.eye(inp.shape[-2]) - _dot(inp, mx))
+            + _dot(_dot(_dot(np.eye(mx.shape[-2]) - _dot(mx, inp), dout), T(mx)), mx)
+        )
+        np.copyto(out, t)
+
+    lmx = jt.numpy_code(
+        [x.shape],
+        [x.dtype],
+        [x],
+        forward_code,
+        [backward_code],
+    )
+    mx = lmx[0]
+    return mx
+
+def slogdet(x):
+    from functools import partial
+    def T(x):
+        return np.swapaxes(x, -1, -2)
+    _dot = partial(np.einsum, '...ij,...jk->...ik')
+    def forward_code(np, data):
+        a = data["inputs"][0]
+        sign, m_a = data["outputs"]
+        sign_, t_a = np.linalg.slogdet(a)
+        np.copyto(m_a, t_a)
+        np.copyto(sign, sign_)
+
+    def backward_code(np, data):
+        dout = data["dout"]
+        out = data["outputs"][0]
+        inp = data["inputs"][0]
+        out_index = data["out_index"]
+        if out_index == 0:
+            np.copyto(out, 0)
+        if out_index == 1:
+            t = np.reshape(dout, np.shape(dout) + (1, 1))
+            t = t * T(np.linalg.inv(inp))
+            np.copyto(out, t)
+
+    s = jt.array(x.shape).data.tolist()
+    det_s = s[:-2]
+    if len(det_s) == 0:
+        det_s.append(1)
+    sign, mx = jt.numpy_code(
+        [det_s, det_s],
+        [x.dtype, x.dtype],
+        [x],
+        forward_code,
+        [backward_code],
+    )
+    return sign, mx
