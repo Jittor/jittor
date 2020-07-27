@@ -50,7 +50,7 @@ class TestNanoString(unittest.TestCase):
         assert str(jt.NanoString(jt.float32)) == "float32"
         assert str(jt.NanoString(jt.float64)) == "float64"
         assert str(jt.NanoString(jt.int8)) == "int8"
-        assert str(jt.NanoString(jt.array([1,2,3]).dtype)) == "int64"
+        assert str(jt.NanoString(jt.array([1,2,3]).dtype)) == "int32"
         assert str(jt.NanoString(jt.sum)) == "add"
 
         def get_error_str(call):

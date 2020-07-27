@@ -53,9 +53,9 @@ class TestNode(unittest.TestCase):
         da, db = jt.grad(c, [a, b])
         da.name('da')
         db.name('db')
-        check(5,7,5) # dc, 3, da, 1, db, 1
+        check(5,6,4) # dc, 3, da, 1, db, 1
         del a, b, c
-        check(2,6,4)
+        check(2,5,3)
         da.sync(), db.sync()
         check(2,2,0)
         del da, db

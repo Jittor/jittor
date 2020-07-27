@@ -7,7 +7,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-__version__ = '1.1.6.5'
+__version__ = '1.1.6.6'
 from . import lock
 with lock.lock_scope():
     from . import compiler
@@ -196,6 +196,7 @@ def clean():
     gc.collect()
 
 cast = unary
+Var.cast = Var.cast
 
 def array(data, dtype=None):
     if isinstance(data, core.Var):
@@ -250,7 +251,7 @@ Var.norm = norm
 
 origin_reshape = reshape
 def reshape(x, *shape):
-    if len(shape) == 1 and isinstance(shape[0], Sequence):
+    if len(shape) == 1 and isinstance(shape[0], (Sequence, NanoVector)):
         shape = shape[0]
     return origin_reshape(x, shape)
 reshape.__doc__ = origin_reshape.__doc__
@@ -258,7 +259,7 @@ Var.view = Var.reshape = view = reshape
 
 origin_transpose = transpose
 def transpose(x, *dim):
-    if len(dim) == 1 and isinstance(dim[0], Sequence):
+    if len(dim) == 1 and isinstance(dim[0], (Sequence, NanoVector)):
         dim = dim[0]
     return origin_transpose(x, dim)
 transpose.__doc__ = origin_transpose.__doc__

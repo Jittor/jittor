@@ -128,6 +128,7 @@ inline int64 PyArray_Size(PyArray_Proxy* arr) {
 union tmp_data_t {
     int32 i32;
     float32 f32;
+    int8 i8;
 };
 
 extern tmp_data_t tmp_data;

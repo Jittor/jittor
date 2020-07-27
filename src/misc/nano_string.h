@@ -156,7 +156,7 @@ NanoString dtype_infer(NanoString v1, NanoString v2, int force_type=0) {
         if (dsize==8) return ns_int64;
         if (dsize==4) return ns_int32;
         if (dsize==2) return ns_int16;
-        return ns_int8;
+        return v1;
     }
 }
 

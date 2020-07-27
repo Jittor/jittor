@@ -261,6 +261,7 @@ DEF_IS(ArrayArgs, bool) is_type(PyObject* obj) {
     return Py_TYPE(obj) == PyArray_Type || 
         PyFloat_CheckExact(obj) ||
         PyLong_CheckExact(obj) ||
+        PyBool_Check(obj) ||
         PyList_CheckExact(obj) ||
         Py_TYPE(obj) == &PyjtVarHolder.ht_type;
 }
@@ -288,6 +289,10 @@ DEF_IS(ArrayArgs, T) from_py_object(PyObject* obj) {
     if (PyLong_CheckExact(obj)) {
         tmp_data.i32 = PyLong_AsLong(obj);
         return {&tmp_data, 1, ns_int32};
+    }
+    if (PyBool_Check(obj)) {
+        tmp_data.i8 = obj == Py_True;
+        return {&tmp_data, 1, ns_bool};
     }
     if (Py_TYPE(obj) == &PyjtVarHolder.ht_type) {
         auto ptr = GET_RAW_PTR(VarHolder, obj);
