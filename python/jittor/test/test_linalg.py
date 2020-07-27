@@ -24,10 +24,7 @@ class TestCodeOp(unittest.TestCase):
 
         for i in range(50):
             #not for full-matrices!
-            a = jt.random((5,4))
-            #for 4 dimensions test
-            a = a.reindex((2,2,a.shape[0],a.shape[1]),["i2","i3"])
-            #print(a)
+            a = jt.random((2,2,5,4))
             c_a = anp.array(a.data)
             u,s,v = jt.linalg.svd(a)
             tu,ts,tv = check_svd(c_a)
@@ -84,8 +81,7 @@ class TestCodeOp(unittest.TestCase):
             return v
 
         for i in range(50):
-            a = jt.random((3,3))
-            a = a.reindex([2,2,a.shape[0],a.shape[1]],["i2","i3"])
+            a = jt.random((2,2,3,3))
             c_a = a.data
             w, v = jt.linalg.eigh(a)
             tw, tv = check_eigh(c_a)
@@ -106,6 +102,71 @@ class TestCodeOp(unittest.TestCase):
             gv = np.sum(gv,2)
             gv = np.sum(gv,2)
             assert np.allclose(gv,jv.data,rtol = 1,atol = 5e-8)
+
+    def test_pinv(self):
+        def check_pinv(a):
+            w = anp.linalg.pinv(a)
+            return w
+
+        for i in range(50):
+            x = jt.random((2,2,4,4))
+            c_a = x.data
+            mx = jt.linalg.pinv(x)
+            tx = check_pinv(c_a)
+            np.allclose(mx.data,tx)
+            jx = jt.grad(mx,x)
+            check_grad = jacobian(check_pinv)
+            gx = check_grad(c_a)
+            np.allclose(gx,jx.data)
+
+    def test_inv(self):
+        def check_inv(a):
+            w = anp.linalg.inv(a)
+            return w
+        for i in range(50):
+            tn = np.random.randn(4,4).astype('float32')*5
+            while np.allclose(np.linalg.det(tn),0):
+                tn = np.random.randn((4,4)).astype('float32')*5
+            x = jt.array(tn)
+            x = x.reindex([2,2,x.shape[0],x.shape[1]],["i2","i3"])
+            c_a = x.data
+            mx = jt.linalg.inv(x)
+            tx = check_inv(c_a)
+            np.allclose(mx.data,tx)
+            jx = jt.grad(mx,x)
+            check_grad = jacobian(check_inv)
+            gx = check_grad(c_a)
+            np.allclose(gx,jx.data)
+
+    def test_slogdet(self):
+        def check_ans(a):
+            s, w = anp.linalg.slogdet(a)
+            return s, w
+
+        def check_slogdet(a):
+            s, w = anp.linalg.slogdet(a)
+            return w
+
+        for i in range(50):
+            tn = np.random.randn(4,4).astype('float32')*10
+            while np.allclose(np.linalg.det(tn),0):
+                tn = np.random.randn((4,4)).astype('float32')*10
+            x = jt.array(tn)
+            x = x.reindex([2,2,x.shape[0],x.shape[1]],["i2","i3"])
+            s = jt.array(x.shape).data.tolist()
+            det_s = s[:-2]
+            if len(det_s) == 0:
+                det_s.append(1)
+            sign, mx = jt.linalg.slogdet(x)
+            ts, ta = check_ans(x.data)
+            assert np.allclose(sign.data, ts)
+            assert np.allclose(mx.data, ta)
+            jx = jt.grad(mx,x)
+            check_sgrad = jacobian(check_slogdet)
+            gx = check_sgrad(x.data)
+            gx = np.sum(gx,2)
+            gx = np.sum(gx,2)
+            assert np.allclose(gx,jx.data)
 
 if __name__ == "__main__":
     unittest.main()
