@@ -27,8 +27,13 @@ BroadcastToOp::BroadcastToOp(Var* x, Var* y, NanoVector dims) : x(x), y(y) {
     z = create_output(NanoVector(), x->dtype());
     bcast_mask = 0;
     keepdims = 0;
+    auto ydim = y->shape.size();
     if (dims.size()) {
-        for (auto a : dims) bcast_mask |= 1 << a;
+        for (auto dim : dims) {
+            if (dim<0) dim += ydim;
+            CHECK(dim>=0 && dim<ydim) << "Wrong dims number:" << dims;
+            bcast_mask |= 1 << dim;
+        }
     } else
         keepdims = 1;
 }
@@ -62,8 +67,13 @@ BroadcastToOp::BroadcastToOp(Var* x, NanoVector shape, NanoVector dims) : x(x), 
     z = create_output(nullptr, x->dtype());
     bcast_mask = 0;
     keepdims = 0;
+    auto ydim = shape.size();
     if (dims.size()) {
-        for (auto a : dims) bcast_mask |= 1 << a;
+        for (auto dim : dims) {
+            if (dim<0) dim += ydim;
+            CHECK(dim>=0 && dim<ydim) << "Wrong dims number:" << dims;
+            bcast_mask |= 1 << dim;
+        }
     } else
         keepdims = 1;
 }
