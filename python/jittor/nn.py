@@ -290,6 +290,36 @@ class InstanceNorm2d(Module):
         b = self.bias.broadcast(x, [0,2,3])
         return norm_x * w + b
 
+class GroupNorm(Module):
+    def __init__(self, num_groups, num_channels, eps=1e-05, affine=None, is_train=True, sync=True):
+        assert affine == None
+        self.num_groups = num_groups
+        self.num_channels = num_channels
+        self.eps = eps
+        self.is_train = is_train
+        self.sync = sync
+        self.weight = init.constant((num_channels,), "float32", 1.0)
+        self.bias = init.constant((num_channels,), "float32", 0.0)
+
+    def execute(self, x):
+        N,C,H,W = x.shape
+        assert C == self.num_channels
+        assert C % self.num_groups == 0
+        x_ = x.reindex([N, int(C/self.num_groups), self.num_groups, H, W], [
+            "i0", f"i2*{C/self.num_groups}+i1", "i3", "i4"
+        ])
+        xmean = jt.mean(x_, dims=[1,3,4], keepdims=1).reindex(x.shape, ["i0", "0", f"i1/({C}/{self.num_groups})","0", "0"])
+        x2mean = jt.mean(x_*x_, dims=[1,3,4], keepdims=1).reindex(x.shape, ["i0", "0", f"i1/({C}/{self.num_groups})","0", "0"])
+        if self.sync and jt.in_mpi:
+            xmean = xmean.mpi_all_reduce("mean")
+            x2mean = x2mean.mpi_all_reduce("mean")
+
+        xvar = jt.maximum(x2mean-xmean*xmean, 0)
+        norm_x = (x-xmean)/jt.sqrt(xvar+self.eps)
+        w = self.weight.broadcast(x, [0,2,3])
+        b = self.bias.broadcast(x, [0,2,3])
+        return norm_x * w + b
+
 Relu = jt.make_module(relu)
 ReLU = Relu
 Leaky_relu = jt.make_module(leaky_relu, 2)
@@ -558,6 +588,23 @@ class Sigmoid(Module):
     def execute(self, x) :
         return x.sigmoid()
 
+class Softplus(Module):
+    r'''
+    SoftPlus is a smooth approximation to the ReLU function and can be used to constrain the output of a machine to always be positive.
+
+    Args:
+        
+        [in] beta (float): the beta value for the Softplus formulation. Default: 1.
+
+        [in] threshold (float): values above this revert to a linear function. Default: 20.
+    '''
+    def __init__(self, beta=1, threshold=20):
+        self.beta = beta
+        self.threshold = threshold
+
+    def execute(self, x):
+        return 1 / self.beta * jt.log(1 + (self.beta * x).exp())
+
 class Resize(Module):
     def __init__(self, size, mode="nearest", align_corners=False):
         super().__init__()
@@ -610,6 +657,52 @@ def upsample(img, size, mode="nearest", align_corners=False):
         x = hid * (h / H)
         y = wid * (w / W)
     return _interpolate(img, x, y, (nid,cid), mode)
+
+def grid_sample(input, grid, mode='bilinear', padding_mode='zeros'):
+    r'''
+    Given an input and a flow-field grid, computes the output using input values and pixel locations from grid.
+
+    grid specifies the sampling pixel locations normalized by the input spatial dimensions. Therefore, it should have most values in the range of [-1, 1]. For example, values x = -1, y = -1 is the left-top pixel of input, and values x = 1, y = 1 is the right-bottom pixel of input.
+
+    Args:
+
+        [in] input (var): the source input var, whose shape is (N, C, Hi, Wi)
+
+        [in] grid (var): the pixel locations, whose shape is (N, Ho, Wo, 2)
+
+        [in] mode (string): the interpolate way, default: bilinear.
+
+        [in] padding_mode (string): the padding way, default: zeros.
+        
+        [out] output (var): the output var, whose shape is (N, C, Ho, Wo)
+
+    Example:
+
+        >>> x = jt.array([[[[1,2],[3,4]]]])
+
+        >>> print(x)
+        [[[[1 2]
+        [3 4]]]] 
+
+        >>> grid = jt.array([[[[0.5, 0.5]]]])
+        
+        >>> print(x.shape, grid.shape)
+        [1,1,2,2,], [1,1,2,2,]
+
+        >>> nn.grid_sample(x, grid)
+        [[[[3.25]]]]
+    '''
+    assert padding_mode == 'zeros'
+    Ni, Ci, Hi, Wi = input.shape
+    No, Ho, Wo, D = grid.shape
+    assert D == 2
+    assert Ni == No
+    assert len(input.shape) == 4 and len(grid.shape)
+
+    nid, cid, hid, wid = jt.index((Ni,Ci,Ho,Wo))
+    x = ((grid[:,:,:,1].unsqueeze(1).repeat([1,Ci,1,1]) + 1) / 2) * (Hi - 1)
+    y = ((grid[:,:,:,0].unsqueeze(1).repeat([1,Ci,1,1]) + 1) / 2) * (Wi - 1)
+    return _interpolate(input, x, y, (nid,cid), mode)
 
 class Upsample(Module):
     def __init__(self, scale_factor=None, mode='nearest'):

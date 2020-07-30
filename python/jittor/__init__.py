@@ -761,3 +761,4 @@ from . import nn
 from .nn import matmul
 from . import contrib
 from .contrib import concat
+from .misc import *
