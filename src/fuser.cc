@@ -146,7 +146,6 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
         for (uint i=0; i<ops.size(); i++)
             LOGvvvv << ops[i] << dis[i] << deps[i];
     }
-
     for (uint i=0; i<vars.size(); i++) {
         Var* v = vars[i];
         if (!v || v->tflag!=tt) {

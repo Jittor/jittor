@@ -280,5 +280,14 @@ class TestFunction(unittest.TestCase):
         assert t3 < t2 + 10, (t1,t2,t3)
         self.assertEqual(jt.liveness_info()["lived_vars"], 0)
 
+
+class TestFunctionWithEagerExecution(TestFunction):
+    @classmethod
+    def setUpClass(self):
+        jt.flags.eager_execution = 1
+    @classmethod
+    def tearDownClass(self):
+        jt.flags.eager_execution = 0
+
 if __name__ == "__main__":
     unittest.main()
