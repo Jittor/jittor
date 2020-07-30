@@ -59,6 +59,18 @@ class TestCore(unittest.TestCase):
         c = np.matmul(a, b)
         jtc = jt.matmul(jt.array(a), jt.array(b)).data
         assert np.all(jtc == c)
+
+        a = np.random.random((128,3,10,20))
+        b = np.random.random((20,30))
+        c = np.matmul(a, b)
+        jtc = jt.matmul(jt.array(a), jt.array(b)).data
+        assert np.all(jtc == c)
+
+        a = np.random.random((128,3,10,20))
+        b = np.random.random((128,3,20,30))
+        c = np.matmul(a, b)
+        jtc = jt.matmul(jt.array(a), jt.array(b)).data
+        assert np.all(jtc == c)
         
     def test_var_holder(self):
         jt.clean()
