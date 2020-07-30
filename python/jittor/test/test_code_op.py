@@ -6,6 +6,7 @@
 import unittest
 import jittor as jt
 import numpy as np
+from jittor import Function
 
 class TestCodeOp(unittest.TestCase):
     def test(self):
@@ -20,6 +21,35 @@ class TestCodeOp(unittest.TestCase):
                     @out(i) = @dout(i)*@in0(i)*4;
                 }
             '''])
+        na, nb = jt.fetch_sync([a,b])
+        assert np.allclose(na*na*2, nb)
+        
+        c = jt.random([10])
+        da = jt.grad(c*b, a)
+        assert np.allclose(c.data*na*4, da.data), (c.data*na*4, da.data)
+
+    def test_use_func(self):
+        class Func(Function):
+            def execute(self, x):
+                self.save_vars = x
+                return jt.code(x.shape, x.dtype, [x],
+                    cpu_src='''
+                        for (int i=0; i<in0_shape0; i++)
+                            @out(i) = @in0(i)*@in0(i)*2;
+                    ''')
+
+            def grad(self, grad_x):
+                x = self.save_vars
+                return jt.code(x.shape, x.dtype, [x, grad_x],
+                    cpu_src='''
+                        for (int i=0; i<in0_shape0; i++)
+                            @out(i) = @in1(i)*@in0(i)*4;
+                    ''')
+
+        a = jt.random([10])
+        func = Func()
+        b = func(a)
+
         na, nb = jt.fetch_sync([a,b])
         assert np.allclose(na*na*2, nb)
         
@@ -225,6 +255,48 @@ class TestCodeOp(unittest.TestCase):
                 }
                 kernel<<<32, 32>>>(@ARGS);
             '''])
+        da, db = jt.grad(c, [a, b])
+        assert np.allclose(c.data, a.data*b.data), (c.data, a.data*b.data)
+        assert np.allclose(da.data, b.data)
+        assert np.allclose(db.data, a.data)
+
+    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @jt.flag_scope(use_cuda=1)
+    def test_cuda2_use_func(self):
+        class Func(Function):
+            def execute(self, a, b):
+                self.save_vars = a, b
+                return jt.code(a.shape, a.dtype, [a,b],
+                    cuda_src='''
+                        __global__ static void kernel1(@ARGS_DEF) {
+                            @PRECALC
+                            for (int i=blockIdx.x; i<in0_shape0; i+=gridDim.x)
+                            for (int j=threadIdx.x; j<in0_shape1; j+=blockDim.x)
+                                @out(i,j) = @in0(i,j)*@in1(i,j);
+                        }
+                        kernel1<<<32, 32>>>(@ARGS);
+                    ''')
+
+            def grad(self, grad):
+                a, b = self.save_vars
+                return jt.code([a.shape, b.shape], [a.dtype, b.dtype], [a, b, grad],
+                    cuda_src='''
+                        __global__ static void kernel2(@ARGS_DEF) {
+                            @PRECALC
+                            for (int i=blockIdx.x; i<in0_shape0; i+=gridDim.x)
+                            for (int j=threadIdx.x; j<in0_shape1; j+=blockDim.x) {
+                                @out0(i,j) = @in2(i,j)*@in1(i,j);
+                                @out1(i,j) = @in2(i,j)*@in0(i,j);
+                            }
+                        }
+                        kernel2<<<32, 32>>>(@ARGS);
+                    ''')
+
+        a = jt.random((100,100))
+        b = jt.random((100,100))
+        
+        func = Func()
+        c = func(a,b)
         da, db = jt.grad(c, [a, b])
         assert np.allclose(c.data, a.data*b.data), (c.data, a.data*b.data)
         assert np.allclose(da.data, b.data)
