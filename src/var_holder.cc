@@ -16,7 +16,7 @@
 
 namespace jittor {
 
-DEFINE_FLAG(int, eager_execution, 0, "Use Eager execution rather than lazy execution, This flag makes error message and traceback infomation better.");
+DEFINE_FLAG(int, eager_execution, 0, "Use Eager execution rather than lazy execution, This flag makes error message and traceback infomation better. But this flag will raise memory consumption and lower the performance.");
 
 list<VarHolder*> VarHolder::hold_vars;
 
