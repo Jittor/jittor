@@ -1,5 +1,5 @@
-error_msg = "Jittor only supports Ubuntu>=16.04 currently."
-
+error_msg = "Jittor only supports Ubuntu>=16.04 currently.\nFor other users, use Jittor at your own risk."
+from warning import warn
 try:
     with open("/etc/os-release", "r", encoding='utf8') as f:
         s = f.read().splitlines()
@@ -8,8 +8,11 @@ try:
             a = line.split('=')
             m[a[0]] = a[1].replace("\"", "")
 except:
-    raise RuntimeError(error_msg)
-assert m["NAME"] == "Ubuntu" and float(m["VERSION_ID"])>16, error_msg
+    warn(raise RuntimeError(error_msg))
+
+try:
+    if m["NAME"] == "Ubuntu" and float(m["VERSION_ID"])>16:pass
+    else:warn(error_msg)
 
 import setuptools
 from setuptools import setup, find_packages
