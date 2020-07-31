@@ -245,8 +245,8 @@ class BatchNorm1d(Module):
 
     def execute(self, x):
         if self.is_train:
-            xmean = jt.mean(x, dims=[0], keepdims=1)
-            x2mean = jt.mean(x*x, dims=[0], keepdims=1)
+            xmean = jt.mean(x, dims=[0, 2], keepdims=1)
+            x2mean = jt.mean(x*x, dims=[0, 2], keepdims=1)
 
             if self.sync and jt.in_mpi:
                 xmean = xmean.mpi_all_reduce("mean")
@@ -255,15 +255,15 @@ class BatchNorm1d(Module):
             xvar = x2mean-xmean*xmean
             norm_x = (x-xmean)/jt.sqrt(xvar+self.eps)
             self.running_mean.update(self.running_mean + 
-                (xmean.sum([0])-self.running_mean)*self.momentum)
+                (xmean.sum([0, 2])-self.running_mean)*self.momentum)
             self.running_var.update(self.running_var + 
-                (xvar.sum([0])-self.running_var)*self.momentum)
+                (xvar.sum([0, 2])-self.running_var)*self.momentum)
         else:
-            running_mean = self.running_mean.broadcast(x, [0])
-            running_var = self.running_var.broadcast(x, [0])
+            running_mean = self.running_mean.broadcast(x, [0, 2])
+            running_var = self.running_var.broadcast(x, [0, 2])
             norm_x = (x-running_mean)/jt.sqrt(running_var+self.eps)
-        w = self.weight.broadcast(x, [0])
-        b = self.bias.broadcast(x, [0])
+        w = self.weight.broadcast(x, [0, 2])
+        b = self.bias.broadcast(x, [0, 2])
         return norm_x * w + b
 
 class InstanceNorm2d(Module):
@@ -378,6 +378,43 @@ class Conv(Module):
                 b = self.bias.broadcast(y.shape, [0,2,3])
                 y = y + b
             return y          
+
+class Conv1d(Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, bias=True):
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
+        self.dilation = dilation
+
+        self.weight = init.invariant_uniform([out_channels, in_channels, self.kernel_size], dtype="float")
+        if bias:
+            fan=1
+            for i in self.weight.shape[1:]:
+                fan *= i
+            bound = 1 / math.sqrt(fan)
+            self.bias = init.uniform([out_channels], dtype="float", low=-bound, high=bound)
+        else:
+            self.bias = None
+
+    def execute(self, x): 
+        N,C,D = x.shape
+        assert C==self.in_channels
+
+        ol = (D+self.padding*2-self.kernel_size*self.dilation+self.dilation-1)//self.stride+1
+        xx = x.reindex([N,self.out_channels,self.in_channels,ol,self.kernel_size], [
+            'i0', # Nid
+            'i2', # Cid
+            f'i3*{self.stride}-{self.padding}+i4*{self.dilation}', # Hid+Khid
+        ])
+        ww = self.weight.broadcast(xx.shape, [0,3])
+        yy = xx*ww
+        y = yy.sum([2,4]) # batch size , c_out, output_length
+        if self.bias is not None:
+            b = self.bias.broadcast(y.shape, [0,2])
+            y = y + b
+        return y
 
 
 class ConvTranspose(Module):
