@@ -1,5 +1,8 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2020 Jittor. Authors: 
+//     Dun Liang <randonlang@gmail.com>. 
+//     Guowei Yang <471184555@qq.com>
+// All Rights Reserved.
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -10,6 +13,7 @@
 #include "misc/hash.h"
 #include "misc/nano_string.h"
 #include "misc/fast_shared_ptr.h"
+#include "misc/cuda_flags.h"
 
 namespace jittor {
 
@@ -581,8 +585,6 @@ DEF_IS_1(fast_shared_ptr, T) from_py_object(PyObject* obj) {
     return from_py_object<typename T::value_type>(obj);
 }
 
-
-
 DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj) {
     // PyObject_Call
     Py_INCREF(obj);
@@ -590,7 +592,12 @@ DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj) {
         // callback
         [obj](typename T::R* result) {
             // import numpy
-            PyObjHolder np(PyImport_ImportModule("numpy"));
+            string npstr="numpy";
+            #ifdef HAS_CUDA
+            if (use_cuda) npstr="cupy";
+            #endif
+
+            PyObjHolder np(PyImport_ImportModule(npstr.data()));
             // data = {}
             PyObjHolder data(to_py_object(result->varrays));
             PyObjHolder data2(to_py_object(result->ints));
@@ -602,7 +609,15 @@ DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj) {
             PyObjHolder args(PyTuple_New(2));
             PyTuple_SET_ITEM(args.obj, 0, np.release());
             PyTuple_SET_ITEM(args.obj, 1, data.release());
-            PyObjHolder ret(PyObject_Call(obj, args.obj, nullptr));
+
+            if (npstr=="cupy") {
+                PyObject *jt = PyImport_ImportModule("jittor");
+                PyObject *np2cp = PyObject_GetAttrString(jt,"numpy2cupy");
+                PyObject *pFunc = PyObject_GetAttrString(np2cp, "numpy2cupy");
+                PyObjHolder ret1(PyObject_Call(pFunc, args.obj, nullptr));
+            }
+
+            PyObjHolder ret2(PyObject_Call(obj, args.obj, nullptr));
         },
         // deleter
         [obj]() { Py_DECREF(obj); },

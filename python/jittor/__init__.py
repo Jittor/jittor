@@ -22,6 +22,7 @@ with lock.lock_scope():
         has_cuda = compile_extern.has_cuda = compiler.has_cuda = False
     if has_cuda:
         from .compile_extern import cudnn, curand, cublas
+    from . import init_cupy
 
 import contextlib
 import numpy as np
@@ -760,4 +761,5 @@ Var.double = Var.float64
 from . import nn
 from .nn import matmul
 from . import contrib
+from . import numpy2cupy
 from .contrib import concat
