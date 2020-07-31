@@ -23,8 +23,8 @@ except:
     tnn = None
     skip_this_test = True
 
-def check_equal(res1, res2):
-    assert np.allclose(res1.detach().numpy(), res2.numpy())
+def check_equal(res1, res2, eps=1e-5):
+    assert np.allclose(res1.detach().numpy(), res2.numpy(), eps)
 
 @unittest.skipIf(skip_this_test, "No Torch found")
 class TestPad(unittest.TestCase):
@@ -53,6 +53,25 @@ class TestPad(unittest.TestCase):
         check_equal(torch.Tensor(arr).flip(2), jt.array(arr).flip(2))
         check_equal(torch.Tensor(arr).flip(3), jt.array(arr).flip(3))
         print('pass flip test ...')
+
+    def test_cross(self):
+        arr1 = np.random.randn(16,3,224,224,3)
+        arr2 = np.random.randn(16,3,224,224,3)
+        check_equal(torch.Tensor(arr1).cross(torch.Tensor(arr2), dim=1), jt.array(arr1).cross(jt.array(arr2), dim=1), 1e-1)
+        check_equal(torch.Tensor(arr1).cross(torch.Tensor(arr2), dim=-4), jt.array(arr1).cross(jt.array(arr2), dim=-4), 1e-1)
+        check_equal(torch.Tensor(arr1).cross(torch.Tensor(arr2), dim=-1), jt.array(arr1).cross(jt.array(arr2), dim=-1), 1e-1)
+        check_equal(torch.Tensor(arr1).cross(torch.Tensor(arr2), dim=4), jt.array(arr1).cross(jt.array(arr2), dim=4), 1e-1)
+        print('pass cross test ...')
+
+    def test_normalize(self):
+        arr = np.random.randn(16,3,224,224,3)
+        check_equal(tnn.functional.normalize(torch.Tensor(arr)), jt.normalize(jt.array(arr)))
+        check_equal(tnn.functional.normalize(torch.Tensor(arr), dim=0), jt.normalize(jt.array(arr), dim=0), 1e-1)
+        check_equal(tnn.functional.normalize(torch.Tensor(arr), dim=1), jt.normalize(jt.array(arr), dim=1), 1e-1)
+        check_equal(tnn.functional.normalize(torch.Tensor(arr), dim=-1), jt.normalize(jt.array(arr), dim=-1), 1e-1)
+        check_equal(tnn.functional.normalize(torch.Tensor(arr), dim=2), jt.normalize(jt.array(arr), dim=2), 1e-1)
+        check_equal(tnn.functional.normalize(torch.Tensor(arr), dim=3), jt.normalize(jt.array(arr), dim=3), 1e-1)
+        print('pass normalize test ...')
 
 if __name__ == "__main__":
     unittest.main()
