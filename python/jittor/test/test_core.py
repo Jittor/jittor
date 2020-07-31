@@ -58,19 +58,19 @@ class TestCore(unittest.TestCase):
         b = np.array([[4, 1], [2, 2]]).astype("float32")
         c = np.matmul(a, b)
         jtc = jt.matmul(jt.array(a), jt.array(b)).data
-        assert np.all(jtc == c)
+        assert np.allclose(jtc, c)
 
         a = np.random.random((128,3,10,20))
         b = np.random.random((20,30))
         c = np.matmul(a, b)
         jtc = jt.matmul(jt.array(a), jt.array(b)).data
-        assert np.all(jtc == c)
+        assert np.allclose(jtc, c)
 
         a = np.random.random((128,3,10,20))
         b = np.random.random((128,3,20,30))
         c = np.matmul(a, b)
         jtc = jt.matmul(jt.array(a), jt.array(b)).data
-        assert np.all(jtc == c)
+        assert np.allclose(jtc, c), np.abs(jtc-c).max()
         
     def test_var_holder(self):
         jt.clean()
