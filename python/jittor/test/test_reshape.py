@@ -70,6 +70,10 @@ class TestReshapeOp(unittest.TestCase):
         assert a.flatten(1).shape == [2,12]
         assert a.flatten(0,-2).shape == [6,4]
 
+    def test_reshape_var(self):
+        a = jt.zeros(10)
+        b = a.reshape(a.shape)
+
 
 if __name__ == "__main__":
     unittest.main()

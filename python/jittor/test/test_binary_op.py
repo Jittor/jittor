@@ -33,8 +33,8 @@ class TestBinaryOp(unittest.TestCase):
         assert (x == 8).all()
         x = (jt.array(2) ** jt.array(3)).data
         assert (x == 8).all()
-        a = [1,2,3]
-        b = [7,10,13]
+        a = np.array([1,2,3])
+        b = np.array([7,10,13])
         check("logical_and", a, b)
         check("logical_or", a, b)
         check("logical_xor", a, b)
@@ -79,6 +79,8 @@ class TestBinaryOp(unittest.TestCase):
         
     def test_r(self):
         def check(op, a, b):
+            a = np.array(a)
+            b = np.array(b)
             if jt.flags.use_cuda and op == "@":
                 return
             jb = jt.array(b)

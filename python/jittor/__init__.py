@@ -7,7 +7,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-__version__ = '1.1.6.5'
+__version__ = '1.1.7.0'
 from . import lock
 with lock.lock_scope():
     from . import compiler
@@ -197,6 +197,7 @@ def clean():
     gc.collect()
 
 cast = unary
+Var.cast = Var.cast
 
 def array(data, dtype=None):
     if isinstance(data, core.Var):
@@ -251,7 +252,7 @@ Var.norm = norm
 
 origin_reshape = reshape
 def reshape(x, *shape):
-    if len(shape) == 1 and isinstance(shape[0], Sequence):
+    if len(shape) == 1 and isinstance(shape[0], (Sequence, NanoVector)):
         shape = shape[0]
     return origin_reshape(x, shape)
 reshape.__doc__ = origin_reshape.__doc__
@@ -259,7 +260,7 @@ Var.view = Var.reshape = view = reshape
 
 origin_transpose = transpose
 def transpose(x, *dim):
-    if len(dim) == 1 and isinstance(dim[0], Sequence):
+    if len(dim) == 1 and isinstance(dim[0], (Sequence, NanoVector)):
         dim = dim[0]
     return origin_transpose(x, dim)
 transpose.__doc__ = origin_transpose.__doc__
@@ -283,6 +284,9 @@ Var.flatten = flatten
 def detach_inplace(x):
     return x.swap(x.stop_grad().clone())
 Var.start_grad = Var.detach_inplace = detach_inplace
+
+def detach(x):
+    return x.detach()
 
 def unsqueeze(x, dim):
     shape = list(x.shape)
@@ -623,12 +627,17 @@ can also be None)::
 
     '''
     def __call__(self, *args):
+        backup = args
         args = list(args)
         taped_inputs = []
         taped_outputs = []
         input_mask = [-1] * len(args)
         for i,v in enumerate(args):
             if isinstance(v, Var):
+                if v.is_stop_grad():
+                    # -2 in input_mask represents it is stop_grad
+                    input_mask[i] = -2
+                    continue
                 v = v.tape()
                 input_mask[i] = len(taped_inputs)
                 args[i] = v
@@ -664,7 +673,8 @@ can also be None)::
         for i, r in enumerate(ret):
             j = self.input_mask[i]
             if j<0:
-                assert r is None, f"{type(self)}'s {i}-th returned grad should be None, "\
+                # -2 in input_mask represents it is stop_grad
+                assert r is None or j==-2, f"{type(self)}'s {i}-th returned grad should be None, "\
                     "because the input value is not jittor variable."
             else:
                 new_ret.append(r)

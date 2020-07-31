@@ -57,7 +57,8 @@ ReduceOp::ReduceOp(Var* x, NanoString op, NanoVector dims, bool keepdims)
     } else {
         reduce_mask = 0;
         for (auto dim : dims) {
-            CHECKop(dim,<,xdim) << "Wrong dims number:" << dims;
+            if (dim<0) dim += xdim;
+            CHECK(dim>=0 && dim<xdim) << "Wrong dims number:" << dims;
             reduce_mask |= 1<<dim;
         }
     }

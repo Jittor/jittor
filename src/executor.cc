@@ -410,8 +410,16 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         // release liveness when op is finished
         // outputs may change during free, we need to backup it;
         outputs_bk.clear();
-        for (Var* var : op->outputs())
-            outputs_bk.push_back(var);
+        for (Var* var : op->outputs()) {
+            /* only free not need_free output var.
+            For example o1, o2 = op1(i1)
+            o2 is not used, so its f:b:p liveness == 0
+            when o1 is freed, op2 will be freed, o2 will be freed too.
+            so no need to free o2 again.
+            */
+            if (!var->need_free())
+                outputs_bk.push_back(var);
+        }
         op->finish_pending_liveness();
         for (Var* var : outputs_bk)
             var->finish_pending_liveness();

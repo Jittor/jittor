@@ -15,24 +15,41 @@
 #include "update_queue.h"
 
 namespace jittor {
-    
+
+DEFINE_FLAG(int, eager_execution, 0, "Use Eager execution rather than lazy execution, This flag makes error message and traceback infomation better. But this flag will raise memory consumption and lower the performance.");
+
 list<VarHolder*> VarHolder::hold_vars;
 
 void add_hold_vars(VarHolder* self) {
     VarHolder::hold_vars.push_front(self);
     self->iter = VarHolder::hold_vars.begin();
+    if (!eager_execution) return;
+    auto v = self->var;
+    for (int i=0; i<5; i++) {
+        auto op = v->input();
+        if (!op) break;
+        if (i==0 && op->name() == string("tape")) return;
+        if (op->type() == OpType::other) break;
+        if (op->type() == OpType::reduce) break;
+        if (op->inputs().size() == 0)
+            break;
+        if (op->type() == OpType::broadcast)
+            return;
+        v = op->inputs().front();
+    }
+    self->sync(true);
 }
 
 VarHolder::VarHolder(Var* v) : var(v) {
-    add_hold_vars(this);
     // Var holder has both forward and backward liveness
     var->own_both_liveness();
+    add_hold_vars(this);
 }
 
 VarHolder::VarHolder(VarPtr&& v) {
-    add_hold_vars(this);
     var = v.ptr;
     v.ptr = nullptr;
+    add_hold_vars(this);
 }
 
 VarHolder::VarHolder(VarHolder* v) : var(v->var) {

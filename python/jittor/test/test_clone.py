@@ -21,5 +21,14 @@ class TestClone(unittest.TestCase):
         c.stop_grad()
         assert jt.number_of_lived_vars()==3
 
+    def test2(self):
+        a = jt.array([1,2])
+        print(a.detach())
+
+    @jt.flag_scope(eager_execution=1)
+    def test3(self):
+        a = jt.array([1,2])
+        print(a.detach())
+
 if __name__ == "__main__":
     unittest.main()

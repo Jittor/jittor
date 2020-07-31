@@ -75,6 +75,10 @@ UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
     ASSERT(ns.is_unary() | ns.is_dtype());
     NanoString dtype;
     if (ns.is_dtype()) {
+        if (ns == x->dtype()) {
+            forward(x);
+            return;
+        }
         dtype = ns;
         ns = ns_cast;
     } else if (ns.is_bool())

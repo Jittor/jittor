@@ -15,9 +15,9 @@ class TestConcatOp(unittest.TestCase):
             res2 = jt.contrib.concat(tmp, dim=dim)
             assert (res1!=res2).data.sum()==0, "concat fail..."
         check([jt.array([[1],[2]]), jt.array([[2],[2]])])
-        check([jt.array(range(24)).reshape((1,2,3,4)), jt.array(range(24)).reshape((1,2,3,4))])
-        check([jt.array(range(120)).reshape((5,2,3,4)), jt.array(range(24)).reshape((1,2,3,4))])
-        check([jt.array(range(5)).reshape((5,1)), jt.array(range(1)).reshape((1,1))])
+        check([jt.array(np.array(range(24))).reshape((1,2,3,4)), jt.array(np.array(range(24))).reshape((1,2,3,4))])
+        check([jt.array(np.array(range(120))).reshape((5,2,3,4)), jt.array(np.array(range(24))).reshape((1,2,3,4))])
+        check([jt.array(np.array(range(5))).reshape((5,1)), jt.array(np.array(range(1))).reshape((1,1))])
         print('concat success...')  
 
 if __name__ == "__main__":

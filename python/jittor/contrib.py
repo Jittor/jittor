@@ -147,6 +147,7 @@ def setitem(x, slices, value):
     reindex_reduce_args = (x.shape, reindex_args[1]) + reindex_args[3:]
     xslice = x.stop_fuse().reindex(*reindex_args).stop_fuse()
     value = jt.broadcast(value, xslice)
+    value = value.cast(x.dtype)
     one = jt.broadcast(1, xslice)
     if not isinstance(reindex_args[0][0], jt.Var):
         reindex_args = (x.shape,) + reindex_args[1:]
