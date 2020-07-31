@@ -22,7 +22,7 @@ with lock.lock_scope():
         has_cuda = compile_extern.has_cuda = compiler.has_cuda = False
     if has_cuda:
         from .compile_extern import cudnn, curand, cublas
-    from . import init_cupy
+    from .init_cupy import numpy2cupy
 
 import contextlib
 import numpy as np

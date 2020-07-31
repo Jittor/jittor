@@ -13,7 +13,9 @@
 #include "misc/hash.h"
 #include "misc/nano_string.h"
 #include "misc/fast_shared_ptr.h"
+#ifdef HAS_CUDA
 #include "misc/cuda_flags.h"
+#endif
 
 namespace jittor {
 
@@ -610,12 +612,13 @@ DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj) {
             PyTuple_SET_ITEM(args.obj, 0, np.release());
             PyTuple_SET_ITEM(args.obj, 1, data.release());
 
+            #ifdef HAS_CUDA
             if (npstr=="cupy") {
-                PyObject *jt = PyImport_ImportModule("jittor");
-                PyObject *np2cp = PyObject_GetAttrString(jt,"numpy2cupy");
-                PyObject *pFunc = PyObject_GetAttrString(np2cp, "numpy2cupy");
-                PyObjHolder ret1(PyObject_Call(pFunc, args.obj, nullptr));
+                PyObjHolder jt(PyImport_ImportModule("jittor"));
+                PyObjHolder pFunc(PyObject_GetAttrString(jt.obj,"numpy2cupy"));
+                PyObjHolder ret1(PyObject_Call(pFunc.obj, args.obj, nullptr));
             }
+            #endif
 
             PyObjHolder ret2(PyObject_Call(obj, args.obj, nullptr));
         },
