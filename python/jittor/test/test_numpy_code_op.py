@@ -7,6 +7,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 import unittest
+from jittor import Function
 import jittor as jt
 import numpy
 import cupy
@@ -14,6 +15,54 @@ import ctypes
 import sys
 
 class TestCodeOp(unittest.TestCase):
+    def test_func(self):
+        class Func(Function):
+            def forward_code(self, np, data):
+                a = data["inputs"][0]
+                b = data["outputs"][0]
+                if (jt.flags.use_cuda==0):
+                    assert isinstance(a,numpy.ndarray)
+                else:
+                    assert isinstance(a,cupy.core.core.ndarray)
+                np.add(a,a,out=b)
+
+            def backward_code(self, np, data):
+                a, dout = data["inputs"]
+                out = data["outputs"][0]
+                np.copyto(out, dout*2.0)
+
+            def execute(self, a):
+                self.save_vars = a
+                return jt.numpy_code(
+                    a.shape,
+                    a.dtype,
+                    [a],
+                    self.forward_code,
+                )
+
+            def grad(self, grad_a):
+                a = self.save_vars
+                return jt.numpy_code(
+                    a.shape,
+                    a.dtype,
+                    [a, grad_a],
+                    self.backward_code,
+                )
+
+        def check():
+            a = jt.random((5,1))
+            func = Func()
+            b = func(a)
+            assert numpy.allclose(b.data,(a+a).data)
+            da = jt.grad(b,a)
+            one=numpy.ones(a.shape)
+            assert numpy.allclose(da.data,one*2.0)
+
+        jt.flags.use_cuda = 0
+        check()
+        jt.flags.use_cuda = 1
+        check()
+
     def test(self):
         def forward_code(np, data):
             a = data["inputs"][0]
