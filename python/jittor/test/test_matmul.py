@@ -339,6 +339,11 @@ class TestMatmul(unittest.TestCase):
         check([10,3,4], [4,5])
         check([10,3,4], [10,4,5])
         check([8,1,3,4], [10,4,5])
+        check([5,10,3,4], [5,10,4,5])
+
+    @jt.flag_scope(use_cuda=1)
+    def test_matmul_example2_cuda(self):
+        self.test_matmul_example2()
 
 if __name__ == "__main__":
     unittest.main()

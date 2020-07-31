@@ -49,8 +49,6 @@ Example::
     '''
     assert len(a.shape) > 2 and len(b.shape) > 2
     return matmul(a, b)
-    if jt.flags.use_cuda:
-        return jt.compile_extern.cublas_ops.cublas_batched_matmul(a, b, 0, 0)
 
 def matmul(a, b):
     ''' matrix multiply, 
