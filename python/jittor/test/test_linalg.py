@@ -168,6 +168,76 @@ class TestCodeOp(unittest.TestCase):
             gx = np.sum(gx,2)
             assert np.allclose(gx,jx.data)
 
+    def test_cholesky(self):
+        def check_cholesky(a):
+            L = anp.linalg.cholesky(a)
+            return L
+
+        #single_test for now
+        x = jt.array(np.array([[4,-1,1],[-1,4.25,2.75],[1,2.75,3.5]]).astype("float32"))
+        x = x.reindex([2,2,x.shape[0],x.shape[1]],["i2","i3"])
+        tx = x.data
+        L = jt.linalg.cholesky(x)
+        tL = check_cholesky(tx)
+        assert np.allclose(tL,L.data)
+        jx = jt.grad(L,x)
+        check_grad = jacobian(check_cholesky)
+        gx = check_grad(tx)
+        gx = np.sum(gx, 0)
+        gx = np.sum(gx, 0)
+        gx = np.sum(gx, 0)
+        gx = np.sum(gx, 0)
+        assert np.allclose(jx.data,gx)
+
+    def test_solve(self):
+        def check_solve(a,b):
+            ans = anp.linalg.solve(a,b)
+            return ans
+
+        for i in range(50):
+            a = jt.random((2,2,3,3))
+            b = jt.random((2,2,3))
+            ans = jt.linalg.solve(a,b)
+            ta = check_solve(a.data,b.data)
+            assert np.allclose(ans.data, ta)
+            jx = jt.grad(ans, a)
+            check_sgrad = jacobian(check_solve)
+            gx = check_sgrad(a.data,b.data)
+            gx = np.sum(gx,0)
+            gx = np.sum(gx,0)
+            gx = np.sum(gx,0)
+            try:
+                assert np.allclose(gx, jx.data,rtol=1)
+            except AssertionError:
+                print(gx)
+                print(jx.data)
+
+    def test_det(self):
+        def check_det(a):
+            de = anp.linalg.det(a)
+            return de
+
+        for i in range(50):
+            tn = np.random.randn(3, 3).astype('float32') * 5
+            while np.allclose(np.linalg.det(tn), 0):
+                tn = np.random.randn((3, 3)).astype('float32') * 5
+            x = jt.array(tn)
+            x = x.reindex([2, 2, x.shape[0], x.shape[1]], ["i2", "i3"])
+            s = jt.array(x.shape).data.tolist()
+            x_s = s[:-2]
+            if len(s) == 2:
+                x_s.append(1)
+            det = jt.linalg.det(x)
+            ta = check_det(x.data)
+            assert np.allclose(det.data, ta)
+            jx = jt.grad(det, x)
+            check_sgrad = jacobian(check_det)
+            gx = check_sgrad(x.data)
+            gx = np.sum(gx, 2)
+            gx = np.sum(gx, 2)
+            assert np.allclose(gx, jx.data)
+
+
 if __name__ == "__main__":
     unittest.main()
 
