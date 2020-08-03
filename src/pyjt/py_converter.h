@@ -264,12 +264,14 @@ struct VarHolder;
 vector<ArrayArgs> fetch_sync(const vector<VarHolder*>& vh);
 extern PyHeapTypeObject PyjtVarHolder;
 DEF_IS(ArrayArgs, bool) is_type(PyObject* obj) {
-    return Py_TYPE(obj) == PyArray_Type || 
+    return 
+        Py_TYPE(obj) == &PyjtVarHolder.ht_type ||
+        Py_TYPE(obj) == PyArray_Type || 
         PyFloat_CheckExact(obj) ||
         PyLong_CheckExact(obj) ||
         PyBool_Check(obj) ||
         PyList_CheckExact(obj) ||
-        Py_TYPE(obj) == &PyjtVarHolder.ht_type;
+        PyObject_TypeCheck(obj, PyNumberArrType_Type);
 }
 
 DEF_IS(ArrayArgs, PyObject*) to_py_object(const T& a) {
@@ -314,7 +316,10 @@ DEF_IS(ArrayArgs, T) from_py_object(PyObject* obj) {
         auto arr = (PyArray_Proxy*)holder.obj;
         int64 size = PyArray_Size(arr);
         T args;
-        args.shape = vector<int64>(arr->dimensions, arr->dimensions+arr->nd);
+        if (arr->nd)
+            args.shape = vector<int64>(arr->dimensions, arr->dimensions+arr->nd);
+        else
+            args.shape.push_back(1);
         args.dtype = get_type_str(arr);
         args.buffer.reset(new char[size]);
         args.ptr = (void*)args.buffer.get();
