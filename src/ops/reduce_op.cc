@@ -15,7 +15,7 @@ namespace jittor {
 
 #ifndef JIT
 static auto make_broadcast_to = get_op_info("broadcast_to")
-    .get_constructor<VarPtr, Var*, Var*, uint>();
+    .get_constructor<VarPtr, Var*, Var*, uint, uint>();
 static auto make_binary = get_op_info("binary")
     .get_constructor<VarPtr, Var*, Var*, NanoString>();
 static auto make_ternary = get_op_info("ternary")
@@ -45,13 +45,14 @@ unordered_set<string> reduce_ops = {
 };
 
 ReduceOp::ReduceOp(Var* x, NanoString op, NanoVector dims, bool keepdims)
-    : x(x), keepdims(keepdims) {
+    : x(x) {
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
     set_type(OpType::reduce);
     ns = op;
     ASSERT(ns.is_binary());
     auto xdim = x->shape.size();
+    keepdims_mask = keepdims ? (int)-1 : (int)0;
     if (!dims.size()) {
         reduce_mask = (1<<xdim)-1;
     } else {
@@ -68,15 +69,15 @@ ReduceOp::ReduceOp(Var* x, NanoString op, NanoVector dims, bool keepdims)
         y = create_output(nullptr, binary_dtype_infer(ns, x, x));
 }
 
-ReduceOp::ReduceOp(Var* x, NanoString op, uint dims_mask, bool keepdims)
-    : x(x), keepdims(keepdims) {
+ReduceOp::ReduceOp(Var* x, NanoString op, uint dims_mask, uint keepdims_mask)
+    : x(x) {
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
     set_type(OpType::reduce);
     ns = op;
     ASSERT(ns.is_binary());
-    auto xdim = x->shape.size();
-    reduce_mask = dims_mask ? dims_mask : (1<<xdim)-1;
+    reduce_mask = dims_mask;
+    this->keepdims_mask = keepdims_mask;
     y = create_output(nullptr, binary_dtype_infer(ns, x, x));
 }
 
@@ -85,28 +86,31 @@ ReduceOp::ReduceOp(Var* x, NanoString op, int dim, bool keepdims)
 
 void ReduceOp::infer_shape() {
     auto xdim = x->shape.size();
+    NanoVector yshape; 
     yshape.clear();
-    for (int i=0; i<xdim; i++)
-        yshape.push_back(((reduce_mask>>i)&1) ? 1 : x->shape[i]);
-    if (!keepdims) {
-        NanoVector yshape2;
-        for (size_t i=0; i<xdim; i++)
-            if (!(reduce_mask>>i & 1))
-                yshape2.push_back(yshape[i]);
-        if (!yshape2.size()) yshape2.push_back(1);
-        y->set_shape(yshape2);
-    } else
-        y->set_shape(yshape);
+    for (int i=0; i<xdim; i++) {
+        if (reduce_mask>>i&1) {
+            if (keepdims_mask>>i&1)
+                yshape.push_back(1);
+        } else
+            yshape.push_back(x->shape[i]);
+    }
+    if (!yshape.size()) {
+        yshape.push_back(1);
+        // change last bit to 1, last dim should keep dim
+        keepdims_mask |= 1;
+    }
+    y->set_shape(yshape);
 }
 
 VarPtr ReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
-    uint mask=0;
-    if (!keepdims) mask = reduce_mask;
-    if (ns == ns_add)
-        return make_broadcast_to(dout, v, mask);
+    if (ns == ns_add) {
+        auto ret = make_broadcast_to(dout, v, reduce_mask, keepdims_mask);
+        return ret;
+    }
     if (ns == ns_multiply) {
         VarPtr a = make_binary(dout, out, ns_multiply);
-        VarPtr b = make_broadcast_to(a, v, mask);
+        VarPtr b = make_broadcast_to(a, v, reduce_mask, keepdims_mask);
         return make_binary(b, v, ns_divide);
     }
     if (ns == ns_mean) {
@@ -116,15 +120,15 @@ VarPtr ReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
             exe.run_sync({v}, 0);
             ASSERT(v->num>=0);
         }
-        VarPtr a = make_broadcast_to(dout, v, mask);
+        VarPtr a = make_broadcast_to(dout, v, reduce_mask, keepdims_mask);
         VarPtr n = make_number(1.0f*out->num / v->num, a);
         return make_binary(a, n, ns_multiply);
     }
     if (ns == ns_maximum || ns == ns_minimum) {
         VarPtr zeros = make_number(0, v);
-        VarPtr a = make_broadcast_to(out, v, mask);
+        VarPtr a = make_broadcast_to(out, v, reduce_mask, keepdims_mask);
         VarPtr cond = make_binary(v, a, ns_equal);
-        VarPtr dv = make_broadcast_to(dout, v, mask);
+        VarPtr dv = make_broadcast_to(dout, v, reduce_mask, keepdims_mask);
         return make_ternary(cond, dv, zeros);
     }
     return nullptr;
@@ -135,7 +139,7 @@ void ReduceOp::jit_prepare() {
     add_jit_define("Ty", y->dtype());
     add_jit_define("Tz", y->dtype());
     add_jit_define("OP", ns.to_cstring());
-    add_jit_define("DIM", JK::hex1(yshape.size()));
+    add_jit_define("DIM", JK::hex1(x->shape.size()));
     add_jit_define("REDUCE", JK::hex(reduce_mask));
 }
 

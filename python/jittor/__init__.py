@@ -763,3 +763,4 @@ from .nn import matmul
 from . import contrib
 from . import numpy2cupy
 from .contrib import concat
+from .misc import *
