@@ -9,6 +9,7 @@
 # ***************************************************************
 import jittor as jt
 import numpy as np
+import math
 from collections.abc import Sequence
 
 def repeat(x, *shape):
@@ -230,3 +231,34 @@ def normalize(input, p=2, dim=1, eps=1e-12):
     if p == 2:
         return input / jt.maximum(input.sqr().sum(dim,True).sqrt(), eps)
 jt.Var.normalize = normalize
+
+def unbind(x, dim=0):
+    r'''
+    Removes a var dimension.
+
+    Returns a tuple of all slices along a given dimension, already without it.
+
+    Args:
+
+        input (var) – the var to unbind
+
+        dim (int) – dimension to remove
+
+    Example:
+
+        jt.random((3,3))
+
+    '''
+    if dim < 0: dim += len(input.shape)
+    return [x[(slice(None),)*dim+(i,)] for i in range(x.shape[dim])]
+
+def make_grid(x, nrow=8, padding=2, normalize=False, range=None, scale_each=False, pad_value=0):
+    assert range == None
+    assert scale_each == False
+    if isinstance(x, list): x = jt.stack(x)
+    if normalize: x = (x - x.min()) / (x.max() - x.min())
+    b,c,h,w = x.shape
+    ncol = math.ceil(b / nrow)
+    return x.reindex([c, h*ncol+(ncol+1)*padding, w*nrow+(nrow+1)*padding], 
+                     [f"i1/{padding+h}*{nrow}+i2/{padding+w}", "i0", 
+                      f"i1-i1/{padding+h}*{padding+h}-{padding}", f"i2-i2/{padding+w}*{padding+w}-{padding}"], overflow_value=pad_value)
