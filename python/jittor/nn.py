@@ -359,16 +359,14 @@ class GroupNorm(Module):
         N,C,H,W = x.shape
         assert C == self.num_channels
         assert C % self.num_groups == 0
-        x_ = x.reindex([N, int(C/self.num_groups), self.num_groups, H, W], [
-            "i0", f"i2*{C/self.num_groups}+i1", "i3", "i4"
-        ])
-        xmean = jt.mean(x_, dims=[1,3,4], keepdims=1).reindex(x.shape, ["i0", "0", f"i1/({C}/{self.num_groups})","0", "0"])
-        x2mean = jt.mean(x_*x_, dims=[1,3,4], keepdims=1).reindex(x.shape, ["i0", "0", f"i1/({C}/{self.num_groups})","0", "0"])
+        x = x.reshape((N, self.num_groups, int(C/self.num_groups), H*W))
+        xmean = jt.mean(x, dims=[2,3], keepdims=1)
+        x2mean = jt.mean(x*x, dims=[2,3], keepdims=1)
         xvar = jt.maximum(x2mean-xmean*xmean, 0)
         norm_x = (x-xmean)/jt.sqrt(xvar+self.eps)
-        w = self.weight.broadcast(x, [0,2,3])
-        b = self.bias.broadcast(x, [0,2,3])
-        return norm_x * w + b
+        w = self.weight.reshape((1,self.num_groups,C//self.num_groups,1))
+        b = self.bias.reshape((1,self.num_groups,C//self.num_groups,1))
+        return (norm_x * w + b).reshape((N,C,H,W))
 
 Relu = jt.make_module(relu)
 ReLU = Relu
