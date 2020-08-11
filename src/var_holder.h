@@ -13,6 +13,7 @@
 namespace jittor {
 
 struct VarHolder;
+VarPtr detach(Var* x);
 
 struct DataView {
     VarHolder* vh;
@@ -42,6 +43,15 @@ struct VarHolder {
     // @attrs(return_self)
     VarHolder* assign(VarHolder* v);
 
+    /* update parameter and global variable,
+       different from assign, it will
+       stop grad between origin var and assigned var, and
+       will update in the background
+     */
+    // @pyjt(update)
+    // @attrs(return_self)
+    VarHolder* update(VarHolder* v);
+
     // @pyjt(swap)
     // @attrs(return_self)
     inline VarHolder* swap(VarHolder* v) { std::swap(var, v->var); return this; };
@@ -62,6 +72,25 @@ struct VarHolder {
         return var->name.c_str();
     }
 
+    // @pyjt(size)
+    inline NanoVector size() {
+        if (var->num<0) sync();
+        return var->shape;
+    }
+
+    // @pyjt(size)
+    inline int64 size(int64 dim) {
+        if (var->num<0) sync();
+        ASSERT(dim>=0 && dim<var->shape.size()) << "dim is out of index";
+        return var->shape[dim];
+    }
+
+    // @pyjt(numel)
+    inline int64 numel() {
+        if (var->num<0) sync();
+        return var->num;
+    }
+
     // @pyjt(stop_grad)
     // @attrs(return_self)
     inline VarHolder* stop_grad() {
@@ -73,6 +102,13 @@ struct VarHolder {
     inline bool is_stop_grad() {
         return var->is_stop_grad();
     }
+
+    /* detach the grad */
+    // @pyjt(detach)
+    inline VarHolder* detach() {
+        return new VarHolder(jittor::detach(var));
+    }
+
 
     // @pyjt(stop_fuse)
     // @attrs(return_self)
@@ -141,6 +177,17 @@ struct VarHolder {
         #endif
         std::memcpy(var->mem_ptr, array.ptr, size);
     }
+
+    // @pyjt(share_with)
+    // @attrs(return_self)
+    inline VarHolder* share_with(VarHolder* other) {
+        CHECK(!var->allocator) << "This var is already executed or shared.";
+        var->allocator = (Allocator*)(other->var);
+        return this;
+    }
+
+    // @pyjt(debug_msg)
+    string debug_msg();
 };
 
 // @pyjt(sync)

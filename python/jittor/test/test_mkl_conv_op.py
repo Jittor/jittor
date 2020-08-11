@@ -59,7 +59,7 @@ class TestMklConvOp(unittest.TestCase):
 
         a_jt = jt.array(a)
         b_jt = jt.array(b)
-        with jt.var_scope(enable_tuner=0,compile_options={"test_mkl_conv":1}):
+        with jt.flag_scope(enable_tuner=0,compile_options={"test_mkl_conv":1}):
             c_jt = conv(a_jt, b_jt, 3, 2).data
         with jt.log_capture_scope(
             enable_tuner=1,
@@ -80,11 +80,11 @@ class TestMklConvOp(unittest.TestCase):
         def check(xshape, wshape, stride, pad):
             a = np.random.rand(*xshape).astype(np.float32)
             b = np.random.rand(*wshape).astype(np.float32)
-            c = jt.mkl_ops.mkl_conv(a,b,stride,pad,1,"acdb","hwio").data
+            c = jt.mkl_ops.mkl_conv(a,b,stride,pad,1,xformat="acdb",wformat="hwio").data
 
             a_jt = jt.array(a)
             b_jt = jt.array(b)
-            with jt.var_scope(enable_tuner=0,
+            with jt.flag_scope(enable_tuner=0,
                 compile_options={"test_mkl_conv":uid[0]}):
                 c_jt = conv_nhwc_hwio(a_jt, b_jt, stride, pad).data
             with jt.log_capture_scope(
@@ -118,7 +118,7 @@ class TestMklConvOp(unittest.TestCase):
         a_jt = jt.array(a)
         b_jt = jt.array(b)
 
-        with jt.var_scope(
+        with jt.flag_scope(
             enable_tuner=0,
             compile_options={"test_mkl_conv":1}
         ):
@@ -159,12 +159,12 @@ class TestMklConvOp(unittest.TestCase):
         a = np.random.rand(n,H,W,c).astype(np.float32)
         b = np.random.rand(h,w,i,o).astype(np.float32)
         da = np.random.rand(n,H,W,o).astype(np.float32)
-        dx = jt.mkl_ops.mkl_conv_backward_x(b,da,H,W,1,1,1,"acdb","hwio","acdb").data
-        dw = jt.mkl_ops.mkl_conv_backward_w(a,da,h,1,1,1,"acdb","hwio","acdb").data
+        dx = jt.mkl_ops.mkl_conv_backward_x(b,da,H,W,1,1,1,xformat="acdb",wformat="hwio",yformat="acdb").data
+        dw = jt.mkl_ops.mkl_conv_backward_w(a,da,h,1,1,1,xformat="acdb",wformat="hwio",yformat="acdb").data
         a_jt = jt.array(a)
         b_jt = jt.array(b)
 
-        with jt.var_scope(
+        with jt.flag_scope(
             enable_tuner=0,
             compile_options={"test_mkl_conv":1}
         ):

@@ -21,7 +21,7 @@ static inline int lzcnt(int64 v) {
 }
 
 struct Slice {
-    int start, stop, step;
+    int64 start, stop, step, mask;
 };
 
 // @pyjt(NanoVector)
@@ -108,9 +108,15 @@ struct NanoVector {
 
     // @pyjt(__map_getitem__)
     inline NanoVector slice(Slice slice) {
+        if (slice.step>0) {
+            if (slice.mask&2) slice.stop = size();
+        } else {
+            if (slice.mask&1) slice.start = size()-1;
+            if (slice.mask&2) slice.stop = 0;
+        }
         if (slice.start<0) slice.start += size();
         if (slice.stop<0) slice.stop += size();
-        ASSERT(slice.start>=0 && slice.stop>=0 && slice.start<size() && slice.stop<size())
+        ASSERT(slice.start>=0 && slice.stop>=0 && slice.start<size() && slice.stop<=size())
             << "slice overflow:" << slice.start << slice.stop << slice.step;
         NanoVector v;
         if (slice.step>0) {

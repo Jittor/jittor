@@ -17,6 +17,7 @@ from ctypes.util import find_library
 import jittor_utils as jit_utils
 from jittor_utils import LOG, run_cmd, cache_path, find_exe, cc_path, cc_type, cache_path
 from . import pyjt_compiler
+from . import lock
 
 def find_jittor_path():
     return os.path.dirname(__file__)
@@ -344,7 +345,7 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
         with open(os.path.join(jittor_path, header), encoding='utf8') as f:
             src = f.read()
         # XxxXxxOp(args)
-        res = re.findall(pybind_attrs_reg + '('+name2+"\\([^\\n]*\\))", src, re.S)
+        res = re.findall(pybind_attrs_reg + '[^~]('+name2+"\\([^\\n]*\\))", src, re.S)
         assert len(res) >= 1, "Wrong op args in " + header
         # registe op
         cc_name = os.path.join(jittor_path, header[:-2] + ".cc")
@@ -518,6 +519,7 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
     """
     return jit_src
 
+@lock.lock_scope()
 def compile_custom_op(header, source, op_name, warp=True):
     """Compile a single custom op
     header: code of op header, not path
@@ -554,11 +556,13 @@ def compile_custom_op(header, source, op_name, warp=True):
     m = compile_custom_ops([hname, ccname])
     return getattr(m, op_name)
 
+@lock.lock_scope()
 def compile_custom_ops(
     filenames, 
     extra_flags="", 
     return_module=False,
-    dlopen_flags=os.RTLD_GLOBAL | os.RTLD_NOW | os.RTLD_DEEPBIND):
+    dlopen_flags=os.RTLD_GLOBAL | os.RTLD_NOW | os.RTLD_DEEPBIND,
+    gen_name_ = ""):
     """Compile custom ops
     filenames: path of op source files, filenames must be
         pairs of xxx_xxx_op.cc and xxx_xxx_op.h, and the 
@@ -596,6 +600,8 @@ def compile_custom_ops(
     for name in srcs:
         assert name in headers, f"Header of op {name} not found"
     gen_name = "gen_ops_" + "_".join(headers.keys())
+    if gen_name_ != "":
+        gen_name = gen_name_
     if len(gen_name) > 100:
         gen_name = gen_name[:80] + "___hash" + str(hash(gen_name))
 
@@ -643,8 +649,10 @@ def compile_custom_ops(
     lib_path = os.path.join(cache_path, "custom_ops")
     if lib_path not in os.sys.path:
         os.sys.path.append(lib_path)
-    with jit_utils.import_scope(dlopen_flags):
-        exec(f"import {gen_name}")
+    # unlock scope when initialize
+    with lock.unlock_scope():
+        with jit_utils.import_scope(dlopen_flags):
+            exec(f"import {gen_name}")
     mod = locals()[gen_name]
     if return_module:
         return mod
@@ -800,6 +808,7 @@ dlopen_flags = os.RTLD_NOW | os.RTLD_GLOBAL | os.RTLD_DEEPBIND
 
 with jit_utils.import_scope(import_flags):
     jit_utils.try_import_jit_utils_core()
+
 jittor_path = find_jittor_path()
 check_debug_flags()
 
@@ -809,18 +818,29 @@ with jit_utils.import_scope(import_flags):
     jit_utils.try_import_jit_utils_core()
 
 python_path = sys.executable
-py3_config_path = sys.executable+"-config"
-assert os.path.isfile(python_path)
-if not os.path.isfile(py3_config_path) :
-    py3_config_path = sys.executable + '3-config'
+py3_config_paths = [
+    sys.executable + "-config",
+    os.path.dirname(sys.executable) + f"/python3.{sys.version_info.minor}-config",
+    f"/usr/bin/python3.{sys.version_info.minor}-config",
+    os.path.dirname(sys.executable) + "/python3-config",
+]
+if "python_config_path" in os.environ:
+    py3_config_paths.insert(0, os.environ["python_config_path"])
 
-assert os.path.isfile(py3_config_path)
+for py3_config_path in py3_config_paths:
+    if os.path.isfile(py3_config_path):
+        break
+else:
+    raise RuntimeError(f"python3.{sys.version_info.minor}-config "
+        "not found in {py3_config_paths}, please specify "
+        "enviroment variable 'python_config_path'")
 nvcc_path = env_or_try_find('nvcc_path', '/usr/local/cuda/bin/nvcc')
 gdb_path = try_find_exe('gdb')
 addr2line_path = try_find_exe('addr2line')
 has_pybt = check_pybt(gdb_path, python_path)
 
 cc_flags += " -Wall -Werror -Wno-unknown-pragmas -std=c++14 -fPIC -march=native "
+cc_flags += " -fdiagnostics-color=always "
 link_flags = " -lstdc++ -ldl -shared "
 core_link_flags = ""
 opt_flags = ""
@@ -868,6 +888,7 @@ if has_cuda:
         nvcc_flags = nvcc_flags.replace("-march", "-Xcompiler -march")
         nvcc_flags = nvcc_flags.replace("-Werror", "")
         nvcc_flags = nvcc_flags.replace("-fPIC", "-Xcompiler -fPIC")
+        nvcc_flags = nvcc_flags.replace("-fdiagnostics", "-Xcompiler -fdiagnostics")
         nvcc_flags += f" -x cu --cudart=shared -ccbin='{cc_path}' --use_fast_math "
         # nvcc warning is noise
         nvcc_flags += " -w "
@@ -887,14 +908,14 @@ with open(os.path.join(cache_path, "gen", "jit_op_maker.h"), 'w') as f:
     f.write(jit_src)
 cc_flags += f' -I{cache_path} '
 # gen pyjt
-pyjt_compiler.compile(cache_path, jittor_path)
+pyjt_gen_src = pyjt_compiler.compile(cache_path, jittor_path)
 
 # initialize order:
 # 1. registers
 # 2. generate source
 # 3. op_utils
 # 4. other
-files2 = run_cmd(f'find "{os.path.join(cache_path, "gen")}" | grep "cc$"').splitlines()
+files2 = pyjt_gen_src
 files4 = run_cmd('find -L src | grep "cc$"', jittor_path).splitlines()
 at_beginning = [
     "src/ops/op_utils.cc",
@@ -966,3 +987,5 @@ flags.jittor_path = jittor_path
 flags.gdb_path = gdb_path
 flags.addr2line_path = addr2line_path
 flags.has_pybt = has_pybt
+
+core.set_lock_path(lock.lock_path)

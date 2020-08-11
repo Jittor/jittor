@@ -13,10 +13,10 @@ namespace jittor {
 
 struct MklConvOp : Op {
     Var* x, * w, * y;
-    int stride, padding, dilation;
+    int stride, padding, dilation, groups;
     string xformat, wformat, yformat;
     /* MklConvOp: xformat abcd represents nchw */
-    MklConvOp(Var* x, Var* w, int stride, int padding, int dilation=1, string xformat="abcd", string wformat="oihw", string yformat="");
+    MklConvOp(Var* x, Var* w, int stride, int padding, int dilation=1, int groups=1, string xformat="abcd", string wformat="oihw", string yformat="");
     
     const char* name() const override { return "mkl_conv"; }
     void infer_shape() override;

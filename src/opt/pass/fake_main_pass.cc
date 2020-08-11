@@ -12,8 +12,9 @@ namespace jittor {
 
 void FakeMainPass::run() {
     // if this op is relayed, we don't run fake main pass
-    if (!pm->oc->op_exist(op->ops.at(0)))
-        return;
+    for (auto& o : op->ops)
+        if (!pm->oc->op_exist(o))
+            return;
 
     // TODO: fake_main only supported when compile_shapes
     if (!op->get_loop_option("jtune"))
@@ -74,6 +75,7 @@ void FakeMainPass::run() {
                     "ptr[0] = 0;\n"
                 "}\n"
             );
+            main->push_back("ArrayOp* op"+S(i)+"=((ArrayOp*)(ops["+S(i)+"]));");
         }
     }
     // fake vars

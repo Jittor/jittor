@@ -14,20 +14,21 @@ struct ConcatOp : Op {
     Var* y;
     int dim;
     /**
-    Concat Operator can concat a list of jt Var at a specfic dimension.
+    Concat Operator can concat a list of jt Var at a specfic dimension
+(WIP: this op don't have grad and working in progress, use jt.contrib.concat instead).
     
-    @param[in]	x   input var list for concat
+    * [in] x:   input var list for concat
 
-    @param[in]	dim concat which dim
+    * [in] dim: concat which dim
 
-    @param[out]	out  concat result
+    * [out] out:  concat result
 
-    Example
-    ```
-    jt.concat([jt.array([[1],[2]]), jt.array([[2],[2]])], dim=1)
-    # return [[1],[2],[2],[2]]
-    ```
+    Example::
+
+        jt.concat([jt.array([[1],[2]]), jt.array([[2],[2]])], dim=1)
+        # return [[1],[2],[2],[2]]
      */
+    // @pybind(WIP_concat)
     ConcatOp(vector<Var*>&& x, int dim=0);
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;
     void infer_shape() override;

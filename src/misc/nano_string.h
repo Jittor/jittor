@@ -12,9 +12,6 @@ namespace jittor {
 #define FOR_ALL_NS(m) \
 \
     m(void) \
-    m(float) \
-    m(double) \
-    m(int) \
     m(bool) \
     m(int8) \
     m(int16) \
@@ -63,6 +60,20 @@ namespace jittor {
     m(floor) \
     m(ceil) \
     m(cast) \
+    \
+    m(sin) \
+    m(asin) \
+    m(sinh) \
+    m(asinh) \
+    m(tan) \
+    m(atan) \
+    m(tanh) \
+    m(atanh) \
+    m(cos) \
+    m(acos) \
+    m(cosh) \
+    m(acosh) \
+    m(sigmoid) \
 
 struct NanoString;
 #define DECLEAR_NS(T) extern NanoString ns_##T;
@@ -115,13 +126,14 @@ struct NanoString {
     inline ns_t is_unary() const { return get(_type, _type_nbits)==_unary; }
 
     inline NanoString() {}
-    inline NanoString(const NanoString& other) : data(other.data) {}
     // @pyjt(__init__)
     inline NanoString(const char* s) {
         auto iter = __string_to_ns.find(s);
         ASSERT(iter != __string_to_ns.end()) << s;
         data = iter->second.data;
     }
+    // @pyjt(__init__)
+    inline NanoString(const NanoString& other) : data(other.data) {}
     inline NanoString(const string& s) : NanoString(s.c_str()) {}
     // @pyjt(__repr__)
     inline const char* to_cstring() const
@@ -144,7 +156,7 @@ NanoString dtype_infer(NanoString v1, NanoString v2, int force_type=0) {
         if (dsize==8) return ns_int64;
         if (dsize==4) return ns_int32;
         if (dsize==2) return ns_int16;
-        return ns_int8;
+        return v1;
     }
 }
 

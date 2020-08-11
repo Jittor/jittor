@@ -158,7 +158,7 @@ class TestParallelPass3(unittest.TestCase):
             src = f.read()
             for i in range(tdim):
                 assert f"tnum{i}" in src
-            assert f"tnum{tdim}" not in src
+            assert f"tnum{tdim}" not in src, f"tnum{tdim}"
             src_has_atomic = "atomic_add" in src or "atomicAdd" in src
             assert has_atomic == src_has_atomic
         assert np.allclose(a.data.sum(rdim), b), (b.sum(), a.data.sum())
@@ -176,7 +176,11 @@ class TestParallelPass3(unittest.TestCase):
         check(3, 1, 1, [0,1], 1)
         check(3, 1, 1, [0,1], 0, [0,0,2])
         check(3, 2, 2, [2], 0)
-        check(3, 2, 1, [1], 0)
+        if jt.flags.use_cuda:
+            # loop is not merged so parallel depth 2
+            check(3, 2, 2, [1], 1)
+        else:
+            check(3, 2, 1, [1], 0)
         check(3, 2, 2, [1], 1, merge=0)
         check(4, 2, 2, [2,3], 0)
         check(4, 2, 2, [0,3], 1)

@@ -32,28 +32,30 @@ struct ArgsortOp : Op {
 
         compare(y[0], y[1]) && compare(y[1], y[2]) && ...
 
-    @param[in]	x input var for sort
+    * [in] x: input var for sort
 
-    @param[in]	dim sort alone which dim
+    * [in] dim: sort alone which dim
 
-    @param[in]	dtype type of return indexes
+    * [in] descending:  the elements are sorted in descending order or not(default False).
 
-    @param[in]	key code for sorted key
+    * [in] dtype: type of return indexes
 
-    @param[in]	compare code for compare
+    * [out] index: index have the same size with sorted dim
 
-    @param[out]	index index have the same size with sorted dim
+    * [out] value: sorted value
 
-        
-    Example
-    ```
-    jt.sort([11,13,12])
-    # return [0,2,1]
-    jt.sort([11,13,12], key='-@x(i)')
-    # return [1,2,0]
-    jt.sort([11,13,12], key='@x(i)<@x(j)')
-    # return [0,2,1]
-    ```
+    
+    Example::
+
+            index, value = jt.argsort([11,13,12])
+            # return [0 2 1], [11 12 13]
+            index, value = jt.argsort([11,13,12], descending=True)
+            # return [1 2 0], [13 12 11]
+            index, value = jt.argsort([[11,13,12], [12,11,13]])
+            # return [[0 2 1],[1 0 2]],  [[11 12 13],[11 12 13]]
+            index, value = jt.argsort([[11,13,12], [12,11,13]], dim=0)
+            # return [[0 1 0],[1 0 1]],  [[11 11 12],[12 13 13]]
+
      */
     // @attrs(multiple_outputs)
     ArgsortOp(Var* x, int dim=-1, bool descending=false, NanoString dtype=ns_int32);

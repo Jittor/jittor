@@ -17,6 +17,7 @@ import math
 from jittor.pool import Pool, pool, AdaptiveAvgPool2d
 from jittor.optim import *
 
+
 def matmul_transpose(a, b):
     '''
     returns a * b^T
@@ -47,23 +48,79 @@ Example::
     b = jt.random((batch, m, k))
     c = nn.bmm(a, b)
     '''
-    assert len(a.shape) >= 2 and len(b.shape) >= 2
-    assert a.shape[-1] == b.shape[-2]
-    if jt.flags.use_cuda:
-        return jt.compile_extern.cublas_ops.cublas_batched_matmul(a, b, 0, 0)
-    shape = list(a.shape) + [b.shape[-1]]
-    a = a.broadcast(shape, [len(shape)-1])
-    b = b.broadcast(shape, [len(shape)-3])
-    return (a*b).sum(len(shape)-2)
+    assert len(a.shape) > 2 and len(b.shape) > 2
+    return matmul(a, b)
 
 def matmul(a, b):
-    assert len(a.shape) >= 2 and len(b.shape) == 2
-    assert a.shape[-1] == b.shape[-2]
+    ''' matrix multiply, 
 
-    shape = list(a.shape) + [b.shape[-1]]
-    a = a.broadcast(shape, [len(shape)-1])
-    b = b.broadcast(shape)
-    return (a*b).sum(len(shape)-2)
+Example::
+
+    a = jt.random([3])
+    b = jt.random([3])
+    c = jt.matmul(a, b)
+    assert c.shape == [1]
+
+    a = jt.random([3, 4])
+    b = jt.random([4])
+    c = jt.matmul(a, b)
+    assert c.shape == [3]
+
+    a = jt.random([10, 3, 4])
+    b = jt.random([4])
+    c = jt.matmul(a, b)
+    assert c.shape == [10, 3]
+
+    a = jt.random([10, 3, 4])
+    b = jt.random([4, 5])
+    c = jt.matmul(a, b)
+    assert c.shape == [10, 3, 5]
+
+    a = jt.random([10, 3, 4])
+    b = jt.random([10, 4, 5])
+    c = jt.matmul(a, b)
+    assert c.shape == [10, 3, 5]
+
+    a = jt.random([8, 1, 3, 4])
+    b = jt.random([10, 4, 5])
+    c = jt.matmul(a, b)
+    assert c.shape == [8, 10, 3, 5]
+    '''
+    len_a = len(a.shape)
+    len_b = len(b.shape)
+    if len_b == 1:
+        # a: [n, m], b:[m], c:[n]
+        return (a*b).sum(-1)
+    if len_a == 1:
+        # a: [n], b:[n,k], c:[k]
+        return (a.broadcast(b, [-1]) * b).sum(0)
+    if len_a>=3 and len_a==len_b:
+        # bmm
+        # a: [..., n, m], b: [..., m, k], c:[..., n, k]
+        if jt.flags.use_cuda:
+            return jt.compile_extern.cublas_ops.cublas_batched_matmul(a, b, 0, 0)
+    shape = []
+    len_c = max(len_a, len_b)
+    (n, m), (m_, k) = a.shape[-2:], b.shape[-2:]
+    assert m == m_, f"dimension not match, a.shape:{a.shape}, b.shape:{a.shape}"
+    # a: [..., n, m]
+    # b: [..., m, k]
+    # cc:[..., n, m, k]
+    #     -->
+    #     012
+    for i in range(len_c-2):
+        ai = len_a-(len_c-i)
+        bi = len_b-(len_c-i)
+        an = a.shape[ai] if ai>=0 else 1
+        bn = b.shape[bi] if bi>=0 else 1
+        if an!=1 and bn!=1:
+            assert an == bn, f"dimension not match, a.shape:{a.shape}, b.shape:{a.shape}"
+        cn = max(an, bn)
+        shape.append(cn)
+    shape.extend([n, m, k])
+    a = a.broadcast(shape, [-1])
+    b = b.broadcast(shape, [-3])
+    return (a*b).sum(-2)
 jt.Var.matmul = jt.Var.__matmul__ = matmul
 jt.Var.__imatmul__ = lambda a,b: a.assign(matmul(a,b))
 
@@ -290,6 +347,30 @@ class InstanceNorm2d(Module):
         b = self.bias.broadcast(x, [0,2,3])
         return norm_x * w + b
 
+class GroupNorm(Module):
+    def __init__(self, num_groups, num_channels, eps=1e-05, affine=None, is_train=True):
+        assert affine == None
+        self.num_groups = num_groups
+        self.num_channels = num_channels
+        self.eps = eps
+        self.weight = init.constant((num_channels,), "float32", 1.0)
+        self.bias = init.constant((num_channels,), "float32", 0.0)
+
+    def execute(self, x):
+        N,C,H,W = x.shape
+        assert C == self.num_channels
+        assert C % self.num_groups == 0
+        x_ = x.reindex([N, int(C/self.num_groups), self.num_groups, H, W], [
+            "i0", f"i2*{C/self.num_groups}+i1", "i3", "i4"
+        ])
+        xmean = jt.mean(x_, dims=[1,3,4], keepdims=1).reindex(x.shape, ["i0", "0", f"i1/({C}/{self.num_groups})","0", "0"])
+        x2mean = jt.mean(x_*x_, dims=[1,3,4], keepdims=1).reindex(x.shape, ["i0", "0", f"i1/({C}/{self.num_groups})","0", "0"])
+        xvar = jt.maximum(x2mean-xmean*xmean, 0)
+        norm_x = (x-xmean)/jt.sqrt(xvar+self.eps)
+        w = self.weight.broadcast(x, [0,2,3])
+        b = self.bias.broadcast(x, [0,2,3])
+        return norm_x * w + b
+
 Relu = jt.make_module(relu)
 ReLU = Relu
 Leaky_relu = jt.make_module(leaky_relu, 2)
@@ -492,8 +573,15 @@ class ConstantPad2d(Module):
         self.value = value
 
     def execute(self, x):
-        n,c,h,w = x.shape
-        return x.reindex([n,c,h+self.pt+self.pb,w+self.pl+self.pr], ["i0","i1",f"i2-{self.pt}",f"i3-{self.pl}"], overflow_value=self.value)
+        assert len(x.shape) >= 2
+        shape = x.shape
+        tar_shape = shape[0:-2] + [shape[-2]+self.pt+self.pb,shape[-1]+self.pl+self.pr]
+        tar_dims = []
+        for i in range(len(shape)-2):
+            tar_dims.append(f"i{i}")
+        tar_dims.append(f"i{i+1}-{self.pt}")
+        tar_dims.append(f"i{i+2}-{self.pl}")
+        return x.reindex(tar_shape, tar_dims, overflow_value=self.value)
 
 class ReplicationPad2d(Module):
     def __init__(self, padding):
@@ -558,6 +646,23 @@ class Sigmoid(Module):
     def execute(self, x) :
         return x.sigmoid()
 
+class Softplus(Module):
+    r'''
+    SoftPlus is a smooth approximation to the ReLU function and can be used to constrain the output of a machine to always be positive.
+
+    Args:
+        
+        [in] beta (float): the beta value for the Softplus formulation. Default: 1.
+
+        [in] threshold (float): values above this revert to a linear function. Default: 20.
+    '''
+    def __init__(self, beta=1, threshold=20):
+        self.beta = beta
+        self.threshold = threshold
+
+    def execute(self, x):
+        return 1 / self.beta * jt.log(1 + (self.beta * x).exp())
+
 class Resize(Module):
     def __init__(self, size, mode="nearest", align_corners=False):
         super().__init__()
@@ -610,6 +715,52 @@ def upsample(img, size, mode="nearest", align_corners=False):
         x = hid * (h / H)
         y = wid * (w / W)
     return _interpolate(img, x, y, (nid,cid), mode)
+
+def grid_sample(input, grid, mode='bilinear', padding_mode='zeros'):
+    r'''
+    Given an input and a flow-field grid, computes the output using input values and pixel locations from grid.
+
+    grid specifies the sampling pixel locations normalized by the input spatial dimensions. Therefore, it should have most values in the range of [-1, 1]. For example, values x = -1, y = -1 is the left-top pixel of input, and values x = 1, y = 1 is the right-bottom pixel of input.
+
+    Args:
+
+        [in] input (var): the source input var, whose shape is (N, C, Hi, Wi)
+
+        [in] grid (var): the pixel locations, whose shape is (N, Ho, Wo, 2)
+
+        [in] mode (string): the interpolate way, default: bilinear.
+
+        [in] padding_mode (string): the padding way, default: zeros.
+        
+        [out] output (var): the output var, whose shape is (N, C, Ho, Wo)
+
+    Example:
+
+        >>> x = jt.array([[[[1,2],[3,4]]]])
+
+        >>> print(x)
+        [[[[1 2]
+        [3 4]]]] 
+
+        >>> grid = jt.array([[[[0.5, 0.5]]]])
+        
+        >>> print(x.shape, grid.shape)
+        [1,1,2,2,], [1,1,2,2,]
+
+        >>> nn.grid_sample(x, grid)
+        [[[[3.25]]]]
+    '''
+    assert padding_mode == 'zeros'
+    Ni, Ci, Hi, Wi = input.shape
+    No, Ho, Wo, D = grid.shape
+    assert D == 2
+    assert Ni == No
+    assert len(input.shape) == 4 and len(grid.shape)
+
+    nid, cid, hid, wid = jt.index((Ni,Ci,Ho,Wo))
+    x = ((grid[:,:,:,1].unsqueeze(1).repeat([1,Ci,1,1]) + 1) / 2) * (Hi - 1)
+    y = ((grid[:,:,:,0].unsqueeze(1).repeat([1,Ci,1,1]) + 1) / 2) * (Wi - 1)
+    return _interpolate(input, x, y, (nid,cid), mode)
 
 class Upsample(Module):
     def __init__(self, scale_factor=None, mode='nearest'):

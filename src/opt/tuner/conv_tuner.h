@@ -16,7 +16,6 @@ namespace jittor {
 struct ConvTuner : Tuner {
     ConvTuner() : Tuner("conv") {}
     void forwardTune(FusedOp* fop);
-    void backwardTune(FusedOp* fop);
     void run(PassManager* pm, TunerManager* tm);
 };
 

@@ -14,10 +14,10 @@ namespace jittor {
 
 struct CubArgReduceOp : Op {
     Var* x, * offsets, * y, * y_key;
-    string op;
+    NanoString op;
     bool keepdims;
     // @attrs(multiple_outputs)
-    CubArgReduceOp(Var* x, Var* offsets, string op, bool keepdims);
+    CubArgReduceOp(Var* x, Var* offsets, NanoString op, bool keepdims);
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;
     void infer_shape() override;
     

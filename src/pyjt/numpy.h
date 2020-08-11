@@ -76,12 +76,12 @@ inline int get_typenum(NanoString ns) {
     if (ns == ns_uint8) return 2;
     if (ns == ns_int16) return 3;
     if (ns == ns_uint16) return 4;
-    if (ns == ns_int32 || ns == ns_int) return 5;
+    if (ns == ns_int32) return 5;
     if (ns == ns_uint32) return 6;
     if (ns == ns_int64) return 7;
     if (ns == ns_uint64) return 8;
-    if (ns == ns_float32 || ns == ns_float) return 11;
-    if (ns == ns_float64 || ns == ns_double) return 12;
+    if (ns == ns_float32) return 11;
+    if (ns == ns_float64) return 12;
     LOGf << ns;
     return -1;
 }
@@ -92,11 +92,14 @@ extern unordered_map<string, int> np_typenum_map;
 
 extern void** PyArray_API;
 extern PyTypeObject *PyArray_Type;
+extern PyTypeObject *PyNumberArrType_Type;
 extern PyTypeObject *PyArrayDescr_Type;
 extern PyObject* (*PyArray_New)(PyTypeObject *, int, npy_intp const *, int, npy_intp const *, void *, int, int, PyObject *);
 extern PyObject* (*PyArray_FromAny)(PyObject *, PyArrayDescr_Proxy *, int, int, int, PyObject *);
 extern unsigned int (*PyArray_GetNDArrayCFeatureVersion)();
 extern int (*PyArray_SetBaseObject)(PyObject *arr, PyObject *obj);
+extern PyObject* (*PyArray_NewCopy)(PyObject *, int);
+#define PyArray_Copy(obj) PyArray_NewCopy(obj, 0)
 
 #define NPY_ARRAY_ALIGNED         0x0100
 #define NPY_ARRAY_WRITEABLE       0x0400
@@ -126,6 +129,7 @@ inline int64 PyArray_Size(PyArray_Proxy* arr) {
 union tmp_data_t {
     int32 i32;
     float32 f32;
+    int8 i8;
 };
 
 extern tmp_data_t tmp_data;

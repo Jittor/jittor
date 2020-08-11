@@ -1,7 +1,7 @@
 error_msg = "Jittor only supports Ubuntu>=16.04 currently."
 
 try:
-    with open("/etc/os-release") as f:
+    with open("/etc/os-release", "r", encoding='utf8') as f:
         s = f.read().splitlines()
         m = {}
         for line in s:
@@ -16,12 +16,20 @@ from setuptools import setup, find_packages
 import os
 
 path = os.path.dirname(__file__)
-with open(os.path.join(path, "README.src.md")) as fh:
+with open(os.path.join(path, "README.md"), "r", encoding='utf8') as fh:
     long_description = fh.read()
+
+with open(os.path.join(path, "python/jittor/__init__.py"), "r", encoding='utf8') as fh:
+    for line in fh:
+        if line.startswith('__version__'):
+            version = line.split("'")[1]
+            break
+    else:
+        raise RuntimeError("Unable to find version string.")
 
 setuptools.setup(
     name='jittor',  
-    version='1.0.0',
+    version=version,
     # scripts=[],
     author="Jittor Group",
     author_email="ran.donglang@gmail.com",
@@ -44,3 +52,6 @@ setuptools.setup(
         "astunparse",
     ],
  )
+
+# upload to pip:
+# rm -rf dist && python3.7 ./setup.py sdist && python3.7 -m twine upload dist/*

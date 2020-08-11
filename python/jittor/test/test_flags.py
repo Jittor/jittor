@@ -21,7 +21,7 @@ class TestFlags(unittest.TestCase):
     
     def test_scope(self):
         prev = jt.flags.log_v
-        with jt.var_scope(log_v=1):
+        with jt.flag_scope(log_v=1):
             assert jt.flags.log_v == 1
         assert jt.flags.log_v == prev
 

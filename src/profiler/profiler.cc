@@ -137,11 +137,16 @@ vector<vector<string>> Profiler::report(const string& sort_key) {
         if (rep[0][sort_key_id] == sort_key)
             break;
     ASSERT(sort_key_id<(int)rep[0].size()) << "Key not supported:" << sort_key;
+    double total_time = 0;
     for (auto& kv : profiler.records) {
         names.push_back(kv.first);
         fnames.push_back(Op::get_filename_from_jit_key(kv.first, ".cc"));
         auto& kinfo = kv.second;
         order.push_back(order.size());
+        // do not count relay op time
+        if (kv.first.find("relay") == string::npos) {
+            total_time += kinfo.time_total;
+        }
         info.push_back({
             (double)kinfo.count, // Count
             (double)kinfo.time_total, // TotalTime
@@ -153,9 +158,9 @@ vector<vector<string>> Profiler::report(const string& sort_key) {
             (double)kinfo.compute_total*1e9 / kinfo.time_total, // Compute
         });
     }
-    if (sort_key_id)
+    if (sort_key_id>=2)
         std::sort(order.begin(), order.end(), [&](int i, int j) {
-            return info[i][sort_key_id-1] > info[j][sort_key_id-1];
+            return info[i][sort_key_id-2] > info[j][sort_key_id-2];
         });
     else
         std::sort(order.begin(), order.end(), [&](int i, int j) {
@@ -165,8 +170,11 @@ vector<vector<string>> Profiler::report(const string& sort_key) {
     ss << "Profile result, sorted by " << sort_key << "\n"
         << "('it/s' represent number of iterations per sec)\n";
     uint w = 10, p=3;
-    for (auto& s : rep[0])
+    for (auto& s : rep[0]) {
         ss << std::setw(w) << s;
+        if (s == "TotalTime")
+            ss << std::setw(w) << "%,cum%";
+    }
     ss << '\n';
     auto output_float = [&](const string& scale, int base, const string& suffix, double k) {
         ss << ' ' << std::setw(w-2-suffix.size());
@@ -179,6 +187,10 @@ vector<vector<string>> Profiler::report(const string& sort_key) {
         ss << k << scale[i];
         ss << suffix;
     };
+    ss << "Total time:";
+    output_float("num ", 1000, "s", total_time);
+    ss << '\n';
+    double cum_time = 0;
     for (auto i : order) {
         auto& name = names[i];
         auto& fname = fnames[i];
@@ -196,6 +208,17 @@ vector<vector<string>> Profiler::report(const string& sort_key) {
             else if (j<=4) {
                 // output time
                 output_float("num ", 1000, "s", k);
+                // output total ratio
+                if (j == 1) {
+                    // do not count relay op time
+                    if (name.find("relay") != string::npos)
+                        k = 0;
+                    cum_time += k;
+                    ss << '(' << std::setw(3)
+                        << std::setprecision(p) << k / total_time * 100 << "%,"
+                        << std::setw(3)
+                        << std::setprecision(p) << cum_time / total_time * 100 << "%)";
+                }
             } else if (j<=6) {
                 // output thoughtput
                 output_float(" KMG", 1024, "B/s", k);

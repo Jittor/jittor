@@ -14,6 +14,9 @@
 namespace jittor {
 
 extern cudnnHandle_t cudnn_handle;
-constexpr int max_cache_size=100;
+extern int max_cache_size;
+
+// @pyjt(set_algorithm_cache_size)
+void set_algorithm_cache_size(int size);
 
 } // jittor

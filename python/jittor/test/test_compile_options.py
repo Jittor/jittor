@@ -18,7 +18,7 @@ class TestCompileOptions(unittest.TestCase):
         assert a.compile_options=={"compile_shapes":1}
         b = a+a
         assert b.compile_options=={}
-        with jt.var_scope(compile_options={"compile_shapes":1}):
+        with jt.flag_scope(compile_options={"compile_shapes":1}):
             c = a+b
         assert c.compile_options=={"compile_shapes":1}
         with jt.profile_scope() as report:

@@ -76,20 +76,35 @@ for i,(x,y) in enumerate(get_data(n)):
 
 ## 安装
 
+我们提供了Docker安装方式，免去您配置环境，Docker安装方法如下：
+
+
+```
+# CPU only
+docker run -it --network host jittor/jittor
+# CPU and CUDA
+docker run -it --network host jittor/jittor-cuda
+```
+
+关于Docker安装的详细教程，可以参考[Windows/Mac/Linux通过Docker安装计图](https://cg.cs.tsinghua.edu.cn/jittor/tutorial/2020-5-15-00-00-docker/)
+
 
 Jittor使用Python和C++编写。 它需要用于即时编译的编译器。当前，我们支持三种编译器：
 
 * CPU 编译器 （需要下列至少一个）
     - g++ （>=5.4.0）
-    - clang （>=8.0）推荐
+    - clang （>=8.0）
 * GPU 编译器（可选）
-    - nvcc（>=10.0）
+    - nvcc (>=10.0 for g++ 或者 >=10.2 for clang)
 
 Jittor的环境要求如下:
 
-* 操作系统: Ubuntu >= 16.04
+* 操作系统: **Ubuntu** >= 16.04 (or **Windows** Subsystem of Linux)
 * Python版本 >= 3.7
 * C++编译器（g++ or clang）
+
+注意：目前Jittor通过WSL的方式在Windows操作系统上运行，WSL的安装方法请参考[微软官网](https://docs.microsoft.com/en-us/windows/wsl/install-win10)，目前WSL尚不支持CUDA。
+
 
 
 
@@ -105,10 +120,6 @@ Jittor 一共提供三种方式安装: pip安装, 一键脚本安装 和 手动�
 ```bash
 sudo apt install python3.7-dev libomp-dev
 sudo python3.7 -m pip install git+https://github.com/Jittor/jittor.git
-# if you cannot access github, please download code from our website:
-#     wget https://cg.cs.tsinghua.edu.cn/jittor/assets/build/jittor.tgz
-#     mkdir -p jittor && tar -xvf ./jittor.tgz -C jittor
-#     sudo pip install ./jittor
 python3.7 -m jittor.test.test_example
 ```
 
@@ -152,7 +163,7 @@ wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.
 sudo apt install g++ build-essential libomp-dev
 
 # OR clang++-8
-wget -O - https://apt.llvm.org/llvm.sh > /tmp/llvm.sh
+wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install_llvm.sh > /tmp/llvm.sh
 bash /tmp/llvm.sh 8
 ```
 
@@ -169,7 +180,7 @@ sudo apt install python3.7 python3.7-dev
 ### 步骤三：运行Jittor
 
 
-整个框架是及时编译的。 让我们通过pip安装jittor
+整个框架是即时编译的。 让我们通过pip安装jittor
 
 ```bash
 git clone https://github.com/Jittor/jittor.git

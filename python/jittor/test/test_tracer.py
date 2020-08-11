@@ -12,7 +12,7 @@ class TestTracer(unittest.TestCase):
 
         # force use addr2line
         jt.flags.gdb_path = ""
-        with jt.var_scope(gdb_path=""):
+        with jt.flag_scope(gdb_path=""):
             jt.print_trace()
 
 

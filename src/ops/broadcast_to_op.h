@@ -13,14 +13,14 @@ struct BroadcastToOp : Op {
     Var* x, * y, * z;
     NanoVector shape;
     uint16 bcast_mask;
-    bool keepdims;
+    uint16 keepdims_mask;
 
     // @pybind(broadcast)
     BroadcastToOp(Var* x, NanoVector shape, NanoVector dims=NanoVector());
     // @pybind(broadcast,broadcast_var)
     BroadcastToOp(Var* x, Var* y, NanoVector dims=NanoVector());
     // @pybind(None)
-    BroadcastToOp(Var* x, Var* y, uint dims_mask);
+    BroadcastToOp(Var* x, Var* y, uint dims_mask, uint keepdims_mask);
 
     bool need_broadcast(const Var* x, const NanoVector& shape);
     

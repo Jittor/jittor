@@ -14,6 +14,8 @@
 #include "misc/str_utils.h"
 #include "ops/op_register.h"
 #include "ops/array_op.h"
+#include "lock.h"
+#include "opt/expr.h"
 
 namespace jittor {
 
@@ -103,48 +105,6 @@ int OpCompiler::total_member_count() {
     return member_count;
 }
 
-#define FOR_ALL_UOPS(m) \
-    m(!,3) m(~,3)
-#define FOR_ALL_BOPS(m) \
-    m(*,5) m(/,5) m(%,5) \
-    m(+,6) m(-,6) \
-    m(<<,7) m(>>,7) \
-    m(<,9) m(<=,9) m(>,9) m(>=,9) \
-    m(!=,10) m(==,10) \
-    m(&,11) \
-    m(^,12) \
-    m(|,13) \
-    m(&&,14) \
-    m(||,15)
-    
-#define FOR_ALL_OPS(m) FOR_ALL_UOPS(m) FOR_ALL_BOPS(m)
-
-inline bool is_unary_op(const string& op) {
-    #define _u(o, _) if (op == #o) return true;
-    FOR_ALL_UOPS(_u);
-    return false;
-}
-
-inline int precedence(const string& op) {
-    #define _prior(o, p) if (op == #o) return p;
-    FOR_ALL_OPS(_prior);
-    return 20;
-}
-
-inline bool check_precedence(const string& op1, const string& op2) {
-    if (op1 == op2 && is_unary_op(op1)) return false;
-    return precedence(op1) <= precedence(op2);
-}
-
-inline int64_t calc_op(int64_t a, int64_t b, const string& op) {
-    #define _calc_b(o, _) if (op == #o) return a o b;
-    FOR_ALL_BOPS(_calc_b);
-    #define _calc_u(o, _) if (op == #o) return o b;
-    FOR_ALL_UOPS(_calc_u);
-    ASSERT(0) << "Unrecognized op " << op;
-    return 0;
-}
-
 int64_t OpCompiler::eval(const string& expr, const unordered_map<string,string>& vars) {
     if (expr.find("@") != string::npos) {
         string new_expr;
@@ -165,15 +125,36 @@ int64_t OpCompiler::eval(const string& expr, const unordered_map<string,string>&
                             presum++;
                         k++;
                     }
-                    ASSERT(presum==0) << "Jit error: braces are not matched.";
+                    CHECK(presum==0) << "Jit error: braces are not matched.";
                     new_expr += S(eval(expr.substr(j+1, k-j-2), vars));
                     i = k-1;
                     continue;
                 } else {
+                    if (expr[j] == '@') {
+                        // syntax @@
+                        i = j;
+                        continue;
+                    }
                     // syntax: @x
-                    ASSERT(isvar(expr[j]));
+                    CHECK(isvar(expr[j])) << expr[j] << "is not var";
                     size_t k=j+1;
                     while (k<expr.size() && isvar(expr[k])) k++;
+                    if (k<expr.size() && expr[k]=='(') {
+                        // syntax @xx(...)
+                        //        ij k    l
+                        size_t l=k+1;
+                        int presum = 1;
+                        while (l<expr.size() && presum) {
+                            if (expr[l] == ')')
+                                presum--;
+                            else if (expr[l] == '(')
+                                presum++;
+                            l++;
+                        }
+                        new_expr += precompile(vars, expr.substr(i, l-i));
+                        i = l-1;
+                        continue;
+                    }
                     string var = expr.substr(j, k-j);
                     auto iter = vars.find(var);
                     ASSERT(iter!=vars.end()) << "Jit var " << var << " not found." << vars;
@@ -184,68 +165,18 @@ int64_t OpCompiler::eval(const string& expr, const unordered_map<string,string>&
         }
         return eval(new_expr, vars);
     }
-    vector<int64> values = {0};
-    vector<string> ops;
-    auto pop_values_and_calc_op = [&]() {
-        CHECK(ops.size());
-        auto op = ops.back();
-        ops.pop_back();
-        CHECK(values.size());
-        auto val2 = values.back();
-        values.pop_back();
-        auto val1 = val2;
-        if (!is_unary_op(op)) {
-            CHECK(values.size());
-            val1 = values.back();
-            values.pop_back();
+    auto e = expr::make(expr);
+    e->dfs([&](expr::Expr* s) {
+        if (s->is_sym()) {
+            auto iter = vars.find(s->str);
+            ASSERT(iter!=vars.end()) << "Jit var " << s->str << " not found.";
+            auto e = expr::make(iter->second);
+            s->swap(e.get());
         }
-        values.push_back(calc_op(val1, val2, op));
-    };
-    for (size_t i=0; i<expr.size(); i++) {
-        if (expr[i] == ' ')
-            continue;
-        if (expr[i] == '(')
-            ops.push_back(string()+expr[i]);
-        else if (isdigit(expr[i])) {
-            int64_t val = 0;
-            while (i<expr.length() && isdigit(expr[i])) {
-                val = val*10 + (expr[i]-'0');
-                i++;
-            }
-            i--;
-            values.push_back(val);
-        } else if (isvar(expr[i])) {
-            auto j=i+1;
-            while (j<expr.size() && isvar(expr[j])) j++;
-            auto var_name = expr.substr(i,j-i);
-            auto iter = vars.find(var_name);
-            ASSERT(iter!=vars.end()) << "Jit var " << var_name << " not found.";
-            try {
-                values.push_back(std::stoll(iter->second));
-            } catch (...) {
-                ASSERT(0) << "'" << iter->second << "' is not integer, expr " << expr;
-            }
-            i = j-1;
-        } else if (expr[i] == ')') {
-            while (ops.size() && ops.back() != "(")
-                pop_values_and_calc_op();
-            ops.pop_back();
-        } else {
-            auto j=i+1;
-            while (j<expr.size() && expr[j] != ' ' && 
-                expr[j] != '!' && expr[j] != '~' && 
-                !isdigit(expr[j]) && !isvar(expr[j]) && 
-                expr[j] != '(' && expr[j] != ')') j++;
-            auto op = expr.substr(i, j-i);
-            while (ops.size() && check_precedence(ops.back(), op))
-                pop_values_and_calc_op();
-            ops.push_back(op);
-            i = j-1;
-        }
-    }
-    while (ops.size())
-        pop_values_and_calc_op();
-    return values.back();
+    });
+    e = e->eval();
+    ASSERT(e->is(expr::_int));
+    return e->as_int();
 }
 
 void load_macros(const string& src, unordered_map<string,string>& macros) {
@@ -274,7 +205,9 @@ void load_macros(const string& src, unordered_map<string,string>& macros) {
             auto r=k;
             while (r<l && src[r] != '(') r++;
             auto body = q>p ? src.substr(p,q-p) : "";
-            body = (r<l?src.substr(r,l-r):"()") + body;
+            auto args = "<"+ (r+1<l?src.substr(r+1,l-r-2):"") + ">";
+            // header <args>body
+            body = args + body;
             auto header = src.substr(k,r-k);
             LOGvvvv << "header:" << header << "body:" << body;
             macros[header] = body;
@@ -285,9 +218,13 @@ void load_macros(const string& src, unordered_map<string,string>& macros) {
 
 void expand_macro(const string& macro, const vector<string>& args, string& new_src) {
     LOGvvvv << "expand_macro" << macro << "args:" << args;
-    auto i = macro.find(")");
+    if (macro.size() == 0 || macro[0] != '<') {
+        new_src += macro;
+        return;
+    }
+    auto i = macro.find(">");
     ASSERT(i != string::npos);
-    // (a1, a2, ...)body
+    // <a1, a2, ...>body
     //  j k        i
     unordered_map<string, int> args_map;
     for (uint j=1, l=0; j<i; l++) {
@@ -447,7 +384,7 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                         presum++;
                     k++;
                 }
-                ASSERT(presum==0) << "Jit error: braces are not matched.";
+                CHECK(presum==0) << "Jit error: braces are not matched.";
                 new_src += S(OpCompiler::eval(src.substr(j+1, k-j-2), defs));
                 i = k-1;
                 continue;
@@ -463,7 +400,7 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                         presum++;
                     k++;
                 }
-                ASSERT(presum==0) << "Jit error: braces are not matched.";
+                CHECK(presum==0) << "Jit error: braces are not matched.";
                 new_src += precompile(defs, src.substr(j+1, k-j-2), macros);
                 i = k-1;
                 continue;
@@ -488,7 +425,7 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                             comma.push_back(l);
                         l++;
                     }
-                    ASSERT(presum==0) << "Jit error: braces are not matched.";
+                    CHECK(presum==0) << "Jit error: braces are not matched.";
                     comma.push_back(l-1);
                     for (uint i=0; i+1<comma.size(); i++)
                         args.push_back(src.substr(comma[i]+1, comma[i+1]-comma[i]-1));
@@ -587,27 +524,89 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                     i = l-1;
                     continue;
                 } else
+                if (expr == "strcmp") {
+                    // syntax: @strcmp(s1,s2)
+                    //         ij     k      l
+                    CHECK(args.size()==2u)
+                        << "Jit error: strcmp wrong arguments.";
+                    auto s1 = precompile(defs, args[0], macros);
+                    auto s2 = precompile(defs, args[1], macros);
+                    if (s1<s2) new_src += "-1"; else
+                    if (s1==s2) new_src += "0"; else
+                        new_src += "1";
+                    i = l-1;
+                    continue;
+                } else
+                if (expr == "alias") {
+                    // syntax: @alias(s1,s2)
+                    //         ij    k     l
+
+                    // alias(a,b)
+                    // a->b
+                    // a_type->b_type
+                    // a_dim -> b_dim
+                    // for i in a_dim:
+                    //   a_shapei -> b_shapei
+                    //   a_stridei -> b_stridei
+                    CHECK(args.size()==2u)
+                        << "Jit error: alias wrong arguments.";
+                    auto key = strip(precompile(defs, args[0], macros));
+                    auto value = strip(precompile(defs, args[1], macros));
+                    CHECK(defs.count(value+"_dim")) << '"' >> value >> '"' << "not exsit";
+                    int dim = std::stoi(defs.at(value+"_dim"));
+                    vector<string> keys = {"", "p", "dim", "type"};
+                    for (int i=0; i<dim; i++) {
+                        keys.push_back("stride"+S(i));
+                        keys.push_back("shape"+S(i));
+                    }
+                    new_src += '\n';
+                    for (auto& s : keys) {
+                        string from = value+"_"+s;
+                        string to = key+"_"+s;
+                        if (!s.size()) {
+                            from = value;
+                            to = key;
+                        }
+                        if (defs.count(from))
+                            from = defs.at(from);
+                        else if (macros.count(from))
+                            from = macros.at(from);
+                        defs[to] = from;
+                        macros[to] = from;
+                        new_src += "#define "+to+" "+from+"\n";
+                    }
+                    i = l-1;
+                    continue;
+                } else
                 if (args.size()) {
-                    // syntax: @e0(i0,i1,...,in) -> e0p[i0*e0stride0+i1*e0stride1+...]
+                    // syntax: @e0(i0,i1,...,in) -> e0_p[i0*e0_stride0+i1*e0_stride1+...]
+                    ASSERT(expr.size());
+
                     int nid=(int)expr.size();
                     while (nid && isdigit(expr[nid-1])) nid--;
-                    // xyz123 ---> prefix: xxx; suffix: 123
                     string prefix = expr.substr(0, nid);
                     string suffix = expr.substr(nid);
-                    string up_prefix = prefix;
-                    for (auto& c : up_prefix)
-                        if (c>='a' && c<='z') c = c-'a'+'A';
-                    string dim = up_prefix + "DIM" + suffix;
-                    if (prefix == "e") prefix = "extras";
-                    ASSERT(defs.count(dim)) << dim;
-                    ASSERTop(defs.at(dim),==,S(args.size()));
-                    expr = prefix + suffix; // e0 ->extras0
+                    string dim;
+                    if (expr == "x" && defs.count("XDIM")) {
+                        dim = "XDIM";
+                        prefix = "x";
+                    } else
+                    if (prefix == "e") {
+                        // TODO: unify interface
+                        prefix = "extras" + suffix;
+                        dim = "EDIM" + suffix;
+                    } else {
+                        prefix = expr+"_";
+                        dim = prefix + "dim";
+                    }
+                    CHECK(macros.count(dim)) << expr << "not exsit" << macros;
+                    CHECKop(macros.at(dim),==,S(args.size())) << expr << "dimension not matched";
                     std::stringstream ss;
-                    ss << expr << "p[";
+                    ss << prefix << "p[";
                     for (uint ii=0; ii<args.size(); ii++) {
                         string arg = precompile(defs, args[ii], macros);
                         if (ii) ss << "+";
-                        ss << '(' << arg << ")*" << expr << "stride" << ii;
+                        ss << '(' << arg << ")*" << prefix << "stride" << ii;
                     }
                     ss << ']';
                     new_src += ss.str();
@@ -629,10 +628,10 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
         } else
             new_src += src[i];
         } catch (std::exception& e) {
-            uint il = i, ir = i;
-            while (il && src[il] != '\n') il--;
-            while (ir<src.size() && src[ir] != '\n') ir++;
-            string this_line = src.substr(il+1, ir-il-1);
+            int il = i, ir = i;
+            while (il>0 && src[il-1] != '\n') il--;
+            while (ir+1<src.size() && src[ir+1] != '\n') ir++;
+            string this_line = src.substr(il, ir-il+1);
             LOGf << e.what() >> "\nJit compiler error:\n" >> this_line;
         }
     }
@@ -640,7 +639,7 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
 }
 
 string OpCompiler::precompile(const unordered_map<string,string>& defs, const string& src) {
-    unordered_map<string, string> macros;
+    unordered_map<string, string> macros = defs;
     return jittor::precompile(defs, src, macros);
 }
 
@@ -661,6 +660,10 @@ string OpCompiler::get_jit_src(Op* op) {
     string after_include_src = "";
     auto jit_define = op->get_jit_define();
     for (auto &t : jit_define) {
+        // don't add CODE in define
+        // this allowed comment exsit in CODE
+        if (t.first == "CODE" || t.first == "HEADER")
+            continue;
         string src = "#define " + t.first + " ";
         for (char c : t.second) {
             if (c=='\n') src += '\\';
@@ -672,7 +675,7 @@ string OpCompiler::get_jit_src(Op* op) {
         else
             after_include_src += src;
     }
-    ASSERT(file_exist(src_path));
+    ASSERT(file_exist(src_path)) << src_path;
     LOGvvv << "Read from" << src_path; 
     string src = read_all(src_path);
     ASSERT(src.size()) << "Source read failed:" << src_path;
@@ -755,7 +758,7 @@ string OpCompiler::__get_fused_src(
         "for", "const", "auto", "get_random_engine",
         "int", "float", "bool", "CHECK", "STRINGIZE",
         "void", "__restrict__", "if", "true", "false",
-        "Op", "Var", "Node", "itof"
+        "Op", "Var", "Node", "itof", "assert", "ASSERT"
     };
     auto not_change = [&](const string& s) -> bool {
         if (unchanged.count(s)) return true;
@@ -859,7 +862,7 @@ string OpCompiler::__get_fused_src(
                     presum++;
                 k++;
             }
-            ASSERT(presum==0) << "Jit error: braces are not matched.";
+            CHECK(presum==0) << "Jit error: braces are not matched.";
             for (;j < k-2; j++) {
                 if (isvar(src[j])) {
                     uint l=j;
@@ -911,7 +914,9 @@ string OpCompiler::__get_fused_src(
     fused_kernel = fused_kernel_args + "\n" + fused_kernel;
     LOGvvvv << "Fused kernel:\n" >> fused_kernel;
     
-    auto fused_src = fused_begin + fused_includes + "\n#include \"fused_op.h\"\n" + 
+    auto fused_src = fused_begin + fused_includes +
+        "\n#include <assert.h>\n" + 
+        "\n#include \"fused_op.h\"\n" + 
         fused_defines + '\n' +
         "void jittor::FusedOp::jit_run() {\n" + fused_kernel + "\n}\n";
         
@@ -945,6 +950,7 @@ jit_op_entry_t OpCompiler::compile(const string& jit_key, const string& src) {
 }
 
 jit_op_entry_t OpCompiler::do_compile(Op* op) {
+    jittor::lock_guard lg;
     OpCompiler oc(op);
     string* src = &oc.src;
     string src_after_passes;
@@ -954,8 +960,8 @@ jit_op_entry_t OpCompiler::do_compile(Op* op) {
         src_after_passes = tm.tune();
         src = &src_after_passes;
     }
-    return oc.compile(op->get_jit_key(), *src);
+    auto ret = oc.compile(op->get_jit_key(), *src);
+    return ret;
 }
-
 
 }

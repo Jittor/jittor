@@ -6,7 +6,7 @@
 import os, sys, shutil
 from .compiler import *
 from jittor_utils import run_cmd, get_version
-from jittor.dataset.utils import download_url_to_local
+from jittor.utils.misc import download_url_to_local
 
 def search_file(dirs, name):
     for d in dirs:
@@ -90,9 +90,10 @@ def install_cub(root_folder):
     
         with tarfile.open(fullname, "r") as tar:
             tar.extractall(root_folder)
-    
         assert 0 == os.system(f"cd {dirname}/examples && "
-            f"{nvcc_path} device/example_device_radix_sort.cu -O2 -I.. -o test && ./test")
+                    f"{nvcc_path} device/example_device_radix_sort.cu -O2 -I.. -o test")
+        if core.get_device_count():
+            assert 0 == os.system(f"cd {dirname}/examples && ./test")
     return dirname
 
 def setup_cub():
@@ -132,6 +133,7 @@ def setup_cuda_extern():
 
 def setup_cuda_lib(lib_name, link=True, extra_flags=""):
     globals()[lib_name+"_ops"] = None
+    globals()[lib_name] = None
     if not has_cuda: return
     LOG.v(f"setup {lib_name}...")
 
@@ -157,9 +159,11 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
         return
 
     # compile and get operators
-    culib_ops = compile_custom_ops(culib_src_files, 
+    culib = compile_custom_ops(culib_src_files, return_module=True,
         extra_flags=f" -I'{jt_cuda_include}' -I'{jt_culib_include}' {link_flags} {extra_flags} ")
+    culib_ops = culib.ops
     globals()[lib_name+"_ops"] = culib_ops
+    globals()[lib_name] = culib
     LOG.vv(f"Get {lib_name}_ops: "+str(dir(culib_ops)))
 
 def install_cutt(root_folder):
@@ -252,6 +256,11 @@ def install_nccl(root_folder):
         LOG.i("Downloading nccl...")
         download_url_to_local(url, filename, root_folder, true_md5)
 
+        if core.get_device_count() == 0:
+            return
+        if not inside_mpi():
+            return
+
         import tarfile
         with tarfile.open(fullname, "r") as tar:
             tar.extractall(root_folder)
@@ -265,7 +274,7 @@ def setup_nccl():
     global nccl_ops, use_nccl
     use_nccl = os.environ.get("use_nccl", "1")=="1"
     nccl_ops = None
-    if not has_cuda or mpi is None:
+    if not has_cuda or not has_mpi:
         use_nccl = False
         return
     if not use_nccl: return
@@ -280,8 +289,12 @@ def setup_nccl():
         
         make_cache_dir(nccl_path)
         nccl_home = install_nccl(nccl_path)
+        if nccl_home is None: return
         nccl_include_path = os.path.join(nccl_home, "build", "include")
         nccl_lib_path = os.path.join(nccl_home, "build", "lib")
+        
+    if not inside_mpi():
+        return
 
     nccl_lib_name = os.path.join(nccl_lib_path, "libnccl.so")
     assert os.path.isdir(nccl_include_path)
@@ -339,8 +352,6 @@ def setup_mpi():
     else:
         use_mpi = True
         has_mpi = True
-    if not inside_mpi():
-        use_mpi = False
     if not use_mpi:
         return
 
@@ -361,19 +372,31 @@ def setup_mpi():
     mpi_compile_flags += f" -I'{os.path.join(mpi_src_dir, 'inc')}' "
     mpi_compile_flags = mpi_compile_flags.replace("-pthread", "")
 
-    if get_version(mpicc_path).startswith("(1."):
+    mpi_version = get_version(mpicc_path)
+    if mpi_version.startswith("(1.") or mpi_version.startswith("(2."):
         # mpi version 1.x need to link like this
         manual_link(mpi_flags)
     # mpi(4.x) cannot use deepbind, it need to
     # share the 'environ' symbol.
     mpi = compile_custom_ops(mpi_src_files, 
         extra_flags=f" {mpi_flags} ", return_module=True,
-        dlopen_flags=os.RTLD_GLOBAL | os.RTLD_NOW)
+        dlopen_flags=os.RTLD_GLOBAL | os.RTLD_NOW, gen_name_="jittor_mpi_core")
     mpi_ops = mpi.ops
     LOG.vv("Get mpi: "+str(mpi.__dict__.keys()))
     LOG.vv("Get mpi_ops: "+str(mpi_ops.__dict__.keys()))
+    def warper(func):
+        def inner(self, *args, **kw):
+            return func(self, *args, **kw)
+        inner.__doc__ = func.__doc__
+        return inner
+    for k in mpi_ops.__dict__:
+        if not k.startswith("mpi_"): continue
+        if k == "mpi_test": continue
+        setattr(core.Var, k, warper(mpi_ops.__dict__[k]))
 
 setup_mpi()
+in_mpi = inside_mpi()
+rank = mpi.world_rank() if in_mpi else 0
 setup_nccl()
 
 setup_cutt()
