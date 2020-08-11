@@ -13,11 +13,12 @@ namespace jittor {
 
 #ifndef JIT
 static auto make_reduce = get_op_info("reduce")
-    .get_constructor<VarPtr, Var*, NanoString, uint, bool>();
+    .get_constructor<VarPtr, Var*, NanoString, uint, uint>();
     
 BroadcastToOp::BroadcastToOp(Var* x, Var* y, NanoVector dims) : x(x), y(y) {
+    auto count = dims.size();
     // forward x if don't need broadcast
-    if (y->num>=0 && !need_broadcast(x, y->shape)) {
+    if (y->num>=0 && !count && !need_broadcast(x, y->shape)) {
         forward(x);
         return;
     }
@@ -26,21 +27,19 @@ BroadcastToOp::BroadcastToOp(Var* x, Var* y, NanoVector dims) : x(x), y(y) {
     set_type(OpType::broadcast);
     z = create_output(NanoVector(), x->dtype());
     bcast_mask = 0;
-    keepdims = 0;
-    auto ydim = y->shape.size();
-    if (dims.size()) {
-        for (auto dim : dims) {
-            if (dim<0) dim += ydim;
-            CHECK(dim>=0 && dim<ydim) << "Wrong dims number:" << dims;
-            bcast_mask |= 1 << dim;
-        }
-    } else
-        keepdims = 1;
+    keepdims_mask = 0;
+    auto ydim = std::max(x->shape.size(), y->shape.size()-count)+count;
+    for (auto dim : dims) {
+        if (dim<0) dim += ydim;
+        CHECK(dim>=0 && dim<ydim) << "Wrong dims number:" << dims;
+        bcast_mask |= 1 << dim; 
+    }
 }
 
-BroadcastToOp::BroadcastToOp(Var* x, Var* y, uint dims_mask) : x(x), y(y) {
+BroadcastToOp::BroadcastToOp(Var* x, Var* y, uint dims_mask, uint keepdims_mask) : x(x), y(y) {
+    auto count = __builtin_popcount(dims_mask);
     // forward x if don't need broadcast
-    if (y->num>=0 && !need_broadcast(x, y->shape)) {
+    if (y->num>=0 && !count && !need_broadcast(x, y->shape)) {
         forward(x);
         return;
     }
@@ -49,12 +48,13 @@ BroadcastToOp::BroadcastToOp(Var* x, Var* y, uint dims_mask) : x(x), y(y) {
     set_type(OpType::broadcast);
     z = create_output(NanoVector(), x->dtype());
     bcast_mask = dims_mask;
-    keepdims = 0;
+    this->keepdims_mask = keepdims_mask;
 }
 
 BroadcastToOp::BroadcastToOp(Var* x, NanoVector shape, NanoVector dims) : x(x), y(nullptr), shape(shape) {
+    auto count = dims.size();
     // forward x if don't need broadcast
-    if (!need_broadcast(x, shape)) {
+    if (!count && !need_broadcast(x, shape)) {
         forward(x);
         return;
     }
@@ -66,16 +66,13 @@ BroadcastToOp::BroadcastToOp(Var* x, NanoVector shape, NanoVector dims) : x(x), 
         CHECKop(v,>,0u) << "Shape should greater than 0.";
     z = create_output(nullptr, x->dtype());
     bcast_mask = 0;
-    keepdims = 0;
-    auto ydim = shape.size();
-    if (dims.size()) {
-        for (auto dim : dims) {
-            if (dim<0) dim += ydim;
-            CHECK(dim>=0 && dim<ydim) << "Wrong dims number:" << dims;
-            bcast_mask |= 1 << dim;
-        }
-    } else
-        keepdims = 1;
+    keepdims_mask = 0;
+    auto ydim = std::max(x->shape.size(), shape.size()-count)+count;
+    for (auto dim : dims) {
+        if (dim<0) dim += ydim;
+        CHECK(dim>=0 && dim<ydim) << "Wrong dims number:" << dims;
+        bcast_mask |= 1 << dim;
+    }
 }
 
 bool BroadcastToOp::need_broadcast(const Var* x, const NanoVector& shape) {
@@ -88,7 +85,7 @@ bool BroadcastToOp::need_broadcast(const Var* x, const NanoVector& shape) {
 VarPtr BroadcastToOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     if (v_index==1) return nullptr;
     if (bcast_mask==0) return dout;
-    VarPtr dv = make_reduce(dout, ns_add, bcast_mask, keepdims);
+    VarPtr dv = make_reduce(dout, ns_add, bcast_mask, keepdims_mask);
     if (dv->shape.size() != v->shape.size())
         dv->shape = v->shape;
     return dv;
@@ -105,50 +102,39 @@ void BroadcastToOp::infer_shape() {
     auto yshapes = y ? y->shape : shape;
     auto xdim = x->shape.size();
     auto ydim = yshapes.size();
-    auto zdim = std::max(xdim, ydim);
-    NanoVector zshape;
+    auto count = __builtin_popcount(bcast_mask&~keepdims_mask);
+    auto zdim = std::max(xdim, ydim-count) + count;
     
-    if (bcast_mask) {
-        uint j=0;
-        for (uint i=0; i<yshapes.size(); i++) {
-            if (bcast_mask>>i&1) {
-                zshape.push_back_check_overflow(yshapes[i]);
-                continue;
-            }
-            CHECK(j<xdim) << "Number of shape not match.";
-            // yshape[i] == 1 will be broadcast to xshape[j]
-            // use case, xshape = [-3], yshape = [1, 3], dims=[1]
-            // zshape -> [-3, 3]
-            auto zs = (yshapes[i]<=1) ? x->shape[j] : yshapes[i];
-            zshape.push_back_check_overflow(zs);
-            CHECKop(x->shape[j],==,zs) << "Shape not match.";
-            j++;
+    int64 zz[zdim];
+    for (int i=zdim-1, xi = xdim-1, yi = ydim-1; i>=0; i--) {
+        bool bx = xi>=0;
+        bool by = yi>=0;
+        auto xshape = bx ? x->shape[xi] : 1;
+        auto yshape = by ? yshapes[yi] : 1;
+        if (bcast_mask>>i&1) {
+            yi--;
+            if (keepdims_mask>>i&1) xi--;
+            zz[i] = yshape;
+            continue;
         }
-        j += j==0;
-        CHECKop(j,==,xdim) << "Number of shape not match.";
-        z->set_shape(zshape);
-        LOGvvv << "Broadcast x(" >> x >> ") dims" << std::hex >> 
-            bcast_mask << "-> z(" >> z >> ")";
-        return;
-    }
-    
-    for (size_t i=0; i<zdim; i++) {
-        bool bx = i-zdim+xdim<xdim;
-        bool by = i-zdim+ydim<ydim;
-        auto xshape = bx ? x->shape[i-zdim+xdim] : 1;
-        auto yshape = by ? yshapes[i-zdim+ydim] : 1;
-        bcast_mask |= ((xshape==1 && (yshape!=1 || !bx) )&1) << i;
+        auto mask = ((xshape==1 && (yshape!=1 || !bx))&1) << i;
+        bcast_mask |= mask;
+        keepdims_mask |= mask;
         int64 zs;
         if ((xshape == 1 || yshape == 1) && (xshape != yshape)) {
             zs = xshape * yshape;
         } else if (xshape < 0 || yshape < 0) {
             zs = std::min(xshape, yshape);
         } else {
-            CHECKop(xshape,==,yshape) << "Shape not match" << x->shape << yshapes;
+            CHECKop(xshape,==,yshape) << "Shape not match" << x->shape << yshapes << bcast_mask;
             zs = xshape;
         }
-        zshape.push_back_check_overflow(zs);
+        zz[i] = zs;
+        xi--, yi--;
     }
+
+    NanoVector zshape;
+    for (int i=0; i<zdim; i++) zshape.push_back(zz[i]);
     z->set_shape(zshape);
     LOGvvv << "Broadcast x(" >> x >> ") shape" << yshapes << "-> z(" >> z >> ")"; 
 }

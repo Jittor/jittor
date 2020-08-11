@@ -120,6 +120,13 @@ class TestArray(unittest.TestCase):
         x = x + b
         assert (x.data == [6,4,2]).all()
 
+    def test_scalar(self):
+        assert jt.array(1).data == 1
+        assert jt.array(np.float64(1)).data == 1
+        assert jt.array(np.float32(1)).data == 1
+        assert jt.array(np.int32(1)).data == 1
+        assert jt.array(np.int64(1)).data == 1
+
 
 
 if __name__ == "__main__":

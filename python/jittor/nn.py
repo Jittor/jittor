@@ -47,43 +47,79 @@ Example::
     b = jt.random((batch, m, k))
     c = nn.bmm(a, b)
     '''
-    assert len(a.shape) >= 2 and len(b.shape) >= 2
-    assert a.shape[-1] == b.shape[-2]
-    if jt.flags.use_cuda:
-        return jt.compile_extern.cublas_ops.cublas_batched_matmul(a, b, 0, 0)
-    shape = list(a.shape) + [b.shape[-1]]
-    a = a.broadcast(shape, [len(shape)-1])
-    b = b.broadcast(shape, [len(shape)-3])
-    return (a*b).sum(len(shape)-2)
+    assert len(a.shape) > 2 and len(b.shape) > 2
+    return matmul(a, b)
 
 def matmul(a, b):
-    assert len(a.shape) >= 2 and len(b.shape) >= 2
-    assert a.shape[-1] == b.shape[-2]
+    ''' matrix multiply, 
 
+Example::
+
+    a = jt.random([3])
+    b = jt.random([3])
+    c = jt.matmul(a, b)
+    assert c.shape == [1]
+
+    a = jt.random([3, 4])
+    b = jt.random([4])
+    c = jt.matmul(a, b)
+    assert c.shape == [3]
+
+    a = jt.random([10, 3, 4])
+    b = jt.random([4])
+    c = jt.matmul(a, b)
+    assert c.shape == [10, 3]
+
+    a = jt.random([10, 3, 4])
+    b = jt.random([4, 5])
+    c = jt.matmul(a, b)
+    assert c.shape == [10, 3, 5]
+
+    a = jt.random([10, 3, 4])
+    b = jt.random([10, 4, 5])
+    c = jt.matmul(a, b)
+    assert c.shape == [10, 3, 5]
+
+    a = jt.random([8, 1, 3, 4])
+    b = jt.random([10, 4, 5])
+    c = jt.matmul(a, b)
+    assert c.shape == [8, 10, 3, 5]
+    '''
     len_a = len(a.shape)
     len_b = len(b.shape)
-    len_max = max(len_a, len_b)
-    a_shape = (len_max - len_a) * [1,] + list(a.shape)
-    b_shape = (len_max - len_b) * [1,] + list(b.shape)
-
-    a_rep = []
-    b_rep = []
-    for i in range(len_max-2):
-        if a_shape[i] == 1 or b_shape[i] == 1:
-            a_rep.append(b_shape[i])
-            b_rep.append(a_shape[i])
-        else:
-            if a_shape[i] == b_shape[i]:
-                a_rep.append(1)
-                b_rep.append(1)
-            else:
-                raise(f"{a_shape[i]} and {b_shape[i]} must be same.")
-    a_rep += [1,1,b.shape[-1],]
-    b_rep += [a.shape[-2],1,1,]
-    a = a.unsqueeze(-1).repeat(a_rep)
-    b = b.unsqueeze(-3).repeat(b_rep)
-
-    return (a*b).sum(len(a.shape)-2)
+    if len_b == 1:
+        # a: [n, m], b:[m], c:[n]
+        return (a*b).sum(-1)
+    if len_a == 1:
+        # a: [n], b:[n,k], c:[k]
+        return (a.broadcast(b, [-1]) * b).sum(0)
+    if len_a>=3 and len_a==len_b:
+        # bmm
+        # a: [..., n, m], b: [..., m, k], c:[..., n, k]
+        if jt.flags.use_cuda:
+            return jt.compile_extern.cublas_ops.cublas_batched_matmul(a, b, 0, 0)
+    shape = []
+    len_c = max(len_a, len_b)
+    (n, m), (m_, k) = a.shape[-2:], b.shape[-2:]
+    assert m == m_, f"dimension not match, a.shape:{a.shape}, b.shape:{a.shape}"
+    # a: [..., n, m]
+    # b: [..., m, k]
+    # cc:[..., n, m, k]
+    #     -->
+    #     012
+    for i in range(len_c-2):
+        ai = len_a-(len_c-i)
+        bi = len_b-(len_c-i)
+        an = a.shape[ai] if ai>=0 else 1
+        bn = b.shape[bi] if bi>=0 else 1
+        if an!=1 and bn!=1:
+            assert an == bn, f"dimension not match, a.shape:{a.shape}, b.shape:{a.shape}"
+        cn = max(an, bn)
+        shape.append(cn)
+    shape.extend([n, m, k])
+    a = a.broadcast(shape, [-1])
+    b = b.broadcast(shape, [-3])
+    return (a*b).sum(-2)
 jt.Var.matmul = jt.Var.__matmul__ = matmul
 jt.Var.__imatmul__ = lambda a,b: a.assign(matmul(a,b))
 

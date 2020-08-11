@@ -92,6 +92,7 @@ extern unordered_map<string, int> np_typenum_map;
 
 extern void** PyArray_API;
 extern PyTypeObject *PyArray_Type;
+extern PyTypeObject *PyNumberArrType_Type;
 extern PyTypeObject *PyArrayDescr_Type;
 extern PyObject* (*PyArray_New)(PyTypeObject *, int, npy_intp const *, int, npy_intp const *, void *, int, int, PyObject *);
 extern PyObject* (*PyArray_FromAny)(PyObject *, PyArrayDescr_Proxy *, int, int, int, PyObject *);
