@@ -14,7 +14,7 @@ from jittor import compile_extern
 # TODO: compare with pytorch
 
 from jittor.test.test_log import find_log_with_re
-if compile_extern.has_cuda:
+if jt.has_cuda:
     from jittor.compile_extern import cublas_ops, cudnn_ops
 else:
     cublas_ops = cudnn_ops = None
@@ -28,10 +28,7 @@ def conv_nchw(x, in_planes, out_planes, kernel_size, padding, stride = 1, dilati
     
     assert C==_C
     if w_ is None:
-        if init_method==None:
-            w = jt.make_var([Kc, _C, Kh, Kw], init=lambda *a: init.relu_invariant_gauss(*a, mode="fan_out"))
-        else:
-            w = jt.make_var([Kc, _C, Kh, Kw], init=init_method)
+        assert 0
     else:
         w = w_
     oh = (H-Kh*dilation+dilation-1+padding*2)//stride+1
@@ -56,10 +53,7 @@ def conv_nhwc(x, in_planes, out_planes, kernel_size, padding, stride = 1, dilati
     
     assert C==_C
     if w_ is None:
-        if init_method==None:
-            w = jt.make_var([Kc, _C, Kh, Kw], init=lambda *a: init.relu_invariant_gauss(*a, mode="fan_out"))
-        else:
-            w = jt.make_var([Kc, _C, Kh, Kw], init=init_method)
+        assert 0
     else:
         w = w_
     oh = (H-Kh*dilation+dilation-1+padding*2)//stride+1
@@ -93,7 +87,7 @@ def check_forward(xshape, wshape, stride, padding, dilation, use_cuda, nhwc):
     else:
         op_name = "mkl_conv"
     with jt.log_capture_scope(use_cuda=use_cuda, enable_tuner=1,
-        log_v=0, log_vprefix="op.cc=100", compile_options={"test":266}
+        log_v=0, log_vprefix="op.cc=100,conv_tuner=1000", compile_options={"test":266}
     ) as raw_log:
         x = jt.random(xshape)
         w = jt.random(wshape)
@@ -118,7 +112,7 @@ def check_backward(xshape, wshape, stride, padding, dilation, use_cuda, nhwc):
         op_name = "mkl_conv"
 
     with jt.log_capture_scope(use_cuda=use_cuda, enable_tuner=1,
-        log_v=1, log_vprefix="op.cc=100,exe=1000", compile_options={"test":244}
+        log_v=1, log_vprefix="op.cc=100,exe=1000,conv_t=1000", compile_options={"test":244}
     ) as raw_log:
         x = jt.random(xshape)
         w = jt.random(wshape)

@@ -45,8 +45,8 @@ static inline void set_shape(Var* x, const char* f, const string& format, int a,
         shape[0], shape[1], shape[2], shape[3]));
 }
 
-MklConvBackwardXOp::MklConvBackwardXOp(Var* w, Var* dy, int height, int width, int stride, int padding, int dilation, string xformat, string wformat, string yformat) 
-        : w(w), dy(dy), xh(height), xw(width), stride(stride), padding(padding), dilation(dilation), 
+MklConvBackwardXOp::MklConvBackwardXOp(Var* w, Var* dy, int height, int width, int stride, int padding, int dilation, int groups, string xformat, string wformat, string yformat) 
+        : w(w), dy(dy), xh(height), xw(width), stride(stride), padding(padding), dilation(dilation), groups(groups),
       xformat(move(xformat)), wformat(move(wformat)), yformat(move(yformat)) {
     dx = create_output(nullptr, dtype_infer(dy->ns, w->ns));
 }
@@ -57,7 +57,7 @@ void MklConvBackwardXOp::infer_shape() {
     int xn, xc, wh, ww, wci, wco, yn, yc, yh, yw;
     get_shape(w, "oihw", wformat, wco, wci, wh, ww);
     get_shape(dy, "abcd", yformat, yn, yc, yh, yw);
-    xn = yn, xc = wci;
+    xn = yn, xc = wci * groups;
     set_shape(dx, "abcd", xformat, xn, xc, xh, xw);
 }
 
@@ -111,14 +111,18 @@ void MklConvBackwardXOp::jit_run() {
     std::vector<std::unordered_map<int, memory>> net_bwd_args;
     
     memory::dims conv_src_tz = {batch, ch_in, height, width};
-    memory::dims conv_weights_tz = {ch_out, ch_in, kernel_size, kernel_size};
+    memory::dims conv_weights_tz = groups>1
+        ? memory::dims{groups, ch_out/groups, ch_in/groups, kernel_size, kernel_size} 
+        : memory::dims{ch_out, ch_in, kernel_size, kernel_size};
     memory::dims conv_dst_tz = {batch, ch_out, (height+padding*2-kernel_size*dilation+dilation-1)/stride+1, (width+padding*2-kernel_size*dilation+dilation-1)/stride+1};
     memory::dims conv_strides = {stride, stride};
     memory::dims conv_padding = {padding, padding};
     memory::dims conv_dilation = {dilation-1, dilation-1};
 
+    if (groups>1) ASSERT(tag::@WFORMAT == tag::oihw);
+
     auto conv_user_weights_memory
-            = memory({{conv_weights_tz}, dt::@Tw, tag::@WFORMAT}, eng, conv_weights);
+            = memory({{conv_weights_tz}, dt::@Tw, groups>1 ? tag::goihw : tag::@WFORMAT}, eng, conv_weights);
 
     auto conv_src_md = memory::desc({conv_src_tz}, dt::@Tx, tag::any);
     auto conv_weights_md = memory::desc({conv_weights_tz}, dt::@Tw, tag::any);

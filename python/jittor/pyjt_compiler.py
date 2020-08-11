@@ -239,6 +239,46 @@ reg = re.compile(
     #        attrs    args $5
 , re.DOTALL)
 
+def generate_error_code_from_func_header(func_head, target_scope_name, name, dfs, basename, h, class_info):
+    # func_head is a string like:
+    # (PyObject* self, PyObject** args, int64 n, PyObject* kw) -> PyObject*
+    lib_name = os.path.basename(h).split("_")[0]
+    # TODO: fix/add var help
+    if target_scope_name == "Var": target_scope_name = None
+    if target_scope_name:
+        if target_scope_name == "flags":
+            help_name = "flags"
+        else:
+            help_name = ""+target_scope_name+'.'+name
+    else:
+        help_name = name
+    if lib_name in ["mpi", "nccl", "cudnn", "curand", "cublas", "mkl"]:
+        help_name = lib_name+'.'+help_name
+    help_cmd = f"help(jt.{help_name})"
+
+    LOG.vvv("gen err from func_head", func_head)
+    args = func_head[1:].split(")")[0].split(",")
+    error_code = f" << \"Wrong inputs arguments, Please refer to examples({help_cmd}).\""
+    error_code += r' << "\n\nTypes of your inputs are:\n"'
+    for arg in args:
+        arg = arg.strip()
+        if arg.startswith("PyObject* "):
+            t, n = arg.split(' ')
+            if n == "args" or n == "_args":
+                error_code += f" << PyTupleArgPrinter{{{n}, \"args\"}} "
+            elif n == "kw":
+                error_code += f" << PyKwArgPrinter{{{n}}} "
+            else:
+                error_code += f" << PyArgPrinter{{{n}, \"{n}\"}} "
+        elif arg.startswith("PyObject** "):
+            t, n = arg.split(' ')
+            error_code += f" << PyFastCallArgPrinter{{{n}, n, kw}} "
+            break
+        else:
+            LOG.vvv("Unhandled arg", arg)
+    LOG.vvv("gen err from func_head", func_head, " -> ", error_code)
+    return error_code
+
 def compile_src(src, h, basename):
     res = list(reg.finditer(src, re.S))
     if len(res)==0: return
@@ -460,6 +500,7 @@ def compile_src(src, h, basename):
         slot_name = None
         func_cast = ""
         func_fill = ""
+        before_return = ""
         if name == "__init__":
             slot_name = "tp_init"
             func_head = "(PyObject* self, PyObject* _args, PyObject* kw) -> int"
@@ -507,6 +548,7 @@ def compile_src(src, h, basename):
             slot_name = "tp_dealloc"
             func_head = "(PyObject* self) -> void"
             func_fill = "int64 n = 0"
+            before_return = "Py_TYPE(self)->tp_free((PyObject *) self);"
         
         elif name in binary_number_slots:
             slot_name = "tp_as_number->"+binary_number_slots[name]
@@ -586,7 +628,7 @@ def compile_src(src, h, basename):
 
         arr_func_return = []
         doc_all = ""
-        decs = "Declarations:\n"
+        decs = "The function declarations are:\n"
         for did, has_return in enumerate(arr_has_return):
             df = dfs[did]
             func_call = arr_func_call[did]
@@ -595,7 +637,7 @@ def compile_src(src, h, basename):
                 doc_all += df["doc"]
             doc_all += "\nDeclaration:\n"
             doc_all += df["dec"]
-            decs += df["dec"]+'\n'
+            decs += " " + df["dec"]+'\n'
             if has_return:
                 assert "-> int" not in func_head
                 if "-> PyObject*" in func_head:
@@ -616,8 +658,10 @@ def compile_src(src, h, basename):
                     func_return_failed = "return -1"
                 else:
                     assert "-> void" in func_head
-                    arr_func_return.append(f"{func_call};return")
+                    arr_func_return.append(f"{func_call};{before_return}return")
                     func_return_failed = "return"
+        # generate error msg when not a valid call
+        error_log_code = generate_error_code_from_func_header(func_head, target_scope_name, name, dfs, basename ,h, class_info)
         func = f"""
         {func_cast}[]{func_head} {{
             try {{
@@ -633,12 +677,18 @@ def compile_src(src, h, basename):
                 '''
                 for did in range(len(arr_func_return))
                 ])}
-                LOGf << "Not a valid call";
+                LOGf << "Not a valid call.";
             }} catch (const std::exception& e) {{
-                PyErr_Format(PyExc_RuntimeError, "%s\\n%s",
-                    e.what(),
-                    R""({decs})""
-                );
+                if (!PyErr_Occurred()) {{
+                    std::stringstream ss;
+                    ss {error_log_code};
+                    PyErr_Format(PyExc_RuntimeError, 
+                        "%s\\n%s\\nFailed reason:%s",
+                        ss.str().c_str(),
+                        R""({decs})"",
+                        e.what()
+                    );
+                }}
             }}
             {func_return_failed};
         }}
@@ -711,6 +761,7 @@ def compile_src(src, h, basename):
     has_seq = class_name == "NanoVector"
     code = f"""
     #include "pyjt/py_converter.h"
+    #include "pyjt/py_arg_printer.h"
     #include "common.h"
     #include "{include_name}"
 
@@ -800,6 +851,7 @@ def compile(cache_path, jittor_path):
     headers = [ os.path.join(jittor_path, h) for h in headers1 ] + \
         [ os.path.join(cache_path, h) for h in headers2 ]
     basenames = []
+    pyjt_names = []
     for h in headers:
         with open(h, 'r') as f:
             src = f.read()
@@ -817,6 +869,7 @@ def compile(cache_path, jittor_path):
         if not check: continue
 
         basenames.append(basename)
+        pyjt_names.append(fname)
     
     code = f"""
     #include "pyjt/numpy.h"
@@ -839,3 +892,5 @@ def compile(cache_path, jittor_path):
     LOG.vvvv(code)
     with open(fname, "w") as f:
         f.write(code)
+    pyjt_names.append(fname)
+    return pyjt_names

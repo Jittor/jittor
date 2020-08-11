@@ -13,7 +13,6 @@ struct PyObjHolder {
     PyObject* obj;
     inline PyObjHolder(PyObject* obj) : obj(obj) {
         if (!obj) {
-            PyErr_Print();
             LOGf << "Python error occur";
         }
     }

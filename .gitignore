@@ -15,7 +15,13 @@ test.py
 extern/mkl/mkldnn_lnx*/*
 data/
 build/
+venv/
 *.md
 !*.src.md
 !README.md
 !README.cn.md
+!CHANGELOG.md
+python/jittor.egg-info
+dist/
+!doc/source/*
+core

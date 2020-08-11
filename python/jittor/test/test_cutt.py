@@ -12,7 +12,7 @@ import numpy as np
 from jittor import compile_extern
 from .test_log import find_log_with_re
 import copy
-if compile_extern.has_cuda:
+if jt.has_cuda:
     from jittor.compile_extern import cutt_ops
 else:
     cutt_ops = None
@@ -22,7 +22,6 @@ class TestCutt(unittest.TestCase):
     @jt.flag_scope(use_cuda=1)
     def test(self):
         t = cutt_ops.cutt_test("213")
-        jt.sync_all(True)
-        print(t.data)
+        assert t.data == 123
 if __name__ == "__main__":
     unittest.main()

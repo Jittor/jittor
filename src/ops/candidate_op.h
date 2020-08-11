@@ -18,7 +18,7 @@ struct CandidateOp : Op {
     /**
     Candidate Operator Perform an indirect candidate filter by given a fail condition.
     
-    x is input, y is output index, satisfy:
+    x is input, y is output index, satisfy::
 
         not fail_cond(y[0], y[1]) and
         not fail_cond(y[0], y[2]) and not fail_cond(y[1], y[2]) and
@@ -27,35 +27,33 @@ struct CandidateOp : Op {
 
     Where m is number of selected candidates.
 
-    Pseudo code:
-    ```
-    y = []
-    for i in range(n):
-        pass = True
-        for j in y:
-            if (@fail_cond):
-                pass = false
-                break
-        if (pass):
-            y.append(i)
-    return y
-    ```
+    Pseudo code::
+    
+        y = []
+        for i in range(n):
+            pass = True
+            for j in y:
+                if (@fail_cond):
+                    pass = false
+                    break
+            if (pass):
+                y.append(i)
+        return y
 
-    @param[in]	x   input var for filter
+    * [in] x:   input var for filter
 
-    @param[in]	fail_cond   code for fail condition
+    * [in] fail_cond:   code for fail condition
 
-    @param[in]	dtype   type of return indexes
+    * [in] dtype:   type of return indexes
 
-    @param[out] index .
+    * [out] index: .
 
-    Example
-    ```
-    jt.candidate(jt.random(100,2), '(@x(j,0)>@x(i,0))or(@x(j,1)>@x(i,1))')
-    # return y satisfy:
-    #    x[y[0], 0] <= x[y[1], 0] and x[y[1], 0] <= x[y[2], 0] and ... and x[y[m-2], 0] <= x[y[m-1], 0] and
-    #    x[y[0], 1] <= x[y[1], 1] and x[y[1], 1] <= x[y[2], 1] and ... and x[y[m-2], 1] <= x[y[m-1], 1]
-    ```
+    Example::
+
+        jt.candidate(jt.random(100,2), '(@x(j,0)>@x(i,0))or(@x(j,1)>@x(i,1))')
+        # return y satisfy:
+        #    x[y[0], 0] <= x[y[1], 0] and x[y[1], 0] <= x[y[2], 0] and ... and x[y[m-2], 0] <= x[y[m-1], 0] and
+        #    x[y[0], 1] <= x[y[1], 1] and x[y[1], 1] <= x[y[2], 1] and ... and x[y[m-2], 1] <= x[y[m-1], 1]
      */
     CandidateOp(Var* x, string&& fail_cond, NanoString dtype=ns_int32);
     void infer_shape() override;

@@ -17,5 +17,6 @@ namespace jittor {
 
 extern ncclComm_t comm;
 extern ncclUniqueId id;
+extern int nccl_device_id;
 
 } // jittor

@@ -280,12 +280,26 @@ bool check_vlog(const char* fileline, int verbose) {
     return verbose <= log_v;
 }
 
+int system_popen(const char* cmd) {
+    static char buf[BUFSIZ];
+    static string cmd2;
+    cmd2 = cmd;
+    cmd2 += " 2>&1 ";
+    FILE *ptr = popen(cmd2.c_str(), "r");
+    if (!ptr) return -1;
+    while (fgets(buf, BUFSIZ, ptr) != NULL) {
+        std::cout << buf;
+        std::cout.flush();
+    }
+    return pclose(ptr);
+}
+
 void system_with_check(const char* cmd) {
-    auto ret = system(cmd);
-    ASSERT(ret!=-1) << "Run cmd failed:" << cmd <<
-            "\nreturn -1. This might be an overcommit issue."
+    auto ret = system_popen(cmd);
+    CHECK(ret!=-1) << "Run cmd failed:" << cmd <<
+            "\nreturn -1. This might be an overcommit issue or out of memory."
             << "Try : echo 1 >/proc/sys/vm/overcommit_memory";
-    ASSERTop(ret,==,0) << "Run cmd failed:" << cmd;
+    CHECKop(ret,==,0) << "Run cmd failed:" << cmd;
 }
 
 std::thread log_thread(log_main);

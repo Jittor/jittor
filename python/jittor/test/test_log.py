@@ -29,7 +29,7 @@ def find_log_with_re(logs, pattern=None, **args):
 class TestLog(unittest.TestCase):
     def test_log_capture(self):
         LOG.log_capture_start()
-        with jt.var_scope(log_v=1000, log_vprefix=""):
+        with jt.flag_scope(log_v=1000, log_vprefix=""):
             LOG.v("1")
             LOG.vv("2")
             LOG.i("3")

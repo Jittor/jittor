@@ -8,29 +8,40 @@
 #include "pybind/py_var_tracer.h"
 #include "misc/str_utils.h"
 #include "op.h"
+#include "var.h"
 
 namespace py = pybind11;
 using namespace pybind11::literals;
 
 namespace jittor {
 
-DEFINE_FLAG(int, trace_py_var, 0, "Trace py stack for debug.");
+DEFINE_FLAG(int, trace_py_var, 0, "Trace py stack max depth for debug.");
 
 unordered_map<const Node*, string> trace_data;
 
 void __registe_node_trace(Node* node) {
-    auto py_stack = 
+    auto py_stacks = 
         py::module::import("traceback")
-        .attr("extract_stack")(nullptr, 1).attr("__getitem__")(0);
-    auto filename = py_stack.attr("filename").cast<string>();
-    auto basename = split(filename, "/").back();
-    basename += ':';
-    basename +=  py_stack.attr("name").cast<string>();
-    basename += ':';
-    basename +=  S(py_stack.attr("lineno").cast<int>());
-    basename += ':';
-    basename +=  py_stack.attr("line").cast<string>();
-    trace_data[node] = basename;
+        .attr("extract_stack")(nullptr, trace_py_var);
+    auto len = py_stacks.attr("__len__")().cast<int>();
+    string info;
+    for (int i=0; i<len; i++) {
+        auto py_stack = py_stacks.attr("__getitem__")(i);
+        auto filename = py_stack.attr("filename").cast<string>();
+        if (len==1)
+            info += split(filename, "/").back();
+        else {
+            info += "\n        ";
+            info += filename;
+        }
+        info += ':';
+        info +=  py_stack.attr("name").cast<string>();
+        info += ':';
+        info +=  S(py_stack.attr("lineno").cast<int>());
+        info += ':';
+        info +=  py_stack.attr("line").cast<string>();
+    }
+    trace_data[node] = info;
 }
 
 void __unregiste_node_trace(Node* node) {

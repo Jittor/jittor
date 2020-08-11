@@ -6,6 +6,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include "mem/allocator.h"
 #include "var.h"
 #include "cudnn_conv_backward_w_op.h"
 #include "cudnn_warper.h"
@@ -41,8 +42,8 @@ static inline void set_shape(Var* x, const char* f, const string& format, int a,
         shape[0], shape[1], shape[2], shape[3]));
 }
 
-CudnnConvBackwardWOp::CudnnConvBackwardWOp(Var* x, Var* dy, int kernel_size, int stride, int padding, int dilation, string xformat, string wformat, string yformat)
-        : x(x), dy(dy), kernel_size(kernel_size), stride(stride), padding(padding), dilation(dilation),
+CudnnConvBackwardWOp::CudnnConvBackwardWOp(Var* x, Var* dy, int kernel_size, int stride, int padding, int dilation, int groups, string xformat, string wformat, string yformat)
+        : x(x), dy(dy), kernel_size(kernel_size), stride(stride), padding(padding), dilation(dilation), groups(groups),
       xformat(move(xformat)), wformat(move(wformat)), yformat(move(yformat)) {
     flags.set(NodeFlags::_cuda, 1);
     flags.set(NodeFlags::_cpu, 0);
@@ -55,7 +56,7 @@ void CudnnConvBackwardWOp::infer_shape() {
     int xn, xc, xh, xw, wh, ww, wci, wco, yn, yc, yh, yw;
     get_shape(x, "abcd", xformat, xn, xc, xh, xw);
     get_shape(dy, "abcd", yformat, yn, yc, yh, yw);
-    wco = yc, wci = xc;
+    wco = yc, wci = xc / groups;
     wh = kernel_size;
     ww = kernel_size;
     set_shape(dw, "oihw", wformat, wco, wci, wh, ww);
@@ -96,6 +97,7 @@ void CudnnConvBackwardWOp::jit_run() {
     checkCudaErrors(cudnnCreateFilterDescriptor( &cudnnFdesc ));
     checkCudaErrors(cudnnCreateTensorDescriptor( &cudnnOdesc ));
     checkCudaErrors(cudnnCreateConvolutionDescriptor( &cudnnConvDesc ));
+    checkCudaErrors(cudnnSetConvolutionGroupCount( cudnnConvDesc, groups ));
 
     int dimX[] = {
         (int)x->shape[findc("@XFORMAT", 'a')], // n
@@ -183,7 +185,7 @@ void CudnnConvBackwardWOp::jit_run() {
     jk.clear();
     jk << dimX[0] << "," << dimX[1] << "," << dimX[2] << "," << dimX[3] << ",";
     jk << dimW[0] << "," << dimW[1] << "," << dimW[2] << "," << dimW[3] << ",";
-    jk << padding << "," <<stride << "," << dilation << ".";
+    jk << padding << "," <<stride << "," << dilation << "," << groups << ".";
     auto iter = bwdw_algo_cache.find(jk.to_string());
     
     if (iter!=bwdw_algo_cache.end()) algo = iter->second;
@@ -194,6 +196,8 @@ void CudnnConvBackwardWOp::jit_run() {
             for (int i = 0; i < num_algos; i++) {
                 size_t sz;
                 cudnnStatus_t ret = cudnnGetConvolutionBackwardFilterWorkspaceSize(handle_, cudnnIdesc, cudnnOdesc, cudnnConvDesc, cudnnFdesc, algos[i], &sz);
+                // continue if use too much workspace
+                if (sz*4 > mem_info.total_cuda_ram) continue;
                 if (CUDNN_STATUS_SUCCESS == ret && sz > max_ws_size) max_ws_size = sz;
             } 
             size_t allocation;

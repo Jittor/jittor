@@ -7,10 +7,12 @@
 #include "common.h"
 #include "misc/nano_string.h"
 #include "misc/nano_vector.h"
+#include "pybind/py_var_tracer.h"
 
 namespace jittor {
 
 extern unordered_map<void*, int64> lived_nodes;
+extern int64 total_node;
 
 struct NodeFlags {
     typedef uint16 nf_t;
@@ -22,11 +24,14 @@ struct NodeFlags {
         _finished=1,
         // bit2: stop grad
         _stop_grad=2,
-        _n=3,
+        // bit3: is fetch
+        _fetch=3,
+        _n=4,
 
-        // op related flags
+        // var related flags
         _force_fuse=_n+0,
         _stop_fuse=_n+1,
+        _in_update_queue=_n+2,
 
         // op related flags
         // bit0: support cpu
@@ -39,6 +44,8 @@ struct NodeFlags {
         _vary_shape=_n+3,
         // bit4~5: op type
         _op_type=_n+4, _op_type_nbits=2,
+        // bit6: backprop grad at ones
+        _grads=_n+6,
     };
 
     inline void set(Flags f, int a=1, int nbits=1) {
@@ -105,8 +112,15 @@ struct Node {
     list<output_t> _outputs;
 
 #ifdef NODE_MEMCHECK
-    Node();
-    virtual ~Node();
+    inline Node() {
+        lived_nodes[(void*)this] = ++total_node;
+        registe_node_trace(this);
+    }
+
+    inline virtual ~Node() {
+        lived_nodes.erase((void*)this);
+        unregiste_node_trace(this);
+    }
 #else
     inline Node() {};
     inline virtual ~Node() {};
@@ -124,7 +138,13 @@ struct Node {
     #endif
     }
     void memcheck_all_exist() const;
-    int64 __id() const;
+    inline int64 __id() const {
+    #ifdef NODE_MEMCHECK
+        return lived_nodes.at((void*)this);
+    #else
+        return 0;
+    #endif
+    }
     // release from counter and memory checker
     void __release();
     #define CHECK_NODE_EXIST(node) \

@@ -10,6 +10,18 @@
 
 namespace jittor {
 
+static bool remove_empty_loop(KernelIR* i) {
+    for (int j=0; j<i->children.size(); j++) {
+        if (remove_empty_loop(i->children[j].get()))
+            j--;
+    }
+    if (i->type == "loop" && i->children.size() == 0) {
+        i->erase();
+        return true;
+    }
+    return false;
+}
+
 void RemoveIntermediatePass::run() {
     unordered_set<string> names;
     for (auto& vi : op->vars) {
@@ -25,6 +37,12 @@ void RemoveIntermediatePass::run() {
     ir->remove_intermediate(names);
     ir->remove_all_unused();
     ir->solve_conflict_define();
+
+    // remove empty loop
+    remove_empty_loop(ir);
+
+    ir->remove_all_unused();
+
 }
 
 } // jittor

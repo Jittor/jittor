@@ -8,6 +8,7 @@
 // ***************************************************************
 #include "curand_warper.h"
 #include "init.h"
+#include "misc/cuda_flags.h"
 
 namespace jittor {
 
@@ -16,6 +17,7 @@ curandGenerator_t gen;
 struct curand_initer {
 
 inline curand_initer() {
+    if (!get_device_count()) return;
     checkCudaErrors( curandCreateGenerator(&gen, CURAND_RNG_PSEUDO_DEFAULT) );
     add_set_seed_callback([](int seed) {
         checkCudaErrors( curandSetPseudoRandomGeneratorSeed(gen, seed) );
@@ -24,6 +26,7 @@ inline curand_initer() {
 }
 
 inline ~curand_initer() {
+    if (!get_device_count()) return;
     checkCudaErrors( curandDestroyGenerator(gen) );
     LOGv << "curandDestroy finished";
 }

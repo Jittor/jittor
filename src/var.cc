@@ -9,6 +9,7 @@
 #include "op.h"
 #include "mem/allocator.h"
 #include "pybind/py_var_tracer.h"
+#include "update_queue.h"
 
 namespace jittor {
 
@@ -16,11 +17,14 @@ int64_t Var::number_of_lived_vars = 0;
 
 DEFINE_FLAG(fast_shared_ptr<loop_options_t>, compile_options, {}, 
     "Override the default loop transfrom options");
+DEFINE_FLAG(bool, no_grad, 0, 
+    "No grad for all jittor Var creation");
 
 Var::Var(NanoVector shape, NanoString dtype)
     : shape(shape), 
       loop_options(compile_options) {
     flags.set(NodeFlags::_var, 1);
+    flags.set(NodeFlags::_stop_grad, !dtype.is_float() || no_grad);
     ns = dtype;
     ASSERT(ns.is_dtype());
     number_of_lived_vars++;
@@ -30,6 +34,8 @@ Var::~Var() {
     if (mem_ptr != nullptr)
         allocator->free(mem_ptr, size, allocation);
     number_of_lived_vars--;
+    if (flags.get(NodeFlags::_in_update_queue))
+        update_queue.pop(this);
 }
     
 string Var::to_string() {

@@ -70,5 +70,12 @@ class TestReduceOpCuda2(TestReduceOp):
     def tearDown(self):
         jt.flags.use_cuda = 0
 
+
+class TestReduceOpMisc(unittest.TestCase):
+    def test_negtive_dim(self):
+        a = jt.array([[1,2],[3,4]])
+        assert (a.sum(-1).data == [3,7]).all()
+        assert (a.sum(-2).data == [4,6]).all()
+
 if __name__ == "__main__":
     unittest.main()

@@ -24,7 +24,7 @@ skip_model_test = not model_test
 
 class MnistNet(Module):
     def __init__(self):
-        self.model = vgg.VGG16_bn()
+        self.model = vgg.vgg16_bn()
         self.layer = nn.Linear(1000,10)
     def execute(self, x):
         x = self.model(x)
@@ -77,7 +77,7 @@ class TestVGGClass(unittest.TestCase):
                     acc_list.append(acc)
                     print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}\tAcc: {:.6f}'
                         .format(0, batch_idx, 100,1. * batch_idx, loss[0], acc))
-                jt.fetch([loss, output, target], callback, batch_idx)
+                jt.fetch(batch_idx, loss, output, target, callback)
 
             log_conv = find_log_with_re(logs, 
                 "Jit op key (not )?found: ((mkl)|(cudnn))_conv.*")

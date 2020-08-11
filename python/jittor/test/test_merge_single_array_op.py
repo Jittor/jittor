@@ -87,8 +87,7 @@ class TestSingleArray(unittest.TestCase):
             jt.set_seed(3)
 
             x = f32(np.random.rand(1, 1))
-            w = jt.make_var([x.shape[-1], 10], init=lambda *a:
-                    (jt.random(*a)-f32(0.5)) / f32(x.shape[-1])**f32(0.5))
+            w = (jt.random([x.shape[-1], 10])-f32(0.5)) / f32(x.shape[-1])**f32(0.5)
             jt.nn.matmul(x, w).data
 
     def test4(self):

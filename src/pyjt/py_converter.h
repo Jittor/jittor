@@ -1,5 +1,8 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2020 Jittor. Authors: 
+//     Dun Liang <randonlang@gmail.com>. 
+//     Guowei Yang <471184555@qq.com>
+// All Rights Reserved.
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -10,6 +13,9 @@
 #include "misc/hash.h"
 #include "misc/nano_string.h"
 #include "misc/fast_shared_ptr.h"
+#ifdef HAS_CUDA
+#include "misc/cuda_flags.h"
+#endif
 
 namespace jittor {
 
@@ -123,8 +129,13 @@ DEF_IS(Slice, bool) is_type(PyObject* obj) {
 }
 DEF_IS(Slice, T) from_py_object(PyObject* obj) {
     Py_ssize_t start, stop, step;
+    auto slice = (PySliceObject*)obj;
+
     PySlice_Unpack(obj, &start, &stop, &step);
-    return {(int)start, (int)stop, (int)step};
+    return {start, stop, step, 
+        (slice->start == Py_None) |
+        ((slice->stop == Py_None) << 1) |
+        ((slice->step == Py_None) << 2)};
 }
 
 #define GET_RAW_PTR(T, obj) ((T*)(((char*)obj) + sizeof(PyObject)))
@@ -153,13 +164,37 @@ DEF_IS(DumpGraphs, const T&) from_py_object(PyObject* obj) {
     return GET_RAW_PTR(T, obj);
 }
 
+// MemInfo
+struct MemInfo;
+extern PyTypeObject PyjtMemInfo;
+DEF_IS(MemInfo, bool) is_type(PyObject* obj) {
+    return Py_TYPE(obj) == &PyjtMemInfo;
+}
+
+
+DEF_IS(MemInfo, PyObject*) to_py_object(const T& a) {
+    PyObjHolder obj(_PyObject_New(&PyjtMemInfo));
+    auto ptr = GET_RAW_PTR(T, obj.obj);
+    new (ptr) T(a);
+    return obj.release();
+}
+
+DEF_IS(MemInfo, const T&) from_py_object(PyObject* obj) {
+    return GET_RAW_PTR(T, obj);
+}
+
 
 // NanoString
 struct NanoString;
 extern PyTypeObject PyjtNanoString;
 DEF_IS(NanoString, bool) is_type(PyObject* obj) {
     return Py_TYPE(obj) == &PyjtNanoString ||
-        PyUnicode_CheckExact(obj);
+        PyUnicode_CheckExact(obj) ||
+        PyType_CheckExact(obj) ||
+        // jt.float.__name__
+        PyCallable_Check(obj) ||
+        // numpy.dtype.type
+        PyObject_HasAttrString(obj, "type");
 }
 
 DEF_IS(NanoString, PyObject*) to_py_object(T a) {
@@ -172,7 +207,19 @@ DEF_IS(NanoString, PyObject*) to_py_object(T a) {
 DEF_IS(NanoString, T) from_py_object(PyObject* obj) {
     if (Py_TYPE(obj) == &PyjtNanoString)
         return *GET_RAW_PTR(T, obj);
-    return T(PyUnicode_AsUTF8(obj));
+    if (PyUnicode_CheckExact(obj))
+        return T(PyUnicode_AsUTF8(obj));
+    // PyType
+    if (PyType_CheckExact(obj))
+        return T(_PyType_Name((PyTypeObject *)obj));
+    // jt.float.__name__
+    if (PyCallable_Check(obj)) {
+        PyObjHolder t(PyObject_GetAttrString(obj, "__name__"));
+        return T(PyUnicode_AsUTF8(t.obj));
+    }
+    PyObjHolder t(PyObject_GetAttrString(obj, "type"));
+    CHECK(PyType_CheckExact(t.obj)) << "Not a valid type:" << t.obj;
+    return T(_PyType_Name((PyTypeObject *)t.obj));
 }
 
 // NanoVector
@@ -217,11 +264,14 @@ struct VarHolder;
 vector<ArrayArgs> fetch_sync(const vector<VarHolder*>& vh);
 extern PyHeapTypeObject PyjtVarHolder;
 DEF_IS(ArrayArgs, bool) is_type(PyObject* obj) {
-    return Py_TYPE(obj) == PyArray_Type || 
+    return 
+        Py_TYPE(obj) == &PyjtVarHolder.ht_type ||
+        Py_TYPE(obj) == PyArray_Type || 
         PyFloat_CheckExact(obj) ||
         PyLong_CheckExact(obj) ||
+        PyBool_Check(obj) ||
         PyList_CheckExact(obj) ||
-        Py_TYPE(obj) == &PyjtVarHolder.ht_type;
+        PyObject_TypeCheck(obj, PyNumberArrType_Type);
 }
 
 DEF_IS(ArrayArgs, PyObject*) to_py_object(const T& a) {
@@ -248,25 +298,51 @@ DEF_IS(ArrayArgs, T) from_py_object(PyObject* obj) {
         tmp_data.i32 = PyLong_AsLong(obj);
         return {&tmp_data, 1, ns_int32};
     }
+    if (PyBool_Check(obj)) {
+        tmp_data.i8 = obj == Py_True;
+        return {&tmp_data, 1, ns_bool};
+    }
     if (Py_TYPE(obj) == &PyjtVarHolder.ht_type) {
         auto ptr = GET_RAW_PTR(VarHolder, obj);
         return move(fetch_sync({ptr}).at(0));
     }
-    if (Py_TYPE(obj) != PyArray_Type) {
-        PyObjHolder holder(PyArray_FROM_O(obj));
+    // PyArray_Type
+    auto arr = (PyArray_Proxy*)obj;
+    if (Py_TYPE(obj) != PyArray_Type || !is_c_style(arr)) {
+        PyObjHolder holder(
+            Py_TYPE(obj) != PyArray_Type ? 
+                PyArray_FROM_O(obj) :
+                PyArray_Copy(obj));
         auto arr = (PyArray_Proxy*)holder.obj;
         int64 size = PyArray_Size(arr);
         T args;
-        args.ptr = arr->data;
-        args.shape = vector<int64>(arr->dimensions, arr->dimensions+arr->nd);
+        if (arr->nd)
+            args.shape = vector<int64>(arr->dimensions, arr->dimensions+arr->nd);
+        else
+            args.shape.push_back(1);
         args.dtype = get_type_str(arr);
         args.buffer.reset(new char[size]);
+        args.ptr = (void*)args.buffer.get();
         memcpy((void*)args.buffer.get(), (void*)arr->data, size);
+        if (Py_TYPE(obj) != PyArray_Type && args.dtype.dsize()==8) {
+            // convert to 32bit
+            auto num = size/8;
+            if (args.dtype.is_int()) {
+                auto* __restrict__ i64 = (int64*)args.ptr;
+                auto* __restrict__ i32 = (int32*)args.ptr;
+                for (int i=0; i<num; i++)
+                    i32[i] = (int32)i64[i];
+                args.dtype = ns_int32;
+            } else if (args.dtype.is_float()) {
+                auto* __restrict__ f64 = (float64*)args.ptr;
+                auto* __restrict__ f32 = (float32*)args.ptr;
+                for (int i=0; i<num; i++)
+                    f32[i] = (float32)f64[i];
+                args.dtype = ns_float32;
+            }
+        }
         return args;
     }
-    // PyArray_Type
-    auto arr = (PyArray_Proxy*)obj;
-    CHECK(is_c_style(arr));
     T args;
     args.ptr = arr->data;
     if (arr->dimensions)
@@ -311,7 +387,6 @@ DEF_IS(VarHolder*, T) from_py_object(PyObject* obj, unique_ptr<VarHolder>& holde
 
 struct DataView;
 DEF_IS(DataView, PyObject*) to_py_object(T a) {
-    auto obj = GET_OBJ_FROM_RAW_PTR(a.vh);
     int64 dims[a.shape.size()];
     for (int i=0; i<a.shape.size(); i++)
         dims[i] = a.shape[i];
@@ -326,12 +401,23 @@ DEF_IS(DataView, PyObject*) to_py_object(T a) {
         NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_WRITEABLE, // flags
         NULL // obj
     ));
-    Py_INCREF(obj);
-    PyObjHolder oh2(obj);
-    ASSERT(PyArray_SetBaseObject(oh.obj, oh2.obj)==0);
-    oh2.release();
+    if (a.vh) {
+        auto obj = GET_OBJ_FROM_RAW_PTR(a.vh);
+        PyObjHolder oh2(obj);
+        Py_INCREF(obj);
+        ASSERT(PyArray_SetBaseObject(oh.obj, oh2.obj)==0);
+        oh2.release();
+    }
     return oh.release();
 }
+
+struct NumpyFunc;
+
+DEF_IS(NumpyFunc, bool) is_type(PyObject* obj) {
+    return PyCallable_Check(obj);
+}
+
+DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj);
 
 #define CHECK_IS_1(check_type) \
     template<typename T> struct is_##check_type : public std::false_type {}; \
@@ -413,6 +499,7 @@ DEF_IS(FetchFunc, T) from_py_object(PyObject* obj) {
     );
     return func;
 }
+
 
 #define CHECK_IS_2(check_type) \
     template<typename T> struct is_##check_type : public std::false_type {}; \
@@ -505,5 +592,103 @@ DEF_IS_1(fast_shared_ptr, T) from_py_object(PyObject* obj) {
     return from_py_object<typename T::value_type>(obj);
 }
 
+DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj) {
+    // PyObject_Call
+    Py_INCREF(obj);
+    T func(
+        // callback
+        [obj](typename T::R* result) {
+            // import numpy
+            string npstr="numpy";
+            #ifdef HAS_CUDA
+            if (use_cuda) npstr="cupy";
+            #endif
+
+            PyObjHolder np(PyImport_ImportModule(npstr.data()));
+            // data = {}
+            PyObjHolder data(to_py_object(result->varrays));
+            PyObjHolder data2(to_py_object(result->ints));
+            PyObjHolder data3(to_py_object(result->arrays));
+            PyDict_Update(data.obj, data2.obj);
+            PyDict_Update(data.obj, data3.obj);
+
+            // args = []
+            PyObjHolder args(PyTuple_New(2));
+            PyTuple_SET_ITEM(args.obj, 0, np.release());
+            PyTuple_SET_ITEM(args.obj, 1, data.release());
+
+            #ifdef HAS_CUDA
+            if (npstr=="cupy") {
+                PyObjHolder jt(PyImport_ImportModule("jittor"));
+                PyObjHolder pFunc(PyObject_GetAttrString(jt.obj,"numpy2cupy"));
+                PyObjHolder ret1(PyObject_Call(pFunc.obj, args.obj, nullptr));
+            }
+            #endif
+
+            PyObjHolder ret2(PyObject_Call(obj, args.obj, nullptr));
+        },
+        // deleter
+        [obj]() { Py_DECREF(obj); },
+        // inc_ref
+        [obj]() { Py_INCREF(obj); }
+    );
+    return func;
+}
+
+
+struct GradCallback;
+
+DEF_IS(GradCallback, bool) is_type(PyObject* obj) {
+    return PyCallable_Check(obj);
+}
+
+DEF_IS(GradCallback, T) from_py_object(PyObject* obj) {
+    // PyObject_Call
+    Py_INCREF(obj);
+    T func(
+        // callback
+        [obj](int n_o, typename T::Var** douts, int n_i, typename T::VarPtr* dins) {
+            PyObjHolder list(PyTuple_New(n_o));
+            for (int i=0; i<n_o; i++) {
+                if (douts[i]) {
+                    PyTuple_SET_ITEM(list.obj, i, 
+                        to_py_object(new typename T::VarHolder(douts[i])));
+                } else {
+                    Py_INCREF(Py_None);
+                    PyTuple_SET_ITEM(list.obj, i, Py_None);
+                }
+            }
+
+            PyObjHolder ret(PyObject_Call(obj, list.obj, nullptr));
+            auto is_seq = PyList_CheckExact(ret.obj) || PyTuple_CheckExact(ret.obj);
+            auto check = [&](int i, PyObject* obj) {
+                if (obj == Py_None) {
+                    dins[i] = nullptr;
+                } else {
+                    CHECK(Py_TYPE(obj) == &PyjtVarHolder.ht_type) << "returned grad("<<Py_TYPE(obj)->tp_name<<") is not jittor variable";
+                    auto vh = from_py_object<typename T::VarHolderPtr>(obj);
+                    dins[i] = vh->var;
+                }
+            };
+            if (!is_seq) {
+                CHECKop(n_i,==,1) << n_i >> " returned grad required, but 1 given.";
+                check(0, ret.obj);
+            } else {
+                auto size = Py_SIZE(ret.obj);
+                CHECKop(n_i,==,size) << n_i >> " returned grad required, but " >> size >> " given.";
+                auto arr = PySequence_Fast_ITEMS(ret.obj);
+                for (int i=0; i<size; i++) {
+                    auto oi = arr[i]; 
+                    check(i, oi);
+                }
+            }
+        },
+        // deleter
+        [obj]() { 
+            Py_DECREF(obj); 
+        }
+    );
+    return func;
+}
 
 } // jittor

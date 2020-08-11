@@ -34,18 +34,16 @@ static auto make_reshape = get_op_info("reshape")
 static auto make_reindex_reduce = get_op_info("reindex_reduce")
     .get_constructor<VarPtr, Var*, NanoString, NanoVector, vector<string>&&, vector<string>&&, vector<Var*>&&>();
 
-ArgReduceOp::ArgReduceOp(Var* x, string op, int dim, bool keepdims)
+ArgReduceOp::ArgReduceOp(Var* x, NanoString op, int dim, bool keepdims)
     : x(x), op(op), dim(dim), keepdims(keepdims) {
     if  (this->dim == -1)
         this->dim = x->shape.size() - 1;
     dim = this->dim;
     #ifdef HAS_CUDA
     if (use_cuda) {
-        static std::vector<VarPtr>(*cub_arg_reduce)(Var*, Var*, string, bool) = nullptr;
-        if (!cub_arg_reduce && has_op("cub_arg_reduce")) {
-            cub_arg_reduce = get_op_info("cub_arg_reduce")
-                .get_constructor<std::vector<VarPtr>, Var*, Var*, string, bool>();
-        }
+        static auto cub_arg_reduce = has_op("cub_arg_reduce") ?
+            get_op_info("cub_arg_reduce").get_constructor<std::vector<VarPtr>, Var*, Var*, NanoString, bool>()
+            : nullptr;
         if (cub_arg_reduce) {
             if (x->num<0) exe.run_sync(vector<Var*>({x}), true);
             int dims = x->shape.size();
@@ -162,7 +160,7 @@ void ArgReduceOp::jit_prepare() {
     add_jit_define("YDIM", JK::hex1(y->shape.size()));
     add_jit_define("KEEPDIMS", keepdims ? 1 : 0);
     add_jit_define("DIM", JK::hex1(dim));
-    add_jit_define("CMP", op=="min" ? "<" : ">");
+    add_jit_define("CMP", op==ns_minimum ? "<" : ">");
 }
 
 #else // JIT

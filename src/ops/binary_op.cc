@@ -13,6 +13,8 @@
 namespace jittor {
 
 #ifndef JIT
+static auto make_array = get_op_info("array")
+    .get_constructor<VarPtr, const void*, NanoVector, NanoString>();
 static auto make_broadcast_to = get_op_info("broadcast_to")
     .get_constructor<VarPtr, Var*, Var*, NanoVector>();
 static auto make_binary = get_op_info("binary")
@@ -122,7 +124,9 @@ VarPtr BinaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
         if (v_index == 0) {
             // dout * y * x^(y-1)
             auto d = make_binary(dout, y, ns_multiply);
-            auto ones = make_number(1, dout);
+            // auto ones = make_number(1, dout);
+            int number = 1;
+            auto ones = make_array(&number, 1, ns_int32);
             auto y_1 = make_binary(y, ones, ns_subtract);
             auto x_y_1 = make_binary(x, y_1, ns_pow);
             return make_binary(d, x_y_1, ns_multiply);

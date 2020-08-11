@@ -44,8 +44,9 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 
-# 通过use_cuda设置在GPU上进行训练
-jt.flags.use_cuda = 1
+# 如果有CUDA，则通过use_cuda设置在GPU上进行训练
+if jt.has_cuda:
+    jt.flags.use_cuda = 1
 
 class generator(Module):
     def __init__(self, dim=3):

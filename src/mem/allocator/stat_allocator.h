@@ -19,5 +19,9 @@ struct StatAllocator : Allocator {
 };
 
 DECLARE_FLAG(int, use_stat_allocator);
+DECLARE_FLAG(size_t, stat_allocator_total_alloc_call);
+DECLARE_FLAG(size_t, stat_allocator_total_alloc_byte);
+DECLARE_FLAG(size_t, stat_allocator_total_free_call);
+DECLARE_FLAG(size_t, stat_allocator_total_free_byte);
 
 } // jittor

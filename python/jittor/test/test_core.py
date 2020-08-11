@@ -16,7 +16,7 @@ def expect_error(func):
 
 class TestCore(unittest.TestCase):
     def test_number_of_hold_vars(self):
-        assert jt.random([1,2,3]).peek() == "float[1,2,3,]"
+        assert jt.random([1,2,3]).peek() == "float32[1,2,3,]"
         assert jt.core.number_of_hold_vars() == 0
         x = jt.random([1,2,3])
         assert jt.core.number_of_hold_vars() == 1
@@ -58,7 +58,19 @@ class TestCore(unittest.TestCase):
         b = np.array([[4, 1], [2, 2]]).astype("float32")
         c = np.matmul(a, b)
         jtc = jt.matmul(jt.array(a), jt.array(b)).data
-        assert np.all(jtc == c)
+        assert np.allclose(jtc, c)
+
+        a = np.random.random((128,3,10,20))
+        b = np.random.random((20,30))
+        c = np.matmul(a, b)
+        jtc = jt.matmul(jt.array(a), jt.array(b)).data
+        assert np.allclose(jtc, c)
+
+        a = np.random.random((128,3,10,20))
+        b = np.random.random((128,3,20,30))
+        c = np.matmul(a, b)
+        jtc = jt.matmul(jt.array(a), jt.array(b)).data
+        assert np.allclose(jtc, c), np.abs(jtc-c).max()
         
     def test_var_holder(self):
         jt.clean()

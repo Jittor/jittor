@@ -30,7 +30,7 @@ class TestArray(unittest.TestCase):
         a.data = jt.array([7,8,9])
         assert (a.fetch_sync()==[7,8,9]).all()
 
-    @unittest.skipIf(not compile_extern.has_cuda, "Cuda not found")
+    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
     @jt.flag_scope(use_cuda=1)
     def test_memcopy_overlap(self):
         import time
@@ -60,6 +60,7 @@ class TestArray(unittest.TestCase):
         for i in range(3):
             x = jt.array(im)
             b = net(x)
+            b.fetch(lambda b: None)
             b.sync()
         jt.sync(device_sync=True)
 
@@ -70,6 +71,7 @@ class TestArray(unittest.TestCase):
             x = jt.array(im)
             b = net(x)
             b.fetch(lambda b: results.append(b))
+            b.sync()
             # del c
         jt.sync(device_sync=True)
         t2 = time.time() - time_start
@@ -95,22 +97,35 @@ class TestArray(unittest.TestCase):
             with jt.flag_scope(use_cuda=1):
                 assert (jt.array([1,2,3]).reshape((1,3)).data==[1,2,3]).all()
     
-    @unittest.skipIf(not compile_extern.has_cuda, "Cuda not found")
+    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
     def test_array_dual(self):
         with jt.flag_scope(use_cuda=1):
             a = jt.array(np.float32([1,2,3]))
             assert (a.data==[1,2,3]).all()
         
-    @unittest.skipIf(not compile_extern.has_cuda, "Cuda not found")
+    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
     def test_array_migrate(self):
         with jt.flag_scope(use_cuda=1):
             a = jt.array(np.float32([1,2,3]))
             b = jt.code(a.shape, a.dtype, [a], cpu_src="""
-                for (int i=0; i<in0shape0; i++)
+                for (int i=0; i<in0_shape0; i++)
                     @out(i) = @in0(i)*@in0(i)*2;
             """)
             assert (b.data==[2,8,18]).all()
         
+    def test_not_c_style(self):
+        a = np.array([1,2,3])
+        b = a[::-1]
+        x = jt.array(b)
+        x = x + b
+        assert (x.data == [6,4,2]).all()
+
+    def test_scalar(self):
+        assert jt.array(1).data == 1
+        assert jt.array(np.float64(1)).data == 1
+        assert jt.array(np.float32(1)).data == 1
+        assert jt.array(np.int32(1)).data == 1
+        assert jt.array(np.int64(1)).data == 1
 
 
 

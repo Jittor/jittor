@@ -38,6 +38,11 @@ class TestNanoVector(unittest.TestCase):
         a += [3,4]
         assert a == [1,2,3,4], a
 
+    def test_slice_bug(self):
+        a = jt.NanoVector([2,3,4,5])
+        assert a[:] == [2,3,4,5]
+        assert a[1:] == [3,4,5]
+
 
 if __name__ == "__main__":
     unittest.main()

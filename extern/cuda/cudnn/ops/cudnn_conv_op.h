@@ -10,10 +10,10 @@ namespace jittor {
 
 struct CudnnConvOp : Op {
     Var* x, * w, * y;
-    int stride, padding, dilation;
+    int stride, padding, dilation, groups;
     string xformat, wformat, yformat;
     /* CudnnConvOp: xformat abcd represents nchw */
-    CudnnConvOp(Var* x, Var* w, int stride, int padding, int dilation, string xformat="abcd", string wformat="oihw", string yformat="");
+    CudnnConvOp(Var* x, Var* w, int stride, int padding, int dilation, int groups=1, string xformat="abcd", string wformat="oihw", string yformat="");
     
     const char* name() const override { return "cudnn_conv"; }
     void infer_shape() override;

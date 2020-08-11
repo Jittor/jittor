@@ -5,6 +5,7 @@
 // ***************************************************************
 #include <typeinfo>
 #include "misc/cuda_flags.h"
+
 #include "mem/allocator/aligned_allocator.h"
 #ifdef HAS_CUDA
 #include "mem/allocator/cuda_managed_allocator.h"
@@ -84,5 +85,5 @@ Allocator* get_allocator() {
 void gc_all() {
     for (auto& kv : allocators) kv.second->gc();
 }
-    
+
 } // jittor

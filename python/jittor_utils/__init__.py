@@ -4,6 +4,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 from multiprocessing import Pool
+import multiprocessing as mp
 import subprocess as sp
 import os
 import re
@@ -129,10 +130,24 @@ def do_compile(args):
         run_cmd(cmd)
         return True
 
+pool_size = 0
+
 def run_cmds(cmds, cache_path, jittor_path):
+    global pool_size
+    if pool_size == 0:
+        mem_bytes = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
+        mem_gib = mem_bytes/(1024.**3)
+        pool_size = min(8,max(int(mem_gib // 3), 1))
+        LOG.i(f"Total mem: {mem_gib:.2f}GB, using {pool_size} procs for compiling.")
     cmds = [ [cmd, cache_path, jittor_path] for cmd in cmds ]
-    with Pool(8) as p:
-        p.map(do_compile, cmds)
+    bk = mp.current_process()._config.get('daemon')
+    mp.current_process()._config['daemon'] = False
+    try:
+        with Pool(pool_size) as p:
+            p.map(do_compile, cmds)
+    finally:
+        mp.current_process()._config['daemon'] = bk
+
 
 def download(url, filename):
     from six.moves import urllib
@@ -158,9 +173,10 @@ def find_cache_path():
             r = sp.run(["git","branch"], cwd=os.path.dirname(__file__), stdout=sp.PIPE,
                    stderr=sp.PIPE)
             assert r.returncode == 0
-            bs = r.stdout.decode()
+            bs = r.stdout.decode().splitlines()
             for b in bs:
                 if b.startswith("* "): break
+            
             cache_name = b[2:]
         for c in " (){}": cache_name = cache_name.replace(c, "_")
     except:
@@ -168,10 +184,14 @@ def find_cache_path():
     for name in cache_name.split("/"):
         dirs.insert(-1, name)
     os.environ["cache_name"] = cache_name
+    LOG.v("cache_name", cache_name)
     for d in dirs:
         path = os.path.join(path, d)
         if not os.path.isdir(path):
-            os.mkdir(path)
+            try:
+                os.mkdir(path)
+            except:
+                pass
         assert os.path.isdir(path)
     if path not in sys.path:
         sys.path.append(path)

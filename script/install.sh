@@ -19,7 +19,7 @@ fi
 
 if [ "$with_clang" = "1" ]; then
 sudo apt install wget lsb-release software-properties-common -y
-wget -O - https://apt.llvm.org/llvm.sh > /tmp/llvm.sh
+wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install_llvm.sh > /tmp/llvm.sh
 sudo bash /tmp/llvm.sh 8
 sudo apt-get install libc++-8-dev libc++abi-8-dev -y
 sudo apt-get install libomp-8-dev -y

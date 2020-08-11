@@ -16,37 +16,50 @@ def check(op, *args):
     x = convert(x)
     y = convert(y)
     # str match nan and inf
-    assert x.dtype == y.dtype and x.shape == y.shape and str(x)==str(y), f"{x}\n{y}"
+    assert x.dtype == y.dtype and x.shape == y.shape
+    for a,b in zip(x.flatten(), y.flatten()):
+        assert str(a)[:5] == str(b)[:5], (a,b)
 
 class TestUnaryOp(unittest.TestCase):
     def test_unary_op(self):
         assert jt.float64(1).data.dtype == "float64"
         assert (jt.abs(-1) == 1).data.all()
         assert (abs(-jt.float64(1)) == 1).data.all()
-        a = [-1,2,3,0]
+        a = np.array([-1,2,3,0])
         check("abs", a)
         check("negative", a)
         check("logical_not", a)
         check("bitwise_not", a)
-        b = [1.1, 2.2, 3.3, 4.4, -1, 0]
+        b = np.array([1.1, 2.2, 3.3, 4.4, -1, 0])
         check("log", a)
         check("exp", a)
         check("sqrt", a)
         
     def test_grad(self):
-        ops = ["abs", "negative", "log", "exp", "sqrt"]
-        a = [1.1, 2.2, 3.3, 4.4]
+        ops = ["abs", "negative", "log", "exp", "sqrt",
+            "sin", "arcsin", "sinh", "arcsinh", 
+            "tan", "arctan", "tanh", "arctanh", 
+            "cos", "arccos", "cosh", "arccosh", 
+            "sigmoid", 
+        ]
+        a = np.array([1.1, 2.2, 3.3, 4.4])
         for op in ops:
             if op == "abs":
                 b = np.array(a+[-1,])
+            elif op == "arccosh":
+                b = np.array(a)
+            elif "sin" in op or "cos" in op or "tan" in op:
+                b = np.array(a) / 5
             else:
                 b = np.array(a)
             func = lambda x: eval(f"np.{op}(x[0]).sum()")
+            if op == "sigmoid":
+                func = lambda x: (1/(1+np.exp(-x[0]))).sum()
             x, (da,) = ngrad(func, [b], 1e-8)
             ja = jt.array(b)
             jb = eval(f"jt.{op}(ja)")
             jda = jt.grad(jb, ja)
-            assert (np.abs(jda.data-da)<1e-5).all(), (jda.data,da,op)
+            assert (np.allclose(jda.data, da)), (jda.data,da,op)
 
 class TestUnaryOpCuda(TestUnaryOp, test_cuda(2)):
     pass

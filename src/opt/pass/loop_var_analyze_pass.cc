@@ -170,6 +170,10 @@ void LoopVarAnalyzePass::run() {
         for (uint j=0; j<ndim; j++)
             if (!(mask>>j&1) && j<loop_var_names.size()) {
                 for (auto& vname : vnames) {
+                    // cannot replace extras shape
+                    // TODO: optimize it
+                    if (vname.find("extras") != string::npos)
+                        continue;
                     // replace op{i}_{vname}shape{j} -> {loop_var_names[j]}
                     std::stringstream name1;
                     name1 << vname<<"shape"<<j;
@@ -193,7 +197,7 @@ void LoopVarAnalyzePass::run() {
         replace_vars.emplace_back(name1, name2);
     }
     
-    LOGvvvv << "replace_vars" << replace_vars;
+    LOGvvv << "replace_vars" << replace_vars;
     ir->replace(replace_vars);
     LOGvvvv << "KernelIR after replace\n" >> ir->to_string(0, true);
     // move define

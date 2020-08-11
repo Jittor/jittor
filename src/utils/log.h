@@ -220,6 +220,10 @@ bool check_vlog(const char* fileline, int verbose);
 #define LOGrrrr LOGvvvv >> jittor::red
 #define LOGyyyy LOGvvvv >> jittor::yellow
 
+#define LOGir LOGi >> jittor::red
+#define LOGig LOGi >> jittor::green
+#define LOGiy LOGi >> jittor::yellow
+
 void system_with_check(const char* cmd);
 
 } // jittor

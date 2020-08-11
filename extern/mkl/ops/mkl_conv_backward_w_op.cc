@@ -45,8 +45,8 @@ static inline void set_shape(Var* x, const char* f, const string& format, int a,
         shape[0], shape[1], shape[2], shape[3]));
 }
 
-MklConvBackwardWOp::MklConvBackwardWOp(Var* x, Var* dy, int kernel_size, int stride, int padding, int dilation, string xformat, string wformat, string yformat)
-        : x(x), dy(dy), kernel_size(kernel_size), stride(stride), padding(padding), dilation(dilation),
+MklConvBackwardWOp::MklConvBackwardWOp(Var* x, Var* dy, int kernel_size, int stride, int padding, int dilation, int groups, string xformat, string wformat, string yformat)
+        : x(x), dy(dy), kernel_size(kernel_size), stride(stride), padding(padding), dilation(dilation), groups(groups), 
       xformat(move(xformat)), wformat(move(wformat)), yformat(move(yformat)) {
     dw = create_output(nullptr, dtype_infer(dy->ns, x->ns));
 }
@@ -57,7 +57,7 @@ void MklConvBackwardWOp::infer_shape() {
     int xn, xc, xh, xw, wh, ww, wci, wco, yn, yc, yh, yw;
     get_shape(x, "abcd", xformat, xn, xc, xh, xw);
     get_shape(dy, "abcd", yformat, yn, yc, yh, yw);
-    wco = yc, wci = xc;
+    wco = yc, wci = xc / groups;
     wh = kernel_size;
     ww = kernel_size;
     set_shape(dw, "oihw", wformat, wco, wci, wh, ww);
@@ -113,11 +113,15 @@ void MklConvBackwardWOp::jit_run() {
     std::vector<std::unordered_map<int, memory>> net_bwd_args;
 
     memory::dims conv_src_tz = {batch, ch_in, height, width};
-    memory::dims conv_weights_tz = {ch_out, ch_in, kernel_size, kernel_size};
+    memory::dims conv_weights_tz = groups>1
+        ? memory::dims{groups, ch_out/groups, ch_in/groups, kernel_size, kernel_size} 
+        : memory::dims{ch_out, ch_in, kernel_size, kernel_size};
     memory::dims conv_dst_tz = {batch, ch_out, (height+padding*2-kernel_size*dilation+dilation-1)/stride+1, (width+padding*2-kernel_size*dilation+dilation-1)/stride+1};
     memory::dims conv_strides = {stride, stride};
     memory::dims conv_padding = {padding, padding};
     memory::dims conv_dilation = {dilation-1, dilation-1};
+
+    if (groups>1) ASSERT(tag::@WFORMAT == tag::oihw);
 
     auto conv_user_src_memory
             = memory({{conv_src_tz}, dt::@Tx, tag::@XFORMAT}, eng, net_src);
@@ -144,7 +148,7 @@ void MklConvBackwardWOp::jit_run() {
             = memory({{conv_dst_tz}, dt::@Ty, tag::YFORMAT}, eng, net_diff_dst);
 
     auto conv_user_diff_weights_memory
-            = memory({{conv_weights_tz}, dt::@Tw, tag::WFORMAT}, eng, conv_user_diff_weights_buffer);
+            = memory({{conv_weights_tz}, dt::@Tw, groups>1 ? tag::goihw : tag::@WFORMAT}, eng, conv_user_diff_weights_buffer);
 
     auto conv_bwd_src_md = memory::desc({conv_src_tz}, dt::@Tx, tag::any);
     auto conv_diff_weights_md

@@ -12,13 +12,6 @@ import numpy as np
 from .test_log import find_log_with_re
 f32 = jt.float32
 from jittor import nn, Module
-
-@jt.var_scope('linear')
-def linear(x, n):
-    w = jt.make_var([x.shape[-1], n], init=lambda *a:
-            (jt.random(*a)-f32(0.5)) / f32(x.shape[-1])**f32(0.5))
-    b = jt.make_var([n], init=lambda *a: jt.random(*a)-f32(0.5))
-    return jt.nn.matmul(x, w) + b
     
 def relu(x): return jt.maximum(x, f32(0))
 
@@ -297,6 +290,60 @@ class TestMatmul(unittest.TestCase):
                     "Jit op key (not )?found: (cublas)_matmul.*")
                 assert len(logs_b)==2, len(logs_b)
             jt.clean()
+
+    def test_matmul_example(self):
+        a = jt.random([3])
+        b = jt.random([3])
+        c = jt.matmul(a, b)
+        assert c.shape == [1]
+
+        a = jt.random([3, 4])
+        b = jt.random([4])
+        c = jt.matmul(a, b)
+        assert c.shape == [3]
+
+        a = jt.random([10, 3, 4])
+        b = jt.random([4])
+        c = jt.matmul(a, b)
+        assert c.shape == [10, 3]
+
+        a = jt.random([10, 3, 4])
+        b = jt.random([4, 5])
+        c = jt.matmul(a, b)
+        assert c.shape == [10, 3, 5]
+
+        a = jt.random([10, 3, 4])
+        b = jt.random([10, 4, 5])
+        c = jt.matmul(a, b)
+        assert c.shape == [10, 3, 5]
+
+        a = jt.random([8, 1, 3, 4])
+        b = jt.random([10, 4, 5])
+        c = jt.matmul(a, b)
+        assert c.shape == [8, 10, 3, 5]
+
+    def test_matmul_example2(self):
+        def check(a_shape, b_shape):
+            a = jt.random(a_shape)
+            b = jt.random(b_shape)
+            c = jt.matmul(a, b)
+            cc = np.matmul(a.data, b.data)
+            assert c.shape == cc.shape or (cc.shape==() and c.shape==[1]), (c.shape, cc.shape)
+            assert np.allclose(c.data, cc), (c.data-cc)
+            da, db = jt.grad(c, [a, b])
+            assert da.shape == a.shape
+            assert db.shape == b.shape
+        check([3], [3])
+        check([3,4], [4])
+        check([10,3,4], [4])
+        check([10,3,4], [4,5])
+        check([10,3,4], [10,4,5])
+        check([8,1,3,4], [10,4,5])
+        check([5,10,3,4], [5,10,4,5])
+
+    @jt.flag_scope(use_cuda=1)
+    def test_matmul_example2_cuda(self):
+        self.test_matmul_example2()
 
 if __name__ == "__main__":
     unittest.main()

@@ -20,4 +20,8 @@ void add_set_seed_callback(set_seed_callback callback);
 extern "C"
 std::default_random_engine* get_random_engine();
 
+// things need to be clean before python exit
+// @pyjt(cleanup)
+void cleanup();
+
 } // jittor

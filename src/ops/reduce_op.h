@@ -10,13 +10,12 @@ namespace jittor {
 
 struct ReduceOp : Op {
     Var* x, * y;
-    NanoVector yshape; // keepdim shape
-    bool keepdims;
     uint16 reduce_mask; // i-th bit is 1 of dim-i is reduced
+    uint16 keepdims_mask;
     ReduceOp(Var* x, NanoString op, int dim, bool keepdims=false);
     ReduceOp(Var* x, NanoString op, NanoVector dims=NanoVector(), bool keepdims=false);
     // @pybind(None)
-    ReduceOp(Var* x, NanoString op, uint dims_mask, bool keepdims);
+    ReduceOp(Var* x, NanoString op, uint dims_mask, uint keepdims_mask);
     
     const char* name() const override { return "reduce"; }
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;

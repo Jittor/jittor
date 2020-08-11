@@ -7,7 +7,7 @@ import unittest
 import jittor as jt
 import os
 from jittor import compile_extern
-if compile_extern.has_cuda:
+if jt.has_cuda:
     from jittor.compile_extern import cublas_ops, cudnn_ops, cub_ops
 else:
     cublas_ops = cudnn_ops = cub_ops = None

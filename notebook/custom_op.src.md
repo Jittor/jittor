@@ -33,7 +33,7 @@ namespace jittor {
 
 struct CustomOp : Op {
     Var* output;
-    CustomOp(NanoVector shape, NanoString dtype=ns_float);
+    CustomOp(NanoVector shape, NanoString dtype=ns_float32);
     
     const char* name() const override { return "custom"; }
     DECLARE_jit_run;

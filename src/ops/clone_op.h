@@ -18,4 +18,7 @@ struct CloneOp : Op {
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;
     void infer_shape() override;
 };
+
+VarPtr detach(Var* x);
+
 } // jittor

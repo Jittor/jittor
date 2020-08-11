@@ -16,7 +16,7 @@ static auto make_broadcast_to = get_op_info("broadcast_to")
     .get_constructor<VarPtr, Var*, Var*, NanoVector>();
 
 VarPtr make_number(float number, Var* x) {
-    VarPtr nums = make_array(&number, 1, ns_float);
+    VarPtr nums = make_array(&number, 1, ns_float32);
     nums = make_broadcast_to(nums, x, {});
     return make_unary(nums, x->dtype());
 }

@@ -133,5 +133,34 @@ class TestOpCompiler(unittest.TestCase):
         expect_error(lambda: jit_precompile(vars, "@if(1)"))
         expect_error(lambda: jit_precompile(vars, "#define OP1(a,b) a+b\n@expand_macro(OP1,1)"))
 
+    def test_strcmp(self):
+        vars = {"Tx":"float"}
+        check = lambda expr, result: \
+            self.assertEqual(jit_precompile(vars, expr), result)
+        check("@strcmp(aaa,aaa)", "0")
+        check("@strcmp(aaa,bbb)", "-1")
+        check("@strcmp(ccc,bbb)", "1")
+        check("@{@strcmp(aaa,aaa)}", "0")
+        check("@{@strcmp(aaa,bbb)}", "-1")
+        check("@{@strcmp(ccc,bbb)}", "1")
+
+        code = \
+"""@define(T_NCCL,
+    @if(@strcmp(@Tx,float)==0 || @strcmp(@Tx,float32)==0, ncclFloat)
+    @if(@strcmp(@Tx,int)==0 || @strcmp(@Tx,int32)==0, ncclInt)
+    @if(@strcmp(@Tx,float64)==0, ncclFloat64)
+    @if(@strcmp(@Tx,int64)==0, ncclInt64)
+)
+ncclBcast(..., @T_NCCL, ...)
+"""
+        assert "ncclFloat" in jit_precompile({"Tx":"float"}, code)
+        assert "ncclFloat" in jit_precompile({"Tx":"float32"}, code)
+        assert "ncclFloat64" in jit_precompile({"Tx":"float64"}, code)
+        assert "ncclInt" in jit_precompile({"Tx":"int"}, code)
+        assert "ncclInt" in jit_precompile({"Tx":"int32"}, code)
+        assert "ncclInt64" in jit_precompile({"Tx":"int64"}, code)
+        
+
+
 if __name__ == "__main__":
     unittest.main()
