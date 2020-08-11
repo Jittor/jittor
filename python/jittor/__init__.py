@@ -7,7 +7,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-__version__ = '1.1.7.2'
+__version__ = '1.1.7.3'
 from . import lock
 with lock.lock_scope():
     from . import compiler
@@ -547,7 +547,7 @@ class Module:
 
     def eval(self):
         def callback(parents, k, v, n):
-            if isinstance(v, Module) and hasattr(v, "is_train"):
+            if isinstance(v, Module):
                 v.is_train = False
         self.dfs([], None, callback, None)
 
@@ -561,7 +561,7 @@ class Module:
 
     def train(self):
         def callback(parents, k, v, n):
-            if isinstance(v, Module) and hasattr(v, "is_train"):
+            if isinstance(v, Module):
                 v.is_train = True
         self.dfs([], None, callback, None)
 
@@ -571,6 +571,11 @@ class Module:
                 if id(p) in self.backup_grad_state and self.backup_grad_state[id(p)]:
                     p.start_grad()
     
+    def is_training(self):
+        if not hasattr(self, "is_train"):
+            self.is_train = True
+        return self.is_train
+
     def mpi_param_broadcast(self, root=0):
         if not in_mpi: return
         for p in self.parameters():
