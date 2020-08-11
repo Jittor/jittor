@@ -9,7 +9,7 @@
 
 has_cupy = 0
 try:
-    import cupy
+    import cupy as cp
     has_cupy = 1
 except:
     pass

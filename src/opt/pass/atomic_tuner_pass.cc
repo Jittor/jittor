@@ -223,7 +223,7 @@ void AtomicTunerPass::run() {
     for (uint i=0; i<ir->before.size(); i++) {
         auto& func_call = ir->before[i];
         // TODO: remove this if
-        if (func_call->get_attr("dtype") != "__global__ void") continue;
+        if (func_call->get_attr("dtype").find("__global__ void") == string::npos) continue;
         tune_atomic(this, func_call.get(), is_cuda, 4, sorder, sfunc);
     }
 
