@@ -34,4 +34,6 @@ if __name__ == "__main__":
         suite.addTest(unittest.defaultTestLoader.loadTestsFromName(
             "jittor.test."+test_name))
 
-    unittest.TextTestRunner(verbosity=3).run(suite)
+    result = unittest.TextTestRunner(verbosity=3).run(suite)
+    if len(result.errors) or len(result.failures):
+        exit(1)
