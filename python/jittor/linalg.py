@@ -1,7 +1,7 @@
 # ***************************************************************
 # Copyright (c) 2020 Jittor. All Rights Reserved.
 # Authors:
-#     Haoyang Peng
+#     Haoyang Peng <2247838039@qq.com>
 #     Guowei Yang <471184555@qq.com>
 #     Dun Liang <randonlang@gmail.com>.
 #

@@ -1,7 +1,7 @@
 # ***************************************************************
 # Copyright (c) 2020 Jittor. All Rights Reserved.
 # Authors:
-#     Haoyang Peng
+#     Haoyang Peng <2247838039@qq.com>
 #     Guowei Yang <471184555@qq.com>
 #     Dun Liang <randonlang@gmail.com>.
 #
@@ -190,21 +190,21 @@ class TestCodeOp(unittest.TestCase):
             L = anp.linalg.cholesky(a)
             return L
 
-        #single_test for now
-        x = jt.array(np.array([[4,-1,1],[-1,4.25,2.75],[1,2.75,3.5]]).astype("float32"))
-        x = x.reindex([2,2,x.shape[0],x.shape[1]],["i2","i3"])
-        tx = x.data
-        L = jt.linalg.cholesky(x)
-        tL = check_cholesky(tx)
-        assert np.allclose(tL,L.data)
-        jx = jt.grad(L,x)
-        check_grad = jacobian(check_cholesky)
-        gx = check_grad(tx)
-        gx = np.sum(gx, 0)
-        gx = np.sum(gx, 0)
-        gx = np.sum(gx, 0)
-        gx = np.sum(gx, 0)
-        assert np.allclose(jx.data,gx)
+        for i in range(50):
+            x = jt.array(np.diag((np.random.rand(3) + 1) * 2))
+            x = x.reindex([2,2,x.shape[0],x.shape[1]],["i2","i3"])
+            tx = x.data
+            L = jt.linalg.cholesky(x)
+            tL = check_cholesky(tx)
+            assert np.allclose(tL,L.data)
+            jx = jt.grad(L,x)
+            check_grad = jacobian(check_cholesky)
+            gx = check_grad(tx)
+            gx = np.sum(gx, 0)
+            gx = np.sum(gx, 0)
+            gx = np.sum(gx, 0)
+            gx = np.sum(gx, 0)
+            assert np.allclose(jx.data,gx)
 
     def test_solve(self):
         def check_solve(a,b):
