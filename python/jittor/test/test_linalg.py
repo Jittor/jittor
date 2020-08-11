@@ -1,9 +1,26 @@
+# ***************************************************************
+# Copyright (c) 2020 Jittor. All Rights Reserved.
+# Authors:
+#     Haoyang Peng
+#     Guowei Yang <471184555@qq.com>
+#     Dun Liang <randonlang@gmail.com>.
+#
+# This file is subject to the terms and conditions defined in
+# file 'LICENSE.txt', which is part of this source code package.
+# ***************************************************************
 import jittor as jt
 import numpy as np
-import autograd.numpy as anp
-from autograd import jacobian
 import unittest
 
+
+try:
+    import autograd.numpy as anp
+    from autograd import jacobian
+    has_autograd = True
+except:
+    has_autograd = False
+
+@unittest.skipIf(not has_autograd, "No autograd found.")
 class TestCodeOp(unittest.TestCase):
     def test_svd(self):
         def check_svd(a):
@@ -153,7 +170,7 @@ class TestCodeOp(unittest.TestCase):
                 tn = np.random.randn((4,4)).astype('float32')*10
             x = jt.array(tn)
             x = x.reindex([2,2,x.shape[0],x.shape[1]],["i2","i3"])
-            s = jt.array(x.shape).data.tolist()
+            s = list(x.shape)
             det_s = s[:-2]
             if len(det_s) == 0:
                 det_s.append(1)
@@ -223,7 +240,7 @@ class TestCodeOp(unittest.TestCase):
                 tn = np.random.randn((3, 3)).astype('float32') * 5
             x = jt.array(tn)
             x = x.reindex([2, 2, x.shape[0], x.shape[1]], ["i2", "i3"])
-            s = jt.array(x.shape).data.tolist()
+            s = list(x.shape)
             x_s = s[:-2]
             if len(s) == 2:
                 x_s.append(1)
