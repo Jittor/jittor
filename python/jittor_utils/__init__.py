@@ -4,6 +4,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 from multiprocessing import Pool
+import multiprocessing as mp
 import subprocess as sp
 import os
 import re
@@ -139,8 +140,14 @@ def run_cmds(cmds, cache_path, jittor_path):
         pool_size = min(8,max(int(mem_gib // 3), 1))
         LOG.i(f"Total mem: {mem_gib:.2f}GB, using {pool_size} procs for compiling.")
     cmds = [ [cmd, cache_path, jittor_path] for cmd in cmds ]
-    with Pool(pool_size) as p:
-        p.map(do_compile, cmds)
+    bk = mp.current_process()._config.get('daemon')
+    mp.current_process()._config['daemon'] = False
+    try:
+        with Pool(pool_size) as p:
+            p.map(do_compile, cmds)
+    finally:
+        mp.current_process()._config['daemon'] = bk
+
 
 def download(url, filename):
     from six.moves import urllib

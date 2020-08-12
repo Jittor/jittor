@@ -48,13 +48,21 @@ VarPtr CublasBatchedMatmulOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 }
 
 void CublasBatchedMatmulOp::infer_shape(){
-    ASSERTop(a->shape.size(),==,3);
-    ASSERTop(b->shape.size(),==,3);
+    auto adim = a->shape.size();
+    auto bdim = b->shape.size();
+    ASSERTop(adim,>=,3);
+    ASSERTop(bdim,>=,3);
+    ASSERTop(adim,==,bdim);
 
-    int batch_size = a->shape[0], n = a->shape[1], m = a->shape[2];
-    int batch_size_ = b->shape[0], m_ = b->shape[1], k = b->shape[2];
+    auto n = a->shape[adim-2], m = a->shape[adim-1];
+    auto m_ = b->shape[adim-2], k = b->shape[adim-1];
 
-    ASSERTop(batch_size,==,batch_size_);
+    NanoVector c_shape;
+
+    for (int i=0; i<adim-2; i++) {
+        ASSERTop(a->shape[i],==,b->shape[i]);
+        c_shape.push_back(a->shape[i]);
+    }
     if (trans_a) {
         swap(n, m);
     }
@@ -62,8 +70,10 @@ void CublasBatchedMatmulOp::infer_shape(){
         swap(m_, k);
     }
     ASSERTop(m,==,m_);
+    c_shape.push_back(n);
+    c_shape.push_back(k);
 
-    c->set_shape({batch_size, n, k});
+    c->set_shape(c_shape);
 }
 
 void CublasBatchedMatmulOp::jit_prepare() {
@@ -83,16 +93,19 @@ void CublasBatchedMatmulOp::jit_run() {
 
     const auto& as = a->shape;
     const auto& bs = b->shape;
+    auto adim = as.size();
     auto batch_size = as[0];
-    auto n = as[1];
-    auto m = as[2];
-    auto k = bs[2];
+    for (int i=1; i<adim-2; i++)
+        batch_size *= as[i];
+    auto n = as[adim-2];
+    auto m = as[adim-1];
+    auto k = bs[adim-1];
     if ('@Trans_a'=='T') {
-        n = as[2];
-        m = as[1];
+        n = as[adim-1];
+        m = as[adim-2];
     }
     if ('@Trans_b'=='T') {
-        k = bs[1];
+        k = bs[adim-2];
     }
     // a: [b,n,m], b: [b,m,k], c: [b,n,k]
     checkCudaErrors(cublas@op@@gemmStridedBatched(handle_,

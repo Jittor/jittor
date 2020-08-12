@@ -49,6 +49,10 @@ class TestPad(unittest.TestCase):
         check_equal(arr, jnn.ConstantPad2d(10,-2), tnn.ConstantPad2d(10,-2))
         check_equal(arr, jnn.ConstantPad2d((2,3,34,1),10.2), tnn.ConstantPad2d((2,3,34,1),10.2))
 
+        arr = np.random.randn(16,3,224,10,10)
+        check_equal(arr, jnn.ConstantPad2d(10,-2), tnn.ConstantPad2d(10,-2))
+        check_equal(arr, jnn.ConstantPad2d((2,3,34,1),10.2), tnn.ConstantPad2d((2,3,34,1),10.2))
+
         # ***************************************************************
         # Test ZeroPad2d Layer
         # ***************************************************************

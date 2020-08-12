@@ -453,5 +453,28 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
     LOGvv << "cudaDeviceSynchronize times:" << sync_times << "/" <<queue.size();
     #endif
 }
+
+unordered_map<void*, size_t> allocation_map;
+unordered_map<void*, size_t> size_map;
+
+extern "C" void* jittor_cuda_malloc(void*, size_t size, int device_id) {
+    size_t allocation;
+    void* ptr=exe.allocator->alloc(size, allocation);
+    allocation_map[ptr]=allocation;
+    size_map[ptr]=size;
+    return ptr;
+}
+
+extern "C" void jittor_cuda_free(void*, void* ptr, int device_id) {
+    exe.allocator->free(ptr, size_map[ptr], allocation_map[ptr]);
+}
+
+extern "C" void* get_jittor_cuda_malloc() {
+    return (void*)jittor_cuda_malloc;
+}
+
+extern "C" void* get_jittor_cuda_free() {
+    return (void*)jittor_cuda_free;
+}
     
 } // jittor
