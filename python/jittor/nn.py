@@ -734,13 +734,11 @@ def grid_sample(input, grid, mode='bilinear', padding_mode='zeros'):
     Example:
 
         >>> x = jt.array([[[[1,2],[3,4]]]])
-
         >>> print(x)
         [[[[1 2]
         [3 4]]]] 
 
         >>> grid = jt.array([[[[0.5, 0.5]]]])
-        
         >>> print(x.shape, grid.shape)
         [1,1,2,2,], [1,1,2,2,]
 

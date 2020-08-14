@@ -13,6 +13,8 @@ namespace jittor {
 
 extern unordered_map<void*, int64> lived_nodes;
 extern int64 total_node;
+extern int64 nt;
+extern vector<Node*> free_buffer;
 
 struct NodeFlags {
     typedef uint16 nf_t;
@@ -184,6 +186,27 @@ struct Node {
     void own_both_liveness();
     void finish_pending_liveness();
     void set_stop_grad();
+};
+
+struct SetupFreeBuffer {
+
+bool outside;
+inline SetupFreeBuffer() {
+    outside = !nt;
+    if (outside) {
+        nt = ++Node::tflag_count;
+    }
+}
+
+inline ~SetupFreeBuffer() {
+    if (outside) {
+        for (int i=0; i<free_buffer.size(); i++)
+            delete free_buffer[i];
+        free_buffer.clear();
+        nt = 0;
+    }
+}
+
 };
 
 std::ostream& operator<<(std::ostream& os, const Node* node);

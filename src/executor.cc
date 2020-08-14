@@ -318,6 +318,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
     }
 
     // running
+    SetupFreeBuffer setup_free_buffer;
     FusedOp fused_op;
     vector<Var*> outputs_bk;
     #ifdef HAS_CUDA
@@ -446,9 +447,9 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
     if (device_sync && use_cuda) {
         last_is_cuda = false;
         sync_times++;
-        event_queue.run_sync([]() {
+        CHECK(EventQueue::OK == event_queue.run_sync([]() {
             checkCudaErrors(cudaDeviceSynchronize());
-        });
+        }));
     }
     LOGvv << "cudaDeviceSynchronize times:" << sync_times << "/" <<queue.size();
     #endif

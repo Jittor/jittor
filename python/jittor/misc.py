@@ -246,10 +246,11 @@ def unbind(x, dim=0):
 
     Example:
 
-        jt.random((3,3))
+        a = jt.random((3,3))
+        b = jt.unbind(a, 0)
 
     '''
-    if dim < 0: dim += len(input.shape)
+    if dim < 0: dim += len(x.shape)
     return [x[(slice(None),)*dim+(i,)] for i in range(x.shape[dim])]
 
 def make_grid(x, nrow=8, padding=2, normalize=False, range=None, scale_each=False, pad_value=0):

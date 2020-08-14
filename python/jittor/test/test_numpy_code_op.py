@@ -10,9 +10,13 @@ import unittest
 from jittor import Function
 import jittor as jt
 import numpy
-import cupy
 import ctypes
 import sys
+
+try:
+    import cupy
+except:
+    pass
 
 class TestCodeOp(unittest.TestCase):
     def test_func(self):
