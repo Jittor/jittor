@@ -764,6 +764,7 @@ double = float64
 Var.double = Var.float64
 
 from . import nn
+from . import linalg
 from .nn import matmul
 from . import contrib
 from . import numpy2cupy
