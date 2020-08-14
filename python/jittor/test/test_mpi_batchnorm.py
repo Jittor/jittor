@@ -92,7 +92,7 @@ class TestMpiBatchnorm(unittest.TestCase):
 
         assert np.allclose(y1.data, y2.data, atol=1e-5),(mpi.world_rank(),y1.data, y2.data, y1.data-y2.data)
         for i in range(len(gs1)):
-            assert np.allclose(gs1[i].data, gs2[i].data, rtol=1e-3),(mpi.world_rank(),gs1[i].data, gs2[i].data,gs1[i].data-gs2[i].data)
+            assert np.allclose(gs1[i].data, gs2[i].data, rtol=1e-2),(mpi.world_rank(),gs1[i].data, gs2[i].data,gs1[i].data-gs2[i].data)
 
     @unittest.skipIf(not jt.has_cuda, "no cuda")
     @jt.flag_scope(use_cuda=1)
