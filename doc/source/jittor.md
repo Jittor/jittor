@@ -42,3 +42,13 @@ jittor
    :members:
    :undoc-members:
 ```
+
+## jittor.Misc
+
+这里是Jittor的基础算子模块的API文档，该API可以通过`jittor.misc.XXX`或者`jittor.XXX`直接访问。
+
+```eval_rst
+.. automodule:: jittor.misc
+   :members:
+   :undoc-members:
+```
