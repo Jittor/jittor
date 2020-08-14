@@ -23,7 +23,7 @@ except:
     skip_this_test = True
 
 mid = 0
-if os.uname()[1] == "jittor-ce":
+if "jittor" in os.uname()[1]:
     mid = 1
 
 def resize_and_crop(x, bbox, interpolation="nearest", out_size=[224,224]):
