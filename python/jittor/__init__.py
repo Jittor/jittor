@@ -7,7 +7,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-__version__ = '1.1.7.6'
+__version__ = '1.1.7.7'
 from . import lock
 with lock.lock_scope():
     from . import compiler
@@ -204,7 +204,11 @@ def array(data, dtype=None):
         if dtype is None:
             return data.clone()
         return cast(data, dtype)
-    if dtype != None:
+    if dtype is not None:
+        if isinstance(dtype, NanoString):
+            dtype = str(dtype)
+        elif callable(dtype):
+            dtype = dtype.__name__
         return ops.array(np.array(data, dtype))
     return ops.array(data)
 
