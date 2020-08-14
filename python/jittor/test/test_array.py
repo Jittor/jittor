@@ -127,6 +127,10 @@ class TestArray(unittest.TestCase):
         assert jt.array(np.int32(1)).data == 1
         assert jt.array(np.int64(1)).data == 1
 
+    def test_array_dtype(self):
+        a = jt.array([1,2,3], dtype=jt.NanoString("float32"))
+        a = jt.array([1,2,3], dtype=jt.float32)
+
 
 
 if __name__ == "__main__":
