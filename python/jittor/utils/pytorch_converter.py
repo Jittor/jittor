@@ -78,6 +78,32 @@ pjmap = {
         'extras': {},
         'delete': ['inplace'],
     },
+    'relu': {
+        'pytorch': {
+            'args': 'input', 
+        },
+        'jittor': {
+            'module': 'nn',
+            'name': 'relu',
+            'args': 'x'
+        },
+        'links': {'input': 'x'},
+        'extras': {},
+        'delete': [],
+    },
+    'binary_cross_entropy_with_logits': {
+        'pytorch': {
+            'args': 'input, target, weight, size_average=True', 
+        },
+        'jittor': {
+            'module': 'nn',
+            'name': 'binary_cross_entropy_with_logits',
+            'args': 'input, target, weight, size_average=True'
+        },
+        'links': {},
+        'extras': {},
+        'delete': [],
+    },
     'ReLU6': {
         'pytorch': {
             'args': 'inplace=False', 
@@ -274,6 +300,23 @@ pjmap = {
         'links': {},
         'extras': {},
     },
+    'clamp': {
+        'pytorch': {
+            'prefix': ['torch'],
+            'args_prefix': 'input, min, max, out=None',
+            'args': 'min, max, out=None',
+        },
+        'jittor': {
+            'prefix': 'jt',
+            'module': '',
+            'name': 'clamp',
+            'args_prefix': 'x, min_v, max_v',
+            'args': 'min_v, max_v'
+        },
+        'links': {'min': 'min_v', 'max': 'max_v'},
+        'extras': {},
+        'delete': ['out'],
+    },
     'permute': {
         'pytorch': {
             'prefix': [],
@@ -354,7 +397,7 @@ unsupport_ops = [
     # ***************************************************************
     # torch.nn
     # ***************************************************************
-    'Parameter', 'ModuleList', 'ModuleDict', 'ParameterList', 'ParameterDict', 
+    'Parameter', 'ModuleDict', 'ParameterList', 'ParameterDict', 
     'Conv1d', 'Conv3d', 'ConvTranspose1d', 'ConvTranspose3d', 'Unfold', 'Fold', 
     'MaxPool1d', 'MaxPool3d', 'MaxUnpool1d', 'MaxUnpool2d', 'MaxUnpool3d', 'AvgPool1d', 
     'AvgPool3d', 'FractionalMaxPool2d', 'LPPool1d', 'LPPool2d', 'AdaptiveMaxPool1d', 

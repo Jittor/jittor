@@ -49,7 +49,7 @@ class TestLoss(unittest.TestCase):
         jt_y=jt_loss(jt.array(output), jt.array(target))
         tc_y=tc_loss(torch.from_numpy(output), torch.from_numpy(target))
         assert np.allclose(jt_y.numpy(), tc_y.numpy())
-        
+
     def test_bce_loss(self):
         jt_loss=jnn.BCELoss()
         tc_loss=tnn.BCELoss()
@@ -57,6 +57,13 @@ class TestLoss(unittest.TestCase):
         tc_sig = tnn.Sigmoid()
         output=np.random.randn(100).astype(np.float32)
         target=np.random.randint(2, size=(100)).astype(np.float32)
+        jt_y=jt_loss(jt_sig(jt.array(output)), jt.array(target))
+        tc_y=tc_loss(tc_sig(torch.from_numpy(output)), torch.from_numpy(target))
+        assert np.allclose(jt_y.numpy(), tc_y.numpy())
+
+        weight=np.random.randn(100).astype(np.float32)
+        jt_loss=jnn.BCELoss(weight=jt.array(weight), size_average=False)
+        tc_loss=tnn.BCELoss(weight=torch.Tensor(weight), size_average=False)
         jt_y=jt_loss(jt_sig(jt.array(output)), jt.array(target))
         tc_y=tc_loss(tc_sig(torch.from_numpy(output)), torch.from_numpy(target))
         assert np.allclose(jt_y.numpy(), tc_y.numpy())
