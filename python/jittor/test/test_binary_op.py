@@ -126,6 +126,20 @@ class TestBinaryOp(unittest.TestCase):
             for jd, nd in zip(jgrads, grads):
                 assert (np.abs(jd.data-nd)<1e-4).all(), f"\n{jd.data}\n{nd}"
 
+    def test_mod_float(self):
+        a = jt.random((10,))
+        b = jt.random((10,))
+        c = a % b
+        assert np.allclose(c.data, a.data % b.data)
+        a = jt.random((10,), 'float64')
+        b = jt.random((10,), 'float64')
+        c = a % b
+        assert np.allclose(c.data, a.data % b.data)
+        a = jt.random((10,)) * 1000
+        b = (jt.random((10,)) * 10).int() + 1
+        c = a % b
+        assert np.allclose(c.data, a.data % b.data), (c.data, a.data%b.data)
+
 
 class TestBinaryOpCuda(TestBinaryOp, test_cuda(2)):
     pass
