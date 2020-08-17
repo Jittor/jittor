@@ -798,7 +798,7 @@ def check_debug_flags():
         global cc_flags
         cc_flags += " -g -DNODE_MEMCHECK "
 
-cc_flags = " " + os.environ.get("cc_flags", "")
+cc_flags = " "
 # os.RTLD_NOW | os.RTLD_GLOBAL cause segfault when import torch first
 import_flags = os.RTLD_NOW | os.RTLD_GLOBAL | os.RTLD_DEEPBIND
 # if cc_type=="icc":
@@ -841,6 +841,8 @@ has_pybt = check_pybt(gdb_path, python_path)
 
 cc_flags += " -Wall -Werror -Wno-unknown-pragmas -std=c++14 -fPIC -march=native "
 cc_flags += " -fdiagnostics-color=always "
+if "cc_flags" in os.environ:
+    cc_flags += os.environ["cc_flags"] + ' '
 link_flags = " -lstdc++ -ldl -shared "
 core_link_flags = ""
 opt_flags = ""

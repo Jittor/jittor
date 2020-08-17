@@ -25,6 +25,7 @@
    jittor.dataset
    jittor.transform
    jittor.mpi
+   jittor.linalg
 
 
 .. toctree::

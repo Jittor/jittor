@@ -7,7 +7,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-__version__ = '1.1.7.4'
+__version__ = '1.1.7.9'
 from . import lock
 with lock.lock_scope():
     from . import compiler
@@ -204,7 +204,11 @@ def array(data, dtype=None):
         if dtype is None:
             return data.clone()
         return cast(data, dtype)
-    if dtype != None:
+    if dtype is not None:
+        if isinstance(dtype, NanoString):
+            dtype = str(dtype)
+        elif callable(dtype):
+            dtype = dtype.__name__
         return ops.array(np.array(data, dtype))
     return ops.array(data)
 
@@ -400,6 +404,16 @@ def load(path):
     model_dict = pickle.load(pkl_file)
     return model_dict
 
+def _uniq(x):
+    a = set()
+    b = []
+    for i in x:
+        j = id(i)
+        if j not in a:
+            a.add(j)
+            b.append(i)
+    return b
+
 class Module:
     def __init__(self, *args, **kw):
         pass
@@ -459,7 +473,7 @@ class Module:
         def callback_leave(parents, k, v, n):
             stack.pop()
         self.dfs([], None, callback, callback_leave)
-        return ps
+        return _uniq(ps)
 
     def modules(self):
         ms = []
@@ -467,7 +481,7 @@ class Module:
             if isinstance(v, Module):
                 ms.append(v)
         self.dfs([], None, callback, None)
-        return ms
+        return _uniq(ms)
 
     def children(self):
         cd = []
@@ -764,6 +778,7 @@ double = float64
 Var.double = Var.float64
 
 from . import nn
+from . import linalg
 from .nn import matmul
 from . import contrib
 from . import numpy2cupy

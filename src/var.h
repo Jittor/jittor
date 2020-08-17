@@ -37,7 +37,6 @@ struct Var : Node {
     inline Op* output(uint i) { return Node::output(i)->op(); }
 
     Var(NanoVector shape, NanoString dtype);
-    ~Var();
 
     string to_string();
     int64_t numel();
