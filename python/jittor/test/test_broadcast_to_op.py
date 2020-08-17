@@ -133,6 +133,11 @@ class TestBroadcastToOpMisc(unittest.TestCase):
         assert (a.broadcast(b, [-1]).data == [[1,1],[2,2]]).all()
         assert (a.broadcast(b, [-2]).data == [[1,2],[1,2]]).all()
 
+    def test_zero_dim(self):
+        a = jt.array(1.0)
+        b = a.broadcast([0])
+        assert b.shape == [0]
+
 
 if __name__ == "__main__":
     unittest.main()
