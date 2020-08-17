@@ -18,9 +18,11 @@ try:
     jt.dirty_fix_pytorch_runtime_error()
     import torch
     import torch.nn as tnn
+    import torchvision
 except:
     torch = None
     tnn = None
+    torchvision = None
     skip_this_test = True
 
 def check_equal(res1, res2, eps=1e-5):
@@ -72,6 +74,25 @@ class TestPad(unittest.TestCase):
         check_equal(tnn.functional.normalize(torch.Tensor(arr), dim=2), jt.normalize(jt.array(arr), dim=2), 1e-1)
         check_equal(tnn.functional.normalize(torch.Tensor(arr), dim=3), jt.normalize(jt.array(arr), dim=3), 1e-1)
         print('pass normalize test ...')
+
+    def test_make_grid(self):
+        arr = np.random.randn(16,3,10,10)
+        check_equal(torchvision.utils.make_grid(torch.Tensor(arr)), jt.make_grid(jt.array(arr)))
+        check_equal(torchvision.utils.make_grid(torch.Tensor(arr), nrow=2), jt.make_grid(jt.array(arr), nrow=2))
+        check_equal(torchvision.utils.make_grid(torch.Tensor(arr), nrow=3), jt.make_grid(jt.array(arr), nrow=3))
+        check_equal(torchvision.utils.make_grid(torch.Tensor(arr), nrow=3, padding=4), jt.make_grid(jt.array(arr), nrow=3, padding=4))
+        check_equal(torchvision.utils.make_grid(torch.Tensor(arr), nrow=3, padding=4, pad_value=-1), jt.make_grid(jt.array(arr), nrow=3, padding=4, pad_value=-1))
+        check_equal(torchvision.utils.make_grid(torch.Tensor(arr), nrow=3, normalize=True, padding=4, pad_value=-1), jt.make_grid(jt.array(arr), nrow=3, normalize=True, padding=4, pad_value=-1))
+        print('pass make_grid test ...')
+
+    def test_unbind(self):
+        arr = np.random.randn(2,3,4)
+        for dim in range(len(arr.shape)):
+            t_res = torch.unbind(torch.Tensor(arr), dim=dim)
+            j_res = jt.unbind(jt.array(arr), dim=dim)
+            for idx in range(len(t_res)):
+                assert np.allclose(t_res[idx].numpy(), j_res[idx].numpy())
+        print('pass unbind test ...')
 
 if __name__ == "__main__":
     unittest.main()

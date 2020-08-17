@@ -25,7 +25,7 @@ class TestClone(unittest.TestCase):
         a = jt.array([1,2])
         print(a.detach())
 
-    @jt.flag_scope(eager_execution=1)
+    @jt.flag_scope(lazy_execution=0)
     def test3(self):
         a = jt.array([1,2])
         print(a.detach())

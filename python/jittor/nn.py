@@ -167,11 +167,16 @@ def cross_entropy_loss(output, target, ignore_index=None):
 def mse_loss(output, target):
     return (output-target).sqr().mean()
 
-def bce_loss(output, target, size_average=True):
+def bce_loss(output, target, weight=None, size_average=True):
+    loss = - (target * jt.log(jt.maximum(output, 1e-20)) + (1 - target) * jt.log(jt.maximum(1 - output, 1e-20)))
+
+    if weight is not None:
+        loss *= weight
+    
     if size_average:
-        return - (target * jt.log(jt.maximum(output, 1e-20)) + (1 - target) * jt.log(jt.maximum(1 - output, 1e-20))).mean()
+        return loss.mean()
     else:
-        return - (target * jt.log(jt.maximum(output, 1e-20)) + (1 - target) * jt.log(jt.maximum(1 - output, 1e-20))).sum()
+        return loss.sum()
 
 def l1_loss(output, target):
     return (output-target).abs().mean()
@@ -189,10 +194,11 @@ class MSELoss(Module):
         return mse_loss(output, target)
 
 class BCELoss(Module):
-    def __init__(self):
-        pass
-    def execute(self, output, target, size_average=True):
-        return bce_loss(output, target, size_average)
+    def __init__(self, weight=None, size_average=True):
+        self.weight = weight
+        self.size_average = size_average
+    def execute(self, output, target):
+        return bce_loss(output, target, self.weight, self.size_average)
 
 class L1Loss(Module):
     def __init__(self):
@@ -201,13 +207,16 @@ class L1Loss(Module):
         return l1_loss(output, target)
 
 class BCEWithLogitsLoss(Module):
-    def __init__(self):
+    def __init__(self, weight=None, size_average=True):
         self.sigmoid = Sigmoid()
-        self.bce = BCELoss()
-    def execute(self, output, target, size_average=True):
+        self.bce = BCELoss(weight, size_average)
+    def execute(self, output, target):
         output = self.sigmoid(output)
-        output = self.bce(output, target, size_average)
+        output = self.bce(output, target)
         return output
+
+def binary_cross_entropy_with_logits(input, target, weight=None, size_average=True):
+    return BCEWithLogitsLoss(weight, size_average)(input, target)
 
 def softmax(x, dim = None):
     if dim is None:
@@ -734,13 +743,11 @@ def grid_sample(input, grid, mode='bilinear', padding_mode='zeros'):
     Example:
 
         >>> x = jt.array([[[[1,2],[3,4]]]])
-
         >>> print(x)
         [[[[1 2]
         [3 4]]]] 
 
         >>> grid = jt.array([[[[0.5, 0.5]]]])
-        
         >>> print(x.shape, grid.shape)
         [1,1,2,2,], [1,1,2,2,]
 

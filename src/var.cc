@@ -30,13 +30,6 @@ Var::Var(NanoVector shape, NanoString dtype)
     number_of_lived_vars++;
     numel();
 }
-Var::~Var() {
-    if (mem_ptr != nullptr)
-        allocator->free(mem_ptr, size, allocation);
-    number_of_lived_vars--;
-    if (flags.get(NodeFlags::_in_update_queue))
-        update_queue.pop(this);
-}
     
 string Var::to_string() {
     string s = dtype().to_cstring();

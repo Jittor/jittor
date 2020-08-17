@@ -20,6 +20,7 @@ import jittor as jt
 from jittor import LOG
 from jittor.compiler import run_cmd
 from jittor_utils import translator
+import sys
 
 jittor_path = os.path.realpath(os.path.join(jt.flags.jittor_path, "..", ".."))
 
@@ -68,12 +69,14 @@ for cc_type in ["g++", "clang"]:
         env = f"cache_name=build/{cc_type}/{device} cc_path="
         cname = "g++" if cc_type=="g++" else "clang-8"
         env += cname
-        env += " "
+        # use core2 arch, avoid using avx instructions
+        # TODO: support more archs, such as arm, or use ir(GIMPLE or LLVM)
+        env += " cc_flags='-march=core2' "
         if device == "cpu":
             env += "nvcc_path='' "
         elif jt.flags.nvcc_path == "":
             env = "unset nvcc_path && " + env
-        cmd = f"{env} python3.7 -c 'import jittor'"
+        cmd = f"{env} {sys.executable} -c 'import jittor'"
         LOG.i("run cmd:", cmd)
         os.system(cmd)
         LOG.i("run cmd:", cmd)

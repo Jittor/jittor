@@ -335,7 +335,7 @@ void test_log_time(std::ostream* out) {
         auto finish = std::chrono::high_resolution_clock::now();
         auto total_ns =  std::chrono::duration_cast<std::chrono::nanoseconds>(finish-start).count();
         LOGi << "total_ns" << total_ns << "each_ns" << total_ns/n;
-        CHECKop(total_ns/n,<=,6000);
+        CHECKop(total_ns/n,<=,6500);
     };
     std::list<std::thread> ts;
     for (int i=0; i<nthread; i++) ts.emplace_back(log_lot);

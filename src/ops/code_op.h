@@ -45,7 +45,7 @@ struct CodeOp : Op {
     Example-1::
 
         from jittor import Function
-        from jittor import jt
+        import jittor as jt
 
         class Func(Function):
             def execute(self, x):
@@ -140,7 +140,7 @@ struct CodeOp : Op {
     CUDA Example-1::
 
         #This example shows how to use CUDA in code op.
-        from jittor import jt
+        import jittor as jt
         from jittor import Function
         jt.flags.use_cuda = 1
 
@@ -185,7 +185,7 @@ struct CodeOp : Op {
     CUDA Example-2::
     
         #This example shows how to use multi dimension data with CUDA.
-        from jittor import jt
+        import jittor as jt
         from jittor import Function
         jt.flags.use_cuda = 1
 

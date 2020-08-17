@@ -284,10 +284,10 @@ class TestFunction(unittest.TestCase):
 class TestFunctionWithEagerExecution(TestFunction):
     @classmethod
     def setUpClass(self):
-        jt.flags.eager_execution = 1
+        jt.flags.lazy_execution = 0
     @classmethod
     def tearDownClass(self):
-        jt.flags.eager_execution = 0
+        jt.flags.lazy_execution = 1
 
 if __name__ == "__main__":
     unittest.main()
