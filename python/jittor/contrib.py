@@ -160,3 +160,25 @@ def setitem(x, slices, value):
 
 jt.Var.__getitem__ = jt.Var.slice_var = slice_var
 jt.Var.__setitem__ = setitem
+
+# contrib topk for dim <= 3 [b, c, h, w]
+def topk(x, k, dim=-1, largest=True):
+    target_shape = x.shape
+    if dim < 0:
+        dim = len(target_shape) + dim
+    assert dim >= 0 and dim < len(target_shape) and dim < 4
+    index, value = jt.argsort(x, dim=dim, descending=largest)
+    if dim == 0:
+        topk_index = index[:k]
+        topk_value = value[:k]
+    elif dim == 1:
+        topk_index = index[:,:k]
+        topk_value = value[:,:k]
+    elif dim == 2:
+        topk_index = index[:,:,:k]
+        topk_value = value[:,:,:k]
+    elif dim == 3:
+        topk_index = index[:,:,:,:k]
+        topk_value = value[:,:,:,:k]
+    return topk_value, topk_index
+
