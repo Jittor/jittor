@@ -181,6 +181,28 @@ def bce_loss(output, target, weight=None, size_average=True):
 def l1_loss(output, target):
     return (output-target).abs().mean()
 
+
+def smooth_l1_loss(y_true, y_pred,reduction="mean"):
+    """Implements Smooth-L1 loss.
+    y_true and y_pred are typically: [N, 4], but could be any shape.
+
+    Args:
+         y_true - ground truth 
+         y_pred - predictions
+         reduction - the mode of cal loss which must be in ['mean','sum','none']
+    """
+    diff = jt.abs(y_true - y_pred)
+    less_than_one = (diff<1.0).float32()
+    loss = (less_than_one * 0.5 * diff**2) + (1 - less_than_one) * (diff - 0.5)
+    if reduction=="mean":
+        return loss.mean()
+    elif reduction=="sum":
+        return loss.sum()
+    elif reduction=="none":
+        return loss
+    else:
+        raise ValueError(f'not support {reduction}')
+
 class CrossEntropyLoss(Module):
     def __init__(self):
         pass
