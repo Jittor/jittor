@@ -10,7 +10,8 @@
 import jittor as jt
 import numpy as np
 import math
-from collections.abc import Sequence
+from collections.abc import Sequence,Iterable
+
 
 def repeat(x, *shape):
     r'''
@@ -263,3 +264,166 @@ def make_grid(x, nrow=8, padding=2, normalize=False, range=None, scale_each=Fals
     return x.reindex([c, h*ncol+(ncol+1)*padding, w*nrow+(nrow+1)*padding], 
                      [f"i1/{padding+h}*{nrow}+i2/{padding+w}", "i0", 
                       f"i1-i1/{padding+h}*{padding+h}-{padding}", f"i2-i2/{padding+w}*{padding+w}-{padding}"], overflow_value=pad_value)
+
+
+def _ntuple(n):
+    def parse(x):
+        if isinstance(x, Iterable):
+            return x
+        return tuple(repeat(x, n))
+    return parse
+
+_single = _ntuple(1)
+_pair = _ntuple(2)
+_triple = _ntuple(3)
+_quadruple = _ntuple(4)
+
+
+def unique(x):
+    r'''
+    Returns the unique elements of the input tensor.
+
+    Args:
+
+        x– the input tensor.
+    '''
+    x = x.reshape(-1)
+    _,x = jt.argsort(x)
+    index2 = [i for i in range(1,x.shape[0])]
+    index1 = [i for i in range(x.shape[0]-1)]
+    y = x[1:][x[index2] != x[index1]]
+    x = jt.contrib.concat([x[:1],y],dim=0)
+    return x
+
+def numel(x):
+    r'''
+    Return the number of the elements of input tensor.
+    '''
+    return np.prod(x.shape)
+
+def nonzero(x):
+    r'''
+    Return the index of the elements of input tensor which are not equal to zero.
+    '''
+    x = jt.where(x!=0.0)
+    x = stack(x)
+    return x
+
+def split(d,split_size,dim):
+    r'''
+    Splits the tensor into chunks. Each chunk is a view of the original tensor.
+
+    If  split_size is an integer type, then tensor will be split into equally sized chunks (if possible). Last chunk will be smaller if the tensor size along the given dimension dim is not divisible by split_size.
+
+    If split_size is a list, then tensor will be split into len(split_size) chunks with sizes in dim according to split_size_or_sections.
+   
+    Args:
+        d (Tensor) – tensor to split.
+
+        split_size (int) or (list(int)) – size of a single chunk or list of sizes for each chunk
+
+        dim (int) – dimension along which to split the tensor.
+    '''
+    if isinstance(split_size,int):
+        shape = d.shape[dim]
+        if shape % split_size == 0:
+            split_size = [split_size]*(shape//split_size)
+        else:
+            split_size = [split_size]*(shape//split_size)+[shape%split_size]
+    if isinstance(split_size, Iterable):
+        assert sum(split_size)==d.shape[dim]
+        
+    ans = []
+    last = 0
+    ndim = d.ndim
+    t_dims = [i for i in range(ndim)]
+    t_dims[0],t_dims[dim] = t_dims[dim],t_dims[0]
+    d = d.transpose(t_dims)
+    t_dims[0],t_dims[dim] = t_dims[dim],t_dims[0]
+    for i in split_size:
+        new_d = d[last:last+i]
+        last +=i
+        ans.append(new_d.transpose(t_dims))
+    return tuple(ans)
+
+
+def smooth_l1_loss(y_true, y_pred,reduction="mean"):
+    """Implements Smooth-L1 loss.
+    y_true and y_pred are typically: [N, 4], but could be any shape.
+
+    Args:
+         y_true - ground truth 
+         y_pred - predictions
+         reduction - the mode of cal loss which must be in ['mean','sum','none']
+    """
+    diff = jt.abs(y_true - y_pred)
+    less_than_one = (diff<1.0).float32()
+    loss = (less_than_one * 0.5 * diff**2) + (1 - less_than_one) * (diff - 0.5)
+    if reduction=="mean":
+        return loss.mean()
+    elif reduction=="sum":
+        return loss.sum()
+    elif reduction=="none":
+        return loss
+    else:
+        raise ValueError(f'not support {reduction}')
+
+
+def expand(x,shape):
+    r'''
+    Returns a new view of the self tensor with singleton dimensions expanded to a larger size.
+    Tensor can be also expanded to a larger number of dimensions, and the new ones will be appended at the front.
+
+    Args:
+       x-the input tensor.
+       shape-the shape of expanded tensor.
+    '''
+    x_shape = x.shape
+    x_l = len(x_shape)
+    rest_shape=shape[:-x_l]
+    expand_shape = shape[-x_l:]
+    indexs=[]
+    ii = len(rest_shape)
+    for i,j in zip(expand_shape,x_shape):
+        if i!=j:
+            assert j==1
+        indexs.append(f'i{ii}' if j>1 else f'0')
+        ii+=1
+    return x.reindex(shape,indexs)
+
+def expand_as(x,y):
+    r'''
+    euqal to expand_as(x.y.shape)
+    '''
+    return expand(x,y.shape)
+
+def index_fill_(x,dim,indexs,val):
+    r'''
+    Fills the elements of the input tensor with value val by selecting the indices in the order given in index.
+
+    Args:
+        x - the input tensor
+        dim - dimension along which to index
+        index – indices of input tensor to fill in
+        val – the value to fill with
+    '''
+    overflow_conditions = [f'i{dim}=={i}'for i in indexs]
+    indexs = [f'i{i}' for i in range(len(x.shape))]
+    return x.reindex(shape = x.shape,indexes = indexs,overflow_conditions=overflow_conditions,overflow_value=val)
+
+def triu_(x,diagonal=0):
+    r'''
+    Returns the upper triangular part of a matrix (2-D tensor) or batch of matrices input, the other elements of the result tensor out are set to 0.
+
+    The upper triangular part of the matrix is defined as the elements on and above the diagonal.
+
+    Args:
+        x – the input tensor.
+
+        diagonal – the diagonal to consider,default =0
+    '''
+    l = len(x.shape)
+    assert l>1
+    overflow_conditions=[f'i{l-1}<i{l-2}+{diagonal}']
+    indexs = [f'i{i}' for i in range(l)]
+    return x.reindex(x.shape,indexs,overflow_conditions=overflow_conditions,overflow_value=0)
