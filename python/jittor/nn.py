@@ -204,10 +204,11 @@ def smooth_l1_loss(y_true, y_pred,reduction="mean"):
         raise ValueError(f'not support {reduction}')
 
 class CrossEntropyLoss(Module):
-    def __init__(self):
-        pass
+    def __init__(self,ignore_index=None):
+        self.ignore_index = ignore_index
+        
     def execute(self, output, target):
-        return cross_entropy_loss(output, target)
+        return cross_entropy_loss(output, target,self.ignore_index)
 
 class MSELoss(Module):
     def __init__(self):
