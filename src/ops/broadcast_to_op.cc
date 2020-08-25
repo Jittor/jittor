@@ -63,7 +63,7 @@ BroadcastToOp::BroadcastToOp(Var* x, NanoVector shape, NanoVector dims) : x(x), 
     set_type(OpType::broadcast);
     CHECKop(shape.size(),>,0u) << "Number of shape should greater than 0.";
     for (auto v : shape)
-        CHECKop(v,>,0u) << "Shape should greater than 0.";
+        CHECKop(v,>=,0u) << "Shape should greater than 0.";
     z = create_output(nullptr, x->dtype());
     bcast_mask = 0;
     keepdims_mask = 0;
@@ -78,7 +78,7 @@ BroadcastToOp::BroadcastToOp(Var* x, NanoVector shape, NanoVector dims) : x(x), 
 bool BroadcastToOp::need_broadcast(const Var* x, const NanoVector& shape) {
     if (x->shape.size() < shape.size()) return true;
     for (uint i=shape.size()-1, j=x->shape.size()-1; i<shape.size(); i--,j--)
-        if (x->shape[j]< 0 || x->shape[j] < shape[i]) return true;
+        if (x->shape[j]< 0 || (x->shape[j] != shape[i] && shape[i] != 1)) return true;
     return false;
 }
 
