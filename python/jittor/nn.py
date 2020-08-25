@@ -718,45 +718,6 @@ def _interpolate(img, x, y, ids, mode):
         o = ab*dny + cd*dy
         return o
     raise(f"Not support interpolation mode: {mode}")
-
-def interpolate(X,output_size=None,scale_factor=None,mode='nearest',align_corners=False):
-    '''
-    interpolate support bacth, X's Shape is N*C*H*W 
-    '''
-    if align_corners:
-        raise(f"Not support align_corners")
-        
-    if scale_factor is not None:
-        output_size = [int(X.shape[-2]*scale_factor),int(X.shape[-1]*scale_factor)]
-    if isinstance(output_size,int):
-        output_size = (output_size,output_size)
-    bbox = jt.array([0,0,1,1]).float32()
-    N,C,H,W = X.shape
-    shape = [N, C,output_size[0], output_size[1]]
-    bb = [bbox.reindex(shape, [str(i)]) for i in range(4)]
-    hid = jt.index(shape, dim=2)
-    wid = jt.index(shape, dim=3)
-    cid = jt.index(shape, dim=1)
-    nid = jt.index(shape, dim=0)
-
-    x = bb[0]*(H-1.0)+hid*((H-1)*1.0/(shape[-2]-1))*(bb[2]-bb[0])
-    y = bb[1]*(W-1.0)+wid*((W-1)*1.0/(shape[-1]-1))*(bb[3]-bb[1])
-    if mode=="nearest":
-        return X.reindex([nid,cid,x.round(), y.round()])
-    if mode=="bilinear":
-        fx, fy = x.floor(), y.floor()
-        cx, cy = fx+1, fy+1
-        dx, dy = x-fx, y-fy
-        dnx, dny = cx-x, cy-y
-
-        a = X.reindex([nid,cid,fx, fy])
-        b = X.reindex([nid,cid,cx, fy])
-        c = X.reindex([nid,cid,fx, cy])
-        d = X.reindex([nid,cid,cx, cy])
-
-        o = a*dnx*dny+b*dx*dny+c*dnx*dy+d*dx*dy
-        return o
-    raise(f"Not support {mode}")
     
 def resize(img, size, mode="nearest", align_corners=False):
     n,c,h,w = img.shape
