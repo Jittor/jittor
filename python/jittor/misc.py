@@ -299,11 +299,17 @@ def unique(x):
     x = jt.contrib.concat([x[:1],y],dim=0)
     return x
 
+jt.Var.unique = unique
+
+
+
 def numel(x):
     r'''
     Return the number of the elements of input tensor.
     '''
     return np.prod(x.shape)
+
+jt.Var.numel = numel
 
 def nonzero(x):
     r'''
@@ -312,6 +318,46 @@ def nonzero(x):
     x = jt.where(x!=0.0)
     x = stack(x)
     return x
+
+jt.Var.nonzero = nonzero
+
+
+def arange(start=0, end, step=1,dtype=None):
+    x = np.arange(start,end,step,dtype)
+    x = jt.array(x)
+    return x
+
+def randperm(n, dtype="int64"):
+    x = np.arange(n)
+    np.random.shuffle(x)
+    return jt.array(x)
+
+def log2(x):
+    return jt.log(x)/jt.log(jt.array([2.0]))
+
+jt.Var.log2 = log2
+
+def item(x):
+    assert x.ndim==1 and x.shape[0]==1
+    return x.data[0]
+
+jt.Var.item  = item
+
+def meshgrid(*tensors):
+    size = len(tensors)
+    shape = []
+    for i in range(size):
+        assert isinstance(tensors[i],jt.Var) and tensors[i].ndim==1
+        shape.append(tensors[i].shape[0])
+    grids = []
+    view_shape = [1]*size
+    for i in range(size):
+        vs = view_shape[:]
+        vs[i]=-1
+        grids.append(tensors[i].reshape(vs).expand(shape))
+
+    return grids
+
 
 def split(d,split_size,dim):
     r'''
@@ -351,27 +397,68 @@ def split(d,split_size,dim):
     return tuple(ans)
 
 
-def smooth_l1_loss(y_true, y_pred,reduction="mean"):
-    """Implements Smooth-L1 loss.
-    y_true and y_pred are typically: [N, 4], but could be any shape.
-
-    Args:
-         y_true - ground truth 
-         y_pred - predictions
-         reduction - the mode of cal loss which must be in ['mean','sum','none']
-    """
-    diff = jt.abs(y_true - y_pred)
+def smooth_l1_loss(input, target, beta=1. / 9, size_average=True):
+    diff = jt.abs(input - target)
     less_than_one = (diff<1.0).float32()
     loss = (less_than_one * 0.5 * diff**2) + (1 - less_than_one) * (diff - 0.5)
-    if reduction=="mean":
+    if size_average:
         return loss.mean()
-    elif reduction=="sum":
-        return loss.sum()
-    elif reduction=="none":
-        return loss
-    else:
-        raise ValueError(f'not support {reduction}')
+    return loss.sum()
 
+
+def topk(input, k, dim=None, largest=True, sorted=True):
+    if dim is None:
+        dim = -1
+    if dim<0:
+        dim+=input.ndim
+    
+    transpose_dims = [i for i in range(input.ndim)]
+    transpose_dims[0] = dim
+    transpose_dims[dim] = 0
+    input = input.transpose(transpose_dims)
+    index,values = jt.argsort(input,dim=0,descending=largest)
+    indices = index[:k]
+    values = values[:k]
+    indices = indices.transpose(transpose_dims)
+    values = values.transpose(transpose_dims)
+    return [values,indices]
+
+def kthvalue(input, k, dim=None, keepdim=False):
+    if dim is None:
+        dim = -1
+    if dim<0:
+        dim+=input.ndim
+    transpose_dims = [i for i in range(input.ndim)]
+    transpose_dims[0] = dim
+    transpose_dims[dim] = 0
+    input = input.transpose(transpose_dims)
+    index,values = jt.argsort(input,dim=0)
+    indices = index[k-1:k]
+    values = values[k-1:k]
+    indices = indices.transpose(transpose_dims)
+    values = values.transpose(transpose_dims)
+    if not keepdim:
+        indices = indices.squeeze(dim)
+        values = values.squeeze(dim)
+    return [values,indices]
+
+def nms(dets,thresh):
+    '''
+      dets jt.array [x1,y1,x2,y2,score]
+      x(:,0)->x1,x(:,1)->y1,x(:,2)->x2,x(:,3)->y2,x(:,4)->score
+    '''
+    threshold = str(thresh)
+    order = jt.argsort(dets[:,4],descending=True)[0]
+    dets = dets[order]
+    s_1 = '(@x(j,2)-@x(j,0)+1)*(@x(j,3)-@x(j,1)+1)'
+    s_2 = '(@x(i,2)-@x(i,0)+1)*(@x(i,3)-@x(i,1)+1)'
+    s_inter_w = 'std::max((Tx)0,std::min(@x(j,2),@x(i,2))-std::max(@x(j,0),@x(i,0))+1)'
+    s_inter_h = 'std::max((Tx)0,std::min(@x(j,3),@x(i,3))-std::max(@x(j,1),@x(i,1))+1)'
+    s_inter = s_inter_h+'*'+s_inter_w
+    iou = s_inter + '/(' + s_1 +'+' + s_2 + '-' + s_inter + ')'
+    fail_cond = iou+'>'+threshold
+    selected = jt.candidate(dets, fail_cond)
+    return order[selected]
 
 def expand(x,shape):
     r'''

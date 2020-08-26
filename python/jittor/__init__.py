@@ -234,8 +234,15 @@ def zeros(shape, dtype="float32"):
         shape = (shape,)
     return unary(0, dtype).broadcast(shape)
 
+def full(shape,val,dtype="float32"):
+    if not isinstance(shape, (NanoVector, Sequence)):
+        shape = (shape,)
+    assert isinstance(val,(int,float))
+    return unary(val, dtype).broadcast(shape)
+
 def zeros_like(x):
     return zeros(x.shape,x.dtype)
+
 
 flags = core.flags()
 
