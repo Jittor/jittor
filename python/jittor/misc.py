@@ -136,6 +136,10 @@ def flip(x, dim=0):
         [[4 3 2 1]]
     '''
     assert isinstance(dim, int)
+    if dim<0:
+        dim+=x.ndim
+    assert dim>=0 and dim<len(x.shape)
+
     tar_dims = []
     for i in range(len(x.shape)):
         if i == dim:

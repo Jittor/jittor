@@ -234,6 +234,9 @@ def zeros(shape, dtype="float32"):
         shape = (shape,)
     return unary(0, dtype).broadcast(shape)
 
+def zeros_like(x):
+    return zeros(x.shape,x.dtype)
+
 flags = core.flags()
 
 def std(x):
