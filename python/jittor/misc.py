@@ -322,7 +322,10 @@ def nonzero(x):
 jt.Var.nonzero = nonzero
 
 
-def arange(start=0, end, step=1,dtype=None):
+def arange(start=0, end=None, step=1,dtype=None):
+    if end is None:
+        end = start
+        start = 0
     x = np.arange(start,end,step,dtype)
     x = jt.array(x)
     return x
