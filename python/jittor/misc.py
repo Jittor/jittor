@@ -274,7 +274,7 @@ def _ntuple(n):
     def parse(x):
         if isinstance(x, Iterable):
             return x
-        return tuple(repeat(x, n))
+        return tuple([x]*n)
     return parse
 
 _single = _ntuple(1)
