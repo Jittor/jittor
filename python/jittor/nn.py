@@ -488,7 +488,7 @@ class ConvTranspose(Module):
             self.dilation[1] * (self.kernel_size[1] - 1) - self.padding[1])
         self.output_padding = output_padding if isinstance (output_padding, tuple) else (output_padding, output_padding)
 
-        self.weight = init.relu_invariant_gauss((in_channels, out_channels) + self.kernel_size, dtype="float", mode="fan_out")
+        self.weight = init.invariant_uniform((in_channels, out_channels) + self.kernel_size, dtype="float")
         if bias:
             self.bias = init.uniform([out_channels], dtype="float", low=-1, high=1)
         else:
