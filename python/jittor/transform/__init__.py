@@ -150,6 +150,9 @@ class RandomCropAndResize:
             i = (height - h) // 2
             j = (width - w) // 2
         return crop_and_resize(img, i, j, h, w, self.size, self.interpolation)
+
+def hflip(img):
+    return img.transpose(Image.FLIP_LEFT_RIGHT)
     
 class RandomHorizontalFlip:
     """
