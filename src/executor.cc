@@ -420,6 +420,10 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
             */
             if (!var->need_free())
                 outputs_bk.push_back(var);
+            else {
+                // TODO: will this cause bug?
+                var->flags.set(NodeFlags::_finished);
+            }
         }
         op->finish_pending_liveness();
         for (Var* var : outputs_bk)
