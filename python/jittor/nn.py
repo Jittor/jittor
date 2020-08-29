@@ -745,6 +745,13 @@ def upsample(img, size, mode="nearest", align_corners=False):
         y = wid * (w / W)
     return _interpolate(img, x, y, (nid,cid), mode)
 
+def interpolate(X,output_size=None,scale_factor=None,mode='bilinear',align_corners=False):
+    if scale_factor is not None:
+        output_size = [X.shape[-2]*scale_factor,X.shape[-1]*scale_factor]
+    if isinstance(output_size,int):
+        output_size = (output_size,output_size)
+    return upsample(X,output_size,mode,align_corners)
+
 def grid_sample_v0(input, grid, mode='bilinear', padding_mode='zeros'):
     r'''
     Given an input and a flow-field grid, computes the output using input values and pixel locations from grid.
