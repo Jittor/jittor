@@ -77,6 +77,7 @@ unique_ptr<expr::Expr> trace_and_expand(KernelIR* ir, expr::Expr* e) {
     };
     a->dfs(func);
     // indexes of relyied loop, split with ","
+    if (rely == "") rely = ",";
     ir->attrs["rely"] = rely;
     return a;
 }

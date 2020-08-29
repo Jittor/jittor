@@ -16,12 +16,15 @@
 
 namespace jittor {
 
-static void move_rely(KernelIR* inner_loop, KernelIR* outer_loop, KernelIR* def){
+static void move_rely(KernelIR* inner_loop, KernelIR* outer_loop, KernelIR* def, bool add_before=false){
     // move all dependence of def from inner_loop to outer_loop
     vector<KernelIR*> q{def};
     map<KernelIR*, int> visited;
     visited[def]=1;
-    outer_loop->push_front(def->to_string());
+    if (add_before)
+        outer_loop->push_front(def->to_string(), &outer_loop->after);
+    else
+        outer_loop->push_front(def->to_string());
     for (int i=0; i<q.size(); i++) {
         auto e = expr::make(q[i]->attrs["rvalue"]);
         LOGvvvv << "move_rely" << e->to_string();
@@ -33,7 +36,10 @@ static void move_rely(KernelIR* inner_loop, KernelIR* outer_loop, KernelIR* def)
             // TODO: definition between inner loop and outer loop
             if (ir->father != inner_loop) return;
             if (!visited.count(ir)) {
-                outer_loop->push_front(ir->to_string());
+                if (add_before)
+                    outer_loop->push_front(ir->to_string(), &outer_loop->after);
+                else
+                    outer_loop->push_front(ir->to_string());
                 q.push_back(ir);
                 visited[ir]=1;
             }
@@ -103,22 +109,25 @@ static void tune_atomic(Pass* pass, KernelIR* ir, bool is_cuda, int tdim, vector
         // reorder
         for (uint j=0;j<atomics.size();j++) {
             KernelIR* p=atomics[j];
-            auto si=split(p->get_attr("rely"),",");
-            for (int k=si.size()-2;k>=0;k--) {
-                int sidx=-1;
-                int sord=-1;
-                for (uint l=0;l<idx_name.size();l++)
-                    if (idx_name[l]==si[k]) sidx=l;
-                ASSERT(sidx != -1);
-                for (uint l=0;l<order.size();l++)
-                    if (order[l]==sidx) sord=l;
-                ASSERT(sord != -1);
-                for (int l=sord;l;l--){
-                    order[l]=order[l-1];
-                    nrely[l]=nrely[l-1];
+            auto rely = p->get_attr("rely");
+            if (rely != ",") {
+                auto si=split(p->get_attr("rely"),",");
+                for (int k=si.size()-2;k>=0;k--) {
+                    int sidx=-1;
+                    int sord=-1;
+                    for (uint l=0;l<idx_name.size();l++)
+                        if (idx_name[l]==si[k]) sidx=l;
+                    ASSERT(sidx != -1);
+                    for (uint l=0;l<order.size();l++)
+                        if (order[l]==sidx) sord=l;
+                    ASSERT(sord != -1);
+                    for (int l=sord;l;l--){
+                        order[l]=order[l-1];
+                        nrely[l]=nrely[l-1];
+                    }
+                    order[0]=sidx;
+                    nrely[0]=j;
                 }
-                order[0]=sidx;
-                nrely[0]=j;
             }
         }
         LOGvvvv << "atomic tuner order" << order;
@@ -147,18 +156,22 @@ static void tune_atomic(Pass* pass, KernelIR* ir, bool is_cuda, int tdim, vector
         for (uint j=0;j<atomics.size();j++) {
             KernelIR* p=atomics[j];
             auto si=split(p->get_attr("rely"),",");
-            int sidx=-1;
-            for (int k=si.size()-2;k>=0;k--)
-                for (int l=0;l<order.size();l++)
-                    if (idx_name[order[l]]==si[k] && l>sidx) sidx=l;
-            ASSERT(sidx != -1);
+            int sidx=-2;
+            if (p->get_attr("rely")==",") {
+                sidx=-1;
+            }
+            else {
+                for (int k=si.size()-2;k>=0;k--)
+                    for (int l=0;l<order.size();l++)
+                        if (idx_name[order[l]]==si[k] && l>sidx) sidx=l;
+            }
+            ASSERT(sidx != -2);
 
             vector<unique_ptr<expr::Expr>> results;
             string stmp = "tmp"+std::to_string(tmp_cnt++);
             auto& code = p->attrs["code"];
             LOGvvvv << "atomic code" << code;
             auto e = expr::make(code.substr(0, code.size()-1));
-
             // add atomic code
             auto check = [&](const string& t, const vector<string>& args, const string& cpu, const string& cuda, const string& acpu, const string& acuda) -> bool {
                 auto target = is_cuda ? expr::make(cuda) : expr::make(cpu);
@@ -179,15 +192,25 @@ static void tune_atomic(Pass* pass, KernelIR* ir, bool is_cuda, int tdim, vector
                 if (def->father == loops[sidx])
                     return true;
                 code = OpCompiler::precompile(defs, t) + ";";
-                loops[sidx]->push_back(OpCompiler::precompile(defs, is_cuda ? acuda : acpu) + ";");
+                if (sidx == -1)
+                    loops[0]->push_back(OpCompiler::precompile(defs, is_cuda ? acuda : acpu) + ";", 
+                        &loops[0]->after);
+                else
+                    loops[sidx]->push_back(OpCompiler::precompile(defs, is_cuda ? acuda : acpu) + ";");
                 uint op_id, opvar_id;
                 Op* op;
                 Var* var;
                 pass->pm->oc->get_op_var_by_name(dvar.substr(0,dvar.length()-1), op_id, opvar_id, op, var);
-                loops[sidx]->push_front(string(var->dtype().to_cstring())+" "+stmp+"=0;");
+                if (sidx == -1) 
+                    loops[0]->push_back(string(var->dtype().to_cstring())+" "+stmp+"=0;", &loops[0]->before);
+                else
+                    loops[sidx]->push_front(string(var->dtype().to_cstring())+" "+stmp+"=0;");
                 string sa=is_cuda ? cuda : cpu;
                 LOGvvv << "atomictuner: move "+sa.substr(0,sa.find("("))+" to loop "+std::to_string(sidx);
-                move_rely(def->father, loops[sidx], def);
+                if (sidx == -1)
+                    move_rely(def->father, loops[0], def, true);
+                else
+                    move_rely(def->father, loops[sidx], def);
                 return true;
             };
             string sstd=is_cuda ? "" : "std";
