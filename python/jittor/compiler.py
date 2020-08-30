@@ -784,11 +784,16 @@ def try_find_exe(*args):
 def check_pybt(gdb_path, python_path):
     if gdb_path=='' or python_path=='':
         return False
-    ret = sp.getoutput(f"{gdb_path} --batch {python_path} -ex 'help py-bt'")
-    if 'python frame' in ret:
-        LOG.v("py-bt found in gdb.")
-        return True
-    return False
+    return True
+    # TODO: prev we use below code to check has py-bt or nor
+    # but it is too slow, so we comment it,
+    # find a better way to check py-bt exist
+    
+    # ret = sp.getoutput(f"{gdb_path} --batch {python_path} -ex 'help py-bt'")
+    # if 'python frame' in ret:
+    #     LOG.v("py-bt found in gdb.")
+    #     return True
+    # return False
 
 def check_debug_flags():
     global is_debug

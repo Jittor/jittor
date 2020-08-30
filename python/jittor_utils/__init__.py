@@ -31,18 +31,20 @@ class LogWarper:
         return cc.log_capture_read()
 
     def _log(self, level, verbose, *msg):
-        if len(msg):
-            msg = " ".join([ str(m) for m in msg ])
-        else:
-            msg = str(msg)
+        if self.log_silent or verbose > self.log_v:
+            return
+        ss = ""
+        for m in msg:
+            if callable(m):
+                m = m()
+            ss += str(m)
+        msg = ss
         f = inspect.currentframe()
         fileline = inspect.getframeinfo(f.f_back.f_back)
         fileline = f"{os.path.basename(fileline.filename)}:{fileline.lineno}"
         if cc and hasattr(cc, "log"):
             cc.log(fileline, level, verbose, msg)
         else:
-            if self.log_silent or verbose > self.log_v:
-                return
             time = datetime.datetime.now().strftime("%m%d %H:%M:%S.%f")
             tid = threading.get_ident()%100
             v = f" v{verbose}" if verbose else ""
