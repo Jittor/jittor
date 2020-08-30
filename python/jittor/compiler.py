@@ -77,7 +77,7 @@ def compile(compiler, flags, inputs, output, combind_build=False):
             cc = nvcc_path
         cmd = f"{cc} {input} {nflags} -c {lto_flags} -o {obj_file}"
         cmds.append(cmd)
-    jit_utils.run_cmds(cmds, cache_path, jittor_path)
+    jit_utils.run_cmds(cmds, cache_path, jittor_path, "compiling")
     cmd = f"{compiler} {' '.join(obj_files)} {flags} {lto_flags} {link} -o {output}"
     return do_compile(cmd)
 
@@ -788,7 +788,7 @@ def check_pybt(gdb_path, python_path):
     # TODO: prev we use below code to check has py-bt or nor
     # but it is too slow, so we comment it,
     # find a better way to check py-bt exist
-    
+
     # ret = sp.getoutput(f"{gdb_path} --batch {python_path} -ex 'help py-bt'")
     # if 'python frame' in ret:
     #     LOG.v("py-bt found in gdb.")
