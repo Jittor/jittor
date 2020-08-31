@@ -392,7 +392,6 @@ def split(d,split_size,dim):
     t_dims = [i for i in range(ndim)]
     t_dims[0],t_dims[dim] = t_dims[dim],t_dims[0]
     d = d.transpose(t_dims)
-    t_dims[0],t_dims[dim] = t_dims[dim],t_dims[0]
     for i in split_size:
         new_d = d[last:last+i]
         last +=i
