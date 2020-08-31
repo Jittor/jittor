@@ -1246,7 +1246,7 @@ class ModuleDict(Module):
         if modules is not None:
             self.update(modules)
 
-    def add_module(key,module):
+    def add_module(self,key,module):
         r"""Adds a child module to the current module.
         The module can be accessed as an attribute using the given name.
         Args:
@@ -1256,7 +1256,7 @@ class ModuleDict(Module):
         """
         if not isinstance(module, Module) and module is not None:
             raise TypeError("{} is not a Module subclass".format(
-                torch.typename(module)))
+                type(module)))
         elif '.' in name:
             raise KeyError("module name can't contain \".\"")
         elif name == '':
