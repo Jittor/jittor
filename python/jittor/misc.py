@@ -319,7 +319,7 @@ def nonzero(x):
     '''
     x = jt.where(x!=0.0)
     if len(x)<2:
-        return x[0].unsqueeze(0)
+        return x[0].unsqueeze(1)
     x = stack(x)
     return x
 
