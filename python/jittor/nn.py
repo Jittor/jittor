@@ -1246,7 +1246,7 @@ class ModuleDict(Module):
         if modules is not None:
             self.update(modules)
 
-    def add_module(self,key,module):
+    def add_module(self,name,module):
         r"""Adds a child module to the current module.
         The module can be accessed as an attribute using the given name.
         Args:
