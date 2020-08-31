@@ -112,7 +112,7 @@ def stack(x, dim=0):
         [[[1 2 3]
         [[4 5 6]]]
     '''
-    assert isinstance(x, list)
+    assert isinstance(x, (list,tuple))
     assert len(x) >= 2
     res = [x_.unsqueeze(dim) for x_ in x]
     return jt.contrib.concat(res, dim=dim)
