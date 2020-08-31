@@ -426,6 +426,8 @@ def topk(input, k, dim=None, largest=True, sorted=True):
     values = values.transpose(transpose_dims)
     return [values,indices]
 
+jt.Var.topk = topk
+
 def kthvalue(input, k, dim=None, keepdim=False):
     if dim is None:
         dim = -1
@@ -444,6 +446,8 @@ def kthvalue(input, k, dim=None, keepdim=False):
         indices = indices.squeeze(dim)
         values = values.squeeze(dim)
     return [values,indices]
+
+jt.Var.kthvalue = kthvalue
 
 def nms(dets,thresh):
     '''
