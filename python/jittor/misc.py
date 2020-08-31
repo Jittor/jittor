@@ -318,6 +318,8 @@ def nonzero(x):
     Return the index of the elements of input tensor which are not equal to zero.
     '''
     x = jt.where(x!=0.0)
+    if len(x)<2:
+        return x[0].unsqueeze(0)
     x = stack(x)
     return x
 
