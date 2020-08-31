@@ -399,6 +399,7 @@ def split(d,split_size,dim):
         ans.append(new_d.transpose(t_dims))
     return tuple(ans)
 
+jt.Var.split = split
 
 def smooth_l1_loss(input, target, beta=1. / 9, size_average=True):
     diff = jt.abs(input - target)
