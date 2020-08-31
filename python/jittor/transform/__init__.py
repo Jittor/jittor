@@ -243,13 +243,13 @@ def to_pil_image(pic, mode=None):
             pic = np.expand_dims(pic, 2)
 
     npimg = pic
-    if isinstance(pic, torch.Tensor):
+    if isinstance(pic, jt.Var):
         if 'float' in str(pic.dtype) and mode != 'F':
             pic = pic.mul(255).uint8()
         npimg = np.transpose(pic.numpy(), (1, 2, 0))
 
     if not isinstance(npimg, np.ndarray):
-        raise TypeError('Input pic must be a torch.Tensor or NumPy ndarray, ' +
+        raise TypeError('Input pic must be a jt.Var or NumPy ndarray, ' +
                         'not {}'.format(type(npimg)))
 
     if npimg.shape[2] == 1:
