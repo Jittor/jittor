@@ -485,6 +485,8 @@ def expand(x,shape):
         ii+=1
     return x.reindex(shape,indexs)
 
+jt.Var.expand = expand
+
 def expand_as(x,y):
     r'''
     euqal to expand_as(x.y.shape)
