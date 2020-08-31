@@ -237,6 +237,7 @@ def zeros(shape, dtype="float32"):
 def full(shape,val,dtype="float32"):
     if not isinstance(shape, (NanoVector, Sequence)):
         shape = (shape,)
+    print(type(val))
     assert isinstance(val,(int,float))
     return unary(val, dtype).broadcast(shape)
 
