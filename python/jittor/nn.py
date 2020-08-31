@@ -1257,11 +1257,6 @@ class ModuleDict(Module):
         if not isinstance(module, Module) and module is not None:
             raise TypeError("{} is not a Module subclass".format(
                 torch.typename(module)))
-        elif not isinstance(name, torch._six.string_classes):
-            raise TypeError("module name should be a string. Got {}".format(
-                torch.typename(name)))
-        elif hasattr(self, name) and name not in self._modules:
-            raise KeyError("attribute '{}' already exists".format(name))
         elif '.' in name:
             raise KeyError("module name can't contain \".\"")
         elif name == '':
@@ -1325,20 +1320,11 @@ class ModuleDict(Module):
             modules (iterable): a mapping (dictionary) from string to :class:`~torch.nn.Module`,
                 or an iterable of key-value pairs of type (string, :class:`~torch.nn.Module`)
         """
-        if not isinstance(modules, container_abcs.Iterable):
-            raise TypeError("ModuleDict.update should be called with an "
-                            "iterable of key/value pairs, but got " +
-                            type(modules).__name__)
-
-        if isinstance(modules, (OrderedDict, ModuleDict, container_abcs.Mapping)):
+        if isinstance(modules, (OrderedDict, ModuleDict)):
             for key, module in modules.items():
                 self[key] = module
         else:
             for j, m in enumerate(modules):
-                if not isinstance(m, container_abcs.Iterable):
-                    raise TypeError("ModuleDict update sequence element "
-                                    "#" + str(j) + " should be Iterable; is" +
-                                    type(m).__name__)
                 if not len(m) == 2:
                     raise ValueError("ModuleDict update sequence element "
                                      "#" + str(j) + " has length " + str(len(m)) +
