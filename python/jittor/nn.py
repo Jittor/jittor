@@ -1205,6 +1205,9 @@ class Sequential(Module):
         assert not isinstance(mod, type), f"Module is not a type"
         self.layers.append(mod)
 
+    def __len__(self):
+        return len(self.layers)
+
 class ModuleDict(Module):
     r"""Holds submodules in a dictionary.
     :class:`~torch.nn.ModuleDict` can be indexed like a regular Python dictionary,
