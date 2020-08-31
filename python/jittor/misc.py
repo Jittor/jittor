@@ -258,6 +258,8 @@ def unbind(x, dim=0):
     if dim < 0: dim += len(x.shape)
     return [x[(slice(None),)*dim+(i,)] for i in range(x.shape[dim])]
 
+jt.Var.unbind = unbind
+
 def make_grid(x, nrow=8, padding=2, normalize=False, range=None, scale_each=False, pad_value=0):
     assert range == None
     assert scale_each == False
