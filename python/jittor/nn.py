@@ -1300,7 +1300,7 @@ class ModuleDict(Module):
         del self[key]
         return v
 
-    def keys(self) -> Iterable[str]:
+    def keys(self):
         r"""Return an iterable of the ModuleDict keys.
         """
         return self._modules.keys()
