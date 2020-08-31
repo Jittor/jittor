@@ -14,6 +14,7 @@ import jittor as jt
 from jittor import init, Module
 import numpy as np
 import math
+from collections import OrderedDict
 from jittor.pool import Pool, pool, AdaptiveAvgPool2d
 from jittor.optim import *
 
@@ -1203,5 +1204,148 @@ class Sequential(Module):
         assert callable(mod), f"Module <{type(mod)}> is not callable"
         assert not isinstance(mod, type), f"Module is not a type"
         self.layers.append(mod)
+
+class ModuleDict(Module):
+    r"""Holds submodules in a dictionary.
+    :class:`~torch.nn.ModuleDict` can be indexed like a regular Python dictionary,
+    but modules it contains are properly registered, and will be visible by all
+    :class:`~torch.nn.Module` methods.
+    :class:`~torch.nn.ModuleDict` is an **ordered** dictionary that respects
+    * the order of insertion, and
+    * in :meth:`~torch.nn.ModuleDict.update`, the order of the merged 
+      ``OrderedDict``, ``dict`` (started from Python 3.6) or another
+      :class:`~torch.nn.ModuleDict` (the argument to 
+      :meth:`~torch.nn.ModuleDict.update`).
+    Note that :meth:`~torch.nn.ModuleDict.update` with other unordered mapping
+    types (e.g., Python's plain ``dict`` before Python version 3.6) does not
+    preserve the order of the merged mapping.
+    Arguments:
+        modules (iterable, optional): a mapping (dictionary) of (string: module)
+            or an iterable of key-value pairs of type (string, module)
+    Example::
+        class MyModule(nn.Module):
+            def __init__(self):
+                super(MyModule, self).__init__()
+                self.choices = nn.ModuleDict({
+                        'conv': nn.Conv2d(10, 10, 3),
+                        'pool': nn.MaxPool2d(3)
+                })
+                self.activations = nn.ModuleDict([
+                        ['lrelu', nn.LeakyReLU()],
+                        ['prelu', nn.PReLU()]
+                ])
+            def forward(self, x, choice, act):
+                x = self.choices[choice](x)
+                x = self.activations[act](x)
+                return x
+    """
+
+    def __init__(self, modules) -> None:
+        super(ModuleDict, self).__init__()
+        self._modules = OrderedDict()
+        if modules is not None:
+            self.update(modules)
+
+    def add_module(key,module):
+        r"""Adds a child module to the current module.
+        The module can be accessed as an attribute using the given name.
+        Args:
+            name (string): name of the child module. The child module can be
+                accessed from this module using the given name
+            module (Module): child module to be added to the module.
+        """
+        if not isinstance(module, Module) and module is not None:
+            raise TypeError("{} is not a Module subclass".format(
+                torch.typename(module)))
+        elif not isinstance(name, torch._six.string_classes):
+            raise TypeError("module name should be a string. Got {}".format(
+                torch.typename(name)))
+        elif hasattr(self, name) and name not in self._modules:
+            raise KeyError("attribute '{}' already exists".format(name))
+        elif '.' in name:
+            raise KeyError("module name can't contain \".\"")
+        elif name == '':
+            raise KeyError("module name can't be empty string \"\"")
+        self._modules[name] = module
+    def __getitem__(self, key: str) -> Module:
+        return self._modules[key]
+
+    def __setitem__(self, key: str, module: Module) -> None:
+        self.add_module(key, module)
+
+
+    def __delitem__(self, key: str) -> None:
+        del self._modules[key]
+
+    def __len__(self) -> int:
+        return len(self._modules)
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._modules)
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._modules
+
+    def clear(self) -> None:
+        """Remove all items from the ModuleDict.
+        """
+        self._modules.clear()
+
+    def pop(self, key: str) -> Module:
+        r"""Remove key from the ModuleDict and return its module.
+        Arguments:
+            key (string): key to pop from the ModuleDict
+        """
+        v = self[key]
+        del self[key]
+        return v
+
+    def keys(self) -> Iterable[str]:
+        r"""Return an iterable of the ModuleDict keys.
+        """
+        return self._modules.keys()
+
+    def items(self) -> Iterable[Tuple[str, Module]]:
+        r"""Return an iterable of the ModuleDict key/value pairs.
+        """
+        return self._modules.items()
+
+    def values(self) -> Iterable[Module]:
+        r"""Return an iterable of the ModuleDict values.
+        """
+        return self._modules.values()
+
+    def update(self, modules) -> None:
+        r"""Update the :class:`~torch.nn.ModuleDict` with the key-value pairs from a
+        mapping or an iterable, overwriting existing keys.
+        .. note::
+            If :attr:`modules` is an ``OrderedDict``, a :class:`~torch.nn.ModuleDict`, or
+            an iterable of key-value pairs, the order of new elements in it is preserved.
+        Arguments:
+            modules (iterable): a mapping (dictionary) from string to :class:`~torch.nn.Module`,
+                or an iterable of key-value pairs of type (string, :class:`~torch.nn.Module`)
+        """
+        if not isinstance(modules, container_abcs.Iterable):
+            raise TypeError("ModuleDict.update should be called with an "
+                            "iterable of key/value pairs, but got " +
+                            type(modules).__name__)
+
+        if isinstance(modules, (OrderedDict, ModuleDict, container_abcs.Mapping)):
+            for key, module in modules.items():
+                self[key] = module
+        else:
+            for j, m in enumerate(modules):
+                if not isinstance(m, container_abcs.Iterable):
+                    raise TypeError("ModuleDict update sequence element "
+                                    "#" + str(j) + " should be Iterable; is" +
+                                    type(m).__name__)
+                if not len(m) == 2:
+                    raise ValueError("ModuleDict update sequence element "
+                                     "#" + str(j) + " has length " + str(len(m)) +
+                                     "; 2 is required")
+                self[m[0]] = m[1]
+
+    def execute(self):
+        raise NotImplementedError()
 
 ModuleList = Sequential
