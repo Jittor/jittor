@@ -12,6 +12,7 @@ import math
 import numpy as np
 import warnings
 from collections.abc import Sequence, Mapping
+import jittor as jt
 
 def crop(img, top, left, height, width):
     '''
