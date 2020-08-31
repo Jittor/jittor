@@ -1280,7 +1280,7 @@ class ModuleDict(Module):
     def __len__(self) -> int:
         return len(self._modules)
 
-    def __iter__(self) -> Iterator[str]:
+    def __iter__(self):
         return iter(self._modules)
 
     def __contains__(self, key: str) -> bool:
@@ -1305,12 +1305,12 @@ class ModuleDict(Module):
         """
         return self._modules.keys()
 
-    def items(self) -> Iterable[Tuple[str, Module]]:
+    def items(self):
         r"""Return an iterable of the ModuleDict key/value pairs.
         """
         return self._modules.items()
 
-    def values(self) -> Iterable[Module]:
+    def values(self):
         r"""Return an iterable of the ModuleDict values.
         """
         return self._modules.values()
