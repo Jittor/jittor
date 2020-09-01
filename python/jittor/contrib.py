@@ -119,6 +119,7 @@ def slice_var_index(x, slices):
             step = 1 if s.step is None else s.step
             if start<0: start += sp
             if stop<0: stop += sp
+            if stop>sp+1: stop = sp
             out_shape.append(1+int(max(0, (stop-start-1)//step)))
             out_index.append(f"{start}+i{j}*{step}")
         elif isinstance(s, jt.Var):
