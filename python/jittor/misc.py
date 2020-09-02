@@ -483,6 +483,7 @@ def expand(x,shape):
     x_shape = x.shape
     x_l = len(x_shape)
     rest_shape=shape[:-x_l]
+    rest_shape = [x_sahpe[i] if rest_shape[i]==-1 else rest_shape[i] for i in range(x_l) ]
     expand_shape = shape[-x_l:]
     indexs=[]
     ii = len(rest_shape)
