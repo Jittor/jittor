@@ -108,6 +108,7 @@ def slice_var_index(x, slices):
     if has_ellipse>1:
         raise Exception(f"There are more than one ...")
     elif has_ellipse==1:
+        slices = list(slices)
         del slices[ellipse_index]
         while len(slices)<len(shape):
             slices.insert(ellipse_index,slice(None))
