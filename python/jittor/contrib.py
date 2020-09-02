@@ -99,6 +99,19 @@ def slice_var_index(x, slices):
     cnt_list = 0
     extras_idx = []
     extras = []
+    has_ellipse = 0
+    ellipse_index = 0
+    for s,i in zip(slices,range(len(slices))):
+        if isinstance(s,type(...)):
+            has_ellipse+=1
+            ellipse_index = i
+    if has_ellipse>1:
+        raise Exception(f"There are more than one ...")
+    elif has_ellipse==1:
+        del slices[ellipse_index]
+        while len(slices)<len(shape):
+            slices.insert(ellipse_index,slice(None))
+
     for i in range(len(shape)):
         if i>=len(slices):
             s = slice(None)
