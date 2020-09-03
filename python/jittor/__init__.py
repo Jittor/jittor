@@ -777,6 +777,8 @@ double = float64
 Var.double = Var.float64
 
 from . import nn
+from . import attention
+from . import lr_scheduler
 from . import linalg
 from .nn import matmul
 from . import contrib
