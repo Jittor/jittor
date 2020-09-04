@@ -395,11 +395,9 @@ def split(d,split_size,dim):
     ndim = d.ndim
     t_dims = [i for i in range(ndim)]
     t_dims[0],t_dims[dim] = t_dims[dim],t_dims[0]
-    print(t_dims)
     d = d.transpose(t_dims)
     for i in split_size:
         new_d = d[last:last+i]
-        print(new_d,last,i)
         last +=i
         ans.append(new_d.transpose(t_dims))
     return tuple(ans)
