@@ -446,9 +446,7 @@ def kthvalue(input, k, dim=None, keepdim=False):
     values = values[k-1:k]
     indices = indices.transpose(transpose_dims)
     values = values.transpose(transpose_dims)
-    print(indices.shape)
-    print(values.shape)
-    if not keepdim:
+    if not keepdim and indices.ndim>1:
         indices = indices.squeeze(dim)
         values = values.squeeze(dim)
     return [values,indices]
