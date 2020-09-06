@@ -50,10 +50,10 @@ class TestInit(unittest.TestCase):
         torch.manual_seed(0)
 
     def test_conv(self):
-        check(jt.nn.Conv(64, 256, 3), torch.nn.Conv2d(64, 256, 3), rtol=1e-1, mean_atol=1e-3)
+        check(jt.nn.Conv(64, 256, 3), torch.nn.Conv2d(64, 256, 3), rtol=1e-1, mean_atol=1e-2)
 
     def test_resnet(self):
-        check(models.resnet152(), torchvision.models.resnet152(), rtol=2e-2, mean_atol=1e-2)
+        check(models.resnet152(), torchvision.models.resnet152(), rtol=5e-2, mean_atol=1e-2)
 
 if __name__ == "__main__":
     unittest.main()

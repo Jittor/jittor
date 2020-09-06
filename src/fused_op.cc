@@ -118,6 +118,18 @@ FusedOp::FusedOp() {
     Op::number_of_lived_ops--;
 }
 
+FusedOp::FusedOp(const FusedOp& other) {
+    Op::number_of_lived_ops--;
+    ops = other.ops;
+    edges = other.edges;
+    vars = other.vars;
+    loop_options_merged = other.loop_options_merged;
+    loop_options_tuned = other.loop_options_tuned;
+    loop_options = other.loop_options;
+    loop_options_origin = other.loop_options_origin;
+    context = other.context;
+}
+
 FusedOp::~FusedOp() {
     _outputs.clear();
     Op::number_of_lived_ops++;
@@ -215,7 +227,7 @@ void FusedOp::do_run_after_prepare() {
     LOGvv << "Jit op key not found:" << jit_key;
     // compile JIT op
     context = new FusedOpContext();
-    context->vrm.fop = this;
+    context->setup(this);
     string prev_jit_key = jit_key;
     context->entry = OpCompiler::do_compile(this);
     string new_jit_key = get_jit_key();
@@ -223,6 +235,25 @@ void FusedOp::do_run_after_prepare() {
     jit_key_mapper[prev_jit_key] = new_jit_key;
     LOGvv << "Get jit op entry:" << (void*)(context->entry);
     Profiler::record_and_run(context->entry, this, new_jit_key.c_str());
+}
+
+void FusedOpContext::setup(FusedOp* fop) {
+    node_id.clear();
+    vrm.fop = fop;
+    for (int i=0; i<fop->ops.size(); i++)
+        node_id[fop->ops[i]] = i;
+    for (int i=0; i<fop->vars.size(); i++)
+        node_id[fop->vars[i].var] = i;
+}
+
+int FusedOp::get_node_id(Node* node) {
+    ASSERT(context);
+    return context->node_id.at(node);
+}
+
+int FusedOp::has(Node* node) {
+    ASSERT(context);
+    return context->node_id.count(node);
 }
 
 void FusedOp::do_run(){

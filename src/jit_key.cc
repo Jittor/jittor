@@ -12,7 +12,7 @@ namespace jittor {
 
 const int page_size = 4*1024;
 
-extern size_t protected_page;
+extern thread_local size_t protected_page;
 
 static size_t get_buffer_end_page(size_t buffer_end) {
     // get the last complete page in buffer
@@ -112,6 +112,6 @@ vector<pair<string,string>> parse_jit_keys(const string& s) {
     return jit_keys;
 }
 
-JitKey jk;
+thread_local JitKey jk;
 
 } // jittor

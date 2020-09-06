@@ -97,7 +97,10 @@ void print_prefix(std::ostream* out) {
         << PRINT_W2(lt.tm_min) << ':'
         << PRINT_W2(lt.tm_sec) << "."
         << PRINT_W6(usecs) << ' '
-        << PRINT_W2(tid) << ' ';
+        << PRINT_W2(tid);
+    if (thread_name.size())
+        *out << ":" << thread_name;
+    *out << ' ';
 }
 
 MWSR_LIST(log, std::ostringstream);
@@ -109,8 +112,6 @@ std::vector<std::map<string,string>> logs;
 int log_capture_enabled = 0;
 
 void log_capture(const string& s) {
-    int bk = log_capture_enabled;
-    log_capture_enabled = 0;
     // find [ and ]
     uint i=0;
     while (i+2<s.size() && !(s[i]=='[' && s[i+2]==' ')) i++;
@@ -139,8 +140,10 @@ void log_capture(const string& s) {
     if (s[end]=='\n') end--;
     if (s[end-2]=='\033') end-=3;
     log["msg"] = s.substr(j, end-j+1);
-    logs.emplace_back(std::move(log));
-    log_capture_enabled = bk;
+    {
+        std::lock_guard<std::mutex> lg(sync_log_capture);
+        logs.emplace_back(std::move(log));
+    }
 }
 
 DECLARE_FLAG(int, log_silent);
@@ -174,14 +177,17 @@ std::vector<std::map<string,string>> log_capture_read() {
 
 void log_exiting();
 
-size_t protected_page=0;
+size_t thread_local protected_page = 0;
+int segfault_happen = 0;
+string thread_local thread_name;
 
 void segfault_sigaction(int signal, siginfo_t *si, void *arg) {
     if (signal == SIGINT) {
         LOGe << "Caught SIGINT, exit";
         exit(1);
     }
-    std::cerr << "Caught segfault at address " << si->si_addr << ", flush log..." << std::endl;
+    std::cerr << "Caught segfault at address " << si->si_addr << ", "
+        << "thread_name: '" << thread_name << "', flush log..." << std::endl;
     std::cerr.flush();
     if (protected_page && 
         si->si_addr>=(void*)protected_page && 
@@ -189,11 +195,14 @@ void segfault_sigaction(int signal, siginfo_t *si, void *arg) {
         LOGf << "Accessing protect pages, maybe jit_key too long";
     }
     if (signal == SIGSEGV) {
-        print_trace();
+        // only print trace in main thread
+        if (thread_name.size() == 0)
+            print_trace();
         std::cerr << "Segfault, exit" << std::endl;
     } else {
         std::cerr << "Get signal " << signal << ", exit" << std::endl;
     }
+    segfault_happen = 1;
     exit(1);
 }
 
@@ -281,8 +290,8 @@ bool check_vlog(const char* fileline, int verbose) {
 }
 
 int system_popen(const char* cmd) {
-    static char buf[BUFSIZ];
-    static string cmd2;
+    static thread_local char buf[BUFSIZ];
+    static thread_local string cmd2;
     cmd2 = cmd;
     cmd2 += " 2>&1 ";
     FILE *ptr = popen(cmd2.c_str(), "r");

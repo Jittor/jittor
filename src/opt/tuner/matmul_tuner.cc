@@ -22,12 +22,12 @@ void MatmulTuner::run(PassManager* pm, TunerManager* tm) {
     for (Op* op : fop->ops) {
         if (op->name_ex()!="reduce.add") continue;
         auto rop = (ReduceOp*)op;
-        if (!(rop->x->input() && rop->x->input()->name_ex()=="binary.multiply" && rop->x->input()->tflag==op->tflag))
+        if (!(rop->x->input() && rop->x->input()->name_ex()=="binary.multiply" && fop->has(rop->x->input())))
             continue;
         auto bop = (BinaryOp*)(rop->x->input());
-        if (!(bop->x->input() && bop->x->input()->name_ex()=="broadcast_to" && bop->x->input()->tflag==op->tflag))
+        if (!(bop->x->input() && bop->x->input()->name_ex()=="broadcast_to" && fop->has(bop->x->input())))
             continue;
-        if (!(bop->y->input() && bop->y->input()->name_ex()=="broadcast_to" && bop->y->input()->tflag==op->tflag))
+        if (!(bop->y->input() && bop->y->input()->name_ex()=="broadcast_to" && fop->has(bop->y->input())))
             continue;
         auto bcop1 = (BroadcastToOp*)(bop->x->input());
         auto bcop2 = (BroadcastToOp*)(bop->y->input());

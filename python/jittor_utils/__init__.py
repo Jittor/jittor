@@ -73,6 +73,7 @@ class DelayProgress:
         if used > 2:
             eta = used / (i+1) * (self.n-i-1)
             print(f"{self.msg}({i+1}/{self.n}) used: {used:.3f}s eta: {eta:.3f}s", end='\r')
+            if i==self.n-1: print()
 
 # check is in jupyter notebook
 def in_ipynb():
@@ -153,7 +154,7 @@ def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
     if pool_size == 0:
         mem_bytes = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
         mem_gib = mem_bytes/(1024.**3)
-        pool_size = min(8,max(int(mem_gib // 3), 1))
+        pool_size = min(16,max(int(mem_gib // 3), 1))
         LOG.i(f"Total mem: {mem_gib:.2f}GB, using {pool_size} procs for compiling.")
     cmds = [ [cmd, cache_path, jittor_path] for cmd in cmds ]
     bk = mp.current_process()._config.get('daemon')

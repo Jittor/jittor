@@ -31,7 +31,6 @@ template <class T> void TunerManager::run_tuner(PassManager* pm) {
 }
 
 string TunerManager::tune() {
-    auto tmp = Var::number_of_lived_vars;
     PassManager pm(oc);
     string src_after_passes;
     pm.run_passes();
@@ -60,7 +59,6 @@ string TunerManager::tune() {
             }
         }
     }
-    ASSERTop(Var::number_of_lived_vars,==,tmp) << (print_trace(), 0) << oc->op->ops << best_tuner->candidates;
     return src_after_passes;
 }
 
