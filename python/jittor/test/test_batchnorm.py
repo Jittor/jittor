@@ -38,7 +38,8 @@ def check_equal_with_istrain(arr, j_layer, p_layer, is_train=True, has_running=T
             assert np.allclose(p_layer.running_mean.detach().numpy(), j_layer.running_mean.numpy(), threshold)
         else:
             assert np.allclose(p_layer.layer.running_mean.detach().numpy(), j_layer.running_mean.numpy(), threshold)
-    assert np.allclose(pytorch_result.detach().numpy(), jittor_result.numpy(), threshold)
+    assert np.allclose(pytorch_result.detach().numpy(), jittor_result.numpy(), 1e-2, threshold), \
+        ( np.abs(pytorch_result.detach().numpy() - jittor_result.numpy()).max() )
 
 def check_equal_without_istrain(arr, j_layer, p_layer, threshold=1e-5):
     jittor_arr = jt.array(arr)

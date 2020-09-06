@@ -46,6 +46,7 @@ def compile(compiler, flags, inputs, output, combind_build=False):
             run_cmd(cmd)
             return True
     link = link_flags
+    base_output = output.split('/')[-1].split('.')[0]
     # if output is core, add core_link_flags
     if output.startswith("jittor_core"):
         link = link + core_link_flags
@@ -77,7 +78,7 @@ def compile(compiler, flags, inputs, output, combind_build=False):
             cc = nvcc_path
         cmd = f"{cc} {input} {nflags} -c {lto_flags} -o {obj_file}"
         cmds.append(cmd)
-    jit_utils.run_cmds(cmds, cache_path, jittor_path, "compiling")
+    jit_utils.run_cmds(cmds, cache_path, jittor_path, "Compiling "+base_output)
     cmd = f"{compiler} {' '.join(obj_files)} {flags} {lto_flags} {link} -o {output}"
     return do_compile(cmd)
 

@@ -65,7 +65,7 @@ struct JitKey {
     };
 };
 
-extern JitKey jk;
+extern thread_local JitKey jk;
 typedef JitKey JK;
 
 inline JK& operator<<(JK& jk, const char* s) {

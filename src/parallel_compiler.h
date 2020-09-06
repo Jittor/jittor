@@ -6,22 +6,9 @@
 // ***************************************************************
 #pragma once
 #include "common.h"
-#include "mem/allocator.h"
-#ifdef HAS_CUDA
-#include <cuda_runtime.h>
-#include <helper_cuda.h>
-#endif
 
 namespace jittor {
 
-struct Executor {
-    Allocator* allocator;
-    bool last_is_cuda = false;
-    void run_sync(vector<Var*> vars, bool device_sync);
-};
-
-extern Executor exe;
-
-void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, int ll, int rr, int64 tt);
+void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, int64 tt);
     
 } // jittor

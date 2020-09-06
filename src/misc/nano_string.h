@@ -74,6 +74,9 @@ namespace jittor {
     m(cosh) \
     m(acosh) \
     m(sigmoid) \
+    \
+    m(uniform) \
+    m(normal) \
 
 struct NanoString;
 #define DECLEAR_NS(T) extern NanoString ns_##T;

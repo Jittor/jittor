@@ -10,7 +10,8 @@ namespace jittor {
 
 struct RandomOp : Op {
     Var* output;
-    RandomOp(NanoVector shape, NanoString dtype=ns_float32);
+    NanoString type;
+    RandomOp(NanoVector shape, NanoString dtype=ns_float32, NanoString type=ns_uniform);
     
     const char* name() const override { return "random"; }
     DECLARE_jit_run;

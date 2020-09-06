@@ -16,6 +16,7 @@
 namespace jittor {
 
 static int lock_fd = -1;
+int _has_lock = 0;
 
 void set_lock_path(string path) {
     lock_fd = open(path.c_str(), O_RDWR);
@@ -32,6 +33,7 @@ void lock() {
         .l_len = 0
     };
     ASSERT(fcntl(lock_fd, F_SETLKW, &lock) == 0);
+    _has_lock = 1;
     LOGvv << "LOCK Pid:" << getpid();
 }
  
@@ -44,6 +46,7 @@ void unlock() {
         .l_len = 0
     };
     ASSERT(fcntl(lock_fd, F_SETLKW, &lock) == 0);
+    _has_lock = 0;
     LOGvv << "UNLOCK Pid:" << getpid();
 }
 

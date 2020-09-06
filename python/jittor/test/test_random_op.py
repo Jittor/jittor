@@ -43,5 +43,23 @@ class TestRandomOp(unittest.TestCase):
             t.data
         logs = find_log_with_re(raw_log, "(Jit op key (not )?found: " + "curand_random" + ".*)")
         assert len(logs)==1
+
+    def test_normal(self):
+        from jittor import init
+        n = 10000
+        r = 0.155
+        a = init.gauss([n], "float32", 1, 3)
+        data = a.data
+
+        assert (np.abs((data<(1-3)).mean() - r) < 0.1)
+        assert (np.abs((data<(1)).mean() - 0.5) < 0.1)
+        assert (np.abs((data<(1+3)).mean() - (1-r)) < 0.1)
+
+    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    @jt.flag_scope(use_cuda=1)
+    def test_normal_cuda(self):
+        self.test_normal()
+
+
 if __name__ == "__main__":
     unittest.main()
