@@ -516,11 +516,10 @@ class Module:
             end = 0
             for k in key_:
                 if isinstance(v, nn.Sequential):
-                    if ori_int(k) >= len(v.layers):
-                        end = 1
+                    v = v[k]
+                    if v is None:
+                        end=1
                         break
-                    else:
-                        v = v[ori_int(k)]
                 else:
                     if hasattr(v, k):
                         v = getattr(v, k)
@@ -782,6 +781,8 @@ double = float64
 Var.double = Var.float64
 
 from . import nn
+from . import attention
+from . import lr_scheduler
 from . import linalg
 from .nn import matmul
 from . import contrib
