@@ -11,22 +11,22 @@ import numpy as np
 import math
 
 def constant(shape, dtype, value=0.0):
-    return jt.array(np.ones(shape)*value).unary(dtype)
+    return jt.array(value).unary(dtype).broadcast(shape)
 
 def constant_(var, value=0.0):
-    var.assign(constant(tuple(var.shape), var.dtype, value))
+    var.assign(constant(var.shape, var.dtype, value))
 
 def uniform(shape, dtype, low, high):
-    return jt.array(np.random.uniform(low, high, shape)).unary(dtype)
+    return jt.random(shape, dtype) * (low - high) + high
 
 def uniform_(var, low, high):
-    var.assign(uniform(tuple(var.shape), var.dtype, low, high))
+    var.assign(uniform(var.shape, var.dtype, low, high))
 
 def gauss(shape, dtype, mean=0.0, std=1.0):
-    return jt.array(np.random.normal(mean, std, shape)).unary(dtype)
+    return jt.random(shape, dtype, "normal") * std + mean
 
 def gauss_(var, mean=0.0, std=1.0):
-    var.assign(gauss(tuple(var.shape), var.dtype, mean, std))
+    var.assign(gauss(var.shape, var.dtype, mean, std))
 
 def invariant_uniform(shape, dtype, mode="fan_in"):
     assert len(shape)>1

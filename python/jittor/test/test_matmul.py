@@ -156,8 +156,8 @@ class TestMatmul(unittest.TestCase):
                 loss_mean.data.sum() 
                 jt.liveness_info()
 
-        # result is 0.00038617782411165535
-        result = 0.00038617782411165535
+        # result is 0.00022486248053610325
+        result = 0.00022486248053610325
         assert abs(loss_mean.data - result) < 1e-6, [loss_mean.data, result]
         jt.clean()
 
@@ -255,9 +255,9 @@ class TestMatmul(unittest.TestCase):
                     loss_mean.data.sum() 
                     jt.liveness_info()
 
-            # result is 0.00038617782411165535
-            result = 0.00038617782411165535
-            assert abs(loss_mean.data - result) < 1e-6
+            # result is 0.00018236637697555125
+            result = 0.00018236637697555125
+            assert abs(loss_mean.data - result) < 1e-2
             jt.clean()
 
     @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")

@@ -16,13 +16,16 @@
 namespace jittor {
 
 #ifndef JIT
-CurandRandomOp::CurandRandomOp(NanoVector shape, NanoString dtype) {
+CurandRandomOp::CurandRandomOp(NanoVector shape, NanoString dtype, NanoString type) {
     flags.set(NodeFlags::_cuda, 1);
     output = create_output(shape, dtype);
+    this->type = type;
+    ASSERT(type == ns_normal || type == ns_uniform);
 }
 
 void CurandRandomOp::jit_prepare() {
     add_jit_define("T", output->dtype());
+    add_jit_define("R", type);
 }
 
 #else // JIT
@@ -31,13 +34,14 @@ void CurandRandomOp::jit_run() {
 }
 #else // JIT_cuda
 void CurandRandomOp::jit_run() {
+    @define(TT,@if(@strcmp(@T,float32)==0,,Double))
+
     auto* __restrict__ x = output->ptr<T>();
     index_t num = output->num;
-    if (sizeof(T) == 4) {
-        checkCudaErrors( curandGenerateUniform(gen, (float*)x, num) );
-    } else {
-        checkCudaErrors( curandGenerateUniformDouble(gen, (float64*)x, num) );
-    }
+    @if(@strcmp(@R,uniform)==0,
+        checkCudaErrors(curandGenerateUniform@TT (gen, x, num));,
+        checkCudaErrors(curandGenerateNormal@TT (gen, x, num, 0, 1));
+    )
 }
 #endif // JIT_cpu
 #endif // JIT

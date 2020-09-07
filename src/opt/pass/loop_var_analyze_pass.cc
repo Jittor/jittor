@@ -24,9 +24,10 @@ void LoopVarAnalyzePass::run() {
         auto& op_members = this->pm->oc->op_members;
         // TODO: fix it
         // ugly temp fix for index_var
+        auto opid = this->op->get_node_id(op);
         if (op->name()==string("index") && 
-            op->inputs().size()+op->outputs().size() != op_members[op->custom_data].size()) {
-            op_members[op->custom_data].insert(op_members[op->custom_data].begin(), "wtf");
+            op->inputs().size()+op->outputs().size() != op_members[opid].size()) {
+            op_members[opid].insert(op_members[opid].begin(), "wtf");
         }
     }
     // LoopVarAnalyzePass has three steps:

@@ -221,11 +221,11 @@ void ConvTuner::forwardTune(FusedOp* fop) {
         auto op_iop = op->input(0)->input();
         if (!(op_iop
             && op_iop->name_ex()=="binary.multiply"
-            && op_iop->tflag==op->tflag))
+            && fop->has(op_iop)))
             continue;
         auto bop = (BinaryOp*)op_iop;
 
-        if (!(bop->y->input() && bop->x->input() && bop->x->input()->tflag==op->tflag && bop->y->input()->tflag==op->tflag)) continue;
+        if (!(bop->y->input() && bop->x->input() && fop->has(bop->x->input()) && fop->has(bop->y->input()))) continue;
         if (!(bop->x->input()->type()==OpType::broadcast && bop->y->input()->type()==OpType::broadcast)) return;
 
         // only support float32 currently

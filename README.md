@@ -356,7 +356,7 @@ File an issue: https://github.com/Jittor/jittor/issues
 ## The Team
 
 
-Jittor is currently maintained by Dun Liang, Guo-Ye Yang, Guo-Wei Yang and Wen-Yang Zhou etc. from the [Tsinghua CSCG Group](https://cg.cs.tsinghua.edu.cn/). If you are also interested in Jittor and want to improve it, Please join us!
+Jittor is currently maintained by Dun Liang, Guo-Ye Yang, Guo-Wei Yang,  Wen-Yang Zhou and Meng-Hao Guo etc. from the [Tsinghua CSCG Group](https://cg.cs.tsinghua.edu.cn/). If you are also interested in Jittor and want to improve it, Please join us!
 
 
 ## License

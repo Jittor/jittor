@@ -7,7 +7,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-__version__ = '1.1.7.11'
+__version__ = '1.1.7.13'
 from . import lock
 with lock.lock_scope():
     from . import compiler
@@ -99,6 +99,8 @@ class log_capture_scope(_call_no_record_scope):
         LOG.log_capture_start()
         try:
             self.fs.__enter__()
+            if "log_v" in self.fs.jt_flags:
+                LOG.log_v = self.fs.jt_flags["log_v"]
             return self.logs
         except:
             LOG.log_capture_stop()
@@ -108,6 +110,8 @@ class log_capture_scope(_call_no_record_scope):
     def __exit__(self, *exc):
         global single_log_capture
         self.fs.__exit__(*exc)
+        if "log_v" in self.fs.jt_flags:
+            LOG.log_v = flags.log_v
         LOG.log_capture_stop()
         self.logs.extend(LOG.log_capture_read())
         single_log_capture = None
