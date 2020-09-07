@@ -41,9 +41,9 @@ std::ostream& operator<<(std::ostream& os, const FloatOutput& o) {
     return os << o.suffix;
 }
 
-void display_memory_info(const char* fileline, bool dump_var) {
+void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
     int p = 3;
-    Log log(fileline, 'i', 0);
+    Log log(fileline, red_color?'e':'i', 0);
     log << "\n=== display_memory_info ===\n";
     log << "total_cpu_ram:" << 
         FloatOutput{(double)mem_info.total_cpu_ram, " KMG", 1024, "B"};

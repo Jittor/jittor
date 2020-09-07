@@ -61,9 +61,6 @@ static string get_symbol_name(const string& jit_key) {
 }
 
 jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_cuda_op, const string& extra_flags) {
-    auto iter = jit_ops.find(jit_key);
-    if (iter != jit_ops.end())
-        return iter->second;
     LOGvv << "Compile op" << jit_key;
     // compiler do not allowed filename too long
     CHECK(cc_path.size());
@@ -92,7 +89,6 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
     cache_compile(cmd, cache_path, jittor_path);
     auto symbol_name = get_symbol_name(jit_key);
     auto jit_entry = load_jit_lib(jit_lib_path, symbol_name);
-    jit_ops[jit_key] = jit_entry;
     return jit_entry;
 }
 
