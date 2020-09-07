@@ -526,10 +526,10 @@ class Module:
                     else:
                         end = 1
                         break
-            if end ==1:
-                n_failed += 1
-                LOG.w(f'load parameter {key} failed ...')
-                pass
+            if end == 1:
+                if not key.endswith("num_batches_tracked"):
+                    n_failed += 1
+                    LOG.w(f'load parameter {key} failed ...')
             else:
                 LOG.v(f'load parameter {key} success ...')
                 if isinstance(params[key], np.ndarray) or isinstance(params[key], list):
