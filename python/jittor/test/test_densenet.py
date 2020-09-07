@@ -24,7 +24,7 @@ skip_this_test = False
 
 class MnistNet(Module):
     def __init__(self):
-        self.model = densenet.Densenet169()
+        self.model = densenet.densenet169()
         self.layer = nn.Linear(1000,10)
     def execute(self, x):
         x = self.model(x)

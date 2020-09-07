@@ -57,7 +57,10 @@ class test_models(unittest.TestCase):
             'shufflenet_v2_x1_0',
             'shufflenet_v2_x1_5',
             'shufflenet_v2_x2_0',
+            "densenet121",
+            "densenet161",
         ]
+        self.models = ["densenet169"]
 
     @unittest.skipIf(not jt.has_cuda, "Cuda not found")
     @jt.flag_scope(use_cuda=1)
@@ -98,6 +101,10 @@ class test_models(unittest.TestCase):
             y = jittor_result.data + 1
             relative_error = abs(x - y) / abs(y)
             diff = relative_error.mean()
+            print(pytorch_result.shape, jittor_result.shape)
+            print(pytorch_result)
+            print(jittor_result)
+            print(pytorch_result.detach().cpu().numpy() - jittor_result.data)
             assert diff < threshold, f"[*] {test_model} forward fails..., Relative Error: {diff}"
             print(f"[*] {test_model} forword passes with Relative Error {diff}")
             jt.clean()

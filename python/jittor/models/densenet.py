@@ -12,15 +12,51 @@ from jittor import nn
 from jittor import init
 from collections import OrderedDict
 
-def Densenet169(pretrained=False, **kwargs):
-    'Densenet-169 model from\n    `"Densely Connected Convolutional Networks" <https://arxiv.org/pdf/1608.06993.pdf>`_\n\n    Args:\n        pretrained (bool): If True, returns a model pre-trained on ImageNet\n    '
+
+def densenet121(pretrained=False, **kwargs):
+    '''Densenet-121 model from
+    `"Densely Connected Convolutional Networks" <https://arxiv.org/pdf/1608.06993.pdf>`_
+    
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on ImageNet
+    '''
+    model = DenseNet(num_init_features=64, growth_rate=32, block_config=(6, 12, 24, 16), **kwargs)
+    assert not pretrained, "pretrained doesn't support now"
+    return model
+
+def densenet161(pretrained=False, **kwargs):
+    '''Densenet-161 model from
+    `"Densely Connected Convolutional Networks" <https://arxiv.org/pdf/1608.06993.pdf>`_
+    
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on ImageNet
+    '''
+    model = DenseNet(num_init_features=96, growth_rate=48, block_config=(6, 12, 36, 24), **kwargs)
+    assert not pretrained, "pretrained doesn't support now"
+    return model
+
+def densenet169(pretrained=False, **kwargs):
+    '''Densenet-169 model from
+    `"Densely Connected Convolutional Networks" <https://arxiv.org/pdf/1608.06993.pdf>`_
+    
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on ImageNet
+    '''
     model = DenseNet(num_init_features=64, growth_rate=32, block_config=(6, 12, 32, 32), **kwargs)
     assert not pretrained, "pretrained doesn't support now"
-    # if pretrained:
-    #     save=torch.load('parameter.pkl')
-    #     params=model.parameters()
-    #     model.load_parameters(save)
     return model
+
+def densenet201(pretrained=False, **kwargs):
+    '''Densenet-201 model from
+    `"Densely Connected Convolutional Networks" <https://arxiv.org/pdf/1608.06993.pdf>`_
+    
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on ImageNet
+    '''
+    model = DenseNet(num_init_features=64, growth_rate=32, block_config=(6, 12, 48, 32), **kwargs)
+    assert not pretrained, "pretrained doesn't support now"
+    return model
+
 
 class _DenseLayer(nn.Sequential):
 
@@ -59,7 +95,18 @@ class _Transition(nn.Sequential):
         self.add_module('pool', nn.Pool(2, stride=2, op='mean'))
 
 class DenseNet(nn.Module):
-    'Densenet-BC model class, based on\n    `"Densely Connected Convolutional Networks" <https://arxiv.org/pdf/1608.06993.pdf>`_\n\n    Args:\n        growth_rate (int) - how many filters to add each layer (`k` in paper)\n        block_config (list of 4 ints) - how many layers in each pooling block\n        num_init_features (int) - the number of filters to learn in the first convolution layer\n        bn_size (int) - multiplicative factor for number of bottle neck layers\n          (i.e. bn_size * k features in the bottleneck layer)\n        drop_rate (float) - dropout rate after each dense layer\n        num_classes (int) - number of classification classes\n    '
+    '''Densenet-BC model class, based on
+        `"Densely Connected Convolutional Networks" <https://arxiv.org/pdf/1608.06993.pdf>`_
+    
+        Args:
+            growth_rate (int) - how many filters to add each layer (`k` in paper)
+            block_config (list of 4 ints) - how many layers in each pooling block
+            num_init_features (int) - the number of filters to learn in the first convolution layer
+            bn_size (int) - multiplicative factor for number of bottle neck layers
+              (i.e. bn_size * k features in the bottleneck layer)
+            drop_rate (float) - dropout rate after each dense layer
+            num_classes (int) - number of classification classes
+    '''
 
     def __init__(self, growth_rate=32, block_config=(6, 12, 24, 16), num_init_features=64, bn_size=4, drop_rate=0, num_classes=1000):
         super(DenseNet, self).__init__()
@@ -79,7 +126,7 @@ class DenseNet(nn.Module):
                 self.features.add_module('transition%d' % (i + 1), trans)
                 num_features = (num_features // 2)
         self.features.add_module('norm5', nn.BatchNorm(num_features))
-        self.fc = nn.Linear(num_features, num_classes)
+        self.classifier = nn.Linear(num_features, num_classes)
         for m in self.modules():
             if isinstance(m, nn.Conv):
                 nn.init.invariant_uniform_(m.weight)
@@ -92,6 +139,6 @@ class DenseNet(nn.Module):
     def execute(self, x):
         features = self.features(x)
         out = nn.relu(features)
-        out = jt.pool.pool(out, kernel_size=7, op="mean",stride=1).reshape([features.shape[0], -1])
-        out = jt.sigmoid(self.fc(out))
+        out = jt.pool.pool(out, kernel_size=7, op="mean", stride=1).reshape([features.shape[0], -1])
+        out = jt.sigmoid(self.classifier(out))
         return out
