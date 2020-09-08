@@ -218,7 +218,7 @@ static void tune_atomic(Pass* pass, KernelIR* ir, bool is_cuda, int tdim, vector
 
                 auto def=p->father->find_define(didx);
                 ASSERT(def != nullptr);
-                if (def->father == loops[sidx])
+                if (sidx>=0 && def->father == loops[sidx])
                     return true;
                 auto& loop_i = loops.at(sidx+1);
                 code = OpCompiler::precompile(defs, t) + ";";
