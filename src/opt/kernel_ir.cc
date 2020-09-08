@@ -303,7 +303,7 @@ void KernelIR::for_each_rev(Func&& func) {
 
 KernelIR* KernelIR::find_define(const string& name) {
     auto iter = scope.find(name);
-    if (iter == scope.end()) {
+    if (iter == scope.end() || iter->second.size()==0) {
         if (father)
             return father->find_define(name);
         return nullptr;
