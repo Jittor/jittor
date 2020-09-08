@@ -140,5 +140,5 @@ class DenseNet(nn.Module):
         features = self.features(x)
         out = nn.relu(features)
         out = jt.pool.pool(out, kernel_size=7, op="mean", stride=1).reshape([features.shape[0], -1])
-        out = jt.sigmoid(self.classifier(out))
+        out = self.classifier(out)
         return out
