@@ -69,6 +69,8 @@ class TestAtomicTunerClass(unittest.TestCase):
             'atomictuner: move atomicAdd to loop -1',
             'atomictuner: move atomicAdd to loop -1',
         ])
+
+        self.check(lambda x: x.reindex_reduce("add", x.shape, ["i2","i3","i0","i1"]), [])
         
 if __name__ == "__main__":
     unittest.main()
