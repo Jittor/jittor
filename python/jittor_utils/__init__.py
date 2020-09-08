@@ -31,18 +31,20 @@ class LogWarper:
         return cc.log_capture_read()
 
     def _log(self, level, verbose, *msg):
-        if len(msg):
-            msg = " ".join([ str(m) for m in msg ])
-        else:
-            msg = str(msg)
+        if self.log_silent or verbose > self.log_v:
+            return
+        ss = ""
+        for m in msg:
+            if callable(m):
+                m = m()
+            ss += str(m)
+        msg = ss
         f = inspect.currentframe()
         fileline = inspect.getframeinfo(f.f_back.f_back)
         fileline = f"{os.path.basename(fileline.filename)}:{fileline.lineno}"
         if cc and hasattr(cc, "log"):
             cc.log(fileline, level, verbose, msg)
         else:
-            if self.log_silent or verbose > self.log_v:
-                return
             time = datetime.datetime.now().strftime("%m%d %H:%M:%S.%f")
             tid = threading.get_ident()%100
             v = f" v{verbose}" if verbose else ""
@@ -57,6 +59,21 @@ class LogWarper:
     def w(self, *msg): self._log('w', 0, *msg)
     def e(self, *msg): self._log('e', 0, *msg)
     def f(self, *msg): self._log('f', 0, *msg)
+
+class DelayProgress:
+    def __init__(self, msg, n):
+        self.msg = msg
+        self.n = n
+        self.time = time.time()
+
+    def update(self, i):
+        if LOG.log_silent:
+            return
+        used = time.time() - self.time
+        if used > 2:
+            eta = used / (i+1) * (self.n-i-1)
+            print(f"{self.msg}({i+1}/{self.n}) used: {used:.3f}s eta: {eta:.3f}s", end='\r')
+            if i==self.n-1: print()
 
 # check is in jupyter notebook
 def in_ipynb():
@@ -132,19 +149,22 @@ def do_compile(args):
 
 pool_size = 0
 
-def run_cmds(cmds, cache_path, jittor_path):
+def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
     global pool_size
     if pool_size == 0:
         mem_bytes = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
         mem_gib = mem_bytes/(1024.**3)
-        pool_size = min(8,max(int(mem_gib // 3), 1))
+        pool_size = min(16,max(int(mem_gib // 3), 1))
         LOG.i(f"Total mem: {mem_gib:.2f}GB, using {pool_size} procs for compiling.")
     cmds = [ [cmd, cache_path, jittor_path] for cmd in cmds ]
     bk = mp.current_process()._config.get('daemon')
     mp.current_process()._config['daemon'] = False
     try:
         with Pool(pool_size) as p:
-            p.map(do_compile, cmds)
+            n = len(cmds)
+            dp = DelayProgress(msg, n)
+            for i,_ in enumerate(p.imap_unordered(do_compile, cmds)):
+                dp.update(i)
     finally:
         mp.current_process()._config['daemon'] = bk
 

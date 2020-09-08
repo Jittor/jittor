@@ -449,7 +449,7 @@ def compile_src(src, h, basename):
             continue
         else:
             defs.append(def_info)
-        LOG.vvv(json.dumps(def_info, indent=4))
+        LOG.vvv(lambda: json.dumps(def_info, indent=4))
     # deal with defs
     if len(defs) == 0: return
     # include_name = h[4:] # remove "src/" prefix

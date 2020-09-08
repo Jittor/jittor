@@ -108,8 +108,7 @@ def pass_asm(cc_path,s_path):
     
     output_path=s_path.replace(".post.s",".s")
     with open(output_path,"w") as f:
-        for line in s_content:
-            f.write(line)
+        f.write("".join(s_content))
 
 def run_cmd(cmd):
     LOG.vvvv(f"Run cmd: {cmd}")
