@@ -28,12 +28,12 @@ for ... // outer loop
 
 -->
 
+statement_x
 for ... // outer loop
     for ...
         for ... // inner loop
             statement_not_rely
 
-statement_x
 statement_y // def
 
  */
