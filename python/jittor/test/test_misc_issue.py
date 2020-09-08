@@ -128,6 +128,9 @@ jt.mkl_ops.mkl_conv(x, w, 1, 2).sync()
         a = jt.random((10,)) - 2
         assert a.min().data == a.data.min(), (a.min(), a.data.min())
         assert a.max().data == a.data.max(), (a.max(), a.data.max())
+        a = jt.random((10,)) + 2
+        assert a.min().data == a.data.min(), (a.min(), a.data.min())
+        assert a.max().data == a.data.max(), (a.max(), a.data.max())
 
     @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
     @jt.flag_scope(use_cuda=1)
