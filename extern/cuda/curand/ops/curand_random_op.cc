@@ -38,6 +38,10 @@ void CurandRandomOp::jit_run() {
 
     auto* __restrict__ x = output->ptr<T>();
     index_t num = output->num;
+    // curand doesn't support even number, we add 1 when it is even
+    // because allocator will make odd chunks, so this wouldn't cause
+    // segmentation fault
+    num += num&1;
     @if(@strcmp(@R,uniform)==0,
         checkCudaErrors(curandGenerateUniform@TT (gen, x, num));,
         checkCudaErrors(curandGenerateNormal@TT (gen, x, num, 0, 1));
