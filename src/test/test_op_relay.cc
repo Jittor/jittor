@@ -55,6 +55,7 @@ JIT_TEST(fused_op_relay_matmul) {
     // a, b, d can not fuse
     a->custom_data = b->custom_data = d->custom_data = 1;
     fop.update_ops();
+    context.setup(&fop);
     if (!has_op("mkl_matmul")) return;
     auto make_matmul = get_op_info("mkl_matmul")
         .get_constructor<VarPtr, Var*, Var*, bool, bool>();
@@ -72,6 +73,7 @@ JIT_TEST(fused_op_relay_matmul) {
     // broadcast(a) can not fused
     fop.vars[1].var->custom_data = 1;
     fop.update_ops();
+    context.setup(&fop);
     is_op_relayed = context.vrm.get_op_relay_info({1});
     vector<pair<int,int>> ans{{-1,-1},{0,0},{0,0},{0,0}};
     CHECKop(is_op_relayed,==,ans);

@@ -9,6 +9,7 @@
 #include "mem/allocator.h"
 #include "opt/pass_manager.h"
 #include "opt/pass/assume_aligned_pass.h"
+#include "executor.h"
 
 namespace jittor {
 
@@ -31,7 +32,7 @@ void AssumeAlignedPass::run() {
                     Var* var;
                     pm->oc->get_op_var_by_name(name, op_id, opvar_id, op, var);
                     // add assume_aligned if is aligned_allocator
-                    if (var->allocator->is_aligned()) {
+                    if (exe.allocator->is_aligned()) {
                         // if is a function arguments
                         if (l == ls[0])
                             func->push_front("assume_aligned("+lvalue+");");

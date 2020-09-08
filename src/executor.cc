@@ -20,6 +20,7 @@
 #include "fused_op.h"
 #include "fuser.h"
 #include "profiler/profiler_guard.h"
+#include "parallel_compiler.h"
 
 namespace jittor {
 
@@ -27,6 +28,43 @@ Executor exe;
 
 // from fetch_op.cc
 extern list<VarPtr> fetcher_to_free;
+
+void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, int ll, int rr, int64 tt) {
+    fused_op.ops.clear();
+    fused_op.edges.clear();
+    auto ntt = ++Node::tflag_count;
+    for (int i=ll; i<rr; i++) {
+        int opid = fuse_ops[i];
+        Op* op = ops[opid];
+        uint64_t fid1 = fused_op.ops.size();
+        op->custom_data = fid1;
+        op->tflag = ntt;
+        fused_op.ops.push_back(op);
+    }
+    for (Op* op : fused_op.ops) {
+        uint fid1 = op->custom_data;
+        uint oid = 0;
+        for (Var* v : op->outputs()) {
+            oid++;
+            if (v->tflag != tt) {
+                // this var node not belong to current execution
+                // this will happend in multiple outputs fuseable op
+                // v->custom_data = 0 represents this var cannot be fused
+                v->custom_data = 0;
+                continue;
+            }
+            for (auto o : v->outputs_with_index()) {
+                Op* op2 = o.op;
+                uint iid = o.index;
+                if (op2->tflag != ntt) continue;
+                uint fid2 = op2->custom_data;
+                fused_op.edges.emplace_back(fid1, oid-1, fid2, iid);
+            }
+        }
+    }
+    LOGvvv << "Prepare fused_op" << fused_op.ops;
+    fused_op.update_ops();
+}
 
 void Executor::run_sync(vector<Var*> vars, bool device_sync) {
     auto allocator = get_allocator();
@@ -316,10 +354,13 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
     for (int i=0; i<var_num; i++) {
         all_vars[i]->custom_data = var_fused[i]==1;
     }
+    FusedOp fused_op;
+
+    // compile all ops, prevent compiling during running
+    parallel_compile_all_ops(queue, range, fused_op, fuse_ops, ops, tt);
 
     // running
     SetupFreeBuffer setup_free_buffer;
-    FusedOp fused_op;
     vector<Var*> outputs_bk;
     #ifdef HAS_CUDA
     int sync_times = 0;
@@ -332,41 +373,9 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         if (op->type() != OpType::other) {
             op = &fused_op;
             is_fused_op = true;
-            fused_op.ops.clear();
-            fused_op.edges.clear();
             int ll = (rid<queue.size()-1)?range[queue.size()-rid-2]:0, rr = range[queue.size()-rid-1];
             root = fuse_ops[rr-1];
-            auto ntt = ++Node::tflag_count;
-            for (int i=ll; i<rr; i++) {
-                int opid = fuse_ops[i];
-                Op* op = ops[opid];
-                uint64_t fid1 = fused_op.ops.size();
-                op->custom_data = fid1;
-                op->tflag = ntt;
-                fused_op.ops.push_back(op);
-            }
-            for (Op* op : fused_op.ops) {
-                uint fid1 = op->custom_data;
-                uint oid = 0;
-                for (Var* v : op->outputs()) {
-                    oid++;
-                    if (v->tflag != tt) {
-                        // this var node not belong to current execution
-                        // this will happend in multiple outputs fuseable op
-                        v->custom_data = 0;
-                        continue;
-                    }
-                    for (auto o : v->outputs_with_index()) {
-                        Op* op2 = o.op;
-                        uint iid = o.index;
-                        if (op2->tflag != ntt) continue;
-                        uint fid2 = op2->custom_data;
-                        fused_op.edges.emplace_back(fid1, oid-1, fid2, iid);
-                    }
-                }
-            }
-            LOGvvv << "Prepare fused_op" << fused_op.ops;
-            fused_op.update_ops();
+            load_fused_op(fused_op, fuse_ops, ops, ll, rr, tt);
         }
         LOGvvv << "Run" << op;
         if (!op->shape_infered()) op->infer_shape();
@@ -430,7 +439,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
             var->finish_pending_liveness();
         } catch (const std::exception& e) {
             // log memory info
-            display_memory_info(__FILELINE__);
+            display_memory_info(__FILELINE__, false, true);
             // log jit_key and file location
             op->do_prepare();
             string jit_src_path = Op::get_filename_from_jit_key(jk.to_cstring(), ".cc");

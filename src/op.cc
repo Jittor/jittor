@@ -110,9 +110,12 @@ void Op::do_jit_prepare() {
         //   check use_cuda_op from outputs may not be enough
         bool use_cuda_op = use_cuda;
         for (Var* var : inputs()) {
-            if (var->allocator) {
+            if (var->mem_ptr) {
+                /* jit key don't include here, because 
+                    parallel compiler don't known
                 jk << JK::key << "alloc_i" << JK::hex1(in_id)
                     << JK::hex1(var->allocator->flags()) << JK::end;
+                */
                 use_cuda_op &= var->allocator->is_cuda();
             }
             if (var->num >= std::numeric_limits<int32_t>::max())
@@ -120,9 +123,11 @@ void Op::do_jit_prepare() {
             in_id ++;
         }
         for (Var* var : outputs()) {
-            if (var->allocator) {
+            if (var->mem_ptr) {
+                /*
                 jk << JK::key << "alloc_o" << JK::hex1(in_id)
                     << JK::hex1(var->allocator->flags()) << JK::end;
+                */
                 use_cuda_op &= var->allocator->is_cuda();
             }
             if (var->num >= std::numeric_limits<int32_t>::max())
