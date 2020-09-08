@@ -516,8 +516,11 @@ class Module:
             end = 0
             for k in key_:
                 if isinstance(v, nn.Sequential):
-                    v = v[k]
-                    if v is None:
+                    if (k in v.layers):
+                        v = v[k]
+                    elif k.isdigit() and (ori_int(k) in v.layers):
+                        v = v[ori_int(k)]
+                    else:
                         end=1
                         break
                 else:
