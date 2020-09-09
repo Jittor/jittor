@@ -279,7 +279,7 @@ def flatten(input, start_dim=0, end_dim=-1):
     in_shape = input.shape
     start_dim = len(in_shape) + start_dim if start_dim < 0 else start_dim
     end_dim = len(in_shape) + end_dim if end_dim < 0 else end_dim
-    assert end_dim > start_dim, "end_dim should be larger than start_dim for flatten function"
+    assert end_dim >= start_dim, "end_dim should be larger than or equal to start_dim for flatten function"
     out_shape = []
     for i in range(0,start_dim,1): out_shape.append(in_shape[i])
     dims = 1
