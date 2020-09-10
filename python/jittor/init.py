@@ -75,8 +75,8 @@ def calculate_std(var,mode,nonlinearity,param=0.01):
         'conv_transpose3d':1,
         'sigmoid':1,
         'tanh':5.0/3,
-        'relu':math.sqrt(2.0)
-        'leaky_relu':math.sqrt(2.0 / (1 + param ** 2))
+        'relu':math.sqrt(2.0),
+        'leaky_relu':math.sqrt(2.0 / (1 + param ** 2)),
     }
     gain = gains[nonlinearity]
     std = gain/math.sqrt(fan)
