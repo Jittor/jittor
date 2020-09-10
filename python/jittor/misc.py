@@ -394,7 +394,7 @@ def split(d,split_size,dim):
     ans = []
     last = 0
     for i in split_size:
-        ss = (slice(None),)*(dim-1)+(slice(last,last+i),)
+        ss = (slice(None),)*dim+(slice(last,last+i),)
         new_d = d[ss]
         last +=i
         ans.append(new_d)
