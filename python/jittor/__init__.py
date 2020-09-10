@@ -242,10 +242,6 @@ def full(shape,val,dtype="float32"):
 def zeros_like(x):
     return zeros(x.shape,x.dtype)
 
-def empty(size,dtype):
-    return jt.array(np.empty(size,dtype=dtype))
-
-
 flags = core.flags()
 
 def std(x):
