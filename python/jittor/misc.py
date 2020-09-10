@@ -319,8 +319,8 @@ jt.Var.nonzero = nonzero
 def arange(start=0, end=None, step=1,dtype=None):
     if end is None:
         end,start = start,0
-    l = round((end-start)//step)
-    if l*step+start>=end:
+    l = round((end-start)//step)+1
+    if (l-1)*step+start>=end:
         l-=1
     x = jt.index((l,),0)
     x = x*step+start
