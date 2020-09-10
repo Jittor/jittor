@@ -20,7 +20,7 @@ from jittor.dataset.mnist import MNIST
 import jittor.transform as trans
 import time
 
-skip_this_test = False
+skip_this_test = True
 
 class MnistNet(Module):
     def __init__(self):
