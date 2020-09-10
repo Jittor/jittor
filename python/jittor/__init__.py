@@ -418,20 +418,105 @@ def _uniq(x):
             b.append(i)
     return b
 
+flag_export_graph = False
+export_turn = 1
+prefix_stack = []
+nodes = []
 class Module:
     def __init__(self, *args, **kw):
         pass
     def execute(self, *args, **kw):
         pass
+    def export_graph(self, *args, **kw):
+        jt.flag_export_graph = True
+        from tensorboard.compat.proto import graph_pb2
+        from tensorboard.compat.proto import config_pb2
+
+        graph_def = graph_pb2.GraphDef()
+
+        in_cnt = 1
+        for arg in args:
+            if isinstance(arg, jt.Var):
+                if arg.name() == "": name = f"Input/input{in_cnt}"
+                else: name = f"Input/{arg.name()}"
+                arg.name(name)
+                in_cnt += 1
+                graph_def.node.add(name=name, op="Input")
+
+        for k in kw.keys():
+            if isinstance(kw[k], jt.Var):
+                name = f"Input/{k}"
+                k.name(name)
+                graph_def.node.add(name=name, op="Input")
+        
+        prefix_stack.append("")
+        self(*args, **kw)
+
+        for node in nodes:
+            graph_def.node.add(**node)
+        jt.flag_export_graph = False
+        return (graph_def, config_pb2.RunMetadata())
     def __call__(self, *args, **kw):
+        if jt.flag_export_graph:
+            global export_turn
+            input_names = []
+            if prefix_stack[-1] == "": 
+                prefix = self.__class__.__name__
+                prefix_stack.append(prefix)
+            else:
+                prefix = f"{prefix_stack[-1]}/{export_turn}_{self.__class__.__name__}"
+                prefix_stack.append(prefix)
+                export_turn += 1
+                if len(self.modules()) == 1:
+                    for param in self.parameters():
+                        if '.' not in param.name():
+                            name = f"{prefix}/{param.name()}"
+                            nodes.append({"name": name})
+                            input_names.append(name)
+                    for arg in args:
+                        if isinstance(arg, jt.Var):
+                            input_names.append(arg.name())
+                    for k in kw.keys():
+                        if isinstance(kw[k], jt.Var):
+                            input_names.append(k.name())
+                    nodes.append({"name": prefix, "input": input_names})
+                    # print("Input:", "=" * 20, input_names, prefix_stack, args[0].name(), kw, nodes[-1])
+
+            ret = self.execute(*args, **kw)
+            if not isinstance(ret, tuple): res=(ret,)
+            else: res=ret
+            out_cnt = 1
+            output_names = []
+            for r in res:
+                if isinstance(r, jt.Var):
+                    if r.name() == "":
+                        if prefix_stack[-2] == "":
+                            break
+                        else:
+                            name = f"{prefix_stack[-2]}/{export_turn-1}_{self.__class__.__name__}_output{out_cnt}"
+                        out_cnt += 1
+                    else:
+                        if prefix_stack[-2] == "":
+                            break
+                            name = f"Output/{r.name()}"
+                        else:
+                            name = r.name()
+                    nodes.append({"name": name, "op": "Output", "input": [prefix_stack[-1]]})
+                    r.name(name)
+                    output_names.append(name)
+            prefix_stack.pop()
+            return ret
         return self.execute(*args, **kw)
+    def apply(self, func):
+        for m in self.modules():
+            func(m)
     def __repr__(self):
         return self.__str__()
     def _get_name(self):
         return self.__class__.__name__
     def __name__(self):
         pass
-
+    
     def dfs(self, parents, k, callback, callback_leave=None):
         n_children = 0
         for v in self.__dict__.values():
