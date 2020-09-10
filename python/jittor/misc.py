@@ -320,7 +320,7 @@ def arange(start=0, end=None, step=1,dtype=None):
     if end is None:
         end,start = start,0
     l = round((end-start)//step)+1
-    if (l-1)*step+start>end:
+    if (l-1)*step+start>=end:
         l-=1
     x = jt.index((l,),0)
     x = x*step+start
@@ -394,7 +394,7 @@ def split(d,split_size,dim):
     ans = []
     last = 0
     for i in split_size:
-        ss = (slice(None,))*(dim-1)+(slice(last,last+i),)
+        ss = (slice(None),)*(dim-1)+(slice(last,last+i),)
         new_d = d[ss]
         last +=i
         ans.append(new_d)
