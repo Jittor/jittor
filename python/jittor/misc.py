@@ -112,7 +112,7 @@ def stack(x, dim=0):
         [[[1 2 3]
         [[4 5 6]]]
     '''
-    assert isinstance(x, (list,tuple))
+    assert isinstance(x, Sequence)
     assert len(x) >= 2
     res = [x_.unsqueeze(dim) for x_ in x]
     return jt.contrib.concat(res, dim=dim)
@@ -303,16 +303,6 @@ def unique(x):
 
 jt.Var.unique = unique
 
-
-
-def numel(x):
-    r'''
-    Return the number of the elements of input tensor.
-    '''
-    return np.prod(x.shape)
-
-jt.Var.numel = numel
-
 def nonzero(x):
     r'''
     Return the index of the elements of input tensor which are not equal to zero.
@@ -328,19 +318,23 @@ jt.Var.nonzero = nonzero
 
 def arange(start=0, end=None, step=1,dtype=None):
     if end is None:
-        end = start
-        start = 0
-    x = np.arange(start,end,step,dtype)
-    x = jt.array(x)
+        end,start = start,0
+    l = (end-start)//step
+    if l*step+start==end:
+        l-=1
+    x = jt.index((l),0)
+    x = x*step+start
+    if dtype is not None:
+        x= x.cast(dtype)
     return x
 
 def randperm(n, dtype="int64"):
     x = np.arange(n)
     np.random.shuffle(x)
-    return jt.array(x)
+    return jt.array(x).cast(dtype)
 
 def log2(x):
-    return jt.log(x)/jt.log(jt.array([2.0]))
+    return jt.log(x)/math.log(2.0)
 
 jt.Var.log2 = log2
 
@@ -351,6 +345,10 @@ def item(x):
 jt.Var.item  = item
 
 def meshgrid(*tensors):
+    r'''
+    Take N tensors, each of which can be 1-dimensional vector, and create N n-dimensional grids, 
+    where the i th grid is defined by expanding the i th input over dimensions defined by other inputs.
+    '''
     size = len(tensors)
     shape = []
     for i in range(size):
@@ -389,28 +387,20 @@ def split(d,split_size,dim):
             split_size = [split_size]*(shape//split_size)+[shape%split_size]
     if isinstance(split_size, Iterable):
         assert sum(split_size)==d.shape[dim]
+
+    if dim<0:
+        dim+=d.ndim
         
     ans = []
     last = 0
-    ndim = d.ndim
-    t_dims = [i for i in range(ndim)]
-    t_dims[0],t_dims[dim] = t_dims[dim],t_dims[0]
-    d = d.transpose(t_dims)
     for i in split_size:
-        new_d = d[last:last+i]
+        ss = (slice(None,))*(dim-1)+(slice(last,last+i),)
+        new_d = d[ss]
         last +=i
-        ans.append(new_d.transpose(t_dims))
+        ans.append(new_d)
     return tuple(ans)
 
 jt.Var.split = split
-
-def smooth_l1_loss(input, target, beta=1. / 9, size_average=True):
-    diff = jt.abs(input - target)
-    less_than_one = (diff<1.0).float32()
-    loss = (less_than_one * 0.5 * diff**2) + (1 - less_than_one) * (diff - 0.5)
-    if size_average:
-        return loss.mean()
-    return loss.sum()
 
 
 def topk(input, k, dim=None, largest=True, sorted=True):
@@ -419,16 +409,11 @@ def topk(input, k, dim=None, largest=True, sorted=True):
     if dim<0:
         dim+=input.ndim
     
-    transpose_dims = [i for i in range(input.ndim)]
-    transpose_dims[0] = dim
-    transpose_dims[dim] = 0
-    input = input.transpose(transpose_dims)
-    index,values = jt.argsort(input,dim=0,descending=largest)
-    indices = index[:k]
-    values = values[:k]
-    indices = indices.transpose(transpose_dims)
-    values = values.transpose(transpose_dims)
-    return [values,indices]
+    index,values = jt.argsort(input,dim=dim,descending=largest)
+    dims = (slice(None),)*(dim-1)+(slice(0,k),)
+    indices = index[dims]
+    values = values[dims]
+    return values,indices
 
 jt.Var.topk = topk
 
@@ -437,21 +422,17 @@ def kthvalue(input, k, dim=None, keepdim=False):
         dim = -1
     if dim<0:
         dim+=input.ndim
-    transpose_dims = [i for i in range(input.ndim)]
-    transpose_dims[0] = dim
-    transpose_dims[dim] = 0
-    input = input.transpose(transpose_dims)
-    index,values = jt.argsort(input,dim=0)
-    indices = index[k-1:k]
-    values = values[k-1:k]
-    indices = indices.transpose(transpose_dims)
-    values = values.transpose(transpose_dims)
+    index,values = jt.argsort(input,dim=dim)
+    dims = (slice(None),)*(dim-1)+(slice(k-1,k),)
+    indices = index[dims]
+    values = values[dims]
     if not keepdim and indices.ndim>1:
         indices = indices.squeeze(dim)
         values = values.squeeze(dim)
-    return [values,indices]
+    return values,indices
 
 jt.Var.kthvalue = kthvalue
+
 
 def nms(dets,thresh):
     '''
@@ -471,35 +452,10 @@ def nms(dets,thresh):
     selected = jt.candidate(dets, fail_cond)
     return order[selected]
 
-def expand(x,shape):
-    r'''
-    Returns a new view of the self tensor with singleton dimensions expanded to a larger size.
-    Tensor can be also expanded to a larger number of dimensions, and the new ones will be appended at the front.
 
-    Args:
-       x-the input tensor.
-       shape-the shape of expanded tensor.
-    '''
-    x_shape = x.shape
-    x_l = len(x_shape)
-    rest_shape=shape[:-x_l]
-    expand_shape = shape[-x_l:]
-    indexs=[]
-    ii = len(rest_shape)
-    for i,j in zip(expand_shape,x_shape):
-        if i!=j:
-            assert j==1
-        indexs.append(f'i{ii}' if j>1 else f'0')
-        ii+=1
-    return x.reindex(shape,indexs)
+jt.Var.expand = jt.Var.broadcast
+jt.Var.expand_as = jt.Var.broadcast_var
 
-jt.Var.expand = expand
-
-def expand_as(x,y):
-    r'''
-    euqal to expand_as(x.y.shape)
-    '''
-    return expand(x,y.shape)
 
 def index_fill_(x,dim,indexs,val):
     r'''
