@@ -516,21 +516,23 @@ class Module:
             end = 0
             for k in key_:
                 if isinstance(v, nn.Sequential):
-                    if ori_int(k) >= len(v.layers):
-                        end = 1
-                        break
-                    else:
+                    if (k in v.layers):
+                        v = v[k]
+                    elif k.isdigit() and (ori_int(k) in v.layers):
                         v = v[ori_int(k)]
+                    else:
+                        end=1
+                        break
                 else:
                     if hasattr(v, k):
                         v = getattr(v, k)
                     else:
                         end = 1
                         break
-            if end ==1:
-                n_failed += 1
-                LOG.w(f'load parameter {key} failed ...')
-                pass
+            if end == 1:
+                if not key.endswith("num_batches_tracked"):
+                    n_failed += 1
+                    LOG.w(f'load parameter {key} failed ...')
             else:
                 LOG.v(f'load parameter {key} success ...')
                 if isinstance(params[key], np.ndarray) or isinstance(params[key], list):
@@ -782,6 +784,8 @@ double = float64
 Var.double = Var.float64
 
 from . import nn
+from . import attention
+from . import lr_scheduler
 from . import linalg
 from .nn import matmul
 from . import contrib
