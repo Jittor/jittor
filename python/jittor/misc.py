@@ -410,7 +410,7 @@ def topk(input, k, dim=None, largest=True, sorted=True):
         dim+=input.ndim
     
     index,values = jt.argsort(input,dim=dim,descending=largest)
-    dims = (slice(None),)*(dim-1)+(slice(0,k),)
+    dims = (slice(None),)*dim+(slice(0,k),)
     indices = index[dims]
     values = values[dims]
     return values,indices
@@ -423,7 +423,7 @@ def kthvalue(input, k, dim=None, keepdim=False):
     if dim<0:
         dim+=input.ndim
     index,values = jt.argsort(input,dim=dim)
-    dims = (slice(None),)*(dim-1)+(slice(k-1,k),)
+    dims = (slice(None),)*dim+(slice(k-1,k),)
     indices = index[dims]
     values = values[dims]
     if not keepdim and indices.ndim>1:
