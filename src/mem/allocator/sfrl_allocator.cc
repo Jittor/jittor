@@ -13,6 +13,13 @@ namespace jittor {
 
 DEFINE_FLAG(int, use_sfrl_allocator, 1, "Enable sfrl allocator");
 
+
+std::vector<size_t> CachingBlockPool::block_ids;
+    //start from 1
+size_t CachingBlockPool::tot_block_id = 0;
+std::unique_ptr<CachingBlock*[]> CachingBlockPool::occupied_id_mapper(
+    new CachingBlock*[CachingBlockPool::ID_LIMIT]);
+
 //CachingBlock
 CachingBlock::CachingBlock(size_t size) : 
     size(size), id(0), share_times(0), memory_ptr(nullptr), blocks(nullptr), prev(nullptr), next(nullptr), occupied(false) {}
@@ -21,7 +28,9 @@ CachingBlock::CachingBlock(size_t size, CachingBlockPool* blocks, void* memory_p
     size(size), id(0), share_times(0), memory_ptr(memory_ptr), blocks(blocks), prev(nullptr), next(nullptr), occupied(false) {}
 
 //CachingBlockPool
-CachingBlockPool::CachingBlockPool() : tot_block_id(0), occupied_id_mapper(new CachingBlock*[ID_LIMIT]) {}
+CachingBlockPool::CachingBlockPool() {
+
+}
 
 CachingBlockPool::~CachingBlockPool() {
     for (auto it = blocks.begin(); it != blocks.end(); ++it) {
@@ -235,8 +244,8 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
 }
 
 void SFRLAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
-    CachingBlockPool* blocks = get_blocks(size);
-    CachingBlock* block = blocks->get_occupied(allocation);
+    auto* block = CachingBlockPool::occupied_id_mapper[allocation];
+    auto* blocks = block->blocks;
     if (block->share_times == 0) {
         blocks->erase_occupied(allocation);
         used_memory -= block->size;
@@ -257,8 +266,7 @@ void SFRLAllocator::gc() {
 }
 
 bool SFRLAllocator::share_with(size_t size, size_t allocation) {
-    CachingBlockPool* blocks = get_blocks(size);
-    CachingBlock* block = blocks->get_occupied(allocation);
+    auto* block = CachingBlockPool::occupied_id_mapper[allocation];
     ++block->share_times;
     return true;
 }
