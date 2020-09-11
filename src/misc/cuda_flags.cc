@@ -21,8 +21,9 @@ void setter_use_cuda(int value) {
         cudaGetDeviceCount(&count);
         CHECK(count>0) << "No device found.";
         LOGi << "CUDA enabled.";
-    } else
-        LOGi << "CUDA disabled.";
+    } else {
+        LOGv << "CUDA disabled.";
+    }
 #else
     CHECK(value==0) << "No CUDA found.";
 #endif

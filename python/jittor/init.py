@@ -93,3 +93,31 @@ def kaiming_normal_(var, a=0, mode='fan_in', nonlinearity='leaky_relu'):
     std = calculate_std(var,mode,nonlinearity,a)
     with jt.no_grad():
         return gauss_(var,0, std)
+
+
+#TODO: bound = gain * math.sqrt(6.0/fan) ??
+def xavier_uniform(shape, dtype, gain=1.0):
+    assert len(shape)>1
+
+    matsize=1
+    for i in shape[2:]:
+        matsize *= i
+    fan = (shape[1] * matsize) + (shape[0] * matsize)
+    bound = gain * math.sqrt(1.0/fan)
+    return uniform(shape, dtype, -bound, bound)
+
+def xavier_uniform_(var, gain=1.0):
+    var.assign(xavier_uniform(tuple(var.shape), var.dtype, gain))
+
+def xavier_gauss(shape, dtype, gain=1.0):
+    assert len(shape)>1
+    
+    matsize=1
+    for i in shape[2:]:
+        matsize *= i
+    fan = (shape[1] * matsize) + (shape[0] * matsize)
+    std = gain * math.sqrt(2.0/fan)
+    return gauss(shape, dtype, 0, std)
+
+def xavier_gauss_(var, gain=1.0):
+    var.assign(xavier_gauss(tuple(var.shape), var.dtype, gain))

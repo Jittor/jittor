@@ -13,6 +13,7 @@
 import jittor as jt
 from jittor import init, Module
 import numpy as np
+import collections
 import math
 from collections import OrderedDict
 from jittor.pool import Pool, pool, AdaptiveAvgPool2d
@@ -1151,13 +1152,17 @@ class Upsample(Module):
 
 class Sequential(Module):
     def __init__(self, *args):
-        self.layers = []
+        self.layers = collections.OrderedDict()
         for mod in args:
-            self.append(mod)
+            if isinstance(mod, collections.OrderedDict):
+                for k, m in mod.items():
+                    self.add_module(k, m)
+            else:
+                self.append(mod)
     def __getitem__(self, idx):
         return self.layers[idx]
     def execute(self, x):
-        for layer in self.layers:
+        for k, layer in self.layers.items():
             x = layer(x)
         return x
     def dfs(self, parents, k, callback, callback_leave):
@@ -1165,7 +1170,7 @@ class Sequential(Module):
         ret = callback(parents, k, self, n_children)
         if ret == False:
             return
-        for k,v in enumerate(self.layers):
+        for k,v in self.layers.items():
             parents.append(self)
             v.dfs(parents, k, callback, callback_leave)
             parents.pop()
@@ -1174,7 +1179,11 @@ class Sequential(Module):
     def append(self, mod):
         assert callable(mod), f"Module <{type(mod)}> is not callable"
         assert not isinstance(mod, type), f"Module is not a type"
-        self.layers.append(mod)
+        self.layers[len(self.layers)]=mod
+    def add_module(self, name, mod):
+        assert callable(mod), f"Module <{type(mod)}> is not callable"
+        assert not isinstance(mod, type), f"Module is not a type"
+        self.layers[name]=mod
 
     def __len__(self):
         return len(self.layers)
