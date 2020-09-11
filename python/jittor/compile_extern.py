@@ -143,8 +143,10 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
 
     link_flags = ""
     if link:
-        cuda_include_name = search_file([cuda_include, "/usr/include"], lib_name+".h")
-        culib_path = search_file([cuda_lib, "/usr/lib/x86_64-linux-gnu"], f"lib{lib_name}.so")
+        extra_include_path = os.path.abspath(os.path.join(cuda_include, "..", "targets/x86_64-linux/include"))
+        extra_lib_path = os.path.abspath(os.path.join(cuda_lib, "..", "targets/x86_64-linux/lib"))
+        cuda_include_name = search_file([cuda_include, extra_include_path, "/usr/include"], lib_name+".h")
+        culib_path = search_file([cuda_lib, extra_lib_path, "/usr/lib/x86_64-linux-gnu"], f"lib{lib_name}.so")
         # dynamic link cuda library
         ctypes.CDLL(culib_path, dlopen_flags)
         link_flags = f"-l{lib_name} -L'{cuda_lib}'"

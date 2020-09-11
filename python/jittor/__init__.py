@@ -7,7 +7,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-__version__ = '1.1.7.13'
+__version__ = '1.1.7.14'
 from . import lock
 with lock.lock_scope():
     from . import compiler
@@ -287,7 +287,7 @@ def flatten(input, start_dim=0, end_dim=-1):
     in_shape = input.shape
     start_dim = len(in_shape) + start_dim if start_dim < 0 else start_dim
     end_dim = len(in_shape) + end_dim if end_dim < 0 else end_dim
-    assert end_dim > start_dim, "end_dim should be larger than start_dim for flatten function"
+    assert end_dim >= start_dim, "end_dim should be larger than or equal to start_dim for flatten function"
     out_shape = []
     for i in range(0,start_dim,1): out_shape.append(in_shape[i])
     dims = 1
@@ -524,21 +524,23 @@ class Module:
             end = 0
             for k in key_:
                 if isinstance(v, nn.Sequential):
-                    if ori_int(k) >= len(v.layers):
-                        end = 1
-                        break
-                    else:
+                    if (k in v.layers):
+                        v = v[k]
+                    elif k.isdigit() and (ori_int(k) in v.layers):
                         v = v[ori_int(k)]
+                    else:
+                        end=1
+                        break
                 else:
                     if hasattr(v, k):
                         v = getattr(v, k)
                     else:
                         end = 1
                         break
-            if end ==1:
-                n_failed += 1
-                LOG.w(f'load parameter {key} failed ...')
-                pass
+            if end == 1:
+                if not key.endswith("num_batches_tracked"):
+                    n_failed += 1
+                    LOG.w(f'load parameter {key} failed ...')
             else:
                 LOG.v(f'load parameter {key} success ...')
                 if isinstance(params[key], np.ndarray) or isinstance(params[key], list):
@@ -790,6 +792,8 @@ double = float64
 Var.double = Var.float64
 
 from . import nn
+from . import attention
+from . import lr_scheduler
 from . import linalg
 from .nn import matmul
 from . import contrib
