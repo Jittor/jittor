@@ -319,9 +319,15 @@ def squeeze(x, dim):
     return x.reshape(shape[:dim] + shape[dim+1:])
 Var.squeeze = squeeze
 
-def clamp(x, min_v, max_v):
-    assert min_v <= max_v
-    return x.maximum(min_v).minimum(max_v)
+def clamp(x, min_v=None, max_v=None):
+    if min_v is not None and max_v is not None:
+        assert min_v <= max_v
+    if min_v is not None:
+        x = x.maximum(min_v)
+    if max_v is not None:
+        x = x.minimum(max_v)
+    return x
+
 Var.clamp = clamp
 
 def type_as(a, b):
