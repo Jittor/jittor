@@ -233,6 +233,9 @@ def ones(shape, dtype="float32"):
         shape = (shape,)
     return unary(1, dtype).broadcast(shape)
 
+def ones_like(x):
+    return ones(x.shape,x.dtype)
+
 def zeros(shape, dtype="float32"):
     if not isinstance(shape, (NanoVector, Sequence)):
         shape = (shape,)
