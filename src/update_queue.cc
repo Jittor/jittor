@@ -128,10 +128,12 @@ void UpdateQueue::push(Var* v, Var* prev) {
         queue.emplace_front();
         owner = queue.begin();
     }
-    if (owner->size() >= update_queue_auto_flush_delay)
-        auto_flush();
+    auto need_auto_flush = owner->size() >= update_queue_auto_flush_delay;
     owner->emplace_front(UpdateQueue::Item{owner, v});
     map[v] = owner->begin();
+    if (need_auto_flush) {
+        auto_flush();
+    }
     // if total size of update queue is too big,
     // force sync all
     if (map.size() > 100000)

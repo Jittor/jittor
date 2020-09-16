@@ -487,6 +487,9 @@ class ConvTranspose(Module):
         self.real_padding = (self.dilation[0] * (self.kernel_size[0] - 1) - self.padding[0],
             self.dilation[1] * (self.kernel_size[1] - 1) - self.padding[1])
         self.output_padding = output_padding if isinstance (output_padding, tuple) else (output_padding, output_padding)
+        assert self.output_padding[0] < max(self.stride[0], self.dilation[0]) and \
+            self.output_padding[1] < max(self.stride[1], self.dilation[1]), \
+            "output padding must be smaller than max(stride, dilation)"
 
         self.weight = init.invariant_uniform((in_channels, out_channels) + self.kernel_size, dtype="float")
         if bias:
