@@ -88,4 +88,35 @@ JIT_TEST(sfrl_allocator_share) {
     }
 }
 
+JIT_TEST(sfrl_allocator_share_without_size_and_ptr) {
+    Allocator* allocator = get_allocator();
+    int max_allc_num = 1000;
+    size_t id[max_allc_num];
+    void* addr[max_allc_num];
+    size_t temp[max_allc_num];
+    std::vector<TestTask> tasks; 
+    tasks.push_back(TestTask(20000000, 100, 100, 400.0));
+    tasks.push_back(TestTask(10000, 100, 100, 600.0));
+
+    for (size_t i = 0; i < tasks.size(); ++i) {
+        for (size_t k = 0; k < tasks[i].times1; ++k) {
+            for (size_t j = 0; j < tasks[i].times2; ++j) {
+                temp[j] = j;
+                if (j > 0)
+                    std::swap(temp[j], temp[rand() % j]);
+                if (rand() % 10 != 0 && j > 0) {
+                    id[j] = id[rand() % j];
+                    allocator->share_with(0, id[j]);
+                    addr[j] = addr[id[j]];
+                } else {
+                    addr[j] = allocator->alloc(tasks[i].size, id[j]);
+                }
+            }
+            for (size_t j = 0; j < tasks[i].times2; ++j) {
+                allocator->free(0, 0, id[temp[j]]);
+            }
+        }
+    }
+}
+
 } // jittor
