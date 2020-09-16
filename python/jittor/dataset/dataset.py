@@ -82,12 +82,15 @@ class Dataset(object):
     def __getitem__(self, index):
         raise NotImplementedError
 
-    def __len__(self):
+    def __batch_len__(self):
         assert self.total_len >= 0
         assert self.batch_size > 0
         if self.drop_last:
             return self.total_len // self.batch_size
         return (self.total_len-1) // self.batch_size + 1
+
+    def __len__(self):
+        return self.__batch_len__()
 
     def set_attrs(self, **kw):
         ''' 
@@ -300,6 +303,8 @@ Example::
         self.terminate()
 
     def __iter__(self):
+        if self.total_len is None:
+            self.total_len = len(self)
         if self.shuffle == False:
             index_list = get_order_list(self.total_len)
         else:
@@ -354,7 +359,7 @@ Example::
             self.real_len = self.total_len
             self.real_batch_size = self.batch_size
             
-        self.batch_len = len(self)
+        self.batch_len = self.__batch_len__()
         
         if not hasattr(self, "workers") and self.num_workers:
             self._init_workers()
