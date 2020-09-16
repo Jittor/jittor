@@ -117,7 +117,6 @@ void UpdateQueue::auto_flush() {
 void UpdateQueue::push(Var* v, Var* prev) {
     if (v->flags.get(NodeFlags::_in_update_queue))
         return;
-    v->flags.set(NodeFlags::_in_update_queue);
     list<list<Item>>::iterator owner;
 
     if (prev->flags.get(NodeFlags::_in_update_queue)) {
@@ -128,12 +127,12 @@ void UpdateQueue::push(Var* v, Var* prev) {
         queue.emplace_front();
         owner = queue.begin();
     }
-    auto need_auto_flush = owner->size() >= update_queue_auto_flush_delay;
-    owner->emplace_front(UpdateQueue::Item{owner, v});
-    map[v] = owner->begin();
-    if (need_auto_flush) {
+    if (owner->size() >= update_queue_auto_flush_delay) {
         auto_flush();
     }
+    v->flags.set(NodeFlags::_in_update_queue);
+    owner->emplace_front(UpdateQueue::Item{owner, v});
+    map[v] = owner->begin();
     // if total size of update queue is too big,
     // force sync all
     if (map.size() > 100000)
