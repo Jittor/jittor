@@ -49,7 +49,8 @@ int64_t Var::numel() {
             num *= k;
         }
     }
-    size = num * dsize();
+    if (mem_ptr==nullptr)
+        size = num * dsize();
     if (negtive) num = -num;
     return num;
 }
