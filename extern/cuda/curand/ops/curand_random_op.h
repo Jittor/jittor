@@ -13,7 +13,8 @@ namespace jittor {
 
 struct CurandRandomOp : Op {
     Var* output;
-    CurandRandomOp(NanoVector shape, NanoString dtype=ns_float32);
+    NanoString type;
+    CurandRandomOp(NanoVector shape, NanoString dtype=ns_float32, NanoString type=ns_uniform);
     
     const char* name() const override { return "curand_random"; }
     DECLARE_jit_run;

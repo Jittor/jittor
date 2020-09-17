@@ -11,22 +11,22 @@ import numpy as np
 import math
 
 def constant(shape, dtype, value=0.0):
-    return jt.array(np.ones(shape)*value).unary(dtype)
+    return jt.array(value).unary(dtype).broadcast(shape)
 
 def constant_(var, value=0.0):
-    var.assign(constant(tuple(var.shape), var.dtype, value))
+    var.assign(constant(var.shape, var.dtype, value))
 
 def uniform(shape, dtype, low, high):
-    return jt.array(np.random.uniform(low, high, shape)).unary(dtype)
+    return jt.random(shape, dtype) * (low - high) + high
 
 def uniform_(var, low, high):
-    var.assign(uniform(tuple(var.shape), var.dtype, low, high))
+    var.assign(uniform(var.shape, var.dtype, low, high))
 
 def gauss(shape, dtype, mean=0.0, std=1.0):
-    return jt.array(np.random.normal(mean, std, shape)).unary(dtype)
+    return jt.random(shape, dtype, "normal") * std + mean
 
 def gauss_(var, mean=0.0, std=1.0):
-    var.assign(gauss(tuple(var.shape), var.dtype, mean, std))
+    var.assign(gauss(var.shape, var.dtype, mean, std))
 
 def invariant_uniform(shape, dtype, mode="fan_in"):
     assert len(shape)>1
@@ -55,3 +55,30 @@ def relu_invariant_gauss(shape, dtype, mode="fan_in"):
 
 def relu_invariant_gauss_(var, mode="fan_in"):
     var.assign(relu_invariant_gauss(tuple(var.shape), var.dtype, mode))
+
+#TODO: bound = gain * math.sqrt(6.0/fan) ??
+def xavier_uniform(shape, dtype, gain=1.0):
+    assert len(shape)>1
+
+    matsize=1
+    for i in shape[2:]:
+        matsize *= i
+    fan = (shape[1] * matsize) + (shape[0] * matsize)
+    bound = gain * math.sqrt(1.0/fan)
+    return uniform(shape, dtype, -bound, bound)
+
+def xavier_uniform_(var, gain=1.0):
+    var.assign(xavier_uniform(tuple(var.shape), var.dtype, gain))
+
+def xavier_gauss(shape, dtype, gain=1.0):
+    assert len(shape)>1
+    
+    matsize=1
+    for i in shape[2:]:
+        matsize *= i
+    fan = (shape[1] * matsize) + (shape[0] * matsize)
+    std = gain * math.sqrt(2.0/fan)
+    return gauss(shape, dtype, 0, std)
+
+def xavier_gauss_(var, gain=1.0):
+    var.assign(xavier_gauss(tuple(var.shape), var.dtype, gain))
