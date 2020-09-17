@@ -28,7 +28,7 @@ __get_thread_range_log
 
 unique_ptr<expr::Expr> trace_and_expand(KernelIR* ir, expr::Expr* e) {
     auto a = e->clone();
-    string rely="";
+    string rely=",";
     std::function<void(expr::Expr*)> func =
     [&](expr::Expr* c) {
         if (!c->is_sym()) return;
@@ -345,10 +345,9 @@ void ParallelPass::run() {
         bool has_atomic = code.find("atomic") != string::npos;
         if (!fix_thread_num) {
             if (has_atomic) {
-                func_call->find_define("thread_num")->attrs["rvalue"] = "min(1<<max((NanoVector::get_nbits(" + nums + "/16)-2),0)," + S(thread_num) + ")";
-            } else {
-                func_call->find_define("thread_num")->attrs["rvalue"] = "min(1<<max((NanoVector::get_nbits(" + nums + ")-2),0)," + S(thread_num) + ")";
+                nums += "/16";
             }
+            func_call->find_define("thread_num")->attrs["rvalue"] = "min(max(1<<(NanoVector::get_nbits(" + nums + ")-2),32)," + S(thread_num) + ")";
         }
     }
     ir->remove_all_unused();

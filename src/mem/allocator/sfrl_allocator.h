@@ -29,11 +29,11 @@ struct CachingBlock {
 struct CachingBlockPool {
     std::map<unsigned long long, CachingBlock*> blocks;
     //for recycle block_id
-    std::vector<size_t> block_ids;  
+    static std::vector<size_t> block_ids;  
     //start from 1
-    size_t tot_block_id;           
-    std::unique_ptr<CachingBlock*[]> occupied_id_mapper;              
-    static const size_t ID_LIMIT = 1 << 16;
+    static size_t tot_block_id;           
+    static std::unique_ptr<CachingBlock*[]> occupied_id_mapper;              
+    static const size_t ID_LIMIT = 1 << 18;
 
     unsigned long long get_key(CachingBlock* block);
 

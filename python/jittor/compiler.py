@@ -46,6 +46,7 @@ def compile(compiler, flags, inputs, output, combind_build=False):
             run_cmd(cmd)
             return True
     link = link_flags
+    base_output = output.split('/')[-1].split('.')[0]
     # if output is core, add core_link_flags
     if output.startswith("jittor_core"):
         link = link + core_link_flags
@@ -77,7 +78,7 @@ def compile(compiler, flags, inputs, output, combind_build=False):
             cc = nvcc_path
         cmd = f"{cc} {input} {nflags} -c {lto_flags} -o {obj_file}"
         cmds.append(cmd)
-    jit_utils.run_cmds(cmds, cache_path, jittor_path)
+    jit_utils.run_cmds(cmds, cache_path, jittor_path, "Compiling "+base_output)
     cmd = f"{compiler} {' '.join(obj_files)} {flags} {lto_flags} {link} -o {output}"
     return do_compile(cmd)
 
@@ -784,11 +785,16 @@ def try_find_exe(*args):
 def check_pybt(gdb_path, python_path):
     if gdb_path=='' or python_path=='':
         return False
-    ret = sp.getoutput(f"{gdb_path} --batch {python_path} -ex 'help py-bt'")
-    if 'python frame' in ret:
-        LOG.v("py-bt found in gdb.")
-        return True
-    return False
+    return True
+    # TODO: prev we use below code to check has py-bt or nor
+    # but it is too slow, so we comment it,
+    # find a better way to check py-bt exist
+
+    # ret = sp.getoutput(f"{gdb_path} --batch {python_path} -ex 'help py-bt'")
+    # if 'python frame' in ret:
+    #     LOG.v("py-bt found in gdb.")
+    #     return True
+    # return False
 
 def check_debug_flags():
     global is_debug
@@ -976,7 +982,9 @@ with jit_utils.import_scope(import_flags):
 
 flags = core.flags()
 if has_cuda:
-    nvcc_flags += f" -arch={','.join(map(lambda x:'sm_'+str(x),flags.cuda_archs))} "
+    if len(flags.cuda_archs):
+        nvcc_flags += f" -arch=compute_{min(flags.cuda_archs)} "
+        nvcc_flags += ''.join(map(lambda x:f' -code=sm_{x} ', flags.cuda_archs))
 
 flags.cc_path = cc_path
 flags.cc_type = cc_type
