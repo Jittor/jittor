@@ -215,6 +215,10 @@ def to_tensor(img):
         return np.array(img).transpose((2,0,1)) / np.float32(255)
     return img
 
+class ToTensor:
+    def __call__(self, img):
+        return to_tensor(img)
+
 class ImageNormalize:
     '''
     Class for normalizing the input image.
