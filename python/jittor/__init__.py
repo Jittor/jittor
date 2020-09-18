@@ -323,6 +323,8 @@ def squeeze(x, dim):
 Var.squeeze = squeeze
 
 def clamp(x, min_v=None, max_v=None):
+    if x.shape[0]==0:
+        return x
     if min_v is not None and max_v is not None:
         assert min_v <= max_v
     if min_v is not None:
