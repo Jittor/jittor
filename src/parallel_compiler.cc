@@ -191,6 +191,7 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
                 FusedOp& fused_op = *fop_needs_compile[-rid-1];
                 op = &fused_op;
                 LOGvv << "Compile FusedOp:" << op;
+                LOGV(11) << "FusedOps:" << fused_op.ops;
                 fused_op.context = new FusedOpContext();
                 fused_op.context->setup(&fused_op);
                 fused_op.do_prepare();
