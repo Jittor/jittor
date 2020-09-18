@@ -982,7 +982,9 @@ with jit_utils.import_scope(import_flags):
 
 flags = core.flags()
 if has_cuda:
-    nvcc_flags += f" -arch={','.join(map(lambda x:'sm_'+str(x),flags.cuda_archs))} "
+    if len(flags.cuda_archs):
+        nvcc_flags += f" -arch=compute_{min(flags.cuda_archs)} "
+        nvcc_flags += ''.join(map(lambda x:f' -code=sm_{x} ', flags.cuda_archs))
 
 flags.cc_path = cc_path
 flags.cc_type = cc_type
