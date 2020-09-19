@@ -108,6 +108,8 @@ class Hook:
             LOG.i(f"save {rid}:<{name}> ok")
 
     def record_params(self, parameters_dict):
+        rid = self.rid
+        self.rid += 1
         global has_error
         pps = {}
         for k, v in parameters_dict.items():
@@ -115,7 +117,7 @@ class Hook:
                 continue
             pps[k] = v
         ps = { name:convert(param) for name, param in pps.items() }
-        fpath = os.path.join(self.base_path, f"params.pkl")
+        fpath = os.path.join(self.base_path, f"{rid}-params.pkl")
         if os.path.isfile(fpath):
             with open(fpath, 'rb') as f:
                 prev_ps = pickle.load(f)
