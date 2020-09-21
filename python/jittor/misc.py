@@ -303,6 +303,37 @@ def unique(x):
 
 jt.Var.unique = unique
 
+
+def hypot(a,b):
+    return jt.sqrt(a.sqr()+b.sqr())
+
+def rad2deg(x):
+    return 180 * x / np.pi
+
+jt.Var.rad2deg = rad2deg
+
+def deg2rad(x):
+    return x * np.pi / 180.
+
+jt.Var.deg2rad = deg2rad
+
+def arctan2(y,x):
+    angle = jt.zeros(x.shape,dtype=x.dtype)
+    mask = x!=0.0
+    if angle[mask].numel()>0:
+        angle[mask] = jt.arctan(y[mask]/x[mask])
+        
+    mask = (y<0) & (x<0)
+    if angle[mask].numel()>0:
+        angle[mask] -= np.pi
+        
+    mask = (y>0) &(x<0)
+    if angle[mask].numel()>0:
+        angle[mask] +=np.pi
+    return angle
+
+
+
 def nonzero(x):
     r'''
     Return the index of the elements of input tensor which are not equal to zero.
