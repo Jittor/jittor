@@ -7,7 +7,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-__version__ = '1.1.7.16'
+__version__ = '1.1.7.18'
 from . import lock
 with lock.lock_scope():
     from . import compiler
@@ -479,6 +479,17 @@ class Module:
         self.dfs([], None, callback, callback_leave)
         return _uniq(ps)
 
+    def named_parameters(self):
+        ps = self.parameters()
+        return [ (p.name(), p) for p in ps ]
+
+    def state_dict(self):
+        ps = self.parameters()
+        return { p.name(): p for p in ps }
+
+    def load_state_dict(self, params):
+        self.load_parameters(params)
+
     def modules(self):
         ms = []
         def callback(parents, k, v, n):
@@ -486,6 +497,36 @@ class Module:
                 ms.append(v)
         self.dfs([], None, callback, None)
         return _uniq(ms)
+
+    def named_modules(self):
+        ms = []
+        stack = []
+        def callback(parents, k, v, n):
+            stack.append(str(k))
+            name = ".".join(stack[1:])
+            ms.append((name, v))
+        def callback_leave(parents, k, v, n):
+            stack.pop()
+        self.dfs([], "", callback, callback_leave)
+        return ms
+
+    def register_forward_hook(self, func):
+        cls = self.__class__
+        self.__fhook__ = func
+        if hasattr(cls, "__hooked__"):
+            return
+        cls.__hooked__ = True
+        origin_call = cls.__call__
+        def new_call(self, *args, **kw):
+            ret = origin_call(self, *args, **kw)
+            if hasattr(self, "__fhook__"):
+                if len(kw):
+                    self.__fhook__(self, args, ret, kw)
+                else:
+                    self.__fhook__(self, args, ret)
+            return ret
+        self.__class__.__call__ = new_call
+
 
     def children(self):
         cd = []
@@ -724,6 +765,7 @@ def make_module(func, exec_n_args=1):
             return f"{func.__name__}({self.extra_repr()})"
         def extra_repr(self):
             return ",".join(map(str, self.args))
+    MakeModule.__name__ = func.__name__
     return MakeModule
 
 
