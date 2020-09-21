@@ -70,6 +70,8 @@ bool Var::alloc(Allocator* allocator) {
         }
     }
     mem_ptr = allocator->alloc(size, allocation);
+    if (size>1000000000)
+        LOGir << "super big var" << this;
     this->allocator = allocator;
     return mem_ptr;
 }
