@@ -20,7 +20,10 @@ def convert(data):
     if isinstance(data, dict):
         return {k:convert(data[k]) for k in data}
     if hasattr(data, "numpy"):
-        return data.detach().numpy()
+        data = data.detach()
+        if hasattr(data,'cpu'):
+            data = data.cpu()
+        return data.numpy()
     return data
 
 class Hook:
@@ -81,7 +84,7 @@ class Hook:
                     has_error += 1
                     LOG.e(f"Key <{k}> not in data, Name <{name}>")
                     continue
-                self.check(name+f".{i}", pre_data[k], data[k])
+                self.check(name+f".{k}", pre_data[k], data[k])
         else:
             if pre_data != data: 
                 has_error += 1
@@ -160,6 +163,16 @@ class Hook:
             with open(fpath, 'wb') as f:
                 pickle.dump(ps, f)
             LOG.i(f"save params ok")
+
+    def hook_function(self, func):
+        name = func.__name__
+        def new_func(*args, **kw):
+            ret = func(*args, **kw)
+            self.record(name+".args", args)
+            self.record(name+".kw", kw)
+            self.record(name+".ret", ret)
+            return ret
+        return new_func
 
 
     def hook_module(self, mod):

@@ -826,18 +826,17 @@ def linspace_from_neg_one(grid,num_steps,align_corners):
 
 def make_base_grid_4D(theta,N,C,H,W,align_corners):
     base_grid = jt.zeros((N, H, W, 3), dtype=theta.dtype);
-    base_grid[:,:,:,0] = linspace_from_neg_one(theta, W, align_corners)
-    base_grid[:,:,:,1] = jt.unsqueeze(linspace_from_neg_one(theta, H, align_corners),-1)
-    base_grid[:,:,:,2] = 1
+    base_grid[...,0] = linspace_from_neg_one(theta, W, align_corners)
+    base_grid[...,1] = jt.unsqueeze(linspace_from_neg_one(theta, H, align_corners),-1)
+    base_grid[...,-1] = 1
     return base_grid
 
 def make_base_grid_5D(theta,N,C,D,H,W,align_corners):
     base_grid = jt.zeros((N, D, H, W, 4), dtype=theta.dtype)
-
-    base_grid[:,:,:,:,0] = linspace_from_neg_one(theta, W, align_corners)
-    base_grid[:,:,:,:,1] = jt.unsqueeze(linspace_from_neg_one(theta, H, align_corners),-1)
-    base_grid[:,:,:,:,2] = jt.unsqueeze(jt.unsqueeze(linspace_from_neg_one(theta, D, align_corners),-1),-1)
-    base_grid[:,:,:,:,3] = 1
+    base_grid[...,0] = linspace_from_neg_one(theta, W, align_corners)
+    base_grid[...,1] = jt.unsqueeze(linspace_from_neg_one(theta, H, align_corners),-1)
+    base_grid[...,2] = jt.unsqueeze(jt.unsqueeze(linspace_from_neg_one(theta, D, align_corners),-1),-1)
+    base_grid[...,-1] = 1
     return base_grid
 
 def affine_grid_generator_4D(theta,N,C,H,W,align_corners):
@@ -850,52 +849,16 @@ def affine_grid_generator_5D(theta,N,C,D,H,W,align_corners):
     grid = jt.nn.bmm(base_grid.reshape(N, D * H * W, 4),theta.transpose(0,2,1))
     return grid.reshape(N, D, H, W, 3)
 
-
-def affine_grid_generator(theta, size,align_corners):
+def affine_grid(theta, size, align_corners=False):
+    assert str(theta.dtype) in ['float','float32','float64']
+    assert min(size)>0
+    assert len(size) in [4,5]    
     if len(size)== 4:
+        assert theta.ndim == 3 and theta.shape[-2] == 2 and theta.shape[-1] == 3
         return affine_grid_generator_4D(theta, size[0], size[1], size[2], size[3], align_corners)
     elif len(size)==5:
+        assert theta.ndim == 3 and theta.shape[-2] == 3 and theta.shape[-1] == 4
         return affine_grid_generator_5D(theta, size[0], size[1], size[2], size[3], size[4], align_corners)
-    else:
-        raise ValueError('AffineGridGenerator needs 4d (spatial) or 5d (volumetric) inputs.')
-
-
-def affine_grid(theta, size, align_corners=False):
-    r"""Generates a 2D or 3D flow field (sampling grid), given a batch of affine matrices
-    Args:
-        theta: input batch of affine matrices with shape N*2*3 for 2D or N*3*4 for 3D
-        size: the target output image size. N*C*H*W for 2D or N*C*D*H*W for 3D
-        align_corners (bool)
-    Returns:
-        output: output Tensor of size N*H*W*2
-    """
-
-    # enforce floating point dtype on theta
-    if theta.dtype!='float' and theta.dtype!='float32' and theta.dtype!='float64':
-        raise ValueError("Expected theta to have floating point type, but got {}"
-                         .format(theta.dtype))
-    # check that shapes and sizes match
-    if len(size) == 4:
-        if theta.ndim != 3 or theta.shape[-2] != 2 or theta.shape[-1] != 3:
-            raise ValueError("Expected a batch of 2D affine matrices of shape Nx2x3 "
-                             "for size {}. Got {}.".format(size, theta.shape))
-        spatial_size = size[-2:]  # spatial dimension sizes
-    elif len(size) == 5:
-        if theta.ndim != 3 or theta.shape[-2] != 3 or theta.shape[-1] != 4:
-            raise ValueError("Expected a batch of 3D affine matrices of shape Nx3x4 "
-                             "for size {}. Got {}.".format(size, theta.shape))
-        spatial_size = size[-3:]  # spatial dimension sizes
-    else:
-        raise ValueError("affine_grid only supports 4D and 5D sizes, "
-                                  "for 2D and 3D affine transforms, respectively. "
-                                  "Got size {}.".format(size))
-    
-    if min(size) <= 0:
-        raise ValueError("Expected non-zero, positive output size. Got {}"
-                         .format(size))
-
-    return affine_grid_generator(theta, size, align_corners)
-
 
 
 def grid_sampler_unnormalize(coord,size,align_corners):
@@ -908,17 +871,16 @@ def grid_sampler_unnormalize(coord,size,align_corners):
 
 
 def clip_coordinates(x,clip_limit):
-    return jt.minimum(clip_limit - 1, jt.maximum(x, 0))
+    return jt.clamp(x,min_v=0,max_v=clip_limit-1)
 
 def reflect_coordinates(x,twice_low,twice_high):
     if twice_low == twice_high:
-        return jt.zeros(x.shape,dtype=x.dtype)
+        return jt.zeros_like(x)
     m = twice_low / 2
     span = (twice_high - twice_low) / 2
     x = (x - m).abs()
     #`fmod` returns same sign as `in`, which is positive after the `fabs` above.
     extra = x.mod(span)
-
     flips = (x / span).floor()
     result1 = extra+m
     result2 = span-extra+m
@@ -940,7 +902,6 @@ def grid_sampler_compute_source_index(coord,size,padding_mode,align_corners):
            coord = reflect_coordinates(coord, 0, 2*(size - 1))
         else:
            coord = reflect_coordinates(coord, -1, 2*size - 1)
-        print('coord',coord)
         #clip coordinates to image borders
         coord = clip_coordinates(coord, size)
     return coord
@@ -986,12 +947,8 @@ def grid_sampler_3d(X,grid,mode,padding_mode,align_corners):
         f = X.reindex([nid,cid,cz,fy,cx])
         g = X.reindex([nid,cid,cz,cy,fx])
         h = X.reindex([nid,cid,cz,cy,cx])
-
         o = a*dnx*dny*dnz+b*dnx*dny*dz+c*dnx*dy*dnz+d*dx*dny*dnz+e*dx*dy*dnz+f*dx*dny*dz+g*dnx*dy*dz+h*dx*dy*dz
         return o
-
-
-    raise ValueError(f"Not support {mode}")
 
 def grid_sampler_2d(X,grid,mode,padding_mode,align_corners):
     N = X.shape[0]
@@ -1009,135 +966,40 @@ def grid_sampler_2d(X,grid,mode,padding_mode,align_corners):
 
     x = grid_sampler_compute_source_index(x,inp_W,padding_mode,align_corners)
     y = grid_sampler_compute_source_index(y,inp_H,padding_mode,align_corners)
-    xid = x.unsqueeze(1).repeat(1,C,1,1)
-    yid = y.unsqueeze(1).repeat(1,C,1,1)
-
+    xid = x.reindex(shape,['i0','i2','i3'])
+    yid = y.reindex(shape,['i0','i2','i3'])
 
     if mode=='nearest':
         return X.reindex([nid,cid,yid.round(),xid.round()])
     elif mode=='bilinear':
-        fx,fy = xid.floor(),yid.floor()
+        #xid,yid = (xid+0.00001),(yid+0.00001)
+        fx,fy = (xid).floor(),(yid).floor()
         cx,cy = fx+1,fy+1
         dx,dy = xid-fx,yid-fy
         dnx,dny = cx-xid,cy-yid
 
-        a = X.reindex([nid,cid,fy,fx])
-        b = X.reindex([nid,cid,cy,fx])
-        c = X.reindex([nid,cid,fy,cx])
-        d = X.reindex([nid,cid,cy,cx])
-
+        a = X.reindex([nid,cid,fy,fx],overflow_value=0.0)
+        b = X.reindex([nid,cid,cy,fx],overflow_value=0.0)
+        c = X.reindex([nid,cid,fy,cx],overflow_value=0.0)
+        d = X.reindex([nid,cid,cy,cx],overflow_value=0.0)
         o = a*dnx*dny+b*dnx*dy+c*dx*dny+d*dx*dy
         return o
-    raise ValueError(f"Not support {mode}")
 
 
 def grid_sampler(X, grid, mode, padding_mode, align_corners):
-    if X.dtype!=grid.dtype:
-        raise(f' "grid_sampler(): expected input and grid to have same dtype, but input has {X.dtype} and grid has {grid.dtype}')
-    if not ((X.ndim==4 or X.ndim==5) and X.ndim==grid.ndim):
-        raise(f'grid_sampler(): expected 4D or 5D input and grid with same number of dimensions, but got input with sizes {X.ndim}, and grid with sizes {grid.ndim}.')
-    if X.shape[0]!=grid.shape[0]:
-        raise(f'grid_sampler(): expected grid and input to have same batch size, but got input with batchsize {X.shape[0]}, and grid with batchsize {gird.shape[0]}')
-    if grid.shape[-1]!=X.ndim-2:
-        raise(f'grid_sampler(): expected grid to have size {X.ndim-2} in last dimension, but got grid with last dimension {grid.shape[-1]}.')
-    for i in range(2,X.ndim):
-        if X.shape[i]==0:
-            raise(f'grid_sampler(): expected input to have non-empty spatial dimensions, but input has size {X.shape[i]} with dimension {i} being empty.')
-
+    assert X.dtype==grid.dtype
+    assert ((X.ndim==4 or X.ndim==5) and X.ndim==grid.ndim)
+    assert X.shape[0]==grid.shape[0] and grid.shape[-1]==X.ndim-2
+    assert X.numel()>0
     if X.ndim == 4:
         return grid_sampler_2d(X, grid, mode, padding_mode, align_corners)
     else:
         return grid_sampler_3d(X, grid, mode, padding_mode, align_corners)
 
 
-def grid_sample(input, grid, mode='bilinear', padding_mode='zeros', align_corners=None):
-    # type: (Tensor, Tensor, str, str, Optional[bool]) -> Tensor
-    r"""Given an :attr:`input` and a flow-field :attr:`grid`, computes the
-    ``output`` using :attr:`input` values and pixel locations from :attr:`grid`.
-    Currently, only spatial (4-D) and volumetric (5-D) :attr:`input` are
-    supported.
-    In the spatial (4-D) case, for :attr:`input` with shape
-    :math:`(N, C, H_\text{in}, W_\text{in})` and :attr:`grid` with shape
-    :math:`(N, H_\text{out}, W_\text{out}, 2)`, the output will have shape
-    :math:`(N, C, H_\text{out}, W_\text{out})`.
-    For each output location ``output[n, :, h, w]``, the size-2 vector
-    ``grid[n, h, w]`` specifies :attr:`input` pixel locations ``x`` and ``y``,
-    which are used to interpolate the output value ``output[n, :, h, w]``.
-    In the case of 5D inputs, ``grid[n, d, h, w]`` specifies the
-    ``x``, ``y``, ``z`` pixel locations for interpolating
-    ``output[n, :, d, h, w]``. :attr:`mode` argument specifies ``nearest`` or
-    ``bilinear`` interpolation method to sample the input pixels.
-    :attr:`grid` specifies the sampling pixel locations normalized by the
-    :attr:`input` spatial dimensions. Therefore, it should have most values in
-    the range of ``[-1, 1]``. For example, values ``x = -1, y = -1`` is the
-    left-top pixel of :attr:`input`, and values  ``x = 1, y = 1`` is the
-    right-bottom pixel of :attr:`input`.
-    If :attr:`grid` has values outside the range of ``[-1, 1]``, the corresponding
-    outputs are handled as defined by :attr:`padding_mode`. Options are
-        * ``padding_mode="zeros"``: use ``0`` for out-of-bound grid locations,
-        * ``padding_mode="border"``: use border values for out-of-bound grid locations,
-        * ``padding_mode="reflection"``: use values at locations reflected by
-          the border for out-of-bound grid locations. For location far away
-          from the border, it will keep being reflected until becoming in bound,
-          e.g., (normalized) pixel location ``x = -3.5`` reflects by border ``-1``
-          and becomes ``x' = 1.5``, then reflects by border ``1`` and becomes
-          ``x'' = -0.5``.
-    Note:
-        This function is often used in conjunction with :func:`affine_grid`
-        to build `Spatial Transformer Networks`_ .
-    Note:
-        When using the CUDA backend, this operation may induce nondeterministic
-        behaviour in its backward pass that is not easily switched off.
-        Please see the notes on :doc:`/notes/randomness` for background.
-    Note:
-        NaN values in :attr:`grid` would be interpreted as ``-1``.
-    Args:
-        input (Tensor): input of shape :math:`(N, C, H_\text{in}, W_\text{in})` (4-D case)
-                        or :math:`(N, C, D_\text{in}, H_\text{in}, W_\text{in})` (5-D case)
-        grid (Tensor): flow-field of shape :math:`(N, H_\text{out}, W_\text{out}, 2)` (4-D case)
-                       or :math:`(N, D_\text{out}, H_\text{out}, W_\text{out}, 3)` (5-D case)
-        mode (str): interpolation mode to calculate output values
-            ``'bilinear'`` | ``'nearest'``. Default: ``'bilinear'``
-        padding_mode (str): padding mode for outside grid values
-            ``'zeros'`` | ``'border'`` | ``'reflection'``. Default: ``'zeros'``
-        align_corners (bool, optional): Geometrically, we consider the pixels of the
-            input  as squares rather than points.
-            If set to ``True``, the extrema (``-1`` and ``1``) are considered as referring
-            to the center points of the input's corner pixels. If set to ``False``, they
-            are instead considered as referring to the corner points of the input's corner
-            pixels, making the sampling more resolution agnostic.
-            This option parallels the ``align_corners`` option in
-            :func:`interpolate`, and so whichever option is used here
-            should also be used there to resize the input image before grid sampling.
-            Default: ``False``
-    Returns:
-        output (Tensor): output Tensor
-    .. _`Spatial Transformer Networks`:
-        https://arxiv.org/abs/1506.02025
-    .. warning::
-        When ``align_corners = True``, the grid positions depend on the pixel
-        size relative to the input image size, and so the locations sampled by
-        :func:`grid_sample` will differ for the same input given at different
-        resolutions (that is, after being upsampled or downsampled).
-        The default behavior up to version 1.2.0 was ``align_corners = True``.
-        Since then, the default behavior has been changed to ``align_corners = False``,
-        in order to bring it in line with the default for :func:`interpolate`.
-    """
-    if mode != 'bilinear' and mode != 'nearest':
-        raise ValueError("nn.grid_sample(): expected mode to be "
-                         "'bilinear' or 'nearest', but got: '{}'".format(mode))
-    if padding_mode != 'zeros' and padding_mode != 'border' and padding_mode != 'reflection':
-        raise ValueError("nn.grid_sample(): expected padding_mode "
-                         "to be 'zeros', 'border', or 'reflection', "
-                         "but got: '{}'".format(padding_mode))
-
-    if align_corners is None:
-        warnings.warn("Default grid_sample and affine_grid behavior has changed "
-                      "to align_corners=False since 1.3.0. Please specify "
-                      "align_corners=True if the old behavior is desired. "
-                      "See the documentation of grid_sample for details.")
-        align_corners = False
-
+def grid_sample(input, grid, mode='bilinear', padding_mode='zeros', align_corners=False):
+    assert mode in ['bilinear','nearest']
+    assert padding_mode in ['zeros','border','reflection']
     return grid_sampler(input, grid, mode, padding_mode, align_corners)
 
 

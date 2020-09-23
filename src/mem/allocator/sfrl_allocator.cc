@@ -204,8 +204,8 @@ inline void SFRLAllocator::try_free_this_allocators() {
 }
 
 void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
-    if (size > 1000000000)
-        LOGir << "very big alloc" << size;
+    //if (size > 1000000000)
+    //    LOGir << "very big alloc" << size;
     size = align_size(size);
     CachingBlockPool* blocks = get_blocks(size);
     //search cached block
