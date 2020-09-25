@@ -586,6 +586,8 @@ class Module:
                 else:
                     if hasattr(v, k):
                         v = getattr(v, k)
+                        assert isinstance(v, (Module, Var)), \
+                            f"expect a jittor Module or Var, but got <{v.__class__.__name__}>, key: {key}"
                     else:
                         end = 1
                         break
@@ -594,6 +596,8 @@ class Module:
                     n_failed += 1
                     LOG.w(f'load parameter {key} failed ...')
             else:
+                assert isinstance(v, Var), \
+                    f"expect a jittor Var, but got <{v.__class__.__name__}>, key: {key}"
                 LOG.v(f'load parameter {key} success ...')
                 if isinstance(params[key], np.ndarray) or isinstance(params[key], list):
                     v.update(array(params[key]))
