@@ -14,6 +14,10 @@ namespace jittor {
 #ifndef JIT
 static auto make_reduce = get_op_info("reduce")
     .get_constructor<VarPtr, Var*, NanoString, uint, uint>();
+static auto make_broadcast = get_op_info("broadcast_to")
+    .get_constructor<VarPtr, Var*, Var*, uint, uint>();
+static auto make_broadcast2 = get_op_info("broadcast_to")
+    .get_constructor<VarPtr, Var*, NanoVector, uint, uint>();
     
 BroadcastToOp::BroadcastToOp(Var* x, Var* y, NanoVector dims) : x(x), y(y) {
     auto count = dims.size();
@@ -40,6 +44,20 @@ BroadcastToOp::BroadcastToOp(Var* x, Var* y, uint dims_mask, uint keepdims_mask)
     auto count = __builtin_popcount(dims_mask);
     // forward x if don't need broadcast
     if (y->num>=0 && !count && !need_broadcast(x, y->shape)) {
+        forward(x);
+        return;
+    }
+    flags.set(NodeFlags::_cpu);
+    flags.set(NodeFlags::_cuda);
+    set_type(OpType::broadcast);
+    z = create_output(NanoVector(), x->dtype());
+    bcast_mask = dims_mask;
+    this->keepdims_mask = keepdims_mask;
+}
+
+BroadcastToOp::BroadcastToOp(Var* x, NanoVector shape, uint dims_mask, uint keepdims_mask) : x(x), y(nullptr), shape(shape) {
+    auto count = __builtin_popcount(dims_mask);
+    if (!count) {
         forward(x);
         return;
     }
@@ -80,6 +98,13 @@ bool BroadcastToOp::need_broadcast(const Var* x, const NanoVector& shape) {
     for (uint i=shape.size()-1, j=x->shape.size()-1; i<shape.size(); i--,j--)
         if (x->shape[j]< 0 || (x->shape[j] != shape[i] && shape[i] != 1)) return true;
     return false;
+}
+
+VarPtr BroadcastToOp::duplicate() {
+    if (y)
+        return make_broadcast(x, y, bcast_mask, keepdims_mask);
+    else
+        return make_broadcast2(x, shape, bcast_mask, keepdims_mask);
 }
 
 VarPtr BroadcastToOp::grad(Var* out, Var* dout, Var* v, int v_index) {

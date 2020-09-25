@@ -50,19 +50,23 @@ void __unregiste_node_trace(Node* node) {
 
 void __registe_node_trace_grad(Node* g, Node* node, int x_index) {
     if (!g) return;
+    string& gname = trace_data.at(g);
     string name = "grad(";
+    if (startswith(gname, "grad("))
+        return;
     if (!node->is_var()) {
         name += node->op()->name_ex();
         name += ':';
         name += S(x_index);
     }
+    name += ":" + gname;
     name += "):";
     name += trace_data.at(node);
-    trace_data[g] = name;
+    gname = name;
     std::function<void(Node*)> dfs = [&] (Node* node) {
         for (Node* i : node->inputs()) {
             string& iname = trace_data[i];
-            if (startswith(iname, "__init__.py:grad:")) {
+            if (iname.find("__init__.py:grad:") != string::npos && !startswith(iname, "grad(")) {
                 iname = name;
                 dfs(i);
             }

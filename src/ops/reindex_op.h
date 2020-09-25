@@ -98,6 +98,7 @@ struct ReindexOp : Op {
     const char* name() const override { return "reindex"; }
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;
     void infer_shape() override;
+    VarPtr duplicate() override;
     DECLARE_jit_run;
 };
 

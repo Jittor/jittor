@@ -464,7 +464,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
             checkCudaErrors(cudaDeviceSynchronize());
         }));
     }
-    LOGvv << "cudaDeviceSynchronize times:" << sync_times << "/" <<queue.size();
+    LOGvv << "cudaDeviceSynchronize times:" << sync_times << "/" <<queue.size() << "device_sync:" << device_sync;
     #endif
 }
 
