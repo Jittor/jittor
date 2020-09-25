@@ -21,12 +21,15 @@ struct BroadcastToOp : Op {
     BroadcastToOp(Var* x, Var* y, NanoVector dims=NanoVector());
     // @pybind(None)
     BroadcastToOp(Var* x, Var* y, uint dims_mask, uint keepdims_mask);
+    // @pybind(None)
+    BroadcastToOp(Var* x, NanoVector shape, uint dims_mask, uint keepdims_mask);
 
     bool need_broadcast(const Var* x, const NanoVector& shape);
     
     const char* name() const override { return "broadcast_to"; }
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;
     void infer_shape() override;
+    VarPtr duplicate() override;
     DECLARE_jit_run;
 };
 
