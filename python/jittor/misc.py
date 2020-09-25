@@ -89,6 +89,11 @@ def chunk(x, chunks, dim=0):
     return res
 jt.Var.chunk = chunk
 
+
+def expand(x, shape):
+    return x.broadcast(shape)
+jt.Var.expand = expand
+
 def stack(x, dim=0):
     r'''
     Concatenates sequence of vars along a new dimension.
