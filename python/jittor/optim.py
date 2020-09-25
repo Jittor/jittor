@@ -33,6 +33,11 @@ class Optimizer(object):
             assert isinstance(pg, dict)
             self.param_groups.append(pg)
         self.n_step = 0
+    
+    @property
+    def defaults(self):
+        exclude = set(("defaults", "param_groups", "n_step"))
+        return { k:v for k, v in self.__dict__.items() if k[0] != '_' and k not in exclude }
 
     def pre_step(self, loss):
         """ something should be done before step, such as calc gradients, mpi sync, and so on.
@@ -76,8 +81,12 @@ class Optimizer(object):
                     pg_grads[i] = grads[pid].stop_grad()
                     pid += 1
         
-    def step(self, loss):
+    def backward(self, loss):
         self.pre_step(loss)
+
+    def step(self, loss=None):
+        if loss is not None:
+            self.pre_step(loss)
         for pg in self.param_groups:
             lr = pg.get("lr", self.lr)
             for p, g in zip(pg["params"], pg["grads"]):
@@ -106,8 +115,9 @@ class SGD(Optimizer):
             for p in pg["params"]:
                 values.append(jt.zeros(p.shape, p.dtype).stop_grad())
 
-    def step(self, loss):
-        self.pre_step(loss)
+    def step(self, loss=None):
+        if loss is not None:
+            self.pre_step(loss)
         for pg in self.param_groups:
             # get arguments from each param_groups
             lr = pg.get("lr", self.lr)
@@ -149,8 +159,9 @@ class RMSprop(Optimizer):
             for p in pg["params"]:
                 values.append(jt.zeros(p.shape, p.dtype).stop_grad())
 
-    def step(self, loss):
-        self.pre_step(loss)
+    def step(self, loss=None):
+        if loss is not None:
+            self.pre_step(loss)
         for pg in self.param_groups:
             # get arguments from each param_groups
             lr = pg.get("lr", self.lr)
@@ -184,8 +195,9 @@ class Adam(Optimizer):
                 values.append(jt.zeros(p.shape, p.dtype).stop_grad())
                 m.append(jt.zeros(p.shape, p.dtype).stop_grad())
 
-    def step(self, loss):
-        self.pre_step(loss)
+    def step(self, loss=None):
+        if loss is not None:
+            self.pre_step(loss)
         n = float(self.n_step)
         for pg in self.param_groups:
             # get arguments from each param_groups

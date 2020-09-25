@@ -7,7 +7,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-__version__ = '1.1.7.18'
+__version__ = '1.1.7.19'
 from . import lock
 with lock.lock_scope():
     from . import compiler
@@ -330,6 +330,12 @@ Var.masked_fill = masked_fill
 def sqr(x): return x*x
 Var.sqr = sqr
 
+def pow(x, y):
+    if isinstance(y, (ori_int, ori_float)) and y == 2:
+        return x.sqr()
+    return core.ops.pow(x, y)
+Var.pow = Var.__pow__ = pow
+
 def argmax(x, dim, keepdims:bool=False):
     return x.arg_reduce("max", dim, keepdims)
 Var.argmax = argmax
@@ -502,9 +508,10 @@ class Module:
         ms = []
         stack = []
         def callback(parents, k, v, n):
-            stack.append(str(k))
-            name = ".".join(stack[1:])
-            ms.append((name, v))
+            if isinstance(v, Module):
+                stack.append(str(k))
+                name = ".".join(stack[1:])
+                ms.append((name, v))
         def callback_leave(parents, k, v, n):
             stack.pop()
         self.dfs([], "", callback, callback_leave)
@@ -819,8 +826,31 @@ Var.__str__ = lambda x: str(x.data)
 Var.__repr__ = lambda x: str(x.data)
 Var.peek = lambda x: f"{x.dtype}{x.shape}"
 
+def item(v):
+    return v.data.item()
+
+def to_int(v):
+    dtype = str(v.dtype)
+    assert dtype.startswith("int")
+    return v.item()
+
+def to_float(v):
+    dtype = str(v.dtype)
+    assert dtype.startswith("float")
+    return v.item()
+
+def to_bool(v):
+    dtype = str(v.dtype)
+    assert dtype.startswith("int") or dtype=="bool"
+    return bool(v.item())
+
+Var.item = item
+Var.__int__ = to_int
+Var.__float__ = to_float
+Var.__bool__ = to_bool
 
 ori_int = int
+ori_float = float
 
 int = int32
 Var.int = Var.int32
