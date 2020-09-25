@@ -24,7 +24,7 @@ class TestNanoString(unittest.TestCase):
         # t is about 0.01 for 100w loop
         # 92ns one loop
         print("nanostring time", t)
-        assert t < [1.5e-7, 1.7e-7][mid], t
+        assert t < [1.5e-7, 1.9e-7][mid], t
 
         assert (jt.hash("asdasd") == 4152566416)
         assert str(jt.NanoString("float"))=="float32"

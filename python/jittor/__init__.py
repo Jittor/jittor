@@ -502,9 +502,10 @@ class Module:
         ms = []
         stack = []
         def callback(parents, k, v, n):
-            stack.append(str(k))
-            name = ".".join(stack[1:])
-            ms.append((name, v))
+            if isinstance(v, Module):
+                stack.append(str(k))
+                name = ".".join(stack[1:])
+                ms.append((name, v))
         def callback_leave(parents, k, v, n):
             stack.pop()
         self.dfs([], "", callback, callback_leave)
@@ -815,6 +816,28 @@ Var.__str__ = lambda x: str(x.data)
 Var.__repr__ = lambda x: str(x.data)
 Var.peek = lambda x: f"{x.dtype}{x.shape}"
 
+def item(v):
+    return v.data.item()
+
+def to_int(v):
+    dtype = str(v.dtype)
+    assert dtype.startswith("int")
+    return v.item()
+
+def to_float(v):
+    dtype = str(v.dtype)
+    assert dtype.startswith("float")
+    return v.item()
+
+def to_bool(v):
+    dtype = str(v.dtype)
+    assert dtype.startswith("int") or dtype=="bool"
+    return bool(v.item())
+
+Var.item = item
+Var.__int__ = to_int
+Var.__float__ = to_float
+Var.__bool__ = to_bool
 
 ori_int = int
 

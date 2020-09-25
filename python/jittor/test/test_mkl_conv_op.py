@@ -140,10 +140,10 @@ class TestMklConvOp(unittest.TestCase):
             dw_jt_tune=gs_tune[1].data
         logs = find_log_with_re(rawlogs, 
             "Run tuner conv: confidence\\((20)\\) candidates\\((.*)\\)$")
-        assert len(logs) == 1
+        assert len(logs) == 2, len(logs)
         assert logs[0][0] == "20", "confidence of reorder should be 20"
         candidates = simple_parser(logs[0][1])
-        assert candidates == {"relay0":[1,0],"relay1":[1,0]}, candidates
+        assert candidates == {"relay0":[1,0]}, candidates
 
         logs = find_log_with_re(rawlogs, r"get_relay_src([\s\S]*)")
         assert len(logs)==2
@@ -186,10 +186,11 @@ class TestMklConvOp(unittest.TestCase):
             dw_jt_tune=gs_tune[1].data
         logs = find_log_with_re(rawlogs, 
             "Run tuner conv: confidence\\((20)\\) candidates\\((.*)\\)$")
-        assert len(logs) == 1
+        assert len(logs) == 2
         assert logs[0][0] == "20", "confidence of reorder should be 20"
         candidates = simple_parser(logs[0][1])
-        assert candidates == {"relay0":[1,0],"relay1":[1,0]}, candidates
+        assert candidates == {"relay0":[1,0]}, candidates
+        # assert candidates == {"relay0":[1,0],"relay1":[1,0]}, candidates
 
         logs = find_log_with_re(rawlogs, r"get_relay_src([\s\S]*)")
         assert len(logs)==2

@@ -47,6 +47,7 @@ struct Op : Node {
     virtual void do_prepare();
     virtual void do_run_after_prepare();
     virtual void do_run();
+    virtual VarPtr duplicate();
     void jit_run();
 
     string name_ex() const;
