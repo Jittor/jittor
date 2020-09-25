@@ -330,6 +330,12 @@ Var.masked_fill = masked_fill
 def sqr(x): return x*x
 Var.sqr = sqr
 
+def pow(x, y):
+    if isinstance(y, (ori_int, ori_float)) and y == 2:
+        return x.sqr()
+    return core.ops.pow(x, y)
+Var.pow = Var.__pow__ = pow
+
 def argmax(x, dim, keepdims:bool=False):
     return x.arg_reduce("max", dim, keepdims)
 Var.argmax = argmax
@@ -840,6 +846,7 @@ Var.__float__ = to_float
 Var.__bool__ = to_bool
 
 ori_int = int
+ori_float = float
 
 int = int32
 Var.int = Var.int32
