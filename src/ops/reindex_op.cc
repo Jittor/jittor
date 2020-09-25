@@ -13,6 +13,8 @@ namespace jittor {
 #ifndef JIT
 static auto make_reindex_reduce = get_op_info("reindex_reduce")
     .get_constructor<VarPtr, Var*, NanoString, NanoVector, vector<string>&&, vector<string>&&, vector<Var*>&&>();
+static auto make_reindex = get_op_info("reindex")
+    .get_constructor<VarPtr, Var*, NanoVector, vector<string>&&, float64, vector<string>&&, vector<Var*>&&>();
     
 ReindexOp::ReindexOp(Var* x, NanoVector shape, vector<string>&& indexes, float64 overflow_value, vector<string>&& overflow_conditions, vector<Var*>&& extras)
     : x(x), 
@@ -61,6 +63,10 @@ ReindexOp::ReindexOp(Var* x, vector<Var*>&& indexes, float64 overflow_value, vec
     for (uint i = 0; i < indexes.size(); ++i) {
         indexes[i]->flags.set(NodeFlags::_force_fuse);
     }
+}
+
+VarPtr ReindexOp::duplicate() {
+    return make_reindex(x, shape, clone(indexes), overflow_value, clone(overflow_conditions), clone(extras));
 }
 
 VarPtr ReindexOp::grad(Var* out, Var* dout, Var* v, int v_index) {

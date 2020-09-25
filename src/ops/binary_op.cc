@@ -87,6 +87,18 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
     z = create_output(nullptr, binary_dtype_infer(op, x, y));
 }
 
+VarPtr dirty_clone_broadcast(Var* v) {
+    Op* op = v->input();
+    // dirty fix conv duplicated
+    if (op && !v->is_finished() && v->shape.size() > 4 && op->type() == OpType::broadcast) {
+        auto vp = op->duplicate();
+        if (vp) {
+            return vp;
+        }
+    }
+    return v;
+}
+
 VarPtr BinaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     if (ns == ns_add) return dout;
     if (ns == ns_subtract) {
@@ -97,9 +109,9 @@ VarPtr BinaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     }
     if (ns == ns_multiply) {
         if (v_index == 0) 
-            return make_binary(y, dout, ns_multiply);
+            return make_binary(dirty_clone_broadcast(y), dirty_clone_broadcast(dout), ns_multiply);
         else
-            return make_binary(x, dout, ns_multiply);
+            return make_binary(dirty_clone_broadcast(x), dirty_clone_broadcast(dout), ns_multiply);
     }
     if (ns == ns_divide) {
         if (v_index == 0) 

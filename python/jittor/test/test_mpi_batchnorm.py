@@ -26,10 +26,10 @@ class FakeMpiBatchNorm(nn.Module):
         self.is_train = is_train
         self.eps = eps
         self.momentum = momentum
-        self.weight = init.constant((num_features,), "float32", 1.0)
-        self.bias = init.constant((num_features,), "float32", 0.0)
         self.running_mean = init.constant((num_features,), "float32", 0.0).stop_grad()
         self.running_var = init.constant((num_features,), "float32", 1.0).stop_grad()
+        self.weight = init.constant((num_features,), "float32", 1.0)
+        self.bias = init.constant((num_features,), "float32", 0.0)
 
     def execute(self, x, global_x):
         if self.is_train:
@@ -91,6 +91,7 @@ class TestMpiBatchnorm(unittest.TestCase):
         gs2 = jt.grad(y2,bn2.parameters())
 
         assert np.allclose(y1.data, y2.data, atol=1e-5),(mpi.world_rank(),y1.data, y2.data, y1.data-y2.data)
+        assert len(gs1) == len(gs2)
         for i in range(len(gs1)):
             assert np.allclose(gs1[i].data, gs2[i].data, rtol=1e-2),(mpi.world_rank(),gs1[i].data, gs2[i].data,gs1[i].data-gs2[i].data)
 
