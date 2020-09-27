@@ -7,7 +7,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-__version__ = '1.1.7.19'
+__version__ = '1.1.7.20'
 from . import lock
 with lock.lock_scope():
     from . import compiler
@@ -818,9 +818,18 @@ def jittor_exit():
     core.cleanup()
 atexit.register(jittor_exit)
 
-Var.__str__ = lambda x: str(x.data)
-Var.__repr__ = lambda x: str(x.data)
+def vtos(v):
+    return f"jt.Var({v.data}, dtype={v.dtype})"
+
+Var.__str__ = vtos
+Var.__repr__ = vtos
 Var.peek = lambda x: f"{x.dtype}{x.shape}"
+
+def size(v, dim=None):
+    if dim is None:
+        return v.shape
+    return v.shape[dim]
+Var.size = size
 
 def item(v):
     return v.data.item()
