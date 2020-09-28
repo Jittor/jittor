@@ -466,6 +466,22 @@ def kthvalue(input, k, dim=None, keepdim=False):
 jt.Var.kthvalue = kthvalue
 
 
+def gather(x,dim,index):
+    if dim<0:
+        dim+=index.ndim
+    x_shape = list(x.shape )
+    i_shape = list(index.shape)
+    assert i_shape[dim]>0
+    assert x.ndim == index.ndim
+    i_shape[dim]=x_shape[dim]
+    assert i_shape == x_shape
+    ins = []
+    for i in range(index.ndim):
+        ins.append(jt.index(index.shape,dim=i))
+    ins[dim]=index
+    return x.reindex(ins)
+    
+
 def nms(dets,thresh):
     '''
       dets jt.array [x1,y1,x2,y2,score]
@@ -519,3 +535,5 @@ def triu_(x,diagonal=0):
     overflow_conditions=[f'i{l-1}<i{l-2}+{diagonal}']
     indexs = [f'i{i}' for i in range(l)]
     return x.reindex(x.shape,indexs,overflow_conditions=overflow_conditions,overflow_value=0)
+
+jt.Var.triu_ = triu_

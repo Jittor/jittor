@@ -769,7 +769,7 @@ def interpolate(X,size=None,scale_factor=None,mode='bilinear',align_corners=Fals
         size = [X.shape[-2]*scale_factor,X.shape[-1]*scale_factor]
     if isinstance(size,int):
         size = (size,size)
-    return upsample(X,size,mode,align_corners)
+    return resize(X,size,mode,align_corners)
 
 def grid_sample_v0(input, grid, mode='bilinear', padding_mode='zeros'):
     r'''
