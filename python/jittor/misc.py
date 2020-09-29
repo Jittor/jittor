@@ -480,7 +480,46 @@ def gather(x,dim,index):
         ins.append(jt.index(index.shape,dim=i))
     ins[dim]=index
     return x.reindex(ins)
-    
+
+
+def prod(x,dim=0):
+    x = jt.log(x)
+    x = x.sum(dim=dim)
+    return jt.exp(x)
+
+jt.Var.prod = prod
+
+def cumsum_forward(np, data):
+    a = data['inputs'][0]
+    b = data['outputs'][0]
+    np.cumsum(a, axis=1, out=b)
+
+def cumsum_backward(np, data):
+    dout = data['dout']
+    out = data['outputs'][0]
+    np.cumsum(dout[:, ::-1], axis=1, out=out)
+    np.copyto(out, out[:, ::-1])
+
+def cumsum(x, dim=None):
+    '''
+    Parameters:
+    -----------
+    x: [batch_size, N], jt.var
+
+    Returns:
+    --------
+    the cumulative sum of x
+    '''
+    return jt.numpy_code(x.shape, x.dtype, [x], cumsum_forward, [cumsum_backward])
+
+jt.Var.cumsum = cumsum
+
+def cumprod(x,dim=0):
+    x = jt.log(x)
+    x = cumsum(x,dim=dim)
+    return jt.exp(x)
+
+jt.Var.cumprod=cumprod
 
 def nms(dets,thresh):
     '''
