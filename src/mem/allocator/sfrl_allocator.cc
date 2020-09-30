@@ -212,14 +212,13 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
     if (block == nullptr) {
         free_all_sfrl_allocators();
         size_t alloc_size = allocation_size(size);
-        void* ptr = underlying->alloc(alloc_size, allocation);
-        if (ptr == nullptr) {
+        void* ptr = nullptr;
+        try {
+            ptr = underlying->alloc(alloc_size, allocation);
+        } catch (...) {
             unused_memory -= large_blocks.free_all_cached_blocks(underlying);
             unused_memory -= small_blocks.free_all_cached_blocks(underlying);
-            void* ptr = underlying->alloc(alloc_size, allocation);
-            if (ptr == nullptr) {
-                return nullptr;
-            }
+            ptr = underlying->alloc(alloc_size, allocation);
         }
         block = new CachingBlock(alloc_size, blocks, ptr);
     } else {
