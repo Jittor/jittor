@@ -149,6 +149,8 @@ void ArgReduceOp::infer_shape() {
             shape.push_back(x->shape[i]);
         }
     }
+    if (shape.size() == 0)
+        shape.push_back(1);
     y->set_shape(shape);
     y_key->set_shape(shape);
 }

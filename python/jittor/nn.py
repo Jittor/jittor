@@ -252,6 +252,13 @@ def softmax(x, dim = None):
         ret = x / x.sum(dim, keepdims=True)
     return ret
 
+def log_softmax(x,dim=None):
+    x = softmax(x,dim=dim)
+    return jt.log(x)
+
+def log_sigmoid(x):
+    return jt.log(jt.sigmoid(x))
+
 class Dropout(Module):
     def __init__(self, p=0.5, is_train=False):
         assert p >= 0 and p <= 1, "dropout probability has to be between 0 and 1, but got {}".format(p)
