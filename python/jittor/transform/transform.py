@@ -7,9 +7,10 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-from PIL import Image
+import numbers
 import random
 import math
+from PIL import Image
 import numpy as np
 import warnings
 from collections.abc import Sequence, Mapping
@@ -19,7 +20,8 @@ from . import function_pil as F_pil
 __all__ = ["hflip", "vflip", "adjust_brightness", "adjust_contrast", "adjust_saturation", "adjust_hue", "adjust_gamma",
            "crop", "resize", "to_grayscale", "center_crop", "crop_and_resize", "to_tensor", "image_normalize",
            "Crop", "RandomCropAndResize", "RandomHorizontalFlip", "CenterCrop", "ImageNormalize", "Compose",
-           "Resize", "Gray", "RandomCrop",]
+           "Resize", "Gray", "RandomGray", "RandomCrop", "ToTensor", "Lambda", "RandomApply", "RandomOrder",
+           "RandomChoice", "RandomVerticalFlip", "ColorJitter"]
 
 
 def _get_image_size(img):
@@ -28,6 +30,8 @@ def _get_image_size(img):
     """
     return F_pil._get_image_size(img)
 
+def _get_image_num_channels(img):
+    return F_pil._get_image_num_channels(img)
 
 def hflip(img):
     """
@@ -73,6 +77,7 @@ def adjust_brightness(img, brightness_factor):
              original image while 2 increases the brightness by a factor of 2.
 
     Returns::
+
         [out] PIL Image.Image: Brightness adjusted image.
 
     Example::
@@ -95,6 +100,7 @@ def adjust_contrast(img, contrast_factor):
              1 gives the original image while 2 increases the contrast by a factor of 2.
 
     Returns::
+
         [out] PIL Image.Image: Contrast adjusted image.
 
     Example::
@@ -117,6 +123,7 @@ def adjust_saturation(img, saturation_factor):
              while 2 will enhance the saturation by a factor of 2.
 
     Returns::
+
         [out] PIL Image.Image: Saturation adjusted image.
 
     Example::
@@ -152,6 +159,7 @@ def adjust_hue(img, hue_factor):
              with complementary colors while 0 gives the original image.
 
     Returns::
+
         [out] PIL Image.Image: Saturation adjusted image.
 
     Example::
@@ -185,6 +193,7 @@ def adjust_gamma(img, gamma, gain=1):
         [in] gain (float): The constant multiplier.
 
     Returns::
+
         [out] PIL Image.Image: Gamma adjusted image.
     """
     return F_pil.adjust_gamma(img, gamma, gain)
@@ -203,6 +212,7 @@ def crop(img, top, left, height, width):
         [in] width(int): width of the cropping box.
 
     Returns::
+
         [out] PIL Image.Image: Cropped image.
 
     Example::
@@ -228,6 +238,7 @@ def resize(img, size, interpolation=Image.BILINEAR):
         [in] interpolation(int, optional): type of interpolation. default: PIL.Image.BILINEAR
 
     Returns::
+
         [out] PIL Image.Image: Resized image.
 
     Example::
@@ -248,6 +259,7 @@ def to_grayscale(img, num_output_channels):
         [in] num_output_channels (int): number of channels of the output image. Value can be 1 or 3. Default, 1.
 
     Returns::
+
         [out] PIL Image: Grayscale version of the image.
               if num_output_channels = 1 : returned image is single channel
               if num_output_channels = 3 : returned image is 3 channel with r = g = b
@@ -266,12 +278,11 @@ def center_crop(img, output_size):
              If int or sequence with single int, it is used for both directions.
 
     Returns::
+
         PIL Image.Image: Cropped image.
     """
-    if isinstance(output_size, int):
-        output_size = (int(output_size), int(output_size))
-    elif isinstance(output_size, (tuple, list)) and len(output_size) == 1:
-        output_size = (output_size[0], output_size[0])
+
+    output_size = _setup_size(output_size, error_msg="If size is a sequence, it should have 2 values")
 
     image_width, image_height = _get_image_size(img)
     crop_height, crop_width = output_size
@@ -386,12 +397,9 @@ class RandomCropAndResize:
         img_ = transform(img)
     """
     def __init__(self, size, scale:tuple=(0.08, 1.0), ratio:tuple=(3. / 4., 4. / 3.), interpolation=Image.BILINEAR):
-        if isinstance(size, int):
-            size = (size, size)
-        assert isinstance(size, tuple)
+        self.size = _setup_size(size, error_msg="If size is a sequence, it should have 2 values")
         assert scale[0] <= scale[1] and ratio[0] <= ratio[1]
 
-        self.size = size
         self.scale = scale
         self.ratio = ratio
         self.interpolation = interpolation
@@ -467,11 +475,7 @@ class CenterCrop:
         img_ = transform(img)
     '''
     def __init__(self, size):
-        if isinstance(size, int):
-            size = (int(size), int(size))
-        elif isinstance(size, (tuple, list)) and len(size) == 1:
-            size = (size[0], size[0])
-        self.size = size
+        self.size = _setup_size(size, error_msg="If size is a sequence, it should have 2 values")
 
     def __call__(self, img: Image.Image):
         return center_crop(img, self.size)
@@ -541,10 +545,7 @@ class Resize:
         img_ = transform(img)
     '''
     def __init__(self, size, interpolation=Image.BILINEAR):
-        if isinstance(size, int):
-            size = (size, size)
-        assert isinstance(size, tuple)
-        self.size = size
+        self.size = _setup_size(size, error_msg="If size is a sequence, it should have 2 values")
         self.interpolation = interpolation
 
     def __call__(self, img: Image.Image):
@@ -567,6 +568,35 @@ class Gray:
         return to_grayscale(img, self.num_output_channels)
 
 
+class RandomGray:
+    '''
+    Randomly convert image to grayscale.
+
+    Args::
+        [in] p (float): probability that image should be converted to grayscale, default: 0.1
+
+    Returns::
+
+        [out] PIL Image: Grayscale version of the image with probability p and unchanged
+              with probability (1-p).
+              - If input image is 1 channel: grayscale version is 1 channel
+              - If input image is 3 channel: grayscale version is 3 channel with r == g == b
+
+    Example::
+
+        transform = transform.Gray()
+        img_ = transform(img)
+    '''
+    def __init__(self, p=0.1):
+        self.p = p
+
+    def __call__(self, img: Image.Image):
+        num_output_channels = _get_image_num_channels(img)
+        if random.random() < self.p:
+            return to_grayscale(img, num_output_channels=num_output_channels)
+        return img
+
+
 class RandomCrop:
     '''
     Class for randomly cropping the input image.
@@ -581,10 +611,7 @@ class RandomCrop:
         img_ = transform(img)
     '''
     def __init__(self, size):
-        if isinstance(size, int):
-            size = (size, size)
-        assert isinstance(size, tuple)
-        self.size = size
+        self.size = _setup_size(size, error_msg="If size is a sequence, it should have 2 values")
 
     def __call__(self, img: Image.Image):
         width, height = _get_image_size(img)
@@ -600,3 +627,213 @@ class ToTensor:
     """
     def __call__(self, img: Image.Image):
         return to_tensor(img)
+
+
+class Lambda:
+    """
+    Apply a user-defined lambda as a transform.
+
+    Args::
+
+        [in] lambd (function): Lambda/function to be used for transform.
+    """
+
+    def __init__(self, lambd):
+        if not callable(lambd):
+            raise TypeError(f"Argument lambd should be callable, got {repr(type(lambd).__name__)}")
+        self.lambd = lambd
+
+    def __call__(self, img):
+        return self.lambd(img)
+
+
+class RandomApply:
+    """
+    Apply randomly a list of transformations with a given probability
+
+    Args::
+        [in] transforms (list or tuple): list of transformations
+        [in] p (float): probability
+    """
+
+    def __init__(self, transforms, p=0.5):
+        assert isinstance(transforms, (list, tuple))
+        self.transforms = transforms
+        self.p = p
+
+    def __call__(self, img):
+        if self.p < random.random():
+            return img
+        for t in self.transforms:
+            img = t(img)
+        return img
+
+
+class RandomOrder:
+    """
+    Apply a list of transformations in a random order.
+
+    Args::
+        [in] transforms (list or tuple): list of transformations
+        [in] p (float): probability
+    """
+
+    def __init__(self, transforms):
+        assert isinstance(transforms, (list, tuple))
+        self.transforms = transforms
+
+    def __call__(self, img):
+        order = list(range(len(self.transforms)))
+        random.shuffle(order)
+        for i in order:
+            img = self.transforms[i](img)
+        return img
+
+
+class RandomChoice:
+    """
+    Apply single transformation randomly picked from a list.
+
+    Args::
+        [in] transforms (list or tuple): list of transformations
+        [in] p (float): probability
+    """
+
+    def __init__(self, transforms):
+        assert isinstance(transforms, (list, tuple))
+        self.transforms = transforms
+
+    def __call__(self, img):
+        t = random.choice(self.transforms)
+        return t(img)
+
+
+class RandomVerticalFlip:
+    """
+    Random flip the image vertically.
+
+    Args::
+
+        [in] p(float): The probability of image flip, default: 0.5.
+
+    Example::
+
+        transform = transform.RandomVerticalFlip(0.6)
+        img_ = transform(img)
+    """
+    def __init__(self, p=0.5):
+        self.p = p
+
+    def __call__(self, img: Image.Image):
+        if random.random() < self.p:
+            return vflip(img)
+        return img
+
+
+class ColorJitter:
+    """
+    Randomly change the brightness, contrast, saturation and hue of an image.
+
+    Args::
+
+        [in] brightness (float or tuple of float (min, max)): How much to jitter brightness.
+             brightness_factor is chosen uniformly from [max(0, 1 - brightness), 1 + brightness]
+             or the given [min, max]. Should be non negative numbers.
+        [in] contrast (float or tuple of float (min, max)): How much to jitter contrast.
+             contrast_factor is chosen uniformly from [max(0, 1 - contrast), 1 + contrast]
+             or the given [min, max]. Should be non negative numbers.
+        [in] saturation (float or tuple of float (min, max)): How much to jitter saturation.
+             saturation_factor is chosen uniformly from [max(0, 1 - saturation), 1 + saturation]
+             or the given [min, max]. Should be non negative numbers.
+        [in] hue (float or tuple of float (min, max)): How much to jitter hue.
+             hue_factor is chosen uniformly from [-hue, hue] or the given [min, max].
+             Should have 0<= hue <= 0.5 or -0.5 <= min <= max <= 0.5.
+    """
+
+    def __init__(self, brightness=0, contrast=0, saturation=0, hue=0):
+        self.brightness = self._check_input(brightness, 'brightness')
+        self.contrast = self._check_input(contrast, 'contrast')
+        self.saturation = self._check_input(saturation, 'saturation')
+        self.hue = self._check_input(hue, 'hue', center=0, bound=(-0.5, 0.5),
+                                     clip_first_on_zero=False)
+
+    @staticmethod
+    def _check_input(value, name, center=1, bound=(0, float('inf')), clip_first_on_zero=True):
+        if isinstance(value, numbers.Number):
+            if value < 0:
+                raise ValueError(f"If {name} is a single number, it must be non negative.")
+            value = [center - float(value), center + float(value)]
+            if clip_first_on_zero:
+                value[0] = max(value[0], 0.0)
+        elif isinstance(value, (tuple, list)) and len(value) == 2:
+            if not bound[0] <= value[0] <= value[1] <= bound[1]:
+                raise ValueError(f"{name} values should be between {bound}")
+        else:
+            raise TypeError(f"{name} should be a single number or a list/tuple with length 2.")
+
+        # if value is 0 or (1., 1.) for brightness/contrast/saturation
+        # or (0., 0.) for hue, do nothing
+        if value[0] == value[1] == center:
+            value = None
+        return value
+
+    @staticmethod
+    def _get_transform(brightness, contrast, saturation, hue):
+        """
+        Get a randomized transform to be applied on image.
+
+        Arguments are same as that of __init__.
+
+        Returns::
+            Transform which randomly adjusts brightness, contrast, saturation
+            and hue in a random order.
+        """
+        transforms = []
+
+        if brightness is not None:
+            brightness_factor = random.uniform(brightness[0], brightness[1])
+            transforms.append(Lambda(lambda img: adjust_brightness(img, brightness_factor)))
+
+        if contrast is not None:
+            contrast_factor = random.uniform(contrast[0], contrast[1])
+            transforms.append(Lambda(lambda img: adjust_contrast(img, contrast_factor)))
+
+        if saturation is not None:
+            saturation_factor = random.uniform(saturation[0], saturation[1])
+            transforms.append(Lambda(lambda img: adjust_saturation(img, saturation_factor)))
+
+        if hue is not None:
+            hue_factor = random.uniform(hue[0], hue[1])
+            transforms.append(Lambda(lambda img: adjust_hue(img, hue_factor)))
+
+        random.shuffle(transforms)
+        transform = Compose(transforms)
+
+        return transform
+
+    def __call__(self, img):
+        """
+        Args::
+
+            [in] img (PIL Image): Input image.
+
+        Returns::
+
+            [out] PIL Image: Color jittered image.
+        """
+        transform = self._get_transform(self.brightness, self.contrast, self.saturation, self.hue)
+
+        return transform(img)
+
+
+def _setup_size(size, error_msg):
+    if isinstance(size, numbers.Number):
+        return int(size), int(size)
+
+    if isinstance(size, Sequence) and len(size) == 1:
+        return size[0], size[0]
+
+    if len(size) != 2:
+        raise ValueError(error_msg)
+
+    return size
