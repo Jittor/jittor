@@ -15,10 +15,18 @@ import numpy as np
 def _is_pil_image(img):
     return isinstance(img, Image.Image)
 
+
 def _get_image_size(img):
     if _is_pil_image(img):
         return img.size
     raise TypeError(f"Unexpected type {img}")
+
+
+def _get_image_num_channels(img):
+    if _is_pil_image(img):
+        return 1 if img.mode == 'L' else 3
+    raise TypeError(f"Unexpected type {img}")
+
 
 def hflip(img):
     """
@@ -70,6 +78,7 @@ def adjust_brightness(img, brightness_factor):
              original image while 2 increases the brightness by a factor of 2.
 
     Returns::
+
         [out] PIL Image.Image: Brightness adjusted image.
 
     Example::
@@ -97,6 +106,7 @@ def adjust_contrast(img, contrast_factor):
              1 gives the original image while 2 increases the contrast by a factor of 2.
 
     Returns::
+
         [out] PIL Image.Image: Contrast adjusted image.
 
     Example::
@@ -124,6 +134,7 @@ def adjust_saturation(img, saturation_factor):
              while 2 will enhance the saturation by a factor of 2.
 
     Returns::
+
         [out] PIL Image.Image: Saturation adjusted image.
 
     Example::
@@ -164,6 +175,7 @@ def adjust_hue(img, hue_factor):
              with complementary colors while 0 gives the original image.
 
     Returns::
+
         [out] PIL Image.Image: Saturation adjusted image.
 
     Example::
@@ -216,6 +228,7 @@ def adjust_gamma(img, gamma, gain=1):
         [in] gain (float): The constant multiplier.
 
     Returns::
+
         [out] PIL Image.Image: Gamma adjusted image.
     """
     if not _is_pil_image(img):
@@ -246,6 +259,7 @@ def crop(img, top, left, height, width):
         [in] width(int): width of the cropping box.
 
     Returns::
+
         [out] PIL Image.Image: Cropped image.
 
     Example::
@@ -274,6 +288,7 @@ def resize(img, size, interpolation=Image.BILINEAR):
         [in] interpolation(int, optional): type of interpolation. default: PIL.Image.BILINEAR
 
     Returns::
+
         [out] PIL Image.Image: Resized image.
 
     Example::
@@ -314,6 +329,7 @@ def to_grayscale(img, num_output_channels):
         [in] num_output_channels (int): number of channels of the output image. Value can be 1 or 3. Default, 1.
 
     Returns::
+
         [out] PIL Image: Grayscale version of the image.
               if num_output_channels = 1 : returned image is single channel
               if num_output_channels = 3 : returned image is 3 channel with r = g = b
