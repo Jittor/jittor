@@ -90,6 +90,26 @@ def chunk(x, chunks, dim=0):
     return res
 jt.Var.chunk = chunk
 
+
+def expand(x, shape):
+    return x.broadcast(shape)
+jt.Var.expand = expand
+
+def median(x,dim=None,keepdim=False):
+    if dim is None:
+        x = x.reshape(-1)
+        dim=0
+    _,x = x.argsort(dim)
+    slices = [slice(None) for i in range(dim-1)]
+    k = (x.shape[dim]-1)//2
+    if keepdim:
+        slices.append(slice(k,k+1))
+    else:
+        slices.append(k)
+    return x[tuple(slices)]
+
+jt.Var.median = median
+
 def stack(x, dim=0):
     r'''
     Concatenates sequence of vars along a new dimension.
@@ -113,7 +133,9 @@ def stack(x, dim=0):
         [[4 5 6]]]
     '''
     assert isinstance(x, Sequence)
-    assert len(x) >= 2
+    if len(x) < 2:
+        return x[0].unsqueeze(dim)
+
     res = [x_.unsqueeze(dim) for x_ in x]
     return jt.contrib.concat(res, dim=dim)
 jt.Var.stack = stack
@@ -436,6 +458,8 @@ jt.Var.split = split
 
 
 def topk(input, k, dim=None, largest=True, sorted=True):
+    if input.numel()==0:
+        return jt.array([],dtype=input.dtype),jt.array([],dtype='int32')
     if dim is None:
         dim = -1
     if dim<0:

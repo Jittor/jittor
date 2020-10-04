@@ -41,6 +41,10 @@ void Op::forward(Var* input) {
     outputs_holder.emplace_back(input);
 }
 
+VarPtr Op::duplicate() {
+    return nullptr;
+}
+
 VarPtr Op::grad(Var* out, Var* dout, Var* v, int v_index) {
     LOGw << "Grad of" << name() << "return zeros";
     return nullptr;
