@@ -18,6 +18,7 @@ import math
 from collections import OrderedDict
 from jittor.pool import Pool, pool, AdaptiveAvgPool2d
 from jittor.optim import *
+from jittor.misc import _pair
 
 
 def matmul_transpose(a, b):
@@ -305,6 +306,11 @@ class BatchNorm(Module):
         self.running_mean = init.constant((num_features,), "float32", 0.0).stop_grad()
         self.running_var = init.constant((num_features,), "float32", 1.0).stop_grad()
 
+        self.affine = affine
+        if self.affine:
+            self.weight = init.constant((num_features,), "float32", 1.0)
+            self.bias = init.constant((num_features,), "float32", 0.0)
+
     def execute(self, x):
         if self.is_train:
             xmean = jt.mean(x, dims=[0,2,3], keepdims=1)
@@ -343,6 +349,11 @@ class BatchNorm1d(Module):
         self.running_mean = init.constant((num_features,), "float32", 0.0).stop_grad()
         self.running_var = init.constant((num_features,), "float32", 1.0).stop_grad()
 
+        self.affine = affine
+        if self.affine:
+            self.weight = init.constant((num_features,), "float32", 1.0)
+            self.bias = init.constant((num_features,), "float32", 0.0)
+
     def execute(self, x):
         if self.is_train:
             xmean = jt.mean(x, dims=[0], keepdims=1)
@@ -375,6 +386,7 @@ class InstanceNorm2d(Module):
         self.is_train = is_train
         self.eps = eps
         self.momentum = momentum
+
         self.affine = affine
         if self.affine:
             self.weight = init.constant((num_features,), "float32", 1.0)
@@ -400,6 +412,7 @@ class GroupNorm(Module):
         self.num_groups = num_groups
         self.num_channels = num_channels
         self.eps = eps
+
         self.affine = affine
         if self.affine:
             self.weight = init.constant((num_channels,), "float32", 1.0)
@@ -419,6 +432,7 @@ class GroupNorm(Module):
         norm_x = (x-xmean)/jt.sqrt(xvar+self.eps)
         if not self.affine:
             return norm_x.reshape(output_shape)
+            return norm_x
         w = self.weight.reshape((1,self.num_groups,C//self.num_groups,1))
         b = self.bias.reshape((1,self.num_groups,C//self.num_groups,1))
         return (norm_x * w + b).reshape(output_shape)
@@ -512,6 +526,63 @@ class Conv(Module):
                 y = y + b
             return y          
 
+def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
+    padding = _pair(padding)
+    stride = _pair(stride)
+    dilation = _pair(dilation)
+    out_channels = weight.shape[0]
+
+    if groups == 1:
+        N,C,H,W = x.shape
+        Kh, Kw = weight.shape[-2:]
+        oh = (H+padding[0]*2-Kh*dilation[0]+dilation[0]-1)//stride[0]+1
+        ow = (W+padding[1]*2-Kw*dilation[1]+dilation[1]-1)//stride[1]+1
+        xx = x.reindex([N,out_channels,C,oh,ow,Kh,Kw], [
+                'i0', # Nid
+                'i2', # Cid
+                f'i3*{stride[0]}-{padding[0]}+i5*{dilation[0]}', # Hid+Khid
+                f'i4*{stride[1]}-{padding[1]}+i6*{dilation[1]}', # Wid+KWid
+            ])
+        ww = weight.broadcast(xx.shape, [0,3,4])
+        yy = xx*ww
+        y = yy.sum([2,5,6]) # Kc, Kh, Kw
+        if bias is not None:
+            b = bias.broadcast(y.shape, [0,2,3])
+            y = y + b
+        return y
+    else:
+        N,C,H,W = x.shape
+        Kh, Kw = weight.shape[-2:]
+        G = groups
+        CpG = C // G # channels per group
+        oc = out_channels
+        oh = (H+padding[0]*2-Kh*dilation[0]+dilation[0]-1)//stride[0]+1
+        ow = (W+padding[1]*2-Kw*dilation[1]+dilation[1]-1)//stride[1]+1
+        xx = x.reindex([N,G,oc//G,CpG,oh,ow,Kh,Kw], [
+                'i0', # Nid
+                f'i1*{CpG}+i3', # Gid
+                f'i4*{stride[0]}-{padding[0]}+i6*{dilation[0]}', # Hid+Khid
+                f'i5*{stride[1]}-{padding[1]}+i7*{dilation[1]}', # Wid+KWid
+            ])
+        xx.compile_options = {"G":G}
+        # w: [oc, CpG, Kh, Kw]
+        ww = weight.reindex([N, G, oc//G, CpG, oh, ow, Kh, Kw], [
+                f'i1*{oc//G}+i2',
+                'i3',
+                'i6',
+                'i7'
+            ])
+        yy = xx*ww
+        y = yy.reindex_reduce('add', [N, oc, oh, ow], [
+                'i0',
+                f'i1*{oc//G}+i2',
+                'i4',
+                'i5'
+            ])
+        if bias is not None:
+            b = bias.broadcast(y.shape, [0,2,3])
+            y = y + b
+        return y          
 
 class ConvTranspose(Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, \
@@ -538,7 +609,11 @@ class ConvTranspose(Module):
 
         self.weight = init.invariant_uniform((in_channels, out_channels) + self.kernel_size, dtype="float")
         if bias:
-            self.bias = init.uniform([out_channels], dtype="float", low=-1, high=1)
+            fan=1
+            for i in self.weight.shape[1:]:
+                fan *= i
+            bound = 1 / math.sqrt(fan)
+            self.bias = init.uniform([out_channels], dtype="float", low=-bound, high=bound)
         else:
             self.bias = None
 
@@ -776,7 +851,10 @@ def interpolate(X,size=None,scale_factor=None,mode='bilinear',align_corners=Fals
         size = [X.shape[-2]*scale_factor,X.shape[-1]*scale_factor]
     if isinstance(size,int):
         size = (size,size)
-    return resize(X,size,mode,align_corners)
+    if scale_factor>1:
+        return upsample(X,size,mode,align_corners)
+    else:
+        return resize(X,size,mode,align_corners)
 
 def grid_sample_v0(input, grid, mode='bilinear', padding_mode='zeros'):
     r'''
