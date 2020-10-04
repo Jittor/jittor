@@ -449,9 +449,9 @@ def split(d,split_size,dim):
     last = 0
     for i in split_size:
         if i==0:
-            shape = tuple(d.shape)
+            shape = list(d.shape)
             shape[dim]=0
-            new_d = jt.zeros(shape,dtype=d.dtype)
+            new_d = jt.zeros(tuple(shape),dtype=d.dtype)
             ans.append(new_d)
             continue
 
