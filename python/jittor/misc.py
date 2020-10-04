@@ -448,6 +448,13 @@ def split(d,split_size,dim):
     ans = []
     last = 0
     for i in split_size:
+        if i==0:
+            shape = tuple(d.shape)
+            shape[dim]=0
+            new_d = jt.zeros(shape,dtype=d.dtype)
+            ans.append(new_d)
+            continue
+
         ss = (slice(None),)*dim+(slice(last,last+i),)
         new_d = d[ss]
         last +=i
