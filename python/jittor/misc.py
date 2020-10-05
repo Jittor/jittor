@@ -463,6 +463,9 @@ def split(d,split_size,dim):
 
 jt.Var.split = split
 
+def tolist(x):
+    return x.numpy().tolist()
+jt.Var.tolist = tolist
 
 def topk(input, k, dim=None, largest=True, sorted=True):
     if input.numel()==0:
