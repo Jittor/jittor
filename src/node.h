@@ -96,7 +96,7 @@ struct Node {
     // f2. var ptr contrib one forward_liveness
     // f3. input(has_grad and f>0) contrib one forward_liveness
     int forward_liveness = 0;
-    // forward_liveness can propergate backward(from output to input)
+    // backward_liveness can propergate backward(from output to input)
     // b1. var ptr contrib one backward_liveness
     // b2. var holder contrib one backward_liveness
     // b3. output(b>0) contrib one backward_liveness

@@ -24,6 +24,7 @@ struct Var : Node {
     Allocator* allocator = nullptr;
     size_t allocation;
     int64_t size, num;
+    VarHolder* var_holder = nullptr;
     inline bool is_float() const { CHECK_EXIST; return ns.is_float(); }
     inline int dsize() const { CHECK_EXIST; return ns.dsize(); }
     inline NanoString dtype() const { CHECK_EXIST; return ns; }

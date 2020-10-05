@@ -385,6 +385,36 @@ DEF_IS(VarHolder*, T) from_py_object(PyObject* obj, unique_ptr<VarHolder>& holde
     return holder.get();
 }
 
+// OptionalVarHolder
+struct OptionalVarHolder;
+DEF_IS(OptionalVarHolder, bool) is_type(PyObject* obj) {
+    return Py_TYPE(obj) == &PyjtVarHolder.ht_type ||
+        is_type<ArrayArgs>(obj) ||
+        obj == Py_None;
+}
+
+DEF_IS(OptionalVarHolder, PyObject*) to_py_object(T a) {
+    if (a.vh == nullptr) {
+        Py_INCREF(Py_None);
+        return Py_None;
+    }
+    return to_py_object<VarHolder*>(a->vh);
+}
+
+
+DEF_IS(OptionalVarHolder, T) from_py_object(PyObject* obj) {
+    if (obj == Py_None)
+        return {nullptr};
+    CHECK(Py_TYPE(obj) == &PyjtVarHolder.ht_type);
+    return {GET_RAW_PTR(VarHolder, obj)};
+}
+
+DEF_IS(OptionalVarHolder, T) from_py_object(PyObject* obj, unique_ptr<VarHolder>& holder) {
+    if (obj == Py_None)
+        return {nullptr};
+    return {from_py_object<VarHolder*>(obj, holder)};
+}
+
 struct DataView;
 DEF_IS(DataView, PyObject*) to_py_object(T a) {
     int64 dims[a.shape.size()];

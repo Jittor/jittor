@@ -1,5 +1,7 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2020 Jittor. Authors: 
+//     Dun Liang <randonlang@gmail.com>. 
+//     Guowei Yang <471184555@qq.com>
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -16,15 +18,34 @@ namespace jittor {
 extern void pyjt_def_all(PyObject* m);
 
 vector<VarHolder*> _grad(VarHolder* loss, const vector<VarHolder*>& targets) {
-   vector<Var*> vs;
-   vs.reserve(targets.size());
-   for (auto* v : targets) vs.push_back(v->var);
-   auto grads = grad(loss->var, vs);
-   vector<VarHolder*> grads_hold;
-   grads_hold.reserve(targets.size());
-   for (auto& grad : grads)
-       grads_hold.push_back(new VarHolder(move(grad)));
-   return grads_hold;
+    vector<Var*> vs;
+    vs.reserve(targets.size());
+    for (auto* v : targets) vs.push_back(v->var);
+    auto grads = grad(loss->var, vs);
+    vector<VarHolder*> grads_hold;
+    grads_hold.reserve(targets.size());
+    for (auto& grad : grads)
+        grads_hold.push_back(new VarHolder(move(grad)));
+    return grads_hold;
+}
+
+vector<VarHolder*> _grad_with_dout(const vector<VarHolder*>& loss, const vector<VarHolder*>& targets, const vector<OptionalVarHolder>& dout) {
+    ASSERT(loss.size()==dout.size()) << "length of loss and length dout of should be equal";
+    vector<Var*> ls;
+    vector<Var*> vs;
+    vector<Var*> ds;
+    ls.reserve(loss.size());
+    vs.reserve(targets.size());
+    ds.reserve(dout.size());
+    for (auto* l : loss) ls.push_back(l->var);
+    for (auto* v : targets) vs.push_back(v->var);
+    for (auto d : dout) ds.push_back(d.vh ? d.vh->var : nullptr);
+    auto grads = grad_with_dout(ls, vs, ds);
+    vector<VarHolder*> grads_hold;
+    grads_hold.reserve(targets.size());
+    for (auto& grad : grads)
+        grads_hold.push_back(new VarHolder(move(grad)));
+    return grads_hold;
 }
 
 } // jittor

@@ -1,5 +1,7 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2020 Jittor. Authors: 
+//     Dun Liang <randonlang@gmail.com>. 
+//     Guowei Yang <471184555@qq.com>
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -42,6 +44,14 @@ struct VarHolder {
     // @pyjt(assign)
     // @attrs(return_self)
     VarHolder* assign(VarHolder* v);
+
+    // @pyjt(_replace)
+    // @attrs(return_self)
+    VarHolder* _replace(VarHolder* v);
+
+    // @pyjt(add_dependence)
+    // @attrs(return_self)
+    VarHolder* add_dependence(VarHolder* v);
 
     /* update parameter and global variable,
        different from assign, it will
@@ -175,6 +185,10 @@ struct VarHolder {
 
     // @pyjt(debug_msg)
     string debug_msg();
+};
+
+struct OptionalVarHolder {
+    VarHolder* vh;
 };
 
 // @pyjt(sync)

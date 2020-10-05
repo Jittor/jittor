@@ -49,11 +49,13 @@ Tapes::Tapes(
     const vector<VarHolder*>& taped_outputs,
     GradCallback&& grad_callback
 ) {
-    callback = move(grad_callback);
+    flags.set(NodeFlags::_cpu);
+    flags.set(NodeFlags::_cuda);
     flags.set(NodeFlags::_grads);
+    callback = move(grad_callback);
 
     /*
-                    stop grad        stop grad
+            stop grad     
         i --> tape --> t_i ---> .... ---> o --> tape --> t_o
         |                                         ^
         +---> tapes ------------------------------+
@@ -74,10 +76,7 @@ Tapes::Tapes(
     add_inputs(tin);
     // stop grad for input and output
     for (int i=0; i<taped_inputs.size(); i++) {
-        taped_inputs[i]->var->set_stop_grad();
-    }
-    for (int i=0; i<taped_outputs.size(); i++) {
-        taped_outputs[i]->var->input()->inputs().front()->set_stop_grad();
+        taped_inputs[i]->var->input()->set_stop_grad();
     }
 }
 

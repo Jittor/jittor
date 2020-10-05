@@ -2,7 +2,7 @@
 # Copyright (c) 2020 Jittor. Authors:
 #   Dun Liang <randonlang@gmail.com>.
 #   Meng-Hao Guo <guomenghao1997@gmail.com>
-#
+#   Guowei Yang <471184555@qq.com>
 # All Rights Reserved.
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
@@ -756,6 +756,269 @@ can also be None)::
     def dfs(self, parents, k, callback, callback_leave=None):
         pass
 
+
+class InvertibleFunction(Module):
+    ''' Function Module for customized backward operations
+
+Example 1 (Function can have multiple input and multiple output, and user
+can store value for backward computation)::
+
+    import jittor as jt
+    from jittor import InvertibleFunction, nn
+
+
+    class MyFunc(InvertibleFunction):
+        def __init__(self, dim):
+            self.dim = dim
+            self.line = nn.Linear(dim, dim)
+
+        def execute(self, x1, x2):
+            return x1, x2+self.line(x1)
+
+        def invert_func(self, y1, y2):
+            return y1, y2-self.line(y1)
+    x1 = jt.ones([10])
+    x2 = jt.ones([10])
+    func = MyFunc(1)
+    y1,y2 = func(x1, x2)
+    xx1, xx2 = func.invert(y1,y2)
+    assert xx1==x1
+    assert xx2==x2
+    dx1, dx2 = jt.grad(y1+y2, [x1, x2])
+
+'''
+    def getv(self, name):
+        key_=name.split('.')
+        v=self
+        end=0
+        for k in key_:
+            if isinstance(v, nn.Sequential):
+                if (k in v.layers):
+                    v = v[k]
+                elif k.isdigit() and (ori_int(k) in v.layers):
+                    v = v[ori_int(k)]
+                else:
+                    end=1
+                    break
+            else:
+                if hasattr(v, k):
+                    v = getattr(v, k)
+                else:
+                    end = 1
+                    break
+        assert end != 1
+        return v
+        
+    def swap_weight(self):
+        for i in range(len(self._weights)):
+            self._weights[i].swap(self.getv(self._weights_name[i]))
+        
+    def __call__(self, *args):
+        if not hasattr(self, "_weights_name"):
+            para = self.parameters()
+            self._weights_name = []
+            for p in para:
+                self._weights_name.append(p.name())
+
+        backup = args
+        args = list(args)
+        taped_inputs = []
+        taped_outputs = []
+        input_mask = [-1] * len(args)
+        for i,v in enumerate(args):
+            if isinstance(v, Var):
+                if v.is_stop_grad():
+                    # -2 in input_mask represents it is stop_grad
+                    input_mask[i] = -2
+                    continue
+                v = v.tape()
+                input_mask[i] = len(taped_inputs)
+                args[i] = v
+                taped_inputs.append(v)
+        self._weights = []
+        for wn in self._weights_name:
+            v = self.getv(wn)
+            v = v.tape()
+            self._weights.append(v)
+            input_mask.append(len(taped_inputs))
+            taped_inputs.append(v)
+
+        self._in = args[:]
+        for i in range(len(args)):
+            args[i]=jt.clone(args[i])
+        self.swap_weight()
+
+        ori_res = self.execute(*args)
+        self.swap_weight()
+        if not isinstance(ori_res, Sequence):
+            res = [ori_res]
+        else:
+            res = list(ori_res)
+        self._out = res[:]
+        output_mask = [-1] * len(res)
+        for i,v in enumerate(res):
+            if isinstance(v, Var):
+                v = v.tape()
+                output_mask[i] = len(taped_outputs)
+                res[i] = v
+                taped_outputs.append(v)
+        self.input_mask = input_mask
+        self.output_mask = output_mask
+        # tape output and input together so
+        # backward treat them as one operator
+        tape_together(taped_inputs, taped_outputs, self._grad)
+        if isinstance(ori_res, Sequence):
+            return res
+        else:
+            return res[0]
+
+    def _grad(self, *args):
+        new_args = ( (args[i] if i>=0 else None) for i in self.output_mask )
+        ret = self.grad(*new_args)
+        if not isinstance(ret, Sequence):
+            ret = (ret,)
+        new_ret = []
+        for i, r in enumerate(ret):
+            j = self.input_mask[i]
+            if j<0:
+                # -2 in input_mask represents it is stop_grad
+                assert r is None or j==-2, f"{type(self)}'s {i}-th returned grad should be None, "\
+                    "because the input value is not jittor variable."
+            else:
+                new_ret.append(r)
+        return new_ret
+
+    def grad(self, *args):
+        self.swap_weight()
+        ori_res = self.invert_func(*self._out)
+        if not isinstance(ori_res, Sequence):
+            res = [ori_res]
+        else:
+            res = list(ori_res)
+        tmp_in = []
+        for i in range(len(res)):
+            tmp_in.append(res[i].detach())
+        out=self.execute(*tmp_in)
+        if not isinstance(out, Sequence):
+            out = [out]
+        self.swap_weight()
+        grad = jt.grad_with_dout(out, tmp_in+self._weights, args)
+        # TOOD:jt.try_merge_graph()
+        sba1=grad+tmp_in
+        sba2 = jt.barrier(sba1)
+        grad=sba2[:len(grad)]
+        for i in range(len(tmp_in)):
+            self._in[i]._replace(sba2[len(grad)+i])
+
+        del self._in
+        del self._out
+        del self._weights
+        return grad
+
+    def invert(self, *args):
+        if not hasattr(self, "_weights_name"):
+            para = self.parameters()
+            self._weights_name = []
+            for p in para:
+                self._weights_name.append(p.name())
+
+        backup = args
+        args = list(args)
+        taped_inputs = []
+        taped_outputs = []
+        input_mask = [-1] * len(args)
+        for i,v in enumerate(args):
+            if isinstance(v, Var):
+                if v.is_stop_grad():
+                    # -2 in input_mask represents it is stop_grad
+                    input_mask[i] = -2
+                    continue
+                v = v.tape()
+                input_mask[i] = len(taped_inputs)
+                args[i] = v
+                taped_inputs.append(v)
+        self._weights = []
+        for wn in self._weights_name:
+            v = self.getv(wn)
+            v = v.tape()
+            self._weights.append(v)
+            input_mask.append(len(taped_inputs))
+            taped_inputs.append(v)
+
+        self._invert_in = args[:]
+        for i in range(len(args)):
+            args[i]=jt.clone(args[i])
+        self.swap_weight()
+
+        ori_res = self.invert_func(*args)
+        self.swap_weight()
+        if not isinstance(ori_res, Sequence):
+            res = [ori_res]
+        else:
+            res = list(ori_res)
+        self._invert_out = res[:]
+        output_mask = [-1] * len(res)
+        for i,v in enumerate(res):
+            if isinstance(v, Var):
+                v = v.tape()
+                output_mask[i] = len(taped_outputs)
+                res[i] = v
+                taped_outputs.append(v)
+        self.invert_input_mask = input_mask
+        self.invert_output_mask = output_mask
+        # tape output and input together so
+        # backward treat them as one operator
+        tape_together(taped_inputs, taped_outputs, self._invert_grad)
+        if isinstance(ori_res, Sequence):
+            return res
+        else:
+            return res[0]
+
+    def _invert_grad(self, *args):
+        new_args = ( (args[i] if i>=0 else None) for i in self.invert_output_mask )
+        ret = self.invert_grad(*new_args)
+        if not isinstance(ret, Sequence):
+            ret = (ret,)
+        new_ret = []
+        for i, r in enumerate(ret):
+            j = self.invert_input_mask[i]
+            if j<0:
+                # -2 in input_mask represents it is stop_grad
+                assert r is None or j==-2, f"{type(self)}'s {i}-th returned grad should be None, "\
+                    "because the input value is not jittor variable."
+            else:
+                new_ret.append(r)
+        return new_ret
+
+    def invert_func(self, *args):
+        pass
+
+    def invert_grad(self, *args):
+        self.swap_weight()
+        ori_res = self.execute(*self._invert_out)
+        if not isinstance(ori_res, Sequence):
+            res = [ori_res]
+        else:
+            res = list(ori_res)
+        tmp_in = []
+        for i in range(len(res)):
+            # self._invert_in[i]._replace(res[i]) 
+            tmp_in.append(res[i].detach())
+        out=self.invert_func(*tmp_in)
+        if not isinstance(out, Sequence):
+            out = [out]
+        self.swap_weight()
+        grad = jt.grad_with_dout(out, tmp_in+self._weights, args)
+        sba1=grad+tmp_in
+        sba2 = jt.barrier(sba1)
+        grad=sba2[:len(grad)]
+        for i in range(len(tmp_in)):
+            self._invert_in[i]._replace(sba2[len(grad)+i])
+
+        del self._invert_in
+        del self._invert_out
+        del self._weights
+        return grad
 
 def make_module(func, exec_n_args=1):
     class MakeModule(Module):

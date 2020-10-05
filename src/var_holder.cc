@@ -1,5 +1,7 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2020 Jittor. Authors: 
+//     Dun Liang <randonlang@gmail.com>. 
+//     Guowei Yang <471184555@qq.com>
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -43,16 +45,19 @@ void add_hold_vars(VarHolder* self) {
 VarHolder::VarHolder(Var* v) : var(v) {
     // Var holder has both forward and backward liveness
     var->own_both_liveness();
+    var->var_holder = this;
     add_hold_vars(this);
 }
 
 VarHolder::VarHolder(VarPtr&& v) {
     var = v.ptr;
+    var->var_holder = this;
     v.ptr = nullptr;
     add_hold_vars(this);
 }
 
 VarHolder::VarHolder(VarHolder* v) : var(v->var) {
+    var->var_holder = this;
     iter = v->iter;
     *iter = this;
     // free memory without calling deconstructor
@@ -61,6 +66,8 @@ VarHolder::VarHolder(VarHolder* v) : var(v->var) {
 
 VarHolder::~VarHolder() {
     hold_vars.erase(iter);
+    if (var->var_holder==this)
+        var->var_holder = NULL;
     var->release_both_liveness();
 }
 
@@ -75,8 +82,11 @@ static inline void assign_var(Var* a, Var* b) {
 
 void VarHolder::operator=(VarPtr&& v) {
     assign_var(v.ptr, var);
+    if (var->var_holder == this)
+        var->var_holder = NULL;
     var->release_both_liveness();
     var = v.ptr;
+    var->var_holder = this;
     v.ptr = nullptr;
 }
 
@@ -87,9 +97,41 @@ string VarHolder::to_string() {
 
 VarHolder* VarHolder::assign(VarHolder* v) {
     assign_var(v->var, var);
+    if (var->var_holder == this)
+        var->var_holder = NULL;
     var->release_both_liveness();
     var = v->var;
+    var->var_holder = this;
     var->own_both_liveness();
+    return this;
+}
+
+// assign this VarHolder, and VarHolder of 2 layers tape op in input direction
+VarHolder* VarHolder::_replace(VarHolder* v) {
+    auto opin = var->input();
+    if (opin && opin->name() == string("tape")) {
+        ASSERT(opin->inputs().size()<=2);
+        auto vin = opin->input(0);
+        auto vin_holder = vin->var_holder;
+
+        auto opin2 = vin->input();
+        if (opin2 && opin2->name() == string("tape")) {
+            ASSERT(opin2->inputs().size()<=2);
+            auto vin2 = opin2->input(0);
+            auto vin2_holder = vin2->var_holder;
+            // ERROR: more than one var_holder point to same var
+            if (vin2_holder)
+                vin2_holder->assign(v);
+        }
+        if (vin_holder)
+            vin_holder->assign(v);
+    }
+    this->assign(v);
+    return this;
+}
+
+VarHolder* VarHolder::add_dependence(VarHolder* v) {
+    var->input()->add_inputs(vector<Var*>{v->var});
     return this;
 }
 
