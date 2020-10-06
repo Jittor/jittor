@@ -12,6 +12,7 @@ import random
 import math
 from PIL import Image
 import numpy as np
+import jittor as jt
 import warnings
 from collections.abc import Sequence, Mapping
 
@@ -335,6 +336,84 @@ def to_tensor(img):
     return img
 
 
+def to_pil_image(pic, mode=None):
+    """Convert a jt.array or an np.ndarray to PIL Image.
+
+    Args::
+
+        [in] pic (jt.array or numpy.ndarray): Image to be converted to PIL Image.
+        [in] mode (`PIL.Image mode`): color space and pixel depth of input data (optional).
+
+    Returns::
+
+        [out] PIL Image: Image converted to PIL Image.
+    """
+    if not(isinstance(pic, jt.array) or isinstance(pic, np.ndarray)):
+        raise TypeError(f'pic should be Tensor or ndarray. Got {type(pic)}.')
+
+    elif isinstance(pic, jt.array):
+        if pic.ndim not in {2, 3}:
+            raise ValueError(f'pic should be 2/3 dimensional. Got {pic.ndim} dimensions.')
+
+        elif pic.ndim == 2:
+            # if 2D image, convert to np.ndarray and add channel dimension (CHW)
+            pic = np.expand_dims(pic.data, 2)
+
+    elif isinstance(pic, np.ndarray):
+        if pic.ndim not in {2, 3}:
+            raise ValueError(f'pic should be 2/3 dimensional. Got {pic.ndim} dimensions.')
+
+        elif pic.ndim == 2:
+            # if 2D image, add channel dimension (HWC)
+            pic = np.expand_dims(pic, 2)
+
+    npimg = pic
+    if not isinstance(npimg, np.ndarray):
+        raise TypeError(f'Input pic must be a torch.Tensor or NumPy ndarray, not {type(npimg)}.')
+
+    if npimg.shape[2] == 1:
+        expected_mode = None
+        npimg = npimg[:, :, 0]
+        if npimg.dtype == np.uint8:
+            expected_mode = 'L'
+        elif npimg.dtype == np.int16:
+            expected_mode = 'I;16'
+        elif npimg.dtype == np.int32:
+            expected_mode = 'I'
+        elif npimg.dtype == np.float32:
+            expected_mode = 'F'
+        if mode is not None and mode != expected_mode:
+            raise ValueError(f"Incorrect mode ({mode}) supplied for input type {np.dtype}. Should be {expected_mode}.")
+        mode = expected_mode
+
+    elif npimg.shape[2] == 2:
+        permitted_2_channel_modes = ['LA']
+        if mode is not None and mode not in permitted_2_channel_modes:
+            raise ValueError(f"Only modes {permitted_2_channel_modes} are supported for 2D inputs")
+
+        if mode is None and npimg.dtype == np.uint8:
+            mode = 'LA'
+
+    elif npimg.shape[2] == 4:
+        permitted_4_channel_modes = ['RGBA', 'CMYK', 'RGBX']
+        if mode is not None and mode not in permitted_4_channel_modes:
+            raise ValueError(f"Only modes {permitted_4_channel_modes} are supported for 4D inputs")
+
+        if mode is None and npimg.dtype == np.uint8:
+            mode = 'RGBA'
+    else:
+        permitted_3_channel_modes = ['RGB', 'YCbCr', 'HSV']
+        if mode is not None and mode not in permitted_3_channel_modes:
+            raise ValueError(f"Only modes {permitted_3_channel_modes} are supported for 3D inputs")
+        if mode is None and npimg.dtype == np.uint8:
+            mode = 'RGB'
+
+    if mode is None:
+        raise TypeError('Input type {} is not supported'.format(npimg.dtype))
+
+    return Image.fromarray(npimg, mode=mode)
+
+
 def image_normalize(img, mean, std):
     """
     Function for normalizing image.
@@ -627,6 +706,36 @@ class ToTensor:
     """
     def __call__(self, img: Image.Image):
         return to_tensor(img)
+
+
+class ToPILImage:
+    """
+    Converts a jt.array of shape C x H x W or a numpy ndarray of shape
+    H x W x C to a PIL Image while preserving the value range.
+
+    Args::
+
+        [in] mode (`PIL.Image mode`): color space and pixel depth of input data (optional).
+             If ``mode`` is ``None`` (default) there are some assumptions made about the input data:
+              - If the input has 4 channels, the ``mode`` is assumed to be ``RGBA``.
+              - If the input has 3 channels, the ``mode`` is assumed to be ``RGB``.
+              - If the input has 2 channels, the ``mode`` is assumed to be ``LA``.
+              - If the input has 1 channel, the ``mode`` is determined by the data type (i.e ``int``,
+                ``float``, ``short``).
+    """
+    def __init__(self, mode=None):
+        self.mode = mode
+
+    def __call__(self, pic):
+        """
+        Args::
+            [in] pic (jt.array or numpy.ndarray): Image to be converted to PIL Image.
+
+        Returns:
+
+            [out] PIL Image: Image converted to PIL Image.
+        """
+        return to_pil_image(pic, self.mode)
 
 
 class Lambda:
