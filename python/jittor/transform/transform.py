@@ -325,12 +325,16 @@ def crop_and_resize(img, top, left, height, width, size, interpolation=Image.BIL
 
 def to_tensor(pic):
     """
-    Function for turning Image.Image or np.ndarray to jt.Var.
+    Function for turning Image.Image or np.ndarray (HWC) to jt.Var (CHW).
 
     Args::
 
         [in] img(PIL Image.Image or np.ndarray): Input image.
-    
+             If input type is np.ndarray, the shape should be in HWC.
+
+    Return:
+        [out] jt.Var in shape CHW.
+
     Example::
         
         img = Image.open(...)
@@ -375,11 +379,11 @@ def to_tensor(pic):
         return img
 
 def to_pil_image(img, mode=None):
-    """Convert a jt.Var or an np.ndarray to PIL Image.
+    """Convert a jt.Var (CHW) or an np.ndarray (HWC) to PIL Image.
 
     Args::
 
-        [in] img (jt.Var or numpy.ndarray): Image to be converted to PIL Image.
+        [in] img (jt.Var (CHW) or numpy.ndarray (HWC)): Image to be converted to PIL Image.
         [in] mode (`PIL.Image mode`): color space and pixel depth of input data (optional).
 
     Returns::
