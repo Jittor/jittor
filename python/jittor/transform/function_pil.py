@@ -19,13 +19,13 @@ def _is_pil_image(img):
 def _get_image_size(img):
     if _is_pil_image(img):
         return img.size
-    raise TypeError(f"Unexpected type {img}")
+    raise TypeError(f"Unexpected type {type(img)}")
 
 
 def _get_image_num_channels(img):
     if _is_pil_image(img):
         return 1 if img.mode == 'L' else 3
-    raise TypeError(f"Unexpected type {img}")
+    raise TypeError(f"Unexpected type {type(img)}")
 
 
 def hflip(img):
@@ -319,7 +319,7 @@ def resize(img, size, interpolation=Image.BILINEAR):
         return img.resize(size[::-1], interpolation)
 
 
-def to_grayscale(img, num_output_channels):
+def gray(img, num_output_channels):
     """
     Function for converting PIL image of any mode (RGB, HSV, LAB, etc) to grayscale version of image.
 

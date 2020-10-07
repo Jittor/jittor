@@ -13,16 +13,15 @@ import math
 from PIL import Image
 import numpy as np
 import jittor as jt
-import warnings
-from collections.abc import Sequence, Mapping
+from collections.abc import Sequence
 
 from . import function_pil as F_pil
 
 __all__ = ["hflip", "vflip", "adjust_brightness", "adjust_contrast", "adjust_saturation", "adjust_hue", "adjust_gamma",
-           "crop", "resize", "to_grayscale", "center_crop", "crop_and_resize", "to_tensor", "image_normalize",
+           "crop", "resize", "gray", "center_crop", "crop_and_resize", "to_tensor", "to_pil_image", "image_normalize",
            "Crop", "RandomCropAndResize", "RandomHorizontalFlip", "CenterCrop", "ImageNormalize", "Compose",
            "Resize", "Gray", "RandomGray", "RandomCrop", "ToTensor", "Lambda", "RandomApply", "RandomOrder",
-           "RandomChoice", "RandomVerticalFlip", "ColorJitter"]
+           "RandomChoice", "RandomVerticalFlip", "ColorJitter", "ToPILImage"]
 
 
 def _get_image_size(img):
@@ -33,6 +32,13 @@ def _get_image_size(img):
 
 def _get_image_num_channels(img):
     return F_pil._get_image_num_channels(img)
+
+def _is_numpy(img):
+    return isinstance(img, np.ndarray)
+
+def _is_numpy_image(img):
+    return img.ndim in {2, 3}
+
 
 def hflip(img):
     """
@@ -250,7 +256,7 @@ def resize(img, size, interpolation=Image.BILINEAR):
     return F_pil.resize(img, size, interpolation)
 
 
-def to_grayscale(img, num_output_channels):
+def gray(img, num_output_channels):
     """
     Function for converting PIL image of any mode (RGB, HSV, LAB, etc) to grayscale version of image.
 
@@ -265,7 +271,7 @@ def to_grayscale(img, num_output_channels):
               if num_output_channels = 1 : returned image is single channel
               if num_output_channels = 3 : returned image is 3 channel with r = g = b
     """
-    return F_pil.to_grayscale(img, num_output_channels)
+    return F_pil.gray(img, num_output_channels)
 
 
 def center_crop(img, output_size):
@@ -317,59 +323,96 @@ def crop_and_resize(img, top, left, height, width, size, interpolation=Image.BIL
     return img
 
 
-def to_tensor(img):
+def to_tensor(pic):
     """
-    Function for turning Image.Image to jt.array.
+    Function for turning Image.Image or np.ndarray to jt.Var.
 
     Args::
 
-        [in] img(PIL Image.Image): Input image.
+        [in] img(PIL Image.Image or np.ndarray): Input image.
     
     Example::
         
         img = Image.open(...)
         img_ = transform.to_tensor(img)
     """
-    # todo: handle image with various modes
-    if isinstance(img, Image.Image):
-        return np.array(img).transpose((2, 0, 1)) / np.float32(255)
-    return img
+    if not(F_pil._is_pil_image(pic) or _is_numpy(pic)):
+        raise TypeError(f'img should be PIL Image or ndarray. Got {type(pic)}.')
 
+    if _is_numpy(pic) and not _is_numpy_image(pic):
+        raise ValueError(f'img should be 2/3 dimensional. Got {pic.ndim} dimensions.')
 
-def to_pil_image(pic, mode=None):
-    """Convert a jt.array or an np.ndarray to PIL Image.
+    if _is_numpy(pic):
+        # handle numpy array
+        if pic.ndim == 2:
+            pic = pic[:, :, None]
+
+        img = jt.array(pic.transpose((2, 0, 1)))
+        # backward compatibility
+        if img.dtype == 'uint8':
+            return img.float().divide(255)
+        else:
+            return img
+
+    # handle PIL Image
+    if pic.mode == 'I':
+        img = jt.array(np.array(pic, np.int32, copy=False))
+    elif pic.mode == 'I;16':
+        img = jt.array(np.array(pic, np.int16, copy=False))
+    elif pic.mode == 'F':
+        img = jt.array(np.array(pic, np.float32, copy=False))
+    elif pic.mode == '1':
+        img = jt.array(np.array(pic, np.uint8, copy=False) * 255, dtype='uint8')
+    else:
+        img = jt.array(np.array(pic, np.uint8, copy=False))
+
+    # put it from HWC to CHW format
+    img = img.reshape(pic.size[1], pic.size[0], len(pic.getbands()))
+    img = img.permute((2, 0, 1))
+    if img.dtype == 'uint8':
+        return img.float().divide(255)
+    else:
+        return img
+
+def to_pil_image(img, mode=None):
+    """Convert a jt.Var or an np.ndarray to PIL Image.
 
     Args::
 
-        [in] pic (jt.array or numpy.ndarray): Image to be converted to PIL Image.
+        [in] img (jt.Var or numpy.ndarray): Image to be converted to PIL Image.
         [in] mode (`PIL.Image mode`): color space and pixel depth of input data (optional).
 
     Returns::
 
         [out] PIL Image: Image converted to PIL Image.
     """
-    if not(isinstance(pic, jt.array) or isinstance(pic, np.ndarray)):
-        raise TypeError(f'pic should be Tensor or ndarray. Got {type(pic)}.')
+    if not(isinstance(img, jt.Var) or isinstance(img, np.ndarray)):
+        raise TypeError(f'img should be jt.Var or ndarray. Got {type(img)}.')
 
-    elif isinstance(pic, jt.array):
-        if pic.ndim not in {2, 3}:
-            raise ValueError(f'pic should be 2/3 dimensional. Got {pic.ndim} dimensions.')
+    elif isinstance(img, jt.Var):
+        if img.ndim not in {2, 3}:
+            raise ValueError(f'img should be 2/3 dimensional. Got {img.ndim} dimensions.')
 
-        elif pic.ndim == 2:
-            # if 2D image, convert to np.ndarray and add channel dimension (CHW)
-            pic = np.expand_dims(pic.data, 2)
+        elif img.ndim == 2:
+            # if 2D image, add channel dimension (CHW)
+            img = img.unsqueeze(0)
 
-    elif isinstance(pic, np.ndarray):
-        if pic.ndim not in {2, 3}:
-            raise ValueError(f'pic should be 2/3 dimensional. Got {pic.ndim} dimensions.')
+    elif isinstance(img, np.ndarray):
+        if img.ndim not in {2, 3}:
+            raise ValueError(f'img should be 2/3 dimensional. Got {img.ndim} dimensions.')
 
-        elif pic.ndim == 2:
+        elif img.ndim == 2:
             # if 2D image, add channel dimension (HWC)
-            pic = np.expand_dims(pic, 2)
+            img = np.expand_dims(img, 2)
 
-    npimg = pic
+    npimg = img
+    if isinstance(img, jt.Var):
+        if img.dtype in ('float32', 'float64') and mode != 'F':
+            img = img.multiply(255).uint8()
+        npimg = np.transpose(img.data, (1, 2, 0))
+
     if not isinstance(npimg, np.ndarray):
-        raise TypeError(f'Input pic must be a torch.Tensor or NumPy ndarray, not {type(npimg)}.')
+        raise TypeError(f'Input img must be a jt.Var or NumPy ndarray, not {type(npimg)}.')
 
     if npimg.shape[2] == 1:
         expected_mode = None
@@ -418,8 +461,6 @@ def image_normalize(img, mean, std):
     """
     Function for normalizing image.
 
-        Class for normalizing the input image.
-
     Args::
 
     [in] image(PIL Image.Image or np.ndarray): input image.
@@ -431,11 +472,30 @@ def image_normalize(img, mean, std):
         img = Image.open(...)
         img_ = transform.image_normalize(img, mean=[0.5], std=[0.5])
     """
-    if isinstance(img, Image.Image):
+    if not isinstance(img, (Image.Image, jt.Var, np.ndarray)):
+        raise TypeError(f'Input type should be in (PIL Image, jt.Var, np.ndarray). Got {type(img)}.')
+    elif isinstance(img, Image.Image):
+        assert img.mode == 'RGB', f"input image mode should be 'RGB'. Got {img.mode}."
         img = (np.array(img).transpose((2, 0, 1)) \
                - mean * np.float32(255.)) \
                / (std * np.float32(255.))
     else:
+        if img.ndim < 3:
+            raise ValueError(f'Expected input to be a array image of size (..., C, H, W). Got {img.shape}.')
+        if isinstance(img, jt.Var):
+            mean = jt.array(mean)
+            std = jt.array(std)
+            if (std.data == 0).any():
+                raise ValueError('std cannot be zero.')
+        else:
+            mean = np.asarray(mean)
+            std = np.asarray(std)
+            if (std == 0).any():
+                raise ValueError('std cannot be zero.')
+        if mean.ndim == 1:
+            mean = mean.reshape(-1, 1, 1)
+        if std.ndim == 1:
+            std = std.reshape(-1, 1, 1)
         img = (img - mean) / std
     return img
 
@@ -483,10 +543,9 @@ class RandomCropAndResize:
         self.ratio = ratio
         self.interpolation = interpolation
 
-    def __call__(self, img:Image.Image):
-        width, height = img.size
-        scale = self.scale
-        ratio = self.ratio
+    @staticmethod
+    def get_params(img: Image.Image, scale, ratio):
+        width, height = _get_image_size(img)
         area = height * width
 
         for _ in range(10):
@@ -500,21 +559,25 @@ class RandomCropAndResize:
             if 0 < w <= width and 0 < h <= height:
                 i = random.randint(0, height - h)
                 j = random.randint(0, width - w)
-                break
+                return i, j, h, w
+
+        # Fallback to central crop
+        in_ratio = float(width) / float(height)
+        if in_ratio < min(ratio):
+            w = width
+            h = int(round(w / min(ratio)))
+        elif in_ratio > max(ratio):
+            h = height
+            w = int(round(h * max(ratio)))
         else:
-            # Fallback to central crop
-            in_ratio = float(width) / float(height)
-            if in_ratio < min(ratio):
-                w = width
-                h = int(round(w / min(ratio)))
-            elif in_ratio > max(ratio):
-                h = height
-                w = int(round(h * max(ratio)))
-            else:
-                w = width
-                h = height
-            i = (height - h) // 2
-            j = (width - w) // 2
+            w = width
+            h = height
+        i = (height - h) // 2
+        j = (width - w) // 2
+        return i, j, h, w
+
+    def __call__(self, img: Image.Image):
+        i, j, h, w = self.get_params(img, self.scale, self.ratio)
         return crop_and_resize(img, i, j, h, w, self.size, self.interpolation)
 
 
@@ -644,7 +707,7 @@ class Gray:
         self.num_output_channels = num_output_channels
 
     def __call__(self, img: Image.Image):
-        return to_grayscale(img, self.num_output_channels)
+        return gray(img, self.num_output_channels)
 
 
 class RandomGray:
@@ -672,7 +735,7 @@ class RandomGray:
     def __call__(self, img: Image.Image):
         num_output_channels = _get_image_num_channels(img)
         if random.random() < self.p:
-            return to_grayscale(img, num_output_channels=num_output_channels)
+            return gray(img, num_output_channels=num_output_channels)
         return img
 
 
@@ -702,7 +765,7 @@ class RandomCrop:
 
 class ToTensor:
     """
-    Convert PIL Image to jt.array.
+    Convert PIL Image to jt.Var.
     """
     def __call__(self, img: Image.Image):
         return to_tensor(img)
@@ -710,7 +773,7 @@ class ToTensor:
 
 class ToPILImage:
     """
-    Converts a jt.array of shape C x H x W or a numpy ndarray of shape
+    Converts a jt.Var of shape C x H x W or a numpy ndarray of shape
     H x W x C to a PIL Image while preserving the value range.
 
     Args::
@@ -726,16 +789,16 @@ class ToPILImage:
     def __init__(self, mode=None):
         self.mode = mode
 
-    def __call__(self, pic):
+    def __call__(self, img):
         """
         Args::
-            [in] pic (jt.array or numpy.ndarray): Image to be converted to PIL Image.
+            [in] img (jt.Var or numpy.ndarray): Image to be converted to PIL Image.
 
         Returns:
 
             [out] PIL Image: Image converted to PIL Image.
         """
-        return to_pil_image(pic, self.mode)
+        return to_pil_image(img, self.mode)
 
 
 class Lambda:
