@@ -162,7 +162,7 @@ void BinaryOp::infer_shape() {
         // -1 1 need b
         // has 1, b, both 1, not b, 0, error
         if ((xshape == 1 || yshape == 1) && (xshape != yshape)) {
-            CHECK(xshape && yshape) << "Shape can not broadcast to 0.";
+            // CHECK(xshape && yshape) << "Shape can not broadcast to 0.";
             need_broadcast = true;
             continue;
         }

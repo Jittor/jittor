@@ -55,9 +55,6 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets) {
             return false;
         if (node->is_stop_grad())
             return false;
-        // int value has zero grad
-        if (node->is_var())
-            return node->var()->is_float();
         return true;
     });
     LOGvv << "Size of grad nodes:" << gnodes.size();

@@ -7,7 +7,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-__version__ = '1.1.7.20'
+__version__ = '1.2.0.0'
 from . import lock
 with lock.lock_scope():
     from . import compiler
@@ -233,10 +233,21 @@ def ones(shape, dtype="float32"):
         shape = (shape,)
     return unary(1, dtype).broadcast(shape)
 
+def ones_like(x):
+    return ones(x.shape,x.dtype)
+
 def zeros(shape, dtype="float32"):
     if not isinstance(shape, (NanoVector, Sequence)):
         shape = (shape,)
     return unary(0, dtype).broadcast(shape)
+
+def full(shape,val,dtype="float32"):
+    if not isinstance(shape, (NanoVector, Sequence)):
+        shape = (shape,)
+    return unary(val, dtype).broadcast(shape)
+
+def zeros_like(x):
+    return zeros(x.shape,x.dtype)
 
 flags = core.flags()
 
@@ -311,9 +322,17 @@ def squeeze(x, dim):
     return x.reshape(shape[:dim] + shape[dim+1:])
 Var.squeeze = squeeze
 
-def clamp(x, min_v, max_v):
-    assert min_v <= max_v
-    return x.maximum(min_v).minimum(max_v)
+def clamp(x, min_v=None, max_v=None):
+    if x.shape[0]==0:
+        return x
+    if min_v is not None and max_v is not None:
+        assert min_v <= max_v
+    if min_v is not None:
+        x = x.maximum(min_v)
+    if max_v is not None:
+        x = x.minimum(max_v)
+    return x
+
 Var.clamp = clamp
 
 def type_as(a, b):
@@ -574,6 +593,8 @@ class Module:
                 else:
                     if hasattr(v, k):
                         v = getattr(v, k)
+                        assert isinstance(v, (Module, Var)), \
+                            f"expect a jittor Module or Var, but got <{v.__class__.__name__}>, key: {key}"
                     else:
                         end = 1
                         break
@@ -582,6 +603,8 @@ class Module:
                     n_failed += 1
                     LOG.w(f'load parameter {key} failed ...')
             else:
+                assert isinstance(v, Var), \
+                    f"expect a jittor Var, but got <{v.__class__.__name__}>, key: {key}"
                 LOG.v(f'load parameter {key} success ...')
                 if isinstance(params[key], np.ndarray) or isinstance(params[key], list):
                     v.update(array(params[key]))

@@ -44,6 +44,11 @@ struct JitKey {
         explicit hex1(uint data) : data(data) {}
     };
 
+    struct shex1 {
+        int data;
+        explicit shex1(int data) : data(data) {}
+    };
+
     struct hex2 {
         uint data;
         explicit hex2(uint data) : data(data) {}
@@ -88,6 +93,13 @@ inline JK& operator<<(JK& jk, const char c) {
 inline JK& operator<<(JK& jk, const JK::hex1& h) {
     uint8 data = h.data % 16;
     return jk << (char)((data<10) ? data+'0' : data-10+'a');
+}
+
+inline JK& operator<<(JK& jk, const JK::shex1& h) {
+    if (h.data<0)
+        return jk << '-' << JK::hex1(-h.data);
+    else
+        return jk << JK::hex1(h.data);
 }
 
 inline JK& operator<<(JK& jk, const JK::hex2& h) {
