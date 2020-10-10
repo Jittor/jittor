@@ -691,4 +691,54 @@ DEF_IS(GradCallback, T) from_py_object(PyObject* obj) {
     return func;
 }
 
+struct VarSlices;
+// Slice
+DEF_IS(VarSlices, bool) is_type(PyObject* obj) {
+    return PyTuple_CheckExact(obj) || 
+        PyLong_CheckExact(obj) || 
+        PySlice_Check(obj) || 
+        (Py_TYPE(obj) == &PyEllipsis_Type) ||
+        obj == Py_None ||
+        is_type<VarHolder*>(obj);
+}
+
+template<class T>
+void load_var_slice(PyObject* obj, T* var_slice, vector<unique_ptr<VarHolder>>& holders) {
+    if (PyLong_CheckExact(obj)) {
+        var_slice->set_int(PyLong_AsLong(obj));
+    } else
+    if (PySlice_Check(obj)) {
+        var_slice->slice = from_py_object<decltype(var_slice->slice)>(obj);
+    } else
+    if (Py_TYPE(obj) == &PyEllipsis_Type) {
+        var_slice->set_ellipsis();
+    } else 
+    if (obj == Py_None) {
+        var_slice->set_none();
+    }else {
+        holders.emplace_back();
+        auto* vh = from_py_object<VarHolder*>(obj, holders.back());
+        auto vv = (Var**)vh;
+        var_slice->set_var(vv[0]);
+    }
+}
+
+DEF_IS(VarSlices, T) from_py_object(PyObject* obj, vector<unique_ptr<VarHolder>>& holders) {
+    if (PyTuple_CheckExact(obj)) {
+        auto size = Py_SIZE(obj);
+        T vs(size);
+        auto arr = PySequence_Fast_ITEMS(obj);
+        for (int i=0; i<size; i++) {
+            auto oi = arr[i]; 
+            load_var_slice(oi, vs.slices+i, holders);
+        }
+        return vs;
+    } else {
+        T vs(1);
+        load_var_slice(obj, vs.slices, holders);
+        return vs;
+    }
+}
+
+
 } // jittor

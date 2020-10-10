@@ -392,14 +392,10 @@ void ConvTuner::forwardTune(FusedOp* fop) {
                     continue;
                 auto kh = w->shape[wformat.find("h")];
                 auto kw = w->shape[wformat.find("w")];
-                if (kh != kw) {
-                    LOGvvvv << "TODO: relay conv_backward_w when kh != kw" << kh << kw;
-                    continue;
-                }
                 LOGvvvv << x << y << kh << stride << padding << dilation << groups << xformat << wformat << yformat;
                 auto make_conv_w = get_op_info(relay_conv_name)
-                        .get_constructor<VarPtr, Var*, Var*, int, int, int, int, int, string, string, string>();
-                rvar = make_conv_w(x, y, kh, stride, padding, dilation, groups, xformat, wformat, yformat);
+                        .get_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, string, string, string>();
+                rvar = make_conv_w(x, y, kh, kw, stride, padding, dilation, groups, xformat, wformat, yformat);
             }
 
             LOGvvvv << relay_conv_name << "output:" << rvar;

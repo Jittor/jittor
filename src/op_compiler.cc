@@ -416,6 +416,7 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                 vector<string> args;
                 size_t l = k+1;
                 if (expr == "for" || expr == "if" || expr == "expand_macro" ||
+                    expr == "is_def" ||
                     (k<src.size() && src[k]=='(')) {
                     ASSERT(src[k] == '(');
                     comma.push_back(k);
@@ -447,6 +448,9 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                     if (args.size() >= 5) {
                         step = OpCompiler::eval(vs, defs);
                         vs = args[4];
+                        for (int i=5; i<args.size(); i++) {
+                            vs += "," + args[i];
+                        }
                     }
                     auto new_defs = defs;
                     LOGvvv << "Expand for" << expr >> "[" >> vil >> "," >> vir >> "," >> step >> "]";
@@ -470,6 +474,18 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                     string vfalse = args.size() == 3u ? args[2] : "";
                     int cond = OpCompiler::eval(vcond, defs);
                     new_src += precompile(defs, cond?vtrue:vfalse, macros);
+                    i = l-1;
+                    continue;
+                } else
+                if (expr == "is_def") {
+                    ASSERT(args.size()==1)
+                        << "Jit error: is_def wrong arguments.";
+                    string vdef = args[0];
+                    vdef = precompile(defs, vdef, macros);
+                    if (defs.count(vdef) || macros.count(vdef))
+                        new_src += "1";
+                    else
+                        new_src += "0";
                     i = l-1;
                     continue;
                 } else
@@ -983,6 +999,7 @@ jit_op_entry_t OpCompiler::do_compile(Op* op) {
         src_after_passes = tm.tune();
         src = &src_after_passes;
     }
+    op->compile_optimize(*src);
     auto ret = oc.compile(op->get_jit_key(), *src);
     return ret;
 }

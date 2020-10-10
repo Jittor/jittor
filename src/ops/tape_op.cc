@@ -49,8 +49,11 @@ Tapes::Tapes(
     const vector<VarHolder*>& taped_outputs,
     GradCallback&& grad_callback
 ) {
-    callback = move(grad_callback);
+    flags.set(NodeFlags::_cpu);
+    flags.set(NodeFlags::_cuda);
     flags.set(NodeFlags::_grads);
+    callback = move(grad_callback);
+    
 
     /*
                     stop grad        stop grad

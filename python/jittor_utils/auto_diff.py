@@ -222,6 +222,16 @@ class Hook:
                 pickle.dump(ps, f)
             LOG.i(f"save params ok")
 
+    def hook_function(self, func):
+        name = func.__name__
+        def new_func(*args, **kw):
+            ret = func(*args, **kw)
+            self.record(name+".args", args)
+            self.record(name+".kw", kw)
+            self.record(name+".ret", ret)
+            return ret
+        return new_func
+
 
     def hook_module(self, mod, mod_name=""):
         if os.environ.get("use_auto_diff", '1') == '0':

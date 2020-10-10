@@ -66,13 +66,13 @@ string strip(const string& s) {
 }
 
 void KernelIR::del_scope() {
-    if (father && (type=="define" || type=="func")) {
+    if (father && (type=="define" || type=="func" || type=="macro")) {
         father->scope[attrs["lvalue"]].remove(this);
     }
 }
 
 void KernelIR::add_scope() {
-    if (father && (type=="define" || type=="func"))
+    if (father && (type=="define" || type=="func" || type=="macro"))
         father->scope[get_attr("lvalue")].push_back(this);
 }
 
@@ -485,6 +485,7 @@ string KernelIR::to_string(int level, bool debug) {
         auto iter = attrs.find("code");
         ASSERT(iter != attrs.end()) << attrs << type << father;
         s << iter->second << "\n";
+        has_bc = attrs.count("has_bc");
     } else {
         s << "\n";
     }
@@ -590,6 +591,10 @@ KernelIR::KernelIR(const string& src, bool raw) {
             if (i==start && k==end) {
                 attrs["code"] = src;
                 type = "macro";
+                auto v = split(src, " ", 3);
+                ASSERT(v.size()>1);
+                attrs["lvalue"] = v.at(1);
+                attrs["rvalue"] = v.size()>2 ? v.at(2) : "";
                 return;
             } else {
                 push_back(src.substr(j, k-j), nullptr, raw);
@@ -650,6 +655,17 @@ KernelIR::KernelIR(const string& src, bool raw) {
             // func define
             if (s.size()>=2 && s.back()=='}') {
                 int l = s.find("{");
+                ASSERT(l != string::npos);
+                if (startswith(s, "namespace ")) {
+                    // namespace xxx {...}
+                    //               l
+                    attrs["code"] = s.substr(0, l);
+                    attrs["has_bc"] = "1";
+                    type = "";
+                    i = j + l;
+                    end--;
+                    continue;
+                }
                 int ll = s.rfind("(", l);
                 int rr = s.rfind(")", l);
                 // if () not found, maybe src like this:

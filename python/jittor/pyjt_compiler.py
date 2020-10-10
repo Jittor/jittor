@@ -109,6 +109,8 @@ def get_def_code(df, scope_name, pyname, self_as_arg0=False):
     func_args_convert = ""
     func_call = df["func_name"]+"("
     pytypes = [ get_pytype_map(a[0],0) for a in args ]
+    holder_dec_array = []
+    holder_set_array = []
     for tid, tpc in enumerate(pytypes):
         check = get_pytype_map(args[tid][0],2)
         default_arg = args[tid][2]
@@ -118,6 +120,11 @@ def get_def_code(df, scope_name, pyname, self_as_arg0=False):
         if jtp == "VarHolder*":
             holder_dec = f"unique_ptr<VarHolder> arg{tid}_holder"
             holder_set = f", arg{tid}_holder"
+        if jtp == "VarSlices":
+            holder_dec = f"vector<unique_ptr<VarHolder>> arg{tid}_holder"
+            holder_set = f", arg{tid}_holder"
+        holder_dec_array.append(holder_dec)
+        holder_set_array.append(holder_set)
         if len(default_arg):
             func_args_convert += f"""
                         {holder_dec};
@@ -165,7 +172,7 @@ def get_def_code(df, scope_name, pyname, self_as_arg0=False):
                                 if (khash == {get_hash(args[aid][1])}u) {{
                                     // hash match {args[aid][1]}
                                     CHECK(({get_pytype_map(args[aid][0],2)}(vo)));
-                                    arg{aid} = {pytypes[aid]}(vo);
+                                    arg{aid} = {pytypes[aid]}(vo{holder_set_array[aid]});
                                     arg_filled |= 1ull << {aid};
                                     continue;
                                 }}
@@ -759,7 +766,11 @@ def compile_src(src, h, basename):
         core_name = submodule_info["attrs"]["core_name"]
     has_map = class_name in ["VarHolder", "NanoVector"]
     has_seq = class_name == "NanoVector"
-    code = f"""
+    # add extra include to avoid compile error
+    src_code = ""
+    if include_name.endswith("var_slices.h"):
+        src_code += '#include "var_holder.h"\n' 
+    src_code += f"""
     #include "pyjt/py_converter.h"
     #include "pyjt/py_arg_printer.h"
     #include "common.h"
@@ -830,7 +841,7 @@ def compile_src(src, h, basename):
 
     }}
     """
-    return code
+    return src_code
 
 def compile_single(head_file_name, src_file_name, src=None):
     basename = head_file_name.split("/")[-1].split(".")[0]

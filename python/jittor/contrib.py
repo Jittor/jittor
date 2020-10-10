@@ -42,7 +42,7 @@ Example::
         indexes[dim] = f"i{dim}-{cdim}"
         b = a.reindex(shape, indexes)
         # ugly fix for preventing large fused op 
-        if len(arr)>=10:
+        if len(arr)>=100:
             b.stop_fuse()
         if s is None:
             s = b
@@ -99,6 +99,20 @@ def slice_var_index(x, slices):
     cnt_list = 0
     extras_idx = []
     extras = []
+    has_ellipse = 0
+    ellipse_index = 0
+    for s,i in zip(slices,range(len(slices))):
+        if isinstance(s,type(...)):
+            has_ellipse+=1
+            ellipse_index = i
+    if has_ellipse>1:
+        raise Exception(f"There are more than one ...")
+    elif has_ellipse==1:
+        slices = list(slices)
+        del slices[ellipse_index]
+        while len(slices)<len(shape):
+            slices.insert(ellipse_index,slice(None))
+
     for i in range(len(shape)):
         if i>=len(slices):
             s = slice(None)
@@ -119,6 +133,7 @@ def slice_var_index(x, slices):
             step = 1 if s.step is None else s.step
             if start<0: start += sp
             if stop<0: stop += sp
+            if stop>sp+1: stop = sp
             out_shape.append(1+int(max(0, (stop-start-1)//step)))
             out_index.append(f"{start}+i{j}*{step}")
         elif isinstance(s, jt.Var):
@@ -160,3 +175,57 @@ def setitem(x, slices, value):
 
 jt.Var.__getitem__ = jt.Var.slice_var = slice_var
 jt.Var.__setitem__ = setitem
+
+# PATCH
+def getitem(x, slices):
+    if isinstance(slices, jt.Var) and slices.dtype == "bool":
+        return getitem(x, slices.where())
+    if isinstance(slices, list):
+        slices = tuple(slices)
+    return x.getitem(slices)
+
+def setitem(x, slices, value):
+    if isinstance(slices, jt.Var) and slices.dtype == "bool":
+        mask = jt.broadcast(slices, x)
+        value = jt.broadcast(value, x)
+        return mask.ternary(value, mask)
+    if isinstance(slices, list):
+        slices = tuple(slices)
+    return x.assign(x.setitem(slices, value))
+
+jt.Var.__getitem__ = jt.Var.slice_var = getitem
+jt.Var.__setitem__ = setitem
+
+def concat(arr, dim):
+    '''Concat Operator can concat a list of jt Var at a specfic dimension.
+    
+    * [in] x:   input var list for concat
+
+    * [in] dim: concat which dim
+
+    * [out] out:  concat result
+
+Example::
+
+        jt.concat([jt.array([[1],[2]]), jt.array([[2],[2]])], dim=1)
+        # return [[1],[2],[2],[2]]
+    '''
+    # TODO: low performance when concat lots of vars
+    total_dim = 0
+    if dim < 0: dim += len(arr[0].shape)
+    for a in arr:
+        total_dim += a.shape[dim]
+    cdim = 0
+    shape = list(a.shape)
+    shape[dim] = total_dim
+    s = jt.empty(shape, a.dtype)
+    slices = [slice(None)]*len(a.shape)
+    for a in arr:
+        if a.shape[dim] == 0:
+            continue
+        slices[dim] = slice(cdim, cdim+a.shape[dim])
+        # print(slices, type(a))
+        s = s.setitem(tuple(slices), a)
+        # s = jt.setitem(s, tuple(slices), a)
+        cdim += a.shape[dim]
+    return s

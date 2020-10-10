@@ -75,6 +75,12 @@ bool Op::shape_infered() {
     return true;
 }
 
+void Op::compile_optimize(string& src) {}
+
+void Op::infer_shape() {}
+void Op::run() {}
+void Op::jit_prepare() {}
+void Op::graph_optimize() {}
 
 string Op::name_ex() const {
     string a=name();

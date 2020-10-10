@@ -241,7 +241,7 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
         if "multiple_outputs" not in attrs:
             jit_cc_src.append(f"""
             VarPtr make_{cc_func_name}({", ".join(cc_make_args)}) {{
-                Op* _op = new {op_name}({", ".join(op_make_args)});
+                auto _op = new {op_name}({", ".join(op_make_args)});
                 if (_op->outputs_holder.size() != 1) {{
                     delete _op;
                     LOGf << "Wrong output size of" << \"{op_name}\";
@@ -261,7 +261,7 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
         else:
             jit_cc_src.append(f"""
             vector<VarPtr> make_{cc_func_name}({", ".join(cc_make_args)}) {{
-                Op* _op = new {op_name}({", ".join(op_make_args)});
+                auto _op = new {op_name}({", ".join(op_make_args)});
                 if (_op->flags.get(NodeFlags::_forwarded)) {{
                     vector<VarPtr> outputs = move(_op->outputs_holder);
                     delete _op;
@@ -408,6 +408,15 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
                         arg_type.replace("Var", "VarHolder")+' '+arg)
                     new_args.append(arg)
                     more_src.append(f"_op->add_inputs({arg});")
+                elif arg_type.startswith("VarSlices"):
+                    new_args_def.append(arg_def)
+                    new_args.append(arg)
+                    more_src.append(f"""
+                        vector<Var*> svars;
+                        for (int i=0; i<_op->vs.n; i++)
+                            if (_op->vs.slices[i].is_var())
+                                svars.push_back(_op->vs.slices[i].var);
+                        _op->add_inputs(svars);""")
                 else:
                     new_args_def.append(arg_def)
                     new_args.append(arg)
