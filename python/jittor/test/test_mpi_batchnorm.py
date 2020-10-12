@@ -26,10 +26,10 @@ class FakeMpiBatchNorm(nn.Module):
         self.is_train = is_train
         self.eps = eps
         self.momentum = momentum
-        self.running_mean = init.constant((num_features,), "float32", 0.0).stop_grad()
-        self.running_var = init.constant((num_features,), "float32", 1.0).stop_grad()
         self.weight = init.constant((num_features,), "float32", 1.0)
         self.bias = init.constant((num_features,), "float32", 0.0)
+        self.running_mean = init.constant((num_features,), "float32", 0.0).stop_grad()
+        self.running_var = init.constant((num_features,), "float32", 1.0).stop_grad()
 
     def execute(self, x, global_x):
         if self.is_train:

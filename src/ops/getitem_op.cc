@@ -358,7 +358,7 @@ void GetitemOp::infer_shape() {
     this->i_to_o = i_to_o.to_nano_vector();
     this->o_shape = o_shape.to_nano_vector();
 
-    LOGvvvv << "\ni_to_vs:" << i_to_vs
+    LOGV(999) << "\ni_to_vs:" << i_to_vs
         << "\ni_to_o:" << i_to_o
         << "\no_shape:" << o_shape;
 }

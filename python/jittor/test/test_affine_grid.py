@@ -9,10 +9,18 @@ import numpy as np
 from jittor.nn import affine_grid,grid_sample
 
 
+skip_this_test = False
+
+try:
+    jt.dirty_fix_pytorch_runtime_error()
+    import torch.nn.functional as F
+    import torch
+except:
+    skip_this_test = True
+
+@unittest.skipIf(skip_this_test, "No Torch found")
 class TestAffineGrid(unittest.TestCase):
     def test_affine_grid_2d(self):
-        import torch.nn.functional as F
-        import torch
         N = 8
         C = 3
         H = 256
@@ -37,8 +45,6 @@ class TestAffineGrid(unittest.TestCase):
 
 
     def test_affine_grid_3d(self):
-        import torch.nn.functional as F
-        import torch
         N = 8
         C = 3
         D = 64

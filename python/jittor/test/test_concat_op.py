@@ -51,6 +51,8 @@ class TestConcatOp(unittest.TestCase):
         check([jt.array(np.array(range(5))).reshape((5,1)), jt.array(np.array(range(1))).reshape((1,1))])
         print('concat success...')
 
+    
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
     @jt.flag_scope(use_cuda = 1)
     def test_concat_perf(self):
         def check(dim, size, backward=False):
@@ -106,6 +108,7 @@ class TestConcatOp(unittest.TestCase):
 
         '''
 
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
     @jt.flag_scope(use_cuda = 1)
     def test_concat2_perf(self):
         def check(dim, size, backward=False):

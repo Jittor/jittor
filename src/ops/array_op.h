@@ -28,6 +28,7 @@ struct ArrayOp : Op {
     
     const char* name() const override { return "array"; }
     void run() override;
+    void jit_prepare() override;
 };
 
 } // jittor
