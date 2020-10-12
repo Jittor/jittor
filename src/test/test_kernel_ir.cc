@@ -49,11 +49,11 @@ JIT_TEST(kernel_ir) {
         })", true
     );
     string code = R"(// 
-// scope: main(1), 
+// scope: <cmath>(1), aaa(1), main(1), 
 
-// C macro code:"#include <cmath>"
+// C macro code:"#include <cmath>" lvalue:"<cmath>"
 #include <cmath>
-// C macro code:"#define aaa  bbb"
+// C macro code:"#define aaa  bbb" lvalue:"aaa" rvalue:" bbb"
 #define aaa  bbb
 // C  code:"using namespace std;" raw:"1"
 using namespace std;

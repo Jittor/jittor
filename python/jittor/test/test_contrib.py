@@ -20,7 +20,7 @@ class TestContrib(unittest.TestCase):
                 arr2.append(jt.array(a))
             x = np.concatenate(tuple(arr1), dim)
             y = jt.contrib.concat(arr2, dim)
-            assert (x==y.data).all()
+            assert (x==y.data).all(), (x, y.data, arr1, arr2)
         check([2,3,4], 0, 2)
         check([2,3,4], 1, 3)
         check([2,3,4], 2, 4)

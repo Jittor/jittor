@@ -49,7 +49,7 @@ class TestSlice(unittest.TestCase):
             # print(slices)
             x = jt.random(shape)
 
-            with jt.log_capture_scope(log_vprefix="getitem=1000") as logs:
+            with jt.log_capture_scope(log_vprefix="getitem=999") as logs:
                 a = x.getitem(slices)
                 a.sync()
             b = x.data[slices]
