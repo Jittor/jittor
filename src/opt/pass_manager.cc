@@ -67,7 +67,8 @@ void PassManager::run_passes() {
             ir.children.back()->erase();
             string type = oc->op->ops[0]->outputs().front()->dtype().to_cstring();
             ir.push_back("kernel<<<1,1>>>(op0_outputp, op0->ptr<"+type+">()[0]);");
-            ir.push_back("__global__ static void kernel(jittor::"+type+"* xp, jittor::"+type+" x) { xp[0] = x; } ", &ir.before, true);
+            auto jt_type = type == "bool" ? type : "jittor::" + type;
+            ir.push_back("__global__ static void kernel("+jt_type+"* xp, "+jt_type+" x) { xp[0] = x; } ", &ir.before, true);
         }
         return;
     }
