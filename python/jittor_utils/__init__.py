@@ -88,10 +88,10 @@ def in_ipynb():
 
 @contextlib.contextmanager
 def simple_timer(name):
-    LOG.i("Timer start", name)
+    print("Timer start", name)
     now = time.time()
     yield
-    LOG.i("Time stop", name, time.time()-now)
+    print("Time stop", name, time.time()-now)
 
 @contextlib.contextmanager
 def import_scope(flags):
