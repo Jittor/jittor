@@ -149,22 +149,30 @@ def do_compile(args):
 
 pool_size = 0
 
+def pool_cleanup():
+    global p
+    p.__exit__(None, None, None)
+    del p
+
 def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
-    global pool_size
+    global pool_size, p
+    bk = mp.current_process()._config.get('daemon')
+    mp.current_process()._config['daemon'] = False
     if pool_size == 0:
         mem_bytes = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
         mem_gib = mem_bytes/(1024.**3)
         pool_size = min(16,max(int(mem_gib // 3), 1))
         LOG.i(f"Total mem: {mem_gib:.2f}GB, using {pool_size} procs for compiling.")
+        p = Pool(pool_size)
+        p.__enter__()
+        import atexit
+        atexit.register(pool_cleanup)
     cmds = [ [cmd, cache_path, jittor_path] for cmd in cmds ]
-    bk = mp.current_process()._config.get('daemon')
-    mp.current_process()._config['daemon'] = False
     try:
-        with Pool(pool_size) as p:
-            n = len(cmds)
-            dp = DelayProgress(msg, n)
-            for i,_ in enumerate(p.imap_unordered(do_compile, cmds)):
-                dp.update(i)
+        n = len(cmds)
+        dp = DelayProgress(msg, n)
+        for i,_ in enumerate(p.imap_unordered(do_compile, cmds)):
+            dp.update(i)
     finally:
         mp.current_process()._config['daemon'] = bk
 

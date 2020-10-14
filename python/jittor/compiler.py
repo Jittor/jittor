@@ -18,6 +18,7 @@ import jittor_utils as jit_utils
 from jittor_utils import LOG, run_cmd, cache_path, find_exe, cc_path, cc_type, cache_path
 from . import pyjt_compiler
 from . import lock
+from jittor import __version__
 
 def find_jittor_path():
     return os.path.dirname(__file__)
@@ -615,7 +616,7 @@ def compile_custom_ops(
     if len(gen_name) > 100:
         gen_name = gen_name[:80] + "___hash" + str(hash(gen_name))
 
-    includes = set(includes)
+    includes = sorted(list(set(includes)))
     includes = "".join(map(lambda x: f" -I'{x}' ", includes))
     LOG.vvvv(f"Include flags:{includes}")
 
@@ -828,6 +829,8 @@ jittor_path = find_jittor_path()
 check_debug_flags()
 
 sys.path.append(cache_path)
+LOG.i(f"Jittor({__version__}) src: {jittor_path}")
+LOG.i(f"cache_path: {cache_path}")
 
 with jit_utils.import_scope(import_flags):
     jit_utils.try_import_jit_utils_core()
