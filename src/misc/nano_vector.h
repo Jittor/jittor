@@ -39,7 +39,7 @@ struct Slice {
         }
         if (start<0) start += size;
         mask = 0;
-        ASSERT(start==step || (start>=0 && stop>=-1 && start<size && stop<=size))
+        ASSERT(start==stop || (start>=0 && stop>=-1 && start<size && stop<=size))
             << "slice overflow:" << start << stop << step;
     }
 };
