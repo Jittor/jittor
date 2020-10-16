@@ -188,7 +188,7 @@ def setitem(x, slices, value):
     if isinstance(slices, jt.Var) and slices.dtype == "bool":
         mask = jt.broadcast(slices, x)
         value = jt.broadcast(value, x)
-        return mask.ternary(value, mask)
+        return x.assign(mask.ternary(value, mask))
     if isinstance(slices, list):
         slices = tuple(slices)
     return x.assign(x.setitem(slices, value))
