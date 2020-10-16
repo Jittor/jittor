@@ -248,15 +248,15 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
                     LOGf << "Wrong output size of" << \"{op_name}\";
                 }}
                 if (_op->flags.get(NodeFlags::_forwarded)) {{
-                    VarPtr output(move(_op->outputs_holder[0]));
+                    VarPtr _out(move(_op->outputs_holder[0]));
                     delete _op;
-                    return output;
+                    return _out;
                 }}
                 _op->outputs_holder[0]->set_inputs({{_op}});
-                VarPtr output(move(_op->outputs_holder[0]));
+                VarPtr _out(move(_op->outputs_holder[0]));
                 {src.replace("->var","")};
                 _op->init();
-                return output;
+                return _out;
             }}
             """)
         else:
@@ -264,16 +264,16 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
             vector<VarPtr> make_{cc_func_name}({", ".join(cc_make_args)}) {{
                 auto _op = new {op_name}({", ".join(op_make_args)});
                 if (_op->flags.get(NodeFlags::_forwarded)) {{
-                    vector<VarPtr> outputs = move(_op->outputs_holder);
+                    vector<VarPtr> _outs = move(_op->outputs_holder);
                     delete _op;
-                    return outputs;
+                    return _outs;
                 }}
-                vector<VarPtr> outputs = move(_op->outputs_holder);
-                for (uint i=0; i<outputs.size(); i++)
-                    outputs[i]->set_inputs({{_op}});
+                vector<VarPtr> _outs = move(_op->outputs_holder);
+                for (uint i=0; i<_outs.size(); i++)
+                    _outs[i]->set_inputs({{_op}});
                 {src.replace("->var","")};
                 _op->init();
-                return outputs;
+                return _outs;
             }}
             """)
         if pybind_name == 'None':
@@ -291,7 +291,14 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
             /*{doc_string}*/
             // @pyjt({",".join(pyjt_names)})
             vector<VarHolder*> {cc_func_name}({", ".join(cc_args)}) {{
-                return make_vh_vector(make_{cc_func_name}({", ".join(op_args)}));
+                {   f'return make_vh_vector(make_{cc_func_name}({", ".join(op_args)}));'
+                    if "replace_outputs" not in attrs else
+                    f'''auto rt = make_vh_vector(make_{cc_func_name}({", ".join(op_args)}));
+                    ASSERT(rt.size() == outputs.size());
+                    for (int i=0; i<outputs.size(); i++)
+                        outputs[i]->assign(rt[i]);
+                    return rt;
+                    '''}
             }}
             """)
         else:
