@@ -431,7 +431,13 @@ DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj);
 CHECK_IS_1(vector);
 
 DEF_IS_1(vector, bool) is_type(PyObject* obj) {
-    return PyList_CheckExact(obj) || PyTuple_CheckExact(obj);
+    if (!(PyList_CheckExact(obj) || PyTuple_CheckExact(obj)))
+        return false;
+    auto size = Py_SIZE(obj);
+    if (!size)
+        return true;
+    auto arr = PySequence_Fast_ITEMS(obj);
+    return is_type<typename T::value_type>(arr[0]);
 }
 
 DEF_IS_1(vector, PyObject*) to_py_object(const T& a) {

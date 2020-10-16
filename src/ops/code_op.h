@@ -230,6 +230,10 @@ struct CodeOp : Op {
     // @attrs(multiple_outputs)
     CodeOp(vector<NanoVector>&& shapes, vector<NanoString>&& dtypes, vector<Var*>&& inputs={}, string&& cpu_src="", vector<string>&& cpu_grad_src={}, string&& cpu_header="", string&& cuda_src="", vector<string>&& cuda_grad_src={}, string&& cuda_header="");
 
+    // @attrs(multiple_outputs,replace_outputs)
+    CodeOp(vector<Var*>&& inputs, vector<Var*>&& outputs, string&& cpu_src="", vector<string>&& cpu_grad_src={}, string&& cpu_header="", string&& cuda_src="", vector<string>&& cuda_grad_src={}, string&& cuda_header="");
+
+
     const char* name() const override { return "code"; }
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;
     DECLARE_jit_run;

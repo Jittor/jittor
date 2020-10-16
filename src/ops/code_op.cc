@@ -32,7 +32,6 @@ CodeOp::CodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs,
     flags.set(NodeFlags::_cpu, !!this->cpu_src.size());
     flags.set(NodeFlags::_cuda, !!this->cuda_src.size());
     _outputs.push_back(create_output(shape, dtype));
-    CHECKop(_inputs.size(),<=,10);
 
     if (_outputs[0]->num < 0) {
         flags.set(NodeFlags::_vary_shape);
@@ -52,8 +51,6 @@ CodeOp::CodeOp(
     flags.set(NodeFlags::_cuda, !!this->cuda_src.size());
     CHECKop(shapes.size(),==,dtypes.size()) << "Number of outputs' shapes and dtypes should be the same";
     _outputs.resize(shapes.size());
-    CHECKop(_inputs.size(),<=,10);
-    CHECKop(_outputs.size(),<=,10);
     CHECKop(_outputs.size(),>,0);
     for (int i=0; i<shapes.size(); i++) {
         _outputs[i] = create_output(shapes[i], dtypes[i]);
@@ -61,6 +58,27 @@ CodeOp::CodeOp(
             flags.set(NodeFlags::_vary_shape);
             check_vary_shape(_outputs[i]->shape);
         }
+    }
+}
+
+CodeOp::CodeOp(
+    vector<Var*>&& inputs, vector<Var*>&& outputs, 
+    string&& cpu_src, vector<string>&& cpu_grad_src, string&& cpu_header, 
+    string&& cuda_src, vector<string>&& cuda_grad_src, string&& cuda_header)
+    : _inputs(inputs), cpu_src(move(cpu_src)), cpu_grad_src(move(cpu_grad_src)), cpu_header(move(cpu_header)),
+    cuda_src(move(cuda_src)), cuda_grad_src(move(cuda_grad_src)), cuda_header(move(cuda_header))
+{
+    flags.set(NodeFlags::_cpu, !!this->cpu_src.size());
+    flags.set(NodeFlags::_cuda, !!this->cuda_src.size());
+    _outputs.resize(outputs.size());
+    CHECKop(_outputs.size(),>,0);
+    for (int i=0; i<outputs.size(); i++) {
+        auto o = outputs[i];
+        _outputs[i] = create_output(o->shape, o->dtype());
+        _outputs[i]->share_with(o);
+        /*
+            TODO: vary shape not allowed in direct output
+        */
     }
 }
 
