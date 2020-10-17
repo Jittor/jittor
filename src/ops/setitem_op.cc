@@ -324,10 +324,18 @@ void SetitemOp::jit_run() {
         )
         auto iid = 0 @for(d, 0, IDIM,  + iid@d * istride@d);
 
-        @if(@strcmp(@OP,void)==0,
-            op[iid] = (Ti)dp[did],
-            op[iid] = @expand_macro(@OP, Ti, op[iid], dp[did])
-        );
+        @if(@is_def(JIT_cpu),
+            @if(@strcmp(@OP,void)==0,
+                op[iid] = (Ti)dp[did],
+                op[iid] = @expand_macro(@OP, Ti, op[iid], dp[did])
+            );
+        ,
+            @if(@strcmp(@OP,void)==0, op[iid] = (Ti)dp[did],
+            @if(@strcmp(@OP,add)==0, atomicAdd(&op[iid], (Ti)dp[did]),
+                op[iid] = @expand_macro(@OP, Ti, op[iid], dp[did])
+            )
+            );
+        )
     }
 }
 #endif // JIT
