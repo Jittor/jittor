@@ -176,6 +176,14 @@ VarPtr SetitemOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 }
 
 void SetitemOp::jit_prepare() {
+    for (int i=0; i<o_shape.size(); i++)
+        if (o_shape[i]<0) {
+            // because output shape is inferd, check in
+            // executor not work
+            // reinfer shape if o_shape has vary shape
+            infer_shape();
+            break;
+        }
     auto data = input(1);
     add_jit_define("OP", op);
     add_jit_define("Td", data->dtype());
