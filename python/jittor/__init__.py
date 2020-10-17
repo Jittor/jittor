@@ -575,6 +575,10 @@ class Module:
             ss.append(s)
         return ", ".join(ss)
 
+    def apply(self, func):
+        for m in self.modules():
+            func(m)
+
     def load_parameters(self, params):
         n_failed = 0
         for key in params.keys():
