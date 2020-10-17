@@ -1142,6 +1142,14 @@ class Sequential(Module):
                 self.append(mod)
     def __getitem__(self, idx):
         return self.layers[idx]
+    def __iter__(self):
+        return self.layers.values().__iter__()
+    def keys(self):
+        return self.layers.keys()
+    def values(self):
+        return self.layers.values()
+    def items(self):
+        return self.layers.items()
     def execute(self, x):
         for k, layer in self.layers.items():
             x = layer(x)
