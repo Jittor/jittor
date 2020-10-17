@@ -1,5 +1,16 @@
-error_msg = "Jittor only supports Ubuntu>=16.04 currently."
+error_msg = """Jittor only supports Ubuntu>=16.04 currently.
+For other OS, use Jittor may be risky.
+We strongly recommended docker installation:
 
+# CPU only
+>>> docker run -it --network host jittor/jittor
+# CPU and CUDA
+>>> docker run -it --network host jittor/jittor-cuda
+
+Reference:
+1. Windows/Mac/Linux通过Docker安装计图: https://cg.cs.tsinghua.edu.cn/jittor/tutorial/2020-5-15-00-00-docker/
+"""
+from warnings import warn
 try:
     with open("/etc/os-release", "r", encoding='utf8') as f:
         s = f.read().splitlines()
@@ -7,9 +18,10 @@ try:
         for line in s:
             a = line.split('=')
             m[a[0]] = a[1].replace("\"", "")
-except:
-    raise RuntimeError(error_msg)
-assert m["NAME"] == "Ubuntu" and float(m["VERSION_ID"])>16, error_msg
+    assert m["NAME"] == "Ubuntu" and float(m["VERSION_ID"])>16, error_msg
+except Exception as e:
+    print(e)
+    warn(error_msg)
 
 import setuptools
 from setuptools import setup, find_packages
