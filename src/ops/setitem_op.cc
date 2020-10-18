@@ -27,8 +27,6 @@ namespace jittor {
 
 static auto make_array = get_op_info("array")
     .get_constructor<VarPtr, const void*, NanoVector, NanoString>();
-static auto make_number = get_op_info("number")
-    .get_constructor<VarPtr, float, Var*>();
 static auto make_getitem = get_op_info("getitem")
     .get_constructor<VarPtr, Var*, VarSlices&&>();
 static auto make_setitem = get_op_info("setitem")
