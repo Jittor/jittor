@@ -149,6 +149,14 @@ jt.mkl_ops.mkl_conv(x, w, 1, 2).sync()
         da = jt.grad(a.sigmoid(), a)
         assert np.isnan(da.data).sum()==0, da.data
 
+    def test_sequential(self):
+        x = jt.nn.Sequential(lambda x:x, lambda x:x)
+        n = 0
+        for a in x:
+            n += 1
+        assert n == 2
+        assert list(x.keys()) == [0,1]
+
 
 if __name__ == "__main__":
     unittest.main()

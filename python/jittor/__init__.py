@@ -7,7 +7,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-__version__ = '1.1.7.16'
+__version__ = '1.2.0.6'
 from . import lock
 with lock.lock_scope():
     from . import compiler
@@ -233,10 +233,21 @@ def ones(shape, dtype="float32"):
         shape = (shape,)
     return unary(1, dtype).broadcast(shape)
 
+def ones_like(x):
+    return ones(x.shape,x.dtype)
+
 def zeros(shape, dtype="float32"):
     if not isinstance(shape, (NanoVector, Sequence)):
         shape = (shape,)
     return unary(0, dtype).broadcast(shape)
+
+def full(shape,val,dtype="float32"):
+    if not isinstance(shape, (NanoVector, Sequence)):
+        shape = (shape,)
+    return unary(val, dtype).broadcast(shape)
+
+def zeros_like(x):
+    return zeros(x.shape,x.dtype)
 
 flags = core.flags()
 
@@ -311,9 +322,17 @@ def squeeze(x, dim):
     return x.reshape(shape[:dim] + shape[dim+1:])
 Var.squeeze = squeeze
 
-def clamp(x, min_v, max_v):
-    assert min_v <= max_v
-    return x.maximum(min_v).minimum(max_v)
+def clamp(x, min_v=None, max_v=None):
+    if x.shape[0]==0:
+        return x
+    if min_v is not None and max_v is not None:
+        assert min_v <= max_v
+    if min_v is not None:
+        x = x.maximum(min_v)
+    if max_v is not None:
+        x = x.minimum(max_v)
+    return x
+
 Var.clamp = clamp
 
 def type_as(a, b):
@@ -329,6 +348,12 @@ Var.masked_fill = masked_fill
 
 def sqr(x): return x*x
 Var.sqr = sqr
+
+def pow(x, y):
+    if isinstance(y, (ori_int, ori_float)) and y == 2:
+        return x.sqr()
+    return core.ops.pow(x, y)
+Var.pow = Var.__pow__ = pow
 
 def argmax(x, dim, keepdims:bool=False):
     return x.arg_reduce("max", dim, keepdims)
@@ -564,6 +589,17 @@ class Module:
         self.dfs([], None, callback, callback_leave)
         return _uniq(ps)
 
+    def named_parameters(self):
+        ps = self.parameters()
+        return [ (p.name(), p) for p in ps ]
+
+    def state_dict(self):
+        ps = self.parameters()
+        return { p.name(): p for p in ps }
+
+    def load_state_dict(self, params):
+        self.load_parameters(params)
+
     def modules(self):
         ms = []
         def callback(parents, k, v, n):
@@ -571,6 +607,37 @@ class Module:
                 ms.append(v)
         self.dfs([], None, callback, None)
         return _uniq(ms)
+
+    def named_modules(self):
+        ms = []
+        stack = []
+        def callback(parents, k, v, n):
+            if isinstance(v, Module):
+                stack.append(str(k))
+                name = ".".join(stack[1:])
+                ms.append((name, v))
+        def callback_leave(parents, k, v, n):
+            stack.pop()
+        self.dfs([], "", callback, callback_leave)
+        return ms
+
+    def register_forward_hook(self, func):
+        cls = self.__class__
+        self.__fhook__ = func
+        if hasattr(cls, "__hooked__"):
+            return
+        cls.__hooked__ = True
+        origin_call = cls.__call__
+        def new_call(self, *args, **kw):
+            ret = origin_call(self, *args, **kw)
+            if hasattr(self, "__fhook__"):
+                if len(kw):
+                    self.__fhook__(self, args, ret, kw)
+                else:
+                    self.__fhook__(self, args, ret)
+            return ret
+        self.__class__.__call__ = new_call
+
 
     def children(self):
         cd = []
@@ -593,6 +660,10 @@ class Module:
             ss.append(s)
         return ", ".join(ss)
 
+    def apply(self, func):
+        for m in self.modules():
+            func(m)
+
     def load_parameters(self, params):
         n_failed = 0
         for key in params.keys():
@@ -611,6 +682,8 @@ class Module:
                 else:
                     if hasattr(v, k):
                         v = getattr(v, k)
+                        assert isinstance(v, (Module, Var)), \
+                            f"expect a jittor Module or Var, but got <{v.__class__.__name__}>, key: {key}"
                     else:
                         end = 1
                         break
@@ -619,6 +692,8 @@ class Module:
                     n_failed += 1
                     LOG.w(f'load parameter {key} failed ...')
             else:
+                assert isinstance(v, Var), \
+                    f"expect a jittor Var, but got <{v.__class__.__name__}>, key: {key}"
                 LOG.v(f'load parameter {key} success ...')
                 if isinstance(params[key], np.ndarray) or isinstance(params[key], list):
                     v.update(array(params[key]))
@@ -805,6 +880,7 @@ def make_module(func, exec_n_args=1):
             return f"{func.__name__}({self.extra_repr()})"
         def extra_repr(self):
             return ",".join(map(str, self.args))
+    MakeModule.__name__ = func.__name__
     return MakeModule
 
 
@@ -854,12 +930,44 @@ def jittor_exit():
     core.cleanup()
 atexit.register(jittor_exit)
 
-Var.__str__ = lambda x: str(x.data)
-Var.__repr__ = lambda x: str(x.data)
+def vtos(v):
+    return f"jt.Var({v.data}, dtype={v.dtype})"
+
+Var.__str__ = vtos
+Var.__repr__ = vtos
 Var.peek = lambda x: f"{x.dtype}{x.shape}"
 
+def size(v, dim=None):
+    if dim is None:
+        return v.shape
+    return v.shape[dim]
+Var.size = size
+
+def item(v):
+    return v.data.item()
+
+def to_int(v):
+    dtype = str(v.dtype)
+    assert dtype.startswith("int")
+    return v.item()
+
+def to_float(v):
+    dtype = str(v.dtype)
+    assert dtype.startswith("float")
+    return v.item()
+
+def to_bool(v):
+    dtype = str(v.dtype)
+    assert dtype.startswith("int") or dtype=="bool"
+    return bool(v.item())
+
+Var.item = item
+Var.__int__ = to_int
+Var.__float__ = to_float
+Var.__bool__ = to_bool
 
 ori_int = int
+ori_float = float
 
 int = int32
 Var.int = Var.int32

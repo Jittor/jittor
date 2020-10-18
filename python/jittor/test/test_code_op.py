@@ -115,6 +115,26 @@ class TestCodeOp(unittest.TestCase):
         assert (b.data == [3,2]).all()
         assert (c.data[:3] == [3,2,1]).all()
 
+    def test_return_multi_output(self):
+        a = jt.array([3,2,1])
+        b = jt.array([1,2])
+        c = jt.array([3,4,5,6])
+        jt.code([a], [b,c],
+            cpu_src="""
+                @alias(a, in0)
+                @alias(b, out0)
+                @alias(c, out1)
+                for (int i=0; i<a_shape0; i++) {
+                    if (i<b_shape0) @b(i) += @a(i);
+                    if (i<c_shape0) @c(i) += @a(i);
+                }
+            """
+        )
+        assert b.shape == [2]
+        assert c.shape == [4]
+        assert (b.data == [4,4]).all()
+        assert (c.data[:3] == [6,6,6]).all()
+
     def test_multi_output2(self):
         a = jt.array([3,2,1])
         b,c = jt.code([(1,), (1,)], [a.dtype, a.dtype], [a],

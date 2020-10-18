@@ -74,8 +74,12 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
     vector<Node*> bfs_q;
     bfs_q.reserve(vars.size());
     int start_var_num = 0;
-    {
+    while (1) {
+        op_num = 0;
+        start_var_num = 0;
+        bfs_q.clear();
         // get all nodes need to be executed
+        int need_opt = 0;
         auto t = ++Node::tflag_count;
         for (Var* v : vars)
             if (!v->is_finished() && v->tflag != t) {
@@ -89,6 +93,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
             for (auto i : node->_inputs)
                 if (i.node->tflag != t && !i.node->is_finished()) {
                     i.node->tflag = t;
+                    need_opt += i.node->flags.get(NodeFlags::_has_gopt);
                     bfs_q.push_back(i.node);
                 }
             // this var has been fetched
@@ -99,9 +104,17 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
                         !n.node->is_finished() &&
                         n.node->flags.get(NodeFlags::_fetch)) {
                         n.node->tflag = t;
+                        need_opt += n.node->flags.get(NodeFlags::_has_gopt);
                         bfs_q.push_back(n.node);
                     }
                 }
+            }
+        }
+        if (!need_opt) break;
+        for (Node* n : bfs_q) {
+            if (n->flags.get(NodeFlags::_has_gopt)) {
+                n->op()->graph_optimize();
+                n->flags.set(NodeFlags::_has_gopt, 0);
             }
         }
     }
@@ -464,7 +477,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
             checkCudaErrors(cudaDeviceSynchronize());
         }));
     }
-    LOGvv << "cudaDeviceSynchronize times:" << sync_times << "/" <<queue.size();
+    LOGvv << "cudaDeviceSynchronize times:" << sync_times << "/" <<queue.size() << "device_sync:" << device_sync;
     #endif
 }
 

@@ -49,6 +49,8 @@ void CubArgReduceOp::infer_shape() {
     if (keepdims) {
         shape.push_back(1);
     }
+    if (shape.size() == 0)
+        shape.push_back(1);
     y->set_shape(shape);
     y_key->set_shape(shape);
 }

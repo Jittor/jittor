@@ -191,6 +191,7 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
                 FusedOp& fused_op = *fop_needs_compile[-rid-1];
                 op = &fused_op;
                 LOGvv << "Compile FusedOp:" << op;
+                LOGV(11) << "FusedOps:" << fused_op.ops;
                 fused_op.context = new FusedOpContext();
                 fused_op.context->setup(&fused_op);
                 fused_op.do_prepare();
@@ -238,11 +239,11 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
             }
         }
     }; // end of threads.launch_all
-    int active_threads = std::min(thread_num, (int)op_needs_compile.size());
-    threads.launch_all(active_threads, func);
 
     typedef std::chrono::high_resolution_clock Time;
     auto start = Time::now();
+    int active_threads = std::min(thread_num, (int)op_needs_compile.size());
+    threads.launch_all(active_threads, func);
     int prev_i = 0;
     bool change_line = false;
     int sleep_us = 10;

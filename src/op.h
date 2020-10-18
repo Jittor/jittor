@@ -38,15 +38,18 @@ struct Op : Node {
     
     virtual VarPtr grad(Var* out, Var* dout, Var* v, int v_index);
     virtual void grads(Var** douts, VarPtr* dins);
-    virtual void infer_shape() {}
-    virtual void run() {};
-    virtual void jit_prepare() {};
+    virtual void infer_shape();
+    virtual void run();
+    virtual void jit_prepare();
     virtual void do_jit_prepare();
     virtual const char* name() const = 0;
     virtual void statistics(uint64_t& in, uint64_t& out, uint64_t& compute);
     virtual void do_prepare();
     virtual void do_run_after_prepare();
     virtual void do_run();
+    virtual VarPtr duplicate();
+    virtual void compile_optimize(string& src);
+    virtual void graph_optimize();
     void jit_run();
 
     string name_ex() const;

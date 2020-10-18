@@ -10,7 +10,8 @@
 import jittor as jt
 import numpy as np
 import math
-from collections.abc import Sequence
+from collections.abc import Sequence,Iterable
+
 
 def repeat(x, *shape):
     r'''
@@ -89,6 +90,27 @@ def chunk(x, chunks, dim=0):
     return res
 jt.Var.chunk = chunk
 
+
+def expand(x, shape):
+    return x.broadcast(shape)
+jt.Var.expand = expand
+
+
+def median(x,dim=None,keepdim=False):
+    if dim is None:
+        x = x.reshape(-1)
+        dim=0
+    _,x = x.argsort(dim)
+    slices = [slice(None) for i in range(dim-1)]
+    k = (x.shape[dim]-1)//2
+    if keepdim:
+        slices.append(slice(k,k+1))
+    else:
+        slices.append(k)
+    return x[tuple(slices)]
+
+jt.Var.median = median
+
 def stack(x, dim=0):
     r'''
     Concatenates sequence of vars along a new dimension.
@@ -111,8 +133,10 @@ def stack(x, dim=0):
         [[[1 2 3]
         [[4 5 6]]]
     '''
-    assert isinstance(x, list)
-    assert len(x) >= 2
+    assert isinstance(x, Sequence)
+    if len(x) < 2:
+        return x[0].unsqueeze(dim)
+
     res = [x_.unsqueeze(dim) for x_ in x]
     return jt.contrib.concat(res, dim=dim)
 jt.Var.stack = stack
@@ -135,6 +159,10 @@ def flip(x, dim=0):
         [[4 3 2 1]]
     '''
     assert isinstance(dim, int)
+    if dim<0:
+        dim+=x.ndim
+    assert dim>=0 and dim<len(x.shape)
+
     tar_dims = []
     for i in range(len(x.shape)):
         if i == dim:
@@ -253,6 +281,8 @@ def unbind(x, dim=0):
     if dim < 0: dim += len(x.shape)
     return [x[(slice(None),)*dim+(i,)] for i in range(x.shape[dim])]
 
+jt.Var.unbind = unbind
+
 def make_grid(x, nrow=8, padding=2, normalize=False, range=None, scale_each=False, pad_value=0):
     assert range == None
     assert scale_each == False
@@ -263,3 +293,321 @@ def make_grid(x, nrow=8, padding=2, normalize=False, range=None, scale_each=Fals
     return x.reindex([c, h*ncol+(ncol+1)*padding, w*nrow+(nrow+1)*padding], 
                      [f"i1/{padding+h}*{nrow}+i2/{padding+w}", "i0", 
                       f"i1-i1/{padding+h}*{padding+h}-{padding}", f"i2-i2/{padding+w}*{padding+w}-{padding}"], overflow_value=pad_value)
+
+
+def _ntuple(n):
+    def parse(x):
+        if isinstance(x, Iterable):
+            return x
+        return tuple([x]*n)
+    return parse
+
+_single = _ntuple(1)
+_pair = _ntuple(2)
+_triple = _ntuple(3)
+_quadruple = _ntuple(4)
+
+
+def unique(x):
+    r'''
+    Returns the unique elements of the input tensor.
+
+    Args:
+
+        x– the input tensor.
+    '''
+    x = x.reshape(-1)
+    _,x = jt.argsort(x)
+    index2 = [i for i in range(1,x.shape[0])]
+    index1 = [i for i in range(x.shape[0]-1)]
+    y = x[1:][x[index2] != x[index1]]
+    x = jt.contrib.concat([x[:1],y],dim=0)
+    return x
+
+jt.Var.unique = unique
+
+
+def hypot(a,b):
+    return jt.sqrt(a.sqr()+b.sqr())
+
+def rad2deg(x):
+    return 180 * x / np.pi
+
+jt.Var.rad2deg = rad2deg
+
+def deg2rad(x):
+    return x * np.pi / 180.
+
+jt.Var.deg2rad = deg2rad
+
+def arctan2(y,x):
+    angle = jt.zeros(x.shape,dtype=x.dtype)
+    mask = x!=0.0
+    if angle[mask].numel()>0:
+        angle[mask] = jt.arctan(y[mask]/x[mask])
+        
+    mask = (y<0) & (x<0)
+    if angle[mask].numel()>0:
+        angle[mask] -= np.pi
+        
+    mask = (y>0) &(x<0)
+    if angle[mask].numel()>0:
+        angle[mask] +=np.pi
+    return angle
+
+
+
+def nonzero(x):
+    r'''
+    Return the index of the elements of input tensor which are not equal to zero.
+    '''
+    x = jt.where(x)
+    x = [xx.unsqueeze(1) for xx in x]
+    if len(x)<2:
+        return x[0]
+    x = jt.contrib.concat(x,dim=1)
+    return x
+
+jt.Var.nonzero = nonzero
+
+
+def arange(start=0, end=None, step=1,dtype=None):
+    if end is None:
+        end,start = start,0
+    l = round((end-start)//step)+1
+    if (l-1)*step+start>=end:
+        l-=1
+    x = jt.index((l,),0)
+    x = x*step+start
+    if dtype is not None:
+        x= x.cast(dtype)
+    return x
+
+def randperm(n, dtype="int64"):
+    x = np.arange(n)
+    np.random.shuffle(x)
+    return jt.array(x).cast(dtype)
+
+def log2(x):
+    return jt.log(x)/math.log(2.0)
+
+jt.Var.log2 = log2
+
+def item(x):
+    assert x.ndim==1 and x.shape[0]==1
+    return x.data[0]
+
+jt.Var.item  = item
+
+def meshgrid(*tensors):
+    r'''
+    Take N tensors, each of which can be 1-dimensional vector, and create N n-dimensional grids, 
+    where the i th grid is defined by expanding the i th input over dimensions defined by other inputs.
+    '''
+    size = len(tensors)
+    shape = []
+    for i in range(size):
+        assert isinstance(tensors[i],jt.Var) and tensors[i].ndim==1
+        shape.append(tensors[i].shape[0])
+    grids = []
+    view_shape = [1]*size
+    for i in range(size):
+        vs = view_shape[:]
+        vs[i]=-1
+        grids.append(tensors[i].reshape(vs).expand(shape))
+
+    return grids
+
+
+def split(d,split_size,dim):
+    r'''
+    Splits the tensor into chunks. Each chunk is a view of the original tensor.
+
+    If  split_size is an integer type, then tensor will be split into equally sized chunks (if possible). Last chunk will be smaller if the tensor size along the given dimension dim is not divisible by split_size.
+
+    If split_size is a list, then tensor will be split into len(split_size) chunks with sizes in dim according to split_size_or_sections.
+   
+    Args:
+        d (Tensor) – tensor to split.
+
+        split_size (int) or (list(int)) – size of a single chunk or list of sizes for each chunk
+
+        dim (int) – dimension along which to split the tensor.
+    '''
+    if isinstance(split_size,int):
+        shape = d.shape[dim]
+        if shape % split_size == 0:
+            split_size = [split_size]*(shape//split_size)
+        else:
+            split_size = [split_size]*(shape//split_size)+[shape%split_size]
+    if isinstance(split_size, Iterable):
+        assert sum(split_size)==d.shape[dim]
+
+    if dim<0:
+        dim+=d.ndim
+        
+    ans = []
+    last = 0
+    for i in split_size:
+        if i==0:
+            shape = list(d.shape)
+            shape[dim]=0
+            new_d = jt.zeros(tuple(shape),dtype=d.dtype)
+            ans.append(new_d)
+            continue
+
+        ss = (slice(None),)*dim+(slice(last,last+i),)
+        new_d = d[ss]
+        last +=i
+        ans.append(new_d)
+    return tuple(ans)
+
+jt.Var.split = split
+
+def tolist(x):
+    return x.numpy().tolist()
+jt.Var.tolist = tolist
+
+def topk(input, k, dim=None, largest=True, sorted=True):
+    if input.numel()==0:
+        return jt.array([],dtype=input.dtype),jt.array([],dtype='int32')
+    if dim is None:
+        dim = -1
+    if dim<0:
+        dim+=input.ndim
+    
+    index,values = jt.argsort(input,dim=dim,descending=largest)
+    dims = (slice(None),)*dim+(slice(0,k),)
+    indices = index[dims]
+    values = values[dims]
+    return values,indices
+
+jt.Var.topk = topk
+
+def kthvalue(input, k, dim=None, keepdim=False):
+    if dim is None:
+        dim = -1
+    if dim<0:
+        dim+=input.ndim
+    index,values = jt.argsort(input,dim=dim)
+    dims = (slice(None),)*dim+(slice(k-1,k),)
+    indices = index[dims]
+    values = values[dims]
+    if not keepdim and indices.ndim>1:
+        indices = indices.squeeze(dim)
+        values = values.squeeze(dim)
+    return values,indices
+
+jt.Var.kthvalue = kthvalue
+
+
+def gather(x,dim,index):
+    if dim<0:
+        dim+=index.ndim
+    x_shape = list(x.shape )
+    i_shape = list(index.shape)
+    assert i_shape[dim]>0
+    assert x.ndim == index.ndim
+    i_shape[dim]=x_shape[dim]
+    assert i_shape == x_shape
+    ins = []
+    for i in range(index.ndim):
+        ins.append(jt.index(index.shape,dim=i))
+    ins[dim]=index
+    return x.reindex(ins)
+
+
+def prod(x,dim=0):
+    x = jt.log(x)
+    x = x.sum(dim=dim)
+    return jt.exp(x)
+
+jt.Var.prod = prod
+
+def cumsum_forward(np, data):
+    a = data['inputs'][0]
+    b = data['outputs'][0]
+    np.cumsum(a, axis=1, out=b)
+
+def cumsum_backward(np, data):
+    dout = data['dout']
+    out = data['outputs'][0]
+    np.cumsum(dout[:, ::-1], axis=1, out=out)
+    np.copyto(out, out[:, ::-1])
+
+def cumsum(x, dim=None):
+    '''
+    Parameters:
+    -----------
+    x: [batch_size, N], jt.var
+
+    Returns:
+    --------
+    the cumulative sum of x
+    '''
+    return jt.numpy_code(x.shape, x.dtype, [x], cumsum_forward, [cumsum_backward])
+
+jt.Var.cumsum = cumsum
+
+def cumprod(x,dim=0):
+    x = jt.log(x)
+    x = cumsum(x,dim=dim)
+    return jt.exp(x)
+
+jt.Var.cumprod=cumprod
+
+def nms(dets,thresh):
+    '''
+      dets jt.array [x1,y1,x2,y2,score]
+      x(:,0)->x1,x(:,1)->y1,x(:,2)->x2,x(:,3)->y2,x(:,4)->score
+    '''
+    threshold = str(thresh)
+    order = jt.argsort(dets[:,4],descending=True)[0]
+    dets = dets[order]
+    s_1 = '(@x(j,2)-@x(j,0)+1)*(@x(j,3)-@x(j,1)+1)'
+    s_2 = '(@x(i,2)-@x(i,0)+1)*(@x(i,3)-@x(i,1)+1)'
+    s_inter_w = 'max((Tx)0,min(@x(j,2),@x(i,2))-max(@x(j,0),@x(i,0))+1)'
+    s_inter_h = 'max((Tx)0,min(@x(j,3),@x(i,3))-max(@x(j,1),@x(i,1))+1)'
+    s_inter = s_inter_h+'*'+s_inter_w
+    iou = s_inter + '/(' + s_1 +'+' + s_2 + '-' + s_inter + ')'
+    fail_cond = iou+'>'+threshold
+    selected = jt.candidate(dets, fail_cond)
+    return order[selected]
+
+
+jt.Var.expand = jt.Var.broadcast
+jt.Var.expand_as = jt.Var.broadcast_var
+
+
+def index_fill_(x,dim,indexs,val):
+    r'''
+    Fills the elements of the input tensor with value val by selecting the indices in the order given in index.
+
+    Args:
+        x - the input tensor
+        dim - dimension along which to index
+        index – indices of input tensor to fill in
+        val – the value to fill with
+    '''
+    overflow_conditions = [f'i{dim}=={i}'for i in indexs]
+    indexs = [f'i{i}' for i in range(len(x.shape))]
+    return x.reindex(shape = x.shape,indexes = indexs,overflow_conditions=overflow_conditions,overflow_value=val)
+
+def triu_(x,diagonal=0):
+    r'''
+    Returns the upper triangular part of a matrix (2-D tensor) or batch of matrices input, the other elements of the result tensor out are set to 0.
+
+    The upper triangular part of the matrix is defined as the elements on and above the diagonal.
+
+    Args:
+        x – the input tensor.
+
+        diagonal – the diagonal to consider,default =0
+    '''
+    l = len(x.shape)
+    assert l>1
+    overflow_conditions=[f'i{l-1}<i{l-2}+{diagonal}']
+    indexs = [f'i{i}' for i in range(l)]
+    return x.reindex(x.shape,indexs,overflow_conditions=overflow_conditions,overflow_value=0)
+
+jt.Var.triu_ = triu_

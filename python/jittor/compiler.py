@@ -18,6 +18,7 @@ import jittor_utils as jit_utils
 from jittor_utils import LOG, run_cmd, cache_path, find_exe, cc_path, cc_type, cache_path
 from . import pyjt_compiler
 from . import lock
+from jittor import __version__
 
 def find_jittor_path():
     return os.path.dirname(__file__)
@@ -241,38 +242,38 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
         if "multiple_outputs" not in attrs:
             jit_cc_src.append(f"""
             VarPtr make_{cc_func_name}({", ".join(cc_make_args)}) {{
-                Op* _op = new {op_name}({", ".join(op_make_args)});
+                auto _op = new {op_name}({", ".join(op_make_args)});
                 if (_op->outputs_holder.size() != 1) {{
                     delete _op;
                     LOGf << "Wrong output size of" << \"{op_name}\";
                 }}
                 if (_op->flags.get(NodeFlags::_forwarded)) {{
-                    VarPtr output(move(_op->outputs_holder[0]));
+                    VarPtr _out(move(_op->outputs_holder[0]));
                     delete _op;
-                    return output;
+                    return _out;
                 }}
                 _op->outputs_holder[0]->set_inputs({{_op}});
-                VarPtr output(move(_op->outputs_holder[0]));
+                VarPtr _out(move(_op->outputs_holder[0]));
                 {src.replace("->var","")};
                 _op->init();
-                return output;
+                return _out;
             }}
             """)
         else:
             jit_cc_src.append(f"""
             vector<VarPtr> make_{cc_func_name}({", ".join(cc_make_args)}) {{
-                Op* _op = new {op_name}({", ".join(op_make_args)});
+                auto _op = new {op_name}({", ".join(op_make_args)});
                 if (_op->flags.get(NodeFlags::_forwarded)) {{
-                    vector<VarPtr> outputs = move(_op->outputs_holder);
+                    vector<VarPtr> _outs = move(_op->outputs_holder);
                     delete _op;
-                    return outputs;
+                    return _outs;
                 }}
-                vector<VarPtr> outputs = move(_op->outputs_holder);
-                for (uint i=0; i<outputs.size(); i++)
-                    outputs[i]->set_inputs({{_op}});
+                vector<VarPtr> _outs = move(_op->outputs_holder);
+                for (uint i=0; i<_outs.size(); i++)
+                    _outs[i]->set_inputs({{_op}});
                 {src.replace("->var","")};
                 _op->init();
-                return outputs;
+                return _outs;
             }}
             """)
         if pybind_name == 'None':
@@ -290,7 +291,14 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
             /*{doc_string}*/
             // @pyjt({",".join(pyjt_names)})
             vector<VarHolder*> {cc_func_name}({", ".join(cc_args)}) {{
-                return make_vh_vector(make_{cc_func_name}({", ".join(op_args)}));
+                {   f'return make_vh_vector(make_{cc_func_name}({", ".join(op_args)}));'
+                    if "replace_outputs" not in attrs else
+                    f'''auto rt = make_vh_vector(make_{cc_func_name}({", ".join(op_args)}));
+                    ASSERT(rt.size() == outputs.size());
+                    for (int i=0; i<outputs.size(); i++)
+                        outputs[i]->assign(rt[i]);
+                    return rt;
+                    '''}
             }}
             """)
         else:
@@ -408,6 +416,15 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
                         arg_type.replace("Var", "VarHolder")+' '+arg)
                     new_args.append(arg)
                     more_src.append(f"_op->add_inputs({arg});")
+                elif arg_type.startswith("VarSlices"):
+                    new_args_def.append(arg_def)
+                    new_args.append(arg)
+                    more_src.append(f"""
+                        vector<Var*> svars;
+                        for (int i=0; i<_op->vs.n; i++)
+                            if (_op->vs.slices[i].is_var())
+                                svars.push_back(_op->vs.slices[i].var);
+                        _op->add_inputs(svars);""")
                 else:
                     new_args_def.append(arg_def)
                     new_args.append(arg)
@@ -606,7 +623,7 @@ def compile_custom_ops(
     if len(gen_name) > 100:
         gen_name = gen_name[:80] + "___hash" + str(hash(gen_name))
 
-    includes = set(includes)
+    includes = sorted(list(set(includes)))
     includes = "".join(map(lambda x: f" -I'{x}' ", includes))
     LOG.vvvv(f"Include flags:{includes}")
 
@@ -819,6 +836,8 @@ jittor_path = find_jittor_path()
 check_debug_flags()
 
 sys.path.append(cache_path)
+LOG.i(f"Jittor({__version__}) src: {jittor_path}")
+LOG.i(f"cache_path: {cache_path}")
 
 with jit_utils.import_scope(import_flags):
     jit_utils.try_import_jit_utils_core()

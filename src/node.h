@@ -48,6 +48,8 @@ struct NodeFlags {
         _op_type=_n+4, _op_type_nbits=2,
         // bit6: backprop grad at ones
         _grads=_n+6,
+        // bit7: has graph optimize
+        _has_gopt=_n+7,
     };
 
     inline void set(Flags f, int a=1, int nbits=1) {
