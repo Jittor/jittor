@@ -7,7 +7,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-__version__ = '1.2.0.5'
+__version__ = '1.2.0.6'
 from . import lock
 with lock.lock_scope():
     from . import compiler
@@ -574,6 +574,10 @@ class Module:
             s = f"{k}={v}" if i >= n else str(v)
             ss.append(s)
         return ", ".join(ss)
+
+    def apply(self, func):
+        for m in self.modules():
+            func(m)
 
     def load_parameters(self, params):
         n_failed = 0

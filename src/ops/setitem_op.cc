@@ -27,8 +27,6 @@ namespace jittor {
 
 static auto make_array = get_op_info("array")
     .get_constructor<VarPtr, const void*, NanoVector, NanoString>();
-static auto make_number = get_op_info("number")
-    .get_constructor<VarPtr, float, Var*>();
 static auto make_getitem = get_op_info("getitem")
     .get_constructor<VarPtr, Var*, VarSlices&&>();
 static auto make_setitem = get_op_info("setitem")
@@ -176,6 +174,14 @@ VarPtr SetitemOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 }
 
 void SetitemOp::jit_prepare() {
+    for (int i=0; i<o_shape.size(); i++)
+        if (o_shape[i]<0) {
+            // because output shape is inferd, check in
+            // executor not work
+            // reinfer shape if o_shape has vary shape
+            infer_shape();
+            break;
+        }
     auto data = input(1);
     add_jit_define("OP", op);
     add_jit_define("Td", data->dtype());
@@ -316,10 +322,18 @@ void SetitemOp::jit_run() {
         )
         auto iid = 0 @for(d, 0, IDIM,  + iid@d * istride@d);
 
-        @if(@strcmp(@OP,void)==0,
-            op[iid] = (Ti)dp[did],
-            op[iid] = @expand_macro(@OP, Ti, op[iid], dp[did])
-        );
+        @if(@is_def(JIT_cpu),
+            @if(@strcmp(@OP,void)==0,
+                op[iid] = (Ti)dp[did],
+                op[iid] = @expand_macro(@OP, Ti, op[iid], dp[did])
+            );
+        ,
+            @if(@strcmp(@OP,void)==0, op[iid] = (Ti)dp[did],
+            @if(@strcmp(@OP,add)==0, atomicAdd(&op[iid], (Ti)dp[did]),
+                op[iid] = @expand_macro(@OP, Ti, op[iid], dp[did])
+            )
+            );
+        )
     }
 }
 #endif // JIT
