@@ -105,7 +105,7 @@ __global__ static void where_kernel_one_warp(
     {
         index_t i@{NDIM-1} = i + tid;
         auto condid = @for(d, 0, NDIM, + i@d * condstride@d);
-        uint x = i@{NDIM-1}<condshape@{NDIM-1} ? condp[condid] : 0;
+        uint x = i@{NDIM-1}<condshape@{NDIM-1} ? !!condp[condid] : 0;
         uint prefix_x = prefix_sum(x, tid);
         if (x) {
             uint cn = n + prefix_x - 1;
@@ -142,7 +142,7 @@ __global__ static void where_kernel_one_block(
     {
         index_t i@{NDIM-1} = i + tid;
         auto condid = @for(d, 0, NDIM, + i@d * condstride@d);
-        uint x = i@{NDIM-1}<condshape@{NDIM-1} ? condp[condid] : 0;
+        uint x = i@{NDIM-1}<condshape@{NDIM-1} ? !!condp[condid] : 0;
         uint prefix_x = prefix_sum(x, lid);
         uint warp_sum = bc(prefix_x, 31);
 
