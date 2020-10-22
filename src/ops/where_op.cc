@@ -5,6 +5,8 @@
 // ***************************************************************
 #include "var.h"
 #include "ops/where_op.h"
+#include "misc/cuda_flags.h"
+#include "ops/op_register.h"
 #ifdef JIT_cuda
 #include "executor.h"
 #include <assert.h>
@@ -18,6 +20,21 @@ WhereOp::WhereOp(Var* cond, NanoString dtype) : cond(cond) {
     flags.set(NodeFlags::_cuda);
     flags.set(NodeFlags::_vary_shape);
     auto ndim = cond->shape.size();
+    #ifdef HAS_CUDA
+    if (use_cuda) {
+        static std::vector<VarPtr>(*cub_where)(Var*, NanoString) = nullptr;
+        if (!cub_where && has_op("cub_where")) {
+            cub_where = get_op_info("cub_where")
+                .get_constructor<std::vector<VarPtr>, Var*, NanoString>();
+        }
+        if (cub_where) {
+            auto var = cub_where(cond,dtype);
+            for(uint i=0;i<ndim;i++)
+                forward(var[i]);
+            return;
+        }
+    }
+    #endif
     outs.reset(new Var*[ndim]);
     for (uint i=0; i<ndim; i++)
         outs[i] = create_output(nullptr, dtype);
