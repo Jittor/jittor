@@ -72,6 +72,12 @@ void setter_gdb_path(string v) {
     setter_gdb_attach(gdb_attach);
 }
 
+void breakpoint() {
+    static bool is_attached = 0;
+    if (is_attached) return;
+    setter_gdb_attach(1);
+}
+
 void print_trace() {
     if (gdb_path.size()) {
         // using gdb to print the stack trace

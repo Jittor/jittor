@@ -1040,7 +1040,7 @@ void KernelIR::split_loop(int i, int j) {
         inner[2]->attrs["code"] = lvalue+"+="+rvalue2+";";
         push_back("for ("+dtype+" id"+sj+"=0; id"+sj+"<range"+sj+"; id"+sj+"++) {}");
         auto& sloop = children.back();
-        int range, stride;
+        int range=0, stride=0;
         if (get_number("range"+si, range) && get_number("stride"+si, stride) && (range%stride==0))
             push_back(dtype+" range"+sj+" = "+S(stride)+";", &inner);
         else {

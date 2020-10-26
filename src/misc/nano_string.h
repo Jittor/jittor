@@ -73,6 +73,7 @@ namespace jittor {
     m(acos) \
     m(cosh) \
     m(acosh) \
+    m(erf) \
     m(sigmoid) \
     \
     m(uniform) \

@@ -143,6 +143,12 @@ def relu(x): return jt.maximum(x, 0)
 def leaky_relu(x, scale=0.01): return jt.ternary(x>0, x, x*scale)
 def relu6(x): return jt.minimum(jt.maximum(x, 0), 6)
 
+def gelu(x):
+    _sqrt2 = 1.4142135623730951
+    erf = jt.erf(x/_sqrt2)+1
+    r = erf*x*.5
+    return r
+
 class PReLU(Module):
     def __init__(self, num_parameters=1, init_=0.25):
         self.num_parameters = num_parameters
@@ -411,6 +417,29 @@ class InstanceNorm2d(Module):
         b = self.bias.broadcast(x, [0,2,3])
         return norm_x * w + b
 
+class LayerNorm(Module):
+    def __init__(self, normalized_shape, eps: float = 1e-5, elementwise_affine: bool = True) -> None:
+        super(LayerNorm, self).__init__()
+        if isinstance(normalized_shape, int):
+            normalized_shape = (normalized_shape,)
+        self.normalized_shape = tuple(normalized_shape)
+        self.eps = eps
+        self.elementwise_affine = elementwise_affine
+        if self.elementwise_affine:
+            self.weight = init.constant(normalized_shape, "float32", 1.0)
+            self.bias = init.constant(normalized_shape, "float32", 0.0)
+
+    def execute(self,x):
+        dims = [-i for i in range(len(self.normalized_shape), 0, -1)]
+        mean = jt.mean(x,dims=dims,keepdims=1)
+        numerator = x-mean
+        variance = jt.mean(numerator.sqr(),dims=dims,keepdims=1)
+        denominator = jt.sqrt(variance+self.eps)
+        norm_x = numerator/denominator
+        if self.elementwise_affine:
+            norm_x = norm_x * self.weight+self.bias
+        return norm_x
+
 class GroupNorm(Module):
     def __init__(self, num_groups, num_channels, eps=1e-05, affine=True, is_train=True):
         self.num_groups = num_groups
@@ -447,6 +476,7 @@ Leaky_relu = jt.make_module(leaky_relu, 2)
 LeakyReLU = Leaky_relu
 ReLU6 = jt.make_module(relu6)
 Softmax = jt.make_module(softmax, 2)
+GELU = jt.make_module(gelu)
 
 class Conv(Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):

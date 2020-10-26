@@ -31,7 +31,7 @@ void ReshapeOp::infer_shape() {
     size_t uncertain_dim = 0;
     int64_t y_items = 1;
     for (size_t i = 0; i < shape.size(); ++i) {
-        if (shape[i] == -1) {
+        if (shape[i] < 0) {
             ++uncertain_dim;
         } else
             y_items *= shape[i];
@@ -39,14 +39,16 @@ void ReshapeOp::infer_shape() {
     ASSERT(uncertain_dim <= 1) << "max number of -1 is 1, but get" << uncertain_dim << ".";
     int64_t x_items = x->num;
     auto yshape = shape;
-    if (uncertain_dim == 0) {
-        ASSERT(x_items == y_items) << "reshape shape is invalid for input of size " << x_items;
+    if (x_items < 0) {
+        // pass if input is uncertain
+    } else if (uncertain_dim == 0) {
+        ASSERTop(x_items,==,y_items) << "reshape shape is invalid for input of size";
     } else {
         ASSERT(x_items % y_items == 0) << "reshape shape is invalid for input of size " << x_items;
         uncertain_dim = x_items / y_items;
         yshape.clear();
         for (auto a : shape)
-            yshape.push_back(a==-1 ? uncertain_dim : a);
+            yshape.push_back(a<0 ? uncertain_dim : a);
     }
     y->set_shape(yshape);
     y->share_with(x);

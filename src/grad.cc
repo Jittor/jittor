@@ -177,7 +177,7 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets) {
                     Var* dout = grads[id];
                     VarPtr dvar = make_grad(op, out, dout, var, index);
                     registe_node_trace_grad(dvar.ptr, op, index);
-                    if (dvar && var->num)
+                    if (dvar && dvar->num>=0 && var->num)
                         ASSERT(dvar->num==var->num && dvar->shape.size()==var->shape.size())
                         << "dvar" << dvar << "var" << var;
                     if (!grad)
