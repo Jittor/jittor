@@ -378,6 +378,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
     #ifdef HAS_CUDA
     int sync_times = 0;
     #endif
+    auto& jkl = jk;
     for (uint rid=0; rid<queue.size(); rid++) {
         int root = queue[rid];
         Op* op = ops[root];
@@ -398,7 +399,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
             var->alloc(allocator);
         }
         LOGvvv << "Run" << op << "inputs:" << op->inputs() << "outputs:" << op->outputs();
-        op->do_prepare();
+        op->do_prepare(jkl);
         bool is_cuda = op->flags.get(NodeFlags::_cuda);
         #ifdef HAS_CUDA
         if (!is_cuda) {
@@ -424,7 +425,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         }
         #endif
         last_is_cuda = is_cuda;
-        op->do_run_after_prepare();
+        op->do_run_after_prepare(jkl);
         LOGvvv << "Finished Op(" >> op->name() << rid >> 
             "/" >> queue.size() >> ") output:" << op->outputs();
         if (is_fused_op) {
@@ -456,7 +457,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
             // log memory info
             display_memory_info(__FILELINE__, false, true);
             // log jit_key and file location
-            op->do_prepare();
+            op->do_prepare(jkl);
             string jit_src_path = Op::get_filename_from_jit_key(jk.to_cstring(), ".cc");
             LOGe << "[Error] source file location:" << jit_src_path;
             if (is_fused_op) {

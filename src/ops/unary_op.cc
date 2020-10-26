@@ -209,10 +209,10 @@ void UnaryOp::infer_shape() {
     y->set_shape(x->shape);
 }
 
-void UnaryOp::jit_prepare() {
-    add_jit_define("Tx", x->dtype());
-    add_jit_define("Ty", y->dtype());
-    add_jit_define("OP", ns.to_cstring());
+void UnaryOp::jit_prepare(JK& jk) {
+    jk << _CS("[Tx:") << x->dtype()
+        << _CS("][Ty:") << y->dtype()
+        << _CS("][OP:") << ns << ']';
 }
 
 #else // JIT

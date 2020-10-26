@@ -74,9 +74,9 @@ ArrayOp::ArrayOp(ArrayArgs&& args) {
     std::memcpy(allocation.ptr, args.ptr, output->size);
 }
 
-void ArrayOp::jit_prepare() {
+void ArrayOp::jit_prepare(JK& jk) {
     if (output->flags.get(NodeFlags::_force_fuse))
-        add_jit_define("T", output->dtype());
+        jk << _CS("[T:") << output->dtype() << ']';
 }
 
 void ArrayOp::run() {

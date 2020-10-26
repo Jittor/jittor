@@ -1044,7 +1044,7 @@ void KernelIR::split_loop(int i, int j) {
         if (get_number("range"+si, range) && get_number("stride"+si, stride) && (range%stride==0))
             push_back(dtype+" range"+sj+" = "+S(stride)+";", &inner);
         else {
-            ASSERT(range != -1 && stride != -1) << range << stride;
+            ASSERT(range != -1 && stride != -1) << range << stride << si;
             push_back(dtype+" range"+sj+" = ::min(range"+si+"-id"+si+", stride"+si+");", &inner);
         }
         sloop->attrs["loop_id"] = sj;
@@ -1081,7 +1081,7 @@ void KernelIR::resplit() {
     // define
     push_front(dtype+" "+lvalue+" = 0;", &before);
     
-    int num;
+    int num=0;
     if (get_number(rvalue2, num)) {
         // range = number;
         inner[3]->attrs["rvalue"] = S(num);

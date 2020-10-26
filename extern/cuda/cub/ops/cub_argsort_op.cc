@@ -47,12 +47,16 @@ void CubArgsortOp::infer_shape() {
     y_key->set_shape(x->shape);
 }
 
-void CubArgsortOp::jit_prepare() {
-    add_jit_define("Tx", x->dtype());
-    add_jit_define("Tindexes", indexes->dtype());
-    add_jit_define("Toffsets", offsets->dtype());
-    add_jit_define("Ty", y->dtype());
-    add_jit_define("FUNC", descending ? "SortPairsDescending" : "SortPairs");
+void CubArgsortOp::jit_prepare(JK& jk) {
+    jk << _CS("[Tx:") << x->dtype();
+    jk << _CS("][Tindexes:") << indexes->dtype();
+    jk << _CS("][Toffsets:") << offsets->dtype();
+    jk << _CS("][Ty:") << y->dtype();
+    jk << _CS("][FUNC:");
+    if (descending)
+        jk << _CS("SortPairsDescending]");
+    else
+        jk << _CS("SortPairs]");
 }
 
 #else // JIT

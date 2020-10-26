@@ -8,6 +8,8 @@
 
 namespace jittor {
 
+constexpr int ns_max_size = 256;
+constexpr int ns_max_len = 16;
 
 #define FOR_ALL_NS(m) \
 \
@@ -108,7 +110,8 @@ struct NanoString {
     ns_t data=0;
 
     static unordered_map<string, NanoString> __string_to_ns;
-    static vector<const char*> __ns_to_string;
+    static char __ns_to_string[];
+    static int __ns_len[];
 
     inline void set(Flags f, ns_t a=1, ns_t nbits=1) {
         ns_t mask = (((1u<<nbits)-1)<<f);
@@ -119,6 +122,7 @@ struct NanoString {
         return (data>>f) & ((1u<<nbits)-1);
     }
     inline ns_t index() const { return get(_index, _index_nbits); }
+    inline int len() const { return __ns_len[index()]; }
     inline ns_t type() const { return get(_type, _type_nbits); }
     inline ns_t is_bool() const { return get(_bool); }
     inline ns_t is_int() const { return get(_int); }
@@ -141,7 +145,9 @@ struct NanoString {
     inline NanoString(const string& s) : NanoString(s.c_str()) {}
     // @pyjt(__repr__)
     inline const char* to_cstring() const
-        { return __ns_to_string[index()]; }
+        { return __ns_to_string+index()*ns_max_len; }
+    inline char* to_cstring()
+        { return __ns_to_string+index()*ns_max_len; }
 };
 
 // force_type = 1 for int, 2 for float

@@ -39,12 +39,12 @@ struct Op : Node {
     virtual void grads(Var** douts, VarPtr* dins);
     virtual void infer_shape();
     virtual void run();
-    virtual void jit_prepare();
-    virtual void do_jit_prepare();
+    virtual void jit_prepare(JK& jk);
+    virtual void do_jit_prepare(JK& jk);
     virtual const char* name() const = 0;
     virtual void statistics(uint64_t& in, uint64_t& out, uint64_t& compute);
-    virtual void do_prepare();
-    virtual void do_run_after_prepare();
+    virtual void do_prepare(JK& jk);
+    virtual void do_run_after_prepare(JK& jk);
     virtual void do_run();
     virtual VarPtr duplicate();
     virtual void compile_optimize(string& src);
@@ -52,7 +52,7 @@ struct Op : Node {
     void jit_run();
 
     string name_ex() const;
-    string get_jit_key();
+    string get_jit_key(JK& jk);
     vector<pair<string,string>> get_jit_define();
 };
 
@@ -65,7 +65,7 @@ extern string_view_map<string> jit_key_mapper;
 #ifdef JIT
     #define DECLARE_jit_run void jit_run();
 #else
-    #define DECLARE_jit_run void jit_prepare() override;
+    #define DECLARE_jit_run void jit_prepare(JK& jk) override;
 #endif
 
 } // jittor

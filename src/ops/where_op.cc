@@ -45,10 +45,10 @@ void WhereOp::infer_shape() {
         outs[i]->set_shape({num});
 }
 
-void WhereOp::jit_prepare() {
-    add_jit_define("Ti", cond->dtype());
-    add_jit_define("To", outs[0]->dtype());
-    add_jit_define("NDIM", JK::hex1(cond->shape.size()));
+void WhereOp::jit_prepare(JK& jk) {
+    add_jit_define(jk, "Ti", cond->dtype());
+    add_jit_define(jk, "To", outs[0]->dtype());
+    add_jit_define(jk, "NDIM", JK::hex1(cond->shape.size()));
 }
 
 #else // JIT
