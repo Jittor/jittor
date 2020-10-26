@@ -11,6 +11,8 @@
 
 #include "init.h"
 #include "ops/op_register.h"
+#include "var.h"
+#include "op.h"
 
 namespace jittor {
 
@@ -20,6 +22,15 @@ unique_ptr<std::default_random_engine> eng;
 
 vector<set_seed_callback> callbacks;
 int current_seed;
+
+// fron fetch_op.cc
+extern list<VarPtr> fetcher;
+extern list<VarPtr> fetcher_to_free;
+
+void cleanup() {
+    fetcher_to_free.clear();
+    fetcher.clear();
+}
 
 static void init_cuda_devices() {
 #ifdef HAS_CUDA
@@ -47,6 +58,9 @@ void init() {
     // init fused op
     op_registe({"fused","",""});
     init_cuda_devices();
+    LOGv << "sizeof(Node)" << sizeof(Node);
+    LOGv << "sizeof(Var)" << sizeof(Var);
+    LOGv << "sizeof(Op)" << sizeof(Op);
 }
 
 void set_seed(int seed) {

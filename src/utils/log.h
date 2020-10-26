@@ -36,9 +36,9 @@ extern "C" uint32_t get_tid();
 extern "C" bool g_supports_color;
 extern "C" void print_prefix(std::ostream* out);
 
-const char green[] = "\033[38;5;2m";
-const char red[] = "\033[38;5;1m";
-const char yellow[] = "\033[38;5;3m";
+constexpr char green[] = "\033[38;5;2m";
+constexpr char red[] = "\033[38;5;1m";
+constexpr char yellow[] = "\033[38;5;3m";
 
 static void get_color(char level, int verbose, const char*& color_begin, const char*& color_end) {
     if (level == 'i') {
@@ -61,6 +61,7 @@ extern "C" void flush_log();
 extern "C" void log_capture_start();
 extern "C" void log_capture_stop();
 extern std::vector<std::map<string,string>> log_capture_read();
+extern string thread_local thread_name;
 
 struct Log {
     std::ostringstream out;
@@ -219,6 +220,10 @@ bool check_vlog(const char* fileline, int verbose);
 #define LOGgggg LOGvvvv >> jittor::green
 #define LOGrrrr LOGvvvv >> jittor::red
 #define LOGyyyy LOGvvvv >> jittor::yellow
+
+#define LOGir LOGi >> jittor::red
+#define LOGig LOGi >> jittor::green
+#define LOGiy LOGi >> jittor::yellow
 
 void system_with_check(const char* cmd);
 

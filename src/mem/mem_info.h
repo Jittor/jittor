@@ -9,7 +9,7 @@
 namespace jittor {
 
 // @pyjt(display_memory_info)
-void display_memory_info(const char* fileline="");
+void display_memory_info(const char* fileline="", bool dump_var=false, bool red_color=false);
 
 // @pyjt(MemInfo)
 struct MemInfo {

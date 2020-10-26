@@ -33,4 +33,11 @@ void CloneOp::infer_shape() {
     y->set_shape(x->shape);
     y->share_with(x);
 }
+
+VarPtr detach(Var* x) {
+    auto y = make_clone(x);
+    y->input()->set_stop_grad();
+    return y;
+}
+
 } // jittor

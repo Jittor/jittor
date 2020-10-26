@@ -120,5 +120,24 @@ class TestBroadcastToOp2Cuda(TestBroadcastToOp):
     def tearDown(self):
         jt.flags.use_cuda = 0
 
+
+class TestBroadcastToOpMisc(unittest.TestCase):
+    def test_negtive_dim(self):
+        a = jt.array([1,2])
+        assert (a.broadcast([2,2], [-1]).data == [[1,1],[2,2]]).all()
+        assert (a.broadcast([2,2], [-2]).data == [[1,2],[1,2]]).all()
+        
+    def test_negtive_dim2(self):
+        a = jt.array([1,2])
+        b = jt.zeros((2,2))
+        assert (a.broadcast(b, [-1]).data == [[1,1],[2,2]]).all()
+        assert (a.broadcast(b, [-2]).data == [[1,2],[1,2]]).all()
+
+    def test_zero_dim(self):
+        a = jt.array(1.0)
+        b = a.broadcast([0])
+        assert b.shape == [0]
+
+
 if __name__ == "__main__":
     unittest.main()

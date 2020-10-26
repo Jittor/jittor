@@ -221,13 +221,16 @@ void ConvTuner::forwardTune(FusedOp* fop) {
         auto op_iop = op->input(0)->input();
         if (!(op_iop
             && op_iop->name_ex()=="binary.multiply"
-            && op_iop->tflag==op->tflag))
+            && fop->has(op_iop)))
             continue;
         auto bop = (BinaryOp*)op_iop;
 
-        if (!(bop->y->input() && bop->x->input() && bop->x->input()->tflag==op->tflag && bop->y->input()->tflag==op->tflag)) continue;
+        if (!(bop->y->input() && bop->x->input() && fop->has(bop->x->input()) && fop->has(bop->y->input()))) continue;
         if (!(bop->x->input()->type()==OpType::broadcast && bop->y->input()->type()==OpType::broadcast)) return;
 
+        // only support float32 currently
+        if (bop->z->dtype() != ns_float32)
+            continue;
         Op* ops[3] = {op, bop->x->input(), bop->y->input()};
         int ok = 0;
         LOGvvvv << "conv like op" << fop << fop->get_jit_key();
@@ -389,14 +392,10 @@ void ConvTuner::forwardTune(FusedOp* fop) {
                     continue;
                 auto kh = w->shape[wformat.find("h")];
                 auto kw = w->shape[wformat.find("w")];
-                if (kh != kw) {
-                    LOGvvvv << "TODO: relay conv_backward_w when kh != kw" << kh << kw;
-                    continue;
-                }
                 LOGvvvv << x << y << kh << stride << padding << dilation << groups << xformat << wformat << yformat;
                 auto make_conv_w = get_op_info(relay_conv_name)
-                        .get_constructor<VarPtr, Var*, Var*, int, int, int, int, int, string, string, string>();
-                rvar = make_conv_w(x, y, kh, stride, padding, dilation, groups, xformat, wformat, yformat);
+                        .get_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, string, string, string>();
+                rvar = make_conv_w(x, y, kh, kw, stride, padding, dilation, groups, xformat, wformat, yformat);
             }
 
             LOGvvvv << relay_conv_name << "output:" << rvar;

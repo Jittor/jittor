@@ -6,6 +6,7 @@
 
 if __name__ == "__main__":
     import unittest, os
+    unittest.TestLoader.sortTestMethodsUsing = None
 
     suffix = "__main__.py"
     assert __file__.endswith(suffix)
@@ -22,16 +23,20 @@ if __name__ == "__main__":
     suite = unittest.TestSuite()
     
     for _, test_file in enumerate(test_files):
+        test_name = test_file.split(".")[0]
+        tests = unittest.defaultTestLoader.loadTestsFromName(
+            "jittor.test."+test_name)
+            
         if not test_file.startswith("test_"):
             continue
         if _ < skip_l or _ > skip_r:
             continue
-        test_name = test_file.split(".")[0]
         if test_only and test_name not in test_only:
             continue
 
         print("Add Test", _, test_name)
-        suite.addTest(unittest.defaultTestLoader.loadTestsFromName(
-            "jittor.test."+test_name))
+        suite.addTest(tests)
 
-    unittest.TextTestRunner(verbosity=3).run(suite)
+    result = unittest.TextTestRunner(verbosity=3).run(suite)
+    if len(result.errors) or len(result.failures):
+        exit(1)

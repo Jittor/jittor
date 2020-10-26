@@ -13,7 +13,10 @@ class TestFetcher(unittest.TestCase):
         a = jt.array([1,2,3])
         a = a*2
         v = []
-        jt.fetch([a], lambda a: v.append(a))
+        jt.fetch(a, lambda a: v.append(a))
+        jt.fetch(1, 2, 3, a, 
+            lambda x, y, z, a: self.assertTrue(x==1 and y==2 and z==3 and isinstance(a, np.ndarray))
+        )
         jt.sync_all(True)
         assert len(v)==1 and (v[0]==[2,4,6]).all()
 

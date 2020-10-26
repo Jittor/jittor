@@ -25,12 +25,12 @@ class TestUnaryOp(unittest.TestCase):
         assert jt.float64(1).data.dtype == "float64"
         assert (jt.abs(-1) == 1).data.all()
         assert (abs(-jt.float64(1)) == 1).data.all()
-        a = [-1,2,3,0]
+        a = np.array([-1,2,3,0])
         check("abs", a)
         check("negative", a)
         check("logical_not", a)
         check("bitwise_not", a)
-        b = [1.1, 2.2, 3.3, 4.4, -1, 0]
+        b = np.array([1.1, 2.2, 3.3, 4.4, -1, 0])
         check("log", a)
         check("exp", a)
         check("sqrt", a)
@@ -42,7 +42,7 @@ class TestUnaryOp(unittest.TestCase):
             "cos", "arccos", "cosh", "arccosh", 
             "sigmoid", 
         ]
-        a = [1.1, 2.2, 3.3, 4.4]
+        a = np.array([1.1, 2.2, 3.3, 4.4])
         for op in ops:
             if op == "abs":
                 b = np.array(a+[-1,])

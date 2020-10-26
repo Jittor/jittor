@@ -109,6 +109,8 @@ def get_def_code(df, scope_name, pyname, self_as_arg0=False):
     func_args_convert = ""
     func_call = df["func_name"]+"("
     pytypes = [ get_pytype_map(a[0],0) for a in args ]
+    holder_dec_array = []
+    holder_set_array = []
     for tid, tpc in enumerate(pytypes):
         check = get_pytype_map(args[tid][0],2)
         default_arg = args[tid][2]
@@ -118,6 +120,11 @@ def get_def_code(df, scope_name, pyname, self_as_arg0=False):
         if jtp == "VarHolder*":
             holder_dec = f"unique_ptr<VarHolder> arg{tid}_holder"
             holder_set = f", arg{tid}_holder"
+        if jtp == "VarSlices":
+            holder_dec = f"vector<unique_ptr<VarHolder>> arg{tid}_holder"
+            holder_set = f", arg{tid}_holder"
+        holder_dec_array.append(holder_dec)
+        holder_set_array.append(holder_set)
         if len(default_arg):
             func_args_convert += f"""
                         {holder_dec};
@@ -165,7 +172,7 @@ def get_def_code(df, scope_name, pyname, self_as_arg0=False):
                                 if (khash == {get_hash(args[aid][1])}u) {{
                                     // hash match {args[aid][1]}
                                     CHECK(({get_pytype_map(args[aid][0],2)}(vo)));
-                                    arg{aid} = {pytypes[aid]}(vo);
+                                    arg{aid} = {pytypes[aid]}(vo{holder_set_array[aid]});
                                     arg_filled |= 1ull << {aid};
                                     continue;
                                 }}
@@ -258,7 +265,7 @@ def generate_error_code_from_func_header(func_head, target_scope_name, name, dfs
 
     LOG.vvv("gen err from func_head", func_head)
     args = func_head[1:].split(")")[0].split(",")
-    error_code = f" << \"Wrong inputs arguments, Please refer to examples(e.g. {help_cmd}).\""
+    error_code = f" << \"Wrong inputs arguments, Please refer to examples({help_cmd}).\""
     error_code += r' << "\n\nTypes of your inputs are:\n"'
     for arg in args:
         arg = arg.strip()
@@ -449,7 +456,7 @@ def compile_src(src, h, basename):
             continue
         else:
             defs.append(def_info)
-        LOG.vvv(json.dumps(def_info, indent=4))
+        LOG.vvv(lambda: json.dumps(def_info, indent=4))
     # deal with defs
     if len(defs) == 0: return
     # include_name = h[4:] # remove "src/" prefix
@@ -500,6 +507,7 @@ def compile_src(src, h, basename):
         slot_name = None
         func_cast = ""
         func_fill = ""
+        before_return = ""
         if name == "__init__":
             slot_name = "tp_init"
             func_head = "(PyObject* self, PyObject* _args, PyObject* kw) -> int"
@@ -547,6 +555,7 @@ def compile_src(src, h, basename):
             slot_name = "tp_dealloc"
             func_head = "(PyObject* self) -> void"
             func_fill = "int64 n = 0"
+            before_return = "Py_TYPE(self)->tp_free((PyObject *) self);"
         
         elif name in binary_number_slots:
             slot_name = "tp_as_number->"+binary_number_slots[name]
@@ -656,7 +665,7 @@ def compile_src(src, h, basename):
                     func_return_failed = "return -1"
                 else:
                     assert "-> void" in func_head
-                    arr_func_return.append(f"{func_call};return")
+                    arr_func_return.append(f"{func_call};{before_return}return")
                     func_return_failed = "return"
         # generate error msg when not a valid call
         error_log_code = generate_error_code_from_func_header(func_head, target_scope_name, name, dfs, basename ,h, class_info)
@@ -677,14 +686,16 @@ def compile_src(src, h, basename):
                 ])}
                 LOGf << "Not a valid call.";
             }} catch (const std::exception& e) {{
-                std::stringstream ss;
-                ss {error_log_code};
-                PyErr_Format(PyExc_RuntimeError, 
-                    "%s\\n%s\\nFailed reason:%s",
-                    ss.str().c_str(),
-                    R""({decs})"",
-                    e.what()
-                );
+                if (!PyErr_Occurred()) {{
+                    std::stringstream ss;
+                    ss {error_log_code};
+                    PyErr_Format(PyExc_RuntimeError, 
+                        "%s\\n%s\\nFailed reason:%s",
+                        ss.str().c_str(),
+                        R""({decs})"",
+                        e.what()
+                    );
+                }}
             }}
             {func_return_failed};
         }}
@@ -755,7 +766,11 @@ def compile_src(src, h, basename):
         core_name = submodule_info["attrs"]["core_name"]
     has_map = class_name in ["VarHolder", "NanoVector"]
     has_seq = class_name == "NanoVector"
-    code = f"""
+    # add extra include to avoid compile error
+    src_code = ""
+    if include_name.endswith("var_slices.h"):
+        src_code += '#include "var_holder.h"\n' 
+    src_code += f"""
     #include "pyjt/py_converter.h"
     #include "pyjt/py_arg_printer.h"
     #include "common.h"
@@ -826,7 +841,7 @@ def compile_src(src, h, basename):
 
     }}
     """
-    return code
+    return src_code
 
 def compile_single(head_file_name, src_file_name, src=None):
     basename = head_file_name.split("/")[-1].split(".")[0]
@@ -847,6 +862,7 @@ def compile(cache_path, jittor_path):
     headers = [ os.path.join(jittor_path, h) for h in headers1 ] + \
         [ os.path.join(cache_path, h) for h in headers2 ]
     basenames = []
+    pyjt_names = []
     for h in headers:
         with open(h, 'r') as f:
             src = f.read()
@@ -864,6 +880,7 @@ def compile(cache_path, jittor_path):
         if not check: continue
 
         basenames.append(basename)
+        pyjt_names.append(fname)
     
     code = f"""
     #include "pyjt/numpy.h"
@@ -886,3 +903,5 @@ def compile(cache_path, jittor_path):
     LOG.vvvv(code)
     with open(fname, "w") as f:
         f.write(code)
+    pyjt_names.append(fname)
+    return pyjt_names

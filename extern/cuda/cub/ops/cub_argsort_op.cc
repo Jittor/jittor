@@ -23,7 +23,7 @@ CubArgsortOp::CubArgsortOp(Var* x, Var* indexes, Var* offsets, bool descending, 
     : x(x), indexes(indexes), offsets(offsets), descending(descending) {
     flags.set(NodeFlags::_cpu, 0);
     flags.set(NodeFlags::_cuda, 1);
-    ASSERT(offsets->dtype()==ns_int || offsets->dtype()==ns_int32);
+    ASSERT(offsets->dtype()==ns_int32);
     y = create_output(nullptr, dtype);
     y_key = create_output(nullptr, x->dtype());
 }

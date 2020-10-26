@@ -18,9 +18,19 @@ void lock();
 
 void unlock();
 
+extern int _has_lock;
+
 struct lock_guard {
-    inline lock_guard() { lock(); }
-    inline ~lock_guard() { unlock(); }
+    int has_lock = 0;
+    inline lock_guard() { 
+        if (_has_lock) return;
+        has_lock = 1;
+        lock(); 
+    }
+    inline ~lock_guard() {
+        if (!has_lock) return;
+        unlock();
+    }
 };
 
 } // jittor

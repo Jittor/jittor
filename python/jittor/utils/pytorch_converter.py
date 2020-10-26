@@ -78,6 +78,32 @@ pjmap = {
         'extras': {},
         'delete': ['inplace'],
     },
+    'relu': {
+        'pytorch': {
+            'args': 'input', 
+        },
+        'jittor': {
+            'module': 'nn',
+            'name': 'relu',
+            'args': 'x'
+        },
+        'links': {'input': 'x'},
+        'extras': {},
+        'delete': [],
+    },
+    'binary_cross_entropy_with_logits': {
+        'pytorch': {
+            'args': 'input, target, weight, size_average=True', 
+        },
+        'jittor': {
+            'module': 'nn',
+            'name': 'binary_cross_entropy_with_logits',
+            'args': 'input, target, weight, size_average=True'
+        },
+        'links': {},
+        'extras': {},
+        'delete': [],
+    },
     'ReLU6': {
         'pytorch': {
             'args': 'inplace=False', 
@@ -140,6 +166,18 @@ pjmap = {
         'links': {},
         'extras': {'affine': 'None'},
         'delete': ['track_running_stats'],
+    },
+    'GroupNorm': {
+        'pytorch': {
+            'args': "num_groups, num_channels, eps=1e-05, momentum=0.1, affine=True"
+        },
+        'jittor': {
+            'module': 'nn',
+            'name': 'GroupNorm',
+            'args': 'num_groups, num_channels, eps=1e-05, affine=None, is_train=True',
+        },
+        'links': {},
+        'extras': {'affine': 'None'},
     },
     'Dropout2d': {
         'pytorch': {
@@ -262,6 +300,23 @@ pjmap = {
         'links': {},
         'extras': {},
     },
+    'clamp': {
+        'pytorch': {
+            'prefix': ['torch'],
+            'args_prefix': 'input, min, max, out=None',
+            'args': 'min, max, out=None',
+        },
+        'jittor': {
+            'prefix': 'jt',
+            'module': '',
+            'name': 'clamp',
+            'args_prefix': 'x, min_v, max_v',
+            'args': 'min_v, max_v'
+        },
+        'links': {'min': 'min_v', 'max': 'max_v'},
+        'extras': {},
+        'delete': ['out'],
+    },
     'permute': {
         'pytorch': {
             'prefix': [],
@@ -342,20 +397,19 @@ unsupport_ops = [
     # ***************************************************************
     # torch.nn
     # ***************************************************************
-    'Parameter', 'ModuleList', 'ModuleDict', 'ParameterList', 'ParameterDict', 
+    'Parameter', 'ModuleDict', 'ParameterList', 'ParameterDict', 
     'Conv1d', 'Conv3d', 'ConvTranspose1d', 'ConvTranspose3d', 'Unfold', 'Fold', 
     'MaxPool1d', 'MaxPool3d', 'MaxUnpool1d', 'MaxUnpool2d', 'MaxUnpool3d', 'AvgPool1d', 
     'AvgPool3d', 'FractionalMaxPool2d', 'LPPool1d', 'LPPool2d', 'AdaptiveMaxPool1d', 
     'AdaptiveMaxPool2d', 'AdaptiveMaxPool3d', 'AdaptiveAvgPool1d', 'AdaptiveAvgPool3d', 
     'ReflectionPad1d', 'ReplicationPad1d', 'ReplicationPad3d', 'ConstantPad1d', 'ConstantPad3d', 
     'ELU', 'Hardshrink', 'Hardtanh', 'LogSigmoid', 'MultiheadAttention', 
-    'RReLU', 'SELU', 'CELU', 'GELU', 'Softplus', 'Softshrink', 'Softsign', 'Tanhshrink', 
+    'RReLU', 'SELU', 'CELU', 'GELU', 'Softshrink', 'Softsign', 'Tanhshrink', 
     'Threshold', 'Softmin', 'Softmax2d', 'LogSoftmax', 'AdaptiveLogSoftmaxWithLoss', 
-    'BatchNorm3d', 'GroupNorm', 'SyncBatchNorm', 'InstanceNorm1d', 'InstanceNorm3d', 'LocalResponseNorm', 
+    'BatchNorm3d', 'SyncBatchNorm', 'InstanceNorm1d', 'InstanceNorm3d', 'LocalResponseNorm', 
     'RNNBase', 'RNN', 'LSTM', 'GRU', 'RNNCell', 'LSTMCell', 'GRUCell', 'Transformer', 'TransformerEncoder', 
     'TransformerDecoder', 'TransformerEncoderLayer', 'TransformerDecoderLayer', 'Identity', 'Bilinear', 
-    'Dropout3d', 'AlphaDropout', 'EmbeddingBag', 'CosineSimilarity', 'PairwiseDistance', 'L1Loss', 
-    'MSELoss', 'CTCLoss', 'NLLLoss', 'PoissonNLLLoss', 'KLDivLoss', 'BCELoss', 'BCEWithLogitsLoss', 
+    'Dropout3d', 'AlphaDropout', 'EmbeddingBag', 'CosineSimilarity', 'PairwiseDistance', 'CTCLoss', 'NLLLoss', 'PoissonNLLLoss', 'KLDivLoss', 'BCEWithLogitsLoss', 
     'MarginRankingLoss', 'HingeEmbeddingLoss', 'MultiLabelMarginLoss', 'SmoothL1Loss', 'SoftMarginLoss', 
     'MultiLabelSoftMarginLoss', 'CosineEmbeddingLoss', 'MultiMarginLoss', 'TripletMarginLoss', 'UpsamplingNearest2d', 
     'UpsamplingBilinear2d', 'DataParallel', 'DistributedDataParallel', 'clip_grad_norm_', 'clip_grad_value_', 

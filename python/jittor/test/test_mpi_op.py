@@ -16,7 +16,7 @@ mpi = jt.compile_extern.mpi
 if mpi:
     n = mpi.world_size()
 
-@unittest.skipIf(mpi is None, "no inside mpirun")
+@unittest.skipIf(not jt.in_mpi, "no inside mpirun")
 class TestMpiOps(unittest.TestCase):
     @classmethod
     def setUpClass(self):

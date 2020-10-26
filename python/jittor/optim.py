@@ -13,12 +13,6 @@
 import jittor as jt
 import numpy as np
 
-def add_dep(a, b):
-    ''' add dependency from a to b '''
-    b.swap(b + a.sum() * 0)
-    # b.swap(b.clone())
-    # b._add_input(a)
-
 class AllReduceFuser:
     sum_limit = 1048576
     num_limit = 10
@@ -82,6 +76,11 @@ class Optimizer(object):
             self.param_groups.append(pg)
         self.n_step = 0
         self.fuser = AllReduceFuser()
+    
+    @property
+    def defaults(self):
+        exclude = set(("defaults", "param_groups", "n_step"))
+        return { k:v for k, v in self.__dict__.items() if k[0] != '_' and k not in exclude }
 
     def pre_step(self, loss):
         """ something should be done before step, such as calc gradients, mpi sync, and so on.
@@ -96,49 +95,55 @@ class Optimizer(object):
         # clean prev grads
         params = []
         params_has_grad = []
-        names = []
         for pg in self.param_groups:
             pg["grads"] = [None] * len(pg['params'])
             for p in pg['params']:
                 params.append(p)
                 if not p.is_stop_grad():
                     params_has_grad.append(p)
-                    names.append(p.name())
-        
-        # sync params, reduce computing graph size
-        jt.sync(params)
 
         # get gradient
         grads = jt.grad(loss, params_has_grad)
         cnt = 0
         # sync grads and model if in mpi
-        if jt.mpi:
+        if jt.in_mpi:
+
+            # for g in grads:
+            #     cnt += 1
+            #     if (cnt <= -1 and last is not None):
+            #         g.swap(g + last.sum() * 0)
+            #     g.compile_options = {'optim_all_reduce':1}   
+            #     temp = g.mpi_all_reduce("mean")
+            #     g.swap(temp)
+            #     last = g
+
+
+            # # for g in grads:
+            # #     g.compile_options = {'optim_all_reduce':1}
+            # #     temp = g.mpi_all_reduce("mean")
+            # #     g.assign(temp)
+
+            # # for g in grads:
+            # #     self.fuser.push(g)
+            # #     self.fuser.send()
+            # # self.fuser.send()
+
+            # # if self.n_step % self.param_sync_iter == 0:
+            # #     for p in params:
+            # #         p.assign(p.mpi_all_reduce("mean"))
             last = None
             cnt = 0
-
             for g in grads:
                 cnt += 1
                 if (cnt <= -1 and last is not None):
                     g.swap(g + last.sum() * 0)
                 g.compile_options = {'optim_all_reduce':1}   
-                g.name(f"cnt_{cnt}_step_{self.n_step}_{names[cnt-1]}")
                 temp = g.mpi_all_reduce("mean")
                 g.swap(temp)
                 last = g
-
-            # for g in grads:
-            #     g.compile_options = {'optim_all_reduce':1}
-            #     temp = g.mpi_all_reduce("mean")
-            #     g.assign(temp)
-
-            # for g in grads:
-            #     self.fuser.push(g)
-            #     self.fuser.send()
-            # self.fuser.send()
-
-            # if self.n_step % self.param_sync_iter == 0:
-            #     for p in params:
-            #         p.assign(p.mpi_all_reduce("mean"))
+            if self.n_step % self.param_sync_iter == 0:
+                for p in params:
+                    p.assign(p.mpi_broadcast())
         self.n_step += 1
 
         # set up grads in param_groups
@@ -147,18 +152,21 @@ class Optimizer(object):
             pg_grads = pg["grads"]
             for i, p in enumerate(pg['params']):
                 if not p.is_stop_grad():
-                    pg_grads[i] = grads[pid]
+                    # stop grad of grad
+                    pg_grads[i] = grads[pid].stop_grad()
                     pid += 1
         
-    def step(self, loss):
+    def backward(self, loss):
         self.pre_step(loss)
+
+    def step(self, loss=None):
+        if loss is not None:
+            self.pre_step(loss)
         for pg in self.param_groups:
             lr = pg.get("lr", self.lr)
             for p, g in zip(pg["params"], pg["grads"]):
                 if p.is_stop_grad(): continue
-                p -= g * lr
-                # detach with the prev graph to reduce memory consumption
-                p.detach_inplace()
+                p.update(p - g * lr)
 
 
 class SGD(Optimizer):
@@ -180,10 +188,11 @@ class SGD(Optimizer):
         for pg in self.param_groups:
             values = pg["values"] = []
             for p in pg["params"]:
-                values.append(jt.zeros(p.shape, p.dtype).stop_fuse().stop_grad())
+                values.append(jt.zeros(p.shape, p.dtype).stop_grad())
 
-    def step(self, loss):
-        self.pre_step(loss)
+    def step(self, loss=None):
+        if loss is not None:
+            self.pre_step(loss)
         for pg in self.param_groups:
             # get arguments from each param_groups
             lr = pg.get("lr", self.lr)
@@ -196,12 +205,11 @@ class SGD(Optimizer):
             for p, g, v in zip(pg["params"], pg["grads"], pg["values"]):
                 if p.is_stop_grad(): continue
                 dp = p * weight_decay + g
-                v.assign(momentum * v + dp * (1 - dampening))
+                v.update(momentum * v + dp * (1 - dampening))
                 if nesterov:
-                    p -= (dp + momentum * v) * lr
+                    p.update(p - (dp + momentum * v) * lr)
                 else:
-                    p -= v * lr
-                p.detach_inplace()
+                    p.update(p - v * lr)
 
 class RMSprop(Optimizer):
     """ RMSprop Optimizer.
@@ -224,10 +232,11 @@ class RMSprop(Optimizer):
         for pg in self.param_groups:
             values = pg["values"] = []
             for p in pg["params"]:
-                values.append(jt.zeros(p.shape, p.dtype).stop_fuse().stop_grad())
+                values.append(jt.zeros(p.shape, p.dtype).stop_grad())
 
-    def step(self, loss):
-        self.pre_step(loss)
+    def step(self, loss=None):
+        if loss is not None:
+            self.pre_step(loss)
         for pg in self.param_groups:
             # get arguments from each param_groups
             lr = pg.get("lr", self.lr)
@@ -235,9 +244,8 @@ class RMSprop(Optimizer):
             alpha = pg.get("alpha", self.alpha)
             for p, g, v in zip(pg["params"], pg["grads"], pg["values"]):
                 if p.is_stop_grad(): continue
-                v.assign(alpha * v + (1-alpha) * g * g)
-                p -= lr * g / (jt.sqrt(v) + eps)
-                p.detach_inplace()
+                v.update(alpha * v + (1-alpha) * g * g)
+                p.update(p - lr * g / (jt.sqrt(v) + eps))
 
 class Adam(Optimizer):
     """ Adam Optimizer.
@@ -259,11 +267,12 @@ class Adam(Optimizer):
             values = pg["values"] = []
             m = pg["m"] = []
             for p in pg["params"]:
-                values.append(jt.zeros(p.shape, p.dtype).stop_fuse().stop_grad())
-                m.append(jt.zeros(p.shape, p.dtype).stop_fuse().stop_grad())
+                values.append(jt.zeros(p.shape, p.dtype).stop_grad())
+                m.append(jt.zeros(p.shape, p.dtype).stop_grad())
 
-    def step(self, loss):
-        self.pre_step(loss)
+    def step(self, loss=None):
+        if loss is not None:
+            self.pre_step(loss)
         n = float(self.n_step)
         for pg in self.param_groups:
             # get arguments from each param_groups
@@ -272,8 +281,7 @@ class Adam(Optimizer):
             b0, b1 = pg.get("betas", self.betas)
             for p, g, v, m in zip(pg["params"], pg["grads"], pg["values"], pg["m"]):
                 if p.is_stop_grad(): continue
-                m.assign(b0 * m + (1-b0) * g)
-                v.assign(b1 * v + (1-b1) * g * g)
+                m.update(b0 * m + (1-b0) * g)
+                v.update(b1 * v + (1-b1) * g * g)
                 step_size = lr * jt.sqrt(1-b1**n) / (1-b0 ** n)
-                p -= m * step_size / (jt.sqrt(v) + eps)
-                p.detach_inplace()
+                p.update(p - m * step_size / (jt.sqrt(v) + eps))

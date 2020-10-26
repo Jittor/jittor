@@ -12,7 +12,6 @@
 #include <cuda_runtime.h>
 #include <helper_cuda.h>
 #include "mem/allocator/cuda_dual_allocator.h"
-#include "fetcher.h"
 #include "event_queue.h"
 #endif
 #include "misc/cuda_flags.h"
@@ -26,6 +25,7 @@
 #include "profiler/profiler_guard.h"
 #include <dlfcn.h>
 #include "utils/cuda_utils.h"
+#include "parallel_compiler.h"
 
 namespace jittor {
 
@@ -57,6 +57,46 @@ void executor_set_break() {
     checkCudaErrors(cudaDeviceSynchronize());
 }
 
+// from fetch_op.cc
+extern list<VarPtr> fetcher_to_free;
+
+void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, int ll, int rr, int64 tt) {
+    fused_op.ops.clear();
+    fused_op.edges.clear();
+    auto ntt = ++Node::tflag_count;
+    for (int i=ll; i<rr; i++) {
+        int opid = fuse_ops[i];
+        Op* op = ops[opid];
+        uint64_t fid1 = fused_op.ops.size();
+        op->custom_data = fid1;
+        op->tflag = ntt;
+        fused_op.ops.push_back(op);
+    }
+    for (Op* op : fused_op.ops) {
+        uint fid1 = op->custom_data;
+        uint oid = 0;
+        for (Var* v : op->outputs()) {
+            oid++;
+            if (v->tflag != tt) {
+                // this var node not belong to current execution
+                // this will happend in multiple outputs fuseable op
+                // v->custom_data = 0 represents this var cannot be fused
+                v->custom_data = 0;
+                continue;
+            }
+            for (auto o : v->outputs_with_index()) {
+                Op* op2 = o.op;
+                uint iid = o.index;
+                if (op2->tflag != ntt) continue;
+                uint fid2 = op2->custom_data;
+                fused_op.edges.emplace_back(fid1, oid-1, fid2, iid);
+            }
+        }
+    }
+    LOGvvv << "Prepare fused_op" << fused_op.ops;
+    fused_op.update_ops();
+}
+
 void Executor::run_sync(vector<Var*> vars, bool device_sync) {
     auto allocator = get_allocator();
     this->allocator = allocator;
@@ -68,22 +108,56 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
     int op_num = 0;
     vector<Node*> bfs_q;
     bfs_q.reserve(vars.size());
-    auto nodes = (vector<Node*>*)&vars;
     int start_var_num = 0;
-    for (Var* v : vars)
-        if (!v->is_finished())
-            start_var_num++;
-    bfs_backward(*nodes, bfs_q, [&](Node *node) -> bool {
-        node->custom_data = 0;
-        if (node->is_finished())
-            return false;
-        op_num += !node->is_var();
-        return true;
-    });
+    while (1) {
+        op_num = 0;
+        start_var_num = 0;
+        bfs_q.clear();
+        // get all nodes need to be executed
+        int need_opt = 0;
+        auto t = ++Node::tflag_count;
+        for (Var* v : vars)
+            if (!v->is_finished() && v->tflag != t) {
+                v->tflag = t;
+                start_var_num++;
+                bfs_q.push_back(v);
+            }
+        for (int i=0; i<bfs_q.size(); i++) {
+            auto node = bfs_q[i];
+            op_num += !node->is_var();
+            for (auto i : node->_inputs)
+                if (i.node->tflag != t && !i.node->is_finished()) {
+                    i.node->tflag = t;
+                    need_opt += i.node->flags.get(NodeFlags::_has_gopt);
+                    bfs_q.push_back(i.node);
+                }
+            // this var has been fetched
+            if (node->flags.get(NodeFlags::_fetch)) {
+                for (auto& n : node->_outputs) {
+                    // if not in queue and is fetch op
+                    if (n.node->tflag != t &&
+                        !n.node->is_finished() &&
+                        n.node->flags.get(NodeFlags::_fetch)) {
+                        n.node->tflag = t;
+                        need_opt += n.node->flags.get(NodeFlags::_has_gopt);
+                        bfs_q.push_back(n.node);
+                    }
+                }
+            }
+        }
+        if (!need_opt) break;
+        for (Node* n : bfs_q) {
+            if (n->flags.get(NodeFlags::_has_gopt)) {
+                n->op()->graph_optimize();
+                n->flags.set(NodeFlags::_has_gopt, 0);
+            }
+        }
+    }
     auto tt = Node::tflag_count;
     vector<Op*> ops;
     vector<Var*> all_vars;
     ops.reserve(op_num);
+    all_vars.reserve(bfs_q.size() - op_num);
     for (Node* node : bfs_q)
         if (!node->is_var()) {
             node->custom_data = ops.size();
@@ -140,7 +214,8 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
     // var_fused represents:
     // 0: can fused
     // 1: cannot fused
-    // 2: can shared
+    // 2: weak shared(may turn into 1 or 3 by shared operator cutting)
+    // 3: strong shared(force shared)
     vector<int> roots, next(op_num, -1);
     vector<int> deps(op_num, 0);
     roots.reserve(op_num);
@@ -693,6 +768,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         sharegraph_q.reserve(16);
         vector<int> shared_id(op_num, -1);
 
+        // for fused op in reversed order
         for (uint rid=0; rid<queue.size(); rid++) {
             int root = queue[queue.size()-rid-1];
             auto& queue = subgraph;
@@ -710,10 +786,13 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
                     if (fopid == root)
                         deps[i]++;
                     else if (shared_id[opid] != root) {
+                        auto& vf = var_fused[v->custom_data];
                         // var_fused = 1 cannot share input op
                         // TODO: check this input op's output var all can be shared
-                        if (var_fused[v->custom_data] == 1)
+                        if (vf == 1)
                             continue;
+                        // if weak share, turn into strong share
+                        if (vf == 2) vf = 3;
                         // new shared op
                         deps[opid] = 0;
                         shared_id[opid] = root;
@@ -733,6 +812,15 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
                     int vi = v->custom_data;
                     if (var_fused[vi] == 1)
                         continue;
+                    // if weak share, cut off
+                    if (var_fused[vi] == 2) {
+                        if (sharegraph.size() - sn < 32)
+                            var_fused[vi] = 3;
+                        else {
+                            var_fused[vi] = 1;
+                            continue;
+                        }
+                    }
                     Op* opi = v->input();
                     int opid = opi->custom_data;
                     int& dep = deps[opid];
@@ -796,9 +884,13 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
     for (int i=0; i<var_num; i++) {
         all_vars[i]->custom_data = var_fused[i]==1;
     }
+    FusedOp fused_op;
+
+    // compile all ops, prevent compiling during running
+    parallel_compile_all_ops(queue, range, fused_op, fuse_ops, ops, tt);
 
     // running
-    FusedOp fused_op;
+    SetupFreeBuffer setup_free_buffer;
     vector<Var*> outputs_bk;
     #ifdef HAS_CUDA
     int sync_times = 0;
@@ -814,41 +906,9 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         if (op->type() != OpType::other) {
             op = &fused_op;
             is_fused_op = true;
-            fused_op.ops.clear();
-            fused_op.edges.clear();
             int ll = (rid<queue.size()-1)?range[queue.size()-rid-2]:0, rr = range[queue.size()-rid-1];
             root = fuse_ops[rr-1];
-            auto ntt = ++Node::tflag_count;
-            for (int i=ll; i<rr; i++) {
-                int opid = fuse_ops[i];
-                Op* op = ops[opid];
-                uint64_t fid1 = fused_op.ops.size();
-                op->custom_data = fid1;
-                op->tflag = ntt;
-                fused_op.ops.push_back(op);
-            }
-            for (Op* op : fused_op.ops) {
-                uint fid1 = op->custom_data;
-                uint oid = 0;
-                for (Var* v : op->outputs()) {
-                    oid++;
-                    if (v->tflag != tt) {
-                        // this var node not belong to current execution
-                        // this will happend in multiple outputs fuseable op
-                        v->custom_data = 0;
-                        continue;
-                    }
-                    for (auto o : v->outputs_with_index()) {
-                        Op* op2 = o.op;
-                        uint iid = o.index;
-                        if (op2->tflag != ntt) continue;
-                        uint fid2 = op2->custom_data;
-                        fused_op.edges.emplace_back(fid1, oid-1, fid2, iid);
-                    }
-                }
-            }
-            LOGvvv << "Prepare fused_op" << fused_op.ops;
-            fused_op.update_ops();
+            load_fused_op(fused_op, fuse_ops, ops, ll, rr, tt);
         }
         LOGvvv << "Run" << op;
         //debug
@@ -1179,15 +1239,26 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         // release liveness when op is finished
         // outputs may change during free, we need to backup it;
         outputs_bk.clear();
-        for (Var* var : op->outputs())
-            outputs_bk.push_back(var);
+        for (Var* var : op->outputs()) {
+            /* only free not need_free output var.
+            For example o1, o2 = op1(i1)
+            o2 is not used, so its f:b:p liveness == 0
+            when o1 is freed, op2 will be freed, o2 will be freed too.
+            so no need to free o2 again.
+            */
+            if (!var->need_free())
+                outputs_bk.push_back(var);
+            else {
+                // TODO: will this cause bug?
+                var->flags.set(NodeFlags::_finished);
+            }
+        }
         op->finish_pending_liveness();
         for (Var* var : outputs_bk)
-            // var->finish_pending_liveness();
             var->finish_pending_liveness();
         } catch (const std::exception& e) {
             // log memory info
-            display_memory_info(__FILELINE__);
+            display_memory_info(__FILELINE__, false, true);
             // log jit_key and file location
             op->do_prepare();
             string jit_src_path = Op::get_filename_from_jit_key(jk.to_cstring(), ".cc");
@@ -1202,17 +1273,42 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
     }
     LOGvv << "All" << op_num << "ops finished, return vars:" << vars;
     for (Var* v : vars) ASSERT(v->mem_ptr);
+    // clean fetcher free buffer
+    fetcher_to_free.clear();
     #ifdef HAS_CUDA
     if (device_sync && use_cuda) {
         last_is_cuda = false;
         sync_times++;
-        event_queue.run_sync([]() {
+        CHECK(EventQueue::OK == event_queue.run_sync([]() {
             checkCudaErrors(cudaDeviceSynchronize());
-        });
-                // TODO sync allocator
+        }));
+            // TODO sync allocator
     }
-    LOGvv << "cudaDeviceSynchronize times:" << sync_times << "/" <<queue.size();
+    LOGvv << "cudaDeviceSynchronize times:" << sync_times << "/" <<queue.size() << "device_sync:" << device_sync;
     #endif
+}
+
+unordered_map<void*, size_t> allocation_map;
+unordered_map<void*, size_t> size_map;
+
+extern "C" void* jittor_cuda_malloc(void*, size_t size, int device_id) {
+    size_t allocation;
+    void* ptr=exe.allocator->alloc(size, allocation);
+    allocation_map[ptr]=allocation;
+    size_map[ptr]=size;
+    return ptr;
+}
+
+extern "C" void jittor_cuda_free(void*, void* ptr, int device_id) {
+    exe.allocator->free(ptr, size_map[ptr], allocation_map[ptr]);
+}
+
+extern "C" void* get_jittor_cuda_malloc() {
+    return (void*)jittor_cuda_malloc;
+}
+
+extern "C" void* get_jittor_cuda_free() {
+    return (void*)jittor_cuda_free;
 }
     
 } // jittor

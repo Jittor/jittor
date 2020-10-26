@@ -12,25 +12,44 @@
 #include "var.h"
 #include "executor.h"
 #include "graph.h"
+#include "update_queue.h"
 
 namespace jittor {
-    
+
+DEFINE_FLAG(int, lazy_execution, 1, "Default enabled, if disable, use immediately eager execution rather than lazy execution, This flag makes error message and traceback infomation better. But this flag will raise memory consumption and lower the performance.");
+
 list<VarHolder*> VarHolder::hold_vars;
 
 void add_hold_vars(VarHolder* self) {
     VarHolder::hold_vars.push_front(self);
     self->iter = VarHolder::hold_vars.begin();
+    if (lazy_execution) return;
+    auto v = self->var;
+    for (int i=0; i<5; i++) {
+        auto op = v->input();
+        if (!op) break;
+        if (i==0 && op->name() == string("tape")) return;
+        if (op->type() == OpType::other) break;
+        if (op->type() == OpType::reduce) break;
+        if (op->inputs().size() == 0)
+            break;
+        if (op->type() == OpType::broadcast)
+            return;
+        v = op->inputs().front();
+    }
+    self->sync(true);
 }
 
 VarHolder::VarHolder(Var* v) : var(v) {
-    add_hold_vars(this);
     // Var holder has both forward and backward liveness
     var->own_both_liveness();
+    add_hold_vars(this);
 }
 
-VarHolder::VarHolder(VarPtr&& v) : VarHolder(v.ptr) {
-    v.free_liveness();
+VarHolder::VarHolder(VarPtr&& v) {
+    var = v.ptr;
     v.ptr = nullptr;
+    add_hold_vars(this);
 }
 
 VarHolder::VarHolder(VarHolder* v) : var(v->var) {
@@ -74,6 +93,13 @@ VarHolder* VarHolder::assign(VarHolder* v) {
     return this;
 }
 
+VarHolder* VarHolder::update(VarHolder* v) {
+    auto dv = jittor::detach(v->var);
+    update_queue.push(dv.ptr, var);
+    *this = move(dv);
+    return this;
+}
+
 extern Executor exe;
 
 void VarHolder::sync(bool device_sync) {
@@ -88,6 +114,9 @@ ArrayArgs VarHolder::fetch_sync() {
     return {var->mem_ptr, var->shape, var->dtype()};
 }
 
+// from fetch_op.cc
+extern list<VarPtr> fetcher;
+
 void sync_all(bool device_sync) {
     vector<Var*> vars;
     vars.reserve(VarHolder::hold_vars.size());
@@ -95,6 +124,8 @@ void sync_all(bool device_sync) {
         if (!v->var->_outputs.size())
             vars.push_back(v->var);
     }
+    for (auto& v :fetcher)
+        vars.push_back(v.ptr);
     graph_check();
     exe.run_sync(vars, device_sync); //need sync at last
     graph_check();

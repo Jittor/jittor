@@ -32,9 +32,9 @@ Init() {
 }
 ~Init() {
     if (!get_device_count()) return;
-    checkCudaErrors(cudaDeviceSynchronize());
-    // checkCudaErrors(cudaStreamDestroy(stream));
-    // checkCudaErrors(cudaEventDestroy(event));
+    peekCudaErrors(cudaDeviceSynchronize());
+    // peekCudaErrors(cudaStreamDestroy(stream));
+    // peekCudaErrors(cudaEventDestroy(event));
 }
 } init;
 
@@ -72,6 +72,11 @@ ArrayOp::ArrayOp(ArrayArgs&& args) {
     // TODO: args.buffer too many copy
     new (&allocation) Allocation(cpu_allocator, output->size);
     std::memcpy(allocation.ptr, args.ptr, output->size);
+}
+
+void ArrayOp::jit_prepare() {
+    if (output->flags.get(NodeFlags::_force_fuse))
+        add_jit_define("T", output->dtype());
 }
 
 void ArrayOp::run() {

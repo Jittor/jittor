@@ -96,7 +96,7 @@ struct DelayFree final : Allocator {
     void free(void* mem_ptr, size_t size, const size_t& allocation) override {
         using namespace cuda_dual_local;
         allocations.emplace_back(mem_ptr, allocation, size, &cuda_dual_allocator);
-        checkCudaErrors(_cudaLaunchHostFunc(0, &to_free_allocation, 0));
+        peekCudaErrors(_cudaLaunchHostFunc(0, &to_free_allocation, 0));
     }
 
     void migrate_to_cpu(void*& mem_ptr, size_t& allocation, size_t size, Allocator* allocator, cudaStream_t* cuda_stream) {

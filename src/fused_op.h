@@ -19,7 +19,11 @@ std::ostream& operator<<(std::ostream& os, const VarInfo& vi);
 struct FusedOpContext {
     VarRelayManager vrm;
     jit_op_entry_t entry;
+    unordered_map<Node*, int> node_id;
+    void setup(FusedOp* fop);
 };
+
+extern string_view_map<FusedOpContext*> jit_fused_ops;
 
 struct FusedOp final : Op {
     vector<Op*> ops;
@@ -31,8 +35,11 @@ struct FusedOp final : Op {
     loop_options_t& get_loop_options_tuned();
     FusedOpContext* context;
 
+    int get_node_id(Node* node);
+    int has(Node* node);
     void update_ops();
     FusedOp();
+    FusedOp(const FusedOp& other);
     ~FusedOp();
 
     int get_loop_option(const string& key, const int& _default=0);

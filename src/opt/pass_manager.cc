@@ -63,6 +63,13 @@ void PassManager::run_passes() {
     LOGvvvv << "KernelIR:\n" << ir.to_string();
     if (oc->op->ops.size() == 1 && oc->op->ops[0]->name() == string("array")) {
         ir.remove_all_unused();
+        if (oc->op->flags.get(NodeFlags::_cuda)) {
+            ir.children.back()->erase();
+            string type = oc->op->ops[0]->outputs().front()->dtype().to_cstring();
+            ir.push_back("kernel<<<1,1>>>(op0_outputp, op0->ptr<"+type+">()[0]);");
+            auto jt_type = type == "bool" ? type : "jittor::" + type;
+            ir.push_back("__global__ static void kernel("+jt_type+"* xp, "+jt_type+" x) { xp[0] = x; } ", &ir.before, true);
+        }
         return;
     }
     run_pass<MarkRawPass>();

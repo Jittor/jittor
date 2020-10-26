@@ -28,6 +28,7 @@ extern int mpi_world_size;
 extern int mpi_world_rank;
 extern int mpi_local_rank;
 extern bool inside_mpi;
+extern bool mpi_enabled;
 
 /**
 Return number of MPI nodes.
@@ -46,6 +47,19 @@ Return local ID of this MPI node.
 */
 // @pyjt(local_rank)
 int _mpi_local_rank();
+
+/**
+ Set MPI state, enable or disable, if disabled, all mpi operators
+ have no affect.
+*/
+// @pyjt(set_state)
+inline void _mpi_set_state(bool enable) { mpi_enabled = enable; }
+
+/**
+ Get MPI state, enable or disable.
+*/
+// @pyjt(get_state)
+inline int _mpi_get_state() { return mpi_enabled; }
 
 struct ArrayArgs;
 

@@ -25,7 +25,9 @@ class TestStopFuse(unittest.TestCase):
             jt.sync(dbs+[a])
         
         for a in report[1:]:
-            assert len(a[0].split("opkey")) < 50
+            # origin is 50
+            # after update queue, increase to 102
+            assert len(a[0].split("opkey")) < 110, len(a[0].split("opkey"))
 
     def test_stop_fuse2(self):
         with jt.profile_scope() as report:
@@ -43,7 +45,9 @@ class TestStopFuse(unittest.TestCase):
             jt.sync(dbs+[a])
         
         for a in report[1:]:
-            assert len(a[0].split("opkey")) < 8
+            # origin is 8
+            # after update queue, increase to 12
+            assert len(a[0].split("opkey")) < 16, len(a[0].split("opkey"))
 
 if __name__ == "__main__":
     unittest.main()

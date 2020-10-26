@@ -180,7 +180,7 @@ sudo apt install python3.7 python3.7-dev
 ### 步骤三：运行Jittor
 
 
-整个框架是及时编译的。 让我们通过pip安装jittor
+整个框架是即时编译的。 让我们通过pip安装jittor
 
 ```bash
 git clone https://github.com/Jittor/jittor.git
@@ -363,7 +363,7 @@ Jittor还很年轻。 它可能存在错误和问题。 请在我们的错误跟
 ## 团队
 
 
-Jittor目前由来自[清华大学计算机图形学组](https://cg.cs.tsinghua.edu.cn/)的梁盾，杨国烨，杨国炜和周文洋等博士生维护。 如果您也对Jittor感兴趣并希望对其进行改进，请加入我们！
+Jittor目前由来自[清华大学计算机图形学组](https://cg.cs.tsinghua.edu.cn/)的梁盾，杨国烨，杨国炜，周文洋和国孟昊等博士生维护。 如果您也对Jittor感兴趣并希望对其进行改进，请加入我们！
 
 
 ## 版权声明

@@ -23,7 +23,7 @@ except:
     skip_this_test = True
 
 mid = 0
-if os.uname()[1] == "jittor-ce":
+if "jittor" in os.uname()[1]:
     mid = 1
 
 def resize_and_crop(x, bbox, interpolation="nearest", out_size=[224,224]):
@@ -99,6 +99,7 @@ class TestResizeAndCrop(unittest.TestCase):
         test_case(20, [1024, 1024], [1.2, 1.8][mid])
         test_case(20, [1024, 666], [0.8,1.0][mid])
 
+    @unittest.skipIf(torch is None, "no torch found")
     def test_resize(self):
         import torch.nn.functional as F
         x = np.array(range(2*3*25)).reshape(2,3,5,5).astype("float32")
@@ -108,11 +109,13 @@ class TestResizeAndCrop(unittest.TestCase):
                     jnn.Resize((r_size, r_size), 'bilinear', align_corners),
                     lambda x: F.interpolate(x, size=(r_size, r_size), mode='bilinear',align_corners=align_corners))
 
+    @unittest.skipIf(torch is None, "no torch found")
     def test_upsample(self):
         arr = np.random.randn(2,3,224,224)
         check_equal(arr, jnn.Upsample(scale_factor=2), tnn.Upsample(scale_factor=2))
         check_equal(arr, jnn.Upsample(scale_factor=0.2), tnn.Upsample(scale_factor=0.2))
 
+    @unittest.skipIf(torch is None, "no torch found")
     def test_pixelshuffle(self):
         arr = np.random.randn(2,4,224,224)
         check_equal(arr, jnn.PixelShuffle(upscale_factor=2), tnn.PixelShuffle(upscale_factor=2))

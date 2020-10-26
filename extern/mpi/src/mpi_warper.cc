@@ -31,20 +31,22 @@ int mpi_world_size = 1;
 int mpi_world_rank = 0;
 int mpi_local_rank = 0;
 bool inside_mpi = false;
+bool mpi_enabled = false;
 
 int _mpi_world_size() {
-    return mpi_world_size;
+    return mpi_enabled ? mpi_world_size : 1;
 }
 
 int _mpi_world_rank() {
-    return mpi_world_rank;
+    return mpi_enabled ? mpi_world_rank : 0;
 }
 
 int _mpi_local_rank() {
-    return mpi_local_rank;
+    return mpi_enabled ? mpi_local_rank : 0;
 }
 
 void _mpi_broadcast(ArrayArgs&& args, int root) {
+    if (!mpi_enabled) return;
     int64 size = args.dtype.dsize();
     for (auto j : args.shape)
         size *= j;
@@ -52,23 +54,23 @@ void _mpi_broadcast(ArrayArgs&& args, int root) {
 }
 
 static uint64_t getHostHash(const char* string) {
-  // Based on DJB2, result = result * 33 + char
-  uint64_t result = 5381;
-  for (int c = 0; string[c] != '\0'; c++){
-    result = ((result << 5) + result) + string[c];
-  }
-  return result;
+    // Based on DJB2, result = result * 33 + char
+    uint64_t result = 5381;
+    for (int c = 0; string[c] != '\0'; c++){
+        result = ((result << 5) + result) + string[c];
+    }
+    return result;
 }
 
 
 static void getHostName(char* hostname, int maxlen) {
-  gethostname(hostname, maxlen);
-  for (int i=0; i< maxlen; i++) {
-    if (hostname[i] == '.') {
-        hostname[i] = '\0';
-        return;
+    gethostname(hostname, maxlen);
+    for (int i=0; i< maxlen; i++) {
+        if (hostname[i] == '.') {
+            hostname[i] = '\0';
+            return;
+        }
     }
-  }
 }
 
 struct mpi_initer {
@@ -76,11 +78,12 @@ struct mpi_initer {
 mpi_initer() {
     inside_mpi = !!getenv("OMPI_COMM_WORLD_SIZE");
     if (!inside_mpi) return;
+    mpi_enabled = true;
     LOGvv << "MPI init...";
     MPI_CHECK(MPI_Init(NULL, NULL));
     MPI_CHECK(MPI_Comm_size(MPI_COMM_WORLD, &mpi_world_size));
     MPI_CHECK(MPI_Comm_rank(MPI_COMM_WORLD, &mpi_world_rank));
-    
+
     //calculating localRank based on hostname which is used in selecting a GPU
     uint64_t hostHashs[mpi_world_rank];
     char hostname[1024];

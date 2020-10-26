@@ -18,6 +18,7 @@ import jittor_utils as jit_utils
 from jittor_utils import LOG, run_cmd, cache_path, find_exe, cc_path, cc_type, cache_path
 from . import pyjt_compiler
 from . import lock
+from jittor import __version__
 
 def find_jittor_path():
     return os.path.dirname(__file__)
@@ -46,6 +47,7 @@ def compile(compiler, flags, inputs, output, combind_build=False):
             run_cmd(cmd)
             return True
     link = link_flags
+    base_output = output.split('/')[-1].split('.')[0]
     # if output is core, add core_link_flags
     if output.startswith("jittor_core"):
         link = link + core_link_flags
@@ -77,7 +79,7 @@ def compile(compiler, flags, inputs, output, combind_build=False):
             cc = nvcc_path
         cmd = f"{cc} {input} {nflags} -c {lto_flags} -o {obj_file}"
         cmds.append(cmd)
-    jit_utils.run_cmds(cmds, cache_path, jittor_path)
+    jit_utils.run_cmds(cmds, cache_path, jittor_path, "Compiling "+base_output)
     cmd = f"{compiler} {' '.join(obj_files)} {flags} {lto_flags} {link} -o {output}"
     return do_compile(cmd)
 
@@ -240,38 +242,38 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
         if "multiple_outputs" not in attrs:
             jit_cc_src.append(f"""
             VarPtr make_{cc_func_name}({", ".join(cc_make_args)}) {{
-                Op* _op = new {op_name}({", ".join(op_make_args)});
+                auto _op = new {op_name}({", ".join(op_make_args)});
                 if (_op->outputs_holder.size() != 1) {{
                     delete _op;
                     LOGf << "Wrong output size of" << \"{op_name}\";
                 }}
                 if (_op->flags.get(NodeFlags::_forwarded)) {{
-                    VarPtr output(move(_op->outputs_holder[0]));
+                    VarPtr _out(move(_op->outputs_holder[0]));
                     delete _op;
-                    return output;
+                    return _out;
                 }}
                 _op->outputs_holder[0]->set_inputs({{_op}});
-                VarPtr output(move(_op->outputs_holder[0]));
+                VarPtr _out(move(_op->outputs_holder[0]));
                 {src.replace("->var","")};
                 _op->init();
-                return output;
+                return _out;
             }}
             """)
         else:
             jit_cc_src.append(f"""
             vector<VarPtr> make_{cc_func_name}({", ".join(cc_make_args)}) {{
-                Op* _op = new {op_name}({", ".join(op_make_args)});
+                auto _op = new {op_name}({", ".join(op_make_args)});
                 if (_op->flags.get(NodeFlags::_forwarded)) {{
-                    vector<VarPtr> outputs = move(_op->outputs_holder);
+                    vector<VarPtr> _outs = move(_op->outputs_holder);
                     delete _op;
-                    return outputs;
+                    return _outs;
                 }}
-                vector<VarPtr> outputs = move(_op->outputs_holder);
-                for (uint i=0; i<outputs.size(); i++)
-                    outputs[i]->set_inputs({{_op}});
+                vector<VarPtr> _outs = move(_op->outputs_holder);
+                for (uint i=0; i<_outs.size(); i++)
+                    _outs[i]->set_inputs({{_op}});
                 {src.replace("->var","")};
                 _op->init();
-                return outputs;
+                return _outs;
             }}
             """)
         if pybind_name == 'None':
@@ -289,7 +291,14 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
             /*{doc_string}*/
             // @pyjt({",".join(pyjt_names)})
             vector<VarHolder*> {cc_func_name}({", ".join(cc_args)}) {{
-                return make_vh_vector(make_{cc_func_name}({", ".join(op_args)}));
+                {   f'return make_vh_vector(make_{cc_func_name}({", ".join(op_args)}));'
+                    if "replace_outputs" not in attrs else
+                    f'''auto rt = make_vh_vector(make_{cc_func_name}({", ".join(op_args)}));
+                    ASSERT(rt.size() == outputs.size());
+                    for (int i=0; i<outputs.size(); i++)
+                        outputs[i]->assign(rt[i]);
+                    return rt;
+                    '''}
             }}
             """)
         else:
@@ -345,7 +354,7 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
         with open(os.path.join(jittor_path, header), encoding='utf8') as f:
             src = f.read()
         # XxxXxxOp(args)
-        res = re.findall(pybind_attrs_reg + '('+name2+"\\([^\\n]*\\))", src, re.S)
+        res = re.findall(pybind_attrs_reg + '[^~]('+name2+"\\([^\\n]*\\))", src, re.S)
         assert len(res) >= 1, "Wrong op args in " + header
         # registe op
         cc_name = os.path.join(jittor_path, header[:-2] + ".cc")
@@ -407,6 +416,15 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
                         arg_type.replace("Var", "VarHolder")+' '+arg)
                     new_args.append(arg)
                     more_src.append(f"_op->add_inputs({arg});")
+                elif arg_type.startswith("VarSlices"):
+                    new_args_def.append(arg_def)
+                    new_args.append(arg)
+                    more_src.append(f"""
+                        vector<Var*> svars;
+                        for (int i=0; i<_op->vs.n; i++)
+                            if (_op->vs.slices[i].is_var())
+                                svars.push_back(_op->vs.slices[i].var);
+                        _op->add_inputs(svars);""")
                 else:
                     new_args_def.append(arg_def)
                     new_args.append(arg)
@@ -784,11 +802,16 @@ def try_find_exe(*args):
 def check_pybt(gdb_path, python_path):
     if gdb_path=='' or python_path=='':
         return False
-    ret = sp.getoutput(f"{gdb_path} --batch {python_path} -ex 'help py-bt'")
-    if 'python frame' in ret:
-        LOG.v("py-bt found in gdb.")
-        return True
-    return False
+    return True
+    # TODO: prev we use below code to check has py-bt or nor
+    # but it is too slow, so we comment it,
+    # find a better way to check py-bt exist
+
+    # ret = sp.getoutput(f"{gdb_path} --batch {python_path} -ex 'help py-bt'")
+    # if 'python frame' in ret:
+    #     LOG.v("py-bt found in gdb.")
+    #     return True
+    # return False
 
 def check_debug_flags():
     global is_debug
@@ -798,7 +821,7 @@ def check_debug_flags():
         global cc_flags
         cc_flags += " -g -DNODE_MEMCHECK "
 
-cc_flags = " " + os.environ.get("cc_flags", "")
+cc_flags = " "
 # os.RTLD_NOW | os.RTLD_GLOBAL cause segfault when import torch first
 import_flags = os.RTLD_NOW | os.RTLD_GLOBAL | os.RTLD_DEEPBIND
 # if cc_type=="icc":
@@ -813,6 +836,8 @@ jittor_path = find_jittor_path()
 check_debug_flags()
 
 sys.path.append(cache_path)
+LOG.i(f"Jittor({__version__}) src: {jittor_path}")
+LOG.i(f"cache_path: {cache_path}")
 
 with jit_utils.import_scope(import_flags):
     jit_utils.try_import_jit_utils_core()
@@ -841,6 +866,8 @@ has_pybt = check_pybt(gdb_path, python_path)
 
 cc_flags += " -Wall -Werror -Wno-unknown-pragmas -std=c++14 -fPIC -march=native "
 cc_flags += " -fdiagnostics-color=always "
+if "cc_flags" in os.environ:
+    cc_flags += os.environ["cc_flags"] + ' '
 link_flags = " -lstdc++ -ldl -shared "
 core_link_flags = ""
 opt_flags = ""
@@ -908,14 +935,14 @@ with open(os.path.join(cache_path, "gen", "jit_op_maker.h"), 'w') as f:
     f.write(jit_src)
 cc_flags += f' -I{cache_path} '
 # gen pyjt
-pyjt_compiler.compile(cache_path, jittor_path)
+pyjt_gen_src = pyjt_compiler.compile(cache_path, jittor_path)
 
 # initialize order:
 # 1. registers
 # 2. generate source
 # 3. op_utils
 # 4. other
-files2 = run_cmd(f'find "{os.path.join(cache_path, "gen")}" | grep "cc$"').splitlines()
+files2 = pyjt_gen_src
 files4 = run_cmd('find -L src | grep "cc$"', jittor_path).splitlines()
 at_beginning = [
     "src/mem/allocator/mssfrl_allocator.cc",
@@ -978,7 +1005,9 @@ with jit_utils.import_scope(import_flags):
 
 flags = core.flags()
 if has_cuda:
-    nvcc_flags += f" -arch={','.join(map(lambda x:'sm_'+str(x),flags.cuda_archs))} "
+    if len(flags.cuda_archs):
+        nvcc_flags += f" -arch=compute_{min(flags.cuda_archs)} "
+        nvcc_flags += ''.join(map(lambda x:f' -code=sm_{x} ', flags.cuda_archs))
 
 flags.cc_path = cc_path
 flags.cc_type = cc_type

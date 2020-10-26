@@ -25,10 +25,16 @@ void EventQueue::Worker::start() {
 }
 
 void EventQueue::worker_caller() {
-    event_queue.func();
+    int status = OK;
+    try {
+        event_queue.func();
+    } catch (const std::exception& e) {
+        LOGe << "Catch error:\n" >> e.what();
+        status = ERROR;
+    }
     {
         std::lock_guard<std::mutex> l(event_queue.mtx);
-        event_queue.run_sync_done = true;
+        event_queue.run_sync_done = status;
     }
 }
 

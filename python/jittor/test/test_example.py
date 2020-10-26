@@ -21,7 +21,8 @@ class Linear(Module):
         self.b = jt.random((out_features,))-0.5 if bias else None
     def execute(self, x):
         x = matmul(x, self.w)
-        if self.b: return x+self.b
+        if self.b is not None: 
+            return x+self.b
         return x
 
 def relu(x):

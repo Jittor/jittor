@@ -25,8 +25,8 @@ def docker_task(name, build_cmd):
     run_cmd(build_cmd)
     run_cmd(f"sudo docker push {name}")
     bname = os.path.basename(name)
-    run_cmd(f"docker save {name}:latest -o /tmp/{bname}.tgz && chmod 666 /tmp/{bname}.tgz")
-    upload_file(f" /tmp/{bname}.tgz")
+    run_cmd(f"sudo docker save {name}:latest -o /tmp/{bname}.tgz && sudo chmod 666 /tmp/{bname}.tgz")
+    upload_file(f"/tmp/{bname}.tgz")
 
 docker_task(
     "jittor/jittor", 
@@ -36,6 +36,11 @@ docker_task(
 docker_task(
     "jittor/jittor-cuda", 
     "sudo docker build --tag jittor/jittor-cuda:latest --build-arg FROM_IMAGE='nvidia/cuda:10.2-cudnn7-devel-ubuntu18.04' . --network host"
+)
+
+docker_task(
+    "jittor/jittor-cuda-10-1", 
+    "sudo docker build --tag jittor/jittor-cuda-10-1:latest --build-arg FROM_IMAGE='nvidia/cuda:10.1-cudnn7-devel-ubuntu18.04' . --network host"
 )
 
 run_cmd("ssh jittor-web Documents/jittor-blog.git/hooks/post-update")

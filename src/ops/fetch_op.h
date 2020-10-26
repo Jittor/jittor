@@ -5,8 +5,9 @@
 // ***************************************************************
 #pragma once
 #include <functional>
-#include "common.h"
-#include "var_holder.h"
+#include "op.h"
+#include "var.h"
+#include "mem/allocator.h"
 #include "ops/array_op.h"
 
 namespace jittor {
@@ -42,7 +43,15 @@ struct FetchResult {
     inline void call() { func.callback(this); }
 };
 
-// @pyjt(fetch)
-void fetch(const vector<VarHolder*>& vh, FetchFunc&& func);
+struct FetchOp final : Op {
+    vector<Var*> fetch_vars;
+    FetchFunc func;
+    list<VarPtr>::iterator fetcher_iter;
+
+    FetchOp(vector<Var*>&& inputs, FetchFunc&& func);
+
+    const char* name() const override { return "fetch"; }
+    void run() override;
+};
 
 } // jittor

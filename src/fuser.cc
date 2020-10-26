@@ -146,7 +146,6 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
         for (uint i=0; i<ops.size(); i++)
             LOGvvvv << ops[i] << dis[i] << deps[i];
     }
-
     for (uint i=0; i<vars.size(); i++) {
         Var* v = vars[i];
         if (!v || v->tflag!=tt) {
@@ -174,10 +173,20 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
                     var_fused[i]=1;
                 }
             }
-        if (vf==0) var_fused[i]=1;
-        if (var_fused[i] && vf && 
-            (iop->type()==OpType::broadcast || all_reduce || v->flags.get(NodeFlags::_force_fuse)))
-            var_fused[i]=2;
+        if (vf==0)
+            // cannot fused
+            var_fused[i]=1;
+        else if (var_fused[i]) {
+            if (iop->type()==OpType::broadcast || 
+                all_reduce || 
+                v->flags.get(NodeFlags::_force_fuse))
+                // strong fused
+                var_fused[i] = 3;
+            else
+                // weak fused
+                var_fused[i] = 2;
+                // var_fused[i] = 3;
+        }
     }
     // output vars can not be fused
     for (int i=0; i<start_var_num; i++)

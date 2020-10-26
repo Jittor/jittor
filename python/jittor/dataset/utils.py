@@ -11,6 +11,7 @@ import jittor as jt
 import numpy as np
 from collections.abc import Sequence, Mapping
 from PIL import Image
+import time
 
 def get_random_list(n):
     return list(np.random.permutation(range(n)))
@@ -25,13 +26,9 @@ def collate_batch(batch):
     elem = batch[0]
     elem_type = type(elem)
     if isinstance(elem, jt.Var):
-        if elem.ndim == 1:
-            temp_data = np.stack([data.numpy() for data in batch], 0)
-            temp_data = np.squeeze(temp_data, -1)
-            return jt.array(temp_data)
-        else:
-            temp_data = np.stack([data.numpy() for data in batch], 0)
-        return jt.array(temp_data)
+        # TODO: use jittor
+        temp_data = np.stack([data.data for data in batch], 0)
+        return temp_data
     if elem_type is np.ndarray:
         temp_data = np.stack([data for data in batch], 0)
         return temp_data
@@ -57,5 +54,15 @@ def collate_batch(batch):
     else:
         raise TypeError(f"Not support type <{elem_type.__name__}>")
 
+class HookTimer:
+    def __init__(self, obj, attr):
+        self.origin = getattr(obj, attr)
+        self.duration = 0.0
+        setattr(obj, attr, self)
 
+    def __call__(self, *args, **kw):
+        start = time.time()
+        rt = self.origin(*args, **kw)
+        self.duration += time.time() - start
+        return rt
 

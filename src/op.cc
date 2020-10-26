@@ -41,9 +41,17 @@ void Op::forward(Var* input) {
     outputs_holder.emplace_back(input);
 }
 
+VarPtr Op::duplicate() {
+    return nullptr;
+}
+
 VarPtr Op::grad(Var* out, Var* dout, Var* v, int v_index) {
     LOGw << "Grad of" << name() << "return zeros";
     return nullptr;
+}
+
+void Op::grads(Var** douts, VarPtr* dins) {
+    LOGw << "Grads of" << name() << "return zeros";
 }
 
 Var* Op::create_output(NanoVector shape, NanoString dtype) {
@@ -67,6 +75,12 @@ bool Op::shape_infered() {
     return true;
 }
 
+void Op::compile_optimize(string& src) {}
+
+void Op::infer_shape() {}
+void Op::run() {}
+void Op::jit_prepare() {}
+void Op::graph_optimize() {}
 
 string Op::name_ex() const {
     string a=name();
@@ -106,9 +120,12 @@ void Op::do_jit_prepare() {
         //   check use_cuda_op from outputs may not be enough
         bool use_cuda_op = use_cuda;
         for (Var* var : inputs()) {
-            if (var->allocator) {
+            if (var->mem_ptr) {
+                /* jit key don't include here, because 
+                    parallel compiler don't known
                 jk << JK::key << "alloc_i" << JK::hex1(in_id)
                     << JK::hex1(var->allocator->flags()) << JK::end;
+                */
                 use_cuda_op &= var->allocator->is_cuda();
             }
             if (var->num >= std::numeric_limits<int32_t>::max())
@@ -116,9 +133,11 @@ void Op::do_jit_prepare() {
             in_id ++;
         }
         for (Var* var : outputs()) {
-            if (var->allocator) {
+            if (var->mem_ptr) {
+                /*
                 jk << JK::key << "alloc_o" << JK::hex1(in_id)
                     << JK::hex1(var->allocator->flags()) << JK::end;
+                */
                 use_cuda_op &= var->allocator->is_cuda();
             }
             if (var->num >= std::numeric_limits<int32_t>::max())

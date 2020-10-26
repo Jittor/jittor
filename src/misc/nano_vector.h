@@ -22,7 +22,32 @@ static inline int lzcnt(int64 v) {
 
 struct Slice {
     int64 start, stop, step, mask;
+    inline void fill(int64 size) {
+        if (step>0) {
+            if (mask&2) 
+                stop = size;
+            else if (stop<0)
+                stop += size;
+            else
+                stop = std::min(size, stop);
+        } else {
+            if (mask&1) start = size-1;
+            if (mask&2)
+                stop = -1;
+            else if (stop<0)
+                stop = std::max((int64)0, stop+size);
+        }
+        if (start<0) start += size;
+        mask = 0;
+        ASSERT(start==stop || (start>=0 && stop>=-1 && start<size && stop<=size))
+            << "slice overflow:" << start << stop << step;
+    }
 };
+
+// return a / ceil_to_2_pow(b)
+inline uint64 fast_div(uint64 a, uint64 b) {
+    return a >> (64 - lzcnt(b));
+}
 
 // @pyjt(NanoVector)
 struct NanoVector {
@@ -108,22 +133,13 @@ struct NanoVector {
 
     // @pyjt(__map_getitem__)
     inline NanoVector slice(Slice slice) {
-        if (slice.step>0) {
-            if (slice.mask&2) slice.stop = size();
-        } else {
-            if (slice.mask&1) slice.start = size()-1;
-            if (slice.mask&2) slice.stop = 0;
-        }
-        if (slice.start<0) slice.start += size();
-        if (slice.stop<0) slice.stop += size();
-        ASSERT(slice.start>=0 && slice.stop>=0 && slice.start<size() && slice.stop<=size())
-            << "slice overflow:" << slice.start << slice.stop << slice.step;
+        slice.fill(size());
         NanoVector v;
         if (slice.step>0) {
             for (int i=slice.start; i<slice.stop; i+=slice.step)
                 v.push_back(this->operator[](i));
         } else {
-            for (int i=slice.start; i>=slice.stop; i+=slice.step)
+            for (int i=slice.start; i>slice.stop; i+=slice.step)
                 v.push_back(this->operator[](i));
         }
         return v;
@@ -166,14 +182,14 @@ struct NanoVector {
     struct Iter {
         const NanoVector* self;
         int index;
-        int64 operator*() { return self->at(index); }
-        Iter& operator++() { index++; return *this; }
-        Iter operator+(int i) { return {self, i+index}; }
-        bool operator!=(Iter& other) { return index != other.index; }
+        inline int64 operator*() { return self->at(index); }
+        inline Iter& operator++() { index++; return *this; }
+        inline Iter operator+(int i) { return {self, i+index}; }
+        inline bool operator!=(Iter& other) { return index != other.index; }
     };
 
-    Iter begin() { return {this, 0}; }
-    Iter end() { return {this, size()}; }
+    inline Iter begin() { return {this, 0}; }
+    inline Iter end() { return {this, size()}; }
 
     inline void pop_back() { offset--; data &= (1ll<<total_bits())-1; }
     inline void push_back(Iter s, Iter t) {

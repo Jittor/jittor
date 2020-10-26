@@ -38,8 +38,10 @@ class FakeMpiBatchNorm(nn.Module):
 
             xvar = x2mean-xmean*xmean
             norm_x = (x-xmean)/jt.sqrt(xvar+self.eps)
-            self.running_mean += (xmean.sum([0,2,3])-self.running_mean)*self.momentum
-            self.running_var += (xvar.sum([0,2,3])-self.running_var)*self.momentum
+            self.running_mean.update(self.running_mean + 
+                (xmean.sum([0,2,3])-self.running_mean)*self.momentum)
+            self.running_var.update(self.running_var + 
+                (xvar.sum([0,2,3])-self.running_var)*self.momentum)
         else:
             running_mean = self.running_mean.broadcast(x, [0,2,3])
             running_var = self.running_var.broadcast(x, [0,2,3])
@@ -48,7 +50,7 @@ class FakeMpiBatchNorm(nn.Module):
         b = self.bias.broadcast(x, [0,2,3])
         return norm_x * w + b
 
-@unittest.skipIf(mpi is None, "no inside mpirun")
+@unittest.skipIf(not jt.in_mpi, "no inside mpirun")
 class TestMpiBatchnorm(unittest.TestCase):
     @classmethod
     def setUpClass(self):
@@ -89,8 +91,9 @@ class TestMpiBatchnorm(unittest.TestCase):
         gs2 = jt.grad(y2,bn2.parameters())
 
         assert np.allclose(y1.data, y2.data, atol=1e-5),(mpi.world_rank(),y1.data, y2.data, y1.data-y2.data)
+        assert len(gs1) == len(gs2)
         for i in range(len(gs1)):
-            assert np.allclose(gs1[i].data, gs2[i].data, rtol=1e-3),(mpi.world_rank(),gs1[i].data, gs2[i].data,gs1[i].data-gs2[i].data)
+            assert np.allclose(gs1[i].data, gs2[i].data, rtol=1e-2),(mpi.world_rank(),gs1[i].data, gs2[i].data,gs1[i].data-gs2[i].data)
 
     @unittest.skipIf(not jt.has_cuda, "no cuda")
     @jt.flag_scope(use_cuda=1)

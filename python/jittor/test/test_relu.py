@@ -61,6 +61,14 @@ class TestRelu(unittest.TestCase):
         check_equal(arr, jnn.LeakyReLU(), tnn.LeakyReLU())
         check_equal(arr, jnn.LeakyReLU(2), tnn.LeakyReLU(2))
         check_equal(arr, jnn.LeakyReLU(99.9), tnn.LeakyReLU(99.9))
+
+        # ***************************************************************
+        # Test Softplus  Layer
+        # ***************************************************************
+        arr = np.random.randn(16,10,224,224)
+        check_equal(arr, jnn.Softplus (), tnn.Softplus ())
+        check_equal(arr, jnn.Softplus (2), tnn.Softplus (2))
+        check_equal(arr, jnn.Softplus (2, 99.9), tnn.Softplus (2, 99.9))
         
 if __name__ == "__main__":
     unittest.main()

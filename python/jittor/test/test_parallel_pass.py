@@ -36,7 +36,7 @@ class TestParallelPass(unittest.TestCase):
         b = jt.random((n, n))
         a.data, b.data
         with jt.profile_scope(compile_options = {
-            "compile_shapes":1, "parallel":1
+            "compile_shapes":1, "parallel":2, "try_use_32bit_index":use_int32
         }, try_use_32bit_index = use_int32) as rep:
             c = a + b
             nc = c.data

@@ -41,9 +41,6 @@ nccl_initer() {
     int device_count = get_device_count();
     if (!device_count) return;
     if (!inside_mpi) return;
-    if (mpi_world_rank == 0)
-        checkCudaErrors(ncclGetUniqueId(&id));
-    MPI_CHECK(MPI_Bcast((void *)&id, sizeof(id), MPI_BYTE, 0, MPI_COMM_WORLD));
     if (mpi_local_rank >= device_count)
         LOGf << "mpi_local_rank(">>mpi_local_rank>>") is larger than device_count("
             >>device_count>>")";
@@ -53,6 +50,9 @@ nccl_initer() {
     event_queue.run_sync([]() {
         checkCudaErrors(cudaSetDevice(nccl_device_id));
     });
+    if (mpi_world_rank == 0)
+        checkCudaErrors(ncclGetUniqueId(&id));
+    MPI_CHECK(MPI_Bcast((void *)&id, sizeof(id), MPI_BYTE, 0, MPI_COMM_WORLD));
     checkCudaErrors(cudaStreamCreateWithFlags(&all_reduce_s, cudaStreamNonBlocking));
     checkCudaErrors(ncclCommInitRank(&comm, mpi_world_size, id, mpi_world_rank));
 }

@@ -74,22 +74,25 @@ string OpCompiler::get_name_by_op_var(Op* op, Var* var) {
             var_id++;
         }
     ASSERT(found);
-    ASSERT(op->custom_data<(int)op_members.size());
-    auto& v = op_members[op->custom_data];
+    ASSERT(this->op);
+    ASSERT(this->op->context);
+    auto opid = this->op->context->node_id.at(op);
+    ASSERT(opid<(int)op_members.size());
+    auto& v = op_members[opid];
     ASSERT(var_id < v.size());
     return v[var_id];
 }
 
 string OpCompiler::get_name_by_op_input(Op* op, uint i) {
-    return op_members.at(op->custom_data).at(i);
+    return op_members.at(this->op->get_node_id(op)).at(i);
 }
 
 string OpCompiler::get_name_by_op_output(Op* op, uint i) {
-    return op_members.at(op->custom_data).at(i+op->inputs().size());
+    return op_members.at(this->op->get_node_id(op)).at(i+op->inputs().size());
 }
 
 bool OpCompiler::op_exist(Op* op) {
-    return op_members.at(op->custom_data).size();
+    return op_members.at(this->op->get_node_id(op)).size();
 }
 
 int OpCompiler::total_member_count() {
@@ -413,6 +416,7 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                 vector<string> args;
                 size_t l = k+1;
                 if (expr == "for" || expr == "if" || expr == "expand_macro" ||
+                    expr == "is_def" ||
                     (k<src.size() && src[k]=='(')) {
                     ASSERT(src[k] == '(');
                     comma.push_back(k);
@@ -444,6 +448,9 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                     if (args.size() >= 5) {
                         step = OpCompiler::eval(vs, defs);
                         vs = args[4];
+                        for (int i=5; i<args.size(); i++) {
+                            vs += "," + args[i];
+                        }
                     }
                     auto new_defs = defs;
                     LOGvvv << "Expand for" << expr >> "[" >> vil >> "," >> vir >> "," >> step >> "]";
@@ -467,6 +474,18 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                     string vfalse = args.size() == 3u ? args[2] : "";
                     int cond = OpCompiler::eval(vcond, defs);
                     new_src += precompile(defs, cond?vtrue:vfalse, macros);
+                    i = l-1;
+                    continue;
+                } else
+                if (expr == "is_def") {
+                    ASSERT(args.size()==1)
+                        << "Jit error: is_def wrong arguments.";
+                    string vdef = args[0];
+                    vdef = precompile(defs, vdef, macros);
+                    if (defs.count(vdef) || macros.count(vdef))
+                        new_src += "1";
+                    else
+                        new_src += "0";
                     i = l-1;
                     continue;
                 } else
@@ -733,6 +752,25 @@ string OpCompiler::get_fused_src(FusedOp* op) {
     return OpCompiler::__get_fused_src(op->ops, op_srcs, op_members);
 }
 
+static void fix_op_member(
+    const vector<Op*>& ops,
+    vector<vector<string>>& op_members
+) {
+    // fill op member: [in0, in1, ... inN, fill, fill, out0, out1, ...]
+    for (int i=0; i<ops.size(); i++) {
+        auto op = ops[i];
+        auto var_num = op->inputs().size() + op->outputs().size();
+        auto& member = op_members.at(i);
+        if (!member.size()) {
+            continue;
+        }
+        ASSERT(member.size() <= var_num);
+        while (member.size() < var_num) {
+            member.insert(member.end() - op->outputs().size(), "__fill__");
+        }
+    }
+}
+
 string OpCompiler::__get_fused_src(
     const vector<Op*>& ops,
     const vector<string>& op_srcs,
@@ -908,6 +946,7 @@ string OpCompiler::__get_fused_src(
             break;
         }
     }
+    fix_op_member(ops, op_members);
     CHECK(!(defs.count("JIT_cpu") && defs.count("JIT_cuda")))
         << "CPU op and GPU op cannot be fused together.";
 
@@ -960,6 +999,7 @@ jit_op_entry_t OpCompiler::do_compile(Op* op) {
         src_after_passes = tm.tune();
         src = &src_after_passes;
     }
+    op->compile_optimize(*src);
     auto ret = oc.compile(op->get_jit_key(), *src);
     return ret;
 }
