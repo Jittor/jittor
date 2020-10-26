@@ -4,6 +4,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 from multiprocessing import Pool
+import multiprocessing as mp
 import subprocess as sp
 import os
 import re
@@ -131,16 +132,31 @@ def do_compile(args):
 
 pool_size = 0
 
-def run_cmds(cmds, cache_path, jittor_path):
-    global pool_size
+def pool_cleanup():
+    global p
+    p.__exit__(None, None, None)
+    del p
+
+def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
+    global pool_size, p
+    bk = mp.current_process()._config.get('daemon')
+    mp.current_process()._config['daemon'] = False
     if pool_size == 0:
         mem_bytes = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
         mem_gib = mem_bytes/(1024.**3)
-        pool_size = min(8,max(int(mem_gib // 3), 1))
+        pool_size = min(16,max(int(mem_gib // 3), 1))
         LOG.i(f"Total mem: {mem_gib:.2f}GB, using {pool_size} procs for compiling.")
+        p = Pool(pool_size)
+        p.__enter__()
+        import atexit
+        atexit.register(pool_cleanup)
     cmds = [ [cmd, cache_path, jittor_path] for cmd in cmds ]
-    with Pool(pool_size) as p:
-        p.map(do_compile, cmds)
+    try:
+        n = len(cmds)
+        for i,_ in enumerate(p.imap_unordered(do_compile, cmds)):
+            pass
+    finally:
+        mp.current_process()._config['daemon'] = bk
 
 def download(url, filename):
     from six.moves import urllib

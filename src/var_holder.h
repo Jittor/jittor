@@ -155,6 +155,11 @@ struct VarHolder {
         std::memcpy(var->mem_ptr, array.ptr, size);
     }
 
+    // @pyjt(_add_input)
+    inline void _add_input(VarHolder* other) {
+        var->input()->add_inputs(vector<Var*>{other->var});
+    }
+
     // @pyjt(debug_msg)
     string debug_msg();
 };

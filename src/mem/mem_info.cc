@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <algorithm>
 #include <sys/sysinfo.h>
+#include <vector>
 
 #include "var.h"
 #include "op.h"
@@ -98,6 +99,12 @@ void display_memory_info(const char* fileline) {
             << "unused:" << FloatOutput{(double)a->unused_memory, " KMG", 1024, "B"} 
                 >> "(" >> std::setprecision(p) >> a->unused_memory*100.0 / total >> "%)"
             << "total:" << FloatOutput{(double)total, " KMG", 1024, "B"} >> "\n";
+        std::vector<size_t> sizes = a->get_stream_available_memory();
+        log << "sizes: ";
+        for (int i = 0; i < sizes.size(); ++i){
+            log << i << ": " << FloatOutput{(double)sizes[i], " KMG", 1024, "B"} << ", ";
+        }
+        log >> "\n";
     }
     log >> "===========================\n";
     log.end();

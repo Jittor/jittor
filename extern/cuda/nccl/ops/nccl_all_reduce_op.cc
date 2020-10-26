@@ -54,7 +54,7 @@ void NcclAllReduceOp::jit_run() {
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
     
-    checkCudaErrors(ncclAllReduce(xp, yp, y->num, @T_NCCL, ncclSum, comm, *cuda_stream));
+    checkCudaErrors(ncclAllReduce(xp, yp, y->num, @T_NCCL, ncclSum, get_comm(cuda_stream), *cuda_stream));
     
 }
 

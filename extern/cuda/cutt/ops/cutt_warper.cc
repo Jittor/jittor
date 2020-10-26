@@ -12,11 +12,11 @@
 namespace jittor {
 
 void jt_alloc(void** p, size_t len, size_t& allocation) {
-    *p = exe.allocator->alloc(len, allocation);
+    *p = exe.allocator->alloc(len, allocation, &exe.cuda_streams[0]);
 }
 
 void jt_free(void* p, size_t len, size_t& allocation) {
-    exe.allocator->free(p, len, allocation);
+    exe.allocator->free(p, len, allocation, &exe.cuda_streams[0]);
 }
 
 struct cutt_initer {

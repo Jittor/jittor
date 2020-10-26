@@ -49,7 +49,7 @@ struct Executor {
     #ifdef HAS_CUDA
     CudaEventPool cuda_event_pool;
     bool cuda_streams_initialized;
-    static const int CUDA_STREAM_NUM = 32; //TODO chagne to 64. but now there are more than 64 streams, so set to 32.
+    static const int CUDA_STREAM_NUM = 5; //TODO chagne to 64. but now there are more than 64 streams, so set to 32.
     cudaStream_t cuda_streams[CUDA_STREAM_NUM];
 
     Executor() {
@@ -57,19 +57,25 @@ struct Executor {
     }
 
     void cuda_streams_init() {
-        cuda_streams_initialized = true;
+        if (((MSSFRLAllocator*)allocator)->cuda_streams_initialized)
+            return;
         cuda_streams[0] = 0;
         ((MSSFRLAllocator*)allocator)->set_stream_n(CUDA_STREAM_NUM);
         ((MSSFRLAllocator*)allocator)->streams_id_mapper[&cuda_streams[0]] = 0;
         for (int i = 1; i < CUDA_STREAM_NUM; ++i) {
-            checkCudaErrors(cudaStreamCreateWithFlags(&cuda_streams[i], cudaStreamNonBlocking));
+            if (!cuda_streams_initialized) 
+                checkCudaErrors(cudaStreamCreateWithFlags(&cuda_streams[i], cudaStreamNonBlocking));
             ((MSSFRLAllocator*)allocator)->streams_id_mapper[&cuda_streams[i]] = i;
         }
+        ((MSSFRLAllocator*)allocator)->cuda_streams_initialized = true;
+        cuda_streams_initialized = true;
     }
     #endif
     Allocator* allocator;
     bool last_is_cuda = false;
     void run_sync(vector<Var*> vars, bool device_sync);
+    bool check_all_reduce(Op* op);
+    bool check_log(Op* op);
 };
 
 extern Executor exe;

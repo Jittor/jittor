@@ -1,3 +1,8 @@
+import os
+import ctypes
+ctypes.CDLL(os.path.join(os.environ.get('PYTHONPATH'), "../my/occ_test/libCuda.so"), os.RTLD_GLOBAL | os.RTLD_NOW)
+ctypes.CDLL(os.path.join(os.environ.get('PYTHONPATH'), "../my/occ_test/libcuda.so.1"), os.RTLD_GLOBAL | os.RTLD_NOW)
+
 # ***************************************************************
 # Copyright (c) 2020 Jittor. Authors:
 #   Dun Liang <randonlang@gmail.com>.

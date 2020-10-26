@@ -22,6 +22,7 @@ struct Op : Node {
     #ifdef HAS_CUDA
     cudaStream_t* cuda_stream = NULL;
     int all_reduce_id = -1;
+    int temp_id = -1;
     #endif
     
     inline Caster<Var*, Node::input_t> inputs() { CHECK_EXIST; return &_inputs; }

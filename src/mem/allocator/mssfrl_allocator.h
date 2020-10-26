@@ -9,6 +9,7 @@
 #pragma once
 #include "mem/allocator.h"
 #include <deque>
+#include <vector>
 #include <cstring>
 #include <unordered_map>
 #include <cuda_runtime.h>
@@ -150,6 +151,7 @@ struct EventPool {
 
 struct MSCachingBlockPool {
     std::map<unsigned long long, MSCachingBlock*> blocks, stream_blocks[STREAM_N];
+    size_t stream_available_memory[STREAM_N];
     //for recycle block_id
     std::vector<size_t> block_ids;  
     //start from 1
@@ -205,6 +207,7 @@ struct MSSFRLAllocator : Allocator {
     size_t stream_n;
     EventPool event_pool;
     std::unordered_map<cudaStream_t*, int> streams_id_mapper;
+    bool cuda_streams_initialized;
 
     //debug
     static const bool debug = false;
@@ -239,6 +242,7 @@ struct MSSFRLAllocator : Allocator {
     inline MSSFRLAllocator(float free_ratio = 1, float min_free_size=0, size_t stream_n = 0) : stream_n(stream_n), event_pool(stream_n), small_blocks(stream_n), large_blocks(stream_n), free_ratio(free_ratio), min_free_size(min_free_size), used_memory(0), unused_memory(0) { 
         mssfrl_allocators.push_front(this); 
         iter = mssfrl_allocators.begin(); 
+        cuda_streams_initialized = false;
         ASSERT(stream_n <= 64);
     }
     inline MSSFRLAllocator(Allocator* underlying, float free_ratio = 1, float min_free_size=0, size_t stream_n = 0) : MSSFRLAllocator(free_ratio, min_free_size, stream_n) {
@@ -266,6 +270,8 @@ struct MSSFRLAllocator : Allocator {
     // tasks in [stream_id_s] before this event will run after [time_stamp] in [stream_id_t]
     long long record_rely(cudaStream_t* stream_s, cudaStream_t* stream_t, long long time_stamp);
     void reset_stream_events(MSCachingBlock* block);
+    std::vector<size_t> get_stream_available_memory();
+    void display_memory_info();
 };
 
 DECLARE_FLAG(int, use_mssfrl_allocator);

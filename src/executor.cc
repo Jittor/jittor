@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <functional>
 #include <cmath>
+#include <utility>
 #ifdef HAS_CUDA
 #include "mem/allocator/mssfrl_allocator.h"
 #include <cuda_runtime.h>
@@ -23,17 +24,45 @@
 #include "fused_op.h"
 #include "fuser.h"
 #include "profiler/profiler_guard.h"
+#include <dlfcn.h>
+#include "utils/cuda_utils.h"
 
 namespace jittor {
 
 Executor exe;
+bool Executor::check_all_reduce(Op* op) {
+    if (((string)op->name()) == "nccl_all_reduce") {
+        for (Var* v : op->inputs()) {
+            if (v->loop_options) {
+                loop_options_t t = v->loop_options.data();
+                return t.count("optim_all_reduce") && t["optim_all_reduce"] == 1;
+            }
+        }
+    }
+    return false;
+}
+bool Executor::check_log(Op* op) {
+    if (((string)op->name()) == "nccl_all_reduce") {
+        for (Var* v : op->inputs()) {
+            if (v->loop_options) {
+                loop_options_t t = v->loop_options.data();
+                return t.count("optim_all_reduce") && t["optim_all_reduce"] == 1 && string(v->name.c_str()).substr(0, 6) == "cnt_1_";
+            }
+        }
+    }
+    return false;
+}
+
+void executor_set_break() {
+    checkCudaErrors(cudaDeviceSynchronize());
+}
 
 void Executor::run_sync(vector<Var*> vars, bool device_sync) {
     auto allocator = get_allocator();
     this->allocator = allocator;
     #ifdef HAS_CUDA
     if (use_cuda)
-        if (!cuda_streams_initialized) cuda_streams_init();
+        cuda_streams_init();
     #endif
     // bfs find all ops need to run
     int op_num = 0;
@@ -130,22 +159,503 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
     // ** toplogical_sort external **
     // output:
     //     queue: toplogical order of fused op
+        int exp = 7;//best:7  default:1
+        // static int* mpi_local_rank = (int*)dlsym(RTLD_DEFAULT, "_ZN6jittor14mpi_local_rankE");
     {
-        for (int root : roots) {
-            for (int i=root; i>=0; i=next[i]) {
-                Op* op = ops[i];
-                for (Var* v : op->inputs()) {
-                    if (v->tflag != tt) continue;
-                    Op* opi = v->input();
-                    // if those two ops are not fused
-                    if (father[opi->custom_data] != root) {
-                        deps[root]++;
+        int all_reduce_plan = -3;//best:-3  default:3
+        int all_reduce_limit = -1;//best:7 -1 128
+        if ((all_reduce_plan != -3 && all_reduce_plan != -2 && all_reduce_plan != 1 && all_reduce_plan != 0 && all_reduce_plan != -1) || (!use_cuda)) {
+            for (int root : roots) {
+                for (int i=root; i>=0; i=next[i]) {
+                    Op* op = ops[i];
+                    for (Var* v : op->inputs()) {
+                        if (v->tflag != tt) continue;
+                        Op* opi = v->input();
+                        // if those two ops are not fused
+                        if (father[opi->custom_data] != root) {
+                            deps[root]++;
+                        }
+                    }
+                }
+                if (deps[root] == 0) 
+                    queue.push_back(root);
+            }
+        }
+        #ifdef HAS_CUDA
+        if (all_reduce_plan == -3 && use_cuda) {
+            // AR least priority
+            vector<std::pair<Op*, int>> all_reduce_ops;
+            for (int root : roots) {
+                for (int i=root; i>=0; i=next[i]) {
+                    Op* op = ops[i];
+                    for (Var* v : op->inputs()) {
+                        if (v->tflag != tt) continue;
+                        Op* opi = v->input();
+                        // if those two ops are not fused
+                        if (father[opi->custom_data] != root) {
+                            deps[root]++;
+                        }
+                    }
+                }
+                if (deps[root] == 0) {
+                    Op* op = ops[root];
+                    if (check_all_reduce(op)) {
+                        all_reduce_ops.push_back(std::make_pair(op, root));
+                    } else {
+                        queue.push_back(root);
                     }
                 }
             }
-            if (deps[root] == 0) 
-                queue.push_back(root);
+            int last_i = 0, last_s = 0;
+            while (last_i < all_reduce_ops.size() || last_s < queue.size()) {
+                if (last_s == queue.size()) {
+                    Op* op = all_reduce_ops[last_i].first;
+                    int op_id = all_reduce_ops[last_i].second;
+                    for (Var* v : op->outputs())
+                        if (v->tflag == tt)
+                            for (Op* op2 : v->outputs()) {
+                                if (op2->tflag != tt) continue;
+                                int op2_id = father[op2->custom_data];
+                                // continue if those two ops are fused
+                                if (op2_id == op_id) continue;
+                                deps[op2_id]--;
+                                if (deps[op2_id] == 0) {
+                                    if (check_all_reduce(op2)) {
+                                        all_reduce_ops.push_back(std::make_pair(op2, op2_id));
+                                        queue.push_back(op2_id);
+                                    } else {
+                                        queue.push_back(op2_id);
+                                    }
+                                }
+                            }
+                    last_i += 1;
+                }
+                for (uint s=last_s; s<queue.size(); s++) {
+                    int op_id = queue[s];
+                    for (int i=op_id; i>=0; i=next[i]) {
+                        Op* op = ops[i];
+                        if (check_all_reduce(op)) {
+                            continue;
+                        }
+                        for (Var* v : op->outputs())
+                            if (v->tflag == tt)
+                                for (Op* op2 : v->outputs()) {
+                                    if (op2->tflag != tt) continue;
+                                    int op2_id = father[op2->custom_data];
+                                    // continue if those two ops are fused
+                                    if (op2_id == op_id) continue;
+                                    deps[op2_id]--;
+                                    if (deps[op2_id] == 0) {
+                                        if (check_all_reduce(op2)) {
+                                            all_reduce_ops.push_back(std::make_pair(op2, op2_id));
+                                            queue.push_back(op2_id);
+                                        } else {
+                                            queue.push_back(op2_id);
+                                        }
+                                    }
+                                }
+                    }
+                    last_s = s + 1;
+                }
+            }
+        } else if (all_reduce_plan == -2 && use_cuda) {
+            // AR least priority
+            vector<std::pair<Op*, int>> all_reduce_ops;
+            for (int root : roots) {
+                for (int i=root; i>=0; i=next[i]) {
+                    Op* op = ops[i];
+                    for (Var* v : op->inputs()) {
+                        if (v->tflag != tt) continue;
+                        Op* opi = v->input();
+                        // if those two ops are not fused
+                        if (father[opi->custom_data] != root) {
+                            deps[root]++;
+                        }
+                    }
+                }
+                if (deps[root] == 0) {
+                    Op* op = ops[root];
+                    if (check_all_reduce(op)) {
+                        all_reduce_ops.push_back(std::make_pair(op, root));
+                    } else {
+                        queue.push_back(root);
+                    }
+                }
+            }
+            int last_i = 0, last_s = 0;
+            while (last_i < all_reduce_ops.size() || last_s < queue.size()) {
+                if (last_s == queue.size()) {
+                    queue.push_back(all_reduce_ops[last_i].second);
+                    // if (*mpi_local_rank == 0){
+                    //     Op* op = all_reduce_ops[last_i].first;
+                    //     for (Var* v : op->inputs()) {
+                    //         std::cout << v->name <<std::endl;
+                    //         std::cout << v->input()->name() << std::endl;
+                    //     }
+                    // }
+                    last_i += 1;
+                }
+                for (uint s=last_s; s<queue.size(); s++) {
+                    int op_id = queue[s];
+                    for (int i=op_id; i>=0; i=next[i]) {
+                        Op* op = ops[i];
+                        for (Var* v : op->outputs())
+                            if (v->tflag == tt)
+                                for (Op* op2 : v->outputs()) {
+                                    if (op2->tflag != tt) continue;
+                                    int op2_id = father[op2->custom_data];
+                                    // continue if those two ops are fused
+                                    if (op2_id == op_id) continue;
+                                    deps[op2_id]--;
+                                    if (deps[op2_id] == 0) {
+                                        if (check_all_reduce(op2)) {
+                                            all_reduce_ops.push_back(std::make_pair(op2, op2_id));
+                                        } else {
+                                            queue.push_back(op2_id);
+                                        }
+                                    }
+                                }
+                    }
+                    last_s = s + 1;
+                }
+            }
+            // std::cout << std::endl;
+            // for (uint s=0; s<queue.size(); s++) {
+            //     std::cout << queue[s] << " ";
+            // }
+            // std::cout << std::endl;
+        } else if (all_reduce_plan == -1 && use_cuda) {
+            std::map<int, int> visited;
+            // reverse send allreduce
+            vector<std::pair<Op*, int>> all_reduce_ops;
+            vector<std::pair<Op*, int>> all_reduce_ops2;
+            for (int root : roots) {
+                for (int i=root; i>=0; i=next[i]) {
+                    Op* op = ops[i];
+                    for (Var* v : op->inputs()) {
+                        if (v->tflag != tt) continue;
+                        Op* opi = v->input();
+                        // if those two ops are not fused
+                        if (father[opi->custom_data] != root) {
+                            deps[root]++;
+                        }
+                    }
+                }
+                if (deps[root] == 0) {
+                    Op* op = ops[root];
+                    if (check_all_reduce(op)) {
+                        all_reduce_ops.push_back(std::make_pair(op, root));
+                    } else {
+                        queue.push_back(root);
+                    }
+                }
+            }
+            int last_i = 0, last_i2 = 0, last_s = 0;
+            while (last_i < all_reduce_ops.size() || last_s < queue.size() || last_i2 < all_reduce_ops2.size()) {
+                if (last_i == all_reduce_ops.size() && last_s == queue.size()) {
+                    for (int i = last_i2; i < all_reduce_ops2.size(); ++i) {
+                        int op_id = all_reduce_ops2[i].second;
+                        for (int i=op_id; i>=0; i=next[i]) {
+                            Op* op = ops[i];
+                            for (Var* v : op->outputs())
+                                if (v->tflag == tt)
+                                    for (Op* op2 : v->outputs()) {
+                                        if (op2->tflag != tt) continue;
+                                        int op2_id = father[op2->custom_data];
+                                        // continue if those two ops are fused
+                                        if (op2_id == op_id) continue;
+                                        deps[op2_id]--;
+                                        if (deps[op2_id] == 0) {
+                                            if (check_all_reduce(op2)) {
+                                                ASSERT(false);
+                                            } else {
+                                                queue.push_back(op2_id);
+                                            }
+                                        }
+                                    }
+                        }
+                    }
+                    last_i2 = all_reduce_ops2.size();
+                }
+                if (last_s != 0 || last_s == queue.size()) {
+                    // for (int i = last_i; i < all_reduce_ops.size(); ++i) {
+                    for (int i = all_reduce_ops.size() - 1; i >= last_i; --i) {
+                        int op_id = all_reduce_ops[i].second;
+                        queue.push_back(op_id);
+                        visited[op_id] = 1;
+                    }
+                    last_i = all_reduce_ops.size();
+                }
+                for (uint s=last_s; s<queue.size(); s++) {
+                    int op_id = queue[s];
+                    if (visited.count(op_id)) {
+                        last_s = s + 1;
+                        continue;
+                    }
+                    for (int i=op_id; i>=0; i=next[i]) {
+                        Op* op = ops[i];
+                        for (Var* v : op->outputs())
+                            if (v->tflag == tt)
+                                for (Op* op2 : v->outputs()) {
+                                    if (op2->tflag != tt) continue;
+                                    int op2_id = father[op2->custom_data];
+                                    // continue if those two ops are fused
+                                    if (op2_id == op_id) continue;
+                                    deps[op2_id]--;
+                                    if (deps[op2_id] == 0) {
+                                        if (check_all_reduce(op2)) {
+                                            all_reduce_ops.push_back(std::make_pair(op2, op2_id));
+                                            all_reduce_ops2.push_back(std::make_pair(op2, op2_id));
+                                        } else {
+                                            queue.push_back(op2_id);
+                                        }
+                                    }
+                                }
+                    }
+                    last_s = s + 1;
+                    if (all_reduce_ops.size() - last_i >= all_reduce_limit && all_reduce_limit != -1)
+                        break;
+                }
+            }
+        } else if (all_reduce_plan == 0 && use_cuda) {
+            // reverse send allreduce
+            vector<std::pair<Op*, int>> all_reduce_ops;
+            for (int root : roots) {
+                for (int i=root; i>=0; i=next[i]) {
+                    Op* op = ops[i];
+                    for (Var* v : op->inputs()) {
+                        if (v->tflag != tt) continue;
+                        Op* opi = v->input();
+                        // if those two ops are not fused
+                        if (father[opi->custom_data] != root) {
+                            deps[root]++;
+                        }
+                    }
+                }
+                if (deps[root] == 0) {
+                    Op* op = ops[root];
+                    if (check_all_reduce(op)) {
+                        all_reduce_ops.push_back(std::make_pair(op, root));
+                    } else {
+                        queue.push_back(root);
+                    }
+                }
+            }
+            int last_i = 0, last_s = 0;
+            while (last_i < all_reduce_ops.size() || last_s < queue.size()) {
+                if (last_s != 0 || last_s == queue.size()) {
+                    // for (int i = last_i; i < all_reduce_ops.size(); ++i) {
+                    for (int i = all_reduce_ops.size() - 1; i >= last_i; --i) {
+                        int op_id = all_reduce_ops[i].second;
+                        queue.push_back(op_id);
+                        
+                        
+                        for (uint s=last_s; s<queue.size(); s++) {
+                            int op_id = queue[s];
+                            for (int i=op_id; i>=0; i=next[i]) {
+                                Op* op = ops[i];
+                                for (Var* v : op->outputs())
+                                    if (v->tflag == tt)
+                                        for (Op* op2 : v->outputs()) {
+                                            if (op2->tflag != tt) continue;
+                                            int op2_id = father[op2->custom_data];
+                                            // continue if those two ops are fused
+                                            if (op2_id == op_id) continue;
+                                            deps[op2_id]--;
+                                            if (deps[op2_id] == 0) {
+                                                if (check_all_reduce(op2)) {
+                                                    all_reduce_ops.push_back(std::make_pair(op2, op2_id));
+                                                } else {
+                                                    queue.push_back(op2_id);
+                                                }
+                                            }
+                                        }
+                            }
+                            last_s = s + 1;
+                        }
+                    }
+                    last_i = all_reduce_ops.size();
+                }
+                for (uint s=last_s; s<queue.size(); s++) {
+                    int op_id = queue[s];
+                    for (int i=op_id; i>=0; i=next[i]) {
+                        Op* op = ops[i];
+                        // if (check_all_reduce(op)) 
+                        //     continue;
+                        for (Var* v : op->outputs())
+                            if (v->tflag == tt)
+                                for (Op* op2 : v->outputs()) {
+                                    if (op2->tflag != tt) continue;
+                                    int op2_id = father[op2->custom_data];
+                                    // continue if those two ops are fused
+                                    if (op2_id == op_id) continue;
+                                    deps[op2_id]--;
+                                    if (deps[op2_id] == 0) {
+                                        if (check_all_reduce(op2)) {
+                                            all_reduce_ops.push_back(std::make_pair(op2, op2_id));
+                                        } else {
+                                            queue.push_back(op2_id);
+                                        }
+                                    }
+                                }
+                    }
+                    last_s = s + 1;
+                    if (all_reduce_ops.size() - last_i >= all_reduce_limit && all_reduce_limit != -1)
+                        break;
+                }
+            }
+        } else if (all_reduce_plan == 1 && use_cuda) {
+            // reverse send allreduce
+            vector<std::pair<Op*, int>> all_reduce_ops;
+            for (int root : roots) {
+                for (int i=root; i>=0; i=next[i]) {
+                    Op* op = ops[i];
+                    for (Var* v : op->inputs()) {
+                        if (v->tflag != tt) continue;
+                        Op* opi = v->input();
+                        // if those two ops are not fused
+                        if (father[opi->custom_data] != root) {
+                            deps[root]++;
+                        }
+                    }
+                }
+                if (deps[root] == 0) {
+                    Op* op = ops[root];
+                    if (check_all_reduce(op)) {
+                        all_reduce_ops.push_back(std::make_pair(op, root));
+                    } else {
+                        queue.push_back(root);
+                    }
+                }
+            }
+            int last_i = 0, last_s = 0;
+            while (last_i < all_reduce_ops.size() || last_s < queue.size()) {
+                if (last_s != 0 || last_s == queue.size()) {
+                    for (int i = last_i; i < all_reduce_ops.size(); ++i) {
+                        int op_id = all_reduce_ops[i].second;
+                        queue.push_back(op_id);
+                        
+                        for (uint s=last_s; s<queue.size(); s++) {
+                            int op_id = queue[s];
+                            for (int i=op_id; i>=0; i=next[i]) {
+                                Op* op = ops[i];
+                                for (Var* v : op->outputs())
+                                    if (v->tflag == tt)
+                                        for (Op* op2 : v->outputs()) {
+                                            if (op2->tflag != tt) continue;
+                                            int op2_id = father[op2->custom_data];
+                                            // continue if those two ops are fused
+                                            if (op2_id == op_id) continue;
+                                            deps[op2_id]--;
+                                            if (deps[op2_id] == 0) {
+                                                if (check_all_reduce(op2)) {
+                                                    all_reduce_ops.push_back(std::make_pair(op2, op2_id));
+                                                } else {
+                                                    queue.push_back(op2_id);
+                                                }
+                                            }
+                                        }
+                            }
+                            last_s = s + 1;
+                        }
+                    }
+                    last_i = all_reduce_ops.size();
+                }
+                for (uint s=last_s; s<queue.size(); s++) {
+                    int op_id = queue[s];
+                    for (int i=op_id; i>=0; i=next[i]) {
+                        Op* op = ops[i];
+                        for (Var* v : op->outputs())
+                            if (v->tflag == tt)
+                                for (Op* op2 : v->outputs()) {
+                                    if (op2->tflag != tt) continue;
+                                    int op2_id = father[op2->custom_data];
+                                    // continue if those two ops are fused
+                                    if (op2_id == op_id) continue;
+                                    deps[op2_id]--;
+                                    if (deps[op2_id] == 0) {
+                                        if (check_all_reduce(op2)) {
+                                            all_reduce_ops.push_back(std::make_pair(op2, op2_id));
+                                        } else {
+                                            queue.push_back(op2_id);
+                                        }
+                                    }
+                                }
+                    }
+                    last_s = s + 1;
+                    if (all_reduce_ops.size() - last_i >= all_reduce_limit && all_reduce_limit != -1)
+                        break;
+                }
+            }
+        } else if (all_reduce_plan == 2 && use_cuda) {
+            // block send allreduce
+            vector<std::pair<Op*, int>> all_reduce_ops;
+            size_t last_i = 0, last_s = 0;
+            while (last_i < all_reduce_ops.size() || last_s < queue.size()) {
+                if (last_s != 0 || last_s == queue.size()) {
+                    for (int i = last_i; i < all_reduce_ops.size(); ++i) {
+                        Op* op = all_reduce_ops[i].first;
+                        int op_id = all_reduce_ops[i].second;
+                        for (Var* v : op->outputs())
+                            if (v->tflag == tt)
+                                for (Op* op2 : v->outputs()) {
+                                    if (op2->tflag != tt) continue;
+                                    int op2_id = father[op2->custom_data];
+                                    // continue if those two ops are fused
+                                    if (op2_id == op_id) continue;
+                                    deps[op2_id]--;
+                                    if (deps[op2_id] == 0)
+                                        queue.push_back(op2_id);
+                                }
+                    }
+                    last_i = all_reduce_ops.size();
+                }
+                for (uint s=last_s; s<queue.size(); s++) {
+                    int op_id = queue[s];
+                    for (int i=op_id; i>=0; i=next[i]) {
+                        Op* op = ops[i];
+                        if (check_all_reduce(op)) {
+                            all_reduce_ops.push_back(std::make_pair(op, op_id));
+                            continue;
+                        }
+                        for (Var* v : op->outputs())
+                            if (v->tflag == tt)
+                                for (Op* op2 : v->outputs()) {
+                                    if (op2->tflag != tt) continue;
+                                    int op2_id = father[op2->custom_data];
+                                    // continue if those two ops are fused
+                                    if (op2_id == op_id) continue;
+                                    deps[op2_id]--;
+                                    if (deps[op2_id] == 0)
+                                        queue.push_back(op2_id);
+                                }
+                    }
+                    last_s = s + 1;
+                    if (all_reduce_ops.size() - last_i >= all_reduce_limit && all_reduce_limit != -1)
+                        break;
+                }
+            }
+        } else {
+            for (uint s=0; s<queue.size(); s++) {
+                int op_id = queue[s];
+                for (int i=op_id; i>=0; i=next[i]) {
+                    Op* op = ops[i];
+                    for (Var* v : op->outputs())
+                        if (v->tflag == tt)
+                            for (Op* op2 : v->outputs()) {
+                                if (op2->tflag != tt) continue;
+                                int op2_id = father[op2->custom_data];
+                                // continue if those two ops are fused
+                                if (op2_id == op_id) continue;
+                                deps[op2_id]--;
+                                if (deps[op2_id] == 0)
+                                    queue.push_back(op2_id);
+                            }
+                }
+            }
         }
+        #endif
+        #ifndef HAS_CUDA
         for (uint s=0; s<queue.size(); s++) {
             int op_id = queue[s];
             for (int i=op_id; i>=0; i=next[i]) {
@@ -163,6 +673,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
                         }
             }
         }
+        #endif
         ASSERTop(queue.size(),==,roots.size());
     }
 
@@ -295,6 +806,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
     int all_reduce_cnt = 0;
     // Op* temp = nullptr;
     for (uint rid=0; rid<queue.size(); rid++) {
+        // void* temp_event_ptr = nullptr;
         int root = queue[rid];
         Op* op = ops[root];
         bool is_fused_op = false;
@@ -379,8 +891,12 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
 
         #ifdef HAS_CUDA
         // TODO define op cuda_stream in other place
+        string all_reduce_name = "";
+        bool output_is_all_reduce = false, input_is_all_reduce = false, is_log = false;
         if (use_cuda) {
-            bool output_is_all_reduce = false, input_is_all_reduce = false;
+            if (!is_fused_op) {
+                check_all_reduce(op);
+            }
             int all_reduce_id = -1;
             if (is_fused_op) {
                 for (auto& vi : fused_op.vars) {
@@ -394,7 +910,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
             } else {
                 for (Var* var : op->inputs()) {
                     Op* op2 = var->input();
-                    if (op2 != nullptr && ((string)op2->name()) == "nccl_all_reduce") {
+                    if (op2 != nullptr && check_all_reduce(op2)) {
                         input_is_all_reduce = true;
                         all_reduce_id = op2->all_reduce_id;
                     }
@@ -403,44 +919,40 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
             
             for (Var* var : op->outputs()) {
                 for (Op* op2 :var->outputs()) {
-                    if (((string)op2->name()) == "nccl_all_reduce") {
-                        output_is_all_reduce = true;
+                    if (check_all_reduce(op2)) {
+                        if (check_log(op2)) {
+                            is_log = true;
+                        } else {
+                            output_is_all_reduce = true;
+                        }
                         if (op2->all_reduce_id == -1)
                             op2->all_reduce_id = ++all_reduce_cnt;
                         all_reduce_id = op2->all_reduce_id;
                     }
                 }
             }
-
-            if (((string)op->name()) == "nccl_all_reduce") {
-                bool have_input = false;
-                for (Var* var : op->inputs()) {
-                    Op* op2 = var->input();
-                    if (op2 == nullptr) continue;
-                    have_input = true;
-                }
-                if (!have_input) {
-                    if (op->all_reduce_id == -1)
-                        op->all_reduce_id = ++all_reduce_cnt;
-                    all_reduce_id = op->all_reduce_id;
-                } else {
-                    all_reduce_id = op->all_reduce_id;
-                }
+            if (check_all_reduce(op)) {
+                if (op->all_reduce_id == -1)
+                    op->all_reduce_id = ++all_reduce_cnt;
+                all_reduce_id = op->all_reduce_id;
                 for (Var* var : op->outputs()) {
                     var->all_reduce_id = all_reduce_id;
                 }
+                
+                for (Var* v : op->inputs()) {
+                    all_reduce_name = v->name.c_str();
+                }
             }
 
-            int exp = 4;
             if (exp == 1) {
                 op->cuda_stream = &cuda_streams[0];
             } else if (exp == 2) {
-                if (((string)op->name()) == "nccl_all_reduce") 
+                if (check_all_reduce(op)) 
                     op->cuda_stream = &cuda_streams[1];
                 else 
                     op->cuda_stream = &cuda_streams[0];
             } else if (exp == 3) {
-                if (((string)op->name()) == "nccl_all_reduce") 
+                if (check_all_reduce(op)) 
                     op->cuda_stream = &cuda_streams[1];
                 else if (input_is_all_reduce)
                     op->cuda_stream = &cuda_streams[2];
@@ -449,9 +961,50 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
                 else
                     op->cuda_stream = &cuda_streams[0]; //change
             } else if (exp == 4) {
-                if ((((string)op->name()) == "nccl_all_reduce") || input_is_all_reduce || output_is_all_reduce) {
+                if ((check_all_reduce(op)) || input_is_all_reduce || output_is_all_reduce) {
                     ASSERT(all_reduce_id != -1);
-                    op->cuda_stream = &cuda_streams[all_reduce_id % (CUDA_STREAM_NUM - 1) + 1]; //TODO change 31 to 63
+                    op->cuda_stream = &cuda_streams[all_reduce_id % (CUDA_STREAM_NUM - 1) + 1];
+                } else {
+                    op->cuda_stream = &cuda_streams[0];
+                }
+            } else if (exp == 5) {
+                if ((check_all_reduce(op))) {
+                    ASSERT(all_reduce_id != -1);
+                    op->cuda_stream = &cuda_streams[all_reduce_id % (CUDA_STREAM_NUM - 1) + 1];
+                } else {
+                    op->cuda_stream = &cuda_streams[0];
+                }
+            } else if (exp == 6) {
+                if ((check_all_reduce(op)) || input_is_all_reduce) {
+                    ASSERT(all_reduce_id != -1);
+                    op->cuda_stream = &cuda_streams[all_reduce_id % (CUDA_STREAM_NUM - 1) + 1];
+                } else {
+                    op->cuda_stream = &cuda_streams[0];
+                }
+            } else if (exp == 7) {
+                if (check_all_reduce(op)) {
+                    op->cuda_stream = &cuda_streams[2];
+                } else if (input_is_all_reduce) {
+                    op->cuda_stream = &cuda_streams[0];
+                } else if (output_is_all_reduce) {
+                    op->cuda_stream = &cuda_streams[1];
+                } else {
+                    op->cuda_stream = &cuda_streams[0];
+                }
+            } else if (exp == 8) {
+                if (check_all_reduce(op)) {
+                    if (all_reduce_name.substr(0, 6) ==  "cnt_1_") {
+                        op->cuda_stream = &cuda_streams[4];
+                    } else {
+                        op->cuda_stream = &cuda_streams[2];
+                    }
+                } else if (is_log){
+                    op->cuda_stream = &cuda_streams[3];
+                } else if (input_is_all_reduce) {
+                    op->cuda_stream = &cuda_streams[0];
+                } else if (output_is_all_reduce) {
+                    // op->cuda_stream = &cuda_streams[1];
+                    op->cuda_stream = &cuda_streams[0];
                 } else {
                     op->cuda_stream = &cuda_streams[0];
                 }
@@ -532,7 +1085,29 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         }
         #endif
         last_is_cuda = is_cuda;
+        // std::cout << "Running " << op->name() << " " << rid << std::endl;
+        // if (is_fused_op)
+        //     for (Op* op : fused_op.ops) {
+        //         std::cout << op->name() << " ";
+        //     }
+        // std::cout << std::endl;
+        // if (rid == 156) {
+        //     executor_set_break();
+        // }
+        // std::cout << "start Running " << op->name() << " " << rid << std::endl;
         op->do_run_after_prepare();
+        // #ifdef HAS_CUDA
+        // if (use_cuda) {
+        //     for (Var* var : op->outputs()) {
+        //         std::cout <<"output "<<(void*)var <<" "<< var->name << " " << (void*)var->wait_event<<std::endl;
+        //     }
+        // }
+        // #endif
+        // std::cout << "ready Finish " << op->name() << std::endl;
+        // checkCudaErrors(cudaDeviceSynchronize());
+        // std::cout << "Finish " << op->name() << std::endl;
+        // display_memory_info(__FILELINE__);
+
         LOGvvv << "Finished Op(" >> op->name() << rid >> 
             "/" >> queue.size() >> ") output:" << op->outputs();
 
@@ -547,9 +1122,18 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
                 // }
                 // TODO check is var holder & need wait.
                 // if (!need_wait && !isvarholder) continue;
-
+                if (var->wait_event != nullptr) 
+                    continue;
                 var->wait_event = cuda_event_pool.get_event();
                 checkCudaErrors(cudaEventRecord(*(var->wait_event), *op->cuda_stream));
+                // if (is_log) {
+                //     temp_event_ptr = var->wait_event;
+                //     // if (*mpi_local_rank == 0)
+                //         std::cout << *mpi_local_rank  <<"is log:" << temp_event_ptr << std::endl;
+                // }
+                // if (temp_event_ptr == var->wait_event) {
+                //     std::cout << *mpi_local_rank <<"WTF\n";
+                // }
             }
             
 

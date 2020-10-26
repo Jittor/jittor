@@ -33,8 +33,8 @@ Init() {
 ~Init() {
     if (!get_device_count()) return;
     checkCudaErrors(cudaDeviceSynchronize());
-    checkCudaErrors(cudaStreamDestroy(stream));
-    checkCudaErrors(cudaEventDestroy(event));
+    // checkCudaErrors(cudaStreamDestroy(stream));
+    // checkCudaErrors(cudaEventDestroy(event));
 }
 } init;
 

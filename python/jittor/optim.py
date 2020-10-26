@@ -13,6 +13,54 @@
 import jittor as jt
 import numpy as np
 
+def add_dep(a, b):
+    ''' add dependency from a to b '''
+    b.swap(b + a.sum() * 0)
+    # b.swap(b.clone())
+    # b._add_input(a)
+
+class AllReduceFuser:
+    sum_limit = 1048576
+    num_limit = 10
+
+    vars = []
+    shapes = []
+    cnts = []
+    sum = 0
+    
+    def push(self, g):
+        s = 1
+        for ss in g.shape:
+            s = s * ss
+        self.vars.append(g)
+        self.shapes.append(g.shape)
+        self.cnts.append(s)
+        self.sum += s
+        # self.send()
+        if (self.sum >= self.sum_limit or len(self.vars) >= self.num_limit):
+            self.send()
+
+    def send(self):
+        if (len(self.vars) == 0):
+            return
+        tmp = []
+        for v in self.vars:
+            tmp.append(v.reshape(-1))
+        t = jt.ops.concat(tmp, 0)
+        t.compile_options = {'optim_all_reduce':1}
+        temp = t.mpi_all_reduce("mean")
+        ssum = 0
+        for i in range(len(self.vars)):
+            # aft_v = temp[ssum:ssum + self.cnts[i]]
+            aft_v = temp[0:0 + self.cnts[i]]
+            aft_v = aft_v.reshape(*self.shapes[i])
+            self.vars[i].assign(aft_v)
+            ssum += self.cnts[i]
+        self.sum = 0
+        self.vars = []
+        self.shapes = []
+        self.cnts = []
+
 class Optimizer(object):
     """ Basic class of Optimizer.
 
@@ -33,6 +81,7 @@ class Optimizer(object):
             assert isinstance(pg, dict)
             self.param_groups.append(pg)
         self.n_step = 0
+        self.fuser = AllReduceFuser()
 
     def pre_step(self, loss):
         """ something should be done before step, such as calc gradients, mpi sync, and so on.
@@ -47,26 +96,49 @@ class Optimizer(object):
         # clean prev grads
         params = []
         params_has_grad = []
+        names = []
         for pg in self.param_groups:
             pg["grads"] = [None] * len(pg['params'])
             for p in pg['params']:
                 params.append(p)
                 if not p.is_stop_grad():
                     params_has_grad.append(p)
+                    names.append(p.name())
         
         # sync params, reduce computing graph size
         jt.sync(params)
 
         # get gradient
         grads = jt.grad(loss, params_has_grad)
-
+        cnt = 0
         # sync grads and model if in mpi
         if jt.mpi:
+            last = None
+            cnt = 0
+
             for g in grads:
-                g.assign(g.mpi_all_reduce("mean"))
-            if self.n_step % self.param_sync_iter == 0:
-                for p in params:
-                    p.assign(p.mpi_all_reduce("mean"))
+                cnt += 1
+                if (cnt <= -1 and last is not None):
+                    g.swap(g + last.sum() * 0)
+                g.compile_options = {'optim_all_reduce':1}   
+                g.name(f"cnt_{cnt}_step_{self.n_step}_{names[cnt-1]}")
+                temp = g.mpi_all_reduce("mean")
+                g.swap(temp)
+                last = g
+
+            # for g in grads:
+            #     g.compile_options = {'optim_all_reduce':1}
+            #     temp = g.mpi_all_reduce("mean")
+            #     g.assign(temp)
+
+            # for g in grads:
+            #     self.fuser.push(g)
+            #     self.fuser.send()
+            # self.fuser.send()
+
+            # if self.n_step % self.param_sync_iter == 0:
+            #     for p in params:
+            #         p.assign(p.mpi_all_reduce("mean"))
         self.n_step += 1
 
         # set up grads in param_groups

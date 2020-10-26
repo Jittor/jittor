@@ -7,9 +7,13 @@
 #include <limits>
 #include "var.h"
 #include "ops/reduce_op.h"
-#include "ops/binary_op_defs.h"
 #include "ops/op_register.h"
 #include "executor.h"
+
+
+#ifdef JIT
+#include "ops/binary_op_defs.h"
+#endif
 
 namespace jittor {
 

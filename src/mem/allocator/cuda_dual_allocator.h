@@ -14,6 +14,7 @@
 #include "var.h"
 #include "mem/allocator.h"
 #include "mem/allocator/sfrl_allocator.h"
+#include "mem/allocator/mssfrl_allocator.h"
 
 namespace jittor {
 
@@ -98,10 +99,10 @@ struct DelayFree final : Allocator {
         checkCudaErrors(_cudaLaunchHostFunc(0, &to_free_allocation, 0));
     }
 
-    void migrate_to_cpu(void*& mem_ptr, size_t& allocation, size_t size, Allocator* allocator) {
+    void migrate_to_cpu(void*& mem_ptr, size_t& allocation, size_t size, Allocator* allocator, cudaStream_t* cuda_stream) {
         auto da = cuda_dual_allocator.get_dual_allocation(allocation);
         auto pre_allocation = allocation;
-        mem_ptr = allocator->alloc(size, allocation);
+        mem_ptr = ((MSSFRLAllocator*)allocator)->alloc(size, allocation, cuda_stream);
         std::memcpy(mem_ptr, da.host_ptr, size);
         free(da.device_ptr, size, pre_allocation);
     }
@@ -113,7 +114,7 @@ inline void migrate_to_cpu(Var* var, Allocator* allocator) {
     if (var->allocator == &delay_free) {
         var->allocator = allocator;
         delay_free.migrate_to_cpu(
-            var->mem_ptr, var->allocation, var->size, var->allocator
+            var->mem_ptr, var->allocation, var->size, var->allocator, var->cuda_stream
         );
     }
 

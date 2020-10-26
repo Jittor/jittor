@@ -26,7 +26,9 @@ MSCachingBlock::MSCachingBlock(size_t size, MSCachingBlockPool* blocks, void* me
     }
 
 //MSCachingBlockPool
-MSCachingBlockPool::MSCachingBlockPool(size_t stream_n) : tot_block_id(0), occupied_id_mapper(new MSCachingBlock*[ID_LIMIT]), stream_n(stream_n) {}
+MSCachingBlockPool::MSCachingBlockPool(size_t stream_n) : tot_block_id(0), occupied_id_mapper(new MSCachingBlock*[ID_LIMIT]), stream_n(stream_n) {
+    memset(stream_available_memory, 0, sizeof(stream_available_memory));
+}
 
 MSCachingBlockPool::~MSCachingBlockPool() {
     for (auto it = blocks.begin(); it != blocks.end(); ++it) {
@@ -56,6 +58,9 @@ void MSCachingBlockPool::insert(MSCachingBlock* block) {
     blocks[key] = block;
     for (int i = 0; i < stream_n; ++i) {
         if ((1ULL << i) & block->stream_mask) {
+            if (stream_blocks[i].count(key) == 0) {
+                stream_available_memory[i] += block->size;
+            }
             stream_blocks[i][key] = block;
         }
     }
@@ -68,6 +73,9 @@ void MSCachingBlockPool::erase(MSCachingBlock* block) {
     blocks.erase(key);
     for (int i = 0; i < stream_n; ++i) {
         if ((1ULL << i) & block->stream_mask) {
+            if (stream_blocks[i].count(key) != 0) {
+                stream_available_memory[i] -= block->size;
+            }
             stream_blocks[i].erase(key);
         }
         block->visit_free_times[i] = 0;
@@ -126,6 +134,9 @@ MSCachingBlock* MSCachingBlockPool::pop_block(size_t size, size_t stream_id, uns
 
 void MSCachingBlockPool::insert_stream(MSCachingBlock* block, size_t stream_id) {
     unsigned long long key = get_key(block);
+    if (stream_blocks[stream_id].count(key) == 0) {
+        stream_available_memory[stream_id] += block->size;
+    }
     stream_blocks[stream_id][key] = block;
 }
 
@@ -254,6 +265,7 @@ void* MSSFRLAllocator::alloc(size_t size, size_t& allocation, cudaStream_t* stre
             unused_memory -= small_blocks.free_all_cached_blocks(underlying);
             void* ptr = underlying->alloc(alloc_size, allocation);
             if (ptr == nullptr) {
+                ASSERT(false);
                 return nullptr;
             }
         }
@@ -349,22 +361,31 @@ bool MSSFRLAllocator::share_with(size_t size, size_t allocation) {
     return true;
 }
 
+bool check_merge_block(MSCachingBlock* b) {
+    if (b->prev && !b->prev->occupied && ((b->prev->stream_mask & b->stream_mask) != 0))
+        return true;
+    if (b->next && !b->next->occupied && ((b->next->stream_mask & b->stream_mask) != 0))
+        return true;
+    return false;
+}
+
 void MSSFRLAllocator::update_mask(size_t stream_id, const vector<MSCachingBlock*>& add_mask) {
     for (int i = 0; i < add_mask.size(); ++i) {
-        MSCachingBlock* b = add_mask[i];
-        if (b->stream_mask & (1ULL << stream_id)) 
+        MSCachingBlock* block = add_mask[i];
+        if (block->stream_mask & (1ULL << stream_id)) 
             continue;
-        if (!b->occupied) {
-            b->stream_mask |= (1ULL << stream_id);
-            b->blocks->insert_stream(b, stream_id);
-            // if (check_merge_block(b)) {
-            //     erase(b);
+        if (!block->occupied) {
+            block->stream_mask |= (1ULL << stream_id);
+            block->blocks->insert_stream(block, stream_id);
+            // while (check_merge_block(block)) {
+            //     unsigned long long stream_mask = block->stream_mask;
+            //     auto& block_list = *block->blocks;
+            //     block_list.erase(block);
+            //     block->stream_mask = stream_mask;
             //     try_merge_two_blocks(block, block->prev, block_list);
             //     try_merge_two_blocks(block, block->next, block_list);
             //     block_list.insert(block);
-            //     if (need_reset || block->size != s) {
-            //         reset_stream_events(block);
-            //     }
+            //     reset_stream_events(block);
             // }
             // TODO try merge blocks?
         }
@@ -423,5 +444,33 @@ void MSSFRLAllocator::reset_stream_events(MSCachingBlock* block) {
         }
     }
 }
+
+std::vector<size_t> MSSFRLAllocator::get_stream_available_memory() {
+    std::vector<size_t> ans;
+    for (int i = 0; i < stream_n; ++i) {
+        ans.push_back(small_blocks.stream_available_memory[i] + large_blocks.stream_available_memory[i]);
+    }
+    return ans;
+}
+
+void MSSFRLAllocator::display_memory_info() {
+    std::cout << "==============large==========\n";
+
+    for (int i = 0; i < stream_n; ++i) {
+        std::cout << "------[ stream " << i << " ]------\n";
+        std::map<unsigned long long, MSCachingBlock*>::iterator iter;
+        for (iter = large_blocks.stream_blocks[i].begin(); iter != large_blocks.stream_blocks[i].end(); ++iter) {
+            MSCachingBlock* b = iter->second;
+            std::cout << b->id << " " << b->occupied << " " << b->size << " " << b->stream_mask << " [";
+            if (b->next)
+                std::cout << b->next->id << " " << b->next->occupied << " " << b->next->size << " " << b->next->stream_mask;
+            std::cout << "] [";
+            if (b->prev)
+                std::cout << b->prev->id << " " << b->prev->occupied << " " << b->prev->size << " " << b->prev->stream_mask;
+            std::cout << "]\n";
+        }
+    }
+}
+
 } // jittor
 

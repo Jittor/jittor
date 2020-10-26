@@ -605,7 +605,7 @@ def compile_custom_ops(
     if len(gen_name) > 100:
         gen_name = gen_name[:80] + "___hash" + str(hash(gen_name))
 
-    includes = set(includes)
+    includes = sorted(list(set(includes)))
     includes = "".join(map(lambda x: f" -I'{x}' ", includes))
     LOG.vvvv(f"Include flags:{includes}")
 
@@ -918,6 +918,7 @@ pyjt_compiler.compile(cache_path, jittor_path)
 files2 = run_cmd(f'find "{os.path.join(cache_path, "gen")}" | grep "cc$"').splitlines()
 files4 = run_cmd('find -L src | grep "cc$"', jittor_path).splitlines()
 at_beginning = [
+    "src/mem/allocator/mssfrl_allocator.cc",
     "src/ops/op_utils.cc",
     "src/event_queue.cc",
     "src/mem/allocator/sfrl_allocator.cc",
@@ -964,7 +965,10 @@ if os.path.isfile(version_file):
     jit_utils.download(url, extra_obj)
     files.append(extra_obj)
 
-compile(cc_path, cc_flags+opt_flags, files, 'jittor_core'+extension_suffix)
+cufiles = run_cmd('find -L src | grep "cu$"', jittor_path).splitlines()
+compile(nvcc_path, nvcc_flags, cufiles, 'cucore.o')
+files.append(os.path.join(cache_path, 'cucore.o'))
+compile(cc_path, cc_flags+opt_flags, files+[], 'jittor_core'+extension_suffix)
 
 # TODO: move to compile_extern.py
 compile_extern()

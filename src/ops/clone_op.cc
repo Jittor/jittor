@@ -24,7 +24,9 @@ CloneOp::CloneOp(Var* x) : x(x) {
 }
 
 VarPtr CloneOp::grad(Var* out, Var* dout, Var* v, int v_index) {
-    return make_clone(dout);
+    if (v_index == 0)
+        return make_clone(dout);
+    return nullptr;
 }
 
 void CloneOp::infer_shape() {

@@ -20,7 +20,20 @@ ncclComm_t comm;
 ncclUniqueId id;
 int nccl_device_id = 0;
 cudaStream_t all_reduce_s;
+std::map<void*, ncclComm_t> comms;
+std::vector<ncclUniqueId> ids;
 
+ncclComm_t get_comm(void* s) {
+    if (!comms.count(s)) {
+        ids.push_back(ncclUniqueId());
+        if (mpi_world_rank == 0)
+            checkCudaErrors(ncclGetUniqueId(&ids.back()));
+        MPI_CHECK(MPI_Bcast((void *)&ids.back(), sizeof(ids.back()), MPI_BYTE, 0, MPI_COMM_WORLD));
+        comms[s] = ncclComm_t();
+        checkCudaErrors(ncclCommInitRank(&comms[s], mpi_world_size, ids.back(), mpi_world_rank));
+    }
+    return comms[s];
+}
 
 struct nccl_initer {
 
@@ -48,6 +61,9 @@ nccl_initer() {
     if (!get_device_count()) return;
     if (!inside_mpi) return;
     checkCudaErrors(ncclCommDestroy(comm));
+    for (auto c : comms) {
+        checkCudaErrors(ncclCommDestroy(c.second));
+    }
 }
 
 };
