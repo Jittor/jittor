@@ -164,10 +164,10 @@ void BroadcastToOp::infer_shape() {
     LOGvvv << "Broadcast x(" >> x >> ") shape" << yshapes << "-> z(" >> z >> ")"; 
 }
 
-void BroadcastToOp::jit_prepare() {
-    add_jit_define("Tx", x->dtype());
-    add_jit_define("DIM", JK::hex1(z->shape.size()));
-    add_jit_define("BCAST", JK::hex(bcast_mask));
+void BroadcastToOp::jit_prepare(JK& jk) {
+    jk << _CS("[Tx:") << x->dtype()
+        << _CS("][DIM=") << JK::hex1(z->shape.size())
+        << _CS("][BCAST=") << JK::hex(bcast_mask) << ']';
 }
 
 #else // JIT

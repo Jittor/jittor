@@ -42,10 +42,10 @@ void MklMatmulOp::infer_shape() {
     c->set_shape({n, k});
 }
 
-void MklMatmulOp::jit_prepare() {
-    add_jit_define("T", a->dtype());
-    add_jit_define("Trans_a", trans_a ? "T" : "N");
-    add_jit_define("Trans_b", trans_b ? "T" : "N");
+void MklMatmulOp::jit_prepare(JK& jk) {
+    jk << _CS("[T:") << a->dtype();
+    jk << _CS("][Trans_a:") << (trans_a ? 'T' : 'N');
+    jk << _CS("][Trans_b:") << (trans_b ? 'T' : 'N') << ']';
 }
 
 #else // JIT

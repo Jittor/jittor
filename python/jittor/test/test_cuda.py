@@ -40,8 +40,8 @@ class TestCuda(unittest.TestCase):
             output = create_output(shape, dtype);
         }
 
-        void NoCudaOp::jit_prepare() {
-            add_jit_define("T", output->dtype());
+        void NoCudaOp::jit_prepare(JK& jk) {
+            add_jit_define(jk, "T", output->dtype());
         }
 
         #else // JIT
@@ -70,8 +70,8 @@ class TestCuda(unittest.TestCase):
             output = create_output(shape, dtype);
         }
 
-        void MyCudaOp::jit_prepare() {
-            add_jit_define("T", output->dtype());
+        void MyCudaOp::jit_prepare(JK& jk) {
+            add_jit_define(jk, "T", output->dtype());
         }
 
         #else // JIT

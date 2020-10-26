@@ -26,6 +26,7 @@ struct string_view_map {
     iter_t end() { return umap.end(); }
 
     const T& at(string_view sv) { return umap.at(sv); }
+    size_t size() { return umap.size(); }
 
     T& operator[](string_view sv) {
         auto iter = find(sv);

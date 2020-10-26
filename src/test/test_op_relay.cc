@@ -45,7 +45,7 @@ JIT_TEST(fused_op_relay_matmul) {
     });
     CHECKop(q.size(),==,10);
     CHECKop(ops.size(),==,4);
-    for (auto op : ops) op->do_jit_prepare();
+    for (auto op : ops) op->do_jit_prepare(jk);
     FusedOp fop;
     FusedOpContext context;
     fop.context = &context;

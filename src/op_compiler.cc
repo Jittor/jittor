@@ -1000,7 +1000,7 @@ jit_op_entry_t OpCompiler::do_compile(Op* op) {
         src = &src_after_passes;
     }
     op->compile_optimize(*src);
-    auto ret = oc.compile(op->get_jit_key(), *src);
+    auto ret = oc.compile(op->get_jit_key(jk), *src);
     return ret;
 }
 

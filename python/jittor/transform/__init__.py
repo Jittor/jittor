@@ -385,9 +385,8 @@ class Gray:
         img_ = transform(img)
     '''
     def __call__(self, img:Image.Image):
-        img = np.array(img.convert('L'))
-        img = img[np.newaxis, :]
-        return np.array((img / 255.0), dtype = np.float32)
+        img = np.float32(img.convert('L')) / np.float32(255.0)
+        return img[np.newaxis, :]
 
 class RandomCrop:
     '''

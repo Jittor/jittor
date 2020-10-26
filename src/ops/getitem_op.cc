@@ -134,7 +134,7 @@ void GetitemOp::infer_slices(
                 i_to_o[i] = out_shape.size();
                 if (in_shape_i > 0) {
                     slice.fill(in_shape_i);
-                    if (abs(slice.step) <= 1)
+                    if (std::abs(slice.step) <= 1)
                         out_shape_j = (slice.stop - slice.start) * slice.step;
                     else if (slice.step>0)
                         out_shape_j = (slice.stop - slice.start - 1) / slice.step + 1;
@@ -376,25 +376,25 @@ VarPtr GetitemOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     return make_setitem(zeros, VarSlices(vs), dout, ns_void);
 }
 
-void GetitemOp::jit_prepare() {
+void GetitemOp::jit_prepare(JK& jk) {
     auto in = inputs().front();
     int idim = i_to_vs.size();
-    add_jit_define("Ti", in->dtype());
-    add_jit_define("IDIM", JK::hex1(i_to_vs.size()));
-    add_jit_define("ODIM", JK::hex1(o_shape.size()));
+    jk << _CS("[Ti:") << in->dtype();
+    jk << _CS("][IDIM=") << JK::hex1(i_to_vs.size());
+    jk << _CS("][ODIM=") << JK::hex1(o_shape.size());
     if (first_oid_of_var>=0) {
-        add_jit_define("FOV", JK::hex1(first_oid_of_var));
-        add_jit_define("VD", JK::hex1(var_dim));
+        jk << _CS("][FOV=") << JK::hex1(first_oid_of_var);
+        jk << _CS("][VD=") << JK::hex1(var_dim);
     }
     for (int i=0; i<idim; i++) {
         auto iv = i_to_vs[i];
         auto io = i_to_o[i];
-        add_jit_define("IV", JK::hex1(i), JK::shex1(iv));
-        add_jit_define("IO", JK::hex1(i), JK::shex1(io));
+        jk << _CS("][IV") << JK::hex1(i) << ':' << JK::shex1(iv);
+        jk << _CS("][IO") << JK::hex1(i) << ':' << JK::shex1(io);
         auto& v = vs.slices[iv];
         if (iv>=0 && io==-1) {
             if (v.is_int()) {
-                add_jit_define("VS", JK::hex1(i), "-1");
+                jk << _CS("][VS") << JK::hex1(i) << _CS(":-1");
             } else {
                 ASSERT(v.is_var());
                 auto var = v.var;
@@ -406,16 +406,17 @@ void GetitemOp::jit_prepare() {
                     if (vshape[j] == o_shape[k])
                         vsmask |= 1<<(j+var_dim-vdim);
                 }
-                add_jit_define("VS", JK::hex1(i), JK::hex(vsmask));
-                add_jit_define("VST", JK::hex1(i), var->dtype());
+                jk << _CS("][VS") << JK::hex1(i) << '=' << JK::hex(vsmask);
+                jk << _CS("][VST") << JK::hex1(i) << ':' << var->dtype();
             }
         } else
         if (iv>=0 && io>=0) {
             ASSERT(v.is_slice());
+            jk << _CS("][VS") << JK::hex1(i) << ':';
             if (std::abs(v.slice.step) <= 1)
-                add_jit_define("VS", JK::hex1(i), JK::shex1(v.slice.step));
+                jk << JK::shex1(v.slice.step);
             else
-                add_jit_define("VS", JK::hex1(i), "0");
+                jk << '0';
         }
     }
     #ifdef HAS_CUDA
@@ -425,10 +426,11 @@ void GetitemOp::jit_prepare() {
         int tdims[6];
         cuda_loop_schedule(o_shape, masks, tdims);
         for (int i=0; i<no; i++) {
-            add_jit_define("LO", JK::hex1(i), JK::hex(masks[i]));
+            jk << _CS("][LO") << JK::hex1(i) << '=' << JK::hex(masks[i]);
         }
     }
     #endif
+    jk << ']';
 }
 
 #else // JIT

@@ -155,14 +155,15 @@ void ArgReduceOp::infer_shape() {
     y_key->set_shape(shape);
 }
 
-void ArgReduceOp::jit_prepare() {
-    add_jit_define("Tx", x->dtype());
-    add_jit_define("Ty", y->dtype());
-    add_jit_define("XDIM", JK::hex1(x->shape.size()));
-    add_jit_define("YDIM", JK::hex1(y->shape.size()));
-    add_jit_define("KEEPDIMS", keepdims ? 1 : 0);
-    add_jit_define("DIM", JK::hex1(dim));
-    add_jit_define("CMP", op==ns_minimum ? "<" : ">");
+void ArgReduceOp::jit_prepare(JK& jk) {
+    jk << _CS("[Tx:") << x->dtype();
+    jk << _CS("][Ty:") << y->dtype();
+    jk << _CS("][XDIM=") << JK::hex1(x->shape.size());
+    jk << _CS("][YDIM=") << JK::hex1(y->shape.size());
+    jk << _CS("][KEEPDIMS:") << (keepdims ? '1' : '0');
+    jk << _CS("][DIM=") << JK::hex1(dim);
+    jk << _CS("][CMP:") << (op==ns_minimum ? "<" : ">");
+    jk << ']';
 }
 
 #else // JIT
