@@ -185,6 +185,7 @@ void cuda_loop_schedule(NanoVector o_shape, int* masks, int* tdims) {
             rtnum = rtnum / std::max(si, (int64)1);
             thread_size *= si;
             tdims[tid] = si;
+            if (si == 0) mask |= 1<<7;
         }
         masks[loop_id] = mask;
         loop_id --;
@@ -194,6 +195,7 @@ void cuda_loop_schedule(NanoVector o_shape, int* masks, int* tdims) {
     for (; tid<6 && loop_id>=0 && total_size<(256*1024); tid++) {
         int64 si = o_shape[loop_id];
         int mask = 1<<tid;
+        if (si == 0) mask |= 1<<7;
         int64 max_thread = tid>=4 ? 65535 : (1u<<31)-1;
         if (si > max_thread) {
             si = max_thread;
@@ -268,6 +270,7 @@ void GetitemOp::_compile_optimize(string& src) {
     if (!no) {
         func->push_back("func<<<1,1>>>("+arg_call+");");
     } else {
+        bool has_zero = 0;
         loops[0] = loop.get();
         for (int i=1; i<no; i++)
             loops[i] = loops[i-1]->children.back().get();
@@ -277,6 +280,7 @@ void GetitemOp::_compile_optimize(string& src) {
             auto lo = l->find_define("LO"+S(i));
             ASSERT(lo);
             auto loi = std::stoi(lo->attrs.at("rvalue"));
+            if (loi>>7) has_zero = 1;
             string tid = "";
             string tnum = "";
             for (int j=0; j<6; j++) {
@@ -303,13 +307,15 @@ void GetitemOp::_compile_optimize(string& src) {
                 l->push_front("index_t i"+S(i)+" = "+tid+";");
             }
         }
-        func->push_back("int no = o_shape.size();");
-        func->push_back("int masks[no];");
-        func->push_back("int tdims[6];");
-        func->push_back("cuda_loop_schedule(o_shape, masks, tdims);");
-        func->push_back("dim3 grid_dim(tdims[3],tdims[4],tdims[5]);");
-        func->push_back("dim3 block_dim(tdims[0],tdims[1],tdims[2]);");
-        func->push_back("func<<<grid_dim, block_dim>>>("+arg_call+");");
+        if (!has_zero) {
+            func->push_back("int no = o_shape.size();");
+            func->push_back("int masks[no];");
+            func->push_back("int tdims[6];");
+            func->push_back("cuda_loop_schedule(o_shape, masks, tdims);");
+            func->push_back("dim3 grid_dim(tdims[3],tdims[4],tdims[5]);");
+            func->push_back("dim3 block_dim(tdims[0],tdims[1],tdims[2]);");
+            func->push_back("func<<<grid_dim, block_dim>>>("+arg_call+");");
+        }
     }
     src = main.to_string();
 }
