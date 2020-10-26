@@ -118,7 +118,7 @@ Example::
         # TODO:ugly implementation for tuner
         aa = a.reshape((-1, m))
         cc = matmul(aa, b)
-        print(a.shape, b.shape, cc.shape) 
+        # print(a.shape, b.shape, cc.shape) 
         return cc.reshape(a.shape[:-1] + [k])
     for i in range(len_c-2):
         ai = len_a-(len_c-i)
