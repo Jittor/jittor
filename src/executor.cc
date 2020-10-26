@@ -391,10 +391,12 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
             load_fused_op(fused_op, fuse_ops, ops, ll, rr, tt);
         }
         LOGvvv << "Run" << op;
-        if (!op->shape_infered()) op->infer_shape();
-        ASSERT(op->shape_infered()) << "Shape of(" >> op->name() >> ") not solved.";
-        for (auto* var : op->outputs())
+        if (op->flags.get(NodeFlags::_has_vary_input)) op->init();
+        ASSERT(!op->flags.get(NodeFlags::_has_vary_input))
+            << "Shape of(" >> op->name() >> ") not solved.";
+        for (auto* var : op->outputs()) {
             var->alloc(allocator);
+        }
         LOGvvv << "Run" << op << "inputs:" << op->inputs() << "outputs:" << op->outputs();
         op->do_prepare();
         bool is_cuda = op->flags.get(NodeFlags::_cuda);

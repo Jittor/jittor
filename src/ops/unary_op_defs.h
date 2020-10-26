@@ -38,6 +38,8 @@ namespace jittor {
 
 #define sigmoid(T,x) ((T) (1.0f/(1.0f+::expf(-(x)))))
 
+#define erf(T,x) ((T) ::erff((x)))
+
 #else
 #define abs(T,x) std::abs(x)
 #define log(T,x) std::log((T)(x))
@@ -63,6 +65,8 @@ namespace jittor {
 #define atanh(T,x) ((T) std::atanh((x)))
 
 #define sigmoid(T,x) ((T) (1.0f/(1.0f+std::exp(-(x)))))
+
+#define erf(T,x) ((T) std::erf((x)))
 
 #endif
 

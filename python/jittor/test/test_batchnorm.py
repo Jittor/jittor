@@ -114,5 +114,20 @@ class TestBatchNorm(unittest.TestCase):
         model.eval()
         check_equal_with_istrain(arr, jnn.GroupNorm(2, 10, is_train=False), model, False, False)
 
+        # ***************************************************************
+        # Test LayerNorm Layer
+        # ***************************************************************
+        arr = np.random.randn(16,10,224,224)
+
+        class Model(tnn.Module):
+            def __init__(self):
+                super(Model, self).__init__()
+                self.layer = tnn.LayerNorm(224)
+            def forward(self, x):
+                return self.layer(x)
+        model = Model()
+        model.eval()
+        check_equal_with_istrain(arr, jnn.LayerNorm(224), model, False, False)
+
 if __name__ == "__main__":
     unittest.main()

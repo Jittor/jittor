@@ -50,6 +50,8 @@ struct NodeFlags {
         _grads=_n+6,
         // bit7: has graph optimize
         _has_gopt=_n+7,
+        // bit7: has vary input
+        _has_vary_input=_n+8,
     };
 
     inline void set(Flags f, int a=1, int nbits=1) {

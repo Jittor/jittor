@@ -62,17 +62,14 @@ Var* Op::create_output(NanoVector shape, NanoString dtype) {
 }
 
 void Op::init() {
+    bool has_vary_input = 0;
+    for (Var* v : inputs())
+        if (v->num < 0) {
+            has_vary_input = 1;
+            break;
+        }
+    flags.set(NodeFlags::_has_vary_input, has_vary_input);
     infer_shape();
-    LOGvvvv << "Create" << this << "and outputs" << outputs();
-    for (Var* v : outputs())
-        CHECK(v->shape.size()) << "Number of dims should be solved.";
-}
-
-bool Op::shape_infered() {
-    if (flags.get(NodeFlags::_vary_shape)) return true;
-    for (Var* v : outputs())
-        if (v->num < 0) return false;
-    return true;
 }
 
 void Op::compile_optimize(string& src) {}

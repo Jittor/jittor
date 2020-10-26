@@ -71,6 +71,7 @@ static unordered_set<string> unary_ops = {
     "cosh",
     "acosh",
     "sigmoid",
+    "erf"
 };
 
 static unordered_set<string> unary_float_ops = {

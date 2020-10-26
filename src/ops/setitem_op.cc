@@ -65,11 +65,12 @@ void SetitemOp::infer_shape() {
     int bmask = 0;
     int bmask2 = 0;
 
-    ASSERTop(data_dim,<=,out_shape.size()) << "Data dimension not match";
+    CHECKop(data_dim,<=,out_shape.size()) << "Data dimension not match";
     for (int i=0; i<data_dim; i++) {
         int j = i - data_dim + out_shape.size();
         if (!(data_shape[i]==1 && out_shape[j]!=-1)) {
-            ASSERTop(data_shape[i],==,out_shape[j]) << "Data shape not match" << data_shape << out_shape;
+            CHECK(data_shape[i]<0 || data_shape[i]==out_shape[j])
+                << "Data shape not match" << data_shape << out_shape;
             bmask |= 1<<j;
         }
     }

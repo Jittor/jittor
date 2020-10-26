@@ -14,6 +14,7 @@ namespace jittor {
 
 // define in tracer.cc
 void print_trace();
+void breakpoint();
     
 constexpr int32_t basename_index(const char * const path, const int32_t index = 0, const int32_t slash_index = -1) {
    return path[index]
