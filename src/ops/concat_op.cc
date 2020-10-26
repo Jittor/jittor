@@ -55,8 +55,8 @@ void ConcatOp::infer_shape() {
     }
     y->set_shape(shape);
 }
-void ConcatOp::jit_prepare() {
-    add_jit_define("T", "int");
+void ConcatOp::jit_prepare(JK& jk) {
+    jk << _CS("[T:int]");
 }
 
 VarPtr ConcatOp::grad(Var* out, Var* dout, Var* v, int v_index) {

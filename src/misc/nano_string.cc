@@ -115,7 +115,8 @@ static unordered_set<string> binary_ops = {
 FOR_ALL_NS(DEFINE_NS);
 
 unordered_map<string, NanoString> NanoString::__string_to_ns;
-vector<const char*> NanoString::__ns_to_string;
+char NanoString::__ns_to_string[ns_max_size*ns_max_len];
+int NanoString::__ns_len[ns_max_size];
 
 static void init_ns() {
     NanoString::ns_t i=0;
@@ -140,11 +141,17 @@ static void init_ns() {
             ns.set(NanoString::_bool, is_bool.count(name));
         }
         NanoString::__string_to_ns[name] = ns;
-        NanoString::__ns_to_string.push_back(name);
+        auto name2 = ns.to_cstring();
+        int len=0;
+        for (;;len++) {
+            name2[len] = name[len];
+            if (!name[len]) break;
+        }
+        NanoString::__ns_len[i-1] = len;
     };
     #define INIT_NS(T) func(#T, ns_##T);
     FOR_ALL_NS(INIT_NS);
-    ASSERT(NanoString::__ns_to_string.size()<=(1<<NanoString::_index_nbits));
+    ASSERT(i<=(1<<NanoString::_index_nbits));
     NanoString::__string_to_ns["sum"] = ns_add;
     NanoString::__string_to_ns["min"] = ns_minimum;
     NanoString::__string_to_ns["max"] = ns_maximum;

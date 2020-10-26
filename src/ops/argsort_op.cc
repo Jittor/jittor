@@ -127,12 +127,13 @@ void ArgsortOp::infer_shape() {
     y_key->set_shape(x->shape);
 }
 
-void ArgsortOp::jit_prepare() {
-    add_jit_define("Tx", x->dtype());
-    add_jit_define("Ty", y->dtype());
-    add_jit_define("XDIM", JK::hex1(x->shape.size()));
-    add_jit_define("DIM", JK::hex1(dim));
-    add_jit_define("CMP", descending ? ">" : "<");
+void ArgsortOp::jit_prepare(JK& jk) {
+    jk << _CS("[Tx:") << x->dtype();
+    jk << _CS("][Ty:") << y->dtype();
+    jk << _CS("][XDIM=") << JK::hex1(x->shape.size());
+    jk << _CS("][DIM=") << JK::hex1(dim);
+    jk << _CS("][CMP:") << (descending ? '>' : '<');
+    jk << ']';
 }
 
 #else // JIT

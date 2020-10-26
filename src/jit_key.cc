@@ -108,7 +108,7 @@ vector<pair<string,string>> parse_jit_keys(const string& s) {
                 val += c;
         }
     }
-    ASSERT(presum==0);
+    ASSERT(presum==0) << s;
     return jit_keys;
 }
 
