@@ -1293,14 +1293,14 @@ unordered_map<void*, size_t> size_map;
 
 extern "C" void* jittor_cuda_malloc(void*, size_t size, int device_id) {
     size_t allocation;
-    void* ptr=exe.allocator->alloc(size, allocation);
+    void* ptr=exe.allocator->alloc(size, allocation, &exe.cuda_streams[0]);
     allocation_map[ptr]=allocation;
     size_map[ptr]=size;
     return ptr;
 }
 
 extern "C" void jittor_cuda_free(void*, void* ptr, int device_id) {
-    exe.allocator->free(ptr, size_map[ptr], allocation_map[ptr]);
+    exe.allocator->free(ptr, size_map[ptr], allocation_map[ptr], &exe.cuda_streams[0]);
 }
 
 extern "C" void* get_jittor_cuda_malloc() {

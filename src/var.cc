@@ -39,19 +39,6 @@ Var::Var(NanoVector shape, NanoString dtype)
     numel();
     wait_event = NULL;
 }
-Var::~Var() {
-    if (mem_ptr != nullptr) {
-        if (((string)allocator->name()) == "mssfrl")
-            allocator->free(mem_ptr, size, allocation, cuda_stream);
-        else
-            allocator->free(mem_ptr, size, allocation);
-    }
-    number_of_lived_vars--;
-    if (wait_event != NULL && wait_event != &array_local::event) {
-        exe.cuda_event_pool.recycle_event(wait_event);
-    }
-    free_time_stamp = 0;
-}
     
 string Var::to_string() {
     string s = dtype().to_cstring();
