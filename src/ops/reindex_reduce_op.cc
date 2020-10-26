@@ -63,21 +63,22 @@ void ReindexReduceOp::infer_shape() {
     CHECKop(y->size,>=,0u);
 }
 
-void ReindexReduceOp::jit_prepare() {
-    add_jit_define("Tx", x->dtype());
-    add_jit_define("OP", ns.to_cstring());
-    add_jit_define("YDIM", JK::hex1(y->shape.size()));
-    add_jit_define("XDIM", JK::hex1(x->shape.size()));
+void ReindexReduceOp::jit_prepare(JK& jk) {
+    jk << _CS("[Tx:") << x->dtype()
+        << _CS("][OP:") << ns
+        << _CS("][YDIM=") << JK::hex1(y->shape.size())
+        << _CS("][XDIM=") << JK::hex1(x->shape.size());
     for (uint i=0; i<indexes.size(); i++)
-        add_jit_define("INDEX", JK::hex1(i), indexes[i]);
-    add_jit_define("OSIZE", JK::hex1(overflow_conditions.size()));
+        jk << _CS("][INDEX") << JK::hex1(i) << ':' << indexes[i];
+    jk << _CS("][OSIZE=") << JK::hex1(overflow_conditions.size());
     for (uint i=0; i<overflow_conditions.size(); i++)
-        add_jit_define("OFD", JK::hex1(i), overflow_conditions[i]);
-    add_jit_define("ESIZE", JK::hex1(extras.size()));
+        jk << _CS("][OFD") << JK::hex1(i) << ':' << overflow_conditions[i];
+    jk << _CS("][ESIZE=") << JK::hex1(extras.size());
     for (uint i=0; i<extras.size(); i++) {
-        add_jit_define("EDIM", JK::hex1(i), JK::hex1(extras[i]->shape.size()));
-        add_jit_define("Te", JK::hex1(i), extras[i]->dtype());
+        jk << _CS("][EDIM") << JK::hex1(i) << '=' << JK::hex1(extras[i]->shape.size());
+        jk << _CS("][Te") << JK::hex1(i) << ':' << extras[i]->dtype();
     }
+    jk << ']';
 }
 
 #else // JIT

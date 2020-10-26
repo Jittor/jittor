@@ -23,9 +23,9 @@ CurandRandomOp::CurandRandomOp(NanoVector shape, NanoString dtype, NanoString ty
     ASSERT(type == ns_normal || type == ns_uniform);
 }
 
-void CurandRandomOp::jit_prepare() {
-    add_jit_define("T", output->dtype());
-    add_jit_define("R", type);
+void CurandRandomOp::jit_prepare(JK& jk) {
+    jk << _CS("[T:") << output->dtype();
+    jk << _CS("][R:") << type << ']';
 }
 
 #else // JIT

@@ -34,8 +34,8 @@ VarPtr NcclBroadcastOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     return nccl_reduce(dout,root);
 }
 
-void NcclBroadcastOp::jit_prepare() {
-    add_jit_define("Tx", x->dtype());
+void NcclBroadcastOp::jit_prepare(JK& jk) {
+    jk << _CS("[Tx:") << x->dtype() << ']';
 }
 
 #else // JIT

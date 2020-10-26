@@ -42,11 +42,11 @@ JIT_TEST(jit_key) {
     }
 
     jk.clear();
-    add_jit_define("f", 0.01);
-    add_jit_define("f", 0.5);
-    add_jit_define("f", 1.0/0);
-    add_jit_define("f", -1.0/0);
-    add_jit_define("f", 0.0/0);
+    add_jit_define(jk, "f", 0.01);
+    add_jit_define(jk, "f", 0.5);
+    add_jit_define(jk, "f", 1.0/0);
+    add_jit_define(jk, "f", -1.0/0);
+    add_jit_define(jk, "f", 0.0/0);
     keys = parse_jit_keys(jk.to_string());
     k2 = {{"f","0x1.47ae147ae147bp-7"}, 
         {"f","0x1p-1"},

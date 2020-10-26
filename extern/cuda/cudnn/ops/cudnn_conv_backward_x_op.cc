@@ -62,13 +62,14 @@ void CudnnConvBackwardXOp::infer_shape() {
     set_shape(dx, "abcd", xformat, xn, xc, xh, xw);
 }
 
-void CudnnConvBackwardXOp::jit_prepare() {
-    add_jit_define("Ty", dy->dtype());
-    add_jit_define("Tw", w->dtype());
-    add_jit_define("Tx", dx->dtype());
-    add_jit_define("XFORMAT", xformat);
-    add_jit_define("WFORMAT", wformat);
-    add_jit_define("YFORMAT", yformat);
+void CudnnConvBackwardXOp::jit_prepare(JK& jk) {
+    jk << _CS("[Tx:") << dx->dtype();
+    jk << _CS("][Ty:") << dy->dtype();
+    jk << _CS("][Tw:") << w->dtype();
+    jk << _CS("][XFORMAT:") << xformat;
+    jk << _CS("][WFORMAT:") << wformat;
+    jk << _CS("][YFORMAT:") << yformat;
+    jk << ']';
 }
 unordered_map<string, cudnnConvolutionBwdDataAlgo_t> bwdx_algo_cache;
 

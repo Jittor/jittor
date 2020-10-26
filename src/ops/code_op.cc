@@ -111,28 +111,28 @@ VarPtr CodeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     );
 }
 
-void CodeOp::jit_prepare() {
+void CodeOp::jit_prepare(JK& jk) {
 
     // forward: in0 in1 in2 -> out0 out1
     // backward: in0 in1 in2 in3(pout0) in4(pout1)
-    add_jit_define("IN_SIZE", JK::hex1(_inputs.size()));
+    jk << _CS("[IN_SIZE=") << JK::hex(_inputs.size());
     for (uint i=0; i<_inputs.size(); i++) {
-        jk << JK::key << "in" << JK::hex1(i) << "_dim" << 
-            JK::val << JK::hex1(_inputs[i]->shape.size()) << JK::end;
-        jk << JK::key << "in" << JK::hex1(i) << "_type" << 
-            JK::val << _inputs[i]->dtype() << JK::end;
+        jk << _CS("][in") << JK::hex(i) << _CS("_dim=")
+            << JK::hex1(_inputs[i]->shape.size());
+        jk << _CS("][in") << JK::hex(i) << _CS("_type:")
+            << _inputs[i]->dtype();
     }
-    add_jit_define("OUT_SIZE", JK::hex1(_outputs.size()));
+    jk << _CS("][OUT_SIZE=") << JK::hex(_outputs.size());
     for (uint i=0; i<_outputs.size(); i++) {
-        jk << JK::key << "out" << JK::hex1(i) << "_dim" << 
-            JK::val << JK::hex1(_outputs[i]->shape.size()) << JK::end;
-        jk << JK::key << "out" << JK::hex1(i) << "_type" << 
-            JK::val << _outputs[i]->dtype() << JK::end;
+        jk << _CS("][out") << JK::hex(i) << _CS("_dim=")
+            << JK::hex1(_outputs[i]->shape.size());
+        jk << _CS("][out") << JK::hex(i) << _CS("_type:")
+            << _outputs[i]->dtype();
     }
     if (flags.get(NodeFlags::_cuda)) {
-        jk << JK::key << "HEADER" << JK::val << cuda_header;
+        jk << _CS("][HEADER:") << cuda_header;
         ASSERT(cuda_src.size());
-        jk << "\nnamespace jittor {\n";
+        jk << _CS("\nnamespace jittor {\n");
         int i=0;
         // move cuda kernel function into header
         for (; i<cuda_src.size(); i++) {
@@ -153,13 +153,12 @@ void CodeOp::jit_prepare() {
                 }
             } else break;
         }
-        jk << "}" << JK::end << JK::key << "CODE" << JK::val;
+        jk << _CS("}][CODE:");
         for (; i<cuda_src.size(); i++) jk << cuda_src[i];
-        jk << JK::end;
+        jk << ']';
     } else {
-        add_jit_define("HEADER", cpu_header);
-        jk << JK::key << "CODE" << JK::val;
-        jk << cpu_src << JK::end;
+        jk << _CS("][HEADER:") << cpu_header;
+        jk << _CS("][CODE:") << cpu_src << ']';
         ASSERT(cpu_src.size());
     }
 }

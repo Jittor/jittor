@@ -35,8 +35,8 @@ CustomOp::CustomOp(NanoVector shape, NanoString dtype) {
     output = create_output(shape, dtype);
 }
 
-void CustomOp::jit_prepare() {
-    add_jit_define("T", output->dtype());
+void CustomOp::jit_prepare(JK& jk) {
+    add_jit_define(jk, "T", output->dtype());
 }
 
 #else // JIT
@@ -86,8 +86,8 @@ class TestCustomOp(unittest.TestCase):
             output = create_output(shape, dtype);
         }
 
-        void MyOp::jit_prepare() {
-            add_jit_define("T", output->dtype());
+        void MyOp::jit_prepare(JK& jk) {
+            add_jit_define(jk, "T", output->dtype());
         }
 
         #else // JIT
