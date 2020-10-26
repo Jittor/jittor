@@ -17,8 +17,8 @@ CublasTestOp::CublasTestOp(int size_mult) : size_mult(size_mult) {
     output = create_output(1, ns_float32);
 }
 
-void CublasTestOp::jit_prepare() {
-    add_jit_define("T", ns_float32);
+void CublasTestOp::jit_prepare(JK& jk) {
+    jk << _CS("[T:float32]");
 }
 
 #else // JIT

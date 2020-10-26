@@ -50,11 +50,11 @@ void TernaryOp::infer_shape() {
     z->set_shape(zshape);
 }
 
-void TernaryOp::jit_prepare() {
-    add_jit_define("Tc", cond->dtype());
-    add_jit_define("Tx", x->dtype());
-    add_jit_define("Ty", y->dtype());
-    add_jit_define("Tz", z->dtype());
+void TernaryOp::jit_prepare(JK& jk) {
+    jk << _CS("[Tc:") << cond->dtype();
+    jk << _CS("][Tx:") << x->dtype();
+    jk << _CS("][Ty:") << y->dtype();
+    jk << _CS("][Tz:") << z->dtype() << ']';
 }
 
 #else // JIT

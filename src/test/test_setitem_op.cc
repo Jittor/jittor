@@ -18,11 +18,11 @@ JIT_TEST(cuda_loop_schedule) {
         cuda_loop_schedule(shape, masks2, tdims2);
         while (tdims.size() < 6) tdims.push_back(1);
         for (int i=0; i<shape.size(); i++)
-            ASSERT(masks2[i] == masks[i]) << i << shape << masks << vector<int>(masks2, masks2+shape.size());
+            ASSERTop(masks2[i],==,masks[i]) << i << shape << masks << vector<int>(masks2, masks2+shape.size());
         for (int i=0; i<6; i++)
             ASSERT(tdims.at(i)==tdims2[i]) << tdims << vector<int>(tdims2, tdims2+6);
     };
-    check({0}, {1}, {0,1,1,1,1,1});
+    check({0}, {129}, {0,1,1,1,1,1});
     check({2,2,2,2}, {8, 4, 2, 1}, {2,2,2,2,1,1});
     check({2048,1024}, {8, 1}, {1024,1,1,2048,1,1});
     check({2048,1025}, {8, 1+(1<<6)}, {1024,1,1,2048,1,1});

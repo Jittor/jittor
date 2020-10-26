@@ -275,7 +275,7 @@ a[2]++;
     ir.move_out_children();
     ir.push_back("T x=1;");
     ir.push_back("T y=n;");
-    int num;
+    int num=0;
     CHECK(ir.get_number("x", num) && num==1);
     CHECK(!ir.get_number("z", num) && num==-1);
     CHECK(!ir.get_number("y", num) && num==-2);

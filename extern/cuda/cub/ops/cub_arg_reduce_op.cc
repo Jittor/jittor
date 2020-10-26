@@ -55,10 +55,14 @@ void CubArgReduceOp::infer_shape() {
     y_key->set_shape(shape);
 }
 
-void CubArgReduceOp::jit_prepare() {
-    add_jit_define("Tx", x->dtype());
-    add_jit_define("Toffsets", offsets->dtype());
-    add_jit_define("FUNC", op==ns_minimum ? "ArgMin" : "ArgMax");
+void CubArgReduceOp::jit_prepare(JK& jk) {
+    jk << _CS("[Tx:") << x->dtype();
+    jk << _CS("][Toffsets:") << offsets->dtype();
+    jk << _CS("][FUNC:");
+    if (op==ns_minimum)
+        jk << _CS("ArgMin]");
+    else 
+        jk << _CS("ArgMax]");
 }
 
 #else // JIT

@@ -23,11 +23,11 @@ void CandidateOp::infer_shape() {
     y->set_shape({-std::abs(x->shape[0])});
 }
 
-void CandidateOp::jit_prepare() {
-    add_jit_define("Tx", x->dtype());
-    add_jit_define("Ty", y->dtype());
-    add_jit_define("FUNC", fail_cond);
-    add_jit_define("XDIM", JK::hex1(x->shape.size()));
+void CandidateOp::jit_prepare(JK& jk) {
+    jk << _CS("[Tx:") << x->dtype();
+    jk << _CS("][Ty:") << y->dtype();
+    jk << _CS("][FUNC:") << fail_cond;
+    jk << _CS("][XDIM=") << JK::hex1(x->shape.size()) << ']';
 }
 
 #else // JIT

@@ -105,11 +105,12 @@ VarPtr TransposeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     return make_transpose(dout, reverse);
 }
 
-void TransposeOp::jit_prepare() {
-    add_jit_define("Tx", x->dtype());
-    add_jit_define("DIM", JK::hex1(axes.size()));
+void TransposeOp::jit_prepare(JK& jk) {
+    jk << _CS("[Tx:") << x->dtype();
+    jk << _CS("][DIM=") << JK::hex1(axes.size());
     for (uint i=0; i<axes.size(); i++)
-        add_jit_define("AXES", JK::hex1(axes[i]), S(i));
+        jk << _CS("][AXES") << JK::hex1(axes[i]) << '=' << JK::hex1(i);
+    jk << ']';
 }
 
 #else // JIT

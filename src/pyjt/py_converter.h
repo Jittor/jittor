@@ -13,6 +13,7 @@
 #include "misc/hash.h"
 #include "misc/nano_string.h"
 #include "misc/fast_shared_ptr.h"
+#include "profiler/simple_profiler.h"
 #ifdef HAS_CUDA
 #include "misc/cuda_flags.h"
 #endif

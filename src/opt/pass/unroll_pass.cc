@@ -41,7 +41,7 @@ void UnrollPass::run() {
         if (choice==1)
             loop->push_back("#pragma unroll", &loop->before);
         else {
-            int num;
+            int num=0;
             auto& split_id = loop->get_attr("split_id");
             auto& loop_id = loop->get_attr("loop_id");
             auto& rvalue = loop->get_attr("rvalue");

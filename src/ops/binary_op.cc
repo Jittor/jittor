@@ -180,11 +180,11 @@ void BinaryOp::infer_shape() {
         z->set_shape(x->shape);
 }
 
-void BinaryOp::jit_prepare() {
-    add_jit_define("Tx", x->dtype());
-    add_jit_define("Ty", y->dtype());
-    add_jit_define("Tz", z->dtype());
-    add_jit_define("OP", ns.to_cstring());
+void BinaryOp::jit_prepare(JK& jk) {
+    jk << _CS("[Tx:") << x->dtype()
+        << _CS("][Ty:") << y->dtype()
+        << _CS("][Tz:") << z->dtype()
+        << _CS("][OP:") << ns << ']';
 }
 
 #else // JIT
