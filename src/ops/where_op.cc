@@ -46,9 +46,10 @@ void WhereOp::infer_shape() {
 }
 
 void WhereOp::jit_prepare(JK& jk) {
-    add_jit_define(jk, "Ti", cond->dtype());
-    add_jit_define(jk, "To", outs[0]->dtype());
-    add_jit_define(jk, "NDIM", JK::hex1(cond->shape.size()));
+    jk << _CS("[Ti:") << cond->dtype();
+    jk << _CS("][To:") << outs[0]->dtype();
+    jk << _CS("][NDIM=") << JK::hex1(cond->shape.size());
+    jk << ']';
 }
 
 #else // JIT

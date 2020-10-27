@@ -38,10 +38,11 @@ void CubWhereOp::infer_shape() {
         outs[i]->set_shape({num});
 }
 
-void CubWhereOp::jit_prepare() {
-    add_jit_define("Ti", cond->dtype());
-    add_jit_define("To", outs[0]->dtype());
-    add_jit_define("NDIM", JK::hex1(cond->shape.size()));
+void CubWhereOp::jit_prepare(JK& jk) {
+    jk << _CS("[Ti:") << cond->dtype();
+    jk << _CS("][To:") << outs[0]->dtype();
+    jk << _CS("][NDIM=") << JK::hex1(cond->shape.size());
+    jk << ']';
 }
 
 #else // JIT
