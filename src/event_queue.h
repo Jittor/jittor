@@ -78,6 +78,12 @@ struct EventQueue {
         }
     }
 
+    inline void wait() {
+        std::unique_lock<std::mutex> l(mtx);
+        if (!tasks.empty())
+            cv.wait(l);
+    }
+
     inline void push(Func func) {
         {
             std::lock_guard<std::mutex> g(mtx);

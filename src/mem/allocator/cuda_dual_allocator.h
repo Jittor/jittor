@@ -78,6 +78,7 @@ extern CudaDualAllocator cuda_dual_allocator;
 namespace cuda_dual_local {
     
 extern list<Allocation> allocations;
+extern int64 allocations_size;
 
 }
 
@@ -96,6 +97,7 @@ struct DelayFree final : Allocator {
     void free(void* mem_ptr, size_t size, const size_t& allocation) override {
         using namespace cuda_dual_local;
         allocations.emplace_back(mem_ptr, allocation, size, &cuda_dual_allocator);
+        allocations_size += size;
         peekCudaErrors(_cudaLaunchHostFunc(0, &to_free_allocation, 0));
     }
 

@@ -41,6 +41,10 @@ Init() {
 }
 using namespace array_local;
 
+namespace cuda_dual_local {
+extern list<Allocation> allocations;
+}
+
 #endif
 
 ArrayOp::ArrayOp(const void* ptr, NanoVector shape, NanoString dtype)
@@ -59,7 +63,13 @@ ArrayOp::ArrayOp(ArrayArgs&& args) {
         flags.set(NodeFlags::_cuda, 1);
         if (!output->flags.get(NodeFlags::_force_fuse)) {
             // free prev allocation first
-            event_queue.flush();
+            while (1) {
+                event_queue.flush();
+                if (cuda_dual_local::allocations.size() < 100 &&
+                    cuda_dual_local::allocations_size < (2ll<<30))
+                    break;
+                event_queue.wait();
+            }
             // alloc new allocation
             auto size = output->size;
             new (&allocation) Allocation(&cuda_dual_allocator, size);

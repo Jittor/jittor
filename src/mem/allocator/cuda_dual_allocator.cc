@@ -20,8 +20,10 @@ DelayFree delay_free;
 namespace cuda_dual_local {
 
 list<Allocation> allocations;
+int64 allocations_size = 0;
 
 static void free_caller() {
+    allocations_size -= allocations.front().size;
     allocations.pop_front();
 }
 
