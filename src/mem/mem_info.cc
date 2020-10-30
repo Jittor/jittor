@@ -108,10 +108,30 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
                 >> "(" >> std::setprecision(p) >> a->unused_memory*100.0 / total >> "%)"
             << "total:" << FloatOutput{(double)total, " KMG", 1024, "B"} >> "\n";
         std::vector<size_t> sizes = a->get_stream_available_memory();
-        log << "sizes: ";
+        log << "sizes:";
         for (int i = 0; i < sizes.size(); ++i){
-            log << i << ": " << FloatOutput{(double)sizes[i], " KMG", 1024, "B"} << ", ";
+            log << i << ":" << FloatOutput{(double)sizes[i], " KMG", 1024, "B"} << ",";
         }
+        log >> "\n";
+        
+        log << "streams_id_mapper size:" << a->streams_id_mapper.size() >> "\n";
+        log << "event_pool size:";
+        for (int i = 0; i < a->stream_n; ++i)
+            log << i << ":" << a->event_pool.events[i].size() << ",";
+        log >> "\n";
+
+        log << "large blocks blocks size:" << a->large_blocks.blocks.size() >> "\n"
+            << "large blocks block_ids size:" << a->large_blocks.block_ids.size() >> "\n"
+            << "large blocks stream_blocks size:";
+        for (int i = 0; i < a->stream_n; ++i)
+            log << i << ":" << a->large_blocks.stream_blocks[i].size() << ",";
+        log >> "\n";
+
+        log << "small blocks blocks size:" << a->small_blocks.blocks.size() >> "\n"
+            << "small blocks block_ids size:" << a->small_blocks.block_ids.size() >> "\n"
+            << "small blocks stream_blocks size:";
+        for (int i = 0; i < a->stream_n; ++i)
+            log << i << ":" << a->small_blocks.stream_blocks[i].size() << ",";
         log >> "\n";
     }
     log << "cpu&gpu:" << FloatOutput{(double)all_total, " KMG", 1024, "B"}

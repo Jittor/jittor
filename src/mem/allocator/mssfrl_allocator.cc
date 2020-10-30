@@ -83,7 +83,11 @@ void MSCachingBlockPool::erase(MSCachingBlock* block) {
     block->free_times = 0;
     block->stream_mask = 0;
     for (int i = 0; i < block->free_events.size(); ++i) {
-        block->free_events[i]->active = false;
+        size_t s = block->free_events[i].second.first;
+        long long ts = block->free_events[i].second.second;
+        Event* event = block->free_events[i].first;
+        if (!events_ptr[s].empty() && events_ptr[s].front()->time_stamp <= ts)
+            event->active = false;
     }
     block->free_events.clear();
 }
@@ -369,25 +373,27 @@ bool check_merge_block(MSCachingBlock* b) {
     return false;
 }
 
-void MSSFRLAllocator::update_mask(size_t stream_id, const vector<MSCachingBlock*>& add_mask) {
-    for (int i = 0; i < add_mask.size(); ++i) {
-        MSCachingBlock* block = add_mask[i];
-        if (block->stream_mask & (1ULL << stream_id)) 
-            continue;
-        if (!block->occupied) {
-            block->stream_mask |= (1ULL << stream_id);
-            block->blocks->insert_stream(block, stream_id);
-            // while (check_merge_block(block)) {
-            //     unsigned long long stream_mask = block->stream_mask;
-            //     auto& block_list = *block->blocks;
-            //     block_list.erase(block);
-            //     block->stream_mask = stream_mask;
-            //     try_merge_two_blocks(block, block->prev, block_list);
-            //     try_merge_two_blocks(block, block->next, block_list);
-            //     block_list.insert(block);
-            //     reset_stream_events(block);
-            // }
-            // TODO try merge blocks?
+void MSSFRLAllocator::update_mask(const vector<vector<MSCachingBlock*> >& add_mask) {
+    for (int stream_id = 0; stream_id < stream_n; ++stream_id) {
+        for (int i = 0; i < add_mask[stream_id].size(); ++i) {
+            MSCachingBlock* block = add_mask[stream_id][i];
+            if (block->stream_mask & (1ULL << stream_id)) 
+                continue;
+            if (!block->occupied) {
+                block->stream_mask |= (1ULL << stream_id);
+                block->blocks->insert_stream(block, stream_id);
+                // while (check_merge_block(block)) {
+                //     unsigned long long stream_mask = block->stream_mask;
+                //     auto& block_list = *block->blocks;
+                //     block_list.erase(block);
+                //     block->stream_mask = stream_mask;
+                //     try_merge_two_blocks(block, block->prev, block_list);
+                //     try_merge_two_blocks(block, block->next, block_list);
+                //     block_list.insert(block);
+                //     reset_stream_events(block);
+                // }
+                // TODO try merge blocks?
+            }
         }
     }
 }
@@ -404,9 +410,10 @@ long long MSSFRLAllocator::record_free(void* mem_ptr, size_t size, const size_t&
     event->event_type = 0;
     event->block = block;
     event->stream_id = stream_id;
-    vector<MSCachingBlock*> add_mask;
+    event->op_time_stamp = op_cnt[stream_id];
+    vector<vector<MSCachingBlock*> > add_mask;
     long long ts = event_pool.add_event(event, add_mask);
-    update_mask(stream_id, add_mask);
+    update_mask(add_mask);
     // event_pool.print(2);
     return ts;
 }
@@ -421,16 +428,21 @@ long long MSSFRLAllocator::record_rely(cudaStream_t* stream_s, cudaStream_t* str
     event->rely_time_stamp = time_stamp;
     event->rely_stream_id = stream_id_t;
     event->stream_id = stream_id_s;
-    vector<MSCachingBlock*> add_mask;
+    event->op_time_stamp = op_cnt[stream_id_s];
+    vector<vector<MSCachingBlock*> > add_mask;
     long long ts = event_pool.add_event(event, add_mask);
-    update_mask(stream_id_s, add_mask);
+    update_mask(add_mask);
     // event_pool.print(2);
     return ts;
 }
 
 void MSSFRLAllocator::reset_stream_events(MSCachingBlock* block) {
     for (int i = 0; i < block->free_events.size(); ++i) {
-        block->free_events[i]->active = false;
+        size_t s = block->free_events[i].second.first;
+        long long ts = block->free_events[i].second.second;
+        Event* event = block->free_events[i].first;
+        if (!events_ptr[s].empty() && events_ptr[s].front()->time_stamp <= ts)
+            event->active = false;
     }
     block->free_events.clear();
     for (int i = 0; i < stream_n; ++i) {
@@ -439,8 +451,10 @@ void MSSFRLAllocator::reset_stream_events(MSCachingBlock* block) {
             event->event_type = 2;
             event->block = block;
             event->stream_id = i;
-            vector<MSCachingBlock*> add_mask;
+            event->op_time_stamp = op_cnt[i];
+            vector<vector<MSCachingBlock*> > add_mask;
             event_pool.add_event(event, add_mask);
+            update_mask(add_mask);
         }
     }
 }
@@ -470,6 +484,10 @@ void MSSFRLAllocator::display_memory_info() {
             std::cout << "]\n";
         }
     }
+}
+void MSSFRLAllocator::increse_op_cnt(cudaStream_t* stream) {
+    size_t stream_id = streams_id_mapper[stream];
+    ++op_cnt[stream_id];
 }
 
 } // jittor

@@ -65,8 +65,8 @@ ArrayOp::ArrayOp(ArrayArgs&& args) {
             // free prev allocation first
             while (1) {
                 event_queue.flush();
-                if (cuda_dual_local::allocations.size() < 100 &&
-                    cuda_dual_local::allocations_size < (2ll<<30))
+                if (cuda_dual_local::allocations.size() < 100 &&    // sended & not finished free cnt
+                    cuda_dual_local::allocations_size < (2ll<<30))  // sended & not finished free size
                     break;
                 event_queue.wait();
             }

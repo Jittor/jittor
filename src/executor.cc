@@ -1073,7 +1073,9 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
 
             for (auto* var : op->outputs())
                 var->cuda_stream = op->cuda_stream;
-
+            if ((string)op->name() != "clone" && (string)op->name() != "reshape") { //TODO add flag
+                ((MSSFRLAllocator*)allocator)->increse_op_cnt(op->cuda_stream);
+            }
             if (is_fused_op) {
                 for (auto& vi : fused_op.vars) {
                     if (vi.type != 0) continue;

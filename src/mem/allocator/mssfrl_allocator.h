@@ -22,14 +22,15 @@ struct MSCachingBlock;
 struct MSCachingBlockPool;
 
 struct Event {
-    size_t event_type; // 0 : free; 1 : rely; 1 : any
-    MSCachingBlock* block; // free/any : block ptr; rely : None;
+    size_t event_type=0; // 0 : free; 1 : rely; 2 : any free
+    MSCachingBlock* block=0; // free/any : block ptr; rely : None;
     long long rely_time_stamp;
-    size_t rely_stream_id; // free : None; rely ：rely event stream_id & time stamp;
-    Event* next; // prev&next event in this stream;
-    size_t stream_id; // stream id  
-    bool active; // whether free is active
-    long long time_stamp; // to compare which event comes later
+    size_t rely_stream_id=0; // free : None; rely ：rely event stream_id & time stamp;
+    Event* next=0; // prev&next event in this stream;
+    size_t stream_id=0; // stream id  
+    bool active=0; // whether free is active
+    long long time_stamp=0; // to compare which event comes later
+    long long op_time_stamp=0; // time stamp of this free/rely
 };
 
 struct MSCachingBlock {
@@ -42,7 +43,7 @@ struct MSCachingBlock {
     MSCachingBlock* prev;
     MSCachingBlock* next;
     bool occupied;
-    vector<Event*> free_events;
+    vector<std::pair<Event*, std::pair<size_t, long long> > > free_events;
     unsigned long long stream_mask;
 
     MSCachingBlock(size_t size);
@@ -50,6 +51,8 @@ struct MSCachingBlock {
 };
 
 struct EventPool {
+    const static int CUDA_QUEUE_SIZE = 1024;
+
     size_t stream_n;
     long long time_stamp_cnt;
     Event* last_event[STREAM_N][STREAM_N]; // last reachable event for each stream. Null for first event
@@ -96,7 +99,7 @@ struct EventPool {
     }
 
     // input
-    // size_t event_type; // 0 : free; 1 : rely; 1 : any
+    // size_t event_type; // 0 : free; 1 : rely; 2 : any free
     // MSCachingBlock* block; // free/any : block ptr; rely : None;
     // long long rely_time_stamp;
     // size_t rely_stream_id; // free : None; rely ：rely event stream_id & time stamp;
@@ -106,9 +109,9 @@ struct EventPool {
     // Event* next; // prev&next event in this stream;
     // bool active; // whether free is active
     // long long time_stamp; // to compare which event comes later
-    long long add_event(Event* event, vector<MSCachingBlock*>& add_mask) {
+    long long add_event(Event* event, vector<vector<MSCachingBlock*> >& add_mask) {
         if (event->event_type == 0 || event->event_type == 2) {
-            event->block->free_events.push_back(event);
+            event->block->free_events.push_back(std::make_pair(event, std::make_pair(event->stream_id, time_stamp_cnt + 1)));
         }
         // TODO inf time_stamp
         event->time_stamp = ++time_stamp_cnt;
@@ -118,21 +121,53 @@ struct EventPool {
         if (last != nullptr)
             last->next = event;
         events[event->stream_id].push_back(event);
-        check_free(event, time_stamp_cnt, event->stream_id, add_mask);
+        Event* latest_useless_event = nullptr;
+        if (event->op_time_stamp - events[event->stream_id].front()->op_time_stamp > CUDA_QUEUE_SIZE) {
+            latest_useless_event = events[event->stream_id].front();
+            while (latest_useless_event->next && event->op_time_stamp - latest_useless_event->next->op_time_stamp > CUDA_QUEUE_SIZE) {
+                latest_useless_event = latest_useless_event->next;
+            }
+        }
+        for (int s = 0; s < stream_n; ++s) {
+            vector<MSCachingBlock*> add_mask_;
+            if (s == event->stream_id) {
+                check_free(event, time_stamp_cnt, event->stream_id, add_mask_);
+            } else {
+                if (latest_useless_event) {
+                    Event* last;
+                    if (last_event_time_stamp[s][event->stream_id] < events[event->stream_id].front()->time_stamp) {
+                        last = events[event->stream_id].front();
+                    } else {
+                        last = last_event[s][event->stream_id]->next;
+                    }
+                    check_free(last, latest_useless_event->time_stamp, s, add_mask_);
+                }
+            }
+            add_mask.push_back(add_mask_);
+        }
         delete_events();
         return event->time_stamp;
     }
 
     void delete_events() {
-        for (int i = 0; i < stream_n; ++i) {
-            if (events[i].empty())
-                continue;
-            Event* now = events[i].front();
-            while (now != nullptr && (((now->event_type == 0 || now->event_type == 2) && !now->active) || (now->event_type == 1 && (events[now->rely_stream_id].empty() || now->rely_time_stamp < events[now->rely_stream_id].front()->time_stamp)))) {
-                Event* temp = now->next;
-                events[i].pop_front();
-                delete now;
-                now = temp;
+        bool deleted = true;
+        while (deleted) {
+            deleted = false;
+            for (int i = 0; i < stream_n; ++i) {
+                if (events[i].empty())
+                    continue;
+                Event* now = events[i].front();
+                while (now != nullptr && 
+                (events[i].back()->op_time_stamp - now->op_time_stamp > CUDA_QUEUE_SIZE || 
+                    (((now->event_type == 0 || now->event_type == 2) && !now->active) || 
+                    (now->event_type == 1 && (events[now->rely_stream_id].empty() || now->rely_time_stamp < events[now->rely_stream_id].front()->time_stamp)))
+                )) {
+                    Event* temp = now->next;
+                    events[i].pop_front();
+                    delete now;
+                    now = temp;
+                    deleted = true;
+                }
             }
         }
     }
@@ -159,6 +194,7 @@ struct MSCachingBlockPool {
     std::unique_ptr<MSCachingBlock*[]> occupied_id_mapper;              
     size_t stream_n;
     static const size_t ID_LIMIT = 1 << 16;
+    std::deque<Event*>* events_ptr;
 
     unsigned long long get_key(MSCachingBlock* block);
 
@@ -180,6 +216,7 @@ struct MSCachingBlockPool {
     MSCachingBlock* get_occupied(size_t allocation);
     // free all unsplit unoccupied blocks and recycle id.
     size_t free_all_cached_blocks(Allocator* underlying, long long free_size = -1);
+    void set_events_ptr(std::deque<Event*>* events_ptr_) {events_ptr = events_ptr_;}
 };
 
 /*
@@ -208,6 +245,8 @@ struct MSSFRLAllocator : Allocator {
     EventPool event_pool;
     std::unordered_map<cudaStream_t*, int> streams_id_mapper;
     bool cuda_streams_initialized;
+    long long op_cnt[512];
+    std::deque<Event*>* events_ptr;
 
     //debug
     static const bool debug = false;
@@ -240,7 +279,11 @@ struct MSSFRLAllocator : Allocator {
 
     // TODO input stream_n
     inline MSSFRLAllocator(float free_ratio = 1, float min_free_size=0, size_t stream_n = 0) : stream_n(stream_n), event_pool(stream_n), small_blocks(stream_n), large_blocks(stream_n), free_ratio(free_ratio), min_free_size(min_free_size), used_memory(0), unused_memory(0) { 
+        small_blocks.set_events_ptr(event_pool.events);
+        large_blocks.set_events_ptr(event_pool.events);
+        events_ptr = event_pool.events;
         mssfrl_allocators.push_front(this); 
+        memset(op_cnt, 0, sizeof(op_cnt));
         iter = mssfrl_allocators.begin(); 
         cuda_streams_initialized = false;
         ASSERT(stream_n <= 64);
@@ -264,7 +307,7 @@ struct MSSFRLAllocator : Allocator {
     virtual bool share_with(size_t size, size_t allocation) override;
 
     // add [stream_id] to stream_mask in all Blocks in [add_mask].
-    void update_mask(size_t stream_id, const vector<MSCachingBlock*>& add_mask);
+    void update_mask(const vector<vector<MSCachingBlock*> >& add_mask);
     // call this function before free()
     long long record_free(void* mem_ptr, size_t size, const size_t& allocation, cudaStream_t* stream);
     // tasks in [stream_id_s] before this event will run after [time_stamp] in [stream_id_t]
@@ -272,6 +315,7 @@ struct MSSFRLAllocator : Allocator {
     void reset_stream_events(MSCachingBlock* block);
     std::vector<size_t> get_stream_available_memory();
     void display_memory_info();
+    void increse_op_cnt(cudaStream_t* stream);
 };
 
 DECLARE_FLAG(int, use_mssfrl_allocator);
