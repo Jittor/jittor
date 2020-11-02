@@ -75,7 +75,11 @@ class TestRingBuffer(unittest.TestCase):
         self.train_loader = MNIST(train=True, transform=trans.Resize(224)) \
             .set_attrs(batch_size=300, shuffle=True)
         self.train_loader.num_workers = 1
+        import time
         for batch_idx, (data, target) in tqdm(enumerate(self.train_loader)):
+            # time.sleep(5)
+            # print("break")
+            # break
             # self.train_loader.display_worker_status()
             if batch_idx > 30:
                 break

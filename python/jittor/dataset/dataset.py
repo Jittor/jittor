@@ -149,7 +149,9 @@ class Dataset(object):
         '''
         if hasattr(self, "workers"):
             for w in self.workers:
-                w.p.terminate()
+                w.buffer.stop()
+                w.p.join()
+                w.p.close()
     
     def _worker_main(self, worker_id, buffer, status):
         import time

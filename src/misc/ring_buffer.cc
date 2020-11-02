@@ -18,11 +18,18 @@ RingBuffer::RingBuffer(uint64 size, bool multiprocess) : m(multiprocess), cv(mul
     size_mask = (1ll<<i)-1;
     this->size = size_mask+1;
     size_bit = i;
-    l = r = is_wait = 0;
+    l = r = is_wait = is_stop = 0;
     is_multiprocess = multiprocess;
 }
 
+void RingBuffer::stop() {
+    MutexScope _(m);
+    is_stop = 1;
+    cv.notify();
+}
+
 RingBuffer::~RingBuffer() {
+    stop();
 }
 
 
