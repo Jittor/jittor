@@ -39,7 +39,7 @@ class TestReduceOp(unittest.TestCase):
         idims = [(), (0,), (1,), (2,), (3,), (0, 2), (1,3), (1,2,3), 2, 3]
         
         iop = [ op[7:] for op in dir(jt) if op.startswith("reduce_")]
-        assert len(iop) >= 10
+        assert len(iop) >= 10, iop
         for a in ia:
             check(a, iop[0], idims[0])
         for op in iop:

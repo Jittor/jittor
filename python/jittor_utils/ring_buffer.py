@@ -127,7 +127,7 @@ def str_to_char_array(s, array_len):
     return a
 
 def char_array_to_str(a):
-    return str(a.tostring(), 'ascii').strip()
+    return str(a.tobytes(), 'ascii').strip()
 
 class RingBuffer:
     def __init__(self, buffer):

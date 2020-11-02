@@ -7,6 +7,8 @@
 #include "op.h"
 #include "mem/allocator.h"
 
+typedef struct _object PyObject;
+
 namespace jittor {
 
 struct ArrayArgs {
@@ -22,7 +24,10 @@ struct ArrayOp : Op {
     // @pybind(None)
     ArrayOp(const void* ptr, NanoVector shape, NanoString dtype=ns_float32);
 
+    // @pybind(array_)
     ArrayOp(ArrayArgs&& args);
+
+    ArrayOp(PyObject* obj);
     template<class T>
     inline T* ptr() { return (T*)allocation.ptr; }
     

@@ -31,8 +31,10 @@ pytype_map = {
     "uint": ["PyLong_AsUnsignedLong", "PyLong_FromUnsignedLong", "PyLong_CheckExact"],
     "uint64": ["PyLong_AsUnsignedLongLong", "PyLong_FromUnsignedLongLong", "PyLong_CheckExact"],
     "void": ["...", "GET_PY_NONE", "..."],
+    "PyObject*": ["","",""],
 }
 def get_pytype_map(T, i):
+    assert T != ""
     if T in pytype_map:
         return pytype_map[T][i]
     return ["from_py_object", "to_py_object", "is_type"][i]+"<"+T+">"
@@ -204,7 +206,7 @@ def get_def_code(df, scope_name, pyname, self_as_arg0=False):
             func_call = f"(GET_RAW_PTR({scope_name},self))->" + func_call
     if pyname == "__init__":
         # XXX->xxx(...) ---> new XXX xxx(...)
-        assert "->" in func_call
+        assert "->" in func_call, func_call
         func_call = "new " + func_call.replace("->", " ")
     if no_need_convert:
         func_quick_check_runable = ""
