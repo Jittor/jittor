@@ -318,7 +318,7 @@ DEF_IS(ArrayArgs, T) from_py_object(PyObject* obj) {
         int64 size = PyArray_Size(arr);
         T args;
         if (arr->nd)
-            args.shape = vector<int64>(arr->dimensions, arr->dimensions+arr->nd);
+            args.shape = NanoVector::make(arr->dimensions, arr->nd);
         else
             args.shape.push_back(1);
         args.dtype = get_type_str(arr);

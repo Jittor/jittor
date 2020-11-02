@@ -7,9 +7,12 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-__version__ = '1.2.0.7'
+__version__ = '1.2.0.8'
 from . import lock
 with lock.lock_scope():
+    ori_int = int
+    ori_float = float
+    ori_bool = bool
     from . import compiler
     from .compiler import LOG, has_cuda
     from .compiler import compile_custom_ops, compile_custom_op
@@ -874,15 +877,12 @@ def to_float(v):
 def to_bool(v):
     dtype = str(v.dtype)
     assert dtype.startswith("int") or dtype=="bool"
-    return bool(v.item())
+    return ori_bool(v.item())
 
 Var.item = item
 Var.__int__ = to_int
 Var.__float__ = to_float
 Var.__bool__ = to_bool
-
-ori_int = int
-ori_float = float
 
 int = int32
 Var.int = Var.int32

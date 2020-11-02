@@ -64,7 +64,7 @@ struct NanoVector {
     // @pyjt(__init__)
     inline NanoVector(const NanoVector& nv) : data(nv.data), offset(nv.offset) {}
     
-    void clear() { data = offset = 0; }
+    inline void clear() { data = offset = 0; }
 
     // @pyjt(__len__, __map_len__)
     inline int size() const {
@@ -158,10 +158,22 @@ struct NanoVector {
         for (auto a : v) push_back_check_overflow(a);
     }
 
+    inline static NanoVector make(const int64* v, int n) {
+        NanoVector nv;
+        for (int i=0; i<n; i++) nv.push_back_check_overflow(v[i]);
+        return nv;
+    }
+
+    inline static NanoVector make(const int32* v, int n) {
+        NanoVector nv;
+        for (int i=0; i<n; i++) nv.push_back_check_overflow(v[i]);
+        return nv;
+    }
+
     inline NanoVector(int64 x) { push_back(x); }
 
     // @pyjt(__repr__)
-    string to_string() {
+    inline string to_string() {
         string s="[";
         for (int i=0; i<size(); i++) {
             s += S(at(i));

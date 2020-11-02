@@ -99,6 +99,8 @@ extern PyObject* (*PyArray_FromAny)(PyObject *, PyArrayDescr_Proxy *, int, int, 
 extern unsigned int (*PyArray_GetNDArrayCFeatureVersion)();
 extern int (*PyArray_SetBaseObject)(PyObject *arr, PyObject *obj);
 extern PyObject* (*PyArray_NewCopy)(PyObject *, int);
+extern int (*PyArray_CopyInto)(PyObject *, PyObject *);
+
 #define PyArray_Copy(obj) PyArray_NewCopy(obj, 0)
 
 #define NPY_ARRAY_ALIGNED         0x0100
