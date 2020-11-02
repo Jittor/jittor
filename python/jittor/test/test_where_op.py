@@ -70,6 +70,8 @@ class TestWhereOpCuda(TestWhereOp):
         jt.flags.use_cuda = 0
 
 
+
+@unittest.skipIf(not jt.has_cuda, "No Torch found")
 class TestWhereOpCub(TestWhereOpCuda):
     def setUp(self):
         self.where = jt.compile_extern.cub_ops.cub_where

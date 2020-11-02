@@ -71,7 +71,8 @@ struct RingBuffer {
     uint64 size_bit;
     volatile uint64 l;
     volatile uint64 r;
-    volatile int is_wait;
+    volatile bool is_wait;
+    volatile bool is_stop;
     bool is_multiprocess;
     Mutex m;
     Cond cv;
@@ -79,17 +80,23 @@ struct RingBuffer {
 
     RingBuffer(uint64 size, bool multiprocess=false);
     ~RingBuffer();
+    void stop();
     static RingBuffer* make_ring_buffer(uint64 size, bool multiprocess);
     static void free_ring_buffer(RingBuffer* rb);
 
     inline void wait() {
-        MutexScope _(m);
-        if (is_wait) {
-            cv.notify();
-            is_wait = 0;
+        if (is_stop) {
+            abort();
         }
-        is_wait = 1;
-        cv.wait(m);
+        {
+            MutexScope _(m);
+            if (is_wait) {
+                cv.notify();
+                is_wait = 0;
+            }
+            is_wait = 1;
+            cv.wait(m);
+        }
     }
 
     inline void notify() {
