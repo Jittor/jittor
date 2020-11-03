@@ -15,8 +15,6 @@ from jittor.dataset.utils import get_random_list, get_order_list, collate_batch,
 from collections.abc import Sequence, Mapping
 import pathlib
 from PIL import Image
-from jittor_utils import ring_buffer
-from jittor_utils.ring_buffer import RingBuffer
 import multiprocessing as mp
 import signal
 from jittor_utils import LOG
@@ -30,8 +28,8 @@ img_open_hook = HookTimer(Image, "open")
 
 class Worker:
     def __init__(self, target, args, buffer_size):
-        buffer = mp.Array('c', buffer_size, lock=False)
-        self.buffer = RingBuffer(buffer)
+        self.buffer = jt.RingBuffer(buffer_size)
+
         self.status = mp.Array('f', 5, lock=False)
         self.p = mp.Process(target=target, args=args+(self.buffer,self.status))
         self.p.daemon = True
@@ -154,6 +152,8 @@ class Dataset(object):
                 w.p.terminate()
     
     def _worker_main(self, worker_id, buffer, status):
+        import jittor_utils
+        jittor_utils.cc.init_subprocess()
         import time
         try:
             gid_obj = self.gid.get_obj()
@@ -162,7 +162,7 @@ class Dataset(object):
             while True:
                 # get id
                 with gid_lock:
-                    while gid_obj.value >= self.batch_len:
+                    while gid_obj.value >= self.batch_len or buffer.is_stop():
                         self.num_idle.value += 1
                         self.num_idle_c.notify()
                         self.gidc.wait()
@@ -189,7 +189,12 @@ class Dataset(object):
                 # send data to main process
                 if mp_log_v:
                     print(f"#{worker_id} {os.getpid()} send", type(batch).__name__, [ type(b).__name__ for b in batch ], buffer)
-                buffer.send(batch)
+                try:
+                    buffer.send(batch)
+                except:
+                    if buffer.is_stop():
+                        continue
+                    raise
                 now = time.time()
                 send_time = now - start
                 start = now
@@ -253,13 +258,12 @@ Example::
         msg.append(f"progress:{self.last_id}/{self.batch_len}")
         msg.append(f"batch(s): {self.batch_time:.3f}\twait(s):{self.wait_time:.3f}")
         msg.append(f"recv(s): {self.recv_time:.3f}\tto_jittor(s):{self.to_jittor_time:.3f}")
-        msg.append(f"recv_raw_call: {ring_buffer.recv_raw_call}")
         msg.append(f"last 10 workers: {self.idmap[max(0, self.last_id-9):self.last_id+1]}")
         msg.append(f"ID\twait(s)\topen(s)\tload(s)\tsend(s)\ttotal(s)")
         for i in range(self.num_workers):
             w = self.workers[i]
             s = w.status
-            msg.append(f"#{i}\t{s[0]:.3f}\t{s[4]:.3f}\t{s[1]:.3f}\t{s[2]:.3f}\t{s[3]:.3f}\t{w.buffer.allocator}")
+            msg.append(f"#{i}\t{s[0]:.3f}\t{s[4]:.3f}\t{s[1]:.3f}\t{s[2]:.3f}\t{s[3]:.3f}\t{w.buffer}")
         LOG.i('\n'.join(msg))
 
     def _stop_all_workers(self):

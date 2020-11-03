@@ -219,7 +219,7 @@ int register_sigaction() {
     sigaction(SIGKILL, &sa, NULL);
     sigaction(SIGSTOP, &sa, NULL);
     sigaction(SIGFPE, &sa, NULL);
-    // sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGINT, &sa, NULL);
     sigaction(SIGILL, &sa, NULL);
     sigaction(SIGBUS, &sa, NULL);
     sigaction(SIGQUIT, &sa, NULL);

@@ -34,7 +34,9 @@ unordered_set<string> reduce_ops = {
     "add",
     // @pybind(prod, product, reduce_multiply)
     "multiply", 
+    // @pybind(reduce_logical_and, all)
     "logical_and", 
+    // @pybind(reduce_logical_or, any)
     "logical_or", 
     "logical_xor", 
     "bitwise_and", 
