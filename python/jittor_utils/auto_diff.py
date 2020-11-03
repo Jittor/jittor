@@ -238,12 +238,14 @@ class Hook:
             return
         if mod_name != "":
             mod_name = "<" + mod_name + ">"
-        def forward_hook(self2, input, output):
+        def forward_hook(self2, input, output, kw=None):
             ex_name = '[' + self2.__class__.__name__ + ']' 
             if "relu" not in self2.__class__.__name__.lower():
                 # not test relu, because input may be inplaced
                 self.record(self2.__ad_mod_name__+".input", input, ex_name)
             self.record(self2.__ad_mod_name__+".output", output, ex_name)
+            if kw is not None:
+                self.record(self2.__ad_mod_name__+".kw", kw, ex_name)
 
         names = []
         for name, module in mod.named_modules():

@@ -10,6 +10,9 @@
 
 namespace jittor {
 
+
+DEFINE_FLAG(int, merge_loop_mismatch_threshold, 2, "");
+
 void MergeLoopPass::run() {
     auto choice = op->get_loop_option("merge", 1);
     if (!choice) return;
@@ -44,7 +47,7 @@ void MergeLoopPass::run() {
                 while (cpx < ki.size() && cpx<kj.size() && ki[cpx] == kj[cpx]) cpx++;
                 int mismatch = std::max(ki.size(), kj.size()) - cpx;
                 LOGvvvv << "loop key " << ki << kj << "mismatch" << mismatch;
-                if (mismatch>=2 || cpx==0)
+                if (mismatch>=merge_loop_mismatch_threshold || cpx==0)
                     continue;
                 loops[i]->insert(0, loops[j]->children);
                 loops[i]->merge_loop();

@@ -37,6 +37,18 @@ def matmul_transpose(a, b):
     b = b.broadcast(shape)
     return (a*b).sum(len(shape)-1)
 
+
+def bmm_transpose(a, b):
+    '''
+    returns a * b^T
+    '''
+    if jt.flags.use_cuda:
+        return jt.compile_extern.cublas_ops.cublas_batched_matmul(a, b, 0, 1)
+    t = list(range(b.ndim))
+    t[-1], t[-2] = t[-2], t[-1]
+    return bmm(a, b.transpose(t))
+
+
 def bmm(a, b):
     ''' batch matrix multiply, 
 shape of input a is [batch, n, m],
@@ -275,6 +287,14 @@ def log_softmax(x,dim=None):
 
 def log_sigmoid(x):
     return jt.log(jt.sigmoid(x))
+
+
+class Identity(Module):
+    def __init__(self, *args, **kwargs):
+        super(Identity, self).__init__()
+
+    def execute(self, input):
+        return input
 
 class Dropout(Module):
     def __init__(self, p=0.5, is_train=False):
@@ -698,6 +718,30 @@ class ConvTranspose(Module):
             b = self.bias.broadcast(y.shape, [0,2,3])
             y = y + b
         return y
+
+
+def pad(x,padding, mode='constant', value=0):
+    assert mode in ['constant','replicate','reflect','circular'],'only support constant,replicate,reflect,circular pad'
+    assert len(padding)%2==0 and len(padding)//2<=x.ndim
+
+    padding = list(padding)
+    left = [0]*(x.ndim-len(padding)//2)+padding[::2][::-1]
+    right = [0]*(x.ndim-len(padding)//2)+padding[1::2][::-1]
+
+    out_dims = []
+    out_shape = []
+    for i,n,l,r in zip(range(x.ndim),x.shape,left,right):
+        out_shape.append(n+l+r)
+        if mode == 'constant':
+            out_dims.append(f'i{i}-{l}')
+        elif mode == 'replicate':
+            out_dims.append(f"i{i}<{l} ? 0 : i{i} > {n+l-1} ? {n-1} : i{i}-{l}")
+        elif mode == 'reflect':
+            out_dims.append(f"i{i}<{l} ? {l}-i{i} : i{i} > {n+l-1} ? {2*(n-1)+l}-i{i} : i{i}-{l}")
+        elif mode == 'circular':
+            out_dims.append(f"i{i}<{l} ? {n-l}+i{i} : i{i} > {n+l-1} ? i{i}-{n+l} : i{i}-{l}")
+
+    return x.reindex(out_shape,out_dims,overflow_value=value)
 
 
 class ReflectionPad2d(Module):
