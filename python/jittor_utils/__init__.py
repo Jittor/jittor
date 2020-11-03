@@ -154,6 +154,9 @@ def pool_cleanup():
     p.__exit__(None, None, None)
     del p
 
+def pool_initializer():
+    cc.init_subprocess()
+
 def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
     global pool_size, p
     bk = mp.current_process()._config.get('daemon')
@@ -163,7 +166,7 @@ def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
         mem_gib = mem_bytes/(1024.**3)
         pool_size = min(16,max(int(mem_gib // 3), 1))
         LOG.i(f"Total mem: {mem_gib:.2f}GB, using {pool_size} procs for compiling.")
-        p = Pool(pool_size)
+        p = Pool(pool_size, initializer=pool_initializer)
         p.__enter__()
         import atexit
         atexit.register(pool_cleanup)

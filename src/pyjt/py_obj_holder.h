@@ -11,6 +11,14 @@ namespace jittor {
 
 struct PyObjHolder {
     PyObject* obj;
+    inline PyObjHolder() : obj(nullptr) {
+    }
+    void assign(PyObject* obj) {
+        if (!obj) {
+            LOGf << "Python error occur";
+        }
+        this->obj = obj;
+    }
     inline PyObjHolder(PyObject* obj) : obj(obj) {
         if (!obj) {
             LOGf << "Python error occur";

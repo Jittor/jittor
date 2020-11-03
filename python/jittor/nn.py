@@ -154,6 +154,10 @@ def get_init_var_rand(shape, dtype):
 def relu(x): return jt.maximum(x, 0)
 def leaky_relu(x, scale=0.01): return jt.ternary(x>0, x, x*scale)
 def relu6(x): return jt.minimum(jt.maximum(x, 0), 6)
+def sign(x):
+    one = jt.ones(x.shape)
+    x = jt.ternary(x>0, one, x)
+    return jt.ternary(x<0, -one, x)
 
 def gelu(x):
     _sqrt2 = 1.4142135623730951
