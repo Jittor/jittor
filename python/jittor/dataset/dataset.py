@@ -149,11 +149,11 @@ class Dataset(object):
         '''
         if hasattr(self, "workers"):
             for w in self.workers:
-                w.buffer.stop()
-                w.p.join()
-                w.p.close()
+                w.p.terminate()
     
     def _worker_main(self, worker_id, buffer, status):
+        import jittor_utils
+        jittor_utils.cc.init_subprocess()
         import time
         try:
             gid_obj = self.gid.get_obj()
@@ -162,7 +162,7 @@ class Dataset(object):
             while True:
                 # get id
                 with gid_lock:
-                    while gid_obj.value >= self.batch_len:
+                    while gid_obj.value >= self.batch_len or buffer.is_stop():
                         self.num_idle.value += 1
                         self.num_idle_c.notify()
                         self.gidc.wait()
@@ -189,7 +189,12 @@ class Dataset(object):
                 # send data to main process
                 if mp_log_v:
                     print(f"#{worker_id} {os.getpid()} send", type(batch).__name__, [ type(b).__name__ for b in batch ], buffer)
-                buffer.send(batch)
+                try:
+                    buffer.send(batch)
+                except:
+                    if buffer.is_stop():
+                        continue
+                    raise
                 now = time.time()
                 send_time = now - start
                 start = now

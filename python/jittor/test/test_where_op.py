@@ -57,6 +57,7 @@ class TestWhereOp(unittest.TestCase):
         assert "Where Operator" in jt.where.__doc__
 
 
+@unittest.skipIf(not jt.has_cuda, "No Torch found")
 class TestWhereOpCuda(TestWhereOp):
     def setUp(self):
         self.where = jt.where

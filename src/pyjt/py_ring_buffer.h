@@ -22,9 +22,11 @@ struct PyMultiprocessRingBuffer {
     // @pyjt(pop,recv)
     PyObject* pop();
     // @pyjt(clear)
-    inline void clear() { rb->l = rb->r = 0; }
+    inline void clear() { rb->l = rb->r = rb->is_stop = 0; }
     // @pyjt(stop)
     inline void stop() { rb->stop(); }
+    // @pyjt(is_stop)
+    inline bool is_stop() { return rb->is_stop; }
 
     // @pyjt(total_pop)
     inline uint64 total_pop() { return rb->l; }
