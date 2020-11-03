@@ -76,6 +76,8 @@ def chunk(x, chunks, dim=0):
         >>> print(res[0].shape, res[1].shape)
         [5,3,3,] [5,3,3,]
     '''
+    if dim<0:
+        dim += x.ndim
     l = x.shape[dim]
     res = []
     if l <= chunks:
@@ -395,7 +397,7 @@ jt.Var.log2 = log2
 
 def item(x):
     assert x.ndim==1 and x.shape[0]==1
-    return x.data[0]
+    return x.numpy().item()
 
 jt.Var.item  = item
 
@@ -515,7 +517,7 @@ def gather(x,dim,index):
         ins.append(jt.index(index.shape,dim=i))
     ins[dim]=index
     return x.reindex(ins)
-
+jt.Var.gather = gather
 
 def prod(x,dim=0):
     x = jt.log(x)
