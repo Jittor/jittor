@@ -84,6 +84,14 @@ class TestRingBuffer(unittest.TestCase):
             if batch_idx > 30:
                 break
             pass
+        for batch_idx, (data, target) in tqdm(enumerate(self.train_loader)):
+            # time.sleep(5)
+            # print("break")
+            # break
+            # self.train_loader.display_worker_status()
+            if batch_idx > 300:
+                break
+            pass
         
 
 if __name__ == "__main__":

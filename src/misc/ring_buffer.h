@@ -48,6 +48,9 @@ struct RingBuffer {
         }
         
         inline ~Cond() {
+            // a dirty hack
+            // ref: https://stackoverflow.com/questions/20439404/pthread-conditions-and-process-termination
+            cv.__data.__wrefs = 0;
             pthread_cond_destroy(&cv);
         }
 
@@ -86,7 +89,7 @@ struct RingBuffer {
 
     inline void wait() {
         if (is_stop) {
-            abort();
+            throw std::runtime_error("stop");
         }
         {
             MutexScope _(m);
