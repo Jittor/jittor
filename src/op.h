@@ -32,7 +32,6 @@ struct Op : Node {
     inline uint type() const { CHECK_EXIST; return flags.get(NodeFlags::_op_type, NodeFlags::_op_type_nbits); }
     inline void set_type(OpType t) { CHECK_EXIST; flags.set(NodeFlags::_op_type, t, NodeFlags::_op_type_nbits); }
     
-    virtual bool shape_infered();
     Var* create_output(NanoVector shape, NanoString dtype);
     void init();
 

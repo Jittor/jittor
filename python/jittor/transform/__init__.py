@@ -213,7 +213,7 @@ def to_tensor(img):
         img_ = transform.to_tensor(img)
     """
     if isinstance(img, Image.Image):
-        return np.array(img).transpose((2,0,1)) / np.float32(255)
+        return np.array(img).transpose((2,0,1)) * np.float32(1.0/255.0)
     return img
 
 
@@ -323,7 +323,7 @@ class ImageNormalize:
         if isinstance(img, Image.Image):
             img = (np.array(img).transpose((2,0,1)) \
                 - self.mean*np.float32(255.)) \
-                / (self.std*np.float32(255.))
+                * (np.float32(1./255.)/self.std)
         else:
             img = (img - self.mean) / self.std
         return img

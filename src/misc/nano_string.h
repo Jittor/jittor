@@ -75,6 +75,7 @@ constexpr int ns_max_len = 16;
     m(acos) \
     m(cosh) \
     m(acosh) \
+    m(erf) \
     m(sigmoid) \
     \
     m(uniform) \

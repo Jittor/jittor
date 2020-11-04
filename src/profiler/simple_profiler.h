@@ -26,13 +26,15 @@ struct SimpleProfiler {
     string name;
     int64 cnt;
     int64 total_ns;
+    int64 sum;
     int64 pcnt[7] = {0};
     int64 pns[7] = {0};
     int64 last[7] = {0};
 
-    inline SimpleProfiler(string&& name): name(move(name)), cnt(0), total_ns(0) {}
-    inline ~SimpleProfiler() {
-        std::cerr << "=============================\nSimpleProfiler [" << name << "] cnt: " << cnt << " total: ";
+    void report() {
+        std::cerr << "=============================\nSimpleProfiler [" << name << "] cnt: " << cnt 
+            << " sum: " << sum << " speed: " << std::setprecision(3) << (sum*1.0/total_ns)
+            << " total: " ;
         if (total_ns < 1.e3)
             std::cerr << total_ns << " ns" << std::endl;
         else if (total_ns < 1.e6)
@@ -52,11 +54,15 @@ struct SimpleProfiler {
         for (int i=0; i<7; i++) std::cerr << std::setw(9) << last[i];
         std::cerr << std::endl;
     }
-    inline void add(int64 time) {
+
+    inline SimpleProfiler(string&& name): name(move(name)), cnt(0), total_ns(0), sum(0) {}
+    inline ~SimpleProfiler() { report(); }
+    inline void add(int64 time, int64 s) {
         auto nbit = 64 - _lzcnt(time);
         auto i = (nbit-1) / 5;
         if (i>6) i=6;
         cnt ++;
+        sum += s;
         total_ns += time;
         pcnt[i] ++;
         pns[i] += time;
@@ -74,14 +80,20 @@ example:
  */
 struct SimpleProfilerGuard {
     SimpleProfiler* p;
+    int64 s;
     std::chrono::high_resolution_clock::time_point start;
-    inline SimpleProfilerGuard(SimpleProfiler& p) : p(&p) {
+    inline SimpleProfilerGuard(SimpleProfiler& p, int64 s=1) : p(&p), s(s) {
         start = std::chrono::high_resolution_clock::now();
     }
+    void finish() {
+        this->~SimpleProfilerGuard();
+        s = 0;
+    }
     inline ~SimpleProfilerGuard() {
+        if (!s) return;
         auto finish = std::chrono::high_resolution_clock::now();
         auto total_ns =  (int64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(finish-start).count();
-        p->add(total_ns);
+        p->add(total_ns, s);
     }
 };
 

@@ -90,7 +90,9 @@ void FusedOp::update_ops() {
         }
     }
     vars.clear();
+    bool has_vary_input = 0;
     for (Op* opi : ops) {
+        has_vary_input |= opi->flags.get(NodeFlags::_has_vary_input);
         for (Var* i : opi->inputs()) {
             auto &c = i->custom_data;
             // if not visited
@@ -109,6 +111,7 @@ void FusedOp::update_ops() {
             }
         }
     }
+    flags.set(NodeFlags::_has_vary_input, has_vary_input);
     LOGvvvv << "Var info" << vars;
 }
 
@@ -135,15 +138,12 @@ FusedOp::~FusedOp() {
 }
 
 void FusedOp::infer_shape() {
-    for (uint i=0; i<ops.size(); i++)
-        ops[i]->infer_shape();
-}
-
-bool FusedOp::shape_infered() {
-    for (uint i=0; i<ops.size(); i++)
-        if (!ops[i]->shape_infered())
-            return false;
-    return true;
+    bool has_vary_input = 0;
+    for (Op* op : ops) {
+        op->init();
+        has_vary_input |= op->flags.get(NodeFlags::_has_vary_input);
+    }
+    flags.set(NodeFlags::_has_vary_input, has_vary_input);
 }
 
 void FusedOp::statistics(uint64_t& in, uint64_t& out, uint64_t& compute) {

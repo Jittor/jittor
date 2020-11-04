@@ -1092,6 +1092,9 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         }
         #endif
 
+        if (op->flags.get(NodeFlags::_has_vary_input)) op->init();
+        ASSERT(!op->flags.get(NodeFlags::_has_vary_input))
+            << "Shape of(" >> op->name() >> ") not solved.";
         for (auto* var : op->outputs())
             var->alloc(allocator);
         // std::cout << "end alloc output" << std::endl;
