@@ -125,9 +125,9 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
         }
         LOGvvv << "Check op needs compile:" << op;
         op->do_prepare(jkl);
-        if (jk.empty()) continue;
+        if (jkl.empty()) continue;
 
-        const char* jit_key = jk.to_cstring();
+        const char* jit_key = jkl.to_cstring();
         auto iter = jit_key_mapper.find(jit_key);
         if (iter != jit_key_mapper.end()) continue;
 
