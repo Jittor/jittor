@@ -62,6 +62,28 @@ unique_ptr<MemoryChecker>* load_memory_checker(string name) {
     return mm;
 }
 
+extern string _get_stack_info(Op* op);
+
+static  string get_stack_info(Op* op) {
+    string stack_info = "stack info:\n";
+    if (string("fused") == op->name()) {
+        auto fop = (FusedOp*)op;
+        map<string, int> stacks;
+        for (Op* op : fop->ops) {
+            stacks[_get_stack_info(op)] = 1;
+        }
+        for (auto& kv : stacks) {
+            stack_info += kv.first;
+            stack_info += '\n';
+        }
+        return stack_info;
+    } else {
+        stack_info += _get_stack_info(op);
+        stack_info += '\n';
+        return stack_info;
+    }
+}
+
 void Profiler::record_and_run(
     jit_op_entry_t jit_entry,
     Op* op,
@@ -82,6 +104,9 @@ void Profiler::record_and_run(
                 0, 0, 0
             };
             iter = profiler.records.find(key);
+            if (trace_py_var) {
+                iter->second.stack_info = get_stack_info(op);
+            }
         }
         bool is_fused = op->name() == string("fused");
         int loop = (is_fused && 
@@ -141,6 +166,10 @@ vector<vector<string>> Profiler::report(const string& sort_key) {
     for (auto& kv : profiler.records) {
         names.push_back(kv.first);
         fnames.push_back(Op::get_filename_from_jit_key(kv.first, ".cc"));
+        if (kv.second.stack_info.size()) {
+            fnames.back() += '\n';
+            fnames.back() += kv.second.stack_info.c_str();
+        }
         auto& kinfo = kv.second;
         order.push_back(order.size());
         // do not count relay op time
