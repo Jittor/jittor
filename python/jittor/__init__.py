@@ -249,6 +249,9 @@ def full(shape,val,dtype="float32"):
         shape = (shape,)
     return unary(val, dtype).broadcast(shape)
 
+def full_like(x,val):
+    return full(x.shape,val,x.dtype)
+
 def zeros_like(x):
     return zeros(x.shape,x.dtype)
 

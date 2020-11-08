@@ -881,6 +881,13 @@ class Sigmoid(Module):
     def execute(self, x) :
         return x.sigmoid()
 
+def softplus(x,bata=1,threshold=20):
+    return 1 / beta * jt.log(1 + (beta * x).exp())
+
+def hardtanh(x,min_val=-1,max_val=1):
+    return jt.clamp(x,min_v=min_val,max_v=max_val)
+
+
 class Softplus(Module):
     r'''
     SoftPlus is a smooth approximation to the ReLU function and can be used to constrain the output of a machine to always be positive.
@@ -1219,6 +1226,9 @@ class Sequential(Module):
             else:
                 self.append(mod)
     def __getitem__(self, idx):
+        if idx not in self.layers:
+            return list(self.layers.values())[idx]
+
         return self.layers[idx]
     def __iter__(self):
         return self.layers.values().__iter__()
