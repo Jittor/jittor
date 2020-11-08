@@ -50,7 +50,8 @@ struct RingBuffer {
         inline ~Cond() {
             // a dirty hack
             // ref: https://stackoverflow.com/questions/20439404/pthread-conditions-and-process-termination
-            cv.__data.__wrefs = 0;
+            // cv.__data.__wrefs = 0;
+            cv.__data = {0};
             pthread_cond_destroy(&cv);
         }
 
