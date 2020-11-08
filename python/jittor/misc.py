@@ -104,18 +104,6 @@ def t(x):
     return x.transpose(*pose)
 jt.Var.t = t 
 
-def any(x,dim=0,keepdim=False):
-    y = x.int().sum(dim,keepdims=keepdim)
-    return y>0
-jt.Var.any = any
-
-def all(x,dim=0,keepdim=False):
-    y = x.int().sum(dim,keepdims=keepdim)
-    return y==x.shape[dim]
-
-jt.Var.all = all
-
-
 def median(x,dim=None,keepdim=False):
     if dim is None:
         x = x.reshape(-1)
