@@ -34,6 +34,18 @@ struct PyObjHolder {
     }
 };
 
+
+inline Log& operator<<(Log& os, PyObject* objp) {
+    PyObjHolder repr_obj(PyObject_Repr(objp));
+    
+    if (PyUnicode_CheckExact(repr_obj.obj)) {
+        return os << Py_TYPE(objp)->tp_name <<
+             PyUnicode_AsUTF8(repr_obj.obj);
+    } else {
+        return os << "unknown(" >> (void*)objp >> ")";
+    }
+}
+
 }
 
 #define PYJF_MODULE_INIT(name) \

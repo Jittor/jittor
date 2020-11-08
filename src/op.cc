@@ -30,6 +30,7 @@ Op::Op() {
     flags.set(NodeFlags::_var, 0);
     flags.set(NodeFlags::_cpu, 1);
     number_of_lived_ops++;
+    if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var)) trace_data.record_node(this);
 }
 
 Op::~Op() {

@@ -1247,10 +1247,10 @@ class Sequential(Module):
         ret = callback(parents, k, self, n_children)
         if ret == False:
             return
+        parents.append(self)
         for k,v in self.layers.items():
-            parents.append(self)
             v.dfs(parents, k, callback, callback_leave)
-            parents.pop()
+        parents.pop()
         if callback_leave:
             callback_leave(parents, k, self, n_children)
     def append(self, mod):

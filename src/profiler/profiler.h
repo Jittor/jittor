@@ -7,6 +7,7 @@
 #include "common.h"
 #include "profiler/cache_info.h"
 #include "op_compiler.h"
+#include "misc/cstr.h"
 
 namespace jittor {
 
@@ -23,6 +24,7 @@ struct Profiler {
         uint64_t compute_total;
         // cache test info
         unique_ptr<CacheInfo> cache_info;
+        cstr stack_info;
 
         void update(int c, uint64_t t, uint64_t in, uint64_t out, uint64_t comp) {
             count += 1<<c;

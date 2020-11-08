@@ -120,16 +120,15 @@ struct Node {
 #ifdef NODE_MEMCHECK
     inline Node() {
         lived_nodes[(void*)this] = ++total_node;
-        registe_node_trace(this);
     }
 
     inline virtual ~Node() {
         lived_nodes.erase((void*)this);
-        unregiste_node_trace(this);
+        if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var)) trace_data.release_node(this);
     }
 #else
     inline Node() {};
-    inline virtual ~Node() {};
+    inline virtual ~Node() { if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var)) trace_data.release_node(this);};
 #endif
     inline Var* var() { return (Var*)this; }
     inline Op* op() { return (Op*)this; }
