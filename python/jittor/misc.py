@@ -98,6 +98,24 @@ def expand(x, shape):
 jt.Var.expand = expand
 
 
+def t(x):
+    pose = [i for i in range(x.ndim)]
+    pose[-1], pose[-2] = pose[-2], pose[-1]
+    return x.transpose(*pose)
+jt.Var.t = t 
+
+def any(x,dim=0,keepdim=False):
+    y = x.int().sum(dim,keepdims=keepdim)
+    return y>0
+jt.Var.any = any
+
+def all(x,dim=0,keepdim=False):
+    y = x.int().sum(dim,keepdims=keepdim)
+    return y==x.shape[dim]
+
+jt.Var.all = all
+
+
 def median(x,dim=None,keepdim=False):
     if dim is None:
         x = x.reshape(-1)
@@ -406,6 +424,8 @@ def meshgrid(*tensors):
     Take N tensors, each of which can be 1-dimensional vector, and create N n-dimensional grids, 
     where the i th grid is defined by expanding the i th input over dimensions defined by other inputs.
     '''
+    if len(tensors)==1 and isinstance(tensors[0], list):
+        tensors = tensors[0]
     size = len(tensors)
     shape = []
     for i in range(size):
@@ -469,6 +489,25 @@ jt.Var.split = split
 def tolist(x):
     return x.numpy().tolist()
 jt.Var.tolist = tolist
+
+def view_as(x,y):
+    return x.reshape(y.shape)
+jt.Var.view_as = view_as
+
+def diag(x,diagonal=0):
+    assert x.ndim==1 or (x.ndim==2 and x.shape[0]==x.shape[1])
+    d = diagonal if diagonal>=0 else -diagonal
+    d_str = f'+{diagonal}' if diagonal>=0 else f'{diagonal}'
+
+    if x.ndim==1:
+        output_shape = (x.shape[0]+d,)*2
+        return x.reindex(output_shape,[f'i1-{d}' if diagonal>=0 else f'i0-{d}'],overflow_conditions=[f'i0{d_str}!=i1'])
+    else:
+        output_shape = (x.shape[0]-d,)
+        return x.reindex(output_shape,[f'i0+{d}' if diagonal<=0 else 'i0',f'i0+{d}' if diagonal>=0 else 'i0'])
+
+jt.Var.diag = diag
+        
 
 def topk(input, k, dim=None, largest=True, sorted=True):
     if input.numel()==0:
