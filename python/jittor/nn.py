@@ -264,17 +264,29 @@ class L1Loss(Module):
     def execute(self, output, target):
         return l1_loss(output, target)
 
-class BCEWithLogitsLoss(Module):
-    def __init__(self, weight=None, size_average=True):
-        self.sigmoid = Sigmoid()
-        self.bce = BCELoss(weight, size_average)
-    def execute(self, output, target):
-        output = self.sigmoid(output)
-        output = self.bce(output, target)
-        return output
+def binary_cross_entropy_with_logits(output, target, weight=None, pos_weight=None, size_average=True):
+    max_val = jt.clamp(-output,min_v=0)
+    if pos_weight is not None:
+        log_weight = (pos_weight-1)*target + 1
+        loss = (1-target)*output+(log_weight*(((-max_val).exp()+(-output - max_val).exp()).log()+max_val))
+    else:
+        loss = (1-target)*output+max_val+((-max_val).exp()+(-output -max_val).exp()).log()
+    if weight is not None:
+        loss *=weight
 
-def binary_cross_entropy_with_logits(input, target, weight=None, size_average=True):
-    return BCEWithLogitsLoss(weight, size_average)(input, target)
+    if size_average:
+        return loss.mean()
+    else:
+        return loss.sum()
+
+class BCEWithLogitsLoss(Module):
+    def __init__(self, weight=None, pos_weight=None, size_average=True):
+        self.pos_weight = pos_weight
+        self.weight = weight
+        self.size_average = size_average
+
+    def execute(self, output, target):
+        return binary_cross_entropy_with_logits(output,target,self.weight,self.pos_weight,self.size_average)
 
 def softmax(x, dim = None):
     if dim is None:
