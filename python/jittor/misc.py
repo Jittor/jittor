@@ -12,6 +12,26 @@ import numpy as np
 import math
 from collections.abc import Sequence,Iterable
 
+def __copy__(x):
+    return x.copy().detach()
+jt.Var.__copy__ = __copy__
+
+def __deepcopy__(x,memo):
+    result = x.copy().detach()
+    memo[id(x)]=result
+    return result
+jt.Var.__deepcopy__ = __deepcopy__
+
+def __len__(x):
+    return x.shape[0]
+jt.Var.__len__ = __len__
+
+def __iter__(x):
+    result = []
+    for i in range(x.shape[0]):
+        result.append(x[i])
+    return result.__iter__()
+jt.Var.__iter__ = __iter__
 
 def repeat(x, *shape):
     r'''
