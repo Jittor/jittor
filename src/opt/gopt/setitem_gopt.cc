@@ -103,6 +103,29 @@ static void setitem_grad_opt(GetitemOp* op) {
 
 }
 
+static void getitem_inplace(GetitemOp* op) {
+    // LOGir << "getitem_inplace";
+
+    auto in = op->inputs().front();
+    auto ou = op->outputs().front();
+    
+    // return if input or output's shape is variable
+    if (in->num < 0 || ou->num < 0)
+        return;
+
+    VarSlices vs = op->vs;
+    auto in_shape = in->shape;
+    auto ou_shape = ou->shape;
+
+    for (int i = vs.n - 1; i > 0; --i)
+        if (!(vs.slices[i].slice.step == 1 && in_shape[i] == ou_shape[i]))
+            return;
+
+    Slice s = vs.slices[0].slice;
+    ou->share_with(in, (s.stop - s.start) * in->size / in_shape[0] / 2);
+    return;
+}
+
 void SetitemOp::graph_optimize() {
     // LOGir << "hello graph_optimize";
     setitem_inplace(this);
@@ -113,6 +136,7 @@ void GetitemOp::graph_optimize() {
     // LOGir << "hello getitem graph_optimize";
     // setitem_grad_opt(this);
     (void)setitem_grad_opt;
+    getitem_inplace(this);
 }
 
 }
