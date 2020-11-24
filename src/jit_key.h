@@ -92,8 +92,12 @@ inline JK& operator<<(JK& jk, const string& s) {
     auto a = (__jk_int256*)(jk.buffer+jk.size);
     auto b = (__jk_int256*)(&s[0]);
     auto len = s.size();
-    for (uint64 i=0; i*32<len; i++)
-        a[i] = b[i];
+    uint64 i=0;
+    for (; i+32<=len; i+=32)
+        a[i/32] = b[i/32];
+        
+    for (; i<len; i++)
+        jk.buffer[jk.size+i] = s[i];
     jk.size += len;
     return jk;
 }
