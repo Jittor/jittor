@@ -33,6 +33,15 @@ def __iter__(x):
     return result.__iter__()
 jt.Var.__iter__ = __iter__
 
+def all(x,dim):
+    return x.all_(dim).bool()
+jt.Var.all = all
+
+def any(x,dim):
+    return x.any_(dim).bool()
+jt.Var.any = any
+    
+
 def repeat(x, *shape):
     r'''
     Repeats this var along the specified dimensions.
@@ -346,9 +355,8 @@ def unique(x):
     '''
     x = x.reshape(-1)
     _,x = jt.argsort(x)
-    index2 = [i for i in range(1,x.shape[0])]
-    index1 = [i for i in range(x.shape[0]-1)]
-    y = x[1:][x[index2] != x[index1]]
+    index,= jt.index((x.shape[0],))
+    y = x[1:][x[index[1:]] != x[index[:-1]]]
     x = jt.contrib.concat([x[:1],y],dim=0)
     return x
 
