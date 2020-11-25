@@ -232,7 +232,7 @@ void CudnnConvBackwardWOp::jit_run() {
                 best_algo_idx=i;
                 break;
             }
-        ASSERT(best_algo_idx!=-1);
+        ASSERT(best_algo_idx!=-1);// TODO: assert error when depthconv
         algo=perf_results[best_algo_idx].algo;
         if (benchmark) {
             bwdw_algo_cache[jk.to_string()] = algo;
