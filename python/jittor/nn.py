@@ -502,6 +502,8 @@ ReLU6 = jt.make_module(relu6)
 Softmax = jt.make_module(softmax, 2)
 GELU = jt.make_module(gelu)
 
+from jittor.depthwise_conv import depthwise_conv 
+
 class Conv(Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
         self.in_channels = in_channels
@@ -511,6 +513,8 @@ class Conv(Module):
         self.padding = padding if isinstance(padding, tuple) else (padding, padding)
         self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
         self.groups = groups
+        self.is_depthwise_conv = self.groups == self.out_channels and self.groups == self.in_channels
+        # self.is_depthwise_conv = False
         assert in_channels % groups == 0, 'in_channels must be divisible by groups'
         assert out_channels % groups == 0, 'out_channels must be divisible by groups'
         Kh, Kw = self.kernel_size
@@ -530,7 +534,9 @@ class Conv(Module):
             self.bias = None
 
     def execute(self, x):
-        if self.groups == 1:
+        if self.is_depthwise_conv:
+            return depthwise_conv(x, self.weight, self.padding, self.dilation, self.stride)
+        elif self.groups == 1:
             N,C,H,W = x.shape
             Kh, Kw = self.kernel_size
             assert C==self.in_channels

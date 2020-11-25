@@ -7,6 +7,11 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
+# import os
+# import ctypes
+# ctypes.CDLL("/home/cxjyxx_me/jittor/my/occ_test/libCuda.so", os.RTLD_GLOBAL | os.RTLD_NOW)
+# ctypes.CDLL("/home/cxjyxx_me/jittor/my/occ_test/libcuda.so.1", os.RTLD_GLOBAL | os.RTLD_NOW)
+
 __version__ = '1.2.1.1'
 from . import lock
 with lock.lock_scope():
