@@ -149,6 +149,19 @@ static vector<Stack> get_stack_info() {
                 (int)PyFrame_GetLineNumber(prev_f)});
         }
     }
+    if (stacks.size() == 0) {
+        auto m = std::min(3,n);
+        for (int i=0; i<m; i++) {
+            auto f = frames[n-m+i];
+            auto s = to_string(f->f_code->co_filename);
+            auto num = (int)PyFrame_GetLineNumber(f);
+            stacks.emplace_back(Stack{
+                s+":"+S(num), 
+                "",
+                s,
+                num});
+        }
+    }
     return stacks;
 }
 
