@@ -25,3 +25,4 @@ python/jittor.egg-info
 dist/
 !doc/source/*
 core
+__data__

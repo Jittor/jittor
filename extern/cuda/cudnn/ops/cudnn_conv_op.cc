@@ -203,7 +203,7 @@ void CudnnConvOp::jit_run() {
                     handle_, cudnnIdesc, cudnnFdesc, cudnnConvDesc, 
                     cudnnOdesc, algos[i], &sz);
                 // continue if use too much workspace
-                if (sz*4 > mem_info.total_cuda_ram) continue;
+                if (sz > mem_info.total_cuda_ram * max_workspace_ratio) continue;
                 if (CUDNN_STATUS_SUCCESS == ret && sz > max_ws_size) max_ws_size = sz;
             } 
             size_t allocation;

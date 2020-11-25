@@ -114,6 +114,23 @@ ArrayArgs VarHolder::fetch_sync() {
     return {var->mem_ptr, var->shape, var->dtype()};
 }
 
+ItemData VarHolder::item() {
+    sync();
+    ItemData data;
+    data.dtype = var->dtype();
+    auto dsize = data.dtype.dsize();
+    #ifdef HAS_CUDA
+    migrate_to_cpu(var, exe.allocator);
+    if (var->allocator->is_cuda()) {
+        checkCudaErrors(cudaMemcpy(&data.data, var->mem_ptr, dsize, cudaMemcpyDeviceToHost));
+    } else
+    #endif
+    {
+        std::memcpy(&data.data, var->mem_ptr, dsize);
+    }
+    return data;
+}
+
 // from fetch_op.cc
 extern list<VarPtr> fetcher;
 

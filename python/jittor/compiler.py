@@ -896,8 +896,8 @@ make_cache_dir(os.path.join(cache_path, "obj_files"))
 make_cache_dir(os.path.join(cache_path, "gen"))
 
 # build cache_compile
-cc_flags += pybind_include
 cc_flags += f" -I{jittor_path}/src "
+cc_flags += pybind_include
 check_cache_compile()
 LOG.v(f"Get cache_compile: {jit_utils.cc}")
 
@@ -981,10 +981,11 @@ assert libname is not None, "openmp library not found"
 ctypes.CDLL(libname, os.RTLD_NOW | os.RTLD_GLOBAL)
 
 version_file = os.path.join(jittor_path, "version")
-if os.path.isfile(version_file):
+if os.path.isfile(version_file) and not os.path.isdir(os.path.join(jittor_path, "src", "__data__")):
     with open(version_file, 'r') as f:
         version = f.read().strip()
-    key = f"{version}-{cc_type}-{'cuda' if has_cuda else 'cpu'}.o"
+    # key = f"{version}-{cc_type}-{'cuda' if has_cuda else 'cpu'}.o"
+    key = f"{version}-g++-cpu.o"
     # TODO: open the website
     extra_obj = os.path.join(cache_path, key)
     url = os.path.join("https://cg.cs.tsinghua.edu.cn/jittor/assets/build/"+key)

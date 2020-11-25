@@ -40,6 +40,7 @@ class Pool(Module):
                     count = f"int count = {self.kernel_size*self.kernel_size};"
                 else:
                     count = "int count = (k2_ - k2) * (k3_ - k3);"
+                count += "float32 rcount = 1.0f / count;"
             else:
                 count = ""
             forward_body = f'''{{
@@ -168,7 +169,9 @@ class AdaptiveAvgPool2d(Module):
             oh = x.shape[2] if self.output_size[0] is None else self.output_size[0]
             ow = x.shape[3] if self.output_size[1] is None else self.output_size[1]
         else:
-            raise TypeError(f"AdaptiveAvgPool2d only support int, typle or list input. Not support {type(self.output_size)} yet.")
+            raise TypeError(f"AdaptiveAvgPool2d only support int, tuple or list input. Not support {type(self.output_size)} yet.")
+        if oh == 1 and ow == 1:
+            return x.reduce("mean", [2,3], keepdims=True)
         N,C,H,W = x.shape
         self.sh = math.floor(H / oh)
         self.sw = math.floor(W / ow)
