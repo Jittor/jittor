@@ -223,7 +223,7 @@ sudo apt install python3.7 python3.7-dev
 
 The whole framework is compiled Just-in-time. Let's install jittor via pip
 
-整个框架是及时编译的。 让我们通过pip安装jittor
+整个框架是即时编译的。 让我们通过pip安装jittor
 
 ```bash
 git clone https://github.com/Jittor/jittor.git

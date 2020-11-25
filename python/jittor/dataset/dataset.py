@@ -267,6 +267,9 @@ Example::
         LOG.i('\n'.join(msg))
 
     def _stop_all_workers(self):
+        # stop workers
+        for w in self.workers:
+            w.buffer.stop()
         # wait until all workers idle
         if self.num_idle.value < self.num_workers:
             with self.gid.get_lock():

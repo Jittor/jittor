@@ -56,17 +56,6 @@ struct NonZeroOp
     }
 };
 
-template<typename T>
-struct ConvertOp 
-{   
-    const T div;
-    const T dim_size;
-    ConvertOp(T _div,T dim_size): div(_div),dim_size(dim_size){} 
-    __host__ __device__ __forceinline__ T operator()(const T& val) const {
-        return (val/div) % dim_size;
-    }
-};
-
 __global__ static void where_kernel(
     int n, 
     To* input
@@ -90,29 +79,24 @@ void CubWhereOp::jit_run(){
     int N = cond->num;
     size_t temp_storage_bytes=0;
     size_t num_nonzeros_allocation;
-    auto num_nonzeros = exe.allocator->alloc(sizeof(int), num_nonzeros_allocation);
-    cub::TransformInputIterator<bool, NonZeroOp<Ti>, Ti*> itr(cond->ptr<Ti>(), NonZeroOp<Ti>());
-    cub::DeviceReduce::Sum(nullptr, temp_storage_bytes, itr, (int *)num_nonzeros, N);
-    
+    auto num_nonzeros = exe.allocator->alloc(sizeof(To), num_nonzeros_allocation);
+
     size_t temp_storage_allocation;
-    auto temp_storage = exe.allocator->alloc(temp_storage_bytes, temp_storage_allocation);
-
-    cub::DeviceReduce::Sum(temp_storage, temp_storage_bytes, itr, (int *)num_nonzeros, N);
-    exe.allocator->free(temp_storage, temp_storage_bytes, temp_storage_allocation);
-
-    int num_nonzeros_h;
-    checkCudaErrors(cudaMemcpy(&num_nonzeros_h, num_nonzeros, sizeof(int), cudaMemcpyDeviceToHost));
+    void* temp_storage;
     
     To* out_temp = outs[0]->ptr<To>();
 
-    @for(i, 0, NDIM, outs[@i]->set_shape({num_nonzeros_h});)
-
     cub::CountingInputIterator<To> counting_itr(0);
+    cub::TransformInputIterator<bool, NonZeroOp<Ti>, Ti*> itr(cond->ptr<Ti>(), NonZeroOp<Ti>());
     temp_storage_bytes = 0;
-    cub::DeviceSelect::Flagged(nullptr, temp_storage_bytes, counting_itr, itr,out_temp, (int*)num_nonzeros, N);
+    checkCudaErrors(cub::DeviceSelect::Flagged(nullptr, temp_storage_bytes, counting_itr, itr, out_temp, (To*)num_nonzeros, N));
     temp_storage = exe.allocator->alloc(temp_storage_bytes, temp_storage_allocation);
-    cub::DeviceSelect::Flagged(temp_storage, temp_storage_bytes, counting_itr, itr,out_temp, (int*)num_nonzeros, N);
+    checkCudaErrors(cub::DeviceSelect::Flagged(temp_storage, temp_storage_bytes, counting_itr, itr,out_temp, (To*)num_nonzeros, N));
     exe.allocator->free(temp_storage, temp_storage_bytes, temp_storage_allocation);
+
+    To num_nonzeros_h;
+    cudaMemcpy(&num_nonzeros_h, num_nonzeros, sizeof(To), cudaMemcpyDeviceToHost);
+    @for(i, 0, NDIM, outs[@i]->set_shape({num_nonzeros_h});)
 
     if (num_nonzeros_h > 0 && NDIM > 1) {
         int thread_num = std::min(1024, num_nonzeros_h);

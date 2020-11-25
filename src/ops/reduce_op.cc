@@ -157,6 +157,7 @@ void ReduceOp::jit_run() {
     index_t xstride@{DIM-1} = 1;
     @for(i, DIM-2, -1, -1, auto xstride@i = xstride@{i+1} * xshape@{i+1};)
     Ty count = Ty(x->num) / Ty(y->num);
+    Ty rcount = Ty(y->num) / Ty(x->num);
     @for(d, 0, DIM,@if(REDUCE>>d&1,, for (index_t xi@d=0; xi@d < xshape@d; xi@d++))) {
         auto yid = 0 @for(d, 0, DIM,@if(REDUCE>>d&1,, + xi@d * ystride@d));
         yp[yid] = @expand_macro(init_@OP, Ty);
@@ -169,7 +170,7 @@ void ReduceOp::jit_run() {
             yp[yid] = @expand_macro(@OP, Ty, yp[yid], xp[xid]);
         }
     }
-    (void)count, (void)yshape0, (void)ystride0;
+    (void)count, (void)rcount, (void)yshape0, (void)ystride0;
 }
 #endif // JIT
 

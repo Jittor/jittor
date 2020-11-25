@@ -79,7 +79,7 @@ struct SimpleThreads {
         for (auto& t : threads) {
             auto start = clock();
             int ok = 0;
-            while (clock()<start+5000) {
+            while (clock()<start+5*CLOCKS_PER_SEC) {
                 if (t.mtx.try_lock()) {
                     t.mtx.unlock();
                     ok = 1;

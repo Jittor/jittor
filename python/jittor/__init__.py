@@ -864,8 +864,6 @@ def size(v, dim=None):
     return v.shape[dim]
 Var.size = size
 
-def item(v):
-    return v.data.item()
 
 def to_int(v):
     dtype = str(v.dtype)
@@ -882,7 +880,6 @@ def to_bool(v):
     assert dtype.startswith("int") or dtype=="bool"
     return ori_bool(v.item())
 
-Var.item = item
 Var.__int__ = to_int
 Var.__float__ = to_float
 Var.__bool__ = to_bool
