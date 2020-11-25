@@ -383,7 +383,7 @@ class BatchNorm(Module):
         return norm_x * w + b
         
 class BatchNorm1d(Module):
-    def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=None, is_train=True, sync=True):
+    def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True, is_train=True, sync=True):
         self.sync = sync
         self.num_features = num_features
         self.is_train = is_train
