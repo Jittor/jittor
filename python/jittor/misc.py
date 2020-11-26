@@ -443,12 +443,6 @@ def log2(x):
 
 jt.Var.log2 = log2
 
-def item(x):
-    assert x.ndim==1 and x.shape[0]==1
-    return x.numpy().item()
-
-jt.Var.item  = item
-
 def meshgrid(*tensors):
     r'''
     Take N tensors, each of which can be 1-dimensional vector, and create N n-dimensional grids, 

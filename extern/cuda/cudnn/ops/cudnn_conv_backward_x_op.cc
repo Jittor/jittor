@@ -178,7 +178,7 @@ void CudnnConvBackwardXOp::jit_run() {
         CUDNN_CONVOLUTION_BWD_DATA_ALGO_WINOGRAD,
         CUDNN_CONVOLUTION_BWD_DATA_ALGO_WINOGRAD_NONFUSED
     };
-    int num_algos = CUDNN_CONVOLUTION_BWD_FILTER_ALGO_COUNT;
+    int num_algos = CUDNN_CONVOLUTION_BWD_DATA_ALGO_COUNT;
     int perf_count;
     cudnnConvolutionBwdDataAlgoPerf_t perf_results[num_algos];
     cudnnConvolutionBwdDataAlgo_t algo;
