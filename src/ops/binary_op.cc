@@ -126,8 +126,8 @@ VarPtr BinaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     }
     if (ns == ns_maximum || ns == ns_minimum) {
         auto zeros = make_number(0, dout);
-        auto cond = make_binary(x, y, ns_greater_equal);
-        if ((ns == ns_maximum) == (v_index==0))
+        auto cond = make_binary(y, z, ns_equal);
+        if (v_index==1)
             return make_ternary(cond, dout, zeros);
         else
             return make_ternary(cond, zeros, dout);

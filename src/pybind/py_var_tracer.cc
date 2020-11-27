@@ -95,6 +95,21 @@ static vector<Stack> get_stack_info() {
     int i=n;
     while (i) frames[--i] = frame, frame = frame->f_back;
     PyObject* prev_obj = nullptr;
+    if (trace_py_var == 2) {
+        // trace raw stack
+        auto start = std::max(0, n-5);
+        for (int i=start; i<n; i++) {
+            auto f = frames[i];
+            auto filename = to_string(f->f_code->co_filename);
+            auto lineno = (int)PyFrame_GetLineNumber(f);
+            stacks.emplace_back(Stack{
+                filename+":"+S(lineno), 
+                to_string(f->f_code->co_name),
+                filename,
+                lineno});
+        }
+        return stacks;
+    }
     for (int i=0; i<n; i++) {
         auto f = frames[i];
         if (Py_SIZE(f->f_code->co_varnames)) {
@@ -170,7 +185,7 @@ void TraceData::record_node(Node* node, bool record_stack) {
     NodeData data;
     data.id = node_data_cnt++;
     id_map[node] = data.id;
-    if (!node->is_var()) {
+    if (!node->is_var() || trace_py_var==2) {
         if (record_stack) {
             if (trace_grad_op) {
                 auto iter = trace_data.id_map.find(trace_grad_op);
@@ -324,23 +339,27 @@ void clear_trace_data() {
     trace_data.node_data.clear();
 }
 
-string _get_stack_info(Op* op) {
+string _get_stack_info(Node* node) {
     string stack_info = "";
-    auto iter = trace_data.id_map.find(op);
+    auto iter = trace_data.id_map.find(node);
     if (iter == trace_data.id_map.end())
         return stack_info;
     auto node_id = iter->second;
     auto iter2 = trace_data.node_data.find(node_id);
     if (iter2 == trace_data.node_data.end())
         return stack_info;
-    for (auto& stack : iter2->second.stacks)
-        stack_info += stack.module_name + " -> ";
+    for (auto& stack : iter2->second.stacks) {
+        stack_info += stack.module_name;
+        stack_info += '(';
+        stack_info += stack.module_type;
+        stack_info += ')';
+        stack_info += " -> ";
+    }
     return stack_info;
 }
 
 void print_node_trace(const Node* node, std::ostream& os) {
-    if (!node->is_var())
-        os << _get_stack_info((((Node*)node))->op());
+    os << _get_stack_info((Node*)node);
 }
 
 } // jittor

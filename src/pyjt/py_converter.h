@@ -401,6 +401,29 @@ DEF_IS(DataView, PyObject*) to_py_object(T a) {
     return oh.release();
 }
 
+
+#pragma GCC diagnostic ignored "-Wstrict-aliasing"
+struct ItemData;
+DEF_IS(ItemData, PyObject*) to_py_object(T a) {
+    if (a.dtype == ns_bool) {
+        if (*((bool*)(&a.data))) Py_RETURN_TRUE;
+        Py_RETURN_FALSE;
+    }
+    if (a.dtype == ns_int32)
+        return PyLong_FromLongLong((int64)*(int*)&a.data);
+    if (a.dtype == ns_float32)
+        return PyFloat_FromDouble((float64)*(float32*)&a.data);
+    if (a.dtype == ns_int64)
+        return PyLong_FromLongLong(a.data);
+    if (a.dtype == ns_float64)
+        return PyFloat_FromDouble(*(float64*)&a.data);
+    if (a.dtype == ns_int16)
+        return PyLong_FromLongLong((int64)*(int16*)&a.data);
+    if (a.dtype == ns_int8)
+        return PyLong_FromLongLong((int64)*(int8*)&a.data);
+    return PyLong_FromLongLong(a.data);
+}
+
 struct NumpyFunc;
 
 DEF_IS(NumpyFunc, bool) is_type(PyObject* obj) {

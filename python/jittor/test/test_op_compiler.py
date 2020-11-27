@@ -120,7 +120,7 @@ class TestOpCompiler(unittest.TestCase):
         OP1
         1+2
         std::max(T(1), T(2))
-        ((1)+T(2)*(T(1)/T(count)))''')
+        ((1)+T(2)*(T(rcount)))''')
         expect_error(lambda: jit_precompile(vars, "@{a"))
         expect_error(lambda: jit_precompile(vars, "@for(a"))
         expect_error(lambda: jit_precompile(vars, "@for(i,l,r)"))
