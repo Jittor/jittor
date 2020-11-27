@@ -370,6 +370,8 @@ class BatchNorm(Module):
         b = self.bias.broadcast(x, [0,2,3])
         return norm_x * w + b
         
+BatchNorm2d = BatchNorm
+	
 class BatchNorm1d(Module):
     def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True, is_train=True, sync=True):
         self.sync = sync
@@ -583,6 +585,8 @@ class Conv(Module):
                 b = self.bias.broadcast(y.shape, [0,2,3])
                 y = y + b
             return y          
+
+Conv2d = Conv
 
 class Conv1d(Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
