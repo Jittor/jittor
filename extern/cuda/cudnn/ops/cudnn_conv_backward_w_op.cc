@@ -198,7 +198,7 @@ void CudnnConvBackwardWOp::jit_run() {
                 size_t sz;
                 cudnnStatus_t ret = cudnnGetConvolutionBackwardFilterWorkspaceSize(handle_, cudnnIdesc, cudnnOdesc, cudnnConvDesc, cudnnFdesc, algos[i], &sz);
                 // continue if use too much workspace
-                if (sz*4 > mem_info.total_cuda_ram) continue;
+                if (sz > mem_info.total_cuda_ram * max_workspace_ratio) continue;
                 if (CUDNN_STATUS_SUCCESS == ret && sz > max_ws_size) max_ws_size = sz;
             } 
             size_t allocation;

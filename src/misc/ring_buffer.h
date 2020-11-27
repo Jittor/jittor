@@ -88,6 +88,8 @@ struct RingBuffer {
     static RingBuffer* make_ring_buffer(uint64 size, bool multiprocess);
     static void free_ring_buffer(RingBuffer* rb);
 
+    inline void clear() { l = r = is_stop = 0; }
+
     inline void wait() {
         if (is_stop) {
             throw std::runtime_error("stop");

@@ -177,6 +177,7 @@ std::vector<std::map<string,string>> log_capture_read() {
 
 void log_exiting();
 
+bool exited = false;
 size_t thread_local protected_page = 0;
 int segfault_happen = 0;
 string thread_local thread_name;
@@ -184,6 +185,7 @@ string thread_local thread_name;
 void segfault_sigaction(int signal, siginfo_t *si, void *arg) {
     if (signal == SIGINT) {
         LOGe << "Caught SIGINT, exit";
+        exited = true;
         exit(1);
     }
     std::cerr << "Caught segfault at address " << si->si_addr << ", "
@@ -194,13 +196,16 @@ void segfault_sigaction(int signal, siginfo_t *si, void *arg) {
         si->si_addr<(void*)(protected_page+4*1024)) {
         LOGf << "Accessing protect pages, maybe jit_key too long";
     }
-    if (signal == SIGSEGV) {
-        // only print trace in main thread
-        if (thread_name.size() == 0)
-            print_trace();
-        std::cerr << "Segfault, exit" << std::endl;
-    } else {
-        std::cerr << "Get signal " << signal << ", exit" << std::endl;
+    if (!exited) {
+        exited = true;
+        if (signal == SIGSEGV) {
+            // only print trace in main thread
+            if (thread_name.size() == 0)
+                print_trace();
+            std::cerr << "Segfault, exit" << std::endl;
+        } else {
+            std::cerr << "Get signal " << signal << ", exit" << std::endl;
+        }
     }
     segfault_happen = 1;
     exit(1);
@@ -290,8 +295,8 @@ bool check_vlog(const char* fileline, int verbose) {
 }
 
 int system_popen(const char* cmd) {
-    static thread_local char buf[BUFSIZ];
-    static thread_local string cmd2;
+    char buf[BUFSIZ];
+    string cmd2;
     cmd2 = cmd;
     cmd2 += " 2>&1 ";
     FILE *ptr = popen(cmd2.c_str(), "r");
@@ -314,11 +319,10 @@ void system_with_check(const char* cmd) {
 std::thread log_thread(log_main);
 
 void log_exiting() {
-    static bool exited = false;
     if (exited) return;
+    exited = true;
     mwsr_list_log::stop();
     log_thread.join();
-    exited = true;
 }
 
 } // jittor
