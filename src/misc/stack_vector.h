@@ -17,6 +17,7 @@ struct StackVector {
     inline T& front() { return a[0]; }
     inline T& back() { return a[n-1]; }
     inline int size() { return n;}
+    inline T* data() { return a;}
     inline StackVector(int n=0) : n(n) {}
 
     struct Iter {
