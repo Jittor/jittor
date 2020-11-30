@@ -10,7 +10,7 @@
 #include "ops/copy_op.h"
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>
-#include <helper_cuda.h>
+#include "helper_cuda.h"
 #include "misc/cuda_flags.h"
 #endif
 

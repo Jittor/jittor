@@ -10,7 +10,7 @@
 #include <dlfcn.h>
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>
-#include <helper_cuda.h>
+#include "helper_cuda.h"
 #endif
 #include "misc/cuda_flags.h"
 #include "profiler/profiler.h"

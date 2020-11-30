@@ -10,7 +10,7 @@
 
 #include <cuda_runtime.h>
 #include <cublas.h>
-#include <helper_cuda.h>
+#include "helper_cuda.h"
 #include <curand.h>
 
 // cuRAND API errors

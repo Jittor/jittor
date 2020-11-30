@@ -12,7 +12,7 @@
 #include "ops/binary_op_defs.h"
 #ifdef JIT_cuda
 #include <cuda_runtime.h>
-#include <helper_cuda.h>
+#include "helper_cuda.h"
 #endif
 #else
 #include "ops/op_register.h"
