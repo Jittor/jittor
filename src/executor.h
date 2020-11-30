@@ -7,6 +7,10 @@
 #pragma once
 #include "common.h"
 #include "mem/allocator.h"
+#ifdef HAS_CUDA
+#include <cuda_runtime.h>
+#include "helper_cuda.h"
+#endif
 
 namespace jittor {
 
