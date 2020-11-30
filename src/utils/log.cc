@@ -13,7 +13,8 @@
 #include "utils/mwsr_list.h"
 
 namespace jittor {
-    
+
+bool peek_logged = 0;
 typedef uint32_t uint;
 using string = std::string;
 using stringstream = std::stringstream;
