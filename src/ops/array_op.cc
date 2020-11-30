@@ -5,7 +5,7 @@
 // ***************************************************************
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>
-#include <helper_cuda.h>
+#include "helper_cuda.h"
 #include "mem/allocator.h"
 #include "mem/allocator/cuda_dual_allocator.h"
 #include "event_queue.h"

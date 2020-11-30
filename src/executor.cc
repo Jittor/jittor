@@ -7,7 +7,7 @@
 #include <functional>
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>
-#include <helper_cuda.h>
+#include "helper_cuda.h"
 #include "mem/allocator/cuda_dual_allocator.h"
 #include "event_queue.h"
 #endif
@@ -429,6 +429,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         // record trace data
         if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var==2)) {
             trace_data.record_execution(op, is_fused_op, jkl);
+            checkCudaErrors(cudaDeviceSynchronize());
         }
         LOGvvv << "Finished Op(" >> op->name() << rid >> 
             "/" >> queue.size() >> ") output:" << op->outputs();
