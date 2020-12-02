@@ -34,9 +34,9 @@ unordered_set<string> reduce_ops = {
     "add",
     // @pybind(prod, product, reduce_multiply)
     "multiply", 
-    // @pybind(reduce_logical_and, all)
+    // @pybind(reduce_logical_and, all_)
     "logical_and", 
-    // @pybind(reduce_logical_or, any)
+    // @pybind(reduce_logical_or, any_)
     "logical_or", 
     "logical_xor", 
     "bitwise_and", 
@@ -65,7 +65,8 @@ ReduceOp::ReduceOp(Var* x, NanoString op, NanoVector dims, bool keepdims)
             reduce_mask |= 1<<dim;
         }
     }
-    if (x->dtype() == ns_bool && ns == ns_add)
+    // if (x->dtype() == ns_bool && ns == ns_add)
+    if (x->dtype() == ns_bool)
         y = create_output(nullptr, ns_int32);
     else
         y = create_output(nullptr, binary_dtype_infer(ns, x, x));
@@ -157,6 +158,7 @@ void ReduceOp::jit_run() {
     index_t xstride@{DIM-1} = 1;
     @for(i, DIM-2, -1, -1, auto xstride@i = xstride@{i+1} * xshape@{i+1};)
     Ty count = Ty(x->num) / Ty(y->num);
+    Ty rcount = Ty(y->num) / Ty(x->num);
     @for(d, 0, DIM,@if(REDUCE>>d&1,, for (index_t xi@d=0; xi@d < xshape@d; xi@d++))) {
         auto yid = 0 @for(d, 0, DIM,@if(REDUCE>>d&1,, + xi@d * ystride@d));
         yp[yid] = @expand_macro(init_@OP, Ty);
@@ -169,7 +171,7 @@ void ReduceOp::jit_run() {
             yp[yid] = @expand_macro(@OP, Ty, yp[yid], xp[xid]);
         }
     }
-    (void)count, (void)yshape0, (void)ystride0;
+    (void)count, (void)rcount, (void)yshape0, (void)ystride0;
 }
 #endif // JIT
 

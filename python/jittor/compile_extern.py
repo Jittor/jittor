@@ -78,20 +78,21 @@ def setup_mkl():
 
 
 def install_cub(root_folder):
-    url = "https://github.com/NVlabs/cub/archive/v1.8.0.tar.gz"
-    filename = "cub-1.8.0.tgz"
+    url = "https://github.com/NVIDIA/cub/archive/1.11.0-rc1.tar.gz"
+    filename = "cub-1.11.0-rc1.tgz"
+    md5 = "f395687060bed7eaeb5fa8a689276ede"
     fullname = os.path.join(root_folder, filename)
     dirname = os.path.join(root_folder, filename.replace(".tgz",""))
     
     if not os.path.isfile(os.path.join(dirname, "examples", "test")):
         LOG.i("Downloading cub...")
-        download_url_to_local(url, filename, root_folder, "9203ea2499b56782601fddf8a12e9b08")
+        download_url_to_local(url, filename, root_folder, md5)
         import tarfile
     
         with tarfile.open(fullname, "r") as tar:
             tar.extractall(root_folder)
         assert 0 == os.system(f"cd {dirname}/examples && "
-                    f"{nvcc_path} device/example_device_radix_sort.cu -O2 -I.. -o test")
+                    f"{nvcc_path} device/example_device_radix_sort.cu -O2 -I.. -std=c++14 -o test")
         if core.get_device_count():
             assert 0 == os.system(f"cd {dirname}/examples && ./test")
     return dirname

@@ -92,7 +92,7 @@ JIT_TEST(ring_buffer_benchmark) {
     LOGi << tt << tt*1.0/n;
     LOGi << s << (n*(n-1)/2); 
     ASSERTop(s,==,(n*(n-1)/2));
-    ASSERTop(tt*1.0/n,<=,50);
+    ASSERTop(tt*1.0/n,<=,100);
 }
 
 }
