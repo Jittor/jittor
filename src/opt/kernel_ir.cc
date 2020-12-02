@@ -919,6 +919,7 @@ void KernelIR::check_unused() {
 }
 
 void KernelIR::find_used(KernelIR* def, vector<KernelIR*>& used) {
+    if (has_attr("raw")) return;
     const char* ss[] = {"code", "rvalue", "rvalue2"};
     for (const char* s : ss) {
         auto& code = get_attr(s);

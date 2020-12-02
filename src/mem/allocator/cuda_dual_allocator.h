@@ -9,7 +9,7 @@
 #include <mutex>
 #include <cstring>
 #include <cuda_runtime.h>
-#include <helper_cuda.h>
+#include "helper_cuda.h"
 #include "misc/cuda_flags.h"
 #include "var.h"
 #include "mem/allocator.h"

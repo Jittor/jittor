@@ -5,7 +5,7 @@
 // ***************************************************************
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>
-#include <helper_cuda.h>
+#include "helper_cuda.h"
 #include "mem/allocator/cuda_device_allocator.h"
 
 namespace jittor {

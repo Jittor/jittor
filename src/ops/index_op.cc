@@ -72,9 +72,9 @@ void IndexOp::jit_run() {
     @for(d, 0, XDIM, for (index_t i@d=0; i@d < x0shape@d; i@d++)) {
         auto xid = @for(d, 0, XDIM, + i@d * x0stride@d);
         @if(DIM==XDIM,
-            @for(i,0,XDIM, x@i@@p[xid] = i@i;)
+            @for(i,0,XDIM, T x@i@@id = i@i; x@i@@p[xid] = x@i@@id;)
         ,
-            x0p[xid] = i@DIM;
+            T x@DIM@@id = i@DIM; x0p[xid] = x@DIM@@id;
         )
     }
 }

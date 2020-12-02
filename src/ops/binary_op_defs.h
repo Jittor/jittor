@@ -38,7 +38,7 @@ namespace jittor {
 #define bitwise_and(T,a,b) ((a)&(b))
 #define bitwise_or(T,a,b) ((a)|(b))
 #define bitwise_xor(T,a,b) ((a)^(b))
-#define mean(T,a,b) ((a)+T(b)*(T(1)/T(count)))
+#define mean(T,a,b) ((a)+T(b)*(T(rcount)))
 
 #ifdef JIT_cuda
 #define init_maximum(T) ::numeric_min<T>()

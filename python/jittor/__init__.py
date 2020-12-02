@@ -7,12 +7,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-# import os
-# import ctypes
-# ctypes.CDLL("/home/cxjyxx_me/jittor/my/occ_test/libCuda.so", os.RTLD_GLOBAL | os.RTLD_NOW)
-# ctypes.CDLL("/home/cxjyxx_me/jittor/my/occ_test/libcuda.so.1", os.RTLD_GLOBAL | os.RTLD_NOW)
-
-__version__ = '1.2.1.1'
+__version__ = '1.2.1.3'
 from . import lock
 with lock.lock_scope():
     ori_int = int
@@ -869,8 +864,6 @@ def size(v, dim=None):
     return v.shape[dim]
 Var.size = size
 
-def item(v):
-    return v.data.item()
 
 def to_int(v):
     dtype = str(v.dtype)
@@ -887,10 +880,14 @@ def to_bool(v):
     assert dtype.startswith("int") or dtype=="bool"
     return ori_bool(v.item())
 
-Var.item = item
 Var.__int__ = to_int
 Var.__float__ = to_float
 Var.__bool__ = to_bool
+
+def format(v, spec):
+    return v.item().__format__(spec)
+Var.__format__ = format
+
 
 int = int32
 Var.int = Var.int32

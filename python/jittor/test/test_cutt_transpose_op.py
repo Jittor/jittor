@@ -30,7 +30,7 @@ class TestCuttTransposeOp(unittest.TestCase):
             for perm in perms:
                 with jt.log_capture_scope(
                     log_silent=1,
-                    log_v=0, log_vprefix="op.cc=100"
+                    log_v=0, log_vprefix="cutt=100"
                 ) as raw_log:
                     if perm:
                         x = np.transpose(a, perm)
@@ -39,7 +39,7 @@ class TestCuttTransposeOp(unittest.TestCase):
                         x = np.transpose(a)
                         y = jt.transpose(a).data
                     self.assertEqual(x.shape, y.shape)
-                logs = find_log_with_re(raw_log, "(Jit op key (not )?found: " + "cutt_transpose" + ".*)")
+                logs = find_log_with_re(raw_log, "(Run cutt_transpose with key.*)")
                 if perm is None:
                     continue
                 last = -1
@@ -53,7 +53,7 @@ class TestCuttTransposeOp(unittest.TestCase):
                     last = perm[i]
                 if not in_order:
                     assert len(logs)==1
-                assert (x==y).all(), f"\n{x}\n{y}"
+                assert (x==y).all(), f"\n{x}\n{y}\n{perm}\n{a.shape}"
                 
         ia = [gen_data([5, 7]), gen_data([2,2,2]), gen_data([2,3,4,5]), gen_data([5,3]), gen_data([3,1,5,3,1])]
         for a in ia: check(a)

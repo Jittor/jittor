@@ -37,7 +37,7 @@ struct SimpleThread {
     std::thread thread;
     void run() {
         thread_name = "C"+S(id);
-        try{
+        try {
             std::unique_lock<std::mutex> lck(mtx);
             if (func)
                 func(id);
@@ -74,6 +74,24 @@ struct SimpleThreads {
     SimpleThreads(int n) {
         for (int i=0; i<n; i++)
             threads.emplace_back(i);
+    }
+    void wait_all() {
+        for (auto& t : threads) {
+            auto start = clock();
+            int ok = 0;
+            while (clock()<start+5*CLOCKS_PER_SEC) {
+                if (t.mtx.try_lock()) {
+                    t.mtx.unlock();
+                    ok = 1;
+                    break;
+                }
+                using namespace std::chrono_literals;
+                std::this_thread::sleep_for(1ms);
+            }
+            if (!ok) {
+                LOGw << "Compile thread timeout, ignored.";
+            }
+        }
     }
     void launch_all(int active_thread, SimpleThread::Func func) {
         if (active_thread == 1) {
@@ -289,10 +307,12 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
 
     if (segfault_happen) {
         LOGe << "Segfault happen, main thread exit";
+        threads.wait_all();
         exit(1);
     }
 
     if (has_error) {
+        threads.wait_all();
         LOGf << "Error happend during compilation, see error above.";
     }
     
