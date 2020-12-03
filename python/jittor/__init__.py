@@ -884,6 +884,11 @@ Var.__int__ = to_int
 Var.__float__ = to_float
 Var.__bool__ = to_bool
 
+def format(v, spec):
+    return v.item().__format__(spec)
+Var.__format__ = format
+
+
 int = int32
 Var.int = Var.int32
 float = float32

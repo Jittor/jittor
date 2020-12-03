@@ -34,9 +34,9 @@ unordered_set<string> reduce_ops = {
     "add",
     // @pybind(prod, product, reduce_multiply)
     "multiply", 
-    // @pybind(reduce_logical_and, all)
+    // @pybind(reduce_logical_and, all_)
     "logical_and", 
-    // @pybind(reduce_logical_or, any)
+    // @pybind(reduce_logical_or, any_)
     "logical_or", 
     "logical_xor", 
     "bitwise_and", 
@@ -65,7 +65,8 @@ ReduceOp::ReduceOp(Var* x, NanoString op, NanoVector dims, bool keepdims)
             reduce_mask |= 1<<dim;
         }
     }
-    if (x->dtype() == ns_bool && ns == ns_add)
+    // if (x->dtype() == ns_bool && ns == ns_add)
+    if (x->dtype() == ns_bool)
         y = create_output(nullptr, ns_int32);
     else
         y = create_output(nullptr, binary_dtype_infer(ns, x, x));
