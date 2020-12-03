@@ -23,7 +23,7 @@ static void push_py_object_pickle(RingBuffer* rb, PyObject* obj, uint64& __restr
     ASSERT(0 == PyBytes_AsStringAndSize(ret.obj, &s, &size));
     rb->push_t<int64>(size, offset);
     rb->push(size, offset);
-    LOGir << string(rb->get_ptr(size, offset), size);
+    // LOGir << string(rb->get_ptr(size, offset), size);
     std::memcpy(rb->get_ptr(size, offset), s, size);
     return;
 }

@@ -177,7 +177,8 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets) {
                     Var* dout = grads[id];
                     trace_grad_op = op;
                     VarPtr dvar = make_grad(op, out, dout, var, index);
-                    if (dvar && dvar->num>=0 && var->num)
+                    if (dvar && dvar->num>=0 && var->num>0)
+                        // var->num == 0 represents a any match var
                         ASSERT(dvar->num==var->num && dvar->shape.size()==var->shape.size())
                         << "dvar" << dvar << "var" << var;
                     if (!grad)
