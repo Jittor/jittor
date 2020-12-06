@@ -885,7 +885,7 @@ class Sigmoid(Module):
     def execute(self, x) :
         return x.sigmoid()
 
-def softplus(x,bata=1,threshold=20):
+def softplus(x,beta=1,threshold=20):
     return 1 / beta * jt.log(1 + (beta * x).exp())
 
 def hardtanh(x,min_val=-1,max_val=1):
