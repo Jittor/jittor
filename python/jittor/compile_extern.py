@@ -98,6 +98,7 @@ def install_cub(root_folder):
     return dirname
 
 def setup_cub():
+    global cub_home
     from pathlib import Path
     cub_path = os.path.join(str(Path.home()), ".cache", "jittor", "cub")
     cub_home = install_cub(cub_path)
