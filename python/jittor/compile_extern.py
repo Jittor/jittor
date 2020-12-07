@@ -101,8 +101,12 @@ def setup_cub():
     global cub_home
     from pathlib import Path
     cub_path = os.path.join(str(Path.home()), ".cache", "jittor", "cub")
-    cub_home = install_cub(cub_path)
-    setup_cuda_lib("cub", link=False, extra_flags=f"-I{cub_home}")
+    cuda_version = int(get_version(nvcc_path)[1:-1].split('.')[0])
+    extra_flags = ""
+    if cuda_version < 11:
+        cub_home = install_cub(cub_path)
+        extra_flags = f"-I{cub_home}"
+    setup_cuda_lib("cub", link=False, extra_flags=extra_flags)
 
 def setup_cuda_extern():
     if not has_cuda: return
