@@ -33,7 +33,7 @@ def __iter__(x):
     return result.__iter__()
 jt.Var.__iter__ = __iter__
 
-def all(x,dim):
+def all(x, dim=[]):
     return x.all_(dim).bool()
 jt.Var.all = all
 

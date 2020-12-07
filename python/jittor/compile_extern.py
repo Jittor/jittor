@@ -78,9 +78,9 @@ def setup_mkl():
 
 
 def install_cub(root_folder):
-    url = "https://github.com/NVIDIA/cub/archive/1.11.0-rc1.tar.gz"
-    filename = "cub-1.11.0-rc1.tgz"
-    md5 = "f395687060bed7eaeb5fa8a689276ede"
+    url = "https://github.com/NVIDIA/cub/archive/1.11.0.tar.gz"
+    filename = "cub-1.11.0.tgz"
+    md5 = "97196a885598e40592100e1caaf3d5ea"
     fullname = os.path.join(root_folder, filename)
     dirname = os.path.join(root_folder, filename.replace(".tgz",""))
     

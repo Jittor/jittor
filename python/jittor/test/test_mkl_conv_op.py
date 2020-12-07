@@ -120,7 +120,7 @@ class TestMklConvOp(unittest.TestCase):
 
         with jt.flag_scope(
             enable_tuner=0,
-            compile_options={"test_mkl_conv":1}
+            # compile_options={"test_mkl_conv":1}
         ):
             c_jt = conv(a_jt, b_jt, 1, 1) * da
             gs=jt.grad(c_jt,[a_jt,b_jt])
@@ -166,7 +166,7 @@ class TestMklConvOp(unittest.TestCase):
 
         with jt.flag_scope(
             enable_tuner=0,
-            compile_options={"test_mkl_conv":1}
+            # compile_options={"test_mkl_conv":1}
         ):
             c_jt = conv_nhwc_hwio(a_jt, b_jt, 1, 1) * da
             gs=jt.grad(c_jt,[a_jt,b_jt])

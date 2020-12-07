@@ -10,6 +10,8 @@
 #ifdef JIT_cuda
 #include "executor.h"
 #include <assert.h>
+#include <cuda_runtime.h>
+#include "helper_cuda.h"
 #endif
 
 namespace jittor {

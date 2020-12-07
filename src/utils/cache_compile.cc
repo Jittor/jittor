@@ -153,7 +153,7 @@ void process(string src, vector<string>& input_names) {
             while (l<src.size() && (src[l] != ' ' && src[l] != '\n')) l++;
             if (src[k] == '"' && src[l-1] == '"' && j-i==8 && src.substr(i,j-i) == "#include") {
                 auto inc = src.substr(k+1, l-k-2);
-                if (inc != "test.h") {
+                if (inc != "test.h" && inc != "helper_cuda.h") {
                     LOGvvvv << "Found include" << inc; 
                     input_names.push_back(inc);
                 }

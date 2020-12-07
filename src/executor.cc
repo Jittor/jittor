@@ -446,8 +446,10 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         // record trace data
         if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var==2)) {
             trace_data.record_execution(op, is_fused_op, jkl);
-            checkCudaErrors(cudaDeviceSynchronize());
-
+            #ifdef HAS_CUDA
+            if (use_cuda)
+                checkCudaErrors(cudaDeviceSynchronize());
+            #endif
         }
         LOGvvv << "Finished Op(" >> op->name() << rid >> 
             "/" >> queue.size() >> ") output:" << op->outputs();

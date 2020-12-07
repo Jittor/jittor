@@ -98,4 +98,6 @@ struct SimpleProfilerGuard {
 };
 
 
+DECLARE_FLAG(int, profiler_enable);
+
 } // jittor
