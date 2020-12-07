@@ -263,16 +263,16 @@ import jittor as jt
 jt.flags.use_cuda = 1
 ```
 
-### Optional Step 5: Run full tests
+### Optional Step 5: Test Resnet18 training
 
-### 可选步骤五：进行完整测试
+### 可选步骤五：测试训练Resnet18
 
-To check the integrity of Jittor, you can run full tests.
+To check the integrity of Jittor, you can run Resnet18 training test.
 
-要检查Jittor的完整性，您可以运行完整的测试。
+要检查Jittor的完整性，您可以运行Resnet18训练测试。
 
 ```bash
-python3.7 -m jittor.test -v
+python3.7 -m jittor.test.test_resnet
 ```
 if those tests are failed, please report bugs for us, and feel free to contribute ^_^
 
