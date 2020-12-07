@@ -153,7 +153,7 @@ def get_init_var_rand(shape, dtype):
 
 def relu(x): return jt.ternary((x>0.0), x, jt.broadcast_var(0.0, x))
 def leaky_relu(x, scale=0.01): return jt.ternary(x>0, x, x*scale)
-def relu6(x): return jt.minimum(jt.maximum(x, 0), 6)
+def relu6(x): return jt.minimum(jt.maximum(x, 0.0), 6.0)
 def sign(x):
     one = jt.ones(x.shape)
     x = jt.ternary(x>0, one, x)
@@ -473,6 +473,8 @@ ReLU6 = jt.make_module(relu6)
 Softmax = jt.make_module(softmax, 2)
 GELU = jt.make_module(gelu)
 
+from jittor.depthwise_conv import DepthwiseConv
+
 class Conv(Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
         self.in_channels = in_channels
@@ -482,6 +484,9 @@ class Conv(Module):
         self.padding = padding if isinstance(padding, tuple) else (padding, padding)
         self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
         self.groups = groups
+        self.is_depthwise_conv = self.groups == self.out_channels and self.groups == self.in_channels
+        if self.is_depthwise_conv and jt.flags.use_cuda:
+            self.depthwise_conv = DepthwiseConv(stride, padding, dilation)
         assert in_channels % groups == 0, 'in_channels must be divisible by groups'
         assert out_channels % groups == 0, 'out_channels must be divisible by groups'
         Kh, Kw = self.kernel_size
@@ -501,7 +506,13 @@ class Conv(Module):
             self.bias = None
 
     def execute(self, x):
-        if self.groups == 1:
+        if self.is_depthwise_conv and jt.flags.use_cuda:
+            y = self.depthwise_conv(x, self.weight)
+            if self.bias is not None:
+                b = self.bias.broadcast(y.shape, [0,2,3])
+                y = y + b
+            return y
+        elif self.groups == 1:
             N,C,H,W = x.shape
             Kh, Kw = self.kernel_size
             assert C==self.in_channels
@@ -535,7 +546,6 @@ class Conv(Module):
                 f'i4*{self.stride[0]}-{self.padding[0]}+i6*{self.dilation[0]}', # Hid+Khid
                 f'i5*{self.stride[1]}-{self.padding[1]}+i7*{self.dilation[1]}', # Wid+KWid
             ])
-            xx.compile_options = {"G":G}
             # w: [oc, CpG, Kh, Kw]
             ww = self.weight.reindex([N, G, oc//G, CpG, oh, ow, Kh, Kw], [
                 f'i1*{oc//G}+i2',
@@ -543,6 +553,7 @@ class Conv(Module):
                 'i6',
                 'i7'
             ])
+            ww.compile_options = xx.compile_options = {"G":G,"C":C}
             yy = xx*ww
             y = yy.reindex_reduce('add', [N, oc, oh, ow], [
                 'i0',
