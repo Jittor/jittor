@@ -555,6 +555,8 @@ class Conv(Module):
                 y = y + b
             return y          
 
+Conv2d = Conv
+
 class Conv1d(Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
         self.in_channels = in_channels
@@ -852,7 +854,7 @@ class Sigmoid(Module):
     def execute(self, x) :
         return x.sigmoid()
 
-def softplus(x,bata=1,threshold=20):
+def softplus(x,beta=1,threshold=20):
     return 1 / beta * jt.log(1 + (beta * x).exp())
 
 def hardtanh(x,min_val=-1,max_val=1):
