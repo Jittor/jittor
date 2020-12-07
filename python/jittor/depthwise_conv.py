@@ -135,7 +135,7 @@ class DepthwiseConv(Function):
         x, weight = self.save_vars
         Kh, Kw = self.Khw
         return jt.code([x.shape, weight.shape], [x.dtype, weight.dtype], [x, weight, grad],
-        cuda_header = f"#include <{jt.compile_extern.cub_home}/cub/cub.cuh>"+"""
+        cuda_header = f"#include <{jt.compile_extern.cub_home}cub/cub.cuh>"+"""
     template <typename T>
     __device__ __inline__ void CudaAtomicAddWithWarp(T* sum, T value) {
     typedef cub::WarpReduce<T> WarpReduce;
