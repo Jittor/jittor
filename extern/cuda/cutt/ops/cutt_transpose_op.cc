@@ -9,6 +9,7 @@
 #include "cutt.h"
 #include "cutt_warper.h"
 #include "misc/stack_vector.h"
+#include "helper_cuda.h"
 
 namespace jittor {
 

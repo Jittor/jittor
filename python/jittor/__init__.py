@@ -7,7 +7,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-__version__ = '1.2.1.3'
+__version__ = '1.2.2.0'
 from . import lock
 with lock.lock_scope():
     ori_int = int
@@ -92,6 +92,7 @@ class log_capture_scope(_call_no_record_scope):
         print(logs)
     """
     def __init__(self, **jt_flags):
+        jt_flags["use_parallel_op_compiler"] = 0
         self.fs = flag_scope(**jt_flags)
 
     def __enter__(self):

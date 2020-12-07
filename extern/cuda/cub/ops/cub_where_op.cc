@@ -10,6 +10,8 @@
 #include "cub_where_op.h"
 #ifdef JIT_cuda
 #include "executor.h"
+#include <cuda_runtime.h>
+#include "helper_cuda.h"
 #include <assert.h>
 #include <executor.h>
 #include <cub/cub.cuh>

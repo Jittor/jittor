@@ -93,6 +93,9 @@ VarPtr dirty_clone_broadcast(Var* v) {
     if (op && !v->is_finished() && v->shape.size() > 4 && op->type() == OpType::broadcast) {
         auto vp = op->duplicate();
         if (vp) {
+            // TODO: loop options should be set to op, rather than var
+            if (v->loop_options)
+                vp->loop_options = v->loop_options;
             return vp;
         }
     }
