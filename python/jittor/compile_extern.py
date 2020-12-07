@@ -98,6 +98,7 @@ def install_cub(root_folder):
     return dirname
 
 def setup_cub():
+    global cub_home
     from pathlib import Path
     cub_path = os.path.join(str(Path.home()), ".cache", "jittor", "cub")
     cuda_version = int(get_version(nvcc_path)[1:-1].split('.')[0])
