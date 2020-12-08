@@ -453,6 +453,12 @@ Email: jittor@qq.com
 
 File an issue: https://github.com/Jittor/jittor/issues
 
+QQ Group: 761222083
+
+QQ 群：761222083
+
+<img src="https://cg.cs.tsinghua.edu.cn/jittor/images/news/2020-12-8-21-19-1_2_2/fig4.png" width="200"/>
+
 ## The Team
 
 ## 团队
@@ -460,6 +466,22 @@ File an issue: https://github.com/Jittor/jittor/issues
 Jittor is currently maintained by Dun Liang, Guo-Ye Yang, Guo-Wei Yang,  Wen-Yang Zhou and Meng-Hao Guo etc. from the [Tsinghua CSCG Group](https://cg.cs.tsinghua.edu.cn/). If you are also interested in Jittor and want to improve it, Please join us!
 
 Jittor目前由来自[清华大学计算机图形学组](https://cg.cs.tsinghua.edu.cn/)的梁盾，杨国烨，杨国炜，周文洋和国孟昊等博士生维护。 如果您也对Jittor感兴趣并希望对其进行改进，请加入我们！
+
+## Citation
+
+## 引用
+
+```
+@article{hu2020jittor,
+  title={Jittor: a novel deep learning framework with meta-operators and unified graph execution},
+  author={Hu, Shi-Min and Liang, Dun and Yang, Guo-Ye and Yang, Guo-Wei and Zhou, Wen-Yang},
+  journal={Information Sciences},
+  volume={63},
+  number={222103},
+  pages={1--222103},
+  year={2020}
+}
+```
 
 ## License
 

@@ -217,13 +217,13 @@ jt.flags.use_cuda = 1
 ```
 
 
-### 可选步骤五：进行完整测试
+### 可选步骤五：测试训练Resnet18
 
 
-要检查Jittor的完整性，您可以运行完整的测试。
+要检查Jittor的完整性，您可以运行Resnet18训练测试。
 
 ```bash
-python3.7 -m jittor.test -v
+python3.7 -m jittor.test.test_resnet
 ```
 
 如果这些测试失败，请为我们报告错误，我们十分欢迎您为Jittor做出贡献^ _ ^
@@ -360,10 +360,29 @@ Jittor还很年轻。 它可能存在错误和问题。 请在我们的错误跟
 
 
 
+QQ 群：761222083
+
+
+
 ## 团队
 
 
 Jittor目前由来自[清华大学计算机图形学组](https://cg.cs.tsinghua.edu.cn/)的梁盾，杨国烨，杨国炜，周文洋和国孟昊等博士生维护。 如果您也对Jittor感兴趣并希望对其进行改进，请加入我们！
+
+
+## 引用
+
+```
+@article{hu2020jittor,
+  title={Jittor: a novel deep learning framework with meta-operators and unified graph execution},
+  author={Hu, Shi-Min and Liang, Dun and Yang, Guo-Ye and Yang, Guo-Wei and Zhou, Wen-Yang},
+  journal={Information Sciences},
+  volume={63},
+  number={222103},
+  pages={1--222103},
+  year={2020}
+}
+```
 
 
 ## 版权声明
