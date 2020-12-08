@@ -84,7 +84,6 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets) {
     if (grads.size()) {
         grads[0] = make_number(1.f, loss);
         assign_attrs(grads[0].ptr, loss);
-        registe_node_trace_grad(grads[0].ptr, loss, 0);
     }
 
     vector<pair<Node*, int64>> id_buffer;
@@ -154,6 +153,7 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets) {
                     } else
                         douts[i] = nullptr;
                 }
+                trace_grad_op = op;
                 op->grads(douts, dins);
                 // dump "for (Var* in : op->inputs())"
                 for (int i=0; i<n_i; i++,j++) {
@@ -175,9 +175,9 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets) {
                     auto out = id_buffer[j].first->var();
                     if (id<0) continue;
                     Var* dout = grads[id];
+                    trace_grad_op = op;
                     VarPtr dvar = make_grad(op, out, dout, var, index);
-                    registe_node_trace_grad(dvar.ptr, op, index);
-                    if (dvar && var->num)
+                    if (dvar && dvar->num>=0 && var->num)
                         ASSERT(dvar->num==var->num && dvar->shape.size()==var->shape.size())
                         << "dvar" << dvar << "var" << var;
                     if (!grad)
@@ -194,12 +194,12 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets) {
                         }
                         #endif
                         assign_attrs(grad.ptr, var);
-                        registe_node_trace_grad(grad.ptr, var, index);
                     }
                 }
             }
         }
     }
+    trace_grad_op = nullptr;
     // set zero grad
     for (size_t i=0; i<results.size(); i++) {
         Var* var = targets[i];
@@ -211,7 +211,6 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets) {
             LOGw << "grads[">>i>>"] '">> var->name>>"' doesn't have gradient. It will be set to zero:" << var;
             grad = make_number(0.f, var);
             assign_attrs(grad.ptr, var);
-            registe_node_trace_grad(grad.ptr, var, 0);
         }
     }
     return results;

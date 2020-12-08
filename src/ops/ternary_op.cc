@@ -36,20 +36,25 @@ void TernaryOp::infer_shape() {
     auto ydim = y->shape.size();
     auto cdim = cond->shape.size();
     CHECK(xdim==ydim && cdim==ydim) << "Number of dims should be the same.";
+    NanoVector zshape;
     for (size_t i=0; i<xdim; i++) {
         auto xshape = x->shape[i];
         auto yshape = y->shape[i];
         auto cshape = cond->shape[i];
-        CHECK(xshape==yshape && cshape==yshape) << "Shape not match";
+        auto shape = std::min(xshape, std::min(yshape, cshape));
+        auto shape2 = std::max(xshape, std::max(yshape, cshape));
+        zshape.push_back(shape2);
+        if (shape < 0) continue;
+        CHECK(shape==shape2) << "Shape not match" << x->shape << y->shape << cond->shape;
     }
-    z->set_shape(x->shape);
+    z->set_shape(zshape);
 }
 
-void TernaryOp::jit_prepare() {
-    add_jit_define("Tc", cond->dtype());
-    add_jit_define("Tx", x->dtype());
-    add_jit_define("Ty", y->dtype());
-    add_jit_define("Tz", z->dtype());
+void TernaryOp::jit_prepare(JK& jk) {
+    jk << _CS("[Tc:") << cond->dtype();
+    jk << _CS("][Tx:") << x->dtype();
+    jk << _CS("][Ty:") << y->dtype();
+    jk << _CS("][Tz:") << z->dtype() << ']';
 }
 
 #else // JIT

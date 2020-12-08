@@ -32,7 +32,7 @@ loop_options_t& FusedOp::get_loop_options_tuned() {
 
 void FusedOp::update_jit_key() {
     jk.clear();
-    do_jit_prepare();
+    do_jit_prepare(jk);
 }
 
 void FusedOp::update_ops() {
@@ -41,7 +41,6 @@ void FusedOp::update_ops() {
     loop_options = loop_options_origin = nullptr;
 
     _outputs.clear();
-    jk.clear();
     for (Op* op : ops) {
         for (Var* o : op->outputs()) {
             if (o->loop_options) {
@@ -91,7 +90,9 @@ void FusedOp::update_ops() {
         }
     }
     vars.clear();
+    bool has_vary_input = 0;
     for (Op* opi : ops) {
+        has_vary_input |= opi->flags.get(NodeFlags::_has_vary_input);
         for (Var* i : opi->inputs()) {
             auto &c = i->custom_data;
             // if not visited
@@ -110,6 +111,7 @@ void FusedOp::update_ops() {
             }
         }
     }
+    flags.set(NodeFlags::_has_vary_input, has_vary_input);
     LOGvvvv << "Var info" << vars;
 }
 
@@ -136,15 +138,12 @@ FusedOp::~FusedOp() {
 }
 
 void FusedOp::infer_shape() {
-    for (uint i=0; i<ops.size(); i++)
-        ops[i]->infer_shape();
-}
-
-bool FusedOp::shape_infered() {
-    for (uint i=0; i<ops.size(); i++)
-        if (!ops[i]->shape_infered())
-            return false;
-    return true;
+    bool has_vary_input = 0;
+    for (Op* op : ops) {
+        op->init();
+        has_vary_input |= op->flags.get(NodeFlags::_has_vary_input);
+    }
+    flags.set(NodeFlags::_has_vary_input, has_vary_input);
 }
 
 void FusedOp::statistics(uint64_t& in, uint64_t& out, uint64_t& compute) {
@@ -156,13 +155,13 @@ void FusedOp::statistics(uint64_t& in, uint64_t& out, uint64_t& compute) {
     }
 }
 
-void FusedOp::do_jit_prepare() {
+void FusedOp::do_jit_prepare(JK& jk) {
     jk.clear();
     int8 flags = 3;
     for (uint i=0; i<ops.size(); i++) {
         Op* op = ops[i];
-        jk << JK::key << "opkey" << i << JK::val;
-        op->do_jit_prepare();
+        jk << "[opkey" << i << JK::val;
+        op->do_jit_prepare(jk);
         jk << JK::end;
         if (op->flags.get(NodeFlags::_cpu))
             flags &= 1; // only cpu
@@ -170,39 +169,39 @@ void FusedOp::do_jit_prepare() {
             flags &= 2; // only gpu
     }
     ASSERT(flags) << "FusedOp cannot contain both cpu and cuda ops.";
-    add_jit_define("JIT", "1");
+    jk << _CS("[JIT:1]");
     if (flags==1) {
         // only cpu
-        add_jit_define("JIT_cpu", "1");
+        jk << _CS("[JIT_cpu:1]");
         this->flags.set(NodeFlags::_cuda, 0);
         this->flags.set(NodeFlags::_cpu, 1);
     } else {
-        add_jit_define("JIT_cuda", "1");
+        jk << _CS("[JIT_cuda:1]");
         this->flags.set(NodeFlags::_cpu, 0);
         this->flags.set(NodeFlags::_cuda, 1);
     }
-    jk << JK::key << "graph" << JK::val;
+    jk << _CS("[graph:");
     for (auto& t : edges) {
         uint i,j,k,l;
         std::tie(i,j,k,l) = t;
         jk << JK::hex2(i) << JK::hex1(j) << JK::hex2(k) << JK::hex1(l) << ',';
     }
-    jk << JK::end << JK::key << "var_info" << JK::val;
-    for (auto& vi : vars) 
+    jk << _CS("][var_info:") << JK::val;
+    for (auto& vi : vars)
         jk << JK::hex1(vi.type) << JK::hex1(vi.var->shape.size());
     jk << JK::end;
     if (loop_options->size()) {
         if (get_loop_option("compile_shapes")) {
-            jk << JK::key << "shapes" << JK::val;
+            jk << _CS("[shapes:");
             for (auto& vi : vars) {
                 jk << '[';
                 for (auto a : vi.var->shape)
                     jk << a << ',';
-                jk << "],";
+                jk << _CS("],");
             }
             jk << JK::end;
         }
-        jk << JK::key << "choices" << JK::val;
+        jk << _CS("[choices:");
         for (auto& kv : *loop_options)
             jk << kv.first << ':' << kv.second << ',';
         jk << JK::end;
@@ -210,11 +209,11 @@ void FusedOp::do_jit_prepare() {
     jk.finilize();
 }
 
-void FusedOp::do_prepare() {
-    do_jit_prepare();
+void FusedOp::do_prepare(JK& jk) {
+    do_jit_prepare(jk);
 }
 
-void FusedOp::do_run_after_prepare() {
+void FusedOp::do_run_after_prepare(JK& jk) {
     const char* jit_key = jk.to_cstring();
     auto iter = jit_fused_ops.find(string_view(jit_key, jk.size));
     if (iter != jit_fused_ops.end()) {
@@ -230,7 +229,7 @@ void FusedOp::do_run_after_prepare() {
     context->setup(this);
     string prev_jit_key = jit_key;
     context->entry = OpCompiler::do_compile(this);
-    string new_jit_key = get_jit_key();
+    string new_jit_key = get_jit_key(jk);
     jit_fused_ops[new_jit_key] = jit_fused_ops[prev_jit_key] = context;
     jit_key_mapper[prev_jit_key] = new_jit_key;
     LOGvv << "Get jit op entry:" << (void*)(context->entry);
@@ -257,8 +256,8 @@ int FusedOp::has(Node* node) {
 }
 
 void FusedOp::do_run(){
-    do_prepare();
-    do_run_after_prepare();
+    do_prepare(jk);
+    do_run_after_prepare(jk);
 }
 
 #else // JIT

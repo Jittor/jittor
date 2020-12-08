@@ -13,6 +13,7 @@
 #include "misc/hash.h"
 #include "misc/nano_string.h"
 #include "misc/fast_shared_ptr.h"
+#include "profiler/simple_profiler.h"
 #ifdef HAS_CUDA
 #include "misc/cuda_flags.h"
 #endif
@@ -24,17 +25,6 @@ namespace jittor {
     typename std::enable_if<std::is_same<T, check_type>::value, return_type>::type
 
 #define GET_PY_NONE(code) ((code), Py_INCREF(Py_None), Py_None)
-
-inline Log& operator<<(Log& os, PyObject* objp) {
-    PyObjHolder repr_obj(PyObject_Repr(objp));
-    
-    if (PyUnicode_CheckExact(repr_obj.obj)) {
-        return os << Py_TYPE(objp)->tp_name <<
-             PyUnicode_AsUTF8(repr_obj.obj);
-    } else {
-        return os << "unknown(" >> (void*)objp >> ")";
-    }
-}
 
 // string
 DEF_IS(string, bool) is_type(PyObject* obj) {
@@ -317,7 +307,7 @@ DEF_IS(ArrayArgs, T) from_py_object(PyObject* obj) {
         int64 size = PyArray_Size(arr);
         T args;
         if (arr->nd)
-            args.shape = vector<int64>(arr->dimensions, arr->dimensions+arr->nd);
+            args.shape = NanoVector::make(arr->dimensions, arr->nd);
         else
             args.shape.push_back(1);
         args.dtype = get_type_str(arr);

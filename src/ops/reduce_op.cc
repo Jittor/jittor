@@ -34,7 +34,9 @@ unordered_set<string> reduce_ops = {
     "add",
     // @pybind(prod, product, reduce_multiply)
     "multiply", 
+    // @pybind(reduce_logical_and, all)
     "logical_and", 
+    // @pybind(reduce_logical_or, any)
     "logical_or", 
     "logical_xor", 
     "bitwise_and", 
@@ -134,13 +136,13 @@ VarPtr ReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     return nullptr;
 }
 
-void ReduceOp::jit_prepare() {
-    add_jit_define("Tx", x->dtype());
-    add_jit_define("Ty", y->dtype());
-    add_jit_define("Tz", y->dtype());
-    add_jit_define("OP", ns.to_cstring());
-    add_jit_define("DIM", JK::hex1(x->shape.size()));
-    add_jit_define("REDUCE", JK::hex(reduce_mask));
+void ReduceOp::jit_prepare(JK& jk) {
+    jk << _CS("[Tx:") << x->dtype()
+        << _CS("][Ty:") << y->dtype()
+        << _CS("][Tz:") << y->dtype()
+        << _CS("][OP:") << ns
+        << _CS("][DIM=") << JK::hex1(x->shape.size())
+        << _CS("][REDUCE=") << JK::hex(reduce_mask) << ']';
 }
 
 #else // JIT

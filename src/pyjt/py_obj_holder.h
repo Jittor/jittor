@@ -11,6 +11,14 @@ namespace jittor {
 
 struct PyObjHolder {
     PyObject* obj;
+    inline PyObjHolder() : obj(nullptr) {
+    }
+    void assign(PyObject* obj) {
+        if (!obj) {
+            LOGf << "Python error occur";
+        }
+        this->obj = obj;
+    }
     inline PyObjHolder(PyObject* obj) : obj(obj) {
         if (!obj) {
             LOGf << "Python error occur";
@@ -25,6 +33,18 @@ struct PyObjHolder {
         return tmp;
     }
 };
+
+
+inline Log& operator<<(Log& os, PyObject* objp) {
+    PyObjHolder repr_obj(PyObject_Repr(objp));
+    
+    if (PyUnicode_CheckExact(repr_obj.obj)) {
+        return os << Py_TYPE(objp)->tp_name <<
+             PyUnicode_AsUTF8(repr_obj.obj);
+    } else {
+        return os << "unknown(" >> (void*)objp >> ")";
+    }
+}
 
 }
 

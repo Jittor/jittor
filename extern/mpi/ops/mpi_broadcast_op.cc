@@ -48,8 +48,8 @@ VarPtr MpiBroadcastOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     return mpi_reduce(dout, ns_add, root);
 }
 
-void MpiBroadcastOp::jit_prepare() {
-    add_jit_define("Tx", x->dtype());
+void MpiBroadcastOp::jit_prepare(JK& jk) {
+    jk << _CS("[Tx:") << x->dtype() << ']';
 }
 
 #else // JIT

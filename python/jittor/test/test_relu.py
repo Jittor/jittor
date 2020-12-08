@@ -63,6 +63,13 @@ class TestRelu(unittest.TestCase):
         check_equal(arr, jnn.LeakyReLU(99.9), tnn.LeakyReLU(99.9))
 
         # ***************************************************************
+        # Test GELU Layer
+        # ***************************************************************
+        if hasattr(tnn, "GELU"):
+            arr = np.random.randn(16,10,224,224)
+            check_equal(arr, jnn.GELU(), tnn.GELU())
+
+        # ***************************************************************
         # Test Softplus  Layer
         # ***************************************************************
         arr = np.random.randn(16,10,224,224)

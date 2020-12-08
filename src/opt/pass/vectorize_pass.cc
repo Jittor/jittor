@@ -31,7 +31,7 @@ void VectorizePass::run() {
         if (choice == 1) {
             loop->push_back("#pragma vector", &loop->before);
         } else if (choice > 1) {
-            int num;
+            int num=0;
             if (!loop->get_number(loop->get_attr("rvalue"), num)) {
                 if (loop->has_attr("split_id")) {
                     string si = loop->attrs["split_id"];

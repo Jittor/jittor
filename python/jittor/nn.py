@@ -37,6 +37,18 @@ def matmul_transpose(a, b):
     b = b.broadcast(shape)
     return (a*b).sum(len(shape)-1)
 
+
+def bmm_transpose(a, b):
+    '''
+    returns a * b^T
+    '''
+    if jt.flags.use_cuda:
+        return jt.compile_extern.cublas_ops.cublas_batched_matmul(a, b, 0, 1)
+    t = list(range(b.ndim))
+    t[-1], t[-2] = t[-2], t[-1]
+    return bmm(a, b.transpose(t))
+
+
 def bmm(a, b):
     ''' batch matrix multiply, 
 shape of input a is [batch, n, m],
@@ -118,7 +130,7 @@ Example::
         # TODO:ugly implementation for tuner
         aa = a.reshape((-1, m))
         cc = matmul(aa, b)
-        print(a.shape, b.shape, cc.shape) 
+        # print(a.shape, b.shape, cc.shape) 
         return cc.reshape(a.shape[:-1] + [k])
     for i in range(len_c-2):
         ai = len_a-(len_c-i)
@@ -142,6 +154,16 @@ def get_init_var_rand(shape, dtype):
 def relu(x): return jt.maximum(x, 0)
 def leaky_relu(x, scale=0.01): return jt.ternary(x>0, x, x*scale)
 def relu6(x): return jt.minimum(jt.maximum(x, 0), 6)
+def sign(x):
+    one = jt.ones(x.shape)
+    x = jt.ternary(x>0, one, x)
+    return jt.ternary(x<0, -one, x)
+
+def gelu(x):
+    _sqrt2 = 1.4142135623730951
+    erf = jt.erf(x/_sqrt2)+1
+    r = erf*x*.5
+    return r
 
 class PReLU(Module):
     def __init__(self, num_parameters=1, init_=0.25):
@@ -270,6 +292,14 @@ def log_softmax(x,dim=None):
 def log_sigmoid(x):
     return jt.log(jt.sigmoid(x))
 
+
+class Identity(Module):
+    def __init__(self, *args, **kwargs):
+        super(Identity, self).__init__()
+
+    def execute(self, input):
+        return input
+
 class Dropout(Module):
     def __init__(self, p=0.5, is_train=False):
         assert p >= 0 and p <= 1, "dropout probability has to be between 0 and 1, but got {}".format(p)
@@ -340,8 +370,10 @@ class BatchNorm(Module):
         b = self.bias.broadcast(x, [0,2,3])
         return norm_x * w + b
         
+BatchNorm2d = BatchNorm
+	
 class BatchNorm1d(Module):
-    def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=None, is_train=True, sync=True):
+    def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True, is_train=True, sync=True):
         self.sync = sync
         self.num_features = num_features
         self.is_train = is_train
@@ -411,6 +443,29 @@ class InstanceNorm2d(Module):
         b = self.bias.broadcast(x, [0,2,3])
         return norm_x * w + b
 
+class LayerNorm(Module):
+    def __init__(self, normalized_shape, eps: float = 1e-5, elementwise_affine: bool = True) -> None:
+        super(LayerNorm, self).__init__()
+        if isinstance(normalized_shape, int):
+            normalized_shape = (normalized_shape,)
+        self.normalized_shape = tuple(normalized_shape)
+        self.eps = eps
+        self.elementwise_affine = elementwise_affine
+        if self.elementwise_affine:
+            self.weight = init.constant(normalized_shape, "float32", 1.0)
+            self.bias = init.constant(normalized_shape, "float32", 0.0)
+
+    def execute(self,x):
+        dims = [-i for i in range(len(self.normalized_shape), 0, -1)]
+        mean = jt.mean(x,dims=dims,keepdims=1)
+        numerator = x-mean
+        variance = jt.mean(numerator.sqr(),dims=dims,keepdims=1)
+        denominator = jt.sqrt(variance+self.eps)
+        norm_x = numerator/denominator
+        if self.elementwise_affine:
+            norm_x = norm_x * self.weight+self.bias
+        return norm_x
+
 class GroupNorm(Module):
     def __init__(self, num_groups, num_channels, eps=1e-05, affine=True, is_train=True):
         self.num_groups = num_groups
@@ -447,6 +502,7 @@ Leaky_relu = jt.make_module(leaky_relu, 2)
 LeakyReLU = Leaky_relu
 ReLU6 = jt.make_module(relu6)
 Softmax = jt.make_module(softmax, 2)
+GELU = jt.make_module(gelu)
 
 class Conv(Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
@@ -529,6 +585,8 @@ class Conv(Module):
                 b = self.bias.broadcast(y.shape, [0,2,3])
                 y = y + b
             return y          
+
+Conv2d = Conv
 
 class Conv1d(Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
@@ -670,6 +728,30 @@ class ConvTranspose(Module):
         return y
 
 
+def pad(x,padding, mode='constant', value=0):
+    assert mode in ['constant','replicate','reflect','circular'],'only support constant,replicate,reflect,circular pad'
+    assert len(padding)%2==0 and len(padding)//2<=x.ndim
+
+    padding = list(padding)
+    left = [0]*(x.ndim-len(padding)//2)+padding[::2][::-1]
+    right = [0]*(x.ndim-len(padding)//2)+padding[1::2][::-1]
+
+    out_dims = []
+    out_shape = []
+    for i,n,l,r in zip(range(x.ndim),x.shape,left,right):
+        out_shape.append(n+l+r)
+        if mode == 'constant':
+            out_dims.append(f'i{i}-{l}')
+        elif mode == 'replicate':
+            out_dims.append(f"i{i}<{l} ? 0 : i{i} > {n+l-1} ? {n-1} : i{i}-{l}")
+        elif mode == 'reflect':
+            out_dims.append(f"i{i}<{l} ? {l}-i{i} : i{i} > {n+l-1} ? {2*(n-1)+l}-i{i} : i{i}-{l}")
+        elif mode == 'circular':
+            out_dims.append(f"i{i}<{l} ? {n-l}+i{i} : i{i} > {n+l-1} ? i{i}-{n+l} : i{i}-{l}")
+
+    return x.reindex(out_shape,out_dims,overflow_value=value)
+
+
 class ReflectionPad2d(Module):
     def __init__(self, padding):
         self.padding = padding
@@ -802,6 +884,13 @@ class Sigmoid(Module):
         super().__init__()
     def execute(self, x) :
         return x.sigmoid()
+
+def softplus(x,beta=1,threshold=20):
+    return 1 / beta * jt.log(1 + (beta * x).exp())
+
+def hardtanh(x,min_val=-1,max_val=1):
+    return jt.clamp(x,min_v=min_val,max_v=max_val)
+
 
 class Softplus(Module):
     r'''
@@ -1141,6 +1230,9 @@ class Sequential(Module):
             else:
                 self.append(mod)
     def __getitem__(self, idx):
+        if idx not in self.layers:
+            return list(self.layers.values())[idx]
+
         return self.layers[idx]
     def __iter__(self):
         return self.layers.values().__iter__()
@@ -1159,10 +1251,10 @@ class Sequential(Module):
         ret = callback(parents, k, self, n_children)
         if ret == False:
             return
+        parents.append(self)
         for k,v in self.layers.items():
-            parents.append(self)
             v.dfs(parents, k, callback, callback_leave)
-            parents.pop()
+        parents.pop()
         if callback_leave:
             callback_leave(parents, k, self, n_children)
     def append(self, mod):

@@ -50,10 +50,10 @@ void IndexOp::infer_shape() {
         o->set_shape(a->shape);
 }
 
-void IndexOp::jit_prepare() {
-    add_jit_define("T", x[0]->dtype());
-    add_jit_define("DIM", JK::hex1(dim));
-    add_jit_define("XDIM", JK::hex1(x[0]->shape.size()));
+void IndexOp::jit_prepare(JK& jk) {
+    add_jit_define(jk, "T", x[0]->dtype());
+    add_jit_define(jk, "DIM", JK::hex1(dim));
+    add_jit_define(jk, "XDIM", JK::hex1(x[0]->shape.size()));
 }
 
 #else // JIT

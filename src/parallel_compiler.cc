@@ -37,7 +37,7 @@ struct SimpleThread {
     std::thread thread;
     void run() {
         thread_name = "C"+S(id);
-        try{
+        try {
             std::unique_lock<std::mutex> lck(mtx);
             if (func)
                 func(id);
@@ -75,6 +75,24 @@ struct SimpleThreads {
         for (int i=0; i<n; i++)
             threads.emplace_back(i);
     }
+    void wait_all() {
+        for (auto& t : threads) {
+            auto start = clock();
+            int ok = 0;
+            while (clock()<start+5000) {
+                if (t.mtx.try_lock()) {
+                    t.mtx.unlock();
+                    ok = 1;
+                    break;
+                }
+                using namespace std::chrono_literals;
+                std::this_thread::sleep_for(1ms);
+            }
+            if (!ok) {
+                LOGw << "Compile thread timeout, ignored.";
+            }
+        }
+    }
     void launch_all(int active_thread, SimpleThread::Func func) {
         if (active_thread == 1) {
             func(0);
@@ -89,14 +107,27 @@ struct SimpleThreads {
     }
 };
 
+static int last_compiled_op_num = 0;
+static int not_compile_window = 0;
+
 void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, int64 tt) {
     // jit_search_kernel require compile at runtime
-    if (jit_search_kernel || !use_parallel_op_compiler)
+    if (jit_search_kernel || !use_parallel_op_compiler || not_compile_window > 1000)
         return;
+
+    // try not use parallel compile if no op needs compile
+    if (last_compiled_op_num != jit_key_mapper.size()) {
+        not_compile_window = 0;
+        last_compiled_op_num = jit_key_mapper.size();
+    } else {
+        not_compile_window += queue.size();
+    }
+    
 
     vector<int> op_needs_compile;
     string_view_map<int> map;
     vector<unique_ptr<FusedOp>> fop_needs_compile;
+    auto& jkl = jk;
     
     for (uint rid=0; rid<queue.size(); rid++) {
         int root = queue[rid];
@@ -111,10 +142,10 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
             load_fused_op(fused_op, fuse_ops, ops, ll, rr, tt);
         }
         LOGvvv << "Check op needs compile:" << op;
-        op->do_prepare();
-        if (jk.empty()) continue;
+        op->do_prepare(jkl);
+        if (jkl.empty()) continue;
 
-        const char* jit_key = jk.to_cstring();
+        const char* jit_key = jkl.to_cstring();
         auto iter = jit_key_mapper.find(jit_key);
         if (iter != jit_key_mapper.end()) continue;
 
@@ -133,8 +164,8 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
         LOGvv << "Op needs compile:" << op;
         } catch (const std::exception& e) {
             // log jit_key and file location
-            op->do_prepare();
-            string jit_src_path = Op::get_filename_from_jit_key(jk.to_cstring(), ".cc");
+            op->do_prepare(jkl);
+            string jit_src_path = Op::get_filename_from_jit_key(jkl.to_cstring(), ".cc");
             LOGe << "[Error] source file location:" << jit_src_path;
             if (is_fused_op) {
                 LOGf << "Compile fused operator(" >> rid >> '/' >> queue.size() >> ")"
@@ -173,6 +204,7 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
     auto func = [&](int tid) {
         auto& entrys = op_entrys.at(tid);
         entrys.clear();
+        auto& jkl = jk;
         while (!has_error && !segfault_happen) {
             int i = ai++;
             if (i >= n) break;
@@ -184,9 +216,9 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
                 int root = queue[rid];
                 op = ops[root];
                 LOGvv << "Compile Op:" << op;
-                op->do_prepare();
+                op->do_prepare(jkl);
                 auto op_entry = OpCompiler::do_compile(op);
-                entrys.emplace_back(std::make_tuple(i, 0, (void*)op_entry, op->get_jit_key()));
+                entrys.emplace_back(std::make_tuple(i, 0, (void*)op_entry, op->get_jit_key(jkl)));
             } else {
                 FusedOp& fused_op = *fop_needs_compile[-rid-1];
                 op = &fused_op;
@@ -194,15 +226,15 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
                 LOGV(11) << "FusedOps:" << fused_op.ops;
                 fused_op.context = new FusedOpContext();
                 fused_op.context->setup(&fused_op);
-                fused_op.do_prepare();
+                fused_op.do_prepare(jkl);
                 auto op_entry = OpCompiler::do_compile(op);
                 fused_op.context->entry = op_entry;
-                entrys.emplace_back(std::make_tuple(i, 1, (void*)fused_op.context, op->get_jit_key()));
+                entrys.emplace_back(std::make_tuple(i, 1, (void*)fused_op.context, op->get_jit_key(jkl)));
 
                 // compile relay operators
                 for (auto& vrg : fused_op.context->vrm.relay_groups) {
                     for (auto& orc : vrg.oprcs) {
-                        orc.op->do_prepare();
+                        orc.op->do_prepare(jkl);
                         bool needs_compile;
                         {
                             std::lock_guard<std::mutex> lock(entry_lock);
@@ -224,7 +256,7 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
             }
             } catch (const std::exception& e) {
                 // log jit_key and file location
-                op->do_prepare();
+                op->do_prepare(jkl);
                 string jit_src_path = Op::get_filename_from_jit_key(jk.to_cstring(), ".cc");
                 LOGe << "[Error] source file location:" << jit_src_path;
 
@@ -275,10 +307,12 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
 
     if (segfault_happen) {
         LOGe << "Segfault happen, main thread exit";
+        threads.wait_all();
         exit(1);
     }
 
     if (has_error) {
+        threads.wait_all();
         LOGf << "Error happend during compilation, see error above.";
     }
     

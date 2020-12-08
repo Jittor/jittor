@@ -30,6 +30,7 @@ Op::Op() {
     flags.set(NodeFlags::_var, 0);
     flags.set(NodeFlags::_cpu, 1);
     number_of_lived_ops++;
+    if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var)) trace_data.record_node(this);
 }
 
 Op::~Op() {
@@ -62,24 +63,21 @@ Var* Op::create_output(NanoVector shape, NanoString dtype) {
 }
 
 void Op::init() {
+    bool has_vary_input = 0;
+    for (Var* v : inputs())
+        if (v->num < 0) {
+            has_vary_input = 1;
+            break;
+        }
+    flags.set(NodeFlags::_has_vary_input, has_vary_input);
     infer_shape();
-    LOGvvvv << "Create" << this << "and outputs" << outputs();
-    for (Var* v : outputs())
-        CHECK(v->shape.size()) << "Number of dims should be solved.";
-}
-
-bool Op::shape_infered() {
-    if (flags.get(NodeFlags::_vary_shape)) return true;
-    for (Var* v : outputs())
-        if (v->num < 0) return false;
-    return true;
 }
 
 void Op::compile_optimize(string& src) {}
 
 void Op::infer_shape() {}
 void Op::run() {}
-void Op::jit_prepare() {}
+void Op::jit_prepare(JK& jk) {}
 void Op::graph_optimize() {}
 
 string Op::name_ex() const {
@@ -91,20 +89,20 @@ string Op::name_ex() const {
     return a;
 }
 
-string Op::get_jit_key() {
+string Op::get_jit_key(JK& jk) {
     jk.clear();
-    do_jit_prepare();
+    do_jit_prepare(jk);
     return jk.to_string();
 }
 
 vector<pair<string,string>> Op::get_jit_define() {
-    return parse_jit_keys(get_jit_key());
+    return parse_jit_keys(get_jit_key(jk));
 }
 
-void Op::do_jit_prepare() {
+void Op::do_jit_prepare(JK& jk) {
     memcheck_all_exist();
     jk << name();
-    jit_prepare();
+    jit_prepare(jk);
     if (jk.empty()) {
         // not a jit op
         bool has_cuda = flags.get(NodeFlags::_cuda);
@@ -144,9 +142,9 @@ void Op::do_jit_prepare() {
                 use_int64_t = true;
             out_id ++;
         }
-        add_jit_define("JIT", "1");
+        jk << _CS("[JIT:1]");
         if (use_cuda_op && flags.get(NodeFlags::_cuda)) {
-            add_jit_define("JIT_cuda", "1");
+            jk << _CS("[JIT_cuda:1]");
             flags.set(NodeFlags::_cpu, 0);
             // TODO: 64bit index in CUDA
             use_int64_t = false;
@@ -159,21 +157,24 @@ void Op::do_jit_prepare() {
             }
             ASSERT(flags.get(NodeFlags::_cpu))
                 << "Op" << name() << "doesn't have cpu version";
-            add_jit_define("JIT_cpu", "1");
+            jk << _CS("[JIT_cpu:1]");
             flags.set(NodeFlags::_cuda, 0);
         }
         if (try_use_32bit_index) use_int64_t = false;
-        add_jit_define("index_t", use_int64_t ? "int64" : "int32");
+        if (use_int64_t)
+            jk << _CS("[index_t:int64]");
+        else
+            jk << _CS("[index_t:int32]");
     }
     jk.finilize();
 }
 
-void Op::do_prepare(){
+void Op::do_prepare(JK& jk){
     jk.clear();
-    do_jit_prepare();
+    do_jit_prepare(jk);
 }
 
-void Op::do_run_after_prepare() {
+void Op::do_run_after_prepare(JK& jk) {
     if (!jk.empty())
         jit_run();
     else
@@ -181,8 +182,8 @@ void Op::do_run_after_prepare() {
 }
 
 void Op::do_run() {
-    do_prepare();
-    do_run_after_prepare();
+    do_prepare(jk);
+    do_run_after_prepare(jk);
 }
 
 string Op::get_filename_from_jit_key(const string& jit_key, const string& suffix) {
@@ -245,7 +246,7 @@ void Op::jit_run() {
     // compile JIT op
     string prev_jit_key = jit_key;
     auto op_entry = OpCompiler::do_compile(this);
-    string new_jit_key = get_jit_key();
+    string new_jit_key = get_jit_key(jk);
     jit_ops[new_jit_key] = jit_ops[prev_jit_key] = op_entry;
     jit_key_mapper[prev_jit_key] = new_jit_key;
     LOGvv << "Get jit op entry:" << (void*)op_entry;

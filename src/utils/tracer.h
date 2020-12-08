@@ -9,5 +9,6 @@
 namespace jittor {
 
 void print_trace();
+void breakpoint();
 
 } // jittor

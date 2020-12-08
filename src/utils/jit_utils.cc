@@ -13,6 +13,16 @@
 #ifdef __GNUC__
 #endif
 #include <pybind11/iostream.h>
+#include <sys/prctl.h>
+#include <signal.h>
+
+namespace jittor {
+
+void init_subprocess() {
+    prctl(PR_SET_PDEATHSIG, SIGKILL);
+}
+
+}
 
 PYBIND11_MODULE(jit_utils_core, m) {
     pybind11::add_ostream_redirect(m, "ostream_redirect");
@@ -39,4 +49,5 @@ PYBIND11_MODULE(jit_utils_core, m) {
     m.def("log_capture_start", &jittor::log_capture_start);
     m.def("log_capture_stop", &jittor::log_capture_stop);
     m.def("log_capture_read", &jittor::log_capture_read);
+    m.def("init_subprocess", &jittor::init_subprocess);
 }

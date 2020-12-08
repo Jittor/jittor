@@ -48,11 +48,10 @@ struct FusedOp final : Op {
     
     const char* name() const override { return "fused"; }
     void statistics(uint64_t& in, uint64_t& out, uint64_t& compute) override;
-    bool shape_infered() override;
     void infer_shape() override;
-    void do_jit_prepare() override;
-    void do_prepare() override;
-    void do_run_after_prepare() override;
+    void do_jit_prepare(JK& jk) override;
+    void do_prepare(JK& jk) override;
+    void do_run_after_prepare(JK& jk) override;
     void do_run() override;
 #ifdef JIT
     void jit_run();

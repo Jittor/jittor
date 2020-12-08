@@ -50,6 +50,8 @@ struct NodeFlags {
         _grads=_n+6,
         // bit7: has graph optimize
         _has_gopt=_n+7,
+        // bit7: has vary input
+        _has_vary_input=_n+8,
     };
 
     inline void set(Flags f, int a=1, int nbits=1) {
@@ -118,16 +120,15 @@ struct Node {
 #ifdef NODE_MEMCHECK
     inline Node() {
         lived_nodes[(void*)this] = ++total_node;
-        registe_node_trace(this);
     }
 
     inline virtual ~Node() {
         lived_nodes.erase((void*)this);
-        unregiste_node_trace(this);
+        if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var)) trace_data.release_node(this);
     }
 #else
     inline Node() {};
-    inline virtual ~Node() {};
+    inline virtual ~Node() { if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var)) trace_data.release_node(this);};
 #endif
     inline Var* var() { return (Var*)this; }
     inline Op* op() { return (Op*)this; }
