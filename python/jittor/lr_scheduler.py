@@ -84,3 +84,57 @@ class ReduceLROnPlateau(object):
             return a > b * save
         else:
             return a > b + self.threshold
+
+class CosineAnnealingLR(object):
+    def __init__(self, optimizer, T_max, eta_min=0, last_epoch=-1):
+        self.T_max = T_max
+        self.eta_min = eta_min
+        self.optimizer = optimizer
+        self.last_epoch = last_epoch
+        self.base_lr = optimizer.lr
+        #TODO set last_epoch is not ready
+
+    def get_lr(self):
+        if self.last_epoch == 0:
+            return self.base_lr
+        now_lr = self.optimizer.lr
+        if (self.last_epoch - 1 - self.T_max) % (2 * self.T_max) == 0:
+            return (now_lr + (self.base_lr - self.eta_min) *
+                    (1 - math.cos(math.pi / self.T_max)) / 2)
+        return  ((1 + math.cos(math.pi * self.last_epoch / self.T_max)) /
+                (1 + math.cos(math.pi * (self.last_epoch - 1) / self.T_max)) *
+                (now_lr - self.eta_min) + self.eta_min)
+
+    def step(self):
+        self.last_epoch += 1
+        self.update_lr(self.get_lr())
+            
+    def update_lr(self, new_lr):
+        self.optimizer.lr = new_lr
+        for i, param_group in enumerate(self.optimizer.param_groups):
+            if param_group.get("lr")!=None:
+                param_group["lr"] = new_lr
+
+class MultiStepLR(object):
+    def __init__(self, optimizer, milestones=[], gamma=0.1, last_epoch=-1):
+        self.optimizer = optimizer
+        self.milestones = milestones
+        self.gamma = gamma
+        self.last_epoch = last_epoch
+        #TODO set last_epoch is not ready
+
+    def get_lr(self):
+        now_lr = self.optimizer.lr
+        if (self.last_epoch in self.milestones):
+            now_lr *= gamma
+        return now_lr
+
+    def step(self):
+        self.last_epoch += 1
+        self.update_lr(self.get_lr())
+            
+    def update_lr(self, new_lr):
+        self.optimizer.lr = new_lr
+        for i, param_group in enumerate(self.optimizer.param_groups):
+            if param_group.get("lr")!=None:
+                param_group["lr"] = new_lr
