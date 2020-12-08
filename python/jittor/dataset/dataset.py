@@ -101,7 +101,7 @@ class Dataset(object):
         Attrs:
 
             * batch_size(int): batch size, default 16.
-            * totol_len(int): totol lenght.
+            * total_len(int): total lenght.
             * shuffle(bool): shuffle at each epoch, default False.
             * drop_last(bool): if true, the last batch of dataset might smaller than batch_size, default True.
             * num_workers: number of workers for loading data
