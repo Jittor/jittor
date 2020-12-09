@@ -463,9 +463,9 @@ QQ 群：761222083
 
 ## 团队
 
-Jittor is currently maintained by Dun Liang, Guo-Ye Yang, Guo-Wei Yang,  Wen-Yang Zhou and Meng-Hao Guo etc. from the [Tsinghua CSCG Group](https://cg.cs.tsinghua.edu.cn/). If you are also interested in Jittor and want to improve it, Please join us!
+Jittor is currently maintained by the [Tsinghua CSCG Group](https://cg.cs.tsinghua.edu.cn/). If you are also interested in Jittor and want to improve it, Please join us!
 
-Jittor目前由来自[清华大学计算机图形学组](https://cg.cs.tsinghua.edu.cn/)的梁盾，杨国烨，杨国炜，周文洋和国孟昊等博士生维护。 如果您也对Jittor感兴趣并希望对其进行改进，请加入我们！
+Jittor目前由[清华大学计算机图形学组](https://cg.cs.tsinghua.edu.cn/)维护。 如果您也对Jittor感兴趣并希望对其进行改进，请加入我们！
 
 ## Citation
 
