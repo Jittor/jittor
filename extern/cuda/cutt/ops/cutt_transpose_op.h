@@ -19,7 +19,7 @@ struct CuttTransposeOp : Op {
     const char* name() const override { return "cutt_transpose"; }
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;
     void infer_shape() override;
-    DECLARE_jit_run;
+    void run() override;
 };
 
 } // jittor

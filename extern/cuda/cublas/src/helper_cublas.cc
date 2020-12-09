@@ -14,7 +14,7 @@
 
 #include <cuda_runtime.h>
 #include <cublas.h>
-#include <helper_cuda.h>
+#include "helper_cuda.h"
 
 #ifdef CUBLAS_API_H_
 // cuBLAS API errors

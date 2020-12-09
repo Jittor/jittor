@@ -151,9 +151,9 @@ jt.Var.__imatmul__ = lambda a,b: a.assign(matmul(a,b))
 def get_init_var_rand(shape, dtype):
     return jt.array(np.random.normal(0.0, 1.0, shape).astype(np.float32))
 
-def relu(x): return jt.maximum(x, 0)
+def relu(x): return jt.ternary((x>0.0), x, jt.broadcast_var(0.0, x))
 def leaky_relu(x, scale=0.01): return jt.ternary(x>0, x, x*scale)
-def relu6(x): return jt.minimum(jt.maximum(x, 0), 6)
+def relu6(x): return jt.minimum(jt.maximum(x, 0.0), 6.0)
 def sign(x):
     one = jt.ones(x.shape)
     x = jt.ternary(x>0, one, x)
@@ -264,17 +264,29 @@ class L1Loss(Module):
     def execute(self, output, target):
         return l1_loss(output, target)
 
-class BCEWithLogitsLoss(Module):
-    def __init__(self, weight=None, size_average=True):
-        self.sigmoid = Sigmoid()
-        self.bce = BCELoss(weight, size_average)
-    def execute(self, output, target):
-        output = self.sigmoid(output)
-        output = self.bce(output, target)
-        return output
+def binary_cross_entropy_with_logits(output, target, weight=None, pos_weight=None, size_average=True):
+    max_val = jt.clamp(-output,min_v=0)
+    if pos_weight is not None:
+        log_weight = (pos_weight-1)*target + 1
+        loss = (1-target)*output+(log_weight*(((-max_val).exp()+(-output - max_val).exp()).log()+max_val))
+    else:
+        loss = (1-target)*output+max_val+((-max_val).exp()+(-output -max_val).exp()).log()
+    if weight is not None:
+        loss *=weight
 
-def binary_cross_entropy_with_logits(input, target, weight=None, size_average=True):
-    return BCEWithLogitsLoss(weight, size_average)(input, target)
+    if size_average:
+        return loss.mean()
+    else:
+        return loss.sum()
+
+class BCEWithLogitsLoss(Module):
+    def __init__(self, weight=None, pos_weight=None, size_average=True):
+        self.pos_weight = pos_weight
+        self.weight = weight
+        self.size_average = size_average
+
+    def execute(self, output, target):
+        return binary_cross_entropy_with_logits(output,target,self.weight,self.pos_weight,self.size_average)
 
 def softmax(x, dim = None):
     if dim is None:
@@ -340,82 +352,39 @@ class BatchNorm(Module):
         self.eps = eps
         self.momentum = momentum
         self.affine = affine
-        if affine:
-            self.weight = init.constant((num_features,), "float32", 1.0)
-            self.bias = init.constant((num_features,), "float32", 0.0)
+        self.weight = init.constant((num_features,), "float32", 1.0) if affine else 1.0
+        self.bias = init.constant((num_features,), "float32", 0.0) if affine else 0.0
         self.running_mean = init.constant((num_features,), "float32", 0.0).stop_grad()
         self.running_var = init.constant((num_features,), "float32", 1.0).stop_grad()
 
     def execute(self, x):
+        dims = [0]+list(range(2,x.ndim))
         if self.is_train:
-            xmean = jt.mean(x, dims=[0,2,3], keepdims=1)
-            x2mean = jt.mean(x*x, dims=[0,2,3], keepdims=1)
+            xmean = jt.mean(x, dims=dims)
+            x2mean = jt.mean(x*x, dims=dims)
             if self.sync and jt.in_mpi:
                 xmean = xmean.mpi_all_reduce("mean")
                 x2mean = x2mean.mpi_all_reduce("mean")
 
-            xvar = x2mean-xmean*xmean
-            norm_x = (x-xmean)/jt.sqrt(xvar+self.eps)
+            xvar = (x2mean-xmean*xmean).maximum(0.0)
+            w = self.weight / jt.sqrt(xvar+self.eps)
+            b = self.bias - xmean * w
+            norm_x = x * w.broadcast(x, dims) + b.broadcast(x, dims)
+
             self.running_mean.update(self.running_mean +
                 (xmean.reshape((-1,)) - self.running_mean) * self.momentum)
             self.running_var.update(self.running_var +
                 (xvar.reshape((-1,))-self.running_var)*self.momentum)
-        else:
-            running_mean = self.running_mean.broadcast(x, [0,2,3])
-            running_var = self.running_var.broadcast(x, [0,2,3])
-            norm_x = (x-running_mean)/jt.sqrt(running_var+self.eps)
-        if not self.affine:
             return norm_x
-        w = self.weight.broadcast(x, [0,2,3])
-        b = self.bias.broadcast(x, [0,2,3])
-        return norm_x * w + b
-        
-BatchNorm2d = BatchNorm
-	
-class BatchNorm1d(Module):
-    def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True, is_train=True, sync=True):
-        self.sync = sync
-        self.num_features = num_features
-        self.is_train = is_train
-        self.eps = eps
-        self.momentum = momentum
-        self.affine = affine
-        if affine:
-            self.weight = init.constant((num_features,), "float32", 1.0)
-            self.bias = init.constant((num_features,), "float32", 0.0)
-        self.running_mean = init.constant((num_features,), "float32", 0.0).stop_grad()
-        self.running_var = init.constant((num_features,), "float32", 1.0).stop_grad()
-
-    def execute(self, x):
-        if len(x.shape) == 3:
-            dims = [0, 2]
         else:
-            dims = [0]
-        if self.is_train:
-            xmean = jt.mean(x, dims=dims, keepdims=1)
-            x2mean = jt.mean(x*x, dims=dims, keepdims=1)
-
-            if self.sync and jt.in_mpi:
-                xmean = xmean.mpi_all_reduce("mean")
-                x2mean = x2mean.mpi_all_reduce("mean")
-
-            xvar = x2mean-xmean*xmean
-            norm_x = (x-xmean)/jt.sqrt(xvar+self.eps)
-            self.running_mean.update(self.running_mean + 
-                (xmean.sum(dims)-self.running_mean)*self.momentum)
-            self.running_var.update(self.running_var + 
-                (xvar.sum(dims)-self.running_var)*self.momentum)
-        else:
-            running_mean = self.running_mean.broadcast(x, dims)
-            running_var = self.running_var.broadcast(x, dims)
-            norm_x = (x-running_mean)/jt.sqrt(running_var+self.eps)
-        if not self.affine:
+            w = self.weight / jt.sqrt(self.running_var+self.eps)
+            b = self.bias - self.running_mean * w
+            norm_x = x * w.broadcast(x, dims) + b.broadcast(x, dims)
             return norm_x
-        w = self.weight.broadcast(x, dims)
-        b = self.bias.broadcast(x, dims)
-        return norm_x * w + b
 
-class InstanceNorm2d(Module):
+BatchNorm2d = BatchNorm1d = BatchNorm
+
+class InstanceNorm(Module):
     def __init__(self, num_features, eps=1e-05, momentum=0.1, affine=True, is_train=True, sync=True):
         self.sync = sync
         self.num_features = num_features
@@ -424,47 +393,43 @@ class InstanceNorm2d(Module):
         self.momentum = momentum
 
         self.affine = affine
-        if self.affine:
-            self.weight = init.constant((num_features,), "float32", 1.0)
-            self.bias = init.constant((num_features,), "float32", 0.0)
+        self.weight = init.constant((num_features,), "float32", 1.0) if affine else 1.0
+        self.bias = init.constant((num_features,), "float32", 0.0) if affine else 0.0
 
     def execute(self, x):
-        xmean = jt.mean(x, dims=[2,3], keepdims=1)
-        x2mean = jt.mean(x*x, dims=[2,3], keepdims=1)
-        if self.sync and jt.in_mpi:
-            xmean = xmean.mpi_all_reduce("mean")
-            x2mean = x2mean.mpi_all_reduce("mean")
+        dims = list(range(2,x.ndim))
+        xmean = jt.mean(x, dims=dims)
+        x2mean = jt.mean(x*x, dims=dims)
 
-        xvar = jt.maximum(x2mean-xmean*xmean, 0)
-        norm_x = (x-xmean)/jt.sqrt(xvar+self.eps)
-        if not self.affine:
-            return norm_x
-        w = self.weight.broadcast(x, [0,2,3])
-        b = self.bias.broadcast(x, [0,2,3])
-        return norm_x * w + b
+        xvar = (x2mean-xmean*xmean).maximum(0.0)
+        w = self.weight / jt.sqrt(xvar+self.eps)
+        b = self.bias - xmean * w
+        return x * w.broadcast(x, dims) + b.broadcast(x, dims)
+
+InstanceNorm2d = InstanceNorm1d = InstanceNorm
 
 class LayerNorm(Module):
     def __init__(self, normalized_shape, eps: float = 1e-5, elementwise_affine: bool = True) -> None:
-        super(LayerNorm, self).__init__()
         if isinstance(normalized_shape, int):
             normalized_shape = (normalized_shape,)
         self.normalized_shape = tuple(normalized_shape)
         self.eps = eps
         self.elementwise_affine = elementwise_affine
-        if self.elementwise_affine:
-            self.weight = init.constant(normalized_shape, "float32", 1.0)
-            self.bias = init.constant(normalized_shape, "float32", 0.0)
+        self.weight = init.constant(normalized_shape, "float32", 1.0) if elementwise_affine else 1.0
+        self.bias = init.constant(normalized_shape, "float32", 0.0) if elementwise_affine else 0.0
 
-    def execute(self,x):
+    def execute(self, x):
         dims = [-i for i in range(len(self.normalized_shape), 0, -1)]
-        mean = jt.mean(x,dims=dims,keepdims=1)
-        numerator = x-mean
-        variance = jt.mean(numerator.sqr(),dims=dims,keepdims=1)
-        denominator = jt.sqrt(variance+self.eps)
-        norm_x = numerator/denominator
-        if self.elementwise_affine:
-            norm_x = norm_x * self.weight+self.bias
-        return norm_x
+        xmean = jt.mean(x, dims=dims, keepdims=1)
+        x2mean = jt.mean(x*x, dims=dims, keepdims=1)
+
+        xvar = (x2mean-xmean*xmean).maximum(0.0)
+        w = self.weight / jt.sqrt(xvar+self.eps)
+        b = self.bias - xmean * w
+        return x * w + b
+
+
+LayerNorm2d = LayerNorm1d = LayerNorm
 
 class GroupNorm(Module):
     def __init__(self, num_groups, num_channels, eps=1e-05, affine=True, is_train=True):
@@ -473,28 +438,32 @@ class GroupNorm(Module):
         self.eps = eps
 
         self.affine = affine
-        if self.affine:
-            self.weight = init.constant((num_channels,), "float32", 1.0)
-            self.bias = init.constant((num_channels,), "float32", 0.0)
+        self.weight = init.constant((num_channels,), "float32", 1.0) if affine else 1.0
+        self.bias = init.constant((num_channels,), "float32", 0.0) if affine else 0.0
 
     def execute(self, x):
         N = x.shape[0]
         C = self.num_channels
         output_shape = (N,-1)
-	# TODO: 3d group norm
+	    # TODO: 3d group norm
         if x.ndim==4:
             output_shape = x.shape
         assert C % self.num_groups == 0
-        x = x.reshape((N, self.num_groups, int(C/self.num_groups), -1))
-        xmean = jt.mean(x, dims=[2,3], keepdims=1)
-        x2mean = jt.mean(x*x, dims=[2,3], keepdims=1)
-        xvar = jt.maximum(x2mean-xmean*xmean, 0)
-        norm_x = (x-xmean)/jt.sqrt(xvar+self.eps)
-        if not self.affine:
-            return norm_x.reshape(output_shape)
-        w = self.weight.reshape((1,self.num_groups,C//self.num_groups,1))
-        b = self.bias.reshape((1,self.num_groups,C//self.num_groups,1))
-        return (norm_x * w + b).reshape(output_shape)
+        x = x.reshape((N, self.num_groups, C//self.num_groups, -1))
+        xmean = jt.mean(x, dims=[2,3]).reshape((N, self.num_groups, 1))
+        x2mean = jt.mean(x*x, dims=[2,3]).reshape((N, self.num_groups, 1))
+        xvar = (x2mean-xmean*xmean).maximum(0.0)
+
+        if self.affine:
+            w = self.weight.reshape((1, self.num_groups, -1))
+            b = self.bias.reshape((1, self.num_groups, -1))
+        else:
+            w = 1
+            b = 0
+        w = w / jt.sqrt(xvar+self.eps)
+        b = b - xmean * w
+        x = x * w.broadcast(x, [3]) + b.broadcast(x, [3])
+        return x.reshape(output_shape)
 
 Relu = jt.make_module(relu)
 ReLU = Relu
@@ -503,6 +472,8 @@ LeakyReLU = Leaky_relu
 ReLU6 = jt.make_module(relu6)
 Softmax = jt.make_module(softmax, 2)
 GELU = jt.make_module(gelu)
+
+from jittor.depthwise_conv import DepthwiseConv
 
 class Conv(Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
@@ -513,6 +484,9 @@ class Conv(Module):
         self.padding = padding if isinstance(padding, tuple) else (padding, padding)
         self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
         self.groups = groups
+        self.is_depthwise_conv = self.groups == self.out_channels and self.groups == self.in_channels
+        if self.is_depthwise_conv and jt.flags.use_cuda:
+            self.depthwise_conv = DepthwiseConv(stride, padding, dilation)
         assert in_channels % groups == 0, 'in_channels must be divisible by groups'
         assert out_channels % groups == 0, 'out_channels must be divisible by groups'
         Kh, Kw = self.kernel_size
@@ -532,7 +506,13 @@ class Conv(Module):
             self.bias = None
 
     def execute(self, x):
-        if self.groups == 1:
+        if self.is_depthwise_conv and jt.flags.use_cuda:
+            y = self.depthwise_conv(x, self.weight)
+            if self.bias is not None:
+                b = self.bias.broadcast(y.shape, [0,2,3])
+                y = y + b
+            return y
+        elif self.groups == 1:
             N,C,H,W = x.shape
             Kh, Kw = self.kernel_size
             assert C==self.in_channels
@@ -566,7 +546,6 @@ class Conv(Module):
                 f'i4*{self.stride[0]}-{self.padding[0]}+i6*{self.dilation[0]}', # Hid+Khid
                 f'i5*{self.stride[1]}-{self.padding[1]}+i7*{self.dilation[1]}', # Wid+KWid
             ])
-            xx.compile_options = {"G":G}
             # w: [oc, CpG, Kh, Kw]
             ww = self.weight.reindex([N, G, oc//G, CpG, oh, ow, Kh, Kw], [
                 f'i1*{oc//G}+i2',
@@ -574,6 +553,7 @@ class Conv(Module):
                 'i6',
                 'i7'
             ])
+            ww.compile_options = xx.compile_options = {"G":G,"C":C}
             yy = xx*ww
             y = yy.reindex_reduce('add', [N, oc, oh, ow], [
                 'i0',

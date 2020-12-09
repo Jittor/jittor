@@ -26,3 +26,4 @@ venv/
 python/jittor.egg-info
 dist/
 !doc/source/*
+__data__

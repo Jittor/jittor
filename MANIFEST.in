@@ -1,0 +1,2 @@
+exclude __data__
+exclude __pycache__

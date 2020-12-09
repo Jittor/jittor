@@ -7,7 +7,7 @@
 #include <functional>
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>
-#include <helper_cuda.h>
+#include "helper_cuda.h"
 #include "mem/allocator/cuda_dual_allocator.h"
 #include "event_queue.h"
 #endif
@@ -41,29 +41,46 @@ void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, i
         op->tflag = ntt;
         fused_op.ops.push_back(op);
     }
-    for (Op* op : fused_op.ops) {
-        uint fid1 = op->custom_data;
-        uint oid = 0;
-        for (Var* v : op->outputs()) {
-            oid++;
-            if (v->tflag != tt) {
-                // this var node not belong to current execution
-                // this will happend in multiple outputs fuseable op
-                // v->custom_data = 0 represents this var cannot be fused
-                v->custom_data = 0;
-                continue;
-            }
-            for (auto o : v->outputs_with_index()) {
-                Op* op2 = o.op;
-                uint iid = o.index;
-                if (op2->tflag != ntt) continue;
-                uint fid2 = op2->custom_data;
-                fused_op.edges.emplace_back(fid1, oid-1, fid2, iid);
-            }
-        }
-    }
     LOGvvv << "Prepare fused_op" << fused_op.ops;
     fused_op.update_ops();
+    for (Op* op : fused_op.ops) {
+        uint fid1 = op->custom_data;
+        int iid = 0;
+        for (Var* v : op->inputs()) {
+            iid++;
+            int iop_id;
+            int iv_id;
+            if (v->_inputs.size() && v->input()->tflag == ntt) {
+                auto e = v->_inputs.front();
+                iop_id = e.node->custom_data;
+                iv_id = e.back->index;
+            } else {
+                iv_id = v->custom_data >> 2;
+                // add iv_id, prevent iv_id jit key overflow
+                iop_id = fused_op.ops.size() + iv_id;
+            }
+            fused_op.edges.emplace_back(iop_id, iv_id, fid1, iid-1);
+        }
+        // TODO: can we remove this?
+        // uint oid = 0;
+        // for (Var* v : op->outputs()) {
+        //     oid++;
+        //     if (v->tflag != tt) {
+        //         // this var node not belong to current execution
+        //         // this will happend in multiple outputs fuseable op
+        //         // v->custom_data = 0 represents this var cannot be fused
+        //         v->custom_data = 0;
+        //         continue;
+        //     }
+        //     // for (auto o : v->outputs_with_index()) {
+        //     //     Op* op2 = o.op;
+        //     //     uint iid = o.index;
+        //     //     if (op2->tflag != ntt) continue;
+        //     //     uint fid2 = op2->custom_data;
+        //     //     fused_op.edges.emplace_back(fid1, oid-1, fid2, iid);
+        //     // }
+        // }
+    }
 }
 
 void Executor::run_sync(vector<Var*> vars, bool device_sync) {
@@ -429,6 +446,10 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         // record trace data
         if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var==2)) {
             trace_data.record_execution(op, is_fused_op, jkl);
+            #ifdef HAS_CUDA
+            if (use_cuda)
+                checkCudaErrors(cudaDeviceSynchronize());
+            #endif
         }
         LOGvvv << "Finished Op(" >> op->name() << rid >> 
             "/" >> queue.size() >> ") output:" << op->outputs();

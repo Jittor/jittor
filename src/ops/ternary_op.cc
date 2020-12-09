@@ -64,8 +64,11 @@ void TernaryOp::jit_run() {
     auto* __restrict__ yp = y->ptr<Ty>();
     auto* __restrict__ zp = z->ptr<Tz>();
     index_t num = z->num;
-    for (index_t i=0; i<num; i++)
-        zp[i] = condp[i] ? xp[i] : yp[i];
+    for (index_t i=0; i<num; i++) {
+        Tz xd_ = xp[i];
+        Tz yd_ = yp[i];
+        zp[i] = condp[i] ? xd_ : yd_;
+    }
 }
 #endif // JIT
 

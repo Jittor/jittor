@@ -6,16 +6,13 @@
 #include "var.h"
 #include "cutt_transpose_op.h"
 #include "ops/op_register.h"
-#include <iostream>
-
-#ifdef JIT
 #include "cutt.h"
-#endif
 #include "cutt_warper.h"
+#include "misc/stack_vector.h"
+#include "helper_cuda.h"
 
 namespace jittor {
 
-#ifndef JIT
 static auto make_transpose = get_op_info("cutt_transpose")
     .get_constructor<VarPtr, Var*, NanoVector>();
 
@@ -58,52 +55,49 @@ VarPtr CuttTransposeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     return make_transpose(dout, reverse);
 }
 
-void CuttTransposeOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype();
-    jk << _CS("][DIM=") << JK::hex1(axes.size());
-    for (uint i=0; i<axes.size(); i++)
-        jk << _CS("][AXES") << JK::hex1(axes[i]) << '=' << JK::hex1(i);
-    jk << ']';
-}
 unordered_map<string, unsigned int> cutt_plan_cache;
 
-#else // JIT
-#ifdef JIT_cuda
-
-extern unordered_map<string, unsigned int> cutt_plan_cache;
-
-void CuttTransposeOp::jit_run() {
-    auto* __restrict__ xp = x->ptr<Tx>();
-    auto* __restrict__ yp = y->ptr<Tx>();
-    vector<int> permutation, permutation2;
-    vector<int> y_shape;
-    vector<int> x_shape;
-    @for(i, 0, DIM, permutation.push_back(DIM-1-AXES@i);)
-    @for(i, 0, DIM, permutation2.push_back(permutation[DIM-1-@i@@]);)
-    std::vector<int> reverse;
-    reverse.reserve(permutation2.size());
-    for (uint i=0; i<permutation2.size(); i++)
-        reverse[permutation2[i]] = i;
-
-    @for(i, 0, DIM, x_shape.push_back(x->shape[DIM-1-@i@@]);)
-
+void CuttTransposeOp::run() {
+    auto* __restrict__ xp = x->mem_ptr;
+    auto* __restrict__ yp = y->mem_ptr;
+    StackVector<int> x_shape;
+    StackVector<int> new_shape, new_axes, trans, reverse;
+    int dim = x->shape.size();
+    for (int i=0; i<dim; i++) {
+        trans[i] = new_shape.size();
+        if (x->shape[i] != 1)
+            new_shape.push_back(x->shape[i]);
+    }
+    for (int i = 0; i < dim; ++i) {
+        if (x->shape[axes[i]] != 1) {
+            new_axes.push_back(trans[axes[i]]);
+        }
+    }
+    dim = new_shape.size();
+    for (int i=0; i<dim; i++)
+        reverse[i] = dim-1-new_axes[dim-1-i];
+    for (int i=0; i<dim; i++)
+        x_shape[i] = new_shape[dim-1-i];
+    if (dim == 1) {
+        checkCudaErrors(cudaMemcpyAsync(yp, xp, x->size, cudaMemcpyDefault, 0));
+        return;
+    }
     jk.clear();
-    jk << @DIM << ",";
-    for (uint i=0; i<@DIM; i++) jk << x_shape[i] << ",";
-    for (uint i=0; i<@DIM; i++) jk << reverse[i] << ",";
-    jk << sizeof(Tx) << ".";
+    jk << dim << ',';
+    for (int i=0; i<dim; i++) jk << x_shape[i] << ',';
+    for (int i=0; i<dim; i++) jk << reverse[i] << ',';
+    jk << x->dtype().dsize() << '.';
     auto iter = cutt_plan_cache.find(jk.to_string());
+    LOGvvv << "Run cutt_transpose with key:" << jk.to_string();
 
     if (iter!=cutt_plan_cache.end()){
         cuttExecute(iter->second, xp, yp);
     } else {
         cuttHandle plan;
-        cuttPlan(&plan, @DIM, x_shape.data(), reverse.data(), sizeof(Tx), 0);
+        cuttPlan(&plan, dim, x_shape.data(), reverse.data(), x->dtype().dsize(), 0);
         cutt_plan_cache[jk.to_string()] = plan;
         cuttExecute(plan, xp, yp);
     }
 }
-#endif // JIT_cuda
-#endif // JIT
 
 } // jittor

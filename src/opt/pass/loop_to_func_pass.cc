@@ -19,6 +19,11 @@ void LoopToFuncPass::run() {
     if (cc_type=="clang") choice=1;
     if (!choice) return;
     int func_num=0;
+    string hash_name;
+    std::stringstream ss;
+    op->do_prepare(jk);
+    ss << std::hex << std::hash<string>()(jk.to_string());
+    hash_name = ss.str();
     
     ir->push_back("using namespace jittor;", &ir->before);
     if ((cc_type=="icc" || cc_type=="g++") && choice)
@@ -41,7 +46,7 @@ void LoopToFuncPass::run() {
             continue;
         
         // func definition
-        ir->push_back("INLINE_FUNC func"+S(func_num++)+"() {}", &ir->before);
+        ir->push_back("INLINE_FUNC func_"+hash_name+"_"+S(func_num++)+"() {}", &ir->before);
         auto& func = ir->before.back();
         
         // generate function arguments
@@ -97,7 +102,7 @@ void LoopToFuncPass::run() {
         auto& fc = ir->children[i];
         fc->attrs["loop_func"] = func->attrs["lvalue"];
     }
-    ir->remove_all_unused();
+    // ir->remove_all_unused();
 }
 
 } // jittor

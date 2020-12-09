@@ -7,7 +7,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-__version__ = '1.2.1.2'
+__version__ = '1.2.2.1'
 from . import lock
 with lock.lock_scope():
     ori_int = int
@@ -92,6 +92,7 @@ class log_capture_scope(_call_no_record_scope):
         print(logs)
     """
     def __init__(self, **jt_flags):
+        jt_flags["use_parallel_op_compiler"] = 0
         self.fs = flag_scope(**jt_flags)
 
     def __enter__(self):
@@ -949,8 +950,6 @@ def size(v, dim=None):
     return v.shape[dim]
 Var.size = size
 
-def item(v):
-    return v.data.item()
 
 def to_int(v):
     dtype = str(v.dtype)
@@ -967,10 +966,14 @@ def to_bool(v):
     assert dtype.startswith("int") or dtype=="bool"
     return ori_bool(v.item())
 
-Var.item = item
 Var.__int__ = to_int
 Var.__float__ = to_float
 Var.__bool__ = to_bool
+
+def format(v, spec):
+    return v.item().__format__(spec)
+Var.__format__ = format
+
 
 int = int32
 Var.int = Var.int32

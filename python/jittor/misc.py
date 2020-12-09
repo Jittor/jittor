@@ -12,6 +12,35 @@ import numpy as np
 import math
 from collections.abc import Sequence,Iterable
 
+def __copy__(x):
+    return x.copy().detach()
+jt.Var.__copy__ = __copy__
+
+def __deepcopy__(x,memo):
+    result = x.copy().detach()
+    memo[id(x)]=result
+    return result
+jt.Var.__deepcopy__ = __deepcopy__
+
+def __len__(x):
+    return x.shape[0]
+jt.Var.__len__ = __len__
+
+def __iter__(x):
+    result = []
+    for i in range(x.shape[0]):
+        result.append(x[i])
+    return result.__iter__()
+jt.Var.__iter__ = __iter__
+
+def all(x, dim=[]):
+    return x.all_(dim).bool()
+jt.Var.all = all
+
+def any(x,dim):
+    return x.any_(dim).bool()
+jt.Var.any = any
+    
 
 def repeat(x, *shape):
     r'''
@@ -47,10 +76,24 @@ def repeat(x, *shape):
         x = x.broadcast(x_shape)
     elif len_x_shape > len_shape:
         rep_shape = (len_x_shape - len_shape) * [1] + shape
+
+    reshape_shape = []
+    broadcast_shape = []
+    for x_s,r_s in zip(x_shape,rep_shape):
+        reshape_shape.append(1)
+        reshape_shape.append(x_s)
+
+        broadcast_shape.append(r_s)
+        broadcast_shape.append(1)
+
+    x = x.reshape(reshape_shape)
+    x = x.broadcast(broadcast_shape)
+
     tar_shape = (np.array(x_shape) * np.array(rep_shape)).tolist()
-    dims = []
-    for i in range(len(tar_shape)): dims.append(f"i{i}%{x_shape[i]}")
-    return x.reindex(tar_shape, dims)
+
+    x = x.reshape(tar_shape)
+    return x
+
 jt.Var.repeat = repeat
 
 def chunk(x, chunks, dim=0):
@@ -326,9 +369,8 @@ def unique(x):
     '''
     x = x.reshape(-1)
     _,x = jt.argsort(x)
-    index2 = [i for i in range(1,x.shape[0])]
-    index1 = [i for i in range(x.shape[0]-1)]
-    y = x[1:][x[index2] != x[index1]]
+    index,= jt.index((x.shape[0],))
+    y = x[1:][x[index[1:]] != x[index[:-1]]]
     x = jt.contrib.concat([x[:1],y],dim=0)
     return x
 
@@ -400,12 +442,6 @@ def log2(x):
     return jt.log(x)/math.log(2.0)
 
 jt.Var.log2 = log2
-
-def item(x):
-    assert x.ndim==1 and x.shape[0]==1
-    return x.numpy().item()
-
-jt.Var.item  = item
 
 def meshgrid(*tensors):
     r'''
