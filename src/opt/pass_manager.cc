@@ -91,7 +91,8 @@ void PassManager::run_passes() {
     
     run_pass<SolveConflictDefinePass>();
     run_pass<MergeLoopVarPass>();
-    run_pass<ConstVarPass>();
+    // tmp disable ConstVarPass
+    // run_pass<ConstVarPass>();
 
     run_pass<RestridePass>();
     

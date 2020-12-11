@@ -7,7 +7,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-__version__ = '1.2.2.1'
+__version__ = '1.2.2.2'
 from . import lock
 with lock.lock_scope():
     ori_int = int
@@ -33,8 +33,37 @@ from collections import OrderedDict
 from collections.abc import Sequence, Mapping
 import types
 import pickle
-import sys
+import hashlib
+import sys, os
 import traceback
+
+
+def safepickle(obj, path):
+    s = pickle.dumps(obj, pickle.HIGHEST_PROTOCOL)
+    checksum = hashlib.sha1(s).digest()
+    s += bytes(checksum)
+    s += b"HCAJSLHD"
+    with open(path, 'wb') as f:
+        f.write(s)
+
+def safeunpickle(path):
+    if path.startswith("jittorhub://"):
+        path = path.replace("jittorhub://", "https://cg.cs.tsinghua.edu.cn/jittor/assets/build/checkpoints/")
+    if path.startswith("https:") or path.startswith("http:"):
+        base = path.split("/")[-1]
+        fname = os.path.join(compiler.ck_path, base)
+        from jittor.utils.misc import download_url_to_local
+        download_url_to_local(path, base, compiler.ck_path, None)
+        path = fname
+    with open(path, "rb") as f:
+        s = f.read()
+    if not s.endswith(b"HCAJSLHD"):
+        return pickle.loads(s)
+    checksum = s[-28:-8]
+    s = s[:-28]
+    if hashlib.sha1(s).digest() != checksum:
+        raise ValueError("Pickle checksum does not match! path: "+path)
+    return pickle.loads(s)
 
 class _call_no_record_scope:
     def __enter__(self): pass
@@ -436,8 +465,7 @@ def display_memory_info():
     core.display_memory_info(fileline)
 
 def load(path):
-    pkl_file = open(path, 'rb')
-    model_dict = pickle.load(pkl_file)
+    model_dict = safeunpickle(path)
     return model_dict
 
 def _uniq(x):
@@ -647,8 +675,7 @@ class Module:
         params_dict = {}
         for p in params:
             params_dict[p.name()] = p.data
-        with open(path, 'wb') as f:
-            pickle.dump(params_dict, f, pickle.HIGHEST_PROTOCOL)
+        safepickle(params_dict, path)
 
     def load(self, path):
         if path.endswith(".pth"):
@@ -659,8 +686,7 @@ class Module:
                 raise RuntimeError("pytorch need to be installed when load pth format.")
             self.load_parameters(torch.load(path, map_location=torch.device('cpu')))
             return
-        with open(path, 'rb') as f:
-            self.load_parameters(pickle.load(f))
+        self.load_parameters(safeunpickle(path))
 
     def eval(self):
         def callback(parents, k, v, n):

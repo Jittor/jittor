@@ -894,6 +894,8 @@ make_cache_dir(cache_path)
 make_cache_dir(os.path.join(cache_path, "jit"))
 make_cache_dir(os.path.join(cache_path, "obj_files"))
 make_cache_dir(os.path.join(cache_path, "gen"))
+ck_path = os.path.join(cache_path, "checkpoints")
+make_cache_dir(ck_path)
 
 # build cache_compile
 cc_flags += f" -I{jittor_path}/src "
