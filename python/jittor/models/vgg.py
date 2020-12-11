@@ -67,33 +67,49 @@ def _vgg(arch, cfg, batch_norm, **kwargs):
     return model
 
 
-def vgg11(**kwargs):
-    return _vgg('vgg11', 'A', False, **kwargs)
+def vgg11(pretrained=False, **kwargs):
+    model = _vgg('vgg11', 'A', False, **kwargs)
+    if pretrained: model.load("jittorhub://vgg11.pkl")
+    return model
 
 
-def vgg11_bn(**kwargs):
-    return _vgg('vgg11_bn', 'A', True, **kwargs)
+def vgg11_bn(pretrained=False, **kwargs):
+    model = _vgg('vgg11_bn', 'A', True, **kwargs)
+    if pretrained: model.load("jittorhub://vgg11_bn.pkl")
+    return model
 
 
-def vgg13(**kwargs):
-    return _vgg('vgg13', 'B', False, **kwargs)
+def vgg13(pretrained=False, **kwargs):
+    model = _vgg('vgg13', 'B', False, **kwargs)
+    if pretrained: model.load("jittorhub://vgg13.pkl")
+    return model
 
 
-def vgg13_bn(**kwargs):
-    return _vgg('vgg13_bn', 'B', True, **kwargs)
+def vgg13_bn(pretrained=False, **kwargs):
+    model = _vgg('vgg13_bn', 'B', True, **kwargs)
+    if pretrained: model.load("jittorhub://vgg13_bn.pkl")
+    return model
 
 
-def vgg16(**kwargs):
-    return _vgg('vgg16', 'D', False, **kwargs)
+def vgg16(pretrained=False, **kwargs):
+    model = _vgg('vgg16', 'D', False, **kwargs)
+    if pretrained: model.load("jittorhub://vgg16.pkl")
+    return model
 
 
-def vgg16_bn(**kwargs):
-    return _vgg('vgg16_bn', 'D', True, **kwargs)
+def vgg16_bn(pretrained=False, **kwargs):
+    model = _vgg('vgg16_bn', 'D', True, **kwargs)
+    if pretrained: model.load("jittorhub://vgg16_bn.pkl")
+    return model
 
 
-def vgg19(**kwargs):
-    return _vgg('vgg19', 'E', False, **kwargs)
+def vgg19(pretrained=False, **kwargs):
+    model = _vgg('vgg19', 'E', False, **kwargs)
+    if pretrained: model.load("jittorhub://vgg19.pkl")
+    return model
 
 
-def vgg19_bn(**kwargs):
-    return _vgg('vgg19_bn', 'E', True, **kwargs)
+def vgg19_bn(pretrained=False, **kwargs):
+    model = _vgg('vgg19_bn', 'E', True, **kwargs)
+    if pretrained: model.load("jittorhub://vgg19_bn.pkl")
+    return model
