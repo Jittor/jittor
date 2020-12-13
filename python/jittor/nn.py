@@ -707,6 +707,45 @@ class ConvTranspose(Module):
             y = y + b
         return y
 
+def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding=0, groups=1, dilation=1):
+    x = input
+    N,C,H,W = x.shape
+    i,o,h,w = weight.shape
+    assert C==i
+    assert groups==1, "Group conv not supported yet."
+    stride = stride if isinstance(stride, tuple) else (stride, stride)
+    dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
+    # added
+    padding = padding if isinstance(padding, tuple) else (padding, padding)
+    output_padding = output_padding if isinstance (output_padding, tuple) else (output_padding, output_padding)
+    assert output_padding[0] < max(stride[0], dilation[0]) and \
+        output_padding[1] < max(stride[1], dilation[1]), \
+        "output padding must be smaller than max(stride, dilation)"
+
+    stride_h, stride_w = stride
+    padding_h, padding_w = padding
+    dilation_h, dilation_w = dilation
+
+    h_out = (H-1) * stride_h + output_padding[0] - 2*padding_h + 1 + (h-1)*dilation_h
+    w_out = (W-1) * stride_w + output_padding[1] - 2*padding_w + 1 + (w-1)*dilation_w
+    out_shape = (N, o, h_out, w_out)
+    shape = (N, i, o, H, W, h, w)
+    xx = x.broadcast(shape, (2, 5, 6)) # i,h,w
+    ww = weight.broadcast(shape, (0, 3, 4)) # N,H,W
+    y = (ww*xx).reindex_reduce("add", out_shape, [
+        'i0', # N
+        'i2', # o
+        f'i3*{stride_h}-{padding_h}+i5*{dilation_h}', # Hid+Khid
+        f'i4*{stride_w}-{padding_w}+i6*{dilation_w}', # Wid+KWid
+    ])
+    if isinstance(bias, jt.Var):
+        b = bias.broadcast(y.shape, [0,2,3])
+        y = y + b
+    else:
+        assert not bias, "Bias should be none or jittor var"
+    return y
+
+conv_transpose2d = conv_transpose
 
 def pad(x,padding, mode='constant', value=0):
     assert mode in ['constant','replicate','reflect','circular'],'only support constant,replicate,reflect,circular pad'
