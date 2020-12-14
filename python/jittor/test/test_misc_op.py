@@ -54,6 +54,7 @@ class TestPad(unittest.TestCase):
         check_equal(torch.Tensor(arr).flip(1), jt.array(arr).flip(1))
         check_equal(torch.Tensor(arr).flip(2), jt.array(arr).flip(2))
         check_equal(torch.Tensor(arr).flip(3), jt.array(arr).flip(3))
+        check_equal(torch.Tensor(arr).flip([2,3]), jt.array(arr).flip([2,3]))
         print('pass flip test ...')
 
     def test_cross(self):
