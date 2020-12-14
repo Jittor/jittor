@@ -33,6 +33,9 @@ class Optimizer(object):
             assert isinstance(pg, dict)
             self.param_groups.append(pg)
         self.n_step = 0
+
+    def add_param_group(self, group):
+        self.param_groups.append(group)
     
     @property
     def defaults(self):
