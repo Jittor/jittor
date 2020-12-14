@@ -7,7 +7,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-__version__ = '1.2.2.4'
+__version__ = '1.2.2.5'
 from . import lock
 with lock.lock_scope():
     ori_int = int
@@ -830,6 +830,11 @@ can also be None)::
 
     def dfs(self, parents, k, callback, callback_leave=None):
         pass
+
+    @classmethod
+    def apply(cls, *args, **kw):
+        func = cls()
+        return func(*args, **kw)
 
 
 def make_module(func, exec_n_args=1):

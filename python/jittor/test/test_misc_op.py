@@ -85,6 +85,10 @@ class TestPad(unittest.TestCase):
         check_equal(torchvision.utils.make_grid(torch.Tensor(arr), nrow=3, normalize=True, padding=4, pad_value=-1), jt.make_grid(jt.array(arr), nrow=3, normalize=True, padding=4, pad_value=-1))
         print('pass make_grid test ...')
 
+    def test_save_image(self):
+        arr = jt.array(np.random.randn(16,3,10,10))
+        jt.save_image(arr, "/tmp/a.jpg")
+
     def test_unbind(self):
         arr = np.random.randn(2,3,4)
         for dim in range(len(arr.shape)):
