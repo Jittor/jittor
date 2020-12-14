@@ -345,6 +345,25 @@ def make_grid(x, nrow=8, padding=2, normalize=False, range=None, scale_each=Fals
                      [f"i1/{padding+h}*{nrow}+i2/{padding+w}", "i0", 
                       f"i1-i1/{padding+h}*{padding+h}-{padding}", f"i2-i2/{padding+w}*{padding+w}-{padding}"], overflow_value=pad_value)
 
+def save_image(
+    x,
+    filepath,
+    nrow: int = 8,
+    padding: int = 2,
+    normalize: bool = False,
+    range = None,
+    scale_each = False,
+    pad_value = 0,
+    format = None
+):
+    from PIL import Image
+    grid = make_grid(x, nrow=nrow, padding=padding, pad_value=pad_value,
+                     normalize=normalize, range=range, scale_each=scale_each)
+                     
+    ndarr = (grid*255+0.5).clamp(0, 255).permute(1, 2, 0).uint8().numpy()
+    im = Image.fromarray(ndarr)
+    im.save(filepath, format=format)
+
 
 def _ntuple(n):
     def parse(x):
