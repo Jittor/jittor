@@ -8,6 +8,7 @@
 #include "profiler/cache_info.h"
 #include "op_compiler.h"
 #include "misc/cstr.h"
+#include "misc/nano_vector.h"
 
 namespace jittor {
 
@@ -25,6 +26,7 @@ struct Profiler {
         // cache test info
         unique_ptr<CacheInfo> cache_info;
         cstr stack_info;
+        unordered_map<NanoVector, pair<uint64, uint64>> shapes;
 
         void update(int c, uint64_t t, uint64_t in, uint64_t out, uint64_t comp) {
             count += 1<<c;

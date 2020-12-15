@@ -7,7 +7,7 @@
 // ***************************************************************
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>
-#include <helper_cuda.h>
+#include "helper_cuda.h"
 #include <mutex>
 #include "misc/cuda_flags.h"
 #include "mem/allocator/sfrl_allocator.h"

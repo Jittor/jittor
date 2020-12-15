@@ -280,4 +280,20 @@ inline bool operator!=(const NanoVector& a, const NanoVector& b) {
     return ne(a, b);
 }
 
+inline bool operator<(const NanoVector& a, const NanoVector& b) {
+    return a.data < b.data || (a.data == b.data && a.offset < b.offset);
+}
+
 } // jittor
+
+
+namespace std {
+template<> struct hash<jittor::NanoVector> {
+inline std::size_t operator()(jittor::NanoVector const& s) const noexcept {
+        std::size_t h1 = std::hash<jittor::int64>{}(s.data);
+        std::size_t h2 = std::hash<jittor::int64>{}(s.offset);
+        return h1 ^ (h2 << 1);
+}
+};
+}
+ 

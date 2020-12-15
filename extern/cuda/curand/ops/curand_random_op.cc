@@ -9,7 +9,7 @@
 #include "init.h"
 #include <cuda_runtime.h>
 #include <curand.h>
-#include <helper_cuda.h>
+#include "helper_cuda.h"
 #include "curand_random_op.h"
 #include "curand_warper.h"
 

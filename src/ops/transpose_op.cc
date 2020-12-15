@@ -40,38 +40,8 @@ TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
                 .get_constructor<VarPtr, Var*, NanoVector>();
         }
         if (cutt_transpose) {
-            bool need_reshape = false;
-            int dims = x->shape.size();
-            vector<int64> in_axes;
-            vector<int64> in_shape;
-            vector<int64> out_shape;
-            vector<int64> trans;
-            int cnt = 0;
-            for (int i = 0; i < dims; ++i) {
-                if (x->shape[i] == 1) {
-                    need_reshape = true;
-                    trans.push_back(-1);
-                } else {
-                    trans.push_back(cnt);
-                    cnt += 1;
-                    in_shape.push_back(x->shape[i]);
-                }
-                out_shape.push_back(x->shape[axes[i]]);
-            }
-            for (int i = 0; i < dims; ++i) {
-                if (x->shape[axes[i]] != 1) {
-                    in_axes.push_back(trans[axes[i]]);
-                }
-            }
-            if (need_reshape) {
-                auto x1 = make_reshape(x, NanoVector(in_shape));
-                auto x2 = cutt_transpose(x1, in_axes);
-                auto x3 = make_reshape(x2, NanoVector(out_shape));
-                forward(x3);
-            } else {
-                auto var = cutt_transpose(x, axes);
-                forward(var);
-            }
+            auto var = cutt_transpose(x, axes);
+            forward(var);
             return;
         }
     }

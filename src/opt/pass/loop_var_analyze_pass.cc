@@ -12,6 +12,8 @@
 
 namespace jittor {
 
+DECLARE_FLAG(int, para_opt_level);
+
 void LoopVarAnalyzePass::run() {
     // loop_vars: opi_xx->shape[j]
     vector<string> loop_vars;
@@ -183,13 +185,45 @@ void LoopVarAnalyzePass::run() {
                 }
             }
     }
+
+    if (para_opt_level) {
+        map<Var*, Op*> same_inputs;
+        for (auto o : op->ops) {
+            if (!pm->oc->op_exist(o))
+                continue;
+            int i_id = 0;
+            for (auto i : o->inputs()) {
+                i_id ++;
+                auto fi_id = op->get_node_id(i);
+                if (op->vars.at(fi_id).type != 0)
+                    continue;
+                if (same_inputs.count(i)) {
+                    auto j = same_inputs[i];
+                    auto name1 = pm->oc->get_name_by_op_input(o, i_id-1);
+                    auto name2 = pm->oc->get_name_by_op_var(j, i);
+                    if (name1[0] == '_' || name2[0] == '_')
+                        continue;
+                    // replace name1 -> name2
+                    replace_vars.emplace_back(name1+'p', name2+'p');
+                } else {
+                    auto name2 = pm->oc->get_name_by_op_var(o, i);
+                    if (name2[0] == '_')
+                        continue;
+                    same_inputs[i] = o;
+                }
+            }
+        }
+    }
     
     for (auto& t : op->edges) {
         uint i,j,k,l;
         std::tie(i,j,k,l) = t;
+        // virtual op holds all inputs
+        if (i>=op->ops.size())
+            continue;
         // loop var may not exist(relayed)
-        auto opa = op->ops[i];
-        auto opb = op->ops[k];
+        auto opa = op->ops.at(i);
+        auto opb = op->ops.at(k);
         if (!pm->oc->op_exist(opa) || !pm->oc->op_exist(opb))
             continue;
         // replace op{j}_{kname}* -> op{i}_{oname}*

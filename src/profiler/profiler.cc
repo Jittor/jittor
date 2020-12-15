@@ -10,7 +10,7 @@
 #include <dlfcn.h>
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>
-#include <helper_cuda.h>
+#include "helper_cuda.h"
 #endif
 #include "misc/cuda_flags.h"
 #include "profiler/profiler.h"
@@ -23,7 +23,11 @@ namespace jittor {
 
 Profiler profiler;
 
+DEFINE_FLAG(int, profiler_warmup, 0, "Profiler warmup.");
+DEFINE_FLAG(int, profiler_rerun, 0, "Profiler rerun.");
+DEFINE_FLAG(int, profiler_hide_relay, 0, "Profiler hide relayed op.");
 DEFINE_FLAG_WITH_SETTER(int, profiler_enable, 0, "Enable profiler.");
+
 void setter_profiler_enable(int value) {
     if (value)
         Profiler::start();
@@ -39,6 +43,8 @@ Profiler::~Profiler() {
 }
 
 void Profiler::start(int64 warmup, int64 rerun) {
+    if (warmup==0) warmup = profiler_warmup;
+    if (rerun==0) rerun = profiler_rerun;
     profiler_enable = 1;
     profiler.records.clear();
     profiler.warmup = warmup;
@@ -62,7 +68,7 @@ unique_ptr<MemoryChecker>* load_memory_checker(string name) {
     return mm;
 }
 
-extern string _get_stack_info(Op* op);
+extern string _get_stack_info(Node* node);
 
 static  string get_stack_info(Op* op) {
     string stack_info = "stack info:\n";
@@ -76,10 +82,39 @@ static  string get_stack_info(Op* op) {
             stack_info += kv.first;
             stack_info += '\n';
         }
+        if (trace_py_var == 2) {
+            std::stringstream ss;
+            ss << "input from:\n";
+            for (auto& vi : fop->vars) {
+                if (vi.type == 0) {
+                    auto v = vi.var;
+                    ss << v->shape << ',' << v->dtype() << ',' << v->name << ',';
+                    if (v->input())
+                        ss << v->input()->name_ex() << ',' << _get_stack_info(v->input());
+                    else
+                        ss << _get_stack_info(v);
+                    ss << '\n';
+                }
+            }
+            stack_info += ss.str();
+        }
         return stack_info;
     } else {
         stack_info += _get_stack_info(op);
         stack_info += '\n';
+        if (trace_py_var == 2) {
+            std::stringstream ss;
+            ss << "input from:\n";
+            for (auto v : op->inputs()) {
+                ss << v->shape << ',' << v->dtype() << ',' << v->name << ',';
+                if (v->input())
+                    ss << v->input()->name_ex() << ',' << _get_stack_info(v->input());
+                else
+                    ss << _get_stack_info(v);
+                ss << '\n';
+            }
+            stack_info += ss.str();
+        }
         return stack_info;
     }
 }
@@ -109,6 +144,36 @@ void Profiler::record_and_run(
             }
         }
         bool is_fused = op->name() == string("fused");
+
+        uint64* shape_time = nullptr;
+        if (trace_py_var) {
+            // record shape
+            NanoVector shape;
+            int64 num = 0;
+            Op** ops = &op;
+            int op_num = 1;
+            if (is_fused) {
+                ops = &(((FusedOp*)op)->ops[0]);
+                op_num = ((FusedOp*)op)->ops.size();
+            }
+            for (int i=0; i<op_num; i++) {
+                auto o = ops[i];
+                for (auto v : o->inputs()) {
+                    if (v->num > num) {
+                        num = v->num;
+                        shape = v->shape;
+                    }
+                }
+                for (auto v : o->outputs()) {
+                    if (v->num > num) {
+                        num = v->num;
+                        shape = v->shape;
+                    }
+                }
+            }
+            iter->second.shapes[shape].second += 1;
+            shape_time = &iter->second.shapes[shape].first;
+        }
         int loop = (is_fused && 
             ((FusedOp*)op)->get_loop_option("insert_profile_loop")) ? 10 : 0;
         int64_t warmup = profiler.warmup ? std::max(profiler.warmup>>loop, (int64_t)1) : 0;
@@ -141,6 +206,7 @@ void Profiler::record_and_run(
             // 24ns function call overhead
             total_ns = std::max((int64_t)1, total_ns-24);
             iter->second.update(loop, total_ns, in, out, compute);
+            if (shape_time) shape_time[0] += total_ns;
             LOGvvvv << "Duration" << total_ns >> "ns running" << op;
         }
         if (is_fused && 
@@ -153,7 +219,7 @@ void Profiler::record_and_run(
 }
 
 vector<vector<string>> Profiler::report(const string& sort_key) {
-    vector<vector<string>> rep = {{"Name", "FileName", "Count", "TotalTime", "AvgTime", "MinTime", "MaxTime", "Input", "Output", "Compute"}};
+    vector<vector<string>> rep = {{"Name", "FileName", "Count", "TotalTime", "AvgTime", "MinTime", "MaxTime", "Input", "Output", "InOut", "Compute"}};
     vector<string> names, fnames;
     vector<vector<double>> info;
     vector<int> order;
@@ -163,18 +229,41 @@ vector<vector<string>> Profiler::report(const string& sort_key) {
             break;
     ASSERT(sort_key_id<(int)rep[0].size()) << "Key not supported:" << sort_key;
     double total_time = 0;
+    double total_mem_access = 0;
     for (auto& kv : profiler.records) {
+        auto& kinfo = kv.second;
         names.push_back(kv.first);
         fnames.push_back(Op::get_filename_from_jit_key(kv.first, ".cc"));
         if (kv.second.stack_info.size()) {
             fnames.back() += '\n';
             fnames.back() += kv.second.stack_info.c_str();
         }
-        auto& kinfo = kv.second;
+        if (kv.second.shapes.size()) {
+            // show shapes
+            vector<pair<pair<uint64,uint64>,NanoVector>> shapes;
+            shapes.reserve(kv.second.shapes.size());
+            for (auto& kv2 : kv.second.shapes) {
+                shapes.push_back(std::make_pair(kv2.second, kv2.first));
+            }
+            std::sort(shapes.begin(), shapes.end());
+            std::stringstream ss;
+            ss << "shapes:\n";
+            for (int i=0; i<10; i++) {
+                if (i>=shapes.size()) break;
+                auto& sp = shapes[shapes.size() - i - 1];
+                auto rate = sp.first.first * 100.0 / kinfo.time_total;
+                ss << sp.second << ':' << sp.first.second << 
+                    "("<< std::setprecision(3) << rate << "%), ";
+            }
+            if (shapes.size()>10)
+                ss << "... total " << shapes.size() << '\n';
+            fnames.back() += ss.str();
+        }
         order.push_back(order.size());
         // do not count relay op time
         if (kv.first.find("relay") == string::npos) {
             total_time += kinfo.time_total;
+            total_mem_access += kinfo.in_total + kinfo.out_total;
         }
         info.push_back({
             (double)kinfo.count, // Count
@@ -184,6 +273,7 @@ vector<vector<string>> Profiler::report(const string& sort_key) {
             (double)kinfo.time_max, // MaxTime
             (double)kinfo.in_total*1e9 / kinfo.time_total, // Input
             (double)kinfo.out_total*1e9 / kinfo.time_total, // Output
+            (double)(kinfo.in_total+kinfo.out_total)*1e9 / kinfo.time_total, // InOut
             (double)kinfo.compute_total*1e9 / kinfo.time_total, // Compute
         });
     }
@@ -219,9 +309,15 @@ vector<vector<string>> Profiler::report(const string& sort_key) {
     ss << "Total time:";
     output_float("num ", 1000, "s", total_time);
     ss << '\n';
+    ss << "Total Memory Access:";
+    output_float(" KMG", 1024, "B", total_mem_access);
+    ss << '\n';
     double cum_time = 0;
     for (auto i : order) {
         auto& name = names[i];
+        auto is_relay = name.find("relay") != string::npos;
+        if (is_relay && profiler_hide_relay)
+            continue;
         auto& fname = fnames[i];
         rep.push_back({name, fname});
         ss << std::setw(w) << name;
@@ -240,7 +336,7 @@ vector<vector<string>> Profiler::report(const string& sort_key) {
                 // output total ratio
                 if (j == 1) {
                     // do not count relay op time
-                    if (name.find("relay") != string::npos)
+                    if (is_relay)
                         k = 0;
                     cum_time += k;
                     ss << '(' << std::setw(3)
@@ -248,7 +344,7 @@ vector<vector<string>> Profiler::report(const string& sort_key) {
                         << std::setw(3)
                         << std::setprecision(p) << cum_time / total_time * 100 << "%)";
                 }
-            } else if (j<=6) {
+            } else if (j<=7) {
                 // output thoughtput
                 output_float(" KMG", 1024, "B/s", k);
             } else {

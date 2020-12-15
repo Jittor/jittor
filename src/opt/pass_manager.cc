@@ -13,6 +13,8 @@
 #include "opt/pass/split_loop_pass.h"
 #include "opt/pass/reorder_loop_pass.h"
 #include "opt/pass/merge_loop_pass.h"
+#include "opt/pass/merge_loop_var_pass.h"
+#include "opt/pass/const_var_pass.h"
 #include "opt/pass/expand_empty_block_pass.h"
 #include "opt/pass/solve_conflict_define_pass.h"
 #include "opt/pass/remove_intermediate_pass.h"
@@ -88,6 +90,9 @@ void PassManager::run_passes() {
     run_pass<RemoveIntermediatePass>();
     
     run_pass<SolveConflictDefinePass>();
+    run_pass<MergeLoopVarPass>();
+    // tmp disable ConstVarPass
+    // run_pass<ConstVarPass>();
 
     run_pass<RestridePass>();
     

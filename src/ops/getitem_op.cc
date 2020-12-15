@@ -10,7 +10,7 @@
 #include "ops/op_register.h"
 #ifdef JIT_cuda
 #include <cuda_runtime.h>
-#include <helper_cuda.h>
+#include "helper_cuda.h"
 #endif
 #ifndef JIT
 #include "misc/stack_vector.h"
