@@ -5,7 +5,7 @@
 // ***************************************************************
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>
-#include <helper_cuda.h>
+#include "helper_cuda.h"
 #endif
 #include <algorithm>
 #include "var.h"

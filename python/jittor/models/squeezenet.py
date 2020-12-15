@@ -83,8 +83,12 @@ def _squeezenet(version, **kwargs):
     model = SqueezeNet(version, **kwargs)
     return model
 
-def squeezenet1_0(**kwargs):
-    return _squeezenet('1_0', **kwargs)
+def squeezenet1_0(pretrained=False, **kwargs):
+    model = _squeezenet('1_0', **kwargs)
+    if pretrained: model.load("jittorhub://squeezenet1_0.pkl")
+    return model
 
-def squeezenet1_1(**kwargs):
-    return _squeezenet('1_1', **kwargs)
+def squeezenet1_1(pretrained=False, **kwargs):
+    model = _squeezenet('1_1', **kwargs)
+    if pretrained: model.load("jittorhub://squeezenet1_1.pkl")
+    return model

@@ -58,7 +58,7 @@
 
 // CUDA and CUBLAS functions
 #include <helper_functions.h>
-#include <helper_cuda.h>
+#include "helper_cuda.h"
 
 #ifndef min
 #define min(a,b) ((a < b) ? a : b)

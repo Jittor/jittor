@@ -101,7 +101,7 @@ class Dataset(object):
         Attrs:
 
             * batch_size(int): batch size, default 16.
-            * totol_len(int): totol lenght.
+            * total_len(int): total lenght.
             * shuffle(bool): shuffle at each epoch, default False.
             * drop_last(bool): if true, the last batch of dataset might smaller than batch_size, default True.
             * num_workers: number of workers for loading data
@@ -267,6 +267,9 @@ Example::
         LOG.i('\n'.join(msg))
 
     def _stop_all_workers(self):
+        # stop workers
+        for w in self.workers:
+            w.buffer.stop()
         # wait until all workers idle
         if self.num_idle.value < self.num_workers:
             with self.gid.get_lock():

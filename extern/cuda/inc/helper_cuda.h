@@ -101,11 +101,17 @@ const char *_cudaGetErrorEnum(NppStatus error);
 #endif
 #endif
 
+namespace jittor {
+extern bool peek_logged;
+}
+
 template <typename T>
 void peek(T result, char const *const func, const char *const file,
            int const line) {
   if (result) {
     // DEVICE_RESET
+    if (jittor::peek_logged) return;
+    jittor::peek_logged = 1;
     LOGe << "Peek CUDA error at" << file >> ":" >> line << " code="
       >> static_cast<unsigned int>(result) >> "(" << _cudaGetErrorEnum(result) << ")"
       << func;

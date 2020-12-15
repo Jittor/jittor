@@ -143,7 +143,7 @@ class ResNet(nn.Module):
         x = self.layer3(x)
         x = self.layer4(x)
         x = self.avgpool(x)
-        x = jt.reshape(x, (x.shape[0], (- 1)))
+        x = jt.reshape(x, (x.shape[0], -1))
         x = self.fc(x)
         return x
 
@@ -154,19 +154,26 @@ def _resnet(block, layers, **kwargs):
     model = ResNet(block, layers, **kwargs)
     return model
 
-def Resnet18(**kwargs):
-    return _resnet(BasicBlock, [2, 2, 2, 2], **kwargs)
+def Resnet18(pretrained=False, **kwargs):
+    model = _resnet(BasicBlock, [2, 2, 2, 2], **kwargs)
+    if pretrained: model.load("jittorhub://resnet18.pkl")
+    return model
 resnet18 = Resnet18
 
-def Resnet34(**kwargs):
-    return _resnet( BasicBlock, [3, 4, 6, 3], **kwargs)
+def Resnet34(pretrained=False, **kwargs):
+    model = _resnet(BasicBlock, [3, 4, 6, 3], **kwargs)
+    if pretrained: model.load("jittorhub://resnet34.pkl")
+    return model
 resnet34 = Resnet34
 
-def Resnet50(**kwargs):
-    return _resnet(Bottleneck, [3, 4, 6, 3], **kwargs)
+def Resnet50(pretrained=False, **kwargs):
+    model = _resnet(Bottleneck, [3, 4, 6, 3], **kwargs)
+    if pretrained: model.load("jittorhub://resnet50.pkl")
+    return model
+
 resnet50 = Resnet50
 
-def Resnet101(**kwargs):
+def Resnet101(pretrained=False, **kwargs):
     """
     ResNet-101 model architecture.
 
@@ -180,28 +187,38 @@ def Resnet101(**kwargs):
     return _resnet(Bottleneck, [3, 4, 23, 3], **kwargs)
 resnet101 = Resnet101
 
-def Resnet152(**kwargs):
-    return _resnet(Bottleneck, [3, 8, 36, 3], **kwargs)
+def Resnet152(pretrained=False, **kwargs):
+    model = _resnet(Bottleneck, [3, 8, 36, 3], **kwargs)
+    if pretrained: model.load("jittorhub://resnet152.pkl")
+    return model
 resnet152 = Resnet152
 
-def Resnext50_32x4d(**kwargs):
+def Resnext50_32x4d(pretrained=False, **kwargs):
     kwargs['groups'] = 32
     kwargs['width_per_group'] = 4
-    return _resnet(Bottleneck, [3, 4, 6, 3], **kwargs)
+    model = _resnet(Bottleneck, [3, 4, 6, 3], **kwargs)
+    if pretrained: model.load("jittorhub://resnext50_32x4d.pkl")
+    return model
 resnext50_32x4d = Resnext50_32x4d
 
-def Resnext101_32x8d(**kwargs):
+def Resnext101_32x8d(pretrained=False, **kwargs):
     kwargs['groups'] = 32
     kwargs['width_per_group'] = 8
-    return _resnet(Bottleneck, [3, 4, 23, 3], **kwargs)
+    model = _resnet(Bottleneck, [3, 4, 23, 3], **kwargs)
+    if pretrained: model.load("jittorhub://resnext101_32x8d.pkl")
+    return model
 resnext101_32x8d = Resnext101_32x8d
 
-def Wide_resnet50_2(**kwargs):
+def Wide_resnet50_2(pretrained=False, **kwargs):
     kwargs['width_per_group'] = (64 * 2)
-    return _resnet(Bottleneck, [3, 4, 6, 3], **kwargs)
+    model = _resnet(Bottleneck, [3, 4, 6, 3], **kwargs)
+    if pretrained: model.load("jittorhub://wide_resnet50_2.pkl")
+    return model
 wide_resnet50_2 = Wide_resnet50_2
 
-def Wide_resnet101_2(**kwargs):
+def Wide_resnet101_2(pretrained=False, **kwargs):
     kwargs['width_per_group'] = (64 * 2)
-    return _resnet(Bottleneck, [3, 4, 23, 3], **kwargs)
+    model = _resnet(Bottleneck, [3, 4, 23, 3], **kwargs)
+    if pretrained: model.load("jittorhub://wide_resnet101_2.pkl")
+    return model
 wide_resnet101_2 = Wide_resnet101_2

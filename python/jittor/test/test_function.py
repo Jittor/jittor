@@ -26,6 +26,19 @@ class TestFunction(unittest.TestCase):
         da = jt.grad(b, a)
         assert da.data == -1
 
+    def test_apply(self):
+        class MyFunc(Function):
+            def execute(self, x):
+                return x+1
+
+            def grad(self, grad):
+                return grad-2
+        a = jt.ones(1)
+        func = MyFunc.apply
+        b = func(a)
+        da = jt.grad(b, a)
+        assert da.data == -1
+
     def test2(self):
         class MyFunc(Function):
             def execute(self, x):
