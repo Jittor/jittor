@@ -935,7 +935,10 @@ def format(v, spec):
     return v.item().__format__(spec)
 Var.__format__ = format
 
+def get_len(var):
+    return var.shape[0]
 
+Var.__len__ = get_len
 int = int32
 Var.int = Var.int32
 float = float32
@@ -952,3 +955,4 @@ from . import contrib
 from . import numpy2cupy
 from .contrib import concat
 from .misc import *
+from . import sparse
