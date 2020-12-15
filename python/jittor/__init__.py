@@ -882,11 +882,14 @@ def to_bool(v):
     assert dtype.startswith("int") or dtype=="bool"
     return ori_bool(v.item())
 
+def get_len(var):
+    return var.shape[0]
+
 Var.item = item
 Var.__int__ = to_int
 Var.__float__ = to_float
 Var.__bool__ = to_bool
-
+Var.__len__ = get_len
 int = int32
 Var.int = Var.int32
 float = float32
@@ -903,3 +906,4 @@ from . import contrib
 from . import numpy2cupy
 from .contrib import concat
 from .misc import *
+from . import sparse
