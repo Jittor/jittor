@@ -42,7 +42,7 @@ struct Var : Node {
     int64_t numel();
     void set_shape(NanoVector shape);
     bool alloc(Allocator* allocator);
-    inline void share_with(Var* x) { CHECK_EXIST; allocator = (Allocator*)x; }
+    inline void share_with(Var* x, size_t offset = 0) { CHECK_EXIST; allocator = (Allocator*)x; allocation = offset; }
 };
 
 struct VarPtr {

@@ -17,7 +17,7 @@ inline static bool fast_strcmp(const char* a, const char* b) {
 }
 
 static void setitem_inplace(SetitemOp* op) {
-    // LOGir << "setitem_inplace";
+    // LOGir << "in setitem_inplace";
     auto input = op->inputs().front();
     if (!(input->outputs().size() == 1 && 
         input->forward_liveness<=1 &&
@@ -29,8 +29,7 @@ static void setitem_inplace(SetitemOp* op) {
         // make sure input op will not use input
         auto input_name = input_op->name();
         if (!(input_op->type() == OpType::broadcast || 
-            fast_strcmp(input_name, "array") || 
-            fast_strcmp(input_name, "empty") || 
+            input_op->inputs().size() == 0 ||
             fast_strcmp(input_name, "setitem") ||
             fast_strcmp(input_name, "getitem")))
             // TODO: inplace getitem maybe risky, getitem maybe inplace too
@@ -38,7 +37,44 @@ static void setitem_inplace(SetitemOp* op) {
     }
     auto output = op->outputs().front();
     output->share_with(input);
-    // LOGir << "apply setitem_inplace on" << op << "input:" << input << "output:" << output;
+    
+    // LOGir << "pass setitem optim one";
+
+    auto data = op->input(1);
+    input_op = input->input();
+
+    if (input_op && input_op->inputs().size() == 1) {
+        input_op = input_op->inputs().front()->input();
+    }
+    if (input_op && input_op->inputs().size() == 1) {
+        input_op = input_op->inputs().front()->input();
+    }
+
+    VarSlices vs = op->vs;
+    if (!(data->is_finished() == 0 && (data->outputs().size() == 1 || (!input_op || input_op->inputs().size() == 0))))
+        return;
+
+    auto in_shape = input->shape;
+    for (int i = vs.n - 1; i > 0; --i) {
+        VarSlice s = vs.slices[i];
+        if (!(s.is_slice())) return;
+        Slice ss = s.slice;
+        if (!(ss.start == 0 && ss.stop >= in_shape[i] && ss.step == 1))
+            return; 
+    }
+    
+    VarSlice s = vs.slices[0];
+    if (s.is_var()) return;
+    
+    auto size = 0;
+    if (s.is_int())
+        size = s.i * input->size / in_shape[0];
+    else if (s.is_slice())
+        size = s.slice.start * input->size / in_shape[0];
+    
+    data->input()->add_inputs(vector<Var*>{input});
+    data->share_with(input, size);
+    // LOGir << "pass setitem optim two";
 }
 
 struct BBox {
@@ -103,6 +139,39 @@ static void setitem_grad_opt(GetitemOp* op) {
 
 }
 
+static void getitem_inplace(GetitemOp* op) {
+    // LOGir << "in getitem_inplace";
+
+    auto in = op->inputs().front();
+    auto ou = op->outputs().front();
+    
+    // return if input or output's shape is variable
+    if (in->num < 0 || ou->num < 0)
+        return;
+
+    VarSlices vs = op->vs;
+    auto in_shape = in->shape;
+
+    for (int i = vs.n - 1; i > 0; --i) {
+        VarSlice s = vs.slices[i];
+        if (!(s.is_slice())) return;
+        Slice ss = s.slice;
+        if (!(ss.start == 0 && ss.stop >= in_shape[i] && ss.step == 1))
+            return; 
+    }
+    
+    VarSlice s = vs.slices[0];
+    if (s.is_var()) return;
+    
+    auto size = 0;
+    if (s.is_int())
+        size = s.i * in->size / in_shape[0];
+    else if (s.is_slice())
+        size = s.slice.start * in->size / in_shape[0];
+    ou->share_with(in, size);
+    // LOGir << "pass getitem_inplace";
+}
+
 void SetitemOp::graph_optimize() {
     // LOGir << "hello graph_optimize";
     setitem_inplace(this);
@@ -113,6 +182,8 @@ void GetitemOp::graph_optimize() {
     // LOGir << "hello getitem graph_optimize";
     // setitem_grad_opt(this);
     (void)setitem_grad_opt;
+    // (void)getitem_inplace;
+    getitem_inplace(this);
 }
 
 }

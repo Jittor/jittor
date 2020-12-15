@@ -12,6 +12,35 @@ import numpy as np
 import math
 from collections.abc import Sequence,Iterable
 
+def __copy__(x):
+    return x.copy().detach()
+jt.Var.__copy__ = __copy__
+
+def __deepcopy__(x,memo):
+    result = x.copy().detach()
+    memo[id(x)]=result
+    return result
+jt.Var.__deepcopy__ = __deepcopy__
+
+def __len__(x):
+    return x.shape[0]
+jt.Var.__len__ = __len__
+
+def __iter__(x):
+    result = []
+    for i in range(x.shape[0]):
+        result.append(x[i])
+    return result.__iter__()
+jt.Var.__iter__ = __iter__
+
+def all(x, dim=[]):
+    return x.all_(dim).bool()
+jt.Var.all = all
+
+def any(x,dim):
+    return x.any_(dim).bool()
+jt.Var.any = any
+    
 
 def repeat(x, *shape):
     r'''
@@ -47,11 +76,24 @@ def repeat(x, *shape):
         x = x.broadcast(x_shape)
     elif len_x_shape > len_shape:
         rep_shape = (len_x_shape - len_shape) * [1] + shape
+
+    reshape_shape = []
+    broadcast_shape = []
+    for x_s,r_s in zip(x_shape,rep_shape):
+        reshape_shape.append(1)
+        reshape_shape.append(x_s)
+
+        broadcast_shape.append(r_s)
+        broadcast_shape.append(1)
+
+    x = x.reshape(reshape_shape)
+    x = x.broadcast(broadcast_shape)
+
     tar_shape = (np.array(x_shape) * np.array(rep_shape)).tolist()
-    dims = []
-    for i in range(len(tar_shape)): dims.append(f"i{i}%{x_shape[i]}")
-    return x.reindex(tar_shape, dims)
-    
+
+    x = x.reshape(tar_shape)
+    return x
+
 jt.Var.repeat = repeat
 
 def repeat_interleave(x,repeats,dim=None):
@@ -188,15 +230,18 @@ def flip(x, dim=0):
         >>> x.flip(1)
         [[4 3 2 1]]
     '''
-    assert isinstance(dim, int)
-    if dim<0:
-        dim+=x.ndim
-    assert dim>=0 and dim<len(x.shape)
+    if isinstance(dim, int):
+        dim = [dim]
+    for i in range(len(dim)):
+        if dim[i]<0:
+            dim[i] += x.ndim
+        assert dim[i]>=0 and dim[i]<x.ndim
+    dim = set(dim)
 
     tar_dims = []
     for i in range(len(x.shape)):
-        if i == dim:
-            tar_dims.append(f"{x.shape[dim]-1}-i{i}")
+        if i in dim:
+            tar_dims.append(f"xshape{i}-1-i{i}")
         else:
             tar_dims.append(f"i{i}")
     return x.reindex(x.shape, tar_dims)
@@ -314,15 +359,36 @@ def unbind(x, dim=0):
 jt.Var.unbind = unbind
 
 def make_grid(x, nrow=8, padding=2, normalize=False, range=None, scale_each=False, pad_value=0):
-    assert range == None
+    assert isinstance(range, tuple) or range is None
     assert scale_each == False
     if isinstance(x, list): x = jt.stack(x)
-    if normalize: x = (x - x.min()) / (x.max() - x.min())
+    if normalize: 
+        if range is None: x = (x - x.min()) / (x.max() - x.min())
+        else: x = (x - range[0]) / (range[1] - range[0])
     b,c,h,w = x.shape
     ncol = math.ceil(b / nrow)
     return x.reindex([c, h*ncol+(ncol+1)*padding, w*nrow+(nrow+1)*padding], 
                      [f"i1/{padding+h}*{nrow}+i2/{padding+w}", "i0", 
                       f"i1-i1/{padding+h}*{padding+h}-{padding}", f"i2-i2/{padding+w}*{padding+w}-{padding}"], overflow_value=pad_value)
+
+def save_image(
+    x,
+    filepath,
+    nrow: int = 8,
+    padding: int = 2,
+    normalize: bool = False,
+    range = None,
+    scale_each = False,
+    pad_value = 0,
+    format = None
+):
+    from PIL import Image
+    grid = make_grid(x, nrow=nrow, padding=padding, pad_value=pad_value,
+                     normalize=normalize, range=range, scale_each=scale_each)
+
+    ndarr = (grid*255+0.5).clamp(0, 255).permute(1, 2, 0).uint8().numpy()
+    im = Image.fromarray(ndarr)
+    im.save(filepath, format=format)
 
 
 def _ntuple(n):
@@ -348,9 +414,8 @@ def unique(x):
     '''
     x = x.reshape(-1)
     _,x = jt.argsort(x)
-    index2 = [i for i in range(1,x.shape[0])]
-    index1 = [i for i in range(x.shape[0]-1)]
-    y = x[1:][x[index2] != x[index1]]
+    index,= jt.index((x.shape[0],))
+    y = x[1:][x[index[1:]] != x[index[:-1]]]
     x = jt.contrib.concat([x[:1],y],dim=0)
     return x
 
@@ -422,12 +487,6 @@ def log2(x):
     return jt.log(x)/math.log(2.0)
 
 jt.Var.log2 = log2
-
-def item(x):
-    assert x.ndim==1 and x.shape[0]==1
-    return x.numpy().item()
-
-jt.Var.item  = item
 
 def meshgrid(*tensors):
     r'''

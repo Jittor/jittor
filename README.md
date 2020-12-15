@@ -210,14 +210,14 @@ import jittor as jt
 jt.flags.use_cuda = 1
 ```
 
-### Optional Step 5: Run full tests
+### Optional Step 5: Test Resnet18 training
 
 
-To check the integrity of Jittor, you can run full tests.
+To check the integrity of Jittor, you can run Resnet18 training test.
 
 
 ```bash
-python3.7 -m jittor.test -v
+python3.7 -m jittor.test.test_resnet
 ```
 if those tests are failed, please report bugs for us, and feel free to contribute ^_^
 
@@ -353,11 +353,31 @@ Email: jittor@qq.com
 
 File an issue: https://github.com/Jittor/jittor/issues
 
+QQ Group: 761222083
+
+
+<img src="https://cg.cs.tsinghua.edu.cn/jittor/images/news/2020-12-8-21-19-1_2_2/fig4.png" width="200"/>
+
 ## The Team
 
 
-Jittor is currently maintained by Dun Liang, Guo-Ye Yang, Guo-Wei Yang,  Wen-Yang Zhou and Meng-Hao Guo etc. from the [Tsinghua CSCG Group](https://cg.cs.tsinghua.edu.cn/). If you are also interested in Jittor and want to improve it, Please join us!
+Jittor is currently maintained by the [Tsinghua CSCG Group](https://cg.cs.tsinghua.edu.cn/). If you are also interested in Jittor and want to improve it, Please join us!
 
+
+## Citation
+
+
+```
+@article{hu2020jittor,
+  title={Jittor: a novel deep learning framework with meta-operators and unified graph execution},
+  author={Hu, Shi-Min and Liang, Dun and Yang, Guo-Ye and Yang, Guo-Wei and Zhou, Wen-Yang},
+  journal={Information Sciences},
+  volume={63},
+  number={222103},
+  pages={1--222103},
+  year={2020}
+}
+```
 
 ## License
 

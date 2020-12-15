@@ -175,10 +175,10 @@ class Res2Net(Module):
         x = self.layer4(x)
         return x, low_level_feat
     
-def res2net50(output_stride):
+def res2net50(output_stride=16):
     model = Res2Net(Bottle2neck, [3,4,6,3], output_stride)
     return model
 
-def res2net101(output_stride):
+def res2net101(output_stride=16):
     model = Res2Net(Bottle2neck, [3,4,23,3], output_stride)
     return model

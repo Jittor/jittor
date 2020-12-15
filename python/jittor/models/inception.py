@@ -4,7 +4,9 @@ from jittor import nn
 __all__ = ['Inception3', 'inception_v3']
 
 def inception_v3(pretrained=False, progress=True, **kwargs):
-    return Inception3(**kwargs)
+    model = Inception3(**kwargs)
+    if pretrained: model.load("jittorhub://inception_v3.pkl")
+    return model
 
 class Inception3(nn.Module):
     """ Inceptionv3 model architecture.

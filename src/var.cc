@@ -64,7 +64,7 @@ bool Var::alloc(Allocator* allocator) {
     if (mem_ptr) return true;
     if (auto* x = (Var*)(this->allocator)) {
         if (x->allocator->share_with(size, x->allocation)) {
-            mem_ptr = x->mem_ptr;
+            mem_ptr = ((char*) x->mem_ptr) + allocation;
             allocation = x->allocation;
             this->allocator = x->allocator;
             return true;
@@ -89,8 +89,12 @@ std::ostream& operator<<(std::ostream& os, const Var& var) {
         << ')' << var.shape;
 #ifdef NODE_MEMCHECK
     os << '<' << var.__id() << '>';
-    print_node_trace(&var, os);
 #endif
+    if (trace_py_var) {
+        os << '{';
+        print_node_trace(&var, os);
+        os << '}';
+    }
     return os;
 }
 std::ostream& operator<<(std::ostream& os, const Var* var) {

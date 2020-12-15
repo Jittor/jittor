@@ -178,7 +178,7 @@ void CudnnConvBackwardXOp::jit_run() {
         CUDNN_CONVOLUTION_BWD_DATA_ALGO_WINOGRAD,
         CUDNN_CONVOLUTION_BWD_DATA_ALGO_WINOGRAD_NONFUSED
     };
-    int num_algos = CUDNN_CONVOLUTION_BWD_FILTER_ALGO_COUNT;
+    int num_algos = CUDNN_CONVOLUTION_BWD_DATA_ALGO_COUNT;
     int perf_count;
     cudnnConvolutionBwdDataAlgoPerf_t perf_results[num_algos];
     cudnnConvolutionBwdDataAlgo_t algo;
@@ -199,7 +199,7 @@ void CudnnConvBackwardXOp::jit_run() {
                 size_t sz;
                 cudnnStatus_t ret = cudnnGetConvolutionBackwardDataWorkspaceSize(handle_, cudnnFdesc, cudnnOdesc, cudnnConvDesc, cudnnIdesc, algos[i], &sz);
                 // continue if use too much workspace
-                if (sz*4 > mem_info.total_cuda_ram) continue;
+                if (sz > mem_info.total_cuda_ram * max_workspace_ratio) continue;
                 if (CUDNN_STATUS_SUCCESS == ret && sz > max_ws_size) max_ws_size = sz;
             } 
             size_t allocation;

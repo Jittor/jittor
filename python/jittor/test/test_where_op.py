@@ -43,7 +43,7 @@ class TestWhereOp(unittest.TestCase):
         x = a.reindex_var(self.where(a>0.1))
         x = x.reindex_var(self.where(x<0.9))
         na = a.data
-        assert (na[np.logical_and(na>0.1, na<0.9)]==x.data).all()
+        assert np.allclose(na[np.logical_and(na>0.1, na<0.9)], x.data)
 
     def test_reduce_dep(self):
         a = jt.random([100,100])

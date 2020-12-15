@@ -69,7 +69,7 @@ void SetitemOp::infer_shape() {
     for (int i=0; i<data_dim; i++) {
         int j = i - data_dim + out_shape.size();
         if (!(data_shape[i]==1 && out_shape[j]!=-1)) {
-            CHECK(data_shape[i]<0 || data_shape[i]==out_shape[j])
+            CHECK(data_shape[i]<0 || out_shape[j]<0 || data_shape[i]==out_shape[j])
                 << "Data shape not match" << data_shape << out_shape;
             bmask |= 1<<j;
         }
@@ -311,6 +311,10 @@ void SetitemOp::jit_run() {
     if (op != ip)
         checkCudaErrors(cudaMemcpyAsync(op, ip, out->size, cudaMemcpyDefault, 0));
     #endif
+
+    if (data->allocation == in->allocation && 
+        data->allocator == in->allocator)
+        return;
 
     @for(d, 0, ODIM, for (index_t i@d=0; i@d < oshape@d; i@d++)) {
         index_t did = 0 @for(d, 0, ODIM, @if((BMASK>>d)&1,+ i@d * dstride@d));

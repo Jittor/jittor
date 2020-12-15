@@ -22,6 +22,11 @@ struct DataView {
     NanoString dtype;
 };
 
+struct ItemData {
+    int64 data;
+    NanoString dtype;
+};
+
 // @pyjt(Var)
 // @attrs(heaptype)
 struct VarHolder {
@@ -144,6 +149,10 @@ struct VarHolder {
         #endif
         return {this, var->mem_ptr, var->shape, var->dtype()};
     }
+
+    /** Get one item data */
+    // @pyjt(item)
+    ItemData item();
 
     // @pyjt(__get__ndim)
     inline int ndim() {
