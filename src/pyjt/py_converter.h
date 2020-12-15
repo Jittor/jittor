@@ -734,7 +734,13 @@ void load_var_slice(PyObject* obj, T* var_slice, vector<unique_ptr<VarHolder>>& 
     } else 
     if (obj == Py_None) {
         var_slice->set_none();
-    }else {
+    } else
+    if (PyObject_TypeCheck(obj, PyNumberArrType_Type)) {
+        PyArrayDescr_Proxy array_descr = {.type_num = 5}; // 5: int32
+        int value;
+        PyArray_CastScalarToCtype(obj, &value, &array_descr);
+        var_slice->set_int(value);
+    } else {
         holders.emplace_back();
         auto* vh = from_py_object<VarHolder*>(obj, holders.back());
         auto vv = (Var**)vh;
