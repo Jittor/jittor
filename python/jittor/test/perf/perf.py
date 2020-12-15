@@ -55,7 +55,11 @@ RUN pip3 install torch torchvision
     with open("/tmp/perf_dockerfile", 'w') as f:
         f.write(dockerfile_src)
     assert os.system("sudo nvidia-smi -lgc 1500") == 0
-    assert os.system(f"sudo docker build --tag jittor/jittor-perf{suffix} -f /tmp/perf_dockerfile .") == 0
+
+    # if the docker image is not built 
+    if os.system(f"sudo docker image inspect jittor/jittor-perf{suffix}"):
+        assert os.system(f"sudo docker build --tag jittor/jittor-perf{suffix} -f /tmp/perf_dockerfile .") == 0
+
     # run once for compile source
     jt_fps = test_main("jittor", "resnet50", 1)
     
