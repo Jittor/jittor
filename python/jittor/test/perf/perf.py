@@ -180,7 +180,8 @@ def test(name, model_name, bs):
                 loss.backward()
                 opt.step()
         else:
-            x.sync()
+            if name == "jittor":
+                x.sync()
     sync()
     for i in time_iter():
         iter()
