@@ -128,8 +128,10 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
             }
         }
         if (!need_opt) break;
+        toplogical_sort_forward_inplace(bfs_q, [&](Node* n) {});
+        SetupFreeBuffer setup_free_buffer;
         for (Node* n : bfs_q) {
-            if (n->flags.get(NodeFlags::_has_gopt)) {
+            if (!n->need_free() && n->flags.get(NodeFlags::_has_gopt)) {
                 n->op()->graph_optimize();
                 n->flags.set(NodeFlags::_has_gopt, 0);
             }

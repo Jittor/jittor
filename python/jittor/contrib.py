@@ -226,13 +226,11 @@ Example::
     shape = list(a.shape)
     shape[dim] = total_dim
     s = jt.empty(shape, a.dtype)
-    slices = [slice(None)]*len(a.shape)
+    slices = [slice(None)]*(dim+1)
     for a in arr:
         if a.shape[dim] == 0:
             continue
         slices[dim] = slice(cdim, cdim+a.shape[dim])
-        # print(slices, type(a))
         s = s.setitem(tuple(slices), a)
-        # s = jt.setitem(s, tuple(slices), a)
         cdim += a.shape[dim]
     return s
