@@ -51,7 +51,29 @@ def repeat(x, *shape):
     dims = []
     for i in range(len(tar_shape)): dims.append(f"i{i}%{x_shape[i]}")
     return x.reindex(tar_shape, dims)
+    
 jt.Var.repeat = repeat
+
+def repeat_interleave(x,repeats,dim=None):
+    # TODO repeats is jt.Var
+    assert isinstance(repeats,int)
+    if dim == None:
+        x = x.reshape(-1)
+        dim=0
+    if dim<0: dim+=x.ndim
+    
+    tar_shape = list(x.shape)
+    x_shape = list(x.shape)
+    tar_shape[dim] = tar_shape[dim]*repeats 
+    dims = []
+    for i in range(len(tar_shape)):
+        if dim==i:
+            dims.append(f"i{i}/{repeats}")
+        else:
+            dims.append(f"i{i}")
+    return x.reindex(tar_shape,dims)
+
+jt.Var.repeat_interleave = repeat_interleave
 
 def chunk(x, chunks, dim=0):
     r'''
