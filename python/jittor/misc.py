@@ -338,10 +338,12 @@ def unbind(x, dim=0):
 jt.Var.unbind = unbind
 
 def make_grid(x, nrow=8, padding=2, normalize=False, range=None, scale_each=False, pad_value=0):
-    assert range == None
+    assert isinstance(range, tuple) or range is None
     assert scale_each == False
     if isinstance(x, list): x = jt.stack(x)
-    if normalize: x = (x - x.min()) / (x.max() - x.min())
+    if normalize: 
+        if range is None: x = (x - x.min()) / (x.max() - x.min())
+        else: x = (x - range[0]) / (range[1] - range[0])
     b,c,h,w = x.shape
     ncol = math.ceil(b / nrow)
     return x.reindex([c, h*ncol+(ncol+1)*padding, w*nrow+(nrow+1)*padding], 
