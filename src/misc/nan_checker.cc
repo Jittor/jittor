@@ -6,9 +6,11 @@
 #include <cfloat>
 #include <cmath>
 #include "misc/nan_checker.h"
+#ifdef HAS_CUDA
 #include "misc/cuda_flags.h"
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
+#endif
 #include "mem/allocator.h"
 #include "op.h"
 
