@@ -736,7 +736,8 @@ void load_var_slice(PyObject* obj, T* var_slice, vector<unique_ptr<VarHolder>>& 
         var_slice->set_none();
     } else
     if (PyObject_TypeCheck(obj, PyNumberArrType_Type)) {
-        PyArrayDescr_Proxy array_descr = {.type_num = 5}; // 5: int32
+        PyArrayDescr_Proxy array_descr;
+        array_descr.type_num = 5; // 5: int32
         int value;
         PyArray_CastScalarToCtype(obj, &value, &array_descr);
         var_slice->set_int(value);

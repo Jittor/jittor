@@ -952,7 +952,8 @@ pyjt_gen_src = pyjt_compiler.compile(cache_path, jittor_path)
 # 3. op_utils
 # 4. other
 files2 = pyjt_gen_src
-files4 = run_cmd('find -L src | grep "c[cu]$"', jittor_path).splitlines()
+grep_args = '"c[cu]$"' if has_cuda else '"cc$"'
+files4 = run_cmd('find -L src | grep '+grep_args, jittor_path).splitlines()
 at_beginning = [
     "src/ops/op_utils.cc",
     "src/event_queue.cc",
