@@ -627,12 +627,11 @@ def gather(x,dim,index):
     return x.reindex(ins)
 jt.Var.gather = gather
 
-def prod(x,dim=0):
+def _prod(x,dim=0):
     x = jt.log(x)
     x = x.sum(dim=dim)
     return jt.exp(x)
 
-jt.Var.prod = prod
 
 def cumsum_forward(np, data):
     a = data['inputs'][0]

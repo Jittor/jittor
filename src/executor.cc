@@ -21,6 +21,7 @@
 #include "fuser.h"
 #include "profiler/profiler_guard.h"
 #include "parallel_compiler.h"
+#include "misc/nan_checker.h"
 
 namespace jittor {
 
@@ -46,7 +47,10 @@ void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, i
     for (Op* op : fused_op.ops) {
         uint fid1 = op->custom_data;
         int iid = 0;
-        for (Var* v : op->inputs()) {
+        for (auto ve : op->_inputs) {
+            // this is a control dependency edge, dont used
+            if (ve.back->index<0) continue;
+            auto v = ve.node->var();
             iid++;
             int iop_id;
             int iv_id;
@@ -450,6 +454,8 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
             if (use_cuda)
                 checkCudaErrors(cudaDeviceSynchronize());
             #endif
+            for (Var* var : op->outputs())
+                check_nan(var);
         }
         LOGvvv << "Finished Op(" >> op->name() << rid >> 
             "/" >> queue.size() >> ") output:" << op->outputs();

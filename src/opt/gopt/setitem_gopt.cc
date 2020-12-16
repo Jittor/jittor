@@ -16,6 +16,17 @@ inline static bool fast_strcmp(const char* a, const char* b) {
     return !*b;
 }
 
+// add dependency b -> a
+static inline void add_dependency(Node* a, const vector<Node*>& b) {
+    a->add_inputs(b);
+    auto edge = a->_inputs.end();
+    for (int i=0; i<b.size(); i++) {
+        edge = std::prev(edge);
+        // set -1 mean this is a control dependency edge
+        edge->back->index = -1;
+    }
+}
+
 static void setitem_inplace(SetitemOp* op) {
     // LOGir << "in setitem_inplace";
     auto input = op->inputs().front();
@@ -37,6 +48,7 @@ static void setitem_inplace(SetitemOp* op) {
     }
     auto output = op->outputs().front();
     output->share_with(input);
+    // return;
     
     // LOGir << "pass setitem optim one";
 
@@ -51,7 +63,12 @@ static void setitem_inplace(SetitemOp* op) {
     }
 
     VarSlices vs = op->vs;
-    if (!(data->is_finished() == 0 && (data->outputs().size() == 1 || (!input_op || input_op->inputs().size() == 0))))
+    if (!(data->is_finished() == 0 && 
+          (data->outputs().size() == 1 || 
+           (!input_op 
+            || input_op->inputs().size() == 0))))
+        return;
+    if (data->allocator)
         return;
 
     auto in_shape = input->shape;
@@ -72,7 +89,7 @@ static void setitem_inplace(SetitemOp* op) {
     else if (s.is_slice())
         size = s.slice.start * input->size / in_shape[0];
     
-    data->input()->add_inputs(vector<Var*>{input});
+    add_dependency(data->input(), {input->node()});
     data->share_with(input, size);
     // LOGir << "pass setitem optim two";
 }
@@ -175,6 +192,7 @@ static void getitem_inplace(GetitemOp* op) {
 void SetitemOp::graph_optimize() {
     // LOGir << "hello graph_optimize";
     setitem_inplace(this);
+    (void)setitem_inplace;
 }
 
 void GetitemOp::graph_optimize() {
@@ -184,6 +202,7 @@ void GetitemOp::graph_optimize() {
     (void)setitem_grad_opt;
     // (void)getitem_inplace;
     getitem_inplace(this);
+    (void)getitem_inplace;
 }
 
 }

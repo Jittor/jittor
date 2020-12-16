@@ -930,7 +930,6 @@ def to_bool(v):
 def get_len(var):
     return var.shape[0]
 
-Var.item = item
 Var.__int__ = to_int
 Var.__float__ = to_float
 Var.__bool__ = to_bool
