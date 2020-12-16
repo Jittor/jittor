@@ -74,10 +74,17 @@ def compile(compiler, flags, inputs, output, combind_build=False):
     for input, obj_file in zip(inputs, obj_files):
         cc = compiler
         nflags = oflags
-        if has_cuda and input.endswith(".cu"):
-            nflags = convert_nvcc_flags(oflags)
-            cc = nvcc_path
+        if input.endswith(".cu"):
+            if has_cuda:
+                nflags = convert_nvcc_flags(oflags)
+                cc = nvcc_path
+            else:
+                continue
         cmd = f"{cc} {input} {nflags} -c {lto_flags} -o {obj_file}"
+        if "nan_checker" in input:
+            # nan checker needs to disable fast_math 
+            cmd = cmd.replace("--use_fast_math", "")
+            cmd = cmd.replace("-Ofast", "-O2")
         cmds.append(cmd)
     jit_utils.run_cmds(cmds, cache_path, jittor_path, "Compiling "+base_output)
     cmd = f"{compiler} {' '.join(obj_files)} {flags} {lto_flags} {link} -o {output}"
@@ -945,7 +952,7 @@ pyjt_gen_src = pyjt_compiler.compile(cache_path, jittor_path)
 # 3. op_utils
 # 4. other
 files2 = pyjt_gen_src
-files4 = run_cmd('find -L src | grep "cc$"', jittor_path).splitlines()
+files4 = run_cmd('find -L src | grep "c[cu]$"', jittor_path).splitlines()
 at_beginning = [
     "src/ops/op_utils.cc",
     "src/event_queue.cc",
