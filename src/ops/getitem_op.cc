@@ -447,6 +447,9 @@ void GetitemOp::jit_run() {
     auto in = inputs().front();
     auto out = outputs().front();
     if (out->num == 0) return;
+    if (out->allocation == in->allocation && 
+        out->allocator == in->allocator)
+        return;
 
     @for(i, 0, ODIM, index_t oshape@i = o_shape[@i];)
     @if(ODIM>0,

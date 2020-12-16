@@ -111,6 +111,34 @@ void toplogical_sort_forward(vector<Node*>& nodes, vector<Node*>& sorted, Func&&
     ASSERTop(nodes.size(),==,sorted.size());
 }
 
+template <typename Func>
+void toplogical_sort_forward_inplace(vector<Node*>& nodes, Func&& func) {
+    auto t = ++Node::tflag_count;
+    int sorted_size = 0;
+    for (auto node : nodes) node->tflag = t;
+    for (auto node : nodes) {
+        auto& deps = node->custom_data;
+        deps = 0;
+        for (auto i : node->_inputs)
+            if (i.node->tflag == t)
+                deps++;
+        if (deps == 0)
+            nodes[sorted_size++] = node;
+    }
+    int i=0;
+    while (i < sorted_size) {
+        Node* node = nodes[i++];
+        for (auto o : node->_outputs)
+            if (o.node->tflag == t) {
+                o.node->custom_data--;
+                if (o.node->custom_data == 0)
+                    nodes[sorted_size++] = o.node;
+            }
+        func(node);
+    }
+    ASSERTop(nodes.size(),==,sorted_size);
+}
+
 
 template <typename Func>
 void toplogical_sort_backward(vector<Node*>& nodes, vector<Node*>& sorted, Func&& func) {
