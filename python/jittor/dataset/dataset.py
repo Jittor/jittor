@@ -117,6 +117,7 @@ class Dataset(object):
         '''
         Change batch data to jittor array, such as np.ndarray, int, and float.
         '''
+        if isinstance(batch, jt.Var): return batch
         to_jt = lambda x: jt.array(x).stop_grad() \
             if self.stop_grad else jt.array(x)
         if isinstance(batch, np.ndarray):
