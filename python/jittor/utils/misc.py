@@ -38,7 +38,7 @@ def download_url_to_local(url, filename, root_folder, md5):
     ensure_dir(root_folder)
     file_path = os.path.join(root_folder, filename)
     if check_file_exist(file_path, md5):
-        print("Data file has been downloaded and verified")
+        return
     else:
         try:
             print('Downloading ' + url + ' to ' + file_path)

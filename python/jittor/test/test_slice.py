@@ -140,6 +140,11 @@ class TestSlice(unittest.TestCase):
         a[c] = 0
         assert (a.data == [1,2,3,0,0]).all()
 
+    def test_numpy_scalar_slice(self):
+        a = jt.random((2,2))
+        b = np.array([1])[0]
+        assert a[b].shape == [2]
+
 
 
 if __name__ == "__main__":

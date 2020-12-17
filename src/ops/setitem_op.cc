@@ -312,6 +312,10 @@ void SetitemOp::jit_run() {
         checkCudaErrors(cudaMemcpyAsync(op, ip, out->size, cudaMemcpyDefault, 0));
     #endif
 
+    if (data->allocation == in->allocation && 
+        data->allocator == in->allocator)
+        return;
+
     @for(d, 0, ODIM, for (index_t i@d=0; i@d < oshape@d; i@d++)) {
         index_t did = 0 @for(d, 0, ODIM, @if((BMASK>>d)&1,+ i@d * dstride@d));
         @for(d, 0, IDIM, index_t iid@d = 

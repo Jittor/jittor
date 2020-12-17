@@ -12,8 +12,10 @@ from jittor import nn
 
 __all__ = ['GoogLeNet', 'googlenet']
 
-def googlenet(**kwargs):
-    return GoogLeNet(**kwargs)
+def googlenet(pretrained=False, **kwargs):
+    model = GoogLeNet(**kwargs)
+    if pretrained: model.load("jittorhub://googlenet.pkl")
+    return model
 
 class GoogLeNet(nn.Module):
     """ GoogLeNet model architecture.

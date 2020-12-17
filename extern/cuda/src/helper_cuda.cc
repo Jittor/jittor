@@ -15,7 +15,6 @@
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
 
-
 #ifdef _CUFFT_H_
 // cuFFT API errors
 const char *_cudaGetErrorEnum(cufftResult error) {

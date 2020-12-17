@@ -90,18 +90,22 @@ class MNASNet(nn.Module):
         x = x.mean([2, 3])
         return self.classifier(x)
 
-def mnasnet0_5(**kwargs):
+def mnasnet0_5(pretrained=False, **kwargs):
     model = MNASNet(0.5, **kwargs)
+    if pretrained: model.load("jittorhub://mnasnet0_5.pkl")
     return model
 
-def mnasnet0_75(**kwargs):
+def mnasnet0_75(pretrained=False, **kwargs):
     model = MNASNet(0.75, **kwargs)
+    if pretrained: model.load("jittorhub://mnasnet0_75.pkl")
     return model
 
-def mnasnet1_0(**kwargs):
+def mnasnet1_0(pretrained=False, **kwargs):
     model = MNASNet(1.0, **kwargs)
+    if pretrained: model.load("jittorhub://mnasnet1_0.pkl")
     return model
 
-def mnasnet1_3(**kwargs):
+def mnasnet1_3(pretrained=False, **kwargs):
     model = MNASNet(1.3, **kwargs)
+    if pretrained: model.load("jittorhub://mnasnet1_3.pkl")
     return model

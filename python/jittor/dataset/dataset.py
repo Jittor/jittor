@@ -27,8 +27,9 @@ mpi = jt.mpi
 img_open_hook = HookTimer(Image, "open")
 
 class Worker:
-    def __init__(self, target, args, buffer_size):
+    def __init__(self, target, args, buffer_size, keep_numpy_array=False):
         self.buffer = jt.RingBuffer(buffer_size)
+        self.buffer.keep_numpy_array(keep_numpy_array)
 
         self.status = mp.Array('f', 5, lock=False)
         self.p = mp.Process(target=target, args=args+(self.buffer,self.status))
@@ -67,7 +68,8 @@ class Dataset(object):
                  drop_last = False,
                  num_workers = 0,
                  buffer_size = 512*1024*1024,
-                 stop_grad = True):
+                 stop_grad = True,
+                 keep_numpy_array = False):
         super().__init__()
         self.total_len = None
         self.batch_size = batch_size
@@ -76,6 +78,7 @@ class Dataset(object):
         self.num_workers = num_workers
         self.buffer_size = buffer_size
         self.stop_grad = stop_grad
+        self.keep_numpy_array = keep_numpy_array
 
     def __getitem__(self, index):
         raise NotImplementedError
@@ -117,6 +120,8 @@ class Dataset(object):
         '''
         Change batch data to jittor array, such as np.ndarray, int, and float.
         '''
+        if self.keep_numpy_array: return batch
+        if isinstance(batch, jt.Var): return batch
         to_jt = lambda x: jt.array(x).stop_grad() \
             if self.stop_grad else jt.array(x)
         if isinstance(batch, np.ndarray):
@@ -299,7 +304,8 @@ Example::
         self.num_idle_c = mp.Condition(self.gid.get_lock())
         for i in range(self.num_workers):
             w = Worker(target=self._worker_main, args=(i,), 
-                       buffer_size=self.buffer_size)
+                       buffer_size=self.buffer_size,
+                       keep_numpy_array=self.keep_numpy_array)
             workers.append(w)
         self.workers = workers
         self.index_list_numpy = np.ndarray(dtype='int32', shape=self.real_len, buffer=self.index_list)

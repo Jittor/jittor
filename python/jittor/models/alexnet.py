@@ -61,6 +61,7 @@ class AlexNet(nn.Module):
         x = self.classifier(x)
         return x
 
-def alexnet(**kwargs):
+def alexnet(pretrained=False, **kwargs):
     model = AlexNet(**kwargs)
+    if pretrained: model.load("jittorhub://alexnet.pkl")
     return model
