@@ -22,6 +22,7 @@ static auto make_number = get_op_info("number")
 
 VarPtr make_grad(Op* op, Var* out, Var* dout, Var* x, int x_index) {
     if (dout == nullptr) return nullptr;
+    if (x_index<0) return nullptr;
     LOGvvvv << "Make grad op:" >> op->name() << "inputs:" >> op->inputs()
         << "out:" >> out << "dout:" >> dout << "x:" >> x << "xid:" >> x_index;
     auto dx = op->grad(out, dout, x, x_index);

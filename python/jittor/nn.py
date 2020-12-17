@@ -154,6 +154,7 @@ def get_init_var_rand(shape, dtype):
 def relu(x): return jt.ternary((x>0.0), x, jt.broadcast_var(0.0, x))
 def leaky_relu(x, scale=0.01): return jt.ternary(x>0, x, x*scale)
 def relu6(x): return jt.minimum(jt.maximum(x, 0.0), 6.0)
+def elu(x,alpha=1.0):return jt.ternary(x>0,x,alpha*(x.exp()-1))
 def sign(x):
     one = jt.ones(x.shape)
     x = jt.ternary(x>0, one, x)
@@ -164,6 +165,13 @@ def gelu(x):
     erf = jt.erf(x/_sqrt2)+1
     r = erf*x*.5
     return r
+
+class ELU(Module):
+    def __init__(self,alpha=1.0):
+        self.alpha=alpha
+    
+    def execute(self,x):
+        return elu(x,self.alpha)
 
 class PReLU(Module):
     def __init__(self, num_parameters=1, init_=0.25):
@@ -238,6 +246,30 @@ def smooth_l1_loss(y_true, y_pred,reduction="mean"):
     else:
         raise ValueError(f'not support {reduction}')
 
+def nll_loss(output,target,weight=None,ignore_index=-100,reduction='mean'):
+    assert output.ndim<=2 and output.ndim>0 and target.ndim==1
+    n_classes = output.shape[-1]
+    assert weight is None or weight.numel()==n_classes
+    assert ignore_index<0 or ignore_index<n_classes
+    if weight is None:
+        weight = jt.ones((n_classes,))
+    if ignore_index>0:
+        weight[ignore_index]=0
+    if output.ndim==2:
+        index = jt.index((output.shape[0],),dim=0)
+        loss = -output[index,target]*weight[target]
+    else:
+        loss = -output[target[0]]*weight[target[0]]
+    if reduction=="mean":
+        total_weight  = weight[target].sum() if output.ndim==2 else weight[target[0]].sum()
+        return loss.sum()/total_weight
+    elif reduction=="sum":
+        return loss.sum()
+    elif reduction=="none":
+        return loss
+    else:
+        raise ValueError(f'not support {reduction}')
+    
 class CrossEntropyLoss(Module):
     def __init__(self,ignore_index=None):
         self.ignore_index = ignore_index
@@ -329,6 +361,9 @@ class Dropout(Module):
                 noise = (noise > self.p).int()
                 output = output * noise / (1.0 - self.p) # div keep prob
         return output
+
+def dropout(x,p=0.5,is_train=False):
+    return Dropout(p=p,is_train=is_train)(x)
 
 class Linear(Module):
     def __init__(self, in_features, out_features, bias=True):
@@ -707,6 +742,45 @@ class ConvTranspose(Module):
             y = y + b
         return y
 
+def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding=0, groups=1, dilation=1):
+    x = input
+    N,C,H,W = x.shape
+    i,o,h,w = weight.shape
+    assert C==i
+    assert groups==1, "Group conv not supported yet."
+    stride = stride if isinstance(stride, tuple) else (stride, stride)
+    dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
+    # added
+    padding = padding if isinstance(padding, tuple) else (padding, padding)
+    output_padding = output_padding if isinstance (output_padding, tuple) else (output_padding, output_padding)
+    assert output_padding[0] < max(stride[0], dilation[0]) and \
+        output_padding[1] < max(stride[1], dilation[1]), \
+        "output padding must be smaller than max(stride, dilation)"
+
+    stride_h, stride_w = stride
+    padding_h, padding_w = padding
+    dilation_h, dilation_w = dilation
+
+    h_out = (H-1) * stride_h + output_padding[0] - 2*padding_h + 1 + (h-1)*dilation_h
+    w_out = (W-1) * stride_w + output_padding[1] - 2*padding_w + 1 + (w-1)*dilation_w
+    out_shape = (N, o, h_out, w_out)
+    shape = (N, i, o, H, W, h, w)
+    xx = x.broadcast(shape, (2, 5, 6)) # i,h,w
+    ww = weight.broadcast(shape, (0, 3, 4)) # N,H,W
+    y = (ww*xx).reindex_reduce("add", out_shape, [
+        'i0', # N
+        'i2', # o
+        f'i3*{stride_h}-{padding_h}+i5*{dilation_h}', # Hid+Khid
+        f'i4*{stride_w}-{padding_w}+i6*{dilation_w}', # Wid+KWid
+    ])
+    if isinstance(bias, jt.Var):
+        b = bias.broadcast(y.shape, [0,2,3])
+        y = y + b
+    else:
+        assert not bias, "Bias should be none or jittor var"
+    return y
+
+conv_transpose2d = conv_transpose
 
 def pad(x,padding, mode='constant', value=0):
     assert mode in ['constant','replicate','reflect','circular'],'only support constant,replicate,reflect,circular pad'

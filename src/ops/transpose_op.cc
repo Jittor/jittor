@@ -14,11 +14,6 @@ namespace jittor {
 static auto make_transpose = get_op_info("transpose")
     .get_constructor<VarPtr, Var*, NanoVector>();
 
-#ifdef HAS_CUDA
-static auto make_reshape = get_op_info("reshape")
-    .get_constructor<VarPtr, Var*, NanoVector>();
-#endif
-
 TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
     int i=0;
     for (; i<axes.size(); i++)

@@ -142,7 +142,7 @@ static PyObject* to_py_object3(ArrayArgs&& a) {
     return to_py_object(jit_op_maker::array_(move(a)));
 }
 
-static PyObject* pop_py_object(RingBuffer* rb, uint64& __restrict__ offset) {
+static PyObject* pop_py_object(RingBuffer* rb, uint64& __restrict__ offset, bool keep_numpy_array) {
     auto t = rb->pop_t<uint8>(offset);
     if (t==0) {
         auto x = rb->pop_t<int64>(offset);
@@ -161,7 +161,7 @@ static PyObject* pop_py_object(RingBuffer* rb, uint64& __restrict__ offset) {
         auto size = rb->pop_t<int64>(offset);
         PyObjHolder list(PyList_New(size));
         for (uint i=0; i<size; i++) {
-            PyObject* o = pop_py_object(rb, offset);
+            PyObject* o = pop_py_object(rb, offset, keep_numpy_array);
             PyList_SET_ITEM(list.obj, i, o);
         }
         return list.release();
@@ -170,8 +170,8 @@ static PyObject* pop_py_object(RingBuffer* rb, uint64& __restrict__ offset) {
         auto size = rb->pop_t<int64>(offset);
         PyObjHolder dict(PyDict_New());
         for (int64 i=0; i<size; i++) {
-            PyObject* key = pop_py_object(rb, offset);
-            PyObject* value = pop_py_object(rb, offset);
+            PyObject* key = pop_py_object(rb, offset, keep_numpy_array);
+            PyObject* value = pop_py_object(rb, offset, keep_numpy_array);
             PyDict_SetItem(dict.obj, key, value);
         }
         return dict.release();
@@ -185,7 +185,10 @@ static PyObject* pop_py_object(RingBuffer* rb, uint64& __restrict__ offset) {
             size *= args.shape[i];
         rb->pop(size, offset);
         args.ptr = rb->get_ptr(size, offset);
-        return to_py_object3(move(args));
+        if (!keep_numpy_array)
+            return to_py_object3(move(args));
+        else
+            return to_py_object<ArrayArgs>(args);
     }
     if (t==6) {
         return pop_py_object_pickle(rb, offset);
@@ -212,7 +215,7 @@ void PyMultiprocessRingBuffer::push(PyObject* obj) {
 
 PyObject* PyMultiprocessRingBuffer::pop() {
     auto offset = rb->l;
-    auto obj = pop_py_object(rb, offset);
+    auto obj = pop_py_object(rb, offset, _keep_numpy_array);
     rb->commit_pop(offset);
     return obj;
 }

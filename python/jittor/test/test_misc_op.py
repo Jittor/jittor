@@ -54,6 +54,7 @@ class TestPad(unittest.TestCase):
         check_equal(torch.Tensor(arr).flip(1), jt.array(arr).flip(1))
         check_equal(torch.Tensor(arr).flip(2), jt.array(arr).flip(2))
         check_equal(torch.Tensor(arr).flip(3), jt.array(arr).flip(3))
+        check_equal(torch.Tensor(arr).flip([2,3]), jt.array(arr).flip([2,3]))
         print('pass flip test ...')
 
     def test_cross(self):
@@ -83,7 +84,12 @@ class TestPad(unittest.TestCase):
         check_equal(torchvision.utils.make_grid(torch.Tensor(arr), nrow=3, padding=4), jt.make_grid(jt.array(arr), nrow=3, padding=4))
         check_equal(torchvision.utils.make_grid(torch.Tensor(arr), nrow=3, padding=4, pad_value=-1), jt.make_grid(jt.array(arr), nrow=3, padding=4, pad_value=-1))
         check_equal(torchvision.utils.make_grid(torch.Tensor(arr), nrow=3, normalize=True, padding=4, pad_value=-1), jt.make_grid(jt.array(arr), nrow=3, normalize=True, padding=4, pad_value=-1))
+        check_equal(torchvision.utils.make_grid(torch.Tensor(arr), nrow=3, normalize=True, padding=4, pad_value=-1, range=(-100,100)), jt.make_grid(jt.array(arr), nrow=3, normalize=True, padding=4, pad_value=-1, range=(-100,100)))
         print('pass make_grid test ...')
+
+    def test_save_image(self):
+        arr = jt.array(np.random.randn(16,3,10,10))
+        jt.save_image(arr, "/tmp/a.jpg")
 
     def test_unbind(self):
         arr = np.random.randn(2,3,4)
