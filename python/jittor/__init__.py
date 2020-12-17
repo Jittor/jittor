@@ -476,6 +476,9 @@ def load(path):
         model_dict = safeunpickle(path)
     return model_dict
 
+def save(params_dict, path):
+    safepickle(params_dict, path)
+
 def _uniq(x):
     a = set()
     b = []
