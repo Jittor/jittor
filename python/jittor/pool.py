@@ -30,11 +30,14 @@ class Pool(Module):
         if self.ceil_mode == False:
             h = (H+self.padding*2-self.kernel_size)//self.stride+1
             w = (W+self.padding*2-self.kernel_size)//self.stride+1
+            use_code_op = self.op in ['maximum', 'minimum']
+            # some second order avg_pool is require, so we don't use code op here  
         else:
             h = (H+self.padding*2-self.kernel_size + self.stride - 1)//self.stride+1
             w = (W+self.padding*2-self.kernel_size + self.stride - 1)//self.stride+1
+            use_code_op = self.op in ['maximum', 'minimum', 'mean']
 
-        if self.op in ['maximum', 'minimum', 'mean']:
+        if use_code_op:
             if self.op == 'mean':
                 if self.count_include_pad:
                     count = f"int count = {self.kernel_size*self.kernel_size};"
@@ -187,5 +190,5 @@ class AdaptiveAvgPool2d(Module):
         ])
         return xx.reduce("mean", [4,5])
 
-def pool(x, kernel_size, op, padding=0, stride = 1):
+def pool(x, kernel_size, op, padding=0, stride=None):
     return Pool(kernel_size, stride, padding, op=op)(x)
