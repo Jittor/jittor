@@ -162,5 +162,16 @@ class TestGrad(unittest.TestCase):
         jt.clean()
         assert jt.liveness_info()["lived_vars"] == 2
 
+    def test_requires_grad(self):
+        a = jt.array(2.0)
+        assert a.requires_grad == True
+        a.requires_grad = False
+        assert a.requires_grad == False
+        assert jt.grad(a**2, a) == 0
+        a.requires_grad = True
+        assert a.requires_grad == True
+        assert jt.grad(a**2, a) == 4
+
+
 if __name__ == "__main__":
     unittest.main()
