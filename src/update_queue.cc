@@ -142,6 +142,8 @@ void UpdateQueue::push(Var* v, Var* prev) {
 void UpdateQueue::pop(Var* v) {
     auto iter = map.find(v);
     iter->second->owner->erase(iter->second);
+    if (iter->second->owner->size() == 0)
+        queue.erase(iter->second->owner);
     map.erase(iter);
 }
 
