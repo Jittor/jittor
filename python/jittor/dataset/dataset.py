@@ -114,6 +114,7 @@ class Dataset(object):
         for k,v in kw.items():
             assert hasattr(self, k), k
             setattr(self, k, v)
+        self.reset()
         return self
 
     def to_jittor(self, batch):
