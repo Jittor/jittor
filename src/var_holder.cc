@@ -100,6 +100,16 @@ VarHolder* VarHolder::update(VarHolder* v) {
     return this;
 }
 
+VarHolder* VarHolder::_update(VarHolder* v) {
+    auto dv = jittor::detach(v->var);
+    if (var->flags.get(NodeFlags::_in_update_queue))
+        update_queue.push(dv.ptr, var);
+    var->release_both_liveness();
+    var = dv.ptr;
+    dv.ptr = nullptr;
+    return this;
+}
+
 extern Executor exe;
 
 void VarHolder::sync(bool device_sync) {

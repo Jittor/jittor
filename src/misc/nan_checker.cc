@@ -23,7 +23,7 @@ extern void check_nan_float64(float64* ptr, int64 num);
 #endif
 
 bool check_nan(Var* v) {
-    if (!v->dtype().is_float()) return true;
+    if (!v->dtype().is_float() || v->num == 0) return true;
     if (v->input() && (
             v->input()->name() == string("empty") ||
             v->input()->name() == string("setitem")))
@@ -37,6 +37,7 @@ bool check_nan(Var* v) {
             check_nan_float64((float64*)v->mem_ptr, v->num);
         }
         ASSERT(cudaDeviceSynchronize()==0) << "detect nan or inf at" << v;
+        ASSERT(cudaGetLastError() == 0);
     } else
     #endif
     {

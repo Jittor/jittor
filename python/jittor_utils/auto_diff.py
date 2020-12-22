@@ -29,12 +29,25 @@ def convert(data):
 
 rand_hooked = False
 
-def hook_pt_rand(*shape):
+def hook_pt_rand(*shape, device=None):
     import torch
     if isinstance(shape, tuple) and len(shape)==1 and isinstance(shape[0], torch.Size):
         shape = tuple(shape[0])
     np.random.seed(0)
-    return torch.from_numpy(np.random.rand(*tuple(shape)).astype("float32"))
+    res = torch.from_numpy(np.random.rand(*tuple(shape)).astype("float32"))
+    if device is not None:
+        return res.to(device)
+    return res
+
+def hook_pt_randn(*shape, device=None):
+    import torch
+    if isinstance(shape, tuple) and len(shape)==1 and isinstance(shape[0], torch.Size):
+        shape = tuple(shape[0])
+    np.random.seed(0)
+    res = torch.from_numpy(np.random.randn(*tuple(shape)).astype("float32"))
+    if device is not None:
+        return res.to(device)
+    return res
 
 def hook_pt_normal(mean, std):
     import torch
@@ -60,6 +73,7 @@ def hook_rand():
         torch = sys.modules["torch"]
         torch.rand = hook_pt_rand
         torch.normal = hook_pt_normal
+        torch.randn = hook_pt_randn
         torch.manual_seed(0)
     if "jittor" in sys.modules:
         jittor = sys.modules["jittor"]
@@ -104,6 +118,12 @@ class Hook:
 
     def check(self, name, pre_data, data):
         global has_error
+        if pre_data is None and isinstance(data, np.ndarray):
+            if (data==0).all():
+                LOG.i(f"name {name} is None")
+            else:
+                LOG.e(f"name {name} is non-zero")
+            return
         if type(pre_data) != type(data):
             LOG.e(f"type not match, {pre_data.__class__.__name__}!={data.__class__.__name__}, name: {name}")
             has_error += 1
@@ -301,9 +321,3 @@ class Hook:
                         self.record(f"{opt_name}.params[{gid}]", p)
                         gid += 1
         opt.step = step_hook
-
-                    
-
-    
-    
-

@@ -310,6 +310,20 @@ Example::
         self.workers = workers
         self.index_list_numpy = np.ndarray(dtype='int32', shape=self.real_len, buffer=self.index_list)
 
+    def reset(self):
+        if not hasattr(self, "workers"):
+            return
+        self._stop_all_workers()
+        self.terminate()
+        del self.index_list
+        del self.idmap
+        del self.gid
+        del self.gidc
+        del self.num_idle
+        del self.num_idle_c
+        del self.workers
+        del self.index_list_numpy
+
     def __del__(self):
         if mp_log_v:
             print("dataset deleted")

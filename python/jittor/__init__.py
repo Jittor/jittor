@@ -7,7 +7,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-__version__ = '1.2.2.8'
+__version__ = '1.2.2.9'
 from . import lock
 with lock.lock_scope():
     ori_int = int
@@ -336,9 +336,9 @@ def flatten(input, start_dim=0, end_dim=-1):
     return input.reshape(out_shape)
 Var.flatten = flatten
 
-def detach_inplace(x):
-    return x.swap(x.stop_grad().clone())
-Var.start_grad = Var.detach_inplace = detach_inplace
+def start_grad(x):
+    return x._update(x)
+Var.detach_inplace = Var.start_grad = start_grad
 
 def detach(x):
     return x.detach()
@@ -476,6 +476,9 @@ def load(path):
         model_dict = safeunpickle(path)
     return model_dict
 
+def save(params_dict, path):
+    safepickle(params_dict, path)
+
 def _uniq(x):
     a = set()
     b = []
@@ -539,6 +542,7 @@ class Module:
         def callback(parents, k, v, n):
             stack.append(str(k))
             for k2, p in v.__dict__.items():
+                if k2.startswith("_"): continue
                 if isinstance(p, Var):
                     ps.append(p)
                     p.name(".".join(stack[1:]+[str(k2)]))
