@@ -140,7 +140,7 @@ class Hook:
         elif isinstance(pre_data, np.ndarray):
             if pre_data.shape != data.shape: 
                 has_error += 1
-                LOG.e(f"Ndarray shape <{name}> not match")
+                LOG.e(f"Ndarray shape <{name}> not match {pre_data.shape} != {data.shape}")
                 return
             self.check_array(name, pre_data, data)
         elif isinstance(pre_data, dict):

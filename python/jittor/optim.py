@@ -39,8 +39,9 @@ class Optimizer(object):
     
     @property
     def defaults(self):
-        exclude = set(("defaults", "param_groups", "n_step"))
-        return { k:v for k, v in self.__dict__.items() if k[0] != '_' and k not in exclude }
+        exclude = set(("defaults", "param_groups", "n_step", "pre_step", "step"))
+        return { k:v for k, v in self.__dict__.items()
+            if k[0] != '_' and k not in exclude and not callable(v) }
 
     def pre_step(self, loss):
         """ something should be done before step, such as calc gradients, mpi sync, and so on.
