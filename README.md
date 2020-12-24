@@ -116,7 +116,9 @@ Jittor offers three ways to install: pip, script or manual.
 
 ```bash
 sudo apt install python3.7-dev libomp-dev
-sudo python3.7 -m pip install git+https://github.com/Jittor/jittor.git
+python3.7 -m pip install jittor
+# or install from github(latest version)
+# python3.7 -m pip install git+https://github.com/Jittor/jittor.git
 python3.7 -m jittor.test.test_example
 ```
 
