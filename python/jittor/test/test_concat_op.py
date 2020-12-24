@@ -40,12 +40,16 @@ Example::
         cdim += a.shape[dim]
     return s
 
+def numpy_concat(arr, dim):
+    arr = [ a.numpy() for a in arr ]
+    return np.concatenate(arr, dim)
+
 class TestConcatOp(unittest.TestCase):
     def test_concat_op(self):
         def check(tmp, dim=0):
-            res1 = jt.WIP_concat(tmp, dim=dim)
+            res1 = numpy_concat(tmp, dim=dim)
             res2 = jt.contrib.concat(tmp, dim=dim)
-            assert (res1!=res2).data.sum()==0, "concat fail..."
+            assert (res2!=res1).data.sum()==0, "concat fail..."
         check([jt.array([[1],[2]]), jt.array([[2],[2]])])
         check([jt.array(np.array(range(24))).reshape((1,2,3,4)), jt.array(np.array(range(24))).reshape((1,2,3,4))])
         check([jt.array(np.array(range(120))).reshape((5,2,3,4)), jt.array(np.array(range(24))).reshape((1,2,3,4))])
