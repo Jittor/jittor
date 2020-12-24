@@ -451,19 +451,8 @@ def arctan2(y,x):
     return angle
 
 
-
-def nonzero(x):
-    r'''
-    Return the index of the elements of input tensor which are not equal to zero.
-    '''
-    x = jt.where(x)
-    x = [xx.unsqueeze(1) for xx in x]
-    if len(x)<2:
-        return x[0]
-    x = jt.contrib.concat(x,dim=1)
-    return x
-
-jt.Var.nonzero = nonzero
+nonzero = jt.where
+jt.Var.nonzero = jt.Var.where
 
 
 def arange(start=0, end=None, step=1,dtype=None):
@@ -478,7 +467,7 @@ def arange(start=0, end=None, step=1,dtype=None):
         x= x.cast(dtype)
     return x
 
-def randperm(n, dtype="int64"):
+def randperm(n, dtype="int32"):
     x = np.arange(n)
     np.random.shuffle(x)
     return jt.array(x).cast(dtype)
