@@ -139,6 +139,10 @@ def setup_cuda_extern():
             import traceback
             line = traceback.format_exc()
             LOG.w(f"CUDA found but {lib_name} is not loaded:\n{line}")
+            if lib_name == "cudnn":
+                LOG.w(f"Develop version of CUDNN not found, "
+                    "please refer to CUDA offical tar file installation: "
+                    "https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#installlinux-tar")
 
 def setup_cuda_lib(lib_name, link=True, extra_flags=""):
     globals()[lib_name+"_ops"] = None
@@ -210,7 +214,7 @@ def install_cutt(root_folder):
         if len(flags.cuda_archs):
             arch_flag = f" -arch=compute_{min(flags.cuda_archs)} "
             arch_flag += ''.join(map(lambda x:f' -code=sm_{x} ', flags.cuda_archs))
-        run_cmd(f"make NVCC_GENCODE='{arch_flag}'", cwd=dirname)
+        run_cmd(f"make NVCC_GENCODE='{arch_flag}' nvcc_path='{nvcc_path}'", cwd=dirname)
     return dirname
 
 def setup_cutt():
