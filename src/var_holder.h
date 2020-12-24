@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2020 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -56,6 +57,10 @@ struct VarHolder {
     // @pyjt(update)
     // @attrs(return_self)
     VarHolder* update(VarHolder* v);
+    /* update parameter without set attribute */
+    // @pyjt(_update)
+    // @attrs(return_self)
+    VarHolder* _update(VarHolder* v);
 
     // @pyjt(swap)
     // @attrs(return_self)
@@ -118,6 +123,21 @@ struct VarHolder {
     inline NanoVector shape() {
         if (var->num<0) sync();
         return var->shape;
+    }
+
+    // @pyjt(__get__requires_grad)
+    inline bool get_requires_grad() {
+        return !var->is_stop_grad();
+    }
+
+    // @pyjt(__set__requires_grad)
+    inline void set_requires_grad(bool flag) {
+        if (flag == get_requires_grad()) return;
+        if (flag)
+            _update(this);
+        else
+            stop_grad(); 
+        return;
     }
 
     // @pyjt(__get__uncertain_shape)

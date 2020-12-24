@@ -1,8 +1,9 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: 
+# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Maintainers: 
 #     Meng-Hao Guo <guomenghao1997@gmail.com>
 #     Dun Liang <randonlang@gmail.com>. 
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -114,6 +115,7 @@ class Dataset(object):
         for k,v in kw.items():
             assert hasattr(self, k), k
             setattr(self, k, v)
+        self.reset()
         return self
 
     def to_jittor(self, batch):
@@ -309,6 +311,20 @@ Example::
             workers.append(w)
         self.workers = workers
         self.index_list_numpy = np.ndarray(dtype='int32', shape=self.real_len, buffer=self.index_list)
+
+    def reset(self):
+        if not hasattr(self, "workers"):
+            return
+        self._stop_all_workers()
+        self.terminate()
+        del self.index_list
+        del self.idmap
+        del self.gid
+        del self.gidc
+        del self.num_idle
+        del self.num_idle_c
+        del self.workers
+        del self.index_list_numpy
 
     def __del__(self):
         if mp_log_v:

@@ -191,6 +191,7 @@ void TraceData::record_node(Node* node, bool record_stack) {
                 auto iter = trace_data.id_map.find(trace_grad_op);
                 data.stacks.emplace_back(Stack{"grad", "Grad", "", 0});
                 if (iter != trace_data.id_map.end()) {
+                    data.attrs["grad_op_id"] = S(iter->second);
                     auto& prev_stack = trace_data.node_data[iter->second].stacks;
                     for (auto& s : prev_stack)
                         data.stacks.push_back(s);
