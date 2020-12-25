@@ -101,5 +101,15 @@ class TestPad(unittest.TestCase):
                 assert np.allclose(t_res[idx].numpy(), j_res[idx].numpy())
         print('pass unbind test ...')
 
+class TestOther(unittest.TestCase):
+    def test_save(self):
+        pp = [1,2,jt.array([1,2,3]), {"a":[1,2,3], "b":jt.array([1,2,3])}]
+        jt.save(pp, "/tmp/xx.pkl")
+        x = jt.load("/tmp/xx.pkl")
+        assert x[:2] == [1,2]
+        assert (x[2] == np.array([1,2,3])).all()
+        assert x[3]['a'] == [1,2,3]
+        assert (x[3]['b'] == np.array([1,2,3])).all()
+
 if __name__ == "__main__":
     unittest.main()
