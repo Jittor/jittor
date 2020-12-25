@@ -192,3 +192,23 @@ class AdaptiveAvgPool2d(Module):
 
 def pool(x, kernel_size, op, padding=0, stride=None):
     return Pool(kernel_size, stride, padding, op=op)(x)
+
+class AvgPool2d(Module):
+    def __init__(self, kernel_size, stride=None, padding=0, ceil_mode=False, count_include_pad=True):
+        self.layer = Pool(kernel_size=kernel_size, stride=stride, padding=padding, ceil_mode=ceil_mode, count_include_pad=count_include_pad, op="mean")
+    
+    def execute(self, x):
+        return self.layer(x)
+
+def avg_pool2d(x, kernel_size, stride=None, padding=0, ceil_mode=False, count_include_pad=True):
+    return AvgPool2d(kernel_size, stride, padding, ceil_mode, count_include_pad)(x)
+
+class MaxPool2d(Module):
+    def __init__(self, kernel_size, stride=None, padding=0, dilation=None, return_indices=None, ceil_mode=False):
+        self.layer = Pool(kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, return_indices=return_indices, ceil_mode=ceil_mode, op="maximum")
+    
+    def execute(self, x):
+        return self.layer(x)
+
+def max_pool2d(x, kernel_size, stride=None, padding=0, dilation=None, return_indices=None, ceil_mode=False):
+    return MaxPool2d(kernel_size, stride, padding, dilation, return_indices, ceil_mode)(x)

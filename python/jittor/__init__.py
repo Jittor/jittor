@@ -960,3 +960,26 @@ from . import numpy2cupy
 from .contrib import concat
 from .misc import *
 from . import sparse
+
+
+def randn(*size, dtype="float32", requires_grad=False):
+    if isinstance(size, tuple) and isinstance(size[0], tuple): size = size[0]
+    arr = jt.random(size, dtype, "normal")
+    if not requires_grad: return arr.stop_grad()
+    return arr
+
+def rand(*size, dtype="float32", requires_grad=False):
+    if isinstance(size, tuple) and isinstance(size[0], tuple): size = size[0]
+    arr = jt.random(size, dtype)
+    if not requires_grad: return arr.stop_grad()
+    return arr
+
+def normal(mean, std, size=None, dtype="float32"):
+    if size is None:
+        if isinstance(mean, Var) and isinstance(std, Var):
+            assert mean.shape == std.shape
+            size = mean.shape
+        else:
+            if isinstance(mean, Var): size = mean.shape
+            if isinstance(std, Var): size = std.shape
+    return jt.init.gauss(size, dtype, mean, std)

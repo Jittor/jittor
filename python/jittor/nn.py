@@ -16,7 +16,7 @@ import numpy as np
 import collections
 import math
 from collections import OrderedDict
-from jittor.pool import Pool, pool, AdaptiveAvgPool2d
+from jittor.pool import *
 from jittor.optim import *
 from jittor.misc import _pair
 
