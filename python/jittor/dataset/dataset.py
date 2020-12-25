@@ -136,7 +136,7 @@ class Dataset(object):
                 isinstance(a, float):
                 new_batch.append(to_jt(a))
             else:
-                new_batch.append(a)
+                new_batch.append(self.to_jittor(a))
         return new_batch
 
     def collate_batch(self, batch):
