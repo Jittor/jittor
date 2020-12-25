@@ -478,7 +478,17 @@ def load(path):
     return model_dict
 
 def save(params_dict, path):
-    safepickle(params_dict, path)
+    def dfs(x):
+        if isinstance(x, list):
+            for i in range(len(x)):
+                x[i] = dfs(x[i])
+        elif isinstance(x, dict):
+            for k in x:
+                x[k] = dfs(x[k])
+        elif isinstance(x, Var):
+            return x.numpy()
+        return x
+    safepickle(dfs(params_dict), path)
 
 def _uniq(x):
     a = set()
