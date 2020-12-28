@@ -298,12 +298,12 @@ def std(x):
     return out
 Var.std = std
 
-def norm(x, k, dim):
+def norm(x, k, dim, keepdim=False):
     assert k==1 or k==2
     if k==1:
-        return x.abs().sum(dim)
+        return x.abs().sum(dim, keepdim)
     if k==2:
-        return (x.sqr()).sum(dim).maximum(1e-6).sqrt()
+        return (x.sqr()).sum(dim, keepdim).maximum(1e-6).sqrt()
 Var.norm = norm
 
 origin_reshape = reshape

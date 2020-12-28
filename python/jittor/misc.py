@@ -721,3 +721,114 @@ def triu_(x,diagonal=0):
     return x.reindex(x.shape,indexs,overflow_conditions=overflow_conditions,overflow_value=0)
 
 jt.Var.triu_ = triu_
+
+def searchsorted(s, v, right=False):
+    class SearchsortedFunc(jt.Module):
+        def __init__(self, right=False):
+            self.side = "right" if right else "left"
+
+        def forward_code(self, np, data):
+            a, b = data["inputs"]
+            c = data["outputs"][0]
+            if len(a.shape)==1:
+                out = np.searchsorted(a, b, side=self.side)
+            else:
+                # out = np.apply_along_axis(np.searchsorted, 1, a, b)
+                # out = out.diagonal(0,0,1).T
+
+                # TODO: support better 2-dims searchsorted
+                outs = []
+                for i in range(a.shape[0]):
+                    outs.append(np.expand_dims(np.searchsorted(a[i], b[i], side=self.side),0))
+                out = np.concatenate(outs, 0)
+                # out = np.zeros(b.shape)
+            np.copyto(c, out)
+
+        def execute(self, s, v):
+            return jt.numpy_code(
+                    v.shape,
+                    v.dtype,
+                    [s, v],
+                    self.forward_code,
+                )
+    assert len(s.shape)==len(v.shape) and v.shape[:-1]==s.shape[:-1]
+    assert len(s.shape)==1 or len(s.shape)==2, "TODO: support n-dims searchsorted"
+    func = SearchsortedFunc(right)
+    return func(s, v)
+
+def cumprod(a, dim):
+    class CumprodFunc(jt.Function):
+        def forward_code(self, np, data):
+            a = data["inputs"][0]
+            b = data["outputs"][0]
+            out = np.cumprod(a, self.dim)
+            np.copyto(b, out)
+
+        def backward_code(self, np, data):
+            a, b, dout = data["inputs"]
+            out = data["outputs"][0]
+
+            sdim = a.shape[self.dim]
+            dim = (len(a.shape)+1)*[1]
+            dim[self.dim+1] = sdim
+            res = np.tile(np.expand_dims(b, self.dim+1), dim)
+            dout = np.tile(np.expand_dims(dout, self.dim+1), dim)
+
+            dim[self.dim]=sdim
+            dim[self.dim+1]=1
+            a = np.tile(np.expand_dims(a, self.dim), dim)
+            res = res/a
+            
+            mask = np.tril(np.ones((sdim, sdim)))
+            for i in range(self.dim):
+                mask = np.expand_dims(mask, 0)
+            for i in range(len(a.shape)-self.dim-2):
+                mask = np.expand_dims(mask, -1)
+            res = np.sum(mask*res*dout, self.dim)
+            
+            np.copyto(out, res)
+
+        def execute(self, a, dim):
+            self.save_vars = a
+            self.dim = dim
+            self.res = jt.numpy_code(
+                a.shape,
+                a.dtype,
+                [a],
+                self.forward_code,
+            )
+            return self.res
+
+        def grad(self, grad_a):
+            a = self.save_vars
+            b = self.res
+            return jt.numpy_code(
+                a.shape,
+                a.dtype,
+                [a, b, grad_a],
+                self.backward_code,
+            )
+
+    func = CumprodFunc()
+    if dim<0:
+        dim+=len(a.shape)
+    return func(a, dim)
+
+def linspace(start, end, steps):
+    res = jt.index((steps,))[0]
+    res = res*(end-start)/float(steps-1)+start
+    return res
+
+def randperm(n):
+    # TODO: use jt.random
+    idx = np.arange(n)
+    return jt.array(np.random.permutation(idx))
+
+def set_global_seed(seed):
+    jt.set_seed(seed)
+    np.random.seed(seed)
+    try:
+        import cupy
+        cupy.random.seed(seed)
+    except:
+        pass
