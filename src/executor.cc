@@ -449,7 +449,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         last_is_cuda = is_cuda;
         op->do_run_after_prepare(jkl);
         // record trace data
-        if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var==2)) {
+        if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var>=2)) {
             trace_data.record_execution(op, is_fused_op, jkl);
             #ifdef HAS_CUDA
             if (use_cuda)
