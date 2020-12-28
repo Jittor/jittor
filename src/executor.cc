@@ -23,10 +23,12 @@
 #include "profiler/profiler_guard.h"
 #include "parallel_compiler.h"
 #include "misc/nan_checker.h"
+#include "memory_profiler.h"
 
 namespace jittor {
 
 Executor exe;
+extern MemoryProfiler memory_profiler;
 
 // from fetch_op.cc
 extern list<VarPtr> fetcher_to_free;
@@ -420,6 +422,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         for (auto* var : op->outputs()) {
             var->alloc(allocator);
         }
+        memory_profiler.check();
         LOGvvv << "Run" << op << "inputs:" << op->inputs() << "outputs:" << op->outputs();
         op->do_prepare(jkl);
         bool is_cuda = op->flags.get(NodeFlags::_cuda);
