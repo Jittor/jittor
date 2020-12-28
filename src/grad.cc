@@ -211,7 +211,7 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets) {
         if (id>=0)
             grad = move(grads[id]);
         if (!grad) {
-            LOGw << "grads[">>i>>"] '">> var->name>>"' doesn't have gradient. It will be set to zero:" << var;
+            // LOGw << "grads[">>i>>"] '">> var->name>>"' doesn't have gradient. It will be set to zero:" << var;
             grad = make_number(0.f, var);
             assign_attrs(grad.ptr, var);
         }
