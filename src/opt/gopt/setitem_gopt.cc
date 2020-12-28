@@ -201,7 +201,7 @@ void GetitemOp::graph_optimize() {
     // setitem_grad_opt(this);
     (void)setitem_grad_opt;
     // (void)getitem_inplace;
-    getitem_inplace(this);
+    // getitem_inplace(this);
     (void)getitem_inplace;
 }
 
