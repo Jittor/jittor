@@ -1,9 +1,10 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors:
+# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Maintainers:
 #   Dun Liang <randonlang@gmail.com>.
 #   Wenyang Zhou <576825820@qq.com>
 #
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -95,6 +96,27 @@ def repeat(x, *shape):
     return x
 
 jt.Var.repeat = repeat
+
+def repeat_interleave(x,repeats,dim=None):
+    # TODO repeats is jt.Var
+    assert isinstance(repeats,int)
+    if dim == None:
+        x = x.reshape(-1)
+        dim=0
+    if dim<0: dim+=x.ndim
+    
+    tar_shape = list(x.shape)
+    x_shape = list(x.shape)
+    tar_shape[dim] = tar_shape[dim]*repeats 
+    dims = []
+    for i in range(len(tar_shape)):
+        if dim==i:
+            dims.append(f"i{i}/{repeats}")
+        else:
+            dims.append(f"i{i}")
+    return x.reindex(tar_shape,dims)
+
+jt.Var.repeat_interleave = repeat_interleave
 
 def chunk(x, chunks, dim=0):
     r'''
@@ -209,15 +231,18 @@ def flip(x, dim=0):
         >>> x.flip(1)
         [[4 3 2 1]]
     '''
-    assert isinstance(dim, int)
-    if dim<0:
-        dim+=x.ndim
-    assert dim>=0 and dim<len(x.shape)
+    if isinstance(dim, int):
+        dim = [dim]
+    for i in range(len(dim)):
+        if dim[i]<0:
+            dim[i] += x.ndim
+        assert dim[i]>=0 and dim[i]<x.ndim
+    dim = set(dim)
 
     tar_dims = []
     for i in range(len(x.shape)):
-        if i == dim:
-            tar_dims.append(f"{x.shape[dim]-1}-i{i}")
+        if i in dim:
+            tar_dims.append(f"xshape{i}-1-i{i}")
         else:
             tar_dims.append(f"i{i}")
     return x.reindex(x.shape, tar_dims)
@@ -335,15 +360,36 @@ def unbind(x, dim=0):
 jt.Var.unbind = unbind
 
 def make_grid(x, nrow=8, padding=2, normalize=False, range=None, scale_each=False, pad_value=0):
-    assert range == None
+    assert isinstance(range, tuple) or range is None
     assert scale_each == False
     if isinstance(x, list): x = jt.stack(x)
-    if normalize: x = (x - x.min()) / (x.max() - x.min())
+    if normalize: 
+        if range is None: x = (x - x.min()) / (x.max() - x.min())
+        else: x = (x - range[0]) / (range[1] - range[0])
     b,c,h,w = x.shape
     ncol = math.ceil(b / nrow)
     return x.reindex([c, h*ncol+(ncol+1)*padding, w*nrow+(nrow+1)*padding], 
                      [f"i1/{padding+h}*{nrow}+i2/{padding+w}", "i0", 
                       f"i1-i1/{padding+h}*{padding+h}-{padding}", f"i2-i2/{padding+w}*{padding+w}-{padding}"], overflow_value=pad_value)
+
+def save_image(
+    x,
+    filepath,
+    nrow: int = 8,
+    padding: int = 2,
+    normalize: bool = False,
+    range = None,
+    scale_each = False,
+    pad_value = 0,
+    format = None
+):
+    from PIL import Image
+    grid = make_grid(x, nrow=nrow, padding=padding, pad_value=pad_value,
+                     normalize=normalize, range=range, scale_each=scale_each)
+
+    ndarr = (grid*255+0.5).clamp(0, 255).permute(1, 2, 0).uint8().numpy()
+    im = Image.fromarray(ndarr)
+    im.save(filepath, format=format)
 
 
 def _ntuple(n):
@@ -582,12 +628,11 @@ def gather(x,dim,index):
     return x.reindex(ins)
 jt.Var.gather = gather
 
-def prod(x,dim=0):
+def _prod(x,dim=0):
     x = jt.log(x)
     x = x.sum(dim=dim)
     return jt.exp(x)
 
-jt.Var.prod = prod
 
 def cumsum_forward(np, data):
     a = data['inputs'][0]

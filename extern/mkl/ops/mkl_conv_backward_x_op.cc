@@ -1,9 +1,10 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: 
+// Copyright (c) 2020 Jittor. All Rights Reserved. 
+// Maintainers: 
 //     Guowei Yang <471184555@qq.com>
 //     Guoye Yang <498731903@qq.com>
 //     Dun Liang <randonlang@gmail.com>. 
-// All Rights Reserved.
+// 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************

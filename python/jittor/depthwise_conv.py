@@ -1,9 +1,10 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors:
+# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Maintainers:
 #     Guoye Yang <498731903@qq.com>
 #     Dun Liang <randonlang@gmail.com>.
 #
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -308,7 +309,7 @@ class DepthwiseConv(Function):
 
         grid = dim3(ksize_width, ksize_height, output_channels);
         threads = dim3(std::min(output_width, block_size), crop_output_height, 1);
-        
+        cudaMemsetAsync(filter_grad_p, 0, filter_grad->size);
 
         KernelDepthwiseConvFilterGrad<                                         
             input_type><<<grid, threads, 0>>>(      

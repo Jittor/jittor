@@ -1,9 +1,10 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: 
+# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Maintainers: 
 #     Guowei Yang <471184555@qq.com>
 #     Guoye Yang <498731903@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -11,6 +12,7 @@ import jittor as jt
 import numpy as np
 from jittor import pool
 from collections.abc import Sequence
+
 
 def argmax_pool(x, size, stride, padding=0):
     return pool.pool(x, size, 'maximum', padding, stride)
@@ -196,28 +198,37 @@ def setitem(x, slices, value):
         mask = jt.broadcast(slices, x)
         value = jt.broadcast(value, x)
         return x.assign(mask.ternary(value, x))
-    if isinstance(slices, list):
-        slices = tuple(slices)
+    if isinstance(slices, Sequence):
+        ss = []
+        for s in slices:
+            if isinstance(s, jt.Var) and s.dtype == "bool":
+                ss.extend(s.where())
+            else:
+                ss.append(s)
+        slices = tuple(ss)
     return x.assign(x.setitem(slices, value))
 
 jt.Var.__getitem__ = jt.Var.slice_var = getitem
 jt.Var.__setitem__ = setitem
 
-def concat(arr, dim):
+def concat(arr, dim=0):
     '''Concat Operator can concat a list of jt Var at a specfic dimension.
     
     * [in] x:   input var list for concat
 
     * [in] dim: concat which dim
 
-    * [out] out:  concat result
+    * return:  concat result
 
 Example::
 
         jt.concat([jt.array([[1],[2]]), jt.array([[2],[2]])], dim=1)
         # return [[1],[2],[2],[2]]
     '''
-    # TODO: low performance when concat lots of vars
+    if not isinstance(arr, Sequence):
+        raise TypeError("concat arr needs to be a tuple or list")
+    if len(arr) == 0:
+        raise ValueError("need at least one array to concat")
     total_dim = 0
     if dim < 0: dim += len(arr[0].shape)
     for a in arr:

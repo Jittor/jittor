@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2020 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -22,6 +23,7 @@
 #include "profiler/profiler_guard.h"
 #include "parallel_compiler.h"
 #include "memory_profiler.h"
+#include "misc/nan_checker.h"
 
 namespace jittor {
 
@@ -48,7 +50,10 @@ void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, i
     for (Op* op : fused_op.ops) {
         uint fid1 = op->custom_data;
         int iid = 0;
-        for (Var* v : op->inputs()) {
+        for (auto ve : op->_inputs) {
+            // this is a control dependency edge, dont used
+            if (ve.back->index<0) continue;
+            auto v = ve.node->var();
             iid++;
             int iop_id;
             int iv_id;
@@ -447,12 +452,14 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         last_is_cuda = is_cuda;
         op->do_run_after_prepare(jkl);
         // record trace data
-        if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var==2)) {
+        if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var>=2)) {
             trace_data.record_execution(op, is_fused_op, jkl);
             #ifdef HAS_CUDA
             if (use_cuda)
                 checkCudaErrors(cudaDeviceSynchronize());
             #endif
+            for (Var* var : op->outputs())
+                check_nan(var);
         }
         LOGvvv << "Finished Op(" >> op->name() << rid >> 
             "/" >> queue.size() >> ") output:" << op->outputs();

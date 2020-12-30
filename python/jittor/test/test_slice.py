@@ -1,8 +1,9 @@
 # ***************************************************************
 # Copyright (c) 2020 Jittor.
-# Authors:
+# All Rights Reserved. 
+# Maintainers:
 #     Dun Liang <randonlang@gmail.com>.
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -139,6 +140,11 @@ class TestSlice(unittest.TestCase):
         c = jt.where(b>3)
         a[c] = 0
         assert (a.data == [1,2,3,0,0]).all()
+
+    def test_numpy_scalar_slice(self):
+        a = jt.random((2,2))
+        b = np.array([1])[0]
+        assert a[b].shape == [2]
 
 
 

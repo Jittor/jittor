@@ -1,7 +1,8 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: 
+# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Maintainers: 
 #     Dun Liang <randonlang@gmail.com>. 
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -39,6 +40,21 @@ class TestLoss(unittest.TestCase):
         target=np.random.randn(10,100).astype(np.float32)
         jt_y=jt_loss(jt.array(output), jt.array(target))
         tc_y=tc_loss(torch.from_numpy(output), torch.from_numpy(target))
+        assert np.allclose(jt_y.numpy(), tc_y.numpy())
+        
+    def test_nll_loss(self):
+        tc_loss = tnn.functional.nll_loss
+        jt_loss = jnn.nll_loss
+        output=np.random.randn(10,10).astype(np.float32)
+        target=np.random.randint(10, size=(10))
+        jt_y=jt_loss(jt.array(output), jt.array(target),reduction='mean')
+        tc_y=tc_loss(torch.from_numpy(output), torch.from_numpy(target),reduction='mean')
+        assert np.allclose(jt_y.numpy(), tc_y.numpy())
+        output=np.random.randn(10,10).astype(np.float32)
+        target=np.random.randint(10, size=(10))
+        weight=np.random.randn(10,).astype(np.float32)
+        jt_y=jt_loss(jt.array(output), jt.array(target),jt.array(weight),reduction='mean')
+        tc_y=tc_loss(torch.from_numpy(output), torch.from_numpy(target),torch.from_numpy(weight),reduction='mean')
         assert np.allclose(jt_y.numpy(), tc_y.numpy())
 
     def test_cross_entropy_loss(self):

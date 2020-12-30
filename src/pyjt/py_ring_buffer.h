@@ -1,6 +1,6 @@
 // ***************************************************************
 // Copyright (c) 2020 Jittor. All Rights Reserved.
-// Authors: Dun Liang <randonlang@gmail.com>.
+// Maintainers: Dun Liang <randonlang@gmail.com>.
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -13,6 +13,7 @@ namespace jittor {
 // @pyjt(RingBuffer)
 struct PyMultiprocessRingBuffer {
     RingBuffer* rb;
+    bool _keep_numpy_array = false;
     // @pyjt(__init__)
     PyMultiprocessRingBuffer(uint64 size);
     // @pyjt(__dealloc__)
@@ -23,6 +24,8 @@ struct PyMultiprocessRingBuffer {
     PyObject* pop();
     // @pyjt(clear)
     inline void clear() { rb->clear(); }
+    // @pyjt(keep_numpy_array)
+    inline void keep_numpy_array(bool keep) { _keep_numpy_array = keep; }
     // @pyjt(stop)
     inline void stop() { rb->stop(); }
     // @pyjt(is_stop)

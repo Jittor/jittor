@@ -1,9 +1,10 @@
 
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: 
+# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Maintainers: 
 #     Wenyang Zhou <576825820@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -54,6 +55,7 @@ class TestPad(unittest.TestCase):
         check_equal(torch.Tensor(arr).flip(1), jt.array(arr).flip(1))
         check_equal(torch.Tensor(arr).flip(2), jt.array(arr).flip(2))
         check_equal(torch.Tensor(arr).flip(3), jt.array(arr).flip(3))
+        check_equal(torch.Tensor(arr).flip([2,3]), jt.array(arr).flip([2,3]))
         print('pass flip test ...')
 
     def test_cross(self):
@@ -83,7 +85,12 @@ class TestPad(unittest.TestCase):
         check_equal(torchvision.utils.make_grid(torch.Tensor(arr), nrow=3, padding=4), jt.make_grid(jt.array(arr), nrow=3, padding=4))
         check_equal(torchvision.utils.make_grid(torch.Tensor(arr), nrow=3, padding=4, pad_value=-1), jt.make_grid(jt.array(arr), nrow=3, padding=4, pad_value=-1))
         check_equal(torchvision.utils.make_grid(torch.Tensor(arr), nrow=3, normalize=True, padding=4, pad_value=-1), jt.make_grid(jt.array(arr), nrow=3, normalize=True, padding=4, pad_value=-1))
+        check_equal(torchvision.utils.make_grid(torch.Tensor(arr), nrow=3, normalize=True, padding=4, pad_value=-1, range=(-100,100)), jt.make_grid(jt.array(arr), nrow=3, normalize=True, padding=4, pad_value=-1, range=(-100,100)))
         print('pass make_grid test ...')
+
+    def test_save_image(self):
+        arr = jt.array(np.random.randn(16,3,10,10))
+        jt.save_image(arr, "/tmp/a.jpg")
 
     def test_unbind(self):
         arr = np.random.randn(2,3,4)
@@ -93,6 +100,16 @@ class TestPad(unittest.TestCase):
             for idx in range(len(t_res)):
                 assert np.allclose(t_res[idx].numpy(), j_res[idx].numpy())
         print('pass unbind test ...')
+
+class TestOther(unittest.TestCase):
+    def test_save(self):
+        pp = [1,2,jt.array([1,2,3]), {"a":[1,2,3], "b":jt.array([1,2,3])}]
+        jt.save(pp, "/tmp/xx.pkl")
+        x = jt.load("/tmp/xx.pkl")
+        assert x[:2] == [1,2]
+        assert (x[2] == np.array([1,2,3])).all()
+        assert x[3]['a'] == [1,2,3]
+        assert (x[3]['b'] == np.array([1,2,3])).all()
 
 if __name__ == "__main__":
     unittest.main()

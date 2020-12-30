@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2020 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -22,6 +23,7 @@ static auto make_number = get_op_info("number")
 
 VarPtr make_grad(Op* op, Var* out, Var* dout, Var* x, int x_index) {
     if (dout == nullptr) return nullptr;
+    if (x_index<0) return nullptr;
     LOGvvvv << "Make grad op:" >> op->name() << "inputs:" >> op->inputs()
         << "out:" >> out << "dout:" >> dout << "x:" >> x << "xid:" >> x_index;
     auto dx = op->grad(out, dout, x, x_index);

@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2020 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -64,7 +65,7 @@ bool Var::alloc(Allocator* allocator) {
     if (mem_ptr) return true;
     if (auto* x = (Var*)(this->allocator)) {
         if (x->allocator->share_with(size, x->allocation)) {
-            mem_ptr = x->mem_ptr;
+            mem_ptr = ((char*) x->mem_ptr) + allocation;
             allocation = x->allocation;
             this->allocator = x->allocator;
             return true;

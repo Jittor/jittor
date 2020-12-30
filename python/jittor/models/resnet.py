@@ -1,9 +1,10 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: 
+# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Maintainers: 
 #     Guowei Yang <471184555@qq.com>
 #     Wenyang Zhou <576825820@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -154,16 +155,23 @@ def _resnet(block, layers, **kwargs):
     model = ResNet(block, layers, **kwargs)
     return model
 
-def Resnet18(**kwargs):
-    return _resnet(BasicBlock, [2, 2, 2, 2], **kwargs)
+def Resnet18(pretrained=False, **kwargs):
+    model = _resnet(BasicBlock, [2, 2, 2, 2], **kwargs)
+    if pretrained: model.load("jittorhub://resnet18.pkl")
+    return model
 resnet18 = Resnet18
 
-def Resnet34(**kwargs):
-    return _resnet( BasicBlock, [3, 4, 6, 3], **kwargs)
+def Resnet34(pretrained=False, **kwargs):
+    model = _resnet(BasicBlock, [3, 4, 6, 3], **kwargs)
+    if pretrained: model.load("jittorhub://resnet34.pkl")
+    return model
 resnet34 = Resnet34
 
-def Resnet50(**kwargs):
-    return _resnet(Bottleneck, [3, 4, 6, 3], **kwargs)
+def Resnet50(pretrained=False, **kwargs):
+    model = _resnet(Bottleneck, [3, 4, 6, 3], **kwargs)
+    if pretrained: model.load("jittorhub://resnet50.pkl")
+    return model
+
 resnet50 = Resnet50
 
 def Resnet38(**kwargs):
@@ -174,7 +182,7 @@ def Resnet26(**kwargs):
     return _resnet(Bottleneck, [1, 2, 4, 1], **kwargs)
 resnet26 = Resnet26
 
-def Resnet101(**kwargs):
+def Resnet101(pretrained=False, **kwargs):
     """
     ResNet-101 model architecture.
 
@@ -188,28 +196,38 @@ def Resnet101(**kwargs):
     return _resnet(Bottleneck, [3, 4, 23, 3], **kwargs)
 resnet101 = Resnet101
 
-def Resnet152(**kwargs):
-    return _resnet(Bottleneck, [3, 8, 36, 3], **kwargs)
+def Resnet152(pretrained=False, **kwargs):
+    model = _resnet(Bottleneck, [3, 8, 36, 3], **kwargs)
+    if pretrained: model.load("jittorhub://resnet152.pkl")
+    return model
 resnet152 = Resnet152
 
-def Resnext50_32x4d(**kwargs):
+def Resnext50_32x4d(pretrained=False, **kwargs):
     kwargs['groups'] = 32
     kwargs['width_per_group'] = 4
-    return _resnet(Bottleneck, [3, 4, 6, 3], **kwargs)
+    model = _resnet(Bottleneck, [3, 4, 6, 3], **kwargs)
+    if pretrained: model.load("jittorhub://resnext50_32x4d.pkl")
+    return model
 resnext50_32x4d = Resnext50_32x4d
 
-def Resnext101_32x8d(**kwargs):
+def Resnext101_32x8d(pretrained=False, **kwargs):
     kwargs['groups'] = 32
     kwargs['width_per_group'] = 8
-    return _resnet(Bottleneck, [3, 4, 23, 3], **kwargs)
+    model = _resnet(Bottleneck, [3, 4, 23, 3], **kwargs)
+    if pretrained: model.load("jittorhub://resnext101_32x8d.pkl")
+    return model
 resnext101_32x8d = Resnext101_32x8d
 
-def Wide_resnet50_2(**kwargs):
+def Wide_resnet50_2(pretrained=False, **kwargs):
     kwargs['width_per_group'] = (64 * 2)
-    return _resnet(Bottleneck, [3, 4, 6, 3], **kwargs)
+    model = _resnet(Bottleneck, [3, 4, 6, 3], **kwargs)
+    if pretrained: model.load("jittorhub://wide_resnet50_2.pkl")
+    return model
 wide_resnet50_2 = Wide_resnet50_2
 
-def Wide_resnet101_2(**kwargs):
+def Wide_resnet101_2(pretrained=False, **kwargs):
     kwargs['width_per_group'] = (64 * 2)
-    return _resnet(Bottleneck, [3, 4, 23, 3], **kwargs)
+    model = _resnet(Bottleneck, [3, 4, 23, 3], **kwargs)
+    if pretrained: model.load("jittorhub://wide_resnet101_2.pkl")
+    return model
 wide_resnet101_2 = Wide_resnet101_2

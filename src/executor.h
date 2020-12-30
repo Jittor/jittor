@@ -1,12 +1,16 @@
 // ***************************************************************
 // Copyright (c) 2020 Jittor. All Rights Reserved.
-// Authors: Dun Liang <randonlang@gmail.com>. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
 #include "common.h"
 #include "mem/allocator.h"
+#ifdef HAS_CUDA
+#include <cuda_runtime.h>
+#include "helper_cuda.h"
+#endif
 
 namespace jittor {
 

@@ -1,8 +1,9 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: 
+# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Maintainers: 
 #     Guoye Yang <498731903@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -16,6 +17,12 @@ import math
 import unittest
 from .test_reorder_tuner import simple_parser
 from .test_log import find_log_with_re
+
+try:
+    jt.dirty_fix_pytorch_runtime_error()
+    import torch
+except:
+    skip_this_test = True
 
 class TestRandomOp(unittest.TestCase):
     @unittest.skipIf(not jt.has_cuda, "Cuda not found")
@@ -54,6 +61,26 @@ class TestRandomOp(unittest.TestCase):
         assert (np.abs((data<(1-3)).mean() - r) < 0.1)
         assert (np.abs((data<(1)).mean() - 0.5) < 0.1)
         assert (np.abs((data<(1+3)).mean() - (1-r)) < 0.1)
+
+        np_res = np.random.normal(1, 0.1, (100, 100))
+        jt_res = jt.normal(1., 0.1, (100, 100))
+        assert (np.abs(np_res.mean() - jt_res.data.mean()) < 0.1)
+        assert (np.abs(np_res.std() - jt_res.data.std()) < 0.1)
+
+        np_res = torch.normal(torch.arange(1., 10000.), 1)
+        jt_res = jt.normal(jt.arange(1, 10000), 1)
+        assert (np.abs(np_res.mean() - jt_res.data.mean()) < 0.1)
+        assert (np.abs(np_res.std() - jt_res.data.std()) < 1)
+
+        np_res = np.random.randn(100, 100)
+        jt_res = jt.randn(100, 100)
+        assert (np.abs(np_res.mean() - jt_res.data.mean()) < 0.1)
+        assert (np.abs(np_res.std() - jt_res.data.std()) < 0.1)
+
+        np_res = np.random.rand(100, 100)
+        jt_res = jt.rand(100, 100)
+        assert (np.abs(np_res.mean() - jt_res.data.mean()) < 0.1)
+        assert (np.abs(np_res.std() - jt_res.data.std()) < 0.1)
 
     @unittest.skipIf(not jt.has_cuda, "Cuda not found")
     @jt.flag_scope(use_cuda=1)

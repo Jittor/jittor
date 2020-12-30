@@ -1,6 +1,6 @@
 // ***************************************************************
 // Copyright (c) 2020 Jittor. All Rights Reserved.
-// Authors: Dun Liang <randonlang@gmail.com>. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -95,7 +95,7 @@ static vector<Stack> get_stack_info() {
     int i=n;
     while (i) frames[--i] = frame, frame = frame->f_back;
     PyObject* prev_obj = nullptr;
-    if (trace_py_var == 2) {
+    if (trace_py_var >= 3) {
         // trace raw stack
         auto start = std::max(0, n-5);
         for (int i=start; i<n; i++) {
@@ -185,12 +185,13 @@ void TraceData::record_node(Node* node, bool record_stack) {
     NodeData data;
     data.id = node_data_cnt++;
     id_map[node] = data.id;
-    if (!node->is_var() || trace_py_var==2) {
+    if (!node->is_var() || trace_py_var>=3) {
         if (record_stack) {
             if (trace_grad_op) {
                 auto iter = trace_data.id_map.find(trace_grad_op);
                 data.stacks.emplace_back(Stack{"grad", "Grad", "", 0});
                 if (iter != trace_data.id_map.end()) {
+                    data.attrs["grad_op_id"] = S(iter->second);
                     auto& prev_stack = trace_data.node_data[iter->second].stacks;
                     for (auto& s : prev_stack)
                         data.stacks.push_back(s);
@@ -218,7 +219,7 @@ void TraceData::release_node(Node* node) {
         return;
     auto node_id = iter->second;
     id_map.erase(node);
-    if (trace_py_var == 1) {
+    if (trace_py_var >= 1) {
         node_data.erase(node_id);
     }
 }
