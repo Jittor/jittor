@@ -1,8 +1,9 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: 
+# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Maintainers: 
 #     Wenyang Zhou <576825820@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -12,8 +13,10 @@ from jittor import nn
 
 __all__ = ['GoogLeNet', 'googlenet']
 
-def googlenet(**kwargs):
-    return GoogLeNet(**kwargs)
+def googlenet(pretrained=False, **kwargs):
+    model = GoogLeNet(**kwargs)
+    if pretrained: model.load("jittorhub://googlenet.pkl")
+    return model
 
 class GoogLeNet(nn.Module):
     """ GoogLeNet model architecture.

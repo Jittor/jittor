@@ -1,8 +1,9 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: 
+# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Maintainers: 
 #     Wenyang Zhou <576825820@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -61,6 +62,7 @@ class AlexNet(nn.Module):
         x = self.classifier(x)
         return x
 
-def alexnet(**kwargs):
+def alexnet(pretrained=False, **kwargs):
     model = AlexNet(**kwargs)
+    if pretrained: model.load("jittorhub://alexnet.pkl")
     return model

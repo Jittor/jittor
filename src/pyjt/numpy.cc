@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2020 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -18,6 +19,7 @@ unsigned int (*PyArray_GetNDArrayCFeatureVersion)();
 int (*PyArray_SetBaseObject)(PyObject *arr, PyObject *obj);
 PyObject* (*PyArray_NewCopy)(PyObject *, int);
 int (*PyArray_CopyInto)(PyObject *, PyObject *);
+void (*PyArray_CastScalarToCtype)(PyObject* scalar, void* ctypeptr, PyArrayDescr_Proxy* outcode);
 
 tmp_data_t tmp_data;
 
@@ -36,6 +38,7 @@ void numpy_init() {
     fill(PyArray_SetBaseObject, 282);
     fill(PyArray_NewCopy, 85);
     fill(PyArray_CopyInto, 82);
+    fill(PyArray_CastScalarToCtype, 63);
 
     ASSERT(PyArray_GetNDArrayCFeatureVersion()>=7);
 }

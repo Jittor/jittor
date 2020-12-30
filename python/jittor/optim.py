@@ -1,12 +1,13 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors:
+# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Maintainers:
 #     Guowei Yang <471184555@qq.com>
 #     Guoye Yang <498731903@qq.com>
 #     Wenyang Zhou <576825820@qq.com>
 #     Meng-Hao Guo <guomenghao1997@gmail.com>
 #     Dun Liang <randonlang@gmail.com>.
 #
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -33,11 +34,15 @@ class Optimizer(object):
             assert isinstance(pg, dict)
             self.param_groups.append(pg)
         self.n_step = 0
+
+    def add_param_group(self, group):
+        self.param_groups.append(group)
     
     @property
     def defaults(self):
-        exclude = set(("defaults", "param_groups", "n_step"))
-        return { k:v for k, v in self.__dict__.items() if k[0] != '_' and k not in exclude }
+        exclude = set(("defaults", "param_groups", "n_step", "pre_step", "step"))
+        return { k:v for k, v in self.__dict__.items()
+            if k[0] != '_' and k not in exclude and not callable(v) }
 
     def pre_step(self, loss):
         """ something should be done before step, such as calc gradients, mpi sync, and so on.
@@ -115,6 +120,12 @@ class SGD(Optimizer):
             for p in pg["params"]:
                 values.append(jt.zeros(p.shape, p.dtype).stop_grad())
 
+    def add_param_group(self, group):
+        values = group["values"] = []
+        for p in group["params"]:
+            values.append(jt.zeros(p.shape, p.dtype).stop_grad())
+        self.param_groups.append(group)
+
     def step(self, loss=None):
         if loss is not None:
             self.pre_step(loss)
@@ -159,6 +170,12 @@ class RMSprop(Optimizer):
             for p in pg["params"]:
                 values.append(jt.zeros(p.shape, p.dtype).stop_grad())
 
+    def add_param_group(self, group):
+        values = group["values"] = []
+        for p in group["params"]:
+            values.append(jt.zeros(p.shape, p.dtype).stop_grad())
+        self.param_groups.append(group)
+
     def step(self, loss=None):
         if loss is not None:
             self.pre_step(loss)
@@ -194,6 +211,14 @@ class Adam(Optimizer):
             for p in pg["params"]:
                 values.append(jt.zeros(p.shape, p.dtype).stop_grad())
                 m.append(jt.zeros(p.shape, p.dtype).stop_grad())
+
+    def add_param_group(self, group):
+        values = group["values"] = []
+        m = group["m"] = []
+        for p in group["params"]:
+            values.append(jt.zeros(p.shape, p.dtype).stop_grad())
+            m.append(jt.zeros(p.shape, p.dtype).stop_grad())
+        self.param_groups.append(group)
 
     def step(self, loss=None):
         if loss is not None:

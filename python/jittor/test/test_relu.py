@@ -1,9 +1,10 @@
 
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: 
+# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Maintainers: 
 #     Wenyang Zhou <576825820@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -28,7 +29,7 @@ def check_equal(arr, j_layer, p_layer):
     pytorch_arr = torch.Tensor(arr)
     jittor_result = j_layer(jittor_arr)
     pytorch_result = p_layer(pytorch_arr)
-    assert np.allclose(pytorch_result.detach().numpy(), jittor_result.numpy())
+    assert np.allclose(pytorch_result.detach().numpy(), jittor_result.numpy(),rtol=1e-5,atol=1e-5)
 
 @unittest.skipIf(skip_this_test, "No Torch found")
 class TestRelu(unittest.TestCase):
@@ -61,6 +62,15 @@ class TestRelu(unittest.TestCase):
         check_equal(arr, jnn.LeakyReLU(), tnn.LeakyReLU())
         check_equal(arr, jnn.LeakyReLU(2), tnn.LeakyReLU(2))
         check_equal(arr, jnn.LeakyReLU(99.9), tnn.LeakyReLU(99.9))
+        
+        # ***************************************************************
+        # Test ELU Layer
+        # ***************************************************************
+        arr = np.random.randn(16,10,224,224)
+        check_equal(arr, jnn.ELU(), tnn.ELU())
+        check_equal(arr, jnn.ELU(0.3), tnn.ELU(0.3))
+        check_equal(arr, jnn.ELU(2), tnn.ELU(2))
+        check_equal(arr, jnn.ELU(99.9), tnn.ELU(99.9))
 
         # ***************************************************************
         # Test GELU Layer

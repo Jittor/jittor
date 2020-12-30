@@ -1,5 +1,6 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -138,6 +139,10 @@ def setup_cuda_extern():
             import traceback
             line = traceback.format_exc()
             LOG.w(f"CUDA found but {lib_name} is not loaded:\n{line}")
+            if lib_name == "cudnn":
+                LOG.w(f"Develop version of CUDNN not found, "
+                    "please refer to CUDA offical tar file installation: "
+                    "https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#installlinux-tar")
 
 def setup_cuda_lib(lib_name, link=True, extra_flags=""):
     globals()[lib_name+"_ops"] = None
@@ -183,7 +188,7 @@ def install_cutt(root_folder):
     filename = "cutt-master.zip"
     fullname = os.path.join(root_folder, filename)
     dirname = os.path.join(root_folder, filename.replace(".zip",""))
-    true_md5 = "a6f4f7f75310a69b131e21f1ebec768a"
+    true_md5 = "af5bc35eea1832a42c0e0011659b7209"
 
     if os.path.exists(fullname):
         md5 = run_cmd('md5sum '+fullname).split()[0]
@@ -205,7 +210,11 @@ def install_cutt(root_folder):
         zf.close()
 
         LOG.i("installing cutt...")
-        run_cmd(f"make", cwd=dirname)
+        arch_flag = ""
+        if len(flags.cuda_archs):
+            arch_flag = f" -arch=compute_{min(flags.cuda_archs)} "
+            arch_flag += ''.join(map(lambda x:f' -code=sm_{x} ', flags.cuda_archs))
+        run_cmd(f"make NVCC_GENCODE='{arch_flag}' nvcc_path='{nvcc_path}'", cwd=dirname)
     return dirname
 
 def setup_cutt():

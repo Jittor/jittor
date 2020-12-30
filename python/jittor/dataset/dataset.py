@@ -1,8 +1,9 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: 
+# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Maintainers: 
 #     Meng-Hao Guo <guomenghao1997@gmail.com>
 #     Dun Liang <randonlang@gmail.com>. 
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -27,8 +28,9 @@ mpi = jt.mpi
 img_open_hook = HookTimer(Image, "open")
 
 class Worker:
-    def __init__(self, target, args, buffer_size):
+    def __init__(self, target, args, buffer_size, keep_numpy_array=False):
         self.buffer = jt.RingBuffer(buffer_size)
+        self.buffer.keep_numpy_array(keep_numpy_array)
 
         self.status = mp.Array('f', 5, lock=False)
         self.p = mp.Process(target=target, args=args+(self.buffer,self.status))
@@ -67,7 +69,8 @@ class Dataset(object):
                  drop_last = False,
                  num_workers = 0,
                  buffer_size = 512*1024*1024,
-                 stop_grad = True):
+                 stop_grad = True,
+                 keep_numpy_array = False):
         super().__init__()
         self.total_len = None
         self.batch_size = batch_size
@@ -76,6 +79,7 @@ class Dataset(object):
         self.num_workers = num_workers
         self.buffer_size = buffer_size
         self.stop_grad = stop_grad
+        self.keep_numpy_array = keep_numpy_array
 
     def __getitem__(self, index):
         raise NotImplementedError
@@ -101,7 +105,7 @@ class Dataset(object):
         Attrs:
 
             * batch_size(int): batch size, default 16.
-            * totol_len(int): totol lenght.
+            * total_len(int): total lenght.
             * shuffle(bool): shuffle at each epoch, default False.
             * drop_last(bool): if true, the last batch of dataset might smaller than batch_size, default True.
             * num_workers: number of workers for loading data
@@ -111,12 +115,15 @@ class Dataset(object):
         for k,v in kw.items():
             assert hasattr(self, k), k
             setattr(self, k, v)
+        self.reset()
         return self
 
     def to_jittor(self, batch):
         '''
         Change batch data to jittor array, such as np.ndarray, int, and float.
         '''
+        if self.keep_numpy_array: return batch
+        if isinstance(batch, jt.Var): return batch
         to_jt = lambda x: jt.array(x).stop_grad() \
             if self.stop_grad else jt.array(x)
         if isinstance(batch, np.ndarray):
@@ -129,7 +136,7 @@ class Dataset(object):
                 isinstance(a, float):
                 new_batch.append(to_jt(a))
             else:
-                new_batch.append(a)
+                new_batch.append(self.to_jittor(a))
         return new_batch
 
     def collate_batch(self, batch):
@@ -299,10 +306,25 @@ Example::
         self.num_idle_c = mp.Condition(self.gid.get_lock())
         for i in range(self.num_workers):
             w = Worker(target=self._worker_main, args=(i,), 
-                       buffer_size=self.buffer_size)
+                       buffer_size=self.buffer_size,
+                       keep_numpy_array=self.keep_numpy_array)
             workers.append(w)
         self.workers = workers
         self.index_list_numpy = np.ndarray(dtype='int32', shape=self.real_len, buffer=self.index_list)
+
+    def reset(self):
+        if not hasattr(self, "workers"):
+            return
+        self._stop_all_workers()
+        self.terminate()
+        del self.index_list
+        del self.idmap
+        del self.gid
+        del self.gidc
+        del self.num_idle
+        del self.num_idle_c
+        del self.workers
+        del self.index_list_numpy
 
     def __del__(self):
         if mp_log_v:

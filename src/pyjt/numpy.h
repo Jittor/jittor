@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2020 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -100,6 +101,7 @@ extern unsigned int (*PyArray_GetNDArrayCFeatureVersion)();
 extern int (*PyArray_SetBaseObject)(PyObject *arr, PyObject *obj);
 extern PyObject* (*PyArray_NewCopy)(PyObject *, int);
 extern int (*PyArray_CopyInto)(PyObject *, PyObject *);
+extern void (*PyArray_CastScalarToCtype)(PyObject* scalar, void* ctypeptr, PyArrayDescr_Proxy* outcode);
 
 #define PyArray_Copy(obj) PyArray_NewCopy(obj, 0)
 

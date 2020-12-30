@@ -5,7 +5,9 @@
 # ***************************************************************
 import unittest
 import jittor as jt
-from jittor.nn import Pool, pool
+from jittor.nn import Pool, pool, AvgPool2d, avg_pool2d
+from jittor.nn import MaxPool2d as j_MaxPool2d
+from jittor.nn import max_pool2d as j_max_pool2d
 import numpy as np
 from .test_core import expect_error
 from .test_grad import ngrad
@@ -101,7 +103,7 @@ class TestArgPoolOp(unittest.TestCase):
         check(jt_model, torch_model, shape, False)
         for i in range(10):
             check(jt_model, torch_model, [1,1,300,300], True)
-            
+
     def test_cpu_(self):
         # x = jt.random([32, 128, 157, 300])
         x = jt.random([4, 128, 157, 300])
@@ -137,6 +139,51 @@ class TestArgPoolOp(unittest.TestCase):
         torch_model = AvgPool2d(3, 1, 1, ceil_mode=True)
         shape = (2, 16, 33, 33)
         check(jt_model, torch_model, shape, False)
+
+    def test_AvgPool2d(self):
+        from torch.nn import AvgPool2d as t_AvgPool2d
+        jt_model = AvgPool2d(3, 1, 1, ceil_mode=True)
+        torch_model = t_AvgPool2d(3, 1, 1, ceil_mode=True)
+        shape = (2, 16, 33, 33)
+        check(jt_model, torch_model, shape, False)
+
+        jt_model = AvgPool2d(3, 1, 1, ceil_mode=True, count_include_pad=False)
+        torch_model = t_AvgPool2d(3, 1, 1, ceil_mode=True, count_include_pad=False)
+        shape = (2, 16, 100, 100)
+        check(jt_model, torch_model, shape, False)
+        print('finish')
+
+    def test_avg_pool2d(self):
+        from torch.nn.functional import avg_pool2d as t_avg_pool2d
+        arr = np.random.random((2, 16, 33, 33))
+        jt_model = avg_pool2d(jt.array(arr), 3, 1, 1, ceil_mode=True)
+        torch_model = t_avg_pool2d(torch.Tensor(arr), 3, 1, 1, ceil_mode=True)
+        assert np.allclose(jt_model.numpy(), torch_model.numpy())
+
+        jt_model = avg_pool2d(jt.array(arr), 3, 1, 1, ceil_mode=True, count_include_pad=False)
+        torch_model = t_avg_pool2d(torch.Tensor(arr), 3, 1, 1, ceil_mode=True, count_include_pad=False)
+        assert np.allclose(jt_model.numpy(), torch_model.numpy())
+        print('finish')
+
+    def test_MaxPool2d(self):
+        from torch.nn import MaxPool2d
+        jt_model = j_MaxPool2d(3, 1, 1, ceil_mode=True)
+        torch_model = MaxPool2d(3, 1, 1, ceil_mode=True)
+        shape = (2, 16, 33, 33)
+        check(jt_model, torch_model, shape, False)
+        print('finish')
+
+    def test_max_pool2d(self):
+        from torch.nn.functional import max_pool2d
+        arr = np.random.random((2, 16, 33, 33))
+        jt_model = j_max_pool2d(jt.array(arr), 3, 1, 1, ceil_mode=True)
+        torch_model = max_pool2d(torch.Tensor(arr), 3, 1, 1, ceil_mode=True)
+        assert np.allclose(jt_model.numpy(), torch_model.numpy())
+
+        jt_model = j_max_pool2d(jt.array(arr), 3, 1, 1)
+        torch_model = max_pool2d(torch.Tensor(arr), 3, 1, 1)
+        assert np.allclose(jt_model.numpy(), torch_model.numpy())
+        print('finish')
 
 if __name__ == "__main__":
     unittest.main()

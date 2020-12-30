@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2020 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -97,6 +98,16 @@ VarHolder* VarHolder::update(VarHolder* v) {
     auto dv = jittor::detach(v->var);
     update_queue.push(dv.ptr, var);
     *this = move(dv);
+    return this;
+}
+
+VarHolder* VarHolder::_update(VarHolder* v) {
+    auto dv = jittor::detach(v->var);
+    if (var->flags.get(NodeFlags::_in_update_queue))
+        update_queue.push(dv.ptr, var);
+    var->release_both_liveness();
+    var = dv.ptr;
+    dv.ptr = nullptr;
     return this;
 }
 

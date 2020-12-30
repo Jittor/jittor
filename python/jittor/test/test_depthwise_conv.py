@@ -1,8 +1,9 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors:
+# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Maintainers:
 #     Guoye Yang <498731903@qq.com>
 #     Dun Liang <randonlang@gmail.com>.
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -12,8 +13,8 @@ import numpy as np
 import jittor.models as jtmodels
 
 def load_parameters(m1, m2):
-    m1.save('temp.pk')
-    m2.load('temp.pk')
+    m1.save('/tmp/temp.pk')
+    m2.load('/tmp/temp.pk')
 
 def compare_parameters(m1, m2):
     ps1 = m1.parameters()
@@ -23,7 +24,7 @@ def compare_parameters(m1, m2):
         y = ps2[i].data + 1e-8
         relative_error = abs(x - y) / abs(y)
         diff = relative_error.mean()
-        assert diff < 1e-4, (diff, 'backward', ps2[i].name())
+        assert diff < 1e-4, (diff, 'backward', ps2[i].name(), ps1[i].mean(), ps1[i].std(), ps2[i].mean(), ps2[i].std())
 
 class TestDepthwiseConv(unittest.TestCase):
     @unittest.skipIf(not jt.has_cuda, "Cuda not found")
@@ -62,21 +63,24 @@ class TestDepthwiseConv(unittest.TestCase):
         jt_optimizer2 = jt.nn.SGD(jittor_model2.parameters(), lr = lr)
 
         jittor_result = jittor_model(jittor_test_img)
-        loss = jittor_result.sum()
+        mask = jt.random(jittor_result.shape, jittor_result.dtype)
+        loss = jittor_result * mask
         jt_optimizer.step(loss)
         jt.sync_all(True)
 
         jittor_result2 = jittor_model2(jittor_test_img)
-        loss = jittor_result2.sum()
-        jt_optimizer2.step(loss)
-        jt.sync_all(True)
-        compare_parameters(jittor_model, jittor_model2)
+        loss = jittor_result2 * mask
 
         x = jittor_result2.data + 1e-8
         y = jittor_result.data + 1e-8
         relative_error = abs(x - y) / abs(y)
         diff = relative_error.mean()
         assert diff < 1e-4, (diff, 'forword')
+
+        jt_optimizer2.step(loss)
+        jt.sync_all(True)
+        compare_parameters(jittor_model, jittor_model2)
+
 
         jt.clean()
         jt.gc()

@@ -1,8 +1,9 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: 
+# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Maintainers: 
 #     Wenyang Zhou <576825820@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -93,7 +94,8 @@ class MobileNetV2(nn.Module):
     def execute(self, x):
         return self._forward_impl(x)
 
-def mobilenet_v2():
+def mobilenet_v2(pretrained=False):
     model = MobileNetV2()
+    if pretrained: model.load("jittorhub://mobilenet_v2.pkl")
     return model
 

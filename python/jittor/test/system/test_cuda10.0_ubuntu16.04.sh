@@ -28,7 +28,7 @@ RUN pip3 install jittor --timeout 100 && python3.7 -m jittor.test.test_example
 RUN pip3 uninstall jittor -y
 
 COPY . jittor
-RUN python3.7 -m pip install jittor
+RUN python3.7 -m pip install ./jittor
 RUN python3.7 -m jittor.test.test_core
 EOF
 

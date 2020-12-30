@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2020 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -13,11 +14,6 @@ namespace jittor {
 #ifndef JIT
 static auto make_transpose = get_op_info("transpose")
     .get_constructor<VarPtr, Var*, NanoVector>();
-
-#ifdef HAS_CUDA
-static auto make_reshape = get_op_info("reshape")
-    .get_constructor<VarPtr, Var*, NanoVector>();
-#endif
 
 TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
     int i=0;

@@ -1,11 +1,12 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors:
+# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Maintainers:
 #     Guowei Yang <471184555@qq.com>
 #     Wenyang Zhou <576825820@qq.com>
 #     Meng-Hao Guo <guomenghao1997@gmail.com>
 #     Dun Liang <randonlang@gmail.com>.
 #
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -30,11 +31,14 @@ class Pool(Module):
         if self.ceil_mode == False:
             h = (H+self.padding*2-self.kernel_size)//self.stride+1
             w = (W+self.padding*2-self.kernel_size)//self.stride+1
+            use_code_op = self.op in ['maximum', 'minimum']
+            # some second order avg_pool is require, so we don't use code op here  
         else:
             h = (H+self.padding*2-self.kernel_size + self.stride - 1)//self.stride+1
             w = (W+self.padding*2-self.kernel_size + self.stride - 1)//self.stride+1
+            use_code_op = self.op in ['maximum', 'minimum', 'mean']
 
-        if self.op in ['maximum', 'minimum', 'mean']:
+        if use_code_op:
             if self.op == 'mean':
                 if self.count_include_pad:
                     count = f"int count = {self.kernel_size*self.kernel_size};"
@@ -187,5 +191,25 @@ class AdaptiveAvgPool2d(Module):
         ])
         return xx.reduce("mean", [4,5])
 
-def pool(x, kernel_size, op, padding=0, stride = 1):
+def pool(x, kernel_size, op, padding=0, stride=None):
     return Pool(kernel_size, stride, padding, op=op)(x)
+
+class AvgPool2d(Module):
+    def __init__(self, kernel_size, stride=None, padding=0, ceil_mode=False, count_include_pad=True):
+        self.layer = Pool(kernel_size=kernel_size, stride=stride, padding=padding, ceil_mode=ceil_mode, count_include_pad=count_include_pad, op="mean")
+    
+    def execute(self, x):
+        return self.layer(x)
+
+def avg_pool2d(x, kernel_size, stride=None, padding=0, ceil_mode=False, count_include_pad=True):
+    return AvgPool2d(kernel_size, stride, padding, ceil_mode, count_include_pad)(x)
+
+class MaxPool2d(Module):
+    def __init__(self, kernel_size, stride=None, padding=0, dilation=None, return_indices=None, ceil_mode=False):
+        self.layer = Pool(kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, return_indices=return_indices, ceil_mode=ceil_mode, op="maximum")
+    
+    def execute(self, x):
+        return self.layer(x)
+
+def max_pool2d(x, kernel_size, stride=None, padding=0, dilation=None, return_indices=None, ceil_mode=False):
+    return MaxPool2d(kernel_size, stride, padding, dilation, return_indices, ceil_mode)(x)

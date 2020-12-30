@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2020 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -142,6 +143,8 @@ void UpdateQueue::push(Var* v, Var* prev) {
 void UpdateQueue::pop(Var* v) {
     auto iter = map.find(v);
     iter->second->owner->erase(iter->second);
+    if (iter->second->owner->size() == 0)
+        queue.erase(iter->second->owner);
     map.erase(iter);
 }
 

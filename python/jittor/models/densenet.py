@@ -1,8 +1,9 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: 
+# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Maintainers: 
 #     Guowei Yang <471184555@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -21,7 +22,7 @@ def densenet121(pretrained=False, **kwargs):
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     '''
     model = DenseNet(num_init_features=64, growth_rate=32, block_config=(6, 12, 24, 16), **kwargs)
-    assert not pretrained, "pretrained doesn't support now"
+    if pretrained: model.load("jittorhub://densenet121.pkl")
     return model
 
 def densenet161(pretrained=False, **kwargs):
@@ -32,7 +33,7 @@ def densenet161(pretrained=False, **kwargs):
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     '''
     model = DenseNet(num_init_features=96, growth_rate=48, block_config=(6, 12, 36, 24), **kwargs)
-    assert not pretrained, "pretrained doesn't support now"
+    if pretrained: model.load("jittorhub://densenet161.pkl")
     return model
 
 def densenet169(pretrained=False, **kwargs):
@@ -43,7 +44,7 @@ def densenet169(pretrained=False, **kwargs):
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     '''
     model = DenseNet(num_init_features=64, growth_rate=32, block_config=(6, 12, 32, 32), **kwargs)
-    assert not pretrained, "pretrained doesn't support now"
+    if pretrained: model.load("jittorhub://densenet169.pkl")
     return model
 
 def densenet201(pretrained=False, **kwargs):
@@ -54,7 +55,7 @@ def densenet201(pretrained=False, **kwargs):
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     '''
     model = DenseNet(num_init_features=64, growth_rate=32, block_config=(6, 12, 48, 32), **kwargs)
-    assert not pretrained, "pretrained doesn't support now"
+    if pretrained: model.load("jittorhub://densenet201.pkl")
     return model
 
 
