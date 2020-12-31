@@ -205,7 +205,7 @@ def cross_entropy_loss(output, target, ignore_index=None):
     if ignore_index is None:
         return loss.mean()
     else:
-        return loss.sum() / jt.maximum(mask.int().sum(), 1)
+        return (loss*mask).sum() / jt.maximum(mask.int().sum(), 1)
 
 def mse_loss(output, target):
     return (output-target).sqr().mean()
