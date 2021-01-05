@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <sys/sysinfo.h>
 #include <sstream>
+#include "pybind/py_var_tracer.h"
 
 namespace jittor {
 
@@ -63,7 +64,7 @@ void MemoryProfiler::check() {
 
         allocations.clear();
         size_t memory_size = 0;
-        vector<std::pair<string, size_t>> live_vars;
+        std::vector<std::pair<std::pair<string, vector<Stack>>, size_t>> live_vars;
         vector<Node*> queue;
 
         auto t = ++Node::tflag_count;
@@ -77,9 +78,10 @@ void MemoryProfiler::check() {
             if (node->is_var()) {
                 Var* var = (Var*)node;
                 if (var->mem_ptr != nullptr) {
+                    vector<Stack> stacks = get_node_trace(var);
                     std::stringstream stream;
                     stream << var;
-                    live_vars.push_back(std::make_pair(stream.str(), var->size));
+                    live_vars.push_back(std::make_pair(std::make_pair(stream.str(), stacks), var->size));
                     if (!allocations.count(var->mem_ptr)) {
                         allocations[var->mem_ptr] = 1;
                         memory_size += var->size;
@@ -92,7 +94,7 @@ void MemoryProfiler::check() {
     }
 }
 
-bool MemoryProfiler::cmp(const std::pair<string, size_t>& a, const std::pair<string, size_t>& b) {
+bool MemoryProfiler::cmp(const std::pair<std::pair<string, vector<Stack>>, size_t>& a, const std::pair<std::pair<string, vector<Stack>>, size_t>& b) {
     return a.second > b.second;
 }
 
@@ -104,7 +106,11 @@ void MemoryProfiler::display_max_memory_info() {
     log << "max var memory" << FloatOutput_{(double)max_memory_size, " KMG", 1024, "B"} << "\n\n";
     log << "[Size]" << "[Percent]" << "[Var Info]" << "\n";
     for (int i = 0; i < max_live_vars.size(); ++i) {
-        log << FloatOutput_{(double)max_live_vars[i].second, " KMG", 1024, "B"} << double(max_live_vars[i].second) / max_memory_size * 100 << "%" << max_live_vars[i].first << "\n\n";
+        log << FloatOutput_{(double)max_live_vars[i].second, " KMG", 1024, "B"} 
+        << double(max_live_vars[i].second) / max_memory_size * 100 << "%" 
+        << max_live_vars[i].first.first 
+        << max_live_vars[i].first.second[0].file_path + ":" + std::to_string(max_live_vars[i].first.second[0].lineno)
+        << "\n\n";
     }
     log << "=========================\n";
     log.end();
@@ -112,6 +118,31 @@ void MemoryProfiler::display_max_memory_info() {
 
 void display_max_memory_info() {
     memory_profiler.display_max_memory_info();
+}
+
+string MemoryProfiler::get_max_memory_info() {
+    std::stringstream out;
+    string div1 = "[!@#div1!@#]";
+    string div2 = "[!@#div2!@#]";
+    string div3 = "[!@#div3!@#]";
+
+    std::sort(max_live_vars.begin(), max_live_vars.end(), cmp);
+    out << max_memory_size;
+    for (int i = 0; i < max_live_vars.size(); ++i) {
+        out << div1;
+        out << max_live_vars[i].first.first << div2;
+        out << max_live_vars[i].second << div2;
+        for (int j = 0; j < max_live_vars[i].first.second.size(); ++j) {
+            out << max_live_vars[i].first.second[j].file_path + ":" + std::to_string(max_live_vars[i].first.second[j].lineno) << div3
+                << max_live_vars[i].first.second[j].module_name << div3
+                << max_live_vars[i].first.second[j].module_type << div2;
+        }
+    }
+    return out.str();
+}
+
+string get_max_memory_info() {
+    return memory_profiler.get_max_memory_info();
 }
 
 } // jittor

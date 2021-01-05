@@ -63,7 +63,7 @@ class TestMemoryProfiler(unittest.TestCase):
         prev = time.time()
         SGD = nn.SGD(mnist_net.parameters(), self.learning_rate, self.momentum, self.weight_decay)
 
-        iters = 50
+        iters = 10
         for batch_idx, (data, target) in enumerate(self.train_loader):
             if (batch_idx > iters):
                 break
@@ -82,6 +82,7 @@ class TestMemoryProfiler(unittest.TestCase):
             jt.fetch(batch_idx, loss, output, target, callback)
         jt.sync_all(True)
         jt.display_max_memory_info()
+        jt.get_max_memory_treemap()
         
 if __name__ == "__main__":
     unittest.main()

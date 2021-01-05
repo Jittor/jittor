@@ -97,7 +97,8 @@ static vector<Stack> get_stack_info() {
     PyObject* prev_obj = nullptr;
     if (trace_py_var >= 3) {
         // trace raw stack
-        auto start = std::max(0, n-5);
+        // auto start = std::max(0, n-5);
+        auto start = 0;
         for (int i=start; i<n; i++) {
             auto f = frames[i];
             auto filename = to_string(f->f_code->co_filename);
@@ -185,7 +186,7 @@ void TraceData::record_node(Node* node, bool record_stack) {
     NodeData data;
     data.id = node_data_cnt++;
     id_map[node] = data.id;
-    if (!node->is_var() || trace_py_var>=3) {
+    if (trace_py_var) {
         if (record_stack) {
             if (trace_grad_op) {
                 auto iter = trace_data.id_map.find(trace_grad_op);
@@ -362,5 +363,17 @@ string _get_stack_info(Node* node) {
 void print_node_trace(const Node* node, std::ostream& os) {
     os << _get_stack_info((Node*)node);
 }
+
+vector<Stack> get_node_trace(Node* node) {
+    auto iter = trace_data.id_map.find(node);
+    if (iter == trace_data.id_map.end())
+        return vector<Stack>();
+    auto node_id = iter->second;
+    auto iter2 = trace_data.node_data.find(node_id);
+    if (iter2 == trace_data.node_data.end())
+        return vector<Stack>();
+    return iter2->second.stacks;
+}
+
 
 } // jittor
