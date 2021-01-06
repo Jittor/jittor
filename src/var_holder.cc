@@ -127,6 +127,7 @@ ArrayArgs VarHolder::fetch_sync() {
 
 ItemData VarHolder::item() {
     sync();
+    CHECK(var->num==1) << "Item var size should be 1, but got" << var->num;
     ItemData data;
     data.dtype = var->dtype();
     auto dsize = data.dtype.dsize();
