@@ -193,7 +193,9 @@ def Resnet101(**kwargs):
         y = model(x) # [10, 1000]
 
     """
-    return _resnet(Bottleneck, [3, 4, 23, 3], **kwargs)
+    model = _resnet(Bottleneck, [3, 4, 23, 3], **kwargs)
+    if pretrained: model.load("jittorhub://resnet101.pkl")
+    return model
 resnet101 = Resnet101
 
 def Resnet152(pretrained=False, **kwargs):
