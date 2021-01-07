@@ -722,8 +722,100 @@ def triu_(x,diagonal=0):
 
 jt.Var.triu_ = triu_
 
+def python_pass_warper(mod_func, args, kw):
+    import importlib
+    mod, func = mod_func.rsplit(".", 1)
+    mod = importlib.import_module(mod)
+    func = getattr(mod, func)
+    args = args + ("**kw",)
+    args = ",".join(args)
+    return eval(f"func({args})")
+
+def auto_parallel(n, src, **kw):
+    """
+    auto parallel(CPU and GPU) n-d for loop function like below:
+
+    Before:
+
+    void inner_func(int n0, int i0, int n1, int i1) {
+        ...
+    }
+
+    for (int i0=0; i0<n0; i0++)
+        for (int i1=0; i1<n1; i1++)
+            inner_func(n0, i0, n1, i1, ...);
+
+    After:
+
+    @python.jittor.auto_parallel(2)
+    void inner_func(int n0, int i0, int n1, int i1) {
+        ...
+    }
+
+    inner_func(n0, 0, n1, 0, ...);
 
 
+    """
+    # src = prev_func func_name(args)code
+    a, b = src.split('(', 1)
+    prev_func, func_name = a.rsplit(None, 1)
+    args, code = b.split(')', 1)
+    args = args.split(',')
+    assert len(args) >= n*2, (args, n)
+    oargs = args[n*2:]
+    pargs = args[:n*2]
+    piargs = pargs[1::2]
+    pnargs = pargs[0::2]
+    pnargs2 = [ a.split()[-1] for a in pnargs ]
+    oargs2 = [ a.split()[-1] for a in oargs ]
+    entry_func_args_def = ",".join(["int tn"+str(i) for i in range(n)]
+        + pnargs + oargs)
+    entry_func_args = ",".join(["tn"+str(i) for i in range(n)]
+        + pnargs2 + oargs2)
+    tid_def = ""
+    tid_loop = ""
+    call_args = []
+    for i in reversed(range(n)):
+        tid_def += f"\nauto tid{i} = tid & ((1<<tn{i})-1);"
+        tid_def += f"\nauto tnum{i} = 1<<tn{i};"
+        tid_def += f"\ntid = tid>>tn{i};"
+    for i in range(n):
+        tid_loop += f"\nfor (int i{i}=tid{i}; i{i}<{pnargs2[i]}; i{i}+=tn{i})"
+        call_args.append(pnargs2[i])
+        call_args.append(f"i{i}")
+    call_args += oargs2
+    call_args = ",".join(call_args)
+    xn = '\n'
+    new_src = f"""
+#ifdef JIT_cuda
+__device__
+#endif
+{src.replace(func_name, func_name+"_inner", 1)}
+
+#ifdef JIT_cuda
+__global__ static void {func_name}_entry({entry_func_args_def}) {{
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    {tid_def}
+    {tid_loop}
+    {func_name}_inner({call_args});
+}}
+#endif
+
+inline static void {func_name}({",".join(pargs+oargs)}) {{
+#ifdef JIT_cuda
+    int thread_num = 256*1024;
+    {xn.join([f"int tn{i} = NanoVector::get_nbits(std::min(thread_num, {pnargs2[i]})) - 2;thread_num >>= tn{i};" for i in reversed(range(n))])}
+    thread_num = 1<<({"+".join([f"tn{i}" for i in range(n)])});
+    int p1 = std::max(thread_num/1024, 1);
+    int p2 = std::min(thread_num, 1024);
+    {func_name}_entry<<<p1,p2>>>({entry_func_args});
+#else
+    {xn.join([f"for (int i{i}=0; i{i}<{pnargs2[i]}; i{i}++)" for i in range(n)])}
+    {func_name}_inner({call_args});
+#endif
+}}
+"""
+    return new_src
 
 def searchsorted(sorted, values, right=False):
     """
@@ -748,11 +840,10 @@ Example::
     _searchsorted_header = f"""
 namespace jittor {{
 
-#ifdef JIT_cuda
-__device__
-#endif
-inline static void searchsorted_kernel(int batch_id, int value_id,
-    int value_num, int sorted_num, int batch_stride,
+@python.jittor.auto_parallel(2)
+inline static void searchsorted(
+    int batch_num, int batch_id, int value_num, int value_id,
+    int sorted_num, int batch_stride,
     {sorted.dtype}* __restrict__  sort_p, {values.dtype}* __restrict__  value_p, 
     int32* __restrict__ index_p) {{
     int32 l = batch_id * batch_stride;
@@ -768,27 +859,6 @@ inline static void searchsorted_kernel(int batch_id, int value_id,
     index_p[batch_id * value_num + value_id] = l - batch_id * batch_stride;
 }}
 
-#ifdef JIT_cuda
-__global__ void searchsorted(int tn0, int tn1, int batch_num,
-    int value_num, int sorted_num, int batch_stride,
-    {sorted.dtype}* __restrict__  sort_p, {values.dtype}* __restrict__  value_p, 
-    int32* __restrict__ index_p
-) {{
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    auto i1 = tid & ((1<<tn1)-1);
-    auto i0 = tid >> tn1;
-    for (int i=i0; i<batch_num; i+=1<<tn0)
-        for (int j=i1; j<value_num; j+=1<<tn1)
-            searchsorted_kernel(i, j, value_num, sorted_num, batch_stride, sort_p, value_p, index_p);
-}}
-
-inline static int get_thread_range_log(int& thread_num, int64 range) {{
-    int nbits = NanoVector::get_nbits(std::min((int64)thread_num, range)) - 2;
-    thread_num >>= nbits;
-    return nbits;
-}}
-#endif
-
 }}
 """
     _searchsorted_src = """
@@ -799,19 +869,7 @@ inline static int get_thread_range_log(int& thread_num, int64 range) {{
     int32 batch_stride = batch_num == 1 ? 0 : sorted_num;
     CHECK(batch_num == batch_num2 || batch_num == 1);
 
-    #ifdef JIT_cuda
-    int thread_num = 256*1024;
-    auto tn1 = get_thread_range_log(thread_num, value_num);
-    auto tn0 = get_thread_range_log(thread_num, batch_num2);
-    thread_num = 1<<(tn0+tn1);
-    int p1 = std::max(thread_num/1024, 1);
-    int p2 = std::min(thread_num, 1024);
-    searchsorted<<<p1,p2>>>(tn0, tn1, batch_num2, value_num, sorted_num, batch_stride, in0_p, in1_p, out0_p);
-    #else
-    for (int32 i=0; i<batch_num2; i++)
-        for (int32 j=0; j<value_num; j++)
-            searchsorted_kernel(i, j, value_num, sorted_num, batch_stride, in0_p, in1_p, out0_p);
-    #endif
+    searchsorted(batch_num2, 0, value_num, 0, sorted_num, batch_stride, in0_p, in1_p, out0_p);
 """
     return jt.code(values.shape, "int32", [sorted, values], 
         cpu_header=_searchsorted_header,
