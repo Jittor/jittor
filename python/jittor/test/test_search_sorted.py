@@ -1,6 +1,6 @@
 
 # ***************************************************************
-# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
 # Maintainers: 
 #     Dun Liang <randonlang@gmail.com>. 
 # 
@@ -36,7 +36,7 @@ class TestSearchSorted(unittest.TestCase):
 
         ret = jt.searchsorted(sorted, values, right=True)
         assert (ret == [[2, 3, 5], [1, 3, 4]]).all(), ret
-        
+
         sorted_1d = jt.array([1, 3, 5, 7, 9])
         ret = jt.searchsorted(sorted_1d, values)
         assert (ret == [[1, 3, 4], [1, 3, 4]]).all(), ret
