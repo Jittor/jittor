@@ -128,7 +128,8 @@ class Dataset(object):
             if self.stop_grad else jt.array(x)
         if isinstance(batch, np.ndarray):
             return to_jt(batch)
-        assert isinstance(batch, Sequence)
+        if not isinstance(batch, (list, tuple)):
+            return batch
         new_batch = []
         for a in batch:
             if isinstance(a, np.ndarray) or \
