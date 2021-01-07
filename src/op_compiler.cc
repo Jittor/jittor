@@ -17,6 +17,7 @@
 #include "ops/array_op.h"
 #include "lock.h"
 #include "opt/expr.h"
+#include "pyjt/py_caller.h"
 
 namespace jittor {
 
@@ -412,12 +413,17 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                 size_t k=j+1;
                 while (k<src.size() && isvar(src[k])) k++;
                 string expr = src.substr(j, k-j);
+                // syntax for @python.module.function(args)
+                if (expr == "python") {
+                    while (k<src.size() && (isvar(src[k]) || src[k]=='.' )) k++;
+                    string full_expr = src.substr(j, k-j);
+                }
                 int presum = 1;
                 vector<int> comma;
                 vector<string> args;
                 size_t l = k+1;
                 if (expr == "for" || expr == "if" || expr == "expand_macro" ||
-                    expr == "is_def" ||
+                    expr == "is_def" || expr == "python" ||
                     (k<src.size() && src[k]=='(')) {
                     ASSERT(src[k] == '(');
                     comma.push_back(k);
@@ -434,6 +440,30 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                     comma.push_back(l-1);
                     for (uint i=0; i+1<comma.size(); i++)
                         args.push_back(src.substr(comma[i]+1, comma[i+1]-comma[i]-1));
+                }
+                if (expr == "python") {
+                    string full_expr = src.substr(j, k-j);
+                    LOGvvv << "python call" << full_expr << args;
+                    int presum = 0;
+                    auto ll = l;
+                    while (l<src.size()) {
+                        if (src[l] == '{')
+                            presum++;
+                        else if (src[l] == '}')
+                            presum--;
+                        if (presum==0 && (src[l] == '}' || src[l] == ';'))
+                            break;
+                        l++;
+                    }
+                    CHECK(l<src.size()) << "Jit error: braces are not matched.";
+                    auto full_src = src.substr(ll, l+1-ll);
+                    i = l;
+                    full_src = py_caller(
+                        full_expr.substr(7),
+                        args, {{"src",full_src}}
+                    );
+                    new_src += precompile(defs, full_src, macros);
+                    continue;
                 }
                 // syntax @for(i, l, r, ...)
                 //        ij  k             l
