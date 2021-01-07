@@ -114,6 +114,24 @@ class TestSetitem(unittest.TestCase):
         assert arr_int32[1,0,0] == 0
         arr_int32_res.data[1,1,2] = 0
         assert arr_int32[2,1,2] == 0
+
+    def test_setitem_inplace_case1(self):
+        # test type case
+        a = jt.zeros((3,))
+        a[1] = 123
+        assert a.data[1] == 123
+
+    def test_setitem_inplace_case2(self):
+        # test un-continuous first dim
+        a = jt.zeros((3,))
+        a[0::2] = jt.ones((2,))
+        assert a.data[2] == 1
+
+    def test_setitem_inplace_case3(self):
+        # test broadcast
+        a = jt.zeros((3,))
+        a[0:] = 1.0
+        assert a.data[2] == 1
         
 if __name__ == "__main__":
     unittest.main()
