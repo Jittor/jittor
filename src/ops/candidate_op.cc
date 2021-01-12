@@ -76,9 +76,9 @@ void CandidateOp::jit_run() {
     // define ys
     auto* __restrict__ yp = y->ptr<Ty>();
     size_t n_allocation;
-    int* np = (int*)exe.allocator->alloc(4, n_allocation);
+    int* np = (int*)exe.temp_allocator->alloc(4, n_allocation);
     size_t mask_allocation;
-    bool* maskp = (bool*)exe.allocator->alloc(xshape0, mask_allocation);
+    bool* maskp = (bool*)exe.temp_allocator->alloc(xshape0, mask_allocation);
     checkCudaErrors(cudaMemsetAsync(maskp, 1, xshape0));
 
     candidate_kernel<<<1, std::max(1, std::min(1024, xshape0)) >>>(
@@ -93,8 +93,8 @@ void CandidateOp::jit_run() {
     // checkCudaErrors(cudaDeviceSynchronize());
     checkCudaErrors(cudaMemcpy(&n, np, 4, cudaMemcpyDefault));
     y->set_shape({n});
-    exe.allocator->free(np, 4, n_allocation);
-    exe.allocator->free(maskp, xshape0, mask_allocation);
+    exe.temp_allocator->free(np, 4, n_allocation);
+    exe.temp_allocator->free(maskp, xshape0, mask_allocation);
 }
 #else
 void CandidateOp::jit_run() {

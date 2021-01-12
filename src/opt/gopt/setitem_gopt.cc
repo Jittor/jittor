@@ -48,7 +48,7 @@ static void setitem_inplace(SetitemOp* op) {
     }
     auto output = op->outputs().front();
     output->share_with(input);
-    // return;
+    return;
     
     // LOGir << "pass setitem optim one";
 

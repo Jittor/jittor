@@ -92,7 +92,9 @@ void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, i
 
 void Executor::run_sync(vector<Var*> vars, bool device_sync) {
     auto allocator = get_allocator();
+    auto temp_allocator = get_allocator(true);
     this->allocator = allocator;
+    this->temp_allocator = temp_allocator;
     // bfs find all ops need to run
     int op_num = 0;
     vector<Node*> bfs_q;
