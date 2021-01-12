@@ -16,6 +16,7 @@ namespace jittor {
 
 struct Executor {
     Allocator* allocator;
+    Allocator* temp_allocator;
     bool last_is_cuda = false;
     void run_sync(vector<Var*> vars, bool device_sync);
 };
