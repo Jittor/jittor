@@ -172,7 +172,7 @@ static PyObject* pop_py_object(RingBuffer* rb, uint64& __restrict__ offset, bool
         for (int64 i=0; i<size; i++) {
             PyObjHolder key(pop_py_object(rb, offset, keep_numpy_array));
             PyObjHolder value(pop_py_object(rb, offset, keep_numpy_array));
-            PyDict_SetItem(dict.obj, key, value);
+            PyDict_SetItem(dict.obj, key.obj, value.obj);
         }
         return dict.release();
     }
