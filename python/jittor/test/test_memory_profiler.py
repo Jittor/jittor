@@ -82,7 +82,16 @@ class TestMemoryProfiler(unittest.TestCase):
             jt.fetch(batch_idx, loss, output, target, callback)
         jt.sync_all(True)
         jt.display_max_memory_info()
-        jt.get_max_memory_treemap()
+        _, out = jt.get_max_memory_treemap()
+        out_ = out.split('\n')
+        assert(out_[0] == 'root()')
+        assert(out_[3] == '   ├─mnist_net(MnistNet)')
+        assert(out_[7] == '   |    └─model(ResNet)')
+        _, out = jt.get_max_memory_treemap(build_by=1)
+        out_ = out.split('\n')
+        assert(out_[0] == 'root()')
+        assert(out_[4] == '   ├─mnist_net(MnistNet)')
+        assert(out_[8] == '   |    └─model(ResNet)')
         
 if __name__ == "__main__":
     unittest.main()
