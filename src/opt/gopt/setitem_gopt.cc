@@ -48,7 +48,6 @@ static void setitem_inplace(SetitemOp* op) {
     }
     auto output = op->outputs().front();
     output->share_with(input);
-    // return;
     
     auto data = op->input(1);
     // if setitem requires type conversion, don't inplace

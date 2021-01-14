@@ -12,8 +12,8 @@
 import jittor as jt
 from jittor import nn
 
-__all__ = ['ResNet', 'Resnet18', 'Resnet34', 'Resnet50', 'Resnet101', 'Resnet152', 'Resnext50_32x4d', 'Resnext101_32x8d', 'Wide_resnet50_2', 'Wide_resnet101_2',
-    'resnet18', 'resnet34', 'resnet50', 'resnet101', 'resnet152', 'resnext50_32x4d', 'resnext101_32x8d', 'wide_resnet50_2', 'wide_resnet101_2']
+__all__ = ['ResNet', 'Resnet18', 'Resnet34', 'Resnet26', 'Resnet38', 'Resnet50', 'Resnet101', 'Resnet152', 'Resnext50_32x4d', 'Resnext101_32x8d', 'Wide_resnet50_2', 'Wide_resnet101_2',
+    'resnet18', 'resnet34', 'resnet26', 'resnet38', 'resnet50', 'resnet101', 'resnet152', 'resnext50_32x4d', 'resnext101_32x8d', 'wide_resnet50_2', 'wide_resnet101_2']
 
 def conv3x3(in_planes, out_planes, stride=1, groups=1, dilation=1):
     conv=nn.Conv(in_planes, out_planes, kernel_size=3, stride=stride, padding=dilation, groups=groups, bias=False, dilation=dilation)
@@ -173,6 +173,14 @@ def Resnet50(pretrained=False, **kwargs):
     return model
 
 resnet50 = Resnet50
+
+def Resnet38(**kwargs):
+    return _resnet(Bottleneck, [2, 3, 5, 2], **kwargs)
+resnet38 = Resnet38
+
+def Resnet26(**kwargs):
+    return _resnet(Bottleneck, [1, 2, 4, 1], **kwargs)
+resnet26 = Resnet26
 
 def Resnet101(pretrained=False, **kwargs):
     """
