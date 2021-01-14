@@ -1,6 +1,9 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved.
-// Maintainers: Dun Liang <randonlang@gmail.com>. 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: 
+//     Dun Liang <randonlang@gmail.com>. 
+//     Guoye Yang <498731903@qq.com>
+//
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -186,7 +189,7 @@ void TraceData::record_node(Node* node, bool record_stack) {
     NodeData data;
     data.id = node_data_cnt++;
     id_map[node] = data.id;
-    if (trace_py_var) {
+    if (!node->is_var() || trace_py_var>=3) {
         if (record_stack) {
             if (trace_grad_op) {
                 auto iter = trace_data.id_map.find(trace_grad_op);

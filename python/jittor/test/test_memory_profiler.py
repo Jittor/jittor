@@ -1,9 +1,9 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: 
-#     Guowei Yang <471184555@qq.com>
-#     Meng-Hao Guo <guomenghao1997@gmail.com>
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers: 
+#     Guoye Yang <498731903@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -53,7 +53,7 @@ class TestMemoryProfiler(unittest.TestCase):
         jt.seed(seed)
 
     @unittest.skipIf(not jt.has_cuda, "Cuda not found")
-    @jt.flag_scope(use_cuda=1, use_stat_allocator=1, trace_py_var=2)
+    @jt.flag_scope(use_cuda=1, use_stat_allocator=1, trace_py_var=3, profile_memory_enable=1)
     def test_resnet(self):
         self.setup_seed(1)
         loss_list=[]
@@ -85,13 +85,13 @@ class TestMemoryProfiler(unittest.TestCase):
         _, out = jt.get_max_memory_treemap()
         out_ = out.split('\n')
         assert(out_[0] == 'root()')
-        assert(out_[3] == '   ├─mnist_net(MnistNet)')
-        assert(out_[7] == '   |    └─model(ResNet)')
+        assert(out_[3] == '   ├─/home/cxjyxx_me/miniconda3/lib/python3.8/runpy.py:194(_run_module_as_main)')
+        assert(out_[7] == '   |    └─/home/cxjyxx_me/miniconda3/lib/python3.8/runpy.py:87(_run_code)')
         _, out = jt.get_max_memory_treemap(build_by=1)
         out_ = out.split('\n')
         assert(out_[0] == 'root()')
-        assert(out_[4] == '   ├─mnist_net(MnistNet)')
-        assert(out_[8] == '   |    └─model(ResNet)')
+        assert(out_[4] == '   ├─/home/cxjyxx_me/miniconda3/lib/python3.8/runpy.py:194(_run_module_as_main)')
+        assert(out_[8] == '   |    └─/home/cxjyxx_me/miniconda3/lib/python3.8/runpy.py:87(_run_code)')
         
 if __name__ == "__main__":
     unittest.main()
