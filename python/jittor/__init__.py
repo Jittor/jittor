@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
 # Maintainers:
 #   Dun Liang <randonlang@gmail.com>.
 #   Meng-Hao Guo <guomenghao1997@gmail.com>
@@ -8,7 +8,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-__version__ = '1.2.2.12'
+__version__ = '1.2.2.16'
 from . import lock
 with lock.lock_scope():
     ori_int = int
@@ -40,7 +40,9 @@ import traceback
 
 
 def safepickle(obj, path):
-    s = pickle.dumps(obj, pickle.HIGHEST_PROTOCOL)
+    # Protocol version 4 was added in Python 3.4. It adds support for very large objects, pickling more kinds of objects, and some data format optimizations.
+    # ref: <https://docs.python.org/3/library/pickle.html>
+    s = pickle.dumps(obj, 4)
     checksum = hashlib.sha1(s).digest()
     s += bytes(checksum)
     s += b"HCAJSLHD"
