@@ -15,6 +15,7 @@
 #include "mem/allocator/stat_allocator.h"
 #include "mem/allocator/sfrl_allocator.h"
 #include "mem/allocator/nfef_allocator.h"
+#include "mem/allocator/temp_allocator.h"
 
 namespace jittor {
 
@@ -46,7 +47,7 @@ Allocator* setup_allocator(Allocator* underlying) {
 
 Allocator* cpu_allocator = setup_allocator<SFRLAllocator>(&aligned_allocator);
 
-Allocator* get_allocator() {
+Allocator* get_allocator(bool temp_allocator) {
     Allocator* allocator = nullptr;
 #ifdef HAS_CUDA
     if (use_cuda && !allocator) {
@@ -72,7 +73,10 @@ Allocator* get_allocator() {
         allocator = setup_allocator<NFEFAllocator>(allocator);
         return allocator;
     }
-    if (use_sfrl_allocator) {
+    if (temp_allocator && use_temp_allocator) {
+        LOGvv << "Using temp_allocator";
+        allocator = setup_allocator<TempAllocator>(allocator);
+    } else if (use_sfrl_allocator) {
         LOGvv << "Using sfrl_allocator";
         allocator = setup_allocator<SFRLAllocator>(allocator);
     }
