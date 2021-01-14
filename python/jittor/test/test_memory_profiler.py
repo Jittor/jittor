@@ -85,13 +85,13 @@ class TestMemoryProfiler(unittest.TestCase):
         _, out = jt.get_max_memory_treemap()
         out_ = out.split('\n')
         assert(out_[0] == 'root()')
-        assert(out_[3] == '   ├─/home/cxjyxx_me/miniconda3/lib/python3.8/runpy.py:194(_run_module_as_main)')
-        assert(out_[7] == '   |    └─/home/cxjyxx_me/miniconda3/lib/python3.8/runpy.py:87(_run_code)')
+        assert(out_[3].endswith('(_run_module_as_main)'))
+        assert(out_[7].endswith('(_run_code)'))
         _, out = jt.get_max_memory_treemap(build_by=1)
         out_ = out.split('\n')
         assert(out_[0] == 'root()')
-        assert(out_[4] == '   ├─/home/cxjyxx_me/miniconda3/lib/python3.8/runpy.py:194(_run_module_as_main)')
-        assert(out_[8] == '   |    └─/home/cxjyxx_me/miniconda3/lib/python3.8/runpy.py:87(_run_code)')
+        assert(out_[4].endswith('(_run_module_as_main)'))
+        assert(out_[8].endswith('(_run_code)'))
         
 if __name__ == "__main__":
     unittest.main()
