@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
 # Maintainers:
 #   Dun Liang <randonlang@gmail.com>.
 #   Wenyang Zhou <576825820@qq.com>
@@ -839,3 +839,157 @@ def get_max_memory_treemap(build_by=0, do_print=True):
     if (do_print):
         print(out)
     return tree, out
+def python_pass_warper(mod_func, args, kw):
+    import importlib
+    mod, func = mod_func.rsplit(".", 1)
+    mod = importlib.import_module(mod)
+    func = getattr(mod, func)
+    args = args + ("**kw",)
+    args = ",".join(args)
+    return eval(f"func({args})")
+
+def auto_parallel(n, src, **kw):
+    """
+    auto parallel(CPU and GPU) n-d for loop function like below:
+
+    Before:
+
+    void inner_func(int n0, int i0, int n1, int i1) {
+        ...
+    }
+
+    for (int i0=0; i0<n0; i0++)
+        for (int i1=0; i1<n1; i1++)
+            inner_func(n0, i0, n1, i1, ...);
+
+    After:
+
+    @python.jittor.auto_parallel(2)
+    void inner_func(int n0, int i0, int n1, int i1) {
+        ...
+    }
+
+    inner_func(n0, 0, n1, 0, ...);
+
+
+    """
+    # src = prev_func func_name(args)code
+    a, b = src.split('(', 1)
+    prev_func, func_name = a.rsplit(None, 1)
+    args, code = b.split(')', 1)
+    args = args.split(',')
+    assert len(args) >= n*2, (args, n)
+    oargs = args[n*2:]
+    pargs = args[:n*2]
+    piargs = pargs[1::2]
+    pnargs = pargs[0::2]
+    pnargs2 = [ a.split()[-1] for a in pnargs ]
+    oargs2 = [ a.split()[-1] for a in oargs ]
+    entry_func_args_def = ",".join(["int tn"+str(i) for i in range(n)]
+        + pnargs + oargs)
+    entry_func_args = ",".join(["tn"+str(i) for i in range(n)]
+        + pnargs2 + oargs2)
+    tid_def = ""
+    tid_loop = ""
+    call_args = []
+    for i in reversed(range(n)):
+        tid_def += f"\nauto tid{i} = tid & ((1<<tn{i})-1);"
+        tid_def += f"\nauto tnum{i} = 1<<tn{i};"
+        tid_def += f"\ntid = tid>>tn{i};"
+    for i in range(n):
+        tid_loop += f"\nfor (int i{i}=tid{i}; i{i}<{pnargs2[i]}; i{i}+=tn{i})"
+        call_args.append(pnargs2[i])
+        call_args.append(f"i{i}")
+    call_args += oargs2
+    call_args = ",".join(call_args)
+    xn = '\n'
+    new_src = f"""
+#ifdef JIT_cuda
+__device__
+#endif
+{src.replace(func_name, func_name+"_inner", 1)}
+
+#ifdef JIT_cuda
+__global__ static void {func_name}_entry({entry_func_args_def}) {{
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    {tid_def}
+    {tid_loop}
+    {func_name}_inner({call_args});
+}}
+#endif
+
+inline static void {func_name}({",".join(pargs+oargs)}) {{
+#ifdef JIT_cuda
+    int thread_num = 256*1024;
+    {xn.join([f"int tn{i} = NanoVector::get_nbits(std::min(thread_num, {pnargs2[i]})) - 2;thread_num >>= tn{i};" for i in reversed(range(n))])}
+    thread_num = 1<<({"+".join([f"tn{i}" for i in range(n)])});
+    int p1 = std::max(thread_num/1024, 1);
+    int p2 = std::min(thread_num, 1024);
+    {func_name}_entry<<<p1,p2>>>({entry_func_args});
+#else
+    {xn.join([f"for (int i{i}=0; i{i}<{pnargs2[i]}; i{i}++)" for i in range(n)])}
+    {func_name}_inner({call_args});
+#endif
+}}
+"""
+    return new_src
+
+def searchsorted(sorted, values, right=False):
+    """
+    Find the indices from the innermost dimension of `sorted` for each `values`.
+
+Example::
+
+    sorted = jt.array([[1, 3, 5, 7, 9], [2, 4, 6, 8, 10]])
+    values = jt.array([[3, 6, 9], [3, 6, 9]])
+    ret = jt.searchsorted(sorted, values)
+    assert (ret == [[1, 3, 4], [1, 2, 4]]).all(), ret
+
+    ret = jt.searchsorted(sorted, values, right=True)
+    assert (ret == [[2, 3, 5], [1, 3, 4]]).all(), ret
+    
+    sorted_1d = jt.array([1, 3, 5, 7, 9])
+    ret = jt.searchsorted(sorted_1d, values)
+    assert (ret == [[1, 3, 4], [1, 3, 4]]).all(), ret
+
+
+    """
+    _searchsorted_header = f"""
+namespace jittor {{
+
+@python.jittor.auto_parallel(2)
+inline static void searchsorted(
+    int batch_num, int batch_id, int value_num, int value_id,
+    int sorted_num, int batch_stride,
+    {sorted.dtype}* __restrict__  sort_p, {values.dtype}* __restrict__  value_p, 
+    int32* __restrict__ index_p) {{
+    int32 l = batch_id * batch_stride;
+    int32 r = l + sorted_num;
+    auto v = value_p[batch_id * value_num + value_id];
+    while (l<r) {{
+        int32 m = (l+r)/2;
+        if (sort_p[m] {"<=" if right else "<"} v)
+            l = m+1;
+        else
+            r = m;
+    }}
+    index_p[batch_id * value_num + value_id] = l - batch_id * batch_stride;
+}}
+
+}}
+"""
+    _searchsorted_src = """
+    int value_num = in1->shape[in1->shape.size()-1];
+    int sorted_num = in0->shape[in0->shape.size()-1];
+    int32 batch_num = in0->num / sorted_num;
+    int32 batch_num2 = in1->num / value_num;
+    int32 batch_stride = batch_num == 1 ? 0 : sorted_num;
+    CHECK(batch_num == batch_num2 || batch_num == 1);
+
+    searchsorted(batch_num2, 0, value_num, 0, sorted_num, batch_stride, in0_p, in1_p, out0_p);
+"""
+    return jt.code(values.shape, "int32", [sorted, values], 
+        cpu_header=_searchsorted_header,
+        cpu_src=_searchsorted_src,
+        cuda_header=_searchsorted_header,
+        cuda_src=_searchsorted_src)

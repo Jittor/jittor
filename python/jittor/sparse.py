@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
 # Maintainers:
 #   Dun Liang <randonlang@gmail.com>.
 #   Xiangli Li <190569238@qq.com>
