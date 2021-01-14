@@ -1,6 +1,9 @@
 // ***************************************************************
 // Copyright (c) 2021 Jittor. All Rights Reserved. 
-// Maintainers: Dun Liang <randonlang@gmail.com>. 
+// Maintainers: 
+//     Dun Liang <randonlang@gmail.com>. 
+//     Guoye Yang <498731903@qq.com>
+//
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -29,6 +32,7 @@ namespace jittor {
 
 Executor exe;
 extern MemoryProfiler memory_profiler;
+DECLARE_FLAG(int, profile_memory_enable);
 
 // from fetch_op.cc
 extern list<VarPtr> fetcher_to_free;
@@ -424,7 +428,8 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         for (auto* var : op->outputs()) {
             var->alloc(allocator);
         }
-        memory_profiler.check();
+        if (PREDICT_BRANCH_NOT_TAKEN(profile_memory_enable))
+            memory_profiler.check();
         LOGvvv << "Run" << op << "inputs:" << op->inputs() << "outputs:" << op->outputs();
         op->do_prepare(jkl);
         bool is_cuda = op->flags.get(NodeFlags::_cuda);

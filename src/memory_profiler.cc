@@ -1,3 +1,12 @@
+// ***************************************************************
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: 
+//     Guoye Yang <498731903@qq.com>
+//     Dun Liang <randonlang@gmail.com>. 
+// 
+// This file is subject to the terms and conditions defined in
+// file 'LICENSE.txt', which is part of this source code package.
+// ***************************************************************
 #include "memory_profiler.h"
 #include "graph.h"
 #include "var_holder.h"
@@ -19,7 +28,7 @@ struct FloatOutput_ {
     string suffix;
     int p=4;
 };
-std::ostream& operator<<(std::ostream& os, const FloatOutput_& o) {
+inline std::ostream& operator<<(std::ostream& os, const FloatOutput_& o) {
     int w = 8;
     os << std::setw(w-2-o.suffix.size());
     os << std::setprecision(o.p);
@@ -47,6 +56,7 @@ void MemoryProfiler::clear() {
 }
 
 std::pair<size_t, size_t> MemoryProfiler::get_memory_info() {
+    ASSERT(profile_memory_enable == 1);
     size_t used = 0;
     size_t unused = 0;
     //TODO add mssfrl allocator
@@ -58,6 +68,7 @@ std::pair<size_t, size_t> MemoryProfiler::get_memory_info() {
 }
 
 void MemoryProfiler::check() {
+    ASSERT(profile_memory_enable == 1);
     std::pair<size_t, size_t> mem_info = get_memory_info();
     if (mem_info.first > max_used_memory_size) {
         max_used_memory_size = mem_info.first;
@@ -99,6 +110,7 @@ bool MemoryProfiler::cmp(const std::pair<std::pair<string, vector<Stack>>, size_
 }
 
 void MemoryProfiler::display_max_memory_info() {
+    ASSERT(profile_memory_enable == 1);
     Log log("", 'i', 0);
     std::sort(max_live_vars.begin(), max_live_vars.end(), cmp);
     log << "\n=====display_max_memory_info=====\n";
@@ -117,10 +129,12 @@ void MemoryProfiler::display_max_memory_info() {
 }
 
 void display_max_memory_info() {
+    ASSERT(profile_memory_enable == 1);
     memory_profiler.display_max_memory_info();
 }
 
 string MemoryProfiler::get_max_memory_info() {
+    ASSERT(profile_memory_enable == 1);
     std::stringstream out;
     string div1 = "[!@#div1!@#]";
     string div2 = "[!@#div2!@#]";
@@ -142,6 +156,7 @@ string MemoryProfiler::get_max_memory_info() {
 }
 
 string get_max_memory_info() {
+    ASSERT(profile_memory_enable == 1);
     return memory_profiler.get_max_memory_info();
 }
 
