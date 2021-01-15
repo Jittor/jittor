@@ -304,8 +304,7 @@ int system_popen(const char* cmd) {
     FILE *ptr = popen(cmd2.c_str(), "r");
     if (!ptr) return -1;
     while (fgets(buf, BUFSIZ, ptr) != NULL) {
-        std::cout << buf;
-        std::cout.flush();
+        puts(buf);
     }
     return pclose(ptr);
 }

@@ -845,28 +845,15 @@ check_debug_flags()
 
 sys.path.append(cache_path)
 LOG.i(f"Jittor({__version__}) src: {jittor_path}")
+LOG.i(f"{jit_utils.cc_type} at {jit_utils.cc_path}")
 LOG.i(f"cache_path: {cache_path}")
 
 with jit_utils.import_scope(import_flags):
     jit_utils.try_import_jit_utils_core()
 
 python_path = sys.executable
-py3_config_paths = [
-    sys.executable + "-config",
-    os.path.dirname(sys.executable) + f"/python3.{sys.version_info.minor}-config",
-    f"/usr/bin/python3.{sys.version_info.minor}-config",
-    os.path.dirname(sys.executable) + "/python3-config",
-]
-if "python_config_path" in os.environ:
-    py3_config_paths.insert(0, os.environ["python_config_path"])
+py3_config_path = jit_utils.py3_config_path
 
-for py3_config_path in py3_config_paths:
-    if os.path.isfile(py3_config_path):
-        break
-else:
-    raise RuntimeError(f"python3.{sys.version_info.minor}-config "
-        "not found in {py3_config_paths}, please specify "
-        "enviroment variable 'python_config_path'")
 nvcc_path = env_or_try_find('nvcc_path', '/usr/local/cuda/bin/nvcc')
 gdb_path = try_find_exe('gdb')
 addr2line_path = try_find_exe('addr2line')
