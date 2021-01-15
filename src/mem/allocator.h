@@ -49,7 +49,7 @@ struct Allocation {
 };
 
 extern Allocator* cpu_allocator;
-Allocator* get_allocator();
+Allocator* get_allocator(bool temp_allocator=false);
 // @pyjt(gc)
 void gc_all();
 

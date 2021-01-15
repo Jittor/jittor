@@ -3,7 +3,7 @@
 # Maintainers:
 #   Dun Liang <randonlang@gmail.com>.
 #   Wenyang Zhou <576825820@qq.com>
-#
+#   Guoye Yang <498731903@qq.com>
 # 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
@@ -77,7 +77,7 @@ def repeat(x, *shape):
         x = x.broadcast(x_shape)
     elif len_x_shape > len_shape:
         rep_shape = (len_x_shape - len_shape) * [1] + shape
-
+    #TODO if input.shape[i]=1, no add [1]
     reshape_shape = []
     broadcast_shape = []
     for x_s,r_s in zip(x_shape,rep_shape):
@@ -722,6 +722,123 @@ def triu_(x,diagonal=0):
 
 jt.Var.triu_ = triu_
 
+def print_tree(now, max_memory_size, prefix1, prefix2, build_by):
+    def format_size(s):
+        if (s < 1024):
+            s = str(s)
+            return s + ' B'
+
+        if (s < 1024*1024):
+            s = format(s/1024, '.2f')
+            return s + ' KB'
+
+        if (s < 1024*1024*1024):
+            s = format(s/1024/1024, '.2f')
+            return s + ' MB'
+
+        s = format(s/1024/1024/1024, '.2f')
+        return s + ' GB'
+
+    out = ''
+    tab = '   '
+    out += prefix1+now['name']+'('+now['type']+')\n'
+    out += prefix2+'['+format_size(now['size'])+'; '+format(now['size']/max_memory_size*100, '.2f')+'%]\n'
+    if (build_by == 0):
+        for p in now['path']:
+            out += prefix2+p+'\n'
+    else:
+        out += prefix2+now['path'] + '\n'
+    if (len(now['children']) > 0):
+        out += prefix2 + tab + '| ' + '\n'
+    else:
+        out += prefix2 + '\n'
+    for i in range(len(now['children'])):
+        c = now['children'][i]
+        if i < len(now['children']) - 1:
+            prefix1_ = prefix2 + tab + '├─'
+            prefix2_ = prefix2 + tab + '| '
+        else:
+            prefix1_ = prefix2 + tab + '└─'
+            prefix2_ = prefix2 + tab + '  '
+        out += print_tree(c, max_memory_size, prefix1_, prefix2_, build_by)
+    return out
+
+def get_max_memory_treemap(build_by=0, do_print=True):
+    div1 = "[!@#div1!@#]"
+    div2 = "[!@#div2!@#]"
+    div3 = "[!@#div3!@#]"
+    info = jt.get_max_memory_info()
+
+    vars = []
+    vars_ = info.split(div1)
+    max_memory_size = int(vars_[0])
+    vars_ = vars_[1:]
+    for v_ in vars_:
+        v__ = v_.split(div2)
+        var = {'size':int(v__[1]), 'stack':[]}
+        v__ = v__[2:-1]
+        for s_ in v__:
+            s__ = s_.split(div3)
+            s = {'path':s__[0], 'name':s__[1], 'type':s__[2]}
+            var['stack'].append(s)
+        vars.append(var)
+    if (build_by == 0): # build tree by name
+        tree = {'name':'root', "children":[], 'size':0, 'path':[], 'type':''}
+
+        def find_child(now, key):
+            for c in now['children']:
+                if (c['name'] == key):
+                    return c
+            return None
+        for v in vars:
+            now = tree
+            now['size'] += v['size']
+            for s in v['stack']:
+                ch = find_child(now, s['name'])
+                if (ch is not None):
+                    if (not s['path'] in ch['path']):
+                        ch['path'].append(s['path'])
+                    assert(ch['type']==s['type'])
+                    now = ch
+                    now['size'] += v['size']
+                else:
+                    now_ = {'name':s['name'], "children":[], 'size':v['size'], 'path':[s['path']], 'type':s['type']}
+                    now['children'].append(now_)
+                    now = now_
+    elif (build_by == 1): # build tree by path
+        tree = {'name':'root', "children":[], 'size':0, 'path':'_root_', 'type':''}
+
+        def find_child(now, key):
+            for c in now['children']:
+                if (c['path'] == key):
+                    return c
+            return None
+        for v in vars:
+            now = tree
+            now['size'] += v['size']
+            for s in v['stack']:
+                ch = find_child(now, s['path'])
+                if (ch is not None):
+                    now = ch
+                    now['size'] += v['size']
+                else:
+                    now_ = {'name':s['name'], "children":[], 'size':v['size'], 'path':s['path'], 'type':s['type']}
+                    now['children'].append(now_)
+                    now = now_
+    else:
+        assert(False)
+        
+    def sort_tree(now):
+        def takeSize(elem):
+            return elem['size']
+        now['children'].sort(key=takeSize, reverse=True)
+        for c in now['children']:
+            sort_tree(c)
+    sort_tree(tree)
+    out = print_tree(tree, max_memory_size, '', '', build_by)
+    if (do_print):
+        print(out)
+    return tree, out
 def python_pass_warper(mod_func, args, kw):
     import importlib
     mod, func = mod_func.rsplit(".", 1)
