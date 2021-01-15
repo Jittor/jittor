@@ -112,7 +112,7 @@ static int not_compile_window = 0;
 
 void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, int64 tt) {
     // jit_search_kernel require compile at runtime
-    if (jit_search_kernel || !use_parallel_op_compiler || not_compile_window > 1000)
+    if (jit_search_kernel || !use_parallel_op_compiler || not_compile_window > 100000)
         return;
 
     // try not use parallel compile if no op needs compile

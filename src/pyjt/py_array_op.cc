@@ -17,8 +17,30 @@
 #include "pyjt/numpy.h"
 #include "ops/array_op.h"
 #include "var.h"
+#include "ops/op_register.h"
+#include "var_holder.h"
 
 namespace jittor {
+
+static auto make_array = get_op_info("array")
+    .get_constructor<VarPtr, const void*, NanoVector, NanoString>();
+
+PyObject* make_pyjt_array(const vector<int64>& shape, const string& dtype, const void* data) {
+    // return nullptr;
+    auto vh = new VarHolder(make_array(data, shape, dtype));
+    return to_py_object<VarHolder*>(vh);
+}
+
+void get_pyjt_array(PyObject* obj, vector<int64>& shape, string& dtype, void*& data) {
+    CHECK(Py_TYPE(obj) == &PyjtVarHolder.ht_type) << "Not a jittor array" << Py_TYPE(obj);
+    auto vh = GET_RAW_PTR(VarHolder, obj);
+    if (!vh->var->mem_ptr)
+        vh->sync();
+    ASSERT(vh->var->mem_ptr);
+    shape = vh->shape().to_vector();
+    dtype = vh->dtype().to_cstring();
+    data = vh->var->mem_ptr;
+}
 
 ArrayOp::ArrayOp(PyObject* obj) {
     ArrayArgs args;

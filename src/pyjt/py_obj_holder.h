@@ -14,7 +14,7 @@ struct PyObjHolder {
     PyObject* obj;
     inline PyObjHolder() : obj(nullptr) {
     }
-    void assign(PyObject* obj) {
+    inline void assign(PyObject* obj) {
         if (!obj) {
             LOGf << "Python error occur";
         }
