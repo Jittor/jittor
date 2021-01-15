@@ -67,5 +67,5 @@ struct TraceData {
 extern TraceData trace_data;
 
 void print_node_trace(const Node* node, std::ostream& os);
-
+vector<Stack> get_node_trace(Node* node);
 } // jittor
