@@ -34,6 +34,9 @@ class Optimizer(object):
             assert isinstance(pg, dict)
             self.param_groups.append(pg)
         self.n_step = 0
+        # __zero_grad is a value for fast determ the grad is zero or not
+        # so we can omit 0+x
+        self.__zero_grad = True
 
     def add_param_group(self, group):
         self.param_groups.append(group)
@@ -43,6 +46,9 @@ class Optimizer(object):
         exclude = set(("defaults", "param_groups", "n_step", "pre_step", "step"))
         return { k:v for k, v in self.__dict__.items()
             if k[0] != '_' and k not in exclude and not callable(v) }
+
+    def zero_grad(self):
+        self.__zero_grad = True
 
     def pre_step(self, loss):
         """ something should be done before step, such as calc gradients, mpi sync, and so on.
@@ -58,7 +64,6 @@ class Optimizer(object):
         params = []
         params_has_grad = []
         for pg in self.param_groups:
-            pg["grads"] = [None] * len(pg['params'])
             for p in pg['params']:
                 params.append(p)
                 if not p.is_stop_grad():
@@ -79,14 +84,52 @@ class Optimizer(object):
         # set up grads in param_groups
         pid = 0
         for pg in self.param_groups:
+            if "grads" not in pg:
+                pg["grads"] = [ jt.zeros_like(p).stop_grad().stop_fuse() for p in pg['params'] ]
             pg_grads = pg["grads"]
             for i, p in enumerate(pg['params']):
                 if not p.is_stop_grad():
-                    # stop grad of grad
-                    pg_grads[i] = grads[pid].stop_grad()
+                    # accumulate grad and stop grad of grad
+                    g = grads[pid].stop_grad()
+                    if not self.__zero_grad:
+                        g = g + pg_grads[i]
+                    pg_grads[i].update(g)
                     pid += 1
+        self.__zero_grad = False
         
     def backward(self, loss):
+        '''
+        optimize.backward(loss) is used for accumulate multiple step,
+        it can be used as following:
+
+        Origin source code ::
+
+        n_iter = 10000
+        batch_size = 100
+        ...
+        for i in range(n_iter):
+            ...
+            loss = calc_loss()
+            optimizer.step(loss)
+
+        Accumulation version ::
+
+        n_iter = 10000
+        batch_size = 100
+        accumulation_steps = 10
+        n_iter *= accumulation_steps
+        batch_size //= accumulation_steps
+        ...
+        for i in range(n_iter):
+            ...
+            loss = calc_loss()
+            # if loss is a mean across batch, we need to divide accumulation_steps
+            optimizer.backward(loss / accumulation_steps)
+            if (i+1) % accumulation_steps == 0:
+                optimizer.step()
+
+
+        '''
         self.pre_step(loss)
 
     def step(self, loss=None):
@@ -97,6 +140,7 @@ class Optimizer(object):
             for p, g in zip(pg["params"], pg["grads"]):
                 if p.is_stop_grad(): continue
                 p.update(p - g * lr)
+        self.zero_grad()
 
 
 class SGD(Optimizer):
@@ -146,6 +190,7 @@ class SGD(Optimizer):
                     p.update(p - (dp + momentum * v) * lr)
                 else:
                     p.update(p - v * lr)
+        self.zero_grad()
 
 class RMSprop(Optimizer):
     """ RMSprop Optimizer.
@@ -188,6 +233,7 @@ class RMSprop(Optimizer):
                 if p.is_stop_grad(): continue
                 v.update(alpha * v + (1-alpha) * g * g)
                 p.update(p - lr * g / (jt.sqrt(v) + eps))
+        self.zero_grad()
 
 class Adam(Optimizer):
     """ Adam Optimizer.
@@ -235,6 +281,7 @@ class Adam(Optimizer):
                 v.update(b1 * v + (1-b1) * g * g)
                 step_size = lr * jt.sqrt(1-b1**n) / (1-b0 ** n)
                 p.update(p - m * step_size / (jt.sqrt(v) + eps))
+        self.zero_grad()
 
 
 class LRScheduler:
