@@ -14,7 +14,7 @@ c++数组和jittor内核之间的数据传输，减少了python额外开销，�
 # 生成c++ example源代码文件
 python3.7 -m jittor_utils.config --cxx-example > example.cc
 # 调用g++编译example, 需要g++支持std=c++17
-g++ example.cc $(python3.7 -m jittor_utils.config --include-flags --libs-flags --cxx-flags) -o example)
+g++ example.cc $(python3.7 -m jittor_utils.config --include-flags --libs-flags --cxx-flags) -o example
 # 运行example
 ./example
 ```
