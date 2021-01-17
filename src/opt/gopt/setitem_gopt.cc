@@ -211,7 +211,7 @@ void SetitemOp::graph_optimize() {
 void GetitemOp::graph_optimize() {
     // This optimize is still WIP
     // LOGir << "hello getitem graph_optimize";
-    // setitem_grad_opt(this);
+    setitem_grad_opt(this);
     (void)setitem_grad_opt;
     // (void)getitem_inplace;
     getitem_inplace(this);
