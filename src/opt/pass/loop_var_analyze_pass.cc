@@ -81,6 +81,10 @@ void LoopVarAnalyzePass::run() {
     // 1. reduce input
     // 2. element input
     // 3. broadcast output
+    
+    // ugly fix multi different dim element input
+    // (caused by force fused array op)
+    int max_elm_dim = 0;
     for (uint i=0; i<vars.size(); i++) {
         // output
         if (vars[i].type == 2) {
@@ -91,8 +95,10 @@ void LoopVarAnalyzePass::run() {
             has_op = true;
             if (op->type() == OpType::reduce)
                 has_reduce = true;
-            if (op->type() == OpType::element)
+            if (op->type() == OpType::element) {
                 has_element = true;
+                max_elm_dim = std::max(max_elm_dim, op->outputs().front()->shape.size());
+            }
         }
     }
     for (uint i=0; i<vars.size(); i++) {
@@ -108,6 +114,9 @@ void LoopVarAnalyzePass::run() {
             if (has_reduce && op->type() != OpType::reduce)
                 continue;
             if (has_element && !has_reduce && op->type() != OpType::element)
+                continue;
+            if (op->type() == OpType::element 
+                && op->outputs().front()->shape.size() != max_elm_dim)
                 continue;
             Var* loop_var;
             if (op->type() == OpType::broadcast || op->name_ex() == "index") {

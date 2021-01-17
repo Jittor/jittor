@@ -55,6 +55,7 @@ struct Op : Node {
     string name_ex() const;
     string get_jit_key(JK& jk);
     vector<pair<string,string>> get_jit_define();
+    string get_hash_name();
 };
 
 std::ostream& operator<<(std::ostream& os, const Op* var);
