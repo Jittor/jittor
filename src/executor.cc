@@ -27,6 +27,7 @@
 #include "parallel_compiler.h"
 #include "memory_profiler.h"
 #include "misc/nan_checker.h"
+#include "memory_profiler.h"
 
 namespace jittor {
 

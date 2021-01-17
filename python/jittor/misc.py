@@ -839,6 +839,7 @@ def get_max_memory_treemap(build_by=0, do_print=True):
     if (do_print):
         print(out)
     return tree, out
+    
 def python_pass_warper(mod_func, args, kw):
     import importlib
     mod, func = mod_func.rsplit(".", 1)
@@ -933,6 +934,84 @@ inline static void {func_name}({",".join(pargs+oargs)}) {{
 }}
 """
     return new_src
+
+
+def cumprod(a, dim):
+    class CumprodFunc(jt.Function):
+        def forward_code(self, np, data):
+            a = data["inputs"][0]
+            b = data["outputs"][0]
+            out = np.cumprod(a, self.dim)
+            np.copyto(b, out)
+
+        def backward_code(self, np, data):
+            a, b, dout = data["inputs"]
+            out = data["outputs"][0]
+
+            sdim = a.shape[self.dim]
+            dim = (len(a.shape)+1)*[1]
+            dim[self.dim+1] = sdim
+            res = np.tile(np.expand_dims(b, self.dim+1), dim)
+            dout = np.tile(np.expand_dims(dout, self.dim+1), dim)
+
+            dim[self.dim]=sdim
+            dim[self.dim+1]=1
+            a = np.tile(np.expand_dims(a, self.dim), dim)
+            res = res/a
+            
+            mask = np.tril(np.ones((sdim, sdim)))
+            for i in range(self.dim):
+                mask = np.expand_dims(mask, 0)
+            for i in range(len(a.shape)-self.dim-2):
+                mask = np.expand_dims(mask, -1)
+            res = np.sum(mask*res*dout, self.dim)
+            
+            np.copyto(out, res)
+
+        def execute(self, a, dim):
+            self.save_vars = a
+            self.dim = dim
+            self.res = jt.numpy_code(
+                a.shape,
+                a.dtype,
+                [a],
+                self.forward_code,
+            )
+            return self.res
+
+        def grad(self, grad_a):
+            a = self.save_vars
+            b = self.res
+            return jt.numpy_code(
+                a.shape,
+                a.dtype,
+                [a, b, grad_a],
+                self.backward_code,
+            )
+
+    func = CumprodFunc()
+    if dim<0:
+        dim+=len(a.shape)
+    return func(a, dim)
+
+def linspace(start, end, steps):
+    res = jt.index((steps,))[0]
+    res = res*(end-start)/float(steps-1)+start
+    return res
+
+def randperm(n):
+    # TODO: use jt.random
+    idx = np.arange(n)
+    return jt.array(np.random.permutation(idx))
+
+def set_global_seed(seed):
+    jt.set_seed(seed)
+    np.random.seed(seed)
+    try:
+        import cupy
+        cupy.random.seed(seed)
+    except:
+        pass
 
 def searchsorted(sorted, values, right=False):
     """

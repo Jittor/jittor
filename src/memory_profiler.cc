@@ -28,6 +28,7 @@ struct FloatOutput_ {
     string suffix;
     int p=4;
 };
+
 inline std::ostream& operator<<(std::ostream& os, const FloatOutput_& o) {
     int w = 8;
     os << std::setw(w-2-o.suffix.size());
