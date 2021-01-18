@@ -14,6 +14,7 @@
 #include "executor.h"
 #include "graph.h"
 #include "update_queue.h"
+#include "mem/allocator/cuda_dual_allocator.h"
 
 namespace jittor {
 

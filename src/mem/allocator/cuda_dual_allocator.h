@@ -102,8 +102,13 @@ struct DelayFree final : Allocator {
     void migrate_to_cpu(void*& mem_ptr, size_t& allocation, size_t size, Allocator* allocator) {
         auto da = cuda_dual_allocator.get_dual_allocation(allocation);
         auto pre_allocation = allocation;
+        auto offset = (int64)mem_ptr - (int64)da.device_ptr;
+
         mem_ptr = allocator->alloc(size, allocation);
-        std::memcpy(mem_ptr, da.host_ptr, size);
+
+        checkCudaErrors(cudaMemcpy(mem_ptr, 
+            (void*)((int64)da.device_ptr+offset), size, cudaMemcpyDeviceToHost));
+        // std::memcpy(mem_ptr, (void*)((int64)da.host_ptr+offset), size);
         free(da.device_ptr, size, pre_allocation);
     }
 };
