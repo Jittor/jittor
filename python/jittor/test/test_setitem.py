@@ -132,6 +132,22 @@ class TestSetitem(unittest.TestCase):
         a = jt.zeros((3,))
         a[0:] = 1.0
         assert a.data[2] == 1
+
+    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @jt.flag_scope(use_cuda=1)
+    def test_getitem_inplace_array(self):
+        a = jt.array([[1,2],[3,4]])
+        assert (a[0].numpy() == [1,2]).all(), a[0].numpy()
+        assert (a[1].numpy() == [3,4]).all(), a[1].numpy()
+
+    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @jt.flag_scope(use_cuda=1)
+    def test_setitem_inplace_array(self):
+        a = jt.array([[1,2],[3,4]])
+        a[0,0] = -1
+        a[1,1] = -2
+        assert (a[0].numpy() == [-1,2]).all(), a[0].numpy()
+        assert (a[1].numpy() == [3,-2]).all(), a[1].numpy()
         
 if __name__ == "__main__":
     unittest.main()
