@@ -241,6 +241,12 @@ def get_version(output):
     version = "("+v[-1]+")"
     return version
 
+def get_int_version(output):
+    ver = get_version(output)
+    ver = ver[1:-1].split('.')
+    ver = tuple(( int(v) for v in ver ))
+    return ver
+
 def find_exe(name, check_version=True, silent=False):
     output = run_cmd(f'which {name}', err_msg=f'{name} not found')
     if check_version:
