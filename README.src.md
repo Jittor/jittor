@@ -94,19 +94,6 @@ We provide some jupyter notebooks to help you quick start with Jittor.
 
 ## 安装
 
-我们提供了Docker安装方式，免去您配置环境，Docker安装方法如下：
-
-We provide a Docker installation method to save you from configuring the environment. The Docker installation method is as follows:
-
-```
-# CPU only
-docker run -it --network host jittor/jittor
-# CPU and CUDA
-docker run -it --network host jittor/jittor-cuda
-```
-
-关于Docker安装的详细教程，可以参考[Windows/Mac/Linux通过Docker安装计图](https://cg.cs.tsinghua.edu.cn/jittor/tutorial/2020-5-15-00-00-docker/)
-
 Jittor is written in Python and C++. It requires a compiler for JIT compilation, Currently, we support four compilers:
 
 Jittor使用Python和C++编写。 它需要用于即时编译的编译器。当前，我们支持三种编译器：
@@ -119,8 +106,10 @@ Jittor使用Python和C++编写。 它需要用于即时编译的编译器。当�
     - clang （>=8.0）
 * GPU compiler (optional)
     * nvcc (>=10.0 for g++ or >=10.2 for clang)
+    * cudnn-dev
 * GPU 编译器（可选）
     - nvcc (>=10.0 for g++ 或者 >=10.2 for clang)
+    * cudnn-dev (cudnn开发版)
 
 Jittor的环境要求如下:
 
@@ -138,15 +127,32 @@ Jittor environment requirements:
 
 Note: Currently Jittor runs on the Windows operating system through WSL. For the installation method of WSL, please refer to [Microsoft official website](https://docs.microsoft.com/en-us/windows/wsl/install-win10). WSL does not yet support CUDA.
 
-Jittor offers three ways to install: pip, script or manual.
+Jittor offers three ways to install: docker, pip, or manual.
 
-Jittor 一共提供三种方式安装: pip安装, 一键脚本安装 和 手动安装.
+Jittor 一共提供三种方式安装: docker安装，pip安装, 和 手动安装.
+
+## Docker Install
+
+## Docker 安装
+
+我们提供了Docker安装方式，免去您配置环境，Docker安装方法如下：
+
+We provide a Docker installation method to save you from configuring the environment. The Docker installation method is as follows:
+
+```
+# CPU only
+docker run -it --network host jittor/jittor
+# CPU and CUDA
+docker run -it --network host jittor/jittor-cuda
+```
+
+关于Docker安装的详细教程，可以参考[Windows/Mac/Linux通过Docker安装计图](https://cg.cs.tsinghua.edu.cn/jittor/tutorial/2020-5-15-00-00-docker/)
 
 ## Pip 安装
 
 ## Pip install
 
-如果您没有准备好环境，欢迎使用我们提供的一键安装脚本， 如果您已经装好编译器和对应版本的Python,我们强烈推荐您使用这种方法
+如果您没有准备好环境，或者使用的不是Ubuntu操作系统， 推荐使用**docker安装**， 如果您已经装好编译器和对应版本的Python,我们强烈推荐您使用这种方法
 (如果无法访问github, 可以通过jittor主页下载):
 
 ```bash
@@ -159,34 +165,6 @@ python3.7 -m jittor.test.test_example
 
 如果测试运行通过,恭喜你已经安装完成.
 jittor会自动在路径中寻找合适的编译器, 如果您希望手动指定编译器, 请使用环境变量 `cc_path` 和 `nvcc_path`(可选).
-
-## 一键脚本安装
-## single line script install
-
-一键脚本安装会帮您安装好所需的编译器以及对应的Python版本.
-
-We provide single line command for quick installation the latest version of Jittor(Ubuntu>=16.04):
-
-我们提供能快速安装最新版本Jittor的单行命令（Ubuntu> = 16.04）：
-
-```bash
-# install with clang and cuda
-wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.sh | with_clang=1 with_cuda=1 bash
-# install with clang
-wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.sh | with_clang=1 bash
-# install with g++ and cuda
-wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.sh | with_gcc=1 with_cuda=1 bash
-# install with g++
-wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.sh | with_gcc=1 bash
-```
-After execution, the script will show some environment variables you need to export.
-
-执行后，脚本将显示一些需要导出的环境变量。
-
-If you use Jittor for CPU computing, we strongly recommend clang(>=8.0) as the back-end compiler of Jittor. Because some customized optimizations will be enabled.
-
-如果将Jittor用于CPU计算，则强烈建议使用clang（> = 8.0）作为Jittor的后端编译器。 因为Jittor会用到其中一些定制的优化。
-
 
 ## 手动安装
 ## manual install
