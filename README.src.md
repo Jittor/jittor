@@ -5,13 +5,26 @@
 
 [快速开始](#快速开始) | [安装](#安装) | [教程](#教程)
 
-Jittor is a high-performance deep learning framework based on JIT compiling and meta-operators. The whole framework and meta-operators are compiled just-in-time. A powerful op compiler and tuner are integrated into Jittor. It allowed us to generate high-performance code with specialized for your model.
+Jittor is a high-performance deep learning framework based on JIT compiling and meta-operators. The whole framework and meta-operators are compiled just-in-time. A powerful op compiler and tuner are integrated into Jittor. It allowed us to generate high-performance code with specialized for your model. Jittor also contains a wealth of high-performance model libraries, including: image recognition, detection, segmentation, generation, differentiable rendering, geometric learning, reinforcement learning, etc. .
 
-Jittor 是一个基于即时编译和元算子的高性能深度学习框架，整个框架在即时编译的同时，还集成了强大的Op编译器和调优器，为您的模型生成定制化的高性能代码。
+Jittor 是一个基于即时编译和元算子的高性能深度学习框架，整个框架在即时编译的同时，还集成了强大的Op编译器和调优器，为您的模型生成定制化的高性能代码。Jittor还包含了丰富的高性能模型库，涵盖范围包括：图像识别，检测，分割，生成，可微渲染，几何学习，强化学习等等。
 
-The front-end language is Python. Module Design is used in the front-end, which is the most popular design for deeplearning framework interface. The back-end is implemented by high performance language, such as CUDA,C++.
+The front-end language is Python. Module Design and Dynamic Graph Execution is used in the front-end, which is the most popular design for deeplearning framework interface. The back-end is implemented by high performance language, such as CUDA,C++.
 
-Jittor前端语言为Python。前端使用了模块化的设计，这是目前最主流的深度学习框架接口设计。后端则使用高性能语言编写，如CUDA，C++。
+Jittor前端语言为Python。前端使用了模块化和动态图执行的设计，这是目前最主流的深度学习框架接口设计。后端则使用高性能语言编写，如CUDA，C++。
+
+Related Links:
+*  [Jittor Website](https://cg.cs.tsinghua.edu.cn/jittor/)
+*  [Jittor Tutorials](https://cg.cs.tsinghua.edu.cn/jittor/tutorial/)
+*  [Jittor Models](https://cg.cs.tsinghua.edu.cn/jittor/resources/)
+*  [Jittor Documents](https://cg.cs.tsinghua.edu.cn/jittor/assets/docs/index.html)
+
+相关链接：
+*  [Jittor官网](https://cg.cs.tsinghua.edu.cn/jittor/)
+*  [Jittor教程](https://cg.cs.tsinghua.edu.cn/jittor/tutorial/)
+*  [Jittor模型库](https://cg.cs.tsinghua.edu.cn/jittor/resources/)
+*  [Jittor文档](https://cg.cs.tsinghua.edu.cn/jittor/assets/docs/index.html)
+
 
 The following example shows how to model a two-layer neural network step by step and train from scratch In a few lines of Python code.
 

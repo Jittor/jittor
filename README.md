@@ -3,10 +3,18 @@
 [Quickstart](#quickstart) | [Install](#install) | [Tutorial](#tutorial) | [Chinese](./README.cn.md)
 
 
-Jittor is a high-performance deep learning framework based on JIT compiling and meta-operators. The whole framework and meta-operators are compiled just-in-time. A powerful op compiler and tuner are integrated into Jittor. It allowed us to generate high-performance code with specialized for your model.
+Jittor is a high-performance deep learning framework based on JIT compiling and meta-operators. The whole framework and meta-operators are compiled just-in-time. A powerful op compiler and tuner are integrated into Jittor. It allowed us to generate high-performance code with specialized for your model. Jittor also contains a wealth of high-performance model libraries, including: image recognition, detection, segmentation, generation, differentiable rendering, geometric learning, reinforcement learning, etc. .
 
 
-The front-end language is Python. Module Design is used in the front-end, which is the most popular design for deeplearning framework interface. The back-end is implemented by high performance language, such as CUDA,C++.
+The front-end language is Python. Module Design and Dynamic Graph Execution is used in the front-end, which is the most popular design for deeplearning framework interface. The back-end is implemented by high performance language, such as CUDA,C++.
+
+
+Related Links:
+*  [Jittor Website](https://cg.cs.tsinghua.edu.cn/jittor/)
+*  [Jittor Tutorials](https://cg.cs.tsinghua.edu.cn/jittor/tutorial/)
+*  [Jittor Models](https://cg.cs.tsinghua.edu.cn/jittor/resources/)
+*  [Jittor Documents](https://cg.cs.tsinghua.edu.cn/jittor/assets/docs/index.html)
+
 
 
 The following example shows how to model a two-layer neural network step by step and train from scratch In a few lines of Python code.

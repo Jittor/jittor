@@ -4,10 +4,18 @@
 [快速开始](#快速开始) | [安装](#安装) | [教程](#教程)
 
 
-Jittor 是一个基于即时编译和元算子的高性能深度学习框架，整个框架在即时编译的同时，还集成了强大的Op编译器和调优器，为您的模型生成定制化的高性能代码。
+Jittor 是一个基于即时编译和元算子的高性能深度学习框架，整个框架在即时编译的同时，还集成了强大的Op编译器和调优器，为您的模型生成定制化的高性能代码。Jittor还包含了丰富的高性能模型库，涵盖范围包括：图像识别，检测，分割，生成，可微渲染，几何学习，强化学习等等。
 
 
-Jittor前端语言为Python。前端使用了模块化的设计，这是目前最主流的深度学习框架接口设计。后端则使用高性能语言编写，如CUDA，C++。
+Jittor前端语言为Python。前端使用了模块化和动态图执行的设计，这是目前最主流的深度学习框架接口设计。后端则使用高性能语言编写，如CUDA，C++。
+
+
+相关链接：
+*  [Jittor官网](https://cg.cs.tsinghua.edu.cn/jittor/)
+*  [Jittor教程](https://cg.cs.tsinghua.edu.cn/jittor/tutorial/)
+*  [Jittor模型库](https://cg.cs.tsinghua.edu.cn/jittor/resources/)
+*  [Jittor文档](https://cg.cs.tsinghua.edu.cn/jittor/assets/docs/index.html)
+
 
 
 下面的代码演示了如何一步一步使用Python代码，从头对一个双层神经网络建模。
@@ -118,7 +126,7 @@ docker run -it --network host jittor/jittor-cuda
 ## Pip 安装
 
 
-如果您没有准备好环境，或者使用的不是Ubuntu操作系统， 推荐使用docker安装， 如果您已经装好编译器和对应版本的Python,我们强烈推荐您使用这种方法
+如果您没有准备好环境，或者使用的不是Ubuntu操作系统， 推荐使用**docker安装**， 如果您已经装好编译器和对应版本的Python,我们强烈推荐您使用这种方法
 (如果无法访问github, 可以通过jittor主页下载):
 
 ```bash
