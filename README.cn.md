@@ -76,18 +76,6 @@ for i,(x,y) in enumerate(get_data(n)):
 
 ## 安装
 
-我们提供了Docker安装方式，免去您配置环境，Docker安装方法如下：
-
-
-```
-# CPU only
-docker run -it --network host jittor/jittor
-# CPU and CUDA
-docker run -it --network host jittor/jittor-cuda
-```
-
-关于Docker安装的详细教程，可以参考[Windows/Mac/Linux通过Docker安装计图](https://cg.cs.tsinghua.edu.cn/jittor/tutorial/2020-5-15-00-00-docker/)
-
 
 Jittor使用Python和C++编写。 它需要用于即时编译的编译器。当前，我们支持三种编译器：
 
@@ -96,6 +84,7 @@ Jittor使用Python和C++编写。 它需要用于即时编译的编译器。当�
     - clang （>=8.0）
 * GPU 编译器（可选）
     - nvcc (>=10.0 for g++ 或者 >=10.2 for clang)
+    * cudnn-dev (cudnn开发版)
 
 Jittor的环境要求如下:
 
@@ -109,12 +98,27 @@ Jittor的环境要求如下:
 
 
 
-Jittor 一共提供三种方式安装: pip安装, 一键脚本安装 和 手动安装.
+Jittor 一共提供三种方式安装: docker安装，pip安装, 和 手动安装.
+
+
+## Docker 安装
+
+我们提供了Docker安装方式，免去您配置环境，Docker安装方法如下：
+
+
+```
+# CPU only
+docker run -it --network host jittor/jittor
+# CPU and CUDA
+docker run -it --network host jittor/jittor-cuda
+```
+
+关于Docker安装的详细教程，可以参考[Windows/Mac/Linux通过Docker安装计图](https://cg.cs.tsinghua.edu.cn/jittor/tutorial/2020-5-15-00-00-docker/)
 
 ## Pip 安装
 
 
-如果您没有准备好环境，欢迎使用我们提供的一键安装脚本， 如果您已经装好编译器和对应版本的Python,我们强烈推荐您使用这种方法
+如果您没有准备好环境，或者使用的不是Ubuntu操作系统， 推荐使用docker安装， 如果您已经装好编译器和对应版本的Python,我们强烈推荐您使用这种方法
 (如果无法访问github, 可以通过jittor主页下载):
 
 ```bash
@@ -127,30 +131,6 @@ python3.7 -m jittor.test.test_example
 
 如果测试运行通过,恭喜你已经安装完成.
 jittor会自动在路径中寻找合适的编译器, 如果您希望手动指定编译器, 请使用环境变量 `cc_path` 和 `nvcc_path`(可选).
-
-## 一键脚本安装
-
-一键脚本安装会帮您安装好所需的编译器以及对应的Python版本.
-
-
-我们提供能快速安装最新版本Jittor的单行命令（Ubuntu> = 16.04）：
-
-```bash
-# install with clang and cuda
-wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.sh | with_clang=1 with_cuda=1 bash
-# install with clang
-wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.sh | with_clang=1 bash
-# install with g++ and cuda
-wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.sh | with_gcc=1 with_cuda=1 bash
-# install with g++
-wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.sh | with_gcc=1 bash
-```
-
-执行后，脚本将显示一些需要导出的环境变量。
-
-
-如果将Jittor用于CPU计算，则强烈建议使用clang（> = 8.0）作为Jittor的后端编译器。 因为Jittor会用到其中一些定制的优化。
-
 
 ## 手动安装
 

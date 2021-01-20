@@ -76,17 +76,6 @@ We provide some jupyter notebooks to help you quick start with Jittor.
 ## Install
 
 
-
-We provide a Docker installation method to save you from configuring the environment. The Docker installation method is as follows:
-
-```
-# CPU only
-docker run -it --network host jittor/jittor
-# CPU and CUDA
-docker run -it --network host jittor/jittor-cuda
-```
-
-
 Jittor is written in Python and C++. It requires a compiler for JIT compilation, Currently, we support four compilers:
 
 
@@ -95,6 +84,7 @@ Jittor is written in Python and C++. It requires a compiler for JIT compilation,
     * clang (>=8.0)
 * GPU compiler (optional)
     * nvcc (>=10.0 for g++ or >=10.2 for clang)
+    * cudnn-dev
 
 
 
@@ -107,7 +97,21 @@ Jittor environment requirements:
 
 Note: Currently Jittor runs on the Windows operating system through WSL. For the installation method of WSL, please refer to [Microsoft official website](https://docs.microsoft.com/en-us/windows/wsl/install-win10). WSL does not yet support CUDA.
 
-Jittor offers three ways to install: pip, script or manual.
+Jittor offers three ways to install: docker, pip, or manual.
+
+
+## Docker Install
+
+
+
+We provide a Docker installation method to save you from configuring the environment. The Docker installation method is as follows:
+
+```
+# CPU only
+docker run -it --network host jittor/jittor
+# CPU and CUDA
+docker run -it --network host jittor/jittor-cuda
+```
 
 
 
@@ -121,29 +125,6 @@ python3.7 -m pip install jittor
 # python3.7 -m pip install git+https://github.com/Jittor/jittor.git
 python3.7 -m jittor.test.test_example
 ```
-
-
-## single line script install
-
-
-We provide single line command for quick installation the latest version of Jittor(Ubuntu>=16.04):
-
-
-```bash
-# install with clang and cuda
-wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.sh | with_clang=1 with_cuda=1 bash
-# install with clang
-wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.sh | with_clang=1 bash
-# install with g++ and cuda
-wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.sh | with_gcc=1 with_cuda=1 bash
-# install with g++
-wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.sh | with_gcc=1 bash
-```
-After execution, the script will show some environment variables you need to export.
-
-
-If you use Jittor for CPU computing, we strongly recommend clang(>=8.0) as the back-end compiler of Jittor. Because some customized optimizations will be enabled.
-
 
 
 ## manual install
