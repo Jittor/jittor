@@ -28,6 +28,8 @@ struct ItemData {
     NanoString dtype;
 };
 
+typedef struct _object PyObject;
+
 // @pyjt(Var)
 // @attrs(heaptype)
 struct VarHolder {
@@ -37,6 +39,8 @@ struct VarHolder {
     VarHolder(VarPtr&& v);
     // will move and delete v
     VarHolder(VarHolder* v);
+    // @pyjt(__init__)
+    VarHolder(PyObject* v, NanoString dtype=ns_void);
     // @pyjt(__dealloc__)
     ~VarHolder();
     string to_string();
