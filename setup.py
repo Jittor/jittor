@@ -1,5 +1,6 @@
 error_msg = """Jittor only supports Ubuntu>=16.04 currently.
 For other OS, use Jittor may be risky.
+If you insist on installing, please set the environment variable : export FORCE_INSTALL=1
 We strongly recommended docker installation:
 
 # CPU only
@@ -8,9 +9,10 @@ We strongly recommended docker installation:
 >>> docker run -it --network host jittor/jittor-cuda
 
 Reference:
-1. Windows/Mac/Linux通过Docker安装计图: https://cg.cs.tsinghua.edu.cn/jittor/tutorial/2020-5-15-00-00-docker/
+1. Windows/Mac/Linux install Jittor in Docker: https://cg.cs.tsinghua.edu.cn/jittor/tutorial/2020-5-15-00-00-docker/
 """
 from warnings import warn
+import os
 try:
     with open("/etc/os-release", "r", encoding='utf8') as f:
         s = f.read().splitlines()
@@ -22,6 +24,7 @@ try:
 except Exception as e:
     print(e)
     warn(error_msg)
+    if os.environ.get("FORCE_INSTALL", '0') != '1': raise
 
 import setuptools
 from setuptools import setup, find_packages
