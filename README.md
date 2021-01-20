@@ -369,7 +369,7 @@ Jittor is currently maintained by the [Tsinghua CSCG Group](https://cg.cs.tsingh
   journal={Information Sciences},
   volume={63},
   number={222103},
-  pages={1--222103},
+  pages={1--21},
   year={2020}
 }
 ```
