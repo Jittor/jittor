@@ -18,12 +18,14 @@ Related Links:
 *  [Jittor Tutorials](https://cg.cs.tsinghua.edu.cn/jittor/tutorial/)
 *  [Jittor Models](https://cg.cs.tsinghua.edu.cn/jittor/resources/)
 *  [Jittor Documents](https://cg.cs.tsinghua.edu.cn/jittor/assets/docs/index.html)
+*  [Github](https://github.com/jittor/jittor), [Gitee](https://gitee.com/jittor/jittor)
 
 相关链接：
 *  [Jittor官网](https://cg.cs.tsinghua.edu.cn/jittor/)
 *  [Jittor教程](https://cg.cs.tsinghua.edu.cn/jittor/tutorial/)
 *  [Jittor模型库](https://cg.cs.tsinghua.edu.cn/jittor/resources/)
 *  [Jittor文档](https://cg.cs.tsinghua.edu.cn/jittor/assets/docs/index.html)
+*  [Github](https://github.com/jittor/jittor)， [Gitee](https://gitee.com/jittor/jittor)
 
 
 The following example shows how to model a two-layer neural network step by step and train from scratch In a few lines of Python code.
@@ -107,42 +109,42 @@ We provide some jupyter notebooks to help you quick start with Jittor.
 
 ## 安装
 
-Jittor is written in Python and C++. It requires a compiler for JIT compilation, Currently, we support four compilers:
 
-Jittor使用Python和C++编写。 它需要用于即时编译的编译器。当前，我们支持三种编译器：
+Jittor框架对环境要求如下:
 
-* CPU compiler (require at least one of the following)
-    * g++ (>=5.4.0)
-    * clang (>=8.0)
-* CPU 编译器 （需要下列至少一个）
+
+* 操作系统: **Ubuntu** >= 16.04 或 **Windows Subsystem of Linux（WSL）**
+* Python：版本 >= 3.7
+* C++编译器 （需要下列至少一个）
     - g++ （>=5.4.0）
     - clang （>=8.0）
-* GPU compiler (optional)
-    * nvcc (>=10.0 for g++ or >=10.2 for clang)
-    * cudnn-dev
-* GPU 编译器（可选）
-    - nvcc (>=10.0 for g++ 或者 >=10.2 for clang)
-    * cudnn-dev (cudnn开发版)
+* GPU 编译器（可选）：nvcc >=10.0
+* GPU 加速库（可选）：cudnn-dev (cudnn开发版)
 
-Jittor的环境要求如下:
+如果您不希望手动配置环境，我们推荐使用 Docker 进行安装。
+除此之外，您还可以使用 pip 安装和手动安装。
 
-* 操作系统: **Ubuntu** >= 16.04 (or **Windows** Subsystem of Linux)
-* Python版本 >= 3.7
-* C++编译器（g++ or clang）
+注意：目前Jittor通过WSL的方式在Windows操作系统上运行，WSL的安装方法请参考[微软官网](https://docs.microsoft.com/en-us/windows/wsl/install-win10)，WSL版本目前尚不支持CUDA。
 
-注意：目前Jittor通过WSL的方式在Windows操作系统上运行，WSL的安装方法请参考[微软官网](https://docs.microsoft.com/en-us/windows/wsl/install-win10)，目前WSL尚不支持CUDA。
+Jittor使用Python和C++编写。 它需要用于即时编译的编译器。当前，我们支持三种编译器：
 
 Jittor environment requirements:
 
 * System: **Ubuntu** >= 16.04 (or **Windows** Subsystem of Linux)
 * Python version >= 3.7
-* C++ compiler(g++ or clang)
+* CPU compiler (require at least one of the following)
+    * g++ (>=5.4.0)
+    * clang (>=8.0)
+* GPU compiler (optional)
+    * nvcc (>=10.0 for g++ or >=10.2 for clang)
+* GPU library: cudnn-dev
+
+
 
 Note: Currently Jittor runs on the Windows operating system through WSL. For the installation method of WSL, please refer to [Microsoft official website](https://docs.microsoft.com/en-us/windows/wsl/install-win10). WSL does not yet support CUDA.
 
 Jittor offers three ways to install: docker, pip, or manual.
 
-Jittor 一共提供三种方式安装: docker安装，pip安装, 和 手动安装.
 
 ## Docker Install
 
@@ -153,10 +155,12 @@ Jittor 一共提供三种方式安装: docker安装，pip安装, 和 手动安�
 We provide a Docker installation method to save you from configuring the environment. The Docker installation method is as follows:
 
 ```
-# CPU only
+# CPU only(Linux)
 docker run -it --network host jittor/jittor
-# CPU and CUDA
+# CPU and CUDA(Linux)
 docker run -it --network host jittor/jittor-cuda
+# CPU only(Mac and Windows)
+docker run -it -p 8888:8888 jittor/jittor
 ```
 
 关于Docker安装的详细教程，可以参考[Windows/Mac/Linux通过Docker安装计图](https://cg.cs.tsinghua.edu.cn/jittor/tutorial/2020-5-15-00-00-docker/)
