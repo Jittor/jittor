@@ -374,7 +374,7 @@ Jittor目前由[清华大学计算机图形学组](https://cg.cs.tsinghua.edu.cn
   journal={Information Sciences},
   volume={63},
   number={222103},
-  pages={1--222103},
+  pages={1--21},
   year={2020}
 }
 ```
