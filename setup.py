@@ -3,10 +3,12 @@ For other OS, use Jittor may be risky.
 If you insist on installing, please set the environment variable : export FORCE_INSTALL=1
 We strongly recommended docker installation:
 
-# CPU only
+# CPU only(Linux)
 >>> docker run -it --network host jittor/jittor
-# CPU and CUDA
+# CPU and CUDA(Linux)
 >>> docker run -it --network host jittor/jittor-cuda
+# CPU only(Mac and Windows)
+>>> docker run -it -p 8888:8888 jittor/jittor
 
 Reference:
 1. Windows/Mac/Linux install Jittor in Docker: https://cg.cs.tsinghua.edu.cn/jittor/tutorial/2020-5-15-00-00-docker/

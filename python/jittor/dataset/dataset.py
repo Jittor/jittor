@@ -162,6 +162,12 @@ class Dataset(object):
     def _worker_main(self, worker_id, buffer, status):
         import jittor_utils
         jittor_utils.cc.init_subprocess()
+        jt.jt_init_subprocess()
+        # parallel_op_compiler still problematic,
+        # it is not work on ubuntu 16.04. but worked on ubuntu 20.04
+        # it seems like the static value of parallel compiler
+        # is not correctly init.
+        jt.flags.use_parallel_op_compiler = 0
         import time
         try:
             gid_obj = self.gid.get_obj()
@@ -293,6 +299,8 @@ Example::
             w.buffer.clear()
             
     def _init_workers(self):
+        jt.clean()
+        jt.gc()
         self.index_list = mp.Array('i', self.real_len, lock=False)
         workers = []
         # batch id to worker id

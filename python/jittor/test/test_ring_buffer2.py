@@ -21,7 +21,7 @@ def test_ring_buffer():
         print("test send recv", type(data))
         buffer.push(data)
         recv = buffer.pop()
-        if isinstance(data, np.ndarray):
+        if isinstance(data, (np.ndarray, jt.Var)):
             assert (recv == data).all()
         else:
             assert data == recv
@@ -62,6 +62,8 @@ def test_ring_buffer():
     n_byte += 1 + 16 + 2 + 10*10*8
     assert n_byte == buffer.total_pop() and n_byte == buffer.total_push()
     test_send_recv(test_ring_buffer)
+
+    test_send_recv(jt.array(np.random.rand(10,10)))
 
     expect_error(lambda: test_send_recv(np.random.rand(10,1000)))
 

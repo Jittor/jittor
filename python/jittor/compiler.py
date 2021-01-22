@@ -852,6 +852,11 @@ with jit_utils.import_scope(import_flags):
     jit_utils.try_import_jit_utils_core()
 
 python_path = sys.executable
+# something python do not return the correct sys executable
+# this will happend when multiple python version installed
+ex_python_path = python_path + '.' + str(sys.version_info.minor)
+if os.path.isfile(ex_python_path):
+    python_path = ex_python_path
 py3_config_path = jit_utils.py3_config_path
 
 nvcc_path = env_or_try_find('nvcc_path', '/usr/local/cuda/bin/nvcc')

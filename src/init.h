@@ -25,4 +25,7 @@ std::default_random_engine* get_random_engine();
 // @pyjt(cleanup)
 void cleanup();
 
+// @pyjt(jt_init_subprocess)
+void jt_init_subprocess();
+
 } // jittor
