@@ -57,8 +57,8 @@ class TestSearchSorted(unittest.TestCase):
             s_tc = torch.from_numpy(s)
             v_tc = torch.from_numpy(v)
 
-            y_jt = jt.searchsorted(s_jt, v_jt, right=True)
             y_tc = torch.searchsorted(s_tc, v_tc, right=True)
+            y_jt = jt.searchsorted(s_jt, v_jt, right=True)
             assert np.allclose(y_jt.numpy(), y_tc.data)
             y_jt = jt.searchsorted(s_jt, v_jt, right=False)
             y_tc = torch.searchsorted(s_tc, v_tc, right=False)

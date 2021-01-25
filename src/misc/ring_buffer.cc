@@ -57,7 +57,6 @@ void RingBuffer::free_ring_buffer(RingBuffer* rb) {
     if (is_multiprocess) {
         munmap(rb, total_size);
     } else {
-        rb->~RingBuffer();
         free((void*)rb);
     }
 }
