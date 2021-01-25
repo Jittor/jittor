@@ -128,7 +128,8 @@ static vector<Stack> get_stack_info() {
             auto base_type = PyTuple_GET_ITEM(tp_mro, Py_SIZE(tp_mro)-2);
             auto prev_f = i? frames[i-1] : f;
             if (base_type == jt_optimizer) {
-                PyObjHolder ret(find_obj_name(f->f_back, obj, "_opt"));
+                string init_name = string(obj->ob_type->tp_name) + "_init";
+                PyObjHolder ret(find_obj_name(f->f_back, obj, init_name.c_str()));
                 stacks.emplace_back(Stack{
                     to_string(ret.obj), 
                     string(obj->ob_type->tp_name),
@@ -189,7 +190,7 @@ void TraceData::record_node(Node* node, bool record_stack) {
     NodeData data;
     data.id = node_data_cnt++;
     id_map[node] = data.id;
-    if (!node->is_var() || trace_py_var>=3) {
+    if (trace_py_var) {
         if (record_stack) {
             if (trace_grad_op) {
                 auto iter = trace_data.id_map.find(trace_grad_op);
@@ -205,6 +206,10 @@ void TraceData::record_node(Node* node, bool record_stack) {
         }
     } else {
     }
+    if (node->__id())
+        data.attrs["__id"] = S(node->__id());
+    data.attrs["is_var"] = node->is_var() ? "1" : "0";
+    data.attrs["name"] = "unname";
     node_data[data.id] = move(data);
 }
 
@@ -223,7 +228,7 @@ void TraceData::release_node(Node* node) {
         return;
     auto node_id = iter->second;
     id_map.erase(node);
-    if (trace_py_var >= 1) {
+    if (trace_py_var < 2) {
         node_data.erase(node_id);
     }
 }
@@ -231,7 +236,8 @@ void TraceData::release_node(Node* node) {
 void TraceData::record_exe_node(Node* node) {
     auto node_id = get_node_id(node);
     auto& data = node_data[node_id];
-    if (data.inputs.size() != node->inputs().size() || data.attrs.size() == 0) {
+    auto name_iter = data.attrs.find("name");
+    if (data.inputs.size() != node->inputs().size() || data.attrs.size() == 0 || name_iter == data.attrs.end() || name_iter->second == "unname") {
         data.inputs.clear();
         data.inputs.reserve(node->inputs().size());
         for (auto i : node->inputs()) {
@@ -315,6 +321,10 @@ PyObject* dump_trace_data() {
     PyObjHolder execute_op_info(PyDict_New());
     for (auto& kv : trace_data.node_data) {
         if (kv.second.attrs.size() == 0)
+            continue;
+        auto name_iter = kv.second.attrs.find("name");
+        // if don't have name, this node is not executed
+        if (name_iter == kv.second.attrs.end() || name_iter->second == "unname")
             continue;
         PyObjHolder dict(PyDict_New());
         fill_dict(dict.obj, string("id"), to_py_object(kv.second.id));
