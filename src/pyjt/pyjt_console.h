@@ -422,7 +422,7 @@ inline ~Console() {
 }
 
 inline void run(const char* src) {
-    PyObjHolder ret(PyRun_String(src, Py_file_input, globals.obj, locals.obj));
+    PyObjHolder ret(PyRun_String(src, Py_file_input, globals.obj, nullptr));
 }
 
 inline void run(const string& src) { run(src.c_str()); }
@@ -430,7 +430,7 @@ inline void run(const string& src) { run(src.c_str()); }
 template<class T>
 inline void set(const char* s, const T& data) {
     PyObjHolder py_data(to_py_object<T>(data));
-    PyDict_SetItemString(locals.obj, s, py_data.obj);
+    PyDict_SetItemString(globals.obj, s, py_data.obj);
 }
 
 template<class T>
@@ -440,7 +440,7 @@ inline void set(const string& s, const T& data) {
 
 template<class T>
 inline T get(const char* s) {
-    auto obj = PyDict_GetItemString(locals.obj, s);
+    auto obj = PyDict_GetItemString(globals.obj, s);
     if (!obj) obj = PyDict_GetItemString(globals.obj, s);
     if (!obj) throw std::runtime_error(string("KeyError: ")+s);
     if (!is_type<T>(obj)) throw std::runtime_error(string("TypeError: key<")+s+"> is "+Py_TYPE(obj)->tp_name);
@@ -460,12 +460,12 @@ inline void set_array(const string& s, const array<T,N>& data) {
         vector<int64>(data.shape, data.shape+N),
         data.dtype(),
         data.data.get()));
-    PyDict_SetItemString(locals.obj, s.c_str(), obj.obj);
+    PyDict_SetItemString(globals.obj, s.c_str(), obj.obj);
 }
 
 template<class T, int N>
 inline array<T,N> get_array(const string& s) {
-    auto obj = PyDict_GetItemString(locals.obj, s.c_str());
+    auto obj = PyDict_GetItemString(globals.obj, s.c_str());
     if (!obj) obj = PyDict_GetItemString(globals.obj, s.c_str());
     if (!obj) throw std::runtime_error(string("KeyError: ")+s);
     vector<int64> shape;
