@@ -120,7 +120,7 @@ We provide a Docker installation method to save you from configuring the environ
 # CPU only(Linux)
 docker run -it --network host jittor/jittor
 # CPU and CUDA(Linux)
-docker run -it --network host jittor/jittor-cuda
+docker run -it --network host --gpus all jittor/jittor-cuda
 # CPU only(Mac and Windows)
 docker run -it -p 8888:8888 jittor/jittor
 ```
@@ -208,7 +208,7 @@ jt.flags.use_cuda = 1
 ### Optional Step 5: Test Resnet18 training
 
 
-To check the integrity of Jittor, you can run Resnet18 training test.
+To check the integrity of Jittor, you can run Resnet18 training test. Note: 6G GPU RAM is requires in this test.
 
 
 ```bash

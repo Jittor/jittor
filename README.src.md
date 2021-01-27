@@ -126,7 +126,7 @@ Jittor框架对环境要求如下:
 
 注意：目前Jittor通过WSL的方式在Windows操作系统上运行，WSL的安装方法请参考[微软官网](https://docs.microsoft.com/en-us/windows/wsl/install-win10)，WSL版本目前尚不支持CUDA。
 
-Jittor使用Python和C++编写。 它需要用于即时编译的编译器。当前，我们支持三种编译器：
+Jittor 提供了三种安装方法：docker，pip和手动安装：
 
 Jittor environment requirements:
 
@@ -158,7 +158,7 @@ We provide a Docker installation method to save you from configuring the environ
 # CPU only(Linux)
 docker run -it --network host jittor/jittor
 # CPU and CUDA(Linux)
-docker run -it --network host jittor/jittor-cuda
+docker run -it --network host --gpus all jittor/jittor-cuda
 # CPU only(Mac and Windows)
 docker run -it -p 8888:8888 jittor/jittor
 ```
@@ -264,9 +264,9 @@ jt.flags.use_cuda = 1
 
 ### 可选步骤五：测试训练Resnet18
 
-To check the integrity of Jittor, you can run Resnet18 training test.
+To check the integrity of Jittor, you can run Resnet18 training test. Note: 6G GPU RAM is requires in this test.
 
-要检查Jittor的完整性，您可以运行Resnet18训练测试。
+要检查Jittor的完整性，您可以运行Resnet18训练测试。需要注意的是，这个测试需要6G显存。
 
 ```bash
 python3.7 -m jittor.test.test_resnet
