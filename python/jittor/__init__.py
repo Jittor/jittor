@@ -8,7 +8,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-__version__ = '1.2.2.20'
+__version__ = '1.2.2.21'
 from . import lock
 with lock.lock_scope():
     ori_int = int
@@ -17,6 +17,7 @@ with lock.lock_scope():
     from . import compiler
     from .compiler import LOG, has_cuda
     from .compiler import compile_custom_ops, compile_custom_op
+    import jittor_core
     import jittor_core as core
     from jittor_core import *
     from jittor_core.ops import *
@@ -962,6 +963,13 @@ float = float32
 Var.float = Var.float32
 double = float64
 Var.double = Var.float64
+
+# __array__ interface is used for np.array(jt_var)
+Var.__array__ = Var.numpy
+# __getstate__, __setstate__, __module__ is used for pickle.dump and pickle.load
+Var.__getstate__ = Var.numpy
+Var.__setstate__ = lambda self, x: self.__init__(x)
+Var.__module__ = "jittor"
 
 from . import nn
 from . import attention

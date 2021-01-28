@@ -140,6 +140,19 @@ class TestArray(unittest.TestCase):
         assert (a.numpy() == [1,2,3]).all()
         assert (b.numpy() == [1,2,3]).all()
 
+    def test_np_array(self):
+        a = jt.Var([1,2,3])
+        b = np.array(a)
+        assert (b==[1,2,3]).all()
+
+    def test_pickle(self):
+        import pickle
+        a = jt.Var([1,2,3])
+        s = pickle.dumps(a)
+        b = pickle.loads(s)
+        assert isinstance(b, jt.Var)
+        assert (b.data == [1,2,3]).all()
+
 
 
 if __name__ == "__main__":
