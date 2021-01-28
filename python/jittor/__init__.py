@@ -968,7 +968,7 @@ Var.double = Var.float64
 Var.__array__ = Var.numpy
 # __getstate__, __setstate__, __module__ is used for pickle.dump and pickle.load
 Var.__getstate__ = Var.numpy
-Var.__setstate__ = lambda self, x: self.__init__(x)
+Var.__setstate__ = Var.__init__
 Var.__module__ = "jittor"
 
 from . import nn
