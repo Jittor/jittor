@@ -378,6 +378,7 @@ Var.clamp = clamp
 def type_as(a, b):
     return a.unary(op=b.dtype)
 Var.type_as = type_as
+Var.astype = Var.cast
 
 def masked_fill(x, mask, value):
     assert list(x.shape) == list(mask.shape)
@@ -402,6 +403,44 @@ Var.argmax = argmax
 def argmin(x, dim, keepdims:bool=False):
     return x.arg_reduce("min", dim, keepdims)
 Var.argmin = argmin
+
+def randn(*size, dtype="float32", requires_grad=True):
+    if isinstance(size, tuple) and isinstance(size[0], (tuple, list, NanoVector)): size = size[0]
+    arr = jt.random(size, dtype, "normal")
+    if not requires_grad: return arr.stop_grad()
+    return arr
+
+def rand(*size, dtype="float32", requires_grad=True):
+    if isinstance(size, tuple) and isinstance(size[0], (tuple, list, NanoVector)): size = size[0]
+    arr = jt.random(size, dtype)
+    if not requires_grad: return arr.stop_grad()
+    return arr
+
+def rand_like(x, dtype=None):
+    if dtype is None: dtype = x.dtype
+    return jt.random(x.shape, x.dtype)
+
+def randn_like(x, dtype=None):
+    if dtype is None: dtype = x.dtype
+    return jt.random(x.shape, x.dtype, "normal")
+
+def randint(low, high=None, shape=(1,), dtype="int32"):
+    if high is None: low, high = 0, low
+    v = (jt.random(shape) * (high - low) + low).clamp(low, high-0.5)
+    return v.astype(dtype)
+
+def randint_like(x, low, high=None):
+    return randint(low, high, x.shape, x.dtype)
+
+def normal(mean, std, size=None, dtype="float32"):
+    if size is None:
+        if isinstance(mean, Var) and isinstance(std, Var):
+            assert mean.shape == std.shape
+            size = mean.shape
+        else:
+            if isinstance(mean, Var): size = mean.shape
+            if isinstance(std, Var): size = std.shape
+    return jt.init.gauss(size, dtype, mean, std)
 
 def attrs(var):
     return {
@@ -966,10 +1005,10 @@ Var.double = Var.float64
 
 # __array__ interface is used for np.array(jt_var)
 Var.__array__ = Var.numpy
-# __getstate__, __setstate__, __module__ is used for pickle.dump and pickle.load
-Var.__getstate__ = Var.numpy
-Var.__setstate__ = Var.__init__
+Var.__array_priority__ = 2000
+# __reduce__, __module__ is used for pickle.dump and pickle.load
 Var.__module__ = "jittor"
+Var.__reduce__ = lambda self: (Var, (self.data,))
 
 from . import nn
 from . import attention
@@ -981,26 +1020,3 @@ from . import numpy2cupy
 from .contrib import concat
 from .misc import *
 from . import sparse
-
-
-def randn(*size, dtype="float32", requires_grad=False):
-    if isinstance(size, tuple) and isinstance(size[0], tuple): size = size[0]
-    arr = jt.random(size, dtype, "normal")
-    if not requires_grad: return arr.stop_grad()
-    return arr
-
-def rand(*size, dtype="float32", requires_grad=False):
-    if isinstance(size, tuple) and isinstance(size[0], tuple): size = size[0]
-    arr = jt.random(size, dtype)
-    if not requires_grad: return arr.stop_grad()
-    return arr
-
-def normal(mean, std, size=None, dtype="float32"):
-    if size is None:
-        if isinstance(mean, Var) and isinstance(std, Var):
-            assert mean.shape == std.shape
-            size = mean.shape
-        else:
-            if isinstance(mean, Var): size = mean.shape
-            if isinstance(std, Var): size = std.shape
-    return jt.init.gauss(size, dtype, mean, std)
