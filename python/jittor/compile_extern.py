@@ -18,7 +18,9 @@ def search_file(dirs, name):
     LOG.f(f"file {name} not found in {dirs}")
 
 def install_mkl(root_folder):
-    url = "https://github.com/intel/mkl-dnn/releases/download/v1.0.2/mkldnn_lnx_1.0.2_cpu_gomp.tgz"
+    # origin url is
+    # url = "https://github.com/intel/mkl-dnn/releases/download/v1.0.2/mkldnn_lnx_1.0.2_cpu_gomp.tgz"
+    url = "https://cloud.tsinghua.edu.cn/f/da02bf62b55b4aa3b8ee/?dl=1"
     filename = "mkldnn_lnx_1.0.2_cpu_gomp.tgz"
     fullname = os.path.join(root_folder, filename)
     dirname = os.path.join(root_folder, filename.replace(".tgz",""))
