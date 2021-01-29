@@ -87,6 +87,18 @@ class TestRandomOp(unittest.TestCase):
     def test_normal_cuda(self):
         self.test_normal()
 
+    def test_other_rand(self):
+        a = jt.array([1.0,2.0,3.0])
+        b = jt.rand_like(a)
+        c = jt.randn_like(a)
+        assert b.shape == c.shape
+        assert b.shape == a.shape
+        print(b, c)
+        assert jt.randint(10, 20, (2000,)).min() == 10
+        assert jt.randint(10, 20, (2000,)).max() == 19
+        assert jt.randint(10, shape=(2000,)).max() == 9
+        assert jt.randint_like(a, 10).shape == a.shape
+
 
 if __name__ == "__main__":
     unittest.main()

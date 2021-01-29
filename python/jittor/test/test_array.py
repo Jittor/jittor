@@ -147,11 +147,11 @@ class TestArray(unittest.TestCase):
 
     def test_pickle(self):
         import pickle
-        a = jt.Var([1,2,3])
-        s = pickle.dumps(a)
+        a = jt.Var([1,2,3,4])
+        s = pickle.dumps(a, pickle.HIGHEST_PROTOCOL)
         b = pickle.loads(s)
         assert isinstance(b, jt.Var)
-        assert (b.data == [1,2,3]).all()
+        assert (b.data == [1,2,3,4]).all()
 
 
 

@@ -15,8 +15,9 @@ namespace jittor {
 static void push_py_object_pickle(RingBuffer* rb, PyObject* obj, uint64& __restrict__ offset) {
     PyObjHolder pickle(PyImport_ImportModule("pickle"));
     PyObjHolder dumps(PyObject_GetAttrString(pickle.obj, "dumps"));
+    PyObjHolder proto(PyObject_GetAttrString(pickle.obj, "HIGHEST_PROTOCOL"));
     rb->push_t<uint8>(6, offset);
-    PyObjHolder ret(PyObject_CallFunctionObjArgs(dumps.obj, obj, nullptr));
+    PyObjHolder ret(PyObject_CallFunctionObjArgs(dumps.obj, obj, proto.obj, nullptr));
     obj = ret.obj;
     Py_ssize_t size;
     char* s;
