@@ -176,7 +176,7 @@ static void getitem_inplace(GetitemOp* op) {
     auto ou = op->outputs().front();
     
     // return if input or output's shape is variable
-    if (in->num < 0 || ou->num < 0)
+    if (in->num <= 0 || ou->num <= 0)
         return;
 
     VarSlices vs = op->vs;

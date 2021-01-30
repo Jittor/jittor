@@ -46,6 +46,7 @@ ArrayOp::ArrayOp(PyObject* obj) {
     ArrayArgs args;
     PyObjHolder holder;
     args.ptr = nullptr;
+    allocation.ptr = nullptr;
     if (PyFloat_CheckExact(obj)) {
         tmp_data.f32 = PyFloat_AS_DOUBLE(obj);
         args = {&tmp_data, 1, ns_float32};
@@ -63,7 +64,7 @@ ArrayOp::ArrayOp(PyObject* obj) {
         args = move(fetch_sync({ptr}).at(0));
     } else
     if (Py_TYPE(obj) == PyArray_Type ||
-        PyList_CheckExact(obj) ||
+        PyList_CheckExact(obj) || PyTuple_CheckExact(obj) ||
         PyObject_TypeCheck(obj, PyNumberArrType_Type)
     ) {
         if (Py_TYPE(obj) != PyArray_Type) {
@@ -97,6 +98,8 @@ ArrayOp::ArrayOp(PyObject* obj) {
             }
 
         }
+    } else {
+        LOGf << "type <" >> Py_TYPE(obj)->tp_name >> "> not support for jittor array";
     }
     NanoVector shape = args.shape;
     output = create_output(shape, args.dtype);

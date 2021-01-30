@@ -121,7 +121,8 @@ struct RingBuffer {
             rr = c2 << size_bit;
             rr_next = rr + size;
         }
-        CHECK(rr_next <= r+this->size) << "Buffer size too small, please increase buffer size.";
+        CHECK(rr_next <= r+this->size) << "Buffer size too small, please increase buffer size. Current size:"
+            << this->size << "Required size:" << rr_next - r;
         while (rr_next > l + this->size) {
             wait();
         }
