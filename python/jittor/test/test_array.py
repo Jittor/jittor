@@ -8,6 +8,7 @@ import unittest
 import jittor as jt
 import numpy as np
 from jittor import compile_extern
+from jittor.test.test_core import expect_error
 
 class TestArray(unittest.TestCase):
     def test_data(self):
@@ -153,6 +154,11 @@ class TestArray(unittest.TestCase):
         assert isinstance(b, jt.Var)
         assert (b.data == [1,2,3,4]).all()
 
+    def test_tuple_array(self):
+        a = jt.array((4,5))
+        expect_error(lambda : jt.array({}))
+        expect_error(lambda : jt.array("asdasd"))
+        expect_error(lambda : jt.array(jt))
 
 
 if __name__ == "__main__":
