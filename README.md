@@ -101,7 +101,7 @@ Jittor environment requirements:
     * clang (>=8.0)
 * GPU compiler (optional)
     * nvcc (>=10.0 for g++ or >=10.2 for clang)
-* GPU library: cudnn-dev
+* GPU library: cudnn-dev (recommend tar file installation, [reference link](https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#installlinux-tar))
 
 
 

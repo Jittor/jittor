@@ -119,7 +119,7 @@ Jittor框架对环境要求如下:
     - g++ （>=5.4.0）
     - clang （>=8.0）
 * GPU 编译器（可选）：nvcc >=10.0
-* GPU 加速库（可选）：cudnn-dev (cudnn开发版)
+* GPU 加速库（可选）：cudnn-dev (cudnn开发版, 推荐使用tar安装方法，[参考链接](https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#installlinux-tar))
 
 如果您不希望手动配置环境，我们推荐使用 Docker 进行安装。
 除此之外，您还可以使用 pip 安装和手动安装。
@@ -137,7 +137,7 @@ Jittor environment requirements:
     * clang (>=8.0)
 * GPU compiler (optional)
     * nvcc (>=10.0 for g++ or >=10.2 for clang)
-* GPU library: cudnn-dev
+* GPU library: cudnn-dev (recommend tar file installation, [reference link](https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#installlinux-tar))
 
 
 
