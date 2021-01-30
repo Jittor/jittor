@@ -314,9 +314,9 @@ And we can give the variable a name.
 此外我们可以给变量起一个名字。
 
 ```python
-c.name('c')
-print(c.name())
-# Output: c
+a.name('a')
+print(a.name())
+# Output: a
 ```
 
 ### Operations

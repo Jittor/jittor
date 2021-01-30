@@ -248,9 +248,9 @@ And we can give the variable a name.
 
 
 ```python
-c.name('c')
-print(c.name())
-# Output: c
+a.name('a')
+print(a.name())
+# Output: a
 ```
 
 ### Operations
