@@ -16,6 +16,7 @@ CudaDeviceAllocator cuda_device_allocator;
 const char* CudaDeviceAllocator::name() const {return "cuda_device";}
 
 void* CudaDeviceAllocator::alloc(size_t size, size_t& allocation) {
+    if (size==0) return (void*)0x10;
     void* ptr;
     try {
         checkCudaErrors(cudaMalloc(&ptr, size));
@@ -32,6 +33,7 @@ void* CudaDeviceAllocator::alloc(size_t size, size_t& allocation) {
 }
 
 void CudaDeviceAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
+    if (size==0) return;
     checkCudaErrors(cudaFree(mem_ptr));
 }
 

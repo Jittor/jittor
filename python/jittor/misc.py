@@ -1009,6 +1009,8 @@ def randperm(n):
     return jt.array(np.random.permutation(idx))
 
 def set_global_seed(seed):
+    import random
+    random.seed(seed)
     jt.set_seed(seed)
     np.random.seed(seed)
     try:
