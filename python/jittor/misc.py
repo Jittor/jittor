@@ -363,6 +363,10 @@ def make_grid(x, nrow=8, padding=2, normalize=False, range=None, scale_each=Fals
     assert isinstance(range, tuple) or range is None
     assert scale_each == False
     if isinstance(x, list): x = jt.stack(x)
+    assert isinstance(x, jt.Var)
+    if x.ndim < 4: return x
+    if x.ndim == 4 and x.shape[0] <= 1: return x
+    nrow = min(nrow, x.shape[0])
     if normalize: 
         if range is None: x = (x - x.min()) / (x.max() - x.min())
         else: x = (x - range[0]) / (range[1] - range[0])
