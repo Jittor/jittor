@@ -88,6 +88,19 @@ class TestPad(unittest.TestCase):
         check_equal(torchvision.utils.make_grid(torch.Tensor(arr), nrow=3, normalize=True, padding=4, pad_value=-1, range=(-100,100)), jt.make_grid(jt.array(arr), nrow=3, normalize=True, padding=4, pad_value=-1, range=(-100,100)))
         print('pass make_grid test ...')
 
+    def test_make_grid2(self):
+        def check(shape):
+            arr = np.random.randn(*shape)
+            check_equal(torchvision.utils.make_grid(torch.Tensor(arr)), jt.make_grid(jt.array(arr)))
+        check((3,100,200))
+        check((1,100,200))
+        check((100,200))
+        check((1,3,100,200))
+        check((4,3,100,200))
+        check((10,3,100,200))
+
+
+
     def test_save_image(self):
         arr = jt.array(np.random.randn(16,3,10,10))
         jt.save_image(arr, "/tmp/a.jpg")
