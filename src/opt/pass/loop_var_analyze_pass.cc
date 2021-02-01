@@ -245,6 +245,20 @@ void LoopVarAnalyzePass::run() {
         auto name2 = pm->oc->get_name_by_op_output(opa, j);
         replace_vars.emplace_back(name1, name2);
     }
+
+    // dirty fix wrong array fuse
+    if (max_elm_size>1)
+        for (int i=0; i<this->op->ops.size(); i++) {
+            auto op = this->op->ops[i];
+            if (op->type() == OpType::element &&
+                op->name() != string("array") &&
+                op->outputs().front()->num == 1) {
+                replace_vars.emplace_back("op"+S(i)+"_xstride0", "0");
+                replace_vars.emplace_back("op"+S(i)+"_ystride0", "0");
+                replace_vars.emplace_back("op"+S(i)+"_zstride0", "0");
+            }
+        }
+    
     
     LOGvvv << "replace_vars" << replace_vars;
     ir->replace(replace_vars);
