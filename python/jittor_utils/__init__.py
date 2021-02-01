@@ -300,4 +300,5 @@ for py3_config_path in py3_config_paths:
 else:
     raise RuntimeError(f"python3.{sys.version_info.minor}-config "
         "not found in {py3_config_paths}, please specify "
-        "enviroment variable 'python_config_path'")
+        "enviroment variable 'python_config_path',"
+        " or apt install python3.{sys.version_info.minor}-dev")
