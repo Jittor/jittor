@@ -392,7 +392,7 @@ Example::
             self.real_len = len(index_list)
             self.real_batch_size = real_batch_size
             assert self.total_len // self.batch_size == \
-                self.real_len // self.real_batch_size
+                self.real_len // self.real_batch_size, f"Number of batches({self.total_len // self.batch_size}!={self.real_len // self.real_batch_size}) not match, total_len: {self.total_len}, batch_size: {self.batch_size}, real_len: {self.real_len}, real_batch_size: {self.real_batch_size}"
         else:
             self.real_len = self.total_len
             self.real_batch_size = self.batch_size
