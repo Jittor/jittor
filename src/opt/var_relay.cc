@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -35,7 +36,7 @@ int VarRelayManager::add_relay_group(const vector<pair<Var*, Var*>>& group) {
     for (auto& g : relay_groups)
         for (auto& p : g.relayed_pairs)
             for (auto& p2 : group)
-            if (p.second == (p2.second->custom_data>>2)) {
+            if (p.second == (fop->get_node_id(p2.second))) {
                 LOGvvvv << "Var allready relayed" << p2.second;
                 return -1;
             }
@@ -43,8 +44,7 @@ int VarRelayManager::add_relay_group(const vector<pair<Var*, Var*>>& group) {
     auto& relay_group = relay_groups.back();
     relay_group.relayed_pairs.reserve(group.size());
     for (const auto& p : group) {
-        // var->custom_data>>2: var id
-        relay_group.relayed_pairs.push_back({p.first, p.second->custom_data>>2});
+        relay_group.relayed_pairs.push_back({p.first, fop->get_node_id(p.second)});
         ASSERTop(p.first->size,==,p.second->size);
     }
     
@@ -69,7 +69,7 @@ int VarRelayManager::add_relay_group(const vector<pair<Var*, Var*>>& group) {
         if (node->is_var())
             continue;
         Op* op = node->op();
-        op->do_jit_prepare();
+        op->do_jit_prepare(jk);
         list<Node*> new_inputs;
         int removed = 0;
         for (Var* v : op->inputs())
@@ -101,7 +101,7 @@ int VarRelayManager::add_relay_group(const vector<pair<Var*, Var*>>& group) {
                 oprc.relayed_members[i] = -1;
             else {
                 ASSERT(fnodes.count(v));
-                oprc.relayed_members[i] = v->custom_data>>2;
+                oprc.relayed_members[i] = fop->get_node_id(v);
             }
             LOGvvvv << "Relay op" << oprc.op->name() >>".">>
                 op_info.var_members[i].first << "-->" <<
@@ -115,8 +115,8 @@ vector<pair<int,int>> VarRelayManager::get_op_relay_info(const vector<bool>& rel
     ASSERT(relay_switches.size()==relay_groups.size());
     auto num = fop->ops.size()+fop->vars.size();
     auto node_id = [&](Node* node) -> int {
-        if (node->is_var()) return node->custom_data>>2;
-        return node->custom_data + fop->vars.size();
+        if (node->is_var()) return fop->get_node_id(node);
+        return fop->get_node_id(node) + fop->vars.size();
     };
     vector<int> deps(num);
     // pair: first: group_id, second: relayed_pair id

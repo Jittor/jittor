@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -9,6 +10,7 @@
 #include "mem/allocator.h"
 #include "opt/pass_manager.h"
 #include "opt/pass/assume_aligned_pass.h"
+#include "executor.h"
 
 namespace jittor {
 
@@ -31,7 +33,7 @@ void AssumeAlignedPass::run() {
                     Var* var;
                     pm->oc->get_op_var_by_name(name, op_id, opvar_id, op, var);
                     // add assume_aligned if is aligned_allocator
-                    if (var->allocator->is_aligned()) {
+                    if (exe.allocator->is_aligned()) {
                         // if is a function arguments
                         if (l == ls[0])
                             func->push_front("assume_aligned("+lvalue+");");

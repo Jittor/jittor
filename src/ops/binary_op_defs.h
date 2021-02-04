@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -12,17 +13,18 @@ namespace jittor {
 #define pow(T,a,b) ::pow(a,b)
 #define maximum(T,a,b) ::max(T(a), T(b))
 #define minimum(T,a,b) ::min(T(a), T(b))
+#define mod(T,a,b) @if(@strcmp(@Tx,float32)==0,::fmodf(T(a),T(b)),@if(@strcmp(@Tx,float64)==0,::fmod(T(a),T(b)),((a)%(b))))
 #else // JIT_cpu
 #define pow(T,a,b) std::pow(a,b)
 #define maximum(T,a,b) std::max(T(a), T(b))
 #define minimum(T,a,b) std::min(T(a), T(b))
+#define mod(T,a,b) @if(@strcmp(@Tx,float32)==0 || @strcmp(@Tx,float64)==0,std::fmod((T)a,(T)b),((a)%(b)))
 #endif
 #define add(T,a,b) ((a)+(b))
 #define subtract(T,a,b) ((a)-(b))
 #define multiply(T,a,b) ((a)*(b))
 #define divide(T,a,b) (T((T(a))/(T(b))))
 #define floor_divide(T,a,b) (T((T(a))/(T(b))))
-#define mod(T,a,b) ((a)%(b))
 #define less(T,a,b) ((a)<(b))
 #define less_equal(T,a,b) ((a)<=(b))
 #define greater(T,a,b) ((a)>(b))
@@ -37,7 +39,7 @@ namespace jittor {
 #define bitwise_and(T,a,b) ((a)&(b))
 #define bitwise_or(T,a,b) ((a)|(b))
 #define bitwise_xor(T,a,b) ((a)^(b))
-#define mean(T,a,b) ((a)+T(b)*(T(1)/T(count)))
+#define mean(T,a,b) ((a)+T(b)*(T(rcount)))
 
 #ifdef JIT_cuda
 #define init_maximum(T) ::numeric_min<T>()

@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -34,7 +35,9 @@ unordered_set<string> reduce_ops = {
     "add",
     // @pybind(prod, product, reduce_multiply)
     "multiply", 
+    // @pybind(reduce_logical_and, all_)
     "logical_and", 
+    // @pybind(reduce_logical_or, any_)
     "logical_or", 
     "logical_xor", 
     "bitwise_and", 
@@ -63,7 +66,8 @@ ReduceOp::ReduceOp(Var* x, NanoString op, NanoVector dims, bool keepdims)
             reduce_mask |= 1<<dim;
         }
     }
-    if (x->dtype() == ns_bool && ns == ns_add)
+    // if (x->dtype() == ns_bool && ns == ns_add)
+    if (x->dtype() == ns_bool)
         y = create_output(nullptr, ns_int32);
     else
         y = create_output(nullptr, binary_dtype_infer(ns, x, x));
@@ -134,13 +138,13 @@ VarPtr ReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     return nullptr;
 }
 
-void ReduceOp::jit_prepare() {
-    add_jit_define("Tx", x->dtype());
-    add_jit_define("Ty", y->dtype());
-    add_jit_define("Tz", y->dtype());
-    add_jit_define("OP", ns.to_cstring());
-    add_jit_define("DIM", JK::hex1(x->shape.size()));
-    add_jit_define("REDUCE", JK::hex(reduce_mask));
+void ReduceOp::jit_prepare(JK& jk) {
+    jk << _CS("[Tx:") << x->dtype()
+        << _CS("][Ty:") << y->dtype()
+        << _CS("][Tz:") << y->dtype()
+        << _CS("][OP:") << ns
+        << _CS("][DIM=") << JK::hex1(x->shape.size())
+        << _CS("][REDUCE=") << JK::hex(reduce_mask) << ']';
 }
 
 #else // JIT
@@ -155,6 +159,7 @@ void ReduceOp::jit_run() {
     index_t xstride@{DIM-1} = 1;
     @for(i, DIM-2, -1, -1, auto xstride@i = xstride@{i+1} * xshape@{i+1};)
     Ty count = Ty(x->num) / Ty(y->num);
+    Ty rcount = Ty(y->num) / Ty(x->num);
     @for(d, 0, DIM,@if(REDUCE>>d&1,, for (index_t xi@d=0; xi@d < xshape@d; xi@d++))) {
         auto yid = 0 @for(d, 0, DIM,@if(REDUCE>>d&1,, + xi@d * ystride@d));
         yp[yid] = @expand_macro(init_@OP, Ty);
@@ -167,7 +172,7 @@ void ReduceOp::jit_run() {
             yp[yid] = @expand_macro(@OP, Ty, yp[yid], xp[xid]);
         }
     }
-    (void)count, (void)yshape0, (void)ystride0;
+    (void)count, (void)rcount, (void)yshape0, (void)ystride0;
 }
 #endif // JIT
 

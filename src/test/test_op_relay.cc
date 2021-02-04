@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -45,7 +46,7 @@ JIT_TEST(fused_op_relay_matmul) {
     });
     CHECKop(q.size(),==,10);
     CHECKop(ops.size(),==,4);
-    for (auto op : ops) op->do_jit_prepare();
+    for (auto op : ops) op->do_jit_prepare(jk);
     FusedOp fop;
     FusedOpContext context;
     fop.context = &context;
@@ -55,6 +56,7 @@ JIT_TEST(fused_op_relay_matmul) {
     // a, b, d can not fuse
     a->custom_data = b->custom_data = d->custom_data = 1;
     fop.update_ops();
+    context.setup(&fop);
     if (!has_op("mkl_matmul")) return;
     auto make_matmul = get_op_info("mkl_matmul")
         .get_constructor<VarPtr, Var*, Var*, bool, bool>();
@@ -72,6 +74,7 @@ JIT_TEST(fused_op_relay_matmul) {
     // broadcast(a) can not fused
     fop.vars[1].var->custom_data = 1;
     fop.update_ops();
+    context.setup(&fop);
     is_op_relayed = context.vrm.get_op_relay_info({1});
     vector<pair<int,int>> ans{{-1,-1},{0,0},{0,0},{0,0}};
     CHECKop(is_op_relayed,==,ans);

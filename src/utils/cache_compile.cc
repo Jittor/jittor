@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -153,7 +154,7 @@ void process(string src, vector<string>& input_names) {
             while (l<src.size() && (src[l] != ' ' && src[l] != '\n')) l++;
             if (src[k] == '"' && src[l-1] == '"' && j-i==8 && src.substr(i,j-i) == "#include") {
                 auto inc = src.substr(k+1, l-k-2);
-                if (inc != "test.h") {
+                if (inc != "test.h" && inc != "helper_cuda.h") {
                     LOGvvvv << "Found include" << inc; 
                     input_names.push_back(inc);
                 }

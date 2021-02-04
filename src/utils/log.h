@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -14,6 +15,7 @@ namespace jittor {
 
 // define in tracer.cc
 void print_trace();
+void breakpoint();
     
 constexpr int32_t basename_index(const char * const path, const int32_t index = 0, const int32_t slash_index = -1) {
    return path[index]
@@ -36,9 +38,9 @@ extern "C" uint32_t get_tid();
 extern "C" bool g_supports_color;
 extern "C" void print_prefix(std::ostream* out);
 
-const char green[] = "\033[38;5;2m";
-const char red[] = "\033[38;5;1m";
-const char yellow[] = "\033[38;5;3m";
+constexpr char green[] = "\033[38;5;2m";
+constexpr char red[] = "\033[38;5;1m";
+constexpr char yellow[] = "\033[38;5;3m";
 
 static void get_color(char level, int verbose, const char*& color_begin, const char*& color_end) {
     if (level == 'i') {
@@ -61,6 +63,7 @@ extern "C" void flush_log();
 extern "C" void log_capture_start();
 extern "C" void log_capture_stop();
 extern std::vector<std::map<string,string>> log_capture_read();
+extern string thread_local thread_name;
 
 struct Log {
     std::ostringstream out;

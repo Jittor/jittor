@@ -1,8 +1,9 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers: 
 #     Guoye Yang <498731903@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -55,6 +56,7 @@ class TestArgReduceOp(unittest.TestCase):
         check_backward([5,5,5], 'min', 0, True)
         check_backward([5,5,5], 'min', 2, True)
         check_backward([5,5,5], 'min', 1, True)
+        check_backward([5,], 'min', 0, True)
         check_backward([20,20,20,20], 'max', 0, True)
         check_backward([20,20,20,20], 'max', 2, True)
         check_backward([20,20,20,20], 'max', 1, True)
@@ -62,6 +64,7 @@ class TestArgReduceOp(unittest.TestCase):
         check_backward([5,5,5], 'min', 0, False)
         check_backward([5,5,5], 'min', 2, False)
         check_backward([5,5,5], 'min', 1, False)
+        check_backward([5,], 'min', 0, False)
         check_backward([20,20,20,20], 'max', 0, False)
         check_backward([20,20,20,20], 'max', 2, False)
         check_backward([20,20,20,20], 'max', 1, False)
@@ -73,6 +76,7 @@ class TestArgReduceOp(unittest.TestCase):
         check_backward([5,5,5], 'min', 0, True)
         check_backward([5,5,5], 'min', 2, True)
         check_backward([5,5,5], 'min', 1, True)
+        check_backward([5,], 'min', 0, True)
         check_backward([20,20,20,20], 'max', 0, True)
         check_backward([20,20,20,20], 'max', 2, True)
         check_backward([20,20,20,20], 'max', 1, True)
@@ -80,6 +84,7 @@ class TestArgReduceOp(unittest.TestCase):
         check_backward([5,5,5], 'min', 0, False)
         check_backward([5,5,5], 'min', 2, False)
         check_backward([5,5,5], 'min', 1, False)
+        check_backward([5,], 'min', 0, False)
         check_backward([20,20,20,20], 'max', 0, False)
         check_backward([20,20,20,20], 'max', 2, False)
         check_backward([20,20,20,20], 'max', 1, False)
@@ -89,6 +94,7 @@ class TestArgReduceOp(unittest.TestCase):
         check_reduce([5,5,5], 'min', 0, True)
         check_reduce([5,5,5], 'min', 2, True)
         check_reduce([5,5,5], 'min', 1, True)
+        check_reduce([5], 'min', 0, True)
         check_reduce([20,20,20,20], 'max', 0, True)
         check_reduce([20,20,20,20], 'max', 2, True)
         check_reduce([20,20,20,20], 'max', 1, True)
@@ -96,6 +102,7 @@ class TestArgReduceOp(unittest.TestCase):
         check_reduce([5,5,5], 'min', 0, False)
         check_reduce([5,5,5], 'min', 2, False)
         check_reduce([5,5,5], 'min', 1, False)
+        check_reduce([5], 'min', 0, False)
         check_reduce([20,20,20,20], 'max', 0, False)
         check_reduce([20,20,20,20], 'max', 2, False)
         check_reduce([20,20,20,20], 'max', 1, False)
@@ -107,6 +114,7 @@ class TestArgReduceOp(unittest.TestCase):
         check_reduce([5,5,5], 'min', 0, True, True)
         check_reduce([5,5,5], 'min', 2, True, True)
         check_reduce([5,5,5], 'min', 1, True, True)
+        check_reduce([5], 'min', 0, True)
         check_reduce([20,20,20,20], 'max', 0, True, True)
         check_reduce([20,20,20,20], 'max', 2, True, True)
         check_reduce([20,20,20,20], 'max', 1, True, True)
@@ -114,6 +122,7 @@ class TestArgReduceOp(unittest.TestCase):
         check_reduce([5,5], 'min', 0, False, True)
         check_reduce([5,5,5], 'min', 2, False, True)
         check_reduce([5,5,5], 'min', 1, False, True)
+        check_reduce([5], 'min', 0, False)
         check_reduce([20,20,20,20], 'max', 0, False, True)
         check_reduce([20,20,20,20], 'max', 2, False, True)
         check_reduce([20,20,20,20], 'max', 1, False, True)

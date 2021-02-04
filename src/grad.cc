@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -22,6 +23,7 @@ static auto make_number = get_op_info("number")
 
 VarPtr make_grad(Op* op, Var* out, Var* dout, Var* x, int x_index) {
     if (dout == nullptr) return nullptr;
+    if (x_index<0) return nullptr;
     LOGvvvv << "Make grad op:" >> op->name() << "inputs:" >> op->inputs()
         << "out:" >> out << "dout:" >> dout << "x:" >> x << "xid:" >> x_index;
     auto dx = op->grad(out, dout, x, x_index);
@@ -55,9 +57,6 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets) {
             return false;
         if (node->is_stop_grad())
             return false;
-        // int value has zero grad
-        if (node->is_var())
-            return node->var()->is_float();
         return true;
     });
     LOGvv << "Size of grad nodes:" << gnodes.size();
@@ -87,7 +86,6 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets) {
     if (grads.size()) {
         grads[0] = make_number(1.f, loss);
         assign_attrs(grads[0].ptr, loss);
-        registe_node_trace_grad(grads[0].ptr, loss, 0);
     }
 
     vector<pair<Node*, int64>> id_buffer;
@@ -157,6 +155,7 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets) {
                     } else
                         douts[i] = nullptr;
                 }
+                trace_grad_op = op;
                 op->grads(douts, dins);
                 // dump "for (Var* in : op->inputs())"
                 for (int i=0; i<n_i; i++,j++) {
@@ -178,9 +177,10 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets) {
                     auto out = id_buffer[j].first->var();
                     if (id<0) continue;
                     Var* dout = grads[id];
+                    trace_grad_op = op;
                     VarPtr dvar = make_grad(op, out, dout, var, index);
-                    registe_node_trace_grad(dvar.ptr, op, index);
-                    if (dvar && var->num)
+                    if (dvar && dvar->num>=0 && var->num>0)
+                        // var->num == 0 represents a any match var
                         ASSERT(dvar->num==var->num && dvar->shape.size()==var->shape.size())
                         << "dvar" << dvar << "var" << var;
                     if (!grad)
@@ -197,12 +197,12 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets) {
                         }
                         #endif
                         assign_attrs(grad.ptr, var);
-                        registe_node_trace_grad(grad.ptr, var, index);
                     }
                 }
             }
         }
     }
+    trace_grad_op = nullptr;
     // set zero grad
     for (size_t i=0; i<results.size(); i++) {
         Var* var = targets[i];
@@ -211,10 +211,10 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets) {
         if (id>=0)
             grad = move(grads[id]);
         if (!grad) {
+            // TODO: better warning message
             LOGw << "grads[">>i>>"] '">> var->name>>"' doesn't have gradient. It will be set to zero:" << var;
             grad = make_number(0.f, var);
             assign_attrs(grad.ptr, var);
-            registe_node_trace_grad(grad.ptr, var, 0);
         }
     }
     return results;

@@ -1,8 +1,9 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers: 
 #     Guowei Yang <471184555@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -10,9 +11,13 @@ import unittest
 from jittor import Function
 import jittor as jt
 import numpy
-import cupy
 import ctypes
 import sys
+
+try:
+    import cupy
+except:
+    pass
 
 class TestCodeOp(unittest.TestCase):
     def test_func(self):
@@ -58,9 +63,9 @@ class TestCodeOp(unittest.TestCase):
             one=numpy.ones(a.shape)
             assert numpy.allclose(da.data,one*2.0)
 
-        jt.flags.use_cuda = 0
-        check()
-        jt.flags.use_cuda = 1
+        if jt.has_cuda:
+            with jt.flag_scope(use_cuda=1):
+                check()
         check()
 
     def test(self):
@@ -92,9 +97,9 @@ class TestCodeOp(unittest.TestCase):
             one=numpy.ones(a.shape)
             assert numpy.allclose(da.data,one*2.0)
 
-        jt.flags.use_cuda = 0
-        check()
-        jt.flags.use_cuda = 1
+        if jt.has_cuda:
+            with jt.flag_scope(use_cuda=1):
+                check()
         check()
 
     def test_multi_input(self):
@@ -139,9 +144,9 @@ class TestCodeOp(unittest.TestCase):
             assert numpy.allclose(dda.data,one)
             assert numpy.allclose(ddb.data,mone)
         
-        jt.flags.use_cuda = 0
-        check()
-        jt.flags.use_cuda = 1
+        if jt.has_cuda:
+            with jt.flag_scope(use_cuda=1):
+                check()
         check()
 
     @unittest.skipIf(True, "Memory leak testing is not in progress, Skip")

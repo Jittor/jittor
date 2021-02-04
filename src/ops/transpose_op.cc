@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -13,11 +14,6 @@ namespace jittor {
 #ifndef JIT
 static auto make_transpose = get_op_info("transpose")
     .get_constructor<VarPtr, Var*, NanoVector>();
-
-#ifdef HAS_CUDA
-static auto make_reshape = get_op_info("reshape")
-    .get_constructor<VarPtr, Var*, NanoVector>();
-#endif
 
 TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
     int i=0;
@@ -40,38 +36,8 @@ TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
                 .get_constructor<VarPtr, Var*, NanoVector>();
         }
         if (cutt_transpose) {
-            bool need_reshape = false;
-            int dims = x->shape.size();
-            vector<int64> in_axes;
-            vector<int64> in_shape;
-            vector<int64> out_shape;
-            vector<int64> trans;
-            int cnt = 0;
-            for (int i = 0; i < dims; ++i) {
-                if (x->shape[i] == 1) {
-                    need_reshape = true;
-                    trans.push_back(-1);
-                } else {
-                    trans.push_back(cnt);
-                    cnt += 1;
-                    in_shape.push_back(x->shape[i]);
-                }
-                out_shape.push_back(x->shape[axes[i]]);
-            }
-            for (int i = 0; i < dims; ++i) {
-                if (x->shape[axes[i]] != 1) {
-                    in_axes.push_back(trans[axes[i]]);
-                }
-            }
-            if (need_reshape) {
-                auto x1 = make_reshape(x, NanoVector(in_shape));
-                auto x2 = cutt_transpose(x1, in_axes);
-                auto x3 = make_reshape(x2, NanoVector(out_shape));
-                forward(x3);
-            } else {
-                auto var = cutt_transpose(x, axes);
-                forward(var);
-            }
+            auto var = cutt_transpose(x, axes);
+            forward(var);
             return;
         }
     }
@@ -105,11 +71,12 @@ VarPtr TransposeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     return make_transpose(dout, reverse);
 }
 
-void TransposeOp::jit_prepare() {
-    add_jit_define("Tx", x->dtype());
-    add_jit_define("DIM", JK::hex1(axes.size()));
+void TransposeOp::jit_prepare(JK& jk) {
+    jk << _CS("[Tx:") << x->dtype();
+    jk << _CS("][DIM=") << JK::hex1(axes.size());
     for (uint i=0; i<axes.size(); i++)
-        add_jit_define("AXES", JK::hex1(axes[i]), S(i));
+        jk << _CS("][AXES") << JK::hex1(axes[i]) << '=' << JK::hex1(i);
+    jk << ']';
 }
 
 #else // JIT

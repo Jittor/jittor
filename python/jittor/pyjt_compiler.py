@@ -1,5 +1,6 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -31,8 +32,10 @@ pytype_map = {
     "uint": ["PyLong_AsUnsignedLong", "PyLong_FromUnsignedLong", "PyLong_CheckExact"],
     "uint64": ["PyLong_AsUnsignedLongLong", "PyLong_FromUnsignedLongLong", "PyLong_CheckExact"],
     "void": ["...", "GET_PY_NONE", "..."],
+    "PyObject*": ["","",""],
 }
 def get_pytype_map(T, i):
+    assert T != ""
     if T in pytype_map:
         return pytype_map[T][i]
     return ["from_py_object", "to_py_object", "is_type"][i]+"<"+T+">"
@@ -109,6 +112,8 @@ def get_def_code(df, scope_name, pyname, self_as_arg0=False):
     func_args_convert = ""
     func_call = df["func_name"]+"("
     pytypes = [ get_pytype_map(a[0],0) for a in args ]
+    holder_dec_array = []
+    holder_set_array = []
     for tid, tpc in enumerate(pytypes):
         check = get_pytype_map(args[tid][0],2)
         default_arg = args[tid][2]
@@ -118,6 +123,11 @@ def get_def_code(df, scope_name, pyname, self_as_arg0=False):
         if jtp == "VarHolder*":
             holder_dec = f"unique_ptr<VarHolder> arg{tid}_holder"
             holder_set = f", arg{tid}_holder"
+        if jtp == "VarSlices":
+            holder_dec = f"vector<unique_ptr<VarHolder>> arg{tid}_holder"
+            holder_set = f", arg{tid}_holder"
+        holder_dec_array.append(holder_dec)
+        holder_set_array.append(holder_set)
         if len(default_arg):
             func_args_convert += f"""
                         {holder_dec};
@@ -165,7 +175,7 @@ def get_def_code(df, scope_name, pyname, self_as_arg0=False):
                                 if (khash == {get_hash(args[aid][1])}u) {{
                                     // hash match {args[aid][1]}
                                     CHECK(({get_pytype_map(args[aid][0],2)}(vo)));
-                                    arg{aid} = {pytypes[aid]}(vo);
+                                    arg{aid} = {pytypes[aid]}(vo{holder_set_array[aid]});
                                     arg_filled |= 1ull << {aid};
                                     continue;
                                 }}
@@ -197,7 +207,7 @@ def get_def_code(df, scope_name, pyname, self_as_arg0=False):
             func_call = f"(GET_RAW_PTR({scope_name},self))->" + func_call
     if pyname == "__init__":
         # XXX->xxx(...) ---> new XXX xxx(...)
-        assert "->" in func_call
+        assert "->" in func_call, func_call
         func_call = "new " + func_call.replace("->", " ")
     if no_need_convert:
         func_quick_check_runable = ""
@@ -449,7 +459,7 @@ def compile_src(src, h, basename):
             continue
         else:
             defs.append(def_info)
-        LOG.vvv(json.dumps(def_info, indent=4))
+        LOG.vvv(lambda: json.dumps(def_info, indent=4))
     # deal with defs
     if len(defs) == 0: return
     # include_name = h[4:] # remove "src/" prefix
@@ -759,7 +769,11 @@ def compile_src(src, h, basename):
         core_name = submodule_info["attrs"]["core_name"]
     has_map = class_name in ["VarHolder", "NanoVector"]
     has_seq = class_name == "NanoVector"
-    code = f"""
+    # add extra include to avoid compile error
+    src_code = ""
+    if include_name.endswith("var_slices.h"):
+        src_code += '#include "var_holder.h"\n' 
+    src_code += f"""
     #include "pyjt/py_converter.h"
     #include "pyjt/py_arg_printer.h"
     #include "common.h"
@@ -830,7 +844,7 @@ def compile_src(src, h, basename):
 
     }}
     """
-    return code
+    return src_code
 
 def compile_single(head_file_name, src_file_name, src=None):
     basename = head_file_name.split("/")[-1].split(".")[0]

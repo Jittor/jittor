@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -22,6 +23,13 @@ struct DataView {
     NanoString dtype;
 };
 
+struct ItemData {
+    int64 data;
+    NanoString dtype;
+};
+
+typedef struct _object PyObject;
+
 // @pyjt(Var)
 // @attrs(heaptype)
 struct VarHolder {
@@ -31,6 +39,8 @@ struct VarHolder {
     VarHolder(VarPtr&& v);
     // will move and delete v
     VarHolder(VarHolder* v);
+    // @pyjt(__init__)
+    VarHolder(PyObject* v, NanoString dtype=ns_void);
     // @pyjt(__dealloc__)
     ~VarHolder();
     string to_string();
@@ -51,6 +61,10 @@ struct VarHolder {
     // @pyjt(update)
     // @attrs(return_self)
     VarHolder* update(VarHolder* v);
+    /* update parameter without set attribute */
+    // @pyjt(_update)
+    // @attrs(return_self)
+    VarHolder* _update(VarHolder* v);
 
     // @pyjt(swap)
     // @attrs(return_self)
@@ -70,19 +84,6 @@ struct VarHolder {
     // @pyjt(name)
     inline const char* name() {
         return var->name.c_str();
-    }
-
-    // @pyjt(size)
-    inline NanoVector size() {
-        if (var->num<0) sync();
-        return var->shape;
-    }
-
-    // @pyjt(size)
-    inline int64 size(int64 dim) {
-        if (var->num<0) sync();
-        ASSERT(dim>=0 && dim<var->shape.size()) << "dim is out of index";
-        return var->shape[dim];
     }
 
     // @pyjt(numel)
@@ -128,6 +129,21 @@ struct VarHolder {
         return var->shape;
     }
 
+    // @pyjt(__get__requires_grad)
+    inline bool get_requires_grad() {
+        return !var->is_stop_grad();
+    }
+
+    // @pyjt(__set__requires_grad)
+    inline void set_requires_grad(bool flag) {
+        if (flag == get_requires_grad()) return;
+        if (flag)
+            _update(this);
+        else
+            stop_grad(); 
+        return;
+    }
+
     // @pyjt(__get__uncertain_shape)
     inline NanoVector uncertain_shape() {
         return var->shape;
@@ -157,6 +173,10 @@ struct VarHolder {
         #endif
         return {this, var->mem_ptr, var->shape, var->dtype()};
     }
+
+    /** Get one item data */
+    // @pyjt(item)
+    ItemData item();
 
     // @pyjt(__get__ndim)
     inline int ndim() {

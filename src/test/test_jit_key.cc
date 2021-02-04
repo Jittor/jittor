@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -42,11 +43,11 @@ JIT_TEST(jit_key) {
     }
 
     jk.clear();
-    add_jit_define("f", 0.01);
-    add_jit_define("f", 0.5);
-    add_jit_define("f", 1.0/0);
-    add_jit_define("f", -1.0/0);
-    add_jit_define("f", 0.0/0);
+    add_jit_define(jk, "f", 0.01);
+    add_jit_define(jk, "f", 0.5);
+    add_jit_define(jk, "f", 1.0/0);
+    add_jit_define(jk, "f", -1.0/0);
+    add_jit_define(jk, "f", 0.0/0);
     keys = parse_jit_keys(jk.to_string());
     k2 = {{"f","0x1.47ae147ae147bp-7"}, 
         {"f","0x1p-1"},

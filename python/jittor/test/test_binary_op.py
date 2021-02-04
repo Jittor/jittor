@@ -1,5 +1,6 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -125,6 +126,20 @@ class TestBinaryOp(unittest.TestCase):
             jgrads = jt.grad(jx, [ja,jb,jc])
             for jd, nd in zip(jgrads, grads):
                 assert (np.abs(jd.data-nd)<1e-4).all(), f"\n{jd.data}\n{nd}"
+
+    def test_mod_float(self):
+        a = jt.random((10,))
+        b = jt.random((10,))
+        c = a % b
+        assert np.allclose(c.data, a.data % b.data)
+        a = jt.random((10,), 'float64')
+        b = jt.random((10,), 'float64')
+        c = a % b
+        assert np.allclose(c.data, a.data % b.data)
+        a = jt.random((10,)) * 1000
+        b = (jt.random((10,)) * 10).int() + 1
+        c = a % b
+        assert np.allclose(c.data, a.data % b.data), (c.data, a.data%b.data)
 
 
 class TestBinaryOpCuda(TestBinaryOp, test_cuda(2)):

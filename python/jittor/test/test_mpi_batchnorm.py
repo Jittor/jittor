@@ -1,8 +1,9 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers: 
 #     Guowei Yang <471184555@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -91,8 +92,9 @@ class TestMpiBatchnorm(unittest.TestCase):
         gs2 = jt.grad(y2,bn2.parameters())
 
         assert np.allclose(y1.data, y2.data, atol=1e-5),(mpi.world_rank(),y1.data, y2.data, y1.data-y2.data)
+        assert len(gs1) == len(gs2)
         for i in range(len(gs1)):
-            assert np.allclose(gs1[i].data, gs2[i].data, rtol=1e-3),(mpi.world_rank(),gs1[i].data, gs2[i].data,gs1[i].data-gs2[i].data)
+            assert np.allclose(gs1[i].data, gs2[i].data, rtol=1e-2),(mpi.world_rank(),gs1[i].data, gs2[i].data,gs1[i].data-gs2[i].data)
 
     @unittest.skipIf(not jt.has_cuda, "no cuda")
     @jt.flag_scope(use_cuda=1)

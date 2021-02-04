@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -18,8 +19,8 @@ CudnnTestOp::CudnnTestOp(string cmd) : cmd(move(cmd)) {
     output = create_output(1, ns_float32);
 }
 
-void CudnnTestOp::jit_prepare() {
-    add_jit_define("T", ns_float32);
+void CudnnTestOp::jit_prepare(JK& jk) {
+    jk << _CS("[T:float32]");
 }
 
 #else // JIT

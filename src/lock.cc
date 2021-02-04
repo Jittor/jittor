@@ -1,8 +1,9 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: 
 //     Wenyang Zhou <576825820@qq.com>
 //     Dun Liang <randonlang@gmail.com>
-// All Rights Reserved.
+// 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -16,6 +17,7 @@
 namespace jittor {
 
 static int lock_fd = -1;
+int _has_lock = 0;
 
 void set_lock_path(string path) {
     lock_fd = open(path.c_str(), O_RDWR);
@@ -32,6 +34,7 @@ void lock() {
         .l_len = 0
     };
     ASSERT(fcntl(lock_fd, F_SETLKW, &lock) == 0);
+    _has_lock = 1;
     LOGvv << "LOCK Pid:" << getpid();
 }
  
@@ -44,6 +47,7 @@ void unlock() {
         .l_len = 0
     };
     ASSERT(fcntl(lock_fd, F_SETLKW, &lock) == 0);
+    _has_lock = 0;
     LOGvv << "UNLOCK Pid:" << getpid();
 }
 

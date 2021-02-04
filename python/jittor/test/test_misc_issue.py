@@ -1,5 +1,6 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -128,6 +129,9 @@ jt.mkl_ops.mkl_conv(x, w, 1, 2).sync()
         a = jt.random((10,)) - 2
         assert a.min().data == a.data.min(), (a.min(), a.data.min())
         assert a.max().data == a.data.max(), (a.max(), a.data.max())
+        a = jt.random((10,)) + 2
+        assert a.min().data == a.data.min(), (a.min(), a.data.min())
+        assert a.max().data == a.data.max(), (a.max(), a.data.max())
 
     @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
     @jt.flag_scope(use_cuda=1)
@@ -145,6 +149,14 @@ jt.mkl_ops.mkl_conv(x, w, 1, 2).sync()
         a = jt.float32([1,-1, -1000.1])
         da = jt.grad(a.sigmoid(), a)
         assert np.isnan(da.data).sum()==0, da.data
+
+    def test_sequential(self):
+        x = jt.nn.Sequential(lambda x:x, lambda x:x)
+        n = 0
+        for a in x:
+            n += 1
+        assert n == 2
+        assert list(x.keys()) == [0,1]
 
 
 if __name__ == "__main__":

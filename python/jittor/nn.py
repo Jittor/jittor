@@ -1,21 +1,25 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors:
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers:
 #     Guowei Yang <471184555@qq.com>
 #     Guoye Yang <498731903@qq.com>
 #     Wenyang Zhou <576825820@qq.com>
 #     Meng-Hao Guo <guomenghao1997@gmail.com>
 #     Dun Liang <randonlang@gmail.com>.
 #
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 import jittor as jt
 from jittor import init, Module
 import numpy as np
+import collections
 import math
-from jittor.pool import Pool, pool, AdaptiveAvgPool2d
+from collections import OrderedDict
+from jittor.pool import *
 from jittor.optim import *
+from jittor.misc import _pair
 
 
 def matmul_transpose(a, b):
@@ -24,11 +28,27 @@ def matmul_transpose(a, b):
     '''
     assert len(a.shape) >= 2 and len(b.shape) == 2
     assert a.shape[-1] == b.shape[-1]
+    if len(a.shape)>2:
+        aa = a.reshape((-1, a.shape[-1]))
+        cc = matmul_transpose(aa, b)
+        return cc.reshape(a.shape[:-1]+(-1,))
 
     shape = list(a.shape)[:-1] + list(b.shape)
     a = a.broadcast(shape, [len(shape)-2])
     b = b.broadcast(shape)
     return (a*b).sum(len(shape)-1)
+
+
+def bmm_transpose(a, b):
+    '''
+    returns a * b^T
+    '''
+    if jt.flags.use_cuda:
+        return jt.compile_extern.cublas_ops.cublas_batched_matmul(a, b, 0, 1)
+    t = list(range(b.ndim))
+    t[-1], t[-2] = t[-2], t[-1]
+    return bmm(a, b.transpose(t))
+
 
 def bmm(a, b):
     ''' batch matrix multiply, 
@@ -107,6 +127,12 @@ Example::
     # cc:[..., n, m, k]
     #     -->
     #     012
+    if len_b == 2 and len_a>2:
+        # TODO:ugly implementation for tuner
+        aa = a.reshape((-1, m))
+        cc = matmul(aa, b)
+        # print(a.shape, b.shape, cc.shape) 
+        return cc.reshape(a.shape[:-1] + [k])
     for i in range(len_c-2):
         ai = len_a-(len_c-i)
         bi = len_b-(len_c-i)
@@ -126,9 +152,27 @@ jt.Var.__imatmul__ = lambda a,b: a.assign(matmul(a,b))
 def get_init_var_rand(shape, dtype):
     return jt.array(np.random.normal(0.0, 1.0, shape).astype(np.float32))
 
-def relu(x): return jt.maximum(x, 0)
+def relu(x): return jt.ternary((x>0.0), x, jt.broadcast_var(0.0, x))
 def leaky_relu(x, scale=0.01): return jt.ternary(x>0, x, x*scale)
-def relu6(x): return jt.minimum(jt.maximum(x, 0), 6)
+def relu6(x): return jt.minimum(jt.maximum(x, 0.0), 6.0)
+def elu(x,alpha=1.0):return jt.ternary(x>0,x,alpha*(x.exp()-1))
+def sign(x):
+    one = jt.ones(x.shape)
+    x = jt.ternary(x>0, one, x)
+    return jt.ternary(x<0, -one, x)
+
+def gelu(x):
+    _sqrt2 = 1.4142135623730951
+    erf = jt.erf(x/_sqrt2)+1
+    r = erf*x*.5
+    return r
+
+class ELU(Module):
+    def __init__(self,alpha=1.0):
+        self.alpha=alpha
+    
+    def execute(self,x):
+        return elu(x,self.alpha)
 
 class PReLU(Module):
     def __init__(self, num_parameters=1, init_=0.25):
@@ -167,20 +211,72 @@ def cross_entropy_loss(output, target, ignore_index=None):
 def mse_loss(output, target):
     return (output-target).sqr().mean()
 
-def bce_loss(output, target, size_average=True):
+def bce_loss(output, target, weight=None, size_average=True):
+    loss = - (target * jt.log(jt.maximum(output, 1e-20)) + (1 - target) * jt.log(jt.maximum(1 - output, 1e-20)))
+
+    if weight is not None:
+        loss *= weight
+    
     if size_average:
-        return - (target * jt.log(jt.maximum(output, 1e-20)) + (1 - target) * jt.log(jt.maximum(1 - output, 1e-20))).mean()
+        return loss.mean()
     else:
-        return - (target * jt.log(jt.maximum(output, 1e-20)) + (1 - target) * jt.log(jt.maximum(1 - output, 1e-20))).sum()
+        return loss.sum()
 
 def l1_loss(output, target):
     return (output-target).abs().mean()
 
+
+def smooth_l1_loss(y_true, y_pred,reduction="mean"):
+    """Implements Smooth-L1 loss.
+    y_true and y_pred are typically: [N, 4], but could be any shape.
+
+    Args:
+         y_true - ground truth 
+         y_pred - predictions
+         reduction - the mode of cal loss which must be in ['mean','sum','none']
+    """
+    diff = jt.abs(y_true - y_pred)
+    less_than_one = (diff<1.0).float32()
+    loss = (less_than_one * 0.5 * diff.sqr()) + (1 - less_than_one) * (diff - 0.5)
+    if reduction=="mean":
+        return loss.mean()
+    elif reduction=="sum":
+        return loss.sum()
+    elif reduction=="none":
+        return loss
+    else:
+        raise ValueError(f'not support {reduction}')
+
+def nll_loss(output,target,weight=None,ignore_index=-100,reduction='mean'):
+    assert output.ndim<=2 and output.ndim>0 and target.ndim==1
+    n_classes = output.shape[-1]
+    assert weight is None or weight.numel()==n_classes
+    assert ignore_index<0 or ignore_index<n_classes
+    if weight is None:
+        weight = jt.ones((n_classes,))
+    if ignore_index>0:
+        weight[ignore_index]=0
+    if output.ndim==2:
+        index = jt.index((output.shape[0],),dim=0)
+        loss = -output[index,target]*weight[target]
+    else:
+        loss = -output[target[0]]*weight[target[0]]
+    if reduction=="mean":
+        total_weight  = weight[target].sum() if output.ndim==2 else weight[target[0]].sum()
+        return loss.sum()/total_weight
+    elif reduction=="sum":
+        return loss.sum()
+    elif reduction=="none":
+        return loss
+    else:
+        raise ValueError(f'not support {reduction}')
+    
 class CrossEntropyLoss(Module):
-    def __init__(self):
-        pass
+    def __init__(self,ignore_index=None):
+        self.ignore_index = ignore_index
+        
     def execute(self, output, target):
-        return cross_entropy_loss(output, target)
+        return cross_entropy_loss(output, target,self.ignore_index)
 
 class MSELoss(Module):
     def __init__(self):
@@ -189,10 +285,11 @@ class MSELoss(Module):
         return mse_loss(output, target)
 
 class BCELoss(Module):
-    def __init__(self):
-        pass
-    def execute(self, output, target, size_average=True):
-        return bce_loss(output, target, size_average)
+    def __init__(self, weight=None, size_average=True):
+        self.weight = weight
+        self.size_average = size_average
+    def execute(self, output, target):
+        return bce_loss(output, target, self.weight, self.size_average)
 
 class L1Loss(Module):
     def __init__(self):
@@ -200,14 +297,29 @@ class L1Loss(Module):
     def execute(self, output, target):
         return l1_loss(output, target)
 
+def binary_cross_entropy_with_logits(output, target, weight=None, pos_weight=None, size_average=True):
+    max_val = jt.clamp(-output,min_v=0)
+    if pos_weight is not None:
+        log_weight = (pos_weight-1)*target + 1
+        loss = (1-target)*output+(log_weight*(((-max_val).exp()+(-output - max_val).exp()).log()+max_val))
+    else:
+        loss = (1-target)*output+max_val+((-max_val).exp()+(-output -max_val).exp()).log()
+    if weight is not None:
+        loss *=weight
+
+    if size_average:
+        return loss.mean()
+    else:
+        return loss.sum()
+
 class BCEWithLogitsLoss(Module):
-    def __init__(self):
-        self.sigmoid = Sigmoid()
-        self.bce = BCELoss()
-    def execute(self, output, target, size_average=True):
-        output = self.sigmoid(output)
-        output = self.bce(output, target, size_average)
-        return output
+    def __init__(self, weight=None, pos_weight=None, size_average=True):
+        self.pos_weight = pos_weight
+        self.weight = weight
+        self.size_average = size_average
+
+    def execute(self, output, target):
+        return binary_cross_entropy_with_logits(output,target,self.weight,self.pos_weight,self.size_average)
 
 def softmax(x, dim = None):
     if dim is None:
@@ -217,6 +329,21 @@ def softmax(x, dim = None):
         x = (x-x.max(dim, keepdims=True)).exp()
         ret = x / x.sum(dim, keepdims=True)
     return ret
+
+def log_softmax(x,dim=None):
+    x = softmax(x,dim=dim)
+    return jt.log(x)
+
+def log_sigmoid(x):
+    return jt.log(jt.sigmoid(x))
+
+
+class Identity(Module):
+    def __init__(self, *args, **kwargs):
+        super(Identity, self).__init__()
+
+    def execute(self, input):
+        return input
 
 class Dropout(Module):
     def __init__(self, p=0.5, is_train=False):
@@ -236,6 +363,9 @@ class Dropout(Module):
                 output = output * noise / (1.0 - self.p) # div keep prob
         return output
 
+def dropout(x,p=0.5,is_train=False):
+    return Dropout(p=p,is_train=is_train)(x)
+
 class Linear(Module):
     def __init__(self, in_features, out_features, bias=True):
         self.in_features = in_features
@@ -251,124 +381,125 @@ class Linear(Module):
         return x
 
 class BatchNorm(Module):
-    def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=None, is_train=True, sync=True):
-        assert affine == None
-
+    def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True, is_train=True, sync=True):
         self.sync = sync
         self.num_features = num_features
         self.is_train = is_train
         self.eps = eps
         self.momentum = momentum
-        self.weight = init.constant((num_features,), "float32", 1.0)
-        self.bias = init.constant((num_features,), "float32", 0.0)
+        self.affine = affine
+        self.weight = init.constant((num_features,), "float32", 1.0) if affine else 1.0
+        self.bias = init.constant((num_features,), "float32", 0.0) if affine else 0.0
         self.running_mean = init.constant((num_features,), "float32", 0.0).stop_grad()
         self.running_var = init.constant((num_features,), "float32", 1.0).stop_grad()
 
     def execute(self, x):
+        dims = [0]+list(range(2,x.ndim))
         if self.is_train:
-            xmean = jt.mean(x, dims=[0,2,3], keepdims=1)
-            x2mean = jt.mean(x*x, dims=[0,2,3], keepdims=1)
+            xmean = jt.mean(x, dims=dims)
+            x2mean = jt.mean(x*x, dims=dims)
             if self.sync and jt.in_mpi:
                 xmean = xmean.mpi_all_reduce("mean")
                 x2mean = x2mean.mpi_all_reduce("mean")
 
-            xvar = x2mean-xmean*xmean
-            norm_x = (x-xmean)/jt.sqrt(xvar+self.eps)
+            xvar = (x2mean-xmean*xmean).maximum(0.0)
+            w = self.weight / jt.sqrt(xvar+self.eps)
+            b = self.bias - xmean * w
+            norm_x = x * w.broadcast(x, dims) + b.broadcast(x, dims)
+
             self.running_mean.update(self.running_mean +
                 (xmean.reshape((-1,)) - self.running_mean) * self.momentum)
             self.running_var.update(self.running_var +
                 (xvar.reshape((-1,))-self.running_var)*self.momentum)
+            return norm_x
         else:
-            running_mean = self.running_mean.broadcast(x, [0,2,3])
-            running_var = self.running_var.broadcast(x, [0,2,3])
-            norm_x = (x-running_mean)/jt.sqrt(running_var+self.eps)
-        w = self.weight.broadcast(x, [0,2,3])
-        b = self.bias.broadcast(x, [0,2,3])
-        return norm_x * w + b
-        
-class BatchNorm1d(Module):
-    def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=None, is_train=True, sync=True):
-        assert affine == None
+            w = self.weight / jt.sqrt(self.running_var+self.eps)
+            b = self.bias - self.running_mean * w
+            norm_x = x * w.broadcast(x, dims) + b.broadcast(x, dims)
+            return norm_x
+
+BatchNorm2d = BatchNorm1d = BatchNorm
+
+class InstanceNorm(Module):
+    def __init__(self, num_features, eps=1e-05, momentum=0.1, affine=True, is_train=True, sync=True):
         self.sync = sync
         self.num_features = num_features
         self.is_train = is_train
         self.eps = eps
         self.momentum = momentum
-        self.weight = init.constant((num_features,), "float32", 1.0)
-        self.bias = init.constant((num_features,), "float32", 0.0)
-        self.running_mean = init.constant((num_features,), "float32", 0.0).stop_grad()
-        self.running_var = init.constant((num_features,), "float32", 1.0).stop_grad()
+
+        self.affine = affine
+        self.weight = init.constant((num_features,), "float32", 1.0) if affine else 1.0
+        self.bias = init.constant((num_features,), "float32", 0.0) if affine else 0.0
 
     def execute(self, x):
-        if self.is_train:
-            xmean = jt.mean(x, dims=[0], keepdims=1)
-            x2mean = jt.mean(x*x, dims=[0], keepdims=1)
+        dims = list(range(2,x.ndim))
+        xmean = jt.mean(x, dims=dims)
+        x2mean = jt.mean(x*x, dims=dims)
 
-            if self.sync and jt.in_mpi:
-                xmean = xmean.mpi_all_reduce("mean")
-                x2mean = x2mean.mpi_all_reduce("mean")
+        xvar = (x2mean-xmean*xmean).maximum(0.0)
+        w = self.weight / jt.sqrt(xvar+self.eps)
+        b = self.bias - xmean * w
+        return x * w.broadcast(x, dims) + b.broadcast(x, dims)
 
-            xvar = x2mean-xmean*xmean
-            norm_x = (x-xmean)/jt.sqrt(xvar+self.eps)
-            self.running_mean.update(self.running_mean + 
-                (xmean.sum([0])-self.running_mean)*self.momentum)
-            self.running_var.update(self.running_var + 
-                (xvar.sum([0])-self.running_var)*self.momentum)
-        else:
-            running_mean = self.running_mean.broadcast(x, [0])
-            running_var = self.running_var.broadcast(x, [0])
-            norm_x = (x-running_mean)/jt.sqrt(running_var+self.eps)
-        w = self.weight.broadcast(x, [0])
-        b = self.bias.broadcast(x, [0])
-        return norm_x * w + b
+InstanceNorm2d = InstanceNorm1d = InstanceNorm
 
-class InstanceNorm2d(Module):
-    def __init__(self, num_features, eps=1e-05, momentum=0.1, affine=None, is_train=True, sync=True):
-        assert affine == None
-        self.sync = sync
-        self.num_features = num_features
-        self.is_train = is_train
+class LayerNorm(Module):
+    def __init__(self, normalized_shape, eps: float = 1e-5, elementwise_affine: bool = True) -> None:
+        if isinstance(normalized_shape, int):
+            normalized_shape = (normalized_shape,)
+        self.normalized_shape = tuple(normalized_shape)
         self.eps = eps
-        self.momentum = momentum
-        self.weight = init.constant((num_features,), "float32", 1.0)
-        self.bias = init.constant((num_features,), "float32", 0.0)
+        self.elementwise_affine = elementwise_affine
+        self.weight = init.constant(normalized_shape, "float32", 1.0) if elementwise_affine else 1.0
+        self.bias = init.constant(normalized_shape, "float32", 0.0) if elementwise_affine else 0.0
 
     def execute(self, x):
-        xmean = jt.mean(x, dims=[2,3], keepdims=1)
-        x2mean = jt.mean(x*x, dims=[2,3], keepdims=1)
-        if self.sync and jt.in_mpi:
-            xmean = xmean.mpi_all_reduce("mean")
-            x2mean = x2mean.mpi_all_reduce("mean")
+        dims = [-i for i in range(len(self.normalized_shape), 0, -1)]
+        xmean = jt.mean(x, dims=dims, keepdims=1)
+        x2mean = jt.mean(x*x, dims=dims, keepdims=1)
 
-        xvar = jt.maximum(x2mean-xmean*xmean, 0)
-        norm_x = (x-xmean)/jt.sqrt(xvar+self.eps)
-        w = self.weight.broadcast(x, [0,2,3])
-        b = self.bias.broadcast(x, [0,2,3])
-        return norm_x * w + b
+        xvar = (x2mean-xmean*xmean).maximum(0.0)
+        w = self.weight / jt.sqrt(xvar+self.eps)
+        b = self.bias - xmean * w
+        return x * w + b
+
+
+LayerNorm2d = LayerNorm1d = LayerNorm
 
 class GroupNorm(Module):
-    def __init__(self, num_groups, num_channels, eps=1e-05, affine=None, is_train=True):
-        assert affine == None
+    def __init__(self, num_groups, num_channels, eps=1e-05, affine=True, is_train=True):
         self.num_groups = num_groups
         self.num_channels = num_channels
         self.eps = eps
-        self.weight = init.constant((num_channels,), "float32", 1.0)
-        self.bias = init.constant((num_channels,), "float32", 0.0)
+
+        self.affine = affine
+        self.weight = init.constant((num_channels,), "float32", 1.0) if affine else 1.0
+        self.bias = init.constant((num_channels,), "float32", 0.0) if affine else 0.0
 
     def execute(self, x):
-        N,C,H,W = x.shape
-        assert C == self.num_channels
+        N = x.shape[0]
+        C = self.num_channels
+        output_shape = (N,-1)
+	    # TODO: 3d group norm
+        if x.ndim==4:
+            output_shape = x.shape
         assert C % self.num_groups == 0
-        x_ = x.reindex([N, int(C/self.num_groups), self.num_groups, H, W], [
-            "i0", f"i2*{C/self.num_groups}+i1", "i3", "i4"
-        ])
-        xmean = jt.mean(x_, dims=[1,3,4], keepdims=1).reindex(x.shape, ["i0", "0", f"i1/({C}/{self.num_groups})","0", "0"])
-        x2mean = jt.mean(x_*x_, dims=[1,3,4], keepdims=1).reindex(x.shape, ["i0", "0", f"i1/({C}/{self.num_groups})","0", "0"])
-        xvar = jt.maximum(x2mean-xmean*xmean, 0)
-        norm_x = (x-xmean)/jt.sqrt(xvar+self.eps)
-        w = self.weight.broadcast(x, [0,2,3])
-        b = self.bias.broadcast(x, [0,2,3])
-        return norm_x * w + b
+        x = x.reshape((N, self.num_groups, C//self.num_groups, -1))
+        xmean = jt.mean(x, dims=[2,3]).reshape((N, self.num_groups, 1))
+        x2mean = jt.mean(x*x, dims=[2,3]).reshape((N, self.num_groups, 1))
+        xvar = (x2mean-xmean*xmean).maximum(0.0)
+
+        if self.affine:
+            w = self.weight.reshape((1, self.num_groups, -1))
+            b = self.bias.reshape((1, self.num_groups, -1))
+        else:
+            w = 1
+            b = 0
+        w = w / jt.sqrt(xvar+self.eps)
+        b = b - xmean * w
+        x = x * w.broadcast(x, [3]) + b.broadcast(x, [3])
+        return x.reshape(output_shape)
 
 Relu = jt.make_module(relu)
 ReLU = Relu
@@ -376,6 +507,9 @@ Leaky_relu = jt.make_module(leaky_relu, 2)
 LeakyReLU = Leaky_relu
 ReLU6 = jt.make_module(relu6)
 Softmax = jt.make_module(softmax, 2)
+GELU = jt.make_module(gelu)
+
+from jittor.depthwise_conv import DepthwiseConv
 
 class Conv(Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
@@ -386,6 +520,9 @@ class Conv(Module):
         self.padding = padding if isinstance(padding, tuple) else (padding, padding)
         self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
         self.groups = groups
+        self.is_depthwise_conv = self.groups == self.out_channels and self.groups == self.in_channels
+        if self.is_depthwise_conv and jt.flags.use_cuda:
+            self.depthwise_conv = DepthwiseConv(stride, padding, dilation)
         assert in_channels % groups == 0, 'in_channels must be divisible by groups'
         assert out_channels % groups == 0, 'out_channels must be divisible by groups'
         Kh, Kw = self.kernel_size
@@ -405,7 +542,13 @@ class Conv(Module):
             self.bias = None
 
     def execute(self, x):
-        if self.groups == 1:
+        if self.is_depthwise_conv and jt.flags.use_cuda:
+            y = self.depthwise_conv(x, self.weight)
+            if self.bias is not None:
+                b = self.bias.broadcast(y.shape, [0,2,3])
+                y = y + b
+            return y
+        elif self.groups == 1:
             N,C,H,W = x.shape
             Kh, Kw = self.kernel_size
             assert C==self.in_channels
@@ -439,7 +582,6 @@ class Conv(Module):
                 f'i4*{self.stride[0]}-{self.padding[0]}+i6*{self.dilation[0]}', # Hid+Khid
                 f'i5*{self.stride[1]}-{self.padding[1]}+i7*{self.dilation[1]}', # Wid+KWid
             ])
-            xx.compile_options = {"G":G}
             # w: [oc, CpG, Kh, Kw]
             ww = self.weight.reindex([N, G, oc//G, CpG, oh, ow, Kh, Kw], [
                 f'i1*{oc//G}+i2',
@@ -447,6 +589,7 @@ class Conv(Module):
                 'i6',
                 'i7'
             ])
+            ww.compile_options = xx.compile_options = {"G":G,"C":C}
             yy = xx*ww
             y = yy.reindex_reduce('add', [N, oc, oh, ow], [
                 'i0',
@@ -459,6 +602,88 @@ class Conv(Module):
                 y = y + b
             return y          
 
+Conv2d = Conv
+
+class Conv1d(Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = (kernel_size, 1)
+        self.stride = (stride, 1)
+        self.padding = (padding, 0)
+        self.dilation = (dilation, 1)
+        self.groups = groups
+        self.bias = bias
+        assert in_channels % groups == 0, 'in_channels must be divisible by groups'
+        assert out_channels % groups == 0, 'out_channels must be divisible by groups'
+        self.conv = Conv(self.in_channels, self.out_channels, self.kernel_size, self.stride, self.padding, self.dilation, self.groups, self.bias)
+
+    def execute(self, x):
+        N,C,D = x.shape
+        assert C==self.in_channels
+        x = x.unsqueeze(-1)
+        x = self.conv(x)
+        y = x.squeeze(-1)
+        return y
+
+
+def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
+    padding = _pair(padding)
+    stride = _pair(stride)
+    dilation = _pair(dilation)
+    out_channels = weight.shape[0]
+
+    if groups == 1:
+        N,C,H,W = x.shape
+        Kh, Kw = weight.shape[-2:]
+        oh = (H+padding[0]*2-Kh*dilation[0]+dilation[0]-1)//stride[0]+1
+        ow = (W+padding[1]*2-Kw*dilation[1]+dilation[1]-1)//stride[1]+1
+        xx = x.reindex([N,out_channels,C,oh,ow,Kh,Kw], [
+                'i0', # Nid
+                'i2', # Cid
+                f'i3*{stride[0]}-{padding[0]}+i5*{dilation[0]}', # Hid+Khid
+                f'i4*{stride[1]}-{padding[1]}+i6*{dilation[1]}', # Wid+KWid
+            ])
+        ww = weight.broadcast(xx.shape, [0,3,4])
+        yy = xx*ww
+        y = yy.sum([2,5,6]) # Kc, Kh, Kw
+        if bias is not None:
+            b = bias.broadcast(y.shape, [0,2,3])
+            y = y + b
+        return y
+    else:
+        N,C,H,W = x.shape
+        Kh, Kw = weight.shape[-2:]
+        G = groups
+        CpG = C // G # channels per group
+        oc = out_channels
+        oh = (H+padding[0]*2-Kh*dilation[0]+dilation[0]-1)//stride[0]+1
+        ow = (W+padding[1]*2-Kw*dilation[1]+dilation[1]-1)//stride[1]+1
+        xx = x.reindex([N,G,oc//G,CpG,oh,ow,Kh,Kw], [
+                'i0', # Nid
+                f'i1*{CpG}+i3', # Gid
+                f'i4*{stride[0]}-{padding[0]}+i6*{dilation[0]}', # Hid+Khid
+                f'i5*{stride[1]}-{padding[1]}+i7*{dilation[1]}', # Wid+KWid
+            ])
+        xx.compile_options = {"G":G}
+        # w: [oc, CpG, Kh, Kw]
+        ww = weight.reindex([N, G, oc//G, CpG, oh, ow, Kh, Kw], [
+                f'i1*{oc//G}+i2',
+                'i3',
+                'i6',
+                'i7'
+            ])
+        yy = xx*ww
+        y = yy.reindex_reduce('add', [N, oc, oh, ow], [
+                'i0',
+                f'i1*{oc//G}+i2',
+                'i4',
+                'i5'
+            ])
+        if bias is not None:
+            b = bias.broadcast(y.shape, [0,2,3])
+            y = y + b
+        return y          
 
 class ConvTranspose(Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, \
@@ -479,10 +704,17 @@ class ConvTranspose(Module):
         self.real_padding = (self.dilation[0] * (self.kernel_size[0] - 1) - self.padding[0],
             self.dilation[1] * (self.kernel_size[1] - 1) - self.padding[1])
         self.output_padding = output_padding if isinstance (output_padding, tuple) else (output_padding, output_padding)
+        assert self.output_padding[0] < max(self.stride[0], self.dilation[0]) and \
+            self.output_padding[1] < max(self.stride[1], self.dilation[1]), \
+            "output padding must be smaller than max(stride, dilation)"
 
-        self.weight = init.relu_invariant_gauss((in_channels, out_channels) + self.kernel_size, dtype="float", mode="fan_out")
+        self.weight = init.invariant_uniform((in_channels, out_channels) + self.kernel_size, dtype="float")
         if bias:
-            self.bias = init.uniform([out_channels], dtype="float", low=-1, high=1)
+            fan=1
+            for i in self.weight.shape[1:]:
+                fan *= i
+            bound = 1 / math.sqrt(fan)
+            self.bias = init.uniform([out_channels], dtype="float", low=-bound, high=bound)
         else:
             self.bias = None
 
@@ -510,6 +742,69 @@ class ConvTranspose(Module):
             b = self.bias.broadcast(y.shape, [0,2,3])
             y = y + b
         return y
+
+def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding=0, groups=1, dilation=1):
+    x = input
+    N,C,H,W = x.shape
+    i,o,h,w = weight.shape
+    assert C==i
+    assert groups==1, "Group conv not supported yet."
+    stride = stride if isinstance(stride, tuple) else (stride, stride)
+    dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
+    # added
+    padding = padding if isinstance(padding, tuple) else (padding, padding)
+    output_padding = output_padding if isinstance (output_padding, tuple) else (output_padding, output_padding)
+    assert output_padding[0] < max(stride[0], dilation[0]) and \
+        output_padding[1] < max(stride[1], dilation[1]), \
+        "output padding must be smaller than max(stride, dilation)"
+
+    stride_h, stride_w = stride
+    padding_h, padding_w = padding
+    dilation_h, dilation_w = dilation
+
+    h_out = (H-1) * stride_h + output_padding[0] - 2*padding_h + 1 + (h-1)*dilation_h
+    w_out = (W-1) * stride_w + output_padding[1] - 2*padding_w + 1 + (w-1)*dilation_w
+    out_shape = (N, o, h_out, w_out)
+    shape = (N, i, o, H, W, h, w)
+    xx = x.broadcast(shape, (2, 5, 6)) # i,h,w
+    ww = weight.broadcast(shape, (0, 3, 4)) # N,H,W
+    y = (ww*xx).reindex_reduce("add", out_shape, [
+        'i0', # N
+        'i2', # o
+        f'i3*{stride_h}-{padding_h}+i5*{dilation_h}', # Hid+Khid
+        f'i4*{stride_w}-{padding_w}+i6*{dilation_w}', # Wid+KWid
+    ])
+    if isinstance(bias, jt.Var):
+        b = bias.broadcast(y.shape, [0,2,3])
+        y = y + b
+    else:
+        assert not bias, "Bias should be none or jittor var"
+    return y
+
+conv_transpose2d = conv_transpose
+
+def pad(x,padding, mode='constant', value=0):
+    assert mode in ['constant','replicate','reflect','circular'],'only support constant,replicate,reflect,circular pad'
+    assert len(padding)%2==0 and len(padding)//2<=x.ndim
+
+    padding = list(padding)
+    left = [0]*(x.ndim-len(padding)//2)+padding[::2][::-1]
+    right = [0]*(x.ndim-len(padding)//2)+padding[1::2][::-1]
+
+    out_dims = []
+    out_shape = []
+    for i,n,l,r in zip(range(x.ndim),x.shape,left,right):
+        out_shape.append(n+l+r)
+        if mode == 'constant':
+            out_dims.append(f'i{i}-{l}')
+        elif mode == 'replicate':
+            out_dims.append(f"i{i}<{l} ? 0 : i{i} > {n+l-1} ? {n-1} : i{i}-{l}")
+        elif mode == 'reflect':
+            out_dims.append(f"i{i}<{l} ? {l}-i{i} : i{i} > {n+l-1} ? {2*(n-1)+l}-i{i} : i{i}-{l}")
+        elif mode == 'circular':
+            out_dims.append(f"i{i}<{l} ? {n-l}+i{i} : i{i} > {n+l-1} ? i{i}-{n+l} : i{i}-{l}")
+
+    return x.reindex(out_shape,out_dims,overflow_value=value)
 
 
 class ReflectionPad2d(Module):
@@ -645,6 +940,14 @@ class Sigmoid(Module):
     def execute(self, x) :
         return x.sigmoid()
 
+def softplus(x,beta=1.0,threshold=20.0):
+    return 1 / beta * jt.log(1 + (beta * x).minimum(threshold).exp()) + \
+        (x - threshold/beta).maximum(0.0)
+
+def hardtanh(x,min_val=-1,max_val=1):
+    return jt.clamp(x,min_v=min_val,max_v=max_val)
+
+
 class Softplus(Module):
     r'''
     SoftPlus is a smooth approximation to the ReLU function and can be used to constrain the output of a machine to always be positive.
@@ -660,7 +963,7 @@ class Softplus(Module):
         self.threshold = threshold
 
     def execute(self, x):
-        return 1 / self.beta * jt.log(1 + (self.beta * x).exp())
+        return softplus(x, self.beta, self.threshold)
 
 class Resize(Module):
     def __init__(self, size, mode="nearest", align_corners=False):
@@ -715,7 +1018,17 @@ def upsample(img, size, mode="nearest", align_corners=False):
         y = wid * (w / W)
     return _interpolate(img, x, y, (nid,cid), mode)
 
-def grid_sample(input, grid, mode='bilinear', padding_mode='zeros'):
+def interpolate(X,size=None,scale_factor=None,mode='bilinear',align_corners=False):
+    if scale_factor is not None:
+        size = [X.shape[-2]*scale_factor,X.shape[-1]*scale_factor]
+    if isinstance(size,int):
+        size = (size,size)
+    if scale_factor is not None and scale_factor>1:
+        return upsample(X,size,mode,align_corners)
+    else:
+        return resize(X,size,mode,align_corners)
+
+def grid_sample_v0(input, grid, mode='bilinear', padding_mode='zeros'):
     r'''
     Given an input and a flow-field grid, computes the output using input values and pixel locations from grid.
 
@@ -736,13 +1049,11 @@ def grid_sample(input, grid, mode='bilinear', padding_mode='zeros'):
     Example:
 
         >>> x = jt.array([[[[1,2],[3,4]]]])
-
         >>> print(x)
         [[[[1 2]
         [3 4]]]] 
 
         >>> grid = jt.array([[[[0.5, 0.5]]]])
-        
         >>> print(x.shape, grid.shape)
         [1,1,2,2,], [1,1,2,2,]
 
@@ -761,6 +1072,195 @@ def grid_sample(input, grid, mode='bilinear', padding_mode='zeros'):
     y = ((grid[:,:,:,0].unsqueeze(1).repeat([1,Ci,1,1]) + 1) / 2) * (Wi - 1)
     return _interpolate(input, x, y, (nid,cid), mode)
 
+
+def linspace_from_neg_one(grid,num_steps,align_corners):
+    if  num_steps <= 1:
+        return jt.array([],dtype=grid.dtype)
+    # TODO: use jt.index
+    ra = np.linspace(-1,1,num_steps)
+    if not align_corners:
+        ra = ra*(num_steps-1)/num_steps
+    return jt.array(ra,dtype=grid.dtype)
+
+def make_base_grid_4D(theta,N,C,H,W,align_corners):
+    base_grid = jt.zeros((N, H, W, 3), dtype=theta.dtype);
+    base_grid[...,0] = linspace_from_neg_one(theta, W, align_corners)
+    base_grid[...,1] = jt.unsqueeze(linspace_from_neg_one(theta, H, align_corners),-1)
+    base_grid[...,-1] = 1
+    return base_grid
+
+def make_base_grid_5D(theta,N,C,D,H,W,align_corners):
+    base_grid = jt.zeros((N, D, H, W, 4), dtype=theta.dtype)
+    base_grid[...,0] = linspace_from_neg_one(theta, W, align_corners)
+    base_grid[...,1] = jt.unsqueeze(linspace_from_neg_one(theta, H, align_corners),-1)
+    base_grid[...,2] = jt.unsqueeze(jt.unsqueeze(linspace_from_neg_one(theta, D, align_corners),-1),-1)
+    base_grid[...,-1] = 1
+    return base_grid
+
+def affine_grid_generator_4D(theta,N,C,H,W,align_corners):
+     base_grid = make_base_grid_4D(theta, N, C, H, W, align_corners)
+     grid = jt.nn.bmm(base_grid.reshape(N, H * W, 3),theta.transpose(0,2,1))
+     return grid.reshape(N, H, W, 2)
+
+def affine_grid_generator_5D(theta,N,C,D,H,W,align_corners):
+    base_grid = make_base_grid_5D(theta, N, C, D, H, W, align_corners)
+    grid = jt.nn.bmm(base_grid.reshape(N, D * H * W, 4),theta.transpose(0,2,1))
+    return grid.reshape(N, D, H, W, 3)
+
+def affine_grid(theta, size, align_corners=False):
+    assert str(theta.dtype) in ['float','float32','float64']
+    assert min(size)>0
+    assert len(size) in [4,5]    
+    if len(size)== 4:
+        assert theta.ndim == 3 and theta.shape[-2] == 2 and theta.shape[-1] == 3
+        return affine_grid_generator_4D(theta, size[0], size[1], size[2], size[3], align_corners)
+    elif len(size)==5:
+        assert theta.ndim == 3 and theta.shape[-2] == 3 and theta.shape[-1] == 4
+        return affine_grid_generator_5D(theta, size[0], size[1], size[2], size[3], size[4], align_corners)
+
+
+def grid_sampler_unnormalize(coord,size,align_corners):
+    if align_corners:
+        #unnormalize coord from [-1, 1] to [0, size - 1]
+        return ((coord + 1) / 2) * (size - 1)
+    else:
+        #unnormalize coord from [-1, 1] to [-0.5, size - 0.5]
+        return ((coord + 1) * size - 1) / 2
+
+
+def clip_coordinates(x,clip_limit):
+    return jt.clamp(x,min_v=0,max_v=clip_limit-1)
+
+def reflect_coordinates(x,twice_low,twice_high):
+    if twice_low == twice_high:
+        return jt.zeros_like(x)
+    m = twice_low / 2
+    span = (twice_high - twice_low) / 2
+    x = (x - m).abs()
+    #`fmod` returns same sign as `in`, which is positive after the `fabs` above.
+    extra = x.mod(span)
+    flips = (x / span).floor()
+    result1 = extra+m
+    result2 = span-extra+m
+    con = flips%2==0
+    not_con = flips%2!=0
+    result1[not_con]=0.0
+    result2[con]=0.0
+    return result1+result2
+
+
+def grid_sampler_compute_source_index(coord,size,padding_mode,align_corners):
+    coord = grid_sampler_unnormalize(coord, size, align_corners)
+    if padding_mode == 'border':
+        #clip coordinates to image borders
+        coord = clip_coordinates(coord, size)
+    elif padding_mode == 'reflection':
+        #reflect coordinates by image borders
+        if align_corners:
+           coord = reflect_coordinates(coord, 0, 2*(size - 1))
+        else:
+           coord = reflect_coordinates(coord, -1, 2*size - 1)
+        #clip coordinates to image borders
+        coord = clip_coordinates(coord, size)
+    return coord
+
+
+
+def grid_sampler_3d(X,grid,mode,padding_mode,align_corners):
+    N = X.shape[0]
+    C = X.shape[1]
+    inp_D = X.shape[2]
+    inp_H = X.shape[3]
+    inp_W = X.shape[4]
+
+    D  = grid.shape[1]
+    H = grid.shape[2]
+    W = grid.shape[3]
+    x = grid[:,:,:,:,0]
+    y = grid[:,:,:,:,1]
+    z = grid[:,:,:,:,2]
+    shape = [N,C,D,H,W]
+    cid = jt.index(shape, dim=1)
+    nid = jt.index(shape, dim=0)
+
+    x = grid_sampler_compute_source_index(x,inp_W,padding_mode,align_corners)
+    y = grid_sampler_compute_source_index(y,inp_H,padding_mode,align_corners)
+    z = grid_sampler_compute_source_index(z,inp_D,padding_mode,align_corners)
+    xid = x.reindex(shape,['i0','i2','i3','i4'])
+    yid = y.reindex(shape,['i0','i2','i3','i4'])
+    zid = z.reindex(shape,['i0','i2','i3','i4'])
+
+    if mode=='nearest':
+        return X.reindex([nid,cid,zid.round(),yid.round(),xid.round()])
+    elif mode=='bilinear':
+        fx,fy,fz = xid.floor(),yid.floor(),zid.floor()
+        cx,cy,cz = fx+1,fy+1,fz+1
+        dx,dy,dz = xid-fx,yid-fy,zid-fz
+        dnx,dny,dnz = cx-xid,cy-yid,cz-zid
+        a = X.reindex([nid,cid,fz,fy,fx])
+        b = X.reindex([nid,cid,cz,fy,fx])
+        c = X.reindex([nid,cid,fz,cy,fx])
+        d = X.reindex([nid,cid,fz,fy,cx])
+        e = X.reindex([nid,cid,fz,cy,cx])
+        f = X.reindex([nid,cid,cz,fy,cx])
+        g = X.reindex([nid,cid,cz,cy,fx])
+        h = X.reindex([nid,cid,cz,cy,cx])
+        o = a*dnx*dny*dnz+b*dnx*dny*dz+c*dnx*dy*dnz+d*dx*dny*dnz+e*dx*dy*dnz+f*dx*dny*dz+g*dnx*dy*dz+h*dx*dy*dz
+        return o
+
+def grid_sampler_2d(X,grid,mode,padding_mode,align_corners):
+    N = X.shape[0]
+    C = X.shape[1]
+    inp_H = X.shape[2]
+    inp_W = X.shape[3]
+
+    H  = grid.shape[1]
+    W = grid.shape[2]
+    x = grid[:,:,:,0]
+    y = grid[:,:,:,1]
+    shape = [N,C,H,W]
+    cid = jt.index(shape, dim=1)
+    nid = jt.index(shape, dim=0)
+
+    x = grid_sampler_compute_source_index(x,inp_W,padding_mode,align_corners)
+    y = grid_sampler_compute_source_index(y,inp_H,padding_mode,align_corners)
+    xid = x.reindex(shape,['i0','i2','i3'])
+    yid = y.reindex(shape,['i0','i2','i3'])
+
+    if mode=='nearest':
+        return X.reindex([nid,cid,yid.round(),xid.round()])
+    elif mode=='bilinear':
+        #xid,yid = (xid+0.00001),(yid+0.00001)
+        fx,fy = (xid).floor(),(yid).floor()
+        cx,cy = fx+1,fy+1
+        dx,dy = xid-fx,yid-fy
+        dnx,dny = cx-xid,cy-yid
+
+        a = X.reindex([nid,cid,fy,fx],overflow_value=0.0)
+        b = X.reindex([nid,cid,cy,fx],overflow_value=0.0)
+        c = X.reindex([nid,cid,fy,cx],overflow_value=0.0)
+        d = X.reindex([nid,cid,cy,cx],overflow_value=0.0)
+        o = a*dnx*dny+b*dnx*dy+c*dx*dny+d*dx*dy
+        return o
+
+
+def grid_sampler(X, grid, mode, padding_mode, align_corners):
+    assert X.dtype==grid.dtype
+    assert ((X.ndim==4 or X.ndim==5) and X.ndim==grid.ndim)
+    assert X.shape[0]==grid.shape[0] and grid.shape[-1]==X.ndim-2
+    assert X.numel()>0
+    if X.ndim == 4:
+        return grid_sampler_2d(X, grid, mode, padding_mode, align_corners)
+    else:
+        return grid_sampler_3d(X, grid, mode, padding_mode, align_corners)
+
+
+def grid_sample(input, grid, mode='bilinear', padding_mode='zeros', align_corners=False):
+    assert mode in ['bilinear','nearest']
+    assert padding_mode in ['zeros','border','reflection']
+    return grid_sampler(input, grid, mode, padding_mode, align_corners)
+
+
 class Upsample(Module):
     def __init__(self, scale_factor=None, mode='nearest'):
         self.scale_factor = scale_factor if isinstance(scale_factor, tuple) else (scale_factor, scale_factor)
@@ -775,13 +1275,31 @@ class Upsample(Module):
 
 class Sequential(Module):
     def __init__(self, *args):
-        self.layers = []
+        self.layers = collections.OrderedDict()
         for mod in args:
-            self.append(mod)
+            if isinstance(mod, collections.OrderedDict):
+                for k, m in mod.items():
+                    self.add_module(k, m)
+            elif isinstance(mod,list):
+                for m in mod:
+                    self.append(m)
+            else:
+                self.append(mod)
     def __getitem__(self, idx):
+        if idx not in self.layers:
+            return list(self.layers.values())[idx]
+
         return self.layers[idx]
+    def __iter__(self):
+        return self.layers.values().__iter__()
+    def keys(self):
+        return self.layers.keys()
+    def values(self):
+        return self.layers.values()
+    def items(self):
+        return self.layers.items()
     def execute(self, x):
-        for layer in self.layers:
+        for k, layer in self.layers.items():
             x = layer(x)
         return x
     def dfs(self, parents, k, callback, callback_leave):
@@ -789,15 +1307,22 @@ class Sequential(Module):
         ret = callback(parents, k, self, n_children)
         if ret == False:
             return
-        for k,v in enumerate(self.layers):
-            parents.append(self)
+        parents.append(self)
+        for k,v in self.layers.items():
             v.dfs(parents, k, callback, callback_leave)
-            parents.pop()
+        parents.pop()
         if callback_leave:
             callback_leave(parents, k, self, n_children)
     def append(self, mod):
         assert callable(mod), f"Module <{type(mod)}> is not callable"
         assert not isinstance(mod, type), f"Module is not a type"
-        self.layers.append(mod)
+        self.layers[len(self.layers)]=mod
+    def add_module(self, name, mod):
+        assert callable(mod), f"Module <{type(mod)}> is not callable"
+        assert not isinstance(mod, type), f"Module is not a type"
+        self.layers[name]=mod
+
+    def __len__(self):
+        return len(self.layers)
 
 ModuleList = Sequential

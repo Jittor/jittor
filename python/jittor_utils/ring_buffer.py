@@ -1,7 +1,8 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers: 
 #     Dun Liang <randonlang@gmail.com>. 
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -127,7 +128,7 @@ def str_to_char_array(s, array_len):
     return a
 
 def char_array_to_str(a):
-    return str(a.tostring(), 'ascii').strip()
+    return str(a.tobytes(), 'ascii').strip()
 
 class RingBuffer:
     def __init__(self, buffer):

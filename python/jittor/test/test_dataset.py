@@ -1,13 +1,14 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers: 
 #     Dun Liang <randonlang@gmail.com>. 
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 import unittest
 import jittor as jt
-from jittor.dataset.dataset import ImageFolder
+from jittor.dataset.dataset import ImageFolder, Dataset
 import jittor.transform as transform
 
 import jittor as jt
@@ -74,6 +75,33 @@ class TestDataset(unittest.TestCase):
         assert isinstance(batch[0], np.ndarray)
         assert isinstance(batch[1], np.ndarray)
 
+
+class TestDataset2(unittest.TestCase):
+    def test_dataset_use_jittor(self):
+        class YourDataset(Dataset):
+            def __init__(self):
+                super().__init__()
+                self.set_attrs(total_len=10240)
+
+            def __getitem__(self, k):
+                x = jt.array(k)
+                y = x
+                for i in range(10):
+                    for j in range(i+2):
+                        y = y + j - j
+                    y.stop_fuse()
+                return x, y
+
+        dataset = YourDataset().set_attrs(batch_size=256, shuffle=True, num_workers=4)
+        for x, y in dataset:
+            # dataset.display_worker_status()
+            pass
+
+
+    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @jt.flag_scope(use_cuda=1)
+    def test_dataset_use_jittor_cuda(self):
+        self.test_dataset_use_jittor()
 
 if __name__ == "__main__":
     unittest.main()

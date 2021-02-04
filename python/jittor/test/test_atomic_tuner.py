@@ -1,8 +1,9 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers: 
 #     Guowei Yang <471184555@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -40,28 +41,23 @@ class TestAtomicTunerClass(unittest.TestCase):
     def check(self, model, std_log):
         x=jt.random([100,64,128,128])
         with jt.log_capture_scope(
-            log_silent=1,
+            # log_silent=1,
             log_v=0, log_vprefix="atomic_tuner_pass.cc=100",
         ) as logs:
             y=model(x).numpy()
         with jt.log_capture_scope(
             log_v=0, 
             exclude_pass="atomic",
+            # new options to force recompile
+            compile_options = {"test_atomic_tuner":1}
         ) as logs2:
             y_std=model(x).numpy()
         
         err=np.max(y_std-y)/(np.mean(y_std)+1e-6)
-        assert err<1e-5
+        assert err<1e-5, (err)
         log_move = find_log_with_re(logs, "atomictuner: move .* to loop .*")
         assert len(log_move)==len(std_log), (len(log_move), len(std_log))
-        for st in log_move:
-            sidx=-1
-            for j in range(len(std_log)):
-                if std_log[j]==st:
-                    sidx=j
-                    break
-            assert sidx!=-1
-            std_log[sidx]="matched"
+        assert sorted(log_move) == sorted(std_log)
 
     @unittest.skipIf(not jt.has_cuda, "Cuda not found")
     @jt.flag_scope(use_cuda=1)
@@ -69,6 +65,13 @@ class TestAtomicTunerClass(unittest.TestCase):
         self.check(self.addNet, ['atomictuner: move atomicAdd to loop 1', 'atomictuner: move atomicAdd to loop 2'])
         self.check(self.maxNet, ['atomictuner: move cuda_atomic_max to loop 1', 'atomictuner: move cuda_atomic_max to loop 2'])
         self.check(self.minNet, ['atomictuner: move cuda_atomic_min to loop 1', 'atomictuner: move cuda_atomic_min to loop 2'])
+
+        self.check(lambda x: x.sum()+x.sqr().mean(), [
+            'atomictuner: move atomicAdd to loop -1',
+            'atomictuner: move atomicAdd to loop -1',
+        ])
+
+        self.check(lambda x: x.reindex_reduce("add", x.shape, ["i2","i3","i0","i1"]), [])
         
 if __name__ == "__main__":
     unittest.main()

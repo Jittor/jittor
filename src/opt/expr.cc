@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -981,7 +982,7 @@ bool match(
                     return false;
             if (!ze.first && s->children.size() != t->children.size())
                 return false;
-            int n = s->children.size();
+            int n = s->is(_op) ? s->children.size() : 1;
             int m = t->children.size();
             unique_ptr<Expr> zep;
             if (ze.first) {
@@ -1013,8 +1014,16 @@ bool match(
                 }
                 return true;
             };
+            if (s->is_not(_op) && t->str == "*" && s->str == "0") {
+                // 0 match 0*a*b
+                for (int i=0; i<m; i++) {
+                    if (check_match(0,i))
+                        return true;
+                }
+                return false;
+            }
             int asso_wildcard_id = -1, asso_wildcard_tid=0;
-            if (s->is(_asso_op)) {
+            if (t->is(_asso_op)) {
                 // wildcard assosiative id
                 // a*b+c <----
                 for (int i=m-1; i>=0; i--) {
@@ -1041,11 +1050,10 @@ bool match(
                         }
                     }
                 }
-                LOGvvvv << "asso_wildcard_id" << asso_wildcard_id <<
-                    t->children.at(asso_wildcard_id);
+                LOGvvvv << "asso_wildcard_id" << asso_wildcard_id;
                 // asso_wildcard_id = -1;
             }
-            if (s->is(_comm_op)) {
+            if (t->is(_comm_op)) {
                 // is commutative op, children can be matched in any order
                 vector<bool> is_matched(m);
                 for (int i=0; i<n; i++) {
@@ -1056,7 +1064,11 @@ bool match(
                         if (check_match(i, j)) {
                             is_matched[j] = true;
                             matched = true;
-                            break;
+                            // if i is zero elem
+                            if (ze.first && i == n-1)
+                                continue;
+                            else
+                                break;
                         }
                     }
                     for (int _=0; _<results.size(); _++)
@@ -1073,6 +1085,7 @@ bool match(
                         if (!check_match(i, j)) {
                             return false;
                         }
+                        is_matched[j] = true;
                         if (bk)
                             res = make_op(s->str, move(bk), move(res));
                         continue;
@@ -1083,8 +1096,15 @@ bool match(
                     }
                 }
                 for (int j=0; j<is_matched.size(); j++)
-                    if (j!=asso_wildcard_id && !is_matched[j])
-                        return false;
+                    //
+                    // if (j!=asso_wildcard_id && !is_matched[j])
+                    //     return false;
+                    if (!is_matched[j]) {
+                        if (!ze.first)
+                            return false;
+                        if (!check_match(n-1, j))
+                            return false;
+                    }
                 return true;
             } else {
                 // not a commutative op, match in the same order

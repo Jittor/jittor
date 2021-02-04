@@ -1,8 +1,9 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers: 
 #     Guowei Yang <471184555@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -114,13 +115,13 @@ class TestMklConvOp(unittest.TestCase):
         b = np.random.rand(o,i,h,w).astype(np.float32)
         da = np.random.rand(n,o,H,W).astype(np.float32)
         dx = jt.mkl_ops.mkl_conv_backward_x(b,da,H,W,1,1,1).data
-        dw = jt.mkl_ops.mkl_conv_backward_w(a,da,h,1,1,1).data
+        dw = jt.mkl_ops.mkl_conv_backward_w(a,da,h,w,1,1,1).data
         a_jt = jt.array(a)
         b_jt = jt.array(b)
 
         with jt.flag_scope(
             enable_tuner=0,
-            compile_options={"test_mkl_conv":1}
+            # compile_options={"test_mkl_conv":1}
         ):
             c_jt = conv(a_jt, b_jt, 1, 1) * da
             gs=jt.grad(c_jt,[a_jt,b_jt])
@@ -140,10 +141,10 @@ class TestMklConvOp(unittest.TestCase):
             dw_jt_tune=gs_tune[1].data
         logs = find_log_with_re(rawlogs, 
             "Run tuner conv: confidence\\((20)\\) candidates\\((.*)\\)$")
-        assert len(logs) == 1
+        assert len(logs) == 2, len(logs)
         assert logs[0][0] == "20", "confidence of reorder should be 20"
         candidates = simple_parser(logs[0][1])
-        assert candidates == {"relay0":[1,0],"relay1":[1,0]}, candidates
+        assert candidates == {"relay0":[1,0]}, candidates
 
         logs = find_log_with_re(rawlogs, r"get_relay_src([\s\S]*)")
         assert len(logs)==2
@@ -160,13 +161,13 @@ class TestMklConvOp(unittest.TestCase):
         b = np.random.rand(h,w,i,o).astype(np.float32)
         da = np.random.rand(n,H,W,o).astype(np.float32)
         dx = jt.mkl_ops.mkl_conv_backward_x(b,da,H,W,1,1,1,xformat="acdb",wformat="hwio",yformat="acdb").data
-        dw = jt.mkl_ops.mkl_conv_backward_w(a,da,h,1,1,1,xformat="acdb",wformat="hwio",yformat="acdb").data
+        dw = jt.mkl_ops.mkl_conv_backward_w(a,da,h,w,1,1,1,xformat="acdb",wformat="hwio",yformat="acdb").data
         a_jt = jt.array(a)
         b_jt = jt.array(b)
 
         with jt.flag_scope(
             enable_tuner=0,
-            compile_options={"test_mkl_conv":1}
+            # compile_options={"test_mkl_conv":1}
         ):
             c_jt = conv_nhwc_hwio(a_jt, b_jt, 1, 1) * da
             gs=jt.grad(c_jt,[a_jt,b_jt])
@@ -186,10 +187,11 @@ class TestMklConvOp(unittest.TestCase):
             dw_jt_tune=gs_tune[1].data
         logs = find_log_with_re(rawlogs, 
             "Run tuner conv: confidence\\((20)\\) candidates\\((.*)\\)$")
-        assert len(logs) == 1
+        assert len(logs) == 2
         assert logs[0][0] == "20", "confidence of reorder should be 20"
         candidates = simple_parser(logs[0][1])
-        assert candidates == {"relay0":[1,0],"relay1":[1,0]}, candidates
+        assert candidates == {"relay0":[1,0]}, candidates
+        # assert candidates == {"relay0":[1,0],"relay1":[1,0]}, candidates
 
         logs = find_log_with_re(rawlogs, r"get_relay_src([\s\S]*)")
         assert len(logs)==2

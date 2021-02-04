@@ -1,8 +1,9 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: 
 //     Dun Liang <randonlang@gmail.com>. 
 //     Guoye Yang <498731903@qq.com>
-// All Rights Reserved.
+// 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -22,12 +23,12 @@ void MatmulTuner::run(PassManager* pm, TunerManager* tm) {
     for (Op* op : fop->ops) {
         if (op->name_ex()!="reduce.add") continue;
         auto rop = (ReduceOp*)op;
-        if (!(rop->x->input() && rop->x->input()->name_ex()=="binary.multiply" && rop->x->input()->tflag==op->tflag))
+        if (!(rop->x->input() && rop->x->input()->name_ex()=="binary.multiply" && fop->has(rop->x->input())))
             continue;
         auto bop = (BinaryOp*)(rop->x->input());
-        if (!(bop->x->input() && bop->x->input()->name_ex()=="broadcast_to" && bop->x->input()->tflag==op->tflag))
+        if (!(bop->x->input() && bop->x->input()->name_ex()=="broadcast_to" && fop->has(bop->x->input())))
             continue;
-        if (!(bop->y->input() && bop->y->input()->name_ex()=="broadcast_to" && bop->y->input()->tflag==op->tflag))
+        if (!(bop->y->input() && bop->y->input()->name_ex()=="broadcast_to" && fop->has(bop->y->input())))
             continue;
         auto bcop1 = (BroadcastToOp*)(bop->x->input());
         auto bcop2 = (BroadcastToOp*)(bop->y->input());

@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -13,6 +14,8 @@ namespace jittor {
 
 extern unordered_map<void*, int64> lived_nodes;
 extern int64 total_node;
+extern int64 nt;
+extern vector<Node*> free_buffer;
 
 struct NodeFlags {
     typedef uint16 nf_t;
@@ -46,6 +49,10 @@ struct NodeFlags {
         _op_type=_n+4, _op_type_nbits=2,
         // bit6: backprop grad at ones
         _grads=_n+6,
+        // bit7: has graph optimize
+        _has_gopt=_n+7,
+        // bit7: has vary input
+        _has_vary_input=_n+8,
     };
 
     inline void set(Flags f, int a=1, int nbits=1) {
@@ -114,16 +121,15 @@ struct Node {
 #ifdef NODE_MEMCHECK
     inline Node() {
         lived_nodes[(void*)this] = ++total_node;
-        registe_node_trace(this);
     }
 
     inline virtual ~Node() {
         lived_nodes.erase((void*)this);
-        unregiste_node_trace(this);
+        if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var)) trace_data.release_node(this);
     }
 #else
     inline Node() {};
-    inline virtual ~Node() {};
+    inline virtual ~Node() { if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var)) trace_data.release_node(this);};
 #endif
     inline Var* var() { return (Var*)this; }
     inline Op* op() { return (Op*)this; }
@@ -184,6 +190,27 @@ struct Node {
     void own_both_liveness();
     void finish_pending_liveness();
     void set_stop_grad();
+};
+
+struct SetupFreeBuffer {
+
+bool outside;
+inline SetupFreeBuffer() {
+    outside = !nt;
+    if (outside) {
+        nt = ++Node::tflag_count;
+    }
+}
+
+inline ~SetupFreeBuffer() {
+    if (outside) {
+        for (int i=0; i<free_buffer.size(); i++)
+            delete free_buffer[i];
+        free_buffer.clear();
+        nt = 0;
+    }
+}
+
 };
 
 std::ostream& operator<<(std::ostream& os, const Node* node);

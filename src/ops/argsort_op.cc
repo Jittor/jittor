@@ -1,8 +1,9 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: 
 //     Guoye Yang <498731903@qq.com>
 //     Dun Liang <randonlang@gmail.com>. 
-// All Rights Reserved.
+// 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -127,12 +128,13 @@ void ArgsortOp::infer_shape() {
     y_key->set_shape(x->shape);
 }
 
-void ArgsortOp::jit_prepare() {
-    add_jit_define("Tx", x->dtype());
-    add_jit_define("Ty", y->dtype());
-    add_jit_define("XDIM", JK::hex1(x->shape.size()));
-    add_jit_define("DIM", JK::hex1(dim));
-    add_jit_define("CMP", descending ? ">" : "<");
+void ArgsortOp::jit_prepare(JK& jk) {
+    jk << _CS("[Tx:") << x->dtype();
+    jk << _CS("][Ty:") << y->dtype();
+    jk << _CS("][XDIM=") << JK::hex1(x->shape.size());
+    jk << _CS("][DIM=") << JK::hex1(dim);
+    jk << _CS("][CMP:") << (descending ? '>' : '<');
+    jk << ']';
 }
 
 #else // JIT

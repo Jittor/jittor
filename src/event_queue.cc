@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -25,10 +26,16 @@ void EventQueue::Worker::start() {
 }
 
 void EventQueue::worker_caller() {
-    event_queue.func();
+    int status = OK;
+    try {
+        event_queue.func();
+    } catch (const std::exception& e) {
+        LOGe << "Catch error:\n" >> e.what();
+        status = ERROR;
+    }
     {
         std::lock_guard<std::mutex> l(event_queue.mtx);
-        event_queue.run_sync_done = true;
+        event_queue.run_sync_done = status;
     }
 }
 

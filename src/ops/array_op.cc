@@ -1,11 +1,12 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>
-#include <helper_cuda.h>
+#include "helper_cuda.h"
 #include "mem/allocator.h"
 #include "mem/allocator/cuda_dual_allocator.h"
 #include "event_queue.h"
@@ -72,6 +73,22 @@ ArrayOp::ArrayOp(ArrayArgs&& args) {
     // TODO: args.buffer too many copy
     new (&allocation) Allocation(cpu_allocator, output->size);
     std::memcpy(allocation.ptr, args.ptr, output->size);
+}
+
+void ArrayOp::jit_prepare(JK& jk) {
+    if (output->flags.get(NodeFlags::_force_fuse)) {
+        jk << _CS("[T:") << output->dtype() << ']';
+
+        // fill or find cbuffer for const var pass
+        if (output->dtype().dsize() == 4) {
+            auto x = abs(ptr<int32>()[0]);
+            auto y = abs(ptr<float32>()[0]);
+            auto z = ptr<uint32>()[0];
+            if ((x<=2) || (y==1.0f || y==2.0f))
+                jk << _CS("[o:") << z << ']';
+        }
+        // end of fill cbuffer
+    }
 }
 
 void ArrayOp::run() {

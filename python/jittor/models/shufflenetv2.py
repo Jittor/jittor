@@ -1,9 +1,10 @@
 
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers: 
 #     Wenyang Zhou <576825820@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -93,14 +94,22 @@ def _shufflenetv2(arch, *args):
     model = ShuffleNetV2(*args)
     return model
 
-def shufflenet_v2_x0_5():
-    return _shufflenetv2('shufflenetv2_x0.5', [4, 8, 4], [24, 48, 96, 192, 1024])
+def shufflenet_v2_x0_5(pretrained=False):
+    model = _shufflenetv2('shufflenetv2_x0.5', [4, 8, 4], [24, 48, 96, 192, 1024])
+    if pretrained: model.load("jittorhub://shufflenet_v2_x0_5.pkl")
+    return model
 
-def shufflenet_v2_x1_0():
-    return _shufflenetv2('shufflenetv2_x1.0', [4, 8, 4], [24, 116, 232, 464, 1024])
+def shufflenet_v2_x1_0(pretrained=False):
+    model = _shufflenetv2('shufflenetv2_x1.0', [4, 8, 4], [24, 116, 232, 464, 1024])
+    if pretrained: model.load("jittorhub://shufflenet_v2_x1_0.pkl")
+    return model
 
-def shufflenet_v2_x1_5():
-    return _shufflenetv2('shufflenetv2_x1.5', [4, 8, 4], [24, 176, 352, 704, 1024])
+def shufflenet_v2_x1_5(pretrained=False):
+    model = _shufflenetv2('shufflenetv2_x1.5', [4, 8, 4], [24, 176, 352, 704, 1024])
+    if pretrained: model.load("jittorhub://shufflenet_v2_x1_5.pkl")
+    return model
 
-def shufflenet_v2_x2_0():
-    return _shufflenetv2('shufflenetv2_x2.0', [4, 8, 4], [24, 244, 488, 976, 2048])
+def shufflenet_v2_x2_0(pretrained=False):
+    model = _shufflenetv2('shufflenetv2_x2.0', [4, 8, 4], [24, 244, 488, 976, 2048])
+    if pretrained: model.load("jittorhub://shufflenet_v2_x2_0.pkl")
+    return model

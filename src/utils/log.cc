@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -13,7 +14,8 @@
 #include "utils/mwsr_list.h"
 
 namespace jittor {
-    
+
+bool peek_logged = 0;
 typedef uint32_t uint;
 using string = std::string;
 using stringstream = std::stringstream;
@@ -97,7 +99,10 @@ void print_prefix(std::ostream* out) {
         << PRINT_W2(lt.tm_min) << ':'
         << PRINT_W2(lt.tm_sec) << "."
         << PRINT_W6(usecs) << ' '
-        << PRINT_W2(tid) << ' ';
+        << PRINT_W2(tid);
+    if (thread_name.size())
+        *out << ":" << thread_name;
+    *out << ' ';
 }
 
 MWSR_LIST(log, std::ostringstream);
@@ -109,8 +114,6 @@ std::vector<std::map<string,string>> logs;
 int log_capture_enabled = 0;
 
 void log_capture(const string& s) {
-    int bk = log_capture_enabled;
-    log_capture_enabled = 0;
     // find [ and ]
     uint i=0;
     while (i+2<s.size() && !(s[i]=='[' && s[i+2]==' ')) i++;
@@ -139,8 +142,10 @@ void log_capture(const string& s) {
     if (s[end]=='\n') end--;
     if (s[end-2]=='\033') end-=3;
     log["msg"] = s.substr(j, end-j+1);
-    logs.emplace_back(std::move(log));
-    log_capture_enabled = bk;
+    {
+        std::lock_guard<std::mutex> lg(sync_log_capture);
+        logs.emplace_back(std::move(log));
+    }
 }
 
 DECLARE_FLAG(int, log_silent);
@@ -153,7 +158,8 @@ void send_log(std::ostringstream&& out) {
         mwsr_list_log::push(move(out));
     } else {
         std::lock_guard<std::mutex> lk(sync_log_m);
-        std::cerr << "[SYNC]" << out.str();
+        // std::cerr << "[SYNC]";
+        std::cerr << out.str();
         std::cerr.flush();
     }
 }
@@ -174,26 +180,37 @@ std::vector<std::map<string,string>> log_capture_read() {
 
 void log_exiting();
 
-size_t protected_page=0;
+bool exited = false;
+size_t thread_local protected_page = 0;
+int segfault_happen = 0;
+string thread_local thread_name;
 
 void segfault_sigaction(int signal, siginfo_t *si, void *arg) {
     if (signal == SIGINT) {
         LOGe << "Caught SIGINT, exit";
+        exited = true;
         exit(1);
     }
-    std::cerr << "Caught segfault at address " << si->si_addr << ", flush log..." << std::endl;
+    std::cerr << "Caught segfault at address " << si->si_addr << ", "
+        << "thread_name: '" << thread_name << "', flush log..." << std::endl;
     std::cerr.flush();
     if (protected_page && 
         si->si_addr>=(void*)protected_page && 
         si->si_addr<(void*)(protected_page+4*1024)) {
         LOGf << "Accessing protect pages, maybe jit_key too long";
     }
-    if (signal == SIGSEGV) {
-        print_trace();
-        std::cerr << "Segfault, exit" << std::endl;
-    } else {
-        std::cerr << "Get signal " << signal << ", exit" << std::endl;
+    if (!exited) {
+        exited = true;
+        if (signal == SIGSEGV) {
+            // only print trace in main thread
+            if (thread_name.size() == 0)
+                print_trace();
+            std::cerr << "Segfault, exit" << std::endl;
+        } else {
+            std::cerr << "Get signal " << signal << ", exit" << std::endl;
+        }
     }
+    segfault_happen = 1;
     exit(1);
 }
 
@@ -210,7 +227,7 @@ int register_sigaction() {
     sigaction(SIGKILL, &sa, NULL);
     sigaction(SIGSTOP, &sa, NULL);
     sigaction(SIGFPE, &sa, NULL);
-    // sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGINT, &sa, NULL);
     sigaction(SIGILL, &sa, NULL);
     sigaction(SIGBUS, &sa, NULL);
     sigaction(SIGQUIT, &sa, NULL);
@@ -240,7 +257,7 @@ void stream_hash(uint64_t& hash, char c) {
 
 DEFINE_FLAG(int, log_silent, 0, "The log will be completely silent.");
 DEFINE_FLAG(int, log_v, 0, "Verbose level of logging");
-DEFINE_FLAG(int, log_sync, 0, "Set log printed synchronously.");
+DEFINE_FLAG(int, log_sync, 1, "Set log printed synchronously.");
 DEFINE_FLAG_WITH_SETTER(string, log_vprefix, "",
     "Verbose level of logging prefix\n"
     "example: log_vprefix='op=1,node=2,executor.cc:38$=1000'");
@@ -281,35 +298,33 @@ bool check_vlog(const char* fileline, int verbose) {
 }
 
 int system_popen(const char* cmd) {
-    static char buf[BUFSIZ];
-    static string cmd2;
+    char buf[BUFSIZ];
+    string cmd2;
     cmd2 = cmd;
     cmd2 += " 2>&1 ";
     FILE *ptr = popen(cmd2.c_str(), "r");
     if (!ptr) return -1;
     while (fgets(buf, BUFSIZ, ptr) != NULL) {
-        std::cout << buf;
-        std::cout.flush();
+        puts(buf);
     }
     return pclose(ptr);
 }
 
 void system_with_check(const char* cmd) {
     auto ret = system_popen(cmd);
-    CHECK(ret!=-1) << "Run cmd failed:" << cmd <<
+    CHECK(ret>=0 && ret<=256) << "Run cmd failed:" << cmd <<
             "\nreturn -1. This might be an overcommit issue or out of memory."
-            << "Try : echo 1 >/proc/sys/vm/overcommit_memory";
+            << "Try : sudo sysctl vm.overcommit_memory=1";
     CHECKop(ret,==,0) << "Run cmd failed:" << cmd;
 }
 
 std::thread log_thread(log_main);
 
 void log_exiting() {
-    static bool exited = false;
     if (exited) return;
+    exited = true;
     mwsr_list_log::stop();
     log_thread.join();
-    exited = true;
 }
 
 } // jittor
@@ -335,7 +350,7 @@ void test_log_time(std::ostream* out) {
         auto finish = std::chrono::high_resolution_clock::now();
         auto total_ns =  std::chrono::duration_cast<std::chrono::nanoseconds>(finish-start).count();
         LOGi << "total_ns" << total_ns << "each_ns" << total_ns/n;
-        CHECKop(total_ns/n,<=,6000);
+        CHECKop(total_ns/n,<=,6500);
     };
     std::list<std::thread> ts;
     for (int i=0; i<nthread; i++) ts.emplace_back(log_lot);

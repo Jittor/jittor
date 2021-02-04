@@ -1,8 +1,9 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors:
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers:
 #     Meng-Hao Guo <guomenghao1997@gmail.com>
 #     Dun Liang <randonlang@gmail.com>.
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -38,7 +39,7 @@ def download_url_to_local(url, filename, root_folder, md5):
     ensure_dir(root_folder)
     file_path = os.path.join(root_folder, filename)
     if check_file_exist(file_path, md5):
-        print("Data file has been downloaded and verified")
+        return
     else:
         try:
             print('Downloading ' + url + ' to ' + file_path)

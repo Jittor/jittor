@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -70,6 +71,12 @@ void setter_gdb_attach(int v) {
 void setter_gdb_path(string v) {
     gdb_path = v;
     setter_gdb_attach(gdb_attach);
+}
+
+void breakpoint() {
+    static bool is_attached = 0;
+    if (is_attached) return;
+    setter_gdb_attach(1);
 }
 
 void print_trace() {

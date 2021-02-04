@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -13,6 +14,8 @@
 #include "opt/pass/split_loop_pass.h"
 #include "opt/pass/reorder_loop_pass.h"
 #include "opt/pass/merge_loop_pass.h"
+#include "opt/pass/merge_loop_var_pass.h"
+#include "opt/pass/const_var_pass.h"
 #include "opt/pass/expand_empty_block_pass.h"
 #include "opt/pass/solve_conflict_define_pass.h"
 #include "opt/pass/remove_intermediate_pass.h"
@@ -63,6 +66,13 @@ void PassManager::run_passes() {
     LOGvvvv << "KernelIR:\n" << ir.to_string();
     if (oc->op->ops.size() == 1 && oc->op->ops[0]->name() == string("array")) {
         ir.remove_all_unused();
+        if (oc->op->flags.get(NodeFlags::_cuda)) {
+            ir.children.back()->erase();
+            string type = oc->op->ops[0]->outputs().front()->dtype().to_cstring();
+            ir.push_back("kernel<<<1,1>>>(op0_outputp, op0->ptr<"+type+">()[0]);");
+            auto jt_type = type == "bool" ? type : "jittor::" + type;
+            ir.push_back("__global__ static void kernel("+jt_type+"* xp, "+jt_type+" x) { xp[0] = x; } ", &ir.before, true);
+        }
         return;
     }
     run_pass<MarkRawPass>();
@@ -81,6 +91,9 @@ void PassManager::run_passes() {
     run_pass<RemoveIntermediatePass>();
     
     run_pass<SolveConflictDefinePass>();
+    run_pass<MergeLoopVarPass>();
+    // tmp disable ConstVarPass
+    // run_pass<ConstVarPass>();
 
     run_pass<RestridePass>();
     

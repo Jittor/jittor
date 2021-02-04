@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -38,6 +39,8 @@ namespace jittor {
 
 #define sigmoid(T,x) ((T) (1.0f/(1.0f+::expf(-(x)))))
 
+#define erf(T,x) ((T) ::erff((x)))
+
 #else
 #define abs(T,x) std::abs(x)
 #define log(T,x) std::log((T)(x))
@@ -63,6 +66,8 @@ namespace jittor {
 #define atanh(T,x) ((T) std::atanh((x)))
 
 #define sigmoid(T,x) ((T) (1.0f/(1.0f+std::exp(-(x)))))
+
+#define erf(T,x) ((T) std::erf((x)))
 
 #endif
 

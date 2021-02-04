@@ -1,8 +1,9 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: 
 //     Guoye Yang <498731903@qq.com>
 //     Dun Liang <randonlang@gmail.com>. 
-// All Rights Reserved.
+// 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -29,11 +30,11 @@ struct CachingBlock {
 struct CachingBlockPool {
     std::map<unsigned long long, CachingBlock*> blocks;
     //for recycle block_id
-    std::vector<size_t> block_ids;  
+    static std::vector<size_t> block_ids;  
     //start from 1
-    size_t tot_block_id;           
-    std::unique_ptr<CachingBlock*[]> occupied_id_mapper;              
-    static const size_t ID_LIMIT = 1 << 16;
+    static size_t tot_block_id;           
+    static std::unique_ptr<CachingBlock*[]> occupied_id_mapper;              
+    static const size_t ID_LIMIT = 1 << 18;
 
     unsigned long long get_key(CachingBlock* block);
 

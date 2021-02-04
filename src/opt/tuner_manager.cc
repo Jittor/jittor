@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -31,7 +32,6 @@ template <class T> void TunerManager::run_tuner(PassManager* pm) {
 }
 
 string TunerManager::tune() {
-    auto tmp = Var::number_of_lived_vars;
     PassManager pm(oc);
     string src_after_passes;
     pm.run_passes();
@@ -60,7 +60,6 @@ string TunerManager::tune() {
             }
         }
     }
-    ASSERTop(Var::number_of_lived_vars,==,tmp) << (print_trace(), 0) << oc->op->ops << best_tuner->candidates;
     return src_after_passes;
 }
 

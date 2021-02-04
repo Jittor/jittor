@@ -1,13 +1,14 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. 
-// Authors: Dun Liang <randonlang@gmail.com>. 
-// All Rights Reserved.
+// Copyright (c) 2021 Jittor. 
+// All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
+// 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>
-#include <helper_cuda.h>
+#include "helper_cuda.h"
 #include <mutex>
 #include "misc/cuda_flags.h"
 #include "mem/allocator/sfrl_allocator.h"

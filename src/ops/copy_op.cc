@@ -1,7 +1,8 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: 
 //     Dun Liang <randonlang@gmail.com>. 
-// All Rights Reserved.
+// 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -10,7 +11,8 @@
 #include "ops/copy_op.h"
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>
-#include <helper_cuda.h>
+#include "helper_cuda.h"
+#include "misc/cuda_flags.h"
 #endif
 
 namespace jittor {
@@ -36,14 +38,14 @@ void CopyOp::run() {
     auto size = x->size;
     auto x_ptr = x->mem_ptr;
     auto y_ptr = outputs().front()->mem_ptr;
-    if (flags.get(NodeFlags::_cpu)) {
+    #ifdef HAS_CUDA
+    if (flags.get(NodeFlags::_cuda))  {
+        checkCudaErrors(cudaMemcpyAsync(y_ptr, x_ptr, size, cudaMemcpyDefault, 0));
+    } else
+    #endif
+    {
         std::memcpy(y_ptr, x_ptr, size);
     }
-    #ifdef HAS_CUDA
-    else {
-        checkCudaErrors(cudaMemcpyAsync(y_ptr, x_ptr, size, cudaMemcpyDefault, 0));
-    }
-    #endif
 }
 
 

@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -11,6 +12,8 @@
 #include "ops/broadcast_to_op.h"
 
 namespace jittor {
+
+DECLARE_FLAG(int, para_opt_level);
 
 void LoopVarAnalyzePass::run() {
     // loop_vars: opi_xx->shape[j]
@@ -24,9 +27,10 @@ void LoopVarAnalyzePass::run() {
         auto& op_members = this->pm->oc->op_members;
         // TODO: fix it
         // ugly temp fix for index_var
+        auto opid = this->op->get_node_id(op);
         if (op->name()==string("index") && 
-            op->inputs().size()+op->outputs().size() != op_members[op->custom_data].size()) {
-            op_members[op->custom_data].insert(op_members[op->custom_data].begin(), "wtf");
+            op->inputs().size()+op->outputs().size() != op_members[opid].size()) {
+            op_members[opid].insert(op_members[opid].begin(), "wtf");
         }
     }
     // LoopVarAnalyzePass has three steps:
@@ -77,6 +81,11 @@ void LoopVarAnalyzePass::run() {
     // 1. reduce input
     // 2. element input
     // 3. broadcast output
+    
+    // ugly fix multi different dim element input
+    // (caused by force fused array op)
+    int max_elm_dim = 0;
+    int64 max_elm_size = 0;
     for (uint i=0; i<vars.size(); i++) {
         // output
         if (vars[i].type == 2) {
@@ -87,8 +96,12 @@ void LoopVarAnalyzePass::run() {
             has_op = true;
             if (op->type() == OpType::reduce)
                 has_reduce = true;
-            if (op->type() == OpType::element)
+            if (op->type() == OpType::element) {
                 has_element = true;
+                max_elm_dim = std::max(max_elm_dim, op->outputs().front()->shape.size());
+                if (max_elm_dim == op->outputs().front()->shape.size())
+                    max_elm_size = std::max(max_elm_size, std::abs(op->outputs().front()->num));
+            }
         }
     }
     for (uint i=0; i<vars.size(); i++) {
@@ -104,6 +117,10 @@ void LoopVarAnalyzePass::run() {
             if (has_reduce && op->type() != OpType::reduce)
                 continue;
             if (has_element && !has_reduce && op->type() != OpType::element)
+                continue;
+            if (op->type() == OpType::element 
+                && (op->outputs().front()->shape.size() != max_elm_dim || 
+                    std::abs(op->outputs().front()->num) != max_elm_size))
                 continue;
             Var* loop_var;
             if (op->type() == OpType::broadcast || op->name_ex() == "index") {
@@ -182,13 +199,45 @@ void LoopVarAnalyzePass::run() {
                 }
             }
     }
+
+    if (para_opt_level) {
+        map<Var*, Op*> same_inputs;
+        for (auto o : op->ops) {
+            if (!pm->oc->op_exist(o))
+                continue;
+            int i_id = 0;
+            for (auto i : o->inputs()) {
+                i_id ++;
+                auto fi_id = op->get_node_id(i);
+                if (op->vars.at(fi_id).type != 0)
+                    continue;
+                if (same_inputs.count(i)) {
+                    auto j = same_inputs[i];
+                    auto name1 = pm->oc->get_name_by_op_input(o, i_id-1);
+                    auto name2 = pm->oc->get_name_by_op_var(j, i);
+                    if (name1[0] == '_' || name2[0] == '_')
+                        continue;
+                    // replace name1 -> name2
+                    replace_vars.emplace_back(name1+'p', name2+'p');
+                } else {
+                    auto name2 = pm->oc->get_name_by_op_var(o, i);
+                    if (name2[0] == '_')
+                        continue;
+                    same_inputs[i] = o;
+                }
+            }
+        }
+    }
     
     for (auto& t : op->edges) {
         uint i,j,k,l;
         std::tie(i,j,k,l) = t;
+        // virtual op holds all inputs
+        if (i>=op->ops.size())
+            continue;
         // loop var may not exist(relayed)
-        auto opa = op->ops[i];
-        auto opb = op->ops[k];
+        auto opa = op->ops.at(i);
+        auto opb = op->ops.at(k);
         if (!pm->oc->op_exist(opa) || !pm->oc->op_exist(opb))
             continue;
         // replace op{j}_{kname}* -> op{i}_{oname}*
@@ -196,6 +245,20 @@ void LoopVarAnalyzePass::run() {
         auto name2 = pm->oc->get_name_by_op_output(opa, j);
         replace_vars.emplace_back(name1, name2);
     }
+
+    // dirty fix wrong array fuse
+    if (max_elm_size>1)
+        for (int i=0; i<this->op->ops.size(); i++) {
+            auto op = this->op->ops[i];
+            if (op->type() == OpType::element &&
+                op->name() != string("array") &&
+                op->outputs().front()->num == 1) {
+                replace_vars.emplace_back("op"+S(i)+"_xstride0", "0");
+                replace_vars.emplace_back("op"+S(i)+"_ystride0", "0");
+                replace_vars.emplace_back("op"+S(i)+"_zstride0", "0");
+            }
+        }
+    
     
     LOGvvv << "replace_vars" << replace_vars;
     ir->replace(replace_vars);

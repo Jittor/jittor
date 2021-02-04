@@ -1,8 +1,9 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: 
 //     Wenyang Zhou <576825820@qq.com>
 //     Dun Liang <randonlang@gmail.com>
-// All Rights Reserved.
+// 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -18,9 +19,19 @@ void lock();
 
 void unlock();
 
+extern int _has_lock;
+
 struct lock_guard {
-    inline lock_guard() { lock(); }
-    inline ~lock_guard() { unlock(); }
+    int has_lock = 0;
+    inline lock_guard() { 
+        if (_has_lock) return;
+        has_lock = 1;
+        lock(); 
+    }
+    inline ~lock_guard() {
+        if (!has_lock) return;
+        unlock();
+    }
 };
 
 } // jittor

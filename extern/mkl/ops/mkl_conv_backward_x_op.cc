@@ -1,9 +1,10 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: 
 //     Guowei Yang <471184555@qq.com>
 //     Guoye Yang <498731903@qq.com>
 //     Dun Liang <randonlang@gmail.com>. 
-// All Rights Reserved.
+// 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -75,16 +76,17 @@ static const char* short_type(Var* x) {
     }
 }
 
-void MklConvBackwardXOp::jit_prepare() {
-    add_jit_define("Tyd", dy->dtype());
-    add_jit_define("Twd", w->dtype());
-    add_jit_define("Txd", dx->dtype());
-    add_jit_define("Tx", short_type(dx));
-    add_jit_define("Tw", short_type(w));
-    add_jit_define("Ty", short_type(dy));
-    add_jit_define("XFORMAT", xformat);
-    add_jit_define("WFORMAT", wformat);
-    add_jit_define("YFORMAT", yformat);
+void MklConvBackwardXOp::jit_prepare(JK& jk) {
+    jk << _CS("[Tyd:") << dy->dtype();
+    jk << _CS("][Twd:") << w->dtype();
+    jk << _CS("][Txd:") << dx->dtype();
+    jk << _CS("][Tx:") << short_type(dx);
+    jk << _CS("][Tw:") << short_type(w);
+    jk << _CS("][Ty:") << short_type(dy);
+    jk << _CS("][XFORMAT:") << xformat;
+    jk << _CS("][WFORMAT:") << wformat;
+    jk << _CS("][YFORMAT:") << yformat;
+    jk << ']';
 }
 
 #else // JIT

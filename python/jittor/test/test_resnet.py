@@ -1,9 +1,10 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers: 
 #     Guowei Yang <471184555@qq.com>
 #     Meng-Hao Guo <guomenghao1997@gmail.com>
 #     Dun Liang <randonlang@gmail.com>. 
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -96,7 +97,7 @@ class TestResnet(unittest.TestCase):
                 -jt.flags.stat_allocator_total_free_byte
             # assert mem_used < 4e9, mem_used
             # TODO: why bigger?
-            assert mem_used < 5.5e9, mem_used
+            assert mem_used < 5.6e9, mem_used
             # example log:
             # Train Epoch: 0 [0/100 (0%)]     Loss: 2.352903  Acc: 0.110000
             # Train Epoch: 0 [1/100 (1%)]     Loss: 2.840830  Acc: 0.080000
@@ -115,9 +116,9 @@ class TestResnet(unittest.TestCase):
             # Train Epoch: 0 [50/100 (50%)]   Loss: 2.055014  Acc: 0.290000
 
             if jt.in_mpi:
-                assert jt.core.number_of_lived_vars() < 7500, jt.core.number_of_lived_vars()
+                assert jt.core.number_of_lived_vars() < 8000, jt.core.number_of_lived_vars()
             else:
-                assert jt.core.number_of_lived_vars() < 6500, jt.core.number_of_lived_vars()
+                assert jt.core.number_of_lived_vars() < 6900, jt.core.number_of_lived_vars()
 
         jt.sync_all(True)
         assert np.mean(loss_list[-50:])<0.5

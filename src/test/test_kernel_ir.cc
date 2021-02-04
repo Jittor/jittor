@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -49,11 +50,11 @@ JIT_TEST(kernel_ir) {
         })", true
     );
     string code = R"(// 
-// scope: main(1), 
+// scope: <cmath>(1), aaa(1), main(1), 
 
-// C macro code:"#include <cmath>"
+// C macro code:"#include <cmath>" lvalue:"<cmath>"
 #include <cmath>
-// C macro code:"#define aaa  bbb"
+// C macro code:"#define aaa  bbb" lvalue:"aaa" rvalue:" bbb"
 #define aaa  bbb
 // C  code:"using namespace std;" raw:"1"
 using namespace std;
@@ -275,7 +276,7 @@ a[2]++;
     ir.move_out_children();
     ir.push_back("T x=1;");
     ir.push_back("T y=n;");
-    int num;
+    int num=0;
     CHECK(ir.get_number("x", num) && num==1);
     CHECK(!ir.get_number("z", num) && num==-1);
     CHECK(!ir.get_number("y", num) && num==-2);

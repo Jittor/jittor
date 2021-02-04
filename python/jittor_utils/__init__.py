@@ -1,5 +1,6 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -31,18 +32,20 @@ class LogWarper:
         return cc.log_capture_read()
 
     def _log(self, level, verbose, *msg):
-        if len(msg):
-            msg = " ".join([ str(m) for m in msg ])
-        else:
-            msg = str(msg)
+        if self.log_silent or verbose > self.log_v:
+            return
+        ss = ""
+        for m in msg:
+            if callable(m):
+                m = m()
+            ss += str(m)
+        msg = ss
         f = inspect.currentframe()
         fileline = inspect.getframeinfo(f.f_back.f_back)
         fileline = f"{os.path.basename(fileline.filename)}:{fileline.lineno}"
         if cc and hasattr(cc, "log"):
             cc.log(fileline, level, verbose, msg)
         else:
-            if self.log_silent or verbose > self.log_v:
-                return
             time = datetime.datetime.now().strftime("%m%d %H:%M:%S.%f")
             tid = threading.get_ident()%100
             v = f" v{verbose}" if verbose else ""
@@ -58,6 +61,21 @@ class LogWarper:
     def e(self, *msg): self._log('e', 0, *msg)
     def f(self, *msg): self._log('f', 0, *msg)
 
+class DelayProgress:
+    def __init__(self, msg, n):
+        self.msg = msg
+        self.n = n
+        self.time = time.time()
+
+    def update(self, i):
+        if LOG.log_silent:
+            return
+        used = time.time() - self.time
+        if used > 2:
+            eta = used / (i+1) * (self.n-i-1)
+            print(f"{self.msg}({i+1}/{self.n}) used: {used:.3f}s eta: {eta:.3f}s", end='\r')
+            if i==self.n-1: print()
+
 # check is in jupyter notebook
 def in_ipynb():
     try:
@@ -71,10 +89,10 @@ def in_ipynb():
 
 @contextlib.contextmanager
 def simple_timer(name):
-    LOG.i("Timer start", name)
+    print("Timer start", name)
     now = time.time()
     yield
-    LOG.i("Time stop", name, time.time()-now)
+    print("Time stop", name, time.time()-now)
 
 @contextlib.contextmanager
 def import_scope(flags):
@@ -132,19 +150,33 @@ def do_compile(args):
 
 pool_size = 0
 
-def run_cmds(cmds, cache_path, jittor_path):
-    global pool_size
+def pool_cleanup():
+    global p
+    p.__exit__(None, None, None)
+    del p
+
+def pool_initializer():
+    cc.init_subprocess()
+
+def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
+    global pool_size, p
+    bk = mp.current_process()._config.get('daemon')
+    mp.current_process()._config['daemon'] = False
     if pool_size == 0:
         mem_bytes = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
         mem_gib = mem_bytes/(1024.**3)
-        pool_size = min(8,max(int(mem_gib // 3), 1))
+        pool_size = min(16,max(int(mem_gib // 3), 1))
         LOG.i(f"Total mem: {mem_gib:.2f}GB, using {pool_size} procs for compiling.")
+        p = Pool(pool_size, initializer=pool_initializer)
+        p.__enter__()
+        import atexit
+        atexit.register(pool_cleanup)
     cmds = [ [cmd, cache_path, jittor_path] for cmd in cmds ]
-    bk = mp.current_process()._config.get('daemon')
-    mp.current_process()._config['daemon'] = False
     try:
-        with Pool(pool_size) as p:
-            p.map(do_compile, cmds)
+        n = len(cmds)
+        dp = DelayProgress(msg, n)
+        for i,_ in enumerate(p.imap_unordered(do_compile, cmds)):
+            dp.update(i)
     finally:
         mp.current_process()._config['daemon'] = bk
 
@@ -209,23 +241,31 @@ def get_version(output):
     version = "("+v[-1]+")"
     return version
 
-def find_exe(name, check_version=True):
+def get_int_version(output):
+    ver = get_version(output)
+    ver = ver[1:-1].split('.')
+    ver = tuple(( int(v) for v in ver ))
+    return ver
+
+def find_exe(name, check_version=True, silent=False):
     output = run_cmd(f'which {name}', err_msg=f'{name} not found')
     if check_version:
         version = get_version(name)
     else:
         version = ""
-    LOG.i(f"Found {name}{version} at {output}.")
+    if not silent:
+        LOG.i(f"Found {name}{version} at {output}.")
     return output
 
-def env_or_find(name, bname):
+def env_or_find(name, bname, silent=False):
     if name in os.environ:
         path = os.environ[name]
         if path != "":
             version = get_version(path)
-            LOG.i(f"Found {bname}{version} at {path}")
+            if not silent:
+                LOG.i(f"Found {bname}{version} at {path}")
         return path
-    return find_exe(bname)
+    return find_exe(bname, silent=silent)
 
 def get_cc_type(cc_path):
     bname = os.path.basename(cc_path)
@@ -239,7 +279,26 @@ is_in_ipynb = in_ipynb()
 cc = None
 LOG = LogWarper()
 
-cc_path = env_or_find('cc_path', 'g++')
+cc_path = env_or_find('cc_path', 'g++', silent=True)
 os.environ["cc_path"] = cc_path
 cc_type = get_cc_type(cc_path)
 cache_path = find_cache_path()
+
+
+py3_config_paths = [
+    os.path.dirname(sys.executable) + f"/python3.{sys.version_info.minor}-config",
+    sys.executable + "-config",
+    f"/usr/bin/python3.{sys.version_info.minor}-config",
+    os.path.dirname(sys.executable) + "/python3-config",
+]
+if "python_config_path" in os.environ:
+    py3_config_paths.insert(0, os.environ["python_config_path"])
+
+for py3_config_path in py3_config_paths:
+    if os.path.isfile(py3_config_path):
+        break
+else:
+    raise RuntimeError(f"python3.{sys.version_info.minor}-config "
+        "not found in {py3_config_paths}, please specify "
+        "enviroment variable 'python_config_path',"
+        " or apt install python3.{sys.version_info.minor}-dev")

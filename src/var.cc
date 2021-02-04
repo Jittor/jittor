@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -29,13 +30,7 @@ Var::Var(NanoVector shape, NanoString dtype)
     ASSERT(ns.is_dtype());
     number_of_lived_vars++;
     numel();
-}
-Var::~Var() {
-    if (mem_ptr != nullptr)
-        allocator->free(mem_ptr, size, allocation);
-    number_of_lived_vars--;
-    if (flags.get(NodeFlags::_in_update_queue))
-        update_queue.pop(this);
+    if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var)) trace_data.record_node(this);
 }
     
 string Var::to_string() {
@@ -70,7 +65,7 @@ bool Var::alloc(Allocator* allocator) {
     if (mem_ptr) return true;
     if (auto* x = (Var*)(this->allocator)) {
         if (x->allocator->share_with(size, x->allocation)) {
-            mem_ptr = x->mem_ptr;
+            mem_ptr = ((char*) x->mem_ptr) + allocation;
             allocation = x->allocation;
             this->allocator = x->allocator;
             return true;
@@ -95,8 +90,12 @@ std::ostream& operator<<(std::ostream& os, const Var& var) {
         << ')' << var.shape;
 #ifdef NODE_MEMCHECK
     os << '<' << var.__id() << '>';
-    print_node_trace(&var, os);
 #endif
+    if (trace_py_var) {
+        os << '{';
+        print_node_trace(&var, os);
+        os << '}';
+    }
     return os;
 }
 std::ostream& operator<<(std::ostream& os, const Var* var) {

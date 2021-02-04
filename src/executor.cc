@@ -1,5 +1,9 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: 
+//     Dun Liang <randonlang@gmail.com>. 
+//     Guoye Yang <498731903@qq.com>
+//
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -7,7 +11,7 @@
 #include <functional>
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>
-#include <helper_cuda.h>
+#include "helper_cuda.h"
 #include "mem/allocator/cuda_dual_allocator.h"
 #include "event_queue.h"
 #endif
@@ -20,24 +24,93 @@
 #include "fused_op.h"
 #include "fuser.h"
 #include "profiler/profiler_guard.h"
+#include "parallel_compiler.h"
+#include "memory_profiler.h"
+#include "misc/nan_checker.h"
+#include "memory_profiler.h"
 
 namespace jittor {
 
 Executor exe;
+extern MemoryProfiler memory_profiler;
+DECLARE_FLAG(int, profile_memory_enable);
 
 // from fetch_op.cc
 extern list<VarPtr> fetcher_to_free;
 
+void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, int ll, int rr, int64 tt) {
+    fused_op.ops.clear();
+    fused_op.edges.clear();
+    auto ntt = ++Node::tflag_count;
+    for (int i=ll; i<rr; i++) {
+        int opid = fuse_ops[i];
+        Op* op = ops[opid];
+        uint64_t fid1 = fused_op.ops.size();
+        op->custom_data = fid1;
+        op->tflag = ntt;
+        fused_op.ops.push_back(op);
+    }
+    LOGvvv << "Prepare fused_op" << fused_op.ops;
+    fused_op.update_ops();
+    for (Op* op : fused_op.ops) {
+        uint fid1 = op->custom_data;
+        int iid = 0;
+        for (auto ve : op->_inputs) {
+            // this is a control dependency edge, dont used
+            if (ve.back->index<0) continue;
+            auto v = ve.node->var();
+            iid++;
+            int iop_id;
+            int iv_id;
+            if (v->_inputs.size() && v->input()->tflag == ntt) {
+                auto e = v->_inputs.front();
+                iop_id = e.node->custom_data;
+                iv_id = e.back->index;
+            } else {
+                iv_id = v->custom_data >> 2;
+                // add iv_id, prevent iv_id jit key overflow
+                iop_id = fused_op.ops.size() + iv_id;
+            }
+            fused_op.edges.emplace_back(iop_id, iv_id, fid1, iid-1);
+        }
+        // TODO: can we remove this?
+        // uint oid = 0;
+        // for (Var* v : op->outputs()) {
+        //     oid++;
+        //     if (v->tflag != tt) {
+        //         // this var node not belong to current execution
+        //         // this will happend in multiple outputs fuseable op
+        //         // v->custom_data = 0 represents this var cannot be fused
+        //         v->custom_data = 0;
+        //         continue;
+        //     }
+        //     // for (auto o : v->outputs_with_index()) {
+        //     //     Op* op2 = o.op;
+        //     //     uint iid = o.index;
+        //     //     if (op2->tflag != ntt) continue;
+        //     //     uint fid2 = op2->custom_data;
+        //     //     fused_op.edges.emplace_back(fid1, oid-1, fid2, iid);
+        //     // }
+        // }
+    }
+}
+
 void Executor::run_sync(vector<Var*> vars, bool device_sync) {
     auto allocator = get_allocator();
+    auto temp_allocator = get_allocator(true);
     this->allocator = allocator;
+    this->temp_allocator = temp_allocator;
     // bfs find all ops need to run
     int op_num = 0;
     vector<Node*> bfs_q;
     bfs_q.reserve(vars.size());
     int start_var_num = 0;
-    {
+    while (1) {
+        op_num = 0;
+        start_var_num = 0;
+        bfs_q.clear();
         // get all nodes need to be executed
+        int need_opt = 0;
         auto t = ++Node::tflag_count;
         for (Var* v : vars)
             if (!v->is_finished() && v->tflag != t) {
@@ -51,6 +124,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
             for (auto i : node->_inputs)
                 if (i.node->tflag != t && !i.node->is_finished()) {
                     i.node->tflag = t;
+                    need_opt += i.node->flags.get(NodeFlags::_has_gopt);
                     bfs_q.push_back(i.node);
                 }
             // this var has been fetched
@@ -61,9 +135,17 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
                         !n.node->is_finished() &&
                         n.node->flags.get(NodeFlags::_fetch)) {
                         n.node->tflag = t;
+                        need_opt += n.node->flags.get(NodeFlags::_has_gopt);
                         bfs_q.push_back(n.node);
                     }
                 }
+            }
+        }
+        if (!need_opt) break;
+        for (Node* n : bfs_q) {
+            if (n->flags.get(NodeFlags::_has_gopt)) {
+                n->op()->graph_optimize();
+                n->flags.set(NodeFlags::_has_gopt, 0);
             }
         }
     }
@@ -316,13 +398,18 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
     for (int i=0; i<var_num; i++) {
         all_vars[i]->custom_data = var_fused[i]==1;
     }
+    FusedOp fused_op;
+
+    // compile all ops, prevent compiling during running
+    parallel_compile_all_ops(queue, range, fused_op, fuse_ops, ops, tt);
 
     // running
-    FusedOp fused_op;
+    SetupFreeBuffer setup_free_buffer;
     vector<Var*> outputs_bk;
     #ifdef HAS_CUDA
     int sync_times = 0;
     #endif
+    auto& jkl = jk;
     for (uint rid=0; rid<queue.size(); rid++) {
         int root = queue[rid];
         Op* op = ops[root];
@@ -331,49 +418,21 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         if (op->type() != OpType::other) {
             op = &fused_op;
             is_fused_op = true;
-            fused_op.ops.clear();
-            fused_op.edges.clear();
             int ll = (rid<queue.size()-1)?range[queue.size()-rid-2]:0, rr = range[queue.size()-rid-1];
             root = fuse_ops[rr-1];
-            auto ntt = ++Node::tflag_count;
-            for (int i=ll; i<rr; i++) {
-                int opid = fuse_ops[i];
-                Op* op = ops[opid];
-                uint64_t fid1 = fused_op.ops.size();
-                op->custom_data = fid1;
-                op->tflag = ntt;
-                fused_op.ops.push_back(op);
-            }
-            for (Op* op : fused_op.ops) {
-                uint fid1 = op->custom_data;
-                uint oid = 0;
-                for (Var* v : op->outputs()) {
-                    oid++;
-                    if (v->tflag != tt) {
-                        // this var node not belong to current execution
-                        // this will happend in multiple outputs fuseable op
-                        v->custom_data = 0;
-                        continue;
-                    }
-                    for (auto o : v->outputs_with_index()) {
-                        Op* op2 = o.op;
-                        uint iid = o.index;
-                        if (op2->tflag != ntt) continue;
-                        uint fid2 = op2->custom_data;
-                        fused_op.edges.emplace_back(fid1, oid-1, fid2, iid);
-                    }
-                }
-            }
-            LOGvvv << "Prepare fused_op" << fused_op.ops;
-            fused_op.update_ops();
+            load_fused_op(fused_op, fuse_ops, ops, ll, rr, tt);
         }
         LOGvvv << "Run" << op;
-        if (!op->shape_infered()) op->infer_shape();
-        ASSERT(op->shape_infered()) << "Shape of(" >> op->name() >> ") not solved.";
-        for (auto* var : op->outputs())
+        if (op->flags.get(NodeFlags::_has_vary_input)) op->init();
+        ASSERT(!op->flags.get(NodeFlags::_has_vary_input))
+            << "Shape of(" >> op->name() >> ") not solved.";
+        for (auto* var : op->outputs()) {
             var->alloc(allocator);
+        }
+        if (PREDICT_BRANCH_NOT_TAKEN(profile_memory_enable))
+            memory_profiler.check();
         LOGvvv << "Run" << op << "inputs:" << op->inputs() << "outputs:" << op->outputs();
-        op->do_prepare();
+        op->do_prepare(jkl);
         bool is_cuda = op->flags.get(NodeFlags::_cuda);
         #ifdef HAS_CUDA
         if (!is_cuda) {
@@ -399,7 +458,17 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         }
         #endif
         last_is_cuda = is_cuda;
-        op->do_run_after_prepare();
+        op->do_run_after_prepare(jkl);
+        // record trace data
+        if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var>=2)) {
+            trace_data.record_execution(op, is_fused_op, jkl);
+            #ifdef HAS_CUDA
+            if (use_cuda)
+                checkCudaErrors(cudaDeviceSynchronize());
+            #endif
+            for (Var* var : op->outputs())
+                check_nan(var);
+        }
         LOGvvv << "Finished Op(" >> op->name() << rid >> 
             "/" >> queue.size() >> ") output:" << op->outputs();
         if (is_fused_op) {
@@ -419,16 +488,20 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
             */
             if (!var->need_free())
                 outputs_bk.push_back(var);
+            else {
+                // TODO: will this cause bug?
+                var->flags.set(NodeFlags::_finished);
+            }
         }
         op->finish_pending_liveness();
         for (Var* var : outputs_bk)
             var->finish_pending_liveness();
         } catch (const std::exception& e) {
             // log memory info
-            display_memory_info(__FILELINE__);
+            display_memory_info(__FILELINE__, false, true);
             // log jit_key and file location
-            op->do_prepare();
-            string jit_src_path = Op::get_filename_from_jit_key(jk.to_cstring(), ".cc");
+            op->do_prepare(jkl);
+            string jit_src_path = Op::get_filename_from_jit_key(jkl.to_cstring(), ".cc");
             LOGe << "[Error] source file location:" << jit_src_path;
             if (is_fused_op) {
                 LOGf << "Execute fused operator(" >> rid >> '/' >> queue.size() >> ")"
@@ -446,11 +519,11 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
     if (device_sync && use_cuda) {
         last_is_cuda = false;
         sync_times++;
-        event_queue.run_sync([]() {
+        CHECK(EventQueue::OK == event_queue.run_sync([]() {
             checkCudaErrors(cudaDeviceSynchronize());
-        });
+        }));
     }
-    LOGvv << "cudaDeviceSynchronize times:" << sync_times << "/" <<queue.size();
+    LOGvv << "cudaDeviceSynchronize times:" << sync_times << "/" <<queue.size() << "device_sync:" << device_sync;
     #endif
 }
 

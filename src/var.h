@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -37,13 +38,12 @@ struct Var : Node {
     inline Op* output(uint i) { return Node::output(i)->op(); }
 
     Var(NanoVector shape, NanoString dtype);
-    ~Var();
 
     string to_string();
     int64_t numel();
     void set_shape(NanoVector shape);
     bool alloc(Allocator* allocator);
-    inline void share_with(Var* x) { CHECK_EXIST; allocator = (Allocator*)x; }
+    inline void share_with(Var* x, size_t offset = 0) { CHECK_EXIST; allocator = (Allocator*)x; allocation = offset; }
 };
 
 struct VarPtr {

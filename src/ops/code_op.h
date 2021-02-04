@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -45,7 +46,7 @@ struct CodeOp : Op {
     Example-1::
 
         from jittor import Function
-        from jittor import jt
+        import jittor as jt
 
         class Func(Function):
             def execute(self, x):
@@ -140,7 +141,7 @@ struct CodeOp : Op {
     CUDA Example-1::
 
         #This example shows how to use CUDA in code op.
-        from jittor import jt
+        import jittor as jt
         from jittor import Function
         jt.flags.use_cuda = 1
 
@@ -185,7 +186,7 @@ struct CodeOp : Op {
     CUDA Example-2::
     
         #This example shows how to use multi dimension data with CUDA.
-        from jittor import jt
+        import jittor as jt
         from jittor import Function
         jt.flags.use_cuda = 1
 
@@ -229,6 +230,10 @@ struct CodeOp : Op {
 
     // @attrs(multiple_outputs)
     CodeOp(vector<NanoVector>&& shapes, vector<NanoString>&& dtypes, vector<Var*>&& inputs={}, string&& cpu_src="", vector<string>&& cpu_grad_src={}, string&& cpu_header="", string&& cuda_src="", vector<string>&& cuda_grad_src={}, string&& cuda_header="");
+
+    // @attrs(multiple_outputs,replace_outputs)
+    CodeOp(vector<Var*>&& inputs, vector<Var*>&& outputs, string&& cpu_src="", vector<string>&& cpu_grad_src={}, string&& cpu_header="", string&& cuda_src="", vector<string>&& cuda_grad_src={}, string&& cuda_header="");
+
 
     const char* name() const override { return "code"; }
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;

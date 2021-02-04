@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -16,6 +17,7 @@
 #include "ops/array_op.h"
 #include "lock.h"
 #include "opt/expr.h"
+#include "pyjt/py_caller.h"
 
 namespace jittor {
 
@@ -74,22 +76,25 @@ string OpCompiler::get_name_by_op_var(Op* op, Var* var) {
             var_id++;
         }
     ASSERT(found);
-    ASSERT(op->custom_data<(int)op_members.size());
-    auto& v = op_members[op->custom_data];
+    ASSERT(this->op);
+    ASSERT(this->op->context);
+    auto opid = this->op->context->node_id.at(op);
+    ASSERT(opid<(int)op_members.size());
+    auto& v = op_members[opid];
     ASSERT(var_id < v.size());
     return v[var_id];
 }
 
 string OpCompiler::get_name_by_op_input(Op* op, uint i) {
-    return op_members.at(op->custom_data).at(i);
+    return op_members.at(this->op->get_node_id(op)).at(i);
 }
 
 string OpCompiler::get_name_by_op_output(Op* op, uint i) {
-    return op_members.at(op->custom_data).at(i+op->inputs().size());
+    return op_members.at(this->op->get_node_id(op)).at(i+op->inputs().size());
 }
 
 bool OpCompiler::op_exist(Op* op) {
-    return op_members.at(op->custom_data).size();
+    return op_members.at(this->op->get_node_id(op)).size();
 }
 
 int OpCompiler::total_member_count() {
@@ -408,11 +413,17 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                 size_t k=j+1;
                 while (k<src.size() && isvar(src[k])) k++;
                 string expr = src.substr(j, k-j);
+                // syntax for @python.module.function(args)
+                if (expr == "python") {
+                    while (k<src.size() && (isvar(src[k]) || src[k]=='.' )) k++;
+                    string full_expr = src.substr(j, k-j);
+                }
                 int presum = 1;
                 vector<int> comma;
                 vector<string> args;
                 size_t l = k+1;
                 if (expr == "for" || expr == "if" || expr == "expand_macro" ||
+                    expr == "is_def" || expr == "python" ||
                     (k<src.size() && src[k]=='(')) {
                     ASSERT(src[k] == '(');
                     comma.push_back(k);
@@ -430,6 +441,30 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                     for (uint i=0; i+1<comma.size(); i++)
                         args.push_back(src.substr(comma[i]+1, comma[i+1]-comma[i]-1));
                 }
+                if (expr == "python") {
+                    string full_expr = src.substr(j, k-j);
+                    LOGvvv << "python call" << full_expr << args;
+                    int presum = 0;
+                    auto ll = l;
+                    while (l<src.size()) {
+                        if (src[l] == '{')
+                            presum++;
+                        else if (src[l] == '}')
+                            presum--;
+                        if (presum==0 && (src[l] == '}' || src[l] == ';'))
+                            break;
+                        l++;
+                    }
+                    CHECK(l<src.size()) << "Jit error: braces are not matched.";
+                    auto full_src = src.substr(ll, l+1-ll);
+                    i = l;
+                    full_src = py_caller(
+                        full_expr.substr(7),
+                        args, {{"src",full_src}}
+                    );
+                    new_src += precompile(defs, full_src, macros);
+                    continue;
+                }
                 // syntax @for(i, l, r, ...)
                 //        ij  k             l
                 if (expr == "for") {
@@ -444,6 +479,9 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                     if (args.size() >= 5) {
                         step = OpCompiler::eval(vs, defs);
                         vs = args[4];
+                        for (int i=5; i<args.size(); i++) {
+                            vs += "," + args[i];
+                        }
                     }
                     auto new_defs = defs;
                     LOGvvv << "Expand for" << expr >> "[" >> vil >> "," >> vir >> "," >> step >> "]";
@@ -467,6 +505,18 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                     string vfalse = args.size() == 3u ? args[2] : "";
                     int cond = OpCompiler::eval(vcond, defs);
                     new_src += precompile(defs, cond?vtrue:vfalse, macros);
+                    i = l-1;
+                    continue;
+                } else
+                if (expr == "is_def") {
+                    ASSERT(args.size()==1)
+                        << "Jit error: is_def wrong arguments.";
+                    string vdef = args[0];
+                    vdef = precompile(defs, vdef, macros);
+                    if (defs.count(vdef) || macros.count(vdef))
+                        new_src += "1";
+                    else
+                        new_src += "0";
                     i = l-1;
                     continue;
                 } else
@@ -733,6 +783,25 @@ string OpCompiler::get_fused_src(FusedOp* op) {
     return OpCompiler::__get_fused_src(op->ops, op_srcs, op_members);
 }
 
+static void fix_op_member(
+    const vector<Op*>& ops,
+    vector<vector<string>>& op_members
+) {
+    // fill op member: [in0, in1, ... inN, fill, fill, out0, out1, ...]
+    for (int i=0; i<ops.size(); i++) {
+        auto op = ops[i];
+        auto var_num = op->inputs().size() + op->outputs().size();
+        auto& member = op_members.at(i);
+        if (!member.size()) {
+            continue;
+        }
+        ASSERT(member.size() <= var_num);
+        while (member.size() < var_num) {
+            member.insert(member.end() - op->outputs().size(), "__fill__");
+        }
+    }
+}
+
 string OpCompiler::__get_fused_src(
     const vector<Op*>& ops,
     const vector<string>& op_srcs,
@@ -908,6 +977,7 @@ string OpCompiler::__get_fused_src(
             break;
         }
     }
+    fix_op_member(ops, op_members);
     CHECK(!(defs.count("JIT_cpu") && defs.count("JIT_cuda")))
         << "CPU op and GPU op cannot be fused together.";
 
@@ -960,7 +1030,8 @@ jit_op_entry_t OpCompiler::do_compile(Op* op) {
         src_after_passes = tm.tune();
         src = &src_after_passes;
     }
-    auto ret = oc.compile(op->get_jit_key(), *src);
+    op->compile_optimize(*src);
+    auto ret = oc.compile(op->get_jit_key(jk), *src);
     return ret;
 }
 

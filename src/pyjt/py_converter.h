@@ -1,8 +1,9 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: 
 //     Dun Liang <randonlang@gmail.com>. 
 //     Guowei Yang <471184555@qq.com>
-// All Rights Reserved.
+// 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -13,6 +14,7 @@
 #include "misc/hash.h"
 #include "misc/nano_string.h"
 #include "misc/fast_shared_ptr.h"
+#include "profiler/simple_profiler.h"
 #ifdef HAS_CUDA
 #include "misc/cuda_flags.h"
 #endif
@@ -24,17 +26,6 @@ namespace jittor {
     typename std::enable_if<std::is_same<T, check_type>::value, return_type>::type
 
 #define GET_PY_NONE(code) ((code), Py_INCREF(Py_None), Py_None)
-
-inline Log& operator<<(Log& os, PyObject* objp) {
-    PyObjHolder repr_obj(PyObject_Repr(objp));
-    
-    if (PyUnicode_CheckExact(repr_obj.obj)) {
-        return os << Py_TYPE(objp)->tp_name <<
-             PyUnicode_AsUTF8(repr_obj.obj);
-    } else {
-        return os << "unknown(" >> (void*)objp >> ")";
-    }
-}
 
 // string
 DEF_IS(string, bool) is_type(PyObject* obj) {
@@ -317,7 +308,7 @@ DEF_IS(ArrayArgs, T) from_py_object(PyObject* obj) {
         int64 size = PyArray_Size(arr);
         T args;
         if (arr->nd)
-            args.shape = vector<int64>(arr->dimensions, arr->dimensions+arr->nd);
+            args.shape = NanoVector::make(arr->dimensions, arr->nd);
         else
             args.shape.push_back(1);
         args.dtype = get_type_str(arr);
@@ -411,6 +402,29 @@ DEF_IS(DataView, PyObject*) to_py_object(T a) {
     return oh.release();
 }
 
+
+#pragma GCC diagnostic ignored "-Wstrict-aliasing"
+struct ItemData;
+DEF_IS(ItemData, PyObject*) to_py_object(T a) {
+    if (a.dtype == ns_bool) {
+        if (*((bool*)(&a.data))) Py_RETURN_TRUE;
+        Py_RETURN_FALSE;
+    }
+    if (a.dtype == ns_int32)
+        return PyLong_FromLongLong((int64)*(int*)&a.data);
+    if (a.dtype == ns_float32)
+        return PyFloat_FromDouble((float64)*(float32*)&a.data);
+    if (a.dtype == ns_int64)
+        return PyLong_FromLongLong(a.data);
+    if (a.dtype == ns_float64)
+        return PyFloat_FromDouble(*(float64*)&a.data);
+    if (a.dtype == ns_int16)
+        return PyLong_FromLongLong((int64)*(int16*)&a.data);
+    if (a.dtype == ns_int8)
+        return PyLong_FromLongLong((int64)*(int8*)&a.data);
+    return PyLong_FromLongLong(a.data);
+}
+
 struct NumpyFunc;
 
 DEF_IS(NumpyFunc, bool) is_type(PyObject* obj) {
@@ -431,7 +445,13 @@ DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj);
 CHECK_IS_1(vector);
 
 DEF_IS_1(vector, bool) is_type(PyObject* obj) {
-    return PyList_CheckExact(obj) || PyTuple_CheckExact(obj);
+    if (!(PyList_CheckExact(obj) || PyTuple_CheckExact(obj)))
+        return false;
+    auto size = Py_SIZE(obj);
+    if (!size)
+        return true;
+    auto arr = PySequence_Fast_ITEMS(obj);
+    return is_type<typename T::value_type>(arr[0]);
 }
 
 DEF_IS_1(vector, PyObject*) to_py_object(const T& a) {
@@ -690,5 +710,62 @@ DEF_IS(GradCallback, T) from_py_object(PyObject* obj) {
     );
     return func;
 }
+
+struct VarSlices;
+// Slice
+DEF_IS(VarSlices, bool) is_type(PyObject* obj) {
+    return PyTuple_CheckExact(obj) || 
+        PyLong_CheckExact(obj) || 
+        PySlice_Check(obj) || 
+        (Py_TYPE(obj) == &PyEllipsis_Type) ||
+        obj == Py_None ||
+        is_type<VarHolder*>(obj);
+}
+
+template<class T>
+void load_var_slice(PyObject* obj, T* var_slice, vector<unique_ptr<VarHolder>>& holders) {
+    if (PyLong_CheckExact(obj)) {
+        var_slice->set_int(PyLong_AsLong(obj));
+    } else
+    if (PySlice_Check(obj)) {
+        var_slice->slice = from_py_object<decltype(var_slice->slice)>(obj);
+    } else
+    if (Py_TYPE(obj) == &PyEllipsis_Type) {
+        var_slice->set_ellipsis();
+    } else 
+    if (obj == Py_None) {
+        var_slice->set_none();
+    } else
+    if (PyObject_TypeCheck(obj, PyNumberArrType_Type)) {
+        PyArrayDescr_Proxy array_descr;
+        array_descr.type_num = 5; // 5: int32
+        int value;
+        PyArray_CastScalarToCtype(obj, &value, &array_descr);
+        var_slice->set_int(value);
+    } else {
+        holders.emplace_back();
+        auto* vh = from_py_object<VarHolder*>(obj, holders.back());
+        auto vv = (Var**)vh;
+        var_slice->set_var(vv[0]);
+    }
+}
+
+DEF_IS(VarSlices, T) from_py_object(PyObject* obj, vector<unique_ptr<VarHolder>>& holders) {
+    if (PyTuple_CheckExact(obj)) {
+        auto size = Py_SIZE(obj);
+        T vs(size);
+        auto arr = PySequence_Fast_ITEMS(obj);
+        for (int i=0; i<size; i++) {
+            auto oi = arr[i]; 
+            load_var_slice(oi, vs.slices+i, holders);
+        }
+        return vs;
+    } else {
+        T vs(1);
+        load_var_slice(obj, vs.slices, holders);
+        return vs;
+    }
+}
+
 
 } // jittor

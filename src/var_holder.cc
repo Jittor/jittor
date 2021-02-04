@@ -1,29 +1,32 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include <sstream>
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>
-#include <helper_cuda.h>
+#include "helper_cuda.h"
 #endif
 #include "var_holder.h"
 #include "var.h"
 #include "executor.h"
 #include "graph.h"
 #include "update_queue.h"
+#include "mem/allocator/cuda_dual_allocator.h"
+#include "ops/op_register.h"
 
 namespace jittor {
 
-DEFINE_FLAG(int, eager_execution, 0, "Use Eager execution rather than lazy execution, This flag makes error message and traceback infomation better. But this flag will raise memory consumption and lower the performance.");
+DEFINE_FLAG(int, lazy_execution, 1, "Default enabled, if disable, use immediately eager execution rather than lazy execution, This flag makes error message and traceback infomation better. But this flag will raise memory consumption and lower the performance.");
 
 list<VarHolder*> VarHolder::hold_vars;
 
 void add_hold_vars(VarHolder* self) {
     VarHolder::hold_vars.push_front(self);
     self->iter = VarHolder::hold_vars.begin();
-    if (!eager_execution) return;
+    if (lazy_execution) return;
     auto v = self->var;
     for (int i=0; i<5; i++) {
         auto op = v->input();
@@ -59,7 +62,23 @@ VarHolder::VarHolder(VarHolder* v) : var(v->var) {
     operator delete(v);
 }
 
+static auto make_array_from_pyobj = get_op_info("array")
+    .get_constructor<VarPtr, PyObject*>();
+static auto make_unary = get_op_info("unary")
+    .get_constructor<VarPtr, Var*, NanoString>();
+
+VarHolder::VarHolder(PyObject* obj, NanoString dtype) {
+    auto vp = make_array_from_pyobj(obj);
+    if (dtype != ns_void)
+        vp = make_unary(vp, dtype);
+    var = vp.ptr;
+    vp.ptr = nullptr;
+    add_hold_vars(this);
+}
+
+
 VarHolder::~VarHolder() {
+    if (PREDICT_BRANCH_NOT_TAKEN(!var)) return;
     hold_vars.erase(iter);
     var->release_both_liveness();
 }
@@ -100,6 +119,16 @@ VarHolder* VarHolder::update(VarHolder* v) {
     return this;
 }
 
+VarHolder* VarHolder::_update(VarHolder* v) {
+    auto dv = jittor::detach(v->var);
+    if (var->flags.get(NodeFlags::_in_update_queue))
+        update_queue.push(dv.ptr, var);
+    var->release_both_liveness();
+    var = dv.ptr;
+    dv.ptr = nullptr;
+    return this;
+}
+
 extern Executor exe;
 
 void VarHolder::sync(bool device_sync) {
@@ -112,6 +141,24 @@ ArrayArgs VarHolder::fetch_sync() {
     migrate_to_cpu(var, exe.allocator);
     #endif
     return {var->mem_ptr, var->shape, var->dtype()};
+}
+
+ItemData VarHolder::item() {
+    sync();
+    CHECK(var->num==1) << "Item var size should be 1, but got" << var->num;
+    ItemData data;
+    data.dtype = var->dtype();
+    auto dsize = data.dtype.dsize();
+    #ifdef HAS_CUDA
+    migrate_to_cpu(var, exe.allocator);
+    if (var->allocator->is_cuda()) {
+        checkCudaErrors(cudaMemcpy(&data.data, var->mem_ptr, dsize, cudaMemcpyDeviceToHost));
+    } else
+    #endif
+    {
+        std::memcpy(&data.data, var->mem_ptr, dsize);
+    }
+    return data;
 }
 
 // from fetch_op.cc

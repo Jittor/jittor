@@ -1,5 +1,6 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -28,8 +29,7 @@ def find_log_with_re(logs, pattern=None, **args):
 
 class TestLog(unittest.TestCase):
     def test_log_capture(self):
-        LOG.log_capture_start()
-        with jt.flag_scope(log_v=1000, log_vprefix=""):
+        with jt.log_capture_scope(log_v=1000, log_vprefix="") as logs:
             LOG.v("1")
             LOG.vv("2")
             LOG.i("3")
@@ -37,10 +37,8 @@ class TestLog(unittest.TestCase):
             LOG.e("5")
             a = jt.zeros([10])
             a.sync()
-        LOG.log_capture_stop()
         # TODO: why need manually delete this variable?
         del a
-        logs = LOG.log_capture_read()
         logs2 = LOG.log_capture_read()
         assert len(logs2)==0
 

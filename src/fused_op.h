@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -19,7 +20,11 @@ std::ostream& operator<<(std::ostream& os, const VarInfo& vi);
 struct FusedOpContext {
     VarRelayManager vrm;
     jit_op_entry_t entry;
+    unordered_map<Node*, int> node_id;
+    void setup(FusedOp* fop);
 };
+
+extern string_view_map<FusedOpContext*> jit_fused_ops;
 
 struct FusedOp final : Op {
     vector<Op*> ops;
@@ -31,8 +36,11 @@ struct FusedOp final : Op {
     loop_options_t& get_loop_options_tuned();
     FusedOpContext* context;
 
+    int get_node_id(Node* node);
+    int has(Node* node);
     void update_ops();
     FusedOp();
+    FusedOp(const FusedOp& other);
     ~FusedOp();
 
     int get_loop_option(const string& key, const int& _default=0);
@@ -41,11 +49,10 @@ struct FusedOp final : Op {
     
     const char* name() const override { return "fused"; }
     void statistics(uint64_t& in, uint64_t& out, uint64_t& compute) override;
-    bool shape_infered() override;
     void infer_shape() override;
-    void do_jit_prepare() override;
-    void do_prepare() override;
-    void do_run_after_prepare() override;
+    void do_jit_prepare(JK& jk) override;
+    void do_prepare(JK& jk) override;
+    void do_run_after_prepare(JK& jk) override;
     void do_run() override;
 #ifdef JIT
     void jit_run();

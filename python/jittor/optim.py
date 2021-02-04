@@ -1,12 +1,13 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors:
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers:
 #     Guowei Yang <471184555@qq.com>
 #     Guoye Yang <498731903@qq.com>
 #     Wenyang Zhou <576825820@qq.com>
 #     Meng-Hao Guo <guomenghao1997@gmail.com>
 #     Dun Liang <randonlang@gmail.com>.
 #
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -33,6 +34,21 @@ class Optimizer(object):
             assert isinstance(pg, dict)
             self.param_groups.append(pg)
         self.n_step = 0
+        # __zero_grad is a value for fast determ the grad is zero or not
+        # so we can omit 0+x
+        self.__zero_grad = True
+
+    def add_param_group(self, group):
+        self.param_groups.append(group)
+    
+    @property
+    def defaults(self):
+        exclude = set(("defaults", "param_groups", "n_step", "pre_step", "step"))
+        return { k:v for k, v in self.__dict__.items()
+            if k[0] != '_' and k not in exclude and not callable(v) }
+
+    def zero_grad(self):
+        self.__zero_grad = True
 
     def pre_step(self, loss):
         """ something should be done before step, such as calc gradients, mpi sync, and so on.
@@ -48,7 +64,6 @@ class Optimizer(object):
         params = []
         params_has_grad = []
         for pg in self.param_groups:
-            pg["grads"] = [None] * len(pg['params'])
             for p in pg['params']:
                 params.append(p)
                 if not p.is_stop_grad():
@@ -69,20 +84,63 @@ class Optimizer(object):
         # set up grads in param_groups
         pid = 0
         for pg in self.param_groups:
+            if "grads" not in pg:
+                pg["grads"] = [ jt.zeros_like(p).stop_grad().stop_fuse() for p in pg['params'] ]
             pg_grads = pg["grads"]
             for i, p in enumerate(pg['params']):
                 if not p.is_stop_grad():
-                    # stop grad of grad
-                    pg_grads[i] = grads[pid].stop_grad()
+                    # accumulate grad and stop grad of grad
+                    g = grads[pid].stop_grad()
+                    if not self.__zero_grad:
+                        g = g + pg_grads[i]
+                    pg_grads[i].update(g)
                     pid += 1
+        self.__zero_grad = False
         
-    def step(self, loss):
+    def backward(self, loss):
+        '''
+        optimize.backward(loss) is used for accumulate multiple step,
+        it can be used as following:
+
+        Origin source code ::
+
+        n_iter = 10000
+        batch_size = 100
+        ...
+        for i in range(n_iter):
+            ...
+            loss = calc_loss()
+            optimizer.step(loss)
+
+        Accumulation version ::
+
+        n_iter = 10000
+        batch_size = 100
+        accumulation_steps = 10
+        n_iter *= accumulation_steps
+        batch_size //= accumulation_steps
+        ...
+        for i in range(n_iter):
+            ...
+            loss = calc_loss()
+            # if loss is a mean across batch, we need to divide accumulation_steps
+            optimizer.backward(loss / accumulation_steps)
+            if (i+1) % accumulation_steps == 0:
+                optimizer.step()
+
+
+        '''
         self.pre_step(loss)
+
+    def step(self, loss=None):
+        if loss is not None:
+            self.pre_step(loss)
         for pg in self.param_groups:
             lr = pg.get("lr", self.lr)
             for p, g in zip(pg["params"], pg["grads"]):
                 if p.is_stop_grad(): continue
                 p.update(p - g * lr)
+        self.zero_grad()
 
 
 class SGD(Optimizer):
@@ -106,8 +164,15 @@ class SGD(Optimizer):
             for p in pg["params"]:
                 values.append(jt.zeros(p.shape, p.dtype).stop_grad())
 
-    def step(self, loss):
-        self.pre_step(loss)
+    def add_param_group(self, group):
+        values = group["values"] = []
+        for p in group["params"]:
+            values.append(jt.zeros(p.shape, p.dtype).stop_grad())
+        self.param_groups.append(group)
+
+    def step(self, loss=None):
+        if loss is not None:
+            self.pre_step(loss)
         for pg in self.param_groups:
             # get arguments from each param_groups
             lr = pg.get("lr", self.lr)
@@ -125,6 +190,7 @@ class SGD(Optimizer):
                     p.update(p - (dp + momentum * v) * lr)
                 else:
                     p.update(p - v * lr)
+        self.zero_grad()
 
 class RMSprop(Optimizer):
     """ RMSprop Optimizer.
@@ -149,8 +215,15 @@ class RMSprop(Optimizer):
             for p in pg["params"]:
                 values.append(jt.zeros(p.shape, p.dtype).stop_grad())
 
-    def step(self, loss):
-        self.pre_step(loss)
+    def add_param_group(self, group):
+        values = group["values"] = []
+        for p in group["params"]:
+            values.append(jt.zeros(p.shape, p.dtype).stop_grad())
+        self.param_groups.append(group)
+
+    def step(self, loss=None):
+        if loss is not None:
+            self.pre_step(loss)
         for pg in self.param_groups:
             # get arguments from each param_groups
             lr = pg.get("lr", self.lr)
@@ -160,6 +233,7 @@ class RMSprop(Optimizer):
                 if p.is_stop_grad(): continue
                 v.update(alpha * v + (1-alpha) * g * g)
                 p.update(p - lr * g / (jt.sqrt(v) + eps))
+        self.zero_grad()
 
 class Adam(Optimizer):
     """ Adam Optimizer.
@@ -184,8 +258,17 @@ class Adam(Optimizer):
                 values.append(jt.zeros(p.shape, p.dtype).stop_grad())
                 m.append(jt.zeros(p.shape, p.dtype).stop_grad())
 
-    def step(self, loss):
-        self.pre_step(loss)
+    def add_param_group(self, group):
+        values = group["values"] = []
+        m = group["m"] = []
+        for p in group["params"]:
+            values.append(jt.zeros(p.shape, p.dtype).stop_grad())
+            m.append(jt.zeros(p.shape, p.dtype).stop_grad())
+        self.param_groups.append(group)
+
+    def step(self, loss=None):
+        if loss is not None:
+            self.pre_step(loss)
         n = float(self.n_step)
         for pg in self.param_groups:
             # get arguments from each param_groups
@@ -198,3 +281,65 @@ class Adam(Optimizer):
                 v.update(b1 * v + (1-b1) * g * g)
                 step_size = lr * jt.sqrt(1-b1**n) / (1-b0 ** n)
                 p.update(p - m * step_size / (jt.sqrt(v) + eps))
+        self.zero_grad()
+
+
+class LRScheduler:
+    def __init__(self,optimizer, last_epoch=-1):
+        assert isinstance(optimizer,Optimizer)
+        self.optimizer = optimizer
+        
+        if last_epoch==-1:
+            for gp in optimizer.param_groups:
+                gp.setdefault('initial_lr',gp.get('lr',optimizer.lr))
+        else:
+            for gp in optimizer.param_groups:
+                assert 'initial_lr' in gp 
+        
+        self.base_lrs = list(map(lambda group: group['initial_lr'], optimizer.param_groups))
+        self.last_epoch = last_epoch
+        self.optimizer._step_count = 0
+        self._step_count = 0
+        self.step()
+
+    def get_lr(self):
+        raise NotImplementedError 
+    
+    def get_last_lr(self):
+        return self._last_lr
+
+    def step(self,epoch=None):
+        self._step_count += 1
+
+        if epoch is None:
+            self.last_epoch += 1
+            values = self.get_lr()
+        else:
+            self.last_epoch = epoch
+            values = self.get_lr()
+
+        for i, data in enumerate(zip(self.optimizer.param_groups, values)):
+            param_group, lr = data
+            param_group['lr'] = lr
+
+        self._last_lr = [group['lr'] for group in self.optimizer.param_groups]
+
+
+class LambdaLR(LRScheduler):
+
+    def __init__(self, optimizer, lr_lambda, last_epoch=-1):
+        if not isinstance(lr_lambda, list) and not isinstance(lr_lambda, tuple):
+            self.lr_lambdas = [lr_lambda] * len(optimizer.param_groups)
+        else:
+            if len(lr_lambda) != len(optimizer.param_groups):
+                raise ValueError("Expected {} lr_lambdas, but got {}".format(len(optimizer.param_groups), len(lr_lambda)))
+
+            self.lr_lambdas = list(lr_lambda)
+            
+        super(LambdaLR, self).__init__(optimizer, last_epoch)
+        
+        
+
+    def get_lr(self):
+        return [base_lr * lmbda(self.last_epoch)
+                for lmbda, base_lr in zip(self.lr_lambdas, self.base_lrs)]

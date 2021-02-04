@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -7,6 +8,8 @@
 #include "common.h"
 #include "profiler/cache_info.h"
 #include "op_compiler.h"
+#include "misc/cstr.h"
+#include "misc/nano_vector.h"
 
 namespace jittor {
 
@@ -23,6 +26,8 @@ struct Profiler {
         uint64_t compute_total;
         // cache test info
         unique_ptr<CacheInfo> cache_info;
+        cstr stack_info;
+        unordered_map<NanoVector, pair<uint64, uint64>> shapes;
 
         void update(int c, uint64_t t, uint64_t in, uint64_t out, uint64_t comp) {
             count += 1<<c;

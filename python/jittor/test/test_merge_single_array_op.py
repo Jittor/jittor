@@ -1,8 +1,9 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers: 
 #     Guoye Yang <498731903@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -45,8 +46,8 @@ def test(shape, op1, op2):
     with jt.log_capture_scope(log_v=0, log_vprefix="fused_op.cc=100") as logs:
         d__ = d.data
     logs = find_log_with_re(logs, 
-        "Jit (fused )?op key (not )?found: \[opkey0:array\]\[opkey1")
-    assert(len(logs)==1)
+        "Jit (fused )?op key (not )?found: \[opkey0:array\[T:float32")
+    assert(len(logs)==1), logs
 
     a_ = a.data
     b_ = b.data

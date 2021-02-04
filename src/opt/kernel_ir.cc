@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -66,13 +67,13 @@ string strip(const string& s) {
 }
 
 void KernelIR::del_scope() {
-    if (father && (type=="define" || type=="func")) {
+    if (father && (type=="define" || type=="func" || type=="macro")) {
         father->scope[attrs["lvalue"]].remove(this);
     }
 }
 
 void KernelIR::add_scope() {
-    if (father && (type=="define" || type=="func"))
+    if (father && (type=="define" || type=="func" || type=="macro"))
         father->scope[get_attr("lvalue")].push_back(this);
 }
 
@@ -303,7 +304,7 @@ void KernelIR::for_each_rev(Func&& func) {
 
 KernelIR* KernelIR::find_define(const string& name) {
     auto iter = scope.find(name);
-    if (iter == scope.end()) {
+    if (iter == scope.end() || iter->second.size()==0) {
         if (father)
             return father->find_define(name);
         return nullptr;
@@ -485,6 +486,7 @@ string KernelIR::to_string(int level, bool debug) {
         auto iter = attrs.find("code");
         ASSERT(iter != attrs.end()) << attrs << type << father;
         s << iter->second << "\n";
+        has_bc = attrs.count("has_bc");
     } else {
         s << "\n";
     }
@@ -590,6 +592,10 @@ KernelIR::KernelIR(const string& src, bool raw) {
             if (i==start && k==end) {
                 attrs["code"] = src;
                 type = "macro";
+                auto v = split(src, " ", 3);
+                ASSERT(v.size()>1);
+                attrs["lvalue"] = v.at(1);
+                attrs["rvalue"] = v.size()>2 ? v.at(2) : "";
                 return;
             } else {
                 push_back(src.substr(j, k-j), nullptr, raw);
@@ -650,6 +656,17 @@ KernelIR::KernelIR(const string& src, bool raw) {
             // func define
             if (s.size()>=2 && s.back()=='}') {
                 int l = s.find("{");
+                ASSERT(l != string::npos);
+                if (startswith(s, "namespace ")) {
+                    // namespace xxx {...}
+                    //               l
+                    attrs["code"] = s.substr(0, l);
+                    attrs["has_bc"] = "1";
+                    type = "";
+                    i = j + l;
+                    end--;
+                    continue;
+                }
                 int ll = s.rfind("(", l);
                 int rr = s.rfind(")", l);
                 // if () not found, maybe src like this:
@@ -903,6 +920,7 @@ void KernelIR::check_unused() {
 }
 
 void KernelIR::find_used(KernelIR* def, vector<KernelIR*>& used) {
+    if (has_attr("raw")) return;
     const char* ss[] = {"code", "rvalue", "rvalue2"};
     for (const char* s : ss) {
         auto& code = get_attr(s);
@@ -1024,11 +1042,11 @@ void KernelIR::split_loop(int i, int j) {
         inner[2]->attrs["code"] = lvalue+"+="+rvalue2+";";
         push_back("for ("+dtype+" id"+sj+"=0; id"+sj+"<range"+sj+"; id"+sj+"++) {}");
         auto& sloop = children.back();
-        int range, stride;
+        int range=0, stride=0;
         if (get_number("range"+si, range) && get_number("stride"+si, stride) && (range%stride==0))
             push_back(dtype+" range"+sj+" = "+S(stride)+";", &inner);
         else {
-            ASSERT(range != -1 && stride != -1) << range << stride;
+            ASSERT(range != -1 && stride != -1) << range << stride << si;
             push_back(dtype+" range"+sj+" = ::min(range"+si+"-id"+si+", stride"+si+");", &inner);
         }
         sloop->attrs["loop_id"] = sj;
@@ -1065,7 +1083,7 @@ void KernelIR::resplit() {
     // define
     push_front(dtype+" "+lvalue+" = 0;", &before);
     
-    int num;
+    int num=0;
     if (get_number(rvalue2, num)) {
         // range = number;
         inner[3]->attrs["rvalue"] = S(num);

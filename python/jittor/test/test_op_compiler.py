@@ -1,5 +1,6 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -120,7 +121,7 @@ class TestOpCompiler(unittest.TestCase):
         OP1
         1+2
         std::max(T(1), T(2))
-        ((1)+T(2)*(T(1)/T(count)))''')
+        ((1)+T(2)*(T(rcount)))''')
         expect_error(lambda: jit_precompile(vars, "@{a"))
         expect_error(lambda: jit_precompile(vars, "@for(a"))
         expect_error(lambda: jit_precompile(vars, "@for(i,l,r)"))

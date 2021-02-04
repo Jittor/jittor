@@ -1,18 +1,23 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors:
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers:
 #   Dun Liang <randonlang@gmail.com>.
 #   Meng-Hao Guo <guomenghao1997@gmail.com>
 #
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-__version__ = '1.1.7.4'
+__version__ = '1.2.2.28'
 from . import lock
 with lock.lock_scope():
+    ori_int = int
+    ori_float = float
+    ori_bool = bool
     from . import compiler
     from .compiler import LOG, has_cuda
     from .compiler import compile_custom_ops, compile_custom_op
+    import jittor_core
     import jittor_core as core
     from jittor_core import *
     from jittor_core.ops import *
@@ -30,8 +35,39 @@ from collections import OrderedDict
 from collections.abc import Sequence, Mapping
 import types
 import pickle
-import sys
+import hashlib
+import sys, os
 import traceback
+
+
+def safepickle(obj, path):
+    # Protocol version 4 was added in Python 3.4. It adds support for very large objects, pickling more kinds of objects, and some data format optimizations.
+    # ref: <https://docs.python.org/3/library/pickle.html>
+    s = pickle.dumps(obj, 4)
+    checksum = hashlib.sha1(s).digest()
+    s += bytes(checksum)
+    s += b"HCAJSLHD"
+    with open(path, 'wb') as f:
+        f.write(s)
+
+def safeunpickle(path):
+    if path.startswith("jittorhub://"):
+        path = path.replace("jittorhub://", "https://cg.cs.tsinghua.edu.cn/jittor/assets/build/checkpoints/")
+    if path.startswith("https:") or path.startswith("http:"):
+        base = path.split("/")[-1]
+        fname = os.path.join(compiler.ck_path, base)
+        from jittor.utils.misc import download_url_to_local
+        download_url_to_local(path, base, compiler.ck_path, None)
+        path = fname
+    with open(path, "rb") as f:
+        s = f.read()
+    if not s.endswith(b"HCAJSLHD"):
+        return pickle.loads(s)
+    checksum = s[-28:-8]
+    s = s[:-28]
+    if hashlib.sha1(s).digest() != checksum:
+        raise ValueError("Pickle checksum does not match! path: "+path)
+    return pickle.loads(s)
 
 class _call_no_record_scope:
     def __enter__(self): pass
@@ -89,6 +125,7 @@ class log_capture_scope(_call_no_record_scope):
         print(logs)
     """
     def __init__(self, **jt_flags):
+        jt_flags["use_parallel_op_compiler"] = 0
         self.fs = flag_scope(**jt_flags)
 
     def __enter__(self):
@@ -99,6 +136,8 @@ class log_capture_scope(_call_no_record_scope):
         LOG.log_capture_start()
         try:
             self.fs.__enter__()
+            if "log_v" in self.fs.jt_flags:
+                LOG.log_v = self.fs.jt_flags["log_v"]
             return self.logs
         except:
             LOG.log_capture_stop()
@@ -108,6 +147,8 @@ class log_capture_scope(_call_no_record_scope):
     def __exit__(self, *exc):
         global single_log_capture
         self.fs.__exit__(*exc)
+        if "log_v" in self.fs.jt_flags:
+            LOG.log_v = flags.log_v
         LOG.log_capture_stop()
         self.logs.extend(LOG.log_capture_read())
         single_log_capture = None
@@ -204,7 +245,11 @@ def array(data, dtype=None):
         if dtype is None:
             return data.clone()
         return cast(data, dtype)
-    if dtype != None:
+    if dtype is not None:
+        if isinstance(dtype, NanoString):
+            dtype = str(dtype)
+        elif callable(dtype):
+            dtype = dtype.__name__
         return ops.array(np.array(data, dtype))
     return ops.array(data)
 
@@ -225,10 +270,24 @@ def ones(shape, dtype="float32"):
         shape = (shape,)
     return unary(1, dtype).broadcast(shape)
 
+def ones_like(x):
+    return ones(x.shape,x.dtype)
+
 def zeros(shape, dtype="float32"):
     if not isinstance(shape, (NanoVector, Sequence)):
         shape = (shape,)
     return unary(0, dtype).broadcast(shape)
+
+def full(shape,val,dtype="float32"):
+    if not isinstance(shape, (NanoVector, Sequence)):
+        shape = (shape,)
+    return unary(val, dtype).broadcast(shape)
+
+def full_like(x,val):
+    return full(x.shape,val,x.dtype)
+
+def zeros_like(x):
+    return zeros(x.shape,x.dtype)
 
 flags = core.flags()
 
@@ -242,12 +301,12 @@ def std(x):
     return out
 Var.std = std
 
-def norm(x, k, dim):
+def norm(x, k, dim, keepdim=False):
     assert k==1 or k==2
     if k==1:
-        return x.abs().sum(dim)
+        return x.abs().sum(dim, keepdim)
     if k==2:
-        return (x.sqr()).sum(dim).maximum(1e-6).sqrt()
+        return (x.sqr()).sum(dim, keepdim).maximum(1e-6).sqrt()
 Var.norm = norm
 
 origin_reshape = reshape
@@ -271,7 +330,7 @@ def flatten(input, start_dim=0, end_dim=-1):
     in_shape = input.shape
     start_dim = len(in_shape) + start_dim if start_dim < 0 else start_dim
     end_dim = len(in_shape) + end_dim if end_dim < 0 else end_dim
-    assert end_dim > start_dim, "end_dim should be larger than start_dim for flatten function"
+    assert end_dim >= start_dim, "end_dim should be larger than or equal to start_dim for flatten function"
     out_shape = []
     for i in range(0,start_dim,1): out_shape.append(in_shape[i])
     dims = 1
@@ -281,9 +340,9 @@ def flatten(input, start_dim=0, end_dim=-1):
     return input.reshape(out_shape)
 Var.flatten = flatten
 
-def detach_inplace(x):
-    return x.swap(x.stop_grad().clone())
-Var.start_grad = Var.detach_inplace = detach_inplace
+def start_grad(x):
+    return x._update(x)
+Var.detach_inplace = Var.start_grad = start_grad
 
 def detach(x):
     return x.detach()
@@ -303,14 +362,23 @@ def squeeze(x, dim):
     return x.reshape(shape[:dim] + shape[dim+1:])
 Var.squeeze = squeeze
 
-def clamp(x, min_v, max_v):
-    assert min_v <= max_v
-    return x.maximum(min_v).minimum(max_v)
+def clamp(x, min_v=None, max_v=None):
+    if x.shape[0]==0:
+        return x
+    if min_v is not None and max_v is not None:
+        assert min_v <= max_v
+    if min_v is not None:
+        x = x.maximum(min_v)
+    if max_v is not None:
+        x = x.minimum(max_v)
+    return x
+
 Var.clamp = clamp
 
 def type_as(a, b):
     return a.unary(op=b.dtype)
 Var.type_as = type_as
+Var.astype = Var.cast
 
 def masked_fill(x, mask, value):
     assert list(x.shape) == list(mask.shape)
@@ -322,6 +390,12 @@ Var.masked_fill = masked_fill
 def sqr(x): return x*x
 Var.sqr = sqr
 
+def pow(x, y):
+    if isinstance(y, (ori_int, ori_float)) and y == 2:
+        return x.sqr()
+    return core.ops.pow(x, y)
+Var.pow = Var.__pow__ = pow
+
 def argmax(x, dim, keepdims:bool=False):
     return x.arg_reduce("max", dim, keepdims)
 Var.argmax = argmax
@@ -329,6 +403,44 @@ Var.argmax = argmax
 def argmin(x, dim, keepdims:bool=False):
     return x.arg_reduce("min", dim, keepdims)
 Var.argmin = argmin
+
+def randn(*size, dtype="float32", requires_grad=True):
+    if isinstance(size, tuple) and isinstance(size[0], (tuple, list, NanoVector)): size = size[0]
+    arr = jt.random(size, dtype, "normal")
+    if not requires_grad: return arr.stop_grad()
+    return arr
+
+def rand(*size, dtype="float32", requires_grad=True):
+    if isinstance(size, tuple) and isinstance(size[0], (tuple, list, NanoVector)): size = size[0]
+    arr = jt.random(size, dtype)
+    if not requires_grad: return arr.stop_grad()
+    return arr
+
+def rand_like(x, dtype=None):
+    if dtype is None: dtype = x.dtype
+    return jt.random(x.shape, x.dtype)
+
+def randn_like(x, dtype=None):
+    if dtype is None: dtype = x.dtype
+    return jt.random(x.shape, x.dtype, "normal")
+
+def randint(low, high=None, shape=(1,), dtype="int32"):
+    if high is None: low, high = 0, low
+    v = (jt.random(shape) * (high - low) + low).clamp(low, high-0.5)
+    return v.astype(dtype)
+
+def randint_like(x, low, high=None):
+    return randint(low, high, x.shape, x.dtype)
+
+def normal(mean, std, size=None, dtype="float32"):
+    if size is None:
+        if isinstance(mean, Var) and isinstance(std, Var):
+            assert mean.shape == std.shape
+            size = mean.shape
+        else:
+            if isinstance(mean, Var): size = mean.shape
+            if isinstance(std, Var): size = std.shape
+    return jt.init.gauss(size, dtype, mean, std)
 
 def attrs(var):
     return {
@@ -396,9 +508,39 @@ def display_memory_info():
     core.display_memory_info(fileline)
 
 def load(path):
-    pkl_file = open(path, 'rb')
-    model_dict = pickle.load(pkl_file)
+    if path.endswith(".pth"):
+        try:
+            dirty_fix_pytorch_runtime_error()
+            import torch
+        except:
+            raise RuntimeError("pytorch need to be installed when load pth format.")
+        model_dict = torch.load(path, map_location=torch.device('cpu'))
+    else:
+        model_dict = safeunpickle(path)
     return model_dict
+
+def save(params_dict, path):
+    def dfs(x):
+        if isinstance(x, list):
+            for i in range(len(x)):
+                x[i] = dfs(x[i])
+        elif isinstance(x, dict):
+            for k in x:
+                x[k] = dfs(x[k])
+        elif isinstance(x, Var):
+            return x.numpy()
+        return x
+    safepickle(dfs(params_dict), path)
+
+def _uniq(x):
+    a = set()
+    b = []
+    for i in x:
+        j = id(i)
+        if j not in a:
+            a.add(j)
+            b.append(i)
+    return b
 
 class Module:
     def __init__(self, *args, **kw):
@@ -453,13 +595,25 @@ class Module:
         def callback(parents, k, v, n):
             stack.append(str(k))
             for k2, p in v.__dict__.items():
+                if k2.startswith("_"): continue
                 if isinstance(p, Var):
                     ps.append(p)
                     p.name(".".join(stack[1:]+[str(k2)]))
         def callback_leave(parents, k, v, n):
             stack.pop()
         self.dfs([], None, callback, callback_leave)
-        return ps
+        return _uniq(ps)
+
+    def named_parameters(self):
+        ps = self.parameters()
+        return [ (p.name(), p) for p in ps ]
+
+    def state_dict(self):
+        ps = self.parameters()
+        return { p.name(): p for p in ps }
+
+    def load_state_dict(self, params):
+        self.load_parameters(params)
 
     def modules(self):
         ms = []
@@ -467,7 +621,53 @@ class Module:
             if isinstance(v, Module):
                 ms.append(v)
         self.dfs([], None, callback, None)
+        return _uniq(ms)
+
+    def named_modules(self):
+        ms = []
+        stack = []
+        def callback(parents, k, v, n):
+            if isinstance(v, Module):
+                stack.append(str(k))
+                name = ".".join(stack[1:])
+                ms.append((name, v))
+        def callback_leave(parents, k, v, n):
+            stack.pop()
+        self.dfs([], "", callback, callback_leave)
         return ms
+
+    def register_forward_hook(self, func):
+        cls = self.__class__
+        self.__fhook__ = func
+        if hasattr(cls, "__hooked__"):
+            return
+        cls.__hooked__ = True
+        origin_call = cls.__call__
+        def new_call(self, *args, **kw):
+            ret = origin_call(self, *args, **kw)
+            if hasattr(self, "__fhook__"):
+                if len(kw):
+                    self.__fhook__(self, args, ret, kw)
+                else:
+                    self.__fhook__(self, args, ret)
+            return ret
+        self.__class__.__call__ = new_call
+
+    def register_pre_forward_hook(self, func):
+        cls = self.__class__
+        self.__fhook2__ = func
+        if hasattr(cls, "__hooked2__"):
+            return
+        cls.__hooked2__ = True
+        origin_call = cls.__call__
+        def new_call(self, *args, **kw):
+            if hasattr(self, "__fhook2__"):
+                if len(kw):
+                    self.__fhook2__(self, args, kw)
+                else:
+                    self.__fhook2__(self, args)
+            return origin_call(self, *args, **kw)
+        self.__class__.__call__ = new_call
 
     def children(self):
         cd = []
@@ -490,6 +690,10 @@ class Module:
             ss.append(s)
         return ", ".join(ss)
 
+    def apply(self, func):
+        for m in self.modules():
+            func(m)
+
     def load_parameters(self, params):
         n_failed = 0
         for key in params.keys():
@@ -498,22 +702,28 @@ class Module:
             end = 0
             for k in key_:
                 if isinstance(v, nn.Sequential):
-                    if ori_int(k) >= len(v.layers):
-                        end = 1
-                        break
-                    else:
+                    if (k in v.layers):
+                        v = v[k]
+                    elif k.isdigit() and (ori_int(k) in v.layers):
                         v = v[ori_int(k)]
+                    else:
+                        end=1
+                        break
                 else:
                     if hasattr(v, k):
                         v = getattr(v, k)
+                        assert isinstance(v, (Module, Var)), \
+                            f"expect a jittor Module or Var, but got <{v.__class__.__name__}>, key: {key}"
                     else:
                         end = 1
                         break
-            if end ==1:
-                n_failed += 1
-                LOG.w(f'load parameter {key} failed ...')
-                pass
+            if end == 1:
+                if not key.endswith("num_batches_tracked"):
+                    n_failed += 1
+                    LOG.w(f'load parameter {key} failed ...')
             else:
+                assert isinstance(v, Var), \
+                    f"expect a jittor Var, but got <{v.__class__.__name__}>, key: {key}"
                 LOG.v(f'load parameter {key} success ...')
                 if isinstance(params[key], np.ndarray) or isinstance(params[key], list):
                     v.update(array(params[key]))
@@ -530,20 +740,10 @@ class Module:
         params_dict = {}
         for p in params:
             params_dict[p.name()] = p.data
-        with open(path, 'wb') as f:
-            pickle.dump(params_dict, f, pickle.HIGHEST_PROTOCOL)
+        safepickle(params_dict, path)
 
     def load(self, path):
-        if path.endswith(".pth"):
-            try:
-                dirty_fix_pytorch_runtime_error()
-                import torch
-            except:
-                raise RuntimeError("pytorch need to be installed when load pth format.")
-            self.load_parameters(torch.load(path, map_location=torch.device('cpu')))
-            return
-        with open(path, 'rb') as f:
-            self.load_parameters(pickle.load(f))
+        self.load_parameters(load(path))
 
     def eval(self):
         def callback(parents, k, v, n):
@@ -688,6 +888,11 @@ can also be None)::
     def dfs(self, parents, k, callback, callback_leave=None):
         pass
 
+    @classmethod
+    def apply(cls, *args, **kw):
+        func = cls()
+        return func(*args, **kw)
+
 
 def make_module(func, exec_n_args=1):
     class MakeModule(Module):
@@ -700,6 +905,7 @@ def make_module(func, exec_n_args=1):
             return f"{func.__name__}({self.extra_repr()})"
         def extra_repr(self):
             return ",".join(map(str, self.args))
+    MakeModule.__name__ = func.__name__
     return MakeModule
 
 
@@ -749,13 +955,47 @@ def jittor_exit():
     core.cleanup()
 atexit.register(jittor_exit)
 
-Var.__str__ = lambda x: str(x.data)
-Var.__repr__ = lambda x: str(x.data)
+def vtos(v):
+    return f"jt.Var({v.data}, dtype={v.dtype})"
+
+Var.__str__ = vtos
+Var.__repr__ = vtos
 Var.peek = lambda x: f"{x.dtype}{x.shape}"
 
+def size(v, dim=None):
+    if dim is None:
+        return v.shape
+    return v.shape[dim]
+Var.size = size
 
-ori_int = int
 
+def to_int(v):
+    dtype = str(v.dtype)
+    assert dtype.startswith("int")
+    return v.item()
+
+def to_float(v):
+    dtype = str(v.dtype)
+    assert dtype.startswith("float")
+    return v.item()
+
+def to_bool(v):
+    dtype = str(v.dtype)
+    assert dtype.startswith("int") or dtype=="bool"
+    return ori_bool(v.item())
+
+Var.__int__ = to_int
+Var.__float__ = to_float
+Var.__bool__ = to_bool
+
+def format(v, spec):
+    return v.item().__format__(spec)
+Var.__format__ = format
+
+def get_len(var):
+    return var.shape[0]
+
+Var.__len__ = get_len
 int = int32
 Var.int = Var.int32
 float = float32
@@ -763,10 +1003,20 @@ Var.float = Var.float32
 double = float64
 Var.double = Var.float64
 
+# __array__ interface is used for np.array(jt_var)
+Var.__array__ = Var.numpy
+Var.__array_priority__ = 2000
+# __reduce__, __module__ is used for pickle.dump and pickle.load
+Var.__module__ = "jittor"
+Var.__reduce__ = lambda self: (Var, (self.data,))
+
 from . import nn
+from . import attention
+from . import lr_scheduler
 from . import linalg
 from .nn import matmul
 from . import contrib
 from . import numpy2cupy
 from .contrib import concat
 from .misc import *
+from . import sparse

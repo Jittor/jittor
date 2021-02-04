@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -12,6 +13,9 @@
 namespace jittor {
 
 struct EventQueue {
+    static constexpr int RUNNING = 0;
+    static constexpr int OK = 1;
+    static constexpr int ERROR = 2;
     typedef void(*Func)();
     struct Worker {
         Func todo;
@@ -39,7 +43,7 @@ struct EventQueue {
     std::condition_variable cv;
     std::mutex mtx;
     Func func;
-    volatile bool run_sync_done;
+    volatile int run_sync_done;
 
     inline void flush() {
         list<Func> ts;
@@ -53,11 +57,11 @@ struct EventQueue {
 
     static void worker_caller();
 
-    void run_sync(Func func) {
+    int run_sync(Func func) {
         // send work to worker and do something by self
         std::unique_lock<std::mutex> l(mtx);
         this->func = func;
-        run_sync_done = false;
+        run_sync_done = RUNNING;
         // send func to worker
         worker.run(worker_caller);
         while (1) {
@@ -70,8 +74,8 @@ struct EventQueue {
                 func();
             l.lock();
             // worker is finished
-            if (run_sync_done)
-                return;
+            if (int ret = run_sync_done)
+                return ret;
         }
     }
 

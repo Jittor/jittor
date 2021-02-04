@@ -1,9 +1,10 @@
 
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers: 
 #     Wenyang Zhou <576825820@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -68,6 +69,19 @@ class TestPad(unittest.TestCase):
         check_equal(arr, jnn.ReflectionPad2d((2,3,34,1)), tnn.ReflectionPad2d((2,3,34,1)))
         check_equal(arr, jnn.ReflectionPad2d((10,123,34,1)), tnn.ReflectionPad2d((10,123,34,1)))
         check_equal(arr, jnn.ReflectionPad2d((100)), tnn.ReflectionPad2d((100)))
+
+        # ***************************************************************
+        # Test function pad
+        # ***************************************************************
+        arr = np.random.randn(16,3,224,224)
+        padding = (10,11,2,3)
+        for mode in ['constant','replicate','reflect','circular']:
+            j_data = jt.array(arr)
+            t_data = torch.tensor(arr)
+            t_output = tnn.functional.pad(t_data,padding,mode=mode).detach().numpy()
+            j_output = jnn.pad(j_data,padding,mode).numpy()
+            assert np.allclose(t_output,j_output)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,8 +1,9 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: 
 //     Guowei Yang <471184555@qq.com>
 //     Dun Liang <randonlang@gmail.com>. 
-// All Rights Reserved.
+// 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -79,13 +80,17 @@ static const char* short_type(Var* x) {
     }
 }
 
-void MklConvOp::jit_prepare() {
-    add_jit_define("Tx", short_type(x));
-    add_jit_define("Tw", short_type(w));
-    add_jit_define("Ty", short_type(y));
-    add_jit_define("XFORMAT", xformat);
-    add_jit_define("WFORMAT", wformat);
-    add_jit_define("YFORMAT", yformat);
+void MklConvOp::jit_prepare(JK& jk) {
+    jk << _CS("[Txd:") << x->dtype();
+    jk << _CS("][Tyd:") << y->dtype();
+    jk << _CS("][Twd:") << w->dtype();
+    jk << _CS("][Tx:") << short_type(x);
+    jk << _CS("][Tw:") << short_type(w);
+    jk << _CS("][Ty:") << short_type(y);
+    jk << _CS("][XFORMAT:") << xformat;
+    jk << _CS("][WFORMAT:") << wformat;
+    jk << _CS("][YFORMAT:") << yformat;
+    jk << ']';
 }
 
 #else // JIT

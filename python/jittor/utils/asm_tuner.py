@@ -1,9 +1,10 @@
 #!/usr/bin/python3
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers: 
 #     Guowei Yang <471184555@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -108,8 +109,7 @@ def pass_asm(cc_path,s_path):
     
     output_path=s_path.replace(".post.s",".s")
     with open(output_path,"w") as f:
-        for line in s_content:
-            f.write(line)
+        f.write("".join(s_content))
 
 def run_cmd(cmd):
     LOG.vvvv(f"Run cmd: {cmd}")

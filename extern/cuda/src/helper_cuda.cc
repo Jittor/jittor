@@ -13,8 +13,7 @@
 // These are CUDA Helper functions for initialization and error checking
 
 #include <cuda_runtime.h>
-#include <helper_cuda.h>
-
+#include "helper_cuda.h"
 
 #ifdef _CUFFT_H_
 // cuFFT API errors

@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -9,6 +10,7 @@
 #include "opt/pass/merge_loop_pass.h"
 
 namespace jittor {
+
 
 void MergeLoopPass::run() {
     auto choice = op->get_loop_option("merge", 1);
@@ -44,7 +46,7 @@ void MergeLoopPass::run() {
                 while (cpx < ki.size() && cpx<kj.size() && ki[cpx] == kj[cpx]) cpx++;
                 int mismatch = std::max(ki.size(), kj.size()) - cpx;
                 LOGvvvv << "loop key " << ki << kj << "mismatch" << mismatch;
-                if (mismatch>=2 || cpx==0)
+                if (mismatch>=1 || cpx==0)
                     continue;
                 loops[i]->insert(0, loops[j]->children);
                 loops[i]->merge_loop();

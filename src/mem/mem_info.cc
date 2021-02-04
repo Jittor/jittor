@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -14,8 +15,10 @@
 #include "misc/cuda_flags.h"
 #include "mem/allocator/sfrl_allocator.h"
 #include "mem/allocator/stat_allocator.h"
+#include "mem/allocator/temp_allocator.h"
 #include "mem/mem_info.h"
 #include "update_queue.h"
+#include "executor.h"
 
 namespace jittor {
 
@@ -41,9 +44,9 @@ std::ostream& operator<<(std::ostream& os, const FloatOutput& o) {
     return os << o.suffix;
 }
 
-void display_memory_info(const char* fileline, bool dump_var) {
+void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
     int p = 3;
-    Log log(fileline, 'i', 0);
+    Log log(fileline, red_color?'e':'i', 0);
     log << "\n=== display_memory_info ===\n";
     log << "total_cpu_ram:" << 
         FloatOutput{(double)mem_info.total_cpu_ram, " KMG", 1024, "B"};
@@ -100,7 +103,13 @@ void display_memory_info(const char* fileline, bool dump_var) {
     log << "cpu&gpu:" << FloatOutput{(double)all_total, " KMG", 1024, "B"}
         << "gpu:" << FloatOutput{(double)gpu_total, " KMG", 1024, "B"}
         << "cpu:" << FloatOutput{(double)cpu_total, " KMG", 1024, "B"} >> '\n';
-    
+    if (use_temp_allocator) {
+        TempAllocator* temp_allocator = (TempAllocator*)exe.temp_allocator;
+        log << "\nname:" << temp_allocator->name() << "\n";
+        log << "used_memory:" << FloatOutput{(double)temp_allocator->used_memory, " KMG", 1024, "B"} << "\n";
+        log << "unused_memory:" << FloatOutput{(double)temp_allocator->unused_memory, " KMG", 1024, "B"} << "\n";
+
+    }
     if (dump_var) {
         vector<Node*> queue;
         unordered_set<Node*> visited;

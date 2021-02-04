@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -12,7 +13,7 @@ namespace jittor {
 
 const int page_size = 4*1024;
 
-extern size_t protected_page;
+extern thread_local size_t protected_page;
 
 static size_t get_buffer_end_page(size_t buffer_end) {
     // get the last complete page in buffer
@@ -108,10 +109,10 @@ vector<pair<string,string>> parse_jit_keys(const string& s) {
                 val += c;
         }
     }
-    ASSERT(presum==0);
+    ASSERT(presum==0) << s;
     return jit_keys;
 }
 
-JitKey jk;
+thread_local JitKey jk;
 
 } // jittor

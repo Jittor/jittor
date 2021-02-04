@@ -1,11 +1,12 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>
-#include <helper_cuda.h>
+#include "helper_cuda.h"
 #include "mem/allocator/cuda_device_allocator.h"
 
 namespace jittor {
@@ -15,6 +16,7 @@ CudaDeviceAllocator cuda_device_allocator;
 const char* CudaDeviceAllocator::name() const {return "cuda_device";}
 
 void* CudaDeviceAllocator::alloc(size_t size, size_t& allocation) {
+    if (size==0) return (void*)0x10;
     void* ptr;
     try {
         checkCudaErrors(cudaMalloc(&ptr, size));
@@ -31,6 +33,7 @@ void* CudaDeviceAllocator::alloc(size_t size, size_t& allocation) {
 }
 
 void CudaDeviceAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
+    if (size==0) return;
     checkCudaErrors(cudaFree(mem_ptr));
 }
 

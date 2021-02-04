@@ -1,8 +1,9 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: 
 //     Dun Liang <randonlang@gmail.com>
 //     Guowei Yang <471184555@qq.com>
-// All Rights Reserved.
+// 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -42,8 +43,8 @@ static inline void set_shape(Var* x, const char* f, const string& format, int a,
         shape[0], shape[1], shape[2], shape[3]));
 }
 
-CudnnConvBackwardWOp::CudnnConvBackwardWOp(Var* x, Var* dy, int kernel_size, int stride, int padding, int dilation, int groups, string xformat, string wformat, string yformat)
-        : x(x), dy(dy), kernel_size(kernel_size), stride(stride), padding(padding), dilation(dilation), groups(groups),
+CudnnConvBackwardWOp::CudnnConvBackwardWOp(Var* x, Var* dy, int kh, int kw, int stride, int padding, int dilation, int groups, string xformat, string wformat, string yformat)
+        : x(x), dy(dy), kh(kh), kw(kw), stride(stride), padding(padding), dilation(dilation), groups(groups),
       xformat(move(xformat)), wformat(move(wformat)), yformat(move(yformat)) {
     flags.set(NodeFlags::_cuda, 1);
     flags.set(NodeFlags::_cpu, 0);
@@ -57,18 +58,19 @@ void CudnnConvBackwardWOp::infer_shape() {
     get_shape(x, "abcd", xformat, xn, xc, xh, xw);
     get_shape(dy, "abcd", yformat, yn, yc, yh, yw);
     wco = yc, wci = xc / groups;
-    wh = kernel_size;
-    ww = kernel_size;
+    wh = kh;
+    ww = kw;
     set_shape(dw, "oihw", wformat, wco, wci, wh, ww);
 }
 
-void CudnnConvBackwardWOp::jit_prepare() {
-    add_jit_define("Tx", x->dtype());
-    add_jit_define("Ty", dy->dtype());
-    add_jit_define("Tw", dw->dtype());
-    add_jit_define("XFORMAT", xformat);
-    add_jit_define("WFORMAT", wformat);
-    add_jit_define("YFORMAT", yformat);
+void CudnnConvBackwardWOp::jit_prepare(JK& jk) {
+    jk << _CS("[Tx:") << x->dtype();
+    jk << _CS("][Ty:") << dy->dtype();
+    jk << _CS("][Tw:") << dw->dtype();
+    jk << _CS("][XFORMAT:") << xformat;
+    jk << _CS("][WFORMAT:") << wformat;
+    jk << _CS("][YFORMAT:") << yformat;
+    jk << ']';
 }
 unordered_map<string, cudnnConvolutionBwdFilterAlgo_t> bwdw_algo_cache;
 
@@ -197,11 +199,11 @@ void CudnnConvBackwardWOp::jit_run() {
                 size_t sz;
                 cudnnStatus_t ret = cudnnGetConvolutionBackwardFilterWorkspaceSize(handle_, cudnnIdesc, cudnnOdesc, cudnnConvDesc, cudnnFdesc, algos[i], &sz);
                 // continue if use too much workspace
-                if (sz*4 > mem_info.total_cuda_ram) continue;
+                if (sz > mem_info.total_cuda_ram * max_workspace_ratio) continue;
                 if (CUDNN_STATUS_SUCCESS == ret && sz > max_ws_size) max_ws_size = sz;
             } 
             size_t allocation;
-            void* ws = exe.allocator->alloc(max_ws_size, allocation);
+            void* ws = exe.temp_allocator->alloc(max_ws_size, allocation);
             checkCudaErrors(cudnnFindConvolutionBackwardFilterAlgorithmEx(
                 handle_,
                 cudnnIdesc, x->ptr<Tx>(),
@@ -213,7 +215,7 @@ void CudnnConvBackwardWOp::jit_run() {
                 perf_results,
                 ws,
                 max_ws_size));
-            exe.allocator->free(ws, max_ws_size, allocation);
+            exe.temp_allocator->free(ws, max_ws_size, allocation);
         } else {
             checkCudaErrors(cudnnGetConvolutionBackwardFilterAlgorithm_v7(
                 handle_,
@@ -248,7 +250,7 @@ void CudnnConvBackwardWOp::jit_run() {
         cudnnFdesc, algo, &workSpaceSize));
     size_t allocation;
     if (workSpaceSize > 0) {
-        workSpace = exe.allocator->alloc(workSpaceSize, allocation);
+        workSpace = exe.temp_allocator->alloc(workSpaceSize, allocation);
     }
     float alpha=1, beta=0;
     checkCudaErrors(cudnnConvolutionBackwardFilter(
@@ -263,7 +265,7 @@ void CudnnConvBackwardWOp::jit_run() {
         cudnnFdesc,  w->ptr<Tw>())
     );
     if (workSpace)
-        exe.allocator->free(workSpace, workSpaceSize, allocation);
+        exe.temp_allocator->free(workSpace, workSpaceSize, allocation);
         
     checkCudaErrors(cudnnDestroyTensorDescriptor( cudnnIdesc ));
     checkCudaErrors(cudnnDestroyFilterDescriptor( cudnnFdesc ));

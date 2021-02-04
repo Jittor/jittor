@@ -1,8 +1,9 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers: 
 #     Meng-Hao Guo <guomenghao1997@gmail.com>
 #     Dun Liang <randonlang@gmail.com>. 
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -15,8 +16,6 @@ from jittor.dataset.utils import get_random_list, get_order_list, collate_batch,
 from collections.abc import Sequence, Mapping
 import pathlib
 from PIL import Image
-from jittor_utils import ring_buffer
-from jittor_utils.ring_buffer import RingBuffer
 import multiprocessing as mp
 import signal
 from jittor_utils import LOG
@@ -29,9 +28,10 @@ mpi = jt.mpi
 img_open_hook = HookTimer(Image, "open")
 
 class Worker:
-    def __init__(self, target, args, buffer_size):
-        buffer = mp.Array('c', buffer_size, lock=False)
-        self.buffer = RingBuffer(buffer)
+    def __init__(self, target, args, buffer_size, keep_numpy_array=False):
+        self.buffer = jt.RingBuffer(buffer_size)
+        self.buffer.keep_numpy_array(keep_numpy_array)
+
         self.status = mp.Array('f', 5, lock=False)
         self.p = mp.Process(target=target, args=args+(self.buffer,self.status))
         self.p.daemon = True
@@ -69,7 +69,8 @@ class Dataset(object):
                  drop_last = False,
                  num_workers = 0,
                  buffer_size = 512*1024*1024,
-                 stop_grad = True):
+                 stop_grad = True,
+                 keep_numpy_array = False):
         super().__init__()
         self.total_len = None
         self.batch_size = batch_size
@@ -78,16 +79,20 @@ class Dataset(object):
         self.num_workers = num_workers
         self.buffer_size = buffer_size
         self.stop_grad = stop_grad
+        self.keep_numpy_array = keep_numpy_array
 
     def __getitem__(self, index):
         raise NotImplementedError
 
-    def __len__(self):
+    def __batch_len__(self):
         assert self.total_len >= 0
         assert self.batch_size > 0
         if self.drop_last:
             return self.total_len // self.batch_size
         return (self.total_len-1) // self.batch_size + 1
+
+    def __len__(self):
+        return self.__batch_len__()
 
     def set_attrs(self, **kw):
         ''' 
@@ -100,7 +105,7 @@ class Dataset(object):
         Attrs:
 
             * batch_size(int): batch size, default 16.
-            * totol_len(int): totol lenght.
+            * total_len(int): total lenght.
             * shuffle(bool): shuffle at each epoch, default False.
             * drop_last(bool): if true, the last batch of dataset might smaller than batch_size, default True.
             * num_workers: number of workers for loading data
@@ -110,17 +115,21 @@ class Dataset(object):
         for k,v in kw.items():
             assert hasattr(self, k), k
             setattr(self, k, v)
+        self.reset()
         return self
 
     def to_jittor(self, batch):
         '''
         Change batch data to jittor array, such as np.ndarray, int, and float.
         '''
+        if self.keep_numpy_array: return batch
+        if isinstance(batch, jt.Var): return batch
         to_jt = lambda x: jt.array(x).stop_grad() \
             if self.stop_grad else jt.array(x)
         if isinstance(batch, np.ndarray):
             return to_jt(batch)
-        assert isinstance(batch, Sequence)
+        if not isinstance(batch, (list, tuple)):
+            return batch
         new_batch = []
         for a in batch:
             if isinstance(a, np.ndarray) or \
@@ -128,7 +137,7 @@ class Dataset(object):
                 isinstance(a, float):
                 new_batch.append(to_jt(a))
             else:
-                new_batch.append(a)
+                new_batch.append(self.to_jittor(a))
         return new_batch
 
     def collate_batch(self, batch):
@@ -151,6 +160,14 @@ class Dataset(object):
                 w.p.terminate()
     
     def _worker_main(self, worker_id, buffer, status):
+        import jittor_utils
+        jittor_utils.cc.init_subprocess()
+        jt.jt_init_subprocess()
+        # parallel_op_compiler still problematic,
+        # it is not work on ubuntu 16.04. but worked on ubuntu 20.04
+        # it seems like the static value of parallel compiler
+        # is not correctly init.
+        jt.flags.use_parallel_op_compiler = 0
         import time
         try:
             gid_obj = self.gid.get_obj()
@@ -159,7 +176,7 @@ class Dataset(object):
             while True:
                 # get id
                 with gid_lock:
-                    while gid_obj.value >= self.batch_len:
+                    while gid_obj.value >= self.batch_len or buffer.is_stop():
                         self.num_idle.value += 1
                         self.num_idle_c.notify()
                         self.gidc.wait()
@@ -186,7 +203,12 @@ class Dataset(object):
                 # send data to main process
                 if mp_log_v:
                     print(f"#{worker_id} {os.getpid()} send", type(batch).__name__, [ type(b).__name__ for b in batch ], buffer)
-                buffer.send(batch)
+                try:
+                    buffer.send(batch)
+                except:
+                    if buffer.is_stop():
+                        continue
+                    raise
                 now = time.time()
                 send_time = now - start
                 start = now
@@ -250,16 +272,18 @@ Example::
         msg.append(f"progress:{self.last_id}/{self.batch_len}")
         msg.append(f"batch(s): {self.batch_time:.3f}\twait(s):{self.wait_time:.3f}")
         msg.append(f"recv(s): {self.recv_time:.3f}\tto_jittor(s):{self.to_jittor_time:.3f}")
-        msg.append(f"recv_raw_call: {ring_buffer.recv_raw_call}")
         msg.append(f"last 10 workers: {self.idmap[max(0, self.last_id-9):self.last_id+1]}")
         msg.append(f"ID\twait(s)\topen(s)\tload(s)\tsend(s)\ttotal(s)")
         for i in range(self.num_workers):
             w = self.workers[i]
             s = w.status
-            msg.append(f"#{i}\t{s[0]:.3f}\t{s[4]:.3f}\t{s[1]:.3f}\t{s[2]:.3f}\t{s[3]:.3f}\t{w.buffer.allocator}")
+            msg.append(f"#{i}\t{s[0]:.3f}\t{s[4]:.3f}\t{s[1]:.3f}\t{s[2]:.3f}\t{s[3]:.3f}\t{w.buffer}")
         LOG.i('\n'.join(msg))
 
     def _stop_all_workers(self):
+        # stop workers
+        for w in self.workers:
+            w.buffer.stop()
         # wait until all workers idle
         if self.num_idle.value < self.num_workers:
             with self.gid.get_lock():
@@ -275,6 +299,8 @@ Example::
             w.buffer.clear()
             
     def _init_workers(self):
+        jt.clean()
+        jt.gc()
         self.index_list = mp.Array('i', self.real_len, lock=False)
         workers = []
         # batch id to worker id
@@ -289,10 +315,25 @@ Example::
         self.num_idle_c = mp.Condition(self.gid.get_lock())
         for i in range(self.num_workers):
             w = Worker(target=self._worker_main, args=(i,), 
-                       buffer_size=self.buffer_size)
+                       buffer_size=self.buffer_size,
+                       keep_numpy_array=self.keep_numpy_array)
             workers.append(w)
         self.workers = workers
         self.index_list_numpy = np.ndarray(dtype='int32', shape=self.real_len, buffer=self.index_list)
+
+    def reset(self):
+        if not hasattr(self, "workers"):
+            return
+        self._stop_all_workers()
+        self.terminate()
+        del self.index_list
+        del self.idmap
+        del self.gid
+        del self.gidc
+        del self.num_idle
+        del self.num_idle_c
+        del self.workers
+        del self.index_list_numpy
 
     def __del__(self):
         if mp_log_v:
@@ -300,6 +341,8 @@ Example::
         self.terminate()
 
     def __iter__(self):
+        if self.total_len is None:
+            self.total_len = len(self)
         if self.shuffle == False:
             index_list = get_order_list(self.total_len)
         else:
@@ -349,12 +392,12 @@ Example::
             self.real_len = len(index_list)
             self.real_batch_size = real_batch_size
             assert self.total_len // self.batch_size == \
-                self.real_len // self.real_batch_size
+                self.real_len // self.real_batch_size, f"Number of batches({self.total_len // self.batch_size}!={self.real_len // self.real_batch_size}) not match, total_len: {self.total_len}, batch_size: {self.batch_size}, real_len: {self.real_len}, real_batch_size: {self.real_batch_size}"
         else:
             self.real_len = self.total_len
             self.real_batch_size = self.batch_size
             
-        self.batch_len = len(self)
+        self.batch_len = self.__batch_len__()
         
         if not hasattr(self, "workers") and self.num_workers:
             self._init_workers()

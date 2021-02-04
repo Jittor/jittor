@@ -1,5 +1,6 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -21,7 +22,8 @@ class Linear(Module):
         self.b = jt.random((out_features,))-0.5 if bias else None
     def execute(self, x):
         x = matmul(x, self.w)
-        if self.b: return x+self.b
+        if self.b is not None: 
+            return x+self.b
         return x
 
 def relu(x):

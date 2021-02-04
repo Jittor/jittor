@@ -1,5 +1,6 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -18,6 +19,7 @@ import jittor_utils as jit_utils
 from jittor_utils import LOG, run_cmd, cache_path, find_exe, cc_path, cc_type, cache_path
 from . import pyjt_compiler
 from . import lock
+from jittor import __version__
 
 def find_jittor_path():
     return os.path.dirname(__file__)
@@ -46,6 +48,7 @@ def compile(compiler, flags, inputs, output, combind_build=False):
             run_cmd(cmd)
             return True
     link = link_flags
+    base_output = output.split('/')[-1].split('.')[0]
     # if output is core, add core_link_flags
     if output.startswith("jittor_core"):
         link = link + core_link_flags
@@ -72,12 +75,19 @@ def compile(compiler, flags, inputs, output, combind_build=False):
     for input, obj_file in zip(inputs, obj_files):
         cc = compiler
         nflags = oflags
-        if has_cuda and input.endswith(".cu"):
-            nflags = convert_nvcc_flags(oflags)
-            cc = nvcc_path
+        if input.endswith(".cu"):
+            if has_cuda:
+                nflags = convert_nvcc_flags(oflags)
+                cc = nvcc_path
+            else:
+                continue
         cmd = f"{cc} {input} {nflags} -c {lto_flags} -o {obj_file}"
+        if "nan_checker" in input:
+            # nan checker needs to disable fast_math 
+            cmd = cmd.replace("--use_fast_math", "")
+            cmd = cmd.replace("-Ofast", "-O2")
         cmds.append(cmd)
-    jit_utils.run_cmds(cmds, cache_path, jittor_path)
+    jit_utils.run_cmds(cmds, cache_path, jittor_path, "Compiling "+base_output)
     cmd = f"{compiler} {' '.join(obj_files)} {flags} {lto_flags} {link} -o {output}"
     return do_compile(cmd)
 
@@ -240,38 +250,38 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
         if "multiple_outputs" not in attrs:
             jit_cc_src.append(f"""
             VarPtr make_{cc_func_name}({", ".join(cc_make_args)}) {{
-                Op* _op = new {op_name}({", ".join(op_make_args)});
+                auto _op = new {op_name}({", ".join(op_make_args)});
                 if (_op->outputs_holder.size() != 1) {{
                     delete _op;
                     LOGf << "Wrong output size of" << \"{op_name}\";
                 }}
                 if (_op->flags.get(NodeFlags::_forwarded)) {{
-                    VarPtr output(move(_op->outputs_holder[0]));
+                    VarPtr _out(move(_op->outputs_holder[0]));
                     delete _op;
-                    return output;
+                    return _out;
                 }}
                 _op->outputs_holder[0]->set_inputs({{_op}});
-                VarPtr output(move(_op->outputs_holder[0]));
+                VarPtr _out(move(_op->outputs_holder[0]));
                 {src.replace("->var","")};
                 _op->init();
-                return output;
+                return _out;
             }}
             """)
         else:
             jit_cc_src.append(f"""
             vector<VarPtr> make_{cc_func_name}({", ".join(cc_make_args)}) {{
-                Op* _op = new {op_name}({", ".join(op_make_args)});
+                auto _op = new {op_name}({", ".join(op_make_args)});
                 if (_op->flags.get(NodeFlags::_forwarded)) {{
-                    vector<VarPtr> outputs = move(_op->outputs_holder);
+                    vector<VarPtr> _outs = move(_op->outputs_holder);
                     delete _op;
-                    return outputs;
+                    return _outs;
                 }}
-                vector<VarPtr> outputs = move(_op->outputs_holder);
-                for (uint i=0; i<outputs.size(); i++)
-                    outputs[i]->set_inputs({{_op}});
+                vector<VarPtr> _outs = move(_op->outputs_holder);
+                for (uint i=0; i<_outs.size(); i++)
+                    _outs[i]->set_inputs({{_op}});
                 {src.replace("->var","")};
                 _op->init();
-                return outputs;
+                return _outs;
             }}
             """)
         if pybind_name == 'None':
@@ -289,7 +299,14 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
             /*{doc_string}*/
             // @pyjt({",".join(pyjt_names)})
             vector<VarHolder*> {cc_func_name}({", ".join(cc_args)}) {{
-                return make_vh_vector(make_{cc_func_name}({", ".join(op_args)}));
+                {   f'return make_vh_vector(make_{cc_func_name}({", ".join(op_args)}));'
+                    if "replace_outputs" not in attrs else
+                    f'''auto rt = make_vh_vector(make_{cc_func_name}({", ".join(op_args)}));
+                    ASSERT(rt.size() == outputs.size());
+                    for (int i=0; i<outputs.size(); i++)
+                        outputs[i]->assign(rt[i]);
+                    return rt;
+                    '''}
             }}
             """)
         else:
@@ -407,6 +424,15 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
                         arg_type.replace("Var", "VarHolder")+' '+arg)
                     new_args.append(arg)
                     more_src.append(f"_op->add_inputs({arg});")
+                elif arg_type.startswith("VarSlices"):
+                    new_args_def.append(arg_def)
+                    new_args.append(arg)
+                    more_src.append(f"""
+                        vector<Var*> svars;
+                        for (int i=0; i<_op->vs.n; i++)
+                            if (_op->vs.slices[i].is_var())
+                                svars.push_back(_op->vs.slices[i].var);
+                        _op->add_inputs(svars);""")
                 else:
                     new_args_def.append(arg_def)
                     new_args.append(arg)
@@ -605,7 +631,7 @@ def compile_custom_ops(
     if len(gen_name) > 100:
         gen_name = gen_name[:80] + "___hash" + str(hash(gen_name))
 
-    includes = set(includes)
+    includes = sorted(list(set(includes)))
     includes = "".join(map(lambda x: f" -I'{x}' ", includes))
     LOG.vvvv(f"Include flags:{includes}")
 
@@ -784,11 +810,16 @@ def try_find_exe(*args):
 def check_pybt(gdb_path, python_path):
     if gdb_path=='' or python_path=='':
         return False
-    ret = sp.getoutput(f"{gdb_path} --batch {python_path} -ex 'help py-bt'")
-    if 'python frame' in ret:
-        LOG.v("py-bt found in gdb.")
-        return True
-    return False
+    return True
+    # TODO: prev we use below code to check has py-bt or nor
+    # but it is too slow, so we comment it,
+    # find a better way to check py-bt exist
+
+    # ret = sp.getoutput(f"{gdb_path} --batch {python_path} -ex 'help py-bt'")
+    # if 'python frame' in ret:
+    #     LOG.v("py-bt found in gdb.")
+    #     return True
+    # return False
 
 def check_debug_flags():
     global is_debug
@@ -798,7 +829,7 @@ def check_debug_flags():
         global cc_flags
         cc_flags += " -g -DNODE_MEMCHECK "
 
-cc_flags = " " + os.environ.get("cc_flags", "")
+cc_flags = " "
 # os.RTLD_NOW | os.RTLD_GLOBAL cause segfault when import torch first
 import_flags = os.RTLD_NOW | os.RTLD_GLOBAL | os.RTLD_DEEPBIND
 # if cc_type=="icc":
@@ -813,27 +844,21 @@ jittor_path = find_jittor_path()
 check_debug_flags()
 
 sys.path.append(cache_path)
+LOG.i(f"Jittor({__version__}) src: {jittor_path}")
+LOG.i(f"{jit_utils.cc_type} at {jit_utils.cc_path}")
+LOG.i(f"cache_path: {cache_path}")
 
 with jit_utils.import_scope(import_flags):
     jit_utils.try_import_jit_utils_core()
 
 python_path = sys.executable
-py3_config_paths = [
-    sys.executable + "-config",
-    os.path.dirname(sys.executable) + f"/python3.{sys.version_info.minor}-config",
-    f"/usr/bin/python3.{sys.version_info.minor}-config",
-    os.path.dirname(sys.executable) + "/python3-config",
-]
-if "python_config_path" in os.environ:
-    py3_config_paths.insert(0, os.environ["python_config_path"])
+# something python do not return the correct sys executable
+# this will happend when multiple python version installed
+ex_python_path = python_path + '.' + str(sys.version_info.minor)
+if os.path.isfile(ex_python_path):
+    python_path = ex_python_path
+py3_config_path = jit_utils.py3_config_path
 
-for py3_config_path in py3_config_paths:
-    if os.path.isfile(py3_config_path):
-        break
-else:
-    raise RuntimeError(f"python3.{sys.version_info.minor}-config "
-        "not found in {py3_config_paths}, please specify "
-        "enviroment variable 'python_config_path'")
 nvcc_path = env_or_try_find('nvcc_path', '/usr/local/cuda/bin/nvcc')
 gdb_path = try_find_exe('gdb')
 addr2line_path = try_find_exe('addr2line')
@@ -841,6 +866,8 @@ has_pybt = check_pybt(gdb_path, python_path)
 
 cc_flags += " -Wall -Werror -Wno-unknown-pragmas -std=c++14 -fPIC -march=native "
 cc_flags += " -fdiagnostics-color=always "
+if "cc_flags" in os.environ:
+    cc_flags += os.environ["cc_flags"] + ' '
 link_flags = " -lstdc++ -ldl -shared "
 core_link_flags = ""
 opt_flags = ""
@@ -867,10 +894,12 @@ make_cache_dir(cache_path)
 make_cache_dir(os.path.join(cache_path, "jit"))
 make_cache_dir(os.path.join(cache_path, "obj_files"))
 make_cache_dir(os.path.join(cache_path, "gen"))
+ck_path = os.path.join(cache_path, "checkpoints")
+make_cache_dir(ck_path)
 
 # build cache_compile
-cc_flags += pybind_include
 cc_flags += f" -I{jittor_path}/src "
+cc_flags += pybind_include
 check_cache_compile()
 LOG.v(f"Get cache_compile: {jit_utils.cc}")
 
@@ -916,7 +945,8 @@ pyjt_gen_src = pyjt_compiler.compile(cache_path, jittor_path)
 # 3. op_utils
 # 4. other
 files2 = pyjt_gen_src
-files4 = run_cmd('find -L src | grep "cc$"', jittor_path).splitlines()
+grep_args = '"c[cu]$"' if has_cuda else '"cc$"'
+files4 = run_cmd('find -L src | grep '+grep_args, jittor_path).splitlines()
 at_beginning = [
     "src/ops/op_utils.cc",
     "src/event_queue.cc",
@@ -954,10 +984,11 @@ assert libname is not None, "openmp library not found"
 ctypes.CDLL(libname, os.RTLD_NOW | os.RTLD_GLOBAL)
 
 version_file = os.path.join(jittor_path, "version")
-if os.path.isfile(version_file):
+if os.path.isfile(version_file) and not os.path.isdir(os.path.join(jittor_path, "src", "__data__")):
     with open(version_file, 'r') as f:
         version = f.read().strip()
-    key = f"{version}-{cc_type}-{'cuda' if has_cuda else 'cpu'}.o"
+    # key = f"{version}-{cc_type}-{'cuda' if has_cuda else 'cpu'}.o"
+    key = f"{version}-g++-cpu.o"
     # TODO: open the website
     extra_obj = os.path.join(cache_path, key)
     url = os.path.join("https://cg.cs.tsinghua.edu.cn/jittor/assets/build/"+key)
@@ -974,7 +1005,9 @@ with jit_utils.import_scope(import_flags):
 
 flags = core.flags()
 if has_cuda:
-    nvcc_flags += f" -arch={','.join(map(lambda x:'sm_'+str(x),flags.cuda_archs))} "
+    if len(flags.cuda_archs):
+        nvcc_flags += f" -arch=compute_{min(flags.cuda_archs)} "
+        nvcc_flags += ''.join(map(lambda x:f' -code=sm_{x} ', flags.cuda_archs))
 
 flags.cc_path = cc_path
 flags.cc_type = cc_type

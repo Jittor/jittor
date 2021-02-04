@@ -1,5 +1,6 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -161,6 +162,17 @@ class TestGrad(unittest.TestCase):
         assert b.data == 11
         jt.clean()
         assert jt.liveness_info()["lived_vars"] == 2
+
+    def test_requires_grad(self):
+        a = jt.array(2.0)
+        assert a.requires_grad == True
+        a.requires_grad = False
+        assert a.requires_grad == False
+        assert jt.grad(a**2, a) == 0
+        a.requires_grad = True
+        assert a.requires_grad == True
+        assert jt.grad(a**2, a) == 4
+
 
 if __name__ == "__main__":
     unittest.main()

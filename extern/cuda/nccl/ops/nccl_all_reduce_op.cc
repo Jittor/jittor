@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2020 
+// Copyright (c) 2021 
 //     Guoye Yang <498731903@qq.com>. 
 //     Dun Liang <randonlang@gmail.com>. 
 // All Rights Reserved.
@@ -12,7 +12,7 @@
 
 #include <nccl.h>
 #include <cuda_runtime.h>
-#include <helper_cuda.h>
+#include "helper_cuda.h"
 #include "nccl_warper.h"
 #include "ops/op_register.h"
 namespace jittor {
@@ -36,8 +36,8 @@ VarPtr NcclAllReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     return nccl_all_reduce(dout);
 }
 
-void NcclAllReduceOp::jit_prepare() {
-    add_jit_define("Tx", x->dtype());
+void NcclAllReduceOp::jit_prepare(JK& jk) {
+    jk << _CS("[Tx:") << x->dtype() << ']';
 }
 
 #else // JIT

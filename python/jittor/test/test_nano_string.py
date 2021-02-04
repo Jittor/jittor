@@ -1,5 +1,6 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -24,7 +25,7 @@ class TestNanoString(unittest.TestCase):
         # t is about 0.01 for 100w loop
         # 92ns one loop
         print("nanostring time", t)
-        assert t < [1.5e-7, 1.7e-7][mid], t
+        assert t < [1.5e-7, 1.9e-7][mid], t
 
         assert (jt.hash("asdasd") == 4152566416)
         assert str(jt.NanoString("float"))=="float32"

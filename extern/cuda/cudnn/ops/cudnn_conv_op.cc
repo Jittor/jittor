@@ -1,6 +1,7 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. 
-// All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
+// 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -64,13 +65,14 @@ void CudnnConvOp::infer_shape() {
     set_shape(y, "abcd", yformat, yn, yc, yh, yw);
 }
 
-void CudnnConvOp::jit_prepare() {
-    add_jit_define("Tx", x->dtype());
-    add_jit_define("Tw", w->dtype());
-    add_jit_define("Ty", y->dtype());
-    add_jit_define("XFORMAT", xformat);
-    add_jit_define("WFORMAT", wformat);
-    add_jit_define("YFORMAT", yformat);
+void CudnnConvOp::jit_prepare(JK& jk) {
+    jk << _CS("[Tx:") << x->dtype();
+    jk << _CS("][Ty:") << y->dtype();
+    jk << _CS("][Tw:") << w->dtype();
+    jk << _CS("][XFORMAT:") << xformat;
+    jk << _CS("][WFORMAT:") << wformat;
+    jk << _CS("][YFORMAT:") << yformat;
+    jk << ']';
 }
 unordered_map<string, cudnnConvolutionFwdAlgo_t> fwd_algo_cache;
 
@@ -202,11 +204,11 @@ void CudnnConvOp::jit_run() {
                     handle_, cudnnIdesc, cudnnFdesc, cudnnConvDesc, 
                     cudnnOdesc, algos[i], &sz);
                 // continue if use too much workspace
-                if (sz*4 > mem_info.total_cuda_ram) continue;
+                if (sz > mem_info.total_cuda_ram * max_workspace_ratio) continue;
                 if (CUDNN_STATUS_SUCCESS == ret && sz > max_ws_size) max_ws_size = sz;
             } 
             size_t allocation;
-            void* ws = exe.allocator->alloc(max_ws_size, allocation);
+            void* ws = exe.temp_allocator->alloc(max_ws_size, allocation);
             checkCudaErrors(cudnnFindConvolutionForwardAlgorithmEx(
                 handle_,
                 cudnnIdesc, x->ptr<Tx>(),
@@ -218,7 +220,7 @@ void CudnnConvOp::jit_run() {
                 perf_results,
                 ws,
                 max_ws_size));
-            exe.allocator->free(ws, max_ws_size, allocation);
+            exe.temp_allocator->free(ws, max_ws_size, allocation);
         } else {
             checkCudaErrors(cudnnGetConvolutionForwardAlgorithm_v7(
                 handle_,
@@ -253,7 +255,7 @@ void CudnnConvOp::jit_run() {
         cudnnOdesc, algo, &workSpaceSize) );
     size_t allocation;
     if (workSpaceSize > 0) {
-        workSpace = exe.allocator->alloc(workSpaceSize, allocation);
+        workSpace = exe.temp_allocator->alloc(workSpaceSize, allocation);
     }
     float alpha=1, beta=0;
     checkCudaErrors(cudnnConvolutionForward(
@@ -268,7 +270,7 @@ void CudnnConvOp::jit_run() {
         cudnnOdesc, y->ptr<Ty>())
     );
     if (workSpace)
-        exe.allocator->free(workSpace, workSpaceSize, allocation);
+        exe.temp_allocator->free(workSpace, workSpaceSize, allocation);
 
     checkCudaErrors(cudnnDestroyTensorDescriptor( cudnnIdesc ));
     checkCudaErrors(cudnnDestroyFilterDescriptor( cudnnFdesc ));

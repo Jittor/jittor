@@ -1,8 +1,9 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: 
 //     Dun Liang <randonlang@gmail.com>
 //     Guowei Yang <471184555@qq.com>
-// All Rights Reserved.
+// 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -62,13 +63,14 @@ void CudnnConvBackwardXOp::infer_shape() {
     set_shape(dx, "abcd", xformat, xn, xc, xh, xw);
 }
 
-void CudnnConvBackwardXOp::jit_prepare() {
-    add_jit_define("Ty", dy->dtype());
-    add_jit_define("Tw", w->dtype());
-    add_jit_define("Tx", dx->dtype());
-    add_jit_define("XFORMAT", xformat);
-    add_jit_define("WFORMAT", wformat);
-    add_jit_define("YFORMAT", yformat);
+void CudnnConvBackwardXOp::jit_prepare(JK& jk) {
+    jk << _CS("[Tx:") << dx->dtype();
+    jk << _CS("][Ty:") << dy->dtype();
+    jk << _CS("][Tw:") << w->dtype();
+    jk << _CS("][XFORMAT:") << xformat;
+    jk << _CS("][WFORMAT:") << wformat;
+    jk << _CS("][YFORMAT:") << yformat;
+    jk << ']';
 }
 unordered_map<string, cudnnConvolutionBwdDataAlgo_t> bwdx_algo_cache;
 
@@ -177,7 +179,7 @@ void CudnnConvBackwardXOp::jit_run() {
         CUDNN_CONVOLUTION_BWD_DATA_ALGO_WINOGRAD,
         CUDNN_CONVOLUTION_BWD_DATA_ALGO_WINOGRAD_NONFUSED
     };
-    int num_algos = CUDNN_CONVOLUTION_BWD_FILTER_ALGO_COUNT;
+    int num_algos = CUDNN_CONVOLUTION_BWD_DATA_ALGO_COUNT;
     int perf_count;
     cudnnConvolutionBwdDataAlgoPerf_t perf_results[num_algos];
     cudnnConvolutionBwdDataAlgo_t algo;
@@ -198,11 +200,11 @@ void CudnnConvBackwardXOp::jit_run() {
                 size_t sz;
                 cudnnStatus_t ret = cudnnGetConvolutionBackwardDataWorkspaceSize(handle_, cudnnFdesc, cudnnOdesc, cudnnConvDesc, cudnnIdesc, algos[i], &sz);
                 // continue if use too much workspace
-                if (sz*4 > mem_info.total_cuda_ram) continue;
+                if (sz > mem_info.total_cuda_ram * max_workspace_ratio) continue;
                 if (CUDNN_STATUS_SUCCESS == ret && sz > max_ws_size) max_ws_size = sz;
             } 
             size_t allocation;
-            void* ws = exe.allocator->alloc(max_ws_size, allocation);
+            void* ws = exe.temp_allocator->alloc(max_ws_size, allocation);
             checkCudaErrors(cudnnFindConvolutionBackwardDataAlgorithmEx(
                 handle_,
                 cudnnFdesc, w->ptr<Tw>(),
@@ -214,7 +216,7 @@ void CudnnConvBackwardXOp::jit_run() {
                 perf_results,
                 ws,
                 max_ws_size));
-            exe.allocator->free(ws, max_ws_size, allocation);
+            exe.temp_allocator->free(ws, max_ws_size, allocation);
         } else {
             checkCudaErrors(cudnnGetConvolutionBackwardDataAlgorithm_v7(
                 handle_,
@@ -249,7 +251,7 @@ void CudnnConvBackwardXOp::jit_run() {
         cudnnIdesc, algo, &workSpaceSize));
     size_t allocation;
     if (workSpaceSize > 0) {
-        workSpace = exe.allocator->alloc(workSpaceSize, allocation);
+        workSpace = exe.temp_allocator->alloc(workSpaceSize, allocation);
     }
     float alpha=1, beta=0;
     checkCudaErrors(cudnnConvolutionBackwardData(
@@ -264,7 +266,7 @@ void CudnnConvBackwardXOp::jit_run() {
         cudnnIdesc, x->ptr<Tx>())
     );
     if (workSpace)
-        exe.allocator->free(workSpace, workSpaceSize, allocation);
+        exe.temp_allocator->free(workSpace, workSpaceSize, allocation);
         
     checkCudaErrors(cudnnDestroyTensorDescriptor( cudnnIdesc ));
     checkCudaErrors(cudnnDestroyFilterDescriptor( cudnnFdesc ));

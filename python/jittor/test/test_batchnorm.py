@@ -1,9 +1,10 @@
 
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers: 
 #     Wenyang Zhou <576825820@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -38,7 +39,8 @@ def check_equal_with_istrain(arr, j_layer, p_layer, is_train=True, has_running=T
             assert np.allclose(p_layer.running_mean.detach().numpy(), j_layer.running_mean.numpy(), threshold)
         else:
             assert np.allclose(p_layer.layer.running_mean.detach().numpy(), j_layer.running_mean.numpy(), threshold)
-    assert np.allclose(pytorch_result.detach().numpy(), jittor_result.numpy(), threshold)
+    assert np.allclose(pytorch_result.detach().numpy(), jittor_result.numpy(), 1e-2, threshold), \
+        ( np.abs(pytorch_result.detach().numpy() - jittor_result.numpy()).max() )
 
 def check_equal_without_istrain(arr, j_layer, p_layer, threshold=1e-5):
     jittor_arr = jt.array(arr)
@@ -112,6 +114,21 @@ class TestBatchNorm(unittest.TestCase):
         model = Model()
         model.eval()
         check_equal_with_istrain(arr, jnn.GroupNorm(2, 10, is_train=False), model, False, False)
+
+        # ***************************************************************
+        # Test LayerNorm Layer
+        # ***************************************************************
+        arr = np.random.randn(16,10,224,224)
+
+        class Model(tnn.Module):
+            def __init__(self):
+                super(Model, self).__init__()
+                self.layer = tnn.LayerNorm(224)
+            def forward(self, x):
+                return self.layer(x)
+        model = Model()
+        model.eval()
+        check_equal_with_istrain(arr, jnn.LayerNorm(224), model, False, False)
 
 if __name__ == "__main__":
     unittest.main()

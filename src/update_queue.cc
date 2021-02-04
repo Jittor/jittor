@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -117,7 +118,6 @@ void UpdateQueue::auto_flush() {
 void UpdateQueue::push(Var* v, Var* prev) {
     if (v->flags.get(NodeFlags::_in_update_queue))
         return;
-    v->flags.set(NodeFlags::_in_update_queue);
     list<list<Item>>::iterator owner;
 
     if (prev->flags.get(NodeFlags::_in_update_queue)) {
@@ -128,8 +128,10 @@ void UpdateQueue::push(Var* v, Var* prev) {
         queue.emplace_front();
         owner = queue.begin();
     }
-    if (owner->size() >= update_queue_auto_flush_delay)
+    if (owner->size() >= update_queue_auto_flush_delay) {
         auto_flush();
+    }
+    v->flags.set(NodeFlags::_in_update_queue);
     owner->emplace_front(UpdateQueue::Item{owner, v});
     map[v] = owner->begin();
     // if total size of update queue is too big,
@@ -141,6 +143,8 @@ void UpdateQueue::push(Var* v, Var* prev) {
 void UpdateQueue::pop(Var* v) {
     auto iter = map.find(v);
     iter->second->owner->erase(iter->second);
+    if (iter->second->owner->size() == 0)
+        queue.erase(iter->second->owner);
     map.erase(iter);
 }
 

@@ -1,5 +1,6 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -132,6 +133,11 @@ class TestBroadcastToOpMisc(unittest.TestCase):
         b = jt.zeros((2,2))
         assert (a.broadcast(b, [-1]).data == [[1,1],[2,2]]).all()
         assert (a.broadcast(b, [-2]).data == [[1,2],[1,2]]).all()
+
+    def test_zero_dim(self):
+        a = jt.array(1.0)
+        b = a.broadcast([0])
+        assert b.shape == [0]
 
 
 if __name__ == "__main__":

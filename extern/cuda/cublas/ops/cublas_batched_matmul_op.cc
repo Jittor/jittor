@@ -1,8 +1,9 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: 
 //     Meng-Hao Guo <guomenghao1997@gmail.com>
 //     Dun Liang <randonlang@gmail.com>. 
-// All Rights Reserved.
+// 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -39,11 +40,17 @@ VarPtr CublasBatchedMatmulOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     // a [b,n,m] b [b,m,k], c[b,n,k]
     // c = a*b
     if (v_index == 0) {
-        // da = dc*b^T
-        return make_cublas_batched_matmul(dout, b, trans_a^0, trans_b^1);
+        if (trans_a)
+            return make_cublas_batched_matmul(b, dout, trans_b, 1);
+        else
+            // da = dc*b^T
+            return make_cublas_batched_matmul(dout, b, 0, trans_b^1);
     } else {
-        // db = a^T*dc
-        return make_cublas_batched_matmul(a, dout, trans_a^1, trans_b^0);
+        if (trans_b)
+            return make_cublas_batched_matmul(dout, a, 1, trans_a);
+        else
+            // db = a^T*dc
+            return make_cublas_batched_matmul(a, dout, trans_a^1, 0);
     }
 }
 
@@ -76,11 +83,12 @@ void CublasBatchedMatmulOp::infer_shape(){
     c->set_shape(c_shape);
 }
 
-void CublasBatchedMatmulOp::jit_prepare() {
-    add_jit_define("T", a->dtype());
-    add_jit_define("Trans_a", trans_a ? "T" : "N");
-    add_jit_define("Trans_b", trans_b ? "T" : "N");
-    add_jit_define("op", a->dtype().dsize() == 4 ? "S" : "D");
+void CublasBatchedMatmulOp::jit_prepare(JK& jk) {
+    jk << _CS("[T:") << a->dtype();
+    jk << _CS("][Trans_a:") << (trans_a ? 'T' : 'N');
+    jk << _CS("][Trans_b:") << (trans_b ? 'T' : 'N');
+    jk << _CS("][op:") << (a->dtype().dsize() == 4 ? 'S' : 'D');
+    jk << ']';
 }
 
 #else // JIT

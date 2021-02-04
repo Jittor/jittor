@@ -1,11 +1,12 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 import os, sys, shutil
 from .compiler import *
-from jittor_utils import run_cmd, get_version
+from jittor_utils import run_cmd, get_version, get_int_version
 from jittor.utils.misc import download_url_to_local
 
 def search_file(dirs, name):
@@ -17,7 +18,9 @@ def search_file(dirs, name):
     LOG.f(f"file {name} not found in {dirs}")
 
 def install_mkl(root_folder):
-    url = "https://github.com/intel/mkl-dnn/releases/download/v1.0.2/mkldnn_lnx_1.0.2_cpu_gomp.tgz"
+    # origin url is
+    # url = "https://github.com/intel/mkl-dnn/releases/download/v1.0.2/mkldnn_lnx_1.0.2_cpu_gomp.tgz"
+    url = "https://cloud.tsinghua.edu.cn/f/da02bf62b55b4aa3b8ee/?dl=1"
     filename = "mkldnn_lnx_1.0.2_cpu_gomp.tgz"
     fullname = os.path.join(root_folder, filename)
     dirname = os.path.join(root_folder, filename.replace(".tgz",""))
@@ -78,29 +81,37 @@ def setup_mkl():
 
 
 def install_cub(root_folder):
-    url = "https://github.com/NVlabs/cub/archive/v1.8.0.tar.gz"
-    filename = "cub-1.8.0.tgz"
+    url = "https://github.com/NVIDIA/cub/archive/1.11.0.tar.gz"
+    filename = "cub-1.11.0.tgz"
+    md5 = "97196a885598e40592100e1caaf3d5ea"
     fullname = os.path.join(root_folder, filename)
     dirname = os.path.join(root_folder, filename.replace(".tgz",""))
     
     if not os.path.isfile(os.path.join(dirname, "examples", "test")):
         LOG.i("Downloading cub...")
-        download_url_to_local(url, filename, root_folder, "9203ea2499b56782601fddf8a12e9b08")
+        download_url_to_local(url, filename, root_folder, md5)
         import tarfile
     
         with tarfile.open(fullname, "r") as tar:
             tar.extractall(root_folder)
         assert 0 == os.system(f"cd {dirname}/examples && "
-                    f"{nvcc_path} device/example_device_radix_sort.cu -O2 -I.. -o test")
+                    f"{nvcc_path} device/example_device_radix_sort.cu -O2 -I.. -std=c++14 -o test")
         if core.get_device_count():
             assert 0 == os.system(f"cd {dirname}/examples && ./test")
     return dirname
 
 def setup_cub():
+    global cub_home
+    cub_home = ""
     from pathlib import Path
     cub_path = os.path.join(str(Path.home()), ".cache", "jittor", "cub")
-    cub_home = install_cub(cub_path)
-    setup_cuda_lib("cub", link=False, extra_flags=f"-I{cub_home}")
+    cuda_version = int(get_version(nvcc_path)[1:-1].split('.')[0])
+    extra_flags = ""
+    if cuda_version < 11:
+        cub_home = install_cub(cub_path)
+        extra_flags = f"-I{cub_home}"
+        cub_home += "/"
+    setup_cuda_lib("cub", link=False, extra_flags=extra_flags)
 
 def setup_cuda_extern():
     if not has_cuda: return
@@ -130,6 +141,10 @@ def setup_cuda_extern():
             import traceback
             line = traceback.format_exc()
             LOG.w(f"CUDA found but {lib_name} is not loaded:\n{line}")
+            if lib_name == "cudnn":
+                LOG.w(f"Develop version of CUDNN not found, "
+                    "please refer to CUDA offical tar file installation: "
+                    "https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#installlinux-tar")
 
 def setup_cuda_lib(lib_name, link=True, extra_flags=""):
     globals()[lib_name+"_ops"] = None
@@ -143,8 +158,20 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
 
     link_flags = ""
     if link:
-        cuda_include_name = search_file([cuda_include, "/usr/include"], lib_name+".h")
-        culib_path = search_file([cuda_lib, "/usr/lib/x86_64-linux-gnu"], f"lib{lib_name}.so")
+        extra_include_path = os.path.abspath(os.path.join(cuda_include, "..", "targets/x86_64-linux/include"))
+        extra_lib_path = os.path.abspath(os.path.join(cuda_lib, "..", "targets/x86_64-linux/lib"))
+        cuda_include_name = search_file([cuda_include, extra_include_path, "/usr/include"], lib_name+".h")
+        culib_path = search_file([cuda_lib, extra_lib_path, "/usr/lib/x86_64-linux-gnu"], f"lib{lib_name}.so")
+
+        if lib_name == "cudnn":
+            # cudnn cannot found libcudnn_cnn_train.so.8, we manual link for it.
+            nvcc_version = get_int_version(nvcc_path)
+            if nvcc_version >= (11,0,0):
+                libs = ["libcudnn_ops_infer.so", "libcudnn_ops_train.so", "libcudnn_cnn_infer.so", "libcudnn_cnn_train.so"]
+                for l in libs:
+                    ex_cudnn_path = search_file([cuda_lib, extra_lib_path, "/usr/lib/x86_64-linux-gnu"], l)
+                    ctypes.CDLL(ex_cudnn_path, dlopen_flags)
+
         # dynamic link cuda library
         ctypes.CDLL(culib_path, dlopen_flags)
         link_flags = f"-l{lib_name} -L'{cuda_lib}'"
@@ -173,7 +200,7 @@ def install_cutt(root_folder):
     filename = "cutt-master.zip"
     fullname = os.path.join(root_folder, filename)
     dirname = os.path.join(root_folder, filename.replace(".zip",""))
-    true_md5 = "a6f4f7f75310a69b131e21f1ebec768a"
+    true_md5 = "af5bc35eea1832a42c0e0011659b7209"
 
     if os.path.exists(fullname):
         md5 = run_cmd('md5sum '+fullname).split()[0]
@@ -195,7 +222,11 @@ def install_cutt(root_folder):
         zf.close()
 
         LOG.i("installing cutt...")
-        run_cmd(f"make", cwd=dirname)
+        arch_flag = ""
+        if len(flags.cuda_archs):
+            arch_flag = f" -arch=compute_{min(flags.cuda_archs)} "
+            arch_flag += ''.join(map(lambda x:f' -code=sm_{x} ', flags.cuda_archs))
+        run_cmd(f"make NVCC_GENCODE='{arch_flag}' nvcc_path='{nvcc_path}'", cwd=dirname)
     return dirname
 
 def setup_cutt():
@@ -266,7 +297,10 @@ def install_nccl(root_folder):
             tar.extractall(root_folder)
 
         LOG.i("installing nccl...")
-        arch_flag = f" -arch={','.join(map(lambda x:'sm_'+str(x),flags.cuda_archs))} "
+        arch_flag = ""
+        if len(flags.cuda_archs):
+            arch_flag = f" -arch=compute_{min(flags.cuda_archs)} "
+            arch_flag += ''.join(map(lambda x:f' -code=sm_{x} ', flags.cuda_archs))
         run_cmd(f"make -j8 src.build CUDA_HOME='{cuda_home}' NVCC_GENCODE='{arch_flag}' ", cwd=dirname)
     return dirname
 

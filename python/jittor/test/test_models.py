@@ -1,8 +1,9 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers: 
 #     Wenyang Zhou <576825820@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -26,7 +27,6 @@ class test_models(unittest.TestCase):
     @classmethod
     def setUpClass(self):
         self.models = [
-            'inception_v3',
             'squeezenet1_0',
             'squeezenet1_1',
             'alexnet',
@@ -57,6 +57,10 @@ class test_models(unittest.TestCase):
             'shufflenet_v2_x1_0',
             'shufflenet_v2_x1_5',
             'shufflenet_v2_x2_0',
+            "densenet121",
+            "densenet161",
+            "densenet169",
+            'inception_v3',
         ]
 
     @unittest.skipIf(not jt.has_cuda, "Cuda not found")
@@ -78,7 +82,6 @@ class test_models(unittest.TestCase):
         pytorch_test_img = to_cuda(torch.Tensor(test_img))
         jittor_test_img = jt.array(test_img)
         for test_model in self.models:
-            print("test model", test_model)
             if test_model == "inception_v3":
                 test_img = np.random.random((bs,3,300,300)).astype('float32')
                 pytorch_test_img = to_cuda(torch.Tensor(test_img))

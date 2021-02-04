@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -50,10 +51,10 @@ void IndexOp::infer_shape() {
         o->set_shape(a->shape);
 }
 
-void IndexOp::jit_prepare() {
-    add_jit_define("T", x[0]->dtype());
-    add_jit_define("DIM", JK::hex1(dim));
-    add_jit_define("XDIM", JK::hex1(x[0]->shape.size()));
+void IndexOp::jit_prepare(JK& jk) {
+    add_jit_define(jk, "T", x[0]->dtype());
+    add_jit_define(jk, "DIM", JK::hex1(dim));
+    add_jit_define(jk, "XDIM", JK::hex1(x[0]->shape.size()));
 }
 
 #else // JIT
@@ -72,9 +73,9 @@ void IndexOp::jit_run() {
     @for(d, 0, XDIM, for (index_t i@d=0; i@d < x0shape@d; i@d++)) {
         auto xid = @for(d, 0, XDIM, + i@d * x0stride@d);
         @if(DIM==XDIM,
-            @for(i,0,XDIM, x@i@@p[xid] = i@i;)
+            @for(i,0,XDIM, T x@i@@id = i@i; x@i@@p[xid] = x@i@@id;)
         ,
-            x0p[xid] = i@DIM;
+            T x@DIM@@id = i@DIM; x0p[xid] = x@DIM@@id;
         )
     }
 }

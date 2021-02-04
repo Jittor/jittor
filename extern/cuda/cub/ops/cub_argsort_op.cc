@@ -1,8 +1,9 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: 
 //     Guoye Yang <498731903@qq.com>
 //     Dun Liang <randonlang@gmail.com>. 
-// All Rights Reserved.
+// 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -47,12 +48,16 @@ void CubArgsortOp::infer_shape() {
     y_key->set_shape(x->shape);
 }
 
-void CubArgsortOp::jit_prepare() {
-    add_jit_define("Tx", x->dtype());
-    add_jit_define("Tindexes", indexes->dtype());
-    add_jit_define("Toffsets", offsets->dtype());
-    add_jit_define("Ty", y->dtype());
-    add_jit_define("FUNC", descending ? "SortPairsDescending" : "SortPairs");
+void CubArgsortOp::jit_prepare(JK& jk) {
+    jk << _CS("[Tx:") << x->dtype();
+    jk << _CS("][Tindexes:") << indexes->dtype();
+    jk << _CS("][Toffsets:") << offsets->dtype();
+    jk << _CS("][Ty:") << y->dtype();
+    jk << _CS("][FUNC:");
+    if (descending)
+        jk << _CS("SortPairsDescending]");
+    else
+        jk << _CS("SortPairs]");
 }
 
 #else // JIT
@@ -80,12 +85,12 @@ void CubArgsortOp::jit_run() {
         num_items, num_segments, offsetsp, offsetsp + 1);
     // Allocate temporary storage
     size_t allocation;
-    d_temp_storage = exe.allocator->alloc(temp_storage_bytes, allocation);
+    d_temp_storage = exe.temp_allocator->alloc(temp_storage_bytes, allocation);
     // Run sorting operation
     cub::DeviceSegmentedRadixSort::@FUNC@@(d_temp_storage, temp_storage_bytes,
         xp, y_keyp, indexesp, yp,
         num_items, num_segments, offsetsp, offsetsp + 1);
-    exe.allocator->free(d_temp_storage, temp_storage_bytes, allocation);
+    exe.temp_allocator->free(d_temp_storage, temp_storage_bytes, allocation);
 }
 #endif // JIT_cuda
 #endif // JIT

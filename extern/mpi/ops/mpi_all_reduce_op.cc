@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2020 
+// Copyright (c) 2021 
 //     Guowei Yang <471184555@qq.com>. 
 //     Dun Liang <randonlang@gmail.com>. 
 // All Rights Reserved.
@@ -61,9 +61,9 @@ VarPtr MpiAllReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     return mpi_all_reduce(dout, ns_add);
 }
 
-void MpiAllReduceOp::jit_prepare() {
-    add_jit_define("Tx", x->dtype());
-    add_jit_define("OP", op.to_cstring());
+void MpiAllReduceOp::jit_prepare(JK& jk) {
+    jk << _CS("[Tx:") << x->dtype();
+    jk << _CS("][OP:") << op << ']';
 }
 
 #else // JIT

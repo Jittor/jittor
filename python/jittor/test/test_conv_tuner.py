@@ -1,8 +1,9 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers: 
 #     Guoye Yang <498731903@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -112,7 +113,7 @@ def check_backward(xshape, wshape, stride, padding, dilation, use_cuda, nhwc):
         op_name = "mkl_conv"
 
     with jt.log_capture_scope(use_cuda=use_cuda, enable_tuner=1,
-        log_v=1, log_vprefix="op.cc=100,exe=1000,conv_t=1000", compile_options={"test":244}
+        log_v=1, log_vprefix="op.cc=1000,exe=1000,conv_t=1000", compile_options={"test":244}
     ) as raw_log:
         x = jt.random(xshape)
         w = jt.random(wshape)

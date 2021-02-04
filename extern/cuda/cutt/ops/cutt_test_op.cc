@@ -20,8 +20,8 @@ CuttTestOp::CuttTestOp(string cmd) : cmd(cmd) {
     output = create_output(1, ns_float32);
 }
 
-void CuttTestOp::jit_prepare() {
-    add_jit_define("T", ns_float32);
+void CuttTestOp::jit_prepare(JK& jk) {
+    jk << _CS("[T:float32]");
 }
 
 #else // JIT

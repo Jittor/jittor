@@ -1,8 +1,9 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: 
 //     Guowei Yang <471184555@qq.com>
 //     Dun Liang <randonlang@gmail.com>. 
-// All Rights Reserved.
+// 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -41,11 +42,12 @@ void CublasMatmulOp::infer_shape() {
     c->set_shape({n, k});
 }
 
-void CublasMatmulOp::jit_prepare() {
-    add_jit_define("T", a->dtype());
-    add_jit_define("Trans_a", trans_a ? "T" : "N");
-    add_jit_define("Trans_b", trans_b ? "T" : "N");
-    add_jit_define("op", a->dtype().dsize() == 4 ? "S" : "D");
+void CublasMatmulOp::jit_prepare(JK& jk) {
+    jk << _CS("[T:") << a->dtype();
+    jk << _CS("][Trans_a:") << (trans_a ? 'T' : 'N');
+    jk << _CS("][Trans_b:") << (trans_b ? 'T' : 'N');
+    jk << _CS("][op:") << (a->dtype().dsize() == 4 ? 'S' : 'D');
+    jk << ']';
 }
 
 #else // JIT

@@ -1,8 +1,9 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: 
 //     Guoye Yang <498731903@qq.com>
 //     Dun Liang <randonlang@gmail.com>. 
-// All Rights Reserved.
+// 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -49,14 +50,20 @@ void CubArgReduceOp::infer_shape() {
     if (keepdims) {
         shape.push_back(1);
     }
+    if (shape.size() == 0)
+        shape.push_back(1);
     y->set_shape(shape);
     y_key->set_shape(shape);
 }
 
-void CubArgReduceOp::jit_prepare() {
-    add_jit_define("Tx", x->dtype());
-    add_jit_define("Toffsets", offsets->dtype());
-    add_jit_define("FUNC", op==ns_minimum ? "ArgMin" : "ArgMax");
+void CubArgReduceOp::jit_prepare(JK& jk) {
+    jk << _CS("[Tx:") << x->dtype();
+    jk << _CS("][Toffsets:") << offsets->dtype();
+    jk << _CS("][FUNC:");
+    if (op==ns_minimum)
+        jk << _CS("ArgMin]");
+    else 
+        jk << _CS("ArgMax]");
 }
 
 #else // JIT
@@ -80,7 +87,7 @@ void CubArgReduceOp::jit_run() {
         num_segments *= x->shape[i];
     }
     size_t allocation_dout;
-    cub::KeyValuePair<int, Tx> *d_out = (cub::KeyValuePair<int, Tx> *)exe.allocator->alloc(sizeof(cub::KeyValuePair<int, Tx>) * num_segments, allocation_dout);
+    cub::KeyValuePair<int, Tx> *d_out = (cub::KeyValuePair<int, Tx> *)exe.temp_allocator->alloc(sizeof(cub::KeyValuePair<int, Tx>) * num_segments, allocation_dout);
 
     // Determine temporary device storage requirementse = NULL;
     void     *d_temp_storage = NULL;
@@ -89,7 +96,7 @@ void CubArgReduceOp::jit_run() {
         xp, d_out, num_segments, offsetsp, offsetsp + 1);
     // Allocate temporary storage
     size_t allocation;
-    d_temp_storage = exe.allocator->alloc(temp_storage_bytes, allocation);
+    d_temp_storage = exe.temp_allocator->alloc(temp_storage_bytes, allocation);
     // Run sorting operation
     cub::DeviceSegmentedReduce::@FUNC@@(d_temp_storage, temp_storage_bytes,
         xp, d_out, num_segments, offsetsp, offsetsp + 1);
@@ -98,8 +105,8 @@ void CubArgReduceOp::jit_run() {
     auto* __restrict__ y_keyp = y_key->ptr<Tx>();
     split<<<max(1,num_segments/1024),1024>>>(d_out, y_keyp, yp, num_segments);
 
-    exe.allocator->free(d_temp_storage, temp_storage_bytes, allocation);
-    exe.allocator->free(d_out, sizeof(cub::KeyValuePair<int, Tx>) * num_segments, allocation_dout);
+    exe.temp_allocator->free(d_temp_storage, temp_storage_bytes, allocation);
+    exe.temp_allocator->free(d_out, sizeof(cub::KeyValuePair<int, Tx>) * num_segments, allocation_dout);
 }
 #endif // JIT_cuda
 #endif // JIT

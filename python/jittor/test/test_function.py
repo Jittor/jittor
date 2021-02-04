@@ -1,7 +1,8 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers: 
 #     Dun Liang <randonlang@gmail.com>. 
-# All Rights Reserved.
+# 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -22,6 +23,19 @@ class TestFunction(unittest.TestCase):
                 return grad-2
         a = jt.ones(1)
         func = MyFunc()
+        b = func(a)
+        da = jt.grad(b, a)
+        assert da.data == -1
+
+    def test_apply(self):
+        class MyFunc(Function):
+            def execute(self, x):
+                return x+1
+
+            def grad(self, grad):
+                return grad-2
+        a = jt.ones(1)
+        func = MyFunc.apply
         b = func(a)
         da = jt.grad(b, a)
         assert da.data == -1
@@ -284,10 +298,10 @@ class TestFunction(unittest.TestCase):
 class TestFunctionWithEagerExecution(TestFunction):
     @classmethod
     def setUpClass(self):
-        jt.flags.eager_execution = 1
+        jt.flags.lazy_execution = 0
     @classmethod
     def tearDownClass(self):
-        jt.flags.eager_execution = 0
+        jt.flags.lazy_execution = 1
 
 if __name__ == "__main__":
     unittest.main()

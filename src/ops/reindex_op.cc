@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -13,6 +14,8 @@ namespace jittor {
 #ifndef JIT
 static auto make_reindex_reduce = get_op_info("reindex_reduce")
     .get_constructor<VarPtr, Var*, NanoString, NanoVector, vector<string>&&, vector<string>&&, vector<Var*>&&>();
+static auto make_reindex = get_op_info("reindex")
+    .get_constructor<VarPtr, Var*, NanoVector, vector<string>&&, float64, vector<string>&&, vector<Var*>&&>();
     
 ReindexOp::ReindexOp(Var* x, NanoVector shape, vector<string>&& indexes, float64 overflow_value, vector<string>&& overflow_conditions, vector<Var*>&& extras)
     : x(x), 
@@ -63,6 +66,10 @@ ReindexOp::ReindexOp(Var* x, vector<Var*>&& indexes, float64 overflow_value, vec
     }
 }
 
+VarPtr ReindexOp::duplicate() {
+    return make_reindex(x, shape, clone(indexes), overflow_value, clone(overflow_conditions), clone(extras));
+}
+
 VarPtr ReindexOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     // Do not have grad to extras input
     if (v_index) return nullptr;
@@ -80,21 +87,22 @@ void ReindexOp::infer_shape() {
     CHECK(y->shape.size()) << "Number of shape should greater than 0.";
 }
 
-void ReindexOp::jit_prepare() {
-    add_jit_define("Tx", x->dtype());
-    add_jit_define("XDIM", JK::hex1(x->shape.size()));
-    add_jit_define("YDIM", JK::hex1(y->shape.size()));
-    add_jit_define("OVERFLOW", overflow_value);
+void ReindexOp::jit_prepare(JK& jk) {
+    jk << _CS("[Tx:") << x->dtype()
+        << _CS("][XDIM=") << JK::hex1(x->shape.size())
+        << _CS("][YDIM=") << JK::hex1(y->shape.size())
+        << _CS("][OVERFLOW:") << overflow_value;
     for (uint i=0; i<indexes.size(); i++)
-        add_jit_define("INDEX", JK::hex1(i), indexes[i]);
-    add_jit_define("OSIZE", JK::hex1(overflow_conditions.size()));
+        jk << _CS("][INDEX") << JK::hex1(i) << ':' << indexes[i];
+    jk << _CS("][OSIZE=") << JK::hex1(overflow_conditions.size());
     for (uint i=0; i<overflow_conditions.size(); i++)
-        add_jit_define("OFD", JK::hex1(i), overflow_conditions[i]);
-    add_jit_define("ESIZE", JK::hex1(extras.size()));
+        jk << _CS("][OFD") << JK::hex1(i) << ':' << overflow_conditions[i];
+    jk << _CS("][ESIZE=") << JK::hex1(extras.size());
     for (uint i=0; i<extras.size(); i++) {
-        add_jit_define("EDIM", JK::hex1(i), JK::hex1(extras[i]->shape.size()));
-        add_jit_define("Te", JK::hex1(i), extras[i]->dtype());
+        jk << _CS("][EDIM") << JK::hex1(i) << '=' << JK::hex1(extras[i]->shape.size());
+        jk << _CS("][Te") << JK::hex1(i) << ':' << extras[i]->dtype();
     }
+    jk << ']';
 }
 
 #else // JIT

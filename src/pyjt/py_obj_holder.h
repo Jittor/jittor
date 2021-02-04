@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -11,6 +12,14 @@ namespace jittor {
 
 struct PyObjHolder {
     PyObject* obj;
+    inline PyObjHolder() : obj(nullptr) {
+    }
+    inline void assign(PyObject* obj) {
+        if (!obj) {
+            LOGf << "Python error occur";
+        }
+        this->obj = obj;
+    }
     inline PyObjHolder(PyObject* obj) : obj(obj) {
         if (!obj) {
             LOGf << "Python error occur";
@@ -25,6 +34,18 @@ struct PyObjHolder {
         return tmp;
     }
 };
+
+
+inline Log& operator<<(Log& os, PyObject* objp) {
+    PyObjHolder repr_obj(PyObject_Repr(objp));
+    
+    if (PyUnicode_CheckExact(repr_obj.obj)) {
+        return os << Py_TYPE(objp)->tp_name <<
+             PyUnicode_AsUTF8(repr_obj.obj);
+    } else {
+        return os << "unknown(" >> (void*)objp >> ")";
+    }
+}
 
 }
 

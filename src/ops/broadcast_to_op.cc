@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -14,6 +15,10 @@ namespace jittor {
 #ifndef JIT
 static auto make_reduce = get_op_info("reduce")
     .get_constructor<VarPtr, Var*, NanoString, uint, uint>();
+static auto make_broadcast = get_op_info("broadcast_to")
+    .get_constructor<VarPtr, Var*, Var*, uint, uint>();
+static auto make_broadcast2 = get_op_info("broadcast_to")
+    .get_constructor<VarPtr, Var*, NanoVector, uint, uint>();
     
 BroadcastToOp::BroadcastToOp(Var* x, Var* y, NanoVector dims) : x(x), y(y) {
     auto count = dims.size();
@@ -51,6 +56,20 @@ BroadcastToOp::BroadcastToOp(Var* x, Var* y, uint dims_mask, uint keepdims_mask)
     this->keepdims_mask = keepdims_mask;
 }
 
+BroadcastToOp::BroadcastToOp(Var* x, NanoVector shape, uint dims_mask, uint keepdims_mask) : x(x), y(nullptr), shape(shape) {
+    auto count = __builtin_popcount(dims_mask);
+    if (!count) {
+        forward(x);
+        return;
+    }
+    flags.set(NodeFlags::_cpu);
+    flags.set(NodeFlags::_cuda);
+    set_type(OpType::broadcast);
+    z = create_output(NanoVector(), x->dtype());
+    bcast_mask = dims_mask;
+    this->keepdims_mask = keepdims_mask;
+}
+
 BroadcastToOp::BroadcastToOp(Var* x, NanoVector shape, NanoVector dims) : x(x), y(nullptr), shape(shape) {
     auto count = dims.size();
     // forward x if don't need broadcast
@@ -63,7 +82,7 @@ BroadcastToOp::BroadcastToOp(Var* x, NanoVector shape, NanoVector dims) : x(x), 
     set_type(OpType::broadcast);
     CHECKop(shape.size(),>,0u) << "Number of shape should greater than 0.";
     for (auto v : shape)
-        CHECKop(v,>,0u) << "Shape should greater than 0.";
+        CHECKop(v,>=,0u) << "Shape should greater than 0.";
     z = create_output(nullptr, x->dtype());
     bcast_mask = 0;
     keepdims_mask = 0;
@@ -78,8 +97,15 @@ BroadcastToOp::BroadcastToOp(Var* x, NanoVector shape, NanoVector dims) : x(x), 
 bool BroadcastToOp::need_broadcast(const Var* x, const NanoVector& shape) {
     if (x->shape.size() < shape.size()) return true;
     for (uint i=shape.size()-1, j=x->shape.size()-1; i<shape.size(); i--,j--)
-        if (x->shape[j]< 0 || x->shape[j] < shape[i]) return true;
+        if (x->shape[j]< 0 || (x->shape[j] != shape[i] && shape[i] != 1)) return true;
     return false;
+}
+
+VarPtr BroadcastToOp::duplicate() {
+    if (y)
+        return make_broadcast(x, y, bcast_mask, keepdims_mask);
+    else
+        return make_broadcast2(x, shape, bcast_mask, keepdims_mask);
 }
 
 VarPtr BroadcastToOp::grad(Var* out, Var* dout, Var* v, int v_index) {
@@ -139,10 +165,10 @@ void BroadcastToOp::infer_shape() {
     LOGvvv << "Broadcast x(" >> x >> ") shape" << yshapes << "-> z(" >> z >> ")"; 
 }
 
-void BroadcastToOp::jit_prepare() {
-    add_jit_define("Tx", x->dtype());
-    add_jit_define("DIM", JK::hex1(z->shape.size()));
-    add_jit_define("BCAST", JK::hex(bcast_mask));
+void BroadcastToOp::jit_prepare(JK& jk) {
+    jk << _CS("[Tx:") << x->dtype()
+        << _CS("][DIM=") << JK::hex1(z->shape.size())
+        << _CS("][BCAST=") << JK::hex(bcast_mask) << ']';
 }
 
 #else // JIT

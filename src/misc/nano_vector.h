@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -22,7 +23,32 @@ static inline int lzcnt(int64 v) {
 
 struct Slice {
     int64 start, stop, step, mask;
+    inline void fill(int64 size) {
+        if (step>0) {
+            if (mask&2) 
+                stop = size;
+            else if (stop<0)
+                stop += size;
+            else
+                stop = std::min(size, stop);
+        } else {
+            if (mask&1) start = size-1;
+            if (mask&2)
+                stop = -1;
+            else if (stop<0)
+                stop = std::max((int64)0, stop+size);
+        }
+        if (start<0) start += size;
+        mask = 0;
+        ASSERT(start==stop || (start>=0 && stop>=-1 && start<size && stop<=size))
+            << "slice overflow:" << start << stop << step;
+    }
 };
+
+// return a / ceil_to_2_pow(b)
+inline uint64 fast_div(uint64 a, uint64 b) {
+    return a >> (64 - lzcnt(b));
+}
 
 // @pyjt(NanoVector)
 struct NanoVector {
@@ -39,7 +65,7 @@ struct NanoVector {
     // @pyjt(__init__)
     inline NanoVector(const NanoVector& nv) : data(nv.data), offset(nv.offset) {}
     
-    void clear() { data = offset = 0; }
+    inline void clear() { data = offset = 0; }
 
     // @pyjt(__len__, __map_len__)
     inline int size() const {
@@ -108,22 +134,13 @@ struct NanoVector {
 
     // @pyjt(__map_getitem__)
     inline NanoVector slice(Slice slice) {
-        if (slice.step>0) {
-            if (slice.mask&2) slice.stop = size();
-        } else {
-            if (slice.mask&1) slice.start = size()-1;
-            if (slice.mask&2) slice.stop = 0;
-        }
-        if (slice.start<0) slice.start += size();
-        if (slice.stop<0) slice.stop += size();
-        ASSERT(slice.start>=0 && slice.stop>=0 && slice.start<size() && slice.stop<=size())
-            << "slice overflow:" << slice.start << slice.stop << slice.step;
+        slice.fill(size());
         NanoVector v;
         if (slice.step>0) {
             for (int i=slice.start; i<slice.stop; i+=slice.step)
                 v.push_back(this->operator[](i));
         } else {
-            for (int i=slice.start; i>=slice.stop; i+=slice.step)
+            for (int i=slice.start; i>slice.stop; i+=slice.step)
                 v.push_back(this->operator[](i));
         }
         return v;
@@ -142,10 +159,22 @@ struct NanoVector {
         for (auto a : v) push_back_check_overflow(a);
     }
 
+    inline static NanoVector make(const int64* v, int n) {
+        NanoVector nv;
+        for (int i=0; i<n; i++) nv.push_back_check_overflow(v[i]);
+        return nv;
+    }
+
+    inline static NanoVector make(const int32* v, int n) {
+        NanoVector nv;
+        for (int i=0; i<n; i++) nv.push_back_check_overflow(v[i]);
+        return nv;
+    }
+
     inline NanoVector(int64 x) { push_back(x); }
 
     // @pyjt(__repr__)
-    string to_string() {
+    inline string to_string() {
         string s="[";
         for (int i=0; i<size(); i++) {
             s += S(at(i));
@@ -166,14 +195,14 @@ struct NanoVector {
     struct Iter {
         const NanoVector* self;
         int index;
-        int64 operator*() { return self->at(index); }
-        Iter& operator++() { index++; return *this; }
-        Iter operator+(int i) { return {self, i+index}; }
-        bool operator!=(Iter& other) { return index != other.index; }
+        inline int64 operator*() { return self->at(index); }
+        inline Iter& operator++() { index++; return *this; }
+        inline Iter operator+(int i) { return {self, i+index}; }
+        inline bool operator!=(Iter& other) { return index != other.index; }
     };
 
-    Iter begin() { return {this, 0}; }
-    Iter end() { return {this, size()}; }
+    inline Iter begin() { return {this, 0}; }
+    inline Iter end() { return {this, size()}; }
 
     inline void pop_back() { offset--; data &= (1ll<<total_bits())-1; }
     inline void push_back(Iter s, Iter t) {
@@ -252,4 +281,20 @@ inline bool operator!=(const NanoVector& a, const NanoVector& b) {
     return ne(a, b);
 }
 
+inline bool operator<(const NanoVector& a, const NanoVector& b) {
+    return a.data < b.data || (a.data == b.data && a.offset < b.offset);
+}
+
 } // jittor
+
+
+namespace std {
+template<> struct hash<jittor::NanoVector> {
+inline std::size_t operator()(jittor::NanoVector const& s) const noexcept {
+        std::size_t h1 = std::hash<jittor::int64>{}(s.data);
+        std::size_t h2 = std::hash<jittor::int64>{}(s.offset);
+        return h1 ^ (h2 << 1);
+}
+};
+}
+ 

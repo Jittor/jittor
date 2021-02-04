@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -14,36 +15,42 @@
 namespace jittor {
 
 #ifndef JIT
-RandomOp::RandomOp(NanoVector shape, NanoString dtype) {
+RandomOp::RandomOp(NanoVector shape, NanoString dtype, NanoString type) {
     // auto curand_random = get_op_info("curand_random")
     // .get_constructor<NanoVector, NanoString>();
     // output = curand_random(shape, dtype);
     #ifdef HAS_CUDA
     if (use_cuda) {
-        static VarPtr(*curand_random)(NanoVector, NanoString) = nullptr;
+        static VarPtr(*curand_random)(NanoVector, NanoString, NanoString) = nullptr;
         if (!curand_random && has_op("curand_random")) {
             curand_random = get_op_info("curand_random")
-                .get_constructor<VarPtr, NanoVector, NanoString>();
+                .get_constructor<VarPtr, NanoVector, NanoString, NanoString>();
         }
         if (curand_random) {
-            auto var = curand_random(shape, dtype);
+            auto var = curand_random(shape, dtype, type);
             forward(var);
             return;
         }
     }
     #endif
     output = create_output(shape, dtype);
+    this->type = type;
+    ASSERT(type == ns_normal || type == ns_uniform);
 }
 
-void RandomOp::jit_prepare() {
-    add_jit_define("T", output->dtype());
+void RandomOp::jit_prepare(JK& jk) {
+    jk << _CS("[T:") << output->dtype();
+    jk << _CS("][R:") << type << ']';
 }
 
 #else // JIT
 #ifdef JIT_cpu
 void RandomOp::jit_run() {
     auto* generator = get_random_engine();
-    std::uniform_real_distribution<T> distribution(0.0,1.0);
+    @if(@strcmp(@R,uniform)==0,
+        std::uniform_real_distribution<T> distribution(0.0,1.0);,
+        std::normal_distribution<T> distribution(0.0,1.0);
+    )
     auto* __restrict__ x = output->ptr<T>();
     index_t num = output->num;
     for (index_t i=0; i<num; i++)

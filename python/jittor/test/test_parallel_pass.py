@@ -1,5 +1,6 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
@@ -36,7 +37,7 @@ class TestParallelPass(unittest.TestCase):
         b = jt.random((n, n))
         a.data, b.data
         with jt.profile_scope(compile_options = {
-            "compile_shapes":1, "parallel":1
+            "compile_shapes":1, "parallel":2, "try_use_32bit_index":use_int32
         }, try_use_32bit_index = use_int32) as rep:
             c = a + b
             nc = c.data
@@ -97,7 +98,7 @@ class TestParallelPass3(unittest.TestCase):
         def check(ndim, depth, tdim):
             a = jt.random([16]*ndim)
             a.sync()
-            compile_options = {"parallel":1}
+            compile_options = {"parallel":1, "merge_loop_var": self.merge_loop_var}
             if depth is not None:
                 compile_options["max_parallel_depth"] = depth
             with jt.profile_scope(compile_options=compile_options) as rep:
@@ -110,6 +111,7 @@ class TestParallelPass3(unittest.TestCase):
                 for i in range(tdim):
                     assert f"tnum{i}" in src
                 assert f"tnum{tdim}" not in src
+        self.merge_loop_var = 0
         check(1, None, 0)
         check(2, None, 1)
         check(3, None, 2)
@@ -134,7 +136,7 @@ class TestParallelPass3(unittest.TestCase):
         a = jt.random(shape)
         a.sync()
         config = {
-            "parallel":1, "max_parallel_depth":depth
+            "parallel":1, "max_parallel_depth":depth, "merge_loop_var": self.merge_loop_var
         }
         for k in args:
             config[k] = args[k]
@@ -164,6 +166,7 @@ class TestParallelPass3(unittest.TestCase):
         assert np.allclose(a.data.sum(rdim), b), (b.sum(), a.data.sum())
 
     def test_reduce(self):
+        self.merge_loop_var = 0
         check = lambda *a, **kw: self.reduce_check(*a, **kw)
         check(1, 2, 1, 0, 1)
         check(2, 1, 1, 1, 0)
@@ -183,6 +186,29 @@ class TestParallelPass3(unittest.TestCase):
             check(3, 2, 1, [1], 0)
         check(3, 2, 2, [1], 1, merge=0)
         check(4, 2, 2, [2,3], 0)
+        check(4, 2, 2, [0,3], 1)
+
+    def test_reduce_with_merge_loop_var(self):
+        self.merge_loop_var = 1
+        check = lambda *a, **kw: self.reduce_check(*a, **kw)
+        check(1, 2, 1, 0, 1)
+        check(2, 1, 1, 1, 0)
+        check(2, 1, 1, 0, 1)
+        check(2, 1, 1, 0, 1, [0,0])
+        check(2, 1, 1, 0, 0, [0,1])
+        check(2, 1, 1, 0, 0, [0,1], [0,64])
+        check(2, 1, 1, [0,1], 1, [0,1])
+        check(3, 1, 1, [1,2], 0)
+        check(3, 1, 1, [0,1], 1)
+        check(3, 1, 1, [0,1], 0, [0,0,2])
+        check(3, 2, 1, [2], 0)
+        if jt.flags.use_cuda:
+            # loop is not merged so parallel depth 2
+            check(3, 2, 2, [1], 1)
+        else:
+            check(3, 2, 1, [1], 0)
+        check(3, 2, 2, [1], 1, merge=0)
+        check(4, 2, 1, [2,3], 0)
         check(4, 2, 2, [0,3], 1)
 
     @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")

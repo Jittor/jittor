@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -32,7 +33,6 @@ CodeOp::CodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs,
     flags.set(NodeFlags::_cpu, !!this->cpu_src.size());
     flags.set(NodeFlags::_cuda, !!this->cuda_src.size());
     _outputs.push_back(create_output(shape, dtype));
-    CHECKop(_inputs.size(),<=,10);
 
     if (_outputs[0]->num < 0) {
         flags.set(NodeFlags::_vary_shape);
@@ -52,8 +52,6 @@ CodeOp::CodeOp(
     flags.set(NodeFlags::_cuda, !!this->cuda_src.size());
     CHECKop(shapes.size(),==,dtypes.size()) << "Number of outputs' shapes and dtypes should be the same";
     _outputs.resize(shapes.size());
-    CHECKop(_inputs.size(),<=,10);
-    CHECKop(_outputs.size(),<=,10);
     CHECKop(_outputs.size(),>,0);
     for (int i=0; i<shapes.size(); i++) {
         _outputs[i] = create_output(shapes[i], dtypes[i]);
@@ -61,6 +59,27 @@ CodeOp::CodeOp(
             flags.set(NodeFlags::_vary_shape);
             check_vary_shape(_outputs[i]->shape);
         }
+    }
+}
+
+CodeOp::CodeOp(
+    vector<Var*>&& inputs, vector<Var*>&& outputs, 
+    string&& cpu_src, vector<string>&& cpu_grad_src, string&& cpu_header, 
+    string&& cuda_src, vector<string>&& cuda_grad_src, string&& cuda_header)
+    : _inputs(inputs), cpu_src(move(cpu_src)), cpu_grad_src(move(cpu_grad_src)), cpu_header(move(cpu_header)),
+    cuda_src(move(cuda_src)), cuda_grad_src(move(cuda_grad_src)), cuda_header(move(cuda_header))
+{
+    flags.set(NodeFlags::_cpu, !!this->cpu_src.size());
+    flags.set(NodeFlags::_cuda, !!this->cuda_src.size());
+    _outputs.resize(outputs.size());
+    CHECKop(_outputs.size(),>,0);
+    for (int i=0; i<outputs.size(); i++) {
+        auto o = outputs[i];
+        _outputs[i] = create_output(o->shape, o->dtype());
+        _outputs[i]->share_with(o);
+        /*
+            TODO: vary shape not allowed in direct output
+        */
     }
 }
 
@@ -93,28 +112,28 @@ VarPtr CodeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     );
 }
 
-void CodeOp::jit_prepare() {
+void CodeOp::jit_prepare(JK& jk) {
 
     // forward: in0 in1 in2 -> out0 out1
     // backward: in0 in1 in2 in3(pout0) in4(pout1)
-    add_jit_define("IN_SIZE", JK::hex1(_inputs.size()));
+    jk << _CS("[IN_SIZE=") << JK::hex(_inputs.size());
     for (uint i=0; i<_inputs.size(); i++) {
-        jk << JK::key << "in" << JK::hex1(i) << "_dim" << 
-            JK::val << JK::hex1(_inputs[i]->shape.size()) << JK::end;
-        jk << JK::key << "in" << JK::hex1(i) << "_type" << 
-            JK::val << _inputs[i]->dtype() << JK::end;
+        jk << _CS("][in") << JK::hex(i) << _CS("_dim=")
+            << JK::hex1(_inputs[i]->shape.size());
+        jk << _CS("][in") << JK::hex(i) << _CS("_type:")
+            << _inputs[i]->dtype();
     }
-    add_jit_define("OUT_SIZE", JK::hex1(_outputs.size()));
+    jk << _CS("][OUT_SIZE=") << JK::hex(_outputs.size());
     for (uint i=0; i<_outputs.size(); i++) {
-        jk << JK::key << "out" << JK::hex1(i) << "_dim" << 
-            JK::val << JK::hex1(_outputs[i]->shape.size()) << JK::end;
-        jk << JK::key << "out" << JK::hex1(i) << "_type" << 
-            JK::val << _outputs[i]->dtype() << JK::end;
+        jk << _CS("][out") << JK::hex(i) << _CS("_dim=")
+            << JK::hex1(_outputs[i]->shape.size());
+        jk << _CS("][out") << JK::hex(i) << _CS("_type:")
+            << _outputs[i]->dtype();
     }
     if (flags.get(NodeFlags::_cuda)) {
-        jk << JK::key << "HEADER" << JK::val << cuda_header;
+        jk << _CS("][HEADER:") << cuda_header;
         ASSERT(cuda_src.size());
-        jk << "\nnamespace jittor {\n";
+        jk << _CS("\nnamespace jittor {\n");
         int i=0;
         // move cuda kernel function into header
         for (; i<cuda_src.size(); i++) {
@@ -135,13 +154,12 @@ void CodeOp::jit_prepare() {
                 }
             } else break;
         }
-        jk << "}" << JK::end << JK::key << "CODE" << JK::val;
+        jk << _CS("}][CODE:");
         for (; i<cuda_src.size(); i++) jk << cuda_src[i];
-        jk << JK::end;
+        jk << ']';
     } else {
-        add_jit_define("HEADER", cpu_header);
-        jk << JK::key << "CODE" << JK::val;
-        jk << cpu_src << JK::end;
+        jk << _CS("][HEADER:") << cpu_header;
+        jk << _CS("][CODE:") << cpu_src << ']';
         ASSERT(cpu_src.size());
     }
 }

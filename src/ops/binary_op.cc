@@ -1,5 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. Authors: Dun Liang <randonlang@gmail.com>. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -87,6 +88,21 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
     z = create_output(nullptr, binary_dtype_infer(op, x, y));
 }
 
+VarPtr dirty_clone_broadcast(Var* v) {
+    Op* op = v->input();
+    // dirty fix conv duplicated
+    if (op && !v->is_finished() && v->shape.size() > 4 && op->type() == OpType::broadcast) {
+        auto vp = op->duplicate();
+        if (vp) {
+            // TODO: loop options should be set to op, rather than var
+            if (v->loop_options)
+                vp->loop_options = v->loop_options;
+            return vp;
+        }
+    }
+    return v;
+}
+
 VarPtr BinaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     if (ns == ns_add) return dout;
     if (ns == ns_subtract) {
@@ -97,9 +113,9 @@ VarPtr BinaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     }
     if (ns == ns_multiply) {
         if (v_index == 0) 
-            return make_binary(y, dout, ns_multiply);
+            return make_binary(dirty_clone_broadcast(y), dirty_clone_broadcast(dout), ns_multiply);
         else
-            return make_binary(x, dout, ns_multiply);
+            return make_binary(dirty_clone_broadcast(x), dirty_clone_broadcast(dout), ns_multiply);
     }
     if (ns == ns_divide) {
         if (v_index == 0) 
@@ -114,8 +130,8 @@ VarPtr BinaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     }
     if (ns == ns_maximum || ns == ns_minimum) {
         auto zeros = make_number(0, dout);
-        auto cond = make_binary(x, y, ns_greater_equal);
-        if ((ns == ns_maximum) == (v_index==0))
+        auto cond = make_binary(y, z, ns_equal);
+        if (v_index==1)
             return make_ternary(cond, dout, zeros);
         else
             return make_ternary(cond, zeros, dout);
@@ -150,7 +166,7 @@ void BinaryOp::infer_shape() {
         // -1 1 need b
         // has 1, b, both 1, not b, 0, error
         if ((xshape == 1 || yshape == 1) && (xshape != yshape)) {
-            CHECK(xshape && yshape) << "Shape can not broadcast to 0.";
+            // CHECK(xshape && yshape) << "Shape can not broadcast to 0.";
             need_broadcast = true;
             continue;
         }
@@ -168,11 +184,11 @@ void BinaryOp::infer_shape() {
         z->set_shape(x->shape);
 }
 
-void BinaryOp::jit_prepare() {
-    add_jit_define("Tx", x->dtype());
-    add_jit_define("Ty", y->dtype());
-    add_jit_define("Tz", z->dtype());
-    add_jit_define("OP", ns.to_cstring());
+void BinaryOp::jit_prepare(JK& jk) {
+    jk << _CS("[Tx:") << x->dtype()
+        << _CS("][Ty:") << y->dtype()
+        << _CS("][Tz:") << z->dtype()
+        << _CS("][OP:") << ns << ']';
 }
 
 #else // JIT
