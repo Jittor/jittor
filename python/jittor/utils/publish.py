@@ -30,6 +30,11 @@ def docker_task(name, build_cmd):
     upload_file(f"/tmp/{bname}.tgz")
 
 docker_task(
+    "jittor/jittor-cuda-11-1", 
+    "sudo docker build --tag jittor/jittor-cuda-11-1:latest -f script/Dockerfile_cuda11 . --network host"
+)
+
+docker_task(
     "jittor/jittor", 
     "sudo docker build --tag jittor/jittor:latest . --network host"
 )
