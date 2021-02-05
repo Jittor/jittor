@@ -736,7 +736,7 @@ class Module:
                     v.update(param)
                 else:
                     n_failed += 1
-                    LOG.w(f'load parameter {key} failed: expect the shape of {key} to be {v.shape}, but got {param.shape}')
+                    LOG.e(f'load parameter {key} failed: expect the shape of {key} to be {v.shape}, but got {param.shape}')
         if n_failed:
             LOG.w(f"load total {len(params)} params, {n_failed} failed")
 
