@@ -228,6 +228,7 @@ class Pool3d(Module):
                         }}"""}
                     }}
             }}'''
+            
             out = jt.code([N,C,h,w,d], x.dtype, [x],
                 cuda_header="""
                     #include <ops/binary_op_defs.h>
@@ -249,10 +250,10 @@ class Pool3d(Module):
                         int s4 = blockDim.x * res_x;
 
                         int p3 = threadIdx.y + idx3 * blockDim.y;
-                        int p3 = blockDim.y * res_y;
+                        int s3 = blockDim.y * res_y;
 
                         int p2 = threadIdx.z + idx2 * blockDim.z;
-                        int p2 = blockDim.z * res_z;
+                        int s2 = blockDim.z * res_z;
 
                         int i1 = blockIdx.y;
                         int i0 = blockIdx.z;
@@ -299,10 +300,10 @@ class Pool3d(Module):
                         int s4 = blockDim.x * res_x;
 
                         int p3 = threadIdx.y + idx3 * blockDim.y;
-                        int p3 = blockDim.y * res_y;
+                        int s3 = blockDim.y * res_y;
 
                         int p2 = threadIdx.z + idx2 * blockDim.z;
-                        int p2 = blockDim.z * res_z;
+                        int s2 = blockDim.z * res_z;
 
                         int i1 = blockIdx.y;
                         int i0 = blockIdx.z;
