@@ -11,6 +11,7 @@
 import jittor as jt
 from functools import partial
 
+
 #TODO:full_matrices=1
 def svd(x):
 
@@ -81,6 +82,7 @@ def svd(x):
     )
     return u, s, v
 
+
 def eigh(x):
 
     def forward_code(np, data):
@@ -122,6 +124,7 @@ def eigh(x):
     )
     return w, v
 
+
 def inv(x):
 
     def forward_code(np, data):
@@ -150,6 +153,7 @@ def inv(x):
     )
     mx = lmx[0]
     return mx
+
 
 def pinv(x):
 
@@ -185,6 +189,7 @@ def pinv(x):
     mx = lmx[0]
     return mx
 
+
 def det(x):
 
     def forward_code(np, data):
@@ -219,6 +224,7 @@ def det(x):
     )
     det = l_det[0]
     return det
+
 
 def slogdet(x):
     def forward_code(np, data):
@@ -256,6 +262,7 @@ def slogdet(x):
     )
     return sign, mx
 
+
 def cholesky(x):
 
     def forward_code(np, data):
@@ -291,6 +298,7 @@ def cholesky(x):
     L = lL[0]
     return L
 
+
 def solve(a,b):
 
     def forward_code(np, data):
@@ -324,3 +332,48 @@ def solve(a,b):
     )
     ans = l_ans[0]
     return ans
+
+
+def qr(x):
+    def forward_code(np, data):
+        a = data["inputs"][0]
+        q, r = data["outputs"]
+        Q, R = np.linalg.qr(a)
+        np.copyto(q,Q)
+        np.copyto(r,R)
+
+    def backward_code(np, data):
+        def T(x):
+            return np.swapaxes(x, -1, -2)
+        _dot = partial(np.einsum, '...ij,...jk->...ik')
+        _harmard = partial(np.einsum, '...ij,...ij->...ij')
+        dout = data["dout"]
+        out = data["outputs"][0]
+        q, r = data["f_outputs"]
+        out_index = data["out_index"]
+        #pl = np.tril(np.ones((inp.shape[-1],inp.shape[-1])))-diags
+        if out_index == 0: # Q_TERM
+            q_t = _dot(T(q),dout)
+            rhs_solve = q_t - T(q_t)
+            rhs_solve = T(np.tril(rhs_solve,-1))
+            qsolve = np.linalg.solve(r,rhs_solve)
+            qsolve = T(qsolve)
+            tq = _dot(q,qsolve)
+            np.copyto(out,tq)
+        else: #R_TERM
+            r_t = _dot(r ,T(dout))
+            rhs_solve = r_t - T(r_t)
+            rhs_solve = np.tril(rhs_solve,-1)
+            rhs_solve = T(rhs_solve)
+            r_solve = np.linalg.solve(r,rhs_solve)
+            tr = _dot(q,(T(r_solve) + dout))
+            np.copyto(out,tr)
+
+    q, r = jt.numpy_code(
+        [x.shape,x.shape],
+        [x.dtype,x.dtype],
+        [x],
+        forward_code,
+        [backward_code],
+    )
+    return q, r
