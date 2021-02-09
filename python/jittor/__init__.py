@@ -540,10 +540,13 @@ def randint_like(x, low, high=None) -> Var:
     Example:
 
         >>> x = jt.zeros((2, 3))
-        >>> jt.randint_like(x)
-        jt.Var([[-1.1647032   0.34847224 -1.3061888 ]
-         [ 1.068085   -0.34366122  0.13172573]], dtype=float32)
-    ''' 
+        >>> jt.randint_like(x, 10)
+        jt.Var([[9. 3. 4.]
+         [4. 8. 5.]], dtype=float32)
+        >>> jt.randint_like(x, 10, 20)
+        jt.Var([[17. 11. 18.]
+        [14. 17. 15.]], dtype=float32)
+     ''' 
 
     return randint(low, high, x.shape, x.dtype)
 
