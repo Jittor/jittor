@@ -1089,7 +1089,6 @@ def _interpolate(img, x, y, ids, mode):
         return o
     if mode == "bicubic":  # ugly ver.
         n, c, h, w = img.shape
-        print(img)
         fx, fy = x.floor(), y.floor()
         dx, dy = x - fx, y - fy
         outputs = jt.zeros((n, c, x.shape[-2], x.shape[-1]))
@@ -1492,32 +1491,29 @@ def unfold(X, kernel_size, dilation=1, padding=0, stride=1):
     return output
 
 
-def fold(X, output_size, kernel_size, dilation=1, padding=0, stride=1):  # this may be implemented in C for speed?
-    assert X.ndim == 3
-    if not isinstance(kernel_size, tuple):
-        kernel_size = (kernel_size, kernel_size)
-    if not isinstance(dilation, tuple):
-        dilation = (dilation, dilation)
-    if not isinstance(padding, tuple):
-        padding = (padding, padding)
-    if not isinstance(stride, tuple):
-        stride = (stride, stride)
-    n, cl, num = X.shape
+def fold(X,output_size,kernel_size,dilation=1,padding=0,stride=1):# this may be implemented in C for speed?
+    assert X.ndim==3
+    if not isinstance(kernel_size,tuple):
+        kernel_size = (kernel_size,kernel_size)
+    if not isinstance(dilation,tuple):
+        dilation = (dilation,dilation)
+    if not isinstance(padding,tuple):
+        padding = (padding,padding)
+    if not isinstance(stride,tuple):
+        stride = (stride,stride)
+    n,cl,num = X.shape
     area = kernel_size[0] * kernel_size[1]
     block_nums = []
-    output = jt.zeros((n, cl // area, output_size[0], output_size[1]))
-    for i in range(2, 4):
-        block_nums.append(
-            (output_size[i - 2] + 2 * padding[i - 2] - dilation[i - 2] * (kernel_size[i - 2] - 1) - 1) // stride[
-                i - 2] + 1)
+    output = jt.zeros((n,cl // area,output_size[0]+2*padding[0],output_size[1]+2*padding[1]))
+    for i in range(2,4):
+        block_nums.append((output_size[i-2]+2*padding[i-2]-dilation[i-2]*(kernel_size[i-2]-1)-1) // stride[i-2]+1)
     for dn in range(n):
         for c in range(cl // area):
             for i in range(num):
                 for j in range(area):
-                    output[dn, c, i // block_nums[1] * stride[0] + (j % area) / kernel_size[1] * dilation[0], i %
-                           block_nums[1] * stride[1] + j % area % kernel_size[1] * dilation[1]] += X[
-                        dn, c * area + j, i]
-    return output
-
+                    h = i//block_nums[1]*stride[0]+(j%area)/kernel_size[1]*dilation[0]
+                    w = i%block_nums[1]*stride[1]+j%area%kernel_size[1]*dilation[1]
+                    output[dn,c,i//block_nums[1]*stride[0]+(j%area)//kernel_size[1]*dilation[0],i%block_nums[1]*stride[1]+j%area%kernel_size[1]*dilation[1]]+=X[dn,c*area+j,i]
+    return output[:,:,padding[0]:padding[0]+output_size[0],padding[1]:padding[1]+output_size[1]]
 
 ModuleList = Sequential

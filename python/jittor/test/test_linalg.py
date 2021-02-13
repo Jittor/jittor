@@ -8,10 +8,11 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
+import torch
+from torch.autograd import Variable
 import jittor as jt
 import numpy as np
 import unittest
-
 
 try:
     import autograd.numpy as anp
@@ -254,6 +255,41 @@ class TestCodeOp(unittest.TestCase):
             gx = np.sum(gx, 2)
             assert np.allclose(gx, jx.data)
 
+    def test_qr(self):
+        for i in range(50):
+            tn = np.random.randn(3, 3).astype('float32')
+            while np.allclose(np.linalg.det(tn), 0):
+                tn = np.random.randn((3, 3)).astype('float32')
+            x = jt.array(tn)
+            # x = x.reindex([2, 2, x.shape[0], x.shape[1]], ["i2", "i3"])
+            t_x = torch.from_numpy(tn)
+            t_x = Variable(t_x, requires_grad=True)
+            jq, jr = qr(x)
+            tq, tr = torch.qr(t_x)
+            try:
+                assert np.allclose(jq.data, tq.detach().numpy())
+                assert np.allclose(jr.data, tr.detach().numpy())
+            except AssertionError:
+                print("ours' qr results:")
+                print(jq)
+                print(jr)
+                print("pytorch's qr results:")
+                print(tq)
+                print(tr)
+            gq = jt.grad(jq, x).data
+            gr = jt.grad(jr, x).data
+            tgq = torch.autograd.grad(tq, t_x, torch.ones_like(tq), retain_graph=True)
+            tgr = torch.autograd.grad(tr, t_x, torch.ones_like(tr), retain_graph=True)
+            try:
+                assert np.allclose(gq, tgq[0].numpy())
+                assert np.allclose(gr, tgr[0].numpy())
+            except AssertionError:
+                print("ours' qr grad results:")
+                print(gq)
+                print(gr)
+                print("pytorch's qr grad result")
+                print(tgq[0])
+                print(tgr[0])
 
 if __name__ == "__main__":
     unittest.main()
