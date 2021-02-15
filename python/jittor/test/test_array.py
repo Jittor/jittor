@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
@@ -8,6 +8,7 @@ import unittest
 import jittor as jt
 import numpy as np
 from jittor import compile_extern
+from jittor.test.test_core import expect_error
 
 class TestArray(unittest.TestCase):
     def test_data(self):
@@ -132,6 +133,32 @@ class TestArray(unittest.TestCase):
         a = jt.array([1,2,3], dtype=jt.NanoString("float32"))
         a = jt.array([1,2,3], dtype=jt.float32)
 
+    def test_var(self):
+        a = jt.Var([1,2,3])
+        b = jt.Var([1,2,3], "float32")
+        assert a.dtype == "int32"
+        assert b.dtype == "float32"
+        assert (a.numpy() == [1,2,3]).all()
+        assert (b.numpy() == [1,2,3]).all()
+
+    def test_np_array(self):
+        a = jt.Var([1,2,3])
+        b = np.array(a)
+        assert (b==[1,2,3]).all()
+
+    def test_pickle(self):
+        import pickle
+        a = jt.Var([1,2,3,4])
+        s = pickle.dumps(a, pickle.HIGHEST_PROTOCOL)
+        b = pickle.loads(s)
+        assert isinstance(b, jt.Var)
+        assert (b.data == [1,2,3,4]).all()
+
+    def test_tuple_array(self):
+        a = jt.array((4,5))
+        expect_error(lambda : jt.array({}))
+        expect_error(lambda : jt.array("asdasd"))
+        expect_error(lambda : jt.array(jt))
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. All Rights Reserved. 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -14,7 +14,7 @@ struct PyObjHolder {
     PyObject* obj;
     inline PyObjHolder() : obj(nullptr) {
     }
-    void assign(PyObject* obj) {
+    inline void assign(PyObject* obj) {
         if (!obj) {
             LOGf << "Python error occur";
         }

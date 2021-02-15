@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 # ***************************************************************
-# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
 # Maintainers: 
 #     Dun Liang <randonlang@gmail.com>. 
 # 
@@ -28,6 +28,11 @@ def docker_task(name, build_cmd):
     bname = os.path.basename(name)
     run_cmd(f"sudo docker save {name}:latest -o /tmp/{bname}.tgz && sudo chmod 666 /tmp/{bname}.tgz")
     upload_file(f"/tmp/{bname}.tgz")
+
+docker_task(
+    "jittor/jittor-cuda-11-1", 
+    "sudo docker build --tag jittor/jittor-cuda-11-1:latest -f script/Dockerfile_cuda11 . --network host"
+)
 
 docker_task(
     "jittor/jittor", 

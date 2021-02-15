@@ -1,9 +1,9 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
 # Maintainers:
 #   Dun Liang <randonlang@gmail.com>.
 #   Wenyang Zhou <576825820@qq.com>
-#
+#   Guoye Yang <498731903@qq.com>
 # 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
@@ -77,7 +77,7 @@ def repeat(x, *shape):
         x = x.broadcast(x_shape)
     elif len_x_shape > len_shape:
         rep_shape = (len_x_shape - len_shape) * [1] + shape
-
+    #TODO if input.shape[i]=1, no add [1]
     reshape_shape = []
     broadcast_shape = []
     for x_s,r_s in zip(x_shape,rep_shape):
@@ -363,6 +363,10 @@ def make_grid(x, nrow=8, padding=2, normalize=False, range=None, scale_each=Fals
     assert isinstance(range, tuple) or range is None
     assert scale_each == False
     if isinstance(x, list): x = jt.stack(x)
+    assert isinstance(x, jt.Var)
+    if x.ndim < 4: return x
+    if x.ndim == 4 and x.shape[0] <= 1: return x
+    nrow = min(nrow, x.shape[0])
     if normalize: 
         if range is None: x = (x - x.min()) / (x.max() - x.min())
         else: x = (x - range[0]) / (range[1] - range[0])
@@ -478,11 +482,6 @@ def arange(start=0, end=None, step=1,dtype=None):
     if dtype is not None:
         x= x.cast(dtype)
     return x
-
-def randperm(n, dtype="int64"):
-    x = np.arange(n)
-    np.random.shuffle(x)
-    return jt.array(x).cast(dtype)
 
 def log2(x):
     return jt.log(x)/math.log(2.0)
@@ -721,3 +720,356 @@ def triu_(x,diagonal=0):
     return x.reindex(x.shape,indexs,overflow_conditions=overflow_conditions,overflow_value=0)
 
 jt.Var.triu_ = triu_
+
+def print_tree(now, max_memory_size, prefix1, prefix2, build_by):
+    def format_size(s):
+        if (s < 1024):
+            s = str(s)
+            return s + ' B'
+
+        if (s < 1024*1024):
+            s = format(s/1024, '.2f')
+            return s + ' KB'
+
+        if (s < 1024*1024*1024):
+            s = format(s/1024/1024, '.2f')
+            return s + ' MB'
+
+        s = format(s/1024/1024/1024, '.2f')
+        return s + ' GB'
+
+    out = ''
+    tab = '   '
+    out += prefix1+now['name']+'('+now['type']+')\n'
+    out += prefix2+'['+format_size(now['size'])+'; '+format(now['size']/max_memory_size*100, '.2f')+'%]\n'
+    if (build_by == 0):
+        for p in now['path']:
+            out += prefix2+p+'\n'
+    else:
+        out += prefix2+now['path'] + '\n'
+    if (len(now['children']) > 0):
+        out += prefix2 + tab + '| ' + '\n'
+    else:
+        out += prefix2 + '\n'
+    for i in range(len(now['children'])):
+        c = now['children'][i]
+        if i < len(now['children']) - 1:
+            prefix1_ = prefix2 + tab + '├─'
+            prefix2_ = prefix2 + tab + '| '
+        else:
+            prefix1_ = prefix2 + tab + '└─'
+            prefix2_ = prefix2 + tab + '  '
+        out += print_tree(c, max_memory_size, prefix1_, prefix2_, build_by)
+    return out
+
+def get_max_memory_treemap(build_by=0, do_print=True):
+    div1 = "[!@#div1!@#]"
+    div2 = "[!@#div2!@#]"
+    div3 = "[!@#div3!@#]"
+    info = jt.get_max_memory_info()
+
+    vars = []
+    vars_ = info.split(div1)
+    max_memory_size = int(vars_[0])
+    vars_ = vars_[1:]
+    for v_ in vars_:
+        v__ = v_.split(div2)
+        var = {'size':int(v__[1]), 'stack':[]}
+        v__ = v__[2:-1]
+        for s_ in v__:
+            s__ = s_.split(div3)
+            s = {'path':s__[0], 'name':s__[1], 'type':s__[2]}
+            var['stack'].append(s)
+        vars.append(var)
+    if (build_by == 0): # build tree by name
+        tree = {'name':'root', "children":[], 'size':0, 'path':[], 'type':''}
+
+        def find_child(now, key):
+            for c in now['children']:
+                if (c['name'] == key):
+                    return c
+            return None
+        for v in vars:
+            now = tree
+            now['size'] += v['size']
+            for s in v['stack']:
+                ch = find_child(now, s['name'])
+                if (ch is not None):
+                    if (not s['path'] in ch['path']):
+                        ch['path'].append(s['path'])
+                    assert(ch['type']==s['type'])
+                    now = ch
+                    now['size'] += v['size']
+                else:
+                    now_ = {'name':s['name'], "children":[], 'size':v['size'], 'path':[s['path']], 'type':s['type']}
+                    now['children'].append(now_)
+                    now = now_
+    elif (build_by == 1): # build tree by path
+        tree = {'name':'root', "children":[], 'size':0, 'path':'_root_', 'type':''}
+
+        def find_child(now, key):
+            for c in now['children']:
+                if (c['path'] == key):
+                    return c
+            return None
+        for v in vars:
+            now = tree
+            now['size'] += v['size']
+            for s in v['stack']:
+                ch = find_child(now, s['path'])
+                if (ch is not None):
+                    now = ch
+                    now['size'] += v['size']
+                else:
+                    now_ = {'name':s['name'], "children":[], 'size':v['size'], 'path':s['path'], 'type':s['type']}
+                    now['children'].append(now_)
+                    now = now_
+    else:
+        assert(False)
+        
+    def sort_tree(now):
+        def takeSize(elem):
+            return elem['size']
+        now['children'].sort(key=takeSize, reverse=True)
+        for c in now['children']:
+            sort_tree(c)
+    sort_tree(tree)
+    out = print_tree(tree, max_memory_size, '', '', build_by)
+    if (do_print):
+        print(out)
+    return tree, out
+    
+def python_pass_warper(mod_func, args, kw):
+    import importlib
+    mod, func = mod_func.rsplit(".", 1)
+    mod = importlib.import_module(mod)
+    func = getattr(mod, func)
+    args = args + ("**kw",)
+    args = ",".join(args)
+    return eval(f"func({args})")
+
+def auto_parallel(n, src, **kw):
+    """
+    auto parallel(CPU and GPU) n-d for loop function like below:
+
+    Before:
+
+    void inner_func(int n0, int i0, int n1, int i1) {
+        ...
+    }
+
+    for (int i0=0; i0<n0; i0++)
+        for (int i1=0; i1<n1; i1++)
+            inner_func(n0, i0, n1, i1, ...);
+
+    After:
+
+    @python.jittor.auto_parallel(2)
+    void inner_func(int n0, int i0, int n1, int i1) {
+        ...
+    }
+
+    inner_func(n0, 0, n1, 0, ...);
+
+
+    """
+    # src = prev_func func_name(args)code
+    a, b = src.split('(', 1)
+    prev_func, func_name = a.rsplit(None, 1)
+    args, code = b.split(')', 1)
+    args = args.split(',')
+    assert len(args) >= n*2, (args, n)
+    oargs = args[n*2:]
+    pargs = args[:n*2]
+    piargs = pargs[1::2]
+    pnargs = pargs[0::2]
+    pnargs2 = [ a.split()[-1] for a in pnargs ]
+    oargs2 = [ a.split()[-1] for a in oargs ]
+    entry_func_args_def = ",".join(["int tn"+str(i) for i in range(n)]
+        + pnargs + oargs)
+    entry_func_args = ",".join(["tn"+str(i) for i in range(n)]
+        + pnargs2 + oargs2)
+    tid_def = ""
+    tid_loop = ""
+    call_args = []
+    for i in reversed(range(n)):
+        tid_def += f"\nauto tid{i} = tid & ((1<<tn{i})-1);"
+        tid_def += f"\nauto tnum{i} = 1<<tn{i};"
+        tid_def += f"\ntid = tid>>tn{i};"
+    for i in range(n):
+        tid_loop += f"\nfor (int i{i}=tid{i}; i{i}<{pnargs2[i]}; i{i}+=tn{i})"
+        call_args.append(pnargs2[i])
+        call_args.append(f"i{i}")
+    call_args += oargs2
+    call_args = ",".join(call_args)
+    xn = '\n'
+    new_src = f"""
+#ifdef JIT_cuda
+__device__
+#endif
+{src.replace(func_name, func_name+"_inner", 1)}
+
+#ifdef JIT_cuda
+__global__ static void {func_name}_entry({entry_func_args_def}) {{
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    {tid_def}
+    {tid_loop}
+    {func_name}_inner({call_args});
+}}
+#endif
+
+inline static void {func_name}({",".join(pargs+oargs)}) {{
+#ifdef JIT_cuda
+    int thread_num = 256*1024;
+    {xn.join([f"int tn{i} = NanoVector::get_nbits(std::min(thread_num, {pnargs2[i]})) - 2;thread_num >>= tn{i};" for i in reversed(range(n))])}
+    thread_num = 1<<({"+".join([f"tn{i}" for i in range(n)])});
+    int p1 = std::max(thread_num/1024, 1);
+    int p2 = std::min(thread_num, 1024);
+    {func_name}_entry<<<p1,p2>>>({entry_func_args});
+#else
+    {xn.join([f"for (int i{i}=0; i{i}<{pnargs2[i]}; i{i}++)" for i in range(n)])}
+    {func_name}_inner({call_args});
+#endif
+}}
+"""
+    return new_src
+
+
+def cumprod(a, dim):
+    class CumprodFunc(jt.Function):
+        def forward_code(self, np, data):
+            a = data["inputs"][0]
+            b = data["outputs"][0]
+            out = np.cumprod(a, self.dim)
+            np.copyto(b, out)
+
+        def backward_code(self, np, data):
+            a, b, dout = data["inputs"]
+            out = data["outputs"][0]
+
+            sdim = a.shape[self.dim]
+            dim = (len(a.shape)+1)*[1]
+            dim[self.dim+1] = sdim
+            res = np.tile(np.expand_dims(b, self.dim+1), dim)
+            dout = np.tile(np.expand_dims(dout, self.dim+1), dim)
+
+            dim[self.dim]=sdim
+            dim[self.dim+1]=1
+            a = np.tile(np.expand_dims(a, self.dim), dim)
+            res = res/a
+            
+            mask = np.tril(np.ones((sdim, sdim)))
+            for i in range(self.dim):
+                mask = np.expand_dims(mask, 0)
+            for i in range(len(a.shape)-self.dim-2):
+                mask = np.expand_dims(mask, -1)
+            res = np.sum(mask*res*dout, self.dim)
+            
+            np.copyto(out, res)
+
+        def execute(self, a, dim):
+            self.save_vars = a
+            self.dim = dim
+            self.res = jt.numpy_code(
+                a.shape,
+                a.dtype,
+                [a],
+                self.forward_code,
+            )
+            return self.res
+
+        def grad(self, grad_a):
+            a = self.save_vars
+            b = self.res
+            return jt.numpy_code(
+                a.shape,
+                a.dtype,
+                [a, b, grad_a],
+                self.backward_code,
+            )
+
+    func = CumprodFunc()
+    if dim<0:
+        dim+=len(a.shape)
+    return func(a, dim)
+
+def linspace(start, end, steps):
+    res = jt.index((steps,))[0]
+    res = res*(end-start)/float(steps-1)+start
+    return res
+
+def randperm(n, dtype="int32"):
+    key = jt.random((n,))
+    index, _ = jt.argsort(key)
+    return index.cast(dtype)
+
+def set_global_seed(seed):
+    import random
+    random.seed(seed)
+    jt.set_seed(seed)
+    np.random.seed(seed)
+    try:
+        import cupy
+        cupy.random.seed(seed)
+    except:
+        pass
+
+def searchsorted(sorted, values, right=False):
+    """
+    Find the indices from the innermost dimension of `sorted` for each `values`.
+
+Example::
+
+    sorted = jt.array([[1, 3, 5, 7, 9], [2, 4, 6, 8, 10]])
+    values = jt.array([[3, 6, 9], [3, 6, 9]])
+    ret = jt.searchsorted(sorted, values)
+    assert (ret == [[1, 3, 4], [1, 2, 4]]).all(), ret
+
+    ret = jt.searchsorted(sorted, values, right=True)
+    assert (ret == [[2, 3, 5], [1, 3, 4]]).all(), ret
+    
+    sorted_1d = jt.array([1, 3, 5, 7, 9])
+    ret = jt.searchsorted(sorted_1d, values)
+    assert (ret == [[1, 3, 4], [1, 3, 4]]).all(), ret
+
+
+    """
+    _searchsorted_header = f"""
+namespace jittor {{
+
+@python.jittor.auto_parallel(2)
+inline static void searchsorted(
+    int batch_num, int batch_id, int value_num, int value_id,
+    int sorted_num, int batch_stride,
+    {sorted.dtype}* __restrict__  sort_p, {values.dtype}* __restrict__  value_p, 
+    int32* __restrict__ index_p) {{
+    int32 l = batch_id * batch_stride;
+    int32 r = l + sorted_num;
+    auto v = value_p[batch_id * value_num + value_id];
+    while (l<r) {{
+        int32 m = (l+r)/2;
+        if (sort_p[m] {"<=" if right else "<"} v)
+            l = m+1;
+        else
+            r = m;
+    }}
+    index_p[batch_id * value_num + value_id] = l - batch_id * batch_stride;
+}}
+
+}}
+"""
+    _searchsorted_src = """
+    int value_num = in1->shape[in1->shape.size()-1];
+    int sorted_num = in0->shape[in0->shape.size()-1];
+    int32 batch_num = in0->num / sorted_num;
+    int32 batch_num2 = in1->num / value_num;
+    int32 batch_stride = batch_num == 1 ? 0 : sorted_num;
+    CHECK(batch_num == batch_num2 || batch_num == 1);
+
+    searchsorted(batch_num2, 0, value_num, 0, sorted_num, batch_stride, in0_p, in1_p, out0_p);
+"""
+    return jt.code(values.shape, "int32", [sorted, values], 
+        cpu_header=_searchsorted_header,
+        cpu_src=_searchsorted_src,
+        cuda_header=_searchsorted_header,
+        cuda_src=_searchsorted_src)

@@ -1,6 +1,9 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. All Rights Reserved.
-// Maintainers: Dun Liang <randonlang@gmail.com>. 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: 
+//     Dun Liang <randonlang@gmail.com>. 
+//     Guoye Yang <498731903@qq.com>
+// 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -16,6 +19,7 @@ namespace jittor {
 
 struct Executor {
     Allocator* allocator;
+    Allocator* temp_allocator;
     bool last_is_cuda = false;
     void run_sync(vector<Var*> vars, bool device_sync);
 };

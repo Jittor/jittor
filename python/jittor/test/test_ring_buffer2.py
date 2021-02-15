@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
 # Maintainers: 
 #     Dun Liang <randonlang@gmail.com>. 
 # 
@@ -15,13 +15,20 @@ from jittor.dataset.mnist import MNIST
 import jittor.transform as trans
 from tqdm import tqdm
 
+class BBox:
+    def __init__(self, x):
+        self.x = x
+
+    def __eq__(self, other):
+        return bool((self.x == other.x).all())
+
 def test_ring_buffer():
-    buffer = jt.RingBuffer(1000)
+    buffer = jt.RingBuffer(2000)
     def test_send_recv(data):
         print("test send recv", type(data))
         buffer.push(data)
         recv = buffer.pop()
-        if isinstance(data, np.ndarray):
+        if isinstance(data, (np.ndarray, jt.Var)):
             assert (recv == data).all()
         else:
             assert data == recv
@@ -62,6 +69,11 @@ def test_ring_buffer():
     n_byte += 1 + 16 + 2 + 10*10*8
     assert n_byte == buffer.total_pop() and n_byte == buffer.total_push()
     test_send_recv(test_ring_buffer)
+
+    test_send_recv(jt.array(np.random.rand(10,10)))
+
+    bbox = BBox(jt.array(np.random.rand(10,10)))
+    test_send_recv(bbox)
 
     expect_error(lambda: test_send_recv(np.random.rand(10,1000)))
 

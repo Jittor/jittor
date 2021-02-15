@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
@@ -241,23 +241,31 @@ def get_version(output):
     version = "("+v[-1]+")"
     return version
 
-def find_exe(name, check_version=True):
+def get_int_version(output):
+    ver = get_version(output)
+    ver = ver[1:-1].split('.')
+    ver = tuple(( int(v) for v in ver ))
+    return ver
+
+def find_exe(name, check_version=True, silent=False):
     output = run_cmd(f'which {name}', err_msg=f'{name} not found')
     if check_version:
         version = get_version(name)
     else:
         version = ""
-    LOG.i(f"Found {name}{version} at {output}.")
+    if not silent:
+        LOG.i(f"Found {name}{version} at {output}.")
     return output
 
-def env_or_find(name, bname):
+def env_or_find(name, bname, silent=False):
     if name in os.environ:
         path = os.environ[name]
         if path != "":
             version = get_version(path)
-            LOG.i(f"Found {bname}{version} at {path}")
+            if not silent:
+                LOG.i(f"Found {bname}{version} at {path}")
         return path
-    return find_exe(bname)
+    return find_exe(bname, silent=silent)
 
 def get_cc_type(cc_path):
     bname = os.path.basename(cc_path)
@@ -271,7 +279,26 @@ is_in_ipynb = in_ipynb()
 cc = None
 LOG = LogWarper()
 
-cc_path = env_or_find('cc_path', 'g++')
+cc_path = env_or_find('cc_path', 'g++', silent=True)
 os.environ["cc_path"] = cc_path
 cc_type = get_cc_type(cc_path)
 cache_path = find_cache_path()
+
+
+py3_config_paths = [
+    os.path.dirname(sys.executable) + f"/python3.{sys.version_info.minor}-config",
+    sys.executable + "-config",
+    f"/usr/bin/python3.{sys.version_info.minor}-config",
+    os.path.dirname(sys.executable) + "/python3-config",
+]
+if "python_config_path" in os.environ:
+    py3_config_paths.insert(0, os.environ["python_config_path"])
+
+for py3_config_path in py3_config_paths:
+    if os.path.isfile(py3_config_path):
+        break
+else:
+    raise RuntimeError(f"python3.{sys.version_info.minor}-config "
+        "not found in {py3_config_paths}, please specify "
+        "enviroment variable 'python_config_path',"
+        " or apt install python3.{sys.version_info.minor}-dev")

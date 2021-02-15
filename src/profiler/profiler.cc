@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. All Rights Reserved. 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -83,7 +83,7 @@ static  string get_stack_info(Op* op) {
             stack_info += kv.first;
             stack_info += '\n';
         }
-        if (trace_py_var == 2) {
+        if (trace_py_var >= 3) {
             std::stringstream ss;
             ss << "input from:\n";
             for (auto& vi : fop->vars) {
@@ -103,7 +103,7 @@ static  string get_stack_info(Op* op) {
     } else {
         stack_info += _get_stack_info(op);
         stack_info += '\n';
-        if (trace_py_var == 2) {
+        if (trace_py_var >= 3) {
             std::stringstream ss;
             ss << "input from:\n";
             for (auto v : op->inputs()) {

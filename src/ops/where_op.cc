@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. All Rights Reserved. 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -196,7 +196,7 @@ void WhereOp::jit_run() {
     @for(i, 0, NDIM,  auto* __restrict__ outs@i@@p = outs[@i]->ptr<To>();)
     
     size_t n_allocation;
-    int* np = (int*)exe.allocator->alloc(4, n_allocation);
+    int* np = (int*)exe.temp_allocator->alloc(4, n_allocation);
 
     // one block kernel, result maybe unstable
     // int tnum = condshape@{NDIM-1};
@@ -232,7 +232,7 @@ void WhereOp::jit_run() {
     // checkCudaErrors(cudaDeviceSynchronize());
     checkCudaErrors(cudaMemcpy(&n, np, 4, cudaMemcpyDefault));
     @for(i, 0, NDIM, outs[@i]->set_shape({n});)
-    exe.allocator->free(np, 4, n_allocation);
+    exe.temp_allocator->free(np, 4, n_allocation);
 }
 #else
 

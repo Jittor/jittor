@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved.
 // Maintainers: Dun Liang <randonlang@gmail.com>.
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -121,8 +121,9 @@ struct RingBuffer {
             rr = c2 << size_bit;
             rr_next = rr + size;
         }
+        CHECK(rr_next <= r+this->size) << "Buffer size too small, please increase buffer size. Current size:"
+            << this->size << "Required size:" << rr_next - r;
         while (rr_next > l + this->size) {
-            CHECKop(size,<=,this->size) << "Buffer size too small, please increase buffer size.";
             wait();
         }
         offset = rr_next;

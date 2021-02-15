@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
 # Maintainers: 
 #     Guowei Yang <471184555@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
@@ -10,6 +10,12 @@
 import jittor as jt
 import numpy as np
 import math
+
+def eye(shape, dtype):
+    return jt.array(np.identity(shape[0])).unary(dtype)
+
+def eye_(var):
+    var.assign(eye(var.shape, var.dtype))
 
 def constant(shape, dtype, value=0.0):
     return jt.array(value).unary(dtype).broadcast(shape)

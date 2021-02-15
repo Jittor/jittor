@@ -3,10 +3,19 @@
 [Quickstart](#quickstart) | [Install](#install) | [Tutorial](#tutorial) | [Chinese](./README.cn.md)
 
 
-Jittor is a high-performance deep learning framework based on JIT compiling and meta-operators. The whole framework and meta-operators are compiled just-in-time. A powerful op compiler and tuner are integrated into Jittor. It allowed us to generate high-performance code with specialized for your model.
+Jittor is a high-performance deep learning framework based on JIT compiling and meta-operators. The whole framework and meta-operators are compiled just-in-time. A powerful op compiler and tuner are integrated into Jittor. It allowed us to generate high-performance code with specialized for your model. Jittor also contains a wealth of high-performance model libraries, including: image recognition, detection, segmentation, generation, differentiable rendering, geometric learning, reinforcement learning, etc. .
 
 
-The front-end language is Python. Module Design is used in the front-end, which is the most popular design for deeplearning framework interface. The back-end is implemented by high performance language, such as CUDA,C++.
+The front-end language is Python. Module Design and Dynamic Graph Execution is used in the front-end, which is the most popular design for deeplearning framework interface. The back-end is implemented by high performance language, such as CUDA,C++.
+
+
+Related Links:
+*  [Jittor Website](https://cg.cs.tsinghua.edu.cn/jittor/)
+*  [Jittor Tutorials](https://cg.cs.tsinghua.edu.cn/jittor/tutorial/)
+*  [Jittor Models](https://cg.cs.tsinghua.edu.cn/jittor/resources/)
+*  [Jittor Documents](https://cg.cs.tsinghua.edu.cn/jittor/assets/docs/index.html)
+*  [Github](https://github.com/jittor/jittor), [Gitee](https://gitee.com/jittor/jittor)
+
 
 
 The following example shows how to model a two-layer neural network step by step and train from scratch In a few lines of Python code.
@@ -77,24 +86,8 @@ We provide some jupyter notebooks to help you quick start with Jittor.
 
 
 
-We provide a Docker installation method to save you from configuring the environment. The Docker installation method is as follows:
-
-```
-# CPU only
-docker run -it --network host jittor/jittor
-# CPU and CUDA
-docker run -it --network host jittor/jittor-cuda
-```
 
 
-Jittor is written in Python and C++. It requires a compiler for JIT compilation, Currently, we support four compilers:
-
-
-* CPU compiler (require at least one of the following)
-    * g++ (>=5.4.0)
-    * clang (>=8.0)
-* GPU compiler (optional)
-    * nvcc (>=10.0 for g++ or >=10.2 for clang)
 
 
 
@@ -103,11 +96,34 @@ Jittor environment requirements:
 
 * System: **Ubuntu** >= 16.04 (or **Windows** Subsystem of Linux)
 * Python version >= 3.7
-* C++ compiler(g++ or clang)
+* CPU compiler (require at least one of the following)
+    * g++ (>=5.4.0)
+    * clang (>=8.0)
+* GPU compiler (optional)
+    * nvcc (>=10.0 for g++ or >=10.2 for clang)
+* GPU library: cudnn-dev (recommend tar file installation, [reference link](https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#installlinux-tar))
+
+
 
 Note: Currently Jittor runs on the Windows operating system through WSL. For the installation method of WSL, please refer to [Microsoft official website](https://docs.microsoft.com/en-us/windows/wsl/install-win10). WSL does not yet support CUDA.
 
-Jittor offers three ways to install: pip, script or manual.
+Jittor offers three ways to install: docker, pip, or manual.
+
+
+## Docker Install
+
+
+
+We provide a Docker installation method to save you from configuring the environment. The Docker installation method is as follows:
+
+```
+# CPU only(Linux)
+docker run -it --network host jittor/jittor
+# CPU and CUDA(Linux)
+docker run -it --network host --gpus all jittor/jittor-cuda
+# CPU only(Mac and Windows)
+docker run -it -p 8888:8888 jittor/jittor
+```
 
 
 
@@ -121,29 +137,6 @@ python3.7 -m pip install jittor
 # python3.7 -m pip install git+https://github.com/Jittor/jittor.git
 python3.7 -m jittor.test.test_example
 ```
-
-
-## single line script install
-
-
-We provide single line command for quick installation the latest version of Jittor(Ubuntu>=16.04):
-
-
-```bash
-# install with clang and cuda
-wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.sh | with_clang=1 with_cuda=1 bash
-# install with clang
-wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.sh | with_clang=1 bash
-# install with g++ and cuda
-wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.sh | with_gcc=1 with_cuda=1 bash
-# install with g++
-wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.sh | with_gcc=1 bash
-```
-After execution, the script will show some environment variables you need to export.
-
-
-If you use Jittor for CPU computing, we strongly recommend clang(>=8.0) as the back-end compiler of Jittor. Because some customized optimizations will be enabled.
-
 
 
 ## manual install
@@ -215,7 +208,7 @@ jt.flags.use_cuda = 1
 ### Optional Step 5: Test Resnet18 training
 
 
-To check the integrity of Jittor, you can run Resnet18 training test.
+To check the integrity of Jittor, you can run Resnet18 training test. Note: 6G GPU RAM is requires in this test.
 
 
 ```bash
@@ -255,9 +248,9 @@ And we can give the variable a name.
 
 
 ```python
-c.name('c')
-print(c.name())
-# Output: c
+a.name('a')
+print(a.name())
+# Output: a
 ```
 
 ### Operations
@@ -376,7 +369,7 @@ Jittor is currently maintained by the [Tsinghua CSCG Group](https://cg.cs.tsingh
   journal={Information Sciences},
   volume={63},
   number={222103},
-  pages={1--222103},
+  pages={1--21},
   year={2020}
 }
 ```

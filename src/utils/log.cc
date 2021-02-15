@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. All Rights Reserved. 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -158,7 +158,8 @@ void send_log(std::ostringstream&& out) {
         mwsr_list_log::push(move(out));
     } else {
         std::lock_guard<std::mutex> lk(sync_log_m);
-        std::cerr << "[SYNC]" << out.str();
+        // std::cerr << "[SYNC]";
+        std::cerr << out.str();
         std::cerr.flush();
     }
 }
@@ -256,7 +257,7 @@ void stream_hash(uint64_t& hash, char c) {
 
 DEFINE_FLAG(int, log_silent, 0, "The log will be completely silent.");
 DEFINE_FLAG(int, log_v, 0, "Verbose level of logging");
-DEFINE_FLAG(int, log_sync, 0, "Set log printed synchronously.");
+DEFINE_FLAG(int, log_sync, 1, "Set log printed synchronously.");
 DEFINE_FLAG_WITH_SETTER(string, log_vprefix, "",
     "Verbose level of logging prefix\n"
     "example: log_vprefix='op=1,node=2,executor.cc:38$=1000'");
@@ -304,8 +305,7 @@ int system_popen(const char* cmd) {
     FILE *ptr = popen(cmd2.c_str(), "r");
     if (!ptr) return -1;
     while (fgets(buf, BUFSIZ, ptr) != NULL) {
-        std::cout << buf;
-        std::cout.flush();
+        puts(buf);
     }
     return pclose(ptr);
 }

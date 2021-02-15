@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. All Rights Reserved. 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -20,11 +20,7 @@ void LoopToFuncPass::run() {
     if (cc_type=="clang") choice=1;
     if (!choice) return;
     int func_num=0;
-    string hash_name;
-    std::stringstream ss;
-    op->do_prepare(jk);
-    ss << std::hex << std::hash<string>()(jk.to_string());
-    hash_name = ss.str();
+    string hash_name = op->get_hash_name();
     
     ir->push_back("using namespace jittor;", &ir->before);
     if ((cc_type=="icc" || cc_type=="g++") && choice)

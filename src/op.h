@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. All Rights Reserved. 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -55,6 +55,7 @@ struct Op : Node {
     string name_ex() const;
     string get_jit_key(JK& jk);
     vector<pair<string,string>> get_jit_define();
+    string get_hash_name();
 };
 
 std::ostream& operator<<(std::ostream& os, const Op* var);

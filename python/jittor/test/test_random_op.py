@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
 # Maintainers: 
 #     Guoye Yang <498731903@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
@@ -86,6 +86,18 @@ class TestRandomOp(unittest.TestCase):
     @jt.flag_scope(use_cuda=1)
     def test_normal_cuda(self):
         self.test_normal()
+
+    def test_other_rand(self):
+        a = jt.array([1.0,2.0,3.0])
+        b = jt.rand_like(a)
+        c = jt.randn_like(a)
+        assert b.shape == c.shape
+        assert b.shape == a.shape
+        print(b, c)
+        assert jt.randint(10, 20, (2000,)).min() == 10
+        assert jt.randint(10, 20, (2000,)).max() == 19
+        assert jt.randint(10, shape=(2000,)).max() == 9
+        assert jt.randint_like(a, 10).shape == a.shape
 
 
 if __name__ == "__main__":

@@ -5,13 +5,28 @@
 
 [快速开始](#快速开始) | [安装](#安装) | [教程](#教程)
 
-Jittor is a high-performance deep learning framework based on JIT compiling and meta-operators. The whole framework and meta-operators are compiled just-in-time. A powerful op compiler and tuner are integrated into Jittor. It allowed us to generate high-performance code with specialized for your model.
+Jittor is a high-performance deep learning framework based on JIT compiling and meta-operators. The whole framework and meta-operators are compiled just-in-time. A powerful op compiler and tuner are integrated into Jittor. It allowed us to generate high-performance code with specialized for your model. Jittor also contains a wealth of high-performance model libraries, including: image recognition, detection, segmentation, generation, differentiable rendering, geometric learning, reinforcement learning, etc. .
 
-Jittor 是一个基于即时编译和元算子的高性能深度学习框架，整个框架在即时编译的同时，还集成了强大的Op编译器和调优器，为您的模型生成定制化的高性能代码。
+Jittor 是一个基于即时编译和元算子的高性能深度学习框架，整个框架在即时编译的同时，还集成了强大的Op编译器和调优器，为您的模型生成定制化的高性能代码。Jittor还包含了丰富的高性能模型库，涵盖范围包括：图像识别，检测，分割，生成，可微渲染，几何学习，强化学习等等。
 
-The front-end language is Python. Module Design is used in the front-end, which is the most popular design for deeplearning framework interface. The back-end is implemented by high performance language, such as CUDA,C++.
+The front-end language is Python. Module Design and Dynamic Graph Execution is used in the front-end, which is the most popular design for deeplearning framework interface. The back-end is implemented by high performance language, such as CUDA,C++.
 
-Jittor前端语言为Python。前端使用了模块化的设计，这是目前最主流的深度学习框架接口设计。后端则使用高性能语言编写，如CUDA，C++。
+Jittor前端语言为Python。前端使用了模块化和动态图执行的设计，这是目前最主流的深度学习框架接口设计。后端则使用高性能语言编写，如CUDA，C++。
+
+Related Links:
+*  [Jittor Website](https://cg.cs.tsinghua.edu.cn/jittor/)
+*  [Jittor Tutorials](https://cg.cs.tsinghua.edu.cn/jittor/tutorial/)
+*  [Jittor Models](https://cg.cs.tsinghua.edu.cn/jittor/resources/)
+*  [Jittor Documents](https://cg.cs.tsinghua.edu.cn/jittor/assets/docs/index.html)
+*  [Github](https://github.com/jittor/jittor), [Gitee](https://gitee.com/jittor/jittor)
+
+相关链接：
+*  [Jittor官网](https://cg.cs.tsinghua.edu.cn/jittor/)
+*  [Jittor教程](https://cg.cs.tsinghua.edu.cn/jittor/tutorial/)
+*  [Jittor模型库](https://cg.cs.tsinghua.edu.cn/jittor/resources/)
+*  [Jittor文档](https://cg.cs.tsinghua.edu.cn/jittor/assets/docs/index.html)
+*  [Github](https://github.com/jittor/jittor)， [Gitee](https://gitee.com/jittor/jittor)
+
 
 The following example shows how to model a two-layer neural network step by step and train from scratch In a few lines of Python code.
 
@@ -94,59 +109,67 @@ We provide some jupyter notebooks to help you quick start with Jittor.
 
 ## 安装
 
-我们提供了Docker安装方式，免去您配置环境，Docker安装方法如下：
 
-We provide a Docker installation method to save you from configuring the environment. The Docker installation method is as follows:
+Jittor框架对环境要求如下:
 
-```
-# CPU only
-docker run -it --network host jittor/jittor
-# CPU and CUDA
-docker run -it --network host jittor/jittor-cuda
-```
 
-关于Docker安装的详细教程，可以参考[Windows/Mac/Linux通过Docker安装计图](https://cg.cs.tsinghua.edu.cn/jittor/tutorial/2020-5-15-00-00-docker/)
-
-Jittor is written in Python and C++. It requires a compiler for JIT compilation, Currently, we support four compilers:
-
-Jittor使用Python和C++编写。 它需要用于即时编译的编译器。当前，我们支持三种编译器：
-
-* CPU compiler (require at least one of the following)
-    * g++ (>=5.4.0)
-    * clang (>=8.0)
-* CPU 编译器 （需要下列至少一个）
+* 操作系统: **Ubuntu** >= 16.04 或 **Windows Subsystem of Linux（WSL）**
+* Python：版本 >= 3.7
+* C++编译器 （需要下列至少一个）
     - g++ （>=5.4.0）
     - clang （>=8.0）
-* GPU compiler (optional)
-    * nvcc (>=10.0 for g++ or >=10.2 for clang)
-* GPU 编译器（可选）
-    - nvcc (>=10.0 for g++ 或者 >=10.2 for clang)
+* GPU 编译器（可选）：nvcc >=10.0
+* GPU 加速库（可选）：cudnn-dev (cudnn开发版, 推荐使用tar安装方法，[参考链接](https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#installlinux-tar))
 
-Jittor的环境要求如下:
+如果您不希望手动配置环境，我们推荐使用 Docker 进行安装。
+除此之外，您还可以使用 pip 安装和手动安装。
 
-* 操作系统: **Ubuntu** >= 16.04 (or **Windows** Subsystem of Linux)
-* Python版本 >= 3.7
-* C++编译器（g++ or clang）
+注意：目前Jittor通过WSL的方式在Windows操作系统上运行，WSL的安装方法请参考[微软官网](https://docs.microsoft.com/en-us/windows/wsl/install-win10)，WSL版本目前尚不支持CUDA。
 
-注意：目前Jittor通过WSL的方式在Windows操作系统上运行，WSL的安装方法请参考[微软官网](https://docs.microsoft.com/en-us/windows/wsl/install-win10)，目前WSL尚不支持CUDA。
+Jittor 提供了三种安装方法：docker，pip和手动安装：
 
 Jittor environment requirements:
 
 * System: **Ubuntu** >= 16.04 (or **Windows** Subsystem of Linux)
 * Python version >= 3.7
-* C++ compiler(g++ or clang)
+* CPU compiler (require at least one of the following)
+    * g++ (>=5.4.0)
+    * clang (>=8.0)
+* GPU compiler (optional)
+    * nvcc (>=10.0 for g++ or >=10.2 for clang)
+* GPU library: cudnn-dev (recommend tar file installation, [reference link](https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#installlinux-tar))
+
+
 
 Note: Currently Jittor runs on the Windows operating system through WSL. For the installation method of WSL, please refer to [Microsoft official website](https://docs.microsoft.com/en-us/windows/wsl/install-win10). WSL does not yet support CUDA.
 
-Jittor offers three ways to install: pip, script or manual.
+Jittor offers three ways to install: docker, pip, or manual.
 
-Jittor 一共提供三种方式安装: pip安装, 一键脚本安装 和 手动安装.
+
+## Docker Install
+
+## Docker 安装
+
+我们提供了Docker安装方式，免去您配置环境，Docker安装方法如下：
+
+We provide a Docker installation method to save you from configuring the environment. The Docker installation method is as follows:
+
+```
+# CPU only(Linux)
+docker run -it --network host jittor/jittor
+# CPU and CUDA(Linux)
+docker run -it --network host --gpus all jittor/jittor-cuda
+# CPU only(Mac and Windows)
+docker run -it -p 8888:8888 jittor/jittor
+```
+
+关于Docker安装的详细教程，可以参考[Windows/Mac/Linux通过Docker安装计图](https://cg.cs.tsinghua.edu.cn/jittor/tutorial/2020-5-15-00-00-docker/)
 
 ## Pip 安装
 
 ## Pip install
 
-如果您没有准备好环境，欢迎使用我们提供的一键安装脚本， 如果您已经装好编译器和对应版本的Python,我们强烈推荐您使用这种方法
+如果您没有准备好环境，或者使用的不是Ubuntu操作系统， 推荐使用**docker安装**， 如果您已经装好编译器和对应版本的Python,我们强烈推荐您使用这种方法
 (如果无法访问github, 可以通过jittor主页下载):
 
 ```bash
@@ -159,34 +182,6 @@ python3.7 -m jittor.test.test_example
 
 如果测试运行通过,恭喜你已经安装完成.
 jittor会自动在路径中寻找合适的编译器, 如果您希望手动指定编译器, 请使用环境变量 `cc_path` 和 `nvcc_path`(可选).
-
-## 一键脚本安装
-## single line script install
-
-一键脚本安装会帮您安装好所需的编译器以及对应的Python版本.
-
-We provide single line command for quick installation the latest version of Jittor(Ubuntu>=16.04):
-
-我们提供能快速安装最新版本Jittor的单行命令（Ubuntu> = 16.04）：
-
-```bash
-# install with clang and cuda
-wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.sh | with_clang=1 with_cuda=1 bash
-# install with clang
-wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.sh | with_clang=1 bash
-# install with g++ and cuda
-wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.sh | with_gcc=1 with_cuda=1 bash
-# install with g++
-wget -O - https://raw.githubusercontent.com/Jittor/jittor/master/script/install.sh | with_gcc=1 bash
-```
-After execution, the script will show some environment variables you need to export.
-
-执行后，脚本将显示一些需要导出的环境变量。
-
-If you use Jittor for CPU computing, we strongly recommend clang(>=8.0) as the back-end compiler of Jittor. Because some customized optimizations will be enabled.
-
-如果将Jittor用于CPU计算，则强烈建议使用clang（> = 8.0）作为Jittor的后端编译器。 因为Jittor会用到其中一些定制的优化。
-
 
 ## 手动安装
 ## manual install
@@ -269,9 +264,9 @@ jt.flags.use_cuda = 1
 
 ### 可选步骤五：测试训练Resnet18
 
-To check the integrity of Jittor, you can run Resnet18 training test.
+To check the integrity of Jittor, you can run Resnet18 training test. Note: 6G GPU RAM is requires in this test.
 
-要检查Jittor的完整性，您可以运行Resnet18训练测试。
+要检查Jittor的完整性，您可以运行Resnet18训练测试。需要注意的是，这个测试需要6G显存。
 
 ```bash
 python3.7 -m jittor.test.test_resnet
@@ -319,9 +314,9 @@ And we can give the variable a name.
 此外我们可以给变量起一个名字。
 
 ```python
-c.name('c')
-print(c.name())
-# Output: c
+a.name('a')
+print(a.name())
+# Output: a
 ```
 
 ### Operations
@@ -480,7 +475,7 @@ Jittor目前由[清华大学计算机图形学组](https://cg.cs.tsinghua.edu.cn
   journal={Information Sciences},
   volume={63},
   number={222103},
-  pages={1--222103},
+  pages={1--21},
   year={2020}
 }
 ```

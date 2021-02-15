@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
 # Maintainers:
 #     Guowei Yang <471184555@qq.com>
 #     Guoye Yang <498731903@qq.com>
@@ -963,7 +963,7 @@ class Softplus(Module):
         self.threshold = threshold
 
     def execute(self, x):
-        return 1 / self.beta * jt.log(1 + (self.beta * x).exp())
+        return softplus(x, self.beta, self.threshold)
 
 class Resize(Module):
     def __init__(self, size, mode="nearest", align_corners=False):

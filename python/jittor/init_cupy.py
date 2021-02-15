@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
 # Maintainers: 
 #     Guowei Yang <471184555@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
@@ -18,10 +18,15 @@ if has_cupy:
     import jittor as jt
     import os
     import ctypes
+    device_num = 0
+    if jt.mpi:
+        device_num = jt.mpi.local_rank()
+    cupy_device = cp.cuda.Device(device_num)
+    cupy_device.__enter__()
 
     def cvt(a):
         a_pointer, read_only_flag = a.__array_interface__['data']
-        aptr=cp.cuda.MemoryPointer(cp.cuda.memory.UnownedMemory(a_pointer,a.size*a.itemsize,a,0),0)
+        aptr=cp.cuda.MemoryPointer(cp.cuda.memory.UnownedMemory(a_pointer,a.size*a.itemsize,a, device_num),0)
         a = cp.ndarray(a.shape,a.dtype,aptr)
         return a
 

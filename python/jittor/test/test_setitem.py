@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
 # Maintainers: 
 #     Wenyang Zhou <576825820@qq.com>. 
 # 
@@ -114,6 +114,40 @@ class TestSetitem(unittest.TestCase):
         assert arr_int32[1,0,0] == 0
         arr_int32_res.data[1,1,2] = 0
         assert arr_int32[2,1,2] == 0
+
+    def test_setitem_inplace_case1(self):
+        # test type case
+        a = jt.zeros((3,))
+        a[1] = 123
+        assert a.data[1] == 123
+
+    def test_setitem_inplace_case2(self):
+        # test un-continuous first dim
+        a = jt.zeros((3,))
+        a[0::2] = jt.ones((2,))
+        assert a.data[2] == 1
+
+    def test_setitem_inplace_case3(self):
+        # test broadcast
+        a = jt.zeros((3,))
+        a[0:] = 1.0
+        assert a.data[2] == 1
+
+    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @jt.flag_scope(use_cuda=1)
+    def test_getitem_inplace_array(self):
+        a = jt.array([[1,2],[3,4]])
+        assert (a[0].numpy() == [1,2]).all(), a[0].numpy()
+        assert (a[1].numpy() == [3,4]).all(), a[1].numpy()
+
+    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @jt.flag_scope(use_cuda=1)
+    def test_setitem_inplace_array(self):
+        a = jt.array([[1,2],[3,4]])
+        a[0,0] = -1
+        a[1,1] = -2
+        assert (a[0].numpy() == [-1,2]).all(), a[0].numpy()
+        assert (a[1].numpy() == [3,-2]).all(), a[1].numpy()
         
 if __name__ == "__main__":
     unittest.main()

@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. All Rights Reserved. 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -24,5 +24,8 @@ std::default_random_engine* get_random_engine();
 // things need to be clean before python exit
 // @pyjt(cleanup)
 void cleanup();
+
+// @pyjt(jt_init_subprocess)
+void jt_init_subprocess();
 
 } // jittor

@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved.
 // Maintainers: Dun Liang <randonlang@gmail.com>.
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -57,7 +57,6 @@ void RingBuffer::free_ring_buffer(RingBuffer* rb) {
     if (is_multiprocess) {
         munmap(rb, total_size);
     } else {
-        rb->~RingBuffer();
         free((void*)rb);
     }
 }

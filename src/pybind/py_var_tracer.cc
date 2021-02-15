@@ -1,6 +1,9 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. All Rights Reserved.
-// Maintainers: Dun Liang <randonlang@gmail.com>. 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Maintainers: 
+//     Dun Liang <randonlang@gmail.com>. 
+//     Guoye Yang <498731903@qq.com>
+//
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -95,9 +98,10 @@ static vector<Stack> get_stack_info() {
     int i=n;
     while (i) frames[--i] = frame, frame = frame->f_back;
     PyObject* prev_obj = nullptr;
-    if (trace_py_var == 2) {
+    if (trace_py_var >= 3) {
         // trace raw stack
-        auto start = std::max(0, n-5);
+        // auto start = std::max(0, n-5);
+        auto start = 0;
         for (int i=start; i<n; i++) {
             auto f = frames[i];
             auto filename = to_string(f->f_code->co_filename);
@@ -124,7 +128,8 @@ static vector<Stack> get_stack_info() {
             auto base_type = PyTuple_GET_ITEM(tp_mro, Py_SIZE(tp_mro)-2);
             auto prev_f = i? frames[i-1] : f;
             if (base_type == jt_optimizer) {
-                PyObjHolder ret(find_obj_name(f->f_back, obj, "_opt"));
+                string init_name = string(obj->ob_type->tp_name) + "_init";
+                PyObjHolder ret(find_obj_name(f->f_back, obj, init_name.c_str()));
                 stacks.emplace_back(Stack{
                     to_string(ret.obj), 
                     string(obj->ob_type->tp_name),
@@ -185,7 +190,7 @@ void TraceData::record_node(Node* node, bool record_stack) {
     NodeData data;
     data.id = node_data_cnt++;
     id_map[node] = data.id;
-    if (!node->is_var() || trace_py_var==2) {
+    if (trace_py_var) {
         if (record_stack) {
             if (trace_grad_op) {
                 auto iter = trace_data.id_map.find(trace_grad_op);
@@ -201,6 +206,10 @@ void TraceData::record_node(Node* node, bool record_stack) {
         }
     } else {
     }
+    if (node->__id())
+        data.attrs["__id"] = S(node->__id());
+    data.attrs["is_var"] = node->is_var() ? "1" : "0";
+    data.attrs["name"] = "unname";
     node_data[data.id] = move(data);
 }
 
@@ -219,7 +228,7 @@ void TraceData::release_node(Node* node) {
         return;
     auto node_id = iter->second;
     id_map.erase(node);
-    if (trace_py_var == 1) {
+    if (trace_py_var < 2) {
         node_data.erase(node_id);
     }
 }
@@ -227,7 +236,8 @@ void TraceData::release_node(Node* node) {
 void TraceData::record_exe_node(Node* node) {
     auto node_id = get_node_id(node);
     auto& data = node_data[node_id];
-    if (data.inputs.size() != node->inputs().size() || data.attrs.size() == 0) {
+    auto name_iter = data.attrs.find("name");
+    if (data.inputs.size() != node->inputs().size() || data.attrs.size() == 0 || name_iter == data.attrs.end() || name_iter->second == "unname") {
         data.inputs.clear();
         data.inputs.reserve(node->inputs().size());
         for (auto i : node->inputs()) {
@@ -312,6 +322,10 @@ PyObject* dump_trace_data() {
     for (auto& kv : trace_data.node_data) {
         if (kv.second.attrs.size() == 0)
             continue;
+        auto name_iter = kv.second.attrs.find("name");
+        // if don't have name, this node is not executed
+        if (name_iter == kv.second.attrs.end() || name_iter->second == "unname")
+            continue;
         PyObjHolder dict(PyDict_New());
         fill_dict(dict.obj, string("id"), to_py_object(kv.second.id));
         fill_dict(dict.obj, string("inputs"), to_py_object(kv.second.inputs));
@@ -362,5 +376,17 @@ string _get_stack_info(Node* node) {
 void print_node_trace(const Node* node, std::ostream& os) {
     os << _get_stack_info((Node*)node);
 }
+
+vector<Stack> get_node_trace(Node* node) {
+    auto iter = trace_data.id_map.find(node);
+    if (iter == trace_data.id_map.end())
+        return vector<Stack>();
+    auto node_id = iter->second;
+    auto iter2 = trace_data.node_data.find(node_id);
+    if (iter2 == trace_data.node_data.end())
+        return vector<Stack>();
+    return iter2->second.stacks;
+}
+
 
 } // jittor

@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
 # Maintainers:
 #     Guowei Yang <471184555@qq.com>
 #     Dun Liang <randonlang@gmail.com>.
@@ -127,7 +127,7 @@ class MultiStepLR(object):
     def get_lr(self):
         now_lr = self.optimizer.lr
         if (self.last_epoch in self.milestones):
-            now_lr *= gamma
+            now_lr *= self.gamma
         return now_lr
 
     def step(self):

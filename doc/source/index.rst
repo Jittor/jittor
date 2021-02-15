@@ -26,6 +26,7 @@
    jittor.transform
    jittor.mpi
    jittor.linalg
+   jittor.console
 
 
 .. toctree::

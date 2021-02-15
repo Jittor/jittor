@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. All Rights Reserved. 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -28,6 +28,8 @@ struct ItemData {
     NanoString dtype;
 };
 
+typedef struct _object PyObject;
+
 // @pyjt(Var)
 // @attrs(heaptype)
 struct VarHolder {
@@ -37,6 +39,8 @@ struct VarHolder {
     VarHolder(VarPtr&& v);
     // will move and delete v
     VarHolder(VarHolder* v);
+    // @pyjt(__init__)
+    VarHolder(PyObject* v, NanoString dtype=ns_void);
     // @pyjt(__dealloc__)
     ~VarHolder();
     string to_string();

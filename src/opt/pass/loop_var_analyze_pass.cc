@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. All Rights Reserved. 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -81,6 +81,11 @@ void LoopVarAnalyzePass::run() {
     // 1. reduce input
     // 2. element input
     // 3. broadcast output
+    
+    // ugly fix multi different dim element input
+    // (caused by force fused array op)
+    int max_elm_dim = 0;
+    int64 max_elm_size = 0;
     for (uint i=0; i<vars.size(); i++) {
         // output
         if (vars[i].type == 2) {
@@ -91,8 +96,12 @@ void LoopVarAnalyzePass::run() {
             has_op = true;
             if (op->type() == OpType::reduce)
                 has_reduce = true;
-            if (op->type() == OpType::element)
+            if (op->type() == OpType::element) {
                 has_element = true;
+                max_elm_dim = std::max(max_elm_dim, op->outputs().front()->shape.size());
+                if (max_elm_dim == op->outputs().front()->shape.size())
+                    max_elm_size = std::max(max_elm_size, std::abs(op->outputs().front()->num));
+            }
         }
     }
     for (uint i=0; i<vars.size(); i++) {
@@ -108,6 +117,10 @@ void LoopVarAnalyzePass::run() {
             if (has_reduce && op->type() != OpType::reduce)
                 continue;
             if (has_element && !has_reduce && op->type() != OpType::element)
+                continue;
+            if (op->type() == OpType::element 
+                && (op->outputs().front()->shape.size() != max_elm_dim || 
+                    std::abs(op->outputs().front()->num) != max_elm_size))
                 continue;
             Var* loop_var;
             if (op->type() == OpType::broadcast || op->name_ex() == "index") {
@@ -232,6 +245,20 @@ void LoopVarAnalyzePass::run() {
         auto name2 = pm->oc->get_name_by_op_output(opa, j);
         replace_vars.emplace_back(name1, name2);
     }
+
+    // dirty fix wrong array fuse
+    if (max_elm_size>1)
+        for (int i=0; i<this->op->ops.size(); i++) {
+            auto op = this->op->ops[i];
+            if (op->type() == OpType::element &&
+                op->name() != string("array") &&
+                op->outputs().front()->num == 1) {
+                replace_vars.emplace_back("op"+S(i)+"_xstride0", "0");
+                replace_vars.emplace_back("op"+S(i)+"_ystride0", "0");
+                replace_vars.emplace_back("op"+S(i)+"_zstride0", "0");
+            }
+        }
+    
     
     LOGvvv << "replace_vars" << replace_vars;
     ir->replace(replace_vars);

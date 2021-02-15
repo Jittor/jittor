@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved.
 // Maintainers: Dun Liang <randonlang@gmail.com>.
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -15,8 +15,9 @@ namespace jittor {
 static void push_py_object_pickle(RingBuffer* rb, PyObject* obj, uint64& __restrict__ offset) {
     PyObjHolder pickle(PyImport_ImportModule("pickle"));
     PyObjHolder dumps(PyObject_GetAttrString(pickle.obj, "dumps"));
+    PyObjHolder proto(PyObject_GetAttrString(pickle.obj, "HIGHEST_PROTOCOL"));
     rb->push_t<uint8>(6, offset);
-    PyObjHolder ret(PyObject_CallFunctionObjArgs(dumps.obj, obj, nullptr));
+    PyObjHolder ret(PyObject_CallFunctionObjArgs(dumps.obj, obj, proto.obj, nullptr));
     obj = ret.obj;
     Py_ssize_t size;
     char* s;
@@ -170,9 +171,9 @@ static PyObject* pop_py_object(RingBuffer* rb, uint64& __restrict__ offset, bool
         auto size = rb->pop_t<int64>(offset);
         PyObjHolder dict(PyDict_New());
         for (int64 i=0; i<size; i++) {
-            PyObject* key = pop_py_object(rb, offset, keep_numpy_array);
-            PyObject* value = pop_py_object(rb, offset, keep_numpy_array);
-            PyDict_SetItem(dict.obj, key, value);
+            PyObjHolder key(pop_py_object(rb, offset, keep_numpy_array));
+            PyObjHolder value(pop_py_object(rb, offset, keep_numpy_array));
+            PyDict_SetItem(dict.obj, key.obj, value.obj);
         }
         return dict.release();
     }

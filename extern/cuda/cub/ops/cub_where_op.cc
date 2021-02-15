@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. All Rights Reserved. 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
 // Maintainers: 
 //     Xiangli Li <1905692338@qq.com>
 //     Dun Liang <randonlang@gmail.com>. 
@@ -82,7 +82,7 @@ void CubWhereOp::jit_run(){
     int N = cond->num;
     size_t temp_storage_bytes=0;
     size_t num_nonzeros_allocation;
-    auto num_nonzeros = exe.allocator->alloc(sizeof(To), num_nonzeros_allocation);
+    auto num_nonzeros = exe.temp_allocator->alloc(sizeof(To), num_nonzeros_allocation);
 
     size_t temp_storage_allocation;
     void* temp_storage;
@@ -93,9 +93,9 @@ void CubWhereOp::jit_run(){
     cub::TransformInputIterator<bool, NonZeroOp<Ti>, Ti*> itr(cond->ptr<Ti>(), NonZeroOp<Ti>());
     temp_storage_bytes = 0;
     checkCudaErrors(cub::DeviceSelect::Flagged(nullptr, temp_storage_bytes, counting_itr, itr, out_temp, (To*)num_nonzeros, N));
-    temp_storage = exe.allocator->alloc(temp_storage_bytes, temp_storage_allocation);
+    temp_storage = exe.temp_allocator->alloc(temp_storage_bytes, temp_storage_allocation);
     checkCudaErrors(cub::DeviceSelect::Flagged(temp_storage, temp_storage_bytes, counting_itr, itr,out_temp, (To*)num_nonzeros, N));
-    exe.allocator->free(temp_storage, temp_storage_bytes, temp_storage_allocation);
+    exe.temp_allocator->free(temp_storage, temp_storage_bytes, temp_storage_allocation);
 
     To num_nonzeros_h;
     cudaMemcpy(&num_nonzeros_h, num_nonzeros, sizeof(To), cudaMemcpyDeviceToHost);
@@ -110,7 +110,7 @@ void CubWhereOp::jit_run(){
             @for(i, 0, NDIM, 1, , cond->shape[@i], outs[@i]->ptr<To>())
         );
     }
-    exe.allocator->free(num_nonzeros, sizeof(int), num_nonzeros_allocation);
+    exe.temp_allocator->free(num_nonzeros, sizeof(int), num_nonzeros_allocation);
     
 }
 #endif

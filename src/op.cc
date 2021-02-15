@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. All Rights Reserved. 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -98,6 +98,15 @@ string Op::get_jit_key(JK& jk) {
 
 vector<pair<string,string>> Op::get_jit_define() {
     return parse_jit_keys(get_jit_key(jk));
+}
+
+string Op::get_hash_name() {
+    string hash_name;
+    std::stringstream ss;
+    do_prepare(jk);
+    ss << std::hex << std::hash<string>()(jk.to_string());
+    hash_name = ss.str();
+    return hash_name;
 }
 
 void Op::do_jit_prepare(JK& jk) {

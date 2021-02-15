@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
 # Maintainers: 
 #     Wenyang Zhou <576825820@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
@@ -23,7 +23,7 @@ class AlexNet(nn.Module):
     Example::
     
         model = jittor.models.AlexNet(500)
-        x = jittor.random([10,224,224,3])
+        x = jittor.random([10,3,224,224])
         y = model(x) # [10, 500]
 
     """

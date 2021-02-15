@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. All Rights Reserved. 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -14,6 +14,8 @@
 #include "executor.h"
 #include "graph.h"
 #include "update_queue.h"
+#include "mem/allocator/cuda_dual_allocator.h"
+#include "ops/op_register.h"
 
 namespace jittor {
 
@@ -60,7 +62,23 @@ VarHolder::VarHolder(VarHolder* v) : var(v->var) {
     operator delete(v);
 }
 
+static auto make_array_from_pyobj = get_op_info("array")
+    .get_constructor<VarPtr, PyObject*>();
+static auto make_unary = get_op_info("unary")
+    .get_constructor<VarPtr, Var*, NanoString>();
+
+VarHolder::VarHolder(PyObject* obj, NanoString dtype) {
+    auto vp = make_array_from_pyobj(obj);
+    if (dtype != ns_void)
+        vp = make_unary(vp, dtype);
+    var = vp.ptr;
+    vp.ptr = nullptr;
+    add_hold_vars(this);
+}
+
+
 VarHolder::~VarHolder() {
+    if (PREDICT_BRANCH_NOT_TAKEN(!var)) return;
     hold_vars.erase(iter);
     var->release_both_liveness();
 }
@@ -127,6 +145,7 @@ ArrayArgs VarHolder::fetch_sync() {
 
 ItemData VarHolder::item() {
     sync();
+    CHECK(var->num==1) << "Item var size should be 1, but got" << var->num;
     ItemData data;
     data.dtype = var->dtype();
     auto dsize = data.dtype.dsize();

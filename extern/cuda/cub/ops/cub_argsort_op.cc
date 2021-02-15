@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. All Rights Reserved. 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
 // Maintainers: 
 //     Guoye Yang <498731903@qq.com>
 //     Dun Liang <randonlang@gmail.com>. 
@@ -85,12 +85,12 @@ void CubArgsortOp::jit_run() {
         num_items, num_segments, offsetsp, offsetsp + 1);
     // Allocate temporary storage
     size_t allocation;
-    d_temp_storage = exe.allocator->alloc(temp_storage_bytes, allocation);
+    d_temp_storage = exe.temp_allocator->alloc(temp_storage_bytes, allocation);
     // Run sorting operation
     cub::DeviceSegmentedRadixSort::@FUNC@@(d_temp_storage, temp_storage_bytes,
         xp, y_keyp, indexesp, yp,
         num_items, num_segments, offsetsp, offsetsp + 1);
-    exe.allocator->free(d_temp_storage, temp_storage_bytes, allocation);
+    exe.temp_allocator->free(d_temp_storage, temp_storage_bytes, allocation);
 }
 #endif // JIT_cuda
 #endif // JIT

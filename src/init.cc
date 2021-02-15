@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. All Rights Reserved. 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -7,6 +7,7 @@
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
+#include "misc/cuda_flags.h"
 #endif
 #include <random>
 
@@ -14,6 +15,7 @@
 #include "ops/op_register.h"
 #include "var.h"
 #include "op.h"
+#include "executor.h"
 
 namespace jittor {
 
@@ -77,5 +79,12 @@ void add_set_seed_callback(set_seed_callback callback) {
 }
 
 std::default_random_engine* get_random_engine() { return eng.get(); }
+
+void jt_init_subprocess() {
+    #ifdef HAS_CUDA
+    use_cuda = 0;
+    exe.last_is_cuda = false;
+    #endif
+}
 
 }

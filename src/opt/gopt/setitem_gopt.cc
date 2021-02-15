@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved.
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -48,11 +48,12 @@ static void setitem_inplace(SetitemOp* op) {
     }
     auto output = op->outputs().front();
     output->share_with(input);
-    return;
     
-    // LOGir << "pass setitem optim one";
-
     auto data = op->input(1);
+    // if setitem requires type conversion, don't inplace
+    if (data->dtype() != input->dtype())
+        return;
+
     input_op = input->input();
 
     if (input_op && input_op->inputs().size() == 1) {
@@ -72,12 +73,14 @@ static void setitem_inplace(SetitemOp* op) {
         return;
 
     auto in_shape = input->shape;
+    int64 inplace_size = 1;
     for (int i = vs.n - 1; i > 0; --i) {
         VarSlice s = vs.slices[i];
         if (!(s.is_slice())) return;
         Slice ss = s.slice;
         if (!(ss.start == 0 && ss.stop >= in_shape[i] && ss.step == 1))
-            return; 
+            return;
+        inplace_size *= in_shape[i];
     }
     
     VarSlice s = vs.slices[0];
@@ -86,12 +89,22 @@ static void setitem_inplace(SetitemOp* op) {
     auto size = 0;
     if (s.is_int())
         size = s.i * input->size / in_shape[0];
-    else if (s.is_slice())
-        size = s.slice.start * input->size / in_shape[0];
-    
+    else if (s.is_slice()) {
+        Slice ss = s.slice;
+        // we also need to check the first dim is continuous
+        if (ss.step != 1)
+            return;
+        size = ss.start * input->size / in_shape[0];
+        inplace_size *= ss.stop - ss.start;
+    }
+    if (inplace_size > data->num) {
+        // if data has been broadcast into input, don't
+        // inplace data, because their shapes are not match
+        // This would lead partial setitem
+        return;
+    }
     add_dependency(data->input(), {input->node()});
     data->share_with(input, size);
-    // LOGir << "pass setitem optim two";
 }
 
 struct BBox {
@@ -163,7 +176,7 @@ static void getitem_inplace(GetitemOp* op) {
     auto ou = op->outputs().front();
     
     // return if input or output's shape is variable
-    if (in->num < 0 || ou->num < 0)
+    if (in->num <= 0 || ou->num <= 0)
         return;
 
     VarSlices vs = op->vs;
@@ -198,7 +211,7 @@ void SetitemOp::graph_optimize() {
 void GetitemOp::graph_optimize() {
     // This optimize is still WIP
     // LOGir << "hello getitem graph_optimize";
-    // setitem_grad_opt(this);
+    setitem_grad_opt(this);
     (void)setitem_grad_opt;
     // (void)getitem_inplace;
     getitem_inplace(this);

@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. All Rights Reserved. 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
 // Maintainers: 
 //     Guoye Yang <498731903@qq.com>
 //     Dun Liang <randonlang@gmail.com>. 
@@ -37,15 +37,15 @@ void ReshapeOp::infer_shape() {
         } else
             y_items *= shape[i];
     }
-    ASSERT(uncertain_dim <= 1) << "max number of -1 is 1, but get" << uncertain_dim << ".";
+    CHECK(uncertain_dim <= 1) << "max number of -1 is 1, but get" << uncertain_dim << ".";
     int64_t x_items = x->num;
     auto yshape = shape;
     if (x_items < 0) {
         // pass if input is uncertain
     } else if (uncertain_dim == 0) {
-        ASSERTop(x_items,==,y_items) << "reshape shape is invalid for input of size";
+        CHECKop(x_items,==,y_items) << "reshape shape is invalid for input of size";
     } else {
-        ASSERT(x_items % y_items == 0) << "reshape shape is invalid for input of size " << x_items;
+        CHECK(y_items != 0 && x_items % y_items == 0) << "reshape shape is invalid for input of size " << x_items;
         uncertain_dim = x_items / y_items;
         yshape.clear();
         for (auto a : shape)

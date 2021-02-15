@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
 # Maintainers: 
 #     Guowei Yang <471184555@qq.com>
 #     Wenyang Zhou <576825820@qq.com>
@@ -189,11 +189,13 @@ def Resnet101(pretrained=False, **kwargs):
     Example::
 
         model = jittor.models.Resnet101()
-        x = jittor.random([10,224,224,3])
+        x = jittor.random([10,3,224,224])
         y = model(x) # [10, 1000]
 
     """
-    return _resnet(Bottleneck, [3, 4, 23, 3], **kwargs)
+    model = _resnet(Bottleneck, [3, 4, 23, 3], **kwargs)
+    if pretrained: model.load("jittorhub://resnet101.pkl")
+    return model
 resnet101 = Resnet101
 
 def Resnet152(pretrained=False, **kwargs):

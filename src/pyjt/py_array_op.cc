@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. All Rights Reserved.
+// Copyright (c) 2021 Jittor. All Rights Reserved.
 // Maintainers: Dun Liang <randonlang@gmail.com>.
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -17,13 +17,36 @@
 #include "pyjt/numpy.h"
 #include "ops/array_op.h"
 #include "var.h"
+#include "ops/op_register.h"
+#include "var_holder.h"
 
 namespace jittor {
+
+static auto make_array = get_op_info("array")
+    .get_constructor<VarPtr, const void*, NanoVector, NanoString>();
+
+PyObject* make_pyjt_array(const vector<int64>& shape, const string& dtype, const void* data) {
+    // return nullptr;
+    auto vh = new VarHolder(make_array(data, shape, dtype));
+    return to_py_object<VarHolder*>(vh);
+}
+
+void get_pyjt_array(PyObject* obj, vector<int64>& shape, string& dtype, void*& data) {
+    CHECK(Py_TYPE(obj) == &PyjtVarHolder.ht_type) << "Not a jittor array" << Py_TYPE(obj);
+    auto vh = GET_RAW_PTR(VarHolder, obj);
+    if (!vh->var->mem_ptr)
+        vh->sync();
+    ASSERT(vh->var->mem_ptr);
+    shape = vh->shape().to_vector();
+    dtype = vh->dtype().to_cstring();
+    data = vh->var->mem_ptr;
+}
 
 ArrayOp::ArrayOp(PyObject* obj) {
     ArrayArgs args;
     PyObjHolder holder;
     args.ptr = nullptr;
+    allocation.ptr = nullptr;
     if (PyFloat_CheckExact(obj)) {
         tmp_data.f32 = PyFloat_AS_DOUBLE(obj);
         args = {&tmp_data, 1, ns_float32};
@@ -41,7 +64,7 @@ ArrayOp::ArrayOp(PyObject* obj) {
         args = move(fetch_sync({ptr}).at(0));
     } else
     if (Py_TYPE(obj) == PyArray_Type ||
-        PyList_CheckExact(obj) ||
+        PyList_CheckExact(obj) || PyTuple_CheckExact(obj) ||
         PyObject_TypeCheck(obj, PyNumberArrType_Type)
     ) {
         if (Py_TYPE(obj) != PyArray_Type) {
@@ -75,6 +98,8 @@ ArrayOp::ArrayOp(PyObject* obj) {
             }
 
         }
+    } else {
+        LOGf << "type <" >> Py_TYPE(obj)->tp_name >> "> not support for jittor array";
     }
     NanoVector shape = args.shape;
     output = create_output(shape, args.dtype);

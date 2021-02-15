@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2020 Jittor. All Rights Reserved. 
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
 # Maintainers:
 #   Dun Liang <randonlang@gmail.com>.
 #   Meng-Hao Guo <guomenghao1997@gmail.com>
@@ -8,7 +8,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-__version__ = '1.2.2.11'
+__version__ = '1.2.2.30'
 from . import lock
 with lock.lock_scope():
     ori_int = int
@@ -17,6 +17,7 @@ with lock.lock_scope():
     from . import compiler
     from .compiler import LOG, has_cuda
     from .compiler import compile_custom_ops, compile_custom_op
+    import jittor_core
     import jittor_core as core
     from jittor_core import *
     from jittor_core.ops import *
@@ -40,7 +41,9 @@ import traceback
 
 
 def safepickle(obj, path):
-    s = pickle.dumps(obj, pickle.HIGHEST_PROTOCOL)
+    # Protocol version 4 was added in Python 3.4. It adds support for very large objects, pickling more kinds of objects, and some data format optimizations.
+    # ref: <https://docs.python.org/3/library/pickle.html>
+    s = pickle.dumps(obj, 4)
     checksum = hashlib.sha1(s).digest()
     s += bytes(checksum)
     s += b"HCAJSLHD"
@@ -298,12 +301,12 @@ def std(x):
     return out
 Var.std = std
 
-def norm(x, k, dim):
+def norm(x, k, dim, keepdim=False):
     assert k==1 or k==2
     if k==1:
-        return x.abs().sum(dim)
+        return x.abs().sum(dim, keepdim)
     if k==2:
-        return (x.sqr()).sum(dim).maximum(1e-6).sqrt()
+        return (x.sqr()).sum(dim, keepdim).maximum(1e-6).sqrt()
 Var.norm = norm
 
 origin_reshape = reshape
@@ -375,6 +378,7 @@ Var.clamp = clamp
 def type_as(a, b):
     return a.unary(op=b.dtype)
 Var.type_as = type_as
+Var.astype = Var.cast
 
 def masked_fill(x, mask, value):
     assert list(x.shape) == list(mask.shape)
@@ -399,6 +403,44 @@ Var.argmax = argmax
 def argmin(x, dim, keepdims:bool=False):
     return x.arg_reduce("min", dim, keepdims)
 Var.argmin = argmin
+
+def randn(*size, dtype="float32", requires_grad=True):
+    if isinstance(size, tuple) and isinstance(size[0], (tuple, list, NanoVector)): size = size[0]
+    arr = jt.random(size, dtype, "normal")
+    if not requires_grad: return arr.stop_grad()
+    return arr
+
+def rand(*size, dtype="float32", requires_grad=True):
+    if isinstance(size, tuple) and isinstance(size[0], (tuple, list, NanoVector)): size = size[0]
+    arr = jt.random(size, dtype)
+    if not requires_grad: return arr.stop_grad()
+    return arr
+
+def rand_like(x, dtype=None):
+    if dtype is None: dtype = x.dtype
+    return jt.random(x.shape, x.dtype)
+
+def randn_like(x, dtype=None):
+    if dtype is None: dtype = x.dtype
+    return jt.random(x.shape, x.dtype, "normal")
+
+def randint(low, high=None, shape=(1,), dtype="int32"):
+    if high is None: low, high = 0, low
+    v = (jt.random(shape) * (high - low) + low).clamp(low, high-0.5)
+    return v.astype(dtype)
+
+def randint_like(x, low, high=None):
+    return randint(low, high, x.shape, x.dtype)
+
+def normal(mean, std, size=None, dtype="float32"):
+    if size is None:
+        if isinstance(mean, Var) and isinstance(std, Var):
+            assert mean.shape == std.shape
+            size = mean.shape
+        else:
+            if isinstance(mean, Var): size = mean.shape
+            if isinstance(std, Var): size = std.shape
+    return jt.init.gauss(size, dtype, mean, std)
 
 def attrs(var):
     return {
@@ -682,14 +724,19 @@ class Module:
             else:
                 assert isinstance(v, Var), \
                     f"expect a jittor Var, but got <{v.__class__.__name__}>, key: {key}"
-                LOG.v(f'load parameter {key} success ...')
                 if isinstance(params[key], np.ndarray) or isinstance(params[key], list):
-                    v.update(array(params[key]))
+                    param = array(params[key])
                 elif isinstance(params[key], Var):
-                    v.update(params[key])
+                    param = params[key]
                 else:
                     # assume is pytorch tensor
-                    v.update(array(params[key].cpu().detach().numpy()))
+                    param = array(params[key].cpu().detach().numpy())
+                if param.shape == v.shape:
+                    LOG.v(f'load parameter {key} success ...')
+                    v.update(param)
+                else:
+                    n_failed += 1
+                    LOG.e(f'load parameter {key} failed: expect the shape of {key} to be {v.shape}, but got {param.shape}')
         if n_failed:
             LOG.w(f"load total {len(params)} params, {n_failed} failed")
 
@@ -961,6 +1008,13 @@ Var.float = Var.float32
 double = float64
 Var.double = Var.float64
 
+# __array__ interface is used for np.array(jt_var)
+Var.__array__ = Var.numpy
+Var.__array_priority__ = 2000
+# __reduce__, __module__ is used for pickle.dump and pickle.load
+Var.__module__ = "jittor"
+Var.__reduce__ = lambda self: (Var, (self.data,))
+
 from . import nn
 from . import attention
 from . import lr_scheduler
@@ -971,26 +1025,3 @@ from . import numpy2cupy
 from .contrib import concat
 from .misc import *
 from . import sparse
-
-
-def randn(*size, dtype="float32", requires_grad=False):
-    if isinstance(size, tuple) and isinstance(size[0], tuple): size = size[0]
-    arr = jt.random(size, dtype, "normal")
-    if not requires_grad: return arr.stop_grad()
-    return arr
-
-def rand(*size, dtype="float32", requires_grad=False):
-    if isinstance(size, tuple) and isinstance(size[0], tuple): size = size[0]
-    arr = jt.random(size, dtype)
-    if not requires_grad: return arr.stop_grad()
-    return arr
-
-def normal(mean, std, size=None, dtype="float32"):
-    if size is None:
-        if isinstance(mean, Var) and isinstance(std, Var):
-            assert mean.shape == std.shape
-            size = mean.shape
-        else:
-            if isinstance(mean, Var): size = mean.shape
-            if isinstance(std, Var): size = std.shape
-    return jt.init.gauss(size, dtype, mean, std)

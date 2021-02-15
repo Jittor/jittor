@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2020 Jittor. All Rights Reserved. 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -211,6 +211,7 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets) {
         if (id>=0)
             grad = move(grads[id]);
         if (!grad) {
+            // TODO: better warning message
             LOGw << "grads[">>i>>"] '">> var->name>>"' doesn't have gradient. It will be set to zero:" << var;
             grad = make_number(0.f, var);
             assign_attrs(grad.ptr, var);
