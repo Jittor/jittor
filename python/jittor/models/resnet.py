@@ -189,7 +189,7 @@ def Resnet101(pretrained=False, **kwargs):
     Example::
 
         model = jittor.models.Resnet101()
-        x = jittor.random([10,224,224,3])
+        x = jittor.random([10,3,224,224])
         y = model(x) # [10, 1000]
 
     """

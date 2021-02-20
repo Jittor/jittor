@@ -10,6 +10,7 @@
 #include <iomanip>
 #include <thread>
 #include <unordered_map>
+#include <unistd.h>
 #include "utils/log.h"
 #include "utils/mwsr_list.h"
 
@@ -184,12 +185,15 @@ bool exited = false;
 size_t thread_local protected_page = 0;
 int segfault_happen = 0;
 string thread_local thread_name;
+static int _pid = getpid();
 
 void segfault_sigaction(int signal, siginfo_t *si, void *arg) {
     if (signal == SIGINT) {
-        LOGe << "Caught SIGINT, exit";
+        if (_pid == getpid()) {
+            LOGe << "Caught SIGINT, quick exit";
+        }
         exited = true;
-        exit(1);
+        std::quick_exit(1);
     }
     std::cerr << "Caught segfault at address " << si->si_addr << ", "
         << "thread_name: '" << thread_name << "', flush log..." << std::endl;

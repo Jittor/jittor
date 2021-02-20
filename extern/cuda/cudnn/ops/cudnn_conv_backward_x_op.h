@@ -14,10 +14,10 @@ namespace jittor {
 
 struct CudnnConvBackwardXOp : Op {
     Var* w, * dy, * dx;
-    int xh, xw, stride, padding, dilation, groups;
+    int xh, xw, strideh, stridew, paddingh, paddingw, dilationh, dilationw, groups;
     string xformat, wformat, yformat;
 
-    CudnnConvBackwardXOp(Var* w, Var* y, int height, int width, int stride, int padding, int dilation, int groups=1, string xformat="abcd", string wformat="oihw", string yformat="abcd");
+    CudnnConvBackwardXOp(Var* w, Var* y, int height, int width, int strideh, int stridew, int paddingh, int paddingw, int dilationh, int dilationw, int groups=1, string xformat="abcd", string wformat="oihw", string yformat="abcd");
     
     const char* name() const override { return "cudnn_conv_backward_x"; }
     void infer_shape() override;

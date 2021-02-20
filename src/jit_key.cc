@@ -37,8 +37,7 @@ JitKey::JitKey() {
 JitKey::~JitKey() {
     auto buffer_end_page = get_buffer_end_page((size_t)&buffer[buffer_size-1]);
     LOGvv << "un-protect page" << (void*)buffer_end_page;
-    ASSERT(0==
-    mprotect((void*)buffer_end_page, page_size, PROT_READ|PROT_WRITE|PROT_EXEC));
+    mprotect((void*)buffer_end_page, page_size, PROT_READ|PROT_WRITE|PROT_EXEC);
     protected_page = 0;
 }
 
