@@ -57,7 +57,7 @@ oihw = [4, 3, 5, 5]
 import jittor as jt
 x = jt.random(nchw)
 w = jt.random(oihw)
-jt.mkl_ops.mkl_conv(x, w, 1, 2).sync()
+jt.mkl_ops.mkl_conv(x, w, 1, 1, 2, 2).sync()
 
 jt.dirty_fix_pytorch_runtime_error()
 
@@ -88,7 +88,7 @@ m(torch.rand(*nchw))
 import jittor as jt
 x = jt.random(nchw)
 w = jt.random(oihw)
-jt.mkl_ops.mkl_conv(x, w, 1, 2).sync()
+jt.mkl_ops.mkl_conv(x, w, 1, 1, 2, 2).sync()
 
 
 """

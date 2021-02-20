@@ -45,8 +45,8 @@ static inline void set_shape(Var* x, const char* f, const string& format, int a,
         shape[0], shape[1], shape[2], shape[3]));
 }
 
-MklConvOp::MklConvOp(Var* x, Var* w, int stride, int padding, int dilation, int groups, string xformat, string wformat, string yformat)
-    : x(x), w(w), stride(stride), padding(padding), dilation(dilation), groups(groups),
+MklConvOp::MklConvOp(Var* x, Var* w, int strideh, int stridew, int paddingh, int paddingw, int dilationh, int dilationw, int groups, string xformat, string wformat, string yformat)
+    : x(x), w(w), strideh(strideh), stridew(stridew), paddingh(paddingh), paddingw(paddingw), dilationh(dilationh), dilationw(dilationw), groups(groups),
       xformat(move(xformat)), wformat(move(wformat)), yformat(move(yformat)) {
     y = create_output(nullptr, dtype_infer(x->ns, w->ns));
     if (!this->yformat.size())
@@ -61,8 +61,8 @@ void MklConvOp::infer_shape() {
     get_shape(w, "oihw", wformat, wco, wci, wh, ww);
     ASSERTop(wci * groups,==,xc);
     yn = xn, yc = wco;
-    yh = (xh+padding*2-wh*dilation+dilation-1)/stride+1;
-    yw = (xw+padding*2-ww*dilation+dilation-1)/stride+1;
+    yh = (xh+paddingh*2-wh*dilationh+dilationh-1)/strideh+1;
+    yw = (xw+paddingw*2-ww*dilationw+dilationw-1)/stridew+1;
     set_shape(y, "abcd", yformat, yn, yc, yh, yw);
 }
 
@@ -104,7 +104,7 @@ void MklConvOp::jit_run() {
     using dt = memory::data_type;
 
     if (tag::@XFORMAT==tag::nhwc && tag::@YFORMAT==tag::nhwc && tag::@WFORMAT==tag::hwio
-        && stride==1 && padding==0  && dilation==1 && ws[0]==1 && ws[1]==1
+        && strideh==1 && stridew==1 && paddingh==0 && paddingw==0  && dilationh==1 && dilationw==1 && ws[0]==1 && ws[1]==1
         && dt::@Tx==dt::f32 && dt::@Ty==dt::f32 && dt::@Tw==dt::f32) {
         auto m = xs[0]*xs[1]*xs[2];
         auto n = ws[3];
@@ -133,9 +133,9 @@ void MklConvOp::jit_run() {
         ? memory::dims{groups, wco/groups, wci, wh, ww} 
         : memory::dims{wco, wci, wh, ww};
     memory::dims conv1_dst_tz = {yn, yc, yh, yw};
-    memory::dims conv1_strides = { stride, stride };
-    memory::dims conv1_padding = { padding, padding };
-    memory::dims conv1_dilation = { dilation-1, dilation-1 };
+    memory::dims conv1_strides = { strideh, stridew };
+    memory::dims conv1_padding = { paddingh, paddingw };
+    memory::dims conv1_dilation = { dilationh-1, dilationw-1 };
 
     if (groups>1) ASSERT(tag::@WFORMAT == tag::oihw);
 

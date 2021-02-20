@@ -331,20 +331,11 @@ void ConvTuner::forwardTune(FusedOp* fop) {
             int padding_w = -rw[1]->as_int();
             int dilation_w = rw[2]->as_int();
             if (dilation_h < 1 || dilation_w < 1) continue;
-            if (stride_h!=stride_w || padding_h!=padding_w || dilation_h!=dilation_w) {
-                LOGw << "cannot relay different stride and padding between h and w"
-                    << stride_h << padding_h << dilation_h << stride_w << padding_w << dilation_w
-                    << "This may cause low performance. Please send us issue if you need it.";
-                continue;
-            }
             LOGvvvv <<  "get stride padding and dilation" << stride_h << padding_h << dilation_h;
             if (xformat == "bacd") {
                 LOGvvvv << "mkl not support bacd, continue";
                 continue;
             }
-            int stride = stride_h;
-            int padding = padding_h;
-            int dilation = dilation_h;
             Var* x = x_id == 0 ? xoi.op->output(0) : xoi.op->input(0);
             Var* w = w_id == 0 ? woi.op->output(0) : woi.op->input(0);
             Var* y = y_id == 0 ? yoi.op->output(0) : yoi.op->input(0);
@@ -371,9 +362,9 @@ void ConvTuner::forwardTune(FusedOp* fop) {
                 if (!has_op(relay_conv_name))
                     continue;
                 auto make_conv = get_op_info(relay_conv_name)
-                        .get_constructor<VarPtr, Var*, Var*, int, int, int, int, string, string, string>();
-                LOGvvvv << x << w << stride << padding << dilation << groups << xformat << wformat << yformat;
-                rvar = make_conv(x, w, stride, padding, dilation, groups, xformat, wformat, yformat);
+                        .get_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, string, string, string>();
+                LOGvvvv << x << w << stride_h << stride_w << padding_h << padding_w << dilation_h << dilation_w << groups << xformat << wformat << yformat;
+                rvar = make_conv(x, w, stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w, groups, xformat, wformat, yformat);
             } else
             if (x_id == 0) {
                 relay_conv_name = fop->flags.get(NodeFlags::_cpu) ?
@@ -383,9 +374,9 @@ void ConvTuner::forwardTune(FusedOp* fop) {
                 auto height = x->shape[xformat.find("c")];
                 auto width = x->shape[xformat.find("d")];
                 auto make_conv_x = get_op_info(relay_conv_name)
-                        .get_constructor<VarPtr, Var*, Var*, int , int, int, int, int, int, string, string, string>();
-                LOGvvvv << w << y << height << width << stride << padding << dilation << groups << xformat << wformat << yformat;
-                rvar = make_conv_x(w, y, height, width, stride, padding, dilation, groups, xformat, wformat, yformat);
+                        .get_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, int, int, string, string, string>();
+                LOGvvvv << w << y << height << width << stride_h << stride_w << padding_h << padding_w << dilation_h << dilation_w << groups << xformat << wformat << yformat;
+                rvar = make_conv_x(w, y, height, width, stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w, groups, xformat, wformat, yformat);
             } else {
                 relay_conv_name = fop->flags.get(NodeFlags::_cpu) ?
                         "mkl_conv_backward_w" : "cudnn_conv_backward_w";
@@ -393,10 +384,10 @@ void ConvTuner::forwardTune(FusedOp* fop) {
                     continue;
                 auto kh = w->shape[wformat.find("h")];
                 auto kw = w->shape[wformat.find("w")];
-                LOGvvvv << x << y << kh << stride << padding << dilation << groups << xformat << wformat << yformat;
+                LOGvvvv << x << y << kh << stride_h << stride_w << padding_h << padding_w << dilation_h << dilation_w << groups << xformat << wformat << yformat;
                 auto make_conv_w = get_op_info(relay_conv_name)
-                        .get_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, string, string, string>();
-                rvar = make_conv_w(x, y, kh, kw, stride, padding, dilation, groups, xformat, wformat, yformat);
+                        .get_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, int, int, string, string, string>();
+                rvar = make_conv_w(x, y, kh, kw, stride_h, stride_w, padding_h, padding_w, dilation_h, dilation_w, groups, xformat, wformat, yformat);
             }
 
             LOGvvvv << relay_conv_name << "output:" << rvar;
