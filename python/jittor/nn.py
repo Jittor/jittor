@@ -554,6 +554,7 @@ class Conv(Module):
             assert C==self.in_channels
             oh = (H+self.padding[0]*2-Kh*self.dilation[0]+self.dilation[0]-1)//self.stride[0]+1
             ow = (W+self.padding[1]*2-Kw*self.dilation[1]+self.dilation[1]-1)//self.stride[1]+1
+            assert oh>0 and ow>0
             xx = x.reindex([N,self.out_channels,C,oh,ow,Kh,Kw], [
                 'i0', # Nid
                 'i2', # Cid
@@ -576,6 +577,7 @@ class Conv(Module):
             oc = self.out_channels
             oh = (H+self.padding[0]*2-Kh*self.dilation[0]+self.dilation[0]-1)//self.stride[0]+1
             ow = (W+self.padding[1]*2-Kw*self.dilation[1]+self.dilation[1]-1)//self.stride[1]+1
+            assert oh>0 and ow>0
             xx = x.reindex([N,G,oc//G,CpG,oh,ow,Kh,Kw], [
                 'i0', # Nid
                 f'i1*{CpG}+i3', # Gid

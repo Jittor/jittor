@@ -42,8 +42,8 @@ static inline void set_shape(Var* x, const char* f, const string& format, int a,
         shape[0], shape[1], shape[2], shape[3]));
 }
 
-CudnnConvOp::CudnnConvOp(Var* x, Var* w, int stride, int padding, int dilation, int groups, string xformat, string wformat, string yformat)
-    : x(x), w(w), stride(stride), padding(padding), dilation(dilation), groups(groups),
+CudnnConvOp::CudnnConvOp(Var* x, Var* w, int strideh, int stridew, int paddingh, int paddingw, int dilationh, int dilationw, int groups, string xformat, string wformat, string yformat)
+    : x(x), w(w), strideh(strideh), stridew(stridew), paddingh(paddingh), paddingw(paddingw), dilationh(dilationh), dilationw(dilationw), groups(groups),
       xformat(move(xformat)), wformat(move(wformat)), yformat(move(yformat)) {
     flags.set(NodeFlags::_cuda, 1);
     flags.set(NodeFlags::_cpu, 0);
@@ -60,8 +60,8 @@ void CudnnConvOp::infer_shape() {
     get_shape(w, "oihw", wformat, wco, wci, wh, ww);
     ASSERTop(wci * groups,==,xc);
     yn = xn, yc = wco;
-    yh = (xh+padding*2-wh*dilation+dilation-1)/stride+1;
-    yw = (xw+padding*2-ww*dilation+dilation-1)/stride+1;
+    yh = (xh+paddingh*2-wh*dilationh+dilationh-1)/strideh+1;
+    yw = (xw+paddingw*2-ww*dilationw+dilationw-1)/stridew+1;
     set_shape(y, "abcd", yformat, yn, yc, yh, yw);
 }
 
@@ -135,9 +135,9 @@ void CudnnConvOp::jit_run() {
         filterFormat_@WFORMAT, 4, dimW
     ));
 
-    int padA[] = {padding, padding};
-    int convstrideA[] = {stride, stride};
-    int dilationA[] = {dilation, dilation};
+    int padA[] = {paddingh, paddingw};
+    int convstrideA[] = {strideh, stridew};
+    int dilationA[] = {dilationh, dilationw};
     // difference between
     // CUDNN_CONVOLUTION and CUDNN_CROSS_CORRELATION
     // is the kernel rc order
@@ -190,7 +190,7 @@ void CudnnConvOp::jit_run() {
     jk.clear();
     jk << dimX[0] << "," << dimX[1] << "," << dimX[2] << "," << dimX[3] << ",";
     jk << dimW[0] << "," << dimW[1] << "," << dimW[2] << "," << dimW[3] << ",";
-    jk << padding << "," <<stride << "," << dilation << "," << groups << ".";
+    jk << paddingh << paddingw << "," <<strideh <<stridew << "," << dilationh << dilationw << "," << groups << ".";
     auto iter = fwd_algo_cache.find(jk.to_string());
     
     if (iter!=fwd_algo_cache.end()) algo = iter->second;

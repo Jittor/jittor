@@ -28,6 +28,7 @@ class DepthwiseConv(Function):
         ow = (W+self.padding[1]*2-Kw*self.dilation[1]+self.dilation[1]-1)//self.stride[1]+1
         filter_height, filter_width = Kh, Kw
         self.Khw = Kh, Kw
+        assert oh>0 and ow>0
         output = jt.code(
             [N, C, oh, ow],
             x.dtype,

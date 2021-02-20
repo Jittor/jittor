@@ -14,10 +14,10 @@ namespace jittor {
 
 struct MklConvBackwardWOp : Op {
     Var* x, * dy, * dw;
-    int kh, kw, stride, padding, dilation, groups;
+    int kh, kw, strideh, stridew, paddingh, paddingw, dilationh, dilationw, groups;
     string xformat, wformat, yformat;
 
-    MklConvBackwardWOp(Var* x, Var* y, int kh, int kw, int stride, int padding, int dilation, int groups=1, string xformat="abcd", string wformat="oihw", string yformat="abcd");
+    MklConvBackwardWOp(Var* x, Var* y, int kh, int kw, int strideh, int stridew, int paddingh, int paddingw, int dilationh, int dilationw, int groups=1, string xformat="abcd", string wformat="oihw", string yformat="abcd");
     
     const char* name() const override { return "mkl_conv_backward_w"; }
     void infer_shape() override;
