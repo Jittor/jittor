@@ -46,8 +46,8 @@ static inline void set_shape(Var* x, const char* f, const string& format, int a,
         shape[0], shape[1], shape[2], shape[3]));
 }
 
-MklConvBackwardWOp::MklConvBackwardWOp(Var* x, Var* dy, int kh, int kw, int stride, int padding, int dilation, int groups, string xformat, string wformat, string yformat)
-        : x(x), dy(dy), kh(kh), kw(kw), stride(stride), padding(padding), dilation(dilation), groups(groups), 
+MklConvBackwardWOp::MklConvBackwardWOp(Var* x, Var* dy, int kh, int kw, int strideh, int stridew, int paddingh, int paddingw, int dilationh, int dilationw, int groups, string xformat, string wformat, string yformat)
+        : x(x), dy(dy), kh(kh), kw(kw), strideh(strideh), stridew(stridew), paddingh(paddingh), paddingw(paddingw), dilationh(dilationh), dilationw(dilationw), groups(groups), 
       xformat(move(xformat)), wformat(move(wformat)), yformat(move(yformat)) {
     dw = create_output(nullptr, dtype_infer(dy->ns, x->ns));
 }
@@ -119,10 +119,10 @@ void MklConvBackwardWOp::jit_run() {
     memory::dims conv_weights_tz = groups>1
         ? memory::dims{groups, ch_out/groups, ch_in/groups, kh, kw} 
         : memory::dims{ch_out, ch_in, kh, kw};
-    memory::dims conv_dst_tz = {batch, ch_out, (height+padding*2-kh*dilation+dilation-1)/stride+1, (width+padding*2-kw*dilation+dilation-1)/stride+1};
-    memory::dims conv_strides = {stride, stride};
-    memory::dims conv_padding = {padding, padding};
-    memory::dims conv_dilation = {dilation-1, dilation-1};
+    memory::dims conv_dst_tz = {batch, ch_out, (height+paddingh*2-kh*dilationh+dilationh-1)/strideh+1, (width+paddingw*2-kw*dilationw+dilationw-1)/stridew+1};
+    memory::dims conv_strides = {strideh, stridew};
+    memory::dims conv_padding = {paddingh, paddingw};
+    memory::dims conv_dilation = {dilationh-1, dilationw-1};
 
     if (groups>1) ASSERT(tag::@WFORMAT == tag::oihw);
 

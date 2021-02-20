@@ -43,8 +43,8 @@ static inline void set_shape(Var* x, const char* f, const string& format, int a,
         shape[0], shape[1], shape[2], shape[3]));
 }
 
-CudnnConvBackwardWOp::CudnnConvBackwardWOp(Var* x, Var* dy, int kh, int kw, int stride, int padding, int dilation, int groups, string xformat, string wformat, string yformat)
-        : x(x), dy(dy), kh(kh), kw(kw), stride(stride), padding(padding), dilation(dilation), groups(groups),
+CudnnConvBackwardWOp::CudnnConvBackwardWOp(Var* x, Var* dy, int kh, int kw, int strideh, int stridew, int paddingh, int paddingw, int dilationh, int dilationw, int groups, string xformat, string wformat, string yformat)
+        : x(x), dy(dy), kh(kh), kw(kw), strideh(strideh), stridew(stridew), paddingh(paddingh), paddingw(paddingw), dilationh(dilationh), dilationw(dilationw), groups(groups),
       xformat(move(xformat)), wformat(move(wformat)), yformat(move(yformat)) {
     flags.set(NodeFlags::_cuda, 1);
     flags.set(NodeFlags::_cpu, 0);
@@ -134,9 +134,9 @@ void CudnnConvBackwardWOp::jit_run() {
         filterFormat_@WFORMAT, 4, dimW
     ));
 
-    int padA[] = {padding, padding};
-    int convstrideA[] = {stride, stride};
-    int dilationA[] = {dilation, dilation};
+    int padA[] = {paddingh, paddingw};
+    int convstrideA[] = {strideh, stridew};
+    int dilationA[] = {dilationh, dilationw};
     // difference between
     // CUDNN_CONVOLUTION and CUDNN_CROSS_CORRELATION
     // is the kernel rc order
@@ -187,7 +187,7 @@ void CudnnConvBackwardWOp::jit_run() {
     jk.clear();
     jk << dimX[0] << "," << dimX[1] << "," << dimX[2] << "," << dimX[3] << ",";
     jk << dimW[0] << "," << dimW[1] << "," << dimW[2] << "," << dimW[3] << ",";
-    jk << padding << "," <<stride << "," << dilation << "," << groups << ".";
+    jk << paddingh << paddingw << "," <<strideh <<stridew << "," << dilationh << dilationw << "," << groups << ".";
     auto iter = bwdw_algo_cache.find(jk.to_string());
     
     if (iter!=bwdw_algo_cache.end()) algo = iter->second;

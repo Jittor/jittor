@@ -189,8 +189,9 @@ static int _pid = getpid();
 
 void segfault_sigaction(int signal, siginfo_t *si, void *arg) {
     if (signal == SIGINT) {
-        if (_pid == getpid())
+        if (_pid == getpid()) {
             LOGe << "Caught SIGINT, quick exit";
+        }
         exited = true;
         std::quick_exit(1);
     }
