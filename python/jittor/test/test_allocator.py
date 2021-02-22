@@ -23,5 +23,16 @@ class TestAllocator(unittest.TestCase):
         assert jt.flags.stat_allocator_total_free_call == 2
         assert jt.flags.stat_allocator_total_free_byte == 800
 
+    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    @jt.flag_scope(use_cuda=1, use_cuda_managed_allocator=0)
+    def test_device_allocator(self):
+        a = jt.array([1,2,3,4,5])
+        b = a + 1
+        c = jt.code(a.shape, a.dtype, [b],  cpu_src="""
+            for (int i=0; i<in0_shape0; i++)
+                @out(i) = @in0(i)*@in0(i)*2;
+        """)
+        assert (c.data == [8,18,32,50,72]).all()
+
 if __name__ == "__main__":
     unittest.main()
