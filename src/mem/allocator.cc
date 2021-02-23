@@ -11,6 +11,7 @@
 #ifdef HAS_CUDA
 #include "mem/allocator/cuda_managed_allocator.h"
 #include "mem/allocator/cuda_device_allocator.h"
+#include "mem/allocator/cuda_dual_allocator.h"
 #endif
 #include "mem/allocator/stat_allocator.h"
 #include "mem/allocator/sfrl_allocator.h"
@@ -90,5 +91,43 @@ Allocator* get_allocator(bool temp_allocator) {
 void gc_all() {
     for (auto& kv : allocators) kv.second->gc();
 }
+
+
+#ifdef HAS_CUDA
+
+void migrate_to_cpu(Var* var, Allocator* allocator) {
+    if (!use_cuda_managed_allocator)
+        allocator = cpu_allocator;
+    if (var->allocator == &delay_free) {
+        var->allocator = allocator;
+        delay_free.migrate_to_cpu(
+            var->mem_ptr, var->allocation, var->size, var->allocator
+        );
+    } else
+    if (!use_cuda_managed_allocator) {
+        // must be a device allocator
+        Allocation a(allocator, var->size);
+        checkCudaErrors(cudaMemcpy(a.ptr, var->mem_ptr, var->size, cudaMemcpyDeviceToHost));
+        var->allocator->free(var->mem_ptr, var->size, var->allocation);
+        var->mem_ptr = a.ptr;
+        var->allocation = a.allocation;
+        var->allocator = a.allocator;
+        a.ptr = nullptr;
+    }
+}
+
+
+void migrate_to_gpu(Var* var, Allocator* allocator) {
+    // only happend when not using use_cuda_managed_allocator
+    Allocation a(allocator, var->size);
+    checkCudaErrors(cudaMemcpy(a.ptr, var->mem_ptr, var->size, cudaMemcpyHostToDevice));
+    var->allocator->free(var->mem_ptr, var->size, var->allocation);
+    var->mem_ptr = a.ptr;
+    var->allocation = a.allocation;
+    var->allocator = a.allocator;
+    a.ptr = nullptr;
+}
+
+#endif
 
 } // jittor

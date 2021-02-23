@@ -148,6 +148,27 @@ class TestSetitem(unittest.TestCase):
         a[1,1] = -2
         assert (a[0].numpy() == [-1,2]).all(), a[0].numpy()
         assert (a[1].numpy() == [3,-2]).all(), a[1].numpy()
+
+    # def test_scatter(self):
+    #     src = jt.arange(1, 11).reshape((2, 5))
+    #     index = jt.array([[0, 1, 2, 0]])
+    #     print(index.shape, src.shape)
+    #     x = jt.zeros((3, 5), dtype=src.dtype).scatter_(0, index, src)
+    #     print(x)
         
+
+# def scatter(x, dim, index, src, reduce='void'):
+#     shape = index.shape
+#     indexes = [ jt.index(shape, i) for i in range(dim) ]
+#     indexes.append(index)
+#     print(indexes)
+#     return x.setitem(tuple(indexes), src, reduce)
+
+# def scatter_(x, dim, index, src, reduce='void'):
+#     return x.assign(x.scatter(dim, index, src, reduce))
+
+# jt.Var.scatter = scatter
+# jt.Var.scatter_ = scatter_
+
 if __name__ == "__main__":
     unittest.main()

@@ -127,7 +127,7 @@ class MultiStepLR(object):
     def get_lr(self):
         now_lr = self.optimizer.lr
         if (self.last_epoch in self.milestones):
-            now_lr *= gamma
+            now_lr *= self.gamma
         return now_lr
 
     def step(self):

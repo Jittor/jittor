@@ -56,7 +56,7 @@ class TestMklConvOp(unittest.TestCase):
     def test_forward(self):
         a = np.random.rand(1,3,224,224).astype(np.float32)
         b = np.random.rand(64,3,7,7).astype(np.float32)
-        c = jt.mkl_ops.mkl_conv(a,b,2,3).data
+        c = jt.mkl_ops.mkl_conv(a,b,2,2,3,3).data
 
         a_jt = jt.array(a)
         b_jt = jt.array(b)
@@ -81,7 +81,7 @@ class TestMklConvOp(unittest.TestCase):
         def check(xshape, wshape, stride, pad):
             a = np.random.rand(*xshape).astype(np.float32)
             b = np.random.rand(*wshape).astype(np.float32)
-            c = jt.mkl_ops.mkl_conv(a,b,stride,pad,1,xformat="acdb",wformat="hwio").data
+            c = jt.mkl_ops.mkl_conv(a,b,stride,stride,pad,pad,1,1,xformat="acdb",wformat="hwio").data
 
             a_jt = jt.array(a)
             b_jt = jt.array(b)
@@ -114,8 +114,8 @@ class TestMklConvOp(unittest.TestCase):
         a = np.random.rand(n,c,H,W).astype(np.float32)
         b = np.random.rand(o,i,h,w).astype(np.float32)
         da = np.random.rand(n,o,H,W).astype(np.float32)
-        dx = jt.mkl_ops.mkl_conv_backward_x(b,da,H,W,1,1,1).data
-        dw = jt.mkl_ops.mkl_conv_backward_w(a,da,h,w,1,1,1).data
+        dx = jt.mkl_ops.mkl_conv_backward_x(b,da,H,W,1,1,1,1,1,1).data
+        dw = jt.mkl_ops.mkl_conv_backward_w(a,da,h,w,1,1,1,1,1,1).data
         a_jt = jt.array(a)
         b_jt = jt.array(b)
 
@@ -160,8 +160,8 @@ class TestMklConvOp(unittest.TestCase):
         a = np.random.rand(n,H,W,c).astype(np.float32)
         b = np.random.rand(h,w,i,o).astype(np.float32)
         da = np.random.rand(n,H,W,o).astype(np.float32)
-        dx = jt.mkl_ops.mkl_conv_backward_x(b,da,H,W,1,1,1,xformat="acdb",wformat="hwio",yformat="acdb").data
-        dw = jt.mkl_ops.mkl_conv_backward_w(a,da,h,w,1,1,1,xformat="acdb",wformat="hwio",yformat="acdb").data
+        dx = jt.mkl_ops.mkl_conv_backward_x(b,da,H,W,1,1,1,1,1,1,xformat="acdb",wformat="hwio",yformat="acdb").data
+        dw = jt.mkl_ops.mkl_conv_backward_w(a,da,h,w,1,1,1,1,1,1,xformat="acdb",wformat="hwio",yformat="acdb").data
         a_jt = jt.array(a)
         b_jt = jt.array(b)
 

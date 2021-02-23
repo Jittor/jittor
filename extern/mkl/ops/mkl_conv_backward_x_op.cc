@@ -46,8 +46,8 @@ static inline void set_shape(Var* x, const char* f, const string& format, int a,
         shape[0], shape[1], shape[2], shape[3]));
 }
 
-MklConvBackwardXOp::MklConvBackwardXOp(Var* w, Var* dy, int height, int width, int stride, int padding, int dilation, int groups, string xformat, string wformat, string yformat) 
-        : w(w), dy(dy), xh(height), xw(width), stride(stride), padding(padding), dilation(dilation), groups(groups),
+MklConvBackwardXOp::MklConvBackwardXOp(Var* w, Var* dy, int height, int width, int strideh, int stridew, int paddingh, int paddingw, int dilationh, int dilationw, int groups, string xformat, string wformat, string yformat) 
+        : w(w), dy(dy), xh(height), xw(width), strideh(strideh), stridew(stridew), paddingh(paddingh), paddingw(paddingw), dilationh(dilationh), dilationw(dilationw), groups(groups),
       xformat(move(xformat)), wformat(move(wformat)), yformat(move(yformat)) {
     dx = create_output(nullptr, dtype_infer(dy->ns, w->ns));
 }
@@ -97,7 +97,8 @@ void MklConvBackwardXOp::jit_run() {
     int height = dx->shape[findc("@XFORMAT",'c')];
     int width = dx->shape[findc("@XFORMAT",'d')];
     int ch_out = w->shape[findc("@WFORMAT",'o')];
-    int kernel_size = w->shape[findc("@WFORMAT",'h')];
+    int kernel_sizeh = w->shape[findc("@WFORMAT",'h')];
+    int kernel_sizew = w->shape[findc("@WFORMAT",'w')];
     
     auto* __restrict__ conv_weights = w->ptr<Twd>();
     auto* __restrict__ net_diff_dst = dy->ptr<Tyd>();
@@ -114,12 +115,12 @@ void MklConvBackwardXOp::jit_run() {
     
     memory::dims conv_src_tz = {batch, ch_in, height, width};
     memory::dims conv_weights_tz = groups>1
-        ? memory::dims{groups, ch_out/groups, ch_in/groups, kernel_size, kernel_size} 
-        : memory::dims{ch_out, ch_in, kernel_size, kernel_size};
-    memory::dims conv_dst_tz = {batch, ch_out, (height+padding*2-kernel_size*dilation+dilation-1)/stride+1, (width+padding*2-kernel_size*dilation+dilation-1)/stride+1};
-    memory::dims conv_strides = {stride, stride};
-    memory::dims conv_padding = {padding, padding};
-    memory::dims conv_dilation = {dilation-1, dilation-1};
+        ? memory::dims{groups, ch_out/groups, ch_in/groups, kernel_sizeh, kernel_sizew} 
+        : memory::dims{ch_out, ch_in, kernel_sizeh, kernel_sizew};
+    memory::dims conv_dst_tz = {batch, ch_out, (height+paddingh*2-kernel_sizeh*dilationh+dilationh-1)/strideh+1, (width+paddingw*2-kernel_sizew*dilationw+dilationw-1)/stridew+1};
+    memory::dims conv_strides = {strideh, stridew};
+    memory::dims conv_padding = {paddingh, paddingw};
+    memory::dims conv_dilation = {dilationh-1, dilationw-1};
 
     if (groups>1) ASSERT(tag::@WFORMAT == tag::oihw);
 

@@ -596,14 +596,15 @@ class Conv(Module):
         elif self.groups == 1:
             N, C, H, W = x.shape
             Kh, Kw = self.kernel_size
-            assert C == self.in_channels
-            oh = (H + self.padding[0] * 2 - Kh * self.dilation[0] + self.dilation[0] - 1) // self.stride[0] + 1
-            ow = (W + self.padding[1] * 2 - Kw * self.dilation[1] + self.dilation[1] - 1) // self.stride[1] + 1
-            xx = x.reindex([N, self.out_channels, C, oh, ow, Kh, Kw], [
-                'i0',  # Nid
-                'i2',  # Cid
-                f'i3*{self.stride[0]}-{self.padding[0]}+i5*{self.dilation[0]}',  # Hid+Khid
-                f'i4*{self.stride[1]}-{self.padding[1]}+i6*{self.dilation[1]}',  # Wid+KWid
+            assert C==self.in_channels
+            oh = (H+self.padding[0]*2-Kh*self.dilation[0]+self.dilation[0]-1)//self.stride[0]+1
+            ow = (W+self.padding[1]*2-Kw*self.dilation[1]+self.dilation[1]-1)//self.stride[1]+1
+            assert oh>0 and ow>0
+            xx = x.reindex([N,self.out_channels,C,oh,ow,Kh,Kw], [
+                'i0', # Nid
+                'i2', # Cid
+                f'i3*{self.stride[0]}-{self.padding[0]}+i5*{self.dilation[0]}', # Hid+Khid
+                f'i4*{self.stride[1]}-{self.padding[1]}+i6*{self.dilation[1]}', # Wid+KWid
             ])
             ww = self.weight.broadcast(xx.shape, [0, 3, 4])
             yy = xx * ww
@@ -619,13 +620,15 @@ class Conv(Module):
             CpG = C // G  # channels per group
             assert C == self.in_channels
             oc = self.out_channels
-            oh = (H + self.padding[0] * 2 - Kh * self.dilation[0] + self.dilation[0] - 1) // self.stride[0] + 1
-            ow = (W + self.padding[1] * 2 - Kw * self.dilation[1] + self.dilation[1] - 1) // self.stride[1] + 1
-            xx = x.reindex([N, G, oc // G, CpG, oh, ow, Kh, Kw], [
-                'i0',  # Nid
-                f'i1*{CpG}+i3',  # Gid
-                f'i4*{self.stride[0]}-{self.padding[0]}+i6*{self.dilation[0]}',  # Hid+Khid
-                f'i5*{self.stride[1]}-{self.padding[1]}+i7*{self.dilation[1]}',  # Wid+KWid
+            oh = (H+self.padding[0]*2-Kh*self.dilation[0]+self.dilation[0]-1)//self.stride[0]+1
+            ow = (W+self.padding[1]*2-Kw*self.dilation[1]+self.dilation[1]-1)//self.stride[1]+1
+            assert oh>0 and ow>0
+            xx = x.reindex([N,G,oc//G,CpG,oh,ow,Kh,Kw], [
+                'i0', # Nid
+                f'i1*{CpG}+i3', # Gid
+                f'i4*{self.stride[0]}-{self.padding[0]}+i6*{self.dilation[0]}', # Hid+Khid
+                f'i5*{self.stride[1]}-{self.padding[1]}+i7*{self.dilation[1]}', # Wid+KWid
+
             ])
             # w: [oc, CpG, Kh, Kw]
             ww = self.weight.reindex([N, G, oc // G, CpG, oh, ow, Kh, Kw], [

@@ -483,11 +483,6 @@ def arange(start=0, end=None, step=1,dtype=None):
         x= x.cast(dtype)
     return x
 
-def randperm(n, dtype="int64"):
-    x = np.arange(n)
-    np.random.shuffle(x)
-    return jt.array(x).cast(dtype)
-
 def log2(x):
     return jt.log(x)/math.log(2.0)
 
@@ -1007,10 +1002,10 @@ def linspace(start, end, steps):
     res = res*(end-start)/float(steps-1)+start
     return res
 
-def randperm(n):
-    # TODO: use jt.random
-    idx = np.arange(n)
-    return jt.array(np.random.permutation(idx))
+def randperm(n, dtype="int32"):
+    key = jt.random((n,))
+    index, _ = jt.argsort(key)
+    return index.cast(dtype)
 
 def set_global_seed(seed):
     import random
