@@ -14,7 +14,18 @@ from functools import partial
 
 #TODO:full_matrices=1
 def svd(x):
-
+    r'''
+    calculate the Singular Value Decomposition of x.It follows the below fomula:
+    x = usv*
+    only support full matrices == False ver now, which means:
+    x's shape (...,M,K)
+    u's shape (...,M,K)
+    s's shape (...,K)
+    v's shape (...,K,N)
+    where K is min(M,N).
+    :param x:
+    :return:u,s,v.
+    '''
     def forward_code(np, data):
         a = data["inputs"][0]
         u, s, v = data["outputs"]
@@ -84,7 +95,13 @@ def svd(x):
 
 
 def eigh(x):
-
+    r"""
+    calculate the eigenvalues and eigenvectors of x.
+    :param x (...,M,M):
+    :return:w, v.
+    w (...,M) : the eigenvalues.
+    v (...,M,M) : normalized eigenvectors.
+    """
     def forward_code(np, data):
         a = data["inputs"][0]
         w, v = data["outputs"]
@@ -126,7 +143,11 @@ def eigh(x):
 
 
 def inv(x):
-
+    r"""
+    calculate the inverse of x.
+    :param x (...,M,M):
+    :return:x^-1 (...,M,M).
+    """
     def forward_code(np, data):
         a = data["inputs"][0]
         m_a = data["outputs"][0]
@@ -156,7 +177,11 @@ def inv(x):
 
 
 def pinv(x):
-
+    r"""
+    calculate the pseudo-inverse of a x.
+    :param x (...,M,N)
+    :return: x's pinv (...N,M)
+    """
     def forward_code(np, data):
         a = data["inputs"][0]
         m_a = data["outputs"][0]
@@ -178,9 +203,9 @@ def pinv(x):
             + _dot(_dot(_dot(np.eye(mx.shape[-2]) - _dot(mx, inp), dout), T(mx)), mx)
         )
         np.copyto(out, t)
-
+    sw = list(x.shape[:-2]) + [x.shape[-1]] + [x.shape[-2]]
     lmx = jt.numpy_code(
-        [x.shape],
+        [sw],
         [x.dtype],
         [x],
         forward_code,
@@ -191,7 +216,11 @@ def pinv(x):
 
 
 def det(x):
-
+    r"""
+    calculate the determinant of x.
+    :param x (...,M,M):
+    :return:|x| (...,1)
+    """
     def forward_code(np, data):
         a = data["inputs"][0]
         L = data["outputs"][0]
@@ -227,6 +256,13 @@ def det(x):
 
 
 def slogdet(x):
+    r"""
+    calculate the sign and log of the determinant of x.
+    :param x (...,M,M):
+    :return sign, x's logdet.
+    sign array decides the sign of determinant and their values can be -1,0,1.Only Real number now.0 means det is 0 and logdet is -inf.
+    logdet in shape (...,1).
+    """
     def forward_code(np, data):
         a = data["inputs"][0]
         sign, m_a = data["outputs"]
@@ -264,7 +300,13 @@ def slogdet(x):
 
 
 def cholesky(x):
-
+    r"""
+    do Cholesky decomposition of x in the form of below formula:
+    x = LL^T
+    x must be a Hermite and positive-definite matrix. L is a lower-triangular matrix.
+    :param x (...,M,M):
+    :return: L (...,M,M).
+    """
     def forward_code(np, data):
         a = data["inputs"][0]
         L = data["outputs"][0]
@@ -300,7 +342,12 @@ def cholesky(x):
 
 
 def solve(a,b):
-
+    r"""
+    Solve a linear matrix equation Ax = B.This is done by calculating x = A^-1B.So A must not be singular.
+    :param a:(...,M,M)
+    :param b:(...,M)
+    :return:solution of Ax = b formula.x in the shape of (...M)
+    """
     def forward_code(np, data):
         a, b = data["inputs"]
         L = data["outputs"][0]
@@ -335,6 +382,12 @@ def solve(a,b):
 
 
 def qr(x):
+    r"""
+    do the qr factorization of x in the below formula:
+    x = QR where Q is orthogonal matrix and R is upper-triangle matrix.
+    :param x (...,M,M):
+    :return:q,r as the result of qr factorization.They are both in the shape of (...,M,M).
+    """
     def forward_code(np, data):
         a = data["inputs"][0]
         q, r = data["outputs"]
