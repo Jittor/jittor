@@ -1043,32 +1043,13 @@ class Resize(Module):
         return resize(x, self.size, self.mode, self.align_corners)
 
 
-def _bicubic(x, a):
-    '''
-    c1 = jt.where(jt.abs(x)<=1)
-    x[:,:,c1[0],c1[1]] = (a+2)*jt.abs(x[:,:,c1[0],c1[1]])**3-(a+3)*x[:,:,c1[0],c1[1]]**2+1
-    c2 = jt.where(jt.abs(x)>1)
-    x[:,:,c2[0],c2[1]] = a*jt.abs(x[:,:,c2[0],c2[1]])**3-5*a*x[:,:,c2[0],c2[1]]**2+8*a*jt.abs(x[:,:,c2[0],c2[1]])-4*a
-    c3 = jt.where(jt.abs(x)>=2)
-    x[:,:,c3[0],c3[1]] = 0
-    return x
-    '''
+def _bicubic(x, a, func):
     # normal ver
-    if jt.abs(x) <= 1:
-        return (a + 2) * (jt.abs(x) ** 3) - (a + 3) * (x ** 2) + 1
-    if jt.abs(x) < 2:
-        return a * (jt.abs(x) ** 3) - 5 * a * (x ** 2) + 8 * a * (jt.abs(x)) - 4 * a
+    if func == 1:
+        return (a+2)*(jt.abs(x)**3)-(a+3)*(x**2)+1
+    if func == 2:
+        return a*(jt.abs(x)**3)-5*a*(x**2)+8*a*(jt.abs(x))-4*a
     return 0
-
-    '''
-    # pytorch ver.
-    coe = []
-    coe.append(((a*(x+1)-5*a)*(x+1)+8*a)*(x+1)-4*a)
-    coe.append(((a+2)*x-(a+3))*x*x+1)
-    coe.append(((a+2)*(1-x)-(a+3))*(1-x)*(1-x)+1)
-    coe.append(((a*(2-x)-5*a)*(2-x)+8*a)*(2-x)-4*a)
-    return coe;
-    '''
 
 
 def _interpolate(img, x, y, ids, mode):
@@ -1087,25 +1068,24 @@ def _interpolate(img, x, y, ids, mode):
         cd = dx * d + dnx * c
         o = ab * dny + cd * dy
         return o
-    if mode == "bicubic":  # ugly ver.
-        n, c, h, w = img.shape
+    if mode=="bicubic": # ugly ver.
+        n,c,h,w = img.shape
         fx, fy = x.floor(), y.floor()
-        dx, dy = x - fx, y - fy
-        outputs = jt.zeros((n, c, x.shape[-2], x.shape[-1]))
-        for dn in range(n):
-            for dc in range(c):
-                for i in range(x.shape[-2]):
-                    for j in range(x.shape[-1]):
-                        for a in range(-1, 3):
-                            for b in range(-1, 3):
-                                nx = max(min(fx[dn, dc, i, j] + a, h - 1), 0)
-                                ny = max(min(fy[dn, dc, i, j] + b, w - 1), 0)
-                                # print(_bicubic(dx[dn,dc,i,j]-a,-0.75))
-                                # print(_bicubic(dy[dn,dc,i,j]-b,-0.75))
-                                outputs[dn, dc, i, j] += img[dn, dc, nx, ny] * _bicubic(dx[dn, dc, i, j] - a,
-                                                                                        -0.75) * _bicubic(
-                                    dy[dn, dc, i, j] - b, -0.75)
-        return outputs
+        dix, diy = x - fx, y - fy
+        ax, ay = _bicubic(dix+1,-0.75,2), _bicubic(diy+1,-0.75,2)
+        bx, by = _bicubic(dix,-0.75,1), _bicubic(diy,-0.75,1)
+        cx, cy = _bicubic(1-dix,-0.75,1), _bicubic(1-diy,-0.75,1)
+        dx, dy = _bicubic(2-dix,-0.75,2), _bicubic(2-diy,-0.75,2)
+        afx, afy = jt.maximum(jt.minimum(fx-1,h-1),0), jt.maximum(jt.minimum(fy-1,w-1),0)
+        bfx, bfy = jt.maximum(jt.minimum(fx,h-1),0), jt.maximum(jt.minimum(fy,w-1),0)
+        cfx, cfy = jt.maximum(jt.minimum(fx+1,h-1),0), jt.maximum(jt.minimum(fy+1,w-1),0)
+        dfx, dfy = jt.maximum(jt.minimum(fx+2,h-1),0), jt.maximum(jt.minimum(fy+2,w-1),0)
+        a = ax*(img.reindex_var([*ids,afx,afy])*ay+img.reindex_var([*ids,afx,bfy])*by+img.reindex_var([*ids,afx,cfy])*cy+img.reindex_var([*ids,afx,dfy])*dy)
+        b = bx*(img.reindex_var([*ids,bfx,afy])*ay+img.reindex_var([*ids,bfx,bfy])*by+img.reindex_var([*ids,bfx,cfy])*cy+img.reindex_var([*ids,bfx,dfy])*dy)
+        c = cx*(img.reindex_var([*ids,cfx,afy])*ay+img.reindex_var([*ids,cfx,bfy])*by+img.reindex_var([*ids,cfx,cfy])*cy+img.reindex_var([*ids,cfx,dfy])*dy)
+        d = dx*(img.reindex_var([*ids,dfx,afy])*ay+img.reindex_var([*ids,dfx,bfy])*by+img.reindex_var([*ids,dfx,cfy])*cy+img.reindex_var([*ids,dfx,dfy])*dy)
+        o = a + b + c + d
+        return o
     raise (f"Not support interpolation mode: {mode}")
 
 
@@ -1491,7 +1471,7 @@ def unfold(X, kernel_size, dilation=1, padding=0, stride=1):
     return output
 
 
-def fold(X,output_size,kernel_size,dilation=1,padding=0,stride=1):# this may be implemented in C for speed?
+def fold(X,output_size,kernel_size,dilation=1,padding=0,stride=1):
     assert X.ndim==3
     if not isinstance(kernel_size,tuple):
         kernel_size = (kernel_size,kernel_size)
@@ -1504,16 +1484,9 @@ def fold(X,output_size,kernel_size,dilation=1,padding=0,stride=1):# this may be 
     n,cl,num = X.shape
     area = kernel_size[0] * kernel_size[1]
     block_nums = []
-    output = jt.zeros((n,cl // area,output_size[0]+2*padding[0],output_size[1]+2*padding[1]))
     for i in range(2,4):
         block_nums.append((output_size[i-2]+2*padding[i-2]-dilation[i-2]*(kernel_size[i-2]-1)-1) // stride[i-2]+1)
-    for dn in range(n):
-        for c in range(cl // area):
-            for i in range(num):
-                for j in range(area):
-                    h = i//block_nums[1]*stride[0]+(j%area)/kernel_size[1]*dilation[0]
-                    w = i%block_nums[1]*stride[1]+j%area%kernel_size[1]*dilation[1]
-                    output[dn,c,i//block_nums[1]*stride[0]+(j%area)//kernel_size[1]*dilation[0],i%block_nums[1]*stride[1]+j%area%kernel_size[1]*dilation[1]]+=X[dn,c*area+j,i]
+    output = X.reindex_reduce("add",[n,cl // area,output_size[0]+2*padding[0],output_size[1]+2*padding[1]],["i0",f"i1/{area}",f"i2/{block_nums[1]}*{stride[0]}+(i1%{area})/{kernel_size[1]}*{dilation[0]}",f"i2%{block_nums[1]}*{stride[1]}+(i1%{area})%{kernel_size[1]}*{dilation[1]}"])
     return output[:,:,padding[0]:padding[0]+output_size[0],padding[1]:padding[1]+output_size[1]]
 
 ModuleList = Sequential
