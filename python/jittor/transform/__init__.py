@@ -376,6 +376,32 @@ class Resize:
     def __call__(self, img:Image.Image):
         return img.resize(self.size, self.mode)
 
+class Resize2:
+    '''
+    Class for resizing image.
+
+    Args::
+
+    [in] size(int or tuple): Size want to resize.
+    [in] mode(int): type of resize.
+
+    Example::
+
+        transform = transform.Resize(224)
+        img_ = transform(img)
+    '''
+    def __init__(self, size, mode=Image.BILINEAR):
+        assert(isinstance(size, int))
+        self.size = size
+        self.mode = mode
+    def __call__(self, img:Image.Image):
+        w, h = img.size
+        if (w < h):
+            size = [self.size, int(round(self.size * h / w))]
+        else:
+            size = [int(round(self.size * w / h)), self.size]
+        return img.resize(size, self.mode)
+
 class Gray:
     '''
     Convert image to grayscale.
