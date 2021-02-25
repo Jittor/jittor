@@ -78,6 +78,7 @@ class test_models(unittest.TestCase):
         # Define numpy input image
         bs = 1
         test_img = np.random.random((bs,3,224,224)).astype('float32')
+        # test_img = np.random.random((bs,3,280,280)).astype('float32')
         # Define pytorch & jittor input image
         pytorch_test_img = to_cuda(torch.Tensor(test_img))
         jittor_test_img = jt.array(test_img)
