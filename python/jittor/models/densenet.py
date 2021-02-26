@@ -140,6 +140,6 @@ class DenseNet(nn.Module):
     def execute(self, x):
         features = self.features(x)
         out = nn.relu(features)
-        out = jt.pool.pool(out, kernel_size=7, op="mean", stride=1).reshape([features.shape[0], -1])
+        out = out.mean([2,3])
         out = self.classifier(out)
         return out

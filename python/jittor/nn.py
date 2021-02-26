@@ -27,8 +27,8 @@ def matmul_transpose(a, b):
     returns a * b^T
     '''
     assert len(a.shape) >= 2 and len(b.shape) == 2
-    assert a.shape[-1] == b.shape[-1]
-    if len(a.shape) > 2:
+    assert a.shape[-1] == b.shape[-1], (a.shape, b.shape)
+    if len(a.shape)>2:
         aa = a.reshape((-1, a.shape[-1]))
         cc = matmul_transpose(aa, b)
         return cc.reshape(a.shape[:-1] + (-1,))
