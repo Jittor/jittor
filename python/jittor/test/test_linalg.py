@@ -24,7 +24,7 @@ except:
 
 
 @unittest.skipIf(not has_autograd, "No autograd found.")
-class TestCodeOp(unittest.TestCase):
+class TestLinalgOp(unittest.TestCase):
     def test_svd(self):
         def check_svd(a):
             u, s, v = anp.linalg.svd(a, full_matrices=0)

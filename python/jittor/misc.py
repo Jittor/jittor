@@ -993,10 +993,6 @@ def cumprod(a, dim):
         dim+=len(a.shape)
     return func(a, dim)
 
-def eye(n):
-    x = jt.ones((n))
-    return x.reindex([n,n],["i0"],overflow_conditions=[f'i0!=i1'])
-
 def linspace(start, end, steps):
     res = jt.index((steps,))[0]
     res = res*(end-start)/float(steps-1)+start

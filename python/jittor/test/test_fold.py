@@ -1,6 +1,7 @@
 # ***************************************************************
 # Copyright (c) 2021 Jittor. All Rights Reserved.
 # Maintainers:
+#     Haoyang Peng <2247838039@qq.com>
 #     Guoye Yang <498731903@qq.com>
 #     Dun Liang <randonlang@gmail.com>.
 #
