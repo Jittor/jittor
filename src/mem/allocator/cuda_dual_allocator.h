@@ -115,16 +115,6 @@ struct DelayFree final : Allocator {
 
 extern DelayFree delay_free;
 
-inline void migrate_to_cpu(Var* var, Allocator* allocator) {
-    if (var->allocator == &delay_free) {
-        var->allocator = allocator;
-        delay_free.migrate_to_cpu(
-            var->mem_ptr, var->allocation, var->size, var->allocator
-        );
-    }
-
-}
-
 }
 
 #endif

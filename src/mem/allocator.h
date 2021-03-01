@@ -53,4 +53,9 @@ Allocator* get_allocator(bool temp_allocator=false);
 // @pyjt(gc)
 void gc_all();
 
+#ifdef HAS_CUDA
+void migrate_to_cpu(Var* var, Allocator* allocator);
+void migrate_to_gpu(Var* var, Allocator* allocator);
+#endif
+
 } // jittor
