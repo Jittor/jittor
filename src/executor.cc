@@ -37,6 +37,10 @@ DECLARE_FLAG(int, profile_memory_enable);
 
 // from fetch_op.cc
 extern list<VarPtr> fetcher_to_free;
+// from cuda_managed_allocator
+#ifdef HAS_CUDA
+DECLARE_FLAG(int, use_cuda_managed_allocator);
+#endif
 
 void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, int ll, int rr, int64 tt) {
     fused_op.ops.clear();
@@ -445,6 +449,14 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
             for (Var* v : op->inputs()) {
                 migrate_to_cpu(v, allocator);
             }
+            if (!use_cuda_managed_allocator) {
+                for (auto* var : op->outputs()) {
+                    var->allocator->free(var->mem_ptr, var->size, var->allocation);
+                    var->mem_ptr = var->allocator = nullptr;
+                    var->allocation = 0;
+                    var->alloc(cpu_allocator);
+                }
+            }
         }
         #endif
         #ifdef NODE_MEMCHECK
@@ -459,6 +471,14 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         #endif
         last_is_cuda = is_cuda;
         op->do_run_after_prepare(jkl);
+        #ifdef HAS_CUDA
+        // migrate to gpu
+        if (PREDICT_BRANCH_NOT_TAKEN((!is_cuda && use_cuda && !use_cuda_managed_allocator))) {
+            for (Var* v : op->outputs()) {
+                migrate_to_gpu(v, allocator);
+            }
+        }
+        #endif
         // record trace data
         if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var>=2)) {
             trace_data.record_execution(op, is_fused_op, jkl);
