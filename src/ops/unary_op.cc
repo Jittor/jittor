@@ -269,7 +269,7 @@ static unordered_set<string> unary_ops = {
      *     >>> jt.atan(a)
      *     jt.Var([-0.70961297  0.87102956  0.44140393  0.76464504], dtype=float32)
      */
-    // @pybind(asin, arcsin)
+    // @pybind(atan, arctan)
     "atan",
 
     /**

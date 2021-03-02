@@ -220,7 +220,6 @@ unordered_set<string> binary_ops = {
      */
     // @pybind(greater, __gt__)
     "greater",
-    // @pybind(greater_equal, __ge__)
 
     /**
      * returns x >= y element-wise.
@@ -232,8 +231,8 @@ unordered_set<string> binary_ops = {
      * :param y: the second input.
      * :type y: a python number or jt.Var.
      */
+    // @pybind(greater_equal, __ge__)
     "greater_equal",
-    // @pybind(equal, __eq__)
 
     /**
      * returns x == y element-wise.
@@ -245,6 +244,7 @@ unordered_set<string> binary_ops = {
      * :param y: the second input.
      * :type y: a python number or jt.Var.
      */
+    // @pybind(equal, __eq__)
     "equal",
 
     /**
