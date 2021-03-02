@@ -55,10 +55,14 @@ def bmm(a, b):
 shape of input a is [batch, n, m],
 shape of input b is [batch, m, k],
 return shape is [batch, n, k]
+
 Example::
+
     import jittor as jt
     from jittor import nn
+
     batch, n, m, k = 100, 5, 6, 7
+
     a = jt.random((batch, n, m))
     b = jt.random((batch, m, k))
     c = nn.bmm(a, b)
@@ -68,27 +72,34 @@ Example::
 
 def matmul(a, b):
     ''' matrix multiply, 
+
 Example::
+
     a = jt.random([3])
     b = jt.random([3])
     c = jt.matmul(a, b)
     assert c.shape == [1]
+
     a = jt.random([3, 4])
     b = jt.random([4])
     c = jt.matmul(a, b)
     assert c.shape == [3]
+
     a = jt.random([10, 3, 4])
     b = jt.random([4])
     c = jt.matmul(a, b)
     assert c.shape == [10, 3]
+
     a = jt.random([10, 3, 4])
     b = jt.random([4, 5])
     c = jt.matmul(a, b)
     assert c.shape == [10, 3, 5]
+
     a = jt.random([10, 3, 4])
     b = jt.random([10, 4, 5])
     c = jt.matmul(a, b)
     assert c.shape == [10, 3, 5]
+
     a = jt.random([8, 1, 3, 4])
     b = jt.random([10, 4, 5])
     c = jt.matmul(a, b)
@@ -218,6 +229,7 @@ def l1_loss(output, target):
 def smooth_l1_loss(y_true, y_pred,reduction="mean"):
     """Implements Smooth-L1 loss.
     y_true and y_pred are typically: [N, 4], but could be any shape.
+
     Args:
          y_true - ground truth 
          y_pred - predictions
@@ -941,9 +953,11 @@ def hardtanh(x,min_val=-1,max_val=1):
 class Softplus(Module):
     r'''
     SoftPlus is a smooth approximation to the ReLU function and can be used to constrain the output of a machine to always be positive.
+    
     Args:
         
         [in] beta (float): the beta value for the Softplus formulation. Default: 1.
+        
         [in] threshold (float): values above this revert to a linear function. Default: 20.
     '''
     def __init__(self, beta=1, threshold=20):
@@ -971,7 +985,7 @@ def _bicubic(x, a, func):
         return a*(jt.abs(x)**3)-5*a*(x**2)+8*a*(jt.abs(x))-4*a
     return 0
 
-    
+
 def _interpolate(img, x, y, ids, mode):
     if mode == "nearest":
         return img.reindex([*ids, x.floor(), y.floor()])
