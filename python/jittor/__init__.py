@@ -932,7 +932,7 @@ class Module:
             >>> net.save('net.pkl')
             >>> net.load('net.pkl')
 
-        This method also support loading a state dict from a pytorch .pth file.
+        This method also supports loading a state dict from a pytorch .pth file.
 
         .. note::
             当载入的参数与模型定义不一致时, jittor 会输出错误信息, 但是不会抛出异常.
