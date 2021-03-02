@@ -932,6 +932,8 @@ class Module:
             >>> net.save('net.pkl')
             >>> net.load('net.pkl')
 
+        This method also supports loading a state dict from a pytorch .pth file.
+
         .. note::
             当载入的参数与模型定义不一致时, jittor 会输出错误信息, 但是不会抛出异常.
             若载入参数出现模型定义中没有的参数名, 则会输出如下信息, 并忽略此参数:
