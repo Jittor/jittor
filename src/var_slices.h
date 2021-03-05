@@ -7,6 +7,7 @@
 #pragma once
 #include "common.h"
 #include "misc/nano_vector.h"
+#include "var.h"
 
 namespace jittor {
 
