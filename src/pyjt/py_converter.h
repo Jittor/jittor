@@ -745,7 +745,9 @@ void load_var_slice(PyObject* obj, T* var_slice, vector<unique_ptr<VarHolder>>& 
     } else {
         holders.emplace_back();
         auto* vh = from_py_object<VarHolder*>(obj, holders.back());
-        auto vv = (Var**)vh;
+        auto vv = (decltype(var_slice->var)*)vh;
+        CHECK(vv[0]->dtype() != ns_bool) << "Please convert bool slice into jt.array, example:\n"
+            "a[[True,False,False]] ---> a[jt.array([True,False,False])";
         var_slice->set_var(vv[0]);
     }
 }
