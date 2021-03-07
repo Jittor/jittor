@@ -719,6 +719,7 @@ DEF_IS(VarSlices, bool) is_type(PyObject* obj) {
         PySlice_Check(obj) || 
         (Py_TYPE(obj) == &PyEllipsis_Type) ||
         obj == Py_None ||
+        PyUnicode_CheckExact(obj) || 
         is_type<VarHolder*>(obj);
 }
 
@@ -732,6 +733,9 @@ void load_var_slice(PyObject* obj, T* var_slice, vector<unique_ptr<VarHolder>>& 
     } else
     if (Py_TYPE(obj) == &PyEllipsis_Type) {
         var_slice->set_ellipsis();
+    } else 
+    if (PyUnicode_CheckExact(obj)) {
+        var_slice->set_str(from_py_object<string>(obj));
     } else 
     if (obj == Py_None) {
         var_slice->set_none();
