@@ -21,11 +21,21 @@ union VarSlice {
     inline bool is_ellipsis() const { return slice.mask == -2; }
     inline bool is_none() const { return slice.mask == -3; }
     inline bool is_int() const { return slice.mask == -4; }
+    inline bool is_str() const { return slice.mask == -5; }
     inline bool is_slice() const { return slice.mask >= 0; }
     inline void set_var(Var* v) { slice.mask = -1; var = v; }
     inline void set_ellipsis() { slice.mask = -2; }
     inline void set_none() { slice.mask = -3; }
     inline void set_int(int64 v) { slice.mask = -4; i = v; }
+    inline void set_str(const string& s) {
+        slice.mask = -5;
+        CHECK(s.size() < 16) << "String slice too long" << s;
+        auto v = (int64*)s.c_str();
+        slice.start = v[0];
+        slice.stop = v[1];
+        slice.step = s.size();
+    }
+    inline char* get_str() {return (char*)this;}
 };
 
 struct VarSlices  {
