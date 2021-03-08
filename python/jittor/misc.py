@@ -1118,7 +1118,7 @@ Example::
 
     '''
     shape = index.shape
-    if src.shape != shape:
+    if src.shape != shape and src.numel() != 1:
         src = src[tuple( slice(None,s) for s in shape )]
     indexes = [ f'i{i}' for i in range(len(shape)) ]
     indexes[dim] = index
