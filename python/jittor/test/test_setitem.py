@@ -197,6 +197,9 @@ class TestSetitem(unittest.TestCase):
         a[b] = jt.array([-1,-2])
         assert (a.data == [-1,2,-2,4]).all()
         
+    def test_slice_none(self):
+        a = jt.array([1,2])
+        assert a[None,:,None,None,...,None].shape == (1,2,1,1,1)
 
 
 if __name__ == "__main__":

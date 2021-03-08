@@ -150,6 +150,13 @@ void GetitemOp::infer_slices(
             }
         }
     }
+    while (vid < vs.n) {
+        auto& s = vs.slices[vid++];
+        if (s.is_none()) {
+            out_shape.push_back(1);
+        } else
+            CHECK(s.is_ellipsis()) << "Too many slices" << vs << "shape:" << in->shape;
+    }
 }
 
 void cuda_loop_schedule(NanoVector o_shape, int* masks, int* tdims) {
