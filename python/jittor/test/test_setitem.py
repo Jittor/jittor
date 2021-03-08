@@ -190,6 +190,12 @@ class TestSetitem(unittest.TestCase):
     @jt.flag_scope(use_cuda=1)
     def test_gather_cuda(self):
         self.test_gather()
+
+    def test_setitem_bool(self):
+        a = jt.array([1,2,3,4])
+        b = jt.array([True,False,True,False])
+        a[b] = jt.array([-1,-2])
+        assert (a.data == [-1,2,-2,4]).all()
         
 
 
