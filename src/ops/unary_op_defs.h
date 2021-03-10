@@ -37,7 +37,7 @@ namespace jittor {
 #define tanh(T,x) ((T) ::tanhf((x)))
 #define atanh(T,x) ((T) ::atanhf((x)))
 
-#define sigmoid(T,x) ((T) (1.0f/(1.0f+::expf(-(x)))))
+#define sigmoid(T,x) ((T) (1.0f/(1.0f+::expf((::min(T(-(x)), T(@if(@strcmp(@T,float32)==0,30,300))))))))
 
 #define erf(T,x) ((T) ::erff((x)))
 
@@ -65,7 +65,7 @@ namespace jittor {
 #define tanh(T,x) ((T) std::tanh((x)))
 #define atanh(T,x) ((T) std::atanh((x)))
 
-#define sigmoid(T,x) ((T) (1.0f/(1.0f+std::exp(-(x)))))
+#define sigmoid(T,x) ((T) (1.0f/(1.0f+std::exp(std::min(T(-(x)), T(@if(@strcmp(@T,float32)==0,30,300)))))))
 
 #define erf(T,x) ((T) std::erf((x)))
 
