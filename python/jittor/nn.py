@@ -621,6 +621,7 @@ class Conv1d(Module):
         # using list to escape module dfs
         self._conv = [Conv(self.in_channels, self.out_channels, self.kernel_size, self.stride, self.padding, self.dilation, self.groups, self.bias)]
         self.weight = self._conv[0].weight.squeeze(-1)
+        self.bias = self._conv[0].bias
 
     def execute(self, x):
         N,C,D = x.shape
