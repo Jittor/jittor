@@ -96,6 +96,16 @@ class TestConvTranspose(unittest.TestCase):
         check((4, 5, 100, 100), (5, 6, 5, 5), 1, 2)
         check((4, 5, 100, 100), (5, 6, 5, 5), 2, 2)
         check((4, 5, 100, 100), (5, 6, 5, 5), 2, 3)
+
+    def test_conv1d(self):
+        conv1d = jt.nn.Conv1d(10,20,5)
+        a = jt.rand((3,10,15))
+        b = conv1d(a)
+        b.sync()
+        assert b.shape == [3,20,11]
+        b = jt.nn.Conv1d(10,20,5, padding=2)(a)
+        assert b.shape == [3,20,15]
+        assert list(conv1d.state_dict().keys()) == ['weight']
         
 if __name__ == "__main__":
     unittest.main()

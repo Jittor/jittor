@@ -618,13 +618,16 @@ class Conv1d(Module):
         self.bias = bias
         assert in_channels % groups == 0, 'in_channels must be divisible by groups'
         assert out_channels % groups == 0, 'out_channels must be divisible by groups'
-        self.conv = Conv(self.in_channels, self.out_channels, self.kernel_size, self.stride, self.padding, self.dilation, self.groups, self.bias)
+        # using list to escape module dfs
+        self._conv = [Conv(self.in_channels, self.out_channels, self.kernel_size, self.stride, self.padding, self.dilation, self.groups, self.bias)]
+        self.weight = self._conv[0].weight.squeeze(-1)
 
     def execute(self, x):
         N,C,D = x.shape
         assert C==self.in_channels
+        self._conv[0].weight = self.weight.unsqueeze(-1)
         x = x.unsqueeze(-1)
-        x = self.conv(x)
+        x = self._conv[0](x)
         y = x.squeeze(-1)
         return y
 
