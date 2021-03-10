@@ -105,7 +105,7 @@ class TestConvTranspose(unittest.TestCase):
         assert b.shape == [3,20,11]
         b = jt.nn.Conv1d(10,20,5, padding=2)(a)
         assert b.shape == [3,20,15]
-        assert list(conv1d.state_dict().keys()) == ['weight']
+        assert sorted(list(conv1d.state_dict().keys())) == ['bias', 'weight'], conv1d.state_dict().keys()
         
 if __name__ == "__main__":
     unittest.main()
