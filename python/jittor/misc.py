@@ -897,7 +897,7 @@ def auto_parallel(n, src, **kw):
         tid_def += f"\nauto tnum{i} = 1<<tn{i};"
         tid_def += f"\ntid = tid>>tn{i};"
     for i in range(n):
-        tid_loop += f"\nfor (int i{i}=tid{i}; i{i}<{pnargs2[i]}; i{i}+=tn{i})"
+        tid_loop += f"\nfor (int i{i}=tid{i}; i{i}<{pnargs2[i]}; i{i}+=tnum{i})"
         call_args.append(pnargs2[i])
         call_args.append(f"i{i}")
     call_args += oargs2
