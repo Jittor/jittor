@@ -1053,8 +1053,10 @@ def upsample(img, size, mode="nearest", align_corners=False):
         x = (hid + 0.5) * (h / H) - 0.5
         y = (wid + 0.5) * (w / W) - 0.5
     else:
-        x = hid * (h / H)
-        y = wid * (w / W)
+        x = hid * (h / H) + (h / H * 0.5 - 0.5)
+        if H > h: x = x.clamp(0, h - 1)
+        y = wid * (w / W) + (w / W * 0.5 - 0.5)
+        if W > w: y = y.clamp(0, w - 1)
     return _interpolate(img, x, y, (nid, cid), mode)
 
 

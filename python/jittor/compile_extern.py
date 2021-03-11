@@ -271,6 +271,7 @@ def setup_cutt():
 
 def install_nccl(root_folder):
     url = "https://github.com/NVIDIA/nccl/archive/v2.8.4-1.tar.gz"
+    url = "https://codeload.github.com/NVIDIA/nccl/tar.gz/v2.8.4-1"
 
     filename = "nccl.tgz"
     fullname = os.path.join(root_folder, filename)
