@@ -849,7 +849,7 @@ class ZeroPad2d(Module):
             self.pr = self.padding
             self.pt = self.padding
             self.pb = self.padding
-        elif isinstance(self.padding, tuple):
+        elif isinstance(self.padding, (tuple,list)):
             self.pl, self.pr, self.pt, self.pb = self.padding
         else:
             raise TypeError(f"ZeroPad2d padding just support int or tuple, but found {type(padding)}")
