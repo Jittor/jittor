@@ -179,7 +179,7 @@ def _setitem_old(x, slices, value):
 # PATCH
 def getitem(x, slices):
     if isinstance(slices, jt.Var) and slices.dtype == "bool":
-        return getitem(x, slices.where())
+        return getitem(x, tuple(slices.where()))
     if isinstance(slices, tuple):
         ss = []
         for s in slices:
