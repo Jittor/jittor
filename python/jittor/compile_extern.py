@@ -82,6 +82,7 @@ def setup_mkl():
 
 def install_cub(root_folder):
     url = "https://github.com/NVIDIA/cub/archive/1.11.0.tar.gz"
+    url = "https://codeload.github.com/NVIDIA/cub/tar.gz/1.11.0"
     filename = "cub-1.11.0.tgz"
     md5 = "97196a885598e40592100e1caaf3d5ea"
     fullname = os.path.join(root_folder, filename)
@@ -196,6 +197,7 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
 def install_cutt(root_folder):
     # Modified from: https://github.com/ap-hynninen/cutt
     url = "https://github.com/Jittor/cutt/archive/master.zip"
+    url = "https://codeload.github.com/Jittor/cutt/zip/master"
 
     filename = "cutt-master.zip"
     fullname = os.path.join(root_folder, filename)
