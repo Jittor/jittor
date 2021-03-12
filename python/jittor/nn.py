@@ -1052,6 +1052,9 @@ def upsample(img, size, mode="nearest", align_corners=False):
     elif mode == "bicubic":
         x = (hid + 0.5) * (h / H) - 0.5
         y = (wid + 0.5) * (w / W) - 0.5
+    elif mode == 'nearest':
+        x = hid * (h / H)
+        y = wid * (w / W)
     else:
         x = hid * (h / H) + (h / H * 0.5 - 0.5)
         if H > h: x = x.clamp(0, h - 1)
