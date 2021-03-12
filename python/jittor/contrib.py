@@ -180,7 +180,7 @@ def _setitem_old(x, slices, value):
 def getitem(x, slices):
     if isinstance(slices, jt.Var) and slices.dtype == "bool":
         return getitem(x, slices.where())
-    if isinstance(slices, Sequence):
+    if isinstance(slices, tuple):
         ss = []
         for s in slices:
             if isinstance(s, jt.Var) and s.dtype == "bool":
@@ -193,7 +193,7 @@ def getitem(x, slices):
 def setitem(x, slices, value):
     if isinstance(slices, jt.Var) and slices.dtype == "bool":
         slices = tuple(slices.where())
-    elif isinstance(slices, Sequence):
+    elif isinstance(slices, tuple):
         ss = []
         for s in slices:
             if isinstance(s, jt.Var) and s.dtype == "bool":
