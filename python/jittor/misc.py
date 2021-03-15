@@ -13,6 +13,12 @@ import numpy as np
 import math
 from collections.abc import Sequence,Iterable
 
+def index_add_(x, dim, index, tensor):
+    assert len(index.shape) == 1
+    assert tensor.shape[0] == index.shape[0]
+    x[(slice(None,),)*dim+(index,)] += tensor
+jt.Var.index_add_ = index_add_
+
 def __copy__(x):
     return x.copy().detach()
 jt.Var.__copy__ = __copy__
