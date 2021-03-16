@@ -28,7 +28,7 @@ struct ArgReduceOp : Op {
 
     * [in] op:      "max" or "min". 
 
-    * [in] dim:     int. Specifies which dimension to reduce.
+    * [in] dim:     int. Specifies which dimension to be reduced.
 
     * [in] keepdim: bool. Whether the output has ``dim`` retained or not.
 
