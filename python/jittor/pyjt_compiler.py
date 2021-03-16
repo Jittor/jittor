@@ -642,11 +642,11 @@ def compile_src(src, h, basename):
         for did, has_return in enumerate(arr_has_return):
             df = dfs[did]
             func_call = arr_func_call[did]
-            if df["doc"]:
+            if df["doc"] and not (did > 0 and df["doc"] == dfs[did - 1]["doc"]):
                 doc_all += "Document:\n"
-                doc_all += df["doc"]
-            doc_all += "\nDeclaration:\n"
-            doc_all += df["dec"]
+                doc_all += df["doc"]+'\n'
+            doc_all += "Declaration:\n"
+            doc_all += df["dec"]+'\n\n'
             decs += " " + df["dec"]+'\n'
             if has_return:
                 assert "-> int" not in func_head
