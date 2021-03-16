@@ -618,13 +618,17 @@ class Conv1d(Module):
         self.bias = bias
         assert in_channels % groups == 0, 'in_channels must be divisible by groups'
         assert out_channels % groups == 0, 'out_channels must be divisible by groups'
-        self.conv = Conv(self.in_channels, self.out_channels, self.kernel_size, self.stride, self.padding, self.dilation, self.groups, self.bias)
+        # using list to escape module dfs
+        self._conv = [Conv(self.in_channels, self.out_channels, self.kernel_size, self.stride, self.padding, self.dilation, self.groups, self.bias)]
+        self.weight = self._conv[0].weight.squeeze(-1)
+        self.bias = self._conv[0].bias
 
     def execute(self, x):
         N,C,D = x.shape
         assert C==self.in_channels
+        self._conv[0].weight = self.weight.unsqueeze(-1)
         x = x.unsqueeze(-1)
-        x = self.conv(x)
+        x = self._conv[0](x)
         y = x.squeeze(-1)
         return y
 
@@ -845,7 +849,7 @@ class ZeroPad2d(Module):
             self.pr = self.padding
             self.pt = self.padding
             self.pb = self.padding
-        elif isinstance(self.padding, tuple):
+        elif isinstance(self.padding, (tuple,list)):
             self.pl, self.pr, self.pt, self.pb = self.padding
         else:
             raise TypeError(f"ZeroPad2d padding just support int or tuple, but found {type(padding)}")
@@ -953,11 +957,11 @@ def hardtanh(x,min_val=-1,max_val=1):
 class Softplus(Module):
     r'''
     SoftPlus is a smooth approximation to the ReLU function and can be used to constrain the output of a machine to always be positive.
-
+    
     Args:
         
         [in] beta (float): the beta value for the Softplus formulation. Default: 1.
-
+        
         [in] threshold (float): values above this revert to a linear function. Default: 20.
     '''
     def __init__(self, beta=1, threshold=20):
@@ -976,59 +980,99 @@ class Resize(Module):
     def execute(self, x):
         return resize(x, self.size, self.mode, self.align_corners)
 
+
+def _bicubic(x, a, func):
+    # normal ver
+    if func == 1:
+        return (a+2)*(jt.abs(x)**3)-(a+3)*(x**2)+1
+    if func == 2:
+        return a*(jt.abs(x)**3)-5*a*(x**2)+8*a*(jt.abs(x))-4*a
+    return 0
+
+
 def _interpolate(img, x, y, ids, mode):
-    if mode=="nearest":
+    if mode == "nearest":
         return img.reindex([*ids, x.floor(), y.floor()])
-    if mode=="bilinear":
+    if mode == "bilinear":
         fx, fy = x.floor(), y.floor()
-        cx, cy = fx+1, fy+1
-        dx, dy = x-fx, y-fy
+        cx, cy = fx + 1, fy + 1
+        dx, dy = x - fx, y - fy
         a = img.reindex_var([*ids, fx, fy])
         b = img.reindex_var([*ids, cx, fy])
         c = img.reindex_var([*ids, fx, cy])
         d = img.reindex_var([*ids, cx, cy])
-        dnx, dny = 1-dx, 1-dy
-        ab = dx*b + dnx*a
-        cd = dx*d + dnx*c
-        o = ab*dny + cd*dy
+        dnx, dny = 1 - dx, 1 - dy
+        ab = dx * b + dnx * a
+        cd = dx * d + dnx * c
+        o = ab * dny + cd * dy
         return o
-    raise(f"Not support interpolation mode: {mode}")
+    if mode=="bicubic": # ugly ver.
+        n,c,h,w = img.shape
+        fx, fy = x.floor(), y.floor()
+        dix, diy = x - fx, y - fy
+        ax, ay = _bicubic(dix+1,-0.75,2), _bicubic(diy+1,-0.75,2)
+        bx, by = _bicubic(dix,-0.75,1), _bicubic(diy,-0.75,1)
+        cx, cy = _bicubic(1-dix,-0.75,1), _bicubic(1-diy,-0.75,1)
+        dx, dy = _bicubic(2-dix,-0.75,2), _bicubic(2-diy,-0.75,2)
+        afx, afy = jt.maximum(jt.minimum(fx-1,h-1),0), jt.maximum(jt.minimum(fy-1,w-1),0)
+        bfx, bfy = jt.maximum(jt.minimum(fx,h-1),0), jt.maximum(jt.minimum(fy,w-1),0)
+        cfx, cfy = jt.maximum(jt.minimum(fx+1,h-1),0), jt.maximum(jt.minimum(fy+1,w-1),0)
+        dfx, dfy = jt.maximum(jt.minimum(fx+2,h-1),0), jt.maximum(jt.minimum(fy+2,w-1),0)
+        a = ax*(img.reindex_var([*ids,afx,afy])*ay+img.reindex_var([*ids,afx,bfy])*by+img.reindex_var([*ids,afx,cfy])*cy+img.reindex_var([*ids,afx,dfy])*dy)
+        b = bx*(img.reindex_var([*ids,bfx,afy])*ay+img.reindex_var([*ids,bfx,bfy])*by+img.reindex_var([*ids,bfx,cfy])*cy+img.reindex_var([*ids,bfx,dfy])*dy)
+        c = cx*(img.reindex_var([*ids,cfx,afy])*ay+img.reindex_var([*ids,cfx,bfy])*by+img.reindex_var([*ids,cfx,cfy])*cy+img.reindex_var([*ids,cfx,dfy])*dy)
+        d = dx*(img.reindex_var([*ids,dfx,afy])*ay+img.reindex_var([*ids,dfx,bfy])*by+img.reindex_var([*ids,dfx,cfy])*cy+img.reindex_var([*ids,dfx,dfy])*dy)
+        o = a + b + c + d
+        return o
+    raise (f"Not support interpolation mode: {mode}")
+
 
 def resize(img, size, mode="nearest", align_corners=False):
-    n,c,h,w = img.shape
-    H,W = size
-    nid, cid, hid, wid = jt.index((n,c,H,W))
+    n, c, h, w = img.shape
+    H, W = size
+    nid, cid, hid, wid = jt.index((n, c, H, W))
     if align_corners:
-        x = hid * ((h-1) / max(1, H-1))
-        y = wid * ((w-1) / max(1, W-1))
+        x = hid * ((h - 1) / max(1, H - 1))
+        y = wid * ((w - 1) / max(1, W - 1))
     else:
-        x = hid * (h / H) + (h/H*0.5 - 0.5)
-        if H>h: x = x.clamp(0, h-1)
-        y = wid * (w / W) + (w/W*0.5 - 0.5)
-        if W>w: y = y.clamp(0, w-1)
-    return _interpolate(img, x, y, (nid,cid), mode)
+        x = hid * (h / H) + (h / H * 0.5 - 0.5)
+        if H > h: x = x.clamp(0, h - 1)
+        y = wid * (w / W) + (w / W * 0.5 - 0.5)
+        if W > w: y = y.clamp(0, w - 1)
+    return _interpolate(img, x, y, (nid, cid), mode)
+
 
 def upsample(img, size, mode="nearest", align_corners=False):
-    n,c,h,w = img.shape
-    H,W = size
-    nid, cid, hid, wid = jt.index((n,c,H,W))
+    n, c, h, w = img.shape
+    H, W = size
+    nid, cid, hid, wid = jt.index((n, c, H, W))
     if align_corners:
-        x = hid * ((h-1) / max(1, H-1))
-        y = wid * ((w-1) / max(1, W-1))
-    else:
+        x = hid * ((h - 1) / max(1, H - 1))
+        y = wid * ((w - 1) / max(1, W - 1))
+    elif mode == "bicubic":
+        x = (hid + 0.5) * (h / H) - 0.5
+        y = (wid + 0.5) * (w / W) - 0.5
+    elif mode == 'nearest':
         x = hid * (h / H)
         y = wid * (w / W)
-    return _interpolate(img, x, y, (nid,cid), mode)
-
-def interpolate(X,size=None,scale_factor=None,mode='bilinear',align_corners=False):
-    if scale_factor is not None:
-        size = [X.shape[-2]*scale_factor,X.shape[-1]*scale_factor]
-    if isinstance(size,int):
-        size = (size,size)
-    if scale_factor is not None and scale_factor>1:
-        return upsample(X,size,mode,align_corners)
     else:
-        return resize(X,size,mode,align_corners)
+        x = hid * (h / H) + (h / H * 0.5 - 0.5)
+        if H > h: x = x.clamp(0, h - 1)
+        y = wid * (w / W) + (w / W * 0.5 - 0.5)
+        if W > w: y = y.clamp(0, w - 1)
+    return _interpolate(img, x, y, (nid, cid), mode)
+
+
+def interpolate(X, size=None, scale_factor=None, mode='bilinear', align_corners=False):
+    if scale_factor is not None:
+        size = [X.shape[-2] * scale_factor, X.shape[-1] * scale_factor]
+    if isinstance(size, int):
+        size = (size, size)
+    if scale_factor is not None and scale_factor > 1:
+        return upsample(X, size, mode, align_corners)
+    else:
+        return resize(X, size, mode, align_corners)
+
 
 def grid_sample_v0(input, grid, mode='bilinear', padding_mode='zeros'):
     r'''
@@ -1045,7 +1089,7 @@ def grid_sample_v0(input, grid, mode='bilinear', padding_mode='zeros'):
         [in] mode (string): the interpolate way, default: bilinear.
 
         [in] padding_mode (string): the padding way, default: zeros.
-        
+
         [out] output (var): the output var, whose shape is (N, C, Ho, Wo)
 
     Example:
@@ -1069,10 +1113,10 @@ def grid_sample_v0(input, grid, mode='bilinear', padding_mode='zeros'):
     assert Ni == No
     assert len(input.shape) == 4 and len(grid.shape)
 
-    nid, cid, hid, wid = jt.index((Ni,Ci,Ho,Wo))
-    x = ((grid[:,:,:,1].unsqueeze(1).repeat([1,Ci,1,1]) + 1) / 2) * (Hi - 1)
-    y = ((grid[:,:,:,0].unsqueeze(1).repeat([1,Ci,1,1]) + 1) / 2) * (Wi - 1)
-    return _interpolate(input, x, y, (nid,cid), mode)
+    nid, cid, hid, wid = jt.index((Ni, Ci, Ho, Wo))
+    x = ((grid[:, :, :, 1].unsqueeze(1).repeat([1, Ci, 1, 1]) + 1) / 2) * (Hi - 1)
+    y = ((grid[:, :, :, 0].unsqueeze(1).repeat([1, Ci, 1, 1]) + 1) / 2) * (Wi - 1)
+    return _interpolate(input, x, y, (nid, cid), mode)
 
 
 def linspace_from_neg_one(grid,num_steps,align_corners):
@@ -1326,5 +1370,50 @@ class Sequential(Module):
 
     def __len__(self):
         return len(self.layers)
+
+
+def unfold(X, kernel_size, dilation=1, padding=0, stride=1):
+    assert X.ndim == 4
+    if not isinstance(kernel_size, tuple):
+        kernel_size = (kernel_size, kernel_size)
+    if not isinstance(dilation, tuple):
+        dilation = (dilation, dilation)
+    if not isinstance(padding, tuple):
+        padding = (padding, padding)
+    if not isinstance(stride, tuple):
+        stride = (stride, stride)
+    n, c, h, w = X.shape
+    shape = X.shape
+    area = kernel_size[0] * kernel_size[1]
+    block_nums = []
+    for i in range(2, 4):
+        block_nums.append(
+            (shape[i] + 2 * padding[i - 2] - dilation[i - 2] * (kernel_size[i - 2] - 1) - 1) // stride[i - 2] + 1)
+    if padding[0] != 0 or padding[1] != 0:
+        X = X.reindex([n, c, h + padding[0] * 2, w + padding[1] * 2],
+                      ["i0", "i1", f"i2-{padding[0]}", f"i3-{padding[1]}"])
+    output = X.reindex([n, c * area, block_nums[0] * block_nums[1]], ["i0", f"i1/{area}",
+                                                                      f"i2/{block_nums[1]}*{stride[0]}+(i1%{area})/{kernel_size[1]}*{dilation[0]}",
+                                                                      f"i2%{block_nums[1]}*{stride[1]}+(i1%{area})%{kernel_size[1]}*{dilation[1]}"])
+    return output
+
+
+def fold(X,output_size,kernel_size,dilation=1,padding=0,stride=1):
+    assert X.ndim==3
+    if not isinstance(kernel_size,tuple):
+        kernel_size = (kernel_size,kernel_size)
+    if not isinstance(dilation,tuple):
+        dilation = (dilation,dilation)
+    if not isinstance(padding,tuple):
+        padding = (padding,padding)
+    if not isinstance(stride,tuple):
+        stride = (stride,stride)
+    n,cl,num = X.shape
+    area = kernel_size[0] * kernel_size[1]
+    block_nums = []
+    for i in range(2,4):
+        block_nums.append((output_size[i-2]+2*padding[i-2]-dilation[i-2]*(kernel_size[i-2]-1)-1) // stride[i-2]+1)
+    output = X.reindex_reduce("add",[n,cl // area,output_size[0]+2*padding[0],output_size[1]+2*padding[1]],["i0",f"i1/{area}",f"i2/{block_nums[1]}*{stride[0]}+(i1%{area})/{kernel_size[1]}*{dilation[0]}",f"i2%{block_nums[1]}*{stride[1]}+(i1%{area})%{kernel_size[1]}*{dilation[1]}"])
+    return output[:,:,padding[0]:padding[0]+output_size[0],padding[1]:padding[1]+output_size[1]]
 
 ModuleList = Sequential

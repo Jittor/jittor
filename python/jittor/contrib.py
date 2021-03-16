@@ -155,12 +155,12 @@ def slice_var_index(x, slices):
     x.stop_fuse()
     return (out_shape, out_index, 0, [], extras)
 
-def slice_var(x, slices):
+def _slice_var_old(x, slices):
     reindex_args = slice_var_index(x, slices)
     x.stop_fuse()
     return x.reindex(*reindex_args).stop_fuse()
 
-def setitem(x, slices, value):
+def _setitem_old(x, slices, value):
     reindex_args = slice_var_index(x, slices)
     reindex_reduce_args = (x.shape, reindex_args[1]) + reindex_args[3:]
     xslice = x.stop_fuse().reindex(*reindex_args).stop_fuse()
@@ -176,14 +176,11 @@ def setitem(x, slices, value):
     x.assign(out)
     return x
 
-jt.Var.__getitem__ = jt.Var.slice_var = slice_var
-jt.Var.__setitem__ = setitem
-
 # PATCH
 def getitem(x, slices):
     if isinstance(slices, jt.Var) and slices.dtype == "bool":
-        return getitem(x, slices.where())
-    if isinstance(slices, Sequence):
+        return getitem(x, tuple(slices.where()))
+    if isinstance(slices, tuple):
         ss = []
         for s in slices:
             if isinstance(s, jt.Var) and s.dtype == "bool":
@@ -195,10 +192,8 @@ def getitem(x, slices):
 
 def setitem(x, slices, value):
     if isinstance(slices, jt.Var) and slices.dtype == "bool":
-        mask = jt.broadcast(slices, x)
-        value = jt.broadcast(value, x)
-        return x.assign(mask.ternary(value, x))
-    if isinstance(slices, Sequence):
+        slices = tuple(slices.where())
+    elif isinstance(slices, tuple):
         ss = []
         for s in slices:
             if isinstance(s, jt.Var) and s.dtype == "bool":

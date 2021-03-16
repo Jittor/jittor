@@ -206,6 +206,10 @@ void SetitemOp::jit_prepare(JK& jk) {
         if (iv>=0 && io==-1) {
             if (v.is_int()) {
                 jk << _CS("][VS") << JK::hex1(i) << _CS(":-1");
+            } else
+            if (v.is_str()) {
+                jk << _CS("][VS") << JK::hex1(i) << _CS(":-5");
+                jk << _CS("][VSS") << JK::hex1(i) << _CS(":") << v.get_str();
             } else {
                 ASSERT(v.is_var());
                 auto var = v.var;
@@ -323,9 +327,10 @@ void SetitemOp::jit_run() {
             @if(IV@d==-2, 0,
             @if(IO@d!=-1, (i@{IO@d}*vstep@d+vstart@d),
             @if(VS@d==-1, vi@d,
+            @if(VS@d==-5, VSS@d,
             @if(VS@d>=0,
                 index_t(vp@d[0 @for(j,0,VD,@if((VS@d>>j)&1, + i@{j+FOV} * vs@d@@s@j,))])
-            , ??? )))));
+            , ??? ))))));
         )
         auto iid = 0 @for(d, 0, IDIM,  + iid@d * istride@d);
 

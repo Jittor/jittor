@@ -21,6 +21,7 @@ std::ostream& operator<<(std::ostream& os, const VarSlice& s) {
     if (s.is_ellipsis()) return os << "...";
     if (s.is_slice()) return os << s.slice;
     if (s.is_int()) return os << s.i;
+    if (s.is_str()) return os << (const char*)&s;
     return os << "-";
 }
 

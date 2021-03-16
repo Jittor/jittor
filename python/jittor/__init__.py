@@ -8,7 +8,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-__version__ = '1.2.2.34'
+__version__ = '1.2.2.48'
 from . import lock
 with lock.lock_scope():
     ori_int = int
@@ -709,7 +709,7 @@ class Module:
     def __init__(self, *args, **kw):
         pass
     def execute(self, *args, **kw):
-        pass
+        raise NotImplementedError
     def __call__(self, *args, **kw):
         return self.execute(*args, **kw)
     def __repr__(self):

@@ -82,6 +82,7 @@ def setup_mkl():
 
 def install_cub(root_folder):
     url = "https://github.com/NVIDIA/cub/archive/1.11.0.tar.gz"
+    url = "https://codeload.github.com/NVIDIA/cub/tar.gz/1.11.0"
     filename = "cub-1.11.0.tgz"
     md5 = "97196a885598e40592100e1caaf3d5ea"
     fullname = os.path.join(root_folder, filename)
@@ -196,6 +197,7 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
 def install_cutt(root_folder):
     # Modified from: https://github.com/ap-hynninen/cutt
     url = "https://github.com/Jittor/cutt/archive/master.zip"
+    url = "https://codeload.github.com/Jittor/cutt/zip/master"
 
     filename = "cutt-master.zip"
     fullname = os.path.join(root_folder, filename)
@@ -270,12 +272,13 @@ def setup_cutt():
 
 
 def install_nccl(root_folder):
-    url = "https://github.com/NVIDIA/nccl/archive/v2.6.4-1.tar.gz"
+    url = "https://github.com/NVIDIA/nccl/archive/v2.8.4-1.tar.gz"
+    url = "https://codeload.github.com/NVIDIA/nccl/tar.gz/v2.8.4-1"
 
     filename = "nccl.tgz"
     fullname = os.path.join(root_folder, filename)
-    dirname = os.path.join(root_folder, "nccl-2.6.4-1")
-    true_md5 = "38d7a9e98d95a99df0a4f1ad6fb50fa7"
+    dirname = os.path.join(root_folder, "nccl-2.8.4-1")
+    true_md5 = "900666558c5bc43e0a5e84045b88a06f"
 
     if os.path.exists(fullname):
         md5 = run_cmd('md5sum '+fullname).split()[0]
