@@ -719,6 +719,7 @@ DEF_IS(VarSlices, bool) is_type(PyObject* obj) {
         PySlice_Check(obj) || 
         (Py_TYPE(obj) == &PyEllipsis_Type) ||
         obj == Py_None ||
+        PyUnicode_CheckExact(obj) || 
         is_type<VarHolder*>(obj);
 }
 
@@ -733,6 +734,9 @@ void load_var_slice(PyObject* obj, T* var_slice, vector<unique_ptr<VarHolder>>& 
     if (Py_TYPE(obj) == &PyEllipsis_Type) {
         var_slice->set_ellipsis();
     } else 
+    if (PyUnicode_CheckExact(obj)) {
+        var_slice->set_str(from_py_object<string>(obj));
+    } else 
     if (obj == Py_None) {
         var_slice->set_none();
     } else
@@ -745,7 +749,9 @@ void load_var_slice(PyObject* obj, T* var_slice, vector<unique_ptr<VarHolder>>& 
     } else {
         holders.emplace_back();
         auto* vh = from_py_object<VarHolder*>(obj, holders.back());
-        auto vv = (Var**)vh;
+        auto vv = (decltype(var_slice->var)*)vh;
+        CHECK(vv[0]->dtype() != ns_bool) << "Please convert bool slice into jt.array, example:\n"
+            "a[[True,False,False]] ---> a[jt.array([True,False,False])";
         var_slice->set_var(vv[0]);
     }
 }

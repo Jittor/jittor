@@ -218,8 +218,11 @@ class Dataset(object):
                     img_open_hook.duration
                 img_open_hook.duration = 0.0
         except:
+            import traceback
+            line = traceback.format_exc()
+            print(line)
             os.kill(os.getppid(), signal.SIGINT)
-            raise
+            exit(0)
 
     def display_worker_status(self):
         ''' Display dataset worker status, when dataset.num_workers > 0, it will display infomation blow:

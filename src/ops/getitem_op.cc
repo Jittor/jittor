@@ -117,6 +117,10 @@ void GetitemOp::infer_slices(
             auto& v = s.slice.start;
             if (v<0) v += in_shape_i;
             CHECK(v>=0 && v<in_shape_i) << "slice overflow, " << v << "not in [0,">>in_shape_i>>")";
+        } else 
+        if (s.is_str()) {
+            i_to_vs[i] = vid++;
+            i_to_o[i] = -1;
         } else {
             // slice
             auto& slice = s.slice;
@@ -145,6 +149,13 @@ void GetitemOp::infer_slices(
                 out_shape.push_back(out_shape_j);
             }
         }
+    }
+    while (vid < vs.n) {
+        auto& s = vs.slices[vid++];
+        if (s.is_none()) {
+            out_shape.push_back(1);
+        } else
+            CHECK(s.is_ellipsis()) << "Too many slices" << vs << "shape:" << in->shape;
     }
 }
 
@@ -401,6 +412,10 @@ void GetitemOp::jit_prepare(JK& jk) {
         if (iv>=0 && io==-1) {
             if (v.is_int()) {
                 jk << _CS("][VS") << JK::hex1(i) << _CS(":-1");
+            } else
+            if (v.is_str()) {
+                jk << _CS("][VS") << JK::hex1(i) << _CS(":-5");
+                jk << _CS("][VSS") << JK::hex1(i) << _CS(":") << v.get_str();
             } else {
                 ASSERT(v.is_var());
                 auto var = v.var;
@@ -498,9 +513,10 @@ void GetitemOp::jit_run() {
             @if(IV@d==-2, 0,
             @if(IO@d!=-1, (i@{IO@d}*vstep@d+vstart@d),
             @if(VS@d==-1, vi@d,
+            @if(VS@d==-5, VSS@d,
             @if(VS@d>=0,
                 index_t(vp@d[0 @for(j,0,VD,@if((VS@d>>j)&1, + i@{j+FOV} * vs@d@@s@j,))])
-            , ??? )))));
+            , ??? ))))));
         )
         auto iid = 0 @for(d, 0, IDIM,  + iid@d * istride@d);
         op[oid] = ip[iid];

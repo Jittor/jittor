@@ -62,6 +62,13 @@ class TestUnaryOp(unittest.TestCase):
             jda = jt.grad(jb, ja)
             assert (np.allclose(jda.data, da)), (jda.data,da,op)
 
+    def test_sigmoid(self):
+        a = np.arange(-150,150, 10).astype("float32")
+        # a = np.array([-150.0, -140.0, -130.0]).astype("float32")
+        b = jt.array(a, dtype='float32')
+        b1 = b.sigmoid().numpy()
+        assert np.isnan(b1).any() == False
+
 class TestUnaryOpCuda(TestUnaryOp, test_cuda(2)):
     pass
 
