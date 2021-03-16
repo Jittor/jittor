@@ -407,6 +407,15 @@ def sqr(x): return x*x
 Var.sqr = sqr
 
 def pow(x, y):
+    ''' computes x^y, element-wise. 
+
+    This operation is equivalent to ``x ** y``.
+
+    :param x: the first input.
+    :type x: a python number or jt.Var.
+    :param y: the second input.
+    :type y: a python number or jt.Var.
+    '''
     if isinstance(y, (ori_int, ori_float)) and y == 2:
         return x.sqr()
     return core.ops.pow(x, y)
