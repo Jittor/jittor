@@ -16,8 +16,72 @@ struct BroadcastToOp : Op {
     uint16 bcast_mask;
     uint16 keepdims_mask;
 
+    /**
+    Broadcast ``x`` to a given shape.
+
+    ----------------
+
+    * [in] x:       the input jt.Var.
+
+    * [in] shape:   the output shape.
+
+    * [in] dims:    specifies the new dimension in the output shape, an integer array.
+
+    ----------------
+
+    Example-1::
+        >>> x = jt.randint(0, 10, shape=(2, 2))
+        >>> x
+        jt.Var([[8 1]
+         [7 6]], dtype=int32)
+        >>> jt.broadcast(x, shape=(2, 3, 2), dims=[1])
+        jt.Var([[[8 1]
+          [8 1]
+          [8 1]],
+         [[7 6]
+          [7 6]
+          [7 6]]], dtype=int32)
+     */
     // @pybind(broadcast)
     BroadcastToOp(Var* x, NanoVector shape, NanoVector dims=NanoVector());
+
+    /**
+    Broadcast ``x`` to the same shape as ``y``.
+
+    ----------------
+
+    * [in] x:       the input jt.Var.
+
+    * [in] y:       the reference jt.Var.
+
+    * [in] dims:    specifies the new dimension in the output shape, an integer array.
+
+    ----------------
+
+    .. note::
+      jt.broadcast_var(x, y, dims) is an alias of jt.broadcast(x, y, dims)
+
+    Example-1::
+        >>> x = jt.randint(0, 10, shape=(2, 2))
+        >>> x
+        jt.Var([[8 1]
+         [7 6]], dtype=int32)
+        >>> y = jt.randint(0, 10, shape=(2, 3, 2))
+        >>> jt.broadcast(x, y, dims=[1])
+        jt.Var([[[8 1]
+          [8 1]
+          [8 1]],
+         [[7 6]
+          [7 6]
+          [7 6]]], dtype=int32)
+        >>> jt.broadcast_var(x, y, dims=[1])
+        jt.Var([[[8 1]
+          [8 1]
+          [8 1]],
+         [[7 6]
+          [7 6]
+          [7 6]]], dtype=int32)
+     */
     // @pybind(broadcast,broadcast_var)
     BroadcastToOp(Var* x, Var* y, NanoVector dims=NanoVector());
     // @pybind(None)

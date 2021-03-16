@@ -18,6 +18,32 @@ struct ArgReduceOp : Op {
     NanoString op;
     int dim;
     bool keepdims;
+
+    /**
+    Returns the indices of the maximum / minimum of the input across a dimension.
+
+    ----------------
+
+    * [in] x:       the input jt.Var.
+
+    * [in] op:      "max" or "min". 
+
+    * [in] dim:     int. Specifies which dimension to reduce.
+
+    * [in] keepdim: bool. Whether the output has ``dim`` retained or not.
+
+    ----------------
+
+    Example-1::
+        >>> x = jt.randint(0, 10, shape=(2, 3))
+        >>> x
+        jt.Var([[4 2 5]
+         [6 7 1]], dtype=int32)
+        >>> jt.arg_reduce(x, 'max', dim=1, keepdims=False)
+        [jt.Var([2 1], dtype=int32), jt.Var([5 7], dtype=int32)]
+        >>> jt.arg_reduce(x, 'min', dim=1, keepdims=False)
+        [jt.Var([1 2], dtype=int32), jt.Var([5 7], dtype=int32)]
+     */
     // @attrs(multiple_outputs)
     ArgReduceOp(Var* x, NanoString op, int dim, bool keepdims);
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;

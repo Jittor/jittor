@@ -27,22 +27,224 @@ static auto make_number = get_op_info("number")
 NanoString binary_dtype_infer(NanoString op, Var* dx, Var* dy);
 
 unordered_set<string> reduce_ops = {
+    /**
+    Returns the maximum elements in the input.
+
+    ----------------
+
+    * [in] x:       the input jt.Var.
+
+    * [in] dim:     int or tuples of ints (optional). If specified, reduce along the given the dimension(s).
+
+    * [in] keepdim: bool (optional). Whether the output has ``dim`` retained or not. Defaults to be False.
+
+    ----------------
+
+    Example-1::
+        >>> x = jt.randint(10, shape=(2, 3))
+        >>> x
+        jt.Var([[4 1 2]
+         [0 2 4]], dtype=int32)
+        >>> jt.max(x)
+        jt.Var([4], dtype=int32)
+        >>> x.max()
+        jt.Var([4], dtype=int32)
+        >>> x.max(dim=1)
+        jt.Var([4 4], dtype=int32)
+        >>> x.max(dim=1, keepdims=True)
+        jt.Var([[4]
+         [4]], dtype=int32)
+     */
     // @pybind(max, reduce_maximum)
     "maximum", 
+
+    /**
+    Returns the minimum elements in the input.
+
+    ----------------
+
+    * [in] x:       the input jt.Var.
+
+    * [in] dim:     int or tuples of ints (optional). If specified, reduce along the given the dimension(s).
+
+    * [in] keepdim: bool (optional). Whether the output has ``dim`` retained or not. Defaults to be False.
+
+    ----------------
+
+    Example-1::
+        >>> x = jt.randint(10, shape=(2, 3))
+        >>> x
+        jt.Var([[4 1 2]
+         [0 2 4]], dtype=int32)
+        >>> jt.min(x)
+        jt.Var([0], dtype=int32)
+        >>> x.min()
+        jt.Var([0], dtype=int32)
+        >>> x.min(dim=1)
+        jt.Var([1 0], dtype=int32)
+        >>> x.min(dim=1, keepdims=True)
+        jt.Var([[1]
+         [0]], dtype=int32)
+     */
     // @pybind(min, reduce_minimum)
     "minimum", 
+
+    /**
+    Returns the sum of the input.
+
+    ----------------
+
+    * [in] x:       the input jt.Var.
+
+    * [in] dim:     int or tuples of ints (optional). If specified, reduce along the given the dimension(s).
+
+    * [in] keepdim: bool (optional). Whether the output has ``dim`` retained or not. Defaults to be False.
+
+    ----------------
+
+    Example-1::
+        >>> x = jt.randint(10, shape=(2, 3))
+        >>> x
+        jt.Var([[4 1 2]
+         [0 2 4]], dtype=int32)
+        >>> jt.sum(x)
+        jt.Var([13], dtype=int32)
+        >>> x.sum()
+        jt.Var([13], dtype=int32)
+        >>> x.sum(dim=1)
+        jt.Var([7 6], dtype=int32)
+        >>> x.sum(dim=1, keepdims=True)
+        jt.Var([[7]
+         [6]], dtype=int32)
+     */
     // @pybind(sum, reduce_add)
     "add",
+
+    /**
+    Returns the product of all the elements in the input.
+
+    ----------------
+
+    * [in] x:       the input jt.Var.
+
+    * [in] dim:     int or tuples of ints (optional). If specified, reduce along the given the dimension(s).
+
+    * [in] keepdim: bool (optional). Whether the output has ``dim`` retained or not. Defaults to be False.
+
+    ----------------
+
+    Example-1::
+        >>> x = jt.randint(10, shape=(2, 3))
+        >>> x
+        jt.Var([[7 5 5]
+         [5 7 5]], dtype=int32)
+        >>> jt.prod(x)
+        jt.Var([30625], dtype=int32)
+        >>> x.prod()
+        jt.Var([30625], dtype=int32)
+        >>> x.prod(dim=1)
+        jt.Var([175 175], dtype=int32)
+        >>> x.prod(dim=1, keepdims=True)
+        jt.Var([[175]
+         [175]], dtype=int32)
+     */
     // @pybind(prod, product, reduce_multiply)
     "multiply", 
+
+    /**
+    Tests if all elements in input evaluate to True.
+
+    ----------------
+
+    * [in] x:       the input jt.Var.
+
+    * [in] dim:     int or tuples of ints (optional). If specified, reduce along the given the dimension(s).
+
+    * [in] keepdim: bool (optional). Whether the output has ``dim`` retained or not. Defaults to be False.
+
+    ----------------
+
+    Example-1::
+        >>> x = jt.randint(2, shape=(2, 3))
+        >>> x
+        jt.Var([[1 1 1]
+         [0 1 0]], dtype=int32)
+        >>> jt.all_(x)
+        jt.Var([False], dtype=int32)
+        >>> x.all_()
+        jt.Var([False], dtype=int32)
+        >>> x.all_(dim=1)
+        jt.Var([True False], dtype=int32)
+        >>> x.all_(dim=1, keepdims=True)
+        jt.Var([[True]
+         [False]], dtype=int32)
+     */
     // @pybind(reduce_logical_and, all_)
     "logical_and", 
+
+    /**
+    Tests if any elements in input evaluate to True.
+
+    ----------------
+
+    * [in] x:       the input jt.Var.
+
+    * [in] dim:     int or tuples of ints (optional). If specified, reduce along the given the dimension(s).
+
+    * [in] keepdim: bool (optional). Whether the output has ``dim`` retained or not. Defaults to be False.
+
+    ----------------
+
+    Example-1::
+        >>> x = jt.randint(2, shape=(2, 3))
+        >>> x
+        jt.Var([[1 0 1]
+         [0 0 0]], dtype=int32)
+        >>> jt.any_(x)
+        jt.Var([True], dtype=int32)
+        >>> x.any_()
+        jt.Var([True], dtype=int32)
+        >>> x.any_(dim=1)
+        jt.Var([True False], dtype=int32)
+        >>> x.any_(dim=1, keepdims=True)
+        jt.Var([[True]
+         [False]], dtype=int32)
+     */
     // @pybind(reduce_logical_or, any_)
     "logical_or", 
     "logical_xor", 
     "bitwise_and", 
     "bitwise_or", 
     "bitwise_xor",
+
+    /**
+    Returns the mean value of the input.
+
+    ----------------
+
+    * [in] x:       the input jt.Var.
+
+    * [in] dim:     int or tuples of ints (optional). If specified, reduce along the given the dimension(s).
+
+    * [in] keepdim: bool (optional). Whether the output has ``dim`` retained or not. Defaults to be False.
+
+    ----------------
+
+    Example-1::
+        >>> x = jt.randint(10, shape=(2, 3))
+        >>> x
+        jt.Var([[9 4 4]
+         [1 9 6]], dtype=int32)
+        >>> jt.mean(x)
+        jt.Var([5.5000005], dtype=float32)
+        >>> x.mean()
+        jt.Var([5.5000005], dtype=float32)
+        >>> x.mean(dim=1)
+        jt.Var([5.666667  5.3333335], dtype=float32)
+        >>> x.mean(dim=1, keepdims=True)
+        jt.Var([[5.666667 ]
+         [5.3333335]], dtype=float32)
+     */
     // @pybind(mean)
     "mean",
 };
