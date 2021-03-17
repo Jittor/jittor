@@ -12,6 +12,7 @@
 #include "event_queue.h"
 #endif
 #include <cstring>
+#include <cmath>
 #include "var.h"
 #include "ops/array_op.h"
 #include "misc/cuda_flags.h"
