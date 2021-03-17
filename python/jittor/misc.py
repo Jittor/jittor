@@ -64,6 +64,8 @@ def any(x,dim):
     return x.any_(dim).bool()
 jt.Var.any = any
     
+def bernoulli(input):
+    return (input>jt.rand_like(input)).cast(input.dtype)
 
 def repeat(x, *shape):
     r'''
