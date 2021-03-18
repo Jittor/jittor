@@ -358,7 +358,7 @@ void ConvTuner::forwardTune(FusedOp* fop) {
 
             if (y_id == 0) {
                 relay_conv_name = fop->flags.get(NodeFlags::_cpu) ?
-                    "mkl_conv" : "cudnn_conv";
+                    "mlu_conv" : "cudnn_conv";
                 if (!has_op(relay_conv_name))
                     continue;
                 auto make_conv = get_op_info(relay_conv_name)

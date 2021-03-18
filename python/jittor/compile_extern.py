@@ -79,6 +79,31 @@ def setup_mkl():
         extra_flags=f" -I'{mkl_include_path}' -L'{mkl_lib_path}' -lmkldnn -Wl,-rpath='{mkl_lib_path}' ")
     LOG.vv("Get mkl_ops: "+str(dir(mkl_ops)))
 
+def setup_mlu():
+    global mlu_ops, use_mlu
+    use_mlu = os.environ.get("use_mlu", "1")=="1"
+    mlu_ops = None
+    if not use_mlu: return
+    mlu_include_path = os.environ.get("mlu_include_path")
+    mlu_lib_path = os.environ.get("mlu_lib_path")
+    
+    if mlu_lib_path is None or mlu_include_path is None:
+        from pathlib import Path
+        mlu_home = "/usr/local/neuware/"
+        mlu_include_path = os.path.join(mlu_home, "include")
+        mlu_lib_path = os.path.join(mlu_home, "lib64")
+    assert os.path.isdir(mlu_include_path)
+    assert os.path.isdir(mlu_lib_path)
+    # mlu_include_path = "/usr/local/neuware/include"
+    LOG.v(f"mlu_include_path: {mlu_include_path}")
+    LOG.v(f"mlu_lib_path: {mlu_lib_path}")
+    # We do not link manualy, link in custom ops
+    # ctypes.CDLL(mlu_lib_name, dlopen_flags)
+    mlu_op_dir = os.path.join(jittor_path, "extern", "mlu", "ops")
+    mlu_op_files = [os.path.join(mlu_op_dir, name) for name in os.listdir(mlu_op_dir)]
+    mlu_ops = compile_custom_ops(mlu_op_files, 
+        extra_flags=f" -I'{mlu_include_path}' -L'{mlu_lib_path}' -Wl,-rpath='{mlu_lib_path}' -lcnnl -lcnml -lcnrt")
+    LOG.vv("Get mlu_ops: "+str(dir(mlu_ops)))
 
 def install_cub(root_folder):
     url = "https://github.com/NVIDIA/cub/archive/1.11.0.tar.gz"
@@ -435,5 +460,5 @@ setup_nccl()
 
 setup_cutt()
 setup_mkl()
-
+setup_mlu()
 setup_cuda_extern()
