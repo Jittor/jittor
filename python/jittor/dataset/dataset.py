@@ -80,6 +80,7 @@ class Dataset(object):
         self.buffer_size = buffer_size
         self.stop_grad = stop_grad
         self.keep_numpy_array = keep_numpy_array
+        self.subset = None
 
     def __getitem__(self, index):
         raise NotImplementedError
@@ -348,6 +349,8 @@ Example::
             self.total_len = len(self)
         if self.shuffle == False:
             index_list = get_order_list(self.total_len)
+        elif self.subset is not None:
+            index_list = [x for x in range(self.subset[0], self.subset[1])]
         else:
             index_list = get_random_list(self.total_len)
         
@@ -465,6 +468,13 @@ Example::
                 batch_data = self.to_jittor(batch_data)
                 yield batch_data
 
+    def set_subset(self, start, end):
+        if start < 0 or end > self.total_len:
+            return
+        if start > end:
+            return
+        self.subset = (start, end)
+        self.total_len = end - start
 
 class ImageFolder(Dataset):
     """
