@@ -26,6 +26,7 @@ struct DualAllocation {
 
 extern SFRLAllocator cuda_dual_host_allocator;
 extern SFRLAllocator cuda_dual_device_allocator;
+extern bool no_cuda_error_when_free;
 
 struct CudaDualAllocator : Allocator {
     //for recycle block_id
@@ -95,6 +96,7 @@ struct DelayFree final : Allocator {
     };
     void free(void* mem_ptr, size_t size, const size_t& allocation) override {
         using namespace cuda_dual_local;
+        if (no_cuda_error_when_free) return;
         allocations.emplace_back(mem_ptr, allocation, size, &cuda_dual_allocator);
         peekCudaErrors(_cudaLaunchHostFunc(0, &to_free_allocation, 0));
     }

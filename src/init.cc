@@ -80,10 +80,15 @@ void add_set_seed_callback(set_seed_callback callback) {
 
 std::default_random_engine* get_random_engine() { return eng.get(); }
 
+#ifdef HAS_CUDA
+bool no_cuda_error_when_free = 0;
+#endif
+
 void jt_init_subprocess() {
     #ifdef HAS_CUDA
     use_cuda = 0;
     exe.last_is_cuda = false;
+    no_cuda_error_when_free = 1;
     #endif
 }
 

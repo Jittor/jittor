@@ -84,6 +84,7 @@ class TestDataset2(unittest.TestCase):
                 self.set_attrs(total_len=10240)
 
             def __getitem__(self, k):
+                self.tmp = None
                 x = jt.array(k)
                 y = x
                 for i in range(10):
@@ -93,6 +94,8 @@ class TestDataset2(unittest.TestCase):
                 return x, y
 
         dataset = YourDataset().set_attrs(batch_size=256, shuffle=True, num_workers=4)
+        dataset.tmp = jt.array([1,2,3,4,5])
+        dataset.tmp.sync()
         for x, y in dataset:
             # dataset.display_worker_status()
             pass

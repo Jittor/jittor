@@ -12,6 +12,7 @@
 namespace jittor {
 
 CudaDeviceAllocator cuda_device_allocator;
+extern bool no_cuda_error_when_free;
 
 const char* CudaDeviceAllocator::name() const {return "cuda_device";}
 
@@ -34,6 +35,7 @@ void* CudaDeviceAllocator::alloc(size_t size, size_t& allocation) {
 
 void CudaDeviceAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
     if (size==0) return;
+    if (no_cuda_error_when_free) return;
     checkCudaErrors(cudaFree(mem_ptr));
 }
 
