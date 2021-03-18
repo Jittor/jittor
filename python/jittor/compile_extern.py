@@ -196,13 +196,12 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
 
 def install_cutt(root_folder):
     # Modified from: https://github.com/ap-hynninen/cutt
-    url = "https://github.com/Jittor/cutt/archive/master.zip"
-    url = "https://codeload.github.com/Jittor/cutt/zip/master"
+    url = "https://codeload.github.com/Jittor/cutt/zip/v1.1"
 
-    filename = "cutt-master.zip"
+    filename = "cutt-1.1.zip"
     fullname = os.path.join(root_folder, filename)
     dirname = os.path.join(root_folder, filename.replace(".zip",""))
-    true_md5 = "af5bc35eea1832a42c0e0011659b7209"
+    true_md5 = "7bb71cf7c49dbe57772539bf043778f7"
 
     if os.path.exists(fullname):
         md5 = run_cmd('md5sum '+fullname).split()[0]
@@ -250,7 +249,7 @@ def setup_cutt():
         
         make_cache_dir(cutt_path)
         install_cutt(cutt_path)
-        cutt_home = os.path.join(cutt_path, "cutt-master")
+        cutt_home = os.path.join(cutt_path, "cutt-1.1")
         cutt_include_path = os.path.join(cutt_home, "src")
         cutt_lib_path = os.path.join(cutt_home, "lib")
 

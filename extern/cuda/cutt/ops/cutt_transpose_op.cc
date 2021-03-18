@@ -94,7 +94,7 @@ void CuttTransposeOp::run() {
         cuttExecute(iter->second, xp, yp);
     } else {
         cuttHandle plan;
-        cuttPlan(&plan, dim, x_shape.data(), reverse.data(), x->dtype().dsize(), 0);
+        CHECK(0==cuttPlan(&plan, dim, x_shape.data(), reverse.data(), x->dtype().dsize(), 0));
         cutt_plan_cache[jk.to_string()] = plan;
         cuttExecute(plan, xp, yp);
     }
