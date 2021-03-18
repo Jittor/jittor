@@ -618,13 +618,17 @@ class Conv1d(Module):
         self.bias = bias
         assert in_channels % groups == 0, 'in_channels must be divisible by groups'
         assert out_channels % groups == 0, 'out_channels must be divisible by groups'
-        self.conv = Conv(self.in_channels, self.out_channels, self.kernel_size, self.stride, self.padding, self.dilation, self.groups, self.bias)
+        # using list to escape module dfs
+        self._conv = [Conv(self.in_channels, self.out_channels, self.kernel_size, self.stride, self.padding, self.dilation, self.groups, self.bias)]
+        self.weight = self._conv[0].weight.squeeze(-1)
+        self.bias = self._conv[0].bias
 
     def execute(self, x):
         N,C,D = x.shape
         assert C==self.in_channels
+        self._conv[0].weight = self.weight.unsqueeze(-1)
         x = x.unsqueeze(-1)
-        x = self.conv(x)
+        x = self._conv[0](x)
         y = x.squeeze(-1)
         return y
 
@@ -845,7 +849,7 @@ class ZeroPad2d(Module):
             self.pr = self.padding
             self.pt = self.padding
             self.pb = self.padding
-        elif isinstance(self.padding, tuple):
+        elif isinstance(self.padding, (tuple,list)):
             self.pl, self.pr, self.pt, self.pb = self.padding
         else:
             raise TypeError(f"ZeroPad2d padding just support int or tuple, but found {type(padding)}")
@@ -1048,9 +1052,14 @@ def upsample(img, size, mode="nearest", align_corners=False):
     elif mode == "bicubic":
         x = (hid + 0.5) * (h / H) - 0.5
         y = (wid + 0.5) * (w / W) - 0.5
-    else:
+    elif mode == 'nearest':
         x = hid * (h / H)
         y = wid * (w / W)
+    else:
+        x = hid * (h / H) + (h / H * 0.5 - 0.5)
+        if H > h: x = x.clamp(0, h - 1)
+        y = wid * (w / W) + (w / W * 0.5 - 0.5)
+        if W > w: y = y.clamp(0, w - 1)
     return _interpolate(img, x, y, (nid, cid), mode)
 
 

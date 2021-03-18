@@ -28,45 +28,393 @@ static auto make_number = get_op_info("number")
     .get_constructor<VarPtr, float, Var*>();
 
 unordered_set<string> binary_ops = {
+    /**
+    Computes ``x^y``, element-wise. 
+
+    ----------------
+
+    * [in] x: the first input,  a python number or jt.Var.
+
+    * [in] y: the second input, a python number or jt.Var.
+
+     */
     // @pybind(pow, __pow__)
     "pow",
+
+    /**
+    Returns the element-wise maximum of ``x`` and ``y``. 
+
+    ----------------
+
+    * [in] x: the first input,  a python number or jt.Var.
+
+    * [in] y: the second input, a python number or jt.Var.
+
+     */
     "maximum",
+
+    /**
+    Returns the element-wise minimum of ``x`` and ``y``. 
+
+    ----------------
+
+    * [in] x: the first input,  a python number or jt.Var.
+
+    * [in] y: the second input, a python number or jt.Var.
+
+     */
     "minimum",
+
+    /**
+    Element-wise adds ``x`` and ``y`` and returns a new Var. 
+    
+    This operation is equivalent to ``x + y``.
+
+    ----------------
+
+    * [in] x: the first input,  a python number or jt.Var.
+
+    * [in] y: the second input, a python number or jt.Var.
+
+     */
     // @pybind(add, __add__)
     "add",
+
+    /**
+    Element-wise subtract ``y`` from ``x`` and returns a new Var.
+
+    This operation is equivalent to ``x - y``.
+
+    ----------------
+
+    * [in] x: the first input,  a python number or jt.Var.
+
+    * [in] y: the second input, a python number or jt.Var.
+
+     */
     // @pybind(subtract, __sub__)
     "subtract",
+
+    /**
+    Element-wise muliplies ``x`` with ``y`` and returns a new Var.
+
+    This operation is equivalent to ``x * y``.
+
+    ----------------
+
+    * [in] x: the first input,  a python number or jt.Var.
+
+    * [in] y: the second input, a python number or jt.Var.
+
+     */
     // @pybind(multiply, __mul__)
     "multiply",
+
+    /**
+    Element-wise divide ``x`` by ``y`` and returns a new Var.
+
+    This operation is equivalent to ``x / y``.
+
+    ----------------
+
+    * [in] x: the first input,  a python number or jt.Var.
+
+    * [in] y: the second input, a python number or jt.Var.
+
+    ----------------
+
+    Example-1::
+        >>> a = jt.empty((3,), dtype=jt.int32)
+        >>> a
+        jt.Var([707406378 707406378 707406378], dtype=int32)
+        >>> b = jt.empty((3,), dtype=jt.int32)
+        >>> b
+        jt.Var([674510453 171649398 538976288], dtype=int32)
+        >>> jt.divide(a, b)
+        jt.Var([1.0487701 4.1212287 1.3125001], dtype=float32)
+        >>> a / b
+        jt.Var([1.0487701 4.1212287 1.3125001], dtype=float32)
+
+    .. note ::
+    returns float value even if the dtype of input Vars are both integers.
+    @see jt.ops.floor_divide() for floor division.
+     */
     // @pybind(divide, __truediv__)
     "divide",
+
+    /**
+    Element-wise divide ``x`` by ``y`` and returns the floor of the result.
+
+    This operation is equivalent to ``x // y``.
+
+    ----------------
+
+    * [in] x: the first input,  a python number or jt.Var.
+
+    * [in] y: the second input, a python number or jt.Var.
+
+    ----------------
+
+    Example-1::
+        >>> a = jt.randint(1, 10, (3,), dtype=jt.int32)
+        >>> a
+        jt.Var([9 2 7], dtype=int32)
+        >>> b = jt.randint(1, 10, (3,), dtype=jt.int32)
+        >>> b
+        jt.Var([6 4 6], dtype=int32)
+        >>> jt.floor_divide(a, b)
+        jt.Var([1 0 1], dtype=int32)
+        >>> a // b
+        jt.Var([1 0 1], dtype=int32)
+     */
     // @pybind(floor_divide, __floordiv__)
     "floor_divide",
+
+    /**
+    Returns the element-wise remainder of division.
+
+    This operation is equivalent to ``x % y``.
+
+    ----------------
+
+    * [in] x: the first input,  a python number or jt.Var.
+
+    * [in] y: the second input, a python number or jt.Var.
+
+    ----------------
+
+    Example-1::
+        >>> a = jt.rand(3)
+        >>> a
+        jt.Var([0.3989529  0.20159635 0.22973768], dtype=float32)
+        >>> b = jt.rand(3)
+        >>> b
+        jt.Var([0.20121202 0.7704864  0.5654395 ], dtype=float32)
+        >>> jt.mod(a, b)
+        jt.Var([0.19774088 0.20159635 0.22973768], dtype=float32)
+        >>> a % b
+        jt.Var([0.19774088 0.20159635 0.22973768], dtype=float32)
+     */
     // @pybind(mod, __mod__)
     "mod",
+
+    /**
+    Returns ``x < y`` element-wise.
+
+    This operation is equivalent to ``x < y``.
+
+    ----------------
+
+    * [in] x: the first input,  a python number or jt.Var.
+
+    * [in] y: the second input, a python number or jt.Var.
+
+     */
     // @pybind(less, __lt__)
     "less",
+
+    /**
+    Returns ``x <= y`` element-wise.
+
+    This operation is equivalent to ``x <= y``.
+
+    ----------------
+
+    * [in] x: the first input,  a python number or jt.Var.
+
+    * [in] y: the second input, a python number or jt.Var.
+
+     */
     // @pybind(less_equal, __le__)
     "less_equal",
+
+    /**
+    Returns ``x > y`` element-wise.
+
+    This operation is equivalent to ``x > y``.
+
+    ----------------
+
+    * [in] x: the first input,  a python number or jt.Var.
+
+    * [in] y: the second input, a python number or jt.Var.
+
+     */
     // @pybind(greater, __gt__)
     "greater",
+
+    /**
+    Returns ``x >= y`` element-wise.
+    
+    This operation is equivalent to ``x >= y``.
+
+    ----------------
+
+    * [in] x: the first input,  a python number or jt.Var.
+
+    * [in] y: the second input, a python number or jt.Var.
+
+     */
     // @pybind(greater_equal, __ge__)
     "greater_equal",
+
+    /**
+    Returns ``x == y`` element-wise.
+
+    This operation is equivalent to ``x == y``.
+
+    ----------------
+
+    * [in] x: the first input,  a python number or jt.Var.
+
+    * [in] y: the second input, a python number or jt.Var.
+
+     */
     // @pybind(equal, __eq__)
     "equal",
+
+    /**
+    Returns ``x != y`` element-wise.
+
+    This operation is equivalent to ``x != y``.
+
+    ----------------
+
+    * [in] x: the first input,  a python number or jt.Var.
+
+    * [in] y: the second input, a python number or jt.Var.
+
+     */
     // @pybind(not_equal, __ne__)
     "not_equal",
+
+    /**
+    Shifts the bits of ``x`` to the left by ``y``. 
+
+    Bits are shifted to the left by appending ``y`` 0s at the right of ``x``.
+    This operation is equivalent to ``x << y``.
+
+    ----------------
+
+    * [in] x: the first input,  a python number or jt.Var (int32 or int64).
+
+    * [in] y: the second input, a python number or jt.Var (int32 or int64).
+
+    ----------------
+
+    Example-1::
+        >>> a = jt.randint(0, 10, shape=(3,))
+        >>> a
+        jt.Var([7 6 7], dtype=int32)
+        >>> b = jt.randint(0, 10, shape=(3,))
+        >>> b
+        jt.Var([3 9 8], dtype=int32)
+        >>> jt.left_shift(a, b)
+        jt.Var([  56 3072 1792], dtype=int32)
+        >>> a << b
+        jt.Var([  56 3072 1792], dtype=int32)
+     */
     // @pybind(left_shift, __lshift__)
     "left_shift",
+
+    /**
+    Shifts the bits of ``x`` to the right by ``y``. 
+
+    This operation is equivalent to ``x >> y``.
+
+    ----------------
+
+    * [in] x: the first input,  a python number or jt.Var (int32 or int64).
+
+    * [in] y: the second input, a python number or jt.Var (int32 or int64).
+
+    ----------------
+
+    Example-1::
+        >>> a = jt.randint(0, 1024, shape=(3,))
+        >>> a
+        jt.Var([439 113  92], dtype=int32)
+        >>> b = jt.randint(0, 10, shape=(3,))
+        >>> b
+        jt.Var([6 8 4], dtype=int32)
+        >>> jt.right_shift(a, b)
+        jt.Var([6 0 5], dtype=int32)
+     */
     // @pybind(right_shift, __rshift__)
     "right_shift",
+
+    /**
+    Returns the element-wise logical AND of the inputs. 
+
+    ----------------
+
+    * [in] x: the first input, jt.Var.
+
+    * [in] y: the second input, jt.Var.
+
+     */
     "logical_and",
+
+    /**
+    Returns the element-wise logical OR of the inputs. 
+
+    ----------------
+
+    * [in] x: the first input, jt.Var.
+
+    * [in] y: the second input, jt.Var.
+
+     */
     "logical_or",
+
+    /**
+    Returns the element-wise logical XOR of the inputs. 
+
+    ----------------
+
+    * [in] x: the first input, jt.Var.
+
+    * [in] y: the second input, jt.Var.
+
+     */
     "logical_xor",
+
+    /**
+    Computes the bitwise AND of x and y.
+
+    ----------------
+
+    * [in] x: the first input, jt.Var (integal or boolean).
+
+    * [in] y: the second input, jt.Var (integal or boolean).
+
+     */
     // @pybind(bitwise_and, __and__)
     "bitwise_and",
+
+    /**
+    Computes the bitwise OR of x and y.
+
+    ----------------
+
+    * [in] x: the first input, jt.Var (integal or boolean).
+
+    * [in] y: the second input, jt.Var (integal or boolean).
+
+     */
     // @pybind(bitwise_or, __or__)
     "bitwise_or",
+
+    /**
+    Computes the bitwise XOR of x and y.
+
+    ----------------
+
+    * [in] x: the first input, jt.Var (integal or boolean).
+
+    * [in] y: the second input, jt.Var (integal or boolean).
+
+     */
     // @pybind(bitwise_xor, __xor__)
     "bitwise_xor",
 };

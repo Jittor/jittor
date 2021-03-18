@@ -67,5 +67,12 @@ class TestTransposeOp(unittest.TestCase):
         assert a.permute().shape == [4,3,2]
         assert a.permute(0,2,1).shape == [2,4,3]
 
+    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @jt.flag_scope(use_cuda=1)
+    def test_cutt(self):
+        a = jt.rand((10,2)) > 0.5
+        b = a.transpose()
+        assert (a.data.transpose() == b.data).all()
+
 if __name__ == "__main__":
     unittest.main()

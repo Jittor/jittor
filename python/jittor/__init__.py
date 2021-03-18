@@ -8,7 +8,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-__version__ = '1.2.2.34'
+__version__ = '1.2.2.51'
 from . import lock
 with lock.lock_scope():
     ori_int = int
@@ -112,6 +112,22 @@ Example::
     def __init__(self, **jt_flags):
         self.jt_flags = jt_flags
         jt_flags["no_grad"] = 1
+
+class enable_grad(flag_scope):
+    ''' enable_grad scope, all variable created inside this
+scope will start grad.
+
+Example::
+
+    import jittor as jt
+
+    with jt.enable_grad():
+        ...
+
+    '''
+    def __init__(self, **jt_flags):
+        self.jt_flags = jt_flags
+        jt_flags["no_grad"] = 0
 
 single_log_capture = None
 
@@ -391,6 +407,15 @@ def sqr(x): return x*x
 Var.sqr = sqr
 
 def pow(x, y):
+    ''' computes x^y, element-wise. 
+
+    This operation is equivalent to ``x ** y``.
+
+    :param x: the first input.
+    :type x: a python number or jt.Var.
+    :param y: the second input.
+    :type y: a python number or jt.Var.
+    '''
     if isinstance(y, (ori_int, ori_float)) and y == 2:
         return x.sqr()
     return core.ops.pow(x, y)
@@ -700,7 +725,7 @@ class Module:
     def __init__(self, *args, **kw):
         pass
     def execute(self, *args, **kw):
-        pass
+        raise NotImplementedError
     def __call__(self, *args, **kw):
         return self.execute(*args, **kw)
     def __repr__(self):
@@ -931,6 +956,8 @@ class Module:
             >>> net = Net()
             >>> net.save('net.pkl')
             >>> net.load('net.pkl')
+
+        This method also supports loading a state dict from a pytorch .pth file.
 
         .. note::
             当载入的参数与模型定义不一致时, jittor 会输出错误信息, 但是不会抛出异常.
