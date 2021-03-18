@@ -13,6 +13,28 @@ import numpy as np
 import math
 from collections.abc import Sequence,Iterable
 
+def index_add_(x, dim, index, tensor):
+    """ Take out each index subscript vector of the dim dimension and add the corresponding tensor variable.
+    
+    Example:
+
+        x = jt.ones((5,3))
+        tensor = jt.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
+        index = jt.array([0,4,2])
+        x.index_add_(0, index, tensor)
+        print(x)
+
+        >>> jt.Var([[  2.,   3.,   4.],
+        [  1.,   1.,   1.],
+        [  8.,   9.,  10.],
+        [  1.,   1.,   1.],
+        [  5.,   6.,   7.]])
+    """
+    assert len(index.shape) == 1
+    assert tensor.shape[0] == index.shape[0]
+    x[(slice(None,),)*dim+(index,)] += tensor
+jt.Var.index_add_ = index_add_
+
 def __copy__(x):
     return x.copy().detach()
 jt.Var.__copy__ = __copy__
@@ -42,6 +64,8 @@ def any(x,dim):
     return x.any_(dim).bool()
 jt.Var.any = any
     
+def bernoulli(input):
+    return (input>jt.rand_like(input)).cast(input.dtype)
 
 def repeat(x, *shape):
     r'''
@@ -897,7 +921,7 @@ def auto_parallel(n, src, **kw):
         tid_def += f"\nauto tnum{i} = 1<<tn{i};"
         tid_def += f"\ntid = tid>>tn{i};"
     for i in range(n):
-        tid_loop += f"\nfor (int i{i}=tid{i}; i{i}<{pnargs2[i]}; i{i}+=tn{i})"
+        tid_loop += f"\nfor (int i{i}=tid{i}; i{i}<{pnargs2[i]}; i{i}+=tnum{i})"
         call_args.append(pnargs2[i])
         call_args.append(f"i{i}")
     call_args += oargs2
@@ -1073,3 +1097,89 @@ inline static void searchsorted(
         cpu_src=_searchsorted_src,
         cuda_header=_searchsorted_header,
         cuda_src=_searchsorted_src)
+
+
+def scatter(x:jt.Var, dim:int, index:jt.Var, src:jt.Var, reduce='void'):
+    ''' if x is a 3-D array, rewrite x like:
+
+    self[index[i][j][k]][j][k] = src[i][j][k]  # if dim == 0
+    self[i][index[i][j][k]][k] = src[i][j][k]  # if dim == 1
+    self[i][j][index[i][j][k]] = src[i][j][k]  # if dim == 2
+
+Parameters::
+
+    * x (jt.Var) – input array
+    * dim (int) – the axis along which to index
+    * index (jt.Var) – the indices of elements to scatter, can be either empty or of the same dimensionality as src. When empty, the operation returns self unchanged.
+    * src (jt.Var) – the source element(s) to scatter.
+    * reduce (str, optional) – reduction operation to apply, can be either 'add' or 'multiply'.
+
+Example::
+
+    src = jt.arange(1, 11).reshape((2, 5))
+    index = jt.array([[0, 1, 2, 0]])
+    x = jt.zeros((3, 5), dtype=src.dtype).scatter_(0, index, src)
+    assert (x.data == 
+        [[1, 0, 0, 4, 0],
+        [0, 2, 0, 0, 0],
+        [0, 0, 3, 0, 0]]).all()
+    index = jt.array([[0, 1, 2], [0, 1, 4]])
+    x = jt.zeros((3, 5), dtype=src.dtype).scatter_(1, index, src)
+    assert (x.data ==
+        [[1, 2, 3, 0, 0],
+        [6, 7, 0, 0, 8],
+        [0, 0, 0, 0, 0]]).all()
+    x = jt.full((2, 4), 2.).scatter_(1, jt.array([[2], [3]]),
+            jt.array(1.23), reduce='multiply')
+    assert np.allclose(x.data, 
+        [[2.0000, 2.0000, 2.4600, 2.0000],
+        [2.0000, 2.0000, 2.0000, 2.4600]]), x
+    x = jt.full((2, 4), 2.).scatter_(1, jt.array([[2], [3]]),
+            jt.array(1.23), reduce='add')
+    assert np.allclose(x.data,
+        [[2.0000, 2.0000, 3.2300, 2.0000],
+        [2.0000, 2.0000, 2.0000, 3.2300]])
+
+    '''
+    shape = index.shape
+    if src.shape != shape and src.numel() != 1:
+        src = src[tuple( slice(None,s) for s in shape )]
+    indexes = [ f'i{i}' for i in range(len(shape)) ]
+    indexes[dim] = index
+    return x.setitem(tuple(indexes), src, reduce)
+
+def scatter_(x, dim, index, src, reduce='void'):
+    return x.assign(x.scatter(dim, index, src, reduce))
+
+jt.Var.scatter = scatter
+jt.Var.scatter_ = scatter_
+
+def gather(x, dim, index):
+    ''' if x is a 3-D array, reindex x like:
+
+    out[i][j][k] = input[index[i][j][k]][j][k]  # if dim == 0
+    out[i][j][k] = input[i][index[i][j][k]][k]  # if dim == 1
+    out[i][j][k] = input[i][j][index[i][j][k]]  # if dim == 2
+
+
+Parameters::
+
+    * input (jt.Var) – the source array
+    * dim (int) – the axis along which to index
+    * index (jt.Var) – the indices of elements to gather
+
+Example::
+
+    t = jt.array([[1, 2], [3, 4]])
+    data = t.gather(1, jt.array([[0, 0], [1, 0]]))
+    assert (data.data == [[ 1,  1], [ 4,  3]]).all()
+    data = t.gather(0, jt.array([[0, 0], [1, 0]]))
+    assert (data.data == [[ 1,  2], [ 3,  2]]).all()
+
+    '''
+    shape = index.shape
+    indexes = [ f'i{i}' for i in range(len(shape)) ]
+    indexes[dim] = index
+    return x.getitem(tuple(indexes))
+
+jt.Var.gather = gather

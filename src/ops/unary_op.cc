@@ -35,37 +35,441 @@ static unordered_set<string> unary_ops = {
     "float32",
     "float64",
     // please keep float64 the last type
+
+    /**
+    Returns the absolute value of the input ``x``. 
+
+    ----------------
+
+    * [in] x:   the input jt.Var
+
+    ----------------
+    
+    Example-1::
+        >>> jt.abs(jt.float32([-1, 0, 1]))
+        jt.Var([1. 0. 1.], dtype=float32)
+     */
     // @pybind(abs, __abs__)
     "abs",
+
+    /**
+    Returns the negative value of the input ``x``. 
+
+    This operator is equavilant to ``-x``.
+
+    ----------------
+
+    * [in] x:   the input jt.Var.
+
+    ----------------
+    
+    Example-1::
+        >>> jt.negative(jt.float32([-1, 0, 1]))
+        jt.Var([ 1. -0. -1.], dtype=float32)
+     */
     // @pybind(negative, __neg__)
     "negative",
+
+    /**
+    Returns the logical NOT of the input ``x``. 
+     
+    ----------------
+
+    * [in] x: the input jt.Var, integal or boolean.
+
+    ----------------
+
+    Example-1::
+        >>> jt.logical_not(jt.int32([-1, 0, 1]))
+        jt.Var([False  True False], dtype=bool)
+     */
     "logical_not",
+
+    /**
+    Returns the bitwise NOT of the input ``x``. 
+
+    ----------------
+
+    * [in] x: the input jt.Var, integal or boolean.
+
+    ----------------
+
+    Example-1::
+        >>> jt.bitwise_not(jt.int32([1, 2, -3]))
+        jt.Var([-2 -3  2], dtype=int32)
+     */
     "bitwise_not",
+
+    /**
+    Returns the natural logarithm of the input ``x``. 
+
+    ----------------
+
+    * [in] x: the input jt.Var.
+
+    ----------------
+
+    Example-1::
+        >>> a = jt.rand(4) * 2
+        >>> a
+        jt.Var([0.02863695 1.30122    1.6048753  1.140261  ], dtype=float32)
+        >>> jt.log(a)
+        jt.Var([-3.5530574   0.26330233  0.47304606  0.13125724], dtype=float32)
+     */
     "log",
+
+    /**
+     Returns the exponential of the input ``x``. 
+
+    ----------------
+
+    * [in] x: the input jt.Var.
+
+    ----------------
+
+    Example-1::
+        >>> a = jt.rand(4) * 2
+        >>> a
+        jt.Var([1.9841381 1.4103996 0.5855549 1.4212812], dtype=float32)
+        >>> jt.exp(a)
+        jt.Var([7.2727766 4.0975924 1.7959872 4.1424246], dtype=float32)
+     */
     "exp",
+
+    /**
+    Returns the square root of the input ``x``. 
+
+    ----------------
+
+    * [in] x: the input jt.Var.
+
+    ----------------
+
+    Example-1::
+        >>> a = jt.rand(4) * 2
+        >>> a
+        jt.Var([0.81957287 0.5609612  0.07435933 1.7571875 ], dtype=float32)
+        >>> jt.sqrt(a)
+        jt.Var([0.90530264 0.7489734  0.27268907 1.3255895 ], dtype=float32)
+     */
     "sqrt",
+
+    /**
+    Returns the closest integer of the input ``x``. 
+
+    ----------------
+
+    * [in] x: the input jt.Var.
+
+    ----------------
+
+    Example-1::
+        >>> a = jt.randn(4)
+        >>> a
+        jt.Var([ 2.101595    0.33055413 -0.44147047 -0.7720668 ], dtype=float32)
+        >>> jt.round(a)
+        jt.Var([ 2  0  0 -1], dtype=int32)
+     */
     "round",
+
+    /**
+     Returns the largest integer less than or equal to the input ``x``. 
+
+    ----------------
+
+    * [in] x: the input jt.Var.
+
+    ----------------
+    Example-1::
+        >>> a = jt.randn(4)
+        >>> a
+        jt.Var([-1.0339162 -0.7259972 -0.9220003 -0.8449701], dtype=float32)
+        >>> jt.floor(a)
+        jt.Var([-2 -1 -1 -1], dtype=int32)
+     */
     "floor",
+
+    /**
+    Returns the smallest integer greater than or equal to the input ``x``. 
+
+    ----------------
+
+    * [in] x: the input jt.Var.
+
+    ----------------
+
+    Example-1::
+        >>> a = jt.randn(4)
+        >>> a
+        jt.Var([-1.0339162 -0.7259972 -0.9220003 -0.8449701], dtype=float32)
+        >>> jt.ceil(a)
+        jt.Var([-1  0  0  0], dtype=int32)
+     */
     "ceil",
+
+    /**
+    Returns the sine of the input ``x``. 
+
+    ----------------
+
+    * [in] x: the input jt.Var.
+
+    ----------------
+
+    Example-1::
+        >>> a = jt.randn(4)
+        >>> a
+        jt.Var([ 0.32893723 -0.7112559  -0.872391    1.8001337 ], dtype=float32)
+        >>> jt.sin(a)
+        jt.Var([ 0.32303742 -0.6527857  -0.76586854  0.9738172 ], dtype=float32)
+     */
     "sin",
+
+    /**
+    Returns the arcsine of the input ``x``. 
+
+    ----------------
+
+    * [in] x: the input jt.Var.
+
+    ----------------
+
+    Example-1::
+        >>> a = jt.randn(4)
+        >>> a
+        jt.Var([ 0.09342023 -0.42522037  0.9264933  -0.785264  ], dtype=float32)
+        >>> jt.asin(a)
+        jt.Var([ 0.09355665 -0.43920535  1.1849847  -0.9031224 ], dtype=float32)
+     */
     // @pybind(asin, arcsin)
     "asin",
+
+    /**
+    Returns the hyperbolic sine of the input ``x``. 
+
+    ----------------
+
+    * [in] x: the input jt.Var.
+
+    ----------------
+
+    Example-1::
+        >>> a = jt.randn(4)
+        >>> a
+        jt.Var([ 0.32893723 -0.7112559  -0.872391    1.8001337 ], dtype=float32)
+        >>> jt.sinh(a)
+        jt.Var([ 0.3349012  -0.77276015 -0.9873369   2.9425898 ], dtype=float32)
+     */
+    // @pybind(asin, arcsin)
     "sinh",
+
+    /**
+    Returns the inverse hyperbolic sine of the input ``x``. 
+
+    ----------------
+
+    * [in] x: the input jt.Var.
+
+    ----------------
+
+    Example-1::
+        >>> a = jt.randn(4)
+        >>> a
+        jt.Var([-1.9749726  -0.52341473  0.8906148   1.0338128 ], dtype=float32)
+        >>> jt.asinh(a)
+        jt.Var([-1.4323865  -0.5020559   0.8018747   0.90508187], dtype=float32)
+     */
     // @pybind(asinh, arcsinh)
     "asinh",
+
+    /**
+    Returns the tangent of the input ``x``. 
+
+    ----------------
+
+    * [in] x: the input jt.Var.
+
+    ----------------
+
+    Example-1::
+        >>> a = jt.randn(4)
+        >>> a
+        jt.Var([ 0.32893723 -0.7112559  -0.872391    1.8001337 ], dtype=float32)
+        >>> jt.tan(a)
+        jt.Var([ 0.34133783 -0.8617148  -1.1910915  -4.283673  ], dtype=float32)
+     */
     "tan",
+
+    /**
+    Returns the inverse tangent of the input ``x``. 
+
+    ----------------
+
+    * [in] x: the input jt.Var.
+
+    ----------------
+
+    Example-1::
+        >>> a = jt.randn(4)
+        >>> a
+        jt.Var([-0.85885596  1.187804    0.47249675  0.95933187], dtype=float32)
+        >>> jt.atan(a)
+        jt.Var([-0.70961297  0.87102956  0.44140393  0.76464504], dtype=float32)
+     */
     // @pybind(atan, arctan)
     "atan",
+
+    /**
+    Returns the hyperbolic tangent of the input ``x``. 
+
+    ----------------
+
+    * [in] x: the input jt.Var.
+
+    ----------------
+    
+    Example-1::
+        >>> a = jt.randn(4)
+        >>> a
+        jt.Var([-0.85885596  1.187804    0.47249675  0.95933187], dtype=float32)
+        >>> jt.tanh(a)
+        jt.Var([-0.6956678   0.82989657  0.4402144   0.7439787 ], dtype=float32)
+     */
     "tanh",
+
+    /**
+    Returns the inverse hyperbolic tangent of the input ``x``. 
+
+    ----------------
+
+    * [in] x: the input jt.Var.
+
+    ----------------
+
+    Example-1::
+        >>> a = jt.rand(4) * 2 - 1
+        >>> a
+        jt.Var([ 0.9062414  -0.799802   -0.27219176 -0.7274077 ], dtype=float32)
+        >>> jt.atanh(a)
+        jt.Var([ 1.5060828  -1.0980625  -0.27922946 -0.9231999 ], dtype=float32)
+     */
     // @pybind(atanh, arctanh)
     "atanh",
+
+    /**
+    Returns the cosine of the input ``x``. 
+
+    ----------------
+
+    * [in] x: the input jt.Var.
+
+    ----------------
+
+    Example-1::
+        >>> a = jt.randn(4)
+        >>> a
+        jt.Var([ 0.32893723 -0.7112559  -0.872391    1.8001337 ], dtype=float32)
+        >>> jt.cos(a)
+        jt.Var([ 0.9463862  0.7575426  0.6429972 -0.2273323], dtype=float32)
+     */
     "cos",
+
+    /**
+    Returns the inverse cosine of the input ``x``. 
+
+    ----------------
+
+    * [in] x: the input jt.Var.
+
+    ----------------
+
+    Example-1::
+        >>> a = jt.rand(4) * 2 - 1
+        >>> a
+        jt.Var([ 0.5876564  0.740723  -0.667666   0.5371753], dtype=float32)
+        >>> jt.acos(a)
+        jt.Var([0.9426371 0.7366504 2.3018656 1.0037117], dtype=float32)
+     */
     // @pybind(acos, arccos)
     "acos",
+
+    /**
+    Returns the hyperbolic cosine of the input ``x``. 
+
+    ----------------
+
+    * [in] x: the input jt.Var.
+
+    ----------------
+
+    Example-1::
+        >>> a = jt.randn(4)
+        >>> a
+        jt.Var([ 0.32893723 -0.7112559  -0.872391    1.8001337 ], dtype=float32)
+        >>> jt.cosh(a)
+        jt.Var([1.0545894 1.2637873 1.405288  3.1078668], dtype=float32)
+     */
     "cosh",
+
+    /**
+    Returns the inverse hyperbolic cosine of the input ``x``. 
+
+    ----------------
+
+    * [in] x: the input jt.Var.
+
+    ----------------
+
+    Example-1::
+        >>> a = jt.rand(4) + 1
+        >>> a
+        jt.Var([1.3609099 1.8137748 1.1146184 1.3911307], dtype=float32)
+        >>> jt.acosh(a)
+        jt.Var([0.8259237  1.2020639  0.47432774 0.8579033 ], dtype=float32)
+     */
     // @pybind(acosh, arccosh)
     "acosh",
+
+    /**
+    Returns the sigmoid of the input ``x``. 
+    
+    .. math::
+       out_i = \frac{1}{1 + e^{x_i}}
+
+    ----------------
+
+    * [in] x: the input jt.Var.
+
+    ----------------
+
+    Example-1::
+        >>> a = jt.randn(4)
+        >>> a
+        jt.Var([ 0.49443012  0.4305426  -1.0364404  -1.2628382 ], dtype=float32)
+        >>> jt.sigmoid(a)
+        jt.Var([0.62114954 0.6060032  0.2618374  0.2204857 ], dtype=float32)
+     */
     "sigmoid",
+
+    /**
+    Computes the error function of each element. The error function is defined as follows:
+
+    .. math::
+        erf(x) = \frac{2}{\sqrt{\pi}} \int_0^x e^{-t^2} dt
+
+    ----------------
+
+    * [in] x: the input jt.Var.
+
+    ----------------
+
+    Example-1::
+        >>> a = jt.randn(4)
+        >>> a
+        jt.Var([ 0.49443012  0.4305426  -1.0364404  -1.2628382 ], dtype=float32)
+        >>> jt.erf(a)
+        jt.Var([ 0.51559156  0.45739546 -0.85728306 -0.9258883 ], dtype=float32)
+     */
     "erf",
 };
 
