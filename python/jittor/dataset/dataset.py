@@ -27,7 +27,6 @@ mp_log_v = os.environ.get("mp_log_v", 0)
 mpi = jt.mpi
 img_open_hook = HookTimer(Image, "open")
 
-
 class Worker:
     def __init__(self, target, args, buffer_size, keep_numpy_array=False):
         self.buffer = jt.RingBuffer(buffer_size)
@@ -37,7 +36,6 @@ class Worker:
         self.p = mp.Process(target=target, args=args + (self.buffer, self.status))
         self.p.daemon = True
         self.p.start()
-
 
 class Dataset(object):
     '''
@@ -65,7 +63,6 @@ class Dataset(object):
         for x, y in dataset:
             ......
     '''
-
     def __init__(self,
                  batch_size=16,
                  shuffle=False,
@@ -195,9 +192,8 @@ class Dataset(object):
                 # load and transform data
                 batch = []
                 if mp_log_v:
-                    print(f"#{worker_id} {os.getpid()} load batch", cid * self.real_batch_size,
-                          min(self.real_len, (cid + 1) * self.real_batch_size))
-                for i in range(cid * self.real_batch_size, min(self.real_len, (cid + 1) * self.real_batch_size)):
+                    print(f"#{worker_id} {os.getpid()} load batch", cid*self.real_batch_size, min(self.real_len, (cid+1)*self.real_batch_size))
+                for i in range(cid*self.real_batch_size, min(self.real_len, (cid+1)*self.real_batch_size)):
                     batch.append(self[self.index_list[i]])
                 batch = self.collate_batch(batch)
                 now = time.time()
@@ -206,8 +202,7 @@ class Dataset(object):
 
                 # send data to main process
                 if mp_log_v:
-                    print(f"#{worker_id} {os.getpid()} send", type(batch).__name__, [type(b).__name__ for b in batch],
-                          buffer)
+                    print(f"#{worker_id} {os.getpid()} send", type(batch).__name__, [type(b).__name__ for b in batch], buffer)
                 try:
                     buffer.send(batch)
                 except:
@@ -500,7 +495,6 @@ class ImageFolder(Dataset):
             ...
 
     """
-
     def __init__(self, root, transform=None):
         super().__init__()
         self.root = root
