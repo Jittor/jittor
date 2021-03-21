@@ -249,7 +249,7 @@ def to_pil_image(pic, mode=None):
     npimg = pic
     if isinstance(pic, jt.Var):
         if 'float' in str(pic.dtype) and mode != 'F':
-            pic = pic.mul(255).uint8()
+            pic = pic.multiply(255).uint8()
         npimg = np.transpose(pic.numpy(), (1, 2, 0))
 
     if not isinstance(npimg, np.ndarray):
