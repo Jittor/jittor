@@ -80,6 +80,7 @@ class Dataset(object):
         self.buffer_size = buffer_size
         self.stop_grad = stop_grad
         self.keep_numpy_array = keep_numpy_array
+        self.sampler = None
 
     def __getitem__(self, index):
         raise NotImplementedError
@@ -343,10 +344,23 @@ Example::
             print("dataset deleted")
         self.terminate()
 
+    def __real_len__(self):
+        if self.total_len is None:
+            self.total_len = len(self)
+        return self.total_len
+        
     def __iter__(self):
         if self.total_len is None:
             self.total_len = len(self)
-        if self.shuffle == False:
+        # maybe rewrite by sampler
+        total_len = self.total_len
+        if self.sampler:
+            index_list = list(self.sampler.__iter__())
+            total_len = len(index_list)
+            # check is not batch sampler
+            if len(index_list):
+                assert not isinstance(index_list[0], (list,tuple)), "Batch sampler not support yet."
+        elif self.shuffle == False:
             index_list = get_order_list(self.total_len)
         else:
             index_list = get_random_list(self.total_len)
@@ -373,8 +387,8 @@ Example::
                 LOG.w("Batch size is not divisible by MPI world size, "
                       "The distributed version may be different from "
                       "the single-process version.")
-            fix_batch = self.total_len // self.batch_size
-            last_batch = self.total_len - fix_batch * self.batch_size
+            fix_batch = total_len // self.batch_size
+            last_batch = total_len - fix_batch * self.batch_size
             fix_batch_l = index_list[0:fix_batch*self.batch_size] \
                 .reshape(-1,self.batch_size)
             fix_batch_l = fix_batch_l[
@@ -394,8 +408,8 @@ Example::
 
             self.real_len = len(index_list)
             self.real_batch_size = real_batch_size
-            assert self.total_len // self.batch_size == \
-                self.real_len // self.real_batch_size, f"Number of batches({self.total_len // self.batch_size}!={self.real_len // self.real_batch_size}) not match, total_len: {self.total_len}, batch_size: {self.batch_size}, real_len: {self.real_len}, real_batch_size: {self.real_batch_size}"
+            assert total_len // self.batch_size == \
+                self.real_len // self.real_batch_size, f"Number of batches({total_len // self.batch_size}!={self.real_len // self.real_batch_size}) not match, total_len: {total_len}, batch_size: {self.batch_size}, real_len: {self.real_len}, real_batch_size: {self.real_batch_size}"
         else:
             self.real_len = self.total_len
             self.real_batch_size = self.batch_size
