@@ -65,6 +65,15 @@ class RandomSampler(Sampler):
 
 class SubsetRandomSampler(Sampler):
     def __init__(self, dataset, indice):
+        '''
+        testdataset = TestSamplerDataset()
+        subsetsampler = SubsetRandomSampler(testdataset, (20, 30))
+
+        for i, data in enumerate(testdataset):
+            # data between 20 ~ 29
+            ......
+            
+        '''
         # MUST set sampler here
         dataset.sampler = self
         self.dataset = dataset
