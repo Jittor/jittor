@@ -260,7 +260,6 @@ static unordered_set<string> unary_ops = {
         >>> jt.sinh(a)
         jt.Var([ 0.3349012  -0.77276015 -0.9873369   2.9425898 ], dtype=float32)
      */
-    // @pybind(asin, arcsin)
     "sinh",
 
     /**

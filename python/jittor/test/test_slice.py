@@ -137,7 +137,7 @@ class TestSlice(unittest.TestCase):
     def test_vary_shape_setitem(self):
         a = jt.array([1,2,3,4,5])
         b = jt.array([1,2,3,4,5])
-        c = jt.where(b>3)
+        c = tuple(jt.where(b>3))
         a[c] = 0
         assert (a.data == [1,2,3,0,0]).all()
 
