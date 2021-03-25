@@ -1,3 +1,12 @@
+# ***************************************************************
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers: 
+#     Hao-Yang Peng
+#     Dun Liang <randonlang@gmail.com>. 
+# 
+# This file is subject to the terms and conditions defined in
+# file 'LICENSE.txt', which is part of this source code package.
+# ***************************************************************
 import jittor as jt
 from .dataset import Dataset
 import numpy as np
@@ -5,57 +14,74 @@ from PIL import Image
 
 
 class Sampler():
-    def __init__(self, data_source):
-        self.data_source = data_source
+    def __init__(self, dataset):
+        self.dataset = dataset
+        # MUST set sampler here
+        dataset.sampler = self
 
     def __iter__(self):
-        pass
+        raise NotImplementedError
 
     def __len__(self):
-        pass
+        raise NotImplementedError
 
 
 class SequentialSampler(Sampler):
-    def __init__(self, data_source):
-        self.data_source = data_source
+    def __init__(self, dataset):
+        # MUST set sampler here
+        dataset.sampler = self
+        self.dataset = dataset
 
     def __iter__(self):
-        return iter(range(len(self.data_source)))
+        return iter(range(self.dataset.__real_len__()))
 
     def __len__(self):
-        return len(self.data_source)
+        return self.dataset.__real_len__()
 
 
 class RandomSampler(Sampler):
-    def __init__(self, data_source, replacement=False, num_samples=None):
-        self.data_source = data_source
+    def __init__(self, dataset, replacement=False, num_samples=None):
+        # MUST set sampler here
+        dataset.sampler = self
+        self.dataset = dataset
         self.rep = replacement
         self._num_samples = num_samples
 
     @property
     def num_samples(self):
         if self._num_samples is None:
-            return len(self.data_source)
+            return self.dataset.__real_len__()
         return self._num_samples
 
     def __len__(self):
         return self.num_samples
 
     def __iter__(self):
-        n = len(self.data_source)
+        n = self.dataset.__real_len__()
         if self.rep:
             return iter(np.random.randint(low=0, high=n, size=(self.num_samples,), dtype=np.int64).tolist())
         return iter(np.random.permutation(n).tolist())
 
 
 class SubsetRandomSampler(Sampler):
-    def __init__(self, data_source, indice):
-        self.data_source = data_source
+    def __init__(self, dataset, indice):
+        '''
+        testdataset = TestSamplerDataset()
+        subsetsampler = SubsetRandomSampler(testdataset, (20, 30))
+
+        for i, data in enumerate(testdataset):
+            # data between 20 ~ 29
+            ......
+            
+        '''
+        # MUST set sampler here
+        dataset.sampler = self
+        self.dataset = dataset
         self.indices = indice
-        assert indice[0] >= 0 and indice[1] < data_source.total_len and indice[0] < indice[1]
+        assert indice[0] >= 0 and indice[1] < dataset.__real_len__() and indice[0] < indice[1]
 
     def __iter__(self):
-        return (self.data_source[i + self.indices[0]] for i in np.random.permutation(self.indices[1] - self.indices[0]))
+        return (int(i) + self.indices[0] for i in np.random.permutation(self.indices[1] - self.indices[0]))
 
     def __len__(self):
         return self.indices[1] - self.indices[0]

@@ -12,6 +12,7 @@
 namespace jittor {
 
 CudaHostAllocator cuda_host_allocator;
+extern bool no_cuda_error_when_free;
 
 const char* CudaHostAllocator::name() const {return "cuda_host";}
 
@@ -24,6 +25,7 @@ void* CudaHostAllocator::alloc(size_t size, size_t& allocation) {
 
 void CudaHostAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
     if (size==0) return;
+    if (no_cuda_error_when_free) return;
     checkCudaErrors(cudaFreeHost(mem_ptr));
 }
 
