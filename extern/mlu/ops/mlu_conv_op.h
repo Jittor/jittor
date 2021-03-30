@@ -9,6 +9,8 @@
 // ***************************************************************
 #pragma once
 #include "op.h"
+#include "./cnml.h"
+#include "./cnrt.h"
 
 namespace jittor {
 
@@ -22,6 +24,16 @@ struct MluConvOp : Op {
     const char* name() const override { return "mlu_conv"; }
     void infer_shape() override;
     DECLARE_jit_run;
+};
+
+struct MluConv_t {
+    cnmlBaseOp_t conv_op_cache;
+    cnmlConvOpParam_t conv_param_cache;
+    cnmlTensor_t input_tensor_cache;
+    cnmlTensor_t filter_tensor_cache;
+    cnmlTensor_t output_tensor_cache;
+    void *input_mlu_ptr_cache;
+    void *output_mlu_ptr_cache;
 };
 
 } // jittor

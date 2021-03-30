@@ -541,13 +541,26 @@ class Conv(Module):
         else:
             self.bias = None
 
+        # scale is for model quantization 
+        # e.g. float32 -> int8: scale = 127 / max(abs(var))
+        self.input_scale = None
+        self.weight_scale = None
+    
+    def quantize(self):
+        self.input_scale = jt.array([1.])
+        self.weight_scale = 127. / self.weight.abs().max()
+
     def execute(self, x):
+        is_quantized = (self.input_scale is not None and self.weight_scale is not None)
+        # print(f"is_quantized: {is_quantized}")
+        quan_x = x
+        quan_weight = self.weight
+        if is_quantized:
+            self.input_scale = min(self.input_scale, 127. / x.abs().max()) if self.input_scale[0] != 1. else (127. / x.abs().max())
+            quan_x = (x * self.input_scale).int8()
+            quan_weight = (self.weight * self.weight_scale).int8()
         if self.is_depthwise_conv and jt.flags.use_cuda:
             y = self.depthwise_conv(x, self.weight)
-            if self.bias is not None:
-                b = self.bias.broadcast(y.shape, [0,2,3])
-                y = y + b
-            return y
         elif self.groups == 1:
             N,C,H,W = x.shape
             Kh, Kw = self.kernel_size
@@ -555,19 +568,15 @@ class Conv(Module):
             oh = (H+self.padding[0]*2-Kh*self.dilation[0]+self.dilation[0]-1)//self.stride[0]+1
             ow = (W+self.padding[1]*2-Kw*self.dilation[1]+self.dilation[1]-1)//self.stride[1]+1
             assert oh>0 and ow>0
-            xx = x.reindex([N,self.out_channels,C,oh,ow,Kh,Kw], [
+            xx = quan_x.reindex([N,self.out_channels,C,oh,ow,Kh,Kw], [
                 'i0', # Nid
                 'i2', # Cid
                 f'i3*{self.stride[0]}-{self.padding[0]}+i5*{self.dilation[0]}', # Hid+Khid
                 f'i4*{self.stride[1]}-{self.padding[1]}+i6*{self.dilation[1]}', # Wid+KWid
             ])
-            ww = self.weight.broadcast(xx.shape, [0,3,4])
+            ww = quan_weight.broadcast(xx.shape, [0,3,4])
             yy = xx*ww
             y = yy.sum([2,5,6]) # Kc, Kh, Kw
-            if self.bias is not None:
-                b = self.bias.broadcast(y.shape, [0,2,3])
-                y = y + b
-            return y
         else:
             N,C,H,W = x.shape
             Kh, Kw = self.kernel_size
@@ -578,14 +587,14 @@ class Conv(Module):
             oh = (H+self.padding[0]*2-Kh*self.dilation[0]+self.dilation[0]-1)//self.stride[0]+1
             ow = (W+self.padding[1]*2-Kw*self.dilation[1]+self.dilation[1]-1)//self.stride[1]+1
             assert oh>0 and ow>0
-            xx = x.reindex([N,G,oc//G,CpG,oh,ow,Kh,Kw], [
+            xx = quan_x.reindex([N,G,oc//G,CpG,oh,ow,Kh,Kw], [
                 'i0', # Nid
                 f'i1*{CpG}+i3', # Gid
                 f'i4*{self.stride[0]}-{self.padding[0]}+i6*{self.dilation[0]}', # Hid+Khid
                 f'i5*{self.stride[1]}-{self.padding[1]}+i7*{self.dilation[1]}', # Wid+KWid
             ])
             # w: [oc, CpG, Kh, Kw]
-            ww = self.weight.reindex([N, G, oc//G, CpG, oh, ow, Kh, Kw], [
+            ww = quan_weight.reindex([N, G, oc//G, CpG, oh, ow, Kh, Kw], [
                 f'i1*{oc//G}+i2',
                 'i3',
                 'i6',
@@ -599,10 +608,16 @@ class Conv(Module):
                 'i4',
                 'i5'
             ])
-            if self.bias is not None:
-                b = self.bias.broadcast(y.shape, [0,2,3])
-                y = y + b
-            return y          
+
+        # print("quan_weight, quan_x, quan_weight.sum() * 127", quan_weight, quan_x, quan_weight.sum() * 127.)
+        # print("y & scale: ", y, self.input_scale, self.weight_scale)
+        if is_quantized:
+            y = (y / self.input_scale / self.weight_scale).float32()
+        
+        if self.bias is not None:
+            b = self.bias.broadcast(y.shape, [0,2,3])
+            y = y + b
+        return y          
 
 Conv2d = Conv
 

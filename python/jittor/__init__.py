@@ -976,6 +976,12 @@ class Module:
                 if id(p) in self.backup_grad_state and self.backup_grad_state[id(p)]:
                     p.start_grad()
     
+    def quantize(self):
+        def callback(parents, k, v, n):
+            if isinstance(v, nn.Conv) or isinstance(v, nn.Linear):
+                v.quantize()
+        self.dfs([], None, callback, None)
+
     def is_training(self) -> bool:
         if not hasattr(self, "is_train"):
             self.is_train = True

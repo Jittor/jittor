@@ -368,7 +368,7 @@ void ConvTuner::forwardTune(FusedOp* fop) {
             } else
             if (x_id == 0) {
                 relay_conv_name = fop->flags.get(NodeFlags::_cpu) ?
-                        "mkl_conv_backward_x" : "cudnn_conv_backward_x";
+                        "mlu_conv_backward_x" : "cudnn_conv_backward_x";
                 if (!has_op(relay_conv_name))
                     continue;
                 auto height = x->shape[xformat.find("c")];
