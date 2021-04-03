@@ -158,6 +158,14 @@ jt.mkl_ops.mkl_conv(x, w, 1, 1, 2, 2).sync()
         assert n == 2
         assert list(x.keys()) == [0,1]
 
+    # def test_res2net(self):
+    #     import jittor.models
+    #     net = jittor.models.res2net50(True)
+    #     img = jt.random((2,3,224,224))
+    #     out = net(img)
+    #     print(out.shape, out.sum())
+    #     assert out.shape == [2,1000]
+
 
 if __name__ == "__main__":
     unittest.main()
