@@ -8,7 +8,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-__version__ = '1.2.2.57'
+__version__ = '1.2.2.58'
 from . import lock
 with lock.lock_scope():
     ori_int = int
@@ -59,6 +59,14 @@ def safeunpickle(path):
         from jittor.utils.misc import download_url_to_local
         download_url_to_local(path, base, compiler.ck_path, None)
         path = fname
+    if path.endswith(".pth"):
+        try:
+            dirty_fix_pytorch_runtime_error()
+            import torch
+        except:
+            raise RuntimeError("pytorch need to be installed when load pth format.")
+        model_dict = torch.load(path, map_location=torch.device('cpu'))
+        return model_dict
     with open(path, "rb") as f:
         s = f.read()
     if not s.endswith(b"HCAJSLHD"):
@@ -680,15 +688,7 @@ def display_memory_info():
 def load(path: str):
     ''' loads an object from a file.
     '''
-    if path.endswith(".pth"):
-        try:
-            dirty_fix_pytorch_runtime_error()
-            import torch
-        except:
-            raise RuntimeError("pytorch need to be installed when load pth format.")
-        model_dict = torch.load(path, map_location=torch.device('cpu'))
-    else:
-        model_dict = safeunpickle(path)
+    model_dict = safeunpickle(path)
     return model_dict
 
 def save(params_dict, path: str):
@@ -725,7 +725,7 @@ class Module:
     def __init__(self, *args, **kw):
         pass
     def execute(self, *args, **kw):
-        raise NotImplementedError
+        raise NotImplementedError("Please implement 'execute' method of "+str(type(self)))
     def __call__(self, *args, **kw):
         return self.execute(*args, **kw)
     def __repr__(self):
