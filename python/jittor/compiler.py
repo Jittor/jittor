@@ -855,6 +855,8 @@ LOG.i(f"cache_path: {cache_path}")
 with jit_utils.import_scope(import_flags):
     jit_utils.try_import_jit_utils_core()
 
+ctypes.CDLL("/usr/local/neuware/lib64/libcnrt.so",  os.RTLD_NOW | os.RTLD_GLOBAL)
+
 python_path = sys.executable
 # something python do not return the correct sys executable
 # this will happend when multiple python version installed
@@ -875,7 +877,8 @@ if "cc_flags" in os.environ:
 link_flags = " -lstdc++ -ldl -shared "
 core_link_flags = ""
 opt_flags = ""
-kernel_opt_flags = os.environ.get("kernel_flags", "") + opt_flags + " -fopenmp "
+# kernel_opt_flags = os.environ.get("kernel_flags", "") + opt_flags + " -fopenmp "
+kernel_opt_flags = os.environ.get("kernel_flags", "") + opt_flags
 
 if ' -O' not in cc_flags:
     opt_flags += " -O2 "
@@ -903,7 +906,11 @@ make_cache_dir(ck_path)
 
 # build cache_compile
 cc_flags += f" -I{jittor_path}/src "
+# cc_flags += " --bang-mlu-arch=mtp_270 "
 cc_flags += pybind_include
+cc_flags += " -I/usr/local/neuware/include "
+# cc_flags += " -lcnrt -L/usr/local/neuware/lib64 -Wl,-rpath,/usr/local/neuware/lib64:/usr/local/neuware/lib "
+cc_flags += " -lcnrt -lcnml -L/usr/local/neuware/lib64 "
 check_cache_compile()
 LOG.v(f"Get cache_compile: {jit_utils.cc}")
 

@@ -315,7 +315,8 @@ inline JK& operator<<(JK& jk, const _CS_G<0,0,0,0>& _) {
 
 
 inline JK& operator<<(JK& jk, float64 f) {
-    return jk << _CS("itof(0x") << JK::hex(ftoi(f)) << ')';
+    // return jk << _CS("itof(0x") << JK::hex(ftoi(f)) << ')';
+    return jk << "itof(0x" << JK::hex(ftoi(f)) << ')';
 }
 
 } // jittor

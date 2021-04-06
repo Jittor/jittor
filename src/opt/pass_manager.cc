@@ -32,6 +32,7 @@
 #include "opt/pass/fake_main_pass.h"
 #include "opt/pass/check_cache_pass.h"
 #include "opt/pass/mark_raw_pass.h"
+#include "opt/pass/mlu_pass.h"
 #include "misc/str_utils.h"
 
 namespace jittor {
@@ -109,13 +110,14 @@ void PassManager::run_passes() {
     run_pass<AssumeAlignedPass>();
     run_pass<ParallelPass>();
     run_pass<AtomicTunerPass>();
-    run_pass<FloatAtomicFixPass>();
+    run_pass<MLUPass>();
+    // run_pass<FloatAtomicFixPass>();
     
-    run_pass<InsertProfileLoopPass>();
+    // run_pass<InsertProfileLoopPass>();
     
-    run_pass<SolveConflictDefinePass>();
+    // run_pass<SolveConflictDefinePass>();
     
-    run_pass<FakeMainPass>();
+    // run_pass<FakeMainPass>();
 }
 
 } // jittor

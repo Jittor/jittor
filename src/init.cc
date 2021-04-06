@@ -4,6 +4,8 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include <cnrt.h>
+#include <cnml.h>
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
@@ -16,6 +18,7 @@
 #include "var.h"
 #include "op.h"
 #include "executor.h"
+#include "mlu_warper.h"
 
 namespace jittor {
 
@@ -55,6 +58,9 @@ static void init_cuda_devices() {
 #endif
 }
 
+cnrtDev_t dev;
+cnrtQueue_t queue;
+
 void init() {
     // init default_random_engine
     set_seed(time(0));
@@ -64,6 +70,11 @@ void init() {
     LOGv << "sizeof(Node)" << sizeof(Node);
     LOGv << "sizeof(Var)" << sizeof(Var);
     LOGv << "sizeof(Op)" << sizeof(Op);
+    JT_MLU_CHECK(cnrtInit(0));
+    // cnmlInit(0);
+    JT_MLU_CHECK(cnrtGetDeviceHandle(&dev, 0));
+    JT_MLU_CHECK(cnrtSetCurrentDevice(dev));
+    JT_MLU_CHECK(cnrtCreateQueue(&queue));
 }
 
 void set_seed(int seed) {

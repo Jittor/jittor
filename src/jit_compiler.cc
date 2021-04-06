@@ -14,6 +14,9 @@
 #include "utils/cache_compile.h"
 #include "utils/flags.h"
 #include "fused_op.h"
+#include <cnrt.h>
+#include <cnml.h>
+#include "mlu_warper.h"
 
 namespace jittor {
     
@@ -30,16 +33,30 @@ DEFINE_FLAG(int, rewrite_op, 1, "Rewrite source file of jit operator or not");
 namespace jit_compiler {
 
 jit_op_entry_t load_jit_lib(string name, string symbol_name="jit_entry") {
+    LOGir << "re destroy";
+    JT_MLU_CHECK(cnrtSyncQueue(queue));
+    JT_MLU_CHECK(cnrtDestroyQueue(queue));
+    cnrtDestroy();
     LOGvv << "Opening jit lib:" << name;
     // void* handle = dlopen(name.c_str(), RTLD_NOW | RTLD_DEEPBIND | RTLD_LOCAL);
     // RTLD_DEEPBIND and openmp cause segfault
-    void* handle = dlopen(name.c_str(), RTLD_NOW | RTLD_LOCAL | RTLD_DEEPBIND);
+    // void* handle = dlopen(name.c_str(), RTLD_NOW | RTLD_GLOBAL);
+    void* handle = dlopen(name.c_str(), RTLD_NOW | RTLD_GLOBAL | RTLD_DEEPBIND);
     CHECK(handle) << "Cannot open library" << name << ":" << dlerror();
     
     //dlerror();
     auto jit_entry = (jit_op_entry_t)dlsym(handle, symbol_name.c_str());
     const char* dlsym_error = dlerror();
     CHECK(!dlsym_error) << "Loading symbol jit_entry from" << name << "failed:" << dlsym_error;
+    LOGir << "re init";
+    
+    // cnrtQueue_t tmp_queue;
+    // queue=*(new cnrtQueue_t);
+    JT_MLU_CHECK(cnrtInit(0));
+    // cnmlInit(0);
+    JT_MLU_CHECK(cnrtGetDeviceHandle(&dev, 0));
+    JT_MLU_CHECK(cnrtSetCurrentDevice(dev));
+    JT_MLU_CHECK(cnrtCreateQueue(&queue));
     
     return jit_entry;
 }
@@ -80,12 +97,12 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
             + nvcc_flags + extra_flags
             + " -o '" + jit_lib_path + "'";
     } else {
-        cmd = cc_path
-            + " '" + jit_src_path + "'" + other_src
+        // cmd = "/usr/local/neuware/bin/cncc -x bang --bang-mlu-arch=mtp_270 -lcnrt -Wl,-rpath,/usr/local/neuware/lib64:/usr/local/neuware/lib '" + 
+        cmd = "/usr/local/neuware/bin/cncc -x bang --bang-mlu-arch=mtp_270 -lcnrt '" + jit_src_path + "'" + other_src
             + cc_flags + extra_flags
             + " -o '" + jit_lib_path + "'";
-        cmd = python_path+" "+jittor_path+"/utils/asm_tuner.py "
-            "--cc_path=" + cmd;
+        // cmd = python_path+" "+jittor_path+"/utils/asm_tuner.py "
+        //     "--cc_path=" + cmd;
     }
     cache_compile(cmd, cache_path, jittor_path);
     auto symbol_name = get_symbol_name(jit_key);

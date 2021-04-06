@@ -9,7 +9,7 @@
 #include <pybind11/stl.h>
 
 #ifdef __clang__
-#pragma clang diagnostic ignored "-Wdefaulted-function-deleted"
+// #pragma clang diagnostic ignored "-Wdefaulted-function-deleted"
 #endif
 #ifdef __GNUC__
 #endif
