@@ -91,6 +91,9 @@ void MemoryProfiler::check() {
                 Var* var = (Var*)node;
                 if (var->mem_ptr != nullptr) {
                     vector<Stack> stacks = get_node_trace(var);
+                    if (stacks.size() == 0) {
+                        stacks.push_back(Stack());
+                    }
                     std::stringstream stream;
                     stream << var;
                     live_vars.push_back(std::make_pair(std::make_pair(stream.str(), stacks), var->size));
