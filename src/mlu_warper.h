@@ -8,12 +8,13 @@
 #include <cnrt.h>
 #include <random>
 #include "common.h"
+#include "misc/mlu_flags.h"
 
 
 namespace jittor {
 
 extern cnrtDev_t dev;
-extern cnrtQueue_t queue;
+extern cnrtQueue_t mlu_queue;
 
 template <typename T>
 void jt_mlu_check(T result, char const *const func, const char *const file,

@@ -19,6 +19,7 @@
 #include "fused_op.h"
 #include "profiler/memory_checker.h"
 #include "misc/deleter.h"
+#include "mlu_warper.h"
 
 namespace jittor {
 
@@ -194,6 +195,8 @@ void Profiler::record_and_run(
             if (use_cuda)
                 checkCudaErrors(cudaDeviceSynchronize());
             #endif
+            if (use_mlu)
+                JT_MLU_CHECK(cnrtSyncQueue(mlu_queue));
         }
         for (int64_t i=0; i<rerun; i++) {
             auto start = std::chrono::high_resolution_clock::now();
@@ -202,6 +205,8 @@ void Profiler::record_and_run(
             if (use_cuda)
                 checkCudaErrors(cudaDeviceSynchronize());
             #endif
+            if (use_mlu)
+                JT_MLU_CHECK(cnrtSyncQueue(mlu_queue));
             auto finish = std::chrono::high_resolution_clock::now();
             auto total_ns =  (int64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(finish-start).count();
             // 24ns function call overhead

@@ -18,6 +18,7 @@
 #include "opt/pass_manager.h"
 #include "opt/expr.h"
 #include "ops/op_register.h"
+#include "misc/mlu_flags.h"
 
 #include <algorithm>
 #include <cstring>
@@ -301,7 +302,7 @@ void ConvTuner::forwardTune(FusedOp* fop) {
             // mkl doesn't support "cdab" format
             if (yformat == "cdab") continue;
             // cuda doesn't support "iohw" format
-            if (fop->flags.get(NodeFlags::_cuda) && wformat == "iohw") continue;
+            if (fop->flags.get(NodeFlags::_cuda) && wformat == "iohw" && !use_mlu) continue;
             if (xoi.failed) continue;
             std::stringstream ss;
             // i@zh*stride+i@zwh+padding
@@ -359,6 +360,9 @@ void ConvTuner::forwardTune(FusedOp* fop) {
             if (y_id == 0) {
                 relay_conv_name = fop->flags.get(NodeFlags::_cpu) ?
                     "mlu_conv" : "cudnn_conv";
+                if (use_mlu)
+                    relay_conv_name = "mlu_conv";
+                LOGir << "relay_conv_name" << relay_conv_name;
                 if (!has_op(relay_conv_name))
                     continue;
                 auto make_conv = get_op_info(relay_conv_name)

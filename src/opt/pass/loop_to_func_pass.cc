@@ -8,6 +8,7 @@
 #include "var.h"
 #include "opt/pass_manager.h"
 #include "opt/pass/loop_to_func_pass.h"
+#include "misc/mlu_flags.h"
 
 namespace jittor {
 
@@ -16,7 +17,7 @@ DECLARE_FLAG(string, cc_type);
 void LoopToFuncPass::run() {
     auto choice = op->get_loop_option("parallel");
     bool is_cuda = op->flags.get(NodeFlags::_cuda);
-    is_cuda = true;
+    is_cuda = use_mlu;
     if (is_cuda) choice=1;
     if (cc_type=="clang") choice=1;
     if (!choice) return;

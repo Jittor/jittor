@@ -59,7 +59,7 @@ static void init_cuda_devices() {
 }
 
 cnrtDev_t dev;
-cnrtQueue_t queue;
+cnrtQueue_t mlu_queue;
 
 void init() {
     // init default_random_engine
@@ -74,7 +74,7 @@ void init() {
     // cnmlInit(0);
     JT_MLU_CHECK(cnrtGetDeviceHandle(&dev, 0));
     JT_MLU_CHECK(cnrtSetCurrentDevice(dev));
-    JT_MLU_CHECK(cnrtCreateQueue(&queue));
+    JT_MLU_CHECK(cnrtCreateQueue(&mlu_queue));
 }
 
 void set_seed(int seed) {

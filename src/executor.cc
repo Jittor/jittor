@@ -15,6 +15,8 @@
 #include "mem/allocator/cuda_dual_allocator.h"
 #include "event_queue.h"
 #endif
+#include <cnrt.h>
+#include "mem/allocator/mlu_device_allocator.h"
 #include "misc/cuda_flags.h"
 #include "executor.h"
 #include "var.h"
@@ -101,6 +103,7 @@ void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, i
 
 void Executor::run_sync(vector<Var*> vars, bool device_sync) {
     auto allocator = get_allocator();
+    // LOGir << "get_allocator" << allocator->is_mlu();
     auto temp_allocator = get_allocator(true);
     this->allocator = allocator;
     this->temp_allocator = temp_allocator;
@@ -410,9 +413,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
     // running
     SetupFreeBuffer setup_free_buffer;
     vector<Var*> outputs_bk;
-    #ifdef HAS_CUDA
     int sync_times = 0;
-    #endif
     auto& jkl = jk;
     for (uint rid=0; rid<queue.size(); rid++) {
         int root = queue[rid];
@@ -438,6 +439,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         LOGvvv << "Run" << op << "inputs:" << op->inputs() << "outputs:" << op->outputs();
         op->do_prepare(jkl);
         bool is_cuda = op->flags.get(NodeFlags::_cuda);
+        LOGir << "is_cuda" << is_cuda;
         #ifdef HAS_CUDA
         if (!is_cuda) {
             if (last_is_cuda) {
@@ -459,6 +461,27 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
             }
         }
         #endif
+        if (use_mlu) {
+            if (!is_cuda) {
+                if (last_is_cuda) {
+                    // if prev op in gpu and this op in cpu
+                    //  mlu sync
+                    JT_MLU_CHECK(cnrtSyncQueue(mlu_queue));
+                    sync_times++;
+                }
+                for (Var* v : op->inputs()) {
+                    migrate_mlu_to_cpu(v, allocator);
+                }
+                for (auto* var : op->outputs()) {
+                    LOGir << "!is_cuda";
+                    LOGir << op;
+                    var->allocator->free(var->mem_ptr, var->size, var->allocation);
+                    var->mem_ptr = var->allocator = nullptr;
+                    var->allocation = 0;
+                    var->alloc(cpu_allocator);
+                }
+            }
+        }
         #ifdef NODE_MEMCHECK
         if (is_fused_op) {
             for (auto& vi : fused_op.vars)
@@ -479,9 +502,18 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
             }
         }
         #endif
+        // migrate to mlu
+        if (PREDICT_BRANCH_NOT_TAKEN((!is_cuda && use_mlu))) {
+            LOGir << "PREDICT_BRANCH_NOT_TAKEN";
+            for (Var* v : op->outputs()) {
+                migrate_cpu_to_mlu(v, allocator);
+            }
+        }
         // record trace data
         if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var>=2)) {
             trace_data.record_execution(op, is_fused_op, jkl);
+            if (use_mlu)
+                JT_MLU_CHECK(cnrtSyncQueue(mlu_queue));
             #ifdef HAS_CUDA
             if (use_cuda)
                 checkCudaErrors(cudaDeviceSynchronize());
@@ -535,6 +567,13 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
     for (Var* v : vars) ASSERT(v->mem_ptr);
     // clean fetcher free buffer
     fetcher_to_free.clear();
+
+    if (device_sync && use_mlu) {
+        last_is_cuda = false;
+        sync_times++;
+        JT_MLU_CHECK(cnrtSyncQueue(mlu_queue));
+    }
+    LOGir << "after run sync";
     #ifdef HAS_CUDA
     if (device_sync && use_cuda) {
         last_is_cuda = false;

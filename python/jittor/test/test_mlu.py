@@ -56,13 +56,17 @@ def jtBatchnorm(x):
 
 class TestMLU(unittest.TestCase):
     # def test_add(self):
+    #     jt.flags.use_mlu=True
     #     jt.profiler.start(0, 1)
     #     a = np.random.randn(10, 1).astype(np.float32)
     #     aj = jt.array(a)
     #     b = np.random.randn(10, 1).astype(np.float32)
     #     bj = jt.array(b)
+    #     print("after array")
     #     c = a+b
     #     cj = aj+bj
+    #     # jt.sync_all(True)
+    #     print("cj", cj.numpy())
     #     assert np.allclose(cj.numpy(), c,rtol=1e-5,atol=1e-5)
     #     jt.profiler.stop()
     #     jt.profiler.report()
@@ -80,20 +84,22 @@ class TestMLU(unittest.TestCase):
     #     jt.profiler.report()
         
         
-    # def test_batchnorm(self):
-    #     jt.profiler.start(0, 1)
-    #     a = np.random.randn(16,10,224,224).astype(np.float32)
-    #     # a = np.ones([1,10,3,3]).astype(np.float32)
-    #     aj = jt.array(a)
-    #     mj = jnn.BatchNorm(10, is_train=True)
-    #     b = npBatchnorm(a)
-    #     # print("b",b)
-    #     bj = jtBatchnorm(aj)
-    #     # print("bj",bj.numpy())
-    #     jt.profiler.stop()
-    #     jt.profiler.report()
-    #     print("batchnorm error",np.max(bj.numpy()-b))
-    #     assert np.allclose(bj.numpy(), b,rtol=1e-1,atol=1e-1)
+    def test_batchnorm(self):
+        jt.flags.use_mlu=True
+        jt.profiler.start(1, 0)
+        a = np.random.randn(16,10,224,224).astype(np.float32)
+        # a = np.ones([1,10,3,3]).astype(np.float32)
+        aj = jt.array(a)
+        mj = jnn.BatchNorm(10, is_train=True)
+        b = npBatchnorm(a)
+        # print("b",b)
+        bj = jtBatchnorm(aj)
+        # print("bj",bj.numpy())
+        bj.numpy()
+        jt.profiler.stop()
+        jt.profiler.report()
+        print("batchnorm error",np.max(bj.numpy()-b))
+        assert np.allclose(bj.numpy(), b,rtol=1e-1,atol=1e-1)
 
     # def test_conv(self):
     #     jt.profiler.start(0, 1)
@@ -108,27 +114,29 @@ class TestMLU(unittest.TestCase):
     #     jt.profiler.stop()
     #     jt.profiler.report()
 
-    def test_resnet(self):
-        na = np.random.randn(1,3,224,224).astype(np.float32)
-        model = resnet.Resnet18()
-        model.eval()
+    # def test_resnet(self):
+    #     jt.flags.use_mlu=True
+    #     na = np.random.randn(1,3,224,224).astype(np.float32)
+    #     model = resnet.Resnet18()
+    #     model.eval()
         
-        a = jt.array(na)
-        b = model(a)
-        print("resnet result", b.shape,b.numpy())
-        jt.sync_all(True)
+    #     a = jt.array(na)
+    #     b = model(a)
+    #     jt.sync_all(True)
+    #     # print("resnet result", b.shape,b.numpy())
 
-        print("time start")
-        # jt.profiler.start(0, 1)
-        time_start=time.time()
-        # a = np.random.randn(1,3,224,224).astype(np.float32)
-        a = jt.array(na)
-        b = model(a)
-        print("resnet result", b.shape,b.numpy())
-        time_end=time.time()
-        print('time cost',time_end-time_start,'s')
-        # jt.profiler.stop()
-        # jt.profiler.report()
+    #     print("time start")
+    #     jt.profiler.start(0, 0)
+    #     time_start=time.time()
+    #     # a = np.random.randn(1,3,224,224).astype(np.float32)
+    #     a = jt.array(na)
+    #     b = model(a)
+    #     b.numpy()
+    #     # print("resnet result", b.shape,b.numpy())
+    #     time_end=time.time()  
+    #     print('time cost',time_end-time_start,'s')
+    #     jt.profiler.stop()
+    #     jt.profiler.report()
 
         
 if __name__ == "__main__":

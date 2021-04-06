@@ -5,6 +5,8 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include <sstream>
+#include <cnrt.h>
+#include "mlu_warper.h"
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
@@ -140,10 +142,13 @@ ArrayArgs VarHolder::fetch_sync() {
     #ifdef HAS_CUDA
     migrate_to_cpu(var, exe.allocator);
     #endif
+    if (var->allocator->is_mlu())
+        migrate_mlu_to_cpu(var, exe.allocator);
     return {var->mem_ptr, var->shape, var->dtype()};
 }
 
 ItemData VarHolder::item() {
+    LOGir << "item";
     sync();
     CHECK(var->num==1) << "Item var size should be 1, but got" << var->num;
     ItemData data;
@@ -155,7 +160,10 @@ ItemData VarHolder::item() {
         checkCudaErrors(cudaMemcpy(&data.data, var->mem_ptr, dsize, cudaMemcpyDeviceToHost));
     } else
     #endif
-    {
+    if (var->allocator->is_mlu()) {
+        migrate_mlu_to_cpu(var, exe.allocator);
+        JT_MLU_CHECK(cnrtMemcpy(&data.data, var->mem_ptr, dsize, CNRT_MEM_TRANS_DIR_DEV2HOST));
+    } else {
         std::memcpy(&data.data, var->mem_ptr, dsize);
     }
     return data;
@@ -194,6 +202,8 @@ vector<ArrayArgs> fetch_sync(const vector<VarHolder*>& vh) {
         #ifdef HAS_CUDA
         migrate_to_cpu(vh[i]->var, exe.allocator);
         #endif
+        if (vh[i]->var->allocator->is_mlu())
+            migrate_mlu_to_cpu(vh[i]->var, exe.allocator);
         ret[i].ptr = vh[i]->var->mem_ptr;
         ret[i].shape = vh[i]->var->shape;
         ret[i].dtype = vh[i]->var->dtype();

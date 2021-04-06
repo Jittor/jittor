@@ -73,6 +73,7 @@ bool Var::alloc(Allocator* allocator) {
     }
     mem_ptr = allocator->alloc(size, allocation);
     this->allocator = allocator;
+    LOGir << "alloc" << this << size << allocator->name() << allocator->is_mlu();
     return mem_ptr;
 }
 

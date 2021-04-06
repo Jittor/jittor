@@ -17,6 +17,7 @@
 #include <cnrt.h>
 #include <cnml.h>
 #include "mlu_warper.h"
+#include "misc/cuda_flags.h"
 
 namespace jittor {
     
@@ -34,8 +35,8 @@ namespace jit_compiler {
 
 jit_op_entry_t load_jit_lib(string name, string symbol_name="jit_entry") {
     LOGir << "re destroy";
-    JT_MLU_CHECK(cnrtSyncQueue(queue));
-    JT_MLU_CHECK(cnrtDestroyQueue(queue));
+    JT_MLU_CHECK(cnrtSyncQueue(mlu_queue));
+    JT_MLU_CHECK(cnrtDestroyQueue(mlu_queue));
     cnrtDestroy();
     LOGvv << "Opening jit lib:" << name;
     // void* handle = dlopen(name.c_str(), RTLD_NOW | RTLD_DEEPBIND | RTLD_LOCAL);
@@ -51,12 +52,12 @@ jit_op_entry_t load_jit_lib(string name, string symbol_name="jit_entry") {
     LOGir << "re init";
     
     // cnrtQueue_t tmp_queue;
-    // queue=*(new cnrtQueue_t);
+    // mlu_queue=*(new cnrtQueue_t);
     JT_MLU_CHECK(cnrtInit(0));
     // cnmlInit(0);
     JT_MLU_CHECK(cnrtGetDeviceHandle(&dev, 0));
     JT_MLU_CHECK(cnrtSetCurrentDevice(dev));
-    JT_MLU_CHECK(cnrtCreateQueue(&queue));
+    JT_MLU_CHECK(cnrtCreateQueue(&mlu_queue));
     
     return jit_entry;
 }
@@ -91,7 +92,7 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
     if (rewrite_op || !file_exist(jit_src_path))
         write(jit_src_path, src);
     string cmd;
-    if (is_cuda_op) {
+    if (is_cuda_op and (not use_mlu)) {
         cmd = nvcc_path 
             + " '" + jit_src_path + "'" + other_src
             + nvcc_flags + extra_flags

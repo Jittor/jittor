@@ -17,7 +17,7 @@
 #include "./cnrt.h"
 #include "mlu_warper.h"
 #include <chrono>
-
+#define FILTER_DATA_FP32 1
 using namespace std;
 
 namespace jittor {
@@ -71,27 +71,24 @@ void MluConvOp::infer_shape() {
     set_shape(y, "abcd", yformat, yn, yc, yh, yw);
 }
 
-static const char* short_type(Var* x) {
-    if (x->is_float()) {
-        if (x->dsize()==4) return "f32";
-        if (x->dsize()==8) return "f64";
-        if (x->dsize()==2) return "f16";
-        return "f8";
-    } else {
-        if (x->dsize()==4) return "s32";
-        if (x->dsize()==8) return "s64";
-        if (x->dsize()==2) return "s16";
-        return "s8";
-    }
-}
+// static const char* short_type(Var* x) {
+//     if (x->is_float()) {
+//         if (x->dsize()==4) return "f32";
+//         if (x->dsize()==8) return "f64";
+//         if (x->dsize()==2) return "f16";
+//         return "f8";
+//     } else {
+//         if (x->dsize()==4) return "s32";
+//         if (x->dsize()==8) return "s64";
+//         if (x->dsize()==2) return "s16";
+//         return "s8";
+//     }
+// }
 
 void MluConvOp::jit_prepare(JK& jk) {
-    jk << _CS("[Txd:") << x->dtype();
-    jk << _CS("][Tyd:") << y->dtype();
-    jk << _CS("][Twd:") << w->dtype();
-    jk << _CS("][Tx:") << short_type(x);
-    jk << _CS("][Tw:") << short_type(w);
-    jk << _CS("][Ty:") << short_type(y);
+    jk << _CS("[Tx:") << x->dtype();
+    jk << _CS("][Ty:") << y->dtype();
+    jk << _CS("][Tw:") << w->dtype();
     jk << _CS("][XFORMAT:") << xformat;
     jk << _CS("][WFORMAT:") << wformat;
     jk << _CS("][YFORMAT:") << yformat;
@@ -120,21 +117,26 @@ void MluConvOp::jit_run() {
     */
 
     // count input, filter, bias, output nums
-    int input_count = ni * hi * wi * ci;
+    // int input_count = ni * hi * wi * ci;
     int filter_count = co * kh * kw * cw;
-    int output_count = no * ho * wo * co;
+    // int output_count = no * ho * wo * co;
     // printf("%d %d %d %d\n", ni, hi, wi, ci);
     // printf("%d %d %d %d\n", co, kh, kw, cw);
     // printf("%d %d %d %d\n", no, ho, wo, co);
     // printf("%d %d %d %d %d %d\n", strideh, stridew, dilationh, dilationw, paddingh * 2, paddingw * 2);
 
-    float *input_cpu_data = (float*)x->mem_ptr;
-    float *filter_cpu_data = (float*)w->mem_ptr;
-    float *output_cpu_data = (float*)y->mem_ptr;
+    cnrtSyncQueue(mlu_queue);
+
+    Tx *input_cpu_data = (Tx*)x->mem_ptr;
+    Tw *filter_cpu_data = (Tw *)malloc(filter_count * sizeof(Tw));
+    Ty *output_cpu_data = (Ty*)y->mem_ptr;
+
+    cnrtMemcpy(filter_cpu_data, (Tw*)w->mem_ptr,  filter_count * sizeof(Tw),
+              CNRT_MEM_TRANS_DIR_DEV2HOST);
 
     // prepare buffer to store the converted data after calling cnrt-cast function
-    int16_t *input_cpu_ptr = (int16_t *)malloc(input_count * sizeof(int16_t));
-    int16_t *output_cpu_ptr = (int16_t *)malloc(output_count * sizeof(int16_t));
+    // int16_t *input_cpu_ptr = (int16_t *)malloc(input_count * sizeof(int16_t));
+    // int16_t *output_cpu_ptr = (int16_t *)malloc(output_count * sizeof(int16_t));
   #ifdef FILTER_DATA_FP32
     float *filter_cpu_ptr = (float *)malloc(filter_count * sizeof(float));
   #else
@@ -142,7 +144,7 @@ void MluConvOp::jit_run() {
   #endif
 
     // converts data type for mlu computing
-    cnrtCastDataType(input_cpu_data, CNRT_FLOAT32, input_cpu_ptr, CNRT_FLOAT16, input_count, NULL);
+    // cnrtCastDataType(input_cpu_data, CNRT_FLOAT32, input_cpu_ptr, CNRT_FLOAT16, input_count, NULL);
     // u should set value depending op the data or your own needs
     int filter_position = -6;
     float filter_scale = 1, filter_offset = 0;
@@ -231,57 +233,57 @@ void MluConvOp::jit_run() {
     cnmlCompileBaseOp_V2(conv_op);
 
     // mlu buffer ptr
-    void *input_mlu_ptr = NULL;
-    void *output_mlu_ptr = NULL;
+    void *input_mlu_ptr = input_cpu_data;
+    void *output_mlu_ptr = output_cpu_data;
 
     // malloc cnml tensor
-    cnrtMalloc(&input_mlu_ptr, input_count * sizeof(int16_t));
-    cnrtMalloc(&output_mlu_ptr, output_count * sizeof(int16_t));
+    // cnrtMalloc(&input_mlu_ptr, input_count * sizeof(int16_t));
+    // cnrtMalloc(&output_mlu_ptr, output_count * sizeof(int16_t));
     // copy input to cnml buffer
-    cnrtMemcpy(input_mlu_ptr, input_cpu_ptr, input_count * sizeof(int16_t),
-              CNRT_MEM_TRANS_DIR_HOST2DEV);
+    // cnrtMemcpy(input_mlu_ptr, input_cpu_ptr, input_count * sizeof(int16_t),
+    //           CNRT_MEM_TRANS_DIR_HOST2DEV);
 
     // compute on mlu
     // set cnrt queue
     // cnrtQueue_t queue;
     // cnrtCreateQueue(&queue);
 
-    if (0) {
-      int operations = co * ho * wo * (2 * ci * kw * kh - 1);
-      int n = 1000;
-      for (int i=0; i<100; i++) {
-          cnmlComputeConvOpForward_V4(conv_op, NULL, input_mlu_ptr, NULL, output_mlu_ptr, queue, NULL);
-      }
-      JT_MLU_CHECK(cnrtSyncQueue(queue));
-      auto start = std::chrono::high_resolution_clock::now();
-      for (int i=0; i<n; i++) {
-          cnmlComputeConvOpForward_V4(conv_op, NULL, input_mlu_ptr, NULL, output_mlu_ptr, queue, NULL);
-      }
-      JT_MLU_CHECK(cnrtSyncQueue(queue));
-      auto finish = std::chrono::high_resolution_clock::now();
-      auto total_ns =  (int64_t)std::chrono::duration_cast<std::chrono::microseconds>(finish-start).count() / 1000. / 1000.;
-      cout << "FLOPS: " << 1.*no*operations*n/total_ns << " || Operations: " << operations << " || total_ns: " << total_ns << endl;
-    }
+    // if (0) {
+    //   int operations = co * ho * wo * (2 * ci * kw * kh - 1);
+    //   int n = 1000;
+    //   for (int i=0; i<100; i++) {
+    //       cnmlComputeConvOpForward_V4(conv_op, NULL, input_mlu_ptr, NULL, output_mlu_ptr, mlu_queue, NULL);
+    //   }
+    //   JT_MLU_CHECK(cnrtSyncQueue(mlu_queue));
+    //   auto start = std::chrono::high_resolution_clock::now();
+    //   for (int i=0; i<n; i++) {
+    //       cnmlComputeConvOpForward_V4(conv_op, NULL, input_mlu_ptr, NULL, output_mlu_ptr, mlu_queue, NULL);
+    //   }
+    //   JT_MLU_CHECK(cnrtSyncQueue(mlu_queue));
+    //   auto finish = std::chrono::high_resolution_clock::now();
+    //   auto total_ns =  (int64_t)std::chrono::duration_cast<std::chrono::microseconds>(finish-start).count() / 1000. / 1000.;
+    //   cout << "FLOPS: " << 1.*no*operations*n/total_ns << " || Operations: " << operations << " || total_ns: " << total_ns << endl;
+    // }
 
     // compute conv op on MLU
     if (groups > 1) {
-      cnmlComputeConvGroupOpForward_V4(conv_op, NULL, input_mlu_ptr, NULL, output_mlu_ptr, queue, NULL);
+      cnmlComputeConvGroupOpForward_V4(conv_op, NULL, input_mlu_ptr, NULL, output_mlu_ptr, mlu_queue, NULL);
     }
     else {
-      cnmlComputeConvOpForward_V4(conv_op, NULL, input_mlu_ptr, NULL, output_mlu_ptr, queue, NULL);
+      cnmlComputeConvOpForward_V4(conv_op, NULL, input_mlu_ptr, NULL, output_mlu_ptr, mlu_queue, NULL);
     }
 
     // wait for computing task over
-    cnrtSyncQueue(queue);
+    // cnrtSyncQueue(mlu_queue);
     // end of queue life cycle
-    // cnrtDestroyQueue(queue);
+    // cnrtDestroyQueue(mlu_queue);
 
     // copy output to cpu
-    cnrtMemcpy(output_cpu_ptr, output_mlu_ptr, output_count * sizeof(int16_t),
-              CNRT_MEM_TRANS_DIR_DEV2HOST);
+    // cnrtMemcpy(output_cpu_ptr, output_mlu_ptr, output_count * sizeof(int16_t),
+    //           CNRT_MEM_TRANS_DIR_DEV2HOST);
     
     // cast datatype to float
-    cnrtCastDataType(output_cpu_ptr, CNRT_FLOAT16, output_cpu_data, CNRT_FLOAT32, output_count, NULL);
+    // cnrtCastDataType(output_cpu_ptr, CNRT_FLOAT16, output_cpu_data, CNRT_FLOAT32, output_count, NULL);
 
     // dump mlu result to file mlu_output
     // printf("dumping mlu result to file mlu_output...\n");
@@ -293,8 +295,8 @@ void MluConvOp::jit_run() {
     cnmlDestroyBaseOp(&conv_op);
 
     // delete cnml buffer
-    cnrtFree(input_mlu_ptr);
-    cnrtFree(output_mlu_ptr);
+    // cnrtFree(input_mlu_ptr);
+    // cnrtFree(output_mlu_ptr);
 
   #ifdef FILTER_DATA_FP32
     // destory filter compute quant-param

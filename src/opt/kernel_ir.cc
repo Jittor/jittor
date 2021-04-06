@@ -6,6 +6,7 @@
 // ***************************************************************
 #include <algorithm>
 #include "opt/kernel_ir.h"
+#include "misc/mlu_flags.h"
 
 namespace jittor {
 
@@ -1026,10 +1027,10 @@ void KernelIR::remove_intermediate(const unordered_set<string>& names) {
 }
 
 
-void KernelIR::split_loop(int i, int j) {
-    if (type=="loop" && check_attr("loop_id", S(i))) {
-        auto sj = S(j);
-        auto si = S(i);
+void KernelIR::split_loop(string i, string j) {
+    if (type=="loop" && check_attr("loop_id", i)) {
+        auto sj = j;
+        auto si = i;
         auto& dtype = get_attr("dtype");
         auto& rvalue2 = get_attr("rvalue2");
         auto& lvalue = get_attr("lvalue");
@@ -1038,7 +1039,8 @@ void KernelIR::split_loop(int i, int j) {
         rvalue2 = "stride" + si;
         // change lvalue++ -> lvalue+=rvalue2
         ASSERT(inner.size()>=3);
-        ASSERT(lvalue == "id"+si);
+        LOGir << "lvalue" << lvalue;
+        // ASSERT(lvalue == "id"+si);
         inner[2]->attrs["code"] = lvalue+"+="+rvalue2+";";
         push_back("for ("+dtype+" id"+sj+"=0; id"+sj+"<range"+sj+"; id"+sj+"++) {}");
         auto& sloop = children.back();
@@ -1047,17 +1049,24 @@ void KernelIR::split_loop(int i, int j) {
             push_back(dtype+" range"+sj+" = "+S(stride)+";", &inner);
         else {
             ASSERT(range != -1 && stride != -1) << range << stride << si;
-            push_back(dtype+" range"+sj+" = ::min(range"+si+"-id"+si+", stride"+si+");", &inner);
+            if (use_mlu)
+                push_back(dtype+" range"+sj+" = std::min(range"+si+"-"+lvalue+", stride"+si+");", &inner);
+            else
+                push_back(dtype+" range"+sj+" = ::min(range"+si+"-"+lvalue+", stride"+si+");", &inner);
         }
         sloop->attrs["loop_id"] = sj;
         sloop->attrs["split_id"] = si;
         sloop->insert(0, c);
-        sloop->replace({{"id"+si, "(id"+si+"+id"+sj+")"}}, true);
+        sloop->replace({{lvalue, "("+lvalue+"+id"+sj+")"}}, true);
         return;
     }
     for_each([&](unique_ptr<KernelIR>& c) {
         c->split_loop(i,j);
     });
+}
+
+void KernelIR::split_loop(int i, int j) {
+    split_loop(S(i), S(j));
 }
 
 void KernelIR::resplit() {

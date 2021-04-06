@@ -19,6 +19,7 @@
 #include "var.h"
 #include "ops/op_register.h"
 #include "var_holder.h"
+#include "mem/allocator/mlu_device_allocator.h"
 
 namespace jittor {
 
@@ -109,6 +110,10 @@ ArrayOp::ArrayOp(PyObject* obj) {
         set_type(OpType::element);
     }
     void* host_ptr = nullptr;
+    if (use_mlu) {
+        flags.set(NodeFlags::_cpu, 0);
+        flags.set(NodeFlags::_cuda, 1);
+    }
     #ifdef HAS_CUDA
     if (use_cuda) {
         flags.set(NodeFlags::_cpu, 0);

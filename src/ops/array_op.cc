@@ -16,6 +16,8 @@
 #include "ops/array_op.h"
 #include "misc/cuda_flags.h"
 #include "mem/allocator.h"
+#include "mem/allocator/mlu_device_allocator.h"
+#include <cnrt.h>
 
 namespace jittor {
 
@@ -54,8 +56,13 @@ ArrayOp::ArrayOp(ArrayArgs&& args) {
         output->flags.set(NodeFlags::_force_fuse);
         set_type(OpType::element);
     }
+    if (use_mlu) {
+        flags.set(NodeFlags::_cpu, 0);
+        flags.set(NodeFlags::_cuda, 1);
+    }
     #ifdef HAS_CUDA
     if (use_cuda) {
+        LOGir << use_cuda;
         flags.set(NodeFlags::_cpu, 0);
         flags.set(NodeFlags::_cuda, 1);
         if (!output->flags.get(NodeFlags::_force_fuse)) {
@@ -73,6 +80,7 @@ ArrayOp::ArrayOp(ArrayArgs&& args) {
     // TODO: args.buffer too many copy
     new (&allocation) Allocation(cpu_allocator, output->size);
     std::memcpy(allocation.ptr, args.ptr, output->size);
+    LOGir << output;
 }
 
 void ArrayOp::jit_prepare(JK& jk) {
@@ -103,8 +111,13 @@ void ArrayOp::run() {
         allocation.allocator = &delay_free;
     }
     #endif
-    // free prev allocation and move into it
     auto o = output;
+    if (use_mlu) {
+        LOGir << "ArrayOp run" << o;
+        JT_MLU_CHECK(cnrtMemcpy(o->mem_ptr, allocation.ptr, o->size, CNRT_MEM_TRANS_DIR_HOST2DEV));
+        return;
+    }
+    // free prev allocation and move into it
     o->allocator->free(o->mem_ptr, o->size, o->allocation);
     o->mem_ptr = allocation.ptr;
     allocation.ptr = nullptr;

@@ -13,10 +13,12 @@
 #include "mem/allocator/cuda_device_allocator.h"
 #include "mem/allocator/cuda_dual_allocator.h"
 #endif
+#include "mem/allocator/mlu_device_allocator.h"
 #include "mem/allocator/stat_allocator.h"
 #include "mem/allocator/sfrl_allocator.h"
 #include "mem/allocator/nfef_allocator.h"
 #include "mem/allocator/temp_allocator.h"
+#include "var.h"
 
 namespace jittor {
 
@@ -61,6 +63,10 @@ Allocator* get_allocator(bool temp_allocator) {
         }
     }
 #endif
+    if (use_mlu) {
+        LOGir << "Using mlu_device_allocator";
+        allocator = &mlu_device_allocator;
+    }
     if (!allocator) {
         LOGvv << "Using aligned_allocator";
         allocator = &aligned_allocator;
@@ -92,6 +98,29 @@ void gc_all() {
     for (auto& kv : allocators) kv.second->gc();
 }
 
+void migrate_mlu_to_cpu(Var* var, Allocator* allocator) {
+    LOGir << "migrate_mlu_to_cpu" << var << var->allocator->name();
+    Allocation a(cpu_allocator, var->size);
+    JT_MLU_CHECK(cnrtMemcpy(a.ptr, var->mem_ptr, var->size, CNRT_MEM_TRANS_DIR_DEV2HOST));
+    var->allocator->free(var->mem_ptr, var->size, var->allocation);
+    var->mem_ptr = a.ptr;
+    var->allocation = a.allocation;
+    var->allocator = a.allocator;
+    a.ptr = nullptr;
+}
+
+
+void migrate_cpu_to_mlu(Var* var, Allocator* allocator) {
+    LOGir << "migrate_cpu_to_mlu" << var;
+    Allocation a(allocator, var->size);
+    LOGir << a.ptr << var->size;
+    JT_MLU_CHECK(cnrtMemcpy(a.ptr, var->mem_ptr, var->size, CNRT_MEM_TRANS_DIR_HOST2DEV));
+    var->allocator->free(var->mem_ptr, var->size, var->allocation);
+    var->mem_ptr = a.ptr;
+    var->allocation = a.allocation;
+    var->allocator = a.allocator;
+    a.ptr = nullptr;
+}
 
 #ifdef HAS_CUDA
 

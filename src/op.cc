@@ -14,6 +14,7 @@
 #include "mem/allocator.h"
 #include "misc/cuda_flags.h"
 #include "pybind/py_var_tracer.h"
+#include "misc/mlu_flags.h"
 
 namespace jittor {
 
@@ -118,7 +119,7 @@ void Op::do_jit_prepare(JK& jk) {
         bool has_cuda = flags.get(NodeFlags::_cuda);
         bool has_cpu = flags.get(NodeFlags::_cpu);
         CHECK(has_cuda || has_cpu);
-        if (has_cuda && has_cpu && !use_cuda)
+        if (has_cuda && has_cpu && !use_mlu)
             flags.set(NodeFlags::_cuda, 0);
     } else {
         // check use int64_t as index_t if array is too big
@@ -126,7 +127,7 @@ void Op::do_jit_prepare(JK& jk) {
         bool use_int64_t = false;
         // TODO: fused op do not have inputs,
         //   check use_cuda_op from outputs may not be enough
-        bool use_cuda_op = use_cuda;
+        bool use_cuda_op = use_mlu;
         for (Var* var : inputs()) {
             if (var->mem_ptr) {
                 /* jit key don't include here, because 
@@ -134,7 +135,7 @@ void Op::do_jit_prepare(JK& jk) {
                 jk << JK::key << "alloc_i" << JK::hex1(in_id)
                     << JK::hex1(var->allocator->flags()) << JK::end;
                 */
-                use_cuda_op &= var->allocator->is_cuda();
+                use_cuda_op &= var->allocator->is_mlu();
             }
             if (var->num >= std::numeric_limits<int32_t>::max())
                 use_int64_t = true;
@@ -146,7 +147,7 @@ void Op::do_jit_prepare(JK& jk) {
                 jk << JK::key << "alloc_o" << JK::hex1(in_id)
                     << JK::hex1(var->allocator->flags()) << JK::end;
                 */
-                use_cuda_op &= var->allocator->is_cuda();
+                use_cuda_op &= var->allocator->is_mlu();
             }
             if (var->num >= std::numeric_limits<int32_t>::max())
                 use_int64_t = true;
@@ -154,12 +155,12 @@ void Op::do_jit_prepare(JK& jk) {
         }
         jk << _CS("[JIT:1]");
         if (use_cuda_op && flags.get(NodeFlags::_cuda)) {
-            jk << _CS("[JIT_cuda:1]");
+            jk << _CS("[JIT_cpu:1]");
             flags.set(NodeFlags::_cpu, 0);
             // TODO: 64bit index in CUDA
             use_int64_t = false;
         } else {
-            if (use_cuda==2) {
+            if (use_mlu==2) {
                 if (flags.get(NodeFlags::_cuda))
                     LOGf << "Op" << name() >> "'s vars are not allocated in cuda";
                 else

@@ -37,6 +37,8 @@ class Pool(Module):
             h = (H+self.padding*2-self.kernel_size + self.stride - 1)//self.stride+1
             w = (W+self.padding*2-self.kernel_size + self.stride - 1)//self.stride+1
             use_code_op = self.op in ['maximum', 'minimum', 'mean']
+        if jt.flags.use_mlu:
+            use_code_op = False
 
         if use_code_op:
             if self.op == 'mean':

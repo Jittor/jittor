@@ -187,6 +187,7 @@ struct KernelIR {
     //     T range{j} = min(stride{i}, range{i}-id{i});
     //     for (T id{j}; id{j}<range{j}; id{j}++)
     //         stmt( (id{i}+id{j}) )
+    void split_loop(string i, string j);
     void split_loop(int i, int j);
 
     // get const number of definition by name
