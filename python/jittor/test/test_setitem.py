@@ -149,26 +149,58 @@ class TestSetitem(unittest.TestCase):
         assert (a[0].numpy() == [-1,2]).all(), a[0].numpy()
         assert (a[1].numpy() == [3,-2]).all(), a[1].numpy()
 
-    # def test_scatter(self):
-    #     src = jt.arange(1, 11).reshape((2, 5))
-    #     index = jt.array([[0, 1, 2, 0]])
-    #     print(index.shape, src.shape)
-    #     x = jt.zeros((3, 5), dtype=src.dtype).scatter_(0, index, src)
-    #     print(x)
+    def test_scatter(self):
+        src = jt.arange(1, 11).reshape((2, 5))
+        index = jt.array([[0, 1, 2, 0]])
+        x = jt.zeros((3, 5), dtype=src.dtype).scatter_(0, index, src)
+        assert (x.data == 
+            [[1, 0, 0, 4, 0],
+            [0, 2, 0, 0, 0],
+            [0, 0, 3, 0, 0]]).all()
+        index = jt.array([[0, 1, 2], [0, 1, 4]])
+        x = jt.zeros((3, 5), dtype=src.dtype).scatter_(1, index, src)
+        assert (x.data ==
+            [[1, 2, 3, 0, 0],
+            [6, 7, 0, 0, 8],
+            [0, 0, 0, 0, 0]]).all()
+        x = jt.full((2, 4), 2.).scatter_(1, jt.array([[2], [3]]),
+               jt.array(1.23), reduce='multiply')
+        assert np.allclose(x.data, 
+            [[2.0000, 2.0000, 2.4600, 2.0000],
+            [2.0000, 2.0000, 2.0000, 2.4600]]), x
+        x = jt.full((2, 4), 2.).scatter_(1, jt.array([[2], [3]]),
+               jt.array(1.23), reduce='add')
+        assert np.allclose(x.data,
+            [[2.0000, 2.0000, 3.2300, 2.0000],
+            [2.0000, 2.0000, 2.0000, 3.2300]])
+
+    def test_gather(self):
+        t = jt.array([[1, 2], [3, 4]])
+        data = t.gather(1, jt.array([[0, 0], [1, 0]])).data
+        assert (data == [[ 1,  1], [ 4,  3]]).all()
+        data = t.gather(0, jt.array([[0, 0], [1, 0]])).data
+        assert (data == [[ 1,  2], [ 3,  2]]).all()
+
+    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @jt.flag_scope(use_cuda=1)
+    def test_scatter_cuda(self):
+        self.test_scatter()
+
+    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @jt.flag_scope(use_cuda=1)
+    def test_gather_cuda(self):
+        self.test_gather()
+
+    def test_setitem_bool(self):
+        a = jt.array([1,2,3,4])
+        b = jt.array([True,False,True,False])
+        a[b] = jt.array([-1,-2])
+        assert (a.data == [-1,2,-2,4]).all()
         
+    def test_slice_none(self):
+        a = jt.array([1,2])
+        assert a[None,:,None,None,...,None].shape == (1,2,1,1,1)
 
-# def scatter(x, dim, index, src, reduce='void'):
-#     shape = index.shape
-#     indexes = [ jt.index(shape, i) for i in range(dim) ]
-#     indexes.append(index)
-#     print(indexes)
-#     return x.setitem(tuple(indexes), src, reduce)
-
-# def scatter_(x, dim, index, src, reduce='void'):
-#     return x.assign(x.scatter(dim, index, src, reduce))
-
-# jt.Var.scatter = scatter
-# jt.Var.scatter_ = scatter_
 
 if __name__ == "__main__":
     unittest.main()

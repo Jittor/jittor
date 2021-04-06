@@ -13,11 +13,8 @@
 #include <string.h>
 #include <iostream>
 #include <sstream>
-#include "./cnml.h"
-#include "./cnrt.h"
-#include "mlu_warper.h"
 #include <chrono>
-#define FILTER_DATA_FP32 1
+
 using namespace std;
 
 namespace jittor {
@@ -53,7 +50,7 @@ static inline void set_shape(Var* x, const char* f, const string& format, int a,
 MluConvOp::MluConvOp(Var* x, Var* w, int strideh, int stridew, int paddingh, int paddingw, int dilationh, int dilationw, int groups, string xformat, string wformat, string yformat)
     : x(x), w(w), strideh(strideh), stridew(stridew), paddingh(paddingh), paddingw(paddingw), dilationh(dilationh), dilationw(dilationw), groups(groups),
       xformat(move(xformat)), wformat(move(wformat)), yformat(move(yformat)) {
-    y = create_output(nullptr, dtype_infer(x->ns, w->ns));
+    y = create_output(nullptr, ns_float32);
     if (!this->yformat.size())
         this->yformat = this->xformat;
 }
@@ -71,248 +68,176 @@ void MluConvOp::infer_shape() {
     set_shape(y, "abcd", yformat, yn, yc, yh, yw);
 }
 
-// static const char* short_type(Var* x) {
-//     if (x->is_float()) {
-//         if (x->dsize()==4) return "f32";
-//         if (x->dsize()==8) return "f64";
-//         if (x->dsize()==2) return "f16";
-//         return "f8";
-//     } else {
-//         if (x->dsize()==4) return "s32";
-//         if (x->dsize()==8) return "s64";
-//         if (x->dsize()==2) return "s16";
-//         return "s8";
-//     }
-// }
+static const char* short_type(Var* x) {
+    if (x->is_float()) {
+        if (x->dsize()==4) return "f32";
+        if (x->dsize()==8) return "f64";
+        if (x->dsize()==2) return "f16";
+        return "f8";
+    } else {
+        if (x->dsize()==4) return "s32";
+        if (x->dsize()==8) return "s64";
+        if (x->dsize()==2) return "s16";
+        return "s8";
+    }
+}
 
 void MluConvOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype();
-    jk << _CS("][Ty:") << y->dtype();
-    jk << _CS("][Tw:") << w->dtype();
+    jk << _CS("[Txd:") << x->dtype();
+    jk << _CS("][Tyd:") << y->dtype();
+    jk << _CS("][Twd:") << w->dtype();
+    jk << _CS("][Tx:") << short_type(x);
+    jk << _CS("][Tw:") << short_type(w);
+    jk << _CS("][Ty:") << short_type(y);
     jk << _CS("][XFORMAT:") << xformat;
     jk << _CS("][WFORMAT:") << wformat;
     jk << _CS("][YFORMAT:") << yformat;
     jk << ']';
 }
 
+unordered_map<string, MluConv_t> mlu_conv_cache;
+
 #else // JIT
 #ifdef JIT_cpu
 #pragma clang diagnostic ignored "-Wtautological-compare"
+
+extern unordered_map<string, MluConv_t> mlu_conv_cache;
+
 void MluConvOp::jit_run() {
-    // cnrtInit(0);
-    // cnmlInit(0);
-    const int coreNum = 4;
-    const int dimNum = 4;
+    // auto start = std::chrono::high_resolution_clock::now();
+    if (mlu_conv_cache.size() == 0) {
+      cnrtInit(0);
+      cnmlInit(0);
+    }
 
     int ni, ci, hi, wi, no, co, cw, ho, wo, kh, kw;
     get_shape(x, "abcd", xformat, ni, ci, hi, wi);
     get_shape(w, "oihw", wformat, co, cw, kh, kw);
     get_shape(y, "abcd", yformat, no, co, ho, wo);
 
-    /*
-    CNN计算量
-    FLOPs (乘法) =  co*  H * W * (ci * kw * kh)   其中H， W代表输出特征的宽和高
-    FLOPs (加法(w)) =  co*  H * W * (ci * kw * kh - 1)   其中H， W代表输出特征的宽和高
-    FLOPs (加法(b)) =  co*  H * W * (1)   其中H， W代表输出特征的宽和高
-    */
+    int input_count = ni * hi * wi * ci;
+    int filter_count = co * cw * kh * kw;
+    int output_count = no * ho * wo * co;
 
-    // count input, filter, bias, output nums
-    // int input_count = ni * hi * wi * ci;
-    int filter_count = co * kh * kw * cw;
-    // int output_count = no * ho * wo * co;
-    // printf("%d %d %d %d\n", ni, hi, wi, ci);
-    // printf("%d %d %d %d\n", co, kh, kw, cw);
-    // printf("%d %d %d %d\n", no, ho, wo, co);
-    // printf("%d %d %d %d %d %d\n", strideh, stridew, dilationh, dilationw, paddingh * 2, paddingw * 2);
+    int8_t* input_cpu_ptr = (int8_t*)x->mem_ptr;
+    int8_t* filter_cpu_ptr = (int8_t*)w->mem_ptr;
+    float *output_cpu_data = (float*)y->mem_ptr;
+    int16_t* output_cpu_ptr = (int16_t *)malloc(output_count * sizeof(int16_t));
 
-    cnrtSyncQueue(mlu_queue);
+    void *input_mlu_ptr_ygw = NULL;
+    void *filter_mlu_ptr_ygw = NULL;
+    cnrtMalloc(&input_mlu_ptr_ygw, input_count * sizeof(int8_t));
+    cnrtMalloc(&filter_mlu_ptr_ygw, filter_count * sizeof(int8_t));
+    cnrtMemcpy(input_mlu_ptr_ygw, input_cpu_ptr, input_count * sizeof(int8_t),
+              CNRT_MEM_TRANS_DIR_HOST2DEV);
+    cnrtMemcpy(filter_mlu_ptr_ygw, filter_cpu_ptr, filter_count * sizeof(int8_t),
+              CNRT_MEM_TRANS_DIR_HOST2DEV);
 
-    Tx *input_cpu_data = (Tx*)x->mem_ptr;
-    Tw *filter_cpu_data = (Tw *)malloc(filter_count * sizeof(Tw));
-    Ty *output_cpu_data = (Ty*)y->mem_ptr;
+    const int coreNum = 16;
+    const int dimNum = 4;
+    MluConv_t mlu_conv;
 
-    cnrtMemcpy(filter_cpu_data, (Tw*)w->mem_ptr,  filter_count * sizeof(Tw),
-              CNRT_MEM_TRANS_DIR_DEV2HOST);
+    jk.clear();
+    jk << ni << "," << ci << "," << hi << "," << wi << ",";
+    jk << no << "," << co << "," << ho << "," << wo << ",";
+    jk << paddingh << paddingw << "," <<strideh <<stridew << "," << dilationh << dilationw << "," << groups << ".";
+    auto iter = mlu_conv_cache.find(jk.to_string());
 
-    // prepare buffer to store the converted data after calling cnrt-cast function
-    // int16_t *input_cpu_ptr = (int16_t *)malloc(input_count * sizeof(int16_t));
-    // int16_t *output_cpu_ptr = (int16_t *)malloc(output_count * sizeof(int16_t));
-  #ifdef FILTER_DATA_FP32
-    float *filter_cpu_ptr = (float *)malloc(filter_count * sizeof(float));
-  #else
-    int8_t *filter_cpu_ptr = (int8_t *)malloc(filter_count * sizeof(int8_t));
-  #endif
-
-    // converts data type for mlu computing
-    // cnrtCastDataType(input_cpu_data, CNRT_FLOAT32, input_cpu_ptr, CNRT_FLOAT16, input_count, NULL);
-    // u should set value depending op the data or your own needs
-    int filter_position = -6;
-    float filter_scale = 1, filter_offset = 0;
-  #ifdef FILTER_DATA_FP32
-    memcpy(filter_cpu_ptr, filter_cpu_data, filter_count * sizeof(float));
-  #else
-    // prepare filter tensor quant param for filter data
-    cnrtQuantizedParam_t filter_quant_param;
-    cnrtCreateQuantizedParam(&filter_quant_param, filter_position, filter_scale, filter_offset);
-    cnrtCastDataType(filter_cpu_data, CNRT_FLOAT32, filter_cpu_ptr, CNRT_INT8, filter_count,
-                    filter_quant_param);
-  #endif
-
-    // set tensor shapes
-    int input_shape[] = {ni, ci, hi, wi};
-    int filter_shape[] = {co, cw, kh, kw};
-    int output_shape[] = {no, co, ho, wo};
-
-    // prepare input tensor
-    cnmlTensor_t input_tensor = NULL;
-    cnmlCreateTensor_V2(&input_tensor, CNML_TENSOR);
-    cnmlSetTensorShape_V2(input_tensor, dimNum, input_shape, NULL);
-    cnmlSetTensorDataType(input_tensor, CNML_DATA_FLOAT16);
-
-    // prepare filter tensor
-    cnmlTensor_t filter_tensor = NULL;
-    cnmlCreateTensor_V2(&filter_tensor, CNML_FILTER);
-    cnmlSetTensorShape_V2(filter_tensor, dimNum, filter_shape, NULL);
-  #ifdef FILTER_DATA_FP32
-    cnmlSetTensorDataType(filter_tensor, CNML_DATA_FLOAT32);
-  #else
-    cnmlSetTensorDataType(filter_tensor, CNML_DATA_INT8);
-    // set filter tensor quant scale and position
-    cnmlSetQuantizedPosition(filter_tensor, filter_position);
-    cnmlSetQuantizedScale(filter_tensor, filter_scale);
-  #endif
-
-    // prepare output tensor
-    cnmlTensor_t output_tensor = NULL;
-    cnmlCreateTensor_V2(&output_tensor, CNML_TENSOR);
-    cnmlSetTensorShape_V2(output_tensor, dimNum, output_shape, NULL);
-    cnmlSetTensorDataType(output_tensor, CNML_DATA_FLOAT16);
-
-    // bind cpu filter to cnml const tensor
-    cnmlBindConstData_V2(filter_tensor, filter_cpu_ptr, false);
-
-    // create conv op ptr and conv_param
     cnmlBaseOp_t conv_op = NULL;
     cnmlConvOpParam_t conv_param;
-
-    // set conv op
-    cnmlCreateConvOpParam(&conv_param, strideh, stridew, dilationh, dilationw, paddingh * 2, paddingw * 2);
-    if (groups > 1) {
-      cnmlCreateConvGroupOp(&conv_op, conv_param, input_tensor, output_tensor, filter_tensor, NULL, groups);
+    cnmlTensor_t input_tensor = NULL;
+    cnmlTensor_t filter_tensor = NULL;
+    cnmlTensor_t output_tensor = NULL;
+    void *input_mlu_ptr = NULL;
+    void *output_mlu_ptr = NULL;
+    if (iter != mlu_conv_cache.end()) {
+      // LOGw << "find key";
+      mlu_conv = iter->second;
+      conv_op = mlu_conv.conv_op_cache;
+      conv_param = mlu_conv.conv_param_cache;
+      input_tensor = mlu_conv.input_tensor_cache;
+      filter_tensor = mlu_conv.filter_tensor_cache;
+      output_tensor = mlu_conv.output_tensor_cache;
+      input_mlu_ptr = mlu_conv.input_mlu_ptr_cache;
+      output_mlu_ptr = mlu_conv.output_mlu_ptr_cache;
     }
     else {
-      cnmlCreateConvOp(&conv_op, conv_param, input_tensor, output_tensor, filter_tensor, NULL);
+      // LOGw << "not find key";
+      int input_shape[] = {ni, ci, hi, wi};
+      int filter_shape[] = {co, cw, kh, kw};
+      int output_shape[] = {no, co, ho, wo};
+
+      cnmlCreateTensor_V2(&input_tensor, CNML_TENSOR);
+      cnmlSetTensorShape_V2(input_tensor, dimNum, input_shape, NULL);
+      cnmlCreateTensor_V2(&filter_tensor, CNML_FILTER);
+      cnmlSetTensorShape_V2(filter_tensor, dimNum, filter_shape, NULL);
+      cnmlCreateTensor_V2(&output_tensor, CNML_TENSOR);
+      cnmlSetTensorShape_V2(output_tensor, dimNum, output_shape, NULL);
+
+      cnmlSetTensorDataType(input_tensor, CNML_DATA_INT8);
+      cnmlSetTensorDataType(filter_tensor, CNML_DATA_INT8);
+      cnmlSetTensorDataType(output_tensor, CNML_DATA_FLOAT16);
+
+      cnmlCreateConvOpParam(&conv_param, strideh, stridew, dilationh, dilationw, paddingh * 2, paddingw * 2);
+      if (groups > 1) {
+        cnmlCreateConvGroupOp(&conv_op, conv_param, input_tensor, output_tensor, filter_tensor, NULL, groups);
+      }
+      else {
+        cnmlCreateConvOp(&conv_op, conv_param, input_tensor, output_tensor, filter_tensor, NULL);
+      }
+      cnmlSetOperationComputingLayout(conv_op, CNML_NCHW);
+      cnrtMemcpy(filter_cpu_ptr, filter_mlu_ptr_ygw, filter_count * sizeof(int8_t),
+              CNRT_MEM_TRANS_DIR_DEV2HOST);
+      cnmlBindConstData_V2(filter_tensor, filter_cpu_ptr, false);
+      
+      const cnmlCoreVersion_t coreVersion = CNML_MLU270;
+      cnmlSetBaseOpCoreVersion(conv_op, coreVersion);
+      cnmlSetBaseOpCorenum(conv_op, coreNum);
+      cnmlCompileBaseOp_V2(conv_op);
+
+      // cnrtMalloc(&input_mlu_ptr, input_count * sizeof(int8_t));
+      cnrtMalloc(&output_mlu_ptr, output_count * sizeof(int16_t));
+
+      mlu_conv.conv_op_cache = conv_op;
+      mlu_conv.conv_param_cache = conv_param;
+      mlu_conv.input_tensor_cache = input_tensor;
+      mlu_conv.filter_tensor_cache = filter_tensor;
+      mlu_conv.output_tensor_cache = output_tensor;
+      mlu_conv.input_mlu_ptr_cache = input_mlu_ptr;
+      mlu_conv.output_mlu_ptr_cache = output_mlu_ptr;
+      mlu_conv_cache[jk.to_string()] = mlu_conv;
     }
 
-    // u should set value depending op the data or your own needs
-    int input_position = -6;
-    float input_scale = 1, input_offset = 0;
-    // prepare input tensor quant param for conv op
-    cnmlQuantizedParam_t input_quant_param;
-    // create quant-param when setting computing datatype for conv op, please set offset 0 here
-    cnmlCreateQuantizedParam(&input_quant_param, input_position, input_scale, input_offset);
-    // setup conv op computing datatype
-    cnmlSetOperationComputingDataType(conv_op, input_tensor, CNML_DATA_INT8, input_quant_param);
-
-  #ifdef FILTER_DATA_FP32
-    // prepare filter tensor quant param for conv op
-    cnmlQuantizedParam_t filter_compute_quant;
-    cnmlCreateQuantizedParam(&filter_compute_quant, filter_position, filter_scale, filter_offset);
-    // setup conv op computing datatype
-    cnmlSetOperationComputingDataType(conv_op, filter_tensor, CNML_DATA_INT8, filter_compute_quant);
-  #endif
-
-    // setup conv op computing layout
-    cnmlSetOperationComputingLayout(conv_op, CNML_NCHW);
-
-    const cnmlCoreVersion_t coreVersion = CNML_MLU270;
-
-    // compile op
-    cnmlSetBaseOpCoreVersion(conv_op, coreVersion);
-    cnmlSetBaseOpCorenum(conv_op, coreNum);
-    cnmlCompileBaseOp_V2(conv_op);
-
-    // mlu buffer ptr
-    void *input_mlu_ptr = input_cpu_data;
-    void *output_mlu_ptr = output_cpu_data;
-
-    // malloc cnml tensor
-    // cnrtMalloc(&input_mlu_ptr, input_count * sizeof(int16_t));
-    // cnrtMalloc(&output_mlu_ptr, output_count * sizeof(int16_t));
-    // copy input to cnml buffer
-    // cnrtMemcpy(input_mlu_ptr, input_cpu_ptr, input_count * sizeof(int16_t),
+    // cnrtMemcpy(input_mlu_ptr, input_cpu_ptr, input_count * sizeof(int8_t),
     //           CNRT_MEM_TRANS_DIR_HOST2DEV);
 
-    // compute on mlu
-    // set cnrt queue
-    // cnrtQueue_t queue;
-    // cnrtCreateQueue(&queue);
+    cnrtQueue_t queue;
+    cnrtCreateQueue(&queue);
 
-    // if (0) {
-    //   int operations = co * ho * wo * (2 * ci * kw * kh - 1);
-    //   int n = 1000;
-    //   for (int i=0; i<100; i++) {
-    //       cnmlComputeConvOpForward_V4(conv_op, NULL, input_mlu_ptr, NULL, output_mlu_ptr, mlu_queue, NULL);
-    //   }
-    //   JT_MLU_CHECK(cnrtSyncQueue(mlu_queue));
-    //   auto start = std::chrono::high_resolution_clock::now();
-    //   for (int i=0; i<n; i++) {
-    //       cnmlComputeConvOpForward_V4(conv_op, NULL, input_mlu_ptr, NULL, output_mlu_ptr, mlu_queue, NULL);
-    //   }
-    //   JT_MLU_CHECK(cnrtSyncQueue(mlu_queue));
-    //   auto finish = std::chrono::high_resolution_clock::now();
-    //   auto total_ns =  (int64_t)std::chrono::duration_cast<std::chrono::microseconds>(finish-start).count() / 1000. / 1000.;
-    //   cout << "FLOPS: " << 1.*no*operations*n/total_ns << " || Operations: " << operations << " || total_ns: " << total_ns << endl;
-    // }
-
-    // compute conv op on MLU
     if (groups > 1) {
-      cnmlComputeConvGroupOpForward_V4(conv_op, NULL, input_mlu_ptr, NULL, output_mlu_ptr, mlu_queue, NULL);
+      cnmlComputeConvGroupOpForward_V4(conv_op, NULL, input_mlu_ptr_ygw, NULL, output_mlu_ptr, queue, NULL);
     }
     else {
-      cnmlComputeConvOpForward_V4(conv_op, NULL, input_mlu_ptr, NULL, output_mlu_ptr, mlu_queue, NULL);
+      cnmlComputeConvOpForward_V4(conv_op, NULL, input_mlu_ptr_ygw, NULL, output_mlu_ptr, queue, NULL) ;
+      CNRT_CHECK(cnrtSyncQueue(queue));
     }
 
-    // wait for computing task over
-    // cnrtSyncQueue(mlu_queue);
-    // end of queue life cycle
-    // cnrtDestroyQueue(mlu_queue);
+    cnrtSyncQueue(queue);
+    cnrtDestroyQueue(queue);
 
-    // copy output to cpu
-    // cnrtMemcpy(output_cpu_ptr, output_mlu_ptr, output_count * sizeof(int16_t),
-    //           CNRT_MEM_TRANS_DIR_DEV2HOST);
+    cnrtMemcpy(output_cpu_ptr, output_mlu_ptr, output_count * sizeof(int16_t),
+              CNRT_MEM_TRANS_DIR_DEV2HOST);
     
-    // cast datatype to float
-    // cnrtCastDataType(output_cpu_ptr, CNRT_FLOAT16, output_cpu_data, CNRT_FLOAT32, output_count, NULL);
+    cnrtCastDataType(output_cpu_ptr, CNRT_FLOAT16, output_cpu_data, CNRT_FLOAT32, output_count, NULL);
 
-    // dump mlu result to file mlu_output
-    // printf("dumping mlu result to file mlu_output...\n");
-    // cnmlDumpTensor2File_V2("mlu_output", output_tensor, output_cpu_data, false);
-    // printf("%f\n", output_cpu_data[0]);
+    /*
+    计算结果存放在output_mlu_ptr，然后copy到本地的output_cpu_ptr，output_cpu_ptr再转成float32拷贝到output_cpu_data，所以output_cpu_data应该再传回y，现在的问题可能是y和output的shape不匹配
+    */
 
-    // delete conv param, op
-    cnmlDestroyConvOpParam(&conv_param);
-    cnmlDestroyBaseOp(&conv_op);
+    // auto finish = std::chrono::high_resolution_clock::now();
+    // auto total_ns =  (int64_t)std::chrono::duration_cast<std::chrono::microseconds>(finish-start).count() / 1000. / 1000.;
+    // LOGw << total_ns;
 
-    // delete cnml buffer
-    // cnrtFree(input_mlu_ptr);
-    // cnrtFree(output_mlu_ptr);
-
-  #ifdef FILTER_DATA_FP32
-    // destory filter compute quant-param
-    cnmlDestroyQuantizedParam(&filter_compute_quant);
-  #else
-    // destroy filter cast quant-param
-    cnrtDestroyQuantizedParam(filter_quant_param);
-  #endif
-
-    // destory computing quant-param
-    cnmlDestroyQuantizedParam(&input_quant_param);
-
-    // delete cnml tensors
-    cnmlDestroyTensor(&input_tensor);
-    cnmlDestroyTensor(&filter_tensor);
-    cnmlDestroyTensor(&output_tensor);
     return;
 }
 #endif

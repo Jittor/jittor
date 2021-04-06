@@ -8,7 +8,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-__version__ = '1.2.2.34'
+__version__ = '1.2.2.40'
 from . import lock
 with lock.lock_scope():
     ori_int = int
@@ -700,7 +700,7 @@ class Module:
     def __init__(self, *args, **kw):
         pass
     def execute(self, *args, **kw):
-        pass
+        raise NotImplementedError
     def __call__(self, *args, **kw):
         return self.execute(*args, **kw)
     def __repr__(self):
@@ -976,6 +976,12 @@ class Module:
                 if id(p) in self.backup_grad_state and self.backup_grad_state[id(p)]:
                     p.start_grad()
     
+    def quantize(self):
+        def callback(parents, k, v, n):
+            if isinstance(v, nn.Conv) or isinstance(v, nn.Linear):
+                v.quantize()
+        self.dfs([], None, callback, None)
+
     def is_training(self) -> bool:
         if not hasattr(self, "is_train"):
             self.is_train = True

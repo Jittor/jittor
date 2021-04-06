@@ -387,7 +387,13 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
     set_type(OpType::element);
     ns = op;
     ASSERT(ns.is_binary());
-    z = create_output(nullptr, binary_dtype_infer(op, x, y));
+
+    if (x->dtype() == ns_int8 && y->dtype() == ns_int8) {
+        z = create_output(nullptr, ns_float32);
+    }
+    else {
+        z = create_output(nullptr, binary_dtype_infer(op, x, y));
+    }
 }
 
 VarPtr dirty_clone_broadcast(Var* v) {
