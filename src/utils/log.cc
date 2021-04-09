@@ -308,16 +308,23 @@ int system_popen(const char* cmd) {
     cmd2 += " 2>&1 ";
     FILE *ptr = popen(cmd2.c_str(), "r");
     if (!ptr) return -1;
+    int64 len=0;
     while (fgets(buf, BUFSIZ, ptr) != NULL) {
+        len += strlen(buf);
         puts(buf);
     }
-    return pclose(ptr);
+    auto ret = pclose(ptr);
+    if (len<10 && ret) {
+        // maybe overcommit
+        return -1;
+    }
+    return ret;
 }
 
 void system_with_check(const char* cmd) {
     auto ret = system_popen(cmd);
-    CHECK(ret>=0 && ret<256) << "Run cmd failed:" << cmd <<
-            "\nreturn -1. This might be an overcommit issue or out of memory."
+    CHECK(ret>=0 && ret<=256) << "Run cmd failed:" << cmd <<
+            "\nreturn ">> ret >> ". This might be an overcommit issue or out of memory."
             << "Try : sudo sysctl vm.overcommit_memory=1";
     CHECKop(ret,==,0) << "Run cmd failed:" << cmd;
 }
