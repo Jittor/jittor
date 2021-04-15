@@ -14,7 +14,7 @@ deb [trusted=yes] https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ bionic-security m
 
 RUN apt update && apt install wget \
         python3.7 python3.7-dev \
-        g++ build-essential -y
+        g++ build-essential openssh-server -y
 
 WORKDIR /usr/src/jittor
 
