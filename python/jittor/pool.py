@@ -21,7 +21,7 @@ class Pool(Module):
         assert return_indices == None
         self.kernel_size = kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size)
         self.op = op
-        self.stride = stride if stride else kernel_size
+        stride = stride if stride else kernel_size
         self.stride = stride if isinstance(stride, tuple) else (stride, stride)
         self.padding = padding if isinstance(padding, tuple) else (padding, padding)
         self.ceil_mode = ceil_mode
@@ -207,10 +207,10 @@ def avg_pool2d(x, kernel_size, stride=None, padding=0, ceil_mode=False, count_in
 
 class MaxPool2d(Module):
     def __init__(self, kernel_size, stride=None, padding=0, dilation=None, return_indices=None, ceil_mode=False):
-        self.layer = Pool(kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, return_indices=return_indices, ceil_mode=ceil_mode, op="maximum")
+        self._layer = Pool(kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, return_indices=return_indices, ceil_mode=ceil_mode, op="maximum")
     
     def execute(self, x):
-        return self.layer(x)
+        return self._layer(x)
 
 def max_pool2d(x, kernel_size, stride=None, padding=0, dilation=None, return_indices=None, ceil_mode=False):
     return MaxPool2d(kernel_size, stride, padding, dilation, return_indices, ceil_mode)(x)
