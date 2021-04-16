@@ -148,6 +148,37 @@ def setup_cub():
     setup_cuda_lib("cub", link=False, extra_flags=extra_flags)
 
 def setup_cuda_extern():
+    if os.environ.get("use_opencl","1") == "1":
+        LOG.vv("setup opencl extern.")
+        cache_path_opencl = os.path.join(cache_path,"opencl")
+        opencl_include = os.path.join(jittor_path,"extern","opencl","inc")
+        opencl_lib = os.path.join(jittor_path,"extern","opencl","lib")
+        make_cache_dir(cache_path_opencl)
+        opencl_extern_src = os.path.join(jittor_path,"extern","opencl","src")
+        from pathlib import Path
+        jit_path = os.path.join(Path.home(),".cache","jittor","master","g++","jit")
+        opencl_extern_files = [os.path.join(opencl_extern_src, name)
+            for name in os.listdir(opencl_extern_src)
+        ]
+        so_name = os.path.join(cache_path_opencl,"opencl_extern.so")
+        os.system(f"cd {jit_path} && cp {opencl_lib}/* .")
+        # compile(cc_path, cc_flags+f"-I'{opencl_include}' -lOpenCL",opencl_extern_files,so_name)
+        # output_lib = os.path.join(Path.home(),".cache","jittor","master","g++","opencl")
+        opencl_extern_op = os.path.join(jittor_path, "extern", "opencl", "ops")
+        opencl_op_files = [os.path.join(opencl_extern_op, name) for name in os.listdir(opencl_extern_op)]
+        print("compile ops ",opencl_op_files)
+        # print(output_lib)
+        opencllib = compile_custom_ops(opencl_op_files, return_module=True,extra_flags=f"-I'{opencl_include}' -I/usr/local/cuda/include -lOpenCL")
+        # opencl_ops = opencllib.ops
+    
+    '''
+    culib = compile_custom_ops(culib_src_files, return_module=True,
+        extra_flags=f" -I'{jt_cuda_include}' -I'{jt_culib_include}' {link_flags} {extra_flags} ")
+    culib_ops = culib.ops
+    globals()[lib_name+"_ops"] = culib_ops
+    globals()[lib_name] = culib
+    LOG.vv(f"Get {lib_name}_ops: "+str(dir(culib_ops)))
+    '''
     if not has_cuda: return
     LOG.vv("setup cuda extern...")
     cache_path_cuda = os.path.join(cache_path, "cuda")
