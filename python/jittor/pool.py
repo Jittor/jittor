@@ -18,7 +18,8 @@ import math
 class Pool(Module):
     def __init__(self, kernel_size, stride=None, padding=0, dilation=None, return_indices=None, ceil_mode=False, count_include_pad=True, op="maximum"):
         assert dilation == None
-        assert return_indices == None
+        assert return_indices == None or op == "maximum"
+        self.return_indices = return_indices
         self.kernel_size = kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size)
         self.op = op
         stride = stride if stride else kernel_size
@@ -48,20 +49,36 @@ class Pool(Module):
                 count += "float32 rcount = 1.0f / count;"
             else:
                 count = ""
-            forward_body = f'''{{
+            forward_body = f'''
                 int k3 = i3*{self.stride[1]}-{self.padding[1]};
                 int k2 = i2*{self.stride[0]}-{self.padding[0]};
                 int k3_ = min(k3 + {self.kernel_size[1]}, in0_shape3);
                 int k2_ = min(k2 + {self.kernel_size[0]}, in0_shape2);
                 k3 = max(0, k3);
                 k2 = max(0, k2);
-                @out(i0, i1, i2, i3) = init_{self.op}(out_type);
                 {count}
+            '''
+            if not self.return_indices:
+                forward_body += f'''
+                @out(i0, i1, i2, i3) = init_{self.op}(out_type);
                 for (int p = k2; p < k2_; ++p)
                     for (int q = k3; q < k3_; ++q)
                         @out(i0, i1, i2, i3) = {self.op}(out_type, @out(i0, i1, i2, i3), @in0(i0, i1, p, q));
-            }}'''
-            backward_body = f'''{{
+                '''
+            else:
+                forward_body += f'''
+                auto out_value = init_{self.op}(out_type);
+                int out_index = -1;
+                for (int p = k2; p < k2_; ++p)
+                    for (int q = k3; q < k3_; ++q) 
+                        if (out_value < @in0(i0, i1, p, q)) {{
+                            out_value = @in0(i0, i1, p, q);
+                            out_index = (p - k2) * {self.kernel_size[0]} + (q - k3);
+                        }}
+                @out(i0, i1, i2, i3) = out_value;
+                @out1(i0, i1, i2, i3) = out_index;
+                '''
+            backward_body = f'''
                 int k3 = i3*{self.stride[1]}-{self.padding[1]};
                 int k2 = i2*{self.stride[0]}-{self.padding[0]};
                 int k3_ = min(k3 + {self.kernel_size[1]}, in0_shape3);
@@ -79,8 +96,14 @@ class Pool(Module):
                             bo=0;
                         }}"""}
                     }}
-            }}'''
-            out = jt.code([N,C,h,w], x.dtype, [x],
+            '''
+            if self.return_indices:
+                return_shapes = [[N,C,h,w]] * 2
+                return_dtypes = [x.dtype, 'uint8']
+            else:
+                return_shapes = [N,C,h,w]
+                return_dtypes = x.dtype
+            out = jt.code(return_shapes, return_dtypes, [x],
                 cuda_header="""
                     #include <ops/binary_op_defs.h>
                     #include <misc/cuda_limits.h>
@@ -96,7 +119,7 @@ class Pool(Module):
                         int i0 = blockIdx.z;
                         for (int i3 = p3; i3 < out_shape3; i3 += s3)
                         for (int i2 = p2; i2 < out_shape2; i2 += s2)
-                            {forward_body}
+                            {{ {forward_body} }}
                     }}
                     int tx = min(1024, out_shape3);
                     int ty = min(1024 / tx, out_shape2);
@@ -118,7 +141,7 @@ class Pool(Module):
                         int i0 = blockIdx.z;
                         for (int i3 = p3; i3 < pout_shape3; i3 += s3)
                             for (int i2 = p2; i2 < pout_shape2; i2 += s2)
-                                {backward_body}
+                                {{ {backward_body} }}
                     }}
                     cudaMemsetAsync(out_p, 0, out->size);
                     int tx = min(1024, pout_shape3);
@@ -137,7 +160,7 @@ class Pool(Module):
                     for (int i1=0; i1<out_shape1; i1++)
                     for (int i2=0; i2<out_shape2; i2++)
                     for (int i3=0; i3<out_shape3; i3++)
-                        {forward_body}
+                        {{ {forward_body} }}
                 ''',
                 cpu_grad_src = [f'''
                     using namespace std;
@@ -148,7 +171,7 @@ class Pool(Module):
                     for (int i1=0; i1<pout_shape1; i1++)
                     for (int i2=0; i2<pout_shape2; i2++) 
                     for (int i3=0; i3<pout_shape3; i3++)
-                        {backward_body}
+                        {{ {backward_body} }}
                 '''])
             return out
         else:
@@ -214,3 +237,52 @@ class MaxPool2d(Module):
 
 def max_pool2d(x, kernel_size, stride=None, padding=0, dilation=None, return_indices=None, ceil_mode=False):
     return MaxPool2d(kernel_size, stride, padding, dilation, return_indices, ceil_mode)(x)
+
+class MaxUnpool2d(Module):
+    def __init__(self, kernel_size, stride=None):
+        ''' MaxUnpool2d is the invert version of MaxPool2d with indices.
+        It takes the output index of MaxPool2d as input.
+        The element will be zero if it is not the max pooled value.
+
+        Example::
+
+        >>> import jittor as jt
+        >>> from jittor import nn
+
+        >>> pool = nn.MaxPool2d(2, stride=2, return_indices=True)
+        >>> unpool = nn.MaxUnpool2d(2, stride=2)
+        >>> input = jt.array([[[[ 1.,  2,  3,  4,0],
+                                [ 5,  6,  7,  8,0],
+                                [ 9, 10, 11, 12,0],
+                                [13, 14, 15, 16,0],
+                                [0,  0,  0,  0, 0]]]])
+        >>> output, indices = pool(input)
+        >>> unpool(output, indices, output_size=input.shape)
+        jt.array([[[[   0.,  0.,   0.,   0.,   0.],
+                    [   0.,  6.,   0.,   8.,   0.],
+                    [   0.,  0.,   0.,   0.,   0.],
+                    [   0., 14.,   0.,  16.,   0.],
+                    [   0.,  0.,   0.,   0.,   0.]]]])
+        '''
+        if isinstance(kernel_size, int):
+            kernel_size = (kernel_size, kernel_size)
+        if isinstance(stride, int):
+            stride = (stride, stride)
+        if stride is None: stride = kernel_size
+        assert stride == kernel_size, "Different stride and kernel is not supported yet."
+        self.kernel_size = kernel_size
+
+    def execute(self, x, id, output_size=None):
+        b, c, ph, pw = x.shape
+        kh, kw = self.kernel_size
+        if output_size:
+            h, w = output_size[-2:]
+        else:
+            h, w = ph * kh, pw * kw
+        x = x.reindex(shape=[b, c, h, w], 
+            indexes=['i0', 'i1', f'i2/{kh}', f'i3/{kw}'],
+            extras=[id], 
+            overflow_conditions=[
+                f'((i2%{kh})*{kw}+i3%{kw}) != @e0(i0,i1,i2/{kh},i3/{kw})'],
+            overflow_value=0)
+        return x
