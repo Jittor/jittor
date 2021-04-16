@@ -166,7 +166,7 @@ inline JK& operator<<(JK& jk, int64 c) {
     return jk << JK::hex(c);
 }
 
-inline JK& operator<<(JK& jk, long long c) {
+inline JK& operator<<(JK& jk, long long int c) {
     return jk << (int64)c;
 }
 

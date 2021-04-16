@@ -31,7 +31,7 @@ rand_hooked = False
 
 def hook_pt_rand(*shape, device=None):
     import torch
-    if isinstance(shape, tuple) and len(shape)==1 and isinstance(shape[0], torch.Size):
+    if isinstance(shape, tuple) and len(shape)==1 and isinstance(shape[0], (torch.Size, tuple, list)):
         shape = tuple(shape[0])
     np.random.seed(0)
     res = torch.from_numpy(np.random.rand(*tuple(shape)).astype("float32"))
@@ -41,9 +41,10 @@ def hook_pt_rand(*shape, device=None):
 
 def hook_pt_randn(*shape, device=None):
     import torch
-    if isinstance(shape, tuple) and len(shape)==1 and isinstance(shape[0], torch.Size):
+    if isinstance(shape, tuple) and len(shape)==1 and isinstance(shape[0], (torch.Size, tuple, list)):
         shape = tuple(shape[0])
     np.random.seed(0)
+    print(shape)
     res = torch.from_numpy(np.random.randn(*tuple(shape)).astype("float32"))
     if device is not None:
         return res.to(device)
@@ -269,6 +270,14 @@ class Hook:
 
         names = []
         for name, module in mod.named_modules():
+            ns = name.split('.')
+            skip = 0
+            for n in ns:
+                if n.startswith('_'):
+                    skip = 1
+            if skip:
+                LOG.i("skip", name)
+                continue
             name = mod_name + name
             module.__ad_mod_name__ = name
             names.append(name)

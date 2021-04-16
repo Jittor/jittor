@@ -261,6 +261,9 @@ void expand_macro(const string& macro, const vector<string>& args, string& new_s
 string precompile(unordered_map<string,string> defs, string src, unordered_map<string, string>& macros) {
     string new_src;
     new_src.reserve(src.size());
+    // dirty fix windows \r\n change line
+    for (auto& c : src)
+        if (c == '\r') c = '\n';
     for (size_t i=0; i<src.size(); i++) {
         try{
         if (src[i] == '/' && (i+1<src.size() && src[i+1] == '/')) {
