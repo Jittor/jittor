@@ -143,6 +143,39 @@ class TestArgPoolOp(unittest.TestCase):
         for i in range(10):
             check(jt_model, torch_model, [1,1,300,300], True)
 
+    def test_index_pool(self):
+        pool = jt.nn.Pool(2, return_indices=True)
+        a = jt.randn([10,3,100,100])
+        b, idx = pool(a)
+        idx.sync()
+
+    def test_index_pool2(self):
+        pool = jt.nn.Pool(2, return_indices=True)
+        a = jt.array([1,0,0,1,
+                      0,0,0,0,
+                      0,0,0,0,
+                      1,0,0,1]).reshape((1,1,4,4))
+        b, idx = pool(a)
+        assert (idx.data.reshape((4,)) == [0,1,2,3]).all()
+
+    def test_unpool(self):
+        from jittor import nn
+        pool = nn.MaxPool2d(2, stride=2, return_indices=True)
+        unpool = nn.MaxUnpool2d(2, stride=2)
+        input = jt.array([[[[ 1.,  2,  3,  4,0],
+                                [ 5,  6,  7,  8,0],
+                                [ 9, 10, 11, 12,0],
+                                [13, 14, 15, 16,0],
+                                [0,  0,  0,  0, 0]]]])
+        output, indices = pool(input)
+        out = unpool(output, indices, output_size=input.shape)
+        assert (out == jt.array([[[[   0.,  0.,   0.,   0.,   0.],
+                    [   0.,  6.,   0.,   8.,   0.],
+                    [   0.,  0.,   0.,   0.,   0.],
+                    [   0., 14.,   0.,  16.,   0.],
+                    [   0.,  0.,   0.,   0.,   0.]]]])).all()
+        
+
     @unittest.skipIf(not jt.compiler.has_cuda, "No cuda found")
     @jt.flag_scope(use_cuda=1)
     def test_cuda_avg_pool(self):
