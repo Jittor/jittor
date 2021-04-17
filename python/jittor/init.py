@@ -92,14 +92,12 @@ def calculate_std(var,mode,nonlinearity,param=0.01):
 
 def kaiming_uniform_(var, a=0, mode='fan_in', nonlinearity='leaky_relu'):
     std = calculate_std(var,mode,nonlinearity,a)
-    bound = math.sqrt(3.0) * std 
-    with jt.no_grad():
-        return uniform_(var,-bound, bound)
+    bound = math.sqrt(3.0) * std
+    return uniform_(var,-bound, bound)
 
 def kaiming_normal_(var, a=0, mode='fan_in', nonlinearity='leaky_relu'):
     std = calculate_std(var,mode,nonlinearity,a)
-    with jt.no_grad():
-        return gauss_(var,0, std)
+    return gauss_(var,0, std)
 
 
 #TODO: bound = gain * math.sqrt(6.0/fan) ??
