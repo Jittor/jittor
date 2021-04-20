@@ -41,7 +41,7 @@ def resize(img, size, interpolation=Image.BILINEAR):
     Args::
 
         [in] img(Image.Image): Input image.
-        [in] size: resize size.
+        [in] size: resize size. [h, w]
         [in] interpolation(int): type of resize. default: PIL.Image.BILINEAR
 
     Example::
@@ -49,7 +49,14 @@ def resize(img, size, interpolation=Image.BILINEAR):
         img = Image.open(...)
         img_ = transform.resize(img, (100, 100))
     '''
-    return img.resize(size[::-1], interpolation)
+    if (isinstance(size, tuple)):
+        return img.resize(size[::-1], interpolation)
+    else:
+        w, h = img.size
+        if (h > w):
+            return img.resize((size, int(round(size * h / w))), interpolation)
+        else:
+            return img.resize((int(round(size * w / h)), size), interpolation)
 
 def crop_and_resize(img, top, left, height, width, size, interpolation=Image.BILINEAR):
     '''
@@ -62,7 +69,7 @@ def crop_and_resize(img, top, left, height, width, size, interpolation=Image.BIL
         [in] left(int): the left boundary of the cropping box.
         [in] height(int): height of the cropping box.
         [in] width(int): width of the cropping box.
-        [in] size: resize size.
+        [in] size: resize size. [h, w]
         [in] interpolation(int): type of resize. default: PIL.Image.BILINEAR
 
     Example::
@@ -98,7 +105,7 @@ class RandomCropAndResize:
 
     Args::
 
-        [in] size(int or tuple): width and height of the output image.
+        [in] size(int or tuple): [height, width] of the output image.
         [in] scale(tuple): range of scale ratio of the area.
         [in] ratio(tuple): range of aspect ratio.
         [in] interpolation: type of resize. default: PIL.Image.BILINEAR.
@@ -109,9 +116,9 @@ class RandomCropAndResize:
         img_ = transform(img)
     """
     def __init__(self, size, scale:tuple=(0.08, 1.0), ratio:tuple=(3. / 4., 4. / 3.), interpolation=Image.BILINEAR):
-        if isinstance(size, int):
-            size = (size, size)
-        assert isinstance(size, tuple)
+        assert isinstance(size, (int, tuple))
+        if (isinstance(size, tuple)):
+            assert len(size) == 2
         assert scale[0] <= scale[1] and ratio[0] <= ratio[1]
 
         self.size = size
@@ -359,7 +366,7 @@ class Resize:
 
     Args::
 
-    [in] size(int or tuple): Size want to resize.
+    [in] size(int or tuple): Size want to resize. [h, w]
     [in] mode(int): type of resize.
 
     Example::
@@ -368,13 +375,13 @@ class Resize:
         img_ = transform(img)
     '''
     def __init__(self, size, mode=Image.BILINEAR):
-        if isinstance(size, int):
-            size = (size, size)
-        assert isinstance(size, tuple)
+        assert isinstance(size, (int, tuple))
+        if (isinstance(size, tuple)):
+            assert len(size) == 2
         self.size = size
         self.mode = mode
     def __call__(self, img:Image.Image):
-        return img.resize(self.size, self.mode)
+        return resize(img, self.size, self.mode)
 
 class Gray:
     '''
