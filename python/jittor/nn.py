@@ -531,8 +531,8 @@ class Conv(Module):
         assert out_channels % groups == 0, 'out_channels must be divisible by groups'
 
         # self.weight = init.relu_invariant_gauss([out_channels, in_channels//groups, Kh, Kw], dtype="float", mode="fan_out")
-        # self.weight = init.invariant_uniform([out_channels, in_channels//groups, Kh, Kw], dtype="float")
-        self.weight = jt.ones([out_channels, in_channels//groups, Kh, Kw], dtype='int8')
+        self.weight = init.invariant_uniform([out_channels, in_channels//groups, Kh, Kw], dtype="float")
+        # self.weight = jt.ones([out_channels, in_channels//groups, Kh, Kw], dtype='int8')
         if bias:
             fan=1
             for i in self.weight.shape[1:]:
@@ -562,8 +562,8 @@ class Conv(Module):
             quan_x = (x * self.input_scale).int8()
             quan_weight = (self.weight * self.weight_scale).int8()
         else:
-            quan_x = x
-            quan_weight = self.weight
+            quan_x = x.int8()
+            quan_weight = self.weight.int8()
         if self.is_depthwise_conv and jt.flags.use_cuda:
             y = self.depthwise_conv(x, self.weight)
         elif self.groups == 1:
