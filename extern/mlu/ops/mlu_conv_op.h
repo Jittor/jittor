@@ -32,8 +32,7 @@ struct MluConv_t {
     cnmlTensor_t input_tensor_cache;
     cnmlTensor_t filter_tensor_cache;
     cnmlTensor_t output_tensor_cache;
-    void *input_mlu_ptr_cache;
-    void *output_mlu_ptr_cache;
+    int8_t* filter_cpu_ptr_cache;
 };
 
 } // jittor

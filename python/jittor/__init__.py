@@ -22,7 +22,7 @@ with lock.lock_scope():
     from jittor_core import *
     from jittor_core.ops import *
     from . import compile_extern
-    from .compile_extern import mkl_ops, mpi, mpi_ops, in_mpi, rank
+    from .compile_extern import mkl_ops, mlu_ops, mpi, mpi_ops, in_mpi, rank
     if core.get_device_count() == 0:
         has_cuda = compile_extern.has_cuda = compiler.has_cuda = False
     if has_cuda:
@@ -1167,7 +1167,7 @@ def jittor_exit():
 atexit.register(jittor_exit)
 
 def vtos(v):
-    return f"jt.Var({v.data}, dtype={v.dtype})"
+    return f"jt.Var({v.numpy()}, dtype={v.dtype})"
 
 Var.__str__ = vtos
 Var.__repr__ = vtos

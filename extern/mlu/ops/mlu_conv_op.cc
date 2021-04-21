@@ -14,6 +14,7 @@
 #include <iostream>
 #include <sstream>
 #include <chrono>
+#include "mlu_warper.h"
 
 using namespace std;
 
@@ -104,37 +105,31 @@ unordered_map<string, MluConv_t> mlu_conv_cache;
 extern unordered_map<string, MluConv_t> mlu_conv_cache;
 
 void MluConvOp::jit_run() {
-    // auto start = std::chrono::high_resolution_clock::now();
-    if (mlu_conv_cache.size() == 0) {
-      cnrtInit(0);
-      cnmlInit(0);
-    }
-
+    auto start = std::chrono::high_resolution_clock::now();
     int ni, ci, hi, wi, no, co, cw, ho, wo, kh, kw;
     get_shape(x, "abcd", xformat, ni, ci, hi, wi);
     get_shape(w, "oihw", wformat, co, cw, kh, kw);
     get_shape(y, "abcd", yformat, no, co, ho, wo);
 
-    int input_count = ni * hi * wi * ci;
     int filter_count = co * cw * kh * kw;
-    int output_count = no * ho * wo * co;
-
-    int8_t* input_cpu_ptr = (int8_t*)x->mem_ptr;
-    int8_t* filter_cpu_ptr = (int8_t*)w->mem_ptr;
-    float *output_cpu_data = (float*)y->mem_ptr;
-    int16_t* output_cpu_ptr = (int16_t *)malloc(output_count * sizeof(int16_t));
-
-    void *input_mlu_ptr_ygw = NULL;
-    void *filter_mlu_ptr_ygw = NULL;
-    cnrtMalloc(&input_mlu_ptr_ygw, input_count * sizeof(int8_t));
-    cnrtMalloc(&filter_mlu_ptr_ygw, filter_count * sizeof(int8_t));
-    cnrtMemcpy(input_mlu_ptr_ygw, input_cpu_ptr, input_count * sizeof(int8_t),
-              CNRT_MEM_TRANS_DIR_HOST2DEV);
-    cnrtMemcpy(filter_mlu_ptr_ygw, filter_cpu_ptr, filter_count * sizeof(int8_t),
-              CNRT_MEM_TRANS_DIR_HOST2DEV);
-
-    const int coreNum = 16;
-    const int dimNum = 4;
+    
+    int8_t* input_mlu_ptr = (int8_t*)x->mem_ptr;
+    int8_t* filter_mlu_ptr = (int8_t*)w->mem_ptr;
+    float *output_mlu_ptr = (float*)y->mem_ptr;
+    // int8_t* input_cpu_ptr = (int8_t *)malloc(input_count * sizeof(int8_t));
+    // cnrtMemcpy(input_cpu_ptr, input_mlu_ptr, input_count * sizeof(int8_t),
+    //           CNRT_MEM_TRANS_DIR_DEV2HOST);
+    // LOGw << (int)input_cpu_ptr[0];
+    // LOGw << (int)input_cpu_ptr[1];
+    // LOGw << (int)input_cpu_ptr[2];
+    // LOGw << (int)input_cpu_ptr[3];
+    // LOGw << (int)input_cpu_ptr[4];
+    // LOGw << (int)input_cpu_ptr[5];
+    // LOGw << (int)input_cpu_ptr[6];
+    // LOGw << (int)input_cpu_ptr[7];
+    // LOGw << (int)input_cpu_ptr[8];
+    // int16_t* output_cpu_ptr = (int16_t *)malloc(output_count * sizeof(int16_t));
+    
     MluConv_t mlu_conv;
 
     jk.clear();
@@ -148,8 +143,7 @@ void MluConvOp::jit_run() {
     cnmlTensor_t input_tensor = NULL;
     cnmlTensor_t filter_tensor = NULL;
     cnmlTensor_t output_tensor = NULL;
-    void *input_mlu_ptr = NULL;
-    void *output_mlu_ptr = NULL;
+    int8_t* filter_cpu_ptr = NULL;
     if (iter != mlu_conv_cache.end()) {
       // LOGw << "find key";
       mlu_conv = iter->second;
@@ -158,14 +152,17 @@ void MluConvOp::jit_run() {
       input_tensor = mlu_conv.input_tensor_cache;
       filter_tensor = mlu_conv.filter_tensor_cache;
       output_tensor = mlu_conv.output_tensor_cache;
-      input_mlu_ptr = mlu_conv.input_mlu_ptr_cache;
-      output_mlu_ptr = mlu_conv.output_mlu_ptr_cache;
+      filter_cpu_ptr = mlu_conv.filter_cpu_ptr_cache;
     }
     else {
       // LOGw << "not find key";
       int input_shape[] = {ni, ci, hi, wi};
       int filter_shape[] = {co, cw, kh, kw};
       int output_shape[] = {no, co, ho, wo};
+
+      const int dimNum = 4;
+
+      filter_cpu_ptr = (int8_t *)malloc(filter_count * sizeof(int8_t));
 
       cnmlCreateTensor_V2(&input_tensor, CNML_TENSOR);
       cnmlSetTensorShape_V2(input_tensor, dimNum, input_shape, NULL);
@@ -176,7 +173,7 @@ void MluConvOp::jit_run() {
 
       cnmlSetTensorDataType(input_tensor, CNML_DATA_INT8);
       cnmlSetTensorDataType(filter_tensor, CNML_DATA_INT8);
-      cnmlSetTensorDataType(output_tensor, CNML_DATA_FLOAT16);
+      cnmlSetTensorDataType(output_tensor, CNML_DATA_FLOAT32);
 
       cnmlCreateConvOpParam(&conv_param, strideh, stridew, dilationh, dilationw, paddingh * 2, paddingw * 2);
       if (groups > 1) {
@@ -186,59 +183,48 @@ void MluConvOp::jit_run() {
         cnmlCreateConvOp(&conv_op, conv_param, input_tensor, output_tensor, filter_tensor, NULL);
       }
       cnmlSetOperationComputingLayout(conv_op, CNML_NCHW);
-      cnrtMemcpy(filter_cpu_ptr, filter_mlu_ptr_ygw, filter_count * sizeof(int8_t),
+      cnrtMemcpy(filter_cpu_ptr, filter_mlu_ptr, filter_count * sizeof(int8_t),
               CNRT_MEM_TRANS_DIR_DEV2HOST);
+      // LOGw << (int)filter_cpu_ptr[0];
+      // LOGw << (int)filter_cpu_ptr[1];
+      // LOGw << (int)filter_cpu_ptr[2];
+      // LOGw << (int)filter_cpu_ptr[3];
+      // LOGw << (int)filter_cpu_ptr[4];
+      // LOGw << (int)filter_cpu_ptr[5];
+      // LOGw << (int)filter_cpu_ptr[6];
+      // LOGw << (int)filter_cpu_ptr[7];
+      // LOGw << (int)filter_cpu_ptr[8];
       cnmlBindConstData_V2(filter_tensor, filter_cpu_ptr, false);
       
-      const cnmlCoreVersion_t coreVersion = CNML_MLU270;
-      cnmlSetBaseOpCoreVersion(conv_op, coreVersion);
-      cnmlSetBaseOpCorenum(conv_op, coreNum);
+      // cnmlSetBaseOpCoreVersion(conv_op, CNML_MLU270);
+      // cnmlSetBaseOpCorenum(conv_op, 4);
       cnmlCompileBaseOp_V2(conv_op);
 
       // cnrtMalloc(&input_mlu_ptr, input_count * sizeof(int8_t));
-      cnrtMalloc(&output_mlu_ptr, output_count * sizeof(int16_t));
+      // cnrtMalloc(&output_mlu_ptr, output_count * sizeof(int16_t));
 
       mlu_conv.conv_op_cache = conv_op;
       mlu_conv.conv_param_cache = conv_param;
       mlu_conv.input_tensor_cache = input_tensor;
       mlu_conv.filter_tensor_cache = filter_tensor;
       mlu_conv.output_tensor_cache = output_tensor;
-      mlu_conv.input_mlu_ptr_cache = input_mlu_ptr;
-      mlu_conv.output_mlu_ptr_cache = output_mlu_ptr;
+      mlu_conv.filter_cpu_ptr_cache = filter_cpu_ptr;
       mlu_conv_cache[jk.to_string()] = mlu_conv;
     }
 
-    // cnrtMemcpy(input_mlu_ptr, input_cpu_ptr, input_count * sizeof(int8_t),
-    //           CNRT_MEM_TRANS_DIR_HOST2DEV);
-
-    cnrtQueue_t queue;
-    cnrtCreateQueue(&queue);
-
     if (groups > 1) {
-      cnmlComputeConvGroupOpForward_V4(conv_op, NULL, input_mlu_ptr_ygw, NULL, output_mlu_ptr, queue, NULL);
+      cnmlComputeConvGroupOpForward_V4(conv_op, NULL, input_mlu_ptr, NULL, output_mlu_ptr, mlu_queue, NULL);
     }
     else {
-      cnmlComputeConvOpForward_V4(conv_op, NULL, input_mlu_ptr_ygw, NULL, output_mlu_ptr, queue, NULL) ;
-      CNRT_CHECK(cnrtSyncQueue(queue));
+      cnmlComputeConvOpForward_V4(conv_op, NULL, input_mlu_ptr, NULL, output_mlu_ptr, mlu_queue, NULL) ;
     }
 
-    cnrtSyncQueue(queue);
-    cnrtDestroyQueue(queue);
+    JT_MLU_CHECK(cnrtSyncQueue(mlu_queue));
 
-    cnrtMemcpy(output_cpu_ptr, output_mlu_ptr, output_count * sizeof(int16_t),
-              CNRT_MEM_TRANS_DIR_DEV2HOST);
-    
-    cnrtCastDataType(output_cpu_ptr, CNRT_FLOAT16, output_cpu_data, CNRT_FLOAT32, output_count, NULL);
-
-    /*
-    计算结果存放在output_mlu_ptr，然后copy到本地的output_cpu_ptr，output_cpu_ptr再转成float32拷贝到output_cpu_data，所以output_cpu_data应该再传回y，现在的问题可能是y和output的shape不匹配
-    */
-
-    // auto finish = std::chrono::high_resolution_clock::now();
-    // auto total_ns =  (int64_t)std::chrono::duration_cast<std::chrono::microseconds>(finish-start).count() / 1000. / 1000.;
-    // LOGw << total_ns;
-
-    return;
+    auto finish = std::chrono::high_resolution_clock::now();
+    auto total_ns =  (int64_t)std::chrono::duration_cast<std::chrono::microseconds>(finish-start).count() / 1000.;
+    (void) total_ns;
+    // LOGw << total_ns << " ms";
 }
 #endif
 #endif // JIT

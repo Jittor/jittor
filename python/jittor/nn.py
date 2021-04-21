@@ -531,7 +531,8 @@ class Conv(Module):
         assert out_channels % groups == 0, 'out_channels must be divisible by groups'
 
         # self.weight = init.relu_invariant_gauss([out_channels, in_channels//groups, Kh, Kw], dtype="float", mode="fan_out")
-        self.weight = init.invariant_uniform([out_channels, in_channels//groups, Kh, Kw], dtype="float")
+        # self.weight = init.invariant_uniform([out_channels, in_channels//groups, Kh, Kw], dtype="float")
+        self.weight = jt.ones([out_channels, in_channels//groups, Kh, Kw], dtype='int8')
         if bias:
             fan=1
             for i in self.weight.shape[1:]:
@@ -547,18 +548,22 @@ class Conv(Module):
         self.weight_scale = None
     
     def quantize(self):
-        self.input_scale = jt.array([1.])
-        self.weight_scale = 127. / self.weight.abs().max()
+        self.input_scale = 1.
+        tmp = self.weight.abs().numpy()
+        self.weight_scale = 127. / tmp.max()
 
     def execute(self, x):
         is_quantized = (self.input_scale is not None and self.weight_scale is not None)
-        # print(f"is_quantized: {is_quantized}")
-        quan_x = x
-        quan_weight = self.weight
+        # quan_x = x
+        # quan_weight = self.weight
         if is_quantized:
-            self.input_scale = min(self.input_scale, 127. / x.abs().max()) if self.input_scale[0] != 1. else (127. / x.abs().max())
+            tmp = x.abs()
+            self.input_scale = min(self.input_scale, 127. / tmp.max()) if self.input_scale != 1. else (127. / tmp.max())
             quan_x = (x * self.input_scale).int8()
             quan_weight = (self.weight * self.weight_scale).int8()
+        else:
+            quan_x = x
+            quan_weight = self.weight
         if self.is_depthwise_conv and jt.flags.use_cuda:
             y = self.depthwise_conv(x, self.weight)
         elif self.groups == 1:
