@@ -52,6 +52,8 @@ MluConvOp::MluConvOp(Var* x, Var* w, int strideh, int stridew, int paddingh, int
     : x(x), w(w), strideh(strideh), stridew(stridew), paddingh(paddingh), paddingw(paddingw), dilationh(dilationh), dilationw(dilationw), groups(groups),
       xformat(move(xformat)), wformat(move(wformat)), yformat(move(yformat)) {
     y = create_output(nullptr, ns_float32);
+    flags.set(NodeFlags::_cpu, 0);
+    flags.set(NodeFlags::_cuda, 1);
     if (!this->yformat.size())
         this->yformat = this->xformat;
 }
