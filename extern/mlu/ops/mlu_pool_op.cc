@@ -99,9 +99,12 @@ void MluPoolOp::jit_prepare(JK& jk) {
     jk << ']';
 }
 
+unordered_map<string, MluPool_t> mlu_pool_cache;
+
 #else // JIT
 #ifdef JIT_cpu
 #pragma clang diagnostic ignored "-Wtautological-compare"
+extern unordered_map<string, MluPool_t> mlu_pool_cache;
 
 void MluPoolOp::jit_run() {
     const int dimNum = 4;
@@ -113,32 +116,56 @@ void MluPoolOp::jit_run() {
     float* input_mlu_ptr = (float*)x->mem_ptr;
     float *output_mlu_ptr = (float*)y->mem_ptr;
 
-    int input_shape[] = {ni, ci, hi, wi};
-    int output_shape[] = {no, co, ho, wo};
+    MluPool_t mlu_pool;
 
+    jk.clear();
+    jk << ni << "," << ci << "," << hi << "," << wi << ",";
+    jk << no << "," << co << "," << ho << "," << wo << ",";
+    auto iter = mlu_pool_cache.find(jk.to_string());
+
+    cnmlBaseOp_t pool_op;
+    cnmlPoolOpParam_t pool_param;
     cnmlTensor_t input_tensor = NULL;
     cnmlTensor_t output_tensor = NULL;
-    cnmlCreateTensor_V2(&input_tensor, CNML_TENSOR);
-    cnmlSetTensorShape_V2(input_tensor, dimNum, input_shape, NULL);
-    cnmlCreateTensor_V2(&output_tensor, CNML_TENSOR);
-    cnmlSetTensorShape_V2(output_tensor, dimNum, output_shape, NULL);
-
-    cnmlSetTensorDataType(input_tensor, CNML_DATA_FLOAT32);
-    cnmlSetTensorDataType(output_tensor, CNML_DATA_FLOAT32);
-
-    cnmlPoolOpParam_t pool_param;
-
-    if (op == ns_maximum) {
-        cnmlCreatePoolOpParam(&pool_param, kernel_size, kernel_size, stride, stride, 2 * padding, 2 * padding, dilation, dilation, CNML_POOL_MAX, CNML_POOL_KFULL, !count_include_pad);
+    if (iter != mlu_pool_cache.end()) {
+        // LOGw << "find key";
+        mlu_pool = iter->second;
+        pool_op = mlu_pool.pool_op_cache; 
+        pool_param = mlu_pool.pool_param_cache; 
+        input_tensor = mlu_pool.input_tensor_cache;
+        output_tensor = mlu_pool.output_tensor_cache;
     }
     else {
-        cnmlCreatePoolOpParam(&pool_param, kernel_size, kernel_size, stride, stride, 2 * padding, 2 * padding, dilation, dilation, CNML_POOL_AVG, CNML_POOL_KFULL, !count_include_pad);
-    }
+        // LOGw << "not find key";
+        int input_shape[] = {ni, ci, hi, wi};
+        int output_shape[] = {no, co, ho, wo};
     
-    cnmlBaseOp_t pool_op;
-    cnmlCreatePoolOp(&pool_op, pool_param, input_tensor, output_tensor);
-    cnmlSetOperationComputingLayout(pool_op, CNML_NCHW);
-    cnmlCompileBaseOp_V2(pool_op);
+        cnmlCreateTensor_V2(&input_tensor, CNML_TENSOR);
+        cnmlSetTensorShape_V2(input_tensor, dimNum, input_shape, NULL);
+        cnmlCreateTensor_V2(&output_tensor, CNML_TENSOR);
+        cnmlSetTensorShape_V2(output_tensor, dimNum, output_shape, NULL);
+
+        cnmlSetTensorDataType(input_tensor, CNML_DATA_INT8);
+        cnmlSetTensorDataType(output_tensor, CNML_DATA_INT8);
+
+        if (op == ns_maximum) {
+            cnmlCreatePoolOpParam(&pool_param, kernel_size, kernel_size, stride, stride, 2 * padding, 2 * padding, dilation, dilation, CNML_POOL_MAX, CNML_POOL_KFULL, !count_include_pad);
+        }
+        else {
+            cnmlCreatePoolOpParam(&pool_param, kernel_size, kernel_size, stride, stride, 2 * padding, 2 * padding, dilation, dilation, CNML_POOL_AVG, CNML_POOL_KFULL, !count_include_pad);
+        }
+    
+        cnmlCreatePoolOp(&pool_op, pool_param, input_tensor, output_tensor);
+        cnmlSetOperationComputingLayout(pool_op, CNML_NCHW);
+        cnmlCompileBaseOp_V2(pool_op);
+
+        mlu_pool.pool_op_cache = pool_op;
+        mlu_pool.pool_param_cache = pool_param;
+        mlu_pool.input_tensor_cache = input_tensor;
+        mlu_pool.output_tensor_cache = output_tensor;
+        mlu_pool_cache[jk.to_string()] = mlu_pool;
+    }
+
     cnmlComputePoolOpForward_V4(pool_op, NULL, input_mlu_ptr, NULL, output_mlu_ptr, mlu_queue, NULL);
     JT_MLU_CHECK(cnrtSyncQueue(mlu_queue));
     return;

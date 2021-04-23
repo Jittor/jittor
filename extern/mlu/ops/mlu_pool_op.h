@@ -27,5 +27,11 @@ struct MluPoolOp : Op {
     DECLARE_jit_run;
 };
 
+struct MluPool_t {
+    cnmlBaseOp_t pool_op_cache;
+    cnmlPoolOpParam_t pool_param_cache;
+    cnmlTensor_t input_tensor_cache;
+    cnmlTensor_t output_tensor_cache;
+};
 
 } // jittor
