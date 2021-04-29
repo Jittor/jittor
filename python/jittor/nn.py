@@ -1524,9 +1524,7 @@ class LSTM(jt.Module):
         self.batch_first = batch_first 
         self.bidirectional = bidirectional
         self.proj_size = proj_size
-
-        assert bidirectional == False, 'bidirectional is not supported now'
-        assert dropout == 0, 'dropout is not supported now'
+        self.dropout = dropout
 
         num_directions = 1 + bidirectional
         k = math.sqrt(1 / hidden_size)
@@ -1542,7 +1540,7 @@ class LSTM(jt.Module):
 
         for l in range(num_layers):
             if l == 0:
-                build_unit(f'weight_ih_l{l}', 4 * hidden_size, num_directions * input_size)
+                build_unit(f'weight_ih_l{l}', 4 * hidden_size, input_size)
             else:
                 if proj_size > 0:
                     build_unit(f'weight_ih_l{l}', 4 * hidden_size, num_directions * proj_size)
@@ -1559,12 +1557,43 @@ class LSTM(jt.Module):
                 build_unit(f'bias_ih_l{l}', 4 * hidden_size)
                 build_unit(f'bias_hh_l{l}', 4 * hidden_size)
 
+    def call_lstm_sequence(self, input, h, c, suffix):
+        if 'reverse' in suffix:
+            input = input[::-1]
+
+        output = []
+        for s in range(input.shape[0]):
+            y = matmul_transpose(input[s], getattr(self, f'weight_ih_{suffix}')) 
+            y = y + matmul_transpose(h, getattr(self, f'weight_hh_{suffix}'))
+            
+            if self.bias:
+                y = y + getattr(self, f'bias_ih_{suffix}') + getattr(self, f'bias_hh_{suffix}')
+
+            i = y[:, :self.hidden_size].sigmoid()
+            f = y[:, self.hidden_size : 2 * self.hidden_size].sigmoid()
+            g = y[:, 2 * self.hidden_size : 3 * self.hidden_size].tanh()
+            o = y[:, 3 * self.hidden_size:].sigmoid()
+            c = f * c + i * g
+            h = o * c.tanh()
+
+            if self.proj_size > 0:
+                h = matmul_transpose(h, getattr(self, f'weight_hr_{suffix}'))
+
+            output.append(h)
+
+        if 'reverse' in suffix:
+            output = output[::-1]
+        output = jt.stack(output, dim=0)
+
+        return output, h, c
+
     def execute(self, input, hx):
         if self.batch_first:
             input = input.permute(1, 0, 2)
 
+        num_directions = 2 if self.bidirectional else 1
+
         if hx is None:
-            num_directions = 2 if self.bidirectional else 1
             real_hidden_size = self.proj_size if self.proj_size > 0 else self.hidden_size
             h_zeros = jt.zeros(self.num_layers * num_directions,
                                   input.shape[1], real_hidden_size,
@@ -1572,37 +1601,34 @@ class LSTM(jt.Module):
             c_zeros = jt.zeros(self.num_layers * num_directions,
                                   input.shape[1], self.hidden_size,
                                   dtype=input.dtype, device=input.device)
-            h, c = h_zeros, c_zeros
+            h0, c0 = h_zeros, c_zeros
         else:
-            h, c = hx
+            h0, c0 = hx
 
-        output = []
-        for s in range(input.shape[0]):
-            for l in range(self.num_layers):
-                if l == 0:
-                    y = matmul_transpose(input[s], getattr(self, f'weight_ih_l{l}'))
-                else:
-                    y = matmul_transpose(h[l - 1], getattr(self, f'weight_ih_l{l}'))
+        hn = []
+        cn = []
 
-                y = y + matmul_transpose(h[l], getattr(self, f'weight_hh_l{l}'))
+        for l in range(self.num_layers):
+            output = []
 
-                if self.bias:
-                    y = y + getattr(self, f'bias_ih_l{l}') + getattr(self, f'bias_hh_l{l}')
+            h = h0[l * num_directions: (l + 1) * num_directions]
+            c = c0[l * num_directions: (l + 1) * num_directions]
 
-                i = y[:, :self.hidden_size].sigmoid()
-                f = y[:, self.hidden_size : 2 * self.hidden_size].sigmoid()
-                g = y[:, 2 * self.hidden_size : 3 * self.hidden_size].tanh()
-                o = y[:, 3 * self.hidden_size:].sigmoid()
+            output, _h, _c = self.call_lstm_sequence(input, h[0], c[0], f'l{l}')
+            hn.append(_h)
+            cn.append(_c)
 
-                c[l] = f * c[l] + i * g
-                rh = o * c[l].tanh()
+            if self.bidirectional:
+                output_b, _h, _c = self.call_lstm_sequence(input, h[1], c[1], f'l{l}_reverse')
+                output = jt.concat([output, output_b], dim=-1)
+                hn.append(_h)
+                cn.append(_c)
 
-                if self.proj_size > 0:
-                    h[l] = matmul_transpose(rh, getattr(self, f'weight_hr_l{l}'))
-                else:
-                    h[l] = rh
+            if self.dropout > 0:
+                input = dropout(output, p=self.dropout)
+            else:
+                input = output
 
-            output.append(h[-1])
-
-        output = jt.stack(output, dim=0)
-        return output, (h, c)
+        hn = jt.stack(hn, dim=0)
+        cn = jt.stack(cn, dim=0)
+        return output, (hn, cn)
