@@ -93,5 +93,14 @@ class TestMemoryProfiler(unittest.TestCase):
         assert(out_[4].endswith('(_run_module_as_main)'))
         assert(out_[8].endswith('(_run_code)'))
         
+    def test_sample(self):
+        net = jt.models.resnet18()
+        with jt.flag_scope(trace_py_var=3, profile_memory_enable=1):
+            imgs = jt.randn((1,3,224,224))
+            net(imgs).sync()
+            jt.get_max_memory_treemap()
+        
+
+
 if __name__ == "__main__":
     unittest.main()
