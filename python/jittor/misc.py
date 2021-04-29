@@ -787,6 +787,39 @@ def print_tree(now, max_memory_size, prefix1, prefix2, build_by):
     return out
 
 def get_max_memory_treemap(build_by=0, do_print=True):
+    '''show treemap of max memory consumption
+
+Example::
+
+        net = jt.models.resnet18()
+        with jt.flag_scope(trace_py_var=3, profile_memory_enable=1):
+            imgs = jt.randn((1,3,224,224))
+            net(imgs).sync()
+            jt.get_max_memory_treemap()
+
+Output::
+
+    | 
+    ├─./python/jittor/test/test_memory_profiler.py:100(test_sample)
+    | [19.03 MB; 29.67%]
+    | ./python/jittor/test/test_memory_profiler.py:100
+    |    | 
+    |    └─./python/jittor/__init__.py:730(__call__)
+    |      [19.03 MB; 29.67%]
+    |      ./python/jittor/__init__.py:730
+    |         | 
+    |         └─./python/jittor/models/resnet.py:152(execute)
+    |           [19.03 MB; 29.67%]
+    |           ./python/jittor/models/resnet.py:152
+    |              | 
+    |              ├─./python/jittor/models/resnet.py:142(_forward_impl)
+    |              | [6.13 MB; 9.55%]
+    |              | ./python/jittor/models/resnet.py:142
+    |              |    | 
+
+
+
+    '''
     div1 = "[!@#div1!@#]"
     div2 = "[!@#div2!@#]"
     div3 = "[!@#div3!@#]"

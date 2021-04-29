@@ -338,6 +338,8 @@ def log_softmax(x,dim=None):
 def log_sigmoid(x):
     return jt.log(jt.sigmoid(x))
 
+def logsumexp(x, dim, keepdim=False):
+    return x.exp().sum(dim, keepdim).log()
 
 class Identity(Module):
     def __init__(self, *args, **kwargs):

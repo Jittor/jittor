@@ -10,6 +10,8 @@
 #include "ops/op_register.h"
 #include "misc/cuda_flags.h"
 
+#define __inline_static__ inline static
+
 #ifndef JIT
 
 namespace jittor {
@@ -130,38 +132,37 @@ void CodeOp::jit_prepare(JK& jk) {
         jk << _CS("][out") << JK::hex(i) << _CS("_type:")
             << _outputs[i]->dtype();
     }
-    if (flags.get(NodeFlags::_cuda)) {
-        jk << _CS("][HEADER:") << cuda_header;
-        ASSERT(cuda_src.size());
-        jk << _CS("\nnamespace jittor {\n");
-        int i=0;
-        // move cuda kernel function into header
-        for (; i<cuda_src.size(); i++) {
-            if (cuda_src[i] == ' ' || cuda_src[i] == '\t' || cuda_src[i] == '\n') {
-                jk << cuda_src[i];
-            } else
-            if (cuda_src[i] == '_') {
-                int presum = 0;
-                while (i < cuda_src.size()) {
-                    jk << cuda_src[i];
-                    if (cuda_src[i] == '{') presum ++;
-                    else if (cuda_src[i] == '}') {
-                        presum--;
-                        if (presum==0)
-                            break;
-                    }
-                    i++;
+    string& header = flags.get(NodeFlags::_cuda) ? 
+        cuda_header : cpu_header;
+    string& src = flags.get(NodeFlags::_cuda) ? 
+        cuda_src : cpu_src;
+
+    jk << _CS("][HEADER:") << header;
+    CHECK(src.size());
+    jk << _CS("\nnamespace jittor {\n");
+    int i=0;
+    // move cuda kernel function into header
+    for (; i<src.size(); i++) {
+        if (src[i] == ' ' || src[i] == '\t' || src[i] == '\n') {
+            jk << src[i];
+        } else
+        if (src[i] == '_') {
+            int presum = 0;
+            while (i < src.size()) {
+                jk << src[i];
+                if (src[i] == '{') presum ++;
+                else if (src[i] == '}') {
+                    presum--;
+                    if (presum==0)
+                        break;
                 }
-            } else break;
-        }
-        jk << _CS("}][CODE:");
-        for (; i<cuda_src.size(); i++) jk << cuda_src[i];
-        jk << ']';
-    } else {
-        jk << _CS("][HEADER:") << cpu_header;
-        jk << _CS("][CODE:") << cpu_src << ']';
-        ASSERT(cpu_src.size());
+                i++;
+            }
+        } else break;
     }
+    jk << _CS("}][CODE:");
+    for (; i<src.size(); i++) jk << src[i];
+    jk << ']';
 }
 
 } // jittor
