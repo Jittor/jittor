@@ -119,6 +119,60 @@ class TestRNN(unittest.TestCase):
         j_output = j_output.data
         assert np.allclose(t_output, j_output, rtol=1e-03, atol=1e-06)
 
+    def test_rnn_cell(self):
+        np_h0 = torch.randn(3, 20).numpy()
+
+        t_rnn = tnn.RNNCell(10, 20)
+        input = torch.randn(2, 3, 10)
+        h0 = torch.from_numpy(np_h0)
+        t_output = []
+        for i in range(input.size()[0]):
+            h0 = t_rnn(input[i], h0)
+            t_output.append(h0)
+        t_output = torch.stack(t_output, dim=0)
+
+        j_rnn = nn.RNNCell(10, 20)
+        j_rnn.load_state_dict(t_rnn.state_dict())
+
+        input = jt.float32(input.numpy())
+        h0 = jt.float32(np_h0)
+        j_output = []
+        for i in range(input.size()[0]):
+            h0 = j_rnn(input[i], h0)
+            j_output.append(h0)
+        j_output = jt.stack(j_output, dim=0)
+
+        t_output = t_output.detach().numpy()
+        j_output = j_output.data
+        assert np.allclose(t_output, j_output, rtol=1e-03, atol=1e-06)
+
+    def test_gru_cell(self):
+        np_h0 = torch.randn(3, 20).numpy()
+
+        t_rnn = tnn.GRUCell(10, 20)
+        input = torch.randn(2, 3, 10)
+        h0 = torch.from_numpy(np_h0)
+        t_output = []
+        for i in range(input.size()[0]):
+            h0 = t_rnn(input[i], h0)
+            t_output.append(h0)
+        t_output = torch.stack(t_output, dim=0)
+
+        j_rnn = nn.GRUCell(10, 20)
+        j_rnn.load_state_dict(t_rnn.state_dict())
+
+        input = jt.float32(input.numpy())
+        h0 = jt.float32(np_h0)
+        j_output = []
+        for i in range(input.size()[0]):
+            h0 = j_rnn(input[i], h0)
+            j_output.append(h0)
+        j_output = jt.stack(j_output, dim=0)
+
+        t_output = t_output.detach().numpy()
+        j_output = j_output.data
+        assert np.allclose(t_output, j_output, rtol=1e-03, atol=1e-06)
+
     def test_lstm(self):
         h0 = np.random.rand(1, 24, 200).astype(np.float32)
         c0 = np.random.rand(1, 24, 200).astype(np.float32)
