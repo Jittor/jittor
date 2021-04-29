@@ -1480,7 +1480,183 @@ class LSTMCell(jt.Module):
         return h, c
 
 
-class LSTM(jt.Module):
+class RNNBase(Module):
+    def __init__(self, mode: str, input_size: int, hidden_size: int, 
+            num_layers: int = 1, bias: bool = True, batch_first: bool = False, 
+            dropout: float = 0, bidirectional: bool = False, 
+            proj_size: int = 0) -> None:
+        super().__init__()
+
+        self.mode = mode
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.bias = bias
+        self.batch_first = batch_first
+        self.dropout = dropout
+        self.bidirectional = bidirectional
+        self.proj_size = proj_size
+
+        if mode == 'LSTM':
+            gate_size = 4 * hidden_size
+        elif mode == 'GRU':
+            gate_size = 3 * hidden_size
+        elif mode == 'RNN':
+            gate_size = hidden_size
+        else:
+            raise ValueError("Unrecognized RNN mode: " + mode)
+
+        num_directions = 1 + bidirectional
+        k = math.sqrt(1 / hidden_size)
+
+        def build_unit(name, in_channels, out_channels=None):
+            if out_channels is not None:
+                shape = (in_channels, out_channels)
+            else:
+                shape = (in_channels,)
+            setattr(self, name, init.uniform(shape, 'float32', -k, k))
+            if self.bidirectional:
+                setattr(self, name + '_reverse', init.uniform(shape, 'float32', -k, k))
+
+        for layer in range(num_layers):
+            if layer == 0:
+                build_unit(f'weight_ih_l{layer}', gate_size, input_size)
+            else:
+                if proj_size > 0:
+                    build_unit(f'weight_ih_l{layer}', gate_size, num_directions * proj_size)
+                else:
+                    build_unit(f'weight_ih_l{layer}', gate_size, num_directions * hidden_size)
+
+            if proj_size > 0:
+                build_unit(f'weight_hh_l{layer}', gate_size, proj_size)
+                build_unit(f'weight_hr_l{layer}', proj_size, hidden_size)
+            else:
+                build_unit(f'weight_hh_l{layer}', gate_size, hidden_size)
+
+            if bias:
+                build_unit(f'bias_ih_l{layer}', gate_size)
+                build_unit(f'bias_hh_l{layer}', gate_size)
+
+    def call_rnn_sequence(self, input, hidden, suffix):
+        if 'reverse' in suffix:
+            input = input[::-1]
+
+        output = []
+        for s in range(input.shape[0]):
+            out, hidden = self.call_rnn_cell(input[s], hidden, suffix)
+            output.append(out)
+
+        if 'reverse' in suffix:
+            output = output[::-1]
+        output = jt.stack(output, dim=0)
+
+        return output, hidden
+
+    def execute(self, input, hx):
+        if self.batch_first:
+            input = input.permute(1, 0, 2)
+
+        num_directions = 2 if self.bidirectional else 1
+
+        if hx is None:
+            hx = self.default_init_state()
+
+        hidden_n = []
+
+        for l in range(self.num_layers):
+            output = []
+
+            if isinstance(hx, tuple):
+                hidden = [h[l * num_directions] for h in hx]
+            else:
+                hidden = hx[l * num_directions]
+
+            output, _hidden = self.call_rnn_sequence(input, hidden, f'l{l}')
+            hidden_n.append(_hidden)
+
+            if self.bidirectional:
+                if isinstance(hx, tuple):
+                    hidden = [h[l * num_directions + 1] for h in hx]
+                else:
+                    hidden = hx[l * num_directions + 1]
+
+                output_b, _hidden = self.call_rnn_sequence(input, hidden, f'l{l}_reverse')
+                output = jt.concat([output, output_b], dim=-1)
+                hidden_n.append(_hidden)
+
+            if self.dropout > 0:
+                input = dropout(output, p=self.dropout)
+            else:
+                input = output
+
+        if isinstance(hx, tuple):
+            hidden_n = tuple(jt.stack(hn, dim=0) for hn in zip(*hidden_n))
+        else:
+            hidden_n = jt.stack(hidden_n, dim=0)
+
+        return output, hidden_n
+
+
+class RNN(RNNBase):
+    def __init__(self, input_size: int, hidden_size: int, num_layers: int = 1,
+        nonlinearity: str = 'tanh', bias: bool = True, batch_first: bool = False, 
+        dropout: float = 0, bidirectional: bool = False) -> None:
+        ''' Applies a multi-layer Elman RNN with tanh ReLU non-linearity to an input sequence.
+
+        :param input_size: The number of expected features in the input.
+        :type input_size: int
+
+        :param hidden_size: The number of features in the hidden state.
+        :type hidden_size: int
+
+        :param num_layers: Number of recurrent layers. E.g., setting num_layers=2 would mean stacking two RNNs together to form a stacked RNN, with the second RNN taking in outputs of the first RNN and computing the final results. Default: 1
+        :type num_layers: int, optinal
+
+        :param nonlinearity: The non-linearity to use. Can be either 'tanh' or 'relu'. Default: 'tanh'
+        :type nonlinearity: str, optional
+
+        :param bias: If False, then the layer does not use bias weights b_ih and b_hh. Default: True.
+        :type bias: bool, optional
+
+        :param batch_first: If True, then the input and output tensors are provided as (batch, seq, feature). Default: False
+        :type bias: bool, optional
+
+        :param dropout: If non-zero, introduces a Dropout layer on the outputs of each RNN layer except the last layer, with dropout probability equal to dropout. Default: 0
+        :type dropout: float, optional
+
+        :param bidirectional: If True, becomes a bidirectional RNN. Default: False
+        :type bidirectional: bool, optional
+
+        Example:
+            >>> rnn = nn.RNN(10, 20, 2)
+            >>> input = jt.randn(5, 3, 10)
+            >>> h0 = jt.randn(2, 3, 20)
+            >>> output, hn = rnn(input, h0)
+        '''
+        super().__init__('RNN', input_size, hidden_size, num_layers=num_layers, 
+            bias=bias, batch_first=batch_first, dropout=dropout, 
+            bidirectional=bidirectional)
+
+        if not nonlinearity in ['tanh', 'relu']:
+            raise ValueError('Unrecognized nonlinearity: ' + nonlinearity)
+        self.nonlinearity = nonlinearity
+
+    def call_rnn_cell(self, input, hidden, suffix):
+        y = matmul_transpose(input, getattr(self, f'weight_ih_{suffix}')) 
+        y = y + matmul_transpose(hidden, getattr(self, f'weight_hh_{suffix}'))
+        
+        if self.bias:
+            y = y + getattr(self, f'bias_ih_{suffix}') + getattr(self, f'bias_hh_{suffix}')
+
+        if self.nonlinearity == 'tanh':
+            h = jt.tanh(y)
+        else:
+            h = jt.relu(y)
+
+        return h, h
+
+
+class LSTM(RNNBase):
     def __init__(self, input_size, hidden_size, num_layers=1, bias=True, 
             batch_first=False, dropout=0, bidirectional=False, proj_size=0):
         ''' Applies a multi-layer long short-term memory (LSTM) RNN to an input sequence.
@@ -1500,10 +1676,10 @@ class LSTM(jt.Module):
         :param batch_first: If True, then the input and output tensors are provided as (batch, seq, feature). Default: False
         :type bias: bool, optional
 
-        :param dropout: [Not implemented] If non-zero, introduces a Dropout layer on the outputs of each LSTM layer except the last layer, with dropout probability equal to dropout. Default: 0
+        :param dropout: If non-zero, introduces a Dropout layer on the outputs of each LSTM layer except the last layer, with dropout probability equal to dropout. Default: 0
         :type dropout: float, optional
 
-        :param bidirectional: [Not implemented] If True, becomes a bidirectional LSTM. Default: False
+        :param bidirectional: If True, becomes a bidirectional LSTM. Default: False
         :type bidirectional: bool, optional
 
         :param proj_size: If > 0, will use LSTM with projections of corresponding size. Default: 0
@@ -1516,119 +1692,80 @@ class LSTM(jt.Module):
             >>> c0 = jt.randn(2, 3, 20)
             >>> output, (hn, cn) = rnn(input, (h0, c0))
         '''
-        super().__init__()
+        super().__init__('LSTM', input_size, hidden_size, num_layers=num_layers, 
+            bias=bias, batch_first=batch_first, dropout=dropout, 
+            bidirectional=bidirectional, proj_size=proj_size)
 
-        self.hidden_size = hidden_size
-        self.bias = bias
-        self.num_layers = num_layers
-        self.batch_first = batch_first 
-        self.bidirectional = bidirectional
-        self.proj_size = proj_size
-        self.dropout = dropout
+    def call_rnn_cell(self, input, hidden, suffix):
+        h, c = hidden
+        y = matmul_transpose(input, getattr(self, f'weight_ih_{suffix}')) 
+        y = y + matmul_transpose(h, getattr(self, f'weight_hh_{suffix}'))
+        
+        if self.bias:
+            y = y + getattr(self, f'bias_ih_{suffix}') + getattr(self, f'bias_hh_{suffix}')
 
-        num_directions = 1 + bidirectional
-        k = math.sqrt(1 / hidden_size)
+        i = y[:, :self.hidden_size].sigmoid()
+        f = y[:, self.hidden_size : 2 * self.hidden_size].sigmoid()
+        g = y[:, 2 * self.hidden_size : 3 * self.hidden_size].tanh()
+        o = y[:, 3 * self.hidden_size:].sigmoid()
+        c = f * c + i * g
+        h = o * c.tanh()
 
-        def build_unit(name, in_channels, out_channels=None):
-            if out_channels is not None:
-                shape = (in_channels, out_channels)
-            else:
-                shape = (in_channels,)
-            setattr(self, name, init.uniform(shape, 'float32', -k, k))
-            if self.bidirectional:
-                setattr(self, name + '_reverse', init.uniform(shape, 'float32', -k, k))
+        if self.proj_size > 0:
+            h = matmul_transpose(h, getattr(self, f'weight_hr_{suffix}'))
 
-        for l in range(num_layers):
-            if l == 0:
-                build_unit(f'weight_ih_l{l}', 4 * hidden_size, input_size)
-            else:
-                if proj_size > 0:
-                    build_unit(f'weight_ih_l{l}', 4 * hidden_size, num_directions * proj_size)
-                else:
-                    build_unit(f'weight_ih_l{l}', 4 * hidden_size, num_directions * hidden_size)
+        return h, (h, c)
 
-            if proj_size > 0:
-                build_unit(f'weight_hh_l{l}', 4 * hidden_size, proj_size)
-                build_unit(f'weight_hr_l{l}', proj_size, hidden_size)
-            else:
-                build_unit(f'weight_hh_l{l}', 4 * hidden_size, hidden_size)
 
-            if bias:
-                build_unit(f'bias_ih_l{l}', 4 * hidden_size)
-                build_unit(f'bias_hh_l{l}', 4 * hidden_size)
+class GRU(RNNBase):
+    def __init__(self, input_size: int, hidden_size: int, num_layers: int = 1,
+        bias: bool = True, batch_first: bool = False, dropout: float = 0, 
+        bidirectional: bool = False) -> None:
+        ''' Applies a multi-layer gated recurrent unit (GRU) RNN to an input sequence.
 
-    def call_lstm_sequence(self, input, h, c, suffix):
-        if 'reverse' in suffix:
-            input = input[::-1]
+        :param input_size: The number of expected features in the input.
+        :type input_size: int
 
-        output = []
-        for s in range(input.shape[0]):
-            y = matmul_transpose(input[s], getattr(self, f'weight_ih_{suffix}')) 
-            y = y + matmul_transpose(h, getattr(self, f'weight_hh_{suffix}'))
-            
-            if self.bias:
-                y = y + getattr(self, f'bias_ih_{suffix}') + getattr(self, f'bias_hh_{suffix}')
+        :param hidden_size: The number of features in the hidden state.
+        :type hidden_size: int
 
-            i = y[:, :self.hidden_size].sigmoid()
-            f = y[:, self.hidden_size : 2 * self.hidden_size].sigmoid()
-            g = y[:, 2 * self.hidden_size : 3 * self.hidden_size].tanh()
-            o = y[:, 3 * self.hidden_size:].sigmoid()
-            c = f * c + i * g
-            h = o * c.tanh()
+        :param num_layers: Number of recurrent layers. E.g., setting num_layers=2 would mean stacking two GRUs together to form a stacked GRU, with the second GRU taking in outputs of the first GRU and computing the final results. Default: 1
+        :type num_layers: int, optinal
 
-            if self.proj_size > 0:
-                h = matmul_transpose(h, getattr(self, f'weight_hr_{suffix}'))
+        :param bias: If False, then the layer does not use bias weights b_ih and b_hh. Default: True.
+        :type bias: bool, optional
 
-            output.append(h)
+        :param batch_first: If True, then the input and output tensors are provided as (batch, seq, feature). Default: False
+        :type bias: bool, optional
 
-        if 'reverse' in suffix:
-            output = output[::-1]
-        output = jt.stack(output, dim=0)
+        :param dropout: If non-zero, introduces a Dropout layer on the outputs of each GRU layer except the last layer, with dropout probability equal to dropout. Default: 0
+        :type dropout: float, optional
 
-        return output, h, c
+        :param bidirectional: If True, becomes a bidirectional GRU. Default: False
+        :type bidirectional: bool, optional
 
-    def execute(self, input, hx):
-        if self.batch_first:
-            input = input.permute(1, 0, 2)
+        Example:
+            >>> rnn = nn.GRU(10, 20, 2)
+            >>> input = jt.randn(5, 3, 10)
+            >>> h0 = jt.randn(2, 3, 20)
+            >>> output, hn = rnn(input, h0)
+        '''
+        super().__init__('GRU', input_size, hidden_size, num_layers=num_layers, 
+            bias=bias, batch_first=batch_first, dropout=dropout, 
+            bidirectional=bidirectional)
 
-        num_directions = 2 if self.bidirectional else 1
+    def call_rnn_cell(self, input, hidden, suffix):
+        ih = matmul_transpose(input, getattr(self, f'weight_ih_{suffix}')) 
+        hh = matmul_transpose(hidden, getattr(self, f'weight_hh_{suffix}'))
+        
+        if self.bias:
+            ih = ih + getattr(self, f'bias_ih_{suffix}')
+            hh = hh + getattr(self, f'bias_hh_{suffix}')
 
-        if hx is None:
-            real_hidden_size = self.proj_size if self.proj_size > 0 else self.hidden_size
-            h_zeros = jt.zeros(self.num_layers * num_directions,
-                                  input.shape[1], real_hidden_size,
-                                  dtype=input.dtype, device=input.device)
-            c_zeros = jt.zeros(self.num_layers * num_directions,
-                                  input.shape[1], self.hidden_size,
-                                  dtype=input.dtype, device=input.device)
-            h0, c0 = h_zeros, c_zeros
-        else:
-            h0, c0 = hx
+        hs = self.hidden_size
+        r = (ih[:, :hs] + hh[:, :hs]).sigmoid()
+        z = (ih[:, hs: 2 * hs] + hh[:, hs: 2 * hs]).sigmoid()
+        n = (ih[:, 2 * hs:] + r * hh[:, 2 * hs:]).tanh()
+        h = (1 - z) * n + z * hidden
 
-        hn = []
-        cn = []
-
-        for l in range(self.num_layers):
-            output = []
-
-            h = h0[l * num_directions: (l + 1) * num_directions]
-            c = c0[l * num_directions: (l + 1) * num_directions]
-
-            output, _h, _c = self.call_lstm_sequence(input, h[0], c[0], f'l{l}')
-            hn.append(_h)
-            cn.append(_c)
-
-            if self.bidirectional:
-                output_b, _h, _c = self.call_lstm_sequence(input, h[1], c[1], f'l{l}_reverse')
-                output = jt.concat([output, output_b], dim=-1)
-                hn.append(_h)
-                cn.append(_c)
-
-            if self.dropout > 0:
-                input = dropout(output, p=self.dropout)
-            else:
-                input = output
-
-        hn = jt.stack(hn, dim=0)
-        cn = jt.stack(cn, dim=0)
-        return output, (hn, cn)
+        return h, h
