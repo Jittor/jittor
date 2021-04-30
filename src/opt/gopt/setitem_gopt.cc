@@ -196,8 +196,10 @@ static void getitem_inplace(GetitemOp* op) {
     auto size = 0;
     if (s.is_int())
         size = s.i * in->size / in_shape[0];
-    else if (s.is_slice())
+    else if (s.is_slice()) {
         size = s.slice.start * in->size / in_shape[0];
+        if (s.slice.step != 1) return;
+    }
     ou->share_with(in, size);
     // LOGir << "pass getitem_inplace";
 }
