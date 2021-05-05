@@ -51,7 +51,6 @@ def wait_queue():
             if buf == '0':
                 print("Begin")
                 os.system(f"sleep {os.environ.get('SWAIT', '60')} && bash -c ' if kill -9 {os.getpid()} 2>/dev/null; then echo Timeout; fi; ' &")
-                os.system("sleep 100")
                 break
             else:
                 print("Pending", buf)
