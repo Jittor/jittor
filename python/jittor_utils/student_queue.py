@@ -17,6 +17,7 @@ key_queue = {}
 def handle_connect(req:socket.socket, c_addr, server):
     print("get connect", c_addr, req)
     skey = req.recv(1024).decode()
+    print("get skey", skey)
     with lock:
         if skey not in key_queue:
             key_queue[skey] = []
@@ -40,20 +41,21 @@ def handle_connect(req:socket.socket, c_addr, server):
         
 
 def wait_queue():
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.connect(("127.0.0.1", 8900))
-        s.send(skey.encode())
-        while True:
-            buf = s.recv(1024).decode()
-            if len(buf) == 0:
-                print("Cannot connect to queue server, please report this issue to admin.")
-                sys.exit(1)
-            if buf == '0':
-                print("Begin")
-                os.system(f"sleep {os.environ.get('SWAIT', '60')} && bash -c ' if kill -9 {os.getpid()} 2>/dev/null; then echo Timeout; fi; ' &")
-                break
-            else:
-                print("Pending", buf)
+    global s
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect(("127.0.0.1", 8900))
+    s.sendall(skey.encode())
+    while True:
+        buf = s.recv(1024).decode()
+        if len(buf) == 0:
+            print("Cannot connect to queue server, please report this issue to admin.")
+            sys.exit(1)
+        if buf == '0':
+            print("Begin")
+            os.system(f"sleep {os.environ.get('SWAIT', '60')} && bash -c ' if kill -9 {os.getpid()} 2>/dev/null; then echo Timeout; fi; ' &")
+            break
+        else:
+            print("Pending", buf)
 
 
 
