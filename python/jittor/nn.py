@@ -532,7 +532,6 @@ class Conv(Module):
 
         # self.weight = init.relu_invariant_gauss([out_channels, in_channels//groups, Kh, Kw], dtype="float", mode="fan_out")
         self.weight = init.invariant_uniform([out_channels, in_channels//groups, Kh, Kw], dtype="float")
-        # self.weight = jt.ones([out_channels, in_channels//groups, Kh, Kw], dtype='int8')
         if bias:
             fan=1
             for i in self.weight.shape[1:]:
@@ -546,24 +545,19 @@ class Conv(Module):
         # e.g. float32 -> int8: scale = 127 / max(abs(var))
         self.input_scale = None
         self.weight_scale = None
-    
-    def quantize(self):
-        self.input_scale = 1.
-        tmp = self.weight.abs().numpy()
-        self.weight_scale = 127. / tmp.max()
 
     def execute(self, x):
         is_quantized = (self.input_scale is not None and self.weight_scale is not None)
-        # quan_x = x
-        # quan_weight = self.weight
-        if is_quantized:
-            tmp = x.abs()
-            self.input_scale = min(self.input_scale, 127. / tmp.max()) if self.input_scale != 1. else (127. / tmp.max())
-            quan_x = (x * self.input_scale).int8()
-            quan_weight = (self.weight * self.weight_scale).int8()
+        if not jt.flags.use_mlu:
+            quan_x = x
+            quan_weight = self.weight
         else:
-            quan_x = x.int8()
-            quan_weight = self.weight.int8()
+            if is_quantized:
+                quan_x = (x * self.input_scale).int8()
+                quan_weight = (self.weight * self.weight_scale).int8()
+            else:
+                quan_x = x
+                quan_weight = self.weight
         if self.is_depthwise_conv and jt.flags.use_cuda:
             y = self.depthwise_conv(x, self.weight)
         elif self.groups == 1:
@@ -614,10 +608,8 @@ class Conv(Module):
                 'i5'
             ])
 
-        # print("quan_weight, quan_x, quan_weight.sum() * 127", quan_weight, quan_x, quan_weight.sum() * 127.)
-        # print("y & scale: ", y, self.input_scale, self.weight_scale)
-        if is_quantized:
-            y = (y / self.input_scale / self.weight_scale).float32()
+        if is_quantized and jt.flags.use_mlu:
+            y = (y / (self.input_scale * self.weight_scale)).float32()
         
         if self.bias is not None:
             b = self.bias.broadcast(y.shape, [0,2,3])

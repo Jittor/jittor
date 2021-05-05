@@ -119,6 +119,7 @@ void MluPoolOp::jit_run() {
     MluPool_t mlu_pool;
 
     jk.clear();
+    jk << op << ",";
     jk << ni << "," << ci << "," << hi << "," << wi << ",";
     jk << no << "," << co << "," << ho << "," << wo << ",";
     auto iter = mlu_pool_cache.find(jk.to_string());
@@ -145,8 +146,8 @@ void MluPoolOp::jit_run() {
         cnmlCreateTensor_V2(&output_tensor, CNML_TENSOR);
         cnmlSetTensorShape_V2(output_tensor, dimNum, output_shape, NULL);
 
-        cnmlSetTensorDataType(input_tensor, CNML_DATA_INT8);
-        cnmlSetTensorDataType(output_tensor, CNML_DATA_INT8);
+        cnmlSetTensorDataType(input_tensor, CNML_DATA_FLOAT32);
+        cnmlSetTensorDataType(output_tensor, CNML_DATA_FLOAT32);
 
         if (op == ns_maximum) {
             cnmlCreatePoolOpParam(&pool_param, kernel_size, kernel_size, stride, stride, 2 * padding, 2 * padding, dilation, dilation, CNML_POOL_MAX, CNML_POOL_KFULL, !count_include_pad);

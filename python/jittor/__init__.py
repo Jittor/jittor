@@ -876,6 +876,10 @@ class Module:
                         end = 1
                         break
             if end == 1:
+                if key.endswith("scale"):
+                    scale = params[key]
+                    v.input_scale = scale[0]
+                    v.weight_scale = scale[1]
                 if not key.endswith("num_batches_tracked"):
                     n_failed += 1
                     LOG.w(f'load parameter {key} failed ...')

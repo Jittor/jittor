@@ -27,7 +27,8 @@ class Pool(Module):
         self.count_include_pad = count_include_pad and padding != 0
 
     def execute(self, x):
-        return jt.mlu_ops.mlu_pool(x, self.kernel_size, self.stride, self.padding, 1, 0, 0, 0, op=self.op)
+        if jt.flags.use_mlu:
+            return jt.mlu_ops.mlu_pool(x, self.kernel_size, self.stride, self.padding, 1, 0, 0, 0, op=self.op)
         N,C,H,W = x.shape
         if self.ceil_mode == False:
             h = (H+self.padding*2-self.kernel_size)//self.stride+1
@@ -185,9 +186,8 @@ class AdaptiveAvgPool2d(Module):
         self.sw = math.floor(W / ow)
         self.ksh = H - (oh - 1) * self.sh
         self.ksw = W - (ow - 1) * self.sw
-        print(self.ksh, self.sh)
-        return jt.mlu_ops.mlu_pool(x, self.ksh, self.sh, 0, 0, 0, 0, 0, op="mean")
-        return jt.mlu_ops.mlu_pool(x, self.kernel_size, self.stride, self.padding, 1, 0, 0, 0, op=self.op)
+        if jt.flags.use_mlu:
+            return jt.mlu_ops.mlu_pool(x, self.ksh, self.sh, 0, 0, 0, 0, 0, op="mean")
         h = (H-self.ksh)//self.sh+1
         w = (W-self.ksw)//self.sw+1
         xx = x.reindex([N,C,h,w,self.ksh,self.ksw], [
