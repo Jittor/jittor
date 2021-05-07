@@ -17,10 +17,10 @@ __inline_static__
 void kernel(int n0, int i0, in0_type* x, in0_type* out, int nl) {
     out[i0*(nl+1)] = 0;
     for (int i=0; i<nl; i++)
-        out[i0*(nl+1)+i+1] = out[i0*(nl+1)+i] + x[i0*(nl+1)+i];
+        out[i0*(nl+1)+i+1] = out[i0*(nl+1)+i] + x[i0*nl+i];
 }
 
-kernel(in0->num/in0->shape[in0->shape.size()-1], 0, in0_p, out0_p, in0->num);
+kernel(in0->num/in0->shape[in0->shape.size()-1], 0, in0_p, out0_p, in0->shape[in0->shape.size()-1]);
     '''
     return jt.code(x.shape[:-1]+(x.shape[-1]+1,), x.dtype, [x],
         cpu_src=src, cuda_src=src)
@@ -37,7 +37,7 @@ class OneHotCategorical:
         with jt.no_grad():
             self.probs = probs / probs.sum(-1, True)
             self.logits = logits
-            self.cum_probs = simple_presum(probs)
+            self.cum_probs = simple_presum(self.probs)
             self.cum_probs_l = self.cum_probs[..., :-1]
             self.cum_probs_r = self.cum_probs[..., 1:]
 

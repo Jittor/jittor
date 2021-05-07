@@ -8,7 +8,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-__version__ = '1.2.2.67'
+__version__ = '1.2.2.68'
 from . import lock
 with lock.lock_scope():
     ori_int = int
@@ -976,17 +976,16 @@ class Module:
         This method also supports loading a state dict from a pytorch .pth file.
 
         .. note::
-            当载入的参数与模型定义不一致时, jittor 会输出错误信息, 但是不会抛出异常.
+            当载入的参数与模型定义不一致时, jittor 会输出错误信�? 但是不会抛出异常.
             若载入参数出现模型定义中没有的参数名, 则会输出如下信息, 并忽略此参数:
 
             >>> [w 0205 21:49:39.962762 96 __init__.py:723] load parameter w failed ...
 
-            若载入参数的 shape 与模型定义不一致, 则会输出如下信息, 并忽略此参数:
+            若载入参数的 shape 与模型定义不一�? 则会输出如下信息, 并忽略此参数:
 
             >>> [e 0205 21:49:39.962822 96 __init__.py:739] load parameter w failed: expect the shape of w to be [1000,100,], but got [3,100,100,]
             
-            如载入过程中出现错误, jittor 会输出概要信息, 您需要仔细核对错误信息
-            
+            如载入过程中出现错误, jittor 会输出概要信�? 您需要仔细核对错误信�?            
             >>> [w 0205 21:49:39.962906 96 __init__.py:741] load total 100 params, 3 failed
         '''
         self.load_parameters(load(path))
