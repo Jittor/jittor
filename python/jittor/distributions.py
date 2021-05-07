@@ -1,6 +1,7 @@
 # ***************************************************************
 # Copyright (c) 2021 Jittor. All Rights Reserved. 
 # Maintainers:
+#     Haoyang Peng <2247838039@qq.com>
 #     Dun Liang <randonlang@gmail.com>.
 #
 # This file is subject to the terms and conditions defined in
@@ -94,9 +95,9 @@ class Normal:
         self.sigma = sigma
     
     def sample(self,sample_shape):
-        return jt.normal(mu,sigma,sample_shape)
+        return jt.normal(self.mu, self.sigma, sample_shape)
 
-    def log_prob(self,x):
+    def log_prob(self, x):
         var = self.sigma**2
         log_scale = jt.log(self.sigma)
         return -((x-self.mu)**2) / (2*var) - log_scale-np.log(np.sqrt(2*np.pi))

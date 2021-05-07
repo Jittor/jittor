@@ -10,7 +10,6 @@
 # ***************************************************************
 import unittest
 import jittor as jt
-import torch
 import numpy as np
 import jittor.distributions as jd
 
@@ -43,6 +42,7 @@ class TestOneHot(unittest.TestCase):
         assert y.shape == [2,3]
         
     def test_normal(self):
+        import torch
         for _ in range(10):
             mu = np.random.uniform(-1,1)
             sigma = np.random.uniform(0,2)
@@ -60,6 +60,7 @@ class TestOneHot(unittest.TestCase):
             assert np.allclose(jd.kl_divergence(jn,jn2).data,torch.distributions.kl_divergence(tn,tn2).numpy())
 
     def test_categorical(self):
+        import torch
         for _ in range(10):
             probs,probs2 = np.random.uniform(0,1,(10)), np.random.uniform(0,1,(10))
             probs,probs2 = probs / probs.sum(),probs2 / probs2.sum()
@@ -83,7 +84,6 @@ class TestOneHot(unittest.TestCase):
             # print(jc.log_prob(x),tc.log_prob(x))
             assert np.allclose(ju.log_prob(x),tu.log_prob(torch.tensor(x)))
             assert np.allclose(jd.kl_divergence(ju,ju2),torch.distributions.kl_divergence(tu,tu2))
-
 
 if __name__ == "__main__":
     unittest.main()
