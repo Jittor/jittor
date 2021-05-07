@@ -8,6 +8,7 @@ import os, sys, shutil
 from .compiler import *
 from jittor_utils import run_cmd, get_version, get_int_version
 from jittor.utils.misc import download_url_to_local
+from jittor import ops
 
 def search_file(dirs, name):
     for d in dirs:
@@ -20,8 +21,7 @@ def search_file(dirs, name):
 def install_mkl(root_folder):
     # origin url is
     # url = "https://github.com/intel/mkl-dnn/releases/download/v1.0.2/mkldnn_lnx_1.0.2_cpu_gomp.tgz"
-    if os.environ.get("use_onednn","1")=="1":
-        print("get in")
+    if os.environ.get("use_onednn") == "1":
         url = "https://cloud.tsinghua.edu.cn/f/cd63e0df3c5c4c52b76d/?dl=1"
         filename = "oneDNN-2.2-rc.tar.gz"
         fullname = os.path.join(root_folder, filename)
@@ -64,9 +64,8 @@ def setup_mkl():
     if not use_mkl: return
     mkl_include_path = os.environ.get("mkl_include_path")
     mkl_lib_path = os.environ.get("mkl_lib_path")
-
     if mkl_lib_path is None or mkl_include_path is None:
-        if os.environ.get("use_onednn","1")=="1":
+        if os.environ.get("use_onednn","0")=="1":
             LOG.v("setup onednn...")
             from pathlib import Path
             one_path = os.path.join(str(Path.home()),".cache", "jittor", "one")
@@ -82,7 +81,6 @@ def setup_mkl():
             # mkl_path decouple with cc_path
             from pathlib import Path
             mkl_path = os.path.join(str(Path.home()), ".cache", "jittor", "mkl")
-            
             make_cache_dir(mkl_path)
             install_mkl(mkl_path)
             mkl_home = ""
@@ -103,9 +101,6 @@ def setup_mkl():
     LOG.v(f"mkl_lib_name: {mkl_lib_name}")
     # We do not link manualy, link in custom ops
     # ctypes.CDLL(mkl_lib_name, dlopen_flags)
-    print(f"mkl_include_path: {mkl_include_path}")
-    print(f"mkl_lib_path: {mkl_lib_path}")
-    print(f"mkl_lib_name: {mkl_lib_name}")
     mkl_op_dir = os.path.join(jittor_path, "extern", "mkl", "ops")
     mkl_op_files = [os.path.join(mkl_op_dir, name) for name in os.listdir(mkl_op_dir)]
     mkl_ops = compile_custom_ops(mkl_op_files, 
@@ -147,30 +142,7 @@ def setup_cub():
         cub_home += "/"
     setup_cuda_lib("cub", link=False, extra_flags=extra_flags)
 
-def setup_cuda_extern():
-    if os.environ.get("use_opencl","1") == "1":
-        LOG.vv("setup opencl extern.")
-        cache_path_opencl = os.path.join(cache_path,"opencl")
-        opencl_include = os.path.join(jittor_path,"extern","opencl","inc")
-        opencl_lib = os.path.join(jittor_path,"extern","opencl","lib")
-        make_cache_dir(cache_path_opencl)
-        opencl_extern_src = os.path.join(jittor_path,"extern","opencl","src")
-        from pathlib import Path
-        jit_path = os.path.join(Path.home(),".cache","jittor","master","g++","jit")
-        opencl_extern_files = [os.path.join(opencl_extern_src, name)
-            for name in os.listdir(opencl_extern_src)
-        ]
-        so_name = os.path.join(cache_path_opencl,"opencl_extern.so")
-        os.system(f"cd {jit_path} && cp {opencl_lib}/* .")
-        # compile(cc_path, cc_flags+f"-I'{opencl_include}' -lOpenCL",opencl_extern_files,so_name)
-        # output_lib = os.path.join(Path.home(),".cache","jittor","master","g++","opencl")
-        opencl_extern_op = os.path.join(jittor_path, "extern", "opencl", "ops")
-        opencl_op_files = [os.path.join(opencl_extern_op, name) for name in os.listdir(opencl_extern_op)]
-        print("compile ops ",opencl_op_files)
-        # print(output_lib)
-        opencllib = compile_custom_ops(opencl_op_files, return_module=True,extra_flags=f"-I'{opencl_include}' -I/usr/local/cuda/include -lOpenCL")
-        # opencl_ops = opencllib.ops
-    
+def setup_cuda_extern():  
     '''
     culib = compile_custom_ops(culib_src_files, return_module=True,
         extra_flags=f" -I'{jt_cuda_include}' -I'{jt_culib_include}' {link_flags} {extra_flags} ")
@@ -494,6 +466,39 @@ def setup_mpi():
         if k == "mpi_test": continue
         setattr(core.Var, k, warper(mpi_ops.__dict__[k]))
 
+def get_pyi():
+    f = open(os.path.join(jittor_path,"__init__.pyi"),"w")
+    # fundamental declaration
+    f.write("from typing import List, Tuple, Optional, Union, Any, ContextManager, Callable, overload\n")
+    f.write("import builtins\nimport math\nimport pickle\n")
+    # for c++ ops
+    for func_name,func in ops.__dict__.items():
+        if func_name == "__doc__" or func_name == "__name__" or func_name == "__loader__" or func_name == "__spec__" or func_name == "__package__":
+            continue
+        # print(func_name)
+        text = func.__doc__
+        declarations = re.findall(r"Declaration:\n(.+)\n",text)
+        # print(declarations)
+        for decl in declarations:
+            f.write(f"def {func_name}(")
+            params = re.findall(r".+ [a-zA-Z_0-9]+\((.+)", decl)
+            # print(params)
+            for param in params:
+                para = param.split(",")
+                for i,p in enumerate(para):
+                    pa = p.strip().split(" ")[1]
+                    pf = pa.split("=")[0]
+                    # print(pa)
+                    f.write(pf)
+                    if i != len(para) - 1:
+                        f.write(",")
+                    else:
+                        if len(pa.split("=")) > 1:
+                            f.write("):...\n")
+                        else:
+                            f.write(":...\n")
+    f.close()
+
 setup_mpi()
 in_mpi = inside_mpi()
 rank = mpi.world_rank() if in_mpi else 0
@@ -503,3 +508,4 @@ setup_cutt()
 setup_mkl()
 
 setup_cuda_extern()
+get_pyi()
