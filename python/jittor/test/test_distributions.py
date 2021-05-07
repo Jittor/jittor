@@ -71,8 +71,9 @@ class TestOneHot(unittest.TestCase):
             # print(jc.log_prob(x),tc.log_prob(x))
             assert np.allclose(jc.log_prob(x),tc.log_prob(torch.tensor(x)))
             assert np.allclose(jd.kl_divergence(jc,jc2),torch.distributions.kl_divergence(tc,tc2))
-    
+            
     def test_uniform(self):
+        import torch
         for _ in range(4):
             low, low2 = np.random.ranint(-1,2), np.random.ranint(-1,2)
             leng, leng2 = np.random.uniform(0,2), np.random.uniform(0,2)
