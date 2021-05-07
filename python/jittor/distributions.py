@@ -105,6 +105,24 @@ class Normal:
         return 0.5+0.5*np.log(2*np.pi)+jt.log(self.sigma)
 
 
+class Uniform:
+    def __init__(self,low,high):
+        self.low = low
+        self.high = high
+        assert high > low
+    
+    def sample(self,sample_shape):
+        return jt.uniform(low,high,sample_shape)
+    
+    def log_prob(self,x):
+        if x < low or x >= high:
+            return math.inf
+        return -jt.log(self.high - self.low)
+    
+    def entropy(self):
+        return jt.log(self.high - self.low)
+
+
 def kl_divergence(cur_dist,old_dist):
     assert isinstance(cur_dist,type(old_dist))
     if isinstance(cur_dist,Normal):
@@ -116,4 +134,8 @@ def kl_divergence(cur_dist,old_dist):
         t[jt.array((old_dist.probs == 0))] = math.inf
         t[jt.array((cur_dist.probs == 0))] = 0
         return t.sum(-1)
-    
+    if isinstance(cur_dist,Uniform):
+        res = jt.log((old_dist.high - old_dist.low) / (cur_dist.high - cur_dist.low))
+        if old_dist.low > cur_dist.low or old_dist.high < cur_dist.high:
+            res = math.inf
+        return res
