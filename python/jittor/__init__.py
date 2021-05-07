@@ -8,7 +8,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-__version__ = '1.2.2.60'
+__version__ = '1.2.2.67'
 from . import lock
 with lock.lock_scope():
     ori_int = int
@@ -39,6 +39,8 @@ import hashlib
 import sys, os
 import traceback
 
+if "SKEY" in os.environ:
+    import jittor_utils.student_queue
 
 def safepickle(obj, path):
     # Protocol version 4 was added in Python 3.4. It adds support for very large objects, pickling more kinds of objects, and some data format optimizations.

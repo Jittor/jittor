@@ -13,6 +13,7 @@
 
 namespace jittor {
 
+#ifndef JIT
 static auto make_transpose = get_op_info("cutt_transpose")
     .get_constructor<VarPtr, Var*, NanoVector>();
 
@@ -55,9 +56,19 @@ VarPtr CuttTransposeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     return make_transpose(dout, reverse);
 }
 
+
+void CuttTransposeOp::jit_prepare(JK& jk) {
+    // do nothing
+    jk << _CS("[T:1]");
+}
+
 unordered_map<string, unsigned int> cutt_plan_cache;
 
-void CuttTransposeOp::run() {
+#else // JIT
+
+extern unordered_map<string, unsigned int> cutt_plan_cache;
+
+void CuttTransposeOp::jit_run() {
     auto* __restrict__ xp = x->mem_ptr;
     auto* __restrict__ yp = y->mem_ptr;
     StackVector<int> x_shape;
@@ -99,5 +110,6 @@ void CuttTransposeOp::run() {
         cuttExecute(plan, xp, yp);
     }
 }
+#endif // JIT
 
 } // jittor
