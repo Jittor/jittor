@@ -40,8 +40,37 @@ class TestOneHot(unittest.TestCase):
         y = a.sample([2,3])
         y.sync()
         assert y.shape == [2,3]
+        
+    def test_normal(self):
+        import torch
+        for _ in range(10):
+            mu = np.random.uniform(-1,1)
+            sigma = np.random.uniform(0,2)
+            jn = jd.Normal(mu,sigma)
+            tn = torch.distributions.Normal(mu,sigma)
+            assert np.allclose(jn.entropy().data,tn.entropy().numpy())
+            x = np.random.uniform(-1,1)
+            # print(jn.log_prob(x))
+            # print(tn.log_prob(torch.tensor(x)))
+            assert np.allclose(jn.log_prob(x),tn.log_prob(torch.tensor(x)))
+            mu2 = np.random.uniform(-1,1)
+            sigma2 = np.random.uniform(0,2)
+            jn2 = jd.Normal(mu2,sigma2)
+            tn2 = torch.distributions.Normal(mu2,sigma2)
+            assert np.allclose(jd.kl_divergence(jn,jn2).data,torch.distributions.kl_divergence(tn,tn2).numpy())
 
-
+    def test_categorical(self):
+        import torch
+        for _ in range(10):
+            probs,probs2 = np.random.uniform(0,1,(10)), np.random.uniform(0,1,(10))
+            probs,probs2 = probs / probs.sum(),probs2 / probs2.sum()
+            jc, jc2 = jd.Categorical(jt.array(probs).reshape(1,-1)),jd.Categorical(jt.array(probs2).reshape(1,-1))
+            tc, tc2 = torch.distributions.Categorical(torch.tensor(probs)),torch.distributions.Categorical(torch.tensor(probs2))
+            assert np.allclose(jc.entropy().data,tc.entropy().numpy())
+            x = np.random.randint(0,10)
+            # print(jc.log_prob(x),tc.log_prob(x))
+            assert np.allclose(jc.log_prob(x),tc.log_prob(torch.tensor(x)))
+            assert np.allclose(jd.kl_divergence(jc,jc2),torch.distributions.kl_divergence(tc,tc2))
 
 if __name__ == "__main__":
     unittest.main()
