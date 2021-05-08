@@ -113,10 +113,10 @@ class Uniform:
         assert high > low
     
     def sample(self,sample_shape):
-        return jt.uniform(low,high,sample_shape)
+        return jt.uniform(self.low,self.high,sample_shape)
     
     def log_prob(self,x):
-        if x < low or x >= high:
+        if x < self.low or x >= self.high:
             return math.inf
         return -jt.log(self.high - self.low)
     

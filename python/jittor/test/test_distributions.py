@@ -75,11 +75,11 @@ class TestOneHot(unittest.TestCase):
     def test_uniform(self):
         import torch
         for _ in range(4):
-            low, low2 = np.random.ranint(-1,2), np.random.ranint(-1,2)
+            low, low2 = np.random.randint(-1,2), np.random.randint(-1,2)
             leng, leng2 = np.random.uniform(0,2), np.random.uniform(0,2)
             high, high2 = low + leng, low2 + leng2
             ju, ju2 = jd.Uniform(low,high),jd.Uniform(low2,high2)
-            tu, tu2 = torch.distributions.Categorical(low,high),torch.distributions.Categorical(low2,high2)
+            tu, tu2 = torch.distributions.Uniform(low,high),torch.distributions.Uniform(low2,high2)
             assert np.allclose(ju.entropy().data,tu.entropy().numpy())
             x = np.random.uniform(low,high)
             # print(jc.log_prob(x),tc.log_prob(x))
