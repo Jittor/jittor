@@ -22,6 +22,9 @@
 
 namespace jittor {
 
+
+DEFINE_FLAG(int, auto_convert_64_to_32, 1, "auto convert 64bit numpy array into 32bit jittor array");
+
 static auto make_array = get_op_info("array")
     .get_constructor<VarPtr, const void*, NanoVector, NanoString>();
 
@@ -81,7 +84,8 @@ ArrayOp::ArrayOp(PyObject* obj) {
             args.ptr = arr->data;
 
         // use 32-bit by default
-        if (holder.obj && args.dtype.dsize() == 8) {
+        if ((auto_convert_64_to_32 || holder.obj) 
+            && args.dtype.dsize() == 8 && args.ptr) {
             auto num = PyArray_Size(arr)/8;
             if (args.dtype.is_int()) {
                 auto* __restrict__ i64 = (int64*)args.ptr;
@@ -96,7 +100,6 @@ ArrayOp::ArrayOp(PyObject* obj) {
                     f32[i] = (float32)f64[i];
                 args.dtype = ns_float32;
             }
-
         }
     } else {
         LOGf << "type <" >> Py_TYPE(obj)->tp_name >> "> not support for jittor array";
@@ -147,6 +150,7 @@ ArrayOp::ArrayOp(PyObject* obj) {
             NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_WRITEABLE, // flags
             NULL // obj
         ));
+        // TODO: fix not c style auto convert
         ASSERT(0==PyArray_CopyInto(holder.obj, obj));
     }
 }

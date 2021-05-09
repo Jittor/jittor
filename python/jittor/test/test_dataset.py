@@ -106,5 +106,62 @@ class TestDataset2(unittest.TestCase):
     def test_dataset_use_jittor_cuda(self):
         self.test_dataset_use_jittor()
 
+class TestDatasetSeed(unittest.TestCase):
+    def test_np(self):
+        class YourDataset(Dataset):
+            def __init__(self):
+                super().__init__()
+                self.set_attrs(total_len=16)
+
+            def __getitem__(self, k):
+                return np.random.rand(2)
+
+        dataset = YourDataset().set_attrs(batch_size=1, shuffle=True, num_workers=4)
+        dd = []
+        for d in dataset:
+            dd.append(d.numpy())
+        for i in range(len(d)):
+            for j in range(i+1, len(d)):
+                assert not np.allclose(dd[i], dd[j])
+
+    def test_py_native(self):
+        import random
+        class YourDataset(Dataset):
+            def __init__(self):
+                super().__init__()
+                self.set_attrs(total_len=16)
+
+            def __getitem__(self, k):
+                return random.randint(0,1000)
+
+        jt.set_global_seed(0)
+        dataset = YourDataset().set_attrs(batch_size=1, shuffle=True, num_workers=4)
+        dd = []
+        for d in dataset:
+            dd.append(d.numpy())
+        for i in range(len(d)):
+            for j in range(i+1, len(d)):
+                assert not np.allclose(dd[i], dd[j])
+
+    def test_jtrand(self):
+        import random
+        class YourDataset(Dataset):
+            def __init__(self):
+                super().__init__()
+                self.set_attrs(total_len=160)
+
+            def __getitem__(self, k):
+                return jt.rand(2)
+
+        jt.set_global_seed(0)
+        dataset = YourDataset().set_attrs(batch_size=1, shuffle=True, num_workers=4)
+        dd = []
+        for d in dataset:
+            dd.append(d.numpy())
+        for i in range(len(d)):
+            for j in range(i+1, len(d)):
+                assert not np.allclose(dd[i], dd[j])
+        
+
 if __name__ == "__main__":
     unittest.main()

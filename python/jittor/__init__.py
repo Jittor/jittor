@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.2.2.69'
+__version__ = '1.2.2.70'
 from . import lock
 with lock.lock_scope():
     ori_int = int
@@ -279,6 +279,10 @@ def array(data, dtype=None):
             dtype = dtype.__name__
         return ops.array(np.array(data, dtype))
     return ops.array(data)
+
+def array64(data, dtype=None):
+    with jt.flag_scope(auto_convert_64_to_32=0):
+        return array(data, dtype)
 
 def grad(loss, targets):
     if type(targets) == core.Var:

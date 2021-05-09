@@ -15,6 +15,8 @@ typedef void (*set_seed_callback)(int);
 void init();
 // @pyjt(set_seed, seed)
 void set_seed(int seed);
+// @pyjt(get_seed)
+int get_seed();
 
 void add_set_seed_callback(set_seed_callback callback);
 
