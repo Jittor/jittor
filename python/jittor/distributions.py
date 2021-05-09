@@ -59,7 +59,18 @@ class OneHotCategorical:
     
 class Categorical:
     def __init__(self, probs=None, logits=None):
-        OneHotCategorical.__init__(self, probs, logits)
+        assert not (probs is None and logits is None)
+        if probs is None:
+            # cannot align to pytorch
+            probs = jt.sigmoid(logits)
+        elif logits is None:
+            logits = jt.log(probs)
+        with jt.no_grad():
+            self.probs = probs / probs.sum(-1, True)
+            self.logits = logits
+            self.cum_probs = simple_presum(probs)
+            self.cum_probs_l = self.cum_probs[..., :-1]
+            self.cum_probs_r = self.cum_probs[..., 1:]
 
     def sample(self, sample_shape=[]):
         shape = sample_shape + self.probs.shape[:-1] + (1,)
@@ -95,6 +106,24 @@ class Normal:
         return 0.5+0.5*np.log(2*np.pi)+jt.log(self.sigma)
 
 
+class Uniform:
+    def __init__(self,low,high):
+        self.low = low
+        self.high = high
+        assert high > low
+    
+    def sample(self,sample_shape):
+        return jt.uniform(self.low,self.high,sample_shape)
+    
+    def log_prob(self,x):
+        if x < self.low or x >= self.high:
+            return math.inf
+        return -jt.log(self.high - self.low)
+    
+    def entropy(self):
+        return jt.log(self.high - self.low)
+
+
 def kl_divergence(cur_dist,old_dist):
     assert isinstance(cur_dist,type(old_dist))
     if isinstance(cur_dist,Normal):
@@ -106,4 +135,8 @@ def kl_divergence(cur_dist,old_dist):
         t[jt.array((old_dist.probs == 0))] = math.inf
         t[jt.array((cur_dist.probs == 0))] = 0
         return t.sum(-1)
-    
+    if isinstance(cur_dist,Uniform):
+        res = jt.log((old_dist.high - old_dist.low) / (cur_dist.high - cur_dist.low))
+        if old_dist.low > cur_dist.low or old_dist.high < cur_dist.high:
+            res = math.inf
+        return res
