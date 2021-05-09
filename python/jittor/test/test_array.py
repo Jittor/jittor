@@ -160,6 +160,20 @@ class TestArray(unittest.TestCase):
         expect_error(lambda : jt.array("asdasd"))
         expect_error(lambda : jt.array(jt))
 
+    def test_64_bit(self):
+        a = np.random.rand(10)
+        b = jt.array(a)
+        assert b.dtype == "float32"
+
+        with jt.flag_scope(auto_convert_64_to_32=0):
+            a = np.random.rand(10)
+            b = jt.array(a)
+            assert b.dtype == "float64"
+
+        a = np.random.rand(10)
+        b = jt.array64(a)
+        assert b.dtype == "float64"
+
 
 if __name__ == "__main__":
     unittest.main()
