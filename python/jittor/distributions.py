@@ -141,10 +141,10 @@ class Geometric:
         return (jt.log(u) / (jt.log(-self.probs+1))).floor()
     
     def log_prob(self,x):
-        pass
+        return x*jt.log(-self.prob+1)+jt.log(self.prob)
     
     def entropy(self):
-        pass
+        binary_cross_entropy_with_logits(self.prob.self.logits)
 
 
 def kl_divergence(cur_dist,old_dist):
@@ -163,3 +163,5 @@ def kl_divergence(cur_dist,old_dist):
         if old_dist.low > cur_dist.low or old_dist.high < cur_dist.high:
             res = math.inf
         return res
+    if isinstance(cur_dist,Geometric):
+        return -cur_dist.entropy() - jt.log(-q.probs+1) / cur_dist.probs - old_dist.logits

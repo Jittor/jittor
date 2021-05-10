@@ -85,6 +85,18 @@ class TestOneHot(unittest.TestCase):
             # print(jc.log_prob(x),tc.log_prob(x))
             assert np.allclose(ju.log_prob(x),tu.log_prob(torch.tensor(x)))
             assert np.allclose(jd.kl_divergence(ju,ju2),torch.distributions.kl_divergence(tu,tu2))
+    
+    def test_uniform(self):
+        import torch
+        for _ in range(4):
+            prob, prob2 = np.random.uniform(0,1), np.random.uniform(0,1)
+            jg, jg2 = jd.Geometric(prob),jd.Geometric(prob2)
+            tg, tg2 = torch.distributions.Geometric(prob),torch.distributions.Geometric(prob2)
+            assert np.allclose(jg.entropy().data,tg.entropy().numpy())
+            x = np.random.randint(1,10)
+            # print(jc.log_prob(x),tc.log_prob(x))
+            assert np.allclose(jg.log_prob(x),tg.log_prob(torch.tensor(x)))
+            assert np.allclose(jd.kl_divergence(jg,jg2),torch.distributions.kl_divergence(tg,tg2))
 
 if __name__ == "__main__":
     unittest.main()
