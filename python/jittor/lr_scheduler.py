@@ -110,7 +110,7 @@ class CosineAnnealingLR(object):
         self.last_epoch += 1
         self.update_lr()
             
-    def update_lr(self, new_lr):
+    def update_lr(self):
         self.optimizer.lr = self.get_lr(self.base_lr, self.optimizer.lr)
         for i, param_group in enumerate(self.optimizer.param_groups):
             if param_group.get("lr") != None:
