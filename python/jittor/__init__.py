@@ -1256,6 +1256,21 @@ Var.__array_priority__ = 2000
 Var.__module__ = "jittor"
 Var.__reduce__ = lambda self: (Var, (self.data,))
 
+class finfo:
+    def __init__(self,dtype=Var.float):
+        if dtype == "float32":
+            self.bits = 32
+            self.eps = math.pow(2,-23)
+            self.max = (math.pow(2,23)-1) / math.pow(2,22) * math.pow(2,127)
+            self.min = -self.max
+            self.tiny = math.pow(2,-126)
+        elif dtype == "float64":
+            self.bits = 64
+            self.eps = math.pow(2,-52)
+            self.max = (math.pow(2,52)-1) / math.pow(2,51) * math.pow(2,1023)
+            self.min = -self.max
+            self.tiny = math.pow(2,-1022)
+
 from . import nn
 from . import attention
 from . import lr_scheduler

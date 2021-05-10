@@ -124,6 +124,29 @@ class Uniform:
         return jt.log(self.high - self.low)
 
 
+class Geometric:
+    def __init__(self,p=None,logits=None):
+        assert (p is not None) or (logits is not None)
+        assert 0 < p and p < 1
+        if p is None:
+            self.prob = jt.pow(e,logits)
+            self.logits = logits
+        else:
+            self.prob = p
+            self.logits = jt.log(p)
+        
+    def sample(self,sample_shape):
+        tiny = jt.info(self.probs.dtype).tiny
+        u = jt.clamp(jt.rand(sample_shape),min_v=tiny)
+        return (jt.log(u) / (jt.log(-self.probs+1))).floor()
+    
+    def log_prob(self,x):
+        pass
+    
+    def entropy(self):
+        pass
+
+
 def kl_divergence(cur_dist,old_dist):
     assert isinstance(cur_dist,type(old_dist))
     if isinstance(cur_dist,Normal):
