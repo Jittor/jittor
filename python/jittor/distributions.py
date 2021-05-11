@@ -10,7 +10,7 @@
 import math
 import numpy as np
 import jittor as jt
-
+from jittor.nn import binary_cross_entropy_with_logits
 def simple_presum(x):
     src = '''
 __inline_static__
@@ -48,7 +48,8 @@ class OneHotCategorical:
         return one_hot
     
     def log_prob(self,x):
-        return jt.log(self.probs)[0,x]
+        indices = jt.argmax(x,0)[0].int()
+        return jt.log(self.probs)[0,indices]
     
     def entropy(self):
         min_real = -(math.pow(2,23)-1) / math.pow(2,22) * math.pow(2,127)
@@ -129,11 +130,11 @@ class Geometric:
         assert (p is not None) or (logits is not None)
         assert 0 < p and p < 1
         if p is None:
-            self.prob = jt.pow(e,logits)
+            self.prob = jt.sigmoid(logits)
             self.logits = logits
-        else:
+        elif logits is None:
             self.prob = p
-            self.logits = jt.log(p)
+            self.logits = -jt.log(1. / p - 1)
         
     def sample(self,sample_shape):
         tiny = jt.info(self.probs.dtype).tiny
@@ -144,7 +145,7 @@ class Geometric:
         return x*jt.log(-self.prob+1)+jt.log(self.prob)
     
     def entropy(self):
-        binary_cross_entropy_with_logits(self.prob.self.logits)
+        return binary_cross_entropy_with_logits(jt.array(self.logits),jt.array(self.prob)) / self.prob
 
 
 def kl_divergence(cur_dist,old_dist):
@@ -153,7 +154,7 @@ def kl_divergence(cur_dist,old_dist):
         vr = (cur_dist.sigma / old_dist.sigma)**2
         t1 = ((cur_dist.mu - old_dist.mu) / old_dist.sigma)**2
         return 0.5*(vr+t1-1-jt.log(vr))
-    if isinstance(cur_dist,Categorical) or isinstance(cur_dist,OneHotCategorical):# ?
+    if isinstance(cur_dist,Categorical) or isinstance(cur_dist,OneHotCategorical):
         t = cur_dist.probs * (cur_dist.logits-old_dist.logits)
         t[jt.array((old_dist.probs == 0))] = math.inf
         t[jt.array((cur_dist.probs == 0))] = 0
@@ -164,4 +165,4 @@ def kl_divergence(cur_dist,old_dist):
             res = math.inf
         return res
     if isinstance(cur_dist,Geometric):
-        return -cur_dist.entropy() - jt.log(-q.probs+1) / cur_dist.probs - old_dist.logits
+        return -cur_dist.entropy() - jt.log(-old_dist.prob+1) / cur_dist.prob - old_dist.logits

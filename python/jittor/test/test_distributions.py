@@ -25,11 +25,21 @@ class TestOneHot(unittest.TestCase):
         x = a.sample().numpy()
         for i in range(1000):
             x += a.sample().numpy()
-        print(x)
         assert (x > 200).all()
         y = a.sample([2,3])
         y.sync()
         assert y.shape == [2,3,4]
+        probs,probs2 = np.random.uniform(0,1,(10)), np.random.uniform(0,1,(10))
+        probs,probs2 = probs / probs.sum(),probs2 / probs2.sum()
+        import torch
+        jc, jc2 = jd.OneHotCategorical(jt.array(probs).reshape(1,-1)),jd.OneHotCategorical(jt.array(probs2).reshape(1,-1))
+        tc, tc2 = torch.distributions.OneHotCategorical(torch.tensor(probs)),torch.distributions.OneHotCategorical(torch.tensor(probs2))
+        assert np.allclose(jc.entropy().data,tc.entropy().numpy())
+        nx = np.random.randint(0,9)
+        x = np.zeros((10))
+        x[nx] = 1
+        assert np.allclose(jc.log_prob(jt.array(x)),tc.log_prob(torch.tensor(x)))
+        assert np.allclose(jd.kl_divergence(jc,jc2),torch.distributions.kl_divergence(tc,tc2))
 
     def test_cate(self):
         a = jd.Categorical(jt.array([0.25, 0.25, 0.25, 0.25]))
@@ -43,7 +53,7 @@ class TestOneHot(unittest.TestCase):
         
     def test_normal(self):
         import torch
-        for _ in range(10):
+        for _ in range(4):
             mu = np.random.uniform(-1,1)
             sigma = np.random.uniform(0,2)
             jn = jd.Normal(mu,sigma)
@@ -61,14 +71,13 @@ class TestOneHot(unittest.TestCase):
 
     def test_categorical(self):
         import torch
-        for _ in range(10):
+        for _ in range(4):
             probs,probs2 = np.random.uniform(0,1,(10)), np.random.uniform(0,1,(10))
             probs,probs2 = probs / probs.sum(),probs2 / probs2.sum()
             jc, jc2 = jd.Categorical(jt.array(probs).reshape(1,-1)),jd.Categorical(jt.array(probs2).reshape(1,-1))
             tc, tc2 = torch.distributions.Categorical(torch.tensor(probs)),torch.distributions.Categorical(torch.tensor(probs2))
             assert np.allclose(jc.entropy().data,tc.entropy().numpy())
             x = np.random.randint(0,10)
-            # print(jc.log_prob(x),tc.log_prob(x))
             assert np.allclose(jc.log_prob(x),tc.log_prob(torch.tensor(x)))
             assert np.allclose(jd.kl_divergence(jc,jc2),torch.distributions.kl_divergence(tc,tc2))
             
@@ -82,11 +91,10 @@ class TestOneHot(unittest.TestCase):
             tu, tu2 = torch.distributions.Uniform(low,high),torch.distributions.Uniform(low2,high2)
             assert np.allclose(ju.entropy().data,tu.entropy().numpy())
             x = np.random.uniform(low,high)
-            # print(jc.log_prob(x),tc.log_prob(x))
             assert np.allclose(ju.log_prob(x),tu.log_prob(torch.tensor(x)))
             assert np.allclose(jd.kl_divergence(ju,ju2),torch.distributions.kl_divergence(tu,tu2))
     
-    def test_uniform(self):
+    def test_geometric(self):
         import torch
         for _ in range(4):
             prob, prob2 = np.random.uniform(0,1), np.random.uniform(0,1)
@@ -94,8 +102,8 @@ class TestOneHot(unittest.TestCase):
             tg, tg2 = torch.distributions.Geometric(prob),torch.distributions.Geometric(prob2)
             assert np.allclose(jg.entropy().data,tg.entropy().numpy())
             x = np.random.randint(1,10)
-            # print(jc.log_prob(x),tc.log_prob(x))
             assert np.allclose(jg.log_prob(x),tg.log_prob(torch.tensor(x)))
+            # print(jd.kl_divergence(jg,jg2),torch.distributions.kl_divergence(tg,tg2))
             assert np.allclose(jd.kl_divergence(jg,jg2),torch.distributions.kl_divergence(tg,tg2))
 
 if __name__ == "__main__":
