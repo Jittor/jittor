@@ -1,4 +1,3 @@
-
 # ***************************************************************
 # Copyright (c) 2021 Jittor. All Rights Reserved. 
 # Maintainers: 
@@ -32,14 +31,16 @@ class TestOneHot(unittest.TestCase):
         probs,probs2 = np.random.uniform(0,1,(10)), np.random.uniform(0,1,(10))
         probs,probs2 = probs / probs.sum(),probs2 / probs2.sum()
         import torch
+        tc, tc2 = torch.distributions.OneHotCategorical(torch.tensor(probs).to(torch.float32)),torch.distributions.OneHotCategorical(torch.tensor(probs2).to(torch.float32))
         jc, jc2 = jd.OneHotCategorical(jt.array(probs).reshape(1,-1)),jd.OneHotCategorical(jt.array(probs2).reshape(1,-1))
-        tc, tc2 = torch.distributions.OneHotCategorical(torch.tensor(probs)),torch.distributions.OneHotCategorical(torch.tensor(probs2))
-        assert np.allclose(jc.entropy().data,tc.entropy().numpy())
+        # print(jc.probs,tc.probs)
+        # print(jc.logits,tc.logits)
+        assert np.allclose(jc.entropy().data,tc.entropy().numpy()), (jc.entropy().data, tc.entropy().numpy())
         x = np.zeros((4,10))
         for _ in range(4):
             nx = np.random.randint(0,9)    
             x[_,nx] = 1
-        assert np.allclose(jc.log_prob(jt.array(x)),tc.log_prob(torch.tensor(x)))
+        assert np.allclose(tc.log_prob(torch.tensor(x).to(torch.float32)),jc.log_prob(jt.array(x)))
         assert np.allclose(jd.kl_divergence(jc,jc2),torch.distributions.kl_divergence(tc,tc2))
 
     def test_cate(self):
@@ -73,11 +74,11 @@ class TestOneHot(unittest.TestCase):
         for _ in range(4):
             probs,probs2 = np.random.uniform(0,1,(10)), np.random.uniform(0,1,(10))
             probs,probs2 = probs / probs.sum(),probs2 / probs2.sum()
-            jc, jc2 = jd.Categorical(jt.array(probs).reshape(1,-1)),jd.Categorical(jt.array(probs2).reshape(1,-1))
             tc, tc2 = torch.distributions.Categorical(torch.tensor(probs)),torch.distributions.Categorical(torch.tensor(probs2))
-            assert np.allclose(jc.entropy().data,tc.entropy().numpy())
+            jc, jc2 = jd.Categorical(jt.array(probs).reshape(1,-1)),jd.Categorical(jt.array(probs2).reshape(1,-1))
+            assert np.allclose(jc.entropy().data, tc.entropy().numpy()), (jc.entropy().data, tc.entropy().numpy())
             x = np.random.randint(0,10,(4))
-            assert np.allclose(jc.log_prob(x),tc.log_prob(torch.tensor(x)))
+            assert np.allclose(jc.log_prob(x), tc.log_prob(torch.tensor(x)))
             assert np.allclose(jd.kl_divergence(jc,jc2),torch.distributions.kl_divergence(tc,tc2))
             
     def test_uniform(self):
