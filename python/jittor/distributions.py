@@ -48,8 +48,11 @@ class OneHotCategorical:
         return one_hot
     
     def log_prob(self,x):
-        indices = jt.argmax(x,0)[0].int()
-        return jt.log(self.probs)[0,indices]
+        if len(x.shape) == 1:
+            x = x.unsqueeze(0)
+        logits = self.logits.broadcast(x.shape)
+        indices = jt.argmax(x, dim=-1)[0]
+        return logits.gather(1, indices.unsqueeze(-1)).reshape(-1)
     
     def entropy(self):
         min_real = -(math.pow(2,23)-1) / math.pow(2,22) * math.pow(2,127)
@@ -95,8 +98,8 @@ class Normal:
         self.mu = mu
         self.sigma = sigma
     
-    def sample(self,sample_shape):
-        return jt.normal(self.mu, self.sigma, sample_shape)
+    def sample(self,sample_shape=None):
+        return jt.normal(jt.array(self.mu), jt.array(self.sigma),size=sample_shape)
 
     def log_prob(self, x):
         var = self.sigma**2

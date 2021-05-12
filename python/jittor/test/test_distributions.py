@@ -35,9 +35,10 @@ class TestOneHot(unittest.TestCase):
         jc, jc2 = jd.OneHotCategorical(jt.array(probs).reshape(1,-1)),jd.OneHotCategorical(jt.array(probs2).reshape(1,-1))
         tc, tc2 = torch.distributions.OneHotCategorical(torch.tensor(probs)),torch.distributions.OneHotCategorical(torch.tensor(probs2))
         assert np.allclose(jc.entropy().data,tc.entropy().numpy())
-        nx = np.random.randint(0,9)
-        x = np.zeros((10))
-        x[nx] = 1
+        x = np.zeros((4,10))
+        for _ in range(4):
+            nx = np.random.randint(0,9)    
+            x[_,nx] = 1
         assert np.allclose(jc.log_prob(jt.array(x)),tc.log_prob(torch.tensor(x)))
         assert np.allclose(jd.kl_divergence(jc,jc2),torch.distributions.kl_divergence(tc,tc2))
 
@@ -60,8 +61,6 @@ class TestOneHot(unittest.TestCase):
             tn = torch.distributions.Normal(mu,sigma)
             assert np.allclose(jn.entropy().data,tn.entropy().numpy())
             x = np.random.uniform(-1,1)
-            # print(jn.log_prob(x))
-            # print(tn.log_prob(torch.tensor(x)))
             assert np.allclose(jn.log_prob(x),tn.log_prob(torch.tensor(x)))
             mu2 = np.random.uniform(-1,1)
             sigma2 = np.random.uniform(0,2)
@@ -77,7 +76,7 @@ class TestOneHot(unittest.TestCase):
             jc, jc2 = jd.Categorical(jt.array(probs).reshape(1,-1)),jd.Categorical(jt.array(probs2).reshape(1,-1))
             tc, tc2 = torch.distributions.Categorical(torch.tensor(probs)),torch.distributions.Categorical(torch.tensor(probs2))
             assert np.allclose(jc.entropy().data,tc.entropy().numpy())
-            x = np.random.randint(0,10)
+            x = np.random.randint(0,10,(4))
             assert np.allclose(jc.log_prob(x),tc.log_prob(torch.tensor(x)))
             assert np.allclose(jd.kl_divergence(jc,jc2),torch.distributions.kl_divergence(tc,tc2))
             

@@ -8,7 +8,6 @@ import os, sys, shutil
 from .compiler import *
 from jittor_utils import run_cmd, get_version, get_int_version
 from jittor.utils.misc import download_url_to_local
-from jittor import ops
 
 def search_file(dirs, name):
     for d in dirs:
@@ -21,41 +20,21 @@ def search_file(dirs, name):
 def install_mkl(root_folder):
     # origin url is
     # url = "https://github.com/intel/mkl-dnn/releases/download/v1.0.2/mkldnn_lnx_1.0.2_cpu_gomp.tgz"
-    if os.environ.get("use_onednn") == "1":
-        url = "https://cloud.tsinghua.edu.cn/f/cd63e0df3c5c4c52b76d/?dl=1"
-        filename = "oneDNN-2.2-rc.tar.gz"
-        fullname = os.path.join(root_folder, filename)
-        dirname = os.path.join(root_folder, filename.replace(".tar.gz",""))
-        download_url_to_local(url, filename, root_folder, "fd6e22bb49dedcf0430495098b3dcf1f")
+    url = "https://cloud.tsinghua.edu.cn/f/da02bf62b55b4aa3b8ee/?dl=1"
+    filename = "mkldnn_lnx_1.0.2_cpu_gomp.tgz"
+    fullname = os.path.join(root_folder, filename)
+    dirname = os.path.join(root_folder, filename.replace(".tgz",""))
+
+    if not os.path.isfile(os.path.join(dirname, "examples", "test")):
+        LOG.i("Downloading mkl...")
+        download_url_to_local(url, filename, root_folder, "47187284ede27ad3bd64b5f0e7d5e730")
         import tarfile
+
         with tarfile.open(fullname, "r") as tar:
             tar.extractall(root_folder)
-        import platform
-        if platform.machine() == "aarch64":
-            os.system(f"cd {dirname} && mkdir -p build && cd build && export CC=aarch64-linux-gnu-gcc && export CXX=aarch64-linux-gnu-g++ && cmake .. \
-            -DCMAKE_SYSTEM_NAME=Linux \
-            -DCMAKE_SYSTEM_PROCESSOR=AARCH64 \
-            -DCMAKE_LIBRARY_PATH=/usr/aarch64-linux-gnu/lib \
-            -D CMAKE_INSTALL_PREFIX={root_folder} && make -j && make install")
-        else:
-            os.system(f"cd {dirname} && mkdir -p build && cd build && cmake -D CMAKE_INSTALL_PREFIX={root_folder} .. && make -j && make install")
-        # TODO add completition test.
-    else:
-        url = "https://cloud.tsinghua.edu.cn/f/da02bf62b55b4aa3b8ee/?dl=1"
-        filename = "mkldnn_lnx_1.0.2_cpu_gomp.tgz"
-        fullname = os.path.join(root_folder, filename)
-        dirname = os.path.join(root_folder, filename.replace(".tgz",""))
-    
-        if not os.path.isfile(os.path.join(dirname, "examples", "test")):
-            LOG.i("Downloading mkl...")
-            download_url_to_local(url, filename, root_folder, "47187284ede27ad3bd64b5f0e7d5e730")
-            import tarfile
-    
-            with tarfile.open(fullname, "r") as tar:
-                tar.extractall(root_folder)
-    
-            assert 0 == os.system(f"cd {dirname}/examples && "
-                f"{cc_path} -std=c++14 cpu_cnn_inference_f32.cpp -Ofast -lmkldnn -I ../include -L ../lib -o test && LD_LIBRARY_PATH=../lib/ ./test")
+
+        assert 0 == os.system(f"cd {dirname}/examples && "
+            f"{cc_path} -std=c++14 cpu_cnn_inference_f32.cpp -Ofast -lmkldnn -I ../include -L ../lib -o test && LD_LIBRARY_PATH=../lib/ ./test")
 
 def setup_mkl():
     global mkl_ops, use_mkl
@@ -64,33 +43,25 @@ def setup_mkl():
     if not use_mkl: return
     mkl_include_path = os.environ.get("mkl_include_path")
     mkl_lib_path = os.environ.get("mkl_lib_path")
+    
     if mkl_lib_path is None or mkl_include_path is None:
-        if os.environ.get("use_onednn","0")=="1":
-            LOG.v("setup onednn...")
-            from pathlib import Path
-            one_path = os.path.join(str(Path.home()),".cache", "jittor", "one")
-            make_cache_dir(one_path)
-            mkl_include_path = os.path.join(one_path,"include")
-            mkl_lib_path = os.path.join(one_path,"lib")
-            if not os.path.isdir(mkl_include_path) or not os.path.isdir(mkl_lib_path) or not os.path.isfile(os.path.join(mkl_lib_path, "libmkldnn.so")):
-                install_mkl(one_path)
-        else:
-            mkl_install_sh = os.path.join(jittor_path, "script", "install_mkl.sh")
-            LOG.v("setup mkl...")
-            # mkl_path = os.path.join(cache_path, "mkl")
-            # mkl_path decouple with cc_path
-            from pathlib import Path
-            mkl_path = os.path.join(str(Path.home()), ".cache", "jittor", "mkl")
-            make_cache_dir(mkl_path)
-            install_mkl(mkl_path)
-            mkl_home = ""
-            for name in os.listdir(mkl_path):
-                if name.startswith("mkldnn_lnx") and os.path.isdir(os.path.join(mkl_path, name)):
-                    mkl_home = os.path.join(mkl_path, name)
-                    break
-            assert mkl_home!=""
-            mkl_include_path = os.path.join(mkl_home, "include")
-            mkl_lib_path = os.path.join(mkl_home, "lib")
+        mkl_install_sh = os.path.join(jittor_path, "script", "install_mkl.sh")
+        LOG.v("setup mkl...")
+        # mkl_path = os.path.join(cache_path, "mkl")
+        # mkl_path decouple with cc_path
+        from pathlib import Path
+        mkl_path = os.path.join(str(Path.home()), ".cache", "jittor", "mkl")
+        
+        make_cache_dir(mkl_path)
+        install_mkl(mkl_path)
+        mkl_home = ""
+        for name in os.listdir(mkl_path):
+            if name.startswith("mkldnn_lnx") and os.path.isdir(os.path.join(mkl_path, name)):
+                mkl_home = os.path.join(mkl_path, name)
+                break
+        assert mkl_home!=""
+        mkl_include_path = os.path.join(mkl_home, "include")
+        mkl_lib_path = os.path.join(mkl_home, "lib")
 
     mkl_lib_name = os.path.join(mkl_lib_path, "libmkldnn.so")
     assert os.path.isdir(mkl_include_path)
@@ -101,6 +72,7 @@ def setup_mkl():
     LOG.v(f"mkl_lib_name: {mkl_lib_name}")
     # We do not link manualy, link in custom ops
     # ctypes.CDLL(mkl_lib_name, dlopen_flags)
+
     mkl_op_dir = os.path.join(jittor_path, "extern", "mkl", "ops")
     mkl_op_files = [os.path.join(mkl_op_dir, name) for name in os.listdir(mkl_op_dir)]
     mkl_ops = compile_custom_ops(mkl_op_files, 
@@ -142,15 +114,7 @@ def setup_cub():
         cub_home += "/"
     setup_cuda_lib("cub", link=False, extra_flags=extra_flags)
 
-def setup_cuda_extern():  
-    '''
-    culib = compile_custom_ops(culib_src_files, return_module=True,
-        extra_flags=f" -I'{jt_cuda_include}' -I'{jt_culib_include}' {link_flags} {extra_flags} ")
-    culib_ops = culib.ops
-    globals()[lib_name+"_ops"] = culib_ops
-    globals()[lib_name] = culib
-    LOG.vv(f"Get {lib_name}_ops: "+str(dir(culib_ops)))
-    '''
+def setup_cuda_extern():
     if not has_cuda: return
     LOG.vv("setup cuda extern...")
     cache_path_cuda = os.path.join(cache_path, "cuda")
@@ -466,39 +430,6 @@ def setup_mpi():
         if k == "mpi_test": continue
         setattr(core.Var, k, warper(mpi_ops.__dict__[k]))
 
-def get_pyi():
-    f = open(os.path.join(jittor_path,"__init__.pyi"),"w")
-    # fundamental declaration
-    f.write("from typing import List, Tuple, Optional, Union, Any, ContextManager, Callable, overload\n")
-    f.write("import builtins\nimport math\nimport pickle\n")
-    # for c++ ops
-    for func_name,func in ops.__dict__.items():
-        if func_name == "__doc__" or func_name == "__name__" or func_name == "__loader__" or func_name == "__spec__" or func_name == "__package__":
-            continue
-        # print(func_name)
-        text = func.__doc__
-        declarations = re.findall(r"Declaration:\n(.+)\n",text)
-        # print(declarations)
-        for decl in declarations:
-            f.write(f"def {func_name}(")
-            params = re.findall(r".+ [a-zA-Z_0-9]+\((.+)", decl)
-            # print(params)
-            for param in params:
-                para = param.split(",")
-                for i,p in enumerate(para):
-                    pa = p.strip().split(" ")[1]
-                    pf = pa.split("=")[0]
-                    # print(pa)
-                    f.write(pf)
-                    if i != len(para) - 1:
-                        f.write(",")
-                    else:
-                        if len(pa.split("=")) > 1:
-                            f.write("):...\n")
-                        else:
-                            f.write(":...\n")
-    f.close()
-
 setup_mpi()
 in_mpi = inside_mpi()
 rank = mpi.world_rank() if in_mpi else 0
@@ -508,4 +439,3 @@ setup_cutt()
 setup_mkl()
 
 setup_cuda_extern()
-get_pyi()
