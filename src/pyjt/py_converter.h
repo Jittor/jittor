@@ -442,7 +442,21 @@ DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj);
     template<class T> \
     typename std::enable_if<is_##check_type<T>::value, return_type>::type
 
+
+#define CHECK_IS_2(check_type) \
+    template<typename T> struct is_##check_type : public std::false_type {}; \
+    template<typename Ta, typename Tb> \
+    struct is_##check_type<check_type<Ta, Tb>> : public std::true_type {};
+
+#define DEF_IS_2(check_type, return_type) \
+    template<class T> \
+    typename std::enable_if<is_##check_type<T>::value, return_type>::type
+
 CHECK_IS_1(vector);
+
+CHECK_IS_2(map);
+DEF_IS_2(map, bool) is_type(PyObject* obj);
+DEF_IS_2(map, PyObject*) to_py_object(const T& a);
 
 DEF_IS_1(vector, bool) is_type(PyObject* obj) {
     if (!(PyList_CheckExact(obj) || PyTuple_CheckExact(obj)))
@@ -520,16 +534,6 @@ DEF_IS(FetchFunc, T) from_py_object(PyObject* obj) {
     return func;
 }
 
-
-#define CHECK_IS_2(check_type) \
-    template<typename T> struct is_##check_type : public std::false_type {}; \
-    template<typename Ta, typename Tb> \
-    struct is_##check_type<check_type<Ta, Tb>> : public std::true_type {};
-
-#define DEF_IS_2(check_type, return_type) \
-    template<class T> \
-    typename std::enable_if<is_##check_type<T>::value, return_type>::type
-
 CHECK_IS_2(unordered_map);
 
 DEF_IS_2(unordered_map, bool) is_type(PyObject* obj) {
@@ -564,7 +568,7 @@ DEF_IS_2(unordered_map, T) from_py_object(PyObject* obj) {
 }
 
 // copy from unordered_map
-CHECK_IS_2(map);
+// CHECK_IS_2(map);
 
 DEF_IS_2(map, bool) is_type(PyObject* obj) {
     return PyDict_CheckExact(obj);

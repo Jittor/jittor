@@ -38,8 +38,7 @@ RUN apt download python3-distutils && dpkg-deb -x ./python3-distutils* / \
 # change tsinghua mirror
 RUN pip3 config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
 
-RUN pip3 install  \
-        pybind11 \
+RUN pip3 install  
         numpy \
         tqdm \
         pillow \

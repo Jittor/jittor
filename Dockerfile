@@ -27,7 +27,6 @@ ENV PYTHONIOENCODING utf8
 RUN pip3 config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
 
 RUN pip3 install  \
-        pybind11 \
         numpy \
         tqdm \
         pillow \

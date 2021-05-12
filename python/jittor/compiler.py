@@ -543,7 +543,7 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
         mdef->m_doc = "User defined custom ops";
         jittor::pyjt_def_{export}(m);
     }}
-    PYJF_MODULE_INIT({export});
+    PYJT_MODULE_INIT({export});
 
     ''' if export else ""}
     """
@@ -889,8 +889,8 @@ if os.environ.get("enable_lto") == "1":
     else:
         lto_flags = " -flto "
 
-pybind_include = run_cmd(python_path+" -m pybind11 --includes")
-LOG.i(f"pybind_include: {pybind_include}")
+py_include = run_cmd(py3_config_path+" --includes")
+LOG.i(f"py_include: {py_include}")
 extension_suffix = run_cmd(py3_config_path+" --extension-suffix")
 LOG.i(f"extension_suffix: {extension_suffix}")
 
@@ -903,7 +903,7 @@ make_cache_dir(ck_path)
 
 # build cache_compile
 cc_flags += f" -I{jittor_path}/src "
-cc_flags += pybind_include
+cc_flags += py_include
 check_cache_compile()
 LOG.v(f"Get cache_compile: {jit_utils.cc}")
 
