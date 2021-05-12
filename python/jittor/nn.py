@@ -348,6 +348,8 @@ class Identity(Module):
     def execute(self, input):
         return input
 
+def identity(input): return input
+
 class Dropout(Module):
     def __init__(self, p=0.5, is_train=False):
         assert p >= 0 and p <= 1, "dropout probability has to be between 0 and 1, but got {}".format(p)
@@ -1321,6 +1323,14 @@ class Upsample(Module):
                 int(x.shape[2]*self.scale_factor[0]), 
                 int(x.shape[3]*self.scale_factor[1])),
             mode=self.mode)
+
+class UpsamplingBilinear2d(Upsample):
+    def __init__(self, scale_factor=None):
+        Upsample.__init__(self, scale_factor, 'bilinear')
+
+class UpsamplingNearest2d(Upsample):
+    def __init__(self, scale_factor=None):
+        Upsample.__init__(self, scale_factor, 'nearest')
 
 class Sequential(Module):
     def __init__(self, *args):

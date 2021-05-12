@@ -164,6 +164,9 @@ class Dataset(object):
         import jittor_utils
         jittor_utils.cc.init_subprocess()
         jt.jt_init_subprocess()
+        seed = jt.get_seed()
+        wseed = (seed ^ worker_id) ^ 1234
+        jt.set_seed(wseed)
         # parallel_op_compiler still problematic,
         # it is not work on ubuntu 16.04. but worked on ubuntu 20.04
         # it seems like the static value of parallel compiler

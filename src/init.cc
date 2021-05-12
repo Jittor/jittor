@@ -73,6 +73,10 @@ void set_seed(int seed) {
         cb(seed);
 }
 
+int get_seed() {
+    return current_seed;
+}
+
 void add_set_seed_callback(set_seed_callback callback) {
     callbacks.push_back(callback);
     callback(current_seed);
@@ -90,6 +94,7 @@ void jt_init_subprocess() {
     exe.last_is_cuda = false;
     no_cuda_error_when_free = 1;
     #endif
+    callbacks.clear();
 }
 
 }

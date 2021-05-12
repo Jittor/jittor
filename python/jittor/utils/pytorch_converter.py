@@ -217,18 +217,6 @@ pjmap = {
         'links': {},
         'extras': {},
     },
-    'kaiming_normal_': {
-        'pytorch': {
-            'args': "tensor, a=0, mode='fan_in', nonlinearity='leaky_relu'", 
-        },
-        'jittor': {
-            'module': 'init',
-            'name': 'relu_invariant_gauss_',
-            'args': 'var, mode="fan_in"'
-        },
-        'links': {'tensor': 'var'},
-        'extras': {},
-    },
     'constant_': {
         'pytorch': {
             'args': "tensor, val", 
@@ -382,10 +370,10 @@ unsupport_ops = [
     'TransformerDecoder', 'TransformerEncoderLayer', 'TransformerDecoderLayer', 'Identity', 'Bilinear', 
     'Dropout3d', 'AlphaDropout', 'EmbeddingBag', 'CosineSimilarity', 'PairwiseDistance', 'CTCLoss', 'NLLLoss', 'PoissonNLLLoss', 'KLDivLoss', 'BCEWithLogitsLoss', 
     'MarginRankingLoss', 'HingeEmbeddingLoss', 'MultiLabelMarginLoss', 'SmoothL1Loss', 'SoftMarginLoss', 
-    'MultiLabelSoftMarginLoss', 'CosineEmbeddingLoss', 'MultiMarginLoss', 'TripletMarginLoss', 'UpsamplingNearest2d', 
-    'UpsamplingBilinear2d', 'DataParallel', 'DistributedDataParallel', 'clip_grad_norm_', 'clip_grad_value_', 
-    'parameters_to_vector', 'vector_to_parameters', 'BasePruningMethod', 'PruningContainer', 'Identity', 
-    'RandomUnstructured', 'L1Unstructured', 'RandomStructured', 'LnStructured', 'CustomFromMask', 'identity', 
+    'MultiLabelSoftMarginLoss', 'CosineEmbeddingLoss', 'MultiMarginLoss', 'TripletMarginLoss', # 'DataParallel', 'DistributedDataParallel', 
+    'clip_grad_norm_', 'clip_grad_value_', 
+    'parameters_to_vector', 'vector_to_parameters', 'BasePruningMethod', 'PruningContainer', 
+    'RandomUnstructured', 'L1Unstructured', 'RandomStructured', 'LnStructured', 'CustomFromMask', 
     'random_unstructured', 'l1_unstructured', 'random_structured', 'ln_structured', 'global_unstructured', 
     'custom_from_mask', 'remove', 'is_pruned', 'weight_norm', 'remove_weight_norm', 'spectral_norm', 
     'remove_spectral_norm', 'PackedSequence', 'pack_padded_sequence', 'pad_packed_sequence', 'pad_sequence', 'pack_sequence'
