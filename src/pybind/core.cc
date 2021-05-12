@@ -35,4 +35,4 @@ static void init_module(PyModuleDef* mdef, PyObject* m) {
     jittor::init();
     jittor::pyjt_def_all(m);
 }
-PYJF_MODULE_INIT(jittor_core);
+PYJT_MODULE_INIT(jittor_core);

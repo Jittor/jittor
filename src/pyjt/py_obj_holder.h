@@ -49,7 +49,7 @@ inline Log& operator<<(Log& os, PyObject* objp) {
 
 }
 
-#define PYJF_MODULE_INIT(name) \
+#define PYJT_MODULE_INIT(name) \
 PyMODINIT_FUNC PyInit_##name() { \
     PyObject *m; \
     try { \

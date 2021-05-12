@@ -30,7 +30,7 @@ class TestNanoString(unittest.TestCase):
         assert (jt.hash("asdasd") == 4152566416)
         assert str(jt.NanoString("float"))=="float32"
         assert jt.NanoString("float")=="float32"
-        # pybind11: 7
+        # py_bind11: 7
         # Tuple call: 1.3
         # fast call (with or with not): 0.9
         # init call 1.5
