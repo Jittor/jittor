@@ -68,7 +68,7 @@ class ReduceLROnPlateau(object):
             new_lr = max(old_lr * self.factor, self.min_lrs[i])
             if old_lr - new_lr > self.eps:
                 if param_group.get("lr")!=None:
-                    param_group["lr"] = new_lr
+                    param_group["lr"] = max(param_group["lr"] * self.factor, self.min_lrs[i])
                 else:
                     self.optimizer.lr = new_lr
                 if self.verbose:
@@ -93,14 +93,14 @@ class CosineAnnealingLR(object):
         self.optimizer = optimizer
         self.last_epoch = last_epoch
         self.base_lr = optimizer.lr
+        self.base_lr_pg = [pg.get("lr") for pg in optimizer.param_groups]
         #TODO set last_epoch is not ready
 
-    def get_lr(self):
+    def get_lr(self, base_lr, now_lr):
         if self.last_epoch == 0:
-            return self.base_lr
-        now_lr = self.optimizer.lr
+            return base_lr
         if (self.last_epoch - 1 - self.T_max) % (2 * self.T_max) == 0:
-            return (now_lr + (self.base_lr - self.eta_min) *
+            return (now_lr + (base_lr - self.eta_min) *
                     (1 - math.cos(math.pi / self.T_max)) / 2)
         return  ((1 + math.cos(math.pi * self.last_epoch / self.T_max)) /
                 (1 + math.cos(math.pi * (self.last_epoch - 1) / self.T_max)) *
@@ -108,13 +108,13 @@ class CosineAnnealingLR(object):
 
     def step(self):
         self.last_epoch += 1
-        self.update_lr(self.get_lr())
+        self.update_lr()
             
-    def update_lr(self, new_lr):
-        self.optimizer.lr = new_lr
+    def update_lr(self):
+        self.optimizer.lr = self.get_lr(self.base_lr, self.optimizer.lr)
         for i, param_group in enumerate(self.optimizer.param_groups):
-            if param_group.get("lr")!=None:
-                param_group["lr"] = new_lr
+            if param_group.get("lr") != None:
+                param_group["lr"] = self.get_lr(self.base_lr_pg[i], param_group["lr"])
 
 class MultiStepLR(object):
     def __init__(self, optimizer, milestones=[], gamma=0.1, last_epoch=-1):
@@ -123,19 +123,24 @@ class MultiStepLR(object):
         self.gamma = gamma
         self.last_epoch = last_epoch
         #TODO set last_epoch is not ready
+    
+    def get_gamma(self):
+        if (self.last_epoch in self.milestones):
+            return self.gamma
+        return 1.0
 
     def get_lr(self):
         now_lr = self.optimizer.lr
-        if (self.last_epoch in self.milestones):
-            now_lr *= self.gamma
-        return now_lr
+        return now_lr * self.get_gamma()
 
     def step(self):
         self.last_epoch += 1
-        self.update_lr(self.get_lr())
+        self.update_lr()
             
-    def update_lr(self, new_lr):
-        self.optimizer.lr = new_lr
-        for i, param_group in enumerate(self.optimizer.param_groups):
-            if param_group.get("lr")!=None:
-                param_group["lr"] = new_lr
+    def update_lr(self):
+        gamma = self.get_gamma()
+        if gamma != 1.0:
+            self.optimizer.lr = self.optimizer.lr * gamma
+            for i, param_group in enumerate(self.optimizer.param_groups):
+                if param_group.get("lr") != None:
+                    param_group["lr"] = param_group["lr"] * gamma
