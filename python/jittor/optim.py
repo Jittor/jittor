@@ -40,6 +40,45 @@ class Optimizer(object):
 
     def add_param_group(self, group):
         self.param_groups.append(group)
+
+    def clip_grad_norm(self, max_norm:float, norm_type:int=2):
+        r"""Clips gradient norm of this optimizer.
+        The norm is computed over all gradients together.
+
+        Args:
+            max_norm (float or int): max norm of the gradients
+            norm_type (int): 1-norm or 2-norm
+
+        Example::
+
+            a = jt.ones(2)
+            opt = jt.optim.SGD([a], 0.1)
+
+            loss = a*a
+            opt.zero_grad()
+            opt.backward(loss)
+
+            print(opt.param_groups[0]['grads'][0].norm()) # output: 2.83
+            opt.clip_grad_norm(0.01, 2)
+            print(opt.param_groups[0]['grads'][0].norm()) # output: 0.01
+            
+            opt.step()
+
+        """
+        if self.__zero_grad: return
+        grads = []
+        for pg in self.param_groups:
+            for p, g in zip(pg["params"], pg["grads"]):
+                if p.is_stop_grad(): continue
+                grads.append(g.flatten())
+        if len(grads) == 0: return
+        total_norm = jt.norm(jt.concat(grads), norm_type)
+        clip_coef = jt.minimum(max_norm / (total_norm + 1e-6), 1.0)
+        for pg in self.param_groups:
+            for p, g in zip(pg["params"], pg["grads"]):
+                if p.is_stop_grad(): continue
+                g *= clip_coef
+
     
     @property
     def defaults(self):
