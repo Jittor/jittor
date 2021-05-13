@@ -21,8 +21,9 @@ try:
         m = {}
         for line in s:
             a = line.split('=')
+            if len(a) != 2: continue
             m[a[0]] = a[1].replace("\"", "")
-    assert m["NAME"] == "Ubuntu" and float(m["VERSION_ID"])>16, error_msg
+    # assert m["NAME"] == "Ubuntu" and float(m["VERSION_ID"].split('.')[0])>=16, error_msg
 except Exception as e:
     print(e)
     warn(error_msg)
