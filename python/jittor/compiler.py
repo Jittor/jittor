@@ -987,15 +987,26 @@ libname = ctypes.util.find_library(libname)
 assert libname is not None, "openmp library not found"
 ctypes.CDLL(libname, os.RTLD_NOW | os.RTLD_GLOBAL)
 
+# get os release
+with open("/etc/os-release", "r", encoding='utf8') as f:
+    s = f.read().splitlines()
+    os_release = {}
+    for line in s:
+        a = line.split('=')
+        if len(a) != 2: continue
+        os_release[a[0]] = a[1].replace("\"", "")
+
 version_file = os.path.join(jittor_path, "version")
 if os.path.isfile(version_file) and not os.path.isdir(os.path.join(jittor_path, "src", "__data__")):
     with open(version_file, 'r') as f:
         version = f.read().strip()
     # key = f"{version}-{cc_type}-{'cuda' if has_cuda else 'cpu'}.o"
-    key = f"{version}-g++-cpu.o"
+    key = f"{version}-g++-cpu"
+    if os_release["ID"] != 'ubuntu':
+        key += 'centos'
     # TODO: open the website
     extra_obj = os.path.join(cache_path, key)
-    url = os.path.join("https://cg.cs.tsinghua.edu.cn/jittor/assets/build/"+key)
+    url = os.path.join("https://cg.cs.tsinghua.edu.cn/jittor/assets/build/"+key+".o")
     jit_utils.download(url, extra_obj)
     files.append(extra_obj)
 

@@ -24,12 +24,17 @@ def install_mkl(root_folder):
     # url = "https://github.com/intel/mkl-dnn/releases/download/v1.0.2/mkldnn_lnx_1.0.2_cpu_gomp.tgz"
     url = "https://cloud.tsinghua.edu.cn/f/da02bf62b55b4aa3b8ee/?dl=1"
     filename = "mkldnn_lnx_1.0.2_cpu_gomp.tgz"
+    # newest version for oneDNN
+    # url = "https://github.com/oneapi-src/oneDNN/releases/download/v2.2/dnnl_lnx_2.2.0_cpu_gomp.tgz"
+    # filename = "dnnl_lnx_2.2.0_cpu_gomp.tgz"
     fullname = os.path.join(root_folder, filename)
     dirname = os.path.join(root_folder, filename.replace(".tgz",""))
 
     if not os.path.isfile(os.path.join(dirname, "examples", "test")):
         LOG.i("Downloading mkl...")
         download_url_to_local(url, filename, root_folder, "47187284ede27ad3bd64b5f0e7d5e730")
+        # newest version for oneDNN
+        # download_url_to_local(url, filename, root_folder, "35bbbdf550a9d8ad54db798e372000f6")
         import tarfile
 
         with tarfile.open(fullname, "r") as tar:
@@ -37,6 +42,9 @@ def install_mkl(root_folder):
 
         assert 0 == os.system(f"cd {dirname}/examples && "
             f"{cc_path} -std=c++14 cpu_cnn_inference_f32.cpp -Ofast -lmkldnn -I ../include -L ../lib -o test && LD_LIBRARY_PATH=../lib/ ./test")
+        # newest version for oneDNN
+        # assert 0 == os.system(f"cd {dirname}/examples && "
+        #     f"{cc_path} -std=c++14 cnn_inference_f32.cpp -Ofast -lmkldnn -I ../include -L ../lib -o test && LD_LIBRARY_PATH=../lib/ ./test")
 
 def setup_mkl():
     global mkl_ops, use_mkl
