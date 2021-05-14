@@ -21,6 +21,7 @@ if has_cupy:
     device_num = 0
     if jt.mpi:
         device_num = jt.mpi.local_rank()
+        device_num = device_num % cp.cuda.runtime.getDeviceCount()
     cupy_device = cp.cuda.Device(device_num)
     cupy_device.__enter__()
 

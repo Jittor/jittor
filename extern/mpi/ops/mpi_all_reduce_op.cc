@@ -37,7 +37,7 @@ MpiAllReduceOp::MpiAllReduceOp(Var* x, NanoString op) : x(x), op(op) {
     }
     ASSERT(op == ns_add) << "Not supported MPI op" << op;
     #ifdef HAS_CUDA
-    if (use_cuda) {
+    if (use_device_mpi) {
         static auto nccl_all_reduce = has_op("nccl_all_reduce")
             ? get_op_info("nccl_all_reduce").get_constructor<VarPtr, Var*>()
             : nullptr;

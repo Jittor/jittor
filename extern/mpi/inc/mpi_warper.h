@@ -27,9 +27,11 @@ namespace jittor {
 
 extern int mpi_world_size;
 extern int mpi_world_rank;
+extern int mpi_local_size;
 extern int mpi_local_rank;
 extern bool inside_mpi;
 extern bool mpi_enabled;
+extern bool use_device_mpi;
 
 /**
 Return number of MPI nodes.

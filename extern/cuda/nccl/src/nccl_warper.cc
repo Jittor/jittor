@@ -39,6 +39,12 @@ nccl_initer() {
     event_queue.run_sync([]() {
         checkCudaErrors(cudaSetDevice(nccl_device_id));
     });
+    if (mpi_local_size > device_count) {
+        // NCCL not support multiple process on one GPU,
+        // failback use MPI
+        return;
+    }
+    use_device_mpi = true;
     if (mpi_world_rank == 0)
         checkCudaErrors(ncclGetUniqueId(&id));
     MPI_CHECK(MPI_Bcast((void *)&id, sizeof(id), MPI_BYTE, 0, MPI_COMM_WORLD));
