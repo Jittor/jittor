@@ -30,9 +30,11 @@ namespace jittor {
 
 int mpi_world_size = 1;
 int mpi_world_rank = 0;
+int mpi_local_size = 1;
 int mpi_local_rank = 0;
 bool inside_mpi = false;
 bool mpi_enabled = false;
+bool use_device_mpi = false;
 
 int _mpi_world_size() {
     return mpi_enabled ? mpi_world_size : 1;
@@ -96,7 +98,12 @@ mpi_initer() {
         if (p == mpi_world_rank) break;
         if (hostHashs[p] == hostHashs[mpi_world_rank]) mpi_local_rank++;
     }
+    mpi_local_size = 0;
+    for (int p=0; p<mpi_world_size; p++) {
+        if (hostHashs[p] == hostHashs[mpi_world_rank]) mpi_local_size++;
+    }
     LOGv << "MPI init finished: local" << mpi_local_rank
+        << "size" << mpi_local_size
         << "global" << mpi_world_rank
         << "size" << mpi_world_size;
 }
