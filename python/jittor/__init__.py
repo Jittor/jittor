@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.2.3.4'
+__version__ = '1.2.3.5'
 from . import lock
 with lock.lock_scope():
     ori_int = int
