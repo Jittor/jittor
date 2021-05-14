@@ -311,8 +311,9 @@ int system_popen(const char* cmd) {
     int64 len=0;
     while (fgets(buf, BUFSIZ, ptr) != NULL) {
         len += strlen(buf);
-        puts(buf);
+        std::cerr << buf;
     }
+    if (len) std::cerr.flush();
     auto ret = pclose(ptr);
     if (len<10 && ret) {
         // maybe overcommit
