@@ -1000,6 +1000,8 @@ os_type = {
     "ubuntu": "ubuntu",
     "debian": "ubuntu",
     "centos": "centos",
+    "rhel": "ubuntu",
+    "fedora": "ubuntu",
 }
 version_file = os.path.join(jittor_path, "version")
 if os.path.isfile(version_file) and not os.path.isdir(os.path.join(jittor_path, "src", "__data__")):
