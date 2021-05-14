@@ -997,8 +997,8 @@ with open("/etc/os-release", "r", encoding='utf8') as f:
         os_release[a[0]] = a[1].replace("\"", "")
 
 os_type = {
-    "ubuntu": "",
-    "debian": "",
+    "ubuntu": "ubuntu",
+    "debian": "ubuntu",
     "centos": "centos",
 }
 version_file = os.path.join(jittor_path, "version")
@@ -1008,13 +1008,12 @@ if os.path.isfile(version_file) and not os.path.isdir(os.path.join(jittor_path, 
     # key = f"{version}-{cc_type}-{'cuda' if has_cuda else 'cpu'}.o"
     key = f"{version}-g++-cpu"
     os_id = os_release["ID"]
-    os_key = os_type.get(os_id, "")
-    LOG.i("OS type:", os_id, "OS key", os_key)
-    if len(os_key):
-        key += '-' + os_key
+    os_key = os_type.get(os_id, "ubuntu")
+    LOG.i("OS type:", os_id, " OS key:", os_key)
+    key += '-' + os_key + '.o'
     # TODO: open the website
     extra_obj = os.path.join(cache_path, key)
-    url = os.path.join("https://cg.cs.tsinghua.edu.cn/jittor/assets/build/"+key+".o")
+    url = os.path.join("https://cg.cs.tsinghua.edu.cn/jittor/assets/build/"+key)
     jit_utils.download(url, extra_obj)
     files.append(extra_obj)
 
