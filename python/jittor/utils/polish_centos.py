@@ -14,6 +14,14 @@ def run_cmd(cmd):
     print("RUN CMD:", cmd)
     assert os.system(cmd) == 0
 
+# ubuntu
+# debian9
+# centos
+# redhat8: docker run -it --name test registry.access.redhat.com/ubi8/ubi:8.1 bash
+# fedora: docker run -it fedora
+# archlinux: ???
+# manjaro: ???
+
 def run_in_centos(env):
     dockerfile_src = r"""
     FROM centos:7
@@ -28,6 +36,7 @@ def run_in_centos(env):
     RUN cd Python-3.8.3 && ./configure --enable-optimizations && make altinstall -j8
 
     # install g++-7
+    # or yum install gcc-g++
     RUN yum install centos-release-scl -y
     RUN yum install devtoolset-7-gcc-c++ -y
     RUN yum install which -y
