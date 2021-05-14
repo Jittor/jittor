@@ -996,14 +996,22 @@ with open("/etc/os-release", "r", encoding='utf8') as f:
         if len(a) != 2: continue
         os_release[a[0]] = a[1].replace("\"", "")
 
+os_type = {
+    "ubuntu": "",
+    "debian": "",
+    "centos": "centos",
+}
 version_file = os.path.join(jittor_path, "version")
 if os.path.isfile(version_file) and not os.path.isdir(os.path.join(jittor_path, "src", "__data__")):
     with open(version_file, 'r') as f:
         version = f.read().strip()
     # key = f"{version}-{cc_type}-{'cuda' if has_cuda else 'cpu'}.o"
     key = f"{version}-g++-cpu"
-    if os_release["ID"] != 'ubuntu':
-        key += 'centos'
+    os_id = os_release["ID"]
+    os_key = os_type.get(os_id, "")
+    LOG.i("OS type:", os_id, "OS key", os_key)
+    if len(os_key):
+        key += '-' + os_key
     # TODO: open the website
     extra_obj = os.path.join(cache_path, key)
     url = os.path.join("https://cg.cs.tsinghua.edu.cn/jittor/assets/build/"+key+".o")
