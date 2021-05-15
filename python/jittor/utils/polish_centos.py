@@ -20,6 +20,7 @@ def run_cmd(cmd):
 # redhat8: docker run -it --name test registry.access.redhat.com/ubi8/ubi:8.1 bash
 # fedora: docker run -it fedora
 # archlinux: ???
+# pacman fix: https://github.com/qutebrowser/qutebrowser/commit/478e4de7bd1f26bebdcdc166d5369b2b5142c3e2
 # manjaro: ???
 
 def run_in_centos(env):

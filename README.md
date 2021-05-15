@@ -94,7 +94,7 @@ We provide some jupyter notebooks to help you quick start with Jittor.
 
 Jittor environment requirements:
 
-* System: **Ubuntu** >= 16.04 (or **Windows** Subsystem of Linux)
+* System: **Linux**(e.g. Ubuntu/CentOS/Arch) (or **Windows** Subsystem of Linux)
 * Python version >= 3.7
 * CPU compiler (require at least one of the following)
     * g++ (>=5.4.0)
