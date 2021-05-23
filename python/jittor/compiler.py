@@ -765,7 +765,8 @@ def check_cuda():
     global cc_flags, has_cuda, core_link_flags, cuda_dir, cuda_lib, cuda_include, cuda_home
     cuda_dir = os.path.dirname(get_full_path_of_executable(nvcc_path))
     cuda_home = os.path.abspath(os.path.join(cuda_dir, ".."))
-    assert cuda_dir.endswith("bin") and "cuda" in cuda_dir.lower(), f"Wrong cuda_dir: {cuda_dir}"
+    # try default nvidia-cuda-toolkit in Ubuntu 20.04
+    # assert cuda_dir.endswith("bin") and "cuda" in cuda_dir.lower(), f"Wrong cuda_dir: {cuda_dir}"
     cuda_include = os.path.abspath(os.path.join(cuda_dir, "..", "include"))
     cuda_lib = os.path.abspath(os.path.join(cuda_dir, "..", "lib64"))
     cuda_include2 = os.path.join(jittor_path, "extern","cuda","inc")
@@ -1011,6 +1012,8 @@ if os.path.isfile(version_file) and not os.path.isdir(os.path.join(jittor_path, 
     key = f"{version}-g++-cpu"
     os_id = os_release["ID"]
     os_key = os_type.get(os_id, "ubuntu")
+    if "os_key" in os.environ:
+        os_key = os.environ['os_key']
     LOG.i("OS type:", os_id, " OS key:", os_key)
     key += '-' + os_key + '.o'
     # TODO: open the website
