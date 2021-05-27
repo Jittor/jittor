@@ -8,7 +8,7 @@
 
 #include "var.h"
 #include "cudnn_test_op.h"
-#include "misc/str_utils.h"
+#include "utils/str_utils.h"
 
 int cudnn_test_entry( int argc, char** argv );
 
