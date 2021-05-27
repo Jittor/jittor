@@ -12,7 +12,7 @@
 #include "jit_compiler.h"
 #include "utils/cache_compile.h"
 #include "opt/tuner_manager.h"
-#include "misc/str_utils.h"
+#include "utils/str_utils.h"
 #include "ops/op_register.h"
 #include "ops/array_op.h"
 #include "lock.h"

@@ -32,7 +32,7 @@
 #include "opt/pass/fake_main_pass.h"
 #include "opt/pass/check_cache_pass.h"
 #include "opt/pass/mark_raw_pass.h"
-#include "misc/str_utils.h"
+#include "utils/str_utils.h"
 
 namespace jittor {
 

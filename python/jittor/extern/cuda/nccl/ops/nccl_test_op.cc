@@ -5,7 +5,7 @@
 // ***************************************************************
 #include "var.h"
 #include "nccl_test_op.h"
-#include "misc/str_utils.h"
+#include "utils/str_utils.h"
 
 #include "nccl_warper.h"
 

@@ -769,6 +769,9 @@ def check_cuda():
     # assert cuda_dir.endswith("bin") and "cuda" in cuda_dir.lower(), f"Wrong cuda_dir: {cuda_dir}"
     cuda_include = os.path.abspath(os.path.join(cuda_dir, "..", "include"))
     cuda_lib = os.path.abspath(os.path.join(cuda_dir, "..", "lib64"))
+    if nvcc_path == "/usr/bin/nvcc":
+        # this nvcc is install by package manager
+        cuda_lib = "/usr/lib/x86_64-linux-gnu"
     cuda_include2 = os.path.join(jittor_path, "extern","cuda","inc")
     cc_flags += f" -DHAS_CUDA -I'{cuda_include}' -I'{cuda_include2}' "
     core_link_flags += f" -lcudart -L'{cuda_lib}' "
@@ -850,14 +853,14 @@ check_debug_flags()
 
 sys.path.append(cache_path)
 LOG.i(f"Jittor({__version__}) src: {jittor_path}")
-LOG.i(f"{jit_utils.cc_type} at {jit_utils.cc_path}")
+LOG.i(f"{jit_utils.cc_type} at {jit_utils.cc_path}{jit_utils.get_version(jit_utils.cc_path)}")
 LOG.i(f"cache_path: {cache_path}")
 
 with jit_utils.import_scope(import_flags):
     jit_utils.try_import_jit_utils_core()
 
 python_path = sys.executable
-# something python do not return the correct sys executable
+# sometime python do not return the correct sys executable
 # this will happend when multiple python version installed
 ex_python_path = python_path + '.' + str(sys.version_info.minor)
 if os.path.isfile(ex_python_path):
@@ -865,6 +868,8 @@ if os.path.isfile(ex_python_path):
 py3_config_path = jit_utils.py3_config_path
 
 nvcc_path = env_or_try_find('nvcc_path', '/usr/local/cuda/bin/nvcc')
+if not nvcc_path:
+    nvcc_path = env_or_try_find('nvcc_path', '/usr/bin/nvcc')
 gdb_path = try_find_exe('gdb')
 addr2line_path = try_find_exe('addr2line')
 has_pybt = check_pybt(gdb_path, python_path)

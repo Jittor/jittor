@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include "utils/log.h"
 #include "utils/mwsr_list.h"
+#include "utils/str_utils.h"
 
 namespace jittor {
 
@@ -301,6 +302,26 @@ bool check_vlog(const char* fileline, int verbose) {
     return verbose <= log_v;
 }
 
+static inline void check_cuda_unsupport_version(const string& output) {
+    // check error like:
+    // /usr/include/crt/host_config.h:121:2: error: #error -- unsupported GNU version! gcc versions later than 6 are not supported!
+    // #error -- unsupported GNU version! gcc versions later than 6 are not supported!
+    string pat = "crt/host_config.h";
+    auto id = output.find(pat);
+    if (id == string::npos) return;
+    auto end = id + pat.size();
+    while (id>=0 && !(output[id]==' ' || output[id]=='\t' || output[id]=='\n'))
+        id--;
+    id ++;
+    auto fname = output.substr(id, end-id);
+    LOGw << R"(
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+Dear user, your nvcc and gcc version are not match, 
+but you can hot fix it by this command:
+>>> sudo python3 -c 's=open(")" >> fname >> R"(","r").read().replace("#error", "//#error");open(")" >> fname >> R"(","w").write(s)'
+        )";
+}
+
 int system_popen(const char* cmd) {
     char buf[BUFSIZ];
     string cmd2;
@@ -308,16 +329,19 @@ int system_popen(const char* cmd) {
     cmd2 += " 2>&1 ";
     FILE *ptr = popen(cmd2.c_str(), "r");
     if (!ptr) return -1;
-    int64 len=0;
+    string output;
     while (fgets(buf, BUFSIZ, ptr) != NULL) {
-        len += strlen(buf);
+        output += buf;
         std::cerr << buf;
     }
-    if (len) std::cerr.flush();
+    if (output.size()) std::cerr.flush();
     auto ret = pclose(ptr);
-    if (len<10 && ret) {
+    if (output.size()<10 && ret) {
         // maybe overcommit
         return -1;
+    }
+    if (ret) {
+        check_cuda_unsupport_version(output);
     }
     return ret;
 }

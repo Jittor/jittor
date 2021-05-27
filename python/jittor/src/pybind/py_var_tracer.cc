@@ -12,7 +12,7 @@
 #include "pyjt/py_obj_holder.h"
 #include "pyjt/py_converter.h"
 #include "pybind/py_var_tracer.h"
-#include "misc/str_utils.h"
+#include "utils/str_utils.h"
 #include "op.h"
 #include "var.h"
 #include "fused_op.h"
