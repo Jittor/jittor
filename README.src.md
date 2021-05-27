@@ -96,7 +96,7 @@ for i,(x,y) in enumerate(get_data(n)):
 
 We provide some jupyter notebooks to help you quick start with Jittor.
 
-我们提供了一些jupyterr notebooks来帮助您快速入门Jittor。
+我们提供了一些jupyter notebooks来帮助您快速入门Jittor。
 
 - [Example: Model definition and training][1]
 - [示例：模型定义与训练][1]

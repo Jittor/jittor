@@ -76,7 +76,7 @@ for i,(x,y) in enumerate(get_data(n)):
 ## 快速开始
 
 
-我们提供了一些jupyterr notebooks来帮助您快速入门Jittor。
+我们提供了一些jupyter notebooks来帮助您快速入门Jittor。
 
 - [示例：模型定义与训练][1]
 - [基础：Op, Var][2]
