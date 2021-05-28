@@ -39,14 +39,12 @@ class TestOneHot(unittest.TestCase):
         import torch
         tc, tc2 = torch.distributions.OneHotCategorical(torch.tensor(probs).to(torch.float32)),torch.distributions.OneHotCategorical(torch.tensor(probs2).to(torch.float32))
         jc, jc2 = jd.OneHotCategorical(jt.array(probs).reshape(1,-1)),jd.OneHotCategorical(jt.array(probs2).reshape(1,-1))
-        # print(jc.probs,tc.probs)
-        # print(jc.logits,tc.logits)
         assert np.allclose(jc.entropy().data,tc.entropy().numpy()), (jc.entropy().data, tc.entropy().numpy())
         x = np.zeros((4,10))
         for _ in range(4):
             nx = np.random.randint(0,9)    
             x[_,nx] = 1
-        assert np.allclose(tc.log_prob(torch.tensor(x).to(torch.float32)),jc.log_prob(jt.array(x)))
+        assert np.allclose(jc.log_prob(jt.array(x)),tc.log_prob(torch.tensor(x)))
         assert np.allclose(jd.kl_divergence(jc,jc2),torch.distributions.kl_divergence(tc,tc2))
 
     def test_cate(self):
@@ -81,7 +79,6 @@ class TestOneHot(unittest.TestCase):
             probs,probs2 = np.random.uniform(0,1,(10)), np.random.uniform(0,1,(10))
             probs,probs2 = probs / probs.sum(),probs2 / probs2.sum()
             tc, tc2 = torch.distributions.Categorical(torch.tensor(probs)),torch.distributions.Categorical(torch.tensor(probs2))
-            jc, jc2 = jd.Categorical(jt.array(probs).reshape(1,-1)),jd.Categorical(jt.array(probs2).reshape(1,-1))
             assert np.allclose(jc.entropy().data, tc.entropy().numpy()), (jc.entropy().data, tc.entropy().numpy())
             x = np.random.randint(0,10,(4))
             assert np.allclose(jc.log_prob(x), tc.log_prob(torch.tensor(x)))
@@ -95,7 +92,7 @@ class TestOneHot(unittest.TestCase):
             high, high2 = low + leng, low2 + leng2
             ju, ju2 = jd.Uniform(low,high),jd.Uniform(low2,high2)
             tu, tu2 = torch.distributions.Uniform(low,high),torch.distributions.Uniform(low2,high2)
-            assert np.allclose(ju.entropy().data,tu.entropy().numpy()),(ju.entropy().data,tu.entropy().numpy())
+            assert np.allclose(ju.entropy().data,tu.entropy().numpy())
             x = np.random.uniform(low,high)
             assert np.allclose(ju.log_prob(x),tu.log_prob(torch.tensor(x)))
             assert np.allclose(jd.kl_divergence(ju,ju2),torch.distributions.kl_divergence(tu,tu2))
@@ -106,23 +103,10 @@ class TestOneHot(unittest.TestCase):
             prob, prob2 = np.random.uniform(0,1), np.random.uniform(0,1)
             jg, jg2 = jd.Geometric(prob),jd.Geometric(prob2)
             tg, tg2 = torch.distributions.Geometric(prob),torch.distributions.Geometric(prob2)
-            assert np.allclose(jg.entropy().data,tg.entropy().numpy()),(jg.entropy().data,tg.entropy().numpy())
+            assert np.allclose(jg.entropy().data,tg.entropy().numpy())
             x = np.random.randint(1,10)
-            assert np.allclose(jg.log_prob(jt.array(x)),tg.log_prob(torch.tensor(x)))
-            # print(jd.kl_divergence(jg,jg2),torch.distributions.kl_divergence(tg,tg2))
-            assert np.allclose(jd.kl_divergence(jg,jg2),torch.distributions.kl_divergence(tg,tg2)),(jd.kl_divergence(jg,jg2),torch.distributions.kl_divergence(tg,tg2))
-    
-    def test_poisson(self):
-        import torch
-        for _ in range(4):
-            prob, prob2 = np.random.uniform(0,1), np.random.uniform(0,1)
-            jp, jp2 = jd.Poisson(prob),jd.Poisson(prob2)
-            tp, tp2 = torch.distributions.Poisson(prob),torch.distributions.Poisson(prob2)
-            x = np.random.randint(1,10)
-            assert np.allclose(jp.log_prob(jt.array(x).float32()),tp.log_prob(torch.tensor(x)))
-            # print(jd.kl_divergence(jg,jg2),torch.distributions.kl_divergence(tg,tg2))
-            assert np.allclose(jd.kl_divergence(jp,jp2),torch.distributions.kl_divergence(tp,tp2)),(jd.kl_divergence(jp,jp2),torch.distributions.kl_divergence(tp,tp2))
-
+            assert np.allclose(jg.log_prob(x),tg.log_prob(torch.tensor(x)))
+            assert np.allclose(jd.kl_divergence(jg,jg2),torch.distributions.kl_divergence(tg,tg2))
 
 if __name__ == "__main__":
     unittest.main()

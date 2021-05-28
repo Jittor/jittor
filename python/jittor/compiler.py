@@ -543,7 +543,7 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
         mdef->m_doc = "User defined custom ops";
         jittor::pyjt_def_{export}(m);
     }}
-    PYJF_MODULE_INIT({export});
+    PYJT_MODULE_INIT({export});
 
     ''' if export else ""}
     """
@@ -765,9 +765,13 @@ def check_cuda():
     global cc_flags, has_cuda, core_link_flags, cuda_dir, cuda_lib, cuda_include, cuda_home
     cuda_dir = os.path.dirname(get_full_path_of_executable(nvcc_path))
     cuda_home = os.path.abspath(os.path.join(cuda_dir, ".."))
-    assert cuda_dir.endswith("bin") and "cuda" in cuda_dir.lower(), f"Wrong cuda_dir: {cuda_dir}"
+    # try default nvidia-cuda-toolkit in Ubuntu 20.04
+    # assert cuda_dir.endswith("bin") and "cuda" in cuda_dir.lower(), f"Wrong cuda_dir: {cuda_dir}"
     cuda_include = os.path.abspath(os.path.join(cuda_dir, "..", "include"))
     cuda_lib = os.path.abspath(os.path.join(cuda_dir, "..", "lib64"))
+    if nvcc_path == "/usr/bin/nvcc":
+        # this nvcc is install by package manager
+        cuda_lib = "/usr/lib/x86_64-linux-gnu"
     cuda_include2 = os.path.join(jittor_path, "extern","cuda","inc")
     cc_flags += f" -DHAS_CUDA -I'{cuda_include}' -I'{cuda_include2}' "
     core_link_flags += f" -lcudart -L'{cuda_lib}' "
@@ -849,14 +853,14 @@ check_debug_flags()
 
 sys.path.append(cache_path)
 LOG.i(f"Jittor({__version__}) src: {jittor_path}")
-LOG.i(f"{jit_utils.cc_type} at {jit_utils.cc_path}")
+LOG.i(f"{jit_utils.cc_type} at {jit_utils.cc_path}{jit_utils.get_version(jit_utils.cc_path)}")
 LOG.i(f"cache_path: {cache_path}")
 
 with jit_utils.import_scope(import_flags):
     jit_utils.try_import_jit_utils_core()
 
 python_path = sys.executable
-# something python do not return the correct sys executable
+# sometime python do not return the correct sys executable
 # this will happend when multiple python version installed
 ex_python_path = python_path + '.' + str(sys.version_info.minor)
 if os.path.isfile(ex_python_path):
@@ -864,6 +868,8 @@ if os.path.isfile(ex_python_path):
 py3_config_path = jit_utils.py3_config_path
 
 nvcc_path = env_or_try_find('nvcc_path', '/usr/local/cuda/bin/nvcc')
+if not nvcc_path:
+    nvcc_path = env_or_try_find('nvcc_path', '/usr/bin/nvcc')
 gdb_path = try_find_exe('gdb')
 addr2line_path = try_find_exe('addr2line')
 has_pybt = check_pybt(gdb_path, python_path)
@@ -889,8 +895,8 @@ if os.environ.get("enable_lto") == "1":
     else:
         lto_flags = " -flto "
 
-pybind_include = run_cmd(python_path+" -m pybind11 --includes")
-LOG.i(f"pybind_include: {pybind_include}")
+py_include = run_cmd(py3_config_path+" --includes")
+LOG.i(f"py_include: {py_include}")
 extension_suffix = run_cmd(py3_config_path+" --extension-suffix")
 LOG.i(f"extension_suffix: {extension_suffix}")
 
@@ -903,7 +909,7 @@ make_cache_dir(ck_path)
 
 # build cache_compile
 cc_flags += f" -I{jittor_path}/src "
-cc_flags += pybind_include
+cc_flags += py_include
 check_cache_compile()
 LOG.v(f"Get cache_compile: {jit_utils.cc}")
 
@@ -987,12 +993,34 @@ libname = ctypes.util.find_library(libname)
 assert libname is not None, "openmp library not found"
 ctypes.CDLL(libname, os.RTLD_NOW | os.RTLD_GLOBAL)
 
+# get os release
+with open("/etc/os-release", "r", encoding='utf8') as f:
+    s = f.read().splitlines()
+    os_release = {}
+    for line in s:
+        a = line.split('=')
+        if len(a) != 2: continue
+        os_release[a[0]] = a[1].replace("\"", "")
+
+os_type = {
+    "ubuntu": "ubuntu",
+    "debian": "ubuntu",
+    "centos": "centos",
+    "rhel": "ubuntu",
+    "fedora": "ubuntu",
+}
 version_file = os.path.join(jittor_path, "version")
 if os.path.isfile(version_file) and not os.path.isdir(os.path.join(jittor_path, "src", "__data__")):
     with open(version_file, 'r') as f:
         version = f.read().strip()
     # key = f"{version}-{cc_type}-{'cuda' if has_cuda else 'cpu'}.o"
-    key = f"{version}-g++-cpu.o"
+    key = f"{version}-g++-cpu"
+    os_id = os_release["ID"]
+    os_key = os_type.get(os_id, "ubuntu")
+    if "os_key" in os.environ:
+        os_key = os.environ['os_key']
+    LOG.i("OS type:", os_id, " OS key:", os_key)
+    key += '-' + os_key + '.o'
     # TODO: open the website
     extra_obj = os.path.join(cache_path, key)
     url = os.path.join("https://cg.cs.tsinghua.edu.cn/jittor/assets/build/"+key)
