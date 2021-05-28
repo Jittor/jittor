@@ -981,16 +981,17 @@ class Module:
         This method also supports loading a state dict from a pytorch .pth file.
 
         .. note::
-            当载入的参数与模型定义不一致时, jittor 会输出错误信�? 但是不会抛出异常.
+            当载入的参数与模型定义不一致时, jittor 会输出错误信息, 但是不会抛出异常.
             若载入参数出现模型定义中没有的参数名, 则会输出如下信息, 并忽略此参数:
 
             >>> [w 0205 21:49:39.962762 96 __init__.py:723] load parameter w failed ...
 
-            若载入参数的 shape 与模型定义不一�? 则会输出如下信息, 并忽略此参数:
+            若载入参数的 shape 与模型定义不一致, 则会输出如下信息, 并忽略此参数:
 
             >>> [e 0205 21:49:39.962822 96 __init__.py:739] load parameter w failed: expect the shape of w to be [1000,100,], but got [3,100,100,]
             
-            如载入过程中出现错误, jittor 会输出概要信�? 您需要仔细核对错误信�?            
+            如载入过程中出现错误, jittor 会输出概要信息, 您需要仔细核对错误信息
+            
             >>> [w 0205 21:49:39.962906 96 __init__.py:741] load total 100 params, 3 failed
         '''
         self.load_parameters(load(path))
@@ -1259,21 +1260,6 @@ Var.__array_priority__ = 2000
 # __reduce__, __module__ is used for pickle.dump and pickle.load
 Var.__module__ = "jittor"
 Var.__reduce__ = lambda self: (Var, (self.data,))
-
-class finfo:
-    def __init__(self,dtype=Var.float):
-        if dtype == "float32":
-            self.bits = 32
-            self.eps = math.pow(2,-23)
-            self.max = (math.pow(2,23)-1) / math.pow(2,22) * math.pow(2,127)
-            self.min = -self.max
-            self.tiny = math.pow(2,-126)
-        elif dtype == "float64":
-            self.bits = 64
-            self.eps = math.pow(2,-52)
-            self.max = (math.pow(2,52)-1) / math.pow(2,51) * math.pow(2,1023)
-            self.min = -self.max
-            self.tiny = math.pow(2,-1022)
 
 from . import nn
 from . import attention
