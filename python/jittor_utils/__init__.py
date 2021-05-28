@@ -16,6 +16,8 @@ import contextlib
 import threading
 import time
 from ctypes import cdll
+import shutil
+import urllib.request
 
 class LogWarper:
     def __init__(self):
@@ -180,7 +182,6 @@ def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
 
 
 def download(url, filename):
-    from six.moves import urllib
     if os.path.isfile(filename):
         if os.path.getsize(filename) > 100:
             return
@@ -246,7 +247,9 @@ def get_int_version(output):
     return ver
 
 def find_exe(name, check_version=True, silent=False):
-    output = run_cmd(f'which {name}', err_msg=f'{name} not found')
+    output = shutil.which(name)
+    if not output:
+        raise RuntimeError(f"{name} not found")
     if check_version:
         version = get_version(name)
     else:
@@ -297,6 +300,6 @@ for py3_config_path in py3_config_paths:
         break
 else:
     raise RuntimeError(f"python3.{sys.version_info.minor}-config "
-        "not found in {py3_config_paths}, please specify "
-        "enviroment variable 'python_config_path',"
-        " or apt install python3.{sys.version_info.minor}-dev")
+        f"not found in {py3_config_paths}, please specify "
+        f"enviroment variable 'python_config_path',"
+        f" or apt install python3.{sys.version_info.minor}-dev")
