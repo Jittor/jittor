@@ -7,12 +7,11 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-import jittor as jt
 import os
-from six.moves import urllib
 import hashlib
+import urllib.request
 from tqdm import tqdm
-from .. import lock
+from jittor_utils import lock
 
 def ensure_dir(dir_path):
     if not os.path.isdir(dir_path):
@@ -41,14 +40,11 @@ def download_url_to_local(url, filename, root_folder, md5):
     if check_file_exist(file_path, md5):
         return
     else:
-        try:
-            print('Downloading ' + url + ' to ' + file_path)
-            urllib.request.urlretrieve(
-                url, file_path,
-                reporthook=_progress()
-            )
-        except(urllib.error.URLError, IOError) as e:
-            raise e
+        print('Downloading ' + url + ' to ' + file_path)
+        urllib.request.urlretrieve(
+            url, file_path,
+            reporthook=_progress()
+        )
     if not check_file_exist(file_path, md5):
         raise RuntimeError("File downloads failed.")
 
@@ -72,3 +68,4 @@ def calculate_md5(file_path, chunk_size=1024 * 1024):
 
 def check_md5(file_path, md5, **kwargs):
     return md5 == calculate_md5(file_path, **kwargs)
+

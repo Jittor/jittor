@@ -7,11 +7,12 @@
 import os, sys, shutil
 from .compiler import *
 from jittor_utils import run_cmd, get_version, get_int_version
-from jittor.utils.misc import download_url_to_local
+from jittor_utils.misc import download_url_to_local
 
 def search_file(dirs, name, prefer_version=()):
     for d in dirs:
         fname = os.path.join(d, name)
+        prefer_version = tuple( str(p) for p in prefer_version )
         for i in range(len(prefer_version),-1,-1):
             vname = ".".join((fname,)+prefer_version[:i])
             if os.path.isfile(vname):
@@ -106,7 +107,7 @@ def install_cub(root_folder):
         with tarfile.open(fullname, "r") as tar:
             tar.extractall(root_folder)
         assert 0 == os.system(f"cd {dirname}/examples && "
-                    f"{nvcc_path} device/example_device_radix_sort.cu -O2 -I.. -std=c++14 -o test")
+                    f"{nvcc_path} --cudart=shared -ccbin=\"{cc_path}\"  device/example_device_radix_sort.cu -O2 -I.. -std=c++14 -o test")
         if core.get_device_count():
             assert 0 == os.system(f"cd {dirname}/examples && ./test")
     return dirname
@@ -153,9 +154,11 @@ def setup_cuda_extern():
             line = traceback.format_exc()
             LOG.w(f"CUDA found but {lib_name} is not loaded:\n{line}")
             if lib_name == "cudnn":
-                LOG.w(f"Develop version of CUDNN not found, "
-                    "please refer to CUDA offical tar file installation: "
-                    "https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#installlinux-tar")
+                LOG.w(f"""Develop version of CUDNN not found, 
+please refer to CUDA offical tar file installation: 
+https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#installlinux-tar
+or you can let jittor install cuda and cudnn for you:
+>>> python3.{sys.version_info.minor} -m jittor_utils.install_cuda""")
 
 def setup_cuda_lib(lib_name, link=True, extra_flags=""):
     globals()[lib_name+"_ops"] = None
@@ -178,6 +181,12 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
         if nvcc_version[0] == 11:
             prefer_version = ("8",)
         culib_path = search_file([cuda_lib, extra_lib_path, "/usr/lib/x86_64-linux-gnu"], f"lib{lib_name}.so", prefer_version)
+
+        if lib_name == "cublas":
+            # manual link libcublasLt.so
+            cublas_lt_lib_path = search_file([cuda_lib, extra_lib_path, "/usr/lib/x86_64-linux-gnu"], f"libcublasLt.so", nvcc_version)
+            ctypes.CDLL(cublas_lt_lib_path, dlopen_flags)
+
 
         if lib_name == "cudnn":
             # cudnn cannot found libcudnn_cnn_train.so.8, we manual link for it.
@@ -241,7 +250,7 @@ def install_cutt(root_folder):
         if len(flags.cuda_archs):
             arch_flag = f" -arch=compute_{min(flags.cuda_archs)} "
             arch_flag += ''.join(map(lambda x:f' -code=sm_{x} ', flags.cuda_archs))
-        run_cmd(f"make NVCC_GENCODE='{arch_flag}' nvcc_path='{nvcc_path}'", cwd=dirname)
+        run_cmd(f"make NVCC_GENCODE='{arch_flag} --cudart=shared -ccbin=\"{cc_path}\" ' nvcc_path='{nvcc_path}'", cwd=dirname)
     return dirname
 
 def setup_cutt():
@@ -317,7 +326,7 @@ def install_nccl(root_folder):
         if len(flags.cuda_archs):
             arch_flag = f" -arch=compute_{min(flags.cuda_archs)} "
             arch_flag += ''.join(map(lambda x:f' -code=sm_{x} ', flags.cuda_archs))
-        run_cmd(f"make -j8 src.build CUDA_HOME='{cuda_home}' NVCC_GENCODE='{arch_flag}' ", cwd=dirname)
+        run_cmd(f"make -j8 src.build CUDA_HOME='{cuda_home}' NVCC_GENCODE='{arch_flag} --cudart=shared -ccbin=\"{cc_path}\" ' ", cwd=dirname)
     return dirname
 
 def setup_nccl():

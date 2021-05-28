@@ -24,8 +24,8 @@ void (*PyArray_CastScalarToCtype)(PyObject* scalar, void* ctypeptr, PyArrayDescr
 tmp_data_t tmp_data;
 
 void numpy_init() {
-    PyObjHolder np(PyImport_ImportModule("numpy.core.multiarray"));
-    PyObjHolder api(PyObject_GetAttrString(np.obj, "_ARRAY_API"));
+    PyObjHolder np(PyImport_ImportModule("numpy.core.multiarray"), "numpy is not installed");
+    PyObjHolder api(PyObject_GetAttrString(np.obj, "_ARRAY_API"), "numpy _ARRAY_API not found, you may need to reinstall numpy");
     PyArray_API = (void **) PyCapsule_GetPointer(api.obj, NULL);
 
     #define fill(name, i) name = (decltype(name))PyArray_API[i]

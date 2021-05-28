@@ -18,7 +18,8 @@ from ctypes.util import find_library
 import jittor_utils as jit_utils
 from jittor_utils import LOG, run_cmd, cache_path, find_exe, cc_path, cc_type, cache_path
 from . import pyjt_compiler
-from . import lock
+from jittor_utils import lock
+from jittor_utils import install_cuda
 from jittor import __version__
 
 def find_jittor_path():
@@ -867,6 +868,11 @@ if os.path.isfile(ex_python_path):
     python_path = ex_python_path
 py3_config_path = jit_utils.py3_config_path
 nvcc_path = env_or_try_find('nvcc_path', 'nvcc') or try_find_exe('/usr/local/cuda/bin/nvcc') or try_find_exe('/usr/bin/nvcc')
+if not nvcc_path:
+    cuda_driver = install_cuda.get_cuda_driver()
+    nvcc_path = install_cuda.install_cuda()
+    if nvcc_path:
+        nvcc_path = try_find_exe(nvcc_path)
 gdb_path = try_find_exe('gdb')
 addr2line_path = try_find_exe('addr2line')
 has_pybt = check_pybt(gdb_path, python_path)
