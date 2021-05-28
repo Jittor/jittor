@@ -866,10 +866,7 @@ ex_python_path = python_path + '.' + str(sys.version_info.minor)
 if os.path.isfile(ex_python_path):
     python_path = ex_python_path
 py3_config_path = jit_utils.py3_config_path
-
-nvcc_path = env_or_try_find('nvcc_path', '/usr/local/cuda/bin/nvcc')
-if not nvcc_path:
-    nvcc_path = env_or_try_find('nvcc_path', '/usr/bin/nvcc')
+nvcc_path = env_or_try_find('nvcc_path', 'nvcc') or try_find_exe('/usr/local/cuda/bin/nvcc') or try_find_exe('/usr/bin/nvcc')
 gdb_path = try_find_exe('gdb')
 addr2line_path = try_find_exe('addr2line')
 has_pybt = check_pybt(gdb_path, python_path)
