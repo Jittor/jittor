@@ -76,7 +76,7 @@ for i,(x,y) in enumerate(get_data(n)):
 ## 快速开始
 
 
-我们提供了一些jupyterr notebooks来帮助您快速入门Jittor。
+我们提供了一些jupyter notebooks来帮助您快速入门Jittor。
 
 - [示例：模型定义与训练][1]
 - [基础：Op, Var][2]
@@ -89,7 +89,7 @@ for i,(x,y) in enumerate(get_data(n)):
 Jittor框架对环境要求如下:
 
 
-* 操作系统: **Ubuntu** >= 16.04 或 **Windows Subsystem of Linux（WSL）**
+* 操作系统: **Linux**(e.g. Ubuntu/CentOS/Arch) 或 **Windows Subsystem of Linux（WSL）**
 * Python：版本 >= 3.7
 * C++编译器 （需要下列至少一个）
     - g++ （>=5.4.0）
@@ -131,8 +131,8 @@ docker run -it -p 8888:8888 jittor/jittor
 ## Pip 安装
 
 
-如果您没有准备好环境，或者使用的不是Ubuntu操作系统， 推荐使用**docker安装**， 如果您已经装好编译器和对应版本的Python,我们强烈推荐您使用这种方法
-(如果无法访问github, 可以通过jittor主页下载):
+下面将展示Ubuntu的安装命令，如果您在使用其他Linux操作系统（如CentOS）， 请安装好依赖（Python>=3.7, g++>=5.4）或者使用**docker安装**， 如果您已经装好编译器和对应版本的Python,我们强烈推荐您使用这种方法
+(如果无法访问github, 可以通过Jittor主页下载):
 
 ```bash
 sudo apt install python3.7-dev libomp-dev

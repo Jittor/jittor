@@ -11,6 +11,7 @@ import math
 import numpy as np
 import jittor as jt
 from jittor.nn import binary_cross_entropy_with_logits
+
 def simple_presum(x):
     src = '''
 __inline_static__
@@ -106,7 +107,7 @@ class Categorical:
 
 
 class Normal:
-    def __init__(self,mu,sigma):
+    def __init__(self, mu, sigma):
         self.mu = mu
         self.sigma = sigma
     
@@ -201,9 +202,50 @@ class Poisson:
         return jt.log(self.la)* x - self.la - lgamma(x + 1)
 
 
-def kl_divergence(cur_dist,old_dist):
-    assert isinstance(cur_dist,type(old_dist))
-    if isinstance(cur_dist,Normal):
+class Uniform:
+    def __init__(self,low,high):
+        self.low = low
+        self.high = high
+        assert high > low
+    
+    def sample(self,sample_shape):
+        return jt.uniform(self.low,self.high,sample_shape)
+    
+    def log_prob(self,x):
+        if x < self.low or x >= self.high:
+            return math.inf
+        return -jt.log(self.high - self.low)
+    
+    def entropy(self):
+        return jt.log(self.high - self.low)
+
+
+class Geometric:
+    def __init__(self,p=None,logits=None):
+        assert (p is not None) or (logits is not None)
+        assert 0 < p and p < 1
+        if p is None:
+            self.prob = jt.sigmoid(logits)
+            self.logits = logits
+        elif logits is None:
+            self.prob = p
+            self.logits = -jt.log(1. / p - 1)
+        
+    def sample(self, sample_shape):
+        tiny = jt.info(self.probs.dtype).tiny
+        u = jt.clamp(jt.rand(sample_shape),min_v=tiny)
+        return (jt.log(u) / (jt.log(-self.probs+1))).floor()
+    
+    def log_prob(self, x):
+        return x*jt.log(-self.prob+1)+jt.log(self.prob)
+    
+    def entropy(self):
+        return binary_cross_entropy_with_logits(jt.array(self.logits),jt.array(self.prob)) / self.prob
+
+
+def kl_divergence(cur_dist, old_dist):
+    assert isinstance(cur_dist, type(old_dist))
+    if isinstance(cur_dist, Normal):
         vr = (cur_dist.sigma / old_dist.sigma)**2
         t1 = ((cur_dist.mu - old_dist.mu) / old_dist.sigma)**2
         return 0.5*(vr+t1-1-jt.log(vr))

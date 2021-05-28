@@ -21,6 +21,7 @@ import jittor as jt
 from jittor import LOG
 from jittor.compiler import run_cmd
 from jittor_utils import translator
+from jittor.utils.polish_centos import run_in_centos
 import sys
 
 jittor_path = jt.flags.jittor_path
@@ -51,33 +52,39 @@ from pathlib import Path
 home = str(Path.home())
 # for cc_type in ["g++", "clang"]:
 #     for device in ["cpu", "cuda"]:
-for cc_type in ["g++"]:
-    for device in ["cpu"]:
-        key = f"{git_version}-{cc_type}-{device}"
-        env = f"cache_name=build/{cc_type}/{device} cc_path="
-        cname = "g++" if cc_type=="g++" else "clang-8"
-        env += cname
-        # use core2 arch, avoid using avx instructions
-        # TODO: support more archs, such as arm, or use ir(GIMPLE or LLVM)
-        env += " cc_flags='-march=core2' "
-        if device == "cpu":
-            env += "nvcc_path='' "
-        elif jt.flags.nvcc_path == "":
-            env = "unset nvcc_path && " + env
-        cmd = f"{env} {sys.executable} -c 'import jittor'"
-        LOG.i("run cmd:", cmd)
-        os.system(cmd)
-        LOG.i("run cmd:", cmd)
-        os.system(cmd)
+for os_name in ['ubuntu', 'centos']:
+    for cc_type in ["g++"]:
+        for device in ["cpu"]:
+            key = f"{git_version}-{cc_type}-{device}"
+            env = f"cache_name=build/{cc_type}/{device} cc_path="
+            cname = "g++" if cc_type=="g++" else "clang-8"
+            env += cname
+            # use core2 arch, avoid using avx instructions
+            # TODO: support more archs, such as arm, or use ir(GIMPLE or LLVM)
+            env += " cc_flags='-march=core2' "
+            if device == "cpu":
+                env += "nvcc_path='' "
+            elif jt.flags.nvcc_path == "":
+                env = "unset nvcc_path && " + env
+            cmd = f"{env} {sys.executable} -c 'import jittor'"
+            if key != 'ubuntu': key += '-' + os_name
+            if os_name == 'centos':
+                run_in_centos(env)
+                obj_path = home + f"/.cache/centos/build/{cc_type}/{device}/{cname}/obj_files"
+            else:
+                LOG.i("run cmd:", cmd)
+                os.system(cmd)
+                LOG.i("run cmd:", cmd)
+                os.system(cmd)
+                obj_path = home + f"/.cache/jittor/build/{cc_type}/{device}/{cname}/obj_files"
 
-        obj_path = home + f"/.cache/jittor/build/{cc_type}/{device}/{cname}/obj_files"
-        obj_files = []
-        for name in data_files:
-            name = name.split("/")[-1]
-            fname = f"{obj_path}/{name}.o"
-            assert os.path.isfile(fname), fname
-            obj_files.append(fname)
-        run_cmd(f"ld -r {' '.join(obj_files)} -o {build_path}/{key}.o")
+            obj_files = []
+            for name in data_files:
+                name = name.split("/")[-1]
+                fname = f"{obj_path}/{name}.o"
+                assert os.path.isfile(fname), fname
+                obj_files.append(fname)
+            run_cmd(f"ld -r {' '.join(obj_files)} -o {build_path}/{key}.o")
 
 # compress source
 # tar -cvzf build/jittor.tgz . --exclude build --exclude .git --exclude .ipynb_checkpoints --exclude __pycache__

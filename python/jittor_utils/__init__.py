@@ -112,9 +112,7 @@ def try_import_jit_utils_core(silent=None):
         if is_in_ipynb: os.environ["log_sync"] = "1"
         import jit_utils_core as cc
         if is_in_ipynb:
-            global redirector
-            redirector = cc.ostream_redirect(stdout=True, stderr=True)
-            redirector.__enter__()
+            cc.ostream_redirect(True, True)
     except Exception as _:
         pass
     if not (silent is None):
