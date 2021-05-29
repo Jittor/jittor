@@ -125,8 +125,9 @@ struct LogFatalVoidify {
 #define LOG_IF(level, cond) _LOG_IF(level, cond, 0)
 
 template<class T> T get_from_env(const char* name,const T& _default) {
-    auto s = getenv(name);
-    if (s == NULL) return _default;
+    auto ss = getenv(name);
+    if (ss == NULL) return _default;
+    string s = ss;
     std::istringstream is(s);
     T env;
     if (is >> env) {
@@ -135,6 +136,8 @@ template<class T> T get_from_env(const char* name,const T& _default) {
             return env;
         }
     }
+    if (s.size() && is.eof())
+        return env;
     LOGw << "Load" << name << "from env(" << s << ") failed, use default" << _default;
     return _default;
 }
