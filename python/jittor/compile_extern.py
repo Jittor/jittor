@@ -182,7 +182,7 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
             prefer_version = ("8",)
         culib_path = search_file([cuda_lib, extra_lib_path, "/usr/lib/x86_64-linux-gnu"], f"lib{lib_name}.so", prefer_version)
 
-        if lib_name == "cublas":
+        if lib_name == "cublas" and nvcc_version[0] >= 10:
             # manual link libcublasLt.so
             cublas_lt_lib_path = search_file([cuda_lib, extra_lib_path, "/usr/lib/x86_64-linux-gnu"], f"libcublasLt.so", nvcc_version)
             ctypes.CDLL(cublas_lt_lib_path, dlopen_flags)

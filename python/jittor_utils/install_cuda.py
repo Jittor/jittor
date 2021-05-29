@@ -26,13 +26,30 @@ def get_cuda_driver():
     except:
         return None
 
+def has_installation():
+    jtcuda_path = os.path.join(pathlib.Path.home(), ".cache", "jittor", "jtcuda")
+    return os.path.isdir(jtcuda_path)
 
 def install_cuda():
     cuda_driver_version = get_cuda_driver()
+    if not cuda_driver_version:
+        return None
     LOG.i("cuda_driver_version: ", cuda_driver_version)
 
-    cuda_tgz = "cuda10.2_cudnn7_linux.tgz"
-    md5 = "a78f296746d97e9d76615289c2fe98ac"
+    if cuda_driver_version >= [11,2]:
+        cuda_tgz = "cuda11.2_cudnn8_linux.tgz"
+        md5 = "b93a1a5d19098e93450ee080509e9836"
+    elif cuda_driver_version >= [11,]:
+        cuda_tgz = "cuda11.0_cudnn8_linux.tgz"
+        md5 = "5dbdb43e35b4db8249027997720bf1ca"
+    elif cuda_driver_version >= [10,2]:
+        cuda_tgz = "cuda10.2_cudnn7_linux.tgz"
+        md5 = "a78f296746d97e9d76615289c2fe98ac"
+    elif cuda_driver_version >= [10,]:
+        cuda_tgz = "cuda10.0_cudnn7_linux.tgz"
+        md5 = "f16d3ff63f081031d21faec3ec8b7dac"
+    else:
+        raise RuntimeError(f"Unsupport cuda driver version: {cuda_driver_version}")
     jtcuda_path = os.path.join(pathlib.Path.home(), ".cache", "jittor", "jtcuda")
     nvcc_path = os.path.join(jtcuda_path, cuda_tgz[:-4], "bin", "nvcc")
     nvcc_lib_path = os.path.join(jtcuda_path, cuda_tgz[:-4], "lib64")

@@ -761,7 +761,7 @@ def compile_extern():
     LOG.vv(f"Compile extern llvm passes: {str(files)}")
 
 def check_cuda():
-    if nvcc_path == "":
+    if not nvcc_path:
         return
     global cc_flags, has_cuda, core_link_flags, cuda_dir, cuda_lib, cuda_include, cuda_home
     cuda_dir = os.path.dirname(get_full_path_of_executable(nvcc_path))
@@ -867,12 +867,24 @@ ex_python_path = python_path + '.' + str(sys.version_info.minor)
 if os.path.isfile(ex_python_path):
     python_path = ex_python_path
 py3_config_path = jit_utils.py3_config_path
-nvcc_path = env_or_try_find('nvcc_path', 'nvcc') or try_find_exe('/usr/local/cuda/bin/nvcc') or try_find_exe('/usr/bin/nvcc')
-if not nvcc_path:
-    cuda_driver = install_cuda.get_cuda_driver()
+
+# if jtcuda is already installed
+nvcc_path = None
+if install_cuda.has_installation():
     nvcc_path = install_cuda.install_cuda()
     if nvcc_path:
         nvcc_path = try_find_exe(nvcc_path)
+# check system installed cuda
+if not nvcc_path:
+    nvcc_path = env_or_try_find('nvcc_path', 'nvcc') or try_find_exe('/usr/local/cuda/bin/nvcc') or try_find_exe('/usr/bin/nvcc')
+# if system has no cuda, install jtcuda
+if not nvcc_path:
+    nvcc_path = install_cuda.install_cuda()
+    if nvcc_path:
+        nvcc_path = try_find_exe(nvcc_path)
+if not nvcc_path:
+    nvcc_path = ""
+
 gdb_path = try_find_exe('gdb')
 addr2line_path = try_find_exe('addr2line')
 has_pybt = check_pybt(gdb_path, python_path)
