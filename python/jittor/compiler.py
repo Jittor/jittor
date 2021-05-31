@@ -786,6 +786,7 @@ def check_cache_compile():
         "src/utils/log.cc",
         "src/utils/tracer.cc",
         "src/utils/jit_utils.cc",
+        "src/utils/str_utils.cc",
     ]
     global jit_utils_core_files
     jit_utils_core_files = files
