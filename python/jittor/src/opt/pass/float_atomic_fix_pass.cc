@@ -11,7 +11,7 @@
 #include "opt/expr.h"
 #include "opt/pass_manager.h"
 #include "opt/pass/float_atomic_fix_pass.h"
-#include "misc/str_utils.h"
+#include "utils/str_utils.h"
 
 namespace jittor {
 

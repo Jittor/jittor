@@ -5,7 +5,7 @@
 // ***************************************************************
 #include "var.h"
 #include "cutt_test_op.h"
-#include "misc/str_utils.h"
+#include "utils/str_utils.h"
 
 #ifdef JIT
 #include "cutt.h"

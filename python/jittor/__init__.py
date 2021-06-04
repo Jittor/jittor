@@ -9,8 +9,8 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.2.3.9'
-from . import lock
+__version__ = '1.2.3.14'
+from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
     ori_float = float
@@ -59,7 +59,7 @@ def safeunpickle(path):
     if path.startswith("https:") or path.startswith("http:"):
         base = path.split("/")[-1]
         fname = os.path.join(compiler.ck_path, base)
-        from jittor.utils.misc import download_url_to_local
+        from jittor_utils.misc import download_url_to_local
         download_url_to_local(path, base, compiler.ck_path, None)
         path = fname
     if path.endswith(".pth"):

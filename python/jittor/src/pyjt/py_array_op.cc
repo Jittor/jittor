@@ -86,15 +86,19 @@ ArrayOp::ArrayOp(PyObject* obj) {
         // use 32-bit by default
         if ((auto_convert_64_to_32 || holder.obj) 
             && args.dtype.dsize() == 8 && args.ptr) {
-            auto num = PyArray_Size(arr)/8;
+            auto size = PyArray_Size(arr);
+            args.buffer.reset(new char[size]);
+            auto pre_data = args.ptr;
+            args.ptr = args.buffer.get();
+            auto num = size/8;
             if (args.dtype.is_int()) {
-                auto* __restrict__ i64 = (int64*)args.ptr;
+                auto* __restrict__ i64 = (int64*)pre_data;
                 auto* __restrict__ i32 = (int32*)args.ptr;
                 for (int i=0; i<num; i++)
                     i32[i] = (int32)i64[i];
                 args.dtype = ns_int32;
             } else if (args.dtype.is_float()) {
-                auto* __restrict__ f64 = (float64*)args.ptr;
+                auto* __restrict__ f64 = (float64*)pre_data;
                 auto* __restrict__ f32 = (float32*)args.ptr;
                 for (int i=0; i<num; i++)
                     f32[i] = (float32)f64[i];

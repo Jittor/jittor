@@ -5,7 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include "opt/expr.h"
-#include "misc/str_utils.h"
+#include "utils/str_utils.h"
 
 namespace jittor {
 namespace expr {

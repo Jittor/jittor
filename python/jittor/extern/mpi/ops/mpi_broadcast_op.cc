@@ -10,7 +10,7 @@
 #include "var.h"
 #include "mpi_broadcast_op.h"
 #include "ops/op_register.h"
-#include "misc/str_utils.h"
+#include "utils/str_utils.h"
 #include "misc/cuda_flags.h"
 
 namespace jittor {
