@@ -1169,9 +1169,11 @@ def dirty_fix_pytorch_runtime_error():
         jt.dirty_fix_pytorch_runtime_error()
         import torch
     '''
-    import os
-    os.RTLD_GLOBAL = os.RTLD_GLOBAL | os.RTLD_DEEPBIND
+    import os, platform
 
+    if platform.system() == 'Linux':
+        os.RTLD_GLOBAL = os.RTLD_GLOBAL | os.RTLD_DEEPBIND
+    
 
 import atexit
 
