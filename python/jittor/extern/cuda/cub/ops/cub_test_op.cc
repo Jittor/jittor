@@ -8,7 +8,7 @@
 
 #include "var.h"
 #include "cub_test_op.h"
-#include "misc/str_utils.h"
+#include "utils/str_utils.h"
 
 #ifdef JIT
 #include "cub_test.h"

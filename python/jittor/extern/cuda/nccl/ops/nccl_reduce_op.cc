@@ -8,7 +8,7 @@
 // ***************************************************************
 #include "var.h"
 #include "nccl_reduce_op.h"
-#include "misc/str_utils.h"
+#include "utils/str_utils.h"
 
 #include <nccl.h>
 #include <cuda_runtime.h>

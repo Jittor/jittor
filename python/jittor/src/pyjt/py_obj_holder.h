@@ -25,6 +25,17 @@ struct PyObjHolder {
             LOGf << "Python error occur";
         }
     }
+    inline void assign(PyObject* obj, const char* err_msg) {
+        if (!obj) {
+            LOGf << err_msg;
+        }
+        this->obj = obj;
+    }
+    inline PyObjHolder(PyObject* obj, const char* err_msg) : obj(obj) {
+        if (!obj) {
+            LOGf << err_msg;
+        }
+    }
     inline ~PyObjHolder() {
         if (obj) Py_DECREF(obj);
     }

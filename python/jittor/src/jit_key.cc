@@ -7,7 +7,7 @@
 #include <sys/mman.h>
 #include <sstream>
 #include "jit_key.h"
-#include "misc/str_utils.h"
+#include "utils/str_utils.h"
 
 namespace jittor {
 

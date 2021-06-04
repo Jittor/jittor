@@ -37,6 +37,7 @@ void cleanup() {
 
 static void init_cuda_devices() {
 #ifdef HAS_CUDA
+    if (cuda_archs.size()) return;
     int count=0;
     cudaGetDeviceCount(&count);
     for (int i=0; i<count; i++) {
