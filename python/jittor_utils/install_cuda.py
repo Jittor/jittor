@@ -44,7 +44,7 @@ def install_cuda():
         md5 = "5dbdb43e35b4db8249027997720bf1ca"
     elif cuda_driver_version >= [10,2]:
         cuda_tgz = "cuda10.2_cudnn7_linux.tgz"
-        md5 = "a78f296746d97e9d76615289c2fe98ac"
+        md5 = "40f0563e8eb176f53e55943f6d212ad7"
     elif cuda_driver_version >= [10,]:
         cuda_tgz = "cuda10.0_cudnn7_linux.tgz"
         md5 = "f16d3ff63f081031d21faec3ec8b7dac"
