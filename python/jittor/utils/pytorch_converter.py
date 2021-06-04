@@ -358,9 +358,9 @@ unsupport_ops = [
     # ***************************************************************
     'ModuleDict', 'ParameterList', 'ParameterDict', 
     'Conv1d', 'Conv3d', 'ConvTranspose1d', 'ConvTranspose3d', 'Unfold', 'Fold', 
-    'MaxPool1d', 'MaxPool3d', 'MaxUnpool1d', 'MaxUnpool2d', 'MaxUnpool3d', 'AvgPool1d', 
-    'AvgPool3d', 'FractionalMaxPool2d', 'LPPool1d', 'LPPool2d', 'AdaptiveMaxPool1d', 
-    'AdaptiveMaxPool2d', 'AdaptiveMaxPool3d', 'AdaptiveAvgPool1d', 'AdaptiveAvgPool3d', 
+    'MaxPool1d', 'MaxUnpool1d', 'MaxUnpool2d', 'AvgPool1d', 
+    'FractionalMaxPool2d', 'LPPool1d', 'LPPool2d', 'AdaptiveMaxPool1d', 
+    'AdaptiveAvgPool1d',
     'ReflectionPad1d', 'ReplicationPad1d', 'ReplicationPad3d', 'ConstantPad1d', 'ConstantPad3d', 
     'ELU', 'Hardshrink', 'Hardtanh', 'LogSigmoid', 'MultiheadAttention', 
     'RReLU', 'SELU', 'CELU', 'GELU', 'Softshrink', 'Softsign', 'Tanhshrink', 
