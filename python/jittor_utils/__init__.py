@@ -154,6 +154,8 @@ def pool_cleanup():
     del p
 
 def pool_initializer():
+    if cc is None:
+        try_import_jit_utils_core()
     cc.init_subprocess()
 
 def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):

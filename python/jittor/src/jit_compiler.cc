@@ -33,7 +33,11 @@ jit_op_entry_t load_jit_lib(string name, string symbol_name="jit_entry") {
     LOGvv << "Opening jit lib:" << name;
     // void* handle = dlopen(name.c_str(), RTLD_NOW | RTLD_DEEPBIND | RTLD_LOCAL);
     // RTLD_DEEPBIND and openmp cause segfault
+#ifdef __linux__
     void* handle = dlopen(name.c_str(), RTLD_NOW | RTLD_LOCAL | RTLD_DEEPBIND);
+#else
+    void *handle = dlopen(name.c_str(), RTLD_NOW | RTLD_LOCAL);
+#endif
     CHECK(handle) << "Cannot open library" << name << ":" << dlerror();
     
     //dlerror();
@@ -84,8 +88,8 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
             + " '" + jit_src_path + "'" + other_src
             + cc_flags + extra_flags
             + " -o '" + jit_lib_path + "'";
-        cmd = python_path+" "+jittor_path+"/utils/asm_tuner.py "
-            "--cc_path=" + cmd;
+        // cmd = python_path+" "+jittor_path+"/utils/asm_tuner.py "
+        //     "--cc_path=" + cmd;
     }
     cache_compile(cmd, cache_path, jittor_path);
     auto symbol_name = get_symbol_name(jit_key);

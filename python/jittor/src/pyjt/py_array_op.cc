@@ -136,7 +136,7 @@ ArrayOp::ArrayOp(PyObject* obj) {
         std::memcpy(host_ptr, args.ptr, size);
     } else {
         // this is non-continue numpy array
-        int64 dims[args.shape.size()];
+        long dims[args.shape.size()];
         for (int i=0; i<args.shape.size(); i++)
             dims[i] = args.shape[i];
         holder.assign(PyArray_New(

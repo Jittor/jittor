@@ -5,6 +5,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 import os, sys, shutil
+import platform
 from .compiler import *
 from jittor_utils import run_cmd, get_version, get_int_version
 from jittor.utils.misc import download_url_to_local
@@ -54,39 +55,46 @@ def setup_mkl():
     mkl_include_path = os.environ.get("mkl_include_path")
     mkl_lib_path = os.environ.get("mkl_lib_path")
     
-    if mkl_lib_path is None or mkl_include_path is None:
-        mkl_install_sh = os.path.join(jittor_path, "script", "install_mkl.sh")
-        LOG.v("setup mkl...")
-        # mkl_path = os.path.join(cache_path, "mkl")
-        # mkl_path decouple with cc_path
-        from pathlib import Path
-        mkl_path = os.path.join(str(Path.home()), ".cache", "jittor", "mkl")
-        
-        make_cache_dir(mkl_path)
-        install_mkl(mkl_path)
-        mkl_home = ""
-        for name in os.listdir(mkl_path):
-            if name.startswith("mkldnn_lnx") and os.path.isdir(os.path.join(mkl_path, name)):
-                mkl_home = os.path.join(mkl_path, name)
-                break
-        assert mkl_home!=""
+    if platform.system() == 'Linux':
+        if mkl_lib_path is None or mkl_include_path is None:
+            mkl_install_sh = os.path.join(jittor_path, "script", "install_mkl.sh")
+            LOG.v("setup mkl...")
+            # mkl_path = os.path.join(cache_path, "mkl")
+            # mkl_path decouple with cc_path
+            from pathlib import Path
+            mkl_path = os.path.join(str(Path.home()), ".cache", "jittor", "mkl")
+            
+            make_cache_dir(mkl_path)
+            install_mkl(mkl_path)
+            mkl_home = ""
+            for name in os.listdir(mkl_path):
+                if name.startswith("mkldnn_lnx") and os.path.isdir(os.path.join(mkl_path, name)):
+                    mkl_home = os.path.join(mkl_path, name)
+                    break
+            assert mkl_home!=""
+
         mkl_include_path = os.path.join(mkl_home, "include")
         mkl_lib_path = os.path.join(mkl_home, "lib")
 
-    mkl_lib_name = os.path.join(mkl_lib_path, "libmkldnn.so")
-    assert os.path.isdir(mkl_include_path)
-    assert os.path.isdir(mkl_lib_path)
-    assert os.path.isfile(mkl_lib_name)
-    LOG.v(f"mkl_include_path: {mkl_include_path}")
-    LOG.v(f"mkl_lib_path: {mkl_lib_path}")
-    LOG.v(f"mkl_lib_name: {mkl_lib_name}")
-    # We do not link manualy, link in custom ops
-    # ctypes.CDLL(mkl_lib_name, dlopen_flags)
+        mkl_lib_name = os.path.join(mkl_lib_path, "libmkldnn.so")
+        assert os.path.isdir(mkl_include_path)
+        assert os.path.isdir(mkl_lib_path)
+        assert os.path.isfile(mkl_lib_name)
+        LOG.v(f"mkl_include_path: {mkl_include_path}")
+        LOG.v(f"mkl_lib_path: {mkl_lib_path}")
+        LOG.v(f"mkl_lib_name: {mkl_lib_name}")
+        # We do not link manualy, link in custom ops
+        # ctypes.CDLL(mkl_lib_name, dlopen_flags)
+        extra_flags = f" -I'{mkl_include_path}' -L'{mkl_lib_path}' -lmkldnn -Wl,-rpath='{mkl_lib_path}' "
+
+    elif platform.system() == 'Darwin':
+        mkl_lib_name = "/usr/local/lib/libmkldnn.dylib"
+        assert os.path.exists(mkl_lib_name), "Not found onednn, please install it by the command 'brew install onednn@2.2.3'"
+        extra_flags = f" -lmkldnn "
 
     mkl_op_dir = os.path.join(jittor_path, "extern", "mkl", "ops")
     mkl_op_files = [os.path.join(mkl_op_dir, name) for name in os.listdir(mkl_op_dir)]
-    mkl_ops = compile_custom_ops(mkl_op_files, 
-        extra_flags=f" -I'{mkl_include_path}' -L'{mkl_lib_path}' -lmkldnn -Wl,-rpath='{mkl_lib_path}' ")
+    mkl_ops = compile_custom_ops(mkl_op_files, extra_flags=extra_flags)
     LOG.vv("Get mkl_ops: "+str(dir(mkl_ops)))
 
 

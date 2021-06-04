@@ -58,7 +58,11 @@ void Profiler::stop() {
 
 unique_ptr<MemoryChecker>* load_memory_checker(string name) {
     LOGvv << "Opening jit lib:" << name;
-    void* handle = dlopen(name.c_str(), RTLD_LAZY | RTLD_DEEPBIND | RTLD_LOCAL);
+#ifdef __linux__
+    void *handle = dlopen(name.c_str(), RTLD_LAZY | RTLD_DEEPBIND | RTLD_LOCAL);
+#else
+    void* handle = dlopen(name.c_str(), RTLD_LAZY | RTLD_LOCAL);
+#endif
     CHECK(handle) << "Cannot open library" << name << ":" << dlerror();
     
     //dlerror();

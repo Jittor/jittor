@@ -159,13 +159,8 @@ struct NanoVector {
         for (auto a : v) push_back_check_overflow(a);
     }
 
-    inline static NanoVector make(const int64* v, int n) {
-        NanoVector nv;
-        for (int i=0; i<n; i++) nv.push_back_check_overflow(v[i]);
-        return nv;
-    }
-
-    inline static NanoVector make(const int32* v, int n) {
+    template<typename TMakeV>
+    inline static NanoVector make(const TMakeV* v, int n) {
         NanoVector nv;
         for (int i=0; i<n; i++) nv.push_back_check_overflow(v[i]);
         return nv;

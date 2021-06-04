@@ -144,7 +144,8 @@ void GetitemOp::infer_slices(
                         out_shape_j = (slice.stop - slice.start - 1) / slice.step + 1;
                     else
                         out_shape_j = (slice.start - slice.stop - 1) / -slice.step + 1;
-                    out_shape_j = std::max(0l, out_shape_j);
+
+                    out_shape_j = out_shape_j > 0 ? out_shape_j : 0;
                 }
                 out_shape.push_back(out_shape_j);
             }
