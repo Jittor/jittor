@@ -423,7 +423,7 @@ class BatchNorm(Module):
             norm_x = x * w.broadcast(x, dims) + b.broadcast(x, dims)
             return norm_x
 
-BatchNorm2d = BatchNorm1d = BatchNorm
+BatchNorm3d = BatchNorm2d = BatchNorm1d = BatchNorm
 
 class InstanceNorm(Module):
     def __init__(self, num_features, eps=1e-05, momentum=0.1, affine=True, is_train=True, sync=True):
@@ -447,7 +447,7 @@ class InstanceNorm(Module):
         b = self.bias - xmean * w
         return x * w.broadcast(x, dims) + b.broadcast(x, dims)
 
-InstanceNorm2d = InstanceNorm1d = InstanceNorm
+InstanceNorm3d = InstanceNorm2d = InstanceNorm1d = InstanceNorm
 
 class LayerNorm(Module):
     def __init__(self, normalized_shape, eps: float = 1e-5, elementwise_affine: bool = True) -> None:
@@ -470,7 +470,7 @@ class LayerNorm(Module):
         return x * w + b
 
 
-LayerNorm2d = LayerNorm1d = LayerNorm
+LayerNorm3d = LayerNorm2d = LayerNorm1d = LayerNorm
 
 class GroupNorm(Module):
     def __init__(self, num_groups, num_channels, eps=1e-05, affine=True, is_train=True):
