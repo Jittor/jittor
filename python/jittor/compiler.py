@@ -877,7 +877,10 @@ if install_cuda.has_installation():
         nvcc_path = try_find_exe(nvcc_path)
 # check system installed cuda
 if not nvcc_path:
-    nvcc_path = env_or_try_find('nvcc_path', 'nvcc') or try_find_exe('/usr/local/cuda/bin/nvcc') or try_find_exe('/usr/bin/nvcc')
+    nvcc_path = env_or_try_find('nvcc_path', 'nvcc') or \
+        try_find_exe('/usr/local/cuda/bin/nvcc') or \
+        try_find_exe('/usr/bin/nvcc') or \
+        try_find_exe('/opt/cuda/bin/nvcc')
 # if system has no cuda, install jtcuda
 if not nvcc_path:
     nvcc_path = install_cuda.install_cuda()
