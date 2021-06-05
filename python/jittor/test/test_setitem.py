@@ -201,6 +201,15 @@ class TestSetitem(unittest.TestCase):
         a = jt.array([1,2])
         assert a[None,:,None,None,...,None].shape == (1,2,1,1,1)
 
+    def test_roll(self):
+        x = jt.array([1, 2, 3, 4, 5, 6, 7, 8]).view(4, 2)
+        y = x.roll(1, 0)
+        assert (y.numpy() == [[7,8],[1,2],[3,4],[5,6]]).all(), y
+        y = x.roll(-1, 0)
+        assert (y.numpy() == [[3,4],[5,6],[7,8],[1,2]]).all()
+        y = x.roll(shifts=(2, 1), dims=(0, 1))
+        assert (y.numpy() == [[6,5],[8,7],[2,1],[4,3]]).all()
+
 
 if __name__ == "__main__":
     unittest.main()
