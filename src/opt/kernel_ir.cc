@@ -141,6 +141,16 @@ void KernelIR::try_parse_define(const string& s) {
             dtype += lvalue;
             lvalue = s.substr(i,j-i);
         }
+        if (lvalue.size()) {
+            // parse float a[1000] 
+            // --> lvalue: a, lvalue_ex: [1000]
+            auto lvs = split(lvalue, "[");
+            if (lvs.size()>1) {
+                lvalue = lvs[0];
+                ASSERT(lvs.size() == 2);
+                attrs["lvalue_ex"] = "[" + lvs[1];
+            }
+        }
         i = j-1;
         count++;
     }
@@ -470,6 +480,8 @@ string KernelIR::to_string(int level, bool debug) {
         has_bc = true;
     } else if (type == "define") {
         s << attrs["dtype"] << " " << attrs["lvalue"];
+        if (has_attr("lvalue_ex"))
+            s << attrs["lvalue_ex"];
         if (has_attr("rvalue"))
             s << " = " << attrs["rvalue"];
         s << ";\n";
@@ -1039,7 +1051,6 @@ void KernelIR::split_loop(string i, string j) {
         rvalue2 = "stride" + si;
         // change lvalue++ -> lvalue+=rvalue2
         ASSERT(inner.size()>=3);
-        LOGir << "lvalue" << lvalue;
         // ASSERT(lvalue == "id"+si);
         inner[2]->attrs["code"] = lvalue+"+="+rvalue2+";";
         push_back("for ("+dtype+" id"+sj+"=0; id"+sj+"<range"+sj+"; id"+sj+"++) {}");

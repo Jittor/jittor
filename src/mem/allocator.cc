@@ -64,7 +64,6 @@ Allocator* get_allocator(bool temp_allocator) {
     }
 #endif
     if (use_mlu) {
-        LOGir << "Using mlu_device_allocator";
         allocator = &mlu_device_allocator;
     }
     if (!allocator) {
@@ -99,7 +98,6 @@ void gc_all() {
 }
 
 void migrate_mlu_to_cpu(Var* var, Allocator* allocator) {
-    LOGir << "migrate_mlu_to_cpu" << var << var->allocator->name();
     Allocation a(cpu_allocator, var->size);
     JT_MLU_CHECK(cnrtMemcpy(a.ptr, var->mem_ptr, var->size, CNRT_MEM_TRANS_DIR_DEV2HOST));
     var->allocator->free(var->mem_ptr, var->size, var->allocation);
@@ -111,9 +109,7 @@ void migrate_mlu_to_cpu(Var* var, Allocator* allocator) {
 
 
 void migrate_cpu_to_mlu(Var* var, Allocator* allocator) {
-    LOGir << "migrate_cpu_to_mlu" << var;
     Allocation a(allocator, var->size);
-    LOGir << a.ptr << var->size;
     JT_MLU_CHECK(cnrtMemcpy(a.ptr, var->mem_ptr, var->size, CNRT_MEM_TRANS_DIR_HOST2DEV));
     var->allocator->free(var->mem_ptr, var->size, var->allocation);
     var->mem_ptr = a.ptr;

@@ -29,6 +29,7 @@ DEFINE_FLAG(int, profiler_warmup, 0, "Profiler warmup.");
 DEFINE_FLAG(int, profiler_rerun, 0, "Profiler rerun.");
 DEFINE_FLAG(int, profiler_hide_relay, 0, "Profiler hide relayed op.");
 DEFINE_FLAG_WITH_SETTER(int, profiler_enable, 0, "Enable profiler.");
+DEFINE_FLAG(int, profiler_record_shape, 0, "Profiler record shape.");
 
 void setter_profiler_enable(int value) {
     if (value)
@@ -148,7 +149,7 @@ void Profiler::record_and_run(
         bool is_fused = op->name() == string("fused");
 
         uint64* shape_time = nullptr;
-        if (trace_py_var) {
+        if (profiler_record_shape) {
             // record shape
             NanoVector shape;
             int64 num = 0;

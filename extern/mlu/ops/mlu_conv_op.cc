@@ -107,7 +107,7 @@ unordered_map<string, MluConv_t> mlu_conv_cache;
 extern unordered_map<string, MluConv_t> mlu_conv_cache;
 
 void MluConvOp::jit_run() {
-    auto start = std::chrono::high_resolution_clock::now();
+    // auto start = std::chrono::high_resolution_clock::now();
     int ni, ci, hi, wi, no, co, cw, ho, wo, kh, kw;
     get_shape(x, "abcd", xformat, ni, ci, hi, wi);
     get_shape(w, "oihw", wformat, co, cw, kh, kw);
@@ -118,26 +118,11 @@ void MluConvOp::jit_run() {
     int8_t* input_mlu_ptr = (int8_t*)x->mem_ptr;
     int8_t* filter_mlu_ptr = (int8_t*)w->mem_ptr;
     float *output_mlu_ptr = (float*)y->mem_ptr;
-    // int8_t* input_cpu_ptr = (int8_t *)malloc(input_count * sizeof(int8_t));
-    // cnrtMemcpy(input_cpu_ptr, input_mlu_ptr, input_count * sizeof(int8_t),
-    //           CNRT_MEM_TRANS_DIR_DEV2HOST);
-    // LOGw << (int)input_cpu_ptr[0];
-    // LOGw << (int)input_cpu_ptr[1];
-    // LOGw << (int)input_cpu_ptr[2];
-    // LOGw << (int)input_cpu_ptr[3];
-    // LOGw << (int)input_cpu_ptr[4];
-    // LOGw << (int)input_cpu_ptr[5];
-    // LOGw << (int)input_cpu_ptr[6];
-    // LOGw << (int)input_cpu_ptr[7];
-    // LOGw << (int)input_cpu_ptr[8];
-    // int16_t* output_cpu_ptr = (int16_t *)malloc(output_count * sizeof(int16_t));
     
     MluConv_t mlu_conv;
 
     jk.clear();
-    jk << ni << "," << ci << "," << hi << "," << wi << ",";
-    jk << no << "," << co << "," << ho << "," << wo << ",";
-    jk << paddingh << paddingw << "," <<strideh <<stridew << "," << dilationh << dilationw << "," << groups << ".";
+    jk << (uint64)w;
     auto iter = mlu_conv_cache.find(jk.to_string());
 
     cnmlBaseOp_t conv_op = NULL;
@@ -187,23 +172,9 @@ void MluConvOp::jit_run() {
       cnmlSetOperationComputingLayout(conv_op, CNML_NCHW);
       cnrtMemcpy(filter_cpu_ptr, filter_mlu_ptr, filter_count * sizeof(int8_t),
               CNRT_MEM_TRANS_DIR_DEV2HOST);
-      // LOGw << (int)filter_cpu_ptr[0];
-      // LOGw << (int)filter_cpu_ptr[1];
-      // LOGw << (int)filter_cpu_ptr[2];
-      // LOGw << (int)filter_cpu_ptr[3];
-      // LOGw << (int)filter_cpu_ptr[4];
-      // LOGw << (int)filter_cpu_ptr[5];
-      // LOGw << (int)filter_cpu_ptr[6];
-      // LOGw << (int)filter_cpu_ptr[7];
-      // LOGw << (int)filter_cpu_ptr[8];
       cnmlBindConstData_V2(filter_tensor, filter_cpu_ptr, false);
-      
-      // cnmlSetBaseOpCoreVersion(conv_op, CNML_MLU270);
-      // cnmlSetBaseOpCorenum(conv_op, 4);
       cnmlCompileBaseOp_V2(conv_op);
 
-      // cnrtMalloc(&input_mlu_ptr, input_count * sizeof(int8_t));
-      // cnrtMalloc(&output_mlu_ptr, output_count * sizeof(int16_t));
 
       mlu_conv.conv_op_cache = conv_op;
       mlu_conv.conv_param_cache = conv_param;
@@ -221,11 +192,9 @@ void MluConvOp::jit_run() {
       cnmlComputeConvOpForward_V4(conv_op, NULL, input_mlu_ptr, NULL, output_mlu_ptr, mlu_queue, NULL) ;
     }
 
-    JT_MLU_CHECK(cnrtSyncQueue(mlu_queue));
-
-    auto finish = std::chrono::high_resolution_clock::now();
-    auto total_ns =  (int64_t)std::chrono::duration_cast<std::chrono::microseconds>(finish-start).count() / 1000.;
-    (void) total_ns;
+    // auto finish = std::chrono::high_resolution_clock::now();
+    // auto total_ns =  (int64_t)std::chrono::duration_cast<std::chrono::microseconds>(finish-start).count() / 1000.;
+    // (void) total_ns;
     // LOGw << total_ns << " ms";
 }
 #endif

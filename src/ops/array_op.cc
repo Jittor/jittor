@@ -62,7 +62,6 @@ ArrayOp::ArrayOp(ArrayArgs&& args) {
     }
     #ifdef HAS_CUDA
     if (use_cuda) {
-        LOGir << use_cuda;
         flags.set(NodeFlags::_cpu, 0);
         flags.set(NodeFlags::_cuda, 1);
         if (!output->flags.get(NodeFlags::_force_fuse)) {
@@ -80,7 +79,6 @@ ArrayOp::ArrayOp(ArrayArgs&& args) {
     // TODO: args.buffer too many copy
     new (&allocation) Allocation(cpu_allocator, output->size);
     std::memcpy(allocation.ptr, args.ptr, output->size);
-    LOGir << output;
 }
 
 void ArrayOp::jit_prepare(JK& jk) {
@@ -113,7 +111,6 @@ void ArrayOp::run() {
     #endif
     auto o = output;
     if (use_mlu) {
-        LOGir << "ArrayOp run" << o;
         JT_MLU_CHECK(cnrtMemcpy(o->mem_ptr, allocation.ptr, o->size, CNRT_MEM_TRANS_DIR_HOST2DEV));
         return;
     }

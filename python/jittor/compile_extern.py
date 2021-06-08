@@ -89,7 +89,7 @@ def setup_mlu():
     
     if mlu_lib_path is None or mlu_include_path is None:
         from pathlib import Path
-        mlu_home = "/usr/local/neuware/"
+        mlu_home = "/usr/local/neuware_cntoolkit2.1.2/"
         mlu_include_path = os.path.join(mlu_home, "include")
         mlu_lib_path = os.path.join(mlu_home, "lib64")
     assert os.path.isdir(mlu_include_path)

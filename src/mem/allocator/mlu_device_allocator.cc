@@ -1,6 +1,8 @@
 // ***************************************************************
 // Copyright (c) 2021 Jittor. All Rights Reserved. 
-// Maintainers: Dun Liang <randonlang@gmail.com>. 
+// Maintainers: 
+//     Guowei Yang <471184555@qq.com>
+//     Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -20,7 +22,6 @@ void* MLUDeviceAllocator::alloc(size_t size, size_t& allocation) {
     void* ptr;
     try {
         JT_MLU_CHECK(cnrtMalloc((void **)&ptr, size));
-        LOGir << "cnrtMalloc" << ptr << size;
         return ptr;
     } catch (...) {
         // clean the last error

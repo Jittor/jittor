@@ -437,9 +437,16 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         if (PREDICT_BRANCH_NOT_TAKEN(profile_memory_enable))
             memory_profiler.check();
         LOGvvv << "Run" << op << "inputs:" << op->inputs() << "outputs:" << op->outputs();
+        if (is_fused_op && use_mlu) {
+            for (auto vi : fused_op.vars) if (vi.type==0) {
+                auto v = vi.var;
+                if (!v->allocator->is_mlu()) {
+                    migrate_cpu_to_mlu(v, allocator);
+                }
+            }
+        }
         op->do_prepare(jkl);
         bool is_cuda = op->flags.get(NodeFlags::_cuda);
-        LOGir << "is_cuda" << is_cuda;
         #ifdef HAS_CUDA
         if (!is_cuda) {
             if (last_is_cuda) {
@@ -473,8 +480,6 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
                     migrate_mlu_to_cpu(v, allocator);
                 }
                 for (auto* var : op->outputs()) {
-                    LOGir << "!is_cuda";
-                    LOGir << op;
                     var->allocator->free(var->mem_ptr, var->size, var->allocation);
                     var->mem_ptr = var->allocator = nullptr;
                     var->allocation = 0;
@@ -504,7 +509,6 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         #endif
         // migrate to mlu
         if (PREDICT_BRANCH_NOT_TAKEN((!is_cuda && use_mlu))) {
-            LOGir << "PREDICT_BRANCH_NOT_TAKEN";
             for (Var* v : op->outputs()) {
                 migrate_cpu_to_mlu(v, allocator);
             }
@@ -518,8 +522,8 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
             if (use_cuda)
                 checkCudaErrors(cudaDeviceSynchronize());
             #endif
-            for (Var* var : op->outputs())
-                check_nan(var);
+            // for (Var* var : op->outputs())
+            //     check_nan(var);
         }
         LOGvvv << "Finished Op(" >> op->name() << rid >> 
             "/" >> queue.size() >> ") output:" << op->outputs();
@@ -573,7 +577,6 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         sync_times++;
         JT_MLU_CHECK(cnrtSyncQueue(mlu_queue));
     }
-    LOGir << "after run sync";
     #ifdef HAS_CUDA
     if (device_sync && use_cuda) {
         last_is_cuda = false;

@@ -8,6 +8,7 @@
 #include "var.h"
 #include "ops/op_register.h"
 #include "misc/cuda_flags.h"
+#include "misc/mlu_flags.h"
 
 namespace jittor {
 
@@ -42,6 +43,18 @@ TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
         }
     }
     #endif
+    if (use_mlu) {
+        static VarPtr(*cnnl_mlu_transpose)(Var*, NanoVector) = nullptr;
+        if (!cnnl_mlu_transpose && has_op("cnnl_mlu_transpose")) {
+            cnnl_mlu_transpose = get_op_info("cnnl_mlu_transpose")
+                .get_constructor<VarPtr, Var*, NanoVector>();
+        }
+        if (cnnl_mlu_transpose) {
+            auto var = cnnl_mlu_transpose(x, axes);
+            forward(var);
+            return;
+        }
+    }
     y = create_output(nullptr, x->dtype());
 }
 

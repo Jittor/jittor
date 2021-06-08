@@ -487,6 +487,8 @@ unique_ptr<Expr> Expr::eval() {
                 can_eval = false;
             if (x->is(_int)) {
                 if (p.first && p.second == x->as_int()) {
+                    if (str == "-" && a->children.size() <= 2)
+                        continue;
                     if (a->children.size()>1 || a->is(_asso_op))
                         a->children.pop_back();
                 }

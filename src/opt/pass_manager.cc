@@ -26,13 +26,16 @@
 #include "opt/pass/loop_to_func_pass.h"
 #include "opt/pass/assume_aligned_pass.h"
 #include "opt/pass/parallel_pass.h"
+#include "opt/pass/simple_para_pass.h"
 #include "opt/pass/atomic_tuner_pass.h"
+#include "opt/pass/simple_atomic_pass.h"
 #include "opt/pass/float_atomic_fix_pass.h"
 #include "opt/pass/insert_profile_loop_pass.h"
 #include "opt/pass/fake_main_pass.h"
 #include "opt/pass/check_cache_pass.h"
 #include "opt/pass/mark_raw_pass.h"
 #include "opt/pass/mlu_pass.h"
+#include "opt/pass/mlu_split_pass.h"
 #include "misc/str_utils.h"
 
 namespace jittor {
@@ -108,8 +111,9 @@ void PassManager::run_passes() {
     run_pass<CheckCachePass>();
     run_pass<LoopToFuncPass>();
     run_pass<AssumeAlignedPass>();
-    run_pass<ParallelPass>();
-    run_pass<AtomicTunerPass>();
+    run_pass<MLUSplitPass>();
+    run_pass<SimpleParallelPass>();
+    run_pass<SimpleAtomicTunerPass>();
     run_pass<MLUPass>();
     // run_pass<FloatAtomicFixPass>();
     

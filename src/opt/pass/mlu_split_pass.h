@@ -7,12 +7,14 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
-#include "utils/log.h"
+#include "opt/pass/pass.h"
 
 namespace jittor {
 
-DECLARE_FLAG(int, use_mlu);
-extern int nram_space;
+struct MLUSplitPass : Pass {
+    MLUSplitPass() : Pass("mark_raw") {};
+    int check_int();
+    void run() override;
+};
 
-}
-
+} // jittor

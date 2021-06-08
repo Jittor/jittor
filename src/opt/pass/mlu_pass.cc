@@ -1,6 +1,8 @@
 // ***************************************************************
 // Copyright (c) 2021 Jittor. All Rights Reserved. 
-// Maintainers: Dun Liang <randonlang@gmail.com>. 
+// Maintainers: 
+//     Guowei Yang <471184555@qq.com>
+//     Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -49,15 +51,6 @@ unique_ptr<expr::Expr> mlu_trace_and_expand(KernelIR* ir, expr::Expr* e) {
                 expr::make(c->str+"+=stride").get(),
                 {"stride"}, {}, r2))
                 return;
-            // tid + loop_cnt * tnum
-            // auto new_expr = expr::make_op("+",
-            //     expr::make(rvalue),
-            //     expr::make_op("*", 
-            //         expr::make("loop_cnt"),
-            //         r2.at(0)->clone()
-            //     )
-            // );
-            // c->swap(new_expr.get());
             return;
         }
         c->swap(expr::make(rvalue).get());
@@ -69,23 +62,18 @@ unique_ptr<expr::Expr> mlu_trace_and_expand(KernelIR* ir, expr::Expr* e) {
     return a;
 }
 
-void MLUPass::add_memcpy(KernelIR* loop_father, KernelIR* loop, vector<string> vars, vector<int> is_input, string new_id) {
-    LOGir << "vars" << vars;
+void MLUPass::add_memcpy(KernelIR* loop_father, KernelIR* loop, vector<string> vars, vector<string> types, vector<int> is_input, string new_id, vector<string> &nram_vars) {
     vector<int> solved;
     for (int i=0;i<is_input.size();i++) solved.push_back(0);
-    // return;
     for (auto& c : loop->children) {
         if (c->type != "" && c->type != "define") continue;
-        LOGir << "c" << c;
         string code;
-        LOGir << "c->attrs[rvalues]" << c->attrs["rvalue"];
         if (c->type == "define") code = c->attrs["lvalue"]+" = "+c->attrs["rvalue"];
         else {
             if (!c->has_attr("code")) continue;
             code = c->attrs["code"];
             code = code.substr(0, code.size()-1); // remove ';'
         }
-        LOGir << "code" << code;
 
         vector<string> vars_offsets;
         vector<int> vars_idxs;
@@ -98,38 +86,12 @@ void MLUPass::add_memcpy(KernelIR* loop_father, KernelIR* loop, vector<string> v
                 vars_idxs.push_back(i);
             }
         }
-        LOGir << "vars_offsets" << vars_offsets;
-        for (int k=0;k<vars_offsets.size();k++){/*
-            auto e = expr::make(code);
-            vector<unique_ptr<expr::Expr>> results;
-            auto target = expr::make("a=b");
-            LOGir << "e" << e;
-            if (!expr::match(e.get(), target.get(), {"a", "b"}, {}, results))
-                continue;
-            LOGir << "results" << results;
-
-            vector<unique_ptr<expr::Expr>> save_var;
-            vector<unique_ptr<expr::Expr>> ptr_and_offset;
-            // if (expr::match(results[0].get(), expr::make("a[b]").get(), {"a", "b"}, {}, ptr_and_offset))
-            //     for (int i=0;i<ptr_and_offset.size();i++) save_var.push_back(ptr_and_offset[i]->clone());
-
-            LOGir<<"666";
-            if (expr::match(results[1].get(), expr::make("a[b]").get(), {"a", "b"}, {}, ptr_and_offset))
-                for (int i=0;i<ptr_and_offset.size();i++) save_var.push_back(ptr_and_offset[i]->clone());
-            
-            if (save_var.size()==0) continue;
-
-            LOGir << "save_var" << save_var;
-            int vars_idx=-1;
-            for (int i=0;i<vars.size();i++)
-            if (vars[i]==ptr_and_offset.at(0)->to_string()) vars_idx=i;
-            ASSERT(vars_idx!=-1);*/
+        for (int k=0;k<vars_offsets.size();k++){
             int vars_idx = vars_idxs[k];
             if (solved[vars_idx]) continue;
             solved[vars_idx] = 1;
             auto offset = mlu_trace_and_expand(c.get(), expr::make(vars_offsets[k]).get())
                 ->simplify();
-            LOGir << "offset" << offset->to_string(1);
 
             string idx_code = offset->to_string(1);
             string cpy_size="1";
@@ -137,23 +99,404 @@ void MLUPass::add_memcpy(KernelIR* loop_father, KernelIR* loop, vector<string> v
             while (idx_code.find(new_id)!=-1){
                 idx_code.replace(idx_code.find(new_id), new_id.size(), "0");
             }
-            LOGir << "idx_code" << idx_code;
             if (is_input[vars_idx]){
-                idx_code = "__memcpy("+vars[vars_idx]+"_nram, "+vars[vars_idx]+" + "+idx_code+", "+cpy_size+" * sizeof(float), GDRAM2NRAM);";
+                idx_code = "__memcpy("+vars[vars_idx]+"_nram, "+vars[vars_idx]+" + "+idx_code+", "+cpy_size+" * sizeof("+types[vars_idx]+"), GDRAM2NRAM);";
+                loop->push_front(idx_code, &loop->before);
+                idx_code = "__nramset("+vars[vars_idx]+"_nram, "+S(nram_space)+", 0);";
                 loop->push_front(idx_code, &loop->before);
             }else{
-                idx_code = "__memcpy("+vars[vars_idx]+" + "+idx_code+", "+vars[vars_idx]+"_nram, "+cpy_size+" * sizeof(float), NRAM2GDRAM);";
+                idx_code = "__memcpy("+vars[vars_idx]+" + "+idx_code+", "+vars[vars_idx]+"_nram, "+cpy_size+" * sizeof("+types[vars_idx]+"), NRAM2GDRAM);";
                 loop->push_front(idx_code, &loop->after);
             }
-
-            // vector<unique_ptr<expr::Expr>> idxs;
-            // expr::match(expr::make(offset->to_string(1)).get(), expr::make("a+b").get(), {"a", "b"}, {}, idxs);
-            // LOGir << "idxs" << idxs;
         }
     }
-    LOGir << "solved" << solved;
-    // return solved;
-    for (int i=0;i<solved.size();i++) ASSERT(solved[i]==1);
+    for (int i=0;i<solved.size();i++)
+    if (solved[i]) nram_vars.push_back(vars[i]);
+}
+
+// is_vec&len=n : 2
+// is_vec&len=1 : 1
+// not_vec : 0
+int check_is_vec(string str, vector<string>& define_vars) {
+    if (str.size()>1){
+        if (str.find("_1",str.size()-2)+2==str.size()) return 2;
+        if (str.find("_0",str.size()-2)+2==str.size()) return 1;
+    }
+    for (int i=0; i<define_vars.size(); i++)
+    if (str==define_vars[i]) return 2;
+    return 0;
+}
+
+string remove_01(string str){
+    if (str.find("_1",str.size()-2)+2==str.size() || str.find("_0",str.size()-2)+2==str.size()) return str.substr(0, str.size()-2);
+    return str;
+}
+string create_bang_var(vector<string>& define_vars){
+    string res = "bang_var_n"+S(define_vars.size());
+    define_vars.push_back(res);
+    return res;
+}
+
+int MLUPass::getConvertType(string a, string varb)
+// return
+// 0:is not cast
+// 1:int8 to float32
+// 2:float32 to int8
+{
+    if (a.find("op")!=0 ||  a.find("_")==-1) return 0;
+    int opnum=std::stoi(a.substr(2, a.find("_")-2));
+    Op* sop = op->ops[opnum];
+    if (sop->name_ex()!="unary.cast") return 0;
+    string ta=sop->outputs().front()->dtype().to_cstring();
+    string tb=sop->inputs().front()->dtype().to_cstring();
+    ASSERT(ta=="int8" || ta=="float32");
+    ASSERT(tb=="int8" || tb=="float32");
+    if (ta==tb) return 0;
+    else if (ta=="float32" && tb=="int8") return 1;
+    else if (ta=="int8" && tb=="float32") return 2;
+    else ASSERT(0);
+    return 0;
+}
+
+int MLUPass::bang_dfs(unique_ptr<KernelIR>& func, string dst, unique_ptr<expr::Expr>& rval, vector<string>& define_vars, vector<string> &bang_code, string new_range){
+    vector<unique_ptr<expr::Expr>> res;
+    string vara,varb,varc;
+    string fake_range="fake_range";
+    bool is_addequ=expr::match(rval.get(), expr::make("a+b").get(), {"a","b"}, {}, res);
+    is_addequ = (dst.find("tmp")==0 || (is_addequ && res.at(0)->clone()->to_string()==dst));
+    if (!(check_is_vec(dst, define_vars)==2) && !is_addequ) return 0;
+
+    string ori_dst=dst;
+    dst = remove_01(dst);
+    if (is_addequ)
+    // dst = dst+a
+    {   
+        if (!expr::match(rval.get(), expr::make("a+b").get(), {"a","b"}, {}, res)) return 0;
+        auto a=res.at(0)->clone();
+        auto b=res.at(1)->clone();
+        LOGvvvv << "a=a+b:" << a << "#+#" << b;
+        if (a->children.size()==0) vara = a->to_string();
+        else{
+            vara=create_bang_var(define_vars);
+            ASSERT(bang_dfs(func, vara, a, define_vars, bang_code, new_range));
+        }
+        if (b->children.size()==0) varb = b->to_string();
+        else{
+            varb=create_bang_var(define_vars);
+            ASSERT(bang_dfs(func, varb, b, define_vars, bang_code, new_range));
+        }
+        int is_single_vec=false;
+        if (vara.find("_0",vara.size()-2)+2==vara.size()) is_single_vec=1;
+        vara = remove_01(vara);
+        if (vara!=dst) return 0;
+        
+        if (is_single_vec) dst+="[0]";
+        LOGvvvv << "dst = dst+a";
+        ASSERT(check_is_vec(varb, define_vars)==2);
+        varb = remove_01(varb);
+        varc=create_bang_var(define_vars);
+        bang_code.push_back("__bang_reduce_sum("+varc+", "+varb+", "+fake_range+");");
+        string vard=create_bang_var(define_vars);
+        bang_code.push_back("__memcpy("+vard+", "+varc+", 1*sizeof(float), NRAM2NRAM, 1*sizeof(float), 32*sizeof(float), "+fake_range+"/32-1);");
+        bang_code.push_back("__bang_reduce_sum("+varc+", "+vard+", "+fake_range+"/ 32);");
+        string vare=create_bang_var(define_vars);
+        bang_code.push_back("__memcpy("+vare+", "+varc+", 1*sizeof(float), NRAM2NRAM, 1*sizeof(float), 32*sizeof(float), "+fake_range+"/32/32-1);");
+        bang_code.push_back("__bang_reduce_sum("+varc+", "+vare+", 32);");
+        bang_code.push_back(dst+"="+dst+"+"+varc+"[0];");
+    }else if (rval->children.size()==0)
+    // dst = a
+    {
+        auto a=rval->clone();
+        LOGvvvv << "memcpy:" << a;
+        vara = a->to_string();
+        int sv=check_is_vec(vara, define_vars);
+        vara = remove_01(vara);
+        if (sv==2){
+            bang_code.push_back("__memcpy("+dst+", "+vara+", "+fake_range+" * sizeof(float), NRAM2NRAM);");
+        } else if (sv==1) {
+            bang_code.push_back("__nramset("+dst+", "+fake_range+", "+vara+"[0]);");
+        } else {
+            bang_code.push_back("__nramset("+dst+", "+fake_range+", "+vara+");");
+        }
+    } else if (expr::match(rval.get(), expr::make("std::sqrt(a)").get(), {"a"}, {}, res))
+    // dst = sqrt(a)
+    {
+        auto a=res.at(0)->clone();
+        LOGvvvv << "sqrt(a):" << a;
+        if (a->children.size()==0) vara = a->to_string();
+        else{
+            vara=create_bang_var(define_vars);
+            ASSERT(bang_dfs(func, vara, a, define_vars, bang_code, new_range));
+        }
+        ASSERT(check_is_vec(vara, define_vars)==2);
+        vara = remove_01(vara);
+        bang_code.push_back("__bang_active_sqrt("+dst+", "+vara+", "+fake_range+");");
+
+    } else if (expr::match(rval.get(), expr::make("a(b)").get(), {"a","b"}, {}, res))
+    // dst = a(b)
+    {
+        auto a=res.at(0)->clone();
+        auto b=res.at(1)->clone();
+        varb = b->to_string();
+        varb = remove_01(varb);
+
+        int res=getConvertType(a->to_string(), varb);
+        if (res==0){
+            ASSERT(bang_dfs(func, ori_dst, b, define_vars, bang_code, new_range));
+        }else if (res==1){
+            bang_code.push_back("__bang_int82float("+dst+", "+varb+", "+fake_range+", 0);");
+        }else if (res==2){
+            bang_code.push_back("__bang_float2int8_rd("+dst+", "+varb+", "+fake_range+", 0);");
+        }
+    } else if (expr::match(rval.get(), expr::make("a+b").get(), {"a","b"}, {}, res))
+    // dst = a+b
+    {
+        auto a=res.at(0)->clone();
+        auto b=res.at(1)->clone();
+        LOGvvvv << "a+b:" << a << "#+#" << b;
+        if (a->children.size()==0) vara = a->to_string();
+        else{
+            vara=create_bang_var(define_vars);
+            ASSERT(bang_dfs(func, vara, a, define_vars, bang_code, new_range));
+        }
+        if (b->children.size()==0) varb = b->to_string();
+        else{
+            varb=create_bang_var(define_vars);
+            ASSERT(bang_dfs(func, varb, b, define_vars, bang_code, new_range));
+        }
+        ASSERT(check_is_vec(vara, define_vars)==2);
+        ASSERT(check_is_vec(varb, define_vars)==2);
+        vara = remove_01(vara);
+        varb = remove_01(varb);
+        bang_code.push_back("__bang_add("+dst+", "+vara+", "+varb+", "+fake_range+");");
+    } else if (expr::match(rval.get(), expr::make("a*b").get(), {"a","b"}, {}, res))
+    // dst = a*b
+    {
+        auto a=res.at(0)->clone();
+        auto b=res.at(1)->clone();
+        LOGvvvv << "a*b:" << a << "#*#" << b;
+        if (a->children.size()==0) vara = a->to_string();
+        else{
+            vara=create_bang_var(define_vars);
+            ASSERT(bang_dfs(func, vara, a, define_vars, bang_code, new_range));
+        }
+        if (b->children.size()==0) varb = b->to_string();
+        else{
+            varb=create_bang_var(define_vars);
+            ASSERT(bang_dfs(func, varb, b, define_vars, bang_code, new_range));
+        }
+        if (vara=="(-1)"){
+            ASSERT(check_is_vec(varb, define_vars)==2);
+            varb = remove_01(varb);
+            bang_code.push_back("__bang_mul_const("+dst+", "+varb+", -1.0, "+fake_range+");");
+        } else {
+            ASSERT(check_is_vec(vara, define_vars)==2);
+            ASSERT(check_is_vec(varb, define_vars)==2);
+            vara = remove_01(vara);
+            varb = remove_01(varb);
+            bang_code.push_back("__bang_mul("+dst+", "+vara+", "+varb+", "+fake_range+");");
+        }
+    } else if (expr::match(rval.get(), expr::make("a/b").get(), {"a","b"}, {}, res))
+    // dst = a/b
+    {
+        auto a=res.at(0)->clone();
+        auto b=res.at(1)->clone();
+        LOGvvvv << "a/b:" << a << "#/#" << b;
+        if (a->children.size()==0) vara = a->to_string();
+        else{
+            vara=create_bang_var(define_vars);
+            ASSERT(bang_dfs(func, vara, a, define_vars, bang_code, new_range));
+        }
+        if (b->children.size()==0) varb = b->to_string();
+        else{
+            varb=create_bang_var(define_vars);
+            ASSERT(bang_dfs(func, varb, b, define_vars, bang_code, new_range));
+        }
+        ASSERT(check_is_vec(vara, define_vars)==2);
+        ASSERT(check_is_vec(varb, define_vars)==2);
+        varc=create_bang_var(define_vars);
+        vara = remove_01(vara);
+        varb = remove_01(varb);
+        bang_code.push_back("__bang_div("+dst+", "+vara+", "+varb+", "+varc+", "+fake_range+");");
+    } else if (expr::match(rval.get(), expr::make("a>b").get(), {"a","b"}, {}, res))
+    // dst = a>b
+    {
+        auto a=res.at(0)->clone();
+        auto b=res.at(1)->clone();
+        LOGvvvv << "a>b:" << a << "#>#" << b;
+        if (a->children.size()==0) vara = a->to_string();
+        else{
+            vara=create_bang_var(define_vars);
+            ASSERT(bang_dfs(func, vara, a, define_vars, bang_code, new_range));
+        }
+        if (b->children.size()==0) varb = b->to_string();
+        else{
+            varb=create_bang_var(define_vars);
+            ASSERT(bang_dfs(func, varb, b, define_vars, bang_code, new_range));
+        }
+        ASSERT(check_is_vec(vara, define_vars)==2);
+        ASSERT(check_is_vec(varb, define_vars)==2);
+        vara = remove_01(vara);
+        varb = remove_01(varb);
+        bang_code.push_back("__bang_gt("+dst+", "+vara+", "+varb+", "+fake_range+");");
+    } else if (expr::match(rval.get(), expr::make("std::max(a,b)").get(), {"a","b"}, {}, res))
+    // dst = std::max(a,b)
+    {
+        auto a=res.at(0)->clone();
+        auto b=res.at(1)->clone();
+        LOGvvvv << "max(a,b):" << a << "#max#" << b;
+        if (a->children.size()==0) vara = a->to_string();
+        else{
+            vara=create_bang_var(define_vars);
+            ASSERT(bang_dfs(func, vara, a, define_vars, bang_code, new_range));
+        }
+        if (b->children.size()==0) varb = b->to_string();
+        else{
+            varb=create_bang_var(define_vars);
+            ASSERT(bang_dfs(func, varb, b, define_vars, bang_code, new_range));
+        }
+        ASSERT(check_is_vec(vara, define_vars)==2);
+        ASSERT(check_is_vec(varb, define_vars)==2);
+        vara = remove_01(vara);
+        varb = remove_01(varb);
+        varc = create_bang_var(define_vars);
+        string varaa = create_bang_var(define_vars);
+        string varbb = create_bang_var(define_vars);
+        string varcc = create_bang_var(define_vars);
+        bang_code.push_back("__bang_gt("+varc+", "+vara+", "+varb+", "+fake_range+");");
+        bang_code.push_back("__nramset("+varaa+", "+fake_range+", (float)1.0);");
+        bang_code.push_back("__bang_sub("+varaa+", "+varaa+", "+varc+", "+fake_range+");");
+        bang_code.push_back("__bang_mul("+varbb+", "+varc+", "+vara+", "+fake_range+");");
+        bang_code.push_back("__bang_mul("+varcc+", "+varaa+", "+varb+", "+fake_range+");");
+        bang_code.push_back("__bang_add("+dst+", "+varbb+", "+varcc+", "+fake_range+");");
+    } else if (expr::match(rval.get(), expr::make("a?b:c").get(), {"a","b","c"}, {}, res))
+    // dst = a?b:c
+    {
+        auto a=res.at(0)->clone();
+        auto b=res.at(1)->clone();
+        auto c=res.at(2)->clone();
+        LOGvvvv << "a?b:c:" << a << "#?#" << b << "#:#" << c;
+        if (a->children.size()==0) vara = a->to_string();
+        else{
+            vara=create_bang_var(define_vars);
+            ASSERT(bang_dfs(func, vara, a, define_vars, bang_code, new_range));
+        }
+        if (b->children.size()==0) varb = b->to_string();
+        else{
+            varb=create_bang_var(define_vars);
+            ASSERT(bang_dfs(func, varb, b, define_vars, bang_code, new_range));
+        }
+        if (c->children.size()==0) varc = c->to_string();
+        else{   
+            varc=create_bang_var(define_vars);
+            ASSERT(bang_dfs(func, varc, c, define_vars, bang_code, new_range));
+        }
+        ASSERT(check_is_vec(vara, define_vars)==2);
+        ASSERT(check_is_vec(varb, define_vars)==2);
+        ASSERT(check_is_vec(varc, define_vars)==2);
+        vara = remove_01(vara);
+        varb = remove_01(varb);
+        varc = remove_01(varc);
+        string varaa=create_bang_var(define_vars);
+        string varbb=create_bang_var(define_vars);
+        string varcc=create_bang_var(define_vars);
+        bang_code.push_back("__nramset("+varaa+", "+fake_range+", (float)1.0);");
+        bang_code.push_back("__bang_sub("+varaa+", "+varaa+", "+vara+", "+fake_range+");");
+        bang_code.push_back("__bang_mul("+varbb+", "+vara+", "+varb+", "+fake_range+");");
+        bang_code.push_back("__bang_mul("+varcc+", "+varaa+", "+varc+", "+fake_range+");");
+        bang_code.push_back("__bang_add("+dst+", "+varbb+", "+varcc+", "+fake_range+");");
+    } else ASSERT(0);
+    return 1;
+}
+
+int MLUPass::check_int(){
+    for (auto& c : ir->father->children)
+    if (c->type=="macro") {
+        string str=c->get_attr("code");
+        if (str.find("#define")==-1 || str.find("_T")==-1) continue;
+        if (str.find("int")!=-1) return 1;
+    }
+    return 0;
+}
+
+void MLUPass::convert_to_bang(unique_ptr<KernelIR>& func, KernelIR* loop, vector<string> vars, string new_id, string new_range) {
+    vector<string> define_vars;
+    vector<string> bang_code;
+    vector<string> calc_code;
+    vector<string> calc_idxs;
+    vector<int> is_vec;
+    for (auto& c : loop->children) {
+        if (c->type != "" && c->type != "define") continue;
+        string code;
+        if (c->type == "define") code = c->attrs["lvalue"]+" = "+c->attrs["rvalue"];
+        else {
+            if (!c->has_attr("code")) continue;
+            code = c->attrs["code"];
+            code = code.substr(0, code.size()-1);
+        }
+
+        vector<string> vars_offsets;
+        vector<int> vars_idxs;
+
+        for (int i=0;i<vars.size();i++){
+            int lastpos=-1;
+            while (code.find(vars[i],lastpos+1)!=-1){
+                lastpos=code.find(vars[i],lastpos+1);
+                vars_offsets.push_back(code.substr(code.find("[",lastpos)+1, code.find("]",lastpos)-code.find("[",lastpos)-1));
+                vars_idxs.push_back(i);
+            }
+        }
+        for (int i=0;i<vars_offsets.size();i++){
+            auto e = expr::make(loop->find_define(vars_offsets[i])->attrs["rvalue"]);
+            auto ee = mlu_trace_and_expand(c.get(), e.get());
+            string simp=ee->simplify()->to_string();
+            if (simp!="0" && simp!=new_id) return;
+            calc_idxs.push_back(vars_offsets[i]);
+            is_vec.push_back(simp==new_id);
+        }
+        if (c->type == "define"){
+            string str=c->attrs["lvalue"];
+            if (str.find("i")!=-1) continue;
+            define_vars.push_back(c->attrs["lvalue"]);
+        }
+        calc_code.push_back(code);
+    }
+
+    for (int i=0;i<calc_code.size();i++){
+        for (int j=0;j<calc_idxs.size();j++){
+            string sidx="["+calc_idxs[j]+"]";
+            while (calc_code[i].find(sidx)!=-1){
+                calc_code[i].replace(calc_code[i].find(sidx),sidx.size(),"_"+S(is_vec[j]));
+            }
+        }
+        if (calc_code[i].find("std::numeric_limits<")!=-1) return;
+
+        vector<unique_ptr<expr::Expr>> res;
+        ASSERT(expr::match(expr::make(calc_code[i]).get(), expr::make("a=b").get(), {"a","b"}, {}, res));
+        string dst = res.at(0)->to_string();
+        auto rval = res.at(1)->clone();
+        if (dst.find("check_overflow")!=-1) return;
+        
+        if (!bang_dfs(func, dst, rval, define_vars, bang_code, new_range)) return;
+    }
+    for (int i=0;i<define_vars.size();i++) {
+        func->push_back("__nram__ float "+define_vars[i]+"["+S(nram_space)+"];");
+    }
+    for (int i=0;i<bang_code.size();i++){
+        loop->push_back(bang_code[i], &loop->before);
+    }
+    loop->push_front("break;", &loop->children);
+    auto& fat=loop->father;
+    fat->push_back("int fake_range=("+new_range+"=="+S(nram_space)+") ? "+S(nram_space)+" : int("+new_range+"/1024+1)*1024;");
+    for (auto& c : loop->before){
+        fat->push_back(c->get_attr("code"));
+    }
+    for (auto& c : loop->after){
+        fat->push_back(c->get_attr("code"));
+    }
+    loop->erase();
+    func->move_loop_back();
+    func->remove_all_unused();
 }
 
 void MLUPass::run() {
@@ -178,18 +521,6 @@ void MLUPass::run() {
             else
                 is_input.push_back(0);
         }
-
-        // for (auto& cc : c->children) {
-        //     if (cc->has_attr("code")) {
-        //         string& ccstr = cc->get_attr("code");
-        //         if (ccstr.find("<<<")!=-1){
-        //             ++func_num;
-        //             while (ccstr.find("p,")!=-1) {
-        //                 ccstr.replace(ccstr.find("p,"),1,"p_mlu");
-        //             }
-        //         }
-        //     }
-        // }
     }
 
     if (var_names.size()==0) return;
@@ -199,14 +530,8 @@ void MLUPass::run() {
     ir->push_front("#include \"mlu_warper.h\"", &ir->before);
     
     vector<string> strs;
-    // strs.push_back("cnrtDev_t dev;");
-    // strs.push_back("cnrtQueue_t mlu_queue;");
-    // strs.push_back("cnrtInit(0);");
-    // strs.push_back("cnrtGetDeviceHandle(&dev, 0);");
-    // strs.push_back("cnrtSetCurrentDevice(dev);");
-    // strs.push_back("cnrtCreateQueue(&mlu_queue);");
 
-    strs.push_back("cnrtDim3_t dim = cnrtDim3_t({16, 1, 1});");
+    strs.push_back("cnrtDim3_t dim = cnrtDim3_t({64, 1, 1});");
     strs.push_back("cnrtFunctionType_t ktype = CNRT_FUNC_TYPE_BLOCK;");
     
 
@@ -215,72 +540,16 @@ void MLUPass::run() {
     }
 
     strs.clear();
-    // for (int i=0;i<var_names.size();i++){
-    //     string str_type = var_names[i];
-    //     string name_mlu = var_names[i]+"p_mlu";
-    //     string name_p = var_names[i]+"p";
-    //     str_type.insert(str_type.find("_")+1,"T");
-
-    //     strs.push_back(str_type+"* __restrict__ "+name_mlu+";");
-        
-    //     string str_size = "size_t size_"+var_names[i]+" = sizeof("+str_type+")";
-    //     for (int j=0;j<vars[i]->shape.size();j++)
-    //         str_size += "*"+var_names[i]+"->shape["+(char)(j+48)+"]";
-    //     str_size += ";";
-    //     strs.push_back(str_size);
-        
-    //     strs.push_back("JT_MLU_CHECK(cnrtMalloc((void **)&"+name_mlu+", size_"+var_names[i]+"));");
-    //     if (is_input[i])
-    //         strs.push_back("JT_MLU_CHECK(cnrtMemcpy("+name_mlu+", "+name_p+", size_"+var_names[i]+", CNRT_MEM_TRANS_DIR_HOST2DEV));");
-    // }
-    // for (int i=0;i<var_names.size();i++){
-    //     string str_type = var_names[i];
-    //     string name_mlu = var_names[i]+"p_mlu";
-    //     string name_p = var_names[i]+"p";
-    //     str_type.insert(str_type.find("_")+1,"T");
-
-    //     strs.push_back(str_type+"* __restrict__ "+name_mlu+";");
-    // }
-
-    // for (int i=0;i<var_names.size();i++){
-    //     string str_type = var_names[i];
-    //     str_type.insert(str_type.find("_")+1,"T");
-    //     string str_size = "size_t size_"+var_names[i]+" = sizeof("+str_type+")";
-    //     for (int j=0;j<vars[i]->shape.size();j++)
-    //         str_size += "*"+var_names[i]+"->shape["+(char)(j+48)+"]";
-    //     str_size += ";";
-    //     strs.push_back(str_size);
-    // }
-
-    // for (int i=0;i<var_names.size();i++){
-    //     string name_mlu = var_names[i]+"p_mlu";
-    //     string name_p = var_names[i]+"p";
-    //     strs.push_back("JT_MLU_CHECK(cnrtMalloc((void **)&"+name_mlu+", size_"+var_names[i]+"));");
-    //     if (is_input[i])
-    //         strs.push_back("JT_MLU_CHECK(cnrtMemcpy("+name_mlu+", "+name_p+", size_"+var_names[i]+", CNRT_MEM_TRANS_DIR_HOST2DEV));");
-    // }
-    // strs.push_back("op0_Tx* __restrict__ op0_xp_mlu;");
-    // strs.push_back("op0_Tx* __restrict__ op0_yp_mlu;");
-    // strs.push_back("op0_Tx* __restrict__ op0_zp_mlu;");
     
-    // strs.push_back("size_t size = op0_x->shape[0]*op0_x->shape[1]*sizeof(op0_Tx);");
-    // strs.push_back("JT_MLU_CHECK(cnrtMalloc((void **)&op0_xp_mlu, size));");
-    // strs.push_back("JT_MLU_CHECK(cnrtMalloc((void **)&op0_yp_mlu, size));");
-    // strs.push_back("JT_MLU_CHECK(cnrtMalloc((void **)&op0_zp_mlu, size));");
-
-    // strs.push_back("JT_MLU_CHECK(cnrtMemcpy(op0_xp_mlu, op0_xp, size, CNRT_MEM_TRANS_DIR_HOST2DEV));");
-    // strs.push_back("JT_MLU_CHECK(cnrtMemcpy(op0_yp_mlu, op0_yp, size, CNRT_MEM_TRANS_DIR_HOST2DEV));");
-
     int len=ir->children.size();
     for (int i=strs.size()-1;i>=0;i--){
         ir->insert(len-func_num, strs[i], &ir->children);
     }
     ir->push_back("JT_MLU_CHECK(cnrtGetLastErr());", &ir->children);
-    ir->push_back("JT_MLU_CHECK(cnrtSyncQueue(mlu_queue));", &ir->children);
     
     int num = 0;
-    int choice = 4096;
-    int split_size = std::max(1, choice);
+    int choice = nram_space;
+    // int split_size = std::max(1, choice);
     KernelIR *loop;
     KernelIR *loop_father;
     string i, j;
@@ -302,17 +571,7 @@ void MLUPass::run() {
                 if (!bo) break;
                 else num++;
             }
-            // LOGir << "ids" << ids << loop_father;
-            i = loop->get_attr("loop_id");
-            j = i+"0";
-            c->split_loop(i, j);
-            c->push_back(loop->attrs["dtype"]+" stride"+i+" = "+S(split_size)+";");
-            
-            for (auto& cc : sc->children)
-            if (cc->type=="loop") {
-                loop_father = loop;
-                loop = &(*cc);
-            }
+            j = loop->get_attr("loop_id");
 
             vector<string> vars;
             vector<string> types;
@@ -321,6 +580,8 @@ void MLUPass::run() {
             if (cc->get_attr("lvalue")[cc->get_attr("lvalue").size()-1]=='p'){
                 vars.push_back(cc->get_attr("lvalue"));
                 types.push_back(cc->get_attr("dtype"));
+                int si=types.size()-1;
+                types[si]=types[si].substr(0,types[si].size()-14);
                 for (int i=0;i<var_names.size();i++)
                 if (var_names[i]==vars[vars.size()-1])
                     is_input_infunc.push_back(is_input[i]);
@@ -328,41 +589,34 @@ void MLUPass::run() {
             }
 
             // __memcpy(op9_zp + id0*xxx, op9_zp_nram, 4096 * sizeof(float), NRAM2GDRAM);
-            LOGir << "before add_memcpy" << c;
-            add_memcpy(loop_father, loop, vars, is_input_infunc, "id"+j);
-            // LOGir << vars << types;
+            vector<string> nram_vars;
+            add_memcpy(loop_father, loop, vars, types, is_input_infunc, "id"+j, nram_vars);
 
             //__nram__ op0_Tx op0_xp_nram[4096];
-            for (int i=0;i<vars.size();i++){
-                c->push_back("__nram__ "+types[i].substr(0,types[i].size()-14)+" "+vars[i]+"_nram["+S(choice)+"];");
+            for (int i=0;i<nram_vars.size();i++){
+                c->push_back("__nram__ "+types[i]+" "+nram_vars[i]+"_nram["+S(choice)+"];");
             }
 
             // replace idxx to 0
             for (auto& cc : loop->children) {
-                for (int i=0;i<ids.size();i++)
+                for (int i=0;i<ids.size()-1;i++)
                     cc->replace({{ids[i], "0"}}, true);
                 for (int i=0;i<vars.size();i++)
                     cc->replace({{vars[i], vars[i]+"_nram"}}, true);
             }
             
+            // set tmp nram var to 0
+            for (int i=0;i<vars.size();i++)
+            if (!is_input_infunc[i])
+                for (int j=0;j<nram_vars.size();j++)
+                if (nram_vars[j]==vars[i]){
+                    loop->push_back("__nramset("+vars[i]+"_nram, "+S(nram_space)+", 0);", &loop->before);
+                }
+            convert_to_bang(c, loop, vars, "id"+j, "range"+j);
+            
             c->move_loop_back();
-            LOGir << c;
-            break;
         }
     }
-    // for (int i=0;i<var_names.size();i++){
-    //     string str_type = var_names[i];
-    //     string name_mlu = var_names[i]+"p_mlu";
-    //     string name_p = var_names[i]+"p";
-    //     if (!is_input[i])
-    //         ir->push_back("JT_MLU_CHECK(cnrtMemcpy("+name_p+", "+name_mlu+", size_"+var_names[i]+", CNRT_MEM_TRANS_DIR_DEV2HOST));", &ir->children);
-    // }
-    // for (int i=0;i<var_names.size();i++){
-    //     string name_mlu = var_names[i]+"p_mlu";
-    //     ir->push_back("JT_MLU_CHECK(cnrtFree("+name_mlu+"));", &ir->children);
-    // }
-    // ir->push_back("JT_MLU_CHECK(cnrtDestroyQueue(mlu_queue));", &ir->children);
-    // ir->push_back("cnrtDestroy();", &ir->children);
 }
 
 } // jittor

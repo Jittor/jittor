@@ -554,10 +554,26 @@ class Conv(Module):
         else:
             if is_quantized:
                 quan_x = (x * self.input_scale).int8()
-                quan_weight = (self.weight * self.weight_scale).int8()
+                # if hasattr(self, "_quan_weight"):
+                #     quan_weight = self._quan_weight
+                # else:
+                self._quan_weight = quan_weight = (self.weight * self.weight_scale).int8()
             else:
                 quan_x = x
                 quan_weight = self.weight
+            # if is_quantized:
+            #     quan_x = (x * self.input_scale).int8()
+            #     quan_weight = (self.weight * self.weight_scale).int8()
+            # else:
+            #     quan_x = x
+            #     quan_weight = self.weight
+        if jt.flags.use_mlu:
+            N,C,H,W = quan_x.shape
+            Kh, Kw = self.kernel_size
+            y = jt.mlu_ops.cnnl_mlu_conv(quan_x.transpose(0,2,3,1), quan_weight.transpose(0,2,3,1), self.stride[0], self.stride[1], self.padding[0], self.padding[1], self.dilation[0], self.dilation[1], self.groups).transpose(0,3,1,2)
+            if is_quantized:
+                y = (y * (1.0 / (self.input_scale * self.weight_scale))).float32()
+            return y
         if self.is_depthwise_conv and jt.flags.use_cuda:
             y = self.depthwise_conv(x, self.weight)
         elif self.groups == 1:

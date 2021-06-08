@@ -6,6 +6,7 @@
 // ***************************************************************
 #include <cnrt.h>
 #include <cnml.h>
+#include <cnnl.h>
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>
 #include "helper_cuda.h"

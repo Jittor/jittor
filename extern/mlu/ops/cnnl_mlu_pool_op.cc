@@ -1,14 +1,14 @@
 // ***************************************************************
 // Copyright (c) 2021 Jittor. All Rights Reserved. 
 // Maintainers: 
-//     Wenyang Zhou <576825820@qq.com>
+//     Guowei Yang <471184555@qq.com>
 //     Dun Liang <randonlang@gmail.com>. 
 // 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include "var.h"
-#include "mlu_pool_op.h"
+#include "cnnl_mlu_pool_op.h"
 
 #include <string.h>
 #include <iostream>
@@ -48,7 +48,7 @@ static inline void set_shape(Var* x, const char* f, const string& format, int a,
         shape[0], shape[1], shape[2], shape[3]));
 }
 
-MluPoolOp::MluPoolOp(Var* x, int kernel_size, int stride, int padding, int dilation, int pool_mode_row, bool ceil_mode, bool count_include_pad, string xformat, string yformat, string op)
+CnnlMluPoolOp::CnnlMluPoolOp(Var* x, int kernel_size, int stride, int padding, int dilation, int pool_mode_row, bool ceil_mode, bool count_include_pad, string xformat, string yformat, string op)
     : x(x), kernel_size(kernel_size), stride(stride), padding(padding), dilation(dilation), pool_mode_row(pool_mode_row), ceil_mode(ceil_mode), count_include_pad(count_include_pad),
       xformat(move(xformat)), yformat(move(yformat)), op(move(op)) {
     y = create_output(nullptr, ns_float32);
@@ -58,7 +58,7 @@ MluPoolOp::MluPoolOp(Var* x, int kernel_size, int stride, int padding, int dilat
         this->yformat = this->xformat;
 }
 
-void MluPoolOp::infer_shape() {
+void CnnlMluPoolOp::infer_shape() {
     ASSERTop(x->shape.size(),==,4);
     int xn, xc, xh, xw, yn, yc, yh, yw;
     get_shape(x, "abcd", xformat, xn, xc, xh, xw);
@@ -88,7 +88,7 @@ static const char* short_type(Var* x) {
     }
 }
 
-void MluPoolOp::jit_prepare(JK& jk) {
+void CnnlMluPoolOp::jit_prepare(JK& jk) {
     jk << _CS("[Txd:") << x->dtype();
     jk << _CS("][Tyd:") << y->dtype();
     jk << _CS("][Tx:") << short_type(x);
@@ -98,75 +98,59 @@ void MluPoolOp::jit_prepare(JK& jk) {
     jk << ']';
 }
 
-unordered_map<string, MluPool_t> mlu_pool_cache;
+unordered_map<string, CnnlMluPool_t> cnnl_mlu_pool_cache;
 
 #else // JIT
 #ifdef JIT_cpu
 #pragma clang diagnostic ignored "-Wtautological-compare"
-extern unordered_map<string, MluPool_t> mlu_pool_cache;
+extern unordered_map<string, CnnlMluPool_t> cnnl_mlu_pool_cache;
 
-void MluPoolOp::jit_run() {
-    const int dimNum = 4;
+void CnnlMluPoolOp::jit_run() {
+    ASSERT(dilation==0);
+    float* input_mlu_ptr = (float*)x->mem_ptr;
+    float *output_mlu_ptr = (float*)y->mem_ptr;
 
     int ni, ci, hi, wi, no, co, ho, wo;
     get_shape(x, "abcd", xformat, ni, ci, hi, wi);
     get_shape(y, "abcd", yformat, no, co, ho, wo);
 
-    float* input_mlu_ptr = (float*)x->mem_ptr;
-    float *output_mlu_ptr = (float*)y->mem_ptr;
 
-    MluPool_t mlu_pool;
+    cnnlTensorDescriptor_t input_desc = nullptr;
+    cnnlTensorDescriptor_t output_desc = nullptr;
+    cnnlPoolingDescriptor_t pooling_desc = nullptr;
+    void *workspace = nullptr;
+    size_t workspace_size = 0;
 
-    jk.clear();
-    jk << op << ",";
-    jk << ni << "," << ci << "," << hi << "," << wi << ",";
-    jk << no << "," << co << "," << ho << "," << wo << ",";
-    auto iter = mlu_pool_cache.find(jk.to_string());
+    cnnlCreateTensorDescriptor(&input_desc);
+    cnnlCreateTensorDescriptor(&output_desc);
 
-    cnmlBaseOp_t pool_op;
-    cnmlPoolOpParam_t pool_param;
-    cnmlTensor_t input_tensor = NULL;
-    cnmlTensor_t output_tensor = NULL;
-    if (iter != mlu_pool_cache.end()) {
-        // LOGw << "find key";
-        mlu_pool = iter->second;
-        pool_op = mlu_pool.pool_op_cache; 
-        pool_param = mlu_pool.pool_param_cache; 
-        input_tensor = mlu_pool.input_tensor_cache;
-        output_tensor = mlu_pool.output_tensor_cache;
-    }
-    else {
-        // LOGw << "not find key";
-        int input_shape[] = {ni, ci, hi, wi};
-        int output_shape[] = {no, co, ho, wo};
+    int input_dim[4] = {ni, ci, hi, wi};
+    int output_dim[4] = {no, co, ho, wo};
+    cnnlSetTensorDescriptor(input_desc, CNNL_LAYOUT_NCHW, CNNL_DTYPE_FLOAT, 4, input_dim);
+    cnnlSetTensorDescriptor(output_desc, CNNL_LAYOUT_NCHW, CNNL_DTYPE_FLOAT, 4, output_dim);
+
+    // Determine the pooling mode
+    cnnlPoolingMode_t mode;
+    if (op == ns_maximum) mode = CNNL_POOLING_MAX;
+    else mode =  CNNL_POOLING_AVERAGE_COUNT_INCLUDE_PADDING;
+
+    cnnlCreatePoolingDescriptor(&pooling_desc);
+    cnnlSetPooling2dDescriptor(pooling_desc, mode, CNNL_PROPAGATE_NAN, kernel_size, kernel_size, padding, padding, padding, padding, stride, stride);
     
-        cnmlCreateTensor_V2(&input_tensor, CNML_TENSOR);
-        cnmlSetTensorShape_V2(input_tensor, dimNum, input_shape, NULL);
-        cnmlCreateTensor_V2(&output_tensor, CNML_TENSOR);
-        cnmlSetTensorShape_V2(output_tensor, dimNum, output_shape, NULL);
+    const void * alpha = nullptr;
+    const void * beta = nullptr;
 
-        cnmlSetTensorDataType(input_tensor, CNML_DATA_FLOAT32);
-        cnmlSetTensorDataType(output_tensor, CNML_DATA_FLOAT32);
-
-        if (op == ns_maximum) {
-            cnmlCreatePoolOpParam(&pool_param, kernel_size, kernel_size, stride, stride, 2 * padding, 2 * padding, dilation, dilation, CNML_POOL_MAX, CNML_POOL_KFULL, !count_include_pad);
-        }
-        else {
-            cnmlCreatePoolOpParam(&pool_param, kernel_size, kernel_size, stride, stride, 2 * padding, 2 * padding, dilation, dilation, CNML_POOL_AVG, CNML_POOL_KFULL, !count_include_pad);
-        }
-    
-        cnmlCreatePoolOp(&pool_op, pool_param, input_tensor, output_tensor);
-        cnmlSetOperationComputingLayout(pool_op, CNML_NCHW);
-        cnmlCompileBaseOp_V2(pool_op);
-
-        mlu_pool.pool_op_cache = pool_op;
-        mlu_pool.pool_param_cache = pool_param;
-        mlu_pool.input_tensor_cache = input_tensor;
-        mlu_pool.output_tensor_cache = output_tensor;
-        mlu_pool_cache[jk.to_string()] = mlu_pool;
-    }
-
-    cnmlComputePoolOpForward_V4(pool_op, NULL, input_mlu_ptr, NULL, output_mlu_ptr, mlu_queue, NULL);
+    cnnlPoolingForward(
+        /* handle         */ mlu_handle,
+        /* pooling_desc   */ pooling_desc,
+        /* alpha          */ alpha,
+        /* x_desc         */ input_desc,
+        /* x              */ input_mlu_ptr,
+        /* beta           */ beta,
+        /* y_desc         */ output_desc,
+        /* y              */ output_mlu_ptr,
+        /* workspace      */ workspace,
+        /* workspace_size */ workspace_size);
     return;
 }
 #endif

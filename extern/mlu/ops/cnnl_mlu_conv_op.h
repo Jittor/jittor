@@ -8,25 +8,26 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
-#include "op.h"
+#include <cnnl.h>
 #include <cnml.h>
 #include <cnrt.h>
+#include "op.h"
 
 namespace jittor {
 
-struct MluConvOp : Op {
+struct CnnlMluConvOp : Op {
     Var* x, * w, * y;
     int strideh, stridew, paddingh, paddingw, dilationh, dilationw, groups;
     string xformat, wformat, yformat;
-    /* MklConvOp: xformat abcd represents nchw */
-    MluConvOp(Var* x, Var* w, int strideh, int stridew, int paddingh, int paddingw, int dilationh=1, int dilationw=1, int groups=1, string xformat="abcd", string wformat="oihw", string yformat="");
     
-    const char* name() const override { return "mlu_conv"; }
+    CnnlMluConvOp(Var* x, Var* w, int strideh, int stridew, int paddingh, int paddingw, int dilationh=1, int dilationw=1, int groups=1, string xformat="abcd", string wformat="oihw", string yformat="");
+    
+    const char* name() const override { return "cnnl_mlu_conv"; }
     void infer_shape() override;
     DECLARE_jit_run;
 };
 
-struct MluConv_t {
+struct CnnlMluConv_t {
     cnmlBaseOp_t conv_op_cache;
     cnmlConvOpParam_t conv_param_cache;
     cnmlTensor_t input_tensor_cache;

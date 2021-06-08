@@ -172,7 +172,6 @@ void FusedOp::do_jit_prepare(JK& jk) {
     ASSERT(flags) << "FusedOp cannot contain both cpu and cuda ops.";
     jk << _CS("[JIT:1]");
     if (flags==1) {
-        LOGir << "only cpu";
         // only cpu
         jk << _CS("[JIT_cpu:1]");
         this->flags.set(NodeFlags::_cuda, 0);
