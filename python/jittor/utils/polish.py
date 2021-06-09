@@ -23,6 +23,7 @@ from jittor.compiler import run_cmd
 from jittor_utils import translator
 from jittor.utils.polish_centos import run_in_centos
 import sys
+import platform
 
 jittor_path = jt.flags.jittor_path
 root_path = os.path.realpath(os.path.join(jt.flags.jittor_path, "..", ".."))
@@ -52,7 +53,17 @@ from pathlib import Path
 home = str(Path.home())
 # for cc_type in ["g++", "clang"]:
 #     for device in ["cpu", "cuda"]:
-for os_name in ['ubuntu', 'centos']:
+
+os_name_system_dict = {
+    'ubuntu': 'Linux',
+    'centos': 'Linux',
+    'macos': 'Darwin',
+}
+
+for os_name, os_type in os_name_system_dict.items():
+    if platform.system() != os_type:
+        continue
+
     for cc_type in ["g++"]:
         for device in ["cpu"]:
             key = f"{git_version}-{cc_type}-{device}"
