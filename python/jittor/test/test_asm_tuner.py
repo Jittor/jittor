@@ -12,6 +12,7 @@ import jittor as jt
 from jittor import LOG
 import os
 import re
+import platform
 
 class TestAsmTuner(unittest.TestCase):
     @classmethod
@@ -103,6 +104,7 @@ void jittor::FusedOp::jit_run() {
         if check_movnt and jt.flags.cc_type == "clang":
             assert bo
 
+    @unittest.skipIf(platform.system() == 'Darwin', 'will crash on macOS')
     def test_asm_tuner(self):
         self.check_cc(self.cc_content,True)
         self.check_cc(self.cc_content.replace("@begin","233").replace("@end","666"), False)

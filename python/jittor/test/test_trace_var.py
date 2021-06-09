@@ -11,6 +11,7 @@ from jittor import Module
 from jittor.models import resnet
 import pickle
 from PIL import Image
+import platform
 
 f32 = jt.float32
 
@@ -148,7 +149,7 @@ class TestTraceVar(unittest.TestCase):
                     if i not in data["node_data"]:
                         assert 0, (i, "not found")
 
-
+    @unittest.skipIf(platform.system() == 'Darwin', 'will crash on macOS')
     def test_resnet_trainx(self):
         with jt.flag_scope(trace_py_var=2):
 
@@ -176,6 +177,7 @@ class TestTraceVar(unittest.TestCase):
                 #     if "_opt" in s["name"] or "_model" in s["name"]:
                 #         assert 0, v
 
+    @unittest.skipIf(platform.system() == 'Darwin', 'will crash on macOS')
     def test_resnet_train_profile(self):
         with jt.profile_scope(trace_py_var=1):
 

@@ -416,7 +416,7 @@ class Tester(unittest.TestCase):
 
             split = img.split()
             for i in range(4):
-                np.testing.assert_allclose(expected_output[:,:,i], transform.to_tensor(split[i])[0])
+                self.assertTrue(np.allclose(expected_output[:,:,i], transform.to_tensor(split[i])[0]))
 
         img_data = jt.random((4, 4, 4))
         expected_output = img_data.multiply(255).int().float().divide(255)
