@@ -14,6 +14,9 @@ AlignedAllocator aligned_allocator;
 const char* AlignedAllocator::name() const {return "aligned";}
 
 void* AlignedAllocator::alloc(size_t size, size_t& allocation) {
+    #ifdef __APPLE__
+    size += 32-size%32;
+    #endif
     return aligned_alloc(alignment, size);
 }
 

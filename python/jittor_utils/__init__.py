@@ -13,11 +13,15 @@ import sys
 import inspect
 import datetime
 import contextlib
+import platform
 import threading
 import time
 from ctypes import cdll
 import shutil
 import urllib.request
+
+if platform.system() == 'Darwin':
+    mp.set_start_method('fork')
 
 class LogWarper:
     def __init__(self):
@@ -217,7 +221,7 @@ def find_cache_path():
     for name in cache_name.split("/"):
         dirs.insert(-1, name)
     os.environ["cache_name"] = cache_name
-    LOG.v("cache_name", cache_name)
+    LOG.v("cache_name: ", cache_name)
     for d in dirs:
         path = os.path.join(path, d)
         if not os.path.isdir(path):
@@ -288,10 +292,20 @@ cc_type = get_cc_type(cc_path)
 cache_path = find_cache_path()
 
 
+# Search python3.x-config
+# Note:
+#   This may be called via c++ console. In that case, sys.executable will
+#   be a path to the executable file, rather than python. So, we cannot infer 
+#   python-config path only from sys.executable.
+#   To address this issue, we add predefined paths to search,
+#       - Linux: /usr/bin/python3.x-config
+#       - macOS (installed via homebrew): /usr/local/bin/python3.x-config
+#   There may be issues under other cases, e.g., installed via conda.
 py3_config_paths = [
     os.path.dirname(sys.executable) + f"/python3.{sys.version_info.minor}-config",
     sys.executable + "-config",
     f"/usr/bin/python3.{sys.version_info.minor}-config",
+    f"/usr/local/bin/python3.{sys.version_info.minor}-config",
     os.path.dirname(sys.executable) + "/python3-config",
 ]
 if "python_config_path" in os.environ:
@@ -304,4 +318,4 @@ else:
     raise RuntimeError(f"python3.{sys.version_info.minor}-config "
         f"not found in {py3_config_paths}, please specify "
         f"enviroment variable 'python_config_path',"
-        f" or apt install python3.{sys.version_info.minor}-dev")
+        f" or install python3.{sys.version_info.minor}-dev")
