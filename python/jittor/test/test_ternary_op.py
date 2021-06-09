@@ -14,8 +14,8 @@ from .test_cuda import test_cuda
 class TestTernaryOp(unittest.TestCase):
     def test_with_np(self):
         np.random.seed(0)
-        a = np.random.rand(5,10)
-        b = np.random.rand(5,10)
+        a = np.random.rand(5,10).astype("float32")
+        b = np.random.rand(5,10).astype("float32")
         ja = jt.array(a)
         jb = jt.array(b)
         jc = jt.ternary(ja>jb, ja, jb)
@@ -26,8 +26,8 @@ class TestTernaryOp(unittest.TestCase):
 
     def test_min(self):
         np.random.seed(1)
-        a = np.random.rand(5,10)
-        b = np.random.rand(5,10)
+        a = np.random.rand(5,10).astype("float32")
+        b = np.random.rand(5,10).astype("float32")
         ja = jt.array(a)
         jb = jt.array(b)
         jc = jt.minimum(ja,jb)

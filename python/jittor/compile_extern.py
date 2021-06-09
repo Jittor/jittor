@@ -52,6 +52,19 @@ def setup_mkl():
     use_mkl = os.environ.get("use_mkl", "1")=="1"
     mkl_ops = None
     if not use_mkl: return
+
+    # pytorch mkl is conflict with jittor mkl
+    # yield error "free: invalide size" or
+    # "mmap error"
+    # import pytorch(>1.8) first can fix this problem
+
+    try:
+        # jt.dirty_fix_pytorch_runtime_error()
+        import torch
+        from torch import nn
+    except:
+        torch = None
+
     mkl_include_path = os.environ.get("mkl_include_path")
     mkl_lib_path = os.environ.get("mkl_lib_path")
     
