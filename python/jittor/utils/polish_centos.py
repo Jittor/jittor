@@ -52,8 +52,8 @@ def run_in_centos(env):
     centos_path = os.path.join(home_path, ".cache", "centos")
     os.makedirs(centos_path+"/src/jittor", exist_ok=True)
     os.makedirs(centos_path+"/src/jittor_utils", exist_ok=True)
-    os.system(f"cp -rL {jt.flags.jittor_path} {centos_path+'/src/'}")
-    os.system(f"cp -rL {jt.flags.jittor_path}/../jittor_utils {centos_path+'/src/'}")
+    os.system(f"sudo cp -rL {jt.flags.jittor_path} {centos_path+'/src/'}")
+    os.system(f"sudo cp -rL {jt.flags.jittor_path}/../jittor_utils {centos_path+'/src/'}")
 
     run_cmd(f"sudo docker build --tag centos_build_env -f /tmp/centos_build_env .")
     run_cmd(f"sudo docker run --rm -v {centos_path}:/root/.cache/jittor centos_build_env scl enable devtoolset-7 'PYTHONPATH=/root/.cache/jittor/src {env} python3.8 -m jittor.test.test_core'")

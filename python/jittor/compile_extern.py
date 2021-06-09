@@ -53,6 +53,19 @@ def setup_mkl():
     use_mkl = os.environ.get("use_mkl", "1")=="1"
     mkl_ops = None
     if not use_mkl: return
+
+    # pytorch mkl is conflict with jittor mkl
+    # yield error "free: invalide size" or
+    # "mmap error"
+    # import pytorch(>1.8) first can fix this problem
+
+    try:
+        # jt.dirty_fix_pytorch_runtime_error()
+        import torch
+        from torch import nn
+    except:
+        torch = None
+
     mkl_include_path = os.environ.get("mkl_include_path")
     mkl_lib_path = os.environ.get("mkl_lib_path")
     
@@ -188,11 +201,11 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
         prefer_version = ()
         if nvcc_version[0] == 11:
             prefer_version = ("8",)
-        culib_path = search_file([cuda_lib, extra_lib_path, "/usr/lib/x86_64-linux-gnu"], f"lib{lib_name}.so", prefer_version)
+        culib_path = search_file([cuda_lib, extra_lib_path, "/usr/lib/x86_64-linux-gnu", "/usr/lib"], f"lib{lib_name}.so", prefer_version)
 
         if lib_name == "cublas" and nvcc_version[0] >= 10:
             # manual link libcublasLt.so
-            cublas_lt_lib_path = search_file([cuda_lib, extra_lib_path, "/usr/lib/x86_64-linux-gnu"], f"libcublasLt.so", nvcc_version)
+            cublas_lt_lib_path = search_file([cuda_lib, extra_lib_path, "/usr/lib/x86_64-linux-gnu", "/usr/lib"], f"libcublasLt.so", nvcc_version)
             ctypes.CDLL(cublas_lt_lib_path, dlopen_flags)
 
 
@@ -201,7 +214,7 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
             if nvcc_version >= (11,0,0):
                 libs = ["libcudnn_ops_infer.so", "libcudnn_ops_train.so", "libcudnn_cnn_infer.so", "libcudnn_cnn_train.so"]
                 for l in libs:
-                    ex_cudnn_path = search_file([cuda_lib, extra_lib_path, "/usr/lib/x86_64-linux-gnu"], l, prefer_version)
+                    ex_cudnn_path = search_file([cuda_lib, extra_lib_path, "/usr/lib/x86_64-linux-gnu", "/usr/lib"], l, prefer_version)
                     ctypes.CDLL(ex_cudnn_path, dlopen_flags)
 
         # dynamic link cuda library
