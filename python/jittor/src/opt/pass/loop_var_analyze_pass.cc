@@ -130,6 +130,7 @@ void LoopVarAnalyzePass::run() {
             }
             loop_vars.reserve(loop_var->shape.size());
             string vname = pm->oc->get_name_by_op_var(op, loop_var);
+            ASSERT(vname!="__fill__");
             for (uint j=0; j<loop_var->shape.size(); j++)
                 loop_vars.emplace_back(vname+"->shape["+S(j)+"]");
             break;
