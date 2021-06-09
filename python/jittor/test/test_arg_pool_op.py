@@ -238,7 +238,33 @@ class TestArgPoolOp(unittest.TestCase):
         jt_model = j_max_pool2d(jt.array(arr), 3, 1, 1)
         torch_model = max_pool2d(torch.Tensor(arr), 3, 1, 1)
         assert np.allclose(jt_model.numpy(), torch_model.numpy())
-        print('finish')
+
+    def test_pool_3d(self):
+        from torch.nn.functional import max_pool2d
+        arr = np.random.random((2, 16, 20, 20, 20)).astype("float32")
+        # arr = np.random.random((1, 1, 1, 5, 5)).astype("float32")
+        jin = jt.array(arr)
+        tin = torch.Tensor(arr)
+        tin.requires_grad = True
+        jt_model = jt.nn.Pool3d(3,1,1)(jin)
+        torch_model = torch.nn.MaxPool3d(3,1,1)(tin)
+        assert np.allclose(jt_model.numpy(), torch_model.detach().numpy())
+
+
+        nout = np.random.random(tuple(jt_model.shape)).astype("float32")
+        jout = jt_model * nout
+        tout = torch_model * torch.Tensor(nout)
+        dj = jt.grad(jout, jin)
+        
+        tout.sum().backward()
+        dt = tin.grad
+        assert np.allclose(dj.numpy(), dt.numpy())
+
+    @unittest.skipIf(not jt.compiler.has_cuda, "No cuda found")
+    @jt.flag_scope(use_cuda=1)
+    def test_cuda_pool_3d(self):
+        self.test_pool_3d()
+
 
 if __name__ == "__main__":
     unittest.main()
