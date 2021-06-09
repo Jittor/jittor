@@ -1041,7 +1041,7 @@ if platform.system() == 'Linux':
             if len(a) != 2: continue
             os_release[a[0]] = a[1].replace("\"", "")
 elif platform.system() == 'Darwin':
-    os_release = {'ID' : 'macOS'}
+    os_release = {'ID' : 'macos'}
 
 os_type = {
     "ubuntu": "ubuntu",
@@ -1049,7 +1049,7 @@ os_type = {
     "centos": "centos",
     "rhel": "ubuntu",
     "fedora": "ubuntu",
-    "macOS": "macOS",
+    "macos": "macos",
 }
 
 version_file = os.path.join(jittor_path, "version")
