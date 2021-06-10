@@ -4,7 +4,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-from multiprocessing import Pool
+from multiprocessing import Pool, Value
 import multiprocessing as mp
 import subprocess as sp
 import os
@@ -169,10 +169,17 @@ def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
     bk = mp.current_process()._config.get('daemon')
     mp.current_process()._config['daemon'] = False
     if pool_size == 0:
-        mem_bytes = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
-        mem_gib = mem_bytes/(1024.**3)
-        pool_size = min(16,max(int(mem_gib // 3), 1))
-        LOG.i(f"Total mem: {mem_gib:.2f}GB, using {pool_size} procs for compiling.")
+        try:
+            mem_bytes = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
+            mem_gib = mem_bytes/(1024.**3)
+            pool_size = min(16,max(int(mem_gib // 3), 1))
+            LOG.i(f"Total mem: {mem_gib:.2f}GB, using {pool_size} procs for compiling.")
+        except ValueError:
+            # On macOS, python with version lower than 3.9 do not support SC_PHYS_PAGES.
+            # Use hard coded pool size instead.
+            pool_size = 4
+            LOG.i(f"using {pool_size} procs for compiling.")
+
         p = Pool(pool_size, initializer=pool_initializer)
         p.__enter__()
         import atexit
