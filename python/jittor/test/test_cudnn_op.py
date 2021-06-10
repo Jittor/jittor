@@ -134,7 +134,8 @@ class TestCudnnConvOp(unittest.TestCase):
             with jt.flag_scope(use_cuda=1):
                 x = jt.random(xshape)
                 w = jt.random(wshape)
-                y = jt.cudnn.ops.cudnn_conv3d(x, w, *stride, *padding, *dilation, group)
+                # y = jt.cudnn.ops.cudnn_conv3d(x, w, *stride, *padding, *dilation, group)
+                y = jt.nn.conv3d(x, w, None, stride, padding, dilation, group)
                 masky = jt.rand_like(y)
                 dx, dw = jt.grad(masky*y, [x, w])
                 
@@ -153,6 +154,7 @@ class TestCudnnConvOp(unittest.TestCase):
         check((2,4,10,10,10), (5,4,3,3,3), (1,1,1), (1,1,1), dilation=(1,2,3))
 
     def test_conv_transpose3d(self):
+        jt.set_global_seed(10)
         def check(xshape, wshape, stride=(1,1,1), padding=(0,0,0), dilation=(1,1,1), group=1):
             with jt.flag_scope(use_cuda=1):
                 x = jt.random(xshape)
@@ -161,7 +163,8 @@ class TestCudnnConvOp(unittest.TestCase):
             y2 = jt.nn.conv_transpose3d(x, w, None, stride, padding, 0, group, dilation)
 
             with jt.flag_scope(use_cuda=1):
-                y = jt.cudnn.ops.cudnn_conv3d_backward_x(w, x, *y2.shape[2:], *stride, *padding, *dilation, group)
+                # y = jt.cudnn.ops.cudnn_conv3d_backward_x(w, x, *y2.shape[2:], *stride, *padding, *dilation, group)
+                y = jt.nn.conv_transpose3d(x, w, None, stride, padding, 0, group, dilation)
                 masky = jt.rand_like(y)
                 dx, dw = jt.grad(masky*y, [x, w])
                 
