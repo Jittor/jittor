@@ -11,11 +11,11 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 import jittor as jt
-from jittor import init, Module
+from jittor import init, Module, Function
 import numpy as np
 import math
 
-class Pool(Module):
+class Pool(Function):
     def __init__(self, kernel_size, stride=None, padding=0, dilation=None, return_indices=None, ceil_mode=False, count_include_pad=True, op="maximum"):
         assert dilation == None
         assert return_indices == None
@@ -25,10 +25,21 @@ class Pool(Module):
         self.padding = padding
         self.ceil_mode = ceil_mode
         self.count_include_pad = count_include_pad and padding != 0
+    
+    def grad(self, grad):
+        return jt.mlu_ops.cnnl_pool_backward(grad.transpose(0,2,3,1), self.x.transpose(0,2,3,1), self.index.transpose(0,2,3,1), self.kernel_size, self.stride, self.padding, self.ceil_mode, self.count_include_pad, op=self.op).transpose(0,3,1,2)
 
     def execute(self, x):
         if jt.flags.use_mlu:
-            return jt.mlu_ops.cnnl_mlu_pool(x, self.kernel_size, self.stride, self.padding, 0, 0, 0, 0, op=self.op)
+            self.x = x
+            if self.op == "mean":
+                self.index = y = jt.mlu_ops.cnnl_mlu_pool(x, self.kernel_size, self.stride, self.padding, 0, 0, 0, 0)
+                return y
+            elif self.op == "maximum":
+                y, index = jt.mlu_ops.cnnl_max_pool(x, self.kernel_size, self.stride, self.padding, 0, 0, 0, 0)
+                self.index = index
+                return y
+        self.x = x
         N,C,H,W = x.shape
         if self.ceil_mode == False:
             h = (H+self.padding*2-self.kernel_size)//self.stride+1
@@ -187,7 +198,8 @@ class AdaptiveAvgPool2d(Module):
         self.ksh = H - (oh - 1) * self.sh
         self.ksw = W - (ow - 1) * self.sw
         if jt.flags.use_mlu:
-            return jt.mlu_ops.cnnl_mlu_pool(x, self.ksh, self.sh, 0, 0, 0, 0, 0, op="mean")
+            return Pool(self.ksh, self.sh, 0)(x)
+            # return jt.mlu_ops.cnnl_mlu_pool(x, self.ksh, self.sh, 0, 0, 0, 0, 0)
         h = (H-self.ksh)//self.sh+1
         w = (W-self.ksw)//self.sw+1
         xx = x.reindex([N,C,h,w,self.ksh,self.ksw], [

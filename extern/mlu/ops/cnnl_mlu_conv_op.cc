@@ -15,7 +15,7 @@
 #include <sstream>
 #include <chrono>
 #include "mlu_warper.h"
-
+#include "ops/op_register.h"
 using namespace std;
 
 namespace jittor {
@@ -38,6 +38,13 @@ static inline void get_shape(Var* x, const char* f, const string& format, int& a
 
 #ifndef JIT
 
+static auto make_transpose = get_op_info("transpose")
+    .get_constructor<VarPtr, Var*, NanoVector>();
+static auto make_cnnl_mlu_conv_backward_x = get_op_info("cnnl_conv_backward_x")
+    .get_constructor<VarPtr, Var*, Var*, Var*, Var*, int, int, int, int, int, int, int, string, string, string>();
+// static auto make_cnnl_mlu_conv_backward_w = get_op_info("cnnl_mlu_conv_backward_w")
+//     .get_constructor<VarPtr, ......>();
+
 static inline void set_shape(Var* x, const char* f, const string& format, int a, int b, int c, int d) {
     int64 shape[4];
     shape[findc(format, f[0])] = a;
@@ -55,8 +62,164 @@ CnnlMluConvOp::CnnlMluConvOp(Var* x, Var* w, int strideh, int stridew, int paddi
     // LOGir << "shit";
     flags.set(NodeFlags::_cpu, 0);
     flags.set(NodeFlags::_cuda, 1);
+    // dx = create_output(nullptr, ns_int8);
     if (!this->yformat.size())
         this->yformat = this->xformat;
+}
+
+VarPtr CnnlMluConvOp::grad(Var* out, Var* dout, Var* v, int v_index) {
+    // int8_t* input_mlu_ptr = (int8_t*)x->mem_ptr;
+    // int8_t* filter_mlu_ptr = (int8_t*)w->mem_ptr;
+    // float *output_mlu_ptr = (float*)y->mem_ptr;
+    LOGw << "CnnlMluConvOp::grad" << v_index;
+    if (v_index == 0) {
+        LOGw << "Grad to x";
+        return make_cnnl_mlu_conv_backward_x(out, dout, w, x, strideh, stridew, paddingh, paddingw, dilationh, dilationw, groups, xformat, wformat, yformat);
+    }
+    else
+        return nullptr;
+    // else
+    //     return make_cnnl_mlu_conv_backward_w(out, dout, w, ....);
+    // if (v_index == 0) {
+    //     LOGw << "grad to x";
+    //     LOGw << w->shape;
+
+    //     int ni, ci, hi, wi, no, co, cw, ho, wo, kh, kw;
+    //     get_shape(x, "abcd", xformat, ni, hi, wi, ci);
+    //     get_shape(w, "oihw", wformat, co, kh, kw, cw);
+    //     get_shape(y, "abcd", yformat, no, ho, wo, co);
+
+    //     int input_dim[4] = {ni, hi, wi, ci};
+    //     int weight_dim[4] = {co, kh, kw, cw};
+    //     int output_dim[4] = {no, ho, wo, co};
+
+    //     cnnlTensorDescriptor_t input_desc = nullptr;
+    //     cnnlTensorDescriptor_t weight_desc = nullptr;
+    //     cnnlTensorDescriptor_t output_desc = nullptr;
+    //     cnnlTensorDescriptor_t grad_input_desc = nullptr;
+    //     cnnlTensorDescriptor_t grad_desc = nullptr;
+    //     cnnlSetTensorDescriptor(input_desc, CNNL_LAYOUT_NHWC, CNNL_DTYPE_INT8, 4, input_dim);
+    //     cnnlSetTensorDescriptor(weight_desc, CNNL_LAYOUT_NHWC, CNNL_DTYPE_INT8, 4, weight_dim);
+    //     cnnlSetTensorDescriptor(output_desc, CNNL_LAYOUT_NHWC, CNNL_DTYPE_FLOAT, 4, output_dim);
+    //     cnnlSetTensorDescriptor(grad_input_desc, CNNL_LAYOUT_NHWC, CNNL_DTYPE_INT8, 4, input_dim);
+    //     cnnlSetTensorDescriptor(grad_desc, CNNL_LAYOUT_NHWC, CNNL_DTYPE_INT8, 4, output_dim);
+
+    //     cnnlConvolutionBwdDataPreference_t pre_t = CNNL_CONVOLUTION_BWD_DATA_FASTEST;
+    //     cnnlConvolutionBwdDataAlgo_t algo_t;
+    //     cnnlConvolutionDescriptor_t conv_desc;
+    //     void *workspace = nullptr;
+    //     size_t workspace_size = 0;
+    //     cnnlHandle_t handle = nullptr;
+    //     cnnlCreate(&handle);
+    //     cnnlSetQueue(handle, mlu_queue);
+
+    //     int pad[4] = {paddingh, paddingh, paddingw, paddingw};
+    //     int stride[2] = {strideh, stridew};
+    //     int dilation[2] = {dilationh, dilationw};
+    //     cnnlSetConvolutionDescriptor(conv_desc, 4, pad, stride, dilation, groups,CNNL_DTYPE_FLOAT);
+
+    //     cnnlGetConvolutionBackwardDataAlgorithm(handle, weight_desc, grad_desc, conv_desc, grad_input_desc, pre_t, &algo_t);
+
+    //     cnnlGetConvolutionBackwardDataWorkspaceSize(handle, weight_desc, grad_desc, conv_desc, grad_input_desc, algo_t, &workspace_size);
+
+    //     const void * alpha = nullptr;
+    //     const void * beta = nullptr;
+
+    //     cnnlConvolutionBackwardData(
+    //     /* handle         */ handle,
+    //     /* alpha          */ alpha,
+    //     /* weight_desc    */ weight_desc,
+    //     /* weight         */ filter_mlu_ptr,
+    //     /* diff_y_desc    */ grad_desc,
+    //     /* diff_y         */ dout->mem_ptr,
+    //     /* conv_desc      */ conv_desc,
+    //     /* algo           */ algo_t,
+    //     /* workspace      */ workspace,
+    //     /* workspace_size */ workspace_size,
+    //     /* beta           */ beta,
+    //     /* diff_x_desc    */ grad_input_desc,
+    //     /* diff_x         */ dw->mem_ptr);
+    //     return dx;
+    //     // LOGw << dout->dtype();
+    //     // auto dout_t = make_transpose(dout, {0,2,1,3});
+
+    //     // void* dout_ptr = dout->mem_ptr;
+    //     // float* cache_ptr = (float *)malloc(dout->size);
+    //     // cnrtMemcpy(cache_ptr, dout_ptr, dout->size, CNRT_MEM_TRANS_DIR_DEV2HOST);
+    //     // LOGw << (float)cache_ptr[0];
+    //     // LOGw << (float)cache_ptr[2];
+    //     // LOGw << (float)cache_ptr[3];
+    //     // LOGw << dout->size;
+    // }
+    // else if (v_index == 1) {
+    //     LOGw << "grad to w";
+
+    //     /*
+    //     int ni, ci, hi, wi, no, co, cw, ho, wo, kh, kw;
+    //     get_shape(x, "abcd", xformat, ni, hi, wi, ci);
+    //     get_shape(w, "oihw", wformat, co, kh, kw, cw);
+    //     get_shape(y, "abcd", yformat, no, ho, wo, co);
+
+    //     int input_dim[4] = {ni, hi, wi, ci};
+    //     int weight_dim[4] = {co, kh, kw, cw};
+    //     int output_dim[4] = {no, ho, wo, co};
+
+    //     cnnlTensorDescriptor_t input_desc = nullptr;
+    //     cnnlTensorDescriptor_t weight_desc = nullptr;
+    //     cnnlTensorDescriptor_t output_desc = nullptr;
+    //     cnnlTensorDescriptor_t grad_weight_desc = nullptr;
+    //     cnnlTensorDescriptor_t grad_desc = nullptr;
+    //     cnnlSetTensorDescriptor(input_desc, CNNL_LAYOUT_NHWC, CNNL_DTYPE_INT8, 4, input_dim);
+    //     cnnlSetTensorDescriptor(weight_desc, CNNL_LAYOUT_NHWC, CNNL_DTYPE_INT8, 4, weight_dim);
+    //     cnnlSetTensorDescriptor(output_desc, CNNL_LAYOUT_NHWC, CNNL_DTYPE_FLOAT, 4, output_dim);
+    //     cnnlSetTensorDescriptor(grad_weight_desc, CNNL_LAYOUT_NHWC, CNNL_DTYPE_INT8, 4, weight_dim);
+    //     cnnlSetTensorDescriptor(grad_desc, CNNL_LAYOUT_NHWC, CNNL_DTYPE_INT8, 4, output_dim);
+
+    //     cnnlConvolutionBwdDataAlgo_t algo_t;
+    //     cnnlConvolutionDescriptor_t conv_desc;
+    //     void *workspace = nullptr;
+    //     size_t workspace_size = 0;
+    //     cnnlCreate(&handle);
+    //     cnnlSetQueue(handle, mlu_queue);
+
+    //     int pad[4] = {paddingh, paddingh, paddingw, paddingw};
+    //     int stride[2] = {strideh, stridew};
+    //     int dilation[2] = {dilationh, dilationw};
+    //     cnnlSetConvolutionDescriptor(conv_desc, 4, pad, stride, dilation, groups, CNNL_DTYPE_FLOAT);
+
+    //     cnnlGetConvolutionBackwardFilterWorkspaceSize(handle, input_desc, grad_desc, grad_weight_desc, conv_desc, algo_t, &workspace_size)
+
+    //     const void * alpha = nullptr;
+    //     const void * beta = nullptr;
+
+    //     */
+
+    //     // cnnlConvolutionBackwardFilter(
+    //     // /* handle         */ handle,
+    //     // /* alpha          */ alpha,
+    //     // /* x_desc         */ input_desc,
+    //     // /* x              */ input_mlu_ptr,
+    //     // /* diff_y_desc    */ grad_desc,
+    //     // /* diff_y         */ dout->mem_ptr,
+    //     // /* conv_desc      */ conv_desc,
+    //     // /* algo           */ algo_t,
+    //     // /* workspace      */ workspace_ptr,
+    //     // /* workspace_size */ workspace_size,
+    //     // /* beta           */ beta,
+    //     // /* diff_w_desc    */ grad_weight_desc,
+    //     // /* diff_w         */ grad_weight_ptr);
+    //     // LOGw << dout->dtype();
+    //     // auto dout_t = make_transpose(dout, {0,2,1,3});
+
+    //     // void* dout_ptr = dout->mem_ptr;
+    //     // float* cache_ptr = (float *)malloc(dout->size);
+    //     // cnrtMemcpy(cache_ptr, dout_ptr, dout->size, CNRT_MEM_TRANS_DIR_DEV2HOST);
+    //     // LOGw << (float)cache_ptr[0];
+    //     // LOGw << (float)cache_ptr[2];
+    //     // LOGw << (float)cache_ptr[3];
+    //     // LOGw << dout->size;
+    // }
+    // return v;
 }
 
 void CnnlMluConvOp::infer_shape() {
@@ -65,8 +228,6 @@ void CnnlMluConvOp::infer_shape() {
     int xn, xc, xh, xw, wh, ww, wci, wco, yn, yc, yh, yw;
     get_shape(x, "abcd", xformat, xn, xh, xw, xc);
     get_shape(w, "oihw", wformat, wco, wh, ww, wci);
-    // LOGw << xn << xc << xh << xw;
-    // LOGw << wco << wci << wh << ww;
     ASSERTop(wci * groups,==,xc);
     yn = xn, yc = wco;
     yh = (xh+paddingh*2-wh*dilationh+dilationh-1)/strideh+1;
@@ -110,8 +271,6 @@ unordered_map<string, CnnlMluConv_t> cnnl_mlu_conv_cache;
 extern unordered_map<string, CnnlMluConv_t> cnnl_mlu_conv_cache;
 
 void CnnlMluConvOp::jit_run() {
-    // cnrtSyncQueue(mlu_queue);
-    // auto start = std::chrono::high_resolution_clock::now();
     int8_t* input_mlu_ptr = (int8_t*)x->mem_ptr;
     int8_t* filter_mlu_ptr = (int8_t*)w->mem_ptr;
     float *output_mlu_ptr = (float*)y->mem_ptr;
@@ -121,7 +280,7 @@ void CnnlMluConvOp::jit_run() {
     get_shape(w, "oihw", wformat, co, kh, kw, cw);
     get_shape(y, "abcd", yformat, no, ho, wo, co);
 
-    // cnnlHandle_t handle = nullptr;
+    cnnlHandle_t handle = nullptr;
     cnnlTensorDescriptor_t input_desc = nullptr;
     cnnlTensorDescriptor_t weight_desc = nullptr;
     cnnlTensorDescriptor_t output_desc = nullptr;
@@ -129,8 +288,8 @@ void CnnlMluConvOp::jit_run() {
     cnnlConvolutionForwardAlgo_t algo = CNNL_CONVOLUTION_FWD_ALGO_DIRECT;
     void *workspace = nullptr;
     size_t workspace_size = 0;
-    // cnnlCreate(&handle);
-    // cnnlSetQueue(handle, mlu_queue);
+    cnnlCreate(&handle);
+    cnnlSetQueue(handle, mlu_queue);
 
     cnnlCreateTensorDescriptor(&input_desc);
     cnnlCreateTensorDescriptor(&weight_desc);
@@ -139,22 +298,10 @@ void CnnlMluConvOp::jit_run() {
     int input_dim[4] = {ni, hi, wi, ci};
     int weight_dim[4] = {co, kh, kw, cw};
     int output_dim[4] = {no, ho, wo, co};
+
     cnnlSetTensorDescriptor(input_desc, CNNL_LAYOUT_NHWC, CNNL_DTYPE_INT8, 4, input_dim);
     cnnlSetTensorDescriptor(weight_desc, CNNL_LAYOUT_NHWC, CNNL_DTYPE_INT8, 4, weight_dim);
     cnnlSetTensorDescriptor(output_desc, CNNL_LAYOUT_NHWC, CNNL_DTYPE_FLOAT, 4, output_dim);
-
-    // int input_dim[4] = {ni, ci, hi, wi};
-    // int weight_dim[4] = {co, cw, kh, kw};
-    // int output_dim[4] = {no, co, ho, wo};
-    // LOGw << ni << ci << hi << wi;
-    // LOGw << co << cw << kh << kw;
-    // LOGw << no << co << ho << wo;
-    // LOGw << x->shape;
-    // LOGw << w->shape;
-    // LOGw << y->shape;
-    // cnnlSetTensorDescriptor(input_desc, CNNL_LAYOUT_NCHW, CNNL_DTYPE_INT8, 4, input_dim);
-    // cnnlSetTensorDescriptor(weight_desc, CNNL_LAYOUT_NCHW, CNNL_DTYPE_INT8, 4, weight_dim);
-    // cnnlSetTensorDescriptor(output_desc, CNNL_LAYOUT_NCHW, CNNL_DTYPE_FLOAT, 4, output_dim);
 
     int pad[4] = {paddingh, paddingh, paddingw, paddingw};
     int stride[2] = {strideh, stridew};
@@ -162,39 +309,7 @@ void CnnlMluConvOp::jit_run() {
     cnnlCreateConvolutionDescriptor(&conv_desc);
     cnnlSetConvolutionDescriptor(conv_desc, 4, pad, stride, dilation, groups, CNNL_DTYPE_FLOAT);
 
-    cnnlConvolutionForward(mlu_handle, conv_desc, algo, nullptr, input_desc, input_mlu_ptr, weight_desc, filter_mlu_ptr, nullptr, nullptr, workspace, workspace_size, nullptr, output_desc, output_mlu_ptr);
-
-    // cnrtSyncQueue(mlu_queue);
-    // auto finish = std::chrono::high_resolution_clock::now();
-    // auto total_ns =  (int64_t)std::chrono::duration_cast<std::chrono::microseconds>(finish-start).count() / 1000.;
-    // (void) total_ns;
-    // LOGw << total_ns << " ms";
-    return;
-    // int input_count = ni * hi * wi * ci;
-    // int8_t* input_cpu_ptr = (int8_t *)malloc(input_count * sizeof(int8_t));
-    // cnrtMemcpy(input_cpu_ptr, input_mlu_ptr, input_count * siz eof(int8_t),
-    //           CNRT_MEM_TRANS_DIR_DEV2HOST);
-    // LOGw << (int)input_cpu_ptr[0];
-    // LOGw << (int)input_cpu_ptr[1];
-    // LOGw << (int)input_cpu_ptr[2];
-    // LOGw << (int)input_cpu_ptr[3];
-
-    // int filter_count = co * kh * kw * cw;
-    // int8_t* filter_cpu_ptr = (int8_t *)malloc(filter_count * sizeof(int8_t));
-    // cnrtMemcpy(filter_cpu_ptr, filter_mlu_ptr, filter_count * sizeof(int8_t),
-    //           CNRT_MEM_TRANS_DIR_DEV2HOST);
-    // LOGw << (int)filter_cpu_ptr[0];
-    // LOGw << (int)filter_cpu_ptr[1];
-    // LOGw << (int)filter_cpu_ptr[2];
-    // LOGw << (int)filter_cpu_ptr[3];
-
-    // LOGw << input_desc;
-    // LOGw << weight_desc;
-    // LOGw << output_desc;
-    // LOGw << conv_desc;
-    // LOGw << algo;
-    // LOGw << workspace;
-    // LOGw << workspace_size;
+    cnnlConvolutionForward(handle, conv_desc, algo, nullptr, input_desc, input_mlu_ptr, weight_desc, filter_mlu_ptr, nullptr, nullptr, workspace, workspace_size, nullptr, output_desc, output_mlu_ptr);
 }
 #endif
 #endif // JIT

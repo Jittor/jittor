@@ -14,15 +14,15 @@
 
 namespace jittor {
 
-struct MluPoolOp : Op {
+struct CnmlPoolOp : Op {
     Var* x, * y;
     int kernel_size, stride, padding, dilation, pool_mode_row;
     bool ceil_mode, count_include_pad;
     string xformat, yformat, op;
-    /* MluPoolOp: xformat abcd represents nchw */
-    MluPoolOp(Var* x, int kernel_size, int stride, int padding, int dilation, int pool_mode_row, bool ceil_mode, bool count_include_pad, string xformat="abcd", string yformat="", string op="maximum");
+    /* CnmlPoolOp: xformat abcd represents nchw */
+    CnmlPoolOp(Var* x, int kernel_size, int stride, int padding, int dilation, int pool_mode_row, bool ceil_mode, bool count_include_pad, string xformat="abcd", string yformat="", string op="maximum");
     
-    const char* name() const override { return "mlu_pool"; }
+    const char* name() const override { return "cnml_pool"; }
     void infer_shape() override;
     DECLARE_jit_run;
 };

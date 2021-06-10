@@ -16,24 +16,17 @@
 
 namespace jittor {
 
-struct CnnlMluPoolOp : Op {
-    Var* x, * y;
+struct CnnlMaxPoolOp : Op {
+    Var* x,* y,* index;
     int kernel_size, stride, padding, dilation, pool_mode_row;
     bool ceil_mode, count_include_pad;
     string xformat, yformat;
-    /* CnnlMluPoolOp: xformat abcd represents nchw */
-    CnnlMluPoolOp(Var* x, int kernel_size, int stride, int padding, int dilation, int pool_mode_row, bool ceil_mode, bool count_include_pad, string xformat="abcd", string yformat="");
+    /* CnnlMaxPoolOp: xformat abcd represents nchw */
+    // @attrs(multiple_outputs)
+    CnnlMaxPoolOp(Var* x, int kernel_size, int stride, int padding, int dilation, int pool_mode_row, bool ceil_mode, bool count_include_pad, string xformat="abcd", string yformat="");
     
-    const char* name() const override { return "cnnl_mlu_pool"; }
+    const char* name() const override { return "cnnl_max_pool"; }
     void infer_shape() override;
     DECLARE_jit_run;
 };
-
-struct CnnlMluPool_t {
-    cnmlBaseOp_t pool_op_cache;
-    cnmlPoolOpParam_t pool_param_cache;
-    cnmlTensor_t input_tensor_cache;
-    cnmlTensor_t output_tensor_cache;
-};
-
 } // jittor

@@ -268,7 +268,7 @@ def liveness_info():
 def ones(shape, dtype="float32"):
     if not isinstance(shape, (NanoVector, Sequence)):
         shape = (shape,)
-    return unary(1, dtype).broadcast(shape)
+    return unary(1.0, dtype).broadcast(shape)
 
 def ones_like(x):
     return ones(x.shape,x.dtype)
@@ -276,7 +276,7 @@ def ones_like(x):
 def zeros(shape, dtype="float32"):
     if not isinstance(shape, (NanoVector, Sequence)):
         shape = (shape,)
-    return unary(0, dtype).broadcast(shape)
+    return unary(0.0, dtype).broadcast(shape)
 
 def full(shape,val,dtype="float32"):
     if not isinstance(shape, (NanoVector, Sequence)):
@@ -882,7 +882,7 @@ class Module:
                     v.weight_scale = scale[1]
                 if not key.endswith("num_batches_tracked"):
                     n_failed += 1
-                    LOG.w(f'load parameter {key} failed ...')
+                    # LOG.w(f'load parameter {key} failed ...')
             else:
                 assert isinstance(v, Var), \
                     f"expect a jittor Var, but got <{v.__class__.__name__}>, key: {key}"
@@ -1166,7 +1166,8 @@ def jittor_exit():
     elif hooks.exception is not None:
         pass
     else:
-        core.sync_all(True)
+        # core.sync_all(True)
+        pass
     core.cleanup()
 atexit.register(jittor_exit)
 
