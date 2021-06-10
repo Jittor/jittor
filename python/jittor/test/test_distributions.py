@@ -18,6 +18,12 @@ class TestOneHot(unittest.TestCase):
         a = jt.array([[1,2,3,4]])
         b = jd.simple_presum(a)
         assert (b.data == [[0,1,3,6,10]]).all()
+    
+    def test_lgamma(self):
+        import torch
+        ta = np.random.uniform(2,3,(1))
+        a = jt.array(ta).float32()
+        assert np.allclose(jd.lgamma(a).data, torch.lgamma(torch.tensor(ta)).numpy()),(jd.lgamma(a).data, torch.lgamma(torch.tensor(ta)).numpy())
 
     def test_one_hot(self):
         a = jd.OneHotCategorical(jt.array([0.25, 0.25, 0.25, 0.25]))
@@ -31,9 +37,9 @@ class TestOneHot(unittest.TestCase):
         probs,probs2 = np.random.uniform(0,1,(10)), np.random.uniform(0,1,(10))
         probs,probs2 = probs / probs.sum(),probs2 / probs2.sum()
         import torch
+        tc, tc2 = torch.distributions.OneHotCategorical(torch.tensor(probs).to(torch.float32)),torch.distributions.OneHotCategorical(torch.tensor(probs2).to(torch.float32))
         jc, jc2 = jd.OneHotCategorical(jt.array(probs).reshape(1,-1)),jd.OneHotCategorical(jt.array(probs2).reshape(1,-1))
-        tc, tc2 = torch.distributions.OneHotCategorical(torch.tensor(probs)),torch.distributions.OneHotCategorical(torch.tensor(probs2))
-        assert np.allclose(jc.entropy().data,tc.entropy().numpy())
+        assert np.allclose(jc.entropy().data,tc.entropy().numpy()), (jc.entropy().data, tc.entropy().numpy())
         x = np.zeros((4,10))
         for _ in range(4):
             nx = np.random.randint(0,9)    
@@ -72,7 +78,6 @@ class TestOneHot(unittest.TestCase):
         for _ in range(4):
             probs,probs2 = np.random.uniform(0,1,(10)), np.random.uniform(0,1,(10))
             probs,probs2 = probs / probs.sum(),probs2 / probs2.sum()
-            jc, jc2 = jd.Categorical(jt.array(probs).reshape(1,-1)),jd.Categorical(jt.array(probs2).reshape(1,-1))
             tc, tc2 = torch.distributions.Categorical(torch.tensor(probs)),torch.distributions.Categorical(torch.tensor(probs2))
             assert np.allclose(jc.entropy().data, tc.entropy().numpy()), (jc.entropy().data, tc.entropy().numpy())
             x = np.random.randint(0,10,(4))
@@ -101,7 +106,6 @@ class TestOneHot(unittest.TestCase):
             assert np.allclose(jg.entropy().data,tg.entropy().numpy())
             x = np.random.randint(1,10)
             assert np.allclose(jg.log_prob(x),tg.log_prob(torch.tensor(x)))
-            # print(jd.kl_divergence(jg,jg2),torch.distributions.kl_divergence(tg,tg2))
             assert np.allclose(jd.kl_divergence(jg,jg2),torch.distributions.kl_divergence(tg,tg2))
 
 if __name__ == "__main__":
