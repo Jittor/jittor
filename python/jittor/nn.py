@@ -731,6 +731,9 @@ def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     dilation = _triple(dilation)
     out_channels = weight.shape[0]
 
+    if jt.flags.use_cuda and jt.cudnn:
+        return jt.cudnn.ops.cudnn_conv3d(x, weight, *stride, *padding, *dilation, groups)
+
     if groups == 1:
         N,C,D,H,W = x.shape
         Kd, Kh, Kw = weight.shape[-3:]
@@ -949,6 +952,8 @@ def conv_transpose3d(input, weight, bias=None, stride=1, padding=0, output_paddi
     h_out = (H-1) * stride_h + output_padding[1] - 2*padding_h + 1 + (h-1)*dilation_h
     w_out = (W-1) * stride_w + output_padding[2] - 2*padding_w + 1 + (w-1)*dilation_w
     out_shape = (N, o, d_out, h_out, w_out)
+    if jt.flags.use_cuda and jt.cudnn:
+        return jt.cudnn.ops.cudnn_conv3d_backward_x(weight, x, *out_shape[2:], *stride, *padding, *dilation, groups)
     shape = (N, i, o, D, H, W, d, h, w)
     xx = x.broadcast(shape, (2, 6, 7, 8)) # i,h,w
     ww = weight.broadcast(shape, (0, 3, 4, 5)) # N,H,W
