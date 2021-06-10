@@ -21,6 +21,7 @@ from collections import OrderedDict
 from jittor.pool import *
 from jittor.optim import *
 from jittor.misc import _pair, _triple
+from jittor_utils import LOG
 
 
 def matmul_transpose(a, b):
@@ -639,7 +640,6 @@ class Conv1d(Module):
 
 class Conv3d(Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
-        LOG.w("Optimizations of Conv3d are working in progress, it maybe slow currently.")
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.kernel_size = kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size, kernel_size)
@@ -665,65 +665,7 @@ class Conv3d(Module):
             self.bias = None
 
     def execute(self, x):
-        if self.groups == 1:
-            N,C,H,W,D = x.shape
-            Kh, Kw, Kd = self.kernel_size
-            assert C==self.in_channels
-            oh = (H+self.padding[0]*2-Kh*self.dilation[0]+self.dilation[0]-1)//self.stride[0]+1
-            ow = (W+self.padding[1]*2-Kw*self.dilation[1]+self.dilation[1]-1)//self.stride[1]+1
-            od = (D+self.padding[2]*2-Kd*self.dilation[2]+self.dilation[2]-1)//self.stride[2]+1
-            xx = x.reindex([N,self.out_channels,C,oh,ow,od,Kh,Kw,Kd], [
-                'i0', # Nid
-                'i2', # Cid
-                f'i3*{self.stride[0]}-{self.padding[0]}+i6*{self.dilation[0]}', # Hid+Khid
-                f'i4*{self.stride[1]}-{self.padding[1]}+i7*{self.dilation[1]}', # Wid+KWid
-                f'i5*{self.stride[2]}-{self.padding[2]}+i8*{self.dilation[2]}', # Did+KDid
-            ])
-            ww = self.weight.broadcast(xx.shape, [0,3,4,5])
-            yy = xx*ww
-            y = yy.sum([2,6,7,8]) # Kc, Kh, Kw, Kd
-            if self.bias is not None:
-                b = self.bias.broadcast(y.shape, [0,2,3,4])
-                y = y + b
-            return y
-        else:
-            N,C,H,W,D = x.shape
-            Kh, Kw, Kd = self.kernel_size
-            G = self.groups
-            CpG = C // G # channels per group
-            assert C==self.in_channels
-            oc = self.out_channels
-            oh = (H+self.padding[0]*2-Kh*self.dilation[0]+self.dilation[0]-1)//self.stride[0]+1
-            ow = (W+self.padding[1]*2-Kw*self.dilation[1]+self.dilation[1]-1)//self.stride[1]+1
-            od = (D+self.padding[2]*2-Kd*self.dilation[2]+self.dilation[2]-1)//self.stride[2]+1
-            xx = x.reindex([N,G,oc//G,CpG,oh,ow,od,Kh,Kw,Kd], [
-                'i0', # Nid
-                f'i1*{CpG}+i3', # Gid
-                f'i4*{self.stride[0]}-{self.padding[0]}+i7*{self.dilation[0]}', # Hid+Khid
-                f'i5*{self.stride[1]}-{self.padding[1]}+i8*{self.dilation[1]}', # Wid+KWid
-                f'i6*{self.stride[2]}-{self.padding[2]}+i9*{self.dilation[2]}', # Did+KDid
-            ])
-            # w: [oc, CpG, Kh, Kw, Kd]
-            ww = self.weight.reindex([N, G, oc//G, CpG, oh, ow, od, Kh, Kw, Kd], [
-                f'i1*{oc//G}+i2',
-                'i3',
-                'i7',
-                'i8',
-                'i9'
-            ])
-            ww.compile_options = xx.compile_options = {"G":G,"C":C}
-            yy = xx*ww
-            y = yy.reindex_reduce('add', [N, oc, oh, ow, od], [
-                'i0',
-                f'i1*{oc//G}+i2',
-                'i4',
-                'i5',
-                'i6'
-            ])
-            if self.bias is not None:
-                b = self.bias.broadcast(y.shape, [0,2,3,4])
-                y = y + b
-            return y 
+        return conv3d(x, self.weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
 
 def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     padding = _pair(padding)
@@ -789,13 +731,16 @@ def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     dilation = _triple(dilation)
     out_channels = weight.shape[0]
 
+    if jt.flags.use_cuda and jt.cudnn:
+        return jt.cudnn.ops.cudnn_conv3d(x, weight, *stride, *padding, *dilation, groups)
+
     if groups == 1:
-        N,C,H,W,D = x.shape
-        Kh, Kw, Kd = weight.shape[-3:]
-        oh = (H+padding[0]*2-Kh*dilation[0]+dilation[0]-1)//stride[0]+1
-        ow = (W+padding[1]*2-Kw*dilation[1]+dilation[1]-1)//stride[1]+1
-        od = (D+padding[2]*2-Kd*dilation[2]+dilation[2]-1)//stride[2]+1
-        xx = x.reindex([N,out_channels,C,oh,ow,od,Kh,Kw,Kd], [
+        N,C,D,H,W = x.shape
+        Kd, Kh, Kw = weight.shape[-3:]
+        od = (D+padding[0]*2-Kd*dilation[0]+dilation[0]-1)//stride[0]+1
+        oh = (H+padding[1]*2-Kh*dilation[1]+dilation[1]-1)//stride[1]+1
+        ow = (W+padding[2]*2-Kw*dilation[2]+dilation[2]-1)//stride[2]+1
+        xx = x.reindex([N,out_channels,C,od,oh,ow,Kd,Kh,Kw], [
                 'i0', # Nid
                 'i2', # Cid
                 f'i3*{stride[0]}-{padding[0]}+i6*{dilation[0]}', # Hid+Khid
@@ -810,15 +755,15 @@ def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
             y = y + b
         return y
     else:
-        N,C,H,W,D = x.shape
-        Kh, Kw, Kd = weight.shape[-3:]
+        N,C,D,H,W = x.shape
+        Kd, Kh, Kw = weight.shape[-3:]
         G = groups
         CpG = C // G # channels per group
         oc = out_channels
-        oh = (H+padding[0]*2-Kh*dilation[0]+dilation[0]-1)//stride[0]+1
-        ow = (W+padding[1]*2-Kw*dilation[1]+dilation[1]-1)//stride[1]+1
-        od = (D+padding[2]*2-Kd*dilation[2]+dilation[2]-1)//stride[2]+1
-        xx = x.reindex([N,G,oc//G,CpG,oh,ow,od,Kh,Kw,Kd], [
+        od = (D+padding[0]*2-Kd*dilation[0]+dilation[0]-1)//stride[0]+1
+        oh = (H+padding[1]*2-Kh*dilation[1]+dilation[1]-1)//stride[1]+1
+        ow = (W+padding[2]*2-Kw*dilation[2]+dilation[2]-1)//stride[2]+1
+        xx = x.reindex([N,G,oc//G,CpG,od,oh,ow,Kd,Kh,Kw], [
                 'i0', # Nid
                 f'i1*{CpG}+i3', # Gid
                 f'i4*{stride[0]}-{padding[0]}+i7*{dilation[0]}', # Hid+Khid
@@ -835,7 +780,7 @@ def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
                 'i9'
             ])
         yy = xx*ww
-        y = yy.reindex_reduce('add', [N, oc, oh, ow, od], [
+        y = yy.reindex_reduce('add', [N, oc, od, oh, ow], [
                 'i0',
                 f'i1*{oc//G}+i2',
                 'i4',
@@ -906,6 +851,45 @@ class ConvTranspose(Module):
             y = y + b
         return y
 
+class ConvTranspose3d(Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, \
+                 padding=0, output_padding=0, groups=1, bias=True, dilation=1):
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+
+        # added
+        self.dilation = dilation
+        self.group = groups
+        assert groups==1, "Group conv not supported yet."
+
+        self.kernel_size = kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size, kernel_size)
+        self.stride = stride if isinstance(stride, tuple) else (stride, stride, stride)
+        self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation, dilation)
+        # added
+        self.padding = padding if isinstance(padding, tuple) else (padding, padding, padding)
+        self.real_padding = (
+            self.dilation[0] * (self.kernel_size[0] - 1) - self.padding[0],
+            self.dilation[1] * (self.kernel_size[1] - 1) - self.padding[1],
+            self.dilation[2] * (self.kernel_size[2] - 1) - self.padding[2])
+        self.output_padding = output_padding if isinstance (output_padding, tuple) else (output_padding, output_padding, output_padding)
+        assert self.output_padding[0] < max(self.stride[0], self.dilation[0]) and \
+            self.output_padding[1] < max(self.stride[1], self.dilation[1]) and \
+            self.output_padding[2] < max(self.stride[2], self.dilation[2]), \
+            "output padding must be smaller than max(stride, dilation)"
+
+        self.weight = init.invariant_uniform((in_channels, out_channels) + self.kernel_size, dtype="float")
+        if bias:
+            fan=1
+            for i in self.weight.shape[1:]:
+                fan *= i
+            bound = 1 / math.sqrt(fan)
+            self.bias = init.uniform([out_channels], dtype="float", low=-bound, high=bound)
+        else:
+            self.bias = None
+
+    def execute(self, x):
+        return conv_transpose3d(x, self.weight, self.bias, self.stride, self.padding, self.output_padding, self.group, self.dilation)
+
 def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding=0, groups=1, dilation=1):
     x = input
     N,C,H,W = x.shape
@@ -939,6 +923,49 @@ def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding
     ])
     if isinstance(bias, jt.Var):
         b = bias.broadcast(y.shape, [0,2,3])
+        y = y + b
+    else:
+        assert not bias, "Bias should be none or jittor var"
+    return y
+
+def conv_transpose3d(input, weight, bias=None, stride=1, padding=0, output_padding=0, groups=1, dilation=1):
+    x = input
+    N,C,D,H,W = x.shape
+    i,o,d,h,w = weight.shape
+    assert C==i
+    assert groups==1, "Group conv not supported yet."
+    stride = stride if isinstance(stride, tuple) else (stride, stride, stride)
+    dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation, dilation)
+    # added
+    padding = padding if isinstance(padding, tuple) else (padding, padding, padding)
+    output_padding = output_padding if isinstance (output_padding, tuple) else (output_padding, output_padding, output_padding)
+    assert output_padding[0] < max(stride[0], dilation[0]) and \
+        output_padding[1] < max(stride[1], dilation[1]) and \
+        output_padding[2] < max(stride[2], dilation[2]), \
+        "output padding must be smaller than max(stride, dilation)"
+
+    stride_d, stride_h, stride_w = stride
+    padding_d, padding_h, padding_w = padding
+    dilation_d, dilation_h, dilation_w = dilation
+
+    d_out = (D-1) * stride_d + output_padding[0] - 2*padding_d + 1 + (d-1)*dilation_d
+    h_out = (H-1) * stride_h + output_padding[1] - 2*padding_h + 1 + (h-1)*dilation_h
+    w_out = (W-1) * stride_w + output_padding[2] - 2*padding_w + 1 + (w-1)*dilation_w
+    out_shape = (N, o, d_out, h_out, w_out)
+    if jt.flags.use_cuda and jt.cudnn:
+        return jt.cudnn.ops.cudnn_conv3d_backward_x(weight, x, *out_shape[2:], *stride, *padding, *dilation, groups)
+    shape = (N, i, o, D, H, W, d, h, w)
+    xx = x.broadcast(shape, (2, 6, 7, 8)) # i,h,w
+    ww = weight.broadcast(shape, (0, 3, 4, 5)) # N,H,W
+    y = (ww*xx).reindex_reduce("add", out_shape, [
+        'i0', # N
+        'i2', # o
+        f'i3*{stride_d}-{padding_d}+i6*{dilation_d}', # Did+Kdid
+        f'i4*{stride_h}-{padding_h}+i7*{dilation_h}', # Hid+Khid
+        f'i5*{stride_w}-{padding_w}+i8*{dilation_w}', # Wid+KWid
+    ])
+    if isinstance(bias, jt.Var):
+        b = bias.broadcast(y.shape, [0,2,3,4])
         y = y + b
     else:
         assert not bias, "Bias should be none or jittor var"
@@ -1286,7 +1313,7 @@ def linspace_from_neg_one(grid,num_steps,align_corners):
     return jt.array(ra,dtype=grid.dtype)
 
 def make_base_grid_4D(theta,N,C,H,W,align_corners):
-    base_grid = jt.zeros((N, H, W, 3), dtype=theta.dtype);
+    base_grid = jt.zeros((N, H, W, 3), dtype=theta.dtype)
     base_grid[...,0] = linspace_from_neg_one(theta, W, align_corners)
     base_grid[...,1] = jt.unsqueeze(linspace_from_neg_one(theta, H, align_corners),-1)
     base_grid[...,-1] = 1
