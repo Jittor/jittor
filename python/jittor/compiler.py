@@ -1026,10 +1026,12 @@ LOG.vv("compile order:", files)
 # manual Link omp using flags(os.RTLD_NOW | os.RTLD_GLOBAL)
 # if cc_type=="icc":
 #     os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-# libname = {"clang":"omp", "icc":"iomp5", "g++":"gomp"}[cc_type]
-# libname = ctypes.util.find_library(libname)
-# assert libname is not None, "openmp library not found"
-# ctypes.CDLL(libname, os.RTLD_NOW | os.RTLD_GLOBAL)
+
+if platform.system() == 'Linux':
+    libname = {"clang":"omp", "icc":"iomp5", "g++":"gomp"}[cc_type]
+    libname = ctypes.util.find_library(libname)
+    assert libname is not None, "openmp library not found"
+    ctypes.CDLL(libname, os.RTLD_NOW | os.RTLD_GLOBAL)
 
 # get os release
 if platform.system() == 'Linux':
