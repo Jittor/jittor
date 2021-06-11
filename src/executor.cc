@@ -437,12 +437,9 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         if (PREDICT_BRANCH_NOT_TAKEN(profile_memory_enable))
             memory_profiler.check();
         LOGvvv << "Run" << op << "inputs:" << op->inputs() << "outputs:" << op->outputs();
-        if (is_fused_op && use_mlu) {
-            for (auto vi : fused_op.vars) if (vi.type==0) {
-                auto v = vi.var;
-                if (!v->allocator->is_mlu()) {
-                    migrate_cpu_to_mlu(v, allocator);
-                }
+        if (use_mlu) {
+            for (Var* v : op->inputs()) if (!v->allocator->is_mlu()) {
+                migrate_cpu_to_mlu(v, allocator);
             }
         }
         op->do_prepare(jkl);
@@ -499,6 +496,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         #endif
         last_is_cuda = is_cuda;
         op->do_run_after_prepare(jkl);
+        JT_MLU_CHECK(cnrtSyncQueue(mlu_queue));
         #ifdef HAS_CUDA
         // migrate to gpu
         if (PREDICT_BRANCH_NOT_TAKEN((!is_cuda && use_cuda && !use_cuda_managed_allocator))) {
@@ -577,6 +575,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         sync_times++;
         JT_MLU_CHECK(cnrtSyncQueue(mlu_queue));
     }
+    // LOGir << "after run sync";
     #ifdef HAS_CUDA
     if (device_sync && use_cuda) {
         last_is_cuda = false;
