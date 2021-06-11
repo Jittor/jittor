@@ -920,7 +920,9 @@ if "cc_flags" in os.environ:
 link_flags = " -lstdc++ -ldl -shared "
 if platform.system() == 'Darwin':
     # TODO: if not using apple clang, there is no need to add -lomp
-    link_flags += "-undefined dynamic_lookup -lomp -L/opt/homebrew/lib"
+    link_flags += "-undefined dynamic_lookup -lomp "
+    if platform.machine() == "arm64":
+        link_flags += " -L/opt/homebrew/lib "
 
 core_link_flags = ""
 opt_flags = ""
