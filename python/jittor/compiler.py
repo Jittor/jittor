@@ -706,7 +706,7 @@ def get_full_path_of_executable(name):
 
 def compile_extern():
     # compile llvm passes
-    if cc_type != "clang":
+    if cc_type != "clang" or platform.system() != 'Linux':
         return
     global kernel_opt_flags
     cache_path_llvm = os.path.join(cache_path, "llvm")
@@ -909,7 +909,7 @@ if "cc_flags" in os.environ:
     cc_flags += os.environ["cc_flags"] + ' '
 link_flags = " -lstdc++ -ldl -shared "
 if platform.system() == 'Darwin':
-    # TODO: if not using apple clang, no need to add -lomp
+    # TODO: if not using apple clang, there is no need to add -lomp
     link_flags += "-undefined dynamic_lookup -lomp "
 
 core_link_flags = ""

@@ -293,7 +293,11 @@ is_in_ipynb = in_ipynb()
 cc = None
 LOG = LogWarper()
 
-cc_path = env_or_find('cc_path', 'g++', silent=True)
+if platform.system() == 'Darwin':
+    default_cc = 'clang'
+else:
+    default_cc = 'g++'
+cc_path = env_or_find('cc_path', default_cc, silent=True)
 os.environ["cc_path"] = cc_path
 cc_type = get_cc_type(cc_path)
 cache_path = find_cache_path()
