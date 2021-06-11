@@ -1255,3 +1255,7 @@ Examples::
     return x.reindex(x.shape, ids)
 
 jt.Var.roll = roll
+
+def safe_log(x):
+    return jt.safe_clip(x, 1e-30, 1e30).log()
+jt.Var.safe_log = safe_log

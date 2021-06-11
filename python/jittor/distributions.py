@@ -34,7 +34,7 @@ class OneHotCategorical:
             # cannot align to pytorch
             probs = jt.sigmoid(logits)
         elif logits is None:
-            logits = jt.log(probs)
+            logits = jt.safe_log(probs)
         with jt.no_grad():
             self.probs = probs / probs.sum(-1, True)
             self.cum_probs = simple_presum(self.probs)
@@ -69,7 +69,7 @@ class Categorical:
             # cannot align to pytorch
             probs = jt.sigmoid(logits)
         elif logits is None:
-            logits = jt.log(probs)
+            logits = jt.safe_log(probs)
         with jt.no_grad():
             self.probs = probs / probs.sum(-1, True)
             self.logits = logits
@@ -85,7 +85,7 @@ class Categorical:
         return (one_hot * index).sum(-1)
     
     def log_prob(self, x):
-        return jt.log(self.probs)[0,x]
+        return jt.safe_log(self.probs)[0,x]
     
     def entropy(self):
         min_real = -(math.pow(2,23)-1) / math.pow(2,22) * math.pow(2,127)
@@ -104,11 +104,11 @@ class Normal:
 
     def log_prob(self, x):
         var = self.sigma**2
-        log_scale = jt.log(self.sigma)
+        log_scale = jt.safe_log(self.sigma)
         return -((x-self.mu)**2) / (2*var) - log_scale-np.log(np.sqrt(2*np.pi))
     
     def entropy(self):
-        return 0.5+0.5*np.log(2*np.pi)+jt.log(self.sigma)
+        return 0.5+0.5*np.log(2*np.pi)+jt.safe_log(self.sigma)
 
 
 class Uniform:
@@ -123,10 +123,10 @@ class Uniform:
     def log_prob(self,x):
         if x < self.low or x >= self.high:
             return math.inf
-        return -jt.log(self.high - self.low)
+        return -jt.safe_log(self.high - self.low)
     
     def entropy(self):
-        return jt.log(self.high - self.low)
+        return jt.safe_log(self.high - self.low)
 
 
 class Geometric:
@@ -138,15 +138,15 @@ class Geometric:
             self.logits = logits
         elif logits is None:
             self.prob = p
-            self.logits = -jt.log(1. / p - 1)
+            self.logits = -jt.safe_log(1. / p - 1)
         
     def sample(self, sample_shape):
         tiny = jt.info(self.probs.dtype).tiny
         u = jt.clamp(jt.rand(sample_shape),min_v=tiny)
-        return (jt.log(u) / (jt.log(-self.probs+1))).floor()
+        return (jt.safe_log(u) / (jt.safe_log(-self.probs+1))).floor()
     
     def log_prob(self, x):
-        return x*jt.log(-self.prob+1)+jt.log(self.prob)
+        return x*jt.safe_log(-self.prob+1)+jt.safe_log(self.prob)
     
     def entropy(self):
         return binary_cross_entropy_with_logits(jt.array(self.logits),jt.array(self.prob)) / self.prob
@@ -157,16 +157,20 @@ def kl_divergence(cur_dist, old_dist):
     if isinstance(cur_dist, Normal):
         vr = (cur_dist.sigma / old_dist.sigma)**2
         t1 = ((cur_dist.mu - old_dist.mu) / old_dist.sigma)**2
-        return 0.5*(vr+t1-1-jt.log(vr))
+        return 0.5*(vr+t1-1-jt.safe_log(vr))
     if isinstance(cur_dist, Categorical) or isinstance(cur_dist,OneHotCategorical):
         t = cur_dist.probs * (cur_dist.logits-old_dist.logits)
-        t[jt.array((old_dist.probs == 0))] = math.inf
-        t[jt.array((cur_dist.probs == 0))] = 0
+        # print("t:", t)
+        # print("old_dist.probs:", old_dist.probs)
+        # print("old_dist.probs:", (old_dist.probs==0).sum())
+        # print("cur_dist.probs:", cur_dist.probs)
+        # t[jt.array((old_dist.probs == 0))] = math.inf
+        # t[jt.array((cur_dist.probs == 0))] = 0
         return t.sum(-1)
     if isinstance(cur_dist, Uniform):
-        res = jt.log((old_dist.high - old_dist.low) / (cur_dist.high - cur_dist.low))
+        res = jt.safe_log((old_dist.high - old_dist.low) / (cur_dist.high - cur_dist.low))
         if old_dist.low > cur_dist.low or old_dist.high < cur_dist.high:
             res = math.inf
         return res
     if isinstance(cur_dist, Geometric):
-        return -cur_dist.entropy() - jt.log(-old_dist.prob+1) / cur_dist.prob - old_dist.logits
+        return -cur_dist.entropy() - jt.safe_log(-old_dist.prob+1) / cur_dist.prob - old_dist.logits

@@ -67,6 +67,10 @@ void LoopToFuncPass::run() {
                         args.push_back(d.get());
                         continue;
                     }
+                    if (endswith(d->attrs["lvalue"], "_value")) {
+                        args.push_back(d.get());
+                        continue;
+                    }
                 }
             }
             func->push_back(d->clone());
