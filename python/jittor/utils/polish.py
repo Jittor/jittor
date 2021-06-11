@@ -63,7 +63,7 @@ os_name_system_dict = {
 for os_name, os_type in os_name_system_dict.items():
     if platform.system() != os_type:
         continue
-    os_arch = platform.machine() if os_type == 'macos' else ''
+    os_arch = platform.machine() if os_type == 'Darwin' else ''
 
     for cc_type in ["g++"]:
         for device in ["cpu"]:
@@ -76,7 +76,7 @@ for os_name, os_type in os_name_system_dict.items():
             if platform.machine() == "x86_64":
                 env += " cc_flags='-march=core2' "
             if device == "cpu":
-                env += "nvcc_path='' "
+                env += " nvcc_path='' "
             elif jt.flags.nvcc_path == "":
                 env = "unset nvcc_path && " + env
             cmd = f"{env} {sys.executable} -c 'import jittor'"
