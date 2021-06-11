@@ -102,8 +102,12 @@ def setup_mkl():
         extra_flags = f" -I'{mkl_include_path}' -L'{mkl_lib_path}' -lmkldnn -Wl,-rpath='{mkl_lib_path}' "
 
     elif platform.system() == 'Darwin':
-        mkl_lib_name = "/usr/local/lib/libmkldnn.dylib"
-        assert os.path.exists(mkl_lib_name), "Not found onednn, please install it by the command 'brew install onednn@2.2.3'"
+        mkl_lib_paths = [
+            "/usr/local/lib/libmkldnn.dylib",       # x86_64
+            "/opt/homebrew/lib/libmkldnn.dylib",    # arm64
+        ]
+        if not any([os.path.exists(lib) for lib in mkl_lib_paths]):
+            raise RuntimeError("Not found onednn, please install it by the command 'brew install onednn@2.2.3'")
         extra_flags = f" -lmkldnn "
 
     mkl_op_dir = os.path.join(jittor_path, "extern", "mkl", "ops")

@@ -903,14 +903,24 @@ gdb_path = try_find_exe('gdb')
 addr2line_path = try_find_exe('addr2line')
 has_pybt = check_pybt(gdb_path, python_path)
 
-cc_flags += " -Wall -Werror -Wno-unknown-pragmas -std=c++14 -fPIC -march=native "
+cc_flags += " -Wall -Werror -Wno-unknown-pragmas -std=c++14 -fPIC "
+# 1. Arch/CPU specific optimization
+if platform.machine() == "x86_64":
+    cc_flags += " -march=native " 
+elif platform.machine() == 'arm64' and platform.system() == "Darwin":
+    cc_flags += " -mcpu=apple-a14 "
 cc_flags += " -fdiagnostics-color=always "
+# 2. Non standard include path
+if platform.system() == 'Darwin' and platform.machine() == 'arm64':
+    cc_flags += " -I/opt/homebrew/include "
+# 3. User specified flags
 if "cc_flags" in os.environ:
     cc_flags += os.environ["cc_flags"] + ' '
+
 link_flags = " -lstdc++ -ldl -shared "
 if platform.system() == 'Darwin':
     # TODO: if not using apple clang, there is no need to add -lomp
-    link_flags += "-undefined dynamic_lookup -lomp "
+    link_flags += "-undefined dynamic_lookup -lomp -L/opt/homebrew/lib"
 
 core_link_flags = ""
 opt_flags = ""
@@ -1042,8 +1052,10 @@ if platform.system() == 'Linux':
             a = line.split('=')
             if len(a) != 2: continue
             os_release[a[0]] = a[1].replace("\"", "")
+        os_arch = ''
 elif platform.system() == 'Darwin':
     os_release = {'ID' : 'macos'}
+    os_arch = platform.machine()
 
 os_type = {
     "ubuntu": "ubuntu",
@@ -1061,7 +1073,8 @@ if os.path.isfile(version_file) and not os.path.isdir(os.path.join(jittor_path, 
     # key = f"{version}-{cc_type}-{'cuda' if has_cuda else 'cpu'}.o"
     key = f"{version}-g++-cpu"
     os_id = os_release["ID"]
-    os_key = os_type.get(os_id, "ubuntu")
+    os_key = os_type.get(os_id, "ubuntu") 
+    os_key += '-' + os_arch if os_arch else ''
     if "os_key" in os.environ:
         os_key = os.environ['os_key']
     LOG.i("OS type:", os_id, " OS key:", os_key)
