@@ -250,7 +250,10 @@ def get_version(output):
     if len(v) == 0:
         v = re.findall("[0-9]+\\.[0-9]+", version)
     assert len(v) != 0, f"Can not find version number from: {version}"
-    version = "("+v[-1]+")"
+    if get_cc_type(output) == 'clang':
+        version = "("+v[0]+")"
+    else:
+        version = "("+v[-1]+")"
     return version
 
 def get_int_version(output):
@@ -293,11 +296,7 @@ is_in_ipynb = in_ipynb()
 cc = None
 LOG = LogWarper()
 
-if platform.system() == 'Darwin':
-    default_cc = 'clang'
-else:
-    default_cc = 'g++'
-cc_path = env_or_find('cc_path', default_cc, silent=True)
+cc_path = env_or_find('cc_path', 'g++', silent=True)
 os.environ["cc_path"] = cc_path
 cc_type = get_cc_type(cc_path)
 cache_path = find_cache_path()
