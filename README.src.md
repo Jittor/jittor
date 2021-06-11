@@ -132,7 +132,7 @@ Jittor 提供了三种安装方法：docker，pip和手动安装：
 
 Jittor environment requirements:
 
-* System: **Linux**(e.g. Ubuntu/CentOS/Arch), **macOS** (x86_64), or **Windows Subsystem of Linux (WSL)**
+* System: **Linux**(e.g. Ubuntu/CentOS/Arch), **macOS**, or **Windows Subsystem of Linux (WSL)**
 * Python version >= 3.7
 * CPU compiler (require at least one of the following)
     * g++ (>=5.4.0)

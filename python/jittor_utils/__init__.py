@@ -316,6 +316,7 @@ py3_config_paths = [
     sys.executable + "-config",
     f"/usr/bin/python3.{sys.version_info.minor}-config",
     f"/usr/local/bin/python3.{sys.version_info.minor}-config",
+    f'/opt/homebrew/bin/python3.{sys.version_info.minor}-config',
     os.path.dirname(sys.executable) + "/python3-config",
 ]
 if "python_config_path" in os.environ:
