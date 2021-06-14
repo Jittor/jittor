@@ -389,7 +389,7 @@ class CenterCrop:
 
 def to_tensor(pic):
     """
-    Function for turning Image.Image to np.array.
+    Function for turning Image.Image to np.array with CHW format.
 
     Args::
 
@@ -414,14 +414,13 @@ def to_tensor(pic):
     if _is_numpy(pic):
         # handle numpy array
         if pic.ndim == 2:
-            pic = pic[:, :, None]
+            pic = pic[None, :, :]
 
-        img = pic.transpose((2, 0, 1))
         # backward compatibility
-        if img.dtype == 'uint8':
-            return np.float32(img) * np.float32(1/255.0)
+        if pic.dtype == 'uint8':
+            return np.float32(pic) * np.float32(1/255.0)
         else:
-            return img
+            return pic
 
     # handle PIL Image
     if pic.mode == 'I':
@@ -499,7 +498,7 @@ def _to_jittor_array(pic):
 def to_pil_image(pic, mode=None):
     """Convert a tensor or an ndarray to PIL Image.
     Args:
-        pic (Tensor or numpy.ndarray): Image to be converted to PIL Image.
+        pic (Tensor or numpy.ndarray): Image(HWC format) to be converted to PIL Image.
         mode (`PIL.Image mode`_): color space and pixel depth of input data (optional).
     .. _PIL.Image mode: https://pillow.readthedocs.io/en/latest/handbook/concepts.html#concept-modes
     Returns:
