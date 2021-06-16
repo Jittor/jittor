@@ -166,8 +166,8 @@ class TestDatasetSeed(unittest.TestCase):
         from jittor.dataset.cifar import CIFAR10
         a = CIFAR10()
         a.set_attr(batch_size=16)
-        for imgs, lables in a:
-            print(imgs.shape)
+        for imgs, labels in a:
+            print(imgs.shape, labels.shape)
             break
         
 

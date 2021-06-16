@@ -98,6 +98,16 @@ class CIFAR10(Dataset):
             puts it in root directory. If dataset is already downloaded, it is not
             downloaded again.
 
+    Example::
+
+
+        from jittor.dataset.cifar import CIFAR10
+        a = CIFAR10()
+        a.set_attr(batch_size=16)
+        for imgs, labels in a:
+            print(imgs.shape, labels.shape)
+            break
+
     """
     base_folder = 'cifar-10-batches-py'
     url = "https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz"
@@ -225,6 +235,17 @@ class CIFAR100(CIFAR10):
     """`CIFAR100 <https://www.cs.toronto.edu/~kriz/cifar.html>`_ Dataset.
 
     This is a subclass of the `CIFAR10` Dataset.
+
+
+    Example::
+
+
+        from jittor.dataset.cifar import CIFAR100
+        a = CIFAR100()
+        a.set_attr(batch_size=16)
+        for imgs, labels in a:
+            print(imgs.shape, labels.shape)
+            break
     """
     base_folder = 'cifar-100-python'
     url = "https://www.cs.toronto.edu/~kriz/cifar-100-python.tar.gz"
