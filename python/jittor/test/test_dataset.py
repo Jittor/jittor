@@ -165,9 +165,11 @@ class TestDatasetSeed(unittest.TestCase):
     def test_cifar(self):
         from jittor.dataset.cifar import CIFAR10
         a = CIFAR10()
-        a.set_attr(batch_size=16)
+        a.set_attrs(batch_size=16)
         for imgs, labels in a:
             print(imgs.shape, labels.shape)
+            assert imgs.shape == [16,32,32,3,]
+            assert labels.shape == [16,]
             break
         
 
