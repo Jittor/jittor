@@ -161,6 +161,14 @@ class TestDatasetSeed(unittest.TestCase):
         for i in range(len(d)):
             for j in range(i+1, len(d)):
                 assert not np.allclose(dd[i], dd[j])
+
+    def test_cifar(self):
+        from jittor.dataset.cifar import CIFAR10
+        a = CIFAR10()
+        a.set_attr(batch_size=16)
+        for imgs, lables in a:
+            print(imgs.shape)
+            break
         
 
 if __name__ == "__main__":
