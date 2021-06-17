@@ -71,9 +71,9 @@ VarPtr CnnlMluConvOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     // int8_t* input_mlu_ptr = (int8_t*)x->mem_ptr;
     // int8_t* filter_mlu_ptr = (int8_t*)w->mem_ptr;
     // float *output_mlu_ptr = (float*)y->mem_ptr;
-    LOGw << "CnnlMluConvOp::grad" << v_index;
+    // LOGw << "CnnlMluConvOp::grad" << v_index;
     if (v_index == 0) {
-        LOGw << "Grad to x";
+        // LOGw << "Grad to x";
         return make_cnnl_mlu_conv_backward_x(out, dout, w, x, strideh, stridew, paddingh, paddingw, dilationh, dilationw, groups, xformat, wformat, yformat);
     }
     else
@@ -109,24 +109,24 @@ VarPtr CnnlMluConvOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     //     cnnlConvolutionDescriptor_t conv_desc;
     //     void *workspace = nullptr;
     //     size_t workspace_size = 0;
-    //     cnnlHandle_t handle = nullptr;
-    //     cnnlCreate(&handle);
-    //     cnnlSetQueue(handle, mlu_queue);
+    //     cnnlHandle_t mlu_handle = nullptr;
+    //     cnnlCreate(&mlu_handle);
+    //     cnnlSetQueue(mlu_handle, mlu_queue);
 
     //     int pad[4] = {paddingh, paddingh, paddingw, paddingw};
     //     int stride[2] = {strideh, stridew};
     //     int dilation[2] = {dilationh, dilationw};
     //     cnnlSetConvolutionDescriptor(conv_desc, 4, pad, stride, dilation, groups,CNNL_DTYPE_FLOAT);
 
-    //     cnnlGetConvolutionBackwardDataAlgorithm(handle, weight_desc, grad_desc, conv_desc, grad_input_desc, pre_t, &algo_t);
+    //     cnnlGetConvolutionBackwardDataAlgorithm(mlu_handle, weight_desc, grad_desc, conv_desc, grad_input_desc, pre_t, &algo_t);
 
-    //     cnnlGetConvolutionBackwardDataWorkspaceSize(handle, weight_desc, grad_desc, conv_desc, grad_input_desc, algo_t, &workspace_size);
+    //     cnnlGetConvolutionBackwardDataWorkspaceSize(mlu_handle, weight_desc, grad_desc, conv_desc, grad_input_desc, algo_t, &workspace_size);
 
     //     const void * alpha = nullptr;
     //     const void * beta = nullptr;
 
     //     cnnlConvolutionBackwardData(
-    //     /* handle         */ handle,
+    //     /* mlu_handle         */ mlu_handle,
     //     /* alpha          */ alpha,
     //     /* weight_desc    */ weight_desc,
     //     /* weight         */ filter_mlu_ptr,
@@ -179,15 +179,15 @@ VarPtr CnnlMluConvOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     //     cnnlConvolutionDescriptor_t conv_desc;
     //     void *workspace = nullptr;
     //     size_t workspace_size = 0;
-    //     cnnlCreate(&handle);
-    //     cnnlSetQueue(handle, mlu_queue);
+    //     cnnlCreate(&mlu_handle);
+    //     cnnlSetQueue(mlu_handle, mlu_queue);
 
     //     int pad[4] = {paddingh, paddingh, paddingw, paddingw};
     //     int stride[2] = {strideh, stridew};
     //     int dilation[2] = {dilationh, dilationw};
     //     cnnlSetConvolutionDescriptor(conv_desc, 4, pad, stride, dilation, groups, CNNL_DTYPE_FLOAT);
 
-    //     cnnlGetConvolutionBackwardFilterWorkspaceSize(handle, input_desc, grad_desc, grad_weight_desc, conv_desc, algo_t, &workspace_size)
+    //     cnnlGetConvolutionBackwardFilterWorkspaceSize(mlu_handle, input_desc, grad_desc, grad_weight_desc, conv_desc, algo_t, &workspace_size)
 
     //     const void * alpha = nullptr;
     //     const void * beta = nullptr;
@@ -195,7 +195,7 @@ VarPtr CnnlMluConvOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     //     */
 
     //     // cnnlConvolutionBackwardFilter(
-    //     // /* handle         */ handle,
+    //     // /* mlu_handle         */ mlu_handle,
     //     // /* alpha          */ alpha,
     //     // /* x_desc         */ input_desc,
     //     // /* x              */ input_mlu_ptr,
@@ -280,7 +280,7 @@ void CnnlMluConvOp::jit_run() {
     get_shape(w, "oihw", wformat, co, kh, kw, cw);
     get_shape(y, "abcd", yformat, no, ho, wo, co);
 
-    cnnlHandle_t handle = nullptr;
+    // cnnlHandle_t mlu_handle = nullptr;
     cnnlTensorDescriptor_t input_desc = nullptr;
     cnnlTensorDescriptor_t weight_desc = nullptr;
     cnnlTensorDescriptor_t output_desc = nullptr;
@@ -288,8 +288,8 @@ void CnnlMluConvOp::jit_run() {
     cnnlConvolutionForwardAlgo_t algo = CNNL_CONVOLUTION_FWD_ALGO_DIRECT;
     void *workspace = nullptr;
     size_t workspace_size = 0;
-    cnnlCreate(&handle);
-    cnnlSetQueue(handle, mlu_queue);
+    cnnlCreate(&mlu_handle);
+    cnnlSetQueue(mlu_handle, mlu_queue);
 
     cnnlCreateTensorDescriptor(&input_desc);
     cnnlCreateTensorDescriptor(&weight_desc);
@@ -309,7 +309,7 @@ void CnnlMluConvOp::jit_run() {
     cnnlCreateConvolutionDescriptor(&conv_desc);
     cnnlSetConvolutionDescriptor(conv_desc, 4, pad, stride, dilation, groups, CNNL_DTYPE_FLOAT);
 
-    cnnlConvolutionForward(handle, conv_desc, algo, nullptr, input_desc, input_mlu_ptr, weight_desc, filter_mlu_ptr, nullptr, nullptr, workspace, workspace_size, nullptr, output_desc, output_mlu_ptr);
+    cnnlConvolutionForward(mlu_handle, conv_desc, algo, nullptr, input_desc, input_mlu_ptr, weight_desc, filter_mlu_ptr, nullptr, nullptr, workspace, workspace_size, nullptr, output_desc, output_mlu_ptr);
 }
 #endif
 #endif // JIT

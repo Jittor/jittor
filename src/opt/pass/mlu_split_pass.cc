@@ -58,6 +58,8 @@ void MLUSplitPass::run() {
                 if (!bo) break;
                 else num++;
             }
+            if (!loop->has_attr("loop_id"))
+                continue;
             i = loop->get_attr("loop_id");
             j = i+"0";
             c->split_loop(i, j);

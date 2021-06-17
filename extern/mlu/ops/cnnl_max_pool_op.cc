@@ -15,6 +15,7 @@
 #include <sstream>
 #include <chrono>
 #include "mlu_warper.h"
+#include "executor.h"
 // #include "/data/zwy/jittor/src/profiler/simple_profiler.h"
 
 using namespace std;
@@ -106,7 +107,7 @@ void CnnlMaxPoolOp::jit_prepare(JK& jk) {
 #pragma clang diagnostic ignored "-Wtautological-compare"
 
 void CnnlMaxPoolOp::jit_run() {
-    LOGw << "CnnlMaxPoolOp::jit_run";
+    // LOGw << "CnnlMaxPoolOp::jit_run";
     ASSERT(dilation==0);
 
     int ni, ci, hi, wi, no, co, ho, wo;
@@ -136,9 +137,13 @@ void CnnlMaxPoolOp::jit_run() {
     void *workspace = nullptr;
     size_t workspace_size = 0;
     cnnlGetPoolingWithIndexWorkspaceSize(mlu_handle, input_desc, output_desc, &workspace_size);
-    if (workspace_size != 0) {
-        cnrtMalloc(&workspace, workspace_size);
-        cnrtMemset(workspace, 0, workspace_size);
+    // if (workspace_size != 0) {
+    //     cnrtMalloc(&workspace, workspace_size);
+    //     cnrtMemset(workspace, 0, workspace_size);
+    // }
+    size_t allocation;
+    if (workspace_size > 0) {
+        workspace = exe.temp_allocator->alloc(workspace_size, allocation);
     }
 
     const void * alpha = nullptr;
@@ -157,6 +162,8 @@ void CnnlMaxPoolOp::jit_run() {
     /* workspace      */ workspace,
     /* workspace_size */ workspace_size);
     cnrtSyncQueue(mlu_queue);
+    if (workspace)
+        exe.temp_allocator->free(workspace, workspace_size, allocation);
     return;
 }
 #endif

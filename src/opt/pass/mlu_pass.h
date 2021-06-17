@@ -14,7 +14,7 @@ namespace jittor {
 
 struct MLUPass : Pass {
     MLUPass() : Pass("mark_raw") {};
-    void add_memcpy(KernelIR* loop_father, KernelIR* loop, vector<string> vars, vector<string> types, vector<int> is_input, string new_id, vector<string> &nram_vars);
+    void add_memcpy(KernelIR* loop_father, KernelIR* loop, vector<string> vars, vector<string> types, vector<int> is_input, string new_id, vector<string> &nram_vars, vector<string> &nram_types);
     
     int getConvertType(string a, string b);
     int bang_dfs(unique_ptr<KernelIR>& func, string dst, unique_ptr<expr::Expr>& rval, vector<string>& define_vars, vector<string> &bang_code, string new_range);

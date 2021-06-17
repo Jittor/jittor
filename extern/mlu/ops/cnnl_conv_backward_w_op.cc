@@ -12,6 +12,7 @@
 #include "var.h"
 #include "mlu_warper.h"
 #include "cnnl_conv_backward_w_op.h"
+#include "executor.h"
 
 using namespace std;
 
@@ -114,9 +115,9 @@ void CnnlConvBackwardWOp::jit_run() {
     cnnlConvolutionDescriptor_t conv_desc = nullptr;
     void *workspace = nullptr;
     size_t workspace_size = 0;
-    cnnlHandle_t handle = nullptr;
-    cnnlCreate(&handle);
-    cnnlSetQueue(handle, mlu_queue);
+    // cnnlHandle_t mlu_handle = nullptr;
+    cnnlCreate(&mlu_handle);
+    cnnlSetQueue(mlu_handle, mlu_queue);
 
     int pad[4] = {paddingh, paddingh, paddingw, paddingw};
     int stride[2] = {strideh, stridew};
@@ -124,19 +125,23 @@ void CnnlConvBackwardWOp::jit_run() {
     cnnlCreateConvolutionDescriptor(&conv_desc);
     cnnlSetConvolutionDescriptor(conv_desc, 4, pad, stride, dilation, groups, CNNL_DTYPE_FLOAT);
 
-    cnnlGetConvolutionBackwardFilterAlgorithm(handle, conv_desc, input_desc, grad_desc, grad_weight_desc, pre_t, &algo_t);
+    cnnlGetConvolutionBackwardFilterAlgorithm(mlu_handle, conv_desc, input_desc, grad_desc, grad_weight_desc, pre_t, &algo_t);
 
-    cnnlGetConvolutionBackwardFilterWorkspaceSize(handle, input_desc, grad_desc, grad_weight_desc, conv_desc, algo_t, &workspace_size);
+    cnnlGetConvolutionBackwardFilterWorkspaceSize(mlu_handle, input_desc, grad_desc, grad_weight_desc, conv_desc, algo_t, &workspace_size);
 
-    if (workspace_size != 0) {
-        cnrtMalloc(&workspace, workspace_size);
-        cnrtMemset(workspace, 0, workspace_size);
+    // if (workspace_size != 0) {
+    //     cnrtMalloc(&workspace, workspace_size);
+    //     cnrtMemset(workspace, 0, workspace_size);
+    // }
+    size_t allocation;
+    if (workspace_size > 0) {
+        workspace = exe.temp_allocator->alloc(workspace_size, allocation);
     }
 
     const void * alpha = nullptr;
     const void * beta = nullptr;
     cnnlConvolutionBackwardFilter(
-    /* handle         */ handle,
+    /* handle         */ mlu_handle,
     /* alpha          */ alpha,
     /* weight_desc    */ input_desc,
     /* weight         */ x->mem_ptr,
@@ -149,6 +154,8 @@ void CnnlConvBackwardWOp::jit_run() {
     /* beta           */ beta,
     /* diff_x_desc    */ grad_weight_desc,
     /* diff_x         */ dw->mem_ptr);
+    if (workspace)
+        exe.temp_allocator->free(workspace, workspace_size, allocation);
 }
 #endif
 #endif // JIT

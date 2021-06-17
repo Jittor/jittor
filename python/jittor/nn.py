@@ -650,7 +650,6 @@ class CnnlConvFunc(Function):
         return y
     
     def grad(ctx, grad):
-        print(grad)
         grad = grad.int8()
         dx = jt.mlu_ops.cnnl_conv_backward_x(ctx.y, grad, ctx.w, ctx.x, ctx.stride[0], ctx.stride[1], ctx.padding[0], ctx.padding[1], ctx.dilation[0], ctx.dilation[1], ctx.groups).transpose(0,3,1,2) / ctx.weight_scale
         dw = jt.mlu_ops.cnnl_conv_backward_w(ctx.y, grad, ctx.w, ctx.x, ctx.stride[0], ctx.stride[1], ctx.padding[0], ctx.padding[1], ctx.dilation[0], ctx.dilation[1], ctx.groups).transpose(0,3,1,2) / ctx.input_scale

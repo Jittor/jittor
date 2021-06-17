@@ -93,7 +93,7 @@ void CnnlPoolBackwardOp::jit_run() {
     int ni, ci, hi, wi, gn, gc, gh, gw;
     get_shape(x, "abcd", xformat, ni, ci, hi, wi);
     get_shape(grad, "abcd", xformat, gn, gc, gh, gw);
-    LOGw << ni << ci << hi << wi << gn << gc << gh << gw;
+    // LOGw << ni << ci << hi << wi << gn << gc << gh << gw;
 
     cnnlTensorDescriptor_t input_desc = nullptr;
     cnnlTensorDescriptor_t index_desc = nullptr;
