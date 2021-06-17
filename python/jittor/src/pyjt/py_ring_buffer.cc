@@ -109,9 +109,13 @@ static void push_py_object(RingBuffer* rb, PyObject* obj, uint64& __restrict__ o
                 rb->push_t<NanoString>(args.dtype, offset);
                 rb->push(size, offset);
                 args.ptr = rb->get_ptr(size, offset);
+#if defined(__linux__)
+                int64 dims[args.shape.size()];
+#elif defined(__APPLE__)
                 long dims[args.shape.size()];
-                for (int i=0; i<args.shape.size(); i++)
-                    dims[i] = args.shape[i];
+#endif
+                for (int i = 0; i < args.shape.size(); i++)
+                  dims[i] = args.shape[i];
                 PyObjHolder oh(PyArray_New(
                     PyArray_Type, // subtype
                     args.shape.size(), // nd

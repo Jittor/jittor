@@ -146,7 +146,7 @@ ArrayOp::ArrayOp(PyObject* obj) {
         long dims[args.shape.size()];
 #endif
         for (int i=0; i<args.shape.size(); i++)
-            dims[i] = (long) args.shape[i];
+            dims[i] = args.shape[i];
         holder.assign(PyArray_New(
             PyArray_Type, // subtype
             args.shape.size(), // nd
