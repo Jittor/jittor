@@ -114,7 +114,7 @@ static void push_py_object(RingBuffer* rb, PyObject* obj, uint64& __restrict__ o
 #elif defined(__APPLE__)
                 long dims[args.shape.size()];
 #endif
-                for (int i = 0; i < args.shape.size(); i++)
+                for (int i=0; i<args.shape.size(); i++)
                     dims[i] = args.shape[i];
                 PyObjHolder oh(PyArray_New(
                     PyArray_Type, // subtype
