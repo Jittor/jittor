@@ -388,7 +388,7 @@ DEF_IS(DataView, PyObject*) to_py_object(T a) {
     long dims[a.shape.size()];
 #endif
     for (int i=0; i<a.shape.size(); i++)
-        dims[i] = (int64) a.shape[i];
+        dims[i] = a.shape[i];
     PyObjHolder oh(PyArray_New(
         PyArray_Type, // subtype
         a.shape.size(), // nd
