@@ -140,9 +140,13 @@ ArrayOp::ArrayOp(PyObject* obj) {
         std::memcpy(host_ptr, args.ptr, size);
     } else {
         // this is non-continue numpy array
+#if defined(__linux__)
+        int64 dims[args.shape.size()];
+#elif defined(__APPLE__)
         long dims[args.shape.size()];
+#endif
         for (int i=0; i<args.shape.size(); i++)
-            dims[i] = args.shape[i];
+            dims[i] = (long) args.shape[i];
         holder.assign(PyArray_New(
             PyArray_Type, // subtype
             args.shape.size(), // nd

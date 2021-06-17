@@ -88,8 +88,11 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
             + " '" + jit_src_path + "'" + other_src
             + cc_flags + extra_flags
             + " -o '" + jit_lib_path + "'";
-        // cmd = python_path+" "+jittor_path+"/utils/asm_tuner.py "
-        //     "--cc_path=" + cmd;
+
+#ifdef __linux__
+        cmd = python_path+" "+jittor_path+"/utils/asm_tuner.py "
+            "--cc_path=" + cmd;
+#endif
     }
     cache_compile(cmd, cache_path, jittor_path);
     auto symbol_name = get_symbol_name(jit_key);

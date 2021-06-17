@@ -266,7 +266,11 @@ DEF_IS(ArrayArgs, bool) is_type(PyObject* obj) {
 }
 
 DEF_IS(ArrayArgs, PyObject*) to_py_object(const T& a) {
+#if defined(__linux__)
+    int64 dims[a.shape.size()];
+#elif defined(__APPLE__)
     long dims[a.shape.size()];
+#endif
     for (int i=0; i<a.shape.size(); i++)
         dims[i] = a.shape[i];
     PyObjHolder obj(PyArray_SimpleNew(
@@ -378,9 +382,13 @@ DEF_IS(VarHolder*, T) from_py_object(PyObject* obj, unique_ptr<VarHolder>& holde
 
 struct DataView;
 DEF_IS(DataView, PyObject*) to_py_object(T a) {
+#if defined(__linux__)
+    int64 dims[a.shape.size()];
+#elif defined(__APPLE__)
     long dims[a.shape.size()];
+#endif
     for (int i=0; i<a.shape.size(); i++)
-        dims[i] = a.shape[i];
+        dims[i] = (int64) a.shape[i];
     PyObjHolder oh(PyArray_New(
         PyArray_Type, // subtype
         a.shape.size(), // nd
