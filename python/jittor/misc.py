@@ -634,23 +634,6 @@ def kthvalue(input, k, dim=None, keepdim=False):
 
 jt.Var.kthvalue = kthvalue
 
-
-def gather(x,dim,index):
-    if dim<0:
-        dim+=index.ndim
-    x_shape = list(x.shape )
-    i_shape = list(index.shape)
-    assert i_shape[dim]>0
-    assert x.ndim == index.ndim
-    i_shape[dim]=x_shape[dim]
-    assert i_shape == x_shape
-    ins = []
-    for i in range(index.ndim):
-        ins.append(jt.index(index.shape,dim=i))
-    ins[dim]=index
-    return x.reindex(ins)
-jt.Var.gather = gather
-
 def _prod(x,dim=0):
     x = jt.log(x)
     x = x.sum(dim=dim)

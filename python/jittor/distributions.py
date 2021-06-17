@@ -29,18 +29,7 @@ kernel(in0->num/in0->shape[in0->shape.size()-1], 0, in0_p, out0_p, in0->shape[in
 
 class OneHotCategorical:
     def __init__(self, probs=None, logits=None):
-        assert not (probs is None and logits is None)
-        if probs is None:
-            # cannot align to pytorch
-            probs = jt.sigmoid(logits)
-        elif logits is None:
-            logits = jt.safe_log(probs)
-        with jt.no_grad():
-            self.probs = probs / probs.sum(-1, True)
-            self.cum_probs = simple_presum(self.probs)
-            self.cum_probs_l = self.cum_probs[..., :-1]
-            self.cum_probs_r = self.cum_probs[..., 1:]
-            self.logits = logits
+        Categorical.__init__(self, probs, logits)
 
     def sample(self, sample_shape=[]):
         shape = sample_shape + self.probs.shape[:-1] + (1,)
@@ -48,17 +37,12 @@ class OneHotCategorical:
         one_hot = jt.logical_and(self.cum_probs_l < rand, rand <= self.cum_probs_r).float()
         return one_hot
     
-    def log_prob(self,x):
-        if len(x.shape) == 1:
-            x = x.unsqueeze(0)
-        logits = self.logits.broadcast(x.shape)
-        indices = jt.argmax(x, dim=-1)[0]
-        return logits.gather(1, indices.unsqueeze(-1)).reshape(-1)
+    def log_prob(self, x):
+        x = jt.argmax(x, dim=-1)[0]
+        return Categorical.log_prob(self, x)
     
     def entropy(self):
-        min_real = -(math.pow(2,23)-1) / math.pow(2,22) * math.pow(2,127)
-        logits = jt.clamp(self.logits,min_v=min_real)
-        p_log_p = logits * self.probs
+        p_log_p = self.logits * self.probs
         return -p_log_p.sum(-1)
     
     
@@ -68,29 +52,32 @@ class Categorical:
         if probs is None:
             # cannot align to pytorch
             probs = jt.sigmoid(logits)
-        elif logits is None:
+        probs = probs / probs.sum(-1, True)
+        if logits is None:
             logits = jt.safe_log(probs)
         with jt.no_grad():
-            self.probs = probs / probs.sum(-1, True)
+            self.probs = probs
             self.logits = logits
-            self.cum_probs = simple_presum(probs)
+            self.cum_probs = simple_presum(self.probs)
             self.cum_probs_l = self.cum_probs[..., :-1]
             self.cum_probs_r = self.cum_probs[..., 1:]
 
-    def sample(self, sample_shape=[]):
+    def sample(self, sample_shape=()):
         shape = sample_shape + self.probs.shape[:-1] + (1,)
         rand = jt.rand(shape)
         one_hot = jt.logical_and(self.cum_probs_l < rand, rand <= self.cum_probs_r)
-        index = one_hot.index(one_hot.ndim-1)
+        index = one_hot.index(one_hot.ndim - 1)
         return (one_hot * index).sum(-1)
-    
+
     def log_prob(self, x):
-        return jt.safe_log(self.probs)[0,x]
-    
+        a = self.probs.ndim
+        b = x.ndim
+        indexes = tuple( f'i{i}' for i in range(b-a+1, b) )
+        indexes = indexes + (x,)
+        return jt.safe_log(self.probs).getitem(indexes)
+
     def entropy(self):
-        min_real = -(math.pow(2,23)-1) / math.pow(2,22) * math.pow(2,127)
-        logits = jt.clamp(self.logits,min_v=min_real)
-        p_log_p = logits * self.probs
+        p_log_p = self.logits * self.probs
         return -p_log_p.sum(-1)
 
 
@@ -141,8 +128,7 @@ class Geometric:
             self.logits = -jt.safe_log(1. / p - 1)
         
     def sample(self, sample_shape):
-        tiny = jt.info(self.probs.dtype).tiny
-        u = jt.clamp(jt.rand(sample_shape),min_v=tiny)
+        u = jt.rand(sample_shape)
         return (jt.safe_log(u) / (jt.safe_log(-self.probs+1))).floor()
     
     def log_prob(self, x):
@@ -160,12 +146,6 @@ def kl_divergence(cur_dist, old_dist):
         return 0.5*(vr+t1-1-jt.safe_log(vr))
     if isinstance(cur_dist, Categorical) or isinstance(cur_dist,OneHotCategorical):
         t = cur_dist.probs * (cur_dist.logits-old_dist.logits)
-        # print("t:", t)
-        # print("old_dist.probs:", old_dist.probs)
-        # print("old_dist.probs:", (old_dist.probs==0).sum())
-        # print("cur_dist.probs:", cur_dist.probs)
-        # t[jt.array((old_dist.probs == 0))] = math.inf
-        # t[jt.array((cur_dist.probs == 0))] = 0
         return t.sum(-1)
     if isinstance(cur_dist, Uniform):
         res = jt.safe_log((old_dist.high - old_dist.low) / (cur_dist.high - cur_dist.low))
