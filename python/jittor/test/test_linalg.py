@@ -8,13 +8,13 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-import torch
-from torch.autograd import Variable
 import jittor as jt
 import numpy as np
 import unittest
 
 try:
+    import torch
+    from torch.autograd import Variable
     import autograd.numpy as anp
     from autograd import jacobian
 

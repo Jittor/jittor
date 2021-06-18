@@ -4,7 +4,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-from multiprocessing import Pool, Value
+from multiprocessing import Pool
 import multiprocessing as mp
 import subprocess as sp
 import os
