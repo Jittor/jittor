@@ -31,7 +31,7 @@ if __name__ == "__main__":
             libext = {
                 'Linux': 'so',
                 'Darwin': 'dylib',
-                'Window': 'DLL',
+                'Windows': 'DLL',
             }[platform.system()]
             ldflags = jittor_utils.run_cmd(jittor_utils.py3_config_path + " --ldflags")
             libpaths = [l[2:] for l in ldflags.split(' ') if l.startswith("-L")]
