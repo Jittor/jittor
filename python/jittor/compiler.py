@@ -1090,7 +1090,7 @@ if os.path.isfile(version_file) and not os.path.isdir(os.path.join(jittor_path, 
 compile(cc_path, cc_flags+opt_flags, files, 'jittor_core'+extension_suffix)
 
 # TODO: move to compile_extern.py
-compile_extern()
+# compile_extern()
 
 with jit_utils.import_scope(import_flags):
     import jittor_core as core
