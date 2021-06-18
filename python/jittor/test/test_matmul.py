@@ -347,5 +347,11 @@ class TestMatmul(unittest.TestCase):
     def test_matmul_example2_cuda(self):
         self.test_matmul_example2()
 
+    def test_linear1d(self):
+        linear = jt.nn.Linear(10,20)
+        a = jt.random((10,))
+        b = linear(a)
+        assert b.shape == (20,)
+
 if __name__ == "__main__":
     unittest.main()

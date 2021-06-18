@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.2.3.24'
+__version__ = '1.2.3.32'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -437,11 +437,11 @@ def pow(x, y):
 Var.pow = Var.__pow__ = pow
 
 def argmax(x, dim, keepdims:bool=False):
-    return x.arg_reduce("max", dim, keepdims)
+    return jt.arg_reduce(x, "max", dim, keepdims)
 Var.argmax = argmax
 
 def argmin(x, dim, keepdims:bool=False):
-    return x.arg_reduce("min", dim, keepdims)
+    return jt.arg_reduce(x, "min", dim, keepdims)
 Var.argmin = argmin
 
 def randn(*size, dtype="float32", requires_grad=True) -> Var:

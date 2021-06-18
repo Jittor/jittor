@@ -104,6 +104,8 @@ int OpCompiler::total_member_count() {
         // array need a extra local var
         if (op->ops[i]->name()==string("array"))
             member_count += 1;
+        if (op->ops[i]->name()==string("safe_clip"))
+            member_count += 2;
         member_count += v.size();
         i += 1;
     }
@@ -826,11 +828,15 @@ string OpCompiler::__get_fused_src(
     const unordered_set<string> members = {
         "x", "y", "z", "cond", "output", "extras"
     };
+    const unordered_set<string> scalar_members = {
+        "left", "right"
+    };
     const unordered_set<string> unchanged = {
         "for", "const", "auto", "get_random_engine",
         "int", "float", "bool", "CHECK", "STRINGIZE",
         "void", "__restrict__", "if", "true", "false",
-        "Op", "Var", "Node", "itof", "assert", "ASSERT"
+        "Op", "Var", "Node", "itof", "assert", "ASSERT",
+        "float64"
     };
     auto not_change = [&](const string& s) -> bool {
         if (unchanged.count(s)) return true;
@@ -941,7 +947,8 @@ string OpCompiler::__get_fused_src(
                     while (l<src.size() && isvar(src[l])) l++;
                     auto var = src.substr(j, l-j);
                     if (var[0] == ':' || isdigit(var[0]) || not_change(var) || src[j-1]=='.' || src[j-1]=='>') {} else
-                    if (members.count(var)) {
+                    if (members.count(var) || scalar_members.count(var)) {
+                        bool is_member = members.count(var);
                         string arg_name = "op" + S(oi) + "_" + var;
                         if (l<src.size() && src[l]=='[') {
                             // handle extras[...]
@@ -964,7 +971,8 @@ string OpCompiler::__get_fused_src(
                                 " = (("+name3+"Op*)(ops[" + S(oi) + "]))->" + var;
                             fused_kernel_args += ";\n";
                             kernel_args.insert(arg_name);
-                            op_members[oi].push_back(arg_name);
+                            if (is_member)
+                                op_members[oi].push_back(arg_name);
                         }
                         fused_kernel += arg_name;
                         j = l-1;

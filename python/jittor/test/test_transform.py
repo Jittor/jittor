@@ -257,14 +257,14 @@ class Tester(unittest.TestCase):
             expect = input_data.transpose(2,0,1)
             self.assertTrue(np.allclose(expect, output), f"{expect.shape}\n{output.shape}")
 
-            ndarray = np.random.randint(low=0, high=255, size=(height, width, channels)).astype(np.uint8)
+            ndarray = np.random.randint(low=0, high=255, size=(channels, height, width)).astype(np.uint8)
             output = trans(ndarray)
-            expected_output = ndarray.transpose((2, 0, 1)) / 255.0
-            self.assertTrue(np.allclose(output, expected_output))
+            expected_output = ndarray / 255.0
+            np.testing.assert_allclose(output, expected_output)
 
-            ndarray = np.random.rand(height, width, channels).astype(np.float32)
+            ndarray = np.random.rand(channels, height, width).astype(np.float32)
             output = trans(ndarray)
-            expected_output = ndarray.transpose((2, 0, 1))
+            expected_output = ndarray
             self.assertTrue(np.allclose(output, expected_output))
 
         # separate test for mode '1' PIL images
