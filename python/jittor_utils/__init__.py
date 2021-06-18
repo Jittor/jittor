@@ -250,8 +250,8 @@ def get_version(output):
     if len(v) == 0:
         v = re.findall("[0-9]+\\.[0-9]+", version)
     assert len(v) != 0, f"Can not find version number from: {version}"
-    if get_cc_type(output) == 'clang':
-        version = "("+v[0]+")"
+    if 'clang' in version and platform.system() == 'Darwin':
+        version = "("+v[-3]+")"
     else:
         version = "("+v[-1]+")"
     return version
