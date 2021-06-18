@@ -18,7 +18,7 @@ except:
     skip_this_test = True
 
 
-@unittest.skipIf
+@unittest.skipIf(skip_this_test, "No Torch Found")
 class TestSearchsorted(unittest.TestCase):
     def test_searchsorted_cpu(self):
         for i in range(1,3):
