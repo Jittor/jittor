@@ -12,6 +12,7 @@ import inspect
 import datetime
 import threading
 import ctypes
+import platform
 from ctypes import cdll
 from ctypes.util import find_library
 
@@ -1038,6 +1039,8 @@ if os.path.isfile(version_file) and not os.path.isdir(os.path.join(jittor_path, 
     os_key = os_type.get(os_id, "ubuntu")
     if "os_key" in os.environ:
         os_key = os.environ['os_key']
+    if platform.machine()=='aarch64':
+        os_key += '-aarch64'
     LOG.i("OS type:", os_id, " OS key:", os_key)
     key += '-' + os_key + '.o'
     # TODO: open the website

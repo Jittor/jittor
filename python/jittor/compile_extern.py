@@ -23,29 +23,35 @@ def search_file(dirs, name, prefer_version=()):
 def install_mkl(root_folder):
     # origin url is
     # url = "https://github.com/intel/mkl-dnn/releases/download/v1.0.2/mkldnn_lnx_1.0.2_cpu_gomp.tgz"
-    url = "https://cloud.tsinghua.edu.cn/f/da02bf62b55b4aa3b8ee/?dl=1"
-    filename = "mkldnn_lnx_1.0.2_cpu_gomp.tgz"
-    # newest version for oneDNN
-    # url = "https://github.com/oneapi-src/oneDNN/releases/download/v2.2/dnnl_lnx_2.2.0_cpu_gomp.tgz"
-    # filename = "dnnl_lnx_2.2.0_cpu_gomp.tgz"
+    import platform
+    if platform.system()=="Linux":
+        if platform.machine()=='x86_64':
+            filename = "dnnl_lnx_2.2.0_cpu_gomp.tgz"
+            md5 = "35bbbdf550a9d8ad54db798e372000f6"
+        elif platform.machine()=='aarch64':
+            filename = "dnnl_lnx_2.2.0_cpu_gomp_aarch64.tgz"
+            md5 = "72cf9b0b8fd6c3c786d35a9daaee22b8"
+        else:
+            raise RuntimeError(f"platform.machine()=={platform.machine()} not support yet,"
+            " Please contact us on https://github.com/jittor/jittor ")
+    else:
+        raise RuntimeError(f"platform.machine()=={platform.machine()} not support yet,"
+        " Please contact us on https://github.com/jittor/jittor ")
+
+    url = "https://cg.cs.tsinghua.edu.cn/jittor/assets/" + filename
     fullname = os.path.join(root_folder, filename)
     dirname = os.path.join(root_folder, filename.replace(".tgz",""))
 
-    if not os.path.isfile(os.path.join(dirname, "examples", "test")):
+    if not os.path.isfile(os.path.join(dirname, "lib", "libmkldnn.so")):
         LOG.i("Downloading mkl...")
-        download_url_to_local(url, filename, root_folder, "47187284ede27ad3bd64b5f0e7d5e730")
-        # newest version for oneDNN
-        # download_url_to_local(url, filename, root_folder, "35bbbdf550a9d8ad54db798e372000f6")
+        download_url_to_local(url, filename, root_folder, md5)
         import tarfile
 
         with tarfile.open(fullname, "r") as tar:
             tar.extractall(root_folder)
 
         assert 0 == os.system(f"cd {dirname}/examples && "
-            f"{cc_path} -std=c++14 cpu_cnn_inference_f32.cpp -Ofast -lmkldnn -I ../include -L ../lib -o test && LD_LIBRARY_PATH=../lib/ ./test")
-        # newest version for oneDNN
-        # assert 0 == os.system(f"cd {dirname}/examples && "
-        #     f"{cc_path} -std=c++14 cnn_inference_f32.cpp -Ofast -lmkldnn -I ../include -L ../lib -o test && LD_LIBRARY_PATH=../lib/ ./test")
+            f"{cc_path} -std=c++14 cnn_inference_f32.cpp -Ofast -lmkldnn -I ../include -L ../lib -o test && LD_LIBRARY_PATH=../lib/ ./test")
 
 def setup_mkl():
     global mkl_ops, use_mkl
@@ -80,7 +86,7 @@ def setup_mkl():
         install_mkl(mkl_path)
         mkl_home = ""
         for name in os.listdir(mkl_path):
-            if name.startswith("mkldnn_lnx") and os.path.isdir(os.path.join(mkl_path, name)):
+            if name.startswith("dnnl") and os.path.isdir(os.path.join(mkl_path, name)):
                 mkl_home = os.path.join(mkl_path, name)
                 break
         assert mkl_home!=""
@@ -197,8 +203,14 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
 
         if lib_name == "cublas" and nvcc_version[0] >= 10:
             # manual link libcublasLt.so
-            cublas_lt_lib_path = search_file([cuda_lib, extra_lib_path, "/usr/lib/x86_64-linux-gnu", "/usr/lib"], f"libcublasLt.so", nvcc_version)
-            ctypes.CDLL(cublas_lt_lib_path, dlopen_flags)
+            try:
+                cublas_lt_lib_path = search_file([cuda_lib, extra_lib_path, "/usr/lib/x86_64-linux-gnu", "/usr/lib"], f"libcublasLt.so", nvcc_version)
+                ctypes.CDLL(cublas_lt_lib_path, dlopen_flags)
+            except:
+                # some aarch64 os, such as uos with FT2000 cpu,
+                # it's cuda 10 doesn't have libcublasLt.so
+                pass
+
 
 
         if lib_name == "cudnn":
