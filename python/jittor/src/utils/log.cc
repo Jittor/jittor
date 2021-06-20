@@ -322,6 +322,34 @@ but you can hot fix it by this command:
         )";
 }
 
+static inline void check_cuda_gcc_version(const string& output) {
+    /*  if such error occur: 
+    error: identifier "__is_assignable" is undefined
+    this means your gcc version is not match with nvcc,
+    for example, nvcc 10 support gcc<=7, nvcc 11 support gcc<=9,
+
+    https://gist.github.com/ax3l/9489132
+    */
+    string pat = "__is_assignable";
+    auto id = output.find(pat);
+    if (id == string::npos) return;
+    LOGf << output << R"(
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+Dear user, your nvcc and gcc version are still not match
+after dirty hack, your should install the correct version of g++
+or nvcc, for example, nvcc 10 support g++<=7, nvcc 11 support g++<=9,
+here is the NVCC Compatibility Matrix:
+    https://gist.github.com/ax3l/9489132
+Please install correct version of gcc, for example:
+    >>> sudo apt install g++-7
+After your g++ is installed, using enviroment variable `cc_path` to
+tell jittor use the correct version of g++, for example:
+    >>> cc_path='g++-7' python3.7 -m jittor.test.test_core
+If you still have problems, please contact us:
+    https://github.com/Jittor/jittor/issues
+    )";
+}
+
 int system_popen(const char* cmd) {
     char buf[BUFSIZ];
     string cmd2;
@@ -342,6 +370,7 @@ int system_popen(const char* cmd) {
     }
     if (ret) {
         check_cuda_unsupport_version(output);
+        check_cuda_gcc_version(output);
     }
     return ret;
 }
