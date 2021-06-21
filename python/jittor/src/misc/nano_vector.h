@@ -238,6 +238,21 @@ struct NanoVector {
             v[i] = at(i);
         return v;
     }
+
+    inline void _unpack(int i) {
+        return;
+    }
+
+    template<class... Args>
+    void _unpack(int i, int& x, Args&&... args) {
+       x = this->operator[](i);
+       _unpack(i+1, std::forward<Args>(args)...);
+    }
+
+    template<class... Args>
+    void unpack(Args&&... args) {
+        _unpack(0, std::forward<Args>(args)...);
+    }
 };
 
 

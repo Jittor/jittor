@@ -38,7 +38,7 @@ class TestResnet(unittest.TestCase):
     @classmethod
     def setUpClass(self):
         # hyper-parameters
-        self.batch_size = 100
+        self.batch_size = int(os.environ.get("TEST_BATCH_SIZE", "100"))
         self.weight_decay = 0.0001
         self.momentum = 0.9
         self.learning_rate = 0.1

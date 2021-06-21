@@ -8,6 +8,7 @@
 #include <streambuf>
 #include "misc/hash.h"
 #include "utils/cache_compile.h"
+#include "utils/str_utils.h"
 
 namespace jittor {
 namespace jit_compiler {
@@ -137,7 +138,7 @@ size_t skip_comments(const string& src, size_t i) {
     return i;
 }
 
-void process(string src, vector<string>& input_names) {
+void process(string src, vector<string>& input_names, string& cmd) {
     for (size_t i=0; i<src.size(); i++) {
         i = skip_comments(src, i);
         if (i>=src.size()) break;
@@ -159,6 +160,20 @@ void process(string src, vector<string>& input_names) {
                     input_names.push_back(inc);
                 }
             }
+            if (l-k>2 && src[k] == 'J' && src[k+1] == 'T' && j-i==6 && src.substr(i,j-i) == "#ifdef") {
+                auto inc = src.substr(k, l-k);
+                auto env = getenv(inc.c_str());
+                if (env && string(env)!="0") {
+                    string dflag = " -D"+inc+"="+string(env)+" -o ";
+                    if (cmd.find(dflag) == string::npos) {
+                        // -D flags should insert before -o flag
+                        auto cmds = split(cmd, " -o ", 2);
+                        if (cmds.size() == 2) {
+                            cmd = cmds[0] + dflag + cmds[1];
+                        }
+                    }
+                }
+            }
             i=l;
         }
     }
@@ -173,12 +188,6 @@ bool cache_compile(const string& cmd, const string& cache_path, const string& ji
     bool ran = false;
     output_cache_key = read_all(output_name+".key");
     string cd_cmd = cache_path.size() ? "cd " + cache_path + " && " + cmd : cmd;
-    if (output_cache_key.size() == 0) {
-        LOGvv << "Cache key of" << output_name << "not found.";
-        LOGvvv << "Run cmd:" << cmd;
-        system_with_check(cd_cmd.c_str());
-        ran = true;
-    }
     string cache_key = cmd;
     cache_key += "\n";
     unordered_set<string> processed;
@@ -192,7 +201,7 @@ bool cache_compile(const string& cmd, const string& cache_path, const string& ji
         ASSERT(src.size()) << "Source read failed:" << input_names[i];
         auto hash = S(hash64(src));
         vector<string> new_names;
-        process(src, new_names);
+        process(src, new_names, cd_cmd);
         for (auto& name : new_names) {
             string full_name;
             if (name.substr(0, 4) == "jit/" || name.substr(0, 4) == "gen/")
@@ -222,9 +231,15 @@ bool cache_compile(const string& cmd, const string& cache_path, const string& ji
         cache_key += hash;
         cache_key += "\n";
     }
+    if (output_cache_key.size() == 0) {
+        LOGvv << "Cache key of" << output_name << "not found.";
+        LOGvvv << "Run cmd:" << cd_cmd;
+        system_with_check(cd_cmd.c_str());
+        ran = true;
+    }
     if (output_cache_key.size() != 0 && output_cache_key != cache_key) {
         LOGvv << "Cache key of" << output_name << "changed.";
-        LOGvvv << "Run cmd:" << cmd;
+        LOGvvv << "Run cmd:" << cd_cmd;
         system_with_check(cd_cmd.c_str());
         ran = true;
     }
@@ -296,7 +311,8 @@ void test_find_nams_error(string cmd) {
 
 void test_process(string src, vector<string> files) {
     vector<string> ifiles;
-    jittor::jit_compiler::process(src, ifiles);
+    string cmd;
+    jittor::jit_compiler::process(src, ifiles, cmd);
     CHECK(files.size() == ifiles.size());
     for (size_t i=0; i<files.size(); i++)
         CHECKop(files[i],==,ifiles[i]);
