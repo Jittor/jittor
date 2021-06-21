@@ -11,6 +11,7 @@ import sys
 import inspect
 import datetime
 import threading
+import platform
 import ctypes
 import platform
 from ctypes import cdll
@@ -94,7 +95,7 @@ def compile(compiler, flags, inputs, output, combind_build=False):
     return do_compile(cmd)
 
 def gen_jit_tests():
-    all_src = run_cmd('find -L src/ | grep "cc$"', jittor_path).splitlines()
+    all_src = run_cmd('find -L src | grep "cc$"', jittor_path).splitlines()
     jit_declares = []
     re_def = re.compile("JIT_TEST\\((.*?)\\)")
     names = set()
@@ -144,7 +145,7 @@ def gen_jit_tests():
         f.write(jit_src)
 
 def gen_jit_flags():
-    all_src = run_cmd('find -L src/ | grep "cc$"', jittor_path).splitlines()
+    all_src = run_cmd('find -L src | grep "cc$"', jittor_path).splitlines()
     jit_declares = []
     re_def = re.compile("DEFINE_FLAG(_WITH_SETTER)?\\((.*?)\\);", re.DOTALL)
 
@@ -593,7 +594,7 @@ def compile_custom_ops(
     filenames, 
     extra_flags="", 
     return_module=False,
-    dlopen_flags=os.RTLD_GLOBAL | os.RTLD_NOW | os.RTLD_DEEPBIND,
+    dlopen_flags=None,
     gen_name_ = ""):
     """Compile custom ops
     filenames: path of op source files, filenames must be
@@ -603,6 +604,11 @@ def compile_custom_ops(
     return_module: return module rather than ops(default: False)
     return: compiled ops
     """
+    if dlopen_flags is None:
+        dlopen_flags = os.RTLD_GLOBAL | os.RTLD_NOW
+        if platform.system() == 'Linux':
+            dlopen_flags |= os.RTLD_DEEPBIND
+
     srcs = {}
     headers = {}
     builds = []
@@ -701,7 +707,7 @@ def get_full_path_of_executable(name):
 
 def compile_extern():
     # compile llvm passes
-    if cc_type != "clang":
+    if cc_type != "clang" or platform.system() != 'Linux':
         return
     global kernel_opt_flags
     cache_path_llvm = os.path.join(cache_path, "llvm")
@@ -842,11 +848,15 @@ def check_debug_flags():
 
 cc_flags = " "
 # os.RTLD_NOW | os.RTLD_GLOBAL cause segfault when import torch first
-import_flags = os.RTLD_NOW | os.RTLD_GLOBAL | os.RTLD_DEEPBIND
+import_flags = os.RTLD_NOW | os.RTLD_GLOBAL
+if platform.system() == 'Linux':
+    import_flags |= os.RTLD_DEEPBIND
 # if cc_type=="icc":
 #     # weird link problem, icc omp library may conflict and cause segfault
 #     import_flags = os.RTLD_NOW | os.RTLD_GLOBAL
-dlopen_flags = os.RTLD_NOW | os.RTLD_GLOBAL | os.RTLD_DEEPBIND
+dlopen_flags = os.RTLD_NOW | os.RTLD_GLOBAL
+if platform.system() == 'Linux':
+    import_flags |= os.RTLD_DEEPBIND
 
 with jit_utils.import_scope(import_flags):
     jit_utils.try_import_jit_utils_core()
@@ -894,14 +904,35 @@ gdb_path = try_find_exe('gdb')
 addr2line_path = try_find_exe('addr2line')
 has_pybt = check_pybt(gdb_path, python_path)
 
-cc_flags += " -Wall -Werror -Wno-unknown-pragmas -std=c++14 -fPIC -march=native "
+cc_flags += " -Wall -Werror -Wno-unknown-pragmas -std=c++14 -fPIC "
+# 1. Arch/CPU specific optimization
+if platform.machine() == "x86_64":
+    cc_flags += " -march=native " 
+elif platform.machine() == 'arm64' and platform.system() == "Darwin":
+    cc_flags += " -mcpu=apple-a14 "
 cc_flags += " -fdiagnostics-color=always "
+# 2. Non standard include path
+if platform.system() == 'Darwin' and platform.machine() == 'arm64':
+    cc_flags += " -I/opt/homebrew/include "
+# 3. User specified flags
 if "cc_flags" in os.environ:
     cc_flags += os.environ["cc_flags"] + ' '
+
 link_flags = " -lstdc++ -ldl -shared "
+if platform.system() == 'Darwin':
+    # TODO: if not using apple clang, there is no need to add -lomp
+    link_flags += "-undefined dynamic_lookup -lomp "
+    if platform.machine() == "arm64":
+        link_flags += " -L/opt/homebrew/lib "
+
 core_link_flags = ""
 opt_flags = ""
-kernel_opt_flags = os.environ.get("kernel_flags", "") + opt_flags + " -fopenmp "
+kernel_opt_flags = os.environ.get("kernel_flags", "") + opt_flags
+if platform.system() == 'Darwin':
+    # TODO: if not using apple clang, cannot add -Xpreprocessor
+    kernel_opt_flags = kernel_opt_flags + " -Xpreprocessor -fopenmp "
+else:
+    kernel_opt_flags = kernel_opt_flags + " -fopenmp "
 
 if ' -O' not in cc_flags:
     opt_flags += " -O2 "
@@ -960,7 +991,7 @@ if has_cuda:
 # build core
 gen_jit_flags()
 gen_jit_tests()
-op_headers = run_cmd('find -L src/ops/ | grep "op.h$"', jittor_path).splitlines()
+op_headers = run_cmd('find -L src/ops | grep "op.h$"', jittor_path).splitlines()
 jit_src = gen_jit_op_maker(op_headers)
 LOG.vvvv(jit_src)
 with open(os.path.join(cache_path, "gen", "jit_op_maker.h"), 'w') as f:
@@ -1008,19 +1039,26 @@ LOG.vv("compile order:", files)
 # manual Link omp using flags(os.RTLD_NOW | os.RTLD_GLOBAL)
 # if cc_type=="icc":
 #     os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-libname = {"clang":"omp", "icc":"iomp5", "g++":"gomp"}[cc_type]
-libname = ctypes.util.find_library(libname)
-assert libname is not None, "openmp library not found"
-ctypes.CDLL(libname, os.RTLD_NOW | os.RTLD_GLOBAL)
+
+if platform.system() == 'Linux':
+    libname = {"clang":"omp", "icc":"iomp5", "g++":"gomp"}[cc_type]
+    libname = ctypes.util.find_library(libname)
+    assert libname is not None, "openmp library not found"
+    ctypes.CDLL(libname, os.RTLD_NOW | os.RTLD_GLOBAL)
 
 # get os release
-with open("/etc/os-release", "r", encoding='utf8') as f:
-    s = f.read().splitlines()
-    os_release = {}
-    for line in s:
-        a = line.split('=')
-        if len(a) != 2: continue
-        os_release[a[0]] = a[1].replace("\"", "")
+if platform.system() == 'Linux':
+    with open("/etc/os-release", "r", encoding='utf8') as f:
+        s = f.read().splitlines()
+        os_release = {}
+        for line in s:
+            a = line.split('=')
+            if len(a) != 2: continue
+            os_release[a[0]] = a[1].replace("\"", "")
+        os_arch = ''
+elif platform.system() == 'Darwin':
+    os_release = {'ID' : 'macos'}
+    os_arch = platform.machine()
 
 os_type = {
     "ubuntu": "ubuntu",
@@ -1028,7 +1066,9 @@ os_type = {
     "centos": "centos",
     "rhel": "ubuntu",
     "fedora": "ubuntu",
+    "macos": "macos",
 }
+
 version_file = os.path.join(jittor_path, "version")
 if os.path.isfile(version_file) and not os.path.isdir(os.path.join(jittor_path, "src", "__data__")):
     with open(version_file, 'r') as f:
@@ -1036,7 +1076,8 @@ if os.path.isfile(version_file) and not os.path.isdir(os.path.join(jittor_path, 
     # key = f"{version}-{cc_type}-{'cuda' if has_cuda else 'cpu'}.o"
     key = f"{version}-g++-cpu"
     os_id = os_release["ID"]
-    os_key = os_type.get(os_id, "ubuntu")
+    os_key = os_type.get(os_id, "ubuntu") 
+    os_key += '-' + os_arch if os_arch else ''
     if "os_key" in os.environ:
         os_key = os.environ['os_key']
     if platform.machine()=='aarch64':
