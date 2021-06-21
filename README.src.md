@@ -416,16 +416,16 @@ If you want to know more about Jittor, please check out the notebooks below:
 
 
 
-[1]: notebook/example.src.md	"example"
-[2]: notebook/basics.src.md	"basics"
-[3]: notebook/meta_op.src.md	"meta_op"
-[4]: notebook/custom_op.src.md	"custom_op"
-[5]: notebook/profiler.src.md	"profiler"
-[1]: notebook/example.src.md	"示例"
-[2]: notebook/basics.src.md	"基本概念"
-[3]: notebook/meta_op.src.md	"元算子"
-[4]: notebook/custom_op.src.md	"自定义算子"
-[5]: notebook/profiler.src.md	"性能分析器"
+[1]: python/jittor/notebook/example.src.md	"example"
+[2]: python/jittor/notebook/basics.src.md	"basics"
+[3]: python/jittor/notebook/meta_op.src.md	"meta_op"
+[4]: python/jittor/notebook/custom_op.src.md	"custom_op"
+[5]: python/jittor/notebook/profiler.src.md	"profiler"
+[1]: python/jittor/notebook/example.src.md	"示例"
+[2]: python/jittor/notebook/basics.src.md	"基本概念"
+[3]: python/jittor/notebook/meta_op.src.md	"元算子"
+[4]: python/jittor/notebook/custom_op.src.md	"自定义算子"
+[5]: python/jittor/notebook/profiler.src.md	"性能分析器"
 
 Those notebooks can be started in your own computer by `python3.7 -m jittor.notebook`
 
