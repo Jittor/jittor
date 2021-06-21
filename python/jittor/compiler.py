@@ -12,6 +12,7 @@ import inspect
 import datetime
 import threading
 import ctypes
+import platform
 from ctypes import cdll
 from ctypes.util import find_library
 
@@ -634,7 +635,7 @@ def compile_custom_ops(
     if gen_name_ != "":
         gen_name = gen_name_
     if len(gen_name) > 100:
-        gen_name = gen_name[:80] + "___hash" + str(hash(gen_name))
+        gen_name = gen_name[:80] + "___hash" + str(abs(hash(gen_name)))
 
     includes = sorted(list(set(includes)))
     includes = "".join(map(lambda x: f" -I'{x}' ", includes))
@@ -1038,6 +1039,8 @@ if os.path.isfile(version_file) and not os.path.isdir(os.path.join(jittor_path, 
     os_key = os_type.get(os_id, "ubuntu")
     if "os_key" in os.environ:
         os_key = os.environ['os_key']
+    if platform.machine()=='aarch64':
+        os_key += '-aarch64'
     LOG.i("OS type:", os_id, " OS key:", os_key)
     key += '-' + os_key + '.o'
     # TODO: open the website
@@ -1049,7 +1052,7 @@ if os.path.isfile(version_file) and not os.path.isdir(os.path.join(jittor_path, 
 compile(cc_path, cc_flags+opt_flags, files, 'jittor_core'+extension_suffix)
 
 # TODO: move to compile_extern.py
-compile_extern()
+# compile_extern()
 
 with jit_utils.import_scope(import_flags):
     import jittor_core as core
