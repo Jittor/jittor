@@ -5,12 +5,22 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
+
+#if defined(__clang__)
+#include <string_view>
+#elif defined(__GNUC__)
 #include <experimental/string_view>
+#endif
+
 #include "common.h"
 
 namespace jittor {
 
+#if defined(__clang__)
+using std::string_view;
+#elif defined(__GNUC__)
 using std::experimental::string_view;
+#endif
 
 template<class T>
 struct string_view_map {

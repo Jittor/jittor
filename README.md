@@ -92,9 +92,10 @@ We provide some jupyter notebooks to help you quick start with Jittor.
 
 
 
+
 Jittor environment requirements:
 
-* System: **Linux**(e.g. Ubuntu/CentOS/Arch) (or **Windows** Subsystem of Linux)
+* System: **Linux**(e.g. Ubuntu/CentOS/Arch), **macOS**, or **Windows Subsystem of Linux (WSL)**
 * Python version >= 3.7
 * CPU compiler (require at least one of the following)
     * g++ (>=5.4.0)
@@ -105,7 +106,9 @@ Jittor environment requirements:
 
 
 
-Note: Currently Jittor runs on the Windows operating system through WSL. For the installation method of WSL, please refer to [Microsoft official website](https://docs.microsoft.com/en-us/windows/wsl/install-win10). WSL does not yet support CUDA.
+Note#1: Currently Jittor runs on the Windows operating system through WSL. For the installation method of WSL, please refer to [Microsoft official website](https://docs.microsoft.com/en-us/windows/wsl/install-win10). WSL does not yet support CUDA.
+
+Note#2: macOS users have to install additional dependencies, see [macOS install](#macOS-install).
 
 Jittor offers three ways to install: docker, pip, or manual.
 
@@ -138,6 +141,27 @@ python3.7 -m pip install jittor
 python3.7 -m jittor.test.test_example
 ```
 
+
+
+## macOS install
+
+
+Please first install additional dependencies with [homebrew](https://brew.sh).
+
+```bash
+brew install python@3.7 onednn libomp
+```
+
+
+Then you can install jittor through pip and run the example.
+
+```bash
+python3.7 -m pip install jittor
+python3.7 -m jittor.test.test_example
+```
+
+
+Currently jittor only supports CPU in macOS.
 
 ## manual install
 
