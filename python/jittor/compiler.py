@@ -855,7 +855,7 @@ LOG.i(f"cache_path: {cache_path}")
 with jit_utils.import_scope(import_flags):
     jit_utils.try_import_jit_utils_core()
 
-ctypes.CDLL("/usr/local/neuware_cntoolkit2.1.2/lib64/libcnrt.so",  os.RTLD_NOW | os.RTLD_GLOBAL)
+ctypes.CDLL("/usr/local/neuware/lib64/libcnrt.so",  os.RTLD_NOW | os.RTLD_GLOBAL)
 
 python_path = sys.executable
 # something python do not return the correct sys executable
@@ -908,9 +908,9 @@ make_cache_dir(ck_path)
 cc_flags += f" -I{jittor_path}/src "
 # cc_flags += " --bang-mlu-arch=mtp_270 "
 cc_flags += pybind_include
-cc_flags += " -I/usr/local/neuware_cntoolkit2.1.2/include "
+cc_flags += " -I/usr/local/neuware/include "
 # cc_flags += " -lcnrt -L/usr/local/neuware/lib64 -Wl,-rpath,/usr/local/neuware/lib64:/usr/local/neuware/lib "
-cc_flags += " -lcnrt -lcnml -L/usr/local/neuware_cntoolkit2.1.2/lib64 "
+cc_flags += " -lcnrt -lcnml -L/usr/local/neuware/lib64 "
 check_cache_compile()
 LOG.v(f"Get cache_compile: {jit_utils.cc}")
 

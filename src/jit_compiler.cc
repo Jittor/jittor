@@ -85,7 +85,7 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
         // cmd = "/usr/local/neuware/bin/cncc -x bang --bang-mlu-arch=mtp_270 -lcnrt '" + jit_src_path + "'" + other_src
         
         // mlu290:
-        cmd = "/usr/local/neuware_cntoolkit2.1.2/bin/cncc -x bang --bang-mlu-arch=MLU290 -lcnrt '" + jit_src_path + "'" + other_src
+        cmd = "/usr/local/neuware/bin/cncc -x bang --bang-mlu-arch=MLU290 -lcnrt '" + jit_src_path + "'" + other_src
             + cc_flags + extra_flags
             + " -o '" + jit_lib_path + "'";
         // cmd = python_path+" "+jittor_path+"/utils/asm_tuner.py "
