@@ -62,7 +62,7 @@ class TestLongestDisFuse(unittest.TestCase):
                 continue
             shape = s.split("[")[1].split("]")[0].split(",")
             ptr = s.split("(")[1].split(")")[0].split(",")[-1]
-            if ptr != '0':
+            if ptr != '0' and ptr != '0x0':
                 assert len(shape)<=5, s
 
 if __name__ == "__main__":

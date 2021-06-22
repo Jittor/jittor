@@ -194,7 +194,11 @@ void segfault_sigaction(int signal, siginfo_t *si, void *arg) {
             LOGe << "Caught SIGINT, quick exit";
         }
         exited = true;
+#ifdef __APPLE__
+        _Exit(1);
+#else
         std::quick_exit(1);
+#endif
     }
     std::cerr << "Caught segfault at address " << si->si_addr << ", "
         << "thread_name: '" << thread_name << "', flush log..." << std::endl;

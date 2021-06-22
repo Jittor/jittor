@@ -12,6 +12,14 @@ import jittor as jt
 import numpy as np
 import jittor.distributions as jd
 
+skip_this_test = False
+try:
+    jt.dirty_fix_pytorch_runtime_error()
+    import torch
+except:
+    torch = None
+    skip_this_test = True
+
 
 class TestOneHot(unittest.TestCase):
     def test_presum(self):
@@ -19,6 +27,7 @@ class TestOneHot(unittest.TestCase):
         b = jd.simple_presum(a)
         assert (b.data == [[0,1,3,6,10]]).all()
 
+    @unittest.skipIf(skip_this_test, "No Torch Found")
     def test_one_hot(self):
         a = jd.OneHotCategorical(jt.array([0.25, 0.25, 0.25, 0.25]))
         x = a.sample().numpy()
@@ -30,7 +39,7 @@ class TestOneHot(unittest.TestCase):
         assert y.shape == [2,3,4]
         probs,probs2 = np.random.uniform(0,1,(10)), np.random.uniform(0,1,(10))
         probs,probs2 = probs / probs.sum(),probs2 / probs2.sum()
-        import torch
+
         jc, jc2 = jd.OneHotCategorical(jt.array(probs)),jd.OneHotCategorical(jt.array(probs2))
         tc, tc2 = torch.distributions.OneHotCategorical(torch.tensor(probs)),torch.distributions.OneHotCategorical(torch.tensor(probs2))
         assert np.allclose(jc.entropy().data,tc.entropy().numpy())
@@ -51,8 +60,8 @@ class TestOneHot(unittest.TestCase):
         y.sync()
         assert y.shape == [2,3]
         
+    @unittest.skipIf(skip_this_test, "No Torch Found")
     def test_normal(self):
-        import torch
         for _ in range(4):
             mu = np.random.uniform(-1,1)
             sigma = np.random.uniform(0,2)
@@ -67,8 +76,8 @@ class TestOneHot(unittest.TestCase):
             tn2 = torch.distributions.Normal(mu2,sigma2)
             assert np.allclose(jd.kl_divergence(jn,jn2).data,torch.distributions.kl_divergence(tn,tn2).numpy())
 
+    @unittest.skipIf(skip_this_test, "No Torch Found")
     def test_categorical1(self):
-        import torch
         for _ in range(4):
             probs,probs2 = np.random.uniform(0,1,(10)), np.random.uniform(0,1,(10))
             probs,probs2 = probs / probs.sum(),probs2 / probs2.sum()
@@ -79,9 +88,9 @@ class TestOneHot(unittest.TestCase):
             np.testing.assert_allclose(jc.log_prob(x), tc.log_prob(torch.tensor(x)), atol=1e-5)
             assert np.allclose(jd.kl_divergence(jc,jc2),torch.distributions.kl_divergence(tc,tc2))
 
+    @unittest.skipIf(skip_this_test, "No Torch Found")
     def test_categorical2(self):
         def check(prob_shape, sample_shape):
-            import torch
             for _ in range(4):
                 probs,probs2 = np.random.uniform(0,1,prob_shape), np.random.uniform(0,1, prob_shape)
 
@@ -98,9 +107,9 @@ class TestOneHot(unittest.TestCase):
         check((2,3), (4,))
         check((3,4,5,6), (2,))
 
+    @unittest.skipIf(skip_this_test, "No Torch Found")
     def test_one_hot_categorical2(self):
         def check(prob_shape, sample_shape):
-            import torch
             for _ in range(4):
                 probs,probs2 = np.random.uniform(0,1,prob_shape), np.random.uniform(0,1, prob_shape)
 
@@ -117,8 +126,8 @@ class TestOneHot(unittest.TestCase):
         check((2,3), (4,))
         check((3,4,5,6), (2,))
             
+    @unittest.skipIf(skip_this_test, "No Torch Found")
     def test_uniform(self):
-        import torch
         for _ in range(4):
             low, low2 = np.random.randint(-1,2), np.random.randint(-1,2)
             leng, leng2 = np.random.uniform(0,2), np.random.uniform(0,2)
@@ -130,8 +139,8 @@ class TestOneHot(unittest.TestCase):
             assert np.allclose(ju.log_prob(x),tu.log_prob(torch.tensor(x)))
             assert np.allclose(jd.kl_divergence(ju,ju2),torch.distributions.kl_divergence(tu,tu2))
     
+    @unittest.skipIf(skip_this_test, "No Torch Found")
     def test_geometric(self):
-        import torch
         for _ in range(4):
             prob, prob2 = np.random.uniform(0,1), np.random.uniform(0,1)
             jg, jg2 = jd.Geometric(prob),jd.Geometric(prob2)

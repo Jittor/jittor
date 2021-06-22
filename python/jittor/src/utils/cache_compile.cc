@@ -196,6 +196,8 @@ bool cache_compile(const string& cmd, const string& cache_path, const string& ji
     for (size_t i=0; i<input_names.size(); i++) {
         if (processed.count(input_names[i]) != 0)
             continue;
+        if (input_names[i] == "dynamic_lookup")
+            continue;
         processed.insert(input_names[i]);
         auto src = read_all(input_names[i]);
         ASSERT(src.size()) << "Source read failed:" << input_names[i];
