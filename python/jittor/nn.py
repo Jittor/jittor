@@ -1564,6 +1564,47 @@ class Sequential(Module):
         return len(self.layers)
 
 
+class ParameterList(Module):
+    def __init__(self, *args):
+        self.params = collections.OrderedDict()
+        for var in args:
+            if isinstance(var, (collections.OrderedDict, dict)):
+                for k, v in var.items():
+                    self.add_param(k, v)
+            elif isinstance(var, list):
+                for v in var:
+                    self.append(v)
+            else:
+                self.append(var)
+    def __getitem__(self, idx):
+        if idx not in self.params:
+            return list(self.params.values())[idx]
+
+        return self.params[idx]
+    def __iter__(self):
+        return self.params.values().__iter__()
+    def keys(self):
+        return self.params.keys()
+    def values(self):
+        return self.params.values()
+    def items(self):
+        return self.params.items()
+    def execute(self, x):
+        raise NotImplementedError("Parameters is not executable")
+    def append(self, var):
+        assert isinstance(var, jt.Var), f"argument <{type(var)}> is not jittor var"
+        self.params[len(self.params)] = var
+    def add_param(self, name, var):
+        assert isinstance(var, jt.Var), f"argument <{type(var)}> is not jittor var"
+        self.params[name]=var
+    def __setitem__(self, name, var):
+        self.add_param(name, var)
+
+    def __len__(self):
+        return len(self.params)
+
+ParameterDict = ParameterList
+
 def unfold(X, kernel_size, dilation=1, padding=0, stride=1):
     assert X.ndim == 4
     if not isinstance(kernel_size, tuple):
