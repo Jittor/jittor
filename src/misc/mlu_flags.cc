@@ -11,7 +11,7 @@
 namespace jittor {
 
 DEFINE_FLAG(int, use_mlu, 0, "");
-int nram_space=2048;
+int nram_space=1024;
 
 } // jittor
 

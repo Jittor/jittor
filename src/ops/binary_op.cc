@@ -434,7 +434,9 @@ VarPtr BinaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
             auto ndz = make_unary(dout, ns_negative);
             auto ndzx = make_binary(ndz, x, ns_multiply);
             auto y2 = make_binary(y, y, ns_multiply);
-            return make_binary(ndzx, y2, ns_divide);
+            auto eps = make_number(1e-2, y2);
+            auto y2_ = make_binary(y2, eps, ns_maximum);
+            return make_binary(ndzx, y2_, ns_divide);
         }
     }
     if (ns == ns_maximum || ns == ns_minimum) {
