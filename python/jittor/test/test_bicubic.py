@@ -10,11 +10,19 @@
 # ***************************************************************
 import unittest
 import jittor as jt
-import torch
-from torch.nn import functional as F
 import numpy as np
 
+skip_this_test = False
+try:
+    jt.dirty_fix_pytorch_runtime_error()
+    import torch
+    from torch.nn import functional as F
+except:
+    torch = None
+    skip_this_test = True
 
+
+@unittest.skipIf(skip_this_test, "No Torch found")
 class TestBicubicInterpolate(unittest.TestCase):
     # this is for testing bicubic interpolate
     def test_bicubic(self):

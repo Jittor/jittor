@@ -6,7 +6,12 @@
 // ***************************************************************
 #include <iomanip>
 #include <algorithm>
+
+#if defined(__linux__)
 #include <sys/sysinfo.h>
+#elif defined(__APPLE__)
+#include <sys/sysctl.h>
+#endif
 
 #include "var.h"
 #include "op.h"
@@ -152,9 +157,17 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
 }
 
 MemInfo::MemInfo() {
+#if defined(__linux__)
     struct sysinfo info = {0};
     sysinfo(&info);
     total_cpu_ram = info.totalram;
+#elif defined(__APPLE__)
+    int mib[] = {CTL_HW, HW_MEMSIZE};
+    int64 mem;
+    size_t len;
+    total_cpu_ram = sysctl(mib, 2, &mem, &len, NULL, 0);
+#endif
+
     total_cuda_ram = 0;
 #ifdef HAS_CUDA
     cudaDeviceProp prop;

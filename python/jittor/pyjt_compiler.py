@@ -860,8 +860,8 @@ def compile_single(head_file_name, src_file_name, src=None):
     return True
 
 def compile(cache_path, jittor_path):
-    headers1 = run_cmd('find -L src/ | grep ".h$"', jittor_path).splitlines()
-    headers2 = run_cmd('find gen/ | grep ".h$"', cache_path).splitlines()
+    headers1 = run_cmd('find -L src | grep ".h$"', jittor_path).splitlines()
+    headers2 = run_cmd('find gen | grep ".h$"', cache_path).splitlines()
     headers = [ os.path.join(jittor_path, h) for h in headers1 ] + \
         [ os.path.join(cache_path, h) for h in headers2 ]
     basenames = []
