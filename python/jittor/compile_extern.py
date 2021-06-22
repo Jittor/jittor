@@ -31,7 +31,7 @@ def install_mkl(root_folder):
             md5 = "35bbbdf550a9d8ad54db798e372000f6"
         elif platform.machine()=='aarch64':
             filename = "dnnl_lnx_2.2.0_cpu_gomp_aarch64.tgz"
-            md5 = "baed8bb96b2bbb3123f94d53cc46c69c"
+            md5 = "72cf9b0b8fd6c3c786d35a9daaee22b8"
         else:
             raise RuntimeError(f"platform.machine()=={platform.machine()} not support yet,"
             " Please contact us on https://github.com/jittor/jittor ")
