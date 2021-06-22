@@ -25,7 +25,7 @@ class TestParamList(unittest.TestCase):
                     "bbb": jt.rand(10)
                 })
         net = Net()
-        assert net.state_dict().keys() == ['ps1.0', 'ps1.1', 'ps2.aaa', 'ps2.bbb']
+        assert list(net.state_dict().keys()) == ['ps1.0', 'ps1.1', 'ps2.aaa', 'ps2.bbb']
 
 if __name__ == "__main__":
     unittest.main()
