@@ -27,6 +27,7 @@
    jittor.mpi
    jittor.linalg
    jittor.console
+   jittor.distributions
 
 
 .. toctree::
