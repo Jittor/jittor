@@ -193,6 +193,16 @@ def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
     finally:
         mp.current_process()._config['daemon'] = bk
 
+if os.environ.get("DISABLE_MULTIPROCESSING", '0') == '1':
+    os.environ["use_parallel_op_compiler"] = '1'
+    def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
+        cmds = [ [cmd, cache_path, jittor_path] for cmd in cmds ]
+        n = len(cmds)
+        dp = DelayProgress(msg, n)
+        for i,cmd in enumerate(cmds):
+            dp.update(i)
+            do_compile(cmd)
+
 
 def download(url, filename):
     if os.path.isfile(filename):
