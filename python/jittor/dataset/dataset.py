@@ -72,6 +72,8 @@ class Dataset(object):
                  stop_grad = True,
                  keep_numpy_array = False):
         super().__init__()
+        if os.environ.get("DISABLE_MULTIPROCESSING", '0') == '1':
+            num_workers = 0
         self.total_len = None
         self.batch_size = batch_size
         self.shuffle = shuffle
