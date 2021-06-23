@@ -64,13 +64,12 @@ def setup_mkl():
     # yield error "free: invalide size" or
     # "mmap error"
     # import pytorch(>1.8) first can fix this problem
-
-    try:
-        # jt.dirty_fix_pytorch_runtime_error()
-        import torch
-        from torch import nn
-    except:
-        torch = None
+    # try:
+    #     # jt.dirty_fix_pytorch_runtime_error()
+    #     import torch
+    #     from torch import nn
+    # except:
+    #     torch = None
 
     mkl_include_path = os.environ.get("mkl_include_path")
     mkl_lib_path = os.environ.get("mkl_lib_path")
