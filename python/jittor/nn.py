@@ -1605,6 +1605,46 @@ class ParameterList(Module):
 
 ParameterDict = ParameterList
 
+def Parameter(data, requires_grad=True):
+    ''' The `Parameter` interface isn't needed in Jittor, this interface
+doesn't nothings and it is just used for compatible.
+    
+A Jittor Var is a Parameter
+when it is a member of Module, if you don't want a Jittor
+Var menber is treated as a Parameter, just name it startswith
+underscore `_`.
+    '''
+    LOG.w(Parameter.__doc__)
+    data = data.clone()
+    data.requires_grad = requires_grad
+    return data
+
+def backward(v, *args, **kw):
+    ''' The `backward` variable interface doesn't exist in Jittor.
+please use `optimizer.backward(loss)` or 
+`optimizer.step(loss)` instead.
+For example, if your code looks like this::
+
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+It can be changed to this::
+
+    optimizer.zero_grad()
+    optimizer.backward(loss)
+    optimizer.step()
+
+Or more concise::
+
+    optimizer.step(loss)
+
+The step function will automatically zero grad and backward.
+    '''
+    LOG.f(backward.__doc__)
+
+jt.Var.backward = backward
+
 def unfold(X, kernel_size, dilation=1, padding=0, stride=1):
     assert X.ndim == 4
     if not isinstance(kernel_size, tuple):
