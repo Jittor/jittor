@@ -641,7 +641,8 @@ def compile_custom_ops(
     if gen_name_ != "":
         gen_name = gen_name_
     if len(gen_name) > 100:
-        gen_name = gen_name[:80] + "___hash" + str(abs(hash(gen_name)))
+        import hashlib
+        gen_name = gen_name[:80] + "___hash" + hashlib.md5(gen_name.encode()).hexdigest()
 
     includes = sorted(list(set(includes)))
     includes = "".join(map(lambda x: f" -I'{x}' ", includes))
