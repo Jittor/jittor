@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.2.3.39'
+__version__ = '1.2.3.40'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -1254,6 +1254,7 @@ def get_len(var):
 Var.__len__ = get_len
 int = int32
 Var.int = Var.int32
+Var.long = Var.int32
 float = float32
 Var.float = Var.float32
 double = float64
