@@ -189,26 +189,31 @@ class PReLU(Module):
             return jt.maximum(0, x) + self.a * jt.minimum(0, x)
 
 #TODO dims is 4 will cause slowly execution
-def cross_entropy_loss(output, target, ignore_index=None):
+def cross_entropy_loss(output, target, weight=None, ignore_index=None):
     if len(output.shape) == 4:
         c_dim = output.shape[1]
         output = output.transpose((0, 2, 3, 1))
         output = output.reshape((-1, c_dim))
+
+    target_weight = jt.ones(target.shape[0], dtype='float32')
+    if weight is not None:
+        target_weight = weight[target]
     if ignore_index is not None:
-        target = jt.ternary(target==ignore_index,
-            jt.array(-1).broadcast(target), target)
-        mask = jt.logical_and(target >= 0, target < output.shape[1])
+        target_weight = jt.ternary(
+            target==ignore_index,
+            jt.array(0).broadcast(target_weight),
+            target_weight
+        )
+    
     target = target.reshape((-1, ))
     target = target.broadcast(output, [1])
     target = target.index(1) == target
     
     output = output - output.max([1], keepdims=True)
-    loss = output.exp().sum(1).log()
-    loss = loss - (output*target).sum(1)
-    if ignore_index is None:
-        return loss.mean()
-    else:
-        return loss.sum() / jt.maximum(mask.int().sum(), 1)
+    logsum = output.exp().sum(1).log()
+    loss = (logsum - (output*target).sum(1)) * target_weight
+
+    return loss.sum() / target_weight.sum()
 
 def mse_loss(output, target):
     return (output-target).sqr().mean()
@@ -274,11 +279,12 @@ def nll_loss(output,target,weight=None,ignore_index=-100,reduction='mean'):
         raise ValueError(f'not support {reduction}')
     
 class CrossEntropyLoss(Module):
-    def __init__(self,ignore_index=None):
+    def __init__(self, weight=None, ignore_index=None):
+        self.weight = weight
         self.ignore_index = ignore_index
         
     def execute(self, output, target):
-        return cross_entropy_loss(output, target,self.ignore_index)
+        return cross_entropy_loss(output, target, self.weight, self.ignore_index)
 
 class MSELoss(Module):
     def __init__(self):
