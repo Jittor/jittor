@@ -28,6 +28,7 @@
    jittor.linalg
    jittor.console
    jittor.distributions
+   jittor.attention
 
 
 .. toctree::
