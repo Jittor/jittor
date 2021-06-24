@@ -195,6 +195,7 @@ def cross_entropy_loss(output, target, weight=None, ignore_index=None):
         output = output.transpose((0, 2, 3, 1))
         output = output.reshape((-1, c_dim))
 
+    target = target.reshape((-1, ))
     target_weight = jt.ones(target.shape[0], dtype='float32')
     if weight is not None:
         target_weight = weight[target]
@@ -205,7 +206,6 @@ def cross_entropy_loss(output, target, weight=None, ignore_index=None):
             target_weight
         )
     
-    target = target.reshape((-1, ))
     target = target.broadcast(output, [1])
     target = target.index(1) == target
     
