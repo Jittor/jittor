@@ -1054,7 +1054,7 @@ can store value for backward computation)::
             return grad0 * self.y, grad1 * self.x
     a = jt.array(3.0)
     b = jt.array(4.0)
-    func = MyFunc()
+    func = MyFunc.apply
     c,d = func(a, b)
     da, db = jt.grad(c+d*3, [a, b])
     assert da.data == 4
@@ -1077,7 +1077,7 @@ can also be None)::
             return grad0 * self.y, None
     a = jt.array(3.0)
     b = jt.array(4.0)
-    func = MyFunc()
+    func = MyFunc.apply
     c,d = func(a, b)
     d.stop_grad()
     da, db = jt.grad(c+d*3, [a, b])
