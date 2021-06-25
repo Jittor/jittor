@@ -1224,21 +1224,6 @@ def resize(img, size, mode="nearest", align_corners=False):
     if align_corners:
         x = hid * ((h - 1) / max(1, H - 1))
         y = wid * ((w - 1) / max(1, W - 1))
-    else:
-        x = hid * (h / H) + (h / H * 0.5 - 0.5)
-        if H > h: x = x.clamp(0, h - 1)
-        y = wid * (w / W) + (w / W * 0.5 - 0.5)
-        if W > w: y = y.clamp(0, w - 1)
-    return _interpolate(img, x, y, (nid, cid), mode)
-
-
-def upsample(img, size, mode="nearest", align_corners=False):
-    n, c, h, w = img.shape
-    H, W = size
-    nid, cid, hid, wid = jt.index((n, c, H, W))
-    if align_corners:
-        x = hid * ((h - 1) / max(1, H - 1))
-        y = wid * ((w - 1) / max(1, W - 1))
     elif mode == "bicubic":
         x = (hid + 0.5) * (h / H) - 0.5
         y = (wid + 0.5) * (w / W) - 0.5
@@ -1251,6 +1236,8 @@ def upsample(img, size, mode="nearest", align_corners=False):
         y = wid * (w / W) + (w / W * 0.5 - 0.5)
         if W > w: y = y.clamp(0, w - 1)
     return _interpolate(img, x, y, (nid, cid), mode)
+
+upsample = resize
 
 
 def interpolate(X, size=None, scale_factor=None, mode='bilinear', align_corners=False):

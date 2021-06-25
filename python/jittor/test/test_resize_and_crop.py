@@ -126,5 +126,11 @@ class TestResizeAndCrop(unittest.TestCase):
         arr = np.random.randn(1,3*3,224,224)
         check_equal(arr, jnn.PixelShuffle(upscale_factor=3), tnn.PixelShuffle(upscale_factor=3))
 
+    def test_resize(self):
+        arr = np.random.randn(1,1,2,2)
+        check_equal(arr, jnn.Resize((4,4)), tnn.Upsample(scale_factor=2))
+        # check_equal(arr, jnn.Upsample(scale_factor=0.5), tnn.Upsample(scale_factor=0.5))
+        
+
 if __name__ == "__main__":
     unittest.main()
