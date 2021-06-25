@@ -1079,10 +1079,10 @@ if os.path.isfile(version_file) and not os.path.isdir(os.path.join(jittor_path, 
     os_id = os_release["ID"]
     os_key = os_type.get(os_id, "ubuntu") 
     os_key += '-' + os_arch if os_arch else ''
-    if "os_key" in os.environ:
-        os_key = os.environ['os_key']
     if platform.machine()=='aarch64':
         os_key += '-aarch64'
+    if "os_key" in os.environ:
+        os_key = os.environ['os_key']
     LOG.i("OS type:", os_id, " OS key:", os_key)
     key += '-' + os_key + '.o'
     # TODO: open the website
