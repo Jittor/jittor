@@ -85,6 +85,17 @@ class TestLoss(unittest.TestCase):
         tc_y=tc_loss(torch.from_numpy(output), torch.from_numpy(target))
         assert np.allclose(jt_y.numpy(), tc_y.numpy())
 
+    def test_cross_entropy_weight_ignore(self):
+        weight = np.random.rand(4).astype('float32')
+        jt_loss = jnn.CrossEntropyLoss(weight=jt.array(weight), ignore_index=1)
+        tc_loss = tnn.CrossEntropyLoss(weight=torch.from_numpy(weight), ignore_index=1)
+        output = np.random.rand(32, 4, 512, 512).astype(np.float32)
+        target = np.random.randint(4, size=(32, 512, 512))
+        jt_y=jt_loss(jt.array(output), jt.array(target))
+        tc_y=tc_loss(torch.from_numpy(output), torch.from_numpy(target))
+        assert np.allclose(jt_y.numpy(), tc_y.numpy())
+
+
     def test_bce_loss(self):
         jt_loss=jnn.BCELoss()
         tc_loss=tnn.BCELoss()
