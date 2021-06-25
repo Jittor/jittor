@@ -120,6 +120,8 @@ def try_import_jit_utils_core(silent=None):
         if is_in_ipynb:
             cc.ostream_redirect(True, True)
     except Exception as _:
+        if int(os.environ.get("log_v", "0")) > 0:
+            print(_)
         pass
     if not (silent is None):
         os.environ["log_silent"] = prev
