@@ -218,9 +218,13 @@ int MLUPass::bang_dfs(unique_ptr<KernelIR>& func, string dst, unique_ptr<expr::E
         if (sv==2){
             bang_code.push_back("__memcpy("+dst+", "+vara+", "+fake_range+" * sizeof(float), NRAM2NRAM);");
         } else if (sv==1) {
-            bang_code.push_back("__nramset("+dst+", "+fake_range+", "+vara+"[0]);");
+            // bang_code.push_back("__nramset("+dst+", "+fake_range+", "+vara+"[0]);");
+            bang_code.push_back("for (int iset=0;iset<"+new_range+";iset++) {"+dst+"[iset]="+vara+"[0];}");
+            bang_code.push_back(dst+"[0]="+vara+"[0];");
         } else {
-            bang_code.push_back("__nramset("+dst+", "+fake_range+", "+vara+");");
+            // bang_code.push_back("__nramset("+dst+", "+fake_range+", "+vara+");");
+            bang_code.push_back("for (int iset=0;iset<"+new_range+";iset++) {"+dst+"[iset]="+vara+";}");
+            bang_code.push_back(dst+"[0]="+vara+";");
         }
     } else if (expr::match(rval.get(), expr::make("std::sqrt(a)").get(), {"a"}, {}, res))
     // dst = sqrt(a)
@@ -571,16 +575,21 @@ void MLUPass::convert_to_bang(unique_ptr<KernelIR>& func, KernelIR* loop, vector
         func->push_back("__nram__ float "+define_vars[i]+"["+S(nram_space)+"];");
     }
     for (int i=0;i<bang_code.size();i++){
-        loop->push_back(bang_code[i], &loop->before);
+        if (bang_code[i].find("for")==0) {
+            loop->push_back("a=1;", &loop->before);
+            loop->before.back()->get_attr("code") = bang_code[i];
+        } else {
+            loop->push_back(bang_code[i], &loop->before);
+        }
     }
     loop->push_front("break;", &loop->children);
     auto& fat=loop->father;
     fat->push_back("int fake_range=("+new_range+"=="+S(nram_space)+") ? "+S(nram_space)+" : int("+new_range+"/1024+1)*1024;");
     for (auto& c : loop->before){
-        fat->push_back(c->get_attr("code"));
+        fat->push_back(c->clone());
     }
     for (auto& c : loop->after){
-        fat->push_back(c->get_attr("code"));
+        fat->push_back(c->clone());
     }
     loop->erase();
     func->move_loop_back();
