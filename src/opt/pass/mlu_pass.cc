@@ -713,6 +713,25 @@ void MLUPass::run() {
                 if (nram_vars[j]==vars[i]){
                     loop->push_back("__nramset("+vars[i]+"_nram, "+S(nram_space)+", 0);", &loop->before);
                 }
+
+            // convert ::max to std::max
+            for (auto& c : loop->children) {
+                if (!c->has_attr("code")) continue;
+                string code = c->attrs["code"];
+                int lastpos=0;
+                while (code.find("::max", lastpos)!=-1){
+                    int sp=code.find("::max", lastpos);
+                    if (code.find("std::max", lastpos)==sp-3){
+                        LOGir << "shit";
+                        lastpos=sp+5;
+                        continue;
+                    }
+                    code=code.insert(sp,"std");
+                    lastpos=sp+8;
+                }
+                c->attrs["code"]=code;
+            }
+
             convert_to_bang(c, loop, vars, "id"+j, "range"+j);
             
             c->move_loop_back();
