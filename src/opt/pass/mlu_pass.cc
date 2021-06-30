@@ -171,7 +171,6 @@ int MLUPass::bang_dfs(unique_ptr<KernelIR>& func, string dst, unique_ptr<expr::E
 
     string ori_dst=dst;
     dst = remove_01(dst);
-    LOGvvvv << "bang_dfs  dst:" << dst << "rval:" << rval;
     if (is_addequ)
     // dst = dst+a
     {   
@@ -713,33 +712,6 @@ void MLUPass::run() {
                 if (nram_vars[j]==vars[i]){
                     loop->push_back("__nramset("+vars[i]+"_nram, "+S(nram_space)+", 0);", &loop->before);
                 }
-
-            // convert ::max/min to std::max/min
-            for (auto& c : loop->children) {
-                if (!c->has_attr("code")) continue;
-                string code = c->attrs["code"];
-                int lastpos=0;
-                while (code.find("::max", lastpos)!=-1){
-                    int sp=code.find("::max", lastpos);
-                    if (code.find("std::max", lastpos)==sp-3){
-                        lastpos=sp+5;
-                        continue;
-                    }
-                    code=code.insert(sp,"std");
-                    lastpos=sp+8;
-                }
-                lastpos=0;
-                while (code.find("::min", lastpos)!=-1){
-                    int sp=code.find("::min", lastpos);
-                    if (code.find("std::min", lastpos)==sp-3){
-                        lastpos=sp+5;
-                        continue;
-                    }
-                    code=code.insert(sp,"std");
-                    lastpos=sp+8;
-                }
-                c->attrs["code"]=code;
-            }
 
             convert_to_bang(c, loop, vars, "id"+j, "range"+j);
             
