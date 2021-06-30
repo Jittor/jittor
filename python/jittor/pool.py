@@ -15,7 +15,170 @@ from jittor import init, Module, Function
 import numpy as np
 import math
 
-class Pool(Function):
+def Pool(kernel_size, stride=None, padding=0, dilation=None, return_indices=None, ceil_mode=False, count_include_pad=True, op="maximum"):
+    if jt.flags.use_mlu:
+        return PoolMlu(kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, return_indices=return_indices, ceil_mode=ceil_mode, count_include_pad=count_include_pad, op=op)
+    else:
+        return PoolCpu(kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, return_indices=return_indices, ceil_mode=ceil_mode, count_include_pad=count_include_pad, op=op)
+
+class PoolCpu(Module):
+    def __init__(self, kernel_size, stride=None, padding=0, dilation=None, return_indices=None, ceil_mode=False, count_include_pad=True, op="maximum"):
+        assert dilation == None
+        assert return_indices == None
+        self.kernel_size = kernel_size
+        self.op = op
+        self.stride = stride if stride else kernel_size
+        self.padding = padding
+        self.ceil_mode = ceil_mode
+        self.count_include_pad = count_include_pad and padding != 0
+
+    def execute(self, x):
+        if jt.flags.use_mlu:
+            self.x = x
+            if self.op == "mean":
+                self.index = y = jt.mlu_ops.cnnl_mlu_pool(x, self.kernel_size, self.stride, self.padding, 0, 0, 0, 0)
+                return y
+            elif self.op == "maximum":
+                y, index = jt.mlu_ops.cnnl_max_pool(x, self.kernel_size, self.stride, self.padding, 0, 0, 0, 0)
+                self.index = index
+                return y
+        self.x = x
+        N,C,H,W = x.shape
+        if self.ceil_mode == False:
+            h = (H+self.padding*2-self.kernel_size)//self.stride+1
+            w = (W+self.padding*2-self.kernel_size)//self.stride+1
+            use_code_op = self.op in ['maximum', 'minimum']
+            # some second order avg_pool is require, so we don't use code op here  
+        else:
+            h = (H+self.padding*2-self.kernel_size + self.stride - 1)//self.stride+1
+            w = (W+self.padding*2-self.kernel_size + self.stride - 1)//self.stride+1
+            use_code_op = self.op in ['maximum', 'minimum', 'mean']
+        if jt.flags.use_mlu:
+            use_code_op = False
+
+        if use_code_op:
+            if self.op == 'mean':
+                if self.count_include_pad:
+                    count = f"int count = {self.kernel_size*self.kernel_size};"
+                else:
+                    count = "int count = (k2_ - k2) * (k3_ - k3);"
+                count += "float32 rcount = 1.0f / count;"
+            else:
+                count = ""
+            forward_body = f'''{{
+                int k3 = i3*{self.stride}-{self.padding};
+                int k2 = i2*{self.stride}-{self.padding};
+                int k3_ = min(k3 + {self.kernel_size}, in0_shape3);
+                int k2_ = min(k2 + {self.kernel_size}, in0_shape2);
+                k3 = max(0, k3);
+                k2 = max(0, k2);
+                @out(i0, i1, i2, i3) = init_{self.op}(out_type);
+                {count}
+                for (int p = k2; p < k2_; ++p)
+                    for (int q = k3; q < k3_; ++q)
+                        @out(i0, i1, i2, i3) = {self.op}(out_type, @out(i0, i1, i2, i3), @in0(i0, i1, p, q));
+            }}'''
+            backward_body = f'''{{
+                int k3 = i3*{self.stride}-{self.padding};
+                int k2 = i2*{self.stride}-{self.padding};
+                int k3_ = min(k3 + {self.kernel_size}, in0_shape3);
+                int k2_ = min(k2 + {self.kernel_size}, in0_shape2);
+                k3 = max(0, k3);
+                k2 = max(0, k2);
+                {count}
+                int bo=1;
+                for (int p = k2; p < k2_ && bo; ++p)
+                    for (int q = k3; q < k3_ && bo; ++q) {{
+                        {"atomicAdd(&@out(i0,i1,p,q), @dout(i0,i1,i2,i3)/count);"
+                            if self.op == "mean" else
+                        f"""if (@pout(i0,i1,i2,i3) == @in0(i0,i1,p,q)) {{
+                            atomicAdd(&@out(i0,i1,p,q), @dout(i0,i1,i2,i3)),
+                            bo=0;
+                        }}"""}
+                    }}
+            }}'''
+            out = jt.code([N,C,h,w], x.dtype, [x],
+                cuda_header="""
+                    #include <ops/binary_op_defs.h>
+                    #include <misc/cuda_limits.h>
+                """,
+                cuda_src=f'''
+                    __global__ static void kernel1(@ARGS_DEF) {{
+                        @PRECALC
+                        int p3 = threadIdx.x;
+                        int s3 = blockDim.x;
+                        int p2 = threadIdx.y + blockIdx.x * blockDim.y;
+                        int s2 = blockDim.y * gridDim.x;
+                        int i1 = blockIdx.y;
+                        int i0 = blockIdx.z;
+                        for (int i3 = p3; i3 < out_shape3; i3 += s3)
+                        for (int i2 = p2; i2 < out_shape2; i2 += s2)
+                            {forward_body}
+                    }}
+                    int tx = min(1024, out_shape3);
+                    int ty = min(1024 / tx, out_shape2);
+                    int bx = (out_shape2 - 1) / ty + 1;
+                    int by = out_shape1;
+                    int bz = out_shape0;
+                    dim3 s1(bx, by, bz);
+                    dim3 s2(tx, ty);
+                    kernel1<<<s1, s2>>>(@ARGS);
+                ''',
+                cuda_grad_src=[f'''
+                    __global__ static void kernel3(@ARGS_DEF) {{
+                        @PRECALC
+                        int p3 = threadIdx.x;
+                        int s3 = blockDim.x;
+                        int p2 = threadIdx.y + blockIdx.x * blockDim.y;
+                        int s2 = blockDim.y * gridDim.x;
+                        int i1 = blockIdx.y;
+                        int i0 = blockIdx.z;
+                        for (int i3 = p3; i3 < pout_shape3; i3 += s3)
+                            for (int i2 = p2; i2 < pout_shape2; i2 += s2)
+                                {backward_body}
+                    }}
+                    cudaMemsetAsync(out_p, 0, out->size);
+                    int tx = min(1024, pout_shape3);
+                    int ty = min(1024 / tx, pout_shape2);
+                    int bx = (pout_shape2 - 1) / ty + 1;
+                    int by = pout_shape1;
+                    int bz = pout_shape0;
+                    dim3 s1_(bx, by, bz);
+                    dim3 s2_(tx, ty);
+                    kernel3<<<s1_, s2_>>>(@ARGS);
+                '''],
+                cpu_header='#include <ops/binary_op_defs.h>',
+                cpu_src=f'''
+                    using namespace std;
+                    for (int i0=0; i0<out_shape0; i0++)
+                    for (int i1=0; i1<out_shape1; i1++)
+                    for (int i2=0; i2<out_shape2; i2++)
+                    for (int i3=0; i3<out_shape3; i3++)
+                        {forward_body}
+                ''',
+                cpu_grad_src = [f'''
+                    using namespace std;
+                    std::memset(out_p, 0, out->size);
+                    #define atomicAdd(a,b) (*a) += b
+
+                    for (int i0=0; i0<pout_shape0; i0++)
+                    for (int i1=0; i1<pout_shape1; i1++)
+                    for (int i2=0; i2<pout_shape2; i2++) 
+                    for (int i3=0; i3<pout_shape3; i3++)
+                        {backward_body}
+                '''])
+            return out
+        else:
+            # TODO: backward 
+            xx = x.reindex([N,C,h,w,self.kernel_size,self.kernel_size], [
+                "i0", # Nid
+                "i1", # Cid
+                f"i2*{self.stride}-{self.padding}+i4", # Hid
+                f"i3*{self.stride}-{self.padding}+i5", # Wid
+            ])
+            return xx.reduce(self.op, [4,5])
+
+class PoolMlu(Function):
     def __init__(self, kernel_size, stride=None, padding=0, dilation=None, return_indices=None, ceil_mode=False, count_include_pad=True, op="maximum"):
         assert dilation == None
         assert return_indices == None
@@ -198,7 +361,7 @@ class AdaptiveAvgPool2d(Module):
         self.ksh = H - (oh - 1) * self.sh
         self.ksw = W - (ow - 1) * self.sw
         if jt.flags.use_mlu:
-            return Pool(self.ksh, self.sh, 0)(x)
+            return Pool(self.ksh, self.sh, 0, op="mean")(x)
             # return jt.mlu_ops.cnnl_mlu_pool(x, self.ksh, self.sh, 0, 0, 0, 0, 0)
         h = (H-self.ksh)//self.sh+1
         w = (W-self.ksw)//self.sw+1

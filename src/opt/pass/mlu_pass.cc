@@ -214,6 +214,18 @@ int MLUPass::bang_dfs(unique_ptr<KernelIR>& func, string dst, unique_ptr<expr::E
         vara = a->to_string();
         int sv=check_is_vec(vara, define_vars);
         vara = remove_01(vara);
+        if ((op->get_hash_name() == "5b86d3be75f5cda3" && vara == "op4_x1id") ||
+            (op->get_hash_name() == "6873186a76f7d715" && vara == "op6_x1id") ||
+            (op->get_hash_name() == "a89cba19a05312db" && vara == "op2_x1id") ||
+            (op->get_hash_name() == "6a9b8b6f2ccb4ddd" && vara == "op4_x1id") ||
+            (op->get_hash_name() == "24331542effa236d" && vara == "op6_x1id") ||
+            (op->get_hash_name() == "4d7d59127f7cf76e" && vara == "op2_x1id") ||
+            (op->get_hash_name() == "3cb1801593c41b1e" && vara == "op2_x1id") ||
+            (op->get_hash_name() == "216638d98d22ac6d" && vara == "op8_x1id")) {
+            // HOTFIX: better way translate index op
+            bang_code.push_back("for (int iset=0;iset<"+new_range+";iset++) {"+dst+"[iset]=iset+id1;}");
+            bang_code.push_back(dst+"[0]=id1;");
+        } else
         if (sv==2){
             bang_code.push_back("__memcpy("+dst+", "+vara+", "+fake_range+" * sizeof(float), NRAM2NRAM);");
         } else if (sv==1) {
@@ -238,6 +250,48 @@ int MLUPass::bang_dfs(unique_ptr<KernelIR>& func, string dst, unique_ptr<expr::E
         ASSERT(check_is_vec(vara, define_vars)==2);
         vara = remove_01(vara);
         bang_code.push_back("__bang_active_sqrt("+dst+", "+vara+", "+fake_range+");");
+
+    } else if (expr::match(rval.get(), expr::make("std::log(a)").get(), {"a"}, {}, res))
+    // dst = log(a)
+    {
+        auto a=res.at(0)->clone();
+        LOGvvvv << "log(a):" << a;
+        if (a->children.size()==0) vara = a->to_string();
+        else{
+            vara=create_bang_var(define_vars);
+            ASSERT(bang_dfs(func, vara, a, define_vars, bang_code, new_range));
+        }
+        ASSERT(check_is_vec(vara, define_vars)==2);
+        vara = remove_01(vara);
+        bang_code.push_back("__bang_active_log("+dst+", "+vara+", "+fake_range+");");
+
+    }  else if (expr::match(rval.get(), expr::make("std::exp(a)").get(), {"a"}, {}, res))
+    // dst = exp(a)
+    {
+        auto a=res.at(0)->clone();
+        LOGvvvv << "exp(a):" << a;
+        if (a->children.size()==0) vara = a->to_string();
+        else{
+            vara=create_bang_var(define_vars);
+            ASSERT(bang_dfs(func, vara, a, define_vars, bang_code, new_range));
+        }
+        ASSERT(check_is_vec(vara, define_vars)==2);
+        vara = remove_01(vara);
+        bang_code.push_back("__bang_active_exp("+dst+", "+vara+", "+fake_range+");");
+
+    } else if (expr::match(rval.get(), expr::make("std::abs(a)").get(), {"a"}, {}, res))
+    // dst = abs(a)
+    {
+        auto a=res.at(0)->clone();
+        LOGvvvv << "abs(a):" << a;
+        if (a->children.size()==0) vara = a->to_string();
+        else{
+            vara=create_bang_var(define_vars);
+            ASSERT(bang_dfs(func, vara, a, define_vars, bang_code, new_range));
+        }
+        ASSERT(check_is_vec(vara, define_vars)==2);
+        vara = remove_01(vara);
+        bang_code.push_back("__bang_active_abs("+dst+", "+vara+", "+fake_range+");");
 
     } else if (expr::match(rval.get(), expr::make("a(b)").get(), {"a","b"}, {}, res))
     // dst = a(b)

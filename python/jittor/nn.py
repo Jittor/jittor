@@ -199,7 +199,6 @@ def cross_entropy_loss(output, target, ignore_index=None):
     target = target.reshape((-1, ))
     target = target.broadcast(output, [1])
     target = target.index(1) == target
-    
     output = output - output.max([1], keepdims=True)
     loss = output.exp().sum(1).log()
     loss = loss - (output*target).sum(1)
@@ -380,6 +379,29 @@ class Linear(Module):
             return x + self.bias
         return x
 
+# class Linear(Function):
+#     def __init__(self, in_features, out_features, bias=True):
+#         self.in_features = in_features
+#         self.out_features = out_features
+#         self.weight = init.invariant_uniform((out_features, in_features), "float32")
+#         bound = 1.0/math.sqrt(in_features)
+#         self.bias = init.uniform((out_features,), "float32",-bound,bound) if bias else None
+#         self.input_scale = 14.927265
+#         self.weight_scale = 177.56354
+     
+#     def execute(self, x):
+#         a = (x * self.input_scale).int8()
+#         b = (self.weight * self.weight_scale).int8()
+#         assert len(a.shape) >= 2 and len(b.shape) == 2
+#         assert a.shape[-1] == b.shape[-1], (a.shape, b.shape)
+#         aa = a.reshape((-1, a.shape[-1]))
+#         print(aa.shape, b.shape)
+#         cc = jt.mlu_ops.cnnl_matmul(aa, b, False, True)
+#         res = cc.reshape(a.shape[:-1]+(-1,))
+#         if self.bias is not None:
+#             return res + self.bias
+#         return res
+
 class BatchNorm(Module):
     def __init__(self, num_features, eps=1e-4, momentum=0.1, affine=True, is_train=True, sync=True):
         self.sync = sync
@@ -543,8 +565,8 @@ class CnnlConv(Module):
 
         # scale is for model quantization 
         # e.g. float32 -> int8: scale = 127 / max(abs(var))
-        self.input_scale = None
-        self.weight_scale = None
+        self.input_scale = 60.
+        self.weight_scale = 60.
     
     def execute(self, x):
         y = CnnlConvFunc()(self, x, self.weight)
@@ -588,7 +610,7 @@ class CnnlConvFunc(Function):
             ctx.input_scale = self.input_scale
             ctx.weight_scale = self.weight_scale
             if self.bias is not None:
-                b = self.bias.broadcast(y.shape, [0,2,3])
+                b = self.bias.broadcast(tran_y.shape, [0,2,3])
                 tran_y += b
             return tran_y
         if self.is_depthwise_conv and jt.flags.use_cuda:
@@ -650,136 +672,156 @@ class CnnlConvFunc(Function):
         return y
     
     def grad(ctx, grad):
-        grad = grad.int8()
-        dx = jt.mlu_ops.cnnl_conv_backward_x(ctx.y, grad, ctx.w, ctx.x, ctx.stride[0], ctx.stride[1], ctx.padding[0], ctx.padding[1], ctx.dilation[0], ctx.dilation[1], ctx.groups).transpose(0,3,1,2) / ctx.weight_scale
-        dw = jt.mlu_ops.cnnl_conv_backward_w(ctx.y, grad, ctx.w, ctx.x, ctx.stride[0], ctx.stride[1], ctx.padding[0], ctx.padding[1], ctx.dilation[0], ctx.dilation[1], ctx.groups).transpose(0,3,1,2) / ctx.input_scale
+        grad_max = grad.max()
+        # (3.1627314e-07 -0.072093844)
+        # gg = grad.numpy()
+        # print(gg)
+        # print(gg.max(), gg.min())
+        # exit(0)
+        # grad = ((grad + 0.072093844) / (3.1627314e-07 + 0.072093844) * 127).int8()
+        max_value = 60
+        grad = (max_value * grad / grad_max).int8()
+        # grad = (grad * ctx.weight_scale * ctx.input_scale).int8()
+        dx = jt.mlu_ops.cnnl_conv_backward_x(ctx.y, grad, ctx.w, ctx.x, ctx.stride[0], ctx.stride[1], ctx.padding[0], ctx.padding[1], ctx.dilation[0], ctx.dilation[1], ctx.groups).transpose(0,3,1,2)
+        dw = jt.mlu_ops.cnnl_conv_backward_w(ctx.y, grad, ctx.w, ctx.x, ctx.stride[0], ctx.stride[1], ctx.padding[0], ctx.padding[1], ctx.dilation[0], ctx.dilation[1], ctx.groups).transpose(0,3,1,2)
+        # dx = dx / (ctx.weight_scale * 127) * (3.1627314e-07 + 0.072093844) + 0.072093844
+        # dw = dw / (ctx.input_scale * 127) * (3.1627314e-07 + 0.072093844) + 0.072093844
+        # dx /= (ctx.weight_scale * ctx.input_scale * ctx.weight_scale)
+        # dw /= (ctx.weight_scale * ctx.input_scale * ctx.input_scale)
+        dx = dx / ctx.weight_scale / max_value * grad_max
+        dw = dw / ctx.input_scale / max_value * grad_max
+        # print(dw.max())
         return None, dx, dw
 
-Conv = CnnlConv
+class ConvCpu(Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size)
+        self.stride = stride if isinstance(stride, tuple) else (stride, stride)
+        self.padding = padding if isinstance(padding, tuple) else (padding, padding)
+        self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
+        self.groups = groups
+        self.is_depthwise_conv = self.groups == self.out_channels and self.groups == self.in_channels
+        if self.is_depthwise_conv and jt.flags.use_cuda:
+            self.depthwise_conv = DepthwiseConv(stride, padding, dilation)
+        assert in_channels % groups == 0, 'in_channels must be divisible by groups'
+        assert out_channels % groups == 0, 'out_channels must be divisible by groups'
+        Kh, Kw = self.kernel_size
+        self.groups = groups
+        assert in_channels % groups == 0, 'in_channels must be divisible by groups'
+        assert out_channels % groups == 0, 'out_channels must be divisible by groups'
 
-# class Conv(Module):
-#     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
-#         self.in_channels = in_channels
-#         self.out_channels = out_channels
-#         self.kernel_size = kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size)
-#         self.stride = stride if isinstance(stride, tuple) else (stride, stride)
-#         self.padding = padding if isinstance(padding, tuple) else (padding, padding)
-#         self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
-#         self.groups = groups
-#         self.is_depthwise_conv = self.groups == self.out_channels and self.groups == self.in_channels
-#         if self.is_depthwise_conv and jt.flags.use_cuda:
-#             self.depthwise_conv = DepthwiseConv(stride, padding, dilation)
-#         assert in_channels % groups == 0, 'in_channels must be divisible by groups'
-#         assert out_channels % groups == 0, 'out_channels must be divisible by groups'
-#         Kh, Kw = self.kernel_size
-#         self.groups = groups
-#         assert in_channels % groups == 0, 'in_channels must be divisible by groups'
-#         assert out_channels % groups == 0, 'out_channels must be divisible by groups'
+        # self.weight = init.relu_invariant_gauss([out_channels, in_channels//groups, Kh, Kw], dtype="float", mode="fan_out")
+        self.weight = init.invariant_uniform([out_channels, in_channels//groups, Kh, Kw], dtype="float")
+        if bias:
+            fan=1
+            for i in self.weight.shape[1:]:
+                fan *= i
+            bound = 1 / math.sqrt(fan)
+            self.bias = init.uniform([out_channels], dtype="float", low=-bound, high=bound)
+        else:
+            self.bias = None
 
-#         # self.weight = init.relu_invariant_gauss([out_channels, in_channels//groups, Kh, Kw], dtype="float", mode="fan_out")
-#         self.weight = init.invariant_uniform([out_channels, in_channels//groups, Kh, Kw], dtype="float")
-#         if bias:
-#             fan=1
-#             for i in self.weight.shape[1:]:
-#                 fan *= i
-#             bound = 1 / math.sqrt(fan)
-#             self.bias = init.uniform([out_channels], dtype="float", low=-bound, high=bound)
-#         else:
-#             self.bias = None
+        # scale is for model quantization 
+        # e.g. float32 -> int8: scale = 127 / max(abs(var))
+        self.input_scale = None
+        self.weight_scale = None
 
-#         # scale is for model quantization 
-#         # e.g. float32 -> int8: scale = 127 / max(abs(var))
-#         self.input_scale = None
-#         self.weight_scale = None
+    def execute(self, x):
+        is_quantized = (self.input_scale is not None and self.weight_scale is not None)
+        if not jt.flags.use_mlu:
+            quan_x = x
+            quan_weight = self.weight
+        else:
+            if is_quantized:
+                quan_x = (x * self.input_scale).int8()
+                if hasattr(self, "_quan_weight"):
+                    quan_weight = self._quan_weight
+                else:
+                    self._quan_weight = quan_weight = (self.weight * self.weight_scale).int8()
+            else:
+                quan_x = x
+                quan_weight = self.weight
+            # if is_quantized:
+            #     quan_x = (x * self.input_scale).int8()
+            #     quan_weight = (self.weight * self.weight_scale).int8()
+            # else:
+            #     quan_x = x
+            #     quan_weight = self.weight
+        if jt.flags.use_mlu:
+            N,C,H,W = quan_x.shape
+            Kh, Kw = self.kernel_size
+            # return jt.mlu_ops.cnnl_mlu_conv(x.transpose(0,2,3,1), self.weight.transpose(0,2,3,1), self.stride[0], self.stride[1], self.padding[0], self.padding[1], self.dilation[0], self.dilation[1], self.groups).transpose(0,3,1,2)
+            self.t_quan_x = quan_x.transpose(0,2,3,1)
+            self.t_quan_w = quan_weight.transpose(0,2,3,1)
+            self._y1 = jt.mlu_ops.cnnl_mlu_conv(self.t_quan_x, self.t_quan_w, self.stride[0], self.stride[1], self.padding[0], self.padding[1], self.dilation[0], self.dilation[1], self.groups, "abcd", "oihw", "").transpose(0,3,1,2)
+            if is_quantized:
+                self._y2 = (self._y1 / (self.input_scale * self.weight_scale)).float32()
+            return self._y2
+        if self.is_depthwise_conv and jt.flags.use_cuda:
+            y = self.depthwise_conv(x, self.weight)
+        elif self.groups == 1:
+            N,C,H,W = x.shape
+            Kh, Kw = self.kernel_size
+            assert C==self.in_channels
+            oh = (H+self.padding[0]*2-Kh*self.dilation[0]+self.dilation[0]-1)//self.stride[0]+1
+            ow = (W+self.padding[1]*2-Kw*self.dilation[1]+self.dilation[1]-1)//self.stride[1]+1
+            assert oh>0 and ow>0
+            xx = quan_x.reindex([N,self.out_channels,C,oh,ow,Kh,Kw], [
+                'i0', # Nid
+                'i2', # Cid
+                f'i3*{self.stride[0]}-{self.padding[0]}+i5*{self.dilation[0]}', # Hid+Khid
+                f'i4*{self.stride[1]}-{self.padding[1]}+i6*{self.dilation[1]}', # Wid+KWid
+            ])
+            ww = quan_weight.broadcast(xx.shape, [0,3,4])
+            yy = xx*ww
+            y = yy.sum([2,5,6]) # Kc, Kh, Kw
+        else:
+            N,C,H,W = x.shape
+            Kh, Kw = self.kernel_size
+            G = self.groups
+            CpG = C // G # channels per group
+            assert C==self.in_channels
+            oc = self.out_channels
+            oh = (H+self.padding[0]*2-Kh*self.dilation[0]+self.dilation[0]-1)//self.stride[0]+1
+            ow = (W+self.padding[1]*2-Kw*self.dilation[1]+self.dilation[1]-1)//self.stride[1]+1
+            assert oh>0 and ow>0
+            xx = quan_x.reindex([N,G,oc//G,CpG,oh,ow,Kh,Kw], [
+                'i0', # Nid
+                f'i1*{CpG}+i3', # Gid
+                f'i4*{self.stride[0]}-{self.padding[0]}+i6*{self.dilation[0]}', # Hid+Khid
+                f'i5*{self.stride[1]}-{self.padding[1]}+i7*{self.dilation[1]}', # Wid+KWid
+            ])
+            # w: [oc, CpG, Kh, Kw]
+            ww = quan_weight.reindex([N, G, oc//G, CpG, oh, ow, Kh, Kw], [
+                f'i1*{oc//G}+i2',
+                'i3',
+                'i6',
+                'i7'
+            ])
+            ww.compile_options = xx.compile_options = {"G":G,"C":C}
+            yy = xx*ww
+            y = yy.reindex_reduce('add', [N, oc, oh, ow], [
+                'i0',
+                f'i1*{oc//G}+i2',
+                'i4',
+                'i5'
+            ])
 
-#     def execute(self, x):
-#         is_quantized = (self.input_scale is not None and self.weight_scale is not None)
-#         if not jt.flags.use_mlu:
-#             quan_x = x
-#             quan_weight = self.weight
-#         else:
-#             if is_quantized:
-#                 quan_x = (x * self.input_scale).fint8()
-#                 if hasattr(self, "_quan_weight"):
-#                     quan_weight = self._quan_weight
-#                 else:
-#                     self._quan_weight = quan_weight = (self.weight * self.weight_scale).fint8()
-#             else:
-#                 quan_x = x
-#                 quan_weight = self.weight
-#             # if is_quantized:
-#             #     quan_x = (x * self.input_scale).int8()
-#             #     quan_weight = (self.weight * self.weight_scale).int8()
-#             # else:
-#             #     quan_x = x
-#             #     quan_weight = self.weight
-#         if jt.flags.use_mlu:
-#             N,C,H,W = quan_x.shape
-#             Kh, Kw = self.kernel_size
-#             # return jt.mlu_ops.cnnl_mlu_conv(x.transpose(0,2,3,1), self.weight.transpose(0,2,3,1), self.stride[0], self.stride[1], self.padding[0], self.padding[1], self.dilation[0], self.dilation[1], self.groups).transpose(0,3,1,2)
-#             self.t_quan_x = quan_x.transpose(0,2,3,1)
-#             self.t_quan_w = quan_weight.transpose(0,2,3,1)
-#             self._y1 = jt.mlu_ops.cnnl_mlu_conv(self.t_quan_x, self.t_quan_w, self.stride[0], self.stride[1], self.padding[0], self.padding[1], self.dilation[0], self.dilation[1], self.groups, "abcd", "oihw", "").transpose(0,3,1,2)
-#             if is_quantized:
-#                 self._y2 = (self._y1 / (self.input_scale * self.weight_scale)).float32()
-#             return self._y2
-#         if self.is_depthwise_conv and jt.flags.use_cuda:
-#             y = self.depthwise_conv(x, self.weight)
-#         elif self.groups == 1:
-#             N,C,H,W = x.shape
-#             Kh, Kw = self.kernel_size
-#             assert C==self.in_channels
-#             oh = (H+self.padding[0]*2-Kh*self.dilation[0]+self.dilation[0]-1)//self.stride[0]+1
-#             ow = (W+self.padding[1]*2-Kw*self.dilation[1]+self.dilation[1]-1)//self.stride[1]+1
-#             assert oh>0 and ow>0
-#             xx = quan_x.reindex([N,self.out_channels,C,oh,ow,Kh,Kw], [
-#                 'i0', # Nid
-#                 'i2', # Cid
-#                 f'i3*{self.stride[0]}-{self.padding[0]}+i5*{self.dilation[0]}', # Hid+Khid
-#                 f'i4*{self.stride[1]}-{self.padding[1]}+i6*{self.dilation[1]}', # Wid+KWid
-#             ])
-#             ww = quan_weight.broadcast(xx.shape, [0,3,4])
-#             yy = xx*ww
-#             y = yy.sum([2,5,6]) # Kc, Kh, Kw
-#         else:
-#             N,C,H,W = x.shape
-#             Kh, Kw = self.kernel_size
-#             G = self.groups
-#             CpG = C // G # channels per group
-#             assert C==self.in_channels
-#             oc = self.out_channels
-#             oh = (H+self.padding[0]*2-Kh*self.dilation[0]+self.dilation[0]-1)//self.stride[0]+1
-#             ow = (W+self.padding[1]*2-Kw*self.dilation[1]+self.dilation[1]-1)//self.stride[1]+1
-#             assert oh>0 and ow>0
-#             xx = quan_x.reindex([N,G,oc//G,CpG,oh,ow,Kh,Kw], [
-#                 'i0', # Nid
-#                 f'i1*{CpG}+i3', # Gid
-#                 f'i4*{self.stride[0]}-{self.padding[0]}+i6*{self.dilation[0]}', # Hid+Khid
-#                 f'i5*{self.stride[1]}-{self.padding[1]}+i7*{self.dilation[1]}', # Wid+KWid
-#             ])
-#             # w: [oc, CpG, Kh, Kw]
-#             ww = quan_weight.reindex([N, G, oc//G, CpG, oh, ow, Kh, Kw], [
-#                 f'i1*{oc//G}+i2',
-#                 'i3',
-#                 'i6',
-#                 'i7'
-#             ])
-#             ww.compile_options = xx.compile_options = {"G":G,"C":C}
-#             yy = xx*ww
-#             y = yy.reindex_reduce('add', [N, oc, oh, ow], [
-#                 'i0',
-#                 f'i1*{oc//G}+i2',
-#                 'i4',
-#                 'i5'
-#             ])
-
-#         if is_quantized and jt.flags.use_mlu:
-#             y = (y / (self.input_scale * self.weight_scale)).float32()
+        if is_quantized and jt.flags.use_mlu:
+            y = (y / (self.input_scale * self.weight_scale)).float32()
         
-#         if self.bias is not None:
-#             b = self.bias.broadcast(y.shape, [0,2,3])
-#             y = y + b
-#         return y          
+        if self.bias is not None:
+            b = self.bias.broadcast(y.shape, [0,2,3])
+            y = y + b
+        return y          
+
+def Conv(in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
+    if jt.flags.use_mlu:
+        return CnnlConv(in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, groups=groups, bias=bias)
+    else:
+        return ConvCpu(in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, groups=groups, bias=bias)
 
 Conv2d = Conv
 
