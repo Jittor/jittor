@@ -714,7 +714,7 @@ void MLUPass::run() {
                     loop->push_back("__nramset("+vars[i]+"_nram, "+S(nram_space)+", 0);", &loop->before);
                 }
 
-            // convert ::max to std::max
+            // convert ::max/min to std::max/min
             for (auto& c : loop->children) {
                 if (!c->has_attr("code")) continue;
                 string code = c->attrs["code"];
@@ -722,7 +722,16 @@ void MLUPass::run() {
                 while (code.find("::max", lastpos)!=-1){
                     int sp=code.find("::max", lastpos);
                     if (code.find("std::max", lastpos)==sp-3){
-                        LOGir << "shit";
+                        lastpos=sp+5;
+                        continue;
+                    }
+                    code=code.insert(sp,"std");
+                    lastpos=sp+8;
+                }
+                lastpos=0;
+                while (code.find("::min", lastpos)!=-1){
+                    int sp=code.find("::min", lastpos);
+                    if (code.find("std::min", lastpos)==sp-3){
                         lastpos=sp+5;
                         continue;
                     }
