@@ -697,6 +697,12 @@ void MLUPass::run() {
     }
     ir->push_back("JT_MLU_CHECK(cnrtGetLastErr());", &ir->children);
     
+    // insert dim.x=1<<tn0;
+    for (auto& c : ir->children) {
+        int lc=c->children.size();
+        if (lc>0) c->insert(lc-1, "dim.x=1<<tn0;", &c->children);
+    }
+
     int num = 0;
     int choice = nram_space;
     // int split_size = std::max(1, choice);
