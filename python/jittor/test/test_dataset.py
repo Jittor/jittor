@@ -117,12 +117,13 @@ class TestDatasetSeed(unittest.TestCase):
                 return np.random.rand(2)
 
         dataset = YourDataset().set_attrs(batch_size=1, shuffle=True, num_workers=4)
-        dd = []
-        for d in dataset:
-            dd.append(d.numpy())
-        for i in range(len(d)):
-            for j in range(i+1, len(d)):
-                assert not np.allclose(dd[i], dd[j])
+        for _ in range(10):
+            dd = []
+            for d in dataset:
+                dd.append(d.numpy())
+            for i in range(len(d)):
+                for j in range(i+1, len(d)):
+                    assert not np.allclose(dd[i], dd[j])
 
     def test_py_native(self):
         import random
@@ -136,12 +137,13 @@ class TestDatasetSeed(unittest.TestCase):
 
         jt.set_global_seed(0)
         dataset = YourDataset().set_attrs(batch_size=1, shuffle=True, num_workers=4)
-        dd = []
-        for d in dataset:
-            dd.append(d.numpy())
-        for i in range(len(d)):
-            for j in range(i+1, len(d)):
-                assert not np.allclose(dd[i], dd[j])
+        for _ in range(10):
+            dd = []
+            for d in dataset:
+                dd.append(d.numpy())
+            for i in range(len(d)):
+                for j in range(i+1, len(d)):
+                    assert not np.allclose(dd[i], dd[j])
 
     def test_jtrand(self):
         import random
@@ -155,12 +157,13 @@ class TestDatasetSeed(unittest.TestCase):
 
         jt.set_global_seed(0)
         dataset = YourDataset().set_attrs(batch_size=1, shuffle=True, num_workers=4)
-        dd = []
-        for d in dataset:
-            dd.append(d.numpy())
-        for i in range(len(d)):
-            for j in range(i+1, len(d)):
-                assert not np.allclose(dd[i], dd[j])
+        for _ in range(10):
+            dd = []
+            for d in dataset:
+                dd.append(d.numpy())
+            for i in range(len(d)):
+                for j in range(i+1, len(d)):
+                    assert not np.allclose(dd[i], dd[j])
 
     def test_cifar(self):
         from jittor.dataset.cifar import CIFAR10
