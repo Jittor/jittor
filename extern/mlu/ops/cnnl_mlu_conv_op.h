@@ -30,12 +30,10 @@ struct CnnlMluConvOp : Op {
 };
 
 struct CnnlMluConv_t {
-    cnmlBaseOp_t conv_op_cache;
-    cnmlConvOpParam_t conv_param_cache;
-    cnmlTensor_t input_tensor_cache;
-    cnmlTensor_t filter_tensor_cache;
-    cnmlTensor_t output_tensor_cache;
-    int8_t* filter_cpu_ptr_cache;
+    cnnlConvolutionDescriptor_t conv_desc_cache;
+    cnnlTensorDescriptor_t input_desc_cache;
+    cnnlTensorDescriptor_t weight_desc_cache;
+    cnnlTensorDescriptor_t output_desc_cache;
 };
 
 } // jittor

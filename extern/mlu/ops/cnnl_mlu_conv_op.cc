@@ -72,6 +72,7 @@ VarPtr CnnlMluConvOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     // int8_t* filter_mlu_ptr = (int8_t*)w->mem_ptr;
     // float *output_mlu_ptr = (float*)y->mem_ptr;
     // LOGw << "CnnlMluConvOp::grad" << v_index;
+    LOGw << "CnnlMluConvOp::grad" << v_index;
     if (v_index == 0) {
         // LOGw << "Grad to x";
         return make_cnnl_mlu_conv_backward_x(out, dout, w, x, strideh, stridew, paddingh, paddingw, dilationh, dilationw, groups, xformat, wformat, yformat);
@@ -271,6 +272,7 @@ unordered_map<string, CnnlMluConv_t> cnnl_mlu_conv_cache;
 extern unordered_map<string, CnnlMluConv_t> cnnl_mlu_conv_cache;
 
 void CnnlMluConvOp::jit_run() {
+    // LOGw << "CnnlMluConvOp::jit_run";
     int8_t* input_mlu_ptr = (int8_t*)x->mem_ptr;
     int8_t* filter_mlu_ptr = (int8_t*)w->mem_ptr;
     float *output_mlu_ptr = (float*)y->mem_ptr;
@@ -280,7 +282,12 @@ void CnnlMluConvOp::jit_run() {
     get_shape(w, "oihw", wformat, co, kh, kw, cw);
     get_shape(y, "abcd", yformat, no, ho, wo, co);
 
-    // cnnlHandle_t mlu_handle = nullptr;
+    CnnlMluConv_t mlu_conv;
+
+    jk.clear();
+    jk << (uint64)w;
+    auto iter = cnnl_mlu_conv_cache.find(jk.to_string());
+
     cnnlTensorDescriptor_t input_desc = nullptr;
     cnnlTensorDescriptor_t weight_desc = nullptr;
     cnnlTensorDescriptor_t output_desc = nullptr;
@@ -288,26 +295,40 @@ void CnnlMluConvOp::jit_run() {
     cnnlConvolutionForwardAlgo_t algo = CNNL_CONVOLUTION_FWD_ALGO_DIRECT;
     void *workspace = nullptr;
     size_t workspace_size = 0;
-    cnnlCreate(&mlu_handle);
-    cnnlSetQueue(mlu_handle, mlu_queue);
+    if (iter != cnnl_mlu_conv_cache.end()) {
+        // LOGw << "find key";
+        mlu_conv = iter->second;
+        conv_desc = mlu_conv.conv_desc_cache;
+        input_desc = mlu_conv.input_desc_cache;
+        weight_desc = mlu_conv.weight_desc_cache;
+        output_desc = mlu_conv.output_desc_cache;
+    }
+    else {
+        // LOGw << "not find key";
+        cnnlCreateTensorDescriptor(&input_desc);
+        cnnlCreateTensorDescriptor(&weight_desc);
+        cnnlCreateTensorDescriptor(&output_desc);
 
-    cnnlCreateTensorDescriptor(&input_desc);
-    cnnlCreateTensorDescriptor(&weight_desc);
-    cnnlCreateTensorDescriptor(&output_desc);
+        int input_dim[4] = {ni, hi, wi, ci};
+        int weight_dim[4] = {co, kh, kw, cw};
+        int output_dim[4] = {no, ho, wo, co};
 
-    int input_dim[4] = {ni, hi, wi, ci};
-    int weight_dim[4] = {co, kh, kw, cw};
-    int output_dim[4] = {no, ho, wo, co};
+        cnnlSetTensorDescriptor(input_desc, CNNL_LAYOUT_NHWC, CNNL_DTYPE_INT8, 4, input_dim);
+        cnnlSetTensorDescriptor(weight_desc, CNNL_LAYOUT_NHWC, CNNL_DTYPE_INT8, 4, weight_dim);
+        cnnlSetTensorDescriptor(output_desc, CNNL_LAYOUT_NHWC, CNNL_DTYPE_FLOAT, 4, output_dim);
 
-    cnnlSetTensorDescriptor(input_desc, CNNL_LAYOUT_NHWC, CNNL_DTYPE_INT8, 4, input_dim);
-    cnnlSetTensorDescriptor(weight_desc, CNNL_LAYOUT_NHWC, CNNL_DTYPE_INT8, 4, weight_dim);
-    cnnlSetTensorDescriptor(output_desc, CNNL_LAYOUT_NHWC, CNNL_DTYPE_FLOAT, 4, output_dim);
+        int pad[4] = {paddingh, paddingh, paddingw, paddingw};
+        int stride[2] = {strideh, stridew};
+        int dilation[2] = {dilationh, dilationw};
+        cnnlCreateConvolutionDescriptor(&conv_desc);
+        cnnlSetConvolutionDescriptor(conv_desc, 4, pad, stride, dilation, groups, CNNL_DTYPE_FLOAT);
 
-    int pad[4] = {paddingh, paddingh, paddingw, paddingw};
-    int stride[2] = {strideh, stridew};
-    int dilation[2] = {dilationh, dilationw};
-    cnnlCreateConvolutionDescriptor(&conv_desc);
-    cnnlSetConvolutionDescriptor(conv_desc, 4, pad, stride, dilation, groups, CNNL_DTYPE_FLOAT);
+        mlu_conv.conv_desc_cache = conv_desc;
+        mlu_conv.input_desc_cache = input_desc;
+        mlu_conv.weight_desc_cache = weight_desc;
+        mlu_conv.output_desc_cache = output_desc;
+        cnnl_mlu_conv_cache[jk.to_string()] = mlu_conv;
+    }
 
     cnnlConvolutionForward(mlu_handle, conv_desc, algo, nullptr, input_desc, input_mlu_ptr, weight_desc, filter_mlu_ptr, nullptr, nullptr, workspace, workspace_size, nullptr, output_desc, output_mlu_ptr);
 }
