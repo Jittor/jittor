@@ -165,6 +165,26 @@ class TestDatasetSeed(unittest.TestCase):
                 for j in range(i+1, len(d)):
                     assert not np.allclose(dd[i], dd[j])
 
+    def test_dict(self):
+        import random
+        class YourDataset(Dataset):
+            def __init__(self):
+                super().__init__()
+                self.set_attrs(total_len=160)
+
+            def __getitem__(self, k):
+                return { "a":np.array([1,2,3]) }
+
+        jt.set_global_seed(0)
+        dataset = YourDataset().set_attrs(batch_size=1, shuffle=True, num_workers=4)
+        for _ in range(10):
+            dd = []
+            for d in dataset:
+                # breakpoint()
+                assert isinstance(d, dict)
+                assert isinstance(d['a'], jt.Var)
+                np.testing.assert_allclose(d['a'].numpy(), [[1,2,3]])
+
     def test_cifar(self):
         from jittor.dataset.cifar import CIFAR10
         a = CIFAR10()

@@ -136,6 +136,11 @@ class Dataset(object):
             if self.stop_grad else jt.array(x)
         if isinstance(batch, np.ndarray):
             return to_jt(batch)
+        if isinstance(batch, dict):
+            new_batch = {}
+            for k,v in batch.items():
+                new_batch[k] = self.to_jittor(v)
+            return new_batch
         if not isinstance(batch, (list, tuple)):
             return batch
         new_batch = []
