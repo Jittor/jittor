@@ -400,7 +400,8 @@ Example::
             world_size = mpi.world_size()
             world_rank = mpi.world_rank()
             index_list = np.int32(index_list)
-            mpi.broadcast(index_list, 0)
+            # TODO: mpi broadcast in subprocess has bug, fix it
+            # mpi.broadcast(index_list, 0)
 
             assert self.batch_size >= world_size, \
                 f"Batch size({self.batch_size}) is smaller than MPI world_size({world_size})"
