@@ -192,23 +192,19 @@ class Dataset(object):
             while True:
                 # get id
                 with gid_lock:
-                    while buffer.is_stop() or self.idqueue.is_stop():
+                    while buffer.is_stop() or self.idqueue.is_stop() or \
+                        gid_obj.value >= self.batch_len:
                         self.num_idle.value += 1
                         self.num_idle_c.notify()
                         self.gidc.wait()
                         self.num_idle.value -= 1
                     cid = gid_obj.value
-                    if cid == 0:
-                        index_list = self._get_index_list()
-                        self.index_list_numpy[:] = index_list
                     batch_index_list = self.index_list_numpy[
                         cid*self.real_batch_size:
                         min(self.real_len, (cid+1)*self.real_batch_size)
                     ].copy()
-                    # print(batch_index_list, cid, self.real_batch_size, self.real_len)
                     self.idqueue.push(worker_id)
-                    gid_obj.value = (gid_obj.value + 1) % self.batch_len
-                    self.gidc.notify()
+                    gid_obj.value += 1
                 now = time.time()
                 other_time = now - start
                 start = now
@@ -328,7 +324,7 @@ Example::
         self.idqueue.clear()
         self.gid_obj.value = 0
             
-    def _init_workers(self):
+    def _init_workers(self, index_list):
         jt.clean()
         jt.gc()
         self.index_list = mp.Array('i', self.real_len, lock=False)
@@ -345,6 +341,7 @@ Example::
         # number of idle workers condition
         self.num_idle_c = mp.Condition(self.gid.get_lock())
         self.index_list_numpy = np.ndarray(dtype='int32', shape=self.real_len, buffer=self.index_list)
+        self.index_list_numpy[:] = index_list
         for i in range(self.num_workers):
             w = Worker(target=self._worker_main, args=(i,), 
                        buffer_size=self.buffer_size,
@@ -406,7 +403,7 @@ Example::
             world_rank = mpi.world_rank()
             index_list = np.int32(index_list)
             # TODO: mpi broadcast in subprocess has bug, fix it
-            # mpi.broadcast(index_list, 0)
+            mpi.broadcast(index_list, 0)
 
             assert self.batch_size >= world_size, \
                 f"Batch size({self.batch_size}) is smaller than MPI world_size({world_size})"
@@ -456,17 +453,32 @@ Example::
         index_list = self._get_index_list()
         
         if not hasattr(self, "workers") and self.num_workers:
-            self._init_workers()
+            self._init_workers(index_list)
             self.last_ids = [-1] * 10
         
         if self.num_workers:
-            if self.num_idle.value:
-                self.gidc.notify_all()
             start = time.time()
             self.batch_time = 0
+            gid_obj = self.gid.get_obj()
+            gid_lock = self.gid.get_lock()
+            if self.num_idle.value:
+                self.gidc.notify_all()
 
             for _ in self._epochs():
+                with gid_lock:
+                    if self.num_idle.value:
+                        self.gidc.notify_all()
+
                 for i in range(self.batch_len):
+                    if self.num_idle.value:
+                        with gid_lock:
+                            if self.num_idle.value and \
+                                gid_obj.value >= self.batch_len:
+                                index_list = self._get_index_list()
+                                self.index_list_numpy[:] = index_list
+                                gid_obj.value = 0
+                                self.gidc.notify_all()
+
                     # get which worker has this batch
                     worker_id = self.idqueue.pop()
 
