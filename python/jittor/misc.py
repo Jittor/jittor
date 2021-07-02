@@ -182,7 +182,28 @@ def chunk(x, chunks, dim=0):
 jt.Var.chunk = chunk
 
 
-def expand(x, shape):
+def expand(x, *shape):
+    ''' Expand and broadcast this array, -1 represents this dimention is not changed.
+
+Example::
+
+    a = jt.zeros((3,1))
+    b = a.expand(3, 4)
+    assert b.shape == (3,4)
+    b = a.expand(-1, 4)
+    assert b.shape == (3,4)
+    b = a.expand((3, 4))
+    assert b.shape == (3,4)
+    b = a.expand((-1, 4))
+    assert b.shape == (3,4)
+
+    '''
+    if len(shape) == 1 and isinstance(shape[0], (tuple,list,jt.NanoVector)):
+        shape = shape[0]
+    shape = list(shape)
+    for i in range(len(shape)):
+        if shape[i] == -1:
+            shape[i] = x.shape[i]
     return x.broadcast(shape)
 jt.Var.expand = expand
 
@@ -691,7 +712,6 @@ def nms(dets,thresh):
     return order[selected]
 
 
-jt.Var.expand = jt.Var.broadcast
 jt.Var.expand_as = jt.Var.broadcast_var
 
 
