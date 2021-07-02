@@ -8,6 +8,7 @@
 #include <streambuf>
 #include <stdlib.h>
 #include <dlfcn.h>
+#include <mutex>
 
 #include "jit_compiler.h"
 #include "op.h"
@@ -29,7 +30,10 @@ DEFINE_FLAG(int, rewrite_op, 1, "Rewrite source file of jit operator or not");
 
 namespace jit_compiler {
 
+std::mutex dl_open_mutex;
+
 jit_op_entry_t load_jit_lib(string name, string symbol_name="jit_entry") {
+    std::lock_guard<std::mutex> lock(dl_open_mutex);
     LOGvv << "Opening jit lib:" << name;
     // void* handle = dlopen(name.c_str(), RTLD_NOW | RTLD_DEEPBIND | RTLD_LOCAL);
     // RTLD_DEEPBIND and openmp cause segfault
