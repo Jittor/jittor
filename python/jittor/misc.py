@@ -183,7 +183,7 @@ jt.Var.chunk = chunk
 
 
 def expand(x, *shape):
-    ''' Expand and broadcast this array, -1 represents this dimention is not changed.
+    ''' Expand and broadcast this array, -1 represents this dimension is not changed.
 
 Example::
 
