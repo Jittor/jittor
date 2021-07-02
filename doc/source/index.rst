@@ -29,6 +29,7 @@
    jittor.console
    jittor.distributions
    jittor.attention
+   jittor.loss3d
 
 
 .. toctree::
