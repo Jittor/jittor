@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.2.3.55'
+__version__ = '1.2.3.56'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -825,52 +825,91 @@ class Module:
         self.dfs([], "", callback, callback_leave)
         return ms
 
-    def register_forward_hook(self, func):
+    def __hooked_call__(self, *args, **kw):
+        if hasattr(self, "__fhook2__"):
+            if len(kw):
+                self.__fhook2__(self, args, kw)
+            else:
+                self.__fhook2__(self, args)
+        if hasattr(self, "__bihook__"):
+            if len(kw):
+                LOG.w("backward hook not support kw")
+            args = grad_hooker(args, self.__bihook__)
+        ret = self.__hooked_call__(*args, **kw)
+        if hasattr(self, "__bohook__"):
+            if len(kw):
+                LOG.w("backward hook not support kw")
+            if isinstance(ret, Var):
+                ret = grad_hooker((ret,), self.__bohook__)[0]
+            else:
+                ret = grad_hooker(ret, self.__bohook__)
+        if hasattr(self, "__fhook__"):
+            if len(kw):
+                self.__fhook__(self, args, ret, kw)
+            else:
+                self.__fhook__(self, args, ret)
+        return ret
+
+    def _place_hooker(self):
         cls = self.__class__
-        self.__fhook__ = func
         if hasattr(cls, "__hooked__"):
             return
         cls.__hooked__ = True
-        origin_call = cls.__call__
-        def new_call(self, *args, **kw):
-            ret = origin_call(self, *args, **kw)
-            if hasattr(self, "__fhook__"):
-                if len(kw):
-                    self.__fhook__(self, args, ret, kw)
-                else:
-                    self.__fhook__(self, args, ret)
-            return ret
-        self.__class__.__call__ = new_call
+        cls.__call__, cls.__hooked_call__ = \
+            cls.__hooked_call__, cls.__call__
+
+    def register_forward_hook(self, func):
+        self.__fhook__ = func
+        self._place_hooker()
     
     def remove_forward_hook(self):
-        cls = self.__class__
-        if hasattr(cls,"__hooked__"):
-            delattr(cls,"__hooked__")
         if hasattr(self,"__fhook__"):
             delattr(self,"__fhook__")
 
     def register_pre_forward_hook(self, func):
-        cls = self.__class__
         self.__fhook2__ = func
-        if hasattr(cls, "__hooked2__"):
-            return
-        cls.__hooked2__ = True
-        origin_call = cls.__call__
-        def new_call(self, *args, **kw):
-            if hasattr(self, "__fhook2__"):
-                if len(kw):
-                    self.__fhook2__(self, args, kw)
-                else:
-                    self.__fhook2__(self, args)
-            return origin_call(self, *args, **kw)
-        self.__class__.__call__ = new_call
+        self._place_hooker()
 
     def remove_pre_forward_hook(self):
-        cls = self.__class__
-        if hasattr(cls,"__hooked2__"):
-            delattr(cls,"__hooked2__")
         if hasattr(self,"__fhook2__"):
             delattr(self,"__fhook2__")
+
+    def register_input_backward_hook(self, func):
+        self.__bihook__ = func
+        self._place_hooker()
+
+    def remove_input_backward_hook(self):
+        if hasattr(self,"__bihook__"):
+            delattr(self,"__bihook__")
+
+    def register_output_backward_hook(self, func):
+        self.__bohook__ = func
+        self._place_hooker()
+
+    def remove_output_backward_hook(self):
+        if hasattr(self,"__bohook__"):
+            delattr(self,"__bohook__")
+
+    def register_backward_hook(self, func):
+        ''' hook both input and output on backpropergation of this module.
+Arguments of hook are defined as::
+
+    hook(module, grad_input:tuple(jt.Var), grad_output:tuple(jt.Var)) -> tuple(jt.Var) or None
+
+`grad_input` is the origin gradients of input of this module, `grad_input` is the  gradients of output of this module, return value is used to replace the gradient of input.
+        '''
+        _grad_output = None
+        def bohook(grad_output):
+            nonlocal _grad_output
+            _grad_output = grad_output
+        def bihook(grad_input):
+            return func(self, grad_input, _grad_output)
+        self.register_input_backward_hook(bihook)
+        self.register_output_backward_hook(bohook)
+
+    def remove_backward_hook(self):
+        self.remove_input_backward_hook()
+        self.remove_output_backward_hook()
 
     def children(self):
         cd = []
@@ -1147,6 +1186,21 @@ can also be None)::
         func = cls()
         return func(*args, **kw)
 
+class GradHooker(Function):
+    def __init__(self, hook):
+        self.hook = hook
+
+    def execute(self, *args):
+        return args
+    
+    def grad(self, *grad_input):
+        ret = self.hook(grad_input)
+        if ret: grad_input = ret
+        return grad_input
+
+def grad_hooker(args, hook):
+    hooker = GradHooker(hook)
+    return hooker(*args)
 
 def make_module(func, exec_n_args=1):
     class MakeModule(Module):
