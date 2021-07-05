@@ -100,6 +100,9 @@ class Pool(Module):
             if self.return_indices:
                 return_shapes = [[N,C,h,w]] * 2
                 return_dtypes = [x.dtype, 'uint8']
+                ks = self.kernel_size[0] * self.kernel_size[1]
+                if ks > 65536: return_dtypes[1] = 'uint32'
+                elif ks > 256: return_dtypes[1] = 'uint16'
             else:
                 return_shapes = [N,C,h,w]
                 return_dtypes = x.dtype
@@ -288,6 +291,9 @@ class Pool3d(Module):
             if self.return_indices:
                 return_shapes = [[N,C,d,h,w]] * 2
                 return_dtypes = [x.dtype, 'uint8']
+                ks = self.kernel_size[0] * self.kernel_size[1] * self.kernel_size[2]
+                if ks > 65536: return_dtypes[1] = 'uint32'
+                elif ks > 256: return_dtypes[1] = 'uint16'
             else:
                 return_shapes = [N,C,d,h,w]
                 return_dtypes = x.dtype
@@ -545,77 +551,100 @@ def max_pool3d(x, kernel_size, stride=None, padding=0, dilation=None, return_ind
     return MaxPool3d(kernel_size, stride, padding, dilation, return_indices, ceil_mode)(x)
 
 class MaxUnpool2d(Module):
+    ''' MaxUnpool2d is the invert version of MaxPool2d with indices.
+    It takes the output index of MaxPool2d as input.
+    The element will be zero if it is not the max pooled value.
+
+    Example::
+
+    >>> import jittor as jt
+    >>> from jittor import nn
+
+    >>> pool = nn.MaxPool2d(2, stride=2, return_indices=True)
+    >>> unpool = nn.MaxUnpool2d(2, stride=2)
+    >>> input = jt.array([[[[ 1.,  2,  3,  4,0],
+                            [ 5,  6,  7,  8,0],
+                            [ 9, 10, 11, 12,0],
+                            [13, 14, 15, 16,0],
+                            [0,  0,  0,  0, 0]]]])
+    >>> output, indices = pool(input)
+    >>> unpool(output, indices, output_size=input.shape)
+    jt.array([[[[   0.,  0.,   0.,   0.,   0.],
+                [   0.,  6.,   0.,   8.,   0.],
+                [   0.,  0.,   0.,   0.,   0.],
+                [   0., 14.,   0.,  16.,   0.],
+                [   0.,  0.,   0.,   0.,   0.]]]])
+    '''
     def __init__(self, kernel_size, stride=None):
-        ''' MaxUnpool2d is the invert version of MaxPool2d with indices.
-        It takes the output index of MaxPool2d as input.
-        The element will be zero if it is not the max pooled value.
-
-        Example::
-
-        >>> import jittor as jt
-        >>> from jittor import nn
-
-        >>> pool = nn.MaxPool2d(2, stride=2, return_indices=True)
-        >>> unpool = nn.MaxUnpool2d(2, stride=2)
-        >>> input = jt.array([[[[ 1.,  2,  3,  4,0],
-                                [ 5,  6,  7,  8,0],
-                                [ 9, 10, 11, 12,0],
-                                [13, 14, 15, 16,0],
-                                [0,  0,  0,  0, 0]]]])
-        >>> output, indices = pool(input)
-        >>> unpool(output, indices, output_size=input.shape)
-        jt.array([[[[   0.,  0.,   0.,   0.,   0.],
-                    [   0.,  6.,   0.,   8.,   0.],
-                    [   0.,  0.,   0.,   0.,   0.],
-                    [   0., 14.,   0.,  16.,   0.],
-                    [   0.,  0.,   0.,   0.,   0.]]]])
-        '''
         if isinstance(kernel_size, int):
             kernel_size = (kernel_size, kernel_size)
         if isinstance(stride, int):
             stride = (stride, stride)
         if stride is None: stride = kernel_size
-        assert stride == kernel_size, "Different stride and kernel is not supported yet."
         self.kernel_size = kernel_size
+        self.stride = stride
 
     def execute(self, x, id, output_size=None):
         b, c, ph, pw = x.shape
         kh, kw = self.kernel_size
+        sh, sw = self.stride
         if output_size:
             h, w = output_size[-2:]
         else:
-            h, w = ph * kh, pw * kw
-        x = x.reindex(shape=[b, c, h, w], 
-            indexes=['i0', 'i1', f'i2/{kh}', f'i3/{kw}'],
-            extras=[id], 
-            overflow_conditions=[
-                f'((i2%{kh})*{kw}+i3%{kw}) != @e0(i0,i1,i2/{kh},i3/{kw})'],
-            overflow_value=0)
+            h, w = ph * sh, pw * sw
+        if self.stride == self.kernel_size:
+            x = x.reindex(shape=[b, c, h, w], 
+                indexes=['i0', 'i1', f'i2/{kh}', f'i3/{kw}'],
+                extras=[id], 
+                overflow_conditions=[
+                    f'((i2%{kh})*{kw}+i3%{kw}) != @e0(i0,i1,i2/{kh},i3/{kw})'],
+                overflow_value=0)
+        else:
+            x = x.reindex_reduce(
+                op="add",
+                shape=[b, c, h, w], 
+                indexes=['i0', 'i1', 
+                    f'i2*{sh}+@e0(i0,i1,i2,i3)/{kw}', 
+                    f'i3*{sw}+@e0(i0,i1,i2,i3)%{kw}'],
+                extras=[id], 
+            )
         return x
 
 class MaxUnpool3d(Module):
+    ''' MaxUnpool3d is the invert version of MaxPool3d with indices.
+    It takes the output index of MaxPool3d as input.
+    The element will be zero if it is not the max pooled value.
+    '''
     def __init__(self, kernel_size, stride=None):
-        ''' MaxUnpool3d is the invert version of MaxPool3d with indices.
-        It takes the output index of MaxPool3d as input.
-        The element will be zero if it is not the max pooled value.
-        '''
         if stride is None: stride = kernel_size
         kernel_size = _triple(kernel_size)
         stride = _triple(stride)
-        assert stride == kernel_size, "Different stride and kernel is not supported yet."
         self.kernel_size = kernel_size
+        self.stride = stride
 
     def execute(self, x, id, output_size=None):
         b, c, pd, ph, pw = x.shape
         kd, kh, kw = self.kernel_size
+        sd, sh, sw = self.stride
         if output_size:
             d, h, w = output_size[-3:]
         else:
-            d, h, w = pd * kd, ph * kh, pw * kw
-        x = x.reindex(shape=[b, c, d, h, w], 
-            indexes=['i0', 'i1', f'i2/{kd}', f'i3/{kh}', f'i4/{kw}'],
-            extras=[id], 
-            overflow_conditions=[
-                f'((i2%{kd})*{kh*kw}+(i3%{kh})*{kw}+i4%{kw}) != @e0(i0,i1,i2/{kd},i3/{kh},i4/{kw})'],
-            overflow_value=0)
+            d, h, w = pd * sd, ph * sh, pw * sw
+        if self.stride == self.kernel_size:
+            x = x.reindex(shape=[b, c, d, h, w], 
+                indexes=['i0', 'i1', f'i2/{kd}', f'i3/{kh}', f'i4/{kw}'],
+                extras=[id], 
+                overflow_conditions=[
+                    f'((i2%{kd})*{kh*kw}+(i3%{kh})*{kw}+i4%{kw}) != @e0(i0,i1,i2/{kd},i3/{kh},i4/{kw})'],
+                overflow_value=0)
+        else:
+            x = x.reindex_reduce(
+                op="add",
+                shape=[b, c, d, h, w], 
+                indexes=['i0', 'i1', 
+                    f'i2*{sd}+@e0(i0,i1,i2,i3,i4)/{kh*kw}', 
+                    f'i3*{sh}+@e0(i0,i1,i2,i3,i4)/{kw}%{kh}', 
+                    f'i4*{sw}+@e0(i0,i1,i2,i3,i4)%{kw}'],
+                extras=[id], 
+            )
         return x
