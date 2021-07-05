@@ -477,7 +477,7 @@ class AdaptiveAvgPool3d(Module):
         ])
         return xx.reduce("mean", [5,6,7])
 
-class AdaptiveMaxPool2d(Module):
+class AdaptiveMaxPool3d(Module):
     def __init__(self, output_size):
         self.output_size = _triple(output_size)
 
