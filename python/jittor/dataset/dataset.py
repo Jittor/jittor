@@ -203,8 +203,9 @@ class Dataset(object):
                         cid*self.real_batch_size:
                         min(self.real_len, (cid+1)*self.real_batch_size)
                     ].copy()
-                    self.idqueue.push(worker_id)
                     gid_obj.value += 1
+                with self.idqueue_lock:
+                    self.idqueue.push(worker_id)
                 now = time.time()
                 other_time = now - start
                 start = now
@@ -331,6 +332,7 @@ Example::
         workers = []
         # get worker id
         self.idqueue = jt.RingBuffer(2048)
+        self.idqueue_lock = mp.Lock()
         # global token index
         self.gid = mp.Value('i', self.batch_len)
         self.gid.value = 0
@@ -461,8 +463,6 @@ Example::
             self.batch_time = 0
             gid_obj = self.gid.get_obj()
             gid_lock = self.gid.get_lock()
-            if self.num_idle.value:
-                self.gidc.notify_all()
 
             for _ in self._epochs():
                 with gid_lock:
