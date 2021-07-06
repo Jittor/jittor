@@ -111,7 +111,7 @@ def setup_mkl():
             "/opt/homebrew/lib/libmkldnn.dylib",    # arm64
         ]
         if not any([os.path.exists(lib) for lib in mkl_lib_paths]):
-            raise RuntimeError("Not found onednn, please install it by the command 'brew install onednn@2.2.3'")
+            raise RuntimeError("Not found onednn, please install it by the command 'brew install onednn'")
         extra_flags = f" -lmkldnn "
 
     mkl_op_dir = os.path.join(jittor_path, "extern", "mkl", "ops")

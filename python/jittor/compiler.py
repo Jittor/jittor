@@ -905,12 +905,19 @@ gdb_path = try_find_exe('gdb')
 addr2line_path = try_find_exe('addr2line')
 has_pybt = check_pybt(gdb_path, python_path)
 
+
+def check_clang_latest_supported_cpu():
+    output = run_cmd('clang --print-supported-cpus')
+    apple_cpus = [l.strip() for l in output.split('\n') if 'apple-a' in l]
+    apple_cpus_id = max([int(cpu[7:]) for cpu in apple_cpus])
+    return f'apple-a{apple_cpus_id}'
+
 cc_flags += " -Wall -Werror -Wno-unknown-pragmas -std=c++14 -fPIC "
 # 1. Arch/CPU specific optimization
 if platform.machine() == "x86_64":
     cc_flags += " -march=native " 
 elif platform.machine() == 'arm64' and platform.system() == "Darwin":
-    cc_flags += " -mcpu=apple-a14 "
+    cc_flags += f" -mcpu={check_clang_latest_supported_cpu()} "
 cc_flags += " -fdiagnostics-color=always "
 # 2. Non standard include path
 if platform.system() == 'Darwin' and platform.machine() == 'arm64':

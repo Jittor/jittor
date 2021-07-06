@@ -390,7 +390,7 @@ Jittor is currently maintained by the [Tsinghua CSCG Group](https://cg.cs.tsingh
 @article{hu2020jittor,
   title={Jittor: a novel deep learning framework with meta-operators and unified graph execution},
   author={Hu, Shi-Min and Liang, Dun and Yang, Guo-Ye and Yang, Guo-Wei and Zhou, Wen-Yang},
-  journal={Information Sciences},
+  journal={Science China Information Sciences},
   volume={63},
   number={222103},
   pages={1--21},

@@ -174,6 +174,25 @@ class TestArgPoolOp(unittest.TestCase):
                     [   0.,  0.,   0.,   0.,   0.],
                     [   0., 14.,   0.,  16.,   0.],
                     [   0.,  0.,   0.,   0.,   0.]]]])).all()
+
+    def test_unpool_diff_kernel_stride(self):
+        from jittor import nn
+        pool = nn.MaxPool2d(3, stride=2, return_indices=True)
+        unpool = nn.MaxUnpool2d(3, stride=2)
+        input = jt.array([[[[ 1.,  2,  3,  4, 0],
+                            [ 5,   6,  7,  8, 0],
+                                [ 9, 10, 11, 12,0],
+                                [13, 14, 16, 15,0],
+                                [0,  0,  0,  0, 0]]]])
+        output, indices = pool(input)
+        out = unpool(output, indices, output_size=input.shape)
+        assert (out == jt.array([[[
+            [ 0.,  0.,  0.,  0.,  0.,],
+            [ 0.,  0.,  0.,  0.,  0.,],
+            [ 0.,  0., 11., 12.,  0.,],
+            [ 0.,  0., 32.,  0.,  0.,],
+            [ 0.,  0.,  0.,  0.,  0.,]]]])).all()
+
         
 
     @unittest.skipIf(not jt.compiler.has_cuda, "No cuda found")
