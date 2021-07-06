@@ -48,6 +48,8 @@ class Dataset(object):
         [in] drop_last(bool): if true, the last batch of dataset might smaller than batch_size, default True.
         [in] num_workers(int): number of workers for loading data.
         [in] buffer_size(int): buffer size for each worker in bytes, default(512MB).
+        [in] keep_numpy_array(bool): return numpy array rather than jittor array, default(False).
+        [in] endless(bool): will this dataset yield data forever, default(False).
     
     Example::
 
@@ -70,7 +72,8 @@ class Dataset(object):
                  num_workers = 0,
                  buffer_size = 512*1024*1024,
                  stop_grad = True,
-                 keep_numpy_array = False):
+                 keep_numpy_array = False,
+                 endless = False):
         super().__init__()
         if os.environ.get("DISABLE_MULTIPROCESSING", '0') == '1':
             num_workers = 0
@@ -82,6 +85,8 @@ class Dataset(object):
         self.buffer_size = buffer_size
         self.stop_grad = stop_grad
         self.keep_numpy_array = keep_numpy_array
+        self.endless = endless
+        self.epoch_id = 0
         self.sampler = None
 
     def __getitem__(self, index):
@@ -131,6 +136,11 @@ class Dataset(object):
             if self.stop_grad else jt.array(x)
         if isinstance(batch, np.ndarray):
             return to_jt(batch)
+        if isinstance(batch, dict):
+            new_batch = {}
+            for k,v in batch.items():
+                new_batch[k] = self.to_jittor(v)
+            return new_batch
         if not isinstance(batch, (list, tuple)):
             return batch
         new_batch = []
@@ -182,15 +192,20 @@ class Dataset(object):
             while True:
                 # get id
                 with gid_lock:
-                    while gid_obj.value >= self.batch_len or buffer.is_stop():
+                    while buffer.is_stop() or self.idqueue.is_stop() or \
+                        gid_obj.value >= self.batch_len:
                         self.num_idle.value += 1
                         self.num_idle_c.notify()
                         self.gidc.wait()
                         self.num_idle.value -= 1
                     cid = gid_obj.value
-                    self.idmap[cid] = worker_id
+                    batch_index_list = self.index_list_numpy[
+                        cid*self.real_batch_size:
+                        min(self.real_len, (cid+1)*self.real_batch_size)
+                    ].copy()
                     gid_obj.value += 1
-                    self.gidc.notify()
+                with self.idqueue_lock:
+                    self.idqueue.push(worker_id)
                 now = time.time()
                 other_time = now - start
                 start = now
@@ -199,8 +214,8 @@ class Dataset(object):
                 batch = []
                 if mp_log_v:
                     print(f"#{worker_id} {os.getpid()} load batch", cid*self.real_batch_size, min(self.real_len, (cid+1)*self.real_batch_size))
-                for i in range(cid*self.real_batch_size, min(self.real_len, (cid+1)*self.real_batch_size)):
-                    batch.append(self[self.index_list[i]])
+                for i in batch_index_list:
+                    batch.append(self[i])
                 batch = self.collate_batch(batch)
                 now = time.time()
                 data_time = now - start
@@ -278,10 +293,10 @@ Example::
         if not hasattr(self, "workers"):
             return
         msg = [""]
-        msg.append(f"progress:{self.last_id}/{self.batch_len}")
+        msg.append(f"progress:{self.batch_id}/{self.batch_len}")
         msg.append(f"batch(s): {self.batch_time:.3f}\twait(s):{self.wait_time:.3f}")
         msg.append(f"recv(s): {self.recv_time:.3f}\tto_jittor(s):{self.to_jittor_time:.3f}")
-        msg.append(f"last 10 workers: {self.idmap[max(0, self.last_id-9):self.last_id+1]}")
+        msg.append(f"last 10 workers: {self.last_ids}")
         msg.append(f"ID\twait(s)\topen(s)\tload(s)\tsend(s)\ttotal(s)")
         for i in range(self.num_workers):
             w = self.workers[i]
@@ -293,6 +308,7 @@ Example::
         # stop workers
         for w in self.workers:
             w.buffer.stop()
+        self.idqueue.stop()
         # wait until all workers idle
         if self.num_idle.value < self.num_workers:
             with self.gid.get_lock():
@@ -306,29 +322,34 @@ Example::
         # clean workers' buffer
         for w in self.workers:
             w.buffer.clear()
+        self.idqueue.clear()
+        self.gid_obj.value = 0
             
-    def _init_workers(self):
+    def _init_workers(self, index_list):
         jt.clean()
         jt.gc()
         self.index_list = mp.Array('i', self.real_len, lock=False)
         workers = []
-        # batch id to worker id
-        self.idmap = mp.Array('i', self.batch_len, lock=False)
+        # get worker id
+        self.idqueue = jt.RingBuffer(2048)
+        self.idqueue_lock = mp.Lock()
         # global token index
         self.gid = mp.Value('i', self.batch_len)
+        self.gid.value = 0
         # global token index condition
         self.gidc = mp.Condition(self.gid.get_lock())
         # number of idle workers
         self.num_idle = mp.Value('i', 0, lock=False)
         # number of idle workers condition
         self.num_idle_c = mp.Condition(self.gid.get_lock())
+        self.index_list_numpy = np.ndarray(dtype='int32', shape=self.real_len, buffer=self.index_list)
+        self.index_list_numpy[:] = index_list
         for i in range(self.num_workers):
             w = Worker(target=self._worker_main, args=(i,), 
                        buffer_size=self.buffer_size,
                        keep_numpy_array=self.keep_numpy_array)
             workers.append(w)
         self.workers = workers
-        self.index_list_numpy = np.ndarray(dtype='int32', shape=self.real_len, buffer=self.index_list)
 
     def reset(self):
         if not hasattr(self, "workers"):
@@ -353,8 +374,8 @@ Example::
         if self.total_len is None:
             self.total_len = len(self)
         return self.total_len
-        
-    def __iter__(self):
+
+    def _get_index_list(self):
         if self.total_len is None:
             self.total_len = len(self)
         # maybe rewrite by sampler
@@ -383,6 +404,7 @@ Example::
             world_size = mpi.world_size()
             world_rank = mpi.world_rank()
             index_list = np.int32(index_list)
+            # TODO: mpi broadcast in subprocess has bug, fix it
             mpi.broadcast(index_list, 0)
 
             assert self.batch_size >= world_size, \
@@ -418,71 +440,92 @@ Example::
         else:
             self.real_len = self.total_len
             self.real_batch_size = self.batch_size
-            
         self.batch_len = self.__batch_len__()
+        return index_list
+
+    def _epochs(self):
+        if self.endless:
+            while True:
+                yield
+                self.epoch_id += 1
+        else:
+            yield
+        
+    def __iter__(self):
+        index_list = self._get_index_list()
         
         if not hasattr(self, "workers") and self.num_workers:
-            self._init_workers()
+            self._init_workers(index_list)
+            self.last_ids = [-1] * 10
         
         if self.num_workers:
-            self._stop_all_workers()
-            self.index_list_numpy[:] = index_list
-            gid_obj = self.gid.get_obj()
-            gid_lock = self.gid.get_lock()
-            with gid_lock:
-                gid_obj.value = 0
-                self.gidc.notify_all()
             start = time.time()
             self.batch_time = 0
-            for i in range(self.batch_len):
-                # try not get lock first
-                if gid_obj.value <= i:
-                    with gid_lock:
-                        if gid_obj.value <= i:
-                            if mp_log_v:
-                                print("wait")
-                            self.gidc.wait()
-                now = time.time()
-                self.wait_time = now - start
-                start = now
+            gid_obj = self.gid.get_obj()
+            gid_lock = self.gid.get_lock()
 
-                self.last_id = i
-                worker_id = self.idmap[i]
-                w = self.workers[worker_id]
-                if mp_log_v:
-                    print(f"#{worker_id} {os.getpid()} recv buffer", w.buffer)
-                batch = w.buffer.recv()
-                now = time.time()
-                self.recv_time = now - start
-                start = now
+            for _ in self._epochs():
+                with gid_lock:
+                    if self.num_idle.value:
+                        self.gidc.notify_all()
 
-                if mp_log_v:
-                    print(f"#{worker_id} {os.getpid()} recv", type(batch).__name__, [ type(b).__name__ for b in batch ])
-                batch = self.to_jittor(batch)
-                now = time.time()
-                self.to_jittor_time = now - start
-                start = now
+                for i in range(self.batch_len):
+                    if self.num_idle.value:
+                        with gid_lock:
+                            if self.num_idle.value and \
+                                gid_obj.value >= self.batch_len:
+                                index_list = self._get_index_list()
+                                self.index_list_numpy[:] = index_list
+                                gid_obj.value = 0
+                                self.gidc.notify_all()
 
-                yield batch
+                    # get which worker has this batch
+                    worker_id = self.idqueue.pop()
 
-                now = time.time()
-                self.batch_time = now - start
-                start = now
+                    now = time.time()
+                    self.wait_time = now - start
+                    start = now
+
+                    self.last_ids[i%10] = worker_id
+                    self.batch_id = i
+                    w = self.workers[worker_id]
+                    if mp_log_v:
+                        print(f"#{worker_id} {os.getpid()} recv buffer", w.buffer)
+                    batch = w.buffer.recv()
+
+                    now = time.time()
+                    self.recv_time = now - start
+                    start = now
+
+                    if mp_log_v:
+                        print(f"#{worker_id} {os.getpid()} recv", type(batch).__name__, [ type(b).__name__ for b in batch ])
+                    batch = self.to_jittor(batch)
+                    
+                    now = time.time()
+                    self.to_jittor_time = now - start
+                    start = now
+
+                    yield batch
+
+                    now = time.time()
+                    self.batch_time = now - start
+                    start = now
         else:
-            batch_data = []
-            for idx in index_list:
-                batch_data.append(self[int(idx)])
-                if len(batch_data) == self.real_batch_size:
+            for _ in self._epochs():
+                batch_data = []
+                for idx in index_list:
+                    batch_data.append(self[int(idx)])
+                    if len(batch_data) == self.real_batch_size:
+                        batch_data = self.collate_batch(batch_data)
+                        batch_data = self.to_jittor(batch_data)
+                        yield batch_data
+                        batch_data = []
+
+                # depend on drop_last
+                if not self.drop_last and len(batch_data) > 0:
                     batch_data = self.collate_batch(batch_data)
                     batch_data = self.to_jittor(batch_data)
                     yield batch_data
-                    batch_data = []
-
-            # depend on drop_last
-            if not self.drop_last and len(batch_data) > 0:
-                batch_data = self.collate_batch(batch_data)
-                batch_data = self.to_jittor(batch_data)
-                yield batch_data
 
 
 class ImageFolder(Dataset):

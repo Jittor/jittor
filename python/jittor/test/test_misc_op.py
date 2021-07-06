@@ -130,6 +130,17 @@ class TestPad(unittest.TestCase):
                 assert np.allclose(t_res[idx].numpy(), j_res[idx].numpy())
         print('pass unbind test ...')
 
+    def test_expand(self):
+        a = jt.zeros((3,1))
+        b = a.expand(3, 4)
+        assert b.shape == (3,4)
+        b = a.expand(-1, 4)
+        assert b.shape == (3,4)
+        b = a.expand((3, 4))
+        assert b.shape == (3,4)
+        b = a.expand((-1, 4))
+        assert b.shape == (3,4)
+
 class TestOther(unittest.TestCase):
     def test_save(self):
         pp = [1,2,jt.array([1,2,3]), {"a":[1,2,3], "b":jt.array([1,2,3])}]
