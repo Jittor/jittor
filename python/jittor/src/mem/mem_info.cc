@@ -108,7 +108,7 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
     log << "cpu&gpu:" << FloatOutput{(double)all_total, " KMG", 1024, "B"}
         << "gpu:" << FloatOutput{(double)gpu_total, " KMG", 1024, "B"}
         << "cpu:" << FloatOutput{(double)cpu_total, " KMG", 1024, "B"} >> '\n';
-    if (use_temp_allocator) {
+    if (use_temp_allocator && exe.temp_allocator) {
         TempAllocator* temp_allocator = (TempAllocator*)exe.temp_allocator;
         log << "\nname:" << temp_allocator->name() << "\n";
         log << "used_memory:" << FloatOutput{(double)temp_allocator->used_memory, " KMG", 1024, "B"} << "\n";

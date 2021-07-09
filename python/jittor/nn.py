@@ -179,14 +179,14 @@ class ELU(Module):
 class PReLU(Module):
     def __init__(self, num_parameters=1, init_=0.25):
         self.num_parameters = num_parameters
-        self.a = init.constant((num_parameters,), "float32", init_)
+        self.weight = init.constant((num_parameters,), "float32", init_)
 
     def execute(self, x):
         if self.num_parameters != 1:
             assert self.num_parameters == x.size(1), f"num_parameters does not match input channels in PReLU"
-            return jt.maximum(0, x) + self.a.broadcast(x, [0,2,3]) * jt.minimum(0, x)
+            return jt.maximum(0, x) + self.weight.broadcast(x, [0,2,3]) * jt.minimum(0, x)
         else:
-            return jt.maximum(0, x) + self.a * jt.minimum(0, x)
+            return jt.maximum(0, x) + self.weight * jt.minimum(0, x)
 
 #TODO dims is 4 will cause slowly execution
 def cross_entropy_loss(output, target, weight=None, ignore_index=None):
