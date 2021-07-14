@@ -86,6 +86,14 @@ class Optimizer(object):
         return { k:v for k, v in self.__dict__.items()
             if k[0] != '_' and k not in exclude and not callable(v) }
 
+    def state_dict(self):
+        state = {"defaults": self.defaults}
+        return state
+
+    def load_state_dict(self, state):
+        for k,v in state["defaults"].items():
+            setattr(self, k, v)
+
     def zero_grad(self):
         self.__zero_grad = True
 
