@@ -212,7 +212,7 @@ def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction=
     output = output - output.max([1], keepdims=True)
     logsum = output.exp().sum(1).log()
     loss = (logsum - (output*target).sum(1)) * target_weight
-    if reduction == 'sum'
+    if reduction == 'sum':
         return loss.sum() / target_weight.sum()
     elif reduction == 'mean':
         return loss.mean() / target_weight.mean()
