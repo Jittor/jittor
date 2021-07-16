@@ -436,6 +436,15 @@ class BatchNorm(Module):
 
 BatchNorm3d = BatchNorm2d = BatchNorm1d = BatchNorm
 
+def batch_norm(x, running_mean, running_var, weight=1, bias=0, training=False, momentum=0.1, eps=1e-05):
+    dims = [0]+list(range(2,x.ndim))
+    assert not training
+    w = weight / jt.sqrt(running_var+eps)
+    b = bias - running_mean * w
+    norm_x = x * w.broadcast(x, dims) + b.broadcast(x, dims)
+    return norm_x
+
+
 class InstanceNorm(Module):
     def __init__(self, num_features, eps=1e-05, momentum=0.1, affine=True, is_train=True, sync=True):
         self.sync = sync
@@ -460,6 +469,22 @@ class InstanceNorm(Module):
 
 InstanceNorm3d = InstanceNorm2d = InstanceNorm1d = InstanceNorm
 
+def instance_norm(x, 
+    running_mean = None,
+    running_var = None,
+    weight = 1,
+    bias = 0,
+    momentum = 0.1,
+    eps = 1e-5):
+    dims = list(range(2,x.ndim))
+    xmean = jt.mean(x, dims=dims)
+    x2mean = jt.mean(x*x, dims=dims)
+
+    xvar = (x2mean-xmean*xmean).maximum(0.0)
+    w = weight / jt.sqrt(xvar+eps)
+    b = bias - xmean * w
+    return x * w.broadcast(x, dims) + b.broadcast(x, dims)
+
 class LayerNorm(Module):
     def __init__(self, normalized_shape, eps: float = 1e-5, elementwise_affine: bool = True) -> None:
         if isinstance(normalized_shape, int):
@@ -482,6 +507,21 @@ class LayerNorm(Module):
 
 
 LayerNorm3d = LayerNorm2d = LayerNorm1d = LayerNorm
+
+def layer_norm(x, 
+    normalized_shape, 
+    weight = 1,
+    bias = 0,
+    eps: float = 1e-5, 
+    elementwise_affine: bool = True):
+    dims = [-i for i in range(len(normalized_shape), 0, -1)]
+    xmean = jt.mean(x, dims=dims, keepdims=1)
+    x2mean = jt.mean(x*x, dims=dims, keepdims=1)
+
+    xvar = (x2mean-xmean*xmean).maximum(0.0)
+    w = weight / jt.sqrt(xvar+eps)
+    b = bias - xmean * w
+    return x * w + b
 
 class GroupNorm(Module):
     def __init__(self, num_groups, num_channels, eps=1e-05, affine=True, is_train=True):
@@ -516,6 +556,33 @@ class GroupNorm(Module):
         b = b - xmean * w
         x = x * w.broadcast(x, [3]) + b.broadcast(x, [3])
         return x.reshape(output_shape)
+
+def group_norm(x, 
+    num_groups, 
+    weight = 1,
+    bias = 0,
+    eps=1e-05):
+    N = x.shape[0]
+    C = x.shape[1]
+    output_shape = (N,-1)
+    # TODO: 3d group norm
+    if x.ndim==4:
+        output_shape = x.shape
+    assert C % num_groups == 0
+    x = x.reshape((N, num_groups, C//num_groups, -1))
+    xmean = jt.mean(x, dims=[2,3]).reshape((N, num_groups, 1))
+    x2mean = jt.mean(x*x, dims=[2,3]).reshape((N, num_groups, 1))
+    xvar = (x2mean-xmean*xmean).maximum(0.0)
+
+    if isinstance(weight, jt.Var):
+        weight = weight.reshape((1, num_groups, -1))
+    if isinstance(bias, jt.Var):
+        bias = bias.reshape((1, num_groups, -1))
+    weight = weight / jt.sqrt(xvar+eps)
+    bias = bias - xmean * weight
+    x = x * weight.broadcast(x, [3]) + bias.broadcast(x, [3])
+    return x.reshape(output_shape)
+
 
 Relu = jt.make_module(relu)
 ReLU = Relu
