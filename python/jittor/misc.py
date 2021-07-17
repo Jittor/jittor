@@ -1064,6 +1064,13 @@ def randperm(n, dtype="int32"):
     return index.cast(dtype)
 
 def set_global_seed(seed):
+    ''' Sets the seeds of the random number generators of Python, numpy and jittor,
+    simultaneously.
+
+    .. note::
+    Jittor also gurantees each worker of jittor.dataset.Dataset to hold a different seed,
+    which is global_seed ^ worker_id ^ 1234.
+    '''
     import random
     random.seed(seed)
     jt.set_seed(seed)
