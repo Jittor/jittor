@@ -186,8 +186,8 @@ static void getitem_inplace(GetitemOp* op) {
         VarSlice s = vs.slices[i];
         if (!(s.is_slice())) return;
         Slice ss = s.slice;
-        if (!(ss.start == 0 && ss.stop >= in_shape[i] && ss.step == 1))
-            return; 
+        if (!(ss.start == 0 && (ss.mask&2) && ss.step == 1))
+            return;
     }
     
     VarSlice s = vs.slices[0];
