@@ -809,9 +809,8 @@ def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     out_channels = weight.shape[0]
 
     if jt.flags.use_cuda and jt.cudnn:
-        return jt.cudnn.ops.cudnn_conv3d(x, weight, *stride, *padding, *dilation, groups)
-
-    if groups == 1:
+        y = jt.cudnn.ops.cudnn_conv3d(x, weight, *stride, *padding, *dilation, groups)
+    elif groups == 1:
         N,C,D,H,W = x.shape
         Kd, Kh, Kw = weight.shape[-3:]
         od = (D+padding[0]*2-Kd*dilation[0]+dilation[0]-1)//stride[0]+1
@@ -827,10 +826,6 @@ def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
         ww = weight.broadcast(xx.shape, [0,3,4,5])
         yy = xx*ww
         y = yy.sum([2,6,7,8]) # Kc, Kh, Kw,Kd
-        if bias is not None:
-            b = bias.broadcast(y.shape, [0,2,3,4])
-            y = y + b
-        return y
     else:
         N,C,D,H,W = x.shape
         Kd, Kh, Kw = weight.shape[-3:]
@@ -865,10 +860,10 @@ def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
                 'i6'
             ])
 
-        if bias is not None:
-            b = bias.broadcast(y.shape, [0,2,3,4])
-            y = y + b
-        return y
+    if bias is not None:
+        b = bias.broadcast(y.shape, [0,2,3,4])
+        y = y + b
+    return y
 
 class ConvTranspose(Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, \
