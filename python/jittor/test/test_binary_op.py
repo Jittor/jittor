@@ -147,7 +147,14 @@ class TestBinaryOp(unittest.TestCase):
         c = a % b
         da, db = jt.grad(c, [a, b])
         np.testing.assert_allclose(da.data, 1)
-        np.testing.assert_allclose(db.data, -c.data)
+        np.testing.assert_allclose(db.data, -np.floor(a.data/b.data))
+
+    def test_mod_negtive(self):
+        a = jt.random((100,)) - 0.5
+        b = jt.random((100,)) - 0.5
+        c = a % b
+        nc = a.data % b.data
+        np.testing.assert_allclose(c.data, nc.data, atol=1e-5, rtol=1e-5)
 
 
 

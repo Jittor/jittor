@@ -479,8 +479,10 @@ VarPtr BinaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     if (ns == ns_mod) {
         if (v_index == 0)
             return dout;
-        else
-            return make_unary(out, ns_negative);;
+        else {
+            auto a = make_unary(make_binary(x, y, ns_divide), ns_floor);
+            return make_unary(a, ns_negative);
+        }
     }
     if (ns == ns_maximum || ns == ns_minimum) {
         auto zeros = make_number(0, dout);
