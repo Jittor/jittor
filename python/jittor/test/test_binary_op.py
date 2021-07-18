@@ -141,6 +141,15 @@ class TestBinaryOp(unittest.TestCase):
         c = a % b
         assert np.allclose(c.data, a.data % b.data), (c.data, a.data%b.data)
 
+    def test_mod_grad(self):
+        a = jt.random((100,))
+        b = jt.random((100,))
+        c = a % b
+        da, db = jt.grad(c, [a, b])
+        np.testing.assert_allclose(da.data, 1)
+        np.testing.assert_allclose(db.data, -c.data)
+
+
 
 class TestBinaryOpCuda(TestBinaryOp, test_cuda(2)):
     pass
