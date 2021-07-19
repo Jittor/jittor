@@ -77,7 +77,7 @@ class Optimizer(object):
         for pg in self.param_groups:
             for p, g in zip(pg["params"], pg["grads"]):
                 if p.is_stop_grad(): continue
-                g *= clip_coef
+                g.update(g*clip_coef)
 
     
     @property
