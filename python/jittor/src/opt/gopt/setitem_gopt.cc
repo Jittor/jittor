@@ -105,6 +105,7 @@ static void setitem_inplace(SetitemOp* op) {
     }
     add_dependency(data->input(), {input->node()});
     data->share_with(input, size);
+    op->flags.set((NodeFlags::Flags(SetitemOp::_data_inplaced)));
 }
 
 struct BBox {
