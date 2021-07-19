@@ -106,9 +106,20 @@ class Hook:
         self.record_status = defaultdict(int)
         self.rtol = rtol
         self.atol = atol
+        self.param_name_map = {}
+        self.hooked_models = {}
         LOG.i(f"Jittor AutoDiff: [{self.mode}] mode")
         LOG.i("Use cache path:", self.base_path)
         LOG.i(f"rtol:{rtol} atol:{atol}")
+
+    def registe_param_name(self, p, name):
+        self.param_name_map[id(p)] = name
+
+    def get_param_name(self, p):
+        if id(p) not in self.param_name_map:
+            LOG.w("Param name not found", p.shape, id(p))
+            return "noname"+str(list(p.shape))
+        return self.param_name_map[id(p)]
 
     def check_array(self, name, a, b):
         rtol = self.rtol
@@ -278,6 +289,7 @@ class Hook:
             return
         if mod_name != "":
             mod_name = "<" + mod_name + ">"
+        self.hooked_models[mod_name] = mod
         def forward_hook(self2, input, output, kw=None):
             ex_name = '[' + self2.__class__.__name__ + ']' 
             if "relu" not in self2.__class__.__name__.lower():
@@ -322,6 +334,9 @@ class Hook:
         ex_name = '['+opt.__class__.__name__+']'
         def step_hook(*args, **kw):
             origin_step(*args, **kw)
+            for mname, mod in self.hooked_models.items():
+                for pname, p in mod.named_parameters():
+                    self.registe_param_name(p, pname)
             self.record(opt_name+".default", opt.defaults, ex_name)
             gid = 0
             n_params = 0
@@ -341,13 +356,13 @@ class Hook:
                     if hasattr(p, "is_stop_grad"):
                         if p.is_stop_grad():
                             continue
-                        self.record(f"{opt_name}.grads[{gid}]", pg["grads"][i], "["+p.name()+"]")
-                        self.record(f"{opt_name}.params[{gid}]", p, "["+p.name()+"]")
-                        gid += 1
+                        grad = pg["grads"][i]
                     else:
-                        self.record(f"{opt_name}.grads[{gid}]", p.grad)
-                        self.record(f"{opt_name}.params[{gid}]", p)
-                        gid += 1
+                        grad = p.grad
+                    pname = self.get_param_name(p)
+                    self.record(pname+".grad", grad, f"<{opt_name}.grads[{gid}]>")
+                    self.record(pname, p, f"<{opt_name}.params[{gid}]>")
+                    gid += 1
         opt.step = step_hook
 
     def save_input(self, *data):
