@@ -1282,8 +1282,8 @@ def _interpolate(img, x, y, ids, mode):
         return o
     raise (f"Not support interpolation mode: {mode}")
 
-
-def resize(img, size, mode="nearest", align_corners=False):
+# TODO: tf_mode to another function
+def resize(img, size, mode="nearest", align_corners=False, tf_mode=False):
     n, c, h, w = img.shape
     H, W = size
     nid, cid, hid, wid = jt.index((n, c, H, W))
@@ -1297,24 +1297,30 @@ def resize(img, size, mode="nearest", align_corners=False):
         x = hid * (h / H)
         y = wid * (w / W)
     else:
-        x = hid * (h / H) + (h / H * 0.5 - 0.5)
-        if H > h: x = x.clamp(0, h - 1)
-        y = wid * (w / W) + (w / W * 0.5 - 0.5)
-        if W > w: y = y.clamp(0, w - 1)
+        if (tf_mode):
+            x = hid * (h / H)
+            if H > h: x = x.clamp(0, h - 1)
+            y = wid * (w / W)
+            if W > w: y = y.clamp(0, w - 1)
+        else:
+            x = hid * (h / H) + (h / H * 0.5 - 0.5)
+            if H > h: x = x.clamp(0, h - 1)
+            y = wid * (w / W) + (w / W * 0.5 - 0.5)
+            if W > w: y = y.clamp(0, w - 1)
     return _interpolate(img, x, y, (nid, cid), mode)
 
 upsample = resize
 
 
-def interpolate(X, size=None, scale_factor=None, mode='bilinear', align_corners=False):
+def interpolate(X, size=None, scale_factor=None, mode='bilinear', align_corners=False, tf_mode=False):
     if scale_factor is not None:
         size = [X.shape[-2] * scale_factor, X.shape[-1] * scale_factor]
     if isinstance(size, int):
         size = (size, size)
     if scale_factor is not None and scale_factor > 1:
-        return upsample(X, size, mode, align_corners)
+        return upsample(X, size, mode, align_corners, tf_mode)
     else:
-        return resize(X, size, mode, align_corners)
+        return resize(X, size, mode, align_corners, tf_mode)
 
 
 def grid_sample_v0(input, grid, mode='bilinear', padding_mode='zeros'):
