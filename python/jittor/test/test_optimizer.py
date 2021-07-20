@@ -33,6 +33,14 @@ class TestOptimizer(unittest.TestCase):
         opt.clip_grad_norm(0.01, 2)
         assert np.allclose(opt.param_groups[0]['grads'][0].norm(), 0.01)
         opt.step()
+
+    def test_state_dict(self):
+        a = jt.ones(2)
+        opt = jt.optim.SGD([a], 0.1)
+        s = opt.state_dict()
+        # print(s)
+        opt.load_state_dict(s)
+
         
 
 if __name__ == "__main__":

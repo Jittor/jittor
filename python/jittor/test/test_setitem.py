@@ -73,6 +73,16 @@ class TestSetitem(unittest.TestCase):
         arr4_res.data[0,0,1,1] = 1
         assert arr4[0,0,1,1] == 1
 
+        arr4 = jt.random((4,2,3,3))
+        arr4_res = arr4[...,:,:2]
+        arr4_res.data[0,0,1,1] = 1
+        assert arr4[0,0,1,1] != 1
+
+        arr4 = jt.random((3,3))
+        arr4_res = arr4[...,:,:2]
+        arr4_res.data[1,1] = 1
+        assert arr4[1,1] != 1
+
         arr5 = jt.random((4,2,3,3))
         arr5_res = arr5[1:3,:,:,:]
         arr5_res.data[1,0,1,1] = 1

@@ -77,7 +77,7 @@ class Optimizer(object):
         for pg in self.param_groups:
             for p, g in zip(pg["params"], pg["grads"]):
                 if p.is_stop_grad(): continue
-                g *= clip_coef
+                g.update(g*clip_coef)
 
     
     @property
@@ -85,6 +85,14 @@ class Optimizer(object):
         exclude = set(("defaults", "param_groups", "n_step", "pre_step", "step"))
         return { k:v for k, v in self.__dict__.items()
             if k[0] != '_' and k not in exclude and not callable(v) }
+
+    def state_dict(self):
+        state = {"defaults": self.defaults}
+        return state
+
+    def load_state_dict(self, state):
+        for k,v in state["defaults"].items():
+            setattr(self, k, v)
 
     def zero_grad(self):
         self.__zero_grad = True

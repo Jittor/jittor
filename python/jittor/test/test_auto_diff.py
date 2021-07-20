@@ -41,6 +41,8 @@ net(data)
 '''
         with open("/tmp/test_pt_hook.py", 'w') as f:
             f.write(code)
+        print(jt.flags.cache_path)
+        os.system(f"rm -rf {jt.flags.cache_path}/../../auto_diff/resnet50")
         assert os.system(sys.executable+" /tmp/test_pt_hook.py") == 0
         assert os.system(sys.executable+" /tmp/test_pt_hook.py") == 0
         code = '''
