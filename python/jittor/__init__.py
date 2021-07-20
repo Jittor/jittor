@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.2.3.59'
+__version__ = '1.2.3.70'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -787,7 +787,9 @@ class Module:
                 if isinstance(k2, str) and k2.startswith("_"): continue
                 if isinstance(p, Var):
                     ps.append(p)
-                    p.name(".".join(stack[1:]+[str(k2)]))
+                    pname = ".".join(stack[1:]+[str(k2)])
+                    if len(pname) > len(p.name()):
+                        p.name(pname)
         def callback_leave(parents, k, v, n):
             stack.pop()
         self.dfs([], None, callback, callback_leave)

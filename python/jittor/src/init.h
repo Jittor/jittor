@@ -13,8 +13,21 @@ namespace jittor {
 typedef void (*set_seed_callback)(int);
 
 void init();
+
+/**
+Sets the seed of jittor random number generator. Also see @jittor.set_global_seed.
+
+----------------
+
+* [in] seed: a python number.
+
+ */
 // @pyjt(set_seed, seed)
 void set_seed(int seed);
+
+/**
+Returns the seed of jittor random number generator.
+ */
 // @pyjt(get_seed)
 int get_seed();
 

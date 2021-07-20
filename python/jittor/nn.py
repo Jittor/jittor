@@ -179,17 +179,17 @@ class ELU(Module):
 class PReLU(Module):
     def __init__(self, num_parameters=1, init_=0.25):
         self.num_parameters = num_parameters
-        self.a = init.constant((num_parameters,), "float32", init_)
+        self.weight = init.constant((num_parameters,), "float32", init_)
 
     def execute(self, x):
         if self.num_parameters != 1:
             assert self.num_parameters == x.size(1), f"num_parameters does not match input channels in PReLU"
-            return jt.maximum(0, x) + self.a.broadcast(x, [0,2,3]) * jt.minimum(0, x)
+            return jt.maximum(0, x) + self.weight.broadcast(x, [0,2,3]) * jt.minimum(0, x)
         else:
-            return jt.maximum(0, x) + self.a * jt.minimum(0, x)
+            return jt.maximum(0, x) + self.weight * jt.minimum(0, x)
 
 #TODO dims is 4 will cause slowly execution
-def cross_entropy_loss(output, target, weight=None, ignore_index=None):
+def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction='sum'):
     if len(output.shape) == 4:
         c_dim = output.shape[1]
         output = output.transpose((0, 2, 3, 1))
@@ -212,8 +212,12 @@ def cross_entropy_loss(output, target, weight=None, ignore_index=None):
     output = output - output.max([1], keepdims=True)
     logsum = output.exp().sum(1).log()
     loss = (logsum - (output*target).sum(1)) * target_weight
-
-    return loss.sum() / target_weight.sum()
+    if reduction == 'sum':
+        return loss.sum() / target_weight.sum()
+    elif reduction == 'mean':
+        return loss.mean() / target_weight.mean()
+    else:
+        return loss / target_weight
 
 def mse_loss(output, target):
     return (output-target).sqr().mean()
@@ -432,6 +436,15 @@ class BatchNorm(Module):
 
 BatchNorm3d = BatchNorm2d = BatchNorm1d = BatchNorm
 
+def batch_norm(x, running_mean, running_var, weight=1, bias=0, training=False, momentum=0.1, eps=1e-05):
+    dims = [0]+list(range(2,x.ndim))
+    assert not training
+    w = weight / jt.sqrt(running_var+eps)
+    b = bias - running_mean * w
+    norm_x = x * w.broadcast(x, dims) + b.broadcast(x, dims)
+    return norm_x
+
+
 class InstanceNorm(Module):
     def __init__(self, num_features, eps=1e-05, momentum=0.1, affine=True, is_train=True, sync=True):
         self.sync = sync
@@ -456,6 +469,22 @@ class InstanceNorm(Module):
 
 InstanceNorm3d = InstanceNorm2d = InstanceNorm1d = InstanceNorm
 
+def instance_norm(x, 
+    running_mean = None,
+    running_var = None,
+    weight = 1,
+    bias = 0,
+    momentum = 0.1,
+    eps = 1e-5):
+    dims = list(range(2,x.ndim))
+    xmean = jt.mean(x, dims=dims)
+    x2mean = jt.mean(x*x, dims=dims)
+
+    xvar = (x2mean-xmean*xmean).maximum(0.0)
+    w = weight / jt.sqrt(xvar+eps)
+    b = bias - xmean * w
+    return x * w.broadcast(x, dims) + b.broadcast(x, dims)
+
 class LayerNorm(Module):
     def __init__(self, normalized_shape, eps: float = 1e-5, elementwise_affine: bool = True) -> None:
         if isinstance(normalized_shape, int):
@@ -478,6 +507,21 @@ class LayerNorm(Module):
 
 
 LayerNorm3d = LayerNorm2d = LayerNorm1d = LayerNorm
+
+def layer_norm(x, 
+    normalized_shape, 
+    weight = 1,
+    bias = 0,
+    eps: float = 1e-5, 
+    elementwise_affine: bool = True):
+    dims = [-i for i in range(len(normalized_shape), 0, -1)]
+    xmean = jt.mean(x, dims=dims, keepdims=1)
+    x2mean = jt.mean(x*x, dims=dims, keepdims=1)
+
+    xvar = (x2mean-xmean*xmean).maximum(0.0)
+    w = weight / jt.sqrt(xvar+eps)
+    b = bias - xmean * w
+    return x * w + b
 
 class GroupNorm(Module):
     def __init__(self, num_groups, num_channels, eps=1e-05, affine=True, is_train=True):
@@ -512,6 +556,33 @@ class GroupNorm(Module):
         b = b - xmean * w
         x = x * w.broadcast(x, [3]) + b.broadcast(x, [3])
         return x.reshape(output_shape)
+
+def group_norm(x, 
+    num_groups, 
+    weight = 1,
+    bias = 0,
+    eps=1e-05):
+    N = x.shape[0]
+    C = x.shape[1]
+    output_shape = (N,-1)
+    # TODO: 3d group norm
+    if x.ndim==4:
+        output_shape = x.shape
+    assert C % num_groups == 0
+    x = x.reshape((N, num_groups, C//num_groups, -1))
+    xmean = jt.mean(x, dims=[2,3]).reshape((N, num_groups, 1))
+    x2mean = jt.mean(x*x, dims=[2,3]).reshape((N, num_groups, 1))
+    xvar = (x2mean-xmean*xmean).maximum(0.0)
+
+    if isinstance(weight, jt.Var):
+        weight = weight.reshape((1, num_groups, -1))
+    if isinstance(bias, jt.Var):
+        bias = bias.reshape((1, num_groups, -1))
+    weight = weight / jt.sqrt(xvar+eps)
+    bias = bias - xmean * weight
+    x = x * weight.broadcast(x, [3]) + bias.broadcast(x, [3])
+    return x.reshape(output_shape)
+
 
 Relu = jt.make_module(relu)
 ReLU = Relu
@@ -738,9 +809,8 @@ def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     out_channels = weight.shape[0]
 
     if jt.flags.use_cuda and jt.cudnn:
-        return jt.cudnn.ops.cudnn_conv3d(x, weight, *stride, *padding, *dilation, groups)
-
-    if groups == 1:
+        y = jt.cudnn.ops.cudnn_conv3d(x, weight, *stride, *padding, *dilation, groups)
+    elif groups == 1:
         N,C,D,H,W = x.shape
         Kd, Kh, Kw = weight.shape[-3:]
         od = (D+padding[0]*2-Kd*dilation[0]+dilation[0]-1)//stride[0]+1
@@ -756,10 +826,6 @@ def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
         ww = weight.broadcast(xx.shape, [0,3,4,5])
         yy = xx*ww
         y = yy.sum([2,6,7,8]) # Kc, Kh, Kw,Kd
-        if bias is not None:
-            b = bias.broadcast(y.shape, [0,2,3,4])
-            y = y + b
-        return y
     else:
         N,C,D,H,W = x.shape
         Kd, Kh, Kw = weight.shape[-3:]
@@ -794,10 +860,10 @@ def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
                 'i6'
             ])
 
-        if bias is not None:
-            b = bias.broadcast(y.shape, [0,2,3,4])
-            y = y + b
-        return y
+    if bias is not None:
+        b = bias.broadcast(y.shape, [0,2,3,4])
+        y = y + b
+    return y
 
 class ConvTranspose(Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, \
