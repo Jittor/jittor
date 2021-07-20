@@ -41,6 +41,14 @@ class TestOptimizer(unittest.TestCase):
         # print(s)
         opt.load_state_dict(s)
 
+    def test_opt_grad(self):
+        a = jt.ones(2)
+        opt = jt.optim.SGD([a], 0.1)
+        opt.backward(a**2)
+        g = a.opt_grad(opt)
+        np.testing.assert_allclose(g.data, 2)
+
+
         
 
 if __name__ == "__main__":
