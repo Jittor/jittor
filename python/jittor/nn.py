@@ -1216,7 +1216,7 @@ def _interpolate(img, x, y, ids, mode):
         return o
     raise (f"Not support interpolation mode: {mode}")
 
-
+# TODO: tf_mode to another function
 def resize(img, size, mode="nearest", align_corners=False, tf_mode=False):
     n, c, h, w = img.shape
     H, W = size
