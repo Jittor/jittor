@@ -13,7 +13,7 @@ skip_this_test = False
 
 @unittest.skipIf(skip_this_test, "No Torch found")
 class TestSetitem(unittest.TestCase):
-    def test_setitem(self):
+    def test_setitem_(self):
         arr0 = jt.random((4,2,2))
         data0 = jt.ones((2,2))
         arr0[1] = data0
@@ -32,7 +32,7 @@ class TestSetitem(unittest.TestCase):
 
         arr1 = jt.random((4,2,2))
         data1 = jt.zeros((2,2))
-        arr1[3,:,0:2] = data1
+        arr1[3,:,:] = data1
         arr1.sync()
         data1.data[0,0] = 1
         assert arr1[3,0,0] == 1

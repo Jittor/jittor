@@ -37,6 +37,7 @@ class Optimizer(object):
         # __zero_grad is a value for fast determ the grad is zero or not
         # so we can omit 0+x
         self.__zero_grad = True
+        self._grad_map = {}
 
     def add_param_group(self, group):
         self.param_groups.append(group)
@@ -189,6 +190,35 @@ class Optimizer(object):
                 p.update(p - g * lr)
         self.zero_grad()
 
+    def _build_grad_map(self):
+        _grad_map = {}
+        for pg in self.param_groups:
+            for p, g in zip(pg["params"], pg["grads"]):
+                _grad_map[id(p)] = g
+        self._grad_map = _grad_map
+
+    def find_grad(self, v:jt.Var) -> jt.Var:
+        if id(v) not in self._grad_map:
+            self._build_grad_map()
+            if id(v) not in self._grad_map:
+                raise RuntimeError("This variable is not managed by this optimizer")
+        return self._grad_map[id(v)]
+
+def opt_grad(v:jt.Var, opt:Optimizer):
+    ''' Get grad of certain variable in optimizer, Example::
+
+
+    model = Model()
+    optimizer = SGD(model.parameters())
+    ...
+    optimizer.backward(loss)
+    
+    for p in model.parameters():
+        grad = p.opt_grad(optimizer)
+    '''
+    return opt.find_grad(v)
+
+jt.Var.opt_grad = opt_grad
 
 class SGD(Optimizer):
     """ SGD Optimizer.

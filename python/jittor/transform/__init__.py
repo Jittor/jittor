@@ -956,6 +956,14 @@ class ToTensor:
         return self.__class__.__name__ + '()'
 
 class ToPILImage(object):
+    """Convert a tensor or an ndarray to PIL Image.
+    Args:
+        pic (Tensor or numpy.ndarray): Image(HWC format) to be converted to PIL Image.
+        mode (`PIL.Image mode`_): color space and pixel depth of input data (optional).
+    .. _PIL.Image mode: https://pillow.readthedocs.io/en/latest/handbook/concepts.html#concept-modes
+    Returns:
+        PIL Image: Image converted to PIL Image.
+    """
     def __init__(self, mode=None):
         self.mode = mode
 
