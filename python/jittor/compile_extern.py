@@ -494,6 +494,9 @@ rank = mpi.world_rank() if in_mpi else 0
 setup_nccl()
 
 setup_cutt()
-setup_mkl()
+try:
+    setup_mkl()
+except Exception as e:
+    LOG.w("MKL install failed, msg:", e)
 
 setup_cuda_extern()

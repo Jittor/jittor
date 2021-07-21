@@ -60,6 +60,9 @@ os_name_system_dict = {
     'macos': 'Darwin',
 }
 
+if len(sys.argv) > 1 and sys.argv[1] == "native":
+    os_name_system_dict = {'ubuntu': 'Linux'}
+
 for os_name, os_type in os_name_system_dict.items():
     if platform.system() != os_type:
         continue
@@ -82,6 +85,8 @@ for os_name, os_type in os_name_system_dict.items():
             cmd = f"{env} {sys.executable} -c 'import jittor'"
             if key != 'ubuntu': key += '-' + os_name
             if os_arch : key += '-' + os_arch
+            if platform.machine() == "sw_64":
+                key += '-sw_64'
             if os_name == 'centos':
                 run_in_centos(env)
                 obj_path = home + f"/.cache/centos/build/{cc_type}/{device}/{cname}/obj_files"
@@ -98,7 +103,12 @@ for os_name, os_type in os_name_system_dict.items():
                 fname = f"{obj_path}/{name}.o"
                 assert os.path.isfile(fname), fname
                 obj_files.append(fname)
-            run_cmd(f"ld -r {' '.join(obj_files)} -o {build_path}/{key}.o")
+            ld_cmd = f"ld -r {' '.join(obj_files)} -o {build_path}/{key}.o"
+            print("RUN CMD:", ld_cmd)
+            run_cmd(ld_cmd)
+
+if len(sys.argv) > 1 and sys.argv[1] == "native":
+    exit(0)
 
 # compress source
 # tar -cvzf build/jittor.tgz . --exclude build --exclude .git --exclude .ipynb_checkpoints --exclude __pycache__
@@ -108,6 +118,7 @@ assert os.system(f"cd {root_path} && tar --exclude=build --exclude=.git --exclud
 # rsync to build-server
 jittor_web_base_dir = "Documents/jittor-blog/assets/"
 jittor_web_build_dir = jittor_web_base_dir
+# copy to jittor-web:Documents/jittor-blog/assets/build/
 assert os.system(f"rsync -avPu {build_path} jittor-web:{jittor_web_build_dir}")==0
 assert os.system(f"ssh jittor-web Documents/jittor-blog.git/hooks/post-update")==0
 
