@@ -1091,8 +1091,8 @@ if os.path.isfile(version_file) and not os.path.isdir(os.path.join(jittor_path, 
         os_key += '-aarch64'
     if platform.machine()=='sw_64':
         os_key += '-sw_64'
-    import ssl
-    ssl._create_default_https_context = ssl._create_unverified_context
+        import ssl
+        ssl._create_default_https_context = ssl._create_unverified_context
     if "os_key" in os.environ:
         os_key = os.environ['os_key']
     LOG.i("OS type:", os_id, " OS key:", os_key)
