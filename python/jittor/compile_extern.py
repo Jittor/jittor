@@ -488,6 +488,12 @@ def setup_mpi():
         if k == "mpi_test": continue
         setattr(core.Var, k, warper(mpi_ops.__dict__[k]))
 
+if os.environ.get("FIX_TORCH_ERROR", "0") == "1":
+    try:
+        import torch
+    except:
+        pass
+
 setup_mpi()
 in_mpi = inside_mpi()
 rank = mpi.world_rank() if in_mpi else 0
