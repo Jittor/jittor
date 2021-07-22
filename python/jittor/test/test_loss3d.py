@@ -29,10 +29,11 @@ class TestLoss3d(unittest.TestCase):
 
             self.assertTrue(np.allclose(ncf, Jcf.item()))
 
-        jt.flags.use_cuda = False
         test()
-        jt.flags.use_cuda = True
-        test()
+
+        if jt.has_cuda:
+            with jt.flag_scope(use_cuda=1):
+                test()
 
     def test_chamfer_dims(self):
         def test():
@@ -50,14 +51,16 @@ class TestLoss3d(unittest.TestCase):
 
             self.assertTrue(np.allclose(ncf, Jcf.item()))
 
-        jt.flags.use_cuda = False
         test()
-        jt.flags.use_cuda = True
-        test()
+        
+        if jt.has_cuda:
+            with jt.flag_scope(use_cuda=1):
+                test()
 
     @unittest.skipIf(skip_this_test, "No Pyorch_EMD found")
     def test_emd_torch(self):
-        jt.flags.use_cuda = True
+        if jt.has_cuda:
+            jt.flags.use_cuda = True
 
         pc1 = np.random.randn(10, 100, 3).astype(np.float32)
         pc2 = np.random.randn(10, 50, 3).astype(np.float32)

@@ -43,7 +43,7 @@ if __name__ == "__main__":
             else:
                 raise RuntimeError("Python dynamic library not found")
         elif arg == "--cxx-flags":
-            s += " --std=c++17 "
+            s += " --std=c++17 -fPIC "
         elif arg == "--cxx-example":
             cc_src = '''
 // please compile with: g++ a.cc $(python3 -m jittor_utils.config --include-flags --libs-flags --cxx-flags) -o a.out && ./a.out

@@ -13,12 +13,12 @@ namespace jittor {
 #define pow(T,a,b) ::pow(a,b)
 #define maximum(T,a,b) ::max(T(a), T(b))
 #define minimum(T,a,b) ::min(T(a), T(b))
-#define mod(T,a,b) @if(@strcmp(@Tx,float32)==0,(a-::floorf((a)/(b))*(b)),@if(@strcmp(@Tx,float64)==0,(a-::floor((a)/(b))*(b)),(a-::floor((a)/(b))*(b))))
+#define mod(T,a,b) @if(@strcmp(@T,float32)==0,(a-::floorf((a)/(b))*(b)),@if(@strcmp(@Tx,float64)==0,(a-::floor((a)/(b))*(b)),(a%b)))
 #else // JIT_cpu
 #define pow(T,a,b) std::pow(a,b)
 #define maximum(T,a,b) std::max(T(a), T(b))
 #define minimum(T,a,b) std::min(T(a), T(b))
-#define mod(T,a,b) (a-std::floor((a)/(b))*(b))
+#define mod(T,a,b) @if(@strcmp(@T,float32)==0,(a-std::floor((a)/(b))*(b)),@if(@strcmp(@Tx,float64)==0,(a-std::floor((a)/(b))*(b)),(a%b)))
 #endif
 #define add(T,a,b) ((a)+(b))
 #define subtract(T,a,b) ((a)-(b))
