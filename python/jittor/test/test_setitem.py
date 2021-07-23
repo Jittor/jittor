@@ -220,6 +220,13 @@ class TestSetitem(unittest.TestCase):
         y = x.roll(shifts=(2, 1), dims=(0, 1))
         assert (y.numpy() == [[6,5],[8,7],[2,1],[4,3]]).all()
 
+    def test_ellipsis_with_none(self):
+        a = jt.arange(2*4*4).reshape(2,4,4)
+        b = a[...,:,None,:2]
+        assert b.shape == [2,4,1,2]
+        np.testing.assert_allclose(b.data, a.data[...,:,None,:2])
+        
+
 
 if __name__ == "__main__":
     unittest.main()

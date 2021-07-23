@@ -93,6 +93,9 @@ void GetitemOp::infer_slices(
         } else
         if (s.is_ellipsis()) {
             auto remain_slice = vs.n-vid-1;
+            for (int i=vid+1; i<vs.n; i++)
+                if (vs.slices[i].is_none())
+                    remain_slice--;
             auto remain_idims = nin-i;
             auto ellipsis_size = remain_idims - remain_slice;
             ASSERT(ellipsis_size>=0) << "NDims not match";
