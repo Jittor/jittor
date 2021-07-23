@@ -492,6 +492,9 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         for (Var* var : op->outputs())
             check_nan(var);
         #endif
+        #ifdef JT_SYNC
+        checkCudaErrors(cudaDeviceSynchronize());
+        #endif
         LOGvvv << "Finished Op(" >> op->name() << rid >> 
             "/" >> queue.size() >> ") output:" << op->outputs();
         if (is_fused_op) {
