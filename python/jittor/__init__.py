@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.2.3.74'
+__version__ = '1.2.3.75'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -1315,6 +1315,9 @@ float = float32
 Var.float = Var.float32
 double = float64
 Var.double = Var.float64
+
+def is_var(v):
+    return isinstance(v, Var)
 
 # __array__ interface is used for np.array(jt_var)
 Var.__array__ = Var.numpy
