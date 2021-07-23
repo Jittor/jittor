@@ -194,6 +194,26 @@ class TestDatasetSeed(unittest.TestCase):
             assert imgs.shape == [16,32,32,3,]
             assert labels.shape == [16,]
             break
+
+    def test_tensor_dataset(self):
+        import jittor as jt
+        from jittor.dataset import TensorDataset
+
+        x = jt.array([1,2,3])
+        y = jt.array([4,5,6])
+        z = jt.array([7,8,9])
+
+        dataset = TensorDataset(x, y, z)
+        # dataset.set_attrs(batch_size=2)
+        dataset.set_attrs(batch_size=1)
+
+        for i,(a,b,c) in enumerate(dataset):
+            # print(a,b,c)
+            # print(a.shape)
+            assert a.shape == [1]
+            assert x[i] == a
+            assert y[i] == b
+            assert z[i] == c
         
 
 if __name__ == "__main__":

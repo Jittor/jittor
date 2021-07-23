@@ -88,6 +88,7 @@ class Dataset(object):
         self.endless = endless
         self.epoch_id = 0
         self.sampler = None
+        self._disable_workers = False
 
     def __getitem__(self, index):
         raise NotImplementedError
@@ -452,6 +453,8 @@ Example::
             yield
         
     def __iter__(self):
+        if self._disable_workers:
+            self.num_workers = 0
         index_list = self._get_index_list()
         
         if not hasattr(self, "workers") and self.num_workers:
@@ -582,3 +585,45 @@ class ImageFolder(Dataset):
             if self.transform:
                 img = self.transform(img)
             return img, self.imgs[k][1]
+
+class TensorDataset(Dataset):
+    """ Dataset using Tensor directly, Example::
+
+    import jittor as jt
+    from jittor.dataset import TensorDataset
+
+    x = jt.array([1,2,3])
+    y = jt.array([4,5,6])
+    z = jt.array([7,8,9])
+    dataset = TensorDataset(x, y, z)
+    dataset.set_attrs(batch_size=1)
+
+    for a,b,c in dataset:
+        print(a,b,c)
+    # will print
+    #  1,4,7
+    #  2,5,8
+    #  3,6,9
+
+    """
+    def __init__(self, *args):
+        super().__init__()
+        self.args = args
+        self._disable_workers = True
+        assert len(args), "At lease one args"
+        l = len(args[0])
+        for a in args:
+            assert l == len(a), "Len should be the same"
+        self.set_attrs(total_len=l)
+
+    def __getitem__(self, idx):
+        return [ a[idx] for a in self.args ]
+        
+
+    def collate_batch(self, batch):
+        b = collate_batch(batch)
+        for i in range(len(self.args)):
+            x = b[i]
+            if jt.is_var(self.args[i]) and self.args[i].ndim == 1:
+                x.assign(x.squeeze(-1))
+        return b
