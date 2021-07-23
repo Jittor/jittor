@@ -586,16 +586,16 @@ class ImageFolder(Dataset):
                 img = self.transform(img)
             return img, self.imgs[k][1]
 
-class TensorDataset(Dataset):
-    """ Dataset using Tensor directly, Example::
+class VarDataset(Dataset):
+    """ Dataset using Var directly, TensorDataset is alias of VarDataset, Example::
 
     import jittor as jt
-    from jittor.dataset import TensorDataset
+    from jittor.dataset import VarDataset
 
     x = jt.array([1,2,3])
     y = jt.array([4,5,6])
     z = jt.array([7,8,9])
-    dataset = TensorDataset(x, y, z)
+    dataset = VarDataset(x, y, z)
     dataset.set_attrs(batch_size=1)
 
     for a,b,c in dataset:
@@ -627,3 +627,5 @@ class TensorDataset(Dataset):
             if jt.is_var(self.args[i]) and self.args[i].ndim == 1:
                 x.assign(x.squeeze(-1))
         return b
+
+TensorDataset = VarDataset
