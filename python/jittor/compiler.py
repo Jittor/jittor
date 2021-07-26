@@ -23,6 +23,7 @@ from . import pyjt_compiler
 from jittor_utils import lock
 from jittor_utils import install_cuda
 from jittor import __version__
+import hashlib
 
 def find_jittor_path():
     return os.path.dirname(__file__)
@@ -641,7 +642,6 @@ def compile_custom_ops(
     if gen_name_ != "":
         gen_name = gen_name_
     if len(gen_name) > 100:
-        import hashlib
         gen_name = gen_name[:80] + "___hash" + hashlib.md5(gen_name.encode()).hexdigest()
 
     includes = sorted(list(set(includes)))
@@ -1078,30 +1078,38 @@ os_type = {
     "macos": "macos",
 }
 
-version_file = os.path.join(jittor_path, "version")
-if os.path.isfile(version_file) and not os.path.isdir(os.path.join(jittor_path, "src", "__data__")):
-    with open(version_file, 'r') as f:
-        version = f.read().strip()
-    # key = f"{version}-{cc_type}-{'cuda' if has_cuda else 'cpu'}.o"
-    key = f"{version}-g++-cpu"
-    os_id = os_release["ID"]
-    os_key = os_type.get(os_id, "ubuntu") 
-    os_key += '-' + os_arch if os_arch else ''
-    if platform.machine()=='aarch64':
-        os_key += '-aarch64'
-    if platform.machine()=='sw_64':
-        os_key += '-sw_64'
-        import ssl
-        ssl._create_default_https_context = ssl._create_unverified_context
-    if "os_key" in os.environ:
-        os_key = os.environ['os_key']
-    LOG.i("OS type:", os_id, " OS key:", os_key)
-    key += '-' + os_key + '.o'
-    # TODO: open the website
-    extra_obj = os.path.join(cache_path, key)
-    url = os.path.join("https://cg.cs.tsinghua.edu.cn/jittor/assets/build/"+key)
-    jit_utils.download(url, extra_obj)
-    files.append(extra_obj)
+if platform.machine()=='sw_64':
+    import ssl
+    ssl._create_default_https_context = ssl._create_unverified_context
+
+data_gz_path = os.path.join(jittor_path, "utils", "data.gz")
+use_data_gz = os.path.isfile(data_gz_path)
+if os.environ.get("use_data_gz", "1") == "0":
+    use_data_gz = False
+if use_data_gz:
+    import gzip
+    with gzip.open(data_gz_path, 'rb') as f:
+        data = f.read()
+        md5 = hashlib.md5(data).hexdigest()
+    target_md5 = None
+    data_gz_md5_path = os.path.join(cache_path, "data.md5")
+    if os.path.isfile(data_gz_md5_path):
+        with open(data_gz_md5_path, 'r') as f:
+            target_md5 = f.read()
+    data_o_path = os.path.join(cache_path, "data.o")
+    if target_md5 != md5:
+        data_s_path = os.path.join(cache_path, "data.cc")
+        with open(data_s_path, "w") as f:
+            f.write(data.decode("utf8"))
+        dflags = (cc_flags+opt_flags)\
+            .replace("-Wall", "") \
+            .replace("-Werror", "")
+        run_cmd(f"{cc_path} {dflags} -D_P\\(...\\)= {data_s_path} -c -o {data_o_path}")
+        os.remove(data_s_path)
+        with open(data_gz_md5_path, 'w') as f:
+            f.write(md5)
+    files.append(data_o_path)
+    files = [f for f in files if "__data__" not in f]
 
 compile(cc_path, cc_flags+opt_flags, files, 'jittor_core'+extension_suffix)
 
