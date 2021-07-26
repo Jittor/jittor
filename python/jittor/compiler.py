@@ -912,7 +912,8 @@ def check_clang_latest_supported_cpu():
     apple_cpus_id = max([int(cpu[7:]) for cpu in apple_cpus])
     return f'apple-a{apple_cpus_id}'
 
-cc_flags += " -Wall -Werror -Wno-unknown-pragmas -std=c++14 -fPIC "
+# cc_flags += " -Wall -Werror -Wno-unknown-pragmas -std=c++14 -fPIC "
+cc_flags += " -Wall -Wno-unknown-pragmas -std=c++14 -fPIC "
 # 1. Arch/CPU specific optimization
 if platform.machine() == "x86_64":
     cc_flags += " -march=native " 

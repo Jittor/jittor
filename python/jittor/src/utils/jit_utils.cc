@@ -8,7 +8,7 @@
 #include "pyjt/py_converter.h"
 #include "pyjt/py_arg_printer.h"
 #ifdef __clang__
-#pragma clang diagnostic ignored "-Wdefaulted-function-deleted"
+// #pragma clang diagnostic ignored "-Wdefaulted-function-deleted"
 #endif
 #ifdef __GNUC__
 #endif
