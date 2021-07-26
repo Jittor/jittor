@@ -46,7 +46,30 @@ class TestHook(unittest.TestCase):
         assert hooked
         np.testing.assert_allclose(dx.numpy(), [-1.0, -2.0])
 
+    def test_register_hook(self):
+        x = jt.array([0.0, 0.0])
+        y = x * [1,2]
+        y.register_hook(lambda g: g*2)
+        dx = jt.grad(y, x)
+        np.testing.assert_allclose(dx.data, [2,4])
 
+    def test_requires_grads_(self):
+        class Mod(jt.nn.Module):
+            def execute(self, x):
+                return x*2
+        x = jt.random((100,))
+        mod = Mod()
+        mod.requires_grad_(True)
+        y = mod(x)
+        y = y*10
+        dx = jt.grad(y, x)
+        np.testing.assert_allclose(dx.data, 20)
+
+        mod.requires_grad_(False)
+        y = mod(x)
+        y = y*10
+        dx = jt.grad(y, x)
+        np.testing.assert_allclose(dx.data, 0)
 
 if __name__ == "__main__":
     unittest.main()

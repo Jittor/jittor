@@ -12,6 +12,7 @@
 
 #include <cuda_runtime.h>
 #include <nccl.h>
+#include "utils/log.h"
 #include "helper_cuda.h"
 
 namespace jittor {
