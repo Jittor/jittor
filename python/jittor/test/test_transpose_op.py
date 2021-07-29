@@ -74,5 +74,9 @@ class TestTransposeOp(unittest.TestCase):
         b = a.transpose()
         assert (a.data.transpose() == b.data).all()
 
+        a = jt.zeros((1,1))
+        b = a.transpose((1,0))
+        b.sync()
+
 if __name__ == "__main__":
     unittest.main()
