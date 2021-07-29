@@ -116,6 +116,33 @@ class CosineAnnealingLR(object):
             if param_group.get("lr") != None:
                 param_group["lr"] = self.get_lr(self.base_lr_pg[i], param_group["lr"])
 
+
+class ExponentialLR(object):
+    """ learning rate is multiplied by gamma in each step.
+    """
+    def __init__(self, optimizer, gamma, last_epoch=-1):
+        self.optimizer = optimizer
+        self.gamma = gamma
+        self.last_epoch = last_epoch
+        self.base_lr = optimizer.lr
+        self.base_lr_pg = [pg.get("lr") for pg in optimizer.param_groups]
+
+    def get_lr(self, base_lr, now_lr):
+        if self.last_epoch == 0:
+            return base_lr
+        return base_lr * self.gamma ** self.last_epoch
+
+    def step(self):
+        self.last_epoch += 1
+        self.update_lr()
+            
+    def update_lr(self):
+        self.optimizer.lr = self.get_lr(self.base_lr, self.optimizer.lr)
+        for i, param_group in enumerate(self.optimizer.param_groups):
+            if param_group.get("lr") != None:
+                param_group["lr"] = self.get_lr(self.base_lr_pg[i], param_group["lr"])
+
+
 class StepLR(object):
     def __init__(self, optimizer, step_size, gamma=0.1, last_epoch=-1):
         self.optimizer = optimizer

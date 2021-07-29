@@ -10,7 +10,7 @@
 #include <functional>
 #include "utils/log.h"
 
-#define JIT_TEST(name) extern "C" void jit_test_ ## name ()
+#define JIT_TEST(name) extern void jit_test_ ## name ()
 void expect_error(std::function<void()> func);
 
 #define VAR_MEMBER_NAME_AND_OFFSET(name, op) { #name , offsetof(struct op, name) }

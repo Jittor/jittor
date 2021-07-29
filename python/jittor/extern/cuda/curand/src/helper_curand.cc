@@ -11,6 +11,7 @@
 
 #include <cuda_runtime.h>
 #include <cublas.h>
+#include "utils/log.h"
 #include "helper_cuda.h"
 #include <curand.h>
 

@@ -778,7 +778,7 @@ void simple_net(int times = 100) {
     s.wait();
 }
 
-// extern "C" int mkl_test_entry();
+// extern int mkl_test_entry();
 
 int mkl_test_entry() {
     try {

@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.2.3.79'
+__version__ = '1.2.3.84'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -827,6 +827,11 @@ class Module:
         self.dfs([], "", callback, callback_leave)
         return ms
 
+    def requires_grad_(self, requires_grad=True):
+        self._requires_grad = requires_grad
+        self._place_hooker()
+        return self
+
     def __hooked_call__(self, *args, **kw):
         if hasattr(self, "__fhook2__"):
             if len(kw):
@@ -837,7 +842,11 @@ class Module:
             if len(kw):
                 LOG.w("backward hook not support kw")
             args = grad_hooker(args, self.__bihook__)
-        ret = self.__hooked_call__(*args, **kw)
+        if hasattr(self, "_requires_grad") and not self._requires_grad:
+            with jt.no_grad():
+                ret = self.__hooked_call__(*args, **kw)
+        else:
+            ret = self.__hooked_call__(*args, **kw)
         if hasattr(self, "__bohook__"):
             if len(kw):
                 LOG.w("backward hook not support kw")
@@ -1204,6 +1213,29 @@ def grad_hooker(args, hook):
     hooker = GradHooker(hook)
     return hooker(*args)
 
+def register_hook(v, hook):
+    """ register hook of any jittor Variables, if hook return not None,
+the gradient of this variable will be alter, Example::
+
+    x = jt.array([0.0, 0.0])
+    y = x * [1,2]
+    y.register_hook(lambda g: g*2)
+    dx = jt.grad(y, x)
+    print(dx)
+    # will be [2, 4]
+
+    """
+    def _hook(grads):
+        g = hook(grads[0])
+        if g is not None:
+            return (g,)
+        return None
+    hooker = GradHooker(_hook)
+    v.swap(hooker(v)[0])
+    return v
+
+Var.register_hook = register_hook
+
 def make_module(func, exec_n_args=1):
     class MakeModule(Module):
         def __init__(self, *args, **kw):
@@ -1337,3 +1369,4 @@ from .contrib import concat
 from .misc import *
 from . import sparse
 from . import optim
+from . import dataset
