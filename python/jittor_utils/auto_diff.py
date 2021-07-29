@@ -13,6 +13,11 @@ jittor_utils.try_import_jit_utils_core()
 has_error = 0
 
 def convert(data):
+    if hasattr(data, "numpy"):
+        if "Var" in data.__class__.__name__:
+            return data.numpy()
+        else:
+            return data.detach().cpu().numpy()
     if isinstance(data, tuple):
         return tuple( convert(v) for v in data )
     if isinstance(data, list):
@@ -21,11 +26,6 @@ def convert(data):
         return data
     if isinstance(data, dict):
         return {k:convert(data[k]) for k in data}
-    if hasattr(data, "numpy"):
-        if "Var" in data.__class__.__name__:
-            return data.numpy()
-        else:
-            return data.detach().cpu().numpy()
     return data
 
 rand_hooked = False
