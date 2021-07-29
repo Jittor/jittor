@@ -100,7 +100,6 @@ def kaiming_normal_(var, a=0, mode='fan_in', nonlinearity='leaky_relu'):
     return gauss_(var,0, std)
 
 
-#TODO: bound = gain * math.sqrt(6.0/fan) ??
 def xavier_uniform(shape, dtype, gain=1.0):
     assert len(shape)>1
 
@@ -108,7 +107,7 @@ def xavier_uniform(shape, dtype, gain=1.0):
     for i in shape[2:]:
         matsize *= i
     fan = (shape[1] * matsize) + (shape[0] * matsize)
-    bound = gain * math.sqrt(1.0/fan)
+    bound = gain * math.sqrt(6.0/fan)
     return uniform(shape, dtype, -bound, bound)
 
 def xavier_uniform_(var, gain=1.0):
