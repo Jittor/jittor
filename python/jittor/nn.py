@@ -1248,9 +1248,9 @@ def _bicubic(x, a, func):
 
 def _interpolate(img, x, y, ids, mode):
     if mode == "nearest":
-        return img.reindex([*ids, x.floor(), y.floor()])
+        return img.reindex([*ids, x.floor_int(), y.floor_int()])
     if mode == "bilinear":
-        fx, fy = x.floor(), y.floor()
+        fx, fy = x.floor_int(), y.floor_int()
         cx, cy = fx + 1, fy + 1
         dx, dy = x - fx, y - fy
         a = img.reindex_var([*ids, fx, fy])
@@ -1264,7 +1264,7 @@ def _interpolate(img, x, y, ids, mode):
         return o
     if mode=="bicubic": # ugly ver.
         n,c,h,w = img.shape
-        fx, fy = x.floor(), y.floor()
+        fx, fy = x.floor_int(), y.floor_int()
         dix, diy = x - fx, y - fy
         ax, ay = _bicubic(dix+1,-0.75,2), _bicubic(diy+1,-0.75,2)
         bx, by = _bicubic(dix,-0.75,1), _bicubic(diy,-0.75,1)
@@ -1434,7 +1434,7 @@ def reflect_coordinates(x,twice_low,twice_high):
     x = (x - m).abs()
     #`fmod` returns same sign as `in`, which is positive after the `fabs` above.
     extra = x.mod(span)
-    flips = (x / span).floor()
+    flips = (x / span).floor_int()
     result1 = extra+m
     result2 = span-extra+m
     con = flips%2==0
@@ -1486,9 +1486,9 @@ def grid_sampler_3d(X,grid,mode,padding_mode,align_corners):
     zid = z.reindex(shape,['i0','i2','i3','i4'])
 
     if mode=='nearest':
-        return X.reindex([nid,cid,zid.round(),yid.round(),xid.round()])
+        return X.reindex([nid,cid,zid.round_int(),yid.round_int(),xid.round_int()])
     elif mode=='bilinear':
-        fx,fy,fz = xid.floor(),yid.floor(),zid.floor()
+        fx,fy,fz = xid.floor_int(),yid.floor_int(),zid.floor_int()
         cx,cy,cz = fx+1,fy+1,fz+1
         dx,dy,dz = xid-fx,yid-fy,zid-fz
         dnx,dny,dnz = cx-xid,cy-yid,cz-zid
@@ -1523,10 +1523,10 @@ def grid_sampler_2d(X,grid,mode,padding_mode,align_corners):
     yid = y.reindex(shape,['i0','i2','i3'])
 
     if mode=='nearest':
-        return X.reindex([nid,cid,yid.round(),xid.round()])
+        return X.reindex([nid,cid,yid.round_int(),xid.round_int()])
     elif mode=='bilinear':
         #xid,yid = (xid+0.00001),(yid+0.00001)
-        fx,fy = (xid).floor(),(yid).floor()
+        fx,fy = (xid).floor_int(),(yid).floor_int()
         cx,cy = fx+1,fy+1
         dx,dy = xid-fx,yid-fy
         dnx,dny = cx-xid,cy-yid

@@ -214,6 +214,81 @@ class TestDatasetSeed(unittest.TestCase):
             assert x[i] == a
             assert y[i] == b
             assert z[i] == c
+
+    def test_children_died(self):
+        src = """
+import jittor as jt
+from jittor.dataset import Dataset
+import numpy as np
+
+class YourDataset(Dataset):
+    def __init__(self):
+        super().__init__()
+        self.set_attrs(total_len=160)
+
+    def __getitem__(self, k):
+        if k>100:
+            while 1:
+                pass
+        return { "a":np.array([1,2,3]) }
+
+dataset = YourDataset()
+dataset.set_attrs(num_workers=2)
+
+for d in dataset:
+    dataset.workers[0].p.kill()
+    pass
+"""
+        fname = os.path.join(jt.flags.cache_path, "children_dead_test.py")
+        with open(fname, 'w') as f:
+            f.write(src)
+        import subprocess as sp
+        import sys
+        cmd = sys.executable + " " + fname
+        print(cmd)
+        r = sp.run(cmd, shell=True, stdout=sp.PIPE, stderr=sp.PIPE)
+        s = r.stderr.decode()
+        print(s)
+        assert r.returncode != 0
+        assert "SIGCHLD" in s
+        assert "quick exit" in s
+
+
+    def test_children_died2(self):
+        src = """
+import jittor as jt
+from jittor.dataset import Dataset
+import numpy as np
+
+class YourDataset(Dataset):
+    def __init__(self):
+        super().__init__()
+        self.set_attrs(total_len=160)
+
+    def __getitem__(self, k):
+        if k>100:
+            while 1:
+                pass
+        return { "a":np.array([1,2,3]) }
+
+dataset = YourDataset()
+dataset.set_attrs(num_workers=2)
+
+for d in dataset:
+    break
+dataset.terminate()
+"""
+        fname = os.path.join(jt.flags.cache_path, "children_dead_test.py")
+        with open(fname, 'w') as f:
+            f.write(src)
+        import subprocess as sp
+        import sys
+        cmd = sys.executable + " " + fname
+        print(cmd)
+        r = sp.run(cmd, shell=True, stdout=sp.PIPE, stderr=sp.PIPE)
+        s = r.stderr.decode()
+        print(s)
+        assert r.returncode == 0
         
 
 if __name__ == "__main__":

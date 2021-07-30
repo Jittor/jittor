@@ -129,7 +129,7 @@ class Geometric:
         
     def sample(self, sample_shape):
         u = jt.rand(sample_shape)
-        return (jt.safe_log(u) / (jt.safe_log(-self.probs+1))).floor()
+        return (jt.safe_log(u) / (jt.safe_log(-self.probs+1))).floor_int()
     
     def log_prob(self, x):
         return x*jt.safe_log(-self.prob+1)+jt.safe_log(self.prob)

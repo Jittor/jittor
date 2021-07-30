@@ -188,17 +188,52 @@ int segfault_happen = 0;
 string thread_local thread_name;
 static int _pid = getpid();
 
+static inline void do_exit() {
+    #ifdef __APPLE__
+    _Exit(1);
+    #else
+    std::quick_exit(1);
+    #endif
+}
+
+vector<void(*)()> sigquit_callback;
+int64 last_q_time;
+
 void segfault_sigaction(int signal, siginfo_t *si, void *arg) {
+    if (signal == SIGQUIT) {
+        if (_pid == getpid()) {
+            std::cerr << "Caught SIGQUIT" << std::endl;
+            int64 now = clock();
+            if (now > last_q_time && last_q_time+CLOCKS_PER_SEC/10 > now) {
+                last_q_time = now;
+                std::cerr << "GDB attach..." << std::endl;
+                breakpoint();
+            } else {
+                last_q_time = now;
+                for (auto f : sigquit_callback)
+                    f();
+            }
+        }
+        return;
+    }
+    if (signal == SIGCHLD) {
+        if (si->si_code != CLD_EXITED && si->si_status != SIGTERM) {
+            LOGe << "Caught SIGCHLD" 
+                << "si_errno:" << si->si_errno 
+                << "si_code:" << si->si_code 
+                << "si_status:" << si->si_status
+                << ", quick exit";
+            exited = true;
+            do_exit();
+        }
+        return;
+    }
     if (signal == SIGINT) {
         if (_pid == getpid()) {
             LOGe << "Caught SIGINT, quick exit";
         }
         exited = true;
-#ifdef __APPLE__
-        _Exit(1);
-#else
-        std::quick_exit(1);
-#endif
+        do_exit();
     }
     std::cerr << "Caught segfault at address " << si->si_addr << ", "
         << "thread_name: '" << thread_name << "', flush log..." << std::endl;
@@ -237,6 +272,7 @@ int register_sigaction() {
     sigaction(SIGSTOP, &sa, NULL);
     sigaction(SIGFPE, &sa, NULL);
     sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGCHLD, &sa, NULL);
     sigaction(SIGILL, &sa, NULL);
     sigaction(SIGBUS, &sa, NULL);
     sigaction(SIGQUIT, &sa, NULL);
