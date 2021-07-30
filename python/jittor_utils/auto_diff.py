@@ -7,8 +7,8 @@ import jittor_utils
 from jittor_utils import LOG
 import sys
 
-jittor_utils.try_import_jit_utils_core()
-
+with jittor_utils.import_scope(os.RTLD_GLOBAL | os.RTLD_NOW):
+    jittor_utils.try_import_jit_utils_core()
 
 has_error = 0
 
