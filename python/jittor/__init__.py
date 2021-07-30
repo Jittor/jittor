@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.2.3.84'
+__version__ = '1.2.3.85'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -562,7 +562,7 @@ def randint(low, high=None, shape=(1,), dtype="int32") -> Var:
     '''
     if high is None: low, high = 0, low
     v = (jt.random(shape) * (high - low) + low).clamp(low, high-0.5)
-    v = jt.floor(v)
+    v = jt.floor_int(v)
     return v.astype(dtype)
 
 def randint_like(x, low, high=None) -> Var:

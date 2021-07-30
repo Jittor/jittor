@@ -50,9 +50,9 @@ def resize_and_crop(x, bbox, interpolation="nearest", out_size=[224,224]):
     x = bb[0]*(H-1.0)+hid*((H-1)*1.0/(shape[1]-1))*(bb[2]-bb[0])
     y = bb[1]*(W-1.0)+wid*((W-1)*1.0/(shape[2]-1))*(bb[3]-bb[1])
     if interpolation=="nearest":
-        return img.reindex([x.round(), y.round(), cid])
+        return img.reindex([x.round_int(), y.round_int(), cid])
     if interpolation=="bilinear":
-        fx, fy = x.floor(), y.floor()
+        fx, fy = x.floor_int(), y.floor_int()
         cx, cy = fx+one, fy+one
         dx, dy = x-fx, y-fy
         a = img.reindex_var([fx, fy, cid])

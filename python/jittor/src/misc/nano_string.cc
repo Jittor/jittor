@@ -58,6 +58,9 @@ static unordered_set<string> unary_ops = {
     "round",
     "floor",
     "ceil",
+    "round_int",
+    "floor_int",
+    "ceil_int",
     "cast",
     "sin",
     "asin",
@@ -81,9 +84,9 @@ static unordered_set<string> unary_float_ops = {
     "sqrt",
 };
 static unordered_set<string> unary_int_ops = {
-    "round",
-    "floor",
-    "ceil",
+    "round_int",
+    "floor_int",
+    "ceil_int",
 };
 
 static unordered_set<string> binary_ops = {

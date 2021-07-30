@@ -26,6 +26,7 @@ dataset_root = os.path.join(pathlib.Path.home(), ".cache", "jittor", "dataset")
 mp_log_v = os.environ.get("mp_log_v", 0) 
 mpi = jt.mpi
 img_open_hook = HookTimer(Image, "open")
+CHECK_MEMORY = int(os.environ.get("CHECK_MEMORY", "0"))
 
 class Worker:
     def __init__(self, target, args, buffer_size, keep_numpy_array=False):
@@ -513,8 +514,12 @@ Example::
                     now = time.time()
                     self.batch_time = now - start
                     start = now
+
+                    if CHECK_MEMORY and self.batch_id % CHECK_MEMORY == 0:
+                        jt.display_memory_info()
         else:
             for _ in self._epochs():
+                self.batch_id = 0
                 batch_data = []
                 for idx in index_list:
                     batch_data.append(self[int(idx)])
@@ -522,12 +527,16 @@ Example::
                         batch_data = self.collate_batch(batch_data)
                         batch_data = self.to_jittor(batch_data)
                         yield batch_data
+                        self.batch_id += 1
+                        if CHECK_MEMORY and self.batch_id % CHECK_MEMORY == 0:
+                            jt.display_memory_info()
                         batch_data = []
 
                 # depend on drop_last
                 if not self.drop_last and len(batch_data) > 0:
                     batch_data = self.collate_batch(batch_data)
                     batch_data = self.to_jittor(batch_data)
+                    self.batch_id += 1
                     yield batch_data
 
 
