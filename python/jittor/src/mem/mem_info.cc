@@ -11,6 +11,9 @@
 #include <sys/sysinfo.h>
 #elif defined(__APPLE__)
 #include <sys/sysctl.h>
+#include <mach/host_info.h>
+#include <mach/mach_init.h>
+#include <mach/mach_host.h>
 #endif
 #include <unistd.h>
 
@@ -122,7 +125,18 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
     log << "cpu&gpu:" << FloatOutput{(double)all_total, " KMG", 1024, "B"}
         << "gpu:" << FloatOutput{(double)gpu_total, " KMG", 1024, "B"}
         << "cpu:" << FloatOutput{(double)cpu_total, " KMG", 1024, "B"} >> '\n';
-    auto cpu_free = get_avphys_pages() * sysconf(_SC_PAGESIZE);
+    size_t cpu_free = 0;
+#if defined(__linux__)
+    cpu_free = get_avphys_pages() * sysconf(_SC_PAGESIZE);
+#elif defined(__APPLE__)
+    {
+        mach_msg_type_number_t count = HOST_VM_INFO_COUNT;
+        vm_statistics_data_t vmstat;
+        if (KERN_SUCCESS == host_statistics(mach_host_self(), HOST_VM_INFO, (host_info_t)&vmstat, &count)) {
+            cpu_free = vmstat.free_count * sysconf(_SC_PAGESIZE);
+        }
+    }
+#endif
     size_t gpu_free = 0, _gpu_total = 0;
     #ifdef HAS_CUDA
     cudaMemGetInfo(&gpu_free, &_gpu_total);
@@ -183,9 +197,8 @@ MemInfo::MemInfo() {
     total_cpu_ram = info.totalram;
 #elif defined(__APPLE__)
     int mib[] = {CTL_HW, HW_MEMSIZE};
-    int64 mem;
-    size_t len;
-    total_cpu_ram = sysctl(mib, 2, &mem, &len, NULL, 0);
+    size_t len=sizeof(total_cpu_ram);
+    sysctl(mib, 2, &total_cpu_ram, &len, NULL, 0);
 #endif
 
     total_cuda_ram = 0;
