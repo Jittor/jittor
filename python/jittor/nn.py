@@ -45,7 +45,7 @@ def bmm_transpose(a, b):
     '''
     returns a * b^T
     '''
-    if jt.flags.use_cuda:
+    if jt.flags.use_cuda and jt.compile_extern.cublas_ops:
         return jt.compile_extern.cublas_ops.cublas_batched_matmul(a, b, 0, 1)
     t = list(range(b.ndim))
     t[-1], t[-2] = t[-2], t[-1]
@@ -118,7 +118,7 @@ Example::
     if len_a>=3 and len_a==len_b:
         # bmm
         # a: [..., n, m], b: [..., m, k], c:[..., n, k]
-        if jt.flags.use_cuda:
+        if jt.flags.use_cuda and jt.compile_extern.cublas_ops:
             return jt.compile_extern.cublas_ops.cublas_batched_matmul(a, b, 0, 0)
     shape = []
     len_c = max(len_a, len_b)
