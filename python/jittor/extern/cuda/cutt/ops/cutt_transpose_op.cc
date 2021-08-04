@@ -105,7 +105,7 @@ void CuttTransposeOp::jit_run() {
         cuttExecute(iter->second, xp, yp);
     } else {
         cuttHandle plan;
-        // checkCudaErrors(cudaDeviceSynchronize());
+        checkCudaErrors(cudaDeviceSynchronize());
         auto ret = cuttPlan(&plan, dim, x_shape.data(), reverse.data(), x->dtype().dsize(), 0);
         CHECK(0==ret) << ret << jk.to_string() << x << y;
         cutt_plan_cache[jk.to_string()] = plan;
