@@ -156,7 +156,7 @@ class TestArgPoolOp(unittest.TestCase):
                       0,0,0,0,
                       1,0,0,1]).reshape((1,1,4,4))
         b, idx = pool(a)
-        assert (idx.data.reshape((4,)) == [0,1,2,3]).all()
+        assert (idx.data.reshape((4,)) == [0,3,12,15]).all()
 
     def test_unpool(self):
         from jittor import nn
@@ -168,6 +168,7 @@ class TestArgPoolOp(unittest.TestCase):
                                 [13, 14, 15, 16,0],
                                 [0,  0,  0,  0, 0]]]])
         output, indices = pool(input)
+        assert (indices == jt.array([[6,8],[16,18]])).all()
         out = unpool(output, indices, output_size=input.shape)
         assert (out == jt.array([[[[   0.,  0.,   0.,   0.,   0.],
                     [   0.,  6.,   0.,   8.,   0.],
