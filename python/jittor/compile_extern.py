@@ -504,6 +504,7 @@ if os.environ.get("FIX_TORCH_ERROR", "0") == "1":
 setup_mpi()
 in_mpi = inside_mpi()
 rank = mpi.world_rank() if in_mpi else 0
+world_size = mpi.world_size() if in_mpi else 1
 setup_nccl()
 
 setup_cutt()

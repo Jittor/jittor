@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.2.3.89'
+__version__ = '1.2.3.90'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -23,7 +23,7 @@ with lock.lock_scope():
     from jittor_core import *
     from jittor_core.ops import *
     from . import compile_extern
-    from .compile_extern import mkl_ops, mpi, mpi_ops, in_mpi, rank
+    from .compile_extern import mkl_ops, mpi, mpi_ops, in_mpi, rank, world_size
     if core.get_device_count() == 0:
         has_cuda = compile_extern.has_cuda = compiler.has_cuda = False
     if has_cuda:
