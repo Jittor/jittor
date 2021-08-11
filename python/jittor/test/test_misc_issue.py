@@ -134,6 +134,13 @@ jt.mkl_ops.mkl_conv(x, w, 1, 1, 2, 2).sync()
         assert a.min().data == a.data.min(), (a.min(), a.data.min())
         assert a.max().data == a.data.max(), (a.max(), a.data.max())
 
+        a = jt.random((10,)).float64() - 2
+        assert a.min().data == a.data.min(), (a.min(), a.data.min())
+        assert a.max().data == a.data.max(), (a.max(), a.data.max())
+        a = jt.random((10,)).float64() + 2
+        assert a.min().data == a.data.min(), (a.min(), a.data.min())
+        assert a.max().data == a.data.max(), (a.max(), a.data.max())
+
     @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
     @jt.flag_scope(use_cuda=1)
     def test_cuda_pow_grad_nan(self):
