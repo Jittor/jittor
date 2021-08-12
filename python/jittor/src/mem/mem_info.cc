@@ -138,6 +138,7 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
     }
 #endif
     size_t gpu_free = 0, _gpu_total = 0;
+    (void)gpu_free; (void)_gpu_total;
     #ifdef HAS_CUDA
     cudaMemGetInfo(&gpu_free, &_gpu_total);
     #endif
