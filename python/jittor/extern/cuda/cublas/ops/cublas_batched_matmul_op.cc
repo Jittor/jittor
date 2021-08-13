@@ -17,6 +17,8 @@
 
 using namespace std;
 
+extern int use_tensor_core;
+
 namespace jittor {
 
 #ifndef JIT
@@ -116,13 +118,26 @@ void CublasBatchedMatmulOp::jit_run() {
         k = bs[adim-2];
     }
     // a: [b,n,m], b: [b,m,k], c: [b,n,k]
-    checkCudaErrors(cublas@op@@gemmStridedBatched(handle_,
+    // checkCudaErrors(cublas@op@@gemmStridedBatched(handle_,
+    // CUBLAS_OP_@Trans_b, CUBLAS_OP_@Trans_a,
+    // k, n, m, &alpha,
+    // b->ptr<T>(), '@Trans_b' == 'N' ? k : m, k * m, 
+    // a->ptr<T>(), '@Trans_a' == 'N' ? m : n, n * m, &beta,
+    // c->ptr<T>(), k, k * n,
+    // batch_size));
+    // int algo = -1;
+    // if(use_tensor_core){
+    //     algo = 99;
+    // }
+    int algo=99;
+
+    checkCudaErrors(cublasGemmStridedBatchedEx(handle_,
     CUBLAS_OP_@Trans_b, CUBLAS_OP_@Trans_a,
     k, n, m, &alpha,
-    b->ptr<T>(), '@Trans_b' == 'N' ? k : m, k * m, 
-    a->ptr<T>(), '@Trans_a' == 'N' ? m : n, n * m, &beta,
-    c->ptr<T>(), k, k * n,
-    batch_size));
+    b->ptr<T>(),CUDA_R_32F, '@Trans_b' == 'N' ? k : m, k * m, 
+    a->ptr<T>(),CUDA_R_32F, '@Trans_a' == 'N' ? m : n, n * m, &beta,
+    c->ptr<T>(),CUDA_R_32F, k, k * n,
+    batch_size,CUDA_R_32F,cublasGemmAlgo_t(algo)));
 }
 #endif
 #endif // JIT

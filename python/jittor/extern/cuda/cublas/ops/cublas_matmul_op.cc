@@ -14,6 +14,8 @@
 
 using namespace std;
 
+extern int use_tensor_core;
+
 namespace jittor {
 
 #ifndef JIT
@@ -71,12 +73,23 @@ void CublasMatmulOp::jit_run() {
         k = bs[0];
     }
     // a: [n,m], b: [m,k], c: [n,k]
-    checkCudaErrors(cublas@op@@gemm(handle_, 
+    // checkCudaErrors(cublas@op@@gemm(handle_, 
+    // CUBLAS_OP_@Trans_b, CUBLAS_OP_@Trans_a, 
+    // k, n, m, &alpha, 
+    // b->ptr<T>(), '@Trans_b' == 'N' ? k : m, 
+    // a->ptr<T>(), '@Trans_a' == 'N' ? m : n, &beta, 
+    // c->ptr<T>(), k));
+    // int algo = -1;
+    // if(use_tensor_core){
+    //     algo = 99;
+    // }
+    int algo=99;
+    checkCudaErrors(cublasGemmEx(handle_, 
     CUBLAS_OP_@Trans_b, CUBLAS_OP_@Trans_a, 
     k, n, m, &alpha, 
-    b->ptr<T>(), '@Trans_b' == 'N' ? k : m, 
-    a->ptr<T>(), '@Trans_a' == 'N' ? m : n, &beta, 
-    c->ptr<T>(), k));
+    b->ptr<T>(),CUDA_R_32F, '@Trans_b' == 'N' ? k : m, 
+    a->ptr<T>(),CUDA_R_32F, '@Trans_a' == 'N' ? m : n, &beta, 
+    c->ptr<T>(),CUDA_R_32F, k,CUDA_R_32F,cublasGemmAlgo_t(algo)));
 }
 #endif
 #endif // JIT
