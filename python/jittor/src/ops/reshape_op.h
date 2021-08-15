@@ -19,7 +19,7 @@ struct ReshapeOp : Op {
     /**
     Returns a tensor with the same data and number of elements as input, but with the specified shape. 
 
-    A single dimension may be -1, in which case it’s inferred from the remaining dimensions and the number of elements in input.
+    A single dimension may be -1, in which case it's inferred from the remaining dimensions and the number of elements in input.
 
     ----------------
 

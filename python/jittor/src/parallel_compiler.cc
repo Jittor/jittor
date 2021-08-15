@@ -69,11 +69,20 @@ struct SimpleThread {
     }
 };
 
+struct SimpleThreads;
+extern SimpleThreads threads;
+extern vector<void(*)()> cleanup_callback;
+
 struct SimpleThreads {
     list<SimpleThread> threads;
-    SimpleThreads(int n) {
+    static void stop() {
+        jittor::threads.threads.clear();
+    }
+    void create_threads(int n) {
+        if (threads.size()) return;
         for (int i=0; i<n; i++)
             threads.emplace_back(i);
+        cleanup_callback.push_back(&stop);
     }
     void wait_all() {
         for (auto& t : threads) {
@@ -105,7 +114,7 @@ struct SimpleThreads {
                 return;
         }
     }
-};
+} threads;
 
 static int last_compiled_op_num = 0;
 static int not_compile_window = 0;
@@ -190,7 +199,7 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
     static volatile int has_error;
     static vector<vector<std::tuple<int,int,void*,string>>> op_entrys(thread_num);
     // <int,int,void*,string> represents: task id, is_fused_op, entry or context, new_jit_key
-    static SimpleThreads threads(thread_num);
+    threads.create_threads(thread_num);
     static std::mutex entry_lock;
     ai = 0;
     has_error = 0;

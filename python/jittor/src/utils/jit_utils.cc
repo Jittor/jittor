@@ -12,7 +12,9 @@
 #endif
 #ifdef __GNUC__
 #endif
+#ifndef _WIN32
 #include <sys/prctl.h>
+#endif
 #include <signal.h>
 #include <iterator>
 #include <algorithm>
@@ -21,7 +23,9 @@
 namespace jittor {
 
 void init_subprocess() {
+#ifndef _WIN32
     prctl(PR_SET_PDEATHSIG, SIGKILL);
+#endif
 }
 
 static void __log(
@@ -169,14 +173,14 @@ public:
     }
 };
 
-static void ostream_redirect(bool stdout, bool stderr) {
-    if (stdout) {
+static void ostream_redirect(bool _stdout, bool _stderr) {
+    if (_stdout) {
         PyObjHolder a(PyImport_ImportModule("sys"));
         PyObjHolder b(PyObject_GetAttrString(a.obj,"stdout"));
         auto buf = new pythonbuf(b.obj);
         std::cout.rdbuf(buf);
     }
-    if (stderr) {
+    if (_stderr) {
         PyObjHolder a(PyImport_ImportModule("sys"));
         PyObjHolder b(PyObject_GetAttrString(a.obj,"stderr"));
         auto buf = new pythonbuf(b.obj);

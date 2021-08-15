@@ -22,7 +22,8 @@ namespace jittor {
     m(float32) \
     m(float64)
 
-#define map_size(T) {#T, ffs(sizeof(T))-1},
+#define map_size(T) {#T, __builtin_ffs(sizeof(T))-1},
+
 unordered_map<string, size_t> dsize_map = {FOR_ALL_TYPES(map_size)};
 
 // TODO: make all static

@@ -24,7 +24,7 @@ except:
     skip_this_test = True
 
 mid = 0
-if "jittor" in os.uname()[1]:
+if hasattr(os, "uname") and "jittor" in os.uname()[1]:
     mid = 1
 
 def resize_and_crop(x, bbox, interpolation="nearest", out_size=[224,224]):

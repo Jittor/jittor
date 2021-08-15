@@ -12,18 +12,29 @@
 
 namespace jittor {
 
+#ifdef HAS_CUDA
 struct EventQueue {
     static constexpr int RUNNING = 0;
     static constexpr int OK = 1;
     static constexpr int ERROR = 2;
     typedef void(*Func)();
+
+    list<Func> tasks;
+    std::condition_variable cv;
+    std::mutex mtx;
+    Func func;
+    volatile int run_sync_done;
+
     struct Worker {
         Func todo;
         std::condition_variable cv;
         std::mutex mtx;
-        std::thread thread = std::thread(Worker::start);
+        std::thread thread;
 
         static void start();
+        static void stop();
+
+        Worker();
 
         inline void run(Func func) {
             {
@@ -32,18 +43,7 @@ struct EventQueue {
             }
             cv.notify_one();
         }
-
-        inline ~Worker() {
-            run(nullptr);
-            thread.join();
-        }
     } worker;
-
-    list<Func> tasks;
-    std::condition_variable cv;
-    std::mutex mtx;
-    Func func;
-    volatile int run_sync_done;
 
     inline void flush() {
         list<Func> ts;
@@ -57,7 +57,7 @@ struct EventQueue {
 
     static void worker_caller();
 
-    int run_sync(Func func) {
+    inline int run_sync(Func func) {
         // send work to worker and do something by self
         std::unique_lock<std::mutex> l(mtx);
         this->func = func;
@@ -89,5 +89,7 @@ struct EventQueue {
 };
 
 extern EventQueue event_queue;
+
+#endif
 
 } // jittor

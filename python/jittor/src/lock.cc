@@ -9,6 +9,10 @@
 // ***************************************************************
 #include <stdio.h>
 #include <unistd.h>
+#ifdef _WIN32
+#include <fileapi.h>
+#else
+#endif
 #include <fcntl.h>
 #include <errno.h>
 
@@ -27,6 +31,11 @@ void set_lock_path(string path) {
  
 void lock() {
     ASSERT(lock_fd >= 0);
+#ifdef _WIN32
+	OVERLAPPED offset = {0, 0, 0, 0, NULL};
+    auto hfile = (HANDLE)_get_osfhandle(lock_fd);
+    ASSERT(LockFileEx(hfile, 2, 0, -0x10000, 0, &offset));
+#else
     struct flock lock = {
         .l_type = F_WRLCK,
         .l_whence = SEEK_SET,
@@ -34,12 +43,18 @@ void lock() {
         .l_len = 0
     };
     ASSERT(fcntl(lock_fd, F_SETLKW, &lock) == 0);
+#endif
     _has_lock = 1;
     LOGvv << "LOCK Pid:" << getpid();
 }
  
 void unlock() {
     ASSERT(lock_fd >= 0);
+#ifdef _WIN32
+	OVERLAPPED offset = {0, 0, 0, 0, NULL};
+    auto hfile = (HANDLE)_get_osfhandle(lock_fd);
+    ASSERT(UnlockFileEx(hfile, 0, -0x10000, 0, &offset));
+#else
     struct flock lock = {
         .l_type = F_UNLCK,
         .l_whence = SEEK_SET,
@@ -47,6 +62,7 @@ void unlock() {
         .l_len = 0
     };
     ASSERT(fcntl(lock_fd, F_SETLKW, &lock) == 0);
+#endif
     _has_lock = 0;
     LOGvv << "UNLOCK Pid:" << getpid();
 }

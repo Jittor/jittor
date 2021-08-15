@@ -6,10 +6,14 @@
 // ***************************************************************
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/wait.h>
-#include <unistd.h>
+#ifndef _WIN32
 #include <sys/prctl.h>
 #include <execinfo.h>
+#include <sys/wait.h>
+#else
+#include <windows.h>
+#endif
+#include <unistd.h>
 #include <iostream>
 #include "utils/tracer.h"
 
@@ -24,6 +28,24 @@ DEFINE_FLAG_WITH_SETTER(int, gdb_attach, 0, "gdb attach self process.");
 
 string _extra_gdb_cmd;
 
+int system_popen(const char* cmd);
+
+#ifdef _WIN32
+string get_cmds(const vector<const char*>& argv) {
+    auto cmds = gdb_path;
+    for (auto p : argv) {
+        if (!p) continue;
+        string cmd = p;
+        cmds += " ";
+        if (cmd.find(' ') != string::npos && cmd[0] != '"')
+            cmds += '"' + cmd + '"';
+        else
+            cmds += cmd;
+    }
+    return cmds;
+}
+#endif
+
 void setter_gdb_attach(int v) {
     if (v && gdb_path.size()) {
         static int gdb_attached = 0;
@@ -32,30 +54,71 @@ void setter_gdb_attach(int v) {
         // using gdb to print the stack trace
         char pid_buf[30];
         sprintf(pid_buf, "%d", getpid());
-        char name_buf[512];
-        name_buf[readlink("/proc/self/exe", name_buf, 511)]=0;
-        int child_pid = fork();
-        if (!child_pid) {
-            LOGi << "gdb attach for" << name_buf << "pid=" >> pid_buf;
 
-            vector<const char*> argv{
-                gdb_path.c_str(),
-                "-ex", "catch throw"
-            };
-            if (auto n = extra_gdb_cmd.size()) {
-                _extra_gdb_cmd = extra_gdb_cmd;
-                _extra_gdb_cmd += '\0';
-                argv.push_back("-ex");
-                argv.push_back(&_extra_gdb_cmd[0]);
-                for (uint i=0; i<n; i++) {
-                    if (_extra_gdb_cmd[i]==';') {
-                        argv.push_back("-ex");
-                        _extra_gdb_cmd[i] = '\0';
-                        argv.push_back(&_extra_gdb_cmd[i+1]);
-                    }
+        vector<const char*> argv{
+            gdb_path.c_str(),
+            "-ex", "catch throw"
+        };
+        if (auto n = extra_gdb_cmd.size()) {
+            _extra_gdb_cmd = extra_gdb_cmd;
+            _extra_gdb_cmd += '\0';
+            argv.push_back("-ex");
+            argv.push_back(&_extra_gdb_cmd[0]);
+            for (uint i=0; i<n; i++) {
+                if (_extra_gdb_cmd[i]==';') {
+                    argv.push_back("-ex");
+                    _extra_gdb_cmd[i] = '\0';
+                    argv.push_back(&_extra_gdb_cmd[i+1]);
                 }
             }
-            argv.insert(argv.end(), {name_buf, pid_buf, NULL});
+        }
+        // argv.insert(argv.end(), {name_buf, pid_buf, NULL});
+        argv.insert(argv.end(), {"-p", pid_buf, NULL});
+        LOGi << "gdb attach for" << "pid=" >> pid_buf << argv;
+
+        #ifdef _WIN32
+        // _spawnvp(_P_OVERLAY, gdb_path.c_str(), (char* const*)&argv[0]);
+        // system_popen((gdb_path+" -p "+pid_buf).c_str());
+        auto cmds = get_cmds(argv);
+
+        // Create the child process.
+        PROCESS_INFORMATION piProcInfo;
+        STARTUPINFO siStartInfo;
+        BOOL bSuccess = false;
+        // Set up members of the PROCESS_INFORMATION structure.
+        ZeroMemory(&piProcInfo, sizeof(PROCESS_INFORMATION));
+
+        // Set up members of the STARTUPINFO structure.
+        // This structure specifies the STDIN and STDOUT handles for redirection.
+        ZeroMemory(&siStartInfo, sizeof(STARTUPINFO));
+        siStartInfo.cb = sizeof(STARTUPINFO);
+        // siStartInfo.hStdError = g_hChildStd_OUT_Wr;
+        // siStartInfo.hStdOutput = g_hChildStd_OUT_Wr;
+        siStartInfo.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+        siStartInfo.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+        siStartInfo.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+        siStartInfo.dwFlags |= STARTF_USESTDHANDLES;
+        // Create the child process.
+        bSuccess = CreateProcess(
+            NULL,
+            (char *)&cmds[0],  // command line
+            NULL,         // process security attributes
+            NULL,         // primary thread security attributes
+            true,         // handles are inherited
+            0,            // creation flags
+            NULL,         // use parent's environment
+            NULL,         // use parent's current directory
+            &siStartInfo, // STARTUPINFO pointer
+            &piProcInfo); // receives PROCESS_INFORMATION
+
+        // If an error occurs, exit the application.
+        if (!bSuccess)
+            LOGf << "CreateProcess error, command:" << cmds;
+        // sleep 5s, wait gdb attach
+        sleep(5);
+        #else
+        int child_pid = fork();
+        if (!child_pid) {
             auto ret = execvp(gdb_path.c_str(), (char* const*)&argv[0]);
             LOGf << "execvp failed return" << ret << gdb_path << extra_gdb_cmd;
             exit(1);
@@ -65,6 +128,7 @@ void setter_gdb_attach(int v) {
             // sleep 5s, wait gdb attach
             sleep(5);
         }
+        #endif
     }
 }
 
@@ -86,34 +150,34 @@ void print_trace() {
         sprintf(pid_buf, "%d", getpid());
         char st_buf[30];
         sprintf(st_buf, "set backtrace limit %d", trace_depth);
-        char name_buf[512];
-        name_buf[readlink("/proc/self/exe", name_buf, 511)]=0;
-        int child_pid = fork();
-        if (!child_pid) {
-            std::cerr << "stack trace for " << name_buf << " pid=" << pid_buf << std::endl;
 
-            vector<const char*> argv{
-                gdb_path.c_str(), "--batch", "-n",
-                "-ex", "thread",
-                "-ex", st_buf, // "set backtrace limit 10",
-                "-ex", "bt",
-            };
-            if (has_pybt)
-                argv.insert(argv.end(), {"-ex", "set backtrace limit 0", "-ex", "py-bt"});
-            if (auto n = extra_gdb_cmd.size()) {
-                _extra_gdb_cmd = extra_gdb_cmd;
-                _extra_gdb_cmd += '\0';
-                argv.push_back("-ex");
-                argv.push_back(&_extra_gdb_cmd[0]);
-                for (uint i=0; i<n; i++) {
-                    if (_extra_gdb_cmd[i]==';') {
-                        argv.push_back("-ex");
-                        _extra_gdb_cmd[i] = '\0';
-                        argv.push_back(&_extra_gdb_cmd[i+1]);
-                    }
+        LOGi << "stack trace for pid=" << pid_buf;
+
+        vector<const char*> argv{
+            gdb_path.c_str(), "--batch", "-n",
+            "-ex", "thread",
+            "-ex", st_buf, // "set backtrace limit 10",
+            "-ex", "bt",
+        };
+        if (has_pybt)
+            argv.insert(argv.end(), {"-ex", "set backtrace limit 0", "-ex", "py-bt"});
+        if (auto n = extra_gdb_cmd.size()) {
+            _extra_gdb_cmd = extra_gdb_cmd;
+            _extra_gdb_cmd += '\0';
+            argv.push_back("-ex");
+            argv.push_back(&_extra_gdb_cmd[0]);
+            for (uint i=0; i<n; i++) {
+                if (_extra_gdb_cmd[i]==';') {
+                    argv.push_back("-ex");
+                    _extra_gdb_cmd[i] = '\0';
+                    argv.push_back(&_extra_gdb_cmd[i+1]);
                 }
             }
-            argv.insert(argv.end(), {name_buf, pid_buf, NULL});
+        }
+        argv.insert(argv.end(), {"-p", pid_buf, NULL});
+        #ifndef _WIN32
+        int child_pid = fork();
+        if (!child_pid) {
             execvp(gdb_path.c_str(), (char* const*)&argv[0]);
             exit(0);
         } else {
@@ -121,7 +185,14 @@ void print_trace() {
     		prctl(PR_SET_PTRACER, child_pid, 0, 0, 0);
             waitpid(child_pid,NULL,0);
         }
-    } else {
+        #else
+        auto cmds = get_cmds(argv);
+        LOGv << cmds;
+        system_popen(cmds.c_str());
+        #endif
+    }
+#ifndef _WIN32
+    else {
         void *trace[16];
         char **messages = (char **)NULL;
         int i, trace_size = 0;
@@ -149,6 +220,7 @@ void print_trace() {
             (void)ret;
         }
     }
+#endif
 }
 
 } // jittor

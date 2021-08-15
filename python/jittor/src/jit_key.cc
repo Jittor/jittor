@@ -4,7 +4,9 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#ifndef _WIN32
 #include <sys/mman.h>
+#endif
 #include <sstream>
 #include "jit_key.h"
 #include "utils/str_utils.h"
@@ -28,17 +30,23 @@ static size_t get_buffer_end_page(size_t buffer_end) {
 }
 
 JitKey::JitKey() {
+    (void)get_buffer_end_page;
+#ifndef _WIN32
     auto buffer_end_page = get_buffer_end_page((size_t)&buffer[buffer_size-1]);
     LOGvv << "protect page" << (void*)buffer_end_page;
     ASSERT(0==mprotect((void*)buffer_end_page, page_size, PROT_NONE));
+    // windows assign extern thread_local var cause fault, FIX IT
     protected_page = buffer_end_page;
+#endif
 }
 
 JitKey::~JitKey() {
+#ifndef _WIN32
     auto buffer_end_page = get_buffer_end_page((size_t)&buffer[buffer_size-1]);
     LOGvv << "un-protect page" << (void*)buffer_end_page;
     mprotect((void*)buffer_end_page, page_size, PROT_READ|PROT_WRITE|PROT_EXEC);
     protected_page = 0;
+#endif
 }
 
 static void hex_to_dec(string& s) {

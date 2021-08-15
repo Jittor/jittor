@@ -8,7 +8,11 @@
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <dlfcn.h>
+#endif
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
@@ -57,14 +61,25 @@ void Profiler::stop() {
 }
 
 unique_ptr<MemoryChecker>* load_memory_checker(string name) {
+    const char* msg = "";
     LOGvv << "Opening jit lib:" << name;
+    #ifdef _WIN32
+    void* handle = (void*)LoadLibrary(name.c_str());
+    #else
     void* handle = dlopen(name.c_str(), RTLD_LAZY | RTLD_DEEPBIND | RTLD_LOCAL);
-    CHECK(handle) << "Cannot open library" << name << ":" << dlerror();
+    msg = dlerror();
+    #endif
+
+    CHECK(handle) << "Cannot open library" << name << ":" << msg;
     
+    #ifdef _WIN32
+    auto mm = (unique_ptr<MemoryChecker>*)GetProcAddress((HINSTANCE)handle, "memory_checker");
+    #else
     //dlerror();
     auto mm = (unique_ptr<MemoryChecker>*)dlsym(handle, "memory_checker");
-    const char* dlsym_error = dlerror();
-    CHECK(!dlsym_error) << "Loading symbol memory_checker from" << name << "failed:" << dlsym_error;
+    msg = dlerror();
+    #endif
+    CHECK(!msg) << "Loading symbol memory_checker from" << name << "failed:" << msg;
     
     return mm;
 }

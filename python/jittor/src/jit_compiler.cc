@@ -7,7 +7,11 @@
 #include <fstream>
 #include <streambuf>
 #include <stdlib.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <dlfcn.h>
+#endif
 
 #include "jit_compiler.h"
 #include "op.h"
@@ -30,16 +34,25 @@ DEFINE_FLAG(int, rewrite_op, 1, "Rewrite source file of jit operator or not");
 namespace jit_compiler {
 
 jit_op_entry_t load_jit_lib(string name, string symbol_name="jit_entry") {
+    const char* msg = "";
     LOGvv << "Opening jit lib:" << name;
-    // void* handle = dlopen(name.c_str(), RTLD_NOW | RTLD_DEEPBIND | RTLD_LOCAL);
-    // RTLD_DEEPBIND and openmp cause segfault
-    void* handle = dlopen(name.c_str(), RTLD_NOW | RTLD_LOCAL | RTLD_DEEPBIND);
-    CHECK(handle) << "Cannot open library" << name << ":" << dlerror();
+    #ifdef _WIN32
+    void* handle = (void*)LoadLibrary(name.c_str());
+    #else
+    void* handle = dlopen(name.c_str(), RTLD_LAZY | RTLD_DEEPBIND | RTLD_LOCAL);
+    msg = dlerror();
+    #endif
+
+    CHECK(handle) << "Cannot open library" << name << ":" << msg;
     
+    #ifdef _WIN32
+    auto jit_entry = (jit_op_entry_t)GetProcAddress((HINSTANCE)handle, symbol_name.c_str());
+    #else
     //dlerror();
     auto jit_entry = (jit_op_entry_t)dlsym(handle, symbol_name.c_str());
-    const char* dlsym_error = dlerror();
-    CHECK(!dlsym_error) << "Loading symbol jit_entry from" << name << "failed:" << dlsym_error;
+    msg = dlerror();
+    #endif
+    CHECK(jit_entry) << "Loading symbol" << symbol_name << "from" << name << "failed:" << msg;
     
     return jit_entry;
 }
@@ -66,26 +79,30 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
     // compiler do not allowed filename too long
     CHECK(cc_path.size());
     string jit_src_path = Op::get_filename_from_jit_key(jit_key, ".cc");
+    #ifdef _WIN32
+    string jit_lib_path = Op::get_filename_from_jit_key(jit_key, ".dll");
+    #else
     string jit_lib_path = Op::get_filename_from_jit_key(jit_key, ".so");
-    string other_src = " "+join(jittor_path, "src/op.cc")+" "+
-        join(jittor_path, "src/var.cc")+" ";
-    other_src = "";
+    #endif
+    string other_src;
     LOGvvv << "Generate" << jit_src_path >> "\n" >> src;
     if (rewrite_op || !file_exist(jit_src_path))
         write(jit_src_path, src);
     string cmd;
     if (is_cuda_op) {
         cmd = nvcc_path 
-            + " '" + jit_src_path + "'" + other_src
+            + " \"" + jit_src_path + "\"" + other_src
             + nvcc_flags + extra_flags
-            + " -o '" + jit_lib_path + "'";
+            + " -o \"" + jit_lib_path + "\"";
     } else {
         cmd = cc_path
-            + " '" + jit_src_path + "'" + other_src
+            + " \"" + jit_src_path + "\"" + other_src
             + cc_flags + extra_flags
-            + " -o '" + jit_lib_path + "'";
+            + " -o \"" + jit_lib_path + "\"";
+        #ifndef _WIN32
         cmd = python_path+" "+jittor_path+"/utils/asm_tuner.py "
             "--cc_path=" + cmd;
+        #endif
     }
     cache_compile(cmd, cache_path, jittor_path);
     auto symbol_name = get_symbol_name(jit_key);

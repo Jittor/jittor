@@ -201,10 +201,10 @@ string Op::get_filename_from_jit_key(const string& jit_key, const string& suffix
     string s = iter==jit_key_mapper.end() ? jit_key : iter->second;
     std::stringstream ss;
     if (s.size() > 100) {
-        ss << s.substr(0, 90) << "...hash:"
+        ss << s.substr(0, 90) << "...hash_"
             << std::hex << std::hash<string>()(s);
     } else {
-        ss << s << "_hash:" << 
+        ss << s << "_hash_" << 
             std::hex << std::hash<string>()(s);
     }
     s = ss.str();
@@ -212,10 +212,14 @@ string Op::get_filename_from_jit_key(const string& jit_key, const string& suffix
         if (c=='[' || c==']' || c=='<' || c=='>'
             || c=='{' || c=='}' || c=='(' || c==')' || c==',' 
             || c=='\n' || c=='\t' || c==' ' || c=='&' || c=='|'
-            || c=='/')
+            || c=='/' || c==':')
             c = '_';
     }
+    #ifndef _WIN32
     string filename = cache_path + "/jit/";
+    #else
+    string filename = cache_path + "\\jit\\";
+    #endif
     filename += s;
     filename += "_op";
     filename += suffix;

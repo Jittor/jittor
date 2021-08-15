@@ -29,6 +29,8 @@ def get_cuda_driver():
 
 def install_cuda():
     cuda_driver_version = get_cuda_driver()
+    if not cuda_driver_version:
+        return None
     LOG.i("cuda_driver_version: ", cuda_driver_version)
 
     cuda_tgz = "cuda10.2_cudnn7_linux.tgz"

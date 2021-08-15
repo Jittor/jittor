@@ -4,8 +4,6 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#include <dlfcn.h>
-
 #include "core.h"
 #include "grad.h"
 #include "pyjt/py_obj_holder.h"

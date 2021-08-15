@@ -8,6 +8,7 @@ import subprocess as sp
 import os
 import re
 import sys
+import glob
 import inspect
 import datetime
 import threading
@@ -49,7 +50,21 @@ def compile(compiler, flags, inputs, output, combind_build=False):
             run_cmd(cmd)
             return True
     link = link_flags
-    base_output = output.split('/')[-1].split('.')[0]
+    base_output = os.path.basename(output).split('.')[0]
+    if os.name == 'nt':
+        # initialize order in windows seems reversed
+        inputs = list(inputs[::-1])
+        # windows need libxxx.a
+        afile = os.path.join(cache_path, f"lib{base_output}.a")
+        link = link + f' -Wl,--export-all-symbols,--out-implib,"{afile}" '
+        if base_output == "jit_utils_core":
+            pass
+        elif base_output == "jittor_core":
+            inputs.append(os.path.join(cache_path, f"libjit_utils_core.a"))
+        else:
+            inputs.append(os.path.join(cache_path, f"libjit_utils_core.a"))
+            inputs.append(os.path.join(cache_path, f"libjittor_core.a"))
+            
     # if output is core, add core_link_flags
     if output.startswith("jittor_core"):
         link = link + core_link_flags
@@ -58,7 +73,7 @@ def compile(compiler, flags, inputs, output, combind_build=False):
     obj_files = []
     new_inputs = []
     for name in inputs:
-        if name.endswith(".o"):
+        if name[-1] in 'oa':
             obj_files.append(name)
         else:
             new_inputs.append(os.path.join(jittor_path, name))
@@ -67,7 +82,7 @@ def compile(compiler, flags, inputs, output, combind_build=False):
     inputs = new_inputs
 
     if len(inputs) == 1 or combind_build:
-        cmd = f"{compiler} {' '.join(inputs)} {flags} {link} -o {output}"
+        cmd = f"\"{compiler}\" {' '.join(inputs)} {flags} {link} -o {output}"
         return do_compile(cmd)
     # split compile object file and link
     # remove -l -L flags when compile object files
@@ -89,20 +104,21 @@ def compile(compiler, flags, inputs, output, combind_build=False):
             cmd = cmd.replace("-Ofast", "-O2")
         cmds.append(cmd)
     jit_utils.run_cmds(cmds, cache_path, jittor_path, "Compiling "+base_output)
-    cmd = f"{compiler} {' '.join(obj_files)} {flags} {lto_flags} {link} -o {output}"
+    cmd = f"\"{compiler}\" {' '.join(obj_files)} {flags} {lto_flags} {link} -o {output}"
     return do_compile(cmd)
 
 def gen_jit_tests():
-    all_src = run_cmd('find -L src/ | grep "cc$"', jittor_path).splitlines()
+    # all_src = run_cmd('find -L src/ | grep "cc$"', jittor_path).splitlines()
+    # all_src = glob.glob(os.path.join(jittor_path,"src","**","*.cc"), recursive=True)
+    all_src = glob.glob(jittor_path+"/src/**/*.cc", recursive=True)
     jit_declares = []
     re_def = re.compile("JIT_TEST\\((.*?)\\)")
     names = set()
     test_defs = []
     
     for src_name in all_src:
-        src_name = os.path.join(jittor_path, src_name)
-        with open(src_name) as f:
-            src = f.read()
+        with open(src_name, 'rb') as f:
+            src = f.read().decode('utf8')
         defs = re_def.findall(src)
         for name in defs:
             LOG.vv(f"Find test {name} from {src_name}")
@@ -143,7 +159,8 @@ def gen_jit_tests():
         f.write(jit_src)
 
 def gen_jit_flags():
-    all_src = run_cmd('find -L src/ | grep "cc$"', jittor_path).splitlines()
+    # all_src = run_cmd('find -L src/ | grep "cc$"', jittor_path).splitlines()
+    all_src = glob.glob(jittor_path+"/src/**/*.cc", recursive=True)
     jit_declares = []
     re_def = re.compile("DEFINE_FLAG(_WITH_SETTER)?\\((.*?)\\);", re.DOTALL)
 
@@ -151,9 +168,8 @@ def gen_jit_flags():
     visit = {}
     
     for src_name in all_src:
-        src_name = os.path.join(jittor_path, src_name)
-        with open(src_name) as f:
-            src = f.read()
+        with open(src_name, 'rb') as f:
+            src = f.read().decode("utf8")
         defs = re_def.findall(src)
         for _, args in defs:
             args = args.split(",")
@@ -360,13 +376,13 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
         # XxxXxxOp
         name2 = map(lambda s:s[:1].upper() + s[1:], name.split('_'))
         name2 = "".join(name2)
-        with open(os.path.join(jittor_path, header), encoding='utf8') as f:
+        with open(header, encoding='utf8') as f:
             src = f.read()
         # XxxXxxOp(args)
         res = re.findall(pybind_attrs_reg + '[^~]('+name2+"\\([^\\n]*\\))", src, re.S)
         assert len(res) >= 1, "Wrong op args in " + header
         # registe op
-        cc_name = os.path.join(jittor_path, header[:-2] + ".cc")
+        cc_name = header[:-2] + ".cc"
         constructors = []
         for i in range(len(res)):
             name = 'make_'+func_name+'_'*i
@@ -440,10 +456,10 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
             vh2v_src = "_op->set_inputs({" + ", ".join(vh2v_src) + "});" + \
                 "".join(more_src)
             LOG.vvvv(f"Find op: {name2} args: {new_args}")
-            if header.startswith("src/"):
-                jit_headers += f"#include \"{header[4:]}\"\n"
-            else:
-                jit_headers += f"#include \"{header}\"\n"
+            # if header.startswith("src/"):
+            #     jit_headers += f"#include \"{header[4:]}\"\n"
+            # else:
+            jit_headers += f"#include \"{header}\"\n"
             add_src(
                 func_name+'_'*hid,
                 new_args_def,
@@ -657,7 +673,7 @@ def compile_custom_ops(
 
     for name in pyjt_includes:
         LOG.i("handle pyjt_include", name)
-        bname = name.split("/")[-1].split(".")[0]
+        bname = os.path.basename(name).split(".")[0]
         gen_src_fname = os.path.join(cache_path, "custom_ops", gen_name+"_"+bname+".cc")
         pyjt_compiler.compile_single(name, gen_src_fname)
         builds.insert(1, gen_src_fname)
@@ -786,7 +802,10 @@ def check_cache_compile():
         "src/utils/log.cc",
         "src/utils/tracer.cc",
         "src/utils/jit_utils.cc",
+        "src/utils/str_utils.cc",
     ]
+    if os.name == 'nt':
+        files = [ x.replace('/', '\\') for x in files ]
     global jit_utils_core_files
     jit_utils_core_files = files
     recompile = compile(cc_path, cc_flags+f" {opt_flags} ", files, 'jit_utils_core'+extension_suffix, True)
@@ -866,13 +885,14 @@ python_path = sys.executable
 ex_python_path = python_path + '.' + str(sys.version_info.minor)
 if os.path.isfile(ex_python_path):
     python_path = ex_python_path
-py3_config_path = jit_utils.py3_config_path
 nvcc_path = env_or_try_find('nvcc_path', 'nvcc') or try_find_exe('/usr/local/cuda/bin/nvcc') or try_find_exe('/usr/bin/nvcc')
 if not nvcc_path:
     cuda_driver = install_cuda.get_cuda_driver()
     nvcc_path = install_cuda.install_cuda()
     if nvcc_path:
         nvcc_path = try_find_exe(nvcc_path)
+if nvcc_path is None:
+    nvcc_path = ""
 gdb_path = try_find_exe('gdb')
 addr2line_path = try_find_exe('addr2line')
 has_pybt = check_pybt(gdb_path, python_path)
@@ -885,6 +905,20 @@ link_flags = " -lstdc++ -ldl -shared "
 core_link_flags = ""
 opt_flags = ""
 kernel_opt_flags = os.environ.get("kernel_flags", "") + opt_flags + " -fopenmp "
+if os.name == 'nt':
+    link_flags = link_flags.replace('-ldl', '')
+    py3_link_path = '-L"' + os.path.join(
+            os.path.dirname(sys.executable),
+            "libs"
+        ) + f'" -lpython3{sys.version_info.minor} '
+    core_link_flags = py3_link_path
+    link_flags += core_link_flags
+    # link_flags += " -Wl,--unresolved-symbols=ignore-all "
+    # cc_flags += " -Xlinker --allow-shlib-undefined "
+    cc_flags = cc_flags.replace('-std=c++14', '-std=c++17')
+    link_flags += " -fopenmp "
+    kernel_opt_flags += f" {cache_path}\\libjit_utils_core.a "
+    kernel_opt_flags += f" {cache_path}\\libjittor_core.a "
 
 if ' -O' not in cc_flags:
     opt_flags += " -O2 "
@@ -898,9 +932,9 @@ if os.environ.get("enable_lto") == "1":
     else:
         lto_flags = " -flto "
 
-py_include = run_cmd(py3_config_path+" --includes")
+py_include = jit_utils.get_py3_include_path()
 LOG.i(f"py_include: {py_include}")
-extension_suffix = run_cmd(py3_config_path+" --extension-suffix")
+extension_suffix = jit_utils.get_py3_extension_suffix()
 LOG.i(f"extension_suffix: {extension_suffix}")
 
 make_cache_dir(cache_path)
@@ -911,7 +945,7 @@ ck_path = os.path.join(cache_path, "checkpoints")
 make_cache_dir(ck_path)
 
 # build cache_compile
-cc_flags += f" -I{jittor_path}/src "
+cc_flags += f" -I{os.path.join(jittor_path, 'src')} "
 cc_flags += py_include
 check_cache_compile()
 LOG.v(f"Get cache_compile: {jit_utils.cc}")
@@ -943,7 +977,8 @@ if has_cuda:
 # build core
 gen_jit_flags()
 gen_jit_tests()
-op_headers = run_cmd('find -L src/ops/ | grep "op.h$"', jittor_path).splitlines()
+op_headers = glob.glob(jittor_path+"/src/ops/**/*op.h", recursive=True)
+# op_headers = run_cmd('find -L src/ops/ | grep "op.h$"', jittor_path).splitlines()
 jit_src = gen_jit_op_maker(op_headers)
 LOG.vvvv(jit_src)
 with open(os.path.join(cache_path, "gen", "jit_op_maker.h"), 'w') as f:
@@ -958,8 +993,10 @@ pyjt_gen_src = pyjt_compiler.compile(cache_path, jittor_path)
 # 3. op_utils
 # 4. other
 files2 = pyjt_gen_src
-grep_args = '"c[cu]$"' if has_cuda else '"cc$"'
-files4 = run_cmd('find -L src | grep '+grep_args, jittor_path).splitlines()
+ext_args = 'c[cu]' if has_cuda else 'cc'
+files4 = glob.glob(jittor_path+"/src/**/*."+ext_args, recursive=True)
+files4 = [ f[len(jittor_path)+1:] for f in files4 ]
+# files4 = run_cmd('find -L src | grep '+grep_args, jittor_path).splitlines()
 at_beginning = [
     "src/ops/op_utils.cc",
     "src/event_queue.cc",
@@ -969,16 +1006,14 @@ at_beginning = [
 at_last = [
     "src/profiler/profiler.cc",
     "src/executor.cc",
-    "src/fetcher.cc",
 ]
+if os.name == 'nt':
+    at_beginning = [ x.replace('/','\\') for x in at_beginning ]
+    at_last = [ x.replace('/','\\') for x in at_last ]
 for i in range(len(at_beginning)):
-    if at_beginning[i] not in files4:
-        continue
     files4.remove(at_beginning[i])
     files4.insert(i, at_beginning[i])
 for v in at_last:
-    if v not in files4:
-        continue
     files4.remove(v)
     files4.append(v)
 registers = [ name for name in files4 if "register" in name ]
@@ -988,22 +1023,24 @@ for file in jit_utils_core_files:
     files.remove(file)
 LOG.vv("compile order:", files)
 
-# manual Link omp using flags(os.RTLD_NOW | os.RTLD_GLOBAL)
-# if cc_type=="icc":
-#     os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-libname = {"clang":"omp", "icc":"iomp5", "g++":"gomp"}[cc_type]
-libname = ctypes.util.find_library(libname)
-assert libname is not None, "openmp library not found"
-ctypes.CDLL(libname, os.RTLD_NOW | os.RTLD_GLOBAL)
+if os.name != 'nt':
+    # manual Link omp using flags(os.RTLD_NOW | os.RTLD_GLOBAL)
+    # if cc_type=="icc":
+    #     os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+    libname = {"clang":"omp", "icc":"iomp5", "g++":"gomp"}[cc_type]
+    libname = ctypes.util.find_library(libname)
+    assert libname is not None, "openmp library not found"
+    ctypes.CDLL(libname, os.RTLD_NOW | os.RTLD_GLOBAL)
 
-# get os release
-with open("/etc/os-release", "r", encoding='utf8') as f:
-    s = f.read().splitlines()
-    os_release = {}
-    for line in s:
-        a = line.split('=')
-        if len(a) != 2: continue
-        os_release[a[0]] = a[1].replace("\"", "")
+    # get os release
+
+    with open("/etc/os-release", "r", encoding='utf8') as f:
+        s = f.read().splitlines()
+        os_release = {}
+        for line in s:
+            a = line.split('=')
+            if len(a) != 2: continue
+            os_release[a[0]] = a[1].replace("\"", "")
 
 os_type = {
     "ubuntu": "ubuntu",

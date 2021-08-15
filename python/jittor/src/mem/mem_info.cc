@@ -6,7 +6,11 @@
 // ***************************************************************
 #include <iomanip>
 #include <algorithm>
+#ifndef _WIN32
 #include <sys/sysinfo.h>
+#else
+#include <windows.h>
+#endif
 
 #include "var.h"
 #include "op.h"
@@ -152,9 +156,15 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
 }
 
 MemInfo::MemInfo() {
+#ifndef _WIN32
     struct sysinfo info = {0};
     sysinfo(&info);
     total_cpu_ram = info.totalram;
+#else
+    MEMORYSTATUSEX statex;
+    GlobalMemoryStatusEx (&statex);
+    total_cpu_ram = statex.ullTotalPhys;
+#endif
     total_cuda_ram = 0;
 #ifdef HAS_CUDA
     cudaDeviceProp prop;
