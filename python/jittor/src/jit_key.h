@@ -165,10 +165,12 @@ inline JK& operator<<(JK& jk, int64 c) {
     }
     return jk << JK::hex(c);
 }
-
+#ifndef _WIN32
+// win32 cause redefinition error
 inline JK& operator<<(JK& jk, long long int c) {
     return jk << (int64)c;
 }
+#endif
 
 inline JK& operator<<(JK& jk, uint64 c) {
     return jk << JK::hex(c);

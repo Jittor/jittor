@@ -6,7 +6,11 @@
 // ***************************************************************
 #pragma once
 #include <Python.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <dlfcn.h>
+#endif
 #include <vector>
 #include <list>
 #include <map>

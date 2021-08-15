@@ -175,5 +175,24 @@ class TestArray(unittest.TestCase):
         assert b.dtype == "float64"
 
 
+    def test_all_type(self):
+        with jt.flag_scope(auto_convert_64_to_32=0):
+            types = [
+                "bool", 
+                "int8", "uint8",
+                "int16", "uint16",
+                "int32", "uint32",
+                "int64", "uint64",
+                "float32", "float64",
+            ]
+            for t in types:
+                a = np.random.random(1000).astype(t)
+                b = jt.array(a)
+                assert str(b.dtype) == t
+                c = b.numpy()
+                assert str(c.dtype) == t
+                np.testing.assert_allclose(a, c)
+
+
 if __name__ == "__main__":
     unittest.main()

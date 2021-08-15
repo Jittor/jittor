@@ -9,6 +9,7 @@ import os
 from jittor_utils import LOG, run_cmd, simple_timer
 import json
 from collections import OrderedDict
+import glob
 
 def parse_attrs(s):
     '''parse @attrs(..., x=y) syntax'''
@@ -847,7 +848,7 @@ def compile_src(src, h, basename):
     return src_code
 
 def compile_single(head_file_name, src_file_name, src=None):
-    basename = head_file_name.split("/")[-1].split(".")[0]
+    basename = os.path.basename(head_file_name).split(".")[0]
     if src==None:
         with open(head_file_name, 'r') as f:
             src = f.read()
@@ -860,22 +861,22 @@ def compile_single(head_file_name, src_file_name, src=None):
     return True
 
 def compile(cache_path, jittor_path):
-    headers1 = run_cmd('find -L src/ | grep ".h$"', jittor_path).splitlines()
-    headers2 = run_cmd('find gen/ | grep ".h$"', cache_path).splitlines()
-    headers = [ os.path.join(jittor_path, h) for h in headers1 ] + \
-        [ os.path.join(cache_path, h) for h in headers2 ]
+    headers1 = glob.glob(jittor_path+"/src/**/*.h", recursive=True)
+    headers2 = glob.glob(cache_path+"/gen/**/*.h", recursive=True)
+    headers = headers1 + headers2
     basenames = []
     pyjt_names = []
     for h in headers:
         with open(h, 'r') as f:
             src = f.read()
 
+        bh = os.path.basename(h)
         # jit_op_maker.h merge compile with var_holder.h
-        if h.endswith("src/var_holder.h"): continue
-        if h.endswith("jit_op_maker.h"):
+        if bh == "var_holder.h": continue
+        if bh == "jit_op_maker.h":
             with open(os.path.join(jittor_path, "src", "var_holder.h"), "r") as f:
                 src = f.read() + src
-        basename = h.split("/")[-1].split(".")[0]
+        basename = bh.split(".")[0]
         fname = "pyjt_"+basename+".cc"
         fname = os.path.join(cache_path, "gen", fname)
         check = compile_single(h, fname, src)

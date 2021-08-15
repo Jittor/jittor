@@ -6,7 +6,6 @@
 // ***************************************************************
 #pragma once
 #include <pthread.h>
-#include <sys/mman.h>
 #include <cstring>
 #include "common.h"
 
@@ -48,10 +47,14 @@ struct RingBuffer {
         }
         
         inline ~Cond() {
+            #ifndef _WIN32
             // a dirty hack
             // ref: https://stackoverflow.com/questions/20439404/pthread-conditions-and-process-termination
             // cv.__data.__wrefs = 0;
             cv.__data = {0};
+            #else
+            // cv.__data = 0;
+            #endif
             pthread_cond_destroy(&cv);
         }
 

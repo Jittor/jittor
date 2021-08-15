@@ -29,10 +29,14 @@ int current_seed;
 // fron fetch_op.cc
 extern list<VarPtr> fetcher;
 extern list<VarPtr> fetcher_to_free;
+extern vector<void(*)()> cleanup_callback;
 
 void cleanup() {
     fetcher_to_free.clear();
     fetcher.clear();
+    for (auto cb : cleanup_callback)
+        cb();
+    cleanup_callback.clear();
 }
 
 static void init_cuda_devices() {

@@ -19,11 +19,11 @@ if __name__ == "__main__":
 
     s = ""
     # base should be something like python3.7m python3.8
-    base = jittor_utils.run_cmd(jittor_utils.py3_config_path + " --includes").split()[0]
+    base = jittor_utils.get_py3_include_path().split()[0]
     base = "python3" + base.split("python3")[-1]
     for arg in sys.argv[1:]:
         if arg == "--include-flags":
-            s += jittor_utils.run_cmd(jittor_utils.py3_config_path + " --includes")
+            s += jittor_utils.get_py3_include_path()
             s += " -I"+os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "jittor", "src"))
             s += " "
         elif arg == "--libs-flags":
@@ -31,6 +31,8 @@ if __name__ == "__main__":
             libpath = libbase + f"/lib{base}.so"
             assert os.path.isfile(libpath), f"lib not exist: {libpath}"
             s += f" -L{libbase} -l{base} -ldl "
+            if os.name == 'nt'
+                s = s.replace('-ldl', '')
         elif arg == "--cxx-flags":
             s += " --std=c++17 "
         elif arg == "--cxx-example":

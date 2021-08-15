@@ -6,7 +6,9 @@
 // ***************************************************************
 #include <chrono>
 #include <thread>
+#ifndef _WIN32
 #include <sys/mman.h>
+#endif
 #include "common.h"
 #include "misc/ring_buffer.h"
 
@@ -41,7 +43,13 @@ RingBuffer* RingBuffer::make_ring_buffer(uint64 size, bool multiprocess) {
     uint64 total_size = sizeof(RingBuffer) + size;
     void* ptr = multiprocess ?
         // mmap(NULL, total_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0) :
-        mmap(NULL, total_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0) :
+        #ifndef _WIN32
+        mmap(NULL, total_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0) 
+        #else
+        // TODO: multiprocess ring buffer in windows
+        (void*)malloc(total_size)
+        #endif
+        :
         // mmap(NULL, total_size, PROT_READ | PROT_WRITE, MAP_SHARED, -1, 0) :
         (void*)malloc(total_size);
     std::memset(ptr, 0, total_size);
@@ -55,7 +63,12 @@ void RingBuffer::free_ring_buffer(RingBuffer* rb) {
     auto is_multiprocess = rb->is_multiprocess;
     rb->~RingBuffer();
     if (is_multiprocess) {
+        #ifndef _WIN32
         munmap(rb, total_size);
+        #else
+        free((void*)rb);
+        #endif
+        (void)total_size;
     } else {
         free((void*)rb);
     }

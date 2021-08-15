@@ -6,8 +6,12 @@
 // ***************************************************************
 #include <fstream>
 #include <streambuf>
+#ifdef _WIN32
+#include <filesystem>
+#endif
 #include "misc/hash.h"
 #include "utils/cache_compile.h"
+#include "utils/str_utils.h"
 
 namespace jittor {
 namespace jit_compiler {
@@ -15,7 +19,7 @@ namespace jit_compiler {
 #ifndef TEST
 string read_all(const string& fname) {
     std::ifstream ifs(fname);
-    if (ifs)
+    if (ifs && ifs.good())
         return string((std::istreambuf_iterator<char>(ifs)),
                       (std::istreambuf_iterator<char>()));
     return "";
@@ -65,7 +69,7 @@ void find_names(string cmd, vector<string>& input_names, string& output_name, ma
     auto substr = [&](size_t i, size_t j) -> string {
         string s;
         for (size_t k=i; k<j; k++)
-            if (cmd[k]!='\'') s += cmd[k];
+            if (cmd[k]!='\'' && cmd[k]!='"') s += cmd[k];
         return s;
     };
     while (i<cmd.size()) {
@@ -164,6 +168,29 @@ void process(string src, vector<string>& input_names) {
     }
 }
 
+static inline void check_win_file(const string& name) {
+#ifdef _WIN32
+    // win32 not allowed so file change when load
+    // but we can rename it
+    if (!file_exist(name)) return;
+    if (!(endswith(name, ".pyd") || endswith(name, ".dll")))
+        return;
+    string new_name = name+".bk";
+    LOGv << "move file" << name << "-> " << new_name;
+    if (file_exist(new_name))
+        std::filesystem::remove(new_name);
+    std::filesystem::rename(name, new_name);
+#endif
+}
+
+static inline bool is_full_path(const string& name) {
+#ifdef _WIN32
+    return name.size()>=2 && name[1]==':';
+#else
+    return name.size() && name[0]=='/';
+#endif
+}
+
 bool cache_compile(const string& cmd, const string& cache_path, const string& jittor_path) {
     vector<string> input_names;
     map<string,vector<string>> extra;
@@ -172,10 +199,12 @@ bool cache_compile(const string& cmd, const string& cache_path, const string& ji
     string output_cache_key;
     bool ran = false;
     output_cache_key = read_all(output_name+".key");
-    string cd_cmd = cache_path.size() ? "cd " + cache_path + " && " + cmd : cmd;
+    // string cd_cmd = cache_path.size() ? "cd " + cache_path + " && " + cmd : cmd;
+    string cd_cmd = cmd;
     if (output_cache_key.size() == 0) {
         LOGvv << "Cache key of" << output_name << "not found.";
         LOGvvv << "Run cmd:" << cmd;
+        check_win_file(output_name);
         system_with_check(cd_cmd.c_str());
         ran = true;
     }
@@ -197,7 +226,7 @@ bool cache_compile(const string& cmd, const string& cache_path, const string& ji
             string full_name;
             if (name.substr(0, 4) == "jit/" || name.substr(0, 4) == "gen/")
                 full_name = join(cache_path, name);
-            else if (name.size() && name[0]=='/')
+            else if (is_full_path(name))
                 full_name = name;
             else
                 full_name = join(src_path, name);
@@ -225,6 +254,7 @@ bool cache_compile(const string& cmd, const string& cache_path, const string& ji
     if (output_cache_key.size() != 0 && output_cache_key != cache_key) {
         LOGvv << "Cache key of" << output_name << "changed.";
         LOGvvv << "Run cmd:" << cmd;
+        check_win_file(output_name);
         system_with_check(cd_cmd.c_str());
         ran = true;
     }

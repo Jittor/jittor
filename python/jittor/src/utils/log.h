@@ -38,6 +38,29 @@ extern "C" uint32_t get_tid();
 extern "C" bool g_supports_color;
 extern "C" void print_prefix(std::ostream* out);
 
+#ifdef _WIN32
+constexpr char green[] = "\x1b[1;32m";
+constexpr char red[] = "\x1b[1;31m";
+constexpr char yellow[] = "\x1b[1;33m";
+
+
+static void get_color(char level, int verbose, const char*& color_begin, const char*& color_end) {
+    if (level == 'i') {
+        if (verbose == 0) color_begin = "\x1b[1;32m"; else
+        if (verbose < 10) color_begin = "\x1b[1;32m"; else
+        if (verbose < 100) color_begin = "\x1b[1;32m"; else
+        if (verbose < 1000) color_begin = "\x1b[1;32m";
+        else color_begin = "\x1b[1;32m";
+    } else if (level == 'w')
+        color_begin = yellow;
+    else if (level == 'e')
+        color_begin = red;
+    else // level == 'f'
+        color_begin = red;
+    color_end = "\x1b[m";
+}
+
+#else
 constexpr char green[] = "\033[38;5;2m";
 constexpr char red[] = "\033[38;5;1m";
 constexpr char yellow[] = "\033[38;5;3m";
@@ -57,6 +80,8 @@ static void get_color(char level, int verbose, const char*& color_begin, const c
         color_begin = red;
     color_end = "\033[m";
 }
+
+#endif
 
 extern "C" void send_log(std::ostringstream&& out);
 extern "C" void flush_log();

@@ -20,7 +20,7 @@ import random
 pass_this_test = False
 msg = ""
 mid = 0
-if os.uname()[1] == "jittor-ce":
+if hasattr(os, "uname") and os.uname()[1] == "jittor-ce":
     mid = 1
 try:
     traindir = ["/data1/cjld/imagenet/train/","/home/cjld/imagenet/train/"][mid]
