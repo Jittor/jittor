@@ -28,22 +28,13 @@ static inline void add_dependency(Node* a, const vector<Node*>& b) {
 }
 
 static void setitem_inplace(SetitemOp* op) {
-    static int cnt = 0;
-    cnt += 1;
-    if (cnt % 1000 == 0)
-        LOGir <<cnt;
     // LOGir << "in setitem_inplace";
-    int check_id = 3000;
-    if (cnt == check_id)
-        LOGir <<"233";
     auto input = op->inputs().front();
     if (!(input->outputs().size() == 1 && 
         input->forward_liveness<=1 &&
         (op->op == ns_void || op->op == ns_add || op->op == ns_subtract))) {
         return;
     }
-    if (cnt == check_id)
-        LOGir <<"233";
     auto input_op = input->input();
     if (input_op) {
         // make sure input op will not use input
@@ -55,22 +46,16 @@ static void setitem_inplace(SetitemOp* op) {
             // TODO: inplace getitem maybe risky, getitem maybe inplace too
         return;
     }
-    if (cnt == check_id)
-        LOGir <<"233";
     auto output = op->outputs().front();
     // return if output is all ready shared
     if (output->allocator) return;
     output->share_with(input);
     
-    if (cnt == check_id)
-        LOGir <<"233";
     auto data = op->input(1);
     // if setitem requires type conversion, don't inplace
     if (data->dtype() != input->dtype())
         return;
 
-    if (cnt == check_id)
-        LOGir <<"233";
     input_op = input->input();
 
     if (input_op && input_op->inputs().size() == 1) {
@@ -86,34 +71,16 @@ static void setitem_inplace(SetitemOp* op) {
            (!input_op 
             || input_op->inputs().size() == 0))))
         return;
-    if (cnt == check_id) {
-        LOGir <<"233";
-        LOGir << data->input() << data;
-    }
-    // if (data->allocator)
-    //     return;
     Var* data_target = data;
     if (data->allocator) {
-    if (cnt == check_id)
-        LOGir <<"233";
         if (data->input()->inputs().size() != 1)
             return;
-    if (cnt == check_id)
-        LOGir <<"233";
         data_target = data->input()->inputs().front();
-    if (cnt == check_id)
-        LOGir <<"233";
         if (data_target->size != data->size)
             return;
-    if (cnt == check_id)
-        LOGir <<"233" << data_target->is_finished() << (void*)data_target->allocator << data_target->input();
         if (data_target->is_finished() || data_target->allocator)
             return;
-    if (cnt == check_id)
-        LOGir <<"233";
     }
-    if (cnt == check_id)
-        LOGir <<"233";
 
     auto in_shape = input->shape;
     int64 inplace_size = 1;
@@ -125,14 +92,10 @@ static void setitem_inplace(SetitemOp* op) {
             return;
         inplace_size *= in_shape[i];
     }
-    if (cnt == check_id)
-        LOGir <<"233";
     
     VarSlice s = vs.slices[0];
     if (s.is_var() || s.is_str()) return;
     
-    if (cnt == check_id)
-        LOGir <<"233";
     auto size = 0;
     if (s.is_int())
         size = s.i * input->size / in_shape[0];
@@ -150,10 +113,6 @@ static void setitem_inplace(SetitemOp* op) {
         // This would lead partial setitem
         return;
     }
-    static int cnt2 = 0;
-    cnt2 += 1;
-    if (cnt2 % 1000 == 0)
-        LOGir <<"ok"<<cnt2;
     add_dependency(data_target->input(), {input->node()});
     data_target->share_with(input, size);
     op->flags.set((NodeFlags::Flags(SetitemOp::_data_inplaced)));

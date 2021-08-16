@@ -141,7 +141,7 @@ class Optimizer(object):
                     g = grads[pid].stop_grad()
                     if not self.__zero_grad:
                         g = g + pg_grads[i]
-                    pg_grads[i].update(g)
+                    pg_grads[i].swap(g)
                     pid += 1
         self.__zero_grad = False
         
