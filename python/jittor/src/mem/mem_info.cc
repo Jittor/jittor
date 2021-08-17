@@ -6,11 +6,17 @@
 // ***************************************************************
 #include <iomanip>
 #include <algorithm>
-#ifndef _WIN32
+#if defined(__linux__)
 #include <sys/sysinfo.h>
-#else
+#elif defined(__APPLE__)
+#include <sys/sysctl.h>
+#include <mach/host_info.h>
+#include <mach/mach_init.h>
+#include <mach/mach_host.h>
+#elif defined(_WIN32)
 #include <windows.h>
 #endif
+#include <unistd.h>
 
 #include "var.h"
 #include "op.h"
@@ -104,16 +110,41 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
                 >> "(" >> std::setprecision(p) >> a->unused_memory*100.0 / total >> "%)"
             << "total:" << FloatOutput{(double)total, " KMG", 1024, "B"} >> "\n";
     }
+    if (use_temp_allocator && exe.temp_allocator) {
+        for (auto& a : TempAllocator::temp_allocators) {
+            auto total = a->used_memory + a->unused_memory;
+            all_total += total;
+            a->is_cuda() ? gpu_total += total : cpu_total += total;
+            log << "name:" << a->name() << "is_cuda:" << a->is_cuda()
+                << "used:" << FloatOutput{(double)a->used_memory, " KMG", 1024, "B"}
+                    >> "(" >> std::setprecision(p) >> a->used_memory*100.0 / total >> "%)"
+                << "unused:" << FloatOutput{(double)a->unused_memory, " KMG", 1024, "B"} 
+                    >> "(" >> std::setprecision(p) >> a->unused_memory*100.0 / total >> "%)"
+                << "total:" << FloatOutput{(double)total, " KMG", 1024, "B"} >> "\n";
+        }
+    }
     log << "cpu&gpu:" << FloatOutput{(double)all_total, " KMG", 1024, "B"}
         << "gpu:" << FloatOutput{(double)gpu_total, " KMG", 1024, "B"}
         << "cpu:" << FloatOutput{(double)cpu_total, " KMG", 1024, "B"} >> '\n';
-    if (use_temp_allocator) {
-        TempAllocator* temp_allocator = (TempAllocator*)exe.temp_allocator;
-        log << "\nname:" << temp_allocator->name() << "\n";
-        log << "used_memory:" << FloatOutput{(double)temp_allocator->used_memory, " KMG", 1024, "B"} << "\n";
-        log << "unused_memory:" << FloatOutput{(double)temp_allocator->unused_memory, " KMG", 1024, "B"} << "\n";
-
+    size_t cpu_free = 0;
+#if defined(__linux__)
+    cpu_free = get_avphys_pages() * sysconf(_SC_PAGESIZE);
+#elif defined(__APPLE__)
+    {
+        mach_msg_type_number_t count = HOST_VM_INFO_COUNT;
+        vm_statistics_data_t vmstat;
+        if (KERN_SUCCESS == host_statistics(mach_host_self(), HOST_VM_INFO, (host_info_t)&vmstat, &count)) {
+            cpu_free = vmstat.free_count * sysconf(_SC_PAGESIZE);
+        }
     }
+#endif
+    size_t gpu_free = 0, _gpu_total = 0;
+    (void)gpu_free; (void)_gpu_total;
+    #ifdef HAS_CUDA
+    cudaMemGetInfo(&gpu_free, &_gpu_total);
+    #endif
+    log << "free: cpu(">>FloatOutput{(double)cpu_free, " KMG", 1024, "B"}
+        >> ") gpu(">>FloatOutput{(double)gpu_free, " KMG", 1024, "B"} >> ")\n";
     if (dump_var) {
         vector<Node*> queue;
         unordered_set<Node*> visited;
@@ -155,22 +186,35 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
     log.end();
 }
 
+extern vector<void(*)()> sigquit_callback;
+
+void meminfo_callback() {
+    display_memory_info();
+}
+
 MemInfo::MemInfo() {
-#ifndef _WIN32
+
+#if defined(__linux__)
     struct sysinfo info = {0};
     sysinfo(&info);
     total_cpu_ram = info.totalram;
-#else
+#elif defined(__APPLE__)
+    int mib[] = {CTL_HW, HW_MEMSIZE};
+    size_t len=sizeof(total_cpu_ram);
+    sysctl(mib, 2, &total_cpu_ram, &len, NULL, 0);
+#elif defined(_WIN32)
     MEMORYSTATUSEX statex;
     GlobalMemoryStatusEx (&statex);
     total_cpu_ram = statex.ullTotalPhys;
 #endif
+
     total_cuda_ram = 0;
 #ifdef HAS_CUDA
     cudaDeviceProp prop;
     cudaGetDeviceProperties(&prop, 0);
     total_cuda_ram = prop.totalGlobalMem;
 #endif
+    sigquit_callback.push_back(&meminfo_callback);
 }
 
 MemInfo mem_info;

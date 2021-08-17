@@ -69,6 +69,13 @@ class TestUnaryOp(unittest.TestCase):
         b1 = b.sigmoid().numpy()
         assert np.isnan(b1).any() == False
 
+    def test_safe_clip(self):
+        a = jt.array([-1.0,0,0.4,1,2,3])
+        b = a.safe_clip(0.1, 0.5)
+        assert np.allclose(b.data, [0.1,0.1,0.4,0.5,0.5,0.5])
+        da = jt.grad(b, a)
+        assert (da.data == 1).all()
+
 class TestUnaryOpCuda(TestUnaryOp, test_cuda(2)):
     pass
 

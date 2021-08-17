@@ -117,12 +117,13 @@ class TestDatasetSeed(unittest.TestCase):
                 return np.random.rand(2)
 
         dataset = YourDataset().set_attrs(batch_size=1, shuffle=True, num_workers=4)
-        dd = []
-        for d in dataset:
-            dd.append(d.numpy())
-        for i in range(len(d)):
-            for j in range(i+1, len(d)):
-                assert not np.allclose(dd[i], dd[j])
+        for _ in range(10):
+            dd = []
+            for d in dataset:
+                dd.append(d.numpy())
+            for i in range(len(d)):
+                for j in range(i+1, len(d)):
+                    assert not np.allclose(dd[i], dd[j])
 
     def test_py_native(self):
         import random
@@ -136,12 +137,13 @@ class TestDatasetSeed(unittest.TestCase):
 
         jt.set_global_seed(0)
         dataset = YourDataset().set_attrs(batch_size=1, shuffle=True, num_workers=4)
-        dd = []
-        for d in dataset:
-            dd.append(d.numpy())
-        for i in range(len(d)):
-            for j in range(i+1, len(d)):
-                assert not np.allclose(dd[i], dd[j])
+        for _ in range(10):
+            dd = []
+            for d in dataset:
+                dd.append(d.numpy())
+            for i in range(len(d)):
+                for j in range(i+1, len(d)):
+                    assert not np.allclose(dd[i], dd[j])
 
     def test_jtrand(self):
         import random
@@ -155,12 +157,138 @@ class TestDatasetSeed(unittest.TestCase):
 
         jt.set_global_seed(0)
         dataset = YourDataset().set_attrs(batch_size=1, shuffle=True, num_workers=4)
-        dd = []
-        for d in dataset:
-            dd.append(d.numpy())
-        for i in range(len(d)):
-            for j in range(i+1, len(d)):
-                assert not np.allclose(dd[i], dd[j])
+        for _ in range(10):
+            dd = []
+            for d in dataset:
+                dd.append(d.numpy())
+            for i in range(len(d)):
+                for j in range(i+1, len(d)):
+                    assert not np.allclose(dd[i], dd[j])
+
+    def test_dict(self):
+        import random
+        class YourDataset(Dataset):
+            def __init__(self):
+                super().__init__()
+                self.set_attrs(total_len=160)
+
+            def __getitem__(self, k):
+                return { "a":np.array([1,2,3]) }
+
+        jt.set_global_seed(0)
+        dataset = YourDataset().set_attrs(batch_size=1, shuffle=True, num_workers=4)
+        for _ in range(10):
+            dd = []
+            for d in dataset:
+                # breakpoint()
+                assert isinstance(d, dict)
+                assert isinstance(d['a'], jt.Var)
+                np.testing.assert_allclose(d['a'].numpy(), [[1,2,3]])
+
+    def test_cifar(self):
+        from jittor.dataset.cifar import CIFAR10
+        a = CIFAR10()
+        a.set_attrs(batch_size=16)
+        for imgs, labels in a:
+            print(imgs.shape, labels.shape)
+            assert imgs.shape == [16,32,32,3,]
+            assert labels.shape == [16,]
+            break
+
+    def test_tensor_dataset(self):
+        import jittor as jt
+        from jittor.dataset import TensorDataset
+
+        x = jt.array([1,2,3])
+        y = jt.array([4,5,6])
+        z = jt.array([7,8,9])
+
+        dataset = TensorDataset(x, y, z)
+        # dataset.set_attrs(batch_size=2)
+        dataset.set_attrs(batch_size=1)
+
+        for i,(a,b,c) in enumerate(dataset):
+            # print(a,b,c)
+            # print(a.shape)
+            assert a.shape == [1]
+            assert x[i] == a
+            assert y[i] == b
+            assert z[i] == c
+
+    def test_children_died(self):
+        src = """
+import jittor as jt
+from jittor.dataset import Dataset
+import numpy as np
+
+class YourDataset(Dataset):
+    def __init__(self):
+        super().__init__()
+        self.set_attrs(total_len=160)
+
+    def __getitem__(self, k):
+        if k>100:
+            while 1:
+                pass
+        return { "a":np.array([1,2,3]) }
+
+dataset = YourDataset()
+dataset.set_attrs(num_workers=2)
+
+for d in dataset:
+    dataset.workers[0].p.kill()
+    pass
+"""
+        fname = os.path.join(jt.flags.cache_path, "children_dead_test.py")
+        with open(fname, 'w') as f:
+            f.write(src)
+        import subprocess as sp
+        import sys
+        cmd = sys.executable + " " + fname
+        print(cmd)
+        r = sp.run(cmd, shell=True, stdout=sp.PIPE, stderr=sp.PIPE)
+        s = r.stderr.decode()
+        print(s)
+        assert r.returncode != 0
+        assert "SIGCHLD" in s
+        assert "quick exit" in s
+
+
+    def test_children_died2(self):
+        src = """
+import jittor as jt
+from jittor.dataset import Dataset
+import numpy as np
+
+class YourDataset(Dataset):
+    def __init__(self):
+        super().__init__()
+        self.set_attrs(total_len=160)
+
+    def __getitem__(self, k):
+        if k>100:
+            while 1:
+                pass
+        return { "a":np.array([1,2,3]) }
+
+dataset = YourDataset()
+dataset.set_attrs(num_workers=2)
+
+for d in dataset:
+    break
+dataset.terminate()
+"""
+        fname = os.path.join(jt.flags.cache_path, "children_dead_test.py")
+        with open(fname, 'w') as f:
+            f.write(src)
+        import subprocess as sp
+        import sys
+        cmd = sys.executable + " " + fname
+        print(cmd)
+        r = sp.run(cmd, shell=True, stdout=sp.PIPE, stderr=sp.PIPE)
+        s = r.stderr.decode()
+        print(s)
+        assert r.returncode == 0
         
 
 if __name__ == "__main__":

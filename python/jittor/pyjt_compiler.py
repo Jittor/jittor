@@ -668,7 +668,7 @@ def compile_src(src, h, basename):
                     arr_func_return.append(f"return ({func_call},0)")
                     func_return_failed = "return -1"
                 else:
-                    assert "-> void" in func_head
+                    assert "-> void" in func_head, func_head
                     arr_func_return.append(f"{func_call};{before_return}return")
                     func_return_failed = "return"
         # generate error msg when not a valid call

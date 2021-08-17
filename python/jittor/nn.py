@@ -20,19 +20,20 @@ import math
 from collections import OrderedDict
 from jittor.pool import *
 from jittor.optim import *
-from jittor.misc import _pair
+from jittor.misc import _pair, _triple
+from jittor_utils import LOG
 
 
 def matmul_transpose(a, b):
     '''
     returns a * b^T
     '''
-    assert len(a.shape) >= 2 and len(b.shape) == 2
     assert a.shape[-1] == b.shape[-1], (a.shape, b.shape)
-    if len(a.shape)>2:
+    if len(a.shape) != 2:
         aa = a.reshape((-1, a.shape[-1]))
         cc = matmul_transpose(aa, b)
         return cc.reshape(a.shape[:-1]+(-1,))
+    assert len(a.shape) == 2 and len(b.shape) == 2
 
     shape = list(a.shape)[:-1] + list(b.shape)
     a = a.broadcast(shape, [len(shape)-2])
@@ -44,7 +45,7 @@ def bmm_transpose(a, b):
     '''
     returns a * b^T
     '''
-    if jt.flags.use_cuda:
+    if jt.flags.use_cuda and jt.compile_extern.cublas_ops:
         return jt.compile_extern.cublas_ops.cublas_batched_matmul(a, b, 0, 1)
     t = list(range(b.ndim))
     t[-1], t[-2] = t[-2], t[-1]
@@ -117,7 +118,7 @@ Example::
     if len_a>=3 and len_a==len_b:
         # bmm
         # a: [..., n, m], b: [..., m, k], c:[..., n, k]
-        if jt.flags.use_cuda:
+        if jt.flags.use_cuda and jt.compile_extern.cublas_ops:
             return jt.compile_extern.cublas_ops.cublas_batched_matmul(a, b, 0, 0)
     shape = []
     len_c = max(len_a, len_b)
@@ -178,36 +179,45 @@ class ELU(Module):
 class PReLU(Module):
     def __init__(self, num_parameters=1, init_=0.25):
         self.num_parameters = num_parameters
-        self.a = init.constant((num_parameters,), "float32", init_)
+        self.weight = init.constant((num_parameters,), "float32", init_)
 
     def execute(self, x):
         if self.num_parameters != 1:
             assert self.num_parameters == x.size(1), f"num_parameters does not match input channels in PReLU"
-            return jt.maximum(0, x) + self.a.broadcast(x, [0,2,3]) * jt.minimum(0, x)
+            return jt.maximum(0, x) + self.weight.broadcast(x, [0,2,3]) * jt.minimum(0, x)
         else:
-            return jt.maximum(0, x) + self.a * jt.minimum(0, x)
+            return jt.maximum(0, x) + self.weight * jt.minimum(0, x)
 
 #TODO dims is 4 will cause slowly execution
-def cross_entropy_loss(output, target, ignore_index=None):
+def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction='sum'):
     if len(output.shape) == 4:
         c_dim = output.shape[1]
         output = output.transpose((0, 2, 3, 1))
         output = output.reshape((-1, c_dim))
-    if ignore_index is not None:
-        target = jt.ternary(target==ignore_index,
-            jt.array(-1).broadcast(target), target)
-        mask = jt.logical_and(target >= 0, target < output.shape[1])
+
     target = target.reshape((-1, ))
+    target_weight = jt.ones(target.shape[0], dtype='float32')
+    if weight is not None:
+        target_weight = weight[target]
+    if ignore_index is not None:
+        target_weight = jt.ternary(
+            target==ignore_index,
+            jt.array(0).broadcast(target_weight),
+            target_weight
+        )
+    
     target = target.broadcast(output, [1])
     target = target.index(1) == target
     
     output = output - output.max([1], keepdims=True)
-    loss = output.exp().sum(1).log()
-    loss = loss - (output*target).sum(1)
-    if ignore_index is None:
-        return loss.mean()
+    logsum = output.exp().sum(1).log()
+    loss = (logsum - (output*target).sum(1)) * target_weight
+    if reduction == 'sum':
+        return loss.sum() / target_weight.sum()
+    elif reduction == 'mean':
+        return loss.mean() / target_weight.mean()
     else:
-        return loss.sum() / jt.maximum(mask.int().sum(), 1)
+        return loss / target_weight
 
 def mse_loss(output, target):
     return (output-target).sqr().mean()
@@ -273,11 +283,12 @@ def nll_loss(output,target,weight=None,ignore_index=-100,reduction='mean'):
         raise ValueError(f'not support {reduction}')
     
 class CrossEntropyLoss(Module):
-    def __init__(self,ignore_index=None):
+    def __init__(self, weight=None, ignore_index=None):
+        self.weight = weight
         self.ignore_index = ignore_index
         
     def execute(self, output, target):
-        return cross_entropy_loss(output, target,self.ignore_index)
+        return cross_entropy_loss(output, target, self.weight, self.ignore_index)
 
 class MSELoss(Module):
     def __init__(self):
@@ -423,7 +434,16 @@ class BatchNorm(Module):
             norm_x = x * w.broadcast(x, dims) + b.broadcast(x, dims)
             return norm_x
 
-BatchNorm2d = BatchNorm1d = BatchNorm
+BatchNorm3d = BatchNorm2d = BatchNorm1d = BatchNorm
+
+def batch_norm(x, running_mean, running_var, weight=1, bias=0, training=False, momentum=0.1, eps=1e-05):
+    dims = [0]+list(range(2,x.ndim))
+    assert not training
+    w = weight / jt.sqrt(running_var+eps)
+    b = bias - running_mean * w
+    norm_x = x * w.broadcast(x, dims) + b.broadcast(x, dims)
+    return norm_x
+
 
 class InstanceNorm(Module):
     def __init__(self, num_features, eps=1e-05, momentum=0.1, affine=True, is_train=True, sync=True):
@@ -447,7 +467,23 @@ class InstanceNorm(Module):
         b = self.bias - xmean * w
         return x * w.broadcast(x, dims) + b.broadcast(x, dims)
 
-InstanceNorm2d = InstanceNorm1d = InstanceNorm
+InstanceNorm3d = InstanceNorm2d = InstanceNorm1d = InstanceNorm
+
+def instance_norm(x, 
+    running_mean = None,
+    running_var = None,
+    weight = 1,
+    bias = 0,
+    momentum = 0.1,
+    eps = 1e-5):
+    dims = list(range(2,x.ndim))
+    xmean = jt.mean(x, dims=dims)
+    x2mean = jt.mean(x*x, dims=dims)
+
+    xvar = (x2mean-xmean*xmean).maximum(0.0)
+    w = weight / jt.sqrt(xvar+eps)
+    b = bias - xmean * w
+    return x * w.broadcast(x, dims) + b.broadcast(x, dims)
 
 class LayerNorm(Module):
     def __init__(self, normalized_shape, eps: float = 1e-5, elementwise_affine: bool = True) -> None:
@@ -470,7 +506,22 @@ class LayerNorm(Module):
         return x * w + b
 
 
-LayerNorm2d = LayerNorm1d = LayerNorm
+LayerNorm3d = LayerNorm2d = LayerNorm1d = LayerNorm
+
+def layer_norm(x, 
+    normalized_shape, 
+    weight = 1,
+    bias = 0,
+    eps: float = 1e-5, 
+    elementwise_affine: bool = True):
+    dims = [-i for i in range(len(normalized_shape), 0, -1)]
+    xmean = jt.mean(x, dims=dims, keepdims=1)
+    x2mean = jt.mean(x*x, dims=dims, keepdims=1)
+
+    xvar = (x2mean-xmean*xmean).maximum(0.0)
+    w = weight / jt.sqrt(xvar+eps)
+    b = bias - xmean * w
+    return x * w + b
 
 class GroupNorm(Module):
     def __init__(self, num_groups, num_channels, eps=1e-05, affine=True, is_train=True):
@@ -505,6 +556,33 @@ class GroupNorm(Module):
         b = b - xmean * w
         x = x * w.broadcast(x, [3]) + b.broadcast(x, [3])
         return x.reshape(output_shape)
+
+def group_norm(x, 
+    num_groups, 
+    weight = 1,
+    bias = 0,
+    eps=1e-05):
+    N = x.shape[0]
+    C = x.shape[1]
+    output_shape = (N,-1)
+    # TODO: 3d group norm
+    if x.ndim==4:
+        output_shape = x.shape
+    assert C % num_groups == 0
+    x = x.reshape((N, num_groups, C//num_groups, -1))
+    xmean = jt.mean(x, dims=[2,3]).reshape((N, num_groups, 1))
+    x2mean = jt.mean(x*x, dims=[2,3]).reshape((N, num_groups, 1))
+    xvar = (x2mean-xmean*xmean).maximum(0.0)
+
+    if isinstance(weight, jt.Var):
+        weight = weight.reshape((1, num_groups, -1))
+    if isinstance(bias, jt.Var):
+        bias = bias.reshape((1, num_groups, -1))
+    weight = weight / jt.sqrt(xvar+eps)
+    bias = bias - xmean * weight
+    x = x * weight.broadcast(x, [3]) + bias.broadcast(x, [3])
+    return x.reshape(output_shape)
+
 
 Relu = jt.make_module(relu)
 ReLU = Relu
@@ -637,6 +715,34 @@ class Conv1d(Module):
         y = x.squeeze(-1)
         return y
 
+class Conv3d(Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size, kernel_size)
+        self.stride = stride if isinstance(stride, tuple) else (stride, stride, stride)
+        self.padding = padding if isinstance(padding, tuple) else (padding, padding, padding)
+        self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation, dilation)
+        self.groups = groups
+        assert in_channels % groups == 0, 'in_channels must be divisible by groups'
+        assert out_channels % groups == 0, 'out_channels must be divisible by groups'
+        Kh, Kw, Kd = self.kernel_size
+        self.groups = groups
+        assert in_channels % groups == 0, 'in_channels must be divisible by groups'
+        assert out_channels % groups == 0, 'out_channels must be divisible by groups'
+
+        self.weight = init.invariant_uniform([out_channels, in_channels//groups, Kh, Kw, Kd], dtype="float")
+        if bias:
+            fan=1
+            for i in self.weight.shape[1:]:
+                fan *= i
+            bound = 1 / math.sqrt(fan)
+            self.bias = init.uniform([out_channels], dtype="float", low=-bound, high=bound)
+        else:
+            self.bias = None
+
+    def execute(self, x):
+        return conv3d(x, self.weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
 
 def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     padding = _pair(padding)
@@ -694,7 +800,70 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
         if bias is not None:
             b = bias.broadcast(y.shape, [0,2,3])
             y = y + b
-        return y          
+        return y
+
+def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
+    padding = _triple(padding)
+    stride = _triple(stride)
+    dilation = _triple(dilation)
+    out_channels = weight.shape[0]
+
+    if jt.flags.use_cuda and jt.cudnn:
+        y = jt.cudnn.ops.cudnn_conv3d(x, weight, *stride, *padding, *dilation, groups)
+    elif groups == 1:
+        N,C,D,H,W = x.shape
+        Kd, Kh, Kw = weight.shape[-3:]
+        od = (D+padding[0]*2-Kd*dilation[0]+dilation[0]-1)//stride[0]+1
+        oh = (H+padding[1]*2-Kh*dilation[1]+dilation[1]-1)//stride[1]+1
+        ow = (W+padding[2]*2-Kw*dilation[2]+dilation[2]-1)//stride[2]+1
+        xx = x.reindex([N,out_channels,C,od,oh,ow,Kd,Kh,Kw], [
+                'i0', # Nid
+                'i2', # Cid
+                f'i3*{stride[0]}-{padding[0]}+i6*{dilation[0]}', # Hid+Khid
+                f'i4*{stride[1]}-{padding[1]}+i7*{dilation[1]}', # Wid+KWid
+                f'i5*{stride[2]}-{padding[2]}+i8*{dilation[2]}', # Did+KDid
+            ])
+        ww = weight.broadcast(xx.shape, [0,3,4,5])
+        yy = xx*ww
+        y = yy.sum([2,6,7,8]) # Kc, Kh, Kw,Kd
+    else:
+        N,C,D,H,W = x.shape
+        Kd, Kh, Kw = weight.shape[-3:]
+        G = groups
+        CpG = C // G # channels per group
+        oc = out_channels
+        od = (D+padding[0]*2-Kd*dilation[0]+dilation[0]-1)//stride[0]+1
+        oh = (H+padding[1]*2-Kh*dilation[1]+dilation[1]-1)//stride[1]+1
+        ow = (W+padding[2]*2-Kw*dilation[2]+dilation[2]-1)//stride[2]+1
+        xx = x.reindex([N,G,oc//G,CpG,od,oh,ow,Kd,Kh,Kw], [
+                'i0', # Nid
+                f'i1*{CpG}+i3', # Gid
+                f'i4*{stride[0]}-{padding[0]}+i7*{dilation[0]}', # Hid+Khid
+                f'i5*{stride[1]}-{padding[1]}+i8*{dilation[1]}', # Wid+KWid
+                f'i6*{stride[2]}-{padding[2]}+i9*{dilation[2]}', # Did+KDid
+            ])
+        xx.compile_options = {"G":G}
+        # w: [oc, CpG, Kh, Kw, Kd]
+        ww = weight.reindex([N, G, oc//G, CpG, oh, ow, od, Kh, Kw, Kd], [
+                f'i1*{oc//G}+i2',
+                'i3',
+                'i7',
+                'i8',
+                'i9'
+            ])
+        yy = xx*ww
+        y = yy.reindex_reduce('add', [N, oc, od, oh, ow], [
+                'i0',
+                f'i1*{oc//G}+i2',
+                'i4',
+                'i5',
+                'i6'
+            ])
+
+    if bias is not None:
+        b = bias.broadcast(y.shape, [0,2,3,4])
+        y = y + b
+    return y
 
 class ConvTranspose(Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, \
@@ -754,6 +923,45 @@ class ConvTranspose(Module):
             y = y + b
         return y
 
+class ConvTranspose3d(Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, \
+                 padding=0, output_padding=0, groups=1, bias=True, dilation=1):
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+
+        # added
+        self.dilation = dilation
+        self.group = groups
+        assert groups==1, "Group conv not supported yet."
+
+        self.kernel_size = kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size, kernel_size)
+        self.stride = stride if isinstance(stride, tuple) else (stride, stride, stride)
+        self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation, dilation)
+        # added
+        self.padding = padding if isinstance(padding, tuple) else (padding, padding, padding)
+        self.real_padding = (
+            self.dilation[0] * (self.kernel_size[0] - 1) - self.padding[0],
+            self.dilation[1] * (self.kernel_size[1] - 1) - self.padding[1],
+            self.dilation[2] * (self.kernel_size[2] - 1) - self.padding[2])
+        self.output_padding = output_padding if isinstance (output_padding, tuple) else (output_padding, output_padding, output_padding)
+        assert self.output_padding[0] < max(self.stride[0], self.dilation[0]) and \
+            self.output_padding[1] < max(self.stride[1], self.dilation[1]) and \
+            self.output_padding[2] < max(self.stride[2], self.dilation[2]), \
+            "output padding must be smaller than max(stride, dilation)"
+
+        self.weight = init.invariant_uniform((in_channels, out_channels) + self.kernel_size, dtype="float")
+        if bias:
+            fan=1
+            for i in self.weight.shape[1:]:
+                fan *= i
+            bound = 1 / math.sqrt(fan)
+            self.bias = init.uniform([out_channels], dtype="float", low=-bound, high=bound)
+        else:
+            self.bias = None
+
+    def execute(self, x):
+        return conv_transpose3d(x, self.weight, self.bias, self.stride, self.padding, self.output_padding, self.group, self.dilation)
+
 def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding=0, groups=1, dilation=1):
     x = input
     N,C,H,W = x.shape
@@ -787,6 +995,49 @@ def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding
     ])
     if isinstance(bias, jt.Var):
         b = bias.broadcast(y.shape, [0,2,3])
+        y = y + b
+    else:
+        assert not bias, "Bias should be none or jittor var"
+    return y
+
+def conv_transpose3d(input, weight, bias=None, stride=1, padding=0, output_padding=0, groups=1, dilation=1):
+    x = input
+    N,C,D,H,W = x.shape
+    i,o,d,h,w = weight.shape
+    assert C==i
+    assert groups==1, "Group conv not supported yet."
+    stride = stride if isinstance(stride, tuple) else (stride, stride, stride)
+    dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation, dilation)
+    # added
+    padding = padding if isinstance(padding, tuple) else (padding, padding, padding)
+    output_padding = output_padding if isinstance (output_padding, tuple) else (output_padding, output_padding, output_padding)
+    assert output_padding[0] < max(stride[0], dilation[0]) and \
+        output_padding[1] < max(stride[1], dilation[1]) and \
+        output_padding[2] < max(stride[2], dilation[2]), \
+        "output padding must be smaller than max(stride, dilation)"
+
+    stride_d, stride_h, stride_w = stride
+    padding_d, padding_h, padding_w = padding
+    dilation_d, dilation_h, dilation_w = dilation
+
+    d_out = (D-1) * stride_d + output_padding[0] - 2*padding_d + 1 + (d-1)*dilation_d
+    h_out = (H-1) * stride_h + output_padding[1] - 2*padding_h + 1 + (h-1)*dilation_h
+    w_out = (W-1) * stride_w + output_padding[2] - 2*padding_w + 1 + (w-1)*dilation_w
+    out_shape = (N, o, d_out, h_out, w_out)
+    if jt.flags.use_cuda and jt.cudnn:
+        return jt.cudnn.ops.cudnn_conv3d_backward_x(weight, x, *out_shape[2:], *stride, *padding, *dilation, groups)
+    shape = (N, i, o, D, H, W, d, h, w)
+    xx = x.broadcast(shape, (2, 6, 7, 8)) # i,h,w
+    ww = weight.broadcast(shape, (0, 3, 4, 5)) # N,H,W
+    y = (ww*xx).reindex_reduce("add", out_shape, [
+        'i0', # N
+        'i2', # o
+        f'i3*{stride_d}-{padding_d}+i6*{dilation_d}', # Did+Kdid
+        f'i4*{stride_h}-{padding_h}+i7*{dilation_h}', # Hid+Khid
+        f'i5*{stride_w}-{padding_w}+i8*{dilation_w}', # Wid+KWid
+    ])
+    if isinstance(bias, jt.Var):
+        b = bias.broadcast(y.shape, [0,2,3,4])
         y = y + b
     else:
         assert not bias, "Bias should be none or jittor var"
@@ -997,9 +1248,9 @@ def _bicubic(x, a, func):
 
 def _interpolate(img, x, y, ids, mode):
     if mode == "nearest":
-        return img.reindex([*ids, x.floor(), y.floor()])
+        return img.reindex([*ids, x.floor_int(), y.floor_int()])
     if mode == "bilinear":
-        fx, fy = x.floor(), y.floor()
+        fx, fy = x.floor_int(), y.floor_int()
         cx, cy = fx + 1, fy + 1
         dx, dy = x - fx, y - fy
         a = img.reindex_var([*ids, fx, fy])
@@ -1013,7 +1264,7 @@ def _interpolate(img, x, y, ids, mode):
         return o
     if mode=="bicubic": # ugly ver.
         n,c,h,w = img.shape
-        fx, fy = x.floor(), y.floor()
+        fx, fy = x.floor_int(), y.floor_int()
         dix, diy = x - fx, y - fy
         ax, ay = _bicubic(dix+1,-0.75,2), _bicubic(diy+1,-0.75,2)
         bx, by = _bicubic(dix,-0.75,1), _bicubic(diy,-0.75,1)
@@ -1031,23 +1282,8 @@ def _interpolate(img, x, y, ids, mode):
         return o
     raise (f"Not support interpolation mode: {mode}")
 
-
-def resize(img, size, mode="nearest", align_corners=False):
-    n, c, h, w = img.shape
-    H, W = size
-    nid, cid, hid, wid = jt.index((n, c, H, W))
-    if align_corners:
-        x = hid * ((h - 1) / max(1, H - 1))
-        y = wid * ((w - 1) / max(1, W - 1))
-    else:
-        x = hid * (h / H) + (h / H * 0.5 - 0.5)
-        if H > h: x = x.clamp(0, h - 1)
-        y = wid * (w / W) + (w / W * 0.5 - 0.5)
-        if W > w: y = y.clamp(0, w - 1)
-    return _interpolate(img, x, y, (nid, cid), mode)
-
-
-def upsample(img, size, mode="nearest", align_corners=False):
+# TODO: tf_mode to another function
+def resize(img, size, mode="nearest", align_corners=False, tf_mode=False):
     n, c, h, w = img.shape
     H, W = size
     nid, cid, hid, wid = jt.index((n, c, H, W))
@@ -1061,22 +1297,30 @@ def upsample(img, size, mode="nearest", align_corners=False):
         x = hid * (h / H)
         y = wid * (w / W)
     else:
-        x = hid * (h / H) + (h / H * 0.5 - 0.5)
-        if H > h: x = x.clamp(0, h - 1)
-        y = wid * (w / W) + (w / W * 0.5 - 0.5)
-        if W > w: y = y.clamp(0, w - 1)
+        if (tf_mode):
+            x = hid * (h / H)
+            if H > h: x = x.clamp(0, h - 1)
+            y = wid * (w / W)
+            if W > w: y = y.clamp(0, w - 1)
+        else:
+            x = hid * (h / H) + (h / H * 0.5 - 0.5)
+            if H > h: x = x.clamp(0, h - 1)
+            y = wid * (w / W) + (w / W * 0.5 - 0.5)
+            if W > w: y = y.clamp(0, w - 1)
     return _interpolate(img, x, y, (nid, cid), mode)
 
+upsample = resize
 
-def interpolate(X, size=None, scale_factor=None, mode='bilinear', align_corners=False):
+
+def interpolate(X, size=None, scale_factor=None, mode='bilinear', align_corners=False, tf_mode=False):
     if scale_factor is not None:
         size = [X.shape[-2] * scale_factor, X.shape[-1] * scale_factor]
     if isinstance(size, int):
         size = (size, size)
     if scale_factor is not None and scale_factor > 1:
-        return upsample(X, size, mode, align_corners)
+        return upsample(X, size, mode, align_corners, tf_mode)
     else:
-        return resize(X, size, mode, align_corners)
+        return resize(X, size, mode, align_corners, tf_mode)
 
 
 def grid_sample_v0(input, grid, mode='bilinear', padding_mode='zeros'):
@@ -1134,7 +1378,7 @@ def linspace_from_neg_one(grid,num_steps,align_corners):
     return jt.array(ra,dtype=grid.dtype)
 
 def make_base_grid_4D(theta,N,C,H,W,align_corners):
-    base_grid = jt.zeros((N, H, W, 3), dtype=theta.dtype);
+    base_grid = jt.zeros((N, H, W, 3), dtype=theta.dtype)
     base_grid[...,0] = linspace_from_neg_one(theta, W, align_corners)
     base_grid[...,1] = jt.unsqueeze(linspace_from_neg_one(theta, H, align_corners),-1)
     base_grid[...,-1] = 1
@@ -1190,7 +1434,7 @@ def reflect_coordinates(x,twice_low,twice_high):
     x = (x - m).abs()
     #`fmod` returns same sign as `in`, which is positive after the `fabs` above.
     extra = x.mod(span)
-    flips = (x / span).floor()
+    flips = (x / span).floor_int()
     result1 = extra+m
     result2 = span-extra+m
     con = flips%2==0
@@ -1242,9 +1486,9 @@ def grid_sampler_3d(X,grid,mode,padding_mode,align_corners):
     zid = z.reindex(shape,['i0','i2','i3','i4'])
 
     if mode=='nearest':
-        return X.reindex([nid,cid,zid.round(),yid.round(),xid.round()])
+        return X.reindex([nid,cid,zid.round_int(),yid.round_int(),xid.round_int()])
     elif mode=='bilinear':
-        fx,fy,fz = xid.floor(),yid.floor(),zid.floor()
+        fx,fy,fz = xid.floor_int(),yid.floor_int(),zid.floor_int()
         cx,cy,cz = fx+1,fy+1,fz+1
         dx,dy,dz = xid-fx,yid-fy,zid-fz
         dnx,dny,dnz = cx-xid,cy-yid,cz-zid
@@ -1279,10 +1523,10 @@ def grid_sampler_2d(X,grid,mode,padding_mode,align_corners):
     yid = y.reindex(shape,['i0','i2','i3'])
 
     if mode=='nearest':
-        return X.reindex([nid,cid,yid.round(),xid.round()])
+        return X.reindex([nid,cid,yid.round_int(),xid.round_int()])
     elif mode=='bilinear':
         #xid,yid = (xid+0.00001),(yid+0.00001)
-        fx,fy = (xid).floor(),(yid).floor()
+        fx,fy = (xid).floor_int(),(yid).floor_int()
         cx,cy = fx+1,fy+1
         dx,dy = xid-fx,yid-fy
         dnx,dny = cx-xid,cy-yid
@@ -1384,6 +1628,87 @@ class Sequential(Module):
     def __len__(self):
         return len(self.layers)
 
+
+class ParameterList(Module):
+    def __init__(self, *args):
+        self.params = collections.OrderedDict()
+        for var in args:
+            if isinstance(var, (collections.OrderedDict, dict)):
+                for k, v in var.items():
+                    self.add_param(k, v)
+            elif isinstance(var, list):
+                for v in var:
+                    self.append(v)
+            else:
+                self.append(var)
+    def __getitem__(self, idx):
+        if idx not in self.params:
+            return list(self.params.values())[idx]
+
+        return self.params[idx]
+    def __iter__(self):
+        return self.params.values().__iter__()
+    def keys(self):
+        return self.params.keys()
+    def values(self):
+        return self.params.values()
+    def items(self):
+        return self.params.items()
+    def execute(self, x):
+        raise NotImplementedError("Parameters is not executable")
+    def append(self, var):
+        assert isinstance(var, jt.Var), f"argument <{type(var)}> is not jittor var"
+        self.params[len(self.params)] = var
+    def add_param(self, name, var):
+        assert isinstance(var, jt.Var), f"argument <{type(var)}> is not jittor var"
+        self.params[name]=var
+    def __setitem__(self, name, var):
+        self.add_param(name, var)
+
+    def __len__(self):
+        return len(self.params)
+
+ParameterDict = ParameterList
+
+def Parameter(data, requires_grad=True):
+    ''' The `Parameter` interface isn't needed in Jittor, this interface
+doesn't nothings and it is just used for compatible.
+    
+A Jittor Var is a Parameter
+when it is a member of Module, if you don't want a Jittor
+Var menber is treated as a Parameter, just name it startswith
+underscore `_`.
+    '''
+    LOG.w(Parameter.__doc__)
+    data = data.clone()
+    data.requires_grad = requires_grad
+    return data
+
+def backward(v, *args, **kw):
+    ''' The `backward` variable interface doesn't exist in Jittor.
+please use `optimizer.backward(loss)` or 
+`optimizer.step(loss)` instead.
+For example, if your code looks like this::
+
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+It can be changed to this::
+
+    optimizer.zero_grad()
+    optimizer.backward(loss)
+    optimizer.step()
+
+Or more concise::
+
+    optimizer.step(loss)
+
+The step function will automatically zero grad and backward.
+    '''
+    LOG.f(backward.__doc__)
+
+jt.Var.backward = backward
 
 def unfold(X, kernel_size, dilation=1, padding=0, stride=1):
     assert X.ndim == 4
@@ -1900,3 +2225,36 @@ class GRU(RNNBase):
         h = (1 - z) * n + z * hidden
 
         return h, h
+
+def bilinear(in1, in2, weight, bias):
+    w = weight.transpose((1,0,2))
+    w = w.reshape((w.shape[0], -1))
+    x = jt.matmul(in1, w)
+    x = x.reshape(x.shape[:-1]+[weight.shape[0], weight.shape[2]])
+    y = in2.broadcast(x, (-2,))
+    z = (x*y).sum(-1)
+    if bias is not None:
+        z += bias
+    return z
+
+
+class Bilinear(Module):
+    ''' bilinear transformation $out = in1^T W in2 + bias$, Example::
+
+    m = nn.Bilinear(20, 30, 40)
+    input1 = jt.randn(128, 20)
+    input2 = jt.randn(128, 30)
+    output = m(input1, input2)
+    print(output.shape)
+    # [128, 40]
+
+    '''
+    def __init__(self, in1_features, in2_features, out_features, bias=True, dtype="float32"):
+        bound = 1 / math.sqrt(in1_features)
+        self.weight = jt.init.uniform([out_features, in1_features, in2_features], dtype, -bound, bound)
+        self.bias = bias
+        if bias:
+            self.bias = jt.init.uniform([out_features], dtype, -bound, bound)
+
+    def execute(self, in1, in2):
+        return bilinear(in1, in2, self.weight, self.bias)

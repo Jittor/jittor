@@ -156,7 +156,7 @@ class TestArgPoolOp(unittest.TestCase):
                       0,0,0,0,
                       1,0,0,1]).reshape((1,1,4,4))
         b, idx = pool(a)
-        assert (idx.data.reshape((4,)) == [0,1,2,3]).all()
+        assert (idx.data.reshape((4,)) == [0,3,12,15]).all()
 
     def test_unpool(self):
         from jittor import nn
@@ -168,12 +168,32 @@ class TestArgPoolOp(unittest.TestCase):
                                 [13, 14, 15, 16,0],
                                 [0,  0,  0,  0, 0]]]])
         output, indices = pool(input)
+        assert (indices == jt.array([[6,8],[16,18]])).all()
         out = unpool(output, indices, output_size=input.shape)
         assert (out == jt.array([[[[   0.,  0.,   0.,   0.,   0.],
                     [   0.,  6.,   0.,   8.,   0.],
                     [   0.,  0.,   0.,   0.,   0.],
                     [   0., 14.,   0.,  16.,   0.],
                     [   0.,  0.,   0.,   0.,   0.]]]])).all()
+
+    def test_unpool_diff_kernel_stride(self):
+        from jittor import nn
+        pool = nn.MaxPool2d(3, stride=2, return_indices=True)
+        unpool = nn.MaxUnpool2d(3, stride=2)
+        input = jt.array([[[[ 1.,  2,  3,  4, 0],
+                            [ 5,   6,  7,  8, 0],
+                                [ 9, 10, 11, 12,0],
+                                [13, 14, 16, 15,0],
+                                [0,  0,  0,  0, 0]]]])
+        output, indices = pool(input)
+        out = unpool(output, indices, output_size=input.shape)
+        assert (out == jt.array([[[
+            [ 0.,  0.,  0.,  0.,  0.,],
+            [ 0.,  0.,  0.,  0.,  0.,],
+            [ 0.,  0., 11., 12.,  0.,],
+            [ 0.,  0., 32.,  0.,  0.,],
+            [ 0.,  0.,  0.,  0.,  0.,]]]])).all()
+
         
 
     @unittest.skipIf(not jt.compiler.has_cuda, "No cuda found")
@@ -238,7 +258,33 @@ class TestArgPoolOp(unittest.TestCase):
         jt_model = j_max_pool2d(jt.array(arr), 3, 1, 1)
         torch_model = max_pool2d(torch.Tensor(arr), 3, 1, 1)
         assert np.allclose(jt_model.numpy(), torch_model.numpy())
-        print('finish')
+
+    def test_pool_3d(self):
+        from torch.nn.functional import max_pool2d
+        arr = np.random.random((2, 16, 20, 20, 20)).astype("float32")
+        # arr = np.random.random((1, 1, 1, 5, 5)).astype("float32")
+        jin = jt.array(arr)
+        tin = torch.Tensor(arr)
+        tin.requires_grad = True
+        jt_model = jt.nn.Pool3d(3,1,1)(jin)
+        torch_model = torch.nn.MaxPool3d(3,1,1)(tin)
+        assert np.allclose(jt_model.numpy(), torch_model.detach().numpy())
+
+
+        nout = np.random.random(tuple(jt_model.shape)).astype("float32")
+        jout = jt_model * nout
+        tout = torch_model * torch.Tensor(nout)
+        dj = jt.grad(jout, jin)
+        
+        tout.sum().backward()
+        dt = tin.grad
+        assert np.allclose(dj.numpy(), dt.numpy())
+
+    @unittest.skipIf(not jt.compiler.has_cuda, "No cuda found")
+    @jt.flag_scope(use_cuda=1)
+    def test_cuda_pool_3d(self):
+        self.test_pool_3d()
+
 
 if __name__ == "__main__":
     unittest.main()

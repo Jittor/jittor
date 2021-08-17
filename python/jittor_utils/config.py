@@ -1,4 +1,5 @@
 import os
+import platform
 import sys
 import jittor_utils
 from jittor_utils import LOG
@@ -27,14 +28,24 @@ if __name__ == "__main__":
             s += " -I"+os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "jittor", "src"))
             s += " "
         elif arg == "--libs-flags":
-            libbase = "/usr/lib/x86_64-linux-gnu"
-            libpath = libbase + f"/lib{base}.so"
-            assert os.path.isfile(libpath), f"lib not exist: {libpath}"
-            s += f" -L{libbase} -l{base} -ldl "
+            libext = {
+                'Linux': 'so',
+                'Darwin': 'dylib',
+                'Windows': 'DLL',
+            }[platform.system()]
+            ldflags = jittor_utils.run_cmd(jittor_utils.py3_config_path + " --ldflags")
+            libpaths = [l[2:] for l in ldflags.split(' ') if l.startswith("-L")]
+            for libbase in libpaths:
+                libpath = os.path.join(libbase, f"lib{base}.{libext}")
+                if os.path.isfile(libpath):
+                    s += f" -L{libbase} -l{base} -ldl "
+                    break
+            else:
+                raise RuntimeError("Python dynamic library not found")
             if os.name == 'nt'
                 s = s.replace('-ldl', '')
         elif arg == "--cxx-flags":
-            s += " --std=c++17 "
+            s += " --std=c++17 -fPIC "
         elif arg == "--cxx-example":
             cc_src = '''
 // please compile with: g++ a.cc $(python3 -m jittor_utils.config --include-flags --libs-flags --cxx-flags) -o a.out && ./a.out

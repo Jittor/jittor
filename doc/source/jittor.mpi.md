@@ -95,6 +95,9 @@ def val(epoch):
 
 下面是 jittor 的 mpi api reference.
 
+* `jt.world_rank`: 获取当前进程总数量，如果没有用mpi，则为1。
+* `jt.rank`: 获取当前进程的编号，区间为`0 ～ jt.world_rank-1`， 如果没有用mpi，则为0。
+
 ```eval_rst
 .. automodule:: jittor_mpi_core
    :members:

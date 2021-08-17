@@ -157,9 +157,9 @@ class TestMatmul(unittest.TestCase):
                 loss_mean.data.sum() 
                 jt.liveness_info()
 
-        # result is 0.00022486248053610325
-        result = 0.00022486248053610325
-        assert abs(loss_mean.data - result) < 1e-6, [loss_mean.data, result]
+        possible_results = [0.00022486248053610325, 0.00020916158973705024]
+        loss_mean = loss_mean.data
+        assert any(abs(loss_mean - r) < 1e-6 for r in possible_results)
         jt.clean()
 
     def test_backward_once(self):
@@ -346,6 +346,12 @@ class TestMatmul(unittest.TestCase):
     @jt.flag_scope(use_cuda=1)
     def test_matmul_example2_cuda(self):
         self.test_matmul_example2()
+
+    def test_linear1d(self):
+        linear = jt.nn.Linear(10,20)
+        a = jt.random((10,))
+        b = linear(a)
+        assert b.shape == (20,)
 
 if __name__ == "__main__":
     unittest.main()

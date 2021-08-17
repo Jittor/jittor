@@ -19,6 +19,7 @@ class TestSlice(unittest.TestCase):
         a[2] = 1
         assert a.dtype == "bool"
         a.sync()
+        assert np.equal(a.data, np.array([0,1,1,0,0,0,0,0,0,0])).all()
 
     def test_var_slices(self):
         def check(slices, msg):

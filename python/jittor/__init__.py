@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.2.3.12'
+__version__ = '1.2.3.92'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -23,7 +23,7 @@ with lock.lock_scope():
     from jittor_core import *
     from jittor_core.ops import *
     from . import compile_extern
-    from .compile_extern import mkl_ops, mpi, mpi_ops, in_mpi, rank
+    from .compile_extern import mkl_ops, mpi, mpi_ops, in_mpi, rank, world_size
     if core.get_device_count() == 0:
         has_cuda = compile_extern.has_cuda = compiler.has_cuda = False
     if has_cuda:
@@ -437,11 +437,11 @@ def pow(x, y):
 Var.pow = Var.__pow__ = pow
 
 def argmax(x, dim, keepdims:bool=False):
-    return x.arg_reduce("max", dim, keepdims)
+    return jt.arg_reduce(x, "max", dim, keepdims)
 Var.argmax = argmax
 
 def argmin(x, dim, keepdims:bool=False):
-    return x.arg_reduce("min", dim, keepdims)
+    return jt.arg_reduce(x, "min", dim, keepdims)
 Var.argmin = argmin
 
 def randn(*size, dtype="float32", requires_grad=True) -> Var:
@@ -562,7 +562,7 @@ def randint(low, high=None, shape=(1,), dtype="int32") -> Var:
     '''
     if high is None: low, high = 0, low
     v = (jt.random(shape) * (high - low) + low).clamp(low, high-0.5)
-    v = jt.floor(v)
+    v = jt.floor_int(v)
     return v.astype(dtype)
 
 def randint_like(x, low, high=None) -> Var:
@@ -780,11 +780,16 @@ class Module:
         stack = []
         def callback(parents, k, v, n):
             stack.append(str(k))
-            for k2, p in v.__dict__.items():
-                if k2.startswith("_"): continue
+            dc = v.__dict__
+            if isinstance(v, nn.ParameterList):
+                dc = v.params
+            for k2, p in dc.items():
+                if isinstance(k2, str) and k2.startswith("_"): continue
                 if isinstance(p, Var):
                     ps.append(p)
-                    p.name(".".join(stack[1:]+[str(k2)]))
+                    pname = ".".join(stack[1:]+[str(k2)])
+                    if len(pname) > len(p.name()):
+                        p.name(pname)
         def callback_leave(parents, k, v, n):
             stack.pop()
         self.dfs([], None, callback, callback_leave)
@@ -822,52 +827,100 @@ class Module:
         self.dfs([], "", callback, callback_leave)
         return ms
 
-    def register_forward_hook(self, func):
+    def requires_grad_(self, requires_grad=True):
+        self._requires_grad = requires_grad
+        self._place_hooker()
+        return self
+
+    def __hooked_call__(self, *args, **kw):
+        if hasattr(self, "__fhook2__"):
+            if len(kw):
+                self.__fhook2__(self, args, kw)
+            else:
+                self.__fhook2__(self, args)
+        if hasattr(self, "__bihook__"):
+            if len(kw):
+                LOG.w("backward hook not support kw")
+            args = grad_hooker(args, self.__bihook__)
+        if hasattr(self, "_requires_grad") and not self._requires_grad:
+            with jt.no_grad():
+                ret = self.__hooked_call__(*args, **kw)
+        else:
+            ret = self.__hooked_call__(*args, **kw)
+        if hasattr(self, "__bohook__"):
+            if len(kw):
+                LOG.w("backward hook not support kw")
+            if isinstance(ret, Var):
+                ret = grad_hooker((ret,), self.__bohook__)[0]
+            else:
+                ret = grad_hooker(ret, self.__bohook__)
+        if hasattr(self, "__fhook__"):
+            if len(kw):
+                self.__fhook__(self, args, ret, kw)
+            else:
+                self.__fhook__(self, args, ret)
+        return ret
+
+    def _place_hooker(self):
         cls = self.__class__
-        self.__fhook__ = func
         if hasattr(cls, "__hooked__"):
             return
         cls.__hooked__ = True
-        origin_call = cls.__call__
-        def new_call(self, *args, **kw):
-            ret = origin_call(self, *args, **kw)
-            if hasattr(self, "__fhook__"):
-                if len(kw):
-                    self.__fhook__(self, args, ret, kw)
-                else:
-                    self.__fhook__(self, args, ret)
-            return ret
-        self.__class__.__call__ = new_call
+        cls.__call__, cls.__hooked_call__ = \
+            cls.__hooked_call__, cls.__call__
+
+    def register_forward_hook(self, func):
+        self.__fhook__ = func
+        self._place_hooker()
     
     def remove_forward_hook(self):
-        cls = self.__class__
-        if hasattr(cls,"__hooked__"):
-            delattr(cls,"__hooked__")
         if hasattr(self,"__fhook__"):
             delattr(self,"__fhook__")
 
     def register_pre_forward_hook(self, func):
-        cls = self.__class__
         self.__fhook2__ = func
-        if hasattr(cls, "__hooked2__"):
-            return
-        cls.__hooked2__ = True
-        origin_call = cls.__call__
-        def new_call(self, *args, **kw):
-            if hasattr(self, "__fhook2__"):
-                if len(kw):
-                    self.__fhook2__(self, args, kw)
-                else:
-                    self.__fhook2__(self, args)
-            return origin_call(self, *args, **kw)
-        self.__class__.__call__ = new_call
+        self._place_hooker()
 
     def remove_pre_forward_hook(self):
-        cls = self.__class__
-        if hasattr(cls,"__hooked2__"):
-            delattr(cls,"__hooked2__")
         if hasattr(self,"__fhook2__"):
             delattr(self,"__fhook2__")
+
+    def register_input_backward_hook(self, func):
+        self.__bihook__ = func
+        self._place_hooker()
+
+    def remove_input_backward_hook(self):
+        if hasattr(self,"__bihook__"):
+            delattr(self,"__bihook__")
+
+    def register_output_backward_hook(self, func):
+        self.__bohook__ = func
+        self._place_hooker()
+
+    def remove_output_backward_hook(self):
+        if hasattr(self,"__bohook__"):
+            delattr(self,"__bohook__")
+
+    def register_backward_hook(self, func):
+        ''' hook both input and output on backpropergation of this module.
+Arguments of hook are defined as::
+
+    hook(module, grad_input:tuple(jt.Var), grad_output:tuple(jt.Var)) -> tuple(jt.Var) or None
+
+`grad_input` is the origin gradients of input of this module, `grad_input` is the  gradients of output of this module, return value is used to replace the gradient of input.
+        '''
+        _grad_output = None
+        def bohook(grad_output):
+            nonlocal _grad_output
+            _grad_output = grad_output
+        def bihook(grad_input):
+            return func(self, grad_input, _grad_output)
+        self.register_input_backward_hook(bihook)
+        self.register_output_backward_hook(bohook)
+
+    def remove_backward_hook(self):
+        self.remove_input_backward_hook()
+        self.remove_output_backward_hook()
 
     def children(self):
         cd = []
@@ -1051,7 +1104,7 @@ can store value for backward computation)::
             return grad0 * self.y, grad1 * self.x
     a = jt.array(3.0)
     b = jt.array(4.0)
-    func = MyFunc()
+    func = MyFunc.apply
     c,d = func(a, b)
     da, db = jt.grad(c+d*3, [a, b])
     assert da.data == 4
@@ -1074,7 +1127,7 @@ can also be None)::
             return grad0 * self.y, None
     a = jt.array(3.0)
     b = jt.array(4.0)
-    func = MyFunc()
+    func = MyFunc.apply
     c,d = func(a, b)
     d.stop_grad()
     da, db = jt.grad(c+d*3, [a, b])
@@ -1144,6 +1197,44 @@ can also be None)::
         func = cls()
         return func(*args, **kw)
 
+class GradHooker(Function):
+    def __init__(self, hook):
+        self.hook = hook
+
+    def execute(self, *args):
+        return args
+    
+    def grad(self, *grad_input):
+        ret = self.hook(grad_input)
+        if ret: grad_input = ret
+        return grad_input
+
+def grad_hooker(args, hook):
+    hooker = GradHooker(hook)
+    return hooker(*args)
+
+def register_hook(v, hook):
+    """ register hook of any jittor Variables, if hook return not None,
+the gradient of this variable will be alter, Example::
+
+    x = jt.array([0.0, 0.0])
+    y = x * [1,2]
+    y.register_hook(lambda g: g*2)
+    dx = jt.grad(y, x)
+    print(dx)
+    # will be [2, 4]
+
+    """
+    def _hook(grads):
+        g = hook(grads[0])
+        if g is not None:
+            return (g,)
+        return None
+    hooker = GradHooker(_hook)
+    v.swap(hooker(v)[0])
+    return v
+
+Var.register_hook = register_hook
 
 def make_module(func, exec_n_args=1):
     class MakeModule(Module):
@@ -1169,9 +1260,11 @@ def dirty_fix_pytorch_runtime_error():
         jt.dirty_fix_pytorch_runtime_error()
         import torch
     '''
-    import os
-    os.RTLD_GLOBAL = os.RTLD_GLOBAL | os.RTLD_DEEPBIND
+    import os, platform
 
+    if platform.system() == 'Linux':
+        os.RTLD_GLOBAL = os.RTLD_GLOBAL | os.RTLD_DEEPBIND
+    
 
 import atexit
 
@@ -1249,10 +1342,14 @@ def get_len(var):
 Var.__len__ = get_len
 int = int32
 Var.int = Var.int32
+Var.long = Var.int32
 float = float32
 Var.float = Var.float32
 double = float64
 Var.double = Var.float64
+
+def is_var(v):
+    return isinstance(v, Var)
 
 # __array__ interface is used for np.array(jt_var)
 Var.__array__ = Var.numpy
@@ -1271,3 +1368,5 @@ from . import numpy2cupy
 from .contrib import concat
 from .misc import *
 from . import sparse
+from . import optim
+from . import dataset

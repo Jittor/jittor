@@ -12,7 +12,9 @@ import glob
 import inspect
 import datetime
 import threading
+import platform
 import ctypes
+import platform
 from ctypes import cdll
 from ctypes.util import find_library
 
@@ -22,6 +24,7 @@ from . import pyjt_compiler
 from jittor_utils import lock
 from jittor_utils import install_cuda
 from jittor import __version__
+import hashlib
 
 def find_jittor_path():
     return os.path.dirname(__file__)
@@ -71,10 +74,11 @@ def compile(compiler, flags, inputs, output, combind_build=False):
     output = os.path.join(cache_path, output)
     # don't recompile object file in inputs
     obj_files = []
+    ex_obj_files = []
     new_inputs = []
     for name in inputs:
         if name[-1] in 'oa':
-            obj_files.append(name)
+            ex_obj_files.append(name)
         else:
             new_inputs.append(os.path.join(jittor_path, name))
             obj_files.append(os.path.join(
@@ -104,12 +108,11 @@ def compile(compiler, flags, inputs, output, combind_build=False):
             cmd = cmd.replace("-Ofast", "-O2")
         cmds.append(cmd)
     jit_utils.run_cmds(cmds, cache_path, jittor_path, "Compiling "+base_output)
+    obj_files += ex_obj_files
     cmd = f"\"{compiler}\" {' '.join(obj_files)} {flags} {lto_flags} {link} -o {output}"
     return do_compile(cmd)
 
 def gen_jit_tests():
-    # all_src = run_cmd('find -L src/ | grep "cc$"', jittor_path).splitlines()
-    # all_src = glob.glob(os.path.join(jittor_path,"src","**","*.cc"), recursive=True)
     all_src = glob.glob(jittor_path+"/src/**/*.cc", recursive=True)
     jit_declares = []
     re_def = re.compile("JIT_TEST\\((.*?)\\)")
@@ -159,7 +162,6 @@ def gen_jit_tests():
         f.write(jit_src)
 
 def gen_jit_flags():
-    # all_src = run_cmd('find -L src/ | grep "cc$"', jittor_path).splitlines()
     all_src = glob.glob(jittor_path+"/src/**/*.cc", recursive=True)
     jit_declares = []
     re_def = re.compile("DEFINE_FLAG(_WITH_SETTER)?\\((.*?)\\);", re.DOTALL)
@@ -608,7 +610,7 @@ def compile_custom_ops(
     filenames, 
     extra_flags="", 
     return_module=False,
-    dlopen_flags=os.RTLD_GLOBAL | os.RTLD_NOW | os.RTLD_DEEPBIND,
+    dlopen_flags=None,
     gen_name_ = ""):
     """Compile custom ops
     filenames: path of op source files, filenames must be
@@ -618,6 +620,11 @@ def compile_custom_ops(
     return_module: return module rather than ops(default: False)
     return: compiled ops
     """
+    if dlopen_flags is None:
+        dlopen_flags = os.RTLD_GLOBAL | os.RTLD_NOW
+        if platform.system() == 'Linux':
+            dlopen_flags |= os.RTLD_DEEPBIND
+
     srcs = {}
     headers = {}
     builds = []
@@ -650,7 +657,7 @@ def compile_custom_ops(
     if gen_name_ != "":
         gen_name = gen_name_
     if len(gen_name) > 100:
-        gen_name = gen_name[:80] + "___hash" + str(hash(gen_name))
+        gen_name = gen_name[:80] + "___hash" + hashlib.md5(gen_name.encode()).hexdigest()
 
     includes = sorted(list(set(includes)))
     includes = "".join(map(lambda x: f" -I'{x}' ", includes))
@@ -716,7 +723,7 @@ def get_full_path_of_executable(name):
 
 def compile_extern():
     # compile llvm passes
-    if cc_type != "clang":
+    if cc_type != "clang" or platform.system() != 'Linux':
         return
     global kernel_opt_flags
     cache_path_llvm = os.path.join(cache_path, "llvm")
@@ -777,7 +784,7 @@ def compile_extern():
     LOG.vv(f"Compile extern llvm passes: {str(files)}")
 
 def check_cuda():
-    if nvcc_path == "":
+    if not nvcc_path:
         return
     global cc_flags, has_cuda, core_link_flags, cuda_dir, cuda_lib, cuda_include, cuda_home
     cuda_dir = os.path.dirname(get_full_path_of_executable(nvcc_path))
@@ -859,11 +866,15 @@ def check_debug_flags():
 
 cc_flags = " "
 # os.RTLD_NOW | os.RTLD_GLOBAL cause segfault when import torch first
-import_flags = os.RTLD_NOW | os.RTLD_GLOBAL | os.RTLD_DEEPBIND
+import_flags = os.RTLD_NOW | os.RTLD_GLOBAL
+if platform.system() == 'Linux':
+    import_flags |= os.RTLD_DEEPBIND
 # if cc_type=="icc":
 #     # weird link problem, icc omp library may conflict and cause segfault
 #     import_flags = os.RTLD_NOW | os.RTLD_GLOBAL
-dlopen_flags = os.RTLD_NOW | os.RTLD_GLOBAL | os.RTLD_DEEPBIND
+dlopen_flags = os.RTLD_NOW | os.RTLD_GLOBAL
+if platform.system() == 'Linux':
+    import_flags |= os.RTLD_DEEPBIND
 
 with jit_utils.import_scope(import_flags):
     jit_utils.try_import_jit_utils_core()
@@ -885,9 +896,21 @@ python_path = sys.executable
 ex_python_path = python_path + '.' + str(sys.version_info.minor)
 if os.path.isfile(ex_python_path):
     python_path = ex_python_path
-nvcc_path = env_or_try_find('nvcc_path', 'nvcc') or try_find_exe('/usr/local/cuda/bin/nvcc') or try_find_exe('/usr/bin/nvcc')
+
+# if jtcuda is already installed
+nvcc_path = None
+if install_cuda.has_installation():
+    nvcc_path = install_cuda.install_cuda()
+    if nvcc_path:
+        nvcc_path = try_find_exe(nvcc_path)
+# check system installed cuda
 if not nvcc_path:
-    cuda_driver = install_cuda.get_cuda_driver()
+    nvcc_path = env_or_try_find('nvcc_path', 'nvcc') or \
+        try_find_exe('/usr/local/cuda/bin/nvcc') or \
+        try_find_exe('/usr/bin/nvcc') or \
+        try_find_exe('/opt/cuda/bin/nvcc')
+# if system has no cuda, install jtcuda
+if not nvcc_path:
     nvcc_path = install_cuda.install_cuda()
     if nvcc_path:
         nvcc_path = try_find_exe(nvcc_path)
@@ -897,14 +920,44 @@ gdb_path = try_find_exe('gdb')
 addr2line_path = try_find_exe('addr2line')
 has_pybt = check_pybt(gdb_path, python_path)
 
-cc_flags += " -Wall -Werror -Wno-unknown-pragmas -std=c++14 -fPIC -march=native "
+
+def check_clang_latest_supported_cpu():
+    output = run_cmd('clang --print-supported-cpus')
+    apple_cpus = [l.strip() for l in output.split('\n') if 'apple-a' in l]
+    apple_cpus_id = max([int(cpu[7:]) for cpu in apple_cpus])
+    return f'apple-a{apple_cpus_id}'
+
+# cc_flags += " -Wall -Werror -Wno-unknown-pragmas -std=c++14 -fPIC "
+cc_flags += " -Wall -Wno-unknown-pragmas -std=c++14 -fPIC "
+# 1. Arch/CPU specific optimization
+if platform.machine() == "x86_64":
+    cc_flags += " -march=native " 
+elif platform.machine() == 'arm64' and platform.system() == "Darwin":
+    cc_flags += f" -mcpu={check_clang_latest_supported_cpu()} "
 cc_flags += " -fdiagnostics-color=always "
+# 2. Non standard include path
+if platform.system() == 'Darwin' and platform.machine() == 'arm64':
+    cc_flags += " -I/opt/homebrew/include "
+# 3. User specified flags
 if "cc_flags" in os.environ:
     cc_flags += os.environ["cc_flags"] + ' '
+
 link_flags = " -lstdc++ -ldl -shared "
+if platform.system() == 'Darwin':
+    # TODO: if not using apple clang, there is no need to add -lomp
+    link_flags += "-undefined dynamic_lookup -lomp "
+    if platform.machine() == "arm64":
+        link_flags += " -L/opt/homebrew/lib "
+
 core_link_flags = ""
 opt_flags = ""
-kernel_opt_flags = os.environ.get("kernel_flags", "") + opt_flags + " -fopenmp "
+
+kernel_opt_flags = os.environ.get("kernel_flags", "") + opt_flags
+if platform.system() == 'Darwin':
+    # TODO: if not using apple clang, cannot add -Xpreprocessor
+    kernel_opt_flags = kernel_opt_flags + " -Xpreprocessor -fopenmp "
+else:
+    kernel_opt_flags = kernel_opt_flags + " -fopenmp "
 if os.name == 'nt':
     link_flags = link_flags.replace('-ldl', '')
     py3_link_path = '-L"' + os.path.join(
@@ -978,7 +1031,6 @@ if has_cuda:
 gen_jit_flags()
 gen_jit_tests()
 op_headers = glob.glob(jittor_path+"/src/ops/**/*op.h", recursive=True)
-# op_headers = run_cmd('find -L src/ops/ | grep "op.h$"', jittor_path).splitlines()
 jit_src = gen_jit_op_maker(op_headers)
 LOG.vvvv(jit_src)
 with open(os.path.join(cache_path, "gen", "jit_op_maker.h"), 'w') as f:
@@ -1023,54 +1075,49 @@ for file in jit_utils_core_files:
     files.remove(file)
 LOG.vv("compile order:", files)
 
-if os.name != 'nt':
-    # manual Link omp using flags(os.RTLD_NOW | os.RTLD_GLOBAL)
-    # if cc_type=="icc":
-    #     os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+if platform.system() == 'Linux':
     libname = {"clang":"omp", "icc":"iomp5", "g++":"gomp"}[cc_type]
     libname = ctypes.util.find_library(libname)
     assert libname is not None, "openmp library not found"
     ctypes.CDLL(libname, os.RTLD_NOW | os.RTLD_GLOBAL)
 
-    # get os release
+if platform.machine()=='sw_64':
+    import ssl
+    ssl._create_default_https_context = ssl._create_unverified_context
 
-    with open("/etc/os-release", "r", encoding='utf8') as f:
-        s = f.read().splitlines()
-        os_release = {}
-        for line in s:
-            a = line.split('=')
-            if len(a) != 2: continue
-            os_release[a[0]] = a[1].replace("\"", "")
-
-os_type = {
-    "ubuntu": "ubuntu",
-    "debian": "ubuntu",
-    "centos": "centos",
-    "rhel": "ubuntu",
-    "fedora": "ubuntu",
-}
-version_file = os.path.join(jittor_path, "version")
-if os.path.isfile(version_file) and not os.path.isdir(os.path.join(jittor_path, "src", "__data__")):
-    with open(version_file, 'r') as f:
-        version = f.read().strip()
-    # key = f"{version}-{cc_type}-{'cuda' if has_cuda else 'cpu'}.o"
-    key = f"{version}-g++-cpu"
-    os_id = os_release["ID"]
-    os_key = os_type.get(os_id, "ubuntu")
-    if "os_key" in os.environ:
-        os_key = os.environ['os_key']
-    LOG.i("OS type:", os_id, " OS key:", os_key)
-    key += '-' + os_key + '.o'
-    # TODO: open the website
-    extra_obj = os.path.join(cache_path, key)
-    url = os.path.join("https://cg.cs.tsinghua.edu.cn/jittor/assets/build/"+key)
-    jit_utils.download(url, extra_obj)
-    files.append(extra_obj)
+data_gz_path = os.path.join(jittor_path, "utils", "data.gz")
+use_data_gz = os.path.isfile(data_gz_path)
+if os.environ.get("use_data_gz", "1") == "0":
+    use_data_gz = False
+if use_data_gz:
+    import gzip
+    with gzip.open(data_gz_path, 'rb') as f:
+        data = f.read()
+        md5 = hashlib.md5(data).hexdigest()
+    target_md5 = None
+    data_gz_md5_path = os.path.join(cache_path, "data.md5")
+    if os.path.isfile(data_gz_md5_path):
+        with open(data_gz_md5_path, 'r') as f:
+            target_md5 = f.read()
+    data_o_path = os.path.join(cache_path, "data.o")
+    if target_md5 != md5:
+        data_s_path = os.path.join(cache_path, "data.cc")
+        with open(data_s_path, "w") as f:
+            f.write(data.decode("utf8"))
+        dflags = (cc_flags+opt_flags)\
+            .replace("-Wall", "") \
+            .replace("-Werror", "")
+        run_cmd(f"{cc_path} {dflags} \"-D_P(...)=\" {data_s_path} -c -o {data_o_path}")
+        os.remove(data_s_path)
+        with open(data_gz_md5_path, 'w') as f:
+            f.write(md5)
+    files.append(data_o_path)
+    files = [f for f in files if "__data__" not in f]
 
 compile(cc_path, cc_flags+opt_flags, files, 'jittor_core'+extension_suffix)
 
 # TODO: move to compile_extern.py
-compile_extern()
+# compile_extern()
 
 with jit_utils.import_scope(import_flags):
     import jittor_core as core

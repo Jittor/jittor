@@ -13,7 +13,7 @@ skip_this_test = False
 
 @unittest.skipIf(skip_this_test, "No Torch found")
 class TestSetitem(unittest.TestCase):
-    def test_setitem(self):
+    def test_setitem_(self):
         arr0 = jt.random((4,2,2))
         data0 = jt.ones((2,2))
         arr0[1] = data0
@@ -32,7 +32,7 @@ class TestSetitem(unittest.TestCase):
 
         arr1 = jt.random((4,2,2))
         data1 = jt.zeros((2,2))
-        arr1[3,:,0:2] = data1
+        arr1[3,:,:] = data1
         arr1.sync()
         data1.data[0,0] = 1
         assert arr1[3,0,0] == 1
@@ -72,6 +72,16 @@ class TestSetitem(unittest.TestCase):
         arr4_res = arr4[...,:,:]
         arr4_res.data[0,0,1,1] = 1
         assert arr4[0,0,1,1] == 1
+
+        arr4 = jt.random((4,2,3,3))
+        arr4_res = arr4[...,:,:2]
+        arr4_res.data[0,0,1,1] = 1
+        assert arr4[0,0,1,1] != 1
+
+        arr4 = jt.random((3,3))
+        arr4_res = arr4[...,:,:2]
+        arr4_res.data[1,1] = 1
+        assert arr4[1,1] != 1
 
         arr5 = jt.random((4,2,3,3))
         arr5_res = arr5[1:3,:,:,:]
@@ -200,6 +210,22 @@ class TestSetitem(unittest.TestCase):
     def test_slice_none(self):
         a = jt.array([1,2])
         assert a[None,:,None,None,...,None].shape == (1,2,1,1,1)
+
+    def test_roll(self):
+        x = jt.array([1, 2, 3, 4, 5, 6, 7, 8]).view(4, 2)
+        y = x.roll(1, 0)
+        assert (y.numpy() == [[7,8],[1,2],[3,4],[5,6]]).all(), y
+        y = x.roll(-1, 0)
+        assert (y.numpy() == [[3,4],[5,6],[7,8],[1,2]]).all()
+        y = x.roll(shifts=(2, 1), dims=(0, 1))
+        assert (y.numpy() == [[6,5],[8,7],[2,1],[4,3]]).all()
+
+    def test_ellipsis_with_none(self):
+        a = jt.arange(2*4*4).reshape(2,4,4)
+        b = a[...,:,None,:2]
+        assert b.shape == [2,4,1,2]
+        np.testing.assert_allclose(b.data, a.data[...,:,None,:2])
+        
 
 
 if __name__ == "__main__":

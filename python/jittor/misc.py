@@ -182,7 +182,28 @@ def chunk(x, chunks, dim=0):
 jt.Var.chunk = chunk
 
 
-def expand(x, shape):
+def expand(x, *shape):
+    ''' Expand and broadcast this array, -1 represents this dimension is not changed.
+
+Example::
+
+    a = jt.zeros((3,1))
+    b = a.expand(3, 4)
+    assert b.shape == (3,4)
+    b = a.expand(-1, 4)
+    assert b.shape == (3,4)
+    b = a.expand((3, 4))
+    assert b.shape == (3,4)
+    b = a.expand((-1, 4))
+    assert b.shape == (3,4)
+
+    '''
+    if len(shape) == 1 and isinstance(shape[0], (tuple,list,jt.NanoVector)):
+        shape = shape[0]
+    shape = list(shape)
+    for i in range(len(shape)):
+        if shape[i] == -1:
+            shape[i] = x.shape[i]
     return x.broadcast(shape)
 jt.Var.expand = expand
 
@@ -634,23 +655,6 @@ def kthvalue(input, k, dim=None, keepdim=False):
 
 jt.Var.kthvalue = kthvalue
 
-
-def gather(x,dim,index):
-    if dim<0:
-        dim+=index.ndim
-    x_shape = list(x.shape )
-    i_shape = list(index.shape)
-    assert i_shape[dim]>0
-    assert x.ndim == index.ndim
-    i_shape[dim]=x_shape[dim]
-    assert i_shape == x_shape
-    ins = []
-    for i in range(index.ndim):
-        ins.append(jt.index(index.shape,dim=i))
-    ins[dim]=index
-    return x.reindex(ins)
-jt.Var.gather = gather
-
 def _prod(x,dim=0):
     x = jt.log(x)
     x = x.sum(dim=dim)
@@ -708,7 +712,6 @@ def nms(dets,thresh):
     return order[selected]
 
 
-jt.Var.expand = jt.Var.broadcast
 jt.Var.expand_as = jt.Var.broadcast_var
 
 
@@ -1061,6 +1064,13 @@ def randperm(n, dtype="int32"):
     return index.cast(dtype)
 
 def set_global_seed(seed):
+    ''' Sets the seeds of the random number generators of Python, numpy and jittor,
+    simultaneously.
+
+    .. note::
+    Jittor also gurantees each worker of jittor.dataset.Dataset to hold a different seed,
+    which is global_seed ^ worker_id ^ 1234.
+    '''
     import random
     random.seed(seed)
     jt.set_seed(seed)
@@ -1197,7 +1207,7 @@ def gather(x, dim, index):
 
 Parameters::
 
-    * input (jt.Var) – the source array
+    * x (jt.Var) – the source array
     * dim (int) – the axis along which to index
     * index (jt.Var) – the indices of elements to gather
 
@@ -1216,3 +1226,46 @@ Example::
     return x.getitem(tuple(indexes))
 
 jt.Var.gather = gather
+
+def roll(x, shifts, dims=None):
+    '''Roll the tensor along the given dimension(s).
+
+Parameters::
+
+    * x (jt.Var) – the source array
+    * shifts (int or tuple) – shift offset of dims
+    * dims (int or tuple) – shift dims
+
+Examples::
+
+        x = jt.array([1, 2, 3, 4, 5, 6, 7, 8]).view(4, 2)
+        y = x.roll(1, 0)
+        assert (y.numpy() == [[7,8],[1,2],[3,4],[5,6]]).all()
+        y = x.roll(-1, 0)
+        assert (y.numpy() == [[3,4],[5,6],[7,8],[1,2]]).all()
+        y = x.roll(shifts=(2, 1), dims=(0, 1))
+        assert (y.numpy() == [[6,5],[8,7],[2,1],[4,3]]).all()
+
+    '''
+    if isinstance(shifts, int):
+        shifts = (shifts,)
+    if dims is None:
+        dims = tuple(range(len(shifts)))
+    elif isinstance(dims, int):
+        dims = (dims,)
+    assert len(dims) == len(shifts)
+    ids = [ f'i{i}' for i in range(x.ndim) ]
+    for i in range(len(dims)):
+        shift = shifts[i]
+        d = dims[i]
+        size = x.shape[d]
+        shift = shift % size
+        if shift<0: shift += size
+        ids[d] = f'(i{d}<{shift}?i{d}+{size-shift}:(i{d}-{shift}))'
+    return x.reindex(x.shape, ids)
+
+jt.Var.roll = roll
+
+def safe_log(x):
+    return jt.safe_clip(x, 1e-30, 1e30).log()
+jt.Var.safe_log = safe_log

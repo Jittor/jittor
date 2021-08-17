@@ -316,8 +316,11 @@ void SetitemOp::jit_run() {
         checkCudaErrors(cudaMemcpyAsync(op, ip, out->size, cudaMemcpyDefault, 0));
     #endif
 
-    if (data->allocation == in->allocation && 
-        data->allocator == in->allocator)
+    if (flags.get((NodeFlags::Flags(SetitemOp::_data_inplaced))) &&
+        // array op may move the data allocation, double check
+        // affect test_contrib.pu 
+        in->allocator == data->allocator &&
+        in->allocation == data->allocation)
         return;
 
     @for(d, 0, ODIM, for (index_t i@d=0; i@d < oshape@d; i@d++)) {

@@ -92,9 +92,10 @@ We provide some jupyter notebooks to help you quick start with Jittor.
 
 
 
+
 Jittor environment requirements:
 
-* System: **Linux**(e.g. Ubuntu/CentOS/Arch) (or **Windows** Subsystem of Linux)
+* System: **Linux**(e.g. Ubuntu/CentOS/Arch), **macOS**, or **Windows Subsystem of Linux (WSL)**
 * Python version >= 3.7
 * CPU compiler (require at least one of the following)
     * g++ (>=5.4.0)
@@ -105,7 +106,9 @@ Jittor environment requirements:
 
 
 
-Note: Currently Jittor runs on the Windows operating system through WSL. For the installation method of WSL, please refer to [Microsoft official website](https://docs.microsoft.com/en-us/windows/wsl/install-win10). WSL does not yet support CUDA.
+Note#1: Currently Jittor runs on the Windows operating system through WSL. For the installation method of WSL, please refer to [Microsoft official website](https://docs.microsoft.com/en-us/windows/wsl/install-win10). WSL does not yet support CUDA.
+
+Note#2: macOS users have to install additional dependencies, see [macOS install](#macOS-install).
 
 Jittor offers three ways to install: docker, pip, or manual.
 
@@ -138,6 +141,27 @@ python3.7 -m pip install jittor
 python3.7 -m jittor.test.test_example
 ```
 
+
+
+## macOS install
+
+
+Please first install additional dependencies with [homebrew](https://brew.sh).
+
+```bash
+brew install python@3.7 onednn libomp
+```
+
+
+Then you can install jittor through pip and run the example.
+
+```bash
+python3.7 -m pip install jittor
+python3.7 -m jittor.test.test_example
+```
+
+
+Currently jittor only supports CPU in macOS.
 
 ## manual install
 
@@ -307,11 +331,11 @@ If you want to know more about Jittor, please check out the notebooks below:
 
 
 
-[1]: notebook/example.src.md	"example"
-[2]: notebook/basics.src.md	"basics"
-[3]: notebook/meta_op.src.md	"meta_op"
-[4]: notebook/custom_op.src.md	"custom_op"
-[5]: notebook/profiler.src.md	"profiler"
+[1]: python/jittor/notebook/example.src.md	"example"
+[2]: python/jittor/notebook/basics.src.md	"basics"
+[3]: python/jittor/notebook/meta_op.src.md	"meta_op"
+[4]: python/jittor/notebook/custom_op.src.md	"custom_op"
+[5]: python/jittor/notebook/profiler.src.md	"profiler"
 
 Those notebooks can be started in your own computer by `python3.7 -m jittor.notebook`
 
@@ -366,7 +390,7 @@ Jittor is currently maintained by the [Tsinghua CSCG Group](https://cg.cs.tsingh
 @article{hu2020jittor,
   title={Jittor: a novel deep learning framework with meta-operators and unified graph execution},
   author={Hu, Shi-Min and Liang, Dun and Yang, Guo-Ye and Yang, Guo-Wei and Zhou, Wen-Yang},
-  journal={Information Sciences},
+  journal={Science China Information Sciences},
   volume={63},
   number={222103},
   pages={1--21},
