@@ -89,7 +89,7 @@ for i,(x,y) in enumerate(get_data(n)):
 Jittor框架对环境要求如下:
 
 
-* 操作系统: **Linux**(e.g. Ubuntu/CentOS/Arch) 或 **Windows Subsystem of Linux（WSL）**
+* 操作系统: **Linux**(e.g. Ubuntu/CentOS/Arch), **macOS**（x86_64）或 **Windows Subsystem of Linux（WSL）**
 * Python：版本 >= 3.7
 * C++编译器 （需要下列至少一个）
     - g++ （>=5.4.0）
@@ -100,9 +100,12 @@ Jittor框架对环境要求如下:
 如果您不希望手动配置环境，我们推荐使用 Docker 进行安装。
 除此之外，您还可以使用 pip 安装和手动安装。
 
-注意：目前Jittor通过WSL的方式在Windows操作系统上运行，WSL的安装方法请参考[微软官网](https://docs.microsoft.com/en-us/windows/wsl/install-win10)，WSL版本目前尚不支持CUDA。
+注意1：目前Jittor通过WSL的方式在Windows操作系统上运行，WSL的安装方法请参考[微软官网](https://docs.microsoft.com/en-us/windows/wsl/install-win10)，WSL版本目前尚不支持CUDA。
+
+注意2：macOS 用户需要安装额外依赖，请参考 [macOS 安装](#macOS-安装)。
 
 Jittor 提供了三种安装方法：docker，pip和手动安装：
+
 
 
 
@@ -144,6 +147,27 @@ python3.7 -m jittor.test.test_example
 
 如果测试运行通过,恭喜你已经安装完成.
 jittor会自动在路径中寻找合适的编译器, 如果您希望手动指定编译器, 请使用环境变量 `cc_path` 和 `nvcc_path`(可选).
+
+## macOS 安装
+
+
+macOS 请使用 [homebrew](https://brew.sh) 安装额外的依赖 (python>=3.7, onednn)。
+
+
+```bash
+brew install python@3.7 onednn libomp
+```
+
+之后您可以通过 pip 安装 jittor，并测试是否可以成功运行。
+
+
+```bash
+python3.7 -m pip install jittor
+python3.7 -m jittor.test.test_example
+```
+
+目前在macOS中，jittor 只支持 CPU 计算。
+
 
 ## 手动安装
 
@@ -313,11 +337,11 @@ help(jt.ops)
 
 
 
-[1]: notebook/example.src.md	"示例"
-[2]: notebook/basics.src.md	"基本概念"
-[3]: notebook/meta_op.src.md	"元算子"
-[4]: notebook/custom_op.src.md	"自定义算子"
-[5]: notebook/profiler.src.md	"性能分析器"
+[1]: python/jittor/notebook/example.src.md	"示例"
+[2]: python/jittor/notebook/basics.src.md	"基本概念"
+[3]: python/jittor/notebook/meta_op.src.md	"元算子"
+[4]: python/jittor/notebook/custom_op.src.md	"自定义算子"
+[5]: python/jittor/notebook/profiler.src.md	"性能分析器"
 
 
 这些notebooks可以通过python3.7 -m jittor.notebook在您自己的计算机中运行。

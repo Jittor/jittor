@@ -8,11 +8,11 @@
 #include "pyjt/py_converter.h"
 #include "pyjt/py_arg_printer.h"
 #ifdef __clang__
-#pragma clang diagnostic ignored "-Wdefaulted-function-deleted"
+// #pragma clang diagnostic ignored "-Wdefaulted-function-deleted"
 #endif
 #ifdef __GNUC__
 #endif
-#ifndef _WIN32
+#ifdef __linux__
 #include <sys/prctl.h>
 #endif
 #include <signal.h>
@@ -23,7 +23,7 @@
 namespace jittor {
 
 void init_subprocess() {
-#ifndef _WIN32
+#ifdef __linux__
     prctl(PR_SET_PDEATHSIG, SIGKILL);
 #endif
 }

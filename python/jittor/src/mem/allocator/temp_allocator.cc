@@ -13,6 +13,7 @@
 namespace jittor {
 
 DEFINE_FLAG(int, use_temp_allocator, 1, "Enable temp allocator");
+vector<TempAllocator*> TempAllocator::temp_allocators;
 
 TempAllocator::~TempAllocator() {
     while (!cached_blocks.empty()) {

@@ -51,6 +51,7 @@ def check_equal_without_istrain(arr, j_layer, p_layer, threshold=1e-5):
 
 @unittest.skipIf(skip_this_test, "No Torch found")
 class TestBatchNorm(unittest.TestCase):
+    @jt.flag_scope(auto_convert_64_to_32=0)
     def test_batchnorm(self):
         # ***************************************************************
         # Test BatchNorm Layer

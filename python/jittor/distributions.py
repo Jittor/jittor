@@ -29,18 +29,7 @@ kernel(in0->num/in0->shape[in0->shape.size()-1], 0, in0_p, out0_p, in0->shape[in
 
 class OneHotCategorical:
     def __init__(self, probs=None, logits=None):
-        assert not (probs is None and logits is None)
-        if probs is None:
-            # cannot align to pytorch
-            probs = jt.sigmoid(logits)
-        elif logits is None:
-            logits = jt.log(probs)
-        with jt.no_grad():
-            self.probs = probs / probs.sum(-1, True)
-            self.cum_probs = simple_presum(self.probs)
-            self.cum_probs_l = self.cum_probs[..., :-1]
-            self.cum_probs_r = self.cum_probs[..., 1:]
-            self.logits = logits
+        Categorical.__init__(self, probs, logits)
 
     def sample(self, sample_shape=[]):
         shape = sample_shape + self.probs.shape[:-1] + (1,)
@@ -48,17 +37,12 @@ class OneHotCategorical:
         one_hot = jt.logical_and(self.cum_probs_l < rand, rand <= self.cum_probs_r).float()
         return one_hot
     
-    def log_prob(self,x):
-        if len(x.shape) == 1:
-            x = x.unsqueeze(0)
-        logits = self.logits.broadcast(x.shape)
-        indices = jt.argmax(x, dim=-1)[0]
-        return logits.gather(1, indices.unsqueeze(-1)).reshape(-1)
+    def log_prob(self, x):
+        x = jt.argmax(x, dim=-1)[0]
+        return Categorical.log_prob(self, x)
     
     def entropy(self):
-        min_real = -(math.pow(2,23)-1) / math.pow(2,22) * math.pow(2,127)
-        logits = jt.clamp(self.logits,min_v=min_real)
-        p_log_p = logits * self.probs
+        p_log_p = self.logits * self.probs
         return -p_log_p.sum(-1)
     
     
@@ -68,29 +52,32 @@ class Categorical:
         if probs is None:
             # cannot align to pytorch
             probs = jt.sigmoid(logits)
-        elif logits is None:
-            logits = jt.log(probs)
+        probs = probs / probs.sum(-1, True)
+        if logits is None:
+            logits = jt.safe_log(probs)
         with jt.no_grad():
-            self.probs = probs / probs.sum(-1, True)
+            self.probs = probs
             self.logits = logits
-            self.cum_probs = simple_presum(probs)
+            self.cum_probs = simple_presum(self.probs)
             self.cum_probs_l = self.cum_probs[..., :-1]
             self.cum_probs_r = self.cum_probs[..., 1:]
 
-    def sample(self, sample_shape=[]):
+    def sample(self, sample_shape=()):
         shape = sample_shape + self.probs.shape[:-1] + (1,)
         rand = jt.rand(shape)
         one_hot = jt.logical_and(self.cum_probs_l < rand, rand <= self.cum_probs_r)
-        index = one_hot.index(one_hot.ndim-1)
+        index = one_hot.index(one_hot.ndim - 1)
         return (one_hot * index).sum(-1)
-    
+
     def log_prob(self, x):
-        return jt.log(self.probs)[0,x]
-    
+        a = self.probs.ndim
+        b = x.ndim
+        indexes = tuple( f'i{i}' for i in range(b-a+1, b) )
+        indexes = indexes + (x,)
+        return jt.safe_log(self.probs).getitem(indexes)
+
     def entropy(self):
-        min_real = -(math.pow(2,23)-1) / math.pow(2,22) * math.pow(2,127)
-        logits = jt.clamp(self.logits,min_v=min_real)
-        p_log_p = logits * self.probs
+        p_log_p = self.logits * self.probs
         return -p_log_p.sum(-1)
 
 
@@ -104,11 +91,11 @@ class Normal:
 
     def log_prob(self, x):
         var = self.sigma**2
-        log_scale = jt.log(self.sigma)
+        log_scale = jt.safe_log(self.sigma)
         return -((x-self.mu)**2) / (2*var) - log_scale-np.log(np.sqrt(2*np.pi))
     
     def entropy(self):
-        return 0.5+0.5*np.log(2*np.pi)+jt.log(self.sigma)
+        return 0.5+0.5*np.log(2*np.pi)+jt.safe_log(self.sigma)
 
 
 class Uniform:
@@ -123,10 +110,10 @@ class Uniform:
     def log_prob(self,x):
         if x < self.low or x >= self.high:
             return math.inf
-        return -jt.log(self.high - self.low)
+        return -jt.safe_log(self.high - self.low)
     
     def entropy(self):
-        return jt.log(self.high - self.low)
+        return jt.safe_log(self.high - self.low)
 
 
 class Geometric:
@@ -138,15 +125,14 @@ class Geometric:
             self.logits = logits
         elif logits is None:
             self.prob = p
-            self.logits = -jt.log(1. / p - 1)
+            self.logits = -jt.safe_log(1. / p - 1)
         
     def sample(self, sample_shape):
-        tiny = jt.info(self.probs.dtype).tiny
-        u = jt.clamp(jt.rand(sample_shape),min_v=tiny)
-        return (jt.log(u) / (jt.log(-self.probs+1))).floor()
+        u = jt.rand(sample_shape)
+        return (jt.safe_log(u) / (jt.safe_log(-self.probs+1))).floor_int()
     
     def log_prob(self, x):
-        return x*jt.log(-self.prob+1)+jt.log(self.prob)
+        return x*jt.safe_log(-self.prob+1)+jt.safe_log(self.prob)
     
     def entropy(self):
         return binary_cross_entropy_with_logits(jt.array(self.logits),jt.array(self.prob)) / self.prob
@@ -157,16 +143,14 @@ def kl_divergence(cur_dist, old_dist):
     if isinstance(cur_dist, Normal):
         vr = (cur_dist.sigma / old_dist.sigma)**2
         t1 = ((cur_dist.mu - old_dist.mu) / old_dist.sigma)**2
-        return 0.5*(vr+t1-1-jt.log(vr))
+        return 0.5*(vr+t1-1-jt.safe_log(vr))
     if isinstance(cur_dist, Categorical) or isinstance(cur_dist,OneHotCategorical):
         t = cur_dist.probs * (cur_dist.logits-old_dist.logits)
-        t[jt.array((old_dist.probs == 0))] = math.inf
-        t[jt.array((cur_dist.probs == 0))] = 0
         return t.sum(-1)
     if isinstance(cur_dist, Uniform):
-        res = jt.log((old_dist.high - old_dist.low) / (cur_dist.high - cur_dist.low))
+        res = jt.safe_log((old_dist.high - old_dist.low) / (cur_dist.high - cur_dist.low))
         if old_dist.low > cur_dist.low or old_dist.high < cur_dist.high:
             res = math.inf
         return res
     if isinstance(cur_dist, Geometric):
-        return -cur_dist.entropy() - jt.log(-old_dist.prob+1) / cur_dist.prob - old_dist.logits
+        return -cur_dist.entropy() - jt.safe_log(-old_dist.prob+1) / cur_dist.prob - old_dist.logits

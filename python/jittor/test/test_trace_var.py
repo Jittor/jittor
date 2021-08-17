@@ -10,6 +10,8 @@ import numpy as np
 from jittor import Module
 from jittor.models import resnet
 import pickle
+from PIL import Image
+import platform
 
 f32 = jt.float32
 
@@ -111,6 +113,36 @@ class TestTraceVar(unittest.TestCase):
             data = jt.dump_trace_data()
             jt.clear_trace_data()
             with open(f"{jt.flags.cache_path}/resnet.pkl", "wb") as f:
+                pickle.dump(data, f)
+            for k,v in data["execute_op_info"].items():
+                for i in v['fused_ops']:
+                    if i not in data["node_data"]:
+                        assert 0, (i, "not found")
+
+    def test_resnet_infer_with_feature(self):
+        cat_url = "https://ss1.bdstatic.com/70cFuXSh_Q1YnxGkpoWK1HF6hhy/it/u=3782485413,1118109468&fm=26&gp=0.jpg"
+        import jittor_utils
+        cat_path = f"{jt.flags.cache_path}/cat.jpg"
+        print("download")
+        jittor_utils.download(cat_url, cat_path)
+        with open(cat_path, 'rb') as f:
+            img = Image.open(f).convert('RGB')
+            img = jt.array(np.array(img))
+            print(img.shape, img.dtype)
+            img = ((img.float() - 128) / 255).transpose(2,0,1)
+
+
+        with jt.flag_scope(trace_py_var=2, trace_var_data=1):
+            img = img[None,...]
+
+            resnet18 = resnet.Resnet18(pretrained=True)
+            x = jt.float32(img)
+            y = resnet18(x)
+            y.sync()
+
+            data = jt.dump_trace_data()
+            jt.clear_trace_data()
+            with open(f"{jt.flags.cache_path}/resnet_with_feature.pkl", "wb") as f:
                 pickle.dump(data, f)
             for k,v in data["execute_op_info"].items():
                 for i in v['fused_ops']:

@@ -67,6 +67,10 @@ void LoopToFuncPass::run() {
                         args.push_back(d.get());
                         continue;
                     }
+                    if (endswith(d->attrs["lvalue"], "_value")) {
+                        args.push_back(d.get());
+                        continue;
+                    }
                 }
             }
             func->push_back(d->clone());
@@ -99,7 +103,9 @@ void LoopToFuncPass::run() {
         auto& fc = ir->children[i];
         fc->attrs["loop_func"] = func->attrs["lvalue"];
     }
-    // ir->remove_all_unused();
+    #ifdef __APPLE__
+    ir->remove_all_unused();
+    #endif
 }
 
 } // jittor

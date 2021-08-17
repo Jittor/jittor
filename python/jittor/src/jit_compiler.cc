@@ -12,6 +12,7 @@
 #else
 #include <dlfcn.h>
 #endif
+#include <mutex>
 
 #include "jit_compiler.h"
 #include "op.h"
@@ -33,13 +34,18 @@ DEFINE_FLAG(int, rewrite_op, 1, "Rewrite source file of jit operator or not");
 
 namespace jit_compiler {
 
+std::mutex dl_open_mutex;
+
 jit_op_entry_t load_jit_lib(string name, string symbol_name="jit_entry") {
     const char* msg = "";
     LOGvv << "Opening jit lib:" << name;
     #ifdef _WIN32
     void* handle = (void*)LoadLibrary(name.c_str());
-    #else
+    #elif defined(__linux__)
     void* handle = dlopen(name.c_str(), RTLD_LAZY | RTLD_DEEPBIND | RTLD_LOCAL);
+    msg = dlerror();
+    #else
+    void *handle = dlopen(name.c_str(), RTLD_NOW | RTLD_LOCAL);
     msg = dlerror();
     #endif
 
@@ -99,10 +105,10 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
             + " \"" + jit_src_path + "\"" + other_src
             + cc_flags + extra_flags
             + " -o \"" + jit_lib_path + "\"";
-        #ifndef _WIN32
+#ifdef __linux__
         cmd = python_path+" "+jittor_path+"/utils/asm_tuner.py "
             "--cc_path=" + cmd;
-        #endif
+#endif
     }
     cache_compile(cmd, cache_path, jittor_path);
     auto symbol_name = get_symbol_name(jit_key);

@@ -25,15 +25,15 @@ bool endswith(const string& a, const string& b) {
 
 vector<string> split(const string& s, const string& sep, int max_split) {
     vector<string> ret;
-    int pos = -1, pos_next;
+    int pos = 0, pos_next;
     while (1) {
-        pos_next = s.find(sep, pos+1);
+        pos_next = s.find(sep, pos);
         if (pos_next == (int)string::npos || (int)ret.size() == max_split-1) {
-            ret.push_back(s.substr(pos+sep.size()));
+            ret.push_back(s.substr(pos));
             return ret;
         }
-        ret.push_back(s.substr(pos+sep.size(), pos_next-pos-sep.size()));
-        pos = pos_next;
+        ret.push_back(s.substr(pos, pos_next-pos));
+        pos = pos_next + sep.size();
     }
     ASSERT(max_split==0);
     return ret;

@@ -34,9 +34,9 @@ constexpr int32_t basename_index(const char * const path, const int32_t index = 
 
 #define PREDICT_BRANCH_NOT_TAKEN(x) (__builtin_expect(x, 0))
 
-extern "C" uint32_t get_tid();
-extern "C" bool g_supports_color;
-extern "C" void print_prefix(std::ostream* out);
+extern uint32_t get_tid();
+extern bool g_supports_color;
+extern void print_prefix(std::ostream* out);
 
 #ifdef _WIN32
 constexpr char green[] = "\x1b[1;32m";
@@ -83,10 +83,10 @@ static void get_color(char level, int verbose, const char*& color_begin, const c
 
 #endif
 
-extern "C" void send_log(std::ostringstream&& out);
-extern "C" void flush_log();
-extern "C" void log_capture_start();
-extern "C" void log_capture_stop();
+extern void send_log(std::ostringstream&& out);
+extern void flush_log();
+extern void log_capture_start();
+extern void log_capture_stop();
 extern std::vector<std::map<string,string>> log_capture_read();
 extern string thread_local thread_name;
 
@@ -170,9 +170,10 @@ template<class T> T get_from_env(const char* name,const T& _default) {
 template<> std::string get_from_env(const char* name, const std::string& _default);
 
 #define DECLARE_FLAG(type, name) \
-extern "C" type name; \
-extern "C" std::string doc_ ## name; \
-extern "C" void set_ ## name (const type&);
+extern type name; \
+extern std::string doc_ ## name; \
+extern void set_ ## name (const type&);
+
 
 #ifdef JIT
 

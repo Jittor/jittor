@@ -206,6 +206,8 @@ int segfault_happen = 0;
 string thread_local thread_name;
 static int _pid = getpid();
 vector<void(*)()> cleanup_callback;
+vector<void(*)()> sigquit_callback;
+int64 last_q_time;
 
 #ifdef _WIN32
 void handle_signal(int signal) {
@@ -214,13 +216,49 @@ void handle_signal(int signal) {
     abort();
 }
 #else
+static inline void do_exit() {
+    #ifdef __APPLE__
+    _Exit(1);
+    #else
+    std::quick_exit(1);
+    #endif
+}
+
 void segfault_sigaction(int signal, siginfo_t *si, void *arg) {
+    if (signal == SIGQUIT) {
+        if (_pid == getpid()) {
+            std::cerr << "Caught SIGQUIT" << std::endl;
+            int64 now = clock();
+            if (now > last_q_time && last_q_time+CLOCKS_PER_SEC/10 > now) {
+                last_q_time = now;
+                std::cerr << "GDB attach..." << std::endl;
+                breakpoint();
+            } else {
+                last_q_time = now;
+                for (auto f : sigquit_callback)
+                    f();
+            }
+        }
+        return;
+    }
+    if (signal == SIGCHLD) {
+        if (si->si_code != CLD_EXITED && si->si_status != SIGTERM) {
+            LOGe << "Caught SIGCHLD" 
+                << "si_errno:" << si->si_errno 
+                << "si_code:" << si->si_code 
+                << "si_status:" << si->si_status
+                << ", quick exit";
+            exited = true;
+            do_exit();
+        }
+        return;
+    }
     if (signal == SIGINT) {
         if (_pid == getpid()) {
             LOGe << "Caught SIGINT, quick exit";
         }
         exited = true;
-        std::quick_exit(1);
+        do_exit();
     }
     std::cerr << "Caught segfault at address " << si->si_addr << ", "
         << "thread_name: '" << thread_name << "', flush log..." << std::endl;
@@ -266,6 +304,7 @@ int register_sigaction() {
     sigaction(SIGSTOP, &sa, NULL);
     sigaction(SIGFPE, &sa, NULL);
     sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGCHLD, &sa, NULL);
     sigaction(SIGILL, &sa, NULL);
     sigaction(SIGBUS, &sa, NULL);
     sigaction(SIGQUIT, &sa, NULL);
@@ -364,6 +403,34 @@ but you can hot fix it by this command:
         )";
 }
 
+static inline void check_cuda_gcc_version(const string& output) {
+    /*  if such error occur: 
+    error: identifier "__is_assignable" is undefined
+    this means your gcc version is not match with nvcc,
+    for example, nvcc 10 support gcc<=7, nvcc 11 support gcc<=9,
+
+    https://gist.github.com/ax3l/9489132
+    */
+    string pat = "__is_assignable";
+    auto id = output.find(pat);
+    if (id == string::npos) return;
+    LOGf << output << R"(
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+Dear user, your nvcc and gcc version are still not match
+after dirty hack, your should install the correct version of g++
+or nvcc, for example, nvcc 10 support g++<=7, nvcc 11 support g++<=9,
+here is the NVCC Compatibility Matrix:
+    https://gist.github.com/ax3l/9489132
+Please install correct version of gcc, for example:
+    >>> sudo apt install g++-7
+After your g++ is installed, using enviroment variable `cc_path` to
+tell jittor use the correct version of g++, for example:
+    >>> cc_path='g++-7' python3.7 -m jittor.test.test_core
+If you still have problems, please contact us:
+    https://github.com/Jittor/jittor/issues
+    )";
+}
+
 #ifdef _WIN32
 int system_popen(const char *cmd) {
     HANDLE g_hChildStd_OUT_Rd = NULL;
@@ -444,6 +511,7 @@ int system_popen(const char *cmd) {
 
     if (ec) {
         check_cuda_unsupport_version(output);
+        check_cuda_gcc_version(output);
     }
     return ec;
 }
@@ -468,6 +536,7 @@ int system_popen(const char* cmd) {
     }
     if (ret) {
         check_cuda_unsupport_version(output);
+        check_cuda_gcc_version(output);
     }
     return ret;
 }

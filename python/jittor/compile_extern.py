@@ -5,6 +5,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 import os, sys, shutil
+import platform
 from .compiler import *
 from jittor_utils import run_cmd, get_version, get_int_version
 from jittor_utils.misc import download_url_to_local
@@ -23,71 +24,99 @@ def search_file(dirs, name, prefer_version=()):
 def install_mkl(root_folder):
     # origin url is
     # url = "https://github.com/intel/mkl-dnn/releases/download/v1.0.2/mkldnn_lnx_1.0.2_cpu_gomp.tgz"
-    url = "https://cloud.tsinghua.edu.cn/f/da02bf62b55b4aa3b8ee/?dl=1"
-    filename = "mkldnn_lnx_1.0.2_cpu_gomp.tgz"
-    # newest version for oneDNN
-    # url = "https://github.com/oneapi-src/oneDNN/releases/download/v2.2/dnnl_lnx_2.2.0_cpu_gomp.tgz"
-    # filename = "dnnl_lnx_2.2.0_cpu_gomp.tgz"
+    import platform
+    if platform.system()=="Linux":
+        if platform.machine()=='x86_64':
+            filename = "dnnl_lnx_2.2.0_cpu_gomp.tgz"
+            md5 = "35bbbdf550a9d8ad54db798e372000f6"
+        elif platform.machine()=='aarch64':
+            filename = "dnnl_lnx_2.2.0_cpu_gomp_aarch64.tgz"
+            md5 = "72cf9b0b8fd6c3c786d35a9daaee22b8"
+        else:
+            raise RuntimeError(f"platform.machine()=={platform.machine()} not support yet,"
+            " Please contact us on https://github.com/jittor/jittor ")
+    else:
+        raise RuntimeError(f"platform.machine()=={platform.machine()} not support yet,"
+        " Please contact us on https://github.com/jittor/jittor ")
+
+    url = "https://cg.cs.tsinghua.edu.cn/jittor/assets/" + filename
     fullname = os.path.join(root_folder, filename)
     dirname = os.path.join(root_folder, filename.replace(".tgz",""))
 
-    if not os.path.isfile(os.path.join(dirname, "examples", "test")):
+    if not os.path.isfile(os.path.join(dirname, "lib", "libmkldnn.so")):
         LOG.i("Downloading mkl...")
-        download_url_to_local(url, filename, root_folder, "47187284ede27ad3bd64b5f0e7d5e730")
-        # newest version for oneDNN
-        # download_url_to_local(url, filename, root_folder, "35bbbdf550a9d8ad54db798e372000f6")
+        download_url_to_local(url, filename, root_folder, md5)
         import tarfile
 
         with tarfile.open(fullname, "r") as tar:
             tar.extractall(root_folder)
 
         assert 0 == os.system(f"cd {dirname}/examples && "
-            f"{cc_path} -std=c++14 cpu_cnn_inference_f32.cpp -Ofast -lmkldnn -I ../include -L ../lib -o test && LD_LIBRARY_PATH=../lib/ ./test")
-        # newest version for oneDNN
-        # assert 0 == os.system(f"cd {dirname}/examples && "
-        #     f"{cc_path} -std=c++14 cnn_inference_f32.cpp -Ofast -lmkldnn -I ../include -L ../lib -o test && LD_LIBRARY_PATH=../lib/ ./test")
+            f"{cc_path} -std=c++14 cnn_inference_f32.cpp -Ofast -lmkldnn -I ../include -L ../lib -o test && LD_LIBRARY_PATH=../lib/ ./test")
 
 def setup_mkl():
     global mkl_ops, use_mkl
     use_mkl = os.environ.get("use_mkl", "1")=="1"
     mkl_ops = None
     if not use_mkl: return
+
+    # pytorch mkl is conflict with jittor mkl
+    # yield error "free: invalide size" or
+    # "mmap error"
+    # import pytorch(>1.8) first can fix this problem
+    # try:
+    #     # jt.dirty_fix_pytorch_runtime_error()
+    #     import torch
+    #     from torch import nn
+    # except:
+    #     torch = None
+
     mkl_include_path = os.environ.get("mkl_include_path")
     mkl_lib_path = os.environ.get("mkl_lib_path")
     
-    if mkl_lib_path is None or mkl_include_path is None:
-        mkl_install_sh = os.path.join(jittor_path, "script", "install_mkl.sh")
-        LOG.v("setup mkl...")
-        # mkl_path = os.path.join(cache_path, "mkl")
-        # mkl_path decouple with cc_path
-        from pathlib import Path
-        mkl_path = os.path.join(str(Path.home()), ".cache", "jittor", "mkl")
-        
-        make_cache_dir(mkl_path)
-        install_mkl(mkl_path)
-        mkl_home = ""
-        for name in os.listdir(mkl_path):
-            if name.startswith("mkldnn_lnx") and os.path.isdir(os.path.join(mkl_path, name)):
-                mkl_home = os.path.join(mkl_path, name)
-                break
-        assert mkl_home!=""
+    if platform.system() == 'Linux':
+        if mkl_lib_path is None or mkl_include_path is None:
+            mkl_install_sh = os.path.join(jittor_path, "script", "install_mkl.sh")
+            LOG.v("setup mkl...")
+            # mkl_path = os.path.join(cache_path, "mkl")
+            # mkl_path decouple with cc_path
+            from pathlib import Path
+            mkl_path = os.path.join(str(Path.home()), ".cache", "jittor", "mkl")
+            
+            make_cache_dir(mkl_path)
+            install_mkl(mkl_path)
+            mkl_home = ""
+            for name in os.listdir(mkl_path):
+                if name.startswith("dnnl") and os.path.isdir(os.path.join(mkl_path, name)):
+                    mkl_home = os.path.join(mkl_path, name)
+                    break
+            assert mkl_home!=""
         mkl_include_path = os.path.join(mkl_home, "include")
         mkl_lib_path = os.path.join(mkl_home, "lib")
 
-    mkl_lib_name = os.path.join(mkl_lib_path, "libmkldnn.so")
-    assert os.path.isdir(mkl_include_path)
-    assert os.path.isdir(mkl_lib_path)
-    assert os.path.isfile(mkl_lib_name)
-    LOG.v(f"mkl_include_path: {mkl_include_path}")
-    LOG.v(f"mkl_lib_path: {mkl_lib_path}")
-    LOG.v(f"mkl_lib_name: {mkl_lib_name}")
-    # We do not link manualy, link in custom ops
-    # ctypes.CDLL(mkl_lib_name, dlopen_flags)
+        mkl_lib_name = os.path.join(mkl_lib_path, "libmkldnn.so")
+        assert os.path.isdir(mkl_include_path)
+        assert os.path.isdir(mkl_lib_path)
+        assert os.path.isfile(mkl_lib_name)
+        LOG.v(f"mkl_include_path: {mkl_include_path}")
+        LOG.v(f"mkl_lib_path: {mkl_lib_path}")
+        LOG.v(f"mkl_lib_name: {mkl_lib_name}")
+        # We do not link manualy, link in custom ops
+        # ctypes.CDLL(mkl_lib_name, dlopen_flags)
+        extra_flags = f" -I'{mkl_include_path}' -L'{mkl_lib_path}' -lmkldnn -Wl,-rpath='{mkl_lib_path}' "
+
+    elif platform.system() == 'Darwin':
+        mkl_lib_paths = [
+            "/usr/local/lib/libmkldnn.dylib",       # x86_64
+            "/opt/homebrew/lib/libmkldnn.dylib",    # arm64
+        ]
+        if not any([os.path.exists(lib) for lib in mkl_lib_paths]):
+            raise RuntimeError("Not found onednn, please install it by the command 'brew install onednn'")
+        extra_flags = f" -lmkldnn "
 
     mkl_op_dir = os.path.join(jittor_path, "extern", "mkl", "ops")
     mkl_op_files = [os.path.join(mkl_op_dir, name) for name in os.listdir(mkl_op_dir)]
-    mkl_ops = compile_custom_ops(mkl_op_files, 
-        extra_flags=f" -I'{mkl_include_path}' -L'{mkl_lib_path}' -lmkldnn -Wl,-rpath='{mkl_lib_path}' ")
+    mkl_ops = compile_custom_ops(mkl_op_files, extra_flags=extra_flags)
     LOG.vv("Get mkl_ops: "+str(dir(mkl_ops)))
 
 
@@ -154,13 +183,20 @@ def setup_cuda_extern():
             line = traceback.format_exc()
             LOG.w(f"CUDA found but {lib_name} is not loaded:\n{line}")
             if lib_name == "cudnn":
-                LOG.w(f"""Develop version of CUDNN not found, 
+                msg = """Develop version of CUDNN not found, 
 please refer to CUDA offical tar file installation: 
-https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#installlinux-tar
+https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#installlinux-tar"""
+                if platform.machine() == "x86_64":
+                    msg += """
 or you can let jittor install cuda and cudnn for you:
->>> python3.{sys.version_info.minor} -m jittor_utils.install_cuda""")
+>>> python3.{sys.version_info.minor} -m jittor_utils.install_cuda
+"""
+                LOG.w(msg)
 
 def setup_cuda_lib(lib_name, link=True, extra_flags=""):
+    arch_key = "x86_64"
+    if platform.machine() != "x86_64":
+        arch_key = "aarch64"
     globals()[lib_name+"_ops"] = None
     globals()[lib_name] = None
     if not has_cuda: return
@@ -172,20 +208,26 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
 
     link_flags = ""
     if link:
-        extra_include_path = os.path.abspath(os.path.join(cuda_include, "..", "targets/x86_64-linux/include"))
-        extra_lib_path = os.path.abspath(os.path.join(cuda_lib, "..", "targets/x86_64-linux/lib"))
+        extra_include_path = os.path.abspath(os.path.join(cuda_include, "..", f"targets/{arch_key}-linux/include"))
+        extra_lib_path = os.path.abspath(os.path.join(cuda_lib, "..", f"targets/{arch_key}-linux/lib"))
         cuda_include_name = search_file([cuda_include, extra_include_path, "/usr/include"], lib_name+".h")
         # cuda11 prefer cudnn 8
         nvcc_version = get_int_version(nvcc_path)
         prefer_version = ()
         if nvcc_version[0] == 11:
             prefer_version = ("8",)
-        culib_path = search_file([cuda_lib, extra_lib_path, "/usr/lib/x86_64-linux-gnu"], f"lib{lib_name}.so", prefer_version)
+        culib_path = search_file([cuda_lib, extra_lib_path, f"/usr/lib/{arch_key}-linux-gnu", "/usr/lib"], f"lib{lib_name}.so", prefer_version)
 
-        if lib_name == "cublas":
+        if lib_name == "cublas" and nvcc_version[0] >= 10:
             # manual link libcublasLt.so
-            cublas_lt_lib_path = search_file([cuda_lib, extra_lib_path, "/usr/lib/x86_64-linux-gnu"], f"libcublasLt.so", nvcc_version)
-            ctypes.CDLL(cublas_lt_lib_path, dlopen_flags)
+            try:
+                cublas_lt_lib_path = search_file([cuda_lib, extra_lib_path, f"/usr/lib/{arch_key}-linux-gnu", "/usr/lib"], f"libcublasLt.so", nvcc_version)
+                ctypes.CDLL(cublas_lt_lib_path, dlopen_flags)
+            except:
+                # some aarch64 os, such as uos with FT2000 cpu,
+                # it's cuda 10 doesn't have libcublasLt.so
+                pass
+
 
 
         if lib_name == "cudnn":
@@ -193,7 +235,7 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
             if nvcc_version >= (11,0,0):
                 libs = ["libcudnn_ops_infer.so", "libcudnn_ops_train.so", "libcudnn_cnn_infer.so", "libcudnn_cnn_train.so"]
                 for l in libs:
-                    ex_cudnn_path = search_file([cuda_lib, extra_lib_path, "/usr/lib/x86_64-linux-gnu"], l, prefer_version)
+                    ex_cudnn_path = search_file([cuda_lib, extra_lib_path, f"/usr/lib/{arch_key}-linux-gnu", "/usr/lib"], l, prefer_version)
                     ctypes.CDLL(ex_cudnn_path, dlopen_flags)
 
         # dynamic link cuda library
@@ -326,7 +368,7 @@ def install_nccl(root_folder):
         if len(flags.cuda_archs):
             arch_flag = f" -arch=compute_{min(flags.cuda_archs)} "
             arch_flag += ''.join(map(lambda x:f' -code=sm_{x} ', flags.cuda_archs))
-        run_cmd(f"make -j8 src.build CUDA_HOME='{cuda_home}' NVCC_GENCODE='{arch_flag} --cudart=shared -ccbin=\"{cc_path}\" ' ", cwd=dirname)
+        run_cmd(f"CC=\"{cc_path}\" CXX=\"{cc_path}\" make -j8 src.build CUDA_HOME='{cuda_home}' NVCC_GENCODE='{arch_flag} --cudart=shared ' ", cwd=dirname)
     return dirname
 
 def setup_nccl():
@@ -453,12 +495,22 @@ def setup_mpi():
         if k == "mpi_test": continue
         setattr(core.Var, k, warper(mpi_ops.__dict__[k]))
 
+if os.environ.get("FIX_TORCH_ERROR", "0") == "1":
+    try:
+        import torch
+    except:
+        pass
+
 setup_mpi()
 in_mpi = inside_mpi()
 rank = mpi.world_rank() if in_mpi else 0
+world_size = mpi.world_size() if in_mpi else 1
 setup_nccl()
 
 setup_cutt()
-setup_mkl()
+try:
+    setup_mkl()
+except Exception as e:
+    LOG.w("MKL install failed, msg:", e)
 
 setup_cuda_extern()

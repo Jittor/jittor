@@ -73,6 +73,7 @@ class TestGrad(unittest.TestCase):
         assert dx.data == 0
         
     def test_random_graph(self):
+        @jt.flag_scope(auto_convert_64_to_32=0)
         def test(num_vars, num_ops, seed):
             np.random.seed(seed)
             vars = []

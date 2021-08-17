@@ -20,6 +20,7 @@
 namespace jittor {
 
 DEFINE_FLAG(int, trace_py_var, 0, "Trace py stack max depth for debug.");
+DEFINE_FLAG(int, trace_var_data, 0, "Trace py stack max depth for debug.");
 Op* trace_grad_op = nullptr;
 
 TraceData trace_data;
@@ -185,6 +186,44 @@ static vector<Stack> get_stack_info() {
     return stacks;
 }
 
+template<class T>
+string get_str(T* t, int64 num) {
+    string s = "";
+    for (int64 i=0; i<num; i++) {
+        s += S(t[i]);
+        if (i != num-1)
+            s += ',';
+    }
+    return s;
+} 
+
+static inline string get_var_data_str(Var* v) {
+    if (v->dtype() == ns_int8)
+        return get_str(v->ptr<int8>(), v->num);
+    if (v->dtype() == ns_int16)
+        return get_str(v->ptr<int16>(), v->num);
+    if (v->dtype() == ns_int32)
+        return get_str(v->ptr<int32>(), v->num);
+    if (v->dtype() == ns_int64)
+        return get_str(v->ptr<int64>(), v->num);
+
+
+    if (v->dtype() == ns_uint8)
+        return get_str(v->ptr<uint8>(), v->num);
+    if (v->dtype() == ns_uint16)
+        return get_str(v->ptr<uint16>(), v->num);
+    if (v->dtype() == ns_uint32)
+        return get_str(v->ptr<uint32>(), v->num);
+    if (v->dtype() == ns_uint64)
+        return get_str(v->ptr<uint64>(), v->num);
+
+    if (v->dtype() == ns_float32)
+        return get_str(v->ptr<float32>(), v->num);
+    if (v->dtype() == ns_float64)
+        return get_str(v->ptr<float64>(), v->num);
+    return "";
+}
+
 void TraceData::record_node(Node* node, bool record_stack) {
     if (thread_name.size()) return;
     NodeData data;
@@ -255,6 +294,8 @@ void TraceData::record_exe_node(Node* node) {
             data.attrs["dsize"] = S(v->dtype().dsize());
             data.attrs["name"] = v->name.c_str();
             data.attrs["is_var"] = "1";
+            if (trace_var_data && v->mem_ptr)
+                data.attrs["data"] = get_var_data_str(v);
         } else {
             auto op = node->op();
             data.attrs["name"] = op->name_ex();

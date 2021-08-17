@@ -4,7 +4,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#include <bits/stdc++.h>
+#include <cstring>
 #include "misc/nano_string.h"
 
 namespace jittor {
@@ -59,6 +59,9 @@ static unordered_set<string> unary_ops = {
     "round",
     "floor",
     "ceil",
+    "round_int",
+    "floor_int",
+    "ceil_int",
     "cast",
     "sin",
     "asin",
@@ -82,9 +85,9 @@ static unordered_set<string> unary_float_ops = {
     "sqrt",
 };
 static unordered_set<string> unary_int_ops = {
-    "round",
-    "floor",
-    "ceil",
+    "round_int",
+    "floor_int",
+    "ceil_int",
 };
 
 static unordered_set<string> binary_ops = {

@@ -130,6 +130,35 @@ class TestPad(unittest.TestCase):
                 assert np.allclose(t_res[idx].numpy(), j_res[idx].numpy())
         print('pass unbind test ...')
 
+    def test_expand(self):
+        a = jt.zeros((3,1))
+        b = a.expand(3, 4)
+        assert b.shape == (3,4)
+        b = a.expand(-1, 4)
+        assert b.shape == (3,4)
+        b = a.expand((3, 4))
+        assert b.shape == (3,4)
+        b = a.expand((-1, 4))
+        assert b.shape == (3,4)
+
+    def test_bilinear(self):
+        from jittor import nn
+        m = nn.Bilinear(20, 30, 40)
+        input1 = jt.randn(128, 20)
+        input2 = jt.randn(128, 30)
+        output = m(input1, input2)
+        assert output.shape == [128,40]
+
+        m2 = torch.nn.Bilinear(20, 30, 40)
+        m2.weight = torch.nn.Parameter(torch.Tensor(m.weight.data))
+        m2.bias = torch.nn.Parameter(torch.Tensor(m.bias.data))
+        in1 = torch.Tensor(input1.data)
+        in2 = torch.Tensor(input2.data)
+        out = m2(in1, in2)
+        np.testing.assert_allclose(
+            out.detach().numpy(), output.data,
+            atol=1e-4)
+
 class TestOther(unittest.TestCase):
     def test_save(self):
         pp = [1,2,jt.array([1,2,3]), {"a":[1,2,3], "b":jt.array([1,2,3])}]

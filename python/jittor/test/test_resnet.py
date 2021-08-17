@@ -38,7 +38,7 @@ class TestResnet(unittest.TestCase):
     @classmethod
     def setUpClass(self):
         # hyper-parameters
-        self.batch_size = 100
+        self.batch_size = int(os.environ.get("TEST_BATCH_SIZE", "100"))
         self.weight_decay = 0.0001
         self.momentum = 0.9
         self.learning_rate = 0.1
@@ -63,8 +63,11 @@ class TestResnet(unittest.TestCase):
         global prev
         prev = time.time()
         SGD = nn.SGD(mnist_net.parameters(), self.learning_rate, self.momentum, self.weight_decay)
+        self.train_loader.endless = True
 
-        for batch_idx, (data, target) in enumerate(self.train_loader):
+        for data, target in self.train_loader:
+            batch_id = self.train_loader.batch_id
+            epoch_id = self.train_loader.epoch_id
 
             # train step
             with jt.log_capture_scope(
@@ -74,7 +77,7 @@ class TestResnet(unittest.TestCase):
                 output = mnist_net(data)
                 loss = nn.cross_entropy_loss(output, target)
                 SGD.step(loss)
-                def callback(batch_idx, loss, output, target):
+                def callback(epoch_id, batch_id, loss, output, target):
                     # print train info
                     global prev
                     pred = np.argmax(output, axis=1)
@@ -82,15 +85,15 @@ class TestResnet(unittest.TestCase):
                     loss_list.append(loss[0])
                     acc_list.append(acc)
                     print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}\tAcc: {:.6f} \tTime:{:.3f}'
-                        .format(0, batch_idx, 600,1. * batch_idx / 6.0, loss[0], acc, time.time()-prev))
+                        .format(epoch_id, batch_id, 600,1. * batch_id / 6.0, loss[0], acc, time.time()-prev))
                     # prev = time.time()
-                jt.fetch(batch_idx, loss, output, target, callback)
+                jt.fetch(epoch_id, batch_id, loss, output, target, callback)
             
             log_conv = find_log_with_re(logs, 
                 "Jit op key (not )?found: ((mkl)|(cudnn))_conv.*")
             log_matmul = find_log_with_re(logs, 
                 "Jit op key (not )?found: ((mkl)|(cublas))_matmul.*")
-            if batch_idx > 2:
+            if batch_id > 2:
                 assert len(log_conv)==59 and len(log_matmul)==6, (len(log_conv), len(log_matmul))
 
             mem_used = jt.flags.stat_allocator_total_alloc_byte \
@@ -116,9 +119,11 @@ class TestResnet(unittest.TestCase):
             # Train Epoch: 0 [50/100 (50%)]   Loss: 2.055014  Acc: 0.290000
 
             if jt.in_mpi:
-                assert jt.core.number_of_lived_vars() < 8000, jt.core.number_of_lived_vars()
+                assert jt.core.number_of_lived_vars() < 8100, jt.core.number_of_lived_vars()
             else:
-                assert jt.core.number_of_lived_vars() < 6900, jt.core.number_of_lived_vars()
+                assert jt.core.number_of_lived_vars() < 7000, jt.core.number_of_lived_vars()
+            if self.train_loader.epoch_id >= 2:
+                break
 
         jt.sync_all(True)
         assert np.mean(loss_list[-50:])<0.5

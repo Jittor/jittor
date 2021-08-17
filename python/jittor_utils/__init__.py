@@ -13,11 +13,15 @@ import sys
 import inspect
 import datetime
 import contextlib
+import platform
 import threading
 import time
 from ctypes import cdll
 import shutil
 import urllib.request
+
+if platform.system() == 'Darwin':
+    mp.set_start_method('fork')
 
 class LogWarper:
     def __init__(self):
@@ -118,6 +122,8 @@ def try_import_jit_utils_core(silent=None):
         if is_in_ipynb:
             cc.ostream_redirect(True, True)
     except Exception as _:
+        if int(os.environ.get("log_v", "0")) > 0:
+            print(_)
         pass
     if not (silent is None):
         os.environ["log_silent"] = prev
@@ -161,7 +167,8 @@ def pool_cleanup():
     del p
 
 def pool_initializer():
-    try_import_jit_utils_core()
+    if cc is None:
+        try_import_jit_utils_core()
     cc.init_subprocess()
 
 def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
@@ -169,10 +176,16 @@ def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
     bk = mp.current_process()._config.get('daemon')
     mp.current_process()._config['daemon'] = False
     if pool_size == 0:
-        mem_bytes = get_total_mem()
-        mem_gib = mem_bytes/(1024.**3)
-        pool_size = min(16,max(int(mem_gib // 3), 1))
-        LOG.i(f"Total mem: {mem_gib:.2f}GB, using {pool_size} procs for compiling.")
+        try:
+            mem_bytes = get_total_mem()
+            mem_gib = mem_bytes/(1024.**3)
+            pool_size = min(16,max(int(mem_gib // 3), 1))
+            LOG.i(f"Total mem: {mem_gib:.2f}GB, using {pool_size} procs for compiling.")
+        except ValueError:
+            # On macOS, python with version lower than 3.9 do not support SC_PHYS_PAGES.
+            # Use hard coded pool size instead.
+            pool_size = 4
+            LOG.i(f"using {pool_size} procs for compiling.")
         if os.name == 'nt':
             # a hack way to by pass windows
             # multiprocess spawn init_main_from_path.
@@ -195,6 +208,16 @@ def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
             dp.update(i)
     finally:
         mp.current_process()._config['daemon'] = bk
+
+if os.environ.get("DISABLE_MULTIPROCESSING", '0') == '1':
+    os.environ["use_parallel_op_compiler"] = '1'
+    def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
+        cmds = [ [cmd, cache_path, jittor_path] for cmd in cmds ]
+        n = len(cmds)
+        dp = DelayProgress(msg, n)
+        for i,cmd in enumerate(cmds):
+            dp.update(i)
+            do_compile(cmd)
 
 
 def download(url, filename):
@@ -231,7 +254,7 @@ def find_cache_path():
     for name in os.path.normpath(cache_name).split(os.path.sep):
         dirs.insert(-1, name)
     os.environ["cache_name"] = cache_name
-    LOG.v("cache_name", cache_name)
+    LOG.v("cache_name: ", cache_name)
     for d in dirs:
         path = os.path.join(path, d)
         if not os.path.isdir(path):
@@ -253,7 +276,10 @@ def get_version(output):
     if len(v) == 0:
         v = re.findall("[0-9]+\\.[0-9]+", version)
     assert len(v) != 0, f"Can not find version number from: {version}"
-    version = "("+v[-1]+")"
+    if 'clang' in version and platform.system() == 'Darwin':
+        version = "("+v[-3]+")"
+    else:
+        version = "("+v[-1]+")"
     return version
 
 def get_int_version(output):
@@ -299,11 +325,21 @@ def get_py3_config_path():
     if os.name == 'nt':
         return None
     else:
-        # Linux
+        # Search python3.x-config
+        # Note:
+        #   This may be called via c++ console. In that case, sys.executable will
+        #   be a path to the executable file, rather than python. So, we cannot infer 
+        #   python-config path only from sys.executable.
+        #   To address this issue, we add predefined paths to search,
+        #       - Linux: /usr/bin/python3.x-config
+        #       - macOS (installed via homebrew): /usr/local/bin/python3.x-config
+        #   There may be issues under other cases, e.g., installed via conda.
         py3_config_paths = [
             os.path.dirname(sys.executable) + f"/python3.{sys.version_info.minor}-config",
             sys.executable + "-config",
             f"/usr/bin/python3.{sys.version_info.minor}-config",
+            f"/usr/local/bin/python3.{sys.version_info.minor}-config",
+            f'/opt/homebrew/bin/python3.{sys.version_info.minor}-config',
             os.path.dirname(sys.executable) + "/python3-config",
         ]
         if "python_config_path" in os.environ:
@@ -316,7 +352,7 @@ def get_py3_config_path():
             raise RuntimeError(f"python3.{sys.version_info.minor}-config "
                 f"not found in {py3_config_paths}, please specify "
                 f"enviroment variable 'python_config_path',"
-                f" or apt install python3.{sys.version_info.minor}-dev")
+                f" or install python3.{sys.version_info.minor}-dev")
         _py3_config_path = py3_config_path
         return py3_config_path
 

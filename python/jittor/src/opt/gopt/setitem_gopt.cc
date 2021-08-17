@@ -47,6 +47,8 @@ static void setitem_inplace(SetitemOp* op) {
         return;
     }
     auto output = op->outputs().front();
+    // return if output is all ready shared
+    if (output->allocator) return;
     output->share_with(input);
     
     auto data = op->input(1);
@@ -78,13 +80,13 @@ static void setitem_inplace(SetitemOp* op) {
         VarSlice s = vs.slices[i];
         if (!(s.is_slice())) return;
         Slice ss = s.slice;
-        if (!(ss.start == 0 && ss.stop >= in_shape[i] && ss.step == 1))
+        if (!(ss.start == 0 && (ss.mask&2) && ss.step == 1))
             return;
         inplace_size *= in_shape[i];
     }
     
     VarSlice s = vs.slices[0];
-    if (s.is_var()) return;
+    if (s.is_var() || s.is_str()) return;
     
     auto size = 0;
     if (s.is_int())
@@ -105,6 +107,7 @@ static void setitem_inplace(SetitemOp* op) {
     }
     add_dependency(data->input(), {input->node()});
     data->share_with(input, size);
+    op->flags.set((NodeFlags::Flags(SetitemOp::_data_inplaced)));
 }
 
 struct BBox {
@@ -174,7 +177,10 @@ static void getitem_inplace(GetitemOp* op) {
 
     auto in = op->inputs().front();
     auto ou = op->outputs().front();
-    
+
+    // return if out is all ready inplaced
+    if (ou->allocator)
+        return;
     // return if input or output's shape is variable
     if (in->num <= 0 || ou->num <= 0)
         return;
@@ -186,12 +192,12 @@ static void getitem_inplace(GetitemOp* op) {
         VarSlice s = vs.slices[i];
         if (!(s.is_slice())) return;
         Slice ss = s.slice;
-        if (!(ss.start == 0 && ss.stop >= in_shape[i] && ss.step == 1))
-            return; 
+        if (!(ss.start == 0 && (ss.mask&2) && ss.step == 1))
+            return;
     }
     
     VarSlice s = vs.slices[0];
-    if (s.is_var()) return;
+    if (s.is_var() || s.is_str()) return;
     
     auto size = 0;
     if (s.is_int())
@@ -213,7 +219,7 @@ void SetitemOp::graph_optimize() {
 void GetitemOp::graph_optimize() {
     // This optimize is still WIP
     // LOGir << "hello getitem graph_optimize";
-    setitem_grad_opt(this);
+    // setitem_grad_opt(this);
     (void)setitem_grad_opt;
     // (void)getitem_inplace;
     getitem_inplace(this);

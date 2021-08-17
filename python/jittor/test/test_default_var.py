@@ -21,6 +21,7 @@ class TestDefaultVar(unittest.TestCase):
     def setUpClass(self):
         return
 
+    @jt.flag_scope(auto_convert_64_to_32=0)
     def test_default_var(self):
         a=jt.array((2,3,3), np.float32)
         b=a*2.0
