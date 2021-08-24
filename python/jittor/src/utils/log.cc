@@ -217,7 +217,7 @@ void segfault_sigaction(int signal, siginfo_t *si, void *arg) {
         return;
     }
     if (signal == SIGCHLD) {
-        if (si->si_code != CLD_EXITED && si->si_status != SIGTERM) {
+        if (si->si_code != CLD_EXITED && si->si_status != SIGTERM && _pid == getpid()) {
             LOGe << "Caught SIGCHLD" 
                 << "si_errno:" << si->si_errno 
                 << "si_code:" << si->si_code 
