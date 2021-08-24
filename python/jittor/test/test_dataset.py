@@ -254,6 +254,45 @@ for d in dataset:
         assert "quick exit" in s
 
 
+    @unittest.skipIf(not jt.compile_extern.has_mpi, "no mpi found")
+    def test_dataset_shuffle_mpi(self):
+        src = """
+import jittor as jt
+from jittor.dataset import Dataset
+import numpy as np
+
+class YourDataset(Dataset):
+    def __init__(self):
+        super().__init__()
+        self.set_attrs(total_len=160, shuffle=True)
+
+    def __getitem__(self, k):
+        return k
+
+dataset = YourDataset()
+dataset.set_attrs(num_workers=2)
+
+for d in dataset:
+    for a in d:
+        print("CHECK: ", a.item())
+"""
+        fname = os.path.join(jt.flags.cache_path, "test_dataset_shuffle_mpi.py")
+        with open(fname, 'w') as f:
+            f.write(src)
+        import subprocess as sp
+        import sys
+        cmd = sys.executable + " " + fname
+        mpirun_path = jt.compile_extern.mpicc_path.replace("mpicc", "mpirun")
+        cmd = mpirun_path + " -np 2 " + cmd
+        print(cmd)
+        r = sp.run(cmd, shell=True, stdout=sp.PIPE, stderr=sp.PIPE)
+        s = r.stdout.decode()
+        # print(s)
+        st = set([ l for l in s.splitlines() if l.startswith("CHECK:") ])
+        assert r.returncode == 0
+        # print(st)
+        assert len(st) == 160, len(st)
+
     def test_children_died2(self):
         src = """
 import jittor as jt
