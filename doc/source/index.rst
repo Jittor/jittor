@@ -36,6 +36,7 @@
    :maxdepth: 1
    :caption: 其他:
    
+   Jittor调试技巧
    教程 <https://cg.cs.tsinghua.edu.cn/jittor/tutorial/>
 
 Indices and tables
