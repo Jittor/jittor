@@ -90,6 +90,7 @@ class Dataset(object):
         self.epoch_id = 0
         self.sampler = None
         self._disable_workers = False
+        self._shuffle_rng = np.random.default_rng(1)
 
     def __getitem__(self, index):
         raise NotImplementedError
@@ -389,7 +390,10 @@ Example::
         elif self.shuffle == False:
             index_list = get_order_list(self.total_len)
         else:
-            index_list = get_random_list(self.total_len)
+            # using _shuffle_rng to generate multiprocess
+            # consist shuffle list
+            # index_list = get_random_list(self.total_len)
+            index_list = self._shuffle_rng.permutation(range(self.total_len))
         
         # scatter index_list for all mpi process
         # scatter rule:
