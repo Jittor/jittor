@@ -33,9 +33,21 @@
 
 
 .. toctree::
+   :maxdepth: 2 
+   :caption: 计图模型库:
+   
+   JDet
+   segmentation-jittor
+   InstanceSegmentation-jittor
+   gan-jittor
+   PointCloudLib
+   jrender
+
+.. toctree::
    :maxdepth: 1
    :caption: 其他:
    
+   Jittor调试技巧
    教程 <https://cg.cs.tsinghua.edu.cn/jittor/tutorial/>
 
 Indices and tables
