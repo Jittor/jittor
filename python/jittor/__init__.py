@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.2.3.93'
+__version__ = '1.2.3.94'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -332,12 +332,12 @@ def std(x):
     return out
 Var.std = std
 
-def norm(x, k=2, dim=-1, keepdim=False):
-    assert k==1 or k==2
-    if k==1:
+def norm(x, p=2, dim=-1, keepdim=False, eps=1e-30):
+    assert p==1 or p==2
+    if p==1:
         return x.abs().sum(dim, keepdim)
-    if k==2:
-        return (x.sqr()).sum(dim, keepdim).maximum(1e-6).sqrt()
+    if p==2:
+        return (x.sqr()).sum(dim, keepdim).maximum(eps).sqrt()
 Var.norm = norm
 
 origin_reshape = reshape
