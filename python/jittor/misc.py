@@ -344,7 +344,7 @@ def cross(input, other, dim=-1):
     return jt.contrib.concat([a1.unsqueeze(dim),a2.unsqueeze(dim),a3.unsqueeze(dim)], dim=dim)
 jt.Var.cross = cross
 
-def normalize(input, p=2, dim=1, eps=1e-12):
+def normalize(input, p=2, dim=1, eps=1e-30):
     r'''        
     Performs L_p normalization of inputs over specified dimension.
 
@@ -376,9 +376,7 @@ def normalize(input, p=2, dim=1, eps=1e-12):
         [0.02647221 0.59484214 0.80340654]
         [0.6910677  0.58067477 0.4303977 ]]
     '''
-    assert p == 2
-    if p == 2:
-        return input / jt.maximum(input.sqr().sum(dim,True).sqrt(), eps)
+    return input / input.norm(p, dim, True, eps)
 jt.Var.normalize = normalize
 
 def unbind(x, dim=0):
