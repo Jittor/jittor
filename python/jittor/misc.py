@@ -1061,14 +1061,17 @@ def randperm(n, dtype="int32"):
     index, _ = jt.argsort(key)
     return index.cast(dtype)
 
-def set_global_seed(seed):
+def set_global_seed(seed, different_seed_for_mpi=True):
     ''' Sets the seeds of the random number generators of Python, numpy and jittor,
     simultaneously.
 
     .. note::
     Jittor also gurantees each worker of jittor.dataset.Dataset to hold a different seed,
-    which is global_seed ^ worker_id ^ 1234.
+    also gurantees each process hold a different seed which using mpi,
+    which is (global_seed ^ (worker_id*1167)) ^ 1234 + jt.rank * 2591
     '''
+    if (different_seed_for_mpi):
+        seed = seed + jt.rank * 2591
     import random
     random.seed(seed)
     jt.set_seed(seed)
@@ -1078,6 +1081,9 @@ def set_global_seed(seed):
         cupy.random.seed(seed)
     except:
         pass
+
+import time
+set_global_seed(int(time.time() * 1000000) % 100000007)
 
 def searchsorted(sorted, values, right=False):
     """
