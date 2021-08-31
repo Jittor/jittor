@@ -235,6 +235,7 @@ void segfault_sigaction(int signal, siginfo_t *si, void *arg) {
         exited = true;
         do_exit();
     }
+    if (exited) do_exit();
     std::cerr << "Caught segfault at address " << si->si_addr << ", "
         << "thread_name: '" << thread_name << "', flush log..." << std::endl;
     std::cerr.flush();
