@@ -344,7 +344,7 @@ def cross(input, other, dim=-1):
     return jt.contrib.concat([a1.unsqueeze(dim),a2.unsqueeze(dim),a3.unsqueeze(dim)], dim=dim)
 jt.Var.cross = cross
 
-def normalize(input, p=2, dim=1, eps=1e-30):
+def normalize(input, p=2, dim=1, eps=1e-12):
     r'''        
     Performs L_p normalization of inputs over specified dimension.
 
@@ -376,7 +376,9 @@ def normalize(input, p=2, dim=1, eps=1e-30):
         [0.02647221 0.59484214 0.80340654]
         [0.6910677  0.58067477 0.4303977 ]]
     '''
-    return input / input.norm(p, dim, True, eps)
+    assert p == 2
+    if p == 2:
+        return input / jt.maximum(input.sqr().sum(dim,True).sqrt(), eps)
 jt.Var.normalize = normalize
 
 def unbind(x, dim=0):
@@ -658,29 +660,62 @@ def _prod(x,dim=0):
     x = x.sum(dim=dim)
     return jt.exp(x)
 
+def numpy_cumsum(x, dim=None):
+    def cumsum_forward(np, data):
+        dim = data['inputs'][1].item()
+        a = data['inputs'][0]
+        b = data['outputs'][0]
+        np.cumsum(a, axis=dim, out=b)
 
-def cumsum_forward(np, data):
-    a = data['inputs'][0]
-    b = data['outputs'][0]
-    np.cumsum(a, axis=1, out=b)
+    def cumsum_backward(np, data):
+        dim = data['inputs'][1].item()
+        dout = data['dout']
+        out = data['outputs'][0]
+        np.cumsum(dout[..., ::-1], axis=dim, out=out)
+        np.copyto(out, out[..., ::-1])
+    if (dim == None):
+        dim = -1
+    assert(dim >= -1 and dim < len(x.shape))
+    dim_var = jt.array([dim],dtype=int)
+    return jt.numpy_code(x.shape, x.dtype, [x, dim_var.detach()], cumsum_forward, [cumsum_backward])
 
-def cumsum_backward(np, data):
-    dout = data['dout']
-    out = data['outputs'][0]
-    np.cumsum(dout[:, ::-1], axis=1, out=out)
-    np.copyto(out, out[:, ::-1])
+def cub_cumsum(x, dim=None):
+    if (dim == None):
+        dim = -1
+    assert(dim >= -1 and dim < len(x.shape))
+    shape = x.shape
+    if (dim != -1 and dim != len(shape) - 1):
+        order = range(len(shape))
+        order[dim], order[-1] = order[-1], order[dim]
+        shape[dim], shape[-1] = shape[-1], shape[dim]
+        x = x.permute(order)
+    if (len(shape) > 2):
+        x = x.reshape([-1, shape[-1]])
+    x = jt.compile_extern.cub_ops.cub_cumsum(x)
+    if (len(shape) > 2):
+        x = x.reshape(shape)
+    if (dim != -1 and dim != len(shape) - 1):
+        x = x.permute(order)
+    return x
 
 def cumsum(x, dim=None):
     '''
     Parameters:
     -----------
-    x: [batch_size, N], jt.var
+    x: jt.var
+    dim: int
 
     Returns:
     --------
-    the cumulative sum of x
+    the cumulative sum in dim of x
     '''
-    return jt.numpy_code(x.shape, x.dtype, [x], cumsum_forward, [cumsum_backward])
+    if (dim == None):
+        dim = -1
+    assert(dim >= -1 and dim < len(x.shape))
+    if jt.has_cuda:
+        return cub_cumsum(x, dim)
+    else:
+        return numpy_cumsum(x, dim)
 
 jt.Var.cumsum = cumsum
 
@@ -747,26 +782,26 @@ def triu_(x,diagonal=0):
 jt.Var.triu_ = triu_
 
 def print_tree(now, max_memory_size, prefix1, prefix2, build_by):
-    def format_size(s, end='B'):
+    def format_size(s):
         if (s < 1024):
             s = str(s)
-            return s + ' '+end
+            return s + ' B'
 
         if (s < 1024*1024):
             s = format(s/1024, '.2f')
-            return s + ' K'+end
+            return s + ' KB'
 
         if (s < 1024*1024*1024):
             s = format(s/1024/1024, '.2f')
-            return s + ' M'+end
+            return s + ' MB'
 
         s = format(s/1024/1024/1024, '.2f')
-        return s + ' G'+end
+        return s + ' GB'
 
     out = ''
     tab = '   '
     out += prefix1+now['name']+'('+now['type']+')\n'
-    out += prefix2+'['+format_size(now['size'])+'; '+format(now['size']/max_memory_size*100, '.2f')+'%; cnt:'+format_size(now['cnt'],'') + ']\n'
+    out += prefix2+'['+format_size(now['size'])+'; '+format(now['size']/max_memory_size*100, '.2f')+'%]\n'
     if (build_by == 0):
         for p in now['path']:
             out += prefix2+p+'\n'
@@ -832,7 +867,7 @@ Output::
     vars_ = vars_[1:]
     for v_ in vars_:
         v__ = v_.split(div2)
-        var = {'size':int(v__[1]), 'stack':[], 'cnt':1}
+        var = {'size':int(v__[1]), 'stack':[]}
         v__ = v__[2:-1]
         for s_ in v__:
             s__ = s_.split(div3)
@@ -840,7 +875,7 @@ Output::
             var['stack'].append(s)
         vars.append(var)
     if (build_by == 0): # build tree by name
-        tree = {'name':'root', "children":[], 'size':0, 'cnt':1, 'path':[], 'type':''}
+        tree = {'name':'root', "children":[], 'size':0, 'path':[], 'type':''}
 
         def find_child(now, key):
             for c in now['children']:
@@ -850,7 +885,6 @@ Output::
         for v in vars:
             now = tree
             now['size'] += v['size']
-            now['cnt'] += v['cnt']
             for s in v['stack']:
                 ch = find_child(now, s['name'])
                 if (ch is not None):
@@ -859,13 +893,12 @@ Output::
                     assert(ch['type']==s['type'])
                     now = ch
                     now['size'] += v['size']
-                    now['cnt'] += v['cnt']
                 else:
-                    now_ = {'name':s['name'], "children":[], 'size':v['size'], 'cnt':v['cnt'], 'path':[s['path']], 'type':s['type']}
+                    now_ = {'name':s['name'], "children":[], 'size':v['size'], 'path':[s['path']], 'type':s['type']}
                     now['children'].append(now_)
                     now = now_
     elif (build_by == 1): # build tree by path
-        tree = {'name':'root', "children":[], 'size':0, 'cnt':0, 'path':'_root_', 'type':''}
+        tree = {'name':'root', "children":[], 'size':0, 'path':'_root_', 'type':''}
 
         def find_child(now, key):
             for c in now['children']:
@@ -875,15 +908,13 @@ Output::
         for v in vars:
             now = tree
             now['size'] += v['size']
-            now['cnt'] += v['cnt']
             for s in v['stack']:
                 ch = find_child(now, s['path'])
                 if (ch is not None):
                     now = ch
                     now['size'] += v['size']
-                    now['cnt'] += v['cnt']
                 else:
-                    now_ = {'name':s['name'], "children":[], 'size':v['size'],  'cnt':v['cnt'], 'path':s['path'], 'type':s['type']}
+                    now_ = {'name':s['name'], "children":[], 'size':v['size'], 'path':s['path'], 'type':s['type']}
                     now['children'].append(now_)
                     now = now_
     else:
@@ -1065,17 +1096,14 @@ def randperm(n, dtype="int32"):
     index, _ = jt.argsort(key)
     return index.cast(dtype)
 
-def set_global_seed(seed, different_seed_for_mpi=True):
+def set_global_seed(seed):
     ''' Sets the seeds of the random number generators of Python, numpy and jittor,
     simultaneously.
 
     .. note::
     Jittor also gurantees each worker of jittor.dataset.Dataset to hold a different seed,
-    also gurantees each process hold a different seed which using mpi,
-    which is (global_seed ^ (worker_id*1167)) ^ 1234 + jt.rank * 2591
+    which is global_seed ^ worker_id ^ 1234.
     '''
-    if (different_seed_for_mpi):
-        seed = seed + jt.rank * 2591
     import random
     random.seed(seed)
     jt.set_seed(seed)
@@ -1085,9 +1113,6 @@ def set_global_seed(seed, different_seed_for_mpi=True):
         cupy.random.seed(seed)
     except:
         pass
-
-import time
-set_global_seed(int(time.time() * 1000000) % 100000007)
 
 def searchsorted(sorted, values, right=False):
     """
