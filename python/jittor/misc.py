@@ -718,7 +718,7 @@ def cumsum(x, dim=None):
 
 jt.Var.cumsum = cumsum
 
-def cumprod(x,dim=0):
+def cumprod(x,dim=None):
     x = jt.log(x)
     x = cumsum(x,dim=dim)
     return jt.exp(x)
