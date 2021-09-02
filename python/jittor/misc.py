@@ -17,11 +17,13 @@ def index_add_(x, dim, index, tensor):
     """ Take out each index subscript vector of the dim dimension and add the corresponding tensor variable.
     
     Example:
+
         x = jt.ones((5,3))
         tensor = jt.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
         index = jt.array([0,4,2])
         x.index_add_(0, index, tensor)
         print(x)
+
         >>> jt.Var([[  2.,   3.,   4.],
         [  1.,   1.,   1.],
         [  8.,   9.,  10.],
@@ -68,17 +70,23 @@ def bernoulli(input):
 def repeat(x, *shape):
     r'''
     Repeats this var along the specified dimensions.
+
     Args:
+
         x (var): jittor var.
+
         shape (tuple): int or tuple. The number of times to repeat this var along each dimension.
  
     Example:
+
         >>> x = jt.array([1, 2, 3])
+
         >>> x.repeat(4, 2)
         [[ 1,  2,  3,  1,  2,  3],
         [ 1,  2,  3,  1,  2,  3],
         [ 1,  2,  3,  1,  2,  3],
         [ 1,  2,  3,  1,  2,  3]]
+
         >>> x.repeat(4, 2, 1).size()
         [4, 2, 3,]
     '''
@@ -137,14 +145,23 @@ jt.Var.repeat_interleave = repeat_interleave
 def chunk(x, chunks, dim=0):
     r'''
     Splits a var into a specific number of chunks. Each chunk is a view of the input var.
+
     Last chunk will be smaller if the var size along the given dimension dim is not divisible by chunks.
+
     Args:
+
         input (var) – the var to split.
+
         chunks (int) – number of chunks to return.
+
         dim (int) – dimension along which to split the var.
+
     Example:
+
         >>> x = jt.random((10,3,3))
+
         >>> res = jt.chunk(x, 2, 0)
+
         >>> print(res[0].shape, res[1].shape)
         [5,3,3,] [5,3,3,]
     '''
@@ -167,7 +184,9 @@ jt.Var.chunk = chunk
 
 def expand(x, *shape):
     ''' Expand and broadcast this array, -1 represents this dimension is not changed.
+
 Example::
+
     a = jt.zeros((3,1))
     b = a.expand(3, 4)
     assert b.shape == (3,4)
@@ -177,6 +196,7 @@ Example::
     assert b.shape == (3,4)
     b = a.expand((-1, 4))
     assert b.shape == (3,4)
+
     '''
     if len(shape) == 1 and isinstance(shape[0], (tuple,list,jt.NanoVector)):
         shape = shape[0]
@@ -212,13 +232,21 @@ jt.Var.median = median
 def stack(x, dim=0):
     r'''
     Concatenates sequence of vars along a new dimension.
+
     All vars need to be of the same size.
+
     Args:
+
         x (sequence of vars) – sequence of vars to concatenate.
+
         dim (int) – dimension to insert. Has to be between 0 and the number of dimensions of concatenated vars (inclusive).
+
     Example:
+
         >>> a1 = jt.array([[1,2,3]])
+
         >>> a2 = jt.array([[4,5,6]])
+
         >>> jt.stack([a1, a2], 0)
         [[[1 2 3]
         [[4 5 6]]]
@@ -234,12 +262,17 @@ jt.Var.stack = stack
 def flip(x, dim=0):
     r'''
     Reverse the order of a n-D var along given axis in dims.
+
     Args:
+
         input (var) – the input var.
  
         dims (a list or tuple) – axis to flip on.
+
     Example:
+
         >>> x = jt.array([[1,2,3,4]])
+
         >>> x.flip(1)
         [[4 3 2 1]]
     '''
@@ -263,18 +296,29 @@ jt.Var.flip = flip
 def cross(input, other, dim=-1):
     r'''
     Returns the cross product of vectors in dimension dim of input and other.
+
     the cross product can be calculated by (a1,a2,a3) x (b1,b2,b3) = (a2b3-a3b2, a3b1-a1b3, a1b2-a2b1)
+
     input and other must have the same size, and the size of their dim dimension should be 3.
+
     If dim is not given, it defaults to the first dimension found with the size 3.
+
     Args:
+
         input (Tensor) – the input tensor.
+
         other (Tensor) – the second input tensor
+
         dim (int, optional) – the dimension to take the cross-product in.
+
         out (Tensor, optional) – the output tensor.
     
     Example:
+
         >>> input = jt.random((6,3))
+
         >>> other = jt.random((6,3))
+
         >>> jt.cross(input, other, dim=1)
         [[-0.42732686  0.6827885  -0.49206433]
         [ 0.4651107   0.27036983 -0.5580432 ]
@@ -282,6 +326,7 @@ def cross(input, other, dim=-1):
         [-0.58346975 -0.21417202  0.55176204]
         [-0.40861478  0.01496297  0.38638002]
         [ 0.18393655 -0.04907863 -0.17928357]]
+
         >>> jt.cross(input, other)
         [[-0.42732686  0.6827885  -0.49206433]
         [ 0.4651107   0.27036983 -0.5580432 ]
@@ -302,12 +347,19 @@ jt.Var.cross = cross
 def normalize(input, p=2, dim=1, eps=1e-30):
     r'''        
     Performs L_p normalization of inputs over specified dimension.
+
     Args:
+
         input – input array of any shape
+
         p (float) – the exponent value in the norm formulation. Default: 2
+
         dim (int) – the dimension to reduce. Default: 1
+
         eps (float) – small value to avoid division by zero. Default: 1e-12
+
     Example:
+
         >>> x = jt.random((6,3))
         [[0.18777736 0.9739261  0.77647036]
         [0.13710196 0.27282116 0.30533272]
@@ -315,6 +367,7 @@ def normalize(input, p=2, dim=1, eps=1e-30):
         [0.02566639 0.37504175 0.32676998]
         [0.0231761  0.5207773  0.70337296]
         [0.58966476 0.49547017 0.36724383]]
+
         >>> jt.normalize(x)
         [[0.14907198 0.7731768  0.61642134]
         [0.31750825 0.63181424 0.7071063 ]
@@ -329,13 +382,20 @@ jt.Var.normalize = normalize
 def unbind(x, dim=0):
     r'''
     Removes a var dimension.
+
     Returns a tuple of all slices along a given dimension, already without it.
+
     Args:
+
         input (var) – the var to unbind
+
         dim (int) – dimension to remove
+
     Example:
+
         a = jt.random((3,3))
         b = jt.unbind(a, 0)
+
     '''
     if dim < 0: dim += len(x.shape)
     return [x[(slice(None),)*dim+(i,)] for i in range(x.shape[dim])]
@@ -395,7 +455,9 @@ _quadruple = _ntuple(4)
 def unique(x):
     r'''
     Returns the unique elements of the input tensor.
+
     Args:
+
         x– the input tensor.
     '''
     x = x.reshape(-1)
@@ -494,12 +556,16 @@ def meshgrid(*tensors):
 def split(d,split_size,dim):
     r'''
     Splits the tensor into chunks. Each chunk is a view of the original tensor.
+
     If  split_size is an integer type, then tensor will be split into equally sized chunks (if possible). Last chunk will be smaller if the tensor size along the given dimension dim is not divisible by split_size.
+
     If split_size is a list, then tensor will be split into len(split_size) chunks with sizes in dim according to split_size_or_sections.
    
     Args:
         d (Tensor) – tensor to split.
+
         split_size (int) or (list(int)) – size of a single chunk or list of sizes for each chunk
+
         dim (int) – dimension along which to split the tensor.
     '''
     if isinstance(split_size,int):
@@ -592,6 +658,7 @@ def _prod(x,dim=0):
     x = x.sum(dim=dim)
     return jt.exp(x)
 
+
 def numpy_cumsum(x, dim=None):
     def cumsum_forward(np, data):
         dim = data['inputs'][1].item()
@@ -683,6 +750,7 @@ jt.Var.expand_as = jt.Var.broadcast_var
 def index_fill_(x,dim,indexs,val):
     r'''
     Fills the elements of the input tensor with value val by selecting the indices in the order given in index.
+
     Args:
         x - the input tensor
         dim - dimension along which to index
@@ -696,9 +764,12 @@ def index_fill_(x,dim,indexs,val):
 def triu_(x,diagonal=0):
     r'''
     Returns the upper triangular part of a matrix (2-D tensor) or batch of matrices input, the other elements of the result tensor out are set to 0.
+
     The upper triangular part of the matrix is defined as the elements on and above the diagonal.
+
     Args:
         x – the input tensor.
+
         diagonal – the diagonal to consider,default =0
     '''
     l = len(x.shape)
@@ -752,13 +823,17 @@ def print_tree(now, max_memory_size, prefix1, prefix2, build_by):
 
 def get_max_memory_treemap(build_by=0, do_print=True):
     '''show treemap of max memory consumption
+
 Example::
+
         net = jt.models.resnet18()
         with jt.flag_scope(trace_py_var=3, profile_memory_enable=1):
             imgs = jt.randn((1,3,224,224))
             net(imgs).sync()
             jt.get_max_memory_treemap()
+
 Output::
+
     | 
     ├─./python/jittor/test/test_memory_profiler.py:100(test_sample)
     | [19.03 MB; 29.67%]
@@ -776,6 +851,9 @@ Output::
     |              | [6.13 MB; 9.55%]
     |              | ./python/jittor/models/resnet.py:142
     |              |    | 
+
+
+
     '''
     div1 = "[!@#div1!@#]"
     div2 = "[!@#div2!@#]"
@@ -869,19 +947,27 @@ def python_pass_warper(mod_func, args, kw):
 def auto_parallel(n, src, **kw):
     """
     auto parallel(CPU and GPU) n-d for loop function like below:
+
     Before:
+
     void inner_func(int n0, int i0, int n1, int i1) {
         ...
     }
+
     for (int i0=0; i0<n0; i0++)
         for (int i1=0; i1<n1; i1++)
             inner_func(n0, i0, n1, i1, ...);
+
     After:
+
     @python.jittor.auto_parallel(2)
     void inner_func(int n0, int i0, int n1, int i1) {
         ...
     }
+
     inner_func(n0, 0, n1, 0, ...);
+
+
     """
     # src = prev_func func_name(args)code
     a, b = src.split('(', 1)
@@ -918,6 +1004,7 @@ def auto_parallel(n, src, **kw):
 __device__
 #endif
 {src.replace(func_name, func_name+"_inner", 1)}
+
 #ifdef JIT_cuda
 __global__ static void {func_name}_entry({entry_func_args_def}) {{
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
@@ -926,6 +1013,7 @@ __global__ static void {func_name}_entry({entry_func_args_def}) {{
     {func_name}_inner({call_args});
 }}
 #endif
+
 inline static void {func_name}({",".join(pargs+oargs)}) {{
 #ifdef JIT_cuda
     int thread_num = 256*1024;
@@ -1014,6 +1102,7 @@ def randperm(n, dtype="int32"):
 def set_global_seed(seed, different_seed_for_mpi=True):
     ''' Sets the seeds of the random number generators of Python, numpy and jittor,
     simultaneously.
+
     .. note::
     Jittor also gurantees each worker of jittor.dataset.Dataset to hold a different seed,
     also gurantees each process hold a different seed which using mpi,
@@ -1037,20 +1126,26 @@ set_global_seed(int(time.time() * 1000000) % 100000007)
 def searchsorted(sorted, values, right=False):
     """
     Find the indices from the innermost dimension of `sorted` for each `values`.
+
 Example::
+
     sorted = jt.array([[1, 3, 5, 7, 9], [2, 4, 6, 8, 10]])
     values = jt.array([[3, 6, 9], [3, 6, 9]])
     ret = jt.searchsorted(sorted, values)
     assert (ret == [[1, 3, 4], [1, 2, 4]]).all(), ret
+
     ret = jt.searchsorted(sorted, values, right=True)
     assert (ret == [[2, 3, 5], [1, 3, 4]]).all(), ret
     
     sorted_1d = jt.array([1, 3, 5, 7, 9])
     ret = jt.searchsorted(sorted_1d, values)
     assert (ret == [[1, 3, 4], [1, 3, 4]]).all(), ret
+
+
     """
     _searchsorted_header = f"""
 namespace jittor {{
+
 @python.jittor.auto_parallel(2)
 inline static void searchsorted(
     int batch_num, int batch_id, int value_num, int value_id,
@@ -1069,6 +1164,7 @@ inline static void searchsorted(
     }}
     index_p[batch_id * value_num + value_id] = l - batch_id * batch_stride;
 }}
+
 }}
 """
     _searchsorted_src = """
@@ -1078,6 +1174,7 @@ inline static void searchsorted(
     int32 batch_num2 = in1->num / value_num;
     int32 batch_stride = batch_num == 1 ? 0 : sorted_num;
     CHECK(batch_num == batch_num2 || batch_num == 1);
+
     searchsorted(batch_num2, 0, value_num, 0, sorted_num, batch_stride, in0_p, in1_p, out0_p);
 """
     return jt.code(values.shape, "int32", [sorted, values], 
@@ -1089,16 +1186,21 @@ inline static void searchsorted(
 
 def scatter(x:jt.Var, dim:int, index:jt.Var, src:jt.Var, reduce='void'):
     ''' if x is a 3-D array, rewrite x like:
+
     self[index[i][j][k]][j][k] = src[i][j][k]  # if dim == 0
     self[i][index[i][j][k]][k] = src[i][j][k]  # if dim == 1
     self[i][j][index[i][j][k]] = src[i][j][k]  # if dim == 2
+
 Parameters::
+
     * x (jt.Var) – input array
     * dim (int) – the axis along which to index
     * index (jt.Var) – the indices of elements to scatter, can be either empty or of the same dimensionality as src. When empty, the operation returns self unchanged.
     * src (jt.Var) – the source element(s) to scatter.
     * reduce (str, optional) – reduction operation to apply, can be either 'add' or 'multiply'.
+
 Example::
+
     src = jt.arange(1, 11).reshape((2, 5))
     index = jt.array([[0, 1, 2, 0]])
     x = jt.zeros((3, 5), dtype=src.dtype).scatter_(0, index, src)
@@ -1122,6 +1224,7 @@ Example::
     assert np.allclose(x.data,
         [[2.0000, 2.0000, 3.2300, 2.0000],
         [2.0000, 2.0000, 2.0000, 3.2300]])
+
     '''
     shape = index.shape
     if src.shape != shape and src.numel() != 1:
@@ -1138,19 +1241,26 @@ jt.Var.scatter_ = scatter_
 
 def gather(x, dim, index):
     ''' if x is a 3-D array, reindex x like:
+
     out[i][j][k] = input[index[i][j][k]][j][k]  # if dim == 0
     out[i][j][k] = input[i][index[i][j][k]][k]  # if dim == 1
     out[i][j][k] = input[i][j][index[i][j][k]]  # if dim == 2
+
+
 Parameters::
+
     * x (jt.Var) – the source array
     * dim (int) – the axis along which to index
     * index (jt.Var) – the indices of elements to gather
+
 Example::
+
     t = jt.array([[1, 2], [3, 4]])
     data = t.gather(1, jt.array([[0, 0], [1, 0]]))
     assert (data.data == [[ 1,  1], [ 4,  3]]).all()
     data = t.gather(0, jt.array([[0, 0], [1, 0]]))
     assert (data.data == [[ 1,  2], [ 3,  2]]).all()
+
     '''
     shape = index.shape
     indexes = [ f'i{i}' for i in range(len(shape)) ]
@@ -1161,11 +1271,15 @@ jt.Var.gather = gather
 
 def roll(x, shifts, dims=None):
     '''Roll the tensor along the given dimension(s).
+
 Parameters::
+
     * x (jt.Var) – the source array
     * shifts (int or tuple) – shift offset of dims
     * dims (int or tuple) – shift dims
+
 Examples::
+
         x = jt.array([1, 2, 3, 4, 5, 6, 7, 8]).view(4, 2)
         y = x.roll(1, 0)
         assert (y.numpy() == [[7,8],[1,2],[3,4],[5,6]]).all()
@@ -1173,6 +1287,7 @@ Examples::
         assert (y.numpy() == [[3,4],[5,6],[7,8],[1,2]]).all()
         y = x.roll(shifts=(2, 1), dims=(0, 1))
         assert (y.numpy() == [[6,5],[8,7],[2,1],[4,3]]).all()
+
     '''
     if isinstance(shifts, int):
         shifts = (shifts,)
