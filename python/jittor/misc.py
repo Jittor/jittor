@@ -660,29 +660,62 @@ def _prod(x,dim=0):
     x = x.sum(dim=dim)
     return jt.exp(x)
 
+def numpy_cumsum(x, dim=None):
+    def cumsum_forward(np, data):
+        dim = data['inputs'][1].item()
+        a = data['inputs'][0]
+        b = data['outputs'][0]
+        np.cumsum(a, axis=dim, out=b)
 
-def cumsum_forward(np, data):
-    a = data['inputs'][0]
-    b = data['outputs'][0]
-    np.cumsum(a, axis=1, out=b)
+    def cumsum_backward(np, data):
+        dim = data['inputs'][1].item()
+        dout = data['dout']
+        out = data['outputs'][0]
+        np.cumsum(dout[..., ::-1], axis=dim, out=out)
+        np.copyto(out, out[..., ::-1])
+    if (dim == None):
+        dim = -1
+    assert(dim >= -1 and dim < len(x.shape))
+    dim_var = jt.array([dim],dtype=int)
+    return jt.numpy_code(x.shape, x.dtype, [x, dim_var.detach()], cumsum_forward, [cumsum_backward])
 
-def cumsum_backward(np, data):
-    dout = data['dout']
-    out = data['outputs'][0]
-    np.cumsum(dout[:, ::-1], axis=1, out=out)
-    np.copyto(out, out[:, ::-1])
+def cub_cumsum(x, dim=None):
+    if (dim == None):
+        dim = -1
+    assert(dim >= -1 and dim < len(x.shape))
+    shape = x.shape
+    if (dim != -1 and dim != len(shape) - 1):
+        order = range(len(shape))
+        order[dim], order[-1] = order[-1], order[dim]
+        shape[dim], shape[-1] = shape[-1], shape[dim]
+        x = x.permute(order)
+    if (len(shape) > 2):
+        x = x.reshape([-1, shape[-1]])
+    x = jt.compile_extern.cub_ops.cub_cumsum(x)
+    if (len(shape) > 2):
+        x = x.reshape(shape)
+    if (dim != -1 and dim != len(shape) - 1):
+        x = x.permute(order)
+    return x
 
 def cumsum(x, dim=None):
     '''
     Parameters:
     -----------
-    x: [batch_size, N], jt.var
+    x: jt.var
+    dim: int
 
     Returns:
     --------
-    the cumulative sum of x
+    the cumulative sum in dim of x
     '''
-    return jt.numpy_code(x.shape, x.dtype, [x], cumsum_forward, [cumsum_backward])
+    if (dim == None):
+        dim = -1
+    assert(dim >= -1 and dim < len(x.shape))
+    if jt.has_cuda:
+        return cub_cumsum(x, dim)
+    else:
+        return numpy_cumsum(x, dim)
 
 jt.Var.cumsum = cumsum
 
