@@ -82,6 +82,7 @@ class TestCubCumsumOp(unittest.TestCase):
         test_forward([16,14,14,2048], 2)
         test_forward([16,14,14,2048], 3)
         test_forward([16,14,14,2048], -1)
+        test_forward([16,14,14,2047], 3)
 
     @unittest.skipIf(cub_ops==None, "Not use cub, Skip")
     @jt.flag_scope(use_cuda=1)
@@ -96,6 +97,7 @@ class TestCubCumsumOp(unittest.TestCase):
         test_backward([16,14,14,2048], 2)
         test_backward([16,14,14,2048], 3)
         test_backward([16,14,14,2048], -1)
+        test_backward([16,14,14,2047], 3)
 
 if __name__ == "__main__":
     unittest.main()

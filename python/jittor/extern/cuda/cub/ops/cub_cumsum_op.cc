@@ -67,25 +67,26 @@ __global__ void BlockScanKernel(Tx* __restrict__ xp, Ty* __restrict__ yp, int ba
             items = num_items - block_offset;
         }
         Tx thread_data[ITEMS_PER_THREAD];
-        #if reverse
-            for (int i = 0; i < items; ++i) {
+        #pragma unroll
+        for (int i = 0; i < ITEMS_PER_THREAD; ++i) {
+            if (i<items)
+                #if reverse
                 thread_data[i] = xp[batch_id * num_items + (num_items - 1 - (block_offset + i))];
-            }
-        #else
-            for (int i = 0; i < items; ++i) {
+                #else
                 thread_data[i] = xp[batch_id * num_items + block_offset + i];
-            }
-        #endif
+                #endif
+        }
         BlockScanT(temp_storage).InclusiveSum(thread_data, thread_data);
-        #if reverse
-            for (int i = 0; i < items; ++i) {
+        __syncthreads();
+        #pragma unroll
+        for (int i = 0; i < ITEMS_PER_THREAD; ++i) {
+            if (i<items)
+                #if reverse
                 yp[batch_id * num_items + (num_items - 1 - (block_offset + i))] = thread_data[i];
-            }
-        #else
-            for (int i = 0; i < items; ++i) {
+                #else
                 yp[batch_id * num_items + block_offset + i] = thread_data[i];
-            }
-        #endif
+                #endif
+        }
     }
 }
 
