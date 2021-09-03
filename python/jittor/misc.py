@@ -780,7 +780,7 @@ def triu_(x,diagonal=0):
 
 jt.Var.triu_ = triu_
 
-def print_tree(now, max_memory_size, prefix1, prefix2, build_by):
+def print_tree(now, max_memory_size, prefix1, prefix2, build_by, mode=0, display_op_name=False):
     def format_size(s, end='B'):
         if (s < 1024):
             s = str(s)
@@ -797,15 +797,61 @@ def print_tree(now, max_memory_size, prefix1, prefix2, build_by):
         s = format(s/1024/1024/1024, '.2f')
         return s + ' G'+end
 
+    def format_time(s, end='s'):
+        if (s < 1000):
+            s = str(s)
+            return s + ' n'+end
+
+        if (s < 1000*1000):
+            s = format(s/1000, '.2f')
+            return s + ' u'+end
+
+        if (s < 1000*1000*1000):
+            s = format(s/1000/1000, '.2f')
+            return s + ' m'+end
+
+        s = format(s/1000/1000/1000, '.2f')
+        return s + ' '+end
+
     out = ''
     tab = '   '
-    out += prefix1+now['name']+'('+now['type']+')\n'
-    out += prefix2+'['+format_size(now['size'])+'; '+format(now['size']/max_memory_size*100, '.2f')+'%; cnt:'+format_size(now['cnt'],'') + ']\n'
-    if (build_by == 0):
-        for p in now['path']:
-            out += prefix2+p+'\n'
+    if (mode == 0):
+        out += prefix1+now['name']+'('+now['type']+')\n'
+        out += prefix2+'['+format_size(now['size'])+'; '+format(now['size']/max_memory_size*100, '.2f')+'%; cnt: '+format_size(now['cnt'],'') + ']\n'
+        if (build_by == 0):
+            for p in now['path']:
+                out += prefix2+p+'\n'
+        else:
+            out += prefix2+now['path'] + '\n'
     else:
-        out += prefix2+now['path'] + '\n'
+        out += prefix1+now['path']+'\n'
+        if ('rep' in now):
+            if (float(now['rep'][3]) < 1):
+                out += prefix2+'[retransmitted]['+format_time(now['size'])+'; '+format(now['size']/max_memory_size*100, '.2f')+'%; op_cnt: '+format_size(now['cnt'],'') + ']\n'
+            else:
+                out += prefix2+               '['+format_time(now['size'])+'; '+format(now['size']/max_memory_size*100, '.2f')+'%; op_cnt: '+format_size(now['cnt'],'') + ']\n'
+            out += (prefix2+'[avgT: '+format_time(float(now['rep'][4]))+'; '+
+                            'minT: '+format_time(float(now['rep'][5])) +'; '+
+                            'maxT: '+format_time(float(now['rep'][6])) +'; '+
+                            'run_cnt: '+format_size(int(now['rep'][2]),'') +']\n')
+            out += (prefix2+'[In: '+format_size(float(now['rep'][7]))+'; '+
+                            'Out: '+format_size(float(now['rep'][8])) +'; '+
+                            'InOut: '+format_size(float(now['rep'][9])) +'; '+
+                            'Comp: '+format_size(float(now['rep'][10]),end='it/s') +']\n')
+            if (display_op_name):
+                row_max_size = 100
+                prefix3 = prefix2 + '   || '
+                out += prefix2+     '[op_name] \n'
+                data = now['rep'][0].split("\n")
+                for d in data:
+                    while (len(d) > row_max_size):
+                        out += prefix3 + d[:row_max_size] + '\n'
+                        d = d[row_max_size:]
+                    out += prefix3 + d + '\n'
+        else:
+            out += prefix2+'['+format_time(now['size'])+'; '+format(now['size']/max_memory_size*100, '.2f')+'%; op_cnt: '+format_size(now['cnt'],'') + ']\n'
+
+
     if (len(now['children']) > 0):
         out += prefix2 + tab + '| ' + '\n'
     else:
@@ -818,8 +864,99 @@ def print_tree(now, max_memory_size, prefix1, prefix2, build_by):
         else:
             prefix1_ = prefix2 + tab + '└─'
             prefix2_ = prefix2 + tab + '  '
-        out += print_tree(c, max_memory_size, prefix1_, prefix2_, build_by)
+        out += print_tree(c, max_memory_size, prefix1_, prefix2_, build_by, mode, display_op_name)
     return out
+
+import re
+def get_time_treemap(rep, do_print=True, display_op_name=False):     
+    def find_child(now, key):
+        for c in now['children']:
+            if (c['path'] == key):
+                return c
+        return None
+        
+    def sort_tree(now):
+        def takeSize(elem):
+            return elem['size']
+        now['children'].sort(key=takeSize, reverse=True)
+        for c in now['children']:
+            sort_tree(c)    
+
+    def get_common_stack(data):
+        infos = data.split("\n")
+        tree = {'path':'root', "children":[], 'cnt':0}
+        for i in infos:
+            if (i == ''):
+                continue
+            temp = i.split(" -> ")
+            if (temp[-1] == ""):
+                temp = temp[:-1]
+
+            now = tree
+            now['cnt'] += 1
+            for s in temp:
+                ch = find_child(now, s)
+                if (ch is not None):
+                    now = ch
+                    now['cnt'] += 1
+                else:
+                    now_ = {"children":[], 'cnt':1, 'path':s}
+                    now['children'].append(now_)
+                    now = now_
+        if tree['cnt'] == 0:
+            return ['no_stack']
+        stack = []
+        now = tree
+        while (True):
+            if (now['children'] == []):
+                break
+            ch = now['children'][0]
+            for c in now['children']:
+                if (ch['cnt'] < c['cnt']):
+                    ch = c
+            stack.append(ch['path'])
+            now = ch
+        return stack
+        
+    # for i in range(len(rep[2])):
+    #     print("=======", i, rep[0][i], "===========")
+    #     print(rep[2][i])
+
+    vars = []
+    tot_time = 0
+    for i in range(1,len(rep)):
+        var = {'size':int(rep[i][2]) * float(rep[i][4]), 'stack':[], 'rep':rep[i]}
+        tot_time += float(rep[i][3])
+        re_obj = re.match(r"(.*)stack info:(.*)input from:(.*)", rep[i][1], re.M|re.DOTALL)
+        filename = re_obj.group(1)
+        stack_info = re_obj.group(2)
+        var['stack'] = get_common_stack(stack_info)
+        var['filename'] = filename.rstrip()
+        vars.append(var)
+
+    tree = {"children":[], 'size':0, 'cnt':0, 'path':'_root_'}
+
+    for v in vars:
+        now = tree
+        now['size'] += v['size']
+        now['cnt'] += 1
+        for s in v['stack']:
+            ch = find_child(now, s)
+            if (ch is not None):
+                now = ch
+                now['size'] += v['size']
+                now['cnt'] += 1
+            else:
+                now_ = {"children":[], 'size':v['size'], 'cnt':1, 'path':s}
+                now['children'].append(now_)
+                now = now_
+        now_ = {"children":[], 'size':v['size'],  'cnt':1, 'path':v['filename'], 'rep':v['rep']}
+        now['children'].append(now_)
+    sort_tree(tree)
+    out = print_tree(tree, tot_time, '', '', 1, 1, display_op_name=display_op_name)
+    if (do_print):
+        print(out)
+    return tree, out
 
 def get_max_memory_treemap(build_by=0, do_print=True):
     '''show treemap of max memory consumption
