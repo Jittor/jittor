@@ -100,15 +100,15 @@ def repeat(x, *shape):
         x_shape = (len_shape - len_x_shape) * [1] + x.shape
         x = x.broadcast(x_shape)
     elif len_x_shape > len_shape:
-        rep_shape = (len_x_shape - len_shape) * [1] + shape
-    #TODO if input.shape[i]=1, no add [1]
+        rep_shape = (len_x_shape - len_shape) * [1] + list(shape)
+
     reshape_shape = []
     broadcast_shape = []
     for x_s,r_s in zip(x_shape,rep_shape):
-        reshape_shape.append(1)
+        if r_s != 1:
+            reshape_shape.append(1)
+            broadcast_shape.append(r_s)
         reshape_shape.append(x_s)
-
-        broadcast_shape.append(r_s)
         broadcast_shape.append(1)
 
     x = x.reshape(reshape_shape)

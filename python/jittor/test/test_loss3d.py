@@ -1,3 +1,13 @@
+# ***************************************************************
+# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Maintainers: 
+#     Zheng-Ning Liu <lzhengning@gmail.com>
+#     Dun Liang <randonlang@gmail.com>. 
+# 
+# This file is subject to the terms and conditions defined in
+# file 'LICENSE.txt', which is part of this source code package.
+# ***************************************************************
+
 import unittest
 import numpy as np
 
