@@ -123,7 +123,7 @@ Example::
     shape = []
     len_c = max(len_a, len_b)
     (n, m), (m_, k) = a.shape[-2:], b.shape[-2:]
-    assert m == m_, f"dimension not match, a.shape:{a.shape}, b.shape:{a.shape}"
+    assert m == m_, f"dimension not match, a.shape:{a.shape}, b.shape:{b.shape}"
     # a: [..., n, m]
     # b: [..., m, k]
     # cc:[..., n, m, k]
