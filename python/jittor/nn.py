@@ -141,7 +141,7 @@ Example::
         an = a.shape[ai] if ai>=0 else 1
         bn = b.shape[bi] if bi>=0 else 1
         if an!=1 and bn!=1:
-            assert an == bn, f"dimension not match, a.shape:{a.shape}, b.shape:{a.shape}"
+            assert an == bn, f"dimension not match, a.shape:{a.shape}, b.shape:{b.shape}"
         cn = max(an, bn)
         shape.append(cn)
     shape.extend([n, m, k])
@@ -341,16 +341,20 @@ def softmax(x, dim = None):
         x = (x-x.max(dim, keepdims=True)).exp()
         ret = x / x.sum(dim, keepdims=True)
     return ret
+jt.Var.softmax = softmax
 
 def log_softmax(x,dim=None):
     x = softmax(x,dim=dim)
     return jt.log(x)
+jt.Var.log_softmax = log_softmax
 
 def log_sigmoid(x):
     return jt.log(jt.sigmoid(x))
+jt.Var.log_sigmoid = log_sigmoid
 
 def logsumexp(x, dim, keepdim=False):
     return x.exp().sum(dim, keepdim).log()
+jt.Var.logsumexp = logsumexp
 
 class Identity(Module):
     def __init__(self, *args, **kwargs):
