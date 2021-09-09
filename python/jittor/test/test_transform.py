@@ -954,6 +954,22 @@ class Tester(unittest.TestCase):
             transform.ToTensor(),
         ])(img)
 
+    def test_not_pil_image(self):
+        img = jt.random((30,40,3))
+        result = transform.Compose([
+            transform.RandomAffine(20),
+            transform.ToTensor(),
+        ])(img)
+
+        img = jt.random((30,40,3))
+        result = transform.Compose([
+            transform.ToPILImage(),
+            transform.Gray(),
+            transform.Resize(20),
+            transform.ToTensor(),
+        ])(img)
+
+
 
 
 if __name__ == '__main__':
