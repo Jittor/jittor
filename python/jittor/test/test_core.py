@@ -7,6 +7,7 @@
 import unittest
 import jittor as jt
 import numpy as np
+import os
 
 def expect_error(func):
     try:
@@ -86,6 +87,17 @@ class TestCore(unittest.TestCase):
         c = np.matmul(a, b)
         jtc = jt.matmul(jt.array(a), jt.array(b)).data
         assert np.all(jtc == c)
+        
+    def test_save_load_sub_module(self):
+        class Net(jt.Module):
+            def __init__(self):
+                self.conv1 = jt.nn.Conv(3,3,3)
+        net = Net()
+        assert list(net.named_parameters().keys()) == ['conv1.weight', 'conv1.bias']
+        assert list(net.conv1.named_parameters().keys()) == ['weight', 'bias']
+        pkl_name = os.path.join(jt.flags.cache_path, "sub.pkl")
+        net.conv1.save(pkl_name)
+        net.conv1.load(pkl_name)
 
 if __name__ == "__main__":
     unittest.main()

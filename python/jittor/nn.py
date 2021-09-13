@@ -1616,7 +1616,8 @@ class Sequential(Module):
             return
         parents.append(self)
         for k,v in self.layers.items():
-            v.dfs(parents, k, callback, callback_leave)
+            if isinstance(v, Module):
+                v.dfs(parents, k, callback, callback_leave)
         parents.pop()
         if callback_leave:
             callback_leave(parents, k, self, n_children)
