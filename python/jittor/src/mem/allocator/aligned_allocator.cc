@@ -21,6 +21,7 @@ void* AlignedAllocator::alloc(size_t size, size_t& allocation) {
     return new char[size];
     #else
     return aligned_alloc(alignment, size);
+    #endif
     #else
     return _aligned_malloc(size, alignment);
     #endif
