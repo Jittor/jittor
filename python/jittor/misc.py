@@ -100,15 +100,15 @@ def repeat(x, *shape):
         x_shape = (len_shape - len_x_shape) * [1] + x.shape
         x = x.broadcast(x_shape)
     elif len_x_shape > len_shape:
-        rep_shape = (len_x_shape - len_shape) * [1] + shape
-    #TODO if input.shape[i]=1, no add [1]
+        rep_shape = (len_x_shape - len_shape) * [1] + list(shape)
+
     reshape_shape = []
     broadcast_shape = []
     for x_s,r_s in zip(x_shape,rep_shape):
-        reshape_shape.append(1)
+        if r_s != 1:
+            reshape_shape.append(1)
+            broadcast_shape.append(r_s)
         reshape_shape.append(x_s)
-
-        broadcast_shape.append(r_s)
         broadcast_shape.append(1)
 
     x = x.reshape(reshape_shape)
@@ -344,7 +344,7 @@ def cross(input, other, dim=-1):
     return jt.contrib.concat([a1.unsqueeze(dim),a2.unsqueeze(dim),a3.unsqueeze(dim)], dim=dim)
 jt.Var.cross = cross
 
-def normalize(input, p=2, dim=1, eps=1e-12):
+def normalize(input, p=2, dim=1, eps=1e-30):
     r'''        
     Performs L_p normalization of inputs over specified dimension.
 
@@ -376,9 +376,7 @@ def normalize(input, p=2, dim=1, eps=1e-12):
         [0.02647221 0.59484214 0.80340654]
         [0.6910677  0.58067477 0.4303977 ]]
     '''
-    assert p == 2
-    if p == 2:
-        return input / jt.maximum(input.sqr().sum(dim,True).sqrt(), eps)
+    return input / input.norm(p, dim, True, eps)
 jt.Var.normalize = normalize
 
 def unbind(x, dim=0):
@@ -661,32 +659,66 @@ def _prod(x,dim=0):
     return jt.exp(x)
 
 
-def cumsum_forward(np, data):
-    a = data['inputs'][0]
-    b = data['outputs'][0]
-    np.cumsum(a, axis=1, out=b)
+def numpy_cumsum(x, dim=None):
+    def cumsum_forward(np, data):
+        dim = data['inputs'][1].item()
+        a = data['inputs'][0]
+        b = data['outputs'][0]
+        np.cumsum(a, axis=dim, out=b)
 
-def cumsum_backward(np, data):
-    dout = data['dout']
-    out = data['outputs'][0]
-    np.cumsum(dout[:, ::-1], axis=1, out=out)
-    np.copyto(out, out[:, ::-1])
+    def cumsum_backward(np, data):
+        dim = data['inputs'][1].item()
+        dout = data['dout']
+        out = data['outputs'][0]
+        np.cumsum(dout[..., ::-1], axis=dim, out=out)
+        np.copyto(out, out[..., ::-1])
+    if (dim == None):
+        dim = -1
+    assert(dim >= -1 and dim < len(x.shape))
+    dim_var = jt.array([dim],dtype=int)
+    return jt.numpy_code(x.shape, x.dtype, [x, dim_var.detach()], cumsum_forward, [cumsum_backward])
+
+def cub_cumsum(x, dim=None):
+    if (dim == None):
+        dim = -1
+    assert(dim >= -1 and dim < len(x.shape))
+    shape = x.shape
+    if (dim != -1 and dim != len(shape) - 1):
+        order = range(len(shape))
+        order[dim], order[-1] = order[-1], order[dim]
+        shape[dim], shape[-1] = shape[-1], shape[dim]
+        x = x.permute(order)
+    if (len(shape) > 2):
+        x = x.reshape([-1, shape[-1]])
+    x = jt.compile_extern.cub_ops.cub_cumsum(x)
+    if (len(shape) > 2):
+        x = x.reshape(shape)
+    if (dim != -1 and dim != len(shape) - 1):
+        x = x.permute(order)
+    return x
 
 def cumsum(x, dim=None):
     '''
     Parameters:
     -----------
-    x: [batch_size, N], jt.var
+    x: jt.var
+    dim: int
 
     Returns:
     --------
-    the cumulative sum of x
+    the cumulative sum in dim of x
     '''
-    return jt.numpy_code(x.shape, x.dtype, [x], cumsum_forward, [cumsum_backward])
+    if (dim == None):
+        dim = -1
+    assert(dim >= -1 and dim < len(x.shape))
+    if jt.has_cuda:
+        return cub_cumsum(x, dim)
+    else:
+        return numpy_cumsum(x, dim)
 
 jt.Var.cumsum = cumsum
 
-def cumprod(x,dim=0):
+def cumprod(x,dim=None):
     x = jt.log(x)
     x = cumsum(x,dim=dim)
     return jt.exp(x)
@@ -749,26 +781,26 @@ def triu_(x,diagonal=0):
 jt.Var.triu_ = triu_
 
 def print_tree(now, max_memory_size, prefix1, prefix2, build_by):
-    def format_size(s):
+    def format_size(s, end='B'):
         if (s < 1024):
             s = str(s)
-            return s + ' B'
+            return s + ' '+end
 
         if (s < 1024*1024):
             s = format(s/1024, '.2f')
-            return s + ' KB'
+            return s + ' K'+end
 
         if (s < 1024*1024*1024):
             s = format(s/1024/1024, '.2f')
-            return s + ' MB'
+            return s + ' M'+end
 
         s = format(s/1024/1024/1024, '.2f')
-        return s + ' GB'
+        return s + ' G'+end
 
     out = ''
     tab = '   '
     out += prefix1+now['name']+'('+now['type']+')\n'
-    out += prefix2+'['+format_size(now['size'])+'; '+format(now['size']/max_memory_size*100, '.2f')+'%]\n'
+    out += prefix2+'['+format_size(now['size'])+'; '+format(now['size']/max_memory_size*100, '.2f')+'%; cnt:'+format_size(now['cnt'],'') + ']\n'
     if (build_by == 0):
         for p in now['path']:
             out += prefix2+p+'\n'
@@ -834,7 +866,7 @@ Output::
     vars_ = vars_[1:]
     for v_ in vars_:
         v__ = v_.split(div2)
-        var = {'size':int(v__[1]), 'stack':[]}
+        var = {'size':int(v__[1]), 'stack':[], 'cnt':1}
         v__ = v__[2:-1]
         for s_ in v__:
             s__ = s_.split(div3)
@@ -842,7 +874,7 @@ Output::
             var['stack'].append(s)
         vars.append(var)
     if (build_by == 0): # build tree by name
-        tree = {'name':'root', "children":[], 'size':0, 'path':[], 'type':''}
+        tree = {'name':'root', "children":[], 'size':0, 'cnt':1, 'path':[], 'type':''}
 
         def find_child(now, key):
             for c in now['children']:
@@ -852,6 +884,7 @@ Output::
         for v in vars:
             now = tree
             now['size'] += v['size']
+            now['cnt'] += v['cnt']
             for s in v['stack']:
                 ch = find_child(now, s['name'])
                 if (ch is not None):
@@ -860,12 +893,13 @@ Output::
                     assert(ch['type']==s['type'])
                     now = ch
                     now['size'] += v['size']
+                    now['cnt'] += v['cnt']
                 else:
-                    now_ = {'name':s['name'], "children":[], 'size':v['size'], 'path':[s['path']], 'type':s['type']}
+                    now_ = {'name':s['name'], "children":[], 'size':v['size'], 'cnt':v['cnt'], 'path':[s['path']], 'type':s['type']}
                     now['children'].append(now_)
                     now = now_
     elif (build_by == 1): # build tree by path
-        tree = {'name':'root', "children":[], 'size':0, 'path':'_root_', 'type':''}
+        tree = {'name':'root', "children":[], 'size':0, 'cnt':0, 'path':'_root_', 'type':''}
 
         def find_child(now, key):
             for c in now['children']:
@@ -875,13 +909,15 @@ Output::
         for v in vars:
             now = tree
             now['size'] += v['size']
+            now['cnt'] += v['cnt']
             for s in v['stack']:
                 ch = find_child(now, s['path'])
                 if (ch is not None):
                     now = ch
                     now['size'] += v['size']
+                    now['cnt'] += v['cnt']
                 else:
-                    now_ = {'name':s['name'], "children":[], 'size':v['size'], 'path':s['path'], 'type':s['type']}
+                    now_ = {'name':s['name'], "children":[], 'size':v['size'],  'cnt':v['cnt'], 'path':s['path'], 'type':s['type']}
                     now['children'].append(now_)
                     now = now_
     else:
@@ -1063,14 +1099,17 @@ def randperm(n, dtype="int32"):
     index, _ = jt.argsort(key)
     return index.cast(dtype)
 
-def set_global_seed(seed):
+def set_global_seed(seed, different_seed_for_mpi=True):
     ''' Sets the seeds of the random number generators of Python, numpy and jittor,
     simultaneously.
 
     .. note::
     Jittor also gurantees each worker of jittor.dataset.Dataset to hold a different seed,
-    which is global_seed ^ worker_id ^ 1234.
+    also gurantees each process hold a different seed which using mpi,
+    which is (global_seed ^ (worker_id*1167)) ^ 1234 + jt.rank * 2591
     '''
+    if (different_seed_for_mpi):
+        seed = seed + jt.rank * 2591
     import random
     random.seed(seed)
     jt.set_seed(seed)
@@ -1080,6 +1119,9 @@ def set_global_seed(seed):
         cupy.random.seed(seed)
     except:
         pass
+
+import time
+set_global_seed(int(time.time() * 1000000) % 100000007)
 
 def searchsorted(sorted, values, right=False):
     """
@@ -1269,3 +1311,348 @@ jt.Var.roll = roll
 def safe_log(x):
     return jt.safe_clip(x, 1e-30, 1e30).log()
 jt.Var.safe_log = safe_log
+
+class _CTCLossFunction(jt.Function):
+    def execute(self, log_probs, targets, input_lengths, target_lengths, blank=0, zero_infinity=False):
+        self.blank = blank
+        T, N, C = log_probs.shape
+        _N, S = targets.shape
+        assert _N == N
+        log_alpha = jt.full([T,N,S*2+1], -1e30)
+        result = jt.empty((N,))
+        jt.code([log_probs, targets, input_lengths, target_lengths], [log_alpha, result], cpu_src=f"""
+            constexpr int blank = {blank};
+            for (int i=0; i<in0_shape1; i++) {{
+                int input_len = @in2(i);
+                int target_len = @in3(i);
+                @out0(0,i,0) = @in0(0,i,blank);
+                if (target_len)
+                    @out0(0,i,1) = @in0(0,i,@in1(i,0));
+                for (int j=1; j<input_len; j++)
+                    for (int k=0; k<target_len*2+1; k++) {{
+                        int target = k%2 ? @in1(i,k/2) : blank;
+                        int target_2 = target;
+                        if (k>1 && k%2) target_2 = @in1(i,k/2-1);
+                        out_type l1 = @out0(j-1,i,k);
+                        out_type l2 = -1e30;
+                        if (k>0) l2 = @out0(j-1,i,k-1);
+                        out_type l3 = -1e30;
+                        if (k>1 && target_2 != target)
+                            l3 = @out0(j-1,i,k-2);
+                        out_type m = std::max(l1, std::max(l2, l3));
+                        @out0(j,i,k) = std::log(
+                            std::exp(l1-m) +
+                            std::exp(l2-m) +
+                            std::exp(l3-m)
+                        ) + m + @in0(j,i,target);
+                    }}
+                if (input_len==0)
+                    @out1(i) = @out0(0,i,0);
+                else {{
+                    out_type l1 = @out0(input_len-1, i, target_len*2);
+                    out_type l2 = -1e30;
+                    if (target_len)
+                        l2 = @out0(input_len-1, i, target_len*2-1);
+                    out_type m = std::max(l1, l2);
+                    out_type log_likelihood = std::log(std::exp(l1-m)+std::exp(l2-m))+m;
+                    @out1(i) = -log_likelihood;
+                }}
+            }}
+        """, cuda_src=f"""
+        __global__ void kernel(@ARGS_DEF) {{
+            @PRECALC;
+            constexpr int blank = {blank};
+            for (int i=blockIdx.x; i<in0_shape1; i+=gridDim.x) {{
+                int input_len = @in2(i);
+                int target_len = @in3(i);
+                @out0(0,i,0) = @in0(0,i,blank);
+                if (target_len)
+                    @out0(0,i,1) = @in0(0,i,@in1(i,0));
+                for (int j=1; j<input_len; j++)
+                    for (int k=threadIdx.x; k-threadIdx.x<target_len*2+1; k+=blockDim.x) {{
+                        __syncthreads();
+                        if (k>=target_len*2+1)
+                            continue;
+                        int target = k%2 ? @in1(i,k/2) : blank;
+                        int target_2 = target;
+                        if (k>1 && k%2) target_2 = @in1(i,k/2-1);
+                        out_type l1 = @out0(j-1,i,k);
+                        out_type l2 = -1e30;
+                        if (k>0) l2 = @out0(j-1,i,k-1);
+                        out_type l3 = -1e30;
+                        if (k>1 && target_2 != target)
+                            l3 = @out0(j-1,i,k-2);
+                        out_type m = ::max(l1, ::max(l2, l3));
+                        @out0(j,i,k) = ::log(
+                            ::exp(l1-m) +
+                            ::exp(l2-m) +
+                            ::exp(l3-m)
+                        ) + m + @in0(j,i,target);
+                    }}
+                 __syncthreads();
+                if (input_len==0)
+                    @out1(i) = @out0(0,i,0);
+                else {{
+                    out_type l1 = @out0(input_len-1, i, target_len*2);
+                    out_type l2 = -1e30;
+                    if (target_len)
+                        l2 = @out0(input_len-1, i, target_len*2-1);
+                    out_type m = ::max(l1, l2);
+                    out_type log_likelihood = ::log(::exp(l1-m)+::exp(l2-m))+m;
+                    @out1(i) = -log_likelihood;
+                }}
+            }}
+        }}
+        kernel<<<std::min(in0_shape1, 1024), std::min(in1_shape1*2+1, 1024)>>>(@ARGS);
+        """)
+        self.saved_var = [log_probs, targets, input_lengths, target_lengths, log_alpha, result]
+        return result
+
+    def grad(self, dout):
+        blank = self.blank
+        inputs = self.saved_var + [dout]
+        dlog_probs = jt.zeros_like(inputs[0])
+        dlog_alpha = jt.zeros_like(inputs[4])
+        jt.code(inputs, [dlog_probs, dlog_alpha], cpu_src=f"""
+            constexpr int blank = {blank};
+            for (int i=0; i<in0_shape1; i++) {{
+                int input_len = @in2(i);
+                int target_len = @in3(i);
+                if (input_len==0)
+                    // write out1 --> read in6
+                    // out1(i) = out0(0,i,0);
+                    @out1(0,i,0) = @in6(i);
+                else {{
+                    out_type l1 = @in4(input_len-1, i, target_len*2);
+                    out_type l2 = -1e30;
+                    if (target_len)
+                        l2 = @in4(input_len-1, i, target_len*2-1);
+                    out_type m = std::max(l1, l2);
+                    // out_type log_likelihood = std::log(std::exp(l1-m)+std::exp(l2-m))+m;
+                    // out1(i) = -log_likelihood;
+                    out_type l1_exp = std::exp(l1-m);
+                    out_type l2_exp = std::exp(l2-m);
+                    out_type sumexp = l1_exp + l2_exp;
+
+                    out_type dlog_likelihood = -@in6(i);
+                    out_type dl1 = dlog_likelihood * l1_exp / sumexp;
+                    out_type dl2 = dlog_likelihood * l2_exp / sumexp;
+
+                    @out1(input_len-1, i, target_len*2) = dl1;
+                    if (target_len)
+                        @out1(input_len-1, i, target_len*2-1) = dl2;
+                }}
+                for (int j=input_len-1; j>0; j--)
+                    for (int k=0; k<target_len*2+1; k++) {{
+                        int target = k%2 ? @in1(i,k/2) : blank;
+                        int target_2 = target;
+                        if (k>1 && k%2) target_2 = @in1(i,k/2-1);
+                        out_type l1 = @in4(j-1,i,k);
+                        out_type l2 = -1e30;
+                        if (k>0) l2 = @in4(j-1,i,k-1);
+                        out_type l3 = -1e30;
+                        if (k>1 && target_2 != target)
+                            l3 = @in4(j-1,i,k-2);
+                        out_type m = std::max(l1, std::max(l2, l3));
+                        out_type l1_exp = std::exp(l1-m);
+                        out_type l2_exp = std::exp(l2-m);
+                        out_type l3_exp = std::exp(l3-m);
+                        out_type sumexp = l1_exp + l2_exp + l3_exp;
+                        out_type dalpha = @out1(j,i,k);
+
+                        @out0(j,i,target) += dalpha;
+
+                        @out1(j-1,i,k) += dalpha * l1_exp / sumexp;
+                        if (k>0)
+                            @out1(j-1,i,k-1) += dalpha * l2_exp / sumexp;
+                        if (k>1 && target_2 != target)
+                            @out1(j-1,i,k-2) += dalpha * l3_exp / sumexp;
+                    }}
+                // read in0 -> white out0
+                // write out0 ->read out1
+                // out0(0,i,0) = in0(0,i,blank);
+                @out0(0,i,blank) += @out1(0,i,0);
+                if (target_len)
+                    @out0(0,i,@in1(i,0)) += @out1(0,i,1);
+            }}
+        """, cuda_src=f"""
+        __global__ void kernel(@ARGS_DEF) {{
+            @PRECALC;
+            constexpr int blank = {blank};
+            for (int i=blockIdx.x; i<in0_shape1; i+=gridDim.x) {{
+                int input_len = @in2(i);
+                int target_len = @in3(i);
+                if (input_len==0)
+                    // write out1 --> read in6
+                    // out1(i) = out0(0,i,0);
+                    @out1(0,i,0) = @in6(i);
+                else {{
+                    out_type l1 = @in4(input_len-1, i, target_len*2);
+                    out_type l2 = -1e30;
+                    if (target_len)
+                        l2 = @in4(input_len-1, i, target_len*2-1);
+                    out_type m = ::max(l1, l2);
+                    // out_type log_likelihood = ::log(::exp(l1-m)+::exp(l2-m))+m;
+                    // out1(i) = -log_likelihood;
+                    out_type l1_exp = ::exp(l1-m);
+                    out_type l2_exp = ::exp(l2-m);
+                    out_type sumexp = l1_exp + l2_exp;
+
+                    out_type dlog_likelihood = -@in6(i);
+                    out_type dl1 = dlog_likelihood * l1_exp / sumexp;
+                    out_type dl2 = dlog_likelihood * l2_exp / sumexp;
+
+                    @out1(input_len-1, i, target_len*2) = dl1;
+                    if (target_len)
+                        @out1(input_len-1, i, target_len*2-1) = dl2;
+                }}
+                for (int j=input_len-1; j>0; j--)
+                    for (int k=threadIdx.x; k-threadIdx.x<target_len*2+1; k+=blockDim.x) {{
+                        __syncthreads();
+                        if (k>=target_len*2+1)
+                            continue;
+                        int target = k%2 ? @in1(i,k/2) : blank;
+                        int target_2 = target;
+                        if (k>1 && k%2) target_2 = @in1(i,k/2-1);
+                        out_type l1 = @in4(j-1,i,k);
+                        out_type l2 = -1e30;
+                        if (k>0) l2 = @in4(j-1,i,k-1);
+                        out_type l3 = -1e30;
+                        if (k>1 && target_2 != target)
+                            l3 = @in4(j-1,i,k-2);
+                        out_type m = ::max(l1, ::max(l2, l3));
+                        out_type l1_exp = ::exp(l1-m);
+                        out_type l2_exp = ::exp(l2-m);
+                        out_type l3_exp = ::exp(l3-m);
+                        out_type sumexp = l1_exp + l2_exp + l3_exp;
+                        out_type dalpha = @out1(j,i,k);
+
+                        atomicAdd(&@out0(j,i,target), dalpha);
+
+                        atomicAdd(&@out1(j-1,i,k), dalpha * l1_exp / sumexp);
+                        if (k>0)
+                            atomicAdd(&@out1(j-1,i,k-1), dalpha * l2_exp / sumexp);
+                        if (k>1 && target_2 != target)
+                            atomicAdd(&@out1(j-1,i,k-2), dalpha * l3_exp / sumexp);
+                    }}
+                // read in0 -> white out0
+                // write out0 ->read out1
+                // out0(0,i,0) = in0(0,i,blank);
+                __syncthreads();
+                if (threadIdx.x==0) {{
+                    @out0(0,i,blank) += @out1(0,i,0);
+                    if (target_len)
+                        @out0(0,i,@in1(i,0)) += @out1(0,i,1);
+                }}
+            }}
+        }}
+        kernel<<<std::min(in0_shape1, 1024), std::min(in1_shape1*2+1, 1024)>>>(@ARGS);
+        """)
+        return (dlog_probs,)
+
+
+def ctc_loss(log_probs, targets, input_lengths, target_lengths, blank=0, reduction='mean', zero_infinity=False):
+    '''The Connectionist Temporal Classification loss.
+
+
+    Reference:
+        A. Graves et al.: Connectionist Temporal Classification:
+        Labelling Unsegmented Sequence Data with Recurrent Neural Networks:
+        https://www.cs.toronto.edu/~graves/icml_2006.pdf
+
+    Input:
+
+        log_probs: shape is [T, N, C], T is the sequence length, N is the batch size, C is the class number.
+        targets: shape is [N, S], N is the batch size, S is the target sequence length, element should between [0,C).
+        input_lengths: shape is [N], which represents the length of input, element should between [0,T].
+        target_lengths: shape is N, which represents the length of target, element should between [0,S].
+        blank (int, default 0): blank label index
+        reduction (string): reduce batch loss,
+            if reduction is none, it will return (N,) array,
+            if reduction is mean or sum, it will return one scalar
+        zero_infinity (bool, default False):
+            zero_infinity for grad
+
+    Example:
+
+        import jittor as jt
+        T = 50      # Input sequence length
+        C = 20      # Number of classes (including blank)
+        N = 16      # Batch size
+        S = 30      # Target sequence length of longest target in batch (padding length)
+        S_min = 10  # Minimum target length, for demonstration purposes
+
+        input = jt.randn(T, N, C).log_softmax(2)
+        # Initialize random batch of targets (0 = blank, 1:C = classes)
+        target = jt.randint(low=1, high=C, shape=(N, S), dtype=jt.int)
+
+        input_lengths = jt.full((N,), T, dtype=jt.int)
+        target_lengths = jt.randint(low=S_min, high=S+1, shape=(N,), dtype=jt.int)
+        loss = jt.ctc_loss(input, target, input_lengths, target_lengths)
+
+        dinput = jt.grad(loss, input)
+
+    '''
+    result = _CTCLossFunction.apply(log_probs, targets, input_lengths, target_lengths, blank, zero_infinity)
+    if reduction=="mean":
+        return result.mean()
+    elif reduction=="sum":
+        return result.sum()
+    assert reduction=="none"
+    return result
+
+
+class CTCLoss(jt.Module):
+    '''The Connectionist Temporal Classification loss.
+
+
+    Reference:
+        A. Graves et al.: Connectionist Temporal Classification:
+        Labelling Unsegmented Sequence Data with Recurrent Neural Networks:
+        https://www.cs.toronto.edu/~graves/icml_2006.pdf
+
+
+    Args:
+
+        blank (int, default 0): blank label index
+        reduction (string): reduce batch loss,
+            if reduction is none, it will return (N,) array,
+            if reduction is mean or sum, it will return one scalar
+        zero_infinity (bool, default False):
+            zero_infinity for grad
+
+    Input:
+
+        log_probs: shape is [T, N, C], T is the sequence length, N is the batch size, C is the class number.
+        targets: shape is [N, S], N is the batch size, S is the target sequence length, element should between [0,C).
+        input_lengths: shape is [N], which represents the length of input, element should between [0,T].
+        target_lengths: shape is N, which represents the length of target, element should between [0,S].
+
+    Example:
+
+        import jittor as jt
+        T = 50      # Input sequence length
+        C = 20      # Number of classes (including blank)
+        N = 16      # Batch size
+        S = 30      # Target sequence length of longest target in batch (padding length)
+        S_min = 10  # Minimum target length, for demonstration purposes
+
+        input = jt.randn(T, N, C).log_softmax(2)
+        # Initialize random batch of targets (0 = blank, 1:C = classes)
+        target = jt.randint(low=1, high=C, shape=(N, S), dtype=jt.int)
+
+        input_lengths = jt.full((N,), T, dtype=jt.int)
+        target_lengths = jt.randint(low=S_min, high=S+1, shape=(N,), dtype=jt.int)
+        ctc_loss = jt.CTCLoss()
+        loss = ctc_loss(input, target, input_lengths, target_lengths)
+
+        dinput = jt.grad(loss, input)
+
+    '''
+    def __init__(self, blank=0, reduction='mean', zero_infinity=False):
+        self.blank = blank
+        self.reduction = reduction
+        self.zero_infinity = zero_infinity
+
+    def execute(self, log_probs, targets, input_lengths, target_lengths):
+        return ctc_loss(log_probs, targets, input_lengths, target_lengths, self.blank, self.reduction, self.zero_infinity)

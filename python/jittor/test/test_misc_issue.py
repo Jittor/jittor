@@ -165,6 +165,8 @@ jt.mkl_ops.mkl_conv(x, w, 1, 1, 2, 2).sync()
             n += 1
         assert n == 2
         assert list(x.keys()) == [0,1]
+        p = x.parameters()
+        assert len(p)==0
 
     # def test_res2net(self):
     #     import jittor.models

@@ -45,7 +45,8 @@ language = 'zh_CN'
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
 extensions = [
-    'recommonmark',
+    # 'recommonmark',
+    'myst_parser',
     'sphinx.ext.autodoc',
     # Auto-generate section labels.
     'sphinx.ext.autosectionlabel',
