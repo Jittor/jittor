@@ -235,6 +235,7 @@ void segfault_sigaction(int signal, siginfo_t *si, void *arg) {
         exited = true;
         do_exit();
     }
+    if (exited) do_exit();
     std::cerr << "Caught segfault at address " << si->si_addr << ", "
         << "thread_name: '" << thread_name << "', flush log..." << std::endl;
     std::cerr.flush();
@@ -424,10 +425,11 @@ void system_with_check(const char* cmd) {
 }
 
 std::thread log_thread(log_main);
+int log_exit = 0;
 
 void log_exiting() {
-    if (exited) return;
-    exited = true;
+    if (log_exit) return;
+    log_exit = true;
     mwsr_list_log::stop();
     log_thread.join();
 }
