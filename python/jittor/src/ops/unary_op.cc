@@ -168,7 +168,7 @@ static unordered_set<string> unary_ops = {
         >>> a
         jt.Var([ 2.101595    0.33055413 -0.44147047 -0.7720668 ], dtype=float32)
         >>> jt.round(a)
-        jt.Var([ 2.0  0.0  0.0 -1.0], dtype=float32)
+        jt.Var([ 2  0  0 -1], dtype=int32)
      */
     "round",
 
@@ -185,7 +185,7 @@ static unordered_set<string> unary_ops = {
         >>> a
         jt.Var([-1.0339162 -0.7259972 -0.9220003 -0.8449701], dtype=float32)
         >>> jt.floor(a)
-        jt.Var([-2.0 -1.0 -1.0 -1.0], dtype=float32)
+        jt.Var([-2 -1 -1 -1], dtype=int32)
      */
     "floor",
 
@@ -203,62 +203,9 @@ static unordered_set<string> unary_ops = {
         >>> a
         jt.Var([-1.0339162 -0.7259972 -0.9220003 -0.8449701], dtype=float32)
         >>> jt.ceil(a)
-        jt.Var([-1.0  0.0  0.0  0.0], dtype=float32)
-     */
-    "ceil",
-
-    /**
-    Returns the closest integer of the input ``x``. 
-
-    ----------------
-
-    * [in] x: the input jt.Var.
-
-    ----------------
-
-    Example-1::
-        >>> a = jt.randn(4)
-        >>> a
-        jt.Var([ 2.101595    0.33055413 -0.44147047 -0.7720668 ], dtype=float32)
-        >>> jt.round_int(a)
-        jt.Var([ 2  0  0 -1], dtype=int32)
-     */
-    "round_int",
-
-    /**
-     Returns the largest integer less than or equal to the input ``x``. 
-
-    ----------------
-
-    * [in] x: the input jt.Var.
-
-    ----------------
-    Example-1::
-        >>> a = jt.randn(4)
-        >>> a
-        jt.Var([-1.0339162 -0.7259972 -0.9220003 -0.8449701], dtype=float32)
-        >>> jt.floor_int(a)
-        jt.Var([-2 -1 -1 -1], dtype=int32)
-     */
-    "floor_int",
-
-    /**
-    Returns the smallest integer greater than or equal to the input ``x``. 
-
-    ----------------
-
-    * [in] x: the input jt.Var.
-
-    ----------------
-
-    Example-1::
-        >>> a = jt.randn(4)
-        >>> a
-        jt.Var([-1.0339162 -0.7259972 -0.9220003 -0.8449701], dtype=float32)
-        >>> jt.ceil_int(a)
         jt.Var([-1  0  0  0], dtype=int32)
      */
-    "ceil_int",
+    "ceil",
 
     /**
     Returns the sine of the input ``x``. 

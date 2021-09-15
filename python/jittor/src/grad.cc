@@ -37,14 +37,6 @@ inline static void assign_attrs(Var* a, Var* b) {
         a->flags.set(NodeFlags::_stop_fuse);
 }
 
-map<string,int> grad_breaks;
-
-void warn_grad_break(int i, Var* v) {
-    if (grad_breaks.count(v->name.c_str())) return;
-    grad_breaks[v->name.c_str()] = 1;
-    LOGw << "grads[">>i>>"] '">> v->name>>"' doesn't have gradient. It will be set to zero:" << v;
-}
-
 vector<VarPtr> grad(Var* loss, vector<Var*> targets) {
     LOGvv << "loss:" >> loss << "targets:" >> targets;
     CHECK(loss->is_float()) << "Loss should be float";
@@ -220,7 +212,7 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets) {
             grad = move(grads[id]);
         if (!grad) {
             // TODO: better warning message
-            warn_grad_break(i, var);
+            LOGw << "grads[">>i>>"] '">> var->name>>"' doesn't have gradient. It will be set to zero:" << var;
             grad = make_number(0.f, var);
             assign_attrs(grad.ptr, var);
         }

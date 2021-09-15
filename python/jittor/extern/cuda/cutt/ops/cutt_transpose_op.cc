@@ -89,7 +89,7 @@ void CuttTransposeOp::jit_run() {
         reverse[i] = dim-1-new_axes[dim-1-i];
     for (int i=0; i<dim; i++)
         x_shape[i] = new_shape[dim-1-i];
-    if (dim == 1 || x->num==1) {
+    if (dim == 1) {
         checkCudaErrors(cudaMemcpyAsync(yp, xp, x->size, cudaMemcpyDefault, 0));
         return;
     }
@@ -105,9 +105,7 @@ void CuttTransposeOp::jit_run() {
         cuttExecute(iter->second, xp, yp);
     } else {
         cuttHandle plan;
-        checkCudaErrors(cudaDeviceSynchronize());
-        auto ret = cuttPlan(&plan, dim, x_shape.data(), reverse.data(), x->dtype().dsize(), 0);
-        CHECK(0==ret) << ret << jk.to_string() << x << y;
+        CHECK(0==cuttPlan(&plan, dim, x_shape.data(), reverse.data(), x->dtype().dsize(), 0));
         cutt_plan_cache[jk.to_string()] = plan;
         cuttExecute(plan, xp, yp);
     }

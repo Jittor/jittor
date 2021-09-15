@@ -9,18 +9,11 @@
 import unittest
 import jittor as jt
 import numpy as np
+import ctypes
+import sys
+import torch
+from torch.autograd import Variable
 
-skip_this_test = False
-try:
-    jt.dirty_fix_pytorch_runtime_error()
-    import torch
-    from torch.autograd import Variable
-except:
-    torch = None
-    skip_this_test = True
-
-
-@unittest.skipIf(skip_this_test, "No Torch found")
 class TestCumprod(unittest.TestCase):
     def test_cumprod_cpu(self):
         for i in range(1,6):

@@ -93,9 +93,6 @@ void GetitemOp::infer_slices(
         } else
         if (s.is_ellipsis()) {
             auto remain_slice = vs.n-vid-1;
-            for (int i=vid+1; i<vs.n; i++)
-                if (vs.slices[i].is_none())
-                    remain_slice--;
             auto remain_idims = nin-i;
             auto ellipsis_size = remain_idims - remain_slice;
             ASSERT(ellipsis_size>=0) << "NDims not match";
@@ -147,8 +144,7 @@ void GetitemOp::infer_slices(
                         out_shape_j = (slice.stop - slice.start - 1) / slice.step + 1;
                     else
                         out_shape_j = (slice.start - slice.stop - 1) / -slice.step + 1;
-
-                    out_shape_j = out_shape_j > 0 ? out_shape_j : 0;
+                    out_shape_j = std::max(0l, out_shape_j);
                 }
                 out_shape.push_back(out_shape_j);
             }

@@ -7,11 +7,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/wait.h>
-#ifdef __linux__
-#include <sys/prctl.h>
-#endif
 #include <unistd.h>
-#include <execinfo.h>
+#include <sys/prctl.h>
+// #include <execinfo.h>
 #include <iostream>
 #include "utils/tracer.h"
 
@@ -63,9 +61,7 @@ void setter_gdb_attach(int v) {
             exit(1);
         } else {
             // allow children ptrace parent
-#ifdef __linux__
     		prctl(PR_SET_PTRACER, child_pid, 0, 0, 0);
-#endif
             // sleep 5s, wait gdb attach
             sleep(5);
         }
@@ -122,12 +118,11 @@ void print_trace() {
             exit(0);
         } else {
             // allow children ptrace parent
-#ifdef __linux__
     		prctl(PR_SET_PTRACER, child_pid, 0, 0, 0);
-#endif
             waitpid(child_pid,NULL,0);
         }
     } else {
+        /*
         void *trace[16];
         char **messages = (char **)NULL;
         int i, trace_size = 0;
@@ -153,7 +148,9 @@ void print_trace() {
             // printf("run '%s'\n", syscom);
             int ret = system(syscom);
             (void)ret;
+            
         }
+        */
     }
 }
 

@@ -15,25 +15,25 @@ def eye(shape, dtype):
     return jt.array(np.identity(shape[0])).unary(dtype)
 
 def eye_(var):
-    return var.assign(eye(var.shape, var.dtype))
+    var.assign(eye(var.shape, var.dtype))
 
 def constant(shape, dtype, value=0.0):
     return jt.array(value).unary(dtype).broadcast(shape)
 
 def constant_(var, value=0.0):
-    return var.assign(constant(var.shape, var.dtype, value))
+    var.assign(constant(var.shape, var.dtype, value))
 
 def uniform(shape, dtype, low, high):
     return jt.random(shape, dtype) * (low - high) + high
 
 def uniform_(var, low, high):
-    return var.assign(uniform(var.shape, var.dtype, low, high))
+    var.assign(uniform(var.shape, var.dtype, low, high))
 
 def gauss(shape, dtype, mean=0.0, std=1.0):
     return jt.random(shape, dtype, "normal") * std + mean
 
 def gauss_(var, mean=0.0, std=1.0):
-    return var.assign(gauss(var.shape, var.dtype, mean, std))
+    var.assign(gauss(var.shape, var.dtype, mean, std))
 
 def invariant_uniform(shape, dtype, mode="fan_in"):
     assert len(shape)>1
@@ -61,7 +61,7 @@ def relu_invariant_gauss(shape, dtype, mode="fan_in"):
     return gauss(shape, dtype, 0, std)
 
 def relu_invariant_gauss_(var, mode="fan_in"):
-    return var.assign(relu_invariant_gauss(tuple(var.shape), var.dtype, mode))
+    var.assign(relu_invariant_gauss(tuple(var.shape), var.dtype, mode))
 
 def calculate_std(var,mode,nonlinearity,param=0.01):
     mode = mode.lower()
@@ -100,6 +100,7 @@ def kaiming_normal_(var, a=0, mode='fan_in', nonlinearity='leaky_relu'):
     return gauss_(var,0, std)
 
 
+#TODO: bound = gain * math.sqrt(6.0/fan) ??
 def xavier_uniform(shape, dtype, gain=1.0):
     assert len(shape)>1
 
@@ -107,11 +108,11 @@ def xavier_uniform(shape, dtype, gain=1.0):
     for i in shape[2:]:
         matsize *= i
     fan = (shape[1] * matsize) + (shape[0] * matsize)
-    bound = gain * math.sqrt(6.0/fan)
+    bound = gain * math.sqrt(1.0/fan)
     return uniform(shape, dtype, -bound, bound)
 
 def xavier_uniform_(var, gain=1.0):
-    return var.assign(xavier_uniform(tuple(var.shape), var.dtype, gain))
+    var.assign(xavier_uniform(tuple(var.shape), var.dtype, gain))
 
 def xavier_gauss(shape, dtype, gain=1.0):
     assert len(shape)>1
@@ -124,4 +125,4 @@ def xavier_gauss(shape, dtype, gain=1.0):
     return gauss(shape, dtype, 0, std)
 
 def xavier_gauss_(var, gain=1.0):
-    return var.assign(xavier_gauss(tuple(var.shape), var.dtype, gain))
+    var.assign(xavier_gauss(tuple(var.shape), var.dtype, gain))

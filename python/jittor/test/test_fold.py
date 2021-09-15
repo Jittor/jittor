@@ -10,19 +10,11 @@
 # ***************************************************************
 import unittest
 import jittor as jt
+import torch
+from torch.nn import functional as F
 import numpy as np
 
-skip_this_test = False
-try:
-    jt.dirty_fix_pytorch_runtime_error()
-    import torch
-    from torch.nn import functional as F
-except:
-    torch = None
-    skip_this_test = True
 
-
-@unittest.skipIf(skip_this_test, "No Torch Found")
 class TestFoldOp(unittest.TestCase):
     def test_fold(self):
         # test unfold first and the test fold.

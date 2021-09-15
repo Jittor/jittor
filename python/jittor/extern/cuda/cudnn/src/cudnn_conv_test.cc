@@ -65,7 +65,6 @@
 #include <assert.h>
 
 #include <cudnn.h>
-#include "utils/log.h"
 #include "helper_cuda.h"
 #include "fp16_dev.h"
 #include "fp16_emu.h"

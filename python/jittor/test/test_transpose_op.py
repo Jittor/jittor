@@ -10,7 +10,6 @@ import numpy as np
 from .test_core import expect_error
 from .test_grad import ngrad
 from itertools import permutations
-from jittor.test.test_cuda import test_cuda
 
 def gen_data(shape):
     num = np.multiply.reduce(shape)
@@ -74,74 +73,6 @@ class TestTransposeOp(unittest.TestCase):
         a = jt.rand((10,2)) > 0.5
         b = a.transpose()
         assert (a.data.transpose() == b.data).all()
-
-        a = jt.zeros((1,1))
-        b = a.transpose((1,0))
-        b.sync()
-
-
-class TestFuseTransposeOp(unittest.TestCase):
-
-    def test_fuse_transpose1(self):
-        with jt.profile_scope() as rep:
-            a = jt.rand((10,11,12))
-            b = a.fuse_transpose((1,2,0))+1
-            np.testing.assert_allclose(
-                a.data.transpose((1,2,0))+1,
-                b.data
-            )
-        assert len(rep) == 3
-
-    def test_fuse_transpose2(self):
-        with jt.profile_scope() as rep:
-            a = jt.rand((10,11,12))
-            b = (a+1).fuse_transpose((1,2,0))
-            np.testing.assert_allclose(
-                a.data.transpose((1,2,0))+1,
-                b.data
-            )
-        assert len(rep) == 3
-
-    def test_fuse_transpose3(self):
-        with jt.profile_scope() as rep:
-            a = jt.rand((10,11,12))
-            c = jt.rand((11,12,10))
-            b = a.fuse_transpose((1,2,0))+c
-            np.testing.assert_allclose(
-                a.data.transpose((1,2,0))+c.data,
-                b.data
-            )
-        assert len(rep) == 3
-
-    def test_fuse_transpose4(self):
-        with jt.profile_scope() as rep:
-            a = jt.rand((10,11,12))
-            c = jt.rand((10,11,12))
-            b = (a+c).fuse_transpose((1,2,0))
-            np.testing.assert_allclose(
-                (a.data+c.data).transpose((1,2,0)),
-                b.data
-            )
-        assert len(rep) == 3
-
-    def test_fuse_transpose5(self):
-        with jt.profile_scope() as rep:
-            a = jt.rand((10,11,6,7))
-            c = jt.rand((10,11,6,7))
-            b = (a+c).fuse_transpose((1,0,2,3))
-            np.testing.assert_allclose(
-                (a.data+c.data).transpose((1,0,2,3)),
-                b.data
-            )
-        assert len(rep) == 3
-
-
-@unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
-class TestFuseTransposeCudaOp(TestFuseTransposeOp):
-    def setUp(self):
-        jt.flags.use_cuda = 1
-    def tearDown(self):
-        jt.flags.use_cuda = 0
 
 if __name__ == "__main__":
     unittest.main()

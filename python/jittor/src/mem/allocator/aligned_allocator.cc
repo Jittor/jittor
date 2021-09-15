@@ -14,21 +14,12 @@ AlignedAllocator aligned_allocator;
 const char* AlignedAllocator::name() const {return "aligned";}
 
 void* AlignedAllocator::alloc(size_t size, size_t& allocation) {
-    #ifdef __APPLE__
-    size += 32-size%32;
-    // low version of mac don't have aligned_alloc
-    return new char[size];
-    #else
-    return aligned_alloc(alignment, size);
-    #endif
+    return malloc(size);
+    // return aligned_alloc(alignment, size);
 }
 
 void AlignedAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
-    #ifdef __APPLE__
-    delete[] (char*)mem_ptr;
-    #else
     ::free(mem_ptr);
-    #endif
 }
 
 } // jittor

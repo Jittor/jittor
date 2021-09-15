@@ -23,7 +23,6 @@ from jittor.compiler import run_cmd
 from jittor_utils import translator
 from jittor.utils.polish_centos import run_in_centos
 import sys
-import platform
 
 jittor_path = jt.flags.jittor_path
 root_path = os.path.realpath(os.path.join(jt.flags.jittor_path, "..", ".."))
@@ -53,21 +52,7 @@ from pathlib import Path
 home = str(Path.home())
 # for cc_type in ["g++", "clang"]:
 #     for device in ["cpu", "cuda"]:
-
-os_name_system_dict = {
-    'ubuntu': 'Linux',
-    'centos': 'Linux',
-    'macos': 'Darwin',
-}
-
-if len(sys.argv) > 1 and sys.argv[1] == "native":
-    os_name_system_dict = {'ubuntu': 'Linux'}
-
-for os_name, os_type in os_name_system_dict.items():
-    if platform.system() != os_type:
-        continue
-    os_arch = platform.machine() if os_type == 'Darwin' else ''
-
+for os_name in ['ubuntu', 'centos']:
     for cc_type in ["g++"]:
         for device in ["cpu"]:
             key = f"{git_version}-{cc_type}-{device}"
@@ -76,17 +61,13 @@ for os_name, os_type in os_name_system_dict.items():
             env += cname
             # use core2 arch, avoid using avx instructions
             # TODO: support more archs, such as arm, or use ir(GIMPLE or LLVM)
-            if platform.machine() == "x86_64":
-                env += " cc_flags='-march=core2' "
+            env += " cc_flags='-march=core2' "
             if device == "cpu":
-                env += " nvcc_path='' "
+                env += "nvcc_path='' "
             elif jt.flags.nvcc_path == "":
                 env = "unset nvcc_path && " + env
             cmd = f"{env} {sys.executable} -c 'import jittor'"
             if key != 'ubuntu': key += '-' + os_name
-            if os_arch : key += '-' + os_arch
-            if platform.machine() == "sw_64":
-                key += '-sw_64'
             if os_name == 'centos':
                 run_in_centos(env)
                 obj_path = home + f"/.cache/centos/build/{cc_type}/{device}/{cname}/obj_files"
@@ -103,12 +84,7 @@ for os_name, os_type in os_name_system_dict.items():
                 fname = f"{obj_path}/{name}.o"
                 assert os.path.isfile(fname), fname
                 obj_files.append(fname)
-            ld_cmd = f"ld -r {' '.join(obj_files)} -o {build_path}/{key}.o"
-            print("RUN CMD:", ld_cmd)
-            run_cmd(ld_cmd)
-
-if len(sys.argv) > 1 and sys.argv[1] == "native":
-    exit(0)
+            run_cmd(f"ld -r {' '.join(obj_files)} -o {build_path}/{key}.o")
 
 # compress source
 # tar -cvzf build/jittor.tgz . --exclude build --exclude .git --exclude .ipynb_checkpoints --exclude __pycache__
@@ -118,7 +94,6 @@ assert os.system(f"cd {root_path} && tar --exclude=build --exclude=.git --exclud
 # rsync to build-server
 jittor_web_base_dir = "Documents/jittor-blog/assets/"
 jittor_web_build_dir = jittor_web_base_dir
-# copy to jittor-web:Documents/jittor-blog/assets/build/
 assert os.system(f"rsync -avPu {build_path} jittor-web:{jittor_web_build_dir}")==0
 assert os.system(f"ssh jittor-web Documents/jittor-blog.git/hooks/post-update")==0
 

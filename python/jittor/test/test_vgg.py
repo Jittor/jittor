@@ -84,13 +84,13 @@ class TestVGGClass(unittest.TestCase):
                 "Jit op key (not )?found: ((mkl)|(cudnn))_conv.*")
             log_matmul = find_log_with_re(logs, 
                 "Jit op key (not )?found: ((mkl)|(cublas))_matmul.*")
-            # if batch_idx:
-            #     assert len(log_conv)==38 and len(log_matmul)==12, (len(log_conv), len(log_matmul))
+            if batch_idx:
+                assert len(log_conv)==38 and len(log_matmul)==12, (len(log_conv), len(log_matmul))
 
             mem_used = jt.flags.stat_allocator_total_alloc_byte \
                 -jt.flags.stat_allocator_total_free_byte
             assert mem_used < 11e9, mem_used
-            # assert jt.core.number_of_lived_vars() < 3500
+            assert jt.core.number_of_lived_vars() < 3500
             if (np.mean(loss_list[-50:])<0.2):
                 break
 

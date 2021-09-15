@@ -20,10 +20,11 @@ struct OpInfo {
     template<class To, class ...Ts> auto get_constructor() {
         typedef To (*func_t)(Ts...);
         const auto& tid = typeid(func_t);
-        for (uint i=0; i<constructors.size(); i++)
-            if (std::type_index(*(constructors[i].first)) == std::type_index(tid))
+        for (uint i=0; i<constructors.size(); i++) {
+            if (string(std::type_index(*(constructors[i].first)).name()) == string(std::type_index(tid).name()))
                 return func_t(constructors[i].second);
-        LOGf << "constructor" << name << tid.name() << "not found.";
+        }
+        LOGf << "constructor" << name << tid.name() << "not found." << constructors;
         return func_t(nullptr);
     }
 };

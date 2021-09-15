@@ -19,12 +19,11 @@ struct cublas_initer {
 inline cublas_initer() {
     if (!get_device_count()) return;
     checkCudaErrors(cublasCreate(&cublas_handle));
-    LOGv << "cublasCreate finished" << (void*)cublas_handle;
+    LOGv << "cublasCreate finished";
 }
 
 inline ~cublas_initer() {
     if (!get_device_count()) return;
-    LOGv << "cublasDestroy:" <<  (void*)cublas_handle;
     checkCudaErrors(cublasDestroy(cublas_handle));
     LOGv << "cublasDestroy finished";
 }

@@ -14,6 +14,7 @@
 #include "mem/allocator/sfrl_allocator.h"
 #include <iomanip>
 #include <algorithm>
+#include <sys/sysinfo.h>
 #include <sstream>
 #include "pybind/py_var_tracer.h"
 

@@ -14,7 +14,7 @@ string read_all(const string& fname);
 void write(const string& fname, const string& src);
 bool file_exist(const string& fname);
 string join(string a, string b);
-bool cache_compile(string cmd, const string& cache_path="", const string& jittor_path="");
+bool cache_compile(const string& cmd, const string& cache_path="", const string& jittor_path="");
 
 } // jit_compiler
 } // jittor

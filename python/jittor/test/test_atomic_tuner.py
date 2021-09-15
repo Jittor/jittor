@@ -42,7 +42,7 @@ class TestAtomicTunerClass(unittest.TestCase):
         x=jt.random([100,64,128,128])
         with jt.log_capture_scope(
             # log_silent=1,
-            log_v=0, log_vprefix="atomic=100,data=100",
+            log_v=0, log_vprefix="atomic_tuner_pass.cc=100",
         ) as logs:
             y=model(x).numpy()
         with jt.log_capture_scope(

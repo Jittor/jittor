@@ -667,7 +667,7 @@ def compile_src(src, h, basename):
                     arr_func_return.append(f"return ({func_call},0)")
                     func_return_failed = "return -1"
                 else:
-                    assert "-> void" in func_head, func_head
+                    assert "-> void" in func_head
                     arr_func_return.append(f"{func_call};{before_return}return")
                     func_return_failed = "return"
         # generate error msg when not a valid call
@@ -860,8 +860,8 @@ def compile_single(head_file_name, src_file_name, src=None):
     return True
 
 def compile(cache_path, jittor_path):
-    headers1 = run_cmd('find -L src | grep ".h$"', jittor_path).splitlines()
-    headers2 = run_cmd('find gen | grep ".h$"', cache_path).splitlines()
+    headers1 = run_cmd('find -L src/ | grep ".h$"', jittor_path).splitlines()
+    headers2 = run_cmd('find gen/ | grep ".h$"', cache_path).splitlines()
     headers = [ os.path.join(jittor_path, h) for h in headers1 ] + \
         [ os.path.join(cache_path, h) for h in headers2 ]
     basenames = []

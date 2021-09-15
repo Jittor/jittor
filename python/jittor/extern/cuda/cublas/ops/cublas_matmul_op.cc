@@ -20,8 +20,6 @@ namespace jittor {
 
 CublasMatmulOp::CublasMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
     : a(a), b(b), trans_a(trans_a), trans_b(trans_b) {
-    flags.set(NodeFlags::_cuda, 1);
-    flags.set(NodeFlags::_cpu, 0);
     // TODO: support int8 * int8
     ASSERT(a->dtype().is_float() && b->dtype().is_float()) << "type of two inputs should be the same";
     // TODO: support diffrent input type
@@ -53,6 +51,7 @@ void CublasMatmulOp::jit_prepare(JK& jk) {
 }
 
 #else // JIT
+#ifdef JIT_cpu
 #pragma clang diagnostic ignored "-Wtautological-compare"
 void CublasMatmulOp::jit_run() {
     cublasHandle_t& handle_ = cublas_handle;
@@ -79,6 +78,7 @@ void CublasMatmulOp::jit_run() {
     a->ptr<T>(), '@Trans_a' == 'N' ? m : n, &beta, 
     c->ptr<T>(), k));
 }
+#endif
 #endif // JIT
 
 } // jittor

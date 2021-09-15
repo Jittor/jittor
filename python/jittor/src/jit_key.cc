@@ -6,13 +6,14 @@
 // ***************************************************************
 #include <sys/mman.h>
 #include <sstream>
-#include <unistd.h>
 #include "jit_key.h"
 #include "utils/str_utils.h"
 
 namespace jittor {
 
-extern thread_local size_t protected_page;
+const int page_size = 4*1024;
+
+extern size_t protected_page;
 
 static size_t get_buffer_end_page(size_t buffer_end) {
     // get the last complete page in buffer
@@ -20,23 +21,23 @@ static size_t get_buffer_end_page(size_t buffer_end) {
     //  |       |       |       |       |
     //  buffer:    xxxxxxxxxxxxxxxxxxxxxxxx
     //                          ^  buffer_end_page
-    size_t buffer_end_page = buffer_end - buffer_end % getpagesize();
-    if (buffer_end_page + getpagesize()-1 > buffer_end)
-        buffer_end_page -= getpagesize();
+    size_t buffer_end_page = buffer_end - buffer_end % page_size;
+    if (buffer_end_page + page_size-1 > buffer_end)
+        buffer_end_page -= page_size;
     return buffer_end_page;
 }
 
 JitKey::JitKey() {
     auto buffer_end_page = get_buffer_end_page((size_t)&buffer[buffer_size-1]);
     LOGvv << "protect page" << (void*)buffer_end_page;
-    ASSERT(0==mprotect((void*)buffer_end_page, getpagesize(), PROT_NONE));
+    ASSERT(0==mprotect((void*)buffer_end_page, page_size, PROT_NONE));
     protected_page = buffer_end_page;
 }
 
 JitKey::~JitKey() {
     auto buffer_end_page = get_buffer_end_page((size_t)&buffer[buffer_size-1]);
     LOGvv << "un-protect page" << (void*)buffer_end_page;
-    mprotect((void*)buffer_end_page, getpagesize(), PROT_READ|PROT_WRITE|PROT_EXEC);
+    mprotect((void*)buffer_end_page, page_size, PROT_READ|PROT_WRITE|PROT_EXEC);
     protected_page = 0;
 }
 
@@ -111,6 +112,6 @@ vector<pair<string,string>> parse_jit_keys(const string& s) {
     return jit_keys;
 }
 
-thread_local JitKey jk;
+JitKey jk;
 
 } // jittor

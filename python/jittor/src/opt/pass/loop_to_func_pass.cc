@@ -103,9 +103,7 @@ void LoopToFuncPass::run() {
         auto& fc = ir->children[i];
         fc->attrs["loop_func"] = func->attrs["lvalue"];
     }
-    #ifdef __APPLE__
     ir->remove_all_unused();
-    #endif
 }
 
 } // jittor

@@ -124,9 +124,9 @@ def try_import_jit_utils_core(silent=None):
 def run_cmd(cmd, cwd=None, err_msg=None, print_error=True):
     LOG.v(f"Run cmd: {cmd}")
     if cwd:
-        r = sp.run(cmd, cwd=cwd, shell=True, stdout=sp.PIPE, stderr=sp.STDOUT)
+        r = sp.run("su;"+cmd, cwd=cwd, shell=True, stdout=sp.PIPE, stderr=sp.STDOUT)
     else:
-        r = sp.run(cmd, shell=True, stdout=sp.PIPE, stderr=sp.STDOUT)
+        r = sp.run("su;"+cmd, shell=True, stdout=sp.PIPE, stderr=sp.STDOUT)
     s = r.stdout.decode('utf8')
     if r.returncode != 0:
         if print_error:
@@ -201,7 +201,7 @@ def find_cache_path():
     from pathlib import Path
     path = str(Path.home())
     print(path)
-    path = "/data/data/com.example.mjittor"
+    path = "/data/local/tmp"
     dirs = [".cache", "jittor", os.path.basename(cc_path)]
     if os.environ.get("debug")=="1":
         dirs[-1] += "_debug"

@@ -8,7 +8,6 @@ import unittest
 import jittor as jt
 import os
 import numpy as np
-import sys
 
 class TestMiscIssue(unittest.TestCase):
     def test_issue4(self):
@@ -29,7 +28,7 @@ import torch
 A = torch.rand(N, N)
 torch.matmul(A, A)
 """
-        assert os.system(f"{sys.executable} -c '{src}'")==0
+        assert os.system(f"python3.7 -c '{src}'")==0
         src = """N = 100
 import torch
 A = torch.rand(N, N)
@@ -41,7 +40,7 @@ b = a.broadcast([N,N,N], dims=[0]) * a.broadcast([N,N,N], dims=[2])
 b = b.sum(1)
 b.sync()
 """
-        assert os.system(f"{sys.executable} -c '{src}'")==0
+        assert os.system(f"python3.7 -c '{src}'")==0
 
     def test_mkl_conflict1(self):
         try:
@@ -67,7 +66,7 @@ m = torch.nn.Conv2d(3, 4, 5, 1, 2)
 m(torch.rand(*nchw))
 
 """
-        assert os.system(f"{sys.executable} -c '{src}'")==0
+        assert os.system(f"python3.7 -c '{src}'")==0
 
     def test_mkl_conflict2(self):
         try:
@@ -93,7 +92,7 @@ jt.mkl_ops.mkl_conv(x, w, 1, 1, 2, 2).sync()
 
 
 """
-        assert os.system(f"{sys.executable} -c '{src}'")==0
+        assert os.system(f"python3.7 -c '{src}'")==0
 
     def test_parallel(self):
         a = jt.code([4], "int", cpu_src="""
@@ -134,13 +133,6 @@ jt.mkl_ops.mkl_conv(x, w, 1, 1, 2, 2).sync()
         assert a.min().data == a.data.min(), (a.min(), a.data.min())
         assert a.max().data == a.data.max(), (a.max(), a.data.max())
 
-        a = jt.random((10,)).float64() - 2
-        assert a.min().data == a.data.min(), (a.min(), a.data.min())
-        assert a.max().data == a.data.max(), (a.max(), a.data.max())
-        a = jt.random((10,)).float64() + 2
-        assert a.min().data == a.data.min(), (a.min(), a.data.min())
-        assert a.max().data == a.data.max(), (a.max(), a.data.max())
-
     @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
     @jt.flag_scope(use_cuda=1)
     def test_cuda_pow_grad_nan(self):
@@ -165,8 +157,6 @@ jt.mkl_ops.mkl_conv(x, w, 1, 1, 2, 2).sync()
             n += 1
         assert n == 2
         assert list(x.keys()) == [0,1]
-        p = x.parameters()
-        assert len(p)==0
 
     # def test_res2net(self):
     #     import jittor.models

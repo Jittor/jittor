@@ -12,6 +12,7 @@ import os
 import numpy as np
 import jittor.nn as jnn
 
+from jittor.test.test_log import find_log_with_re
 skip_this_test = False
 
 try:
@@ -64,37 +65,6 @@ class TestLoss(unittest.TestCase):
         jt_y=jt_loss(jt.array(output), jt.array(target))
         tc_y=tc_loss(torch.from_numpy(output), torch.from_numpy(target))
         assert np.allclose(jt_y.numpy(), tc_y.numpy())
-
-    def test_cross_entropy_ignore_index(self):
-        ignore_index = np.random.randint(0, 10)
-        jt_loss = jnn.CrossEntropyLoss(ignore_index=ignore_index)
-        tc_loss = tnn.CrossEntropyLoss(ignore_index=ignore_index)
-        output = np.random.rand(100, 10).astype(np.float32)
-        target = np.random.randint(10, size=(100))
-        jt_y=jt_loss(jt.array(output), jt.array(target))
-        tc_y=tc_loss(torch.from_numpy(output), torch.from_numpy(target))
-        assert np.allclose(jt_y.numpy(), tc_y.numpy())
-
-    def test_cross_entropy_weight(self):
-        weight = np.random.rand(10).astype('float32')
-        jt_loss = jnn.CrossEntropyLoss(weight=jt.array(weight))
-        tc_loss = tnn.CrossEntropyLoss(weight=torch.from_numpy(weight))
-        output = np.random.rand(100, 10).astype(np.float32)
-        target = np.random.randint(10, size=(100))
-        jt_y=jt_loss(jt.array(output), jt.array(target))
-        tc_y=tc_loss(torch.from_numpy(output), torch.from_numpy(target))
-        assert np.allclose(jt_y.numpy(), tc_y.numpy())
-
-    def test_cross_entropy_weight_ignore(self):
-        weight = np.random.rand(4).astype('float32')
-        jt_loss = jnn.CrossEntropyLoss(weight=jt.array(weight), ignore_index=1)
-        tc_loss = tnn.CrossEntropyLoss(weight=torch.from_numpy(weight), ignore_index=1)
-        output = np.random.rand(32, 4, 512, 512).astype(np.float32)
-        target = np.random.randint(4, size=(32, 512, 512))
-        jt_y=jt_loss(jt.array(output), jt.array(target))
-        tc_y=tc_loss(torch.from_numpy(output), torch.from_numpy(target))
-        assert np.allclose(jt_y.numpy(), tc_y.numpy())
-
 
     def test_bce_loss(self):
         jt_loss=jnn.BCELoss()

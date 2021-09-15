@@ -13,7 +13,7 @@
 
 namespace jittor {
 
-DEFINE_FLAG(int, para_opt_level, 3, "para_opt_level");
+DECLARE_FLAG(int, para_opt_level);
 
 void LoopVarAnalyzePass::run() {
     // loop_vars: opi_xx->shape[j]

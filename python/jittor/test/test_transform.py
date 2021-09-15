@@ -416,7 +416,7 @@ class Tester(unittest.TestCase):
 
             split = img.split()
             for i in range(4):
-                self.assertTrue(np.allclose(expected_output[:,:,i], transform.to_tensor(split[i])[0]))
+                np.testing.assert_allclose(expected_output[:,:,i], transform.to_tensor(split[i])[0])
 
         img_data = jt.random((4, 4, 4))
         expected_output = img_data.multiply(255).int().float().divide(255)
@@ -953,22 +953,6 @@ class Tester(unittest.TestCase):
             transform.RandomAffine(20),
             transform.ToTensor(),
         ])(img)
-
-    def test_not_pil_image(self):
-        img = jt.random((30,40,3))
-        result = transform.Compose([
-            transform.RandomAffine(20),
-            transform.ToTensor(),
-        ])(img)
-
-        img = jt.random((30,40,3))
-        result = transform.Compose([
-            transform.ToPILImage(),
-            transform.Gray(),
-            transform.Resize(20),
-            transform.ToTensor(),
-        ])(img)
-
 
 
 

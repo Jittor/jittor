@@ -78,7 +78,7 @@ struct __jk_int256 {
     int64 a,b,c,d;
 };
 
-extern thread_local JitKey jk;
+extern JitKey jk;
 typedef JitKey JK;
 
 inline JK& operator<<(JK& jk, const char* s) {
@@ -166,11 +166,9 @@ inline JK& operator<<(JK& jk, int64 c) {
     return jk << JK::hex(c);
 }
 
-#ifdef __linux__
 inline JK& operator<<(JK& jk, long long int c) {
     return jk << (int64)c;
 }
-#endif
 
 inline JK& operator<<(JK& jk, uint64 c) {
     return jk << JK::hex(c);

@@ -37,7 +37,6 @@ class Optimizer(object):
         # __zero_grad is a value for fast determ the grad is zero or not
         # so we can omit 0+x
         self.__zero_grad = True
-        self._grad_map = {}
 
     def add_param_group(self, group):
         self.param_groups.append(group)
@@ -78,7 +77,7 @@ class Optimizer(object):
         for pg in self.param_groups:
             for p, g in zip(pg["params"], pg["grads"]):
                 if p.is_stop_grad(): continue
-                g.update(g*clip_coef)
+                g *= clip_coef
 
     
     @property
@@ -86,14 +85,6 @@ class Optimizer(object):
         exclude = set(("defaults", "param_groups", "n_step", "pre_step", "step"))
         return { k:v for k, v in self.__dict__.items()
             if k[0] != '_' and k not in exclude and not callable(v) }
-
-    def state_dict(self):
-        state = {"defaults": self.defaults}
-        return state
-
-    def load_state_dict(self, state):
-        for k,v in state["defaults"].items():
-            setattr(self, k, v)
 
     def zero_grad(self):
         self.__zero_grad = True
@@ -190,35 +181,6 @@ class Optimizer(object):
                 p.update(p - g * lr)
         self.zero_grad()
 
-    def _build_grad_map(self):
-        _grad_map = {}
-        for pg in self.param_groups:
-            for p, g in zip(pg["params"], pg["grads"]):
-                _grad_map[id(p)] = g
-        self._grad_map = _grad_map
-
-    def find_grad(self, v:jt.Var) -> jt.Var:
-        if id(v) not in self._grad_map:
-            self._build_grad_map()
-            if id(v) not in self._grad_map:
-                raise RuntimeError("This variable is not managed by this optimizer")
-        return self._grad_map[id(v)]
-
-def opt_grad(v:jt.Var, opt:Optimizer):
-    ''' Get grad of certain variable in optimizer, Example::
-
-
-    model = Model()
-    optimizer = SGD(model.parameters())
-    ...
-    optimizer.backward(loss)
-    
-    for p in model.parameters():
-        grad = p.opt_grad(optimizer)
-    '''
-    return opt.find_grad(v)
-
-jt.Var.opt_grad = opt_grad
 
 class SGD(Optimizer):
     """ SGD Optimizer.
@@ -360,60 +322,6 @@ class Adam(Optimizer):
                 v.update(b1 * v + (1-b1) * g * g)
                 step_size = lr * jt.sqrt(1-b1**n) / (1-b0 ** n)
                 p.update(p - m * step_size / (jt.sqrt(v) + eps))
-        self.zero_grad()
-
-
-class AdamW(Optimizer):
-    """ AdamW Optimizer.
-    
-    Example::
-
-        optimizer = nn.AdamW(model.parameters(), lr, eps=1e-8, betas=(0.9, 0.999))
-        optimizer.step(loss)
-    """
-    def __init__(self, params, lr, eps=1e-8, betas=(0.9, 0.999), weight_decay=0):
-        super().__init__(params, lr)
-        self.eps = eps
-        self.betas = betas
-        self.weight_decay = weight_decay
-        # assert weight_decay==0, "weight_decay is not supported yet"
-        
-        # initialize required arguments for each param_groups
-        for pg in self.param_groups:
-            values = pg["values"] = []
-            m = pg["m"] = []
-            for p in pg["params"]:
-                values.append(jt.zeros(p.shape, p.dtype).stop_grad())
-                m.append(jt.zeros(p.shape, p.dtype).stop_grad())
-
-    def add_param_group(self, group):
-        values = group["values"] = []
-        m = group["m"] = []
-        for p in group["params"]:
-            values.append(jt.zeros(p.shape, p.dtype).stop_grad())
-            m.append(jt.zeros(p.shape, p.dtype).stop_grad())
-        self.param_groups.append(group)
-
-    def step(self, loss=None):
-        if loss is not None:
-            self.pre_step(loss)
-        n = float(self.n_step)
-        for pg in self.param_groups:
-            # get arguments from each param_groups
-            lr = pg.get("lr", self.lr)
-            eps = pg.get("eps", self.eps)
-            weight_decay = pg.get("weight_decay", self.weight_decay)
-            b0, b1 = pg.get("betas", self.betas)
-            for p, g, v, m in zip(pg["params"], pg["grads"], pg["values"], pg["m"]):
-                if p.is_stop_grad(): continue
-                p.update(p * (1 - lr * weight_decay))
-                bias_correction1 = 1 - b0 ** n
-                bias_correction2 = 1 - b1 ** n
-                m.update(b0 * m + (1-b0) * g) #exp_avg
-                v.update(b1 * v + (1-b1) * g * g) #exp_avg_sq
-                denom = jt.sqrt(v) / jt.sqrt(bias_correction2) + eps
-                step_size = lr / bias_correction1
-                p.update(p - step_size * m / denom)
         self.zero_grad()
 
 

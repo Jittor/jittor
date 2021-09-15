@@ -264,23 +264,6 @@ struct VarHolder {
      */
     // @pyjt(debug_msg)
     string debug_msg();
-
-    /* Jittor Var doesn't have this interface, please change your code as below::
-
-    model = Model()
-    optimizer = SGD(model.parameters())
-    ...
-    optimizer.backward(loss)
-    
-    for p in model.parameters():
-        # prev code:
-        # grad = p.grad
-
-        # change to:
-        grad = p.opt_grad(optimizer)
-     */
-    // @pyjt(__get__grad)
-    int grad();
 };
 
 // @pyjt(sync)

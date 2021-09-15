@@ -27,7 +27,8 @@ def collate_batch(batch):
     elem = batch[0]
     elem_type = type(elem)
     if isinstance(elem, jt.Var):
-        temp_data = jt.stack([data for data in batch], 0)
+        # TODO: use jittor
+        temp_data = np.stack([data.data for data in batch], 0)
         return temp_data
     if elem_type is np.ndarray:
         temp_data = np.stack([data for data in batch], 0)

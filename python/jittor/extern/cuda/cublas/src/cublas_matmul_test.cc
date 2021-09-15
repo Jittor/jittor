@@ -58,7 +58,6 @@
 
 // CUDA and CUBLAS functions
 #include <helper_functions.h>
-#include "utils/log.h"
 #include "helper_cuda.h"
 
 #ifndef min

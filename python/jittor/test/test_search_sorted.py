@@ -18,9 +18,12 @@ try:
     jt.dirty_fix_pytorch_runtime_error()
     import torch
     import torch.nn as tnn
+    import torchvision
+    from torch.autograd import Variable
 except:
     torch = None
     tnn = None
+    torchvision = None
     skip_this_test = True
 
 # TODO: more test

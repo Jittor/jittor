@@ -207,23 +207,4 @@ string VarHolder::debug_msg() {
     return ss.str();
 }
 
-int VarHolder::grad() {
-    LOGf << R""(Jittor Var doesn't have this interface, please change
-your code as below::
-
-    model = Model()
-    optimizer = SGD(model.parameters())
-    ...
-    optimizer.backward(loss)
-    
-    for p in model.parameters():
-        # prev code:
-        # grad = p.grad
-
-        # change to:
-        grad = p.opt_grad(optimizer)
-)"";
-    return 0;
-}
-
 } // jittor

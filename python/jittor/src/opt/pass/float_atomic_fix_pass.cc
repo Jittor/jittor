@@ -22,7 +22,7 @@ void FloatAtomicFixPass::run() {
     if (!choice) return;
 
     unordered_map<string,int> fixed;
-    auto fix_float_atomic = [&](string name, Var* v) {
+    auto fix_float_atomic = [&](string name) {
         if (fixed.count(name)) return;
         fixed[name] = 1;
         string namep = name+"p";
@@ -38,15 +38,9 @@ void FloatAtomicFixPass::run() {
                 return;
             // fix code a[b] = c -->
             // a[b] = __int_as_float(floatToOrderedInt(c))
-            string new_code;
-            if (v->dtype() == ns_float32)
-                new_code = namep+'['+results.at(0)->to_string(true)+
-                    "] = __int_as_float(floatToOrderedInt(" +
-                    results.at(1)->to_string(true) + "));";
-            else
-                new_code = namep+'['+results.at(0)->to_string(true)+
-                    "] = __longlong_as_double(floatToOrderedInt(" +
-                    results.at(1)->to_string(true) + "));";
+            string new_code = namep+'['+results.at(0)->to_string(true)+
+                "] = __int_as_float(floatToOrderedInt(" +
+                results.at(1)->to_string(true) + "));";
             LOGvvvv << "prev code" << code >> "\nreplace:" << new_code;
             code = new_code;
         });
@@ -80,7 +74,7 @@ void FloatAtomicFixPass::run() {
         }
         if (!var->dtype().is_float()) return;
         LOGvvvv << "find var" << var << "op" << op;
-        fix_float_atomic(s, var);
+        fix_float_atomic(s);
     });
 }
 

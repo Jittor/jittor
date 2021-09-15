@@ -152,9 +152,7 @@ class Crop:
         self.left = left
         self.height = height
         self.width = width
-    def __call__(self, img:Image.Image):
-        if not isinstance(img, Image.Image):
-            img = to_pil_image(img)
+    def __call__(self, img):
         return crop(img, self.top, self.left, self.height, self.width)
 
 
@@ -183,8 +181,6 @@ class RandomCropAndResize:
         self.interpolation = interpolation
 
     def __call__(self, img:Image.Image):
-        if not isinstance(img, Image.Image):
-            img = to_pil_image(img)
         width, height = img.size
         scale = self.scale
         ratio = self.ratio
@@ -367,8 +363,6 @@ class RandomHorizontalFlip:
         self.p = p
         
     def __call__(self, img:Image.Image):
-        if not isinstance(img, Image.Image):
-            img = to_pil_image(img)
         if random.random() < self.p:
             return img.transpose(Image.FLIP_LEFT_RIGHT)
         return img
@@ -390,8 +384,6 @@ class CenterCrop:
         self.size = _setup_size(size, error_msg="If size is a sequence, it should have 2 values")
     
     def __call__(self, img:Image.Image):
-        if not isinstance(img, Image.Image):
-            img = to_pil_image(img)
         width, height = img.size
         return crop(img, (height - self.size[0]) / 2, (width - self.size[1]) / 2, self.size[0], self.size[1])
 
@@ -690,8 +682,6 @@ class Resize:
         self.size = _setup_size(size, error_msg="If size is a sequence, it should have 2 values")
         self.mode = mode
     def __call__(self, img:Image.Image):
-        if not isinstance(img, Image.Image):
-            img = to_pil_image(img)
         return resize(img, self.size, self.mode)
 
 class Gray:
@@ -707,8 +697,6 @@ class Gray:
         self.num_output_channels = num_output_channels
 
     def __call__(self, img:Image.Image):
-        if not isinstance(img, Image.Image):
-            img = to_pil_image(img)
         img = np.float32(img.convert('L')) / np.float32(255.0)
         if self.num_output_channels == 1:
             return img[np.newaxis, :]
@@ -732,9 +720,7 @@ class RandomGray:
     def __init__(self, p=0.1):
         self.p = p
 
-    def __call__(self, img:Image.Image):
-        if not isinstance(img, Image.Image):
-            img = to_pil_image(img)
+    def __call__(self, img: Image.Image):
         num_output_channels = _get_image_num_channels(img)
         if random.random() < self.p:
             return gray(img, num_output_channels=num_output_channels)
@@ -756,8 +742,6 @@ class RandomCrop:
     def __init__(self, size):
         self.size = _setup_size(size, error_msg="If size is a sequence, it should have 2 values")
     def __call__(self, img:Image.Image):
-        if not isinstance(img, Image.Image):
-            img = to_pil_image(img)
         width, height = img.size
         assert self.size[0] <= height and self.size[1] <= width, f"crop size exceeds the input image in RandomCrop, {(self.size, height, width)}"
         top = np.random.randint(0,height-self.size[0]+1)
@@ -851,9 +835,7 @@ class RandomVerticalFlip:
     def __init__(self, p=0.5):
         self.p = p
 
-    def __call__(self, img:Image.Image):
-        if not isinstance(img, Image.Image):
-            img = to_pil_image(img)
+    def __call__(self, img: Image.Image):
         if random.random() < self.p:
             return vflip(img)
         return img
@@ -936,15 +918,13 @@ class ColorJitter:
 
         return transform
 
-    def __call__(self, img:Image.Image):
+    def __call__(self, img):
         """
         Args::
             [in] img (PIL Image): Input image.
         Returns::
             [out] PIL Image: Color jittered image.
         """
-        if not isinstance(img, Image.Image):
-            img = to_pil_image(img)
         transform = self._get_transform(self.brightness, self.contrast, self.saturation, self.hue)
 
         return transform(img)
@@ -976,14 +956,6 @@ class ToTensor:
         return self.__class__.__name__ + '()'
 
 class ToPILImage(object):
-    """Convert a tensor or an ndarray to PIL Image.
-    Args:
-        pic (Tensor or numpy.ndarray): Image(HWC format) to be converted to PIL Image.
-        mode (`PIL.Image mode`_): color space and pixel depth of input data (optional).
-    .. _PIL.Image mode: https://pillow.readthedocs.io/en/latest/handbook/concepts.html#concept-modes
-    Returns:
-        PIL Image: Image converted to PIL Image.
-    """
     def __init__(self, mode=None):
         self.mode = mode
 
@@ -1022,7 +994,7 @@ class RandomPerspective(object):
         self.interpolation = interpolation
         self.distortion_scale = distortion_scale
 
-    def __call__(self, img:Image.Image):
+    def __call__(self, img):
         """
         Args:
             img (PIL Image): Image to be Perspectively transformed.
@@ -1031,7 +1003,7 @@ class RandomPerspective(object):
             PIL Image: Random perspectivley transformed image.
         """
         if not isinstance(img, Image.Image):
-            img = to_pil_image(img)
+            raise TypeError('img should be PIL Image. Got {}'.format(type(img)))
 
         if random.random() < self.p:
             width, height = img.size
@@ -1139,7 +1111,7 @@ class RandomResizedCrop(object):
         j = (width - w) // 2
         return i, j, h, w
 
-    def __call__(self, img:Image.Image):
+    def __call__(self, img):
         """
         Args:
             img (PIL Image): Image to be cropped and resized.
@@ -1147,8 +1119,6 @@ class RandomResizedCrop(object):
         Returns:
             PIL Image: Randomly cropped and resized image.
         """
-        if not isinstance(img, Image.Image):
-            img = to_pil_image(img)
         i, j, h, w = self.get_params(img, self.scale, self.ratio)
         return F_pil.resized_crop(img, i, j, h, w, self.size, self.interpolation)
 
@@ -1196,9 +1166,7 @@ class FiveCrop(object):
             assert len(size) == 2, "Please provide only two dimensions (h, w) for size."
             self.size = size
 
-    def __call__(self, img:Image.Image):
-        if not isinstance(img, Image.Image):
-            img = to_pil_image(img)
+    def __call__(self, img):
         return F_pil.five_crop(img, self.size)
 
     def __repr__(self):
@@ -1241,9 +1209,7 @@ class TenCrop(object):
             self.size = size
         self.vertical_flip = vertical_flip
 
-    def __call__(self, img:Image.Image):
-        if not isinstance(img, Image.Image):
-            img = to_pil_image(img)
+    def __call__(self, img):
         return F_pil.ten_crop(img, self.size, self.vertical_flip)
 
     def __repr__(self):
@@ -1301,7 +1267,7 @@ class RandomRotation(object):
 
         return angle
 
-    def __call__(self, img:Image.Image):
+    def __call__(self, img):
         """
         Args:
             img (PIL Image): Image to be rotated.
@@ -1309,8 +1275,7 @@ class RandomRotation(object):
         Returns:
             PIL Image: Rotated image.
         """
-        if not isinstance(img, Image.Image):
-            img = to_pil_image(img)
+
         angle = self.get_params(self.degrees)
 
         return F_pil.rotate(img, angle, self.resample, self.expand, self.center, self.fill)
@@ -1432,15 +1397,13 @@ class RandomAffine(object):
 
         return angle, translations, scale, shear
 
-    def __call__(self, img:Image.Image):
+    def __call__(self, img):
         """
             img (PIL Image): Image to be transformed.
 
         Returns:
             PIL Image: Affine transformed image.
         """
-        if not isinstance(img, Image.Image):
-            img = to_pil_image(img)
         ret = self.get_params(self.degrees, self.translate, self.scale, self.shear, img.size)
         return F_pil.affine(img, *ret, resample=self.resample, fillcolor=self.fillcolor)
 

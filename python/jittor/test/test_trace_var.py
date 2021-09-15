@@ -11,7 +11,6 @@ from jittor import Module
 from jittor.models import resnet
 import pickle
 from PIL import Image
-import platform
 
 f32 = jt.float32
 
@@ -148,6 +147,7 @@ class TestTraceVar(unittest.TestCase):
                 for i in v['fused_ops']:
                     if i not in data["node_data"]:
                         assert 0, (i, "not found")
+
 
     def test_resnet_trainx(self):
         with jt.flag_scope(trace_py_var=2):

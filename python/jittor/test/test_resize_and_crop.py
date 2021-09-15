@@ -50,9 +50,9 @@ def resize_and_crop(x, bbox, interpolation="nearest", out_size=[224,224]):
     x = bb[0]*(H-1.0)+hid*((H-1)*1.0/(shape[1]-1))*(bb[2]-bb[0])
     y = bb[1]*(W-1.0)+wid*((W-1)*1.0/(shape[2]-1))*(bb[3]-bb[1])
     if interpolation=="nearest":
-        return img.reindex([x.round_int(), y.round_int(), cid])
+        return img.reindex([x.round(), y.round(), cid])
     if interpolation=="bilinear":
-        fx, fy = x.floor_int(), y.floor_int()
+        fx, fy = x.floor(), y.floor()
         cx, cy = fx+one, fy+one
         dx, dy = x-fx, y-fy
         a = img.reindex_var([fx, fy, cid])
@@ -125,12 +125,6 @@ class TestResizeAndCrop(unittest.TestCase):
         check_equal(arr, jnn.PixelShuffle(upscale_factor=2), tnn.PixelShuffle(upscale_factor=2))
         arr = np.random.randn(1,3*3,224,224)
         check_equal(arr, jnn.PixelShuffle(upscale_factor=3), tnn.PixelShuffle(upscale_factor=3))
-
-    def test_resize(self):
-        arr = np.random.randn(1,1,2,2)
-        check_equal(arr, jnn.Resize((4,4)), tnn.Upsample(scale_factor=2))
-        # check_equal(arr, jnn.Upsample(scale_factor=0.5), tnn.Upsample(scale_factor=0.5))
-        
 
 if __name__ == "__main__":
     unittest.main()

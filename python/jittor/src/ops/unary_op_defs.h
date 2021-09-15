@@ -21,9 +21,6 @@ namespace jittor {
 #define round(T,x) ((T) ::roundf((x)))
 #define floor(T,x) ((T) ::floorf((x)))
 #define ceil(T,x) ((T) ::ceilf((x)))
-#define round_int(T,x) ((T) ::roundf((x)))
-#define floor_int(T,x) ((T) ::floorf((x)))
-#define ceil_int(T,x) ((T) ::ceilf((x)))
 
 #define sin(T,x) ((T) ::sinf((x)))
 #define asin(T,x) ((T) ::asinf((x)))
@@ -52,9 +49,6 @@ namespace jittor {
 #define round(T,x) ((T)std::round((x)))
 #define floor(T,x) ((T)std::floor((x)))
 #define ceil(T,x) ((T)std::ceil((x)))
-#define round_int(T,x) ((T)std::round((x)))
-#define floor_int(T,x) ((T)std::floor((x)))
-#define ceil_int(T,x) ((T)std::ceil((x)))
 
 #define sin(T,x) ((T) std::sin((x)))
 #define asin(T,x) ((T) std::asin((x)))

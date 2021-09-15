@@ -88,7 +88,7 @@ void print_prefix(std::ostream* out) {
     
     auto usecs = tv.tv_usec;
     
-    thread_local uint32_t tid = get_tid()%100;
+    uint32_t tid = get_tid()%100;
     
     #define PRINT_W2(x) \
         char('0'+(x)/10%10) << char('0'+(x)%10)
@@ -183,59 +183,19 @@ std::vector<std::map<string,string>> log_capture_read() {
 void log_exiting();
 
 bool exited = false;
-size_t thread_local protected_page = 0;
+size_t protected_page = 0;
 int segfault_happen = 0;
-string thread_local thread_name;
+string thread_name;
 static int _pid = getpid();
 
-static inline void do_exit() {
-    #ifdef __APPLE__
-    _Exit(1);
-    #else
-    std::quick_exit(1);
-    #endif
-}
-
-vector<void(*)()> sigquit_callback;
-int64 last_q_time;
-
 void segfault_sigaction(int signal, siginfo_t *si, void *arg) {
-    if (signal == SIGQUIT) {
-        if (_pid == getpid()) {
-            std::cerr << "Caught SIGQUIT" << std::endl;
-            int64 now = clock();
-            if (now > last_q_time && last_q_time+CLOCKS_PER_SEC/10 > now) {
-                last_q_time = now;
-                std::cerr << "GDB attach..." << std::endl;
-                breakpoint();
-            } else {
-                last_q_time = now;
-                for (auto f : sigquit_callback)
-                    f();
-            }
-        }
-        return;
-    }
-    if (signal == SIGCHLD) {
-        if (si->si_code != CLD_EXITED && si->si_status != SIGTERM && _pid == getpid()) {
-            LOGe << "Caught SIGCHLD" 
-                << "si_errno:" << si->si_errno 
-                << "si_code:" << si->si_code 
-                << "si_status:" << si->si_status
-                << ", quick exit";
-            exited = true;
-            do_exit();
-        }
-        return;
-    }
     if (signal == SIGINT) {
         if (_pid == getpid()) {
             LOGe << "Caught SIGINT, quick exit";
         }
         exited = true;
-        do_exit();
+        std::quick_exit(1);
     }
-    if (exited) do_exit();
     std::cerr << "Caught segfault at address " << si->si_addr << ", "
         << "thread_name: '" << thread_name << "', flush log..." << std::endl;
     std::cerr.flush();
@@ -273,7 +233,6 @@ int register_sigaction() {
     sigaction(SIGSTOP, &sa, NULL);
     sigaction(SIGFPE, &sa, NULL);
     sigaction(SIGINT, &sa, NULL);
-    sigaction(SIGCHLD, &sa, NULL);
     sigaction(SIGILL, &sa, NULL);
     sigaction(SIGBUS, &sa, NULL);
     sigaction(SIGQUIT, &sa, NULL);
@@ -425,11 +384,10 @@ void system_with_check(const char* cmd) {
 }
 
 std::thread log_thread(log_main);
-int log_exit = 0;
 
 void log_exiting() {
-    if (log_exit) return;
-    log_exit = true;
+    if (exited) return;
+    exited = true;
     mwsr_list_log::stop();
     log_thread.join();
 }

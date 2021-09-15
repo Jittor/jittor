@@ -62,9 +62,6 @@ constexpr int ns_max_len = 16;
     m(round) \
     m(floor) \
     m(ceil) \
-    m(round_int) \
-    m(floor_int) \
-    m(ceil_int) \
     m(cast) \
     \
     m(sin) \

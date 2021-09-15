@@ -10,11 +10,11 @@
 namespace jittor {
 
 __device__ inline static int floatToOrderedInt(float floatVal) {
-    int intVal = __float_as_int( floatVal );
-    return (intVal >= 0 ) ? intVal : intVal ^ 0x7FFFFFFF;
+ int intVal = __float_as_int( floatVal );
+ return (intVal >= 0 ) ? intVal : intVal ^ 0x7FFFFFFF;
 }
 __device__ inline static float orderedIntToFloat(int intVal) {
-    return __int_as_float((intVal >= 0) ? intVal : intVal ^ 0x7FFFFFFF);
+ return __int_as_float((intVal >= 0) ? intVal : intVal ^ 0x7FFFFFFF);
 }
 
 __global__ inline static void fix_float_kernel(float* x, int num) {
@@ -24,24 +24,7 @@ __global__ inline static void fix_float_kernel(float* x, int num) {
         x[i] = orderedIntToFloat(__float_as_int(x[i]));
 }
 
-
-__device__ inline static long long floatToOrderedInt(double floatVal) {
-    long long intVal = __double_as_longlong( floatVal );
-    return (intVal >= 0 ) ? intVal : intVal ^ 0x7FFFFFFFFFFFFFFF;
-}
-__device__ inline static double orderedIntToFloat(long long intVal) {
- return __longlong_as_double((intVal >= 0) ? intVal : intVal ^ 0x7FFFFFFFFFFFFFFF);
-}
-
-__global__ inline static void fix_float_kernel(double* x, int num) {
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
-    int tnum = gridDim.x * blockDim.x;
-    for (int i=tid; i<num; i+=tnum)
-        x[i] = orderedIntToFloat(__double_as_longlong(x[i]));
-}
-
-template<class T>
-inline static void fix_float(T* x, int num) {
+inline static void fix_float(float* x, int num) {
     fix_float_kernel<<<std::min((num-1)/1024+1,256), 1024>>>(x, num);
 }
 
@@ -55,11 +38,6 @@ inline float cuda_atomic_max(float* a, float b) {
     return orderedIntToFloat(atomicMax((int *)a, floatToOrderedInt(b)));
 }
 
-template<> __device__
-inline double cuda_atomic_max(double* a, double b) {
-    return orderedIntToFloat(atomicMax((long long *)a, floatToOrderedInt(b)));
-}
-
 template<class T> __device__
 T cuda_atomic_min(T* a, T b) {
     return atomicMin(a, b);
@@ -68,11 +46,6 @@ T cuda_atomic_min(T* a, T b) {
 template<> __device__
 inline float cuda_atomic_min(float* a, float b) {
     return orderedIntToFloat(atomicMin((int *)a, floatToOrderedInt(b)));
-}
-
-template<> __device__
-inline double cuda_atomic_min(double* a, double b) {
-    return orderedIntToFloat(atomicMin((long long *)a, floatToOrderedInt(b)));
 }
 
 template <class T> struct int_mapper {

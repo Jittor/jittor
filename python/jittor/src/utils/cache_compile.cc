@@ -179,7 +179,7 @@ void process(string src, vector<string>& input_names, string& cmd) {
     }
 }
 
-bool cache_compile(string cmd, const string& cache_path, const string& jittor_path) {
+bool cache_compile(const string& cmd, const string& cache_path, const string& jittor_path) {
     vector<string> input_names;
     map<string,vector<string>> extra;
     string output_name;
@@ -187,7 +187,9 @@ bool cache_compile(string cmd, const string& cache_path, const string& jittor_pa
     string output_cache_key;
     bool ran = false;
     output_cache_key = read_all(output_name+".key");
-    string cache_key;
+    string cd_cmd = cache_path.size() ? "cd " + cache_path + " && " + cmd : cmd;
+    string cache_key = cmd;
+    cache_key += "\n";
     unordered_set<string> processed;
     auto src_path = join(jittor_path, "src");
     const auto& extra_include = extra["I"];
@@ -201,7 +203,7 @@ bool cache_compile(string cmd, const string& cache_path, const string& jittor_pa
         ASSERT(src.size()) << "Source read failed:" << input_names[i];
         auto hash = S(hash64(src));
         vector<string> new_names;
-        process(src, new_names, cmd);
+        process(src, new_names, cd_cmd);
         for (auto& name : new_names) {
             string full_name;
             if (name.substr(0, 4) == "jit/" || name.substr(0, 4) == "gen/")
@@ -231,8 +233,6 @@ bool cache_compile(string cmd, const string& cache_path, const string& jittor_pa
         cache_key += hash;
         cache_key += "\n";
     }
-    string cd_cmd = cache_path.size() ? "cd " + cache_path + " && " + cmd : cmd;
-    cache_key = cmd + "\n" + cache_key;
     if (output_cache_key.size() == 0) {
         LOGvv << "Cache key of" << output_name << "not found.";
         LOGvvv << "Run cmd:" << cd_cmd;

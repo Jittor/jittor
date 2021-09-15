@@ -22,7 +22,7 @@
 
 namespace jittor {
 
-DEFINE_FLAG(int, use_parallel_op_compiler, 16, "Number of threads that parallel op comiler used, default 16, set this value to 0 will disable parallel op compiler.");
+DEFINE_FLAG(int, use_parallel_op_compiler, 1, "Number of threads that parallel op comiler used, default 16, set this value to 0 will disable parallel op compiler.");
 
 // from log.cc
 extern int segfault_happen;

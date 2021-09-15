@@ -18,13 +18,11 @@ import unittest
 from .test_reorder_tuner import simple_parser
 from .test_log import find_log_with_re
 
-skip_this_test = False
 try:
     jt.dirty_fix_pytorch_runtime_error()
     import torch
 except:
     skip_this_test = True
-
 
 class TestRandomOp(unittest.TestCase):
     @unittest.skipIf(not jt.has_cuda, "Cuda not found")
@@ -53,7 +51,6 @@ class TestRandomOp(unittest.TestCase):
         logs = find_log_with_re(raw_log, "(Jit op key (not )?found: " + "curand_random" + ".*)")
         assert len(logs)==1
 
-    @unittest.skipIf(skip_this_test, "No Torch Found")
     def test_normal(self):
         from jittor import init
         n = 10000

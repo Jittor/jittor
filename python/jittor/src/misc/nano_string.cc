@@ -4,7 +4,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#include <cstring>
+// #include <bits/stdc++.h>
 #include "misc/nano_string.h"
 
 namespace jittor {
@@ -22,7 +22,7 @@ namespace jittor {
     m(float32) \
     m(float64)
 
-#define map_size(T) {#T, ffs(sizeof(T))-1},
+#define map_size(T) {#T, __builtin_ffs(sizeof(T))-1},
 unordered_map<string, size_t> dsize_map = {FOR_ALL_TYPES(map_size)};
 
 // TODO: make all static
@@ -58,9 +58,6 @@ static unordered_set<string> unary_ops = {
     "round",
     "floor",
     "ceil",
-    "round_int",
-    "floor_int",
-    "ceil_int",
     "cast",
     "sin",
     "asin",
@@ -84,9 +81,9 @@ static unordered_set<string> unary_float_ops = {
     "sqrt",
 };
 static unordered_set<string> unary_int_ops = {
-    "round_int",
-    "floor_int",
-    "ceil_int",
+    "round",
+    "floor",
+    "ceil",
 };
 
 static unordered_set<string> binary_ops = {

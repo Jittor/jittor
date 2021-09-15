@@ -34,7 +34,6 @@ namespace jittor {
 Executor exe;
 extern MemoryProfiler memory_profiler;
 DECLARE_FLAG(int, profile_memory_enable);
-DEFINE_FLAG(int, gopt_disable, 0, "Disable graph optimizer.");
 
 // from fetch_op.cc
 extern list<VarPtr> fetcher_to_free;
@@ -146,7 +145,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
                 }
             }
         }
-        if (!need_opt || gopt_disable) break;
+        if (!need_opt) break;
         for (Node* n : bfs_q) {
             if (n->flags.get(NodeFlags::_has_gopt)) {
                 n->op()->graph_optimize();
@@ -491,9 +490,6 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         #ifdef JT_CHECK_NAN
         for (Var* var : op->outputs())
             check_nan(var);
-        #endif
-        #ifdef JT_SYNC
-        checkCudaErrors(cudaDeviceSynchronize());
         #endif
         LOGvvv << "Finished Op(" >> op->name() << rid >> 
             "/" >> queue.size() >> ") output:" << op->outputs();
