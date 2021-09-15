@@ -17,6 +17,7 @@ namespace jittor {
 using namespace expr;
 
 void ConstVarPass::run() {
+    JK& jk = get_jk();
     int changed = 0;
     for (int i=0; i<op->ops.size(); i++) {
         auto opi = op->ops[i];

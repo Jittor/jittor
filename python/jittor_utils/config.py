@@ -33,7 +33,7 @@ if __name__ == "__main__":
                 'Darwin': 'dylib',
                 'Windows': 'DLL',
             }[platform.system()]
-            ldflags = jittor_utils.run_cmd(jittor_utils.py3_config_path + " --ldflags")
+            ldflags = jittor_utils.run_cmd(jittor_utils.get_py3_config_path() + " --ldflags")
             libpaths = [l[2:] for l in ldflags.split(' ') if l.startswith("-L")]
             for libbase in libpaths:
                 libpath = os.path.join(libbase, f"lib{base}.{libext}")
@@ -42,7 +42,7 @@ if __name__ == "__main__":
                     break
             else:
                 raise RuntimeError("Python dynamic library not found")
-            if os.name == 'nt'
+            if os.name == 'nt':
                 s = s.replace('-ldl', '')
         elif arg == "--cxx-flags":
             s += " --std=c++17 -fPIC "

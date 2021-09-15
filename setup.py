@@ -58,6 +58,7 @@ setuptools.setup(
         "tqdm",
         "pillow",
         "astunparse",
+        'pywin32 >= 1.0 ; platform_system=="Windows"'
     ],
  )
 

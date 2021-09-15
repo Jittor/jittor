@@ -17,7 +17,7 @@ struct CudaManagedAllocator : Allocator {
     void free(void* mem_ptr, size_t size, const size_t& allocation) override;
 };
 
-extern CudaManagedAllocator cuda_managed_allocator;
+EXTERN_LIB CudaManagedAllocator cuda_managed_allocator;
 DECLARE_FLAG(int, use_cuda_managed_allocator);
 
 }

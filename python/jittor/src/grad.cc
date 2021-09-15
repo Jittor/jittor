@@ -153,8 +153,8 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets) {
             if (op->flags.get(NodeFlags::_grads)) {
                 // backward together
                 auto n_i = op->inputs().size();
-                Var* douts[n_o];
-                VarPtr dins[n_i];
+                STACK_ALLOC(Var*, douts, n_o);
+                STACK_ALLOC(VarPtr, dins, n_i);
                 // dump "for (Var* out : op->outputs())"
                 for (int i=0; i<n_o; i++,j++) {
                     auto id = id_buffer[j].second;

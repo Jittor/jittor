@@ -39,7 +39,7 @@ struct MemoryProfiler {
     string get_max_memory_info();
 };
 
-extern MemoryProfiler memory_profiler;
+EXTERN_LIB MemoryProfiler memory_profiler;
 
 DECLARE_FLAG(int, profile_memory_enable);
 

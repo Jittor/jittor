@@ -55,18 +55,22 @@ def compile(compiler, flags, inputs, output, combind_build=False):
     link = link_flags
     base_output = os.path.basename(output).split('.')[0]
     if os.name == 'nt':
-        # initialize order in windows seems reversed
-        inputs = list(inputs[::-1])
-        # windows need libxxx.a
-        afile = os.path.join(cache_path, f"lib{base_output}.a")
-        link = link + f' -Wl,--export-all-symbols,--out-implib,"{afile}" '
-        if base_output == "jit_utils_core":
-            pass
-        elif base_output == "jittor_core":
-            inputs.append(os.path.join(cache_path, f"libjit_utils_core.a"))
-        else:
-            inputs.append(os.path.join(cache_path, f"libjit_utils_core.a"))
-            inputs.append(os.path.join(cache_path, f"libjittor_core.a"))
+        # windows do not combind build, need gen def
+        combind_build = False
+        # windows need xxxx.lib
+        afile = output.rsplit('.', 1)[0] + ".lib"
+        afile = os.path.join(cache_path, afile)
+        if cc_type != 'cl':
+            # initialize order in windows seems reversed
+            inputs = list(inputs[::-1])
+            link = link + f' -Wl,--export-all-symbols,--out-implib,"{afile}" '
+            if base_output == "jit_utils_core":
+                pass
+            elif base_output == "jittor_core":
+                inputs.append(os.path.join(cache_path, f"jit_utils_core{lib_suffix}"))
+            else:
+                inputs.append(os.path.join(cache_path, f"jit_utils_core{lib_suffix}"))
+                inputs.append(os.path.join(cache_path, f"jittor_core{lib_suffix}"))
             
     # if output is core, add core_link_flags
     if output.startswith("jittor_core"):
@@ -77,7 +81,7 @@ def compile(compiler, flags, inputs, output, combind_build=False):
     ex_obj_files = []
     new_inputs = []
     for name in inputs:
-        if name[-1] in 'oa':
+        if name[-1] in 'oab':
             ex_obj_files.append(name)
         else:
             new_inputs.append(os.path.join(jittor_path, name))
@@ -87,7 +91,7 @@ def compile(compiler, flags, inputs, output, combind_build=False):
 
     if len(inputs) == 1 or combind_build:
         cmd = f"\"{compiler}\" {' '.join(inputs)} {flags} {link} -o {output}"
-        return do_compile(cmd)
+        return do_compile(fix_cl_flags(cmd))
     # split compile object file and link
     # remove -l -L flags when compile object files
     oflags = remove_flags(flags, ['-l', '-L', '-Wl,'])
@@ -101,16 +105,20 @@ def compile(compiler, flags, inputs, output, combind_build=False):
                 cc = nvcc_path
             else:
                 continue
-        cmd = f"{cc} {input} {nflags} -c {lto_flags} -o {obj_file}"
+        cmd = f"\"{cc}\" {input} {nflags} {lto_flags} -c -o {obj_file}"
         if "nan_checker" in input:
             # nan checker needs to disable fast_math 
             cmd = cmd.replace("--use_fast_math", "")
             cmd = cmd.replace("-Ofast", "-O2")
-        cmds.append(cmd)
+        cmds.append(fix_cl_flags(cmd))
     jit_utils.run_cmds(cmds, cache_path, jittor_path, "Compiling "+base_output)
     obj_files += ex_obj_files
+    if os.name == 'nt':
+        dumpdef_path = os.path.join(jittor_path, "utils", "dumpdef.py")
+        cmd = f"\"{sys.executable}\" \"{dumpdef_path}\" {' '.join(obj_files)} -Fo: \"{output}.def\""
+        do_compile(fix_cl_flags(cmd))
     cmd = f"\"{compiler}\" {' '.join(obj_files)} {flags} {lto_flags} {link} -o {output}"
-    return do_compile(cmd)
+    return do_compile(fix_cl_flags(cmd))
 
 def gen_jit_tests():
     all_src = glob.glob(jittor_path+"/src/**/*.cc", recursive=True)
@@ -660,7 +668,7 @@ def compile_custom_ops(
         gen_name = gen_name[:80] + "___hash" + hashlib.md5(gen_name.encode()).hexdigest()
 
     includes = sorted(list(set(includes)))
-    includes = "".join(map(lambda x: f" -I'{x}' ", includes))
+    includes = "".join(map(lambda x: f" -I\"{x}\" ", includes))
     LOG.vvvv(f"Include flags:{includes}")
 
     op_extra_flags = includes + extra_flags
@@ -916,7 +924,7 @@ if not nvcc_path:
         nvcc_path = try_find_exe(nvcc_path)
 if nvcc_path is None:
     nvcc_path = ""
-gdb_path = try_find_exe('gdb')
+gdb_path = env_or_try_find('gdb_path', 'gdb')
 addr2line_path = try_find_exe('addr2line')
 has_pybt = check_pybt(gdb_path, python_path)
 
@@ -952,26 +960,80 @@ if platform.system() == 'Darwin':
 core_link_flags = ""
 opt_flags = ""
 
+py_include = jit_utils.get_py3_include_path()
+LOG.i(f"py_include: {py_include}")
+extension_suffix = jit_utils.get_py3_extension_suffix()
+lib_suffix = extension_suffix.replace(".pyd", ".lib")
+LOG.i(f"extension_suffix: {extension_suffix}")
+
+
 kernel_opt_flags = os.environ.get("kernel_flags", "") + opt_flags
 if platform.system() == 'Darwin':
     # TODO: if not using apple clang, cannot add -Xpreprocessor
     kernel_opt_flags = kernel_opt_flags + " -Xpreprocessor -fopenmp "
-else:
+elif cc_type != 'cl':
     kernel_opt_flags = kernel_opt_flags + " -fopenmp "
+fix_cl_flags = lambda x:x
 if os.name == 'nt':
-    link_flags = link_flags.replace('-ldl', '')
-    py3_link_path = '-L"' + os.path.join(
-            os.path.dirname(sys.executable),
-            "libs"
-        ) + f'" -lpython3{sys.version_info.minor} '
-    core_link_flags = py3_link_path
-    link_flags += core_link_flags
-    # link_flags += " -Wl,--unresolved-symbols=ignore-all "
-    # cc_flags += " -Xlinker --allow-shlib-undefined "
-    cc_flags = cc_flags.replace('-std=c++14', '-std=c++17')
-    link_flags += " -fopenmp "
-    kernel_opt_flags += f" {cache_path}\\libjit_utils_core.a "
-    kernel_opt_flags += f" {cache_path}\\libjittor_core.a "
+    if cc_type == 'g++':
+        link_flags = link_flags.replace('-ldl', '')
+        py3_link_path = '-L"' + os.path.join(
+                os.path.dirname(sys.executable),
+                "libs"
+            ) + f'" -lpython3{sys.version_info.minor} '
+        core_link_flags = py3_link_path
+        link_flags += core_link_flags
+        # link_flags += " -Wl,--unresolved-symbols=ignore-all "
+        # cc_flags += " -Xlinker --allow-shlib-undefined "
+        cc_flags = cc_flags.replace('-std=c++14', '-std=c++17')
+        link_flags += " -fopenmp "
+        kernel_opt_flags += f" {cache_path}\\jit_utils_core{lib_suffix} "
+        kernel_opt_flags += f" {cache_path}\\jittor_core{lib_suffix} "
+    elif cc_type == 'cl':
+        py3_link_path = os.path.join(
+                os.path.dirname(sys.executable),
+                "libs",
+                f'python3{sys.version_info.minor}.lib'
+        )
+        # core_link_flags = py3_link_path
+        link_flags += core_link_flags
+        # link_flags += " -Wl,--unresolved-symbols=ignore-all "
+        # cc_flags += " -Xlinker --allow-shlib-undefined "
+        kernel_opt_flags += f" {cache_path}\\jit_utils_core{lib_suffix} "
+        kernel_opt_flags += f" {cache_path}\\jittor_core{lib_suffix} "
+        # cc_flags = " -std:c++17 -O2 -fp:fast -EHsc "
+        cc_flags = " -std:c++17 -O2 -fp:fast -EHsc "
+        # cc_flags += py3_link_path + " "
+        import jittor_utils
+        if jittor_utils.msvc_path:
+            mp = jittor_utils.msvc_path
+            cc_flags += f' -nologo -I"{mp}\\cl_x64\\include" -I"{mp}\\win10_kits\\include\\ucrt" -I"{mp}\\win10_kits\\include\\shared" -I"{mp}\\win10_kits\\include\\um" -DNOMINMAX '
+            win_link_flags = f' -link -LIBPATH:"{mp}\\cl_x64\\lib" -LIBPATH:"{mp}\\win10_kits\\lib\\um\\x64" -LIBPATH:"{mp}\\win10_kits\\lib\\ucrt\\x64" '
+        link_flags = ' -LD '
+        kernel_opt_flags += win_link_flags# + " -EXPORT:\"?jit_run@FusedOp@jittor@@QEAAXXZ\""
+        def fix_cl_flags(cmd):
+            cmd = cmd.replace(".o ", ".obj ")
+            cmd = cmd.replace(".o\" ", ".obj\" ")
+            if cmd.endswith(".o"): cmd += "bj"
+            from shlex import split
+            if " -LD " in cmd:
+                cmd = cmd.replace(" -o ", " -Fe: ")
+                output = split(cmd.split("-Fe:")[1].strip(), posix=False)[0]
+                base_output = os.path.basename(output).split('.')[0]
+                cmd += win_link_flags
+                cmd += f" -DEF:\"{output}.def\" -IGNORE:4102 -IGNORE:4197 -IGNORE:4217 {py3_link_path}"
+                if base_output == "jit_utils_core":
+                    pass
+                elif base_output == "jittor_core":
+                    cmd += " " + os.path.join(cache_path, f"jit_utils_core{lib_suffix}")
+                else:
+                    cmd += " " + os.path.join(cache_path, f"jit_utils_core{lib_suffix} ")
+                    cmd += " " + os.path.join(cache_path, f"jittor_core{lib_suffix} ")
+
+            elif " -c -o " in cmd:
+                cmd = cmd.replace(" -c -o ", " -c -Fo: ")
+            cmd = cmd.replace("-include", "-FI")
+            return cmd
 
 if ' -O' not in cc_flags:
     opt_flags += " -O2 "
@@ -984,11 +1046,6 @@ if os.environ.get("enable_lto") == "1":
         lto_flags = " -flto -fuse-linker-plugin "
     else:
         lto_flags = " -flto "
-
-py_include = jit_utils.get_py3_include_path()
-LOG.i(f"py_include: {py_include}")
-extension_suffix = jit_utils.get_py3_extension_suffix()
-LOG.i(f"extension_suffix: {extension_suffix}")
 
 make_cache_dir(cache_path)
 make_cache_dir(os.path.join(cache_path, "jit"))
@@ -1107,7 +1164,8 @@ if use_data_gz:
         dflags = (cc_flags+opt_flags)\
             .replace("-Wall", "") \
             .replace("-Werror", "")
-        run_cmd(f"{cc_path} {dflags} \"-D_P(...)=\" {data_s_path} -c -o {data_o_path}")
+        vdp = os.path.join(jittor_path, "src", "utils", "vdp")
+        run_cmd(fix_cl_flags(f"{cc_path} {dflags} -include {vdp} {data_s_path} -c -o {data_o_path}"))
         os.remove(data_s_path)
         with open(data_gz_md5_path, 'w') as f:
             f.write(md5)

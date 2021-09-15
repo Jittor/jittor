@@ -160,6 +160,7 @@ class TestMklConvOp(unittest.TestCase):
         a = np.random.rand(n,H,W,c).astype(np.float32)
         b = np.random.rand(h,w,i,o).astype(np.float32)
         da = np.random.rand(n,H,W,o).astype(np.float32)
+        jt.mkl_ops.mkl_conv_backward_x(b,da,H,W,1,1,1,1,1,1,xformat="acdb",wformat="hwio",yformat="acdb")
         dx = jt.mkl_ops.mkl_conv_backward_x(b,da,H,W,1,1,1,1,1,1,xformat="acdb",wformat="hwio",yformat="acdb").data
         dw = jt.mkl_ops.mkl_conv_backward_w(a,da,h,w,1,1,1,1,1,1,xformat="acdb",wformat="hwio",yformat="acdb").data
         a_jt = jt.array(a)

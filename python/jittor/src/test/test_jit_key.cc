@@ -9,10 +9,11 @@
 namespace jittor {
 
 JIT_TEST(jit_key) {
+    JK& jk = get_jk();
     jk.clear();
     for (int i=0; i<JK::buffer_size/2; i++)
         jk.buffer[i] = i%256;
-    expect_error([]() {
+    expect_error([&]() {
         for (int i=0; i<JK::buffer_size; i++)
             jk.buffer[i] = i%256;
     });
@@ -45,9 +46,11 @@ JIT_TEST(jit_key) {
     jk.clear();
     add_jit_define(jk, "f", 0.01);
     add_jit_define(jk, "f", 0.5);
+    #ifndef _MSC_VER
     add_jit_define(jk, "f", 1.0/0);
     add_jit_define(jk, "f", -1.0/0);
     add_jit_define(jk, "f", 0.0/0);
+    #endif
     keys = parse_jit_keys(jk.to_string());
     k2 = {{"f","0x1.47ae147ae147bp-7"}, 
         {"f","0x1p-1"},

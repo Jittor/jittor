@@ -50,7 +50,7 @@ struct Op : Node {
     virtual VarPtr duplicate();
     virtual void compile_optimize(string& src);
     virtual void graph_optimize();
-    void jit_run();
+    void jit_run(JK& jk);
 
     string name_ex() const;
     string get_jit_key(JK& jk);
@@ -60,9 +60,9 @@ struct Op : Node {
 
 std::ostream& operator<<(std::ostream& os, const Op* var);
 
-extern string_view_map<jit_op_entry_t> jit_ops;
+EXTERN_LIB string_view_map<jit_op_entry_t> jit_ops;
 // jit_key_mapper: map origin jit_key -> tuned jit_key
-extern string_view_map<string> jit_key_mapper;
+EXTERN_LIB string_view_map<string> jit_key_mapper;
 
 #ifdef JIT
     #define DECLARE_jit_run void jit_run();

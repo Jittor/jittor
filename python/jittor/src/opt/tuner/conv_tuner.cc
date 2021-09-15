@@ -234,7 +234,7 @@ void ConvTuner::forwardTune(FusedOp* fop) {
             continue;
         Op* ops[3] = {op, bop->x->input(), bop->y->input()};
         int ok = 0;
-        LOGvvvv << "conv like op" << fop << fop->get_jit_key(jk);
+        LOGvvvv << "conv like op" << fop << fop->get_jit_key(get_jk());
         for (int y_id=0; y_id<3; y_id++)
         for (int x_id=0; x_id<3; x_id++)
         for (int w_id=0; w_id<3; w_id++) {

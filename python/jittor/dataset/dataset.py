@@ -28,6 +28,43 @@ mpi = jt.mpi
 img_open_hook = HookTimer(Image, "open")
 CHECK_MEMORY = int(os.environ.get("CHECK_MEMORY", "0"))
 
+if os.name == "nt":
+    from multiprocessing import shared_memory
+    class RingBuffer:
+        def __init__(self, size, shm=None):
+            for i in range(100):
+                if (1<<i) >= size: break
+            size = 1<<i
+            init = False
+            if shm is None:
+                init = True
+                shm = shared_memory.SharedMemory(create=True, size=size+1024)
+            rb = jt.core.RingBuffer(size, id(shm.buf), init)
+            self.size = size
+            self.shm = shm
+            self.rb = rb
+
+        def __reduce__(self):
+            return (RingBuffer, (self.size, self.shm))
+            
+        def __del__(self):
+            del self.rb
+            del self.shm
+
+        def push(self, obj): self.send(obj)
+        def pop(self): return self.recv()
+        def send(self, obj): self.rb.push(obj)
+        def recv(self): return self.rb.pop()
+        def clear(self): return self.rb.clear()
+        def stop(self): return self.rb.stop()
+        def is_stop(self): return self.rb.is_stop()
+        def total_pop(self): return self.rb.total_pop()
+        def total_push(self): return self.rb.total_push()
+        def __repr__(self): return repr(self.rb)
+        def keep_numpy_array(self, keep): self.rb.keep_numpy_array(keep)
+
+    jt.RingBuffer = RingBuffer
+
 class Worker:
     def __init__(self, target, args, buffer_size, keep_numpy_array=False):
         self.buffer = jt.RingBuffer(buffer_size)

@@ -12,7 +12,7 @@
 namespace jittor {
 
 CudaDeviceAllocator cuda_device_allocator;
-extern bool no_cuda_error_when_free;
+EXTERN_LIB bool no_cuda_error_when_free;
 
 const char* CudaDeviceAllocator::name() const {return "cuda_device";}
 

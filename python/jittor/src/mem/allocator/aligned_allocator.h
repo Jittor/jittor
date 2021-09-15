@@ -16,6 +16,6 @@ struct AlignedAllocator : Allocator {
     void free(void* mem_ptr, size_t size, const size_t& allocation) override;
 };
 
-extern AlignedAllocator aligned_allocator;
+EXTERN_LIB AlignedAllocator aligned_allocator;
 
 } // jittor

@@ -22,7 +22,7 @@ struct UpdateQueue {
     void auto_flush();
 };
 
-extern UpdateQueue update_queue;
+EXTERN_LIB UpdateQueue update_queue;
 
 } // jittor
 

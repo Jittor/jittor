@@ -102,7 +102,7 @@ const char *_cudaGetErrorEnum(NppStatus error);
 #endif
 
 namespace jittor {
-extern bool peek_logged;
+EXTERN_LIB bool peek_logged;
 }
 
 template <typename T>

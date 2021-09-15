@@ -9,6 +9,7 @@
 // ***************************************************************
 #pragma once
 #define OMPI_SKIP_MPICXX
+#include <common.h>
 #include <mpi.h>
 
 extern void throw_mpi_error(int result, 
@@ -25,13 +26,13 @@ static inline void mpi_check(int result,
 
 namespace jittor {
 
-extern int mpi_world_size;
-extern int mpi_world_rank;
-extern int mpi_local_size;
-extern int mpi_local_rank;
-extern bool inside_mpi;
-extern bool mpi_enabled;
-extern bool use_device_mpi;
+EXTERN_LIB int mpi_world_size;
+EXTERN_LIB int mpi_world_rank;
+EXTERN_LIB int mpi_local_size;
+EXTERN_LIB int mpi_local_rank;
+EXTERN_LIB bool inside_mpi;
+EXTERN_LIB bool mpi_enabled;
+EXTERN_LIB bool use_device_mpi;
 
 /**
 Return number of MPI nodes.

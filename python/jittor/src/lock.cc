@@ -8,10 +8,15 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include <stdio.h>
-#include <unistd.h>
 #ifdef _WIN32
+#include <windows.h>
 #include <fileapi.h>
+#include <process.h>
+#include <io.h>
+#define getpid _getpid
+#define open _open
 #else
+#include <unistd.h>
 #endif
 #include <fcntl.h>
 #include <errno.h>

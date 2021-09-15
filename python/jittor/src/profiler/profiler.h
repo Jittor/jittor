@@ -59,7 +59,7 @@ struct Profiler {
     ~Profiler();
 };
 
-extern Profiler profiler;
+EXTERN_LIB Profiler profiler;
 
 DECLARE_FLAG(int, profiler_enable);
 

@@ -614,7 +614,7 @@ def compile_src(src, h, basename):
                 (void)n;
                 if (arg0 >= GET_RAW_PTR({dfs[0]["scope_name"]},self)->size()) {{
                     PyErr_SetString(PyExc_IndexError, "");
-                    return 0;
+                    return (PyObject*)nullptr;
                 }}
             """
 
@@ -675,7 +675,7 @@ def compile_src(src, h, basename):
         error_log_code = generate_error_code_from_func_header(func_head, target_scope_name, name, dfs, basename ,h, class_info)
         func = f"""
         {func_cast}[]{func_head} {{
-            try {{
+            try {{_JT_SEH_START3;
                 {func_fill};
                 uint64 arg_filled=0;
                 (void)arg_filled;
@@ -689,7 +689,7 @@ def compile_src(src, h, basename):
                 for did in range(len(arr_func_return))
                 ])}
                 LOGf << "Not a valid call.";
-            }} catch (const std::exception& e) {{
+            _JT_SEH_END3; }} catch (const std::exception& e) {{
                 if (!PyErr_Occurred()) {{
                     std::stringstream ss;
                     ss {error_log_code};
@@ -775,6 +775,7 @@ def compile_src(src, h, basename):
     if include_name.endswith("var_slices.h"):
         src_code += '#include "var_holder.h"\n' 
     src_code += f"""
+    #include "utils/seh.h"
     #include "pyjt/py_converter.h"
     #include "pyjt/py_arg_printer.h"
     #include "common.h"

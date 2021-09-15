@@ -110,7 +110,7 @@ static void push_py_object(RingBuffer* rb, PyObject* obj, uint64& __restrict__ o
                 rb->push(size, offset);
                 args.ptr = rb->get_ptr(size, offset);
 #if defined(__linux__) || defined(_WIN32)
-                int64 dims[args.shape.size()];
+                STACK_ALLOC(int64, dims, args.shape.size());
 #elif defined(__APPLE__)
                 long dims[args.shape.size()];
 #endif
@@ -225,12 +225,19 @@ PyObject* PyMultiprocessRingBuffer::pop() {
     return obj;
 }
 
-PyMultiprocessRingBuffer::PyMultiprocessRingBuffer(uint64 size) {
-    rb = RingBuffer::make_ring_buffer(size, 1);
+PyMultiprocessRingBuffer::PyMultiprocessRingBuffer(uint64 size, uint64 buffer, bool init) {
+    this->buffer = buffer;
+    this->init = init;
+    if (buffer) {
+        auto mobj = (PyObject*)buffer;
+        auto buf = PyMemoryView_GET_BUFFER(mobj);
+        buffer = (uint64)buf->buf;
+    }
+    rb = RingBuffer::make_ring_buffer(size, 1, buffer, init);
 }
 
 PyMultiprocessRingBuffer::~PyMultiprocessRingBuffer() {
-    RingBuffer::free_ring_buffer(rb);
+    RingBuffer::free_ring_buffer(rb, buffer, init);
 }
 
 }

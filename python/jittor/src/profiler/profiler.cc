@@ -87,7 +87,7 @@ unique_ptr<MemoryChecker>* load_memory_checker(string name) {
     return mm;
 }
 
-extern string _get_stack_info(Node* node);
+EXTERN_LIB string _get_stack_info(Node* node);
 
 static  string get_stack_info(Op* op) {
     string stack_info = "stack info:\n";

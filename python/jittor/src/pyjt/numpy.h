@@ -50,8 +50,8 @@ enum NPY_TYPES {
     NPY_OBJECT=17,
 };
 
-extern NanoString npy2ns[];
-extern NPY_TYPES ns2npy[];
+EXTERN_LIB NanoString npy2ns[];
+EXTERN_LIB NPY_TYPES ns2npy[];
 
 #define NPY_ARRAY_C_CONTIGUOUS    0x0001
 #define NPY_ARRAY_ALIGNED         0x0100
@@ -74,19 +74,19 @@ inline int get_typenum(NanoString ns) {
 
 typedef Py_intptr_t npy_intp;
 
-extern unordered_map<string, int> np_typenum_map;
+EXTERN_LIB unordered_map<string, int> np_typenum_map;
 
-extern void** PyArray_API;
-extern PyTypeObject *PyArray_Type;
-extern PyTypeObject *PyNumberArrType_Type;
-extern PyTypeObject *PyArrayDescr_Type;
-extern PyObject* (*PyArray_New)(PyTypeObject *, int, npy_intp const *, int, npy_intp const *, void *, int, int, PyObject *);
-extern PyObject* (*PyArray_FromAny)(PyObject *, PyArrayDescr_Proxy *, int, int, int, PyObject *);
-extern unsigned int (*PyArray_GetNDArrayCFeatureVersion)();
-extern int (*PyArray_SetBaseObject)(PyObject *arr, PyObject *obj);
-extern PyObject* (*PyArray_NewCopy)(PyObject *, int);
-extern int (*PyArray_CopyInto)(PyObject *, PyObject *);
-extern void (*PyArray_CastScalarToCtype)(PyObject* scalar, void* ctypeptr, PyArrayDescr_Proxy* outcode);
+EXTERN_LIB void** PyArray_API;
+EXTERN_LIB PyTypeObject *PyArray_Type;
+EXTERN_LIB PyTypeObject *PyNumberArrType_Type;
+EXTERN_LIB PyTypeObject *PyArrayDescr_Type;
+EXTERN_LIB PyObject* (*PyArray_New)(PyTypeObject *, int, npy_intp const *, int, npy_intp const *, void *, int, int, PyObject *);
+EXTERN_LIB PyObject* (*PyArray_FromAny)(PyObject *, PyArrayDescr_Proxy *, int, int, int, PyObject *);
+EXTERN_LIB unsigned int (*PyArray_GetNDArrayCFeatureVersion)();
+EXTERN_LIB int (*PyArray_SetBaseObject)(PyObject *arr, PyObject *obj);
+EXTERN_LIB PyObject* (*PyArray_NewCopy)(PyObject *, int);
+EXTERN_LIB int (*PyArray_CopyInto)(PyObject *, PyObject *);
+EXTERN_LIB void (*PyArray_CastScalarToCtype)(PyObject* scalar, void* ctypeptr, PyArrayDescr_Proxy* outcode);
 
 #define PyArray_Copy(obj) PyArray_NewCopy(obj, 0)
 
@@ -121,7 +121,7 @@ union tmp_data_t {
     int8 i8;
 };
 
-extern tmp_data_t tmp_data;
+EXTERN_LIB tmp_data_t tmp_data;
 
 void numpy_init();
 

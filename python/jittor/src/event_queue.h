@@ -88,7 +88,7 @@ struct EventQueue {
     }
 };
 
-extern EventQueue event_queue;
+EXTERN_LIB EventQueue event_queue;
 
 #endif
 

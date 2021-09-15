@@ -17,6 +17,8 @@ def all_eq(x, y):
     convert = lambda x: x.astype("uint8") if x.dtype=="bool" else x
     x = convert(x)
     y = convert(y)
+    if str(x.dtype).startswith("float"):
+        return str(y.dtype).startswith("float") and x.shape == y.shape and (x==y).all()
     return x.dtype == y.dtype and x.shape == y.shape and (x==y).all()
 
 def check(op, *args):

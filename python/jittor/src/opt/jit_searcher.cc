@@ -23,6 +23,7 @@ Searcher::Searcher(OpCompiler* oc) : oc(oc) {
 }
 
 int64_t Searcher::get_time_of_current_choices() {
+    JK& jk = get_jk();
     auto* op = oc->op;
     // generate jit_key
     op->update_jit_key();

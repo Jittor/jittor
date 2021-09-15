@@ -18,8 +18,8 @@ namespace jittor {
 
 
 #ifdef HAS_CUDA
-extern void check_nan_float32(float32* ptr, int64 num);
-extern void check_nan_float64(float64* ptr, int64 num);
+EXTERN_LIB void check_nan_float32(float32* ptr, int64 num);
+EXTERN_LIB void check_nan_float64(float64* ptr, int64 num);
 #endif
 
 bool check_nan(Var* v) {
