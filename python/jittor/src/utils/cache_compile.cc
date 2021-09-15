@@ -31,7 +31,7 @@ void write(const string& fname, const string& src) {
 
 bool file_exist(const string& fname) {
     std::ifstream f(fname);
-    return f.good();
+    return f && f.good();
 }
 #endif
 
@@ -45,23 +45,21 @@ string join(string a, string b) {
 }
 
 void find_names(string cmd, vector<string>& input_names, string& output_name, map<string,vector<string>>& extra) {
-    size_t i=0;
-    while (i<cmd.size() && cmd[i] != ' ') i++;
-    CHECK(i<cmd.size());
     // find space not in str
+    #define is_quate(x) ((x)=='\'' || (x)=='\"')
     auto pass = [&](size_t& j) {
         while (j<cmd.size()) {
-            if (cmd[j]=='\'') {
+            if (is_quate(cmd[j])) {
                 j++;
-                while (j<cmd.size() && cmd[j]!='\'') j++;
+                while (j<cmd.size() && !is_quate(cmd[j])) j++;
                 ASSERT(j<cmd.size());
                 j++;
                 continue;
             }
-            while (j<cmd.size() && cmd[j]!=' ' && cmd[j]!='\'') j++;
+            while (j<cmd.size() && cmd[j]!=' ' && !is_quate(cmd[j])) j++;
             if (j<cmd.size()) {
                 if (cmd[j]==' ') break;
-                if (cmd[j]=='\'') continue;
+                if (is_quate(cmd[j])) continue;
             }
         }
     };
@@ -69,15 +67,33 @@ void find_names(string cmd, vector<string>& input_names, string& output_name, ma
     auto substr = [&](size_t i, size_t j) -> string {
         string s;
         for (size_t k=i; k<j; k++)
-            if (cmd[k]!='\'' && cmd[k]!='"') s += cmd[k];
+            if (!is_quate(cmd[k])) s += cmd[k];
         return s;
     };
+    size_t i=0;
+    pass(i);
     while (i<cmd.size()) {
         if (cmd[i] == ' ') {
             i++;
             continue;
         }
         if (cmd[i] == '-') {
+            #ifdef _MSC_VER
+            if (i+4<cmd.size() && cmd[i+1]=='F' && cmd[i+4]==' ') {
+                // -Fo: -Fe:
+                auto j=i+5;
+                while (j<cmd.size() && cmd[j] == ' ') j++;
+                CHECK(j<cmd.size());
+                auto k=j;
+                pass(k);
+                CHECK(j<k && output_name.size()==0);
+                // -Fo: xxx
+                // i    j  k
+                output_name = substr(j, k);
+                i = k;
+                continue;
+            } else
+            #endif
             if (i+2<cmd.size() && cmd[i+1]=='o' && cmd[i+2]==' ') {
                 auto j=i+3;
                 while (j<cmd.size() && cmd[j] == ' ') j++;
@@ -141,6 +157,8 @@ size_t skip_comments(const string& src, size_t i) {
     return i;
 }
 
+map<string,string> jt_env;
+
 void process(string src, vector<string>& input_names, string& cmd) {
     for (size_t i=0; i<src.size(); i++) {
         i = skip_comments(src, i);
@@ -149,8 +167,9 @@ void process(string src, vector<string>& input_names, string& cmd) {
             // #include "a.h"
             // i       jk    l
             auto j=i+1;
-            while (j<src.size() && src[j] != ' ') j++;
+            while (j<src.size() && (src[j] != ' ' && src[j] != '\n')) j++;
             if (j>=src.size()) return;
+            if (j-i != 8 && j-i != 6) continue;
             auto k=j+1;
             while (k<src.size() && src[k] == ' ') k++;
             if (k>=src.size()) return;
@@ -167,12 +186,22 @@ void process(string src, vector<string>& input_names, string& cmd) {
                 auto inc = src.substr(k, l-k);
                 auto env = getenv(inc.c_str());
                 if (env && string(env)!="0") {
-                    string dflag = " -D"+inc+"="+string(env)+" -o ";
+                    auto senv = string(env);
+                    if (!jt_env.count(inc)) {
+                        LOGe << "Load JT env ok:" << inc << senv;
+                        jt_env[inc] = senv;
+                    }
+                    string dflag = " -D"+inc+"="+senv;
                     if (cmd.find(dflag) == string::npos) {
                         // -D flags should insert before -o flag
-                        auto cmds = split(cmd, " -o ", 2);
+                        #ifdef _MSC_VER
+                        string patt = " -Fo: ";
+                        #else
+                        string patt = " -o ";
+                        #endif
+                        auto cmds = split(cmd, patt, 2);
                         if (cmds.size() == 2) {
-                            cmd = cmds[0] + dflag + cmds[1];
+                            cmd = cmds[0] + dflag + patt + cmds[1];
                         }
                     }
                 }
@@ -199,7 +228,7 @@ static inline void check_win_file(const string& name) {
 
 static inline bool is_full_path(const string& name) {
 #ifdef _WIN32
-    return name.size()>=2 && name[1]==':';
+    return name.size()>=2 && (name[1]==':' || (name[0]=='\\' && name[1]=='\\'));
 #else
     return name.size() && name[0]=='/';
 #endif
@@ -217,6 +246,7 @@ bool cache_compile(string cmd, const string& cache_path, const string& jittor_pa
     unordered_set<string> processed;
     auto src_path = join(jittor_path, "src");
     const auto& extra_include = extra["I"];
+    string tmp_dir =join(cache_path, "obj_files");
     for (size_t i=0; i<input_names.size(); i++) {
         if (processed.count(input_names[i]) != 0)
             continue;
@@ -224,10 +254,13 @@ bool cache_compile(string cmd, const string& cache_path, const string& jittor_pa
             continue;
         processed.insert(input_names[i]);
         auto src = read_all(input_names[i]);
-        ASSERT(src.size()) << "Source read failed:" << input_names[i];
+        ASSERT(src.size()) << "Source read failed:" << input_names[i] << "cmd:" << cmd;
         auto hash = S(hash64(src));
         vector<string> new_names;
-        process(src, new_names, cmd);
+        auto back = input_names[i].back();
+        // *.obj, *.o, *.pyd
+        if (back != 'j' && back != 'o' && back != 'd')
+            process(src, new_names, cmd);
         for (auto& name : new_names) {
             string full_name;
             if (name.substr(0, 4) == "jit/" || name.substr(0, 4) == "gen/")
@@ -261,14 +294,15 @@ bool cache_compile(string cmd, const string& cache_path, const string& jittor_pa
     if (output_cache_key.size() == 0) {
         LOGvv << "Cache key of" << output_name << "not found.";
         LOGvvv << "Run cmd:" << cmd;
-        system_with_check(cmd.c_str());
+        check_win_file(output_name);
+        system_with_check(cmd.c_str(), tmp_dir.c_str());
         ran = true;
     }
     if (output_cache_key.size() != 0 && output_cache_key != cache_key) {
         LOGvv << "Cache key of" << output_name << "changed.";
         LOGvvv << "Run cmd:" << cmd;
         check_win_file(output_name);
-        system_with_check(cmd.c_str());
+        system_with_check(cmd.c_str(), tmp_dir.c_str());
         ran = true;
     }
     if (output_cache_key != cache_key) {
@@ -277,7 +311,7 @@ bool cache_compile(string cmd, const string& cache_path, const string& jittor_pa
         write(output_name+".key", cache_key);
     }
     if (!ran)
-        LOGvv << "Command cached:" << cmd;
+        LOGvvvv << "Command cached:" << cmd;
     return ran;
 }
 

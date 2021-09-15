@@ -90,7 +90,7 @@ void CheckCachePass::run() {
     ir->push_back("#include \"profiler/memory_checker.h\"", &ir->before);
     ir->push_back("using namespace jittor;", &ir->before);
     // declaration
-    ir->push_back("extern \"C\" std::unique_ptr<MemoryChecker> memory_checker;", &ir->before);
+    ir->push_back("EXTERN_LIB \"C\" std::unique_ptr<MemoryChecker> memory_checker;", &ir->before);
     // definition
     ir->push_back("std::unique_ptr<MemoryChecker> memory_checker;", &ir->before);
     vector<string> commands;

@@ -69,7 +69,7 @@ int VarRelayManager::add_relay_group(const vector<pair<Var*, Var*>>& group) {
         if (node->is_var())
             continue;
         Op* op = node->op();
-        op->do_jit_prepare(jk);
+        op->do_jit_prepare(get_jk());
         list<Node*> new_inputs;
         int removed = 0;
         for (Var* v : op->inputs())

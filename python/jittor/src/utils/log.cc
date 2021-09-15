@@ -6,15 +6,10 @@
 // ***************************************************************
 #include <string.h>
 #include <signal.h>
-#include <sys/time.h>
 #include <iomanip>
 #include <thread>
 #include <unordered_map>
-#include <unistd.h>
-#ifdef _WIN32
-#include <wchar.h>
-#include <windows.h>
-#endif
+#include "utils/cross_platform.h"
 #include "utils/log.h"
 #include "utils/mwsr_list.h"
 #include "utils/str_utils.h"
@@ -72,6 +67,7 @@ static bool supports_color() {
     return term_supports_color;
 }
 bool g_supports_color = supports_color();
+string thread_local thread_name;
 
 struct timeval start_tv;
 
@@ -166,10 +162,10 @@ void log_capture(const string& s) {
 
 DECLARE_FLAG(int, log_silent);
 
-void send_log(std::ostringstream&& out) {
+void send_log(std::ostringstream&& out, char level, int verbose) {
     if (log_capture_enabled)
         log_capture(out.str());
-    if (log_silent) return;
+    if ((level=='i' || level=='w') && log_silent) return;
     if (!log_sync) {
         #if LOG_ASYNC
         mwsr_list_log::push(move(out));
@@ -203,11 +199,14 @@ void log_exiting();
 bool exited = false;
 size_t thread_local protected_page = 0;
 int segfault_happen = 0;
-string thread_local thread_name;
 static int _pid = getpid();
 vector<void(*)()> cleanup_callback;
 vector<void(*)()> sigquit_callback;
 int64 last_q_time;
+
+string& get_thread_name() {
+    return thread_name;
+}
 
 #ifdef _WIN32
 void handle_signal(int signal) {
@@ -432,7 +431,7 @@ If you still have problems, please contact us:
 }
 
 #ifdef _WIN32
-int system_popen(const char *cmd) {
+int system_popen(const char *cmd, const char* cwd) {
     HANDLE g_hChildStd_OUT_Rd = NULL;
     HANDLE g_hChildStd_OUT_Wr = NULL;
     SECURITY_ATTRIBUTES saAttr;
@@ -472,7 +471,7 @@ int system_popen(const char *cmd) {
                              TRUE,         // handles are inherited
                              0,            // creation flags
                              NULL,         // use parent's environment
-                             NULL,         // use parent's current directory
+                             cwd,          // use cwd directory
                              &siStartInfo, // STARTUPINFO pointer
                              &piProcInfo); // receives PROCESS_INFORMATION
 
@@ -495,7 +494,8 @@ int system_popen(const char *cmd) {
         if (!bSuccess || dwRead == 0)
             break;
         output += chBuf;
-        bSuccess = WriteFile(hParentStdOut, chBuf,
+        if (log_v)
+            bSuccess = WriteFile(hParentStdOut, chBuf,
                              dwRead, &dwWritten, NULL);
         if (!bSuccess)
             break;
@@ -508,6 +508,8 @@ int system_popen(const char *cmd) {
     // of the child process, for example.
     CloseHandle(piProcInfo.hProcess);
     CloseHandle(piProcInfo.hThread);
+    if (ec && !log_v)
+        LOGe << output;
 
     if (ec) {
         check_cuda_unsupport_version(output);
@@ -516,7 +518,7 @@ int system_popen(const char *cmd) {
     return ec;
 }
 #else
-int system_popen(const char* cmd) {
+int system_popen(const char* cmd, const char* cwd) {
     char buf[BUFSIZ];
     string cmd2;
     cmd2 = cmd;
@@ -542,8 +544,8 @@ int system_popen(const char* cmd) {
 }
 #endif
 
-void system_with_check(const char* cmd) {
-    auto ret = system_popen(cmd);
+void system_with_check(const char* cmd, const char* cwd) {
+    auto ret = system_popen(cmd, cwd);
     CHECK(ret>=0 && ret<=256) << "Run cmd failed:" << cmd <<
             "\nreturn ">> ret >> ". This might be an overcommit issue or out of memory."
             << "Try : sudo sysctl vm.overcommit_memory=1";

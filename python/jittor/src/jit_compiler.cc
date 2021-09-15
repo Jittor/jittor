@@ -37,10 +37,13 @@ namespace jit_compiler {
 std::mutex dl_open_mutex;
 
 jit_op_entry_t load_jit_lib(string name, string symbol_name="jit_entry") {
+    std::lock_guard<std::mutex> lock(dl_open_mutex);
     const char* msg = "";
     LOGvv << "Opening jit lib:" << name;
     #ifdef _WIN32
-    void* handle = (void*)LoadLibrary(name.c_str());
+    void* handle = (void*)LoadLibraryExA(name.c_str(), nullptr,
+        LOAD_LIBRARY_SEARCH_DEFAULT_DIRS |
+        LOAD_LIBRARY_SEARCH_USER_DIRS);
     #elif defined(__linux__)
     void* handle = dlopen(name.c_str(), RTLD_LAZY | RTLD_DEEPBIND | RTLD_LOCAL);
     msg = dlerror();
@@ -76,7 +79,11 @@ static string get_symbol_name(const string& jit_key) {
     op_name = Op::file_name_to_class_name(op_name);
     // _ZN7jittorXyyyyyy7jit_runEv
     // jittor::yyyyyy::jit_run
+    #ifdef _MSC_VER
+    op_name = "?jit_run@"+op_name+"Op@jittor@@QEAAXXZ";
+    #else
     op_name = "_ZN6jittor"+S(op_name.size()+2)+op_name+"Op7jit_runEv";
+    #endif
     return op_name;
 }
 
@@ -95,13 +102,15 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
     if (rewrite_op || !file_exist(jit_src_path))
         write(jit_src_path, src);
     string cmd;
+    
+#ifndef _MSC_VER
     if (is_cuda_op) {
-        cmd = nvcc_path 
+        cmd = "\"" + nvcc_path + "\""
             + " \"" + jit_src_path + "\"" + other_src
             + nvcc_flags + extra_flags
             + " -o \"" + jit_lib_path + "\"";
     } else {
-        cmd = cc_path
+        cmd = "\"" + cc_path + "\""
             + " \"" + jit_src_path + "\"" + other_src
             + cc_flags + extra_flags
             + " -o \"" + jit_lib_path + "\"";
@@ -110,6 +119,24 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
             "--cc_path=" + cmd;
 #endif
     }
+#else // Windows _MSC_VER
+    if (is_cuda_op) {
+        cmd = "\"" + nvcc_path + "\""
+            + " \"" + jit_src_path + "\"" + other_src
+            + nvcc_flags + extra_flags
+            + " -o \"" + jit_lib_path + "\"";
+    } else {
+        auto symbol_name = get_symbol_name(jit_key);
+        auto pos = cc_flags.find("-link");
+        auto cc_flags1 = cc_flags.substr(0, pos);
+        auto cc_flags2 = cc_flags.substr(pos);
+        cmd = "\"" + cc_path + "\""
+            + " \"" + jit_src_path + "\"" + other_src
+            + cc_flags1 + extra_flags
+            + " -Fe: \"" + jit_lib_path + "\" " + cc_flags2 + " -EXPORT:\""
+            + symbol_name + "\"";
+    }
+#endif
     cache_compile(cmd, cache_path, jittor_path);
     auto symbol_name = get_symbol_name(jit_key);
     auto jit_entry = load_jit_lib(jit_lib_path, symbol_name);

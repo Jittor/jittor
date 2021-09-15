@@ -24,7 +24,7 @@ struct MemInfo {
     MemInfo();
 };
 
-extern MemInfo mem_info;
+EXTERN_LIB MemInfo mem_info;
 
 // @pyjt(get_mem_info)
 inline MemInfo get_mem_info() { return mem_info; }

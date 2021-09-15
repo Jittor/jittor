@@ -17,7 +17,7 @@ struct CudaDeviceAllocator : Allocator {
     void free(void* mem_ptr, size_t size, const size_t& allocation) override;
 };
 
-extern CudaDeviceAllocator cuda_device_allocator;
+EXTERN_LIB CudaDeviceAllocator cuda_device_allocator;
 
 }
 

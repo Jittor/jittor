@@ -25,7 +25,11 @@ void* AlignedAllocator::alloc(size_t size, size_t& allocation) {
 }
 
 void AlignedAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
+    #ifdef _WIN32
+    _aligned_free(mem_ptr);
+    #else
     ::free(mem_ptr);
+    #endif
 }
 
 } // jittor

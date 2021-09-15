@@ -135,7 +135,7 @@ DEF_IS(Slice, T) from_py_object(PyObject* obj) {
 
 // DumpGraphs
 struct DumpGraphs;
-extern PyTypeObject PyjtDumpGraphs;
+EXTERN_LIB PyTypeObject PyjtDumpGraphs;
 DEF_IS(DumpGraphs, bool) is_type(PyObject* obj) {
     return Py_TYPE(obj) == &PyjtDumpGraphs;
 }
@@ -157,7 +157,7 @@ DEF_IS(DumpGraphs, const T&) from_py_object(PyObject* obj) {
 
 // MemInfo
 struct MemInfo;
-extern PyTypeObject PyjtMemInfo;
+EXTERN_LIB PyTypeObject PyjtMemInfo;
 DEF_IS(MemInfo, bool) is_type(PyObject* obj) {
     return Py_TYPE(obj) == &PyjtMemInfo;
 }
@@ -177,7 +177,7 @@ DEF_IS(MemInfo, const T&) from_py_object(PyObject* obj) {
 
 // NanoString
 struct NanoString;
-extern PyTypeObject PyjtNanoString;
+EXTERN_LIB PyTypeObject PyjtNanoString;
 DEF_IS(NanoString, bool) is_type(PyObject* obj) {
     return Py_TYPE(obj) == &PyjtNanoString ||
         PyUnicode_CheckExact(obj) ||
@@ -215,7 +215,7 @@ DEF_IS(NanoString, T) from_py_object(PyObject* obj) {
 
 // NanoVector
 struct NanoVector;
-extern PyTypeObject PyjtNanoVector;
+EXTERN_LIB PyTypeObject PyjtNanoVector;
 DEF_IS(NanoVector, bool) is_type(PyObject* obj) {
     return Py_TYPE(obj) == &PyjtNanoVector ||
         PyList_CheckExact(obj) || PyTuple_CheckExact(obj);
@@ -253,7 +253,7 @@ DEF_IS(NanoVector, T) from_py_object(PyObject* obj) {
 struct ArrayArgs;
 struct VarHolder;
 vector<ArrayArgs> fetch_sync(const vector<VarHolder*>& vh);
-extern PyHeapTypeObject PyjtVarHolder;
+EXTERN_LIB PyHeapTypeObject PyjtVarHolder;
 DEF_IS(ArrayArgs, bool) is_type(PyObject* obj) {
     return 
         Py_TYPE(obj) == &PyjtVarHolder.ht_type ||
@@ -267,7 +267,7 @@ DEF_IS(ArrayArgs, bool) is_type(PyObject* obj) {
 
 DEF_IS(ArrayArgs, PyObject*) to_py_object(const T& a) {
 #if defined(__linux__) || defined(_WIN32)
-    int64 dims[a.shape.size()];
+    STACK_ALLOC(int64, dims, a.shape.size());
 #elif defined(__APPLE__)
     long dims[a.shape.size()];
 #endif
@@ -351,8 +351,8 @@ DEF_IS(ArrayArgs, T) from_py_object(PyObject* obj) {
 
 // VarHolder
 struct VarHolder;
-extern PyHeapTypeObject PyjtVarHolder;
-namespace jit_op_maker { extern VarHolder* array_(ArrayArgs&& args); }
+EXTERN_LIB PyHeapTypeObject PyjtVarHolder;
+namespace jit_op_maker { EXTERN_LIB VarHolder* array_(ArrayArgs&& args); }
 DEF_IS(VarHolder*, bool) is_type(PyObject* obj) {
     return Py_TYPE(obj) == &PyjtVarHolder.ht_type ||
         is_type<ArrayArgs>(obj);
@@ -383,7 +383,7 @@ DEF_IS(VarHolder*, T) from_py_object(PyObject* obj, unique_ptr<VarHolder>& holde
 struct DataView;
 DEF_IS(DataView, PyObject*) to_py_object(T a) {
 #if defined(__linux__) || defined(_WIN32)
-    int64 dims[a.shape.size()];
+    STACK_ALLOC(int64, dims, a.shape.size());
 #elif defined(__APPLE__)
     long dims[a.shape.size()];
 #endif
@@ -410,8 +410,9 @@ DEF_IS(DataView, PyObject*) to_py_object(T a) {
     return oh.release();
 }
 
-
+#ifdef __GNUC__
 #pragma GCC diagnostic ignored "-Wstrict-aliasing"
+#endif
 struct ItemData;
 DEF_IS(ItemData, PyObject*) to_py_object(T a) {
     if (a.dtype == ns_bool) {

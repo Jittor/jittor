@@ -167,9 +167,13 @@ def pool_cleanup():
     del p
 
 def pool_initializer():
+    if os.name == 'nt':
+        os.environ['log_silent'] = '1'
+        os.environ['gdb_path'] = ""
     if cc is None:
         try_import_jit_utils_core()
-    cc.init_subprocess()
+    if cc:
+        cc.init_subprocess()
 
 def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
     global pool_size, p
@@ -209,6 +213,11 @@ def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
     finally:
         mp.current_process()._config['daemon'] = bk
 
+if os.name=='nt' and getattr(mp.current_process(), '_inheriting', False):
+    # when windows spawn multiprocess, disable sub-subprocess
+    os.environ["DISABLE_MULTIPROCESSING"] = '1'
+    os.environ["log_silent"] = '1'
+        
 if os.environ.get("DISABLE_MULTIPROCESSING", '0') == '1':
     os.environ["use_parallel_op_compiler"] = '1'
     def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
@@ -270,6 +279,8 @@ def find_cache_path():
 def get_version(output):
     if output.endswith("mpicc"):
         version = run_cmd(output+" --showme:version")
+    elif os.name == 'nt' and output.endswith("cl"):
+        version = run_cmd(output)
     else:
         version = run_cmd(output+" --version")
     v = re.findall("[0-9]+\\.[0-9]+\\.[0-9]+", version)
@@ -315,6 +326,7 @@ def get_cc_type(cc_path):
     if "clang" in bname: return "clang"
     if "icc" in bname or "icpc" in bname: return "icc"
     if "g++" in bname: return "g++"
+    if "cl" in bname: return "cl"
     LOG.f(f"Unknown cc type: {bname}")
 
 def get_py3_config_path():
@@ -410,7 +422,15 @@ is_in_ipynb = in_ipynb()
 cc = None
 LOG = LogWarper()
 
-cc_path = env_or_find('cc_path', 'g++', silent=True)
+check_msvc_install = False
+msvc_path = ""
+if os.name == 'nt' and os.environ.get("cc_path", "")=="":
+    from pathlib import Path
+    msvc_path = os.path.join(str(Path.home()), ".cache", "jittor", "msvc")
+    cc_path = os.path.join(msvc_path, "cl_x64", "bin", "cl")
+    check_msvc_install = True
+else:
+    cc_path = env_or_find('cc_path', 'g++', silent=True)
 os.environ["cc_path"] = cc_path
 cc_type = get_cc_type(cc_path)
 cache_path = find_cache_path()
@@ -420,9 +440,14 @@ _py3_include_path = None
 _py3_extension_suffix = None
 
 if os.name == 'nt':
+    if check_msvc_install:
+        if not os.path.isfile(cc_path):
+            from jittor_utils import install_msvc
+            install_msvc.install(msvc_path)
     os.RTLD_NOW = os.RTLD_GLOBAL = os.RTLD_DEEPBIND = 0
     path = os.path.dirname(cc_path).replace('/', '\\')
-    sys.path.insert(0, path)
-    os.environ["PATH"] = path+';'+os.environ["PATH"]
-    if hasattr(os, "add_dll_directory"):
-        os.add_dll_directory(path)
+    if path:
+        sys.path.insert(0, path)
+        os.environ["PATH"] = path+';'+os.environ["PATH"]
+        if hasattr(os, "add_dll_directory"):
+            os.add_dll_directory(path)

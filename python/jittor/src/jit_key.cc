@@ -6,17 +6,17 @@
 // ***************************************************************
 #ifndef _WIN32
 #include <sys/mman.h>
+#include <unistd.h>
 #endif
 #include <sstream>
-#include <unistd.h>
 #include "jit_key.h"
 #include "utils/str_utils.h"
 
 namespace jittor {
 
-extern thread_local size_t protected_page;
-
 #ifndef _WIN32
+EXTERN_LIB thread_local size_t protected_page;
+
 static size_t get_buffer_end_page(size_t buffer_end) {
     // get the last complete page in buffer
     // 4k align :
@@ -120,5 +120,9 @@ vector<pair<string,string>> parse_jit_keys(const string& s) {
 }
 
 thread_local JitKey jk;
+
+JK& get_jk() {
+    return jk;
+}
 
 } // jittor

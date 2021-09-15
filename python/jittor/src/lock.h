@@ -19,7 +19,7 @@ void lock();
 
 void unlock();
 
-extern int _has_lock;
+EXTERN_LIB int _has_lock;
 
 struct lock_guard {
     int has_lock = 0;

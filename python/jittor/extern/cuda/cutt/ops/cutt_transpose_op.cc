@@ -66,7 +66,7 @@ unordered_map<string, unsigned int> cutt_plan_cache;
 
 #else // JIT
 
-extern unordered_map<string, unsigned int> cutt_plan_cache;
+EXTERN_LIB unordered_map<string, unsigned int> cutt_plan_cache;
 
 void CuttTransposeOp::jit_run() {
     auto* __restrict__ xp = x->mem_ptr;
@@ -93,6 +93,7 @@ void CuttTransposeOp::jit_run() {
         checkCudaErrors(cudaMemcpyAsync(yp, xp, x->size, cudaMemcpyDefault, 0));
         return;
     }
+    JK& jk = get_jk();
     jk.clear();
     jk << dim << ',';
     for (int i=0; i<dim; i++) jk << x_shape[i] << ',';

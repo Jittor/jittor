@@ -6,19 +6,8 @@
 // ***************************************************************
 #include <stdio.h>
 #include <stdlib.h>
-#ifndef _WIN32
-#include <sys/wait.h>
-#ifdef __linux__
-#include <sys/prctl.h>
-#endif
-#include <unistd.h>
-#include <execinfo.h>
-#include <sys/wait.h>
-#else
-#include <windows.h>
-#endif
-#include <unistd.h>
 #include <iostream>
+#include "utils/cross_platform.h"
 #include "utils/tracer.h"
 
 namespace jittor {
@@ -32,7 +21,7 @@ DEFINE_FLAG_WITH_SETTER(int, gdb_attach, 0, "gdb attach self process.");
 
 string _extra_gdb_cmd;
 
-int system_popen(const char* cmd);
+int system_popen(const char* cmd, const char* cwd=nullptr);
 
 #ifdef _WIN32
 string get_cmds(const vector<const char*>& argv) {
@@ -76,9 +65,9 @@ void setter_gdb_attach(int v) {
                 }
             }
         }
+        LOGi << "gdb attach for" << "pid=" >> pid_buf << argv;
         // argv.insert(argv.end(), {name_buf, pid_buf, NULL});
         argv.insert(argv.end(), {"-p", pid_buf, NULL});
-        LOGi << "gdb attach for" << "pid=" >> pid_buf << argv;
 
         #ifdef _WIN32
         // _spawnvp(_P_OVERLAY, gdb_path.c_str(), (char* const*)&argv[0]);
@@ -150,6 +139,7 @@ void breakpoint() {
 }
 
 void print_trace() {
+    LOGir << "???" << gdb_path;
     if (gdb_path.size()) {
         // using gdb to print the stack trace
         char pid_buf[30];

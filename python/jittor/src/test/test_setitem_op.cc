@@ -13,7 +13,7 @@ void cuda_loop_schedule(NanoVector o_shape, int* masks, int* tdims);
 
 JIT_TEST(cuda_loop_schedule) {
     auto check = [&](const vector<int64>& shape, const vector<int>& masks, vector<int> tdims={}) {
-        int masks2[shape.size()];
+        STACK_ALLOC(int, masks2, shape.size());
         int tdims2[6];
         cuda_loop_schedule(shape, masks2, tdims2);
         while (tdims.size() < 6) tdims.push_back(1);

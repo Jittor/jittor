@@ -34,7 +34,7 @@ void EventQueue::Worker::stop() {
     LOGv << "stopped event queue worker.";
 }
 
-extern vector<void(*)()> cleanup_callback;
+EXTERN_LIB vector<void(*)()> cleanup_callback;
 
 EventQueue::Worker::Worker() : thread(EventQueue::Worker::start) {
     cleanup_callback.push_back(&EventQueue::Worker::stop);

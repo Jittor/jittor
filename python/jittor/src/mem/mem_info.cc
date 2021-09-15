@@ -16,7 +16,9 @@
 #elif defined(_WIN32)
 #include <windows.h>
 #endif
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 
 #include "var.h"
 #include "op.h"
@@ -62,7 +64,7 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
         FloatOutput{(double)mem_info.total_cpu_ram, " KMG", 1024, "B"};
     log << "total_cuda_ram:" << 
         FloatOutput{(double)mem_info.total_cuda_ram, " KMG", 1024, "B"} >> "\n";
-    log << "hold_vars:" << VarHolder::hold_vars.size()
+    log << "hold_vars:" << hold_vars.size()
         << "lived_vars:" << Var::number_of_lived_vars
         << "lived_ops:" << Op::number_of_lived_ops >> '\n';
     log << "update queue:" << update_queue.queue.size() 
@@ -72,7 +74,7 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
     // get the oldest var
     // vector<Node*> queue;
     // auto t = ++Node::tflag_count;
-    // for (auto& vh : VarHolder::hold_vars)
+    // for (auto& vh : hold_vars)
     //     if (vh->var->tflag != t) {
     //         vh->var->tflag = t;
     //         queue.push_back(vh->var);
@@ -148,7 +150,7 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
     if (dump_var) {
         vector<Node*> queue;
         unordered_set<Node*> visited;
-        for (auto& vh : VarHolder::hold_vars)
+        for (auto& vh : hold_vars)
             if (!visited.count(vh->var)) {
                 queue.push_back(vh->var);
                 visited.insert(vh->var);
@@ -186,7 +188,7 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
     log.end();
 }
 
-extern vector<void(*)()> sigquit_callback;
+EXTERN_LIB vector<void(*)()> sigquit_callback;
 
 void meminfo_callback() {
     display_memory_info();

@@ -25,6 +25,7 @@ def install_mkl(root_folder):
     # origin url is
     # url = "https://github.com/intel/mkl-dnn/releases/download/v1.0.2/mkldnn_lnx_1.0.2_cpu_gomp.tgz"
     import platform
+    url = None
     if platform.system()=="Linux":
         if platform.machine()=='x86_64':
             filename = "dnnl_lnx_2.2.0_cpu_gomp.tgz"
@@ -35,23 +36,44 @@ def install_mkl(root_folder):
         else:
             raise RuntimeError(f"platform.machine()=={platform.machine()} not support yet,"
             " Please contact us on https://github.com/jittor/jittor ")
+    elif os.name == "nt":
+        # url = "https://github.com/oneapi-src/oneDNN/releases/download/v2.2/dnnl_win_2.2.0_cpu_iomp.zip"
+        # url = "https://github.com/oneapi-src/oneDNN/releases/download/v2.2/dnnl_win_2.2.0_cpu_vcomp.zip"
+        filename = "dnnl_win_2.2.0_cpu_vcomp.zip"
+        md5 = "fa12c693b2ec07700d174e1e99d60a7e"
     else:
         raise RuntimeError(f"platform.machine()=={platform.machine()} not support yet,"
         " Please contact us on https://github.com/jittor/jittor ")
 
-    url = "https://cg.cs.tsinghua.edu.cn/jittor/assets/" + filename
+    if not url:
+        url = "https://cg.cs.tsinghua.edu.cn/jittor/assets/" + filename
     fullname = os.path.join(root_folder, filename)
-    dirname = os.path.join(root_folder, filename.replace(".tgz",""))
+    dirname = os.path.join(root_folder, filename.rsplit(".",1)[0])
 
-    if not os.path.isfile(os.path.join(dirname, "lib", "libmkldnn.so")):
+    if not (os.path.isfile(os.path.join(dirname, "lib", "libmkldnn.so")) or
+        os.path.isfile(os.path.join(dirname, "bin", "dnnl.dll"))):
         LOG.i("Downloading mkl...")
         download_url_to_local(url, filename, root_folder, md5)
-        import tarfile
-
-        with tarfile.open(fullname, "r") as tar:
-            tar.extractall(root_folder)
-
-        assert 0 == os.system(f"cd {dirname}/examples && "
+        if fullname.endswith(".zip"):
+            import zipfile
+            with zipfile.ZipFile(fullname, "r") as f:
+                f.extractall(root_folder)
+        else:
+            import tarfile
+            with tarfile.open(fullname, "r") as tar:
+                tar.extractall(root_folder)
+        if os.name == 'nt':
+            # this env is used for execute example/text
+            bin_path = os.path.join(dirname, "bin")
+            sys.path.append(bin_path)
+            os.add_dll_directory(bin_path)
+            os.environ["PATH"] = os.environ.get("PATH", "") + ";" + bin_path
+            cmd = f"cd /d {dirname}/examples && {cc_path} {dirname}/examples/cnn_inference_f32.cpp -I{dirname}/include -Fe: {dirname}/examples/test {cc_flags} {win_link_flags} {dirname}/lib/mkldnn.lib"
+            
+            assert 0 == os.system(cmd)
+            assert 0 == os.system(f"{dirname}/examples/test")
+        else:
+            assert 0 == os.system(f"cd {dirname}/examples && "
             f"{cc_path} -std=c++14 cnn_inference_f32.cpp -Ofast -lmkldnn -I ../include -L ../lib -o test && LD_LIBRARY_PATH=../lib/ ./test")
 
 def setup_mkl():
@@ -74,7 +96,7 @@ def setup_mkl():
     mkl_include_path = os.environ.get("mkl_include_path")
     mkl_lib_path = os.environ.get("mkl_lib_path")
     
-    if platform.system() == 'Linux':
+    if platform.system() == 'Linux' or os.name == 'nt':
         if mkl_lib_path is None or mkl_include_path is None:
             mkl_install_sh = os.path.join(jittor_path, "script", "install_mkl.sh")
             LOG.v("setup mkl...")
@@ -95,6 +117,13 @@ def setup_mkl():
         mkl_lib_path = os.path.join(mkl_home, "lib")
 
         mkl_lib_name = os.path.join(mkl_lib_path, "libmkldnn.so")
+        extra_flags = f" -I\"{mkl_include_path}\" -L\"{mkl_lib_path}\" -lmkldnn -Wl,-rpath='{mkl_lib_path}' "
+        if os.name == 'nt':
+            mkl_lib_name = os.path.join(mkl_home, 'bin', 'dnnl.dll')
+            mkl_bin_path = os.path.join(mkl_home, 'bin')
+            os.add_dll_directory(mkl_bin_path)
+            mkl_lib = os.path.join(mkl_lib_path, "dnnl.lib")
+            extra_flags = f" -I\"{mkl_include_path}\" \"{mkl_lib}\" "
         assert os.path.isdir(mkl_include_path)
         assert os.path.isdir(mkl_lib_path)
         assert os.path.isfile(mkl_lib_name)
@@ -103,7 +132,6 @@ def setup_mkl():
         LOG.v(f"mkl_lib_name: {mkl_lib_name}")
         # We do not link manualy, link in custom ops
         # ctypes.CDLL(mkl_lib_name, dlopen_flags)
-        extra_flags = f" -I'{mkl_include_path}' -L'{mkl_lib_path}' -lmkldnn -Wl,-rpath='{mkl_lib_path}' "
 
     elif platform.system() == 'Darwin':
         mkl_lib_paths = [
@@ -508,6 +536,7 @@ world_size = mpi.world_size() if in_mpi else 1
 setup_nccl()
 
 setup_cutt()
+
 try:
     setup_mkl()
 except Exception as e:

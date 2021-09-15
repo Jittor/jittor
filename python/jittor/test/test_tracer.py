@@ -31,6 +31,17 @@ with jt.flag_scope(extra_gdb_cmd="c;q"):
         print(out)
         assert "Attaching to" in out
 
+    def test_segfault(self):
+        if os.name == 'nt':
+            a = jt.array([1,2,3])
+            b = jt.array([1,2,300000000])
+            c = a[b]
+            try:
+                c.sync()
+            except Exception as e:
+                assert "access violation reading" in str(e)
+        
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -27,9 +27,9 @@ vector<set_seed_callback> callbacks;
 int current_seed;
 
 // fron fetch_op.cc
-extern list<VarPtr> fetcher;
-extern list<VarPtr> fetcher_to_free;
-extern vector<void(*)()> cleanup_callback;
+EXTERN_LIB list<VarPtr> fetcher;
+EXTERN_LIB list<VarPtr> fetcher_to_free;
+EXTERN_LIB vector<void(*)()> cleanup_callback;
 
 void cleanup() {
     fetcher_to_free.clear();
