@@ -241,7 +241,7 @@ void segfault_sigaction(int signal, siginfo_t *si, void *arg) {
         return;
     }
     if (signal == SIGCHLD) {
-        if (si->si_code != CLD_EXITED && si->si_status != SIGTERM) {
+        if (si->si_code != CLD_EXITED && si->si_status != SIGTERM && _pid == getpid()) {
             LOGe << "Caught SIGCHLD" 
                 << "si_errno:" << si->si_errno 
                 << "si_code:" << si->si_code 
@@ -259,6 +259,7 @@ void segfault_sigaction(int signal, siginfo_t *si, void *arg) {
         exited = true;
         do_exit();
     }
+    if (exited) do_exit();
     std::cerr << "Caught segfault at address " << si->si_addr << ", "
         << "thread_name: '" << thread_name << "', flush log..." << std::endl;
     std::cerr.flush();
@@ -556,9 +557,11 @@ void system_with_check(const char* cmd, const char* cwd) {
 std::thread log_thread(log_main);
 #endif
 
+int log_exit = 0;
+
 void log_exiting() {
-    if (exited) return;
-    exited = true;
+    if (log_exit) return;
+    log_exit = true;
     for (auto cb : cleanup_callback)
         cb();
     cleanup_callback.clear();

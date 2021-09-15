@@ -17,7 +17,9 @@ void* AlignedAllocator::alloc(size_t size, size_t& allocation) {
     #ifndef _WIN32
     #ifdef __APPLE__
     size += 32-size%32;
-    #endif
+    // low version of mac don't have aligned_alloc
+    return new char[size];
+    #else
     return aligned_alloc(alignment, size);
     #else
     return _aligned_malloc(size, alignment);
@@ -28,7 +30,11 @@ void AlignedAllocator::free(void* mem_ptr, size_t size, const size_t& allocation
     #ifdef _WIN32
     _aligned_free(mem_ptr);
     #else
+    #ifdef __APPLE__
+    delete[] (char*)mem_ptr;
+    #else
     ::free(mem_ptr);
+    #endif
     #endif
 }
 

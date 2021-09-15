@@ -159,6 +159,86 @@ class TestPad(unittest.TestCase):
             out.detach().numpy(), output.data,
             atol=1e-4)
 
+    def test_ctc_loss(self):
+        def check(T,C,N,S,S_min):
+            jt.set_global_seed(0)
+
+            # Initialize random batch of input vectors, for *size = (T,N,C)
+            input = jt.randn(T, N, C).log_softmax(2)
+            # input = -jt.ones((T, N, C))
+            # input[0,0,1] += 0.01
+
+            # Initialize random batch of targets (0 = blank, 1:C = classes)
+            target = jt.randint(low=1, high=C, shape=(N, S), dtype=jt.int)
+            _input_jt = input
+
+            input_lengths = jt.full((N,), T, dtype=jt.int)
+            target_lengths = jt.randint(low=S_min, high=S+1, shape=(N,), dtype=jt.int)
+            # ctc_loss = nn.CTCLoss()
+            loss = jt.ctc_loss(input, target, input_lengths, target_lengths, reduction='none')
+            _loss_jt = loss
+
+            loss_jt = loss.numpy()
+
+            input = torch.Tensor(input.numpy()).detach().requires_grad_()
+            input_lengths = torch.full(size=(N,), fill_value=T, dtype=torch.long)
+            target_lengths = torch.LongTensor(target_lengths.numpy())
+            input_lengths = torch.LongTensor(input_lengths.numpy())
+            target = torch.LongTensor(target.numpy())
+            loss = tnn.CTCLoss(reduction='none')(input, target, input_lengths, target_lengths)
+            np.testing.assert_allclose(loss.detach().numpy(), loss_jt, rtol=1e-5, atol=1e-5)
+
+            dinput_jt = jt.grad(_loss_jt, _input_jt)
+            dinput_jt.sync()
+
+            loss.sum().backward()
+            # print(input.grad)
+            # print(dinput_jt)
+            # print(loss)
+
+        def check_gpu_with_cpu(T,C,N,S,S_min):
+            jt.set_global_seed(1)
+
+            # Initialize random batch of input vectors, for *size = (T,N,C)
+            input = jt.randn(T, N, C).log_softmax(2)
+            # input = -jt.ones((T, N, C))
+            # input[0,0,1] += 0.01
+
+            # Initialize random batch of targets (0 = blank, 1:C = classes)
+            target = jt.randint(low=1, high=C, shape=(N, S), dtype=jt.int)
+            _input_jt = input
+
+            input_lengths = jt.full((N,), T, dtype=jt.int)
+            target_lengths = jt.randint(low=S_min, high=S+1, shape=(N,), dtype=jt.int)
+            # ctc_loss = nn.CTCLoss()
+            loss = jt.ctc_loss(input, target, input_lengths, target_lengths, reduction='none')
+            _loss_jt = loss
+
+            loss_jt = loss.numpy()
+
+            dinput_jt = jt.grad(_loss_jt, _input_jt)
+            dinput_jt.sync()
+
+            with jt.flag_scope(use_cuda=1):
+                input = input.copy()
+                target = target.copy()
+                input_lengths = input_lengths.copy()
+                target_lengths = target_lengths.copy()
+                loss = jt.ctc_loss(input, target, input_lengths, target_lengths, reduction='none')
+                grad = jt.grad(loss, input)
+                np.testing.assert_allclose(_loss_jt.numpy(), loss.numpy(), atol=1e-5, rtol=1e-5)
+                np.testing.assert_allclose(dinput_jt.numpy(), grad.numpy(), atol=1e-5, rtol=1e-5)
+
+
+        check(2,2,1,1,1)
+        check(50,20,16,30,10)
+
+        if jt.has_cuda:
+            with jt.flag_scope(use_cuda=1):
+                check(2,2,1,1,1)
+                check(50,20,16,30,10)
+            check_gpu_with_cpu(50,20,16,30,10)
+
 class TestOther(unittest.TestCase):
     def test_save(self):
         pp = [1,2,jt.array([1,2,3]), {"a":[1,2,3], "b":jt.array([1,2,3])}]

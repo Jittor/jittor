@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.2.3.92'
+__version__ = '1.2.3.102'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -69,6 +69,15 @@ def safeunpickle(path):
         except:
             raise RuntimeError("pytorch need to be installed when load pth format.")
         model_dict = torch.load(path, map_location=torch.device('cpu'))
+        try:
+            for k, v in model_dict.items():
+                try:
+                    if not isinstance(v, np.ndarray) and hasattr(v, "cpu"):
+                        model_dict[k] = v.cpu().detach().numpy()
+                except:
+                    pass
+        except:
+            pass
         return model_dict
     with open(path, "rb") as f:
         s = f.read()
@@ -332,12 +341,12 @@ def std(x):
     return out
 Var.std = std
 
-def norm(x, k=2, dim=-1, keepdim=False):
-    assert k==1 or k==2
-    if k==1:
+def norm(x, p=2, dim=-1, keepdim=False, eps=1e-30):
+    assert p==1 or p==2
+    if p==1:
         return x.abs().sum(dim, keepdim)
-    if k==2:
-        return (x.sqr()).sum(dim, keepdim).maximum(1e-6).sqrt()
+    if p==2:
+        return (x.sqr()).sum(dim, keepdim).maximum(eps).sqrt()
 Var.norm = norm
 
 origin_reshape = reshape
@@ -796,12 +805,30 @@ class Module:
         return _uniq(ps)
 
     def named_parameters(self):
-        ps = self.parameters()
-        return [ (p.name(), p) for p in ps ]
+        uniq_set = set()
+        ps = {}
+        stack = []
+        def callback(parents, k, v, n):
+            stack.append(str(k))
+            dc = v.__dict__
+            if isinstance(v, nn.ParameterList):
+                dc = v.params
+            for k2, p in dc.items():
+                if isinstance(k2, str) and k2.startswith("_"): continue
+                if isinstance(p, Var):
+                    if id(p) in uniq_set: continue
+                    uniq_set.add(id(p))
+                    pname = ".".join(stack[1:]+[str(k2)])
+                    ps[pname] = p
+                    if len(pname) > len(p.name()):
+                        p.name(pname)
+        def callback_leave(parents, k, v, n):
+            stack.pop()
+        self.dfs([], None, callback, callback_leave)
+        return ps
 
     def state_dict(self):
-        ps = self.parameters()
-        return { p.name(): p for p in ps }
+        return self.named_parameters()
 
     def load_state_dict(self, params):
         self.load_parameters(params)
@@ -1011,10 +1038,13 @@ Arguments of hook are defined as::
             >>> net.save('net.pkl')
             >>> net.load('net.pkl')
         '''
-        params = self.parameters()
+        params = self.named_parameters()
         params_dict = {}
-        for p in params:
-            params_dict[p.name()] = p.data
+        for k, v in params.items():
+            if isinstance(v, Var):
+                params_dict[k] = v.numpy()
+            else:
+                params_dict[k] = v
         safepickle(params_dict, path)
 
     def load(self, path: str):

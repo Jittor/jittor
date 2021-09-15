@@ -127,6 +127,7 @@ class Dataset(object):
         self.epoch_id = 0
         self.sampler = None
         self._disable_workers = False
+        self._shuffle_rng = np.random.default_rng(1)
 
     def __getitem__(self, index):
         raise NotImplementedError
@@ -214,8 +215,8 @@ class Dataset(object):
         jittor_utils.cc.init_subprocess()
         jt.jt_init_subprocess()
         seed = jt.get_seed()
-        wseed = (seed ^ worker_id) ^ 1234
-        jt.set_seed(wseed)
+        wseed = (seed ^ (worker_id*1167)) ^ 1234
+        jt.set_global_seed(wseed)
         # parallel_op_compiler still problematic,
         # it is not work on ubuntu 16.04. but worked on ubuntu 20.04
         # it seems like the static value of parallel compiler
@@ -426,7 +427,10 @@ Example::
         elif self.shuffle == False:
             index_list = get_order_list(self.total_len)
         else:
-            index_list = get_random_list(self.total_len)
+            # using _shuffle_rng to generate multiprocess
+            # consist shuffle list
+            # index_list = get_random_list(self.total_len)
+            index_list = self._shuffle_rng.permutation(range(self.total_len))
         
         # scatter index_list for all mpi process
         # scatter rule:

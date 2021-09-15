@@ -30,8 +30,10 @@ int current_seed;
 EXTERN_LIB list<VarPtr> fetcher;
 EXTERN_LIB list<VarPtr> fetcher_to_free;
 EXTERN_LIB vector<void(*)()> cleanup_callback;
+EXTERN_LIB bool exited;
 
 void cleanup() {
+    exited = true;
     fetcher_to_free.clear();
     fetcher.clear();
     for (auto cb : cleanup_callback)
