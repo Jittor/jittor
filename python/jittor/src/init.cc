@@ -29,8 +29,10 @@ int current_seed;
 // fron fetch_op.cc
 extern list<VarPtr> fetcher;
 extern list<VarPtr> fetcher_to_free;
+extern bool exited;
 
 void cleanup() {
+    exited = true;
     fetcher_to_free.clear();
     fetcher.clear();
 }
