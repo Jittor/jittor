@@ -47,8 +47,8 @@ jit_op_entry_t load_jit_lib(string name, string symbol_name="jit_entry") {
     //dlerror();
     auto jit_entry = (jit_op_entry_t)dlsym(handle, symbol_name.c_str());
     const char* dlsym_error = dlerror();
-    CHECK(!dlsym_error) << "Loading symbol jit_entry from" << name << "failed:" << dlsym_error;
-    
+    // CHECK(!dlsym_error) << "Loading symbol jit_entry from" << name << "failed:" << dlsym_error;
+    CHECK(jit_entry) << "Loading symbol" << symbol_name << "from" << name << "failed:" << dlsym_error;
     return jit_entry;
 }
 
@@ -99,7 +99,7 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
             + cc_flags + extra_flags
             + " -o '" + jit_lib_path + "'";
 #endif
-#ifdef __linux__
+#if defined(__linux__) && !defined(mobile)
         cmd = python_path+" "+jittor_path+"/utils/asm_tuner.py "
             "--cc_path=" + cmd;
 #endif
