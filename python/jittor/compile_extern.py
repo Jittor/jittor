@@ -70,7 +70,7 @@ def setup_mkl():
     #     from torch import nn
     # except:
     #     torch = None
-    if os.environ.get("is_mobile", "1") == "1":
+    if os.environ.get("is_mobile", "0") == "1":
             mkl_include_path = '/data/data/com.example.mjittor/termux/odnn/include'
             mkl_lib_path = '/data/data/com.example.mjittor/termux/odnn/lib'
     else:
@@ -105,7 +105,7 @@ def setup_mkl():
         LOG.v(f"mkl_lib_name: {mkl_lib_name}")
         # We do not link manualy, link in custom ops
         # ctypes.CDLL(mkl_lib_name, dlopen_flags)
-        if os.environ.get("is_mobile", "1") == "1":
+        if os.environ.get("is_mobile", "0") == "1":
             extra_flags = f" -L/data/data/com.example.mjittor/.cache/jittor/default/clang -lpython3.9 -ljit_utils_core -ljittor_core -Wl,-rpath=/data/data/com.example.mjittor/.cache/jittor/default/clang/ -lomp -I'{mkl_include_path}' -L'{mkl_lib_path}' -lmkldnn -Wl,-rpath='{mkl_lib_path}' "
         else:
             extra_flags = f" -I'{mkl_include_path}' -L'{mkl_lib_path}' -lmkldnn -Wl,-rpath='{mkl_lib_path}' "

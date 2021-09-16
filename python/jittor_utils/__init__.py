@@ -195,7 +195,7 @@ def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
     finally:
         mp.current_process()._config['daemon'] = bk
 
-if os.environ.get("DISABLE_MULTIPROCESSING", '0') == '1':
+if os.environ.get("DISABLE_MULTIPROCESSING", '0') == '1' or os.environ.get("is_mobile", "0") == "1":
     os.environ["use_parallel_op_compiler"] = '1'
     def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
         cmds = [ [cmd, cache_path, jittor_path] for cmd in cmds ]
@@ -216,7 +216,10 @@ def download(url, filename):
 
 def find_cache_path():
     from pathlib import Path
-    path = str(Path.home())
+    if os.environ.get("is_mobile", "0") == "1":
+        path = "/data/data/com.example.mjittor"
+    else:
+        path = str(Path.home())
     dirs = [".cache", "jittor", os.path.basename(cc_path)]
     if os.environ.get("debug")=="1":
         dirs[-1] += "_debug"

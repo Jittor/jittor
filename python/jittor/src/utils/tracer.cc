@@ -11,7 +11,9 @@
 #include <sys/prctl.h>
 #endif
 #include <unistd.h>
+#ifndef __mobile__
 #include <execinfo.h>
+#endif
 #include <iostream>
 #include "utils/tracer.h"
 
@@ -128,6 +130,7 @@ void print_trace() {
             waitpid(child_pid,NULL,0);
         }
     } else {
+        #ifndef __mobile__
         void *trace[16];
         char **messages = (char **)NULL;
         int i, trace_size = 0;
@@ -154,6 +157,7 @@ void print_trace() {
             int ret = system(syscom);
             (void)ret;
         }
+        #endif
     }
 }
 
