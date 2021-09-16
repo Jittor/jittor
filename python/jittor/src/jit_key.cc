@@ -12,7 +12,11 @@
 
 namespace jittor {
 
+#ifdef __mobile__
+extern size_t protected_page;
+#else
 extern thread_local size_t protected_page;
+#endif
 
 static size_t get_buffer_end_page(size_t buffer_end) {
     // get the last complete page in buffer
@@ -111,6 +115,10 @@ vector<pair<string,string>> parse_jit_keys(const string& s) {
     return jit_keys;
 }
 
+#ifdef __mobile__
+JitKey jk;
+#else
 thread_local JitKey jk;
+#endif
 
 } // jittor

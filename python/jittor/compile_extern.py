@@ -70,10 +70,12 @@ def setup_mkl():
     #     from torch import nn
     # except:
     #     torch = None
-
-    mkl_include_path = os.environ.get("mkl_include_path")
-    mkl_lib_path = os.environ.get("mkl_lib_path")
-    
+    if os.environ.get("is_mobile", "1") == "1":
+            mkl_include_path = '/data/data/com.example.mjittor/termux/odnn/include'
+            mkl_lib_path = '/data/data/com.example.mjittor/termux/odnn/lib'
+    else:
+        mkl_include_path = os.environ.get("mkl_include_path")
+        mkl_lib_path = os.environ.get("mkl_lib_path")
     if platform.system() == 'Linux':
         if mkl_lib_path is None or mkl_include_path is None:
             mkl_install_sh = os.path.join(jittor_path, "script", "install_mkl.sh")
@@ -103,7 +105,10 @@ def setup_mkl():
         LOG.v(f"mkl_lib_name: {mkl_lib_name}")
         # We do not link manualy, link in custom ops
         # ctypes.CDLL(mkl_lib_name, dlopen_flags)
-        extra_flags = f" -I'{mkl_include_path}' -L'{mkl_lib_path}' -lmkldnn -Wl,-rpath='{mkl_lib_path}' "
+        if os.environ.get("is_mobile", "1") == "1":
+            extra_flags = f" -L/data/data/com.example.mjittor/.cache/jittor/default/clang -lpython3.9 -ljit_utils_core -ljittor_core -Wl,-rpath=/data/data/com.example.mjittor/.cache/jittor/default/clang/ -lomp -I'{mkl_include_path}' -L'{mkl_lib_path}' -lmkldnn -Wl,-rpath='{mkl_lib_path}' "
+        else:
+            extra_flags = f" -I'{mkl_include_path}' -L'{mkl_lib_path}' -lmkldnn -Wl,-rpath='{mkl_lib_path}' "
 
     elif platform.system() == 'Darwin':
         mkl_lib_paths = [

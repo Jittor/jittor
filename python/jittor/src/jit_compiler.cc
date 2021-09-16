@@ -88,11 +88,19 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
             + nvcc_flags + extra_flags
             + " -o '" + jit_lib_path + "'";
     } else {
+#ifdef __mobile__
         cmd = cc_path
             + " '" + jit_src_path + "'" + other_src
             + cc_flags + extra_flags
             + " -o '" + jit_lib_path + "'";
-
+        cmd = python_path+" "+jittor_path+"/utils/asm_tuner.py "
+            "--cc_path=" + cmd;
+#else
+        cmd = cc_path
+            + " '" + jit_src_path + "'" + other_src
+            + cc_flags + extra_flags
+            + " -o '" + jit_lib_path + "'";
+#endif
 #ifdef __linux__
         cmd = python_path+" "+jittor_path+"/utils/asm_tuner.py "
             "--cc_path=" + cmd;

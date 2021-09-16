@@ -78,7 +78,11 @@ struct __jk_int256 {
     int64 a,b,c,d;
 };
 
+#ifdef __mobile__
+extern JitKey jk;
+#else
 extern thread_local JitKey jk;
+#endif
 typedef JitKey JK;
 
 inline JK& operator<<(JK& jk, const char* s) {
