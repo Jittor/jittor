@@ -1066,6 +1066,8 @@ make_cache_dir(ck_path)
 # build cache_compile
 cc_flags += f" -I{os.path.join(jittor_path, 'src')} "
 cc_flags += py_include
+if os.environ.get("is_mobile", "0") == "1":
+    cc_flags += " -I/data/data/com.example.mjittor/termux/include -I/data/data/com.example.mjittor/termux/include/c++/v1 -Dmobile"
 check_cache_compile()
 LOG.v(f"Get cache_compile: {jit_utils.cc}")
 

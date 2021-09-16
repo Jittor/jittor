@@ -11,7 +11,9 @@
 #include <sys/prctl.h>
 #endif
 #include <unistd.h>
+#ifndef mobile
 #include <execinfo.h>
+#endif
 #include <sys/wait.h>
 #include <sys/time.h>
 #else

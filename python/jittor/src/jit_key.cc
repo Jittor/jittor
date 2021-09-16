@@ -14,7 +14,7 @@
 
 namespace jittor {
 
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(mobile) 
 EXTERN_LIB thread_local size_t protected_page;
 
 static size_t get_buffer_end_page(size_t buffer_end) {
@@ -31,7 +31,7 @@ static size_t get_buffer_end_page(size_t buffer_end) {
 #endif
 
 JitKey::JitKey() {
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(mobile) 
     auto buffer_end_page = get_buffer_end_page((size_t)&buffer[buffer_size-1]);
     LOGvv << "protect page" << (void*)buffer_end_page;
     ASSERT(0==mprotect((void*)buffer_end_page, getpagesize(), PROT_NONE));
@@ -40,7 +40,7 @@ JitKey::JitKey() {
 }
 
 JitKey::~JitKey() {
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(mobile) 
     auto buffer_end_page = get_buffer_end_page((size_t)&buffer[buffer_size-1]);
     LOGvv << "un-protect page" << (void*)buffer_end_page;
     mprotect((void*)buffer_end_page, getpagesize(), PROT_READ|PROT_WRITE|PROT_EXEC);
