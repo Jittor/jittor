@@ -37,7 +37,7 @@ jit_op_entry_t load_jit_lib(string name, string symbol_name="jit_entry") {
     LOGvv << "Opening jit lib:" << name;
     // void* handle = dlopen(name.c_str(), RTLD_NOW | RTLD_DEEPBIND | RTLD_LOCAL);
     // RTLD_DEEPBIND and openmp cause segfault
-#ifdef __linux__
+#if defined(__linux__) && !defined(mobile)
     void* handle = dlopen(name.c_str(), RTLD_NOW | RTLD_LOCAL | RTLD_DEEPBIND);
 #else
     void *handle = dlopen(name.c_str(), RTLD_NOW | RTLD_LOCAL);

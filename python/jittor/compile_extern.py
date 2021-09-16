@@ -76,7 +76,7 @@ def setup_mkl():
     else:
         mkl_include_path = os.environ.get("mkl_include_path")
         mkl_lib_path = os.environ.get("mkl_lib_path")
-    if platform.system() == 'Linux':
+    if platform.system() == 'Linux' :
         if mkl_lib_path is None or mkl_include_path is None:
             mkl_install_sh = os.path.join(jittor_path, "script", "install_mkl.sh")
             LOG.v("setup mkl...")
@@ -93,8 +93,9 @@ def setup_mkl():
                     mkl_home = os.path.join(mkl_path, name)
                     break
             assert mkl_home!=""
-        mkl_include_path = os.path.join(mkl_home, "include")
-        mkl_lib_path = os.path.join(mkl_home, "lib")
+        if os.environ.get("is_mobile", "0") == "0":
+            mkl_include_path = os.path.join(mkl_home, "include")
+            mkl_lib_path = os.path.join(mkl_home, "lib")
 
         mkl_lib_name = os.path.join(mkl_lib_path, "libmkldnn.so")
         assert os.path.isdir(mkl_include_path)

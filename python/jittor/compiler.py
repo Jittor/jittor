@@ -607,7 +607,7 @@ def compile_custom_ops(
     """
     if dlopen_flags is None:
         dlopen_flags = os.RTLD_GLOBAL | os.RTLD_NOW
-        if platform.system() == 'Linux':
+        if platform.system() == 'Linux'  and os.environ.get("is_mobile", "0") == "0":
             dlopen_flags |= os.RTLD_DEEPBIND
 
     srcs = {}
@@ -859,13 +859,13 @@ def check_debug_flags():
 cc_flags = " "
 # os.RTLD_NOW | os.RTLD_GLOBAL cause segfault when import torch first
 import_flags = os.RTLD_NOW | os.RTLD_GLOBAL
-if platform.system() == 'Linux':
+if platform.system() == 'Linux' and os.environ.get("is_mobile", "0") == "0":
     import_flags |= os.RTLD_DEEPBIND
 # if cc_type=="icc":
 #     # weird link problem, icc omp library may conflict and cause segfault
 #     import_flags = os.RTLD_NOW | os.RTLD_GLOBAL
 dlopen_flags = os.RTLD_NOW | os.RTLD_GLOBAL
-if platform.system() == 'Linux':
+if platform.system() == 'Linux' and os.environ.get("is_mobile", "0") == "0":
     import_flags |= os.RTLD_DEEPBIND
 
 with jit_utils.import_scope(import_flags):
@@ -1064,11 +1064,12 @@ LOG.vv("compile order:", files)
 if platform.system() == 'Linux':
     libname = {"clang":"omp", "icc":"iomp5", "g++":"gomp"}[cc_type]
     libname = ctypes.util.find_library(libname)
-    assert libname is not None, "openmp library not found"
+    if os.environ.get("is_mobile", "0") == "0":
+        assert libname is not None, "openmp library not found"
     ctypes.CDLL(libname, os.RTLD_NOW | os.RTLD_GLOBAL)
 
 # get os release
-if platform.system() == 'Linux':
+if platform.system() == 'Linux' and os.environ.get("is_mobile", "0") == "0":
     with open("/etc/os-release", "r", encoding='utf8') as f:
         s = f.read().splitlines()
         os_release = {}
@@ -1124,7 +1125,7 @@ if use_data_gz:
     files.append(data_o_path)
     files = [f for f in files if "__data__" not in f]
 
-if os.environ.get("is_mobile", "0") == 1:
+if os.environ.get("is_mobile", "0") == "1":
     compile(cc_path, cc_flags+opt_flags+f' -L/data/data/com.example.mjittor/termux/lib -I/data/data/com.example.mjittor/termux/include/c++/v1 -L/data/data/com.example.mjittor/.cache/jittor/default/clang/ -lomp -lpython3.9 -ljit_utils_core -Wl,-rpath=/data/data/com.example.mjittor/.cache/jittor/default/clang/ -Dmobile', files, 'jittor_core'+extension_suffix)
 else:
     compile(cc_path, cc_flags+opt_flags, files, 'jittor_core'+extension_suffix)

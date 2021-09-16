@@ -1292,7 +1292,7 @@ def dirty_fix_pytorch_runtime_error():
     '''
     import os, platform
 
-    if platform.system() == 'Linux':
+    if platform.system() == 'Linux' and os.environ.get("is_mobile", "0") == "0":
         os.RTLD_GLOBAL = os.RTLD_GLOBAL | os.RTLD_DEEPBIND
     
 
