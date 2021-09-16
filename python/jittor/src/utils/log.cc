@@ -88,7 +88,7 @@ void print_prefix(std::ostream* out) {
     
     auto usecs = tv.tv_usec;
     
-    #ifdef __mobile__
+    #ifdef mobile
     uint32_t tid = get_tid()%100;
     #else
     thread_local uint32_t tid = get_tid()%100;
@@ -187,13 +187,13 @@ std::vector<std::map<string,string>> log_capture_read() {
 void log_exiting();
 
 bool exited = false;
-#ifdef __mobile__
+#ifdef mobile
 size_t protected_page = 0;
 #else
 size_t thread_local protected_page = 0;
 #endif
 int segfault_happen = 0;
-#ifdef __mobile__
+#ifdef mobile
 string thread_name;
 #else
 string thread_local thread_name;

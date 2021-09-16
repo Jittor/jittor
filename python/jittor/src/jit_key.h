@@ -78,7 +78,7 @@ struct __jk_int256 {
     int64 a,b,c,d;
 };
 
-#ifdef __mobile__
+#ifdef mobile
 extern JitKey jk;
 #else
 extern thread_local JitKey jk;

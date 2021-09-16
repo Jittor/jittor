@@ -22,7 +22,7 @@ namespace jittor {
     m(float32) \
     m(float64)
 
-#ifdef __mobile__
+#ifdef mobile
 #define map_size(T) {#T, __builtin_ffs(sizeof(T))-1},
 #else
 #define map_size(T) {#T, ffs(sizeof(T))-1},

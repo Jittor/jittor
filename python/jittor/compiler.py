@@ -682,7 +682,7 @@ def compile_custom_ops(
     LOG.vvv(f"Build custum ops lib:{gen_lib}")
     LOG.vvvv(f"Build sources:{builds}")
     if os.environ.get("is_mobile", "0") == "1":
-        compile(cc_path, extra_flags+cc_flags+opt_flags+includes+" -L/data/data/com.example.mjittor/.cache/jittor/default/clang -L/data/data/com.example.mjittor/termux/lib -I/data/data/com.example.mjittor/termux/include/c++/v1", builds, gen_lib)
+        compile(cc_path, extra_flags+cc_flags+opt_flags+includes+" -L/data/data/com.example.mjittor/.cache/jittor/default/clang -L/data/data/com.example.mjittor/termux/lib -I/data/data/com.example.mjittor/termux/include/c++/v1 -Dmobile", builds, gen_lib)
     else:
         compile(cc_path, extra_flags+cc_flags+opt_flags+includes, builds, gen_lib)
 
@@ -802,7 +802,7 @@ def check_cache_compile():
     global jit_utils_core_files
     jit_utils_core_files = files
     if os.environ.get("is_mobile", "0") == "1":
-        recompile = compile(cc_path, cc_flags+f" {opt_flags} -L/data/data/com.example.mjittor/termux/lib -I/data/data/com.example.mjittor/termux/include/c++/v1 -lpython3.9 ", files, 'jit_utils_core'+extension_suffix, True)
+        recompile = compile(cc_path, cc_flags+f" {opt_flags} -L/data/data/com.example.mjittor/termux/lib -I/data/data/com.example.mjittor/termux/include/c++/v1 -lpython3.9 -Dmobile", files, 'jit_utils_core'+extension_suffix, True)
     else:
         recompile = compile(cc_path, cc_flags+f" {opt_flags} ", files, 'jit_utils_core'+extension_suffix, True)
     if recompile and jit_utils.cc:
@@ -814,7 +814,7 @@ def check_cache_compile():
         assert jit_utils.cc
         # recompile, generate cache key
         if os.environ.get("is_mobile", "0") == "1":
-            compile(cc_path, cc_flags+f" {opt_flags} -I/data/data/com.example.mjittor/termux/lib -L/data/data/com.example.mjittor/termux/lib -I/data/data/com.example.mjittor/termux/include/c++/v1 -lpython3.9 ", files, 'jit_utils_core'+extension_suffix, True)
+            compile(cc_path, cc_flags+f" {opt_flags} -I/data/data/com.example.mjittor/termux/lib -L/data/data/com.example.mjittor/termux/lib -I/data/data/com.example.mjittor/termux/include/c++/v1 -lpython3.9 -Dmobile", files, 'jit_utils_core'+extension_suffix, True)
         else:
             compile(cc_path, cc_flags+f" {opt_flags} ", files, 'jit_utils_core'+extension_suffix, True)
 
@@ -965,7 +965,7 @@ if os.environ.get("enable_lto") == "1":
         lto_flags = " -flto "
 
 if os.environ.get("is_mobile", "0") == "1":
-    py_include = run_cmd(py3_config_path+" --includes") + " -I/data/data/com.example.mjittor/termux/include -I/data/data/com.example.mjittor/termux/include/c++/v1"
+    py_include = run_cmd(py3_config_path+" --includes") + " -I/data/data/com.example.mjittor/termux/include -I/data/data/com.example.mjittor/termux/include/c++/v1 -Dmobile"
 else:
     py_include = run_cmd(py3_config_path+" --includes")
 LOG.i(f"py_include: {py_include}")
@@ -1125,7 +1125,7 @@ if use_data_gz:
     files = [f for f in files if "__data__" not in f]
 
 if os.environ.get("is_mobile", "0") == 1:
-    compile(cc_path, cc_flags+opt_flags+f' -L/data/data/com.example.mjittor/termux/lib -I/data/data/com.example.mjittor/termux/include/c++/v1 -L/data/data/com.example.mjittor/.cache/jittor/default/clang/ -lomp -lpython3.9 -ljit_utils_core -Wl,-rpath=/data/data/com.example.mjittor/.cache/jittor/default/clang/ ', files, 'jittor_core'+extension_suffix)
+    compile(cc_path, cc_flags+opt_flags+f' -L/data/data/com.example.mjittor/termux/lib -I/data/data/com.example.mjittor/termux/include/c++/v1 -L/data/data/com.example.mjittor/.cache/jittor/default/clang/ -lomp -lpython3.9 -ljit_utils_core -Wl,-rpath=/data/data/com.example.mjittor/.cache/jittor/default/clang/ -Dmobile', files, 'jittor_core'+extension_suffix)
 else:
     compile(cc_path, cc_flags+opt_flags, files, 'jittor_core'+extension_suffix)
 

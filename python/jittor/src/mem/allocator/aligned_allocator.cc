@@ -19,7 +19,7 @@ void* AlignedAllocator::alloc(size_t size, size_t& allocation) {
     // low version of mac don't have aligned_alloc
     return new char[size];
     #else
-    #ifdef __mobile__
+    #ifdef mobile
     return malloc(size);
     #else
     return aligned_alloc(alignment, size);

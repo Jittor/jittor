@@ -63,7 +63,7 @@ extern void flush_log();
 extern void log_capture_start();
 extern void log_capture_stop();
 extern std::vector<std::map<string,string>> log_capture_read();
-#ifdef __mobile__
+#ifdef mobile
 extern string thread_name;
 #else
 extern string thread_local thread_name;

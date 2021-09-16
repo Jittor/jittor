@@ -103,7 +103,7 @@ void LoopToFuncPass::run() {
         auto& fc = ir->children[i];
         fc->attrs["loop_func"] = func->attrs["lvalue"];
     }
-    #if (defined __APPLE__) || (defined __mobile__)
+    #if (defined __APPLE__) || (defined mobile)
     ir->remove_all_unused();
     #endif
 }

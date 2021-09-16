@@ -12,7 +12,7 @@
 
 namespace jittor {
 
-#ifdef __mobile__
+#ifdef mobile
 extern size_t protected_page;
 #else
 extern thread_local size_t protected_page;
@@ -115,7 +115,7 @@ vector<pair<string,string>> parse_jit_keys(const string& s) {
     return jit_keys;
 }
 
-#ifdef __mobile__
+#ifdef mobile
 JitKey jk;
 #else
 thread_local JitKey jk;
