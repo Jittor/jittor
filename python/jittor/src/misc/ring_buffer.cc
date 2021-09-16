@@ -6,7 +6,9 @@
 // ***************************************************************
 #include <chrono>
 #include <thread>
+#ifndef _WIN32
 #include <sys/mman.h>
+#endif
 #include "common.h"
 #include "misc/ring_buffer.h"
 
@@ -33,7 +35,7 @@ RingBuffer::~RingBuffer() {
 }
 
 
-RingBuffer* RingBuffer::make_ring_buffer(uint64 size, bool multiprocess) {
+RingBuffer* RingBuffer::make_ring_buffer(uint64 size, bool multiprocess, uint64 buffer, bool init) {
     int i=0;
     for (;(1ll<<i)<size;i++);
     uint64 size_mask = (1ll<<i)-1;
@@ -41,21 +43,36 @@ RingBuffer* RingBuffer::make_ring_buffer(uint64 size, bool multiprocess) {
     uint64 total_size = sizeof(RingBuffer) + size;
     void* ptr = multiprocess ?
         // mmap(NULL, total_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0) :
-        mmap(NULL, total_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0) :
+        #ifndef _WIN32
+        mmap(NULL, total_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0) 
+        #else
+        // TODO: multiprocess ring buffer in windows
+        (void*)buffer
+        #endif
+        :
         // mmap(NULL, total_size, PROT_READ | PROT_WRITE, MAP_SHARED, -1, 0) :
         (void*)malloc(total_size);
-    std::memset(ptr, 0, total_size);
     auto rb = (RingBuffer*)ptr;
+    if (!init) return rb;
+    std::memset(ptr, 0, total_size);
     new (rb) RingBuffer(size, multiprocess);
     return rb;
 }
 
-void RingBuffer::free_ring_buffer(RingBuffer* rb) {
+void RingBuffer::free_ring_buffer(RingBuffer* rb, uint64 buffer, bool init) {
     uint64 total_size = sizeof(RingBuffer) + rb->size;
     auto is_multiprocess = rb->is_multiprocess;
-    rb->~RingBuffer();
+    if (init)
+        rb->~RingBuffer();
     if (is_multiprocess) {
+        #ifndef _WIN32
         munmap(rb, total_size);
+        #else
+        if (!buffer)
+            free((void*)rb);
+        // this buffer is not owned by this obj
+        #endif
+        (void)total_size;
     } else {
         free((void*)rb);
     }

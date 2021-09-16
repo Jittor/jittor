@@ -94,7 +94,7 @@ static vector<Stack> get_stack_info() {
     auto frame = (PyFrameObject*)ret.obj;
     int n=0;
     while (frame) n++, frame = frame->f_back;
-    PyFrameObject* frames[n];
+    STACK_ALLOC(PyFrameObject*, frames, n);
     frame = (PyFrameObject*)ret.obj;
     int i=n;
     while (i) frames[--i] = frame, frame = frame->f_back;
@@ -225,7 +225,7 @@ static inline string get_var_data_str(Var* v) {
 }
 
 void TraceData::record_node(Node* node, bool record_stack) {
-    if (thread_name.size()) return;
+    if (get_thread_name().size()) return;
     NodeData data;
     data.id = node_data_cnt++;
     id_map[node] = data.id;
@@ -261,7 +261,7 @@ static int64 get_node_id(Node* node) {
 }
 
 void TraceData::release_node(Node* node) {
-    if (thread_name.size()) return;
+    if (get_thread_name().size()) return;
     auto iter = trace_data.id_map.find(node);
     if (iter == trace_data.id_map.end())
         return;

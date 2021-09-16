@@ -12,10 +12,10 @@
 
 namespace jittor {
 
-extern unordered_map<void*, int64> lived_nodes;
-extern int64 total_node;
-extern int64 nt;
-extern vector<Node*> free_buffer;
+EXTERN_LIB unordered_map<void*, int64> lived_nodes;
+EXTERN_LIB int64 total_node;
+EXTERN_LIB int64 nt;
+EXTERN_LIB vector<Node*> free_buffer;
 
 struct NodeFlags {
     typedef uint16 nf_t;

@@ -10,7 +10,7 @@
 namespace jittor {
 
 DECLARE_FLAG(int, trace_py_var);
-extern Op* trace_grad_op;
+EXTERN_LIB Op* trace_grad_op;
 struct JitKey;
 
 struct Stack {
@@ -64,7 +64,7 @@ struct TraceData {
     void record_execution(Op* op, bool is_fused_op, JitKey& jk);
 };
 
-extern TraceData trace_data;
+EXTERN_LIB TraceData trace_data;
 
 void print_node_trace(const Node* node, std::ostream& os);
 vector<Stack> get_node_trace(Node* node);

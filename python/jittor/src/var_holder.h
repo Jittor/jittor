@@ -30,6 +30,8 @@ struct ItemData {
 
 typedef struct _object PyObject;
 
+EXTERN_LIB list<VarHolder*> hold_vars;
+
 // @pyjt(Var)
 // @attrs(heaptype)
 struct VarHolder {
@@ -82,7 +84,6 @@ struct VarHolder {
     
     void operator=(VarPtr&& v);
 
-    static list<VarHolder*> hold_vars;
 
     /** 
      * set the name of the Var.

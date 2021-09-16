@@ -17,7 +17,7 @@ struct CudaHostAllocator : Allocator {
     void free(void* mem_ptr, size_t size, const size_t& allocation) override;
 };
 
-extern CudaHostAllocator cuda_host_allocator;
+EXTERN_LIB CudaHostAllocator cuda_host_allocator;
 
 }
 

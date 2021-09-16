@@ -7,11 +7,12 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#define _XOPEN_SOURCE 700
-#include <fcntl.h> /* open */
 #include <stdint.h> /* uint64_t  */
 #include <stdio.h> /* printf */
 #include <stdlib.h> /* size_t */
+#ifndef _WIN32
+#define _XOPEN_SOURCE 700
+#include <fcntl.h> /* open */
 #include <unistd.h> /* pread, sysconf */
 
 typedef struct {
@@ -77,3 +78,12 @@ int virt_to_phys_user(uintptr_t* paddr, uintptr_t vaddr)
     *paddr = (entry.pfn * sysconf(_SC_PAGE_SIZE)) + (vaddr % sysconf(_SC_PAGE_SIZE));
     return 0;
 }
+
+#else
+int virt_to_phys_user(uintptr_t* paddr, uintptr_t vaddr)
+{
+    paddr[0] = vaddr;
+    return 1;
+}
+
+#endif

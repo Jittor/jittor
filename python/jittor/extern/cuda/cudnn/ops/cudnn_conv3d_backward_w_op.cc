@@ -87,7 +87,7 @@ VarPtr CudnnConv3dBackwardWOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 
 #pragma clang diagnostic ignored "-Wtautological-compare"
 
-extern unordered_map<string, cudnnConvolutionBwdFilterAlgo_t> bwdw_algo_cache;
+EXTERN_LIB unordered_map<string, cudnnConvolutionBwdFilterAlgo_t> bwdw_algo_cache;
 
 template <typename T_ELEM> __inline__  cudnnDataType_t getDataType();
 template <> __inline__ cudnnDataType_t getDataType<half1>() { return CUDNN_DATA_HALF;   }
@@ -194,6 +194,7 @@ void CudnnConv3dBackwardWOp::jit_run() {
     cudnnConvolutionBwdFilterAlgo_t algo;
     bool benchmark=true;
 
+    JK& jk = get_jk();
     jk.clear();
     jk << dimX[0] << "," << dimX[1] << "," << dimX[2] << "," << dimX[3] << "," << dimX[4] << ",";
     jk << dimW[0] << "," << dimW[1] << "," << dimW[2] << "," << dimW[3] << "," << dimW[4] << ",";

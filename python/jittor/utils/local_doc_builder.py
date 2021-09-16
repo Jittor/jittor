@@ -21,7 +21,7 @@ def check(dirname, fname):
             src = src.replace(a, b)
             found = True
     if ac not in src and not found: return
-    n = len(dirname.split('/'))-1
+    n = len(dirname.split(os.path.sep))-1
     s = '.' + '/..' * n
     new_src = ""
     i = -1

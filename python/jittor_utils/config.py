@@ -20,11 +20,11 @@ if __name__ == "__main__":
 
     s = ""
     # base should be something like python3.7m python3.8
-    base = jittor_utils.run_cmd(jittor_utils.py3_config_path + " --includes").split()[0]
+    base = jittor_utils.get_py3_include_path().split()[0]
     base = "python3" + base.split("python3")[-1]
     for arg in sys.argv[1:]:
         if arg == "--include-flags":
-            s += jittor_utils.run_cmd(jittor_utils.py3_config_path + " --includes")
+            s += jittor_utils.get_py3_include_path()
             s += " -I"+os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "jittor", "src"))
             s += " "
         elif arg == "--libs-flags":
@@ -33,7 +33,7 @@ if __name__ == "__main__":
                 'Darwin': 'dylib',
                 'Windows': 'DLL',
             }[platform.system()]
-            ldflags = jittor_utils.run_cmd(jittor_utils.py3_config_path + " --ldflags")
+            ldflags = jittor_utils.run_cmd(jittor_utils.get_py3_config_path() + " --ldflags")
             libpaths = [l[2:] for l in ldflags.split(' ') if l.startswith("-L")]
             for libbase in libpaths:
                 libpath = os.path.join(libbase, f"lib{base}.{libext}")
@@ -42,6 +42,8 @@ if __name__ == "__main__":
                     break
             else:
                 raise RuntimeError("Python dynamic library not found")
+            if os.name == 'nt':
+                s = s.replace('-ldl', '')
         elif arg == "--cxx-flags":
             s += " --std=c++17 -fPIC "
         elif arg == "--cxx-example":

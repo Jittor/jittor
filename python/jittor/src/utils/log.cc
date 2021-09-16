@@ -6,11 +6,10 @@
 // ***************************************************************
 #include <string.h>
 #include <signal.h>
-#include <sys/time.h>
 #include <iomanip>
 #include <thread>
 #include <unordered_map>
-#include <unistd.h>
+#include "utils/cross_platform.h"
 #include "utils/log.h"
 #include "utils/mwsr_list.h"
 #include "utils/str_utils.h"
@@ -38,11 +37,19 @@ uint32_t get_tid() {
 }
 
 static bool supports_color() {
-    bool term_supports_color = false;
     #ifdef _WIN32
-    // TODO: windows color not supported yet.
-    term_supports_color = false;
-    #else
+    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (hOut == INVALID_HANDLE_VALUE) return 0;
+
+    DWORD dwMode = 0;
+    if (!GetConsoleMode(hOut, &dwMode)) return 0;
+
+    dwMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+    if (!SetConsoleMode(hOut, dwMode)) return 0;
+    return 1;
+
+    #endif
+    bool term_supports_color = false;
     const char* const term = getenv("TERM");
     if (term != NULL && term[0] != '\0') {
     term_supports_color =
@@ -57,16 +64,17 @@ static bool supports_color() {
         !strcmp(term, "linux") ||
         !strcmp(term, "cygwin");
     }
-    #endif
     return term_supports_color;
 }
 bool g_supports_color = supports_color();
+string thread_local thread_name;
 
 struct timeval start_tv;
 
 struct tm get_start_tm() {
     gettimeofday (&start_tv, NULL);
-    return *localtime(&start_tv.tv_sec);
+    time_t t = start_tv.tv_sec;
+    return *localtime(&t);
 }
 
 struct tm start_tm = get_start_tm();
@@ -111,7 +119,9 @@ void print_prefix(std::ostream* out) {
     *out << ' ';
 }
 
+#ifdef LOG_ASYNC
 MWSR_LIST(log, std::ostringstream);
+#endif
 DECLARE_FLAG(int, log_sync);
 
 std::mutex sync_log_m;
@@ -156,12 +166,14 @@ void log_capture(const string& s) {
 
 DECLARE_FLAG(int, log_silent);
 
-void send_log(std::ostringstream&& out) {
+void send_log(std::ostringstream&& out, char level, int verbose) {
     if (log_capture_enabled)
         log_capture(out.str());
-    if (log_silent) return;
+    if ((level=='i' || level=='w') && log_silent) return;
     if (!log_sync) {
+        #if LOG_ASYNC
         mwsr_list_log::push(move(out));
+        #endif
     } else {
         std::lock_guard<std::mutex> lk(sync_log_m);
         // std::cerr << "[SYNC]";
@@ -172,7 +184,9 @@ void send_log(std::ostringstream&& out) {
 
 void flush_log() {
     if (!log_sync) {
+        #if LOG_ASYNC
         mwsr_list_log::flush();
+        #endif
     } else {
         std::cerr.flush();
     }
@@ -193,13 +207,22 @@ size_t protected_page = 0;
 size_t thread_local protected_page = 0;
 #endif
 int segfault_happen = 0;
-#ifdef mobile
-string thread_name;
-#else
-string thread_local thread_name;
-#endif
 static int _pid = getpid();
+vector<void(*)()> cleanup_callback;
+vector<void(*)()> sigquit_callback;
+int64 last_q_time;
 
+string& get_thread_name() {
+    return thread_name;
+}
+
+#ifdef _WIN32
+void handle_signal(int signal) {
+    std::cerr << "Caught SIGNAL " << signal << ", quick exit";
+    std::cerr.flush();
+    abort();
+}
+#else
 static inline void do_exit() {
     #ifdef __APPLE__
     _Exit(1);
@@ -207,9 +230,6 @@ static inline void do_exit() {
     std::quick_exit(1);
     #endif
 }
-
-vector<void(*)()> sigquit_callback;
-int64 last_q_time;
 
 void segfault_sigaction(int signal, siginfo_t *si, void *arg) {
     if (signal == SIGQUIT) {
@@ -270,9 +290,16 @@ void segfault_sigaction(int signal, siginfo_t *si, void *arg) {
     segfault_happen = 1;
     exit(1);
 }
-
+#endif
 
 int register_sigaction() {
+#ifdef _WIN32
+    signal(SIGINT, handle_signal);
+    signal(SIGTERM, handle_signal);
+    // signal(SIGABRT, handle_signal);
+    signal(SIGSEGV, handle_signal);
+    signal(SIGFPE, handle_signal);
+#else
     struct sigaction sa;
 
     memset(&sa, 0, sizeof(struct sigaction));
@@ -290,12 +317,20 @@ int register_sigaction() {
     sigaction(SIGBUS, &sa, NULL);
     sigaction(SIGQUIT, &sa, NULL);
     // sigaction(SIGABRT, &sa, NULL);
+#endif
     return 0;
 }
 
-void log_main() {
+static int log_init() {
     register_sigaction();
     std::atexit(log_exiting);
+    return 1;
+}
+
+int _log_init = log_init();
+
+void log_main() {
+    #ifdef LOG_ASYNC
     mwsr_list_log::reduce([&](const std::ostringstream& out) {
         #ifdef TEST_LOG
         string s = out.str();
@@ -306,6 +341,7 @@ void log_main() {
     }, [&]() {
         std::cerr.flush();
     });
+    #endif
 }
 
 unordered_map<uint64_t, int> vprefix_map;
@@ -313,9 +349,9 @@ void stream_hash(uint64_t& hash, char c) {
     hash = hash * 257 + (uint8_t)c;
 }
 
+DEFINE_FLAG(int, log_sync, 1, "Set log printed synchronously.");
 DEFINE_FLAG(int, log_silent, 0, "The log will be completely silent.");
 DEFINE_FLAG(int, log_v, 0, "Verbose level of logging");
-DEFINE_FLAG(int, log_sync, 1, "Set log printed synchronously.");
 DEFINE_FLAG_WITH_SETTER(string, log_vprefix, "",
     "Verbose level of logging prefix\n"
     "example: log_vprefix='op=1,node=2,executor.cc:38$=1000'");
@@ -403,7 +439,95 @@ If you still have problems, please contact us:
     )";
 }
 
-int system_popen(const char* cmd) {
+#ifdef _WIN32
+int system_popen(const char *cmd, const char* cwd) {
+    HANDLE g_hChildStd_OUT_Rd = NULL;
+    HANDLE g_hChildStd_OUT_Wr = NULL;
+    SECURITY_ATTRIBUTES saAttr;
+    // Set the bInheritHandle flag so pipe handles are inherited.
+
+    saAttr.nLength = sizeof(SECURITY_ATTRIBUTES);
+    saAttr.bInheritHandle = TRUE;
+    saAttr.lpSecurityDescriptor = NULL;
+
+    // Create a pipe for the child process's STDOUT.
+    if (!CreatePipe(&g_hChildStd_OUT_Rd, &g_hChildStd_OUT_Wr, &saAttr, 0))
+        LOGf << "StdoutRd CreatePipe error";
+    // Ensure the read handle to the pipe for STDOUT is not inherited.
+    if (!SetHandleInformation(g_hChildStd_OUT_Rd, HANDLE_FLAG_INHERIT, 0))
+        LOGf << "Stdout SetHandleInformation error";
+
+    // Create the child process.
+    PROCESS_INFORMATION piProcInfo;
+    STARTUPINFO siStartInfo;
+    BOOL bSuccess = FALSE;
+    // Set up members of the PROCESS_INFORMATION structure.
+    ZeroMemory(&piProcInfo, sizeof(PROCESS_INFORMATION));
+
+    // Set up members of the STARTUPINFO structure.
+    // This structure specifies the STDIN and STDOUT handles for redirection.
+    ZeroMemory(&siStartInfo, sizeof(STARTUPINFO));
+    siStartInfo.cb = sizeof(STARTUPINFO);
+    siStartInfo.hStdError = g_hChildStd_OUT_Wr;
+    siStartInfo.hStdOutput = g_hChildStd_OUT_Wr;
+    siStartInfo.dwFlags |= STARTF_USESTDHANDLES;
+
+    // Create the child process.
+    bSuccess = CreateProcess(NULL,
+                             (char *)cmd,  // command line
+                             NULL,         // process security attributes
+                             NULL,         // primary thread security attributes
+                             TRUE,         // handles are inherited
+                             0,            // creation flags
+                             NULL,         // use parent's environment
+                             cwd,          // use cwd directory
+                             &siStartInfo, // STARTUPINFO pointer
+                             &piProcInfo); // receives PROCESS_INFORMATION
+
+    // If an error occurs, exit the application.
+    if (!bSuccess)
+        LOGf << "CreateProcess error";
+    // Close handles to the stdin and stdout pipes no longer needed by the child process.
+    // If they are not explicitly closed, there is no way to recognize that the child process has ended.
+    CloseHandle(g_hChildStd_OUT_Wr);
+
+    DWORD dwRead, dwWritten;
+    CHAR chBuf[BUFSIZ];
+    HANDLE hParentStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
+
+
+    string output;
+    for (;;)
+    {
+        bSuccess = ReadFile(g_hChildStd_OUT_Rd, chBuf, BUFSIZ, &dwRead, NULL);
+        if (!bSuccess || dwRead == 0)
+            break;
+        output += chBuf;
+        if (log_v)
+            bSuccess = WriteFile(hParentStdOut, chBuf,
+                             dwRead, &dwWritten, NULL);
+        if (!bSuccess)
+            break;
+    }
+    WaitForSingleObject(piProcInfo.hProcess, INFINITE);
+    DWORD ec;
+    GetExitCodeProcess(piProcInfo.hProcess, &ec);
+    // Close handles to the child process and its primary thread.
+    // Some applications might keep these handles to monitor the status
+    // of the child process, for example.
+    CloseHandle(piProcInfo.hProcess);
+    CloseHandle(piProcInfo.hThread);
+    if (ec && !log_v)
+        LOGe << output;
+
+    if (ec) {
+        check_cuda_unsupport_version(output);
+        check_cuda_gcc_version(output);
+    }
+    return ec;
+}
+#else
+int system_popen(const char* cmd, const char* cwd) {
     char buf[BUFSIZ];
     string cmd2;
     cmd2 = cmd;
@@ -427,27 +551,45 @@ int system_popen(const char* cmd) {
     }
     return ret;
 }
+#endif
 
-void system_with_check(const char* cmd) {
-    auto ret = system_popen(cmd);
+void system_with_check(const char* cmd, const char* cwd) {
+    auto ret = system_popen(cmd, cwd);
     CHECK(ret>=0 && ret<=256) << "Run cmd failed:" << cmd <<
             "\nreturn ">> ret >> ". This might be an overcommit issue or out of memory."
             << "Try : sudo sysctl vm.overcommit_memory=1";
     CHECKop(ret,==,0) << "Run cmd failed:" << cmd;
 }
 
+#ifdef LOG_ASYNC
 std::thread log_thread(log_main);
+#endif
+
 int log_exit = 0;
 
 void log_exiting() {
     if (log_exit) return;
     log_exit = true;
+    for (auto cb : cleanup_callback)
+        cb();
+    cleanup_callback.clear();
+#ifdef LOG_ASYNC
     mwsr_list_log::stop();
     log_thread.join();
+#endif
 }
 
 } // jittor
 
+
+void expect_error(std::function<void()> func) {
+    try {
+        func();
+    } catch (...) {
+        return;
+    }
+    LOGf << "Missing error";
+}
 
 #ifdef TEST_LOG
 

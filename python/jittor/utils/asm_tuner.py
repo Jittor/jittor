@@ -44,7 +44,7 @@ def init(cc_path,s_path):
 
     global file_idx
     file_idx=0
-    file_name=cc_path.split("/")[-1]
+    file_name=os.path.basename(cc_path)
 
     idx=0
     for line in s_content:

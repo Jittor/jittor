@@ -102,10 +102,12 @@ def simple_timer(name):
 
 @contextlib.contextmanager
 def import_scope(flags):
-    prev = sys.getdlopenflags()
-    sys.setdlopenflags(flags)
+    if os.name != 'nt':
+        prev = sys.getdlopenflags()
+        sys.setdlopenflags(flags)
     yield
-    sys.setdlopenflags(prev)
+    if os.name != 'nt':
+        sys.setdlopenflags(prev)
 
 def try_import_jit_utils_core(silent=None):
     global cc
@@ -132,7 +134,10 @@ def run_cmd(cmd, cwd=None, err_msg=None, print_error=True):
         r = sp.run(cmd, cwd=cwd, shell=True, stdout=sp.PIPE, stderr=sp.STDOUT)
     else:
         r = sp.run(cmd, shell=True, stdout=sp.PIPE, stderr=sp.STDOUT)
-    s = r.stdout.decode('utf8')
+    try:
+        s = r.stdout.decode('utf8')
+    except:
+        s = r.stdout.decode('gbk')
     if r.returncode != 0:
         if print_error:
             sys.stderr.write(s)
@@ -162,9 +167,13 @@ def pool_cleanup():
     del p
 
 def pool_initializer():
+    if os.name == 'nt':
+        os.environ['log_silent'] = '1'
+        os.environ['gdb_path'] = ""
     if cc is None:
         try_import_jit_utils_core()
-    cc.init_subprocess()
+    if cc:
+        cc.init_subprocess()
 
 def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
     global pool_size, p
@@ -172,7 +181,7 @@ def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
     mp.current_process()._config['daemon'] = False
     if pool_size == 0:
         try:
-            mem_bytes = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
+            mem_bytes = get_total_mem()
             mem_gib = mem_bytes/(1024.**3)
             pool_size = min(16,max(int(mem_gib // 3), 1))
             LOG.i(f"Total mem: {mem_gib:.2f}GB, using {pool_size} procs for compiling.")
@@ -181,9 +190,18 @@ def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
             # Use hard coded pool size instead.
             pool_size = 4
             LOG.i(f"using {pool_size} procs for compiling.")
-
+        if os.name == 'nt':
+            # a hack way to by pass windows
+            # multiprocess spawn init_main_from_path.
+            # check spawn.py:get_preparation_data
+            spec_bk = sys.modules['__main__'].__spec__
+            tmp = lambda x:x
+            tmp.name = '__main__'
+            sys.modules['__main__'].__spec__ = tmp
         p = Pool(pool_size, initializer=pool_initializer)
         p.__enter__()
+        if os.name == 'nt':
+            sys.modules['__main__'].__spec__ = spec_bk
         import atexit
         atexit.register(pool_cleanup)
     cmds = [ [cmd, cache_path, jittor_path] for cmd in cmds ]
@@ -245,7 +263,7 @@ def find_cache_path():
         for c in " (){}": cache_name = cache_name.replace(c, "_")
     except:
         pass
-    for name in cache_name.split("/"):
+    for name in os.path.normpath(cache_name).split(os.path.sep):
         dirs.insert(-1, name)
     os.environ["cache_name"] = cache_name
     LOG.v("cache_name: ", cache_name)
@@ -264,6 +282,8 @@ def find_cache_path():
 def get_version(output):
     if output.endswith("mpicc"):
         version = run_cmd(output+" --showme:version")
+    elif os.name == 'nt' and output.endswith("cl"):
+        version = run_cmd(output)
     else:
         version = run_cmd(output+" --version")
     v = re.findall("[0-9]+\\.[0-9]+\\.[0-9]+", version)
@@ -309,44 +329,128 @@ def get_cc_type(cc_path):
     if "clang" in bname: return "clang"
     if "icc" in bname or "icpc" in bname: return "icc"
     if "g++" in bname: return "g++"
+    if "cl" in bname: return "cl"
     LOG.f(f"Unknown cc type: {bname}")
 
+def get_py3_config_path():
+    global _py3_config_path
+    if _py3_config_path: 
+        return _py3_config_path
+
+    if os.name == 'nt':
+        return None
+    else:
+        # Search python3.x-config
+        # Note:
+        #   This may be called via c++ console. In that case, sys.executable will
+        #   be a path to the executable file, rather than python. So, we cannot infer 
+        #   python-config path only from sys.executable.
+        #   To address this issue, we add predefined paths to search,
+        #       - Linux: /usr/bin/python3.x-config
+        #       - macOS (installed via homebrew): /usr/local/bin/python3.x-config
+        #   There may be issues under other cases, e.g., installed via conda.
+        py3_config_paths = [
+            os.path.dirname(sys.executable) + f"/python3.{sys.version_info.minor}-config",
+            sys.executable + "-config",
+            f"/usr/bin/python3.{sys.version_info.minor}-config",
+            f"/usr/local/bin/python3.{sys.version_info.minor}-config",
+            f'/opt/homebrew/bin/python3.{sys.version_info.minor}-config',
+            os.path.dirname(sys.executable) + "/python3-config",
+        ]
+        if "python_config_path" in os.environ:
+            py3_config_paths.insert(0, os.environ["python_config_path"])
+
+        for py3_config_path in py3_config_paths:
+            if os.path.isfile(py3_config_path):
+                break
+        else:
+            raise RuntimeError(f"python3.{sys.version_info.minor}-config "
+                f"not found in {py3_config_paths}, please specify "
+                f"enviroment variable 'python_config_path',"
+                f" or install python3.{sys.version_info.minor}-dev")
+        _py3_config_path = py3_config_path
+        return py3_config_path
+
+def get_py3_include_path():
+    global _py3_include_path
+    if _py3_include_path: 
+        return _py3_include_path
+    
+    if os.name == 'nt':
+        # Windows
+        _py3_include_path = '-I"' + os.path.join(
+            os.path.dirname(sys.executable),
+            "include"
+        ) + '"'
+    else:
+        _py3_include_path = run_cmd(get_py3_config_path()+" --includes")
+    return _py3_include_path
+
+
+def get_py3_extension_suffix():
+    global _py3_extension_suffix
+    if _py3_extension_suffix: 
+        return _py3_extension_suffix
+    
+    if os.name == 'nt':
+        # Windows
+        _py3_extension_suffix = f".cp3{sys.version_info.minor}-win_amd64.pyd"
+    else:
+        _py3_extension_suffix = run_cmd(get_py3_config_path()+" --extension-suffix")
+    return _py3_extension_suffix
+
+def get_total_mem():
+    if os.name == 'nt':
+        from ctypes import Structure, c_int32, c_uint64, sizeof, byref, windll
+        class MemoryStatusEx(Structure):
+            _fields_ = [
+                ('length', c_int32),
+                ('memoryLoad', c_int32),
+                ('totalPhys', c_uint64),
+                ('availPhys', c_uint64),
+                ('totalPageFile', c_uint64),
+                ('availPageFile', c_uint64),
+                ('totalVirtual', c_uint64),
+                ('availVirtual', c_uint64),
+                ('availExtendedVirtual', c_uint64)]
+            def __init__(self):
+                self.length = sizeof(self)
+        m = MemoryStatusEx()
+        assert windll.kernel32.GlobalMemoryStatusEx(byref(m))
+        return m.totalPhys
+    else:
+        return os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
 
 is_in_ipynb = in_ipynb()
 cc = None
 LOG = LogWarper()
 
-cc_path = env_or_find('cc_path', 'g++', silent=True)
+check_msvc_install = False
+msvc_path = ""
+if os.name == 'nt' and os.environ.get("cc_path", "")=="":
+    from pathlib import Path
+    msvc_path = os.path.join(str(Path.home()), ".cache", "jittor", "msvc")
+    cc_path = os.path.join(msvc_path, "cl_x64", "bin", "cl")
+    check_msvc_install = True
+else:
+    cc_path = env_or_find('cc_path', 'g++', silent=True)
 os.environ["cc_path"] = cc_path
 cc_type = get_cc_type(cc_path)
 cache_path = find_cache_path()
 
+_py3_config_path = None
+_py3_include_path = None
+_py3_extension_suffix = None
 
-# Search python3.x-config
-# Note:
-#   This may be called via c++ console. In that case, sys.executable will
-#   be a path to the executable file, rather than python. So, we cannot infer 
-#   python-config path only from sys.executable.
-#   To address this issue, we add predefined paths to search,
-#       - Linux: /usr/bin/python3.x-config
-#       - macOS (installed via homebrew): /usr/local/bin/python3.x-config
-#   There may be issues under other cases, e.g., installed via conda.
-py3_config_paths = [
-    os.path.dirname(sys.executable) + f"/python3.{sys.version_info.minor}-config",
-    sys.executable + "-config",
-    f"/usr/bin/python3.{sys.version_info.minor}-config",
-    f"/usr/local/bin/python3.{sys.version_info.minor}-config",
-    f'/opt/homebrew/bin/python3.{sys.version_info.minor}-config',
-    os.path.dirname(sys.executable) + "/python3-config",
-]
-if "python_config_path" in os.environ:
-    py3_config_paths.insert(0, os.environ["python_config_path"])
-
-for py3_config_path in py3_config_paths:
-    if os.path.isfile(py3_config_path):
-        break
-else:
-    raise RuntimeError(f"python3.{sys.version_info.minor}-config "
-        f"not found in {py3_config_paths}, please specify "
-        f"enviroment variable 'python_config_path',"
-        f" or install python3.{sys.version_info.minor}-dev")
+if os.name == 'nt':
+    if check_msvc_install:
+        if not os.path.isfile(cc_path):
+            from jittor_utils import install_msvc
+            install_msvc.install(msvc_path)
+    os.RTLD_NOW = os.RTLD_GLOBAL = os.RTLD_DEEPBIND = 0
+    path = os.path.dirname(cc_path).replace('/', '\\')
+    if path:
+        sys.path.insert(0, path)
+        os.environ["PATH"] = path+';'+os.environ["PATH"]
+        if hasattr(os, "add_dll_directory"):
+            os.add_dll_directory(path)

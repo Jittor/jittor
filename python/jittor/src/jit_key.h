@@ -78,12 +78,8 @@ struct __jk_int256 {
     int64 a,b,c,d;
 };
 
-#ifdef mobile
-extern JitKey jk;
-#else
-extern thread_local JitKey jk;
-#endif
 typedef JitKey JK;
+EXTERN_LIB JK& get_jk();
 
 inline JK& operator<<(JK& jk, const char* s) {
     int i;
@@ -288,7 +284,11 @@ getChr(s,35)
 
 #define getChr(name, ii) ((_CS_MIN(ii,MAX_CONST_CHAR))<sizeof(name)/sizeof(*name)?name[ii]:0)
 
+#ifdef _MSC_VER
+#define _CS(str) str
+#else
 #define _CS(str) _CS_G<_CS_T(str)>()
+#endif
 
 template <char c1, char c2, char c3, char c4, char... Chars_> struct _CS_G {
  };

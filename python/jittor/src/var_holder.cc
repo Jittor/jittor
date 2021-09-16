@@ -21,11 +21,11 @@ namespace jittor {
 
 DEFINE_FLAG(int, lazy_execution, 1, "Default enabled, if disable, use immediately eager execution rather than lazy execution, This flag makes error message and traceback infomation better. But this flag will raise memory consumption and lower the performance.");
 
-list<VarHolder*> VarHolder::hold_vars;
+list<VarHolder*> hold_vars;
 
 void add_hold_vars(VarHolder* self) {
-    VarHolder::hold_vars.push_front(self);
-    self->iter = VarHolder::hold_vars.begin();
+    hold_vars.push_front(self);
+    self->iter = hold_vars.begin();
     if (lazy_execution) return;
     auto v = self->var;
     for (int i=0; i<5; i++) {
@@ -129,7 +129,7 @@ VarHolder* VarHolder::_update(VarHolder* v) {
     return this;
 }
 
-extern Executor exe;
+EXTERN_LIB Executor exe;
 
 void VarHolder::sync(bool device_sync) {
     jittor::sync({this}, device_sync);
@@ -162,12 +162,12 @@ ItemData VarHolder::item() {
 }
 
 // from fetch_op.cc
-extern list<VarPtr> fetcher;
+EXTERN_LIB list<VarPtr> fetcher;
 
 void sync_all(bool device_sync) {
     vector<Var*> vars;
-    vars.reserve(VarHolder::hold_vars.size());
-    for (auto v : VarHolder::hold_vars) {
+    vars.reserve(hold_vars.size());
+    for (auto v : hold_vars) {
         if (!v->var->_outputs.size())
             vars.push_back(v->var);
     }

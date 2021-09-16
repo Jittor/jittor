@@ -10,7 +10,7 @@ from jittor import LOG
 
 def find_jittor_path():
     path = os.path.realpath(__file__)
-    suffix = "test/test_utils.py"
+    suffix = "test_utils.py"
     assert path.endswith(suffix), path
     return path[:-len(suffix)]
     

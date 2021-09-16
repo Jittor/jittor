@@ -13,9 +13,11 @@ namespace jittor {
 // @pyjt(RingBuffer)
 struct PyMultiprocessRingBuffer {
     RingBuffer* rb;
+    uint64 buffer;
     bool _keep_numpy_array = false;
+    bool init;
     // @pyjt(__init__)
-    PyMultiprocessRingBuffer(uint64 size);
+    PyMultiprocessRingBuffer(uint64 size, uint64 buffer=0, bool init=true);
     // @pyjt(__dealloc__)
     ~PyMultiprocessRingBuffer();
     // @pyjt(push,send)
@@ -46,6 +48,9 @@ struct PyMultiprocessRingBuffer {
         s += ")";
         return s;
     }
+
+    // @pyjt(__get__size)
+    inline uint64 size() { return rb->size; }
 };
 
 

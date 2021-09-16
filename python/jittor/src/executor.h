@@ -24,7 +24,7 @@ struct Executor {
     void run_sync(vector<Var*> vars, bool device_sync);
 };
 
-extern Executor exe;
+EXTERN_LIB Executor exe;
 
 void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, int ll, int rr, int64 tt);
     

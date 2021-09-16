@@ -11,18 +11,7 @@ using namespace std;
 
 void test_main();
 
-void on_error() {
-    throw std::exception();
-}
-
-void expect_error(function<void()> func) {
-    try {
-        func();
-    } catch (...) {
-        return;
-    }
-    CHECK(0) << "Missing error";
-}
+void expect_error(function<void()> func);
 
 int main() {
     try {

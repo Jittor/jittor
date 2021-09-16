@@ -129,9 +129,9 @@ static unordered_set<string> binary_ops = {
 #define DEFINE_NS(T) NanoString ns_##T;
 FOR_ALL_NS(DEFINE_NS);
 
-unordered_map<string, NanoString> NanoString::__string_to_ns;
-char NanoString::__ns_to_string[ns_max_size*ns_max_len];
-int NanoString::__ns_len[ns_max_size];
+unordered_map<string, NanoString> __string_to_ns;
+char __ns_to_string[ns_max_size*ns_max_len];
+int __ns_len[ns_max_size];
 
 static void init_ns() {
     NanoString::ns_t i=0;
@@ -155,27 +155,27 @@ static void init_ns() {
             ns.set(NanoString::_type, NanoString::_binary, NanoString::_type_nbits);
             ns.set(NanoString::_bool, is_bool.count(name));
         }
-        NanoString::__string_to_ns[name] = ns;
+        __string_to_ns[name] = ns;
         auto name2 = ns.to_cstring();
         int len=0;
         for (;;len++) {
             name2[len] = name[len];
             if (!name[len]) break;
         }
-        NanoString::__ns_len[i-1] = len;
+        __ns_len[i-1] = len;
     };
     #define INIT_NS(T) func(#T, ns_##T);
     FOR_ALL_NS(INIT_NS);
     ASSERT(i<=(1<<NanoString::_index_nbits));
-    NanoString::__string_to_ns["sum"] = ns_add;
-    NanoString::__string_to_ns["min"] = ns_minimum;
-    NanoString::__string_to_ns["max"] = ns_maximum;
-    NanoString::__string_to_ns["float"] = ns_float32;
-    NanoString::__string_to_ns["double"] = ns_float64;
-    NanoString::__string_to_ns["int"] = ns_int32;
-    NanoString::__string_to_ns["uint"] = ns_uint32;
-    LOGvv << "init __string_to_ns" << NanoString::__string_to_ns;
-    LOGvv << "init __ns_to_string" << NanoString::__ns_to_string;
+    __string_to_ns["sum"] = ns_add;
+    __string_to_ns["min"] = ns_minimum;
+    __string_to_ns["max"] = ns_maximum;
+    __string_to_ns["float"] = ns_float32;
+    __string_to_ns["double"] = ns_float64;
+    __string_to_ns["int"] = ns_int32;
+    __string_to_ns["uint"] = ns_uint32;
+    LOGvv << "init __string_to_ns" << __string_to_ns;
+    LOGvv << "init __ns_to_string" << __ns_to_string;
 }
 
 int __init_ns = (init_ns(), 0);
