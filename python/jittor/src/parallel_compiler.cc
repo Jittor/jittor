@@ -25,7 +25,7 @@ namespace jittor {
 DEFINE_FLAG(int, use_parallel_op_compiler, 16, "Number of threads that parallel op comiler used, default 16, set this value to 0 will disable parallel op compiler.");
 
 // from log.cc
-extern int segfault_happen;
+EXTERN_LIB int segfault_happen;
 
 // simple thread used for parallel compilation
 struct SimpleThread {
@@ -36,7 +36,7 @@ struct SimpleThread {
     std::condition_variable cv;
     std::thread thread;
     void run() {
-        thread_name = "C"+S(id);
+        get_thread_name() = "C"+S(id);
         try {
             std::unique_lock<std::mutex> lck(mtx);
             if (func)
@@ -69,11 +69,20 @@ struct SimpleThread {
     }
 };
 
+struct SimpleThreads;
+EXTERN_LIB SimpleThreads threads;
+EXTERN_LIB vector<void(*)()> cleanup_callback;
+
 struct SimpleThreads {
     list<SimpleThread> threads;
-    SimpleThreads(int n) {
+    static void stop() {
+        jittor::threads.threads.clear();
+    }
+    void create_threads(int n) {
+        if (threads.size()) return;
         for (int i=0; i<n; i++)
             threads.emplace_back(i);
+        cleanup_callback.push_back(&stop);
     }
     void wait_all() {
         for (auto& t : threads) {
@@ -105,7 +114,7 @@ struct SimpleThreads {
                 return;
         }
     }
-};
+} threads;
 
 static int last_compiled_op_num = 0;
 static int not_compile_window = 0;
@@ -127,7 +136,7 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
     vector<int> op_needs_compile;
     string_view_map<int> map;
     vector<unique_ptr<FusedOp>> fop_needs_compile;
-    auto& jkl = jk;
+    auto& jkl = get_jk();
     
     for (uint rid=0; rid<queue.size(); rid++) {
         int root = queue[rid];
@@ -190,7 +199,7 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
     static volatile int has_error;
     static vector<vector<std::tuple<int,int,void*,string>>> op_entrys(thread_num);
     // <int,int,void*,string> represents: task id, is_fused_op, entry or context, new_jit_key
-    static SimpleThreads threads(thread_num);
+    threads.create_threads(thread_num);
     static std::mutex entry_lock;
     ai = 0;
     has_error = 0;
@@ -204,7 +213,7 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
     auto func = [&](int tid) {
         auto& entrys = op_entrys.at(tid);
         entrys.clear();
-        auto& jkl = jk;
+        auto& jkl = get_jk();
         while (!has_error && !segfault_happen) {
             int i = ai++;
             if (i >= n) break;
@@ -238,14 +247,14 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
                         bool needs_compile;
                         {
                             std::lock_guard<std::mutex> lock(entry_lock);
-                            auto iter = jit_ops.find(jk.to_cstring());
+                            auto iter = jit_ops.find(jkl.to_cstring());
                             needs_compile = (iter == jit_ops.end());
                             if (needs_compile) {
-                                jit_ops[jk.to_cstring()] = nullptr;
+                                jit_ops[jkl.to_cstring()] = nullptr;
                             }
                         }
                         if (!needs_compile) continue;
-                        string s = jk.to_string();
+                        string s = jkl.to_string();
                         auto op_entry = OpCompiler::do_compile(orc.op);
                         {
                             std::lock_guard<std::mutex> lock(entry_lock);
@@ -257,7 +266,7 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
             } catch (const std::exception& e) {
                 // log jit_key and file location
                 op->do_prepare(jkl);
-                string jit_src_path = Op::get_filename_from_jit_key(jk.to_cstring(), ".cc");
+                string jit_src_path = Op::get_filename_from_jit_key(jkl.to_cstring(), ".cc");
                 LOGe << "[Error] source file location:" << jit_src_path;
 
                 if (is_fused_op) {

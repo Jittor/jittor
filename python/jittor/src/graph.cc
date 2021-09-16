@@ -13,7 +13,7 @@ namespace jittor {
 
 DEFINE_FLAG(int, check_graph, 0, "Unify graph sanity check.");
 
-extern unordered_map<void*, int64> lived_nodes;
+EXTERN_LIB unordered_map<void*, int64> lived_nodes;
 
 template <typename T>
 string ss_convert(T x) {
@@ -25,7 +25,7 @@ string ss_convert(T x) {
 void do_graph_check() {
     vector<Node*> queue;
     unordered_map<Node*,int> visited;
-    for (auto& vh : VarHolder::hold_vars) {
+    for (auto& vh : hold_vars) {
         if (0==visited[vh->var]++)
             queue.push_back(vh->var);
     }
@@ -85,7 +85,7 @@ void do_graph_check() {
 DumpGraphs dump_all_graphs() {
     vector<Node*> queue;
     auto t = ++Node::tflag_count;
-    for (auto& vh : VarHolder::hold_vars)
+    for (auto& vh : hold_vars)
         if (vh->var->tflag != t) {
             vh->var->tflag = t;
             queue.push_back(vh->var);

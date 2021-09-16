@@ -140,8 +140,8 @@ ArrayOp::ArrayOp(PyObject* obj) {
         std::memcpy(host_ptr, args.ptr, size);
     } else {
         // this is non-continue numpy array
-#if defined(__linux__)
-        int64 dims[args.shape.size()];
+#if defined(__linux__) || defined(_WIN32)
+        STACK_ALLOC(int64, dims, args.shape.size());
 #elif defined(__APPLE__)
         long dims[args.shape.size()];
 #endif

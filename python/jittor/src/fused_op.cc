@@ -32,6 +32,7 @@ loop_options_t& FusedOp::get_loop_options_tuned() {
 }
 
 void FusedOp::update_jit_key() {
+    JK& jk = get_jk();
     jk.clear();
     do_jit_prepare(jk);
 }
@@ -256,7 +257,8 @@ int FusedOp::has(Node* node) {
     return context->node_id.count(node);
 }
 
-void FusedOp::do_run(){
+void FusedOp::do_run() {
+    JK& jk = get_jk();
     do_prepare(jk);
     do_run_after_prepare(jk);
 }

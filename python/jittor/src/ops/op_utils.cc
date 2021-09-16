@@ -38,6 +38,6 @@ VarPtr make_number(float number, Var* x) {
 static void init() {
     op_registe({"number", "", "", {{&typeid(&make_number), (void*)&make_number}}});
 }
-__attribute__((unused)) static int caller = (init(), 0);
+static int caller = (init(), 0);
 
 } // jittor

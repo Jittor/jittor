@@ -24,9 +24,9 @@ struct DualAllocation {
     size_t host_allocation, device_allocation;
 };
 
-extern SFRLAllocator cuda_dual_host_allocator;
-extern SFRLAllocator cuda_dual_device_allocator;
-extern bool no_cuda_error_when_free;
+EXTERN_LIB SFRLAllocator cuda_dual_host_allocator;
+EXTERN_LIB SFRLAllocator cuda_dual_device_allocator;
+EXTERN_LIB bool no_cuda_error_when_free;
 
 struct CudaDualAllocator : Allocator {
     //for recycle block_id
@@ -74,11 +74,11 @@ struct CudaDualAllocator : Allocator {
     }
 };
 
-extern CudaDualAllocator cuda_dual_allocator;
+EXTERN_LIB CudaDualAllocator cuda_dual_allocator;
 
 namespace cuda_dual_local {
     
-extern list<Allocation> allocations;
+EXTERN_LIB list<Allocation> allocations;
 
 }
 
@@ -115,7 +115,7 @@ struct DelayFree final : Allocator {
     }
 };
 
-extern DelayFree delay_free;
+EXTERN_LIB DelayFree delay_free;
 
 }
 

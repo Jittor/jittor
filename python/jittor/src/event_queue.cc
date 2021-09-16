@@ -8,6 +8,7 @@
 
 namespace jittor {
 
+#ifdef HAS_CUDA
 EventQueue event_queue;
 
 void EventQueue::Worker::start() {
@@ -25,6 +26,20 @@ void EventQueue::Worker::start() {
     }
 }
 
+
+void EventQueue::Worker::stop() {
+    LOGv << "stoping event queue worker...";
+    event_queue.worker.run(nullptr);
+    event_queue.worker.thread.join();
+    LOGv << "stopped event queue worker.";
+}
+
+EXTERN_LIB vector<void(*)()> cleanup_callback;
+
+EventQueue::Worker::Worker() : thread(EventQueue::Worker::start) {
+    cleanup_callback.push_back(&EventQueue::Worker::stop);
+}
+
 void EventQueue::worker_caller() {
     int status = OK;
     try {
@@ -38,6 +53,8 @@ void EventQueue::worker_caller() {
         event_queue.run_sync_done = status;
     }
 }
+
+#endif
 
 
 } // jittor

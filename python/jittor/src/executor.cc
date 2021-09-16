@@ -28,16 +28,17 @@
 #include "memory_profiler.h"
 #include "misc/nan_checker.h"
 #include "memory_profiler.h"
+#include "utils/seh.h"
 
 namespace jittor {
 
 Executor exe;
-extern MemoryProfiler memory_profiler;
+EXTERN_LIB MemoryProfiler memory_profiler;
 DECLARE_FLAG(int, profile_memory_enable);
 DEFINE_FLAG(int, gopt_disable, 0, "Disable graph optimizer.");
 
 // from fetch_op.cc
-extern list<VarPtr> fetcher_to_free;
+EXTERN_LIB list<VarPtr> fetcher_to_free;
 // from cuda_managed_allocator
 #ifdef HAS_CUDA
 DECLARE_FLAG(int, use_cuda_managed_allocator);
@@ -414,7 +415,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
     #ifdef HAS_CUDA
     int sync_times = 0;
     #endif
-    auto& jkl = jk;
+    auto& jkl = get_jk();
     for (uint rid=0; rid<queue.size(); rid++) {
         int root = queue[rid];
         Op* op = ops[root];
@@ -471,7 +472,9 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         }
         #endif
         last_is_cuda = is_cuda;
+        _JT_SEH_START2;
         op->do_run_after_prepare(jkl);
+        _JT_SEH_END2;
         #ifdef HAS_CUDA
         // migrate to gpu
         if (PREDICT_BRANCH_NOT_TAKEN((!is_cuda && use_cuda && !use_cuda_managed_allocator))) {

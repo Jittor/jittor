@@ -11,7 +11,7 @@ from .test_core import expect_error
 import os
 
 mid = 0
-if "jittor" in os.uname()[1]:
+if hasattr(os, "uname") and "jittor" in os.uname()[1]:
     mid = 1
 
 class TestNanoString(unittest.TestCase):

@@ -20,7 +20,7 @@ import random
 pass_this_test = False
 msg = ""
 mid = 0
-if os.uname()[1] == "jittor-ce":
+if hasattr(os, "uname") and os.uname()[1] == "jittor-ce":
     mid = 1
 try:
     traindir = ["/data1/cjld/imagenet/train/","/home/cjld/imagenet/train/"][mid]
@@ -76,23 +76,59 @@ class TestDataset(unittest.TestCase):
         assert isinstance(batch[1], np.ndarray)
 
 
+class YourDataset(Dataset):
+    def __init__(self):
+        super().__init__()
+        self.set_attrs(total_len=10240)
+
+    def __getitem__(self, k):
+        self.tmp = None
+        x = jt.array(k)
+        y = x
+        for i in range(10):
+            for j in range(i+2):
+                y = y + j - j
+            y.stop_fuse()
+        return x, y
+
+        
+class YourDataset2(Dataset):
+    def __init__(self):
+        super().__init__()
+        self.set_attrs(total_len=16)
+
+    def __getitem__(self, k):
+        return np.random.rand(2)
+
+
+class YourDataset3(Dataset):
+    def __init__(self):
+        super().__init__()
+        self.set_attrs(total_len=16)
+
+    def __getitem__(self, k):
+        return random.randint(0,1000)
+
+
+class YourDataset4(Dataset):
+    def __init__(self):
+        super().__init__()
+        self.set_attrs(total_len=160)
+
+    def __getitem__(self, k):
+        return jt.rand(2)
+
+
+class YourDataset5(Dataset):
+    def __init__(self):
+        super().__init__()
+        self.set_attrs(total_len=160)
+
+    def __getitem__(self, k):
+        return { "a":np.array([1,2,3]) }
+
 class TestDataset2(unittest.TestCase):
     def test_dataset_use_jittor(self):
-        class YourDataset(Dataset):
-            def __init__(self):
-                super().__init__()
-                self.set_attrs(total_len=10240)
-
-            def __getitem__(self, k):
-                self.tmp = None
-                x = jt.array(k)
-                y = x
-                for i in range(10):
-                    for j in range(i+2):
-                        y = y + j - j
-                    y.stop_fuse()
-                return x, y
-
         dataset = YourDataset().set_attrs(batch_size=256, shuffle=True, num_workers=4)
         dataset.tmp = jt.array([1,2,3,4,5])
         dataset.tmp.sync()
@@ -108,15 +144,8 @@ class TestDataset2(unittest.TestCase):
 
 class TestDatasetSeed(unittest.TestCase):
     def test_np(self):
-        class YourDataset(Dataset):
-            def __init__(self):
-                super().__init__()
-                self.set_attrs(total_len=16)
 
-            def __getitem__(self, k):
-                return np.random.rand(2)
-
-        dataset = YourDataset().set_attrs(batch_size=1, shuffle=True, num_workers=4)
+        dataset = YourDataset2().set_attrs(batch_size=1, shuffle=True, num_workers=4)
         for _ in range(10):
             dd = []
             for d in dataset:
@@ -127,16 +156,9 @@ class TestDatasetSeed(unittest.TestCase):
 
     def test_py_native(self):
         import random
-        class YourDataset(Dataset):
-            def __init__(self):
-                super().__init__()
-                self.set_attrs(total_len=16)
-
-            def __getitem__(self, k):
-                return random.randint(0,1000)
 
         jt.set_global_seed(0)
-        dataset = YourDataset().set_attrs(batch_size=1, shuffle=True, num_workers=4)
+        dataset = YourDataset3().set_attrs(batch_size=1, shuffle=True, num_workers=4)
         for _ in range(10):
             dd = []
             for d in dataset:
@@ -147,16 +169,9 @@ class TestDatasetSeed(unittest.TestCase):
 
     def test_jtrand(self):
         import random
-        class YourDataset(Dataset):
-            def __init__(self):
-                super().__init__()
-                self.set_attrs(total_len=160)
-
-            def __getitem__(self, k):
-                return jt.rand(2)
 
         jt.set_global_seed(0)
-        dataset = YourDataset().set_attrs(batch_size=1, shuffle=True, num_workers=4)
+        dataset = YourDataset4().set_attrs(batch_size=1, shuffle=True, num_workers=4)
         for _ in range(10):
             dd = []
             for d in dataset:
@@ -167,16 +182,9 @@ class TestDatasetSeed(unittest.TestCase):
 
     def test_dict(self):
         import random
-        class YourDataset(Dataset):
-            def __init__(self):
-                super().__init__()
-                self.set_attrs(total_len=160)
-
-            def __getitem__(self, k):
-                return { "a":np.array([1,2,3]) }
 
         jt.set_global_seed(0)
-        dataset = YourDataset().set_attrs(batch_size=1, shuffle=True, num_workers=4)
+        dataset = YourDataset5().set_attrs(batch_size=1, shuffle=True, num_workers=4)
         for _ in range(10):
             dd = []
             for d in dataset:
@@ -216,6 +224,11 @@ class TestDatasetSeed(unittest.TestCase):
             assert z[i] == c
 
     def test_children_died(self):
+        if os.name == 'nt':
+            # TODO: windows cannot pass this test now
+            # don't know how to detect child died in windows
+            # some clue: https://ikriv.com/blog/?p=1431
+            return
         src = """
 import jittor as jt
 from jittor.dataset import Dataset
@@ -231,13 +244,13 @@ class YourDataset(Dataset):
             while 1:
                 pass
         return { "a":np.array([1,2,3]) }
+if __name__ == "__main__":
+    dataset = YourDataset()
+    dataset.set_attrs(num_workers=2)
 
-dataset = YourDataset()
-dataset.set_attrs(num_workers=2)
-
-for d in dataset:
-    dataset.workers[0].p.kill()
-    pass
+    for d in dataset:
+        dataset.workers[0].p.kill()
+        pass
 """
         fname = os.path.join(jt.flags.cache_path, "children_dead_test.py")
         with open(fname, 'w') as f:
@@ -310,12 +323,13 @@ class YourDataset(Dataset):
                 pass
         return { "a":np.array([1,2,3]) }
 
-dataset = YourDataset()
-dataset.set_attrs(num_workers=2)
+if __name__ == "__main__":
+    dataset = YourDataset()
+    dataset.set_attrs(num_workers=2)
 
-for d in dataset:
-    break
-dataset.terminate()
+    for d in dataset:
+        break
+    dataset.terminate()
 """
         fname = os.path.join(jt.flags.cache_path, "children_dead_test.py")
         with open(fname, 'w') as f:

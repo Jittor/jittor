@@ -17,8 +17,8 @@
 
 namespace jittor {
 
-extern ncclComm_t comm;
-extern ncclUniqueId id;
-extern int nccl_device_id;
+EXTERN_LIB ncclComm_t comm;
+EXTERN_LIB ncclUniqueId id;
+EXTERN_LIB int nccl_device_id;
 
 } // jittor

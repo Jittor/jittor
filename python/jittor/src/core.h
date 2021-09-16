@@ -14,7 +14,7 @@ namespace jittor {
 
 // @pyjt(number_of_hold_vars)
 inline static uint64 get_number_of_hold_vars() {
-    return VarHolder::hold_vars.size();
+    return hold_vars.size();
 }
 
 // @pyjt(number_of_lived_vars)

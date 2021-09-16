@@ -86,8 +86,13 @@ constexpr int ns_max_len = 16;
     m(normal) \
 
 struct NanoString;
-#define DECLEAR_NS(T) extern NanoString ns_##T;
+#define DECLEAR_NS(T) EXTERN_LIB NanoString ns_##T;
 FOR_ALL_NS(DECLEAR_NS);
+
+
+EXTERN_LIB unordered_map<string, NanoString> __string_to_ns;
+EXTERN_LIB char __ns_to_string[];
+EXTERN_LIB int __ns_len[];
 
 // @pyjt(NanoString)
 struct NanoString {
@@ -112,10 +117,6 @@ struct NanoString {
         _dsize=_n+6, _dsize_nbits=2,
     };
     ns_t data=0;
-
-    static unordered_map<string, NanoString> __string_to_ns;
-    static char __ns_to_string[];
-    static int __ns_len[];
 
     inline void set(Flags f, ns_t a=1, ns_t nbits=1) {
         ns_t mask = (((1u<<nbits)-1)<<f);

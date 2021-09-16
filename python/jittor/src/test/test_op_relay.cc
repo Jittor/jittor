@@ -31,6 +31,7 @@ JIT_TEST(op_register) {
 }
 
 JIT_TEST(fused_op_relay_matmul) {
+    JK& jk = get_jk();
     VarPtr a({10,10}, "float32");
     VarPtr b({10,10}, "float32");
     auto aa = make_broadcast_to_op(a, {10,10,10}, {2});

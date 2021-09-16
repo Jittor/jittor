@@ -17,6 +17,6 @@
 
 namespace jittor {
 
-extern curandGenerator_t gen;
+EXTERN_LIB curandGenerator_t gen;
 
 } // jittor

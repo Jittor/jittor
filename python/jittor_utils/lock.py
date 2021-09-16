@@ -1,4 +1,11 @@
-import fcntl
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+    import win32file
+    import pywintypes
+    _OVERLAPPED = pywintypes.OVERLAPPED()
+
 import os
 from jittor_utils import cache_path, LOG
 
@@ -8,13 +15,21 @@ class Lock:
         LOG.v(f'OPEN LOCK path: {filename} PID: {os.getpid()}')
         self.is_locked = False
       
-    def lock(self):  
-        fcntl.flock(self.handle, fcntl.LOCK_EX)
+    def lock(self):
+        if fcntl:
+            fcntl.flock(self.handle, fcntl.LOCK_EX)
+        else:
+            hfile = win32file._get_osfhandle(self.handle.fileno())
+            win32file.LockFileEx(hfile, 2, 0, -0x10000, _OVERLAPPED)
         self.is_locked = True
         LOG.vv(f'LOCK PID: {os.getpid()}')
         
-    def unlock(self):  
-        fcntl.flock(self.handle, fcntl.LOCK_UN)
+    def unlock(self):
+        if fcntl:
+            fcntl.flock(self.handle, fcntl.LOCK_UN)
+        else:
+            hfile = win32file._get_osfhandle(self.handle.fileno())
+            win32file.UnlockFileEx(hfile, 0, -0x10000, _OVERLAPPED)
         self.is_locked = False
         LOG.vv(f'UNLOCK PID: {os.getpid()}')
         

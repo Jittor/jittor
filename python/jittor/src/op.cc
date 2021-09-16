@@ -97,12 +97,13 @@ string Op::get_jit_key(JK& jk) {
 }
 
 vector<pair<string,string>> Op::get_jit_define() {
-    return parse_jit_keys(get_jit_key(jk));
+    return parse_jit_keys(get_jit_key(get_jk()));
 }
 
 string Op::get_hash_name() {
     string hash_name;
     std::stringstream ss;
+    JK& jk = get_jk();
     do_prepare(jk);
     ss << std::hex << std::hash<string>()(jk.to_string());
     hash_name = ss.str();
@@ -186,12 +187,13 @@ void Op::do_prepare(JK& jk){
 
 void Op::do_run_after_prepare(JK& jk) {
     if (!jk.empty())
-        jit_run();
+        jit_run(jk);
     else
         run();
 }
 
 void Op::do_run() {
+    JK& jk = get_jk();
     do_prepare(jk);
     do_run_after_prepare(jk);
 }
@@ -201,21 +203,22 @@ string Op::get_filename_from_jit_key(const string& jit_key, const string& suffix
     string s = iter==jit_key_mapper.end() ? jit_key : iter->second;
     std::stringstream ss;
     if (s.size() > 100) {
-        ss << s.substr(0, 90) << "...hash:"
+        ss << s.substr(0, 90) << "...hash_"
             << std::hex << std::hash<string>()(s);
     } else {
-        ss << s << "_hash:" << 
+        ss << s << "_hash_" << 
             std::hex << std::hash<string>()(s);
     }
     s = ss.str();
     for (char& c : s) {
-        if (c=='[' || c==']' || c=='<' || c=='>'
-            || c=='{' || c=='}' || c=='(' || c==')' || c==',' 
-            || c=='\n' || c=='\t' || c==' ' || c=='&' || c=='|'
-            || c=='/')
+        if (!((c>='a' && c<='z') || (c>='A' && c<='Z') || (c>='0' && c<='9')))
             c = '_';
     }
+    #ifndef _WIN32
     string filename = cache_path + "/jit/";
+    #else
+    string filename = cache_path + "\\jit\\";
+    #endif
     filename += s;
     filename += "_op";
     filename += suffix;
@@ -244,7 +247,7 @@ string Op::file_name_to_class_name(const string& s) {
     return res;
 }
 
-void Op::jit_run() {
+void Op::jit_run(JK& jk) {
     const char* jit_key = jk.to_cstring();
     auto iter = jit_ops.find(jit_key);
     if (iter != jit_ops.end()) {

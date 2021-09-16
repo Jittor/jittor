@@ -18,6 +18,6 @@
 
 namespace jittor {
 
-extern cublasHandle_t cublas_handle;
+EXTERN_LIB cublasHandle_t cublas_handle;
 
 } // jittor

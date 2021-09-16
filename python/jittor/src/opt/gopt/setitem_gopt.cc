@@ -213,17 +213,17 @@ static void getitem_inplace(GetitemOp* op) {
 void SetitemOp::graph_optimize() {
     // LOGir << "hello graph_optimize";
     setitem_inplace(this);
-    (void)setitem_inplace;
+    (void*)setitem_inplace;
 }
 
 void GetitemOp::graph_optimize() {
     // This optimize is still WIP
     // LOGir << "hello getitem graph_optimize";
     // setitem_grad_opt(this);
-    (void)setitem_grad_opt;
+    (void*)setitem_grad_opt;
     // (void)getitem_inplace;
     getitem_inplace(this);
-    (void)getitem_inplace;
+    (void*)getitem_inplace;
 }
 
 }

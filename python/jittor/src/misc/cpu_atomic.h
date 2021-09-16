@@ -10,7 +10,7 @@
 
 namespace jittor {
 
-extern std::atomic_flag lock;
+EXTERN_LIB std::atomic_flag lock;
 
 struct spin_lock_guard {
     inline spin_lock_guard() {

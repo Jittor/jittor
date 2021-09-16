@@ -38,70 +38,55 @@ struct PyArray_Proxy {
     int flags;
 };
 
+enum NPY_TYPES {    
+    NPY_BOOL=0,
+    NPY_BYTE, NPY_UBYTE,
+    NPY_SHORT, NPY_USHORT,
+    NPY_INT, NPY_UINT,
+    NPY_LONG, NPY_ULONG,
+    NPY_LONGLONG, NPY_ULONGLONG,
+    NPY_FLOAT, NPY_DOUBLE, NPY_LONGDOUBLE,
+    NPY_CFLOAT, NPY_CDOUBLE, NPY_CLONGDOUBLE,
+    NPY_OBJECT=17,
+};
+
+EXTERN_LIB NanoString npy2ns[];
+EXTERN_LIB NPY_TYPES ns2npy[];
+
 #define NPY_ARRAY_C_CONTIGUOUS    0x0001
 #define NPY_ARRAY_ALIGNED         0x0100
 #define NPY_ARRAY_WRITEABLE       0x0400
 // NPY_ARRAY_C_CONTIGUOUS=1
 inline bool is_c_style(PyArray_Proxy* obj) { return obj->flags & 1; }
 inline NanoString get_type_str(PyArray_Proxy* obj) {
-    auto type = obj->descr->type;
-    // bool ?
-    if (type=='?') return ns_bool;
-    // int8 b
-    if (type=='b') return ns_int8;
-    // int16 h
-    if (type=='h') return ns_int16;
-    // int32 i
-    if (type=='i') return ns_int32;
-    // int64 l
-    if (type=='l') return ns_int64;
-    // uint8 B
-    if (type=='B') return ns_uint8;
-    // uint16 H
-    if (type=='H') return ns_uint16;
-    // uint32 I
-    if (type=='I') return ns_uint32;
-    // uint64 L
-    if (type=='L') return ns_uint64;
-    // float32 f
-    if (type=='f') return ns_float32;
-    // float64 d
-    if (type=='d') return ns_float64;
-    LOGf << "Unsupport numpy type char:'" << type << '\'';
-    return ns_float64;
+    NanoString type = ns_void;
+    if (obj->descr->type_num < NPY_OBJECT)
+        type = npy2ns[obj->descr->type_num];
+    CHECK(type != ns_void) << "Numpy type not support, type_num:"
+        << obj->descr->type_num 
+        << "type_char:" << obj->descr->type;
+    return type;
 }
 
 inline int get_typenum(NanoString ns) {
-    if (ns == ns_bool) return 0;
-    if (ns == ns_int8) return 1;
-    if (ns == ns_uint8) return 2;
-    if (ns == ns_int16) return 3;
-    if (ns == ns_uint16) return 4;
-    if (ns == ns_int32) return 5;
-    if (ns == ns_uint32) return 6;
-    if (ns == ns_int64) return 7;
-    if (ns == ns_uint64) return 8;
-    if (ns == ns_float32) return 11;
-    if (ns == ns_float64) return 12;
-    LOGf << ns;
-    return -1;
+    return ns2npy[ns.index()];
 }
 
 typedef Py_intptr_t npy_intp;
 
-extern unordered_map<string, int> np_typenum_map;
+EXTERN_LIB unordered_map<string, int> np_typenum_map;
 
-extern void** PyArray_API;
-extern PyTypeObject *PyArray_Type;
-extern PyTypeObject *PyNumberArrType_Type;
-extern PyTypeObject *PyArrayDescr_Type;
-extern PyObject* (*PyArray_New)(PyTypeObject *, int, npy_intp const *, int, npy_intp const *, void *, int, int, PyObject *);
-extern PyObject* (*PyArray_FromAny)(PyObject *, PyArrayDescr_Proxy *, int, int, int, PyObject *);
-extern unsigned int (*PyArray_GetNDArrayCFeatureVersion)();
-extern int (*PyArray_SetBaseObject)(PyObject *arr, PyObject *obj);
-extern PyObject* (*PyArray_NewCopy)(PyObject *, int);
-extern int (*PyArray_CopyInto)(PyObject *, PyObject *);
-extern void (*PyArray_CastScalarToCtype)(PyObject* scalar, void* ctypeptr, PyArrayDescr_Proxy* outcode);
+EXTERN_LIB void** PyArray_API;
+EXTERN_LIB PyTypeObject *PyArray_Type;
+EXTERN_LIB PyTypeObject *PyNumberArrType_Type;
+EXTERN_LIB PyTypeObject *PyArrayDescr_Type;
+EXTERN_LIB PyObject* (*PyArray_New)(PyTypeObject *, int, npy_intp const *, int, npy_intp const *, void *, int, int, PyObject *);
+EXTERN_LIB PyObject* (*PyArray_FromAny)(PyObject *, PyArrayDescr_Proxy *, int, int, int, PyObject *);
+EXTERN_LIB unsigned int (*PyArray_GetNDArrayCFeatureVersion)();
+EXTERN_LIB int (*PyArray_SetBaseObject)(PyObject *arr, PyObject *obj);
+EXTERN_LIB PyObject* (*PyArray_NewCopy)(PyObject *, int);
+EXTERN_LIB int (*PyArray_CopyInto)(PyObject *, PyObject *);
+EXTERN_LIB void (*PyArray_CastScalarToCtype)(PyObject* scalar, void* ctypeptr, PyArrayDescr_Proxy* outcode);
 
 #define PyArray_Copy(obj) PyArray_NewCopy(obj, 0)
 
@@ -136,7 +121,7 @@ union tmp_data_t {
     int8 i8;
 };
 
-extern tmp_data_t tmp_data;
+EXTERN_LIB tmp_data_t tmp_data;
 
 void numpy_init();
 

@@ -21,7 +21,7 @@ struct TestTask {
 
 JIT_TEST(sfrl_allocator_time) {
     Allocator* allocator = get_allocator();
-    int max_allc_num = 10000;
+    constexpr int max_allc_num = 10000;
     size_t id[max_allc_num];
     size_t temp[max_allc_num];
     std::vector<TestTask> tasks; 
@@ -52,7 +52,7 @@ JIT_TEST(sfrl_allocator_time) {
 
 JIT_TEST(sfrl_allocator_share) {
     Allocator* allocator = get_allocator();
-    int max_allc_num = 10000;
+    constexpr int max_allc_num = 10000;
     size_t id[max_allc_num];
     size_t temp[max_allc_num];
     std::vector<TestTask> tasks; 
@@ -88,7 +88,7 @@ JIT_TEST(sfrl_allocator_share) {
 
 JIT_TEST(sfrl_allocator_share_without_size_and_ptr) {
     Allocator* allocator = get_allocator();
-    int max_allc_num = 1000;
+    constexpr int max_allc_num = 1000;
     size_t id[max_allc_num];
     size_t temp[max_allc_num];
     std::vector<TestTask> tasks; 

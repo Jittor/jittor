@@ -27,7 +27,7 @@ struct Allocator {
 };
 
 struct AlignedAllocator;
-extern AlignedAllocator aligned_allocator;
+EXTERN_LIB AlignedAllocator aligned_allocator;
 
 struct Allocation {
     void* ptr;
@@ -48,7 +48,7 @@ struct Allocation {
         { if (ptr) allocator->free(ptr, size, allocation); }
 };
 
-extern Allocator* cpu_allocator;
+EXTERN_LIB Allocator* cpu_allocator;
 Allocator* get_allocator(bool temp_allocator=false);
 // @pyjt(gc)
 void gc_all();

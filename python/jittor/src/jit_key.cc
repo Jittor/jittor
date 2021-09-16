@@ -4,15 +4,18 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#ifndef _WIN32
 #include <sys/mman.h>
-#include <sstream>
 #include <unistd.h>
+#endif
+#include <sstream>
 #include "jit_key.h"
 #include "utils/str_utils.h"
 
 namespace jittor {
 
-extern thread_local size_t protected_page;
+#ifndef _WIN32
+EXTERN_LIB thread_local size_t protected_page;
 
 static size_t get_buffer_end_page(size_t buffer_end) {
     // get the last complete page in buffer
@@ -25,19 +28,24 @@ static size_t get_buffer_end_page(size_t buffer_end) {
         buffer_end_page -= getpagesize();
     return buffer_end_page;
 }
+#endif
 
 JitKey::JitKey() {
+#ifndef _WIN32
     auto buffer_end_page = get_buffer_end_page((size_t)&buffer[buffer_size-1]);
     LOGvv << "protect page" << (void*)buffer_end_page;
     ASSERT(0==mprotect((void*)buffer_end_page, getpagesize(), PROT_NONE));
     protected_page = buffer_end_page;
+#endif
 }
 
 JitKey::~JitKey() {
+#ifndef _WIN32
     auto buffer_end_page = get_buffer_end_page((size_t)&buffer[buffer_size-1]);
     LOGvv << "un-protect page" << (void*)buffer_end_page;
     mprotect((void*)buffer_end_page, getpagesize(), PROT_READ|PROT_WRITE|PROT_EXEC);
     protected_page = 0;
+#endif
 }
 
 static void hex_to_dec(string& s) {
@@ -112,5 +120,9 @@ vector<pair<string,string>> parse_jit_keys(const string& s) {
 }
 
 thread_local JitKey jk;
+
+JK& get_jk() {
+    return jk;
+}
 
 } // jittor

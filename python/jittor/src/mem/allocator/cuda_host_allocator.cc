@@ -12,7 +12,7 @@
 namespace jittor {
 
 CudaHostAllocator cuda_host_allocator;
-extern bool no_cuda_error_when_free;
+EXTERN_LIB bool no_cuda_error_when_free;
 
 const char* CudaHostAllocator::name() const {return "cuda_host";}
 

@@ -11,7 +11,7 @@ import os
 import hashlib
 import urllib.request
 from tqdm import tqdm
-from jittor_utils import lock
+from jittor_utils import lock, LOG
 import gzip
 import tarfile
 import zipfile
@@ -66,7 +66,9 @@ def calculate_md5(file_path, chunk_size=1024 * 1024):
     with open(file_path, 'rb') as f:
         for chunk in iter(lambda: f.read(chunk_size), b''):
             md5.update(chunk)
-    return md5.hexdigest()
+    md5 = md5.hexdigest()
+    LOG.v(f"file {file_path} md5: {md5}")
+    return md5
 
 
 def check_md5(file_path, md5, **kwargs):

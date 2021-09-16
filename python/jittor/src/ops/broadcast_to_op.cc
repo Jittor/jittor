@@ -129,9 +129,13 @@ void BroadcastToOp::infer_shape() {
     auto xdim = x->shape.size();
     auto ydim = yshapes.size();
     auto count = __builtin_popcount(bcast_mask&~keepdims_mask);
-    auto zdim = std::max(xdim, ydim-count) + count;
+    auto zdim = std::max(uint64(xdim), uint64(ydim-count)) + count;
     
+    #ifdef _WIN32
+    int64 zz[10];
+    #else
     int64 zz[zdim];
+    #endif
     for (int i=zdim-1, xi = xdim-1, yi = ydim-1; i>=0; i--) {
         bool bx = xi>=0;
         bool by = yi>=0;

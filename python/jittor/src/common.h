@@ -5,7 +5,6 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
-#include <stddef.h>
 #include <memory>
 #include <functional>
 #include "utils/log.h"
@@ -26,4 +25,14 @@ void expect_error(std::function<void()> func);
 #pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
 #pragma GCC diagnostic ignored "-Wdiv-by-zero"
 #endif
+#endif
+
+#ifdef _WIN32
+#ifndef __restrict__
+#define __restrict__ __restrict
+#endif
+#endif
+
+#ifdef _MSC_VER
+#define __builtin_popcount __popcnt
 #endif

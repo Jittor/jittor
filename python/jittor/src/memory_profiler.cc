@@ -79,7 +79,7 @@ void MemoryProfiler::check() {
         vector<Node*> queue;
 
         auto t = ++Node::tflag_count;
-        for (auto& vh : VarHolder::hold_vars)
+        for (auto& vh : hold_vars)
             if (vh->var->tflag != t) {
                 vh->var->tflag = t;
                 queue.push_back(vh->var);
