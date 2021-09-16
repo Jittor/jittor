@@ -44,16 +44,16 @@ jit_op_entry_t load_jit_lib(string name, string symbol_name="jit_entry") {
     void* handle = (void*)LoadLibraryExA(name.c_str(), nullptr,
         LOAD_LIBRARY_SEARCH_DEFAULT_DIRS |
         LOAD_LIBRARY_SEARCH_USER_DIRS);
-    #elif defined(__linux__)
-    void* handle = dlopen(name.c_str(), RTLD_LAZY | RTLD_DEEPBIND | RTLD_LOCAL);
+    #elif defined(__linux__) && !defined(mobile)
+    void* handle = dlopen(name.c_str(), RTLD_NOW | RTLD_LOCAL | RTLD_DEEPBIND);
     msg = dlerror();
     #else
     void *handle = dlopen(name.c_str(), RTLD_NOW | RTLD_LOCAL);
     msg = dlerror();
     #endif
-
+  
     CHECK(handle) << "Cannot open library" << name << ":" << msg;
-    
+  
     #ifdef _WIN32
     auto jit_entry = (jit_op_entry_t)GetProcAddress((HINSTANCE)handle, symbol_name.c_str());
     #else
@@ -110,11 +110,18 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
             + nvcc_flags + extra_flags
             + " -o \"" + jit_lib_path + "\"";
     } else {
-        cmd = "\"" + cc_path + "\""
-            + " \"" + jit_src_path + "\"" + other_src
+#ifdef mobile
+        cmd = cc_path
+            + " '" + jit_src_path + "'" + other_src
             + cc_flags + extra_flags
-            + " -o \"" + jit_lib_path + "\"";
-#ifdef __linux__
+            + " -Dmobile -L/data/data/com.example.mjittor/.cache/jittor/default/clang -L/data/data/com.example.mjittor/termux/lib -lpython3.9 -lomp -ljit_utils_core -ljittor_core -Wl,-rpath=/data/data/com.example.mjittor/.cache/jittor/default/clang/ -o '" + jit_lib_path + "'";
+#else
+        cmd = cc_path
+            + " '" + jit_src_path + "'" + other_src
+            + cc_flags + extra_flags
+            + " -o '" + jit_lib_path + "'";
+#endif
+#if defined(__linux__) && !defined(mobile)
         cmd = python_path+" "+jittor_path+"/utils/asm_tuner.py "
             "--cc_path=" + cmd;
 #endif

@@ -217,6 +217,7 @@ void print_trace() {
             int ret = system(syscom);
             (void)ret;
         }
+        #endif
     }
 #endif
 }

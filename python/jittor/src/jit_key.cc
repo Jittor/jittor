@@ -119,7 +119,11 @@ vector<pair<string,string>> parse_jit_keys(const string& s) {
     return jit_keys;
 }
 
+#ifdef mobile
+JitKey jk;
+#else
 thread_local JitKey jk;
+#endif
 
 JK& get_jk() {
     return jk;
