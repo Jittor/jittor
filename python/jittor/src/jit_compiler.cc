@@ -47,8 +47,11 @@ jit_op_entry_t load_jit_lib(string name, string symbol_name="jit_entry") {
     //dlerror();
     auto jit_entry = (jit_op_entry_t)dlsym(handle, symbol_name.c_str());
     const char* dlsym_error = dlerror();
-    // CHECK(!dlsym_error) << "Loading symbol jit_entry from" << name << "failed:" << dlsym_error;
+    #ifdef mobile
     CHECK(jit_entry) << "Loading symbol" << symbol_name << "from" << name << "failed:" << dlsym_error;
+    #else
+    CHECK(!dlsym_error) << "Loading symbol jit_entry from" << name << "failed:" << dlsym_error;
+    #endif
     return jit_entry;
 }
 
