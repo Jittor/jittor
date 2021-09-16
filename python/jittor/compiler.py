@@ -1111,6 +1111,7 @@ at_beginning = [
     "src/event_queue.cc",
     "src/mem/allocator/sfrl_allocator.cc",
     "src/mem/allocator.cc",
+    "src/misc/nano_string.cc",
 ]
 at_last = [
     "src/profiler/profiler.cc",
