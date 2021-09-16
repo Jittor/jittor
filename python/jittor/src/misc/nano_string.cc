@@ -22,11 +22,17 @@ namespace jittor {
     m(float32) \
     m(float64)
 
-#ifdef mobile
-#define map_size(T) {#T, __builtin_ffs(sizeof(T))-1},
-#else
+#ifdef _MSC_VER
+inline int ffs(int i) {
+    int j=0;
+    while (i) j++,i/=2;
+    return j;
+}
 #define map_size(T) {#T, ffs(sizeof(T))-1},
+#else
+#define map_size(T) {#T, __builtin_ffs(sizeof(T))-1},
 #endif
+
 unordered_map<string, size_t> dsize_map = {FOR_ALL_TYPES(map_size)};
 
 // TODO: make all static

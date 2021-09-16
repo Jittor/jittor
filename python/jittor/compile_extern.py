@@ -76,7 +76,7 @@ def setup_mkl():
     else:
         mkl_include_path = os.environ.get("mkl_include_path")
         mkl_lib_path = os.environ.get("mkl_lib_path")
-    if platform.system() == 'Linux' :
+    if platform.system() == 'Linux' or os.name == 'nt':
         if mkl_lib_path is None or mkl_include_path is None:
             mkl_install_sh = os.path.join(jittor_path, "script", "install_mkl.sh")
             LOG.v("setup mkl...")

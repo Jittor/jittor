@@ -12,7 +12,9 @@
 
 namespace jittor {
 
-#ifdef mobile
+#ifndef _WIN32
+EXTERN_LIB thread_local size_t protected_page;
+#elif defined(mobile)
 extern size_t protected_page;
 #else
 extern thread_local size_t protected_page;

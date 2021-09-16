@@ -18,12 +18,10 @@ void* AlignedAllocator::alloc(size_t size, size_t& allocation) {
     size += 32-size%32;
     // low version of mac don't have aligned_alloc
     return new char[size];
-    #else
-    #ifdef mobile
+    #elif defined(mobile)
     return malloc(size);
     #else
     return aligned_alloc(alignment, size);
-    #endif
     #endif
 }
 

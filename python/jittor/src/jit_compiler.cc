@@ -37,11 +37,16 @@ jit_op_entry_t load_jit_lib(string name, string symbol_name="jit_entry") {
     LOGvv << "Opening jit lib:" << name;
     // void* handle = dlopen(name.c_str(), RTLD_NOW | RTLD_DEEPBIND | RTLD_LOCAL);
     // RTLD_DEEPBIND and openmp cause segfault
-#if defined(__linux__) && !defined(mobile)
+    #ifdef _WIN32
+    void* handle = (void*)LoadLibraryExA(name.c_str(), nullptr,
+        LOAD_LIBRARY_SEARCH_DEFAULT_DIRS |
+        LOAD_LIBRARY_SEARCH_USER_DIRS);
+    #elif defined(__linux__) && !defined(mobile)
     void* handle = dlopen(name.c_str(), RTLD_NOW | RTLD_LOCAL | RTLD_DEEPBIND);
-#else
+    msg = dlerror();
+    #else
     void *handle = dlopen(name.c_str(), RTLD_NOW | RTLD_LOCAL);
-#endif
+    #endif
     CHECK(handle) << "Cannot open library" << name << ":" << dlerror();
     
     //dlerror();

@@ -195,6 +195,11 @@ def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
     finally:
         mp.current_process()._config['daemon'] = bk
 
+if os.name=='nt' and getattr(mp.current_process(), '_inheriting', False):
+    # when windows spawn multiprocess, disable sub-subprocess
+    os.environ["DISABLE_MULTIPROCESSING"] = '1'
+    os.environ["log_silent"] = '1'
+
 if os.environ.get("DISABLE_MULTIPROCESSING", '0') == '1' or os.environ.get("is_mobile", "0") == "1":
     os.environ["use_parallel_op_compiler"] = '1'
     def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
