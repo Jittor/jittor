@@ -32,17 +32,55 @@ constexpr int32_t basename_index(const char * const path, const int32_t index = 
 #define __FILELINE__ \
     (&((__FILE__ ":" STRINGIZE(__LINE__))[jittor::basename_index(__FILE__)]))
 
+#ifndef _WIN32
 #define PREDICT_BRANCH_NOT_TAKEN(x) (__builtin_expect(x, 0))
+#else
+#define PREDICT_BRANCH_NOT_TAKEN(x) (x)
+#endif
 
-extern uint32_t get_tid();
-extern bool g_supports_color;
-extern void print_prefix(std::ostream* out);
 
+#ifdef _MSC_VER
+#define STACK_ALLOC(T, a, n) T* a = (T*)_alloca(sizeof(T)*(n))
+#define EXTERN_LIB extern __declspec(dllimport)
+#define EXPORT_LIB __declspec(dllimport)
+#else
+#define STACK_ALLOC(T, a, n) T a[n]
+#define EXTERN_LIB extern
+#define EXPORT_LIB 
+#endif
+
+EXTERN_LIB uint32_t get_tid();
+EXTERN_LIB bool g_supports_color;
+EXTERN_LIB void print_prefix(std::ostream* out);
+
+#ifdef _WIN32
+constexpr char green[] = "\x1b[1;32m";
+constexpr char red[] = "\x1b[1;31m";
+constexpr char yellow[] = "\x1b[1;33m";
+
+
+inline static void get_color(char level, int verbose, const char*& color_begin, const char*& color_end) {
+    if (level == 'i') {
+        if (verbose == 0) color_begin = "\x1b[1;32m"; else
+        if (verbose < 10) color_begin = "\x1b[1;32m"; else
+        if (verbose < 100) color_begin = "\x1b[1;32m"; else
+        if (verbose < 1000) color_begin = "\x1b[1;32m";
+        else color_begin = "\x1b[1;32m";
+    } else if (level == 'w')
+        color_begin = yellow;
+    else if (level == 'e')
+        color_begin = red;
+    else // level == 'f'
+        color_begin = red;
+    color_end = "\x1b[m";
+}
+
+#else
 constexpr char green[] = "\033[38;5;2m";
 constexpr char red[] = "\033[38;5;1m";
 constexpr char yellow[] = "\033[38;5;3m";
 
-static void get_color(char level, int verbose, const char*& color_begin, const char*& color_end) {
+inline static void get_color(char level, int verbose, const char*& color_begin, const char*& color_end) {
     if (level == 'i') {
         if (verbose == 0) color_begin = "\033[38;5;2m"; else
         if (verbose < 10) color_begin = "\033[38;5;250m"; else
@@ -58,18 +96,24 @@ static void get_color(char level, int verbose, const char*& color_begin, const c
     color_end = "\033[m";
 }
 
-extern void send_log(std::ostringstream&& out);
-extern void flush_log();
-extern void log_capture_start();
-extern void log_capture_stop();
-extern std::vector<std::map<string,string>> log_capture_read();
-extern string thread_local thread_name;
+#endif
+
+EXTERN_LIB void send_log(std::ostringstream&& out, char level, int verbose);
+EXTERN_LIB void flush_log();
+EXTERN_LIB void log_capture_start();
+EXTERN_LIB void log_capture_stop();
+EXTERN_LIB std::vector<std::map<string,string>> log_capture_read();
+EXTERN_LIB string& get_thread_name();
 
 struct Log {
     std::ostringstream out;
     const char* color_end;
+    int verbose;
+    char level;
 
-    Log(const char* const fileline, char level, int verbose) {
+    inline Log(const char* const fileline, char level, int verbose) {
+        this->verbose = verbose;
+        this->level = level;
         const char* color_begin;
         get_color(level, verbose, color_begin, color_end);
         if (g_supports_color) out << color_begin;
@@ -79,12 +123,12 @@ struct Log {
         out << fileline << ']';
     }
 
-    void end() {
+    inline void end() {
         if (g_supports_color) out << color_end;
         out << '\n';
-        send_log(move(out));
+        send_log(move(out), level, verbose);
     }
-    void flush() { flush_log(); }
+    inline void flush() { flush_log(); }
 
     template<class T>
     Log& operator<<(const T& a) { out << ' ' << a; return *this; }
@@ -93,11 +137,11 @@ struct Log {
 };
 
 struct LogVoidify {
-    void operator&&(Log& log) { log.end(); }
+    inline void operator&&(Log& log) { log.end(); }
 };
 
 struct LogFatalVoidify {
-    void operator&&(Log& log) {
+    inline void operator&&(Log& log) {
         log.flush();
         if (g_supports_color) log.out << log.color_end;
         throw std::runtime_error(log.out.str()); 
@@ -145,9 +189,9 @@ template<class T> T get_from_env(const char* name,const T& _default) {
 template<> std::string get_from_env(const char* name, const std::string& _default);
 
 #define DECLARE_FLAG(type, name) \
-extern type name; \
-extern std::string doc_ ## name; \
-extern void set_ ## name (const type&);
+EXTERN_LIB type name; \
+EXTERN_LIB std::string doc_ ## name; \
+EXTERN_LIB void set_ ## name (const type&);
 
 
 #ifdef JIT
@@ -231,6 +275,6 @@ bool check_vlog(const char* fileline, int verbose);
 #define LOGig LOGi >> jittor::green
 #define LOGiy LOGi >> jittor::yellow
 
-void system_with_check(const char* cmd);
+void system_with_check(const char* cmd, const char* cwd=nullptr);
 
 } // jittor

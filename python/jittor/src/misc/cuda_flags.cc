@@ -15,7 +15,7 @@ namespace jittor {
 DEFINE_FLAG_WITH_SETTER(int, use_cuda, 0,
     "Use cuda or not. 1 for trying to use cuda, 2 for forcing to use cuda.");
 
-extern void sync_all(bool device_sync);
+EXTERN_LIB void sync_all(bool device_sync);
 
 void setter_use_cuda(int value) {
 #ifdef HAS_CUDA

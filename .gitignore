@@ -12,6 +12,7 @@ perf.data.old
 *.pdf
 *.zip
 *.tgz
+*.obj
 test.py
 extern/mkl/mkldnn_lnx*/*
 data/

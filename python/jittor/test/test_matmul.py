@@ -157,9 +157,9 @@ class TestMatmul(unittest.TestCase):
                 loss_mean.data.sum() 
                 jt.liveness_info()
 
-        possible_results = [0.00022486248053610325, 0.00020916158973705024]
+        possible_results = [0.00022486248053610325, 0.00020916158973705024, 0.00561215]
         loss_mean = loss_mean.data
-        assert any(abs(loss_mean - r) < 1e-6 for r in possible_results)
+        assert any(abs(loss_mean - r) < 1e-6 for r in possible_results), loss_mean
         jt.clean()
 
     def test_backward_once(self):

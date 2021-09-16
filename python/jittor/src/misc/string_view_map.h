@@ -20,6 +20,8 @@ namespace jittor {
 using std::string_view;
 #elif defined(__GNUC__)
 using std::experimental::string_view;
+#else
+using std::string_view;
 #endif
 
 template<class T>

@@ -8,7 +8,11 @@
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <dlfcn.h>
+#endif
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
@@ -57,23 +61,33 @@ void Profiler::stop() {
 }
 
 unique_ptr<MemoryChecker>* load_memory_checker(string name) {
+    const char* msg = "";
     LOGvv << "Opening jit lib:" << name;
-#ifdef __linux__
-    void *handle = dlopen(name.c_str(), RTLD_LAZY | RTLD_DEEPBIND | RTLD_LOCAL);
-#else
+    #ifdef _WIN32
+    void* handle = (void*)LoadLibrary(name.c_str());
+    #elif defined(__linux__)
+    void* handle = dlopen(name.c_str(), RTLD_LAZY | RTLD_DEEPBIND | RTLD_LOCAL);
+    msg = dlerror();
+    #else
     void* handle = dlopen(name.c_str(), RTLD_LAZY | RTLD_LOCAL);
-#endif
-    CHECK(handle) << "Cannot open library" << name << ":" << dlerror();
+    msg = dlerror();
+    #endif
+
+    CHECK(handle) << "Cannot open library" << name << ":" << msg;
     
+    #ifdef _WIN32
+    auto mm = (unique_ptr<MemoryChecker>*)GetProcAddress((HINSTANCE)handle, "memory_checker");
+    #else
     //dlerror();
     auto mm = (unique_ptr<MemoryChecker>*)dlsym(handle, "memory_checker");
-    const char* dlsym_error = dlerror();
-    CHECK(!dlsym_error) << "Loading symbol memory_checker from" << name << "failed:" << dlsym_error;
+    msg = dlerror();
+    #endif
+    CHECK(!msg) << "Loading symbol memory_checker from" << name << "failed:" << msg;
     
     return mm;
 }
 
-extern string _get_stack_info(Node* node);
+EXTERN_LIB string _get_stack_info(Node* node);
 
 static  string get_stack_info(Op* op) {
     string stack_info = "stack info:\n";

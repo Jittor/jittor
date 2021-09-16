@@ -8,6 +8,34 @@
 
 namespace jittor {
 
+NanoString npy2ns[] = {
+    ns_bool, 
+    ns_int8, ns_uint8,
+    ns_int16, ns_uint16,
+    ns_int32, ns_uint32,
+    #ifdef _WIN32
+    ns_int32, ns_uint32,
+    #else
+    ns_int64, ns_uint64,
+    #endif
+    ns_int64, ns_uint64,
+    ns_float32, ns_float64, ns_float64,
+    ns_void, ns_void, ns_void, 
+    ns_void 
+};
+
+NPY_TYPES ns2npy[] = {
+    NPY_OBJECT, // placeholder for ns_void
+    NPY_BOOL,
+    #ifdef _WIN32
+    NPY_BYTE, NPY_SHORT, NPY_LONG, NPY_LONGLONG,
+    NPY_UBYTE, NPY_USHORT, NPY_ULONG, NPY_ULONGLONG,
+    #else
+    NPY_BYTE, NPY_SHORT, NPY_INT, NPY_LONGLONG,
+    NPY_UBYTE, NPY_USHORT, NPY_UINT, NPY_ULONGLONG,
+    #endif
+    NPY_FLOAT, NPY_DOUBLE
+};
 
 void** PyArray_API;
 PyTypeObject *PyArray_Type;

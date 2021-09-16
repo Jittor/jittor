@@ -147,8 +147,7 @@ void GetitemOp::infer_slices(
                         out_shape_j = (slice.stop - slice.start - 1) / slice.step + 1;
                     else
                         out_shape_j = (slice.start - slice.stop - 1) / -slice.step + 1;
-
-                    out_shape_j = out_shape_j > 0 ? out_shape_j : 0;
+                    out_shape_j = std::max((int64)0, out_shape_j);
                 }
                 out_shape.push_back(out_shape_j);
             }
@@ -281,7 +280,7 @@ void GetitemOp::_compile_optimize(string& src) {
     new_func->push_back(func->children.back()->move_out());
     auto& loop = new_func->children.back();
     int no = o_shape.size();
-    KernelIR* loops[no];
+    STACK_ALLOC(KernelIR*, loops, no);
     if (!no) {
         func->push_back("func<<<1,1>>>("+arg_call+");");
     } else {

@@ -27,14 +27,18 @@ vector<set_seed_callback> callbacks;
 int current_seed;
 
 // fron fetch_op.cc
-extern list<VarPtr> fetcher;
-extern list<VarPtr> fetcher_to_free;
-extern bool exited;
+EXTERN_LIB list<VarPtr> fetcher;
+EXTERN_LIB list<VarPtr> fetcher_to_free;
+EXTERN_LIB vector<void(*)()> cleanup_callback;
+EXTERN_LIB bool exited;
 
 void cleanup() {
     exited = true;
     fetcher_to_free.clear();
     fetcher.clear();
+    for (auto cb : cleanup_callback)
+        cb();
+    cleanup_callback.clear();
 }
 
 static void init_cuda_devices() {

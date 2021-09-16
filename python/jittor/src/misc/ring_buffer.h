@@ -5,8 +5,11 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
+#ifdef _MSC_VER
+#include <windows.h>
+#else
 #include <pthread.h>
-#include <sys/mman.h>
+#endif
 #include <cstring>
 #include "common.h"
 
@@ -14,6 +17,37 @@ namespace jittor {
 
 struct RingBuffer {
 
+#ifdef _MSC_VER
+    struct Mutex {
+        HANDLE handle;
+        inline Mutex(bool multiprocess=0) {
+        }
+        
+        inline void lock() {
+        }
+
+        inline void unlock() {
+        }
+        inline ~Mutex() {
+        }
+    };
+    struct MutexScope {
+        Mutex* m;
+        inline MutexScope(Mutex& m) : m(&m) { m.lock(); }
+        inline ~MutexScope() { m->unlock(); }
+    };
+
+    struct Cond {
+        inline Cond(bool multiprocess=0) {
+        }
+
+        inline void wait(MutexScope& m) {
+        }
+
+        inline void notify() {
+        }
+    };
+#else
     struct Mutex {
         pthread_mutex_t m;
         inline Mutex(bool multiprocess=0) {
@@ -36,6 +70,11 @@ struct RingBuffer {
             pthread_mutex_unlock(&m);
         }
     };
+    struct MutexScope {
+        Mutex* m;
+        inline MutexScope(Mutex& m) : m(&m) { m.lock(); }
+        inline ~MutexScope() { m->unlock(); }
+    };
 
     struct Cond {
         pthread_cond_t cv;
@@ -57,20 +96,15 @@ struct RingBuffer {
             pthread_cond_destroy(&cv);
         }
 
-        inline void wait(Mutex& m) {
-            pthread_cond_wait(&cv, &m.m);
+        inline void wait(MutexScope& m) {
+            pthread_cond_wait(&cv, &m.m->m);
         }
 
         inline void notify() {
             pthread_cond_signal(&cv);
         }
     };
-
-    struct MutexScope {
-        Mutex* m;
-        inline MutexScope(Mutex& m) : m(&m) { m.lock(); }
-        inline ~MutexScope() { m->unlock(); }
-    };
+#endif
 
     uint64 size;
     uint64 size_mask;
@@ -87,8 +121,8 @@ struct RingBuffer {
     RingBuffer(uint64 size, bool multiprocess=false);
     ~RingBuffer();
     void stop();
-    static RingBuffer* make_ring_buffer(uint64 size, bool multiprocess);
-    static void free_ring_buffer(RingBuffer* rb);
+    static RingBuffer* make_ring_buffer(uint64 size, bool multiprocess, uint64 buffer=0, bool init=true);
+    static void free_ring_buffer(RingBuffer* rb, uint64 buffer=0, bool init=true);
 
     inline void clear() { l = r = is_stop = 0; }
 
@@ -103,7 +137,7 @@ struct RingBuffer {
                 is_wait = 0;
             }
             is_wait = 1;
-            cv.wait(m);
+            cv.wait(_);
         }
     }
 

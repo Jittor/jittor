@@ -32,9 +32,9 @@ class TestUnaryOp(unittest.TestCase):
         check("logical_not", a)
         check("bitwise_not", a)
         b = np.array([1.1, 2.2, 3.3, 4.4, -1, 0])
-        check("log", a)
-        check("exp", a)
-        check("sqrt", a)
+        check("log", a.astype("float32"))
+        check("exp", a.astype("float32"))
+        check("sqrt", a.astype("float32"))
         
     def test_grad(self):
         ops = ["abs", "negative", "log", "exp", "sqrt",

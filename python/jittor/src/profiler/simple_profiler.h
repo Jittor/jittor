@@ -19,7 +19,11 @@ static inline int _lzcnt(int64 v) {
         return v ? __builtin_clzll(v) : 64;
     #endif
     #else
+    #ifdef _MSC_VER
+        return __lzcnt64(v);
+    #else
         return __builtin_clzll(v);
+    #endif
     #endif
 }
 

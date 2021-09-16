@@ -24,7 +24,7 @@ struct FusedOpContext {
     void setup(FusedOp* fop);
 };
 
-extern string_view_map<FusedOpContext*> jit_fused_ops;
+EXTERN_LIB string_view_map<FusedOpContext*> jit_fused_ops;
 
 struct FusedOp final : Op {
     vector<Op*> ops;

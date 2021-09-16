@@ -99,7 +99,7 @@ for os_name, os_type in os_name_system_dict.items():
 
             obj_files = []
             for name in data_files:
-                name = name.split("/")[-1]
+                name = os.path.basename(name)
                 fname = f"{obj_path}/{name}.o"
                 assert os.path.isfile(fname), fname
                 obj_files.append(fname)
