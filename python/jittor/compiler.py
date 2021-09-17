@@ -47,6 +47,8 @@ def remove_flags(flags, rm_flags):
 
 def compile(compiler, flags, inputs, output, combind_build=False):
     def do_compile(cmd):
+        if os.environ.get("is_mobile", "0") == "1":
+            cmd = "cd /data/data/com.example.mjittor/.cache/jittor/default/clang && " + cmd
         if jit_utils.cc:
             return jit_utils.cc.cache_compile(cmd, cache_path, jittor_path)
         else:
