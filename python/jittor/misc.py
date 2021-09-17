@@ -1656,3 +1656,10 @@ class CTCLoss(jt.Module):
 
     def execute(self, log_probs, targets, input_lengths, target_lengths):
         return ctc_loss(log_probs, targets, input_lengths, target_lengths, self.blank, self.reduction, self.zero_infinity)
+
+def pass_to_c(x, sopath):
+    shape = x.shape()
+    size = len(shape)
+    from ctypes import cdll
+    cdll.LoadLibrary(sopath)
+    sopath.get_array(x)
