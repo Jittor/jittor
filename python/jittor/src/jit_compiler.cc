@@ -111,7 +111,7 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
             + " -o \"" + jit_lib_path + "\"";
     } else {
 #ifdef mobile
-        cmd = cc_path
+        cmd = "cd /data/data/com.example.mjittor/.cache/jittor/default/clang && " + cc_path
             + " '" + jit_src_path + "'" + other_src
             + cc_flags + extra_flags
             + " -Dmobile -L/data/data/com.example.mjittor/.cache/jittor/default/clang -L/data/data/com.example.mjittor/termux/lib -lpython3.9 -lomp -ljit_utils_core -ljittor_core -Wl,-rpath=/data/data/com.example.mjittor/.cache/jittor/default/clang/ -o '" + jit_lib_path + "'";
