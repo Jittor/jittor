@@ -804,7 +804,7 @@ class Module:
         self.dfs([], None, callback, callback_leave)
         return _uniq(ps)
 
-    def named_parameters(self):
+    def state_dict(self):
         uniq_set = set()
         ps = {}
         stack = []
@@ -827,8 +827,9 @@ class Module:
         self.dfs([], None, callback, callback_leave)
         return ps
 
-    def state_dict(self):
-        return self.named_parameters()
+    def named_parameters(self):
+        state_dict = self.state_dict()
+        return list(state_dict.items())
 
     def load_state_dict(self, params):
         self.load_parameters(params)
@@ -1038,7 +1039,7 @@ Arguments of hook are defined as::
             >>> net.save('net.pkl')
             >>> net.load('net.pkl')
         '''
-        params = self.named_parameters()
+        params = self.state_dict()
         params_dict = {}
         for k, v in params.items():
             if isinstance(v, Var):
