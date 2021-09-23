@@ -22,7 +22,10 @@ from jittor_utils import LOG
 import jittor as jt
 import time
 
-dataset_root = os.path.join(pathlib.Path.home(), ".cache", "jittor", "dataset")
+if os.environ.get("is_mobile", "0") == "1":
+    dataset_root = os.path.join("/data/data/com.example.mjittor", ".cache", "jittor", "dataset")
+else:
+    dataset_root = os.path.join(pathlib.Path.home(), ".cache", "jittor", "dataset")
 mp_log_v = os.environ.get("mp_log_v", 0) 
 mpi = jt.mpi
 img_open_hook = HookTimer(Image, "open")

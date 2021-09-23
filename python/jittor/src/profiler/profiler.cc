@@ -65,14 +65,14 @@ unique_ptr<MemoryChecker>* load_memory_checker(string name) {
     LOGvv << "Opening jit lib:" << name;
     #ifdef _WIN32
     void* handle = (void*)LoadLibrary(name.c_str());
-    #elif defined(__linux__)
-    void* handle = dlopen(name.c_str(), RTLD_LAZY | RTLD_DEEPBIND | RTLD_LOCAL);
+    #elif defined(__linux__) && !defined(mobile)
+    void *handle = dlopen(name.c_str(), RTLD_LAZY | RTLD_DEEPBIND | RTLD_LOCAL);
     msg = dlerror();
     #else
     void* handle = dlopen(name.c_str(), RTLD_LAZY | RTLD_LOCAL);
-    msg = dlerror();
+     msg = dlerror();
     #endif
-
+  
     CHECK(handle) << "Cannot open library" << name << ":" << msg;
     
     #ifdef _WIN32

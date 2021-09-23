@@ -189,7 +189,7 @@ void print_trace() {
         system_popen(cmds.c_str());
         #endif
     }
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(mobile)
     else {
         void *trace[16];
         char **messages = (char **)NULL;

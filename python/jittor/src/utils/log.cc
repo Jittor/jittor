@@ -96,8 +96,12 @@ void print_prefix(std::ostream* out) {
     
     auto usecs = tv.tv_usec;
     
+    #ifdef mobile
+    uint32_t tid = get_tid()%100;
+    #else
     thread_local uint32_t tid = get_tid()%100;
-    
+    #endif
+
     #define PRINT_W2(x) \
         char('0'+(x)/10%10) << char('0'+(x)%10)
     #define PRINT_W6(x) \
@@ -197,7 +201,11 @@ std::vector<std::map<string,string>> log_capture_read() {
 void log_exiting();
 
 bool exited = false;
+#ifdef mobile
+size_t protected_page = 0;
+#else
 size_t thread_local protected_page = 0;
+#endif
 int segfault_happen = 0;
 static int _pid = getpid();
 vector<void(*)()> cleanup_callback;

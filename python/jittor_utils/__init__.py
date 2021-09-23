@@ -152,6 +152,8 @@ def run_cmd(cmd, cwd=None, err_msg=None, print_error=True):
 
 def do_compile(args):
     cmd, cache_path, jittor_path = args
+    if os.environ.get("is_mobile", "0") == "1":
+        cmd = "cd /data/data/com.example.mjittor/.cache/jittor/default/clang && " + cmd
     try_import_jit_utils_core(True)
     if cc:
         return cc.cache_compile(cmd, cache_path, jittor_path)
@@ -217,8 +219,8 @@ if os.name=='nt' and getattr(mp.current_process(), '_inheriting', False):
     # when windows spawn multiprocess, disable sub-subprocess
     os.environ["DISABLE_MULTIPROCESSING"] = '1'
     os.environ["log_silent"] = '1'
-        
-if os.environ.get("DISABLE_MULTIPROCESSING", '0') == '1':
+
+if os.environ.get("DISABLE_MULTIPROCESSING", '0') == '1' or os.environ.get("is_mobile", "0") == "1":
     os.environ["use_parallel_op_compiler"] = '1'
     def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
         cmds = [ [cmd, cache_path, jittor_path] for cmd in cmds ]
@@ -239,7 +241,10 @@ def download(url, filename):
 
 def find_cache_path():
     from pathlib import Path
-    path = str(Path.home())
+    if os.environ.get("is_mobile", "0") == "1":
+        path = "/data/data/com.example.mjittor"
+    else:
+        path = str(Path.home())
     dirs = [".cache", "jittor", os.path.basename(cc_path)]
     if os.environ.get("debug")=="1":
         dirs[-1] += "_debug"
