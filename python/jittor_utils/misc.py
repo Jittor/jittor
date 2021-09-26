@@ -21,7 +21,10 @@ def ensure_dir(dir_path):
         os.makedirs(dir_path)
 
 def _progress():
-    pbar = tqdm(total=None)
+    pbar = tqdm(total=None,
+        unit="B",
+        unit_scale=True,
+        unit_divisor=1024)
 
     def bar_update(block_num, block_size, total_size):
         """ reporthook

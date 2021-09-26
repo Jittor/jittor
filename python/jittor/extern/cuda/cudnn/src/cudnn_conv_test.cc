@@ -84,9 +84,6 @@ static double second (void)
     gettimeofday(&tv, NULL);
     return (double)tv.tv_sec + (double)tv.tv_usec / 1000000.0;
 }
-#else
-#error unsupported platform
-#endif
 
 template <typename T_ELEM> __inline__  cudnnDataType_t getDataType();
 template <> __inline__ cudnnDataType_t getDataType<half1>()        { return CUDNN_DATA_HALF;   }
@@ -996,3 +993,9 @@ int cudnn_test_entry( int argc, char** argv )
 
     return 0;
 }
+
+#else
+int cudnn_test_entry( int argc, char** argv ) {
+    return 0;
+}
+#endif

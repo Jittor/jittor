@@ -181,7 +181,7 @@ void CudnnConvBackwardXOp::jit_run() {
     };
     int num_algos = CUDNN_CONVOLUTION_BWD_DATA_ALGO_COUNT;
     int perf_count;
-    cudnnConvolutionBwdDataAlgoPerf_t perf_results[num_algos];
+    STACK_ALLOC(cudnnConvolutionBwdDataAlgoPerf_t,perf_results,num_algos);
     cudnnConvolutionBwdDataAlgo_t algo;
     bool benchmark=true;
 

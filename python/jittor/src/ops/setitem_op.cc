@@ -237,7 +237,7 @@ void SetitemOp::jit_prepare(JK& jk) {
     #ifdef HAS_CUDA
     if (use_cuda) {
         int no = o_shape.size();
-        int masks[no];
+        STACK_ALLOC(int, masks, no);
         int tdims[6];
         cuda_loop_schedule(o_shape, masks, tdims);
         for (int i=0; i<no; i++) {
