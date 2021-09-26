@@ -79,6 +79,7 @@ def install_cuda():
             raise RuntimeError(f"Unsupport cuda driver version: {cuda_driver_version}, at least 10.0")
     jtcuda_path = os.path.join(pathlib.Path.home(), ".cache", "jittor", "jtcuda")
     nvcc_path = os.path.join(jtcuda_path, cuda_tgz[:-4], "bin", "nvcc")
+    if os.name=='nt': nvcc_path += '.exe'
     nvcc_lib_path = os.path.join(jtcuda_path, cuda_tgz[:-4], "lib64")
     sys.path.append(nvcc_lib_path)
     new_ld_path = os.environ.get("LD_LIBRARY_PATH", "") + ":" + nvcc_lib_path
@@ -101,7 +102,7 @@ def install_cuda():
         with tarfile.open(cuda_tgz_path, "r") as tar:
             tar.extractall(cuda_tgz_path[:-4])
 
-    assert os.path.isfile(nvcc_path)
+    assert os.path.isfile(nvcc_path), nvcc_path
     return nvcc_path
 
 
