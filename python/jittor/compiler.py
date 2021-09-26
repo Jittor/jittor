@@ -118,7 +118,7 @@ def compile(compiler, flags, inputs, output, combind_build=False, cuda_flags="")
     inputs = new_inputs
 
     if len(inputs) == 1 or combind_build:
-        cmd = f"\"{compiler}\" {' '.join(inputs)} {flags} {link} -o {output}"
+        cmd = f"\"{compiler}\" {' '.join(inputs)} {flags} -o {output}"
         return do_compile(fix_cl_flags(cmd))
     # split compile object file and link
     # remove -l -L flags when compile object files
@@ -1019,7 +1019,18 @@ if platform.system() == 'Darwin':
     kernel_opt_flags += " -Xpreprocessor -fopenmp "
 elif cc_type != 'cl':
     kernel_opt_flags += " -fopenmp "
-fix_cl_flags = lambda x:x
+def fix_cl_flags(cmd):
+    output = shsplit(cmd)
+    output2 = []
+    for s in output:
+        if s.startswith("-l") and ("cpython" in s or "lib" in s):
+            output2.append(f"-l:{s[2:]}.so")
+        elif s.startswith("-L"):
+            output2.append(f"{s} -Wl,-rpath={s[2:]}")
+        else:
+            output2.append(s)
+    return " ".join(output2)
+
 if os.name == 'nt':
     if cc_type == 'g++':
         pass
@@ -1251,9 +1262,9 @@ with jit_utils.import_scope(import_flags):
     import jittor_core as core
 
 flags = core.flags()
-nvcc_flags = convert_nvcc_flags(cc_flags)
 
 if has_cuda:
+    nvcc_flags = convert_nvcc_flags(cc_flags)
     if len(flags.cuda_archs):
         nvcc_flags += f" -arch=compute_{min(flags.cuda_archs)} "
         nvcc_flags += ''.join(map(lambda x:f' -code=sm_{x} ', flags.cuda_archs))

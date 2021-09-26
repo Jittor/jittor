@@ -33,7 +33,6 @@ DEFINE_FLAG(string, python_path, "", "Path of python interpreter");
 DEFINE_FLAG(string, cache_path, "", "Cache path of jittor");
 DEFINE_FLAG(int, rewrite_op, 1, "Rewrite source file of jit operator or not");
 
-#ifdef _MSC_VER
 vector<string> shsplit(const string& s) {
     auto s1 = split(s, " ");
     vector<string> s2;
@@ -54,7 +53,8 @@ vector<string> shsplit(const string& s) {
     return s2;
 }
 
-string fix_cl_flags(const string& cmd) {
+string fix_cl_flags(const string& cmd, bool is_cuda) {
+#ifdef _MSC_VER
     auto flags = shsplit(cmd);
     vector<string> output, output2;
     
@@ -95,8 +95,31 @@ string fix_cl_flags(const string& cmd) {
         cmdx += " ";
     }
     return cmdx;
-}
+#else
+    auto flags = shsplit(cmd);
+    vector<string> output;
+    
+    for (auto& f : flags) {
+        if (startswith(f, "-l") && 
+            (f.find("cpython") != string::npos ||
+             f.find("lib") != string::npos))
+            output.push_back("-l:"+f.substr(2)+".so");
+        else if (startswith(f, "-L")) {
+            if (is_cuda)
+                output.push_back(f+" -Xlinker -rpath="+f.substr(2));
+            else
+                output.push_back(f+" -Wl,-rpath="+f.substr(2));
+        } else
+            output.push_back(f);
+    }
+    string cmdx = "";
+    for (auto& s : output) {
+        cmdx += s;
+        cmdx += " ";
+    }
+    return cmdx;
 #endif
+}
 
 namespace jit_compiler {
 
@@ -174,12 +197,12 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
     if (is_cuda_op) {
         cmd = "\"" + nvcc_path + "\""
             + " \"" + jit_src_path + "\"" + other_src
-            + nvcc_flags + extra_flags
+            + fix_cl_flags(nvcc_flags + extra_flags, is_cuda_op)
             + " -o \"" + jit_lib_path + "\"";
     } else {
         cmd = "\"" + cc_path + "\""
             + " \"" + jit_src_path + "\"" + other_src
-            + cc_flags + extra_flags
+            + fix_cl_flags(cc_flags + extra_flags, is_cuda_op)
             + " -o \"" + jit_lib_path + "\"";
 #ifdef __linux__
         cmd = python_path+" "+jittor_path+"/utils/asm_tuner.py "
@@ -193,12 +216,12 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
             + nvcc_flags + extra_flags
             + " -o \"" + jit_lib_path + "\""
             +  " -Xlinker -EXPORT:\""
-            + symbol_name + "\"";;
+            + symbol_name + "\"";
     } else {
         cmd = "\"" + cc_path + "\""
             + " \"" + jit_src_path + "\"" + other_src
             + " -Fe: \"" + jit_lib_path + "\" "
-            + fix_cl_flags(cc_flags + extra_flags) + " -EXPORT:\""
+            + fix_cl_flags(cc_flags + extra_flags, is_cuda_op) + " -EXPORT:\""
             + symbol_name + "\"";
     }
 #endif
