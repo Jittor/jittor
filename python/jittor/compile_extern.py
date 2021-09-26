@@ -126,7 +126,7 @@ def setup_mkl():
         mkl_lib_path = os.path.join(mkl_home, "lib")
 
         mkl_lib_name = os.path.join(mkl_lib_path, "libmkldnn.so")
-        extra_flags = f" -I\"{mkl_include_path}\" -L\"{mkl_lib_path}\" -lmkldnn -Wl,-rpath='{mkl_lib_path}' "
+        extra_flags = f" -I\"{mkl_include_path}\" -L\"{mkl_lib_path}\" -lmkldnn "
         if os.name == 'nt':
             mkl_lib_name = os.path.join(mkl_home, 'bin', 'dnnl.dll')
             mkl_bin_path = os.path.join(mkl_home, 'bin')
@@ -199,9 +199,9 @@ def setup_cuda_extern():
     cuda_extern_src = os.path.join(jittor_path, "extern", "cuda", "src")
     cuda_extern_files = [os.path.join(cuda_extern_src, name)
         for name in os.listdir(cuda_extern_src)]
-    so_name = os.path.join(cache_path_cuda, "cuda_extern"+so)
+    so_name = os.path.join(cache_path_cuda, "libcuda_extern"+so)
     compile(cc_path, cc_flags+f" -I\"{cuda_include}\" ", cuda_extern_files, so_name)
-    link_cuda_extern = f" -L\"{cache_path_cuda}\" -lcuda_extern "
+    link_cuda_extern = f" -L\"{cache_path_cuda}\" -llibcuda_extern "
     ctypes.CDLL(so_name, dlopen_flags)
 
     try:

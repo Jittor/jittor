@@ -241,7 +241,8 @@ bool cache_compile(string cmd, const string& cache_path, const string& jittor_pa
     find_names(cmd, input_names, output_name, extra);
     string output_cache_key;
     bool ran = false;
-    output_cache_key = read_all(output_name+".key");
+    if (file_exist(output_name))
+        output_cache_key = read_all(output_name+".key");
     string cache_key;
     unordered_set<string> processed;
     auto src_path = join(jittor_path, "src");
