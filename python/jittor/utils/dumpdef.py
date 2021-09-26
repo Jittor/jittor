@@ -6,6 +6,7 @@ def_path = sys.argv[-1]
 
 # print(sys.argv)
 dumpbin_path = os.environ.get("dumpbin_path", "dumpbin")
+export_all = os.environ.get("EXPORT_ALL", "0")=="1"
 
 syms = {}
 
@@ -22,6 +23,11 @@ for obj in sys.argv[1:-2]:
             if sym.startswith("??$get_from_env"): syms[sym] = 1
             # if sym.startswith("??"): continue
             if sym.startswith("my"): syms[sym] = 1
+            # for cutt
+            if "custom_cuda" in sym: syms[sym] = 1
+            if "cutt" in sym: syms[sym] = 1
+            if "_cudaGetErrorEnum" in sym: syms[sym] = 1
+            if export_all: syms[sym] = 1
             if "jittor" not in sym: continue
             syms[sym] = 1
     # print(ret)

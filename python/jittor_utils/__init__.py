@@ -219,7 +219,7 @@ if os.name=='nt' and getattr(mp.current_process(), '_inheriting', False):
     os.environ["log_silent"] = '1'
         
 if os.environ.get("DISABLE_MULTIPROCESSING", '0') == '1':
-    os.environ["use_parallel_op_compiler"] = '1'
+    os.environ["use_parallel_op_compiler"] = '0'
     def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
         cmds = [ [cmd, cache_path, jittor_path] for cmd in cmds ]
         n = len(cmds)
@@ -278,11 +278,12 @@ def find_cache_path():
 
 def get_version(output):
     if output.endswith("mpicc"):
-        version = run_cmd(output+" --showme:version")
-    elif os.name == 'nt' and output.endswith("cl"):
+        version = run_cmd(f"\"{output}\" --showme:version")
+    elif os.name == 'nt' and (
+        output.endswith("cl") or output.endswith("cl.exe")):
         version = run_cmd(output)
     else:
-        version = run_cmd(output+" --version")
+        version = run_cmd(f"\"{output}\" --version")
     v = re.findall("[0-9]+\\.[0-9]+\\.[0-9]+", version)
     if len(v) == 0:
         v = re.findall("[0-9]+\\.[0-9]+", version)
@@ -427,7 +428,7 @@ msvc_path = ""
 if os.name == 'nt' and os.environ.get("cc_path", "")=="":
     from pathlib import Path
     msvc_path = os.path.join(str(Path.home()), ".cache", "jittor", "msvc")
-    cc_path = os.path.join(msvc_path, "cl_x64", "bin", "cl")
+    cc_path = os.path.join(msvc_path, "VC", r"_\_\_\_\_\bin", "cl.exe")
     check_msvc_install = True
 else:
     cc_path = env_or_find('cc_path', 'g++', silent=True)

@@ -472,9 +472,9 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         }
         #endif
         last_is_cuda = is_cuda;
-        _JT_SEH_START2;
+        // _JT_SEH_START2;
         op->do_run_after_prepare(jkl);
-        _JT_SEH_END2;
+        // _JT_SEH_END2;
         #ifdef HAS_CUDA
         // migrate to gpu
         if (PREDICT_BRANCH_NOT_TAKEN((!is_cuda && use_cuda && !use_cuda_managed_allocator))) {
