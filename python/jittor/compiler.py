@@ -848,12 +848,7 @@ def check_cuda():
         cuda_lib_path = glob.glob(cuda_bin+"/cudart64*")[0]
         cc_flags += f" -lcudart -L\"{cuda_lib}\" "
         os.add_dll_directory(cuda_dir)
-        # dll = ctypes.CDLL("cudart64_110", dlopen_flags)
         dll = ctypes.CDLL(cuda_lib_path, dlopen_flags)
-        cuda_driver = ctypes.CDLL(r"nvcuda", dlopen_flags)
-        driver_version = ctypes.c_int()
-        r = cuda_driver.cuDriverGetVersion(ctypes.byref(driver_version))
-        print("version:", driver_version, r)
         ret = dll.cudaDeviceSynchronize()
         assert ret == 0
     else:
