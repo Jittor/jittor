@@ -139,7 +139,6 @@ void breakpoint() {
 }
 
 void print_trace() {
-    LOGir << "???" << gdb_path;
     if (gdb_path.size()) {
         // using gdb to print the stack trace
         char pid_buf[30];
