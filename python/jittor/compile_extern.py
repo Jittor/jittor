@@ -77,7 +77,7 @@ def install_mkl(root_folder):
             sys.path.append(bin_path)
             os.add_dll_directory(bin_path)
             os.environ["PATH"] = os.environ.get("PATH", "") + ";" + bin_path
-            cmd = f"cd /d {dirname}/examples && {cc_path} {dirname}/examples/cnn_inference_f32.cpp -I{dirname}/include -Fe: {dirname}/examples/test {cc_flags} {win_link_flags} {dirname}/lib/mkldnn.lib"
+            cmd = f"cd /d {dirname}/examples && {cc_path} {dirname}/examples/cnn_inference_f32.cpp -I{dirname}/include -Fe: {dirname}/examples/test {fix_cl_flags(cc_flags)} {dirname}/lib/mkldnn.lib"
             
             assert 0 == os.system(cmd)
             assert 0 == os.system(f"{dirname}/examples/test")
@@ -276,8 +276,10 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
                     ctypes.CDLL(ex_cudnn_path, dlopen_flags)
 
         # dynamic link cuda library
-        ctypes.CDLL(culib_path, dlopen_flags)
-        link_flags = f"-l{lib_name} -L\"{cuda_lib}\""
+        # ctypes.CDLL(culib_path, dlopen_flags)
+        # link_flags = f"-l{lib_name} -L\"{cuda_lib}\""
+        link_flags = f"-l{lib_name} -L\"{os.path.dirname(culib_path)}\""
+        # print("link_flags", link_flags, culib_path)
 
     # find all source files
     culib_src_dir = os.path.join(jittor_path, "extern", "cuda", lib_name)
