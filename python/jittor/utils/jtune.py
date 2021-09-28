@@ -44,7 +44,7 @@ elif cmd == "cc_to_s":
     run_cmd(asm_cmd)
 elif cmd == "s_to_so":
     asm_cmd = cpcmd.replace("_op.cc", "_op.s") \
-        .replace("-g", "")
+        .replace(" -g", "")
     run_cmd(asm_cmd)
     # remove hash info, force re-compile
     with open(lib_path+'.key', 'w') as f:

@@ -315,6 +315,10 @@ bool cache_compile(string cmd, const string& cache_path, const string& jittor_pa
     }
     if (!ran)
         LOGvvvv << "Command cached:" << cmd;
+    #ifdef TEST
+    if (ran)
+        write(output_name, "...");
+    #endif
     return ran;
 }
 
