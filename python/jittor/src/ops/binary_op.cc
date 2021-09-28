@@ -424,7 +424,7 @@ NanoString binary_dtype_infer(NanoString op, Var* x, Var* y) {
     int force_type=0;
     if (op == ns_divide) force_type=2; // force float
     if (op == ns_floor_divide) force_type=1; // force int
-    return op.is_bool() ? ns_bool : dtype_infer(x->ns, y->ns, force_type);
+    return op.is_bool() ? ns_bool : dtype_infer(x->ns, y->ns, force_type, op);
 }
 
 BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
