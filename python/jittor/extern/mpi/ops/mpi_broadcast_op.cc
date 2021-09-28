@@ -60,6 +60,7 @@ void MpiBroadcastOp::jit_run() {
         @if(@strcmp(@Tx,int)==0 || @strcmp(@Tx,int32)==0, MPI_INT)
         @if(@strcmp(@Tx,float64)==0 || @strcmp(@Tx,double)==0, MPI_DOUBLE)
         @if(@strcmp(@Tx,int64)==0, MPI_DOUBLE_INT)
+        @if(@strcmp(@Tx,uint8)==0, MPI_CHAR)
     )
     auto* __restrict__ yp = y->ptr<Tx>();
     MPI_Bcast(yp, y->num, T_MPI, root, MPI_COMM_WORLD);
