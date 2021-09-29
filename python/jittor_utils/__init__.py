@@ -441,10 +441,14 @@ _py3_include_path = None
 _py3_extension_suffix = None
 
 if os.name == 'nt':
+    from pathlib import Path
     if check_msvc_install:
         if not os.path.isfile(cc_path):
             from jittor_utils import install_msvc
             install_msvc.install(msvc_path)
+    mpath = os.path.join(str(Path.home()), ".cache", "jittor", "msvc")
+    if cc_path.startswith(mpath):
+        msvc_path = mpath
     os.RTLD_NOW = os.RTLD_GLOBAL = os.RTLD_DEEPBIND = 0
     path = os.path.dirname(cc_path).replace('/', '\\')
     if path:

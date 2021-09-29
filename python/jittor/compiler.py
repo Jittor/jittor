@@ -1043,7 +1043,7 @@ if os.name == 'nt':
         cc_flags = cc_flags.replace("-lstdc++", "")
         cc_flags = cc_flags.replace("-ldl", "")
         cc_flags += f" -L\"{py3_link_path}\" -lpython3{sys.version_info.minor} "
-        cc_flags += " -EHsc "
+        cc_flags += " -EHa "
         import jittor_utils
         if jittor_utils.msvc_path:
             mp = jittor_utils.msvc_path
@@ -1109,6 +1109,7 @@ make_cache_dir(cache_path)
 make_cache_dir(os.path.join(cache_path, "jit"))
 make_cache_dir(os.path.join(cache_path, "obj_files"))
 make_cache_dir(os.path.join(cache_path, "gen"))
+make_cache_dir(os.path.join(cache_path, "tmp"))
 ck_path = os.path.join(cache_path, "checkpoints")
 make_cache_dir(ck_path)
 
@@ -1128,7 +1129,7 @@ if has_cuda:
         # nvcc don't support -Wall option
         if os.name == 'nt':
             nvcc_flags = nvcc_flags.replace("-fp:", "-Xcompiler -fp:")
-            nvcc_flags = nvcc_flags.replace("-EHsc", "-Xcompiler -EHsc")
+            nvcc_flags = nvcc_flags.replace("-EHa", "-Xcompiler -EHa")
             nvcc_flags = nvcc_flags.replace("-nologo", "")
             nvcc_flags = nvcc_flags.replace("-std:", "-std=")
             nvcc_flags = nvcc_flags.replace("-Fo:", "-o")

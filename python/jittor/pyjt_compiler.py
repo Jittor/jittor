@@ -675,7 +675,7 @@ def compile_src(src, h, basename):
         error_log_code = generate_error_code_from_func_header(func_head, target_scope_name, name, dfs, basename ,h, class_info)
         func = f"""
         {func_cast}[]{func_head} {{
-            try {{_JT_SEH_START3;
+            try {{
                 {func_fill};
                 uint64 arg_filled=0;
                 (void)arg_filled;
@@ -689,7 +689,7 @@ def compile_src(src, h, basename):
                 for did in range(len(arr_func_return))
                 ])}
                 LOGf << "Not a valid call.";
-            _JT_SEH_END3; }} catch (const std::exception& e) {{
+            }} catch (const std::exception& e) {{
                 if (!PyErr_Occurred()) {{
                     std::stringstream ss;
                     ss {error_log_code};
