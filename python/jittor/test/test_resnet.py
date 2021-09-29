@@ -23,6 +23,8 @@ import jittor.transform as trans
 import time
 
 skip_this_test = False
+if os.name == 'nt':
+    skip_this_test = True
 
 class MnistNet(Module):
     def __init__(self):
