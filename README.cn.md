@@ -106,7 +106,7 @@ Jittor 支持**Linux**(e.g. Ubuntu/CentOS/Arch), **macOS**,**Windows**， 其中
 
 注意1：macOS 用户需要安装额外依赖，请参考 [macOS 安装](#macOS-安装)。
 
-Jittor 提供了三种安装方法：docker，pip和手动安装：
+Jittor 提供了三种安装方法：pip、docker和手动安装：
 
 
 
@@ -116,24 +116,6 @@ Jittor 提供了三种安装方法：docker，pip和手动安装：
 
 
 
-
-
-
-## Docker 安装
-
-我们提供了Docker安装方式，免去您配置环境，Docker安装方法如下：
-
-
-```
-# CPU only(Linux)
-docker run -it --network host jittor/jittor
-# CPU and CUDA(Linux)
-docker run -it --network host --gpus all jittor/jittor-cuda
-# CPU only(Mac and Windows)
-docker run -it -p 8888:8888 jittor/jittor
-```
-
-关于Docker安装的详细教程，可以参考[Windows/Mac/Linux通过Docker安装计图](https://cg.cs.tsinghua.edu.cn/jittor/tutorial/2020-5-15-00-00-docker/)
 
 ## Pip 安装
 
@@ -152,7 +134,7 @@ python3.7 -m jittor.test.test_example
 如果测试运行通过,恭喜你已经安装完成.
 jittor会自动在路径中寻找合适的编译器, 如果您希望手动指定编译器, 请使用环境变量 `cc_path` 和 `nvcc_path`(可选).
 
-## macOS 安装
+### macOS 安装
 
 
 macOS 请使用 [homebrew](https://brew.sh) 安装额外的依赖 (python>=3.7, onednn)。
@@ -173,7 +155,8 @@ python3.7 -m jittor.test.test_example
 目前在macOS中，jittor 只支持 CPU 计算。
 
 
-## Windows安装
+### Windows安装
+
 
 Windows 请准备好Python>=3.8，安装方法如下(conda安装需要额外命令)：
 
@@ -193,6 +176,24 @@ Windows 下，jittor会自动检测显卡并安装对应的 CUDA， 请确保您
 ```bash
 python -m jittor_utils.install_cuda
 ```
+
+
+
+## Docker 安装
+
+我们提供了Docker安装方式，免去您配置环境，Docker安装方法如下：
+
+
+```
+# CPU only(Linux)
+docker run -it --network host jittor/jittor
+# CPU and CUDA(Linux)
+docker run -it --network host --gpus all jittor/jittor-cuda
+# CPU only(Mac and Windows)
+docker run -it -p 8888:8888 jittor/jittor
+```
+
+关于Docker安装的详细教程，可以参考[Windows/Mac/Linux通过Docker安装计图](https://cg.cs.tsinghua.edu.cn/jittor/tutorial/2020-5-15-00-00-docker/)
 
 ## 手动安装
 

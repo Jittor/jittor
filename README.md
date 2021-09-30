@@ -114,24 +114,7 @@ Jittor environment requirements:
 
 Note#1: macOS users have to install additional dependencies, see [macOS install](#macOS-install).
 
-Jittor offers three ways to install: docker, pip, or manual.
-
-
-## Docker Install
-
-
-
-We provide a Docker installation method to save you from configuring the environment. The Docker installation method is as follows:
-
-```
-# CPU only(Linux)
-docker run -it --network host jittor/jittor
-# CPU and CUDA(Linux)
-docker run -it --network host --gpus all jittor/jittor-cuda
-# CPU only(Mac and Windows)
-docker run -it -p 8888:8888 jittor/jittor
-```
-
+Jittor offers three ways to install: pip, docker, or manual.
 
 
 ## Pip install
@@ -147,7 +130,7 @@ python3.7 -m jittor.test.test_example
 
 
 
-## macOS install
+### macOS install
 
 
 Please first install additional dependencies with [homebrew](https://brew.sh).
@@ -168,6 +151,8 @@ python3.7 -m jittor.test.test_example
 Currently jittor only supports CPU in macOS.
 
 
+### Windows install
+
 
 
 ```bash
@@ -184,6 +169,23 @@ In Windows, jittor will automatically detect and install CUDA, please make sure 
 ```bash
 python -m jittor_utils.install_cuda
 ```
+
+
+## Docker Install
+
+
+
+We provide a Docker installation method to save you from configuring the environment. The Docker installation method is as follows:
+
+```
+# CPU only(Linux)
+docker run -it --network host jittor/jittor
+# CPU and CUDA(Linux)
+docker run -it --network host --gpus all jittor/jittor-cuda
+# CPU only(Mac and Windows)
+docker run -it -p 8888:8888 jittor/jittor
+```
+
 
 ## manual install
 
