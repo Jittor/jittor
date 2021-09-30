@@ -214,7 +214,8 @@ def t(x):
     return x.transpose(*pose)
 jt.Var.t = t 
 
-def median(x,dim=None,keepdim=False):
+def median(x,dim=None,keepdim=False, keepdims=False):
+    keepdim = keepdim or keepdims
     if dim is None:
         x = x.reshape(-1)
         dim=0
@@ -637,7 +638,8 @@ def topk(input, k, dim=None, largest=True, sorted=True):
 
 jt.Var.topk = topk
 
-def kthvalue(input, k, dim=None, keepdim=False):
+def kthvalue(input, k, dim=None, keepdim=False, keepdims=False):
+    keepdim = keepdim or keepdims
     if dim is None:
         dim = -1
     if dim<0:
