@@ -1022,11 +1022,23 @@ elif cc_type != 'cl':
 def fix_cl_flags(cmd):
     output = shsplit(cmd)
     output2 = []
+    libpaths = []
     for s in output:
         if s.startswith("-l") and ("cpython" in s or "lib" in s):
-            output2.append(f"-l:{s[2:]}.so")
+            if platform.system() == 'Darwin':
+                fname = s[2:] + ".so"
+                for path in reversed(libpaths):
+                    full = os.path.join(path, fname).replace("\"", "")
+                    if os.path.isfile(full):
+                        output2.append(full)
+                        break
+                else:
+                    output2.append(s)
+            else:
+                output2.append(f"-l:{s[2:]}.so")
         elif s.startswith("-L"):
-            output2.append(f"{s} -Wl,-rpath={s[2:]}")
+            libpaths.append(s[2:])
+            output2.append(f"{s} -Wl,-rpath,{s[2:]}")
         else:
             output2.append(s)
     return " ".join(output2)

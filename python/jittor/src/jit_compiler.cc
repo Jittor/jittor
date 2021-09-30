@@ -98,17 +98,40 @@ string fix_cl_flags(const string& cmd, bool is_cuda) {
 #else
     auto flags = shsplit(cmd);
     vector<string> output;
+    #ifdef __APPLE__
+    vector<string> libpaths;
+    #endif
     
     for (auto& f : flags) {
         if (startswith(f, "-l") && 
             (f.find("cpython") != string::npos ||
-             f.find("lib") != string::npos))
+             f.find("lib") != string::npos)) {
+            #ifdef __APPLE__
+            auto fname = f.substr(2) + ".so";
+            int i;
+            for (i=libpaths.size()-1; i>=0; i--) {
+                auto full = libpaths[i] + '/' + fname;
+                string full2;
+                for (auto c : full)
+                    if (c != '\"') full2 += c;
+                if (jit_compiler::file_exist(full2)) {
+                    output.push_back(full2);
+                    break;
+                }
+            }
+            if (i<0) output.push_back(f);
+            #else
             output.push_back("-l:"+f.substr(2)+".so");
+            #endif
+        }
         else if (startswith(f, "-L")) {
             if (is_cuda)
                 output.push_back(f+" -Xlinker -rpath="+f.substr(2));
             else
-                output.push_back(f+" -Wl,-rpath="+f.substr(2));
+                output.push_back(f+" -Wl,-rpath,"+f.substr(2));
+            #ifdef __APPLE__
+            libpaths.push_back(f.substr(2));
+            #endif
         } else
             output.push_back(f);
     }
