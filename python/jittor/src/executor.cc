@@ -548,9 +548,11 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
     if (device_sync && use_cuda) {
         last_is_cuda = false;
         sync_times++;
-        CHECK(EventQueue::OK == event_queue.run_sync([]() {
+        // CHECK(EventQueue::OK == event_queue.run_sync([]() {
             checkCudaErrors(cudaDeviceSynchronize());
-        }));
+        // }));
+        // TODO: run_sync cause hang, tmp fix it
+        event_queue.flush();
     }
     LOGvv << "cudaDeviceSynchronize times:" << sync_times << "/" <<queue.size() << "device_sync:" << device_sync;
     #endif
