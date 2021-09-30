@@ -22,7 +22,7 @@ MpiBroadcastOp::MpiBroadcastOp(Var* x, int root) : x(x), root(root) {
         return;
     }
     #ifdef HAS_CUDA
-    if (use_device_mpi) {
+    if (use_device_mpi && use_cuda) {
         static auto nccl_broadcast = has_op("nccl_broadcast")
             ? get_op_info("nccl_broadcast").get_constructor<VarPtr, Var*, int>()
             : nullptr;
