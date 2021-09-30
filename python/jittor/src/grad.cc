@@ -36,7 +36,7 @@ template<class T> struct StackIniter {
 
 #define STACK_ALLOC2(T, a, n) T* a = (T*)_alloca(sizeof(T)*(n)); StackIniter<T> __init_##a(a, n);
 #else
-#define STACK_ALLOC2(T, a, n) T* a = (T*)_alloca(sizeof(T)*(n))
+#define STACK_ALLOC2(T, a, n) T a[n]
 #endif
 
 VarPtr make_grad(Op* op, Var* out, Var* dout, Var* x, int x_index) {

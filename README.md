@@ -92,10 +92,10 @@ We provide some jupyter notebooks to help you quick start with Jittor.
 
 
 
-
 Jittor environment requirements:
 
-* System: **Linux**(e.g. Ubuntu/CentOS/Arch), **macOS**, or **Windows Subsystem of Linux (WSL)**
+* System: **Linux**(e.g. Ubuntu/CentOS/Arch), **macOS**, or **Windows**, enviroment requirements of **Linux** and **Mac** are list below:
+
 * Python version >= 3.7
 * CPU compiler (require at least one of the following)
     * g++ (>=5.4.0)
@@ -105,10 +105,14 @@ Jittor environment requirements:
 * GPU library: cudnn-dev (recommend tar file installation, [reference link](https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#installlinux-tar))
 
 
+**Windows** requirements atr:
 
-Note#1: Currently Jittor runs on the Windows operating system through WSL. For the installation method of WSL, please refer to [Microsoft official website](https://docs.microsoft.com/en-us/windows/wsl/install-win10). WSL does not yet support CUDA.
+* Python: version >= 3.8
+* x86_64 CPU processor
+* Windows 10 or above
 
-Note#2: macOS users have to install additional dependencies, see [macOS install](#macOS-install).
+
+Note#1: macOS users have to install additional dependencies, see [macOS install](#macOS-install).
 
 Jittor offers three ways to install: docker, pip, or manual.
 
@@ -162,6 +166,24 @@ python3.7 -m jittor.test.test_example
 
 
 Currently jittor only supports CPU in macOS.
+
+
+
+
+```bash
+# check your python version(>=3.8)
+python --version
+python -m pip install jittor
+# if conda is used
+conda install pywin32
+```
+
+
+In Windows, jittor will automatically detect and install CUDA, please make sure your NVIDIA driver support CUDA 10.2  or above, or you can manually let jittor install CUDA for you:
+
+```bash
+python -m jittor_utils.install_cuda
+```
 
 ## manual install
 
