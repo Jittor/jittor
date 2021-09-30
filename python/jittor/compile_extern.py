@@ -216,23 +216,21 @@ def setup_cuda_extern():
         try:
             setup_cuda_lib(lib_name, extra_flags=link_cuda_extern)
         except Exception as e:
-            import traceback
-            line = traceback.format_exc()
-            LOG.w(f"CUDA found but {lib_name} is not loaded:\n{line}")
+            msg = f"CUDA found but {lib_name} is not loaded:\n"
             if lib_name == "cudnn":
-                msg = """Develop version of CUDNN not found, 
+                msg += """Develop version of CUDNN not found, 
 please refer to CUDA offical tar file installation: 
 https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#installlinux-tar"""
-                if platform.machine() == "x86_64":
-                    msg += """
+                if platform.machine() in ["x86_64", "AMD64"]:
+                    msg += f"""
 or you can let jittor install cuda and cudnn for you:
 >>> python3.{sys.version_info.minor} -m jittor_utils.install_cuda
 """
-                LOG.w(msg)
+            LOG.f(msg)
 
 def setup_cuda_lib(lib_name, link=True, extra_flags=""):
     arch_key = "x86_64"
-    if platform.machine() != "x86_64":
+    if platform.machine() not in ["x86_64", "AMD64"]:
         arch_key = "aarch64"
     globals()[lib_name+"_ops"] = None
     globals()[lib_name] = None
