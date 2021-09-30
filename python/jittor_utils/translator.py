@@ -4,6 +4,7 @@ from pathlib import Path
 dirname = os.path.dirname(__file__)
 
 jittor_root = os.path.join(dirname, "..", "..")
+print(jittor_root)
 
 all_src_md = []
 

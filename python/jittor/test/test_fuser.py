@@ -16,6 +16,18 @@ class TestFuser(unittest.TestCase):
         c = (a * b).sum() + (a + 1)
         print(c)
 
+    def test_wrong_fuse2(self):
+        a = jt.array([1])
+        b = jt.random([10,])
+        c = jt.random([100,])
+        bb = a*b
+        cc = a*c
+        jt.sync([bb,cc])
+        np.testing.assert_allclose(b.data, bb.data)
+        np.testing.assert_allclose(c.data, cc.data)
+
+
+
 
 if __name__ == "__main__":
     unittest.main()
