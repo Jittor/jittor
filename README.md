@@ -107,7 +107,7 @@ Jittor environment requirements:
 
 **Windows** requirements atr:
 
-* Python: version >= 3.8
+* Python: version >= 3.8(recommend install from <https://www.python.org/downloads/windows/>)
 * x86_64 CPU processor
 * Windows 10 or above
 

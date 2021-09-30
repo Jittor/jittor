@@ -442,6 +442,11 @@ _py3_extension_suffix = None
 
 if os.name == 'nt':
     from pathlib import Path
+    try:
+        import ssl
+        ssl._create_default_https_context = ssl._create_unverified_context
+    except:
+        pass
     if check_msvc_install:
         if not os.path.isfile(cc_path):
             from jittor_utils import install_msvc
