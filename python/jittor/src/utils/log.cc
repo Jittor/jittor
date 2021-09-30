@@ -529,10 +529,13 @@ int system_popen(const char* cmd, const char* cwd) {
     string output;
     while (fgets(buf, BUFSIZ, ptr) != NULL) {
         output += buf;
-        std::cerr << buf;
+        if (log_v)
+            std::cerr << buf;
     }
     if (output.size()) std::cerr.flush();
     auto ret = pclose(ptr);
+    if (ret && !log_v)
+        std::cerr << output;
     if (output.size()<10 && ret) {
         // maybe overcommit
         return -1;
