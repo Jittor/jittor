@@ -953,7 +953,7 @@ if os.path.isfile(ex_python_path):
 
 # if jtcuda is already installed
 nvcc_path = None
-if install_cuda.has_installation():
+if install_cuda.has_installation() or os.name == 'nt':
     nvcc_path = install_cuda.install_cuda()
     if nvcc_path:
         nvcc_path = try_find_exe(nvcc_path)
@@ -984,7 +984,7 @@ def check_clang_latest_supported_cpu():
 # cc_flags += " -Wall -Werror -Wno-unknown-pragmas -std=c++14 -fPIC "
 cc_flags += " -Wall -Wno-unknown-pragmas -std=c++14 -fPIC "
 # 1. Arch/CPU specific optimization
-if platform.machine() == "x86_64":
+if platform.machine() in ["x86_64", "AMD64"]:
     cc_flags += " -march=native " 
 elif platform.machine() == 'arm64' and platform.system() == "Darwin":
     cc_flags += f" -mcpu={check_clang_latest_supported_cpu()} "

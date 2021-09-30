@@ -112,21 +112,23 @@ We provide some jupyter notebooks to help you quick start with Jittor.
 
 Jittor框架对环境要求如下:
 
-
-* 操作系统: **Linux**(e.g. Ubuntu/CentOS/Arch), **macOS**（x86_64）或 **Windows Subsystem of Linux（WSL）**
+Jittor 支持**Linux**(e.g. Ubuntu/CentOS/Arch), **macOS**,**Windows**， 其中**Linux**和**macOS**的依赖如下：
 * Python：版本 >= 3.7
 * C++编译器 （需要下列至少一个）
-    - g++ （>=5.4.0）
-    - clang （>=8.0）
+    - g++ （>=5.4.0 for linux）
+    - clang （>=8.0 for mac）
 * GPU 编译器（可选）：nvcc >=10.0
 * GPU 加速库（可选）：cudnn-dev (cudnn开发版, 推荐使用tar安装方法，[参考链接](https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#installlinux-tar))
+
+**Windows**对环境的要求为：
+* Python：版本 >= 3.8
+* x86_64处理器
+* Windows 10及以上。
 
 如果您不希望手动配置环境，我们推荐使用 Docker 进行安装。
 除此之外，您还可以使用 pip 安装和手动安装。
 
-注意1：目前Jittor通过WSL的方式在Windows操作系统上运行，WSL的安装方法请参考[微软官网](https://docs.microsoft.com/en-us/windows/wsl/install-win10)，WSL版本目前尚不支持CUDA。
-
-注意2：macOS 用户需要安装额外依赖，请参考 [macOS 安装](#macOS-安装)。
+注意1：macOS 用户需要安装额外依赖，请参考 [macOS 安装](#macOS-安装)。
 
 Jittor 提供了三种安装方法：docker，pip和手动安装：
 
@@ -142,10 +144,7 @@ Jittor environment requirements:
 * GPU library: cudnn-dev (recommend tar file installation, [reference link](https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#installlinux-tar))
 
 
-
-Note#1: Currently Jittor runs on the Windows operating system through WSL. For the installation method of WSL, please refer to [Microsoft official website](https://docs.microsoft.com/en-us/windows/wsl/install-win10). WSL does not yet support CUDA.
-
-Note#2: macOS users have to install additional dependencies, see [macOS install](#macOS-install).
+Note#1: macOS users have to install additional dependencies, see [macOS install](#macOS-install).
 
 Jittor offers three ways to install: docker, pip, or manual.
 
@@ -211,6 +210,24 @@ python3.7 -m jittor.test.test_example
 目前在macOS中，jittor 只支持 CPU 计算。
 
 Currently jittor only supports CPU in macOS.
+
+## Windows安装
+
+Windows 请准备好Python>=3.8，安装方法如下(conda安装需要额外命令)：
+
+```bash
+# check your python version(>=3.8)
+python --version
+python -m pip install jittor
+# if conda is used
+conda install pywin32
+```
+
+Windows 下，jittor会自动检测显卡并安装对应的 CUDA， 请确保您的NVIDIA驱动支持CUDA 10.2 以上，您还可以使用如下命令手动为Jittor安装CUDA：
+
+```bash
+python -m jittor_utils.install_cuda
+```
 
 ## 手动安装
 ## manual install
