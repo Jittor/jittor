@@ -1,5 +1,7 @@
 # Jittor: a Just-in-time(JIT) deep learning framework
 
+![Jittor Logo](doc/logo.png)
+
 [Quickstart](#quickstart) | [Install](#install) | [Tutorial](#tutorial) | [Chinese](./README.cn.md)
 
 
