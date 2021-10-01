@@ -8,7 +8,7 @@ def install(path):
     LOG.i("Installing MSVC...")
     filename = "msvc.zip"
     url = "https://cg.cs.tsinghua.edu.cn/jittor/assets/" + filename
-    md5sum = "929c4b86ea68160121f73c3edf6b5463"
+    md5sum = "55f0c175fdf1419b124e0fc498b659d2"
     download_url_to_local(url, filename, path, md5sum)
     fullname = os.path.join(path, filename)
     import zipfile
