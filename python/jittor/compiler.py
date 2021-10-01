@@ -1055,7 +1055,7 @@ if os.name == 'nt':
         cc_flags = cc_flags.replace("-lstdc++", "")
         cc_flags = cc_flags.replace("-ldl", "")
         cc_flags += f" -L\"{py3_link_path}\" -lpython3{sys.version_info.minor} "
-        cc_flags += " -EHa "
+        cc_flags += " -EHa -MD "
         import jittor_utils
         if jittor_utils.msvc_path:
             mp = jittor_utils.msvc_path
@@ -1142,6 +1142,7 @@ if has_cuda:
         if os.name == 'nt':
             nvcc_flags = nvcc_flags.replace("-fp:", "-Xcompiler -fp:")
             nvcc_flags = nvcc_flags.replace("-EHa", "-Xcompiler -EHa")
+            nvcc_flags = nvcc_flags.replace("-M", "-Xcompiler -M")
             nvcc_flags = nvcc_flags.replace("-nologo", "")
             nvcc_flags = nvcc_flags.replace("-std:", "-std=")
             nvcc_flags = nvcc_flags.replace("-Fo:", "-o")

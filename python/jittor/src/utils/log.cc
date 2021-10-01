@@ -494,7 +494,8 @@ int system_popen(const char *cmd, const char* cwd) {
         bSuccess = ReadFile(g_hChildStd_OUT_Rd, chBuf, BUFSIZ, &dwRead, NULL);
         if (!bSuccess || dwRead == 0)
             break;
-        output += chBuf;
+        output += string(chBuf, dwRead);
+
         if (log_v)
             bSuccess = WriteFile(hParentStdOut, chBuf,
                              dwRead, &dwWritten, NULL);
