@@ -1283,7 +1283,7 @@ if has_cuda:
         archs = []
         for arch in flags.cuda_archs:
             if arch<50:
-                LOG.w(f"CUDA arch({arch})<50 is not supported")
+                LOG.w(f"CUDA arch({arch})<30 is not supported")
                 continue
             archs.append(arch)
         nvcc_flags += f" -arch=compute_{min(flags.cuda_archs)} "
