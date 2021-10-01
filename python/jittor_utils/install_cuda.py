@@ -50,7 +50,7 @@ def install_cuda():
         return None
     LOG.i("cuda_driver_version: ", cuda_driver_version)
     if "JTCUDA_VERSION" in os.environ:
-        cuda_driver_version = list(map(int,os.enviroment["JTCUDA_VERSION"].split(".")))
+        cuda_driver_version = list(map(int,os.environ["JTCUDA_VERSION"].split(".")))
         LOG.i("JTCUDA_VERSION: ", cuda_driver_version)
 
     if os.name == 'nt':

@@ -1279,15 +1279,26 @@ flags = core.flags()
 
 if has_cuda:
     nvcc_flags = convert_nvcc_flags(cc_flags)
+    nvcc_version = jit_utils.get_int_version(nvcc_path)
+    max_arch = 1000
+    if nvcc_version < (11,):
+        max_arch = 75
+    elif nvcc_version < (11,1):
+        max_arch = 80
     if len(flags.cuda_archs):
+        min_arch = 30
         archs = []
         for arch in flags.cuda_archs:
-            if arch<50:
-                LOG.w(f"CUDA arch({arch})<30 is not supported")
+            if arch<min_arch:
+                LOG.w(f"CUDA arch({arch})<{min_arch} is not supported")
                 continue
+            if arch>max_arch:
+                LOG.w(f"CUDA arch({arch})>{max_arch} will be backward-compatible")
+                arch = max_arch
             archs.append(arch)
-        nvcc_flags += f" -arch=compute_{min(flags.cuda_archs)} "
-        nvcc_flags += ''.join(map(lambda x:f' -code=sm_{x} ', flags.cuda_archs))
+        flags.cuda_archs = archs
+        nvcc_flags += f" -arch=compute_{min(archs)} "
+        nvcc_flags += ''.join(map(lambda x:f' -code=sm_{x} ', archs))
 
 flags.cc_path = cc_path
 flags.cc_type = cc_type
