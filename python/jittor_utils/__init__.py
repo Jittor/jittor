@@ -376,6 +376,7 @@ def get_py3_include_path():
     
     if os.name == 'nt':
         # Windows
+        sys.executable = sys.executable.lower()
         _py3_include_path = '-I"' + os.path.join(
             os.path.dirname(sys.executable),
             "include"

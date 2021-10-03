@@ -75,9 +75,8 @@ def install_mkl(root_folder):
             # this env is used for execute example/text
             bin_path = os.path.join(dirname, "bin")
             sys.path.append(bin_path)
-            os.add_dll_directory(bin_path)
             os.environ["PATH"] = os.environ.get("PATH", "") + ";" + bin_path
-            cmd = f"cd /d {dirname}/examples && {cc_path} {dirname}/examples/cnn_inference_f32.cpp -I{dirname}/include -Fe: {dirname}/examples/test {fix_cl_flags(cc_flags)} {dirname}/lib/mkldnn.lib"
+            cmd = f"cd /d {dirname}/examples && {cc_path} {dirname}/examples/cnn_inference_f32.cpp -I{dirname}/include -Fe: {dirname}/examples/test.exe {fix_cl_flags(cc_flags).replace('-LD', '')} {dirname}/lib/mkldnn.lib"
             
             assert 0 == os.system(cmd)
             assert 0 == os.system(f"{dirname}/examples/test")
@@ -130,8 +129,7 @@ def setup_mkl():
         if os.name == 'nt':
             mkl_lib_name = os.path.join(mkl_home, 'bin', 'dnnl.dll')
             mkl_bin_path = os.path.join(mkl_home, 'bin')
-            os.add_dll_directory(mkl_bin_path)
-            extra_flags = f" -I\"{mkl_include_path}\"  -L\"{mkl_lib_path}\" -ldnnl "
+            extra_flags = f" -I\"{mkl_include_path}\"  -L\"{mkl_lib_path}\" -L\"{mkl_bin_path}\" -ldnnl "
         assert os.path.isdir(mkl_include_path)
         assert os.path.isdir(mkl_lib_path)
         assert os.path.isfile(mkl_lib_name)
@@ -374,8 +372,6 @@ def setup_cutt():
     LOG.v(f"cutt_lib_path: {cutt_lib_path}")
     LOG.v(f"cutt_lib_name: {cutt_lib_name}")
     # We do not link manualy, link in custom ops
-    if os.name == "nt":
-        os.add_dll_directory(cutt_lib_path)
     ctypes.CDLL(cutt_lib_name, dlopen_flags)
 
     cutt_op_dir = os.path.join(jittor_path, "extern", "cuda", "cutt", "ops")

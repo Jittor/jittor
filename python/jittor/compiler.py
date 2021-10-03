@@ -847,7 +847,6 @@ def check_cuda():
         # cc_flags += f" \"{cuda_lib}\\cudart.lib\" "
         cuda_lib_path = glob.glob(cuda_bin+"/cudart64*")[0]
         cc_flags += f" -lcudart -L\"{cuda_lib}\" "
-        os.add_dll_directory(cuda_dir)
         dll = ctypes.CDLL(cuda_lib_path, dlopen_flags)
         ret = dll.cudaDeviceSynchronize()
         assert ret == 0
@@ -1051,6 +1050,7 @@ if os.name == 'nt':
                 os.path.dirname(sys.executable),
                 "libs",
         )
+        cc_flags = remove_flags(cc_flags, ["-f", "-m"])
         cc_flags = cc_flags.replace("-std=c++14", "-std=c++17")
         cc_flags = cc_flags.replace("-lstdc++", "")
         cc_flags = cc_flags.replace("-ldl", "")
@@ -1061,6 +1061,7 @@ if os.name == 'nt':
             mp = jittor_utils.msvc_path
             cc_flags += f' -nologo -I"{mp}\\VC\\include" -I"{mp}\\win10_kits\\include\\ucrt" -I"{mp}\\win10_kits\\include\\shared" -I"{mp}\\win10_kits\\include\\um" -DNOMINMAX '
             cc_flags += f' -L"{mp}\\VC\\lib" -L"{mp}\\win10_kits\\lib\\um\\x64" -L"{mp}\\win10_kits\\lib\\ucrt\\x64" '
+        win_libpaths = {}
         def fix_cl_flags(cmd):
             cmd = cmd.replace(".o ", ".obj ")
             cmd = cmd.replace(".o\" ", ".obj\" ")
@@ -1087,6 +1088,10 @@ if os.name == 'nt':
                 elif f.startswith("-LD"):
                     output.append(f)
                 elif f.startswith("-L"):
+                    path = f[2:].replace("\"", "")
+                    if path not in win_libpaths:
+                        win_libpaths[path] = 1
+                        os.add_dll_directory(path)
                     output2.append("-LIBPATH:"+f[2:])
                 elif ".lib" in f:
                     output2.append(f)
@@ -1141,7 +1146,7 @@ if has_cuda:
         # nvcc don't support -Wall option
         if os.name == 'nt':
             nvcc_flags = nvcc_flags.replace("-fp:", "-Xcompiler -fp:")
-            nvcc_flags = nvcc_flags.replace("-EHa", "-Xcompiler -EHa")
+            nvcc_flags = nvcc_flags.replace("-EH", "-Xcompiler -EH")
             nvcc_flags = nvcc_flags.replace("-M", "-Xcompiler -M")
             nvcc_flags = nvcc_flags.replace("-nologo", "")
             nvcc_flags = nvcc_flags.replace("-std:", "-std=")
