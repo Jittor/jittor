@@ -122,6 +122,8 @@ Jittor 支持**Linux**(e.g. Ubuntu/CentOS/Arch), **macOS**,**Windows**， 其中
 * GPU 编译器（可选）：nvcc >=10.0
 * GPU 加速库（可选）：cudnn-dev (cudnn开发版, 推荐使用tar安装方法，[参考链接](https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#installlinux-tar))
 
+Jittor 目前还支持主流国产Linux操作系统，如统信、麒麟、普华、龙芯Loongnix，安装方式可参考 Linux pip安装方法，准备好python和g++即可。
+
 **Windows**对环境的要求为：
 * Python：版本 >= 3.8(建议从Python官网安装：<https://www.python.org/downloads/windows/>)
 * x86_64处理器
