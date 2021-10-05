@@ -1092,7 +1092,7 @@ if os.name == 'nt':
                     if path not in win_libpaths:
                         win_libpaths[path] = 1
                         os.add_dll_directory(path)
-                        os.environ["PATH"] += f";{path};"
+                        os.environ["PATH"] = f";{path};" + os.environ["PATH"]
                     output2.append("-LIBPATH:"+f[2:])
                 elif ".lib" in f:
                     output2.append(f)
