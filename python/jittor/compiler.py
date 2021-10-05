@@ -846,7 +846,7 @@ def check_cuda():
         cuda_lib = os.path.abspath(os.path.join(cuda_dir, "..", "lib", "x64"))
         # cc_flags += f" \"{cuda_lib}\\cudart.lib\" "
         cuda_lib_path = glob.glob(cuda_bin+"/cudart64*")[0]
-        cc_flags += f" -lcudart -L\"{cuda_lib}\" "
+        cc_flags += f" -lcudart -L\"{cuda_lib}\" -L\"{cuda_bin}\" "
         dll = ctypes.CDLL(cuda_lib_path, dlopen_flags)
         ret = dll.cudaDeviceSynchronize()
         assert ret == 0
@@ -1092,6 +1092,7 @@ if os.name == 'nt':
                     if path not in win_libpaths:
                         win_libpaths[path] = 1
                         os.add_dll_directory(path)
+                        os.environ["PATH"] += f";{path};"
                     output2.append("-LIBPATH:"+f[2:])
                 elif ".lib" in f:
                     output2.append(f)
