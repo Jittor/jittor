@@ -219,8 +219,8 @@ def setup_cuda_extern():
                 msg += """Develop version of CUDNN not found, 
 please refer to CUDA offical tar file installation: 
 https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#installlinux-tar"""
-                if platform.machine() in ["x86_64", "AMD64"]:
-                    msg += f"""
+            if platform.machine() in ["x86_64", "AMD64"]:
+                msg += f"""
 or you can let jittor install cuda and cudnn for you:
 >>> python3.{sys.version_info.minor} -m jittor_utils.install_cuda
 """
