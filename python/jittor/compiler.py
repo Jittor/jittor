@@ -116,9 +116,11 @@ def compile(compiler, flags, inputs, output, combind_build=False, cuda_flags="")
             obj_files.append(os.path.join(
                 cache_path, "obj_files", os.path.basename(name)+".o"))
     inputs = new_inputs
+    cm = lambda s: f"\"{s}\""
+    cms = lambda arr: [f"\"{s}\"" for s in arr ]
 
     if len(inputs) == 1 or combind_build:
-        cmd = f"\"{compiler}\" {' '.join(inputs)} {flags} -o {output}"
+        cmd = f"\"{compiler}\" {' '.join(cms(inputs))} {flags} -o {cm(output)}"
         return do_compile(fix_cl_flags(cmd))
     # split compile object file and link
     # remove -l -L flags when compile object files
@@ -127,7 +129,7 @@ def compile(compiler, flags, inputs, output, combind_build=False, cuda_flags="")
     for input, obj_file in zip(inputs, obj_files):
         cc = compiler
         nflags = oflags
-        cmd = f"{input} {nflags} {lto_flags} -c -o {obj_file}"
+        cmd = f"{cm(input)} {nflags} {lto_flags} -c -o {cm(obj_file)}"
         if input.endswith(".cu"):
             if has_cuda:
                 cmd = f"\"{nvcc_path}\" {cuda_flags} {cmd}"
@@ -146,9 +148,9 @@ def compile(compiler, flags, inputs, output, combind_build=False, cuda_flags="")
     obj_files += ex_obj_files
     if os.name == 'nt':
         dumpdef_path = os.path.join(jittor_path, "utils", "dumpdef.py")
-        cmd = f"\"{sys.executable}\" \"{dumpdef_path}\" {' '.join(obj_files)} -Fo: \"{output}.def\""
+        cmd = f"\"{sys.executable}\" \"{dumpdef_path}\" {' '.join(cms(obj_files))} -Fo: \"{output}.def\""
         do_compile(fix_cl_flags(cmd))
-    cmd = f"\"{compiler}\" {' '.join(obj_files)} -o {output} {flags} {lto_flags}"
+    cmd = f"\"{compiler}\" {' '.join(cms(obj_files))} -o {cm(output)} {flags} {lto_flags}"
     return do_compile(fix_cl_flags(cmd))
 
 def gen_jit_tests():
@@ -1064,7 +1066,7 @@ if os.name == 'nt':
         win_libpaths = {}
         def fix_cl_flags(cmd):
             cmd = cmd.replace(".o ", ".obj ")
-            cmd = cmd.replace(".o\" ", ".obj\" ")
+            cmd = cmd.replace(".o\"", ".obj\"")
             if cmd.endswith(".o"): cmd += "bj"
             if " -o " in cmd:
                 if " -shared " in cmd:
@@ -1264,7 +1266,7 @@ if use_data_gz:
             .replace("-Werror", "") \
             .replace("-shared", "")
         vdp = os.path.join(jittor_path, "src", "utils", "vdp")
-        run_cmd(fix_cl_flags(f"{cc_path} {dflags} -include {vdp} {data_s_path} -c -o {data_o_path}"))
+        run_cmd(fix_cl_flags(f"{cc_path} {dflags} -include \"{vdp}\" \"{data_s_path}\" -c -o \"{data_o_path}\""))
         os.remove(data_s_path)
         with open(data_gz_md5_path, 'w') as f:
             f.write(md5)
