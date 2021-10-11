@@ -17,6 +17,8 @@ Jittor前端语言为Python。前端使用了模块化和动态图执行的设�
 *  [Jittor模型库](https://cg.cs.tsinghua.edu.cn/jittor/resources/)
 *  [Jittor文档](https://cg.cs.tsinghua.edu.cn/jittor/assets/docs/index.html)
 *  [Github](https://github.com/jittor/jittor)， [Gitee](https://gitee.com/jittor/jittor)
+*  [Jittor 论坛](https://discuss.jittor.org/)
+*  即时通信: QQ Group(761222083)
 
 
 

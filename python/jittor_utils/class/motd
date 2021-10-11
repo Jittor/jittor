@@ -1,0 +1,20 @@
+★★★★★★★★★★★★★★★★★★★★★
+Welcome to use Jittor
+Please put the file under /root directory
+★★★★★★★★★★★★★★★★★★★★★
+欢迎使用Jittor
+请将文件放置在/root目录下
+本docker已经安装好cuda环境
+相关链接：
+*  [Jittor官网](https://cg.cs.tsinghua.edu.cn/jittor/)
+*  [Jittor教程](https://cg.cs.tsinghua.edu.cn/jittor/tutorial/)
+*  [Jittor模型库](https://cg.cs.tsinghua.edu.cn/jittor/resources/)
+*  [Jittor文档](https://cg.cs.tsinghua.edu.cn/jittor/assets/docs/index.html)
+*  [Github](https://github.com/jittor/jittor)， [Gitee](https://gitee.com/jittor/jittor)
+*  [Jittor 论坛](https://discuss.jittor.org/)
+*  即时通信: QQ Group(761222083)
+
+欢迎大家star，fork并在QQ群或者论坛向我们提出宝贵的意见和建议。
+
+注意:请不要开启无密码保护的jupyter notebook或vscode server
+★★★★★★★★★★★★★★★★★★★★★
