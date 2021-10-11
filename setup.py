@@ -16,6 +16,9 @@ Reference:
 from warnings import warn
 import os
 import platform
+import site
+import sys
+site.ENABLE_USER_SITE = "--user" in sys.argv[1:]
 
 if not platform.system() in ['Linux', 'Darwin']:
     assert os.environ.get("FORCE_INSTALL", '0') != '1', error_msg
@@ -58,7 +61,7 @@ setuptools.setup(
     python_requires='>=3.7',
 
     packages=["jittor", "jittor.test", "jittor.models", "jittor.utils", "jittor_utils"],
-    package_dir={'': os.path.join(path, 'python')},
+    package_dir={'': 'python'},
     package_data={'': ['*', '*/*', '*/*/*','*/*/*/*','*/*/*/*/*','*/*/*/*/*/*']},
     # include_package_data=True,
     install_requires=[
