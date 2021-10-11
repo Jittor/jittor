@@ -155,22 +155,151 @@ jt.Var.__imatmul__ = lambda a,b: a.assign(matmul(a,b))
 def get_init_var_rand(shape, dtype):
     return jt.array(np.random.normal(0.0, 1.0, shape).astype(np.float32))
 
-def relu(x): return jt.ternary((x>0.0), x, jt.broadcast_var(0.0, x))
-def leaky_relu(x, scale=0.01): return jt.ternary(x>0, x, x*scale)
-def relu6(x): return jt.minimum(jt.maximum(x, 0.0), 6.0)
-def elu(x,alpha=1.0):return jt.ternary(x>0,x,alpha*(x.exp()-1))
-def sign(x):
+def relu(x): 
+    r''' Applies the element-wise function:
+
+    .. math::
+        \text{ReLU6}(x) = \max(0,x)
+
+    :param x: the input var
+    :type x: jt.Var
+
+    Example:
+        >>> a = jt.randn(3)
+        >>> a
+        jt.Var([-0.38380373 1.1338731   6.128115  ], dtype=float32)
+        >>> nn.relu(a)
+        jt.Var([0.        1.1338731 6.128115 ], dtype=float32)
+    '''
+    return jt.ternary((x>0.0), x, jt.broadcast_var(0.0, x))
+
+
+def leaky_relu(x, scale=0.01): 
+    r''' Applies the element-wise function:
+
+    .. math::
+        \text{LeakyRELU}(x) =
+        \begin{cases}
+        x, & \text{ if } x \geq 0 \\
+        \text{scale} \times x, & \text{ otherwise }
+        \end{cases}
+
+    :param x: the input var
+    :type x: jt.Var
+
+    :param scale: the :math:`\scale` value for the leaky relu formulation. Default: 0.01
+    :param scale: float, optional
+
+    Example:
+        >>> a = jt.randn(3)
+        >>> a
+        jt.Var([-0.38380373 1.1338731   6.128115  ], dtype=float32)
+        >>> nn.leaky_relu(a)
+        jt.Var([-3.8380371e-03  1.1338731e+00  6.1281152e+00], dtype=float32)
+    '''
+    return jt.ternary(x>0, x, x*scale)
+
+def relu6(x): 
+    r''' Applies the element-wise function:
+
+    .. math::
+        \text{ReLU6}(x) = \min(\max(0,x), 6)
+
+    :param x: the input var
+    :type x: jt.Var
+
+    Example:
+        >>> a = jt.randn(3)
+        >>> a
+        jt.Var([-0.38380373 1.1338731   6.128115  ], dtype=float32)
+        >>> nn.relu6(a)
+        jt.Var([0.        1.1338731 6.       ], dtype=float32)
+    '''
+    return jt.minimum(jt.maximum(x, 0.0), 6.0)
+
+def elu(x: jt.Var, alpha: float = 1.0) -> jt.Var:
+    r''' Applies the element-wise function:
+
+    .. math::
+        \text{ELU}(x) = \begin{cases}
+        x, & \text{ if } x > 0\\
+        \alpha * (\exp(x) - 1), & \text{ if } x \leq 0
+        \end{cases}
+
+    :param x: the input var
+    :type x: jt.Var
+
+    :param alpha: the :math:`\alpha` value for the ELU formulation. Default: 1.0
+    :param alpha: float, optional
+
+    Example:
+        >>> a = jt.randn(3)
+        >>> a
+        jt.Var([-0.38380373 -1.1338731   2.128115  ], dtype=float32)
+        >>> nn.elu(a)
+        jt.Var([-0.31873488 -0.6782155   2.128115  ], dtype=float32)
+    '''
+    return jt.ternary(x>0,x,alpha*(x.exp()-1))
+
+def sign(x: jt.Var) -> jt.Var:
+    ''' returns the signs of elements of x
+
+    :param x: the input Var
+    :type x: jt.Var
+
+    Example:
+        >>> a = jt.float32([0.99, 0, -0.99])
+        >>> nn.sign(a)
+        jt.Var([ 1.  0. -1.], dtype=float32)
+    '''
     one = jt.ones(x.shape)
     x = jt.ternary(x>0, one, x)
     return jt.ternary(x<0, -one, x)
 
 def gelu(x):
+    r''' Applies the element-wise function:
+
+   .. math:: \text{GELU}(x) = x * \Phi(x)
+
+    where :math:`\Phi(x)` is the Cumulative Distribution Function for Gaussian Distribution.
+
+    :param x: the input var
+    :type x: jt.Var
+
+    Example:
+        >>> a = jt.randn(3)
+        >>> a
+        jt.Var([-0.38380373 -1.1338731   2.128115  ], dtype=float32)
+        >>> nn.gelu(a)
+        jt.Var([-0.134547   0.9882567  6.128115 ], dtype=float32)
+    '''
     _sqrt2 = 1.4142135623730951
     erf = jt.erf(x/_sqrt2)+1
     r = erf*x*.5
     return r
 
 class ELU(Module):
+    r''' Applies the element-wise function:
+
+    .. math::
+        \text{ELU}(x) = \begin{cases}
+        x, & \text{ if } x > 0\\
+        \alpha * (\exp(x) - 1), & \text{ if } x \leq 0
+        \end{cases}
+
+    :param x: the input var
+    :type x: jt.Var
+
+    :param alpha: the :math:`\alpha` value for the ELU formulation. Default: 1.0
+    :param alpha: float, optional
+
+    Example:
+        >>> a = jt.randn(3)
+        >>> a
+        jt.Var([-0.38380373 -1.1338731   2.128115  ], dtype=float32)
+        >>> nn.elu(a)
+        jt.Var([-0.31873488 -0.6782155   2.128115  ], dtype=float32)
+    '''
     def __init__(self,alpha=1.0):
         self.alpha=alpha
     
@@ -178,6 +307,31 @@ class ELU(Module):
         return elu(x,self.alpha)
 
 class PReLU(Module):
+    r''' Applies the element-wise function:
+
+    .. math::
+        \text{PReLU}(x) =
+        \begin{cases}
+        x, & \text{ if } x \geq 0 \\
+        ax, & \text{ otherwise }
+        \end{cases}
+
+    :param x: the input var
+    :type x: jt.Var
+
+    :param num_parameters: number of :math:`a` to learn, can be either 1 or the number of channels at input. Default: 1
+    :type num_parameters: int, optional
+
+    :param init: the initial value of :math:`a`. Default: 0.25
+    :param init: float, optional
+
+    Example:
+        >>> a = jt.randn(3)
+        >>> prelu = nn.PReLU()
+        >>> prelu(a)
+        jt.Var([-0.09595093  1.1338731   6.128115  ], dtype=float32)
+    '''
+
     def __init__(self, num_parameters=1, init_=0.25):
         self.num_parameters = num_parameters
         self.weight = init.constant((num_parameters,), "float32", init_)
@@ -600,6 +754,41 @@ GELU = jt.make_module(gelu)
 from jittor.depthwise_conv import DepthwiseConv
 
 class Conv(Module):
+    ''' Applies a 2D convolution over an input signal composed of several input planes.
+
+    :param in_channels: Number of channels in the input feature map
+    :type in_channels: int
+
+    :param out_channels: Number of channels in the output feature map
+    :type out_channels: int
+
+    :param kernel_size: Size of the convolving kernel
+    :type kernel_size: int or tuple
+
+    :param stride: Stride of the convolution. Default: 1
+    :type stride: int or tuple, optional
+
+    :param padding: Padding added to all four sides of the input. Default: 0
+    :type padding: int or tuple, optional
+
+    :param dilation: Spacing between kernel elements. Default: 1
+    :type dilation: int or tuple, optional
+
+    :param groups: Number of blocked connections from input channels to output channels. Default: 1
+    :type groups: int, optional
+
+    :param bias: If True, adds a learnable bias to the output. Default: True
+    :type bias: bool, optional
+
+    Example:
+
+    >>> conv = nn.Conv2d(24, 32, 3)
+    >>> conv = nn.Conv2d(24, 32, (3,3))
+    >>> conv = nn.Conv2d(24, 32, 3, stride=2, padding=1)
+    >>> conv = nn.Conv2d(24, 32, 3, dilation=(3, 1))
+    >>> input = jt.randn(4, 24, 100, 100)
+    >>> output = conv(input)
+    '''
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -695,6 +884,41 @@ class Conv(Module):
 Conv2d = Conv
 
 class Conv1d(Module):
+    ''' Applies a 1D convolution over an input signal composed of several input planes.
+
+    :param in_channels: Number of channels in the input feature map
+    :type in_channels: int
+
+    :param out_channels: Number of channels in the output feature map
+    :type out_channels: int
+
+    :param kernel_size: Size of the convolving kernel
+    :type kernel_size: int or tuple
+
+    :param stride: Stride of the convolution. Default: 1
+    :type stride: int or tuple, optional
+
+    :param padding: Padding added to all four sides of the input. Default: 0
+    :type padding: int or tuple, optional
+
+    :param dilation: Spacing between kernel elements. Default: 1
+    :type dilation: int or tuple, optional
+
+    :param groups: Number of blocked connections from input channels to output channels. Default: 1
+    :type groups: int, optional
+
+    :param bias: If True, adds a learnable bias to the output. Default: True
+    :type bias: bool, optional
+
+    Example:
+
+    >>> conv = nn.Conv1d(24, 32, 3)
+    >>> conv = nn.Conv1d(24, 32, (3,3))
+    >>> conv = nn.Conv1d(24, 32, 3, stride=2, padding=1)
+    >>> conv = nn.Conv1d(24, 32, 3, dilation=(3, 1))
+    >>> input = jt.randn(4, 24, 100)
+    >>> output = conv(input)
+    '''
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -721,6 +945,41 @@ class Conv1d(Module):
         return y
 
 class Conv3d(Module):
+    ''' Applies a 3D convolution over an input signal composed of several input planes.
+
+    :param in_channels: Number of channels in the input feature map
+    :type in_channels: int
+
+    :param out_channels: Number of channels in the output feature map
+    :type out_channels: int
+
+    :param kernel_size: Size of the convolving kernel
+    :type kernel_size: int or tuple
+
+    :param stride: Stride of the convolution. Default: 1
+    :type stride: int or tuple, optional
+
+    :param padding: Padding added to all four sides of the input. Default: 0
+    :type padding: int or tuple, optional
+
+    :param dilation: Spacing between kernel elements. Default: 1
+    :type dilation: int or tuple, optional
+
+    :param groups: Number of blocked connections from input channels to output channels. Default: 1
+    :type groups: int, optional
+
+    :param bias: If True, adds a learnable bias to the output. Default: True
+    :type bias: bool, optional
+
+    Example:
+
+    >>> conv = nn.Conv3d(24, 32, 3)
+    >>> conv = nn.Conv3d(24, 32, (3,3))
+    >>> conv = nn.Conv3d(24, 32, 3, stride=2, padding=1)
+    >>> conv = nn.Conv3d(24, 32, 3, dilation=(3, 1))
+    >>> input = jt.randn(4, 24, 50, 50, 50)
+    >>> output = conv(input)
+    '''
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -750,6 +1009,35 @@ class Conv3d(Module):
         return conv3d(x, self.weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
 
 def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
+    ''' Applies a 2D convolution over an input signal composed of several input planes.
+
+    :param x: the input image
+    :type x: jt.Var
+
+    :param weight: the convolution kernel
+    :type weight: jt.Var
+
+    :param bias: the bias after convolution
+    :type bias: jt,Var, optional
+
+    :param stride: Stride of the convolution. Default: 1
+    :type stride: int or tuple, optional
+
+    :param padding: Padding added to all four sides of the input. Default: 0
+    :type padding: int or tuple, optional
+
+    :param dilation: Spacing between kernel elements. Default: 1
+    :type dilation: int or tuple, optional
+
+    :param groups: Number of blocked connections from input channels to output channels. Default: 1
+    :type groups: int, optional
+
+    Example:
+
+    >>> x = jt.randn(4, 24, 100, 100)
+    >>> w = jt.randn(32, 24, 3, 3)
+    >>> y = nn.conv2d(x, w)
+    '''
     padding = _pair(padding)
     stride = _pair(stride)
     dilation = _pair(dilation)
@@ -808,6 +1096,35 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
         return y
 
 def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
+    ''' Applies a 3D convolution over an input signal composed of several input planes.
+
+    :param x: the input volume
+    :type x: jt.Var
+
+    :param weight: the convolution kernel
+    :type weight: jt.Var
+
+    :param bias: the bias after convolution
+    :type bias: jt,Var, optional
+
+    :param stride: Stride of the convolution. Default: 1
+    :type stride: int or tuple, optional
+
+    :param padding: Padding added to all four sides of the input. Default: 0
+    :type padding: int or tuple, optional
+
+    :param dilation: Spacing between kernel elements. Default: 1
+    :type dilation: int or tuple, optional
+
+    :param groups: Number of blocked connections from input channels to output channels. Default: 1
+    :type groups: int, optional
+
+    Example:
+
+    >>> x = jt.randn(4, 24, 50, 50, 50)
+    >>> w = jt.randn(32, 24, 3, 3, 3)
+    >>> y = nn.conv2d(x, w)
+    '''
     padding = _triple(padding)
     stride = _triple(stride)
     dilation = _triple(dilation)
@@ -1764,30 +2081,30 @@ ModuleList = Sequential
 
 
 class LSTMCell(jt.Module):
+    ''' A long short-term memory (LSTM) cell.
+
+    :param input_size: The number of expected features in the input
+    :type input_size: int
+
+    :param hidden_size: The number of features in the hidden state
+    :type hidden_size: int
+
+    :param bias: If False, then the layer does not use bias weights b_ih and b_hh. Default: True.
+    :type bias: bool, optional
+
+    Example:
+
+    >>> rnn = nn.LSTMCell(10, 20) # (input_size, hidden_size)
+    >>> input = jt.randn(2, 3, 10) # (time_steps, batch, input_size)
+    >>> hx = jt.randn(3, 20) # (batch, hidden_size)
+    >>> cx = jt.randn(3, 20)
+    >>> output = []
+    >>> for i in range(input.shape[0]):
+            hx, cx = rnn(input[i], (hx, cx))
+            output.append(hx)
+    >>> output = jt.stack(output, dim=0)
+    '''
     def __init__(self, input_size, hidden_size, bias=True):
-        ''' A long short-term memory (LSTM) cell.
-
-        :param input_size: The number of expected features in the input
-        :type input_size: int
-
-        :param hidden_size: The number of features in the hidden state
-        :type hidden_size: int
-
-        :param bias: If False, then the layer does not use bias weights b_ih and b_hh. Default: True.
-        :type bias: bool, optional
-
-        Example:
-
-        >>> rnn = nn.LSTMCell(10, 20) # (input_size, hidden_size)
-        >>> input = jt.randn(2, 3, 10) # (time_steps, batch, input_size)
-        >>> hx = jt.randn(3, 20) # (batch, hidden_size)
-        >>> cx = jt.randn(3, 20)
-        >>> output = []
-        >>> for i in range(input.shape[0]):
-                hx, cx = rnn(input[i], (hx, cx))
-                output.append(hx)
-        >>> output = jt.stack(output, dim=0)
-        '''
         super().__init__()
 
         self.hidden_size = hidden_size
@@ -1825,31 +2142,31 @@ class LSTMCell(jt.Module):
 
 
 class RNNCell(jt.Module):
+    ''' An Elman RNN cell with tanh or ReLU non-linearity.
+
+    :param input_size: The number of expected features in the input
+    :type input_size: int
+
+    :param hidden_size: The number of features in the hidden state
+    :type hidden_size: int
+
+    :param bias: If False, then the layer does not use bias weights b_ih and b_hh. Default: True.
+    :type bias: bool, optional
+
+    :param nonlinearity: The non-linearity to use. Can be either 'tanh' or 'relu'. Default: 'tanh'.
+    :type nonlinearity: str, optional
+
+    Example:
+
+    >>> rnn = nn.RNNCell(10, 20)
+    >>> input = jt.randn((6, 3, 10))
+    >>> hx = jt.randn((3, 20))
+    >>> output = []
+    >>> for i in range(6):
+            hx = rnn(input[i], hx)
+            output.append(hx)
+    '''
     def __init__(self, input_size, hidden_size, bias=True, nonlinearity = "tanh"):
-        ''' An Elman RNN cell with tanh or ReLU non-linearity.
-
-        :param input_size: The number of expected features in the input
-        :type input_size: int
-
-        :param hidden_size: The number of features in the hidden state
-        :type hidden_size: int
-
-        :param bias: If False, then the layer does not use bias weights b_ih and b_hh. Default: True.
-        :type bias: bool, optional
-
-        :param nonlinearity: The non-linearity to use. Can be either 'tanh' or 'relu'. Default: 'tanh'.
-        :type nonlinearity: str, optional
-
-        Example:
-
-        >>> rnn = nn.RNNCell(10, 20)
-        >>> input = jt.randn((6, 3, 10))
-        >>> hx = jt.randn((3, 20))
-        >>> output = []
-        >>> for i in range(6):
-                hx = rnn(input[i], hx)
-                output.append(hx)
-        '''
         super().__init__()
 
         self.hidden_size = hidden_size
@@ -1884,28 +2201,28 @@ class RNNCell(jt.Module):
 
 
 class GRUCell(jt.Module):
+    ''' A gated recurrent unit (GRU) cell.
+
+    :param input_size: The number of expected features in the input
+    :type input_size: int
+
+    :param hidden_size: The number of features in the hidden state
+    :type hidden_size: int
+
+    :param bias: If False, then the layer does not use bias weights b_ih and b_hh. Default: True.
+    :type bias: bool, optional
+
+    Example:
+
+    >>> rnn = nn.GRUCell(10, 20)
+    >>> input = jt.randn((6, 3, 10))
+    >>> hx = jt.randn((3, 20))
+    >>> output = []
+    >>> for i in range(6):
+            hx = rnn(input[i], hx)
+            output.append(hx)
+    '''
     def __init__(self, input_size, hidden_size, bias=True):
-        ''' A gated recurrent unit (GRU) cell.
-
-        :param input_size: The number of expected features in the input
-        :type input_size: int
-
-        :param hidden_size: The number of features in the hidden state
-        :type hidden_size: int
-
-        :param bias: If False, then the layer does not use bias weights b_ih and b_hh. Default: True.
-        :type bias: bool, optional
-
-        Example:
-
-        >>> rnn = nn.GRUCell(10, 20)
-        >>> input = jt.randn((6, 3, 10))
-        >>> hx = jt.randn((3, 20))
-        >>> output = []
-        >>> for i in range(6):
-                hx = rnn(input[i], hx)
-                output.append(hx)
-        '''
         super().__init__()
 
         self.hidden_size = hidden_size
