@@ -16,9 +16,6 @@ Reference:
 from warnings import warn
 import os
 import platform
-import site
-import sys
-site.ENABLE_USER_SITE = "--user" in sys.argv[1:]
 
 if not platform.system() in ['Linux', 'Darwin']:
     assert os.environ.get("FORCE_INSTALL", '0') != '1', error_msg
