@@ -2,9 +2,14 @@ try:
     import fcntl
 except ImportError:
     fcntl = None
-    import win32file
-    import pywintypes
-    _OVERLAPPED = pywintypes.OVERLAPPED()
+    try:
+        import win32file
+        import pywintypes
+        _OVERLAPPED = pywintypes.OVERLAPPED()
+    except:
+        LOG.f("""pywin32 package not found, please install it.
+If conda is used, please install with command: 
+>>> conda install pywin32.""")
 
 import os
 from jittor_utils import cache_path, LOG

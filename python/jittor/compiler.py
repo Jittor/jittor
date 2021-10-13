@@ -697,8 +697,8 @@ def compile_custom_ops(
     gen_name = "gen_ops_" + "_".join(headers.keys())
     if gen_name_ != "":
         gen_name = gen_name_
-    if len(gen_name) > 100:
-        gen_name = gen_name[:80] + "___hash" + hashlib.md5(gen_name.encode()).hexdigest()
+    if len(gen_name) > 50:
+        gen_name = gen_name[:50] + "___hash" + hashlib.md5(gen_name.encode()).hexdigest()[:6]
 
     includes = sorted(list(set(includes)))
     includes = "".join(map(lambda x: f" -I\"{x}\" ", includes))
