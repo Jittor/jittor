@@ -265,6 +265,10 @@ def get_cpu_version():
             value = winreg.QueryValueEx(key, field_name)[0]
             winreg.CloseKey(key)
             v = value
+        elif platform.system() == "Darwin":
+            r, s = sp.getstatusoutput("sysctl -a sysctl machdep.cpu.brand_string")
+            if r==0:
+                v = s.split(":")[-1].strip()
         else:
             with open("/proc/cpuinfo", 'r') as f:
                 for l in f:
@@ -322,7 +326,7 @@ def find_cache_path():
     if os.environ.get("debug")=="1":
         dirs[-1] += "_debug"
     for name in os.path.normpath(cache_name).split(os.path.sep):
-        dirs.insert(-1, name)
+        dirs.append(name)
     os.environ["cache_name"] = cache_name
     LOG.v("cache_name: ", cache_name)
     path = os.path.join(path, *dirs)
