@@ -309,7 +309,7 @@ def install_cutt(root_folder):
         if md5 != true_md5:
             os.remove(fullname)
             shutil.rmtree(dirname)
-    if not os.path.isfile(os.path.join(dirname, "lib/libcutt"+so)):
+    if not os.path.isfile(os.path.join(cache_path, "libcutt"+so)):
         LOG.i("Downloading cutt...")
         download_url_to_local(url, filename, root_folder, true_md5)
 
@@ -337,8 +337,7 @@ def install_cutt(root_folder):
                 continue
             files2.append(f)
         cutt_flags = cc_flags+opt_flags+cutt_include
-        os.makedirs(dirname+"/lib", exist_ok=True)
-        compile(cc_path, cutt_flags, files2, dirname+"/lib/libcutt"+so, cuda_flags=arch_flag)
+        compile(cc_path, cutt_flags, files2, cache_path+"/libcutt"+so, cuda_flags=arch_flag)
     return dirname
 
 def setup_cutt():
@@ -362,7 +361,7 @@ def setup_cutt():
         install_cutt(cutt_path)
         cutt_home = os.path.join(cutt_path, "cutt-1.2")
         cutt_include_path = os.path.join(cutt_home, "src")
-        cutt_lib_path = os.path.join(cutt_home, "lib")
+        cutt_lib_path = cache_path
 
     cutt_lib_name = os.path.join(cutt_lib_path, "libcutt"+so)
     assert os.path.isdir(cutt_include_path)
