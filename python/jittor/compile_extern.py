@@ -397,7 +397,8 @@ def install_nccl(root_folder):
             if os.path.isdir(dirname):
                 shutil.rmtree(dirname)
     if not os.path.isfile(os.path.join(dirname, "build", "lib", "libnccl.so")):
-        LOG.i("Downloading nccl...")
+        if not os.path.isfile(os.path.join(root_folder, filename)):
+            LOG.i("Downloading nccl...")
         download_url_to_local(url, filename, root_folder, true_md5)
 
         if core.get_device_count() == 0:
@@ -547,6 +548,7 @@ if os.environ.get("FIX_TORCH_ERROR", "0") == "1":
     except:
         pass
 
+cudnn = cublas = curand = None
 setup_mpi()
 in_mpi = inside_mpi()
 rank = mpi.world_rank() if in_mpi else 0
