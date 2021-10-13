@@ -724,7 +724,7 @@ def compile_custom_ops(
         return gen_src.replace(anchor_str, anchor_str+insert_str, 1)
 
     for name in pyjt_includes:
-        LOG.i("handle pyjt_include", name)
+        LOG.v("handle pyjt_include ", name)
         bname = os.path.basename(name).split(".")[0]
         gen_src_fname = os.path.join(cache_path, "custom_ops", gen_name+"_"+bname+".cc")
         pyjt_compiler.compile_single(name, gen_src_fname)
@@ -870,7 +870,7 @@ def check_cache_compile():
         files = [ x.replace('/', '\\') for x in files ]
     global jit_utils_core_files
     jit_utils_core_files = files
-    recompile = compile(cc_path, cc_flags+f" {opt_flags} ", files, 'jit_utils_core'+extension_suffix, True)
+    recompile = compile(cc_path, cc_flags+f" {opt_flags} ", files, jit_utils.cache_path+'/jit_utils_core'+extension_suffix, True)
     if recompile and jit_utils.cc:
         LOG.e("jit_utils updated, please restart jittor.")
         sys.exit(0)
@@ -879,7 +879,7 @@ def check_cache_compile():
             jit_utils.try_import_jit_utils_core()
         assert jit_utils.cc
         # recompile, generate cache key
-        compile(cc_path, cc_flags+f" {opt_flags} ", files, 'jit_utils_core'+extension_suffix, True)
+        compile(cc_path, cc_flags+f" {opt_flags} ", files, jit_utils.cache_path+'/jit_utils_core'+extension_suffix, True)
 
 def env_or_try_find(name, bname):
     if name in os.environ:
@@ -975,6 +975,24 @@ gdb_path = env_or_try_find('gdb_path', 'gdb')
 addr2line_path = try_find_exe('addr2line')
 has_pybt = check_pybt(gdb_path, python_path)
 
+if nvcc_path:
+    # gen cuda key for cache_path
+    cu = "cu"
+    v = jit_utils.get_version(nvcc_path)[1:-1]
+    cu += v
+    try:
+        r, s = sp.getstatusoutput(f"{sys.executable} -m jittor_utils.query_cuda_cc")
+        if r==0:
+            s = sorted(list(set(s.strip().split())))
+            cu += "_sm_" + "_".join(s)
+            if "cuda_arch" not in os.environ:
+                os.environ["cuda_arch"] = " ".join(cu)
+    except:
+        pass
+    LOG.i("cuda key:", cu)
+    cache_path = os.path.join(cache_path, cu)
+    sys.path.append(cache_path)
+
 
 def check_clang_latest_supported_cpu():
     output = run_cmd('clang --print-supported-cpus')
@@ -1007,10 +1025,10 @@ if platform.system() == 'Darwin':
 opt_flags = ""
 
 py_include = jit_utils.get_py3_include_path()
-LOG.i(f"py_include: {py_include}")
+LOG.v(f"py_include: {py_include}")
 extension_suffix = jit_utils.get_py3_extension_suffix()
 lib_suffix = extension_suffix.rsplit(".", 1)[0]
-LOG.i(f"extension_suffix: {extension_suffix}")
+LOG.v(f"extension_suffix: {extension_suffix}")
 so = ".so" if os.name != 'nt' else ".dll"
 
 
@@ -1191,7 +1209,7 @@ jit_src = gen_jit_op_maker(op_headers)
 LOG.vvvv(jit_src)
 with open(os.path.join(cache_path, "gen", "jit_op_maker.h"), 'w') as f:
     f.write(jit_src)
-cc_flags += f' -I\"{cache_path}\" -L\"{cache_path}\" '
+cc_flags += f' -I\"{cache_path}\" -L\"{cache_path}\" -L\"{jit_utils.cache_path}\" '
 # gen pyjt
 pyjt_gen_src = pyjt_compiler.compile(cache_path, jittor_path)
 

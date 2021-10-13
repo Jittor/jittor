@@ -237,12 +237,71 @@ def download(url, filename):
     urllib.request.urlretrieve(url, filename)
     LOG.v("Download finished")
 
+def get_jittor_version():
+    path = os.path.dirname(__file__)
+    with open(os.path.join(path, "../jittor/__init__.py"), "r", encoding='utf8') as fh:
+        for line in fh:
+            if line.startswith('__version__'):
+                version = line.split("'")[1]
+                break
+        else:
+            raise RuntimeError("Unable to find version string.")
+    return version
+
+def get_str_hash(s):
+    import hashlib
+    md5 = hashlib.md5()
+    md5.update(s.encode())
+    return md5.hexdigest()
+
+def get_cpu_version():
+    v = platform.processor()
+    try:
+        if os.name == 'nt':
+            import winreg
+            key_name = r"Hardware\Description\System\CentralProcessor\0"
+            field_name = "ProcessorNameString"
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_name)
+            value = winreg.QueryValueEx(key, field_name)[0]
+            winreg.CloseKey(key)
+            v = value
+        else:
+            with open("/proc/cpuinfo", 'r') as f:
+                for l in f:
+                    if l.startswith("model name"):
+                        v = l.split(':')[-1].strip()
+                        break
+    except:
+        pass
+    return v
+    
+def short(s):
+    ss = ""
+    for c in s:
+        if str.isidentifier(c) or str.isnumeric(c) \
+            or str.isalpha(c) or c in '.-+':
+            ss += c
+    if len(ss)>14:
+        return ss[:14]+'x'+get_str_hash(ss)[:2]
+    return ss
+
 def find_cache_path():
     from pathlib import Path
     path = str(Path.home())
-    dirs = [".cache", "jittor", os.path.basename(cc_path)]
-    if os.environ.get("debug")=="1":
-        dirs[-1] += "_debug"
+    # jittor version key
+    jtv = "jt"+get_jittor_version().rsplit('.', 1)[0]
+    # cc version key
+    ccv = cc_type+get_version(cc_path)[1:-1]
+    # os version key
+    osv = platform.platform() + platform.node()
+    if len(osv)>14:
+        osv = osv[:14] + 'x'+get_str_hash(osv)[:2]
+    # py version
+    pyv = "py"+platform.python_version()
+    # cpu version
+    cpuv = get_cpu_version()
+    dirs = [".cache", "jittor", jtv, ccv, pyv, osv, cpuv]
+    dirs = list(map(short, dirs))
     cache_name = "default"
     try:
         if "cache_name" in os.environ:
@@ -260,18 +319,14 @@ def find_cache_path():
         for c in " (){}": cache_name = cache_name.replace(c, "_")
     except:
         pass
+    if os.environ.get("debug")=="1":
+        dirs[-1] += "_debug"
     for name in os.path.normpath(cache_name).split(os.path.sep):
         dirs.insert(-1, name)
     os.environ["cache_name"] = cache_name
     LOG.v("cache_name: ", cache_name)
-    for d in dirs:
-        path = os.path.join(path, d)
-        if not os.path.isdir(path):
-            try:
-                os.mkdir(path)
-            except:
-                pass
-        assert os.path.isdir(path)
+    path = os.path.join(path, *dirs)
+    os.makedirs(path, exist_ok=True)
     if path not in sys.path:
         sys.path.append(path)
     return path

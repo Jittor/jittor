@@ -6,6 +6,7 @@
 # ***************************************************************
 import os, sys, shutil
 from pathlib import Path
+import glob
 
 cache_path = os.path.join(str(Path.home()), ".cache", "jittor")
 
@@ -29,6 +30,8 @@ def clean_cuda():
     rmtree(cache_path+"/cutt")
     rmtree(cache_path+"/cub")
     rmtree(cache_path+"/nccl")
+    fs = glob.glob(cache_path+"/jt*")
+    for f in fs: rmtree(f)
 
 def clean_dataset():
     rmtree(cache_path+"/dataset")
