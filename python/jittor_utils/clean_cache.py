@@ -24,14 +24,14 @@ def clean_all():
 def clean_core():
     rmtree(cache_path+"/default")
     rmtree(cache_path+"/master")
+    fs = glob.glob(cache_path+"/jt*")
+    for f in fs: rmtree(f)
 
 def clean_cuda():
     rmtree(cache_path+"/jtcuda")
     rmtree(cache_path+"/cutt")
     rmtree(cache_path+"/cub")
     rmtree(cache_path+"/nccl")
-    fs = glob.glob(cache_path+"/jt*")
-    for f in fs: rmtree(f)
 
 def clean_dataset():
     rmtree(cache_path+"/dataset")
