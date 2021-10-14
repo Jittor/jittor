@@ -128,6 +128,15 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
     log << "cpu&gpu:" << FloatOutput{(double)all_total, " KMG", 1024, "B"}
         << "gpu:" << FloatOutput{(double)gpu_total, " KMG", 1024, "B"}
         << "cpu:" << FloatOutput{(double)cpu_total, " KMG", 1024, "B"} >> '\n';
+
+    if (red_color){
+        bool cuda_overflow = (double)gpu_total>(double)mem_info.total_cuda_ram;
+        bool cpu_overflow = (double)cpu_total>(double)mem_info.total_cpu_ram;
+        if(cuda_overflow || cpu_overflow){
+            LOGf<<"CUDA memory or CPU memory is overflow, please reduce your batch_size or data size!";
+        }
+    }
+    
     size_t cpu_free = 0;
 #if defined(__linux__)
     cpu_free = get_avphys_pages() * sysconf(_SC_PAGESIZE);
