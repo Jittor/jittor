@@ -282,6 +282,33 @@ struct VarHolder {
      */
     // @pyjt(__get__grad)
     int grad();
+
+    // @pyjt(_input)
+    inline VarHolder* _input(int i) {
+        CHECK(!var->is_finished());
+        return new VarHolder(var->input()->input(i));
+    }
+
+    /* Add dependency, make var computed after vars
+    */
+    // @pyjt(_add_dependency)
+    // @attrs(return_self)
+    inline VarHolder* _add_dependency(vector<VarHolder*>&& vars) {
+        vector<Node*> b(vars.size());
+        for (int i=0; i<vars.size(); i++)
+            b[i] = vars[i]->var;
+        CHECK(!var->is_finished());
+        auto a = var->input();
+        var->input()->add_inputs(b);
+        auto edge = a->_inputs.end();
+        for (int i=0; i<b.size(); i++) {
+            edge = std::prev(edge);
+            // set -1 mean this is a control dependency edge
+            edge->back->index = -1;
+        }
+        return this;
+    }
+
 };
 
 // @pyjt(sync)

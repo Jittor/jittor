@@ -72,31 +72,31 @@ class TestResnet(unittest.TestCase):
             epoch_id = self.train_loader.epoch_id
 
             # train step
-            with jt.log_capture_scope(
-                log_silent=1,
-                log_v=1, log_vprefix="op.cc=100,exe=10",
-            ) as logs:
-                output = mnist_net(data)
-                loss = nn.cross_entropy_loss(output, target)
-                SGD.step(loss)
-                def callback(epoch_id, batch_id, loss, output, target):
-                    # print train info
-                    global prev
-                    pred = np.argmax(output, axis=1)
-                    acc = np.mean(target==pred)
-                    loss_list.append(loss[0])
-                    acc_list.append(acc)
-                    print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}\tAcc: {:.6f} \tTime:{:.3f}'
-                        .format(epoch_id, batch_id, 600,1. * batch_id / 6.0, loss[0], acc, time.time()-prev))
-                    # prev = time.time()
-                jt.fetch(epoch_id, batch_id, loss, output, target, callback)
+            # with jt.log_capture_scope(
+            #     log_silent=1,
+            #     log_v=1, log_vprefix="op.cc=100,exe=10",
+            # ) as logs:
+            output = mnist_net(data)
+            loss = nn.cross_entropy_loss(output, target)
+            SGD.step(loss)
+            def callback(epoch_id, batch_id, loss, output, target):
+                # print train info
+                global prev
+                pred = np.argmax(output, axis=1)
+                acc = np.mean(target==pred)
+                loss_list.append(loss[0])
+                acc_list.append(acc)
+                print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}\tAcc: {:.6f} \tTime:{:.3f}'
+                    .format(epoch_id, batch_id, 600,1. * batch_id / 6.0, loss[0], acc, time.time()-prev))
+                # prev = time.time()
+            jt.fetch(epoch_id, batch_id, loss, output, target, callback)
             
-            log_conv = find_log_with_re(logs, 
-                "Jit op key (not )?found: ((mkl)|(cudnn))_conv.*")
-            log_matmul = find_log_with_re(logs, 
-                "Jit op key (not )?found: ((mkl)|(cublas))_matmul.*")
-            if batch_id > 2:
-                assert len(log_conv)==59 and len(log_matmul)==6, (len(log_conv), len(log_matmul))
+            # log_conv = find_log_with_re(logs, 
+            #     "Jit op key (not )?found: ((mkl)|(cudnn))_conv.*")
+            # log_matmul = find_log_with_re(logs, 
+            #     "Jit op key (not )?found: ((mkl)|(cublas))_matmul.*")
+            # if batch_id > 2:
+            #     assert len(log_conv)==59 and len(log_matmul)==6, (len(log_conv), len(log_matmul))
 
             mem_used = jt.flags.stat_allocator_total_alloc_byte \
                 -jt.flags.stat_allocator_total_free_byte

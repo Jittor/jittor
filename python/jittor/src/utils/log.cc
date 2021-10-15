@@ -9,6 +9,7 @@
 #include <iomanip>
 #include <thread>
 #include <unordered_map>
+#include <fstream>
 #include "utils/cross_platform.h"
 #include "utils/log.h"
 #include "utils/mwsr_list.h"
@@ -367,6 +368,17 @@ void setter_log_vprefix(string value) {
         i = k;
     }
     vprefix_map = move(new_map);
+}
+DEFINE_FLAG_WITH_SETTER(string, log_file, "",
+    "log to file, mpi env will add $OMPI_COMM_WORLD_RANK suffix\n");
+void setter_log_file(string value) {
+    if (value.size() == 0)
+        return;
+    auto c = getenv("OMPI_COMM_WORLD_RANK");
+    if (c) value += string("_") + c;
+    static std::ofstream out;
+    out = std::ofstream(value);
+    std::cerr.rdbuf(out.rdbuf());
 }
 
 bool check_vlog(const char* fileline, int verbose) {
