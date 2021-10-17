@@ -295,7 +295,8 @@ def find_cache_path():
     # jittor version key
     jtv = "jt"+get_jittor_version().rsplit('.', 1)[0]
     # cc version key
-    ccv = cc_type+get_version(cc_path)[1:-1]
+    ccv = cc_type+get_version(cc_path)[1:-1] \
+        if cc_type != "cl" else cc_type
     # os version key
     osv = platform.platform() + platform.node()
     if len(osv)>14:
