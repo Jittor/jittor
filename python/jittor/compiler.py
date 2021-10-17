@@ -872,7 +872,7 @@ def check_cache_compile():
     jit_utils_core_files = files
     recompile = compile(cc_path, cc_flags+f" {opt_flags} ", files, jit_utils.cache_path+'/jit_utils_core'+extension_suffix, True)
     if recompile and jit_utils.cc:
-        LOG.e("jit_utils updated, please restart jittor.")
+        LOG.e("jit_utils updated, please rerun your command.")
         sys.exit(0)
     if not jit_utils.cc:
         with jit_utils.import_scope(import_flags):

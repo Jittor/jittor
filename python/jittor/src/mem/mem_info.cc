@@ -128,14 +128,6 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
     log << "cpu&gpu:" << FloatOutput{(double)all_total, " KMG", 1024, "B"}
         << "gpu:" << FloatOutput{(double)gpu_total, " KMG", 1024, "B"}
         << "cpu:" << FloatOutput{(double)cpu_total, " KMG", 1024, "B"} >> '\n';
-
-    if (red_color){
-        bool cuda_overflow = (double)gpu_total>(double)mem_info.total_cuda_ram;
-        bool cpu_overflow = (double)cpu_total>(double)mem_info.total_cpu_ram;
-        if(cuda_overflow || cpu_overflow){
-            LOGf<<"CUDA memory or CPU memory is overflow, please reduce your batch_size or data size!";
-        }
-    }
     
     size_t cpu_free = 0;
 #if defined(__linux__)
@@ -194,6 +186,20 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
         }
     }
     log >> "===========================\n";
+
+    if (red_color) {
+        bool gpu_overflow = (double)gpu_total>(double)mem_info.total_cuda_ram*0.95;
+        bool cpu_overflow = (double)cpu_total>(double)mem_info.total_cpu_ram*0.95;
+        if(gpu_overflow || cpu_overflow) {
+            double used = gpu_overflow ? (double)gpu_total : (double)cpu_total;
+            double total = gpu_overflow ? (double)mem_info.total_cuda_ram : (double)mem_info.total_cpu_ram;
+            log.end();
+            LOGf << "\n*******************\n"
+                >> (gpu_overflow?"GPU":"CPU") << "memory is overflow, please reduce your batch_size or data size!\nTotal:" << FloatOutput{(double)total, " KMG", 1024, "B"} << "Used:" << FloatOutput{(double)used, " KMG", 1024, "B"};
+        } else
+            return;
+    }
+
     log.end();
 }
 
