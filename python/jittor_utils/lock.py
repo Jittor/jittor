@@ -9,7 +9,7 @@ except ImportError:
     except:
         LOG.f("""pywin32 package not found, please install it.
 If conda is used, please install with command: 
->>> conda install pywin32.""")
+>>> conda install pywin32""")
 
 import os
 from jittor_utils import cache_path, LOG
