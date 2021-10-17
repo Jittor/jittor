@@ -979,6 +979,7 @@ if nvcc_path:
     # gen cuda key for cache_path
     cu = "cu"
     v = jit_utils.get_version(nvcc_path)[1:-1]
+    nvcc_version = list(map(int,v.split('.')))
     cu += v
     try:
         r, s = sp.getstatusoutput(f"{sys.executable} -m jittor_utils.query_cuda_cc")
@@ -1184,7 +1185,10 @@ if has_cuda:
                     return x
                 return f"-L\"{a}\" -l{b[:-4]}"
             nvcc_flags = map_flags(nvcc_flags, func)
-        nvcc_flags = nvcc_flags.replace("-std=c++17", "-std=c++14 -Xcompiler -std:c++14")
+        if nvcc_version >= [11,4]:
+            nvcc_flags = nvcc_flags.replace("-std=c++17", "-std=c++14 -Xcompiler -std:c++14")
+        else:
+            nvcc_flags = nvcc_flags.replace("-std=c++17", "")
         nvcc_flags = nvcc_flags.replace("-Wall", "")
         nvcc_flags = nvcc_flags.replace("-Wno-unknown-pragmas", "")
         nvcc_flags = nvcc_flags.replace("-fopenmp", "")
@@ -1305,11 +1309,11 @@ flags = core.flags()
 
 if has_cuda:
     nvcc_flags = convert_nvcc_flags(cc_flags)
-    nvcc_version = jit_utils.get_int_version(nvcc_path)
+    nvcc_version = list(jit_utils.get_int_version(nvcc_path))
     max_arch = 1000
-    if nvcc_version < (11,):
+    if nvcc_version < [11,]:
         max_arch = 75
-    elif nvcc_version < (11,1):
+    elif nvcc_version < [11,1]:
         max_arch = 80
     if len(flags.cuda_archs):
         min_arch = 30
