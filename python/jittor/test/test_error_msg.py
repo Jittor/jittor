@@ -27,7 +27,44 @@ class TestErrorMsg(unittest.TestCase):
                 throw std::runtime_error("???");
             """
         )
-        print(b)
+        msg = ""
+        try:
+            print(b)
+        except Exception as e:
+            msg = str(e)
+        assert "[Reason]: ???" in msg
+        assert "[Input]: int32[3,]" in msg
+        assert "[OP TYPE]: code" in msg
+        assert "[Async Backtrace]:" in msg
+
+    @jt.flag_scope(trace_py_var=3)
+    def test_error_msg_trace_py_var(self):
+        a = jt.array([3,2,1])
+        b = jt.code(a.shape, a.dtype, [a],
+            cpu_header="""
+                #include <algorithm>
+                @alias(a, in0)
+                @alias(b, out)
+            """,
+            cpu_src="""
+                for (int i=0; i<a_shape0; i++)
+                    @b(i) = @a(i);
+                std::sort(&@b(0), &@b(in0_shape0));
+                throw std::runtime_error("???");
+            """
+        )
+        msg = ""
+        try:
+            print(b)
+        except Exception as e:
+            msg = str(e)
+        print(msg)
+        assert "[Reason]: ???" in msg
+        assert "[Input]: int32[3,]" in msg
+        assert "[OP TYPE]: code" in msg
+        assert "[Async Backtrace]:" in msg
+        assert "test_error_msg.py:" in msg
+
 
 
 if __name__ == "__main__":

@@ -786,5 +786,6 @@ DEF_IS(VarSlices, T) from_py_object(PyObject* obj, vector<unique_ptr<VarHolder>>
     }
 }
 
+EXTERN_LIB bool check_async_executor_error(const std::exception& e, std::ostream& os);
 
 } // jittor
