@@ -23,6 +23,34 @@
 
 namespace jittor {
 
+bool check_async_executor_error(const std::exception& e, std::ostream& os) {
+    if (!e.what()) return false;
+    auto s = string(e.what());
+    if (s.find("executor.cc:") == string::npos) 
+        return false;
+    os << s;
+    if (getenv("JT_SYNC") && getenv("trace_py_var"))
+        return true;
+    if (s.find("[Async Backtrace]: ---") != string::npos)
+        return true;
+    os << "\n**********\nAsync error was detected. "
+        "To locate the async backtrace, please rerun your code with "
+        "two enviroment variables set:\n"
+        #ifdef _WIN32
+        "cmd: \n"
+        ">>> set JT_SYNC=1\n"
+        ">>> set trace_py_var=3\n"
+        "powershell: \n"
+        ">>> $env:JT_SYNC=1\n"
+        ">>> $env:trace_py_var=3\n"
+        #else
+        ">>> export JT_SYNC=1\n"
+        ">>> export trace_py_var=3\n"
+        #endif
+        ;
+    return true;
+}
+
 SEH_HOOK;
 
 void init_subprocess() {

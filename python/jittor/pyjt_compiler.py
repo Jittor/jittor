@@ -692,13 +692,20 @@ def compile_src(src, h, basename):
             }} catch (const std::exception& e) {{
                 if (!PyErr_Occurred()) {{
                     std::stringstream ss;
-                    ss {error_log_code};
-                    PyErr_Format(PyExc_RuntimeError, 
-                        "%s\\n%s\\nFailed reason:%s",
-                        ss.str().c_str(),
-                        R""({decs})"",
-                        e.what()
-                    );
+                    if (check_async_executor_error(e, ss)) {{
+                        PyErr_Format(PyExc_RuntimeError, 
+                            "%s",
+                            ss.str().c_str()
+                        );
+                    }} else {{
+                        ss {error_log_code};
+                        PyErr_Format(PyExc_RuntimeError, 
+                            "%s\\n%s\\nFailed reason:%s",
+                            ss.str().c_str(),
+                            R""({decs})"",
+                            e.what()
+                        );
+                    }}
                 }}
             }}
             {func_return_failed};
