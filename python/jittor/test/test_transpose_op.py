@@ -68,6 +68,10 @@ class TestTransposeOp(unittest.TestCase):
         assert a.permute().shape == [4,3,2]
         assert a.permute(0,2,1).shape == [2,4,3]
 
+    def test_transpose_3d2i(self):
+        a = jt.ones([2,3,4])
+        assert a.transpose(0,1).shape == (3,2,4)
+
     @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
     @jt.flag_scope(use_cuda=1)
     def test_cutt(self):

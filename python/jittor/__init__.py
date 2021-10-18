@@ -360,6 +360,11 @@ origin_transpose = transpose
 def transpose(x, *dim):
     if len(dim) == 1 and isinstance(dim[0], (Sequence, NanoVector)):
         dim = dim[0]
+    elif len(dim) == 2:
+        axes = list(range(x.ndim))
+        a, b = dim
+        axes[a], axes[b] = axes[b], axes[a]
+        dim = axes
     return origin_transpose(x, dim)
 transpose.__doc__ = origin_transpose.__doc__
 Var.transpose = Var.permute = permute = transpose
