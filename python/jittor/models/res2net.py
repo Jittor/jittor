@@ -7,7 +7,7 @@ import math
 
 
 model_urls = {
-    'res2net50_14w_8s': 'https://cloud.tsinghua.edu.cn/f/2543e4b5646d40a1afa9/?dl=1&fname=/res2net50_14w_8s.pkl',
+    'res2net50_14w_8s': 'jittorhub://res2net50_14w_8s.pkl',
     'res2net50_26w_4s': 'https://cloud.tsinghua.edu.cn/f/927fead9c9884f769d88/?dl=1&fname=/res2net50_26w_4s.pkl',
     'res2net50_26w_6s': 'https://cloud.tsinghua.edu.cn/f/067875edf6ca488ba83e/?dl=1&fname=/res2net50_26w_6s.pkl',
     'res2net50_26w_8s': 'https://cloud.tsinghua.edu.cn/f/ce1230155a2c4352bf17/?dl=1&fname=/res2net50_26w_8s.pkl',
