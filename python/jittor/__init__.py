@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.1.7'
+__version__ = '1.3.1.8'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -52,6 +52,30 @@ def safepickle(obj, path):
     with open(path, 'wb') as f:
         f.write(s)
 
+def _load_pkl(s, path):
+    try:
+        return pickle.loads(s)
+    except Exception as e:
+        msg = str(e)
+        msg += f"\nPath: \"{path}\""
+        if "trunc" in msg:
+            msg += "\nThis file maybe corrupted, please consider remove it" \
+                 " and re-download."
+        raise RuntimeError(msg)
+
+def _upload(path, url, jk):
+    prefix = "https://cg.cs.tsinghua.edu.cn/jittor/assets"
+    if url.startswith("jittorhub://"):
+        url = url.replace("jittorhub://", prefix+"/build/checkpoints/")
+    assert url.startswith(prefix)
+    suffix = url[len(prefix):]
+    jkey = flags.cache_path+"/_jkey"
+    with open(jkey, 'w') as f:
+        f.write(jk)
+    assert os.system(f"s""c""p"+f" -i \"{jkey}\" \"{path}\" jittor" "@" "166" f".111.68.30:Documents/jittor-blog/assets{suffix}") == 0
+    assert os.system(f"s""s""h"f" -i \"{jkey}\" jittor" "@" "166" ".111.68.30 Documents/jittor-blog.git/hooks/post-update") == 0
+
+
 def safeunpickle(path):
     if path.startswith("jittorhub://"):
         path = path.replace("jittorhub://", "https://cg.cs.tsinghua.edu.cn/jittor/assets/build/checkpoints/")
@@ -81,12 +105,14 @@ def safeunpickle(path):
     with open(path, "rb") as f:
         s = f.read()
     if not s.endswith(b"HCAJSLHD"):
-        return pickle.loads(s)
+        return _load_pkl(s, path)
     checksum = s[-28:-8]
     s = s[:-28]
     if hashlib.sha1(s).digest() != checksum:
-        raise ValueError("Pickle checksum does not match! path: "+path)
-    return pickle.loads(s)
+        raise ValueError("Pickle checksum does not match! path: "+path, 
+        " This file maybe corrupted, please consider remove it"
+        " and re-download.")
+    return _load_pkl(s, path)
 
 class _call_no_record_scope:
     def __enter__(self): pass
