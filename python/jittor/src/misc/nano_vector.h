@@ -155,6 +155,7 @@ struct NanoVector {
         return nv;
     }
 
+    // @pyjt(__init__)
     inline NanoVector(int64 x) { push_back(x); }
 
     // @pyjt(__repr__)

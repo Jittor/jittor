@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.1.9'
+__version__ = '1.3.1.10'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -1431,3 +1431,4 @@ from .misc import *
 from . import sparse
 from . import optim
 from . import dataset
+from . import init
