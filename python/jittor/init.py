@@ -24,7 +24,7 @@ def eye(shape, dtype="float32"):
     Return:
         A Jittor Var of identity matrix.
 
-    Example:
+    Example::
 
         from jittor import init
         print(init.eye(2))
@@ -77,7 +77,7 @@ def constant(shape, dtype="float32", value=0.0):
     Return:
         A Jittor Var which filled by constant value.
 
-    Example:
+    Example::
 
         from jittor import init
         print(init.constant(2))
@@ -124,7 +124,7 @@ def zero(shape, dtype="float32"):
     Return:
         A Jittor Var which filled by constant value.
 
-    Example:
+    Example::
 
         from jittor import init
         print(init.zero(2))
@@ -169,7 +169,7 @@ def one(shape, dtype="float32"):
     Return:
         A Jittor Var which filled by one.
 
-    Example:
+    Example::
 
         from jittor import init
         print(init.one(2))
@@ -219,7 +219,7 @@ def uniform(shape, dtype="float32", low=0, high=1):
     Return:
         A Jittor Var which filled by random uniform.
 
-    Example:
+    Example::
 
         from jittor import init
         print(init.uniform(5))
