@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.1.10'
+__version__ = '1.3.1.11'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -834,7 +834,35 @@ class Module:
         self.dfs([], None, callback, callback_leave)
         return _uniq(ps)
 
-    def state_dict(self):
+    def state_dict(self, to=None):
+        ''' Returns a dictionary containing 
+        Jittor Var of the module and its descendants.
+        
+        Args:
+            to: target type of var, canbe None or 'numpy' or 'torch'
+
+        Return:
+            dictionary of module's states.
+
+        Example::
+
+            import jittor as jt
+            from jittor.models import resnet50
+            jittor_model = resnet50()
+            dict = jittor_model.state_dict()
+            jittor_model.load_state_dict(dict)
+
+        Example2(export Jittor params to PyTorch)::
+
+            import jittor as jt
+            from jittor.models import resnet50
+            jittor_model = resnet50()
+            import torch
+            from torchvision.models import resnet50
+            torch_model = resnet50()
+            torch_model.load_state_dict(jittor_model.state_dict(to="torch"))
+
+        '''
         uniq_set = set()
         ps = {}
         stack = []
@@ -855,6 +883,15 @@ class Module:
         def callback_leave(parents, k, v, n):
             stack.pop()
         self.dfs([], None, callback, callback_leave)
+        if to == "numpy":
+            for k,v in ps.items():
+                if isinstance(v, Var):
+                    ps[k] = v.numpy()
+        elif to == "torch":
+            import torch
+            for k,v in ps.items():
+                if isinstance(v, Var):
+                    ps[k] = torch.Tensor(v.numpy())
         return ps
 
     def named_parameters(self):
