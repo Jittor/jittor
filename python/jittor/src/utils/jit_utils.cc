@@ -34,7 +34,7 @@ bool check_async_executor_error(const std::exception& e, std::ostream& os) {
     if (s.find("[Async Backtrace]: ---") != string::npos)
         return true;
     os << "\n**********\nAsync error was detected. "
-        "To locate the async backtrace, please rerun your code with "
+        "To locate the async backtrace and get better error report, please rerun your code with "
         "two enviroment variables set:\n"
         #ifdef _WIN32
         "cmd: \n"
