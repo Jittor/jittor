@@ -25,7 +25,7 @@ import os
 import re
 import shutil
 import jittor
-jittor_path = os.environ.get("PYTHONPATH")
+jittor_path = jittor.flags.jittor_path
 
 def add_indent(s: str, n=1):
     for _ in range(n):
@@ -83,12 +83,11 @@ def cval_to_python(val_str: str):
 
 
 def run_stubgen(jittor_path, cache_path):
-    python_path = os.path.split(jittor_path)[0]
 
     # for __init__.py functions
     stubpath = os.path.join(cache_path, 'stubs')
     stubfile = os.path.join(stubpath, "jittor", "__init__.pyi")
-    os.system(f"PYTHONPATH={python_path} stubgen -m jittor -o {stubpath} -q")
+    os.system(f"stubgen -m jittor -o {stubpath} -q")
     with open(stubfile) as f:
         mypy_content = f.read()
 
