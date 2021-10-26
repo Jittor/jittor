@@ -18,7 +18,7 @@ In detail, autocompletion of the following functions are supported.
 Prerequisite:
 - mypy for automatic stub generation
 
-Usage: python3 -m jittor.utils.gen_pyi.py
+Usage: python3 -m jittor.utils.gen_pyi
 
 """
 
