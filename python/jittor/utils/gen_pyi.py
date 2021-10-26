@@ -12,12 +12,13 @@
 In detail, autocompletion of the following functions are supported.
 - functions in __init__.py
 - functions in jittor.core.ops
+- attributes of jittor.flags
 - methods of jittor.Var
 
 Prerequisite:
 - mypy for automatic stub generation
 
-Usage: PYTHONPATH=/PATH/TO/JITTOR python autocomplete.py
+Usage: python3 -m jittor.utils.gen_pyi.py
 
 """
 
@@ -25,7 +26,6 @@ import os
 import re
 import shutil
 import jittor
-jittor_path = jittor.flags.jittor_path
 
 def add_indent(s: str, n=1):
     for _ in range(n):
@@ -99,7 +99,7 @@ def run_stubgen(jittor_path, cache_path):
                       "int = int32\n",
                       "float = float32\n",
                       "double = float64\n",
-                      "flags: Any\n"]
+                      "\nflags: Any\n"]
     for unused in unused_content:
         mypy_content = mypy_content.replace(unused, "")
     f.write(mypy_content)
@@ -155,9 +155,9 @@ def gen_ops_stub(jittor_path):
     for func_name, func in jittor.ops.__dict__.items():
         if func_name.startswith("__"):
             continue
-        # Exclude an function that overrides builtin bool:
+        # Exclude a function that overrides the builtin bool:
         #       def bool(x: Var) -> Var: ...
-        # It will confuse the IDE. So we donot add this function in pyi.
+        # It will confuse the IDE. So we ignore this function in pyi.
         if func_name == "bool":
             continue
 
