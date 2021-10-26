@@ -247,7 +247,7 @@ def gen_jit_flags():
     
     {jit_declares}
 
-    // @pyjt(flags)
+    // @pyjt(Flags)
     struct _Flags {{
         // @pyjt(__init__)
         _Flags() {{}}
@@ -1305,7 +1305,7 @@ cc_flags += f" -l\"jittor_core{lib_suffix}\" "
 with jit_utils.import_scope(import_flags):
     import jittor_core as core
 
-flags = core.flags()
+flags = core.Flags()
 
 if has_cuda:
     nvcc_flags = convert_nvcc_flags(cc_flags)

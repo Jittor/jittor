@@ -354,7 +354,7 @@ def full_like(x,val):
 def zeros_like(x):
     return zeros(x.shape,x.dtype)
 
-flags = core.flags()
+flags = core.Flags()
 
 def std(x):
     matsize=1
