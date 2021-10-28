@@ -1488,13 +1488,30 @@ class ReplicationPad2d(Module):
         ])
 
 class Embedding(Module):
+    ''' A simple lookup table that stores embeddings of a fixed dictionary and size.
+
+        :param num: size of the dictionary of embeddings
+        :type num: int
+
+        :param dim: the size of each embedding vector
+        :type dim: int
+
+        Example:
+            >>> embedding = nn.Embedding(10, 3)
+            >>> x = jt.int32([1, 2, 3, 3])
+            >>> embedding(x)
+            jt.Var([[ 1.1128596   0.19169547  0.706642]
+             [ 1.2047412   1.9668795   0.9932192]
+             [ 0.14941819  0.57047683 -1.3217674]
+             [ 0.14941819  0.57047683 -1.3217674]], dtype=float32)
+    '''
     def __init__(self, num, dim):
         self.num = num
         self.dim = dim
         self.weight = jt.init.gauss([num,dim],'float32').stop_grad()
 
     def execute(self, x):
-        res = self.weight[x].reshape([x.shape[0],self.dim])
+        res = self.weight[x.flatten()].reshape(x.shape + [self.dim])
         return res
 
 class PixelShuffle(Module):
