@@ -5,6 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include <cmath>
+#include "misc/cpu_math.h"
 #include "var.h"
 #include "ops/unary_op.h"
 #include "ops/unary_op_defs.h"
@@ -523,6 +524,7 @@ static unordered_set<string> unary_ops = {
         jt.Var([ 0.51559156  0.45739546 -0.85728306 -0.9258883 ], dtype=float32)
      */
     "erf",
+    "erfinv",
 };
 
 UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
@@ -657,6 +659,14 @@ VarPtr UnaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
         x2 = make_unary(x2, ns_negative);
         auto r = make_unary(x2, ns_exp);
         r = make_binary(r, two_div_sqrt_pi, ns_multiply);
+        return make_binary(dout, r, ns_multiply);
+    }
+    // derfinv(x) = sqrt(pi) / 2 * exp(erfinv(x)^2)
+    if (ns == ns_erfinv) {
+        auto sqrt_pi_div_two = make_number(1.7724538509055159/2, x);
+        auto y2 = make_binary(y, y, ns_multiply);
+        auto r = make_unary(y2, ns_exp);
+        r = make_binary(r, sqrt_pi_div_two, ns_multiply);
         return make_binary(dout, r, ns_multiply);
     }
     return nullptr;
