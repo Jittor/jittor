@@ -4,6 +4,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#define _USE_MATH_DEFINES
 #include <cmath>
 #include <limits>
 #include "misc/cpu_math.h"
