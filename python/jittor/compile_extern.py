@@ -531,7 +531,7 @@ def setup_mpi():
     mpi_ops = mpi.ops
     LOG.vv("Get mpi: "+str(mpi.__dict__.keys()))
     LOG.vv("Get mpi_ops: "+str(mpi_ops.__dict__.keys()))
-    def warper(func):
+    def wrapper(func):
         def inner(self, *args, **kw):
             return func(self, *args, **kw)
         inner.__doc__ = func.__doc__
@@ -539,7 +539,7 @@ def setup_mpi():
     for k in mpi_ops.__dict__:
         if not k.startswith("mpi_"): continue
         if k == "mpi_test": continue
-        setattr(core.Var, k, warper(mpi_ops.__dict__[k]))
+        setattr(core.Var, k, wrapper(mpi_ops.__dict__[k]))
 
 if os.environ.get("FIX_TORCH_ERROR", "0") == "1":
     try:

@@ -23,7 +23,7 @@ import urllib.request
 if platform.system() == 'Darwin':
     mp.set_start_method('fork')
 
-class LogWarper:
+class Logwrapper:
     def __init__(self):
         self.log_silent = int(os.environ.get("log_silent", "0"))
         self.log_v = int(os.environ.get("log_v", "0"))
@@ -482,7 +482,7 @@ def get_total_mem():
 
 is_in_ipynb = in_ipynb()
 cc = None
-LOG = LogWarper()
+LOG = Logwrapper()
 
 check_msvc_install = False
 msvc_path = ""
