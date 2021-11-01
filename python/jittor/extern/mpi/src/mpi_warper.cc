@@ -11,7 +11,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#include "mpi_warper.h"
+#include "mpi_wrapper.h"
 #include "common.h"
 #include "ops/array_op.h"
 

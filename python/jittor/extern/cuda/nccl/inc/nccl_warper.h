@@ -8,7 +8,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
-#include "mpi_warper.h"
+#include "mpi_wrapper.h"
 
 #include <cuda_runtime.h>
 #include <nccl.h>

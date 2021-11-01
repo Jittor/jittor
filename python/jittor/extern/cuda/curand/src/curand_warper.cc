@@ -7,7 +7,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#include "curand_warper.h"
+#include "curand_wrapper.h"
 #include "init.h"
 #include "misc/cuda_flags.h"
 
