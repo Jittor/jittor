@@ -19,6 +19,8 @@ using namespace std;
 
 namespace jittor {
 
+extern int use_tensorcore;
+
 #ifndef JIT
 
 static auto make_cublas_batched_matmul = get_op_info("cublas_batched_matmul")
@@ -116,13 +118,25 @@ void CublasBatchedMatmulOp::jit_run() {
         k = bs[adim-2];
     }
     // a: [b,n,m], b: [b,m,k], c: [b,n,k]
-    checkCudaErrors(cublas@op@@gemmStridedBatched(handle_,
+    cublasGemmAlgo_t algo = use_tensorcore ? CUBLAS_GEMM_DEFAULT_TENSOR_OP : CUBLAS_GEMM_DEFAULT;
+    cublasComputeType_t computeType = CUBLAS_COMPUTE_32F;
+    
+    // checkCudaErrors(cublas@op@@gemmStridedBatched(handle_,
+    // CUBLAS_OP_@Trans_b, CUBLAS_OP_@Trans_a,
+    // k, n, m, &alpha,
+    // b->ptr<T>(), '@Trans_b' == 'N' ? k : m, k * m, 
+    // a->ptr<T>(), '@Trans_a' == 'N' ? m : n, n * m, &beta,
+    // c->ptr<T>(), k, k * n,
+    // batch_size));
+    
+    checkCudaErrors(cublasGemmStridedBatchedEx(handle_,
     CUBLAS_OP_@Trans_b, CUBLAS_OP_@Trans_a,
     k, n, m, &alpha,
-    b->ptr<T>(), '@Trans_b' == 'N' ? k : m, k * m, 
-    a->ptr<T>(), '@Trans_a' == 'N' ? m : n, n * m, &beta,
-    c->ptr<T>(), k, k * n,
-    batch_size));
+    b->ptr<T>(),get_dtype(b->dtype()), '@Trans_b' == 'N' ? k : m, k * m, 
+    a->ptr<T>(),get_dtype(a->dtype()), '@Trans_a' == 'N' ? m : n, n * m, &beta,
+    c->ptr<T>(),get_dtype(c->dtype()), k, k * n,
+    batch_size,computeType,algo));
+
 }
 #endif
 #endif // JIT

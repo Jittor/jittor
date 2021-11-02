@@ -15,6 +15,8 @@ using namespace std;
 
 namespace jittor {
 
+extern int use_tensorcore;
+
 #pragma GCC diagnostic ignored "-Wunused-variable"
 
 #ifndef JIT
@@ -150,7 +152,9 @@ void CudnnConv3dOp::jit_run() {
     ));
 
     // using tensor core
-    // checkCudaErrors( cudnnSetConvolutionMathType(cudnnConvDesc, CUDNN_TENSOR_OP_MATH) );
+    if(use_tensorcore){
+        checkCudaErrors( cudnnSetConvolutionMathType(cudnnConvDesc, CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION) );
+    }
 
 
     int sy[] = {0,0,0,0,1};

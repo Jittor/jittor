@@ -16,6 +16,9 @@
 using namespace std;
 
 namespace jittor {
+
+extern int use_tensorcore;
+
 static inline int findc(const string& format, const char& c) {
     if (c==format[0]) return 0;
     if (c==format[1]) return 1;
@@ -149,7 +152,14 @@ void CudnnConvBackwardWOp::jit_run() {
     ));
 
     // using tensor core
-    // checkCudaErrors( cudnnSetConvolutionMathType(cudnnConvDesc, CUDNN_TENSOR_OP_MATH) );
+    if(use_tensorcore){
+        // CUDNN_TENSOR_OP_MATH
+        // The use of Tensor Core operations is permitted but will not actively perform datatype down conversion on tensors in order to utilize Tensor Cores.
+        // CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION
+        // The use of Tensor Core operations is permitted and will actively perform datatype down conversion on tensors in order to utilize Tensor Cores.
+        
+        checkCudaErrors( cudnnSetConvolutionMathType(cudnnConvDesc, CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION) );
+    }
 
     int dimY[] = {
         (int)y->shape[findc("@YFORMAT", 'a')], // n
