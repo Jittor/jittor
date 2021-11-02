@@ -56,6 +56,11 @@ void LoopToFuncPass::run() {
                 if (d->has_attr("rvalue")) {
                     auto& rvalue = d->attrs["rvalue"];
                     auto& dtype = d->attrs["dtype"];
+                    if (endswith(d->attrs["lvalue"], "_value") ||
+                        endswith(d->attrs["lvalue"], "_outputv")) {
+                        args.push_back(d.get());
+                        continue;
+                    }
                     if (rvalue.find("ops") != string::npos)
                         continue;
                     if (dtype=="Var*")
@@ -64,10 +69,6 @@ void LoopToFuncPass::run() {
                         continue;
                     if (rvalue.find("->") != string::npos ||
                         dtype.find("*") != string::npos) {
-                        args.push_back(d.get());
-                        continue;
-                    }
-                    if (endswith(d->attrs["lvalue"], "_value")) {
                         args.push_back(d.get());
                         continue;
                     }

@@ -122,6 +122,9 @@ void LoopVarAnalyzePass::run() {
                 && (op->outputs().front()->shape.size() != max_elm_dim || 
                     std::abs(op->outputs().front()->num) != max_elm_size))
                 continue;
+            if (op->name_ex() == "array")
+                // array op should not be loop var
+                continue;
             Var* loop_var;
             if (op->type() == OpType::broadcast || op->name_ex() == "index") {
                 loop_var = op->output(0);

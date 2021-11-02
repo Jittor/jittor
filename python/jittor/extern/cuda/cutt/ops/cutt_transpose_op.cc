@@ -7,7 +7,7 @@
 #include "cutt_transpose_op.h"
 #include "ops/op_register.h"
 #include "cutt.h"
-#include "cutt_warper.h"
+#include "cutt_wrapper.h"
 #include "misc/stack_vector.h"
 #include "helper_cuda.h"
 

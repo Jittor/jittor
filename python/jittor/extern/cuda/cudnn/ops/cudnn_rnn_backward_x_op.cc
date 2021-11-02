@@ -8,7 +8,7 @@
 #include "var.h"
 #include "cudnn_rnn_descriptor.h"
 #include "cudnn_rnn_backward_x_op.h"
-#include "cudnn_warper.h"
+#include "cudnn_wrapper.h"
 #include "executor.h"
 #include "ops/op_register.h"
 

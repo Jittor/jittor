@@ -43,6 +43,7 @@ namespace jittor {
 #define sigmoid(T,x) ((T) (1.0f/(1.0f+::expf((::min(T(-(x)), T(@if(@strcmp(@T,float32)==0,30,300))))))))
 
 #define erf(T,x) ((T) ::erff((x)))
+#define erfinv(T,x) ((T) ::erfinvf((T)(x)))
 
 #else
 #define abs(T,x) std::abs(x)
@@ -74,6 +75,7 @@ namespace jittor {
 #define sigmoid(T,x) ((T) (1.0f/(1.0f+std::exp(std::min(T(-(x)), T(@if(@strcmp(@T,float32)==0,30,300)))))))
 
 #define erf(T,x) ((T) std::erf((x)))
+#define erfinv(T,x) (jittor::_erfinv(x))
 
 #endif
 

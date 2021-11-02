@@ -6,7 +6,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#include "mpi_warper.h"
+#include "mpi_wrapper.h"
 #include "var.h"
 #include "mpi_all_reduce_op.h"
 #include "ops/op_register.h"

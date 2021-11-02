@@ -13,7 +13,7 @@
 #include <nccl.h>
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
-#include "nccl_warper.h"
+#include "nccl_wrapper.h"
 #include "ops/op_register.h"
 namespace jittor {
 

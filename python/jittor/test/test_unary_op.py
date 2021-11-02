@@ -76,6 +76,25 @@ class TestUnaryOp(unittest.TestCase):
         da = jt.grad(b, a)
         assert (da.data == 1).all()
 
+    def test_erfinv(self):
+        from scipy import special
+        y = np.linspace(-1.0, 1.0, num=10)
+        x = special.erfinv(y)
+        y2 = jt.array(y)
+        x2 = jt.erfinv(y2)
+        np.testing.assert_allclose(y.data, y2.data)
+        
+        
+        y = np.linspace(-0.9, 0.9, num=10)
+        x = special.erfinv(y)
+        y2 = jt.array(y)
+        x2 = jt.erfinv(y2)
+        np.testing.assert_allclose(y.data, y2.data)
+        d = jt.grad(x2, y2)
+        _, (dn,) = ngrad(lambda y: special.erfinv(y).sum(), [y], 1e-8)
+        np.testing.assert_allclose(d.data, dn, atol=1e-6, rtol=1e-6)
+
+
 class TestUnaryOpCuda(TestUnaryOp, test_cuda(2)):
     pass
 

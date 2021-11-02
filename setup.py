@@ -58,7 +58,7 @@ setuptools.setup(
     python_requires='>=3.7',
 
     packages=["jittor", "jittor.test", "jittor.models", "jittor.utils", "jittor_utils"],
-    package_dir={'': os.path.join(path, 'python')},
+    package_dir={'': 'python'},
     package_data={'': ['*', '*/*', '*/*/*','*/*/*/*','*/*/*/*/*','*/*/*/*/*/*']},
     # include_package_data=True,
     install_requires=[

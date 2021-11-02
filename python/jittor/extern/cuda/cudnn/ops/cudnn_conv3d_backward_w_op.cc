@@ -10,7 +10,7 @@
 #include "mem/allocator.h"
 #include "var.h"
 #include "cudnn_conv3d_backward_w_op.h"
-#include "cudnn_warper.h"
+#include "cudnn_wrapper.h"
 #include "executor.h"
 #include "ops/op_register.h"
 

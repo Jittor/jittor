@@ -193,6 +193,23 @@ class TestArray(unittest.TestCase):
                 assert str(c.dtype) == t
                 np.testing.assert_allclose(a, c)
 
+    def test_scalar_fuse_unary(self):
+        with jt.profile_scope() as rep:
+            a = jt.array([1])
+            b = -a
+            a = a.clone()
+            b = b.clone()
+            jt.sync([a, b])
+            assert a.data == 1
+            assert b.data == -1
+        assert len(rep) == 2
+        
+    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    def test_scalar_fuse_unary_cuda(self):
+        with jt.flag_scope(use_cuda=1):
+            self.test_scalar_fuse_unary()
+
+
 
 if __name__ == "__main__":
     unittest.main()

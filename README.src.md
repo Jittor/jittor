@@ -21,6 +21,8 @@ Related Links:
 *  [Jittor Models](https://cg.cs.tsinghua.edu.cn/jittor/resources/)
 *  [Jittor Documents](https://cg.cs.tsinghua.edu.cn/jittor/assets/docs/index.html)
 *  [Github](https://github.com/jittor/jittor), [Gitee](https://gitee.com/jittor/jittor)
+*  [Jittor Forum](https://discuss.jittor.org/)
+*  IM: QQ Group(761222083)
 
 相关链接：
 *  [Jittor官网](https://cg.cs.tsinghua.edu.cn/jittor/)
@@ -28,6 +30,8 @@ Related Links:
 *  [Jittor模型库](https://cg.cs.tsinghua.edu.cn/jittor/resources/)
 *  [Jittor文档](https://cg.cs.tsinghua.edu.cn/jittor/assets/docs/index.html)
 *  [Github](https://github.com/jittor/jittor)， [Gitee](https://gitee.com/jittor/jittor)
+*  [Jittor 论坛](https://discuss.jittor.org/)
+*  即时通信: QQ Group(761222083)
 
 
 The following example shows how to model a two-layer neural network step by step and train from scratch In a few lines of Python code.

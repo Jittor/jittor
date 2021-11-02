@@ -47,10 +47,17 @@ def download_url_to_local(url, filename, root_folder, md5):
         return
     else:
         print('Downloading ' + url + ' to ' + file_path)
-        urllib.request.urlretrieve(
-            url, file_path,
-            reporthook=_progress()
-        )
+        try:
+            urllib.request.urlretrieve(
+                url, file_path,
+                reporthook=_progress()
+            )
+        except Exception as e:
+            msg = f"{e}\nDownload File failed, url: {url}, path: {file_path}"
+            print(msg)
+            if os.path.isfile(file_path):
+                os.remove(file_path)
+            raise RuntimeError(msg)
     if not check_file_exist(file_path, md5):
         raise RuntimeError("File downloads failed.")
 
