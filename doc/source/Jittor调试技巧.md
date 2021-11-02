@@ -74,3 +74,17 @@ export gdb_attach=1
 
 其中，环境变量`debug=1`代表开启jittor的debug模式，性能会大幅下降，但会保留调试信息，`gdb_attach=1`将会自动将gdb贴在jittor的主进程上，方便您进行单步调试。关于gdb的使用，您可以参考[GDB Cheat Sheet](https://darkdust.net/files/GDB%20Cheat%20Sheet.pdf)
 
+
+## 管理Jittor cache
+
+Jittor会在`～/.cache/jittor`目录下创建cache， cache里面可能包括 core（内核）、cuda编译器、cuda库、数据集（dataset）、预训练参数等等，在某些情况下cache可能失效，如系统更新、驱动更新等等，这种情况可能需要用户手动清除cache， 清除的方法如下：
+
+```
+python3 -m jittor_utils.clean_cache all
+```
+
+以上命令会清除jittor的所有cache，如果您不想全部清除，可以参考命令行帮助：
+
+```
+python3 -m jittor_utils.clean_cache help
+```

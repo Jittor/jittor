@@ -856,14 +856,19 @@ string OpCompiler::__get_fused_src(
             string arg_name = op_name + "_output";
             string argp_name = op_name + "_outputp";
             string T = ((ArrayOp*)ops[oi])->output->dtype().to_cstring();
-            fused_kernel_args += "    ArrayOp* " + op_name + " = (ArrayOp*)(ops[" + S(oi) + "]);\n";
-            // op_name = "((ArrayOp*)(ops[" + S(oi) + "]))";
-            fused_kernel_args += "    Var* " + arg_name + " = " + op_name + "->output;\n";
 
-            fused_kernel += "    auto* " + argp_name + " = " + arg_name + "->ptr<" + T + ">();\n";
-            fused_kernel += "    " + argp_name + "[0] = " + op_name + "->ptr<" + T + ">()[0];\n";
-            fused_kernel += "    int " + arg_name + "shape0 = 1;\n";
-            fused_kernel += "    int " + arg_name + "stride0 = 1;\n";
+            fused_kernel_args += precompile({{"oi",S(oi)}, {"T", T}}, R"(
+                Var* op@oi@@_output = ((ArrayOp*)(ops[@oi]))->output;
+                @T op@oi@@_outputv = ((ArrayOp*)(ops[@oi]))->ptr<@T>()[0];
+            )");
+
+
+            fused_kernel += precompile({{"oi",S(oi)}, {"T", T}}, R"(
+                @T* op@oi@@_outputp = op@oi@@_output->ptr<@T>();
+                op@oi@@_outputp[0] = op@oi@@_outputv;
+            )");
+
+
 
             fused_includes += "#include \"ops/array_op.h\"\n";
             op_members[oi].push_back(arg_name);

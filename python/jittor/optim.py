@@ -122,11 +122,19 @@ class Optimizer(object):
 
         # sync grads and model if in mpi
         if jt.in_mpi:
+            dep = []
+            def add_dep(v):
+                nonlocal dep
+                v._add_dependency(dep)
+                dep = [v]
+
             for g in grads:
                 g.assign(g.mpi_all_reduce("mean"))
+                add_dep(g._input(0))
             if self.n_step % self.param_sync_iter == 0:
                 for p in params:
                     p.assign(p.mpi_broadcast())
+                    add_dep(p)
         self.n_step += 1
 
         # set up grads in param_groups

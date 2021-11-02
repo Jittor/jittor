@@ -13,7 +13,7 @@
 #include "var.h"
 
 #include "cublas_batched_matmul_op.h"
-#include "cublas_warper.h"
+#include "cublas_wrapper.h"
 
 using namespace std;
 

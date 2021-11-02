@@ -219,8 +219,8 @@ def setup_cuda_extern():
                 msg += """Develop version of CUDNN not found, 
 please refer to CUDA offical tar file installation: 
 https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#installlinux-tar"""
-                if platform.machine() in ["x86_64", "AMD64"]:
-                    msg += f"""
+            if platform.machine() in ["x86_64", "AMD64"]:
+                msg += f"""
 or you can let jittor install cuda and cudnn for you:
 >>> python3.{sys.version_info.minor} -m jittor_utils.install_cuda
 """
@@ -309,7 +309,7 @@ def install_cutt(root_folder):
         if md5 != true_md5:
             os.remove(fullname)
             shutil.rmtree(dirname)
-    if not os.path.isfile(os.path.join(dirname, "lib/libcutt"+so)):
+    if not os.path.isfile(os.path.join(cache_path, "libcutt"+so)):
         LOG.i("Downloading cutt...")
         download_url_to_local(url, filename, root_folder, true_md5)
 
@@ -337,8 +337,7 @@ def install_cutt(root_folder):
                 continue
             files2.append(f)
         cutt_flags = cc_flags+opt_flags+cutt_include
-        os.makedirs(dirname+"/lib", exist_ok=True)
-        compile(cc_path, cutt_flags, files2, dirname+"/lib/libcutt"+so, cuda_flags=arch_flag)
+        compile(cc_path, cutt_flags, files2, cache_path+"/libcutt"+so, cuda_flags=arch_flag)
     return dirname
 
 def setup_cutt():
@@ -362,7 +361,7 @@ def setup_cutt():
         install_cutt(cutt_path)
         cutt_home = os.path.join(cutt_path, "cutt-1.2")
         cutt_include_path = os.path.join(cutt_home, "src")
-        cutt_lib_path = os.path.join(cutt_home, "lib")
+        cutt_lib_path = cache_path
 
     cutt_lib_name = os.path.join(cutt_lib_path, "libcutt"+so)
     assert os.path.isdir(cutt_include_path)
@@ -397,7 +396,8 @@ def install_nccl(root_folder):
             if os.path.isdir(dirname):
                 shutil.rmtree(dirname)
     if not os.path.isfile(os.path.join(dirname, "build", "lib", "libnccl.so")):
-        LOG.i("Downloading nccl...")
+        if not os.path.isfile(os.path.join(root_folder, filename)):
+            LOG.i("Downloading nccl...")
         download_url_to_local(url, filename, root_folder, true_md5)
 
         if core.get_device_count() == 0:
@@ -531,7 +531,7 @@ def setup_mpi():
     mpi_ops = mpi.ops
     LOG.vv("Get mpi: "+str(mpi.__dict__.keys()))
     LOG.vv("Get mpi_ops: "+str(mpi_ops.__dict__.keys()))
-    def warper(func):
+    def wrapper(func):
         def inner(self, *args, **kw):
             return func(self, *args, **kw)
         inner.__doc__ = func.__doc__
@@ -539,7 +539,7 @@ def setup_mpi():
     for k in mpi_ops.__dict__:
         if not k.startswith("mpi_"): continue
         if k == "mpi_test": continue
-        setattr(core.Var, k, warper(mpi_ops.__dict__[k]))
+        setattr(core.Var, k, wrapper(mpi_ops.__dict__[k]))
 
 if os.environ.get("FIX_TORCH_ERROR", "0") == "1":
     try:
@@ -547,6 +547,7 @@ if os.environ.get("FIX_TORCH_ERROR", "0") == "1":
     except:
         pass
 
+cudnn = cublas = curand = None
 setup_mpi()
 in_mpi = inside_mpi()
 rank = mpi.world_rank() if in_mpi else 0

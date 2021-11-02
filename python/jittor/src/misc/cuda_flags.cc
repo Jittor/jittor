@@ -22,7 +22,13 @@ void setter_use_cuda(int value) {
     if (value) {
         int count=0;
         cudaGetDeviceCount(&count);
-        CHECK(count>0) << "No device found.";
+        if (count == 0) {
+            if (getenv("CUDA_VISIBLE_DEVICES")) {
+                LOGf << "No device found, please unset your "
+                "enviroment variable 'CUDA_VISIBLE_DEVICES'";
+            } else
+                LOGf << "No device found";
+        }
         LOGi << "CUDA enabled.";
     } else {
         LOGv << "CUDA disabled.";

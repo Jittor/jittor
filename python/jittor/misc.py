@@ -937,7 +937,7 @@ Output::
         print(out)
     return tree, out
     
-def python_pass_warper(mod_func, args, kw):
+def python_pass_wrapper(mod_func, args, kw):
     import importlib
     mod, func = mod_func.rsplit(".", 1)
     mod = importlib.import_module(mod)
