@@ -25,6 +25,8 @@ static inline int findc(const char* format, const char& c) {
 
 namespace jittor {
 
+extern int use_tensorcore;
+
 #ifndef JIT
 
 static inline void get_shape(Var* x, const char* f, const string& format, int& a, int& b, int &c, int& d) {
@@ -150,7 +152,9 @@ void CudnnConvBackwardXOp::jit_run() {
     ));
 
     // using tensor core
-    // checkCudaErrors( cudnnSetConvolutionMathType(cudnnConvDesc, CUDNN_TENSOR_OP_MATH) );
+    if(use_tensorcore){
+        checkCudaErrors( cudnnSetConvolutionMathType(cudnnConvDesc, CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION) );
+    }
 
     int dimY[] = {
         (int)y->shape[findc("@YFORMAT", 'a')], // n

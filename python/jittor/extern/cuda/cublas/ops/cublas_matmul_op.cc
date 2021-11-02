@@ -16,6 +16,8 @@ using namespace std;
 
 namespace jittor {
 
+extern int use_tensorcore;
+
 #ifndef JIT
 
 CublasMatmulOp::CublasMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
@@ -54,6 +56,15 @@ void CublasMatmulOp::jit_prepare(JK& jk) {
 
 #else // JIT
 #pragma clang diagnostic ignored "-Wtautological-compare"
+
+static inline cudaDataType get_dtype(NanoString dtype) {
+    if (dtype == ns_float32) return CUDA_R_32F;
+    // if (dtype == ns_float64) return CUDA_R_64F;
+    // if (dtype == ns_float16) return CUDA_R_16F;
+    LOGf << "not support type" << dtype;
+    return CUDA_R_32F;
+}
+
 void CublasMatmulOp::jit_run() {
     cublasHandle_t& handle_ = cublas_handle;
     const T alpha = 1.0f;
@@ -72,12 +83,24 @@ void CublasMatmulOp::jit_run() {
         k = bs[0];
     }
     // a: [n,m], b: [m,k], c: [n,k]
-    checkCudaErrors(cublas@op@@gemm(handle_, 
+    cublasGemmAlgo_t algo = use_tensorcore ? CUBLAS_GEMM_DEFAULT_TENSOR_OP : CUBLAS_GEMM_DEFAULT;
+    cublasComputeType_t computeType = CUBLAS_COMPUTE_32F;
+
+    // checkCudaErrors(cublas@op@@gemm(handle_, 
+    // CUBLAS_OP_@Trans_b, CUBLAS_OP_@Trans_a, 
+    // k, n, m, &alpha, 
+    // b->ptr<T>(), '@Trans_b' == 'N' ? k : m, 
+    // a->ptr<T>(), '@Trans_a' == 'N' ? m : n, &beta, 
+    // c->ptr<T>(), k));
+
+    checkCudaErrors(cublasGemmEx(handle_, 
     CUBLAS_OP_@Trans_b, CUBLAS_OP_@Trans_a, 
     k, n, m, &alpha, 
-    b->ptr<T>(), '@Trans_b' == 'N' ? k : m, 
-    a->ptr<T>(), '@Trans_a' == 'N' ? m : n, &beta, 
-    c->ptr<T>(), k));
+    b->ptr<T>(),get_dtype(b->dtype()), '@Trans_b' == 'N' ? k : m, 
+    a->ptr<T>(),get_dtype(a->dtype()), '@Trans_a' == 'N' ? m : n, &beta, 
+    c->ptr<T>(),get_dtype(c->dtype()), k,
+    computeType, algo));
+    
 }
 #endif // JIT
 
