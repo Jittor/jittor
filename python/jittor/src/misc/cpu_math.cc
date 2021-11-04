@@ -44,8 +44,8 @@ Date:  February 1996
     x = std::copysign(num, y) / dem;
   }
   /* Two steps of Newton-Raphson correction */
-  x = x - (std::erf(x) - y) / ((static_cast<T>(2.0)/static_cast<T>(std::sqrt(M_PI)))*std::exp(-x*x));
-  x = x - (std::erf(x) - y) / ((static_cast<T>(2.0)/static_cast<T>(std::sqrt(M_PI)))*std::exp(-x*x));
+  x = x - (std::erf(x) - y) / ((static_cast<T>(2.0)/static_cast<T>(std::sqrt(3.14159265358979323846)))*std::exp(-x*x));
+  x = x - (std::erf(x) - y) / ((static_cast<T>(2.0)/static_cast<T>(std::sqrt(3.14159265358979323846)))*std::exp(-x*x));
 
   return x;
 }
