@@ -991,7 +991,7 @@ if nvcc_path:
             cu += "_sm_" + "_".join(s)
             if "cuda_arch" not in os.environ:
                 os.environ["cuda_arch"] = " ".join(cu)
-            cu = cu.replace(":", "")
+            cu = cu.replace(":", "").replace(" ", "")
     except:
         pass
     LOG.i("cuda key:", cu)
