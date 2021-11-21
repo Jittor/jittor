@@ -225,8 +225,14 @@ class TestSetitem(unittest.TestCase):
         b = a[...,:,None,:2]
         assert b.shape == [2,4,1,2]
         np.testing.assert_allclose(b.data, a.data[...,:,None,:2])
-        
 
+    def test_flip_grad(self):
+        a = jt.rand(10)
+        b = a[::-1]
+        c = b[::-1]
+        d = c.sum()
+        jt.grad(d, [a])
+        
 
 if __name__ == "__main__":
     unittest.main()
