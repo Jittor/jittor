@@ -76,7 +76,7 @@ for os_name, os_type in os_name_system_dict.items():
             env += cname
             # use core2 arch, avoid using avx instructions
             # TODO: support more archs, such as arm, or use ir(GIMPLE or LLVM)
-            if platform.machine() == "x86_64":
+            if platform.machine() in ["x86_64", "AMD64"]:
                 env += " cc_flags='-march=core2' "
             if device == "cpu":
                 env += " nvcc_path='' "

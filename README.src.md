@@ -1,6 +1,8 @@
 # Jittor: a Just-in-time(JIT) deep learning framework
 # Jittor: 即时编译深度学习框架
 
+![Jittor Logo](doc/logo.png)
+
 [Quickstart](#quickstart) | [Install](#install) | [Tutorial](#tutorial) | [Chinese](./README.cn.md)
 
 [快速开始](#快速开始) | [安装](#安装) | [教程](#教程)
@@ -19,6 +21,8 @@ Related Links:
 *  [Jittor Models](https://cg.cs.tsinghua.edu.cn/jittor/resources/)
 *  [Jittor Documents](https://cg.cs.tsinghua.edu.cn/jittor/assets/docs/index.html)
 *  [Github](https://github.com/jittor/jittor), [Gitee](https://gitee.com/jittor/jittor)
+*  [Jittor Forum](https://discuss.jittor.org/)
+*  IM: QQ Group(761222083)
 
 相关链接：
 *  [Jittor官网](https://cg.cs.tsinghua.edu.cn/jittor/)
@@ -26,6 +30,8 @@ Related Links:
 *  [Jittor模型库](https://cg.cs.tsinghua.edu.cn/jittor/resources/)
 *  [Jittor文档](https://cg.cs.tsinghua.edu.cn/jittor/assets/docs/index.html)
 *  [Github](https://github.com/jittor/jittor)， [Gitee](https://gitee.com/jittor/jittor)
+*  [Jittor 论坛](https://discuss.jittor.org/)
+*  即时通信: QQ Group(761222083)
 
 
 The following example shows how to model a two-layer neural network step by step and train from scratch In a few lines of Python code.
@@ -112,27 +118,32 @@ We provide some jupyter notebooks to help you quick start with Jittor.
 
 Jittor框架对环境要求如下:
 
-
-* 操作系统: **Linux**(e.g. Ubuntu/CentOS/Arch), **macOS**（x86_64）或 **Windows Subsystem of Linux（WSL）**
+Jittor 支持**Linux**(e.g. Ubuntu/CentOS/Arch), **macOS**,**Windows**， 其中**Linux**和**macOS**的依赖如下：
 * Python：版本 >= 3.7
 * C++编译器 （需要下列至少一个）
-    - g++ （>=5.4.0）
-    - clang （>=8.0）
+    - g++ （>=5.4.0 for linux）
+    - clang （>=8.0 for mac）
 * GPU 编译器（可选）：nvcc >=10.0
 * GPU 加速库（可选）：cudnn-dev (cudnn开发版, 推荐使用tar安装方法，[参考链接](https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#installlinux-tar))
+
+Jittor 目前还支持主流国产Linux操作系统，如统信、麒麟、普华、龙芯Loongnix，安装方式可参考 Linux pip安装方法，准备好python和g++即可。
+
+**Windows**对环境的要求为：
+* Python：版本 >= 3.8(建议从Python官网安装：<https://www.python.org/downloads/windows/>)
+* x86_64处理器
+* Windows 10及以上。
 
 如果您不希望手动配置环境，我们推荐使用 Docker 进行安装。
 除此之外，您还可以使用 pip 安装和手动安装。
 
-注意1：目前Jittor通过WSL的方式在Windows操作系统上运行，WSL的安装方法请参考[微软官网](https://docs.microsoft.com/en-us/windows/wsl/install-win10)，WSL版本目前尚不支持CUDA。
+注意1：macOS 用户需要安装额外依赖，请参考 [macOS 安装](#macOS-安装)。
 
-注意2：macOS 用户需要安装额外依赖，请参考 [macOS 安装](#macOS-安装)。
-
-Jittor 提供了三种安装方法：docker，pip和手动安装：
+Jittor 提供了三种安装方法：pip、docker和手动安装：
 
 Jittor environment requirements:
 
-* System: **Linux**(e.g. Ubuntu/CentOS/Arch), **macOS**, or **Windows Subsystem of Linux (WSL)**
+* System: **Linux**(e.g. Ubuntu/CentOS/Arch), **macOS**, or **Windows**, enviroment requirements of **Linux** and **Mac** are list below:
+
 * Python version >= 3.7
 * CPU compiler (require at least one of the following)
     * g++ (>=5.4.0)
@@ -142,32 +153,16 @@ Jittor environment requirements:
 * GPU library: cudnn-dev (recommend tar file installation, [reference link](https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#installlinux-tar))
 
 
+**Windows** requirements atr:
 
-Note#1: Currently Jittor runs on the Windows operating system through WSL. For the installation method of WSL, please refer to [Microsoft official website](https://docs.microsoft.com/en-us/windows/wsl/install-win10). WSL does not yet support CUDA.
-
-Note#2: macOS users have to install additional dependencies, see [macOS install](#macOS-install).
-
-Jittor offers three ways to install: docker, pip, or manual.
+* Python: version >= 3.8(recommend install from <https://www.python.org/downloads/windows/>)
+* x86_64 CPU processor
+* Windows 10 or above
 
 
-## Docker Install
+Note#1: macOS users have to install additional dependencies, see [macOS install](#macOS-install).
 
-## Docker 安装
-
-我们提供了Docker安装方式，免去您配置环境，Docker安装方法如下：
-
-We provide a Docker installation method to save you from configuring the environment. The Docker installation method is as follows:
-
-```
-# CPU only(Linux)
-docker run -it --network host jittor/jittor
-# CPU and CUDA(Linux)
-docker run -it --network host --gpus all jittor/jittor-cuda
-# CPU only(Mac and Windows)
-docker run -it -p 8888:8888 jittor/jittor
-```
-
-关于Docker安装的详细教程，可以参考[Windows/Mac/Linux通过Docker安装计图](https://cg.cs.tsinghua.edu.cn/jittor/tutorial/2020-5-15-00-00-docker/)
+Jittor offers three ways to install: pip, docker, or manual.
 
 ## Pip 安装
 
@@ -187,9 +182,9 @@ python3.7 -m jittor.test.test_example
 如果测试运行通过,恭喜你已经安装完成.
 jittor会自动在路径中寻找合适的编译器, 如果您希望手动指定编译器, 请使用环境变量 `cc_path` 和 `nvcc_path`(可选).
 
-## macOS 安装
+### macOS 安装
 
-## macOS install
+### macOS install
 
 macOS 请使用 [homebrew](https://brew.sh) 安装额外的依赖 (python>=3.7, onednn)。
 
@@ -211,6 +206,50 @@ python3.7 -m jittor.test.test_example
 目前在macOS中，jittor 只支持 CPU 计算。
 
 Currently jittor only supports CPU in macOS.
+
+### Windows安装
+
+### Windows install
+
+Windows 请准备好Python>=3.8，安装方法如下(conda安装需要额外命令)：
+
+Windows user please prepare Python>=3.8, install instructions are list below(conda needs extra instructions)：
+
+```bash
+# check your python version(>=3.8)
+python --version
+python -m pip install jittor
+# if conda is used
+conda install pywin32
+```
+
+Windows 下，jittor会自动检测显卡并安装对应的 CUDA， 请确保您的NVIDIA驱动支持CUDA 10.2 以上，您还可以使用如下命令手动为Jittor安装CUDA：
+
+In Windows, jittor will automatically detect and install CUDA, please make sure your NVIDIA driver support CUDA 10.2  or above, or you can manually let jittor install CUDA for you:
+
+```bash
+python -m jittor_utils.install_cuda
+```
+
+
+## Docker Install
+
+## Docker 安装
+
+我们提供了Docker安装方式，免去您配置环境，Docker安装方法如下：
+
+We provide a Docker installation method to save you from configuring the environment. The Docker installation method is as follows:
+
+```
+# CPU only(Linux)
+docker run -it --network host jittor/jittor
+# CPU and CUDA(Linux)
+docker run -it --network host --gpus all jittor/jittor-cuda
+# CPU only(Mac and Windows)
+docker run -it -p 8888:8888 jittor/jittor
+```
+
+关于Docker安装的详细教程，可以参考[Windows/Mac/Linux通过Docker安装计图](https://cg.cs.tsinghua.edu.cn/jittor/tutorial/2020-5-15-00-00-docker/)
 
 ## 手动安装
 ## manual install
@@ -501,7 +540,7 @@ Jittor目前由[清华大学计算机图形学组](https://cg.cs.tsinghua.edu.cn
 @article{hu2020jittor,
   title={Jittor: a novel deep learning framework with meta-operators and unified graph execution},
   author={Hu, Shi-Min and Liang, Dun and Yang, Guo-Ye and Yang, Guo-Wei and Zhou, Wen-Yang},
-  journal={Information Sciences},
+  journal={Science China Information Sciences},
   volume={63},
   number={222103},
   pages={1--21},

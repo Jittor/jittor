@@ -69,7 +69,7 @@ class TestOneHot(unittest.TestCase):
             tn = torch.distributions.Normal(mu,sigma)
             assert np.allclose(jn.entropy().data,tn.entropy().numpy())
             x = np.random.uniform(-1,1)
-            assert np.allclose(jn.log_prob(x),tn.log_prob(torch.tensor(x)))
+            np.testing.assert_allclose(jn.log_prob(x),tn.log_prob(torch.tensor(x)))
             mu2 = np.random.uniform(-1,1)
             sigma2 = np.random.uniform(0,2)
             jn2 = jd.Normal(mu2,sigma2)

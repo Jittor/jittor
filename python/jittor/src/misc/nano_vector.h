@@ -6,24 +6,9 @@
 // ***************************************************************
 #pragma once
 #include "common.h"
+#include "misc/intrin.h"
 
 namespace jittor {
-
-static inline int lzcnt(int64 v) {
-    #ifdef __clang__
-    #if __has_feature(__builtin_ia32_lzcnt_u64)
-        return __builtin_ia32_lzcnt_u64(v);
-    #else
-        return v ? __builtin_clzll(v) : 64;
-    #endif
-    #else
-    #ifdef _MSC_VER
-        return __lzcnt64(v);
-    #else
-        return __builtin_clzll(v);
-    #endif
-    #endif
-}
 
 struct Slice {
     int64 start, stop, step, mask;
@@ -170,6 +155,7 @@ struct NanoVector {
         return nv;
     }
 
+    // @pyjt(__init__)
     inline NanoVector(int64 x) { push_back(x); }
 
     // @pyjt(__repr__)

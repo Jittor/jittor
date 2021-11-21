@@ -7,7 +7,7 @@
 #include "nccl_test_op.h"
 #include "utils/str_utils.h"
 
-#include "nccl_warper.h"
+#include "nccl_wrapper.h"
 
 
 namespace jittor {

@@ -12,7 +12,7 @@
 #include <curand.h>
 #include "helper_cuda.h"
 #include "curand_random_op.h"
-#include "curand_warper.h"
+#include "curand_wrapper.h"
 
 namespace jittor {
 

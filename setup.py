@@ -23,6 +23,7 @@ if not platform.system() in ['Linux', 'Darwin']:
 import setuptools
 from setuptools import setup, find_packages
 import os
+import sys
 
 path = os.path.dirname(__file__)
 with open(os.path.join(path, "README.md"), "r", encoding='utf8') as fh:
@@ -35,6 +36,13 @@ with open(os.path.join(path, "python/jittor/__init__.py"), "r", encoding='utf8')
             break
     else:
         raise RuntimeError("Unable to find version string.")
+
+version_require = (3,7)
+if os.name == 'nt':
+    version_require = (3,8)
+if sys.version_info < version_require:
+    raise RuntimeError("Python version not match, require %s, current %s"
+        %(version_require, sys.version_info))
 
 setuptools.setup(
     name='jittor',  
@@ -50,7 +58,7 @@ setuptools.setup(
     python_requires='>=3.7',
 
     packages=["jittor", "jittor.test", "jittor.models", "jittor.utils", "jittor_utils"],
-    package_dir={'': os.path.join(path, 'python')},
+    package_dir={'': 'python'},
     package_data={'': ['*', '*/*', '*/*/*','*/*/*/*','*/*/*/*/*','*/*/*/*/*/*']},
     # include_package_data=True,
     install_requires=[

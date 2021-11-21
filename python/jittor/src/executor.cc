@@ -29,6 +29,7 @@
 #include "misc/nan_checker.h"
 #include "memory_profiler.h"
 #include "utils/seh.h"
+#include "utils/cache_compile.h"
 
 namespace jittor {
 
@@ -99,6 +100,55 @@ void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, i
         //     // }
         // }
     }
+}
+
+void check_op_async_error(Op* op, bool is_fused_op, const std::exception& e, jittor::Log& logf) {
+    vector<Stack> stack;
+    if (is_fused_op) {
+        FusedOp& fused_op = *((FusedOp*)op);
+        logf >> "[OP TYPE]:" << "fused_op:(";
+        for (auto& op : fused_op.ops)
+            logf << op->name_ex() >> ",";
+        logf >> ")\n";
+        logf >> "[Input]:";
+        for (auto& vi : fused_op.vars)
+            if (vi.type == 0) logf << vi.var->dtype() >> vi.var->shape >> vi.var->name >> ",";
+        logf << "\n[Output]:";
+        Var* ov = nullptr;
+        for (auto& vi : fused_op.vars)
+            if (vi.type == 2) {
+                logf << vi.var->dtype() >> vi.var->shape >> vi.var->name >> ",";
+                ov = vi.var;
+            }
+        if (ov)
+            stack = get_node_trace(ov);
+    } else {
+        logf >> "[OP TYPE]:" << op->name_ex();
+        logf << "\n[Input]:";
+        for (auto v : op->inputs())
+            logf << v->dtype() >> v->shape >> v->name >> ",";
+        logf << "\n[Output]:";
+        Var* ov = nullptr;
+        for (auto v : op->outputs()) {
+            logf << v->dtype() >> v->shape >> v->name >> ",";
+            ov = v;
+        }
+        if (ov)
+            stack = get_node_trace(ov);
+    }
+    logf << "\n[Async Backtrace]:";
+    if (stack.size()) {
+        logf << "---";
+        for (auto& s : stack) {
+            logf << "\n    " << s.file_path >> ":" >> s.lineno;
+            if (s.module_type.size()) logf << '<' >> s.module_type >> '>';
+            if (s.module_name.size() && s.module_name.find(":") == string::npos)
+                logf << '[' >> s.module_name >> ']';
+        }
+    } else
+        logf << "not found, please set env JT_SYNC=1, trace_py_var=3";
+    logf << "\n[Reason]:" << e.what();
+    jittor::LogFatalVoidify() && logf;
 }
 
 void Executor::run_sync(vector<Var*> vars, bool device_sync) {
@@ -472,9 +522,9 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         }
         #endif
         last_is_cuda = is_cuda;
-        _JT_SEH_START2;
+        // _JT_SEH_START2;
         op->do_run_after_prepare(jkl);
-        _JT_SEH_END2;
+        // _JT_SEH_END2;
         #ifdef HAS_CUDA
         // migrate to gpu
         if (PREDICT_BRANCH_NOT_TAKEN((!is_cuda && use_cuda && !use_cuda_managed_allocator))) {
@@ -531,13 +581,12 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
             // log jit_key and file location
             op->do_prepare(jkl);
             string jit_src_path = Op::get_filename_from_jit_key(jkl.to_cstring(), ".cc");
-            LOGe << "[Error] source file location:" << jit_src_path;
-            if (is_fused_op) {
-                LOGf << "Execute fused operator(" >> rid >> '/' >> queue.size() >> ")"
-                    << "failed:" << fused_op.ops << "\n\nReason: " >> e.what();
-            } else
-                LOGf << "Execute operator(" >> rid >> '/' >> queue.size() >> ")"
-                    << "failed:" << op << "\n\nReason: " >> e.what();
+            jittor::Log logf(__FILELINE__, 'f', 0);
+            logf << "\nExecute fused operator(" >> rid >> '/' >> queue.size() >> ")"
+                << "failed.";
+            if (jit_compiler::file_exist(jit_src_path))
+                logf << "\n[JIT Source]:" << jit_src_path << "\n";
+            check_op_async_error(op, is_fused_op, e, logf);
         }
     }
     LOGvv << "All" << op_num << "ops finished, return vars:" << vars;
@@ -548,9 +597,11 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
     if (device_sync && use_cuda) {
         last_is_cuda = false;
         sync_times++;
-        CHECK(EventQueue::OK == event_queue.run_sync([]() {
+        // CHECK(EventQueue::OK == event_queue.run_sync([]() {
             checkCudaErrors(cudaDeviceSynchronize());
-        }));
+        // }));
+        // TODO: run_sync cause hang, tmp fix it
+        event_queue.flush();
     }
     LOGvv << "cudaDeviceSynchronize times:" << sync_times << "/" <<queue.size() << "device_sync:" << device_sync;
     #endif

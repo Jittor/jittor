@@ -20,6 +20,24 @@ static auto make_binary = get_op_info("binary")
 static auto make_number = get_op_info("number")
     .get_constructor<VarPtr, float, Var*>();
 
+#ifdef _WIN32
+template<class T> struct StackIniter {
+    T* a;
+    int n;
+    inline StackIniter(T* a, int n) :a(a), n(n) {
+        for (int i=0; i<n; i++)
+            new(a+i) T();
+    }
+    inline ~StackIniter() {
+        for (int i=0; i<n; i++)
+            a[i].~T();
+    }
+};
+
+#define STACK_ALLOC2(T, a, n) T* a = (T*)_alloca(sizeof(T)*(n)); StackIniter<T> __init_##a(a, n);
+#else
+#define STACK_ALLOC2(T, a, n) T a[n]
+#endif
 
 VarPtr make_grad(Op* op, Var* out, Var* dout, Var* x, int x_index) {
     if (dout == nullptr) return nullptr;
@@ -154,7 +172,7 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets) {
                 // backward together
                 auto n_i = op->inputs().size();
                 STACK_ALLOC(Var*, douts, n_o);
-                STACK_ALLOC(VarPtr, dins, n_i);
+                STACK_ALLOC2(VarPtr, dins, n_i);
                 // dump "for (Var* out : op->outputs())"
                 for (int i=0; i<n_o; i++,j++) {
                     auto id = id_buffer[j].second;

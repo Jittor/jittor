@@ -80,6 +80,7 @@ constexpr int ns_max_len = 16;
     m(cosh) \
     m(acosh) \
     m(erf) \
+    m(erfinv) \
     m(sigmoid) \
     \
     m(uniform) \
@@ -157,7 +158,7 @@ struct NanoString {
 
 // force_type = 1 for int, 2 for float
 inline 
-NanoString dtype_infer(NanoString v1, NanoString v2, int force_type=0) {
+NanoString dtype_infer(NanoString v1, NanoString v2, int force_type=0, NanoString op=ns_void) {
     bool is_float = v1.is_float() || v2.is_float();
     int dsize = std::max(v1.dsize(), v2.dsize());
     if (force_type == 1)
@@ -171,6 +172,8 @@ NanoString dtype_infer(NanoString v1, NanoString v2, int force_type=0) {
         if (dsize==8) return ns_int64;
         if (dsize==4) return ns_int32;
         if (dsize==2) return ns_int16;
+        if (op.data == ns_add.data || op.data == ns_subtract.data)
+            return ns_int8;
         return v1;
     }
 }

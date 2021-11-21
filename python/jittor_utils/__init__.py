@@ -23,7 +23,7 @@ import urllib.request
 if platform.system() == 'Darwin':
     mp.set_start_method('fork')
 
-class LogWarper:
+class Logwrapper:
     def __init__(self):
         self.log_silent = int(os.environ.get("log_silent", "0"))
         self.log_v = int(os.environ.get("log_v", "0"))
@@ -219,7 +219,7 @@ if os.name=='nt' and getattr(mp.current_process(), '_inheriting', False):
     os.environ["log_silent"] = '1'
         
 if os.environ.get("DISABLE_MULTIPROCESSING", '0') == '1':
-    os.environ["use_parallel_op_compiler"] = '1'
+    os.environ["use_parallel_op_compiler"] = '0'
     def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
         cmds = [ [cmd, cache_path, jittor_path] for cmd in cmds ]
         n = len(cmds)
@@ -237,12 +237,76 @@ def download(url, filename):
     urllib.request.urlretrieve(url, filename)
     LOG.v("Download finished")
 
+def get_jittor_version():
+    path = os.path.dirname(__file__)
+    with open(os.path.join(path, "../jittor/__init__.py"), "r", encoding='utf8') as fh:
+        for line in fh:
+            if line.startswith('__version__'):
+                version = line.split("'")[1]
+                break
+        else:
+            raise RuntimeError("Unable to find version string.")
+    return version
+
+def get_str_hash(s):
+    import hashlib
+    md5 = hashlib.md5()
+    md5.update(s.encode())
+    return md5.hexdigest()
+
+def get_cpu_version():
+    v = platform.processor()
+    try:
+        if os.name == 'nt':
+            import winreg
+            key_name = r"Hardware\Description\System\CentralProcessor\0"
+            field_name = "ProcessorNameString"
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_name)
+            value = winreg.QueryValueEx(key, field_name)[0]
+            winreg.CloseKey(key)
+            v = value
+        elif platform.system() == "Darwin":
+            r, s = sp.getstatusoutput("sysctl -a sysctl machdep.cpu.brand_string")
+            if r==0:
+                v = s.split(":")[-1].strip()
+        else:
+            with open("/proc/cpuinfo", 'r') as f:
+                for l in f:
+                    if l.startswith("model name"):
+                        v = l.split(':')[-1].strip()
+                        break
+    except:
+        pass
+    return v
+    
+def short(s):
+    ss = ""
+    for c in s:
+        if str.isidentifier(c) or str.isnumeric(c) \
+            or str.isalpha(c) or c in '.-+':
+            ss += c
+    if len(ss)>14:
+        return ss[:14]+'x'+get_str_hash(ss)[:2]
+    return ss
+
 def find_cache_path():
     from pathlib import Path
     path = str(Path.home())
-    dirs = [".cache", "jittor", os.path.basename(cc_path)]
-    if os.environ.get("debug")=="1":
-        dirs[-1] += "_debug"
+    # jittor version key
+    jtv = "jt"+get_jittor_version().rsplit('.', 1)[0]
+    # cc version key
+    ccv = cc_type+get_version(cc_path)[1:-1] \
+        if cc_type != "cl" else cc_type
+    # os version key
+    osv = platform.platform() + platform.node()
+    if len(osv)>14:
+        osv = osv[:14] + 'x'+get_str_hash(osv)[:2]
+    # py version
+    pyv = "py"+platform.python_version()
+    # cpu version
+    cpuv = get_cpu_version()
+    dirs = [".cache", "jittor", jtv, ccv, pyv, osv, cpuv]
+    dirs = list(map(short, dirs))
     cache_name = "default"
     try:
         if "cache_name" in os.environ:
@@ -260,29 +324,26 @@ def find_cache_path():
         for c in " (){}": cache_name = cache_name.replace(c, "_")
     except:
         pass
+    if os.environ.get("debug")=="1":
+        dirs[-1] += "_debug"
     for name in os.path.normpath(cache_name).split(os.path.sep):
-        dirs.insert(-1, name)
+        dirs.append(name)
     os.environ["cache_name"] = cache_name
     LOG.v("cache_name: ", cache_name)
-    for d in dirs:
-        path = os.path.join(path, d)
-        if not os.path.isdir(path):
-            try:
-                os.mkdir(path)
-            except:
-                pass
-        assert os.path.isdir(path)
+    path = os.path.join(path, *dirs)
+    os.makedirs(path, exist_ok=True)
     if path not in sys.path:
         sys.path.append(path)
     return path
 
 def get_version(output):
     if output.endswith("mpicc"):
-        version = run_cmd(output+" --showme:version")
-    elif os.name == 'nt' and output.endswith("cl"):
+        version = run_cmd(f"\"{output}\" --showme:version")
+    elif os.name == 'nt' and (
+        output.endswith("cl") or output.endswith("cl.exe")):
         version = run_cmd(output)
     else:
-        version = run_cmd(output+" --version")
+        version = run_cmd(f"\"{output}\" --version")
     v = re.findall("[0-9]+\\.[0-9]+\\.[0-9]+", version)
     if len(v) == 0:
         v = re.findall("[0-9]+\\.[0-9]+", version)
@@ -375,6 +436,7 @@ def get_py3_include_path():
     
     if os.name == 'nt':
         # Windows
+        sys.executable = sys.executable.lower()
         _py3_include_path = '-I"' + os.path.join(
             os.path.dirname(sys.executable),
             "include"
@@ -420,14 +482,14 @@ def get_total_mem():
 
 is_in_ipynb = in_ipynb()
 cc = None
-LOG = LogWarper()
+LOG = Logwrapper()
 
 check_msvc_install = False
 msvc_path = ""
 if os.name == 'nt' and os.environ.get("cc_path", "")=="":
     from pathlib import Path
     msvc_path = os.path.join(str(Path.home()), ".cache", "jittor", "msvc")
-    cc_path = os.path.join(msvc_path, "cl_x64", "bin", "cl")
+    cc_path = os.path.join(msvc_path, "VC", r"_\_\_\_\_\bin", "cl.exe")
     check_msvc_install = True
 else:
     cc_path = env_or_find('cc_path', 'g++', silent=True)
@@ -440,10 +502,19 @@ _py3_include_path = None
 _py3_extension_suffix = None
 
 if os.name == 'nt':
+    from pathlib import Path
+    try:
+        import ssl
+        ssl._create_default_https_context = ssl._create_unverified_context
+    except:
+        pass
     if check_msvc_install:
         if not os.path.isfile(cc_path):
             from jittor_utils import install_msvc
             install_msvc.install(msvc_path)
+    mpath = os.path.join(str(Path.home()), ".cache", "jittor", "msvc")
+    if cc_path.startswith(mpath):
+        msvc_path = mpath
     os.RTLD_NOW = os.RTLD_GLOBAL = os.RTLD_DEEPBIND = 0
     path = os.path.dirname(cc_path).replace('/', '\\')
     if path:

@@ -48,6 +48,7 @@
    :caption: 其他:
    
    Jittor调试技巧
+   Jittor性能测试与对比方法
    教程 <https://cg.cs.tsinghua.edu.cn/jittor/tutorial/>
 
 Indices and tables

@@ -56,7 +56,7 @@ struct ReindexReduceOp : Op {
     
     * [in] shape:   the output shape, a integer array
     
-    * [in] indexes: array of c++ style integer expression, its length should be the same with length of shape, some buildin variables it can use are::
+    * [in] indexes: array of c++ style integer expression, its length should be the same with length of output shape, some buildin variables it can use are::
     
              XDIM, xshape0, ..., xshapem, xstride0, ..., xstridem
              YDIM, yshape0, ..., yshapen, ystride0, ..., ystriden
