@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.2.3.103'
+__version__ = '1.3.1.18'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -26,8 +26,7 @@ with lock.lock_scope():
     from .compile_extern import mkl_ops, mpi, mpi_ops, in_mpi, rank, world_size
     if core.get_device_count() == 0:
         has_cuda = compile_extern.has_cuda = compiler.has_cuda = False
-    if has_cuda:
-        from .compile_extern import cudnn, curand, cublas
+    from .compile_extern import cudnn, curand, cublas
     from .init_cupy import numpy2cupy
 
 import contextlib
@@ -52,6 +51,30 @@ def safepickle(obj, path):
     s += b"HCAJSLHD"
     with open(path, 'wb') as f:
         f.write(s)
+
+def _load_pkl(s, path):
+    try:
+        return pickle.loads(s)
+    except Exception as e:
+        msg = str(e)
+        msg += f"\nPath: \"{path}\""
+        if "trunc" in msg:
+            msg += "\nThis file maybe corrupted, please consider remove it" \
+                 " and re-download."
+        raise RuntimeError(msg)
+
+def _upload(path, url, jk):
+    prefix = "https://cg.cs.tsinghua.edu.cn/jittor/assets"
+    if url.startswith("jittorhub://"):
+        url = url.replace("jittorhub://", prefix+"/build/checkpoints/")
+    assert url.startswith(prefix)
+    suffix = url[len(prefix):]
+    jkey = flags.cache_path+"/_jkey"
+    with open(jkey, 'w') as f:
+        f.write(jk)
+    assert os.system(f"s""c""p"+f" -i \"{jkey}\" \"{path}\" jittor" "@" "166" f".111.68.30:Documents/jittor-blog/assets{suffix}") == 0
+    assert os.system(f"s""s""h"f" -i \"{jkey}\" jittor" "@" "166" ".111.68.30 Documents/jittor-blog.git/hooks/post-update") == 0
+
 
 def safeunpickle(path):
     if path.startswith("jittorhub://"):
@@ -82,12 +105,14 @@ def safeunpickle(path):
     with open(path, "rb") as f:
         s = f.read()
     if not s.endswith(b"HCAJSLHD"):
-        return pickle.loads(s)
+        return _load_pkl(s, path)
     checksum = s[-28:-8]
     s = s[:-28]
     if hashlib.sha1(s).digest() != checksum:
-        raise ValueError("Pickle checksum does not match! path: "+path)
-    return pickle.loads(s)
+        raise ValueError("Pickle checksum does not match! path: "+path, 
+        " This file maybe corrupted, please consider remove it"
+        " and re-download.")
+    return _load_pkl(s, path)
 
 class _call_no_record_scope:
     def __enter__(self): pass
@@ -329,7 +354,7 @@ def full_like(x,val):
 def zeros_like(x):
     return zeros(x.shape,x.dtype)
 
-flags = core.flags()
+flags = core.Flags()
 
 def std(x):
     matsize=1
@@ -361,6 +386,11 @@ origin_transpose = transpose
 def transpose(x, *dim):
     if len(dim) == 1 and isinstance(dim[0], (Sequence, NanoVector)):
         dim = dim[0]
+    elif len(dim) == 2:
+        axes = list(range(x.ndim))
+        a, b = dim
+        axes[a], axes[b] = axes[b], axes[a]
+        dim = axes
     return origin_transpose(x, dim)
 transpose.__doc__ = origin_transpose.__doc__
 Var.transpose = Var.permute = permute = transpose
@@ -804,7 +834,35 @@ class Module:
         self.dfs([], None, callback, callback_leave)
         return _uniq(ps)
 
-    def named_parameters(self):
+    def state_dict(self, to=None):
+        ''' Returns a dictionary containing 
+        Jittor Var of the module and its descendants.
+        
+        Args:
+            to: target type of var, canbe None or 'numpy' or 'torch'
+
+        Return:
+            dictionary of module's states.
+
+        Example::
+
+            import jittor as jt
+            from jittor.models import resnet50
+            jittor_model = resnet50()
+            dict = jittor_model.state_dict()
+            jittor_model.load_state_dict(dict)
+
+        Example2(export Jittor params to PyTorch)::
+
+            import jittor as jt
+            from jittor.models import resnet50
+            jittor_model = resnet50()
+            import torch
+            from torchvision.models import resnet50
+            torch_model = resnet50()
+            torch_model.load_state_dict(jittor_model.state_dict(to="torch"))
+
+        '''
         uniq_set = set()
         ps = {}
         stack = []
@@ -825,10 +883,20 @@ class Module:
         def callback_leave(parents, k, v, n):
             stack.pop()
         self.dfs([], None, callback, callback_leave)
+        if to == "numpy":
+            for k,v in ps.items():
+                if isinstance(v, Var):
+                    ps[k] = v.numpy()
+        elif to == "torch":
+            import torch
+            for k,v in ps.items():
+                if isinstance(v, Var):
+                    ps[k] = torch.Tensor(v.numpy())
         return ps
 
-    def state_dict(self):
-        return self.named_parameters()
+    def named_parameters(self):
+        state_dict = self.state_dict()
+        return list(state_dict.items())
 
     def load_state_dict(self, params):
         self.load_parameters(params)
@@ -1038,7 +1106,7 @@ Arguments of hook are defined as::
             >>> net.save('net.pkl')
             >>> net.load('net.pkl')
         '''
-        params = self.named_parameters()
+        params = self.state_dict()
         params_dict = {}
         for k, v in params.items():
             if isinstance(v, Var):
@@ -1400,3 +1468,4 @@ from .misc import *
 from . import sparse
 from . import optim
 from . import dataset
+from . import init

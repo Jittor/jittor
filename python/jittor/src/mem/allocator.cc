@@ -107,7 +107,7 @@ void migrate_to_cpu(Var* var, Allocator* allocator) {
     if (!use_cuda_managed_allocator) {
         // must be a device allocator
         Allocation a(allocator, var->size);
-        checkCudaErrors(cudaMemcpy(a.ptr, var->mem_ptr, var->size, cudaMemcpyDeviceToHost));
+        checkCudaErrors(cudaMemcpy(a.ptr, var->mem_ptr, var->size, cudaMemcpyDefault));
         var->allocator->free(var->mem_ptr, var->size, var->allocation);
         var->mem_ptr = a.ptr;
         var->allocation = a.allocation;

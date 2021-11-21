@@ -241,7 +241,8 @@ bool cache_compile(string cmd, const string& cache_path, const string& jittor_pa
     find_names(cmd, input_names, output_name, extra);
     string output_cache_key;
     bool ran = false;
-    output_cache_key = read_all(output_name+".key");
+    if (file_exist(output_name))
+        output_cache_key = read_all(output_name+".key");
     string cache_key;
     unordered_set<string> processed;
     auto src_path = join(jittor_path, "src");
@@ -254,10 +255,12 @@ bool cache_compile(string cmd, const string& cache_path, const string& jittor_pa
             continue;
         processed.insert(input_names[i]);
         auto src = read_all(input_names[i]);
+        auto back = input_names[i].back();
+        // *.lib
+        if (back == 'b') continue;
         ASSERT(src.size()) << "Source read failed:" << input_names[i] << "cmd:" << cmd;
         auto hash = S(hash64(src));
         vector<string> new_names;
-        auto back = input_names[i].back();
         // *.obj, *.o, *.pyd
         if (back != 'j' && back != 'o' && back != 'd')
             process(src, new_names, cmd);
@@ -312,6 +315,10 @@ bool cache_compile(string cmd, const string& cache_path, const string& jittor_pa
     }
     if (!ran)
         LOGvvvv << "Command cached:" << cmd;
+    #ifdef TEST
+    if (ran)
+        write(output_name, "...");
+    #endif
     return ran;
 }
 

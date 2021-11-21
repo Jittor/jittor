@@ -34,25 +34,62 @@ def make_cache_dir(cache_path):
         LOG.i(f"Create cache dir: {cache_path}")
         os.mkdir(cache_path)
 
+def shsplit(s):
+    s1 = s.split(' ')
+    s2 = []
+    count = 0
+    for s in s1:
+        nc = s.count('"') + s.count('\'')
+        if count&1:
+            count += nc
+            s2[-1] += " "
+            s2[-1] += s
+        else:
+            count = nc
+            s2.append(s)
+    return s2
+
+
 def remove_flags(flags, rm_flags):
-    flags = flags.split(" ")
+    flags = shsplit(flags)
     output = []
     for s in flags:
+        ss = s.replace("\"", "")
         for rm in rm_flags:
-            if s.startswith(rm):
+            if ss.startswith(rm) or ss.endswith(rm):
                 break
         else:
             output.append(s)
     return " ".join(output)
 
-def compile(compiler, flags, inputs, output, combind_build=False):
+def moveback_flags(flags, rm_flags):
+    flags = shsplit(flags)
+    output = []
+    output2 = []
+    for s in flags:
+        ss = s.replace("\"", "")
+        for rm in rm_flags:
+            if ss.startswith(rm) or ss.endswith(rm):
+                output2.append(s)
+                break
+        else:
+            output.append(s)
+    return " ".join(output+output2)
+
+def map_flags(flags, func):
+    flags = shsplit(flags)
+    output = []
+    for s in flags:
+        output.append(func(s))
+    return " ".join(output)
+
+def compile(compiler, flags, inputs, output, combind_build=False, cuda_flags=""):
     def do_compile(cmd):
         if jit_utils.cc:
             return jit_utils.cc.cache_compile(cmd, cache_path, jittor_path)
         else:
             run_cmd(cmd)
             return True
-    link = link_flags
     base_output = os.path.basename(output).split('.')[0]
     if os.name == 'nt':
         # windows do not combind build, need gen def
@@ -64,18 +101,9 @@ def compile(compiler, flags, inputs, output, combind_build=False):
             # initialize order in windows seems reversed
             inputs = list(inputs[::-1])
             link = link + f' -Wl,--export-all-symbols,--out-implib,"{afile}" '
-            if base_output == "jit_utils_core":
-                pass
-            elif base_output == "jittor_core":
-                inputs.append(os.path.join(cache_path, f"jit_utils_core{lib_suffix}"))
-            else:
-                inputs.append(os.path.join(cache_path, f"jit_utils_core{lib_suffix}"))
-                inputs.append(os.path.join(cache_path, f"jittor_core{lib_suffix}"))
             
-    # if output is core, add core_link_flags
-    if output.startswith("jittor_core"):
-        link = link + core_link_flags
-    output = os.path.join(cache_path, output)
+    if not os.path.isabs(output):
+        output = os.path.join(cache_path, output)
     # don't recompile object file in inputs
     obj_files = []
     ex_obj_files = []
@@ -88,36 +116,41 @@ def compile(compiler, flags, inputs, output, combind_build=False):
             obj_files.append(os.path.join(
                 cache_path, "obj_files", os.path.basename(name)+".o"))
     inputs = new_inputs
+    cm = lambda s: f"\"{s}\""
+    cms = lambda arr: [f"\"{s}\"" for s in arr ]
 
     if len(inputs) == 1 or combind_build:
-        cmd = f"\"{compiler}\" {' '.join(inputs)} {flags} {link} -o {output}"
+        cmd = f"\"{compiler}\" {' '.join(cms(inputs))} {flags} -o {cm(output)}"
         return do_compile(fix_cl_flags(cmd))
     # split compile object file and link
     # remove -l -L flags when compile object files
-    oflags = remove_flags(flags, ['-l', '-L', '-Wl,'])
+    oflags = remove_flags(flags, ['-l', '-L', '-Wl,', '.lib', '-shared'])
     cmds = []
     for input, obj_file in zip(inputs, obj_files):
         cc = compiler
         nflags = oflags
+        cmd = f"{cm(input)} {nflags} {lto_flags} -c -o {cm(obj_file)}"
         if input.endswith(".cu"):
             if has_cuda:
-                nflags = convert_nvcc_flags(oflags)
-                cc = nvcc_path
+                cmd = f"\"{nvcc_path}\" {cuda_flags} {cmd}"
+                cmd = convert_nvcc_flags(fix_cl_flags(cmd))
             else:
                 continue
-        cmd = f"\"{cc}\" {input} {nflags} {lto_flags} -c -o {obj_file}"
+        else:
+            cmd = f"\"{cc}\" {cmd}"
+            cmd = fix_cl_flags(cmd)
         if "nan_checker" in input:
             # nan checker needs to disable fast_math 
             cmd = cmd.replace("--use_fast_math", "")
             cmd = cmd.replace("-Ofast", "-O2")
-        cmds.append(fix_cl_flags(cmd))
+        cmds.append(cmd)
     jit_utils.run_cmds(cmds, cache_path, jittor_path, "Compiling "+base_output)
     obj_files += ex_obj_files
     if os.name == 'nt':
         dumpdef_path = os.path.join(jittor_path, "utils", "dumpdef.py")
-        cmd = f"\"{sys.executable}\" \"{dumpdef_path}\" {' '.join(obj_files)} -Fo: \"{output}.def\""
+        cmd = f"\"{sys.executable}\" \"{dumpdef_path}\" {' '.join(cms(obj_files))} -Fo: \"{output}.def\""
         do_compile(fix_cl_flags(cmd))
-    cmd = f"\"{compiler}\" {' '.join(obj_files)} {flags} {lto_flags} {link} -o {output}"
+    cmd = f"\"{compiler}\" {' '.join(cms(obj_files))} -o {cm(output)} {flags} {lto_flags}"
     return do_compile(fix_cl_flags(cmd))
 
 def gen_jit_tests():
@@ -214,7 +247,7 @@ def gen_jit_flags():
     
     {jit_declares}
 
-    // @pyjt(flags)
+    // @pyjt(Flags)
     struct _Flags {{
         // @pyjt(__init__)
         _Flags() {{}}
@@ -664,8 +697,8 @@ def compile_custom_ops(
     gen_name = "gen_ops_" + "_".join(headers.keys())
     if gen_name_ != "":
         gen_name = gen_name_
-    if len(gen_name) > 100:
-        gen_name = gen_name[:80] + "___hash" + hashlib.md5(gen_name.encode()).hexdigest()
+    if len(gen_name) > 50:
+        gen_name = gen_name[:50] + "___hash" + hashlib.md5(gen_name.encode()).hexdigest()[:6]
 
     includes = sorted(list(set(includes)))
     includes = "".join(map(lambda x: f" -I\"{x}\" ", includes))
@@ -673,11 +706,15 @@ def compile_custom_ops(
 
     op_extra_flags = includes + extra_flags
 
+    lib_path = os.path.join(cache_path, "custom_ops")
+    make_cache_dir(lib_path)
+    gen_src_fname = os.path.join(lib_path, gen_name+".cc")
+    gen_head_fname = os.path.join(lib_path, gen_name+".h")
+    gen_lib = os.path.join(lib_path, gen_name+extension_suffix)
+    libname = gen_name + lib_suffix
+    op_extra_flags += f" -L\"{lib_path}\" -l\"{libname}\" "
+
     gen_src = gen_jit_op_maker(headers.values(), export=gen_name, extra_flags=op_extra_flags)
-    make_cache_dir(os.path.join(cache_path, "custom_ops"))
-    gen_src_fname = os.path.join(cache_path, "custom_ops", gen_name+".cc")
-    gen_head_fname = os.path.join(cache_path, "custom_ops", gen_name+".h")
-    gen_lib = os.path.join("custom_ops", gen_name+extension_suffix)
     pyjt_compiler.compile_single(gen_head_fname, gen_src_fname, src=gen_src)
     # gen src initialize first
     builds.insert(0, gen_src_fname)
@@ -687,7 +724,7 @@ def compile_custom_ops(
         return gen_src.replace(anchor_str, anchor_str+insert_str, 1)
 
     for name in pyjt_includes:
-        LOG.i("handle pyjt_include", name)
+        LOG.v("handle pyjt_include ", name)
         bname = os.path.basename(name).split(".")[0]
         gen_src_fname = os.path.join(cache_path, "custom_ops", gen_name+"_"+bname+".cc")
         pyjt_compiler.compile_single(name, gen_src_fname)
@@ -794,8 +831,9 @@ def compile_extern():
 def check_cuda():
     if not nvcc_path:
         return
-    global cc_flags, has_cuda, core_link_flags, cuda_dir, cuda_lib, cuda_include, cuda_home
+    global cc_flags, has_cuda, core_link_flags, cuda_dir, cuda_lib, cuda_include, cuda_home, cuda_bin
     cuda_dir = os.path.dirname(get_full_path_of_executable(nvcc_path))
+    cuda_bin = cuda_dir
     cuda_home = os.path.abspath(os.path.join(cuda_dir, ".."))
     # try default nvidia-cuda-toolkit in Ubuntu 20.04
     # assert cuda_dir.endswith("bin") and "cuda" in cuda_dir.lower(), f"Wrong cuda_dir: {cuda_dir}"
@@ -805,10 +843,19 @@ def check_cuda():
         # this nvcc is install by package manager
         cuda_lib = "/usr/lib/x86_64-linux-gnu"
     cuda_include2 = os.path.join(jittor_path, "extern","cuda","inc")
-    cc_flags += f" -DHAS_CUDA -I'{cuda_include}' -I'{cuda_include2}' "
-    core_link_flags += f" -lcudart -L'{cuda_lib}' "
-    # ctypes.CDLL(cuda_lib+"/libcudart.so", import_flags)
-    ctypes.CDLL(cuda_lib+"/libcudart.so", dlopen_flags)
+    cc_flags += f" -DHAS_CUDA -I\"{cuda_include}\" -I\"{cuda_include2}\" "
+    if os.name == 'nt':
+        cuda_lib = os.path.abspath(os.path.join(cuda_dir, "..", "lib", "x64"))
+        # cc_flags += f" \"{cuda_lib}\\cudart.lib\" "
+        cuda_lib_path = glob.glob(cuda_bin+"/cudart64*")[0]
+        cc_flags += f" -lcudart -L\"{cuda_lib}\" -L\"{cuda_bin}\" "
+        dll = ctypes.CDLL(cuda_lib_path, dlopen_flags)
+        ret = dll.cudaDeviceSynchronize()
+        assert ret == 0
+    else:
+        cc_flags += f" -lcudart -L\"{cuda_lib}\" "
+        # ctypes.CDLL(cuda_lib+"/libcudart.so", import_flags)
+        ctypes.CDLL(cuda_lib+"/libcudart.so", dlopen_flags)
     has_cuda = 1
 
 def check_cache_compile():
@@ -823,16 +870,16 @@ def check_cache_compile():
         files = [ x.replace('/', '\\') for x in files ]
     global jit_utils_core_files
     jit_utils_core_files = files
-    recompile = compile(cc_path, cc_flags+f" {opt_flags} ", files, 'jit_utils_core'+extension_suffix, True)
+    recompile = compile(cc_path, cc_flags+f" {opt_flags} ", files, jit_utils.cache_path+'/jit_utils_core'+extension_suffix, True)
     if recompile and jit_utils.cc:
-        LOG.e("jit_utils updated, please restart jittor.")
+        LOG.e("jit_utils updated, please rerun your command.")
         sys.exit(0)
     if not jit_utils.cc:
         with jit_utils.import_scope(import_flags):
             jit_utils.try_import_jit_utils_core()
         assert jit_utils.cc
         # recompile, generate cache key
-        compile(cc_path, cc_flags+f" {opt_flags} ", files, 'jit_utils_core'+extension_suffix, True)
+        compile(cc_path, cc_flags+f" {opt_flags} ", files, jit_utils.cache_path+'/jit_utils_core'+extension_suffix, True)
 
 def env_or_try_find(name, bname):
     if name in os.environ:
@@ -888,6 +935,9 @@ with jit_utils.import_scope(import_flags):
     jit_utils.try_import_jit_utils_core()
 
 jittor_path = find_jittor_path()
+if os.name == 'nt':
+    # prevent windows recompile
+    jittor_path = jittor_path.lower()
 check_debug_flags()
 
 sys.path.append(cache_path)
@@ -907,7 +957,7 @@ if os.path.isfile(ex_python_path):
 
 # if jtcuda is already installed
 nvcc_path = None
-if install_cuda.has_installation():
+if install_cuda.has_installation() or os.name == 'nt':
     nvcc_path = install_cuda.install_cuda()
     if nvcc_path:
         nvcc_path = try_find_exe(nvcc_path)
@@ -928,6 +978,26 @@ gdb_path = env_or_try_find('gdb_path', 'gdb')
 addr2line_path = try_find_exe('addr2line')
 has_pybt = check_pybt(gdb_path, python_path)
 
+if nvcc_path:
+    # gen cuda key for cache_path
+    cu = "cu"
+    v = jit_utils.get_version(nvcc_path)[1:-1]
+    nvcc_version = list(map(int,v.split('.')))
+    cu += v
+    try:
+        r, s = sp.getstatusoutput(f"{sys.executable} -m jittor_utils.query_cuda_cc")
+        if r==0:
+            s = sorted(list(set(s.strip().split())))
+            cu += "_sm_" + "_".join(s)
+            if "cuda_arch" not in os.environ:
+                os.environ["cuda_arch"] = " ".join(cu)
+            cu = cu.replace(":", "").replace(" ", "")
+    except:
+        pass
+    LOG.i("cuda key:", cu)
+    cache_path = os.path.join(cache_path, cu)
+    sys.path.append(cache_path)
+
 
 def check_clang_latest_supported_cpu():
     output = run_cmd('clang --print-supported-cpus')
@@ -938,7 +1008,7 @@ def check_clang_latest_supported_cpu():
 # cc_flags += " -Wall -Werror -Wno-unknown-pragmas -std=c++14 -fPIC "
 cc_flags += " -Wall -Wno-unknown-pragmas -std=c++14 -fPIC "
 # 1. Arch/CPU specific optimization
-if platform.machine() == "x86_64":
+if platform.machine() in ["x86_64", "AMD64"]:
     cc_flags += " -march=native " 
 elif platform.machine() == 'arm64' and platform.system() == "Darwin":
     cc_flags += f" -mcpu={check_clang_latest_supported_cpu()} "
@@ -950,89 +1020,120 @@ if platform.system() == 'Darwin' and platform.machine() == 'arm64':
 if "cc_flags" in os.environ:
     cc_flags += os.environ["cc_flags"] + ' '
 
-link_flags = " -lstdc++ -ldl -shared "
+cc_flags += " -lstdc++ -ldl -shared "
 if platform.system() == 'Darwin':
     # TODO: if not using apple clang, there is no need to add -lomp
-    link_flags += "-undefined dynamic_lookup -lomp "
+    cc_flags += "-undefined dynamic_lookup -lomp "
     if platform.machine() == "arm64":
-        link_flags += " -L/opt/homebrew/lib "
+        cc_flags += " -L/opt/homebrew/lib "
 
-core_link_flags = ""
 opt_flags = ""
 
 py_include = jit_utils.get_py3_include_path()
-LOG.i(f"py_include: {py_include}")
+LOG.v(f"py_include: {py_include}")
 extension_suffix = jit_utils.get_py3_extension_suffix()
-lib_suffix = extension_suffix.replace(".pyd", ".lib")
-LOG.i(f"extension_suffix: {extension_suffix}")
+lib_suffix = extension_suffix.rsplit(".", 1)[0]
+LOG.v(f"extension_suffix: {extension_suffix}")
+so = ".so" if os.name != 'nt' else ".dll"
 
 
 kernel_opt_flags = os.environ.get("kernel_flags", "") + opt_flags
 if platform.system() == 'Darwin':
     # TODO: if not using apple clang, cannot add -Xpreprocessor
-    kernel_opt_flags = kernel_opt_flags + " -Xpreprocessor -fopenmp "
+    kernel_opt_flags += " -Xpreprocessor -fopenmp "
 elif cc_type != 'cl':
-    kernel_opt_flags = kernel_opt_flags + " -fopenmp "
-fix_cl_flags = lambda x:x
+    kernel_opt_flags += " -fopenmp "
+def fix_cl_flags(cmd):
+    output = shsplit(cmd)
+    output2 = []
+    libpaths = []
+    for s in output:
+        if s.startswith("-l") and ("cpython" in s or "lib" in s):
+            if platform.system() == 'Darwin':
+                fname = s[2:] + ".so"
+                for path in reversed(libpaths):
+                    full = os.path.join(path, fname).replace("\"", "")
+                    if os.path.isfile(full):
+                        output2.append(full)
+                        break
+                else:
+                    output2.append(s)
+            else:
+                output2.append(f"-l:{s[2:]}.so")
+        elif s.startswith("-L"):
+            libpaths.append(s[2:])
+            output2.append(f"{s} -Wl,-rpath,{s[2:]}")
+        else:
+            output2.append(s)
+    return " ".join(output2)
+
 if os.name == 'nt':
     if cc_type == 'g++':
-        link_flags = link_flags.replace('-ldl', '')
-        py3_link_path = '-L"' + os.path.join(
-                os.path.dirname(sys.executable),
-                "libs"
-            ) + f'" -lpython3{sys.version_info.minor} '
-        core_link_flags = py3_link_path
-        link_flags += core_link_flags
-        # link_flags += " -Wl,--unresolved-symbols=ignore-all "
-        # cc_flags += " -Xlinker --allow-shlib-undefined "
-        cc_flags = cc_flags.replace('-std=c++14', '-std=c++17')
-        link_flags += " -fopenmp "
-        kernel_opt_flags += f" {cache_path}\\jit_utils_core{lib_suffix} "
-        kernel_opt_flags += f" {cache_path}\\jittor_core{lib_suffix} "
+        pass
     elif cc_type == 'cl':
         py3_link_path = os.path.join(
                 os.path.dirname(sys.executable),
                 "libs",
-                f'python3{sys.version_info.minor}.lib'
         )
-        # core_link_flags = py3_link_path
-        link_flags += core_link_flags
-        # link_flags += " -Wl,--unresolved-symbols=ignore-all "
-        # cc_flags += " -Xlinker --allow-shlib-undefined "
-        kernel_opt_flags += f" {cache_path}\\jit_utils_core{lib_suffix} "
-        kernel_opt_flags += f" {cache_path}\\jittor_core{lib_suffix} "
-        # cc_flags = " -std:c++17 -O2 -fp:fast -EHsc "
-        cc_flags = " -std:c++17 -O2 -fp:fast -EHsc "
-        # cc_flags += py3_link_path + " "
+        cc_flags = remove_flags(cc_flags, ["-f", "-m"])
+        cc_flags = cc_flags.replace("-std=c++14", "-std=c++17")
+        cc_flags = cc_flags.replace("-lstdc++", "")
+        cc_flags = cc_flags.replace("-ldl", "")
+        cc_flags += f" -L\"{py3_link_path}\" -lpython3{sys.version_info.minor} "
+        cc_flags += " -EHa -MD "
         import jittor_utils
         if jittor_utils.msvc_path:
             mp = jittor_utils.msvc_path
-            cc_flags += f' -nologo -I"{mp}\\cl_x64\\include" -I"{mp}\\win10_kits\\include\\ucrt" -I"{mp}\\win10_kits\\include\\shared" -I"{mp}\\win10_kits\\include\\um" -DNOMINMAX '
-            win_link_flags = f' -link -LIBPATH:"{mp}\\cl_x64\\lib" -LIBPATH:"{mp}\\win10_kits\\lib\\um\\x64" -LIBPATH:"{mp}\\win10_kits\\lib\\ucrt\\x64" '
-        link_flags = ' -LD '
-        kernel_opt_flags += win_link_flags# + " -EXPORT:\"?jit_run@FusedOp@jittor@@QEAAXXZ\""
+            cc_flags += f' -nologo -I"{mp}\\VC\\include" -I"{mp}\\win10_kits\\include\\ucrt" -I"{mp}\\win10_kits\\include\\shared" -I"{mp}\\win10_kits\\include\\um" -DNOMINMAX '
+            cc_flags += f' -L"{mp}\\VC\\lib" -L"{mp}\\win10_kits\\lib\\um\\x64" -L"{mp}\\win10_kits\\lib\\ucrt\\x64" '
+        win_libpaths = {}
         def fix_cl_flags(cmd):
             cmd = cmd.replace(".o ", ".obj ")
-            cmd = cmd.replace(".o\" ", ".obj\" ")
+            cmd = cmd.replace(".o\"", ".obj\"")
             if cmd.endswith(".o"): cmd += "bj"
-            from shlex import split
-            if " -LD " in cmd:
-                cmd = cmd.replace(" -o ", " -Fe: ")
-                output = split(cmd.split("-Fe:")[1].strip(), posix=False)[0]
-                base_output = os.path.basename(output).split('.')[0]
-                cmd += win_link_flags
-                cmd += f" -DEF:\"{output}.def\" -IGNORE:4102 -IGNORE:4197 -IGNORE:4217 {py3_link_path}"
-                if base_output == "jit_utils_core":
-                    pass
-                elif base_output == "jittor_core":
-                    cmd += " " + os.path.join(cache_path, f"jit_utils_core{lib_suffix}")
-                else:
-                    cmd += " " + os.path.join(cache_path, f"jit_utils_core{lib_suffix} ")
-                    cmd += " " + os.path.join(cache_path, f"jittor_core{lib_suffix} ")
+            if " -o " in cmd:
+                if " -shared " in cmd:
+                    cmd = cmd.replace(" -o ", " -Fe: ")
+                    output = shsplit(cmd.split("-Fe:")[1].strip())[0]
+                    base_output = os.path.basename(output).split('.')[0]
+                    cmd += f" -DEF:\"{output}.def\" -IGNORE:4102 -IGNORE:4197 -IGNORE:4217 "
 
-            elif " -c -o " in cmd:
-                cmd = cmd.replace(" -c -o ", " -c -Fo: ")
+                elif " -c -o " in cmd:
+                    cmd = cmd.replace(" -c -o ", " -c -Fo: ")
+            flags = shsplit(cmd)
+            output = []
+            output2 = []
+            for f in flags:
+                if f.startswith("-link"):
+                    pass
+                elif f.startswith("-l"):
+                    output2.append(f[2:]+".lib")
+                elif f.startswith("-LIB"):
+                    output2.append(f)
+                elif f.startswith("-LD"):
+                    output.append(f)
+                elif f.startswith("-L"):
+                    path = f[2:].replace("\"", "")
+                    if path not in win_libpaths:
+                        win_libpaths[path] = 1
+                        os.add_dll_directory(path)
+                        os.environ["PATH"] = f";{path};" + os.environ["PATH"]
+                    output2.append("-LIBPATH:"+f[2:])
+                elif ".lib" in f:
+                    output2.append(f)
+                elif f.startswith("-DEF:"):
+                    output2.append(f)
+                elif f.startswith("-W") or f.startswith("-f"):
+                    pass
+                elif f.startswith("-std="):
+                    output.append(f.replace("=", ":"))
+                else:
+                    output.append(f)
+            cmd = " ".join(output)
+            if len(output2):
+                cmd += " -link " + " ".join(output2)
             cmd = cmd.replace("-include", "-FI")
+            cmd = cmd.replace("-shared", "-LD")
             return cmd
 
 if ' -O' not in cc_flags:
@@ -1051,11 +1152,12 @@ make_cache_dir(cache_path)
 make_cache_dir(os.path.join(cache_path, "jit"))
 make_cache_dir(os.path.join(cache_path, "obj_files"))
 make_cache_dir(os.path.join(cache_path, "gen"))
+make_cache_dir(os.path.join(cache_path, "tmp"))
 ck_path = os.path.join(cache_path, "checkpoints")
 make_cache_dir(ck_path)
 
 # build cache_compile
-cc_flags += f" -I{os.path.join(jittor_path, 'src')} "
+cc_flags += f" -I\"{os.path.join(jittor_path, 'src')}\" "
 cc_flags += py_include
 check_cache_compile()
 LOG.v(f"Get cache_compile: {jit_utils.cc}")
@@ -1065,9 +1167,32 @@ has_cuda = 0
 check_cuda()
 nvcc_flags = os.environ.get("nvcc_flags", "")
 if has_cuda:
-    nvcc_flags += cc_flags + link_flags
+    nvcc_flags += cc_flags
     def convert_nvcc_flags(nvcc_flags):
         # nvcc don't support -Wall option
+        if os.name == 'nt':
+            nvcc_flags = nvcc_flags.replace("-fp:", "-Xcompiler -fp:")
+            nvcc_flags = nvcc_flags.replace("-EH", "-Xcompiler -EH")
+            nvcc_flags = nvcc_flags.replace("-M", "-Xcompiler -M")
+            nvcc_flags = nvcc_flags.replace("-nologo", "")
+            nvcc_flags = nvcc_flags.replace("-std:", "-std=")
+            nvcc_flags = nvcc_flags.replace("-Fo:", "-o")
+            nvcc_flags = nvcc_flags.replace("-LD", "-shared")
+            nvcc_flags = nvcc_flags.replace("-LIBPATH:", "-L")
+            nvcc_flags = nvcc_flags.replace("-link", "")
+            def func(x):
+                if ".lib" not in x: return x
+                x = x.replace("\"", "")
+                a = os.path.dirname(x)
+                b = os.path.basename(x)
+                if not b.endswith(".lib"):
+                    return x
+                return f"-L\"{a}\" -l{b[:-4]}"
+            nvcc_flags = map_flags(nvcc_flags, func)
+        if nvcc_version >= [11,4]:
+            nvcc_flags = nvcc_flags.replace("-std=c++17", "-std=c++14 -Xcompiler -std:c++14")
+        else:
+            nvcc_flags = nvcc_flags.replace("-std=c++17", "")
         nvcc_flags = nvcc_flags.replace("-Wall", "")
         nvcc_flags = nvcc_flags.replace("-Wno-unknown-pragmas", "")
         nvcc_flags = nvcc_flags.replace("-fopenmp", "")
@@ -1075,10 +1200,10 @@ if has_cuda:
         nvcc_flags = nvcc_flags.replace("-Werror", "")
         nvcc_flags = nvcc_flags.replace("-fPIC", "-Xcompiler -fPIC")
         nvcc_flags = nvcc_flags.replace("-fdiagnostics", "-Xcompiler -fdiagnostics")
-        nvcc_flags += f" -x cu --cudart=shared -ccbin='{cc_path}' --use_fast_math "
+        nvcc_flags += f" -x cu --cudart=shared -ccbin=\"{cc_path}\" --use_fast_math "
         # nvcc warning is noise
         nvcc_flags += " -w "
-        nvcc_flags += f" -I'{os.path.join(jittor_path, 'extern/cuda/inc')}' "
+        nvcc_flags += f" -I\"{os.path.join(jittor_path, 'extern/cuda/inc')}\" "
         if os.environ.get("cuda_debug", "0") == "1":
             nvcc_flags += " -G "
         return nvcc_flags
@@ -1092,7 +1217,7 @@ jit_src = gen_jit_op_maker(op_headers)
 LOG.vvvv(jit_src)
 with open(os.path.join(cache_path, "gen", "jit_op_maker.h"), 'w') as f:
     f.write(jit_src)
-cc_flags += f' -I{cache_path} '
+cc_flags += f' -I\"{cache_path}\" -L\"{cache_path}\" -L\"{jit_utils.cache_path}\" '
 # gen pyjt
 pyjt_gen_src = pyjt_compiler.compile(cache_path, jittor_path)
 
@@ -1164,16 +1289,19 @@ if use_data_gz:
             f.write(data.decode("utf8"))
         dflags = (cc_flags+opt_flags)\
             .replace("-Wall", "") \
-            .replace("-Werror", "")
+            .replace("-Werror", "") \
+            .replace("-shared", "")
         vdp = os.path.join(jittor_path, "src", "utils", "vdp")
-        run_cmd(fix_cl_flags(f"{cc_path} {dflags} -include {vdp} {data_s_path} -c -o {data_o_path}"))
+        run_cmd(fix_cl_flags(f"{cc_path} {dflags} -include \"{vdp}\" \"{data_s_path}\" -c -o \"{data_o_path}\""))
         os.remove(data_s_path)
         with open(data_gz_md5_path, 'w') as f:
             f.write(md5)
     files.append(data_o_path)
     files = [f for f in files if "__data__" not in f]
 
+cc_flags += f" -l\"jit_utils_core{lib_suffix}\" "
 compile(cc_path, cc_flags+opt_flags, files, 'jittor_core'+extension_suffix)
+cc_flags += f" -l\"jittor_core{lib_suffix}\" "
 
 # TODO: move to compile_extern.py
 # compile_extern()
@@ -1181,15 +1309,34 @@ compile(cc_path, cc_flags+opt_flags, files, 'jittor_core'+extension_suffix)
 with jit_utils.import_scope(import_flags):
     import jittor_core as core
 
-flags = core.flags()
+flags = core.Flags()
+
 if has_cuda:
+    nvcc_flags = convert_nvcc_flags(cc_flags)
+    nvcc_version = list(jit_utils.get_int_version(nvcc_path))
+    max_arch = 1000
+    if nvcc_version < [11,]:
+        max_arch = 75
+    elif nvcc_version < [11,1]:
+        max_arch = 80
     if len(flags.cuda_archs):
-        nvcc_flags += f" -arch=compute_{min(flags.cuda_archs)} "
-        nvcc_flags += ''.join(map(lambda x:f' -code=sm_{x} ', flags.cuda_archs))
+        min_arch = 30
+        archs = []
+        for arch in flags.cuda_archs:
+            if arch<min_arch:
+                LOG.w(f"CUDA arch({arch})<{min_arch} is not supported")
+                continue
+            if arch>max_arch:
+                LOG.w(f"CUDA arch({arch})>{max_arch} will be backward-compatible")
+                arch = max_arch
+            archs.append(arch)
+        flags.cuda_archs = archs
+        nvcc_flags += f" -arch=compute_{min(archs)} "
+        nvcc_flags += ''.join(map(lambda x:f' -code=sm_{x} ', archs))
 
 flags.cc_path = cc_path
 flags.cc_type = cc_type
-flags.cc_flags = cc_flags + link_flags + kernel_opt_flags
+flags.cc_flags = cc_flags + kernel_opt_flags
 flags.nvcc_path = nvcc_path
 flags.nvcc_flags = nvcc_flags
 flags.python_path = python_path

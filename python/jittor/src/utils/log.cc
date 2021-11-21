@@ -9,6 +9,7 @@
 #include <iomanip>
 #include <thread>
 #include <unordered_map>
+#include <fstream>
 #include "utils/cross_platform.h"
 #include "utils/log.h"
 #include "utils/mwsr_list.h"
@@ -368,6 +369,17 @@ void setter_log_vprefix(string value) {
     }
     vprefix_map = move(new_map);
 }
+DEFINE_FLAG_WITH_SETTER(string, log_file, "",
+    "log to file, mpi env will add $OMPI_COMM_WORLD_RANK suffix\n");
+void setter_log_file(string value) {
+    if (value.size() == 0)
+        return;
+    auto c = getenv("OMPI_COMM_WORLD_RANK");
+    if (c) value += string("_") + c;
+    static std::ofstream out;
+    out = std::ofstream(value);
+    std::cerr.rdbuf(out.rdbuf());
+}
 
 bool check_vlog(const char* fileline, int verbose) {
     uint64_t phash=0;
@@ -494,7 +506,8 @@ int system_popen(const char *cmd, const char* cwd) {
         bSuccess = ReadFile(g_hChildStd_OUT_Rd, chBuf, BUFSIZ, &dwRead, NULL);
         if (!bSuccess || dwRead == 0)
             break;
-        output += chBuf;
+        output += string(chBuf, dwRead);
+
         if (log_v)
             bSuccess = WriteFile(hParentStdOut, chBuf,
                              dwRead, &dwWritten, NULL);
@@ -529,10 +542,13 @@ int system_popen(const char* cmd, const char* cwd) {
     string output;
     while (fgets(buf, BUFSIZ, ptr) != NULL) {
         output += buf;
-        std::cerr << buf;
+        if (log_v)
+            std::cerr << buf;
     }
     if (output.size()) std::cerr.flush();
     auto ret = pclose(ptr);
+    if (ret && !log_v)
+        std::cerr << output;
     if (output.size()<10 && ret) {
         // maybe overcommit
         return -1;

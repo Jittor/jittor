@@ -157,6 +157,12 @@ class TestBinaryOp(unittest.TestCase):
         c = a % b
         nc = a.data % b.data
         np.testing.assert_allclose(c.data, nc.data, atol=1e-5, rtol=1e-5)
+    
+    def test_pow(self):
+        # win cuda 10.2 cannot pass
+        a = jt.random((100,))
+        b = a**3
+        b.sync()
 
 
 

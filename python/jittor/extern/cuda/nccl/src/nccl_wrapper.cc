@@ -8,7 +8,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include "misc/cuda_flags.h"
-#include "nccl_warper.h"
+#include "nccl_wrapper.h"
 #include "event_queue.h"
 
 const char *_cudaGetErrorEnum(ncclResult_t error) {

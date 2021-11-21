@@ -119,7 +119,7 @@ class TestPad(unittest.TestCase):
 
     def test_save_image(self):
         arr = jt.array(np.random.randn(16,3,10,10))
-        jt.save_image(arr, "/tmp/a.jpg")
+        jt.save_image(arr, jt.flags.cache_path+"/tmp/a.jpg")
 
     def test_unbind(self):
         arr = np.random.randn(2,3,4)
@@ -242,8 +242,9 @@ class TestPad(unittest.TestCase):
 class TestOther(unittest.TestCase):
     def test_save(self):
         pp = [1,2,jt.array([1,2,3]), {"a":[1,2,3], "b":jt.array([1,2,3])}]
-        jt.save(pp, "/tmp/xx.pkl")
-        x = jt.load("/tmp/xx.pkl")
+        name = jt.flags.cache_path+"/xx.pkl"
+        jt.save(pp, name)
+        x = jt.load(name)
         assert x[:2] == [1,2]
         assert (x[2] == np.array([1,2,3])).all()
         assert x[3]['a'] == [1,2,3]

@@ -34,9 +34,9 @@ unordered_set<string> reduce_ops = {
 
     * [in] x:       the input jt.Var.
 
-    * [in] dim:     int or tuples of ints (optional). If specified, reduce along the given the dimension(s).
+    * [in] dim or dims:     int or tuples of ints (optional). If specified, reduce along the given the dimension(s).
 
-    * [in] keepdim: bool (optional). Whether the output has ``dim`` retained or not. Defaults to be False.
+    * [in] keepdims: bool (optional). Whether the output has ``dim`` retained or not. Defaults to be False.
 
     ----------------
 
@@ -65,9 +65,9 @@ unordered_set<string> reduce_ops = {
 
     * [in] x:       the input jt.Var.
 
-    * [in] dim:     int or tuples of ints (optional). If specified, reduce along the given the dimension(s).
+    * [in] dim or dims:     int or tuples of ints (optional). If specified, reduce along the given the dimension(s).
 
-    * [in] keepdim: bool (optional). Whether the output has ``dim`` retained or not. Defaults to be False.
+    * [in] keepdims: bool (optional). Whether the output has ``dim`` retained or not. Defaults to be False.
 
     ----------------
 
@@ -96,9 +96,9 @@ unordered_set<string> reduce_ops = {
 
     * [in] x:       the input jt.Var.
 
-    * [in] dim:     int or tuples of ints (optional). If specified, reduce along the given the dimension(s).
+    * [in] dim or dims:     int or tuples of ints (optional). If specified, reduce along the given the dimension(s).
 
-    * [in] keepdim: bool (optional). Whether the output has ``dim`` retained or not. Defaults to be False.
+    * [in] keepdims: bool (optional). Whether the output has ``dim`` retained or not. Defaults to be False.
 
     ----------------
 
@@ -127,9 +127,9 @@ unordered_set<string> reduce_ops = {
 
     * [in] x:       the input jt.Var.
 
-    * [in] dim:     int or tuples of ints (optional). If specified, reduce along the given the dimension(s).
+    * [in] dim or dims:     int or tuples of ints (optional). If specified, reduce along the given the dimension(s).
 
-    * [in] keepdim: bool (optional). Whether the output has ``dim`` retained or not. Defaults to be False.
+    * [in] keepdims: bool (optional). Whether the output has ``dim`` retained or not. Defaults to be False.
 
     ----------------
 
@@ -158,9 +158,9 @@ unordered_set<string> reduce_ops = {
 
     * [in] x:       the input jt.Var.
 
-    * [in] dim:     int or tuples of ints (optional). If specified, reduce along the given the dimension(s).
+    * [in] dim or dims:     int or tuples of ints (optional). If specified, reduce along the given the dimension(s).
 
-    * [in] keepdim: bool (optional). Whether the output has ``dim`` retained or not. Defaults to be False.
+    * [in] keepdims: bool (optional). Whether the output has ``dim`` retained or not. Defaults to be False.
 
     ----------------
 
@@ -189,9 +189,9 @@ unordered_set<string> reduce_ops = {
 
     * [in] x:       the input jt.Var.
 
-    * [in] dim:     int or tuples of ints (optional). If specified, reduce along the given the dimension(s).
+    * [in] dim or dims:     int or tuples of ints (optional). If specified, reduce along the given the dimension(s).
 
-    * [in] keepdim: bool (optional). Whether the output has ``dim`` retained or not. Defaults to be False.
+    * [in] keepdims: bool (optional). Whether the output has ``dim`` retained or not. Defaults to be False.
 
     ----------------
 
@@ -224,9 +224,9 @@ unordered_set<string> reduce_ops = {
 
     * [in] x:       the input jt.Var.
 
-    * [in] dim:     int or tuples of ints (optional). If specified, reduce along the given the dimension(s).
+    * [in] dim or dims:     int or tuples of ints (optional). If specified, reduce along the given the dimension(s).
 
-    * [in] keepdim: bool (optional). Whether the output has ``dim`` retained or not. Defaults to be False.
+    * [in] keepdims: bool (optional). Whether the output has ``dim`` retained or not. Defaults to be False.
 
     ----------------
 

@@ -6,7 +6,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#include "mpi_warper.h"
+#include "mpi_wrapper.h"
 #include "var.h"
 #include "mpi_broadcast_op.h"
 #include "ops/op_register.h"
@@ -22,7 +22,7 @@ MpiBroadcastOp::MpiBroadcastOp(Var* x, int root) : x(x), root(root) {
         return;
     }
     #ifdef HAS_CUDA
-    if (use_device_mpi) {
+    if (use_device_mpi && use_cuda) {
         static auto nccl_broadcast = has_op("nccl_broadcast")
             ? get_op_info("nccl_broadcast").get_constructor<VarPtr, Var*, int>()
             : nullptr;
@@ -60,6 +60,7 @@ void MpiBroadcastOp::jit_run() {
         @if(@strcmp(@Tx,int)==0 || @strcmp(@Tx,int32)==0, MPI_INT)
         @if(@strcmp(@Tx,float64)==0 || @strcmp(@Tx,double)==0, MPI_DOUBLE)
         @if(@strcmp(@Tx,int64)==0, MPI_DOUBLE_INT)
+        @if(@strcmp(@Tx,uint8)==0, MPI_CHAR)
     )
     auto* __restrict__ yp = y->ptr<Tx>();
     MPI_Bcast(yp, y->num, T_MPI, root, MPI_COMM_WORLD);

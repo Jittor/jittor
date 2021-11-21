@@ -28,7 +28,7 @@ class TestCodeOp(unittest.TestCase):
                 if (jt.flags.use_cuda==0):
                     assert isinstance(a,numpy.ndarray)
                 else:
-                    assert isinstance(a,cupy.core.core.ndarray)
+                    assert isinstance(a,cupy.ndarray)
                 np.add(a,a,out=b)
 
             def backward_code(self, np, data):
@@ -75,7 +75,7 @@ class TestCodeOp(unittest.TestCase):
             if (jt.flags.use_cuda==0):
                 assert isinstance(a,numpy.ndarray)
             else:
-                assert isinstance(a,cupy.core.core.ndarray)
+                assert isinstance(a,cupy.ndarray)
             np.add(a,a,out=b)
 
         def backward_code(np, data):

@@ -7,7 +7,7 @@
 // ***************************************************************
 #include "var.h"
 #include "cudnn_conv3d_op.h"
-#include "cudnn_warper.h"
+#include "cudnn_wrapper.h"
 #include "executor.h"
 #include "ops/op_register.h"
 
@@ -184,7 +184,7 @@ void CudnnConv3dOp::jit_run() {
     };
     int num_algos = CUDNN_CONVOLUTION_FWD_ALGO_COUNT;
     int perf_count;
-    cudnnConvolutionFwdAlgoPerf_t perf_results[num_algos];
+    STACK_ALLOC(cudnnConvolutionFwdAlgoPerf_t,perf_results,num_algos);
     cudnnConvolutionFwdAlgo_t algo;
     bool benchmark=true;
 

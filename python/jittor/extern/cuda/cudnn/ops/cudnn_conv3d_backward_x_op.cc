@@ -10,7 +10,7 @@
 #include "mem/allocator.h"
 #include "var.h"
 #include "cudnn_conv3d_backward_x_op.h"
-#include "cudnn_warper.h"
+#include "cudnn_wrapper.h"
 #include "executor.h"
 #include "ops/op_register.h"
 
@@ -181,7 +181,7 @@ void CudnnConv3dBackwardXOp::jit_run() {
     };
     int num_algos = CUDNN_CONVOLUTION_BWD_DATA_ALGO_COUNT;
     int perf_count;
-    cudnnConvolutionBwdDataAlgoPerf_t perf_results[num_algos];
+    STACK_ALLOC(cudnnConvolutionBwdDataAlgoPerf_t,perf_results,num_algos);
     cudnnConvolutionBwdDataAlgo_t algo;
     bool benchmark=true;
 

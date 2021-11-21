@@ -408,6 +408,9 @@ def to_tensor(pic):
         img = Image.open(...)
         img_ = transform.to_tensor(img)
     """
+    if isinstance(pic, jt.Var):
+        return pic
+    
     if isinstance(pic, tuple):
         # try convert ten crop tuple
         pic = ( to_tensor(pic) for p in pic )
