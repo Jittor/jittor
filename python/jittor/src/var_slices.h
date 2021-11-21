@@ -47,9 +47,16 @@ struct VarSlices  {
     inline VarSlices(VarSlices&& other) : slices(other.slices), n(other.n) {
         other.slices = nullptr;
     }
-    inline VarSlices(const VarSlices& other) : slices(new VarSlice[other.n]), n(other.n) {
-        for (int i=0; i<n; i++)
+    inline VarSlices(const VarSlices& other, bool negtive_set_none=false) : slices(new VarSlice[other.n]), n(other.n) {
+        for (int i=0; i<n; i++) {
             slices[i] = other.slices[i];
+            if (negtive_set_none && 
+                slices[i].is_slice() && 
+                slices[i].slice.step < 0 &&
+                slices[i].slice.stop < 0) {
+                slices[i].slice.mask |= 2;
+            }
+        }
     }
     inline void operator=(VarSlices&& other) {
         if (slices) delete[] slices;

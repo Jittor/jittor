@@ -327,6 +327,19 @@ class TestRNN(unittest.TestCase):
         np.testing.assert_allclose(th.detach().cpu().numpy(), jh.data, rtol=1e-03, atol=1e-06)
         np.testing.assert_allclose(tc.detach().cpu().numpy(), jc.data, rtol=1e-03, atol=1e-06)
 
+    def test_twobilinear_lstm(self):
+        x = jt.rand(5, 4, 10)
+        rnn1 = nn.LSTM(10, 20, bidirectional=True)
+        out1, _ = rnn1(x)
+        rnn2 = nn.LSTM(40, 20, bidirectional=True)
+        out2, _ = rnn2(out1)
+        target = jt.zeros_like(out2)
+        loss = nn.mse_loss(out2, target)
+
+        from jittor import optim
+        optimizer = optim.RMSprop(rnn1.parameters())
+        optimizer.step(loss)
+
     @skipIf(not jt.has_cuda, "No Cuda found")
     @jt.flag_scope(use_cuda=1)
     def test_cudnn_rnn(self):
