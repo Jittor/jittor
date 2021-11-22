@@ -108,11 +108,16 @@ static auto make_backwardx_with_cx = get_op_info("cudnn_rnn_backward_x")
     .get_constructor<vector<VarPtr>, Var*, Var*, Var*, Var*, Var*, Var*, Var*, Var*, Var*, string, int, int, int, int, double, bool, bool>();
 static auto make_backwardx_without_cx = get_op_info("cudnn_rnn_backward_x")
     .get_constructor<vector<VarPtr>, Var*, Var*, Var*, Var*, Var*, Var*, Var*, string, int, int, int, int, double, bool, bool>();
+static auto make_number = get_op_info("number")
+    .get_constructor<VarPtr, float, Var*>();
 
 void CudnnRnnOp::grads(Var** dout, VarPtr* dins) {
-    Var *dy = dout[0];
-    Var *dhy = dout[1];
-    Var *dcy = cx ? dout[2] : nullptr;
+    VarPtr dy = dout[0];
+    VarPtr dhy = dout[1];
+    VarPtr dcy = cx ? dout[2] : nullptr;
+    if (!dhy.ptr) dhy = make_number(0.0, hy);
+    if (!dcy.ptr) dcy = make_number(0.0, cy);
+
 
     vector<VarPtr> dInput;
     if (cx)
