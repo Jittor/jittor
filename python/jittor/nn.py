@@ -1653,7 +1653,7 @@ upsample = resize
 
 def interpolate(X, size=None, scale_factor=None, mode='bilinear', align_corners=False, tf_mode=False):
     if scale_factor is not None:
-        size = [X.shape[-2] * scale_factor, X.shape[-1] * scale_factor]
+        size = [int(X.shape[-2] * scale_factor), int(X.shape[-1] * scale_factor)]
     if isinstance(size, int):
         size = (size, size)
     if scale_factor is not None and scale_factor > 1:
