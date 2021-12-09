@@ -250,5 +250,9 @@ class TestOther(unittest.TestCase):
         assert x[3]['a'] == [1,2,3]
         assert (x[3]['b'] == np.array([1,2,3])).all()
 
+    def test_arctan2(self):
+        a = jt.arctan2(jt.array([1,1.0,0]), jt.array([1,0.0,-1]))
+        np.testing.assert_allclose(a.data, [0.7853982,1.5707964,3.1415927])
+
 if __name__ == "__main__":
     unittest.main()
