@@ -115,7 +115,10 @@ class TestPad(unittest.TestCase):
         check((4,3,100,200))
         check((10,3,100,200))
 
-
+    def test_make_grid3(self):
+        arr=np.random.randn(3,10,10)
+        check_equal(torchvision.utils.make_grid(torch.Tensor(arr)), jt.make_grid(jt.array(arr)))
+        check_equal(torchvision.utils.make_grid(torch.Tensor(arr), normalize=True), jt.make_grid(jt.array(arr), normalize=True))
 
     def test_save_image(self):
         arr = jt.array(np.random.randn(16,3,10,10))
