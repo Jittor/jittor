@@ -28,8 +28,9 @@ def concat(arr, dim):
 
 Example::
 
-        jt.concat([jt.array([[1],[2]]), jt.array([[2],[2]])], dim=1)
-        # return [[1],[2],[2],[2]]
+        >>> jt.concat([jt.array([[1],[2]]), jt.array([[2],[2]])], dim=1)
+        jt.Var([[1 2]
+                [2 2]], dtype=int32)
     '''
     # TODO: low performance when concat lots of vars
     total_dim = 0
