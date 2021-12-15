@@ -266,6 +266,15 @@ void LoopVarAnalyzePass::run() {
     
     LOGvvv << "replace_vars" << replace_vars;
     ir->replace(replace_vars);
+
+    for (int i=0; i<this->op->ops.size(); i++) {
+        auto op = this->op->ops[i];
+        if (op->type() == OpType::element &&
+            op->name() == string("array") &&
+            op->outputs().front()->num == 1) {
+            ir->replace({{"op"+S(i)+"_outputshape0", "1"}});
+        }
+    }
     LOGvvvv << "KernelIR after replace\n" >> ir->to_string(0, true);
     // move define
     ir->move_loop_back();
