@@ -240,12 +240,12 @@ struct VarHolder {
     // @pyjt(__set__data)
     inline void set_data(ArrayArgs&& array) {
         sync(true);
-        ASSERT(array.dtype.dsize() == var->dtype().dsize()
+        CHECK(array.dtype.dsize() == var->dtype().dsize()
             && array.dtype.is_int() == var->dtype().is_int());
         int64 size = array.dtype.dsize();
         for (int i=0; i<array.shape.size(); i++)
             size *= array.shape[i];
-        ASSERT(size==var->size);
+        CHECK(size==var->size);
         #ifdef HAS_CUDA
         migrate_to_cpu(var, exe.allocator);
         #endif
