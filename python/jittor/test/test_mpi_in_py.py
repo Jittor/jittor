@@ -56,9 +56,9 @@ def main():
 
 
 
-class TestMpiInPy(unittest.TestCase):
-    def test(self):
-        main()
+# class TestMpiInPy(unittest.TestCase):
+#     def test(self):
+#         main()
 
 
 if __name__ == "__main__":
