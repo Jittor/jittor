@@ -1183,6 +1183,13 @@ Arguments of hook are defined as::
         for p in self.parameters():
             p.update(p.mpi_broadcast(root))
 
+    def __setattr__(self, key, value):
+        object.__setattr__(self, key, value)
+
+    def __getattr__(self, key):
+        return object.__getattribute__(self, key)
+
+
 class Function(Module):
     ''' Function Module for customized backward operations
 
