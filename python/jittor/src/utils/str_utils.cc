@@ -41,9 +41,9 @@ vector<string> split(const string& s, const string& sep, int max_split) {
 
 string strip(const string& s) {
     int i=0;
-    while (i<s.size() && (s[i]==' ' || s[i]=='\t' || s[i]=='\n')) i++;
+    while (i<s.size() && (s[i]==' ' || s[i]=='\t' || s[i]=='\n' || s[i]=='\r')) i++;
     int j = s.size();
-    while (j>i && (s[j]==' ' || s[j]=='\t' || s[j]=='\n')) j--;
+    while (j>i && (s[j-1]==' ' || s[j-1]=='\t' || s[j-1]=='\n' || s[j-1]=='\r')) j--;
     return s.substr(i,j-i);
 }
 

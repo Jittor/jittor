@@ -183,7 +183,7 @@ void process(string src, vector<string>& input_names, string& cmd) {
                 }
             }
             if (l-k>2 && src[k] == 'J' && src[k+1] == 'T' && j-i==6 && src.substr(i,j-i) == "#ifdef") {
-                auto inc = src.substr(k, l-k);
+                auto inc = strip(src.substr(k, l-k));
                 auto env = getenv(inc.c_str());
                 if (env && string(env)!="0") {
                     auto senv = string(env);
