@@ -280,6 +280,21 @@ class TestReindexOp(unittest.TestCase):
 
     def test_doc(self):
         assert "Reindex Operator" in jt.reindex.__doc__
+
+
+
+    def test_reindex_fuse_error(self):
+        a = jt.zeros([10,10])
+        b = jt.array([1])
+        c = a.reindex([8,8], ["@e0(0)", "@e1(0,i0 / @e0(0))"], extras=[b, jt.ones([10,10])])
+        c.sync()
+        # print(c)
+    
+    def test_reindex_wrong_op(self):
+        a = jt.zeros([10,10])
+        b = jt.array([1])
+        c = a.reindex([8,8], ["@e0(0) // 1", "@e0(0)"], extras=[b, b])
+        expect_error(lambda: c.sync())
         
 
 @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
