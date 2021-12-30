@@ -15,9 +15,18 @@
 #include "helper_cuda.h"
 #include "fp16_emu.h"
 #include "common.h"
+#include "misc/nano_string.h"
 
 namespace jittor {
 
 EXTERN_LIB cublasHandle_t cublas_handle;
+
+static inline cudaDataType get_dtype(NanoString dtype) {
+    if (dtype == ns_float32) return CUDA_R_32F;
+    // if (dtype == ns_float64) return CUDA_R_64F;
+    // if (dtype == ns_float16) return CUDA_R_16F;
+    LOGf << "not support type" << dtype;
+    return CUDA_R_32F;
+}
 
 } // jittor
