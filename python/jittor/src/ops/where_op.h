@@ -25,7 +25,7 @@ struct WhereOp : Op {
     Example::
 
         jt.where([[0,0,1],[1,0,0]])
-        # return ( [0,2], [1,0] )
+        # return [jt.Var([0 1], dtype=int32), jt.Var([2 0], dtype=int32)]
      */
     // @attrs(multiple_outputs)
     WhereOp(Var* cond, NanoString dtype=ns_int32);

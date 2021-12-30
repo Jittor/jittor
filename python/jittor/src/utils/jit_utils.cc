@@ -54,7 +54,7 @@ bool check_async_executor_error(const std::exception& e, std::ostream& os) {
 SEH_HOOK;
 
 void init_subprocess() {
-#ifdef __linux__
+#if defined(__linux__) && defined(PR_SET_PDEATHSIG)
     prctl(PR_SET_PDEATHSIG, SIGKILL);
 #endif
 }

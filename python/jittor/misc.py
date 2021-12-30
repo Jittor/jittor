@@ -486,15 +486,14 @@ jt.Var.deg2rad = deg2rad
 
 def arctan2(y,x):
     angle = jt.zeros(x.shape,dtype=x.dtype)
-    mask = x!=0.0
-    if angle[mask].numel()>0:
-        angle[mask] = jt.arctan(y[mask]/x[mask])
+    x = (x!=0.0).ternary(x, x+1e-30)
+    angle = (y/x).arctan()
         
     mask = (y<0) & (x<0)
     if angle[mask].numel()>0:
         angle[mask] -= np.pi
         
-    mask = (y>0) &(x<0)
+    mask = (y>=0) &(x<0)
     if angle[mask].numel()>0:
         angle[mask] +=np.pi
     return angle

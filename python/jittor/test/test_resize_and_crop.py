@@ -130,6 +130,12 @@ class TestResizeAndCrop(unittest.TestCase):
         arr = np.random.randn(1,1,2,2)
         check_equal(arr, jnn.Resize((4,4)), tnn.Upsample(scale_factor=2))
         # check_equal(arr, jnn.Upsample(scale_factor=0.5), tnn.Upsample(scale_factor=0.5))
+
+    def test_interpolate(self):
+        a = jt.rand(1,3,64,64)
+        b = jt.nn.interpolate(a, scale_factor=0.5)
+        b.sync()
+        assert b.shape == (1,3,32,32)
         
 
 if __name__ == "__main__":

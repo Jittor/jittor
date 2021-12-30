@@ -10,6 +10,7 @@
 #include "opt/pass/loop_var_analyze_pass.h"
 #include "ops/reduce_op.h"
 #include "ops/broadcast_to_op.h"
+#include "ops/reindex_op.h"
 
 namespace jittor {
 
@@ -266,10 +267,34 @@ void LoopVarAnalyzePass::run() {
     
     LOGvvv << "replace_vars" << replace_vars;
     ir->replace(replace_vars);
+
+    for (int i=0; i<this->op->ops.size(); i++) {
+        auto op = this->op->ops[i];
+        if (op->type() == OpType::element &&
+            op->name() == string("array") &&
+            op->outputs().front()->num == 1) {
+            ir->replace({{"op"+S(i)+"_outputshape0", "1"}});
+        }
+    }
     LOGvvvv << "KernelIR after replace\n" >> ir->to_string(0, true);
     // move define
     ir->move_loop_back();
     LOGvvvv << "KernelIR after move_loop_back\n" >> ir->to_string(0, true);
+
+    // check reindex run arguments op
+    for (Op* op : this->op->ops) {
+        string op_name = op->name();
+        if (op_name == "reindex" || op_name == "reindex_reduce") {
+            ReindexOp* rop = (ReindexOp*)op;
+            vector<string> ss = rop->indexes;
+            for (auto& s : rop->overflow_conditions) ss.push_back(s);
+            for (auto& s : ss) {
+                if (s.find("//") != string::npos) {
+                    LOGf << "Arguments of reindex op should not contain '//' operation, please replace 'a//b' to 'int(a/b)', Arguments of reindex op: " << s << ss;
+                }
+            }
+        }
+    }
 }
 
 } // jittor

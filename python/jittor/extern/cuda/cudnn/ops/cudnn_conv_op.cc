@@ -9,6 +9,7 @@
 #include "cudnn_conv_op.h"
 #include "cudnn_wrapper.h"
 #include "executor.h"
+#include "ops/op_register.h"
 
 using namespace std;
 
@@ -76,6 +77,24 @@ void CudnnConvOp::jit_prepare(JK& jk) {
     jk << _CS("][YFORMAT:") << yformat;
     jk << ']';
 }
+static auto make_backwardx = get_op_info("cudnn_conv_backward_x")
+    .get_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, int, int, string, string, string>();
+static auto make_backwardw = get_op_info("cudnn_conv_backward_w")
+    .get_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, int, int, string, string, string>();
+VarPtr CudnnConvOp::grad(Var* out, Var* dout, Var* v, int v_index) {
+    int xn, xc, xh, xw, wh, ww, wci, wco, yn, yc, yh, yw;
+    if (xformat == "ncdhw")
+        x->shape.unpack(xn, xc, xh, xw);
+    else
+        x->shape.unpack(xn, xh, xw, xc);
+    w->shape.unpack(wco, wci, wh, ww);
+    if (v_index == 0) {
+        return make_backwardx(w, dout, xh, xw, strideh, stridew, paddingh, paddingw, dilationh, dilationw, groups, xformat, wformat, yformat);
+    } else {
+        return make_backwardw(x, dout, wh, ww, strideh, stridew, paddingh, paddingw, dilationh, dilationw, groups, xformat, wformat, yformat);
+    }
+}
+
 unordered_map<string, cudnnConvolutionFwdAlgo_t> fwd_algo_cache;
 
 #else // JIT

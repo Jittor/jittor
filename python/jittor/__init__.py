@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.1.16'
+__version__ = '1.3.1.31'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -1182,6 +1182,13 @@ Arguments of hook are defined as::
         if not in_mpi: return
         for p in self.parameters():
             p.update(p.mpi_broadcast(root))
+
+    def __setattr__(self, key, value):
+        object.__setattr__(self, key, value)
+
+    def __getattr__(self, key):
+        return object.__getattribute__(self, key)
+
 
 class Function(Module):
     ''' Function Module for customized backward operations

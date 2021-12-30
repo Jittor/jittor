@@ -236,6 +236,11 @@ class TestFusedOp(unittest.TestCase):
         check(64, 60, 64, 1, 0, 42)
         check(64, 60, 64, 0, 0, 30) # TODO: why slower?
 
+    def test_array_reindex(self):
+        a = jt.array([1])
+        b = a.reindex([3], ['i0-1'])
+        np.testing.assert_allclose(b.data, [0,1,0])
+
     
     @unittest.skipIf(skip_slow_test, "Skip slow test")
     def test_profile_fused_op_restride(self):
