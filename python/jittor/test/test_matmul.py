@@ -353,5 +353,48 @@ class TestMatmul(unittest.TestCase):
         b = linear(a)
         assert b.shape == (20,)
 
+    # def test_tensorcore(self):
+    #     import time
+    #     jt.flags.use_cuda = 1
+    #     # jt.flags.use_tensorcore = 1
+    #     a = jt.rand(4096, 4096)
+    #     b = jt.rand(4096, 4096)
+    #     for i in range(100):
+    #         c = jt.matmul(a, b)
+    #         c.sync()
+    #     jt.sync_all(True)
+
+    #     start = time.time()
+    #     for i in range(1000):
+    #         c = jt.matmul(a, b)
+    #         c.sync()
+    #     jt.sync_all(True)
+    #     end = time.time() - start
+    #     gflops = 4096**3*2 * 1000 / end / 10**9
+    #     print(end, gflops)
+    #     # 14T vs 37T
+
+    # def test_conv(self):
+    #     import time
+    #     jt.flags.use_cuda = 1
+    #     # jt.flags.use_tensorcore = 1
+    #     a = jt.rand(160, 1024, 16, 16)
+    #     b = jt.rand(1024, 1024, 1, 1)
+    #     for i in range(100):
+    #         c = jt.nn.conv2d(a, b)
+    #         c.sync()
+    #     jt.sync_all(True)
+
+    #     start = time.time()
+    #     for i in range(1000):
+    #         c = jt.nn.conv2d(a, b)
+    #         c.sync()
+    #     jt.sync_all(True)
+    #     end = time.time() - start
+    #     gflops = a.numel() * b.numel() * 2 / 1024 * 1000 / end / 10**9
+    #     print(end, gflops)
+    #     # 12T vs 30T
+
+
 if __name__ == "__main__":
     unittest.main()
