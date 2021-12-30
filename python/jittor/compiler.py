@@ -935,6 +935,9 @@ with jit_utils.import_scope(import_flags):
     jit_utils.try_import_jit_utils_core()
 
 jittor_path = find_jittor_path()
+if os.name == 'nt':
+    # prevent windows recompile
+    jittor_path = jittor_path.lower()
 check_debug_flags()
 
 sys.path.append(cache_path)
@@ -988,6 +991,7 @@ if nvcc_path:
             cu += "_sm_" + "_".join(s)
             if "cuda_arch" not in os.environ:
                 os.environ["cuda_arch"] = " ".join(cu)
+            cu = cu.replace(":", "").replace(" ", "")
     except:
         pass
     LOG.i("cuda key:", cu)

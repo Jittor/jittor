@@ -243,7 +243,7 @@ void segfault_sigaction(int signal, siginfo_t *si, void *arg) {
     }
     if (signal == SIGCHLD) {
         if (si->si_code != CLD_EXITED && si->si_status != SIGTERM && _pid == getpid()) {
-            LOGe << "Caught SIGCHLD" 
+            LOGe << "Caught SIGCHLD. Maybe out of memory, please reduce your worker size." 
                 << "si_errno:" << si->si_errno 
                 << "si_code:" << si->si_code 
                 << "si_status:" << si->si_status

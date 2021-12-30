@@ -12,6 +12,7 @@
 #include "cudnn_conv_backward_x_op.h"
 #include "cudnn_wrapper.h"
 #include "executor.h"
+#include "ops/op_register.h"
 
 using namespace std;
 
@@ -73,6 +74,22 @@ void CudnnConvBackwardXOp::jit_prepare(JK& jk) {
     jk << _CS("][WFORMAT:") << wformat;
     jk << _CS("][YFORMAT:") << yformat;
     jk << ']';
+}
+
+static auto make_conv = get_op_info("cudnn_conv")
+    .get_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, string, string, string>();
+static auto make_backwardw = get_op_info("cudnn_conv_backward_w")
+    .get_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, int, int, string, string, string>();
+
+VarPtr CudnnConvBackwardXOp::grad(Var* out, Var* dout, Var* v, int v_index) {
+    int xn, xc, wh, ww, wci, wco, yn, yc, yd, yh, yw;
+    w->shape.unpack(wco, wci, wh, ww);
+    
+    if (v_index == 0) {
+        return make_backwardw(dout, dy, wh, ww, strideh, stridew, paddingh, paddingw, dilationh, dilationw, groups, xformat, wformat, yformat);
+    } else {
+        return make_conv(dout, w, strideh, stridew, paddingh, paddingw, dilationh, dilationw, groups, xformat, wformat, yformat);
+    }
 }
 unordered_map<string, cudnnConvolutionBwdDataAlgo_t> bwdx_algo_cache;
 
