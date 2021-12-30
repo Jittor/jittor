@@ -118,8 +118,13 @@ void CublasBatchedMatmulOp::jit_run() {
         k = bs[adim-2];
     }
     // a: [b,n,m], b: [b,m,k], c: [b,n,k]
-    cublasGemmAlgo_t algo = use_tensorcore ? CUBLAS_GEMM_DEFAULT_TENSOR_OP : CUBLAS_GEMM_DEFAULT;
+    cublasGemmAlgo_t algo = CUBLAS_GEMM_DEFAULT;
     cublasComputeType_t computeType = CUBLAS_COMPUTE_32F;
+    #if CUDART_VERSION >= 11000
+    if (use_tensorcore) {
+        computeType = CUBLAS_COMPUTE_32F_FAST_16F;
+    }
+    #endif
     
     // checkCudaErrors(cublas@op@@gemmStridedBatched(handle_,
     // CUBLAS_OP_@Trans_b, CUBLAS_OP_@Trans_a,

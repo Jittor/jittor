@@ -75,8 +75,13 @@ void CublasMatmulOp::jit_run() {
         k = bs[0];
     }
     // a: [n,m], b: [m,k], c: [n,k]
-    cublasGemmAlgo_t algo = use_tensorcore ? CUBLAS_GEMM_DEFAULT_TENSOR_OP : CUBLAS_GEMM_DEFAULT;
+    cublasGemmAlgo_t algo = CUBLAS_GEMM_DEFAULT;
     cublasComputeType_t computeType = CUBLAS_COMPUTE_32F;
+    #if CUDART_VERSION >= 11000
+    if (use_tensorcore) {
+        computeType = CUBLAS_COMPUTE_32F_FAST_16F;
+    }
+    #endif
 
     // checkCudaErrors(cublas@op@@gemm(handle_, 
     // CUBLAS_OP_@Trans_b, CUBLAS_OP_@Trans_a, 
