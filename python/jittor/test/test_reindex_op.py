@@ -230,6 +230,20 @@ class TestReindexOp(unittest.TestCase):
         check_fused(len(x.shape))
         npy = conv_transpose_naive(x.data, w.data)
         assert np.allclose(npy, ny), (np.where(np.abs(npy-ny)>1e-4), npy[0,:4,:4,0], ny[0,:4,:4,0])
+
+        
+    def test_conv_transpose_group(self):
+        N,C,H,W = 3,6,10,10
+        i,o,h,w = 6,2,3,3
+        g = 2
+        x = jt.random([N,C,H,W])
+        ww = jt.random([i,o,h,w])
+        ct = jt.nn.ConvTranspose(i,o*g,(h,w), groups=2, bias=False)
+        assert ct.weight.shape == ww.shape, (ct.weight.shape, ww.shape)
+        ct.weight = ww
+        y = ct(x)
+        y2 = jt.nn.conv_transpose(x, ww, groups=2)
+        np.testing.assert_allclose(y.data, y2.data)
         
     def test_conv_transpose_grad(self):
         N,H,W,C = 1,5,5,2
