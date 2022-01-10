@@ -180,7 +180,7 @@ def _setitem_old(x, slices, value):
 # PATCH
 def getitem(x, slices):
     if isinstance(slices, jt.Var) and slices.dtype == "bool":
-        return getitem(x, tuple(slices.where()))
+        return getitem(x, slices.where())
     if isinstance(slices, tuple):
         ss = []
         for s in slices:
@@ -193,7 +193,14 @@ def getitem(x, slices):
 
 def setitem(x, slices, value):
     if isinstance(slices, jt.Var) and slices.dtype == "bool":
-        slices = tuple(slices.where())
+        if slices.shape == x.shape:
+            if isinstance(value, (int, float)):
+                value = jt.array(value).broadcast(x.shape)
+                return x.assign(slices.ternary(value, x))
+            elif isinstance(value, jt.Var) and value.shape == [1,]:
+                value = jt.broadcast(value, x.shape)
+                return x.assign(slices.ternary(value, x))
+        slices = slices.where()
     elif isinstance(slices, tuple):
         ss = []
         for s in slices:
