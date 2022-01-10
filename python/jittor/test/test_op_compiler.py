@@ -161,6 +161,11 @@ ncclBcast(..., @T_NCCL, ...)
         assert "ncclInt" in jit_precompile({"Tx":"int32"}, code)
         assert "ncclInt64" in jit_precompile({"Tx":"int64"}, code)
         
+    def test_mif(self):
+        vars = {"Tx":"float"}
+        check = lambda expr, result: \
+            self.assertEqual(jit_precompile(vars, expr), result)
+        check("#if aa>1\n@Tx\n#else\n@Tx@@1\n#endif", "#if aa>1\nfloat\n#else\nfloat1\n#endif")
 
 
 if __name__ == "__main__":

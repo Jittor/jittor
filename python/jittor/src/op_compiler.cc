@@ -294,10 +294,16 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
             // #define xxx
             // i      jk  l
             auto j=i+1;
-            while (j<src.size() && src[j] != ' ') j++;
+            while (j<src.size() && (src[j] != ' ' && src[j] != '\n')) j++;
+            auto mstr = src.substr(i,j-i);
+            if (mstr == "#if" || mstr == "#else" || mstr == "#endif") {
+                new_src += mstr;
+                i = j-1;
+                continue;
+            }
             ASSERT(j<src.size());
             auto k=j+1;
-            while (k<src.size() && src[k] == ' ') k++;
+            while (k<src.size() && src[k] == ' ' && src[k] != '\n') k++;
             ASSERT(k<src.size());
             auto l=k+1;
             while (l<src.size() && (src[l] != '\n')) l++;
