@@ -1467,7 +1467,8 @@ from . import nn
 from . import attention
 from . import lr_scheduler
 from . import linalg
-from .nn import matmul
+from .nn import matmul, \
+    bmm, bmm_transpose
 from . import contrib
 from . import numpy2cupy
 from .contrib import concat

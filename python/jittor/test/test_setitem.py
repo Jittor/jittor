@@ -206,6 +206,16 @@ class TestSetitem(unittest.TestCase):
         b = jt.array([True,False,True,False])
         a[b] = jt.array([-1,-2])
         assert (a.data == [-1,2,-2,4]).all()
+
+    def test_setitem_bool2(self):
+        a = jt.array([1,2,3,4])
+        b = jt.array([True,False,True,False])
+        a[b] = jt.array([-1])
+        assert (a.data == [-1,2,-1,4]).all(), a
+        a = jt.array([1,2,3,4])
+        b = jt.array([True,False,True,False])
+        a[b] = -1
+        assert (a.data == [-1,2,-1,4]).all(), a
         
     def test_slice_none(self):
         a = jt.array([1,2])

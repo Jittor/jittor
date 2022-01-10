@@ -358,7 +358,7 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
             jit_cc_src.append(f"""
             /*{doc_string}*/
             // @pyjt({",".join(pyjt_names)})
-            vector<VarHolder*> {cc_func_name}({", ".join(cc_args)}) {{
+            vector_to_tuple<VarHolder*> {cc_func_name}({", ".join(cc_args)}) {{
                 {   f'return make_vh_vector(make_{cc_func_name}({", ".join(op_args)}));'
                     if "replace_outputs" not in attrs else
                     f'''auto rt = make_vh_vector(make_{cc_func_name}({", ".join(op_args)}));

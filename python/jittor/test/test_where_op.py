@@ -49,6 +49,7 @@ class TestWhereOp(unittest.TestCase):
     def test_reduce_dep(self):
         a = jt.random([100,100])
         index = self.where(a>0.5)
+        assert isinstance(index, tuple)
         x = a.reindex_var(index)
         xsum =x.sum()
         na = a.data
