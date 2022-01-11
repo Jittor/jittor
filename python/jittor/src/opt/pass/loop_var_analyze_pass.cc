@@ -276,6 +276,19 @@ void LoopVarAnalyzePass::run() {
             ir->replace({{"op"+S(i)+"_outputshape0", "1"}});
         }
     }
+
+    // fix index op stride not found
+    replace_vars.clear();
+    for (int i=0; i<this->op->ops.size(); i++) {
+        auto op = this->op->ops[i];
+        if (op->type() == OpType::element &&
+            op->name() == string("index")) {
+            for (int j=1; j<op->outputs().size(); i++)
+                replace_vars.push_back({"op"+S(i)+"_x"+S(j)+"stride", "op"+S(i)+"_x0stride"});
+        }
+    }
+    if (replace_vars.size())
+        ir->replace(replace_vars);
     LOGvvvv << "KernelIR after replace\n" >> ir->to_string(0, true);
     // move define
     ir->move_loop_back();
