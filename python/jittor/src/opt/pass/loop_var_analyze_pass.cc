@@ -283,7 +283,7 @@ void LoopVarAnalyzePass::run() {
         auto op = this->op->ops[i];
         if (op->type() == OpType::element &&
             op->name() == string("index")) {
-            for (int j=1; j<op->outputs().size(); i++)
+            for (int j=1; j<op->outputs().size(); j++)
                 replace_vars.push_back({"op"+S(i)+"_x"+S(j)+"stride", "op"+S(i)+"_x0stride"});
         }
     }
