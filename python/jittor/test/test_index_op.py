@@ -56,5 +56,12 @@ class TestIndexOp(unittest.TestCase):
     def test_doc(self):
         assert "Index Operator" in jt.index.__doc__
 
+    def test_wrong_fuse(self):
+        a,b = jt.index([10,10])
+        c = jt.zeros([10,10])
+        c = c.reindex([b+1,a])
+        x = b.clone()
+        jt.sync([c, x])
+
 if __name__ == "__main__":
     unittest.main()
