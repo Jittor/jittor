@@ -720,10 +720,10 @@ def _no_grad_trunc_normal_(var, mean, std, a, b):
 
     # Use inverse cdf transform for normal distribution to get truncated
     # standard normal
-    var.erfinv()
+    var = var.erfinv()
 
     # Transform to proper mean, std
-    var.multiply(std * math.sqrt(2.))
+    var = var.multiply(std * math.sqrt(2.))
     var.add(mean)
 
     # Clamp to ensure it's in the proper range
