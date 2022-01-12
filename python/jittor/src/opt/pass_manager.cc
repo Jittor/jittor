@@ -37,7 +37,9 @@
 namespace jittor {
 
 DECLARE_FLAG(string, cc_type);
-DEFINE_FLAG(string, exclude_pass, "", "Don't run certian pass.");
+DEFINE_FLAG(string, exclude_pass, "", "Don't run certain pass.");
+DEFINE_FLAG(string, log_op_hash, "", "Output compiler pass result of certain hash of op.");
+
 
 PassManager::PassManager(OpCompiler* oc) : oc(oc), all(oc->get_src()) {
     main_ir = nullptr;
