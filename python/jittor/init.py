@@ -724,8 +724,8 @@ def _no_grad_trunc_normal_(var, mean, std, a, b):
 
     # Transform to proper mean, std
     var = var.multiply(std * math.sqrt(2.))
-    var.add(mean)
+    var = var.add(mean)
 
     # Clamp to ensure it's in the proper range
-    var.clamp(min_v=a, max_v=b)
+    var = var.clamp(min_v=a, max_v=b)
     return var
