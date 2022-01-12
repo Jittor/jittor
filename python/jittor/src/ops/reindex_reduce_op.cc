@@ -32,6 +32,11 @@ ReindexReduceOp::ReindexReduceOp(Var* y, NanoString op, NanoVector shape, vector
     ns = op;
     ASSERT(ns.is_binary() && ns!=ns_mean);
     x = create_output(nullptr, y->dtype());
+    for (auto e : extras) {
+        if (e->shape != y->shape) {
+            e->flags.set(NodeFlags::_stop_fuse);
+        }
+    }
 }
 
 VarPtr ReindexReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
