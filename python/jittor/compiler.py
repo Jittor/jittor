@@ -974,6 +974,8 @@ if not nvcc_path:
         nvcc_path = try_find_exe(nvcc_path)
 if nvcc_path is None:
     nvcc_path = ""
+if "nvcc_path" in os.environ:
+    nvcc_path = os.environ["nvcc_path"]
 gdb_path = env_or_try_find('gdb_path', 'gdb')
 addr2line_path = try_find_exe('addr2line')
 has_pybt = check_pybt(gdb_path, python_path)
