@@ -209,7 +209,7 @@ def setup_cuda_extern():
         line = traceback.format_exc()
         LOG.w(f"CUDA found but cub is not loaded:\n{line}")
 
-    libs = ["cublas", "cudnn", "curand"]
+    libs = ["cublas", "cudnn", "curand", "cufft"]
     for lib_name in libs:
         try:
             setup_cuda_lib(lib_name, extra_flags=link_cuda_extern)
@@ -547,7 +547,7 @@ if os.environ.get("FIX_TORCH_ERROR", "0") == "1":
     except:
         pass
 
-cudnn = cublas = curand = None
+cudnn = cublas = curand = cufft = None
 setup_mpi()
 in_mpi = inside_mpi()
 rank = mpi.world_rank() if in_mpi else 0

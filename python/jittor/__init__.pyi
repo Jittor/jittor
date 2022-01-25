@@ -2,7 +2,7 @@ from jittor_core import *
 from jittor_core.ops import *
 from .misc import *
 from . import attention as attention, contrib as contrib, dataset as dataset, init as init, linalg as linalg, lr_scheduler as lr_scheduler, numpy2cupy as numpy2cupy, optim as optim, sparse as sparse
-from .compile_extern import cublas as cublas, cudnn as cudnn, curand as curand, mkl_ops as mkl_ops, mpi_ops as mpi_ops, world_size as world_size
+from .compile_extern import cublas as cublas, cudnn as cudnn, curand as curand, cufft as cufft, mkl_ops as mkl_ops, mpi_ops as mpi_ops, world_size as world_size
 from .compiler import compile_custom_op as compile_custom_op, compile_custom_ops as compile_custom_ops
 from .contrib import concat as concat
 from .nn import matmul as matmul
