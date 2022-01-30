@@ -2101,7 +2101,7 @@ ParameterDict = ParameterList
 
 def Parameter(data, requires_grad=True):
     ''' The `Parameter` interface isn't needed in Jittor, this interface
-doesn't nothings and it is just used for compatible.
+does nothings and it is just used for compatible.
     
 A Jittor Var is a Parameter
 when it is a member of Module, if you don't want a Jittor
