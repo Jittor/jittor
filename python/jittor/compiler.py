@@ -1314,7 +1314,8 @@ with jit_utils.import_scope(import_flags):
 flags = core.Flags()
 
 if has_cuda:
-    nvcc_flags = convert_nvcc_flags(cc_flags)
+    nvcc_flags = " " + os.environ.get("nvcc_flags", "") + " "
+    nvcc_flags += convert_nvcc_flags(cc_flags)
     nvcc_version = list(jit_utils.get_int_version(nvcc_path))
     max_arch = 1000
     if nvcc_version < [11,]:
