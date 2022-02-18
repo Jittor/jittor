@@ -489,6 +489,9 @@ class BCEWithLogitsLoss(Module):
         return binary_cross_entropy_with_logits(output,target,self.weight,self.pos_weight,self.size_average)
 
 def softmax(x, dim = None):
+    import jittor.other.code_softmax as code_softmax
+    if code_softmax.can_softmax_v1(x, dim):
+        return code_softmax.softmax_v1(x)
     if dim is None:
         x = (x - x.max()).exp()
         ret = x / x.sum()
