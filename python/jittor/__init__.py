@@ -91,7 +91,7 @@ def safeunpickle(path):
             import torch
         except:
             raise RuntimeError("pytorch need to be installed when load pth format.")
-        model_dict = torch.load(path, map_location=torch.device('cpu'))
+        model_dict = torch.load(path, map_location='cpu')
         try:
             for k, v in model_dict.items():
                 try:
