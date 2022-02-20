@@ -1235,6 +1235,7 @@ files4 = [ f[len(jittor_path)+1:] for f in files4 ]
 # files4 = run_cmd('find -L src | grep '+grep_args, jittor_path).splitlines()
 at_beginning = [
     "src/ops/op_utils.cc",
+    "src/ops/op_register.cc",
     "src/event_queue.cc",
     "src/mem/allocator/sfrl_allocator.cc",
     "src/mem/allocator.cc",

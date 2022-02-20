@@ -8,7 +8,6 @@
 #include <limits>
 #include "var.h"
 #include "ops/reindex_reduce_op.h"
-#include "ops/binary_op_defs.h"
 #include "ops/op_register.h"
 
 namespace jittor {
@@ -112,7 +111,7 @@ void ReindexReduceOp::jit_run() {
 
     @for(d, 0, XDIM, for (index_t i@d=0; i@d < xshape@d; i@d++)) {
         auto xid = @for(d, 0, XDIM, + i@d * xstride@d);
-        xp[xid] = @expand_macro(init_@OP, Tx);
+        xp[xid] = @expand_op(init_@OP, @Tx);
     }
     // generate d-for loop
     @for(d, 0, YDIM, for (index_t i@d=0; i@d < yshape@d; i@d++)) {
@@ -121,7 +120,7 @@ void ReindexReduceOp::jit_run() {
         auto xid = @for(d, 0, XDIM, + xid@d * xstride@d);
         bool check_overflow = 0 @for(d, 0, XDIM, || xid@d<0 || xid@d>=xshape@d) @for(d, 0, OSIZE, || (@expand_macro(OFD@d)));
         if (!check_overflow)
-            xp[xid] = @expand_macro(@OP, Tx, xp[xid], yp[yid]);
+            xp[xid] = @expand_op(@OP, @Tx, xp[xid], @Tx, yp[yid], @Tx);
     }
 }
 #endif // JIT

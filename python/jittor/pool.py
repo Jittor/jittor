@@ -60,14 +60,14 @@ class Pool(Module):
             '''
             if not self.return_indices:
                 forward_body += f'''
-                @out(i0, i1, i2, i3) = init_{self.op}(out_type);
+                @out(i0, i1, i2, i3) = @expand_op(init_{self.op}, @out_type);
                 for (int p = k2; p < k2_; ++p)
                     for (int q = k3; q < k3_; ++q)
-                        @out(i0, i1, i2, i3) = {self.op}(out_type, @out(i0, i1, i2, i3), @in0(i0, i1, p, q));
+                        @out(i0, i1, i2, i3) = @expand_op({self.op}, @out_type, @out(i0, i1, i2, i3), @out_type, @in0(i0, i1, p, q), @in0_type);
                 '''
             else:
                 forward_body += f'''
-                auto out_value = init_{self.op}(out_type);
+                auto out_value = @expand_op(init_{self.op}, @out_type);
                 int out_index = -1;
                 for (int p = k2; p < k2_; ++p)
                     for (int q = k3; q < k3_; ++q) 
@@ -105,7 +105,6 @@ class Pool(Module):
                 return_dtypes = x.dtype
             out = jt.code(return_shapes, return_dtypes, [x],
                 cuda_header="""
-                    #include <ops/binary_op_defs.h>
                     #include <misc/cuda_limits.h>
                 """,
                 cuda_src=f'''
@@ -153,7 +152,7 @@ class Pool(Module):
                     dim3 s2_(tx, ty);
                     kernel3<<<s1_, s2_>>>(@ARGS);
                 '''],
-                cpu_header='#include <ops/binary_op_defs.h>',
+                cpu_header='',
                 cpu_src=f'''
                     using namespace std;
                     for (int i0=0; i0<out_shape0; i0++)
@@ -242,15 +241,15 @@ class Pool3d(Module):
             '''
             if not self.return_indices:
                 forward_body += f'''
-                @out(i0, i1, i2, i3, i4) = init_{self.op}(out_type);
+                @out(i0, i1, i2, i3, i4) = @expand_op(init_{self.op}, @out_type);
                 for (int p = k2; p < k2_; ++p)
                     for (int q = k3; q < k3_; ++q)
                         for (int r = k4; r < k4_; ++r)
-                            @out(i0, i1, i2, i3, i4) = {self.op}(out_type, @out(i0, i1, i2, i3, i4), @in0(i0, i1, p, q, r));
+                            @out(i0, i1, i2, i3, i4) = @expand_op({self.op}, @out_type, @out(i0, i1, i2, i3, i4), @out_type, @in0(i0, i1, p, q, r), @in0_type);
                 '''
             else:
                 forward_body += f'''
-                auto out_value = init_{self.op}(out_type);
+                auto out_value = @expand_op(init_{self.op}, @out_type);
                 int out_index = -1;
                 for (int p = k2; p < k2_; ++p)
                     for (int q = k3; q < k3_; ++q) 
@@ -293,7 +292,6 @@ class Pool3d(Module):
                 return_dtypes = x.dtype
             out = jt.code(return_shapes, return_dtypes, [x],
                 cuda_header="""
-                    #include <ops/binary_op_defs.h>
                     #include <misc/cuda_limits.h>
                 """,
                 cuda_src=f'''
@@ -349,7 +347,7 @@ class Pool3d(Module):
                     dim3 s2(tx, ty, tz);
                     kernel3<<<s1, s2>>>(@ARGS);
                 '''],
-                cpu_header='#include <ops/binary_op_defs.h>',
+                cpu_header='',
                 cpu_src=f'''
                     using namespace std;
                     for (int i0=0; i0<out_shape0; i0++)

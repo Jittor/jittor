@@ -8,7 +8,6 @@
 #include "var.h"
 #include "ops/binary_op.h"
 #include "ops/broadcast_to_op.h"
-#include "ops/binary_op_defs.h"
 #include "ops/op_register.h"
 
 namespace jittor {
@@ -554,7 +553,7 @@ void BinaryOp::jit_run() {
     auto* __restrict__ zp = z->ptr<Tz>();
     index_t num = z->num;
     for (index_t i=0; i<num; i++)
-        zp[i] = @expand_macro(@OP, Tz, xp[i], yp[i]);
+        zp[i] = @expand_op(@OP, @Tz, xp[i], @Tx, yp[i], @Ty);
 }
 #endif // JIT
 

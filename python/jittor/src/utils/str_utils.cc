@@ -47,4 +47,18 @@ string strip(const string& s) {
     return s.substr(i,j-i);
 }
 
+string format(const string& s, const vector<string>& v) {
+    string ss;
+    for (int i=0; i<s.size(); i++) {
+        if (s[i] == '$') {
+            int j = s[i+1] - '0';
+            ss += v.at(j);
+            i ++;
+            continue;
+        } else
+            ss += s[i];
+    }
+    return ss;
+}
+
 } // jittor
