@@ -111,17 +111,6 @@ class TestOpCompiler(unittest.TestCase):
         check("@{a^b == 7}", "2")
         check("@{(a^b) == 7}", "1")
         check("@{b<<a == 5*4}", "1")
-        check('''#include "ops/binary_op_defs.h"
-        #define OP1(a, b) a+b
-        OP1
-        @expand_macro(OP1,1,2)
-        @expand_macro(maximum, T, 1, 2)
-        @expand_macro(@OP,T,1,2)''',
-        '''        #define OP1(a, b) a+b
-        OP1
-        1+2
-        std::max(T(1), T(2))
-        ((1)+T(2)*(T(rcount)))''')
         expect_error(lambda: jit_precompile(vars, "@{a"))
         expect_error(lambda: jit_precompile(vars, "@for(a"))
         expect_error(lambda: jit_precompile(vars, "@for(i,l,r)"))

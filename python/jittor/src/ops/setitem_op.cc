@@ -9,7 +9,6 @@
 #include "ops/setitem_op.h"
 #include "ops/getitem_op.h"
 #ifdef JIT
-#include "ops/binary_op_defs.h"
 #ifdef JIT_cuda
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
@@ -340,12 +339,12 @@ void SetitemOp::jit_run() {
         @if(@is_def(JIT_cpu),
             @if(@strcmp(@OP,void)==0,
                 op[iid] = (Ti)dp[did],
-                op[iid] = @expand_macro(@OP, Ti, op[iid], dp[did])
+                op[iid] = @expand_op(@OP, @Ti, op[iid], @Ti, dp[did], @Td)
             );
         ,
             @if(@strcmp(@OP,void)==0, op[iid] = (Ti)dp[did],
             @if(@strcmp(@OP,add)==0, atomicAdd(&op[iid], (Ti)dp[did]),
-                op[iid] = @expand_macro(@OP, Ti, op[iid], dp[did])
+                op[iid] = @expand_op(@OP, @Ti, op[iid], @Ti, dp[did], @Td)
             )
             );
         )

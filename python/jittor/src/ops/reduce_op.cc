@@ -8,7 +8,6 @@
 #include <limits>
 #include "var.h"
 #include "ops/reduce_op.h"
-#include "ops/binary_op_defs.h"
 #include "ops/op_register.h"
 #include "executor.h"
 
@@ -364,14 +363,14 @@ void ReduceOp::jit_run() {
     Ty rcount = Ty(y->num) / Ty(x->num);
     @for(d, 0, DIM,@if(REDUCE>>d&1,, for (index_t xi@d=0; xi@d < xshape@d; xi@d++))) {
         auto yid = 0 @for(d, 0, DIM,@if(REDUCE>>d&1,, + xi@d * ystride@d));
-        yp[yid] = @expand_macro(init_@OP, Ty);
+        yp[yid] = @expand_op(init_@OP, @Ty);
     }
     
     @for(d, 0, DIM,@if(REDUCE>>d&1,, for (index_t xi@d=0; xi@d < xshape@d; xi@d++))) {
         @for(d, 0, DIM,@if(REDUCE>>d&1, for (index_t xi@d=0; xi@d < xshape@d; xi@d++),)) {
             auto yid = 0 @for(d, 0, DIM,@if(REDUCE>>d&1,, + xi@d * ystride@d));
             auto xid = 0 @for(d, 0, DIM, + xi@d * xstride@d);
-            yp[yid] = @expand_macro(@OP, Ty, yp[yid], xp[xid]);
+            yp[yid] = @expand_op(@OP, @Ty, yp[yid], @Ty, xp[xid], @Tx);
         }
     }
     (void)count, (void)rcount, (void)yshape0, (void)ystride0;

@@ -32,4 +32,12 @@ void op_registe(const OpInfo& op_info);
 bool has_op(const string& name);
 OpInfo get_op_info(const string& name);
 
+struct OpByType {
+    unordered_set<string> types;
+    virtual string expand_op(const vector<string>& args) = 0;
+};
+
+extern vector<OpByType*> op_types;
+int registe_op_type(OpByType*);
+
 } // jittor

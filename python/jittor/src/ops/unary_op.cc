@@ -8,7 +8,6 @@
 #include "misc/cpu_math.h"
 #include "var.h"
 #include "ops/unary_op.h"
-#include "ops/unary_op_defs.h"
 #include "ops/op_register.h"
 
 namespace jittor {
@@ -688,7 +687,7 @@ void UnaryOp::jit_run() {
     auto* __restrict__ yp = y->ptr<Ty>();
     index_t num = y->num;
     for (index_t i=0; i<num; i++)
-        yp[i] = @expand_macro(@OP, Ty, xp[i]);
+        yp[i] = @expand_op(@OP, @Ty, xp[i], @Tx);
 }
 #endif // JIT
 
