@@ -268,11 +268,15 @@ void Op::jit_run(JK& jk) {
 
 void Op::statistics(uint64_t& in, uint64_t& out, uint64_t& compute) {
     in = out = compute = 0;
-    for (Var* var : inputs()) {
+    for (auto& e : _inputs) {
+        auto var = e.node->var();
+        if (e.back->index<0) continue;
         in += var->size;
         compute = std::max(compute, (uint64_t)var->num);
     }
-    for (Var* var : outputs()) {
+    for (auto& e : _outputs) {
+        auto var = e.node->var();
+        if (e.index<0) continue;
         out += var->size;
         compute = std::max(compute, (uint64_t)var->num);
     }
