@@ -683,9 +683,9 @@ def cub_cumsum(x, dim=None):
     if (dim == None):
         dim = -1
     assert(dim >= -1 and dim < len(x.shape))
-    shape = x.shape
+    shape = list(x.shape)
     if (dim != -1 and dim != len(shape) - 1):
-        order = range(len(shape))
+        order = list(range(len(shape)))
         order[dim], order[-1] = order[-1], order[dim]
         shape[dim], shape[-1] = shape[-1], shape[dim]
         x = x.permute(order)
