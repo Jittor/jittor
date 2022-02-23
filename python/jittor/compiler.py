@@ -987,7 +987,7 @@ if nvcc_path:
     nvcc_version = list(map(int,v.split('.')))
     cu += v
     try:
-        r, s = sp.getstatusoutput(f"{sys.executable} -m jittor_utils.query_cuda_cc")
+        r, s = sp.getstatusoutput(f"log_v=0 {sys.executable} -m jittor_utils.query_cuda_cc")
         if r==0:
             s = sorted(list(set(s.strip().split())))
             cu += "_sm_" + "_".join(s)
