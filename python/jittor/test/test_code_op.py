@@ -29,6 +29,16 @@ class TestCodeOp(unittest.TestCase):
         da = jt.grad(c*b, a)
         assert np.allclose(c.data*na*4, da.data), (c.data*na*4, da.data)
 
+    def test_exflags(self):
+        a = jt.random([10])
+        b = jt.code(a.shape, a.dtype, [a],
+            cpu_src='''
+                LOGir << HAHAHA;
+            ''')
+        b.compile_options = {"FLAGS: -DHAHAHA=233 -I/any/include/path ": 1}
+        b.sync()
+
+
     def test_use_func(self):
         class Func(Function):
             def execute(self, x):
