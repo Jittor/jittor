@@ -137,6 +137,22 @@ struct CodeOp : Op {
         assert (b.data == [5,3,1]).all()
         assert (c.data == [-4,-2]).all()
 
+    Example-5::
+
+        # This example shows how to customize code op
+        # compilation flags, such as add include search
+        # path, add definitions, or any command line options
+
+        a = jt.random([10])
+        b = jt.code(a.shape, a.dtype, [a],
+            cpu_src='''
+                LOGir << HAHAHA;
+            ''')
+        # HAHAHA is defined in flags below
+        # /any/include/path can be change to any path you want to include
+        b.compile_options = {"FLAGS: -DHAHAHA=233 -I/any/include/path ": 1}
+        b.sync()
+
 
     CUDA Example-1::
 
