@@ -34,9 +34,12 @@ class TestCodeOp(unittest.TestCase):
         b = jt.code(a.shape, a.dtype, [a],
             cpu_src='''
                 LOGir << HAHAHA;
+                @out0(0) = HAHAHA;
             ''')
         b.compile_options = {"FLAGS: -DHAHAHA=233 -I/any/include/path ": 1}
-        b.sync()
+        # print(b[0])
+        assert b[0].item() == 233
+
 
 
     def test_use_func(self):

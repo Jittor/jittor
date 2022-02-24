@@ -146,12 +146,13 @@ struct CodeOp : Op {
         a = jt.random([10])
         b = jt.code(a.shape, a.dtype, [a],
             cpu_src='''
-                LOGir << HAHAHA;
+                @out0(0) = HAHAHA;
             ''')
         # HAHAHA is defined in flags below
         # /any/include/path can be change to any path you want to include
         b.compile_options = {"FLAGS: -DHAHAHA=233 -I/any/include/path ": 1}
-        b.sync()
+        print(b[0])
+        # will output 233
 
 
     CUDA Example-1::
