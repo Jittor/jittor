@@ -231,19 +231,19 @@ class profile_scope(_call_no_record_scope):
 
     def __enter__(self):
         assert not flags.profiler_enable
-        profiler.start(self.warmup, self.rerun)
         self.report = []
         try:
             self.fs.__enter__()
+            profiler.start(self.warmup, self.rerun)
             return self.report
         except:
             profiler.stop()
             raise
 
     def __exit__(self, *exc):
-        self.fs.__exit__(*exc)
         profiler.stop()
         self.report.extend(profiler.report())
+        self.fs.__exit__(*exc)
 
 class __single_process_scope:
     def __init__(self, rank=0):

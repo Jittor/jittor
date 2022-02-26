@@ -1064,13 +1064,22 @@ jit_op_entry_t OpCompiler::compile(const string& jit_key, const string& src) {
     // add extra flags for custom ops
     bool is_cuda = _op->flags.get(NodeFlags::_cuda);
     auto op_info = get_op_info(_op->name());
-    return jit_compiler::compile(jit_key, src, is_cuda, op_info.extra_flags);
+    string extra_flags = op_info.extra_flags;
+    for (auto v : _op->outputs())
+        if (v->loop_options)
+            for (auto& kv : v->loop_options.data()) {
+                if (kv.second && startswith(kv.first, "FLAGS:"))
+                    extra_flags += " " + kv.first.substr(6) + " ";
+            }
+    return jit_compiler::compile(jit_key, src, is_cuda, extra_flags);
 }
 
 jit_op_entry_t OpCompiler::do_compile(Op* op) {
     jittor::lock_guard lg;
     OpCompiler oc(op);
     string* src = &oc.src;
+    for (auto op_type : op_types)
+        op_type->post_pass(&oc);
     string src_after_passes;
     // if is fused op
     if (oc.op) {

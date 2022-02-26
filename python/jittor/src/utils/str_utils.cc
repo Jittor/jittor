@@ -61,4 +61,19 @@ string format(const string& s, const vector<string>& v) {
     return ss;
 }
 
+string join(const vector<string>& vs, const string& x) {
+    string s;
+    for (int i=0; i<vs.size(); i++) {
+        s += vs[i];
+        if (i!=vs.size()-1)
+            s += x;
+    }
+    return s;
+}
+
+string replace(const string& a, const string& b, const string& c) {
+    auto vs = split(a, b);
+    return join(vs, c);
+}
+
 } // jittor
