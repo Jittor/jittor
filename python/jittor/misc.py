@@ -712,7 +712,7 @@ def cumsum(x, dim=None):
     if (dim == None):
         dim = -1
     assert(dim >= -1 and dim < len(x.shape))
-    if jt.has_cuda:
+    if jt.flags.use_cuda:
         return cub_cumsum(x, dim)
     else:
         return numpy_cumsum(x, dim)
