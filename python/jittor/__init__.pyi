@@ -908,7 +908,7 @@ def arg_reduce(x: Var, op: str, dim: int, keepdims: bool)-> List[Var]:
 	        >>> jt.arg_reduce(x, 'max', dim=1, keepdims=False)
 	        [jt.Var([2 1], dtype=int32), jt.Var([5 7], dtype=int32)]
 	        >>> jt.arg_reduce(x, 'min', dim=1, keepdims=False)
-	        [jt.Var([1 2], dtype=int32), jt.Var([5 7], dtype=int32)]'''
+	        [jt.Var([1 2], dtype=int32), jt.Var([2 1], dtype=int32)]'''
 	...
 def random(shape: Tuple[int], dtype: str="float32", type: str="uniform")-> Var:
  ...
