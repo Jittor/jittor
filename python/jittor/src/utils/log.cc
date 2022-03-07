@@ -304,7 +304,9 @@ int register_sigaction() {
     sigaction(SIGKILL, &sa, NULL);
     sigaction(SIGSTOP, &sa, NULL);
     sigaction(SIGFPE, &sa, NULL);
-    sigaction(SIGINT, &sa, NULL);
+    // jupyter use sigint to interp
+    if (getenv("JPY_PARENT_PID") == nullptr)
+        sigaction(SIGINT, &sa, NULL);
     sigaction(SIGCHLD, &sa, NULL);
     sigaction(SIGILL, &sa, NULL);
     sigaction(SIGBUS, &sa, NULL);
