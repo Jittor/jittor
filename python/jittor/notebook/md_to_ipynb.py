@@ -11,7 +11,7 @@ for r, _, f in os.walk(dirname):
         if not fname.endswith(".md"): continue
         all_md.append(os.path.join(r, fname))
 for mdname in all_md:
-    with open(os.path.join(dirname, mdname), "r") as f:
+    with open(os.path.join(dirname, mdname), "r", encoding="utf-8") as f:
         src = f.read()
     blocks = []
     for i, b in enumerate(src.split("```")):
