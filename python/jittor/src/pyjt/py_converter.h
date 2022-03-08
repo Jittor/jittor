@@ -45,7 +45,13 @@ DEF_IS(string, PyObject*) to_py_object(const string& a) {
 
 DEF_IS(string, string) from_py_object(PyObject* obj) {
     Py_ssize_t size;
+    #ifdef _WIN32
+    PyObjHolder a(PyUnicode_AsEncodedString(obj, win_encode.c_str(), "strict"));
+    char* s;
+    auto ret = PyBytes_AsStringAndSize(a.obj, &s, &size);
+    #else
     const char* s = PyUnicode_AsUTF8AndSize(obj, &size);
+    #endif
     CHECK(s);
     return string(s, size);
 }

@@ -277,4 +277,8 @@ bool check_vlog(const char* fileline, int verbose);
 
 void system_with_check(const char* cmd, const char* cwd=nullptr);
 
+#ifdef _WIN32
+extern string win_encode;
+#endif
+
 } // jittor

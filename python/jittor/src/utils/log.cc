@@ -316,9 +316,19 @@ int register_sigaction() {
     return 0;
 }
 
+#ifdef _WIN32
+string win_encode;
+#endif
+
 static int log_init() {
     register_sigaction();
     std::atexit(log_exiting);
+    #ifdef _WIN32
+    if (getenv("JITTOR_ENCODE"))
+        win_encode = getenv("JITTOR_ENCODE");
+    else
+        win_encode = "gbk";
+    #endif
     return 1;
 }
 
