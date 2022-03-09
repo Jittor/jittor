@@ -174,7 +174,7 @@ void send_log(std::ostringstream&& out, char level, int verbose) {
     } else {
         std::lock_guard<std::mutex> lk(sync_log_m);
         // std::cerr << "[SYNC]";
-        std::cerr << out.str();
+        std::cerr << _to_winstr(out.str());
         std::cerr.flush();
     }
 }
@@ -318,8 +318,8 @@ int register_sigaction() {
 
 static int log_init() {
     #ifdef _WIN32
-    SetConsoleCP(CP_UTF8);
-    SetConsoleOutputCP(CP_UTF8);
+    // SetConsoleCP(CP_UTF8);
+    // SetConsoleOutputCP(CP_UTF8);
     #endif
     register_sigaction();
     std::atexit(log_exiting);

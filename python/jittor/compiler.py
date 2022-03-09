@@ -1176,6 +1176,7 @@ if has_cuda:
             nvcc_flags = nvcc_flags.replace("-fp:", "-Xcompiler -fp:")
             nvcc_flags = nvcc_flags.replace("-EH", "-Xcompiler -EH")
             nvcc_flags = nvcc_flags.replace("-M", "-Xcompiler -M")
+            nvcc_flags = nvcc_flags.replace("-utf", "-Xcompiler -utf")
             nvcc_flags = nvcc_flags.replace("-nologo", "")
             nvcc_flags = nvcc_flags.replace("-std:", "-std=")
             nvcc_flags = nvcc_flags.replace("-Fo:", "-o")

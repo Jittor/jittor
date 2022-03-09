@@ -153,7 +153,7 @@ jit_op_entry_t load_jit_lib(string name, string symbol_name="jit_entry") {
     const char* msg = "";
     LOGvv << "Opening jit lib:" << name;
     #ifdef _WIN32
-    void* handle = (void*)LoadLibraryExA(Utf8ToGbk(name.c_str()).c_str(), nullptr,
+    void* handle = (void*)LoadLibraryExA(_to_winstr(name).c_str(), nullptr,
         LOAD_LIBRARY_SEARCH_DEFAULT_DIRS |
         LOAD_LIBRARY_SEARCH_USER_DIRS);
     #elif defined(__linux__)
@@ -206,7 +206,7 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
     string jit_src_path = Op::get_filename_from_jit_key(jit_key, ".cc");
     #ifdef _WIN32
     string jit_lib_path = Op::get_filename_from_jit_key(jit_key, ".dll");
-    string jit_src_path2 = Utf8ToGbk(jit_src_path.c_str());
+    string jit_src_path2 = _to_winstr(jit_src_path);
     #else
     string jit_lib_path = Op::get_filename_from_jit_key(jit_key, ".so");
     string& jit_src_path2 = jit_src_path;
