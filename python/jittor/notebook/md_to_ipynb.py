@@ -63,5 +63,5 @@ for mdname in all_md:
     ipynb_name = os.path.basename(mdname[:-2])+"ipynb"
     ipynb_name = os.path.join(notebook_dir, ipynb_name)
     print(mdname, len(src), len(blocks), len(cells), "--->", ipynb_name)
-    with open(ipynb_name, "w") as f:
+    with open(ipynb_name, "w", encoding='utf8') as f:
         f.write(json.dumps(ipynb))

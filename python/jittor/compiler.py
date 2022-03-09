@@ -199,7 +199,7 @@ def gen_jit_tests():
     }} // jittor
     """
     LOG.vvvv(jit_src)
-    with open(os.path.join(cache_path, "gen", "jit_tests.h"), 'w') as f:
+    with open(os.path.join(cache_path, "gen", "jit_tests.h"), 'w', encoding='utf8') as f:
         f.write(jit_src)
 
 def gen_jit_flags():
@@ -257,7 +257,7 @@ def gen_jit_flags():
     }} // jittor
     """
     LOG.vvvv(jit_src)
-    with open(os.path.join(cache_path, "gen", "jit_flags.h"), 'w') as f:
+    with open(os.path.join(cache_path, "gen", "jit_flags.h"), 'w', encoding='utf8') as f:
         f.write(jit_src)
 
 def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
@@ -639,9 +639,9 @@ def compile_custom_op(header, source, op_name, warp=True):
     make_cache_dir(cops_dir)
     hname = os.path.join(cops_dir, op_name+"_op.h")
     ccname = os.path.join(cops_dir, op_name+"_op.cc")
-    with open(hname, 'w') as f:
+    with open(hname, 'w', encoding='utf8') as f:
         f.write(header)
-    with open(ccname, 'w') as f:
+    with open(ccname, 'w', encoding='utf8') as f:
         f.write(source)
     m = compile_custom_ops([hname, ccname])
     return getattr(m, op_name)
@@ -679,7 +679,7 @@ def compile_custom_ops(
             dirname = os.path.dirname(name)
             if dirname.endswith("inc"):
                 includes.append(dirname)
-            with open(name, "r") as f:
+            with open(name, "r", encoding='utf8') as f:
                 if "@pyjt" in f.read():
                     pyjt_includes.append(name)
         bname = os.path.basename(name)
@@ -736,7 +736,7 @@ def compile_custom_ops(
             "init_module(PyModuleDef* mdef, PyObject* m) {",
             f"jittor::pyjt_def_{bname}(m);")
 
-    with open(gen_head_fname, "w") as f:
+    with open(gen_head_fname, "w", encoding='utf8') as f:
         f.write(gen_src)
 
     LOG.vvv(f"Build custum ops lib:{gen_lib}")
@@ -781,7 +781,7 @@ def compile_extern():
     files = os.listdir(jittor_path_llvm)
     # test_pass.cc is used for test link problem of llvm pass plugin
     test_pass_path = os.path.join(cache_path_llvm, "test_pass.cc")
-    with open(test_pass_path, 'w') as f:
+    with open(test_pass_path, 'w', encoding='utf8') as f:
         f.write("int main() {return 0;}")
     
     # -fno-rtti fix link error
@@ -1082,7 +1082,7 @@ if os.name == 'nt':
         cc_flags = cc_flags.replace("-lstdc++", "")
         cc_flags = cc_flags.replace("-ldl", "")
         cc_flags += f" -L\"{py3_link_path}\" -lpython3{sys.version_info.minor} "
-        cc_flags += " -EHa -MD "
+        cc_flags += " -EHa -MD -utf-8 "
         import jittor_utils
         if jittor_utils.msvc_path:
             mp = jittor_utils.msvc_path
@@ -1217,7 +1217,7 @@ gen_jit_tests()
 op_headers = glob.glob(jittor_path+"/src/ops/**/*op.h", recursive=True)
 jit_src = gen_jit_op_maker(op_headers)
 LOG.vvvv(jit_src)
-with open(os.path.join(cache_path, "gen", "jit_op_maker.h"), 'w') as f:
+with open(os.path.join(cache_path, "gen", "jit_op_maker.h"), 'w', encoding='utf8') as f:
     f.write(jit_src)
 cc_flags += f' -I\"{cache_path}\" -L\"{cache_path}\" -L\"{jit_utils.cache_path}\" '
 # gen pyjt

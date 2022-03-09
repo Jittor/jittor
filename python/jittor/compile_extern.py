@@ -190,6 +190,11 @@ def setup_cub():
 
 def setup_cuda_extern():
     if not has_cuda: return
+    check_ld_path = os.environ.get("LD_LIBRARY_PATH", "")
+    if "cuda" in check_ld_path.lower() and "lib" in check_ld_path.lower():
+        LOG.w(f"CUDA related path found in LD_LIBRARY_PATH({check_ld_path}), "
+            "This path may cause jittor found the wrong libs, "
+            "please unset LD_LIBRARY_PATH. ")
     LOG.vv("setup cuda extern...")
     cache_path_cuda = os.path.join(cache_path, "cuda")
     cuda_include = os.path.join(jittor_path, "extern", "cuda", "inc")
