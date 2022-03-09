@@ -181,10 +181,22 @@ struct VarHolder {
     inline void set_requires_grad(bool flag) {
         if (flag == get_requires_grad()) return;
         if (flag)
-            _update(this);
+            start_grad();
         else
             stop_grad(); 
         return;
+    }
+
+    /** 
+     * enable the gradient calculation for the Var.
+     */
+    // @pyjt(start_grad)
+    // @attrs(return_self)
+    inline VarHolder* start_grad() {
+        if (!var->dtype().is_float())
+            LOGw << "cannot enable grad of a non-float value:" << var;
+        _update(this);
+        return this;
     }
 
     // @pyjt(__get__uncertain_shape)

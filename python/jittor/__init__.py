@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.1.44'
+__version__ = '1.3.1.45'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -410,9 +410,7 @@ def flatten(input, start_dim=0, end_dim=-1):
     return input.reshape(out_shape)
 Var.flatten = flatten
 
-def start_grad(x):
-    return x._update(x)
-Var.detach_inplace = Var.start_grad = start_grad
+Var.detach_inplace = Var.start_grad
 
 def detach(x):
     return x.detach()

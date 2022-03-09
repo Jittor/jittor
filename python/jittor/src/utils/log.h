@@ -16,6 +16,10 @@ namespace jittor {
 // define in tracer.cc
 void print_trace();
 void breakpoint();
+#ifdef _WIN32
+string GbkToUtf8(const char *src_str);
+string Utf8ToGbk(const char *src_str);
+#endif
     
 constexpr int32_t basename_index(const char * const path, const int32_t index = 0, const int32_t slash_index = -1) {
    return path[index]
@@ -276,9 +280,5 @@ bool check_vlog(const char* fileline, int verbose);
 #define LOGiy LOGi >> jittor::yellow
 
 void system_with_check(const char* cmd, const char* cwd=nullptr);
-
-#ifdef _WIN32
-extern string win_encode;
-#endif
 
 } // jittor
