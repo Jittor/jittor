@@ -236,9 +236,9 @@ static inline bool is_full_path(const string& name) {
 
 bool cache_compile(string cmd, const string& cache_path_, const string& jittor_path_) {
     #ifdef _WIN32
-    cmd = Utf8ToGbk(cmd.c_str());
-    string cache_path = Utf8ToGbk(cache_path_.c_str());
-    string jittor_path = Utf8ToGbk(jittor_path_.c_str());
+    cmd = _to_winstr(cmd);
+    string cache_path = _to_winstr(cache_path_);
+    string jittor_path = _to_winstr(jittor_path_);
     #else
     const string& cache_path = cache_path_;
     const string& jittor_path = jittor_path_;
@@ -264,7 +264,7 @@ bool cache_compile(string cmd, const string& cache_path_, const string& jittor_p
         processed.insert(input_names[i]);
         auto src = read_all(input_names[i]);
         #ifdef _WIN32
-        src = Utf8ToGbk(src.c_str());
+        src = _to_winstr(src);
         #endif
         auto back = input_names[i].back();
         // *.lib

@@ -19,6 +19,11 @@ void breakpoint();
 #ifdef _WIN32
 string GbkToUtf8(const char *src_str);
 string Utf8ToGbk(const char *src_str);
+#define _to_winstr(x) Utf8ToGbk(x.c_str())
+#define _from_winstr(x) GbkToUtf8(x.c_str())
+#else
+#define _to_winstr(x) (x)
+#define _from_winstr(x) (x)
 #endif
     
 constexpr int32_t basename_index(const char * const path, const int32_t index = 0, const int32_t slash_index = -1) {

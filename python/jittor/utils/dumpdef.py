@@ -37,5 +37,5 @@ for k in syms:
     src += f"    {k}\n"
 # print(src)
 
-with open(def_path, "w") as f:
+with open(def_path, "w", encoding="utf8") as f:
     f.write(src)

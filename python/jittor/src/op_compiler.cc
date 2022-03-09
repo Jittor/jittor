@@ -313,7 +313,7 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                     LOGvvvv << "Found defs include" << inc;
                     auto src_path = join(jittor_path, "src");
                     src_path = join(src_path, inc);
-                    auto inc_src = read_all(src_path);
+                    auto inc_src = read_all(_to_winstr(src_path));
                     // load_macros from include src
                     precompile(defs, inc_src, macros);
                     // we do not include defs.h
@@ -736,9 +736,9 @@ string OpCompiler::get_jit_src(Op* op) {
         else
             after_include_src += src;
     }
-    ASSERT(file_exist(src_path)) << src_path;
+    ASSERT(file_exist(_to_winstr(src_path))) << src_path;
     LOGvvv << "Read from" << src_path; 
-    string src = read_all(src_path);
+    string src = read_all(_to_winstr(src_path));
     ASSERT(src.size()) << "Source read failed:" << src_path;
 
     unordered_map<string,string> defs(jit_define.begin(), jit_define.end());
