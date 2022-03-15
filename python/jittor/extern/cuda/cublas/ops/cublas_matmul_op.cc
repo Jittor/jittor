@@ -81,6 +81,10 @@ void CublasMatmulOp::jit_run() {
     if (use_tensorcore) {
         computeType = CUBLAS_COMPUTE_32F_FAST_16F;
     }
+    if (a->dtype() == ns_float16
+        || b->dtype() == ns_float16 || c->dtype() == ns_float16) {
+        computeType = CUBLAS_COMPUTE_16F;
+    }
     checkCudaErrors(cublasGemmEx(handle_, 
     CUBLAS_OP_@Trans_b, CUBLAS_OP_@Trans_a, 
     k, n, m, &alpha, 

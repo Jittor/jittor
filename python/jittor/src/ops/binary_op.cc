@@ -418,21 +418,13 @@ unordered_set<string> binary_ops = {
     "bitwise_xor",
 };
 
-NanoString binary_dtype_infer(NanoString op, Var* x, Var* y) {
-    if (op == ns_mean) return dtype_infer(x->ns, y->ns, 2); // force float
-    int force_type=0;
-    if (op == ns_divide) force_type=2; // force float
-    if (op == ns_floor_divide) force_type=1; // force int
-    return op.is_bool() ? ns_bool : dtype_infer(x->ns, y->ns, force_type, op);
-}
-
 BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
     set_type(OpType::element);
     ns = op;
     ASSERT(ns.is_binary());
-    z = create_output(nullptr, binary_dtype_infer(op, x, y));
+    z = create_output(nullptr, binary_dtype_infer(op, x->ns, y->ns));
 }
 
 VarPtr dirty_clone_broadcast(Var* v) {

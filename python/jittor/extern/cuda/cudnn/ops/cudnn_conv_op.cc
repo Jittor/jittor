@@ -174,6 +174,11 @@ void CudnnConvOp::jit_run() {
     if(use_tensorcore){
         checkCudaErrors( cudnnSetConvolutionMathType(cudnnConvDesc, CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION) );
     }
+    
+    if (x->dtype() == ns_float16
+        || y->dtype() == ns_float16 || w->dtype() == ns_float16) {
+        checkCudaErrors( cudnnSetConvolutionMathType(cudnnConvDesc, CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION) );
+    }
 
     int dimY[] = {
         (int)y->shape[findc("@YFORMAT", 'a')], // n

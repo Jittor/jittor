@@ -25,11 +25,12 @@ DEFINE_FLAG(int, try_use_32bit_index, 0,
 string_view_map<jit_op_entry_t> jit_ops;
 string_view_map<string> jit_key_mapper;
 
-int64_t Op::number_of_lived_ops = 0;
+int64 Op::number_of_lived_ops = 0;
 
 Op::Op() {
     flags.set(NodeFlags::_var, 0);
     flags.set(NodeFlags::_cpu, 1);
+    flags.flags |= ((amp_reg & 7) << NodeFlags::_prefer_32);
     number_of_lived_ops++;
     if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var)) trace_data.record_node(this);
 }

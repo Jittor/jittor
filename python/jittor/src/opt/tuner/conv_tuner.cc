@@ -25,6 +25,7 @@
 namespace jittor {
 
 using namespace expr;
+extern int use_cuda;
 
 struct OpInspector {
     // binary mask for
@@ -229,9 +230,14 @@ void ConvTuner::forwardTune(FusedOp* fop) {
         if (!(bop->y->input() && bop->x->input() && fop->has(bop->x->input()) && fop->has(bop->y->input()))) continue;
         if (!(bop->x->input()->type()==OpType::broadcast && bop->y->input()->type()==OpType::broadcast)) return;
 
-        // only support float32 currently
-        if (bop->z->dtype() != ns_float32)
-            continue;
+        // only support float32,float16 currently
+        if (use_cuda) {
+            if (bop->z->dtype() != ns_float32 && bop->z->dtype() != ns_float16)
+                continue;
+        } else {
+            if (bop->z->dtype() != ns_float32)
+                continue;
+        }
         Op* ops[3] = {op, bop->x->input(), bop->y->input()};
         int ok = 0;
         LOGvvvv << "conv like op" << fop << fop->get_jit_key(get_jk());

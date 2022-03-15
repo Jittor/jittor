@@ -262,7 +262,7 @@ void Profiler::record_and_run(
         Deleter _d;
         if (is_fused) {
             auto fop = ((FusedOp*)op);
-            if (fop->context && fop->context->entry) {
+            if (fop->context && fop->context->vrm.relay_groups.size()) {
                 // relay op
                 loop = rerun;
                 profiler.relay_extra_cost = 0;

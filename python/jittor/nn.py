@@ -37,9 +37,10 @@ def matmul_transpose(a, b):
     assert len(a.shape) == 2 and len(b.shape) == 2
 
     shape = list(a.shape)[:-1] + list(b.shape)
-    a = a.broadcast(shape, [len(shape)-2])
-    b = b.broadcast(shape)
-    return (a*b).sum(len(shape)-1)
+    with jt.flag_scope(amp_reg = jt.flags.amp_reg | 4):
+        a = a.broadcast(shape, [len(shape)-2])
+        b = b.broadcast(shape)
+        return (a*b).sum(len(shape)-1)
 
 
 def bmm_transpose(a, b):
@@ -108,47 +109,48 @@ Example::
     c = jt.matmul(a, b)
     assert c.shape == [8, 10, 3, 5]
     '''
-    len_a = len(a.shape)
-    len_b = len(b.shape)
-    if len_b == 1:
-        # a: [n, m], b:[m], c:[n]
-        return (a*b).sum(-1)
-    if len_a == 1:
-        # a: [n], b:[n,k], c:[k]
-        return (a.broadcast(b, [-1]) * b).sum(0)
-    if len_a>=3 and len_a==len_b:
-        # bmm
-        # a: [..., n, m], b: [..., m, k], c:[..., n, k]
-        if jt.flags.use_cuda and jt.compile_extern.cublas_ops:
-            return jt.compile_extern.cublas_ops.cublas_batched_matmul(a, b, 0, 0)
-    shape = []
-    len_c = max(len_a, len_b)
-    (n, m), (m_, k) = a.shape[-2:], b.shape[-2:]
-    assert m == m_, f"dimension not match, a.shape:{a.shape}, b.shape:{b.shape}"
-    # a: [..., n, m]
-    # b: [..., m, k]
-    # cc:[..., n, m, k]
-    #     -->
-    #     012
-    if len_b == 2 and len_a>2:
-        # TODO:ugly implementation for tuner
-        aa = a.reshape((-1, m))
-        cc = matmul(aa, b)
-        # print(a.shape, b.shape, cc.shape) 
-        return cc.reshape(a.shape[:-1] + [k])
-    for i in range(len_c-2):
-        ai = len_a-(len_c-i)
-        bi = len_b-(len_c-i)
-        an = a.shape[ai] if ai>=0 else 1
-        bn = b.shape[bi] if bi>=0 else 1
-        if an!=1 and bn!=1:
-            assert an == bn, f"dimension not match, a.shape:{a.shape}, b.shape:{b.shape}"
-        cn = max(an, bn)
-        shape.append(cn)
-    shape.extend([n, m, k])
-    a = a.broadcast(shape, [-1])
-    b = b.broadcast(shape, [-3])
-    return (a*b).sum(-2)
+    with jt.flag_scope(amp_reg = jt.flags.amp_reg | 4):
+        len_a = len(a.shape)
+        len_b = len(b.shape)
+        if len_b == 1:
+            # a: [n, m], b:[m], c:[n]
+            return (a*b).sum(-1)
+        if len_a == 1:
+            # a: [n], b:[n,k], c:[k]
+            return (a.broadcast(b, [-1]) * b).sum(0)
+        if len_a>=3 and len_a==len_b:
+            # bmm
+            # a: [..., n, m], b: [..., m, k], c:[..., n, k]
+            if jt.flags.use_cuda and jt.compile_extern.cublas_ops:
+                return jt.compile_extern.cublas_ops.cublas_batched_matmul(a, b, 0, 0)
+        shape = []
+        len_c = max(len_a, len_b)
+        (n, m), (m_, k) = a.shape[-2:], b.shape[-2:]
+        assert m == m_, f"dimension not match, a.shape:{a.shape}, b.shape:{b.shape}"
+        # a: [..., n, m]
+        # b: [..., m, k]
+        # cc:[..., n, m, k]
+        #     -->
+        #     012
+        if len_b == 2 and len_a>2:
+            # TODO:ugly implementation for tuner
+            aa = a.reshape((-1, m))
+            cc = matmul(aa, b)
+            # print(a.shape, b.shape, cc.shape) 
+            return cc.reshape(a.shape[:-1] + [k])
+        for i in range(len_c-2):
+            ai = len_a-(len_c-i)
+            bi = len_b-(len_c-i)
+            an = a.shape[ai] if ai>=0 else 1
+            bn = b.shape[bi] if bi>=0 else 1
+            if an!=1 and bn!=1:
+                assert an == bn, f"dimension not match, a.shape:{a.shape}, b.shape:{b.shape}"
+            cn = max(an, bn)
+            shape.append(cn)
+        shape.extend([n, m, k])
+        a = a.broadcast(shape, [-1])
+        b = b.broadcast(shape, [-3])
+        return (a*b).sum(-2)
 jt.Var.matmul = jt.Var.__matmul__ = matmul
 jt.Var.__imatmul__ = lambda a,b: a.assign(matmul(a,b))
 
@@ -488,22 +490,22 @@ class BCEWithLogitsLoss(Module):
     def execute(self, output, target):
         return binary_cross_entropy_with_logits(output,target,self.weight,self.pos_weight,self.size_average)
 
-def softmax(x, dim = None):
+def softmax(x, dim=None, log=False):
     import jittor.other.code_softmax as code_softmax
     if code_softmax.can_softmax_v1(x, dim):
-        return code_softmax.softmax_v1(x)
+        return code_softmax.softmax_v1(x, log)
     if dim is None:
         x = (x - x.max()).exp()
         ret = x / x.sum()
     else:
         x = (x-x.max(dim, keepdims=True)).exp()
         ret = x / x.sum(dim, keepdims=True)
+    if log: return ret.log()
     return ret
 jt.Var.softmax = softmax
 
 def log_softmax(x,dim=None):
-    x = softmax(x,dim=dim)
-    return jt.log(x)
+    return softmax(x,dim=dim, log=True)
 jt.Var.log_softmax = log_softmax
 
 def log_sigmoid(x):
@@ -832,15 +834,16 @@ class Conv(Module):
             oh = (H+self.padding[0]*2-Kh*self.dilation[0]+self.dilation[0]-1)//self.stride[0]+1
             ow = (W+self.padding[1]*2-Kw*self.dilation[1]+self.dilation[1]-1)//self.stride[1]+1
             assert oh>0 and ow>0
-            xx = x.reindex([N,self.out_channels,C,oh,ow,Kh,Kw], [
-                'i0', # Nid
-                'i2', # Cid
-                f'i3*{self.stride[0]}-{self.padding[0]}+i5*{self.dilation[0]}', # Hid+Khid
-                f'i4*{self.stride[1]}-{self.padding[1]}+i6*{self.dilation[1]}', # Wid+KWid
-            ])
-            ww = self.weight.broadcast(xx.shape, [0,3,4])
-            yy = xx*ww
-            y = yy.sum([2,5,6]) # Kc, Kh, Kw
+            with jt.flag_scope(amp_reg = jt.flags.amp_reg | 4):
+                xx = x.reindex([N,self.out_channels,C,oh,ow,Kh,Kw], [
+                    'i0', # Nid
+                    'i2', # Cid
+                    f'i3*{self.stride[0]}-{self.padding[0]}+i5*{self.dilation[0]}', # Hid+Khid
+                    f'i4*{self.stride[1]}-{self.padding[1]}+i6*{self.dilation[1]}', # Wid+KWid
+                ])
+                ww = self.weight.broadcast(xx.shape, [0,3,4])
+                yy = xx*ww
+                y = yy.sum([2,5,6]) # Kc, Kh, Kw
             if self.bias is not None:
                 b = self.bias.broadcast(y.shape, [0,2,3])
                 y = y + b
@@ -1008,6 +1011,18 @@ class Conv3d(Module):
     def execute(self, x):
         return conv3d(x, self.weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
 
+
+class Conv1d_sp(Linear):
+    def __init__(self, inchannels, outchannels, kernel_size=1, bias=True):
+        super().__init__(inchannels, outchannels, bias=bias)
+        assert kernel_size == 1
+
+    def execute(self, x):
+        x = x.transpose(0, 2, 1)
+        x = super().execute(x)
+        x = x.transpose(0, 2, 1)
+        return x
+
 def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     ''' Applies a 2D convolution over an input signal composed of several input planes.
 
@@ -1048,15 +1063,16 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
         Kh, Kw = weight.shape[-2:]
         oh = (H+padding[0]*2-Kh*dilation[0]+dilation[0]-1)//stride[0]+1
         ow = (W+padding[1]*2-Kw*dilation[1]+dilation[1]-1)//stride[1]+1
-        xx = x.reindex([N,out_channels,C,oh,ow,Kh,Kw], [
-                'i0', # Nid
-                'i2', # Cid
-                f'i3*{stride[0]}-{padding[0]}+i5*{dilation[0]}', # Hid+Khid
-                f'i4*{stride[1]}-{padding[1]}+i6*{dilation[1]}', # Wid+KWid
-            ])
-        ww = weight.broadcast(xx.shape, [0,3,4])
-        yy = xx*ww
-        y = yy.sum([2,5,6]) # Kc, Kh, Kw
+        with jt.flag_scope(amp_reg = jt.flags.amp_reg | 4):
+            xx = x.reindex([N,out_channels,C,oh,ow,Kh,Kw], [
+                    'i0', # Nid
+                    'i2', # Cid
+                    f'i3*{stride[0]}-{padding[0]}+i5*{dilation[0]}', # Hid+Khid
+                    f'i4*{stride[1]}-{padding[1]}+i6*{dilation[1]}', # Wid+KWid
+                ])
+            ww = weight.broadcast(xx.shape, [0,3,4])
+            yy = xx*ww
+            y = yy.sum([2,5,6]) # Kc, Kh, Kw
         if bias is not None:
             b = bias.broadcast(y.shape, [0,2,3])
             y = y + b

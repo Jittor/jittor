@@ -120,8 +120,8 @@ class Pool(Module):
                         for (int i2 = p2; i2 < out_shape2; i2 += s2)
                             {{ {forward_body} }}
                     }}
-                    int tx = min(1024, out_shape3);
-                    int ty = min(1024 / tx, out_shape2);
+                    int tx = std::min(1024, out_shape3);
+                    int ty = std::min(1024 / tx, out_shape2);
                     int bx = (out_shape2 - 1) / ty + 1;
                     int by = out_shape1;
                     int bz = out_shape0;
@@ -143,8 +143,8 @@ class Pool(Module):
                                 {{ {backward_body} }}
                     }}
                     cudaMemsetAsync(out_p, 0, out->size);
-                    int tx = min(1024, pout_shape3);
-                    int ty = min(1024 / tx, pout_shape2);
+                    int tx = std::min(1024, pout_shape3);
+                    int ty = std::min(1024 / tx, pout_shape2);
                     int bx = (pout_shape2 - 1) / ty + 1;
                     int by = pout_shape1;
                     int bz = pout_shape0;
@@ -310,9 +310,9 @@ class Pool3d(Module):
                         for (int i2 = p2; i2 < out_shape2; i2 += s2)
                             {{ {forward_body} }}
                     }}
-                    int tx = min(1024, out_shape4);
-                    int ty = min(1024 / tx, out_shape3);
-                    int tz = min(1024 / tx / ty, out_shape2);
+                    int tx = std::min(1024, out_shape4);
+                    int ty = std::min(1024 / tx, out_shape3);
+                    int tz = std::min(1024 / tx / ty, out_shape2);
                     int bx = (out_shape2 - 1) / tz + 1;
                     int by = out_shape1;
                     int bz = out_shape0;
@@ -337,9 +337,9 @@ class Pool3d(Module):
                                 {{ {backward_body} }}
                     }}
                     cudaMemsetAsync(out_p, 0, out->size);
-                    int tx = min(1024, pout_shape4);
-                    int ty = min(1024 / tx, pout_shape3);
-                    int tz = min(1024 / tx / ty, pout_shape2);
+                    int tx = std::min(1024, pout_shape4);
+                    int ty = std::min(1024 / tx, pout_shape3);
+                    int tz = std::min(1024 / tx / ty, pout_shape2);
                     int bx = (pout_shape2 - 1) / tz + 1;
                     int by = pout_shape1;
                     int bz = pout_shape0;

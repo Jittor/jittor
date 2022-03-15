@@ -112,7 +112,7 @@ int OpCompiler::total_member_count() {
     return member_count;
 }
 
-int64_t OpCompiler::eval(const string& expr, const unordered_map<string,string>& vars) {
+int64 OpCompiler::eval(const string& expr, const unordered_map<string,string>& vars) {
     if (expr.find("@") != string::npos) {
         string new_expr;
         for (size_t i=0; i<expr.size(); i++) {
