@@ -31,8 +31,8 @@ struct PyArray_Proxy {
     PyObject_HEAD
     char* data;
     int nd;
-    ssize_t* dimensions;
-    ssize_t* strides;
+    Py_ssize_t* dimensions;
+    Py_ssize_t* strides;
     PyObject *base;
     PyArrayDescr_Proxy *descr;
     int flags;

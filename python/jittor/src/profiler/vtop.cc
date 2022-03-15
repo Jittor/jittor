@@ -33,7 +33,7 @@ typedef struct {
 int pagemap_get_entry(PagemapEntry* entry, int pagemap_fd, uintptr_t vaddr)
 {
     size_t nread;
-    ssize_t ret;
+    int64_t ret;
     uint64_t data;
     uintptr_t vpn;
 
