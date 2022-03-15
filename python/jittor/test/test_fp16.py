@@ -269,6 +269,12 @@ class TestFP16(unittest.TestCase):
             b.sync()
             assert b.dtype == "float16", b.dtype
 
+    def test_module_half(self):
+        a = jt.nn.Linear(10,10)
+        assert a.weight.dtype == "float32"
+        a.half()
+        assert a.weight.dtype == "float16"
+
 
 
 @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
