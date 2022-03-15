@@ -23,7 +23,7 @@ def check_is_both(src):
 
 for mdname in all_src_md:
     print(mdname)
-    with open(mdname, "r") as f:
+    with open(mdname, "r", encoding='utf8') as f:
         src = f.read()
     src = src.split("```")
     en_src = []
@@ -47,8 +47,8 @@ for mdname in all_src_md:
             cn_src.append("\n".join(cn_s))
     en_src = "```".join(en_src)
     cn_src = "```".join(cn_src)
-    with open(mdname.replace(".src.md", ".md"), 'w') as f:
+    with open(mdname.replace(".src.md", ".md"), 'w', encoding='utf8') as f:
         f.write(en_src)
-    with open(mdname.replace(".src.md", ".cn.md"), 'w') as f:
+    with open(mdname.replace(".src.md", ".cn.md"), 'w', encoding='utf8') as f:
         f.write(cn_src)
                     
