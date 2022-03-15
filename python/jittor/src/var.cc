@@ -14,7 +14,7 @@
 
 namespace jittor {
 
-int64_t Var::number_of_lived_vars = 0;
+int64 Var::number_of_lived_vars = 0;
 
 DEFINE_FLAG(fast_shared_ptr<loop_options_t>, compile_options, {}, 
     "Override the default loop transfrom options");
@@ -42,7 +42,7 @@ string Var::to_string() {
     return s;
 }
 
-int64_t Var::numel() {
+int64 Var::numel() {
     if (!shape.size()) return size=num=-1;
     bool negtive = 0;
     num=1;

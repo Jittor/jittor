@@ -7,72 +7,67 @@
 #include "common.h"
 #include "utils/str_utils.h"
 #include "ops/op_register.h"
+#include "op_compiler.h"
 
 namespace jittor {
 
 extern int use_cuda;
 
-unordered_map<string,string> common_op_type_cuda_map = {
-    {"logical_not", "(!($2))"},
-    {"bitwise_not", "(~($2))"},
-    {"negative", "(-($2))"},
-    {"abs", "::abs($2)"},
-    {"log", "::logf(($1)($2))"},
-    {"exp", "::expf(($1)($2))"},
-    {"sqrt", "::sqrtf(($1)($2))"},
-    {"round", "(($1) ::roundf(($2)))"},
-    {"floor", "(($1) ::floorf(($2)))"},
-    {"ceil", "(($1) ::ceilf(($2)))"},
-    {"round_int", "(($1) ::roundf(($2)))"},
-    {"floor_int", "(($1) ::floorf(($2)))"},
-    {"ceil_int", "(($1) ::ceilf(($2)))"},
-    {"sin", "(($1) ::sinf(($2)))"},
-    {"asin", "(($1) ::asinf(($2)))"},
-    {"sinh", "(($1) ::sinhf(($2)))"},
-    {"asinh", "(($1) ::asinhf(($2)))"},
-    {"cos", "(($1) ::cosf(($2)))"},
-    {"acos", "(($1) ::acosf(($2)))"},
-    {"cosh", "(($1) ::coshf(($2)))"},
-    {"acosh", "(($1) ::acoshf(($2)))"},
-    {"tan", "(($1) ::tanf(($2)))"},
-    {"atan", "(($1) ::atanf(($2)))"},
-    {"tanh", "(($1) ::tanhf(($2)))"},
-    {"atanh", "(($1) ::atanhf(($2)))"},
-    {"sigmoid", "(($1) (1.0f/(1.0f+::expf((::min($1(-($2)), $1(@if(@strcmp($1,float32)==0,30,300))))))))"},
-    {"erf", "(($1) ::erff(($2)))"},
-    {"erfinv", "(($1) ::erfinvf(($1)($2)))"},
-    {"cast", "(($1)($2))"},
-    {"pow", "::pow(($2),($4))"},
-    {"maximum", "::max($1($2), $1($4))"},
-    {"minimum", "::min($1($2), $1($4))"},
-    {"mod", "@if(@strcmp($1,float32)==0,(($2)-::floorf(($2)/($4))*($4)),@if(@strcmp(@Tx,float64)==0,(($2)-::floor(($2)/($4))*($4)),(($2)%($4))))"},
-    {"init_maximum", "::numeric_min<$1>()"},
-    {"init_minimum", "::numeric_max<$1>()"},
-};
+extern unordered_map<string,string> common_op_type_cuda_map;
 
-struct CommonOpType : OpByType {
-    CommonOpType() {
+static bool isvar(char x) { return isalnum(x) || x == '_' || x == ':'; }
+
+struct FP16OpType : OpByType {
+    FP16OpType() {
         types = {
-            "bool",
-            "int8",
-            "int16",
-            "int32",
-            "int64",
-            "uint8",
-            "uint16",
-            "uint32",
-            "uint64",
-            "float32",
-            "float64",
+            "float16",
         };
     }
 
     string expand_op(const vector<string>& args) {
+        bool found_fp16 = 0;
         for (int i=1; i<args.size(); i+=2) {
-            if (!types.count(args[i]))
-                return "";
+            if (types.count(args[i]))
+                found_fp16 = 1;
         }
-        auto& cuda_map = common_op_type_cuda_map;
+        if (!found_fp16) return "";
+        static unordered_map<string,string> cuda_map = {
+            {"logical_not", "(!($2))"},
+            {"bitwise_not", "(~($2))"},
+            {"negative", "(-($2))"},
+            {"abs", "::abs($2)"},
+            {"log", "::hlog(($1)($2))"},
+            {"exp", "::hexp(($1)($2))"},
+            {"sqrt", "::hsqrt(($1)($2))"},
+            {"round", "(($1) ::roundf(($2)))"},
+            {"floor", "(($1) ::floorf(($2)))"},
+            {"ceil", "(($1) ::ceilf(($2)))"},
+            {"round_int", "(($1) ::roundf(($2)))"},
+            {"floor_int", "(($1) ::floorf(($2)))"},
+            {"ceil_int", "(($1) ::ceilf(($2)))"},
+            {"sin", "(($1) ::sinf(($2)))"},
+            {"asin", "(($1) ::asinf(($2)))"},
+            {"sinh", "(($1) ::sinhf(($2)))"},
+            {"asinh", "(($1) ::asinhf(($2)))"},
+            {"cos", "(($1) ::cosf(($2)))"},
+            {"acos", "(($1) ::acosf(($2)))"},
+            {"cosh", "(($1) ::coshf(($2)))"},
+            {"acosh", "(($1) ::acoshf(($2)))"},
+            {"tan", "(($1) ::tanf(($2)))"},
+            {"atan", "(($1) ::atanf(($2)))"},
+            {"tanh", "(($1) ::tanhf(($2)))"},
+            {"atanh", "(($1) ::atanhf(($2)))"},
+            {"sigmoid", "(($1) (1.0f/(1.0f+::expf((::min($1(-($2)), $1(@if(@strcmp($1,float16)==0,30,300))))))))"},
+            {"erf", "(($1) ::erff(($2)))"},
+            {"erfinv", "(($1) ::erfinvf(($1)($2)))"},
+            {"cast", "(($1)($2))"},
+            {"pow", "::pow(($2),($4))"},
+            {"maximum", "::max($1($2), $1($4))"},
+            {"minimum", "::min($1($2), $1($4))"},
+            {"mod", "$1(($2)-::hfloor(($2)/($4))*($4))"},
+            {"init_maximum", "-32768.0f"},
+            {"init_minimum", "32768.0f"},
+        };
 
         static unordered_map<string,string> cpu_map = {
             {"logical_not", "(!($2))"},
@@ -107,9 +102,9 @@ struct CommonOpType : OpByType {
             {"pow", "std::pow(($2),($4))"},
             {"maximum", "std::max($1($2), $1($4))"},
             {"minimum", "std::min($1($2), $1($4))"},
-            {"mod", "@if(@strcmp($1,float32)==0,(($2)-std::floor(($2)/($4))*($4)),@if(@strcmp(@Tx,float64)==0,(($2)-std::floor(($2)/($4))*($4)),(($2)%($4))))"},
-            {"init_maximum", "std::numeric_limits<$1>::lowest()"},
-            {"init_minimum", "std::numeric_limits<$1>::max()"},
+            {"mod", "$1(($2)-std::floor(($2)/($4))*($4))"},
+            {"init_maximum", "-32768.0f"},
+            {"init_minimum", "32768.0f"},
         };
 
         static unordered_map<string,string> both_map {
@@ -132,7 +127,7 @@ struct CommonOpType : OpByType {
             {"bitwise_and", "(($2)&($4))"},
             {"bitwise_or", "(($2)|($4))"},
             {"bitwise_xor", "(($2)^($4))"},
-            {"mean", "(($2)+$1($4)*($1(rcount)))"},
+            {"mean", "(($2)+($4)*($1(rcount)))"},
             {"init_add", "$1(0)"},
             {"init_multiply", "$1(1)"},
             {"init_logical_and", "true"},
@@ -151,15 +146,43 @@ struct CommonOpType : OpByType {
             ret = cuda_map[args.at(0)];
         else
             ret = cpu_map[args.at(0)];
+        if (use_cuda) {
+            if (args[1] == "float32" && !both_map.count(args.at(0))) {
+                ret = common_op_type_cuda_map[args.at(0)];
+            }
+            if (args[1] == "float16" || args[1] == "float32") {
+                for (int i=3; i<args.size(); i+=2) {
+                    if (args[i] != args[1]) {
+                        ret = replace(ret, "$"+S(i-1),
+                            args[1]+"($"+S(i-1)+")");
+                    }
+                }
+            } else {
+                for (int i=3; i<args.size(); i+=2) {
+                    if (args[i] != "float16") {
+                        ret = replace(ret, "$"+S(i-1),
+                            "float16($"+S(i-1)+")");
+                    }
+                }
+            }
+        }
         return format(ret, args);
     }
 
-    void post_pass(OpCompiler*) {
+    void post_pass(OpCompiler* oc) {
+        string& src = oc->src;
+        if (src.find("float16") == string::npos)
+            return;
+        int i = src.rfind("#include");
+        if (i<0) i=0;
+        i = src.find('\n', i) + 1;
+        src = src.substr(0, i) + "#include \"type/fp16_compute.h\"\n" + 
+            src.substr(i);
         return;
     }
 };
 
 
-static int _ = registe_op_type(new CommonOpType());
+static int _ = registe_op_type(new FP16OpType());
 
 }

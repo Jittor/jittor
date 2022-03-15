@@ -28,6 +28,12 @@ TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
         for (int i=0; i<(int)xdim; i++)
             axes.push_back(xdim-1-i);
     }
+    if (axes.size() < xdim || (axes.size() == xdim && axes[xdim-1]==xdim-1)) {
+        static VarPtr(*fuse_transpose)(Var*, NanoVector) = get_op_info("fuse_transpose").get_constructor<VarPtr, Var*, NanoVector>();
+        auto var = fuse_transpose(x, axes);
+        forward(var);
+        return;
+    }
     #ifdef HAS_CUDA
     if (use_cuda) {
         static VarPtr(*cutt_transpose)(Var*, NanoVector) = nullptr;

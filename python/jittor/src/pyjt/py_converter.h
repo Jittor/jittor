@@ -274,7 +274,7 @@ DEF_IS(ArrayArgs, bool) is_type(PyObject* obj) {
 
 DEF_IS(ArrayArgs, PyObject*) to_py_object(const T& a) {
 #if defined(__linux__) || defined(_WIN32)
-    STACK_ALLOC(int64, dims, a.shape.size());
+    STACK_ALLOC(int64_t, dims, a.shape.size());
 #elif defined(__APPLE__)
     long dims[a.shape.size()];
 #endif
@@ -390,7 +390,7 @@ DEF_IS(VarHolder*, T) from_py_object(PyObject* obj, unique_ptr<VarHolder>& holde
 struct DataView;
 DEF_IS(DataView, PyObject*) to_py_object(T a) {
 #if defined(__linux__) || defined(_WIN32)
-    STACK_ALLOC(int64, dims, a.shape.size());
+    STACK_ALLOC(int64_t, dims, a.shape.size());
 #elif defined(__APPLE__)
     long dims[a.shape.size()];
 #endif

@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.1.38'
+__version__ = '1.3.1.38.1'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -304,15 +304,52 @@ Var.cast = Var.cast
 def array(data, dtype=None):
     if isinstance(data, core.Var):
         if dtype is None:
-            return data.clone()
-        return cast(data, dtype)
-    if dtype is not None:
+            ret = data.clone()
+        else:
+            ret = cast(data, dtype)
+    elif dtype is not None:
         if isinstance(dtype, NanoString):
             dtype = str(dtype)
         elif callable(dtype):
             dtype = dtype.__name__
-        return ops.array(np.array(data, dtype))
-    return ops.array(data)
+        ret = ops.array(np.array(data, dtype))
+    else:
+        ret = ops.array(data)
+    # TODO: move those code to core
+    amp_reg = jt.flags.amp_reg
+    if amp_reg and ret.numel() != 1 and ret.dtype.is_float():
+        if amp_reg & 16:
+            if amp_reg & 1:
+                if ret.dtype != "float32":
+                    return ret.float32()
+            elif amp_reg & 2:
+                if ret.dtype != "float16":
+                    return ret.float16()
+    return ret
+
+def random(shape, dtype="float32", type="uniform"):
+    # TODO: move those code to core
+    if dtype == "float16":
+        # TODO: make curand support fp16
+        ret = ops.random(shape, "float32", type).float16()
+    else:
+        ret = ops.random(shape, dtype, type)
+    amp_reg = jt.flags.amp_reg
+    if amp_reg:
+        if amp_reg & 16:
+            if amp_reg & 1:
+                if ret.dtype != "float32":
+                    return ret.float32()
+            elif amp_reg & 2:
+                if ret.dtype != "float16":
+                    return ret.float16()
+    return ret
+
+def float_auto(x):
+    if jt.flags.amp_reg & 2:
+        return x.float16()
+    return x.float32()
+Var.float_auto = float_auto
 
 def array64(data, dtype=None):
     with jt.flag_scope(auto_convert_64_to_32=0):
@@ -1419,18 +1456,15 @@ Var.size = size
 
 
 def to_int(v):
-    dtype = str(v.dtype)
-    assert dtype.startswith("int")
+    assert v.dtype.is_int()
     return v.item()
 
 def to_float(v):
-    dtype = str(v.dtype)
-    assert dtype.startswith("float")
+    assert v.dtype.is_float()
     return v.item()
 
 def to_bool(v):
-    dtype = str(v.dtype)
-    assert dtype.startswith("int") or dtype=="bool"
+    assert v.dtype.is_int() or v.dtype.is_bool()
     return ori_bool(v.item())
 
 Var.__int__ = to_int

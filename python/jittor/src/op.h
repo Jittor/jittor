@@ -15,7 +15,7 @@ namespace jittor {
 enum OpType {other=0, element=1, broadcast=2, reduce=3};
 struct Op : Node {
     vector<VarPtr> outputs_holder;
-    static int64_t number_of_lived_ops;
+    static int64 number_of_lived_ops;
     
     inline Caster<Var*, Node::input_t> inputs() { CHECK_EXIST; return &_inputs; }
     inline Caster<Var*, Node::output_t> outputs() { CHECK_EXIST; return &_outputs; }
