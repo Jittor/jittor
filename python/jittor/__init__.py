@@ -1224,6 +1224,24 @@ Arguments of hook are defined as::
     def __getattr__(self, key):
         return object.__getattribute__(self, key)
 
+    def float16(self):
+        '''convert all parameters to float16'''
+        for p in self.parameters():
+            if p.dtype.is_float():
+                p.assign(p.float16())
+
+    def half(self):
+        '''convert all parameters to float16'''
+        self.float16()
+
+    def float_auto(self):
+        '''convert all parameters to float16 or float32 automatically
+        by jt.flags.auto_mixed_precision_level and jt.flags.amp_reg'''
+        for p in self.parameters():
+            if p.dtype.is_float():
+                p.assign(p.float_auto())
+
+
 
 class Function(Module):
     ''' Function Module for customized backward operations
@@ -1484,6 +1502,8 @@ float = float32
 Var.float = Var.float32
 double = float64
 Var.double = Var.float64
+half = float16
+Var.half = Var.float16
 
 def is_var(v):
     return isinstance(v, Var)

@@ -198,6 +198,7 @@ static void init_ns() {
     __string_to_ns["sum"] = ns_add;
     __string_to_ns["min"] = ns_minimum;
     __string_to_ns["max"] = ns_maximum;
+    __string_to_ns["half"] = ns_float16;
     __string_to_ns["float"] = ns_float32;
     __string_to_ns["double"] = ns_float64;
     __string_to_ns["int"] = ns_int32;
