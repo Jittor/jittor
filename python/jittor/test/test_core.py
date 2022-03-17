@@ -99,5 +99,12 @@ class TestCore(unittest.TestCase):
         net.conv1.save(pkl_name)
         net.conv1.load(pkl_name)
 
+    def test_module(self):
+        a = jt.Module()
+        a.__setattr__("x", 1)
+        assert a.__getattr__("x") == 1
+        a.y = 2
+        assert a.y == 2
+
 if __name__ == "__main__":
     unittest.main()

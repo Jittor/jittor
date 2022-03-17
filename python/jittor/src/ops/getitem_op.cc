@@ -391,9 +391,9 @@ VarPtr GetitemOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     // need analysis the overlap attr os var slices
     for (int i=0; i<vs.n; i++)
         if (vs.slices[i].is_var()) {
-            return make_setitem(zeros, VarSlices(vs), dout, ns_add);
+            return make_setitem(zeros, VarSlices(vs, true), dout, ns_add);
         }
-    return make_setitem(zeros, VarSlices(vs), dout, ns_void);
+    return make_setitem(zeros, VarSlices(vs, true), dout, ns_void);
 }
 
 void GetitemOp::jit_prepare(JK& jk) {

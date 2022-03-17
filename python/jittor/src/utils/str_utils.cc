@@ -41,10 +41,39 @@ vector<string> split(const string& s, const string& sep, int max_split) {
 
 string strip(const string& s) {
     int i=0;
-    while (i<s.size() && (s[i]==' ' || s[i]=='\t' || s[i]=='\n')) i++;
+    while (i<s.size() && (s[i]==' ' || s[i]=='\t' || s[i]=='\n' || s[i]=='\r')) i++;
     int j = s.size();
-    while (j>i && (s[j]==' ' || s[j]=='\t' || s[j]=='\n')) j--;
+    while (j>i && (s[j-1]==' ' || s[j-1]=='\t' || s[j-1]=='\n' || s[j-1]=='\r')) j--;
     return s.substr(i,j-i);
+}
+
+string format(const string& s, const vector<string>& v) {
+    string ss;
+    for (int i=0; i<s.size(); i++) {
+        if (s[i] == '$') {
+            int j = s[i+1] - '0';
+            ss += v.at(j);
+            i ++;
+            continue;
+        } else
+            ss += s[i];
+    }
+    return ss;
+}
+
+string join(const vector<string>& vs, const string& x) {
+    string s;
+    for (int i=0; i<vs.size(); i++) {
+        s += vs[i];
+        if (i!=vs.size()-1)
+            s += x;
+    }
+    return s;
+}
+
+string replace(const string& a, const string& b, const string& c) {
+    auto vs = split(a, b);
+    return join(vs, c);
 }
 
 } // jittor

@@ -110,7 +110,7 @@ static void push_py_object(RingBuffer* rb, PyObject* obj, uint64& __restrict__ o
                 rb->push(size, offset);
                 args.ptr = rb->get_ptr(size, offset);
 #if defined(__linux__) || defined(_WIN32)
-                STACK_ALLOC(int64, dims, args.shape.size());
+                STACK_ALLOC(int64_t, dims, args.shape.size());
 #elif defined(__APPLE__)
                 long dims[args.shape.size()];
 #endif

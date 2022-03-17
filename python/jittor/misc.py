@@ -408,12 +408,12 @@ def make_grid(x, nrow=8, padding=2, normalize=False, range=None, scale_each=Fals
     assert scale_each == False
     if isinstance(x, list): x = jt.stack(x)
     assert isinstance(x, jt.Var)
-    if x.ndim < 4: return x
-    if x.ndim == 4 and x.shape[0] <= 1: return x
-    nrow = min(nrow, x.shape[0])
     if normalize: 
         if range is None: x = (x - x.min()) / (x.max() - x.min())
         else: x = (x - range[0]) / (range[1] - range[0])
+    if x.ndim < 4: return x
+    if x.ndim == 4 and x.shape[0] <= 1: return x
+    nrow = min(nrow, x.shape[0])
     b,c,h,w = x.shape
     ncol = math.ceil(b / nrow)
     return x.reindex([c, h*ncol+(ncol+1)*padding, w*nrow+(nrow+1)*padding], 
@@ -486,19 +486,11 @@ jt.Var.deg2rad = deg2rad
 
 def arctan2(y,x):
     angle = jt.zeros(x.shape,dtype=x.dtype)
-    mask = x!=0.0
-    if angle[mask].numel()>0:
-        angle[mask] = jt.arctan(y[mask]/x[mask])
-        
-    mask = (y<0) & (x<0)
-    if angle[mask].numel()>0:
-        angle[mask] -= np.pi
-        
-    mask = (y>0) &(x<0)
-    if angle[mask].numel()>0:
-        angle[mask] +=np.pi
+    x = (x!=0.0).ternary(x, x+1e-30)
+    angle = (y/x).arctan()
+    mask = y<0 | ((y==0) & (x<0))
+    angle = angle + mask*np.pi
     return angle
-
 
 
 def nonzero(x):
@@ -684,9 +676,9 @@ def cub_cumsum(x, dim=None):
     if (dim == None):
         dim = -1
     assert(dim >= -1 and dim < len(x.shape))
-    shape = x.shape
+    shape = list(x.shape)
     if (dim != -1 and dim != len(shape) - 1):
-        order = range(len(shape))
+        order = list(range(len(shape)))
         order[dim], order[-1] = order[-1], order[dim]
         shape[dim], shape[-1] = shape[-1], shape[dim]
         x = x.permute(order)
@@ -713,7 +705,7 @@ def cumsum(x, dim=None):
     if (dim == None):
         dim = -1
     assert(dim >= -1 and dim < len(x.shape))
-    if jt.has_cuda:
+    if jt.flags.use_cuda:
         return cub_cumsum(x, dim)
     else:
         return numpy_cumsum(x, dim)

@@ -15,6 +15,7 @@ if __name__ == "__main__":
 
     skip_l = int(os.environ.get("test_skip_l", "0"))
     skip_r = int(os.environ.get("test_skip_r", "1000000"))
+    skip = os.environ.get("test_skip", "").split(",")
     test_only = None
     if "test_only" in os.environ:
         test_only = set(os.environ.get("test_only").split(","))
@@ -34,6 +35,9 @@ if __name__ == "__main__":
             continue
         if test_only and test_name not in test_only:
             continue
+        for s in skip:
+            if s in test_name:
+                continue
 
         print("Add Test", _, test_name)
         suite.addTest(tests)

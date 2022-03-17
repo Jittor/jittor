@@ -54,10 +54,12 @@ def install_cuda():
         LOG.i("JTCUDA_VERSION: ", cuda_driver_version)
 
     if os.name == 'nt':
-        if cuda_driver_version >= [11,4]:
-            cuda_tgz = "cuda11.4_cudnn8_win.zip"
-            md5 = "06eed370d0d44bb2cc57809343911187"
-        elif cuda_driver_version >= [11,2]:
+        # TODO: cuda11.4 has bug fit with
+        # current msvc, FIXME
+        # if cuda_driver_version >= [11,4]:
+        #     cuda_tgz = "cuda11.4_cudnn8_win.zip"
+        #     md5 = "06eed370d0d44bb2cc57809343911187"
+        if cuda_driver_version >= [11,2]:
             cuda_tgz = "cuda11.2_cudnn8_win.zip"
             md5 = "b5543822c21bc460c1a414af47754556"
         elif cuda_driver_version >= [11,]:

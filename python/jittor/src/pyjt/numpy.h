@@ -31,8 +31,8 @@ struct PyArray_Proxy {
     PyObject_HEAD
     char* data;
     int nd;
-    ssize_t* dimensions;
-    ssize_t* strides;
+    Py_ssize_t* dimensions;
+    Py_ssize_t* strides;
     PyObject *base;
     PyArrayDescr_Proxy *descr;
     int flags;
@@ -48,6 +48,8 @@ enum NPY_TYPES {
     NPY_FLOAT, NPY_DOUBLE, NPY_LONGDOUBLE,
     NPY_CFLOAT, NPY_CDOUBLE, NPY_CLONGDOUBLE,
     NPY_OBJECT=17,
+    NPY_HALF=23,
+    NPY_END=24,
 };
 
 EXTERN_LIB NanoString npy2ns[];
@@ -60,11 +62,11 @@ EXTERN_LIB NPY_TYPES ns2npy[];
 inline bool is_c_style(PyArray_Proxy* obj) { return obj->flags & 1; }
 inline NanoString get_type_str(PyArray_Proxy* obj) {
     NanoString type = ns_void;
-    if (obj->descr->type_num < NPY_OBJECT)
+    if (obj->descr->type_num < NPY_END)
         type = npy2ns[obj->descr->type_num];
     CHECK(type != ns_void) << "Numpy type not support, type_num:"
         << obj->descr->type_num 
-        << "type_char:" << obj->descr->type;
+        << "type_char:" << obj->descr->type << NPY_END << npy2ns[obj->descr->type_num];
     return type;
 }
 

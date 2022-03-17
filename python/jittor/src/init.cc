@@ -20,6 +20,7 @@
 namespace jittor {
 
 DEFINE_FLAG(vector<int>, cuda_archs, {}, "Cuda arch");
+DEFINE_FLAG(int, use_tensorcore, 0, "use tensor core");
 
 unique_ptr<std::default_random_engine> eng;
 

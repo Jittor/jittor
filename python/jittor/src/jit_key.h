@@ -167,7 +167,7 @@ inline JK& operator<<(JK& jk, int64 c) {
 }
 
 #ifdef __linux__
-inline JK& operator<<(JK& jk, long long int c) {
+inline JK& operator<<(JK& jk, int64_t c) {
     return jk << (int64)c;
 }
 #endif

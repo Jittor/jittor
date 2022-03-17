@@ -21,6 +21,13 @@
 
 namespace jittor {
 
+template<class T>
+struct vector_to_tuple {
+    typedef T value_type;
+    vector<T> x;
+    vector_to_tuple(vector<T>&& _) :x(move(_)) {}
+};
+
 #define DEF_IS(check_type, return_type) \
     template<class T> \
     typename std::enable_if<std::is_same<T, check_type>::value, return_type>::type
@@ -267,7 +274,7 @@ DEF_IS(ArrayArgs, bool) is_type(PyObject* obj) {
 
 DEF_IS(ArrayArgs, PyObject*) to_py_object(const T& a) {
 #if defined(__linux__) || defined(_WIN32)
-    STACK_ALLOC(int64, dims, a.shape.size());
+    STACK_ALLOC(int64_t, dims, a.shape.size());
 #elif defined(__APPLE__)
     long dims[a.shape.size()];
 #endif
@@ -383,7 +390,7 @@ DEF_IS(VarHolder*, T) from_py_object(PyObject* obj, unique_ptr<VarHolder>& holde
 struct DataView;
 DEF_IS(DataView, PyObject*) to_py_object(T a) {
 #if defined(__linux__) || defined(_WIN32)
-    STACK_ALLOC(int64, dims, a.shape.size());
+    STACK_ALLOC(int64_t, dims, a.shape.size());
 #elif defined(__APPLE__)
     long dims[a.shape.size()];
 #endif
@@ -462,6 +469,7 @@ DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj);
     typename std::enable_if<is_##check_type<T>::value, return_type>::type
 
 CHECK_IS_1(vector);
+CHECK_IS_1(vector_to_tuple);
 
 CHECK_IS_2(map);
 DEF_IS_2(map, bool) is_type(PyObject* obj);
@@ -492,6 +500,17 @@ DEF_IS_1(vector, PyObject*) to_py_tuple(const T& a) {
     PyObjHolder list(PyTuple_New(a.size()));
     for (uint i=0; i<a.size(); i++) {
         PyObject* o = to_py_object<typename T::value_type>(a[i]);
+        CHECK(o);
+        // PyTuple_SET_ITEM borrow ownership, we do not hold this
+        PyTuple_SET_ITEM(list.obj, i, o);
+    }
+    return list.release();
+}
+
+DEF_IS_1(vector_to_tuple, PyObject*) to_py_object(const T& a) {
+    PyObjHolder list(PyTuple_New(a.x.size()));
+    for (uint i=0; i<a.x.size(); i++) {
+        PyObject* o = to_py_object<typename T::value_type>(a.x[i]);
         CHECK(o);
         // PyTuple_SET_ITEM borrow ownership, we do not hold this
         PyTuple_SET_ITEM(list.obj, i, o);

@@ -230,6 +230,20 @@ class TestReindexOp(unittest.TestCase):
         check_fused(len(x.shape))
         npy = conv_transpose_naive(x.data, w.data)
         assert np.allclose(npy, ny), (np.where(np.abs(npy-ny)>1e-4), npy[0,:4,:4,0], ny[0,:4,:4,0])
+
+        
+    def test_conv_transpose_group(self):
+        N,C,H,W = 3,6,10,10
+        i,o,h,w = 6,2,3,3
+        g = 2
+        x = jt.random([N,C,H,W])
+        ww = jt.random([i,o,h,w])
+        ct = jt.nn.ConvTranspose(i,o*g,(h,w), groups=2, bias=False)
+        assert ct.weight.shape == ww.shape, (ct.weight.shape, ww.shape)
+        ct.weight = ww
+        y = ct(x)
+        y2 = jt.nn.conv_transpose(x, ww, groups=2)
+        np.testing.assert_allclose(y.data, y2.data)
         
     def test_conv_transpose_grad(self):
         N,H,W,C = 1,5,5,2
@@ -280,6 +294,21 @@ class TestReindexOp(unittest.TestCase):
 
     def test_doc(self):
         assert "Reindex Operator" in jt.reindex.__doc__
+
+
+
+    def test_reindex_fuse_error(self):
+        a = jt.zeros([10,10])
+        b = jt.array([1])
+        c = a.reindex([8,8], ["@e0(0)", "@e1(0,i0 / @e0(0))"], extras=[b, jt.ones([10,10])])
+        c.sync()
+        # print(c)
+    
+    def test_reindex_wrong_op(self):
+        a = jt.zeros([10,10])
+        b = jt.array([1])
+        c = a.reindex([8,8], ["@e0(0) // 1", "@e0(0)"], extras=[b, b])
+        expect_error(lambda: c.sync())
         
 
 @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
