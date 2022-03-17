@@ -8,7 +8,6 @@
 #include <limits>
 #include "var.h"
 #include "ops/reduce_op.h"
-#include "ops/binary_op_defs.h"
 #include "ops/op_register.h"
 #include "executor.h"
 
@@ -272,7 +271,7 @@ ReduceOp::ReduceOp(Var* x, NanoString op, NanoVector dims, bool keepdims)
     if (x->dtype() == ns_bool)
         y = create_output(nullptr, ns_int32);
     else
-        y = create_output(nullptr, binary_dtype_infer(ns, x, x));
+        y = create_output(nullptr, reduce_dtype_infer(ns, x->ns));
 }
 
 ReduceOp::ReduceOp(Var* x, NanoString op, uint dims_mask, uint keepdims_mask)
@@ -284,7 +283,7 @@ ReduceOp::ReduceOp(Var* x, NanoString op, uint dims_mask, uint keepdims_mask)
     ASSERT(ns.is_binary());
     reduce_mask = dims_mask;
     this->keepdims_mask = keepdims_mask;
-    y = create_output(nullptr, binary_dtype_infer(ns, x, x));
+    y = create_output(nullptr, reduce_dtype_infer(ns, x->ns));
 }
 
 ReduceOp::ReduceOp(Var* x, NanoString op, int dim, bool keepdims)
@@ -360,18 +359,18 @@ void ReduceOp::jit_run() {
     @for(i, DIM-2, -1, -1, auto ystride@i = ystride@{i+1} * yshape@{i+1};)
     index_t xstride@{DIM-1} = 1;
     @for(i, DIM-2, -1, -1, auto xstride@i = xstride@{i+1} * xshape@{i+1};)
-    Ty count = Ty(x->num) / Ty(y->num);
-    Ty rcount = Ty(y->num) / Ty(x->num);
+    Ty count = x->num*1.0 / y->num;
+    Ty rcount = y->num*1.0 / x->num;
     @for(d, 0, DIM,@if(REDUCE>>d&1,, for (index_t xi@d=0; xi@d < xshape@d; xi@d++))) {
         auto yid = 0 @for(d, 0, DIM,@if(REDUCE>>d&1,, + xi@d * ystride@d));
-        yp[yid] = @expand_macro(init_@OP, Ty);
+        yp[yid] = @expand_op(init_@OP, @Ty);
     }
     
     @for(d, 0, DIM,@if(REDUCE>>d&1,, for (index_t xi@d=0; xi@d < xshape@d; xi@d++))) {
         @for(d, 0, DIM,@if(REDUCE>>d&1, for (index_t xi@d=0; xi@d < xshape@d; xi@d++),)) {
             auto yid = 0 @for(d, 0, DIM,@if(REDUCE>>d&1,, + xi@d * ystride@d));
             auto xid = 0 @for(d, 0, DIM, + xi@d * xstride@d);
-            yp[yid] = @expand_macro(@OP, Ty, yp[yid], xp[xid]);
+            yp[yid] = @expand_op(@OP, @Ty, yp[yid], @Ty, xp[xid], @Tx);
         }
     }
     (void)count, (void)rcount, (void)yshape0, (void)ystride0;

@@ -9,7 +9,6 @@
 #include "ops/setitem_op.h"
 #include "ops/getitem_op.h"
 #ifdef JIT
-#include "ops/binary_op_defs.h"
 #ifdef JIT_cuda
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
@@ -128,41 +127,41 @@ VarPtr SetitemOp::grad(Var* out, Var* dout, Var* v, int v_index) {
         if (v_index == 0) {
             float32 number = 0;
             VarPtr zero = make_array(&number, 1, ns_float32);
-            return make_setitem(dout, VarSlices(vs), zero, ns_void);
+            return make_setitem(dout, VarSlices(vs, true), zero, ns_void);
         } else {
-            return make_getitem(dout, VarSlices(vs));
+            return make_getitem(dout, VarSlices(vs, true));
         }
     }
     if (op == ns_add) {
         if (v_index == 0) {
             return dout;
         } else {
-            return make_getitem(dout, VarSlices(vs));
+            return make_getitem(dout, VarSlices(vs, true));
         }
     }
     if (op == ns_subtract) {
         if (v_index == 0) {
             return dout;
         } else {
-            return make_unary(make_getitem(dout, VarSlices(vs)), ns_negative);
+            return make_unary(make_getitem(dout, VarSlices(vs, true)), ns_negative);
         }
     }
     if (op == ns_multiply) {
         if (v_index == 0) {
-            return make_setitem(dout, VarSlices(vs), input(1), ns_multiply);
+            return make_setitem(dout, VarSlices(vs, true), input(1), ns_multiply);
         } else {
             return make_binary(
-                make_getitem(inputs().front(), VarSlices(vs)),
-                make_getitem(dout, VarSlices(vs)), ns_multiply);
+                make_getitem(inputs().front(), VarSlices(vs, true)),
+                make_getitem(dout, VarSlices(vs, true)), ns_multiply);
         }
     }
     if (op == ns_divide) {
         if (v_index == 0) {
-            return make_setitem(dout, VarSlices(vs), input(1), ns_divide);
+            return make_setitem(dout, VarSlices(vs, true), input(1), ns_divide);
         } else {
             // dy = -dz*x / y^2
-            auto dout2 = make_getitem(dout, VarSlices(vs));
-            auto x = make_getitem(inputs().front(), VarSlices(vs));
+            auto dout2 = make_getitem(dout, VarSlices(vs, true));
+            auto x = make_getitem(inputs().front(), VarSlices(vs, true));
             auto y = v;
             auto ndz = make_unary(dout2, ns_negative);
             auto ndzx = make_binary(ndz, x, ns_multiply);
@@ -340,12 +339,12 @@ void SetitemOp::jit_run() {
         @if(@is_def(JIT_cpu),
             @if(@strcmp(@OP,void)==0,
                 op[iid] = (Ti)dp[did],
-                op[iid] = @expand_macro(@OP, Ti, op[iid], dp[did])
+                op[iid] = @expand_op(@OP, @Ti, op[iid], @Ti, dp[did], @Td)
             );
         ,
             @if(@strcmp(@OP,void)==0, op[iid] = (Ti)dp[did],
             @if(@strcmp(@OP,add)==0, atomicAdd(&op[iid], (Ti)dp[did]),
-                op[iid] = @expand_macro(@OP, Ti, op[iid], dp[did])
+                op[iid] = @expand_op(@OP, @Ti, op[iid], @Ti, dp[did], @Td)
             )
             );
         )

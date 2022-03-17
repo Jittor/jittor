@@ -33,4 +33,12 @@ OpInfo get_op_info(const string& name) {
     return op_info_map.at(op_file_name);
 }
 
+vector<OpByType*> op_types;
+
+int registe_op_type(OpByType* op_type) {
+    op_types.push_back(op_type);
+    return 0;
+}
+
+
 } // jittor

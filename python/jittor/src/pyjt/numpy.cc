@@ -21,7 +21,9 @@ NanoString npy2ns[] = {
     ns_int64, ns_uint64,
     ns_float32, ns_float64, ns_float64,
     ns_void, ns_void, ns_void, 
-    ns_void 
+    ns_void, // 17
+    ns_void, ns_void, ns_void, ns_void, ns_void, // 22
+    ns_float16, // 23
 };
 
 NPY_TYPES ns2npy[] = {
@@ -34,7 +36,7 @@ NPY_TYPES ns2npy[] = {
     NPY_BYTE, NPY_SHORT, NPY_INT, NPY_LONGLONG,
     NPY_UBYTE, NPY_USHORT, NPY_UINT, NPY_ULONGLONG,
     #endif
-    NPY_FLOAT, NPY_DOUBLE
+    NPY_HALF, NPY_FLOAT, NPY_DOUBLE
 };
 
 void** PyArray_API;

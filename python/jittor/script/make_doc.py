@@ -1,7 +1,7 @@
 import os
 
 def fix_config(in_name, out_name, src_path, out_path):
-    data = open(in_name, 'r').readlines()
+    data = open(in_name, 'r', encoding='utf8').readlines()
     out = []
     for d in data:
         if d.startswith('INPUT                  ='):
@@ -9,7 +9,7 @@ def fix_config(in_name, out_name, src_path, out_path):
         elif d.startswith('OUTPUT_DIRECTORY       ='):
             d = f'OUTPUT_DIRECTORY       ={out_path}\n'
         out.append(d)
-    f = open(out_name, 'w')
+    f = open(out_name, 'w', encoding='utf8')
     f.writelines(out)
 
 jt_path = os.getcwd()

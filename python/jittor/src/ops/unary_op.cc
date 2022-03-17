@@ -8,7 +8,6 @@
 #include "misc/cpu_math.h"
 #include "var.h"
 #include "ops/unary_op.h"
-#include "ops/unary_op_defs.h"
 #include "ops/op_register.h"
 
 namespace jittor {
@@ -33,6 +32,7 @@ static unordered_set<string> unary_ops = {
     "uint16",
     "uint32",
     "uint64",
+    "float16",
     "float32",
     "float64",
     // please keep float64 the last type
@@ -534,22 +534,15 @@ UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
     ns = op;
     ASSERT(ns.is_unary() | ns.is_dtype());
     NanoString dtype;
+    if (ns == x->dtype()) {
+        forward(x);
+        return;
+    }
     if (ns.is_dtype()) {
-        if (ns == x->dtype()) {
-            forward(x);
-            return;
-        }
         dtype = ns;
         ns = ns_cast;
-    } else if (ns.is_bool())
-        dtype = ns_bool;
-    else if (ns.is_float())
-        dtype = dtype_infer(x->ns, x->ns, 2);
-    else if (ns.is_int())
-        dtype = dtype_infer(x->ns, x->ns, 1);
-    else {
-        dtype = x->ns;
-    }
+    } else 
+        dtype = unary_dtype_infer(ns, x->ns);
     y = create_output(nullptr, dtype);
 }
 
@@ -688,7 +681,7 @@ void UnaryOp::jit_run() {
     auto* __restrict__ yp = y->ptr<Ty>();
     index_t num = y->num;
     for (index_t i=0; i<num; i++)
-        yp[i] = @expand_macro(@OP, Ty, xp[i]);
+        yp[i] = @expand_op(@OP, @Ty, xp[i], @Tx);
 }
 #endif // JIT
 

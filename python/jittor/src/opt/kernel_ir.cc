@@ -941,16 +941,22 @@ void KernelIR::remove_intermediate(const unordered_set<string>& names) {
             if (i >= code.size()) break;
             uint j=i+1;
             while (j<code.size() && isvar(code[j])) j++;
+            uint k=j-1;
             if (j<code.size() && code[j]=='[') {
                 // find xxx[...]
-                while (j<code.size() && code[j]!=']') j++;
+                //      i k     j
+                int prefix = 0;
+                while (j<code.size()) {
+                    if (code[j] == ']') prefix--;
+                    if (code[j] == '[') prefix++;
+                    if (prefix == 0) break;
+                    j++;
+                }
+                CHECK(prefix==0);
                 j++;
             }
-            uint k=j-1;
-            if (code[k] == ']') {
+            if (code[j-1] == ']') {
                 // xxxp[...] -> xxxd
-                while (k>=i && code[k]!='[') k--;
-                k--;
                 if (k>=i && code[k]=='p' && names.count(code.substr(i,k-i))) {
                     code[k] = 'd';
                     for (uint l=k+1; l<j; l++) code[l] = ' ';
@@ -961,6 +967,8 @@ void KernelIR::remove_intermediate(const unordered_set<string>& names) {
                         j += 5;
                     }
                 }
+                i = k+1;
+                continue;
             } else
             if (code[k] == 'p' && string(s)=="lvalue" && type=="define") {
                 if (names.count(code.substr(i,k-i))) {

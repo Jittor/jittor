@@ -12,10 +12,14 @@
 #include "cudnn_conv_backward_w_op.h"
 #include "cudnn_wrapper.h"
 #include "executor.h"
+#include "ops/op_register.h"
 
 using namespace std;
 
 namespace jittor {
+
+extern int use_tensorcore;
+
 static inline int findc(const string& format, const char& c) {
     if (c==format[0]) return 0;
     if (c==format[1]) return 1;
@@ -72,6 +76,30 @@ void CudnnConvBackwardWOp::jit_prepare(JK& jk) {
     jk << _CS("][YFORMAT:") << yformat;
     jk << ']';
 }
+
+static auto make_conv = get_op_info("cudnn_conv")
+    .get_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, string, string, string>();
+static auto make_backwardx = get_op_info("cudnn_conv_backward_x")
+    .get_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, int, int, string, string, string>();
+
+VarPtr CudnnConvBackwardWOp::grad(Var* out, Var* dout, Var* v, int v_index) {
+    int xn, xc, xh, xw, wh, ww, wci, wco, yn, yc, yh, yw;
+
+    if (xformat == "nchw") {
+        x->shape.unpack(xn, xc, xh, xw);
+        dy->shape.unpack(yn, yc, yh, yw);
+    } else {
+        x->shape.unpack(xn, xh, xw, xc);
+        dy->shape.unpack(yn, yh, yw, yc);
+    }
+
+    if (v_index == 0) {
+        return make_backwardx(dout, dy, xh, xw, strideh, stridew, paddingh, paddingw, dilationh, dilationw, groups, xformat, wformat, yformat);
+    } else {
+        return make_conv(x, dout, strideh, stridew, paddingh, paddingw, dilationh, dilationw, groups, xformat, wformat, yformat);
+    }
+}
+
 unordered_map<string, cudnnConvolutionBwdFilterAlgo_t> bwdw_algo_cache;
 
 #else // JIT
@@ -149,7 +177,14 @@ void CudnnConvBackwardWOp::jit_run() {
     ));
 
     // using tensor core
-    // checkCudaErrors( cudnnSetConvolutionMathType(cudnnConvDesc, CUDNN_TENSOR_OP_MATH) );
+    if(use_tensorcore){
+        // CUDNN_TENSOR_OP_MATH
+        // The use of Tensor Core operations is permitted but will not actively perform datatype down conversion on tensors in order to utilize Tensor Cores.
+        // CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION
+        // The use of Tensor Core operations is permitted and will actively perform datatype down conversion on tensors in order to utilize Tensor Cores.
+        
+        checkCudaErrors( cudnnSetConvolutionMathType(cudnnConvDesc, CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION) );
+    }
 
     int dimY[] = {
         (int)y->shape[findc("@YFORMAT", 'a')], // n

@@ -9,6 +9,17 @@
 
 namespace jittor {
 
+DEFINE_FLAG(int, amp_reg, 0, "Auto mixed-precision control registers, bit 0: prefer 32; bit 1: prefer 16; bit 2: keep reduce type; bit 3 keep white list type; bit 4: array like op prefer too");
+
+DEFINE_FLAG_WITH_SETTER(int, auto_mixed_precision_level, 0, "Auto mixed-precision optimization level, 0: not use fp16, 1-3: preserve level, not use fp16 for now; 4: perfer fp16, but some ops use fp32 e.g. sum,exp; 5: simular with 4, and array op will automatically convert to fp16; 6: all ops prefer fp16");
+
+void setter_auto_mixed_precision_level(int value) {
+    if (value <= 3) amp_reg = 0; else
+    if (value == 4) amp_reg = amp_prefer16; else
+    if (value == 5) amp_reg = amp_prefer16 | amp_array_prefer; else
+    if (value == 6) amp_reg = amp_prefer16 | amp_array_prefer | amp_keep_reduce | amp_keep_white;
+}
+
 #define FOR_ALL_TYPES(m) \
     m(bool) \
     m(int8) \
@@ -89,15 +100,18 @@ static unordered_set<string> unary_ops = {
     "erfinv"
 };
 
-static unordered_set<string> unary_float_ops = {
+static unordered_set<string> float_ops = {
     "log",
     "exp",
     "sqrt",
+    "mean",
+    "divide",
 };
-static unordered_set<string> unary_int_ops = {
+static unordered_set<string> int_ops = {
     "round_int",
     "floor_int",
     "ceil_int",
+    "floor_divide",
 };
 
 static unordered_set<string> binary_ops = {
@@ -127,6 +141,13 @@ static unordered_set<string> binary_ops = {
     "mean",
 };
 
+
+static unordered_set<string> white_ops = {
+    // "log",
+    "exp",
+    "pow",
+};
+
 #define DEFINE_NS(T) NanoString ns_##T;
 FOR_ALL_NS(DEFINE_NS);
 
@@ -135,6 +156,9 @@ char __ns_to_string[ns_max_size*ns_max_len];
 int __ns_len[ns_max_size];
 
 static void init_ns() {
+    dsize_map["float16"] = 1;
+    is_float_map["float16"] = 1;
+    is_unsigned["float16"] = 0;
     NanoString::ns_t i=0;
     auto func = [&](const char* name, NanoString& ns) {
         ns.set(NanoString::_index, i++, NanoString::_index_nbits);
@@ -149,13 +173,16 @@ static void init_ns() {
         if (unary_ops.count(name)) {
             ns.set(NanoString::_type, NanoString::_unary, NanoString::_type_nbits);
             ns.set(NanoString::_bool, is_bool.count(name));
-            ns.set(NanoString::_int, unary_int_ops.count(name));
-            ns.set(NanoString::_float, unary_float_ops.count(name));
+            ns.set(NanoString::_int, int_ops.count(name));
+            ns.set(NanoString::_float, float_ops.count(name));
         } else
         if (binary_ops.count(name)) {
             ns.set(NanoString::_type, NanoString::_binary, NanoString::_type_nbits);
             ns.set(NanoString::_bool, is_bool.count(name));
+            ns.set(NanoString::_int, int_ops.count(name));
+            ns.set(NanoString::_float, float_ops.count(name));
         }
+        ns.set(NanoString::_white_list, white_ops.count(name));
         __string_to_ns[name] = ns;
         auto name2 = ns.to_cstring();
         int len=0;
@@ -171,6 +198,7 @@ static void init_ns() {
     __string_to_ns["sum"] = ns_add;
     __string_to_ns["min"] = ns_minimum;
     __string_to_ns["max"] = ns_maximum;
+    __string_to_ns["half"] = ns_float16;
     __string_to_ns["float"] = ns_float32;
     __string_to_ns["double"] = ns_float64;
     __string_to_ns["int"] = ns_int32;

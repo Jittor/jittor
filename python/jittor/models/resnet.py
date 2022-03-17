@@ -143,7 +143,7 @@ class ResNet(nn.Module):
         x = self.layer2(x)
         x = self.layer3(x)
         x = self.layer4(x)
-        x = self.avgpool(x)
+        x = self.avgpool(x).float_auto()
         x = jt.reshape(x, (x.shape[0], -1))
         x = self.fc(x)
         return x
@@ -174,12 +174,16 @@ def Resnet50(pretrained=False, **kwargs):
 
 resnet50 = Resnet50
 
-def Resnet38(**kwargs):
-    return _resnet(Bottleneck, [2, 3, 5, 2], **kwargs)
+def Resnet38(pretrained=False, **kwargs):
+    model = _resnet(Bottleneck, [2, 3, 5, 2], **kwargs)
+    if pretrained: model.load("jittorhub://resnet38.pkl")
+    return model
 resnet38 = Resnet38
 
-def Resnet26(**kwargs):
-    return _resnet(Bottleneck, [1, 2, 4, 1], **kwargs)
+def Resnet26(pretrained=False, **kwargs):
+    model = _resnet(Bottleneck, [1, 2, 4, 1], **kwargs)
+    if pretrained: model.load("jittorhub://resnet26.pkl")
+    return model
 resnet26 = Resnet26
 
 def Resnet101(pretrained=False, **kwargs):

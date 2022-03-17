@@ -9,10 +9,13 @@
 #include "cudnn_conv_op.h"
 #include "cudnn_wrapper.h"
 #include "executor.h"
+#include "ops/op_register.h"
 
 using namespace std;
 
 namespace jittor {
+
+extern int use_tensorcore;
 
 static inline int findc(const char* format, const char& c) {
     if (c==format[0]) return 0;
@@ -74,6 +77,24 @@ void CudnnConvOp::jit_prepare(JK& jk) {
     jk << _CS("][YFORMAT:") << yformat;
     jk << ']';
 }
+static auto make_backwardx = get_op_info("cudnn_conv_backward_x")
+    .get_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, int, int, string, string, string>();
+static auto make_backwardw = get_op_info("cudnn_conv_backward_w")
+    .get_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, int, int, string, string, string>();
+VarPtr CudnnConvOp::grad(Var* out, Var* dout, Var* v, int v_index) {
+    int xn, xc, xh, xw, wh, ww, wci, wco, yn, yc, yh, yw;
+    if (xformat == "ncdhw")
+        x->shape.unpack(xn, xc, xh, xw);
+    else
+        x->shape.unpack(xn, xh, xw, xc);
+    w->shape.unpack(wco, wci, wh, ww);
+    if (v_index == 0) {
+        return make_backwardx(w, dout, xh, xw, strideh, stridew, paddingh, paddingw, dilationh, dilationw, groups, xformat, wformat, yformat);
+    } else {
+        return make_backwardw(x, dout, wh, ww, strideh, stridew, paddingh, paddingw, dilationh, dilationw, groups, xformat, wformat, yformat);
+    }
+}
+
 unordered_map<string, cudnnConvolutionFwdAlgo_t> fwd_algo_cache;
 
 #else // JIT
@@ -150,7 +171,14 @@ void CudnnConvOp::jit_run() {
     ));
 
     // using tensor core
-    // checkCudaErrors( cudnnSetConvolutionMathType(cudnnConvDesc, CUDNN_TENSOR_OP_MATH) );
+    if(use_tensorcore){
+        checkCudaErrors( cudnnSetConvolutionMathType(cudnnConvDesc, CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION) );
+    }
+    
+    if (x->dtype() == ns_float16
+        || y->dtype() == ns_float16 || w->dtype() == ns_float16) {
+        checkCudaErrors( cudnnSetConvolutionMathType(cudnnConvDesc, CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION) );
+    }
 
     int dimY[] = {
         (int)y->shape[findc("@YFORMAT", 'a')], // n

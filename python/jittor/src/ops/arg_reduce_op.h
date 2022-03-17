@@ -42,7 +42,7 @@ struct ArgReduceOp : Op {
         >>> jt.arg_reduce(x, 'max', dim=1, keepdims=False)
         [jt.Var([2 1], dtype=int32), jt.Var([5 7], dtype=int32)]
         >>> jt.arg_reduce(x, 'min', dim=1, keepdims=False)
-        [jt.Var([1 2], dtype=int32), jt.Var([5 7], dtype=int32)]
+        [jt.Var([1 2], dtype=int32), jt.Var([2 1], dtype=int32)]
      */
     // @attrs(multiple_outputs)
     ArgReduceOp(Var* x, NanoString op, int dim, bool keepdims);

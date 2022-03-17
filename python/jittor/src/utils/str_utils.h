@@ -27,4 +27,10 @@ vector<string> split(const string& s, const string& sep, int max_split=0);
 
 string strip(const string& s);
 
+string format(const string& s, const vector<string>& v);
+
+string replace(const string& a, const string& b, const string& c);
+
+string join(const vector<string>& vs, const string& x);
+
 } // jittor

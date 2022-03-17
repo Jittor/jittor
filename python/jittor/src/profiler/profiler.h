@@ -24,6 +24,8 @@ struct Profiler {
         uint64_t in_total, out_total;
         // compute thoughtput in ops
         uint64_t compute_total;
+        // peek time use memcopy
+        uint64_t peek_time_total;
         // cache test info
         unique_ptr<CacheInfo> cache_info;
         cstr stack_info;
@@ -56,6 +58,9 @@ struct Profiler {
     
     int64_t warmup=0, rerun=0;
     unordered_map<string, Info> records;
+    int64 relay_extra_cost;
+    FusedOp* relay_fop;
+
     ~Profiler();
 };
 

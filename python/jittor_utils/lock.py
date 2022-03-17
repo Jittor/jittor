@@ -14,6 +14,8 @@ If conda is used, please install with command:
 import os
 from jittor_utils import cache_path, LOG
 
+disable_lock = os.environ.get("disable_lock", "0") == "1"
+
 class Lock:   
     def __init__(self, filename):  
         self.handle = open(filename, 'w')
@@ -21,6 +23,8 @@ class Lock:
         self.is_locked = False
       
     def lock(self):
+        if disable_lock:
+            return
         if fcntl:
             fcntl.flock(self.handle, fcntl.LOCK_EX)
         else:
@@ -30,6 +34,8 @@ class Lock:
         LOG.vv(f'LOCK PID: {os.getpid()}')
         
     def unlock(self):
+        if disable_lock:
+            return
         if fcntl:
             fcntl.flock(self.handle, fcntl.LOCK_UN)
         else:
