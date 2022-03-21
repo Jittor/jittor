@@ -100,7 +100,7 @@ __global__ void kernel(pout0_type* x, dout_type* y, out0_type* z, int len) {{
     {for_loop} 
         #pragma unroll
         for (int j=0; j<{ILP}; j++)
-            v1 += {"vy[i][j];" if log else "vx[i][j]*vy[i][j];"}
+            v1 += {"float(vy[i][j]);" if log else "float(vx[i][j]*vy[i][j]);"}
 
     typedef cub::BlockReduce<float, {tnum}> BlockReduce;
     __shared__ typename BlockReduce::TempStorage temp_storage;
@@ -114,8 +114,8 @@ __global__ void kernel(pout0_type* x, dout_type* y, out0_type* z, int len) {{
         #pragma unroll
         for (int j=0; j<{ILP}; j++)
             vx[i][j] = {
-                "vy[i][j] - expf(vx[i][j]) * reduce_var;" if log 
-                else "vx[i][j] * (vy[i][j] - reduce_var);"
+                "vy[i][j] - in0_type(expf(vx[i][j]) * reduce_var);" if log 
+                else "vx[i][j] * (vy[i][j] - in0_type(reduce_var));"
             }
 
     {for_loop}
