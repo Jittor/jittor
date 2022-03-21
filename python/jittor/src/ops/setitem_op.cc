@@ -312,7 +312,7 @@ void SetitemOp::jit_run() {
         std::memcpy(op, ip, out->size);
     #else
     if (op != ip)
-        checkCudaErrors(cudaMemcpyAsync(op, ip, out->size, cudaMemcpyDefault, 0));
+        checkCudaErrors(cudaMemcpyAsync(op, ip, out->size, cudaMemcpyDeviceToDevice, 0));
     #endif
 
     if (flags.get((NodeFlags::Flags(SetitemOp::_data_inplaced))) &&
