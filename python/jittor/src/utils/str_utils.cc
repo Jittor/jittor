@@ -76,4 +76,122 @@ string replace(const string& a, const string& b, const string& c) {
     return join(vs, c);
 }
 
+static inline bool isvar(char x) { return isalnum(x) || x == '_' || x == ':'; }
+
+vector<string> token_split(const string& s) {
+    vector<string> ss;
+    if (!s.size()) return ss;
+    ss.push_back(string()+s[0]);
+    for (int i=1; i<s.size(); i++) {
+        if (isvar(s[i]) != isvar(s[i-1]))
+            ss.push_back("");
+        ss.back() += s[i];
+    }
+    return ss;
+}
+
+static void parse_reg(const string& src, 
+    vector<string>& patterns,
+    vector<int>& arg_id) {
+    patterns.clear();
+    arg_id.clear();
+    patterns.push_back("");
+    for (int j=0; j<src.size(); j++) {
+        if (src[j] == '$') {
+            j++;
+            arg_id.push_back(src[j]-'0');
+            patterns.push_back("");
+            continue;
+        }
+        patterns.back() += src[j];
+    }
+}
+
+void token_replace(vector<string>& tokens, int i, const string& src, const string& dst) {
+    ASSERT(src.at(0) != '$' && src.at(src.size()-1) != '$' && 
+        src.at(src.size()-2) != '$') << "illegal src:" << src;
+    vector<string> patterns;
+    vector<int> arg_id;
+    vector<string> patterns2;
+    vector<int> arg_id2;
+    unordered_map<int, string> args;
+    parse_reg(src, patterns, arg_id);
+    parse_reg(dst, patterns2, arg_id2);
+
+    int start_i, start_pos, end_i, end_pos;
+    int c_i = i, c_pos = 0;
+    int match_i, match_pos;
+    string c_arg;
+
+    auto match = [&](int c_i, int c_pos, const string& pat) -> bool {
+        for (int i=0; i<pat.size(); i++) {
+            if (tokens[c_i][c_pos] != pat[i])
+                return false;
+            c_pos ++;
+            if (c_pos >= tokens[c_i].size()) {
+                c_pos = 0;
+                c_i ++;
+                if (c_i >= tokens.size())
+                    return false;
+            }
+        }
+        match_i = c_i;
+        match_pos = c_pos;
+        return true;
+    };
+
+    for (int j=0; j<patterns.size(); j++) {
+        int ok = 0;
+        while (c_i < tokens.size()) {
+            while (c_pos < tokens[c_i].size()) {
+                if (match(c_i, c_pos, patterns[j])) {
+                    ok = 1;
+                    break;
+                }
+                c_arg += tokens[c_i][c_pos];
+                c_pos ++;
+            }
+            if (ok) break;
+            c_i ++;
+            c_pos = 0;
+        }
+        CHECK(ok) << "Pattern not match:" << patterns[j] << j;
+        if (j == 0) {
+            start_i = c_i;
+            start_pos = c_pos;
+        }
+        if (j) {
+            args[arg_id[j-1]] = c_arg;
+        }
+        c_arg = "";
+        c_i = match_i;
+        c_pos = match_pos;
+        if (j == patterns.size()-1) {
+            end_i = c_i;
+            end_pos = c_pos;
+        }
+    }
+    string new_src;
+    for (int j=0; j<patterns2.size(); j++) {
+        if (j) new_src += args[arg_id2.at(j-1)];
+        new_src += patterns2[j];
+    }
+    if (start_i == end_i) {
+        tokens[start_i] = tokens[start_i].substr(0, start_pos) +
+            new_src + tokens[start_i].substr(end_pos);
+    } else {
+        tokens[start_i] = tokens[start_i].substr(0, start_pos)
+            + new_src;
+        tokens[end_i] = tokens[end_i].substr(end_pos);
+        for (int j=start_i+1; j<end_i; j++)
+            tokens[j] = "";
+    }
+}
+
+string token_replace(const string& s, const string& src, const string& dst) {
+    vector<string> ss{s};
+    token_replace(ss, 0, src, dst);
+    return join(ss, "");
+}
+
 } // jittor

@@ -19,6 +19,7 @@ import time
 from ctypes import cdll
 import shutil
 import urllib.request
+import ctypes
 
 if platform.system() == 'Darwin':
     mp.set_start_method('fork')
@@ -386,6 +387,22 @@ def env_or_find(name, bname, silent=False):
         return path
     return find_exe(bname, silent=silent)
 
+def env_or_try_find(name, bname):
+    if name in os.environ:
+        path = os.environ[name]
+        if path != "":
+            version = get_version(path)
+            LOG.i(f"Found {bname}{version} at {path}")
+        return path
+    return try_find_exe(bname)
+
+def try_find_exe(*args):
+    try:
+        return find_exe(*args)
+    except:
+        LOG.v(f"{args[0]} not found.")
+        return ""
+
 def get_cc_type(cc_path):
     bname = os.path.basename(cc_path)
     if "clang" in bname: return "clang"
@@ -526,3 +543,65 @@ if os.name == 'nt':
         os.environ["PATH"] = path+';'+os.environ["PATH"]
         if hasattr(os, "add_dll_directory"):
             os.add_dll_directory(path)
+
+backends = []
+def add_backend(mod):
+    backends.append(mod)
+
+def compile_module(source, flags):
+    tmp_path = os.path.join(cache_path, "tmp")
+    os.makedirs(tmp_path, exist_ok=True)
+    hash = "hash_" + get_str_hash(source)
+    so = get_py3_extension_suffix()
+    header_name = os.path.join(tmp_path, hash+".h")
+    source_name = os.path.join(tmp_path, hash+".cc")
+    lib_name = hash+so
+    with open(header_name, "w", encoding="utf8") as f:
+        f.write(source)
+    from jittor.pyjt_compiler import compile_single
+    ok = compile_single(header_name, source_name)
+    assert ok, "no pyjt interface found"
+    
+    entry_src = f'''
+static void init_module(PyModuleDef* mdef, PyObject* m) {{
+    mdef->m_doc = "generated py jittor_utils.compile_module";
+    jittor::pyjt_def_{hash}(m);
+}}
+PYJT_MODULE_INIT({hash});
+    '''
+    with open(source_name, "r", encoding="utf8") as f:
+        src = f.read()
+    with open(source_name, "w", encoding="utf8") as f:
+        f.write(src + entry_src)
+    jittor_path = os.path.join(os.path.dirname(__file__), "..", "jittor")
+    jittor_path = os.path.abspath(jittor_path)
+    do_compile([f"\"{cc_path}\" \"{source_name}\" \"{jittor_path}/src/pyjt/py_arg_printer.cc\" {flags} -o \"{cache_path+'/'+lib_name}\" ",
+        cache_path, jittor_path])
+    with import_scope(os.RTLD_GLOBAL | os.RTLD_NOW):
+        exec(f"import {hash}")
+    mod = locals()[hash]
+    return mod
+
+def process_jittor_source(device_type, callback):
+    import jittor.compiler as compiler
+    import shutil
+    djittor = device_type + "_jittor"
+    djittor_path = os.path.join(compiler.cache_path, djittor)
+    os.makedirs(djittor_path, exist_ok=True)
+
+    for root, dir, files in os.walk(compiler.jittor_path):
+        root2 = root.replace(compiler.jittor_path, djittor_path)
+        os.makedirs(root2, exist_ok=True)
+        for name in files:
+            fname = os.path.join(root, name)
+            fname2 = os.path.join(root2, name)
+            if fname.endswith(".h") or fname.endswith(".cc"):
+                with open(fname, 'r', encoding="utf8") as f:
+                    src = f.read()
+                src = callback(src, name, {"fname":fname, "fname2":fname2})
+                with open(fname2, 'w', encoding="utf8") as f:
+                    f.write(src)
+            else:
+                shutil.copy(fname, fname2)
+    compiler.cc_flags = compiler.cc_flags.replace(compiler.jittor_path, djittor_path) + f" -I\"{djittor_path}/extern/cuda/inc\" "
+    compiler.jittor_path = djittor_path
