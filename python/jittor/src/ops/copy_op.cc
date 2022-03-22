@@ -40,12 +40,7 @@ void CopyOp::run() {
     auto y_ptr = outputs().front()->mem_ptr;
     #ifdef HAS_CUDA
     if (flags.get(NodeFlags::_cuda)) {
-        // TODO: check why cpu allocator in x
-        #ifdef IS_CUDA
-        checkCudaErrors(cudaMemcpyAsync(y_ptr, x_ptr, size, cudaMemcpyDefault, 0));
-        #else
         checkCudaErrors(cudaMemcpyAsync(y_ptr, x_ptr, size, cudaMemcpyDeviceToDevice, 0));
-        #endif
     } else
     #endif
     {
