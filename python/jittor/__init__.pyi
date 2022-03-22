@@ -5,7 +5,7 @@ from . import attention as attention, contrib as contrib, dataset as dataset, in
 from .compile_extern import cublas as cublas, cudnn as cudnn, curand as curand, mkl_ops as mkl_ops, mpi_ops as mpi_ops, world_size as world_size
 from .compiler import compile_custom_op as compile_custom_op, compile_custom_ops as compile_custom_ops
 from .contrib import concat as concat
-from .nn import matmul as matmul
+from .nn import bmm as bmm, bmm_transpose as bmm_transpose, matmul as matmul
 from collections import OrderedDict as OrderedDict
 from collections.abc import Mapping as Mapping
 from typing import Any
@@ -64,6 +64,8 @@ def clean() -> None: ...
 cast = unary
 
 def array(data, dtype: Any | None = ...): ...
+def random(shape, dtype: str = ..., type: str = ...): ...
+def float_auto(x): ...
 def array64(data, dtype: Any | None = ...): ...
 def grad(loss, targets): ...
 def liveness_info(): ...
@@ -85,7 +87,6 @@ origin_transpose = transpose
 def transpose(x, *dim): ...
 permute = transpose
 def flatten(input, start_dim: int = ..., end_dim: int = ...): ...
-def start_grad(x): ...
 def detach(x): ...
 def unsqueeze(x, dim): ...
 def squeeze(x, dim): ...
@@ -149,6 +150,11 @@ class Module:
     is_train: bool
     def is_training(self) -> bool: ...
     def mpi_param_broadcast(self, root: int = ...) -> None: ...
+    def __setattr__(self, key, value) -> None: ...
+    def __getattr__(self, key): ...
+    def float16(self) -> None: ...
+    def half(self) -> None: ...
+    def float_auto(self) -> None: ...
 
 class Function(Module):
     input_mask: Any
@@ -187,6 +193,7 @@ def to_float(v): ...
 def to_bool(v): ...
 def format(v, spec): ...
 def get_len(var): ...
+half = float16
 
 def is_var(v): ...
 from typing import List, Tuple, Callable, overload
@@ -374,7 +381,7 @@ def index(shape: Tuple[int], dim: int, dtype: str="int32")-> Var:
 	        # output: [[0,1],[0,1]]'''
 	...
 @overload
-def index(shape: Tuple[int], dtype: str="int32")-> List[Var]:
+def index(shape: Tuple[int], dtype: str="int32"):
 	'''Document:
 	* 
 	    Index Operator generate index of shape.
@@ -428,7 +435,7 @@ def index(a: Var, dim: int, dtype: str="int32")-> Var:
 	        # output: [[0,1],[0,1]]'''
 	...
 @overload
-def index(a: Var, dtype: str="int32")-> List[Var]:
+def index(a: Var, dtype: str="int32"):
 	'''Document:
 	* 
 	    Index Operator generate index of shape.
@@ -461,7 +468,7 @@ def index_var(a: Var, dim: int, dtype: str="int32")-> Var:
 	        jt.index_var(a, 1) similar with jt.index(a.shape, 1)'''
 	...
 @overload
-def index_var(a: Var, dtype: str="int32")-> List[Var]:
+def index_var(a: Var, dtype: str="int32"):
 	'''Document:
 	* shape dependency version of index op
 	        jt.index_var(a, 1) similar with jt.index(a.shape, 1)'''
@@ -824,7 +831,7 @@ def bitwise_xor(x: Var, y: Var)-> Var:
 	...
 def tape(x: Var)-> Var:
  ...
-def where(cond: Var, dtype: str="int32")-> List[Var]:
+def where(cond: Var, dtype: str="int32"):
 	'''Document:
 	*
 	    Where Operator generate index of true condition.
@@ -838,9 +845,9 @@ def where(cond: Var, dtype: str="int32")-> List[Var]:
 	    Example::
 	
 	        jt.where([[0,0,1],[1,0,0]])
-	        # return ( [0,2], [1,0] )'''
+	        # return [jt.Var([0 1], dtype=int32), jt.Var([2 0], dtype=int32)]'''
 	...
-def argsort(x: Var, dim: int=-1, descending: bool=False, dtype: str="int32")-> List[Var]:
+def argsort(x: Var, dim: int=-1, descending: bool=False, dtype: str="int32"):
 	'''Document:
 	* 
 	    Argsort Operator Perform an indirect sort by given key or compare function.
@@ -883,7 +890,7 @@ def argsort(x: Var, dim: int=-1, descending: bool=False, dtype: str="int32")-> L
 	...
 def fetch(inputs: List[Var], func: Callable)-> Var:
  ...
-def arg_reduce(x: Var, op: str, dim: int, keepdims: bool)-> List[Var]:
+def arg_reduce(x: Var, op: str, dim: int, keepdims: bool):
 	'''Document:
 	*
 	    Returns the indices of the maximum / minimum of the input across a dimension.
@@ -2278,6 +2285,8 @@ def uint32(x: Var)-> Var:
  ...
 def uint64(x: Var)-> Var:
  ...
+def float16(x: Var)-> Var:
+ ...
 def float32(x: Var)-> Var:
  ...
 def float64(x: Var)-> Var:
@@ -2870,6 +2879,8 @@ def erf(x: Var)-> Var:
 	        >>> jt.erf(a)
 	        jt.Var([ 0.51559156  0.45739546 -0.85728306 -0.9258883 ], dtype=float32)'''
 	...
+def erfinv(x: Var)-> Var:
+ ...
 def transpose(x: Var, axes: Tuple[int]=())-> Var:
  ...
 def fuse_transpose(x: Var, axes: Tuple[int]=())-> Var:
@@ -3005,7 +3016,7 @@ def numpy_code(shape: Tuple[int], dtype: str, inputs: List[Var], forward: Callab
 	        )'''
 	...
 @overload
-def numpy_code(shapes: List[Tuple[int]], dtypes: List[str], inputs: List[Var], forward: Callable, backward: List[Callable])-> List[Var]:
+def numpy_code(shapes: List[Tuple[int]], dtypes: List[str], inputs: List[Var], forward: Callable, backward: List[Callable]):
 	'''Document:
 	*
 	    Numpy Code Operator for easily customized op.
@@ -3151,7 +3162,7 @@ def numpy_code(shape: Tuple[int], dtype: str, inputs: List[Var], forward: Callab
 	        )'''
 	...
 @overload
-def numpy_code(shapes: List[Tuple[int]], dtypes: List[str], inputs: List[Var], forward: Callable)-> List[Var]:
+def numpy_code(shapes: List[Tuple[int]], dtypes: List[str], inputs: List[Var], forward: Callable):
 	'''Document:
 	*
 	    Numpy Code Operator for easily customized op.
@@ -3345,6 +3356,23 @@ def code(shape: Tuple[int], dtype: str, inputs: List[Var]={}, cpu_src: str="", c
 	        assert (b.data == [5,3,1]).all()
 	        assert (c.data == [-4,-2]).all()
 	
+	    Example-5::
+	
+	        # This example shows how to customize code op
+	        # compilation flags, such as add include search
+	        # path, add definitions, or any command line options
+	
+	        a = jt.random([10])
+	        b = jt.code(a.shape, a.dtype, [a],
+	            cpu_src="""
+	                @out0(0) = HAHAHA;
+	            """)
+	        # HAHAHA is defined in flags below
+	        # /any/include/path can be change to any path you want to include
+	        b.compile_options = {"FLAGS: -DHAHAHA=233 -I/any/include/path ": 1}
+	        print(b[0])
+	        # will output 233
+	
 	
 	    CUDA Example-1::
 	
@@ -3435,7 +3463,7 @@ def code(shape: Tuple[int], dtype: str, inputs: List[Var]={}, cpu_src: str="", c
 	        print(jt.grad(c, [a, b]))'''
 	...
 @overload
-def code(shapes: List[Tuple[int]], dtypes: List[str], inputs: List[Var]={}, cpu_src: str="", cpu_grad_src: List[str]={}, cpu_header: str="", cuda_src: str="", cuda_grad_src: List[str]={}, cuda_header: str="")-> List[Var]:
+def code(shapes: List[Tuple[int]], dtypes: List[str], inputs: List[Var]={}, cpu_src: str="", cpu_grad_src: List[str]={}, cpu_header: str="", cuda_src: str="", cuda_grad_src: List[str]={}, cuda_header: str=""):
 	'''Document:
 	*
 	    Code Operator for easily customized op.
@@ -3556,6 +3584,23 @@ def code(shapes: List[Tuple[int]], dtypes: List[str], inputs: List[Var]={}, cpu_
 	        assert (b.data == [5,3,1]).all()
 	        assert (c.data == [-4,-2]).all()
 	
+	    Example-5::
+	
+	        # This example shows how to customize code op
+	        # compilation flags, such as add include search
+	        # path, add definitions, or any command line options
+	
+	        a = jt.random([10])
+	        b = jt.code(a.shape, a.dtype, [a],
+	            cpu_src="""
+	                @out0(0) = HAHAHA;
+	            """)
+	        # HAHAHA is defined in flags below
+	        # /any/include/path can be change to any path you want to include
+	        b.compile_options = {"FLAGS: -DHAHAHA=233 -I/any/include/path ": 1}
+	        print(b[0])
+	        # will output 233
+	
 	
 	    CUDA Example-1::
 	
@@ -3646,7 +3691,7 @@ def code(shapes: List[Tuple[int]], dtypes: List[str], inputs: List[Var]={}, cpu_
 	        print(jt.grad(c, [a, b]))'''
 	...
 @overload
-def code(inputs: List[Var], outputs: List[Var], cpu_src: str="", cpu_grad_src: List[str]={}, cpu_header: str="", cuda_src: str="", cuda_grad_src: List[str]={}, cuda_header: str="")-> List[Var]:
+def code(inputs: List[Var], outputs: List[Var], cpu_src: str="", cpu_grad_src: List[str]={}, cpu_header: str="", cuda_src: str="", cuda_grad_src: List[str]={}, cuda_header: str=""):
 	'''Document:
 	*
 	    Code Operator for easily customized op.
@@ -3766,6 +3811,23 @@ def code(inputs: List[Var], outputs: List[Var], cpu_src: str="", cpu_grad_src: L
 	        )
 	        assert (b.data == [5,3,1]).all()
 	        assert (c.data == [-4,-2]).all()
+	
+	    Example-5::
+	
+	        # This example shows how to customize code op
+	        # compilation flags, such as add include search
+	        # path, add definitions, or any command line options
+	
+	        a = jt.random([10])
+	        b = jt.code(a.shape, a.dtype, [a],
+	            cpu_src="""
+	                @out0(0) = HAHAHA;
+	            """)
+	        # HAHAHA is defined in flags below
+	        # /any/include/path can be change to any path you want to include
+	        b.compile_options = {"FLAGS: -DHAHAHA=233 -I/any/include/path ": 1}
+	        print(b[0])
+	        # will output 233
 	
 	
 	    CUDA Example-1::
@@ -4239,7 +4301,7 @@ class Var:
 		        # output: [[0,1],[0,1]]'''
 		...
 	@overload
-	def index(self, dtype: str="int32")-> List[Var]:		
+	def index(self, dtype: str="int32"):		
 		'''Document:
 		* 
 		    Index Operator generate index of shape.
@@ -4272,7 +4334,7 @@ class Var:
 		        jt.index_var(a, 1) similar with jt.index(a.shape, 1)'''
 		...
 	@overload
-	def index_var(self, dtype: str="int32")-> List[Var]:		
+	def index_var(self, dtype: str="int32"):		
 		'''Document:
 		* shape dependency version of index op
 		        jt.index_var(a, 1) similar with jt.index(a.shape, 1)'''
@@ -4633,7 +4695,7 @@ class Var:
 		    * [in] y: the second input, jt.Var (integal or boolean).'''
 		...
 	def tape(self)-> Var: ...
-	def where(self, dtype: str="int32")-> List[Var]:		
+	def where(self, dtype: str="int32"):		
 		'''Document:
 		*
 		    Where Operator generate index of true condition.
@@ -4647,9 +4709,9 @@ class Var:
 		    Example::
 		
 		        jt.where([[0,0,1],[1,0,0]])
-		        # return ( [0,2], [1,0] )'''
+		        # return [jt.Var([0 1], dtype=int32), jt.Var([2 0], dtype=int32)]'''
 		...
-	def argsort(self, dim: int=-1, descending: bool=False, dtype: str="int32")-> List[Var]:		
+	def argsort(self, dim: int=-1, descending: bool=False, dtype: str="int32"):		
 		'''Document:
 		* 
 		    Argsort Operator Perform an indirect sort by given key or compare function.
@@ -4691,7 +4753,7 @@ class Var:
 		            # return [[0 1 0],[1 0 1]],  [[11 11 12],[12 13 13]]'''
 		...
 	def fetch(self, func: Callable)-> Var: ...
-	def arg_reduce(self, op: str, dim: int, keepdims: bool)-> List[Var]:		
+	def arg_reduce(self, op: str, dim: int, keepdims: bool):		
 		'''Document:
 		*
 		    Returns the indices of the maximum / minimum of the input across a dimension.
@@ -6059,6 +6121,7 @@ class Var:
 	def uint16(self)-> Var: ...
 	def uint32(self)-> Var: ...
 	def uint64(self)-> Var: ...
+	def float16(self)-> Var: ...
 	def float32(self)-> Var: ...
 	def float64(self)-> Var: ...
 	def abs(self)-> Var:		
@@ -6649,6 +6712,7 @@ class Var:
 		        >>> jt.erf(a)
 		        jt.Var([ 0.51559156  0.45739546 -0.85728306 -0.9258883 ], dtype=float32)'''
 		...
+	def erfinv(self)-> Var: ...
 	def transpose(self, axes: Tuple[int]=())-> Var: ...
 	def fuse_transpose(self, axes: Tuple[int]=())-> Var: ...
 	def safe_clip(self, left: float, right: float)-> Var:		
@@ -6705,7 +6769,7 @@ class Var:
 		        #    x[y[0], 1] <= x[y[1], 1] and x[y[1], 1] <= x[y[2], 1] and ... and x[y[m-2], 1] <= x[y[m-1], 1]'''
 		...
 	@overload
-	def code(self, outputs: List[Var], cpu_src: str="", cpu_grad_src: List[str]={}, cpu_header: str="", cuda_src: str="", cuda_grad_src: List[str]={}, cuda_header: str="")-> List[Var]:		
+	def code(self, outputs: List[Var], cpu_src: str="", cpu_grad_src: List[str]={}, cpu_header: str="", cuda_src: str="", cuda_grad_src: List[str]={}, cuda_header: str=""):		
 		'''Document:
 		*
 		    Code Operator for easily customized op.
@@ -6825,6 +6889,23 @@ class Var:
 		        )
 		        assert (b.data == [5,3,1]).all()
 		        assert (c.data == [-4,-2]).all()
+		
+		    Example-5::
+		
+		        # This example shows how to customize code op
+		        # compilation flags, such as add include search
+		        # path, add definitions, or any command line options
+		
+		        a = jt.random([10])
+		        b = jt.code(a.shape, a.dtype, [a],
+		            cpu_src="""
+		                @out0(0) = HAHAHA;
+		            """)
+		        # HAHAHA is defined in flags below
+		        # /any/include/path can be change to any path you want to include
+		        b.compile_options = {"FLAGS: -DHAHAHA=233 -I/any/include/path ": 1}
+		        print(b[0])
+		        # will output 233
 		
 		
 		    CUDA Example-1::
@@ -7177,6 +7258,11 @@ class Var:
 		*
 		     * return True if operator fusion is stopped.'''
 		...
+	def start_grad(self)-> Var:		
+		'''Document:
+		* 
+		     * enable the gradient calculation for the Var.'''
+		...
 	def item(self)-> float | int | bool:		
 		'''Document:
 		*
@@ -7266,7 +7352,13 @@ class Var:
 		         [1 8 1 1 2 2]], dtype=int32)'''
 		...
 	def permute(self, x: Var, axes: Tuple[int]=())-> Var: ...
+	def detach_inplace(self)-> Var:		
+		'''Document:
+		* 
+		     * enable the gradient calculation for the Var.'''
+		...
 	def astype(self, x: Var, op: str)-> Var: ...
+	def half(self, x: Var)-> Var: ...
 	def expand_as(self, x: Var, y: Var, dims: Tuple[int]=())-> Var:		
 		'''Document:
 		*
@@ -7310,8 +7402,12 @@ class Flags:
 	'''A set of flags to configure jittor running behaviors'''
 	addr2line_path: str
 	'''Path of addr2line. Default: ""'''
+	amp_reg: int
+	'''Auto mixed-precision control registers, bit 0: prefer 32; bit 1: prefer 16; bit 2: keep reduce type; bit 3 keep white list type; bit 4: array like op prefer too. Default: 0'''
 	auto_convert_64_to_32: int
 	'''auto convert 64bit numpy array into 32bit jittor array. Default: 1'''
+	auto_mixed_precision_level: int
+	'''Auto mixed-precision optimization level, 0: not use fp16, 1-3: preserve level, not use fp16 for now; 4: perfer fp16, but some ops use fp32 e.g. sum,exp; 5: simular with 4, and array op will automatically convert to fp16; 6: all ops prefer fp16. Default: 0'''
 	cache_path: str
 	'''Cache path of jittor. Default: ""'''
 	cc_flags: str
@@ -7324,10 +7420,12 @@ class Flags:
 	'''Unify graph sanity check. Default: 0'''
 	compile_options: Any
 	'''Override the default loop transfrom options. Default: {}'''
+	disable_lock: bool
+	'''Disable file lock. Default: 0'''
 	enable_tuner: int
 	'''Enable tuner. Default: 1'''
 	exclude_pass: str
-	'''Don't run certian pass. Default: ""'''
+	'''Don't run certain pass. Default: ""'''
 	extra_gdb_cmd: str
 	'''Extra command pass to GDB, seperate by(;) . Default: ""): Extra command pass to GDB, seperate by(;'''
 	gdb_attach: int
@@ -7352,6 +7450,8 @@ class Flags:
 	'''Default enabled, if disable, use immediately eager execution rather than lazy execution, This flag makes error message and traceback infomation better. But this flag will raise memory consumption and lower the performance. Default: 1'''
 	log_file: str
 	'''log to file, mpi env will add $OMPI_COMM_WORLD_RANK suffix. Default: ""'''
+	log_op_hash: str
+	'''Output compiler pass result of certain hash of op. Default: ""'''
 	log_silent: int
 	'''The log will be completely silent. Default: 0'''
 	log_sync: int
@@ -7376,6 +7476,10 @@ class Flags:
 	'''Enable profiler. Default: 0'''
 	profiler_hide_relay: int
 	'''Profiler hide relayed op. Default: 0'''
+	profiler_record_peek: int
+	'''Profiler record peek mem bandwidth. Default: 0'''
+	profiler_record_shape: int
+	'''Profiler record shape for op. Default: 0'''
 	profiler_rerun: int
 	'''Profiler rerun. Default: 0'''
 	profiler_warmup: int
@@ -7402,7 +7506,11 @@ class Flags:
 	'''If not overflow, try to use 32 bit type as index type. Default: 0'''
 	update_queue_auto_flush_delay: int
 	'''when size of a update queue is great than this value, update queue trigger auto flush(default 2). Default: 2): when size of a update queue is great than this value, update queue trigger auto flush(default 2'''
+	use_acl: int
+	'''Use cuda or not. 1 for trying to use cuda, 2 for forcing to use cuda. Default: 0'''
 	use_cuda: int
+	'''Use cuda or not. 1 for trying to use cuda, 2 for forcing to use cuda. Default: 0'''
+	use_device: int
 	'''Use cuda or not. 1 for trying to use cuda, 2 for forcing to use cuda. Default: 0'''
 	use_nfef_allocator: int
 	'''Enable never free exact fit allocator. Default: 0'''
@@ -7414,5 +7522,7 @@ class Flags:
 	'''Enable stat allocator. Default: 0'''
 	use_temp_allocator: int
 	'''Enable temp allocator. Default: 1'''
+	use_tensorcore: int
+	'''use tensor core. Default: 0'''
 flags: Flags
 '''Jittor running time flags instance'''
