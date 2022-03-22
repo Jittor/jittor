@@ -28,7 +28,12 @@ from pathlib import Path
 import json
 
 
+_jittor_home = None
 def home():
+    global _jittor_home
+    if _jittor_home is not None:
+        return _jittor_home
+
     src_path = os.path.join(str(Path.home()),".cache","jittor")
     os.makedirs(src_path,exist_ok=True)
     src_path_file = os.path.join(src_path,"config.json")
@@ -49,7 +54,8 @@ def home():
     with open(src_path_file,"w") as f:
         data['jittor_home'] = _home_path
         json.dump(data,f)
-
+    
+    _jittor_home = _home_path
     return _home_path
 
 class Logwrapper:
