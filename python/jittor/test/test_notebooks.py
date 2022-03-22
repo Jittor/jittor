@@ -8,10 +8,10 @@ import unittest, os
 import jittor as jt
 from jittor import LOG
 import sys
-from pathlib import Path
+import jittor_utils as jit_utils
 
 dirname = os.path.join(jt.flags.jittor_path, "notebook")
-notebook_dir = os.path.join(str(Path.home()), ".cache","jittor","notebook")
+notebook_dir = os.path.join(jit_utils.home(), ".cache","jittor","notebook")
 tests = []
 for mdname in os.listdir(dirname):
     if not mdname.endswith(".src.md"): continue

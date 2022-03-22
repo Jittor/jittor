@@ -19,7 +19,7 @@ from ctypes import cdll
 from ctypes.util import find_library
 
 import jittor_utils as jit_utils
-from jittor_utils import LOG, run_cmd, cache_path, find_exe, cc_path, cc_type, cache_path
+from jittor_utils import LOG, run_cmd, find_exe, cc_path, cc_type, cache_path
 from . import pyjt_compiler
 from jittor_utils import lock
 from jittor_utils import install_cuda

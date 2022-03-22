@@ -1,7 +1,7 @@
 #!python3
 import os, json
-from pathlib import Path
-notebook_dir = os.path.join(str(Path.home()), ".cache","jittor","notebook")
+import jittor_utils as jit_utils
+notebook_dir = os.path.join(jit_utils.home(), ".cache","jittor","notebook")
 if not os.path.isdir(notebook_dir):
     os.mkdir(notebook_dir)
 dirname = os.path.dirname(__file__)
