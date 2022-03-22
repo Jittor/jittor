@@ -112,10 +112,10 @@ class TestCore(unittest.TestCase):
         a.y = jt.Module()
         a.a = jt.array([1,2,3])
         a.b = jt.array([1,2,3])
-        assert a._modules.keys() == ["x", "y"]
+        assert list(a._modules.keys()) == ["x", "y"]
         assert a._modules['x'] is a.x
         assert a._modules['y'] is a.y
-        assert a._parameters.keys() == ['a', 'b']
+        assert list(a._parameters.keys()) == ['a', 'b']
         assert a._parameters['a'] is a.a
         assert a._parameters['b'] is a.b
 
