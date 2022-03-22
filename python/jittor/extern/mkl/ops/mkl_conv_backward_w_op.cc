@@ -13,9 +13,9 @@
 #include "var.h"
 #include "mkl_conv_backward_w_op.h"
 
-#include <mkldnn.hpp>
+#include <dnnl.hpp>
 
-using namespace mkldnn;
+using namespace dnnl;
 using namespace std;
 
 namespace jittor {
@@ -143,8 +143,8 @@ void MklConvBackwardWOp::jit_run() {
     if (conv_pd.src_desc() != conv_user_src_memory.get_desc()) {
         conv_src_memory = memory(conv_pd.src_desc(), eng);
         net_bwd.push_back(reorder(conv_user_src_memory, conv_src_memory));
-        net_bwd_args.push_back({{MKLDNN_ARG_FROM, conv_user_src_memory},
-                {MKLDNN_ARG_TO, conv_src_memory}});
+        net_bwd_args.push_back({{DNNL_ARG_FROM, conv_user_src_memory},
+                {DNNL_ARG_TO, conv_src_memory}});
     }
     
     auto conv_user_diff_dst_memory
@@ -169,8 +169,8 @@ void MklConvBackwardWOp::jit_run() {
     if (conv_bwd_weights_pd.src_desc() != conv_src_memory.get_desc()) {
         conv_bwd_src_memory = memory(conv_bwd_weights_pd.src_desc(), eng);
         net_bwd.push_back(reorder(conv_src_memory, conv_bwd_src_memory));
-        net_bwd_args.push_back({{MKLDNN_ARG_FROM, conv_src_memory},
-                {MKLDNN_ARG_TO, conv_bwd_src_memory}});
+        net_bwd_args.push_back({{DNNL_ARG_FROM, conv_src_memory},
+                {DNNL_ARG_TO, conv_bwd_src_memory}});
     }
 
     auto conv_diff_dst_memory = conv_user_diff_dst_memory;
@@ -178,13 +178,13 @@ void MklConvBackwardWOp::jit_run() {
             != conv_user_diff_dst_memory.get_desc()) {
         conv_diff_dst_memory = memory(conv_bwd_weights_pd.diff_dst_desc(), eng);
         net_bwd.push_back(reorder(conv_user_diff_dst_memory, conv_diff_dst_memory));
-        net_bwd_args.push_back({{MKLDNN_ARG_FROM, conv_user_diff_dst_memory},
-                {MKLDNN_ARG_TO, conv_diff_dst_memory}});
+        net_bwd_args.push_back({{DNNL_ARG_FROM, conv_user_diff_dst_memory},
+                {DNNL_ARG_TO, conv_diff_dst_memory}});
     }
 
     net_bwd.push_back(convolution_backward_weights(conv_bwd_weights_pd));
-    net_bwd_args.push_back({{MKLDNN_ARG_SRC, conv_bwd_src_memory},
-            {MKLDNN_ARG_DIFF_DST, conv_diff_dst_memory}});
+    net_bwd_args.push_back({{DNNL_ARG_SRC, conv_bwd_src_memory},
+            {DNNL_ARG_DIFF_DST, conv_diff_dst_memory}});
 
     auto conv_diff_weights_memory = conv_user_diff_weights_memory;
     if (conv_bwd_weights_pd.diff_weights_desc()
@@ -192,15 +192,15 @@ void MklConvBackwardWOp::jit_run() {
         conv_diff_weights_memory
                 = memory(conv_bwd_weights_pd.diff_weights_desc(), eng);
         net_bwd_args.back().insert(
-                {MKLDNN_ARG_DIFF_WEIGHTS, conv_diff_weights_memory});
+                {DNNL_ARG_DIFF_WEIGHTS, conv_diff_weights_memory});
 
         net_bwd.push_back(reorder(
                 conv_diff_weights_memory, conv_user_diff_weights_memory));
-        net_bwd_args.push_back({{MKLDNN_ARG_FROM, conv_diff_weights_memory},
-                {MKLDNN_ARG_TO, conv_user_diff_weights_memory}});
+        net_bwd_args.push_back({{DNNL_ARG_FROM, conv_diff_weights_memory},
+                {DNNL_ARG_TO, conv_user_diff_weights_memory}});
     } else {
         net_bwd_args.back().insert(
-                {MKLDNN_ARG_DIFF_WEIGHTS, conv_diff_weights_memory});
+                {DNNL_ARG_DIFF_WEIGHTS, conv_diff_weights_memory});
     }
 
     ASSERTop(net_bwd.size(),==,net_bwd_args.size());
