@@ -34,11 +34,11 @@ def home():
     src_path_file = os.path.join(src_path,"config.json")
     data = {}
     if os.path.exists(src_path_file):
-        data = json.load(open(src_path_file))
+        data = json.load(open(src_path_file,"r"))
 
     default_path = data.get("jittor_home",str(Path.home()))
 
-    _home_path = os.environ.get("jittor_home","")
+    _home_path = os.environ.get("jittor_home",default_path)
     
     if not os.path.exists(_home_path):
         _home_path = default_path
