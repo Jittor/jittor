@@ -24,6 +24,34 @@ import ctypes
 if platform.system() == 'Darwin':
     mp.set_start_method('fork')
 
+from pathlib import Path
+import json
+
+
+def home():
+    src_path = os.path.join(str(Path.home()),".cache","jittor")
+    os.makedirs(src_path,exist_ok=True)
+    src_path_file = os.path.join(src_path,"config.json")
+    data = {}
+    if os.path.exists(src_path_file):
+        data = json.load(open(src_path_file))
+
+    default_path = data.get("jittor_home",str(Path.home()))
+
+    _home_path = os.environ.get("jittor_home","")
+    
+    if not os.path.exists(_home_path):
+        _home_path = default_path
+    _home_path = os.path.abspath(_home_path)
+    
+    # LOG.i(f"Use {_home_path} as Jittor Home")
+
+    with open(src_path_file,"w") as f:
+        data['jittor_home'] = _home_path
+        json.dump(data,f)
+
+    return _home_path
+
 class Logwrapper:
     def __init__(self):
         self.log_silent = int(os.environ.get("log_silent", "0"))
@@ -295,8 +323,7 @@ def short(s):
     return ss
 
 def find_cache_path():
-    from pathlib import Path
-    path = str(Path.home())
+    path = home()
     # jittor version key
     jtv = "jt"+get_jittor_version().rsplit('.', 1)[0]
     # cc version key
@@ -508,8 +535,7 @@ LOG = Logwrapper()
 check_msvc_install = False
 msvc_path = ""
 if os.name == 'nt' and os.environ.get("cc_path", "")=="":
-    from pathlib import Path
-    msvc_path = os.path.join(str(Path.home()), ".cache", "jittor", "msvc")
+    msvc_path = os.path.join(home(), ".cache", "jittor", "msvc")
     cc_path = os.path.join(msvc_path, "VC", r"_\_\_\_\_\bin", "cl.exe")
     check_msvc_install = True
 else:
@@ -523,7 +549,6 @@ _py3_include_path = None
 _py3_extension_suffix = None
 
 if os.name == 'nt':
-    from pathlib import Path
     try:
         import ssl
         ssl._create_default_https_context = ssl._create_unverified_context
@@ -533,7 +558,7 @@ if os.name == 'nt':
         if not os.path.isfile(cc_path):
             from jittor_utils import install_msvc
             install_msvc.install(msvc_path)
-    mpath = os.path.join(str(Path.home()), ".cache", "jittor", "msvc")
+    mpath = os.path.join(home(), ".cache", "jittor", "msvc")
     if cc_path.startswith(mpath):
         msvc_path = mpath
     os.RTLD_NOW = os.RTLD_GLOBAL = os.RTLD_DEEPBIND = 0

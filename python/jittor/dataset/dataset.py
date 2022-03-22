@@ -21,8 +21,9 @@ import signal
 from jittor_utils import LOG
 import jittor as jt
 import time
+import jittor_utils as jit_utils
 
-dataset_root = os.path.join(pathlib.Path.home(), ".cache", "jittor", "dataset")
+dataset_root = os.path.join(jit_utils.home(), ".cache", "jittor", "dataset")
 mp_log_v = os.environ.get("mp_log_v", 0) 
 mpi = jt.mpi
 img_open_hook = HookTimer(Image, "open")
