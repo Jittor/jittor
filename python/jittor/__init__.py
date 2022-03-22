@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.1.49'
+__version__ = '1.3.1.50'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -956,6 +956,14 @@ class Module:
             stack.pop()
         self.dfs([], "", callback, callback_leave)
         return ms
+
+    @property
+    def _modules(self):
+        return { k:v for k,v in self.__dict__.items() if isinstance(v, Module) }
+
+    @property
+    def _parameters(self):
+        return { k:v for k,v in self.__dict__.items() if isinstance(v, Var) }
 
     def requires_grad_(self, requires_grad=True):
         self._requires_grad = requires_grad
