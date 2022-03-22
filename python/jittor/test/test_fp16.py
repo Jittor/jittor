@@ -162,7 +162,6 @@ def check_share():
         }
     }
     kernel<<<1024,16*16>>>(in0_p, out0_p);
-    LOGir << "aaa";
     """).sync()
     jt.sync_all(True)
     # print(a[0]+1)

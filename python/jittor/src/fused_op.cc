@@ -9,6 +9,7 @@
 #include "op_compiler.h"
 #include "profiler/profiler.h"
 #include "misc/fast_shared_ptr.h"
+#include "misc/cuda_flags.h"
 
 namespace jittor {
 
@@ -42,6 +43,7 @@ void FusedOp::update_ops() {
     loop_options_tuned.clear();
     loop_options = loop_options_origin = nullptr;
 
+    _inputs.clear();
     _outputs.clear();
     for (Op* op : ops) {
         for (Var* o : op->outputs()) {
@@ -101,6 +103,7 @@ void FusedOp::update_ops() {
             if (!(c&2)) {
                 c += 2 + vars.size()*4;
                 vars.push_back({i, 0});
+                _inputs.emplace_back((Node*)i);
             }
         }
         for (Var* o : opi->outputs()) {
@@ -135,6 +138,7 @@ FusedOp::FusedOp(const FusedOp& other) {
 }
 
 FusedOp::~FusedOp() {
+    _inputs.clear();
     _outputs.clear();
     Op::number_of_lived_ops++;
 }
@@ -159,20 +163,15 @@ void FusedOp::statistics(uint64_t& in, uint64_t& out, uint64_t& compute) {
 
 void FusedOp::do_jit_prepare(JK& jk) {
     jk.clear();
-    int8 flags = 3;
     for (uint i=0; i<ops.size(); i++) {
         Op* op = ops[i];
         jk << "[opkey" << i << JK::val;
-        op->do_jit_prepare(jk);
+        jk << op->name();
+        op->jit_prepare(jk);
         jk << JK::end;
-        if (op->flags.get(NodeFlags::_cpu))
-            flags &= 1; // only cpu
-        else
-            flags &= 2; // only gpu
     }
-    ASSERT(flags) << "FusedOp cannot contain both cpu and cuda ops.";
     jk << _CS("[JIT:1]");
-    if (flags==1) {
+    if (!use_cuda) {
         // only cpu
         jk << _CS("[JIT_cpu:1]");
         this->flags.set(NodeFlags::_cuda, 0);
@@ -189,9 +188,17 @@ void FusedOp::do_jit_prepare(JK& jk) {
         jk << JK::hex2(i) << JK::hex1(j) << JK::hex2(k) << JK::hex1(l) << ',';
     }
     jk << _CS("][var_info:") << JK::val;
-    for (auto& vi : vars)
+    bool use_int64_t = false;
+    for (auto& vi : vars) {
         jk << JK::hex1(vi.type) << JK::hex1(vi.var->shape.size());
+        if (vi.type != 1 && vi.var->num >= std::numeric_limits<int32_t>::max())
+            use_int64_t = true;
+    }
     jk << JK::end;
+    if (use_int64_t)
+        jk << _CS("[index_t:int64]");
+    else
+        jk << _CS("[index_t:int32]");
     if (loop_options->size()) {
         if (get_loop_option("compile_shapes")) {
             jk << _CS("[shapes:");
