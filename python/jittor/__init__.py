@@ -1232,15 +1232,23 @@ Arguments of hook are defined as::
     def __getattr__(self, key):
         return object.__getattribute__(self, key)
 
+    def float64(self):
+        '''convert all parameters to float16'''
+        for p in self.parameters():
+            if p.dtype.is_float():
+                p.assign(p.float64())
+        return self
+
     def float16(self):
         '''convert all parameters to float16'''
         for p in self.parameters():
             if p.dtype.is_float():
                 p.assign(p.float16())
+        return self
 
     def half(self):
         '''convert all parameters to float16'''
-        self.float16()
+        return self.float16()
 
     def float_auto(self):
         '''convert all parameters to float16 or float32 automatically
@@ -1248,6 +1256,7 @@ Arguments of hook are defined as::
         for p in self.parameters():
             if p.dtype.is_float():
                 p.assign(p.float_auto())
+        return self
 
 
 
