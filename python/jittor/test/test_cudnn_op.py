@@ -123,8 +123,8 @@ class TestCudnnConvOp(unittest.TestCase):
             logs = find_log_with_re(raw_log, "(Jit op key (not )?found: cudnn_conv.*)")
             assert len(logs)==3 and "oihw" in logs[0][0], logs
             assert np.allclose(y.data, cy.data)
-            np.testing.assert_allclose(dx.data, cdx.data, atol=1e-2)
-            np.testing.assert_allclose(dw.data, cdw.data, atol=1e-2)
+            np.testing.assert_allclose(dx.data, cdx.data, atol=1e-2, rtol=1e-3)
+            np.testing.assert_allclose(dw.data, cdw.data, atol=1e-2, rtol=1e-3)
         if os.name == 'nt': return
         check([10,3,100,100], [5,3,3,3], stride=2, padding=0, dilation=1)
         check([10,4,40,50], [5,4,5,5], stride=1, padding=1, dilation=1)
