@@ -231,6 +231,8 @@ def gen_jit_flags():
             alias = []
             if name == "use_cuda":
                 alias = ["use_device", "use_acl"]
+            elif name == "auto_mixed_precision_level":
+                alias = ["amp_level"]
             get_names = ",".join(["__get__"+a for a in [name]+alias])
             set_names = ",".join(["__set__"+a for a in [name]+alias])
             flags_defs.append(f"""
