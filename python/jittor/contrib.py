@@ -243,7 +243,7 @@ def concat(arr, dim=0):
 Example::
 
         jt.concat([jt.array([[1],[2]]), jt.array([[2],[2]])], dim=1)
-        # return [[1],[2],[2],[2]]
+        # return jt.Var([[1,2],[2,2]],dtype=int32)
     '''
     if not isinstance(arr, Sequence):
         raise TypeError("concat arr needs to be a tuple or list")
