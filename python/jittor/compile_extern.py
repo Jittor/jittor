@@ -9,6 +9,7 @@ import platform
 from .compiler import *
 from jittor_utils import run_cmd, get_version, get_int_version
 from jittor_utils.misc import download_url_to_local
+import jittor_utils as jit_utils
 
 def search_file(dirs, name, prefer_version=()):
     if os.name == 'nt':
@@ -110,8 +111,7 @@ def setup_mkl():
             LOG.v("setup mkl...")
             # mkl_path = os.path.join(cache_path, "mkl")
             # mkl_path decouple with cc_path
-            from pathlib import Path
-            mkl_path = os.path.join(str(Path.home()), ".cache", "jittor", "mkl")
+            mkl_path = os.path.join(jit_utils.home(), ".cache", "jittor", "mkl")
             
             make_cache_dir(mkl_path)
             install_mkl(mkl_path)
@@ -141,12 +141,12 @@ def setup_mkl():
 
     elif platform.system() == 'Darwin':
         mkl_lib_paths = [
-            "/usr/local/lib/libmkldnn.dylib",       # x86_64
-            "/opt/homebrew/lib/libmkldnn.dylib",    # arm64
+            "/usr/local/lib/libdnnl.dylib",       # x86_64
+            "/opt/homebrew/lib/libdnnl.dylib",    # arm64
         ]
         if not any([os.path.exists(lib) for lib in mkl_lib_paths]):
             raise RuntimeError("Not found onednn, please install it by the command 'brew install onednn'")
-        extra_flags = f" -lmkldnn "
+        extra_flags = f" -ldnnl "
 
     mkl_op_dir = os.path.join(jittor_path, "extern", "mkl", "ops")
     mkl_op_files = [os.path.join(mkl_op_dir, name) for name in os.listdir(mkl_op_dir)]
@@ -178,8 +178,7 @@ def install_cub(root_folder):
 def setup_cub():
     global cub_home
     cub_home = ""
-    from pathlib import Path
-    cub_path = os.path.join(str(Path.home()), ".cache", "jittor", "cub")
+    cub_path = os.path.join(jit_utils.home(), ".cache", "jittor", "cub")
     cuda_version = int(get_version(nvcc_path)[1:-1].split('.')[0])
     extra_flags = ""
     if cuda_version < 11:
@@ -221,6 +220,12 @@ def setup_cuda_extern():
         LOG.w(f"CUDA found but cub is not loaded:\n{line}")
 
     libs = ["cublas", "cudnn", "curand", "cufft"]
+    # in cuda 11.4, module memory comsumptions:
+    # default context: 259 MB
+    # cublas: 340 MB
+    # cudnn: 340 MB
+    if int(os.environ.get("conv_opt", "0")):
+        libs = ["cublas", "curand"]
     for lib_name in libs:
         try:
             setup_cuda_lib(lib_name, extra_flags=link_cuda_extern)
@@ -320,22 +325,27 @@ def install_cutt(root_folder):
         if md5 != true_md5:
             os.remove(fullname)
             shutil.rmtree(dirname)
-    if not os.path.isfile(os.path.join(cache_path, "libcutt"+so)):
-        LOG.i("Downloading cutt...")
-        download_url_to_local(url, filename, root_folder, true_md5)
+    CUTT_PATH = os.environ.get("CUTT_PATH", "")
+    if not os.path.isfile(os.path.join(cache_path, "libcutt"+so)) or CUTT_PATH:
+        if CUTT_PATH:
+            dirname = CUTT_PATH
+        else:
+            LOG.i("Downloading cutt...")
+            download_url_to_local(url, filename, root_folder, true_md5)
 
-        import zipfile
+            import zipfile
 
-        zf = zipfile.ZipFile(fullname)
-        try:
-            zf.extractall(path=root_folder)
-        except RuntimeError as e:
-            print(e)
-            raise
-        zf.close()
+            zf = zipfile.ZipFile(fullname)
+            try:
+                zf.extractall(path=root_folder)
+            except RuntimeError as e:
+                print(e)
+                raise
+            zf.close()
 
         LOG.i("installing cutt...")
-        arch_flag = ""
+        # -Xptxas -dlcm=ca actually not work
+        arch_flag = " -Xptxas -dlcm=ca "
         if len(flags.cuda_archs):
             arch_flag = f" -arch=compute_{min(flags.cuda_archs)} "
             arch_flag += ''.join(map(lambda x:f' -code=sm_{x} ', flags.cuda_archs))
@@ -365,8 +375,7 @@ def setup_cutt():
     if cutt_lib_path is None or cutt_include_path is None:
         LOG.v("setup cutt...")
         # cutt_path decouple with cc_path
-        from pathlib import Path
-        cutt_path = os.path.join(str(Path.home()), ".cache", "jittor", "cutt")
+        cutt_path = os.path.join(jit_utils.home(), ".cache", "jittor", "cutt")
         
         make_cache_dir(cutt_path)
         install_cutt(cutt_path)
@@ -442,8 +451,7 @@ def setup_nccl():
     if nccl_lib_path is None or nccl_include_path is None:
         LOG.v("setup nccl...")
         # nccl_path decouple with cc_path
-        from pathlib import Path
-        nccl_path = os.path.join(str(Path.home()), ".cache", "jittor", "nccl")
+        nccl_path = os.path.join(jit_utils.home(), ".cache", "jittor", "nccl")
         
         make_cache_dir(nccl_path)
         nccl_home = install_nccl(nccl_path)

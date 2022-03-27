@@ -15,8 +15,8 @@ def find_jittor_path():
     return path[:-len(suffix)] + ".."
     
 def find_cache_path():
-    from pathlib import Path
-    path = str(Path.home())
+    import jittor_utils as jit_utils
+    path = jit_utils.home()
     dirs = [".cache", "jittor"]
     for d in dirs:
         path = os.path.join(path, d)

@@ -230,7 +230,7 @@ void WhereOp::jit_run() {
 
     int n=0;
     // checkCudaErrors(cudaDeviceSynchronize());
-    checkCudaErrors(cudaMemcpy(&n, np, 4, cudaMemcpyDefault));
+    checkCudaErrors(cudaMemcpy(&n, np, 4, cudaMemcpyDeviceToHost));
     @for(i, 0, NDIM, outs[@i]->set_shape({n});)
     exe.temp_allocator->free(np, 4, n_allocation);
 }

@@ -143,7 +143,7 @@ class ResNet(nn.Module):
         x = self.layer2(x)
         x = self.layer3(x)
         x = self.layer4(x)
-        x = self.avgpool(x)
+        x = self.avgpool(x).float_auto()
         x = jt.reshape(x, (x.shape[0], -1))
         x = self.fc(x)
         return x

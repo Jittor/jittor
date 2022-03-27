@@ -39,11 +39,24 @@ template<class T> struct StackIniter {
 #define STACK_ALLOC2(T, a, n) T a[n]
 #endif
 
+struct AmpGradGuard {
+    int amp_reg_bk;
+    AmpGradGuard(Op* op) {
+        amp_reg_bk = amp_reg;
+        amp_reg |= (op->flags.flags >> NodeFlags::_prefer_32);
+    }
+
+    ~AmpGradGuard() {
+        amp_reg = amp_reg_bk;
+    }
+};
+
 VarPtr make_grad(Op* op, Var* out, Var* dout, Var* x, int x_index) {
     if (dout == nullptr) return nullptr;
     if (x_index<0) return nullptr;
     LOGvvvv << "Make grad op:" >> op->name() << "inputs:" >> op->inputs()
         << "out:" >> out << "dout:" >> dout << "x:" >> x << "xid:" >> x_index;
+    AmpGradGuard agg(op);
     auto dx = op->grad(out, dout, x, x_index);
     if (x->loop_options)
         dx->loop_options = x->loop_options;
@@ -182,7 +195,10 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets) {
                         douts[i] = nullptr;
                 }
                 trace_grad_op = op;
-                op->grads(douts, dins);
+                {
+                    AmpGradGuard agg(op);
+                    op->grads(douts, dins);
+                }
                 // dump "for (Var* in : op->inputs())"
                 for (int i=0; i<n_i; i++,j++) {
                     auto id = id_buffer[j].second;
