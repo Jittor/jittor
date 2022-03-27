@@ -62,7 +62,7 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
     log << "\n=== display_memory_info ===\n";
     log << "total_cpu_ram:" << 
         FloatOutput{(double)mem_info.total_cpu_ram, " KMG", 1024, "B"};
-    log << "total_cuda_ram:" << 
+    log << "total_device_ram:" << 
         FloatOutput{(double)mem_info.total_cuda_ram, " KMG", 1024, "B"} >> "\n";
     log << "hold_vars:" << hold_vars.size()
         << "lived_vars:" << Var::number_of_lived_vars
@@ -105,7 +105,7 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
         auto total = a->used_memory + a->unused_memory;
         all_total += total;
         a->is_cuda() ? gpu_total += total : cpu_total += total;
-        log << "name:" << a->name() << "is_cuda:" << a->is_cuda()
+        log << "name:" << a->name() << "is_device:" << a->is_cuda()
             << "used:" << FloatOutput{(double)a->used_memory, " KMG", 1024, "B"}
                 >> "(" >> std::setprecision(p) >> a->used_memory*100.0 / total >> "%)"
             << "unused:" << FloatOutput{(double)a->unused_memory, " KMG", 1024, "B"} 
@@ -117,7 +117,7 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
             auto total = a->used_memory + a->unused_memory;
             all_total += total;
             a->is_cuda() ? gpu_total += total : cpu_total += total;
-            log << "name:" << a->name() << "is_cuda:" << a->is_cuda()
+            log << "name:" << a->name() << "is_device:" << a->is_cuda()
                 << "used:" << FloatOutput{(double)a->used_memory, " KMG", 1024, "B"}
                     >> "(" >> std::setprecision(p) >> a->used_memory*100.0 / total >> "%)"
                 << "unused:" << FloatOutput{(double)a->unused_memory, " KMG", 1024, "B"} 
@@ -227,9 +227,9 @@ MemInfo::MemInfo() {
 
     total_cuda_ram = 0;
 #ifdef HAS_CUDA
-    cudaDeviceProp prop;
-    cudaGetDeviceProperties(&prop, 0);
-    total_cuda_ram = prop.totalGlobalMem;
+    size_t gpu_free = 0, _gpu_total = 0;
+    cudaMemGetInfo(&gpu_free, &_gpu_total);
+    total_cuda_ram = _gpu_total;
 #endif
     sigquit_callback.push_back(&meminfo_callback);
 }

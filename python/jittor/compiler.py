@@ -19,7 +19,7 @@ from ctypes import cdll
 from ctypes.util import find_library
 
 import jittor_utils as jit_utils
-from jittor_utils import LOG, run_cmd, cache_path, find_exe, cc_path, cc_type, cache_path
+from jittor_utils import LOG, run_cmd, find_exe, cc_path, cc_type, cache_path
 from . import pyjt_compiler
 from jittor_utils import lock
 from jittor_utils import install_cuda
@@ -228,13 +228,20 @@ def gen_jit_flags():
                 continue
             visit[name] = 1
             jit_declares.append(f"DECLARE_FLAG({type}, {name});")
+            alias = []
+            if name == "use_cuda":
+                alias = ["use_device", "use_acl"]
+            elif name == "auto_mixed_precision_level":
+                alias = ["amp_level"]
+            get_names = ",".join(["__get__"+a for a in [name]+alias])
+            set_names = ",".join(["__set__"+a for a in [name]+alias])
             flags_defs.append(f"""
                 /* {name}(type:{type}, default:{default}): {doc} */
-                // @pyjt(__get__{name})
+                // @pyjt({get_names})
                 {type} _get_{name}() {{ return {name}; }}
-                // @pyjt(__set__{name})
+                // @pyjt({set_names})
                 void _set_{name}({type} v) {{ set_{name}(v); }}
-                {f'''// @pyjt(__set__{name})
+                {f'''// @pyjt({set_names})
                 void _set_{name}(bool v) {{ set_{name}(v); }}
                 ''' if type=="int" else ""}
             """)
@@ -843,7 +850,7 @@ def check_cuda():
         # this nvcc is install by package manager
         cuda_lib = "/usr/lib/x86_64-linux-gnu"
     cuda_include2 = os.path.join(jittor_path, "extern","cuda","inc")
-    cc_flags += f" -DHAS_CUDA -I\"{cuda_include}\" -I\"{cuda_include2}\" "
+    cc_flags += f" -DHAS_CUDA -DIS_CUDA -I\"{cuda_include}\" -I\"{cuda_include2}\" "
     if os.name == 'nt':
         cuda_lib = os.path.abspath(os.path.join(cuda_dir, "..", "lib", "x64"))
         # cc_flags += f" \"{cuda_lib}\\cudart.lib\" "
@@ -1212,6 +1219,14 @@ if has_cuda:
         return nvcc_flags
     nvcc_flags = convert_nvcc_flags(nvcc_flags)
 
+# from .acl_compiler import check_acl
+from .extern.acl import acl_compiler
+jit_utils.add_backend(acl_compiler)
+
+for mod in jit_utils.backends:
+    if mod.check():
+        break
+
 # build core
 gen_jit_flags()
 gen_jit_tests()
@@ -1236,6 +1251,8 @@ files4 = [ f[len(jittor_path)+1:] for f in files4 ]
 # files4 = run_cmd('find -L src | grep '+grep_args, jittor_path).splitlines()
 at_beginning = [
     "src/ops/op_utils.cc",
+    "src/ops/op_register.cc",
+    "src/init.cc",
     "src/event_queue.cc",
     "src/mem/allocator/sfrl_allocator.cc",
     "src/mem/allocator.cc",

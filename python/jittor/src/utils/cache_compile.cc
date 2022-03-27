@@ -167,14 +167,14 @@ void process(string src, vector<string>& input_names, string& cmd) {
             // #include "a.h"
             // i       jk    l
             auto j=i+1;
-            while (j<src.size() && (src[j] != ' ' && src[j] != '\n')) j++;
+            while (j<src.size() && (src[j] != ' ' && src[j] != '\n' && src[j] != '\r')) j++;
             if (j>=src.size()) return;
             if (j-i != 8 && j-i != 6) continue;
             auto k=j+1;
             while (k<src.size() && src[k] == ' ') k++;
             if (k>=src.size()) return;
             auto l=k+1;
-            while (l<src.size() && (src[l] != ' ' && src[l] != '\n')) l++;
+            while (l<src.size() && (src[l] != ' ' && src[l] != '\n' && src[l] != '\r')) l++;
             if (src[k] == '"' && src[l-1] == '"' && j-i==8 && src.substr(i,j-i) == "#include") {
                 auto inc = src.substr(k+1, l-k-2);
                 if (inc != "test.h" && inc != "helper_cuda.h") {

@@ -7,12 +7,12 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#include <mkldnn.hpp>
+#include <dnnl.hpp>
 
 #include "var.h"
 #include "mkl_matmul_op.h"
 
-using namespace mkldnn;
+using namespace dnnl;
 using namespace std;
 
 namespace jittor {
@@ -66,7 +66,7 @@ void MklMatmulOp::jit_run() {
         k = bs[0];
     }
     // a: [n,m], b: [m,k], c: [n,k]
-    ASSERTop(0,==,mkldnn_sgemm('@Trans_a', '@Trans_b', n, k, m,
+    ASSERTop(0,==,dnnl_sgemm('@Trans_a', '@Trans_b', n, k, m,
         1.f, a->ptr<T>(), '@Trans_a'=='N'? m : n,
         b->ptr<T>(), '@Trans_b' == 'N' ? k : m,
         0.f, c->ptr<T>(), k));

@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.1.46'
+__version__ = '1.3.1.55'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -91,7 +91,7 @@ def safeunpickle(path):
             import torch
         except:
             raise RuntimeError("pytorch need to be installed when load pth format.")
-        model_dict = torch.load(path, map_location=torch.device('cpu'))
+        model_dict = torch.load(path, map_location='cpu')
         try:
             for k, v in model_dict.items():
                 try:
@@ -231,19 +231,19 @@ class profile_scope(_call_no_record_scope):
 
     def __enter__(self):
         assert not flags.profiler_enable
-        profiler.start(self.warmup, self.rerun)
         self.report = []
         try:
             self.fs.__enter__()
+            profiler.start(self.warmup, self.rerun)
             return self.report
         except:
             profiler.stop()
             raise
 
     def __exit__(self, *exc):
-        self.fs.__exit__(*exc)
         profiler.stop()
         self.report.extend(profiler.report())
+        self.fs.__exit__(*exc)
 
 class __single_process_scope:
     def __init__(self, rank=0):
@@ -304,15 +304,52 @@ Var.cast = Var.cast
 def array(data, dtype=None):
     if isinstance(data, core.Var):
         if dtype is None:
-            return data.clone()
-        return cast(data, dtype)
-    if dtype is not None:
+            ret = data.clone()
+        else:
+            ret = cast(data, dtype)
+    elif dtype is not None:
         if isinstance(dtype, NanoString):
             dtype = str(dtype)
         elif callable(dtype):
             dtype = dtype.__name__
-        return ops.array(np.array(data, dtype))
-    return ops.array(data)
+        ret = ops.array(np.array(data, dtype))
+    else:
+        ret = ops.array(data)
+    # TODO: move those code to core
+    amp_reg = jt.flags.amp_reg
+    if amp_reg and ret.numel() != 1 and ret.dtype.is_float():
+        if amp_reg & 16:
+            if amp_reg & 1:
+                if ret.dtype != "float32":
+                    return ret.float32()
+            elif amp_reg & 2:
+                if ret.dtype != "float16":
+                    return ret.float16()
+    return ret
+
+def random(shape, dtype="float32", type="uniform"):
+    # TODO: move those code to core
+    if dtype == "float16":
+        # TODO: make curand support fp16
+        ret = ops.random(shape, "float32", type).float16()
+    else:
+        ret = ops.random(shape, dtype, type)
+    amp_reg = jt.flags.amp_reg
+    if amp_reg:
+        if amp_reg & 16:
+            if amp_reg & 1:
+                if ret.dtype != "float32":
+                    return ret.float32()
+            elif amp_reg & 2:
+                if ret.dtype != "float16":
+                    return ret.float16()
+    return ret
+
+def float_auto(x):
+    if jt.flags.amp_reg & 2:
+        return x.float16()
+    return x.float32()
+Var.float_auto = float_auto
 
 def array64(data, dtype=None):
     with jt.flag_scope(auto_convert_64_to_32=0):
@@ -920,6 +957,14 @@ class Module:
         self.dfs([], "", callback, callback_leave)
         return ms
 
+    @property
+    def _modules(self):
+        return { k:v for k,v in self.__dict__.items() if isinstance(v, Module) }
+
+    @property
+    def _parameters(self):
+        return { k:v for k,v in self.__dict__.items() if isinstance(v, Var) }
+
     def requires_grad_(self, requires_grad=True):
         self._requires_grad = requires_grad
         self._place_hooker()
@@ -1187,6 +1232,33 @@ Arguments of hook are defined as::
     def __getattr__(self, key):
         return object.__getattribute__(self, key)
 
+    def float64(self):
+        '''convert all parameters to float16'''
+        for p in self.parameters():
+            if p.dtype.is_float():
+                p.assign(p.float64())
+        return self
+
+    def float16(self):
+        '''convert all parameters to float16'''
+        for p in self.parameters():
+            if p.dtype.is_float():
+                p.assign(p.float16())
+        return self
+
+    def half(self):
+        '''convert all parameters to float16'''
+        return self.float16()
+
+    def float_auto(self):
+        '''convert all parameters to float16 or float32 automatically
+        by jt.flags.auto_mixed_precision_level and jt.flags.amp_reg'''
+        for p in self.parameters():
+            if p.dtype.is_float():
+                p.assign(p.float_auto())
+        return self
+
+
 
 class Function(Module):
     ''' Function Module for customized backward operations
@@ -1417,18 +1489,15 @@ Var.size = size
 
 
 def to_int(v):
-    dtype = str(v.dtype)
-    assert dtype.startswith("int")
+    assert v.dtype.is_int()
     return v.item()
 
 def to_float(v):
-    dtype = str(v.dtype)
-    assert dtype.startswith("float")
+    assert v.dtype.is_float()
     return v.item()
 
 def to_bool(v):
-    dtype = str(v.dtype)
-    assert dtype.startswith("int") or dtype=="bool"
+    assert v.dtype.is_int() or v.dtype.is_bool()
     return ori_bool(v.item())
 
 Var.__int__ = to_int
@@ -1450,6 +1519,8 @@ float = float32
 Var.float = Var.float32
 double = float64
 Var.double = Var.float64
+half = float16
+Var.half = Var.float16
 
 def is_var(v):
     return isinstance(v, Var)

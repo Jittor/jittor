@@ -89,7 +89,7 @@ void CublasBatchedMatmulOp::jit_prepare(JK& jk) {
     jk << _CS("[T:") << a->dtype();
     jk << _CS("][Trans_a:") << (trans_a ? 'T' : 'N');
     jk << _CS("][Trans_b:") << (trans_b ? 'T' : 'N');
-    jk << _CS("][op:") << (a->dtype().dsize() == 4 ? 'S' : 'D');
+    jk << _CS("][op:") << (a->dtype().dsize() == 2? 'H' : (a->dtype().dsize() == 4 ? 'S' : 'D'));
     jk << ']';
 }
 
@@ -124,6 +124,22 @@ void CublasBatchedMatmulOp::jit_run() {
     if (use_tensorcore) {
         computeType = CUBLAS_COMPUTE_32F_FAST_16F;
     }
+    if (a->dtype() == ns_float16
+        || b->dtype() == ns_float16 || c->dtype() == ns_float16) {
+        computeType = CUBLAS_COMPUTE_16F;
+    }
+    #else 
+    cublasGemmAlgo_t algo = CUBLAS_GEMM_DEFAULT;
+    cudaDataType_t computeType = CUDA_R_32F;
+    if (use_tensorcore) {
+        algo = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+    }
+    if (a->dtype() == ns_float16
+        || b->dtype() == ns_float16 || c->dtype() == ns_float16) {
+        computeType = CUDA_R_16F;
+        algo = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+    }
+    #endif
     checkCudaErrors(cublasGemmStridedBatchedEx(handle_,
     CUBLAS_OP_@Trans_b, CUBLAS_OP_@Trans_a,
     k, n, m, &alpha,
@@ -131,15 +147,13 @@ void CublasBatchedMatmulOp::jit_run() {
     a->ptr<T>(),get_dtype(a->dtype()), '@Trans_a' == 'N' ? m : n, n * m, &beta,
     c->ptr<T>(),get_dtype(c->dtype()), k, k * n,
     batch_size,computeType,algo));
-    #else
-    checkCudaErrors(cublas@op@@gemmStridedBatched(handle_,
-    CUBLAS_OP_@Trans_b, CUBLAS_OP_@Trans_a,
-    k, n, m, &alpha,
-    b->ptr<T>(), '@Trans_b' == 'N' ? k : m, k * m, 
-    a->ptr<T>(), '@Trans_a' == 'N' ? m : n, n * m, &beta,
-    c->ptr<T>(), k, k * n,
-    batch_size));
-    #endif
+    // checkCudaErrors(cublas@op@@gemmStridedBatched(handle_,
+    // CUBLAS_OP_@Trans_b, CUBLAS_OP_@Trans_a,
+    // k, n, m, &alpha,
+    // b->ptr<T>(), '@Trans_b' == 'N' ? k : m, k * m, 
+    // a->ptr<T>(), '@Trans_a' == 'N' ? m : n, n * m, &beta,
+    // c->ptr<T>(), k, k * n,
+    // batch_size));
 }
 #endif
 #endif // JIT

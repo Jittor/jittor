@@ -41,7 +41,7 @@ def get_cuda_driver():
         return None
 
 def has_installation():
-    jtcuda_path = os.path.join(pathlib.Path.home(), ".cache", "jittor", "jtcuda")
+    jtcuda_path = os.path.join(jit_utils.home(), ".cache", "jittor", "jtcuda")
     return os.path.isdir(jtcuda_path)
 
 def install_cuda():
@@ -54,10 +54,12 @@ def install_cuda():
         LOG.i("JTCUDA_VERSION: ", cuda_driver_version)
 
     if os.name == 'nt':
-        if cuda_driver_version >= [11,4]:
-            cuda_tgz = "cuda11.4_cudnn8_win.zip"
-            md5 = "06eed370d0d44bb2cc57809343911187"
-        elif cuda_driver_version >= [11,2]:
+        # TODO: cuda11.4 has bug fit with
+        # current msvc, FIXME
+        # if cuda_driver_version >= [11,4]:
+        #     cuda_tgz = "cuda11.4_cudnn8_win.zip"
+        #     md5 = "06eed370d0d44bb2cc57809343911187"
+        if cuda_driver_version >= [11,2]:
             cuda_tgz = "cuda11.2_cudnn8_win.zip"
             md5 = "b5543822c21bc460c1a414af47754556"
         elif cuda_driver_version >= [11,]:
@@ -83,7 +85,7 @@ def install_cuda():
             md5 = "f16d3ff63f081031d21faec3ec8b7dac"
         else:
             raise RuntimeError(f"Unsupport cuda driver version: {cuda_driver_version}, at least 10.0")
-    jtcuda_path = os.path.join(pathlib.Path.home(), ".cache", "jittor", "jtcuda")
+    jtcuda_path = os.path.join(jit_utils.home(), ".cache", "jittor", "jtcuda")
     nvcc_path = os.path.join(jtcuda_path, cuda_tgz[:-4], "bin", "nvcc")
     if os.name=='nt': nvcc_path += '.exe'
     nvcc_lib_path = os.path.join(jtcuda_path, cuda_tgz[:-4], "lib64")

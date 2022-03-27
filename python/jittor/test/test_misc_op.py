@@ -75,6 +75,8 @@ class TestPad(unittest.TestCase):
         print('pass flip test ...')
 
     def test_cross(self):
+        def check_equal(a, b, tol):
+            np.testing.assert_allclose(a.detach().numpy(), b.numpy(), atol=1e-5)
         arr1 = np.random.randn(16,3,224,224,3)
         arr2 = np.random.randn(16,3,224,224,3)
         check_equal(torch.Tensor(arr1).cross(torch.Tensor(arr2), dim=1), jt.array(arr1).cross(jt.array(arr2), dim=1), 1e-1)
@@ -256,6 +258,53 @@ class TestOther(unittest.TestCase):
     def test_arctan2(self):
         a = jt.arctan2(jt.array([1,1.0,0]), jt.array([1,0.0,-1]))
         np.testing.assert_allclose(a.data, [0.7853982,1.5707964,3.1415927])
+
+        y = jt.random((100,))
+        x = jt.random((100,))
+        z = jt.arctan2(y, x)
+        z2 = np.arctan2(y.data, x.data)
+        np.testing.assert_allclose(z.data, z2)
+
+    def test_code_softmax(self):
+        if not jt.has_cuda: return
+        
+        def softmax(x, dim = None, log=False):
+            if dim is None:
+                x = (x - x.max()).exp()
+                ret = x / x.sum()
+            else:
+                x = (x-x.max(dim, keepdims=True)).exp()
+                ret = x / x.sum(dim, keepdims=True)
+            if log: return ret.log()
+            return ret
+        from jittor.other.code_softmax import softmax_v1
+
+        with jt.flag_scope(use_cuda = 1):
+            shape = (120, 2000, 2000)
+            shape = (3,3)
+            for log in [0,1]:
+                for shape in [(3,3), 
+                    (12, 200, 2000), 
+                    (12, 200, 2048), 
+                    (12, 200, 2049)]:
+                    print(shape)
+                    a = jt.rand(shape)
+                    c = jt.rand(shape)
+                    b = softmax(a, -1, log=log)
+                    bb = softmax_v1(a, log=log)
+
+                    err = (bb - b).abs().max()
+                    assert err.item() < 1e-5, (err, bb, b)
+
+                    d1 = jt.grad(b*c, a)
+                    d2 = jt.grad(bb*c, a)
+                    err = (d1 - d2).abs().max()
+
+                    if log:
+                        assert err.item() < 1e-2, (err.item())
+                    else:
+                        assert err.item() < 1e-5, (err.item())
+
 
 if __name__ == "__main__":
     unittest.main()

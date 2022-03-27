@@ -25,7 +25,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef IS_CUDA
 #include <helper_string.h>
+#endif
 
 #ifndef EXIT_WAIVED
 #define EXIT_WAIVED 2
@@ -128,6 +130,9 @@ void check(T result, char const *const func, const char *const file,
       << func;
   }
 }
+
+#define checkCudaErrors(val) check((val), #val, __FILE__, __LINE__)
+#define peekCudaErrors(val) peek((val), #val, __FILE__, __LINE__)
 
 #ifdef __DRIVER_TYPES_H__
 // This will output the proper CUDA error strings in the event

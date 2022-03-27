@@ -132,7 +132,7 @@ void ReindexOp::jit_run() {
         @for(d, 0, XDIM, index_t xid@d = @expand_macro(INDEX@d);)
         auto xid = @for(d, 0, XDIM, + xid@d * xstride@d);
         bool check_overflow = 0 @for(d, 0, XDIM, || xid@d<0 || xid@d>=xshape@d) @for(d, 0, OSIZE, || (@expand_macro(OFD@d)));
-        yp[yid] = check_overflow ? (@OVERFLOW) : xp[xid];
+        yp[yid] = check_overflow ? Tx(@OVERFLOW) : xp[xid];
     }
 }
 #endif // JIT

@@ -49,8 +49,8 @@ data_files = [ name for name in files
 LOG.i("data_files", data_files)
 
 # compile data files
-from pathlib import Path
-home = str(Path.home())
+import jittor_utils as jit_utils
+home = jit_utils.home()
 # for cc_type in ["g++", "clang"]:
 #     for device in ["cpu", "cuda"]:
 

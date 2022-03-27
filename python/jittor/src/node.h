@@ -51,8 +51,14 @@ struct NodeFlags {
         _grads=_n+6,
         // bit7: has graph optimize
         _has_gopt=_n+7,
-        // bit7: has vary input
+        // bit8: has vary input
         _has_vary_input=_n+8,
+        // bit9: prefer 32 bit
+        _prefer_32=_n+9,
+        // bit10: force 16 bit
+        _prefer_16=_n+10,
+        // bit11: reduce keep type unchange
+        _reduce_keep=_n+11,
     };
 
     inline void set(Flags f, int a=1, int nbits=1) {
@@ -90,7 +96,7 @@ struct Node {
         operator Var*() { return (Var*)node; }
         operator var_output_t() { return {(Op*)node, index}; }
     };
-    static int64_t tflag_count;
+    static int64 tflag_count;
     NodeFlags flags;
     NanoString ns;
     inline bool is_var() const { return flags.get(NodeFlags::_var); }
