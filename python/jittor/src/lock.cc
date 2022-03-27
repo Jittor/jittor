@@ -31,7 +31,7 @@ int _has_lock = 0;
 DEFINE_FLAG(bool, disable_lock, 0, "Disable file lock");
 
 void set_lock_path(string path) {
-    lock_fd = open(path.c_str(), O_RDWR);
+    lock_fd = open(_to_winstr(path).c_str(), O_RDWR);
     ASSERT(lock_fd >= 0);
     LOGv << "OPEN LOCK path:" << path << "Pid:" << getpid();
 }

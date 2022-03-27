@@ -313,7 +313,7 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                     LOGvvvv << "Found defs include" << inc;
                     auto src_path = join(jittor_path, "src");
                     src_path = join(src_path, inc);
-                    auto inc_src = read_all(src_path);
+                    auto inc_src = read_all(_to_winstr(src_path));
                     // load_macros from include src
                     precompile(defs, inc_src, macros);
                     // we do not include defs.h
@@ -736,9 +736,9 @@ string OpCompiler::get_jit_src(Op* op) {
         else
             after_include_src += src;
     }
-    ASSERT(file_exist(src_path)) << src_path;
+    ASSERT(file_exist(_to_winstr(src_path))) << src_path;
     LOGvvv << "Read from" << src_path; 
-    string src = read_all(src_path);
+    string src = read_all(_to_winstr(src_path));
     ASSERT(src.size()) << "Source read failed:" << src_path;
 
     unordered_map<string,string> defs(jit_define.begin(), jit_define.end());
@@ -1038,7 +1038,14 @@ jit_op_entry_t OpCompiler::compile(const string& jit_key, const string& src) {
     // add extra flags for custom ops
     bool is_cuda = _op->flags.get(NodeFlags::_cuda);
     auto op_info = get_op_info(_op->name());
-    return jit_compiler::compile(jit_key, src, is_cuda, op_info.extra_flags);
+    string extra_flags = op_info.extra_flags;
+    for (auto v : _op->outputs())
+        if (v->loop_options)
+            for (auto& kv : v->loop_options.data()) {
+                if (kv.second && startswith(kv.first, "FLAGS:"))
+                    extra_flags += " "+kv.first.substr(6)+" ";
+            }
+    return jit_compiler::compile(jit_key, src, is_cuda, extra_flags);
 }
 
 jit_op_entry_t OpCompiler::do_compile(Op* op) {

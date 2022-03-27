@@ -234,7 +234,15 @@ static inline bool is_full_path(const string& name) {
 #endif
 }
 
-bool cache_compile(string cmd, const string& cache_path, const string& jittor_path) {
+bool cache_compile(string cmd, const string& cache_path_, const string& jittor_path_) {
+    #ifdef _WIN32
+    cmd = _to_winstr(cmd);
+    string cache_path = _to_winstr(cache_path_);
+    string jittor_path = _to_winstr(jittor_path_);
+    #else
+    const string& cache_path = cache_path_;
+    const string& jittor_path = jittor_path_;
+    #endif
     vector<string> input_names;
     map<string,vector<string>> extra;
     string output_name;
@@ -255,6 +263,9 @@ bool cache_compile(string cmd, const string& cache_path, const string& jittor_pa
             continue;
         processed.insert(input_names[i]);
         auto src = read_all(input_names[i]);
+        #ifdef _WIN32
+        src = _to_winstr(src);
+        #endif
         auto back = input_names[i].back();
         // *.lib
         if (back == 'b') continue;
