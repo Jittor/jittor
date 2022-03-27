@@ -36,8 +36,13 @@ VarPtr CufftFftOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 }
 
 void CufftFftOp::jit_prepare(JK& jk) {
+    if ((y->dtype() != "float32") && (y->dtype() != "float64")){
+        printf("not supported fft dtype: %s\n", y->dtype().to_cstring());
+        ASSERT(false);
+    }
     jk << _CS("[T:") << y->dtype();
     jk << _CS("][I:")<<inverse<<"]";
+    jk << _CS("[TS:\"")<<y->dtype()<<"\"]";
 }
 
 #else // JIT
@@ -56,19 +61,26 @@ void CufftFftOp::jit_run() {
     std::array<int, 2> fft = {n1, n2};
 
     CUFFT_CALL(cufftCreate(&plan));
+    auto op_type = CUFFT_C2C;
+    if (TS == "float32") {
+        op_type = CUFFT_C2C;
+    } else if (TS == "float64") {
+        op_type = CUFFT_Z2Z;
+    }
     CUFFT_CALL(cufftPlanMany(&plan, 2, fft.data(), 
                              nullptr, 1, fft[0] * fft[1], // *inembed, istride, idist
                              nullptr, 1, fft[0] * fft[1], // *onembed, ostride, odist
-                             CUFFT_C2C, batch_size));
+                             op_type, batch_size));
     CUFFT_CALL(cufftSetStream(plan, 0));
     /*
      * Note:
      *  Identical pointers to data and output arrays implies in-place transformation
      */
-    CUDA_RT_CALL(cudaStreamSynchronize(0));
-    CUFFT_CALL(cufftExecC2C(plan, (cufftComplex *)xp, (cufftComplex *)yp, I ? CUFFT_INVERSE : CUFFT_FORWARD));
-    // CUFFT_CALL(cufftExecC2C(plan, (cufftComplex *)xp, (cufftComplex *)yp, CUFFT_INVERSE));
-    CUDA_RT_CALL(cudaStreamSynchronize(0));
+    if (TS == "float32") {
+        CUFFT_CALL(cufftExecC2C(plan, (cufftComplex *)xp, (cufftComplex *)yp, I ? CUFFT_INVERSE : CUFFT_FORWARD));
+    } else if (TS == "float64") {
+        CUFFT_CALL(cufftExecZ2Z(plan, (cufftDoubleComplex *)xp, (cufftDoubleComplex *)yp, I ? CUFFT_INVERSE : CUFFT_FORWARD));
+    }
 
     CUFFT_CALL(cufftDestroy(plan));
 }
