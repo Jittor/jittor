@@ -41,6 +41,12 @@ def _progress():
 
 @lock.lock_scope()
 def download_url_to_local(url, filename, root_folder, md5):
+    if os.getenv('GET_PACKAGE') == 1:
+        print(url)
+        print(filename)
+        print(root_folder)
+        print(md5)
+        print("=========")
     ensure_dir(root_folder)
     file_path = os.path.join(root_folder, filename)
     if check_file_exist(file_path, md5):

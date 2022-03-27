@@ -52,9 +52,10 @@ def home():
     
     # LOG.i(f"Use {_home_path} as Jittor Home")
 
-    with open(src_path_file,"w") as f:
-        data['JITTOR_HOME'] = _home_path
-        json.dump(data,f)
+    if default_path != _home_path:
+        with open(src_path_file,"w") as f:
+            data['JITTOR_HOME'] = _home_path
+            json.dump(data,f)
     
     _jittor_home = _home_path
     return _home_path
