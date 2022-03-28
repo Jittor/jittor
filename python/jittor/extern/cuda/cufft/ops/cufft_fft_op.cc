@@ -58,7 +58,6 @@ void CufftFftOp::jit_run() {
     auto* __restrict__ xp = x->mem_ptr;
     auto* __restrict__ yp = y->mem_ptr;
 
-    cufftHandle& plan = cufft_handle;
     int batch_size = x->shape[0];
     int n1 = x->shape[1], n2 = x->shape[2];
     int fft_size = batch_size * n1 * n2;
@@ -70,11 +69,21 @@ void CufftFftOp::jit_run() {
     } else if (TS == "float64") {
         op_type = CUFFT_Z2Z;
     }
-    CUFFT_CALL(cufftPlanMany(&plan, 2, fft.data(), 
-                             nullptr, 1, fft[0] * fft[1], // *inembed, istride, idist
-                             nullptr, 1, fft[0] * fft[1], // *onembed, ostride, odist
-                             op_type, batch_size));
-    CUFFT_CALL(cufftSetStream(plan, 0));
+    JK& jk = get_jk();
+    jk.clear();
+    jk << fft[0] << "," << fft[1] << "," << TS << "," << batch_size;
+    auto iter = cufft_handle_cache.find(jk.to_string());
+    cufftHandle plan;
+    if (iter!=cufft_handle_cache.end()) plan = iter->second;
+    else {
+        CUFFT_CALL(cufftCreate(&plan));
+        CUFFT_CALL(cufftPlanMany(&plan, 2, fft.data(), 
+                                nullptr, 1, fft[0] * fft[1], // *inembed, istride, idist
+                                nullptr, 1, fft[0] * fft[1], // *onembed, ostride, odist
+                                op_type, batch_size));
+        CUFFT_CALL(cufftSetStream(plan, 0));
+        cufft_handle_cache[jk.to_string()] = plan;
+    }
     /*
      * Note:
      *  Identical pointers to data and output arrays implies in-place transformation
