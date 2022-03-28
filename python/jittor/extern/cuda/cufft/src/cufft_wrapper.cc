@@ -12,19 +12,20 @@
 
 namespace jittor {
 
-cufftHandle cufft_handle;
+unordered_map<string, cufftHandle> cufft_handle_cache;
 
 struct cufft_initer {
 
 inline cufft_initer() {
     if (!get_device_count()) return;
-    CUFFT_CALL(cufftCreate(&cufft_handle));
     LOGv << "cufftCreate finished";
 }
 
 inline ~cufft_initer() {
     if (!get_device_count()) return;
-    CUFFT_CALL(cufftDestroy(cufft_handle));
+    for (auto it = cufft_handle_cache.begin(); it != cufft_handle_cache.end(); it++) {
+        CUFFT_CALL(cufftDestroy(it->second));
+    }
     LOGv << "cufftDestroy finished";
 }
 

@@ -19,6 +19,6 @@
 
 namespace jittor {
 
-EXTERN_LIB cufftHandle cufft_handle;
+EXTERN_LIB unordered_map<string, cufftHandle> cufft_handle_cache;
 
 } // jittor
