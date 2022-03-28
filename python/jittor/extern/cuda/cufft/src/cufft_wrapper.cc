@@ -26,6 +26,7 @@ inline ~cufft_initer() {
     for (auto it = cufft_handle_cache.begin(); it != cufft_handle_cache.end(); it++) {
         CUFFT_CALL(cufftDestroy(it->second));
     }
+    cufft_handle_cache.clear();
     LOGv << "cufftDestroy finished";
 }
 
