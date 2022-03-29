@@ -268,7 +268,7 @@ ReduceOp::ReduceOp(Var* x, NanoString op, NanoVector dims, bool keepdims)
         }
     }
     // if (x->dtype() == ns_bool && ns == ns_add)
-    if (x->dtype() == ns_bool || x->dtype() == ns_int8)
+    if (x->dtype() == ns_bool)
         y = create_output(nullptr, ns_int32);
     else
         y = create_output(nullptr, reduce_dtype_infer(ns, x->ns));
