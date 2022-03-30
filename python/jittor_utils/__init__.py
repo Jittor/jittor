@@ -42,19 +42,19 @@ def home():
         with open(src_path_file,"r") as f:
             data = json.load(f)
 
-    default_path = data.get("JITTOR_HOME",str(Path.home()))
+    default_path = data.get("JITTOR_HOME", str(Path.home()))
 
-    _home_path = os.environ.get("JITTOR_HOME",default_path)
+    _home_path = os.environ.get("JITTOR_HOME", default_path)
     
     if not os.path.exists(_home_path):
         _home_path = default_path
     _home_path = os.path.abspath(_home_path)
     
     # LOG.i(f"Use {_home_path} as Jittor Home")
-
-    with open(src_path_file,"w") as f:
-        data['JITTOR_HOME'] = _home_path
-        json.dump(data,f)
+    if default_path != _home_path:
+        with open(src_path_file,"w") as f:
+            data['JITTOR_HOME'] = _home_path
+            json.dump(data,f)
     
     _jittor_home = _home_path
     return _home_path
@@ -554,13 +554,13 @@ cache_path = find_cache_path()
 _py3_config_path = None
 _py3_include_path = None
 _py3_extension_suffix = None
+try:
+    import ssl
+    ssl._create_default_https_context = ssl._create_unverified_context
+except:
+    pass
 
 if os.name == 'nt':
-    try:
-        import ssl
-        ssl._create_default_https_context = ssl._create_unverified_context
-    except:
-        pass
     if check_msvc_install:
         if not os.path.isfile(cc_path):
             from jittor_utils import install_msvc

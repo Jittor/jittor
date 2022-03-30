@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.1.55'
+__version__ = '1.3.1.57'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -26,7 +26,7 @@ with lock.lock_scope():
     from .compile_extern import mkl_ops, mpi, mpi_ops, in_mpi, rank, world_size
     if core.get_device_count() == 0:
         has_cuda = compile_extern.has_cuda = compiler.has_cuda = False
-    from .compile_extern import cudnn, curand, cublas
+    from .compile_extern import cudnn, curand, cublas, cufft
     from .init_cupy import numpy2cupy
 
 import contextlib

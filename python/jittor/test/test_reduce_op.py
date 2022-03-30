@@ -49,7 +49,13 @@ class TestReduceOp(unittest.TestCase):
             check(ia[0], iop[0], dims)
         expect_error(lambda: jt.reduce_add([1,2,3], 2))
 
-    def test_bool(self):
+    def test_bool_reduce(self):
+        x = (jt.bool([1,0,1]) | jt.bool([0,1,0])).all().item()
+        assert x
+        x = (jt.bool([1,0,1]) & jt.bool([0,1,0])).any().item()
+        assert not x
+
+    def test_bool_reduce2(self):
         def gen_data(shape):
             num = np.multiply.reduce(shape)
             a = np.random.randint(2, size=[num]).astype(bool)
