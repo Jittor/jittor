@@ -219,7 +219,7 @@ def setup_cuda_extern():
         line = traceback.format_exc()
         LOG.w(f"CUDA found but cub is not loaded:\n{line}")
 
-    libs = ["cublas", "cudnn", "curand"]
+    libs = ["cublas", "cudnn", "curand", "cufft"]
     # in cuda 11.4, module memory comsumptions:
     # default context: 259 MB
     # cublas: 340 MB
@@ -566,7 +566,7 @@ if os.environ.get("FIX_TORCH_ERROR", "0") == "1":
     except:
         pass
 
-cudnn = cublas = curand = None
+cudnn = cublas = curand = cufft = None
 setup_mpi()
 in_mpi = inside_mpi()
 rank = mpi.world_rank() if in_mpi else 0
