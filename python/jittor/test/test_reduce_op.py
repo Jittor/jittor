@@ -49,6 +49,12 @@ class TestReduceOp(unittest.TestCase):
             check(ia[0], iop[0], dims)
         expect_error(lambda: jt.reduce_add([1,2,3], 2))
 
+    def test_bool_reduce(self):
+        x = (jt.bool([1,0,1]) | jt.bool([0,1,0])).all().item()
+        assert x
+        x = (jt.bool([1,0,1]) & jt.bool([0,1,0])).any().item()
+        assert not x
+
 
 class TestReduceOp2(TestReduceOp):
     def setUp(self):
