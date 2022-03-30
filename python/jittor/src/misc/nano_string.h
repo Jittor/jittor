@@ -223,10 +223,9 @@ inline NanoString binary_dtype_infer(NanoString op, NanoString x, NanoString y) 
     if (is_float) {
         if (op.is_white() && !(amp_reg & amp_keep_white))
             return (dsize_ == 3) ? ns_float64 : ns_float32;
-        if (x.is_bool() && y.is_bool() && op != ns_divide) return ns_bool;
         return float_dtype(dsize_);
     } else {
-        if (x.is_bool() && y.is_bool() && op != ns_floor_divide) return ns_bool;
+        if (x.is_bool() && y.is_bool()) return ns_bool;
         return int_dtype(dsize_);
     }
 }
