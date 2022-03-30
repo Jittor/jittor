@@ -2789,3 +2789,13 @@ class Bilinear(Module):
 
     def execute(self, in1, in2):
         return bilinear(in1, in2, self.weight, self.bias)
+
+#TODO: support FFT2D only now.
+def _fft2(x, inverse=False):
+    assert(jt.flags.use_cuda==1)
+    assert(len(x.shape) == 4)
+    assert(x.shape[3] == 2)
+    y = jt.compile_extern.cufft_ops.cufft_fft(x, inverse)
+    if inverse:
+        y /= x.shape[1] * x.shape[2]
+    return y
