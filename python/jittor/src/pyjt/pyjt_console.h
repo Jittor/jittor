@@ -419,8 +419,8 @@ inline Console() {
     auto symbol_make_pyjt_array = "__ZN6jittor15make_pyjt_arrayERKNSt3__16vectorIxNS0_9allocatorIxEEEERKNS0_12basic_stringIcNS0_11char_traitsIcEENS2_IcEEEEPKv";
     auto symbol_gen_pyjt_array = "__ZN6jittor14get_pyjt_arrayEP7_objectRNSt3__16vectorIxNS2_9allocatorIxEEEERNS2_12basic_stringIcNS2_11char_traitsIcEENS4_IcEEEERPv";
     #else
-    auto symbol_make_pyjt_array = "_ZN6jittor15make_pyjt_arrayERKSt6vectorIlSaIlEERKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEEPKv";
-    auto symbol_gen_pyjt_array = "_ZN6jittor14get_pyjt_arrayEP7_objectRSt6vectorIlSaIlEERNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEERPv";
+    auto symbol_make_pyjt_array = "_ZN6jittor15make_pyjt_arrayERKSt6vectorIxSaIxEERKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEEPKv";
+    auto symbol_gen_pyjt_array = "_ZN6jittor14get_pyjt_arrayEP7_objectRSt6vectorIxSaIxEERNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEERPv";
     #endif
     make_pyjt_array = (PyObject* (*)(const vector<int64>& shape, const string& dtype, const void* data))dlsym(RTLD_DEFAULT, symbol_make_pyjt_array);
     get_pyjt_array = (void (*)(PyObject* obj, vector<int64>& shape, string& dtype, void*& data))dlsym(RTLD_DEFAULT, symbol_gen_pyjt_array);
