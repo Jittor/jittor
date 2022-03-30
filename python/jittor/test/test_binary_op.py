@@ -178,6 +178,22 @@ class TestBinaryOp(unittest.TestCase):
         b = a**3
         b.sync()
 
+    def test_binary_op_bool(self):
+        a = np.array([0,1,0,1]).astype(bool)
+        b = np.array([0,1,1,0]).astype(bool)
+        c = np.array([1,1,1,1]).astype(bool)
+        check("add", a, b)
+        all_eq(np.logical_xor(a, b), jt.subtract(a, b).data)
+        check("multiply", a, b)
+        check("logical_and", a, b)
+        check("logical_or", a, b)
+        check("logical_xor", a, b)
+        check("bitwise_and", a, b)
+        check("bitwise_or", a, b)
+        check("bitwise_xor", a, b)
+        check("divide", a, c)
+        check("floor_divide", a, c)
+        check("mod", a, c)
 
 
 class TestBinaryOpCuda(TestBinaryOp, test_cuda(2)):
