@@ -102,7 +102,7 @@ class TestUnaryOp(unittest.TestCase):
 class TestUnaryOpCuda(TestUnaryOp, test_cuda(2)):
     pass
 
-class TestUnaryOpCudaFp16(TestUnaryOp, test_cuda(2)):
+class TestUnaryOpCpuFp16(TestUnaryOp, test_cuda(2)):
     def setUp(self):
         jt.flags.amp_reg = 2 | 4 | 8 | 16
     def tearDown(self):

@@ -189,6 +189,7 @@ class TestBinaryOpCpuFp16(TestBinaryOp):
     def tearDown(self):
         jt.flags.amp_reg = 0
 
+@unittest.skipIf(not jt.has_cuda, "no cuda found")
 class TestBinaryOpCudaFp16(TestBinaryOp):
     def setUp(self):
         jt.flags.amp_reg = 2 | 4 | 8 | 16
