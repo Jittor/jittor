@@ -53,7 +53,6 @@ class TestReduceOp(unittest.TestCase):
         def gen_data(shape):
             num = np.multiply.reduce(shape)
             a = np.random.randint(2, size=[num]).astype(bool)
-            print(a)
             return a.reshape(shape).astype("int32")
 
         def check(a, op, dims):
@@ -80,7 +79,7 @@ class TestReduceOp(unittest.TestCase):
         for a in ia:
             check(a, iop[0], idims[0])
         for op in iop:
-            check(ia[0], op, idims[0])
+            check(ia[0], op, idims[1])
         for dims in idims:
             check(ia[0], iop[0], dims)
         expect_error(lambda: jt.reduce_add([1,2,3], 2))
