@@ -1652,7 +1652,7 @@ class CTCLoss(jt.Module):
         return ctc_loss(log_probs, targets, input_lengths, target_lengths, self.blank, self.reduction, self.zero_infinity)
 
 def _simple_for(x, func):
-    with jt.flag_scope(compile_options={"FLAGS: -O0 ":1}):
+    with jt.flag_scope(compile_options={"FLAGS: -O2 ":1}):
         src = f'''
         __inline_static__
         @python.jittor.auto_parallel(1)
