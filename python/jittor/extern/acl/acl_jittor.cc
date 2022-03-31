@@ -161,24 +161,33 @@ string process_acl(const string& src, const string& name, const map<string,strin
     return join(tokens, "");
 }
 
-void acl_jittor_op_compiler(string& filename, string& src, bool is_acl) {
+void acl_jittor_op_compiler(string& filename, string& src, bool is_acl, string& extra_flags) {
     if (!is_acl) return;
+    extra_flags += " --tik-soc-version=Ascend910 ";
     filename = replace(filename, ".cc", ".tikcc");
     // LOGir << filename;
     string new_src = process_acl(src, "", {});
     new_src = replace(new_src, R"(#include "misc/cuda_atomic.h")", "");
     new_src = replace(new_src, R"(#include "misc/cuda_limits.h")", "");
     new_src = replace(new_src, "__global__", "__ai_device_entry__");
-    new_src = token_replace(new_src, "__launch_bounds__($1)", "");
-    new_src = token_replace(new_src, "int thread_num = $1;", "int thread_num = 1;");
-    new_src = token_replace(new_src, "tn0=std::max(tn0, $1);", "");
-    new_src = token_replace(new_src, "<<<$1,$2>>>", "<<<1,0>>>");
-    new_src = token_replace(new_src, "int thread_id = $1;", "int thread_id = 1;");
+    new_src = token_replace_all(new_src, "__launch_bounds__($1)", "");
+    new_src = token_replace_all(new_src, "int thread_num = $1;", "int thread_num = 1;");
+    new_src = token_replace_all(new_src, "tn0=std::max(tn0, $1);", "");
+    new_src = token_replace_all(new_src, "<<<$1>>>", "<<<1,0>>>");
+    new_src = token_replace_all(new_src, "int thread_id = $1;", "int thread_id = 1;");
     // for inc error
-    new_src = token_replace(new_src, "for ($1+=$2)", "for ($1++)");
+    new_src = token_replace_all(new_src, "for ($1+=$2)", "for ($1++)");
     // bit op error
-    new_src = token_replace(new_src, "int tnum$1;", "");
-    new_src = token_replace(new_src, "int tid$1=$2;", "int tid$1=0;");
+    new_src = token_replace_all(new_src, "int tnum$1;", "");
+    new_src = token_replace_all(new_src, "int p1$1;", "");
+    new_src = token_replace_all(new_src, "int p2$1;", "");
+    new_src = token_replace_all(new_src, "int tn$1=$2;", "int tn$1=0;");
+    new_src = token_replace_all(new_src, "int tid$1=$2;", "int tid$1=0;");
+    src = new_src;
+
+    new_src = token_replace_all(new_src, "atomicAdd(&$1,$2);", "$1=$1+$2;");
+    new_src = token_replace_all(new_src, "::max($1,$2);", "($1)>($2)?($1):($2);");
+    // new_src = replace(new_src, "::max", "fmax");
     src = new_src;
     // auto tokens = token_split(new_src);
 }

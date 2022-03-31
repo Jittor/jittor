@@ -107,7 +107,7 @@ static void parse_reg(const string& src,
     }
 }
 
-void token_replace(vector<string>& tokens, int i, const string& src, const string& dst) {
+int token_replace(vector<string>& tokens, int i, const string& src, const string& dst) {
     ASSERT(src.at(0) != '$' && src.at(src.size()-1) != '$' && 
         src.at(src.size()-2) != '$') << "illegal src:" << src;
     vector<string> patterns;
@@ -186,11 +186,26 @@ void token_replace(vector<string>& tokens, int i, const string& src, const strin
         for (int j=start_i+1; j<end_i; j++)
             tokens[j] = "";
     }
+    return end_i;
 }
 
 string token_replace(const string& s, const string& src, const string& dst) {
     vector<string> ss{s};
     token_replace(ss, 0, src, dst);
+    return join(ss, "");
+}
+
+string token_replace_all(const string& s, const string& src, const string& dst) {
+    auto ss = token_split(s);
+    int pos = 0;
+    while (pos < ss.size()) {
+        try {
+            pos = token_replace(ss, pos, src, dst) + 1;
+        } 
+        catch(const std::exception& e) {
+            return join(ss, "");
+        }
+    }
     return join(ss, "");
 }
 

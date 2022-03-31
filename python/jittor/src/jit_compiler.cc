@@ -206,7 +206,8 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
     CHECK(cc_path.size());
     string jit_src_path = Op::get_filename_from_jit_key(jit_key, ".cc");
     string* src2 = (string*)&src;
-    JPU(op_compiler(jit_src_path, *src2, is_cuda_op));
+    string* extra_flags2 = (string*)&extra_flags;
+    JPU(op_compiler(jit_src_path, *src2, is_cuda_op, *extra_flags2));
     #ifdef _WIN32
     string jit_lib_path = Op::get_filename_from_jit_key(jit_key, ".dll");
     string jit_src_path2 = _to_winstr(jit_src_path);
