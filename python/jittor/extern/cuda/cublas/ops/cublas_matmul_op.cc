@@ -87,7 +87,7 @@ void CublasMatmulOp::jit_run() {
     }
     #else
     cublasGemmAlgo_t algo = CUBLAS_GEMM_DEFAULT;
-    cudaDataType_t computeType = CUDA_R_32F;
+    cudaDataType_t computeType = get_dtype(c->dtype());
     if (use_tensorcore) {
         algo = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
     }
