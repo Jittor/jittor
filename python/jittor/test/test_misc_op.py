@@ -305,6 +305,18 @@ class TestOther(unittest.TestCase):
                     else:
                         assert err.item() < 1e-5, (err.item())
 
+    def test_nan(self):
+        a = np.array([1.0,0.0,1.0,-1.0], "float32") / np.array([1.0,0.0,0.0,0.0], "float32")
+        np.testing.assert_allclose(jt.isnan(jt.array(a)).data, [0,1,0,0])
+        np.testing.assert_allclose(jt.isfinite(jt.array(a)).data, [1,0,0,0])
+        np.testing.assert_allclose(jt.isinf(jt.array(a)).data, [0,0,1,1])
+        np.testing.assert_allclose(jt.isneginf(jt.array(a)).data, [0,0,0,1])
+        np.testing.assert_allclose(jt.isposinf(jt.array(a)).data, [0,0,1,0])
+
+    def test_nan_cuda(self):
+        if not jt.has_cuda: return
+        with jt.flag_scope(use_cuda=1):
+            self.test_nan()
 
 if __name__ == "__main__":
     unittest.main()
