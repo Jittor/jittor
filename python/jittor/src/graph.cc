@@ -112,4 +112,24 @@ DumpGraphs dump_all_graphs() {
     return graphs;
 }
 
+void clean_graph() {
+    vector<Node*> queue;
+    auto t = ++Node::tflag_count;
+    for (auto& vh : hold_vars)
+        if (vh->var->tflag != t) {
+            vh->var->tflag = t;
+            queue.push_back(vh->var);
+        }
+    bfs_both(queue, [](Node*){return true;});
+    t = ++Node::tflag_count;
+    for (auto& vh : hold_vars)
+        vh->var->tflag = t;
+    SetupFreeBuffer setup_free_buffer;
+    for (auto node : queue) {
+        if (node->tflag != t) {
+            node->set_stop_grad();
+        }
+    }
+}
+
 } // jittor

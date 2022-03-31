@@ -27,6 +27,14 @@ void do_graph_check();
 inline void graph_check() { if (check_graph) do_graph_check(); };
 // @pyjt(dump_all_graphs)
 DumpGraphs dump_all_graphs();
+/**
+ * Clean graph, try to reduce memory usage.
+ * This operation will stop grad for all previous nodes.
+ * Backpropegation for previous nodes will be unavailable.
+ * This operation offen used between train and eval.
+ */
+// @pyjt(clean_graph)
+void clean_graph();
 
 template <typename Func>
 void bfs_backward(vector<Node*>& queue, Func&& func) {
