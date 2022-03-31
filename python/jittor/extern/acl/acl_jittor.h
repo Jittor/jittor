@@ -14,6 +14,6 @@ namespace jittor {
 
 EXTERN_LIB uint64_t acl_jittor_tid;
 
-void acl_jittor_op_compiler(string& filename, string& src, bool is_acl);
+void acl_jittor_op_compiler(string& filename, string& src, bool is_acl, string& extra_flags);
 
 }
