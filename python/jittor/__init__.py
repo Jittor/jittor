@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.1.57'
+__version__ = '1.3.1.58'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -1439,6 +1439,9 @@ def dirty_fix_pytorch_runtime_error():
 
     if platform.system() == 'Linux':
         os.RTLD_GLOBAL = os.RTLD_GLOBAL | os.RTLD_DEEPBIND
+        import jittor_utils
+        with jittor_utils.import_scope(os.RTLD_GLOBAL | os.RTLD_NOW):
+            import torch
     
 
 import atexit
