@@ -189,6 +189,12 @@ class TestFP16(unittest.TestCase):
         c = jt.matmul(a, b)
         c.sync()
 
+    def test_bmm(self):
+        a = jt.random((10,3,4)).float16()
+        b = jt.random((10,4,5)).float16()
+        c = jt.matmul(a, b)
+        c.sync()
+
     def test_matmul_grad(self):
         a = jt.random((100,100)).float16()
         b = jt.random((100,100)).float16()
