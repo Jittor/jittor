@@ -15,7 +15,7 @@
 #include "misc/nano_string.h"
 #include "misc/fast_shared_ptr.h"
 #include "profiler/simple_profiler.h"
-#ifdef HAS_CUDA
+#ifdef IS_CUDA
 #include "misc/cuda_flags.h"
 #endif
 
@@ -652,7 +652,7 @@ DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj) {
         [obj](typename T::R* result) {
             // import numpy
             string npstr="numpy";
-            #ifdef HAS_CUDA
+            #ifdef IS_CUDA
             if (use_cuda) npstr="cupy";
             #endif
 
@@ -669,7 +669,7 @@ DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj) {
             PyTuple_SET_ITEM(args.obj, 0, np.release());
             PyTuple_SET_ITEM(args.obj, 1, data.release());
 
-            #ifdef HAS_CUDA
+            #ifdef IS_CUDA
             if (npstr=="cupy") {
                 PyObjHolder jt(PyImport_ImportModule("jittor"));
                 PyObjHolder pFunc(PyObject_GetAttrString(jt.obj,"numpy2cupy"));

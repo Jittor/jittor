@@ -9,6 +9,10 @@
 import unittest
 import jittor as jt
 import numpy as np
+import os
+
+model_test = os.environ.get("model_test", "") == "1"
+skip_model_test = not model_test
 
 class TestMem(unittest.TestCase):
     def tearDown(self):
@@ -16,6 +20,7 @@ class TestMem(unittest.TestCase):
         jt.gc()
 
     @unittest.skipIf(not jt.has_cuda, "no cuda found")
+    @unittest.skipIf(skip_model_test, "skip_model_test")
     @jt.flag_scope(use_cuda=1)
     def test_oom(self):
         backups = []

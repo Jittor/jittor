@@ -7,8 +7,8 @@
 # ***************************************************************
 import jittor as jt
 import os
-from pathlib import Path
-home_path = str(Path.home())
+import jittor_utils as jit_utils
+home_path = jit_utils.home()
 
 def run_cmd(cmd):
     print("RUN CMD:", cmd)

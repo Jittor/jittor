@@ -39,8 +39,8 @@ void CopyOp::run() {
     auto x_ptr = x->mem_ptr;
     auto y_ptr = outputs().front()->mem_ptr;
     #ifdef HAS_CUDA
-    if (flags.get(NodeFlags::_cuda))  {
-        checkCudaErrors(cudaMemcpyAsync(y_ptr, x_ptr, size, cudaMemcpyDefault, 0));
+    if (flags.get(NodeFlags::_cuda)) {
+        checkCudaErrors(cudaMemcpyAsync(y_ptr, x_ptr, size, cudaMemcpyDeviceToDevice, 0));
     } else
     #endif
     {

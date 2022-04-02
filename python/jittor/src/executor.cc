@@ -509,6 +509,11 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
                     var->alloc(cpu_allocator);
                 }
             }
+        } else {
+            for (Var* v : op->inputs()) {
+                if (!v->allocator->is_cuda())
+                    migrate_to_gpu(v, allocator);
+            }
         }
         #endif
         #ifdef NODE_MEMCHECK

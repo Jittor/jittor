@@ -90,7 +90,7 @@ void CuttTransposeOp::jit_run() {
     for (int i=0; i<dim; i++)
         x_shape[i] = new_shape[dim-1-i];
     if (dim == 1 || x->num==1) {
-        checkCudaErrors(cudaMemcpyAsync(yp, xp, x->size, cudaMemcpyDefault, 0));
+        checkCudaErrors(cudaMemcpyAsync(yp, xp, x->size, cudaMemcpyDeviceToDevice, 0));
         return;
     }
     JK& jk = get_jk();
