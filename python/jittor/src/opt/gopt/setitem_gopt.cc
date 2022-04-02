@@ -107,69 +107,9 @@ static void setitem_inplace(SetitemOp* op) {
     }
     add_dependency(data->input(), {input->node()});
     data->share_with(input, size);
-    op->flags.set((NodeFlags::Flags(SetitemOp::_data_inplaced)));
-}
-
-struct BBox {
-    int n = 0;
-    int* minmax = nullptr;
-    
-
-
-    void load_var_slice(const VarSlice& vs) {
-
-    }
-};
-
-static void setitem_grad_opt(GetitemOp* op) {
-    if (!op->flags.get(NodeFlags::_has_gopt))
-        return;
-    auto get_in = op->inputs().front();
-    auto get_in_op = get_in->input();
-    if (!get_in_op)
-        return;
-    auto name = get_in_op->name();
-    if (!fast_strcmp(name, "setitem"))
-        return;
-    // find setitem op chain
-    auto first_set = (SetitemOp*)get_in_op;
-    vector<SetitemOp*> chain;
-    while (1) {
-        auto next = first_set->inputs().front()->input();
-        if (!next) break;
-        if (!fast_strcmp(next->name(), "setitem"))
-            break;
-        chain.push_back(first_set);
-        first_set = (SetitemOp*)next;
-    }
-    chain.push_back(first_set);
-    for (int i=0; i<chain.size()/2; i++)
-        std::swap(chain[i], chain[chain.size()-1-i]);
-    auto last_set = (SetitemOp*)get_in_op;
-    while (1) {
-        SetitemOp* next = nullptr;
-        auto out_var = last_set->outputs().front();
-        for (auto* out : out_var->outputs()) {
-            if (fast_strcmp(out->name(), "setitem")) {
-                next = (SetitemOp*)out;
-                break;
-            }
-        }
-        if (!next) break;
-        last_set = next;
-        chain.push_back(next);
-    }
-    // LOGir << "find setitem chain" << chain.size() << chain;
-    for (auto* sop : chain) {
-        // LOGig << sop << sop->vs;
-        auto out_var = sop->outputs().front();
-        for (auto* out : out_var->outputs()) {
-            if (fast_strcmp(out->name(), "getitem")) {
-                out->flags.set(NodeFlags::_has_gopt, 0);
-            }
-        }
-    }
-
+    op->ns.set(GetitemOp::_inplace);
+    // LOGir << input->shape << input->dtype() << data->shape << data->dtype() << vs << data->input();
+    // LOGir << output;
 }
 
 static void getitem_inplace(GetitemOp* op) {
@@ -207,7 +147,9 @@ static void getitem_inplace(GetitemOp* op) {
         if (s.slice.step != 1) return;
     }
     ou->share_with(in, size);
+    op->ns.set(GetitemOp::_inplace);
     // LOGir << "pass getitem_inplace";
+    // LOGir << "inplace getitem" << vs << in->shape << ou->shape;
 }
 
 void SetitemOp::graph_optimize() {
@@ -220,7 +162,6 @@ void GetitemOp::graph_optimize() {
     // This optimize is still WIP
     // LOGir << "hello getitem graph_optimize";
     // setitem_grad_opt(this);
-    (void*)setitem_grad_opt;
     // (void)getitem_inplace;
     getitem_inplace(this);
     (void*)getitem_inplace;

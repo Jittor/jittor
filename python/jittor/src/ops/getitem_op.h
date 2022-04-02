@@ -12,6 +12,7 @@
 namespace jittor {
 
 struct GetitemOp : Op {
+    static constexpr jittor::NanoString::Flags _inplace = (jittor::NanoString::Flags)0;
     VarSlices vs;
     // map i to related var slice
     NanoVector i_to_vs;

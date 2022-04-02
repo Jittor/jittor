@@ -315,7 +315,7 @@ void SetitemOp::jit_run() {
         checkCudaErrors(cudaMemcpyAsync(op, ip, out->size, cudaMemcpyDeviceToDevice, 0));
     #endif
 
-    if (flags.get((NodeFlags::Flags(SetitemOp::_data_inplaced))) &&
+    if (ns.get(GetitemOp::_inplace) &&
         // array op may move the data allocation, double check
         // affect test_contrib.pu 
         in->allocator == data->allocator &&
