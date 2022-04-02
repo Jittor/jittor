@@ -294,6 +294,24 @@ class TestLinalgOp(unittest.TestCase):
                 print(tgq[0])
                 print(tgr[0])
 
+@unittest.skipIf(not jt.has_cuda, "No cuda found.")
+class TestBUG4_2Op(unittest.TestCase):
+    def test(self):
+        jt.flags.use_cuda = 1
+        x = jt.randn(32, 50, 2)
+        y = jt.rand(32, 1, 2)
+
+        # MLE
+        mean = x.mean(dim=1, keepdims=True)# [batch_size, 1, n_feature]
+        mup = jt.transpose((x - mean), [0, 2, 1])# [batch_size, n_feature, n_particles]
+        cov = jt.nn.bmm_transpose(mup, mup) / (50 - 1)# [batch_size, n_feature, n_feature]
+        prec = jt.linalg.inv(cov)# [batch_size, n_feature, n_feature]
+        # print(prec)
+        # log_prob
+        dst = y - mean
+        log_prob = -1/2 * jt.bmm(dst, jt.bmm_transpose(prec, dst))
+        grad = jt.grad(log_prob, x)
+        grad.sync()
 
 if __name__ == "__main__":
     unittest.main()
