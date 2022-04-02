@@ -11,7 +11,6 @@
 namespace jittor {
 
 struct SetitemOp : Op {
-    static constexpr int _data_inplaced = NodeFlags::_has_vary_input + 1;
     VarSlices vs;
     // map i to related var slice
     NanoVector i_to_vs;
