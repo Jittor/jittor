@@ -103,14 +103,15 @@ VarPtr NumpyCodeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     result.arrays["dout"].shape=dout->shape;
     result.arrays["dout"].dtype=dout->dtype();
     vector<DataView> outputs(_outputs.size());
-    for (int i=0; i<outputs.size(); i++) {
-        outputs[i].ptr=_outputs[i]->ptr<DataView>();
-        outputs[i].shape=_outputs[i]->shape;
-        outputs[i].dtype=_outputs[i]->dtype();
-    }
-    result.varrays["f_outputs"] = move(outputs);
     auto inputs = clone(_inputs);
     inputs.push_back(dout);
+    for (int i=0; i<outputs.size(); i++) {
+        outputs[i].ptr=_outputs[i];
+        outputs[i].shape=_outputs[i]->shape;
+        outputs[i].dtype=_outputs[i]->dtype();
+        inputs.push_back(_outputs[i]);
+    }
+    result.varrays["f_outputs"] = move(outputs);
 
     return make_numpy_code(
         _inputs[v_index]->shape,
@@ -126,8 +127,14 @@ void NumpyCodeOp::run() {
     result.ints = _results.ints;
     result.arrays = _results.arrays;
     
-    if (result.arrays.count("dout") > 0){
-        result.arrays["dout"].ptr=((Var*)result.arrays["dout"].ptr)->ptr<DataView>();
+    if (result.arrays.count("dout") > 0) {
+        auto &ptr = result.arrays["dout"].ptr;
+        ptr = ((Var*)ptr)->mem_ptr;
+    }
+    if (result.varrays.count("f_outputs") > 0) {
+        for (auto& dv : result.varrays["f_outputs"]) {
+            dv.ptr = ((Var*)dv.ptr)->mem_ptr;
+        }
     }
     vector<DataView> inputs(_inputs.size());
     vector<DataView> outputs(_outputs.size());
