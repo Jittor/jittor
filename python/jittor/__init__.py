@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.1.48'
+__version__ = '1.3.1.63'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -26,7 +26,7 @@ with lock.lock_scope():
     from .compile_extern import mkl_ops, mpi, mpi_ops, in_mpi, rank, world_size
     if core.get_device_count() == 0:
         has_cuda = compile_extern.has_cuda = compiler.has_cuda = False
-    from .compile_extern import cudnn, curand, cublas
+    from .compile_extern import cudnn, curand, cublas, cufft
     from .init_cupy import numpy2cupy
 
 import contextlib
@@ -957,6 +957,14 @@ class Module:
         self.dfs([], "", callback, callback_leave)
         return ms
 
+    @property
+    def _modules(self):
+        return { k:v for k,v in self.__dict__.items() if isinstance(v, Module) }
+
+    @property
+    def _parameters(self):
+        return { k:v for k,v in self.__dict__.items() if isinstance(v, Var) }
+
     def requires_grad_(self, requires_grad=True):
         self._requires_grad = requires_grad
         self._place_hooker()
@@ -1224,15 +1232,23 @@ Arguments of hook are defined as::
     def __getattr__(self, key):
         return object.__getattribute__(self, key)
 
+    def float64(self):
+        '''convert all parameters to float16'''
+        for p in self.parameters():
+            if p.dtype.is_float():
+                p.assign(p.float64())
+        return self
+
     def float16(self):
         '''convert all parameters to float16'''
         for p in self.parameters():
             if p.dtype.is_float():
                 p.assign(p.float16())
+        return self
 
     def half(self):
         '''convert all parameters to float16'''
-        self.float16()
+        return self.float16()
 
     def float_auto(self):
         '''convert all parameters to float16 or float32 automatically
@@ -1240,6 +1256,7 @@ Arguments of hook are defined as::
         for p in self.parameters():
             if p.dtype.is_float():
                 p.assign(p.float_auto())
+        return self
 
 
 
@@ -1422,6 +1439,9 @@ def dirty_fix_pytorch_runtime_error():
 
     if platform.system() == 'Linux':
         os.RTLD_GLOBAL = os.RTLD_GLOBAL | os.RTLD_DEEPBIND
+        import jittor_utils
+        with jittor_utils.import_scope(os.RTLD_GLOBAL | os.RTLD_NOW):
+            import torch
     
 
 import atexit

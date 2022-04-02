@@ -56,11 +56,11 @@ def __iter__(x):
     return result.__iter__()
 jt.Var.__iter__ = __iter__
 
-def all(x, dim=[]):
+def all(x, dim=()):
     return x.all_(dim).bool()
 jt.Var.all = all
 
-def any(x,dim):
+def any(x,dim=()):
     return x.any_(dim).bool()
 jt.Var.any = any
     
@@ -1650,3 +1650,28 @@ class CTCLoss(jt.Module):
 
     def execute(self, log_probs, targets, input_lengths, target_lengths):
         return ctc_loss(log_probs, targets, input_lengths, target_lengths, self.blank, self.reduction, self.zero_infinity)
+
+def _simple_for(x, func):
+    with jt.flag_scope(compile_options={"FLAGS: -O2 ":1}):
+        src = f'''
+        __inline_static__
+        @python.jittor.auto_parallel(1)
+        void kernel(int n0, int i0, in0_type* _x, out0_type* y) {{
+            using namespace std;
+            auto x = _x[i0];
+            y[i0] = {func};
+        }}
+        kernel(in0->num, 0, in0_p, out0_p);
+        '''
+        return jt.code(x.shape, "bool", [x], cpu_src=src, cuda_src=src)
+
+def isnan(x): return _simple_for(x, "isnan(x)")
+jt.Var.isnan = isnan
+def isfinite(x): return _simple_for(x, "!isnan(x) && !isinf(x)")
+jt.Var.isfinite = isfinite
+def isinf(x): return _simple_for(x, "isinf(x)")
+jt.Var.isinf = isinf
+def isneginf(x): return _simple_for(x, "x<0 && isinf(x)")
+jt.Var.isneginf = isneginf
+def isposinf(x): return _simple_for(x, "x>0 && isinf(x)")
+jt.Var.isposinf = isposinf

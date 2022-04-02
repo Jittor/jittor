@@ -151,6 +151,7 @@ struct CommonOpType : OpByType {
             ret = cuda_map[args.at(0)];
         else
             ret = cpu_map[args.at(0)];
+        if (args.at(1) == "bool") ret = "((bool)"+ret+")";
         return format(ret, args);
     }
 

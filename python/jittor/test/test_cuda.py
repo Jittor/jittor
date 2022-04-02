@@ -101,6 +101,12 @@ class TestCuda(unittest.TestCase):
         assert a.shape == [3,4,5] and a.dtype == 'float'
         assert (-na.flatten() == range(3*4*5)).all(), na
 
+    def test_cuda_fused_op(self):
+        a = jt.array([1,2,3])
+        a.sync()
+        with jt.flag_scope(use_cuda=1):
+            ((a+a)*2).data
+
 
 @unittest.skipIf(jt.compiler.has_cuda, "Only test without CUDA")
 class TestNoCuda(unittest.TestCase):

@@ -1,9 +1,9 @@
 import os
-from pathlib import Path
 from collections import defaultdict
 import pickle
 import numpy as np
 import jittor_utils
+import jittor_utils as jit_utils
 from jittor_utils import LOG
 import sys
 
@@ -96,7 +96,7 @@ class Hook:
         hook_rand()
         self.rid = 0
         self.base_name = base_name
-        self.base_path = os.path.join(str(Path.home()), ".cache", "jittor", "auto_diff", base_name)
+        self.base_path = os.path.join(jit_utils.home(), ".cache", "jittor", "auto_diff", base_name)
         if not os.path.exists(self.base_path):
             os.makedirs(self.base_path, exist_ok=True)
             self.mode = 'save'

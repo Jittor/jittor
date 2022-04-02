@@ -162,7 +162,6 @@ def check_share():
         }
     }
     kernel<<<1024,16*16>>>(in0_p, out0_p);
-    LOGir << "aaa";
     """).sync()
     jt.sync_all(True)
     # print(a[0]+1)
@@ -187,6 +186,12 @@ class TestFP16(unittest.TestCase):
     def test_matmul(self):
         a = jt.random((100,100)).float16()
         b = jt.random((100,100)).float16()
+        c = jt.matmul(a, b)
+        c.sync()
+
+    def test_bmm(self):
+        a = jt.random((10,3,4)).float16()
+        b = jt.random((10,4,5)).float16()
         c = jt.matmul(a, b)
         c.sync()
 

@@ -51,8 +51,8 @@ class TestCuttTransposeOp(unittest.TestCase):
                         in_order = False
                         break
                     last = perm[i]
-                if not in_order:
-                    assert len(logs)==1
+                # if not in_order:
+                #     assert len(logs)==1
                 assert (x==y).all(), f"\n{x}\n{y}\n{perm}\n{a.shape}"
                 
         ia = [gen_data([5, 7]), gen_data([2,2,2]), gen_data([2,3,4,5]), gen_data([5,3]), gen_data([3,1,5,3,1])]

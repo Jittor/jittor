@@ -13,9 +13,9 @@
 #include "var.h"
 #include "mkl_conv_backward_x_op.h"
 
-#include <mkldnn.hpp>
+#include <dnnl.hpp>
 
-using namespace mkldnn;
+using namespace dnnl;
 using namespace std;
 
 namespace jittor {
@@ -142,8 +142,8 @@ void MklConvBackwardXOp::jit_run() {
         conv_weights_memory = memory(conv_pd.weights_desc(), eng);
         net_bwd.push_back(
                 reorder(conv_user_weights_memory, conv_weights_memory));
-        net_bwd_args.push_back({{MKLDNN_ARG_FROM, conv_user_weights_memory},
-                {MKLDNN_ARG_TO, conv_weights_memory}});
+        net_bwd_args.push_back({{DNNL_ARG_FROM, conv_user_weights_memory},
+                {DNNL_ARG_TO, conv_weights_memory}});
     }
     
     auto conv_user_diff_dst_memory
@@ -168,21 +168,21 @@ void MklConvBackwardXOp::jit_run() {
             != conv_user_diff_dst_memory.get_desc()) {
         conv_diff_dst_memory = memory(conv_bwd_data_pd.diff_dst_desc(), eng);
         net_bwd.push_back(reorder(conv_user_diff_dst_memory, conv_diff_dst_memory));
-        net_bwd_args.push_back({{MKLDNN_ARG_FROM, conv_user_diff_dst_memory},
-                {MKLDNN_ARG_TO, conv_diff_dst_memory}});
+        net_bwd_args.push_back({{DNNL_ARG_FROM, conv_user_diff_dst_memory},
+                {DNNL_ARG_TO, conv_diff_dst_memory}});
     }
 
     auto conv_bwd_weights_memory = conv_weights_memory;
     if (conv_bwd_data_pd.weights_desc() != conv_weights_memory.get_desc()) {
         conv_bwd_weights_memory = memory(conv_bwd_data_pd.weights_desc(), eng);
         net_bwd.push_back(reorder(conv_weights_memory, conv_bwd_weights_memory));
-        net_bwd_args.push_back({{MKLDNN_ARG_FROM, conv_weights_memory},
-                {MKLDNN_ARG_TO, conv_bwd_weights_memory}});
+        net_bwd_args.push_back({{DNNL_ARG_FROM, conv_weights_memory},
+                {DNNL_ARG_TO, conv_bwd_weights_memory}});
     }
 
     net_bwd.push_back(convolution_backward_data(conv_bwd_data_pd));
-    net_bwd_args.push_back({{MKLDNN_ARG_WEIGHTS, conv_bwd_weights_memory},
-        {MKLDNN_ARG_DIFF_DST, conv_diff_dst_memory}});
+    net_bwd_args.push_back({{DNNL_ARG_WEIGHTS, conv_bwd_weights_memory},
+        {DNNL_ARG_DIFF_DST, conv_diff_dst_memory}});
             
     auto conv_diff_src_memory = conv_user_diff_src_memory;
     if (conv_bwd_data_pd.diff_src_desc()
@@ -190,15 +190,15 @@ void MklConvBackwardXOp::jit_run() {
         conv_diff_src_memory
                 = memory(conv_bwd_data_pd.diff_src_desc(), eng);
         net_bwd_args.back().insert(
-                {MKLDNN_ARG_DIFF_SRC, conv_diff_src_memory});
+                {DNNL_ARG_DIFF_SRC, conv_diff_src_memory});
                 
         net_bwd.push_back(reorder(
                 conv_diff_src_memory, conv_user_diff_src_memory));
-        net_bwd_args.push_back({{MKLDNN_ARG_FROM, conv_diff_src_memory},
-                {MKLDNN_ARG_TO, conv_user_diff_src_memory}});
+        net_bwd_args.push_back({{DNNL_ARG_FROM, conv_diff_src_memory},
+                {DNNL_ARG_TO, conv_user_diff_src_memory}});
     } else {
         net_bwd_args.back().insert(
-                {MKLDNN_ARG_DIFF_SRC, conv_diff_src_memory});
+                {DNNL_ARG_DIFF_SRC, conv_diff_src_memory});
     }
 
     ASSERTop(net_bwd.size(),==,net_bwd_args.size());

@@ -225,6 +225,7 @@ inline NanoString binary_dtype_infer(NanoString op, NanoString x, NanoString y) 
             return (dsize_ == 3) ? ns_float64 : ns_float32;
         return float_dtype(dsize_);
     } else {
+        if (x.is_bool() && y.is_bool()) return ns_bool;
         return int_dtype(dsize_);
     }
 }
