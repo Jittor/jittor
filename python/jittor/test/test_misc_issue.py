@@ -95,6 +95,23 @@ jt.mkl_ops.mkl_conv(x, w, 1, 1, 2, 2).sync()
 """
         assert os.system(f"{sys.executable} -c '{src}'")==0
 
+    def test_cuda_lowsm(self):
+        if not jt.has_cuda: return
+        src = """
+import jittor
+from jittor.nn import matmul_transpose
+
+a = jittor.ones((3,4,2), dtype="float32")
+b = jittor.ones((5, 2), dtype="float32")
+print(matmul_transpose(a, b))
+
+jittor.flags.use_cuda = 1
+a = jittor.ones((3,4,2), dtype="float32")
+b = jittor.ones((5, 2), dtype="float32")
+print(matmul_transpose(a, b))
+"""
+        assert os.system(f"cuda_archs=52 {sys.executable} -c '{src}'")==0
+
     def test_parallel(self):
         a = jt.code([4], "int", cpu_src="""
             #pragma omp parallel num_threads(4)

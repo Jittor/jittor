@@ -19,9 +19,12 @@ typedef __half float16;
 #if CUDA_ARCH >= 800
 inline __device__ float16 max(float16 a, float16 b) { return __hmax(a, b); }
 inline __device__ float16 min(float16 a, float16 b) { return __hmin(a, b); }
-#else
+#elif CUDA_ARCH >= 610
 inline __device__ float16 max(float16 a, float16 b) { return a<b?b:a; }
 inline __device__ float16 min(float16 a, float16 b) { return a<b?a:b; }
+#else
+inline __device__ float16 max(float16 a, float16 b) { return float(a)<float(b)?b:a; }
+inline __device__ float16 min(float16 a, float16 b) { return float(a)<float(b)?a:b; }
 #endif
 
 inline __device__ float16 pow(float16 a, float16 b) { return ::pow(float32(a), float32(b)); }
