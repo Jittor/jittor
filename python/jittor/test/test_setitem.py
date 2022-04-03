@@ -242,6 +242,106 @@ class TestSetitem(unittest.TestCase):
         c = b[::-1]
         d = c.sum()
         jt.grad(d, [a])
+
+    def test_concat2(self):
+        a = jt.rand(10)
+        b = jt.rand(11)
+        c = jt.rand(12)
+        def cc():
+            x = jt.concat([b.copy(), c.copy()])
+            d = jt.concat([a.copy(), x])
+            return d.copy().copy().copy().copy().copy().copy()\
+                .copy().copy() + x.sum()*0.0
+        d = cc()
+        np.testing.assert_allclose(d.data,
+            np.concatenate([a.data,b.data,c.data]))
+
+    def test_concat3(self):
+        # a = jt.rand(10)
+        b = jt.rand(11)
+        c = jt.rand(12)
+        def cc():
+            x = jt.concat([b.copy(), c.copy()])
+            d = jt.concat([x])
+            return d.copy().copy().copy().copy().copy().copy()\
+                .copy().copy() + x.sum()*0.0
+        d = cc()
+        np.testing.assert_allclose(d.data,
+            np.concatenate([b.data,c.data]))
+        
+
+    def test_concat4(self):
+        # a = jt.rand(10)
+        b = jt.rand(11)
+        c = jt.rand(12)
+        def cc():
+            x = jt.concat([b.copy(), c.copy()])
+            d = jt.concat([x])
+            return d
+        d = cc()
+        np.testing.assert_allclose(d.data,
+            np.concatenate([b.data,c.data]))
+        
+    def test_concat_random(self):
+        def check():
+            n1, n2, n3 = 1000, 20, 10
+            # n1, n2, n3 = 2, 2, 1
+            import random
+            data = []
+            for i in range(n1):
+                if len(data) > n2:
+                    del data[random.randint(0,len(data)-1)]
+                x1 = random.randint(0,9)
+                # print(i, x1)
+                if len(data) == 0:
+                    # a = jt.random((random.randint(10,20),))
+                    a = jt.array(np.random.rand(random.randint(n3,n3*2)))
+                    data.append(a)
+                if x1 == 0:
+                    a = data[random.randint(0,len(data)-1)]
+                    a = a.copy()
+                    data.append(a)
+                elif x1 == 1:
+                    a = data[random.randint(0,len(data)-1)]
+                    a = a.clone()
+                    data.append(a)
+                elif x1 == 2:
+                    a = data[random.randint(0,len(data)-1)]
+                    b = np.random.permutation(np.arange(a.numel()))
+                    # print("permutation", b)
+                    a = a[b]
+                    data.append(a)
+                elif x1 == 3:
+                    a = data[random.randint(0,len(data)-1)]
+                    a = a[:100]
+                    # print(a.shape)
+                    data.append(a)
+                elif x1 == 4:
+                    # a = jt.random((random.randint(10,20),))
+                    a = jt.array(np.random.rand(random.randint(n3,n3*2)))
+                    data.append(a)
+                else:
+                    if not len(data): continue
+                    n = random.randint(1,3)
+                    a = [ data[random.randint(0,len(data)-1)] for i in range(n) ]
+                    a = jt.concat(a)
+                    if a.numel() > 1000:
+                        b = np.random.permutation(np.arange(a.numel()))
+                        a = a[b][:100]
+                    data.append(a)
+            ret = jt.concat(data).numpy()
+            # print(data)
+            return ret
+
+        for s in range(1000):
+            jt.set_global_seed(s)
+            data = check()
+            jt.gc()
+            jt.set_global_seed(s)
+            with jt.flag_scope(gopt_disable=1):
+                data2 = check()
+            jt.gc()
+            np.testing.assert_allclose(data, data2)
         
 
 if __name__ == "__main__":
