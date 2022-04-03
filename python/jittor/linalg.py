@@ -10,7 +10,6 @@
 # ***************************************************************
 import jittor as jt
 from functools import partial
-import numpy
 
 #TODO:full_matrices=1
 def svd(x):
@@ -438,6 +437,7 @@ def einsum(string, *args):
     :param string, args:
     :return: return values depend on the input string kinds.
     """
+    import numpy as np_cpu
     def forward_code(np, data):
         out = data["outputs"][0]
         npout = np.einsum(string, *data["inputs"])
@@ -464,7 +464,7 @@ def einsum(string, *args):
         if naked_summed:
             naked_summed_dims, ones_subs = zip(*naked_summed)
             ones_subs = ''.join(ones_subs)
-            ones = np.ones(np.array(operands[op_num].shape)[list(naked_summed_dims)])
+            ones = np_cpu.ones(np_cpu.array(operands[op_num].shape)[list(naked_summed_dims)])
             new_input_subs = ','.join([out_subs, ones_subs] + rest_of_subs)
             new_operands = [dout, ones] + rest_of_ops
         else:
@@ -481,14 +481,14 @@ def einsum(string, *args):
         np.copyto(out, x)
     
     def einsum_outshape(einsum_expr, inputs):
-        shps = numpy.concatenate([in_.shape for in_ in inputs])
+        shps = np_cpu.concatenate([in_.shape for in_ in inputs])
         p = einsum_expr.split(',')
         s = p[:-1] + p[-1].split('->')
         if s[-1]=='':
             return ()
         else:
             inop = list(map(list,s))
-            return tuple(shps[(numpy.concatenate(inop[:-1])[:,None]==inop[-1]).argmax(0)].astype(numpy.int64))
+            return tuple(shps[(np_cpu.concatenate(inop[:-1])[:,None]==inop[-1]).argmax(0)].astype(np_cpu.int64))
 
     output_shape = [int(x) for x in einsum_outshape(string, args)]
     backwards = [partial(backward_code, argnum=idx) for idx in range(len(args))]
