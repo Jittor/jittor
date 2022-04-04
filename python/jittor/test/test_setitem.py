@@ -39,7 +39,7 @@ class TestSetitem(unittest.TestCase):
 
         arr21 = jt.ones((2,2))
         arr22 = jt.ones((2,2)) * 2
-        arr2 = jt.contrib.concat([arr21, arr22], dim=0)
+        arr2 = jt.concat([arr21, arr22], dim=0)
         arr2.sync()
         arr21.data[0,0] = 3
         arr22.data[0,0] = 4
@@ -283,14 +283,17 @@ class TestSetitem(unittest.TestCase):
             np.concatenate([b.data,c.data]))
         
     def test_concat_random(self):
-        def check():
+        def check(backward=False):
             n1, n2, n3 = 1000, 20, 10
-            # n1, n2, n3 = 2, 2, 1
+            # n1, n2, n3 = 3, 2, 3
             import random
             data = []
+            back = []
             for i in range(n1):
                 if len(data) > n2:
-                    del data[random.randint(0,len(data)-1)]
+                    v = random.randint(0,len(data)-1)
+                    # print("del", v)
+                    del data[v]
                 x1 = random.randint(0,9)
                 # print(i, x1)
                 if len(data) == 0:
@@ -319,7 +322,15 @@ class TestSetitem(unittest.TestCase):
                 elif x1 == 4:
                     # a = jt.random((random.randint(10,20),))
                     a = jt.array(np.random.rand(random.randint(n3,n3*2)))
+                    if backward and random.randint(0,1):
+                        back.append(a)
                     data.append(a)
+                elif x1 == 5:
+                    v = random.randint(0,len(data)-1)
+                    a = data[v]
+                    # print("split", v, a.shape)
+                    arr = a.split(n3-1)
+                    data += arr
                 else:
                     if not len(data): continue
                     n = random.randint(1,3)
@@ -329,19 +340,49 @@ class TestSetitem(unittest.TestCase):
                         b = np.random.permutation(np.arange(a.numel()))
                         a = a[b][:100]
                     data.append(a)
-            ret = jt.concat(data).numpy()
-            # print(data)
-            return ret
+            ret = jt.concat(data)
+            if backward and len(back):
+                grads = jt.grad(jt.rand_like(ret)*ret, back)
+                return jt.concat(grads).numpy()
+            return ret.numpy()
 
-        for s in range(1000):
-            jt.set_global_seed(s)
-            data = check()
-            jt.gc()
-            jt.set_global_seed(s)
-            with jt.flag_scope(gopt_disable=1):
-                data2 = check()
-            jt.gc()
-            np.testing.assert_allclose(data, data2)
+        for s in range(100):
+            print("check", s)
+            for check_grad in [True, False]:
+                jt.set_global_seed(s)
+                data = check(check_grad)
+                jt.gc()
+                jt.set_global_seed(s)
+                with jt.flag_scope(gopt_disable=1):
+                    data2 = check(check_grad)
+                jt.gc()
+                np.testing.assert_allclose(data, data2, atol=1e-5, rtol=1e-5)
+
+    def test_concat_grad(self):
+        n = 30000
+        m = 100
+        arr = []
+        for i in range(n):
+            arr.append(jt.random((m,)))
+        x = jt.concat(arr)
+        y = jt.rand_like(x)
+        grads = jt.grad(x*y, arr)
+        for i in range(n):
+            np.testing.assert_allclose(grads[i].numpy(), y[i*m:(i+1)*m].numpy())
+
+    def test_split_grad(self):
+        n = 30000
+        m = 100
+        x = jt.random((n*m,))
+        arr = x.split(m)
+        yy = [ jt.rand(m) for i in range(n) ]
+        arr2 = [ y*yy[i] for i,y in enumerate(arr) ]
+        g = jt.grad(jt.concat(arr2), x)
+        for i in range(n):
+            np.testing.assert_allclose(g.data[i*m:(i+1)*m], yy[i].data)
+
+
+
         
 
 if __name__ == "__main__":

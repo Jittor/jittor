@@ -6,6 +6,7 @@
 // ***************************************************************
 #include <cmath>
 #include "var.h"
+#include "executor.h"
 #include "ops/getitem_op.h"
 #include "ops/op_register.h"
 #ifdef JIT_cuda
@@ -27,6 +28,8 @@ namespace jittor {
 
 static auto make_number = get_op_info("number")
     .get_constructor<VarPtr, float, Var*>();
+static auto make_empty = get_op_info("empty")
+    .get_constructor<VarPtr, NanoVector, NanoString>();
 static auto make_setitem = get_op_info("setitem")
     .get_constructor<VarPtr, Var*, VarSlices&&, Var*, NanoString>();
 
@@ -36,6 +39,19 @@ GetitemOp::GetitemOp(Var* x, VarSlices&& slices)
     flags.set(NodeFlags::_cuda);
     flags.set(NodeFlags::_has_gopt);
     create_output(nullptr, x->dtype());
+}
+
+GetitemOp::GetitemOp(Var* x, VarSlices&& slices, int _) 
+    : vs(move(slices)) {
+    flags.set(NodeFlags::_cpu);
+    flags.set(NodeFlags::_cuda);
+    flags.set(NodeFlags::_has_gopt);
+    flags.set(NodeFlags::_custom_flag);
+    flags.set(NodeFlags::_grads);
+    create_output(nullptr, x->dtype());
+    auto out2 = create_output(nullptr, x->dtype());
+    out2->share_with(x);
+    ns.data = _;
 }
 
 void GetitemOp::infer_slices(
@@ -377,6 +393,10 @@ void GetitemOp::infer_shape() {
     this->i_to_vs = i_to_vs.to_nano_vector();
     this->i_to_o = i_to_o.to_nano_vector();
     this->o_shape = o_shape.to_nano_vector();
+    if (outputs().size() > 1) {
+        auto out2 = output(1);
+        out2->set_shape(in->shape);
+    }
 
     LOGV(999) << "\ni_to_vs:" << i_to_vs
         << "\ni_to_o:" << i_to_o
@@ -394,6 +414,24 @@ VarPtr GetitemOp::grad(Var* out, Var* dout, Var* v, int v_index) {
             return make_setitem(zeros, VarSlices(vs, true), dout, ns_add);
         }
     return make_setitem(zeros, VarSlices(vs, true), dout, ns_void);
+}
+
+void GetitemOp::grads(Var** dout, VarPtr* dins) {
+    VarPtr x = dout[1];
+    VarPtr y = dout[0];
+    if (!x) {
+        auto in = inputs().front();
+        if (in->num<0) exe.run_sync(vector<Var*>({in}), true);
+        // ns.data represents this is the last split var
+        if (ns.data)
+            x = make_empty(in->shape, in->dtype());
+        else
+            x = make_number(0, in);
+    }
+    if (!y) {
+        y = make_number(0, outputs().front());
+    }
+    dins[0] = make_setitem(x, VarSlices(vs, true), y, ns_void);
 }
 
 void GetitemOp::jit_prepare(JK& jk) {

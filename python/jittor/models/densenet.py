@@ -76,7 +76,7 @@ class _DenseLayer(nn.Sequential):
         new_features = super(_DenseLayer, self).execute(x)
         if (self.drop_rate > 0):
             new_features = self.drop(new_features)
-        return jt.contrib.concat([x, new_features], dim=1)
+        return jt.concat([x, new_features], dim=1)
 
 class _DenseBlock(nn.Sequential):
 

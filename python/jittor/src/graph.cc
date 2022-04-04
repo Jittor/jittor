@@ -132,4 +132,46 @@ void clean_graph() {
     }
 }
 
+void check_circle(Node* s) {
+    vector<Node*> q = {s};
+    vector<int> fa = {-1};
+    unordered_set<Node*> visited = {s};
+    for (int i=0; i<q.size(); i++) {
+        auto n = q[i];
+        for (auto o : n->outputs()) {
+            if (o == s) {
+                LOGe << "Found circle:";
+                int j=i;
+                vector<Node*> nodes{o};
+                while (j) {
+                    nodes.push_back(q[j]);
+                    j = fa[j];
+                }
+                for (int i=0; i<nodes.size(); i++) {
+                    auto n = nodes[i];
+                    auto out = nodes[(i-1+nodes.size())%nodes.size()];
+                    auto in = nodes[(i+1)%nodes.size()];
+                    int in_id=0, out_id=0;
+                    for (auto ii : n->inputs()) {
+                        if (ii == in) break;
+                        in_id ++;
+                    }
+                    for (auto oo : n->outputs()) {
+                        if (oo == out) break;
+                        out_id ++;
+                    }
+                    LOGe << n << "in:" >> in_id >> '/' >> n->inputs().size() << "out:" >> out_id >> '/' >> n->outputs().size();
+                }
+                LOGf << "found circle";
+            }
+            if (!visited.count(o)) {
+                visited.emplace(o);
+                q.push_back(o);
+                fa.push_back(i);
+            }
+        }
+    }
+
+}
+
 } // jittor

@@ -59,6 +59,7 @@ struct NodeFlags {
         _prefer_16=_n+10,
         // bit11: reduce keep type unchange
         _reduce_keep=_n+11,
+        _custom_flag=_reduce_keep,
     };
 
     inline void set(Flags f, int a=1, int nbits=1) {

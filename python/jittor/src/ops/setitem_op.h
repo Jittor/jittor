@@ -25,6 +25,7 @@ struct SetitemOp : Op {
     
     const char* name() const override { return "setitem"; }
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;
+    void grads(Var** dout, VarPtr* dins) override;
     void infer_shape() override;
     void compile_optimize(string& src) override;
     void graph_optimize() override;

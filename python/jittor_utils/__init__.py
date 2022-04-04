@@ -560,6 +560,15 @@ try:
 except:
     pass
 
+try:
+    import sys
+    sys.setrecursionlimit(10**6)
+    if os.name != 'nt':
+        import resource
+        resource.setrlimit(resource.RLIMIT_STACK, (2**29,-1))
+except:
+    pass
+
 if os.name == 'nt':
     if check_msvc_install:
         if not os.path.isfile(cc_path):

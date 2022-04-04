@@ -9,17 +9,6 @@
 
 namespace jittor {
 
-DEFINE_FLAG(int, amp_reg, 0, "Auto mixed-precision control registers, bit 0: prefer 32; bit 1: prefer 16; bit 2: keep reduce type; bit 3 keep white list type; bit 4: array like op prefer too");
-
-DEFINE_FLAG_WITH_SETTER(int, auto_mixed_precision_level, 0, "Auto mixed-precision optimization level, 0: not use fp16, 1-3: preserve level, not use fp16 for now; 4: perfer fp16, but some ops use fp32 e.g. sum,exp; 5: simular with 4, and array op will automatically convert to fp16; 6: all ops prefer fp16");
-
-void setter_auto_mixed_precision_level(int value) {
-    if (value <= 3) amp_reg = 0; else
-    if (value == 4) amp_reg = amp_prefer16; else
-    if (value == 5) amp_reg = amp_prefer16 | amp_array_prefer; else
-    if (value == 6) amp_reg = amp_prefer16 | amp_array_prefer | amp_keep_reduce | amp_keep_white;
-}
-
 #define FOR_ALL_TYPES(m) \
     m(bool) \
     m(int8) \

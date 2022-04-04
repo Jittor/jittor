@@ -73,6 +73,9 @@ static void setitem_inplace(SetitemOp* op) {
         return;
     if (data->allocator)
         return;
+    auto data_op = data->input();
+    if (data_op->flags.get(NodeFlags::_custom_flag))
+        return;
 
     auto in_shape = input->shape;
     int64 inplace_size = 1;

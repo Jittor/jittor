@@ -45,9 +45,9 @@ class InvertedResidual(nn.Module):
         if (self.stride == 1):
             x1 = x[:,0:x.shape[1]//2]
             x2 = x[:,x.shape[1]//2:x.shape[1]]
-            out = jt.contrib.concat([x1, self.branch2(x2)], dim=1)
+            out = jt.concat([x1, self.branch2(x2)], dim=1)
         else:
-            out = jt.contrib.concat([self.branch1(x), self.branch2(x)], dim=1)
+            out = jt.concat([self.branch1(x), self.branch2(x)], dim=1)
         out = channel_shuffle(out, 2)
         return out
 
