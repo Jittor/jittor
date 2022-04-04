@@ -231,6 +231,7 @@ def _merge_dtypes(dtypes):
     dtype = names[s]+("" if e ==-1 else dbytes[e])
     return dtype 
 
+@jt.flag_scope(amp_reg=4) # _custom_flag
 def concat(arr, dim=0):
     '''Concat Operator can concat a list of jt Var at a specfic dimension.
     

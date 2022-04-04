@@ -118,7 +118,7 @@ class InceptionA(nn.Module):
 
     def execute(self, x):
         outputs = self._forward(x)
-        return jt.contrib.concat(outputs, dim=1)
+        return jt.concat(outputs, dim=1)
 
 class InceptionB(nn.Module):
 
@@ -142,7 +142,7 @@ class InceptionB(nn.Module):
 
     def execute(self, x):
         outputs = self._forward(x)
-        return jt.contrib.concat(outputs, dim=1)
+        return jt.concat(outputs, dim=1)
 
 class InceptionC(nn.Module):
 
@@ -179,7 +179,7 @@ class InceptionC(nn.Module):
 
     def execute(self, x):
         outputs = self._forward(x)
-        return jt.contrib.concat(outputs, dim=1)
+        return jt.concat(outputs, dim=1)
 
 class InceptionD(nn.Module):
 
@@ -207,7 +207,7 @@ class InceptionD(nn.Module):
 
     def execute(self, x):
         outputs = self._forward(x)
-        return jt.contrib.concat(outputs, dim=1)
+        return jt.concat(outputs, dim=1)
 
 class InceptionE(nn.Module):
 
@@ -229,11 +229,11 @@ class InceptionE(nn.Module):
         branch1x1 = self.branch1x1(x)
         branch3x3 = self.branch3x3_1(x)
         branch3x3 = [self.branch3x3_2a(branch3x3), self.branch3x3_2b(branch3x3)]
-        branch3x3 = jt.contrib.concat(branch3x3, dim=1)
+        branch3x3 = jt.concat(branch3x3, dim=1)
         branch3x3dbl = self.branch3x3dbl_1(x)
         branch3x3dbl = self.branch3x3dbl_2(branch3x3dbl)
         branch3x3dbl = [self.branch3x3dbl_3a(branch3x3dbl), self.branch3x3dbl_3b(branch3x3dbl)]
-        branch3x3dbl = jt.contrib.concat(branch3x3dbl, dim=1)
+        branch3x3dbl = jt.concat(branch3x3dbl, dim=1)
         branch_pool = nn.pool(x, kernel_size=3, op="mean", stride=1, padding=1)
         branch_pool = self.branch_pool(branch_pool)
         outputs = [branch1x1, branch3x3, branch3x3dbl, branch_pool]
@@ -241,7 +241,7 @@ class InceptionE(nn.Module):
 
     def execute(self, x):
         outputs = self._forward(x)
-        return jt.contrib.concat(outputs, dim=1)
+        return jt.concat(outputs, dim=1)
 
 class InceptionAux(nn.Module):
 

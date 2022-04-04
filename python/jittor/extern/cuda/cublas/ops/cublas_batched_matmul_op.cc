@@ -121,8 +121,12 @@ void CublasBatchedMatmulOp::jit_run() {
     #if CUDART_VERSION >= 11000
     cublasGemmAlgo_t algo = CUBLAS_GEMM_DEFAULT;
     cublasComputeType_t computeType = CUBLAS_COMPUTE_32F;
-    if (use_tensorcore) {
+    if (use_tensorcore>=3) {
         computeType = CUBLAS_COMPUTE_32F_FAST_16F;
+    } else if (use_tensorcore==2) {
+        computeType = CUBLAS_COMPUTE_32F_FAST_16BF;
+    } else if (use_tensorcore==1) {
+        computeType = CUBLAS_COMPUTE_32F_FAST_TF32;
     }
     if (a->dtype() == ns_float16
         || b->dtype() == ns_float16 || c->dtype() == ns_float16) {

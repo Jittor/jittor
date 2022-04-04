@@ -104,7 +104,7 @@ class TestSingleArray(unittest.TestCase):
                 arr1.append(a)
                 arr2.append(jt.array(a))
             x = np.concatenate(tuple(arr1), dim)
-            y = jt.contrib.concat(arr2, dim)
+            y = jt.concat(arr2, dim)
             assert (x==y.data).all()
         check([1], 0, 20)
 

@@ -31,6 +31,8 @@ pytype_map = {
     "int": ["PyLong_AsLong", "PyLong_FromLong", "PyLong_CheckExact"],
     "int64": ["PyLong_AsLongLong", "PyLong_FromLongLong", "PyLong_CheckExact"],
     "uint": ["PyLong_AsUnsignedLong", "PyLong_FromUnsignedLong", "PyLong_CheckExact"],
+    "uint8": ["PyLong_AsUnsignedLong", "PyLong_FromUnsignedLong", "PyLong_CheckExact"],
+    "uint16": ["PyLong_AsUnsignedLong", "PyLong_FromUnsignedLong", "PyLong_CheckExact"],
     "uint64": ["PyLong_AsUnsignedLongLong", "PyLong_FromUnsignedLongLong", "PyLong_CheckExact"],
     "void": ["...", "GET_PY_NONE", "..."],
     "PyObject*": ["","",""],

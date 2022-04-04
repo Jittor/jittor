@@ -34,7 +34,7 @@ class Generator(nn.Module):
             nn.Tanh())
 
     def execute(self, noise, labels):
-        gen_input = jt.contrib.concat((self.label_emb(labels), noise), dim=1)
+        gen_input = jt.concat((self.label_emb(labels), noise), dim=1)
         img = self.model(gen_input)
         img = img.view((img.shape[0], *img_shape))
         return img
@@ -55,7 +55,7 @@ class Discriminator(nn.Module):
             nn.Linear(512, 1))
 
     def execute(self, img, labels):
-        d_in = jt.contrib.concat((img.view((img.shape[0], (- 1))), self.label_embedding(labels)), dim=1)
+        d_in = jt.concat((img.view((img.shape[0], (- 1))), self.label_embedding(labels)), dim=1)
         validity = self.model(d_in)
         return validity
 

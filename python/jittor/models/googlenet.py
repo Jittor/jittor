@@ -121,7 +121,7 @@ class Inception(nn.Module):
 
     def execute(self, x):
         outputs = self._forward(x)
-        return jt.contrib.concat(outputs, dim=1)
+        return jt.concat(outputs, dim=1)
 
 class InceptionAux(nn.Module):
 

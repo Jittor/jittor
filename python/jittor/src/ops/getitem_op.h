@@ -22,9 +22,12 @@ struct GetitemOp : Op {
     int first_oid_of_var, var_dim;
 
     GetitemOp(Var* x, VarSlices&& slices);
+    // @attrs(multiple_outputs)
+    GetitemOp(Var* x, VarSlices&& slices, int _);
     
     const char* name() const override { return "getitem"; }
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;
+    void grads(Var** dout, VarPtr* dins) override;
     void infer_shape() override;
     void compile_optimize(string& src) override;
     void graph_optimize() override;

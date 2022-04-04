@@ -26,7 +26,7 @@ class Fire(nn.Module):
 
     def execute(self, x):
         x = self.squeeze_activation(self.squeeze(x))
-        return jt.contrib.concat([self.expand1x1_activation(self.expand1x1(x)), self.expand3x3_activation(self.expand3x3(x))], dim=1)
+        return jt.concat([self.expand1x1_activation(self.expand1x1(x)), self.expand3x3_activation(self.expand3x3(x))], dim=1)
 
 class SqueezeNet(nn.Module):
 

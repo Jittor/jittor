@@ -148,4 +148,6 @@ void toplogical_sort_backward(vector<Node*>& nodes, vector<Node*>& sorted, Func&
     ASSERTop(nodes.size(),==,sorted.size());
 }
 
+void check_circle(Node* s);
+
 } // jittor

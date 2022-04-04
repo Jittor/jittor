@@ -29,7 +29,7 @@ class SparseVar:
     def t(self):
         indices = list(self.indices.split(1,dim=0))
         indices[-1],indices[-2] = indices[-2],indices[-1]
-        indices = jt.contrib.concat(indices,dim=0)
+        indices = jt.concat(indices,dim=0)
         shape = list(self.shape)
         shape[-1],shape[-2] = shape[-2],shape[-1]
         shape = jt.NanoVector(shape)
