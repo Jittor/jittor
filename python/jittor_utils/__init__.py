@@ -535,6 +535,23 @@ def get_total_mem():
     else:
         return os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
 
+def dirty_fix_pytorch_runtime_error():
+    ''' This funtion should be called before pytorch.
+    
+    Example::
+
+        import jittor as jt
+        jt.dirty_fix_pytorch_runtime_error()
+        import torch
+    '''
+    import os, platform
+
+    if platform.system() == 'Linux':
+        os.RTLD_GLOBAL = os.RTLD_GLOBAL | os.RTLD_DEEPBIND
+        import jittor_utils
+        with jittor_utils.import_scope(os.RTLD_GLOBAL | os.RTLD_NOW):
+            import torch
+
 is_in_ipynb = in_ipynb()
 cc = None
 LOG = Logwrapper()

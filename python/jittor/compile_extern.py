@@ -563,6 +563,8 @@ def setup_mpi():
 if os.environ.get("FIX_TORCH_ERROR", "0") == "1":
     try:
         import torch
+        from jittor_utils import dirty_fix_pytorch_runtime_error
+        dirty_fix_pytorch_runtime_error()
     except:
         pass
 
