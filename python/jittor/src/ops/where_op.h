@@ -29,6 +29,10 @@ struct WhereOp : Op {
      */
     // @attrs(multiple_outputs)
     WhereOp(Var* cond, NanoString dtype=ns_int32);
+    /**
+     * Condition operator, perform cond ? x : y
+     * */
+    WhereOp(Var* cond, Var* x, Var* y);
     void infer_shape() override;
     
     const char* name() const override { return "where"; }
