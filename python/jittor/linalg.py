@@ -446,7 +446,11 @@ def einsum(string, *args):
     def backward_code(np, data, argnum=0):
         real_len = len(data["inputs"]) - 2
         operands = data["inputs"][:real_len]
-        in_subs, out_subs, _ = np.core.einsumfunc._parse_einsum_input([string] + operands)
+        _ops = operands
+        if np_cpu is not np:
+            # fake a numpy array
+            _ops = [ np_cpu.zeros((1,)*o.ndim) for o in _ops ]
+        in_subs, out_subs, _ = np_cpu.core.einsumfunc._parse_einsum_input([string] + _ops)
         dout = data["dout"]
         out_index = data["out_index"]
         out = data["outputs"][0]
