@@ -91,7 +91,7 @@ static void setitem_inplace(SetitemOp* op) {
     VarSlice s = vs.slices[0];
     if (s.is_var() || s.is_str()) return;
     
-    auto size = 0;
+    int64 size = 0;
     if (s.is_int())
         size = s.i * input->size / in_shape[0];
     else if (s.is_slice()) {
@@ -142,7 +142,7 @@ static void getitem_inplace(GetitemOp* op) {
     VarSlice s = vs.slices[0];
     if (s.is_var() || s.is_str()) return;
     
-    auto size = 0;
+    int64 size = 0;
     if (s.is_int())
         size = s.i * in->size / in_shape[0];
     else if (s.is_slice()) {
