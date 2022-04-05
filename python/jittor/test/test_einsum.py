@@ -22,6 +22,11 @@ try:
 except:
     has_autograd = False
 
+cupy = None
+try:
+    import cupy
+except:
+    pass
 
 @unittest.skipIf(not has_autograd, "No autograd found.")
 class TestEinsum(unittest.TestCase):
@@ -37,27 +42,13 @@ class TestEinsum(unittest.TestCase):
             t_y = Variable(t_y, requires_grad=True)
             jq = jt.linalg.einsum(string, x, y)
             tq = torch.einsum(string, t_x, t_y)
-            try:
-                assert np.allclose(jq.data, tq.detach().numpy(), rtol=1e-4, atol=1e-6)
-            except AssertionError:
-                print("ours' results:")
-                print(jq)
-                print("pytorch's results:")
-                print(tq)
+            np.testing.assert_allclose(jq.data, tq.detach().numpy(), rtol=1e-4, atol=1e-6)
             gq = jt.grad(jq, x).data
             gr = jt.grad(jq, y).data
             tgq = torch.autograd.grad(tq, t_x, torch.ones_like(tq), retain_graph=True)
             tgr = torch.autograd.grad(tq, t_y, torch.ones_like(tq))
-            try:
-                assert np.allclose(gq, tgq[0].numpy(), rtol=1e-4, atol=1e-6)
-                assert np.allclose(gr, tgr[0].numpy(), rtol=1e-4, atol=1e-6)
-            except AssertionError:
-                print("ours' grad results:")
-                print(gq)
-                print(gr)
-                print("pytorch's grad result")
-                print(tgq[0])
-                print(tgr[0])
+            np.testing.assert_allclose(gq, tgq[0].numpy(), rtol=1e-4, atol=1e-6)
+            np.testing.assert_allclose(gr, tgr[0].numpy(), rtol=1e-4, atol=1e-6)
     
     def test_einsum_ii(self):
         for i in range(30):
@@ -69,22 +60,10 @@ class TestEinsum(unittest.TestCase):
             t_x = Variable(t_x, requires_grad=True)
             jq = jt.linalg.einsum(string, x)
             tq = torch.einsum(string, t_x)
-            try:
-                assert np.allclose(jq.data, tq.detach().numpy(), rtol=1e-4, atol=1e-6)
-            except AssertionError:
-                print("ours' results:")
-                print(jq)
-                print("pytorch's results:")
-                print(tq)
+            np.testing.assert_allclose(jq.data, tq.detach().numpy(), rtol=1e-4, atol=1e-6)
             gq = jt.grad(jq, x).data
             tgq = torch.autograd.grad(tq, t_x, torch.ones_like(tq))
-            try:
-                assert np.allclose(gq, tgq[0].numpy(), rtol=1e-4, atol=1e-6)
-            except AssertionError:
-                print("ours' grad results:")
-                print(gq)
-                print("pytorch's grad result")
-                print(tgq[0])
+            np.testing.assert_allclose(gq, tgq[0].numpy(), rtol=1e-4, atol=1e-6)
     
     def test_einsum_multi(self):
        for i in range(30):
@@ -102,32 +81,24 @@ class TestEinsum(unittest.TestCase):
             t_z = Variable(t_z, requires_grad=True)
             jq = jt.linalg.einsum(string, x, y, z)
             tq = torch.einsum(string, t_x, t_y, t_z)
-            try:
-                assert np.allclose(jq.data, tq.detach().numpy(), rtol=1e-4, atol=1e-6)
-            except AssertionError:
-                print("ours' results:")
-                print(jq)
-                print("pytorch's results:")
-                print(tq)
+            np.testing.assert_allclose(jq.data, tq.detach().numpy(), rtol=1e-4, atol=1e-6)
             gq = jt.grad(jq, x).data
             gr = jt.grad(jq, y).data
             gz = jt.grad(jq, z).data
             tgq = torch.autograd.grad(tq, t_x, torch.ones_like(tq), retain_graph=True)
             tgr = torch.autograd.grad(tq, t_y, torch.ones_like(tq), retain_graph=True)
             tgz = torch.autograd.grad(tq, t_z, torch.ones_like(tq), retain_graph=True)
-            try:
-                assert np.allclose(gq, tgq[0].numpy(), rtol=1e-4, atol=1e-6)
-                assert np.allclose(gr, tgr[0].numpy(), rtol=1e-4, atol=1e-6)
-                assert np.allclose(gz, tgz[0].numpy(), rtol=1e-4, atol=1e-6)
-            except AssertionError:
-                print("ours' grad results:")
-                print(gq)
-                print(gr)
-                print(gz)
-                print("pytorch's grad result")
-                print(tgq[0])
-                print(tgr[0])
-                print(tgz[0])
+            np.testing.assert_allclose(gq, tgq[0].numpy(), rtol=1e-4, atol=1e-6)
+            np.testing.assert_allclose(gr, tgr[0].numpy(), rtol=1e-4, atol=1e-6)
+            np.testing.assert_allclose(gz, tgz[0].numpy(), rtol=1e-4, atol=1e-6)
+
+
+@unittest.skipIf(not jt.compiler.has_cuda or cupy is None, "No CUDA found")
+class TestCudaEinsum(TestEinsum):
+    def setUp(self):
+        jt.flags.use_cuda = 1
+    def tearDown(self):
+        jt.flags.use_cuda = 0
 
 if __name__ == "__main__":
     unittest.main()
