@@ -653,7 +653,7 @@ def process_jittor_source(device_type, callback):
         for name in files:
             fname = os.path.join(root, name)
             fname2 = os.path.join(root2, name)
-            if fname.endswith(".h") or fname.endswith(".cc"):
+            if fname.endswith(".h") or fname.endswith(".cc") or fname.endswith(".cu"):
                 with open(fname, 'r', encoding="utf8") as f:
                     src = f.read()
                 src = callback(src, name, {"fname":fname, "fname2":fname2})

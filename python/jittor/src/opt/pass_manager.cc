@@ -27,6 +27,7 @@
 #include "opt/pass/assume_aligned_pass.h"
 #include "opt/pass/parallel_pass.h"
 #include "opt/pass/atomic_tuner_pass.h"
+#include "opt/pass/shared_reduce_pass.h"
 #include "opt/pass/float_atomic_fix_pass.h"
 #include "opt/pass/insert_profile_loop_pass.h"
 #include "opt/pass/fake_main_pass.h"
@@ -111,6 +112,7 @@ void PassManager::run_passes() {
     run_pass<AssumeAlignedPass>();
     run_pass<ParallelPass>();
     run_pass<AtomicTunerPass>();
+    run_pass<SharedReducePass>();
     run_pass<FloatAtomicFixPass>();
     
     run_pass<InsertProfileLoopPass>();

@@ -133,7 +133,7 @@ def compile(compiler, flags, inputs, output, combind_build=False, cuda_flags="",
         nflags = oflags
         cmd = f"{cm(input)} {nflags} {lto_flags} -c -o {cm(obj_file)}"
         if input.endswith(".cu"):
-            if has_cuda:
+            if has_cuda or has_rocm:
                 cmd = f"\"{nvcc_path}\" {cuda_flags} {cmd}"
                 cmd = convert_nvcc_flags(fix_cl_flags(cmd))
             else:
@@ -143,8 +143,10 @@ def compile(compiler, flags, inputs, output, combind_build=False, cuda_flags="",
             cmd = fix_cl_flags(cmd)
         if "nan_checker" in input:
             # nan checker needs to disable fast_math 
-            cmd = cmd.replace("--use_fast_math", "")
-            cmd = cmd.replace("-Ofast", "-O2")
+            if "--use_fast_math" in cmd:
+                cmd = cmd.replace("--use_fast_math", "")
+            if "-Ofast" in cmd:
+                cmd = cmd.replace("-Ofast", "-O2")
         cmds.append(cmd)
     jit_utils.run_cmds(cmds, cache_path, jittor_path, "Compiling "+base_output)
     obj_files += ex_obj_files
@@ -232,7 +234,7 @@ def gen_jit_flags():
             jit_declares.append(f"DECLARE_FLAG({type}, {name});")
             alias = []
             if name == "use_cuda":
-                alias = ["use_device", "use_acl"]
+                alias = ["use_device", "use_acl", "use_rocm"]
             elif name == "auto_mixed_precision_level":
                 alias = ["amp_level"]
             get_names = ",".join(["__get__"+a for a in [name]+alias])
@@ -1229,6 +1231,8 @@ if has_cuda:
 # from .acl_compiler import check_acl
 from .extern.acl import acl_compiler
 jit_utils.add_backend(acl_compiler)
+from .extern.rocm import rocm_compiler
+jit_utils.add_backend(rocm_compiler)
 
 for mod in jit_utils.backends:
     if mod.check():
@@ -1252,7 +1256,7 @@ pyjt_gen_src = pyjt_compiler.compile(cache_path, jittor_path)
 # 3. op_utils
 # 4. other
 files2 = pyjt_gen_src
-ext_args = 'c[cu]' if has_cuda else 'cc'
+ext_args = 'c[cu]' if has_cuda or has_rocm else 'cc'
 files4 = glob.glob(jittor_path+"/src/**/*."+ext_args, recursive=True)
 files4 = [ f[len(jittor_path)+1:] for f in files4 ]
 # files4 = run_cmd('find -L src | grep '+grep_args, jittor_path).splitlines()
