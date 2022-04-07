@@ -693,7 +693,7 @@ def compile_custom_ops(
         bname = os.path.splitext(bname)[0]
         if bname.endswith("_op"):
             bname = bname[:-3]
-            if name.endswith(".cc") or name.endswith(".cu"):
+            if name.endswith(".cc"):
                 srcs[bname] = name
             elif name.endswith(".h"):
                 includes.append(os.path.dirname(name))

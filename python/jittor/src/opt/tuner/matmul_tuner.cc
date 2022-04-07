@@ -87,7 +87,7 @@ void MatmulTuner::run(PassManager* pm, TunerManager* tm) {
             if (xx->dtype().dsize() != 4) continue;
 
         string relay_matmul_name = fop->flags.get(NodeFlags::_cpu) ?
-            "mkl_matmul" : "cutlass_matmul";
+            "mkl_matmul" : "cublas_matmul";
         if (!has_op(relay_matmul_name))
             return;
         auto make_matmul = get_op_info(relay_matmul_name)

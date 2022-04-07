@@ -561,12 +561,12 @@ def setup_mpi():
         setattr(core.Var, k, wrapper(mpi_ops.__dict__[k]))
 
 def install_cutlass(root_folder):
-    url = "https://cloud.tsinghua.edu.cn/f/e3dbf620495f48458488/?dl=1"
+    url = "https://cloud.tsinghua.edu.cn/f/8fc42499904f43e39141/?dl=1"
 
-    filename = "cutlass-master.zip"
+    filename = "cutlass.zip"
     fullname = os.path.join(root_folder, filename)
-    dirname = os.path.join(root_folder, "cutlass-master")
-    true_md5 = "95d5ca8f981a3694ec3efd658084fa3b"
+    dirname = os.path.join(root_folder, "cutlass")
+    true_md5 = "41bb524a6bad4612d6017ed4b11f1d28"
 
     if os.path.exists(fullname):
         md5 = run_cmd('md5sum '+fullname).split()[0]
@@ -586,7 +586,7 @@ def install_cutlass(root_folder):
     return dirname
 
 def setup_cutlass():
-    use_cutlass = os.environ.get("use_cutlass", "1")=="1"
+    use_cutlass = os.environ.get("use_cutlass", "0")=="1"
     if not has_cuda:
         use_cutlass = False
         return
@@ -600,6 +600,7 @@ def setup_cutlass():
         make_cache_dir(cutlass_path)
         cutlass_home = install_cutlass(cutlass_path)
         if cutlass_home is None: return
+        os.environ['cutlass_include_path'] = cutlass_home
         cutlass_include_path = os.path.join(cutlass_home, "include")
         cutlass_tool_include_path = os.path.join(cutlass_home, "tools", "util", "include")
         all_dir = f" -I\"{cutlass_include_path}\" -I\"{cutlass_tool_include_path}\""

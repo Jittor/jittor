@@ -18,6 +18,7 @@ from jittor import flatten, init, Module
 import numpy as np
 import collections
 import math
+import os
 from collections import OrderedDict
 from jittor.pool import *
 from jittor.optim import *
@@ -756,7 +757,10 @@ ReLU6 = jt.make_module(relu6)
 Softmax = jt.make_module(softmax, 2)
 GELU = jt.make_module(gelu)
 
-from jittor.depthwise_conv import DepthwiseConv
+if os.environ.get('use_cutlass') == '0':
+    from jittor.depthwise_conv import DepthwiseConv
+else:
+    from jittor.cutlass_depthwise_conv import DepthwiseConv
 
 class Conv(Module):
     ''' Applies a 2D convolution over an input signal composed of several input planes.
