@@ -588,3 +588,8 @@ except Exception as e:
     LOG.w("MKL install failed, msg:", e)
 
 setup_cuda_extern()
+
+# install backend extern library
+for mod in jit_utils.backends:
+    if mod.install_extern():
+        break

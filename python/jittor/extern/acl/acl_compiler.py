@@ -35,6 +35,10 @@ string process_acl(const string& src, const string& name, const map<string,strin
     has_acl = 1
 
 
+def install_extern():
+    return False
+
+
 def check():
     import jittor.compiler as compiler
     global has_acl, cc_flags
