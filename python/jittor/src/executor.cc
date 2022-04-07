@@ -499,7 +499,8 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
                 sync_times++;
             }
             for (Var* v : op->inputs()) {
-                migrate_to_cpu(v, allocator);
+                if (v->allocator->is_cuda())
+                    migrate_to_cpu(v, allocator);
             }
             if (!use_cuda_managed_allocator) {
                 for (auto* var : op->outputs()) {
