@@ -267,7 +267,7 @@ void TraceData::release_node(Node* node) {
         return;
     auto node_id = iter->second;
     id_map.erase(node);
-    if (trace_py_var < 2) {
+    if (trace_py_var < 2 || execute_op_info.size() > 100000) {
         node_data.erase(node_id);
     }
 }
@@ -312,6 +312,7 @@ void TraceData::record_op(Op* op) {
 }
 
 void TraceData::record_execution(Op* op, bool is_fused_op, JK& jk) {
+    if (execute_op_info.size() > 100000) return;
     ExecuteOpInfo& einfo = execute_op_info[execute_op_info_cnt++];
     if (is_fused_op) {
         FusedOp* fop = (FusedOp*)op;

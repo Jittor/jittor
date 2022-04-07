@@ -11,7 +11,6 @@
 import jittor as jt
 from functools import partial
 
-
 #TODO:full_matrices=1
 def svd(x):
     r'''
@@ -430,3 +429,78 @@ def qr(x):
         [backward_code],
     )
     return q, r
+
+
+def einsum(string, *args):
+    r"""
+    do the einsum operation. Using the implementation in https://github.com/HIPS/autograd
+    :param string, args:
+    :return: return values depend on the input string kinds.
+    """
+    import numpy as np_cpu
+    def forward_code(np, data):
+        out = data["outputs"][0]
+        npout = np.einsum(string, *data["inputs"])
+        np.copyto(out, npout)
+
+    def backward_code(np, data, argnum=0):
+        real_len = len(data["inputs"]) - 2
+        operands = data["inputs"][:real_len]
+        _ops = operands
+        if np_cpu is not np:
+            # fake a numpy array
+            _ops = [ np_cpu.zeros((1,)*o.ndim) for o in _ops ]
+        in_subs, out_subs, _ = np_cpu.core.einsumfunc._parse_einsum_input([string] + _ops)
+        dout = data["dout"]
+        out_index = data["out_index"]
+        out = data["outputs"][0]
+        inp = data["inputs"][argnum]
+        c = data["f_outputs"]
+
+        in_subs_list = in_subs.split(',')
+        op_num = argnum
+        subs_wrt = in_subs_list[op_num]
+        rest_of_ops = operands[:op_num] + operands[op_num+1:]
+        rest_of_subs = in_subs_list[:op_num] + in_subs_list[op_num+1:]
+        other_named_subs = set(''.join([out_subs] + rest_of_subs))
+        naked_summed = [(i, sub) for i, sub in enumerate(subs_wrt)
+                        if sub not in other_named_subs]
+        if naked_summed:
+            naked_summed_dims, ones_subs = zip(*naked_summed)
+            ones_subs = ''.join(ones_subs)
+            ones = np_cpu.ones(np_cpu.array(operands[op_num].shape)[list(naked_summed_dims)])
+            new_input_subs = ','.join([out_subs, ones_subs] + rest_of_subs)
+            new_operands = [dout, ones] + rest_of_ops
+        else:
+            new_input_subs = ','.join([out_subs] + rest_of_subs)
+            new_operands = [dout] + rest_of_ops
+
+        new_subscripts = new_input_subs + '->' + subs_wrt
+        x = np.einsum(new_subscripts, *new_operands)
+        while np.ndim(x) > np.ndim(inp):
+            x = np.sum(x, axis=broadcast_idx)
+            for axis, size in enumerate(inp.shape):
+                if size == 1:
+                    x = np.sum(x, axis=axis, keepdims=True)
+        np.copyto(out, x)
+    
+    def einsum_outshape(einsum_expr, inputs):
+        shps = np_cpu.concatenate([in_.shape for in_ in inputs])
+        p = einsum_expr.split(',')
+        s = p[:-1] + p[-1].split('->')
+        if s[-1]=='':
+            return ()
+        else:
+            inop = list(map(list,s))
+            return tuple(shps[(np_cpu.concatenate(inop[:-1])[:,None]==inop[-1]).argmax(0)].astype(np_cpu.int64))
+
+    output_shape = [int(x) for x in einsum_outshape(string, args)]
+    backwards = [partial(backward_code, argnum=idx) for idx in range(len(args))]
+    a = jt.numpy_code(
+        [output_shape],
+        [args[0].dtype],
+        args,
+        forward_code,
+        backwards,
+    )[0]
+    return a

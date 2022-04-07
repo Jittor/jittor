@@ -56,11 +56,11 @@ def __iter__(x):
     return result.__iter__()
 jt.Var.__iter__ = __iter__
 
-def all(x, dim=[]):
+def all(x, dim=()):
     return x.all_(dim).bool()
 jt.Var.all = all
 
-def any(x,dim):
+def any(x,dim=()):
     return x.any_(dim).bool()
 jt.Var.any = any
     
@@ -257,7 +257,7 @@ def stack(x, dim=0):
         return x[0].unsqueeze(dim)
 
     res = [x_.unsqueeze(dim) for x_ in x]
-    return jt.contrib.concat(res, dim=dim)
+    return jt.concat(res, dim=dim)
 jt.Var.stack = stack
 
 def flip(x, dim=0):
@@ -342,7 +342,7 @@ def cross(input, other, dim=-1):
     a1 = input[(slice(None,),)*dim+(1,)]*other[(slice(None,),)*dim+(2,)]-input[(slice(None,),)*dim+(2,)]*other[(slice(None,),)*dim+(1,)]
     a2 = input[(slice(None,),)*dim+(2,)]*other[(slice(None,),)*dim+(0,)]-input[(slice(None,),)*dim+(0,)]*other[(slice(None,),)*dim+(2,)]
     a3 = input[(slice(None,),)*dim+(0,)]*other[(slice(None,),)*dim+(1,)]-input[(slice(None,),)*dim+(1,)]*other[(slice(None,),)*dim+(0,)]
-    return jt.contrib.concat([a1.unsqueeze(dim),a2.unsqueeze(dim),a3.unsqueeze(dim)], dim=dim)
+    return jt.concat([a1.unsqueeze(dim),a2.unsqueeze(dim),a3.unsqueeze(dim)], dim=dim)
 jt.Var.cross = cross
 
 def normalize(input, p=2, dim=1, eps=1e-30):
@@ -465,7 +465,7 @@ def unique(x):
     _,x = jt.argsort(x)
     index,= jt.index((x.shape[0],))
     y = x[1:][x[index[1:]] != x[index[:-1]]]
-    x = jt.contrib.concat([x[:1],y],dim=0)
+    x = jt.concat([x[:1],y],dim=0)
     return x
 
 jt.Var.unique = unique
@@ -501,7 +501,7 @@ def nonzero(x):
     x = [xx.unsqueeze(1) for xx in x]
     if len(x)<2:
         return x[0]
-    x = jt.contrib.concat(x,dim=1)
+    x = jt.concat(x,dim=1)
     return x
 
 jt.Var.nonzero = nonzero
@@ -546,7 +546,7 @@ def meshgrid(*tensors):
     return grids
 
 
-def split(d,split_size,dim):
+def split(d, split_size, dim=0):
     r'''
     Splits the tensor into chunks. Each chunk is a view of the original tensor.
 
@@ -575,7 +575,9 @@ def split(d,split_size,dim):
         
     ans = []
     last = 0
-    for i in split_size:
+    s_last = len(split_size)-1
+    gopt_disable = jt.flags.gopt_disable
+    for j, i in enumerate(split_size):
         if i==0:
             shape = list(d.shape)
             shape[dim]=0
@@ -584,7 +586,11 @@ def split(d,split_size,dim):
             continue
 
         ss = (slice(None),)*dim+(slice(last,last+i),)
-        new_d = d[ss]
+        if gopt_disable:
+            new_d = d.getitem(ss)
+        else:
+            new_d, d = d.getitem(ss, int(j==s_last))
+
         last +=i
         ans.append(new_d)
     return tuple(ans)
@@ -1650,3 +1656,28 @@ class CTCLoss(jt.Module):
 
     def execute(self, log_probs, targets, input_lengths, target_lengths):
         return ctc_loss(log_probs, targets, input_lengths, target_lengths, self.blank, self.reduction, self.zero_infinity)
+
+def _simple_for(x, func):
+    with jt.flag_scope(compile_options={"FLAGS: -O2 ":1}):
+        src = f'''
+        __inline_static__
+        @python.jittor.auto_parallel(1)
+        void kernel(int n0, int i0, in0_type* _x, out0_type* y) {{
+            using namespace std;
+            auto x = _x[i0];
+            y[i0] = {func};
+        }}
+        kernel(in0->num, 0, in0_p, out0_p);
+        '''
+        return jt.code(x.shape, "bool", [x], cpu_src=src, cuda_src=src)
+
+def isnan(x): return _simple_for(x, "isnan(x)")
+jt.Var.isnan = isnan
+def isfinite(x): return _simple_for(x, "!isnan(x) && !isinf(x)")
+jt.Var.isfinite = isfinite
+def isinf(x): return _simple_for(x, "isinf(x)")
+jt.Var.isinf = isinf
+def isneginf(x): return _simple_for(x, "x<0 && isinf(x)")
+jt.Var.isneginf = isneginf
+def isposinf(x): return _simple_for(x, "x>0 && isinf(x)")
+jt.Var.isposinf = isposinf

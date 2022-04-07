@@ -155,7 +155,7 @@ static void stat_peek_bandwidth(uint64 in, uint64 out, uint64 loop, uint64& peek
     for (int i=0; i<warmup; i++)
     #ifdef HAS_CUDA
         if (use_cuda)
-            cudaMemcpyAsync(temp1.ptr, temp2.ptr, size, cudaMemcpyDefault, 0);
+            cudaMemcpyAsync(temp1.ptr, temp2.ptr, size, cudaMemcpyDeviceToDevice, 0);
         else
     #endif
             std::memcpy(temp1.ptr, temp2.ptr, size);
@@ -167,7 +167,7 @@ static void stat_peek_bandwidth(uint64 in, uint64 out, uint64 loop, uint64& peek
     for (int i=0; i<loop; i++)
     #ifdef HAS_CUDA
         if (use_cuda)
-            cudaMemcpyAsync(temp1.ptr, temp2.ptr, size, cudaMemcpyDefault, 0);
+            cudaMemcpyAsync(temp1.ptr, temp2.ptr, size, cudaMemcpyDeviceToDevice, 0);
         else
     #endif
             std::memcpy(temp1.ptr, temp2.ptr, size);

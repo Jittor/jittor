@@ -10,12 +10,12 @@
 import unittest
 import os, sys
 import jittor as jt
-from pathlib import Path
+import jittor_utils as jit_utils
 
 class TestLock(unittest.TestCase):
     def test(self):
         if os.environ.get('lock_full_test', '0') == '1':
-            cache_path = os.path.join(str(Path.home()), ".cache", "jittor", "lock")
+            cache_path = os.path.join(jit_utils.home(), ".cache", "jittor", "lock")
             assert os.system(f"rm -rf {cache_path}") == 0
             cmd = f"cache_name=lock {sys.executable} -m jittor.test.test_example"
         else:

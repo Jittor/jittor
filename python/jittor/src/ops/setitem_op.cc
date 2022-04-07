@@ -28,6 +28,8 @@ static auto make_array = get_op_info("array")
     .get_constructor<VarPtr, const void*, NanoVector, NanoString>();
 static auto make_getitem = get_op_info("getitem")
     .get_constructor<VarPtr, Var*, VarSlices&&>();
+static auto make_getitem2 = get_op_info("getitem")
+    .get_constructor<vector<VarPtr>, Var*, VarSlices&&, int>();
 static auto make_setitem = get_op_info("setitem")
     .get_constructor<VarPtr, Var*, VarSlices&&, Var*, NanoString>();
 static auto make_binary = get_op_info("binary")
@@ -40,8 +42,11 @@ SetitemOp::SetitemOp(Var* x, VarSlices&& slices, Var* y, NanoString op)
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
     flags.set(NodeFlags::_has_gopt);
-    ASSERT(ns == ns_void || ns.is_binary());
+    ASSERT(op == ns_void || op.is_binary());
     create_output(nullptr, x->dtype());
+    if (flags.get(NodeFlags::_custom_flag)) {
+        flags.set(NodeFlags::_grads);
+    }
 }
 
 void SetitemOp::infer_shape() {
@@ -118,6 +123,12 @@ void SetitemOp::infer_shape() {
     LOGvvvv << "\ni_to_vs:" << i_to_vs
         << "\ni_to_o:" << i_to_o
         << "\no_shape:" << o_shape;
+}
+
+void SetitemOp::grads(Var** dout, VarPtr* dins) {
+    auto outs = make_getitem2(dout[0], VarSlices(vs, true), 0);
+    dins[0] = move(outs[1]);
+    dins[1] = move(outs[0]);
 }
 
 VarPtr SetitemOp::grad(Var* out, Var* dout, Var* v, int v_index) {
@@ -312,10 +323,10 @@ void SetitemOp::jit_run() {
         std::memcpy(op, ip, out->size);
     #else
     if (op != ip)
-        checkCudaErrors(cudaMemcpyAsync(op, ip, out->size, cudaMemcpyDefault, 0));
+        checkCudaErrors(cudaMemcpyAsync(op, ip, out->size, cudaMemcpyDeviceToDevice, 0));
     #endif
 
-    if (flags.get((NodeFlags::Flags(SetitemOp::_data_inplaced))) &&
+    if (ns.get(GetitemOp::_inplace) &&
         // array op may move the data allocation, double check
         // affect test_contrib.pu 
         in->allocator == data->allocator &&

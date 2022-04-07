@@ -9,6 +9,7 @@ import platform
 from .compiler import *
 from jittor_utils import run_cmd, get_version, get_int_version
 from jittor_utils.misc import download_url_to_local
+import jittor_utils as jit_utils
 
 def search_file(dirs, name, prefer_version=()):
     if os.name == 'nt':
@@ -110,8 +111,7 @@ def setup_mkl():
             LOG.v("setup mkl...")
             # mkl_path = os.path.join(cache_path, "mkl")
             # mkl_path decouple with cc_path
-            from pathlib import Path
-            mkl_path = os.path.join(str(Path.home()), ".cache", "jittor", "mkl")
+            mkl_path = os.path.join(jit_utils.home(), ".cache", "jittor", "mkl")
             
             make_cache_dir(mkl_path)
             install_mkl(mkl_path)
@@ -141,12 +141,12 @@ def setup_mkl():
 
     elif platform.system() == 'Darwin':
         mkl_lib_paths = [
-            "/usr/local/lib/libmkldnn.dylib",       # x86_64
-            "/opt/homebrew/lib/libmkldnn.dylib",    # arm64
+            "/usr/local/lib/libdnnl.dylib",       # x86_64
+            "/opt/homebrew/lib/libdnnl.dylib",    # arm64
         ]
         if not any([os.path.exists(lib) for lib in mkl_lib_paths]):
             raise RuntimeError("Not found onednn, please install it by the command 'brew install onednn'")
-        extra_flags = f" -lmkldnn "
+        extra_flags = f" -ldnnl "
 
     mkl_op_dir = os.path.join(jittor_path, "extern", "mkl", "ops")
     mkl_op_files = [os.path.join(mkl_op_dir, name) for name in os.listdir(mkl_op_dir)]
@@ -178,8 +178,7 @@ def install_cub(root_folder):
 def setup_cub():
     global cub_home
     cub_home = ""
-    from pathlib import Path
-    cub_path = os.path.join(str(Path.home()), ".cache", "jittor", "cub")
+    cub_path = os.path.join(jit_utils.home(), ".cache", "jittor", "cub")
     cuda_version = int(get_version(nvcc_path)[1:-1].split('.')[0])
     extra_flags = ""
     if cuda_version < 11:
@@ -220,7 +219,7 @@ def setup_cuda_extern():
         line = traceback.format_exc()
         LOG.w(f"CUDA found but cub is not loaded:\n{line}")
 
-    libs = ["cublas", "cudnn", "curand"]
+    libs = ["cublas", "cudnn", "curand", "cufft"]
     # in cuda 11.4, module memory comsumptions:
     # default context: 259 MB
     # cublas: 340 MB
@@ -376,8 +375,7 @@ def setup_cutt():
     if cutt_lib_path is None or cutt_include_path is None:
         LOG.v("setup cutt...")
         # cutt_path decouple with cc_path
-        from pathlib import Path
-        cutt_path = os.path.join(str(Path.home()), ".cache", "jittor", "cutt")
+        cutt_path = os.path.join(jit_utils.home(), ".cache", "jittor", "cutt")
         
         make_cache_dir(cutt_path)
         install_cutt(cutt_path)
@@ -453,8 +451,7 @@ def setup_nccl():
     if nccl_lib_path is None or nccl_include_path is None:
         LOG.v("setup nccl...")
         # nccl_path decouple with cc_path
-        from pathlib import Path
-        nccl_path = os.path.join(str(Path.home()), ".cache", "jittor", "nccl")
+        nccl_path = os.path.join(jit_utils.home(), ".cache", "jittor", "nccl")
         
         make_cache_dir(nccl_path)
         nccl_home = install_nccl(nccl_path)
@@ -618,10 +615,12 @@ def setup_cutlass():
 if os.environ.get("FIX_TORCH_ERROR", "0") == "1":
     try:
         import torch
+        from jittor_utils import dirty_fix_pytorch_runtime_error
+        dirty_fix_pytorch_runtime_error()
     except:
         pass
 
-cudnn = cublas = curand = None
+cudnn = cublas = curand = cufft = None
 setup_mpi()
 in_mpi = inside_mpi()
 rank = mpi.world_rank() if in_mpi else 0

@@ -26,8 +26,6 @@ class TestFlags(unittest.TestCase):
             assert jt.flags.log_v == 1
         assert jt.flags.log_v == prev
 
-    def test_buildin(self):
-        assert jt.flags.__doc__ == jt.core.flags.__doc__
 
 if __name__ == "__main__":
     unittest.main()
