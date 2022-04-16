@@ -72,6 +72,7 @@ def _upload(path, url, jk):
     jkey = flags.cache_path+"/_jkey"
     with open(jkey, 'w') as f:
         f.write(jk)
+    assert os.system(f"chmod 600 \"{jkey}\"") == 0
     assert os.system(f"s""c""p"+f" -i \"{jkey}\" \"{path}\" jittor" "@" "166" f".111.68.30:Documents/jittor-blog/assets{suffix}") == 0
     assert os.system(f"s""s""h"f" -i \"{jkey}\" jittor" "@" "166" ".111.68.30 Documents/jittor-blog.git/hooks/post-update") == 0
 
