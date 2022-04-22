@@ -232,7 +232,7 @@ your code as below::
 static auto make_ternary = get_op_info("ternary")
     .get_constructor<VarPtr, Var*, Var*, Var*>();
 
-extern int no_grad;
+extern bool no_grad;
 
 VarHolder* ternary_out_hint(VarHolder* cond, VarHolder* x, VarHolder* y) {
     if (!no_grad)
