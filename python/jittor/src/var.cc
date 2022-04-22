@@ -22,6 +22,7 @@ DEFINE_FLAG(bool, no_grad, 0,
     "No grad for all jittor Var creation");
 DEFINE_FLAG(bool, no_fuse, 0, 
     "No fusion optimization for all jittor Var creation");
+// TODO: fuse multiple flags
 DEFINE_FLAG(int, amp_reg, 0, "Auto mixed-precision control registers, bit 0: prefer 32; bit 1: prefer 16; bit 2: keep reduce type; bit 3 keep white list type; bit 4: array like op prefer too");
 
 DEFINE_FLAG_WITH_SETTER(int, auto_mixed_precision_level, 0, "Auto mixed-precision optimization level, 0: not use fp16, 1-3: preserve level, not use fp16 for now; 4: perfer fp16, but some ops use fp32 e.g. sum,exp; 5: simular with 4, and array op will automatically convert to fp16; 6: all ops prefer fp16");
@@ -91,13 +92,14 @@ bool Var::alloc(Allocator* allocator) {
 
 
 std::ostream& operator<<(std::ostream& os, const Var& var) {
-    os << "Var" << '(' << (void*)&var
+    os << "Var" << '(' << var.id
         << ':' << var.forward_liveness
         << ':' << var.backward_liveness
         << ':' << var.pending_liveness
         << ":i" << var._inputs.size()
         << ":o" << var._outputs.size()
         << ":s" << var.is_finished()
+        << ":n" << var.flags.get(NodeFlags::_needed_by_backward)
         << ',' 
         << var.dtype().to_cstring() << ',' << var.name << ',' << var.mem_ptr 
         << ')' << var.shape;

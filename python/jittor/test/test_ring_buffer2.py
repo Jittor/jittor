@@ -66,8 +66,9 @@ def test_ring_buffer():
     assert n_byte == buffer.total_pop() and n_byte == buffer.total_push()
 
     test_send_recv(np.random.rand(10,10))
-    n_byte += 1 + 16 + 2 + 10*10*8
-    assert n_byte == buffer.total_pop() and n_byte == buffer.total_push()
+    n_byte += 1 + 16 + 4 + 10*10*8
+    assert n_byte == buffer.total_pop() and n_byte == buffer.total_push(), \
+        (n_byte, buffer.total_pop(), n_byte, buffer.total_push())
     test_send_recv(test_ring_buffer)
 
     test_send_recv(jt.array(np.random.rand(10,10)))

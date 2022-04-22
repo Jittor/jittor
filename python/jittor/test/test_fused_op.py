@@ -78,9 +78,11 @@ class TestFusedOp(unittest.TestCase):
     def test_add(self):
         jt.clean()
         def check(hv, lv, lo):
-            self.assertEqual(jt.number_of_hold_vars(), hv)
-            self.assertEqual(jt.number_of_lived_vars(), lv)
-            self.assertEqual(jt.number_of_lived_ops(), lo)
+            self.assertEqual((
+                jt.number_of_hold_vars(),
+                jt.number_of_lived_vars(),
+                jt.number_of_lived_ops()),
+                (hv, lv, lo))
         for i in range(8):
             check(0,0,0)
             a = jt.array(1.0).name('a').stop_fuse()
@@ -88,7 +90,14 @@ class TestFusedOp(unittest.TestCase):
             c = (b+jt.array(1.0).name('t2').stop_fuse()).name('c')
             check(3,5,5)
             graph = jt.dump_all_graphs()
+            # for n in graph.nodes_info:
+            #     print(n)
             self.assertEqual(c.data, 3)
+            graph2 = jt.dump_all_graphs()
+            print("check", i)
+            for n in graph2.nodes_info:
+                print(n)
+            print(jt.liveness_info())
             check(3,5,2)
             graph = jt.dump_all_graphs()
             for node in graph.nodes_info:

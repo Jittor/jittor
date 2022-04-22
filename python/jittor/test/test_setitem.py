@@ -381,6 +381,19 @@ class TestSetitem(unittest.TestCase):
         for i in range(n):
             np.testing.assert_allclose(g.data[i*m:(i+1)*m], yy[i].data)
 
+    def test_dfs_memopt(self):
+        with jt.flag_scope(profile_memory_enable=1):
+            n = 1024
+            b = []
+            for i in range(n):
+                a = jt.rand(n).copy().copy()
+                a = a.sum()
+                # a.sync()
+                b.append(a)
+            jt.sync_all()
+            jt.get_max_memory_treemap()
+
+
 
 
         

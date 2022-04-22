@@ -98,7 +98,7 @@ EXTERN_LIB int __ns_len[];
 
 // @pyjt(NanoString)
 struct NanoString {
-    typedef uint16 ns_t;
+    typedef uint32 ns_t;
     enum Flags {
         // bit0~7: index
         _index=0, _index_nbits=7,
@@ -119,6 +119,9 @@ struct NanoString {
         _dsize=_n+6, _dsize_nbits=2,
         // bit8: white list
         _white_list=_n+8,
+        // bit9: backward opt
+        _no_need_back_in=_n+9,
+        _no_need_back_out=_n+10,
     };
     ns_t data=0;
 

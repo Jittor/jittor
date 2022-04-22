@@ -37,7 +37,6 @@ CodeOp::CodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs,
     _outputs.push_back(create_output(shape, dtype));
 
     if (_outputs[0]->num < 0) {
-        flags.set(NodeFlags::_vary_shape);
         check_vary_shape(_outputs[0]->shape);
     }
 }
@@ -58,7 +57,6 @@ CodeOp::CodeOp(
     for (int i=0; i<shapes.size(); i++) {
         _outputs[i] = create_output(shapes[i], dtypes[i]);
         if (_outputs[i]->num < 0) {
-            flags.set(NodeFlags::_vary_shape);
             check_vary_shape(_outputs[i]->shape);
         }
     }

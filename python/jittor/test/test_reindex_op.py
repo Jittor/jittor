@@ -75,10 +75,7 @@ def conv_transpose_naive(x, w):
 
 
 def is_fused(x):
-    x.name('_x')
-    graph = jt.dump_all_graphs()
-    node_a = [ node for node in graph.nodes_info if ",_x," in node ]
-    return 's0' in node_a[0]
+    return 's0' in x.debug_msg()
     
 def check_fused(dim):
     jt.clean()

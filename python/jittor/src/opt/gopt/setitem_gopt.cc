@@ -124,9 +124,6 @@ static void getitem_inplace(GetitemOp* op) {
     // return if out is all ready inplaced
     if (ou->allocator)
         return;
-    // return if input or output's shape is variable
-    if (in->num <= 0 || ou->num <= 0)
-        return;
 
     VarSlices vs = op->vs;
     auto in_shape = in->shape;

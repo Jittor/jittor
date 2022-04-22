@@ -29,6 +29,9 @@ CudnnConv3dBackwardXOp::CudnnConv3dBackwardXOp(Var* w, Var* dy, int depth, int h
       xformat(move(xformat)) {
     flags.set(NodeFlags::_cuda, 1);
     flags.set(NodeFlags::_cpu, 0);
+    flags.set(NodeFlags::_manual_set_vnbb);
+    w->flags.set(NodeFlags::_needed_by_backward);
+    dy->flags.set(NodeFlags::_needed_by_backward);
     dx = create_output(nullptr, dtype_infer(dy->ns, w->ns));
 }
 

@@ -801,6 +801,10 @@ def print_tree(now, max_memory_size, prefix1, prefix2, build_by):
     tab = '   '
     out += prefix1+now['name']+'('+now['type']+')\n'
     out += prefix2+'['+format_size(now['size'])+'; '+format(now['size']/max_memory_size*100, '.2f')+'%; cnt:'+format_size(now['cnt'],'') + ']\n'
+    if len(now['children']) == 0 and len(now['vinfo']):
+        out += prefix2+now['vinfo'][0]
+        if len(now['vinfo']) > 1: out += "..."
+        out += '\n'
     if (build_by == 0):
         for p in now['path']:
             out += prefix2+p+'\n'
@@ -866,7 +870,8 @@ Output::
     vars_ = vars_[1:]
     for v_ in vars_:
         v__ = v_.split(div2)
-        var = {'size':int(v__[1]), 'stack':[], 'cnt':1}
+        vinfo = v__[0].split("{")[0]
+        var = {'size':int(v__[1]), 'stack':[], 'cnt':1, "vinfo":vinfo}
         v__ = v__[2:-1]
         for s_ in v__:
             s__ = s_.split(div3)
@@ -874,7 +879,7 @@ Output::
             var['stack'].append(s)
         vars.append(var)
     if (build_by == 0): # build tree by name
-        tree = {'name':'root', "children":[], 'size':0, 'cnt':1, 'path':[], 'type':''}
+        tree = {'name':'root', "children":[], 'size':0, 'cnt':1, 'path':[], 'type':'', 'vinfo':[]}
 
         def find_child(now, key):
             for c in now['children']:
@@ -885,6 +890,7 @@ Output::
             now = tree
             now['size'] += v['size']
             now['cnt'] += v['cnt']
+            now['vinfo'].append(v['vinfo'])
             for s in v['stack']:
                 ch = find_child(now, s['name'])
                 if (ch is not None):
@@ -894,12 +900,13 @@ Output::
                     now = ch
                     now['size'] += v['size']
                     now['cnt'] += v['cnt']
+                    now['vinfo'].append(v['vinfo'])
                 else:
-                    now_ = {'name':s['name'], "children":[], 'size':v['size'], 'cnt':v['cnt'], 'path':[s['path']], 'type':s['type']}
+                    now_ = {'name':s['name'], "children":[], 'size':v['size'], 'cnt':v['cnt'], 'path':[s['path']], 'type':s['type'], 'vinfo':[v['vinfo']]}
                     now['children'].append(now_)
                     now = now_
     elif (build_by == 1): # build tree by path
-        tree = {'name':'root', "children":[], 'size':0, 'cnt':0, 'path':'_root_', 'type':''}
+        tree = {'name':'root', "children":[], 'size':0, 'cnt':0, 'path':'_root_', 'type':'', 'vinfo':[]}
 
         def find_child(now, key):
             for c in now['children']:
@@ -910,14 +917,16 @@ Output::
             now = tree
             now['size'] += v['size']
             now['cnt'] += v['cnt']
+            now['vinfo'].append(v['vinfo'])
             for s in v['stack']:
                 ch = find_child(now, s['path'])
                 if (ch is not None):
                     now = ch
                     now['size'] += v['size']
                     now['cnt'] += v['cnt']
+                    now['vinfo'].append(v['vinfo'])
                 else:
-                    now_ = {'name':s['name'], "children":[], 'size':v['size'],  'cnt':v['cnt'], 'path':s['path'], 'type':s['type']}
+                    now_ = {'name':s['name'], "children":[], 'size':v['size'],  'cnt':v['cnt'], 'path':s['path'], 'type':s['type'], 'vinfo':[v['vinfo']]}
                     now['children'].append(now_)
                     now = now_
     else:

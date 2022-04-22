@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.2.6'
+__version__ = '1.3.3.0'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -355,10 +355,10 @@ def array64(data, dtype=None):
     with jt.flag_scope(auto_convert_64_to_32=0):
         return array(data, dtype)
 
-def grad(loss, targets):
+def grad(loss, targets, retain_graph=True):
     if type(targets) == core.Var:
-        return core.grad(loss, [targets])[0]
-    return core.grad(loss, targets)
+        return core.grad(loss, [targets], retain_graph)[0]
+    return core.grad(loss, targets, retain_graph)
 
 def liveness_info():
     return {

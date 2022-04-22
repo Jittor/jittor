@@ -52,6 +52,9 @@ CudnnConvBackwardWOp::CudnnConvBackwardWOp(Var* x, Var* dy, int kh, int kw, int 
       xformat(move(xformat)), wformat(move(wformat)), yformat(move(yformat)) {
     flags.set(NodeFlags::_cuda, 1);
     flags.set(NodeFlags::_cpu, 0);
+    flags.set(NodeFlags::_manual_set_vnbb);
+    x->flags.set(NodeFlags::_needed_by_backward);
+    dy->flags.set(NodeFlags::_needed_by_backward);
     dw = create_output(nullptr, dtype_infer(dy->ns, x->ns));
 }
 

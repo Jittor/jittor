@@ -27,6 +27,8 @@ CubArgsortOp::CubArgsortOp(Var* x, Var* indexes, Var* offsets, bool descending, 
     ASSERT(offsets->dtype()==ns_int32);
     y = create_output(nullptr, dtype);
     y_key = create_output(nullptr, x->dtype());
+    flags.set(NodeFlags::_manual_set_vnbb);
+    y->flags.set(NodeFlags::_needed_by_backward);
 }
 
 VarPtr CubArgsortOp::grad(Var* out, Var* dout, Var* v, int v_index) {

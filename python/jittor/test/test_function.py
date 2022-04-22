@@ -258,6 +258,7 @@ class TestFunction(unittest.TestCase):
             g = jt.grad(c+d*3, [a, b])
         test()
         jt.clean()
+        jt.dump_all_graphs()
         self.assertEqual(jt.liveness_info()["lived_vars"], 0)
 
     @unittest.skipIf(True, "skip memleak test")

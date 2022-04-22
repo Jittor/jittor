@@ -46,7 +46,6 @@ ArgReduceOp::ArgReduceOp(Var* x, NanoString op, int dim, bool keepdims)
             get_op_info("cub_arg_reduce").get_constructor<std::vector<VarPtr>, Var*, Var*, NanoString, bool>()
             : nullptr;
         if (cub_arg_reduce) {
-            if (x->num<0) exe.run_sync(vector<Var*>({x}), true);
             int dims = x->shape.size();
             vector<int64> axes;
             axes.reserve(dims);
@@ -88,6 +87,8 @@ ArgReduceOp::ArgReduceOp(Var* x, NanoString op, int dim, bool keepdims)
     #endif
     y = create_output(nullptr, ns_int32);
     y_key = create_output(nullptr, x->dtype());
+    flags.set(NodeFlags::_manual_set_vnbb);
+    y->flags.set(NodeFlags::_needed_by_backward);
 }
 VarPtr ArgReduceOp::get_grad(Var* out, Var* dout, Var* v, int v_index, int dim, Var* y) {
     // Do not have grad to extras input

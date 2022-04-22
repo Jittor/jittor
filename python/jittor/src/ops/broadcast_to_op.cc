@@ -29,6 +29,7 @@ BroadcastToOp::BroadcastToOp(Var* x, Var* y, NanoVector dims) : x(x), y(y) {
     }
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
+    flags.set(NodeFlags::_manual_set_vnbb);
     set_type(OpType::broadcast);
     z = create_output(NanoVector(), x->dtype());
     bcast_mask = 0;
