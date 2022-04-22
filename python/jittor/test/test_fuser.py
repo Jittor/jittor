@@ -26,6 +26,16 @@ class TestFuser(unittest.TestCase):
         np.testing.assert_allclose(b.data, bb.data)
         np.testing.assert_allclose(c.data, cc.data)
 
+    def test_for_fuse(self):
+        arr = []
+        x = 0
+        for i in range(100):
+            arr.append(jt.array(1))
+            x += arr[-1]
+        x.sync()
+        for i in range(100):
+            # print(arr[i].debug_msg())
+            assert ",0)" not in arr[i].debug_msg()
 
 
 
