@@ -33,6 +33,7 @@ FuseTransposeOp::FuseTransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
     set_type(tp);
+    flags.set(NodeFlags::_manual_set_vnbb);
     int i=0;
     for (; i<axes.size(); i++)
         if (i!=axes[i]) break;

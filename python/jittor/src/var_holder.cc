@@ -22,6 +22,7 @@ namespace jittor {
 DEFINE_FLAG(int, lazy_execution, 1, "Default enabled, if disable, use immediately eager execution rather than lazy execution, This flag makes error message and traceback infomation better. But this flag will raise memory consumption and lower the performance.");
 
 list<VarHolder*> hold_vars;
+list<VarHolder*>::iterator sync_ptr = hold_vars.end();
 
 void add_hold_vars(VarHolder* self) {
     hold_vars.push_front(self);
@@ -79,6 +80,8 @@ VarHolder::VarHolder(PyObject* obj, NanoString dtype) {
 
 VarHolder::~VarHolder() {
     if (PREDICT_BRANCH_NOT_TAKEN(!var)) return;
+    if (iter == sync_ptr)
+        sync_ptr = std::next(sync_ptr);
     hold_vars.erase(iter);
     var->release_both_liveness();
 }
@@ -100,7 +103,6 @@ void VarHolder::operator=(VarPtr&& v) {
 }
 
 string VarHolder::to_string() {
-    if (var->num<0) sync();
     return var->to_string();
 }
 
@@ -131,8 +133,8 @@ VarHolder* VarHolder::_update(VarHolder* v) {
 
 EXTERN_LIB Executor exe;
 
-void VarHolder::sync(bool device_sync) {
-    jittor::sync({this}, device_sync);
+void VarHolder::sync(bool device_sync, bool weak_sync) {
+    jittor::sync({this}, device_sync, weak_sync);
 }
 
 ArrayArgs VarHolder::fetch_sync() {
@@ -178,12 +180,12 @@ void sync_all(bool device_sync) {
     graph_check();
 }
 
-void sync(const vector<VarHolder*>& vh, bool device_sync) {
+void sync(const vector<VarHolder*>& vh, bool device_sync, bool weak_sync) {
     vector<Var*> vars;
     vars.reserve(vh.size());
     for (auto v : vh) vars.push_back(v->var);
     graph_check();
-    exe.run_sync(vars, device_sync); //need sync at last
+    exe.run_sync(vars, device_sync, weak_sync); //need sync at last
     graph_check();
 }
 
@@ -225,5 +227,18 @@ your code as below::
 )"";
     return 0;
 }
+
+
+static auto make_ternary = get_op_info("ternary")
+    .get_constructor<VarPtr, Var*, Var*, Var*>();
+
+extern int no_grad;
+
+VarHolder* ternary_out_hint(VarHolder* cond, VarHolder* x, VarHolder* y) {
+    if (!no_grad)
+        cond->var->flags.set(NodeFlags::_out_hint);
+    return new VarHolder(make_ternary(cond->var, x->var, y->var));
+}
+
 
 } // jittor

@@ -137,6 +137,24 @@ static unordered_set<string> white_ops = {
     "pow",
 };
 
+static unordered_set<string> no_need_back_in = {
+    "void",
+    "cast",
+    "negative",
+    "add",
+    "subtract",
+    "mean",
+};
+
+static unordered_set<string> no_need_back_out = {
+    "void",
+    "cast",
+    "negative",
+    "add",
+    "subtract",
+    "multiply",
+};
+
 #define DEFINE_NS(T) NanoString ns_##T;
 FOR_ALL_NS(DEFINE_NS);
 
@@ -172,6 +190,8 @@ static void init_ns() {
             ns.set(NanoString::_float, float_ops.count(name));
         }
         ns.set(NanoString::_white_list, white_ops.count(name));
+        ns.set(NanoString::_no_need_back_in, no_need_back_in.count(name));
+        ns.set(NanoString::_no_need_back_out, no_need_back_out.count(name));
         __string_to_ns[name] = ns;
         auto name2 = ns.to_cstring();
         int len=0;

@@ -9,7 +9,7 @@
 
 namespace jittor {
 
-vector<VarPtr> grad(Var* loss, vector<Var*> targets);
+vector<VarPtr> grad(Var* loss, vector<Var*> targets, bool retain_graph=true);
 
 // @pyjt(tape_together)
 void tape_together(

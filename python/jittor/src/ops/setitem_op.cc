@@ -42,6 +42,12 @@ SetitemOp::SetitemOp(Var* x, VarSlices&& slices, Var* y, NanoString op)
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
     flags.set(NodeFlags::_has_gopt);
+    if (op.get(NanoString::_no_need_back_in)) {
+        flags.set(NodeFlags::_manual_set_vnbb);
+        for (int i=0; i<vs.n; i++)
+            if (vs.slices[i].is_var())
+                vs.slices[i].var->flags.set(NodeFlags::_needed_by_backward);
+    }
     ASSERT(op == ns_void || op.is_binary());
     create_output(nullptr, x->dtype());
     if (flags.get(NodeFlags::_custom_flag)) {

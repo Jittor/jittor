@@ -14,6 +14,8 @@
 #include "mem/allocator.h"
 #include "misc/cuda_flags.h"
 #include "pybind/py_var_tracer.h"
+#include "executor.h"
+#include "var_holder.h"
 
 namespace jittor {
 
@@ -65,14 +67,26 @@ Var* Op::create_output(NanoVector shape, NanoString dtype) {
 }
 
 void Op::init() {
-    bool has_vary_input = 0;
-    for (Var* v : inputs())
-        if (v->num < 0) {
-            has_vary_input = 1;
-            break;
-        }
-    flags.set(NodeFlags::_has_vary_input, has_vary_input);
     infer_shape();
+    bool manual_set_vnbb = flags.get(NodeFlags::_manual_set_vnbb)
+        || _inputs.size()==0
+        || (_outputs.size()==1 && _outputs.front().node->is_stop_grad());
+    for (Var* v : inputs()) {
+        if (!manual_set_vnbb) {
+            v->flags.set(NodeFlags::_needed_by_backward);
+        }
+    }
+    Var* need_sync = nullptr;
+    for (Var* v : outputs()) {
+        if (!manual_set_vnbb)
+            v->flags.set(NodeFlags::_needed_by_backward);
+        if (v->num < 0)
+            need_sync = v;
+    }
+    if (need_sync) {
+        exe.run_sync(vector<Var*>({need_sync}), false);
+        CHECK(need_sync->num >= 0) << need_sync << "'s shape is error";
+    }
 }
 
 void Op::compile_optimize(string& src) {}
@@ -84,7 +98,7 @@ void Op::graph_optimize() {}
 
 string Op::name_ex() const {
     string a=name();
-    if (ns!=ns_void) {
+    if (ns.data) {
         a += '.';
         a += ns.to_cstring();
     }
@@ -266,7 +280,7 @@ void Op::statistics(uint64_t& in, uint64_t& out, uint64_t& compute) {
 
 std::ostream& operator<<(std::ostream& os, const Op* op) {
     if (!op) return os << "Op(0)";
-    os << "Op(" << (void*)op
+    os << "Op(" << op->id
         << ':' << op->forward_liveness
         << ':' << op->backward_liveness
         << ':' << op->pending_liveness

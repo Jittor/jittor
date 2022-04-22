@@ -16,6 +16,7 @@ namespace jittor {
 SafeClipOp::SafeClipOp(Var* x, float64 left, float64 right) : x(x), left(left), right(right) {
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
+    flags.set(NodeFlags::_manual_set_vnbb);
     set_type(OpType::element);
     y = create_output(nullptr, x->dtype());
 }

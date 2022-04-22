@@ -173,7 +173,8 @@ def relu(x):
         >>> nn.relu(a)
         jt.Var([0.        1.1338731 6.128115 ], dtype=float32)
     '''
-    return jt.ternary((x>0.0), x, jt.broadcast_var(0.0, x))
+    cond = x>0.0
+    return jt.ternary_out_hint(cond, x, 0.0)
 
 
 def leaky_relu(x, scale=0.01): 

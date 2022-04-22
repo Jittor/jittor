@@ -425,6 +425,18 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
     ns = op;
     ASSERT(ns.is_binary());
     z = create_output(nullptr, binary_dtype_infer(op, x->ns, y->ns));
+    bool bin = ns.get(NanoString::_no_need_back_in);
+    bool bout = ns.get(NanoString::_no_need_back_out);
+    if (bin || bout) {
+        flags.set(NodeFlags::_manual_set_vnbb);
+        if (!bin) {
+            x->flags.set(NodeFlags::_needed_by_backward);
+            y->flags.set(NodeFlags::_needed_by_backward);
+        }
+        if (!bout) {
+            z->flags.set(NodeFlags::_needed_by_backward);
+        }
+    }
 }
 
 VarPtr dirty_clone_broadcast(Var* v) {

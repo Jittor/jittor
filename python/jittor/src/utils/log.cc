@@ -604,7 +604,7 @@ void system_with_check(const char* cmd, const char* cwd) {
     auto ret = system_popen(cmd, cwd);
     CHECK(ret>=0 && ret<=256) << "Run cmd failed:" << cmd <<
             "\nreturn ">> ret >> ". This might be an overcommit issue or out of memory."
-            << "Try : sudo sysctl vm.overcommit_memory=1";
+            << "Try : sudo sysctl vm.overcommit_memory=1, or set enviroment variable `export DISABLE_MULTIPROCESSING=1`";
     CHECKop(ret,==,0) << "Run cmd failed:" << cmd;
 }
 

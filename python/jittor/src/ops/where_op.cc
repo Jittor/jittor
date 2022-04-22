@@ -21,7 +21,7 @@ namespace jittor {
 WhereOp::WhereOp(Var* cond, NanoString dtype) : cond(cond) {
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
-    flags.set(NodeFlags::_vary_shape);
+    flags.set(NodeFlags::_manual_set_vnbb);
     auto ndim = cond->shape.size();
     #ifdef HAS_CUDA
     if (use_cuda) {
@@ -48,8 +48,7 @@ WhereOp::WhereOp(Var* cond, Var* x, Var* y) {
 
 void WhereOp::infer_shape() {
     auto ndim = cond->shape.size();
-    auto num = cond->num;
-    if (num>0) num = -num;
+    auto num = -cond->num;
     for (uint i=0; i<ndim; i++)
         outs[i]->set_shape({num});
 }

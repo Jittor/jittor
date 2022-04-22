@@ -544,6 +544,17 @@ UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
     } else 
         dtype = unary_dtype_infer(ns, x->ns);
     y = create_output(nullptr, dtype);
+    bool bin = ns.get(NanoString::_no_need_back_in);
+    bool bout = ns.get(NanoString::_no_need_back_out);
+    if (bin || bout) {
+        flags.set(NodeFlags::_manual_set_vnbb);
+        if (!bin) {
+            x->flags.set(NodeFlags::_needed_by_backward);
+        }
+        if (!bout) {
+            y->flags.set(NodeFlags::_needed_by_backward);
+        }
+    }
 }
 
 VarPtr UnaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {

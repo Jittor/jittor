@@ -38,6 +38,10 @@ GetitemOp::GetitemOp(Var* x, VarSlices&& slices)
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
     flags.set(NodeFlags::_has_gopt);
+    flags.set(NodeFlags::_manual_set_vnbb);
+    for (int i=0; i<vs.n; i++)
+        if (vs.slices[i].is_var())
+            vs.slices[i].var->flags.set(NodeFlags::_needed_by_backward);
     create_output(nullptr, x->dtype());
 }
 
@@ -48,6 +52,10 @@ GetitemOp::GetitemOp(Var* x, VarSlices&& slices, int _)
     flags.set(NodeFlags::_has_gopt);
     flags.set(NodeFlags::_custom_flag);
     flags.set(NodeFlags::_grads);
+    flags.set(NodeFlags::_manual_set_vnbb);
+    for (int i=0; i<vs.n; i++)
+        if (vs.slices[i].is_var())
+            vs.slices[i].var->flags.set(NodeFlags::_needed_by_backward);
     create_output(nullptr, x->dtype());
     auto out2 = create_output(nullptr, x->dtype());
     out2->share_with(x);
@@ -421,7 +429,6 @@ void GetitemOp::grads(Var** dout, VarPtr* dins) {
     VarPtr y = dout[0];
     if (!x) {
         auto in = inputs().front();
-        if (in->num<0) exe.run_sync(vector<Var*>({in}), true);
         // ns.data represents this is the last split var
         if (ns.data)
             x = make_empty(in->shape, in->dtype());

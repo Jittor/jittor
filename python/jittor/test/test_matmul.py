@@ -130,6 +130,7 @@ class TestMatmul(unittest.TestCase):
         np.random.seed(0)
         jt.set_seed(3)
         model = Model()
+        for p in reversed(model.parameters()): p.sync(0,0)
         SGD = jt.nn.SGD(model.parameters(), 0.05, 0.9, 0)
         n = 1000
         batch_size = 50

@@ -16,12 +16,12 @@ namespace jittor {
 CandidateOp::CandidateOp(Var* x, string&& fail_cond, NanoString dtype) : x(x), fail_cond(move(fail_cond)) {
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
-    flags.set(NodeFlags::_vary_shape);
+    flags.set(NodeFlags::_manual_set_vnbb);
     y = create_output(nullptr, dtype);
 }
 
 void CandidateOp::infer_shape() {
-    y->set_shape({-std::abs(x->shape[0])});
+    y->set_shape({-x->shape[0]});
 }
 
 void CandidateOp::jit_prepare(JK& jk) {

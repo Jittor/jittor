@@ -27,6 +27,7 @@ ReindexOp::ReindexOp(Var* x, NanoVector shape, vector<string>&& indexes, float64
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
     set_type(OpType::broadcast);
+    flags.set(NodeFlags::_manual_set_vnbb);
     y = create_output(nullptr, x->dtype());
 }
 

@@ -28,6 +28,8 @@ ReindexReduceOp::ReindexReduceOp(Var* y, NanoString op, NanoVector shape, vector
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
     set_type(OpType::reduce);
+    if (op.get(NanoString::_no_need_back_in))
+        flags.set(NodeFlags::_manual_set_vnbb);
     ns = op;
     ASSERT(ns.is_binary() && ns!=ns_mean);
     x = create_output(nullptr, y->dtype());

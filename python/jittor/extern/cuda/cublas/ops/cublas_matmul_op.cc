@@ -24,6 +24,9 @@ CublasMatmulOp::CublasMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
     : a(a), b(b), trans_a(trans_a), trans_b(trans_b) {
     flags.set(NodeFlags::_cuda, 1);
     flags.set(NodeFlags::_cpu, 0);
+    flags.set(NodeFlags::_manual_set_vnbb);
+    a->flags.set(NodeFlags::_needed_by_backward);
+    b->flags.set(NodeFlags::_needed_by_backward);
     // TODO: support int8 * int8
     ASSERT(a->dtype().is_float() && b->dtype().is_float()) << "type of two inputs should be the same";
     // TODO: support diffrent input type

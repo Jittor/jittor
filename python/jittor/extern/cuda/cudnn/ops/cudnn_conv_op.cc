@@ -50,6 +50,9 @@ CudnnConvOp::CudnnConvOp(Var* x, Var* w, int strideh, int stridew, int paddingh,
       xformat(move(xformat)), wformat(move(wformat)), yformat(move(yformat)) {
     flags.set(NodeFlags::_cuda, 1);
     flags.set(NodeFlags::_cpu, 0);
+    flags.set(NodeFlags::_manual_set_vnbb);
+    x->flags.set(NodeFlags::_needed_by_backward);
+    w->flags.set(NodeFlags::_needed_by_backward);
     y = create_output(nullptr, dtype_infer(x->ns, w->ns));
     if (!this->yformat.size())
         this->yformat = this->xformat;

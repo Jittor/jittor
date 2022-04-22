@@ -33,6 +33,6 @@ inline static void __print_trace() {
 }
 
 // @pyjt(grad)
-vector<VarHolder*> _grad(VarHolder* loss, const vector<VarHolder*>& targets);
+vector<VarHolder*> _grad(VarHolder* loss, const vector<VarHolder*>& targets, bool retain_graph=true);
 
 } // jittor
