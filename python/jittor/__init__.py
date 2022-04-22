@@ -393,6 +393,58 @@ def zeros_like(x):
 
 flags = core.Flags()
 
+def var(x, dim=None, dims=None, unbiased=False, keepdims=False):
+    """ return the sample variance. If unbiased is True, Bessel's correction will be used.
+
+    :param x: the input jittor Var.
+    :type x: jt.Var.
+    :param dim: the dimension to compute the variance. If both dim and dims are None, the variance of the whole tensor will be computed.
+    :type dim: int.
+    :param dims: the dimensions to compute the variance. If both dim and dims are None, the variance of the whole tensor will be computed.
+    :type dims: tuple of int.
+    :param unbiased: if True, Bessel's correction will be used.
+    :type unbiased: bool.
+    :param keepdim: if True, the output shape is same as input shape except for the dimension in dim.
+    :type keepdim: bool.
+
+    Example:
+
+        >>> a = jt.rand(3)
+        >>> a
+        jt.Var([0.79613626 0.29322362 0.19785859], dtype=float32)
+        >>> a.var()
+        jt.Var([0.06888353], dtype=float32)
+        >>> a.var(unbiased=True)
+        jt.Var([0.10332529], dtype=float32)
+    """
+    shape = x.shape
+    new_shape = list(x.shape)
+
+    assert dim is None or dims is None, "dim and dims can not be both set"
+    if dim is None and dims is None:
+        dims = list(range(len(shape)))
+    elif dim is not None:
+        dims = [dim]
+
+    mean = jt.mean(x, dims, keepdims=True)
+    mean = jt.broadcast(mean, shape)
+
+    n = 1
+    for d in dims:
+        n *= shape[d]
+        new_shape[d] = 1
+
+    sqr = (x - mean) ** 2
+    sqr = jt.sum(sqr, dims=dims, keepdims=False)
+    if unbiased:
+        n -= 1
+    sqr /= n
+
+    if keepdims:
+        sqr = sqr.view(new_shape)
+    return sqr
+Var.var = var
+
 def std(x):
     matsize=1
     for i in x.shape:
