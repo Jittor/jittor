@@ -43,6 +43,14 @@ class TestACL(unittest.TestCase):
     def test_meminfo(self):
         jt.display_memory_info()
 
+    @jt.flag_scope(use_acl=1)
+    def test_conv(self):
+        x = jt.rand(10, 3, 50, 50)
+        w = jt.rand(4,3,3,3)
+        y = jt.nn.conv2d(x, w)
+        y.sync(True)
+
+
 
 def matmul(a, b):
     (n, m), k = a.shape, b.shape[-1]
