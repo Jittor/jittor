@@ -190,6 +190,9 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
     if (red_color) {
         bool gpu_overflow = (double)gpu_total>(double)mem_info.total_cuda_ram*0.95;
         bool cpu_overflow = (double)cpu_total>(double)mem_info.total_cpu_ram*0.95;
+        // cpu total too small, not possible
+        if (mem_info.total_cpu_ram < 100000)
+            cpu_overflow = false;
         if(gpu_overflow || cpu_overflow) {
             double used = gpu_overflow ? (double)gpu_total : (double)cpu_total;
             double total = gpu_overflow ? (double)mem_info.total_cuda_ram : (double)mem_info.total_cpu_ram;

@@ -45,6 +45,8 @@ def has_installation():
     return os.path.isdir(jtcuda_path)
 
 def install_cuda():
+    if "nvcc_path" in os.environ and os.environ["nvcc_path"] == "":
+        return None
     cuda_driver_version = get_cuda_driver()
     if not cuda_driver_version:
         return None
