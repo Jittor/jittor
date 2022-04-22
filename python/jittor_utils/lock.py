@@ -7,7 +7,8 @@ except ImportError:
         import pywintypes
         _OVERLAPPED = pywintypes.OVERLAPPED()
     except:
-        LOG.f("""pywin32 package not found, please install it.
+        raise Exception("""pywin32 package not found, please install it.
+>>> python3.x -m pip install pywin32
 If conda is used, please install with command: 
 >>> conda install pywin32""")
 
