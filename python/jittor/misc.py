@@ -661,22 +661,19 @@ def _prod(x,dim=0):
 
 def numpy_cumsum(x, dim=None):
     def cumsum_forward(np, data):
-        dim = data['inputs'][1].item()
         a = data['inputs'][0]
         b = data['outputs'][0]
         np.cumsum(a, axis=dim, out=b)
 
     def cumsum_backward(np, data):
-        dim = data['inputs'][1].item()
         dout = data['dout']
         out = data['outputs'][0]
-        np.cumsum(dout[..., ::-1], axis=dim, out=out)
-        np.copyto(out, out[..., ::-1])
+        np.cumsum(np.flip(dout, dim), axis=dim, out=out)
+        np.copyto(out, np.flip(out, dim))
     if (dim == None):
         dim = -1
     assert(dim >= -1 and dim < len(x.shape))
-    dim_var = jt.array([dim],dtype=int)
-    return jt.numpy_code(x.shape, x.dtype, [x, dim_var.detach()], cumsum_forward, [cumsum_backward])
+    return jt.numpy_code(x.shape, x.dtype, [x], cumsum_forward, [cumsum_backward])
 
 def cub_cumsum(x, dim=None):
     if (dim == None):
@@ -1040,7 +1037,7 @@ inline static void {func_name}({",".join(pargs+oargs)}) {{
     return new_src
 
 
-def cumprod(a, dim):
+def numpy_cumprod(a, dim):
     class CumprodFunc(jt.Function):
         def forward_code(self, np, data):
             a = data["inputs"][0]
