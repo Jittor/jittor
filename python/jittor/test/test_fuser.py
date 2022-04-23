@@ -37,6 +37,12 @@ class TestFuser(unittest.TestCase):
             # print(arr[i].debug_msg())
             assert ",0)" not in arr[i].debug_msg()
 
+    def test_array_bc(self):
+        # a = jt.array(1)
+        with jt.profile_scope() as rep:
+            b = jt.array(1).broadcast([10])
+            b.sync()
+        assert len(rep) == 2
 
 
 if __name__ == "__main__":
