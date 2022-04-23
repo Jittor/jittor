@@ -365,6 +365,7 @@ Example::
         self.gid_obj.value = 0
             
     def _init_workers(self, index_list):
+        jt.migrate_all_to_cpu()
         jt.clean()
         jt.gc()
         self.index_list = mp.Array('i', self.real_len, lock=False)
