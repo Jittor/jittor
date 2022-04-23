@@ -98,7 +98,7 @@ BroadcastToOp::BroadcastToOp(Var* x, NanoVector shape, NanoVector dims) : x(x), 
 bool BroadcastToOp::need_broadcast(const Var* x, const NanoVector& shape) {
     if (x->shape.size() < shape.size()) return true;
     for (uint i=shape.size()-1, j=x->shape.size()-1; i<shape.size(); i--,j--)
-        if (x->shape[j]< 0 || (x->shape[j] != shape[i] && shape[i] != 1)) return true;
+        if ((x->shape[j] != shape[i] && shape[i] != 1)) return true;
     return false;
 }
 
@@ -154,8 +154,6 @@ void BroadcastToOp::infer_shape() {
         int64 zs;
         if ((xshape == 1 || yshape == 1) && (xshape != yshape)) {
             zs = xshape * yshape;
-        } else if (xshape < 0 || yshape < 0) {
-            zs = std::min(xshape, yshape);
         } else {
             CHECKop(xshape,==,yshape) << "Shape not match" << x->shape << yshapes << bcast_mask;
             zs = xshape;

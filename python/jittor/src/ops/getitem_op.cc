@@ -108,11 +108,11 @@ void GetitemOp::infer_slices(
             for (int j=0; j<niv; j++) {
                 auto iv_shape_j = iv_shape[niv-j-1];
                 auto& out_shape_j = out_shape[first_oid_of_var+var_dim-j-1];
+                CHECK(out_shape_j == iv_shape_j || out_shape_j == 1 || iv_shape_j == 1) << "Shape not match " >> out_shape_j >> "!="
+                    >> iv_shape_j << "data shape:" << in_shape <<
+                    "slice shape:" << iv_shape;
                 if (out_shape_j == 1)
                     out_shape_j = iv_shape_j;
-                else
-                    ASSERT(out_shape_j == iv_shape_j || out_shape_j < 0 || iv_shape_j < 0)
-                        << out_shape_j << iv_shape_j << out_shape;
             }
         } else
         if (s.is_ellipsis()) {
