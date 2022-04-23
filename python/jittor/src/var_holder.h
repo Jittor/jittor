@@ -359,4 +359,7 @@ inline vector<VarHolder*> make_vh_vector(vector<VarPtr>&& vps) {
 // @pyjt(ternary_out_hint)
 VarHolder* ternary_out_hint(VarHolder* cond, VarHolder* x, VarHolder* y);
 
+// @pyjt(migrate_all_to_cpu)
+void migrate_all_to_cpu();
+
 } // jittor

@@ -240,5 +240,16 @@ VarHolder* ternary_out_hint(VarHolder* cond, VarHolder* x, VarHolder* y) {
     return new VarHolder(make_ternary(cond->var, x->var, y->var));
 }
 
+void migrate_all_to_cpu() {
+    sync_all(true);
+#ifdef HAS_CUDA
+    for (auto vh : hold_vars) {
+        auto v = vh->var;
+        if (v->_outputs.size()) continue;
+        if (v->allocator && !v->allocator->is_cuda())
+            migrate_to_gpu(v, cpu_allocator);
+    }
+#endif
+}
 
 } // jittor
