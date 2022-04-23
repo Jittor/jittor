@@ -394,7 +394,39 @@ class TestSetitem(unittest.TestCase):
             jt.get_max_memory_treemap()
 
 
-
+    def test_setitem_bc(self):
+        a = jt.random([10,11,12])
+        b = a[jt.arange(3)[:,None],
+            jt.arange(4)[None,:]]
+        b.sync()
+        assert (a[:3, :4] == b).all()
+        
+        a = jt.random([10,11,12])
+        b = a[jt.arange(3)[:,None],
+            jt.arange(4)[None,:],
+            jt.arange(4)[None,:]]
+        nb = a.data[np.arange(3)[:,None],
+            np.arange(4)[None,:],
+            np.arange(4)[None,:]]
+        np.testing.assert_allclose(nb, b.data)
+        
+        a = jt.random([10,11,12])
+        b = a[jt.arange(3)[::-1,None],
+            jt.arange(4)[None,:],
+            jt.arange(4)[None,:]]
+        nb = a.data[np.arange(3)[::-1,None],
+            np.arange(4)[None,:],
+            np.arange(4)[None,:]]
+        np.testing.assert_allclose(nb, b.data)
+        
+        a = jt.random([10,11,12])
+        b = a[jt.arange(3)[::-1,None],
+            jt.arange(4)[None,:],
+            jt.arange(4)[None,::-1]]
+        nb = a.data[np.arange(3)[::-1,None],
+            np.arange(4)[None,:],
+            np.arange(4)[None,::-1]]
+        np.testing.assert_allclose(nb, b.data)
 
         
 
