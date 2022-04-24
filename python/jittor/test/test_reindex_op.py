@@ -306,6 +306,16 @@ class TestReindexOp(unittest.TestCase):
         b = jt.array([1])
         c = a.reindex([8,8], ["@e0(0) // 1", "@e0(0)"], extras=[b, b])
         expect_error(lambda: c.sync())
+
+    def test_reindex_memopt(self):
+        a = jt.zeros([10,10])
+        b = jt.array([1,2,3]).name("b")
+        c = a.reindex([8,8], ["@e0(0) / 1", "@e0(0)"], extras=[b, b])
+        del b
+        c.sync()
+        da = jt.grad(c, a)
+        da.sync()
+
         
 
 @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")

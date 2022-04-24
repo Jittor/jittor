@@ -28,6 +28,7 @@ ReindexOp::ReindexOp(Var* x, NanoVector shape, vector<string>&& indexes, float64
     flags.set(NodeFlags::_cuda);
     set_type(OpType::broadcast);
     flags.set(NodeFlags::_manual_set_vnbb);
+    for (auto& v : extras) v->flags.set(NodeFlags::_needed_by_backward);
     y = create_output(nullptr, x->dtype());
 }
 
@@ -64,6 +65,7 @@ ReindexOp::ReindexOp(Var* x, vector<Var*>&& indexes, float64 overflow_value, vec
     extras = indexes;
     for (uint i = 0; i < indexes.size(); ++i) {
         indexes[i]->flags.set(NodeFlags::_force_fuse);
+        indexes[i]->flags.set(NodeFlags::_needed_by_backward);
     }
 }
 
