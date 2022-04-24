@@ -101,7 +101,7 @@ std::ostream& operator<<(std::ostream& os, const Var& var) {
         << ":s" << var.is_finished()
         << ":n" << var.flags.get(NodeFlags::_needed_by_backward)
         << ',' 
-        << var.dtype().to_cstring() << ',' << var.name << ',' << var.mem_ptr 
+        << var.dtype().to_cstring() << ',' << var.name << ',' << std::hex <<(uint64)var.mem_ptr 
         << ')' << var.shape;
 #ifdef NODE_MEMCHECK
     os << '<' << var.__id() << '>';
