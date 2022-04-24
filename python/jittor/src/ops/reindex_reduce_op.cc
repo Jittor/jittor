@@ -37,6 +37,8 @@ ReindexReduceOp::ReindexReduceOp(Var* y, NanoString op, NanoVector shape, vector
         if (e->shape != y->shape) {
             e->flags.set(NodeFlags::_stop_fuse);
         }
+        if (op.get(NanoString::_no_need_back_in))
+            e->flags.set(NodeFlags::_needed_by_backward);
     }
 }
 

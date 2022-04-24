@@ -547,7 +547,6 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
             root = fuse_ops[rr-1];
             load_fused_op(fused_op, fuse_ops, ops, ll, rr, tt);
         }
-        LOGvvv << "Run" << op;
         for (auto* var : op->outputs()) {
             var->alloc(allocator);
         }
