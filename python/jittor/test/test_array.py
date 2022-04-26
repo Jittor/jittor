@@ -202,7 +202,7 @@ class TestArray(unittest.TestCase):
             jt.sync([a, b])
             assert a.data == 1
             assert b.data == -1
-        assert len(rep) == 2
+        assert len(rep) == 3
         
     @unittest.skipIf(not jt.has_cuda, "Cuda not found")
     def test_scalar_fuse_unary_cuda(self):
