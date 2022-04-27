@@ -115,6 +115,7 @@ void CudnnRnnOp::grads(Var** dout, VarPtr* dins) {
     VarPtr dy = dout[0];
     VarPtr dhy = dout[1];
     VarPtr dcy = cx ? dout[2] : nullptr;
+    if (!dy.ptr) dy = make_number(0.0, y);
     if (!dhy.ptr) dhy = make_number(0.0, hy);
     if (!dcy.ptr && cx) dcy = make_number(0.0, cy);
 
