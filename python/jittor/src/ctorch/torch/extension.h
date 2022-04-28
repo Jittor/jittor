@@ -215,7 +215,6 @@ namespace jittor {
             }
             
             bool is_cuda() {
-                LOGir << use_cuda << &use_cuda;
                 return use_cuda;
             }
 
@@ -223,7 +222,6 @@ namespace jittor {
                 return Option(dtype());
             }
 
-            // VarPtr jtptr;
             VarHolder* jtptr;
             int64 ndim;
             at::MemoryFormat format;
