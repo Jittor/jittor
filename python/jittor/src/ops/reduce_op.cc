@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -253,6 +253,8 @@ ReduceOp::ReduceOp(Var* x, NanoString op, NanoVector dims, bool keepdims)
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
     set_type(OpType::reduce);
+    if (op.get(NanoString::_no_need_back_in))
+        flags.set(NodeFlags::_manual_set_vnbb);
     ns = op;
     ASSERT(ns.is_binary());
     auto xdim = x->shape.size();
@@ -279,6 +281,8 @@ ReduceOp::ReduceOp(Var* x, NanoString op, uint dims_mask, uint keepdims_mask)
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
     set_type(OpType::reduce);
+    if (op.get(NanoString::_no_need_back_in))
+        flags.set(NodeFlags::_manual_set_vnbb);
     ns = op;
     ASSERT(ns.is_binary());
     reduce_mask = dims_mask;
@@ -319,12 +323,6 @@ VarPtr ReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
         return make_binary(b, v, ns_divide);
     }
     if (ns == ns_mean) {
-        if (v->num < 0) {
-            // TODO: Dynamic shape of mean grad was not supported yet
-            LOGw << "Dynamic shape of mean grad cause synchronize.";
-            exe.run_sync({v}, 0);
-            ASSERT(v->num>=0);
-        }
         VarPtr a = make_broadcast_to(dout, v, reduce_mask, keepdims_mask);
         VarPtr n = make_number(1.0f*out->num / v->num, a);
         return make_binary(a, n, ns_multiply);

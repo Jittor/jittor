@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
@@ -1033,8 +1033,10 @@ cc_flags += " -lstdc++ -ldl -shared "
 if platform.system() == 'Darwin':
     # TODO: if not using apple clang, there is no need to add -lomp
     cc_flags += "-undefined dynamic_lookup -lomp "
+    if os.environ.get('CONDA_PREFIX', None):
+        cc_flags += f" -L{os.path.join(os.environ['CONDA_PREFIX'], 'lib')} "
     if platform.machine() == "arm64":
-        cc_flags += " -L/opt/homebrew/lib "
+        cc_flags += "  -L/opt/homebrew/lib "
 
 opt_flags = ""
 

@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -28,6 +28,8 @@ ReindexReduceOp::ReindexReduceOp(Var* y, NanoString op, NanoVector shape, vector
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
     set_type(OpType::reduce);
+    if (op.get(NanoString::_no_need_back_in))
+        flags.set(NodeFlags::_manual_set_vnbb);
     ns = op;
     ASSERT(ns.is_binary() && ns!=ns_mean);
     x = create_output(nullptr, y->dtype());
@@ -35,6 +37,8 @@ ReindexReduceOp::ReindexReduceOp(Var* y, NanoString op, NanoVector shape, vector
         if (e->shape != y->shape) {
             e->flags.set(NodeFlags::_stop_fuse);
         }
+        if (op.get(NanoString::_no_need_back_in))
+            e->flags.set(NodeFlags::_needed_by_backward);
     }
 }
 

@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers:
 #   Dun Liang <randonlang@gmail.com>.
 #   Meng-Hao Guo <guomenghao1997@gmail.com>
@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.2.7'
+__version__ = '1.3.3.13'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -72,6 +72,7 @@ def _upload(path, url, jk):
     jkey = flags.cache_path+"/_jkey"
     with open(jkey, 'w') as f:
         f.write(jk)
+    assert os.system(f"chmod 600 \"{jkey}\"") == 0
     assert os.system(f"s""c""p"+f" -i \"{jkey}\" \"{path}\" jittor" "@" "166" f".111.68.30:Documents/jittor-blog/assets{suffix}") == 0
     assert os.system(f"s""s""h"f" -i \"{jkey}\" jittor" "@" "166" ".111.68.30 Documents/jittor-blog.git/hooks/post-update") == 0
 
@@ -355,10 +356,10 @@ def array64(data, dtype=None):
     with jt.flag_scope(auto_convert_64_to_32=0):
         return array(data, dtype)
 
-def grad(loss, targets):
+def grad(loss, targets, retain_graph=True):
     if type(targets) == core.Var:
-        return core.grad(loss, [targets])[0]
-    return core.grad(loss, targets)
+        return core.grad(loss, [targets], retain_graph)[0]
+    return core.grad(loss, targets, retain_graph)
 
 def liveness_info():
     return {
@@ -392,6 +393,58 @@ def zeros_like(x):
     return zeros(x.shape,x.dtype)
 
 flags = core.Flags()
+
+def var(x, dim=None, dims=None, unbiased=False, keepdims=False):
+    """ return the sample variance. If unbiased is True, Bessel's correction will be used.
+
+    :param x: the input jittor Var.
+    :type x: jt.Var.
+    :param dim: the dimension to compute the variance. If both dim and dims are None, the variance of the whole tensor will be computed.
+    :type dim: int.
+    :param dims: the dimensions to compute the variance. If both dim and dims are None, the variance of the whole tensor will be computed.
+    :type dims: tuple of int.
+    :param unbiased: if True, Bessel's correction will be used.
+    :type unbiased: bool.
+    :param keepdim: if True, the output shape is same as input shape except for the dimension in dim.
+    :type keepdim: bool.
+
+    Example:
+
+        >>> a = jt.rand(3)
+        >>> a
+        jt.Var([0.79613626 0.29322362 0.19785859], dtype=float32)
+        >>> a.var()
+        jt.Var([0.06888353], dtype=float32)
+        >>> a.var(unbiased=True)
+        jt.Var([0.10332529], dtype=float32)
+    """
+    shape = x.shape
+    new_shape = list(x.shape)
+
+    assert dim is None or dims is None, "dim and dims can not be both set"
+    if dim is None and dims is None:
+        dims = list(range(len(shape)))
+    elif dim is not None:
+        dims = [dim]
+
+    mean = jt.mean(x, dims, keepdims=True)
+    mean = jt.broadcast(mean, shape)
+
+    n = 1
+    for d in dims:
+        n *= shape[d]
+        new_shape[d] = 1
+
+    sqr = (x - mean) ** 2
+    sqr = jt.sum(sqr, dims=dims, keepdims=False)
+    if unbiased:
+        n -= 1
+    sqr /= n
+
+    if keepdims:
+        sqr = sqr.view(new_shape)
+    return sqr
+Var.var = var
 
 def std(x):
     matsize=1
