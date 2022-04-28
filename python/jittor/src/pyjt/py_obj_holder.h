@@ -20,7 +20,8 @@ struct PyObjHolder {
         }
         this->obj = obj;
     }
-    inline PyObjHolder(PyObject* obj) : obj(obj) {
+    inline PyObjHolder(PyObject* obj) {
+        this->obj = obj;
         if (!obj) {
             LOGf << "Python error occur";
         }
