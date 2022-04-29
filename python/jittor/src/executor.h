@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: 
 //     Dun Liang <randonlang@gmail.com>. 
 //     Guoye Yang <498731903@qq.com>
@@ -21,7 +21,7 @@ struct Executor {
     Allocator* allocator;
     Allocator* temp_allocator;
     bool last_is_cuda = false;
-    void run_sync(vector<Var*> vars, bool device_sync);
+    void run_sync(vector<Var*> vars, bool device_sync, bool weak_sync=true);
 
     inline Allocation alloc_temp(size_t size) {
         return Allocation(temp_allocator, size);

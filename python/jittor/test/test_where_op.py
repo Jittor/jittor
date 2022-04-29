@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
@@ -15,7 +15,7 @@ class TestWhereOp(unittest.TestCase):
     def test(self):
         assert (self.where([0,1,0,1])[0].data == [1,3]).all()
         a, = self.where([0,1,0,1])
-        assert a.uncertain_shape==[-4]
+        assert a.uncertain_shape==[2]
         a.data
         assert a.uncertain_shape==[2]
         a,b = self.where([[0,0,1],[1,0,0]])

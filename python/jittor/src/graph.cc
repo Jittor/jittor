@@ -1,10 +1,11 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include <sstream>
+#include <algorithm>
 #include "graph.h"
 #include "var_holder.h"
 #include "var.h"
@@ -32,7 +33,7 @@ void do_graph_check() {
     LOGvv << "Check hold_vars size" << queue.size();
     int vhsize = queue.size();
     for (auto* node : queue) {
-        ASSERTop(node->forward_liveness,>,0);
+        // ASSERTop(node->forward_liveness,>,0);
         ASSERTop(node->backward_liveness,>,0);
     }
     for (uint i=0; i<queue.size(); i++) {
@@ -49,7 +50,7 @@ void do_graph_check() {
         LOGvvvv << "Check node" << i << node;
         int f=0, b=0, p=0;
         if (i<vhsize) {
-            f+=visited.at(node), b+=visited.at(node);
+            f+=visited.at(node), b+=visited.at(node), p+=visited.at(node);
         }
         for (auto* i : node->inputs()) {
             if (i->is_stop_grad()) continue;
@@ -62,7 +63,7 @@ void do_graph_check() {
             if (o->pending_liveness && !o->is_finished())
                 p++;
         }
-        if (f>0 && b>0 && !node->is_finished()) p++;
+        // if (f>0 && b>0 && !node->is_finished()) p++;
         if (f!=node->forward_liveness || b!=node->backward_liveness || p!=node->pending_liveness) {
             LOGf << "ERROR" << node << '\n' 
                 << f << b << p << i << '\n' 
@@ -91,6 +92,8 @@ DumpGraphs dump_all_graphs() {
             queue.push_back(vh->var);
         }
     bfs_both(queue, [](Node*){return true;});
+    std::sort(queue.begin(), queue.end(),
+        [](Node* a, Node* b) { return a->id < b->id;});
     DumpGraphs graphs;
     for (uint i=0; i<queue.size(); i++)
         queue[i]->custom_data = i;

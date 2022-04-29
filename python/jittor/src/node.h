@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -18,7 +18,7 @@ EXTERN_LIB int64 nt;
 EXTERN_LIB vector<Node*> free_buffer;
 
 struct NodeFlags {
-    typedef uint16 nf_t;
+    typedef uint32 nf_t;
     nf_t flags=0;
     enum Flags {
         // bit0: is_var
@@ -35,6 +35,8 @@ struct NodeFlags {
         _force_fuse=_n+0,
         _stop_fuse=_n+1,
         _in_update_queue=_n+2,
+        _needed_by_backward=_n+3,
+        _out_hint=_n+4,
 
         // op related flags
         // bit0: support cpu
@@ -53,13 +55,14 @@ struct NodeFlags {
         _has_gopt=_n+7,
         // bit8: has vary input
         _has_vary_input=_n+8,
+        _manual_set_vnbb = _n+9,
         // bit9: prefer 32 bit
-        _prefer_32=_n+9,
-        // bit10: force 16 bit
-        _prefer_16=_n+10,
-        // bit11: reduce keep type unchange
-        _reduce_keep=_n+11,
-        _custom_flag=_reduce_keep,
+        _prefer_32=_n+10,
+        // force 16 bit
+        _prefer_16=_prefer_32+1,
+        // reduce keep type unchange
+        _reduce_keep=_prefer_32+2,
+        _custom_flag = _reduce_keep,
     };
 
     inline void set(Flags f, int a=1, int nbits=1) {
@@ -89,8 +92,8 @@ struct Node {
     };
     struct output_t {
         Node* node;
-        int index;
         list<input_t>::iterator back;
+        int index;
         output_t(Node* n, int i) : node(n), index(i) {}
         operator Node*() { return node; }
         operator Op*() { return (Op*)node; }
@@ -120,14 +123,15 @@ struct Node {
     inline bool need_free()
     { return !pending_liveness && (!forward_liveness || !backward_liveness); }
     
-    int64_t tflag = 0;
-    int64_t custom_data;
+    int custom_data;
+    int64 tflag = 0;
+    int64 id; 
     list<input_t> _inputs;
     list<output_t> _outputs;
 
 #ifdef NODE_MEMCHECK
     inline Node() {
-        lived_nodes[(void*)this] = ++total_node;
+        lived_nodes[(void*)this] = id = ++total_node;
     }
 
     inline virtual ~Node() {
@@ -135,7 +139,7 @@ struct Node {
         if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var)) trace_data.release_node(this);
     }
 #else
-    inline Node() {};
+    inline Node() { id = ++total_node; };
     inline virtual ~Node() { if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var)) trace_data.release_node(this);};
 #endif
     inline Var* var() { return (Var*)this; }

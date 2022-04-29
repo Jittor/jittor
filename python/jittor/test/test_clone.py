@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: 
 #     Dun Liang <randonlang@gmail.com>. 
 # 
@@ -11,7 +11,7 @@ import jittor as jt
 import numpy as np
 
 class TestClone(unittest.TestCase):
-    def test(self):
+    def test_mid_stop_grad(self):
         jt.clean()
         b = a = jt.array(1.0)
         for i in range(10):
@@ -19,8 +19,11 @@ class TestClone(unittest.TestCase):
             if i==5: c=b
         b.sync()
         assert jt.number_of_lived_vars()==11
+        c.name("c")
         c.stop_grad()
-        assert jt.number_of_lived_vars()==3
+        for n in jt.dump_all_graphs().nodes_info:
+            print(n)
+        assert jt.number_of_lived_vars()==3, jt.number_of_lived_vars()
 
     def test2(self):
         a = jt.array([1,2])

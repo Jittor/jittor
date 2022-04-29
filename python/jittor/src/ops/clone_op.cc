@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: 
 //     Dun Liang <randonlang@gmail.com>. 
 // 
@@ -19,6 +19,7 @@ static auto make_clone = get_op_info("clone")
 CloneOp::CloneOp(Var* x) : x(x) {
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
+    flags.set(NodeFlags::_manual_set_vnbb);
     y = create_output(nullptr, x->dtype());
     if (x->name.ptr)
         y->name = x->name;

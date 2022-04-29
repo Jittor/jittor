@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: 
 #     Guowei Yang <471184555@qq.com>
 #     Meng-Hao Guo <guomenghao1997@gmail.com>
@@ -91,7 +91,10 @@ class TestResnetFp32(unittest.TestCase):
                 print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}\tAcc: {:.6f} \tTime:{:.3f}'
                     .format(epoch_id, batch_id, 600,1. * batch_id / 6.0, loss[0], acc, time.time()-prev))
                 # prev = time.time()
+            # async version
             jt.fetch(epoch_id, batch_id, loss, output, target, callback)
+            # sync version
+            # callback(epoch_id, batch_id, loss.numpy(), output.numpy(), target.numpy())
             
             # log_conv = find_log_with_re(logs, 
             #     "Jit op key (not )?found: ((mkl)|(cudnn))_conv.*")

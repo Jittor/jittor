@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -33,6 +33,7 @@ FuseTransposeOp::FuseTransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
     set_type(tp);
+    flags.set(NodeFlags::_manual_set_vnbb);
     int i=0;
     for (; i<axes.size(); i++)
         if (i!=axes[i]) break;

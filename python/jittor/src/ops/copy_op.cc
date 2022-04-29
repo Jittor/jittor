@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: 
 //     Dun Liang <randonlang@gmail.com>. 
 // 
@@ -20,6 +20,7 @@ namespace jittor {
 CopyOp::CopyOp(Var* x) {
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
+    flags.set(NodeFlags::_manual_set_vnbb);
     auto y = create_output(nullptr, x->dtype());
     if (x->name.ptr)
         y->name = x->name;

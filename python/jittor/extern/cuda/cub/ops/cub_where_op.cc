@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: 
 //     Xiangli Li <1905692338@qq.com>
 //     Dun Liang <randonlang@gmail.com>. 
@@ -26,7 +26,6 @@ namespace jittor {
 CubWhereOp::CubWhereOp(Var* cond, NanoString dtype) : cond(cond) {
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
-    flags.set(NodeFlags::_vary_shape);
     auto ndim = cond->shape.size();
     outs.reset(new Var*[ndim]);
     for (uint i=0; i<ndim; i++)
@@ -35,8 +34,7 @@ CubWhereOp::CubWhereOp(Var* cond, NanoString dtype) : cond(cond) {
 
 void CubWhereOp::infer_shape() {
     auto ndim = cond->shape.size();
-    auto num = cond->num;
-    if (num>0) num = -num;
+    auto num = -cond->num;
     for (uint i=0; i<ndim; i++)
         outs[i]->set_shape({num});
 }

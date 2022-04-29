@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
@@ -141,6 +141,13 @@ class TestNode(unittest.TestCase):
         # noded opt:   build(0.44),execute(0.11)
         # for i in range(20):
         #     run()
+
+        # version 1.3.2.6 retest(laptop)
+        # mode1:
+        # origin      0.296 exec(0.11)
+        # int32flag   0.298 exec(0.11)
+        # add order   0.299 exec(0.11)
+        # rm p1 rule  0.299 exec(0.11)
         for i in range(20):
             run()
         import gc

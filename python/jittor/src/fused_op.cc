@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -45,6 +45,7 @@ void FusedOp::update_ops() {
 
     _inputs.clear();
     _outputs.clear();
+    vars.clear();
     for (Op* op : ops) {
         for (Var* o : op->outputs()) {
             if (o->loop_options) {
@@ -93,10 +94,7 @@ void FusedOp::update_ops() {
             o->custom_data &= 1;
         }
     }
-    vars.clear();
-    bool has_vary_input = 0;
     for (Op* opi : ops) {
-        has_vary_input |= opi->flags.get(NodeFlags::_has_vary_input);
         for (Var* i : opi->inputs()) {
             auto &c = i->custom_data;
             // if not visited
@@ -116,7 +114,6 @@ void FusedOp::update_ops() {
             }
         }
     }
-    flags.set(NodeFlags::_has_vary_input, has_vary_input);
     LOGvvvv << "Var info" << vars;
 }
 
@@ -144,12 +141,9 @@ FusedOp::~FusedOp() {
 }
 
 void FusedOp::infer_shape() {
-    bool has_vary_input = 0;
     for (Op* op : ops) {
         op->init();
-        has_vary_input |= op->flags.get(NodeFlags::_has_vary_input);
     }
-    flags.set(NodeFlags::_has_vary_input, has_vary_input);
 }
 
 void FusedOp::statistics(uint64_t& in, uint64_t& out, uint64_t& compute) {

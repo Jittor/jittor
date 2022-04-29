@@ -25,6 +25,7 @@ class TestCumprod(unittest.TestCase):
     def test_cumprod_cpu(self):
         for i in range(1,6):
             for j in range(i):
+                print("test", i, j)
                 x = np.random.rand(*((10,)*i))
                 x_jt = jt.array(x)
                 y_jt = jt.cumprod(x_jt, j).sqr()
@@ -34,7 +35,7 @@ class TestCumprod(unittest.TestCase):
                 y_tc.sum().backward()
                 g_tc = x_tc.grad
                 assert np.allclose(y_jt.numpy(), y_tc.data)
-                assert np.allclose(g_jt.numpy(), g_tc.data)
+                np.testing.assert_allclose(g_jt.numpy(), g_tc.data, atol=1e-5)
 
     @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
     @jt.flag_scope(use_cuda=1)

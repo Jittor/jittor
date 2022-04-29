@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: 
 //     Guoye Yang <498731903@qq.com>
 //     Dun Liang <randonlang@gmail.com>. 
@@ -76,7 +76,7 @@ void MemoryProfiler::check() {
         allocations.clear();
         size_t memory_size = 0;
         std::vector<std::pair<std::pair<string, vector<Stack>>, size_t>> live_vars;
-        vector<Node*> queue;
+        vector<Node*> queue, queue2;
 
         auto t = ++Node::tflag_count;
         for (auto& vh : hold_vars)
@@ -85,6 +85,14 @@ void MemoryProfiler::check() {
                 queue.push_back(vh->var);
             }
         bfs_both(queue, [](Node*){return true;});
+        vector<int> backup_custom_data;
+        backup_custom_data.resize(queue.size());
+        for (int i=0; i<queue.size(); i++)
+            backup_custom_data[i] = queue[i]->custom_data;
+        toplogical_sort_forward(queue, queue2, [](Node*){});
+        for (int i=0; i<queue.size(); i++)
+            queue[i]->custom_data = backup_custom_data[i];
+        queue.swap(queue2);
         for (Node* node : queue) {
             if (node->is_var()) {
                 Var* var = (Var*)node;

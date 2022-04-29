@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: 
 //     Dun Liang <randonlang@gmail.com>. 
 // 
@@ -16,6 +16,7 @@ namespace jittor {
 TapeOp::TapeOp(Var* x) {
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
+    flags.set(NodeFlags::_manual_set_vnbb);
     create_output(nullptr, x->dtype());
 }
 
@@ -53,6 +54,7 @@ Tapes::Tapes(
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
     flags.set(NodeFlags::_grads);
+    flags.set(NodeFlags::_manual_set_vnbb);
     callback = move(grad_callback);
     
 

@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: 
 #     Wenyang Zhou <576825820@qq.com>. 
 # 
@@ -381,7 +381,52 @@ class TestSetitem(unittest.TestCase):
         for i in range(n):
             np.testing.assert_allclose(g.data[i*m:(i+1)*m], yy[i].data)
 
+    def test_dfs_memopt(self):
+        with jt.flag_scope(profile_memory_enable=1):
+            n = 1024
+            b = []
+            for i in range(n):
+                a = jt.rand(n).copy().copy()
+                a = a.sum()
+                # a.sync()
+                b.append(a)
+            jt.sync_all()
+            jt.get_max_memory_treemap()
 
+
+    def test_setitem_bc(self):
+        a = jt.random([10,11,12])
+        b = a[jt.arange(3)[:,None],
+            jt.arange(4)[None,:]]
+        b.sync()
+        assert (a[:3, :4] == b).all()
+        
+        a = jt.random([10,11,12])
+        b = a[jt.arange(3)[:,None],
+            jt.arange(4)[None,:],
+            jt.arange(4)[None,:]]
+        nb = a.data[np.arange(3)[:,None],
+            np.arange(4)[None,:],
+            np.arange(4)[None,:]]
+        np.testing.assert_allclose(nb, b.data)
+        
+        a = jt.random([10,11,12])
+        b = a[jt.arange(3)[::-1,None],
+            jt.arange(4)[None,:],
+            jt.arange(4)[None,:]]
+        nb = a.data[np.arange(3)[::-1,None],
+            np.arange(4)[None,:],
+            np.arange(4)[None,:]]
+        np.testing.assert_allclose(nb, b.data)
+        
+        a = jt.random([10,11,12])
+        b = a[jt.arange(3)[::-1,None],
+            jt.arange(4)[None,:],
+            jt.arange(4)[None,::-1]]
+        nb = a.data[np.arange(3)[::-1,None],
+            np.arange(4)[None,:],
+            np.arange(4)[None,::-1]]
+        np.testing.assert_allclose(nb, b.data)
 
         
 

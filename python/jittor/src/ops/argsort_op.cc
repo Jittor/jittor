@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: 
 //     Guoye Yang <498731903@qq.com>
 //     Dun Liang <randonlang@gmail.com>. 
@@ -45,7 +45,6 @@ ArgsortOp::ArgsortOp(Var* x, int dim, bool descending, NanoString dtype)
                 .get_constructor<std::vector<VarPtr>, Var*, Var*, Var*, bool, NanoString>();
         }
         if (cub_argsort) {
-            if (x->num<0) exe.run_sync(vector<Var*>({x}), true);
             int dims = x->shape.size();
             vector<int64> axes;
             axes.reserve(dims);
@@ -81,6 +80,8 @@ ArgsortOp::ArgsortOp(Var* x, int dim, bool descending, NanoString dtype)
     #endif
     y = create_output(nullptr, dtype);
     y_key = create_output(nullptr, x->dtype());
+    flags.set(NodeFlags::_manual_set_vnbb);
+    y->flags.set(NodeFlags::_needed_by_backward);
 }
 
 VarPtr ArgsortOp::get_grad(Var* out, Var* dout, Var* v, int v_index, int dim, Var* y) {

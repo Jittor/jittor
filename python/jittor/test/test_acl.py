@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
@@ -42,6 +42,14 @@ class TestACL(unittest.TestCase):
 
     def test_meminfo(self):
         jt.display_memory_info()
+
+    @jt.flag_scope(use_acl=1)
+    def test_conv(self):
+        x = jt.rand(10, 3, 50, 50)
+        w = jt.rand(4,3,3,3)
+        y = jt.nn.conv2d(x, w)
+        y.sync(True)
+
 
 
 def matmul(a, b):

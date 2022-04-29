@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: 
 //     Guoye Yang <498731903@qq.com>
 //     Dun Liang <randonlang@gmail.com>. 
@@ -20,6 +20,7 @@ static auto make_reshape = get_op_info("reshape")
 ReshapeOp::ReshapeOp(Var* x, NanoVector shape) : x(x), shape(shape) {
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
+    flags.set(NodeFlags::_manual_set_vnbb);
     y = create_output(nullptr, x->dtype());
     ASSERT(shape.size() > 0) << "input target shape of reshape can't be empty.";
 }
@@ -40,9 +41,7 @@ void ReshapeOp::infer_shape() {
     CHECK(uncertain_dim <= 1) << "max number of -1 is 1, but get" << uncertain_dim << ".";
     int64_t x_items = x->num;
     auto yshape = shape;
-    if (x_items < 0) {
-        // pass if input is uncertain
-    } else if (uncertain_dim == 0) {
+    if (uncertain_dim == 0) {
         CHECKop(x_items,==,y_items) << "reshape shape is invalid for input of size";
     } else {
         CHECK(y_items != 0 && x_items % y_items == 0) << "reshape shape is invalid for input of size " << x_items;

@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
@@ -39,7 +39,6 @@ class TestIndexOp(unittest.TestCase):
     def test_vary_shape_dep(self):
         a, = jt.where([1,0,1])
         b, = a.index_var()
-        assert a.uncertain_shape==[-3] and b.uncertain_shape==[-3]
         assert (b.data==[0,1]).all()
         
     def test_vary_shape_dep2(self):
@@ -48,7 +47,6 @@ class TestIndexOp(unittest.TestCase):
         index0 = index0.broadcast([1,3], dims=[1]) # [[1,1,1],[2,2,2]]
         index1 = index0.index_var(1) # [[0,1,2],[0,1,2]]
         b = a.reindex_var([index0, index1])
-        assert b.uncertain_shape==[-3,3]
         assert (b.data==[[4,5,6],[7,8,9]]).all()
         assert (index0.data==[[1,1,1],[2,2,2]]).all()
         assert (index1.data==[[0,1,2],[0,1,2]]).all()
