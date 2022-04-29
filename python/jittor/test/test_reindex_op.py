@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
@@ -75,10 +75,7 @@ def conv_transpose_naive(x, w):
 
 
 def is_fused(x):
-    x.name('_x')
-    graph = jt.dump_all_graphs()
-    node_a = [ node for node in graph.nodes_info if ",_x," in node ]
-    return 's0' in node_a[0]
+    return 's0' in x.debug_msg()
     
 def check_fused(dim):
     jt.clean()
@@ -309,6 +306,16 @@ class TestReindexOp(unittest.TestCase):
         b = jt.array([1])
         c = a.reindex([8,8], ["@e0(0) // 1", "@e0(0)"], extras=[b, b])
         expect_error(lambda: c.sync())
+
+    def test_reindex_memopt(self):
+        a = jt.zeros([10,10])
+        b = jt.array([1,2,3]).name("b")
+        c = a.reindex([8,8], ["@e0(0) / 1", "@e0(0)"], extras=[b, b])
+        del b
+        c.sync()
+        da = jt.grad(c, a)
+        da.sync()
+
         
 
 @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")

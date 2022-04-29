@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: 
 //     Meng-Hao Guo <guomenghao1997@gmail.com>
 //     Dun Liang <randonlang@gmail.com>. 
@@ -35,6 +35,9 @@ CublasBatchedMatmulOp::CublasBatchedMatmulOp(Var* a, Var* b, bool trans_a, bool 
     c = create_output(nullptr, a->dtype());
     flags.set(NodeFlags::_cpu, 0);
     flags.set(NodeFlags::_cuda, 1);
+    flags.set(NodeFlags::_manual_set_vnbb);
+    a->flags.set(NodeFlags::_needed_by_backward);
+    b->flags.set(NodeFlags::_needed_by_backward);
 }
 
 
