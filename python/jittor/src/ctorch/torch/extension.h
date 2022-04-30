@@ -22,14 +22,7 @@ namespace py = pybind11;
 
 namespace jittor {
 
-    void AT_CUDA_CHECK(cudaError_t status) { 
-                cudaError_t error = status;                                           
-        if (error != cudaSuccess) {                                           
-            std::cerr << "Got bad cuda status: " << cudaGetErrorString(error) 
-                    << " at line: " << __LINE__ << std::endl;               
-            exit(EXIT_FAILURE);                                               
-        }    
-    }
+    void AT_CUDA_CHECK(cudaError_t status);
 
     #define TORCH_CHECK(a, b) assert(a) 
 
@@ -50,134 +43,81 @@ namespace jittor {
         }                                                                        \
     }()
 
-    static auto make_empty = get_op_info("empty")
-    .get_constructor<VarPtr, NanoVector, NanoString>();
-
     namespace at {
         namespace cuda {
-            cudaStream_t getCurrentCUDAStream() {
-                return (cudaStream_t)0;
-            }
+            cudaStream_t getCurrentCUDAStream();
 
             struct OptionalCUDAGuard {
                 // todo: supoort device guard.
-                OptionalCUDAGuard() {}
-                OptionalCUDAGuard(int x) {}
+                OptionalCUDAGuard();
+                OptionalCUDAGuard(int x);
             };
         }
-        enum MemoryFormat {
+
+        typedef enum MemoryFormat {
             Contiguous,
             Incontiguous,
             NCHW,
             NHWC,
             CHWN
-        };
+        } MemoryFormat; 
     }
 
     namespace torch {
         
-        // definiton of torch kTtypes
-        int kUInt8 = 0;
-        int kFloat = 1;
-        int kDouble = 2;
-        int kHalf = 3;
-        int kInt32 = 4;
+        // definiton of torch kTypes
+        extern int kUInt8;
+        extern int kFloat;
+        extern int kDouble;
+        extern int kHalf;
+        extern int kFloat16;
+        extern int kFloat32;
+        extern int kInt32;
+        extern int kCUDA;
 
         struct Option {
             int dtype_;
-            Option dtype(int dt) {
-                return Option(dt);
-            }
-            Option(int dt):dtype_(dt) {}
-            Option() {}
+            int device_;
+            int devid_;
+
+            Option dtype(int dt);
+
+            Option device(int device, int devid);
+
+            Option(int dt);
+            Option();
         };
 
         struct Device {
-            int index() {
-                return 0;
-            }
-            bool operator ==(const Device& b) const { return true; }
+            int index();
+            int type();
+            bool operator ==(const Device& b) const;
         };
 
+
+
         struct Tensor {
-            Tensor():format(at::MemoryFormat::Contiguous),jtptr(nullptr),ndim(0) {}
+            Tensor();
 
-            Tensor(VarPtr& ptr) {
-                jtptr = new VarHolder(ptr.ptr);
-                ndim = jtptr->shape().size();
-            }
+            Tensor(VarPtr& ptr);
 
-            Tensor(const Tensor& b) {
-                if(!b.jtptr) jtptr = nullptr;
-                else
-                    jtptr = new VarHolder(b.jtptr->var);
-            }
+            Tensor(const Tensor& b);
             
-            NanoVector size() {
-                if(!jtptr) return 0;
-                return jtptr->shape();
-            }
+            NanoVector size();
 
-            int size(int i) {
-                if(!jtptr) {
-                    LOGir << "Tensor is None.";
-                    return -1;
-                }
-                if(i == -1) 
-                    i = jtptr->shape().size() - 1;
-                return jtptr->shape()[i];
-            }
+            int size(int i);
 
-            int numel() {
-                if(!jtptr)
-                    return 0;
-                return jtptr->numel();
-            }
+            int numel();
 
-            void init_stride() {
-                if(!jtptr) return;
-                int64 prod = 1;
-                for(int i=jtptr->shape().size()-1;i>=0;i--) {
-                    strides.push_back(prod);
-                    prod *= jtptr->shape()[i];
-                }
-            }
+            void init_stride();
 
-            NanoVector stride(){
-                if(strides.size() == 0) init_stride();
-                return strides;
-            } 
+            NanoVector stride();
 
-            int stride(int i) {
-                if(!jtptr) {
-                    LOGir << "Tensor is None.";
-                    return -1;
-                }
-                if(strides.size() == 0) init_stride();
-                if(i == -1)
-                    i = 0;
-                return strides[strides.size() - i - 1];
-            }
+            int stride(int i);
 
-            int dtype() {
-                if(!jtptr) return -1; // nullptr
-                NanoString dtype_ = jtptr->dtype();
-                if(dtype_ == "uint8") 
-                    return 0;
-                if(dtype_ == "float16")
-                    return 3;
-                if(dtype_ == "float32")
-                    return 1;
-                if(dtype_ == "float64")
-                    return 2;
-                if(dtype_ == "int32")
-                    return 4;
-                return -1; // non-exist types
-            }
+            int dtype();
 
-            int scalar_type() {
-                return dtype();
-            }
+            int scalar_type();
 
             template<typename T=float>
             T* data_ptr() {
@@ -187,40 +127,21 @@ namespace jittor {
                 return jtptr->var->ptr<T>();
             }
 
-            at::MemoryFormat suggest_memory_format() {
-                return format;
-            }
+            at::MemoryFormat suggest_memory_format();
         
-            void sync(bool device_sync=true) {
-                if(jtptr)
-                    jtptr->sync(device_sync);
-            }
+            void sync(bool device_sync=true);
 
-            int dim() {
-                if(!jtptr)
-                    return 0;
-                return jtptr->shape().size();
-            }
+            int dim();
 
-            bool is_contiguous() {
-                return true;
-            }
+            bool is_contiguous();
 
-            Device device() { // device is controlled by jittor 
-                return Device(); // so all tensors are on the same device.
-            }
+            Device device();
 
-            void cuda() {
-                return;
-            }
+            void cuda();
             
-            bool is_cuda() {
-                return use_cuda;
-            }
+            bool is_cuda();
 
-            Option options() { // assume that jtptr is not nullptr
-                return Option(dtype());
-            }
+            Option options();
 
             VarHolder* jtptr;
             int64 ndim;
@@ -228,28 +149,9 @@ namespace jittor {
             NanoVector strides;
         };
 
-        Tensor empty(NanoVector shape, Option option, at::MemoryFormat format) {
-            // todo: add special support for different formats. For now all outputs are contiguous format.
-            VarPtr ptr;
-            switch(option.dtype_) {
-                case 0:
-                    ptr = make_empty(shape, "uint8"); 
-                    break;
-                case 1:
-                    ptr = make_empty(shape, "float32");
-                    break;
-                case 2:
-                    ptr = make_empty(shape, "float64");
-                    break;
-                case 4:
-                    ptr = make_empty(shape, "int32");
-                    break;
-                default:
-                    ptr = make_empty(shape, "float32");
-                    break;  
-            }
-            return Tensor(ptr);
-        }
+        Tensor empty(NanoVector shape, Option option, at::MemoryFormat format=at::MemoryFormat::Contiguous);
+
+        Option TensorOptions();
 
         // void test_tensor(Tensor a) {
         //     // todo: add special support for different formats.
@@ -261,39 +163,20 @@ namespace jittor {
         // }
     }
     
-    int device_of(torch::Tensor a) {
-        if(use_cuda) 
-            return 1;
-        else return 0;
-    }
+    int device_of(torch::Tensor a);
 
 }
+
 
 namespace pybind11 { namespace detail {
     template <> struct type_caster<jittor::torch::Tensor> {
     public:
- 
         PYBIND11_TYPE_CASTER(jittor::torch::Tensor, const_name("Tensor"));
 
-        bool load(handle src, bool) {
-            PyObject *source = src.ptr();
-            if(source != Py_None) {
-                jittor::VarHolder* var_holder = jittor::from_py_object<jittor::VarHolder*>(source);
-                if (!var_holder)
-                    return false;
-                value.jtptr = var_holder;
-            } else {
-                value.jtptr = nullptr;
-            }
-            return !PyErr_Occurred();
-        }
+        bool load(handle src, bool);
 
-        static handle cast(jittor::torch::Tensor src, return_value_policy, handle) {
-            jittor::PyObjHolder obj(_PyObject_New(&jittor::PyjtVarHolder.ht_type));
-            auto ptr = GET_RAW_PTR(jittor::VarHolder*, obj.obj);
-            new (ptr) jittor::VarHolder (src.jtptr->var);
-            return obj.release();
-        }
+        static handle cast(jittor::torch::Tensor src, return_value_policy, handle);
     };
 }} 
 
+using namespace jittor;
