@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // 
 // This file is subject to the terms and conditions defined in
@@ -26,6 +26,9 @@ CudnnConv3dOp::CudnnConv3dOp(Var* x, Var* w, int strided, int strideh, int strid
       xformat(move(xformat)) {
     flags.set(NodeFlags::_cuda, 1);
     flags.set(NodeFlags::_cpu, 0);
+    flags.set(NodeFlags::_manual_set_vnbb);
+    x->flags.set(NodeFlags::_needed_by_backward);
+    w->flags.set(NodeFlags::_needed_by_backward);
     y = create_output(nullptr, dtype_infer(x->ns, w->ns));
 }
 

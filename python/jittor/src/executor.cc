@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: 
 //     Dun Liang <randonlang@gmail.com>. 
 //     Guoye Yang <498731903@qq.com>
@@ -30,6 +30,7 @@
 #include "memory_profiler.h"
 #include "utils/seh.h"
 #include "utils/cache_compile.h"
+#include "var_holder.h"
 
 namespace jittor {
 
@@ -102,6 +103,23 @@ void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, i
     }
 }
 
+static inline void propergate_needed_flags(FusedOp& fused_op) {
+    auto& ops = fused_op.ops;
+    for (int i=ops.size()-1; i>=0; i--) {
+        bool has_need = 0;
+        auto op = ops[i];
+        for (auto o : op->outputs())
+            if (o->flags.get(NodeFlags::_needed_by_backward) &&
+                !(o->custom_data&1)) {
+                has_need = 1;
+            }
+        if (has_need)
+            for (auto i : op->inputs()) {
+                i->flags.set(NodeFlags::_needed_by_backward);
+            }
+    }
+}
+
 void check_op_async_error(Op* op, bool is_fused_op, const std::exception& e, jittor::Log& logf) {
     vector<Stack> stack;
     if (is_fused_op) {
@@ -151,7 +169,30 @@ void check_op_async_error(Op* op, bool is_fused_op, const std::exception& e, jit
     jittor::LogFatalVoidify() && logf;
 }
 
-void Executor::run_sync(vector<Var*> vars, bool device_sync) {
+static void top_weak_sync(vector<Var*>& vars) {
+    auto t = ++Node::tflag_count;
+    int64 max_id=0;
+    for (auto v : vars) {
+        max_id = std::max(v->id, max_id);
+        v->tflag = t;
+    }
+    while (true) {
+        if (sync_ptr == hold_vars.begin())
+            break;
+        auto next_ptr = std::prev(sync_ptr);
+        auto v = (*next_ptr)->var;
+        if (v->id > max_id) break;
+        sync_ptr = next_ptr;
+        if (v->tflag == t) continue;
+        if (v->_outputs.size()) continue;
+        if (v->is_finished()) continue;
+        vars.push_back(v);
+    }
+}
+
+void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
+    if (weak_sync)
+        top_weak_sync(vars);
     auto allocator = get_allocator();
     auto temp_allocator = get_allocator(true);
     this->allocator = allocator;
@@ -287,6 +328,10 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
     // output:
     //     queue: toplogical order of fused op
     {
+        // queue.clear();
+        #ifndef JT_bfs_executor
+        map<int64, int> p_queue;
+        #endif
         for (int root : roots) {
             for (int i=root; i>=0; i=next[i]) {
                 Op* op = ops[i];
@@ -299,24 +344,48 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
                     }
                 }
             }
+            #ifdef JT_bfs_executor
             if (deps[root] == 0) 
                 queue.push_back(root);
+            #else
+            if (deps[root] == 0) 
+                p_queue[ops[root]->id] = root;
+            #endif
         }
-        for (uint s=0; s<queue.size(); s++) {
+        #ifdef JT_bfs_executor
+        for (uint s=0; s<queue.size(); s++)
+        #else
+        while (p_queue.size())
+        #endif
+        {
+            #ifdef JT_bfs_executor
             int op_id = queue[s];
+            #else
+            int op_id = p_queue.begin()->second;
+            p_queue.erase(p_queue.begin());
+            queue.push_back(op_id);
+            #endif
             for (int i=op_id; i>=0; i=next[i]) {
                 Op* op = ops[i];
                 for (Var* v : op->outputs())
+                {
                     if (v->tflag == tt)
-                        for (Op* op2 : v->outputs()) {
+                        for (Op* op2 : v->outputs())
+                        {
                             if (op2->tflag != tt) continue;
                             int op2_id = father[op2->custom_data];
                             // continue if those two ops are fused
                             if (op2_id == op_id) continue;
                             deps[op2_id]--;
+                            #ifdef JT_bfs_executor
                             if (deps[op2_id] == 0)
                                 queue.push_back(op2_id);
+                            #else
+                            if (deps[op2_id] == 0)
+                                p_queue[op2->id] = op2_id;
+                            #endif
                         }
+                }
             }
         }
         ASSERTop(queue.size(),==,roots.size());
@@ -478,10 +547,6 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
             root = fuse_ops[rr-1];
             load_fused_op(fused_op, fuse_ops, ops, ll, rr, tt);
         }
-        LOGvvv << "Run" << op;
-        if (op->flags.get(NodeFlags::_has_vary_input)) op->init();
-        ASSERT(!op->flags.get(NodeFlags::_has_vary_input))
-            << "Shape of(" >> op->name() >> ") not solved.";
         for (auto* var : op->outputs()) {
             var->alloc(allocator);
         }
@@ -557,6 +622,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         LOGvvv << "Finished Op(" >> op->name() << rid >> 
             "/" >> queue.size() >> ") output:" << op->outputs();
         if (is_fused_op) {
+            propergate_needed_flags(fused_op);
             for (Var* var : op->outputs())
                 var->finish_pending_liveness();
             continue;
@@ -596,7 +662,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync) {
         }
     }
     LOGvv << "All" << op_num << "ops finished, return vars:" << vars;
-    for (Var* v : vars) ASSERT(v->mem_ptr);
+    for (Var* v : vars) ASSERT(v->mem_ptr || !v->backward_liveness);
     // clean fetcher free buffer
     fetcher_to_free.clear();
     #ifdef HAS_CUDA

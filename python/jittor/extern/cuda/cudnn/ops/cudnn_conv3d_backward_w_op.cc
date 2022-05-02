@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: 
 //     Dun Liang <randonlang@gmail.com>
 //     Guowei Yang <471184555@qq.com>
@@ -29,6 +29,9 @@ CudnnConv3dBackwardWOp::CudnnConv3dBackwardWOp(Var* x, Var* dy, int kd, int kh, 
       xformat(move(xformat)) {
     flags.set(NodeFlags::_cuda, 1);
     flags.set(NodeFlags::_cpu, 0);
+    flags.set(NodeFlags::_manual_set_vnbb);
+    x->flags.set(NodeFlags::_needed_by_backward);
+    dy->flags.set(NodeFlags::_needed_by_backward);
     dw = create_output(nullptr, dtype_infer(dy->ns, x->ns));
 }
 

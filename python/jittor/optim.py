@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers:
 #     Guowei Yang <471184555@qq.com>
 #     Guoye Yang <498731903@qq.com>
@@ -98,7 +98,7 @@ class Optimizer(object):
     def zero_grad(self):
         self.__zero_grad = True
 
-    def pre_step(self, loss):
+    def pre_step(self, loss, retain_graph=False):
         """ something should be done before step, such as calc gradients, mpi sync, and so on.
 
         Example::
@@ -118,7 +118,7 @@ class Optimizer(object):
                     params_has_grad.append(p)
 
         # get gradient
-        grads = jt.grad(loss, params_has_grad)
+        grads = jt.grad(loss, params_has_grad, retain_graph)
 
         # sync grads and model if in mpi
         if jt.in_mpi:
@@ -153,7 +153,7 @@ class Optimizer(object):
                     pid += 1
         self.__zero_grad = False
         
-    def backward(self, loss):
+    def backward(self, loss, retain_graph=False):
         '''
         optimize.backward(loss) is used for accumulate multiple step,
         it can be used as following:
@@ -186,11 +186,11 @@ class Optimizer(object):
 
 
         '''
-        self.pre_step(loss)
+        self.pre_step(loss, retain_graph)
 
-    def step(self, loss=None):
+    def step(self, loss=None, retain_graph=False):
         if loss is not None:
-            self.pre_step(loss)
+            self.pre_step(loss, retain_graph)
         for pg in self.param_groups:
             lr = pg.get("lr", self.lr)
             for p, g in zip(pg["params"], pg["grads"]):
