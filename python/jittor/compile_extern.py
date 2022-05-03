@@ -613,7 +613,6 @@ def setup_cutlass():
         extra_flags=f" {all_dir} ")
     LOG.vv("Get cutlass_ops: "+str(dir(cutlass_ops)))
 
-if os.environ.get("FIX_TORCH_ERROR", "0") == "1":
 in_mpi = inside_mpi()
 FIX_TORCH_ERROR = 0
 if os.name != 'nt' and not in_mpi:

@@ -1177,11 +1177,11 @@ def backward_header():
         void backward(float* input, float* grad, float* output, float* output_grad, int input_m, int input_n, int grad_m, int grad_n, int output_m, int output_n) { // grad * weight.T
             using Gemm = OurGemmTransfer;
             const int lda = grad_n;
-            const int ldb = input_m;
+            const int ldb = input_n;
             const int ldc = output_n;
             const int ldd = output_n;
             typename Gemm::Arguments arguments{
-                {grad_m, input_n, grad_n}, // TODO
+                {grad_m, input_m, grad_n}, // TODO
                 {grad, lda},
                 {input, ldb},
                 {output, ldc},
@@ -1207,11 +1207,11 @@ def backward_header():
         void last_inp_backward(float* input, float* grad, float* output, int input_m, int input_n, int grad_m, int grad_n, int output_m, int output_n) { // output * weight.T
             using Gemm = OurGemm;
             const int lda = grad_n;
-            const int ldb = input_m;
+            const int ldb = input_n;
             const int ldc = output_n;
             const int ldd = output_n;
             typename Gemm::Arguments arguments{
-                {grad_m, input_n, grad_n}, // TODO
+                {grad_m, input_m, grad_n}, // TODO
                 {grad, lda},
                 {input, ldb},
                 {output, ldc},
@@ -1239,7 +1239,7 @@ def backward_header():
             int batch_size = grad_n;
 
             using Gemm = OurGemmW;
-            const int lda = input_m;
+            const int lda = input_n;
             const int ldb = grad_n;
             const int ldc = weight_grad_n;
             const int ldd = weight_grad_n;
@@ -1279,80 +1279,6 @@ class FullyFusedMlp(jt.Function):
         self.weights = None
 
     def single_forward(self, a, b):
-        cuda_src = '''
-            @alias(b, in1)
-            @alias(a, in0)
-            @alias(c, out0)
-            const int length_m = a_shape0;
-            const int length_n = b_shape1;
-            const int length_k = a_shape1;
-
-            // Create a tuple of problem size for matrix multiplication
-            cutlass::gemm::GemmCoord problem_size(length_m, length_n, length_k);
-
-            // Initialize tensors using CUTLASS helper functions
-            cutlass::TensorRef<ElementInputA, LayoutInputA> tensor_a((ElementInputA*)a_p,
-                LayoutInputA().packed(problem_size.mk()));
-            cutlass::TensorRef<ElementInputB, LayoutInputB> tensor_b((ElementInputB*)b_p,
-                LayoutInputB().packed(problem_size.kn()));
-            cutlass::TensorRef<ElementOutput, LayoutOutput> tensor_d((ElementOutput*)c_p,
-                LayoutOutput().packed(problem_size.mn()));
-
-            // Initialize alpha for dot product computation
-            ElementComputeEpilogue alpha = ElementComputeEpilogue(1);
-
-            // Split K dimension into 1 partitions
-            int split_k_slices = 1;
-
-            // Create a tuple of gemm kernel arguments. This is later passed as arguments to launch
-            // instantiated CUTLASS kernel
-            typename Gemm::Arguments arguments{
-                problem_size,                       // <- problem size of matrix multiplication
-                tensor_a,              // <- reference to matrix A on device
-                tensor_b,              // <- reference to matrix B on device
-
-                {NULL, 0},   // <- the C matrix is treated as the bias vector. We can enable the GEMM
-                                                    //    to project away the N dimension by setting the stride to zero.
-
-                tensor_d,              // <- reference to matrix D on device,
-                {alpha},                              // <- alpha
-                split_k_slices};                    // <- k-dimension split factor
-
-            // Using the arguments, query for extra workspace required for matrix multiplication computation
-            size_t workspace_size = Gemm::get_workspace_size(arguments);
-
-
-            // Allocate workspace memory
-            auto temp1 = exe.alloc_temp(workspace_size);
-
-            // Allocate workspace memory
-            // cutlass::device_memory::allocation<uint8_t> workspace(workspace_size);
-
-            // Instantiate CUTLASS kernel depending on templates
-            Gemm gemm_op;
-
-            // Check the problem size is supported or not 
-            cutlass::Status status = gemm_op.can_implement(arguments);
-            CUTLASS_CHECK(status);
-
-            // Initialize CUTLASS kernel with arguments and workspace pointer
-            status = gemm_op.initialize(arguments, temp1.ptr);
-            CUTLASS_CHECK(status);
-
-            // Launch initialized CUTLASS kernel
-            status = gemm_op();
-            CUTLASS_CHECK(status);  
-        '''
-        output = jt.code((a.shape[0], b.shape[1]), a.dtype, [a, b], cuda_header=cuda_header, cuda_src=cuda_src)
-        output.compile_options = {f"FLAGS: --expt-relaxed-constexpr -I{cutlass_path}/include -I{cutlass_path}/tools/util/include ": 1}
-        return output
-    
-    def execute(self, a, *args):
-        self.shapes = []
-        self.dtypes = []
-        self.max_dim = 0
-        self.weights = list(args)
-        weights = args
         cuda_header = '''
             #undef out
             #include <algorithm>
@@ -1465,89 +1391,85 @@ class FullyFusedMlp(jt.Function):
                                                     NumStages>;
         '''
         cuda_src = '''
-            int length_m;
-            int length_n;
-            int length_k;
-            ElementComputeEpilogue alpha = ElementComputeEpilogue(1);
-            int split_k_slices = 1;
-            cutlass::Status status;
-            float* a_p;
-        '''
-        for i in range(len(weights)):
-            if i == 0:
-                assert a.shape[1] == weights[0].shape[0]
-            else:
-                assert weights[i-1].shape[1] == weights[i].shape[0]
-            mm = np.maximum(weights[i].shape[0], weights[i].shape[1])
-            if self.max_dim < mm: self.max_dim = mm
-            self.shapes.append((a.shape[0], weights[i].shape[1]))
-            self.dtypes.append(a.dtype)
-            cuda_src += f'''
-            if ({i} == 0) {{
-                length_m = in0_shape0;
-                length_n = in1_shape1;
-                length_k = in0_shape1;
-            }} else {{
-                length_m = in0_shape0;
-                length_n = in{i}_shape1;
-                length_k = in{0 if i == 0 else i-1}_shape1;
-            }}
+            @alias(b, in1)
+            @alias(a, in0)
+            @alias(c, out0)
+            const int length_m = a_shape0;
+            const int length_n = b_shape1;
+            const int length_k = a_shape1;
 
-            if ({i} == 0) a_p = in0_p;
-            else 
-                a_p = out{0 if i == 0 else i-1}_p;
             // Create a tuple of problem size for matrix multiplication
-            cutlass::gemm::GemmCoord problem_size{i}(length_m, length_n, length_k);
+            cutlass::gemm::GemmCoord problem_size(length_m, length_n, length_k);
 
             // Initialize tensors using CUTLASS helper functions
-            cutlass::TensorRef<ElementInputA, LayoutInputA> tensor_a{i}((ElementInputA*)a_p,
-                LayoutInputA().packed(problem_size{i}.mk()));
-            cutlass::TensorRef<ElementInputB, LayoutInputB> tensor_b{i}((ElementInputB*)in{i+1}_p,
-                LayoutInputB().packed(problem_size{i}.kn()));
-            cutlass::TensorRef<ElementOutput, LayoutOutput> tensor_d{i}((ElementOutput*)out{i}_p,
-                LayoutOutput().packed(problem_size{i}.mn()));
+            cutlass::TensorRef<ElementInputA, LayoutInputA> tensor_a((ElementInputA*)a_p,
+                LayoutInputA().packed(problem_size.mk()));
+            cutlass::TensorRef<ElementInputB, LayoutInputB> tensor_b((ElementInputB*)b_p,
+                LayoutInputB().packed(problem_size.kn()));
+            cutlass::TensorRef<ElementOutput, LayoutOutput> tensor_d((ElementOutput*)c_p,
+                LayoutOutput().packed(problem_size.mn()));
 
+            // Initialize alpha for dot product computation
+            ElementComputeEpilogue alpha = ElementComputeEpilogue(1);
+
+            // Split K dimension into 1 partitions
+            int split_k_slices = 1;
+
+            // Create a tuple of gemm kernel arguments. This is later passed as arguments to launch
             // instantiated CUTLASS kernel
-            typename Gemm::Arguments arguments{i}{{
-                problem_size{i},                       // <- problem size of matrix multiplication
-                tensor_a{i},              // <- reference to matrix A on device
-                tensor_b{i},              // <- reference to matrix B on device
+            typename Gemm::Arguments arguments{
+                problem_size,                       // <- problem size of matrix multiplication
+                tensor_a,              // <- reference to matrix A on device
+                tensor_b,              // <- reference to matrix B on device
 
-                {{NULL, 0}},   // <- the C matrix is treated as the bias vector. We can enable the GEMM
+                {NULL, 0},   // <- the C matrix is treated as the bias vector. We can enable the GEMM
                                                     //    to project away the N dimension by setting the stride to zero.
 
-                tensor_d{i},              // <- reference to matrix D on device,
-                {{alpha}},                              // <- alpha
-                split_k_slices}};                    // <- k-dimension split factor
+                tensor_d,              // <- reference to matrix D on device,
+                {alpha},                              // <- alpha
+                split_k_slices};                    // <- k-dimension split factor
 
             // Using the arguments, query for extra workspace required for matrix multiplication computation
-            size_t workspace_size{i} = Gemm::get_workspace_size(arguments{i});
+            size_t workspace_size = Gemm::get_workspace_size(arguments);
 
 
             // Allocate workspace memory
-            auto temp{i} = exe.alloc_temp(workspace_size{i});
+            auto temp1 = exe.alloc_temp(workspace_size);
 
             // Allocate workspace memory
-            // cutlass::device_memory::allocation<uint8_t> workspace{i}(workspace_size);
+            // cutlass::device_memory::allocation<uint8_t> workspace(workspace_size);
 
             // Instantiate CUTLASS kernel depending on templates
-            Gemm gemm_op{i};
+            Gemm gemm_op;
 
             // Check the problem size is supported or not 
-            status = gemm_op{i}.can_implement(arguments{i});
+            cutlass::Status status = gemm_op.can_implement(arguments);
             CUTLASS_CHECK(status);
 
             // Initialize CUTLASS kernel with arguments and workspace pointer
-            status = gemm_op{i}.initialize(arguments{i}, temp{i}.ptr);
+            status = gemm_op.initialize(arguments, temp1.ptr);
             CUTLASS_CHECK(status);
 
             // Launch initialized CUTLASS kernel
-            status = gemm_op{i}();
+            status = gemm_op();
             CUTLASS_CHECK(status);  
-            '''
+        '''
+        output = jt.code((a.shape[0], b.shape[1]), a.dtype, [a, b], cuda_header=cuda_header, cuda_src=cuda_src)
+        output.compile_options = {f"FLAGS: --expt-relaxed-constexpr -I/home/penghy/jittor-dev/depth/cutlass/include -I/home/penghy/jittor-dev/depth/cutlass/tools/util/include ": 1}
+        # print(output)
+        return output
+    
+    def execute(self, a, *args):
+        self.shapes = []
+        self.dtypes = []
+        self.max_dim = 0
+        self.weights = list(args)
         self.input = a
-        self.outputs = jt.code(self.shapes, self.dtypes, [a] + self.weights, cuda_header=cuda_header, cuda_src=cuda_src)
-        self.outputs[0].compile_options = {f"FLAGS: --expt-relaxed-constexpr --expt-relaxed-constexpr -I{cutlass_path}/include -I{cutlass_path}/tools/util/include ": 1}
+        weights = args
+        for i in range(len(weights)):
+            self.outputs.append(self.single_forward(a, weights[i]))
+            a = self.outputs[-1]
+        # print(self.outputs)
         return self.outputs[-1]
 
     def backward(self, grad, weight, output):
