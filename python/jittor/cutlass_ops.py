@@ -203,7 +203,8 @@ def depthwise_src_backward(x, weights):
     #define CHECK_INPUT(x) CHECK_CUDA(x); CHECK_CONTIGUOUS(x)
 
     '''
-
+    if x.dtype == jt.float16: 
+        cuda_header = cuda_header.replace("float", "cutlass::half_t")
     cuda_src = '''
     @alias(weights, in1)      
     @alias(x, in0)
@@ -452,7 +453,8 @@ def depthwise_filter_backward(x, weights, diff):
     #define CHECK_CONTIGUOUS(x) TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
     #define CHECK_INPUT(x) CHECK_CUDA(x); CHECK_CONTIGUOUS(x)
     '''
-
+    if x.dtype == jt.float16: 
+        cuda_header = cuda_header.replace("float", "cutlass::half_t")
     cuda_src = '''
     @alias(grad, in2)
     @alias(weights, in1)      
@@ -709,6 +711,8 @@ class DepthwiseConv(jt.Function):
             }
 
         '''
+        if x.dtype == jt.float16: 
+            cuda_header.replace("float", "cutlass::half_t")
         cuda_src = '''
             // __global__ void kernel() {}
             @alias(weights, in1)      
@@ -770,8 +774,8 @@ class DepthwiseConv(jt.Function):
     def grad(self, g):
         return depthwise_src_backward(g, self.weights), depthwise_filter_backward(self.x, self.weights, g)
 
-def backward_header():
-    return '''
+def backward_header(use_fp16 = False):
+    cuda_header =  '''
         #pragma once
         #undef out
         #include <cutlass/cutlass.h>
@@ -1267,6 +1271,9 @@ def backward_header():
             CUTLASS_CHECK(status);
         }
     '''
+    if use_fp16: 
+        cuda_header = cuda_header.replace("float", "cutlass::half_t")
+    return cuda_header
 
 class FullyFusedMlp(jt.Function):
     def __init__(self):
@@ -1390,6 +1397,8 @@ class FullyFusedMlp(jt.Function):
                                                     SwizzleThreadBlock,
                                                     NumStages>;
         '''
+        if a.dtype == jt.float16: 
+            cuda_header = cuda_header.replace("float", "cutlass::half_t")
         cuda_src = '''
             @alias(b, in1)
             @alias(a, in0)
@@ -1473,30 +1482,34 @@ class FullyFusedMlp(jt.Function):
         return self.outputs[-1]
 
     def backward(self, grad, weight, output):
-        cuda_header = backward_header()
-        cuda_src = '''
+        use_fp16 = True if grad.dtype == jt.float16 else False
+        cuda_header = backward_header(use_fp16)
+        converter = "(cutlass::half_t*)" if use_fp16 else ""
+        cuda_src = f'''
         @alias(input, in0)
         @alias(grad, in1)
         @alias(weight, in2)
         @alias(weight_grad, out0)  
         @alias(inp_grad, out1)
-        weight_backward(input_p, grad_p, weight_grad_p, input_shape0, input_shape1, grad_shape0, grad_shape1, weight_shape0, weight_shape1); 
-        backward(weight_p, grad_p, input_p, inp_grad_p, weight_shape0, weight_shape1, grad_shape0, grad_shape1, input_shape0, input_shape1);
+        weight_backward({converter}input_p, {converter}grad_p, {converter}weight_grad_p, input_shape0, input_shape1, grad_shape0, grad_shape1, weight_shape0, weight_shape1); 
+        backward({converter}weight_p, {converter}grad_p, {converter}input_p, {converter}inp_grad_p, weight_shape0, weight_shape1, grad_shape0, grad_shape1, input_shape0, input_shape1);
         '''
         weight_grad, out_grad = jt.code([weight.shape, output.shape], [weight.dtype, output.dtype], [output, grad, weight], cuda_header=cuda_header, cuda_src=cuda_src)
         weight_grad.compile_options = {f"FLAGS: --expt-relaxed-constexpr -I{cutlass_path}/include -I{cutlass_path}/tools/util/include ": 1}
         return out_grad, weight_grad
 
     def last_backward(self, grad, weight, output):
-        cuda_header = backward_header()
-        cuda_src = '''
+        use_fp16 = True if grad.dtype == jt.float16 else False
+        cuda_header = backward_header(use_fp16)
+        converter = "(cutlass::half_t*)" if use_fp16 else ""
+        cuda_src = f'''
         @alias(input, in0)
         @alias(grad, in1)  
         @alias(weight, in2) 
         @alias(weight_grad, out0) 
         @alias(out_grad, out1)
-        weight_backward(input_p, grad_p, weight_grad_p, input_shape0, input_shape1, grad_shape0, grad_shape1, weight_shape0, weight_shape1);
-        last_inp_backward(weight_p, grad_p, out_grad_p, weight_shape0, weight_shape1, grad_shape0, grad_shape1, input_shape0, input_shape1); 
+        weight_backward({converter}input_p, {converter}grad_p, {converter}weight_grad_p, input_shape0, input_shape1, grad_shape0, grad_shape1, weight_shape0, weight_shape1);
+        last_inp_backward({converter}weight_p, {converter}grad_p, {converter}out_grad_p, weight_shape0, weight_shape1, grad_shape0, grad_shape1, input_shape0, input_shape1); 
         '''
         weight_grad, out_grad = jt.code([weight.shape, output.shape], [weight.dtype, output.dtype], [output, grad, weight], cuda_header=cuda_header, cuda_src=cuda_src)
         weight_grad.compile_options = {f"FLAGS: --expt-relaxed-constexpr -I{cutlass_path}/include -I{cutlass_path}/tools/util/include ": 1}
