@@ -130,7 +130,7 @@ class TestResnetFp32(unittest.TestCase):
             if jt.in_mpi:
                 assert jt.core.number_of_lived_vars() < 8100, jt.core.number_of_lived_vars()
             else:
-                assert jt.core.number_of_lived_vars() < 7000, jt.core.number_of_lived_vars()
+                assert jt.core.number_of_lived_vars() < 8000, jt.core.number_of_lived_vars()
             if self.train_loader.epoch_id >= 2:
                 break
 

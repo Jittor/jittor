@@ -59,7 +59,7 @@ class TestReduceF64Op(unittest.TestCase):
         jt.flags.use_cuda = True
         x = gen_data((3,32,64,64))
 
-        with jt.profile_scope() as report:
+        with jt.profile_scope(log_silent=1) as report:
             x_jt = jt.array(x)
             print(x_jt.sum())
         check_report(report)
@@ -68,7 +68,7 @@ class TestReduceF64Op(unittest.TestCase):
         jt.flags.use_cuda = True
         x = gen_data((3,32,64,64))
 
-        with jt.profile_scope() as report:
+        with jt.profile_scope(log_silent=1) as report:
             x_jt = jt.array(x)
             print(x_jt.mean())
         check_report(report)
@@ -77,7 +77,7 @@ class TestReduceF64Op(unittest.TestCase):
         jt.flags.use_cuda = True
         x = gen_data((3,32,64,64))
 
-        with jt.profile_scope() as report:
+        with jt.profile_scope(log_silent=1) as report:
             x_jt = jt.array(x)
             bn = nn.BatchNorm(32)
             bn.train()
@@ -93,7 +93,7 @@ class TestReduceF64Op(unittest.TestCase):
     @unittest.skipIf(not jt.has_cuda, "Cuda not found")
     @jt.flag_scope(use_cuda=1, use_stat_allocator=1)
     def test_resnet(self):
-        with jt.profile_scope() as report:
+        with jt.profile_scope(log_silent=1) as report:
             self.setup_seed(1)
 
             # hyper-parameters
@@ -111,6 +111,7 @@ class TestReduceF64Op(unittest.TestCase):
             loss_list=[]
             acc_list=[]
             mnist_net = MnistNet()
+            mnist_net.train()
             global prev
             prev = time.time()
             SGD = nn.SGD(mnist_net.parameters(), self.learning_rate, self.momentum, self.weight_decay)
@@ -178,7 +179,7 @@ class TestReduceF64Op(unittest.TestCase):
                 if jt.in_mpi:
                     assert jt.core.number_of_lived_vars() < 8100, jt.core.number_of_lived_vars()
                 else:
-                    assert jt.core.number_of_lived_vars() < 7000, jt.core.number_of_lived_vars()
+                    assert jt.core.number_of_lived_vars() < 8000, jt.core.number_of_lived_vars()
                 if self.train_loader.epoch_id >= 2:
                     break
 
