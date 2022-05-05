@@ -49,6 +49,10 @@ struct VarHolder {
     string to_string();
     // @pyjt(sync)
     void sync(bool device_sync = false, bool weak_sync = true);
+
+    /**
+     * Returns a numpy array copy of the Var.
+     */
     // @pyjt(fetch_sync,numpy)
     ArrayArgs fetch_sync();
 
