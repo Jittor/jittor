@@ -248,6 +248,14 @@ unordered_set<string> reduce_ops = {
     "mean",
 };
 
+
+static auto make_reduce = get_op_info("reduce")
+    .get_constructor<VarPtr, Var*, NanoString, NanoVector, bool>();
+static auto make_reduce2 = get_op_info("reduce")
+    .get_constructor<VarPtr, Var*, NanoString, uint, uint>();
+static auto make_unary = get_op_info("unary")
+    .get_constructor<VarPtr, Var*, NanoString>();
+
 ReduceOp::ReduceOp(Var* x, NanoString op, NanoVector dims, bool keepdims)
     : x(x) {
     flags.set(NodeFlags::_cpu);
@@ -269,6 +277,13 @@ ReduceOp::ReduceOp(Var* x, NanoString op, NanoVector dims, bool keepdims)
             reduce_mask |= 1<<dim;
         }
     }
+    if (x->dtype() == ns_float32 && !(amp_reg & amp_keep_reduce) && (op==ns_add || op==ns_mean || op==ns_multiply)) {
+        auto out = make_unary(x, ns_float64);
+        out = make_reduce(out, op, dims, keepdims);
+        out = make_unary(out, ns_float32);
+        forward(out);
+        return;
+    }
     // if (x->dtype() == ns_bool && ns == ns_add)
     if (x->dtype() == ns_bool)
         y = create_output(nullptr, ns_int32);
@@ -287,6 +302,13 @@ ReduceOp::ReduceOp(Var* x, NanoString op, uint dims_mask, uint keepdims_mask)
     ASSERT(ns.is_binary());
     reduce_mask = dims_mask;
     this->keepdims_mask = keepdims_mask;
+    if (x->dtype() == ns_float32 && !(amp_reg & amp_keep_reduce) && (op==ns_add || op==ns_mean || op==ns_multiply)) {
+        auto out = make_unary(x, ns_float64);
+        out = make_reduce2(x, op, dims_mask, keepdims_mask);
+        out = make_unary(out, ns_float32);
+        forward(out);
+        return;
+    }
     y = create_output(nullptr, reduce_dtype_infer(ns, x->ns));
 }
 
