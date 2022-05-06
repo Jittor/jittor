@@ -1526,7 +1526,8 @@ def jittor_exit():
     elif hooks.exception is not None:
         pass
     else:
-        core.sync_all(True)
+        pass
+        # core.sync_all(True)
     core.cleanup()
 atexit.register(jittor_exit)
 
