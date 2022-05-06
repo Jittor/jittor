@@ -240,9 +240,9 @@ void migrate_all_to_cpu() {
 #ifdef HAS_CUDA
     for (auto vh : hold_vars) {
         auto v = vh->var;
-        if (v->_outputs.size()) continue;
-        if (v->allocator && !v->allocator->is_cuda())
-            migrate_to_gpu(v, cpu_allocator);
+        // if (v->_outputs.size()) continue;
+        if (v->allocator && v->mem_ptr && !v->allocator->is_cuda())
+            migrate_to_cpu(v, cpu_allocator);
     }
 #endif
 }
