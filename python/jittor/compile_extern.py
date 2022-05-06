@@ -560,7 +560,13 @@ def setup_mpi():
         if k == "mpi_test": continue
         setattr(core.Var, k, wrapper(mpi_ops.__dict__[k]))
 
-if os.environ.get("FIX_TORCH_ERROR", "0") == "1":
+in_mpi = inside_mpi()
+FIX_TORCH_ERROR = 0
+if os.name != 'nt' and not in_mpi:
+    FIX_TORCH_ERROR = 1
+if "FIX_TORCH_ERROR" in os.environ:
+    FIX_TORCH_ERROR = os.environ["FIX_TORCH_ERROR"] != "0"
+if FIX_TORCH_ERROR:
     try:
         import torch
         from jittor_utils import dirty_fix_pytorch_runtime_error
@@ -570,7 +576,6 @@ if os.environ.get("FIX_TORCH_ERROR", "0") == "1":
 
 cudnn = cublas = curand = cufft = None
 setup_mpi()
-in_mpi = inside_mpi()
 rank = mpi.world_rank() if in_mpi else 0
 world_size = mpi.world_size() if in_mpi else 1
 setup_nccl()
