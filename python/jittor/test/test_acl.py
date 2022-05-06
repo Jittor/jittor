@@ -40,6 +40,13 @@ class TestACL(unittest.TestCase):
         y = jt.float32(x)
         np.testing.assert_allclose(x, y.numpy())
 
+    @jt.flag_scope(use_acl=1)
+    def test_rand(self):
+        a = jt.rand(10)
+        b = a*10
+        b.sync()
+        print(b)
+
     def test_meminfo(self):
         jt.display_memory_info()
 

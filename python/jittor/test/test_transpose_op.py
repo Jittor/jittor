@@ -83,6 +83,14 @@ class TestTransposeOp(unittest.TestCase):
         b = a.transpose((1,0))
         b.sync()
 
+    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @jt.flag_scope(use_cuda=1)
+    def test_cutt_bug(self):
+        a = jt.rand(640000,4,3)
+        b = a.transpose(0,2,1)
+        b.sync(True)
+        print(a.shape, b.shape)
+
 
 class TestFuseTransposeOp(unittest.TestCase):
 

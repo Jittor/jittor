@@ -245,8 +245,7 @@ void TraceData::record_node(Node* node, bool record_stack) {
         }
     } else {
     }
-    if (node->__id())
-        data.attrs["__id"] = S(node->__id());
+    data.attrs["__id"] = S(node->id);
     data.attrs["is_var"] = node->is_var() ? "1" : "0";
     data.attrs["name"] = "unname";
     node_data[data.id] = move(data);

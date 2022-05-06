@@ -14,7 +14,6 @@ namespace jittor {
 
 DEFINE_FLAG(int, check_graph, 0, "Unify graph sanity check.");
 
-EXTERN_LIB unordered_map<void*, int64> lived_nodes;
 
 template <typename T>
 string ss_convert(T x) {

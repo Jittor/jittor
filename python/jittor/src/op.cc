@@ -298,9 +298,6 @@ std::ostream& operator<<(std::ostream& os, const Op* op) {
             os << "->" << (void*)v;
     }
     os << ')';
-#ifdef NODE_MEMCHECK
-    os << '<' << op->__id() << '>';
-#endif
     if (trace_py_var) {
         os << '{';
         print_node_trace(op, os);

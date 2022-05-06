@@ -13,9 +13,14 @@
 namespace jittor {
 
 EXTERN_LIB unordered_map<void*, int64> lived_nodes;
+EXTERN_LIB unordered_map<int64, Node*> lived_nodes_id;
 EXTERN_LIB int64 total_node;
 EXTERN_LIB int64 nt;
 EXTERN_LIB vector<Node*> free_buffer;
+EXTERN_LIB uint8 node_order;
+
+inline static Node* get_node(int64 id) 
+{ return  lived_nodes_id.count(id) ? lived_nodes_id[id] : nullptr; }
 
 struct NodeFlags {
     typedef uint32 nf_t;
@@ -29,12 +34,14 @@ struct NodeFlags {
         _stop_grad=2,
         // bit3: is fetch
         _fetch=3,
-        _n=4,
+        // bit4: node order low
+        _node_order_low=4,
+        _node_order_high=5,
+        _n=6,
 
         // var related flags
         _force_fuse=_n+0,
         _stop_fuse=_n+1,
-        _in_update_queue=_n+2,
         _needed_by_backward=_n+3,
         _out_hint=_n+4,
 
@@ -129,19 +136,28 @@ struct Node {
     list<input_t> _inputs;
     list<output_t> _outputs;
 
-#ifdef NODE_MEMCHECK
-    inline Node() {
-        lived_nodes[(void*)this] = id = ++total_node;
+    int64 order() {
+        if (flags.get(NodeFlags::_node_order_low)) return 0;
+        if (flags.get(NodeFlags::_node_order_high)) return 1ll<<60;
+        return id;
     }
 
-    inline virtual ~Node() {
+    inline Node() {
+        id = ++total_node;
+        #ifdef NODE_MEMCHECK
+        lived_nodes_id[id] = this;
+        lived_nodes[(void*)this] = id;
+        #endif
+        flags.set(NodeFlags::_node_order_low, node_order, 2);
+    }
+    inline virtual ~Node() { 
+        #ifdef NODE_MEMCHECK
+        lived_nodes_id.erase(id);
         lived_nodes.erase((void*)this);
+        #endif
         if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var)) trace_data.release_node(this);
     }
-#else
-    inline Node() { id = ++total_node; };
-    inline virtual ~Node() { if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var)) trace_data.release_node(this);};
-#endif
+
     inline Var* var() { return (Var*)this; }
     inline Op* op() { return (Op*)this; }
     inline Node* node() { return this; }
@@ -155,13 +171,6 @@ struct Node {
     #endif
     }
     void memcheck_all_exist() const;
-    inline int64 __id() const {
-    #ifdef NODE_MEMCHECK
-        return lived_nodes.at((void*)this);
-    #else
-        return 0;
-    #endif
-    }
     // release from counter and memory checker
     void __release();
     #define CHECK_NODE_EXIST(node) \

@@ -194,14 +194,11 @@ class TestArray(unittest.TestCase):
                 np.testing.assert_allclose(a, c)
 
     def test_scalar_fuse_unary(self):
+        c = jt.ones(10)
+        jt.sync_all()
         with jt.profile_scope() as rep:
-            a = jt.array([1])
-            b = -a
-            a = a.clone()
-            b = b.clone()
-            jt.sync([a, b])
-            assert a.data == 1
-            assert b.data == -1
+            b = c-1
+            assert b.data[1] == 0
         assert len(rep) == 2
         
     @unittest.skipIf(not jt.has_cuda, "Cuda not found")

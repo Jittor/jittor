@@ -13,7 +13,6 @@
 #include "var.h"
 #include "executor.h"
 #include "graph.h"
-#include "update_queue.h"
 #include "mem/allocator/cuda_dual_allocator.h"
 #include "ops/op_register.h"
 
@@ -27,7 +26,7 @@ list<VarHolder*>::iterator sync_ptr = hold_vars.end();
 void add_hold_vars(VarHolder* self) {
     hold_vars.push_front(self);
     self->iter = hold_vars.begin();
-    if (lazy_execution) return;
+    if (lazy_execution && Op::number_of_lived_ops < 100000) return;
     auto v = self->var;
     for (int i=0; i<5; i++) {
         auto op = v->input();
@@ -115,19 +114,15 @@ VarHolder* VarHolder::assign(VarHolder* v) {
 }
 
 VarHolder* VarHolder::update(VarHolder* v) {
-    auto dv = jittor::detach(v->var);
-    update_queue.push(dv.ptr, var);
-    *this = move(dv);
-    return this;
+    v->var->flags.set(NodeFlags::_out_hint);
+    return assign(v);
 }
 
 VarHolder* VarHolder::_update(VarHolder* v) {
-    auto dv = jittor::detach(v->var);
-    if (var->flags.get(NodeFlags::_in_update_queue))
-        update_queue.push(dv.ptr, var);
+    v->var->own_both_liveness();
     var->release_both_liveness();
-    var = dv.ptr;
-    dv.ptr = nullptr;
+    var = v->var;
+    var->flags.set(NodeFlags::_out_hint);
     return this;
 }
 
