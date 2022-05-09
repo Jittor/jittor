@@ -149,7 +149,8 @@ namespace jit_compiler {
 
 std::mutex dl_open_mutex;
 
-jit_op_entry_t load_jit_lib(string name, string symbol_name="jit_entry") {
+jit_op_entry_t load_jit_lib(
+    string name, string symbol_name="jit_entry", const string& extra_flags="") {
     std::lock_guard<std::mutex> lock(dl_open_mutex);
     const char* msg = "";
     LOGvv << "Opening jit lib:" << name;
@@ -158,10 +159,16 @@ jit_op_entry_t load_jit_lib(string name, string symbol_name="jit_entry") {
         LOAD_LIBRARY_SEARCH_DEFAULT_DIRS |
         LOAD_LIBRARY_SEARCH_USER_DIRS);
     #elif defined(__linux__)
-    void* handle = dlopen(name.c_str(), RTLD_LAZY | RTLD_DEEPBIND | RTLD_LOCAL);
+    auto flags = RTLD_LAZY | RTLD_DEEPBIND | RTLD_LOCAL;
+    if (extra_flags.find("GLOBAL_VAR") != string::npos)
+        flags = RTLD_LAZY | RTLD_DEEPBIND | RTLD_GLOBAL;
+    void* handle = dlopen(name.c_str(), flags);
     msg = dlerror();
     #else
-    void *handle = dlopen(name.c_str(), RTLD_NOW | RTLD_LOCAL);
+    auto flags = RTLD_LAZY | RTLD_LOCAL;
+    if (extra_flags.find("GLOBAL_VAR") != string::npos)
+        flags = RTLD_LAZY | RTLD_GLOBAL;
+    void *handle = dlopen(name.c_str(), flags);
     msg = dlerror();
     #endif
 
@@ -255,7 +262,7 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
     }
 #endif
     cache_compile(cmd, cache_path, jittor_path);
-    auto jit_entry = load_jit_lib(jit_lib_path, symbol_name);
+    auto jit_entry = load_jit_lib(jit_lib_path, symbol_name, extra_flags);
     return jit_entry;
 }
 

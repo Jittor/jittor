@@ -40,7 +40,25 @@ class TestCodeOp(unittest.TestCase):
         # print(b[0])
         assert b[0].item() == 233
 
+    def test_global_var(self):
+        header = """
+        namespace jittor {
+            extern int a_global_int_var;
+        }
+        """
+        src = """
+        namespace jittor {
+            int a_global_int_var = 123;
+        }
+        """
+        with jt.flag_scope(compile_options={"FLAGS:-DGLOBAL_VAR":1}):
+            jt.code([1], "int", [], cpu_header=header+src, cpu_src=" ").sync()
 
+        # use the global var
+        assert jt.code([1], "int", [], cpu_header=header, 
+            cpu_src="out0_p[0] = ++a_global_int_var; ").item() == 124
+        assert jt.code([1], "int", [], cpu_header=header,
+            cpu_src="out0_p[0] = ++a_global_int_var; ").item() == 125
 
     def test_use_func(self):
         class Func(Function):
