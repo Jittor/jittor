@@ -809,6 +809,7 @@ class Conv(Module):
         self.groups = groups
         self.is_depthwise_conv = self.groups == self.out_channels and self.groups == self.in_channels
         if self.is_depthwise_conv and jt.flags.use_cuda:
+            print("??????")
             self.depthwise_conv = DepthwiseConv(stride, padding, dilation)
         assert in_channels % groups == 0, 'in_channels must be divisible by groups'
         assert out_channels % groups == 0, 'out_channels must be divisible by groups'
