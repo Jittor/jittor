@@ -8,6 +8,7 @@
 #include "grad.h"
 #include "pyjt/py_obj_holder.h"
 #include "init.h"
+#include "pyjt/numpy.h"
 #include "utils/seh.h"
 
 namespace jittor {
@@ -34,6 +35,7 @@ vector<VarHolder*> _grad(VarHolder* loss, const vector<VarHolder*>& targets, boo
 static void init_module(PyModuleDef* mdef, PyObject* m) {
     mdef->m_doc = "Inner c++ core of jittor";
     jittor::init();
+    jittor::numpy_init();
     jittor::pyjt_def_all(m);
 }
 PYJT_MODULE_INIT(jittor_core);

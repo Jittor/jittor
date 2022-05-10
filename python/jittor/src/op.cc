@@ -20,6 +20,7 @@
 namespace jittor {
 
 DECLARE_FLAG(string, cache_path);
+DECLARE_FLAG(uint8, th_mode);
 
 DEFINE_FLAG(int, try_use_32bit_index, 0,
     "If not overflow, try to use 32 bit type as index type.");
@@ -86,6 +87,11 @@ void Op::init() {
     if (need_sync) {
         exe.run_sync(vector<Var*>({need_sync}), false);
         CHECK(need_sync->num >= 0) << need_sync << "'s shape is error";
+    }
+    if (th_mode) {
+        for (Var* v : outputs()) {
+            v->set_stop_grad();
+        }
     }
 }
 

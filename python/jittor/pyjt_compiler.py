@@ -897,7 +897,6 @@ def compile(cache_path, jittor_path):
         pyjt_names.append(fname)
     
     code = f"""
-    #include "pyjt/numpy.h"
     #include "pyjt/py_converter.h"
     #include "common.h"
 
@@ -906,7 +905,6 @@ def compile(cache_path, jittor_path):
     { " ".join([f"extern void pyjt_def_{n}(PyObject* m);" for n in basenames])}
 
     void pyjt_def_all(PyObject* m) {{
-        numpy_init();
         { " ".join([f"pyjt_def_{n}(m);" for n in basenames])}
     }}
 

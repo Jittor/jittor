@@ -22,6 +22,7 @@ DEFINE_FLAG(bool, no_grad, 0,
 DEFINE_FLAG(bool, no_fuse, 0, 
     "No fusion optimization for all jittor Var creation");
 DEFINE_FLAG(uint8, node_order, 0, "id prior");
+DEFINE_FLAG(uint8, th_mode, 0, "th mode");
 // TODO: fuse multiple flags
 DEFINE_FLAG(int, amp_reg, 0, "Auto mixed-precision control registers, bit 0: prefer 32; bit 1: prefer 16; bit 2: keep reduce type; bit 3 keep white list type; bit 4: array like op prefer too");
 
@@ -54,7 +55,6 @@ string Var::to_string() {
 }
 
 int64 Var::numel() {
-    if (!shape.size()) return size=num=-1;
     bool negtive = 0;
     num=1;
     for (auto k : shape) {
