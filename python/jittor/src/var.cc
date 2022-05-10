@@ -10,7 +10,6 @@
 #include "op.h"
 #include "mem/allocator.h"
 #include "pybind/py_var_tracer.h"
-#include "update_queue.h"
 
 namespace jittor {
 
@@ -22,6 +21,7 @@ DEFINE_FLAG(bool, no_grad, 0,
     "No grad for all jittor Var creation");
 DEFINE_FLAG(bool, no_fuse, 0, 
     "No fusion optimization for all jittor Var creation");
+DEFINE_FLAG(uint8, node_order, 0, "id prior");
 // TODO: fuse multiple flags
 DEFINE_FLAG(int, amp_reg, 0, "Auto mixed-precision control registers, bit 0: prefer 32; bit 1: prefer 16; bit 2: keep reduce type; bit 3 keep white list type; bit 4: array like op prefer too");
 
@@ -103,9 +103,6 @@ std::ostream& operator<<(std::ostream& os, const Var& var) {
         << ',' 
         << var.dtype().to_cstring() << ',' << var.name << ',' << std::hex <<(uint64)var.mem_ptr << std::dec
         << ')' << var.shape;
-#ifdef NODE_MEMCHECK
-    os << '<' << var.__id() << '>';
-#endif
     if (trace_py_var) {
         os << '{';
         print_node_trace(&var, os);

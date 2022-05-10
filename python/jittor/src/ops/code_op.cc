@@ -39,6 +39,9 @@ CodeOp::CodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs,
     if (_outputs[0]->num < 0) {
         check_vary_shape(_outputs[0]->shape);
     }
+    if (this->cuda_grad_src.size() == 0 && this->cpu_grad_src.size() == 0) {
+        flags.set(NodeFlags::_manual_set_vnbb);
+    }
 }
 
 
@@ -60,6 +63,8 @@ CodeOp::CodeOp(
             check_vary_shape(_outputs[i]->shape);
         }
     }
+    if (this->cuda_grad_src.size() == 0 && this->cpu_grad_src.size() == 0)
+        flags.set(NodeFlags::_manual_set_vnbb);
 }
 
 CodeOp::CodeOp(
@@ -81,6 +86,8 @@ CodeOp::CodeOp(
             TODO: vary shape not allowed in direct output
         */
     }
+    if (this->cuda_grad_src.size() == 0 && this->cpu_grad_src.size() == 0)
+        flags.set(NodeFlags::_manual_set_vnbb);
 }
 
 

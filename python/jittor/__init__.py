@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.3.13'
+__version__ = '1.3.4.3'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -1526,7 +1526,8 @@ def jittor_exit():
     elif hooks.exception is not None:
         pass
     else:
-        core.sync_all(True)
+        pass
+        # core.sync_all(True)
     core.cleanup()
 atexit.register(jittor_exit)
 

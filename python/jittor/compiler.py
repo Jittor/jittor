@@ -1148,7 +1148,10 @@ if os.name == 'nt':
             return cmd
 
 if ' -O' not in cc_flags:
-    opt_flags += " -O2 "
+    if os.environ.get("debug", "0") == "1":
+        opt_flags += " -O0 "
+    else:
+        opt_flags += " -O2 "
     kernel_opt_flags += " -Ofast "
 lto_flags = ""
 if os.environ.get("enable_lto") == "1":

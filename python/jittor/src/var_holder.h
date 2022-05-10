@@ -204,7 +204,8 @@ struct VarHolder {
     inline VarHolder* start_grad() {
         if (!var->dtype().is_float())
             LOGw << "cannot enable grad of a non-float value:" << var;
-        _update(this);
+        auto dvar = jittor::detach(var);
+        std::swap(dvar.ptr, var);
         return this;
     }
 
