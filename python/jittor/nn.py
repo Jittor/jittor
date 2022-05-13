@@ -347,7 +347,8 @@ class PReLU(Module):
             return jt.maximum(0, x) + self.weight * jt.minimum(0, x)
 
 #TODO dims is 4 will cause slowly execution
-def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction='sum'):
+def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction='mean'):
+    target_shape = target.shape
     if len(output.shape) == 4:
         c_dim = output.shape[1]
         output = output.transpose((0, 2, 3, 1))
@@ -371,11 +372,11 @@ def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction=
     logsum = output.exp().sum(1).log()
     loss = (logsum - (output*target).sum(1)) * target_weight
     if reduction == 'sum':
-        return loss.sum() / target_weight.sum()
+        return loss.sum()
     elif reduction == 'mean':
         return loss.mean() / target_weight.mean()
     else:
-        return loss / target_weight
+        return loss.reshape(target_shape) 
 
 def mse_loss(output, target):
     return (output-target).sqr().mean()
