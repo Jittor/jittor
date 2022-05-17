@@ -11,6 +11,7 @@
 #include "var.h"
 #include "cublas_matmul_op.h"
 #include "cublas_wrapper.h"
+#include "ops/op_register.h"
 
 using namespace std;
 
@@ -47,6 +48,27 @@ void CublasMatmulOp::infer_shape() {
     }
     ASSERTop(m,==,m_);
     c->set_shape({n, k});
+}
+
+static auto make_cublas_matmul = get_op_info("cublas_matmul")
+    .get_constructor<VarPtr, Var*, Var*, bool, bool>();
+
+VarPtr CublasMatmulOp::grad(Var* out, Var* dout, Var* v, int v_index) {
+    // a [b,n,m] b [b,m,k], c[b,n,k]
+    // c = a*b
+    if (v_index == 0) {
+        if (trans_a)
+            return make_cublas_matmul(b, dout, trans_b, 1);
+        else
+            // da = dc*b^T
+            return make_cublas_matmul(dout, b, 0, trans_b^1);
+    } else {
+        if (trans_b)
+            return make_cublas_matmul(dout, a, 1, trans_a);
+        else
+            // db = a^T*dc
+            return make_cublas_matmul(a, dout, trans_a^1, 0);
+    }
 }
 
 void CublasMatmulOp::jit_prepare(JK& jk) {

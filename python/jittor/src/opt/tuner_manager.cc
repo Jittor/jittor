@@ -43,20 +43,31 @@ string TunerManager::tune() {
     run_tuner<ReduceTuner>(&pm);
     run_tuner<MatmulTuner>(&pm);
     run_tuner<ConvTuner>(&pm);
-
+    // if (pm.all.to_string().find("define op4_index_t int32") != string::npos)
+    //     LOGir << "?????" << pm.all.to_string();
     // use the best tuner if it is confidence enough
     if (best_tuner && best_tuner->confidence) {
-        if (jit_search_kernel)
+        
+        if (jit_search_kernel) {
+            // LOGir << "?????" << pm.all.to_string();
             searcher.search(best_tuner->candidates);
+        }
         else {
             if (best_tuner->confidence >= 10) {
                 auto& loop_options = oc->op->get_loop_options_tuned();
                 for (auto& kv : best_tuner->candidates)
                     loop_options[kv.first] = kv.second.front();
                 oc->op->update_jit_key();
-                PassManager pm(oc);
+                // if (oc->get_src().find("define op4_index_t int32") != string::npos)
+                //     LOGir << "?????" << oc->get_src(); 
+                string* src = &oc->src; 
+                PassManager pm(oc); 
+                // if (pm.all.to_string().find("define op4_index_t int32") != string::npos)
+                //     LOGir << "?????" << pm.all.to_string();  
                 pm.run_passes();
                 src_after_passes = pm.all.to_string();
+                // if (pm.all.to_string().find("58aff3bc47edee4") != string::npos)
+                //     LOGir << "?????" << pm.all.to_string();
             }
         }
     }

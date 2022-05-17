@@ -63,8 +63,10 @@ bool PassManager::check(Pass* pass) {
 }
 
 void PassManager::run_passes() {
+    if(oc->op->get_hash_name() == "58aff3bc47edee4")
+        LOGir << "hahaha1" << all.to_string();
     auto& ir = *main_ir;
-
+    // LOGir << all.to_string();
     LOGvvvv << "KernelIR:\n" << ir.to_string();
     if (oc->op->ops.size() == 1 && oc->op->ops[0]->name() == string("array")) {
         ir.remove_all_unused();
@@ -77,6 +79,7 @@ void PassManager::run_passes() {
         }
         return;
     }
+
     run_pass<MarkRawPass>();
     run_pass<ReplaceForNumPass>();
     run_pass<LoopVarAnalyzePass>();
@@ -96,7 +99,6 @@ void PassManager::run_passes() {
     run_pass<MergeLoopVarPass>();
     // tmp disable ConstVarPass
     // run_pass<ConstVarPass>();
-
     run_pass<RestridePass>();
     
     if (cc_type == "icc") {
@@ -106,17 +108,21 @@ void PassManager::run_passes() {
         run_pass<UnrollPass>();
     }
     run_pass<UseMovntPass>();
+
     run_pass<CheckCachePass>();
+
     run_pass<LoopToFuncPass>();
+    // if(all.to_string().find("58aff3bc47edee4") != string::npos)
+    //     LOGir << "hahaha1" << all.to_string();
     run_pass<AssumeAlignedPass>();
+
     run_pass<ParallelPass>();
     run_pass<AtomicTunerPass>();
+
     run_pass<FloatAtomicFixPass>();
-    
     run_pass<InsertProfileLoopPass>();
     
     run_pass<SolveConflictDefinePass>();
-    
     run_pass<FakeMainPass>();
 }
 

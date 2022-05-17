@@ -19,6 +19,7 @@ struct CublasMatmulOp : Op {
     
     const char* name() const override { return "cublas_matmul"; }
     void infer_shape() override;
+    VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;
     DECLARE_jit_run;
 };
 

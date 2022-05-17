@@ -8,6 +8,7 @@
 #include "utils/str_utils.h"
 #include "ops/op_register.h"
 #include "op_compiler.h"
+#include "fused_op.h"
 
 namespace jittor {
 
@@ -35,7 +36,7 @@ struct FP16OpType : OpByType {
             {"logical_not", "(!($2))"},
             {"bitwise_not", "(~($2))"},
             {"negative", "(-($2))"},
-            {"abs", "::abs($2)"},
+            {"abs", "::__habs($2)"},
             {"log", "::hlog(($1)($2))"},
             {"exp", "::hexp(($1)($2))"},
             {"sqrt", "::hsqrt(($1)($2))"},
@@ -171,6 +172,10 @@ struct FP16OpType : OpByType {
 
     void post_pass(OpCompiler* oc) {
         string& src = oc->src;
+        if(oc->op && oc->op->get_hash_name() == "58aff3bc47edee4")
+            LOGir << src;
+        // if (src.find("ops/broadcast_to_op.h") != string::npos && src.find("<limits>") == string::npos)
+        //     LOGir << "sssss " << src;
         if (src.find("float16") == string::npos)
             return;
         int i = src.rfind("#include");
@@ -178,6 +183,7 @@ struct FP16OpType : OpByType {
         i = src.find('\n', i) + 1;
         src = src.substr(0, i) + "#include \"type/fp16_compute.h\"\n" + 
             src.substr(i);
+    // LOGir << "eeeee " << src;
         return;
     }
 };
