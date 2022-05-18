@@ -496,14 +496,12 @@ def softmax(x, dim=None, log=False):
     import jittor.other.code_softmax as code_softmax
     if code_softmax.can_softmax_v1(x, dim):
         return code_softmax.softmax_v1(x, log)
-    if dim is None:
-        x = (x - x.max()).exp()
-        ret = x / x.sum()
-    else:
-        x = (x-x.max(dim, keepdims=True)).exp()
-        ret = x / x.sum(dim, keepdims=True)
-    if log: return ret.log()
-    return ret
+    if dim is None: dim = ()
+    if log:
+        a = x-x.max(dim, keepdims=True)
+        return a - a.exp().sum(dim, keepdims=True).log()
+    x = (x-x.max(dim, keepdims=True)).exp()
+    return x / x.sum(dim, keepdims=True)
 jt.Var.softmax = softmax
 
 def log_softmax(x,dim=None):
