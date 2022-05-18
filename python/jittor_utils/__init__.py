@@ -47,7 +47,7 @@ def home():
     _home_path = os.environ.get("JITTOR_HOME", default_path)
     
     if not os.path.exists(_home_path):
-        _home_path = default_path
+        os.makedirs(_home_path, exist_ok=True)
     _home_path = os.path.abspath(_home_path)
     
     # LOG.i(f"Use {_home_path} as Jittor Home")
