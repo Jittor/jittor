@@ -622,7 +622,10 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
             check_nan(var);
         #endif
         #ifdef JT_SYNC
+        #ifdef HAS_CUDA
+        checkCudaErrors(cudaGetLastError());
         checkCudaErrors(cudaDeviceSynchronize());
+        #endif
         #endif
         LOGvvv << "Finished Op(" >> op->name() << rid >> 
             "/" >> queue.size() >> ") output:" << op->outputs();

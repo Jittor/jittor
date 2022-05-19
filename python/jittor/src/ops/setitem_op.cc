@@ -132,6 +132,7 @@ void SetitemOp::infer_shape() {
 }
 
 void SetitemOp::grads(Var** dout, VarPtr* dins) {
+    if (!dout[0]) return;
     auto outs = make_getitem2(dout[0], VarSlices(vs, true), 0);
     dins[0] = move(outs[1]);
     dins[1] = move(outs[0]);
