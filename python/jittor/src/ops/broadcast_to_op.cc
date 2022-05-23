@@ -167,9 +167,9 @@ void BroadcastToOp::infer_shape() {
 }
 
 void BroadcastToOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype()
-        << _CS("][DIM=") << JK::hex1(z->shape.size())
-        << _CS("][BCAST=") << JK::hex(bcast_mask) << ']';
+    jk << "«Tx:" << x->dtype()
+        << "«DIM=" << JK::hex1(z->shape.size())
+        << "«BCAST=" << JK::hex(bcast_mask);
 }
 
 #else // JIT

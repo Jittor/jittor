@@ -81,7 +81,7 @@ def test_case(box_num, out_size, time_limit):
     for i in range(1, len(rep)):
         t += float(rep[i][3]) / 1e9
         name = rep[i][0]
-        if name.startswith('[') and (not '[graph:]' in name):
+        if name.startswith('«') and (not '«graph:«' in name):
             fused_op_num += 1
     assert fused_op_num == 1, fused_op_num
     assert t <= time_limit, t

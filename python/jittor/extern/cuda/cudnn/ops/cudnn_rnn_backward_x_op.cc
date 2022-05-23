@@ -79,10 +79,9 @@ void CudnnRnnBackwardXOp::infer_shape() {
 }
 
 void CudnnRnnBackwardXOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << hx->dtype();
-    jk << _CS("][Ty:") << y->dtype();
-    jk << _CS("][Tw:") << w->dtype();
-    jk << ']';
+    jk << "«Tx:" << hx->dtype();
+    jk << "«Ty:" << y->dtype();
+    jk << "«Tw:" << w->dtype();
 }
 
 #else // JIT

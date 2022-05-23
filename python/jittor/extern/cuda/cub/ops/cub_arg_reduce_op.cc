@@ -59,13 +59,13 @@ void CubArgReduceOp::infer_shape() {
 }
 
 void CubArgReduceOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype();
-    jk << _CS("][Toffsets:") << offsets->dtype();
-    jk << _CS("][FUNC:");
+    jk << "«Tx:" << x->dtype();
+    jk << "«Toffsets:" << offsets->dtype();
+    jk << "«FUNC:";
     if (op==ns_minimum)
-        jk << _CS("ArgMin]");
+        jk << "ArgMin";
     else 
-        jk << _CS("ArgMax]");
+        jk << "ArgMax";
 }
 
 #else // JIT

@@ -20,7 +20,7 @@ NcclTestOp::NcclTestOp(string cmd) : cmd(cmd) {
 }
 
 void NcclTestOp::jit_prepare(JK& jk) {
-    jk << _CS("[T:float32]");
+    jk << "«T:float32";
 }
 
 #else // JIT

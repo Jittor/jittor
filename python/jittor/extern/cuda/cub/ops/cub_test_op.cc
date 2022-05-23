@@ -24,7 +24,7 @@ CubTestOp::CubTestOp(string cmd) : cmd(cmd) {
 }
 
 void CubTestOp::jit_prepare(JK& jk) {
-    jk << _CS("[T:float32]");
+    jk << "«T:float32";
 }
 
 #else // JIT
