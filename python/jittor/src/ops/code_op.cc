@@ -123,18 +123,18 @@ void CodeOp::jit_prepare(JK& jk) {
 
     // forward: in0 in1 in2 -> out0 out1
     // backward: in0 in1 in2 in3(pout0) in4(pout1)
-    jk << _CS("[IN_SIZE=") << JK::hex(_inputs.size());
+    jk << "«IN_SIZE=" << JK::hex(_inputs.size());
     for (uint i=0; i<_inputs.size(); i++) {
-        jk << _CS("][in") << JK::hex(i) << _CS("_dim=")
+        jk << "«in" << JK::hex(i) << "_dim="
             << JK::hex1(_inputs[i]->shape.size());
-        jk << _CS("][in") << JK::hex(i) << _CS("_type:")
+        jk << "«in" << JK::hex(i) << "_type:"
             << _inputs[i]->dtype();
     }
-    jk << _CS("][OUT_SIZE=") << JK::hex(_outputs.size());
+    jk << "«OUT_SIZE=" << JK::hex(_outputs.size());
     for (uint i=0; i<_outputs.size(); i++) {
-        jk << _CS("][out") << JK::hex(i) << _CS("_dim=")
+        jk << "«out" << JK::hex(i) << "_dim="
             << JK::hex1(_outputs[i]->shape.size());
-        jk << _CS("][out") << JK::hex(i) << _CS("_type:")
+        jk << "«out" << JK::hex(i) << "_type:"
             << _outputs[i]->dtype();
     }
     string& header = flags.get(NodeFlags::_cuda) ? 
@@ -142,9 +142,9 @@ void CodeOp::jit_prepare(JK& jk) {
     string& src = flags.get(NodeFlags::_cuda) ? 
         cuda_src : cpu_src;
 
-    jk << _CS("][HEADER:") << header;
+    jk << "«HEADER:" << header;
     CHECK(src.size());
-    jk << _CS("\nnamespace jittor {\n");
+    jk << "\nnamespace jittor {\n";
     int i=0;
     // move cuda kernel function into header
     for (; i<src.size(); i++) {
@@ -165,9 +165,8 @@ void CodeOp::jit_prepare(JK& jk) {
             }
         } else break;
     }
-    jk << _CS("}][CODE:");
+    jk << "}«CODE:";
     for (; i<src.size(); i++) jk << src[i];
-    jk << ']';
 }
 
 } // jittor

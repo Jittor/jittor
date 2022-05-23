@@ -25,8 +25,8 @@ CurandRandomOp::CurandRandomOp(NanoVector shape, NanoString dtype, NanoString ty
 }
 
 void CurandRandomOp::jit_prepare(JK& jk) {
-    jk << _CS("[T:") << output->dtype();
-    jk << _CS("][R:") << type << ']';
+    jk << "«T:" << output->dtype();
+    jk << "«R:" << type;
 }
 
 #else // JIT

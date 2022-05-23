@@ -540,10 +540,10 @@ void BinaryOp::infer_shape() {
 }
 
 void BinaryOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype()
-        << _CS("][Ty:") << y->dtype()
-        << _CS("][Tz:") << z->dtype()
-        << _CS("][OP:") << ns << ']';
+    jk << "«Tx:" << x->dtype()
+        << "«Ty:" << y->dtype()
+        << "«Tz:" << z->dtype()
+        << "«OP:" << ns;
 }
 
 #else // JIT

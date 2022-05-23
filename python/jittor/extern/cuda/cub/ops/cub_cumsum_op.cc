@@ -38,10 +38,9 @@ void CubCumsumOp::infer_shape() {
 }
 
 void CubCumsumOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype();
-    jk << _CS("][Ty:") << y->dtype();
-    jk << _CS("][reverse:") << reverse;
-    jk << _CS("]");
+    jk << "«Tx:" << x->dtype();
+    jk << "«Ty:" << y->dtype();
+    jk << "«reverse:" << reverse;
 }
 
 VarPtr CubCumsumOp::grad(Var* out, Var* dout, Var* v, int v_index) {

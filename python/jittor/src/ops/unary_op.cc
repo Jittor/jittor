@@ -681,9 +681,9 @@ void UnaryOp::infer_shape() {
 }
 
 void UnaryOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype()
-        << _CS("][Ty:") << y->dtype()
-        << _CS("][OP:") << ns << ']';
+    jk << "«Tx:" << x->dtype()
+        << "«Ty:" << y->dtype()
+        << "«OP:" << ns;
 }
 
 #else // JIT
