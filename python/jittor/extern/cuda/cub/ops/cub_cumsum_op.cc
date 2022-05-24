@@ -60,12 +60,15 @@ __global__ void BlockScanKernel(Tx* __restrict__ xp, Ty* __restrict__ yp, int ba
 
     int batch_id = blockIdx.x;
     int offset = threadIdx.x * ITEMS_PER_THREAD;
+    __shared__ Tx prefix_sum[1];
+    prefix_sum[0] = 0;
+
     for (int block_offset = offset; block_offset < num_items; block_offset += BLOCK_THREADS * ITEMS_PER_THREAD) {
         int items = ITEMS_PER_THREAD;
         if (block_offset + ITEMS_PER_THREAD > num_items) {
             items = num_items - block_offset;
         }
-        Tx thread_data[ITEMS_PER_THREAD];
+        Tx thread_data[ITEMS_PER_THREAD] = {0};
         #pragma unroll
         for (int i = 0; i < ITEMS_PER_THREAD; ++i) {
             if (i<items)
@@ -75,6 +78,8 @@ __global__ void BlockScanKernel(Tx* __restrict__ xp, Ty* __restrict__ yp, int ba
                 thread_data[i] = xp[batch_id * num_items + block_offset + i];
                 #endif
         }
+        if (threadIdx.x == 0)
+            thread_data[0] += prefix_sum[0];
         BlockScanT(temp_storage).InclusiveSum(thread_data, thread_data);
         __syncthreads();
         #pragma unroll
@@ -86,6 +91,9 @@ __global__ void BlockScanKernel(Tx* __restrict__ xp, Ty* __restrict__ yp, int ba
                 yp[batch_id * num_items + block_offset + i] = thread_data[i];
                 #endif
         }
+        if (threadIdx.x == BLOCK_THREADS-1)
+            prefix_sum[0] = thread_data[ITEMS_PER_THREAD - 1];
+        __syncthreads();
     }
 }
 
