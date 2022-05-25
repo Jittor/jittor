@@ -644,6 +644,25 @@ DEF_IS_1(fast_shared_ptr, T) from_py_object(PyObject* obj) {
     return from_py_object<typename T::value_type>(obj);
 }
 
+CHECK_IS_1(Maybe);
+
+DEF_IS_1(Maybe, bool) is_type(PyObject* obj) {
+    return obj == Py_None || 
+        is_type<typename T::value_type*>(obj);
+}
+
+DEF_IS_1(Maybe, PyObject*) to_py_object(T a) {
+    if (a)
+        return to_py_object<typename T::value_type*>(a.ptr);
+    Py_INCREF(Py_None);
+    return Py_None;
+}
+
+DEF_IS_1(Maybe, T) from_py_object(PyObject* obj) {
+    if (obj == Py_None) return T();
+    return T(from_py_object<typename T::value_type*>(obj));
+}
+
 DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj) {
     // PyObject_Call
     Py_INCREF(obj);

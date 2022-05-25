@@ -32,6 +32,7 @@ typedef struct _object PyObject;
 
 EXTERN_LIB list<VarHolder*> hold_vars;
 EXTERN_LIB list<VarHolder*>::iterator sync_ptr;
+extern uint8 th_mode;
 
 // @pyjt(Var)
 // @attrs(heaptype)
@@ -187,14 +188,7 @@ struct VarHolder {
      * @see stop_grad
      */ 
     // @pyjt(__set__requires_grad)
-    inline void set_requires_grad(bool flag) {
-        if (flag == get_requires_grad()) return;
-        if (flag)
-            start_grad();
-        else
-            stop_grad(); 
-        return;
-    }
+    void set_requires_grad(bool flag);
 
     /** 
      * enable the gradient calculation for the Var.
