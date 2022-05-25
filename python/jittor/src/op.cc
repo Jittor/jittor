@@ -89,9 +89,17 @@ void Op::init() {
         CHECK(need_sync->num >= 0) << need_sync << "'s shape is error";
     }
     if (th_mode) {
-        for (Var* v : outputs()) {
-            v->set_stop_grad();
+        bool stop_grad = true;
+        for (Var* v : inputs()) {
+            if (!v->is_stop_grad()) {
+                stop_grad = false;
+                break;
+            }
         }
+        if (stop_grad)
+            for (Var* v : outputs()) {
+                v->set_stop_grad();
+            }
     }
 }
 
@@ -301,7 +309,7 @@ std::ostream& operator<<(std::ostream& os, const Op* op) {
         if (v->name.size())
             os << "->" << v->name;
         else
-            os << "->" << (void*)v;
+            os << "->" << v->id;
     }
     os << ')';
     if (trace_py_var) {

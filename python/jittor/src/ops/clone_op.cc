@@ -40,4 +40,8 @@ VarPtr detach(Var* x) {
     return y;
 }
 
+VarPtr clone(Var* x) {
+    return make_clone(x);
+}
+
 } // jittor

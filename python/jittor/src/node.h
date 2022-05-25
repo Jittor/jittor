@@ -44,6 +44,7 @@ struct NodeFlags {
         _stop_fuse=_n+1,
         _needed_by_backward=_n+3,
         _out_hint=_n+4,
+        _th_require_grad=_n+5,
 
         // op related flags
         // bit0: support cpu

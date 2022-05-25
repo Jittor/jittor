@@ -28,6 +28,8 @@ DEFINE_FLAG(int, amp_reg, 0, "Auto mixed-precision control registers, bit 0: pre
 
 DEFINE_FLAG_WITH_SETTER(int, auto_mixed_precision_level, 0, "Auto mixed-precision optimization level, 0: not use fp16, 1-3: preserve level, not use fp16 for now; 4: perfer fp16, but some ops use fp32 e.g. sum,exp; 5: simular with 4, and array op will automatically convert to fp16; 6: all ops prefer fp16");
 
+void (*_var_free_hook)(Var*);
+
 void setter_auto_mixed_precision_level(int value) {
     if (value <= 3) amp_reg = 0; else
     if (value == 4) amp_reg = amp_prefer16; else
@@ -67,6 +69,7 @@ int64 Var::numel() {
     }
     size = num * dsize();
     if (negtive) num = -num;
+    if (shape.size() == 0) {shape.push_back(1);}
     return num;
 }
 
@@ -90,6 +93,21 @@ bool Var::alloc(Allocator* allocator) {
     return mem_ptr;
 }
 
+VarPtr clone(Var* x);
+void VarPtr::set_stop_grad(bool stop_grad) {
+    if (stop_grad == ptr->is_stop_grad()) return;
+    if (stop_grad)
+        ptr->set_stop_grad();
+    else {
+        bool no_grad_bk = no_grad;
+        auto th_mode_bk = th_mode;
+        no_grad = 0;
+        th_mode = 0;
+        *this = clone(ptr);
+        no_grad = no_grad_bk;
+        th_mode = th_mode_bk;
+    }
+}
 
 std::ostream& operator<<(std::ostream& os, const Var& var) {
     os << "Var" << '(' << var.id

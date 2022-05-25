@@ -377,8 +377,8 @@ def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction=
     else:
         return loss / target_weight
 
-def mse_loss(output, target):
-    return (output-target).sqr().mean()
+def mse_loss(output, target, reduction="mean"):
+    return (output-target).sqr().reduce(reduction)
 
 def bce_loss(output, target, weight=None, size_average=True):
     loss = - (target * jt.log(jt.maximum(output, 1e-20)) + (1 - target) * jt.log(jt.maximum(1 - output, 1e-20)))
@@ -449,10 +449,10 @@ class CrossEntropyLoss(Module):
         return cross_entropy_loss(output, target, self.weight, self.ignore_index)
 
 class MSELoss(Module):
-    def __init__(self):
-        pass
+    def __init__(self, reduction='mean'):
+        self.reduction = reduction
     def execute(self, output, target):
-        return mse_loss(output, target)
+        return mse_loss(output, target, self.reduction)
 
 class BCELoss(Module):
     def __init__(self, weight=None, size_average=True):
@@ -756,6 +756,7 @@ LeakyReLU = Leaky_relu
 ReLU6 = jt.make_module(relu6)
 Softmax = jt.make_module(softmax, 2)
 GELU = jt.make_module(gelu)
+Flatten = jt.make_module(jt.flatten)
 
 from jittor.depthwise_conv import DepthwiseConv
 
