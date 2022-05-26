@@ -44,9 +44,9 @@ void MklMatmulOp::infer_shape() {
 }
 
 void MklMatmulOp::jit_prepare(JK& jk) {
-    jk << _CS("[T:") << a->dtype();
-    jk << _CS("][Trans_a:") << (trans_a ? 'T' : 'N');
-    jk << _CS("][Trans_b:") << (trans_b ? 'T' : 'N') << ']';
+    jk << "«T:" << a->dtype();
+    jk << "«Trans_a:" << (trans_a ? 'T' : 'N');
+    jk << "«Trans_b:" << (trans_b ? 'T' : 'N');
 }
 
 #else // JIT

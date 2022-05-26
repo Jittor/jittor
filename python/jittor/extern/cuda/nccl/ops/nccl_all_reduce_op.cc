@@ -37,7 +37,7 @@ VarPtr NcclAllReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 }
 
 void NcclAllReduceOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype() << ']';
+    jk << "«Tx:" << x->dtype();
 }
 
 #else // JIT

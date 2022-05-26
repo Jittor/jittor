@@ -74,12 +74,11 @@ VarPtr FuseTransposeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 void FuseTransposeOp::jit_prepare(JK& jk) {
     auto bc = type()==OpType::broadcast;
     auto ax = bc ? axes : get_reverse(axes);
-    jk << _CS("[Tx:") << x->dtype();
-    jk << _CS("][DIM=") << JK::hex1(axes.size());
-    jk << _CS("][BC:") << JK::hex1(bc);
+    jk << "«Tx:" << x->dtype();
+    jk << "«DIM=" << JK::hex1(axes.size());
+    jk << "«BC:" << JK::hex1(bc);
     for (uint i=0; i<ax.size(); i++)
-        jk << _CS("][AXES") << JK::hex1(ax[i]) << '=' << JK::hex1(i);
-    jk << ']';
+        jk << "«AXES" << JK::hex1(ax[i]) << '=' << JK::hex1(i);
 }
 
 #else // JIT

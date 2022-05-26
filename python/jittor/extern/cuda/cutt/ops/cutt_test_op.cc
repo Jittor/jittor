@@ -21,7 +21,7 @@ CuttTestOp::CuttTestOp(string cmd) : cmd(cmd) {
 }
 
 void CuttTestOp::jit_prepare(JK& jk) {
-    jk << _CS("[T:float32]");
+    jk << "«T:float32";
 }
 
 #else // JIT

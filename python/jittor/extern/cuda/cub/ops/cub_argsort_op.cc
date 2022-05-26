@@ -51,15 +51,15 @@ void CubArgsortOp::infer_shape() {
 }
 
 void CubArgsortOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype();
-    jk << _CS("][Tindexes:") << indexes->dtype();
-    jk << _CS("][Toffsets:") << offsets->dtype();
-    jk << _CS("][Ty:") << y->dtype();
-    jk << _CS("][FUNC:");
+    jk << "«Tx:" << x->dtype();
+    jk << "«Tindexes:" << indexes->dtype();
+    jk << "«Toffsets:" << offsets->dtype();
+    jk << "«Ty:" << y->dtype();
+    jk << "«FUNC:";
     if (descending)
-        jk << _CS("SortPairsDescending]");
+        jk << "SortPairsDescending";
     else
-        jk << _CS("SortPairs]");
+        jk << "SortPairs";
 }
 
 #else // JIT

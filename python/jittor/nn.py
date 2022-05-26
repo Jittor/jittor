@@ -347,7 +347,8 @@ class PReLU(Module):
             return jt.maximum(0, x) + self.weight * jt.minimum(0, x)
 
 #TODO dims is 4 will cause slowly execution
-def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction='sum'):
+def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction='mean'):
+    target_shape = target.shape
     if len(output.shape) == 4:
         c_dim = output.shape[1]
         output = output.transpose((0, 2, 3, 1))
@@ -371,11 +372,11 @@ def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction=
     logsum = output.exp().sum(1).log()
     loss = (logsum - (output*target).sum(1)) * target_weight
     if reduction == 'sum':
-        return loss.sum() / target_weight.sum()
+        return loss.sum()
     elif reduction == 'mean':
         return loss.mean() / target_weight.mean()
     else:
-        return loss / target_weight
+        return loss.reshape(target_shape) 
 
 def mse_loss(output, target, reduction="mean"):
     return (output-target).sqr().reduce(reduction)
@@ -495,14 +496,12 @@ def softmax(x, dim=None, log=False):
     import jittor.other.code_softmax as code_softmax
     if code_softmax.can_softmax_v1(x, dim):
         return code_softmax.softmax_v1(x, log)
-    if dim is None:
-        x = (x - x.max()).exp()
-        ret = x / x.sum()
-    else:
-        x = (x-x.max(dim, keepdims=True)).exp()
-        ret = x / x.sum(dim, keepdims=True)
-    if log: return ret.log()
-    return ret
+    if dim is None: dim = ()
+    if log:
+        a = x-x.max(dim, keepdims=True)
+        return a - a.exp().sum(dim, keepdims=True).log()
+    x = (x-x.max(dim, keepdims=True)).exp()
+    return x / x.sum(dim, keepdims=True)
 jt.Var.softmax = softmax
 
 def log_softmax(x,dim=None):

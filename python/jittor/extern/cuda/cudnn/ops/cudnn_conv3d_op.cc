@@ -53,10 +53,9 @@ void CudnnConv3dOp::infer_shape() {
 }
 
 void CudnnConv3dOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype();
-    jk << _CS("][Ty:") << y->dtype();
-    jk << _CS("][Tw:") << w->dtype();
-    jk << ']';
+    jk << "«Tx:" << x->dtype();
+    jk << "«Ty:" << y->dtype();
+    jk << "«Tw:" << w->dtype();
 }
 
 static auto make_backwardx = get_op_info("cudnn_conv3d_backward_x")

@@ -244,6 +244,13 @@ class TestCore(unittest.TestCase):
         for i in range(10):
             assert orders[i] <= 14+i*3
 
+    def test_bc_bug(self):
+        a = jt.zeros((1,1))
+        b = a * 0.5
+        b.sync()
+        da = jt.grad(b, a)
+        da.sync()
+
 
 if __name__ == "__main__":
     unittest.main()

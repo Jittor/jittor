@@ -64,10 +64,10 @@ void TernaryOp::infer_shape() {
 }
 
 void TernaryOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tc:") << cond->dtype();
-    jk << _CS("][Tx:") << x->dtype();
-    jk << _CS("][Ty:") << y->dtype();
-    jk << _CS("][Tz:") << z->dtype() << ']';
+    jk << "«Tc:" << cond->dtype();
+    jk << "«Tx:" << x->dtype();
+    jk << "«Ty:" << y->dtype();
+    jk << "«Tz:" << z->dtype();
 }
 
 #else // JIT

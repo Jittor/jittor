@@ -19,7 +19,7 @@ MklTestOp::MklTestOp() {
 }
 
 void MklTestOp::jit_prepare(JK& jk) {
-    jk << _CS("[T:float32]");
+    jk << "«T:float32";
 }
 
 #else // JIT

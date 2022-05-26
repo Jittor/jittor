@@ -77,16 +77,15 @@ static const char* short_type(Var* x) {
 }
 
 void MklConvBackwardXOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tyd:") << dy->dtype();
-    jk << _CS("][Twd:") << w->dtype();
-    jk << _CS("][Txd:") << dx->dtype();
-    jk << _CS("][Tx:") << short_type(dx);
-    jk << _CS("][Tw:") << short_type(w);
-    jk << _CS("][Ty:") << short_type(dy);
-    jk << _CS("][XFORMAT:") << xformat;
-    jk << _CS("][WFORMAT:") << wformat;
-    jk << _CS("][YFORMAT:") << yformat;
-    jk << ']';
+    jk << "«Tyd:" << dy->dtype();
+    jk << "«Twd:" << w->dtype();
+    jk << "«Txd:" << dx->dtype();
+    jk << "«Tx:" << short_type(dx);
+    jk << "«Tw:" << short_type(w);
+    jk << "«Ty:" << short_type(dy);
+    jk << "«XFORMAT:" << xformat;
+    jk << "«WFORMAT:" << wformat;
+    jk << "«YFORMAT:" << yformat;
 }
 
 #else // JIT

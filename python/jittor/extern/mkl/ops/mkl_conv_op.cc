@@ -81,16 +81,15 @@ static const char* short_type(Var* x) {
 }
 
 void MklConvOp::jit_prepare(JK& jk) {
-    jk << _CS("[Txd:") << x->dtype();
-    jk << _CS("][Tyd:") << y->dtype();
-    jk << _CS("][Twd:") << w->dtype();
-    jk << _CS("][Tx:") << short_type(x);
-    jk << _CS("][Tw:") << short_type(w);
-    jk << _CS("][Ty:") << short_type(y);
-    jk << _CS("][XFORMAT:") << xformat;
-    jk << _CS("][WFORMAT:") << wformat;
-    jk << _CS("][YFORMAT:") << yformat;
-    jk << ']';
+    jk << "«Txd:" << x->dtype();
+    jk << "«Tyd:" << y->dtype();
+    jk << "«Twd:" << w->dtype();
+    jk << "«Tx:" << short_type(x);
+    jk << "«Tw:" << short_type(w);
+    jk << "«Ty:" << short_type(y);
+    jk << "«XFORMAT:" << xformat;
+    jk << "«WFORMAT:" << wformat;
+    jk << "«YFORMAT:" << yformat;
 }
 
 #else // JIT

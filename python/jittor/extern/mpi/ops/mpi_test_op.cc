@@ -17,7 +17,7 @@ MpiTestOp::MpiTestOp(string cmd) : cmd(cmd) {
 }
 
 void MpiTestOp::jit_prepare(JK& jk) {
-    jk << _CS("[T:float32]");
+    jk << "«T:float32";
 }
 
 #else // JIT

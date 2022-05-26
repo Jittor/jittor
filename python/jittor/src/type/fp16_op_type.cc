@@ -35,7 +35,7 @@ struct FP16OpType : OpByType {
             {"logical_not", "(!($2))"},
             {"bitwise_not", "(~($2))"},
             {"negative", "(-($2))"},
-            {"abs", "::abs($2)"},
+            {"abs", "::__habs($2)"},
             {"log", "::hlog(($1)($2))"},
             {"exp", "::hexp(($1)($2))"},
             {"sqrt", "::hsqrt(($1)($2))"},

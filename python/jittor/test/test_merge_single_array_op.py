@@ -46,7 +46,7 @@ def test(shape, op1, op2):
     with jt.log_capture_scope(log_v=0, log_vprefix="fused_op.cc=100") as logs:
         d__ = d.data
     logs = find_log_with_re(logs, 
-        "Jit (fused )?op key (not )?found: \[opkey0:array\[T:float32")
+        "Jit (fused )?op key (not )?found: «opkey0:array«T:float32")
     assert(len(logs)==1), logs
 
     a_ = a.data
