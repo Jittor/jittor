@@ -62,8 +62,8 @@ VarPtr MpiReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 }
 
 void MpiReduceOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype();
-    jk << _CS("][OP:") << op << ']';
+    jk << "«Tx:" << x->dtype();
+    jk << "«OP:" << op;
 }
 
 #else // JIT

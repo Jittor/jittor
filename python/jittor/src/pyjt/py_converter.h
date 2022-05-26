@@ -105,6 +105,21 @@ DEF_IS(int64, T) from_py_object(PyObject* obj) {
     return PyLong_AsLongLong(obj);
 }
 
+#ifdef __linux__
+// int64_t
+DEF_IS(int64_t, bool) is_type(PyObject* obj) {
+    return PyLong_CheckExact(obj);
+}
+
+DEF_IS(int64_t, PyObject*) to_py_object(const T& a) {
+    return PyLong_FromLongLong(a);
+}
+
+DEF_IS(int64_t, T) from_py_object(PyObject* obj) {
+    return PyLong_AsLongLong(obj);
+}
+#endif
+
 // float64
 DEF_IS(float64, bool) is_type(PyObject* obj) {
     return PyFloat_CheckExact(obj) || PyLong_CheckExact(obj);

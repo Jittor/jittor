@@ -158,14 +158,13 @@ void ArgReduceOp::infer_shape() {
 }
 
 void ArgReduceOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype();
-    jk << _CS("][Ty:") << y->dtype();
-    jk << _CS("][XDIM=") << JK::hex1(x->shape.size());
-    jk << _CS("][YDIM=") << JK::hex1(y->shape.size());
-    jk << _CS("][KEEPDIMS:") << (keepdims ? '1' : '0');
-    jk << _CS("][DIM=") << JK::hex1(dim);
-    jk << _CS("][CMP:") << (op==ns_minimum ? "<" : ">");
-    jk << ']';
+    jk << "«Tx:" << x->dtype();
+    jk << "«Ty:" << y->dtype();
+    jk << "«XDIM=" << JK::hex1(x->shape.size());
+    jk << "«YDIM=" << JK::hex1(y->shape.size());
+    jk << "«KEEPDIMS:" << (keepdims ? '1' : '0');
+    jk << "«DIM=" << JK::hex1(dim);
+    jk << "«CMP:" << (op==ns_minimum ? "<" : ">");
 }
 
 #else // JIT

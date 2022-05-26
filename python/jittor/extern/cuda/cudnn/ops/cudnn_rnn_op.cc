@@ -98,10 +98,9 @@ void CudnnRnnOp::infer_shape() {
 }
 
 void CudnnRnnOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype();
-    jk << _CS("][Ty:") << y->dtype();
-    jk << _CS("][Tw:") << w->dtype();
-    jk << ']';
+    jk << "«Tx:" << x->dtype();
+    jk << "«Ty:" << y->dtype();
+    jk << "«Tw:" << w->dtype();
 }
 
 static auto make_backwardx_with_cx = get_op_info("cudnn_rnn_backward_x")

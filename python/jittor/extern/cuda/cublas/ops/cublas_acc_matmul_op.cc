@@ -9,7 +9,7 @@
 // ***************************************************************
 
 #include "var.h"
-#include "cublas_matmul_op.h"
+#include "cublas_acc_matmul_op.h"
 #include "cublas_wrapper.h"
 
 using namespace std;
@@ -20,8 +20,8 @@ extern int use_tensorcore;
 
 #ifndef JIT
 
-CublasMatmulOp::CublasMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
-    : a(a), b(b), trans_a(trans_a), trans_b(trans_b) {
+CublasAccMatmulOp::CublasAccMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b, int stride_a, int stride_b, int offset_a, int offset_b)
+    : a(a), b(b), trans_a(trans_a), trans_b(trans_b),stride_a(stride_a),stride_b(stride_b),offset_a(offset_a),offset_b(offset_b) {
     flags.set(NodeFlags::_cuda, 1);
     flags.set(NodeFlags::_cpu, 0);
     flags.set(NodeFlags::_manual_set_vnbb);
@@ -34,7 +34,7 @@ CublasMatmulOp::CublasMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
     c = create_output(nullptr, a->dtype());
 }
 
-void CublasMatmulOp::infer_shape() {
+void CublasAccMatmulOp::infer_shape() {
     ASSERTop(a->shape.size(),==,2);
     ASSERTop(b->shape.size(),==,2);
     int n = a->shape[0], m = a->shape[1];
@@ -46,10 +46,14 @@ void CublasMatmulOp::infer_shape() {
         swap(m_, k);
     }
     ASSERTop(m,==,m_);
+    if(stride_a != -1)
+        n = stride_a;
+    if(stride_b != -1)
+        k = stride_b;
     c->set_shape({n, k});
 }
 
-void CublasMatmulOp::jit_prepare(JK& jk) {
+void CublasAccMatmulOp::jit_prepare(JK& jk) {
     jk << "«T:" << a->dtype();
     jk << "«Trans_a:" << (trans_a ? 'T' : 'N');
     jk << "«Trans_b:" << (trans_b ? 'T' : 'N');
@@ -59,7 +63,7 @@ void CublasMatmulOp::jit_prepare(JK& jk) {
 #else // JIT
 #pragma clang diagnostic ignored "-Wtautological-compare"
 
-void CublasMatmulOp::jit_run() {
+void CublasAccMatmulOp::jit_run() {
     cublasHandle_t& handle_ = cublas_handle;
     const T alpha = 1.0f;
     const T beta  = 0.0f;
@@ -76,6 +80,7 @@ void CublasMatmulOp::jit_run() {
     if ('@Trans_b'=='T') {
         k = bs[0];
     }
+
     // a: [n,m], b: [m,k], c: [n,k]
     #if CUDART_VERSION >= 11000
     cublasGemmAlgo_t algo = CUBLAS_GEMM_DEFAULT;
@@ -103,11 +108,18 @@ void CublasMatmulOp::jit_run() {
         algo = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
     }
     #endif
+    int ldb, lda;
+    ldb = '@Trans_b' == 'N' ? k : m;
+    lda = '@Trans_a' == 'N' ? m : n;
+    if(stride_b != -1)
+        k = stride_b;
+    // if(stride_a != -1)
+    //     n = stride_a;
     checkCudaErrors(cublasGemmEx(handle_, 
     CUBLAS_OP_@Trans_b, CUBLAS_OP_@Trans_a, 
     k, n, m, &alpha, 
-    b->ptr<T>(),get_dtype(b->dtype()), '@Trans_b' == 'N' ? k : m, 
-    a->ptr<T>(),get_dtype(a->dtype()), '@Trans_a' == 'N' ? m : n, &beta, 
+    b->ptr<T>() + offset_b,get_dtype(b->dtype()), ldb, 
+    a->ptr<T>() + offset_a,get_dtype(a->dtype()), lda, &beta, 
     c->ptr<T>(),get_dtype(c->dtype()), k,
     computeType, algo));
     // checkCudaErrors(cublas@op@@gemm(handle_, 

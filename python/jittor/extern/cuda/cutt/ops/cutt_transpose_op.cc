@@ -59,7 +59,7 @@ VarPtr CuttTransposeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 
 void CuttTransposeOp::jit_prepare(JK& jk) {
     // do nothing
-    jk << _CS("[T:1]");
+    jk << "«T:1";
 }
 
 unordered_map<string, unsigned int> cutt_plan_cache;

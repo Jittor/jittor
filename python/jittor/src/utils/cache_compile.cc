@@ -167,10 +167,10 @@ void process(string src, vector<string>& input_names, string& cmd) {
             // #include "a.h"
             // i       jk    l
             auto j=i+1;
-            while (j<src.size() && (src[j] != ' ' && src[j] != '\n' && src[j] != '\r')) j++;
+            while (j<src.size() && (src[j] != ' ' && src[j] != '\"' && src[j] != '\n' && src[j] != '\r')) j++;
             if (j>=src.size()) return;
             if (j-i != 8 && j-i != 6) continue;
-            auto k=j+1;
+            auto k=src[j] == '\"' ? j : j+1;
             while (k<src.size() && src[k] == ' ') k++;
             if (k>=src.size()) return;
             auto l=k+1;
