@@ -20,7 +20,8 @@
 namespace jittor {
 
 DECLARE_FLAG(string, cache_path);
-DECLARE_FLAG(uint8, th_mode);
+// DECLARE_FLAG(uint8, th_mode);
+extern uint8 th_mode;
 
 DEFINE_FLAG(int, try_use_32bit_index, 0,
     "If not overflow, try to use 32 bit type as index type.");
