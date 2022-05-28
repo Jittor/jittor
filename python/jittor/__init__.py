@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.4.11'
+__version__ = '1.3.4.12'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -1362,6 +1362,7 @@ Arguments of hook are defined as::
                 else:
                     n_failed += 1
                     LOG.e(f'load parameter {key} failed: expect the shape of {key} to be {v.shape}, but got {param.shape}')
+        jt.sync_all()
         if n_failed:
             LOG.w(f"load total {len(params)} params, {n_failed} failed")
 
