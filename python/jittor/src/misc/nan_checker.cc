@@ -9,6 +9,7 @@
 #ifdef HAS_CUDA
 #include "misc/cuda_flags.h"
 #include <cuda_runtime.h>
+#include <cuda_fp16.h>
 #include "helper_cuda.h"
 #endif
 #include "mem/allocator.h"
@@ -18,6 +19,7 @@ namespace jittor {
 
 
 #ifdef IS_CUDA
+EXTERN_LIB void check_nan_float16(__half* ptr, int64 num);
 EXTERN_LIB void check_nan_float32(float32* ptr, int64 num);
 EXTERN_LIB void check_nan_float64(float64* ptr, int64 num);
 #endif
@@ -30,6 +32,9 @@ bool check_nan(Var* v) {
         return true;
     #ifdef IS_CUDA
     if (v->allocator->is_cuda()) {
+        if (v->dtype() == ns_float16) {
+            check_nan_float16((__half*)v->mem_ptr, v->num);
+        }
         if (v->dtype() == ns_float32) {
             check_nan_float32((float32*)v->mem_ptr, v->num);
         } else
