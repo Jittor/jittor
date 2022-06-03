@@ -52,10 +52,9 @@ void CudnnConv3dBackwardXOp::infer_shape() {
 }
 
 void CudnnConv3dBackwardXOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << dx->dtype();
-    jk << _CS("][Ty:") << dy->dtype();
-    jk << _CS("][Tw:") << w->dtype();
-    jk << ']';
+    jk << "«Tx:" << dx->dtype();
+    jk << "«Ty:" << dy->dtype();
+    jk << "«Tw:" << w->dtype();
 }
 
 

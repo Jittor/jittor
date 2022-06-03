@@ -113,8 +113,6 @@ VarPtr BroadcastToOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     if (v_index==1) return nullptr;
     if (bcast_mask==0) return dout;
     VarPtr dv = make_reduce(dout, ns_add, bcast_mask, keepdims_mask);
-    if (dv->shape.size() != v->shape.size())
-        dv->shape = v->shape;
     return dv;
 }
 
@@ -150,7 +148,7 @@ void BroadcastToOp::infer_shape() {
         }
         auto mask = ((xshape==1 && (yshape!=1 || !bx))&1) << i;
         bcast_mask |= mask;
-        keepdims_mask |= mask;
+        if (bx) keepdims_mask |= mask;
         int64 zs;
         if ((xshape == 1 || yshape == 1) && (xshape != yshape)) {
             zs = xshape * yshape;
@@ -169,9 +167,9 @@ void BroadcastToOp::infer_shape() {
 }
 
 void BroadcastToOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype()
-        << _CS("][DIM=") << JK::hex1(z->shape.size())
-        << _CS("][BCAST=") << JK::hex(bcast_mask) << ']';
+    jk << "«Tx:" << x->dtype()
+        << "«DIM=" << JK::hex1(z->shape.size())
+        << "«BCAST=" << JK::hex(bcast_mask);
 }
 
 #else // JIT

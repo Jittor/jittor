@@ -19,7 +19,7 @@ CublasTestOp::CublasTestOp(int size_mult) : size_mult(size_mult) {
 }
 
 void CublasTestOp::jit_prepare(JK& jk) {
-    jk << _CS("[T:float32]");
+    jk << "«T:float32";
 }
 
 #else // JIT

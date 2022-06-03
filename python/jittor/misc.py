@@ -13,6 +13,78 @@ import numpy as np
 import math
 from collections.abc import Sequence,Iterable
 
+def knn(unknown, known, k):
+    ''' find k neighbors for unknown array from known array
+
+    Args:
+        
+        unknown (var): shape [b, n, c]
+        known (var): shape [b, m, c]
+        k (int)
+
+    '''
+    b, n, c = unknown.shape
+    _, m, _ = known.shape
+    dists2 = jt.empty((b, n, k), dtype="float")
+    idx = jt.empty((b, n, k), dtype="int")
+    src = '''
+__inline_static__
+@python.jittor.auto_parallel(2, block_num=256)
+void knn_kernel(int b, int batch_index, int n, int index, int m,
+                        const float *__restrict__ unknown,
+                        const float *__restrict__ known,
+                        float *__restrict__ dist2,
+                        int *__restrict__ idx) {
+
+#define K %s
+    unknown += batch_index * n * 3;
+    known += batch_index * m * 3;
+    dist2 += batch_index * n * K;
+    idx += batch_index * n * K;
+    int j = index;
+    {
+        float ux = unknown[j * 3 + 0];
+        float uy = unknown[j * 3 + 1];
+        float uz = unknown[j * 3 + 2];
+
+        float tmp_dist[K];
+        int tmp_idx[K];
+        #pragma unroll
+        for (int i=0; i<K; i++) tmp_dist[i] = 1e30;
+        for (int k = 0; k < m; ++k) {
+            float x = known[k * 3 + 0];
+            float y = known[k * 3 + 1];
+            float z = known[k * 3 + 2];
+            float d = (ux - x) * (ux - x) + (uy - y) * (uy - y) + (uz - z) * (uz - z);
+            
+            int first = -1;
+            #pragma unroll
+            for (int i=0; i<K; i++)
+                if (first == -1 && d<tmp_dist[i])
+                    first = i;
+            if (first == -1) continue;
+            #pragma unroll
+            for (int i=0; i<K; i++)
+                if (K-1-i > first) {
+                    tmp_dist[K-1-i] = tmp_dist[K-2-i];
+                    tmp_idx[K-1-i] = tmp_idx[K-2-i];
+                }
+            tmp_dist[first] = d;
+            tmp_idx[first] = k;
+        }
+        #pragma unroll
+        for (int i=0; i<K; i++) {
+            dist2[j * K + i] = tmp_dist[i];
+            idx[j * K + i] = tmp_idx[i];
+        }
+    }
+}
+    knn_kernel(in0->shape[0], 0, in0->shape[1], 0, in1->shape[1], in0_p, in1_p, out0_p, out1_p);
+    ''' % k
+    return jt.code([unknown, known], [dists2, idx],
+    cpu_src=src,
+    cuda_src=src)
+
 def index_add_(x, dim, index, tensor):
     """ Take out each index subscript vector of the dim dimension and add the corresponding tensor variable.
     
@@ -660,6 +732,10 @@ def _prod(x,dim=0):
 
 
 def numpy_cumsum(x, dim=None):
+    ''' cumsum implemented with numpy or cupy.
+    
+        This function should not be called directly. Instead, jittor.misc.cumsum is recommended.
+    '''
     def cumsum_forward(np, data):
         a = data['inputs'][0]
         b = data['outputs'][0]
@@ -676,6 +752,10 @@ def numpy_cumsum(x, dim=None):
     return jt.numpy_code(x.shape, x.dtype, [x], cumsum_forward, [cumsum_backward])
 
 def cub_cumsum(x, dim=None):
+    ''' cumsum implemented with CUB.
+    
+        This function should not be called directly. Instead, jittor.misc.cumsum is recommended.
+    '''
     if (dim == None):
         dim = -1
     assert(dim >= -1 and dim < len(x.shape))
@@ -950,7 +1030,7 @@ def python_pass_wrapper(mod_func, args, kw):
     args = ",".join(args)
     return eval(f"func({args})")
 
-def auto_parallel(n, src, **kw):
+def auto_parallel(n, src, block_num=1024, **kw):
     """
     auto parallel(CPU and GPU) n-d for loop function like below:
 
@@ -1022,11 +1102,11 @@ __global__ static void {func_name}_entry({entry_func_args_def}) {{
 
 inline static void {func_name}({",".join(pargs+oargs)}) {{
 #ifdef JIT_cuda
-    int thread_num = 256*1024;
+    int thread_num = 256*{block_num};
     {xn.join([f"int tn{i} = NanoVector::get_nbits(std::min(thread_num, {pnargs2[i]})) - 2;thread_num >>= tn{i};" for i in reversed(range(n))])}
     thread_num = 1<<({"+".join([f"tn{i}" for i in range(n)])});
-    int p1 = std::max(thread_num/1024, 1);
-    int p2 = std::min(thread_num, 1024);
+    int p1 = std::max(thread_num/{block_num}, 1);
+    int p2 = std::min(thread_num, {block_num});
     {func_name}_entry<<<p1,p2>>>({entry_func_args});
 #else
     {xn.join([f"for (int i{i}=0; i{i}<{pnargs2[i]}; i{i}++)" for i in range(n)])}

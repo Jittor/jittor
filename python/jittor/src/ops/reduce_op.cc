@@ -338,12 +338,12 @@ VarPtr ReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 }
 
 void ReduceOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype()
-        << _CS("][Ty:") << y->dtype()
-        << _CS("][Tz:") << y->dtype()
-        << _CS("][OP:") << ns
-        << _CS("][DIM=") << JK::hex1(x->shape.size())
-        << _CS("][REDUCE=") << JK::hex(reduce_mask) << ']';
+    jk << "«Tx:" << x->dtype()
+        << "«Ty:" << y->dtype()
+        << "«Tz:" << y->dtype()
+        << "«OP:" << ns
+        << "«DIM=" << JK::hex1(x->shape.size())
+        << "«REDUCE=" << JK::hex(reduce_mask);
 }
 
 #else // JIT

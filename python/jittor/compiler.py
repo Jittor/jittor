@@ -83,7 +83,7 @@ def map_flags(flags, func):
         output.append(func(s))
     return " ".join(output)
 
-def compile(compiler, flags, inputs, output, combind_build=False, cuda_flags=""):
+def compile(compiler, flags, inputs, output, combind_build=False, cuda_flags="", obj_dirname="obj_files"):
     def do_compile(cmd):
         if jit_utils.cc:
             return jit_utils.cc.cache_compile(cmd, cache_path, jittor_path)
@@ -108,13 +108,15 @@ def compile(compiler, flags, inputs, output, combind_build=False, cuda_flags="")
     obj_files = []
     ex_obj_files = []
     new_inputs = []
+    obj_dir = os.path.join(cache_path, obj_dirname)
+    os.makedirs(obj_dir, exist_ok=True)
     for name in inputs:
         if name[-1] in 'oab':
             ex_obj_files.append(name)
         else:
             new_inputs.append(os.path.join(jittor_path, name))
             obj_files.append(os.path.join(
-                cache_path, "obj_files", os.path.basename(name)+".o"))
+                obj_dir, os.path.basename(name)+".o"))
     inputs = new_inputs
     cm = lambda s: f"\"{s}\""
     cms = lambda arr: [f"\"{s}\"" for s in arr ]
@@ -1148,7 +1150,10 @@ if os.name == 'nt':
             return cmd
 
 if ' -O' not in cc_flags:
-    opt_flags += " -O2 "
+    if os.environ.get("debug", "0") == "1":
+        opt_flags += " -O0 "
+    else:
+        opt_flags += " -O2 "
     kernel_opt_flags += " -Ofast "
 lto_flags = ""
 if os.environ.get("enable_lto") == "1":

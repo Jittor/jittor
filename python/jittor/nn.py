@@ -348,7 +348,8 @@ class PReLU(Module):
             return jt.maximum(0, x) + self.weight * jt.minimum(0, x)
 
 #TODO dims is 4 will cause slowly execution
-def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction='sum'):
+def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction='mean'):
+    target_shape = target.shape
     if len(output.shape) == 4:
         c_dim = output.shape[1]
         output = output.transpose((0, 2, 3, 1))
@@ -372,14 +373,14 @@ def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction=
     logsum = output.exp().sum(1).log()
     loss = (logsum - (output*target).sum(1)) * target_weight
     if reduction == 'sum':
-        return loss.sum() / target_weight.sum()
+        return loss.sum()
     elif reduction == 'mean':
         return loss.mean() / target_weight.mean()
     else:
-        return loss / target_weight
+        return loss.reshape(target_shape) 
 
-def mse_loss(output, target):
-    return (output-target).sqr().mean()
+def mse_loss(output, target, reduction="mean"):
+    return (output-target).sqr().reduce(reduction)
 
 def bce_loss(output, target, weight=None, size_average=True):
     loss = - (target * jt.log(jt.maximum(output, 1e-20)) + (1 - target) * jt.log(jt.maximum(1 - output, 1e-20)))
@@ -450,10 +451,10 @@ class CrossEntropyLoss(Module):
         return cross_entropy_loss(output, target, self.weight, self.ignore_index)
 
 class MSELoss(Module):
-    def __init__(self):
-        pass
+    def __init__(self, reduction='mean'):
+        self.reduction = reduction
     def execute(self, output, target):
-        return mse_loss(output, target)
+        return mse_loss(output, target, self.reduction)
 
 class BCELoss(Module):
     def __init__(self, weight=None, size_average=True):
@@ -496,14 +497,12 @@ def softmax(x, dim=None, log=False):
     import jittor.other.code_softmax as code_softmax
     if code_softmax.can_softmax_v1(x, dim):
         return code_softmax.softmax_v1(x, log)
-    if dim is None:
-        x = (x - x.max()).exp()
-        ret = x / x.sum()
-    else:
-        x = (x-x.max(dim, keepdims=True)).exp()
-        ret = x / x.sum(dim, keepdims=True)
-    if log: return ret.log()
-    return ret
+    if dim is None: dim = ()
+    if log:
+        a = x-x.max(dim, keepdims=True)
+        return a - a.exp().sum(dim, keepdims=True).log()
+    x = (x-x.max(dim, keepdims=True)).exp()
+    return x / x.sum(dim, keepdims=True)
 jt.Var.softmax = softmax
 
 def log_softmax(x,dim=None):
@@ -757,6 +756,7 @@ LeakyReLU = Leaky_relu
 ReLU6 = jt.make_module(relu6)
 Softmax = jt.make_module(softmax, 2)
 GELU = jt.make_module(gelu)
+Flatten = jt.make_module(jt.flatten)
 
 if os.environ.get('use_cutlass') == '0':
     from jittor.depthwise_conv import DepthwiseConv

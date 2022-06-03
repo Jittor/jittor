@@ -72,13 +72,12 @@ void CudnnConvOp::infer_shape() {
 }
 
 void CudnnConvOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype();
-    jk << _CS("][Ty:") << y->dtype();
-    jk << _CS("][Tw:") << w->dtype();
-    jk << _CS("][XFORMAT:") << xformat;
-    jk << _CS("][WFORMAT:") << wformat;
-    jk << _CS("][YFORMAT:") << yformat;
-    jk << ']';
+    jk << "«Tx:" << x->dtype();
+    jk << "«Ty:" << y->dtype();
+    jk << "«Tw:" << w->dtype();
+    jk << "«XFORMAT:" << xformat;
+    jk << "«WFORMAT:" << wformat;
+    jk << "«YFORMAT:" << yformat;
 }
 static auto make_backwardx = get_op_info("cudnn_conv_backward_x")
     .get_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, int, int, string, string, string>();

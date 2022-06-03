@@ -408,7 +408,10 @@ Example::
     def __del__(self):
         if mp_log_v:
             print("dataset deleted")
-        self.terminate()
+        try:
+            self.terminate()
+        except:
+            pass
 
     def __real_len__(self):
         if self.total_len is None:

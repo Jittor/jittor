@@ -29,7 +29,6 @@
 #include "mem/allocator/stat_allocator.h"
 #include "mem/allocator/temp_allocator.h"
 #include "mem/mem_info.h"
-#include "update_queue.h"
 #include "executor.h"
 
 namespace jittor {
@@ -67,8 +66,6 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
     log << "hold_vars:" << hold_vars.size()
         << "lived_vars:" << Var::number_of_lived_vars
         << "lived_ops:" << Op::number_of_lived_ops >> '\n';
-    log << "update queue:" << update_queue.queue.size() 
-        >> '/' >> update_queue.map.size() >> '\n';
 
     #ifdef NODE_MEMCHECK
     // get the oldest var
