@@ -331,7 +331,7 @@ class TestMatmul(unittest.TestCase):
             c = jt.matmul(a, b)
             cc = np.matmul(a.data, b.data)
             assert c.shape == cc.shape or (cc.shape==() and c.shape==[1]), (c.shape, cc.shape)
-            assert np.allclose(c.data, cc), (c.data-cc)
+            np.testing.assert_allclose(c.data, cc, atol=1e-5)
             da, db = jt.grad(c, [a, b])
             assert da.shape == a.shape
             assert db.shape == b.shape
