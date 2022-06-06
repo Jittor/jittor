@@ -2123,7 +2123,7 @@ class Sequential(Module):
             else:
                 self.append(mod)
     def __getitem__(self, idx):
-        if idx not in self.layers:
+        if isinstance(idx, slice) or idx not in self.layers:
             return list(self.layers.values())[idx]
 
         return self.layers[idx]
