@@ -18,6 +18,7 @@ from jittor import flatten, init, Module
 import numpy as np
 import collections
 import math
+import os
 from collections import OrderedDict
 from jittor.pool import *
 from jittor.optim import *
@@ -757,7 +758,10 @@ Softmax = jt.make_module(softmax, 2)
 GELU = jt.make_module(gelu)
 Flatten = jt.make_module(jt.flatten)
 
-from jittor.depthwise_conv import DepthwiseConv
+if os.environ.get('use_cutlass') == '0':
+    from jittor.depthwise_conv import DepthwiseConv
+else:
+    from jittor.cutlass_ops import DepthwiseConv, FullyFusedMlp
 
 class Conv(Module):
     ''' Applies a 2D convolution over an input signal composed of several input planes.
@@ -2800,3 +2804,28 @@ def _fft2(x, inverse=False):
     if inverse:
         y /= x.shape[1] * x.shape[2]
     return y
+
+
+class FullyFusedMLP(Module):
+    ''' fusing multiple linear layers in one FullyFusedMLP layer using ReLU activation.
+    Example::
+
+    m = nn.FullyFusedMLP((20, 30, 40)) # with 2 layers
+    input1 = jt.randn(128, 20)
+    output = m(input1)
+    print(output.shape)
+    # [128, 40]
+    '''
+    def __init__(self, weights_width=None, weights=None):
+        assert os.environ.get("use_cutlass") == '1', "Need cutlass support!"
+        if weights != None:
+            self.weights = weights
+        else:
+            assert weights_width != None, "All inputs are None."
+            for idx in range(len(weights_width)-1):
+                self.weights.append(jt.randn(weights_width[idx], weights_width[idx+1]))
+        
+        self.ops = FullyFusedMlp()
+    
+    def execute(self, a):
+        return self.ops(a, *self.weights)

@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2022 Jittor. All Rights Reserved. 
+// Copyright (c) 2021 Jittor. All Rights Reserved. 
 // Maintainers: 
 //     Guoye Yang <498731903@qq.com>
 //     Dun Liang <randonlang@gmail.com>. 
@@ -12,14 +12,13 @@
 
 namespace jittor {
 
-struct CublasMatmulOp : Op {
+struct CutlassMatmulOp : Op {
     Var* a, * b, * c;
     bool trans_a, trans_b;
-    CublasMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b);
+    CutlassMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b);
     
-    const char* name() const override { return "cublas_matmul"; }
+    const char* name() const override { return "cutlass_matmul"; }
     void infer_shape() override;
-    VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;
     DECLARE_jit_run;
 };
 

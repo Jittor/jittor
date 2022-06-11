@@ -211,10 +211,12 @@ class Optimizer(object):
 
     def step(self, loss=None, retain_graph=False):
         self.pre_step(loss, retain_graph)
+        print("lr: ", lr)
         for pg in self.param_groups:
             lr = pg.get("lr", self.lr)
             for p, g in zip(pg["params"], pg["grads"]):
                 if p.is_stop_grad(): continue
+                print("g: ", g)
                 p.update(p - g * lr)
         self.post_step()
 
@@ -386,6 +388,7 @@ class Adam(Optimizer):
                 m.update(b0 * m + (1-b0) * g)
                 v.update(b1 * v + (1-b1) * g * g)
                 step_size = lr * jt.sqrt(1-b1**n) / (1-b0 ** n)
+                # print("delta: ", m * step_size / (jt.sqrt(v) + eps))
                 p.update(p - m * step_size / (jt.sqrt(v) + eps))
         self.post_step()
 

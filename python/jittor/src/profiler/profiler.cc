@@ -428,7 +428,10 @@ vector<vector<string>> Profiler::report(const string& sort_key) {
             continue;
         auto& fname = fnames[i];
         rep.push_back({name, fname});
-        ss << std::setw(w) << name;
+        if (name.size() > 100)
+            ss << std::setw(w) << name.substr(0, 100);
+        else
+            ss << std::setw(w) << name;
         if (name.size() >= w-1)
             ss << "\n" << std::setw(w) << " ";
         ss << std::setw(w) << fname;

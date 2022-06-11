@@ -731,11 +731,15 @@ string OpCompiler::get_jit_src(Op* op) {
     string name = op->name();
     string name2 = Op::op_name_to_file_name(name);
     string name3 = Op::file_name_to_class_name(name2);
+
     if (name == "fused") {
         string src = get_fused_src((FusedOp*)op);
+        // if (src.find("define op4_index_t int32") != string::npos)
+        //     LOGir << "here here here" << src; 
         ASSERT(src.size());
         return src;
     }
+    // LOGir << "name: " << " " << name << " " << name2 << " " << name3;
     auto op_info = get_op_info(name);
     auto& src_path = op_info.source_path;
     
@@ -759,15 +763,17 @@ string OpCompiler::get_jit_src(Op* op) {
         else
             after_include_src += src;
     }
+    // if (src.find("define op4_index_t int32") != string::npos)
+    //     LOGir << "here here here" << src; 
     ASSERT(file_exist(_to_winstr(src_path))) << src_path;
     LOGvvv << "Read from" << src_path; 
     string src = read_all(_to_winstr(src_path));
     ASSERT(src.size()) << "Source read failed:" << src_path;
-
     unordered_map<string,string> defs(jit_define.begin(), jit_define.end());
     LOGvvv << "Precompile with key:" << defs;
     src = precompile(defs, src);
-
+    // if (src.find("define op4_index_t int32") != string::npos)
+    //     LOGir << "?????" << src; 
     // find the last occur of #include "..."\n
     auto pos = src.rfind("#include");
     if (pos == string::npos) pos=0;
@@ -812,6 +818,7 @@ string OpCompiler::get_fused_src(FusedOp* op) {
         }
         Op* opi = op->ops[oi];
         string src = get_jit_src(opi);
+        // LOGir << "@@@: " << src;
         op_srcs.push_back(move(src));
     }
     return OpCompiler::__get_fused_src(op->ops, op_srcs, op_members);
@@ -865,7 +872,7 @@ string OpCompiler::__get_fused_src(
         "int", "float", "bool", "CHECK", "STRINGIZE",
         "void", "__restrict__", "if", "true", "false",
         "Op", "Var", "Node", "itof", "assert", "ASSERT",
-        "float64"
+        "float64", "float16"
     };
     auto not_change = [&](const string& s) -> bool {
         if (unchanged.count(s)) return true;
@@ -914,6 +921,7 @@ string OpCompiler::__get_fused_src(
         std::regex_match(src, cm, e);
         ASSERT(cm.size()>=2) << src;
         string name3 = cm[1];
+
         for (uint i=0; i<src.size(); i++) {
             if (src[i] == '#' &&
                 (i+1<src.size() && src[i+1] == 'i') &&
@@ -1078,15 +1086,23 @@ jit_op_entry_t OpCompiler::do_compile(Op* op) {
     jittor::lock_guard lg;
     OpCompiler oc(op);
     string* src = &oc.src;
+    // if (src->find("ops/broadcast_to_op.h") != string::npos && src->find("<limits>") == string::npos && src->find("op4_Tx") != string::npos && src->find("op9_Tx") == string::npos)
+    //     LOGir << "!!!!" << *src;
     for (auto op_type : op_types)
         op_type->post_pass(&oc);
     string src_after_passes;
+    // if (src->find("ops/broadcast_to_op.h") != string::npos && src->find("<limits>") == string::npos && src->find("op6_Tx") != string::npos)
+    //     LOGir << "????" << *src;
     // if is fused op
     if (oc.op) {
+        // LOGir << "?????????????  " << *src;
         TunerManager tm(&oc);
         src_after_passes = tm.tune();
         src = &src_after_passes;
     }
+    // if (src->find("ops/broadcast_to_op.h") != string::npos && src->find("<limits>") == string::npos && src->find("op4_Tx") != string::npos && src->find("op9_Tx") == string::npos)
+    // if (src->find("58aff3bc47edee4")!=string::npos)
+    //     LOGir << "1233243423  " << *src << oc.op;
     op->compile_optimize(*src);
     auto ret = oc.compile(op->get_jit_key(get_jk()), *src);
     return ret;
