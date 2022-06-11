@@ -419,12 +419,33 @@ unordered_set<string> binary_ops = {
 };
 
 BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
+    auto xdim = x->shape.size();
+    auto ydim = y->shape.size();
+    bool need_broadcast = xdim != ydim;
+    for (size_t i=0; i<xdim && i<ydim; i++) {
+        auto xshape = x->shape[xdim-i-1];
+        auto yshape = y->shape[ydim-i-1];
+        if ((xshape == 1 || yshape == 1) && (xshape != yshape)) {
+            need_broadcast = true;
+            continue;
+        }
+        CHECKop(xshape,==,yshape) << "Shape not match, x:" >> x->to_string()
+            << " y:" >> y->to_string();
+    }
+    if (need_broadcast) {
+        auto xp = make_broadcast_to(x, y, {});
+        auto yp = make_broadcast_to(y, x, {});
+        auto zp = make_binary(xp, yp, op);
+        forward(zp);
+        return;
+    }
+
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
     set_type(OpType::element);
     ns = op;
     ASSERT(ns.is_binary());
-    z = create_output(nullptr, binary_dtype_infer(op, x->ns, y->ns));
+    z = create_output(x->shape, binary_dtype_infer(op, x->ns, y->ns));
     bool bin = ns.get(NanoString::_no_need_back_in);
     bool bout = ns.get(NanoString::_no_need_back_out);
     if (bin || bout) {
@@ -516,38 +537,13 @@ VarPtr BinaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 }
 
 void BinaryOp::infer_shape() {
-    auto xdim = x->shape.size();
-    auto ydim = y->shape.size();
-    bool need_broadcast = xdim != ydim;
-    for (size_t i=0; i<xdim && i<ydim; i++) {
-        auto xshape = x->shape[xdim-i-1];
-        auto yshape = y->shape[ydim-i-1];
-        // -1 1 need b
-        // has 1, b, both 1, not b, 0, error
-        if ((xshape == 1 || yshape == 1) && (xshape != yshape)) {
-            // CHECK(xshape && yshape) << "Shape can not broadcast to 0.";
-            need_broadcast = true;
-            continue;
-        }
-        if (xshape<0 || yshape<0 ) continue;
-        CHECKop(xshape,==,yshape) << "Shape not match, x:" >> x->to_string()
-            << " y:" >> y->to_string();
-    }
-    if (need_broadcast) {
-        auto xp = make_broadcast_to(x, y, {});
-        auto yp = make_broadcast_to(y, x, {});
-        set_inputs({x=xp, y=yp});
-        // infer shape again
-        infer_shape();
-    } else
-        z->set_shape(x->shape);
 }
 
 void BinaryOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype()
-        << _CS("][Ty:") << y->dtype()
-        << _CS("][Tz:") << z->dtype()
-        << _CS("][OP:") << ns << ']';
+    jk << "«Tx:" << x->dtype()
+        << "«Ty:" << y->dtype()
+        << "«Tz:" << z->dtype()
+        << "«OP:" << ns;
 }
 
 #else // JIT

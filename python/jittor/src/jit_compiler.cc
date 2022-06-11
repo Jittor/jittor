@@ -194,7 +194,7 @@ void run_cmd(string cmd, string cwd="") {
 
 static string get_symbol_name(const string& jit_key) {
     int i=0;
-    while (i<jit_key.size() && jit_key[i]!='[') i++;
+    while (i<jit_key.size() && jit_key[i]>=0) i++;
     string op_name = i ? jit_key.substr(0, i) : "fused";
     op_name = Op::file_name_to_class_name(op_name);
     // _ZN7jittorXyyyyyy7jit_runEv
@@ -211,7 +211,7 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
     LOGvv << "Compile op" << jit_key;
     // compiler do not allowed filename too long
     CHECK(cc_path.size());
-    string jit_src_path = Op::get_filename_from_jit_key(jit_key, ".cc");
+    string jit_src_path = Op::get_filename_from_jit_key(jit_key, is_cuda_op?".cu":".cc");
     string* src2 = (string*)&src;
     string* extra_flags2 = (string*)&extra_flags;
     JPU(op_compiler(jit_src_path, *src2, is_cuda_op, *extra_flags2));
@@ -235,6 +235,9 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
             + " \"" + jit_src_path + "\"" + other_src
             + fix_cl_flags(nvcc_flags + extra_flags, is_cuda_op)
             + " -o \"" + jit_lib_path + "\"";
+        if (cmd.find("-dc") != string::npos) {
+            cmd = python_path+" "+jittor_path+"/utils/dlink_compiler.py " + cmd;
+        }
     } else {
         cmd = "\"" + cc_path + "\""
             + " \"" + jit_src_path + "\"" + other_src

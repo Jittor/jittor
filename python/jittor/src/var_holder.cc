@@ -92,13 +92,40 @@ static inline void assign_var(Var* a, Var* b) {
         a->set_stop_grad();
     if (b->flags.get(NodeFlags::_stop_fuse))
         a->flags.set(NodeFlags::_stop_fuse);
+    if (b->flags.get(NodeFlags::_th_require_grad))
+        a->flags.set(NodeFlags::_th_require_grad);
 }
 
+extern uint8 th_mode;
 void VarHolder::operator=(VarPtr&& v) {
+    if (th_mode) {
+        if (var->is_stop_grad() != v->is_stop_grad())
+            v.set_stop_grad(var->is_stop_grad());
+        if (var->flags.get(NodeFlags::_th_require_grad))
+            v.ptr->flags.set(NodeFlags::_th_require_grad);
+    }
     assign_var(v.ptr, var);
     var->release_both_liveness();
     var = v.ptr;
     v.ptr = nullptr;
+}
+
+extern bool no_grad;
+void VarHolder::set_requires_grad(bool flag) {
+    if (flag != get_requires_grad()) {
+        if (flag) {
+            bool no_grad_bk = no_grad;
+            auto th_mode_bk = th_mode;
+            no_grad = 0;
+            th_mode = 0;
+            start_grad();
+            no_grad = no_grad_bk;
+            th_mode = th_mode_bk;
+            var->flags.set(NodeFlags::_th_require_grad, (int)flag);
+        } else
+            stop_grad(); 
+    }
+    return;
 }
 
 string VarHolder::to_string() {

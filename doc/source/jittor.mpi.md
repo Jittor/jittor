@@ -12,6 +12,8 @@ jittor.mpi
 sudo apt install openmpi-bin openmpi-common libopenmpi-dev
 ```
 
+也可以参考 [OpenMPI 文档](https://www.open-mpi.org/faq/?category=building#easy-build)，自行编译安装。
+
 计图会自动检测环境变量中是否包含`mpicc`，如果计图成功的检测到了`mpicc`，那么会输出如下信息：
 
 ```

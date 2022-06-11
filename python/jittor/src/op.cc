@@ -20,6 +20,8 @@
 namespace jittor {
 
 DECLARE_FLAG(string, cache_path);
+// DECLARE_FLAG(uint8, th_mode);
+extern uint8 th_mode;
 
 DEFINE_FLAG(int, try_use_32bit_index, 0,
     "If not overflow, try to use 32 bit type as index type.");
@@ -87,6 +89,19 @@ void Op::init() {
         exe.run_sync(vector<Var*>({need_sync}), false);
         CHECK(need_sync->num >= 0) << need_sync << "'s shape is error";
     }
+    if (th_mode) {
+        bool stop_grad = true;
+        for (Var* v : inputs()) {
+            if (!v->is_stop_grad()) {
+                stop_grad = false;
+                break;
+            }
+        }
+        if (stop_grad)
+            for (Var* v : outputs()) {
+                v->set_stop_grad();
+            }
+    }
 }
 
 void Op::compile_optimize(string& src) {}
@@ -128,14 +143,16 @@ string Op::get_hash_name() {
 void Op::do_jit_prepare(JK& jk) {
     memcheck_all_exist();
     jk << name();
+    auto pre_size = jk.size;
     jit_prepare(jk);
-    if (jk.empty()) {
+    if (jk.size == pre_size) {
         // not a jit op
         bool has_cuda = flags.get(NodeFlags::_cuda);
         bool has_cpu = flags.get(NodeFlags::_cpu);
         CHECK(has_cuda || has_cpu);
         if (has_cuda && has_cpu && !use_cuda)
             flags.set(NodeFlags::_cuda, 0);
+        jk.clear();
     } else {
         bool use_int64_t = false;
         // TODO: fused op do not have inputs,
@@ -149,9 +166,9 @@ void Op::do_jit_prepare(JK& jk) {
             if (var->num >= std::numeric_limits<int32_t>::max())
                 use_int64_t = true;
         }
-        jk << _CS("[JIT:1]");
+        jk << "«JIT:1";
         if (use_cuda_op && flags.get(NodeFlags::_cuda)) {
-            jk << _CS("[JIT_cuda:1]");
+            jk << "«JIT_cuda:1";
             flags.set(NodeFlags::_cpu, 0);
             // TODO: 64bit index in CUDA
             // use_int64_t = false;
@@ -164,14 +181,14 @@ void Op::do_jit_prepare(JK& jk) {
             }
             ASSERT(flags.get(NodeFlags::_cpu))
                 << "Op" << name() << "doesn't have cpu version";
-            jk << _CS("[JIT_cpu:1]");
+            jk << "«JIT_cpu:1";
             flags.set(NodeFlags::_cuda, 0);
         }
         if (try_use_32bit_index) use_int64_t = false;
         if (use_int64_t)
-            jk << _CS("[index_t:int64]");
+            jk << "«index_t:int64";
         else
-            jk << _CS("[index_t:int32]");
+            jk << "«index_t:int32";
     }
     jk.finilize();
 }
@@ -295,7 +312,7 @@ std::ostream& operator<<(std::ostream& os, const Op* op) {
         if (v->name.size())
             os << "->" << v->name;
         else
-            os << "->" << (void*)v;
+            os << "->" << v->id;
     }
     os << ')';
     if (trace_py_var) {

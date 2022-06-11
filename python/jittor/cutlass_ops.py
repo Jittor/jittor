@@ -1464,8 +1464,7 @@ class FullyFusedMlp(jt.Function):
             CUTLASS_CHECK(status);  
         '''
         output = jt.code((a.shape[0], b.shape[1]), a.dtype, [a, b], cuda_header=cuda_header, cuda_src=cuda_src)
-        output.compile_options = {f"FLAGS: --expt-relaxed-constexpr -I/home/penghy/jittor-dev/depth/cutlass/include -I/home/penghy/jittor-dev/depth/cutlass/tools/util/include ": 1}
-        # print(output)
+        output.compile_options = {f"FLAGS: --expt-relaxed-constexpr -I{cutlass_path}/include -I{cutlass_path}/tools/util/include ": 1}
         return output
     
     def execute(self, a, *args):

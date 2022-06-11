@@ -732,6 +732,10 @@ def _prod(x,dim=0):
 
 
 def numpy_cumsum(x, dim=None):
+    ''' cumsum implemented with numpy or cupy.
+    
+        This function should not be called directly. Instead, jittor.misc.cumsum is recommended.
+    '''
     def cumsum_forward(np, data):
         a = data['inputs'][0]
         b = data['outputs'][0]
@@ -748,6 +752,10 @@ def numpy_cumsum(x, dim=None):
     return jt.numpy_code(x.shape, x.dtype, [x], cumsum_forward, [cumsum_backward])
 
 def cub_cumsum(x, dim=None):
+    ''' cumsum implemented with CUB.
+    
+        This function should not be called directly. Instead, jittor.misc.cumsum is recommended.
+    '''
     if (dim == None):
         dim = -1
     assert(dim >= -1 and dim < len(x.shape))

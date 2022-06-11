@@ -30,7 +30,7 @@ void SafeClipOp::infer_shape() {
 }
 
 void SafeClipOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype() <<']';
+    jk << "«Tx:" << x->dtype() <<"«";
 }
 
 #else // JIT

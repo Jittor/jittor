@@ -39,6 +39,7 @@ def softmax_v1(a, log=False):
 ''', cuda_src=f'''
 __global__ void kernel(in0_type* x, out0_type* y, int len) {{
     typedef cub::BlockReduce<float, {tnum}> BlockReduce;
+    constexpr int need_log = {int(log)};
     __shared__ typename BlockReduce::TempStorage temp_storage;
 
     int id = blockIdx.x * len;
@@ -62,8 +63,13 @@ __global__ void kernel(in0_type* x, out0_type* y, int len) {{
     {for_loop}
         #pragma unroll
         for (int j=0; j<{ILP}; j++) {{
-            v[i][j] = expf(float(v[i][j]) - vmax);
-            v1 += float(v[i][j]);
+            if (need_log) {{
+                v[i][j] = float(v[i][j]) - vmax;
+                v1 += expf(float(v[i][j]));
+            }} else {{
+                v[i][j] = expf(float(v[i][j]) - vmax);
+                v1 += float(v[i][j]);
+            }}
         }}
 
     tmp = BlockReduce(temp_storage).Sum(v1);
@@ -74,11 +80,12 @@ __global__ void kernel(in0_type* x, out0_type* y, int len) {{
 
     {for_loop}
         #pragma unroll
-        for (int j=0; j<{ILP}; j++)
-            v[i][j] = {
-                "@expand_op(log,@in0_type,float(v[i][j])/vsum)" if log
-                else "float(v[i][j])/vsum"
-            };
+        for (int j=0; j<{ILP}; j++) {{
+            if (need_log)
+                v[i][j] = v[i][j] - @expand_op(log,@in0_type,vsum);
+            else
+                v[i][j] = float(v[i][j])/vsum;
+        }}
     {for_loop}
         vload<sizeof(in0_type)*{ILP}>(&y[id+(i*{tnum}+threadIdx.x)*{ILP}], v[i]);
 }}

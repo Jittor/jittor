@@ -574,14 +574,13 @@ def install_cutlass(root_folder):
             os.remove(fullname)
             if os.path.isdir(dirname):
                 shutil.rmtree(dirname)
-    if not os.path.isfile(os.path.join(dirname, "include")):
+    if not os.path.isdir(os.path.join(dirname, "include")):
         if not os.path.isfile(os.path.join(root_folder, filename)):
             LOG.i("Downloading cutlass...")
         download_url_to_local(url, filename, root_folder, true_md5)
 
         if core.get_device_count() == 0:
             return
-
         shutil.unpack_archive(fullname, root_folder)
     return dirname
 
@@ -592,6 +591,7 @@ def setup_cutlass():
         return
     if not use_cutlass: return
     cutlass_include_path = os.environ.get("cutlass_include_path")
+    print(cutlass_include_path)
     if cutlass_include_path is None:
         LOG.v("setup cutlass...")
         from pathlib import Path
