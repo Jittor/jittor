@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -38,7 +38,9 @@
 namespace jittor {
 
 DECLARE_FLAG(string, cc_type);
-DEFINE_FLAG(string, exclude_pass, "", "Don't run certian pass.");
+DEFINE_FLAG(string, exclude_pass, "", "Don't run certain pass.");
+DEFINE_FLAG(string, log_op_hash, "", "Output compiler pass result of certain hash of op.");
+
 
 PassManager::PassManager(OpCompiler* oc) : oc(oc), all(oc->get_src()) {
     main_ir = nullptr;
@@ -70,7 +72,7 @@ void PassManager::run_passes() {
         if (oc->op->flags.get(NodeFlags::_cuda)) {
             ir.children.back()->erase();
             string type = oc->op->ops[0]->outputs().front()->dtype().to_cstring();
-            ir.push_back("kernel<<<1,1>>>(op0_outputp, op0->ptr<"+type+">()[0]);");
+            ir.push_back("kernel<<<1,1>>>(op0_outputp, op0_outputv);");
             auto jt_type = type == "bool" ? type : "jittor::" + type;
             ir.push_back("__global__ static void kernel("+jt_type+"* xp, "+jt_type+" x) { xp[0] = x; } ", &ir.before, true);
         }

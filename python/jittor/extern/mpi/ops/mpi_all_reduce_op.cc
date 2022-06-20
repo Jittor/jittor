@@ -1,12 +1,12 @@
 // ***************************************************************
-// Copyright (c) 2021 
+// Copyright (c) 2022 Jittor. All Rights Reserved.  
 //     Guowei Yang <471184555@qq.com>. 
 //     Dun Liang <randonlang@gmail.com>. 
 // All Rights Reserved.
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#include "mpi_warper.h"
+#include "mpi_wrapper.h"
 #include "var.h"
 #include "mpi_all_reduce_op.h"
 #include "ops/op_register.h"
@@ -37,7 +37,7 @@ MpiAllReduceOp::MpiAllReduceOp(Var* x, NanoString op) : x(x), op(op) {
     }
     ASSERT(op == ns_add) << "Not supported MPI op" << op;
     #ifdef HAS_CUDA
-    if (use_device_mpi) {
+    if (use_device_mpi && use_cuda) {
         static auto nccl_all_reduce = has_op("nccl_all_reduce")
             ? get_op_info("nccl_all_reduce").get_constructor<VarPtr, Var*>()
             : nullptr;
@@ -62,8 +62,8 @@ VarPtr MpiAllReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 }
 
 void MpiAllReduceOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype();
-    jk << _CS("][OP:") << op << ']';
+    jk << "«Tx:" << x->dtype();
+    jk << "«OP:" << op;
 }
 
 #else // JIT

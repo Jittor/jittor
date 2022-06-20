@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -56,7 +56,7 @@ struct ReindexReduceOp : Op {
     
     * [in] shape:   the output shape, a integer array
     
-    * [in] indexes: array of c++ style integer expression, its length should be the same with length of shape, some buildin variables it can use are::
+    * [in] indexes: array of c++ style integer expression, its length should be the same with length of output shape, some buildin variables it can use are::
     
              XDIM, xshape0, ..., xshapem, xstride0, ..., xstridem
              YDIM, yshape0, ..., yshapen, ystride0, ..., ystriden

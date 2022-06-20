@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -8,24 +8,9 @@
 #include <chrono>
 #include <iomanip>
 #include "common.h"
+#include "misc/intrin.h"
 
 namespace jittor {
-
-static inline int _lzcnt(int64 v) {
-    #ifdef __clang__
-    #if __has_feature(__builtin_ia32_lzcnt_u64)
-        return __builtin_ia32_lzcnt_u64(v);
-    #else
-        return v ? __builtin_clzll(v) : 64;
-    #endif
-    #else
-    #ifdef _MSC_VER
-        return __lzcnt64(v);
-    #else
-        return __builtin_clzll(v);
-    #endif
-    #endif
-}
 
 struct SimpleProfiler {
     string name;
@@ -63,7 +48,7 @@ struct SimpleProfiler {
     inline SimpleProfiler(string&& name): name(move(name)), cnt(0), total_ns(0), sum(0) {}
     inline ~SimpleProfiler() { report(); }
     inline void add(int64 time, int64 s) {
-        auto nbit = 64 - _lzcnt(time);
+        auto nbit = 64 - lzcnt(time);
         auto i = (nbit-1) / 5;
         if (i>6) i=6;
         cnt ++;

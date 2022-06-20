@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: 
 //     Wenyang Zhou <576825820@qq.com>
 //     Dun Liang <randonlang@gmail.com>
@@ -28,13 +28,16 @@ namespace jittor {
 static int lock_fd = -1;
 int _has_lock = 0;
 
+DEFINE_FLAG(bool, disable_lock, 0, "Disable file lock");
+
 void set_lock_path(string path) {
-    lock_fd = open(path.c_str(), O_RDWR);
+    lock_fd = open(_to_winstr(path).c_str(), O_RDWR);
     ASSERT(lock_fd >= 0);
     LOGv << "OPEN LOCK path:" << path << "Pid:" << getpid();
 }
  
 void lock() {
+    if (disable_lock) return;
     ASSERT(lock_fd >= 0);
 #ifdef _WIN32
 	OVERLAPPED offset = {0, 0, 0, 0, NULL};
@@ -54,6 +57,7 @@ void lock() {
 }
  
 void unlock() {
+    if (disable_lock) return;
     ASSERT(lock_fd >= 0);
 #ifdef _WIN32
 	OVERLAPPED offset = {0, 0, 0, 0, NULL};

@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers:
 #     Guowei Yang <471184555@qq.com>
 #     Guoye Yang <498731903@qq.com>
@@ -12,8 +12,9 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 from abc import abstractmethod
+from sys import breakpointhook
 import jittor as jt
-from jittor import init, Module
+from jittor import flatten, init, Module
 import numpy as np
 import collections
 import math
@@ -38,9 +39,10 @@ def matmul_transpose(a, b):
     # if jt.flags.use_opencl:
     #     return jt.compile_extern.clblas_ops.clblas_matmul(a, b, 0, 1)
     shape = list(a.shape)[:-1] + list(b.shape)
-    a = a.broadcast(shape, [len(shape)-2])
-    b = b.broadcast(shape)
-    return (a*b).sum(len(shape)-1)
+    with jt.flag_scope(amp_reg = jt.flags.amp_reg | 4):
+        a = a.broadcast(shape, [len(shape)-2])
+        b = b.broadcast(shape)
+        return (a*b).sum(len(shape)-1)
 
 
 def bmm_transpose(a, b):
@@ -109,71 +111,200 @@ Example::
     c = jt.matmul(a, b)
     assert c.shape == [8, 10, 3, 5]
     '''
-    len_a = len(a.shape)
-    len_b = len(b.shape)
-    if len_b == 1:
-        # a: [n, m], b:[m], c:[n]
-        return (a*b).sum(-1)
-    if len_a == 1:
-        # a: [n], b:[n,k], c:[k]
-        return (a.broadcast(b, [-1]) * b).sum(0)
-    if len_a>=3 and len_a==len_b:
-        # bmm
-        # a: [..., n, m], b: [..., m, k], c:[..., n, k]
-        if jt.flags.use_cuda and jt.compile_extern.cublas_ops:
-            return jt.compile_extern.cublas_ops.cublas_batched_matmul(a, b, 0, 0)
-    shape = []
-    len_c = max(len_a, len_b)
-    (n, m), (m_, k) = a.shape[-2:], b.shape[-2:]
-    assert m == m_, f"dimension not match, a.shape:{a.shape}, b.shape:{b.shape}"
-    # a: [..., n, m]
-    # b: [..., m, k]
-    # cc:[..., n, m, k]
-    #     -->
-    #     012
-    if len_b == 2 and len_a>2:
-        # TODO:ugly implementation for tuner
-        aa = a.reshape((-1, m))
-        cc = matmul(aa, b)
-        # print(a.shape, b.shape, cc.shape) 
-        return cc.reshape(a.shape[:-1] + [k])
-    for i in range(len_c-2):
-        ai = len_a-(len_c-i)
-        bi = len_b-(len_c-i)
-        an = a.shape[ai] if ai>=0 else 1
-        bn = b.shape[bi] if bi>=0 else 1
-        if an!=1 and bn!=1:
-            assert an == bn, f"dimension not match, a.shape:{a.shape}, b.shape:{b.shape}"
-        cn = max(an, bn)
-        shape.append(cn)
-    # if jt.flags.use_opencl:
-    #     return jt.compile_extern.clblas_ops.clblas_matmul(a, b, 0, 0)
-    shape.extend([n, m, k])
-    a = a.broadcast(shape, [-1])
-    b = b.broadcast(shape, [-3])
-    return (a*b).sum(-2)
+    with jt.flag_scope(amp_reg = jt.flags.amp_reg | 4):
+        len_a = len(a.shape)
+        len_b = len(b.shape)
+        if len_b == 1:
+            # a: [n, m], b:[m], c:[n]
+            return (a*b).sum(-1)
+        if len_a == 1:
+            # a: [n], b:[n,k], c:[k]
+            return (a.broadcast(b, [-1]) * b).sum(0)
+        if len_a>=3 and len_a==len_b:
+            # bmm
+            # a: [..., n, m], b: [..., m, k], c:[..., n, k]
+            if jt.flags.use_cuda and jt.compile_extern.cublas_ops:
+                return jt.compile_extern.cublas_ops.cublas_batched_matmul(a, b, 0, 0)
+        shape = []
+        len_c = max(len_a, len_b)
+        (n, m), (m_, k) = a.shape[-2:], b.shape[-2:]
+        assert m == m_, f"dimension not match, a.shape:{a.shape}, b.shape:{b.shape}"
+        # a: [..., n, m]
+        # b: [..., m, k]
+        # cc:[..., n, m, k]
+        #     -->
+        #     012
+        if len_b == 2 and len_a>2:
+            # TODO:ugly implementation for tuner
+            aa = a.reshape((-1, m))
+            cc = matmul(aa, b)
+            # print(a.shape, b.shape, cc.shape) 
+            return cc.reshape(a.shape[:-1] + [k])
+        for i in range(len_c-2):
+            ai = len_a-(len_c-i)
+            bi = len_b-(len_c-i)
+            an = a.shape[ai] if ai>=0 else 1
+            bn = b.shape[bi] if bi>=0 else 1
+            if an!=1 and bn!=1:
+                assert an == bn, f"dimension not match, a.shape:{a.shape}, b.shape:{b.shape}"
+            cn = max(an, bn)
+            shape.append(cn)
+        shape.extend([n, m, k])
+        a = a.broadcast(shape, [-1])
+        b = b.broadcast(shape, [-3])
+        return (a*b).sum(-2)
 jt.Var.matmul = jt.Var.__matmul__ = matmul
 jt.Var.__imatmul__ = lambda a,b: a.assign(matmul(a,b))
 
 def get_init_var_rand(shape, dtype):
     return jt.array(np.random.normal(0.0, 1.0, shape).astype(np.float32))
 
-def relu(x): return jt.ternary((x>0.0), x, jt.broadcast_var(0.0, x))
-def leaky_relu(x, scale=0.01): return jt.ternary(x>0, x, x*scale)
-def relu6(x): return jt.minimum(jt.maximum(x, 0.0), 6.0)
-def elu(x,alpha=1.0):return jt.ternary(x>0,x,alpha*(x.exp()-1))
-def sign(x):
+def relu(x): 
+    r''' Applies the element-wise function:
+
+    .. math::
+        \text{ReLU6}(x) = \max(0,x)
+
+    :param x: the input var
+    :type x: jt.Var
+
+    Example:
+        >>> a = jt.randn(3)
+        >>> a
+        jt.Var([-0.38380373 1.1338731   6.128115  ], dtype=float32)
+        >>> nn.relu(a)
+        jt.Var([0.        1.1338731 6.128115 ], dtype=float32)
+    '''
+    cond = x>0.0
+    return jt.ternary_out_hint(cond, x, 0.0)
+
+
+def leaky_relu(x, scale=0.01): 
+    r''' Applies the element-wise function:
+
+    .. math::
+        \text{LeakyRELU}(x) =
+        \begin{cases}
+        x, & \text{ if } x \geq 0 \\
+        \text{scale} \times x, & \text{ otherwise }
+        \end{cases}
+
+    :param x: the input var
+    :type x: jt.Var
+
+    :param scale: the :math:`\scale` value for the leaky relu formulation. Default: 0.01
+    :param scale: float, optional
+
+    Example:
+        >>> a = jt.randn(3)
+        >>> a
+        jt.Var([-0.38380373 1.1338731   6.128115  ], dtype=float32)
+        >>> nn.leaky_relu(a)
+        jt.Var([-3.8380371e-03  1.1338731e+00  6.1281152e+00], dtype=float32)
+    '''
+    return jt.ternary(x>0, x, x*scale)
+
+def relu6(x): 
+    r''' Applies the element-wise function:
+
+    .. math::
+        \text{ReLU6}(x) = \min(\max(0,x), 6)
+
+    :param x: the input var
+    :type x: jt.Var
+
+    Example:
+        >>> a = jt.randn(3)
+        >>> a
+        jt.Var([-0.38380373 1.1338731   6.128115  ], dtype=float32)
+        >>> nn.relu6(a)
+        jt.Var([0.        1.1338731 6.       ], dtype=float32)
+    '''
+    return jt.minimum(jt.maximum(x, 0.0), 6.0)
+
+def elu(x: jt.Var, alpha: float = 1.0) -> jt.Var:
+    r''' Applies the element-wise function:
+
+    .. math::
+        \text{ELU}(x) = \begin{cases}
+        x, & \text{ if } x > 0\\
+        \alpha * (\exp(x) - 1), & \text{ if } x \leq 0
+        \end{cases}
+
+    :param x: the input var
+    :type x: jt.Var
+
+    :param alpha: the :math:`\alpha` value for the ELU formulation. Default: 1.0
+    :param alpha: float, optional
+
+    Example:
+        >>> a = jt.randn(3)
+        >>> a
+        jt.Var([-0.38380373 -1.1338731   2.128115  ], dtype=float32)
+        >>> nn.elu(a)
+        jt.Var([-0.31873488 -0.6782155   2.128115  ], dtype=float32)
+    '''
+    return jt.ternary(x>0,x,alpha*(x.exp()-1))
+
+def sign(x: jt.Var) -> jt.Var:
+    ''' returns the signs of elements of x
+
+    :param x: the input Var
+    :type x: jt.Var
+
+    Example:
+        >>> a = jt.float32([0.99, 0, -0.99])
+        >>> nn.sign(a)
+        jt.Var([ 1.  0. -1.], dtype=float32)
+    '''
     one = jt.ones(x.shape)
     x = jt.ternary(x>0, one, x)
     return jt.ternary(x<0, -one, x)
 
 def gelu(x):
+    r''' Applies the element-wise function:
+
+   .. math:: \text{GELU}(x) = x * \Phi(x)
+
+    where :math:`\Phi(x)` is the Cumulative Distribution Function for Gaussian Distribution.
+
+    :param x: the input var
+    :type x: jt.Var
+
+    Example:
+        >>> a = jt.randn(3)
+        >>> a
+        jt.Var([-0.38380373 -1.1338731   2.128115  ], dtype=float32)
+        >>> nn.gelu(a)
+        jt.Var([-0.134547   0.9882567  6.128115 ], dtype=float32)
+    '''
     _sqrt2 = 1.4142135623730951
     erf = jt.erf(x/_sqrt2)+1
     r = erf*x*.5
     return r
 
 class ELU(Module):
+    r''' Applies the element-wise function:
+
+    .. math::
+        \text{ELU}(x) = \begin{cases}
+        x, & \text{ if } x > 0\\
+        \alpha * (\exp(x) - 1), & \text{ if } x \leq 0
+        \end{cases}
+
+    :param x: the input var
+    :type x: jt.Var
+
+    :param alpha: the :math:`\alpha` value for the ELU formulation. Default: 1.0
+    :param alpha: float, optional
+
+    Example:
+        >>> a = jt.randn(3)
+        >>> a
+        jt.Var([-0.38380373 -1.1338731   2.128115  ], dtype=float32)
+        >>> nn.elu(a)
+        jt.Var([-0.31873488 -0.6782155   2.128115  ], dtype=float32)
+    '''
     def __init__(self,alpha=1.0):
         self.alpha=alpha
     
@@ -181,6 +312,31 @@ class ELU(Module):
         return elu(x,self.alpha)
 
 class PReLU(Module):
+    r''' Applies the element-wise function:
+
+    .. math::
+        \text{PReLU}(x) =
+        \begin{cases}
+        x, & \text{ if } x \geq 0 \\
+        ax, & \text{ otherwise }
+        \end{cases}
+
+    :param x: the input var
+    :type x: jt.Var
+
+    :param num_parameters: number of :math:`a` to learn, can be either 1 or the number of channels at input. Default: 1
+    :type num_parameters: int, optional
+
+    :param init: the initial value of :math:`a`. Default: 0.25
+    :param init: float, optional
+
+    Example:
+        >>> a = jt.randn(3)
+        >>> prelu = nn.PReLU()
+        >>> prelu(a)
+        jt.Var([-0.09595093  1.1338731   6.128115  ], dtype=float32)
+    '''
+
     def __init__(self, num_parameters=1, init_=0.25):
         self.num_parameters = num_parameters
         self.weight = init.constant((num_parameters,), "float32", init_)
@@ -193,7 +349,8 @@ class PReLU(Module):
             return jt.maximum(0, x) + self.weight * jt.minimum(0, x)
 
 #TODO dims is 4 will cause slowly execution
-def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction='sum'):
+def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction='mean'):
+    target_shape = target.shape
     if len(output.shape) == 4:
         c_dim = output.shape[1]
         output = output.transpose((0, 2, 3, 1))
@@ -217,14 +374,14 @@ def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction=
     logsum = output.exp().sum(1).log()
     loss = (logsum - (output*target).sum(1)) * target_weight
     if reduction == 'sum':
-        return loss.sum() / target_weight.sum()
+        return loss.sum()
     elif reduction == 'mean':
         return loss.mean() / target_weight.mean()
     else:
-        return loss / target_weight
+        return loss.reshape(target_shape) 
 
-def mse_loss(output, target):
-    return (output-target).sqr().mean()
+def mse_loss(output, target, reduction="mean"):
+    return (output-target).sqr().reduce(reduction)
 
 def bce_loss(output, target, weight=None, size_average=True):
     loss = - (target * jt.log(jt.maximum(output, 1e-20)) + (1 - target) * jt.log(jt.maximum(1 - output, 1e-20)))
@@ -295,10 +452,10 @@ class CrossEntropyLoss(Module):
         return cross_entropy_loss(output, target, self.weight, self.ignore_index)
 
 class MSELoss(Module):
-    def __init__(self):
-        pass
+    def __init__(self, reduction='mean'):
+        self.reduction = reduction
     def execute(self, output, target):
-        return mse_loss(output, target)
+        return mse_loss(output, target, self.reduction)
 
 class BCELoss(Module):
     def __init__(self, weight=None, size_average=True):
@@ -337,19 +494,20 @@ class BCEWithLogitsLoss(Module):
     def execute(self, output, target):
         return binary_cross_entropy_with_logits(output,target,self.weight,self.pos_weight,self.size_average)
 
-def softmax(x, dim = None):
-    if dim is None:
-        x = (x - x.max()).exp()
-        ret = x / x.sum()
-    else:
-        x = (x-x.max(dim, keepdims=True)).exp()
-        ret = x / x.sum(dim, keepdims=True)
-    return ret
+def softmax(x, dim=None, log=False):
+    import jittor.other.code_softmax as code_softmax
+    if code_softmax.can_softmax_v1(x, dim):
+        return code_softmax.softmax_v1(x, log)
+    if dim is None: dim = ()
+    if log:
+        a = x-x.max(dim, keepdims=True)
+        return a - a.exp().sum(dim, keepdims=True).log()
+    x = (x-x.max(dim, keepdims=True)).exp()
+    return x / x.sum(dim, keepdims=True)
 jt.Var.softmax = softmax
 
 def log_softmax(x,dim=None):
-    x = softmax(x,dim=dim)
-    return jt.log(x)
+    return softmax(x,dim=dim, log=True)
 jt.Var.log_softmax = log_softmax
 
 def log_sigmoid(x):
@@ -599,10 +757,46 @@ LeakyReLU = Leaky_relu
 ReLU6 = jt.make_module(relu6)
 Softmax = jt.make_module(softmax, 2)
 GELU = jt.make_module(gelu)
+Flatten = jt.make_module(jt.flatten)
 
 from jittor.depthwise_conv import DepthwiseConv
 
 class Conv(Module):
+    ''' Applies a 2D convolution over an input signal composed of several input planes.
+
+    :param in_channels: Number of channels in the input feature map
+    :type in_channels: int
+
+    :param out_channels: Number of channels in the output feature map
+    :type out_channels: int
+
+    :param kernel_size: Size of the convolving kernel
+    :type kernel_size: int or tuple
+
+    :param stride: Stride of the convolution. Default: 1
+    :type stride: int or tuple, optional
+
+    :param padding: Padding added to all four sides of the input. Default: 0
+    :type padding: int or tuple, optional
+
+    :param dilation: Spacing between kernel elements. Default: 1
+    :type dilation: int or tuple, optional
+
+    :param groups: Number of blocked connections from input channels to output channels. Default: 1
+    :type groups: int, optional
+
+    :param bias: If True, adds a learnable bias to the output. Default: True
+    :type bias: bool, optional
+
+    Example:
+
+    >>> conv = nn.Conv2d(24, 32, 3)
+    >>> conv = nn.Conv2d(24, 32, (3,3))
+    >>> conv = nn.Conv2d(24, 32, 3, stride=2, padding=1)
+    >>> conv = nn.Conv2d(24, 32, 3, dilation=(3, 1))
+    >>> input = jt.randn(4, 24, 100, 100)
+    >>> output = conv(input)
+    '''
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -617,9 +811,6 @@ class Conv(Module):
         assert in_channels % groups == 0, 'in_channels must be divisible by groups'
         assert out_channels % groups == 0, 'out_channels must be divisible by groups'
         Kh, Kw = self.kernel_size
-        self.groups = groups
-        assert in_channels % groups == 0, 'in_channels must be divisible by groups'
-        assert out_channels % groups == 0, 'out_channels must be divisible by groups'
 
         # self.weight = init.relu_invariant_gauss([out_channels, in_channels//groups, Kh, Kw], dtype="float", mode="fan_out")
         self.weight = init.invariant_uniform([out_channels, in_channels//groups, Kh, Kw], dtype="float")
@@ -646,15 +837,16 @@ class Conv(Module):
             oh = (H+self.padding[0]*2-Kh*self.dilation[0]+self.dilation[0]-1)//self.stride[0]+1
             ow = (W+self.padding[1]*2-Kw*self.dilation[1]+self.dilation[1]-1)//self.stride[1]+1
             assert oh>0 and ow>0
-            xx = x.reindex([N,self.out_channels,C,oh,ow,Kh,Kw], [
-                'i0', # Nid
-                'i2', # Cid
-                f'i3*{self.stride[0]}-{self.padding[0]}+i5*{self.dilation[0]}', # Hid+Khid
-                f'i4*{self.stride[1]}-{self.padding[1]}+i6*{self.dilation[1]}', # Wid+KWid
-            ])
-            ww = self.weight.broadcast(xx.shape, [0,3,4])
-            yy = xx*ww
-            y = yy.sum([2,5,6]) # Kc, Kh, Kw
+            with jt.flag_scope(amp_reg = jt.flags.amp_reg | 4):
+                xx = x.reindex([N,self.out_channels,C,oh,ow,Kh,Kw], [
+                    'i0', # Nid
+                    'i2', # Cid
+                    f'i3*{self.stride[0]}-{self.padding[0]}+i5*{self.dilation[0]}', # Hid+Khid
+                    f'i4*{self.stride[1]}-{self.padding[1]}+i6*{self.dilation[1]}', # Wid+KWid
+                ])
+                ww = self.weight.broadcast(xx.shape, [0,3,4])
+                yy = xx*ww
+                y = yy.sum([2,5,6]) # Kc, Kh, Kw
             if self.bias is not None:
                 b = self.bias.broadcast(y.shape, [0,2,3])
                 y = y + b
@@ -829,6 +1021,41 @@ else:
     Conv2d = Conv
 
 class Conv1d(Module):
+    ''' Applies a 1D convolution over an input signal composed of several input planes.
+
+    :param in_channels: Number of channels in the input feature map
+    :type in_channels: int
+
+    :param out_channels: Number of channels in the output feature map
+    :type out_channels: int
+
+    :param kernel_size: Size of the convolving kernel
+    :type kernel_size: int or tuple
+
+    :param stride: Stride of the convolution. Default: 1
+    :type stride: int or tuple, optional
+
+    :param padding: Padding added to all four sides of the input. Default: 0
+    :type padding: int or tuple, optional
+
+    :param dilation: Spacing between kernel elements. Default: 1
+    :type dilation: int or tuple, optional
+
+    :param groups: Number of blocked connections from input channels to output channels. Default: 1
+    :type groups: int, optional
+
+    :param bias: If True, adds a learnable bias to the output. Default: True
+    :type bias: bool, optional
+
+    Example:
+
+    >>> conv = nn.Conv1d(24, 32, 3)
+    >>> conv = nn.Conv1d(24, 32, (3,3))
+    >>> conv = nn.Conv1d(24, 32, 3, stride=2, padding=1)
+    >>> conv = nn.Conv1d(24, 32, 3, dilation=(3, 1))
+    >>> input = jt.randn(4, 24, 100)
+    >>> output = conv(input)
+    '''
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -855,6 +1082,41 @@ class Conv1d(Module):
         return y
 
 class Conv3d(Module):
+    ''' Applies a 3D convolution over an input signal composed of several input planes.
+
+    :param in_channels: Number of channels in the input feature map
+    :type in_channels: int
+
+    :param out_channels: Number of channels in the output feature map
+    :type out_channels: int
+
+    :param kernel_size: Size of the convolving kernel
+    :type kernel_size: int or tuple
+
+    :param stride: Stride of the convolution. Default: 1
+    :type stride: int or tuple, optional
+
+    :param padding: Padding added to all four sides of the input. Default: 0
+    :type padding: int or tuple, optional
+
+    :param dilation: Spacing between kernel elements. Default: 1
+    :type dilation: int or tuple, optional
+
+    :param groups: Number of blocked connections from input channels to output channels. Default: 1
+    :type groups: int, optional
+
+    :param bias: If True, adds a learnable bias to the output. Default: True
+    :type bias: bool, optional
+
+    Example:
+
+    >>> conv = nn.Conv3d(24, 32, 3)
+    >>> conv = nn.Conv3d(24, 32, (3,3))
+    >>> conv = nn.Conv3d(24, 32, 3, stride=2, padding=1)
+    >>> conv = nn.Conv3d(24, 32, 3, dilation=(3, 1))
+    >>> input = jt.randn(4, 24, 50, 50, 50)
+    >>> output = conv(input)
+    '''
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -883,7 +1145,48 @@ class Conv3d(Module):
     def execute(self, x):
         return conv3d(x, self.weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
 
+
+class Conv1d_sp(Linear):
+    def __init__(self, inchannels, outchannels, kernel_size=1, bias=True):
+        super().__init__(inchannels, outchannels, bias=bias)
+        assert kernel_size == 1
+
+    def execute(self, x):
+        x = x.transpose(0, 2, 1)
+        x = super().execute(x)
+        x = x.transpose(0, 2, 1)
+        return x
+
 def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
+    ''' Applies a 2D convolution over an input signal composed of several input planes.
+
+    :param x: the input image
+    :type x: jt.Var
+
+    :param weight: the convolution kernel
+    :type weight: jt.Var
+
+    :param bias: the bias after convolution
+    :type bias: jt,Var, optional
+
+    :param stride: Stride of the convolution. Default: 1
+    :type stride: int or tuple, optional
+
+    :param padding: Padding added to all four sides of the input. Default: 0
+    :type padding: int or tuple, optional
+
+    :param dilation: Spacing between kernel elements. Default: 1
+    :type dilation: int or tuple, optional
+
+    :param groups: Number of blocked connections from input channels to output channels. Default: 1
+    :type groups: int, optional
+
+    Example:
+
+    >>> x = jt.randn(4, 24, 100, 100)
+    >>> w = jt.randn(32, 24, 3, 3)
+    >>> y = nn.conv2d(x, w)
+    '''
     padding = _pair(padding)
     stride = _pair(stride)
     dilation = _pair(dilation)
@@ -894,15 +1197,16 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
         Kh, Kw = weight.shape[-2:]
         oh = (H+padding[0]*2-Kh*dilation[0]+dilation[0]-1)//stride[0]+1
         ow = (W+padding[1]*2-Kw*dilation[1]+dilation[1]-1)//stride[1]+1
-        xx = x.reindex([N,out_channels,C,oh,ow,Kh,Kw], [
-                'i0', # Nid
-                'i2', # Cid
-                f'i3*{stride[0]}-{padding[0]}+i5*{dilation[0]}', # Hid+Khid
-                f'i4*{stride[1]}-{padding[1]}+i6*{dilation[1]}', # Wid+KWid
-            ])
-        ww = weight.broadcast(xx.shape, [0,3,4])
-        yy = xx*ww
-        y = yy.sum([2,5,6]) # Kc, Kh, Kw
+        with jt.flag_scope(amp_reg = jt.flags.amp_reg | 4):
+            xx = x.reindex([N,out_channels,C,oh,ow,Kh,Kw], [
+                    'i0', # Nid
+                    'i2', # Cid
+                    f'i3*{stride[0]}-{padding[0]}+i5*{dilation[0]}', # Hid+Khid
+                    f'i4*{stride[1]}-{padding[1]}+i6*{dilation[1]}', # Wid+KWid
+                ])
+            ww = weight.broadcast(xx.shape, [0,3,4])
+            yy = xx*ww
+            y = yy.sum([2,5,6]) # Kc, Kh, Kw
         if bias is not None:
             b = bias.broadcast(y.shape, [0,2,3])
             y = y + b
@@ -940,8 +1244,38 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
             b = bias.broadcast(y.shape, [0,2,3])
             y = y + b
         return y
+conv = conv2d
 
 def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
+    ''' Applies a 3D convolution over an input signal composed of several input planes.
+
+    :param x: the input volume
+    :type x: jt.Var
+
+    :param weight: the convolution kernel
+    :type weight: jt.Var
+
+    :param bias: the bias after convolution
+    :type bias: jt,Var, optional
+
+    :param stride: Stride of the convolution. Default: 1
+    :type stride: int or tuple, optional
+
+    :param padding: Padding added to all four sides of the input. Default: 0
+    :type padding: int or tuple, optional
+
+    :param dilation: Spacing between kernel elements. Default: 1
+    :type dilation: int or tuple, optional
+
+    :param groups: Number of blocked connections from input channels to output channels. Default: 1
+    :type groups: int, optional
+
+    Example:
+
+    >>> x = jt.randn(4, 24, 50, 50, 50)
+    >>> w = jt.randn(32, 24, 3, 3, 3)
+    >>> y = nn.conv2d(x, w)
+    '''
     padding = _triple(padding)
     stride = _triple(stride)
     dilation = _triple(dilation)
@@ -1012,8 +1346,7 @@ class ConvTranspose(Module):
 
         # added
         self.dilation = dilation
-        self.group = groups
-        assert groups==1, "Group conv not supported yet."
+        self.groups = groups
 
         self.kernel_size = kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size)
         self.stride = stride if isinstance(stride, tuple) else (stride, stride)
@@ -1026,8 +1359,10 @@ class ConvTranspose(Module):
         assert self.output_padding[0] < max(self.stride[0], self.dilation[0]) and \
             self.output_padding[1] < max(self.stride[1], self.dilation[1]), \
             "output padding must be smaller than max(stride, dilation)"
+        assert in_channels % groups == 0, 'in_channels must be divisible by groups'
+        assert out_channels % groups == 0, 'out_channels must be divisible by groups'
 
-        self.weight = init.invariant_uniform((in_channels, out_channels) + self.kernel_size, dtype="float")
+        self.weight = init.invariant_uniform((in_channels, out_channels//groups) + self.kernel_size, dtype="float")
         if bias:
             fan=1
             for i in self.weight.shape[1:]:
@@ -1038,29 +1373,70 @@ class ConvTranspose(Module):
             self.bias = None
 
     def execute(self, x):
-        N,C,H,W = x.shape
-        i,o,h,w = self.weight.shape
-        assert C==i
-        stride_h, stride_w = self.stride
-        padding_h, padding_w = self.padding
-        dilation_h, dilation_w = self.dilation
+        if self.groups == 1:
+            N,C,H,W = x.shape
+            i,o,h,w = self.weight.shape
+            assert C==i
+            stride_h, stride_w = self.stride
+            padding_h, padding_w = self.padding
+            dilation_h, dilation_w = self.dilation
 
-        h_out = (H-1) * stride_h + self.output_padding[0] - 2*padding_h + 1 + (h-1)*dilation_h
-        w_out = (W-1) * stride_w + self.output_padding[1] - 2*padding_w + 1 + (w-1)*dilation_w
-        out_shape = (N, o, h_out, w_out)
-        shape = (N, i, o, H, W, h, w)
-        xx = x.broadcast(shape, (2, 5, 6)) # i,h,w
-        ww = self.weight.broadcast(shape, (0, 3, 4)) # N,H,W
-        y = (ww*xx).reindex_reduce("add", out_shape, [
-            'i0', # N
-            'i2', # o
-            f'i3*{stride_h}-{padding_h}+i5*{dilation_h}', # Hid+Khid
-            f'i4*{stride_w}-{padding_w}+i6*{dilation_w}', # Wid+KWid
-        ])
-        if self.bias is not None:
-            b = self.bias.broadcast(y.shape, [0,2,3])
-            y = y + b
-        return y
+            h_out = (H-1) * stride_h + self.output_padding[0] - 2*padding_h + 1 + (h-1)*dilation_h
+            w_out = (W-1) * stride_w + self.output_padding[1] - 2*padding_w + 1 + (w-1)*dilation_w
+            out_shape = (N, o, h_out, w_out)
+            shape = (N, i, o, H, W, h, w)
+            xx = x.broadcast(shape, (2, 5, 6)) # i,h,w
+            ww = self.weight.broadcast(shape, (0, 3, 4)) # N,H,W
+            y = (ww*xx).reindex_reduce("add", out_shape, [
+                'i0', # N
+                'i2', # o
+                f'i3*{stride_h}-{padding_h}+i5*{dilation_h}', # Hid+Khid
+                f'i4*{stride_w}-{padding_w}+i6*{dilation_w}', # Wid+KWid
+            ])
+            if self.bias is not None:
+                b = self.bias.broadcast(y.shape, [0,2,3])
+                y = y + b
+            return y
+        else:
+            N,C,H,W = x.shape
+            Kh, Kw = self.kernel_size
+            i,o,h,w = self.weight.shape
+            oc = self.out_channels
+            G = self.groups
+            CpG = C // G # channels per group
+            assert C==self.in_channels
+            stride_h, stride_w = self.stride
+            padding_h, padding_w = self.padding
+            dilation_h, dilation_w = self.dilation
+
+            oh = (H-1) * stride_h + self.output_padding[0] - 2*padding_h + 1 + (h-1)*dilation_h
+            ow = (W-1) * stride_w + self.output_padding[1] - 2*padding_w + 1 + (w-1)*dilation_w
+            out_shape = (N, oc, oh, ow)
+            shape = [N,G,oc//G,CpG,oh,ow,Kh,Kw]
+            xx = x.reindex(shape, [
+                'i0',
+                f'i1*{oc//G}+i2',
+                'i4',
+                'i5'
+            ])
+            ww = self.weight.reindex(shape, [
+                f'i1*{oc//G}+i2',
+                'i3',
+                'i6',
+                'i7'
+            ])
+            ww.compile_options = xx.compile_options = {"G":G,"C":C}
+            y = (ww*xx).reindex_reduce("add", out_shape, [
+                'i0', # Nid
+                f'i1*{CpG}+i3', # Gid
+                f'i4*{self.stride[0]}-{self.padding[0]}+i6*{self.dilation[0]}', # Hid+Khid
+                f'i5*{self.stride[1]}-{self.padding[1]}+i7*{self.dilation[1]}', # Wid+KWid
+            ])
+            if self.bias is not None:
+                b = self.bias.broadcast(y.shape, [0,2,3])
+                y = y + b
+            return y
+
 
 class ConvTranspose3d(Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, \
@@ -1102,42 +1478,91 @@ class ConvTranspose3d(Module):
         return conv_transpose3d(x, self.weight, self.bias, self.stride, self.padding, self.output_padding, self.group, self.dilation)
 
 def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding=0, groups=1, dilation=1):
-    x = input
-    N,C,H,W = x.shape
-    i,o,h,w = weight.shape
-    assert C==i
-    assert groups==1, "Group conv not supported yet."
-    stride = stride if isinstance(stride, tuple) else (stride, stride)
-    dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
-    # added
-    padding = padding if isinstance(padding, tuple) else (padding, padding)
-    output_padding = output_padding if isinstance (output_padding, tuple) else (output_padding, output_padding)
-    assert output_padding[0] < max(stride[0], dilation[0]) and \
-        output_padding[1] < max(stride[1], dilation[1]), \
-        "output padding must be smaller than max(stride, dilation)"
+    if groups == 1:
+        x = input
+        N,C,H,W = x.shape
+        i,o,h,w = weight.shape
+        assert C==i
+        stride = stride if isinstance(stride, tuple) else (stride, stride)
+        dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
+        # added
+        padding = padding if isinstance(padding, tuple) else (padding, padding)
+        output_padding = output_padding if isinstance (output_padding, tuple) else (output_padding, output_padding)
+        assert output_padding[0] < max(stride[0], dilation[0]) and \
+            output_padding[1] < max(stride[1], dilation[1]), \
+            "output padding must be smaller than max(stride, dilation)"
 
-    stride_h, stride_w = stride
-    padding_h, padding_w = padding
-    dilation_h, dilation_w = dilation
+        stride_h, stride_w = stride
+        padding_h, padding_w = padding
+        dilation_h, dilation_w = dilation
 
-    h_out = (H-1) * stride_h + output_padding[0] - 2*padding_h + 1 + (h-1)*dilation_h
-    w_out = (W-1) * stride_w + output_padding[1] - 2*padding_w + 1 + (w-1)*dilation_w
-    out_shape = (N, o, h_out, w_out)
-    shape = (N, i, o, H, W, h, w)
-    xx = x.broadcast(shape, (2, 5, 6)) # i,h,w
-    ww = weight.broadcast(shape, (0, 3, 4)) # N,H,W
-    y = (ww*xx).reindex_reduce("add", out_shape, [
-        'i0', # N
-        'i2', # o
-        f'i3*{stride_h}-{padding_h}+i5*{dilation_h}', # Hid+Khid
-        f'i4*{stride_w}-{padding_w}+i6*{dilation_w}', # Wid+KWid
-    ])
-    if isinstance(bias, jt.Var):
-        b = bias.broadcast(y.shape, [0,2,3])
-        y = y + b
+        h_out = (H-1) * stride_h + output_padding[0] - 2*padding_h + 1 + (h-1)*dilation_h
+        w_out = (W-1) * stride_w + output_padding[1] - 2*padding_w + 1 + (w-1)*dilation_w
+        out_shape = (N, o, h_out, w_out)
+        shape = (N, i, o, H, W, h, w)
+        xx = x.broadcast(shape, (2, 5, 6)) # i,h,w
+        ww = weight.broadcast(shape, (0, 3, 4)) # N,H,W
+        y = (ww*xx).reindex_reduce("add", out_shape, [
+            'i0', # N
+            'i2', # o
+            f'i3*{stride_h}-{padding_h}+i5*{dilation_h}', # Hid+Khid
+            f'i4*{stride_w}-{padding_w}+i6*{dilation_w}', # Wid+KWid
+        ])
+        if isinstance(bias, jt.Var):
+            b = bias.broadcast(y.shape, [0,2,3])
+            y = y + b
+        else:
+            assert not bias, "Bias should be none or jittor var"
+        return y
     else:
-        assert not bias, "Bias should be none or jittor var"
-    return y
+        N,C,H,W = input.shape
+        i,o,h,w = weight.shape
+        G = groups
+        oc = o * G
+        CpG = C // G # channels per group
+        assert C % G == 0
+        assert C==i, (C, i)
+        stride = stride if isinstance(stride, tuple) else (stride, stride)
+        dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
+        # added
+        padding = padding if isinstance(padding, tuple) else (padding, padding)
+        output_padding = output_padding if isinstance (output_padding, tuple) else (output_padding, output_padding)
+        assert output_padding[0] < max(stride[0], dilation[0]) and \
+            output_padding[1] < max(stride[1], dilation[1]), \
+            "output padding must be smaller than max(stride, dilation)"
+
+        stride_h, stride_w = stride
+        padding_h, padding_w = padding
+        dilation_h, dilation_w = dilation
+
+        oh = (H-1) * stride_h + output_padding[0] - 2*padding_h + 1 + (h-1)*dilation_h
+        ow = (W-1) * stride_w + output_padding[1] - 2*padding_w + 1 + (w-1)*dilation_w
+        out_shape = (N, oc, oh, ow)
+        shape = [N,G,oc//G,CpG,oh,ow,h,w]
+        xx = input.reindex(shape, [
+            'i0',
+            f'i1*{oc//G}+i2',
+            'i4',
+            'i5'
+        ])
+        ww = weight.reindex(shape, [
+            f'i1*{oc//G}+i2',
+            'i3',
+            'i6',
+            'i7'
+        ])
+        ww.compile_options = xx.compile_options = {"G":G,"C":C}
+        y = (ww*xx).reindex_reduce("add", out_shape, [
+            'i0', # Nid
+            f'i1*{CpG}+i3', # Gid
+            f'i4*{stride[0]}-{padding[0]}+i6*{dilation[0]}', # Hid+Khid
+            f'i5*{stride[1]}-{padding[1]}+i7*{dilation[1]}', # Wid+KWid
+        ])
+        if bias is not None:
+            b = bias.broadcast(y.shape, [0,2,3])
+            y = y + b
+        return y
+conv_transpose2d = conv_transpose
 
 def conv_transpose3d(input, weight, bias=None, stride=1, padding=0, output_padding=0, groups=1, dilation=1):
     x = input
@@ -1305,13 +1730,30 @@ class ReplicationPad2d(Module):
         ])
 
 class Embedding(Module):
+    ''' A simple lookup table that stores embeddings of a fixed dictionary and size.
+
+        :param num: size of the dictionary of embeddings
+        :type num: int
+
+        :param dim: the size of each embedding vector
+        :type dim: int
+
+        Example:
+            >>> embedding = nn.Embedding(10, 3)
+            >>> x = jt.int32([1, 2, 3, 3])
+            >>> embedding(x)
+            jt.Var([[ 1.1128596   0.19169547  0.706642]
+             [ 1.2047412   1.9668795   0.9932192]
+             [ 0.14941819  0.57047683 -1.3217674]
+             [ 0.14941819  0.57047683 -1.3217674]], dtype=float32)
+    '''
     def __init__(self, num, dim):
         self.num = num
         self.dim = dim
         self.weight = jt.init.gauss([num,dim],'float32').stop_grad()
 
     def execute(self, x):
-        res = self.weight[x].reshape([x.shape[0],self.dim])
+        res = self.weight[x.flatten()].reshape(x.shape + [self.dim])
         return res
 
 class PixelShuffle(Module):
@@ -1453,7 +1895,7 @@ upsample = resize
 
 def interpolate(X, size=None, scale_factor=None, mode='bilinear', align_corners=False, tf_mode=False):
     if scale_factor is not None:
-        size = [X.shape[-2] * scale_factor, X.shape[-1] * scale_factor]
+        size = [int(X.shape[-2] * scale_factor), int(X.shape[-1] * scale_factor)]
     if isinstance(size, int):
         size = (size, size)
     if scale_factor is not None and scale_factor > 1:
@@ -1812,7 +2254,7 @@ ParameterDict = ParameterList
 
 def Parameter(data, requires_grad=True):
     ''' The `Parameter` interface isn't needed in Jittor, this interface
-doesn't nothings and it is just used for compatible.
+does nothings and it is just used for compatible.
     
 A Jittor Var is a Parameter
 when it is a member of Module, if you don't want a Jittor
@@ -1898,30 +2340,30 @@ ModuleList = Sequential
 
 
 class LSTMCell(jt.Module):
+    ''' A long short-term memory (LSTM) cell.
+
+    :param input_size: The number of expected features in the input
+    :type input_size: int
+
+    :param hidden_size: The number of features in the hidden state
+    :type hidden_size: int
+
+    :param bias: If False, then the layer does not use bias weights b_ih and b_hh. Default: True.
+    :type bias: bool, optional
+
+    Example:
+
+    >>> rnn = nn.LSTMCell(10, 20) # (input_size, hidden_size)
+    >>> input = jt.randn(2, 3, 10) # (time_steps, batch, input_size)
+    >>> hx = jt.randn(3, 20) # (batch, hidden_size)
+    >>> cx = jt.randn(3, 20)
+    >>> output = []
+    >>> for i in range(input.shape[0]):
+            hx, cx = rnn(input[i], (hx, cx))
+            output.append(hx)
+    >>> output = jt.stack(output, dim=0)
+    '''
     def __init__(self, input_size, hidden_size, bias=True):
-        ''' A long short-term memory (LSTM) cell.
-
-        :param input_size: The number of expected features in the input
-        :type input_size: int
-
-        :param hidden_size: The number of features in the hidden state
-        :type hidden_size: int
-
-        :param bias: If False, then the layer does not use bias weights b_ih and b_hh. Default: True.
-        :type bias: bool, optional
-
-        Example:
-
-        >>> rnn = nn.LSTMCell(10, 20) # (input_size, hidden_size)
-        >>> input = jt.randn(2, 3, 10) # (time_steps, batch, input_size)
-        >>> hx = jt.randn(3, 20) # (batch, hidden_size)
-        >>> cx = jt.randn(3, 20)
-        >>> output = []
-        >>> for i in range(input.shape[0]):
-                hx, cx = rnn(input[i], (hx, cx))
-                output.append(hx)
-        >>> output = jt.stack(output, dim=0)
-        '''
         super().__init__()
 
         self.hidden_size = hidden_size
@@ -1959,31 +2401,31 @@ class LSTMCell(jt.Module):
 
 
 class RNNCell(jt.Module):
+    ''' An Elman RNN cell with tanh or ReLU non-linearity.
+
+    :param input_size: The number of expected features in the input
+    :type input_size: int
+
+    :param hidden_size: The number of features in the hidden state
+    :type hidden_size: int
+
+    :param bias: If False, then the layer does not use bias weights b_ih and b_hh. Default: True.
+    :type bias: bool, optional
+
+    :param nonlinearity: The non-linearity to use. Can be either 'tanh' or 'relu'. Default: 'tanh'.
+    :type nonlinearity: str, optional
+
+    Example:
+
+    >>> rnn = nn.RNNCell(10, 20)
+    >>> input = jt.randn((6, 3, 10))
+    >>> hx = jt.randn((3, 20))
+    >>> output = []
+    >>> for i in range(6):
+            hx = rnn(input[i], hx)
+            output.append(hx)
+    '''
     def __init__(self, input_size, hidden_size, bias=True, nonlinearity = "tanh"):
-        ''' An Elman RNN cell with tanh or ReLU non-linearity.
-
-        :param input_size: The number of expected features in the input
-        :type input_size: int
-
-        :param hidden_size: The number of features in the hidden state
-        :type hidden_size: int
-
-        :param bias: If False, then the layer does not use bias weights b_ih and b_hh. Default: True.
-        :type bias: bool, optional
-
-        :param nonlinearity: The non-linearity to use. Can be either 'tanh' or 'relu'. Default: 'tanh'.
-        :type nonlinearity: str, optional
-
-        Example:
-
-        >>> rnn = nn.RNNCell(10, 20)
-        >>> input = jt.randn((6, 3, 10))
-        >>> hx = jt.randn((3, 20))
-        >>> output = []
-        >>> for i in range(6):
-                hx = rnn(input[i], hx)
-                output.append(hx)
-        '''
         super().__init__()
 
         self.hidden_size = hidden_size
@@ -2016,29 +2458,30 @@ class RNNCell(jt.Module):
 
         return y
 
+
 class GRUCell(jt.Module):
+    ''' A gated recurrent unit (GRU) cell.
+
+    :param input_size: The number of expected features in the input
+    :type input_size: int
+
+    :param hidden_size: The number of features in the hidden state
+    :type hidden_size: int
+
+    :param bias: If False, then the layer does not use bias weights b_ih and b_hh. Default: True.
+    :type bias: bool, optional
+
+    Example:
+
+    >>> rnn = nn.GRUCell(10, 20)
+    >>> input = jt.randn((6, 3, 10))
+    >>> hx = jt.randn((3, 20))
+    >>> output = []
+    >>> for i in range(6):
+            hx = rnn(input[i], hx)
+            output.append(hx)
+    '''
     def __init__(self, input_size, hidden_size, bias=True):
-        ''' A gated recurrent unit (GRU) cell.
-
-        :param input_size: The number of expected features in the input
-        :type input_size: int
-
-        :param hidden_size: The number of features in the hidden state
-        :type hidden_size: int
-
-        :param bias: If False, then the layer does not use bias weights b_ih and b_hh. Default: True.
-        :type bias: bool, optional
-
-        Example:
-
-        >>> rnn = nn.GRUCell(10, 20)
-        >>> input = jt.randn((6, 3, 10))
-        >>> hx = jt.randn((3, 20))
-        >>> output = []
-        >>> for i in range(6):
-                hx = rnn(input[i], hx)
-                output.append(hx)
-        '''
         super().__init__()
 
         self.hidden_size = hidden_size
@@ -2076,7 +2519,7 @@ class RNNBase(Module):
     def __init__(self, mode: str, input_size: int, hidden_size: int, 
             num_layers: int = 1, bias: bool = True, batch_first: bool = False, 
             dropout: float = 0, bidirectional: bool = False, 
-            proj_size: int = 0) -> None:
+            proj_size: int = 0, nonlinearity: str = None) -> None:
         super().__init__()
 
         self.mode = mode
@@ -2088,6 +2531,7 @@ class RNNBase(Module):
         self.dropout = dropout
         self.bidirectional = bidirectional
         self.proj_size = proj_size
+        self.nonlinearity = nonlinearity
 
         if mode == 'LSTM':
             gate_size = 4 * hidden_size
@@ -2129,6 +2573,56 @@ class RNNBase(Module):
                 build_unit(f'bias_ih_l{layer}', gate_size)
                 build_unit(f'bias_hh_l{layer}', gate_size)
 
+    def _cudnn_flatten_weights(self, cudnn_mode):
+        def copy_to_flatten_weight(param_name, offset_idx, num_gates):
+            def copy_to(param_name, offset_idx, idx):
+                cur_offset = self._cudnn_weight_offset[offset_idx]
+                param = getattr(self, param_name)
+                param = param[self.hidden_size * idx: self.hidden_size * (idx + 1)]
+                ft_weight[cur_offset:cur_offset + param.numel()] = param.flatten()
+                
+            if self.bias:
+                for idx in range(num_gates):
+                    copy_to('weight' + param_name, offset_idx + idx * 2, idx)
+                    copy_to('bias' + param_name, offset_idx + idx * 2 + 1, idx)
+                return num_gates * 2
+            else:
+                for idx in range(num_gates):
+                    copy_to('weight' + param_name, offset_idx + idx, idx)
+                return num_gates
+
+        if jt.flags.use_cuda and jt.cudnn:
+            if getattr(self, '_cudnn_weight_size', None) is None:                
+                offset_array = jt.cudnn.cudnn_rnn_weight_offset(
+                    cudnn_mode,
+                    self.input_size,
+                    self.hidden_size, 
+                    self.num_layers,
+                    self.proj_size,
+                    self.bias,
+                    self.bidirectional
+                )
+                self._cudnn_weight_size = offset_array[0]
+                self._cudnn_weight_offset = offset_array[1:]
+            
+            num_gates = {
+                "RNN": 1, "LSTM": 4, "GRU": 3
+            }[self.mode]
+            ft_weight = jt.zeros(self._cudnn_weight_size, dtype=jt.float32)
+
+            cnt = 0
+            for layer in range(self.num_layers):
+                suffix = ''
+                cnt += copy_to_flatten_weight(f'_ih_l{layer}' + suffix, cnt, num_gates)
+                cnt += copy_to_flatten_weight(f'_hh_l{layer}' + suffix, cnt, num_gates)
+                if self.bidirectional:
+                    suffix = '_reverse'
+                    cnt += copy_to_flatten_weight(f'_ih_l{layer}' + suffix, cnt, num_gates)
+                    cnt += copy_to_flatten_weight(f'_hh_l{layer}' + suffix, cnt, num_gates)
+            return ft_weight
+        else:
+            raise RuntimeError("Not Cudnn found")
+
     @abstractmethod
     def call_rnn_cell(self, input, hidden, suffix):
         pass
@@ -2148,87 +2642,116 @@ class RNNBase(Module):
 
         return output, hidden
 
-    def execute(self, input, hx):
+    def _execute_cudnn_rnn(self, input, hx):
+        cudnn_mode = {
+            ('RNN', 'tanh'): 'tanh',
+            ('RNN', 'relu'): 'relu',
+            ('LSTM', None): 'lstm',
+            ('GRU', None): 'gru'
+        }[(self.mode, self.nonlinearity)]
+        ft_weight = self._cudnn_flatten_weights(cudnn_mode)
+
+        if self.mode == 'LSTM':
+            ret = jt.cudnn.ops.cudnn_rnn(input, hx[0], hx[1], ft_weight,
+                cudnn_mode, self.input_size, self.hidden_size, self.num_layers, 0,
+                self.dropout, self.bias, self.bidirectional, self.is_training()
+            )
+            return ret[0], (ret[1], ret[2])
+        else:
+            ret = jt.cudnn.ops.cudnn_rnn(input, hx, ft_weight,
+                cudnn_mode, self.input_size, self.hidden_size, self.num_layers, 0,
+                self.dropout, self.bias, self.bidirectional, self.is_training()
+            )
+            return ret[0], ret[1]
+
+    def execute(self, input, hx=None):
         if self.batch_first:
             input = input.permute(1, 0, 2)
 
         num_directions = 2 if self.bidirectional else 1
 
         if hx is None:
-            hx = self.default_init_state()
+            if self.mode in ['RNN', 'GRU']:
+                hx = jt.zeros((num_directions * self.num_layers, input.shape[1], self.hidden_size), dtype=input.dtype)
+            elif self.mode == 'LSTM':
+                hx = (jt.zeros((num_directions * self.num_layers, input.shape[1], self.hidden_size), dtype=input.dtype),
+                      jt.zeros((num_directions * self.num_layers, input.shape[1], self.hidden_size), dtype=input.dtype))
 
-        hidden_n = []
+        if jt.flags.use_cuda and jt.cudnn and self.proj_size == 0:
+            return self._execute_cudnn_rnn(input, hx)
+        else:
+            hidden_n = []
 
-        for l in range(self.num_layers):
-            output = []
+            for l in range(self.num_layers):
+                output = []
 
-            if isinstance(hx, tuple):
-                hidden = [h[l * num_directions] for h in hx]
-            else:
-                hidden = hx[l * num_directions]
-
-            output, _hidden = self.call_rnn_sequence(input, hidden, f'l{l}')
-            hidden_n.append(_hidden)
-
-            if self.bidirectional:
                 if isinstance(hx, tuple):
-                    hidden = [h[l * num_directions + 1] for h in hx]
+                    hidden = [h[l * num_directions] for h in hx]
                 else:
-                    hidden = hx[l * num_directions + 1]
+                    hidden = hx[l * num_directions]
 
-                output_b, _hidden = self.call_rnn_sequence(input, hidden, f'l{l}_reverse')
-                output = jt.concat([output, output_b], dim=-1)
+                output, _hidden = self.call_rnn_sequence(input, hidden, f'l{l}')
                 hidden_n.append(_hidden)
 
-            if self.dropout > 0:
-                input = dropout(output, p=self.dropout)
+                if self.bidirectional:
+                    if isinstance(hx, tuple):
+                        hidden = [h[l * num_directions + 1] for h in hx]
+                    else:
+                        hidden = hx[l * num_directions + 1]
+
+                    output_b, _hidden = self.call_rnn_sequence(input, hidden, f'l{l}_reverse')
+                    output = jt.concat([output, output_b], dim=-1)
+                    hidden_n.append(_hidden)
+
+                if self.dropout > 0:
+                    input = dropout(output, p=self.dropout)
+                else:
+                    input = output
+
+            if isinstance(hx, tuple):
+                hidden_n = tuple(jt.stack(hn, dim=0) for hn in zip(*hidden_n))
             else:
-                input = output
+                hidden_n = jt.stack(hidden_n, dim=0)
 
-        if isinstance(hx, tuple):
-            hidden_n = tuple(jt.stack(hn, dim=0) for hn in zip(*hidden_n))
-        else:
-            hidden_n = jt.stack(hidden_n, dim=0)
-
-        return output, hidden_n
+            return output, hidden_n
 
 
 class RNN(RNNBase):
+    ''' Applies a multi-layer Elman RNN with tanh ReLU non-linearity to an input sequence.
+
+    :param input_size: The number of expected features in the input.
+    :type input_size: int
+
+    :param hidden_size: The number of features in the hidden state.
+    :type hidden_size: int
+
+    :param num_layers: Number of recurrent layers. E.g., setting num_layers=2 would mean stacking two RNNs together to form a stacked RNN, with the second RNN taking in outputs of the first RNN and computing the final results. Default: 1
+    :type num_layers: int, optinal
+
+    :param nonlinearity: The non-linearity to use. Can be either 'tanh' or 'relu'. Default: 'tanh'
+    :type nonlinearity: str, optional
+
+    :param bias: If False, then the layer does not use bias weights b_ih and b_hh. Default: True.
+    :type bias: bool, optional
+
+    :param batch_first: If True, then the input and output tensors are provided as (batch, seq, feature). Default: False
+    :type bias: bool, optional
+
+    :param dropout: If non-zero, introduces a Dropout layer on the outputs of each RNN layer except the last layer, with dropout probability equal to dropout. Default: 0
+    :type dropout: float, optional
+
+    :param bidirectional: If True, becomes a bidirectional RNN. Default: False
+    :type bidirectional: bool, optional    
+
+    Example:
+        >>> rnn = nn.RNN(10, 20, 2)
+        >>> input = jt.randn(5, 3, 10)
+        >>> h0 = jt.randn(2, 3, 20)
+        >>> output, hn = rnn(input, h0)
+    '''
     def __init__(self, input_size: int, hidden_size: int, num_layers: int = 1,
         nonlinearity: str = 'tanh', bias: bool = True, batch_first: bool = False, 
         dropout: float = 0, bidirectional: bool = False) -> None:
-        ''' Applies a multi-layer Elman RNN with tanh ReLU non-linearity to an input sequence.
-
-        :param input_size: The number of expected features in the input.
-        :type input_size: int
-
-        :param hidden_size: The number of features in the hidden state.
-        :type hidden_size: int
-
-        :param num_layers: Number of recurrent layers. E.g., setting num_layers=2 would mean stacking two RNNs together to form a stacked RNN, with the second RNN taking in outputs of the first RNN and computing the final results. Default: 1
-        :type num_layers: int, optinal
-
-        :param nonlinearity: The non-linearity to use. Can be either 'tanh' or 'relu'. Default: 'tanh'
-        :type nonlinearity: str, optional
-
-        :param bias: If False, then the layer does not use bias weights b_ih and b_hh. Default: True.
-        :type bias: bool, optional
-
-        :param batch_first: If True, then the input and output tensors are provided as (batch, seq, feature). Default: False
-        :type bias: bool, optional
-
-        :param dropout: If non-zero, introduces a Dropout layer on the outputs of each RNN layer except the last layer, with dropout probability equal to dropout. Default: 0
-        :type dropout: float, optional
-
-        :param bidirectional: If True, becomes a bidirectional RNN. Default: False
-        :type bidirectional: bool, optional
-
-        Example:
-            >>> rnn = nn.RNN(10, 20, 2)
-            >>> input = jt.randn(5, 3, 10)
-            >>> h0 = jt.randn(2, 3, 20)
-            >>> output, hn = rnn(input, h0)
-        '''
         super().__init__('RNN', input_size, hidden_size, num_layers=num_layers, 
             bias=bias, batch_first=batch_first, dropout=dropout, 
             bidirectional=bidirectional)
@@ -2247,47 +2770,48 @@ class RNN(RNNBase):
         if self.nonlinearity == 'tanh':
             h = jt.tanh(y)
         else:
-            h = jt.relu(y)
+            h = jt.nn.relu(y)
 
         return h, h
 
 
 class LSTM(RNNBase):
+    ''' Applies a multi-layer long short-term memory (LSTM) RNN to an input sequence.
+
+    :param input_size: The number of expected features in the input.
+    :type input_size: int
+
+    :param hidden_size: The number of features in the hidden state.
+    :type hidden_size: int
+
+    :param num_layers: Number of recurrent layers. E.g., setting num_layers=2 would mean stacking two LSTMs together to form a stacked LSTM, with the second LSTM taking in outputs of the first LSTM and computing the final results. Default: 1
+    :type num_layers: int, optinal
+
+    :param bias: If False, then the layer does not use bias weights b_ih and b_hh. Default: True.
+    :type bias: bool, optional
+
+    :param batch_first: If True, then the input and output tensors are provided as (batch, seq, feature). Default: False
+    :type bias: bool, optional
+
+    :param dropout: If non-zero, introduces a Dropout layer on the outputs of each LSTM layer except the last layer, with dropout probability equal to dropout. Default: 0
+    :type dropout: float, optional
+
+    :param bidirectional: If True, becomes a bidirectional LSTM. Default: False
+    :type bidirectional: bool, optional
+
+    :param proj_size: If > 0, will use LSTM with projections of corresponding size. Default: 0
+    :type proj_size: int, optional
+
+    Example:
+        >>> rnn = nn.LSTM(10, 20, 2)
+        >>> input = jt.randn(5, 3, 10)
+        >>> h0 = jt.randn(2, 3, 20)
+        >>> c0 = jt.randn(2, 3, 20)
+        >>> output, (hn, cn) = rnn(input, (h0, c0))
+    '''
+
     def __init__(self, input_size, hidden_size, num_layers=1, bias=True, 
             batch_first=False, dropout=0, bidirectional=False, proj_size=0):
-        ''' Applies a multi-layer long short-term memory (LSTM) RNN to an input sequence.
-
-        :param input_size: The number of expected features in the input.
-        :type input_size: int
-
-        :param hidden_size: The number of features in the hidden state.
-        :type hidden_size: int
-
-        :param num_layers: Number of recurrent layers. E.g., setting num_layers=2 would mean stacking two LSTMs together to form a stacked LSTM, with the second LSTM taking in outputs of the first LSTM and computing the final results. Default: 1
-        :type num_layers: int, optinal
-
-        :param bias: If False, then the layer does not use bias weights b_ih and b_hh. Default: True.
-        :type bias: bool, optional
-
-        :param batch_first: If True, then the input and output tensors are provided as (batch, seq, feature). Default: False
-        :type bias: bool, optional
-
-        :param dropout: If non-zero, introduces a Dropout layer on the outputs of each LSTM layer except the last layer, with dropout probability equal to dropout. Default: 0
-        :type dropout: float, optional
-
-        :param bidirectional: If True, becomes a bidirectional LSTM. Default: False
-        :type bidirectional: bool, optional
-
-        :param proj_size: If > 0, will use LSTM with projections of corresponding size. Default: 0
-        :type proj_size: int, optional
-
-        Example:
-            >>> rnn = nn.LSTM(10, 20, 2)
-            >>> input = jt.randn(5, 3, 10)
-            >>> h0 = jt.randn(2, 3, 20)
-            >>> c0 = jt.randn(2, 3, 20)
-            >>> output, (hn, cn) = rnn(input, (h0, c0))
-        '''
         super().__init__('LSTM', input_size, hidden_size, num_layers=num_layers, 
             bias=bias, batch_first=batch_first, dropout=dropout, 
             bidirectional=bidirectional, proj_size=proj_size)
@@ -2314,38 +2838,39 @@ class LSTM(RNNBase):
 
 
 class GRU(RNNBase):
+    ''' Applies a multi-layer gated recurrent unit (GRU) RNN to an input sequence.
+
+    :param input_size: The number of expected features in the input.
+    :type input_size: int
+
+    :param hidden_size: The number of features in the hidden state.
+    :type hidden_size: int
+
+    :param num_layers: Number of recurrent layers. E.g., setting num_layers=2 would mean stacking two GRUs together to form a stacked GRU, with the second GRU taking in outputs of the first GRU and computing the final results. Default: 1
+    :type num_layers: int, optinal
+
+    :param bias: If False, then the layer does not use bias weights b_ih and b_hh. Default: True.
+    :type bias: bool, optional
+
+    :param batch_first: If True, then the input and output tensors are provided as (batch, seq, feature). Default: False
+    :type bias: bool, optional
+
+    :param dropout: If non-zero, introduces a Dropout layer on the outputs of each GRU layer except the last layer, with dropout probability equal to dropout. Default: 0
+    :type dropout: float, optional
+
+    :param bidirectional: If True, becomes a bidirectional GRU. Default: False
+    :type bidirectional: bool, optional
+
+    Example:
+        >>> rnn = nn.GRU(10, 20, 2)
+        >>> input = jt.randn(5, 3, 10)
+        >>> h0 = jt.randn(2, 3, 20)
+        >>> output, hn = rnn(input, h0)
+    '''
+
     def __init__(self, input_size: int, hidden_size: int, num_layers: int = 1,
         bias: bool = True, batch_first: bool = False, dropout: float = 0, 
         bidirectional: bool = False) -> None:
-        ''' Applies a multi-layer gated recurrent unit (GRU) RNN to an input sequence.
-
-        :param input_size: The number of expected features in the input.
-        :type input_size: int
-
-        :param hidden_size: The number of features in the hidden state.
-        :type hidden_size: int
-
-        :param num_layers: Number of recurrent layers. E.g., setting num_layers=2 would mean stacking two GRUs together to form a stacked GRU, with the second GRU taking in outputs of the first GRU and computing the final results. Default: 1
-        :type num_layers: int, optinal
-
-        :param bias: If False, then the layer does not use bias weights b_ih and b_hh. Default: True.
-        :type bias: bool, optional
-
-        :param batch_first: If True, then the input and output tensors are provided as (batch, seq, feature). Default: False
-        :type bias: bool, optional
-
-        :param dropout: If non-zero, introduces a Dropout layer on the outputs of each GRU layer except the last layer, with dropout probability equal to dropout. Default: 0
-        :type dropout: float, optional
-
-        :param bidirectional: If True, becomes a bidirectional GRU. Default: False
-        :type bidirectional: bool, optional
-
-        Example:
-            >>> rnn = nn.GRU(10, 20, 2)
-            >>> input = jt.randn(5, 3, 10)
-            >>> h0 = jt.randn(2, 3, 20)
-            >>> output, hn = rnn(input, h0)
-        '''
         super().__init__('GRU', input_size, hidden_size, num_layers=num_layers, 
             bias=bias, batch_first=batch_first, dropout=dropout, 
             bidirectional=bidirectional)
@@ -2398,3 +2923,13 @@ class Bilinear(Module):
 
     def execute(self, in1, in2):
         return bilinear(in1, in2, self.weight, self.bias)
+
+#TODO: support FFT2D only now.
+def _fft2(x, inverse=False):
+    assert(jt.flags.use_cuda==1)
+    assert(len(x.shape) == 4)
+    assert(x.shape[3] == 2)
+    y = jt.compile_extern.cufft_ops.cufft_fft(x, inverse)
+    if inverse:
+        y /= x.shape[1] * x.shape[2]
+    return y

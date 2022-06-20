@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -18,7 +18,7 @@ namespace jittor {
 typedef int8_t int8;
 typedef int16_t int16;
 typedef int int32;
-typedef int64_t int64;
+typedef long long int64;
 typedef uint8_t uint8;
 typedef uint16_t uint16;
 typedef uint32_t uint32;
@@ -238,5 +238,7 @@ std::ostream& operator<<(std::ostream& os, const Caster<T,To>& input) {
     for (const T i: input) os << i << ",";
     return os << ']';
 }
+
+#define JPU(x) ;
 
 } // jittor

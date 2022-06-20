@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: 
 #     Guowei Yang <471184555@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
@@ -91,7 +91,7 @@ void jittor::FusedOp::jit_run() {
             f.write(content)
 
         cmd = jt.flags.python_path + " " + \
-            jt.flags.jittor_path+"/utils/asm_tuner.py --cc_path=" + jt.flags.cc_path + " '" + self.src_path + "'" + " -DJIT -DJIT_cpu " + jt.flags.cc_flags + " -o '" + self.so_path + "'";
+            jt.flags.jittor_path+"/utils/asm_tuner.py --cc_path=" + jt.flags.cc_path + " '" + self.src_path + "'" + " -DJIT -DJIT_cpu " + jt.compiler.fix_cl_flags(jt.flags.cc_flags) + " -o '" + self.so_path + "'";
         self.run_cmd(cmd)
 
         s_path=self.so_path.replace(".so",".s")

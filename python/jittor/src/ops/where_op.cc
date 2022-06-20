@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -21,7 +21,7 @@ namespace jittor {
 WhereOp::WhereOp(Var* cond, NanoString dtype) : cond(cond) {
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
-    flags.set(NodeFlags::_vary_shape);
+    flags.set(NodeFlags::_manual_set_vnbb);
     auto ndim = cond->shape.size();
     #ifdef HAS_CUDA
     if (use_cuda) {
@@ -39,20 +39,24 @@ WhereOp::WhereOp(Var* cond, NanoString dtype) : cond(cond) {
     for (uint i=0; i<ndim; i++)
         outs[i] = create_output(nullptr, dtype);
 }
+static auto make_ternary = get_op_info("ternary")
+    .get_constructor<VarPtr, Var*, Var*, Var*>();
+WhereOp::WhereOp(Var* cond, Var* x, Var* y) {
+    forward(make_ternary(cond, x, y));
+    return;
+}
 
 void WhereOp::infer_shape() {
     auto ndim = cond->shape.size();
-    auto num = cond->num;
-    if (num>0) num = -num;
+    auto num = -cond->num;
     for (uint i=0; i<ndim; i++)
         outs[i]->set_shape({num});
 }
 
 void WhereOp::jit_prepare(JK& jk) {
-    jk << _CS("[Ti:") << cond->dtype();
-    jk << _CS("][To:") << outs[0]->dtype();
-    jk << _CS("][NDIM=") << JK::hex1(cond->shape.size());
-    jk << ']';
+    jk << "«Ti:" << cond->dtype();
+    jk << "«To:" << outs[0]->dtype();
+    jk << "«NDIM=" << JK::hex1(cond->shape.size());
 }
 
 #else // JIT
@@ -230,7 +234,7 @@ void WhereOp::jit_run() {
 
     int n=0;
     // checkCudaErrors(cudaDeviceSynchronize());
-    checkCudaErrors(cudaMemcpy(&n, np, 4, cudaMemcpyDefault));
+    checkCudaErrors(cudaMemcpy(&n, np, 4, cudaMemcpyDeviceToHost));
     @for(i, 0, NDIM, outs[@i]->set_shape({n});)
     exe.temp_allocator->free(np, 4, n_allocation);
 }

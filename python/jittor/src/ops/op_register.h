@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -38,5 +38,15 @@ struct OpInfo {
 void op_registe(const OpInfo& op_info);
 bool has_op(const string& name);
 OpInfo get_op_info(const string& name);
+
+struct OpCompiler;
+struct OpByType {
+    unordered_set<string> types;
+    virtual string expand_op(const vector<string>& args) = 0;
+    virtual void post_pass(OpCompiler*) = 0;
+};
+
+extern vector<OpByType*> op_types;
+int registe_op_type(OpByType*);
 
 } // jittor

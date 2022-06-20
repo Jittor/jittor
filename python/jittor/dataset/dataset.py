@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: 
 #     Meng-Hao Guo <guomenghao1997@gmail.com>
 #     Dun Liang <randonlang@gmail.com>. 
@@ -21,11 +21,12 @@ import signal
 from jittor_utils import LOG
 import jittor as jt
 import time
+import jittor_utils as jit_utils
 
 if os.environ.get("is_mobile", "0") == "1":
     dataset_root = os.path.join("/data/data/com.example.mjittor", ".cache", "jittor", "dataset")
 else:
-    dataset_root = os.path.join(pathlib.Path.home(), ".cache", "jittor", "dataset")
+    dataset_root = os.path.join(jit_utils.home(), ".cache", "jittor", "dataset")
 mp_log_v = os.environ.get("mp_log_v", 0) 
 mpi = jt.mpi
 img_open_hook = HookTimer(Image, "open")
@@ -367,6 +368,7 @@ Example::
         self.gid_obj.value = 0
             
     def _init_workers(self, index_list):
+        jt.migrate_all_to_cpu()
         jt.clean()
         jt.gc()
         self.index_list = mp.Array('i', self.real_len, lock=False)
@@ -409,7 +411,10 @@ Example::
     def __del__(self):
         if mp_log_v:
             print("dataset deleted")
-        self.terminate()
+        try:
+            self.terminate()
+        except:
+            pass
 
     def __real_len__(self):
         if self.total_len is None:

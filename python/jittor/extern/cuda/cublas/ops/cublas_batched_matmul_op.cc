@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: 
 //     Meng-Hao Guo <guomenghao1997@gmail.com>
 //     Dun Liang <randonlang@gmail.com>. 
@@ -13,11 +13,13 @@
 #include "var.h"
 
 #include "cublas_batched_matmul_op.h"
-#include "cublas_warper.h"
+#include "cublas_wrapper.h"
 
 using namespace std;
 
 namespace jittor {
+
+extern int use_tensorcore;
 
 #ifndef JIT
 
@@ -33,6 +35,9 @@ CublasBatchedMatmulOp::CublasBatchedMatmulOp(Var* a, Var* b, bool trans_a, bool 
     c = create_output(nullptr, a->dtype());
     flags.set(NodeFlags::_cpu, 0);
     flags.set(NodeFlags::_cuda, 1);
+    flags.set(NodeFlags::_manual_set_vnbb);
+    a->flags.set(NodeFlags::_needed_by_backward);
+    b->flags.set(NodeFlags::_needed_by_backward);
 }
 
 
@@ -84,11 +89,10 @@ void CublasBatchedMatmulOp::infer_shape(){
 }
 
 void CublasBatchedMatmulOp::jit_prepare(JK& jk) {
-    jk << _CS("[T:") << a->dtype();
-    jk << _CS("][Trans_a:") << (trans_a ? 'T' : 'N');
-    jk << _CS("][Trans_b:") << (trans_b ? 'T' : 'N');
-    jk << _CS("][op:") << (a->dtype().dsize() == 4 ? 'S' : 'D');
-    jk << ']';
+    jk << "«T:" << a->dtype();
+    jk << "«Trans_a:" << (trans_a ? 'T' : 'N');
+    jk << "«Trans_b:" << (trans_b ? 'T' : 'N');
+    jk << "«op:" << (a->dtype().dsize() == 2? 'H' : (a->dtype().dsize() == 4 ? 'S' : 'D'));
 }
 
 #else // JIT
@@ -116,13 +120,46 @@ void CublasBatchedMatmulOp::jit_run() {
         k = bs[adim-2];
     }
     // a: [b,n,m], b: [b,m,k], c: [b,n,k]
-    checkCudaErrors(cublas@op@@gemmStridedBatched(handle_,
+    #if CUDART_VERSION >= 11000
+    cublasGemmAlgo_t algo = CUBLAS_GEMM_DEFAULT;
+    cublasComputeType_t computeType = CUBLAS_COMPUTE_32F;
+    if (use_tensorcore>=3) {
+        computeType = CUBLAS_COMPUTE_32F_FAST_16F;
+    } else if (use_tensorcore==2) {
+        computeType = CUBLAS_COMPUTE_32F_FAST_16BF;
+    } else if (use_tensorcore==1) {
+        computeType = CUBLAS_COMPUTE_32F_FAST_TF32;
+    }
+    if (a->dtype() == ns_float16
+        || b->dtype() == ns_float16 || c->dtype() == ns_float16) {
+        computeType = CUBLAS_COMPUTE_16F;
+    }
+    #else 
+    cublasGemmAlgo_t algo = CUBLAS_GEMM_DEFAULT;
+    cudaDataType_t computeType = CUDA_R_32F;
+    if (use_tensorcore) {
+        algo = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+    }
+    if (a->dtype() == ns_float16
+        || b->dtype() == ns_float16 || c->dtype() == ns_float16) {
+        computeType = CUDA_R_16F;
+        algo = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+    }
+    #endif
+    checkCudaErrors(cublasGemmStridedBatchedEx(handle_,
     CUBLAS_OP_@Trans_b, CUBLAS_OP_@Trans_a,
     k, n, m, &alpha,
-    b->ptr<T>(), '@Trans_b' == 'N' ? k : m, k * m, 
-    a->ptr<T>(), '@Trans_a' == 'N' ? m : n, n * m, &beta,
-    c->ptr<T>(), k, k * n,
-    batch_size));
+    b->ptr<T>(),get_dtype(b->dtype()), '@Trans_b' == 'N' ? k : m, k * m, 
+    a->ptr<T>(),get_dtype(a->dtype()), '@Trans_a' == 'N' ? m : n, n * m, &beta,
+    c->ptr<T>(),get_dtype(c->dtype()), k, k * n,
+    batch_size,computeType,algo));
+    // checkCudaErrors(cublas@op@@gemmStridedBatched(handle_,
+    // CUBLAS_OP_@Trans_b, CUBLAS_OP_@Trans_a,
+    // k, n, m, &alpha,
+    // b->ptr<T>(), '@Trans_b' == 'N' ? k : m, k * m, 
+    // a->ptr<T>(), '@Trans_a' == 'N' ? m : n, n * m, &beta,
+    // c->ptr<T>(), k, k * n,
+    // batch_size));
 }
 #endif
 #endif // JIT

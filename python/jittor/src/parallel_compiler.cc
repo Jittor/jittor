@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved.
+// Copyright (c) 2022 Jittor. All Rights Reserved.
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -197,12 +197,14 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
     #endif
     static std::atomic<int> ai;
     static volatile int has_error;
+    static string error_msg;
     static vector<vector<std::tuple<int,int,void*,string>>> op_entrys(thread_num);
     // <int,int,void*,string> represents: task id, is_fused_op, entry or context, new_jit_key
     threads.create_threads(thread_num);
     static std::mutex entry_lock;
     ai = 0;
     has_error = 0;
+    error_msg = "";
     int n = op_needs_compile.size();
     LOGvv << "Total number of op needs compile" << op_needs_compile.size()
         << "thread_num:" << thread_num;
@@ -267,14 +269,16 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
                 // log jit_key and file location
                 op->do_prepare(jkl);
                 string jit_src_path = Op::get_filename_from_jit_key(jkl.to_cstring(), ".cc");
-                LOGe << "[Error] source file location:" << jit_src_path;
+                std::stringstream ss;
+                ss << "[Error] source file location:" << jit_src_path << '\n';
 
                 if (is_fused_op) {
-                    LOGe << "Compile fused operator(" >> i >> '/' >> n >> ")"
-                        << "failed:" << ((FusedOp*)op)->ops << "\n\nReason: " >> e.what();
+                    ss << "Compile fused operator(" << i << '/' << n << ")"
+                        << "failed:" << ((FusedOp*)op)->ops << "\n\nReason: " << e.what() << '\n';
                 } else
-                    LOGe << "Compile operator(" >> i >> '/' >> n >> ")"
-                        << "failed:" << op << "\n\nReason: " >> e.what();
+                    ss << "Compile operator(" << i << '/' << n << ")"
+                        << "failed:" << op << "\n\nReason: " << e.what() << '\n';
+                error_msg = ss.str();
                 has_error = 1;
                 break;
             }
@@ -322,7 +326,7 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
 
     if (has_error) {
         threads.wait_all();
-        LOGf << "Error happend during compilation, see error above.";
+        LOGf << "Error happend during compilation:\n" << error_msg;
     }
     
     // fill all op entry

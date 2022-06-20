@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
@@ -68,6 +68,10 @@ class TestTransposeOp(unittest.TestCase):
         assert a.permute().shape == [4,3,2]
         assert a.permute(0,2,1).shape == [2,4,3]
 
+    def test_transpose_3d2i(self):
+        a = jt.ones([2,3,4])
+        assert a.transpose(0,1).shape == (3,2,4)
+
     @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
     @jt.flag_scope(use_cuda=1)
     def test_cutt(self):
@@ -78,6 +82,14 @@ class TestTransposeOp(unittest.TestCase):
         a = jt.zeros((1,1))
         b = a.transpose((1,0))
         b.sync()
+
+    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @jt.flag_scope(use_cuda=1)
+    def test_cutt_bug(self):
+        a = jt.rand(640000,4,3)
+        b = a.transpose(0,2,1)
+        b.sync(True)
+        print(a.shape, b.shape)
 
 
 class TestFuseTransposeOp(unittest.TestCase):

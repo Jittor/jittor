@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -13,13 +13,26 @@ namespace jittor {
 #ifndef JIT
 static auto make_ternary = get_op_info("ternary")
     .get_constructor<VarPtr, Var*, Var*, Var*>();
+static auto make_broadcast = get_op_info("broadcast_to")
+    .get_constructor<VarPtr, Var*, Var*, NanoVector>();
 static auto make_number = get_op_info("number")
     .get_constructor<VarPtr, float, Var*>();
 
 TernaryOp::TernaryOp(Var* cond, Var* x, Var* y) : cond(cond), x(x), y(y) {
+    bool bx = cond->shape.size() > x->shape.size() || cond->num > x->num;
+    bool by = cond->shape.size() > y->shape.size() || cond->num > y->num;
+    if (bx || by) {
+        VarPtr xx, yy;
+        if (bx) xx = make_broadcast(x, cond, NanoVector()), x = xx;
+        if (by) yy = make_broadcast(y, cond, NanoVector()), y = yy;
+        forward(make_ternary(cond, x, y));
+        return;
+    }
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
     set_type(OpType::element);
+    flags.set(NodeFlags::_manual_set_vnbb);
+    cond->flags.set(NodeFlags::_needed_by_backward);
     z = create_output(nullptr, dtype_infer(x->ns, y->ns));
 }
 
@@ -45,17 +58,16 @@ void TernaryOp::infer_shape() {
         auto shape = std::min(xshape, std::min(yshape, cshape));
         auto shape2 = std::max(xshape, std::max(yshape, cshape));
         zshape.push_back(shape2);
-        if (shape < 0) continue;
         CHECK(shape==shape2) << "Shape not match" << x->shape << y->shape << cond->shape;
     }
     z->set_shape(zshape);
 }
 
 void TernaryOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tc:") << cond->dtype();
-    jk << _CS("][Tx:") << x->dtype();
-    jk << _CS("][Ty:") << y->dtype();
-    jk << _CS("][Tz:") << z->dtype() << ']';
+    jk << "«Tc:" << cond->dtype();
+    jk << "«Tx:" << x->dtype();
+    jk << "«Ty:" << y->dtype();
+    jk << "«Tz:" << z->dtype();
 }
 
 #else // JIT

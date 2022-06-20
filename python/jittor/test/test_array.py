@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
@@ -192,6 +192,20 @@ class TestArray(unittest.TestCase):
                 c = b.numpy()
                 assert str(c.dtype) == t
                 np.testing.assert_allclose(a, c)
+
+    def test_scalar_fuse_unary(self):
+        c = jt.ones(10)
+        jt.sync_all()
+        with jt.profile_scope() as rep:
+            b = c-1
+            assert b.data[1] == 0
+        assert len(rep) == 2
+        
+    @unittest.skipIf(not jt.has_cuda, "Cuda not found")
+    def test_scalar_fuse_unary_cuda(self):
+        with jt.flag_scope(use_cuda=1):
+            self.test_scalar_fuse_unary()
+
 
 
 if __name__ == "__main__":

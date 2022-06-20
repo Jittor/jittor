@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: 
 //     Dun Liang <randonlang@gmail.com>. 
 // 
@@ -20,6 +20,7 @@ namespace jittor {
 CopyOp::CopyOp(Var* x) {
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
+    flags.set(NodeFlags::_manual_set_vnbb);
     auto y = create_output(nullptr, x->dtype());
     if (x->name.ptr)
         y->name = x->name;
@@ -39,8 +40,8 @@ void CopyOp::run() {
     auto x_ptr = x->mem_ptr;
     auto y_ptr = outputs().front()->mem_ptr;
     #ifdef HAS_CUDA
-    if (flags.get(NodeFlags::_cuda))  {
-        checkCudaErrors(cudaMemcpyAsync(y_ptr, x_ptr, size, cudaMemcpyDefault, 0));
+    if (flags.get(NodeFlags::_cuda)) {
+        checkCudaErrors(cudaMemcpyAsync(y_ptr, x_ptr, size, cudaMemcpyDeviceToDevice, 0));
     } else
     #endif
     {

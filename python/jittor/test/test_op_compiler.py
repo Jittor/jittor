@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
@@ -111,17 +111,6 @@ class TestOpCompiler(unittest.TestCase):
         check("@{a^b == 7}", "2")
         check("@{(a^b) == 7}", "1")
         check("@{b<<a == 5*4}", "1")
-        check('''#include "ops/binary_op_defs.h"
-        #define OP1(a, b) a+b
-        OP1
-        @expand_macro(OP1,1,2)
-        @expand_macro(maximum, T, 1, 2)
-        @expand_macro(@OP,T,1,2)''',
-        '''        #define OP1(a, b) a+b
-        OP1
-        1+2
-        std::max(T(1), T(2))
-        ((1)+T(2)*(T(rcount)))''')
         expect_error(lambda: jit_precompile(vars, "@{a"))
         expect_error(lambda: jit_precompile(vars, "@for(a"))
         expect_error(lambda: jit_precompile(vars, "@for(i,l,r)"))
@@ -161,6 +150,11 @@ ncclBcast(..., @T_NCCL, ...)
         assert "ncclInt" in jit_precompile({"Tx":"int32"}, code)
         assert "ncclInt64" in jit_precompile({"Tx":"int64"}, code)
         
+    def test_mif(self):
+        vars = {"Tx":"float"}
+        check = lambda expr, result: \
+            self.assertEqual(jit_precompile(vars, expr), result)
+        check("#if aa>1\n@Tx\n#else\n@Tx@@1\n#endif", "#if aa>1\nfloat\n#else\nfloat1\n#endif")
 
 
 if __name__ == "__main__":

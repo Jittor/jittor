@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: 
 #     Guoye Yang <498731903@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
@@ -130,6 +130,7 @@ class TestMatmul(unittest.TestCase):
         np.random.seed(0)
         jt.set_seed(3)
         model = Model()
+        for p in reversed(model.parameters()): p.sync(0,0)
         SGD = jt.nn.SGD(model.parameters(), 0.05, 0.9, 0)
         n = 1000
         batch_size = 50
@@ -330,7 +331,7 @@ class TestMatmul(unittest.TestCase):
             c = jt.matmul(a, b)
             cc = np.matmul(a.data, b.data)
             assert c.shape == cc.shape or (cc.shape==() and c.shape==[1]), (c.shape, cc.shape)
-            assert np.allclose(c.data, cc), (c.data-cc)
+            np.testing.assert_allclose(c.data, cc, atol=1e-5)
             da, db = jt.grad(c, [a, b])
             assert da.shape == a.shape
             assert db.shape == b.shape
@@ -352,6 +353,49 @@ class TestMatmul(unittest.TestCase):
         a = jt.random((10,))
         b = linear(a)
         assert b.shape == (20,)
+
+    # def test_tensorcore(self):
+    #     import time
+    #     jt.flags.use_cuda = 1
+    #     # jt.flags.use_tensorcore = 1
+    #     a = jt.rand(4096, 4096)
+    #     b = jt.rand(4096, 4096)
+    #     for i in range(100):
+    #         c = jt.matmul(a, b)
+    #         c.sync()
+    #     jt.sync_all(True)
+
+    #     start = time.time()
+    #     for i in range(1000):
+    #         c = jt.matmul(a, b)
+    #         c.sync()
+    #     jt.sync_all(True)
+    #     end = time.time() - start
+    #     gflops = 4096**3*2 * 1000 / end / 10**9
+    #     print(end, gflops)
+    #     # 14T vs 37T
+
+    # def test_conv(self):
+    #     import time
+    #     jt.flags.use_cuda = 1
+    #     # jt.flags.use_tensorcore = 1
+    #     a = jt.rand(160, 1024, 16, 16)
+    #     b = jt.rand(1024, 1024, 1, 1)
+    #     for i in range(100):
+    #         c = jt.nn.conv2d(a, b)
+    #         c.sync()
+    #     jt.sync_all(True)
+
+    #     start = time.time()
+    #     for i in range(1000):
+    #         c = jt.nn.conv2d(a, b)
+    #         c.sync()
+    #     jt.sync_all(True)
+    #     end = time.time() - start
+    #     gflops = a.numel() * b.numel() * 2 / 1024 * 1000 / end / 10**9
+    #     print(end, gflops)
+    #     # 12T vs 30T
+
 
 if __name__ == "__main__":
     unittest.main()

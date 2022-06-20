@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -24,6 +24,7 @@
 #include "profiler/memory_checker.h"
 #include "misc/deleter.h"
 #include "opencl_warper.h"
+#include "executor.h"
 
 namespace jittor {
 
@@ -31,6 +32,8 @@ Profiler profiler;
 
 DEFINE_FLAG(int, profiler_warmup, 0, "Profiler warmup.");
 DEFINE_FLAG(int, profiler_rerun, 0, "Profiler rerun.");
+DEFINE_FLAG(int, profiler_record_peek, 0, "Profiler record peek mem bandwidth.");
+DEFINE_FLAG(int, profiler_record_shape, 0, "Profiler record shape for op.");
 DEFINE_FLAG(int, profiler_hide_relay, 0, "Profiler hide relayed op.");
 DEFINE_FLAG_WITH_SETTER(int, profiler_enable, 0, "Enable profiler.");
 
@@ -55,6 +58,8 @@ void Profiler::start(int64 warmup, int64 rerun) {
     profiler.records.clear();
     profiler.warmup = warmup;
     profiler.rerun = rerun;
+    profiler.relay_extra_cost = 0;
+    profiler.relay_fop = 0;
 }
 
 void Profiler::stop() {
@@ -139,6 +144,60 @@ static  string get_stack_info(Op* op) {
     }
 }
 
+static void stat_peek_bandwidth(uint64 in, uint64 out, uint64 loop, uint64& peek_time_total) {
+    auto size = (in+out) / 2;
+    // memcpy in some not aligned case will drop performance
+    size &= ~((1 << 12)-1);
+    // size = 7680000*4;
+    auto temp1 = exe.alloc_temp(size);
+    auto temp2 = exe.alloc_temp(size);
+    loop = 1 << loop;
+    int warmup = std::max(loop/8, (uint64)1);
+    for (int i=0; i<warmup; i++)
+    #ifdef HAS_CUDA
+        if (use_cuda)
+            cudaMemcpyAsync(temp1.ptr, temp2.ptr, size, cudaMemcpyDeviceToDevice, 0);
+        else
+    #endif
+            std::memcpy(temp1.ptr, temp2.ptr, size);
+    #ifdef HAS_CUDA
+    if (use_cuda)
+        checkCudaErrors(cudaDeviceSynchronize());
+    #endif
+    auto start = std::chrono::high_resolution_clock::now();
+    for (int i=0; i<loop; i++)
+    #ifdef HAS_CUDA
+        if (use_cuda)
+            cudaMemcpyAsync(temp1.ptr, temp2.ptr, size, cudaMemcpyDeviceToDevice, 0);
+        else
+    #endif
+            std::memcpy(temp1.ptr, temp2.ptr, size);
+    #ifdef HAS_CUDA
+    if (use_cuda)
+        checkCudaErrors(cudaDeviceSynchronize());
+    #endif
+    auto finish = std::chrono::high_resolution_clock::now();
+    auto total_ns =  (int64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(finish-start).count();
+    peek_time_total += total_ns;
+}
+
+struct RecordExtraCost {
+    int ck;
+    std::chrono::high_resolution_clock::time_point start;
+
+    RecordExtraCost(int ck) : ck(ck) {
+        if (!ck) return;
+        start = std::chrono::high_resolution_clock::now();
+    }
+
+    ~RecordExtraCost() {
+        if (!ck) return;
+        auto finish = std::chrono::high_resolution_clock::now();
+        auto total_ns =  (int64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(finish-start).count();
+        profiler.relay_extra_cost += total_ns;
+    }
+};
+
 void Profiler::record_and_run(
     jit_op_entry_t jit_entry,
     Op* op,
@@ -152,7 +211,10 @@ void Profiler::record_and_run(
             jit_key : ikey->second.c_str();
         auto iter = profiler.records.find(key);
         uint64_t in, out, compute;
-        op->statistics(in, out, compute);
+        if (profiler.relay_fop)
+            profiler.relay_fop->statistics(in, out, compute);
+        else
+            op->statistics(in, out, compute);
         if (iter == profiler.records.end()) {
             profiler.records[key] = Info{
                 0, 0, -1ull, 0, 
@@ -166,7 +228,7 @@ void Profiler::record_and_run(
         bool is_fused = op->name() == string("fused");
 
         uint64* shape_time = nullptr;
-        if (trace_py_var) {
+        if (trace_py_var || profiler_record_shape) {
             // record shape
             NanoVector shape;
             int64 num = 0;
@@ -194,21 +256,34 @@ void Profiler::record_and_run(
             iter->second.shapes[shape].second += 1;
             shape_time = &iter->second.shapes[shape].first;
         }
-        int loop = (is_fused && 
-            ((FusedOp*)op)->get_loop_option("insert_profile_loop")) ? 10 : 0;
-        int64_t warmup = profiler.warmup ? std::max(profiler.warmup>>loop, (int64_t)1) : 0;
-        int64_t rerun = std::max((profiler.rerun+1)>>loop, (int64_t)1);
-        // prevent relayed op being rerun
-        auto warmup_bk = profiler.warmup;
-        auto rerun_bk = profiler.rerun;
-        profiler.warmup = profiler.rerun = 0;
-        Deleter del([&]() {
-            profiler.warmup = warmup_bk;
-            profiler.rerun = rerun_bk;
-        });
-        
-        for (int64_t i=0; i<warmup; i++) {
-            jit_entry(op);
+        int64_t warmup = profiler.warmup;
+        int64_t rerun = profiler.rerun + 1;
+        rerun = std::max(NanoVector::get_nbits(rerun) - 2, 0);
+        int loop = 0;
+        Deleter _d;
+        if (is_fused) {
+            auto fop = ((FusedOp*)op);
+            if (fop->context && fop->context->vrm.relay_groups.size()) {
+                // relay op
+                loop = rerun;
+                profiler.relay_extra_cost = 0;
+                profiler.relay_fop = fop;
+                _d.del = [&]() {
+                    profiler.relay_extra_cost = 0;
+                    profiler.relay_fop = 0;
+                };
+            } else
+                loop = fop->get_loop_option("insert_profile_loop") ? 10 : 0;
+        }
+        int64 num = 1<<(rerun - loop);
+
+        {
+            profiler_enable = 0;
+            Deleter del([&]() { profiler_enable = 1;});
+            RecordExtraCost rec(profiler.relay_fop && profiler.relay_fop != op);
+            for (int64_t i=0; i<warmup; i++) {
+                jit_entry(op);
+            }
             #ifdef HAS_CUDA
             if (use_cuda)
                 checkCudaErrors(cudaDeviceSynchronize());
@@ -218,25 +293,33 @@ void Profiler::record_and_run(
                 clFinish(opencl_queue);
             #endif
         }
-        for (int64_t i=0; i<rerun; i++) {
-            auto start = std::chrono::high_resolution_clock::now();
+
+        auto start = std::chrono::high_resolution_clock::now();
+        for (int64_t i=0; i<num; i++) {
             jit_entry(op);
-            #ifdef HAS_CUDA
-            if (use_cuda)
-                checkCudaErrors(cudaDeviceSynchronize());
-            #endif
-            #ifdef HAS_OPENCL
-            if (use_opencl)
-                clFinish(opencl_queue);
-            #endif
-            auto finish = std::chrono::high_resolution_clock::now();
-            auto total_ns =  (int64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(finish-start).count();
-            // 24ns function call overhead
-            total_ns = std::max((int64_t)1, total_ns-24);
-            iter->second.update(loop, total_ns, in, out, compute);
-            if (shape_time) shape_time[0] += total_ns;
-            LOGvvvv << "Duration" << total_ns >> "ns running" << op;
         }
+        #ifdef HAS_CUDA
+        if (use_cuda)
+            checkCudaErrors(cudaDeviceSynchronize());
+        #endif
+        #ifdef HAS_OPENCL
+        if (use_opencl)
+            clFinish(opencl_queue);
+        #endif
+        auto finish = std::chrono::high_resolution_clock::now();
+        auto total_ns =  (int64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(finish-start).count();
+        if (profiler.relay_fop == op) {
+            total_ns -= profiler.relay_extra_cost;
+        }
+        // 24ns function call overhead
+        total_ns = std::max((int64_t)1, total_ns-24);
+        iter->second.update(rerun, total_ns, in, out, compute);
+        if (shape_time) shape_time[0] += total_ns;
+
+        RecordExtraCost rec(profiler.relay_fop && profiler.relay_fop != op);
+        if (profiler_record_peek)
+            stat_peek_bandwidth(in, out, rerun, iter->second.peek_time_total);
+        LOGvvvv << "Duration" << total_ns >> "ns running" << op;
         if (is_fused && 
             ((FusedOp*)op)->get_loop_option("check_cache")) {
             auto fname = Op::get_filename_from_jit_key(key, ".so");
@@ -248,6 +331,8 @@ void Profiler::record_and_run(
 
 vector<vector<string>> Profiler::report(const string& sort_key) {
     vector<vector<string>> rep = {{"Name", "FileName", "Count", "TotalTime", "AvgTime", "MinTime", "MaxTime", "Input", "Output", "InOut", "Compute"}};
+    if (profiler_record_peek)
+        rep[0].push_back("Peek");
     vector<string> names, fnames;
     vector<vector<double>> info;
     vector<int> order;
@@ -304,6 +389,10 @@ vector<vector<string>> Profiler::report(const string& sort_key) {
             (double)(kinfo.in_total+kinfo.out_total)*1e9 / kinfo.time_total, // InOut
             (double)kinfo.compute_total*1e9 / kinfo.time_total, // Compute
         });
+        if (profiler_record_peek)
+            info.back().push_back(
+                (double)(kinfo.in_total+kinfo.out_total)*1e9 / kinfo.peek_time_total // Peek
+            );
     }
     if (sort_key_id>=2)
         std::sort(order.begin(), order.end(), [&](int i, int j) {
@@ -372,7 +461,7 @@ vector<vector<string>> Profiler::report(const string& sort_key) {
                         << std::setw(3)
                         << std::setprecision(p) << cum_time / total_time * 100 << "%)";
                 }
-            } else if (j<=7) {
+            } else if (j<=7 || j==9) {
                 // output thoughtput
                 output_float(" KMG", 1024, "B/s", k);
             } else {

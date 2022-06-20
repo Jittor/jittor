@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -176,14 +176,14 @@ void process(string src, vector<string>& input_names, string& cmd) {
             // #include "a.h"
             // i       jk    l
             auto j=i+1;
-            while (j<src.size() && (src[j] != ' ' && src[j] != '\n')) j++;
+            while (j<src.size() && (src[j] != ' ' && src[j] != '\"' && src[j] != '\n' && src[j] != '\r')) j++;
             if (j>=src.size()) return;
             if (j-i != 8 && j-i != 6) continue;
-            auto k=j+1;
+            auto k=src[j] == '\"' ? j : j+1;
             while (k<src.size() && src[k] == ' ') k++;
             if (k>=src.size()) return;
             auto l=k+1;
-            while (l<src.size() && (src[l] != ' ' && src[l] != '\n')) l++;
+            while (l<src.size() && (src[l] != ' ' && src[l] != '\n' && src[l] != '\r')) l++;
             if (src[k] == '"' && src[l-1] == '"' && j-i==8 && src.substr(i,j-i) == "#include") {
                 auto inc = src.substr(k+1, l-k-2);
                 if (inc != "test.h" && inc != "helper_cuda.h") {
@@ -192,7 +192,7 @@ void process(string src, vector<string>& input_names, string& cmd) {
                 }
             }
             if (l-k>2 && src[k] == 'J' && src[k+1] == 'T' && j-i==6 && src.substr(i,j-i) == "#ifdef") {
-                auto inc = src.substr(k, l-k);
+                auto inc = strip(src.substr(k, l-k));
                 auto env = getenv(inc.c_str());
                 if (env && string(env)!="0") {
                     auto senv = string(env);
@@ -243,14 +243,23 @@ static inline bool is_full_path(const string& name) {
 #endif
 }
 
-bool cache_compile(string cmd, const string& cache_path, const string& jittor_path) {
+bool cache_compile(string cmd, const string& cache_path_, const string& jittor_path_) {
+    #ifdef _WIN32
+    cmd = _to_winstr(cmd);
+    string cache_path = _to_winstr(cache_path_);
+    string jittor_path = _to_winstr(jittor_path_);
+    #else
+    const string& cache_path = cache_path_;
+    const string& jittor_path = jittor_path_;
+    #endif
     vector<string> input_names;
     map<string,vector<string>> extra;
     string output_name;
     find_names(cmd, input_names, output_name, extra);
     string output_cache_key;
     bool ran = false;
-    output_cache_key = read_all(output_name+".key");
+    if (file_exist(output_name))
+        output_cache_key = read_all(output_name+".key");
     string cache_key;
     unordered_set<string> processed;
     auto src_path = join(jittor_path, "src");
@@ -263,10 +272,15 @@ bool cache_compile(string cmd, const string& cache_path, const string& jittor_pa
             continue;
         processed.insert(input_names[i]);
         auto src = read_all(input_names[i]);
+        #ifdef _WIN32
+        src = _to_winstr(src);
+        #endif
+        auto back = input_names[i].back();
+        // *.lib
+        if (back == 'b') continue;
         ASSERT(src.size()) << "Source read failed:" << input_names[i] << "cmd:" << cmd;
         auto hash = S(hash64(src));
         vector<string> new_names;
-        auto back = input_names[i].back();
         // *.obj, *.o, *.pyd
         if (back != 'j' && back != 'o' && back != 'd')
             process(src, new_names, cmd);
@@ -321,6 +335,10 @@ bool cache_compile(string cmd, const string& cache_path, const string& jittor_pa
     }
     if (!ran)
         LOGvvvv << "Command cached:" << cmd;
+    #ifdef TEST
+    if (ran)
+        write(output_name, "...");
+    #endif
     return ran;
 }
 

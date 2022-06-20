@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
@@ -19,6 +19,18 @@ class TestTernaryOp(unittest.TestCase):
         ja = jt.array(a)
         jb = jt.array(b)
         jc = jt.ternary(ja>jb, ja, jb)
+        assert (jc.data==np.maximum(a,b)).all(), f"\n{jc.data}\n{np.maximum(a,b)}\n{a}\n{b}"
+        jda, jdb = jt.grad(jc, [ja, jb])
+        assert (jda.data==(a>b)*1).all()
+        assert (jdb.data==1-(a>b)).all()
+
+    def test_where(self):
+        np.random.seed(0)
+        a = np.random.rand(5,10).astype("float32")
+        b = np.random.rand(5,10).astype("float32")
+        ja = jt.array(a)
+        jb = jt.array(b)
+        jc = jt.where(ja>jb, ja, jb)
         assert (jc.data==np.maximum(a,b)).all(), f"\n{jc.data}\n{np.maximum(a,b)}\n{a}\n{b}"
         jda, jdb = jt.grad(jc, [ja, jb])
         assert (jda.data==(a>b)*1).all()

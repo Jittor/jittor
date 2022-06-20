@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -20,6 +20,7 @@
 namespace jittor {
 
 DEFINE_FLAG(vector<int>, cuda_archs, {}, "Cuda arch");
+DEFINE_FLAG(int, use_tensorcore, 0, "use tensor core");
 
 unique_ptr<std::default_random_engine> eng;
 
@@ -42,7 +43,7 @@ void cleanup() {
 }
 
 static void init_cuda_devices() {
-#ifdef HAS_CUDA
+#ifdef IS_CUDA
     if (cuda_archs.size()) return;
     int count=0;
     cudaGetDeviceCount(&count);

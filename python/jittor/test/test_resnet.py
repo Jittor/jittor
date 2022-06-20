@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: 
 #     Guowei Yang <471184555@qq.com>
 #     Meng-Hao Guo <guomenghao1997@gmail.com>
@@ -23,6 +23,8 @@ import jittor.transform as trans
 import time
 
 skip_this_test = False
+if os.name == 'nt':
+    skip_this_test = True
 
 class MnistNet(Module):
     def __init__(self):
@@ -34,19 +36,7 @@ class MnistNet(Module):
         return x
 
 @unittest.skipIf(skip_this_test, "skip_this_test")
-class TestResnet(unittest.TestCase):
-    @classmethod
-    def setUpClass(self):
-        # hyper-parameters
-        self.batch_size = int(os.environ.get("TEST_BATCH_SIZE", "100"))
-        self.weight_decay = 0.0001
-        self.momentum = 0.9
-        self.learning_rate = 0.1
-        # mnist dataset
-        self.train_loader = MNIST(train=True, transform=trans.Resize(224)) \
-            .set_attrs(batch_size=self.batch_size, shuffle=True)
-        self.train_loader.num_workers = 4
-
+class TestResnetFp32(unittest.TestCase):
     # setup random seed
     def setup_seed(self, seed):
         np.random.seed(seed)
@@ -96,6 +86,19 @@ class TestResnet(unittest.TestCase):
     @jt.flag_scope(use_cuda=1, use_stat_allocator=1)
     def test_resnet(self):
         self.setup_seed(1)
+
+        # hyper-parameters
+        self.batch_size = int(os.environ.get("TEST_BATCH_SIZE", "100"))
+        self.weight_decay = 0.0001
+        self.momentum = 0.9
+        self.learning_rate = 0.1
+        if jt.flags.amp_reg:
+            self.learning_rate = 0.01
+        # mnist dataset
+        self.train_loader = MNIST(train=True, transform=trans.Resize(224)) \
+            .set_attrs(batch_size=self.batch_size, shuffle=True)
+        self.train_loader.num_workers = 4
+
         loss_list=[]
         acc_list=[]
         mnist_net = MnistNet()
@@ -107,26 +110,30 @@ class TestResnet(unittest.TestCase):
         for data, target in self.train_loader:
             batch_id = self.train_loader.batch_id
             epoch_id = self.train_loader.epoch_id
+            data = data.float_auto()
 
             # train step
-            with jt.log_capture_scope(
-                log_silent=1,
-                log_v=1, log_vprefix="op.cc=100,exe=10",
-            ) as logs:
-                output = mnist_net(data)
-                loss = nn.cross_entropy_loss(output, target)
-                SGD.step(loss)
-                def callback(epoch_id, batch_id, loss, output, target):
-                    # print train info
-                    global prev
-                    pred = np.argmax(output, axis=1)
-                    acc = np.mean(target==pred)
-                    loss_list.append(loss[0])
-                    acc_list.append(acc)
-                    print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}\tAcc: {:.6f} \tTime:{:.3f}'
-                        .format(epoch_id, batch_id, 600,1. * batch_id / 6.0, loss[0], acc, time.time()-prev))
-                    # prev = time.time()
-                jt.fetch(epoch_id, batch_id, loss, output, target, callback)
+            # with jt.log_capture_scope(
+            #     log_silent=1,
+            #     log_v=1, log_vprefix="op.cc=100,exe=10",
+            # ) as logs:
+            output = mnist_net(data)
+            loss = nn.cross_entropy_loss(output, target)
+            SGD.step(loss)
+            def callback(epoch_id, batch_id, loss, output, target):
+                # print train info
+                global prev
+                pred = np.argmax(output, axis=1)
+                acc = np.mean(target==pred)
+                loss_list.append(loss[0])
+                acc_list.append(acc)
+                print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}\tAcc: {:.6f} \tTime:{:.3f}'
+                    .format(epoch_id, batch_id, 600,1. * batch_id / 6.0, loss[0], acc, time.time()-prev))
+                # prev = time.time()
+            # async version
+            jt.fetch(epoch_id, batch_id, loss, output, target, callback)
+            # sync version
+            # callback(epoch_id, batch_id, loss.numpy(), output.numpy(), target.numpy())
             
             # log_conv = find_log_with_re(logs, 
             #     "Jit op key (not )?found: ((mkl)|(cudnn))_conv.*")
@@ -157,6 +164,8 @@ class TestResnet(unittest.TestCase):
             # Train Epoch: 0 [40/100 (40%)]   Loss: 2.286762  Acc: 0.130000
             # Train Epoch: 0 [50/100 (50%)]   Loss: 2.055014  Acc: 0.290000
 
+            # if jt.flags.amp_reg:
+            #     continue
             # if jt.in_mpi:
             #     assert jt.core.number_of_lived_vars() < 8100, jt.core.number_of_lived_vars()
             # else:
@@ -168,5 +177,14 @@ class TestResnet(unittest.TestCase):
         assert np.mean(loss_list[-50:])<0.5
         assert np.mean(acc_list[-50:])>0.8
         
+
+@unittest.skipIf(skip_this_test, "skip_this_test")
+class TestResnetFp16(TestResnetFp32):
+    def setup(self):
+        jt.flags.auto_mixed_precision_level = 5
+
+    def tearDown(self):
+        jt.flags.auto_mixed_precision_level = 0
+
 if __name__ == "__main__":
     unittest.main()

@@ -84,9 +84,6 @@ static double second (void)
     gettimeofday(&tv, NULL);
     return (double)tv.tv_sec + (double)tv.tv_usec / 1000000.0;
 }
-#else
-#error unsupported platform
-#endif
 
 template <typename T_ELEM> __inline__  cudnnDataType_t getDataType();
 template <> __inline__ cudnnDataType_t getDataType<half1>()        { return CUDNN_DATA_HALF;   }
@@ -791,7 +788,7 @@ int doTest(int algo, int* dimA, int* padA, int* convstrideA, int* filterdimA, cu
                                                    CUDNN_CONVOLUTION,
                                                    CUDNN_DATA_FLOAT) );
     if (mathType == 1) {
-        checkCudaErrors( cudnnSetConvolutionMathType(cudnnConvDesc, CUDNN_TENSOR_OP_MATH) );
+        checkCudaErrors( cudnnSetConvolutionMathType(cudnnConvDesc, CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION) );
     }
 
     checkCudaErrors( cudnnSetTensorNdDescriptor(cudnnOdesc, getDataType<T_ELEM>(), convDim+2, outdimA, outstrideA) );
@@ -996,3 +993,9 @@ int cudnn_test_entry( int argc, char** argv )
 
     return 0;
 }
+
+#else
+int cudnn_test_entry( int argc, char** argv ) {
+    return 0;
+}
+#endif

@@ -1,6 +1,6 @@
 
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: 
 #     Wenyang Zhou <576825820@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
@@ -75,6 +75,8 @@ class TestPad(unittest.TestCase):
         print('pass flip test ...')
 
     def test_cross(self):
+        def check_equal(a, b, tol):
+            np.testing.assert_allclose(a.detach().numpy(), b.numpy(), atol=1e-5)
         arr1 = np.random.randn(16,3,224,224,3)
         arr2 = np.random.randn(16,3,224,224,3)
         check_equal(torch.Tensor(arr1).cross(torch.Tensor(arr2), dim=1), jt.array(arr1).cross(jt.array(arr2), dim=1), 1e-1)
@@ -115,11 +117,14 @@ class TestPad(unittest.TestCase):
         check((4,3,100,200))
         check((10,3,100,200))
 
-
+    def test_make_grid3(self):
+        arr=np.random.randn(3,10,10)
+        check_equal(torchvision.utils.make_grid(torch.Tensor(arr)), jt.make_grid(jt.array(arr)))
+        check_equal(torchvision.utils.make_grid(torch.Tensor(arr), normalize=True), jt.make_grid(jt.array(arr), normalize=True))
 
     def test_save_image(self):
         arr = jt.array(np.random.randn(16,3,10,10))
-        jt.save_image(arr, "/tmp/a.jpg")
+        jt.save_image(arr, jt.flags.cache_path+"/tmp/a.jpg")
 
     def test_unbind(self):
         arr = np.random.randn(2,3,4)
@@ -242,12 +247,89 @@ class TestPad(unittest.TestCase):
 class TestOther(unittest.TestCase):
     def test_save(self):
         pp = [1,2,jt.array([1,2,3]), {"a":[1,2,3], "b":jt.array([1,2,3])}]
-        jt.save(pp, "/tmp/xx.pkl")
-        x = jt.load("/tmp/xx.pkl")
+        name = jt.flags.cache_path+"/xx.pkl"
+        jt.save(pp, name)
+        x = jt.load(name)
         assert x[:2] == [1,2]
         assert (x[2] == np.array([1,2,3])).all()
         assert x[3]['a'] == [1,2,3]
         assert (x[3]['b'] == np.array([1,2,3])).all()
+
+    def test_arctan2(self):
+        a = jt.arctan2(jt.array([1,1.0,0]), jt.array([1,0.0,-1]))
+        np.testing.assert_allclose(a.data, [0.7853982,1.5707964,3.1415927])
+
+        y = jt.random((100,))
+        x = jt.random((100,))
+        z = jt.arctan2(y, x)
+        z2 = np.arctan2(y.data, x.data)
+        np.testing.assert_allclose(z.data, z2, atol=1e-6)
+
+    def test_softmax_precision(self):
+        # jt.flags.use_cuda = 1
+        a = -jt.array([1.0,2.0,1e5])
+        b = a.log_softmax(0)
+        assert b.isfinite().all().item()
+        print("test_softmax_precision cpu ok")
+        if not jt.has_cuda: return
+        jt.flags.use_cuda = 1
+        a = -jt.array([1.0,2.0,1e5])
+        b = a.log_softmax(0)
+        assert b.isfinite().all().item()
+        print("test_softmax_precision gpu ok")
+
+    def test_code_softmax(self):
+        if not jt.has_cuda: return
+        
+        def softmax(x, dim = None, log=False):
+            if dim is None:
+                x = (x - x.max()).exp()
+                ret = x / x.sum()
+            else:
+                x = (x-x.max(dim, keepdims=True)).exp()
+                ret = x / x.sum(dim, keepdims=True)
+            if log: return ret.log()
+            return ret
+        from jittor.other.code_softmax import softmax_v1
+
+        with jt.flag_scope(use_cuda = 1):
+            shape = (120, 2000, 2000)
+            shape = (3,3)
+            for log in [0,1]:
+                for shape in [(3,3), 
+                    (12, 200, 2000), 
+                    (12, 200, 2048), 
+                    (12, 200, 2049)]:
+                    print(shape)
+                    a = jt.rand(shape)
+                    c = jt.rand(shape)
+                    b = softmax(a, -1, log=log)
+                    bb = softmax_v1(a, log=log)
+
+                    err = (bb - b).abs().max()
+                    assert err.item() < 1e-5, (err, bb, b)
+
+                    d1 = jt.grad(b*c, a)
+                    d2 = jt.grad(bb*c, a)
+                    err = (d1 - d2).abs().max()
+
+                    if log:
+                        assert err.item() < 1e-2, (err.item())
+                    else:
+                        assert err.item() < 1e-5, (err.item())
+
+    def test_nan(self):
+        a = np.array([1.0,0.0,1.0,-1.0], "float32") / np.array([1.0,0.0,0.0,0.0], "float32")
+        np.testing.assert_allclose(jt.isnan(jt.array(a)).data, [0,1,0,0])
+        np.testing.assert_allclose(jt.isfinite(jt.array(a)).data, [1,0,0,0])
+        np.testing.assert_allclose(jt.isinf(jt.array(a)).data, [0,0,1,1])
+        np.testing.assert_allclose(jt.isneginf(jt.array(a)).data, [0,0,0,1])
+        np.testing.assert_allclose(jt.isposinf(jt.array(a)).data, [0,0,1,0])
+
+    def test_nan_cuda(self):
+        if not jt.has_cuda: return
+        with jt.flag_scope(use_cuda=1):
+            self.test_nan()
 
 if __name__ == "__main__":
     unittest.main()

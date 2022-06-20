@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
@@ -19,12 +19,12 @@ def all_eq(x, y):
     y = convert(y)
     if str(x.dtype).startswith("float"):
         return str(y.dtype).startswith("float") and x.shape == y.shape and (x==y).all()
-    return x.dtype == y.dtype and x.shape == y.shape and (x==y).all()
+    return x.dtype == y.dtype and x.shape == y.shape and np.testing.assert_allclose(x, y)
 
 def check(op, *args):
     x = eval(f"np.{op}(*args)")
     y = eval(f"jt.{op}(*args).data")
-    assert all_eq(x, y), f"{x}\n{y}"
+    all_eq(x, y)
 
 class TestBinaryOp(unittest.TestCase):
     def test_binary_op(self):
@@ -47,6 +47,9 @@ class TestBinaryOp(unittest.TestCase):
         
     def test_i(self):
         def check(op, a, b):
+            if isinstance(a, list):
+                a = np.array(a)
+                b = np.array(b)
             if jt.flags.use_cuda and op == "@":
                 return
             if op=="@":
@@ -65,13 +68,13 @@ class TestBinaryOp(unittest.TestCase):
                 a = np.float32(a)
             ja = np.float32(ja)
             
-            assert all_eq(ja, a), (ja,a)
+            all_eq(ja, a)
         check("+", 5, 2)
         check("-", 5, 2)
         check("*", 5, 2)
         check("/", 5, 2)
         check("//", 5, 2)
-        check("@", [[5]], [[2]])
+        # check("@", [[5]], [[2]])
         check("%", 5, 2)
         check("**", 5, 2)
         check("<<", 5, 2)
@@ -79,6 +82,15 @@ class TestBinaryOp(unittest.TestCase):
         check("&", 5, 2)
         check("^", 5, 2)
         check("|", 5, 2)
+        
+        check("+", [5.0,6.0], [2.0,3.0])
+        check("-", [5.0,6.0], [2.0,3.0])
+        check("*", [5.0,6.0], [2.0,3.0])
+        check("/", [5.0,6.0], [2.0,3.0])
+        check("//", [5.0,6.0], [2.0,3.0])
+        check("@", [[5,6],[7,8]], [[2,3],[4,5]])
+        check("%", [5.0,6.0], [2.0,3.0])
+        check("**", [5.0,6.0], [2.0,3.0])
         
     def test_r(self):
         def check(op, a, b):
@@ -97,7 +109,7 @@ class TestBinaryOp(unittest.TestCase):
                 a = eval(f"a {op} b")
                 a = np.array(a)
             
-            assert all_eq(jc, a), f"\n{jc}\n{a}"
+            all_eq(jc, a)
         check("+", 5, 2)
         check("-", 5, 2)
         check("*", 5, 2)
@@ -118,6 +130,7 @@ class TestBinaryOp(unittest.TestCase):
         a = np.random.rand(10)
         b = np.random.rand(10)
         c = np.random.rand(10)
+        tol = 1e-2 if jt.flags.amp_reg & 2 else 1e-4
         for op in ops:
             func = lambda x: eval(f"((x[0]{op}x[1])*x[2]).sum()")
             x, grads = ngrad(func, [a,b,c], 1e-8)
@@ -127,7 +140,7 @@ class TestBinaryOp(unittest.TestCase):
             jx = eval(f"(ja{op}jb)*jc")
             jgrads = jt.grad(jx, [ja,jb,jc])
             for jd, nd in zip(jgrads, grads):
-                assert (np.abs(jd.data-nd)<1e-4).all(), f"\n{jd.data}\n{nd}"
+                np.testing.assert_allclose(jd.data, nd, atol=tol, rtol=tol)
 
     def test_mod_float(self):
         a = jt.random((10,))
@@ -137,7 +150,8 @@ class TestBinaryOp(unittest.TestCase):
         a = jt.random((10,), 'float64')
         b = jt.random((10,), 'float64')
         c = a % b
-        assert np.allclose(c.data, a.data % b.data)
+        assert np.allclose(c.data, a.data % b.data, a.data, b.data)
+        if jt.flags.amp_reg & 2: return
         a = jt.random((10,)) * 1000
         b = (jt.random((10,)) * 10).int() + 1
         c = a % b
@@ -157,11 +171,48 @@ class TestBinaryOp(unittest.TestCase):
         c = a % b
         nc = a.data % b.data
         np.testing.assert_allclose(c.data, nc.data, atol=1e-5, rtol=1e-5)
+    
+    def test_pow(self):
+        # win cuda 10.2 cannot pass
+        a = jt.random((100,))
+        b = a**3
+        b.sync()
 
+    def test_binary_op_bool(self):
+        a = np.array([0,1,0,1]).astype(bool)
+        b = np.array([0,1,1,0]).astype(bool)
+        c = np.array([1,1,1,1]).astype(bool)
+        check("add", a, b)
+        all_eq(np.logical_xor(a, b), jt.subtract(a, b).data)
+        check("multiply", a, b)
+        check("logical_and", a, b)
+        check("logical_or", a, b)
+        check("logical_xor", a, b)
+        check("bitwise_and", a, b)
+        check("bitwise_or", a, b)
+        check("bitwise_xor", a, b)
+        check("divide", a, c)
+        check("floor_divide", a, c)
+        check("mod", a, c)
 
 
 class TestBinaryOpCuda(TestBinaryOp, test_cuda(2)):
     pass
+
+class TestBinaryOpCpuFp16(TestBinaryOp):
+    def setUp(self):
+        jt.flags.amp_reg = 2 | 4 | 8 | 16
+    def tearDown(self):
+        jt.flags.amp_reg = 0
+
+@unittest.skipIf(not jt.has_cuda, "no cuda found")
+class TestBinaryOpCudaFp16(TestBinaryOp):
+    def setUp(self):
+        jt.flags.amp_reg = 2 | 4 | 8 | 16
+        jt.flags.use_cuda = 1
+    def tearDown(self):
+        jt.flags.amp_reg = 0
+        jt.flags.use_cuda = 0
 
 if __name__ == "__main__":
     unittest.main()

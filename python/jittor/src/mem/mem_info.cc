@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -29,7 +29,6 @@
 #include "mem/allocator/stat_allocator.h"
 #include "mem/allocator/temp_allocator.h"
 #include "mem/mem_info.h"
-#include "update_queue.h"
 #include "executor.h"
 
 namespace jittor {
@@ -62,13 +61,11 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
     log << "\n=== display_memory_info ===\n";
     log << "total_cpu_ram:" << 
         FloatOutput{(double)mem_info.total_cpu_ram, " KMG", 1024, "B"};
-    log << "total_cuda_ram:" << 
+    log << "total_device_ram:" << 
         FloatOutput{(double)mem_info.total_cuda_ram, " KMG", 1024, "B"} >> "\n";
     log << "hold_vars:" << hold_vars.size()
         << "lived_vars:" << Var::number_of_lived_vars
         << "lived_ops:" << Op::number_of_lived_ops >> '\n';
-    log << "update queue:" << update_queue.queue.size() 
-        >> '/' >> update_queue.map.size() >> '\n';
 
     #ifdef NODE_MEMCHECK
     // get the oldest var
@@ -105,7 +102,7 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
         auto total = a->used_memory + a->unused_memory;
         all_total += total;
         a->is_cuda() ? gpu_total += total : cpu_total += total;
-        log << "name:" << a->name() << "is_cuda:" << a->is_cuda()
+        log << "name:" << a->name() << "is_device:" << a->is_cuda()
             << "used:" << FloatOutput{(double)a->used_memory, " KMG", 1024, "B"}
                 >> "(" >> std::setprecision(p) >> a->used_memory*100.0 / total >> "%)"
             << "unused:" << FloatOutput{(double)a->unused_memory, " KMG", 1024, "B"} 
@@ -117,7 +114,7 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
             auto total = a->used_memory + a->unused_memory;
             all_total += total;
             a->is_cuda() ? gpu_total += total : cpu_total += total;
-            log << "name:" << a->name() << "is_cuda:" << a->is_cuda()
+            log << "name:" << a->name() << "is_device:" << a->is_cuda()
                 << "used:" << FloatOutput{(double)a->used_memory, " KMG", 1024, "B"}
                     >> "(" >> std::setprecision(p) >> a->used_memory*100.0 / total >> "%)"
                 << "unused:" << FloatOutput{(double)a->unused_memory, " KMG", 1024, "B"} 
@@ -128,6 +125,7 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
     log << "cpu&gpu:" << FloatOutput{(double)all_total, " KMG", 1024, "B"}
         << "gpu:" << FloatOutput{(double)gpu_total, " KMG", 1024, "B"}
         << "cpu:" << FloatOutput{(double)cpu_total, " KMG", 1024, "B"} >> '\n';
+    
     size_t cpu_free = 0;
 #if defined(__linux__)
     cpu_free = get_avphys_pages() * sysconf(_SC_PAGESIZE);
@@ -185,6 +183,23 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
         }
     }
     log >> "===========================\n";
+
+    if (red_color) {
+        bool gpu_overflow = (double)gpu_total>(double)mem_info.total_cuda_ram*0.95;
+        bool cpu_overflow = (double)cpu_total>(double)mem_info.total_cpu_ram*0.95;
+        // cpu total too small, not possible
+        if (mem_info.total_cpu_ram < 100000)
+            cpu_overflow = false;
+        if(gpu_overflow || cpu_overflow) {
+            double used = gpu_overflow ? (double)gpu_total : (double)cpu_total;
+            double total = gpu_overflow ? (double)mem_info.total_cuda_ram : (double)mem_info.total_cpu_ram;
+            log.end();
+            LOGf << "\n*******************\n"
+                >> (gpu_overflow?"GPU":"CPU") << "memory is overflow, please reduce your batch_size or data size!\nTotal:" << FloatOutput{(double)total, " KMG", 1024, "B"} << "Used:" << FloatOutput{(double)used, " KMG", 1024, "B"};
+        } else
+            return;
+    }
+
     log.end();
 }
 
@@ -212,9 +227,9 @@ MemInfo::MemInfo() {
 
     total_cuda_ram = 0;
 #ifdef HAS_CUDA
-    cudaDeviceProp prop;
-    cudaGetDeviceProperties(&prop, 0);
-    total_cuda_ram = prop.totalGlobalMem;
+    size_t gpu_free = 0, _gpu_total = 0;
+    cudaMemGetInfo(&gpu_free, &_gpu_total);
+    total_cuda_ram = _gpu_total;
 #endif
     sigquit_callback.push_back(&meminfo_callback);
 }

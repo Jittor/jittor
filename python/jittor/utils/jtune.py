@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
@@ -44,7 +44,7 @@ elif cmd == "cc_to_s":
     run_cmd(asm_cmd)
 elif cmd == "s_to_so":
     asm_cmd = cpcmd.replace("_op.cc", "_op.s") \
-        .replace("-g", "")
+        .replace(" -g", "")
     run_cmd(asm_cmd)
     # remove hash info, force re-compile
     with open(lib_path+'.key', 'w') as f:

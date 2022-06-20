@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -20,6 +20,8 @@
 #include "utils/flags.h"
 #include "fused_op.h"
 #include "misc/opencl_flags.h"
+#include "utils/str_utils.h"
+JPU(header)
 
 namespace jittor {
     
@@ -34,23 +36,141 @@ DEFINE_FLAG(string, python_path, "", "Path of python interpreter");
 DEFINE_FLAG(string, cache_path, "", "Cache path of jittor");
 DEFINE_FLAG(int, rewrite_op, 1, "Rewrite source file of jit operator or not");
 
+vector<string> shsplit(const string& s) {
+    auto s1 = split(s, " ");
+    vector<string> s2;
+    int count = 0;
+    for (auto& s : s1) {
+        int nc = 0;
+        for (auto& c : s)
+            nc += c=='"' || c=='\'';
+        if (count&1) {
+            count += nc;
+            s2.back() += " ";
+            s2.back() += s;
+        } else {
+            count = nc;
+            s2.push_back(s);
+        }
+    }
+    return s2;
+}
+
+string fix_cl_flags(const string& cmd, bool is_cuda) {
+#ifdef _MSC_VER
+    auto flags = shsplit(cmd);
+    vector<string> output, output2;
+    
+    for (auto& f : flags) {
+        if (startswith(f, "-link"))
+            continue;
+        else if (startswith(f, "-l"))
+            output2.push_back(f.substr(2)+".lib");
+        else if (startswith(f, "-LIB"))
+            output2.push_back(f);
+        else if (startswith(f, "-LD"))
+            output.push_back(f);
+        else if (startswith(f, "-L"))
+            output2.push_back("-LIBPATH:"+f.substr(2));
+        else if (f.find(".lib") != string::npos)
+            output2.push_back(f);
+        else if (startswith(f, "-DEF:"))
+            output2.push_back(f);
+        else if (startswith(f, "-W") || startswith(f,"-f"))
+            continue;
+        else if (startswith(f,"-std="))
+            output.push_back("-std:"+f.substr(5));
+        else if (startswith(f,"-include"))
+            output.push_back("-FI");
+        else if (startswith(f,"-shared"))
+            output.push_back("-LD");
+        else
+            output.push_back(f);
+    }
+    string cmdx = "";
+    for (auto& s : output) {
+        cmdx += s;
+        cmdx += " ";
+    }
+    cmdx += "-link ";
+    for (auto& s : output2) {
+        cmdx += s;
+        cmdx += " ";
+    }
+    return cmdx;
+#else
+    auto flags = shsplit(cmd);
+    vector<string> output;
+    #ifdef __APPLE__
+    vector<string> libpaths;
+    #endif
+    
+    for (auto& f : flags) {
+        if (startswith(f, "-l") && 
+            (f.find("cpython") != string::npos ||
+             f.find("lib") != string::npos)) {
+            #ifdef __APPLE__
+            auto fname = f.substr(2) + ".so";
+            int i;
+            for (i=libpaths.size()-1; i>=0; i--) {
+                auto full = libpaths[i] + '/' + fname;
+                string full2;
+                for (auto c : full)
+                    if (c != '\"') full2 += c;
+                if (jit_compiler::file_exist(full2)) {
+                    output.push_back(full2);
+                    break;
+                }
+            }
+            if (i<0) output.push_back(f);
+            #else
+            output.push_back("-l:"+f.substr(2)+".so");
+            #endif
+        }
+        else if (startswith(f, "-L")) {
+            if (is_cuda)
+                output.push_back(f+" -Xlinker -rpath="+f.substr(2));
+            else
+                output.push_back(f+" -Wl,-rpath,"+f.substr(2));
+            #ifdef __APPLE__
+            libpaths.push_back(f.substr(2));
+            #endif
+        } else
+            output.push_back(f);
+    }
+    string cmdx = "";
+    for (auto& s : output) {
+        cmdx += s;
+        cmdx += " ";
+    }
+    return cmdx;
+#endif
+}
+
 namespace jit_compiler {
 
 std::mutex dl_open_mutex;
 
-jit_op_entry_t load_jit_lib(string name, string symbol_name="jit_entry") {
+jit_op_entry_t load_jit_lib(
+    string name, string symbol_name="jit_entry", const string& extra_flags="") {
     std::lock_guard<std::mutex> lock(dl_open_mutex);
     const char* msg = "";
     LOGvv << "Opening jit lib:" << name;
     #ifdef _WIN32
-    void* handle = (void*)LoadLibraryExA(name.c_str(), nullptr,
+    void* handle = (void*)LoadLibraryExA(_to_winstr(name).c_str(), nullptr,
         LOAD_LIBRARY_SEARCH_DEFAULT_DIRS |
         LOAD_LIBRARY_SEARCH_USER_DIRS);
-    #elif defined(__linux__) && !defined(mobile)
-    void* handle = dlopen(name.c_str(), RTLD_NOW | RTLD_LOCAL | RTLD_DEEPBIND);
+    #elif defined(__linux__)&& !defined(mobile)
+    auto flags = RTLD_LAZY | RTLD_DEEPBIND | RTLD_LOCAL;
+    if (extra_flags.find("GLOBAL_VAR") != string::npos)
+        flags = RTLD_LAZY | RTLD_DEEPBIND | RTLD_GLOBAL;
+    void* handle = dlopen(name.c_str(), flags);
     msg = dlerror();
     #else
-    void *handle = dlopen(name.c_str(), RTLD_NOW | RTLD_LOCAL);
+    auto flags = RTLD_LAZY | RTLD_LOCAL;
+    if (extra_flags.find("GLOBAL_VAR") != string::npos)
+        flags = RTLD_LAZY | RTLD_GLOBAL;
+    void *handle = dlopen(name.c_str(), flags);
     msg = dlerror();
     #endif
   
@@ -76,7 +196,7 @@ void run_cmd(string cmd, string cwd="") {
 
 static string get_symbol_name(const string& jit_key) {
     int i=0;
-    while (i<jit_key.size() && jit_key[i]!='[') i++;
+    while (i<jit_key.size() && jit_key[i]>=0) i++;
     string op_name = i ? jit_key.substr(0, i) : "fused";
     op_name = Op::file_name_to_class_name(op_name);
     // _ZN7jittorXyyyyyy7jit_runEv
@@ -93,18 +213,28 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
     LOGvv << "Compile op" << jit_key;
     // compiler do not allowed filename too long
     CHECK(cc_path.size());
-    string jit_src_path = Op::get_filename_from_jit_key(jit_key, ".cc");
+    string jit_src_path;
+    if(is_cuda_op && extra_flags.find("-dc") != string::npos)
+        jit_src_path = Op::get_filename_from_jit_key(jit_key, ".cu");
+    else
+        jit_src_path = Op::get_filename_from_jit_key(jit_key, ".cc");
+    string* src2 = (string*)&src;
+    string* extra_flags2 = (string*)&extra_flags;
+    JPU(op_compiler(jit_src_path, *src2, is_cuda_op, *extra_flags2));
     #ifdef _WIN32
     string jit_lib_path = Op::get_filename_from_jit_key(jit_key, ".dll");
+    string jit_src_path2 = _to_winstr(jit_src_path);
     #else
     string jit_lib_path = Op::get_filename_from_jit_key(jit_key, ".so");
+    string& jit_src_path2 = jit_src_path;
     #endif
     string other_src;
     LOGvvv << "Generate" << jit_src_path >> "\n" >> src;
-    if (rewrite_op || !file_exist(jit_src_path))
-        write(jit_src_path, src);
+    if (rewrite_op || !file_exist(jit_src_path2))
+        write(jit_src_path2, src);
     string cmd;
     
+    auto symbol_name = get_symbol_name(jit_key);
 #ifndef _MSC_VER
     if (is_cuda_op) {
         if (use_opencl) {
@@ -114,8 +244,11 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
         } else {
             cmd = "\"" + nvcc_path + "\""
                 + " \"" + jit_src_path + "\"" + other_src
-                + nvcc_flags + extra_flags
+                + fix_cl_flags(nvcc_flags + extra_flags, is_cuda_op)
                 + " -o \"" + jit_lib_path + "\"";
+            if (cmd.find("-dc") != string::npos) {
+                cmd = python_path+" "+jittor_path+"/utils/dlink_compiler.py " + cmd;
+            }
         }
     } else {
 #ifdef mobile
@@ -124,10 +257,10 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
             + cc_flags + extra_flags
             + " -Dmobile -L/data/data/com.example.mjittor/.cache/jittor/default/clang -L/data/data/com.example.mjittor/termux/lib -lpython3.9 -lomp -ljit_utils_core -ljittor_core -Wl,-rpath=/data/data/com.example.mjittor/.cache/jittor/default/clang/ -o '" + jit_lib_path + "'";
 #else
-        cmd = cc_path
-            + " '" + jit_src_path + "'" + other_src
-            + cc_flags + extra_flags
-            + " -o '" + jit_lib_path + "'";
+        cmd = "\"" + cc_path + "\""
+            + " \"" + jit_src_path + "\"" + other_src
+            + fix_cl_flags(cc_flags + extra_flags, is_cuda_op)
+            + " -o \"" + jit_lib_path + "\"";
 #endif
 #if defined(__linux__) && !defined(mobile)
         cmd = python_path+" "+jittor_path+"/utils/asm_tuner.py "
@@ -139,22 +272,19 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
         cmd = "\"" + nvcc_path + "\""
             + " \"" + jit_src_path + "\"" + other_src
             + nvcc_flags + extra_flags
-            + " -o \"" + jit_lib_path + "\"";
+            + " -o \"" + jit_lib_path + "\""
+            +  " -Xlinker -EXPORT:\""
+            + symbol_name + "\"";
     } else {
-        auto symbol_name = get_symbol_name(jit_key);
-        auto pos = cc_flags.find("-link");
-        auto cc_flags1 = cc_flags.substr(0, pos);
-        auto cc_flags2 = cc_flags.substr(pos);
         cmd = "\"" + cc_path + "\""
             + " \"" + jit_src_path + "\"" + other_src
-            + cc_flags1 + extra_flags
-            + " -Fe: \"" + jit_lib_path + "\" " + cc_flags2 + " -EXPORT:\""
+            + " -Fe: \"" + jit_lib_path + "\" "
+            + fix_cl_flags(cc_flags + extra_flags, is_cuda_op) + " -EXPORT:\""
             + symbol_name + "\"";
     }
 #endif
     cache_compile(cmd, cache_path, jittor_path);
-    auto symbol_name = get_symbol_name(jit_key);
-    auto jit_entry = load_jit_lib(jit_lib_path, symbol_name);
+    auto jit_entry = load_jit_lib(jit_lib_path, symbol_name, extra_flags);
     return jit_entry;
 }
 

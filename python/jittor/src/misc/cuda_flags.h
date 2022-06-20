@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -24,7 +24,7 @@ inline int get_device_count() {
 
 } // jittor
 
-#if CUDART_VERSION < 10000
+#if defined(CUDART_VERSION) && CUDART_VERSION < 10000
     #define _cudaLaunchHostFunc(a,b,c) \
         cudaStreamAddCallback(a,b,c,0)
     #define CUDA_HOST_FUNC_ARGS cudaStream_t stream, cudaError_t status, void*

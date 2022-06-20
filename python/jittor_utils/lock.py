@@ -2,12 +2,20 @@ try:
     import fcntl
 except ImportError:
     fcntl = None
-    import win32file
-    import pywintypes
-    _OVERLAPPED = pywintypes.OVERLAPPED()
+    try:
+        import win32file
+        import pywintypes
+        _OVERLAPPED = pywintypes.OVERLAPPED()
+    except:
+        raise Exception("""pywin32 package not found, please install it.
+>>> python3.x -m pip install pywin32
+If conda is used, please install with command: 
+>>> conda install pywin32""")
 
 import os
 from jittor_utils import cache_path, LOG
+
+disable_lock = os.environ.get("disable_lock", "0") == "1"
 
 class Lock:   
     def __init__(self, filename):  
@@ -16,6 +24,8 @@ class Lock:
         self.is_locked = False
       
     def lock(self):
+        if disable_lock:
+            return
         if fcntl:
             fcntl.flock(self.handle, fcntl.LOCK_EX)
         else:
@@ -25,6 +35,8 @@ class Lock:
         LOG.vv(f'LOCK PID: {os.getpid()}')
         
     def unlock(self):
+        if disable_lock:
+            return
         if fcntl:
             fcntl.flock(self.handle, fcntl.LOCK_UN)
         else:

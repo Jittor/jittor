@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -31,6 +31,7 @@ IndexOp::IndexOp(Var* a, int64 dim, NanoString dtype) : dim(dim) {
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
     set_type(OpType::element);
+    flags.set(NodeFlags::_manual_set_vnbb);
     x.reset(new Var*[1]);
     x[0] = create_output(nullptr, dtype);
 }
@@ -38,6 +39,7 @@ IndexOp::IndexOp(Var* a, int64 dim, NanoString dtype) : dim(dim) {
 IndexOp::IndexOp(Var* a, NanoString dtype) : dim(a->shape.size()) {
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
+    flags.set(NodeFlags::_manual_set_vnbb);
     set_type(OpType::element);
     x.reset(new Var*[dim]);
     for (int i=0; i<dim; i++)

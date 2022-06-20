@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: 
 #     Wenyang Zhou <576825820@qq.com>. 
 # 
@@ -39,7 +39,7 @@ class TestSetitem(unittest.TestCase):
 
         arr21 = jt.ones((2,2))
         arr22 = jt.ones((2,2)) * 2
-        arr2 = jt.contrib.concat([arr21, arr22], dim=0)
+        arr2 = jt.concat([arr21, arr22], dim=0)
         arr2.sync()
         arr21.data[0,0] = 3
         arr22.data[0,0] = 4
@@ -206,6 +206,16 @@ class TestSetitem(unittest.TestCase):
         b = jt.array([True,False,True,False])
         a[b] = jt.array([-1,-2])
         assert (a.data == [-1,2,-2,4]).all()
+
+    def test_setitem_bool2(self):
+        a = jt.array([1,2,3,4])
+        b = jt.array([True,False,True,False])
+        a[b] = jt.array([-1])
+        assert (a.data == [-1,2,-1,4]).all(), a
+        a = jt.array([1,2,3,4])
+        b = jt.array([True,False,True,False])
+        a[b] = -1
+        assert (a.data == [-1,2,-1,4]).all(), a
         
     def test_slice_none(self):
         a = jt.array([1,2])
@@ -225,8 +235,209 @@ class TestSetitem(unittest.TestCase):
         b = a[...,:,None,:2]
         assert b.shape == [2,4,1,2]
         np.testing.assert_allclose(b.data, a.data[...,:,None,:2])
+
+    def test_flip_grad(self):
+        a = jt.rand(10)
+        b = a[::-1]
+        c = b[::-1]
+        d = c.sum()
+        jt.grad(d, [a])
+
+    def test_concat2(self):
+        a = jt.rand(10)
+        b = jt.rand(11)
+        c = jt.rand(12)
+        def cc():
+            x = jt.concat([b.copy(), c.copy()])
+            d = jt.concat([a.copy(), x])
+            return d.copy().copy().copy().copy().copy().copy()\
+                .copy().copy() + x.sum()*0.0
+        d = cc()
+        np.testing.assert_allclose(d.data,
+            np.concatenate([a.data,b.data,c.data]))
+
+    def test_concat3(self):
+        # a = jt.rand(10)
+        b = jt.rand(11)
+        c = jt.rand(12)
+        def cc():
+            x = jt.concat([b.copy(), c.copy()])
+            d = jt.concat([x])
+            return d.copy().copy().copy().copy().copy().copy()\
+                .copy().copy() + x.sum()*0.0
+        d = cc()
+        np.testing.assert_allclose(d.data,
+            np.concatenate([b.data,c.data]))
         
 
+    def test_concat4(self):
+        # a = jt.rand(10)
+        b = jt.rand(11)
+        c = jt.rand(12)
+        def cc():
+            x = jt.concat([b.copy(), c.copy()])
+            d = jt.concat([x])
+            return d
+        d = cc()
+        np.testing.assert_allclose(d.data,
+            np.concatenate([b.data,c.data]))
+        
+    def test_concat_random(self):
+        def check(backward=False):
+            n1, n2, n3 = 1000, 20, 10
+            # n1, n2, n3 = 3, 2, 3
+            import random
+            data = []
+            back = []
+            for i in range(n1):
+                if len(data) > n2:
+                    v = random.randint(0,len(data)-1)
+                    # print("del", v)
+                    del data[v]
+                x1 = random.randint(0,9)
+                # print(i, x1)
+                if len(data) == 0:
+                    # a = jt.random((random.randint(10,20),))
+                    a = jt.array(np.random.rand(random.randint(n3,n3*2)))
+                    data.append(a)
+                if x1 == 0:
+                    a = data[random.randint(0,len(data)-1)]
+                    a = a.copy()
+                    data.append(a)
+                elif x1 == 1:
+                    a = data[random.randint(0,len(data)-1)]
+                    a = a.clone()
+                    data.append(a)
+                elif x1 == 2:
+                    a = data[random.randint(0,len(data)-1)]
+                    b = np.random.permutation(np.arange(a.numel()))
+                    # print("permutation", b)
+                    a = a[b]
+                    data.append(a)
+                elif x1 == 3:
+                    a = data[random.randint(0,len(data)-1)]
+                    a = a[:100]
+                    # print(a.shape)
+                    data.append(a)
+                elif x1 == 4:
+                    # a = jt.random((random.randint(10,20),))
+                    a = jt.array(np.random.rand(random.randint(n3,n3*2)))
+                    if backward and random.randint(0,1):
+                        back.append(a)
+                    data.append(a)
+                elif x1 == 5:
+                    v = random.randint(0,len(data)-1)
+                    a = data[v]
+                    # print("split", v, a.shape)
+                    arr = a.split(n3-1)
+                    data += arr
+                else:
+                    if not len(data): continue
+                    n = random.randint(1,3)
+                    a = [ data[random.randint(0,len(data)-1)] for i in range(n) ]
+                    a = jt.concat(a)
+                    if a.numel() > 1000:
+                        b = np.random.permutation(np.arange(a.numel()))
+                        a = a[b][:100]
+                    data.append(a)
+            ret = jt.concat(data)
+            if backward and len(back):
+                grads = jt.grad(jt.rand_like(ret)*ret, back)
+                return jt.concat(grads).numpy()
+            return ret.numpy()
+
+        for s in range(100):
+            print("check", s)
+            for check_grad in [True, False]:
+                jt.set_global_seed(s)
+                data = check(check_grad)
+                jt.gc()
+                jt.set_global_seed(s)
+                with jt.flag_scope(gopt_disable=1):
+                    data2 = check(check_grad)
+                jt.gc()
+                np.testing.assert_allclose(data, data2, atol=1e-5, rtol=1e-5)
+
+    def test_concat_grad(self):
+        n = 30000
+        m = 100
+        arr = []
+        for i in range(n):
+            arr.append(jt.random((m,)))
+        x = jt.concat(arr)
+        y = jt.rand_like(x)
+        grads = jt.grad(x*y, arr)
+        for i in range(n):
+            np.testing.assert_allclose(grads[i].numpy(), y[i*m:(i+1)*m].numpy())
+
+    def test_split_grad(self):
+        n = 30000
+        m = 100
+        x = jt.random((n*m,))
+        arr = x.split(m)
+        yy = [ jt.rand(m) for i in range(n) ]
+        arr2 = [ y*yy[i] for i,y in enumerate(arr) ]
+        g = jt.grad(jt.concat(arr2), x)
+        for i in range(n):
+            np.testing.assert_allclose(g.data[i*m:(i+1)*m], yy[i].data)
+
+    def test_dfs_memopt(self):
+        with jt.flag_scope(profile_memory_enable=1):
+            n = 1024
+            b = []
+            for i in range(n):
+                a = jt.rand(n).copy().copy()
+                a = a.sum()
+                # a.sync()
+                b.append(a)
+            jt.sync_all()
+            jt.get_max_memory_treemap()
+
+
+    def test_setitem_bc(self):
+        a = jt.random([10,11,12])
+        b = a[jt.arange(3)[:,None],
+            jt.arange(4)[None,:]]
+        b.sync()
+        assert (a[:3, :4] == b).all()
+        
+        a = jt.random([10,11,12])
+        b = a[jt.arange(3)[:,None],
+            jt.arange(4)[None,:],
+            jt.arange(4)[None,:]]
+        nb = a.data[np.arange(3)[:,None],
+            np.arange(4)[None,:],
+            np.arange(4)[None,:]]
+        np.testing.assert_allclose(nb, b.data)
+        
+        a = jt.random([10,11,12])
+        b = a[jt.arange(3)[::-1,None],
+            jt.arange(4)[None,:],
+            jt.arange(4)[None,:]]
+        nb = a.data[np.arange(3)[::-1,None],
+            np.arange(4)[None,:],
+            np.arange(4)[None,:]]
+        np.testing.assert_allclose(nb, b.data)
+        
+        a = jt.random([10,11,12])
+        b = a[jt.arange(3)[::-1,None],
+            jt.arange(4)[None,:],
+            jt.arange(4)[None,::-1]]
+        nb = a.data[np.arange(3)[::-1,None],
+            np.arange(4)[None,:],
+            np.arange(4)[None,::-1]]
+        np.testing.assert_allclose(nb, b.data)
+
+    def test_cuda_slice_migrate_bug(self):
+        a = jt.array([1,2,3,4,5])
+        jt.sync_all()
+        if not jt.has_cuda: return
+        with jt.flag_scope(use_cuda=1):
+            b = a[0]
+            b.sync(True)
+            assert b.item() == 1
+
+        
 
 if __name__ == "__main__":
     unittest.main()

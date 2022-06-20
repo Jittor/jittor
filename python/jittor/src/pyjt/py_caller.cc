@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: 
 //     Dun Liang <randonlang@gmail.com>. 
 // 
@@ -14,7 +14,7 @@ namespace jittor {
 
 string py_caller(const string& mod_func, const vector<string>& args, const map<string,string>& kw) {
     PyObjHolder mod(PyImport_ImportModule("jittor"));
-    PyObjHolder func(PyObject_GetAttrString(mod.obj, "python_pass_warper"));
+    PyObjHolder func(PyObject_GetAttrString(mod.obj, "python_pass_wrapper"));
     PyObjHolder py_name(to_py_object<string>(mod_func));
     PyObjHolder py_args(to_py_tuple(args));
     PyObjHolder py_kw(to_py_object(kw));

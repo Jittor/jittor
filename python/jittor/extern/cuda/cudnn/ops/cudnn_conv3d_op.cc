@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // 
 // This file is subject to the terms and conditions defined in
@@ -7,13 +7,15 @@
 // ***************************************************************
 #include "var.h"
 #include "cudnn_conv3d_op.h"
-#include "cudnn_warper.h"
+#include "cudnn_wrapper.h"
 #include "executor.h"
 #include "ops/op_register.h"
 
 using namespace std;
 
 namespace jittor {
+
+extern int use_tensorcore;
 
 #pragma GCC diagnostic ignored "-Wunused-variable"
 
@@ -24,6 +26,9 @@ CudnnConv3dOp::CudnnConv3dOp(Var* x, Var* w, int strided, int strideh, int strid
       xformat(move(xformat)) {
     flags.set(NodeFlags::_cuda, 1);
     flags.set(NodeFlags::_cpu, 0);
+    flags.set(NodeFlags::_manual_set_vnbb);
+    x->flags.set(NodeFlags::_needed_by_backward);
+    w->flags.set(NodeFlags::_needed_by_backward);
     y = create_output(nullptr, dtype_infer(x->ns, w->ns));
 }
 
@@ -48,10 +53,9 @@ void CudnnConv3dOp::infer_shape() {
 }
 
 void CudnnConv3dOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype();
-    jk << _CS("][Ty:") << y->dtype();
-    jk << _CS("][Tw:") << w->dtype();
-    jk << ']';
+    jk << "«Tx:" << x->dtype();
+    jk << "«Ty:" << y->dtype();
+    jk << "«Tw:" << w->dtype();
 }
 
 static auto make_backwardx = get_op_info("cudnn_conv3d_backward_x")
@@ -150,7 +154,9 @@ void CudnnConv3dOp::jit_run() {
     ));
 
     // using tensor core
-    // checkCudaErrors( cudnnSetConvolutionMathType(cudnnConvDesc, CUDNN_TENSOR_OP_MATH) );
+    if(use_tensorcore){
+        checkCudaErrors( cudnnSetConvolutionMathType(cudnnConvDesc, CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION) );
+    }
 
 
     int sy[] = {0,0,0,0,1};
@@ -184,7 +190,7 @@ void CudnnConv3dOp::jit_run() {
     };
     int num_algos = CUDNN_CONVOLUTION_FWD_ALGO_COUNT;
     int perf_count;
-    cudnnConvolutionFwdAlgoPerf_t perf_results[num_algos];
+    STACK_ALLOC(cudnnConvolutionFwdAlgoPerf_t,perf_results,num_algos);
     cudnnConvolutionFwdAlgo_t algo;
     bool benchmark=true;
 

@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
@@ -100,6 +100,12 @@ class TestCuda(unittest.TestCase):
         na = a.data
         assert a.shape == [3,4,5] and a.dtype == 'float'
         assert (-na.flatten() == range(3*4*5)).all(), na
+
+    def test_cuda_fused_op(self):
+        a = jt.array([1,2,3])
+        a.sync()
+        with jt.flag_scope(use_cuda=1):
+            ((a+a)*2).data
 
 
 @unittest.skipIf(jt.compiler.has_cuda, "Only test without CUDA")

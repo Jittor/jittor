@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
@@ -142,6 +142,11 @@ class TestGrad(unittest.TestCase):
         expect_error(lambda: jt.grad(z, [y1]))
         dx, = jt.grad(z, [x])
         self.assertEqual(dx.data, 48)
+
+    def test_int_enable_grad(self):
+        a = jt.int([1,2,3])
+        a.requires_grad = True
+        a.start_grad()
         
     def test_nth_grad(self):
         x = jt.array(2.0)

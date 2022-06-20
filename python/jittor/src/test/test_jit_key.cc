@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -19,16 +19,16 @@ JIT_TEST(jit_key) {
     });
     std::cerr << "get segfault, ok" << std::endl;
 
-    jk << JK::key << "key" << JK::val << "value" << JK::end;
-    jk << JK::key << "key" << JK::val << JK::hex(0x123123) << JK::end;
-    jk << JK::key << "key" << JK::val << JK::hex1(0x123123) << JK::end;
-    jk << JK::key << "key" << JK::val << JK::hex2(0x123123) << JK::end;
-    jk << JK::key << "key" << JK::val << JK::Oxhex(0x123123) << JK::end;
-    jk << JK::key << "key" << JK::val << JK::Oxhex1(0x123123) << JK::end;
-    jk << JK::key << "key" << JK::val << JK::Oxhex2(0x123123) << JK::end;
-    string key = "[key:value][key:123123][key:3][key:23][key:0x123123][key:0x3][key:0x23]";
+    jk << JK::key << "key" << JK::val << "value";
+    jk << JK::key << "key" << JK::val << JK::hex(0x123123);
+    jk << JK::key << "key" << JK::val << JK::hex1(0x123123);
+    jk << JK::key << "key" << JK::val << JK::hex2(0x123123);
+    jk << JK::key << "key" << JK::val << JK::Oxhex(0x123123);
+    jk << JK::key << "key" << JK::val << JK::Oxhex1(0x123123);
+    jk << JK::key << "key" << JK::val << JK::Oxhex2(0x123123);
+    string key = "«key:value«key:123123«key:3«key:23«key:0x123123«key:0x3«key:0x23";
     ASSERTop(jk.to_string(),==,key);
-    auto keys = parse_jit_keys("[a:11][b:22][a[3]:b::[x]][x=11][f=itof(0x0)]");
+    auto keys = parse_jit_keys("«a:11«b:22«a[3]:b::[x]«x=11«f=itof(0x0)");
     vector<pair<string,string>> k2 = 
         {{"a","11"},{"b","22"},{"a[3]","b::[x]"},{"x","17"},{"f","0"}};
     ASSERTop(keys,==,k2);

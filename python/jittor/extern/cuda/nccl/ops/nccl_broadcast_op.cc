@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 
+// Copyright (c) 2022 Jittor. All Rights Reserved.  
 //     Guoye Yang <498731903@qq.com>. 
 //     Dun Liang <randonlang@gmail.com>. 
 // All Rights Reserved.
@@ -13,7 +13,7 @@
 #include <nccl.h>
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
-#include "nccl_warper.h"
+#include "nccl_wrapper.h"
 #include "ops/op_register.h"
 namespace jittor {
 
@@ -35,7 +35,7 @@ VarPtr NcclBroadcastOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 }
 
 void NcclBroadcastOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype() << ']';
+    jk << "«Tx:" << x->dtype();
 }
 
 #else // JIT
@@ -47,6 +47,7 @@ void NcclBroadcastOp::jit_run() {
         @if(@strcmp(@Tx,int)==0 || @strcmp(@Tx,int32)==0, ncclInt)
         @if(@strcmp(@Tx,float64)==0, ncclFloat64)
         @if(@strcmp(@Tx,int64)==0, ncclInt64)
+        @if(@strcmp(@Tx,uint8)==0, ncclUint8)
     )
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();

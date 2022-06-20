@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: 
 #     Dun Liang <randonlang@gmail.com>. 
 # 
@@ -29,13 +29,13 @@ class TestConvTranspose(unittest.TestCase):
         self.test()
 
     def test(self):
-        def check(data_shape, weights_shape, stride=1, dilation=1):
+        def check(data_shape, weights_shape, stride=1, dilation=1, groups=1):
             N,C,H,W = data_shape
             i,o,h,w = weights_shape
             img = np.random.rand(N,C,H,W).astype("float32")
-            weights = np.random.rand(i,o,h,w).astype("float32")
-            m1 = jt.nn.ConvTranspose(i,o,h, stride=stride, dilation=dilation, bias=False)
-            m2 = torch.nn.ConvTranspose2d(i,o,h, stride=stride, dilation=dilation, bias=False)
+            weights = np.random.rand(i,o//groups,h,w).astype("float32")
+            m1 = jt.nn.ConvTranspose(i,o,h, stride=stride, dilation=dilation, bias=False, groups=groups)
+            m2 = torch.nn.ConvTranspose2d(i,o,h, stride=stride, dilation=dilation, bias=False, groups=groups)
             m1.weight.data = weights
             m2.weight.data = torch.Tensor(weights)
             x = jt.array(img)
@@ -61,6 +61,7 @@ class TestConvTranspose(unittest.TestCase):
         check((4, 5, 100, 100), (5, 6, 5, 5), 1, 2)
         check((4, 5, 100, 100), (5, 6, 5, 5), 2, 2)
         check((4, 5, 100, 100), (5, 6, 5, 5), 2, 3)
+        check((4, 6, 100, 100), (6, 6, 5, 5), 2, 3, 2)
 
     def test_function(self):
         def check(data_shape, weights_shape, stride=1, dilation=1):

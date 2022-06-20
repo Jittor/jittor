@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: 
 #     Guowei Yang <471184555@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
@@ -28,7 +28,7 @@ class TestCodeOp(unittest.TestCase):
                 if (jt.flags.use_cuda==0):
                     assert isinstance(a,numpy.ndarray)
                 else:
-                    assert isinstance(a,cupy.core.core.ndarray)
+                    assert isinstance(a,cupy.ndarray)
                 np.add(a,a,out=b)
 
             def backward_code(self, np, data):
@@ -75,7 +75,7 @@ class TestCodeOp(unittest.TestCase):
             if (jt.flags.use_cuda==0):
                 assert isinstance(a,numpy.ndarray)
             else:
-                assert isinstance(a,cupy.core.core.ndarray)
+                assert isinstance(a,cupy.ndarray)
             np.add(a,a,out=b)
 
         def backward_code(np, data):

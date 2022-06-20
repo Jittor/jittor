@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -8,7 +8,6 @@
 #include <limits>
 #include "var.h"
 #include "ops/reindex_reduce_op.h"
-#include "ops/binary_op_defs.h"
 #include "ops/op_register.h"
 
 namespace jittor {
@@ -29,9 +28,18 @@ ReindexReduceOp::ReindexReduceOp(Var* y, NanoString op, NanoVector shape, vector
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
     set_type(OpType::reduce);
+    if (op.get(NanoString::_no_need_back_in))
+        flags.set(NodeFlags::_manual_set_vnbb);
     ns = op;
     ASSERT(ns.is_binary() && ns!=ns_mean);
     x = create_output(nullptr, y->dtype());
+    for (auto e : extras) {
+        if (e->shape != y->shape) {
+            e->flags.set(NodeFlags::_stop_fuse);
+        }
+        if (op.get(NanoString::_no_need_back_in))
+            e->flags.set(NodeFlags::_needed_by_backward);
+    }
 }
 
 VarPtr ReindexReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
@@ -65,21 +73,20 @@ void ReindexReduceOp::infer_shape() {
 }
 
 void ReindexReduceOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype()
-        << _CS("][OP:") << ns
-        << _CS("][YDIM=") << JK::hex1(y->shape.size())
-        << _CS("][XDIM=") << JK::hex1(x->shape.size());
+    jk << "«Tx:" << x->dtype()
+        << "«OP:" << ns
+        << "«YDIM=" << JK::hex1(y->shape.size())
+        << "«XDIM=" << JK::hex1(x->shape.size());
     for (uint i=0; i<indexes.size(); i++)
-        jk << _CS("][INDEX") << JK::hex1(i) << ':' << indexes[i];
-    jk << _CS("][OSIZE=") << JK::hex1(overflow_conditions.size());
+        jk << "«INDEX" << JK::hex1(i) << ':' << indexes[i];
+    jk << "«OSIZE=" << JK::hex1(overflow_conditions.size());
     for (uint i=0; i<overflow_conditions.size(); i++)
-        jk << _CS("][OFD") << JK::hex1(i) << ':' << overflow_conditions[i];
-    jk << _CS("][ESIZE=") << JK::hex1(extras.size());
+        jk << "«OFD" << JK::hex1(i) << ':' << overflow_conditions[i];
+    jk << "«ESIZE=" << JK::hex1(extras.size());
     for (uint i=0; i<extras.size(); i++) {
-        jk << _CS("][EDIM") << JK::hex1(i) << '=' << JK::hex1(extras[i]->shape.size());
-        jk << _CS("][Te") << JK::hex1(i) << ':' << extras[i]->dtype();
+        jk << "«EDIM" << JK::hex1(i) << '=' << JK::hex1(extras[i]->shape.size());
+        jk << "«Te" << JK::hex1(i) << ':' << extras[i]->dtype();
     }
-    jk << ']';
 }
 
 #else // JIT
@@ -107,7 +114,7 @@ void ReindexReduceOp::jit_run() {
 
     @for(d, 0, XDIM, for (index_t i@d=0; i@d < xshape@d; i@d++)) {
         auto xid = @for(d, 0, XDIM, + i@d * xstride@d);
-        xp[xid] = @expand_macro(init_@OP, Tx);
+        xp[xid] = @expand_op(init_@OP, @Tx);
     }
     // generate d-for loop
     @for(d, 0, YDIM, for (index_t i@d=0; i@d < yshape@d; i@d++)) {
@@ -116,7 +123,7 @@ void ReindexReduceOp::jit_run() {
         auto xid = @for(d, 0, XDIM, + xid@d * xstride@d);
         bool check_overflow = 0 @for(d, 0, XDIM, || xid@d<0 || xid@d>=xshape@d) @for(d, 0, OSIZE, || (@expand_macro(OFD@d)));
         if (!check_overflow)
-            xp[xid] = @expand_macro(@OP, Tx, xp[xid], yp[yid]);
+            xp[xid] = @expand_op(@OP, @Tx, xp[xid], @Tx, yp[yid], @Tx);
     }
 }
 #endif // JIT

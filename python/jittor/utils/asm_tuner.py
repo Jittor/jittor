@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: 
 #     Guowei Yang <471184555@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
@@ -130,15 +130,28 @@ so_pos=cmd.find("_op.so")
 # remove -Xclang ...
 remove_clang_flag = lambda s: re.sub("-Xclang (('[^']*')|([^ ]*))", "", s)
 
+def shsplit(s):
+    s1 = s.split(' ')
+    s2 = []
+    count = 0
+    for s in s1:
+        nc = s.count('"') + s.count('\'')
+        if count&1:
+            count += nc
+            s2[-1] += " "
+            s2[-1] += s
+        else:
+            count = nc
+            s2.append(s)
+    return s2
+
 def remove_flags(flags, rm_flags):
-    flags = flags.split(" ")
+    flags = shsplit(flags)
     output = []
     for s in flags:
-        if s.startswith("-load"):
-            output.append(s)
-            continue
+        ss = s.replace("\"", "")
         for rm in rm_flags:
-            if s.startswith(rm):
+            if ss.startswith(rm) or ss.endswith(rm):
                 break
         else:
             output.append(s)
@@ -160,7 +173,7 @@ else:  #cc_to_so
         .replace("-ldl", "") \
         .replace("-shared", "-S") \
         .replace(" -o ", " -g -o ")
-    asm_cmd = remove_flags(asm_cmd, ['-l', '-L', '-Wl,'])
+    asm_cmd = remove_flags(asm_cmd, ['-l', '-L', '-Wl,', '.lib', '-shared'])
     run_cmd(asm_cmd)
 
     s_path = cc_path.replace("_op.cc","_op.post.s")
@@ -168,5 +181,5 @@ else:  #cc_to_so
     pass_asm(cc_path,s_path)
 
     asm_cmd = cmd.replace("_op.cc", "_op.s") \
-        .replace("-g", "")
+        .replace(" -g", "")
     run_cmd(remove_clang_flag(asm_cmd))

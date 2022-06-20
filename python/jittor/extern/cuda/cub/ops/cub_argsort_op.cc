@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: 
 //     Guoye Yang <498731903@qq.com>
 //     Dun Liang <randonlang@gmail.com>. 
@@ -27,6 +27,8 @@ CubArgsortOp::CubArgsortOp(Var* x, Var* indexes, Var* offsets, bool descending, 
     ASSERT(offsets->dtype()==ns_int32);
     y = create_output(nullptr, dtype);
     y_key = create_output(nullptr, x->dtype());
+    flags.set(NodeFlags::_manual_set_vnbb);
+    y->flags.set(NodeFlags::_needed_by_backward);
 }
 
 VarPtr CubArgsortOp::grad(Var* out, Var* dout, Var* v, int v_index) {
@@ -49,15 +51,15 @@ void CubArgsortOp::infer_shape() {
 }
 
 void CubArgsortOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype();
-    jk << _CS("][Tindexes:") << indexes->dtype();
-    jk << _CS("][Toffsets:") << offsets->dtype();
-    jk << _CS("][Ty:") << y->dtype();
-    jk << _CS("][FUNC:");
+    jk << "«Tx:" << x->dtype();
+    jk << "«Tindexes:" << indexes->dtype();
+    jk << "«Toffsets:" << offsets->dtype();
+    jk << "«Ty:" << y->dtype();
+    jk << "«FUNC:";
     if (descending)
-        jk << _CS("SortPairsDescending]");
+        jk << "SortPairsDescending";
     else
-        jk << _CS("SortPairs]");
+        jk << "SortPairs";
 }
 
 #else // JIT

@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved.
+// Copyright (c) 2022 Jittor. All Rights Reserved.
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -17,7 +17,7 @@
 namespace jittor {
 
 
-#ifdef HAS_CUDA
+#ifdef IS_CUDA
 EXTERN_LIB void check_nan_float32(float32* ptr, int64 num);
 EXTERN_LIB void check_nan_float64(float64* ptr, int64 num);
 #endif
@@ -28,7 +28,7 @@ bool check_nan(Var* v) {
             v->input()->name() == string("empty") ||
             v->input()->name() == string("setitem")))
         return true;
-    #ifdef HAS_CUDA
+    #ifdef IS_CUDA
     if (v->allocator->is_cuda()) {
         if (v->dtype() == ns_float32) {
             check_nan_float32((float32*)v->mem_ptr, v->num);

@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -22,7 +22,13 @@ void setter_use_cuda(int value) {
     if (value) {
         int count=0;
         cudaGetDeviceCount(&count);
-        CHECK(count>0) << "No device found.";
+        if (count == 0) {
+            if (getenv("CUDA_VISIBLE_DEVICES")) {
+                LOGf << "No device found, please unset your "
+                "enviroment variable 'CUDA_VISIBLE_DEVICES'";
+            } else
+                LOGf << "No device found";
+        }
         LOGi << "CUDA enabled.";
     } else {
         LOGv << "CUDA disabled.";

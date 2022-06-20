@@ -4,8 +4,8 @@ suffix = ""
 
 import jittor as jt
 import time
-from pathlib import Path
-home_path = str(Path.home())
+import jittor_utils as jit_utils
+home_path = jit_utils.home()
 perf_path = os.path.join(home_path, ".cache", "jittor_perf")
 
 def main():

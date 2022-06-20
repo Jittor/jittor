@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -16,6 +16,15 @@ namespace jittor {
 // define in tracer.cc
 void print_trace();
 void breakpoint();
+#ifdef _WIN32
+string GbkToUtf8(const char *src_str);
+string Utf8ToGbk(const char *src_str);
+#define _to_winstr(x) Utf8ToGbk(x.c_str())
+#define _from_winstr(x) GbkToUtf8(x.c_str())
+#else
+#define _to_winstr(x) (x)
+#define _from_winstr(x) (x)
+#endif
     
 constexpr int32_t basename_index(const char * const path, const int32_t index = 0, const int32_t slash_index = -1) {
    return path[index]
@@ -60,7 +69,7 @@ constexpr char yellow[] = "\x1b[1;33m";
 
 
 inline static void get_color(char level, int verbose, const char*& color_begin, const char*& color_end) {
-    if (level == 'i') {
+    if (level == 'i' || level == 'I') {
         if (verbose == 0) color_begin = "\x1b[1;32m"; else
         if (verbose < 10) color_begin = "\x1b[1;32m"; else
         if (verbose < 100) color_begin = "\x1b[1;32m"; else
@@ -81,7 +90,7 @@ constexpr char red[] = "\033[38;5;1m";
 constexpr char yellow[] = "\033[38;5;3m";
 
 inline static void get_color(char level, int verbose, const char*& color_begin, const char*& color_end) {
-    if (level == 'i') {
+    if (level == 'i' || level == 'I') {
         if (verbose == 0) color_begin = "\033[38;5;2m"; else
         if (verbose < 10) color_begin = "\033[38;5;250m"; else
         if (verbose < 100) color_begin = "\033[38;5;244m"; else
@@ -271,9 +280,10 @@ bool check_vlog(const char* fileline, int verbose);
 #define LOGrrrr LOGvvvv >> jittor::red
 #define LOGyyyy LOGvvvv >> jittor::yellow
 
-#define LOGir LOGi >> jittor::red
-#define LOGig LOGi >> jittor::green
-#define LOGiy LOGi >> jittor::yellow
+#define LOGI jittor::LogVoidify() && jittor::Log(__FILELINE__, 'I', 0)
+#define LOGir LOGI >> jittor::red
+#define LOGig LOGI >> jittor::green
+#define LOGiy LOGI >> jittor::yellow
 
 void system_with_check(const char* cmd, const char* cwd=nullptr);
 

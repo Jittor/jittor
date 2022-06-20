@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -12,7 +12,7 @@
 namespace jittor {
 
 CudaManagedAllocator cuda_managed_allocator;
-DEFINE_FLAG(int, use_cuda_managed_allocator, 1, "Enable cuda_managed_allocator");
+DEFINE_FLAG(int, use_cuda_managed_allocator, 0, "Enable cuda_managed_allocator");
 EXTERN_LIB bool no_cuda_error_when_free;
 
 const char* CudaManagedAllocator::name() const {return "cuda_managed";}

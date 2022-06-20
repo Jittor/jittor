@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: 
 //     Guoye Yang <498731903@qq.com>
 //     Dun Liang <randonlang@gmail.com>. 
@@ -46,7 +46,6 @@ ArgReduceOp::ArgReduceOp(Var* x, NanoString op, int dim, bool keepdims)
             get_op_info("cub_arg_reduce").get_constructor<std::vector<VarPtr>, Var*, Var*, NanoString, bool>()
             : nullptr;
         if (cub_arg_reduce) {
-            if (x->num<0) exe.run_sync(vector<Var*>({x}), true);
             int dims = x->shape.size();
             vector<int64> axes;
             axes.reserve(dims);
@@ -88,6 +87,8 @@ ArgReduceOp::ArgReduceOp(Var* x, NanoString op, int dim, bool keepdims)
     #endif
     y = create_output(nullptr, ns_int32);
     y_key = create_output(nullptr, x->dtype());
+    flags.set(NodeFlags::_manual_set_vnbb);
+    y->flags.set(NodeFlags::_needed_by_backward);
 }
 VarPtr ArgReduceOp::get_grad(Var* out, Var* dout, Var* v, int v_index, int dim, Var* y) {
     // Do not have grad to extras input
@@ -157,14 +158,13 @@ void ArgReduceOp::infer_shape() {
 }
 
 void ArgReduceOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype();
-    jk << _CS("][Ty:") << y->dtype();
-    jk << _CS("][XDIM=") << JK::hex1(x->shape.size());
-    jk << _CS("][YDIM=") << JK::hex1(y->shape.size());
-    jk << _CS("][KEEPDIMS:") << (keepdims ? '1' : '0');
-    jk << _CS("][DIM=") << JK::hex1(dim);
-    jk << _CS("][CMP:") << (op==ns_minimum ? "<" : ">");
-    jk << ']';
+    jk << "«Tx:" << x->dtype();
+    jk << "«Ty:" << y->dtype();
+    jk << "«XDIM=" << JK::hex1(x->shape.size());
+    jk << "«YDIM=" << JK::hex1(y->shape.size());
+    jk << "«KEEPDIMS:" << (keepdims ? '1' : '0');
+    jk << "«DIM=" << JK::hex1(dim);
+    jk << "«CMP:" << (op==ns_minimum ? "<" : ">");
 }
 
 #else // JIT

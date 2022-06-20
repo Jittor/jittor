@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -143,6 +143,7 @@ void migrate_to_cpu(Var* var, Allocator* allocator) {
         );
     } else
     if (!use_cuda_managed_allocator) {
+        if (!var->allocator->is_cuda()) return;
         // must be a device allocator
         Allocation a(allocator, var->size);
         checkCudaErrors(cudaMemcpy(a.ptr, var->mem_ptr, var->size, cudaMemcpyDeviceToHost));

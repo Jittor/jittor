@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
@@ -19,11 +19,47 @@ import time
 from ctypes import cdll
 import shutil
 import urllib.request
+import ctypes
 
 if platform.system() == 'Darwin':
     mp.set_start_method('fork')
 
-class LogWarper:
+from pathlib import Path
+import json
+
+
+_jittor_home = None
+def home():
+    global _jittor_home
+    if _jittor_home is not None:
+        return _jittor_home
+
+    src_path = os.path.join(str(Path.home()),".cache","jittor")
+    os.makedirs(src_path,exist_ok=True)
+    src_path_file = os.path.join(src_path,"config.json")
+    data = {}
+    if os.path.exists(src_path_file):
+        with open(src_path_file,"r") as f:
+            data = json.load(f)
+
+    default_path = data.get("JITTOR_HOME", str(Path.home()))
+
+    _home_path = os.environ.get("JITTOR_HOME", default_path)
+    
+    if not os.path.exists(_home_path):
+        os.makedirs(_home_path, exist_ok=True)
+    _home_path = os.path.abspath(_home_path)
+    
+    # LOG.i(f"Use {_home_path} as Jittor Home")
+    if default_path != _home_path:
+        with open(src_path_file,"w") as f:
+            data['JITTOR_HOME'] = _home_path
+            json.dump(data,f)
+    
+    _jittor_home = _home_path
+    return _home_path
+
+class Logwrapper:
     def __init__(self):
         self.log_silent = int(os.environ.get("log_silent", "0"))
         self.log_v = int(os.environ.get("log_v", "0"))
@@ -120,7 +156,11 @@ def try_import_jit_utils_core(silent=None):
         if is_in_ipynb: os.environ["log_sync"] = "1"
         import jit_utils_core as cc
         if is_in_ipynb:
-            cc.ostream_redirect(True, True)
+            if os.name != 'nt':
+                # windows jupyter has import error
+                # disable ostream redirect
+                # TODO: find a better way
+                cc.ostream_redirect(True, True)
     except Exception as _:
         if int(os.environ.get("log_v", "0")) > 0:
             print(_)
@@ -219,9 +259,9 @@ if os.name=='nt' and getattr(mp.current_process(), '_inheriting', False):
     # when windows spawn multiprocess, disable sub-subprocess
     os.environ["DISABLE_MULTIPROCESSING"] = '1'
     os.environ["log_silent"] = '1'
-
+        
 if os.environ.get("DISABLE_MULTIPROCESSING", '0') == '1' or os.environ.get("is_mobile", "0") == "1":
-    os.environ["use_parallel_op_compiler"] = '1'
+    os.environ["use_parallel_op_compiler"] = '0'
     def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
         cmds = [ [cmd, cache_path, jittor_path] for cmd in cmds ]
         n = len(cmds)
@@ -239,15 +279,83 @@ def download(url, filename):
     urllib.request.urlretrieve(url, filename)
     LOG.v("Download finished")
 
+def get_jittor_version():
+    path = os.path.dirname(__file__)
+    with open(os.path.join(path, "../jittor/__init__.py"), "r", encoding='utf8') as fh:
+        for line in fh:
+            if line.startswith('__version__'):
+                version = line.split("'")[1]
+                break
+        else:
+            raise RuntimeError("Unable to find version string.")
+    return version
+
+def get_str_hash(s):
+    import hashlib
+    md5 = hashlib.md5()
+    md5.update(s.encode())
+    return md5.hexdigest()
+
+def get_cpu_version():
+    v = platform.processor()
+    try:
+        if os.name == 'nt':
+            import winreg
+            key_name = r"Hardware\Description\System\CentralProcessor\0"
+            field_name = "ProcessorNameString"
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_name)
+            value = winreg.QueryValueEx(key, field_name)[0]
+            winreg.CloseKey(key)
+            v = value
+        elif platform.system() == "Darwin":
+            r, s = sp.getstatusoutput("sysctl -a sysctl machdep.cpu.brand_string")
+            if r==0:
+                v = s.split(":")[-1].strip()
+        else:
+            with open("/proc/cpuinfo", 'r') as f:
+                for l in f:
+                    if l.startswith("model name"):
+                        v = l.split(':')[-1].strip()
+                        break
+    except:
+        pass
+    return v
+    
+def short(s):
+    ss = ""
+    for c in s:
+        if str.isidentifier(c) or str.isnumeric(c) \
+            or str.isalpha(c) or c in '.-+':
+            ss += c
+    if len(ss)>14:
+        return ss[:14]+'x'+get_str_hash(ss)[:2]
+    return ss
+
 def find_cache_path():
-    from pathlib import Path
+
     if os.environ.get("is_mobile", "0") == "1":
+        from pathlib import Path
         path = "/data/data/com.example.mjittor"
+        dirs = [".cache", "jittor", os.path.basename(cc_path)]
+        if os.environ.get("debug")=="1":
+            dirs[-1] += "_debug"
     else:
-        path = str(Path.home())
-    dirs = [".cache", "jittor", os.path.basename(cc_path)]
-    if os.environ.get("debug")=="1":
-        dirs[-1] += "_debug"
+        path = home()
+        # jittor version key
+        jtv = "jt"+get_jittor_version().rsplit('.', 1)[0]
+        # cc version key
+        ccv = cc_type+get_version(cc_path)[1:-1] \
+            if cc_type != "cl" else cc_type
+        # os version key
+        osv = platform.platform() + platform.node()
+        if len(osv)>14:
+            osv = osv[:14] + 'x'+get_str_hash(osv)[:2]
+        # py version
+        pyv = "py"+platform.python_version()
+        # cpu version
+        cpuv = get_cpu_version()
+        dirs = [".cache", "jittor", jtv, ccv, pyv, osv, cpuv]
+        dirs = list(map(short, dirs))
     cache_name = "default"
     try:
         if "cache_name" in os.environ:
@@ -265,29 +373,26 @@ def find_cache_path():
         for c in " (){}": cache_name = cache_name.replace(c, "_")
     except:
         pass
+    if os.environ.get("debug")=="1":
+        dirs[-1] += "_debug"
     for name in os.path.normpath(cache_name).split(os.path.sep):
-        dirs.insert(-1, name)
+        dirs.append(name)
     os.environ["cache_name"] = cache_name
     LOG.v("cache_name: ", cache_name)
-    for d in dirs:
-        path = os.path.join(path, d)
-        if not os.path.isdir(path):
-            try:
-                os.mkdir(path)
-            except:
-                pass
-        assert os.path.isdir(path)
+    path = os.path.join(path, *dirs)
+    os.makedirs(path, exist_ok=True)
     if path not in sys.path:
         sys.path.append(path)
     return path
 
 def get_version(output):
     if output.endswith("mpicc"):
-        version = run_cmd(output+" --showme:version")
-    elif os.name == 'nt' and output.endswith("cl"):
+        version = run_cmd(f"\"{output}\" --showme:version")
+    elif os.name == 'nt' and (
+        output.endswith("cl") or output.endswith("cl.exe")):
         version = run_cmd(output)
     else:
-        version = run_cmd(output+" --version")
+        version = run_cmd(f"\"{output}\" --version")
     v = re.findall("[0-9]+\\.[0-9]+\\.[0-9]+", version)
     if len(v) == 0:
         v = re.findall("[0-9]+\\.[0-9]+", version)
@@ -325,6 +430,22 @@ def env_or_find(name, bname, silent=False):
                 LOG.i(f"Found {bname}{version} at {path}")
         return path
     return find_exe(bname, silent=silent)
+
+def env_or_try_find(name, bname):
+    if name in os.environ:
+        path = os.environ[name]
+        if path != "":
+            version = get_version(path)
+            LOG.i(f"Found {bname}{version} at {path}")
+        return path
+    return try_find_exe(bname)
+
+def try_find_exe(*args):
+    try:
+        return find_exe(*args)
+    except:
+        LOG.v(f"{args[0]} not found.")
+        return ""
 
 def get_cc_type(cc_path):
     bname = os.path.basename(cc_path)
@@ -380,6 +501,7 @@ def get_py3_include_path():
     
     if os.name == 'nt':
         # Windows
+        sys.executable = sys.executable.lower()
         _py3_include_path = '-I"' + os.path.join(
             os.path.dirname(sys.executable),
             "include"
@@ -423,16 +545,32 @@ def get_total_mem():
     else:
         return os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
 
+def dirty_fix_pytorch_runtime_error():
+    ''' This funtion should be called before pytorch.
+    
+    Example::
+
+        import jittor as jt
+        jt.dirty_fix_pytorch_runtime_error()
+        import torch
+    '''
+    import os, platform
+
+    if platform.system() == 'Linux':
+        os.RTLD_GLOBAL = os.RTLD_GLOBAL | os.RTLD_DEEPBIND
+        import jittor_utils
+        with jittor_utils.import_scope(os.RTLD_GLOBAL | os.RTLD_NOW):
+            import torch
+
 is_in_ipynb = in_ipynb()
 cc = None
-LOG = LogWarper()
+LOG = Logwrapper()
 
 check_msvc_install = False
 msvc_path = ""
 if os.name == 'nt' and os.environ.get("cc_path", "")=="":
-    from pathlib import Path
-    msvc_path = os.path.join(str(Path.home()), ".cache", "jittor", "msvc")
-    cc_path = os.path.join(msvc_path, "cl_x64", "bin", "cl")
+    msvc_path = os.path.join(home(), ".cache", "jittor", "msvc")
+    cc_path = os.path.join(msvc_path, "VC", r"_\_\_\_\_\bin", "cl.exe")
     check_msvc_install = True
 else:
     cc_path = env_or_find('cc_path', 'g++', silent=True)
@@ -443,12 +581,29 @@ cache_path = find_cache_path()
 _py3_config_path = None
 _py3_include_path = None
 _py3_extension_suffix = None
+try:
+    import ssl
+    ssl._create_default_https_context = ssl._create_unverified_context
+except:
+    pass
+
+try:
+    import sys
+    sys.setrecursionlimit(10**6)
+    if os.name != 'nt':
+        import resource
+        resource.setrlimit(resource.RLIMIT_STACK, (2**29,-1))
+except:
+    pass
 
 if os.name == 'nt':
     if check_msvc_install:
         if not os.path.isfile(cc_path):
             from jittor_utils import install_msvc
             install_msvc.install(msvc_path)
+    mpath = os.path.join(home(), ".cache", "jittor", "msvc")
+    if cc_path.startswith(mpath):
+        msvc_path = mpath
     os.RTLD_NOW = os.RTLD_GLOBAL = os.RTLD_DEEPBIND = 0
     path = os.path.dirname(cc_path).replace('/', '\\')
     if path:
@@ -456,3 +611,65 @@ if os.name == 'nt':
         os.environ["PATH"] = path+';'+os.environ["PATH"]
         if hasattr(os, "add_dll_directory"):
             os.add_dll_directory(path)
+
+backends = []
+def add_backend(mod):
+    backends.append(mod)
+
+def compile_module(source, flags):
+    tmp_path = os.path.join(cache_path, "tmp")
+    os.makedirs(tmp_path, exist_ok=True)
+    hash = "hash_" + get_str_hash(source)
+    so = get_py3_extension_suffix()
+    header_name = os.path.join(tmp_path, hash+".h")
+    source_name = os.path.join(tmp_path, hash+".cc")
+    lib_name = hash+so
+    with open(header_name, "w", encoding="utf8") as f:
+        f.write(source)
+    from jittor.pyjt_compiler import compile_single
+    ok = compile_single(header_name, source_name)
+    assert ok, "no pyjt interface found"
+    
+    entry_src = f'''
+static void init_module(PyModuleDef* mdef, PyObject* m) {{
+    mdef->m_doc = "generated py jittor_utils.compile_module";
+    jittor::pyjt_def_{hash}(m);
+}}
+PYJT_MODULE_INIT({hash});
+    '''
+    with open(source_name, "r", encoding="utf8") as f:
+        src = f.read()
+    with open(source_name, "w", encoding="utf8") as f:
+        f.write(src + entry_src)
+    jittor_path = os.path.join(os.path.dirname(__file__), "..", "jittor")
+    jittor_path = os.path.abspath(jittor_path)
+    do_compile([f"\"{cc_path}\" \"{source_name}\" \"{jittor_path}/src/pyjt/py_arg_printer.cc\" {flags} -o \"{cache_path+'/'+lib_name}\" ",
+        cache_path, jittor_path])
+    with import_scope(os.RTLD_GLOBAL | os.RTLD_NOW):
+        exec(f"import {hash}")
+    mod = locals()[hash]
+    return mod
+
+def process_jittor_source(device_type, callback):
+    import jittor.compiler as compiler
+    import shutil
+    djittor = device_type + "_jittor"
+    djittor_path = os.path.join(compiler.cache_path, djittor)
+    os.makedirs(djittor_path, exist_ok=True)
+
+    for root, dir, files in os.walk(compiler.jittor_path):
+        root2 = root.replace(compiler.jittor_path, djittor_path)
+        os.makedirs(root2, exist_ok=True)
+        for name in files:
+            fname = os.path.join(root, name)
+            fname2 = os.path.join(root2, name)
+            if fname.endswith(".h") or fname.endswith(".cc"):
+                with open(fname, 'r', encoding="utf8") as f:
+                    src = f.read()
+                src = callback(src, name, {"fname":fname, "fname2":fname2})
+                with open(fname2, 'w', encoding="utf8") as f:
+                    f.write(src)
+            else:
+                shutil.copy(fname, fname2)
+    compiler.cc_flags = compiler.cc_flags.replace(compiler.jittor_path, djittor_path) + f" -I\"{djittor_path}/extern/cuda/inc\" "
+    compiler.jittor_path = djittor_path

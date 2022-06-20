@@ -1,7 +1,7 @@
 #!python3
 import os, json
-from pathlib import Path
-notebook_dir = os.path.join(str(Path.home()), ".cache","jittor","notebook")
+import jittor_utils as jit_utils
+notebook_dir = os.path.join(jit_utils.home(), ".cache","jittor","notebook")
 if not os.path.isdir(notebook_dir):
     os.mkdir(notebook_dir)
 dirname = os.path.dirname(__file__)
@@ -11,7 +11,7 @@ for r, _, f in os.walk(dirname):
         if not fname.endswith(".md"): continue
         all_md.append(os.path.join(r, fname))
 for mdname in all_md:
-    with open(os.path.join(dirname, mdname), "r") as f:
+    with open(os.path.join(dirname, mdname), "r", encoding="utf-8") as f:
         src = f.read()
     blocks = []
     for i, b in enumerate(src.split("```")):
@@ -63,5 +63,5 @@ for mdname in all_md:
     ipynb_name = os.path.basename(mdname[:-2])+"ipynb"
     ipynb_name = os.path.join(notebook_dir, ipynb_name)
     print(mdname, len(src), len(blocks), len(cells), "--->", ipynb_name)
-    with open(ipynb_name, "w") as f:
+    with open(ipynb_name, "w", encoding='utf8') as f:
         f.write(json.dumps(ipynb))

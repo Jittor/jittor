@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor.
+# Copyright (c) 2022 Jittor.
 # All Rights Reserved. 
 # Maintainers:
 #     Dun Liang <randonlang@gmail.com>. 
@@ -408,6 +408,9 @@ def to_tensor(pic):
         img = Image.open(...)
         img_ = transform.to_tensor(img)
     """
+    if isinstance(pic, jt.Var):
+        return pic
+    
     if isinstance(pic, tuple):
         # try convert ten crop tuple
         pic = ( to_tensor(pic) for p in pic )

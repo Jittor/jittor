@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: 
 #     Guoye Yang <498731903@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
@@ -81,7 +81,7 @@ def test_case(box_num, out_size, time_limit):
     for i in range(1, len(rep)):
         t += float(rep[i][3]) / 1e9
         name = rep[i][0]
-        if name.startswith('[') and (not '[graph:]' in name):
+        if name.startswith('«') and (not '«graph:«' in name):
             fused_op_num += 1
     assert fused_op_num == 1, fused_op_num
     assert t <= time_limit, t
@@ -130,6 +130,12 @@ class TestResizeAndCrop(unittest.TestCase):
         arr = np.random.randn(1,1,2,2)
         check_equal(arr, jnn.Resize((4,4)), tnn.Upsample(scale_factor=2))
         # check_equal(arr, jnn.Upsample(scale_factor=0.5), tnn.Upsample(scale_factor=0.5))
+
+    def test_interpolate(self):
+        a = jt.rand(1,3,64,64)
+        b = jt.nn.interpolate(a, scale_factor=0.5)
+        b.sync()
+        assert b.shape == (1,3,32,32)
         
 
 if __name__ == "__main__":

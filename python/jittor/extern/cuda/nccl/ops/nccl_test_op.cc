@@ -7,7 +7,7 @@
 #include "nccl_test_op.h"
 #include "utils/str_utils.h"
 
-#include "nccl_warper.h"
+#include "nccl_wrapper.h"
 
 
 namespace jittor {
@@ -20,7 +20,7 @@ NcclTestOp::NcclTestOp(string cmd) : cmd(cmd) {
 }
 
 void NcclTestOp::jit_prepare(JK& jk) {
-    jk << _CS("[T:float32]");
+    jk << "«T:float32";
 }
 
 #else // JIT

@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: 
 #     Guowei Yang <471184555@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
@@ -27,16 +27,16 @@ class TestMpiOps(unittest.TestCase):
     def test_all_reduce(self):
         x = jt.random([5, 5])
         y = x.mpi_all_reduce()
-        assert np.allclose(y.data, (x*n).data)
+        np.testing.assert_allclose(y.data, (x*n).data)
         g = jt.grad(y,x)
-        assert np.allclose(g.data, np.ones([5,5])*n)
+        np.testing.assert_allclose(g.data, np.ones([5,5])*n)
 
     def test_all_reduce_mean(self):
         x = jt.random([5, 5])
         y = x.mpi_all_reduce("mean")
-        assert np.allclose(y.data, x.data)
+        np.testing.assert_allclose(y.data, x.data)
         g = jt.grad(y,x)
-        assert np.allclose(g.data, np.ones([5,5]))
+        np.testing.assert_allclose(g.data, np.ones([5,5]))
 
     def test_broadcast(self):
         data = jt.random([5, 5])
@@ -45,23 +45,24 @@ class TestMpiOps(unittest.TestCase):
         else:
             x = jt.zeros([5, 5])
         y = x.mpi_broadcast(0)
-        assert np.allclose(y.data, data.data)
+        np.testing.assert_allclose(y.data, data.data)
         g = jt.grad(y,x)
         if mpi.world_rank() == 0:
-            assert np.allclose(g.data, np.ones([5,5])*n)
+            np.testing.assert_allclose(g.data, np.ones([5,5])*n)
         else:
-            assert np.allclose(g.data, np.zeros([5,5]))
+            np.testing.assert_allclose(g.data, np.zeros([5,5]))
 
     def test_reduce(self):
         x = jt.random([5, 5])
         y = x.mpi_reduce(root=0)
         y.sync()
         if mpi.world_rank() == 0:
-            assert np.allclose(y.data, (x*n).data)
+            np.testing.assert_allclose(y.data, (x*n).data)
         else:
-            assert np.allclose(y.data, np.zeros([5,5]))
+            np.testing.assert_allclose(y.data, np.zeros([5,5]))
         g = jt.grad(y,x)
-        assert np.allclose(g.data, np.ones([5,5]))
+        print(mpi.world_rank(), g)
+        np.testing.assert_allclose(g.data, np.ones([5,5]))
 
 
 @unittest.skipIf(not jt.compile_extern.has_mpi, "no mpi found")

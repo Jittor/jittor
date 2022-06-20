@@ -55,5 +55,42 @@ class TestInit(unittest.TestCase):
     def test_resnet(self):
         check(models.resnet152(), torchvision.models.resnet152(), rtol=5e-2, mean_atol=1e-2)
 
+from jittor import init
+from jittor import nn
+
+class TestInitFunc(unittest.TestCase):
+    def test_eye(self):
+        a = init.eye(2, "float32")
+        np.testing.assert_allclose(a.data, [[1,0],[0,1]])
+        a = init.eye((2,3), "float32")
+        np.testing.assert_allclose(a.data, [[1,0,0],[0,1,0]])
+
+        linear = nn.Linear(2,2)
+        init.eye_(linear.weight)
+        np.testing.assert_allclose(linear.weight.data, [[1,0],[0,1]])
+
+    def test_constant(self):
+        a = init.constant(2, "float32")
+        np.testing.assert_allclose(a.data, [0,0])
+        a = init.constant((2,3), value=1.)
+        np.testing.assert_allclose(a.data, [[1,1,1],[1,1,1]])
+
+        linear = nn.Linear(2,2)
+        init.constant_(linear.weight)
+        np.testing.assert_allclose(linear.weight.data, [[0,0],[0,0]])
+
+    def test_uniform(self):
+        a = init.uniform(5, "float32")
+        assert ((a>0) & (a<1)).all()
+        a = init.uniform((2,3), low=-1, high=1)
+        assert ((a>-1) & (a<1)).all()
+
+        linear = nn.Linear(2,2)
+        init.uniform_(linear.weight)
+        assert (linear.weight > 0).all()
+        linear.weight.uniform_()
+        assert (linear.weight > 0).all()
+
+
 if __name__ == "__main__":
     unittest.main()

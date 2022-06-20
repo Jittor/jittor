@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -33,6 +33,7 @@ FuseTransposeOp::FuseTransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
     set_type(tp);
+    flags.set(NodeFlags::_manual_set_vnbb);
     int i=0;
     for (; i<axes.size(); i++)
         if (i!=axes[i]) break;
@@ -73,12 +74,11 @@ VarPtr FuseTransposeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 void FuseTransposeOp::jit_prepare(JK& jk) {
     auto bc = type()==OpType::broadcast;
     auto ax = bc ? axes : get_reverse(axes);
-    jk << _CS("[Tx:") << x->dtype();
-    jk << _CS("][DIM=") << JK::hex1(axes.size());
-    jk << _CS("][BC:") << JK::hex1(bc);
+    jk << "«Tx:" << x->dtype();
+    jk << "«DIM=" << JK::hex1(axes.size());
+    jk << "«BC:" << JK::hex1(bc);
     for (uint i=0; i<ax.size(); i++)
-        jk << _CS("][AXES") << JK::hex1(ax[i]) << '=' << JK::hex1(i);
-    jk << ']';
+        jk << "«AXES" << JK::hex1(ax[i]) << '=' << JK::hex1(i);
 }
 
 #else // JIT
