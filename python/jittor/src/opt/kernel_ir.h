@@ -58,8 +58,8 @@ struct KernelIR {
     void push_back(unique_ptr<KernelIR>&& irp, vector<unique_ptr<KernelIR>>* ls=nullptr);
     void push_front(unique_ptr<KernelIR>&& irp, vector<unique_ptr<KernelIR>>* ls=nullptr);
 
-    // insert kernel ir (src) to pos
-    void insert(uint pos, const string& src, bool raw=false);
+    // insert kernel ir (src) to pos of ls(can be [before, inner, children, after])
+    void insert(uint pos, const string& src, bool raw=false, vector<unique_ptr<KernelIR>>* ls=nullptr);
     // insert kernel irs to pos
     void insert(uint pos, vector<unique_ptr<KernelIR>>& irs);
     // recursive clone kernel ir(type, attrs, before, inner, after)

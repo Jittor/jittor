@@ -9,6 +9,7 @@
 // ***************************************************************
 
 #include "mem/allocator/sfrl_allocator.h"
+#include "opencl_warper.h"
 
 namespace jittor {
 
@@ -139,6 +140,7 @@ bool SFRLAllocator::should_split(CachingBlock* block, size_t size) {
 }
 
 size_t CachingBlockPool::free_all_cached_blocks(Allocator* underlying, long long free_size) {
+    // TODO: opencl support
     auto it = blocks.begin();
     size_t freed_memory = 0;
     while (it != blocks.end()) {
@@ -165,12 +167,22 @@ void SFRLAllocator::try_merge_two_blocks(CachingBlock* dst, CachingBlock* src, C
         return;
     }
     if (dst->prev == src) {
+        if (underlying->is_opencl()) {
+            cl_int err = clReleaseMemObject(*(cl_mem*)dst->memory_ptr);
+            ASSERT(err == CL_SUCCESS);
+            delete (cl_mem*)dst->memory_ptr;
+        }
         dst->memory_ptr = src->memory_ptr;
         dst->prev = src->prev;
         if (dst->prev) {
             dst->prev->next = dst;
         }
     } else {
+        if (underlying->is_opencl()) {
+            cl_int err = clReleaseMemObject(*(cl_mem*)src->memory_ptr);
+            ASSERT(err == CL_SUCCESS);
+            delete (cl_mem*)src->memory_ptr;
+        }
         dst->next = src->next;
         if (dst->next) {
             dst->next->prev = dst;
@@ -179,6 +191,47 @@ void SFRLAllocator::try_merge_two_blocks(CachingBlock* dst, CachingBlock* src, C
     dst->size += src->size;
     blocks.erase(src);
     delete src;
+
+    if (underlying->is_opencl()) {
+        cl_int err;
+        void* new_mem = new cl_mem;
+        cl_mem main_mem;
+        size_t offset;
+
+        err = clGetMemObjectInfo (
+            *(cl_mem*)dst->memory_ptr, 
+            CL_MEM_ASSOCIATED_MEMOBJECT, 
+            NULL, 
+            (void*)&main_mem, 
+            NULL
+        );
+        ASSERT(main_mem!=NULL);
+        ASSERT(err == CL_SUCCESS);
+        err = clGetMemObjectInfo (
+            *(cl_mem*)dst->memory_ptr, 
+            CL_MEM_OFFSET, 
+            NULL, 
+            (void*)&offset, 
+            NULL
+        );
+        ASSERT(err == CL_SUCCESS);
+        err = clReleaseMemObject(*(cl_mem*)dst->memory_ptr);
+        ASSERT(err == CL_SUCCESS);
+        delete (cl_mem*)dst->memory_ptr;
+
+        _cl_buffer_region buffer_reg;
+        buffer_reg.origin = offset;
+        buffer_reg.size = dst->size;
+        *(cl_mem*)new_mem = clCreateSubBuffer(
+            main_mem, 
+            CL_MEM_READ_WRITE,
+            CL_BUFFER_CREATE_TYPE_REGION, 
+            &buffer_reg, 
+            &err
+        ); 
+        ASSERT(err == CL_SUCCESS);
+        dst->memory_ptr = new_mem;
+    }
 }
 
 CachingBlockPool* SFRLAllocator::get_blocks(size_t size) {
@@ -221,12 +274,72 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
             unused_memory -= small_blocks.free_all_cached_blocks(underlying);
             ptr = underlying->alloc(alloc_size, allocation);
         }
-        block = new CachingBlock(alloc_size, blocks, ptr);
+        if (underlying->is_opencl()) {
+            cl_int err;
+            void* sub_ptr = new cl_mem;
+            _cl_buffer_region buffer_reg;
+            buffer_reg.origin = 0;
+            buffer_reg.size = alloc_size;
+            *(cl_mem*)sub_ptr = clCreateSubBuffer(*(cl_mem*)ptr, CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION, &buffer_reg, &err);
+            block = new CachingBlock(alloc_size, blocks, sub_ptr);
+        } else block = new CachingBlock(alloc_size, blocks, ptr);
     } else {
         unused_memory -= block->size;
     }
     if (should_split(block, size)) {
-        CachingBlock* rest = new CachingBlock(block->size - size, block->blocks, static_cast<char*>(block->memory_ptr) + size);
+        CachingBlock* rest;
+        if (underlying->is_opencl()) {
+            cl_int err;
+            cl_mem main_mem;
+            void* use_mem = new cl_mem;
+            void* sub_mem = new cl_mem;
+            size_t offset;
+
+
+            err = clGetMemObjectInfo (
+                *(cl_mem*)block->memory_ptr, 
+                CL_MEM_ASSOCIATED_MEMOBJECT, 
+                NULL, 
+                (void*)&main_mem, 
+                NULL
+            );
+            err = clGetMemObjectInfo (
+                *(cl_mem*)block->memory_ptr, 
+                CL_MEM_OFFSET, 
+                NULL, 
+                (void*)&offset, 
+                NULL
+            );
+            
+            err = clReleaseMemObject(*(cl_mem*)block->memory_ptr);
+            ASSERT(err == CL_SUCCESS);
+            delete (cl_mem*)block->memory_ptr;
+
+            _cl_buffer_region buffer_reg;
+            buffer_reg.origin = offset + size;
+            buffer_reg.size = block->size - size;
+            *(cl_mem*)sub_mem = clCreateSubBuffer(
+                main_mem, 
+                CL_MEM_READ_WRITE,
+                CL_BUFFER_CREATE_TYPE_REGION, 
+                &buffer_reg, 
+                &err
+            ); 
+            buffer_reg.origin = offset;
+            buffer_reg.size = size;
+            *(cl_mem*)use_mem = clCreateSubBuffer(
+                main_mem, 
+                CL_MEM_READ_WRITE,
+                CL_BUFFER_CREATE_TYPE_REGION, 
+                &buffer_reg, 
+                &err
+            );
+
+            block->memory_ptr = use_mem;
+            rest = new CachingBlock(block->size - size, block->blocks, sub_mem);
+        } else {
+            rest = new CachingBlock(block->size - size, block->blocks, static_cast<char*>(block->memory_ptr) + size);
+        }
         block->size = size;
         if (block->next) {
             block->next->prev = rest;

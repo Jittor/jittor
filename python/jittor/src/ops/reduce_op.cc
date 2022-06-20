@@ -6,6 +6,7 @@
 // ***************************************************************
 #include <cmath>
 #include <limits>
+#include "misc/opencl_flags.h"
 #include "var.h"
 #include "ops/reduce_op.h"
 #include "ops/binary_op_defs.h"
@@ -15,14 +16,22 @@
 namespace jittor {
 
 #ifndef JIT
+static auto make_reduce = get_op_info("reduce")
+    .get_constructor<VarPtr, Var*, NanoString, NanoVector, bool>();
 static auto make_broadcast_to = get_op_info("broadcast_to")
     .get_constructor<VarPtr, Var*, Var*, uint, uint>();
+static auto make_broadcast_to2 = get_op_info("broadcast_to")
+    .get_constructor<VarPtr, Var*, Var*, NanoVector>();
+static auto make_unary = get_op_info("unary")
+    .get_constructor<VarPtr, Var*, NanoString>();
 static auto make_binary = get_op_info("binary")
     .get_constructor<VarPtr, Var*, Var*, NanoString>();
 static auto make_ternary = get_op_info("ternary")
     .get_constructor<VarPtr, Var*, Var*, Var*>();
 static auto make_number = get_op_info("number")
     .get_constructor<VarPtr, float, Var*>();
+static auto make_array = get_op_info("array")
+    .get_constructor<VarPtr, const void*, NanoVector, NanoString>();
 
 NanoString binary_dtype_infer(NanoString op, Var* dx, Var* dy);
 
@@ -268,6 +277,25 @@ ReduceOp::ReduceOp(Var* x, NanoString op, NanoVector dims, bool keepdims)
             reduce_mask |= 1<<dim;
         }
     }
+    if (x->dtype()==ns_float32 && use_opencl && (op==ns_add || op==ns_mean || op==ns_minimum || op==ns_maximum || false)) {
+        auto scale = make_number(10000.0f, x);
+        auto var = make_binary(x, scale, ns_multiply);
+        var = make_unary(var, ns_int32);
+        auto rop = op;
+        if (op==ns_mean)
+            rop = ns_add;
+        var = make_reduce(var, rop, dims, keepdims);
+        float s=1;
+        if (op==ns_mean)
+            s = x->num*1.0 / var->num;
+
+        float32 number = 1.0/(10000.0f*s);
+        scale = make_array(&number, 1, ns_float32);
+        scale = make_broadcast_to2(scale, var, {});
+        var = make_binary(var, scale, ns_multiply);
+        forward(var);
+        return;
+    }
     // if (x->dtype() == ns_bool && ns == ns_add)
     if (x->dtype() == ns_bool)
         y = create_output(nullptr, ns_int32);
@@ -310,6 +338,7 @@ void ReduceOp::infer_shape() {
 }
 
 VarPtr ReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
+    // TODO: opencl grad support
     if (ns == ns_add) {
         auto ret = make_broadcast_to(dout, v, reduce_mask, keepdims_mask);
         return ret;

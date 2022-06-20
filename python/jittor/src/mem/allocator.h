@@ -13,11 +13,13 @@ namespace jittor {
 struct Allocator {
     enum Flag {
         _cuda=1,
-        _aligned=2
+        _aligned=2,
+        _opencl=4
     };
     inline virtual uint64 flags() const { return 0; };
     inline bool is_cuda() const { return flags() & _cuda; }
     inline bool is_aligned() const { return flags() & _aligned; }
+    inline bool is_opencl() const { return flags() & _opencl; }
     virtual const char* name() const = 0;
     virtual void* alloc(size_t size, size_t& allocation) = 0;
     virtual void free(void* mem_ptr, size_t size, const size_t& allocation) = 0;
@@ -53,6 +55,10 @@ Allocator* get_allocator(bool temp_allocator=false);
 // @pyjt(gc)
 void gc_all();
 
+#ifdef HAS_OPENCL
+void migrate_opencl_to_cpu(Var* var, Allocator* allocator);
+void migrate_cpu_to_opencl(Var* var, Allocator* allocator);
+#endif
 #ifdef HAS_CUDA
 void migrate_to_cpu(Var* var, Allocator* allocator);
 void migrate_to_gpu(Var* var, Allocator* allocator);

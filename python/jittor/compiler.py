@@ -18,6 +18,10 @@ import platform
 from ctypes import cdll
 from ctypes.util import find_library
 
+import ctypes
+if os.environ.get("is_mobile", "0") == "0":
+    ctypes.CDLL("/usr/local/cuda/targets/x86_64-linux/lib/libOpenCL.so", os.RTLD_NOW | os.RTLD_GLOBAL)
+
 import jittor_utils as jit_utils
 from jittor_utils import LOG, run_cmd, cache_path, find_exe, cc_path, cc_type, cache_path
 from . import pyjt_compiler
@@ -47,6 +51,8 @@ def remove_flags(flags, rm_flags):
 
 def compile(compiler, flags, inputs, output, combind_build=False):
     def do_compile(cmd):
+        if os.environ.get("is_mobile", "0") == "1":
+            cmd = "cd /data/data/com.example.mjittor/.cache/jittor/default/clang && " + cmd
         if jit_utils.cc:
             return jit_utils.cc.cache_compile(cmd, cache_path, jittor_path)
         else:
@@ -814,6 +820,29 @@ def check_cuda():
     ctypes.CDLL(cuda_lib+"/libcudart.so", dlopen_flags)
     has_cuda = 1
 
+def find_opencl():
+    path = ""
+    name = "opencl_path"
+    if name in os.environ:
+        path = os.environ[name]
+    if path=="":
+        if os.environ.get("is_mobile", "0") == "1":
+            path = "/data/data/com.example.mjittor/termux"
+        else:
+            if os.path.exists("/usr/local/cuda/targets/x86_64-linux/include/CL"):
+                path = "/usr/local/cuda/targets/x86_64-linux"
+    else:
+        if not os.path.exists(path+"/include/CL"):
+            raise RuntimeError(f"opencl not found at: {path}")
+    return path
+
+def check_opencl():
+    global cc_flags, has_opencl, opencl_path
+    if not opencl_path or opencl_path=="":
+        return
+    cc_flags += "-I"+opencl_path+"/include -L"+opencl_path+"/lib -lOpenCL -DHAS_OPENCL"
+    has_opencl = 1
+
 def check_cache_compile():
     files = [
         "src/utils/cache_compile.cc",
@@ -933,6 +962,11 @@ if not nvcc_path:
         nvcc_path = try_find_exe(nvcc_path)
 if nvcc_path is None:
     nvcc_path = ""
+# check opencl
+opencl_path = find_opencl()
+has_opencl = 0
+check_opencl()
+
 gdb_path = env_or_try_find('gdb_path', 'gdb')
 addr2line_path = try_find_exe('addr2line')
 has_pybt = check_pybt(gdb_path, python_path)
@@ -1066,6 +1100,8 @@ make_cache_dir(ck_path)
 # build cache_compile
 cc_flags += f" -I{os.path.join(jittor_path, 'src')} "
 cc_flags += py_include
+if os.environ.get("is_mobile", "0") == "1":
+    cc_flags += " -I/data/data/com.example.mjittor/termux/include -I/data/data/com.example.mjittor/termux/include/c++/v1 -Dmobile"
 check_cache_compile()
 LOG.v(f"Get cache_compile: {jit_utils.cc}")
 
@@ -1117,6 +1153,8 @@ files4 = [ f[len(jittor_path)+1:] for f in files4 ]
 # files4 = run_cmd('find -L src | grep '+grep_args, jittor_path).splitlines()
 at_beginning = [
     "src/ops/op_utils.cc",
+    "src/misc/opencl_flags.cc",
+    "src/misc/cuda_flags.cc",
     "src/event_queue.cc",
     "src/mem/allocator/sfrl_allocator.cc",
     "src/mem/allocator.cc",
@@ -1205,6 +1243,7 @@ flags.cc_type = cc_type
 flags.cc_flags = cc_flags + link_flags + kernel_opt_flags
 flags.nvcc_path = nvcc_path
 flags.nvcc_flags = nvcc_flags
+flags.opencl_path = opencl_path
 flags.python_path = python_path
 flags.cache_path = cache_path
 flags.jittor_path = jittor_path

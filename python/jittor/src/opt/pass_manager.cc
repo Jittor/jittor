@@ -32,6 +32,7 @@
 #include "opt/pass/fake_main_pass.h"
 #include "opt/pass/check_cache_pass.h"
 #include "opt/pass/mark_raw_pass.h"
+#include "opt/pass/opencl_pass.h"
 #include "utils/str_utils.h"
 
 namespace jittor {
@@ -116,6 +117,7 @@ void PassManager::run_passes() {
     run_pass<SolveConflictDefinePass>();
     
     run_pass<FakeMainPass>();
+    run_pass<OpenclPass>();
 }
 
 } // jittor

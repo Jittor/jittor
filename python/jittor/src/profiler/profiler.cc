@@ -23,6 +23,7 @@
 #include "fused_op.h"
 #include "profiler/memory_checker.h"
 #include "misc/deleter.h"
+#include "opencl_warper.h"
 
 namespace jittor {
 
@@ -212,6 +213,10 @@ void Profiler::record_and_run(
             if (use_cuda)
                 checkCudaErrors(cudaDeviceSynchronize());
             #endif
+            #ifdef HAS_OPENCL
+            if (use_opencl) 
+                clFinish(opencl_queue);
+            #endif
         }
         for (int64_t i=0; i<rerun; i++) {
             auto start = std::chrono::high_resolution_clock::now();
@@ -219,6 +224,10 @@ void Profiler::record_and_run(
             #ifdef HAS_CUDA
             if (use_cuda)
                 checkCudaErrors(cudaDeviceSynchronize());
+            #endif
+            #ifdef HAS_OPENCL
+            if (use_opencl)
+                clFinish(opencl_queue);
             #endif
             auto finish = std::chrono::high_resolution_clock::now();
             auto total_ns =  (int64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(finish-start).count();

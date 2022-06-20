@@ -34,7 +34,9 @@ def matmul_transpose(a, b):
         cc = matmul_transpose(aa, b)
         return cc.reshape(a.shape[:-1]+(-1,))
     assert len(a.shape) == 2 and len(b.shape) == 2
-
+    
+    # if jt.flags.use_opencl:
+    #     return jt.compile_extern.clblas_ops.clblas_matmul(a, b, 0, 1)
     shape = list(a.shape)[:-1] + list(b.shape)
     a = a.broadcast(shape, [len(shape)-2])
     b = b.broadcast(shape)
@@ -144,6 +146,8 @@ Example::
             assert an == bn, f"dimension not match, a.shape:{a.shape}, b.shape:{b.shape}"
         cn = max(an, bn)
         shape.append(cn)
+    # if jt.flags.use_opencl:
+    #     return jt.compile_extern.clblas_ops.clblas_matmul(a, b, 0, 0)
     shape.extend([n, m, k])
     a = a.broadcast(shape, [-1])
     b = b.broadcast(shape, [-3])
@@ -691,7 +695,138 @@ class Conv(Module):
                 y = y + b
             return y          
 
-Conv2d = Conv
+class ConvUseMatmul(Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size)
+        self.stride = stride if isinstance(stride, tuple) else (stride, stride)
+        self.padding = padding if isinstance(padding, tuple) else (padding, padding)
+        self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
+        self.groups = groups
+        self.is_depthwise_conv = self.groups == self.out_channels and self.groups == self.in_channels
+        if self.is_depthwise_conv and jt.flags.use_cuda:
+            self.depthwise_conv = DepthwiseConv(stride, padding, dilation)
+        assert in_channels % groups == 0, 'in_channels must be divisible by groups'
+        assert out_channels % groups == 0, 'out_channels must be divisible by groups'
+        Kh, Kw = self.kernel_size
+        self.groups = groups
+        assert in_channels % groups == 0, 'in_channels must be divisible by groups'
+        assert out_channels % groups == 0, 'out_channels must be divisible by groups'
+
+        # self.weight = init.relu_invariant_gauss([out_channels, in_channels//groups, Kh, Kw], dtype="float", mode="fan_out")
+        self.weight = init.invariant_uniform([out_channels, in_channels//groups, Kh, Kw], dtype="float")
+        if bias:
+            fan=1
+            for i in self.weight.shape[1:]:
+                fan *= i
+            bound = 1 / math.sqrt(fan)
+            self.bias = init.uniform([out_channels], dtype="float", low=-bound, high=bound)
+        else:
+            self.bias = None
+
+    def execute(self, x):
+        if self.is_depthwise_conv and jt.flags.use_cuda:
+            y = self.depthwise_conv(x, self.weight)
+            if self.bias is not None:
+                b = self.bias.broadcast(y.shape, [0,2,3])
+                y = y + b
+            return y
+        elif self.groups == 1:
+            N,C,H,W = x.shape
+            Kh, Kw = self.kernel_size
+            assert C==self.in_channels
+            oh = (H+self.padding[0]*2-Kh*self.dilation[0]+self.dilation[0]-1)//self.stride[0]+1
+            ow = (W+self.padding[1]*2-Kw*self.dilation[1]+self.dilation[1]-1)//self.stride[1]+1
+            assert oh>0 and ow>0
+
+            # x_padded = pad(x, [self.padding[0], self.padding[1], self.padding[0], self.padding[1]])
+            # level1 = np.repeat(np.arange(Kh), Kw)
+            # level1 = np.tile(level1, C)
+            # everyLevels = self.stride[0] * np.repeat(np.arange(oh), ow)
+            # i = level1.reshape(-1, 1) + everyLevels.reshape(1, -1)
+            # slide1 = np.tile(np.arange(Kw), Kh)
+            # slide1 = np.tile(slide1, C)
+            # everySlides = self.stride[0] * np.tile(np.arange(ow), oh)
+            # d = np.repeat(np.arange(C), Kh * Kw).reshape(-1, 1)
+            # j = slide1.reshape(-1, 1) + everySlides.reshape(1, -1)
+            # cols = x_padded[:,d,i,j]
+
+            # l, m, n = cols.shape
+            # cols = cols.reindex([m, l*n], [
+            #     f"i1/{n}",
+            #     "i0",
+            #     f"i1%{n}"
+            # ])
+            # w_col = self.weight.reshape((self.weight.shape[0], -1))
+            # out = matmul(w_col, cols)
+            # if self.bias is not None:
+            #     b_col = self.bias.reshape(-1, 1)
+            #     out += b_col
+            # out = out.reindex([l, out.shape[0], n], [
+            #     "i1",
+            #     f"i0*{n}+i2",
+            # ])
+            # out = out.reshape((N, self.out_channels, oh, ow))
+            # # out = jt.stack(jt.split(out, n, dim=-1), dim=0).reshape((N, self.out_channels, oh, ow))
+            # return out
+
+            with jt.flag_scope(compile_options = {"max_parallel_depth": 6}):
+                xx = x.reindex([C,Kh,Kw,N,oh,ow], [
+                    'i3', # Nid
+                    'i0', # Cid
+                    f'i4*{self.stride[0]}-{self.padding[0]}+i1*{self.dilation[0]}', # Hid+Khid
+                    f'i5*{self.stride[1]}-{self.padding[1]}+i2*{self.dilation[1]}', # Wid+KWid
+                ]).reshape([C*Kh*Kw, N*oh*ow])
+            ww = self.weight.reshape([self.out_channels, -1])
+            y = matmul(ww, xx).reshape([self.out_channels,N,oh,ow]).fuse_transpose((1,0,2,3))
+            if self.bias is not None:
+                b = self.bias.broadcast(y.shape, [0,2,3])
+                y = y + b
+            return y
+        else:
+            N,C,H,W = x.shape
+            Kh, Kw = self.kernel_size
+            G = self.groups
+            CpG = C // G # channels per group
+            assert C==self.in_channels
+            oc = self.out_channels
+            oh = (H+self.padding[0]*2-Kh*self.dilation[0]+self.dilation[0]-1)//self.stride[0]+1
+            ow = (W+self.padding[1]*2-Kw*self.dilation[1]+self.dilation[1]-1)//self.stride[1]+1
+            assert oh>0 and ow>0
+            xx = x.reindex([N,G,oc//G,CpG,oh,ow,Kh,Kw], [
+                'i0', # Nid
+                f'i1*{CpG}+i3', # Gid
+                f'i4*{self.stride[0]}-{self.padding[0]}+i6*{self.dilation[0]}', # Hid+Khid
+                f'i5*{self.stride[1]}-{self.padding[1]}+i7*{self.dilation[1]}', # Wid+KWid
+            ])
+            # w: [oc, CpG, Kh, Kw]
+            ww = self.weight.reindex([N, G, oc//G, CpG, oh, ow, Kh, Kw], [
+                f'i1*{oc//G}+i2',
+                'i3',
+                'i6',
+                'i7'
+            ])
+            ww.compile_options = xx.compile_options = {"G":G,"C":C}
+            yy = xx*ww
+            y = yy.reindex_reduce('add', [N, oc, oh, ow], [
+                'i0',
+                f'i1*{oc//G}+i2',
+                'i4',
+                'i5'
+            ])
+            if self.bias is not None:
+                b = self.bias.broadcast(y.shape, [0,2,3])
+                y = y + b
+            return y
+
+if jt.flags.use_opencl:
+    # Conv = ConvUseMatmul
+    # Conv2d = ConvUseMatmul
+    Conv2d = Conv
+
+else:
+    Conv2d = Conv
 
 class Conv1d(Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):

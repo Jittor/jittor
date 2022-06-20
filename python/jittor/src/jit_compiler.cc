@@ -19,6 +19,7 @@
 #include "utils/cache_compile.h"
 #include "utils/flags.h"
 #include "fused_op.h"
+#include "misc/opencl_flags.h"
 
 namespace jittor {
     
@@ -28,6 +29,7 @@ DEFINE_FLAG(string, cc_type, "", "Type of C++ compiler(clang, icc, g++)");
 DEFINE_FLAG(string, cc_flags, "", "Flags of C++ compiler");
 DEFINE_FLAG(string, nvcc_path, "", "Path of CUDA C++ compiler");
 DEFINE_FLAG(string, nvcc_flags, "", "Flags of CUDA C++ compiler");
+DEFINE_FLAG(string, opencl_path, "", "Path of Opencl Folder");
 DEFINE_FLAG(string, python_path, "", "Path of python interpreter");
 DEFINE_FLAG(string, cache_path, "", "Cache path of jittor");
 DEFINE_FLAG(int, rewrite_op, 1, "Rewrite source file of jit operator or not");
@@ -105,13 +107,19 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
     
 #ifndef _MSC_VER
     if (is_cuda_op) {
-        cmd = "\"" + nvcc_path + "\""
-            + " \"" + jit_src_path + "\"" + other_src
-            + nvcc_flags + extra_flags
-            + " -o \"" + jit_lib_path + "\"";
+        if (use_opencl) {
+            cmd = "cd /data/data/com.example.mjittor/.cache/jittor/default/clang && " + cc_path + " -I"+opencl_path+"/include -L"+opencl_path+"/lib -lOpenCL '" + jit_src_path + "'" + other_src
+                + cc_flags + extra_flags
+                + " -Dmobile -L/data/data/com.example.mjittor/.cache/jittor/default/clang -L/data/data/com.example.mjittor/termux/lib -lpython3.9 -lomp -ljit_utils_core -ljittor_core -Wl,-rpath=/data/data/com.example.mjittor/.cache/jittor/default/clang/ -o '" + jit_lib_path + "'";
+        } else {
+            cmd = "\"" + nvcc_path + "\""
+                + " \"" + jit_src_path + "\"" + other_src
+                + nvcc_flags + extra_flags
+                + " -o \"" + jit_lib_path + "\"";
+        }
     } else {
 #ifdef mobile
-        cmd = cc_path
+        cmd = "cd /data/data/com.example.mjittor/.cache/jittor/default/clang && " + cc_path
             + " '" + jit_src_path + "'" + other_src
             + cc_flags + extra_flags
             + " -Dmobile -L/data/data/com.example.mjittor/.cache/jittor/default/clang -L/data/data/com.example.mjittor/termux/lib -lpython3.9 -lomp -ljit_utils_core -ljittor_core -Wl,-rpath=/data/data/com.example.mjittor/.cache/jittor/default/clang/ -o '" + jit_lib_path + "'";

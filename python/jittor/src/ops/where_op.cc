@@ -8,7 +8,7 @@
 #include "ops/where_op.h"
 #include "misc/cuda_flags.h"
 #include "ops/op_register.h"
-#ifdef JIT_cuda
+#ifdef JIT_device
 #include "executor.h"
 #include <assert.h>
 #include <cuda_runtime.h>
@@ -56,7 +56,7 @@ void WhereOp::jit_prepare(JK& jk) {
 }
 
 #else // JIT
-#ifdef JIT_cuda
+#ifdef JIT_device
 
 __global__ static void where_kernel(
     @for(i, 0, NDIM, 1, index_t condshape@i, )

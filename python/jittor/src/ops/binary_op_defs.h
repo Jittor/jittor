@@ -9,10 +9,17 @@
 
 namespace jittor {
 
+#ifdef JIT_device
+#ifdef JIT_opencl
+#define pow(T,a,b) pow(a,b)
+#define maximum(T,a,b) max(T(a), T(b))
+#define minimum(T,a,b) min(T(a), T(b))
+#endif
 #ifdef JIT_cuda
 #define pow(T,a,b) ::pow(a,b)
 #define maximum(T,a,b) ::max(T(a), T(b))
 #define minimum(T,a,b) ::min(T(a), T(b))
+#endif
 #define mod(T,a,b) @if(@strcmp(@T,float32)==0,(a-::floorf((a)/(b))*(b)),@if(@strcmp(@Tx,float64)==0,(a-::floor((a)/(b))*(b)),(a%b)))
 #else // JIT_cpu
 #define pow(T,a,b) std::pow(a,b)
@@ -41,9 +48,17 @@ namespace jittor {
 #define bitwise_xor(T,a,b) ((a)^(b))
 #define mean(T,a,b) ((a)+T(b)*(T(rcount)))
 
+// TODO: fix numeric_min&numeric_max
+#ifdef JIT_device
+#ifdef JIT_opencl
+// #define init_maximum(T) @if(@strcmp(@T,float32)==0 || @strcmp(@T,float)==0,((T)-3.40282e+38F),@if(@strcmp(@Tx,float64)==0,((T)-1.79769e+308F), @if(@strcmp(@Tx, int)==0, -2147483648, GG)))
+#define init_maximum(T) (T)-100000
+#define init_minimum(T) (T)100000
+#endif
 #ifdef JIT_cuda
 #define init_maximum(T) ::numeric_min<T>()
 #define init_minimum(T) ::numeric_max<T>()
+#endif
 #else
 #define init_maximum(T) std::numeric_limits<T>::lowest()
 #define init_minimum(T) std::numeric_limits<T>::max()

@@ -178,7 +178,7 @@ void FusedOp::do_jit_prepare(JK& jk) {
         this->flags.set(NodeFlags::_cuda, 0);
         this->flags.set(NodeFlags::_cpu, 1);
     } else {
-        jk << _CS("[JIT_cuda:1]");
+        jk << _CS("[JIT_device:1]");
         this->flags.set(NodeFlags::_cpu, 0);
         this->flags.set(NodeFlags::_cuda, 1);
     }

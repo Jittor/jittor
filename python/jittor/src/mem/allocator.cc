@@ -6,6 +6,7 @@
 // ***************************************************************
 #include <typeinfo>
 #include "misc/cuda_flags.h"
+#include "var.h"
 
 #include "mem/allocator/aligned_allocator.h"
 #ifdef HAS_CUDA
@@ -13,6 +14,7 @@
 #include "mem/allocator/cuda_device_allocator.h"
 #include "mem/allocator/cuda_dual_allocator.h"
 #endif
+#include "mem/allocator/opencl_device_allocator.h"
 #include "mem/allocator/stat_allocator.h"
 #include "mem/allocator/sfrl_allocator.h"
 #include "mem/allocator/nfef_allocator.h"
@@ -61,6 +63,12 @@ Allocator* get_allocator(bool temp_allocator) {
         }
     }
 #endif
+    if (use_opencl) {
+        use_sfrl_allocator = 0;
+        use_nfef_allocator = 1;
+        LOGvv << "Using opencl_device_allocator";
+        allocator = &opencl_device_allocator;
+    }
     if (!allocator) {
         LOGvv << "Using aligned_allocator";
         allocator = &aligned_allocator;
@@ -92,6 +100,36 @@ void gc_all() {
     for (auto& kv : allocators) kv.second->gc();
 }
 
+#ifdef HAS_OPENCL
+
+void migrate_opencl_to_cpu(Var* var, Allocator* allocator) {
+    Allocation a(cpu_allocator, var->size);
+    cl_int err;
+    err=clEnqueueReadBuffer(opencl_queue, *(cl_mem*)var->mem_ptr, CL_TRUE, 0, var->size, a.ptr, 0, 0, 0);
+    if(err != CL_SUCCESS)
+        LOGf << "Can't read back data to host";
+    var->allocator->free(var->mem_ptr, var->size, var->allocation);
+    var->mem_ptr = a.ptr;
+    var->allocation = a.allocation;
+    var->allocator = a.allocator;
+    a.ptr = nullptr;
+}
+
+
+void migrate_cpu_to_opencl(Var* var, Allocator* allocator) {
+    Allocation a(allocator, var->size);
+    cl_int err;
+    err=clEnqueueWriteBuffer(opencl_queue, *(cl_mem*)a.ptr, CL_TRUE, 0, var->size, var->mem_ptr, 0, 0, 0);
+    if(err != CL_SUCCESS) 
+        LOGf << "Can't write data to device";
+    var->allocator->free(var->mem_ptr, var->size, var->allocation);
+    var->mem_ptr = a.ptr;
+    var->allocation = a.allocation;
+    var->allocator = a.allocator;
+    a.ptr = nullptr;
+}
+
+#endif
 
 #ifdef HAS_CUDA
 

@@ -37,7 +37,6 @@ def init(cc_path,s_path):
     with open(cc_path) as f:
         for line in f:
             cc_content.append(line)
-    print("spath", s_path)
     with open(s_path) as f:
         for line in f:
             s_content.append(line)

@@ -40,6 +40,7 @@ class Pool(Module):
             w = (W+self.padding[1]*2-self.kernel_size[1] + self.stride[1] - 1)//self.stride[1]+1
             use_code_op = self.op in ['maximum', 'minimum', 'mean']
 
+        use_code_op=False
         if use_code_op:
             if self.op == 'mean':
                 if self.count_include_pad:

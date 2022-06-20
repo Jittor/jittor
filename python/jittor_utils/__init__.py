@@ -152,6 +152,8 @@ def run_cmd(cmd, cwd=None, err_msg=None, print_error=True):
 
 def do_compile(args):
     cmd, cache_path, jittor_path = args
+    if os.environ.get("is_mobile", "0") == "1":
+        cmd = "cd /data/data/com.example.mjittor/.cache/jittor/default/clang && " + cmd
     try_import_jit_utils_core(True)
     if cc:
         return cc.cache_compile(cmd, cache_path, jittor_path)

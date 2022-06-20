@@ -67,7 +67,7 @@ void CustomOp::jit_run() {
         x[i] = (T)i;
 }
 #else
-// JIT_cuda
+// JIT_device
 __global__ void kernel(index_t n, T *x) {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;

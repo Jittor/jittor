@@ -17,6 +17,7 @@
 #include "ops/array_op.h"
 #include "misc/cuda_flags.h"
 #include "mem/allocator.h"
+#include "opencl_warper.h"
 
 namespace jittor {
 
@@ -54,6 +55,10 @@ ArrayOp::ArrayOp(ArrayArgs&& args) {
     if (shape.size() == 1 && shape[0] == 1) {
         output->flags.set(NodeFlags::_force_fuse);
         set_type(OpType::element);
+    }
+    if (use_opencl) {
+        flags.set(NodeFlags::_cpu, 0);
+        flags.set(NodeFlags::_cuda, 1);
     }
     #ifdef HAS_CUDA
     if (use_cuda) {
@@ -106,12 +111,21 @@ void ArrayOp::run() {
     #endif
     // free prev allocation and move into it
     auto o = output;
+    #ifdef HAS_OPENCL
+    if (use_opencl) {
+        cl_int err;
+        err=clEnqueueWriteBuffer(opencl_queue, *(cl_mem*)o->mem_ptr, CL_TRUE, 0, o->size, allocation.ptr, NULL, NULL, NULL);
+        if (err!=CL_SUCCESS)
+            LOGf << "array_op clEnqueueWriteBuffer error: " << err;
+        return;
+    }
+    #endif
     o->allocator->free(o->mem_ptr, o->size, o->allocation);
     o->mem_ptr = allocation.ptr;
     allocation.ptr = nullptr;
     o->allocator = allocation.allocator;
     o->allocation = allocation.allocation;
 
-}
+}   
 
 } // jittor

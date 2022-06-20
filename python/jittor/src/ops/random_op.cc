@@ -56,7 +56,7 @@ void RandomOp::jit_run() {
     for (index_t i=0; i<num; i++)
         x[i] = distribution(*generator);
 }
-#else // JIT_cuda
+#else // JIT_device
 void RandomOp::jit_run() {
     // cuda device code
 }

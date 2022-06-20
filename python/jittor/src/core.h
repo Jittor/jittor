@@ -11,6 +11,8 @@
 #include "var_holder.h"
 
 namespace jittor {
+DECLARE_FLAG(int, use_device);
+DECLARE_FLAG(string, device_type);
 
 // @pyjt(number_of_hold_vars)
 inline static uint64 get_number_of_hold_vars() {

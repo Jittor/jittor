@@ -17,7 +17,7 @@ struct CachingBlock {
     size_t size;
     size_t id;
     size_t share_times;
-    void* memory_ptr;
+    void* memory_ptr; // current memory
     CachingBlockPool* blocks;
     CachingBlock* prev;
     CachingBlock* next;

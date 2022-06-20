@@ -8,6 +8,7 @@
 #include "var.h"
 #include "opt/pass_manager.h"
 #include "opt/pass/remove_intermediate_pass.h"
+#include "opencl_warper.h"
 
 namespace jittor {
 

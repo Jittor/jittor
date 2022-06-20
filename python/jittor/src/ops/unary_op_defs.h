@@ -12,12 +12,20 @@ namespace jittor {
 #define logical_not(T,x) (!(x))
 #define bitwise_not(T,x) (~(x))
 #define negative(T,x) (-(x))
-#ifdef JIT_cuda
+#ifdef JIT_device
 // TODO: add float64 version
+#ifdef JIT_opencl
+#define abs(T,x) abs(x)
+#define log(T,x) log((T)(x))
+#define exp(T,x) exp((T)(x))
+#define sqrt(T,x) sqrt((T)(x))
+#endif
+#ifdef JIT_cuda
 #define abs(T,x) ::abs(x)
 #define log(T,x) ::logf((T)(x))
 #define exp(T,x) ::expf((T)(x))
 #define sqrt(T,x) ::sqrtf((T)(x))
+#endif
 #define round(T,x) ((T) ::roundf((x)))
 #define floor(T,x) ((T) ::floorf((x)))
 #define ceil(T,x) ((T) ::ceilf((x)))

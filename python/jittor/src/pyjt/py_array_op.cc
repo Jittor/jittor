@@ -19,6 +19,7 @@
 #include "var.h"
 #include "ops/op_register.h"
 #include "var_holder.h"
+#include "opencl_warper.h"
 
 namespace jittor {
 
@@ -50,6 +51,10 @@ ArrayOp::ArrayOp(PyObject* obj) {
     PyObjHolder holder;
     args.ptr = nullptr;
     allocation.ptr = nullptr;
+    if (use_opencl) {
+        flags.set(NodeFlags::_cpu, 0);
+        flags.set(NodeFlags::_cuda, 1);
+    }
     if (PyFloat_CheckExact(obj)) {
         tmp_data.f32 = PyFloat_AS_DOUBLE(obj);
         args = {&tmp_data, 1, ns_float32};

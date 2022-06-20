@@ -6,7 +6,7 @@
 // ***************************************************************
 #include "var.h"
 #include "ops/candidate_op.h"
-#ifdef JIT_cuda
+#ifdef JIT_device
 #include "executor.h"
 #endif
 
@@ -33,7 +33,7 @@ void CandidateOp::jit_prepare(JK& jk) {
 
 #else // JIT
 
-#ifdef JIT_cuda
+#ifdef JIT_device
 
 __global__ static void candidate_kernel(
     @for(i, 0, XDIM, 1, index_t xshape@i, )

@@ -10,7 +10,7 @@
 #include "ops/getitem_op.h"
 #ifdef JIT
 #include "ops/binary_op_defs.h"
-#ifdef JIT_cuda
+#ifdef JIT_device
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
 #endif

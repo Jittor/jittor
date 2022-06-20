@@ -53,7 +53,7 @@ void ReplaceForNumPass::run() {
             } ,
                 "@for(di,0,DIM, op@op_id@@_index_t @def@@shape@di = @def->shape[@di];)\n"
                 "op@op_id@@_index_t @def@@stride@{DIM-1} = 1;\n"
-                "@for(di,DIM-2,-1,-1, auto @def@@stride@di = @def@@stride@{di+1} * @def@@shape@{di+1};)\n"
+                "@for(di,DIM-2,-1,-1, int @def@@stride@di = @def@@stride@{di+1} * @def@@shape@{di+1};)\n"
                 "@for(di,0,DIM, for (op@op_id@@_index_t @loop_index@di=0; @loop_index@di<@def@@shape@di; @loop_index@di++))\n"
                 "{ op@op_id@@_index_t @loop_index = @for(di,0,DIM, + @loop_index@di * @def@@stride@di); }"
         );

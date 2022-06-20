@@ -836,7 +836,7 @@ string OpCompiler::__get_fused_src(
         "int", "float", "bool", "CHECK", "STRINGIZE",
         "void", "__restrict__", "if", "true", "false",
         "Op", "Var", "Node", "itof", "assert", "ASSERT",
-        "float64"
+        "float64", "abs", "log", "exp", "sqrt", "pow", "min", "max"
     };
     auto not_change = [&](const string& s) -> bool {
         if (unchanged.count(s)) return true;
@@ -989,7 +989,7 @@ string OpCompiler::__get_fused_src(
         }
     }
     fix_op_member(ops, op_members);
-    CHECK(!(defs.count("JIT_cpu") && defs.count("JIT_cuda")))
+    CHECK(!(defs.count("JIT_cpu") && defs.count("JIT_device")))
         << "CPU op and GPU op cannot be fused together.";
 
     fused_kernel = fused_kernel_args + "\n" + fused_kernel;

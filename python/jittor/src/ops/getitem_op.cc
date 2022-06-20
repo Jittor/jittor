@@ -8,7 +8,7 @@
 #include "var.h"
 #include "ops/getitem_op.h"
 #include "ops/op_register.h"
-#ifdef JIT_cuda
+#ifdef JIT_device
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
 #endif

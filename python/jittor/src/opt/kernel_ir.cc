@@ -469,11 +469,13 @@ string KernelIR::to_string(int level, bool debug) {
     }
     return s.str();
 }
-void KernelIR::insert(uint pos, const string& src, bool raw) {
-    children.insert(children.begin()+pos, std::make_unique<KernelIR>(src, raw));
-    auto& ir = *children[pos];
+void KernelIR::insert(uint pos, const string& src, bool raw, vector<unique_ptr<KernelIR>>* ls) {
+    if (!ls) ls = &children;
+    ASSERT(ls>=&before && ls<=&after);
+    ls->insert(ls->begin()+pos, std::make_unique<KernelIR>(src, raw));
+    auto& ir = *((*ls)[pos]);
     ir.father = this;
-    ir.flist = &children;
+    ir.flist = ls;
     ir.add_scope();
 }
 
