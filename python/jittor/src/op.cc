@@ -152,40 +152,40 @@ void Op::do_jit_prepare(JK& jk) {
         bool has_cuda = flags.get(NodeFlags::_cuda);
         bool has_cpu = flags.get(NodeFlags::_cpu);
         CHECK(has_cuda || has_cpu);
-        if (has_cuda && has_cpu && !use_device)
+        if (has_cuda && has_cpu && !use_cuda)
             flags.set(NodeFlags::_cuda, 0);
         jk.clear();
     } else {
         bool use_int64_t = false;
         // TODO: fused op do not have inputs,
         //   check use_cuda_op from outputs may not be enough
-        bool use_cuda_op = use_device;
+        bool use_cuda_op = use_cuda || use_opencl;
         for (Var* var : inputs()) {
-            if (var->mem_ptr) {
-                /* jit key don't include here, because 
-                    parallel compiler don't known
-                jk << JK::key << "alloc_i" << JK::hex1(in_id)
-                    << JK::hex1(var->allocator->flags()) << JK::end;
-                */
-                if (use_opencl)
-                    use_cuda_op &= var->allocator->is_opencl();
-                if (use_cuda)
-                    use_cuda_op &= var->allocator->is_cuda();
-            }
+            // if (var->mem_ptr) {
+            //     /* jit key don't include here, because 
+            //         parallel compiler don't known
+            //     jk << JK::key << "alloc_i" << JK::hex1(in_id)
+            //         << JK::hex1(var->allocator->flags()) << JK::end;
+            //     */
+            //     if (use_opencl)
+            //         use_cuda_op &= var->allocator->is_opencl();
+            //     else if (use_cuda)
+            //         use_cuda_op &= var->allocator->is_cuda();
+            // }
             if (var->num >= std::numeric_limits<int32_t>::max())
                 use_int64_t = true;
         }
         for (Var* var : outputs()) {
-            if (var->mem_ptr) {
-                /*
-                jk << JK::key << "alloc_o" << JK::hex1(in_id)
-                    << JK::hex1(var->allocator->flags()) << JK::end;
-                */
-                if (use_opencl)
-                    use_cuda_op &= var->allocator->is_opencl();
-                if (use_cuda)
-                    use_cuda_op &= var->allocator->is_cuda();
-            }
+            // if (var->mem_ptr) {
+            //     /*
+            //     jk << JK::key << "alloc_o" << JK::hex1(in_id)
+            //         << JK::hex1(var->allocator->flags()) << JK::end;
+            //     */
+            //     if (use_opencl)
+            //         use_cuda_op &= var->allocator->is_opencl();
+            //     else if (use_cuda)
+            //         use_cuda_op &= var->allocator->is_cuda();
+            // }
             if (var->num >= std::numeric_limits<int32_t>::max())
                 use_int64_t = true;
         }
@@ -202,7 +202,7 @@ void Op::do_jit_prepare(JK& jk) {
             // TODO: 64bit index in CUDA
             // use_int64_t = false;
         } else {
-            if (use_device==2) {
+            if (use_cuda==2) {
                 if (flags.get(NodeFlags::_cuda))
                     LOGf << "Op" << name() >> "'s vars are not allocated in cuda";
                 else

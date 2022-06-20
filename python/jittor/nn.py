@@ -36,8 +36,6 @@ def matmul_transpose(a, b):
         return cc.reshape(a.shape[:-1]+(-1,))
     assert len(a.shape) == 2 and len(b.shape) == 2
     
-    # if jt.flags.use_opencl:
-    #     return jt.compile_extern.clblas_ops.clblas_matmul(a, b, 0, 1)
     shape = list(a.shape)[:-1] + list(b.shape)
     with jt.flag_scope(amp_reg = jt.flags.amp_reg | 4):
         a = a.broadcast(shape, [len(shape)-2])
