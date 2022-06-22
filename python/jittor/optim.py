@@ -188,7 +188,7 @@ class Optimizer(object):
                 def step(self, loss):
                     self.pre_step(loss)
                     ...
-                    self.post_step(loss)
+                    self.post_step()
         """
         if loss is not None:
             self.backward(loss, retain_graph)
@@ -203,7 +203,7 @@ class Optimizer(object):
                 def step(self, loss):
                     self.pre_step(loss)
                     ...
-                    self.post_step(loss)
+                    self.post_step()
         """
         jt.flags.node_order = 0
         self.zero_grad()
