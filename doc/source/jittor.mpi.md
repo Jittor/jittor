@@ -134,8 +134,8 @@ def val(epoch):
 目前MPI开放接口如下：
 
 * `jt.in_mpi`: 当计图不在MPI环境下时，`jt.mpi == False`， 用户可以用这个判断是否在mpi环境下。
-* `jt.world_rank`: 获取当前进程总数量，如果没有用mpi，则为1。
-* `jt.rank`: 获取当前进程的编号，区间为`0 ～ jt.world_rank-1`， 如果没有用mpi，则为0。
+* `jt.world_size`: 获取当前进程总数量，如果没有用mpi，则为1。
+* `jt.rank`: 获取当前进程的编号，区间为`0 ～ jt.world_size-1`， 如果没有用mpi，则为0。
 * `jt.mpi`: 计图的MPI模块。
 * `jt.Module.mpi_param_broadcast(root=0)`: 将模块的参数从root节点广播给其他节点。
 * `jt.mpi.mpi_reduce(x, op='add', root=0)`: 将所有节点的变量x使用算子op，reduce到root节点。如果op是'add'或者'sum'，该接口会把所有变量求和，如果op是'mean'，该接口会取均值。
