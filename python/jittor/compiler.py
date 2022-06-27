@@ -89,6 +89,7 @@ def map_flags(flags, func):
 
 def compile(compiler, flags, inputs, output, combind_build=False, cuda_flags="", obj_dirname="obj_files"):
     def do_compile(cmd):
+        print(cmd)
         if os.environ.get("is_mobile", "0") == "1":
             cmd = "cd /data/data/com.example.mjittor/.cache/jittor/default/clang && " + cmd
         if jit_utils.cc:
@@ -912,7 +913,8 @@ def check_cache_compile():
     global jit_utils_core_files
     jit_utils_core_files = files
     if os.environ.get("is_mobile", "0") == "1":
-        recompile = compile(cc_path, cc_flags+f" {opt_flags} -L/data/data/com.example.mjittor/termux/lib -I/data/data/com.example.mjittor/termux/include/c++/v1 -lpython3.9 -Dmobile", files, 'jit_utils_core'+extension_suffix, True)
+        recompile = compile(cc_path, cc_flags+f" {opt_flags} -L/data/data/com.example.mjittor/termux/lib -I/data/data/com.example.mjittor/termux/include/c++/v1 -lpython3.9 -Dmobile", files, jit_utils.cache_path+'/jit_utils_core'+extension_suffix, True)
+        print(recompile)
     else:
         recompile = compile(cc_path, cc_flags+f" {opt_flags} ", files, jit_utils.cache_path+'/jit_utils_core'+extension_suffix, True)
     if recompile and jit_utils.cc:
@@ -924,7 +926,7 @@ def check_cache_compile():
         assert jit_utils.cc
         # recompile, generate cache key
         if os.environ.get("is_mobile", "0") == "1":
-            compile(cc_path, cc_flags+f" {opt_flags} -I/data/data/com.example.mjittor/termux/lib -L/data/data/com.example.mjittor/termux/lib -I/data/data/com.example.mjittor/termux/include/c++/v1 -lpython3.9 -Dmobile", files, 'jit_utils_core'+extension_suffix, True)
+            compile(cc_path, cc_flags+f" {opt_flags} -I/data/data/com.example.mjittor/termux/lib -L/data/data/com.example.mjittor/termux/lib -I/data/data/com.example.mjittor/termux/include/c++/v1 -lpython3.9 -Dmobile", files, jit_utils.cache_path+'/jit_utils_core'+extension_suffix, True)
         else:
             compile(cc_path, cc_flags+f" {opt_flags} ", files, jit_utils.cache_path+'/jit_utils_core'+extension_suffix, True)
 
@@ -1375,9 +1377,9 @@ if use_data_gz:
     files = [f for f in files if "__data__" not in f]
 
 if os.environ.get("is_mobile", "0") == "1":
-    cc_flags += f" -l\"jit_utils_core{lib_suffix}\" "
+    cc_flags += f" -l\"jit_utils_core\" "
     compile(cc_path, cc_flags+opt_flags+f' -L/data/data/com.example.mjittor/termux/lib -I/data/data/com.example.mjittor/termux/include/c++/v1 -L/data/data/com.example.mjittor/.cache/jittor/default/clang/ -lomp -lpython3.9 -ljit_utils_core -Wl,-rpath=/data/data/com.example.mjittor/.cache/jittor/default/clang/ -Dmobile', files, 'jittor_core'+extension_suffix)
-    cc_flags += f" -l\"jittor_core{lib_suffix}\" "
+    cc_flags += f" -l\"jittor_core\" "
 else:
     cc_flags += f" -l\"jit_utils_core{lib_suffix}\" "
     compile(cc_path, cc_flags+opt_flags, files, 'jittor_core'+extension_suffix)

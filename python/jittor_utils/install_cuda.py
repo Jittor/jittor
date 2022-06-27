@@ -41,6 +41,8 @@ def get_cuda_driver():
         return None
 
 def has_installation():
+    if os.environ.get("is_mobile", "0") == "1":
+        return False
     jtcuda_path = os.path.join(jit_utils.home(), ".cache", "jittor", "jtcuda")
     return os.path.isdir(jtcuda_path)
 

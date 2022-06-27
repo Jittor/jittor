@@ -57,6 +57,7 @@ def home():
             json.dump(data,f)
     
     _jittor_home = _home_path
+    print("home: ", _home_path)
     return _home_path
 
 class Logwrapper:
@@ -332,11 +333,11 @@ def short(s):
     return ss
 
 def find_cache_path():
-
     if os.environ.get("is_mobile", "0") == "1":
         from pathlib import Path
         path = "/data/data/com.example.mjittor"
-        dirs = [".cache", "jittor", os.path.basename(cc_path)]
+        cache_name = "default"
+        dirs = [".cache", "jittor", cache_name, os.path.basename(cc_path)]
         if os.environ.get("debug")=="1":
             dirs[-1] += "_debug"
     else:
@@ -375,8 +376,9 @@ def find_cache_path():
         pass
     if os.environ.get("debug")=="1":
         dirs[-1] += "_debug"
-    for name in os.path.normpath(cache_name).split(os.path.sep):
-        dirs.append(name)
+    if os.environ.get("is_mobile", "0") == "0":
+        for name in os.path.normpath(cache_name).split(os.path.sep):
+            dirs.append(name)
     os.environ["cache_name"] = cache_name
     LOG.v("cache_name: ", cache_name)
     path = os.path.join(path, *dirs)
