@@ -39,7 +39,7 @@ import setuptools
 
 setuptools.setup(
     name="jittor_offline",
-    version="0.0.5",
+    version="0.0.6",
     author="jittor",
     author_email="jittor@qq.com",
     description="jittor project",
@@ -58,7 +58,7 @@ setuptools.setup(
     package_data={'': ['*', '*/*', '*/*/*','*/*/*/*','*/*/*/*/*','*/*/*/*/*/*']},
     python_requires=">=3.7",
     install_requires=[
-        "jittor>=1.3.4.10",
+        "jittor>=1.3.4.16",
     ],
 )
 """)
