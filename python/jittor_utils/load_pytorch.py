@@ -1,18 +1,11 @@
 import pickle
-import inspect
-import difflib
 import os
 import io
 import shutil
-import struct
-import sys
+from zipfile import ZipFile
 import jittor as jt
-import tarfile
-import tempfile
-import warnings
 import numpy as np
 from typing import Any, BinaryIO, cast, Dict, Optional, Type, Tuple, Union, IO, List
-from contextlib import closing, contextmanager
 
 loaded_storages = {}
 
@@ -21,10 +14,9 @@ def _maybe_decode_ascii(bytes_str: Union[bytes, str]) -> str:
         return bytes_str.decode('ascii')
     return bytes_str
 
-def load_tensor(dtype, numel, key, location):
+def load_tensor(contents, dtype, numel, key, location):
     name = os.path.join("archive", "data", str(key))
-    f = open(name, "rb")
-    loaded_storages[key] = np.frombuffer(f.read(), dtype).copy()
+    loaded_storages[key] = np.frombuffer(contents[name], dtype).copy()
 
 def get_dtype_size(dtype):
     if dtype is np.float32 or dtype is np.int32:
@@ -37,6 +29,7 @@ def get_dtype_size(dtype):
         return 1
 
 def persistent_load(saved_id):
+    global contents
     assert isinstance(saved_id, tuple)
     typename = _maybe_decode_ascii(saved_id[0])
     data = saved_id[1:]
@@ -46,7 +39,7 @@ def persistent_load(saved_id):
     dtype = storage_type.dtype
     if key not in loaded_storages:
         nbytes = numel * get_dtype_size(dtype)
-        load_tensor(dtype, nbytes, key, _maybe_decode_ascii(location))
+        load_tensor(contents, dtype, nbytes, key, _maybe_decode_ascii(location))
     return loaded_storages[key]
 
 def _dtype_to_storage_type_map():
@@ -78,9 +71,6 @@ class StorageType():
     def __str__(self):
         return f'StorageType(dtype={self.dtype})'
 
-# Need to subclass Unpickler instead of directly monkey-patching the find_class method
-# because it's marked readonly in pickle.
-# The type: ignore is because mypy can't statically determine the type of this class.
 def jittor_rebuild(storage, storage_offset, size, stride, requires_grad, backward_hooks):
     # print(storage, size)
     if len(size) == 0:
@@ -115,19 +105,22 @@ def _check_seekable(f) -> bool:
         raise_err_msg(["seek", "tell"], e)
     return False
 
+def extract_zip(input_zip):
+    input_zip = ZipFile(input_zip)
+    return {name: input_zip.read(name) for name in input_zip.namelist()}
+
 def load_pytorch(fn_name):
+    global contents
     if not fn_name.endswith(".pth"):
         print("This function is designed to load pytorch pth format files.")
         return None
     else:
-        shutil.unpack_archive(fn_name, format='zip')
-        f = open("archive/data.pkl", "rb")
-        data_file = io.BytesIO(f.read())
+        contents = extract_zip(fn_name)
+        data_file = io.BytesIO(contents['archive/data.pkl'])
         pickle_load_args = {'encoding': 'utf-8'}
         unpickler = UnpicklerWrapper(data_file,  **pickle_load_args)
         unpickler.persistent_load = persistent_load
         result = unpickler.load()
-        shutil.rmtree("archive")
         return result
 
 if __name__ == "__main__":
