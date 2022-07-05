@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -30,7 +30,7 @@ __device__ inline static long long floatToOrderedInt(double floatVal) {
     return (intVal >= 0 ) ? intVal : intVal ^ 0x7FFFFFFFFFFFFFFF;
 }
 __device__ inline static double orderedIntToFloat(long long intVal) {
- return __longlong_as_double((intVal >= 0) ? intVal : intVal ^ 0x7FFFFFFFFFFFFFFF);
+    return __longlong_as_double((intVal >= 0) ? intVal : intVal ^ 0x7FFFFFFFFFFFFFFF);
 }
 
 __global__ inline static void fix_float_kernel(double* x, int num) {
@@ -111,6 +111,88 @@ T cuda_atomic_mul(T* a, T b) {
         if (assume==old) break;
     }
     return old_f;
+}
+
+template<typename T>
+__device__ inline T shared_reduce_add(T a, T b) {
+    return a + b;
+}
+
+template<typename T>
+__device__ inline T shared_reduce_mul(T a, T b) {
+    return a * b;
+}
+
+template<typename T>
+__device__ inline T shared_reduce_max(T a, T b) {
+    return a > b ? a : b;
+}
+
+template<typename T>
+__device__ inline T shared_reduce_min(T a, T b) {
+    return a < b ? a : b;
+}
+
+template<typename T>
+__device__ inline T shared_reduce_and(T a, T b) {
+    return a & b;
+}
+
+template<typename T>
+__device__ inline T shared_reduce_or(T a, T b) {
+    return a | b;
+}
+
+template<typename T>
+__device__ inline T shared_reduce_xor(T a, T b) {
+    return a ^ b;
+}
+
+
+template<typename T, T(*op)(T, T)>
+__device__ inline void warpReduce(volatile T* sdata, int tid) {
+    if (blockDim.x >= 64)
+        sdata[tid] = op(sdata[tid], sdata[tid + 32]);
+    sdata[tid] = op(sdata[tid], sdata[tid + 16]);
+    sdata[tid] = op(sdata[tid], sdata[tid + 8]);
+    sdata[tid] = op(sdata[tid], sdata[tid + 4]);
+    sdata[tid] = op(sdata[tid], sdata[tid + 2]);
+    sdata[tid] = op(sdata[tid], sdata[tid + 1]);
+}
+
+template<typename T, T(*op)(T, T)>
+__device__ inline static T shared_reduce(T u) {
+    __shared__ T sdata[1024];
+
+    int tid = threadIdx.x;
+
+    sdata[tid] = u;
+    __syncthreads();
+
+    if (blockDim.x >= 1024 && tid < 512) {
+        sdata[tid] = u = op(u, sdata[tid + 512]);
+    }
+    __syncthreads();
+
+    if (blockDim.x >= 512 && tid < 256) {
+        sdata[tid] = u = op(u, sdata[tid + 256]);
+    }
+    __syncthreads();
+
+    if (blockDim.x >= 256 && tid < 128) {
+        sdata[tid] = u = op(u, sdata[tid + 128]);
+    }
+    __syncthreads();
+
+    if (blockDim.x >= 128 && tid < 64) {
+        sdata[tid] = u = op(u, sdata[tid + 64]);
+    }
+    __syncthreads();
+
+    if (tid < 32) 
+        warpReduce<T, op>(sdata, tid);
+
+    return sdata[0];
 }
 
 } // jittor

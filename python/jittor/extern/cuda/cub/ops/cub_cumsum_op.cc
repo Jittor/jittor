@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: 
 //     Guoye Yang <498731903@qq.com>
 //     Dun Liang <randonlang@gmail.com>. 
@@ -38,10 +38,9 @@ void CubCumsumOp::infer_shape() {
 }
 
 void CubCumsumOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype();
-    jk << _CS("][Ty:") << y->dtype();
-    jk << _CS("][reverse:") << reverse;
-    jk << _CS("]");
+    jk << "«Tx:" << x->dtype();
+    jk << "«Ty:" << y->dtype();
+    jk << "«reverse:" << reverse;
 }
 
 VarPtr CubCumsumOp::grad(Var* out, Var* dout, Var* v, int v_index) {
@@ -61,12 +60,15 @@ __global__ void BlockScanKernel(Tx* __restrict__ xp, Ty* __restrict__ yp, int ba
 
     int batch_id = blockIdx.x;
     int offset = threadIdx.x * ITEMS_PER_THREAD;
+    __shared__ Tx prefix_sum[1];
+    prefix_sum[0] = 0;
+
     for (int block_offset = offset; block_offset < num_items; block_offset += BLOCK_THREADS * ITEMS_PER_THREAD) {
         int items = ITEMS_PER_THREAD;
         if (block_offset + ITEMS_PER_THREAD > num_items) {
             items = num_items - block_offset;
         }
-        Tx thread_data[ITEMS_PER_THREAD];
+        Tx thread_data[ITEMS_PER_THREAD] = {0};
         #pragma unroll
         for (int i = 0; i < ITEMS_PER_THREAD; ++i) {
             if (i<items)
@@ -76,6 +78,8 @@ __global__ void BlockScanKernel(Tx* __restrict__ xp, Ty* __restrict__ yp, int ba
                 thread_data[i] = xp[batch_id * num_items + block_offset + i];
                 #endif
         }
+        if (threadIdx.x == 0)
+            thread_data[0] += prefix_sum[0];
         BlockScanT(temp_storage).InclusiveSum(thread_data, thread_data);
         __syncthreads();
         #pragma unroll
@@ -87,6 +91,9 @@ __global__ void BlockScanKernel(Tx* __restrict__ xp, Ty* __restrict__ yp, int ba
                 yp[batch_id * num_items + block_offset + i] = thread_data[i];
                 #endif
         }
+        if (threadIdx.x == BLOCK_THREADS-1)
+            prefix_sum[0] = thread_data[ITEMS_PER_THREAD - 1];
+        __syncthreads();
     }
 }
 

@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -80,42 +80,26 @@ static void convert_itof(string& s) {
 
 vector<pair<string,string>> parse_jit_keys(const string& s) {
     vector<pair<string,string>> jit_keys;
-    int presum = 0;
-    char state=0;
-    string key, val;
-    for (char c : s) {
-        if (c==JK::key) {
-            presum++;
-            if (presum==1) {
+    auto sp = split(s, JitKey::key);
+    for (auto& ss : sp) {
+        if (!ss.size()) continue;
+        string key, val;
+        char state=0;
+        for (auto c : ss) {
+            if (state == 0 && 
+                (c==JK::val || c==JK::hex_val)) {
                 state = c;
                 continue;
             }
-        } else
-        if (c==JK::val || c==JK::hex_val) {
-            if (presum==1 && state==JK::key) {
-                state = c;
-                continue;
-            }
-        } else
-        if (c==JK::end) {
-            presum--;
-            if (presum==0) {
-                if (state == JK::hex_val)
-                    hex_to_dec(val);
-                if (startswith(val, "itof"))
-                    convert_itof(val);
-                jit_keys.emplace_back(move(key), move(val));
-                continue;
-            }
+            if (state == 0) key += c;
+            else val += c;
         }
-        if (presum) {
-            if (state==JK::key)
-                key += c;
-            if (state==JK::val || state==JK::hex_val)
-                val += c;
-        }
+        if (state == JK::hex_val)
+            hex_to_dec(val);
+        if (startswith(val, "itof"))
+            convert_itof(val);
+        jit_keys.emplace_back(move(key), move(val));
     }
-    ASSERT(presum==0) << s;
     return jit_keys;
 }
 

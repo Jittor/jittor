@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -25,10 +25,14 @@ struct WhereOp : Op {
     Example::
 
         jt.where([[0,0,1],[1,0,0]])
-        # return ( [0,2], [1,0] )
+        # return [jt.Var([0 1], dtype=int32), jt.Var([2 0], dtype=int32)]
      */
     // @attrs(multiple_outputs)
     WhereOp(Var* cond, NanoString dtype=ns_int32);
+    /**
+     * Condition operator, perform cond ? x : y
+     * */
+    WhereOp(Var* cond, Var* x, Var* y);
     void infer_shape() override;
     
     const char* name() const override { return "where"; }

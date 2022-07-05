@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: 
 //     Dun Liang <randonlang@gmail.com>
 //     Guowei Yang <471184555@qq.com>
@@ -12,6 +12,7 @@
 #include "cudnn_conv_backward_x_op.h"
 #include "cudnn_wrapper.h"
 #include "executor.h"
+#include "ops/op_register.h"
 
 using namespace std;
 
@@ -24,6 +25,8 @@ static inline int findc(const char* format, const char& c) {
 }
 
 namespace jittor {
+
+extern int use_tensorcore;
 
 #ifndef JIT
 
@@ -50,6 +53,9 @@ CudnnConvBackwardXOp::CudnnConvBackwardXOp(Var* w, Var* dy, int height, int widt
       xformat(move(xformat)), wformat(move(wformat)), yformat(move(yformat)) {
     flags.set(NodeFlags::_cuda, 1);
     flags.set(NodeFlags::_cpu, 0);
+    flags.set(NodeFlags::_manual_set_vnbb);
+    w->flags.set(NodeFlags::_needed_by_backward);
+    dy->flags.set(NodeFlags::_needed_by_backward);
     dx = create_output(nullptr, dtype_infer(dy->ns, w->ns));
 }
 
@@ -64,13 +70,28 @@ void CudnnConvBackwardXOp::infer_shape() {
 }
 
 void CudnnConvBackwardXOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << dx->dtype();
-    jk << _CS("][Ty:") << dy->dtype();
-    jk << _CS("][Tw:") << w->dtype();
-    jk << _CS("][XFORMAT:") << xformat;
-    jk << _CS("][WFORMAT:") << wformat;
-    jk << _CS("][YFORMAT:") << yformat;
-    jk << ']';
+    jk << "«Tx:" << dx->dtype();
+    jk << "«Ty:" << dy->dtype();
+    jk << "«Tw:" << w->dtype();
+    jk << "«XFORMAT:" << xformat;
+    jk << "«WFORMAT:" << wformat;
+    jk << "«YFORMAT:" << yformat;
+}
+
+static auto make_conv = get_op_info("cudnn_conv")
+    .get_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, string, string, string>();
+static auto make_backwardw = get_op_info("cudnn_conv_backward_w")
+    .get_constructor<VarPtr, Var*, Var*, int, int, int, int, int, int, int, int, int, string, string, string>();
+
+VarPtr CudnnConvBackwardXOp::grad(Var* out, Var* dout, Var* v, int v_index) {
+    int xn, xc, wh, ww, wci, wco, yn, yc, yd, yh, yw;
+    w->shape.unpack(wco, wci, wh, ww);
+    
+    if (v_index == 0) {
+        return make_backwardw(dout, dy, wh, ww, strideh, stridew, paddingh, paddingw, dilationh, dilationw, groups, xformat, wformat, yformat);
+    } else {
+        return make_conv(dout, w, strideh, stridew, paddingh, paddingw, dilationh, dilationw, groups, xformat, wformat, yformat);
+    }
 }
 unordered_map<string, cudnnConvolutionBwdDataAlgo_t> bwdx_algo_cache;
 
@@ -150,7 +171,9 @@ void CudnnConvBackwardXOp::jit_run() {
     ));
 
     // using tensor core
-    // checkCudaErrors( cudnnSetConvolutionMathType(cudnnConvDesc, CUDNN_TENSOR_OP_MATH) );
+    if(use_tensorcore){
+        checkCudaErrors( cudnnSetConvolutionMathType(cudnnConvDesc, CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION) );
+    }
 
     int dimY[] = {
         (int)y->shape[findc("@YFORMAT", 'a')], // n

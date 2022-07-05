@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -27,4 +27,17 @@ vector<string> split(const string& s, const string& sep, int max_split=0);
 
 string strip(const string& s);
 
+string format(const string& s, const vector<string>& v);
+
+string replace(const string& a, const string& b, const string& c);
+
+string join(const vector<string>& vs, const string& x);
+
+vector<string> token_split(const string& s, bool exclude_comments=false);
+
+int token_replace(vector<string>& tokens, int i, const string& src, const string& dst, bool match_whitespace=true);
+
+string token_replace(const string& s, const string& src, const string& dst);
+
+string token_replace_all(const string& s, const string& src, const string& dst);
 } // jittor

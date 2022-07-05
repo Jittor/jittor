@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved.
+// Copyright (c) 2022 Jittor. All Rights Reserved.
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -9,7 +9,6 @@
 #include "ops/setitem_op.h"
 #include "ops/getitem_op.h"
 #ifdef JIT
-#include "ops/binary_op_defs.h"
 #ifdef JIT_cuda
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
@@ -29,6 +28,8 @@ static auto make_array = get_op_info("array")
     .get_constructor<VarPtr, const void*, NanoVector, NanoString>();
 static auto make_getitem = get_op_info("getitem")
     .get_constructor<VarPtr, Var*, VarSlices&&>();
+static auto make_getitem2 = get_op_info("getitem")
+    .get_constructor<vector<VarPtr>, Var*, VarSlices&&, int>();
 static auto make_setitem = get_op_info("setitem")
     .get_constructor<VarPtr, Var*, VarSlices&&, Var*, NanoString>();
 static auto make_binary = get_op_info("binary")
@@ -41,8 +42,17 @@ SetitemOp::SetitemOp(Var* x, VarSlices&& slices, Var* y, NanoString op)
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
     flags.set(NodeFlags::_has_gopt);
-    ASSERT(ns == ns_void || ns.is_binary());
+    if (op.get(NanoString::_no_need_back_in)) {
+        flags.set(NodeFlags::_manual_set_vnbb);
+        for (int i=0; i<vs.n; i++)
+            if (vs.slices[i].is_var())
+                vs.slices[i].var->flags.set(NodeFlags::_needed_by_backward);
+    }
+    ASSERT(op == ns_void || op.is_binary());
     create_output(nullptr, x->dtype());
+    if (flags.get(NodeFlags::_custom_flag)) {
+        flags.set(NodeFlags::_grads);
+    }
 }
 
 void SetitemOp::infer_shape() {
@@ -121,6 +131,13 @@ void SetitemOp::infer_shape() {
         << "\no_shape:" << o_shape;
 }
 
+void SetitemOp::grads(Var** dout, VarPtr* dins) {
+    if (!dout[0]) return;
+    auto outs = make_getitem2(dout[0], VarSlices(vs, true), 0);
+    dins[0] = move(outs[1]);
+    dins[1] = move(outs[0]);
+}
+
 VarPtr SetitemOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     if (v_index >= 2)
         return nullptr;
@@ -184,32 +201,32 @@ void SetitemOp::jit_prepare(JK& jk) {
             break;
         }
     auto data = input(1);
-    jk << _CS("[OP:") << op
-        << _CS("][Td:") << data->dtype()
-        << _CS("][BMASK=") << JK::hex(bmask);
+    jk << "«OP:" << op
+        << "«Td:" << data->dtype()
+        << "«BMASK=" << JK::hex(bmask);
     // TODO: merge code
     auto in = inputs().front();
     int idim = i_to_vs.size();
-    jk << _CS("][Ti:") << in->dtype();
-    jk << _CS("][IDIM=") << JK::hex1(i_to_vs.size());
-    jk << _CS("][ODIM=") << JK::hex1(o_shape.size());
+    jk << "«Ti:" << in->dtype();
+    jk << "«IDIM=" << JK::hex1(i_to_vs.size());
+    jk << "«ODIM=" << JK::hex1(o_shape.size());
     if (first_oid_of_var>=0) {
-        jk << _CS("][FOV=") << JK::hex1(first_oid_of_var);
-        jk << _CS("][VD=") << JK::hex1(var_dim);
+        jk << "«FOV=" << JK::hex1(first_oid_of_var);
+        jk << "«VD=" << JK::hex1(var_dim);
     }
     for (int i=0; i<idim; i++) {
         auto iv = i_to_vs[i];
         auto io = i_to_o[i];
-        jk << _CS("][IV") << JK::hex1(i) << ':' << JK::shex1(iv);
-        jk << _CS("][IO") << JK::hex1(i) << ':' << JK::shex1(io);
+        jk << "«IV" << JK::hex1(i) << ':' << JK::shex1(iv);
+        jk << "«IO" << JK::hex1(i) << ':' << JK::shex1(io);
         auto& v = vs.slices[iv];
         if (iv>=0 && io==-1) {
             if (v.is_int()) {
-                jk << _CS("][VS") << JK::hex1(i) << _CS(":-1");
+                jk << "«VS" << JK::hex1(i) << ":-1";
             } else
             if (v.is_str()) {
-                jk << _CS("][VS") << JK::hex1(i) << _CS(":-5");
-                jk << _CS("][VSS") << JK::hex1(i) << _CS(":") << v.get_str();
+                jk << "«VS" << JK::hex1(i) << ":-5";
+                jk << "«VSS" << JK::hex1(i) << ":" << v.get_str();
             } else {
                 ASSERT(v.is_var());
                 auto var = v.var;
@@ -221,13 +238,13 @@ void SetitemOp::jit_prepare(JK& jk) {
                     if (vshape[j] == o_shape[k])
                         vsmask |= 1<<(j+var_dim-vdim);
                 }
-                jk << _CS("][VS") << JK::hex1(i) << '=' << JK::hex(vsmask);
-                jk << _CS("][VST") << JK::hex1(i) << ':' << var->dtype();
+                jk << "«VS" << JK::hex1(i) << '=' << JK::hex(vsmask);
+                jk << "«VST" << JK::hex1(i) << ':' << var->dtype();
             }
         } else
         if (iv>=0 && io>=0) {
             ASSERT(v.is_slice());
-            jk << _CS("][VS") << JK::hex1(i) << ':';
+            jk << "«VS" << JK::hex1(i) << ':';
             if (std::abs(v.slice.step) <= 1)
                 jk << JK::shex1(v.slice.step);
             else
@@ -241,11 +258,10 @@ void SetitemOp::jit_prepare(JK& jk) {
         int tdims[6];
         cuda_loop_schedule(o_shape, masks, tdims);
         for (int i=0; i<no; i++) {
-            jk << _CS("][LO") << JK::hex1(i) << '=' << JK::hex(masks[i]);
+            jk << "«LO" << JK::hex1(i) << '=' << JK::hex(masks[i]);
         }
     }
     #endif
-    jk << ']';
 }
 
 void SetitemOp::compile_optimize(string& src) {
@@ -313,10 +329,10 @@ void SetitemOp::jit_run() {
         std::memcpy(op, ip, out->size);
     #else
     if (op != ip)
-        checkCudaErrors(cudaMemcpyAsync(op, ip, out->size, cudaMemcpyDefault, 0));
+        checkCudaErrors(cudaMemcpyAsync(op, ip, out->size, cudaMemcpyDeviceToDevice, 0));
     #endif
 
-    if (flags.get((NodeFlags::Flags(SetitemOp::_data_inplaced))) &&
+    if (ns.get(GetitemOp::_inplace) &&
         // array op may move the data allocation, double check
         // affect test_contrib.pu 
         in->allocator == data->allocator &&
@@ -340,12 +356,12 @@ void SetitemOp::jit_run() {
         @if(@is_def(JIT_cpu),
             @if(@strcmp(@OP,void)==0,
                 op[iid] = (Ti)dp[did],
-                op[iid] = @expand_macro(@OP, Ti, op[iid], dp[did])
+                op[iid] = @expand_op(@OP, @Ti, op[iid], @Ti, dp[did], @Td)
             );
         ,
             @if(@strcmp(@OP,void)==0, op[iid] = (Ti)dp[did],
             @if(@strcmp(@OP,add)==0, atomicAdd(&op[iid], (Ti)dp[did]),
-                op[iid] = @expand_macro(@OP, Ti, op[iid], dp[did])
+                op[iid] = @expand_op(@OP, @Ti, op[iid], @Ti, dp[did], @Td)
             )
             );
         )

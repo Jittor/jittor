@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: 
 //      Zheng-Ning Liu <lzhengning@gmail.com>
 // This file is subject to the terms and conditions defined in
@@ -79,10 +79,9 @@ void CudnnRnnBackwardXOp::infer_shape() {
 }
 
 void CudnnRnnBackwardXOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << hx->dtype();
-    jk << _CS("][Ty:") << y->dtype();
-    jk << _CS("][Tw:") << w->dtype();
-    jk << ']';
+    jk << "«Tx:" << hx->dtype();
+    jk << "«Ty:" << y->dtype();
+    jk << "«Tw:" << w->dtype();
 }
 
 #else // JIT

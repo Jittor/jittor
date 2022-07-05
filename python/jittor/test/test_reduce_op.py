@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
@@ -45,6 +45,47 @@ class TestReduceOp(unittest.TestCase):
             check(a, iop[0], idims[0])
         for op in iop:
             check(ia[0], op, idims[0])
+        for dims in idims:
+            check(ia[0], iop[0], dims)
+        expect_error(lambda: jt.reduce_add([1,2,3], 2))
+
+    def test_bool_reduce(self):
+        x = (jt.bool([1,0,1]) | jt.bool([0,1,0])).all().item()
+        assert x
+        x = (jt.bool([1,0,1]) & jt.bool([0,1,0])).any().item()
+        assert not x
+
+    def test_bool_reduce2(self):
+        def gen_data(shape):
+            num = np.multiply.reduce(shape)
+            a = np.random.randint(2, size=[num]).astype(bool)
+            return a.reshape(shape).astype("int32")
+
+        def check(a, op, dims):
+            if ("logical" in op) and jt.flags.use_cuda:
+                # TODO: atomic bool operation for cuda not 
+                # supported yet
+                return
+            np_dims = jt_dims = dims
+            if dims == ():
+                np_dims = tuple(range(len(a.shape)))
+            x = eval(f"np.{op}.reduce(a, {np_dims}, keepdims={self.keepdims})")
+            y = eval(f"jt.reduce_{op}(a, {jt_dims}, keepdims={self.keepdims}).data")
+            if len(x.shape) == 0: x = np.array([x]).astype(a.dtype)
+            x = x.astype(a.dtype)
+            y = y.astype(a.dtype)
+            assert x.dtype == y.dtype and x.shape == y.shape and (x==y).all(), \
+                f"\n{a.shape}\n{op}\n{dims}\n{x}\n{y}\n{x.dtype}\n{y.dtype}\n{a.dtype}"
+                
+        ia = [gen_data([2,3,4,5]), gen_data([5,3])]
+        idims = [(), (0,), (1,), (2,), (3,), (0, 2), (1,3), (1,2,3), 2, 3]
+        
+        iop = [ op[7:] for op in dir(jt) if op.startswith("reduce_")]
+        assert len(iop) >= 10, iop
+        for a in ia:
+            check(a, iop[0], idims[0])
+        for op in iop:
+            check(ia[0], op, idims[1])
         for dims in idims:
             check(ia[0], iop[0], dims)
         expect_error(lambda: jt.reduce_add([1,2,3], 2))

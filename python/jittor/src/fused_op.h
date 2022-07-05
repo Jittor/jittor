@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -28,7 +28,7 @@ EXTERN_LIB string_view_map<FusedOpContext*> jit_fused_ops;
 
 struct FusedOp final : Op {
     vector<Op*> ops;
-    // edges: [[i,j,k,l], ...] represents opi.output(j) == opk.input(i)
+    // edges: [[i,j,k,l], ...] represents opi.output(j) == opk.input(l)
     vector<std::tuple<uint,uint,uint,uint>> edges;
     vector<VarInfo> vars;
     loop_options_t loop_options_merged, loop_options_tuned;

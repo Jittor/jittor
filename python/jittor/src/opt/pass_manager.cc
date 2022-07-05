@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -27,6 +27,7 @@
 #include "opt/pass/assume_aligned_pass.h"
 #include "opt/pass/parallel_pass.h"
 #include "opt/pass/atomic_tuner_pass.h"
+#include "opt/pass/shared_reduce_pass.h"
 #include "opt/pass/float_atomic_fix_pass.h"
 #include "opt/pass/insert_profile_loop_pass.h"
 #include "opt/pass/fake_main_pass.h"
@@ -37,7 +38,9 @@
 namespace jittor {
 
 DECLARE_FLAG(string, cc_type);
-DEFINE_FLAG(string, exclude_pass, "", "Don't run certian pass.");
+DEFINE_FLAG(string, exclude_pass, "", "Don't run certain pass.");
+DEFINE_FLAG(string, log_op_hash, "", "Output compiler pass result of certain hash of op.");
+
 
 PassManager::PassManager(OpCompiler* oc) : oc(oc), all(oc->get_src()) {
     main_ir = nullptr;
@@ -109,6 +112,7 @@ void PassManager::run_passes() {
     run_pass<AssumeAlignedPass>();
     run_pass<ParallelPass>();
     run_pass<AtomicTunerPass>();
+    run_pass<SharedReducePass>();
     run_pass<FloatAtomicFixPass>();
     
     run_pass<InsertProfileLoopPass>();

@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -13,12 +13,17 @@
 namespace jittor {
 
 EXTERN_LIB unordered_map<void*, int64> lived_nodes;
+EXTERN_LIB unordered_map<int64, Node*> lived_nodes_id;
 EXTERN_LIB int64 total_node;
 EXTERN_LIB int64 nt;
 EXTERN_LIB vector<Node*> free_buffer;
+EXTERN_LIB uint8 node_order;
+
+inline static Node* get_node(int64 id) 
+{ return  lived_nodes_id.count(id) ? lived_nodes_id[id] : nullptr; }
 
 struct NodeFlags {
-    typedef uint16 nf_t;
+    typedef uint32 nf_t;
     nf_t flags=0;
     enum Flags {
         // bit0: is_var
@@ -29,12 +34,17 @@ struct NodeFlags {
         _stop_grad=2,
         // bit3: is fetch
         _fetch=3,
-        _n=4,
+        // bit4: node order low
+        _node_order_low=4,
+        _node_order_high=5,
+        _n=6,
 
         // var related flags
         _force_fuse=_n+0,
         _stop_fuse=_n+1,
-        _in_update_queue=_n+2,
+        _needed_by_backward=_n+3,
+        _out_hint=_n+4,
+        _th_require_grad=_n+5,
 
         // op related flags
         // bit0: support cpu
@@ -51,8 +61,16 @@ struct NodeFlags {
         _grads=_n+6,
         // bit7: has graph optimize
         _has_gopt=_n+7,
-        // bit7: has vary input
+        // bit8: has vary input
         _has_vary_input=_n+8,
+        _manual_set_vnbb = _n+9,
+        // bit9: prefer 32 bit
+        _prefer_32=_n+10,
+        // force 16 bit
+        _prefer_16=_prefer_32+1,
+        // reduce keep type unchange
+        _reduce_keep=_prefer_32+2,
+        _custom_flag = _reduce_keep,
     };
 
     inline void set(Flags f, int a=1, int nbits=1) {
@@ -82,15 +100,15 @@ struct Node {
     };
     struct output_t {
         Node* node;
-        int index;
         list<input_t>::iterator back;
+        int index;
         output_t(Node* n, int i) : node(n), index(i) {}
         operator Node*() { return node; }
         operator Op*() { return (Op*)node; }
         operator Var*() { return (Var*)node; }
         operator var_output_t() { return {(Op*)node, index}; }
     };
-    static int64_t tflag_count;
+    static int64 tflag_count;
     NodeFlags flags;
     NanoString ns;
     inline bool is_var() const { return flags.get(NodeFlags::_var); }
@@ -113,24 +131,34 @@ struct Node {
     inline bool need_free()
     { return !pending_liveness && (!forward_liveness || !backward_liveness); }
     
-    int64_t tflag = 0;
-    int64_t custom_data;
+    int custom_data;
+    int64 tflag = 0;
+    int64 id; 
     list<input_t> _inputs;
     list<output_t> _outputs;
 
-#ifdef NODE_MEMCHECK
-    inline Node() {
-        lived_nodes[(void*)this] = ++total_node;
+    int64 order() {
+        if (flags.get(NodeFlags::_node_order_low)) return 0;
+        if (flags.get(NodeFlags::_node_order_high)) return 1ll<<60;
+        return id;
     }
 
-    inline virtual ~Node() {
+    inline Node() {
+        id = ++total_node;
+        #ifdef NODE_MEMCHECK
+        lived_nodes_id[id] = this;
+        lived_nodes[(void*)this] = id;
+        #endif
+        flags.set(NodeFlags::_node_order_low, node_order, 2);
+    }
+    inline virtual ~Node() { 
+        #ifdef NODE_MEMCHECK
+        lived_nodes_id.erase(id);
         lived_nodes.erase((void*)this);
+        #endif
         if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var)) trace_data.release_node(this);
     }
-#else
-    inline Node() {};
-    inline virtual ~Node() { if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var)) trace_data.release_node(this);};
-#endif
+
     inline Var* var() { return (Var*)this; }
     inline Op* op() { return (Op*)this; }
     inline Node* node() { return this; }
@@ -144,13 +172,6 @@ struct Node {
     #endif
     }
     void memcheck_all_exist() const;
-    inline int64 __id() const {
-    #ifdef NODE_MEMCHECK
-        return lived_nodes.at((void*)this);
-    #else
-        return 0;
-    #endif
-    }
     // release from counter and memory checker
     void __release();
     #define CHECK_NODE_EXIST(node) \

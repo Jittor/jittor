@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
@@ -48,7 +48,7 @@ class TestConcatOp(unittest.TestCase):
     def test_concat_op(self):
         def check(tmp, dim=0):
             res1 = numpy_concat(tmp, dim=dim)
-            res2 = jt.contrib.concat(tmp, dim=dim)
+            res2 = jt.concat(tmp, dim=dim)
             assert (res2!=res1).data.sum()==0, "concat fail..."
         check([jt.array([[1],[2]]), jt.array([[2],[2]])])
         check([jt.array(np.array(range(24))).reshape((1,2,3,4)), jt.array(np.array(range(24))).reshape((1,2,3,4))])
@@ -68,7 +68,7 @@ class TestConcatOp(unittest.TestCase):
             arr = []
             for i in range(m):
                 arr.append(a[(slice(None),)*dim + (slice(i*size,i*size+size),)])
-            b = jt.contrib.concat(arr, dim)
+            b = jt.concat(arr, dim)
             if backward:
                 loss = b * a
                 b = jt.grad(loss, a)

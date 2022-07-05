@@ -1,14 +1,14 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 import os, sys, shutil
-from pathlib import Path
 import glob
+import jittor_utils as jit_utils
 
-cache_path = os.path.join(str(Path.home()), ".cache", "jittor")
+cache_path = os.path.join(jit_utils.home(), ".cache", "jittor")
 
 def callback(func, path, exc_info):
     print(f"remove \"{path}\" failed.")

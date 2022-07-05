@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
@@ -8,7 +8,6 @@ import unittest
 import jittor as jt
 from jittor import init, Module
 import numpy as np
-f32 = jt.float32
 
 def matmul(a, b):
     (n, m), k = a.shape, b.shape[-1]
@@ -46,9 +45,7 @@ class TestExample(unittest.TestCase):
         jt.set_seed(3)
         n = 1000
         batch_size = 50
-        base_lr = 0.05
-        # we need to stop grad of global value to prevent memory leak
-        lr = f32(base_lr).name("lr").stop_grad()
+        lr = 0.05
 
         def get_data(n):
             for i in range(n):
@@ -58,10 +55,11 @@ class TestExample(unittest.TestCase):
         
         model = Model(input_size=1)
         ps = model.parameters()
+        for p in reversed(ps): p.sync(0,0)
 
         for i,(x,y) in enumerate(get_data(n)):
             pred_y = model(x).name("pred_y")
-            loss = ((pred_y - y)**f32(2)).name("loss")
+            loss = ((pred_y - y).sqr()).name("loss")
             loss_mean = loss.mean()
             
             gs = jt.grad(loss_mean, ps)

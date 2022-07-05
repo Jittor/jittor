@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -24,6 +24,7 @@ constexpr int ns_max_len = 16;
     m(uint16) \
     m(uint32) \
     m(uint64) \
+    m(float16) \
     m(float32) \
     m(float64) \
 \
@@ -97,10 +98,10 @@ EXTERN_LIB int __ns_len[];
 
 // @pyjt(NanoString)
 struct NanoString {
-    typedef uint16 ns_t;
+    typedef uint32 ns_t;
     enum Flags {
         // bit0~7: index
-        _index=0, _index_nbits=8,
+        _index=0, _index_nbits=7,
         _n=_index_nbits,
 
         // bit0-1: type
@@ -116,6 +117,11 @@ struct NanoString {
         _float=_n+5,
         // bit6-7: dsize(1,2,4,8 byte)
         _dsize=_n+6, _dsize_nbits=2,
+        // bit8: white list
+        _white_list=_n+8,
+        // bit9: backward opt
+        _no_need_back_in=_n+9,
+        _no_need_back_out=_n+10,
     };
     ns_t data=0;
 
@@ -130,11 +136,16 @@ struct NanoString {
     inline ns_t index() const { return get(_index, _index_nbits); }
     inline int len() const { return __ns_len[index()]; }
     inline ns_t type() const { return get(_type, _type_nbits); }
-    inline ns_t is_bool() const { return get(_bool); }
-    inline ns_t is_int() const { return get(_int); }
-    inline ns_t is_unsigned() const { return get(_unsigned); }
-    inline ns_t is_float() const { return get(_float); }
+    // @pyjt(is_bool)
+    inline bool is_bool() const { return get(_bool); }
+    // @pyjt(is_int)
+    inline bool is_int() const { return get(_int); }
+    inline bool is_unsigned() const { return get(_unsigned); }
+    // @pyjt(is_float)
+    inline bool is_float() const { return get(_float); }
+    inline ns_t is_white() const { return get(_white_list); }
     inline ns_t dsize() const { return 1<<get(_dsize, _dsize_nbits); }
+    inline ns_t dsize_() const { return get(_dsize, _dsize_nbits); }
     inline ns_t is_dtype() const { return get(_type, _type_nbits)==_dtype; }
     inline ns_t is_binary() const { return get(_type, _type_nbits)==_binary; }
     inline ns_t is_unary() const { return get(_type, _type_nbits)==_unary; }
@@ -156,28 +167,6 @@ struct NanoString {
         { return __ns_to_string+index()*ns_max_len; }
 };
 
-// force_type = 1 for int, 2 for float
-inline 
-NanoString dtype_infer(NanoString v1, NanoString v2, int force_type=0, NanoString op=ns_void) {
-    bool is_float = v1.is_float() || v2.is_float();
-    int dsize = std::max(v1.dsize(), v2.dsize());
-    if (force_type == 1)
-        is_float = false;
-    else if (force_type == 2)
-        is_float = true;
-    if (is_float) {
-        if (dsize==4) return ns_float32;
-        return ns_float64;
-    } else {
-        if (dsize==8) return ns_int64;
-        if (dsize==4) return ns_int32;
-        if (dsize==2) return ns_int16;
-        if (op.data == ns_add.data || op.data == ns_subtract.data)
-            return ns_int8;
-        return v1;
-    }
-}
-
 // @pyjt(NanoString.__eq__)
 inline bool eq(const NanoString& a, const NanoString& b) {
     return a.data == b.data;
@@ -197,6 +186,75 @@ inline bool operator!=(const NanoString& a, const NanoString& b) {
 
 inline std::ostream& operator<<(std::ostream& os, const NanoString& v) {
     return os << v.to_cstring();
+}
+
+EXTERN_LIB int amp_reg;
+constexpr int amp_prefer32 = 1;
+constexpr int amp_prefer16 = 2;
+constexpr int amp_keep_reduce = 4;
+constexpr int amp_keep_white = 8;
+constexpr int amp_array_prefer = 16;
+
+inline NanoString float_dtype(int dsize_) {
+    if (amp_reg & amp_prefer32) return ns_float32;
+    if (amp_reg & amp_prefer16) return ns_float16;
+    return (dsize_ == 3) ? ns_float64 : 
+        (dsize_ == 2 ) ? ns_float32 : ns_float16;
+}
+
+inline NanoString int_dtype(int dsize_) {
+    return (dsize_ == 3) ? ns_int64 : 
+        (dsize_ == 2) ? ns_int32 :
+        (dsize_ == 1) ? ns_int16 : ns_int8;
+}
+
+inline  NanoString dtype_infer(NanoString x, NanoString y) {
+    int dsize_ = std::max(x.dsize_(), y.dsize_());
+    bool is_float = x.is_float() || y.is_float();
+    if (is_float)
+        return float_dtype(dsize_);
+    else {
+        return int_dtype(dsize_);
+    }
+}
+
+inline NanoString binary_dtype_infer(NanoString op, NanoString x, NanoString y) {
+    if (op.is_bool()) return ns_bool;
+    int dsize_ = std::max(x.dsize_(), y.dsize_());
+    bool is_float = !op.is_int() && 
+        (x.is_float() || y.is_float() || op.is_float());
+    if (is_float) {
+        if (op.is_white() && !(amp_reg & amp_keep_white))
+            return (dsize_ == 3) ? ns_float64 : ns_float32;
+        return float_dtype(dsize_);
+    } else {
+        if (x.is_bool() && y.is_bool()) return ns_bool;
+        return int_dtype(dsize_);
+    }
+}
+
+inline NanoString unary_dtype_infer(NanoString op, NanoString x) {
+    if (op.is_bool()) return ns_bool;
+    int dsize_ = x.dsize_();
+    if (op.is_float()) {
+        if (op.is_white() && !(amp_reg & amp_keep_white))
+            return (dsize_ == 3) ? ns_float64 : ns_float32;
+        return float_dtype(dsize_);
+    }
+    if (op.is_int()) return int_dtype(dsize_);
+    return x;
+}
+
+inline NanoString reduce_dtype_infer(NanoString op, NanoString x) {
+    bool is_float = x.is_float() || op.is_float();
+    int dsize_ = x.dsize_();
+    if (is_float) {
+        if (amp_reg & amp_keep_reduce)
+            return float_dtype(dsize_);
+        return (dsize_ == 3) ? ns_float64 : ns_float32;
+    } else {
+        return x;
+    }
 }
 
 }

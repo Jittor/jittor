@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -9,6 +9,7 @@
 #include "op_compiler.h"
 #include "profiler/profiler.h"
 #include "misc/fast_shared_ptr.h"
+#include "misc/cuda_flags.h"
 
 namespace jittor {
 
@@ -42,7 +43,9 @@ void FusedOp::update_ops() {
     loop_options_tuned.clear();
     loop_options = loop_options_origin = nullptr;
 
+    _inputs.clear();
     _outputs.clear();
+    vars.clear();
     for (Op* op : ops) {
         for (Var* o : op->outputs()) {
             if (o->loop_options) {
@@ -91,16 +94,14 @@ void FusedOp::update_ops() {
             o->custom_data &= 1;
         }
     }
-    vars.clear();
-    bool has_vary_input = 0;
     for (Op* opi : ops) {
-        has_vary_input |= opi->flags.get(NodeFlags::_has_vary_input);
         for (Var* i : opi->inputs()) {
             auto &c = i->custom_data;
             // if not visited
             if (!(c&2)) {
                 c += 2 + vars.size()*4;
                 vars.push_back({i, 0});
+                _inputs.emplace_back((Node*)i);
             }
         }
         for (Var* o : opi->outputs()) {
@@ -113,7 +114,6 @@ void FusedOp::update_ops() {
             }
         }
     }
-    flags.set(NodeFlags::_has_vary_input, has_vary_input);
     LOGvvvv << "Var info" << vars;
 }
 
@@ -135,17 +135,15 @@ FusedOp::FusedOp(const FusedOp& other) {
 }
 
 FusedOp::~FusedOp() {
+    _inputs.clear();
     _outputs.clear();
     Op::number_of_lived_ops++;
 }
 
 void FusedOp::infer_shape() {
-    bool has_vary_input = 0;
     for (Op* op : ops) {
         op->init();
-        has_vary_input |= op->flags.get(NodeFlags::_has_vary_input);
     }
-    flags.set(NodeFlags::_has_vary_input, has_vary_input);
 }
 
 void FusedOp::statistics(uint64_t& in, uint64_t& out, uint64_t& compute) {
@@ -159,54 +157,53 @@ void FusedOp::statistics(uint64_t& in, uint64_t& out, uint64_t& compute) {
 
 void FusedOp::do_jit_prepare(JK& jk) {
     jk.clear();
-    int8 flags = 3;
     for (uint i=0; i<ops.size(); i++) {
         Op* op = ops[i];
-        jk << "[opkey" << i << JK::val;
-        op->do_jit_prepare(jk);
-        jk << JK::end;
-        if (op->flags.get(NodeFlags::_cpu))
-            flags &= 1; // only cpu
-        else
-            flags &= 2; // only gpu
+        jk << "«opkey" << i << JK::val;
+        jk << op->name();
+        op->jit_prepare(jk);
     }
-    ASSERT(flags) << "FusedOp cannot contain both cpu and cuda ops.";
-    jk << _CS("[JIT:1]");
-    if (flags==1) {
+    jk << "«JIT:1";
+    if (!use_cuda) {
         // only cpu
-        jk << _CS("[JIT_cpu:1]");
+        jk << "«JIT_cpu:1";
         this->flags.set(NodeFlags::_cuda, 0);
         this->flags.set(NodeFlags::_cpu, 1);
     } else {
-        jk << _CS("[JIT_cuda:1]");
+        jk << "«JIT_cuda:1";
         this->flags.set(NodeFlags::_cpu, 0);
         this->flags.set(NodeFlags::_cuda, 1);
     }
-    jk << _CS("[graph:");
+    jk << "«graph:";
     for (auto& t : edges) {
         uint i,j,k,l;
         std::tie(i,j,k,l) = t;
         jk << JK::hex2(i) << JK::hex1(j) << JK::hex2(k) << JK::hex1(l) << ',';
     }
-    jk << _CS("][var_info:") << JK::val;
-    for (auto& vi : vars)
+    jk << "«var_info:" << JK::val;
+    bool use_int64_t = false;
+    for (auto& vi : vars) {
         jk << JK::hex1(vi.type) << JK::hex1(vi.var->shape.size());
-    jk << JK::end;
+        if (vi.type != 1 && vi.var->num >= std::numeric_limits<int32_t>::max())
+            use_int64_t = true;
+    }
+    if (use_int64_t)
+        jk << "«index_t:int64";
+    else
+        jk << "«index_t:int32";
     if (loop_options->size()) {
         if (get_loop_option("compile_shapes")) {
-            jk << _CS("[shapes:");
+            jk << "«shapes:";
             for (auto& vi : vars) {
                 jk << '[';
                 for (auto a : vi.var->shape)
                     jk << a << ',';
-                jk << _CS("],");
+                jk << "],";
             }
-            jk << JK::end;
         }
-        jk << _CS("[choices:");
+        jk << "«choices:";
         for (auto& kv : *loop_options)
             jk << kv.first << ':' << kv.second << ',';
-        jk << JK::end;
     }
     jk.finilize();
 }

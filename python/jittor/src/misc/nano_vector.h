@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -147,6 +147,12 @@ struct NanoVector {
     inline NanoVector(const vector<int64>& v) {
         for (auto a : v) push_back_check_overflow(a);
     }
+
+#ifdef __linux__
+    inline NanoVector(const vector<int64_t>& v) {
+        for (auto a : v) push_back_check_overflow((int64)a);
+    }
+#endif
 
     template<typename TMakeV>
     inline static NanoVector make(const TMakeV* v, int n) {

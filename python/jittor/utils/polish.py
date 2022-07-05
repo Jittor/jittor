@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
@@ -49,8 +49,8 @@ data_files = [ name for name in files
 LOG.i("data_files", data_files)
 
 # compile data files
-from pathlib import Path
-home = str(Path.home())
+import jittor_utils as jit_utils
+home = jit_utils.home()
 # for cc_type in ["g++", "clang"]:
 #     for device in ["cpu", "cuda"]:
 

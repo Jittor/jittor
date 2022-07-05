@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -112,7 +112,7 @@ int OpCompiler::total_member_count() {
     return member_count;
 }
 
-int64_t OpCompiler::eval(const string& expr, const unordered_map<string,string>& vars) {
+int64 OpCompiler::eval(const string& expr, const unordered_map<string,string>& vars) {
     if (expr.find("@") != string::npos) {
         string new_expr;
         for (size_t i=0; i<expr.size(); i++) {
@@ -223,6 +223,16 @@ void load_macros(const string& src, unordered_map<string,string>& macros) {
     }
 }
 
+string expand_op_search(const vector<string>& args) {
+    for (auto op_type : op_types) {
+        string ret = op_type->expand_op(args);
+        if (ret.size())
+            return ret;
+    }
+    LOGf << "No expand op pattern found for args:" << args;
+    return "";
+}
+
 void expand_macro(const string& macro, const vector<string>& args, string& new_src) {
     LOGvvvv << "expand_macro" << macro << "args:" << args;
     if (macro.size() == 0 || macro[0] != '<') {
@@ -294,10 +304,16 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
             // #define xxx
             // i      jk  l
             auto j=i+1;
-            while (j<src.size() && src[j] != ' ') j++;
+            while (j<src.size() && (src[j] != ' ' && src[j] != '\n')) j++;
+            auto mstr = src.substr(i,j-i);
+            if (mstr == "#if" || mstr == "#else" || mstr == "#endif") {
+                new_src += mstr;
+                i = j-1;
+                continue;
+            }
             ASSERT(j<src.size());
             auto k=j+1;
-            while (k<src.size() && src[k] == ' ') k++;
+            while (k<src.size() && src[k] == ' ' && src[k] != '\n') k++;
             ASSERT(k<src.size());
             auto l=k+1;
             while (l<src.size() && (src[l] != '\n')) l++;
@@ -307,7 +323,7 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                     LOGvvvv << "Found defs include" << inc;
                     auto src_path = join(jittor_path, "src");
                     src_path = join(src_path, inc);
-                    auto inc_src = read_all(src_path);
+                    auto inc_src = read_all(_to_winstr(src_path));
                     // load_macros from include src
                     precompile(defs, inc_src, macros);
                     // we do not include defs.h
@@ -428,6 +444,7 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                 vector<string> args;
                 size_t l = k+1;
                 if (expr == "for" || expr == "if" || expr == "expand_macro" ||
+                expr == "expand_op" ||
                     expr == "is_def" || expr == "python" ||
                     (k<src.size() && src[k]=='(')) {
                     ASSERT(src[k] == '(');
@@ -545,6 +562,18 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                     } else {
                         expand_macro(iter->second, args, ns);
                     }
+                    new_src += precompile(defs, ns, macros);
+                    i = l-1;
+                    continue;
+                } else
+                if (expr == "expand_op") {
+                    // syntax: @expand_op(args)
+                    for (auto& arg : args) {
+                        uint p=0;
+                        while (p<arg.size() && arg[p] == ' ') p++;
+                        arg = precompile(defs, arg.substr(p), macros);
+                    }
+                    string ns = expand_op_search(args);
                     new_src += precompile(defs, ns, macros);
                     i = l-1;
                     continue;
@@ -730,9 +759,9 @@ string OpCompiler::get_jit_src(Op* op) {
         else
             after_include_src += src;
     }
-    ASSERT(file_exist(src_path)) << src_path;
+    ASSERT(file_exist(_to_winstr(src_path))) << src_path;
     LOGvvv << "Read from" << src_path; 
-    string src = read_all(src_path);
+    string src = read_all(_to_winstr(src_path));
     ASSERT(src.size()) << "Source read failed:" << src_path;
 
     unordered_map<string,string> defs(jit_define.begin(), jit_define.end());
@@ -840,6 +869,9 @@ string OpCompiler::__get_fused_src(
     };
     auto not_change = [&](const string& s) -> bool {
         if (unchanged.count(s)) return true;
+        for (auto op_type : op_types)
+            if (op_type->types.count(s))
+                return true;
         return (s.find("::") != string::npos) || (s.find("LOG") != string::npos);
     };
     // regex find XxxXxxOp::jit_run
@@ -1032,13 +1064,22 @@ jit_op_entry_t OpCompiler::compile(const string& jit_key, const string& src) {
     // add extra flags for custom ops
     bool is_cuda = _op->flags.get(NodeFlags::_cuda);
     auto op_info = get_op_info(_op->name());
-    return jit_compiler::compile(jit_key, src, is_cuda, op_info.extra_flags);
+    string extra_flags = op_info.extra_flags;
+    for (auto v : _op->outputs())
+        if (v->loop_options)
+            for (auto& kv : v->loop_options.data()) {
+                if (kv.second && startswith(kv.first, "FLAGS:"))
+                    extra_flags += " " + kv.first.substr(6) + " ";
+            }
+    return jit_compiler::compile(jit_key, src, is_cuda, extra_flags);
 }
 
 jit_op_entry_t OpCompiler::do_compile(Op* op) {
     jittor::lock_guard lg;
     OpCompiler oc(op);
     string* src = &oc.src;
+    for (auto op_type : op_types)
+        op_type->post_pass(&oc);
     string src_after_passes;
     // if is fused op
     if (oc.op) {

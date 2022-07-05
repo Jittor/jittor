@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved.
+// Copyright (c) 2022 Jittor. All Rights Reserved.
 // Maintainers: Dun Liang <randonlang@gmail.com>.
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -91,7 +91,8 @@ static void push_py_object(RingBuffer* rb, PyObject* obj, uint64& __restrict__ o
         Py_TYPE(obj) == PyArray_Type) {
         ArrayArgs args;
         int64 size=0;
-        rb->push_t<uint8>(5, offset);
+        uint8 protocol = Py_TYPE(obj) == PyArray_Type ? 5 : 7;
+        rb->push_t<uint8>(protocol, offset);
         if (Py_TYPE(obj) == &PyjtVarHolder.ht_type) {
             auto ptr = GET_RAW_PTR(VarHolder, obj);
             args = move(fetch_sync({ptr}).at(0));
@@ -110,7 +111,7 @@ static void push_py_object(RingBuffer* rb, PyObject* obj, uint64& __restrict__ o
                 rb->push(size, offset);
                 args.ptr = rb->get_ptr(size, offset);
 #if defined(__linux__) || defined(_WIN32)
-                STACK_ALLOC(int64, dims, args.shape.size());
+                STACK_ALLOC(int64_t, dims, args.shape.size());
 #elif defined(__APPLE__)
                 long dims[args.shape.size()];
 #endif
@@ -181,7 +182,7 @@ static PyObject* pop_py_object(RingBuffer* rb, uint64& __restrict__ offset, bool
         }
         return dict.release();
     }
-    if (t==5) {
+    if (t==5 || t==7) {
         ArrayArgs args;
         args.shape = rb->pop_t<NanoVector>(offset);
         args.dtype = rb->pop_t<NanoString>(offset);
@@ -190,7 +191,8 @@ static PyObject* pop_py_object(RingBuffer* rb, uint64& __restrict__ offset, bool
             size *= args.shape[i];
         rb->pop(size, offset);
         args.ptr = rb->get_ptr(size, offset);
-        if (!keep_numpy_array)
+        if (!keep_numpy_array || t==7)
+            // become jittor var
             return to_py_object3(move(args));
         else
             return to_py_object<ArrayArgs>(args);

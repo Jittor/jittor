@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -13,7 +13,8 @@ namespace jittor {
 struct Deleter {
     std::function<void()> del;
     inline Deleter(std::function<void()>&& func) : del(move(func)) {}
-    inline ~Deleter() { del(); }
+    inline Deleter() {}
+    inline ~Deleter() { if (del) del(); }
 };
 
 } // jittor

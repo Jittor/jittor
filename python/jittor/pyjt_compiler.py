@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
@@ -31,6 +31,8 @@ pytype_map = {
     "int": ["PyLong_AsLong", "PyLong_FromLong", "PyLong_CheckExact"],
     "int64": ["PyLong_AsLongLong", "PyLong_FromLongLong", "PyLong_CheckExact"],
     "uint": ["PyLong_AsUnsignedLong", "PyLong_FromUnsignedLong", "PyLong_CheckExact"],
+    "uint8": ["PyLong_AsUnsignedLong", "PyLong_FromUnsignedLong", "PyLong_CheckExact"],
+    "uint16": ["PyLong_AsUnsignedLong", "PyLong_FromUnsignedLong", "PyLong_CheckExact"],
     "uint64": ["PyLong_AsUnsignedLongLong", "PyLong_FromUnsignedLongLong", "PyLong_CheckExact"],
     "void": ["...", "GET_PY_NONE", "..."],
     "PyObject*": ["","",""],
@@ -263,7 +265,7 @@ def generate_error_code_from_func_header(func_head, target_scope_name, name, dfs
             help_name = ""+target_scope_name+'.'+name
     else:
         help_name = name
-    if lib_name in ["mpi", "nccl", "cudnn", "curand", "cublas", "mkl"]:
+    if lib_name in ["mpi", "nccl", "cudnn", "curand" "cufft", "cublas", "mkl"]:
         help_name = lib_name+'.'+help_name
     help_cmd = f"help(jt.{help_name})"
 
@@ -858,13 +860,13 @@ def compile_src(src, h, basename):
 def compile_single(head_file_name, src_file_name, src=None):
     basename = os.path.basename(head_file_name).split(".")[0]
     if src==None:
-        with open(head_file_name, 'r') as f:
+        with open(head_file_name, 'r', encoding='utf8') as f:
             src = f.read()
     code = compile_src(src, head_file_name, basename)
     if not code: return False
     LOG.vvv("write to", src_file_name)
     LOG.vvvv(code)
-    with open(src_file_name, 'w') as f:
+    with open(src_file_name, 'w', encoding='utf8') as f:
         f.write(code)
     return True
 
@@ -875,14 +877,14 @@ def compile(cache_path, jittor_path):
     basenames = []
     pyjt_names = []
     for h in headers:
-        with open(h, 'r') as f:
+        with open(h, 'r', encoding='utf8') as f:
             src = f.read()
 
         bh = os.path.basename(h)
         # jit_op_maker.h merge compile with var_holder.h
         if bh == "var_holder.h": continue
         if bh == "jit_op_maker.h":
-            with open(os.path.join(jittor_path, "src", "var_holder.h"), "r") as f:
+            with open(os.path.join(jittor_path, "src", "var_holder.h"), "r", encoding='utf8') as f:
                 src = f.read() + src
         basename = bh.split(".")[0]
         fname = "pyjt_"+basename+".cc"
@@ -895,7 +897,6 @@ def compile(cache_path, jittor_path):
         pyjt_names.append(fname)
     
     code = f"""
-    #include "pyjt/numpy.h"
     #include "pyjt/py_converter.h"
     #include "common.h"
 
@@ -904,7 +905,6 @@ def compile(cache_path, jittor_path):
     { " ".join([f"extern void pyjt_def_{n}(PyObject* m);" for n in basenames])}
 
     void pyjt_def_all(PyObject* m) {{
-        numpy_init();
         { " ".join([f"pyjt_def_{n}(m);" for n in basenames])}
     }}
 
@@ -913,7 +913,7 @@ def compile(cache_path, jittor_path):
     fname = os.path.join(cache_path, "gen", "pyjt_all.cc")
     LOG.vvv(("write to", fname))
     LOG.vvvv(code)
-    with open(fname, "w") as f:
+    with open(fname, "w", encoding='utf8') as f:
         f.write(code)
     pyjt_names.append(fname)
     return pyjt_names

@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved.
+// Copyright (c) 2022 Jittor. All Rights Reserved.
 // Maintainers: Dun Liang <randonlang@gmail.com>.
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -141,7 +141,7 @@ ArrayOp::ArrayOp(PyObject* obj) {
     } else {
         // this is non-continue numpy array
 #if defined(__linux__) || defined(_WIN32)
-        STACK_ALLOC(int64, dims, args.shape.size());
+        STACK_ALLOC(int64_t, dims, args.shape.size());
 #elif defined(__APPLE__)
         long dims[args.shape.size()];
 #endif

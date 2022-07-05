@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: 
 #     Wenyang Zhou <576825820@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
@@ -50,7 +50,7 @@ class TestLoadPth(unittest.TestCase):
         assert np.max(np.abs(jt_out.fetch_sync() - torch_out.detach().numpy())) < 1e-3
 
         pth_name = os.path.join(jt.flags.cache_path, "x.pth")
-        torch.save(torch_model.state_dict, pth_name)
+        torch.save(torch_model.state_dict(), pth_name)
         jt_model.load(pth_name)
 
         # output
@@ -58,6 +58,6 @@ class TestLoadPth(unittest.TestCase):
         # torch_out = torch_model(torch_img)
         print(np.max(np.abs(jt_out.fetch_sync() - torch_out.detach().numpy())))
         assert np.max(np.abs(jt_out.fetch_sync() - torch_out.detach().numpy())) < 1e-3
-        
+    
 if __name__ == "__main__":
     unittest.main()

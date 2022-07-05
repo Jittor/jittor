@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -270,10 +270,36 @@ Expr::Expr(const string& src) : flags(0) {
         ops.push_back(cp);
         op_flags.push_back(flag);
     }
+    auto check_cast_func = [&]() {
+        while (nodes.size() > 1) {
+            int op_pos = ops.size() ? ops.back().first : -1;
+            if (op_pos>=0 && src[op_pos] == '?') return;
+            auto vpos = values[values.size()-2];
+            if (op_pos >= vpos.first) return;
+
+            // something like
+            // xxx = (float) yyy
+            if (vpos.first && src[vpos.first-1] == '(' && src[vpos.second] == ')') {
+                auto v1 = move(nodes[nodes.size()-2]);
+                auto v2 = move(nodes[nodes.size()-1]);
+                auto r = values.back().second;
+                nodes.pop_back();nodes.pop_back();
+                values.pop_back();values.pop_back();
+                auto v3 = expr::make(expr::Flags::_call | expr::Flags::_binary_op, "()");
+                v3->add_child(move(v1));
+                v3->add_child(move(v2));
+                nodes.emplace_back(move(v3));
+                values.emplace_back(std::make_pair(vpos.first, r));
+            } else
+                return;
+        }
+    };
     while (ops.size()) {
+        check_cast_func();
         auto prev_op = substr(ops.back());
         execute_back(prev_op);
     }
+    check_cast_func();
 
     ASSERT(nodes.size() == 1) << "Left multiple nodes:" << nodes;
     move_from(nodes[0]);
@@ -620,8 +646,13 @@ void Expr::to_string(std::ostream& os, int olp, int orp, int debug) const {
     } else if (is(_left_op)) {
         // ++a, --a
         os << str;
-        ASSERT(children.size()==1) << (print_trace(), 0);
-        children[0]->to_string(os, pd, orp, debug);
+        if (children.size() != 1) {
+            os << " !!ERR ";
+            for (auto &c : children)
+                os << c->str.size() << " " << *c;
+            os << " ERR!! ";
+        } else
+            children[0]->to_string(os, pd, orp, debug);
     } else {
         // a--, a+b
         ASSERT(children.size());

@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -8,7 +8,6 @@
 #include <limits>
 #include "var.h"
 #include "ops/reduce_op.h"
-#include "ops/binary_op_defs.h"
 #include "ops/op_register.h"
 #include "executor.h"
 
@@ -254,6 +253,8 @@ ReduceOp::ReduceOp(Var* x, NanoString op, NanoVector dims, bool keepdims)
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
     set_type(OpType::reduce);
+    if (op.get(NanoString::_no_need_back_in))
+        flags.set(NodeFlags::_manual_set_vnbb);
     ns = op;
     ASSERT(ns.is_binary());
     auto xdim = x->shape.size();
@@ -272,7 +273,7 @@ ReduceOp::ReduceOp(Var* x, NanoString op, NanoVector dims, bool keepdims)
     if (x->dtype() == ns_bool)
         y = create_output(nullptr, ns_int32);
     else
-        y = create_output(nullptr, binary_dtype_infer(ns, x, x));
+        y = create_output(nullptr, reduce_dtype_infer(ns, x->ns));
 }
 
 ReduceOp::ReduceOp(Var* x, NanoString op, uint dims_mask, uint keepdims_mask)
@@ -280,11 +281,13 @@ ReduceOp::ReduceOp(Var* x, NanoString op, uint dims_mask, uint keepdims_mask)
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
     set_type(OpType::reduce);
+    if (op.get(NanoString::_no_need_back_in))
+        flags.set(NodeFlags::_manual_set_vnbb);
     ns = op;
     ASSERT(ns.is_binary());
     reduce_mask = dims_mask;
     this->keepdims_mask = keepdims_mask;
-    y = create_output(nullptr, binary_dtype_infer(ns, x, x));
+    y = create_output(nullptr, reduce_dtype_infer(ns, x->ns));
 }
 
 ReduceOp::ReduceOp(Var* x, NanoString op, int dim, bool keepdims)
@@ -320,12 +323,6 @@ VarPtr ReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
         return make_binary(b, v, ns_divide);
     }
     if (ns == ns_mean) {
-        if (v->num < 0) {
-            // TODO: Dynamic shape of mean grad was not supported yet
-            LOGw << "Dynamic shape of mean grad cause synchronize.";
-            exe.run_sync({v}, 0);
-            ASSERT(v->num>=0);
-        }
         VarPtr a = make_broadcast_to(dout, v, reduce_mask, keepdims_mask);
         VarPtr n = make_number(1.0f*out->num / v->num, a);
         return make_binary(a, n, ns_multiply);
@@ -341,12 +338,12 @@ VarPtr ReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 }
 
 void ReduceOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype()
-        << _CS("][Ty:") << y->dtype()
-        << _CS("][Tz:") << y->dtype()
-        << _CS("][OP:") << ns
-        << _CS("][DIM=") << JK::hex1(x->shape.size())
-        << _CS("][REDUCE=") << JK::hex(reduce_mask) << ']';
+    jk << "«Tx:" << x->dtype()
+        << "«Ty:" << y->dtype()
+        << "«Tz:" << y->dtype()
+        << "«OP:" << ns
+        << "«DIM=" << JK::hex1(x->shape.size())
+        << "«REDUCE=" << JK::hex(reduce_mask);
 }
 
 #else // JIT
@@ -360,18 +357,18 @@ void ReduceOp::jit_run() {
     @for(i, DIM-2, -1, -1, auto ystride@i = ystride@{i+1} * yshape@{i+1};)
     index_t xstride@{DIM-1} = 1;
     @for(i, DIM-2, -1, -1, auto xstride@i = xstride@{i+1} * xshape@{i+1};)
-    Ty count = Ty(x->num) / Ty(y->num);
-    Ty rcount = Ty(y->num) / Ty(x->num);
+    Ty count = x->num*1.0 / y->num;
+    Ty rcount = y->num*1.0 / x->num;
     @for(d, 0, DIM,@if(REDUCE>>d&1,, for (index_t xi@d=0; xi@d < xshape@d; xi@d++))) {
         auto yid = 0 @for(d, 0, DIM,@if(REDUCE>>d&1,, + xi@d * ystride@d));
-        yp[yid] = @expand_macro(init_@OP, Ty);
+        yp[yid] = @expand_op(init_@OP, @Ty);
     }
     
     @for(d, 0, DIM,@if(REDUCE>>d&1,, for (index_t xi@d=0; xi@d < xshape@d; xi@d++))) {
         @for(d, 0, DIM,@if(REDUCE>>d&1, for (index_t xi@d=0; xi@d < xshape@d; xi@d++),)) {
             auto yid = 0 @for(d, 0, DIM,@if(REDUCE>>d&1,, + xi@d * ystride@d));
             auto xid = 0 @for(d, 0, DIM, + xi@d * xstride@d);
-            yp[yid] = @expand_macro(@OP, Ty, yp[yid], xp[xid]);
+            yp[yid] = @expand_op(@OP, @Ty, yp[yid], @Ty, xp[xid], @Tx);
         }
     }
     (void)count, (void)rcount, (void)yshape0, (void)ystride0;

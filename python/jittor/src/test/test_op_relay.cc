@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -94,7 +94,7 @@ JIT_TEST(fused_op_relay_matmul) {
     auto allocator = get_allocator();
     for (auto& v : fop.vars)
         if (v.type!=1) v.var->alloc(allocator);
-    auto entry = oc.compile("[OP:_fused_op_relay_matmul]", oc.src);
+    auto entry = oc.compile("«OP:_fused_op_relay_matmul", oc.src);
     for (uint i=0; i<a->num; i++)
         a->ptr<float>()[i] = b->ptr<float>()[i] = 1;
     entry(&fop);

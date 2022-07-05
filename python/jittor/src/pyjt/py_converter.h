@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: 
 //     Dun Liang <randonlang@gmail.com>. 
 //     Guowei Yang <471184555@qq.com>
@@ -15,11 +15,18 @@
 #include "misc/nano_string.h"
 #include "misc/fast_shared_ptr.h"
 #include "profiler/simple_profiler.h"
-#ifdef HAS_CUDA
+#ifdef IS_CUDA
 #include "misc/cuda_flags.h"
 #endif
 
 namespace jittor {
+
+template<class T>
+struct vector_to_tuple {
+    typedef T value_type;
+    vector<T> x;
+    vector_to_tuple(vector<T>&& _) :x(move(_)) {}
+};
 
 #define DEF_IS(check_type, return_type) \
     template<class T> \
@@ -97,6 +104,21 @@ DEF_IS(int64, PyObject*) to_py_object(const T& a) {
 DEF_IS(int64, T) from_py_object(PyObject* obj) {
     return PyLong_AsLongLong(obj);
 }
+
+#ifdef __linux__
+// int64_t
+DEF_IS(int64_t, bool) is_type(PyObject* obj) {
+    return PyLong_CheckExact(obj);
+}
+
+DEF_IS(int64_t, PyObject*) to_py_object(const T& a) {
+    return PyLong_FromLongLong(a);
+}
+
+DEF_IS(int64_t, T) from_py_object(PyObject* obj) {
+    return PyLong_AsLongLong(obj);
+}
+#endif
 
 // float64
 DEF_IS(float64, bool) is_type(PyObject* obj) {
@@ -267,7 +289,7 @@ DEF_IS(ArrayArgs, bool) is_type(PyObject* obj) {
 
 DEF_IS(ArrayArgs, PyObject*) to_py_object(const T& a) {
 #if defined(__linux__) || defined(_WIN32)
-    STACK_ALLOC(int64, dims, a.shape.size());
+    STACK_ALLOC(int64_t, dims, a.shape.size());
 #elif defined(__APPLE__)
     long dims[a.shape.size()];
 #endif
@@ -383,7 +405,7 @@ DEF_IS(VarHolder*, T) from_py_object(PyObject* obj, unique_ptr<VarHolder>& holde
 struct DataView;
 DEF_IS(DataView, PyObject*) to_py_object(T a) {
 #if defined(__linux__) || defined(_WIN32)
-    STACK_ALLOC(int64, dims, a.shape.size());
+    STACK_ALLOC(int64_t, dims, a.shape.size());
 #elif defined(__APPLE__)
     long dims[a.shape.size()];
 #endif
@@ -462,6 +484,7 @@ DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj);
     typename std::enable_if<is_##check_type<T>::value, return_type>::type
 
 CHECK_IS_1(vector);
+CHECK_IS_1(vector_to_tuple);
 
 CHECK_IS_2(map);
 DEF_IS_2(map, bool) is_type(PyObject* obj);
@@ -492,6 +515,17 @@ DEF_IS_1(vector, PyObject*) to_py_tuple(const T& a) {
     PyObjHolder list(PyTuple_New(a.size()));
     for (uint i=0; i<a.size(); i++) {
         PyObject* o = to_py_object<typename T::value_type>(a[i]);
+        CHECK(o);
+        // PyTuple_SET_ITEM borrow ownership, we do not hold this
+        PyTuple_SET_ITEM(list.obj, i, o);
+    }
+    return list.release();
+}
+
+DEF_IS_1(vector_to_tuple, PyObject*) to_py_object(const T& a) {
+    PyObjHolder list(PyTuple_New(a.x.size()));
+    for (uint i=0; i<a.x.size(); i++) {
+        PyObject* o = to_py_object<typename T::value_type>(a.x[i]);
         CHECK(o);
         // PyTuple_SET_ITEM borrow ownership, we do not hold this
         PyTuple_SET_ITEM(list.obj, i, o);
@@ -625,6 +659,25 @@ DEF_IS_1(fast_shared_ptr, T) from_py_object(PyObject* obj) {
     return from_py_object<typename T::value_type>(obj);
 }
 
+CHECK_IS_1(Maybe);
+
+DEF_IS_1(Maybe, bool) is_type(PyObject* obj) {
+    return obj == Py_None || 
+        is_type<typename T::value_type*>(obj);
+}
+
+DEF_IS_1(Maybe, PyObject*) to_py_object(T a) {
+    if (a)
+        return to_py_object<typename T::value_type*>(a.ptr);
+    Py_INCREF(Py_None);
+    return Py_None;
+}
+
+DEF_IS_1(Maybe, T) from_py_object(PyObject* obj) {
+    if (obj == Py_None) return T();
+    return T(from_py_object<typename T::value_type*>(obj));
+}
+
 DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj) {
     // PyObject_Call
     Py_INCREF(obj);
@@ -633,7 +686,7 @@ DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj) {
         [obj](typename T::R* result) {
             // import numpy
             string npstr="numpy";
-            #ifdef HAS_CUDA
+            #ifdef IS_CUDA
             if (use_cuda) npstr="cupy";
             #endif
 
@@ -650,7 +703,7 @@ DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj) {
             PyTuple_SET_ITEM(args.obj, 0, np.release());
             PyTuple_SET_ITEM(args.obj, 1, data.release());
 
-            #ifdef HAS_CUDA
+            #ifdef IS_CUDA
             if (npstr=="cupy") {
                 PyObjHolder jt(PyImport_ImportModule("jittor"));
                 PyObjHolder pFunc(PyObject_GetAttrString(jt.obj,"numpy2cupy"));

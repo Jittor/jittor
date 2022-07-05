@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -174,7 +174,7 @@ void send_log(std::ostringstream&& out, char level, int verbose) {
     } else {
         std::lock_guard<std::mutex> lk(sync_log_m);
         // std::cerr << "[SYNC]";
-        std::cerr << out.str();
+        std::cerr << _to_winstr(out.str());
         std::cerr.flush();
     }
 }
@@ -243,7 +243,7 @@ void segfault_sigaction(int signal, siginfo_t *si, void *arg) {
     }
     if (signal == SIGCHLD) {
         if (si->si_code != CLD_EXITED && si->si_status != SIGTERM && _pid == getpid()) {
-            LOGe << "Caught SIGCHLD" 
+            LOGe << "Caught SIGCHLD. Maybe out of memory, please reduce your worker size." 
                 << "si_errno:" << si->si_errno 
                 << "si_code:" << si->si_code 
                 << "si_status:" << si->si_status
@@ -304,7 +304,9 @@ int register_sigaction() {
     sigaction(SIGKILL, &sa, NULL);
     sigaction(SIGSTOP, &sa, NULL);
     sigaction(SIGFPE, &sa, NULL);
-    sigaction(SIGINT, &sa, NULL);
+    // jupyter use sigint to interp
+    if (getenv("JPY_PARENT_PID") == nullptr)
+        sigaction(SIGINT, &sa, NULL);
     sigaction(SIGCHLD, &sa, NULL);
     sigaction(SIGILL, &sa, NULL);
     sigaction(SIGBUS, &sa, NULL);
@@ -315,6 +317,10 @@ int register_sigaction() {
 }
 
 static int log_init() {
+    #ifdef _WIN32
+    // SetConsoleCP(CP_UTF8);
+    // SetConsoleOutputCP(CP_UTF8);
+    #endif
     register_sigaction();
     std::atexit(log_exiting);
     return 1;
@@ -444,6 +450,39 @@ If you still have problems, please contact us:
 }
 
 #ifdef _WIN32
+
+string GbkToUtf8(const char *src_str)
+{
+	int len = MultiByteToWideChar(CP_ACP, 0, src_str, -1, NULL, 0);
+	wchar_t* wstr = new wchar_t[len + 1];
+	memset(wstr, 0, len + 1);
+	MultiByteToWideChar(CP_ACP, 0, src_str, -1, wstr, len);
+	len = WideCharToMultiByte(CP_UTF8, 0, wstr, -1, NULL, 0, NULL, NULL);
+	char* str = new char[len + 1];
+	memset(str, 0, len + 1);
+	WideCharToMultiByte(CP_UTF8, 0, wstr, -1, str, len, NULL, NULL);
+	string strTemp = str;
+	if (wstr) delete[] wstr;
+	if (str) delete[] str;
+	return strTemp;
+}
+
+string Utf8ToGbk(const char *src_str)
+{
+	int len = MultiByteToWideChar(CP_UTF8, 0, src_str, -1, NULL, 0);
+	wchar_t* wszGBK = new wchar_t[len + 1];
+	memset(wszGBK, 0, len * 2 + 2);
+	MultiByteToWideChar(CP_UTF8, 0, src_str, -1, wszGBK, len);
+	len = WideCharToMultiByte(CP_ACP, 0, wszGBK, -1, NULL, 0, NULL, NULL);
+	char* szGBK = new char[len + 1];
+	memset(szGBK, 0, len + 1);
+	WideCharToMultiByte(CP_ACP, 0, wszGBK, -1, szGBK, len, NULL, NULL);
+	string strTemp(szGBK);
+	if (wszGBK) delete[] wszGBK;
+	if (szGBK) delete[] szGBK;
+	return strTemp;
+}
+
 int system_popen(const char *cmd, const char* cwd) {
     HANDLE g_hChildStd_OUT_Rd = NULL;
     HANDLE g_hChildStd_OUT_Wr = NULL;
@@ -565,7 +604,7 @@ void system_with_check(const char* cmd, const char* cwd) {
     auto ret = system_popen(cmd, cwd);
     CHECK(ret>=0 && ret<=256) << "Run cmd failed:" << cmd <<
             "\nreturn ">> ret >> ". This might be an overcommit issue or out of memory."
-            << "Try : sudo sysctl vm.overcommit_memory=1";
+            << "Try : sudo sysctl vm.overcommit_memory=1, or set enviroment variable `export DISABLE_MULTIPROCESSING=1`";
     CHECKop(ret,==,0) << "Run cmd failed:" << cmd;
 }
 

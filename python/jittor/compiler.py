@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
@@ -19,7 +19,7 @@ from ctypes import cdll
 from ctypes.util import find_library
 
 import jittor_utils as jit_utils
-from jittor_utils import LOG, run_cmd, cache_path, find_exe, cc_path, cc_type, cache_path
+from jittor_utils import LOG, run_cmd, find_exe, cc_path, cc_type, cache_path
 from . import pyjt_compiler
 from jittor_utils import lock
 from jittor_utils import install_cuda
@@ -83,7 +83,7 @@ def map_flags(flags, func):
         output.append(func(s))
     return " ".join(output)
 
-def compile(compiler, flags, inputs, output, combind_build=False, cuda_flags=""):
+def compile(compiler, flags, inputs, output, combind_build=False, cuda_flags="", obj_dirname="obj_files"):
     def do_compile(cmd):
         if jit_utils.cc:
             return jit_utils.cc.cache_compile(cmd, cache_path, jittor_path)
@@ -108,13 +108,15 @@ def compile(compiler, flags, inputs, output, combind_build=False, cuda_flags="")
     obj_files = []
     ex_obj_files = []
     new_inputs = []
+    obj_dir = os.path.join(cache_path, obj_dirname)
+    os.makedirs(obj_dir, exist_ok=True)
     for name in inputs:
         if name[-1] in 'oab':
             ex_obj_files.append(name)
         else:
             new_inputs.append(os.path.join(jittor_path, name))
             obj_files.append(os.path.join(
-                cache_path, "obj_files", os.path.basename(name)+".o"))
+                obj_dir, os.path.basename(name)+".o"))
     inputs = new_inputs
     cm = lambda s: f"\"{s}\""
     cms = lambda arr: [f"\"{s}\"" for s in arr ]
@@ -131,7 +133,7 @@ def compile(compiler, flags, inputs, output, combind_build=False, cuda_flags="")
         nflags = oflags
         cmd = f"{cm(input)} {nflags} {lto_flags} -c -o {cm(obj_file)}"
         if input.endswith(".cu"):
-            if has_cuda:
+            if has_cuda or has_rocm:
                 cmd = f"\"{nvcc_path}\" {cuda_flags} {cmd}"
                 cmd = convert_nvcc_flags(fix_cl_flags(cmd))
             else:
@@ -141,8 +143,10 @@ def compile(compiler, flags, inputs, output, combind_build=False, cuda_flags="")
             cmd = fix_cl_flags(cmd)
         if "nan_checker" in input:
             # nan checker needs to disable fast_math 
-            cmd = cmd.replace("--use_fast_math", "")
-            cmd = cmd.replace("-Ofast", "-O2")
+            if "--use_fast_math" in cmd:
+                cmd = cmd.replace("--use_fast_math", "")
+            if "-Ofast" in cmd:
+                cmd = cmd.replace("-Ofast", "-O2")
         cmds.append(cmd)
     jit_utils.run_cmds(cmds, cache_path, jittor_path, "Compiling "+base_output)
     obj_files += ex_obj_files
@@ -199,7 +203,7 @@ def gen_jit_tests():
     }} // jittor
     """
     LOG.vvvv(jit_src)
-    with open(os.path.join(cache_path, "gen", "jit_tests.h"), 'w') as f:
+    with open(os.path.join(cache_path, "gen", "jit_tests.h"), 'w', encoding='utf8') as f:
         f.write(jit_src)
 
 def gen_jit_flags():
@@ -228,13 +232,20 @@ def gen_jit_flags():
                 continue
             visit[name] = 1
             jit_declares.append(f"DECLARE_FLAG({type}, {name});")
+            alias = []
+            if name == "use_cuda":
+                alias = ["use_device", "use_acl", "use_rocm"]
+            elif name == "auto_mixed_precision_level":
+                alias = ["amp_level"]
+            get_names = ",".join(["__get__"+a for a in [name]+alias])
+            set_names = ",".join(["__set__"+a for a in [name]+alias])
             flags_defs.append(f"""
                 /* {name}(type:{type}, default:{default}): {doc} */
-                // @pyjt(__get__{name})
+                // @pyjt({get_names})
                 {type} _get_{name}() {{ return {name}; }}
-                // @pyjt(__set__{name})
+                // @pyjt({set_names})
                 void _set_{name}({type} v) {{ set_{name}(v); }}
-                {f'''// @pyjt(__set__{name})
+                {f'''// @pyjt({set_names})
                 void _set_{name}(bool v) {{ set_{name}(v); }}
                 ''' if type=="int" else ""}
             """)
@@ -257,7 +268,7 @@ def gen_jit_flags():
     }} // jittor
     """
     LOG.vvvv(jit_src)
-    with open(os.path.join(cache_path, "gen", "jit_flags.h"), 'w') as f:
+    with open(os.path.join(cache_path, "gen", "jit_flags.h"), 'w', encoding='utf8') as f:
         f.write(jit_src)
 
 def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
@@ -358,7 +369,7 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags=""):
             jit_cc_src.append(f"""
             /*{doc_string}*/
             // @pyjt({",".join(pyjt_names)})
-            vector<VarHolder*> {cc_func_name}({", ".join(cc_args)}) {{
+            vector_to_tuple<VarHolder*> {cc_func_name}({", ".join(cc_args)}) {{
                 {   f'return make_vh_vector(make_{cc_func_name}({", ".join(op_args)}));'
                     if "replace_outputs" not in attrs else
                     f'''auto rt = make_vh_vector(make_{cc_func_name}({", ".join(op_args)}));
@@ -639,9 +650,9 @@ def compile_custom_op(header, source, op_name, warp=True):
     make_cache_dir(cops_dir)
     hname = os.path.join(cops_dir, op_name+"_op.h")
     ccname = os.path.join(cops_dir, op_name+"_op.cc")
-    with open(hname, 'w') as f:
+    with open(hname, 'w', encoding='utf8') as f:
         f.write(header)
-    with open(ccname, 'w') as f:
+    with open(ccname, 'w', encoding='utf8') as f:
         f.write(source)
     m = compile_custom_ops([hname, ccname])
     return getattr(m, op_name)
@@ -679,7 +690,7 @@ def compile_custom_ops(
             dirname = os.path.dirname(name)
             if dirname.endswith("inc"):
                 includes.append(dirname)
-            with open(name, "r") as f:
+            with open(name, "r", encoding='utf8') as f:
                 if "@pyjt" in f.read():
                     pyjt_includes.append(name)
         bname = os.path.basename(name)
@@ -736,7 +747,7 @@ def compile_custom_ops(
             "init_module(PyModuleDef* mdef, PyObject* m) {",
             f"jittor::pyjt_def_{bname}(m);")
 
-    with open(gen_head_fname, "w") as f:
+    with open(gen_head_fname, "w", encoding='utf8') as f:
         f.write(gen_src)
 
     LOG.vvv(f"Build custum ops lib:{gen_lib}")
@@ -781,7 +792,7 @@ def compile_extern():
     files = os.listdir(jittor_path_llvm)
     # test_pass.cc is used for test link problem of llvm pass plugin
     test_pass_path = os.path.join(cache_path_llvm, "test_pass.cc")
-    with open(test_pass_path, 'w') as f:
+    with open(test_pass_path, 'w', encoding='utf8') as f:
         f.write("int main() {return 0;}")
     
     # -fno-rtti fix link error
@@ -843,7 +854,7 @@ def check_cuda():
         # this nvcc is install by package manager
         cuda_lib = "/usr/lib/x86_64-linux-gnu"
     cuda_include2 = os.path.join(jittor_path, "extern","cuda","inc")
-    cc_flags += f" -DHAS_CUDA -I\"{cuda_include}\" -I\"{cuda_include2}\" "
+    cc_flags += f" -DHAS_CUDA -DIS_CUDA -I\"{cuda_include}\" -I\"{cuda_include2}\" "
     if os.name == 'nt':
         cuda_lib = os.path.abspath(os.path.join(cuda_dir, "..", "lib", "x64"))
         # cc_flags += f" \"{cuda_lib}\\cudart.lib\" "
@@ -974,6 +985,8 @@ if not nvcc_path:
         nvcc_path = try_find_exe(nvcc_path)
 if nvcc_path is None:
     nvcc_path = ""
+if "nvcc_path" in os.environ:
+    nvcc_path = os.environ["nvcc_path"]
 gdb_path = env_or_try_find('gdb_path', 'gdb')
 addr2line_path = try_find_exe('addr2line')
 has_pybt = check_pybt(gdb_path, python_path)
@@ -985,7 +998,7 @@ if nvcc_path:
     nvcc_version = list(map(int,v.split('.')))
     cu += v
     try:
-        r, s = sp.getstatusoutput(f"{sys.executable} -m jittor_utils.query_cuda_cc")
+        r, s = sp.getstatusoutput(f"log_v=0 {sys.executable} -m jittor_utils.query_cuda_cc")
         if r==0:
             s = sorted(list(set(s.strip().split())))
             cu += "_sm_" + "_".join(s)
@@ -1024,8 +1037,10 @@ cc_flags += " -lstdc++ -ldl -shared "
 if platform.system() == 'Darwin':
     # TODO: if not using apple clang, there is no need to add -lomp
     cc_flags += "-undefined dynamic_lookup -lomp "
+    if os.environ.get('CONDA_PREFIX', None):
+        cc_flags += f" -L{os.path.join(os.environ['CONDA_PREFIX'], 'lib')} "
     if platform.machine() == "arm64":
-        cc_flags += " -L/opt/homebrew/lib "
+        cc_flags += "  -L/opt/homebrew/lib "
 
 opt_flags = ""
 
@@ -1080,7 +1095,7 @@ if os.name == 'nt':
         cc_flags = cc_flags.replace("-lstdc++", "")
         cc_flags = cc_flags.replace("-ldl", "")
         cc_flags += f" -L\"{py3_link_path}\" -lpython3{sys.version_info.minor} "
-        cc_flags += " -EHa -MD "
+        cc_flags += " -EHa -MD -utf-8 "
         import jittor_utils
         if jittor_utils.msvc_path:
             mp = jittor_utils.msvc_path
@@ -1137,7 +1152,10 @@ if os.name == 'nt':
             return cmd
 
 if ' -O' not in cc_flags:
-    opt_flags += " -O2 "
+    if os.environ.get("debug", "0") == "1":
+        opt_flags += " -O0 "
+    else:
+        opt_flags += " -O2 "
     kernel_opt_flags += " -Ofast "
 lto_flags = ""
 if os.environ.get("enable_lto") == "1":
@@ -1174,6 +1192,7 @@ if has_cuda:
             nvcc_flags = nvcc_flags.replace("-fp:", "-Xcompiler -fp:")
             nvcc_flags = nvcc_flags.replace("-EH", "-Xcompiler -EH")
             nvcc_flags = nvcc_flags.replace("-M", "-Xcompiler -M")
+            nvcc_flags = nvcc_flags.replace("-utf", "-Xcompiler -utf")
             nvcc_flags = nvcc_flags.replace("-nologo", "")
             nvcc_flags = nvcc_flags.replace("-std:", "-std=")
             nvcc_flags = nvcc_flags.replace("-Fo:", "-o")
@@ -1209,13 +1228,23 @@ if has_cuda:
         return nvcc_flags
     nvcc_flags = convert_nvcc_flags(nvcc_flags)
 
+# from .acl_compiler import check_acl
+from .extern.acl import acl_compiler
+jit_utils.add_backend(acl_compiler)
+from .extern.rocm import rocm_compiler
+jit_utils.add_backend(rocm_compiler)
+
+for mod in jit_utils.backends:
+    if mod.check():
+        break
+
 # build core
 gen_jit_flags()
 gen_jit_tests()
 op_headers = glob.glob(jittor_path+"/src/ops/**/*op.h", recursive=True)
 jit_src = gen_jit_op_maker(op_headers)
 LOG.vvvv(jit_src)
-with open(os.path.join(cache_path, "gen", "jit_op_maker.h"), 'w') as f:
+with open(os.path.join(cache_path, "gen", "jit_op_maker.h"), 'w', encoding='utf8') as f:
     f.write(jit_src)
 cc_flags += f' -I\"{cache_path}\" -L\"{cache_path}\" -L\"{jit_utils.cache_path}\" '
 # gen pyjt
@@ -1227,12 +1256,14 @@ pyjt_gen_src = pyjt_compiler.compile(cache_path, jittor_path)
 # 3. op_utils
 # 4. other
 files2 = pyjt_gen_src
-ext_args = 'c[cu]' if has_cuda else 'cc'
+ext_args = 'c[cu]' if has_cuda or has_rocm else 'cc'
 files4 = glob.glob(jittor_path+"/src/**/*."+ext_args, recursive=True)
 files4 = [ f[len(jittor_path)+1:] for f in files4 ]
 # files4 = run_cmd('find -L src | grep '+grep_args, jittor_path).splitlines()
 at_beginning = [
     "src/ops/op_utils.cc",
+    "src/ops/op_register.cc",
+    "src/init.cc",
     "src/event_queue.cc",
     "src/mem/allocator/sfrl_allocator.cc",
     "src/mem/allocator.cc",
@@ -1312,7 +1343,8 @@ with jit_utils.import_scope(import_flags):
 flags = core.Flags()
 
 if has_cuda:
-    nvcc_flags = convert_nvcc_flags(cc_flags)
+    nvcc_flags = " " + os.environ.get("nvcc_flags", "") + " "
+    nvcc_flags += convert_nvcc_flags(cc_flags)
     nvcc_version = list(jit_utils.get_int_version(nvcc_path))
     max_arch = 1000
     if nvcc_version < [11,]:

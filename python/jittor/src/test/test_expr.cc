@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -61,6 +61,11 @@ JIT_TEST(expr) {
     // this test can not pass
     // check("***a", "***a", 0, 1);
     check("a((x),(y,z))", "a(x,(y,z))", 0, 1);
+}
+
+JIT_TEST(expr_bug) {
+    // unique_ptr<Expr> expr(new Expr("op0_yp[op0_i]=((float32)(std::tanh((op0_xp[op0_i]))))"));
+    unique_ptr<Expr> expr(new Expr("op0_yp[op0_i]=((float32)std::tanh((op0_xp[op0_i])))"));
 }
 
 JIT_TEST(expr_get_tokens) {

@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: 
 //     Dun Liang <randonlang@gmail.com>. 
 //     Guoye Yang <498731903@qq.com>
@@ -245,8 +245,7 @@ void TraceData::record_node(Node* node, bool record_stack) {
         }
     } else {
     }
-    if (node->__id())
-        data.attrs["__id"] = S(node->__id());
+    data.attrs["__id"] = S(node->id);
     data.attrs["is_var"] = node->is_var() ? "1" : "0";
     data.attrs["name"] = "unname";
     node_data[data.id] = move(data);
@@ -267,7 +266,7 @@ void TraceData::release_node(Node* node) {
         return;
     auto node_id = iter->second;
     id_map.erase(node);
-    if (trace_py_var < 2) {
+    if (trace_py_var < 2 || execute_op_info.size() > 100000) {
         node_data.erase(node_id);
     }
 }
@@ -312,6 +311,7 @@ void TraceData::record_op(Op* op) {
 }
 
 void TraceData::record_execution(Op* op, bool is_fused_op, JK& jk) {
+    if (execute_op_info.size() > 100000) return;
     ExecuteOpInfo& einfo = execute_op_info[execute_op_info_cnt++];
     if (is_fused_op) {
         FusedOp* fop = (FusedOp*)op;

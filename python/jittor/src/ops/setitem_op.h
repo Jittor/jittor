@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor.  All Rights Reserved.
+// Copyright (c) 2022 Jittor.  All Rights Reserved.
 // Maintainers: Dun Liang <randonlang@gmail.com>.
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -11,7 +11,6 @@
 namespace jittor {
 
 struct SetitemOp : Op {
-    static constexpr int _data_inplaced = NodeFlags::_has_vary_input + 1;
     VarSlices vs;
     // map i to related var slice
     NanoVector i_to_vs;
@@ -26,6 +25,7 @@ struct SetitemOp : Op {
     
     const char* name() const override { return "setitem"; }
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;
+    void grads(Var** dout, VarPtr* dins) override;
     void infer_shape() override;
     void compile_optimize(string& src) override;
     void graph_optimize() override;

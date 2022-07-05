@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: 
 #     Guoye Yang <498731903@qq.com>
 #     Dun Liang <randonlang@gmail.com>. 
@@ -46,7 +46,7 @@ def test(shape, op1, op2):
     with jt.log_capture_scope(log_v=0, log_vprefix="fused_op.cc=100") as logs:
         d__ = d.data
     logs = find_log_with_re(logs, 
-        "Jit (fused )?op key (not )?found: \[opkey0:array\[T:float32")
+        "Jit (fused )?op key (not )?found: «opkey0:array«T:float32")
     assert(len(logs)==1), logs
 
     a_ = a.data
@@ -104,7 +104,7 @@ class TestSingleArray(unittest.TestCase):
                 arr1.append(a)
                 arr2.append(jt.array(a))
             x = np.concatenate(tuple(arr1), dim)
-            y = jt.contrib.concat(arr2, dim)
+            y = jt.concat(arr2, dim)
             assert (x==y.data).all()
         check([1], 0, 20)
 

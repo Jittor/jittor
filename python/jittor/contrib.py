@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: 
 #     Guowei Yang <471184555@qq.com>
 #     Guoye Yang <498731903@qq.com>
@@ -28,8 +28,9 @@ def concat(arr, dim):
 
 Example::
 
-        jt.concat([jt.array([[1],[2]]), jt.array([[2],[2]])], dim=1)
-        # return [[1],[2],[2],[2]]
+        >>> jt.concat([jt.array([[1],[2]]), jt.array([[2],[2]])], dim=1)
+        jt.Var([[1 2]
+                [2 2]], dtype=int32)
     '''
     # TODO: low performance when concat lots of vars
     total_dim = 0
@@ -179,7 +180,7 @@ def _setitem_old(x, slices, value):
 # PATCH
 def getitem(x, slices):
     if isinstance(slices, jt.Var) and slices.dtype == "bool":
-        return getitem(x, tuple(slices.where()))
+        return getitem(x, slices.where())
     if isinstance(slices, tuple):
         ss = []
         for s in slices:
@@ -192,7 +193,14 @@ def getitem(x, slices):
 
 def setitem(x, slices, value):
     if isinstance(slices, jt.Var) and slices.dtype == "bool":
-        slices = tuple(slices.where())
+        if slices.shape == x.shape:
+            if isinstance(value, (int, float)):
+                value = jt.array(value).broadcast(x.shape)
+                return x.assign(slices.ternary(value, x))
+            elif isinstance(value, jt.Var) and value.shape == [1,]:
+                value = jt.broadcast(value, x.shape)
+                return x.assign(slices.ternary(value, x))
+        slices = slices.where()
     elif isinstance(slices, tuple):
         ss = []
         for s in slices:
@@ -223,6 +231,7 @@ def _merge_dtypes(dtypes):
     dtype = names[s]+("" if e ==-1 else dbytes[e])
     return dtype 
 
+@jt.flag_scope(amp_reg=4) # _custom_flag
 def concat(arr, dim=0):
     '''Concat Operator can concat a list of jt Var at a specfic dimension.
     
@@ -235,7 +244,7 @@ def concat(arr, dim=0):
 Example::
 
         jt.concat([jt.array([[1],[2]]), jt.array([[2],[2]])], dim=1)
-        # return [[1],[2],[2],[2]]
+        # return jt.Var([[1,2],[2,2]],dtype=int32)
     '''
     if not isinstance(arr, Sequence):
         raise TypeError("concat arr needs to be a tuple or list")

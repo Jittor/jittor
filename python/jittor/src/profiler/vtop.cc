@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: 
 //     Guoye Yang <498731903@qq.com>
 //     Dun Liang <randonlang@gmail.com>. 
@@ -33,7 +33,7 @@ typedef struct {
 int pagemap_get_entry(PagemapEntry* entry, int pagemap_fd, uintptr_t vaddr)
 {
     size_t nread;
-    ssize_t ret;
+    int64_t ret;
     uint64_t data;
     uintptr_t vpn;
 

@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers:
 #   Dun Liang <randonlang@gmail.com>.
 #   Wenyang Zhou <576825820@qq.com>
@@ -12,6 +12,78 @@ import jittor as jt
 import numpy as np
 import math
 from collections.abc import Sequence,Iterable
+
+def knn(unknown, known, k):
+    ''' find k neighbors for unknown array from known array
+
+    Args:
+        
+        unknown (var): shape [b, n, c]
+        known (var): shape [b, m, c]
+        k (int)
+
+    '''
+    b, n, c = unknown.shape
+    _, m, _ = known.shape
+    dists2 = jt.empty((b, n, k), dtype="float")
+    idx = jt.empty((b, n, k), dtype="int")
+    src = '''
+__inline_static__
+@python.jittor.auto_parallel(2, block_num=256)
+void knn_kernel(int b, int batch_index, int n, int index, int m,
+                        const float *__restrict__ unknown,
+                        const float *__restrict__ known,
+                        float *__restrict__ dist2,
+                        int *__restrict__ idx) {
+
+#define K %s
+    unknown += batch_index * n * 3;
+    known += batch_index * m * 3;
+    dist2 += batch_index * n * K;
+    idx += batch_index * n * K;
+    int j = index;
+    {
+        float ux = unknown[j * 3 + 0];
+        float uy = unknown[j * 3 + 1];
+        float uz = unknown[j * 3 + 2];
+
+        float tmp_dist[K];
+        int tmp_idx[K];
+        #pragma unroll
+        for (int i=0; i<K; i++) tmp_dist[i] = 1e30;
+        for (int k = 0; k < m; ++k) {
+            float x = known[k * 3 + 0];
+            float y = known[k * 3 + 1];
+            float z = known[k * 3 + 2];
+            float d = (ux - x) * (ux - x) + (uy - y) * (uy - y) + (uz - z) * (uz - z);
+            
+            int first = -1;
+            #pragma unroll
+            for (int i=0; i<K; i++)
+                if (first == -1 && d<tmp_dist[i])
+                    first = i;
+            if (first == -1) continue;
+            #pragma unroll
+            for (int i=0; i<K; i++)
+                if (K-1-i > first) {
+                    tmp_dist[K-1-i] = tmp_dist[K-2-i];
+                    tmp_idx[K-1-i] = tmp_idx[K-2-i];
+                }
+            tmp_dist[first] = d;
+            tmp_idx[first] = k;
+        }
+        #pragma unroll
+        for (int i=0; i<K; i++) {
+            dist2[j * K + i] = tmp_dist[i];
+            idx[j * K + i] = tmp_idx[i];
+        }
+    }
+}
+    knn_kernel(in0->shape[0], 0, in0->shape[1], 0, in1->shape[1], in0_p, in1_p, out0_p, out1_p);
+    ''' % k
+    return jt.code([unknown, known], [dists2, idx],
+    cpu_src=src,
+    cuda_src=src)
 
 def index_add_(x, dim, index, tensor):
     """ Take out each index subscript vector of the dim dimension and add the corresponding tensor variable.
@@ -56,11 +128,11 @@ def __iter__(x):
     return result.__iter__()
 jt.Var.__iter__ = __iter__
 
-def all(x, dim=[]):
+def all(x, dim=()):
     return x.all_(dim).bool()
 jt.Var.all = all
 
-def any(x,dim):
+def any(x,dim=()):
     return x.any_(dim).bool()
 jt.Var.any = any
     
@@ -257,7 +329,7 @@ def stack(x, dim=0):
         return x[0].unsqueeze(dim)
 
     res = [x_.unsqueeze(dim) for x_ in x]
-    return jt.contrib.concat(res, dim=dim)
+    return jt.concat(res, dim=dim)
 jt.Var.stack = stack
 
 def flip(x, dim=0):
@@ -342,7 +414,7 @@ def cross(input, other, dim=-1):
     a1 = input[(slice(None,),)*dim+(1,)]*other[(slice(None,),)*dim+(2,)]-input[(slice(None,),)*dim+(2,)]*other[(slice(None,),)*dim+(1,)]
     a2 = input[(slice(None,),)*dim+(2,)]*other[(slice(None,),)*dim+(0,)]-input[(slice(None,),)*dim+(0,)]*other[(slice(None,),)*dim+(2,)]
     a3 = input[(slice(None,),)*dim+(0,)]*other[(slice(None,),)*dim+(1,)]-input[(slice(None,),)*dim+(1,)]*other[(slice(None,),)*dim+(0,)]
-    return jt.contrib.concat([a1.unsqueeze(dim),a2.unsqueeze(dim),a3.unsqueeze(dim)], dim=dim)
+    return jt.concat([a1.unsqueeze(dim),a2.unsqueeze(dim),a3.unsqueeze(dim)], dim=dim)
 jt.Var.cross = cross
 
 def normalize(input, p=2, dim=1, eps=1e-30):
@@ -465,7 +537,7 @@ def unique(x):
     _,x = jt.argsort(x)
     index,= jt.index((x.shape[0],))
     y = x[1:][x[index[1:]] != x[index[:-1]]]
-    x = jt.contrib.concat([x[:1],y],dim=0)
+    x = jt.concat([x[:1],y],dim=0)
     return x
 
 jt.Var.unique = unique
@@ -488,16 +560,9 @@ def arctan2(y,x):
     angle = jt.zeros(x.shape,dtype=x.dtype)
     x = (x!=0.0).ternary(x, x+1e-30)
     angle = (y/x).arctan()
-        
-    mask = (y<0) & (x<0)
-    if angle[mask].numel()>0:
-        angle[mask] -= np.pi
-        
-    mask = (y>=0) &(x<0)
-    if angle[mask].numel()>0:
-        angle[mask] +=np.pi
+    mask = y<0 | ((y==0) & (x<0))
+    angle = angle + mask*np.pi
     return angle
-
 
 
 def nonzero(x):
@@ -508,7 +573,7 @@ def nonzero(x):
     x = [xx.unsqueeze(1) for xx in x]
     if len(x)<2:
         return x[0]
-    x = jt.contrib.concat(x,dim=1)
+    x = jt.concat(x,dim=1)
     return x
 
 jt.Var.nonzero = nonzero
@@ -553,7 +618,7 @@ def meshgrid(*tensors):
     return grids
 
 
-def split(d,split_size,dim):
+def split(d, split_size, dim=0):
     r'''
     Splits the tensor into chunks. Each chunk is a view of the original tensor.
 
@@ -582,7 +647,9 @@ def split(d,split_size,dim):
         
     ans = []
     last = 0
-    for i in split_size:
+    s_last = len(split_size)-1
+    gopt_disable = jt.flags.gopt_disable
+    for j, i in enumerate(split_size):
         if i==0:
             shape = list(d.shape)
             shape[dim]=0
@@ -591,7 +658,11 @@ def split(d,split_size,dim):
             continue
 
         ss = (slice(None),)*dim+(slice(last,last+i),)
-        new_d = d[ss]
+        if gopt_disable:
+            new_d = d.getitem(ss)
+        else:
+            new_d, d = d.getitem(ss, int(j==s_last))
+
         last +=i
         ans.append(new_d)
     return tuple(ans)
@@ -661,31 +732,36 @@ def _prod(x,dim=0):
 
 
 def numpy_cumsum(x, dim=None):
+    ''' cumsum implemented with numpy or cupy.
+    
+        This function should not be called directly. Instead, jittor.misc.cumsum is recommended.
+    '''
     def cumsum_forward(np, data):
-        dim = data['inputs'][1].item()
         a = data['inputs'][0]
         b = data['outputs'][0]
         np.cumsum(a, axis=dim, out=b)
 
     def cumsum_backward(np, data):
-        dim = data['inputs'][1].item()
         dout = data['dout']
         out = data['outputs'][0]
-        np.cumsum(dout[..., ::-1], axis=dim, out=out)
-        np.copyto(out, out[..., ::-1])
+        np.cumsum(np.flip(dout, dim), axis=dim, out=out)
+        np.copyto(out, np.flip(out, dim))
     if (dim == None):
         dim = -1
     assert(dim >= -1 and dim < len(x.shape))
-    dim_var = jt.array([dim],dtype=int)
-    return jt.numpy_code(x.shape, x.dtype, [x, dim_var.detach()], cumsum_forward, [cumsum_backward])
+    return jt.numpy_code(x.shape, x.dtype, [x], cumsum_forward, [cumsum_backward])
 
 def cub_cumsum(x, dim=None):
+    ''' cumsum implemented with CUB.
+    
+        This function should not be called directly. Instead, jittor.misc.cumsum is recommended.
+    '''
     if (dim == None):
         dim = -1
     assert(dim >= -1 and dim < len(x.shape))
-    shape = x.shape
+    shape = list(x.shape)
     if (dim != -1 and dim != len(shape) - 1):
-        order = range(len(shape))
+        order = list(range(len(shape)))
         order[dim], order[-1] = order[-1], order[dim]
         shape[dim], shape[-1] = shape[-1], shape[dim]
         x = x.permute(order)
@@ -712,7 +788,7 @@ def cumsum(x, dim=None):
     if (dim == None):
         dim = -1
     assert(dim >= -1 and dim < len(x.shape))
-    if jt.has_cuda:
+    if jt.flags.use_cuda:
         return cub_cumsum(x, dim)
     else:
         return numpy_cumsum(x, dim)
@@ -802,6 +878,10 @@ def print_tree(now, max_memory_size, prefix1, prefix2, build_by):
     tab = '   '
     out += prefix1+now['name']+'('+now['type']+')\n'
     out += prefix2+'['+format_size(now['size'])+'; '+format(now['size']/max_memory_size*100, '.2f')+'%; cnt:'+format_size(now['cnt'],'') + ']\n'
+    if len(now['children']) == 0 and len(now['vinfo']):
+        out += prefix2+now['vinfo'][0]
+        if len(now['vinfo']) > 1: out += "..."
+        out += '\n'
     if (build_by == 0):
         for p in now['path']:
             out += prefix2+p+'\n'
@@ -867,7 +947,8 @@ Output::
     vars_ = vars_[1:]
     for v_ in vars_:
         v__ = v_.split(div2)
-        var = {'size':int(v__[1]), 'stack':[], 'cnt':1}
+        vinfo = v__[0].split("{")[0]
+        var = {'size':int(v__[1]), 'stack':[], 'cnt':1, "vinfo":vinfo}
         v__ = v__[2:-1]
         for s_ in v__:
             s__ = s_.split(div3)
@@ -875,7 +956,7 @@ Output::
             var['stack'].append(s)
         vars.append(var)
     if (build_by == 0): # build tree by name
-        tree = {'name':'root', "children":[], 'size':0, 'cnt':1, 'path':[], 'type':''}
+        tree = {'name':'root', "children":[], 'size':0, 'cnt':1, 'path':[], 'type':'', 'vinfo':[]}
 
         def find_child(now, key):
             for c in now['children']:
@@ -886,6 +967,7 @@ Output::
             now = tree
             now['size'] += v['size']
             now['cnt'] += v['cnt']
+            now['vinfo'].append(v['vinfo'])
             for s in v['stack']:
                 ch = find_child(now, s['name'])
                 if (ch is not None):
@@ -895,12 +977,13 @@ Output::
                     now = ch
                     now['size'] += v['size']
                     now['cnt'] += v['cnt']
+                    now['vinfo'].append(v['vinfo'])
                 else:
-                    now_ = {'name':s['name'], "children":[], 'size':v['size'], 'cnt':v['cnt'], 'path':[s['path']], 'type':s['type']}
+                    now_ = {'name':s['name'], "children":[], 'size':v['size'], 'cnt':v['cnt'], 'path':[s['path']], 'type':s['type'], 'vinfo':[v['vinfo']]}
                     now['children'].append(now_)
                     now = now_
     elif (build_by == 1): # build tree by path
-        tree = {'name':'root', "children":[], 'size':0, 'cnt':0, 'path':'_root_', 'type':''}
+        tree = {'name':'root', "children":[], 'size':0, 'cnt':0, 'path':'_root_', 'type':'', 'vinfo':[]}
 
         def find_child(now, key):
             for c in now['children']:
@@ -911,14 +994,16 @@ Output::
             now = tree
             now['size'] += v['size']
             now['cnt'] += v['cnt']
+            now['vinfo'].append(v['vinfo'])
             for s in v['stack']:
                 ch = find_child(now, s['path'])
                 if (ch is not None):
                     now = ch
                     now['size'] += v['size']
                     now['cnt'] += v['cnt']
+                    now['vinfo'].append(v['vinfo'])
                 else:
-                    now_ = {'name':s['name'], "children":[], 'size':v['size'],  'cnt':v['cnt'], 'path':s['path'], 'type':s['type']}
+                    now_ = {'name':s['name'], "children":[], 'size':v['size'],  'cnt':v['cnt'], 'path':s['path'], 'type':s['type'], 'vinfo':[v['vinfo']]}
                     now['children'].append(now_)
                     now = now_
     else:
@@ -945,7 +1030,7 @@ def python_pass_wrapper(mod_func, args, kw):
     args = ",".join(args)
     return eval(f"func({args})")
 
-def auto_parallel(n, src, **kw):
+def auto_parallel(n, src, block_num=1024, **kw):
     """
     auto parallel(CPU and GPU) n-d for loop function like below:
 
@@ -1017,11 +1102,11 @@ __global__ static void {func_name}_entry({entry_func_args_def}) {{
 
 inline static void {func_name}({",".join(pargs+oargs)}) {{
 #ifdef JIT_cuda
-    int thread_num = 256*1024;
+    int thread_num = 256*{block_num};
     {xn.join([f"int tn{i} = NanoVector::get_nbits(std::min(thread_num, {pnargs2[i]})) - 2;thread_num >>= tn{i};" for i in reversed(range(n))])}
     thread_num = 1<<({"+".join([f"tn{i}" for i in range(n)])});
-    int p1 = std::max(thread_num/1024, 1);
-    int p2 = std::min(thread_num, 1024);
+    int p1 = std::max(thread_num/{block_num}, 1);
+    int p2 = std::min(thread_num, {block_num});
     {func_name}_entry<<<p1,p2>>>({entry_func_args});
 #else
     {xn.join([f"for (int i{i}=0; i{i}<{pnargs2[i]}; i{i}++)" for i in range(n)])}
@@ -1032,7 +1117,7 @@ inline static void {func_name}({",".join(pargs+oargs)}) {{
     return new_src
 
 
-def cumprod(a, dim):
+def numpy_cumprod(a, dim):
     class CumprodFunc(jt.Function):
         def forward_code(self, np, data):
             a = data["inputs"][0]
@@ -1657,3 +1742,28 @@ class CTCLoss(jt.Module):
 
     def execute(self, log_probs, targets, input_lengths, target_lengths):
         return ctc_loss(log_probs, targets, input_lengths, target_lengths, self.blank, self.reduction, self.zero_infinity)
+
+def _simple_for(x, func):
+    with jt.flag_scope(compile_options={"FLAGS: -O2 ":1}):
+        src = f'''
+        __inline_static__
+        @python.jittor.auto_parallel(1)
+        void kernel(int n0, int i0, in0_type* _x, out0_type* y) {{
+            using namespace std;
+            auto x = _x[i0];
+            y[i0] = {func};
+        }}
+        kernel(in0->num, 0, in0_p, out0_p);
+        '''
+        return jt.code(x.shape, "bool", [x], cpu_src=src, cuda_src=src)
+
+def isnan(x): return _simple_for(x, "isnan(x)")
+jt.Var.isnan = isnan
+def isfinite(x): return _simple_for(x, "!isnan(x) && !isinf(x)")
+jt.Var.isfinite = isfinite
+def isinf(x): return _simple_for(x, "isinf(x)")
+jt.Var.isinf = isinf
+def isneginf(x): return _simple_for(x, "x<0 && isinf(x)")
+jt.Var.isneginf = isneginf
+def isposinf(x): return _simple_for(x, "x>0 && isinf(x)")
+jt.Var.isposinf = isposinf

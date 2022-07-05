@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -89,15 +89,18 @@ static unordered_set<string> unary_ops = {
     "erfinv"
 };
 
-static unordered_set<string> unary_float_ops = {
+static unordered_set<string> float_ops = {
     "log",
     "exp",
     "sqrt",
+    "mean",
+    "divide",
 };
-static unordered_set<string> unary_int_ops = {
+static unordered_set<string> int_ops = {
     "round_int",
     "floor_int",
     "ceil_int",
+    "floor_divide",
 };
 
 static unordered_set<string> binary_ops = {
@@ -127,6 +130,31 @@ static unordered_set<string> binary_ops = {
     "mean",
 };
 
+
+static unordered_set<string> white_ops = {
+    // "log",
+    "exp",
+    "pow",
+};
+
+static unordered_set<string> no_need_back_in = {
+    "void",
+    "cast",
+    "negative",
+    "add",
+    "subtract",
+    "mean",
+};
+
+static unordered_set<string> no_need_back_out = {
+    "void",
+    "cast",
+    "negative",
+    "add",
+    "subtract",
+    "multiply",
+};
+
 #define DEFINE_NS(T) NanoString ns_##T;
 FOR_ALL_NS(DEFINE_NS);
 
@@ -135,6 +163,9 @@ char __ns_to_string[ns_max_size*ns_max_len];
 int __ns_len[ns_max_size];
 
 static void init_ns() {
+    dsize_map["float16"] = 1;
+    is_float_map["float16"] = 1;
+    is_unsigned["float16"] = 0;
     NanoString::ns_t i=0;
     auto func = [&](const char* name, NanoString& ns) {
         ns.set(NanoString::_index, i++, NanoString::_index_nbits);
@@ -149,13 +180,18 @@ static void init_ns() {
         if (unary_ops.count(name)) {
             ns.set(NanoString::_type, NanoString::_unary, NanoString::_type_nbits);
             ns.set(NanoString::_bool, is_bool.count(name));
-            ns.set(NanoString::_int, unary_int_ops.count(name));
-            ns.set(NanoString::_float, unary_float_ops.count(name));
+            ns.set(NanoString::_int, int_ops.count(name));
+            ns.set(NanoString::_float, float_ops.count(name));
         } else
         if (binary_ops.count(name)) {
             ns.set(NanoString::_type, NanoString::_binary, NanoString::_type_nbits);
             ns.set(NanoString::_bool, is_bool.count(name));
+            ns.set(NanoString::_int, int_ops.count(name));
+            ns.set(NanoString::_float, float_ops.count(name));
         }
+        ns.set(NanoString::_white_list, white_ops.count(name));
+        ns.set(NanoString::_no_need_back_in, no_need_back_in.count(name));
+        ns.set(NanoString::_no_need_back_out, no_need_back_out.count(name));
         __string_to_ns[name] = ns;
         auto name2 = ns.to_cstring();
         int len=0;
@@ -171,6 +207,7 @@ static void init_ns() {
     __string_to_ns["sum"] = ns_add;
     __string_to_ns["min"] = ns_minimum;
     __string_to_ns["max"] = ns_maximum;
+    __string_to_ns["half"] = ns_float16;
     __string_to_ns["float"] = ns_float32;
     __string_to_ns["double"] = ns_float64;
     __string_to_ns["int"] = ns_int32;

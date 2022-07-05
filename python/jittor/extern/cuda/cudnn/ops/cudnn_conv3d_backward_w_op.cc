@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: 
 //     Dun Liang <randonlang@gmail.com>
 //     Guowei Yang <471184555@qq.com>
@@ -18,6 +18,8 @@ using namespace std;
 
 namespace jittor {
 
+extern int use_tensorcore;
+
 #pragma GCC diagnostic ignored "-Wunused-variable"
 
 #ifndef JIT
@@ -27,6 +29,9 @@ CudnnConv3dBackwardWOp::CudnnConv3dBackwardWOp(Var* x, Var* dy, int kd, int kh, 
       xformat(move(xformat)) {
     flags.set(NodeFlags::_cuda, 1);
     flags.set(NodeFlags::_cpu, 0);
+    flags.set(NodeFlags::_manual_set_vnbb);
+    x->flags.set(NodeFlags::_needed_by_backward);
+    dy->flags.set(NodeFlags::_needed_by_backward);
     dw = create_output(nullptr, dtype_infer(dy->ns, x->ns));
 }
 
@@ -50,10 +55,9 @@ void CudnnConv3dBackwardWOp::infer_shape() {
 }
 
 void CudnnConv3dBackwardWOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype();
-    jk << _CS("][Ty:") << dy->dtype();
-    jk << _CS("][Tw:") << dw->dtype();
-    jk << ']';
+    jk << "«Tx:" << x->dtype();
+    jk << "«Ty:" << dy->dtype();
+    jk << "«Tw:" << dw->dtype();
 }
 
 static auto make_conv3d = get_op_info("cudnn_conv3d")
@@ -158,7 +162,9 @@ void CudnnConv3dBackwardWOp::jit_run() {
     ));
 
     // using tensor core
-    // checkCudaErrors( cudnnSetConvolutionMathType(cudnnConvDesc, CUDNN_TENSOR_OP_MATH) );
+    if(use_tensorcore){
+        checkCudaErrors( cudnnSetConvolutionMathType(cudnnConvDesc, CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION) );
+    }
 
 
     int sy[] = {0,0,0,0,1};

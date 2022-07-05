@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -16,12 +16,12 @@
 
 namespace jittor {
 
-#if defined(__clang__)
+#if __cplusplus < 201400L || defined(IS_ACL)
+using string_view = string;
+#elif defined(__clang__)
 using std::string_view;
 #elif defined(__GNUC__)
 using std::experimental::string_view;
-#elif __cplusplus < 201400L
-using string_view = string;
 #else
 using std::string_view;
 #endif

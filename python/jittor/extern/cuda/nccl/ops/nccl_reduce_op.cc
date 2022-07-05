@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 
+// Copyright (c) 2022 Jittor. All Rights Reserved.  
 //     Guoye Yang <498731903@qq.com>. 
 //     Dun Liang <randonlang@gmail.com>. 
 // All Rights Reserved.
@@ -35,7 +35,7 @@ VarPtr NcclReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 }
 
 void NcclReduceOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype() << ']';
+    jk << "«Tx:" << x->dtype();
 }
 
 #else // JIT

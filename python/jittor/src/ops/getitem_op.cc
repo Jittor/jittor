@@ -1,11 +1,12 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved.
+// Copyright (c) 2022 Jittor. All Rights Reserved.
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include <cmath>
 #include "var.h"
+#include "executor.h"
 #include "ops/getitem_op.h"
 #include "ops/op_register.h"
 #ifdef JIT_cuda
@@ -27,6 +28,8 @@ namespace jittor {
 
 static auto make_number = get_op_info("number")
     .get_constructor<VarPtr, float, Var*>();
+static auto make_empty = get_op_info("empty")
+    .get_constructor<VarPtr, NanoVector, NanoString>();
 static auto make_setitem = get_op_info("setitem")
     .get_constructor<VarPtr, Var*, VarSlices&&, Var*, NanoString>();
 
@@ -35,7 +38,28 @@ GetitemOp::GetitemOp(Var* x, VarSlices&& slices)
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
     flags.set(NodeFlags::_has_gopt);
+    flags.set(NodeFlags::_manual_set_vnbb);
+    for (int i=0; i<vs.n; i++)
+        if (vs.slices[i].is_var())
+            vs.slices[i].var->flags.set(NodeFlags::_needed_by_backward);
     create_output(nullptr, x->dtype());
+}
+
+GetitemOp::GetitemOp(Var* x, VarSlices&& slices, int _) 
+    : vs(move(slices)) {
+    flags.set(NodeFlags::_cpu);
+    flags.set(NodeFlags::_cuda);
+    flags.set(NodeFlags::_has_gopt);
+    flags.set(NodeFlags::_custom_flag);
+    flags.set(NodeFlags::_grads);
+    flags.set(NodeFlags::_manual_set_vnbb);
+    for (int i=0; i<vs.n; i++)
+        if (vs.slices[i].is_var())
+            vs.slices[i].var->flags.set(NodeFlags::_needed_by_backward);
+    create_output(nullptr, x->dtype());
+    auto out2 = create_output(nullptr, x->dtype());
+    out2->share_with(x);
+    ns.data = _;
 }
 
 void GetitemOp::infer_slices(
@@ -84,11 +108,11 @@ void GetitemOp::infer_slices(
             for (int j=0; j<niv; j++) {
                 auto iv_shape_j = iv_shape[niv-j-1];
                 auto& out_shape_j = out_shape[first_oid_of_var+var_dim-j-1];
+                CHECK(out_shape_j == iv_shape_j || out_shape_j == 1 || iv_shape_j == 1) << "Shape not match " >> out_shape_j >> "!="
+                    >> iv_shape_j << "data shape:" << in_shape <<
+                    "slice shape:" << iv_shape;
                 if (out_shape_j == 1)
                     out_shape_j = iv_shape_j;
-                else
-                    ASSERT(out_shape_j == iv_shape_j || out_shape_j < 0 || iv_shape_j < 0)
-                        << out_shape_j << iv_shape_j << out_shape;
             }
         } else
         if (s.is_ellipsis()) {
@@ -377,6 +401,10 @@ void GetitemOp::infer_shape() {
     this->i_to_vs = i_to_vs.to_nano_vector();
     this->i_to_o = i_to_o.to_nano_vector();
     this->o_shape = o_shape.to_nano_vector();
+    if (outputs().size() > 1) {
+        auto out2 = output(1);
+        out2->set_shape(in->shape);
+    }
 
     LOGV(999) << "\ni_to_vs:" << i_to_vs
         << "\ni_to_o:" << i_to_o
@@ -396,29 +424,46 @@ VarPtr GetitemOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     return make_setitem(zeros, VarSlices(vs, true), dout, ns_void);
 }
 
+void GetitemOp::grads(Var** dout, VarPtr* dins) {
+    VarPtr x = dout[1];
+    VarPtr y = dout[0];
+    if (!x) {
+        auto in = inputs().front();
+        // ns.data represents this is the last split var
+        if (ns.data)
+            x = make_empty(in->shape, in->dtype());
+        else
+            x = make_number(0, in);
+    }
+    if (!y) {
+        y = make_number(0, outputs().front());
+    }
+    dins[0] = make_setitem(x, VarSlices(vs, true), y, ns_void);
+}
+
 void GetitemOp::jit_prepare(JK& jk) {
     auto in = inputs().front();
     int idim = i_to_vs.size();
-    jk << _CS("[Ti:") << in->dtype();
-    jk << _CS("][IDIM=") << JK::hex1(i_to_vs.size());
-    jk << _CS("][ODIM=") << JK::hex1(o_shape.size());
+    jk << "«Ti:" << in->dtype();
+    jk << "«IDIM=" << JK::hex1(i_to_vs.size());
+    jk << "«ODIM=" << JK::hex1(o_shape.size());
     if (first_oid_of_var>=0) {
-        jk << _CS("][FOV=") << JK::hex1(first_oid_of_var);
-        jk << _CS("][VD=") << JK::hex1(var_dim);
+        jk << "«FOV=" << JK::hex1(first_oid_of_var);
+        jk << "«VD=" << JK::hex1(var_dim);
     }
     for (int i=0; i<idim; i++) {
         auto iv = i_to_vs[i];
         auto io = i_to_o[i];
-        jk << _CS("][IV") << JK::hex1(i) << ':' << JK::shex1(iv);
-        jk << _CS("][IO") << JK::hex1(i) << ':' << JK::shex1(io);
+        jk << "«IV" << JK::hex1(i) << ':' << JK::shex1(iv);
+        jk << "«IO" << JK::hex1(i) << ':' << JK::shex1(io);
         auto& v = vs.slices[iv];
         if (iv>=0 && io==-1) {
             if (v.is_int()) {
-                jk << _CS("][VS") << JK::hex1(i) << _CS(":-1");
+                jk << "«VS" << JK::hex1(i) << ":-1";
             } else
             if (v.is_str()) {
-                jk << _CS("][VS") << JK::hex1(i) << _CS(":-5");
-                jk << _CS("][VSS") << JK::hex1(i) << _CS(":") << v.get_str();
+                jk << "«VS" << JK::hex1(i) << ":-5";
+                jk << "«VSS" << JK::hex1(i) << ":" << v.get_str();
             } else {
                 ASSERT(v.is_var());
                 auto var = v.var;
@@ -430,13 +475,13 @@ void GetitemOp::jit_prepare(JK& jk) {
                     if (vshape[j] == o_shape[k])
                         vsmask |= 1<<(j+var_dim-vdim);
                 }
-                jk << _CS("][VS") << JK::hex1(i) << '=' << JK::hex(vsmask);
-                jk << _CS("][VST") << JK::hex1(i) << ':' << var->dtype();
+                jk << "«VS" << JK::hex1(i) << '=' << JK::hex(vsmask);
+                jk << "«VST" << JK::hex1(i) << ':' << var->dtype();
             }
         } else
         if (iv>=0 && io>=0) {
             ASSERT(v.is_slice());
-            jk << _CS("][VS") << JK::hex1(i) << ':';
+            jk << "«VS" << JK::hex1(i) << ':';
             if (std::abs(v.slice.step) <= 1)
                 jk << JK::shex1(v.slice.step);
             else
@@ -450,11 +495,10 @@ void GetitemOp::jit_prepare(JK& jk) {
         int tdims[6];
         cuda_loop_schedule(o_shape, masks, tdims);
         for (int i=0; i<no; i++) {
-            jk << _CS("][LO") << JK::hex1(i) << '=' << JK::hex(masks[i]);
+            jk << "«LO" << JK::hex1(i) << '=' << JK::hex(masks[i]);
         }
     }
     #endif
-    jk << ']';
 }
 
 #else // JIT
@@ -465,7 +509,8 @@ void GetitemOp::jit_run() {
     auto in = inputs().front();
     auto out = outputs().front();
     if (out->num == 0) return;
-    if (in->allocator == out->allocator &&
+    if (ns.get(GetitemOp::_inplace) &&
+        in->allocator == out->allocator &&
         in->allocation == out->allocation)
         return;
 

@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -18,13 +18,13 @@ struct Var : Node {
     NanoVector shape;
     cstr name;
     fast_shared_ptr<loop_options_t> loop_options;
-    static int64_t number_of_lived_vars;
+    static int64 number_of_lived_vars;
 
     // this var will be generated after alloc.
     void* mem_ptr = nullptr;
     Allocator* allocator = nullptr;
     size_t allocation;
-    int64_t size, num;
+    int64 size, num;
     inline bool is_float() const { CHECK_EXIST; return ns.is_float(); }
     inline int dsize() const { CHECK_EXIST; return ns.dsize(); }
     inline NanoString dtype() const { CHECK_EXIST; return ns; }
@@ -40,7 +40,7 @@ struct Var : Node {
     Var(NanoVector shape, NanoString dtype);
 
     string to_string();
-    int64_t numel();
+    int64 numel();
     void set_shape(NanoVector shape);
     bool alloc(Allocator* allocator);
     inline void share_with(Var* x, size_t offset = 0) { CHECK_EXIST; allocator = (Allocator*)x; allocation = offset; }
@@ -77,8 +77,11 @@ struct VarPtr {
     
     inline
     void free_liveness() {
-        if (ptr)
-            ptr->release_both_liveness();
+        if (ptr) {
+            auto tmp = ptr;
+            ptr = nullptr;
+            tmp->release_both_liveness();
+        }
     }
     
     inline Var* operator->() { return ptr; }
@@ -91,6 +94,8 @@ struct VarPtr {
         other.ptr = nullptr;
         return *this;
     }
+
+    void set_stop_grad(bool stop_grad);
 };
 
 std::ostream& operator<<(std::ostream& os, const Var& var);

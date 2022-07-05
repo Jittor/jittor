@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 
+// Copyright (c) 2022 Jittor. All Rights Reserved.  
 //     Guowei Yang <471184555@qq.com>. 
 //     Dun Liang <randonlang@gmail.com>. 
 // All Rights Reserved.
@@ -49,7 +49,7 @@ VarPtr MpiBroadcastOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 }
 
 void MpiBroadcastOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype() << ']';
+    jk << "«Tx:" << x->dtype();
 }
 
 #else // JIT

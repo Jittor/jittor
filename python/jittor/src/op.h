@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -15,7 +15,7 @@ namespace jittor {
 enum OpType {other=0, element=1, broadcast=2, reduce=3};
 struct Op : Node {
     vector<VarPtr> outputs_holder;
-    static int64_t number_of_lived_ops;
+    static int64 number_of_lived_ops;
     
     inline Caster<Var*, Node::input_t> inputs() { CHECK_EXIST; return &_inputs; }
     inline Caster<Var*, Node::output_t> outputs() { CHECK_EXIST; return &_outputs; }

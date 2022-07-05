@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
@@ -15,8 +15,8 @@ def find_jittor_path():
     return path[:-len(suffix)] + ".."
     
 def find_cache_path():
-    from pathlib import Path
-    path = str(Path.home())
+    import jittor_utils as jit_utils
+    path = jit_utils.home()
     dirs = [".cache", "jittor"]
     for d in dirs:
         path = os.path.join(path, d)

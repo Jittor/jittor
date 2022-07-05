@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -10,6 +10,7 @@
 #include "op.h"
 #include "graph.h"
 #include "ops/op_register.h"
+#include "var_holder.h"
 
 namespace jittor {
 
@@ -39,11 +40,24 @@ template<class T> struct StackIniter {
 #define STACK_ALLOC2(T, a, n) T a[n]
 #endif
 
+struct AmpGradGuard {
+    int amp_reg_bk;
+    AmpGradGuard(Op* op) {
+        amp_reg_bk = amp_reg;
+        amp_reg |= (op->flags.flags >> NodeFlags::_prefer_32);
+    }
+
+    ~AmpGradGuard() {
+        amp_reg = amp_reg_bk;
+    }
+};
+
 VarPtr make_grad(Op* op, Var* out, Var* dout, Var* x, int x_index) {
     if (dout == nullptr) return nullptr;
     if (x_index<0) return nullptr;
     LOGvvvv << "Make grad op:" >> op->name() << "inputs:" >> op->inputs()
         << "out:" >> out << "dout:" >> dout << "x:" >> x << "xid:" >> x_index;
+    AmpGradGuard agg(op);
     auto dx = op->grad(out, dout, x, x_index);
     if (x->loop_options)
         dx->loop_options = x->loop_options;
@@ -63,7 +77,7 @@ void warn_grad_break(int i, Var* v) {
     LOGw << "grads[">>i>>"] '">> v->name>>"' doesn't have gradient. It will be set to zero:" << v;
 }
 
-vector<VarPtr> grad(Var* loss, vector<Var*> targets) {
+vector<VarPtr> grad(Var* loss, vector<Var*> targets, bool retain_graph) {
     LOGvv << "loss:" >> loss << "targets:" >> targets;
     CHECK(loss->is_float()) << "Loss should be float";
     for (Var* var : targets)
@@ -182,7 +196,10 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets) {
                         douts[i] = nullptr;
                 }
                 trace_grad_op = op;
-                op->grads(douts, dins);
+                {
+                    AmpGradGuard agg(op);
+                    op->grads(douts, dins);
+                }
                 // dump "for (Var* in : op->inputs())"
                 for (int i=0; i<n_i; i++,j++) {
                     auto id = id_buffer[j].second;
@@ -242,6 +259,20 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets) {
             grad = make_number(0.f, var);
             assign_attrs(grad.ptr, var);
         }
+    }
+    if (!retain_graph) {
+        auto t = ++Node::tflag_count;
+        for (auto& vh : hold_vars)
+            if (vh->var->tflag != t) {
+                vh->var->tflag = t;
+            }
+        SetupFreeBuffer setup_free_buffer;
+        for (int i=int(gvars.size())-1; i>=0; i--)
+            if (gvars[i]->tflag != t && gvars[i]->backward_liveness)
+                gvars[i]->set_stop_grad();
+        for (int i=0; i<grads.size(); i++)
+            if (grads[i])
+                grads[i]->set_stop_grad();
     }
     return results;
 }

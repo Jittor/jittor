@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
@@ -63,6 +63,7 @@ class TestExample(unittest.TestCase):
         
         model = Model(input_size=1)
         ps = model.parameters()
+        for p in reversed(ps): p.sync(0,0)
         opt = Optimizer(ps, lr)
         all_loss = 0
 

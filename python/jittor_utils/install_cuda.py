@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
@@ -41,10 +41,12 @@ def get_cuda_driver():
         return None
 
 def has_installation():
-    jtcuda_path = os.path.join(pathlib.Path.home(), ".cache", "jittor", "jtcuda")
+    jtcuda_path = os.path.join(jit_utils.home(), ".cache", "jittor", "jtcuda")
     return os.path.isdir(jtcuda_path)
 
 def install_cuda():
+    if "nvcc_path" in os.environ and os.environ["nvcc_path"] == "":
+        return None
     cuda_driver_version = get_cuda_driver()
     if not cuda_driver_version:
         return None
@@ -54,10 +56,12 @@ def install_cuda():
         LOG.i("JTCUDA_VERSION: ", cuda_driver_version)
 
     if os.name == 'nt':
-        if cuda_driver_version >= [11,4]:
-            cuda_tgz = "cuda11.4_cudnn8_win.zip"
-            md5 = "06eed370d0d44bb2cc57809343911187"
-        elif cuda_driver_version >= [11,2]:
+        # TODO: cuda11.4 has bug fit with
+        # current msvc, FIXME
+        # if cuda_driver_version >= [11,4]:
+        #     cuda_tgz = "cuda11.4_cudnn8_win.zip"
+        #     md5 = "06eed370d0d44bb2cc57809343911187"
+        if cuda_driver_version >= [11,2]:
             cuda_tgz = "cuda11.2_cudnn8_win.zip"
             md5 = "b5543822c21bc460c1a414af47754556"
         elif cuda_driver_version >= [11,]:
@@ -83,7 +87,7 @@ def install_cuda():
             md5 = "f16d3ff63f081031d21faec3ec8b7dac"
         else:
             raise RuntimeError(f"Unsupport cuda driver version: {cuda_driver_version}, at least 10.0")
-    jtcuda_path = os.path.join(pathlib.Path.home(), ".cache", "jittor", "jtcuda")
+    jtcuda_path = os.path.join(jit_utils.home(), ".cache", "jittor", "jtcuda")
     nvcc_path = os.path.join(jtcuda_path, cuda_tgz[:-4], "bin", "nvcc")
     if os.name=='nt': nvcc_path += '.exe'
     nvcc_lib_path = os.path.join(jtcuda_path, cuda_tgz[:-4], "lib64")

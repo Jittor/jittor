@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -28,6 +28,12 @@ TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
         for (int i=0; i<(int)xdim; i++)
             axes.push_back(xdim-1-i);
     }
+    if (axes.size() < xdim || (axes.size() == xdim && axes[xdim-1]==xdim-1)) {
+        static VarPtr(*fuse_transpose)(Var*, NanoVector) = get_op_info("fuse_transpose").get_constructor<VarPtr, Var*, NanoVector>();
+        auto var = fuse_transpose(x, axes);
+        forward(var);
+        return;
+    }
     #ifdef HAS_CUDA
     if (use_cuda) {
         static VarPtr(*cutt_transpose)(Var*, NanoVector) = nullptr;
@@ -43,6 +49,7 @@ TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
     }
     #endif
     y = create_output(nullptr, x->dtype());
+    flags.set(NodeFlags::_manual_set_vnbb);
 }
 
 void TransposeOp::infer_shape() {
@@ -72,11 +79,10 @@ VarPtr TransposeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 }
 
 void TransposeOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype();
-    jk << _CS("][DIM=") << JK::hex1(axes.size());
+    jk << "«Tx:" << x->dtype();
+    jk << "«DIM=" << JK::hex1(axes.size());
     for (uint i=0; i<axes.size(); i++)
-        jk << _CS("][AXES") << JK::hex1(axes[i]) << '=' << JK::hex1(i);
-    jk << ']';
+        jk << "«AXES" << JK::hex1(axes[i]) << '=' << JK::hex1(i);
 }
 
 #else // JIT

@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: 
 #     Dun Liang <randonlang@gmail.com>. 
 # 
@@ -64,6 +64,53 @@ class TestLoss(unittest.TestCase):
         jt_y=jt_loss(jt.array(output), jt.array(target))
         tc_y=tc_loss(torch.from_numpy(output), torch.from_numpy(target))
         assert np.allclose(jt_y.numpy(), tc_y.numpy())
+    
+    def test_cross_entropy_loss_v2(self):
+        B = 100
+        C = 5
+        for shape in [[100,1],[],[100,20]]:
+            s1 = [B,C]+shape
+            s2 = [B]+shape
+            a = np.random.randn(*s1).astype(np.float32)
+            b = np.random.randint(0,C,size=s2).astype(np.int32)
+            weight = np.random.randn(C).astype(np.float32)
+
+            for r in ['mean','sum','none']:
+                r1 = torch.nn.functional.cross_entropy(torch.tensor(a),torch.tensor(b.astype(np.int64)),weight=torch.tensor(weight),reduction=r)
+                r2 = jnn.cross_entropy_loss(jt.array(a),jt.array(b),weight=jt.array(weight),reduction=r)
+                np.testing.assert_allclose(r1.numpy(),r2.numpy(),rtol=1e-3, atol=1e-3)
+            
+            for r in ['mean','sum','none']:
+                r1 = torch.nn.functional.cross_entropy(torch.tensor(a),torch.tensor(b.astype(np.int64)),reduction=r)
+                r2 = jnn.cross_entropy_loss(jt.array(a),jt.array(b),reduction=r)
+                np.testing.assert_allclose(r1.numpy(),r2.numpy(),rtol=1e-3, atol=1e-3)
+            
+            r1 = torch.nn.functional.cross_entropy(torch.tensor(a),torch.tensor(b.astype(np.int64)))
+            r2 = jnn.cross_entropy_loss(jt.array(a),jt.array(b))
+            np.testing.assert_allclose(r1.numpy(),r2.numpy(),rtol=1e-3, atol=1e-3)
+
+            r1 = torch.nn.functional.cross_entropy(torch.tensor(a),torch.tensor(b.astype(np.int64)),weight=torch.tensor(weight))
+            r2 = jnn.cross_entropy_loss(jt.array(a),jt.array(b),weight=jt.array(weight))
+            np.testing.assert_allclose(r1.numpy(),r2.numpy(),rtol=1e-3, atol=1e-3)
+
+            for r in ['mean','sum','none']:
+                r1 = torch.nn.functional.cross_entropy(torch.tensor(a),torch.tensor(b.astype(np.int64)),weight=torch.tensor(weight),reduction=r,ignore_index=C//2)
+                r2 = jnn.cross_entropy_loss(jt.array(a),jt.array(b),weight=jt.array(weight),reduction=r,ignore_index=C//2)
+                np.testing.assert_allclose(r1.numpy(),r2.numpy(),rtol=1e-3, atol=1e-3)
+            
+            for r in ['mean','sum','none']:
+                r1 = torch.nn.functional.cross_entropy(torch.tensor(a),torch.tensor(b.astype(np.int64)),reduction=r,ignore_index=C//2)
+                r2 = jnn.cross_entropy_loss(jt.array(a),jt.array(b),reduction=r,ignore_index=C//2)
+                np.testing.assert_allclose(r1.numpy(),r2.numpy(),rtol=1e-3, atol=1e-3)
+            
+            r1 = torch.nn.functional.cross_entropy(torch.tensor(a),torch.tensor(b.astype(np.int64)),ignore_index=C//2)
+            r2 = jnn.cross_entropy_loss(jt.array(a),jt.array(b),ignore_index=C//2)
+            np.testing.assert_allclose(r1.numpy(),r2.numpy(),rtol=1e-3, atol=1e-3)
+
+            r1 = torch.nn.functional.cross_entropy(torch.tensor(a),torch.tensor(b.astype(np.int64)),weight=torch.tensor(weight),ignore_index=C//2)
+            r2 = jnn.cross_entropy_loss(jt.array(a),jt.array(b),weight=jt.array(weight),ignore_index=C//2)
+            np.testing.assert_allclose(r1.numpy(),r2.numpy(),rtol=1e-3, atol=1e-3)
+
 
     def test_cross_entropy_ignore_index(self):
         ignore_index = np.random.randint(0, 10)
@@ -89,11 +136,11 @@ class TestLoss(unittest.TestCase):
         weight = np.random.rand(4).astype('float32')
         jt_loss = jnn.CrossEntropyLoss(weight=jt.array(weight), ignore_index=1)
         tc_loss = tnn.CrossEntropyLoss(weight=torch.from_numpy(weight), ignore_index=1)
-        output = np.random.rand(32, 4, 512, 512).astype(np.float32)
-        target = np.random.randint(4, size=(32, 512, 512))
+        output = np.random.rand(3, 4, 2,2).astype(np.float32)
+        target = np.random.randint(4, size=(3, 2,2))
         jt_y=jt_loss(jt.array(output), jt.array(target))
         tc_y=tc_loss(torch.from_numpy(output), torch.from_numpy(target))
-        assert np.allclose(jt_y.numpy(), tc_y.numpy())
+        np.testing.assert_allclose(jt_y.numpy(), tc_y.numpy())
 
 
     def test_bce_loss(self):

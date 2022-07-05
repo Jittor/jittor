@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
@@ -8,10 +8,10 @@ import unittest, os
 import jittor as jt
 from jittor import LOG
 import sys
-from pathlib import Path
+import jittor_utils as jit_utils
 
 dirname = os.path.join(jt.flags.jittor_path, "notebook")
-notebook_dir = os.path.join(str(Path.home()), ".cache","jittor","notebook")
+notebook_dir = os.path.join(jit_utils.home(), ".cache","jittor","notebook")
 tests = []
 for mdname in os.listdir(dirname):
     if not mdname.endswith(".src.md"): continue

@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor.  All Rights Reserved.
+// Copyright (c) 2022 Jittor.  All Rights Reserved.
 // Maintainers: Dun Liang <randonlang@gmail.com>.
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -12,6 +12,7 @@
 namespace jittor {
 
 struct GetitemOp : Op {
+    static constexpr jittor::NanoString::Flags _inplace = (jittor::NanoString::Flags)0;
     VarSlices vs;
     // map i to related var slice
     NanoVector i_to_vs;
@@ -21,9 +22,12 @@ struct GetitemOp : Op {
     int first_oid_of_var, var_dim;
 
     GetitemOp(Var* x, VarSlices&& slices);
+    // @attrs(multiple_outputs)
+    GetitemOp(Var* x, VarSlices&& slices, int _);
     
     const char* name() const override { return "getitem"; }
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;
+    void grads(Var** dout, VarPtr* dins) override;
     void infer_shape() override;
     void compile_optimize(string& src) override;
     void graph_optimize() override;

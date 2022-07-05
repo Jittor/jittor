@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -27,6 +27,8 @@ ReindexOp::ReindexOp(Var* x, NanoVector shape, vector<string>&& indexes, float64
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
     set_type(OpType::broadcast);
+    flags.set(NodeFlags::_manual_set_vnbb);
+    for (auto& v : extras) v->flags.set(NodeFlags::_needed_by_backward);
     y = create_output(nullptr, x->dtype());
 }
 
@@ -63,6 +65,7 @@ ReindexOp::ReindexOp(Var* x, vector<Var*>&& indexes, float64 overflow_value, vec
     extras = indexes;
     for (uint i = 0; i < indexes.size(); ++i) {
         indexes[i]->flags.set(NodeFlags::_force_fuse);
+        indexes[i]->flags.set(NodeFlags::_needed_by_backward);
     }
 }
 
@@ -88,21 +91,20 @@ void ReindexOp::infer_shape() {
 }
 
 void ReindexOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype()
-        << _CS("][XDIM=") << JK::hex1(x->shape.size())
-        << _CS("][YDIM=") << JK::hex1(y->shape.size())
-        << _CS("][OVERFLOW:") << overflow_value;
+    jk << "«Tx:" << x->dtype()
+        << "«XDIM=" << JK::hex1(x->shape.size())
+        << "«YDIM=" << JK::hex1(y->shape.size())
+        << "«OVERFLOW:" << overflow_value;
     for (uint i=0; i<indexes.size(); i++)
-        jk << _CS("][INDEX") << JK::hex1(i) << ':' << indexes[i];
-    jk << _CS("][OSIZE=") << JK::hex1(overflow_conditions.size());
+        jk << "«INDEX" << JK::hex1(i) << ':' << indexes[i];
+    jk << "«OSIZE=" << JK::hex1(overflow_conditions.size());
     for (uint i=0; i<overflow_conditions.size(); i++)
-        jk << _CS("][OFD") << JK::hex1(i) << ':' << overflow_conditions[i];
-    jk << _CS("][ESIZE=") << JK::hex1(extras.size());
+        jk << "«OFD" << JK::hex1(i) << ':' << overflow_conditions[i];
+    jk << "«ESIZE=" << JK::hex1(extras.size());
     for (uint i=0; i<extras.size(); i++) {
-        jk << _CS("][EDIM") << JK::hex1(i) << '=' << JK::hex1(extras[i]->shape.size());
-        jk << _CS("][Te") << JK::hex1(i) << ':' << extras[i]->dtype();
+        jk << "«EDIM" << JK::hex1(i) << '=' << JK::hex1(extras[i]->shape.size());
+        jk << "«Te" << JK::hex1(i) << ':' << extras[i]->dtype();
     }
-    jk << ']';
 }
 
 #else // JIT
@@ -132,7 +134,7 @@ void ReindexOp::jit_run() {
         @for(d, 0, XDIM, index_t xid@d = @expand_macro(INDEX@d);)
         auto xid = @for(d, 0, XDIM, + xid@d * xstride@d);
         bool check_overflow = 0 @for(d, 0, XDIM, || xid@d<0 || xid@d>=xshape@d) @for(d, 0, OSIZE, || (@expand_macro(OFD@d)));
-        yp[yid] = check_overflow ? (@OVERFLOW) : xp[xid];
+        yp[yid] = check_overflow ? Tx(@OVERFLOW) : xp[xid];
     }
 }
 #endif // JIT

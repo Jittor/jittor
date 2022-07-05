@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -117,7 +117,7 @@ void setter_gdb_attach(int v) {
             exit(1);
         } else {
             // allow children ptrace parent
-#ifdef __linux__
+#if defined(__linux__) && defined(PR_SET_PTRACER)
     		prctl(PR_SET_PTRACER, child_pid, 0, 0, 0);
 #endif
             // sleep 5s, wait gdb attach
@@ -177,7 +177,7 @@ void print_trace() {
             exit(0);
         } else {
             // allow children ptrace parent
-#ifdef __linux__
+#if defined(__linux__) && defined(PR_SET_PTRACER)
     		prctl(PR_SET_PTRACER, child_pid, 0, 0, 0);
 #endif
             waitpid(child_pid,NULL,0);

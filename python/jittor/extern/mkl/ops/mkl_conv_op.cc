@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: 
 //     Guowei Yang <471184555@qq.com>
 //     Dun Liang <randonlang@gmail.com>. 
@@ -7,12 +7,12 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#include <mkldnn.hpp>
+#include <dnnl.hpp>
 
 #include "var.h"
 #include "mkl_conv_op.h"
 
-using namespace mkldnn;
+using namespace dnnl;
 using namespace std;
 
 namespace jittor {
@@ -81,16 +81,15 @@ static const char* short_type(Var* x) {
 }
 
 void MklConvOp::jit_prepare(JK& jk) {
-    jk << _CS("[Txd:") << x->dtype();
-    jk << _CS("][Tyd:") << y->dtype();
-    jk << _CS("][Twd:") << w->dtype();
-    jk << _CS("][Tx:") << short_type(x);
-    jk << _CS("][Tw:") << short_type(w);
-    jk << _CS("][Ty:") << short_type(y);
-    jk << _CS("][XFORMAT:") << xformat;
-    jk << _CS("][WFORMAT:") << wformat;
-    jk << _CS("][YFORMAT:") << yformat;
-    jk << ']';
+    jk << "«Txd:" << x->dtype();
+    jk << "«Tyd:" << y->dtype();
+    jk << "«Twd:" << w->dtype();
+    jk << "«Tx:" << short_type(x);
+    jk << "«Tw:" << short_type(w);
+    jk << "«Ty:" << short_type(y);
+    jk << "«XFORMAT:" << xformat;
+    jk << "«WFORMAT:" << wformat;
+    jk << "«YFORMAT:" << yformat;
 }
 
 #else // JIT
@@ -110,7 +109,7 @@ void MklConvOp::jit_run() {
         auto n = ws[3];
         auto k = xs[3];
         // x: [m,k], w: [k,n], y: [m,n]
-        ASSERTop(0,==,mkldnn_sgemm('N', 'N', m, n, k,
+        ASSERTop(0,==,dnnl_sgemm('N', 'N', m, n, k,
             1.f, x->ptr<float32>(), k,
             w->ptr<float32>(), n,
             0.f, y->ptr<float32>(), n));
@@ -162,27 +161,27 @@ void MklConvOp::jit_run() {
     if (conv1_prim_desc.src_desc() != user_src_memory.get_desc()) {
         conv1_src_memory = memory(conv1_prim_desc.src_desc(), eng);
         net.push_back(reorder(user_src_memory, conv1_src_memory));
-        net_args.push_back({ { MKLDNN_ARG_FROM, user_src_memory },
-                { MKLDNN_ARG_TO, conv1_src_memory } });
+        net_args.push_back({ { DNNL_ARG_FROM, user_src_memory },
+                { DNNL_ARG_TO, conv1_src_memory } });
     }
 
     auto conv1_weights_memory = user_weights_memory;
     if (conv1_prim_desc.weights_desc() != user_weights_memory.get_desc()) {
         conv1_weights_memory = memory(conv1_prim_desc.weights_desc(), eng);
         net.push_back(reorder(user_weights_memory, conv1_weights_memory));
-        net_args.push_back({ { MKLDNN_ARG_FROM, user_weights_memory }, { MKLDNN_ARG_TO, conv1_weights_memory } });
+        net_args.push_back({ { DNNL_ARG_FROM, user_weights_memory }, { DNNL_ARG_TO, conv1_weights_memory } });
     }
     
     auto conv1_dst_memory = memory(conv1_prim_desc.dst_desc(), eng);
     
     net.push_back(convolution_forward(conv1_prim_desc));
-    net_args.push_back({ { MKLDNN_ARG_SRC, conv1_src_memory },
-            { MKLDNN_ARG_WEIGHTS, conv1_weights_memory },
-            { MKLDNN_ARG_DST, conv1_dst_memory } });
+    net_args.push_back({ { DNNL_ARG_SRC, conv1_src_memory },
+            { DNNL_ARG_WEIGHTS, conv1_weights_memory },
+            { DNNL_ARG_DST, conv1_dst_memory } });
 
     if (conv1_dst_memory != user_dst_memory) {
         net.push_back(reorder(conv1_dst_memory, user_dst_memory));
-        net_args.push_back({ { MKLDNN_ARG_FROM, conv1_dst_memory },{ MKLDNN_ARG_TO, user_dst_memory } });
+        net_args.push_back({ { DNNL_ARG_FROM, conv1_dst_memory },{ DNNL_ARG_TO, user_dst_memory } });
     }
 
     ASSERTop(net.size(),==,net_args.size());

@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
@@ -75,6 +75,19 @@ class TestReindexReduceOp(unittest.TestCase):
             nmask = mask.data
             _, (ndx,) = ngrad(lambda args: (pool_naive(args[0], size, op)*nmask).sum(), [nx], 1e-6)
             assert np.allclose(jdx, ndx), (op, jdx[0,:,:,0], ndx[0,:,:,0])
+
+    def test_fuse_error(self):
+        a = jt.array([1,2,3,4])
+        b = jt.zeros((3,3))
+        jt.sync_all()
+        c = b.reindex_reduce("add", [4,4], ["@e0(i0)", "@e0(i1)"], extras=[-a])
+        c.sync()
+
+        a = jt.zeros((3,3))
+        b = jt.zeros((3,3))
+        jt.sync_all()
+        c = b.reindex_reduce("add", [4,4], ["@e0(i0,i1)", "@e0(i1,i0)"], extras=[-a])
+        c.sync()
         
     def test_error(self):
         jt.random([3]).reindex_reduce("add", [3], ["i0"])

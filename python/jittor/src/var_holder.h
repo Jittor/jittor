@@ -1,5 +1,5 @@
 // ***************************************************************
-// Copyright (c) 2021 Jittor. All Rights Reserved. 
+// Copyright (c) 2022 Jittor. All Rights Reserved. 
 // Maintainers: Dun Liang <randonlang@gmail.com>. 
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
@@ -31,6 +31,8 @@ struct ItemData {
 typedef struct _object PyObject;
 
 EXTERN_LIB list<VarHolder*> hold_vars;
+EXTERN_LIB list<VarHolder*>::iterator sync_ptr;
+extern uint8 th_mode;
 
 // @pyjt(Var)
 // @attrs(heaptype)
@@ -47,7 +49,11 @@ struct VarHolder {
     ~VarHolder();
     string to_string();
     // @pyjt(sync)
-    void sync(bool device_sync = false);
+    void sync(bool device_sync = false, bool weak_sync = true);
+
+    /**
+     * Returns a numpy array copy of the Var.
+     */
     // @pyjt(fetch_sync,numpy)
     ArrayArgs fetch_sync();
 
@@ -108,7 +114,6 @@ struct VarHolder {
      */
     // @pyjt(numel)
     inline int64 numel() {
-        if (var->num<0) sync();
         return var->num;
     }
 
@@ -155,12 +160,21 @@ struct VarHolder {
         return var->flags.get(NodeFlags::_stop_fuse);
     }
 
+    /**
+     * output hint for training optimization
+     */
+    // @pyjt(out_hint)
+    // @attrs(return_self)
+    inline VarHolder* out_hint() {
+        var->flags.set(NodeFlags::_out_hint);
+        return this;
+    }
+
     /** 
      * return the shape of the Var.
      */
     // @pyjt(__get__shape)
     inline NanoVector shape() {
-        if (var->num<0) sync();
         return var->shape;
     }
 
@@ -178,13 +192,19 @@ struct VarHolder {
      * @see stop_grad
      */ 
     // @pyjt(__set__requires_grad)
-    inline void set_requires_grad(bool flag) {
-        if (flag == get_requires_grad()) return;
-        if (flag)
-            _update(this);
-        else
-            stop_grad(); 
-        return;
+    void set_requires_grad(bool flag);
+
+    /** 
+     * enable the gradient calculation for the Var.
+     */
+    // @pyjt(start_grad)
+    // @attrs(return_self)
+    inline VarHolder* start_grad() {
+        if (!var->dtype().is_float())
+            LOGw << "cannot enable grad of a non-float value:" << var;
+        auto dvar = jittor::detach(var);
+        std::swap(dvar.ptr, var);
+        return this;
     }
 
     // @pyjt(__get__uncertain_shape)
@@ -240,12 +260,12 @@ struct VarHolder {
     // @pyjt(__set__data)
     inline void set_data(ArrayArgs&& array) {
         sync(true);
-        ASSERT(array.dtype.dsize() == var->dtype().dsize()
+        CHECK(array.dtype.dsize() == var->dtype().dsize()
             && array.dtype.is_int() == var->dtype().is_int());
         int64 size = array.dtype.dsize();
         for (int i=0; i<array.shape.size(); i++)
             size *= array.shape[i];
-        ASSERT(size==var->size);
+        CHECK(size==var->size);
         #ifdef HAS_CUDA
         migrate_to_cpu(var, exe.allocator);
         #endif
@@ -312,7 +332,7 @@ struct VarHolder {
 };
 
 // @pyjt(sync)
-void sync(const vector<VarHolder*>& vh=vector<VarHolder*>(), bool device_sync=false);
+void sync(const vector<VarHolder*>& vh=vector<VarHolder*>(), bool device_sync=false, bool weak_sync=true);
 // @pyjt(fetch_sync)
 vector<ArrayArgs> fetch_sync(const vector<VarHolder*>& vh);
 
@@ -334,5 +354,11 @@ inline vector<VarHolder*> make_vh_vector(vector<VarPtr>&& vps) {
         a.emplace_back(new VarHolder(move(vp)));
     return a;
 }
+
+// @pyjt(ternary_out_hint)
+VarHolder* ternary_out_hint(VarHolder* cond, VarHolder* x, VarHolder* y);
+
+// @pyjt(migrate_all_to_cpu)
+void migrate_all_to_cpu();
 
 } // jittor

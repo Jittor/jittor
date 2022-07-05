@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2021 Jittor. All Rights Reserved. 
+# Copyright (c) 2022 Jittor. All Rights Reserved. 
 # Maintainers: Dun Liang <randonlang@gmail.com>. 
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
@@ -20,7 +20,7 @@ class TestContrib(unittest.TestCase):
                 arr1.append(a)
                 arr2.append(jt.array(a))
             x = np.concatenate(tuple(arr1), dim)
-            y = jt.contrib.concat(arr2, dim)
+            y = jt.concat(arr2, dim)
             assert (x==y.data).all(), (x, y.data, arr1, arr2)
         check([2,3,4], 0, 2)
         check([2,3,4], 1, 3)
