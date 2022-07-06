@@ -711,7 +711,7 @@ def rand_like(x, dtype=None) -> Var:
          [0.58626485 0.35345772 0.5638483 ]], dtype=float32)
     ''' 
     if dtype is None: dtype = x.dtype
-    return jt.random(x.shape, x.dtype)
+    return jt.random(x.shape, dtype)
 
 def randn_like(x, dtype=None) -> Var:
     ''' samples random values from standard normal distribution with the same shape as x.
