@@ -83,17 +83,43 @@ class Optimizer(object):
     
     @property
     def defaults(self):
-        exclude = set(("defaults", "param_groups", "n_step", "pre_step", "step"))
-        return { k:v for k, v in self.__dict__.items()
-            if k[0] != '_' and k not in exclude and not callable(v) }
+        import copy
+        exclude = set(("defaults", "pre_step", "step"))
+        return copy.deepcopy({ k:v for k, v in self.__dict__.items()
+            if k[0] != '_' and k not in exclude and not callable(v) })
 
     def state_dict(self):
         state = {"defaults": self.defaults}
         return state
 
     def load_state_dict(self, state):
-        for k,v in state["defaults"].items():
-            setattr(self, k, v)
+
+        def dfs(x):
+            if isinstance(x, list):
+                for i in range(len(x)):
+                    x[i] = dfs(x[i])
+            elif isinstance(x, dict):
+                for k in x:
+                    x[k] = dfs(x[k])
+            elif isinstance(x, np.ndarray):
+                return jt.array(x).stop_grad()
+            elif isinstance(x, jt.Var):
+                return x.stop_grad()
+            return x
+            
+        exclude = set(("param_groups",))
+        for k, v in state["defaults"].items():
+            if k not in exclude:
+                setattr(self, k, dfs(v))
+        param_groups = dfs(state["defaults"].get('param_groups', None))
+        if param_groups is not None:
+            exclude = set(("params",))
+            for i in range(len(param_groups)):
+                for k, v in param_groups[i].items():
+                    if k not in exclude:
+                        self.param_groups[i][k] = v
+
+        
 
     def zero_grad(self):
         self.__zero_grad = True
