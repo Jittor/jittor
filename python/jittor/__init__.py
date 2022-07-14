@@ -88,21 +88,8 @@ def safeunpickle(path):
         download_url_to_local(path, base, compiler.ck_path, None)
         path = fname
     if path.endswith(".pth"):
-        try:
-            dirty_fix_pytorch_runtime_error()
-            import torch
-        except:
-            raise RuntimeError("pytorch need to be installed when load pth format.")
-        model_dict = torch.load(path, map_location='cpu')
-        try:
-            for k, v in model_dict.items():
-                try:
-                    if not isinstance(v, np.ndarray) and hasattr(v, "cpu"):
-                        model_dict[k] = v.cpu().detach().numpy()
-                except:
-                    pass
-        except:
-            pass
+        from jittor_utils.load_pytorch import load_pytorch
+        model_dict = load_pytorch(path)
         return model_dict
     with open(path, "rb") as f:
         s = f.read()
@@ -724,7 +711,7 @@ def rand_like(x, dtype=None) -> Var:
          [0.58626485 0.35345772 0.5638483 ]], dtype=float32)
     ''' 
     if dtype is None: dtype = x.dtype
-    return jt.random(x.shape, x.dtype)
+    return jt.random(x.shape, dtype)
 
 def randn_like(x, dtype=None) -> Var:
     ''' samples random values from standard normal distribution with the same shape as x.
