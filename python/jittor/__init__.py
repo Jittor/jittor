@@ -106,6 +106,7 @@ def safeunpickle(path):
 class _call_no_record_scope:
     def __enter__(self): pass
     def __exit__(self, *exc): pass
+
     def __call__(self, func):
         def inner(*args, **kw):
             with self:
@@ -135,6 +136,8 @@ class no_grad(flag_scope):
     ''' no_grad scope, all variable created inside this
 scope will stop grad.
 
+//lang[zh-cn] 没有梯度的区域，所有在这个区域内创建的变量都不再求梯度
+
 Example::
 
     import jittor as jt
@@ -147,9 +150,12 @@ Example::
         self.jt_flags = jt_flags
         jt_flags["no_grad"] = 1
 
+
 class enable_grad(flag_scope):
     ''' enable_grad scope, all variable created inside this
 scope will start grad.
+
+//lang[zh-cn] 赋予梯度的区域，所有在这个区域内创建的变量都会具有梯度
 
 Example::
 
@@ -163,11 +169,13 @@ Example::
         self.jt_flags = jt_flags
         jt_flags["no_grad"] = 0
 
+
 single_log_capture = None
+
 
 class log_capture_scope(_call_no_record_scope):
     """log capture scope
-
+    //lang[zh-cn]得到log的区域，用以判断其重要性并赋值
     example::
 
         with jt.log_capture_scope(log_v=0) as logs:
@@ -206,7 +214,7 @@ class log_capture_scope(_call_no_record_scope):
 
 class profile_scope(_call_no_record_scope):
     """ profile scope
-
+    //lang[zh-cn] 写简介报告的区域
     example::
     
         with jt.profile_scope() as report:
@@ -264,7 +272,10 @@ def single_process_scope(rank=0):
 
     All the mpi code inside this scope will have not affect.
     mpi.world_rank() and mpi.local_rank() will return 0, world_size() will return 1,
-
+    //lang[zh-cn]单一程序区域
+    //lang[zh-cn]这个区域的代码仅会被一个程序执行
+    //lang[zh-cn]这个区域内的mpi代码将不会产生影响
+    //lang[zh-cn]mpi.world_rank() 和 mpi.local_rank() 将返回 0, world_size() 将返回 1,
     example::
     
         @jt.single_process_scope(rank=0)
@@ -298,6 +309,11 @@ def array(data, dtype=None):
     :param dtype: The data type of the Var. If None, the data type will be inferred from the data.
     :type dtype: str, jittor type-cast function, or None.
 
+    //lang[zh-cn]：通过数字，列表（List），或其它计图变量来建立一个计图的变量
+    //lang[zh-cn]：数据参数：初始化变量的数值
+    //lang[zh-cn]：数据类型：具体数值，列表，numpy.ndarray类n维数组变量，或计图变量jittor.Var
+    //lang[zh-cn]：数据类型参数：变量的数据类型，若没有声明，则由数据推断得出
+    //lang[zh-cn]：描述数据类型的参数类型：字符串，计图数据类型转换功能，或者无
     ----------------
 
     Example::
@@ -342,7 +358,13 @@ def random(shape, dtype="float32", type="uniform"):
     :type dtype: str, jittor type-cast function, or None.
     :param type: The random distribution, can be 'uniform' or 'normal'.
     :type type: str
-
+    //lang[zh-cn]建立一个随机的计图变量
+    //lang[zh-cn]：程序结构：随机变量的结构
+    //lang[zh-cn]：结构数据类型：列表或元组
+    //lang[zh-cn]：程序数据类型：随机变量的数据类型
+    //lang[zh-cn]：描述相关数据类型的类型：字符串，计图数据类型转换功能或者无
+    //lang[zh-cn]：程序类型：随机分配，可以是一致的（uniform）或者正规的（normal）
+    //lang[zh-cn]：用以描述类型的类型
     ----------------
 
     Example::
@@ -398,6 +420,13 @@ def ones(shape, dtype="float32"):
     :type dtype: str, jittor type-cast function, or None.
     :return: The output Var.
     :rtype: jittor.Var
+    //lang[zh-cn]建立一个计图变量，且其所有的元素都置1
+    //lang[zh-cn]：参数结构：输出变量的结构
+    //lang[zh-cn]：结构数据类型：列表或元组
+    //lang[zh-cn]：程序的数据结构：输出变量的数据结构
+    //lang[zh-cn]：描述相关数据类型的类型：字符串，计图数据类型转换功能或者无
+    //lang[zh-cn]：返回值：输出变量
+    //lang[zh-cn]：返回数据类型：计图的变量（jittor.Var）
     '''
     if not isinstance(shape, (NanoVector, Sequence)):
         shape = (shape,)
@@ -410,8 +439,15 @@ def ones_like(x):
     :type x: jt.Var
     :return: The output Var.
     :rtype: jittor.Var
+    //lang[zh-cn]：建立一个所有元素置1的计图变量，且和参数x有相同的结构
+    //lang[zh-cn]：参数x：参考计图变量
+    //lang[zh-cn]：参数x类型：jt.Var的类型
+    //lang[zh-cn]：返回值：返回输出变量
+    //lang[zh-cn]：返回值类型：计图变量类型，jittor.Var
+
     '''
     return ones(x.shape,x.dtype)
+
 
 def zeros(shape, dtype="float32"):
     ''' Constructs a jittor Var with all elements set to 0. 
@@ -422,6 +458,12 @@ def zeros(shape, dtype="float32"):
     :type dtype: str, jittor type-cast function, or None.
     :return: The output Var.
     :rtype: jittor.Var
+    //lang[zh-cn]：建立一个所有元素置0的计图变量
+    //lang[zh-cn]：结构数据类型：列表或元组
+    //lang[zh-cn]：程序的数据结构：输出变量的数据结构
+    //lang[zh-cn]：描述相关数据类型的类型：字符串，计图数据类型转换功能或者无
+    //lang[zh-cn]：返回值：返回输出变量
+    //lang[zh-cn]：返回值类型：计图变量类型，jittor.Var
     '''
     if not isinstance(shape, (NanoVector, Sequence)):
         shape = (shape,)
@@ -437,13 +479,22 @@ def full(shape,val,dtype="float32"):
     :param dtype: The data type of the output Var. Defaults to jt.float32.
     :type dtype: str, jittor type-cast function, or None.
     :return: The output Var.
-    :rtype: jittor.Var    
+    :rtype: jittor.Var  
+    //lang[zh-cn]：建立一个所有元素置为参数val的计图变量
+    //lang[zh-cn]：形状参数：输出变量的形状参数
+    //lang[zh-cn]：val参数：输出变量的值
+    //lang[zh-cn]：val参数类型：数值类型
+    //lang[zh-cn]：数据类型参数：输出变量的数据类型。默认为jt.float32类型
+    //lang[zh-cn]：描述相关数据类型的类型：字符串，计图数据类型转换功能或者无
+    //lang[zh-cn]：返回值：输出变量
+    //lang[zh-cn]：返回值类型：jittor.Var
     '''
     if not isinstance(shape, (NanoVector, Sequence)):
         shape = (shape,)
     return unary(val, dtype).broadcast(shape)
 
-def full_like(x,val):
+
+def full_like(x, val):
     ''' Constructs a jittor Var with all elements set to val and shape same with x. 
     :param x: The reference jittor Var.
     :type x: jt.Var.
@@ -451,8 +502,15 @@ def full_like(x,val):
     :type val: number.
     :return: The output Var.
     :rtype: jittor.Var
+    //lang[zh-cn]：建立一个元素值都置val的计图变量且和参数x有相同的结构
+    //lang[zh-cn]：参数x：参考计图变量
+    //lang[zh-cn]：参数x种类：jt.Var
+    //lang[zh-cn]：val参数：输出参数值
+    //lang[zh-cn]：返回值：输出变量
+    //lang[zh-cn]：返回值类型：jittor.Var
     '''
     return full(x.shape,val,x.dtype)
+
 
 def zeros_like(x):
     ''' Constructs a jittor Var with all elements set to 0 and shape same with x. 
@@ -461,10 +519,15 @@ def zeros_like(x):
     :type x: jt.Var
     :return: The output Var.
     :rtype: jittor.Var
+    //lang[zh-cn]：构建一个所有元素值置0的计图变量且与参数x有相同的结构
+    //lang[zh-cn]：参数x：jt.Var类型
+    //lang[zh-cn]：返回：输出变量
+    //lang[zh-cn]：返回值类型：jittor.Var
     '''
     return zeros(x.shape,x.dtype)
 
 flags = core.Flags()
+
 
 def var(x, dim=None, dims=None, unbiased=False, keepdims=False):
     """ return the sample variance. If unbiased is True, Bessel's correction will be used.
@@ -711,7 +774,7 @@ def rand_like(x, dtype=None) -> Var:
          [0.58626485 0.35345772 0.5638483 ]], dtype=float32)
     ''' 
     if dtype is None: dtype = x.dtype
-    return jt.random(x.shape, dtype)
+    return jt.random(x.shape, x.dtype)
 
 def randn_like(x, dtype=None) -> Var:
     ''' samples random values from standard normal distribution with the same shape as x.
