@@ -43,7 +43,6 @@ import traceback
 if "SKEY" in os.environ:
     import jittor_utils.student_queue
 
-
 def safepickle(obj, path):
     # Protocol version 4 was added in Python 3.4. It adds support for very large objects, pickling more kinds of objects, and some data format optimizations.
     # ref: <https://docs.python.org/3/library/pickle.html>
@@ -53,7 +52,6 @@ def safepickle(obj, path):
     s += b"HCAJSLHD"
     with open(path, 'wb') as f:
         f.write(s)
-
 
 def _load_pkl(s, path):
     try:
@@ -65,7 +63,6 @@ def _load_pkl(s, path):
             msg += "\nThis file maybe corrupted, please consider remove it" \
                  " and re-download."
         raise RuntimeError(msg)
-
 
 def _upload(path, url, jk):
     prefix = "https://cg.cs.tsinghua.edu.cn/jittor/assets"
@@ -91,21 +88,8 @@ def safeunpickle(path):
         download_url_to_local(path, base, compiler.ck_path, None)
         path = fname
     if path.endswith(".pth"):
-        try:
-            dirty_fix_pytorch_runtime_error()
-            import torch
-        except:
-            raise RuntimeError("pytorch need to be installed when load pth format.")
-        model_dict = torch.load(path, map_location='cpu')
-        try:
-            for k, v in model_dict.items():
-                try:
-                    if not isinstance(v, np.ndarray) and hasattr(v, "cpu"):
-                        model_dict[k] = v.cpu().detach().numpy()
-                except:
-                    pass
-        except:
-            pass
+        from jittor_utils.load_pytorch import load_pytorch
+        model_dict = load_pytorch(path)
         return model_dict
     with open(path, "rb") as f:
         s = f.read()
@@ -115,12 +99,9 @@ def safeunpickle(path):
     s = s[:-28]
     if hashlib.sha1(s).digest() != checksum:
         raise ValueError("Pickle checksum does not match! path: "+path, 
-
         " This file maybe corrupted, please consider remove it"
-
         " and re-download.")
     return _load_pkl(s, path)
-
 
 class _call_no_record_scope:
     def __enter__(self): pass
@@ -132,7 +113,6 @@ class _call_no_record_scope:
                 ret = func(*args, **kw)
             return ret
         return inner
-
 
 class flag_scope(_call_no_record_scope):
     def __init__(self, **jt_flags):
@@ -149,7 +129,7 @@ class flag_scope(_call_no_record_scope):
             raise
 
     def __exit__(self, *exc):
-        for k, v in self.flags_bk.items():
+        for k,v in self.flags_bk.items():
             setattr(flags, k, v)
 
 
@@ -286,7 +266,6 @@ class __single_process_scope:
         if mpi:
             mpi.set_state(self.bk_mpi_state)
         
-
 def single_process_scope(rank=0):
     """ single_process_scope
     
@@ -314,7 +293,6 @@ def single_process_scope(rank=0):
             return ret
         return inner
     return outer
-
 
 def clean():
     import gc
@@ -372,7 +350,6 @@ def array(data, dtype=None):
                     return ret.float16()
     return ret
 
-
 def random(shape, dtype="float32", type="uniform"):
     ''' Constructs a random jittor Var.
 
@@ -419,17 +396,14 @@ def float_auto(x):
     return x.float32()
 Var.float_auto = float_auto
 
-
 def array64(data, dtype=None):
     with jt.flag_scope(auto_convert_64_to_32=0):
         return array(data, dtype)
-
 
 def grad(loss, targets, retain_graph=True):
     if type(targets) == core.Var:
         return core.grad(loss, [targets], retain_graph)[0]
     return core.grad(loss, targets, retain_graph)
-
 
 def liveness_info():
     return {
@@ -437,7 +411,6 @@ def liveness_info():
         "lived_vars": core.number_of_lived_vars(),
         "lived_ops": core.number_of_lived_ops(),
     }
-
 
 def ones(shape, dtype="float32"):
     ''' Constructs a jittor Var with all elements set to 1.
@@ -460,7 +433,6 @@ def ones(shape, dtype="float32"):
         shape = (shape,)
     return unary(1, dtype).broadcast(shape)
 
-
 def ones_like(x):
     ''' Constructs a jittor Var with all elements set to 1 and shape same with x.
     
@@ -475,7 +447,7 @@ def ones_like(x):
     //lang[zh-cn]：返回值类型：计图变量类型，jittor.Var
 
     '''
-    return ones(x.shape, x.dtype)
+    return ones(x.shape,x.dtype)
 
 
 def zeros(shape, dtype="float32"):
@@ -498,8 +470,7 @@ def zeros(shape, dtype="float32"):
         shape = (shape,)
     return unary(0, dtype).broadcast(shape)
 
-
-def full(shape, val, dtype="float32"):
+def full(shape,val,dtype="float32"):
     ''' Constructs a jittor Var with all elements set to val.
     
     :param shape: The shape of the output Var.
@@ -539,7 +510,7 @@ def full_like(x, val):
     //lang[zh-cn]：返回值：输出变量
     //lang[zh-cn]：返回值类型：jittor.Var
     '''
-    return full(x.shape, val, x.dtype)
+    return full(x.shape,val,x.dtype)
 
 
 def zeros_like(x):
@@ -554,8 +525,7 @@ def zeros_like(x):
     //lang[zh-cn]：返回：输出变量
     //lang[zh-cn]：返回值类型：jittor.Var
     '''
-    return zeros(x.shape, x.dtype)
-
+    return zeros(x.shape,x.dtype)
 
 flags = core.Flags()
 
@@ -612,7 +582,6 @@ def var(x, dim=None, dims=None, unbiased=False, keepdims=False):
     return sqr
 Var.var = var
 
-
 def std(x):
     matsize=1
     for i in x.shape:
@@ -623,7 +592,6 @@ def std(x):
     return out
 Var.std = std
 
-
 def norm(x, p=2, dim=-1, keepdim=False, eps=1e-30):
     assert p==1 or p==2
     if p==1:
@@ -632,16 +600,11 @@ def norm(x, p=2, dim=-1, keepdim=False, eps=1e-30):
         return (x.sqr()).sum(dim, keepdim).maximum(eps).sqrt()
 Var.norm = norm
 
-
 origin_reshape = reshape
-
-
 def reshape(x, *shape):
     if len(shape) == 1 and isinstance(shape[0], (Sequence, NanoVector)):
         shape = shape[0]
     return origin_reshape(x, shape)
-
-
 reshape.__doc__ = origin_reshape.__doc__
 Var.view = Var.reshape = view = reshape
 
