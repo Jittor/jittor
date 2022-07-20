@@ -121,7 +121,7 @@ class flag_scope(_call_no_record_scope):
     def __enter__(self):
         flags_bk = self.flags_bk = {}
         try:
-            for k, v in self.jt_flags.items():
+            for k,v in self.jt_flags.items():
                 flags_bk[k] = getattr(flags, k)
                 setattr(flags, k, v)
         except:
@@ -131,7 +131,6 @@ class flag_scope(_call_no_record_scope):
     def __exit__(self, *exc):
         for k,v in self.flags_bk.items():
             setattr(flags, k, v)
-
 
 class no_grad(flag_scope):
     ''' no_grad scope, all variable created inside this
