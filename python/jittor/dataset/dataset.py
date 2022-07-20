@@ -80,6 +80,7 @@ class Dataset(object):
     '''
     Base class for reading data.
 
+    //lang[zh-cn]用于读取数据的基础类
     Args::
 
         [in] batch_size(int): batch size, default 16.
@@ -89,7 +90,15 @@ class Dataset(object):
         [in] buffer_size(int): buffer size for each worker in bytes, default(512MB).
         [in] keep_numpy_array(bool): return numpy array rather than jittor array, default(False).
         [in] endless(bool): will this dataset yield data forever, default(False).
-    
+
+    //lang[zh-cn]参数：：
+        //lang[zh-cn] [in] batch_size(int): 一次训练所抓取的数据样本数量，默认 16
+        //lang[zh-cn] [in] shuffle(bool): 是否打乱每次遍历的数据集，默认 否
+        //lang[zh-cn] [in] drop_last(bool): 若为真，则最后一组训练的数据样本数量可能小于batch_size，默认 真
+        //lang[zh-cn] [in] num_workers(int): 用于加载数据的工作线程数
+        //lang[zh-cn] [in] buffer_size(int): 每个工作线程的缓冲区大小（以字节为单位），默认值 512MB
+        //lang[zh-cn] [in] keep_numpy_array(bool): 是否返回 numpy 数组而非是否打乱每次遍历的数据集，默认不 jittor 数组，默认 否
+        //lang[zh-cn] [in] endless(bool): 是否持续在数据集中采样，默认否
     Example::
 
         class YourDataset(Dataset):
@@ -146,7 +155,7 @@ class Dataset(object):
     def set_attrs(self, **kw):
         ''' 
         You can set attributes of dataset by using set_attrs function, including total_len, batch_size, shuffle, drop_last, num_workers, buffer_size.
-        
+        //lang[zh-cn] 您可以使用set_attrs函数设置数据集的属性，包括total_len, batch_size, shuffle, drop_last, num_workers, buffer_size参数。
         Example::
 
             dataset = YourDataset().set_attrs(batch_size=256, shuffle=True)
@@ -160,6 +169,15 @@ class Dataset(object):
             * num_workers: number of workers for loading data
             * buffer_size: buffer size for each worker in bytes, default(512MB).
             * stop_grad: stop grad for data, default(True).
+
+        //lang[zh-cn]参数：
+            //lang[zh-cn]* batch_size(int): 一次训练所抓取的数据样本数量，默认 16
+            //lang[zh-cn]* total_len(int): 总体长度
+            //lang[zh-cn]* shuffle(bool): 是否打乱每次遍历的数据集，默认 否
+            //lang[zh-cn]* drop_last(bool): 若为真，则最后一组训练的数据样本数量可能小于batch_size，默认 真
+            //lang[zh-cn]* num_workers: 用于加载数据的工作线程数
+            //lang[zh-cn]* buffer_size: 每个工作线程的缓冲区大小（以字节为单位），默认值 512MB
+            //lang[zh-cn]* stop_grad: 是否停止梯度值传播，默认是
         '''
         for k,v in kw.items():
             assert hasattr(self, k), k
@@ -170,6 +188,7 @@ class Dataset(object):
     def to_jittor(self, batch):
         '''
         Change batch data to jittor array, such as np.ndarray, int, and float.
+        //lang[zh-cn]将处理数据转换为jittor数组，例如np.ndarray, int, and float.
         '''
         if self.keep_numpy_array: return batch
         if isinstance(batch, jt.Var): return batch
@@ -200,12 +219,17 @@ class Dataset(object):
 
         [in] batch(list): A list of variables, such as jt.var, Image.Image, np.ndarray, int, float, str and so on.
 
+        //lang[zh-cn]将数据集中的数据转换成统一可调度的批处理形式
+
+        //lang[zh-cn]参数：：
+            //lang[zh-cn] [in] batch(list): 一个变量的list，例如jt.var, Image.Image, np.ndarray, int, float, str等等。
         '''
         return collate_batch(batch)
 
     def terminate(self):
         '''
         Terminate is used to terminate multi-process worker reading data.
+        //lang[zh-cn]终止用于终止读取数据的多进程工作线程。
         '''
         if hasattr(self, "workers"):
             for w in self.workers:
@@ -222,6 +246,9 @@ class Dataset(object):
         # it is not work on ubuntu 16.04. but worked on ubuntu 20.04
         # it seems like the static value of parallel compiler
         # is not correctly init.
+        # //lang[zh-cn] parallel_op_compiler仍有问题，
+        # //lang[zh-cn] 它在ubuntu 16.04系统上不能工作但在ubuntu 20.04却可以
+        # //lang[zh-cn] 似乎并行编译器的静态值没有正确初始化
         jt.flags.use_parallel_op_compiler = 0
         import time
         try:
@@ -250,6 +277,7 @@ class Dataset(object):
                 start = now
 
                 # load and transform data
+                # //lang[zh-cn] 加载并转换数据
                 batch = []
                 if mp_log_v:
                     print(f"#{worker_id} {os.getpid()} load batch", cid*self.real_batch_size, min(self.real_len, (cid+1)*self.real_batch_size))
@@ -261,6 +289,7 @@ class Dataset(object):
                 start = now
 
                 # send data to main process
+                # //lang[zh-cn] 将数据发送到主进程
                 if mp_log_v:
                     print(f"#{worker_id} {os.getpid()} send", type(batch).__name__, [ type(b).__name__ for b in batch ], buffer)
                 try:
@@ -285,8 +314,9 @@ class Dataset(object):
             exit(0)
 
     def display_worker_status(self):
-        ''' Display dataset worker status, when dataset.num_workers > 0, it will display infomation blow:
+        ''' Display dataset worker status, when dataset.num_workers > 0, it will display information below:
 
+            //lang[zh-cn]显示数据集工作线程状态，当dataset.num_workers>0时，将显示如下信息
 .. code-block:: console
 
         progress:479/5005
@@ -320,6 +350,22 @@ Meaning of the outputs:
     * load: worker load time
     * buffer: ring buffer status, such as how many free space, left index, right index, total size(bytes).
 
+//lang[zh-cn]输出含义：
+
+//lang[zh-cn]* progress: 加载数据集过程 （当前/整体）
+//lang[zh-cn]* batch: 批处理时间，不包括数据加载时间
+//lang[zh-cn]* wait: 主进程等待工作进程的时间
+//lang[zh-cn]* recv: 采集批处理数据的时间
+//lang[zh-cn]* to_jittor: 批处理数据为 jittor 变量的时间
+//lang[zh-cn]* recv_raw_call: 被调用的基础recv_raw总数
+//lang[zh-cn]* last 10 workers: 主要进程所加载的最后10个工作的id
+//lang[zh-cn]* 表格含义
+
+    //lang[zh-cn]*ID: 工作的编号
+    //lang[zh-cn]* wait: 工作的等待时间
+    //lang[zh-cn]* open: 工作图像打开时间
+    //lang[zh-cn]* load: 工作加载时间
+    //lang[zh-cn]* buffer: 环缓冲区状态，例如有多少可用空间，左索引，右索引，总大小（字节）。
 Example::
   
   from jittor.dataset import Dataset
@@ -596,7 +642,6 @@ class ImageFolder(Dataset):
         * root/label2/img1.png
         * root/label2/img2.png
         * ...
-
     Args::
 
         [in] root(string): Root directory path.
@@ -607,6 +652,19 @@ class ImageFolder(Dataset):
         * class_to_idx(dict): map from class_name to class_index.
         * imgs(list): List of (image_path, class_index) tuples
 
+    //lang[zh-cn] 图像分类数据集，从目录加载图像和标签：：
+        //lang[zh-cn] * root/label1/img1.png
+        //lang[zh-cn] * root/label1/img2.png
+        //lang[zh-cn] * ...
+        //lang[zh-cn] * root/label2/img1.png
+        //lang[zh-cn] * root/label2/img2.png
+        //lang[zh-cn] * ...
+    //lang[zh-cn]参数：：
+        //lang[zh-cn] [in] root(string):根目录路径。
+    //lang[zh-cn]属性：：
+        //lang[zh-cn]* classes(list): 类名称的列表。
+        //lang[zh-cn]* class_to_idx(dict): 从class_name到class_index的地图。
+        //lang[zh-cn]* imgs(list): （image_path、class_index）元组列表
     Example::
 
         train_dir = './data/celebA_train'
@@ -644,6 +702,7 @@ class ImageFolder(Dataset):
 class VarDataset(Dataset):
     """ Dataset using Var directly, TensorDataset is alias of VarDataset, Example::
 
+        //lang[zh-cn] 数据集直接使用 Var，TensorDataset 是 VarDataset 的别名
     import jittor as jt
     from jittor.dataset import VarDataset
 
