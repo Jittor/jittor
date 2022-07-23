@@ -443,26 +443,35 @@ def full(shape,val,dtype="float32"):
         shape = (shape,)
     return unary(val, dtype).broadcast(shape)
 
-def full_like(x,val):
+def full_like(x, val, dtype=None) -> Var:
     ''' Constructs a jittor Var with all elements set to val and shape same with x. 
+    
     :param x: The reference jittor Var.
     :type x: jt.Var.
     :param val: The value of the output Var.
     :type val: number.
+    :param dtype: if None, the dtype of the output is the same as x. 
+        Otherwise, use the specified dtype. Defaults to None.
+    :type dtype: str, optional
     :return: The output Var.
     :rtype: jittor.Var
     '''
-    return full(x.shape,val,x.dtype)
+    if dtype is None: dtype = x.dtype
+    return full(x.shape, val, dtype)
 
-def zeros_like(x):
+def zeros_like(x, dtype=None) -> Var:
     ''' Constructs a jittor Var with all elements set to 0 and shape same with x. 
     
     :param x: The reference jittor Var.
     :type x: jt.Var
+    :param dtype: if None, the dtype of the output is the same as x. 
+        Otherwise, use the specified dtype. Defaults to None.
+    :type dtype: str, optional
     :return: The output Var.
     :rtype: jittor.Var
     '''
-    return zeros(x.shape,x.dtype)
+    if dtype is None: dtype = x.dtype
+    return zeros(x.shape, dtype)
 
 flags = core.Flags()
 
