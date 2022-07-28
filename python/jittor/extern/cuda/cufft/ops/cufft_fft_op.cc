@@ -45,8 +45,8 @@ void CufftFftOp::jit_prepare(JK& jk) {
         ASSERT(false);
     }
     jk << "«T:" << y->dtype();
-    jk << "«I:"<<inverse<<"]";
-    jk << _CS("«TS:\"")<<y->dtype()<<"\"]";
+    jk << "«I:" << inverse;
+    jk << "«TS:\"" << y->dtype()<<"\"";
 }
 
 #else // JIT
