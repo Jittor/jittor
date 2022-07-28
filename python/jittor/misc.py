@@ -1177,7 +1177,7 @@ def numpy_cumprod(a, dim):
 
 def linspace(start, end, steps):
     res = jt.index((steps,))[0]
-    res = res*(end-start)/float(steps-1)+start
+    res = res*float((end-start)/(steps-1))+start
     return res
 
 def randperm(n, dtype="int32"):
