@@ -63,6 +63,11 @@ JIT_TEST(expr) {
     check("a((x),(y,z))", "a(x,(y,z))", 0, 1);
 }
 
+JIT_TEST(expr_bug) {
+    // unique_ptr<Expr> expr(new Expr("op0_yp[op0_i]=((float32)(std::tanh((op0_xp[op0_i]))))"));
+    unique_ptr<Expr> expr(new Expr("op0_yp[op0_i]=((float32)std::tanh((op0_xp[op0_i])))"));
+}
+
 JIT_TEST(expr_get_tokens) {
     auto check = [&](
         const string& src, 
