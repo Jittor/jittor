@@ -77,6 +77,11 @@ def jittor_rebuild(storage, storage_offset, size, stride, requires_grad, backwar
         return jt.array(storage)
     return jt.array(storage).reshape(size)
 
+def jittor_rebuild_var(data, requires_grad, backward_hooks):
+    v =  jt.array(data)
+    v.requires_grad = requires_grad
+    return v
+
 class UnpicklerWrapper(pickle.Unpickler):  # type: ignore[name-defined]
     def find_class(self, mod_name, name):
         if type(name) is str and 'Storage' in name:
@@ -86,6 +91,9 @@ class UnpicklerWrapper(pickle.Unpickler):  # type: ignore[name-defined]
                 pass
         if type(name) is str and '_rebuild_tensor_v2' in name:
             return super().find_class("jittor_utils.load_pytorch", "jittor_rebuild")
+        if type(name) is str and '_rebuild_parameter' in name:
+            return super().find_class("jittor_utils.load_pytorch", "jittor_rebuild_var")
+        
         return super().find_class(mod_name, name)
 
 def _check_seekable(f) -> bool:
