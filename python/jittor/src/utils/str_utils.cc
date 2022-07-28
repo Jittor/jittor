@@ -148,6 +148,7 @@ int token_replace(vector<string>& tokens, int i, const string& src, const string
             if (c_i >= tokens.size())
                 return false;
         }
+        return true;
     };
 
     auto match = [&](int c_i, int c_pos, const string& pat) -> bool {
