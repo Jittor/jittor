@@ -7,6 +7,7 @@
 import os
 import ctypes
 import glob
+import gzip
 
 import jittor_utils
 from jittor_utils import env_or_try_find, run_cmd, cache_path, LOG
@@ -29,7 +30,7 @@ def install_rocm_jittor_core():
 
     rocm_cache_path = os.path.join(rocm_compiler_home, "rocm_cache.o")
     rocm_cache_gz_path = os.path.join(rocm_compiler_home, "rocm_cache.gz")
-    if not os.path.exists(rocm_cache_path) and os.path.exists(rocm_cache_gz_path):
+    if os.path.exists(rocm_cache_gz_path):
         import gzip
         with gzip.open(rocm_cache_gz_path, "rb") as f:
             data = f.read()
