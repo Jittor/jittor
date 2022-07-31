@@ -671,8 +671,13 @@ class Compose:
     def __init__(self, transforms):
         self.transforms = transforms
     def __call__(self, *data):
-        for t in self.transforms:
-            data = t(*data)
+        if len(data) == 1:
+            data = data[0]
+            for t in self.transforms:
+                data = t(data)
+        else:
+            for t in self.transforms:
+                data = t(*data)
         return data
 
 class Resize:
