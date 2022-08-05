@@ -204,6 +204,12 @@ class TestROCmReindexOp(TestReindexOp, test_rocm(1)):
     pass
 
 
+from .test_where_op import TestWhereOp
+@unittest.skipIf(not jt.compiler.has_rocm, "No ROCm found")
+class TestROCmWhereOp(TestWhereOp, test_rocm(1)):
+    pass
+
+
 # from .test_reindex_reduce_op import TestReindexReduceOp
 # @unittest.skipIf(not jt.compiler.has_rocm, "No ROCm found")
 # class TestROCmReindexReduceOp(TestReindexReduceOp, test_rocm(1)):

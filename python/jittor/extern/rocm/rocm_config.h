@@ -9,7 +9,7 @@
 
 namespace jittor {
 
-void rocm_translate(string& src);
+void rocm_config(const string& name, string& src);
 
 }
 
