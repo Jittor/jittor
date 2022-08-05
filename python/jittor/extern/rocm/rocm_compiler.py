@@ -50,9 +50,6 @@ def install_rocm_jittor_core():
                 tar.extractall(rocm_compiler_home, members=[tar.getmember("rocm_cache.o")])
                 o_files = [ os.path.join(rocm_compiler_home, "rocm_cache.o") ]
     
-    if not check_gcc_use_cxx11_abi():
-        jt.flags.use_parallel_op_compiler = min(jt.flags.use_parallel_op_compiler, 8)
-
     cc_files = sorted(glob.glob(rocm_compiler_home + "/**/*.cc", recursive=True))
     cc_flags += f" -DHAS_CUDA -DIS_ROCM -I{rocm_compiler_home} "
     cc_flags += " " + run_cmd("hipconfig -C") + " "
