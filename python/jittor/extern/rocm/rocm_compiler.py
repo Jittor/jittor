@@ -7,7 +7,7 @@
 import os
 import ctypes
 import glob
-import gzip
+import tarfile
 
 import jittor_utils
 from jittor_utils import env_or_try_find, run_cmd, cache_path, LOG
@@ -20,6 +20,17 @@ rocm_home = ""
 dlopen_flags = os.RTLD_NOW | os.RTLD_GLOBAL
 
 
+def check_gcc_use_cxx11_abi():
+    gcc_info = run_cmd("gcc -v")
+    if "--with-default-libstdcxx-abi=new" in gcc_info:
+        return True
+    elif "--with-default-libstdcxx-abi=gcc4-compatible" in gcc_info:
+        return False
+    else:
+        LOG.d("unknown cxx abi, defaults to gcc4-compatible")
+        return False
+
+
 def install_rocm_jittor_core():
     import jittor.compiler as compiler
     global has_rocm, cc_flags, rocm_home
@@ -27,18 +38,19 @@ def install_rocm_jittor_core():
     rocm_version = run_cmd("hipconfig -v")
     
     rocm_compiler_home = os.path.dirname(__file__)
-
-    rocm_cache_path = os.path.join(rocm_compiler_home, "rocm_cache.o")
-    rocm_cache_gz_path = os.path.join(rocm_compiler_home, "rocm_cache.gz")
+    rocm_cache_gz_path = os.path.join(rocm_compiler_home, "rocm_cache.tar.gz")
     if os.path.exists(rocm_cache_gz_path):
-        import gzip
-        with gzip.open(rocm_cache_gz_path, "rb") as f:
-            data = f.read()
-        with open(rocm_cache_path, "wb") as f:
-            f.write(data)
-
+        for o_file in glob.glob(rocm_compiler_home + "/**/*.o", recursive=True):
+            os.remove(o_file)
+        with tarfile.open(rocm_cache_gz_path, "r:gz") as tar:
+            if (check_gcc_use_cxx11_abi()):
+                tar.extractall(rocm_compiler_home, members=[tar.getmember("rocm_cache_cxx11.o")])
+                o_files = [ os.path.join(rocm_compiler_home, "rocm_cache_cxx11.o") ]
+            else:
+                tar.extractall(rocm_compiler_home, members=[tar.getmember("rocm_cache.o")])
+                o_files = [ os.path.join(rocm_compiler_home, "rocm_cache.o") ]
+    
     cc_files = sorted(glob.glob(rocm_compiler_home + "/**/*.cc", recursive=True))
-    o_files = sorted(glob.glob(rocm_compiler_home + "/**/*.o", recursive=True))
     cc_flags += f" -DHAS_CUDA -DIS_ROCM -I{rocm_compiler_home} "
     cc_flags += " " + run_cmd("hipconfig -C") + " "
     cc_flags += '  -L"' + os.path.join(rocm_home, "lib") + '" -lamdhip64 '
