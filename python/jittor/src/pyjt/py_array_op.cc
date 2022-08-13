@@ -147,7 +147,7 @@ ArrayOp::ArrayOp(PyObject* obj) {
             allocation.~Allocation();
             make_foreign_allocation(allocation, 
                 ori_ptr, output->size, 
-                [=, obj]() { 
+                [obj]() { 
                     Py_DECREF(obj); 
                 });
             Py_INCREF(obj);
