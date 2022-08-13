@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.5.6'
+__version__ = '1.3.5.7'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -537,7 +537,8 @@ def std(x):
     return out
 Var.std = std
 
-def norm(x, p=2, dim=-1, keepdim=False, eps=1e-30):
+def norm(x, p=2, dim=-1, keepdims=False, eps=1e-30, keepdim=False):
+    keepdim = keepdim or keepdims
     assert p==1 or p==2
     if p==1:
         return x.abs().sum(dim, keepdim)

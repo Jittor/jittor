@@ -30,7 +30,7 @@ struct ArgReduceOp : Op {
 
     * [in] dim:     int. Specifies which dimension to be reduced.
 
-    * [in] keepdim: bool. Whether the output has ``dim`` retained or not.
+    * [in] keepdims: bool. Whether the output has ``dim`` retained or not.
 
     ----------------
 

@@ -77,7 +77,7 @@ def full_like(x, val): ...
 def zeros_like(x): ...
 
 def std(x): ...
-def norm(x, p: int = ..., dim: int = ..., keepdim: bool = ..., eps: float = ...): ...
+def norm(x, p: int = ..., dim: int = ..., keepdims: bool = ..., eps: float = ...): ...
 origin_reshape = reshape
 
 def reshape(x, *shape): ...
@@ -903,7 +903,7 @@ def arg_reduce(x: Var, op: str, dim: int, keepdims: bool):
 	
 	    * [in] dim:     int. Specifies which dimension to be reduced.
 	
-	    * [in] keepdim: bool. Whether the output has ``dim`` retained or not.
+	    * [in] keepdims: bool. Whether the output has ``dim`` retained or not.
 	
 	    ----------------
 	
@@ -4766,7 +4766,7 @@ class Var:
 		
 		    * [in] dim:     int. Specifies which dimension to be reduced.
 		
-		    * [in] keepdim: bool. Whether the output has ``dim`` retained or not.
+		    * [in] keepdims: bool. Whether the output has ``dim`` retained or not.
 		
 		    ----------------
 		
