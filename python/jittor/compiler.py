@@ -1111,7 +1111,7 @@ if os.name == 'nt':
                     cmd = cmd.replace(" -o ", " -Fe: ")
                     output = shsplit(cmd.split("-Fe:")[1].strip())[0]
                     base_output = os.path.basename(output).split('.')[0]
-                    cmd += f" -DEF:\"{output}.def\" -IGNORE:4102 -IGNORE:4197 -IGNORE:4217 "
+                    cmd += f" -DEF:{output}.def -IGNORE:4102 -IGNORE:4197 -IGNORE:4217 "
 
                 elif " -c -o " in cmd:
                     cmd = cmd.replace(" -c -o ", " -c -Fo: ")
@@ -1323,7 +1323,7 @@ if use_data_gz:
             .replace("-Werror", "") \
             .replace("-shared", "")
         vdp = os.path.join(jittor_path, "src", "utils", "vdp")
-        run_cmd(fix_cl_flags(f"{cc_path} {dflags} -include \"{vdp}\" \"{data_s_path}\" -c -o \"{data_o_path}\""))
+        run_cmd(fix_cl_flags(f"\"{cc_path}\" {dflags} -include \"{vdp}\" \"{data_s_path}\" -c -o \"{data_o_path}\""))
         os.remove(data_s_path)
         with open(data_gz_md5_path, 'w') as f:
             f.write(md5)
