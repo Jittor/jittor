@@ -11,6 +11,7 @@
 #include "mem/allocator/cuda_dual_allocator.h"
 #include "event_queue.h"
 #endif
+#include "mem/allocator/foreign_allocator.h"
 #include <Python.h>
 #include "pyjt/py_obj_holder.h"
 #include "pyjt/py_converter.h"
@@ -24,6 +25,8 @@ namespace jittor {
 
 
 DEFINE_FLAG(int, auto_convert_64_to_32, 1, "auto convert 64bit numpy array into 32bit jittor array");
+DEFINE_FLAG(uint8, reuse_array, 0, "try reuse np.array memory into jt.array");
+DECLARE_FLAG(int, use_cuda);
 
 static auto make_array = get_op_info("array")
     .get_constructor<VarPtr, const void*, NanoVector, NanoString>();
@@ -50,6 +53,7 @@ ArrayOp::ArrayOp(PyObject* obj) {
     PyObjHolder holder;
     args.ptr = nullptr;
     allocation.ptr = nullptr;
+    void* ori_ptr = nullptr;
     if (PyFloat_CheckExact(obj)) {
         tmp_data.f32 = PyFloat_AS_DOUBLE(obj);
         args = {&tmp_data, 1, ns_float32};
@@ -80,8 +84,10 @@ ArrayOp::ArrayOp(PyObject* obj) {
         else
             args.shape.push_back(1);
         args.dtype = get_type_str(arr);
-        if (is_c_style(arr))
+        if (is_c_style(arr)) {
             args.ptr = arr->data;
+            ori_ptr = arr->data;
+        }
 
         // use 32-bit by default
         if ((auto_convert_64_to_32 || holder.obj) 
@@ -137,7 +143,17 @@ ArrayOp::ArrayOp(PyObject* obj) {
 
     if (args.ptr) {
         // if has ptr, copy from ptr
-        std::memcpy(host_ptr, args.ptr, size);
+        if (reuse_array && !use_cuda && args.ptr == ori_ptr) {
+            allocation.~Allocation();
+            make_foreign_allocation(allocation, 
+                ori_ptr, output->size, 
+                [=, obj]() { 
+                    Py_DECREF(obj); 
+                });
+            Py_INCREF(obj);
+        } else {
+            std::memcpy(host_ptr, args.ptr, size);
+        }
     } else {
         // this is non-continue numpy array
 #if defined(__linux__) || defined(_WIN32)
