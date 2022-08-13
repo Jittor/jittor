@@ -512,8 +512,8 @@ def log_sigmoid(x):
     return jt.log(jt.sigmoid(x))
 jt.Var.log_sigmoid = log_sigmoid
 
-def logsumexp(x, dim, keepdim=False):
-    return x.exp().sum(dim, keepdim).log()
+def logsumexp(x, dim, keepdims=False, keepdim=False):
+    return x.exp().sum(dim, keepdim or keepdims).log()
 jt.Var.logsumexp = logsumexp
 
 class Identity(Module):
