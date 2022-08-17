@@ -185,6 +185,12 @@ print(matmul_transpose(a, b))
         p = x.parameters()
         assert len(p)==0
 
+    def test_self_update(self):
+        from jittor.models import resnet18
+        m = resnet18()
+        x = m.state_dict()
+        m.load_state_dict(x)
+
     # def test_res2net(self):
     #     import jittor.models
     #     net = jittor.models.res2net50(True)
