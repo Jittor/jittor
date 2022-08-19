@@ -54,7 +54,7 @@ def persistent_load(saved_id):
     storage_type, key, location, numel = data
     dtype = storage_type.dtype
     if key not in loaded_storages:
-        nbytes = numel * get_dtype_size(dtype)
+        nbytes = numel
         load_tensor(contents, dtype, nbytes, key, _maybe_decode_ascii(location))
     return loaded_storages[key]
 
@@ -229,6 +229,8 @@ def load_pytorch(fn_name):
             if magic_number != MAGIC_NUMBER:
                 raise RuntimeError("Invalid magic number; corrupt file?")
             protocol_version = pickle.load(f, **pickle_load_args)
+            if PROTOCOL_VERSION != protocol_version:
+                raise RuntimeError("Invalid protocal version.")
             _sys_info = pickle.load(f, **pickle_load_args)
             unpickler = DirectUnpicklerWrapper(f, **pickle_load_args)
             unpickler.persistent_load = persistent_load_direct
