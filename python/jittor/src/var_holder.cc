@@ -134,9 +134,9 @@ string VarHolder::to_string() {
 
 VarHolder* VarHolder::assign(VarHolder* v) {
     assign_var(v->var, var);
+    v->var->own_both_liveness();
     var->release_both_liveness();
     var = v->var;
-    var->own_both_liveness();
     return this;
 }
 

@@ -494,7 +494,7 @@ class BCEWithLogitsLoss(Module):
 
 def softmax(x, dim=None, log=False):
     import jittor.other.code_softmax as code_softmax
-    if code_softmax.can_softmax_v1(x, dim):
+    if code_softmax.can_softmax_v1(x, dim) and not jt.compiler.has_rocm:
         return code_softmax.softmax_v1(x, log)
     if dim is None: dim = ()
     if log:
@@ -512,8 +512,8 @@ def log_sigmoid(x):
     return jt.log(jt.sigmoid(x))
 jt.Var.log_sigmoid = log_sigmoid
 
-def logsumexp(x, dim, keepdim=False):
-    return x.exp().sum(dim, keepdim).log()
+def logsumexp(x, dim, keepdims=False, keepdim=False):
+    return x.exp().sum(dim, keepdim or keepdims).log()
 jt.Var.logsumexp = logsumexp
 
 class Identity(Module):
@@ -2458,7 +2458,7 @@ class RNNBase(Module):
                     copy_to('weight' + param_name, offset_idx + idx, idx)
                 return num_gates
 
-        if jt.flags.use_cuda and jt.cudnn:
+        if jt.flags.use_cuda and jt.cudnn and not jt.compiler.has_rocm:
             if getattr(self, '_cudnn_weight_size', None) is None:                
                 offset_array = jt.cudnn.cudnn_rnn_weight_offset(
                     cudnn_mode,
@@ -2544,7 +2544,7 @@ class RNNBase(Module):
                 hx = (jt.zeros((num_directions * self.num_layers, input.shape[1], self.hidden_size), dtype=input.dtype),
                       jt.zeros((num_directions * self.num_layers, input.shape[1], self.hidden_size), dtype=input.dtype))
 
-        if jt.flags.use_cuda and jt.cudnn and self.proj_size == 0:
+        if jt.flags.use_cuda and jt.cudnn and self.proj_size == 0 and not jt.compiler.has_rocm:
             return self._execute_cudnn_rnn(input, hx)
         else:
             hidden_n = []

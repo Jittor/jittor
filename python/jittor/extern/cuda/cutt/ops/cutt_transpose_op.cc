@@ -69,6 +69,10 @@ unordered_map<string, unsigned int> cutt_plan_cache;
 EXTERN_LIB unordered_map<string, unsigned int> cutt_plan_cache;
 
 void CuttTransposeOp::jit_run() {
+    // Return if x is empty
+    if (x->num == 0)
+        return;
+
     cudaGetLastError();
     auto* __restrict__ xp = x->mem_ptr;
     auto* __restrict__ yp = y->mem_ptr;

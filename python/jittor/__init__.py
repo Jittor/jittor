@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.4.16'
+__version__ = '1.3.5.11'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -443,26 +443,35 @@ def full(shape,val,dtype="float32"):
         shape = (shape,)
     return unary(val, dtype).broadcast(shape)
 
-def full_like(x,val):
+def full_like(x, val, dtype=None) -> Var:
     ''' Constructs a jittor Var with all elements set to val and shape same with x. 
+    
     :param x: The reference jittor Var.
     :type x: jt.Var.
     :param val: The value of the output Var.
     :type val: number.
+    :param dtype: if None, the dtype of the output is the same as x. 
+        Otherwise, use the specified dtype. Defaults to None.
+    :type dtype: str, optional
     :return: The output Var.
     :rtype: jittor.Var
     '''
-    return full(x.shape,val,x.dtype)
+    if dtype is None: dtype = x.dtype
+    return full(x.shape, val, dtype)
 
-def zeros_like(x):
+def zeros_like(x, dtype=None) -> Var:
     ''' Constructs a jittor Var with all elements set to 0 and shape same with x. 
     
     :param x: The reference jittor Var.
     :type x: jt.Var
+    :param dtype: if None, the dtype of the output is the same as x. 
+        Otherwise, use the specified dtype. Defaults to None.
+    :type dtype: str, optional
     :return: The output Var.
     :rtype: jittor.Var
     '''
-    return zeros(x.shape,x.dtype)
+    if dtype is None: dtype = x.dtype
+    return zeros(x.shape, dtype)
 
 flags = core.Flags()
 
@@ -528,7 +537,8 @@ def std(x):
     return out
 Var.std = std
 
-def norm(x, p=2, dim=-1, keepdim=False, eps=1e-30):
+def norm(x, p=2, dim=-1, keepdims=False, eps=1e-30, keepdim=False):
+    keepdim = keepdim or keepdims
     assert p==1 or p==2
     if p==1:
         return x.abs().sum(dim, keepdim)
