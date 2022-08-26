@@ -90,7 +90,8 @@ class StorageType():
 def jittor_rebuild(storage, storage_offset, size, stride, requires_grad, backward_hooks):
     if len(size) == 0:
         return jt.array(storage)
-    return jt.array(storage).reshape(size)
+    record_size = np.prod(size)
+    return jt.array(storage[:record_size]).reshape(size)
 
 def jittor_rebuild_var(data, requires_grad, backward_hooks):
     v = jt.array(data)
