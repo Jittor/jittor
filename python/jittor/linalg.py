@@ -486,7 +486,7 @@ def einsum(string, *args):
     
     def einsum_outshape(einsum_expr, inputs):
         shps = np_cpu.concatenate([in_.shape for in_ in inputs])
-        p = einsum_expr.split(',')
+        p = einsum_expr.replace(" ", "").split(',')
         s = p[:-1] + p[-1].split('->')
         if s[-1]=='':
             return ()
