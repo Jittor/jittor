@@ -207,7 +207,9 @@ def persistent_load_direct(saved_id):
         raise RuntimeError("Unknown saved id type: %s" % saved_id[0])
 
 def load_pytorch(fn_name):
-    global contents, deserialized_objects
+    global contents, deserialized_objects, loaded_storages
+    loaded_storages = {}
+    deserialized_objects = {}
     if not fn_name.endswith(".pth"):
         print("This function is designed to load pytorch pth format files.")
         return None
