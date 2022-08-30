@@ -10,6 +10,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
+from cgi import test
 import unittest
 import jittor as jt
 import numpy as np
@@ -39,6 +40,17 @@ class TestSparse(unittest.TestCase):
     def test_unique_dim(self):
         test_unique_with_torch(np.array([[1, 3], [2, 3], [1, 3], [2, 3]]), 0)
         test_unique_with_torch(np.array([[1, 3], [2, 3], [1, 3], [2, 3]]), 1)
+
+
+    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @jt.flag_scope(use_cuda=1)
+    def test_unique_cuda(self):
+        self.test_unique()
+
+    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    @jt.flag_scope(use_cuda=1)
+    def test_unique_dim_cuda(self):
+        self.test_unique_dim()
     
         
 if __name__ == "__main__":

@@ -640,6 +640,8 @@ def unique(
             }
         '''
     )
+    if jt.flags.use_cuda > 0:
+        indice.compile_options = {"FLAGS:  --extended-lambda ": 1}
     input_sorted = input_flatten[indice][:]
     
     dimlen = indice.shape[0]
@@ -723,6 +725,10 @@ def unique(
             output->set_shape({ num });
         '''
     )
+    if jt.flags.use_cuda > 0:
+        output.compile_options = {"FLAGS:  --extended-lambda ": 1}
+        inverse.compile_options = {"FLAGS:  --extended-lambda ": 1}
+
     indice_shape = (output.shape[0], )
     output = input_sorted[output][:]
 
