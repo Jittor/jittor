@@ -525,7 +525,7 @@ _triple = _ntuple(3)
 _quadruple = _ntuple(4)
 
 
-def unique(
+def _unique(
     input: jt.Var, 
     return_inverse: bool=False, 
     return_counts: bool=False, 
@@ -640,8 +640,8 @@ def unique(
             }
         '''
     )
-    if jt.flags.use_cuda > 0:
-        indice.compile_options = {"FLAGS:  --extended-lambda ": 1}
+    # if jt.flags.use_cuda > 0:
+    indice.compile_options = {"FLAGS:  --extended-lambda ": 1}
     input_sorted = input_flatten[indice][:]
     
     dimlen = indice.shape[0]
@@ -725,9 +725,9 @@ def unique(
             output->set_shape({ num });
         '''
     )
-    if jt.flags.use_cuda > 0:
-        output.compile_options = {"FLAGS:  --extended-lambda ": 1}
-        inverse.compile_options = {"FLAGS:  --extended-lambda ": 1}
+    # if jt.flags.use_cuda > 0:
+    output.compile_options = {"FLAGS:  --extended-lambda ": 1}
+    inverse.compile_options = {"FLAGS:  --extended-lambda ": 1}
 
     indice_shape = (output.shape[0], )
     output = input_sorted[output][:]
@@ -747,6 +747,19 @@ def unique(
             return output, inverse
     else:
         return output
+
+def unique(x):
+    r'''
+    Returns the unique elements of the input tensor.
+    Args:
+        x– the input tensor.
+    '''
+    x = x.reshape(-1)
+    _,x = jt.argsort(x)
+    index,= jt.index((x.shape[0],))
+    y = x[1:][x[index[1:]] != x[index[:-1]]]
+    x = jt.concat([x[:1],y],dim=0)
+    return x
 
 jt.Var.unique = unique
 
