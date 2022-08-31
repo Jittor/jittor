@@ -691,7 +691,7 @@ def trunc_normal_(var, mean=0., std=1., a=-2., b=2.):
         print(linear.weight)
         linear.weight.trunc_normal_(std=.02) # This is ok too
     """
-    return _no_grad_trunc_normal_(var, mean, std, a, b)
+    return var.assign(_no_grad_trunc_normal_(var, mean, std, a, b))
 Var.trunc_normal_ = trunc_normal_
 
 def _no_grad_trunc_normal_(var, mean, std, a, b):
