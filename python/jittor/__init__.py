@@ -615,6 +615,38 @@ def clamp(x, min_v=None, max_v=None):
 
 Var.clamp = clamp
 
+def clamp_(x, min_v=None, max_v=None):
+    return x.assign(x.clamp(min_v=min_v, max_v=max_v))
+Var.clamp_ = clamp_
+
+def erfinv_(x):
+    return x.assign(x.erfinv())
+Var.erfinv_ = erfinv_
+
+def erf_(x):
+    return x.assign(x.erf())
+Var.erf_ = erf_
+
+def abs_(x):
+    return x.assign(x.abs())
+Var.abs_ = abs_
+
+def sigmoid_(x):
+    return x.assign(x.sigmoid())
+Var.sigmoid_ = sigmoid_
+
+def sqrt_(x):
+    return x.assign(x.sqrt())
+Var.sqrt_ = sqrt_
+
+def add_(x, y):
+    return x.assign(x.add(y))
+Var.add_ = add_
+
+def multiply_(x, y):
+    return x.assign(x.multiply(y))
+Var.multiply_ = multiply_
+
 def type_as(a, b):
     return a.unary(op=b.dtype)
 Var.type_as = type_as
