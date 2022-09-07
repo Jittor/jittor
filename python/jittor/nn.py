@@ -2800,3 +2800,59 @@ def _fft2(x, inverse=False):
     if inverse:
         y /= x.shape[1] * x.shape[2]
     return y
+
+
+def one_hot(x: jt.Var, num_classes: int=-1) -> jt.Var:
+    ''' Returns the one_hot encoding of inputs.
+
+    :param x: class values of any shape
+    :type x: jt.Var with bool or integer dtype
+
+    :param num_classes: Total number of classes. If set to -1, the number of classes will be inferred as one greater than the largest class value in the input tensor.
+    :type num_classes: int, optional
+
+    :return: a Var with one more dimension with 1 values at the index 
+    of last dimension indicated by the input, and 0 everywhere else.
+    :rtype: jt.Var
+
+    .. note::
+        if the values in x are greater than num_class or less than 0, 
+        the returned one_hot will be all zeros.
+
+    Example:
+        >>> jt.nn.one_hot(jt.arange(5) % 3)
+            jt.Var([[1 0 0]
+                [0 1 0]
+                [0 0 1]
+                [1 0 0]
+                [0 1 0]], dtype=int32)
+        >>> jt.nn.one_hot(jt.arange(5) % 3, num_classes=5)
+            jt.Var([[1 0 0 0 0]
+                [0 1 0 0 0]
+                [0 0 1 0 0]
+                [1 0 0 0 0]
+                [0 1 0 0 0]], dtype=int32)
+        >>> jt.nn.one_hot(jt.arange(6).reshape(3,2) % 3)
+            jt.Var([[[1 0 0]
+                [0 1 0]]
+
+                [[0 0 1]
+                [1 0 0]]
+
+                [[0 1 0]
+                [0 0 1]]], dtype=int32)
+    '''
+
+    assert x.dtype in [jt.bool, jt.int8, jt.int16, jt.int32, jt.int64, jt.uint8, jt.uint16, jt.uint32, jt.uint64]
+    if num_classes == -1:
+        num_classes = x.max().item() + 1
+
+    N = len(x.shape)
+    indices = ["i"+str(i) for i in range(N)]
+    y = jt.ones_like(x).reindex(
+        x.shape + [num_classes],
+        indices, 
+        extras=[x],
+        overflow_conditions=[f"i{N} != @e0({','.join(indices)})"],
+        overflow_value=0)
+    return y
