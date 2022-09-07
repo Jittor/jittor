@@ -19,23 +19,69 @@ def check_is_en(src):
     return en_cnt == len(src)
 
 def check_is_both(src):
+    if src.startswith("!"):
+        return True
     return len(src) < 2
+
+def splite_markdown_blocks(src):
+    ''' split markdown document into text, code, table blocks
+    '''
+    blocks = []
+    block = ""
+    status = "text"
+
+    def commit_block():
+        blocks.append((block, status))
+
+    for line in src.split('\n'):
+        line = line + "\n"
+        if line.startswith("```"):
+            assert status in ["text", "code"]
+            if status == "text":
+                commit_block()
+                status = "code"
+                block = line
+            elif status == "code":
+                block += line
+                commit_block()
+                status = "text"
+                block = ""
+        elif line.strip().startswith('|') and line.strip().endswith('|'):
+            assert status in ["text", "table"]
+            if status == "text":
+                commit_block()
+                status = "table"
+                block = line
+            else:
+                block += line
+        else:
+            if status == "table":
+                commit_block()
+                status = "text"
+                block = line
+            else:
+                block += line
+    if status != "code":
+        commit_block()
+    return blocks
 
 for mdname in all_src_md:
     print(mdname)
     with open(mdname, "r", encoding='utf8') as f:
         src = f.read()
-    src = src.split("```")
-    en_src = []
-    cn_src = []
-    for i, s in enumerate(src):
-        if i%2==1:
-            en_src.append(s)
-            cn_src.append(s)
+
+    src_blocks = splite_markdown_blocks(src)
+
+    en_src = ""
+    cn_src = ""
+    for block, status in src_blocks:
+        if status == "code" or status == "table":
+            en_src += block
+            cn_src += block
         else:
             en_s = []
             cn_s = []
-            for line in s.split('\n'):
+            for line in block.split('\n'):
                 if check_is_both(line):
                     en_s.append(line)
                     cn_s.append(line)
@@ -43,10 +89,9 @@ for mdname in all_src_md:
                     en_s.append(line)
                 else:
                     cn_s.append(line)
-            en_src.append("\n".join(en_s))
-            cn_src.append("\n".join(cn_s))
-    en_src = "```".join(en_src)
-    cn_src = "```".join(cn_src)
+            en_src += "\n".join(en_s)
+            cn_src += "\n".join(cn_s)
+    
     with open(mdname.replace(".src.md", ".md"), 'w', encoding='utf8') as f:
         f.write(en_src)
     with open(mdname.replace(".src.md", ".cn.md"), 'w', encoding='utf8') as f:
