@@ -1380,8 +1380,11 @@ def numpy_cumprod(a, dim):
     return func(a, dim)
 
 def linspace(start, end, steps):
-    res = jt.index((steps,))[0]
-    res = res*float((end-start)/(steps-1))+start
+    if steps > 1:
+        res = jt.index((steps,))[0]
+        res = res*float((end-start)/(steps-1))+start
+    else:
+        res = jt.array([start])
     return res
 
 def randperm(n, dtype="int32"):
