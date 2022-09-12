@@ -546,6 +546,22 @@ class Dropout(Module):
 def dropout(x,p=0.5,is_train=False):
     return Dropout(p=p,is_train=is_train)(x)
 
+class DropPath(Module):
+    def __init__(self, drop_prob=0.):
+        self.drop_prob = drop_prob
+
+    def execute(self, x):
+        if self.drop_prob == 0. or not self.is_training():
+            return x
+        keep_prob = 1 - self.drop_prob
+        shape = (x.shape[0], ) + (1, ) * (x.ndim - 1)
+        random_tensor = keep_prob + jt.rand(shape, dtype=x.dtype)
+        output = x.divide(keep_prob) * random_tensor.floor()
+        return output
+
+def drop_path(x, drop_prob=0.):
+    return DropPath(drop_prob=drop_prob)(x)
+
 class Linear(Module):
     def __init__(self, in_features, out_features, bias=True):
         self.in_features = in_features
