@@ -547,20 +547,29 @@ def dropout(x,p=0.5,is_train=False):
     return Dropout(p=p,is_train=is_train)(x)
 
 class DropPath(Module):
-    def __init__(self, drop_prob=0.):
-        self.drop_prob = drop_prob
-
+    '''Drop paths (Stochastic Depth) per sample  (when applied in main path of residual blocks).
+    '''
+    def __init__(self, p=0.5, is_train=False):
+        '''
+            :param p: Specifies the probability of each batch retention. Defaults to 0.5.
+            :type p: float dtype
+            :param is_train: Specify whether it is a training model. Defaults to False.
+            :type is_train: bool
+        '''
+        self.p = p
+        self.is_train = is_train
+        #TODO: test model.train() to change self.is_train
     def execute(self, x):
-        if self.drop_prob == 0. or not self.is_training():
+        if self.p == 0. or not self.is_train:
             return x
-        keep_prob = 1 - self.drop_prob
+        keep_prob = 1 - self.p
         shape = (x.shape[0], ) + (1, ) * (x.ndim - 1)
         random_tensor = keep_prob + jt.rand(shape, dtype=x.dtype)
         output = x.divide(keep_prob) * random_tensor.floor()
         return output
 
-def drop_path(x, drop_prob=0.):
-    return DropPath(drop_prob=drop_prob)(x)
+def droppath(x,p=0.5,is_train=False):
+    return DropPath(p=p,is_train=is_train)(x)
 
 class Linear(Module):
     def __init__(self, in_features, out_features, bias=True):
