@@ -90,5 +90,14 @@ class TestCuttTransposeOp(unittest.TestCase):
             assert ((da-jda.data)<1e-5).all(), (da, jda.data, da-jda.data)
             assert ((db-jdb.data)<1e-5).all(), (db-jdb.data)
 
+    @unittest.skipIf(cutt_ops==None, "Not use cutt, Skip")
+    @jt.flag_scope(use_cuda=1)
+    def test_matmul_grad(self):
+        a = jt.zeros((0, 10))
+        b = a.transpose(1, 0)
+        c = b.data
+        assert c.shape[0] == 10
+        assert c.shape[1] == 0
+
 if __name__ == "__main__":
     unittest.main()
