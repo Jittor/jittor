@@ -16,7 +16,7 @@ In detail, autocompletion of the following functions are supported.
 - methods of jittor.Var
 
 Prerequisite:
-- mypy for automatic stub generation
+- mypy for automatic stub generation, installation: pip install mypy
 
 Usage: python3 -m jittor.utils.gen_pyi
 
@@ -35,7 +35,7 @@ def add_indent(s: str, n=1):
 def ctype_to_python(type_str):
     if type_str == "bool":
         return "bool"
-    if type_str in ["int", "uint", "int64", "uint64", "size_t"]:
+    if type_str in ["int", "uint", "uint8", "int64", "uint64", "size_t"]:
         return "int"
     if type_str in ["float32", "float64"]:
         return "float"
@@ -49,6 +49,8 @@ def ctype_to_python(type_str):
         return "Var"
     if type_str in ["vector<VarHolder*>", "vector<VarHolder*>&&"]:
         return "List[Var]"
+    if type_str in ["vector_to_tuple<VarHolder*>"]:
+        return "Tuple[Var]"
     if type_str == "NanoVector":
         return "Tuple[int]"
     if type_str == "vector<NanoVector>&&":
@@ -161,11 +163,22 @@ def gen_ops_stub(jittor_path):
         if func_name == "bool":
             continue
 
-        docstring = func.__doc__[:func.__doc__.find("Declaration:")]
-        docstring = docstring.replace("'''", '"""').strip()
-        declarations = re.findall(r"Declaration:\n(.+)\n", func.__doc__)
+        docstrings = []
+        declarations = []
+        for i, doc in enumerate(re.split(r"Declaration:\n(.+)\n", func.__doc__)):
+            if i % 2 == 0:
+                if not doc.strip() and docstrings:  
+                    # if the current docstring is empty, use the last docstring
+                    docstrings.append(docstrings[-1])
+                else:
+                    docstrings.append(doc.replace("'''", '"""').strip())
+            else:
+                declarations.append(doc)
 
-        for decl in declarations:
+        for i in range(len(declarations)):
+            decl = declarations[i]
+            docstring = docstrings[i]
+
             decorators = "@overload\n" if len(declarations) > 1 else ""
             return_type = ctype_to_python(decl.split(' ', maxsplit=1)[0])
             param_hints = decl_to_param_hints(decl)
