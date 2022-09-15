@@ -9,6 +9,7 @@
 // ***************************************************************
 #include <algorithm>
 #include <functional>
+#include <queue>
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
@@ -209,11 +210,13 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
         // get all nodes need to be executed
         int need_opt = 0;
         auto t = ++Node::tflag_count;
+        int64 max_id = 0;
         for (Var* v : vars)
             if (!v->is_finished() && v->tflag != t) {
                 v->tflag = t;
                 start_var_num++;
                 bfs_q.push_back(v);
+                max_id = std::max(max_id, v->id);
             }
         for (int i=0; i<bfs_q.size(); i++) {
             auto node = bfs_q[i];
@@ -225,12 +228,14 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
                     bfs_q.push_back(i.node);
                 }
             // this var has been fetched
-            if (node->flags.get(NodeFlags::_fetch)) {
+            if (weak_sync || node->flags.get(NodeFlags::_fetch)) {
                 for (auto& n : node->_outputs) {
                     // if not in queue and is fetch op
                     if (n.node->tflag != t &&
+                        n.node->pending_liveness &&
                         !n.node->is_finished() &&
-                        n.node->flags.get(NodeFlags::_fetch)) {
+                        (n.node->id <= max_id ||
+                            n.node->flags.get(NodeFlags::_fetch))) {
                         n.node->tflag = t;
                         need_opt += n.node->flags.get(NodeFlags::_has_gopt);
                         bfs_q.push_back(n.node);
@@ -330,7 +335,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     {
         // queue.clear();
         #ifndef JT_bfs_executor
-        map<int64, int> p_queue;
+        std::priority_queue<pair<int64,int64>> p_queue;
         #endif
         for (int root : roots) {
             for (int i=root; i>=0; i=next[i]) {
@@ -349,7 +354,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
                 queue.push_back(root);
             #else
             if (deps[root] == 0) 
-                p_queue[ops[root]->id] = root;
+                p_queue.emplace(-ops[root]->order(), root);
             #endif
         }
         #ifdef JT_bfs_executor
@@ -361,8 +366,8 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
             #ifdef JT_bfs_executor
             int op_id = queue[s];
             #else
-            int op_id = p_queue.begin()->second;
-            p_queue.erase(p_queue.begin());
+            int op_id = p_queue.top().second;
+            p_queue.pop();
             queue.push_back(op_id);
             #endif
             for (int i=op_id; i>=0; i=next[i]) {
@@ -382,7 +387,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
                                 queue.push_back(op2_id);
                             #else
                             if (deps[op2_id] == 0)
-                                p_queue[op2->id] = op2_id;
+                                p_queue.emplace(-op2->order(), op2_id);
                             #endif
                         }
                 }
@@ -568,15 +573,16 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
                     migrate_to_cpu(v, allocator);
             }
             if (!use_cuda_managed_allocator) {
-                for (auto* var : op->outputs()) {
-                    var->allocator->free(var->mem_ptr, var->size, var->allocation);
-                    var->mem_ptr = var->allocator = nullptr;
-                    var->allocation = 0;
-                    var->alloc(cpu_allocator);
-                }
+                for (auto* var : op->outputs()) 
+                    if (var->allocator->is_cuda())
+                        migrate_to_cpu(var, allocator);
             }
         } else {
             for (Var* v : op->inputs()) {
+                if (!v->allocator->is_cuda())
+                    migrate_to_gpu(v, allocator);
+            }
+            for (Var* v : op->outputs()) {
                 if (!v->allocator->is_cuda())
                     migrate_to_gpu(v, allocator);
             }
@@ -617,7 +623,10 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
             check_nan(var);
         #endif
         #ifdef JT_SYNC
+        #ifdef HAS_CUDA
+        checkCudaErrors(cudaGetLastError());
         checkCudaErrors(cudaDeviceSynchronize());
+        #endif
         #endif
         LOGvvv << "Finished Op(" >> op->name() << rid >> 
             "/" >> queue.size() >> ") output:" << op->outputs();

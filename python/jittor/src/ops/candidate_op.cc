@@ -25,10 +25,10 @@ void CandidateOp::infer_shape() {
 }
 
 void CandidateOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype();
-    jk << _CS("][Ty:") << y->dtype();
-    jk << _CS("][FUNC:") << fail_cond;
-    jk << _CS("][XDIM=") << JK::hex1(x->shape.size()) << ']';
+    jk << "«Tx:" << x->dtype();
+    jk << "«Ty:" << y->dtype();
+    jk << "«FUNC:" << fail_cond;
+    jk << "«XDIM=" << JK::hex1(x->shape.size());
 }
 
 #else // JIT

@@ -83,7 +83,7 @@ def map_flags(flags, func):
         output.append(func(s))
     return " ".join(output)
 
-def compile(compiler, flags, inputs, output, combind_build=False, cuda_flags=""):
+def compile(compiler, flags, inputs, output, combind_build=False, cuda_flags="", obj_dirname="obj_files"):
     def do_compile(cmd):
         if jit_utils.cc:
             return jit_utils.cc.cache_compile(cmd, cache_path, jittor_path)
@@ -108,13 +108,15 @@ def compile(compiler, flags, inputs, output, combind_build=False, cuda_flags="")
     obj_files = []
     ex_obj_files = []
     new_inputs = []
+    obj_dir = os.path.join(cache_path, obj_dirname)
+    os.makedirs(obj_dir, exist_ok=True)
     for name in inputs:
         if name[-1] in 'oab':
             ex_obj_files.append(name)
         else:
             new_inputs.append(os.path.join(jittor_path, name))
             obj_files.append(os.path.join(
-                cache_path, "obj_files", os.path.basename(name)+".o"))
+                obj_dir, os.path.basename(name)+".o"))
     inputs = new_inputs
     cm = lambda s: f"\"{s}\""
     cms = lambda arr: [f"\"{s}\"" for s in arr ]
@@ -131,7 +133,7 @@ def compile(compiler, flags, inputs, output, combind_build=False, cuda_flags="")
         nflags = oflags
         cmd = f"{cm(input)} {nflags} {lto_flags} -c -o {cm(obj_file)}"
         if input.endswith(".cu"):
-            if has_cuda:
+            if has_cuda or has_rocm:
                 cmd = f"\"{nvcc_path}\" {cuda_flags} {cmd}"
                 cmd = convert_nvcc_flags(fix_cl_flags(cmd))
             else:
@@ -141,8 +143,10 @@ def compile(compiler, flags, inputs, output, combind_build=False, cuda_flags="")
             cmd = fix_cl_flags(cmd)
         if "nan_checker" in input:
             # nan checker needs to disable fast_math 
-            cmd = cmd.replace("--use_fast_math", "")
-            cmd = cmd.replace("-Ofast", "-O2")
+            if "--use_fast_math" in cmd:
+                cmd = cmd.replace("--use_fast_math", "")
+            if "-Ofast" in cmd:
+                cmd = cmd.replace("-Ofast", "-O2")
         cmds.append(cmd)
     jit_utils.run_cmds(cmds, cache_path, jittor_path, "Compiling "+base_output)
     obj_files += ex_obj_files
@@ -230,7 +234,7 @@ def gen_jit_flags():
             jit_declares.append(f"DECLARE_FLAG({type}, {name});")
             alias = []
             if name == "use_cuda":
-                alias = ["use_device", "use_acl"]
+                alias = ["use_device", "use_acl", "use_rocm"]
             elif name == "auto_mixed_precision_level":
                 alias = ["amp_level"]
             get_names = ",".join(["__get__"+a for a in [name]+alias])
@@ -1107,7 +1111,7 @@ if os.name == 'nt':
                     cmd = cmd.replace(" -o ", " -Fe: ")
                     output = shsplit(cmd.split("-Fe:")[1].strip())[0]
                     base_output = os.path.basename(output).split('.')[0]
-                    cmd += f" -DEF:\"{output}.def\" -IGNORE:4102 -IGNORE:4197 -IGNORE:4217 "
+                    cmd += f" -DEF:{output}.def -IGNORE:4102 -IGNORE:4197 -IGNORE:4217 "
 
                 elif " -c -o " in cmd:
                     cmd = cmd.replace(" -c -o ", " -c -Fo: ")
@@ -1148,7 +1152,10 @@ if os.name == 'nt':
             return cmd
 
 if ' -O' not in cc_flags:
-    opt_flags += " -O2 "
+    if os.environ.get("debug", "0") == "1":
+        opt_flags += " -O0 "
+    else:
+        opt_flags += " -O2 "
     kernel_opt_flags += " -Ofast "
 lto_flags = ""
 if os.environ.get("enable_lto") == "1":
@@ -1224,6 +1231,8 @@ if has_cuda:
 # from .acl_compiler import check_acl
 from .extern.acl import acl_compiler
 jit_utils.add_backend(acl_compiler)
+from .extern.rocm import rocm_compiler
+jit_utils.add_backend(rocm_compiler)
 
 for mod in jit_utils.backends:
     if mod.check():
@@ -1247,7 +1256,7 @@ pyjt_gen_src = pyjt_compiler.compile(cache_path, jittor_path)
 # 3. op_utils
 # 4. other
 files2 = pyjt_gen_src
-ext_args = 'c[cu]' if has_cuda else 'cc'
+ext_args = 'c[cu]' if has_cuda or has_rocm else 'cc'
 files4 = glob.glob(jittor_path+"/src/**/*."+ext_args, recursive=True)
 files4 = [ f[len(jittor_path)+1:] for f in files4 ]
 # files4 = run_cmd('find -L src | grep '+grep_args, jittor_path).splitlines()
@@ -1314,7 +1323,7 @@ if use_data_gz:
             .replace("-Werror", "") \
             .replace("-shared", "")
         vdp = os.path.join(jittor_path, "src", "utils", "vdp")
-        run_cmd(fix_cl_flags(f"{cc_path} {dflags} -include \"{vdp}\" \"{data_s_path}\" -c -o \"{data_o_path}\""))
+        run_cmd(fix_cl_flags(f"\"{cc_path}\" {dflags} -include \"{vdp}\" \"{data_s_path}\" -c -o \"{data_o_path}\""))
         os.remove(data_s_path)
         with open(data_gz_md5_path, 'w') as f:
             f.write(md5)

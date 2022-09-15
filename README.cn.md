@@ -2,7 +2,8 @@
 
 ![Jittor Logo](https://cg.cs.tsinghua.edu.cn/jittor/favicon_package_v0/JittorLogo_Final1220.svg)
 
-[快速开始](#快速开始) | [安装](#安装) | [教程](#教程)
+
+[快速开始](#快速开始) | [安装](#安装) | [教程](#教程) | [English](./README.md)
 
 
 Jittor 是一个基于即时编译和元算子的高性能深度学习框架，整个框架在即时编译的同时，还集成了强大的Op编译器和调优器，为您的模型生成定制化的高性能代码。Jittor还包含了丰富的高性能模型库，涵盖范围包括：图像识别，检测，分割，生成，可微渲染，几何学习，强化学习等等。
@@ -18,6 +19,7 @@ Jittor前端语言为Python。前端使用了模块化和动态图执行的设�
 *  [Jittor文档](https://cg.cs.tsinghua.edu.cn/jittor/assets/docs/index.html)
 *  [Github](https://github.com/jittor/jittor)， [Gitee](https://gitee.com/jittor/jittor)
 *  [Jittor 论坛](https://discuss.jittor.org/)
+*  [Jittor 精选仓库](https://github.com/Jittor/jittor/blob/master/AWESOME-JITTOR-LIST.md)
 *  即时通信: QQ Group(761222083)
 
 
@@ -88,38 +90,16 @@ for i,(x,y) in enumerate(get_data(n)):
 
 ## 安装
 
-
 Jittor框架对环境要求如下:
 
-Jittor 支持**Linux**(e.g. Ubuntu/CentOS/Arch), **macOS**,**Windows**， 其中**Linux**和**macOS**的依赖如下：
-* Python：版本 >= 3.7
-* C++编译器 （需要下列至少一个）
-    - g++ （>=5.4.0 for linux）
-    - clang （>=8.0 for mac）
-* GPU 编译器（可选）：nvcc >=10.0
-* GPU 加速库（可选）：cudnn-dev (cudnn开发版, 推荐使用tar安装方法，[参考链接](https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#installlinux-tar))
 
-Jittor 目前还支持主流国产Linux操作系统，如统信、麒麟、普华、龙芯Loongnix，安装方式可参考 Linux pip安装方法，准备好python和g++即可。
-
-**Windows**对环境的要求为：
-* Python：版本 >= 3.8(建议从Python官网安装：<https://www.python.org/downloads/windows/>)
-* x86_64处理器
-* Windows 10及以上。
-
-如果您不希望手动配置环境，我们推荐使用 Docker 进行安装。
-除此之外，您还可以使用 pip 安装和手动安装。
-
-注意1：macOS 用户需要安装额外依赖，请参考 [macOS 安装](#macOS-安装)。
+| OS                                                     | CPU                                 | Python | Compiler     | (Optional) GPU platform                                |
+|--------------------------------------------------------|-------------------------------------|--------|--------------|---------------------------------------------|
+| Linux<br>(Ubuntu, CentOS, Arch, <br>UOS, KylinOS, ...) | x86 <br>x86_64 <br>ARM <br>loongson | >= 3.7 | g++ >=5.4    | Nvidia CUDA >= 10.0, [cuDNN](https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#installlinux-tar) <br> or [AMD ROCm](https://docs.amd.com/) >= 4.0 <br> or [Hygon DCU DTK](https://tycloud.hpccube.com/doc/1.0.6/11277/general-handbook/software-tutorial/jittor.html) >= 22.04 |
+| macOS <br>(>= 10.14 Mojave)                            | intel<br>Apple Silicon              | >= 3.7 | clang >= 8.0 | -                                           |
+| Windows 10 & 11                                        | x86_64                              | [>= 3.8](https://www.python.org/downloads/windows/) | -            | Nvidia CUDA >= 10.2 [cuDNN](https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#install-windows)                               |
 
 Jittor 提供了三种安装方法：pip、docker和手动安装：
-
-
-
-
-
-
-
-
 
 
 ## Pip 安装
@@ -142,11 +122,11 @@ jittor会自动在路径中寻找合适的编译器, 如果您希望手动指定
 ### macOS 安装
 
 
-macOS 请使用 [homebrew](https://brew.sh) 安装额外的依赖 (python>=3.7, onednn)。
+macOS 请使用 [homebrew](https://brew.sh) 安装额外的依赖。
 
 
 ```bash
-brew install python@3.7 onednn libomp
+brew install onednn libomp
 ```
 
 之后您可以通过 pip 安装 jittor，并测试是否可以成功运行。
@@ -157,7 +137,7 @@ python3.7 -m pip install jittor
 python3.7 -m jittor.test.test_example
 ```
 
-目前在macOS中，jittor 只支持 CPU 计算。
+目前在 macOS 中，jittor 只支持 CPU 计算。
 
 
 ### Windows安装
@@ -439,3 +419,4 @@ Jittor目前由[清华大学计算机图形学组](https://cg.cs.tsinghua.edu.cn
 
 
 如LICENSE.txt文件中所示，Jittor使用Apache 2.0版权协议。
+

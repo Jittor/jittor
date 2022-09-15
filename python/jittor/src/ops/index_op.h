@@ -32,9 +32,9 @@ struct IndexOp : Op {
 
     Example::
 
-        print(jt.index([2,2], 0)())
+        print(jt.index([2,2], 0))
         # output: [[0,0],[1,1]]
-        print(jt.index([2,2], 1)())
+        print(jt.index([2,2], 1))
         # output: [[0,1],[0,1]]
      */
     IndexOp(NanoVector shape, int64 dim, NanoString dtype=ns_int32);

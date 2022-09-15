@@ -218,6 +218,39 @@ class TestCore(unittest.TestCase):
         assert cnt2 == 10
         assert cnt1 <= 33, cnt1
 
+    def test_node_order(self):
+        a = jt.nn.Sequential()
+        for i in range(10):
+            a.append(jt.nn.Linear(10,10, bias=False))
+        sgd = jt.optim.SGD(a.parameters(), 0.1)
+        jt.sync_all()
+        with jt.log_capture_scope(log_silent=1,
+                log_vprefix="exe=100") as logs:
+            x = jt.rand(3,10)
+            y = a(x)
+            sgd.step(y*y)
+            jt.sync_all()
+        orders = []
+        for l in logs:
+            msg = l["msg"]
+            if "Finished" in msg:
+                # print(msg)
+                if "weight" in msg:
+                    assert msg.count("Var") >= 2
+                    order = int(msg.split('fused ')[1].split("/")[0])
+                    # print(order)
+                    orders.append(order)
+        assert len(orders) == 10, orders
+        for i in range(10):
+            assert orders[i] <= 14+i*3
+
+    def test_bc_bug(self):
+        a = jt.zeros((1,1))
+        b = a * 0.5
+        b.sync()
+        da = jt.grad(b, a)
+        da.sync()
+
 
 if __name__ == "__main__":
     unittest.main()

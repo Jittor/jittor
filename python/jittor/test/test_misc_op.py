@@ -263,7 +263,20 @@ class TestOther(unittest.TestCase):
         x = jt.random((100,))
         z = jt.arctan2(y, x)
         z2 = np.arctan2(y.data, x.data)
-        np.testing.assert_allclose(z.data, z2)
+        np.testing.assert_allclose(z.data, z2, atol=1e-6)
+
+    def test_softmax_precision(self):
+        # jt.flags.use_cuda = 1
+        a = -jt.array([1.0,2.0,1e5])
+        b = a.log_softmax(0)
+        assert b.isfinite().all().item()
+        print("test_softmax_precision cpu ok")
+        if not jt.has_cuda: return
+        jt.flags.use_cuda = 1
+        a = -jt.array([1.0,2.0,1e5])
+        b = a.log_softmax(0)
+        assert b.isfinite().all().item()
+        print("test_softmax_precision gpu ok")
 
     def test_code_softmax(self):
         if not jt.has_cuda: return

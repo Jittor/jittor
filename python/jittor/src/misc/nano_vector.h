@@ -148,6 +148,12 @@ struct NanoVector {
         for (auto a : v) push_back_check_overflow(a);
     }
 
+#ifdef __linux__
+    inline NanoVector(const vector<int64_t>& v) {
+        for (auto a : v) push_back_check_overflow((int64)a);
+    }
+#endif
+
     template<typename TMakeV>
     inline static NanoVector make(const TMakeV* v, int n) {
         NanoVector nv;

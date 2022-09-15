@@ -20,7 +20,7 @@ def install():
     global has_acl, cc_flags
     acl_compiler_home = os.path.dirname(__file__)
     cc_files = sorted(glob.glob(acl_compiler_home+"/**/*.cc", recursive=True))
-    cc_flags += f" -DHAS_CUDA -DIS_ACL -I/usr/local/Ascend/runtime/include -I/usr/local/Ascend/driver/include -L/usr/local/Ascend/compiler/lib64 -L/usr/local/Ascend/runtime/lib64 -I{acl_compiler_home}  -ltikc_runtime -lascendcl  "
+    cc_flags += f" -DHAS_CUDA -DIS_ACL  -I/usr/local/Ascend/latest/x86_64-linux/include/ -I/usr/local/Ascend/latest/x86_64-linux/include/acl -L/usr/local/Ascend/latest/x86_64-linux/lib64  -I/usr/local/Ascend/runtime/include -I/usr/local/Ascend/driver/include -L/usr/local/Ascend/compiler/lib64 -L/usr/local/Ascend/runtime/lib64 -I{acl_compiler_home}  -ltikc_runtime -lascendcl  "
     ctypes.CDLL("libascendcl.so", dlopen_flags)
     jittor_utils.LOG.i("ACL detected")
 
@@ -33,6 +33,10 @@ string process_acl(const string& src, const string& name, const map<string,strin
     jittor_utils.process_jittor_source("acl", mod.process)
 
     has_acl = 1
+
+
+def install_extern():
+    return False
 
 
 def check():

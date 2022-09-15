@@ -199,7 +199,8 @@ def setup_cuda_extern():
             "jtcuda" not in cp:
             LOG.w(f"CUDA related path found in LD_LIBRARY_PATH or PATH({check_ld_path}), "
             "This path may cause jittor found the wrong libs, "
-            "please unset LD_LIBRARY_PATH and remove cuda lib path in Path. ")
+            "please unset LD_LIBRARY_PATH and remove cuda lib path in Path. \n"
+            "Or you can let jittor install cuda for you: `python3.x -m jittor_utils.install_cuda`")
     LOG.vv("setup cuda extern...")
     cache_path_cuda = os.path.join(cache_path, "cuda")
     cuda_include = os.path.join(jittor_path, "extern", "cuda", "inc")
@@ -588,3 +589,8 @@ except Exception as e:
     LOG.w("MKL install failed, msg:", e)
 
 setup_cuda_extern()
+
+# install backend extern library
+for mod in jit_utils.backends:
+    if mod.install_extern():
+        break

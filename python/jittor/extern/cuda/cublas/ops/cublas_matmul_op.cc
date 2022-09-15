@@ -50,11 +50,10 @@ void CublasMatmulOp::infer_shape() {
 }
 
 void CublasMatmulOp::jit_prepare(JK& jk) {
-    jk << _CS("[T:") << a->dtype();
-    jk << _CS("][Trans_a:") << (trans_a ? 'T' : 'N');
-    jk << _CS("][Trans_b:") << (trans_b ? 'T' : 'N');
-    jk << _CS("][op:") << (a->dtype().dsize() == 2? 'H' : (a->dtype().dsize() == 4 ? 'S' : 'D'));
-    jk << ']';
+    jk << "«T:" << a->dtype();
+    jk << "«Trans_a:" << (trans_a ? 'T' : 'N');
+    jk << "«Trans_b:" << (trans_b ? 'T' : 'N');
+    jk << "«op:" << (a->dtype().dsize() == 2? 'H' : (a->dtype().dsize() == 4 ? 'S' : 'D'));
 }
 
 #else // JIT

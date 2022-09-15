@@ -44,9 +44,9 @@ void CufftFftOp::jit_prepare(JK& jk) {
         printf("not supported fft dtype: %s\n", y->dtype().to_cstring());
         ASSERT(false);
     }
-    jk << _CS("[T:") << y->dtype();
-    jk << _CS("][I:")<<inverse<<"]";
-    jk << _CS("[TS:\"")<<y->dtype()<<"\"]";
+    jk << "«T:" << y->dtype();
+    jk << "«I:" << inverse;
+    jk << "«TS:\"" << y->dtype()<<"\"";
 }
 
 #else // JIT
