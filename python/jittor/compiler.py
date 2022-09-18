@@ -1380,7 +1380,7 @@ flags.has_pybt = has_pybt
 
 core.set_lock_path(lock.lock_path)
 
-def compile_torch_extensions(extension_name, sources, use_cuda=0, force_recompile=0):
+def compile_torch_extensions(extension_name, sources, extra_cflags=None, extra_cuda_cflags=None, extra_ldflags=None, use_cuda=0, force_recompile=0):
     if use_cuda:
         compiler = nvcc_path
     else:
@@ -1389,12 +1389,17 @@ def compile_torch_extensions(extension_name, sources, use_cuda=0, force_recompil
     if os.path.exists(extension_name+suffix) and not force_recompile:
         return 0
     jittor_src_path = os.path.join(jittor_path, "src")
-    assert (isinstance(sources, str) or isinstance(sources, list)), "must input lists or concated string of source files"
+    assert (isinstance(sources, str) or isinstance(sources, list)), "must input lists or concatenated string of source files"
     if not isinstance(sources, str):
         sources = " ".join(sources)
-    compile_command = f"{compiler} {sources} {jittor_src_path}/ctorch/torch/extension.cpp -I{jittor_src_path} -I{jittor_src_path}/ctorch -DTORCH_EXTENSION_NAME={extension_name} -O3 -shared -std=c++14 --forward-unknown-to-host-compiler --use_fast_math --expt-relaxed-constexpr -fPIC -DHAS_CUDA -lcusparse -I{jittor_path}/extern/cuda/inc/ --allow-unsupported-compiler -arch=sm_80 $(python3 -m pybind11 --includes) -o {extension_name}$(python3-config --extension-suffix)" 
+    extra_flags = extra_cflags if use_cuda == 0 else extra_cuda_cflags
+    extra_flags = " ".join(extra_flags)
+    compile_command = f"{compiler} {sources} {jittor_src_path}/ctorch/torch/extension.cpp -I{jittor_src_path} -I{jittor_src_path}/ctorch -DTORCH_EXTENSION_NAME={extension_name} -O3 -shared -std=c++14 --forward-unknown-to-host-compiler --use_fast_math --expt-relaxed-constexpr -fPIC -DHAS_CUDA -lcusparse {extra_flags} -I{jittor_path}/extern/cuda/inc/ --allow-unsupported-compiler -arch=sm_80 $(python3 -m pybind11 --includes) -o {extension_name}$(python3-config --extension-suffix)" 
     status = os.system(compile_command)
     print(compile_command)
     if status != 0:
         print("=========\nCompile failed. If you are compiling CUDA ops, please set use_cuda to 1 in the parameters.\n=========")
     return status
+
+def _get_build_directory(extension_name, empty=False):
+    return os.path.join(cache_path, extension_name)

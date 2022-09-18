@@ -1541,6 +1541,13 @@ can also be None)::
     assert db.data == 0
 
     '''
+    def __init__(self):
+        super().__init__(self)
+        self.saved_variables = []
+    
+    def save_for_backward(self, *args):
+        self.saved_variables += list(args)
+    
     def __call__(self, *args):
         backup = args
         args = list(args)

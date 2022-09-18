@@ -11,8 +11,6 @@ namespace jittor {
         }    
     }
 
-    #define TORCH_CHECK(a, b) assert(a) 
-
     #define AT_PRIVATE_CASE_TYPE(enum_type, type, ...) \
         case enum_type: {                                \
             using scalar_t = type;                         \
@@ -56,13 +54,13 @@ namespace jittor {
         int kInt32 = 4;
         int kCUDA = 1;
 
-        Option Option::dtype(int dt) {
+        Option Option::dtype(int dt) const {
             Option temp = *this;
             temp.dtype_ = dt;
             return temp;
         }
-
-        Option Option::device(int device, int devid) {
+        
+        Option Option::device(int device, int devid=0) const {
             Option temp = *this;
             temp.device_ = device;
             temp.devid_ = devid;
@@ -77,6 +75,10 @@ namespace jittor {
         }
 
         int Device::type() {
+            return use_cuda;
+        }
+
+        int Option::type() {
             return use_cuda;
         }
 
@@ -96,6 +98,11 @@ namespace jittor {
         }
         
         NanoVector Tensor::size() {
+            if(!jtptr) return 0;
+            return jtptr->shape();
+        }
+
+        NanoVector Tensor::sizes() {
             if(!jtptr) return 0;
             return jtptr->shape();
         }
@@ -141,7 +148,21 @@ namespace jittor {
             return strides[strides.size() - i - 1];
         }
 
-        int Tensor::dtype() {
+        Tensor contiguous() {
+            return *this;
+        }
+
+        int get_device() {
+            return 0;
+        }
+
+        bool defined() {
+            if(!jtptr) return 0;
+            if(!jtptr->var) return 0;
+            return 1;
+        }
+
+        int Tensor::dtype() const {
             if(!jtptr) return -1; // nullptr
             NanoString dtype_ = jtptr->dtype();
             if(dtype_ == "uint8") 
@@ -176,7 +197,7 @@ namespace jittor {
             return jtptr->shape().size();
         }
 
-        bool Tensor::is_contiguous() {
+        bool Tensor::is_contiguous() const {
             return true;
         }
 
@@ -197,6 +218,17 @@ namespace jittor {
         }
 
         static auto make_empty = get_op_info("empty").get_constructor<VarPtr, NanoVector, NanoString>();
+        static auto make_number = get_op_info("number").get_constructor<VarPtr, float, Var*>();
+        
+        Tensor zeros_like(Tensor& refer_tensor) {
+            Varptr ptr = make_number(0, refer_tensor.jtptr->var);
+            return Tensor(ptr);
+        }
+
+        Tensor empty_like(Tensor& refer_tensor) {
+            VarPtr ptr = make_empty(refer_tensor.size(), refer_tensor.dtype());
+            return Tensor(ptr);
+        }
 
         Tensor empty(NanoVector shape, Option option, at::MemoryFormat format) {
             // todo: add special support for different formats. For now all outputs are contiguous format.
@@ -236,6 +268,11 @@ namespace jittor {
         // }
     }
     
+    namespace at {
+        // in face at::Tensor is not differentiable. TODO: set requires_grad to false for it.
+        using Tensor = torch::Tensor; 
+    }
+
     int device_of(torch::Tensor a) {
         if(use_cuda) 
             return 1;

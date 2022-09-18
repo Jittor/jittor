@@ -230,6 +230,13 @@ struct NanoVector {
         return v;
     }
 
+    inline vector<long int> vec() const {
+        vector<long int> v(size());
+        for (int i=0; i<size(); i++)
+            v[i] = at(i);
+        return v;
+    }
+
     inline void _unpack(int i) {
         return;
     }
