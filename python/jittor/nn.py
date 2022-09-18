@@ -1770,6 +1770,9 @@ def resize(img, size, mode="nearest", align_corners=False, tf_mode=False):
         x = hid * (h / H)
         y = wid * (w / W)
     elif mode == "area":
+        '''
+        Area interpolation uses AdaptivePool2D to resize origin images.
+        '''
         stride = (h // H, w // W)
         assert stride[0] > 0 and stride[1] > 0
         x, y = jt.meshgrid(jt.arange(0, H, 1), jt.arange(0, W, 1))
