@@ -39,6 +39,7 @@ Executor exe;
 EXTERN_LIB MemoryProfiler memory_profiler;
 DECLARE_FLAG(int, profile_memory_enable);
 DEFINE_FLAG(int, gopt_disable, 0, "Disable graph optimizer.");
+DEFINE_FLAG(int, use_threading, 0, "Allow to use python threading with jittor.");
 
 // from fetch_op.cc
 EXTERN_LIB list<VarPtr> fetcher_to_free;
@@ -192,7 +193,7 @@ static void top_weak_sync(vector<Var*>& vars) {
 }
 
 void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
-    if (weak_sync)
+    if (weak_sync && !use_threading)
         top_weak_sync(vars);
     auto allocator = get_allocator();
     auto temp_allocator = get_allocator(true);
