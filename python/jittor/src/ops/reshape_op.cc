@@ -44,8 +44,12 @@ void ReshapeOp::infer_shape() {
     if (uncertain_dim == 0) {
         CHECKop(x_items,==,y_items) << "reshape shape is invalid for input of size";
     } else {
-        CHECK(y_items != 0 && x_items % y_items == 0) << "reshape shape is invalid for input of size " << x_items;
-        uncertain_dim = x_items / y_items;
+        if (x_items == 0) {
+            uncertain_dim = 0;
+        } else {
+            CHECK(y_items != 0 && x_items % y_items == 0) << "reshape shape is invalid for input of size " << x_items;
+            uncertain_dim = x_items / y_items;
+        }        
         yshape.clear();
         for (auto a : shape)
             yshape.push_back(a<0 ? uncertain_dim : a);

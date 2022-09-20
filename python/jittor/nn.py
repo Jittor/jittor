@@ -47,6 +47,10 @@ def bmm_transpose(a, b):
     returns a * b^T
     '''
     if jt.flags.use_cuda and jt.compile_extern.cublas_ops:
+        if a.shape[0] != b.shape[0]:
+            # For a, b with different batch_size
+            broad_var = (a, b.shape[0]) if a.shape[0] < b.shape[0] else (b, a.shape[0])
+            broad_var[0].broadcast((broad_var[1], broad_var[0].shape[1:]))
         return jt.compile_extern.cublas_ops.cublas_batched_matmul(a, b, 0, 1)
     t = list(range(b.ndim))
     t[-1], t[-2] = t[-2], t[-1]
@@ -1770,6 +1774,9 @@ def resize(img, size, mode="nearest", align_corners=False, tf_mode=False):
         x = hid * (h / H)
         y = wid * (w / W)
     elif mode == "area":
+        '''
+        Area interpolation uses AdaptivePool2D to resize origin images.
+        '''
         stride = (h // H, w // W)
         assert stride[0] > 0 and stride[1] > 0
         x, y = jt.meshgrid(jt.arange(0, H, 1), jt.arange(0, W, 1))
