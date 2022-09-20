@@ -67,26 +67,39 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
         << "lived_vars:" << Var::number_of_lived_vars
         << "lived_ops:" << Op::number_of_lived_ops >> '\n';
 
-    #ifdef NODE_MEMCHECK
     // get the oldest var
-    // vector<Node*> queue;
-    // auto t = ++Node::tflag_count;
-    // for (auto& vh : hold_vars)
-    //     if (vh->var->tflag != t) {
-    //         vh->var->tflag = t;
-    //         queue.push_back(vh->var);
-    //     }
-    // bfs_both(queue, [](Node*){return true;});
-    // vector<pair<int64, Node*>> nodes;
-    // nodes.reserve(queue.size());
-    // for (auto* node : queue)
-    //     nodes.push_back({node->__id(), node});
-    // std::sort(nodes.begin(), nodes.end());
-    // log << "list of the oldest nodes:\n";
-    // for (int i=0; i<10 && i<nodes.size(); i++) {
-    //     log << "ID#" >> nodes[i].first >> ":" << nodes[i].second << "\n";
-    // }
-    #endif
+    if (trace_py_var) {
+        vector<Node*> queue;
+        auto t = ++Node::tflag_count;
+        for (auto& vh : hold_vars)
+            if (vh->var->tflag != t) {
+                vh->var->tflag = t;
+                queue.push_back(vh->var);
+            }
+        bfs_both(queue, [](Node*){return true;});
+        static unordered_map<int64, int> cnt;
+        auto cnt_bk = cnt;
+        map<int,int> stat;
+        for (auto* node : queue) {
+            auto &x = cnt[node->id];
+            x++;
+            if (x == 3 && node->is_var()) {
+                LOGe << node;
+            }
+            stat[x]++;
+        }
+        for (auto x : cnt_bk) {
+            if (x.second == cnt[x.first]) {
+                cnt.erase(x.first);
+            }
+        }
+        LOGe << stat << lived_nodes_id.size();
+        for (auto nid : lived_nodes_id) {
+            if (!cnt.count(nid.first)) {
+                LOGe << nid;
+            }
+        }
+    }
 
     if (use_stat_allocator) {
         log << "stat:" << use_stat_allocator;

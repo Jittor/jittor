@@ -12,7 +12,6 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 from abc import abstractmethod
-from sys import breakpointhook
 import jittor as jt
 from jittor import flatten, init, Module
 import numpy as np
@@ -262,7 +261,8 @@ def sign(x: jt.Var) -> jt.Var:
 def gelu(x):
     r''' Applies the element-wise function:
 
-   .. math:: \text{GELU}(x) = x * \Phi(x)
+    .. math::
+        \text{GELU}(x) = x * \Phi(x)
 
     where :math:`\Phi(x)` is the Cumulative Distribution Function for Gaussian Distribution.
 
@@ -545,6 +545,31 @@ class Dropout(Module):
 
 def dropout(x,p=0.5,is_train=False):
     return Dropout(p=p,is_train=is_train)(x)
+
+class DropPath(Module):
+    '''Drop paths (Stochastic Depth) per sample  (when applied in main path of residual blocks).
+    '''
+    def __init__(self, p=0.5, is_train=False):
+        '''
+            :param p: Specifies the probability of each batch retention. Defaults to 0.5.
+            :type p: float dtype
+            :param is_train: Specify whether it is a training model. Defaults to False.
+            :type is_train: bool
+        '''
+        self.p = p
+        self.is_train = is_train
+        #TODO: test model.train() to change self.is_train
+    def execute(self, x):
+        if self.p == 0. or not self.is_train:
+            return x
+        keep_prob = 1 - self.p
+        shape = (x.shape[0], ) + (1, ) * (x.ndim - 1)
+        random_tensor = keep_prob + jt.rand(shape, dtype=x.dtype)
+        output = x.divide(keep_prob) * random_tensor.floor()
+        return output
+
+def droppath(x,p=0.5,is_train=False):
+    return DropPath(p=p,is_train=is_train)(x)
 
 class Linear(Module):
     def __init__(self, in_features, out_features, bias=True):
@@ -2873,3 +2898,34 @@ def one_hot(x: jt.Var, num_classes: int=-1) -> jt.Var:
         overflow_conditions=[f"i{N} != @e0({','.join(indices)})"],
         overflow_value=0)
     return y
+
+
+class KLDivLoss(Module):
+    ''' Computes the Kullback-Leibler divergence loss.
+    '''
+
+    def __init__(self, reduction: str = 'mean', log_target: bool = False):
+        '''
+            :param reduction: Specifies the reduction to apply to the output. Can be 'mean', 'sum', 'batchmean', or 'none'. Defaults to 'mean'.
+            :type reduction: str, optional
+            :param log_target: Specifies whether target is the log space. Defaults to False.
+            :type log_target: bool, optional
+        '''
+        self.reduction = reduction
+        self.log_target = log_target
+
+    def execute(self, input: jt.Var, target: jt.Var) -> jt.Var:
+        if not self.log_target:
+            loss_pointwise = target * (target.log() - input)
+        else:
+            loss_pointwise = target.exp() * (target - input)
+
+        if self.reduction == "mean":
+            loss = loss_pointwise.mean()
+        elif self.reduction == "batchmean":
+            loss = loss_pointwise.sum() / input.size(0)
+        elif self.reduction == "sum":
+            loss = loss_pointwise.sum()
+        else:
+            loss = loss_pointwise
+        return loss

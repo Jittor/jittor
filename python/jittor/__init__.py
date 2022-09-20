@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.5.13'
+__version__ = '1.3.5.16'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -1710,7 +1710,9 @@ def jittor_exit():
 atexit.register(jittor_exit)
 
 def vtos(v):
-    return f"jt.Var({v.data}, dtype={v.dtype})"
+    data_str = f"jt.Var({v.data}, dtype={v.dtype})"
+    data_str = data_str.replace("\n", "\n       ")
+    return data_str
 
 Var.__str__ = vtos
 Var.__repr__ = vtos
