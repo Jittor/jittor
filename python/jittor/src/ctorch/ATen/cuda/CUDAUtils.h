@@ -34,10 +34,7 @@ namespace jittor {
         };
 
         namespace cuda {
-            bool check_device(std::vector<torch::Tensor>) {
-                // for now, single GPU.
-                return true;
-            }
+            bool check_device(std::vector<torch::Tensor>);
         }
     }
 }

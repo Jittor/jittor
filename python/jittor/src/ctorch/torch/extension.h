@@ -18,6 +18,7 @@
 #include "misc/cuda_flags.h"
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
+#include "type/fp16_compute.h"
 
 namespace py = pybind11;
 
@@ -74,6 +75,9 @@ namespace jittor {
         extern int kFloat32;
         extern int kInt32;
         extern int kCUDA;
+        extern int kBFloat16;
+        // TODO: support BFloat16 in jittor
+        using BFloat16 = jittor::float16; 
 
         struct Option {
             int dtype_;
@@ -81,9 +85,9 @@ namespace jittor {
             int devid_;
             int type();
 
-            Option dtype(int dt);
+            Option dtype(int dt) const;
 
-            Option device(int device, int devid=0);
+            Option device(int device, int devid=0) const;
 
             Option(int dt);
             Option();
@@ -105,26 +109,19 @@ namespace jittor {
             Tensor(const Tensor& b);
             
             NanoVector size();
-
             int size(int i);
-
             int numel();
-
             void init_stride();
-
             NanoVector stride();
-
             int stride(int i);
-
             int dtype() const;
-
             int scalar_type();
-
             Tensor contiguous();
             bool defined();
             int get_device();
             NanoVector sizes(); // TODO: WHAT torch sizes really do?
-            
+            Tensor clone();
+            Tensor detach();
             template<typename T=float>
             T* data_ptr() {
                 if(!jtptr)
@@ -161,6 +158,7 @@ namespace jittor {
         };
 
         Tensor empty(NanoVector shape, Option option, at::MemoryFormat format=at::MemoryFormat::Contiguous);
+        Tensor zeros(NanoVector shape, Option option);
         Tensor zeros_like(Tensor& refer_tensor);
         Tensor empty_like(Tensor& refer_tensor);
         Option TensorOptions();

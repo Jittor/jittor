@@ -10,7 +10,6 @@
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
 
-
 namespace c10 {
     using Half = jittor::float16; 
 }

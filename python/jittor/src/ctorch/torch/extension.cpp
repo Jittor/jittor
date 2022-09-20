@@ -3,7 +3,7 @@
 namespace jittor {
 
     void AT_CUDA_CHECK(cudaError_t status) { 
-                cudaError_t error = status;                                           
+        cudaError_t error = status;                                           
         if (error != cudaSuccess) {                                           
             std::cerr << "Got bad cuda status: " << cudaGetErrorString(error) 
                     << " at line: " << __LINE__ << std::endl;               
@@ -53,6 +53,21 @@ namespace jittor {
         int kFloat32 = 1;
         int kInt32 = 4;
         int kCUDA = 1;
+        int kBFloat16 = 5;
+        NanoString parse_dtype(int dtype) {
+            switch(dtype) {
+                case 0:
+                    return "uint8";
+                case 1:
+                    return "float32";
+                case 2:
+                    return "float64";
+                case 4:
+                    return "int32";
+                default:
+                    return "float32";
+            }
+        }
 
         Option Option::dtype(int dt) const {
             Option temp = *this;
@@ -60,7 +75,7 @@ namespace jittor {
             return temp;
         }
         
-        Option Option::device(int device, int devid=0) const {
+        Option Option::device(int device, int devid) const {
             Option temp = *this;
             temp.device_ = device;
             temp.devid_ = devid;
@@ -148,15 +163,15 @@ namespace jittor {
             return strides[strides.size() - i - 1];
         }
 
-        Tensor contiguous() {
+        Tensor Tensor::contiguous() {
             return *this;
         }
 
-        int get_device() {
+        int Tensor::get_device() {
             return 0;
         }
 
-        bool defined() {
+        bool Tensor::defined() {
             if(!jtptr) return 0;
             if(!jtptr->var) return 0;
             return 1;
@@ -201,12 +216,17 @@ namespace jittor {
             return true;
         }
 
-        Device Tensor::device() { // device is controlled by jittor 
+        Device Tensor::device() const { // device is controlled by jittor 
             return Device(); // so all tensors are on the same device.
         }
 
         void Tensor::cuda() {
             return;
+        }
+
+        Tensor Tensor::detach() {
+            this->jtptr = this->jtptr->detach();
+            return *this;
         }
         
         bool Tensor::is_cuda() {
@@ -219,14 +239,27 @@ namespace jittor {
 
         static auto make_empty = get_op_info("empty").get_constructor<VarPtr, NanoVector, NanoString>();
         static auto make_number = get_op_info("number").get_constructor<VarPtr, float, Var*>();
-        
+        static auto make_clone = get_op_info("clone").get_constructor<VarPtr, Var*>();
+
+        Tensor Tensor::clone() {
+            VarPtr ptr = VarPtr(make_clone(this->jtptr->var));
+            return Tensor(ptr);
+        }
+
+        Tensor zeros(NanoVector shape, Option option) {
+            VarPtr ptr = VarPtr(shape, parse_dtype(option.dtype_));
+            ptr = make_number(0, ptr.ptr);
+            return Tensor(ptr);
+        }
+
         Tensor zeros_like(Tensor& refer_tensor) {
-            Varptr ptr = make_number(0, refer_tensor.jtptr->var);
+            VarPtr ptr = VarPtr(refer_tensor.size(), refer_tensor.jtptr->dtype());
+            ptr = make_number(0, ptr.ptr);
             return Tensor(ptr);
         }
 
         Tensor empty_like(Tensor& refer_tensor) {
-            VarPtr ptr = make_empty(refer_tensor.size(), refer_tensor.dtype());
+            VarPtr ptr = make_empty(refer_tensor.size(), parse_dtype(refer_tensor.dtype()));
             return Tensor(ptr);
         }
 

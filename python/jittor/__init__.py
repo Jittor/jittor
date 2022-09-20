@@ -1546,7 +1546,7 @@ can also be None)::
         self.saved_variables = []
     
     def save_for_backward(self, *args):
-        self.saved_variables += list(args)
+        self.saved_variables = list(args)
     
     def __call__(self, *args):
         backup = args
