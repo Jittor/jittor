@@ -168,7 +168,7 @@ single_log_capture = None
 class log_capture_scope(_call_no_record_scope):
     """log capture scope
 
-    example::
+    Example::
 
         with jt.log_capture_scope(log_v=0) as logs:
             LOG.v("...")
@@ -301,12 +301,13 @@ def array(data, dtype=None):
     ----------------
 
     Example::
-    >>> jt.array(1)
-    jt.Var([1], dtype=int32)
-    >>> jt.array([0, 2.71, 3.14]) 
-    jt.Var([0.   2.71 3.14], dtype=float32)
-    >>> jt.array(np.arange(4, dtype=np.uint8))  
-    jt.Var([0 1 2 3], dtype=uint8)
+
+        >>> jt.array(1)
+        jt.Var([1], dtype=int32)
+        >>> jt.array([0, 2.71, 3.14]) 
+        jt.Var([0.   2.71 3.14], dtype=float32)
+        >>> jt.array(np.arange(4, dtype=np.uint8))  
+        jt.Var([0 1 2 3], dtype=uint8)
     '''
     if isinstance(data, core.Var):
         if dtype is None:
@@ -346,9 +347,10 @@ def random(shape, dtype="float32", type="uniform"):
     ----------------
 
     Example::
-    >>> jt.random((2, 3))
-    jt.Var([[0.96788853 0.28334728 0.30482838]
-     [0.46107793 0.62798643 0.03457401]], dtype=float32)
+
+        >>> jt.random((2, 3))
+        jt.Var([[0.96788853 0.28334728 0.30482838]
+                [0.46107793 0.62798643 0.03457401]], dtype=float32)
     '''
     # TODO: move those code to core
     if dtype == "float16":
@@ -489,7 +491,7 @@ def var(x, dim=None, dims=None, unbiased=False, keepdims=False):
     :param keepdim: if True, the output shape is same as input shape except for the dimension in dim.
     :type keepdim: bool.
 
-    Example:
+    Example::
 
         >>> a = jt.rand(3)
         >>> a
@@ -645,11 +647,51 @@ def pow(x, y):
     return core.ops.pow(x, y)
 Var.pow = Var.__pow__ = pow
 
-def argmax(x, dim, keepdims:bool=False):
+def argmax(x: Var, dim: int, keepdims:bool=False):
+    ''' Returns the indices and values of the maximum elements along the specified dimension.
+
+    :param x: the input Var.
+    :type x: jt.Var, numpy array, or python sequence.
+    :param dim: the dimension to reduce.
+    :type dim: int.
+    :param keepdims: whether the output Var has dim retained or not. Defaults to False
+    :type keepdims: bool, optional
+    
+    Example::
+
+        >>> a = jt.randn((2, 4))
+        >>> a
+        jt.Var([[-0.33272865 -0.4951588   1.4128606   0.13734372]
+                [-1.633469    0.19593953 -0.7803732  -0.5260756 ]], dtype=float32)
+        >>> a.argmax(dim=0)
+        (jt.Var([0 1 0 0], dtype=int32), jt.Var([-0.33272865  0.19593953  1.4128606   0.13734372], dtype=float32))
+        >>> a.argmax(dim=1)
+        (jt.Var([2 1], dtype=int32), jt.Var([1.4128606  0.19593953], dtype=float32))
+    '''
     return jt.arg_reduce(x, "max", dim, keepdims)
 Var.argmax = argmax
 
-def argmin(x, dim, keepdims:bool=False):
+def argmin(x, dim: int, keepdims:bool=False):
+    ''' Returns the indices and values of the minimum elements along the specified dimension.
+
+    :param x: the input Var.
+    :type x: jt.Var, numpy array, or python sequence.
+    :param dim: the dimension to reduce.
+    :type dim: int.
+    :param keepdims: whether the output Var has dim retained or not. Defaults to False
+    :type keepdims: bool, optional
+
+    Example::
+    
+        >>> a = jt.randn((2, 4))
+        >>> a
+        jt.Var([[-0.33272865 -0.4951588   1.4128606   0.13734372]
+                [-1.633469    0.19593953 -0.7803732  -0.5260756 ]], dtype=float32)
+        >>> a.argmin(dim=0)
+        (jt.Var([1 0 1 1], dtype=int32), jt.Var([-1.633469  -0.4951588 -0.7803732 -0.5260756], dtype=float32))
+        >>> a.argmin(dim=1)
+        (jt.Var([1 0], dtype=int32), jt.Var([-0.4951588 -1.633469 ], dtype=float32))
+    '''
     return jt.arg_reduce(x, "min", dim, keepdims)
 Var.argmin = argmin
 
@@ -665,7 +707,7 @@ def randn(*size, dtype="float32", requires_grad=True) -> Var:
     :param requires_grad: whether to enable gradient back-propgation, defaults to True.
     :type requires_grad: bool, optional
 
-    Example:
+    Example::
 
         >>> jt.randn(3)
         jt.Var([-1.019889   -0.30377278 -1.4948598 ], dtype=float32)
@@ -690,7 +732,7 @@ def rand(*size, dtype="float32", requires_grad=True) -> Var:
     :param requires_grad: whether to enable gradient back-propgation. defaults to True.
     :type requires_grad: bool, optional
 
-    Example:
+    Example::
 
         >>> jt.rand(3)
         jt.Var([0.31005102 0.02765604 0.8150749 ], dtype=float32)
@@ -713,7 +755,7 @@ def rand_like(x, dtype=None) -> Var:
         Otherwise, use the specified dtype. Defaults to None.
     :type dtype: str, optional
     
-    Example:
+    Example::
         
         >>> x = jt.zeros((2, 3))
         >>> jt.rand_like(x)
@@ -733,7 +775,7 @@ def randn_like(x, dtype=None) -> Var:
         Otherwise, use the specified dtype. Defaults to None.
     :type dtype: str, optional
 
-    Example:
+    Example::
         
         >>> x = jt.zeros((2, 3))
         >>> jt.randn_like(x)
@@ -758,16 +800,16 @@ def randint(low, high=None, shape=(1,), dtype="int32") -> Var:
     :param dtype: data type of the output, defaults to "int32".
     :type dtype: str, optional
 
-    Example:
+    Example::
         
         >>> jt.randint(3, shape=(3, 3))
         jt.Var([[2 0 2]
-         [2 1 2]
-         [2 0 1]], dtype=int32)
+                [2 1 2]
+                [2 0 1]], dtype=int32)
         >>> jt.randint(1, 3, shape=(3, 3))
         jt.Var([[2 2 2]
-         [1 1 2]
-         [1 1 1]], dtype=int32)
+                [1 1 2]
+                [1 1 1]], dtype=int32)
     '''
     if high is None: low, high = 0, low
     v = (jt.random(shape) * (high - low) + low).clamp(low, high-0.5)
@@ -786,15 +828,15 @@ def randint_like(x, low, high=None) -> Var:
     :param high: One above the highest integer to be drawn from the distribution.
     :type high: int
 
-    Example:
+    Example::
 
         >>> x = jt.zeros((2, 3))
         >>> jt.randint_like(x, 10)
         jt.Var([[9. 3. 4.]
-         [4. 8. 5.]], dtype=float32)
+                [4. 8. 5.]], dtype=float32)
         >>> jt.randint_like(x, 10, 20)
         jt.Var([[17. 11. 18.]
-        [14. 17. 15.]], dtype=float32)
+                [14. 17. 15.]], dtype=float32)
      ''' 
 
     return randint(low, high, x.shape, x.dtype)
@@ -817,15 +859,15 @@ def normal(mean, std, size=None, dtype="float32") -> Var:
     :param dtype: data type of the output, defaults to "float32".
     :type dtype: str, optional
 
-    Example:
+    Example::
     
         >>> jt.normal(5, 3, size=(2,3))
         jt.Var([[ 8.070848   7.654219  10.252696 ]
-         [ 6.383718   7.8817277  3.0786133]], dtype=float32)
+                [ 6.383718   7.8817277  3.0786133]], dtype=float32)
         >>> mean = jt.randint(low=0, high=10, shape=(10,))
         >>> jt.normal(mean, 0.1)
         jt.Var([1.9524184 1.0749301 7.9864206 5.9407325 8.1596155 4.824019  7.955083
-         8.972998  6.0674286 8.88026  ], dtype=float32)
+                8.972998  6.0674286 8.88026  ], dtype=float32)
     '''
     if size is None:
         if isinstance(mean, Var) and isinstance(std, Var):
@@ -996,17 +1038,18 @@ class Module:
         ----------------
 
         Example::
-        >>> net = nn.Sequential(nn.Linear(2, 10), nn.ReLU(), nn.Linear(10, 2))
-        >>> for p in net.parameters():
-        ...     print(p.name)
-        ... 
-        >>> for p in net.parameters():
-        ...     print(p.name())
-        ... 
-        0.weight
-        0.bias
-        2.weight
-        2.bias
+        
+            >>> net = nn.Sequential(nn.Linear(2, 10), nn.ReLU(), nn.Linear(10, 2))
+            >>> for p in net.parameters():
+            ...     print(p.name)
+            ... 
+            >>> for p in net.parameters():
+            ...     print(p.name())
+            ... 
+            0.weight
+            0.bias
+            2.weight
+            2.bias
         '''
         ps = []
         stack = []
@@ -1093,14 +1136,15 @@ class Module:
         ----------------
 
         Example::
-        >>> net = nn.Linear(2, 5)
-        >>> net.named_parameters() 
-        [('weight', jt.Var([[ 0.5964666  -0.3175258 ]
-        [ 0.41493994 -0.66982657]
-        [-0.32677156  0.49614117]
-        [-0.24102807 -0.08656466]
-        [ 0.15868133 -0.12468725]], dtype=float32)), 
-        ('bias', jt.Var([-0.38282675  0.36271113 -0.7063226   0.02899247  0.52210844], dtype=float32))]
+
+            >>> net = nn.Linear(2, 5)
+            >>> net.named_parameters() 
+            [('weight', jt.Var([[ 0.5964666  -0.3175258 ]
+            [ 0.41493994 -0.66982657]
+            [-0.32677156  0.49614117]
+            [-0.24102807 -0.08656466]
+            [ 0.15868133 -0.12468725]], dtype=float32)), 
+            ('bias', jt.Var([-0.38282675  0.36271113 -0.7063226   0.02899247  0.52210844], dtype=float32))]
 
         '''
         state_dict = self.state_dict()
@@ -1118,13 +1162,14 @@ class Module:
         ----------------
 
         Example::
-        >>> net = nn.Sequential(nn.Linear(2, 10), nn.ReLU(), nn.Linear(10, 2))
-        >>> net.modules()
-        [Sequential(
-            0: Linear(2, 10, float32[10,], None)
-            1: relu()
-            2: Linear(10, 2, float32[2,], None)
-        ), Linear(2, 10, float32[10,], None), relu(), Linear(10, 2, float32[2,], None)]
+
+            >>> net = nn.Sequential(nn.Linear(2, 10), nn.ReLU(), nn.Linear(10, 2))
+            >>> net.modules()
+            [Sequential(
+                0: Linear(2, 10, float32[10,], None)
+                1: relu()
+                2: Linear(10, 2, float32[2,], None)
+            ), Linear(2, 10, float32[10,], None), relu(), Linear(10, 2, float32[2,], None)]
         '''
         ms = []
         def callback(parents, k, v, n):
@@ -1139,13 +1184,14 @@ class Module:
         ----------------
 
         Example::
-        >>> net = nn.Sequential(nn.Linear(2, 10), nn.ReLU(), nn.Linear(10, 2))
-        >>> net.named_modules() 
-        [('', Sequential(
-            0: Linear(2, 10, float32[10,], None)
-            1: relu()
-            2: Linear(10, 2, float32[2,], None)
-        )), ('0', Linear(2, 10, float32[10,], None)), ('1', relu()), ('2', Linear(10, 2, float32[2,], None))]
+
+            >>> net = nn.Sequential(nn.Linear(2, 10), nn.ReLU(), nn.Linear(10, 2))
+            >>> net.named_modules() 
+            [('', Sequential(
+                0: Linear(2, 10, float32[10,], None)
+                1: relu()
+                2: Linear(10, 2, float32[2,], None)
+            )), ('0', Linear(2, 10, float32[10,], None)), ('1', relu()), ('2', Linear(10, 2, float32[2,], None))]
         '''
         ms = []
         stack = []
@@ -1369,7 +1415,7 @@ Arguments of hook are defined as::
         :param path: path to save.
         :type path: str
 
-        Example:
+        Example::
 
             >>> class Net(nn.Module):
             >>> ...
@@ -1392,7 +1438,7 @@ Arguments of hook are defined as::
         :param path: path to load.
         :type path: str
         
-        Example:
+        Example::
 
             >>> class Net(nn.Module):
             >>> ...
@@ -1621,14 +1667,16 @@ def grad_hooker(args, hook):
 
 def register_hook(v, hook):
     """ register hook of any jittor Variables, if hook return not None,
-the gradient of this variable will be alter, Example::
+the gradient of this variable will be alter, 
 
-    x = jt.array([0.0, 0.0])
-    y = x * [1,2]
-    y.register_hook(lambda g: g*2)
-    dx = jt.grad(y, x)
-    print(dx)
-    # will be [2, 4]
+    Example::
+
+        x = jt.array([0.0, 0.0])
+        y = x * [1,2]
+        y.register_hook(lambda g: g*2)
+        dx = jt.grad(y, x)
+        print(dx)
+        # will be [2, 4]
 
     """
     def _hook(grads):
