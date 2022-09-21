@@ -1602,22 +1602,24 @@ can also be None)::
                     "because the input value is not jittor variable."
             else:
                 # detect if all the input dims are the same
-                input_shape = self.taped_inputs_shape[j]
-                same_idx = -1
-                for i in range(1, len(input_shape)):
-                    if input_shape[-i] == r.shape[-i]:
-                        same_idx = i
-                    else:
-                        break
-                if same_idx = -1:
-                    r = r.reshape(input_shape[0], -1).sum(1)
-                elif same_idx < len(input_shape) - 1:
-                    r_shape_prod = np.prod(r.shape[:-same_idx])
-                    input_shape_prod = np.prod(input_shape[:-same_idx])
-                    r = r.reshape(input_shape[:-same_idx], r_shape_prod // input_shape_prod, input_shape[-same_idx:]).sum(len(input_shape) - same_idx)
-                elif same_idx == len(input_shape) - 1 and len(input_shape) != len(r.shape):
-                    while len(r.shape) > len(input_shape):
-                        r = r.sum(0)
+                if r is not None:
+                    input_shape = self.taped_inputs_shape[j]
+                    same_idx = -1
+                    for i in range(1, len(input_shape) + 1):
+                        if input_shape[-i] == r.shape[-i]:
+                            same_idx = i
+                        else:
+                            break
+                    print(same_idx, input_shape, r.shape)
+                    if same_idx == -1:
+                        r = r.reshape(input_shape[0], -1).sum(1)
+                    elif same_idx < len(input_shape):
+                        r_shape_prod = np.prod(r.shape[:-same_idx])
+                        input_shape_prod = np.prod(input_shape[:-same_idx])
+                        r = r.reshape(input_shape[:-same_idx] + [ori_int(r_shape_prod // input_shape_prod)] + input_shape[-same_idx:]).sum(len(input_shape) - same_idx)
+                    elif same_idx == len(input_shape) and len(r.shape) > len(input_shape):
+                        while len(r.shape) > len(input_shape):
+                            r = r.sum(0)
                 new_ret.append(r)
         return new_ret
 
