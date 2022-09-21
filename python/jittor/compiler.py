@@ -1395,11 +1395,11 @@ def compile_torch_extensions(extension_name, sources, extra_cflags=None, extra_c
     assert (isinstance(sources, str) or isinstance(sources, list)), "must input lists or concatenated string of source files"
     if not isinstance(sources, str):
         sources = " ".join(sources)
-    extra_flags = extra_cflags if use_cuda == 0 else extra_cuda_cflags
+    extra_flags = extra_cflags + extra_ldflags if use_cuda == 0 else extra_cuda_cflags + extra_ldflags
     extra_flags = " ".join(extra_flags)
     compile_command = f"{compiler} {sources} {jittor_src_path}/ctorch/torch/extension.cpp {jittor_src_path}/ctorch/ATen/cuda/CUDAUtils.cpp -I{jittor_src_path} -I{jittor_src_path}/ctorch -DTORCH_EXTENSION_NAME={extension_name} -O3 -shared -std=c++14 --forward-unknown-to-host-compiler --use_fast_math --expt-relaxed-constexpr -fPIC -DHAS_CUDA -gencode arch=compute_75,code=compute_75 -lcusparse {extra_flags} -I{jittor_path}/extern/cuda/inc/ --allow-unsupported-compiler -arch=sm_80 $(python3 -m pybind11 --includes) -o {extension_name}$(python3-config --extension-suffix)" 
     status = os.system(compile_command)
-    # print(compile_command)
+    print(compile_command)
     if status != 0:
         print("=========\nCompile failed. If you are compiling CUDA ops, please set use_cuda to 1 in the parameters.\n=========")
     return status
