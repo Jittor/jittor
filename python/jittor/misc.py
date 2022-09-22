@@ -1981,3 +1981,10 @@ jt.Var.scatter_add_ = scatter_add_
 
 def lerp(start, end, weight, out=None):
     return start + weight * (end - start)
+
+def atan2(input, other, out=None):
+    atan_res = jt.atan(input / other)
+    atan_res[jt.bitwise_and(input > 0, other < 0)] += np.pi
+    atan_res[jt.bitwise_and(input < 0, other < 0)] -= np.pi
+    return atan_res
+jt.atan2 = atan2
