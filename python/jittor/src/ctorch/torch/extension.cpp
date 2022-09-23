@@ -178,8 +178,13 @@ namespace jittor {
         }
 
         int Tensor::dtype() const {
-            if(!jtptr) return -1; // nullptr
+            LOGir << "ptr: " << (long long) jtptr;
+            // if(jtptr) 
+            //     LOGir << jtptr->dtype();
+            if(!jtptr) return 1; // nullptr
+            LOGir << " ???? ";
             NanoString dtype_ = jtptr->dtype();
+            LOGir << dtype_;
             if(dtype_ == "uint8") 
                 return 0;
             if(dtype_ == "float16")

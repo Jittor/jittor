@@ -11,7 +11,7 @@ namespace jittor {
         template<typename T>
         class ArrayRef {
             public:
-                std::vector<std::reference_wrapper<T> > containers;
+                std::vector<T> containers;
                 ArrayRef() {containers.clear();}
                 ArrayRef(T& item) { 
                     containers.clear();
@@ -28,7 +28,7 @@ namespace jittor {
                         containers.push_back(item);
                 }
                 ~ArrayRef() { containers.clear(); }
-                typedef typename std::vector<std::reference_wrapper<T> >::iterator it; 
+                typedef typename std::vector<T>::iterator it; 
                 it begin() { return containers.begin(); }
                 it end() { return containers.end(); }
         };
