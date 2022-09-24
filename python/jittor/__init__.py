@@ -616,34 +616,60 @@ def clamp(x, min_v=None, max_v=None):
 Var.clamp = clamp
 
 def clamp_(x, min_v=None, max_v=None):
+    ''' In-place version of clamp().
+
+    Args:
+        x (Jittor Var):
+            the input var
+        min_v ( Number or Var, optional) - lower-bound of clamp range
+        max_v ( Number or Var, optional) - upper-bound of clamp range
+    
+    Return:
+        x itself after clamp.
+    
+    '''
     return x.assign(x.clamp(min_v=min_v, max_v=max_v))
 Var.clamp_ = clamp_
 
 def erfinv_(x):
+    ''' In-place version of erfinv().
+    '''
     return x.assign(x.erfinv())
 Var.erfinv_ = erfinv_
 
 def erf_(x):
+    ''' In-place version of erf().
+    '''
     return x.assign(x.erf())
 Var.erf_ = erf_
 
 def abs_(x):
+    ''' In-place version of abs().
+    '''
     return x.assign(x.abs())
 Var.abs_ = abs_
 
 def sigmoid_(x):
+    ''' In-place version of sigmoid().
+    '''
     return x.assign(x.sigmoid())
 Var.sigmoid_ = sigmoid_
 
 def sqrt_(x):
+    ''' In-place version of sqrt().
+    '''
     return x.assign(x.sqrt())
 Var.sqrt_ = sqrt_
 
 def add_(x, y):
+    ''' In-place version of add().
+    '''
     return x.assign(x.add(y))
 Var.add_ = add_
 
 def multiply_(x, y):
+    ''' In-place version of multiply().
+    '''
     return x.assign(x.multiply(y))
 Var.multiply_ = multiply_
 
