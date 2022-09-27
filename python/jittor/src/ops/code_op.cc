@@ -125,16 +125,16 @@ void CodeOp::jit_prepare(JK& jk) {
     // backward: in0 in1 in2 in3(pout0) in4(pout1)
     jk << "«IN_SIZE=" << JK::hex(_inputs.size());
     for (uint i=0; i<_inputs.size(); i++) {
-        jk << "«in" << JK::hex(i) << "_dim="
+        jk << "«in" << std::to_string(i) << "_dim="
             << JK::hex1(_inputs[i]->shape.size());
-        jk << "«in" << JK::hex(i) << "_type:"
+        jk << "«in" << std::to_string(i) << "_type:"
             << _inputs[i]->dtype();
     }
     jk << "«OUT_SIZE=" << JK::hex(_outputs.size());
     for (uint i=0; i<_outputs.size(); i++) {
-        jk << "«out" << JK::hex(i) << "_dim="
+        jk << "«out" << std::to_string(i) << "_dim="
             << JK::hex1(_outputs[i]->shape.size());
-        jk << "«out" << JK::hex(i) << "_type:"
+        jk << "«out" << std::to_string(i) << "_type:"
             << _outputs[i]->dtype();
     }
     string& header = flags.get(NodeFlags::_cuda) ? 
