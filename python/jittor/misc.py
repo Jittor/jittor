@@ -1976,7 +1976,7 @@ def isposinf(x): return _simple_for(x, "x>0 && isinf(x)")
 jt.Var.isposinf = isposinf
 
 def scatter_add_(x, dim, indexes, src):
-    return scatter_(x, dim, index, src, reduce='add')
+    return scatter_(x, dim, indexes, src, reduce='add')
 jt.Var.scatter_add_ = scatter_add_
 
 def lerp(start, end, weight, out=None):

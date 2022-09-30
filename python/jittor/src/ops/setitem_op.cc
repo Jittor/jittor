@@ -271,7 +271,6 @@ void SetitemOp::compile_optimize(string& src) {
 #else // JIT
 
 #pragma GCC diagnostic ignored "-Wunused-variable"
-
 void SetitemOp::jit_run() {
     auto in = inputs().front();
     auto data = input(1);

@@ -1577,12 +1577,14 @@ can also be None)::
                 v = v.tape()
                 output_mask[i] = len(taped_outputs)
                 res[i] = v
-                taped_outputs.append(v)
+                if not v.is_stop_grad():
+                    taped_outputs.append(v)
         self.input_mask = input_mask
         self.output_mask = output_mask
         # tape output and input together so
         # backward treat them as one operator
-        tape_together(taped_inputs, taped_outputs, self._grad)
+        if len(taped_outputs) > 0:
+            tape_together(taped_inputs, taped_outputs, self._grad)
         if isinstance(ori_res, Sequence):
             return res
         else:
