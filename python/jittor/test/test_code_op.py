@@ -59,6 +59,26 @@ class TestCodeOp(unittest.TestCase):
             cpu_src="out0_p[0] = ++a_global_int_var; ").item() == 124
         assert jt.code([1], "int", [], cpu_header=header,
             cpu_src="out0_p[0] = ++a_global_int_var; ").item() == 125
+    
+    def test_ten_args(self):
+        a = jt.random([10])
+        b = jt.code([a.shape]*11, [a.dtype]*11, [jt.random([10])]*10+[a],
+            cpu_src='''
+                for (int i=0; i<in10_shape0; i++)
+                    @out10(i) = @in10(i)*@in10(i)*2;
+            ''',
+            cpu_grad_src = ['']*10+['''
+                for (int i=0; i<in10_shape0; i++) {
+                    @out0(i) = @dout(i)*@in10(i)*4;
+                }
+            '''])[-1]
+        na, nb = jt.fetch_sync([a,b])
+        assert np.allclose(na*na*2, nb)
+        
+        c = jt.random([10])
+        da = jt.grad(c*b, a)
+        assert np.allclose(c.data*na*4, da.data), (c.data*na*4, da.data)
+
 
     def test_use_func(self):
         class Func(Function):
