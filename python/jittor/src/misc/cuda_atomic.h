@@ -11,11 +11,14 @@ namespace jittor {
 typedef unsigned long long int uint64_cu;
 template<typename T>
 __device__ void atomicAdd(T* a, T b) {
-    if(std::is_same<T, int64>::value)
-        atomicAdd((uint64_cu *)a, (uint64_cu)b);
-    else 
-        atomicAdd(a, b);
+    if constexpr (std::is_same<T, jittor::int64>::value) {
+        ::atomicAdd((uint64_cu *)a, (uint64_cu)b);
+    }
+    else{
+        ::atomicAdd(a, b);
+    }
 }
+
 __device__ inline static int floatToOrderedInt(float floatVal) {
     int intVal = __float_as_int( floatVal );
     return (intVal >= 0 ) ? intVal : intVal ^ 0x7FFFFFFF;
