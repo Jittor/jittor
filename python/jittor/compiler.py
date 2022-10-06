@@ -1329,6 +1329,9 @@ if use_data_gz:
             f.write(md5)
     files.append(data_o_path)
     files = [f for f in files if "__data__" not in f]
+else:
+    files = [f for f in files 
+        if "__data__" not in f or "src" in f.split("__data__")[1]]
 
 cc_flags += f" -l\"jit_utils_core{lib_suffix}\" "
 compile(cc_path, cc_flags+opt_flags, files, 'jittor_core'+extension_suffix)

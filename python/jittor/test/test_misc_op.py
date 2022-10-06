@@ -256,14 +256,19 @@ class TestOther(unittest.TestCase):
         assert (x[3]['b'] == np.array([1,2,3])).all()
 
     def test_arctan2(self):
-        a = jt.arctan2(jt.array([1,1.0,0]), jt.array([1,0.0,-1]))
-        np.testing.assert_allclose(a.data, [0.7853982,1.5707964,3.1415927])
-
-        y = jt.random((100,))
-        x = jt.random((100,))
+        x = jt.float32([1,1,-1,-1,  1,-1,0,0,0])
+        y = jt.float32([-1,1,-1,1,  0,0,1,-1,0])
         z = jt.arctan2(y, x)
         z2 = np.arctan2(y.data, x.data)
         np.testing.assert_allclose(z.data, z2, atol=1e-6)
+        
+        y = jt.random((100,)) * 2 - 1
+        x = jt.random((100,)) * 2 - 1
+        z = jt.arctan2(y, x)
+        z2 = np.arctan2(y.data, x.data)
+        np.testing.assert_allclose(z.data, z2, atol=1e-6)
+
+        np.testing.assert_allclose(jt.array([1]).arctan().item(), 0.7853982)
 
     def test_softmax_precision(self):
         # jt.flags.use_cuda = 1
