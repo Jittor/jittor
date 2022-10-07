@@ -1235,8 +1235,9 @@ from .extern.rocm import rocm_compiler
 jit_utils.add_backend(rocm_compiler)
 
 for mod in jit_utils.backends:
-    if mod.check():
-        break
+    mod.check()
+    # if mod.check():
+        # break
 
 # build core
 gen_jit_flags()
