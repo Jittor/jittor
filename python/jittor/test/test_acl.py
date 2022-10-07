@@ -41,6 +41,13 @@ class TestACL(unittest.TestCase):
         np.testing.assert_allclose(x, y.numpy())
 
     @jt.flag_scope(use_acl=1)
+    def test_array_cast_half(self):
+        # this test cannot pass because cast error
+        x = np.random.rand(10).astype("float32")
+        y = jt.float16(x)
+        np.testing.assert_allclose(x, y.numpy())
+
+    @jt.flag_scope(use_acl=1)
     def test_rand(self):
         a = jt.rand(10)
         b = a*10

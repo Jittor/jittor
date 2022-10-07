@@ -687,7 +687,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
         } catch (const std::exception& e) {
             // log memory info
             display_memory_info(__FILELINE__, false, true);
-            throw e;
+            throw;
         }
         event_queue.flush();
     }
