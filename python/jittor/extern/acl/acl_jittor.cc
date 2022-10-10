@@ -170,6 +170,9 @@ string process_acl(const string& src, const string& name, const map<string,strin
             }
         })");
     }
+    if (name == "profiler.cc") {
+        new_src = token_replace_all(new_src, ".cc", ".tikcc");
+    }
     return new_src;
 }
 
