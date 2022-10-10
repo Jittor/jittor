@@ -59,10 +59,23 @@ class TestACL(unittest.TestCase):
 
     @jt.flag_scope(use_acl=1)
     def test_conv(self):
-        x = jt.rand(10, 3, 50, 50)
-        w = jt.rand(4,3,3,3)
+        # x = jt.rand(10, 3, 50, 50)
+        # w = jt.rand(4,3,3,3)
+        x = jt.rand(2, 2, 1, 1)
+        w = jt.rand(2,2,1,1)
         y = jt.nn.conv2d(x, w)
         y.sync(True)
+
+    @jt.flag_scope(use_acl=1)
+    def test_matmul(self):
+        # x = jt.rand(10, 3, 50, 50)
+        # w = jt.rand(4,3,3,3)
+        x = jt.rand(10,10)
+        w = jt.rand(10,10)
+        y = jt.matmul(x, w)
+        ny = np.matmul(x.numpy(), w.numpy())
+        np.testing.assert_allclose(y.numpy(), ny)
+        # y.sync(True)
 
 
 

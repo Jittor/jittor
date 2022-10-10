@@ -66,15 +66,18 @@ def check_cuda_env():
         os.environ[key] = ":".join(new_env)
         return changed
     changed = fix_env("PATH") \
-        or fix_env("LD_LIBRARY_PATH") \
-        or fix_env("CUDA_HOME")
+        + fix_env("LD_LIBRARY_PATH") \
+        + fix_env("CUDA_HOME")
     if changed:
         try:
-            with open("/proc/self/cmdline", "r") as f:
-                argv = f.read().split("\x00")
-                if len(argv[-1]) == 0: del argv[-1]
-            LOG.i(f"restart {sys.executable} {argv[1:]}")
-            os.execl(sys.executable, sys.executable, *argv[1:])
+            with open("/proc/self/maps", "r") as f:
+                cudart_loaded = "cudart" in f.read().lower()
+            if cudart_loaded:
+                with open("/proc/self/cmdline", "r") as f:
+                    argv = f.read().split("\x00")
+                    if len(argv[-1]) == 0: del argv[-1]
+                LOG.i(f"restart {sys.executable} {argv[1:]}")
+                os.execl(sys.executable, sys.executable, *argv[1:])
         except:
             pass
     
