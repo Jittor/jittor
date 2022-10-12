@@ -125,6 +125,11 @@ static void parse_reg(const string& src,
 }
 
 int token_replace(vector<string>& tokens, int i, const string& src, const string& dst, bool match_whitespace) {
+    if (!(src.at(0) != '$' && src.at(src.size()-1) != '$' && 
+        src.at(src.size()-2) != '$')) {
+        LOGe << "illegal src:" << src;
+        LOGf << "illegal src:" << src;
+    }
     ASSERT(src.at(0) != '$' && src.at(src.size()-1) != '$' && 
         src.at(src.size()-2) != '$') << "illegal src:" << src;
     vector<string> patterns;
