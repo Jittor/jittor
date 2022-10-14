@@ -1543,10 +1543,12 @@ can also be None)::
     '''
     def __init__(self):
         super().__init__(self)
-        self.saved_variables = []
-    
+        self.saved_tensors = []
+        self.saved_variables = self.saved_tensors
+
     def save_for_backward(self, *args):
-        self.saved_variables = list(args)
+        self.saved_tensors = list(args)
+        self.saved_variables = self.saved_tensors
     
     def __call__(self, *args):
         backup = args
@@ -1596,6 +1598,7 @@ can also be None)::
         if not isinstance(ret, Sequence):
             ret = (ret,)
         new_ret = []
+        # print("function grad: ", self.__class__, len(ret), len(self.input_mask), self.input_mask)
         for i, r in enumerate(ret):
             j = self.input_mask[i]
             if j<0:
@@ -1612,7 +1615,7 @@ can also be None)::
                             same_idx = i
                         else:
                             break
-                    print(same_idx, input_shape, r.shape)
+                    # print(same_idx, input_shape, r.shape)
                     if same_idx == -1:
                         r = r.reshape(input_shape[0], -1).sum(1)
                     elif same_idx < len(input_shape):

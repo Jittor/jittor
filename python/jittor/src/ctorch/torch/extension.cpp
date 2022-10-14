@@ -331,10 +331,14 @@ bool type_caster<jittor::torch::Tensor>::load(handle src, bool) {
 }
 
 handle type_caster<jittor::torch::Tensor>::cast(jittor::torch::Tensor src, return_value_policy, handle) {
-    jittor::PyObjHolder obj(_PyObject_New(&jittor::PyjtVarHolder.ht_type));
-    auto ptr = GET_RAW_PTR(jittor::VarHolder*, obj.obj);
-    new (ptr) jittor::VarHolder (src.jtptr->var);
-    return obj.release();
+    if(src.jtptr) {
+        jittor::PyObjHolder obj(_PyObject_New(&jittor::PyjtVarHolder.ht_type));
+        auto ptr = GET_RAW_PTR(jittor::VarHolder*, obj.obj);
+        new (ptr) jittor::VarHolder (src.jtptr->var);
+        return obj.release();
+    } else {
+        return py::object(py::cast(nullptr));
+    }
 }
 
 }} 
