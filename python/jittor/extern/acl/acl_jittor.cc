@@ -158,7 +158,22 @@ string process_acl(const string& src, const string& name, const map<string,strin
         }
     }
     if (!edit) return src;
-    return join(tokens, "");
+    string new_src = join(tokens, "");
+    if (name == "executor.cc") {
+        new_src = "#include <Python.h>\n#include <pystate.h>\n"+
+        replace(new_src, "op->do_run_after_prepare(jkl);", 
+        R"({
+            auto state = _PyThreadState_UncheckedGet();
+            op->do_run_after_prepare(jkl);
+            if (!_PyThreadState_UncheckedGet()) {
+                PyEval_AcquireThread(state);
+            }
+        })");
+    }
+    if (name == "profiler.cc") {
+        new_src = token_replace_all(new_src, ".cc", ".tikcc");
+    }
+    return new_src;
 }
 
 void acl_jittor_op_compiler(string& filename, string& src, bool is_acl, string& extra_flags) {
