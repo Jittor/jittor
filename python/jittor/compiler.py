@@ -1231,8 +1231,10 @@ if has_cuda:
 # from .acl_compiler import check_acl
 from .extern.acl import acl_compiler
 jit_utils.add_backend(acl_compiler)
+has_acl = False
 from .extern.rocm import rocm_compiler
 jit_utils.add_backend(rocm_compiler)
+has_rocm = False
 
 if not has_cuda:
     for mod in jit_utils.backends:
