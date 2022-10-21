@@ -726,7 +726,6 @@ def unique(
             '''
         )
     indice_shape = (output.shape[0], )
-    print("unique check: ", input_sorted.shape, output.max())
     output = input_sorted[output][:]
 
     new_shape = list(orig_shape[1:])

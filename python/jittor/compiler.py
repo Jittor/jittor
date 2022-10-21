@@ -17,7 +17,6 @@ import ctypes
 import platform
 from ctypes import cdll
 from ctypes.util import find_library
-
 import jittor_utils as jit_utils
 from jittor_utils import LOG, run_cmd, find_exe, cc_path, cc_type, cache_path
 from . import pyjt_compiler
@@ -1388,6 +1387,7 @@ flags.has_pybt = has_pybt
 core.set_lock_path(lock.lock_path)
 
 def compile_torch_extensions(extension_name, sources, extra_cflags=None, extra_cuda_cflags=None, extra_ldflags=None, use_cuda=0, force_compile=0):
+    global flags
     if use_cuda:
         compiler = nvcc_path
     else:
@@ -1401,7 +1401,7 @@ def compile_torch_extensions(extension_name, sources, extra_cflags=None, extra_c
         sources = " ".join(sources)
     extra_flags = extra_cflags + extra_ldflags if use_cuda == 0 else extra_cuda_cflags + extra_ldflags
     extra_flags = " ".join(extra_flags)
-    compile_command = f"{compiler} {sources} {jittor_src_path}/ctorch/torch/extension.cpp {jittor_src_path}/ctorch/ATen/cuda/CUDAUtils.cpp -I{jittor_src_path} -I{jittor_src_path}/ctorch -g -DTORCH_EXTENSION_NAME={extension_name} -O3 -shared -std=c++14 --forward-unknown-to-host-compiler --use_fast_math --expt-relaxed-constexpr -fPIC -DHAS_CUDA -gencode arch=compute_{jt.flags.cuda_archs[0]},code=compute_{jt.flags.cuda_archs[0]} -lcusparse {extra_flags} -I{jittor_path}/extern/cuda/inc/ --allow-unsupported-compiler $(python3 -m pybind11 --includes) -o {extension_name}$(python3-config --extension-suffix)" 
+    compile_command = f"{compiler} {sources} {jittor_src_path}/ctorch/torch/extension.cpp {jittor_src_path}/ctorch/ATen/cuda/CUDAUtils.cpp -I{jittor_src_path} -I{jittor_src_path}/ctorch -g -DTORCH_EXTENSION_NAME={extension_name} -O3 -shared -std=c++14 --forward-unknown-to-host-compiler --use_fast_math --expt-relaxed-constexpr -fPIC -DHAS_CUDA -gencode arch=compute_{flags.cuda_archs[0]},code=compute_{flags.cuda_archs[0]} -lcusparse {extra_flags} -I{jittor_path}/extern/cuda/inc/ --allow-unsupported-compiler $(python3 -m pybind11 --includes) -o {extension_name}$(python3-config --extension-suffix)" 
     status = os.system(compile_command)
     # print(compile_command)
     if status != 0:
