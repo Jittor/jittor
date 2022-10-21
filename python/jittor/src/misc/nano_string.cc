@@ -95,6 +95,21 @@ static unordered_set<string> float_ops = {
     "sqrt",
     "mean",
     "divide",
+    "sin",
+    "asin",
+    "sinh",
+    "asinh",
+    "tan",
+    "atan",
+    "tanh",
+    "atanh",
+    "cos",
+    "acos",
+    "cosh",
+    "acosh",
+    "sigmoid",
+    "erf",
+    "erfinv"
 };
 static unordered_set<string> int_ops = {
     "round_int",
