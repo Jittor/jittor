@@ -17,6 +17,8 @@ import ctypes
 import platform
 from ctypes import cdll
 from ctypes.util import find_library
+
+import jittor as jt
 import jittor_utils as jit_utils
 from jittor_utils import LOG, run_cmd, find_exe, cc_path, cc_type, cache_path
 from . import pyjt_compiler
