@@ -53,7 +53,9 @@ namespace jittor {
         int kFloat32 = 1;
         int kInt32 = 4;
         int kCUDA = 1;
-        int kBFloat16 = 5;
+        int kLong = 5;
+        int kInt64 = 5;
+        int kBFloat16 = 6;
         NanoString parse_dtype(int dtype) {
             switch(dtype) {
                 case 0:
@@ -64,6 +66,8 @@ namespace jittor {
                     return "float64";
                 case 4:
                     return "int32";
+                case 5:
+                    return "int64";
                 default:
                     return "float32";
             }
@@ -190,6 +194,8 @@ namespace jittor {
                 return 2;
             if(dtype_ == "int32")
                 return 4;
+            if(dtype_ == "int64")
+                return 4;
             return -1; // non-exist types
         }
 
@@ -263,6 +269,10 @@ namespace jittor {
             return Tensor(ptr);
         }
 
+        Tensor empty(NanoVector shape, Option option) {
+            return empty(shape, option, at::MemoryFormat::Contiguous);
+        }
+        
         Tensor empty(NanoVector shape, Option option, at::MemoryFormat format) {
             // todo: add special support for different formats. For now all outputs are contiguous format.
             VarPtr ptr;
