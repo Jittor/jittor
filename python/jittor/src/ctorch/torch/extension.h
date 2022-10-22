@@ -115,6 +115,7 @@ namespace jittor {
             NanoVector stride();
             int stride(int i);
             int dtype() const;
+            Option dtype(int);
             int scalar_type();
             Tensor contiguous();
             bool defined();

@@ -195,8 +195,12 @@ namespace jittor {
             if(dtype_ == "int32")
                 return 4;
             if(dtype_ == "int64")
-                return 4;
+                return 5;
             return -1; // non-exist types
+        }
+
+        Option Tensor::dtype(int dtype_) {
+            return Option(dtype_);
         }
 
         int Tensor::scalar_type() {
