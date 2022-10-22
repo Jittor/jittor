@@ -56,6 +56,9 @@ namespace jittor {
         int kLong = 5;
         int kInt64 = 5;
         int kBFloat16 = 6;
+        Option dtype(int dtype_) {
+            return Option(dtype_);
+        }
         NanoString parse_dtype(int dtype) {
             switch(dtype) {
                 case 0:
@@ -197,10 +200,6 @@ namespace jittor {
             if(dtype_ == "int64")
                 return 5;
             return -1; // non-exist types
-        }
-
-        Option Tensor::dtype(int dtype_) {
-            return Option(dtype_);
         }
 
         int Tensor::scalar_type() {

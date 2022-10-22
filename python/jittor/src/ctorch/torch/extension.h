@@ -76,6 +76,8 @@ namespace jittor {
         extern int kInt32;
         extern int kCUDA;
         extern int kBFloat16;
+        extern int kLong;
+        extern int kInt64;
         // TODO: support BFloat16 in jittor
         using BFloat16 = jittor::float16; 
 
@@ -100,7 +102,7 @@ namespace jittor {
         };
 
 
-
+        Option dtype(int);
         struct Tensor {
             Tensor();
 
@@ -115,7 +117,6 @@ namespace jittor {
             NanoVector stride();
             int stride(int i);
             int dtype() const;
-            Option dtype(int);
             int scalar_type();
             Tensor contiguous();
             bool defined();
