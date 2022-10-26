@@ -279,24 +279,8 @@ namespace jittor {
         Tensor empty(NanoVector shape, Option option, at::MemoryFormat format) {
             // todo: add special support for different formats. For now all outputs are contiguous format.
             VarPtr ptr;
-
-            switch(option.dtype_) {
-                case 0:
-                    ptr = make_empty(shape, "uint8"); 
-                    break;
-                case 1:
-                    ptr = make_empty(shape, "float32");
-                    break;
-                case 2:
-                    ptr = make_empty(shape, "float64");
-                    break;
-                case 4:
-                    ptr = make_empty(shape, "int32");
-                    break;
-                default:
-                    ptr = make_empty(shape, "float32");
-                    break;  
-            }
+            NanoString t_type = parse_dtype(option.dtype_);
+            ptr = make_empty(shape, t_type); 
             return Tensor(ptr);
         }
 

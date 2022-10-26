@@ -381,6 +381,7 @@ class Adam(Optimizer):
             weight_decay = pg.get("weight_decay", self.weight_decay)
             b0, b1 = pg.get("betas", self.betas)
             for p, g, v, m in zip(pg["params"], pg["grads"], pg["values"], pg["m"]):
+                # print("m: ", p.name(), g.sum())
                 if p.is_stop_grad(): continue
                 g = p * weight_decay + g
                 m.update(b0 * m + (1-b0) * g)
