@@ -1231,16 +1231,14 @@ if has_cuda:
 # from .acl_compiler import check_acl
 from .extern.acl import acl_compiler
 jit_utils.add_backend(acl_compiler)
-has_acl = False
 from .extern.rocm import rocm_compiler
 jit_utils.add_backend(rocm_compiler)
 from .extern.corex import corex_compiler
 jit_utils.add_backend(corex_compiler)
 
-if not has_cuda:
-    for mod in jit_utils.backends:
-        if mod.check():
-            break
+for mod in jit_utils.backends:
+    if mod.check():
+        break
 
 # build core
 gen_jit_flags()
