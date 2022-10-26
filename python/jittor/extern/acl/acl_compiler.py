@@ -9,11 +9,13 @@ from jittor_utils import env_or_try_find
 import jittor_utils
 import ctypes
 import glob
+import jittor.compiler as compiler
 
 has_acl = 0
 cc_flags = ""
 tikcc_path = env_or_try_find('tikcc_path', 'tikcc')
 dlopen_flags = os.RTLD_NOW | os.RTLD_GLOBAL
+compiler.has_acl = has_acl
 
 def install():
     import jittor.compiler as compiler
@@ -64,3 +66,7 @@ def check():
     compiler.nvcc_flags = compiler.cc_flags.replace("-std=c++14","")
     return True
 
+def post_process():
+    if has_acl:
+        from jittor import pool
+        pool.pool_use_code_op = False

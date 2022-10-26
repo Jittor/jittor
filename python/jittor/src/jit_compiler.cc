@@ -212,7 +212,7 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
     // compiler do not allowed filename too long
     CHECK(cc_path.size());
     string jit_src_path;
-    if(is_cuda_op && extra_flags.find("-dc") != string::npos)
+    if (is_cuda_op && extra_flags.find("-dc") != string::npos)
         jit_src_path = Op::get_filename_from_jit_key(jit_key, ".cu");
     else
         jit_src_path = Op::get_filename_from_jit_key(jit_key, ".cc");
