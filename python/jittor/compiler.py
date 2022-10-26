@@ -234,7 +234,7 @@ def gen_jit_flags():
             jit_declares.append(f"DECLARE_FLAG({type}, {name});")
             alias = []
             if name == "use_cuda":
-                alias = ["use_device", "use_acl", "use_rocm"]
+                alias = ["use_device", "use_acl", "use_rocm", "use_corex"]
             elif name == "auto_mixed_precision_level":
                 alias = ["amp_level"]
             get_names = ",".join(["__get__"+a for a in [name]+alias])
@@ -867,7 +867,7 @@ def check_cuda():
         cc_flags += f" -lcudart -L\"{cuda_lib}\" "
         # ctypes.CDLL(cuda_lib+"/libcudart.so", import_flags)
         ctypes.CDLL(cuda_lib+"/libcudart.so", dlopen_flags)
-    has_cuda = 1
+    is_cuda = has_cuda = 1
 
 def check_cache_compile():
     files = [
@@ -1181,7 +1181,7 @@ check_cache_compile()
 LOG.v(f"Get cache_compile: {jit_utils.cc}")
 
 # check cuda
-has_cuda = 0
+is_cuda = has_cuda = 0
 check_cuda()
 nvcc_flags = os.environ.get("nvcc_flags", "")
 if has_cuda:
@@ -1233,6 +1233,8 @@ from .extern.acl import acl_compiler
 jit_utils.add_backend(acl_compiler)
 from .extern.rocm import rocm_compiler
 jit_utils.add_backend(rocm_compiler)
+from .extern.corex import corex_compiler
+jit_utils.add_backend(corex_compiler)
 
 for mod in jit_utils.backends:
     mod.check()
@@ -1346,7 +1348,7 @@ with jit_utils.import_scope(import_flags):
 
 flags = core.Flags()
 
-if has_cuda:
+if has_cuda and is_cuda:
     nvcc_flags = " " + os.environ.get("nvcc_flags", "") + " "
     nvcc_flags += convert_nvcc_flags(cc_flags)
     nvcc_version = list(jit_utils.get_int_version(nvcc_path))

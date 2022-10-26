@@ -374,7 +374,10 @@ DEF_IS(ArrayArgs, T) from_py_object(PyObject* obj) {
 // VarHolder
 struct VarHolder;
 EXTERN_LIB PyHeapTypeObject PyjtVarHolder;
-namespace jit_op_maker { EXTERN_LIB VarHolder* array_(ArrayArgs&& args); }
+namespace jit_op_maker { 
+EXTERN_LIB VarHolder* array_(ArrayArgs&&);
+EXTERN_LIB VarHolder* array__(PyObject* obj);
+}
 DEF_IS(VarHolder*, bool) is_type(PyObject* obj) {
     return Py_TYPE(obj) == &PyjtVarHolder.ht_type ||
         is_type<ArrayArgs>(obj);
@@ -397,8 +400,7 @@ DEF_IS(VarHolder*, T) from_py_object(PyObject* obj) {
 DEF_IS(VarHolder*, T) from_py_object(PyObject* obj, unique_ptr<VarHolder>& holder) {
     if (Py_TYPE(obj) == &PyjtVarHolder.ht_type)
         return GET_RAW_PTR(VarHolder, obj);
-    auto args = from_py_object<ArrayArgs>(obj);
-    holder.reset(jit_op_maker::array_(move(args)));
+    holder.reset(jit_op_maker::array__(obj));
     return holder.get();
 }
 

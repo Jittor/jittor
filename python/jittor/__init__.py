@@ -1889,3 +1889,9 @@ from . import sparse
 from . import optim
 from . import dataset
 from . import init
+
+import jittor_utils
+
+for backend in jittor_utils.backends:
+    if hasattr(backend, "post_process"):
+        backend.post_process()

@@ -55,10 +55,12 @@ inline float cuda_atomic_max(float* a, float b) {
     return orderedIntToFloat(atomicMax((int *)a, floatToOrderedInt(b)));
 }
 
+#ifndef NO_ATOMIC64
 template<> __device__
 inline double cuda_atomic_max(double* a, double b) {
     return orderedIntToFloat(atomicMax((long long *)a, floatToOrderedInt(b)));
 }
+#endif
 
 template<class T> __device__
 T cuda_atomic_min(T* a, T b) {
@@ -70,10 +72,12 @@ inline float cuda_atomic_min(float* a, float b) {
     return orderedIntToFloat(atomicMin((int *)a, floatToOrderedInt(b)));
 }
 
+#ifndef NO_ATOMIC64
 template<> __device__
 inline double cuda_atomic_min(double* a, double b) {
     return orderedIntToFloat(atomicMin((long long *)a, floatToOrderedInt(b)));
 }
+#endif
 
 template <class T> struct int_mapper {
     typedef T src;

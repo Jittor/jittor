@@ -81,6 +81,21 @@ class TestACL(unittest.TestCase):
         np.testing.assert_allclose(y.numpy(), ny)
         # y.sync(True)
 
+    @jt.flag_scope(use_acl=1)
+    def test_max(self):
+        x = jt.rand(10,10)
+        y = x.max(1).data
+        ny = x.data.max(1)
+        np.testing.assert_allclose(y, ny)
+
+    @jt.flag_scope(use_acl=1)
+    def test_resnet(self):
+        from jittor.models import resnet50
+        net = resnet50()
+        x = jt.rand(2,3,224,224)
+        y = net(x)
+        y.sync()
+
 
 
 def matmul(a, b):
