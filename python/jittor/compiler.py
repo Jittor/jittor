@@ -1239,9 +1239,8 @@ jit_utils.add_backend(corex_compiler)
 
 if not has_cuda:
     for mod in jit_utils.backends:
-        mod.check()
-        # if mod.check():
-            # break
+        if mod.check():
+            break
 
 # build core
 gen_jit_flags()
