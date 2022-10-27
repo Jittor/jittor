@@ -109,7 +109,7 @@ namespace jittor {
             Tensor(VarPtr& ptr);
 
             Tensor(const Tensor& b);
-            
+            ~Tensor();
             NanoVector size();
             int size(int i);
             int numel();

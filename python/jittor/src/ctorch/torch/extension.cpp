@@ -174,6 +174,12 @@ namespace jittor {
             return *this;
         }
 
+        Tensor::~Tensor() {
+            if(jtptr!=nullptr) {
+                delete jtptr;
+            }
+        }
+        
         int Tensor::get_device() {
             return 0;
         }
