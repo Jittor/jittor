@@ -27,7 +27,7 @@ def search_file(dirs, name, prefer_version=()):
         for i in range(len(prefer_version),-1,-1):
             vname = ".".join((fname,)+prefer_version[:i])
             if os.path.isfile(vname):
-                LOG.i(f"found {vname}")
+                LOG.v(f"found {vname}")
                 return vname
     LOG.f(f"file {name} not found in {dirs}")
 

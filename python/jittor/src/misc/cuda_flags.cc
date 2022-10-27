@@ -24,6 +24,7 @@ DEFINE_FLAG_WITH_SETTER(int, device_id, -1,
 EXTERN_LIB void sync_all(bool device_sync);
 
 void setter_use_cuda(int value) {
+    if (use_cuda == value) return;
 #ifdef HAS_CUDA
     if (value) {
         int count=0;
