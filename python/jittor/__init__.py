@@ -1889,6 +1889,7 @@ from . import sparse
 from . import optim
 from . import dataset
 from . import init
+from . import einops
 
 import jittor_utils
 

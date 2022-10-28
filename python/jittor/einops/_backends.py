@@ -117,6 +117,9 @@ class AbstractBackend:
     def __repr__(self):
         return "<einops backend for {}>".format(self.framework_name)
 
+    def einsum(self, pattern, *x):
+        raise NotImplementedError("backend does not support einsum")
+
 
 class UnknownSize:
     """ pseudo-symbol for symbolic frameworks which do not provide symbols for shape elements """
@@ -163,10 +166,14 @@ class NumpyBackend(AbstractBackend):
         return self.np.tile(x, repeats)
 
     def is_float_type(self, x):
-        return x.dtype in ('float16', 'float32', 'float64', 'float128')
+        return x.dtype in ('float16', 'float32', 'float64', 'float128', 'bfloat16')
 
     def add_axis(self, x, new_position):
         return self.np.expand_dims(x, new_position)
+    
+    def einsum(self, pattern, *x):
+        return self.np.einsum(pattern, *x)
+
 
 class HashableTuple:
     """Overcomes non-hashability of symbolic elements"""
@@ -192,13 +199,10 @@ class JittorBackend(AbstractBackend):
         self.jittor = jittor
 
     def is_appropriate_type(self, tensor):
-        return isinstance(tensor, self.jittor.jittor_core.Var)
+        return isinstance(tensor, self.jittor.Var)
 
     def from_numpy(self, x):
         variable = self.jittor.array(x)
-        if self.is_float_type(variable):
-            # attach grad only to floating types
-            variable.requires_grad = True
         return variable
 
     def to_numpy(self, x):
@@ -208,21 +212,24 @@ class JittorBackend(AbstractBackend):
         return self.jittor.arange(start, stop, dtype='int64')
 
     def shape(self, x):
-        return HashableTuple(tuple(x.shape))
+        return tuple(x.shape)
 
     def reshape(self, x, shape):
+        if len(shape) == 0:
+            return x
         return self.jittor.reshape(x, shape)
     
-    # def reduce(self, x, operation, axes):
-    #     return getattr(x, operation)(dim=axes)
-
     def reduce(self, x, operation, reduced_axes):
+        
+        if operation == 'prod':
+            #avoid overflow
+            return x.prod(reduced_axes)
         for axis in sorted(reduced_axes, reverse=True):
             if operation == 'min':
                 x = x.min(dim=axis)
             elif operation == 'max':
                 x = x.max(dim=axis)
-            elif operation in ['sum', 'mean', 'prod']:
+            elif operation in ['sum', 'mean']:
                 x = getattr(x, operation)(dim=axis)
             else:
                 raise NotImplementedError('Unknown reduction ', operation)
@@ -253,3 +260,6 @@ class JittorBackend(AbstractBackend):
     def layers(self):
         from jittor.einops.layers import jittor
         return jittor
+    
+    def einsum(self, pattern, *x):
+        return self.jittor.linalg.einsum(pattern, *x)

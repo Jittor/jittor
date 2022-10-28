@@ -1,5 +1,6 @@
 import functools
 import itertools
+import string
 import typing
 from collections import OrderedDict
 from typing import Tuple, List, Dict, Union, Callable, Optional, TypeVar
@@ -16,6 +17,8 @@ ReductionCallable = Callable[[Tensor, List[int]], Tensor]
 Reduction = Union[str, ReductionCallable]
 
 _reductions = ('min', 'max', 'sum', 'mean', 'prod')
+# magic integers are required to stay within
+# traceable subset of language
 _ellipsis_not_in_parenthesis: List[int] = [-999]
 _unknown_axis_length = -999999
 
@@ -393,11 +396,12 @@ def reduce(tensor: Tensor, pattern: str, reduction: Reduction, **axes_lengths: i
     ```
 
     Parameters:
-        tensor: tensor: tensor of any supported library (e.g. numpy.ndarray, jittor.array).
+        tensor: tensor: tensor of any supported library (e.g. numpy.ndarray, tensorflow, pytorch, mxnet.ndarray).
             list of tensors is also accepted, those should be of the same type and shape
         pattern: string, reduction pattern
         reduction: one of available reductions ('min', 'max', 'sum', 'mean', 'prod'), case-sensitive
             alternatively, a callable f(tensor, reduced_axes) -> tensor can be provided.
+            This allows using various reductions, examples: np.max, tf.reduce_logsumexp, torch.var, etc.
         axes_lengths: any additional specifications for dimensions
 
     Returns:
@@ -418,13 +422,7 @@ def reduce(tensor: Tensor, pattern: str, reduction: Reduction, **axes_lengths: i
 
 
 
-@typing.overload
-def rearrange(tensor: Tensor, pattern: str, **axes_length: int) -> Tensor: ...
-@typing.overload
-def rearrange(tensor: List[Tensor], pattern: str, **axes_lengths: int) -> Tensor: ...
-
-
-def rearrange(tensor, pattern: str, **axes_lengths):
+def rearrange(tensor: Union[Tensor, List[Tensor]], pattern: str, **axes_lengths) -> Tensor:
     """
     einops.rearrange is a reader-friendly smart element reordering for multidimensional tensors.
     This operation includes functionality of transpose (axes permutation), reshape (view), squeeze, unsqueeze,
@@ -470,7 +468,7 @@ def rearrange(tensor, pattern: str, **axes_lengths):
     Find more examples in einops tutorial.
 
     Parameters:
-        tensor: tensor of any supported library (e.g. numpy.ndarray, jittor.array).
+        tensor: tensor of any supported library (e.g. numpy.ndarray, tensorflow, pytorch, mxnet.ndarray).
                 list of tensors is also accepted, those should be of the same type and shape
         pattern: string, rearrangement pattern
         axes_lengths: any additional specifications for dimensions
@@ -506,8 +504,8 @@ def repeat(tensor: Tensor, pattern: str, **axes_lengths) -> Tensor:
     (60, 40)
 
     # repeat image 2 time along height and 3 times along width
-    >>> repeat(image, 'h w -> h (repeat w)', repeat=3).shape
-    (30, 120)
+    >>> repeat(image, 'h w -> (h2 h) (w3 w)', h2=2, w3=3).shape
+    (60, 120)
 
     # convert each pixel to a small square 2x2. Upsample image by 2x
     >>> repeat(image, 'h w -> (h h2) (w w2)', h2=2, w2=2).shape
@@ -524,7 +522,7 @@ def repeat(tensor: Tensor, pattern: str, **axes_lengths) -> Tensor:
     Find more examples in einops tutorial.
 
     Parameters:
-        tensor: tensor of any supported library (e.g. numpy.ndarray, jittor.array).
+        tensor: tensor of any supported library (e.g. numpy.ndarray, tensorflow, pytorch, mxnet.ndarray).
             list of tensors is also accepted, those should be of the same type and shape
         pattern: string, rearrangement pattern
         axes_lengths: any additional specifications for dimensions
@@ -536,7 +534,7 @@ def repeat(tensor: Tensor, pattern: str, **axes_lengths) -> Tensor:
     return reduce(tensor, pattern, reduction='repeat', **axes_lengths)
 
 
-def parse_shape(x, pattern: str):
+def parse_shape(x, pattern: str) -> dict:
     """
     Parse a tensor shape to dictionary mapping axes names to their lengths.
 
@@ -579,11 +577,11 @@ def parse_shape(x, pattern: str):
         ellipsis_idx = exp.composition.index(_ellipsis)
         composition = (exp.composition[:ellipsis_idx] +
                        ['_'] * (len(shape) - len(exp.composition) + 1) +
-                       exp.composition[ellipsis_idx+1:])
+                       exp.composition[ellipsis_idx + 1:])
     else:
         composition = exp.composition
     result = {}
-    for (axis_name, ), axis_length in zip(composition, shape):
+    for (axis_name,), axis_length in zip(composition, shape):
         if axis_name != '_':
             result[axis_name] = axis_length
     return result
@@ -614,7 +612,7 @@ def _enumerate_directions(x):
 
 def asnumpy(tensor) -> 'numpy.ndarray':
     """
-    Convert a tensor of an imperative framework (i.e. numpy/jittor.) to `numpy.ndarray`
+    Convert a tensor of an imperative framework (i.e. numpy/cupy/torch/gluon/etc.) to `numpy.ndarray`
 
     Parameters:
         tensor: tensor of any of known imperative framework
@@ -623,3 +621,165 @@ def asnumpy(tensor) -> 'numpy.ndarray':
         `numpy.ndarray`, converted to numpy
     """
     return get_backend(tensor).to_numpy(tensor)
+
+def _validate_einsum_axis_name(axis_name):
+    if len(axis_name) == 0:
+        raise NotImplementedError("Singleton () axes are not yet supported in einsum.")
+    if len(axis_name) > 1:
+        raise NotImplementedError("Shape rearrangement is not yet supported in einsum.")
+
+    axis_name = axis_name[0]
+
+    if isinstance(axis_name, AnonymousAxis):
+        raise NotImplementedError("Anonymous axes are not yet supported in einsum.")
+    if len(axis_name) == 0:
+        raise RuntimeError("Encountered empty axis name in einsum.")
+    if not isinstance(axis_name, str):
+        raise RuntimeError("Axis name in einsum must be a string.")
+
+
+@functools.lru_cache(256)
+def _compactify_pattern_for_einsum(pattern: str) -> str:
+    if "->" not in pattern:
+        # numpy allows this, so make sure users
+        # don't accidentally do something like this.
+        raise ValueError("Einsum pattern must contain '->'.")
+    lefts, right = pattern.split('->')
+    lefts = lefts.split(',')
+
+    lefts = [
+        ParsedExpression(left, allow_underscore=True, allow_duplicates=True)
+        for left in lefts
+    ]
+
+    right = ParsedExpression(right, allow_underscore=True)
+
+    # Start from 'a' and go up to 'Z'
+    output_axis_names = string.ascii_letters
+    i = 0
+    axis_name_mapping = {}
+
+    left_patterns = []
+    for left in lefts:
+        left_pattern = ""
+        for raw_axis_name in left.composition:
+
+            if raw_axis_name == _ellipsis:
+                left_pattern += '...'
+                continue
+
+            _validate_einsum_axis_name(raw_axis_name)
+            axis_name = raw_axis_name[0]
+            if axis_name not in axis_name_mapping:
+                if i >= len(output_axis_names):
+                    raise RuntimeError("Too many axes in einsum.")
+                axis_name_mapping[axis_name] = output_axis_names[i]
+                i += 1
+
+            left_pattern += axis_name_mapping[axis_name]
+        left_patterns.append(left_pattern)
+
+    compact_pattern = ",".join(left_patterns) + "->"
+
+    for raw_axis_name in right.composition:
+        if raw_axis_name == _ellipsis:
+            compact_pattern += '...'
+            continue
+
+        _validate_einsum_axis_name(raw_axis_name)
+        axis_name = raw_axis_name[0]
+
+        if axis_name not in axis_name_mapping:
+            raise EinopsError(f"Unknown axis {axis_name} on right side of einsum {pattern}.")
+
+        compact_pattern += axis_name_mapping[axis_name]
+
+    return compact_pattern
+
+
+@typing.overload
+def einsum(tensor: Tensor, pattern: str) -> Tensor: ...
+@typing.overload
+def einsum(tensor1: Tensor, tensor2: Tensor, pattern: str) -> Tensor: ...
+@typing.overload
+def einsum(tensor1: Tensor, tensor2: Tensor, tensor3: Tensor, pattern: str) -> Tensor: ...
+@typing.overload
+def einsum(tensor1: Tensor, tensor2: Tensor, tensor3: Tensor, tensor4: Tensor, pattern: str) -> Tensor: ...
+
+
+def einsum(*tensors_and_pattern: List[Union[Tensor, str]]) -> Tensor:
+    """
+    einops.einsum calls einsum operations with einops-style named
+    axes indexing, computing tensor products with an arbitrary
+    number of tensors. Unlike typical einsum syntax, here you must
+    pass tensors first, and then the pattern.
+
+    Also, note that rearrange operations such as `"(batch chan) out"`,
+    or singleton axes `()`, are not currently supported.
+
+    Examples:
+
+    For a given pattern such as:
+    ```python
+    >>> x, y, z = np.random.randn(3, 20, 20, 20)
+    >>> output = einsum(x, y, z, "a b c, c b d, a g k -> a b k")
+
+    ```
+    the following formula is computed:
+    ```tex
+    output[a, b, k] = 
+        \sum_{c, d, g} x[a, b, c] * y[c, b, d] * z[a, g, k]
+    ```
+    where the summation over `c`, `d`, and `g` is performed
+    because those axes names do not appear on the right-hand side.
+
+    Let's see some additional examples:
+    ```python
+    # Filter a set of images:
+    >>> batched_images = np.random.randn(128, 16, 16)
+    >>> filters = np.random.randn(16, 16, 30)
+    >>> result = einsum(batched_images, filters,
+    ...                 "batch h w, h w channel -> batch channel")
+    >>> result.shape
+    (128, 30)
+
+    # Matrix multiplication, with an unknown input shape:
+    >>> batch_shape = (50, 30)
+    >>> data = np.random.randn(*batch_shape, 20)
+    >>> weights = np.random.randn(10, 20)
+    >>> result = einsum(weights, data,
+    ...                 "out_dim in_dim, ... in_dim -> ... out_dim")
+    >>> result.shape
+    (50, 30, 10)
+
+    # Matrix trace on a single tensor:
+    >>> matrix = np.random.randn(10, 10)
+    >>> result = einsum(matrix, "i i ->")
+    >>> result.shape
+    ()
+
+    ```
+
+    Parameters:
+        tensors: tensors of any supported library (numpy, tensorflow, pytorch, jax).
+        pattern: string, einsum pattern, with commas
+                 separating specifications for each tensor.
+
+    Returns:
+        Tensor of the same type as input, after processing with einsum.
+
+    """
+    if len(tensors_and_pattern) <= 1:
+        raise ValueError(
+            "`einops.einsum` takes at minimum two arguments: the tensors (at least one),"
+            " followed by the pattern."
+        )
+    pattern = tensors_and_pattern[-1]
+    if not isinstance(pattern, str):
+        raise ValueError(
+            "The last argument passed to `einops.einsum` must be a string,"
+            " representing the einsum pattern."
+        )
+    tensors = tensors_and_pattern[:-1]
+    pattern = _compactify_pattern_for_einsum(pattern)
+    return get_backend(tensors[0]).einsum(pattern, *tensors)

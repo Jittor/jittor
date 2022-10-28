@@ -6,27 +6,18 @@ import numpy as np
 
 from jittor.einops.layers import RearrangeMixin, ReduceMixin
 from jittor.einops.layers._einmix import _EinmixMixin
-from jittor.einops._jittor_specific import apply_for_scriptable_jittor
 
-__author__ = 'Ruiyang Liu'
+__author__ = 'Ruiyang Liu, DongYang Li'
 
 
 class Rearrange(RearrangeMixin, jt.nn.Module):
     def execute(self, input):
-        return apply_for_scriptable_jittor(self._recipe, input, reduction_type='rearrange')
+        return self._apply_recipe(input)
 
-    def _apply_recipe(self, x):
-        # overriding parent method to prevent it's scripting
-        pass
-
-
+    
 class Reduce(ReduceMixin, jt.nn.Module):
     def execute(self, input):
-        return apply_for_scriptable_jittor(self._recipe, input, reduction_type=self.reduction)
-
-    def _apply_recipe(self, x):
-        # overriding parent method to prevent it's scripting
-        pass
+        return self._apply_recipe(input)
 
 
 class EinMix(_EinmixMixin, jt.nn.Module):

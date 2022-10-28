@@ -49,8 +49,8 @@ class _EinmixMixin:
 
         Parameters
         :param pattern: transformation pattern, left side - dimensions of input, right side - dimensions of output
-        :param weight_shape: axes of weight. Tensor od this shape is created, stored, and optimized in a layer
-        :param bias_shape: axes of bias added to output.
+        :param weight_shape: axes of weight. A tensor of this shape is created, stored, and optimized in a layer
+        :param bias_shape: axes of bias added to output. Weights of this shape are created and stored. If `None` (the default), no bias is added.
         :param axes_lengths: dimensions of weight tensor
         """
         super().__init__()
@@ -58,7 +58,9 @@ class _EinmixMixin:
         self.weight_shape = weight_shape
         self.bias_shape = bias_shape
         self.axes_lengths = axes_lengths
+        self.initialize_einmix(pattern=pattern, weight_shape=weight_shape, bias_shape=bias_shape, axes_lengths=axes_lengths)
 
+    def initialize_einmix(self, pattern, weight_shape, bias_shape, axes_lengths):
         left_pattern, right_pattern = pattern.split('->')
         left = ParsedExpression(left_pattern)
         right = ParsedExpression(right_pattern)
@@ -84,7 +86,7 @@ class _EinmixMixin:
                 names += group
             composition = ' '.join(names)
             pre_reshape_pattern = f'{left_pattern}->{composition}'
-            pre_reshape_lengths = {name: length for name, length in self.axes_lengths.items() if name in names}
+            pre_reshape_lengths = {name: length for name, length in axes_lengths.items() if name in names}
 
         if any(len(group) != 1 for group in right.composition):
             names = []
@@ -134,8 +136,7 @@ class _EinmixMixin:
                         _bias_shape.append(1)
         else:
             _bias_shape = None
-            _bias_input_size = None
-
+            
         weight_bound = (3 / _fan_in) ** 0.5
         bias_bound = (1 / _fan_in) ** 0.5
         self._create_parameters(_weight_shape, weight_bound, _bias_shape, bias_bound)
