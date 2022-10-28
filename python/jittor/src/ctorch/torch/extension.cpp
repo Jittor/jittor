@@ -177,6 +177,7 @@ namespace jittor {
         Tensor::~Tensor() {
             if(jtptr!=nullptr) {
                 delete jtptr;
+                jtptr=nullptr;
             }
         }
         
@@ -323,10 +324,16 @@ namespace pybind11 { namespace detail {
 bool type_caster<jittor::torch::Tensor>::load(handle src, bool) {
     PyObject *source = src.ptr();
     if(source != Py_None) {
-        jittor::VarHolder* var_holder = jittor::from_py_object<jittor::VarHolder*>(source);
-        if (!var_holder)
+        if(Py_TYPE(source) == &jittor::PyjtVarHolder.ht_type) {
+            jittor::VarHolder* var_holder = jittor::from_py_object<jittor::VarHolder*>(source);
+            if (!var_holder)
+                return false;
+            value.jtptr = new VarHolder(var_holder->var);
+        }
+        else {
+            LOGe << "Wrong input type!!";
             return false;
-        value.jtptr = var_holder;
+        }
     } else {
         value.jtptr = nullptr;
     }
