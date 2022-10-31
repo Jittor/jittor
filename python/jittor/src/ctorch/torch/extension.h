@@ -25,7 +25,17 @@ namespace py = pybind11;
 namespace jittor {
     void AT_CUDA_CHECK(cudaError_t status);
 
-    #define TORCH_CHECK(a, ...) assert(a) 
+    template<class... Args>
+    void torch_print(Args... args)
+    {
+        (std::cout << ... << args) << "\n";
+    }
+    
+    #define TORCH_CHECK(a, ...) \
+        if(!(a)) { \
+            printf("wrong line: %d, wrong file %s\n", __LINE__, __FILE__); \
+            torch_print(__VA_ARGS__); \
+        }
 
     #define AT_PRIVATE_CASE_TYPE(enum_type, type, ...) \
         case enum_type: {                                \
