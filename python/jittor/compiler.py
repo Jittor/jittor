@@ -1388,27 +1388,283 @@ flags.has_pybt = has_pybt
 
 core.set_lock_path(lock.lock_path)
 
-def compile_torch_extensions(extension_name, sources, extra_cflags=None, extra_cuda_cflags=None, extra_ldflags=None, use_cuda=0, force_compile=0):
-    global flags
-    if use_cuda:
-        compiler = nvcc_path
+def _is_cuda_file(path: str) -> bool:
+    valid_ext = ['.cu', '.cuh']
+    return os.path.splitext(path)[1] in valid_ext
+
+def object_file_path(source_file, with_cuda=True) -> str:
+    # '/path/to/file.cpp' -> 'file'
+    file_name = os.path.splitext(os.path.basename(source_file))[0]
+    if _is_cuda_file(source_file) and with_cuda:
+        # Use a different object filename in case a C++ and CUDA file have
+        # the same filename but different extension (.cpp vs. .cu).
+        target = f'{file_name}.cuda.o'
     else:
-        compiler = cc_path
+        target = f'{file_name}.o'
+    return target
+
+def _write_ninja_file(path,
+                      compiler,
+                      nvcc,
+                      cflags,
+                      post_cflags,
+                      cuda_cflags,
+                      cuda_post_cflags,
+                      sources,
+                      objects,
+                      ldflags,
+                      library_target,
+                      with_cuda) -> None:
+    r"""Write a ninja file that does the desired compiling and linking.
+
+    `path`: Where to write this file
+    `cflags`: list of flags to pass to $cxx. Can be None.
+    `post_cflags`: list of flags to append to the $cxx invocation. Can be None.
+    `cuda_cflags`: list of flags to pass to $nvcc. Can be None.
+    `cuda_postflags`: list of flags to append to the $nvcc invocation. Can be None.
+    `sources`: list of paths to source files
+    `objects`: list of desired paths to objects, one per source.
+    `ldflags`: list of flags to pass to linker. Can be None.
+    `library_target`: Name of the output library. Can be None; in that case,
+                      we do no linking.
+    `with_cuda`: If we should be compiling with CUDA.
+    """
+    def sanitize_flags(flags):
+        if flags is None:
+            return []
+        else:
+            return [flag.strip() for flag in flags]
+
+    cflags = sanitize_flags(cflags)
+    post_cflags = sanitize_flags(post_cflags)
+    cuda_cflags = sanitize_flags(cuda_cflags)
+    cuda_post_cflags = sanitize_flags(cuda_post_cflags)
+    ldflags = sanitize_flags(ldflags)
+
+    # Sanity checks...
+    assert len(sources) == len(objects)
+    assert len(sources) > 0
+
+    # Version 1.3 is required for the `deps` directive.
+    config = ['ninja_required_version = 1.3']
+    config.append(f'cxx = {compiler}')
+    if with_cuda:
+        # if IS_HIP_EXTENSION:
+        #     nvcc = _join_rocm_home('bin', 'hipcc')
+        # nvcc = _join_cuda_home('bin', 'nvcc')
+        config.append(f'nvcc = {nvcc}')
+
+    # if IS_HIP_EXTENSION:
+    #     post_cflags = COMMON_HIP_FLAGS + post_cflags
+    flags = [f'cflags = {" ".join(cflags)}']
+    flags.append(f'post_cflags = {" ".join(post_cflags)}')
+    if with_cuda:
+        flags.append(f'cuda_cflags = {" ".join(cuda_cflags)}')
+        flags.append(f'cuda_post_cflags = {" ".join(cuda_post_cflags)}')
+    flags.append(f'ldflags = {" ".join(ldflags)}')
+
+    # Turn into absolute paths so we can emit them into the ninja build
+    # file wherever it is.
+    sources = [os.path.abspath(file) for file in sources]
+
+    # See https://ninja-build.org/build.ninja.html for reference.
+    compile_rule = ['rule compile']
+    # if IS_WINDOWS:
+    #     compile_rule.append(
+    #         '  command = cl /showIncludes $cflags -c $in /Fo$out $post_cflags')
+    #     compile_rule.append('  deps = msvc')
+    # else:
+    compile_rule.append(
+        '  command = $cxx -MMD -MF $out.d $cflags -c $in -o $out $post_cflags')
+    compile_rule.append('  depfile = $out.d')
+    compile_rule.append('  deps = gcc')
+
+    if with_cuda:
+        cuda_compile_rule = ['rule cuda_compile']
+        nvcc_gendeps = ''
+        # --generate-dependencies-with-compile was added in CUDA 10.2.
+        # Compilation will work on earlier CUDA versions but header file
+        # dependencies are not correctly computed.
+        # required_cuda_version =     .version.parse('10.2')
+        # has_cuda_version = torch.version.cuda is not None
+        # if has_cuda_version and packaging.version.parse(torch.version.cuda) >= required_cuda_version:
+        #     cuda_compile_rule.append('  depfile = $out.d')
+        #     cuda_compile_rule.append('  deps = gcc')
+        #     # Note: non-system deps with nvcc are only supported
+        #     # on Linux so use --generate-dependencies-with-compile
+        #     # to make this work on Windows too.
+        #     if IS_WINDOWS:
+        #         nvcc_gendeps = '--generate-dependencies-with-compile --dependency-output $out.d'
+        cuda_compile_rule.append(
+            f'  command = $nvcc {nvcc_gendeps} $cuda_cflags -c $in -o $out $cuda_post_cflags')
+
+    # Emit one build rule per source to enable incremental build.
+    build = []
+    for source_file, object_file in zip(sources, objects):
+        is_cuda_source = _is_cuda_file(source_file) and with_cuda
+        rule = 'cuda_compile' if is_cuda_source else 'compile'
+        # if IS_WINDOWS:
+        #     source_file = source_file.replace(':', '$:')
+        #     object_file = object_file.replace(':', '$:')
+        source_file = source_file.replace(" ", "$ ")
+        object_file = object_file.replace(" ", "$ ")
+        build.append(f'build {object_file}: {rule} {source_file}')
+
+    if library_target is not None:
+        link_rule = ['rule link']
+        # if IS_WINDOWS:
+        #     cl_paths = subprocess.check_output(['where',
+        #                                         'cl']).decode(*SUBPROCESS_DECODE_ARGS).split('\r\n')
+        #     if len(cl_paths) >= 1:
+        #         cl_path = os.path.dirname(cl_paths[0]).replace(':', '$:')
+        #     else:
+        #         raise RuntimeError("MSVC is required to load C++ extensions")
+        #     link_rule.append(f'  command = "{cl_path}/link.exe" $in /nologo $ldflags /out:$out')
+        # else:
+        link_rule.append('  command = $cxx $in $ldflags -shared -o $out')
+
+        link = [f'build {library_target}: link {" ".join(objects)}']
+
+        default = [f'default {library_target}']
+    else:
+        link_rule, link, default = [], [], []
+
+    # 'Blocks' should be separated by newlines, for visual benefit.
+    blocks = [config, flags, compile_rule]
+    if with_cuda:
+        blocks.append(cuda_compile_rule)
+    blocks += [link_rule, build, link, default]
+    with open(path, 'w') as build_file:
+        for block in blocks:
+            lines = '\n'.join(block)
+            build_file.write(f'{lines}\n\n')
+
+def _run_ninja_build(build_directory, verbose=False, error_prefix="") -> None:
+    SUBPROCESS_DECODE_ARGS = ()
+    command = ['ninja', '-v']
+    num_workers = 8
+    if num_workers is not None:
+        command.extend(['-j', str(num_workers)])
+    env = os.environ.copy()
+    # os.system(f"cd {build_directory} && {' '.join(command)}")
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        # Warning: don't pass stdout=None to subprocess.run to get output.
+        # subprocess.run assumes that sys.__stdout__ has not been modified and
+        # attempts to write to it by default.  However, when we call _run_ninja_build
+        # from ahead-of-time cpp extensions, the following happens:
+        # 1) If the stdout encoding is not utf-8, setuptools detachs __stdout__.
+        #    https://github.com/pypa/setuptools/blob/7e97def47723303fafabe48b22168bbc11bb4821/setuptools/dist.py#L1110
+        #    (it probably shouldn't do this)
+        # 2) subprocess.run (on POSIX, with no stdout override) relies on
+        #    __stdout__ not being detached:
+        #    https://github.com/python/cpython/blob/c352e6c7446c894b13643f538db312092b351789/Lib/subprocess.py#L1214
+        # To work around this, we pass in the fileno directly and hope that
+        # it is valid.
+        stdout_fileno = 1
+        sp.run(
+            command,
+            stdout=stdout_fileno if verbose else sp.PIPE,
+            stderr=sp.STDOUT,
+            cwd=build_directory,
+            check=True,
+            env=env)
+    except sp.CalledProcessError as e:
+        # Python 2 and 3 compatible way of getting the error object.
+        _, error, _ = sys.exc_info()
+        # error.output contains the stdout and stderr of the build attempt.
+        message = error_prefix
+        # `error` is a CalledProcessError (which has an `ouput`) attribute, but
+        # mypy thinks it's Optional[BaseException] and doesn't narrow
+        if hasattr(error, 'output') and error.output:  # type: ignore[union-attr]
+            message += f": {error.output.decode(*SUBPROCESS_DECODE_ARGS)}"  # type: ignore[union-attr]
+        raise RuntimeError(message) from e
+
+def compile_torch_extensions(extension_name, sources, extra_cflags=None, extra_cuda_cflags=None, extra_ldflags=None, use_cuda=0, force_compile=0):
+    if not use_cuda:
+        use_cuda = all(map(_is_cuda_file, sources))
+    if use_cuda:
+        compiler = jt.flags.nvcc_path
+    else:
+        compiler = jt.flags.cc_path
     suffix = os.popen("python3-config --extension-suffix").read().replace("\n","")
     if os.path.exists(extension_name+suffix) and not force_compile:
         return 0
     jittor_src_path = os.path.join(jittor_path, "src")
     assert (isinstance(sources, str) or isinstance(sources, list)), "must input lists or concatenated string of source files"
-    if not isinstance(sources, str):
-        sources = " ".join(sources)
+    # add ctorch files.
+    sources += [f"{jittor_src_path}/ctorch/torch/extension.cpp", f"{jittor_src_path}/ctorch/ATen/cuda/CUDAUtils.cpp"]
+    objects = [object_file_path(fn) for fn in sources]
     extra_flags = extra_cflags + extra_ldflags if use_cuda == 0 else extra_cuda_cflags + extra_ldflags
     extra_flags = " ".join(extra_flags)
-    compile_command = f"{compiler} {sources} {jittor_src_path}/ctorch/torch/extension.cpp {jittor_src_path}/ctorch/ATen/cuda/CUDAUtils.cpp -I{jittor_src_path} -I{jittor_src_path}/ctorch -g -DTORCH_EXTENSION_NAME={extension_name} -O3 -shared -std=c++17 --forward-unknown-to-host-compiler --use_fast_math --expt-relaxed-constexpr -fPIC -DHAS_CUDA -gencode arch=compute_{flags.cuda_archs[0]},code=compute_{flags.cuda_archs[0]} -lcusparse {extra_flags} -I{jittor_path}/extern/cuda/inc/ --allow-unsupported-compiler $(python3 -m pybind11 --includes) -o {extension_name}$(python3-config --extension-suffix)" 
-    status = os.system(compile_command)
+    # test write ninja files
+    jittor_c_include = f" -I{jittor_src_path} -I{jittor_src_path}/ctorch -I{jt.flags.jittor_path}/extern/cuda/inc/ "
+    pybind_include = os.popen("python3 -m pybind11 --includes").read().strip()
+    cflags = [jittor_c_include + " -I/usr/local/cuda/include ",
+            "$$(python3 -m pybind11 --includes)",
+            "-g",
+            f"-DTORCH_EXTENSION_NAME={extension_name}",
+            "-O3",
+            "-shared",
+            "-std=c++17",
+            "-fPIC"
+    ] 
+    cflags += extra_cflags
+    post_cflags = []
+    cuda_cflags = [jittor_c_include,
+            "-g",
+            f"-DTORCH_EXTENSION_NAME={extension_name}",
+            "-O3",
+            "-shared",
+            "-std=c++17",
+            "-fPIC",
+            "--forward-unknown-to-host-compiler --use_fast_math --expt-relaxed-constexpr",
+            "-DHAS_CUDA",
+            "--allow-unsupported-compiler",
+            f"-gencode arch=compute_{flags.cuda_archs[0]},code=compute_{flags.cuda_archs[0]}"
+    ] 
+    cuda_post_cflags = []
+    cuda_cflags += extra_cuda_cflags
+    python_ldflags = [x if "config" not in x else "" for x in os.popen("python3-config --ldflags").read().split(" ")]
+    ldflags = python_ldflags + ["-lomp", "-lgcc"]
+    # add jittor lib:
+    core_path = jt.flags.cache_path
+    util_path = os.path.sep.join(core_path.split(os.path.sep)[:-1])
+    ldflags += [f' -L"{core_path}" -L"{util_path}" -Wl,-rpath "{core_path}" -ljittor_core -Wl,-rpath "{util_path}" -ljit_utils_core']
+    # add cuda lib:
+    if use_cuda:
+        ldflags += ['-L/usr/local/cuda/lib64 -lcudart -lcusparse']
+    ldflags += extra_ldflags
+    pybind_suffix = os.popen("python3-config --extension-suffix").read().strip()
+    library_target = f"{extension_name}{pybind_suffix}"
+    path = os.path.join(jt.flags.cache_path, "build_cache", extension_name)
+    if not os.path.exists(path):
+        os.makedirs(path)
+    sys.path.append(path)
+    # print(jt.flags.cache_path)
+    _write_ninja_file(os.path.join(path, "build.ninja"),
+            jt.flags.cc_path,
+            jt.flags.nvcc_path,
+            cflags,
+            post_cflags,
+            cuda_cflags,
+            cuda_post_cflags,
+            sources,
+            objects,
+            ldflags,
+            library_target,
+            use_cuda)
+    _run_ninja_build(path, verbose=False, error_prefix=f"Error building extension '{extension_name}'")
+    # directly use nvcc or gcc to compile
+    # if not isinstance(sources, str):
+    #     sources = " ".join(sources)
+    # compile_command = f"{compiler} {sources} -I{jittor_src_path} -I{jittor_src_path}/ctorch -g -DTORCH_EXTENSION_NAME={extension_name} -O3 -shared -std=c++17 --forward-unknown-to-host-compiler --use_fast_math --expt-relaxed-constexpr -fPIC -DHAS_CUDA -gencode arch=compute_{flags.cuda_archs[0]},code=compute_{flags.cuda_archs[0]} -lcusparse {extra_flags} -I{jittor_path}/extern/cuda/inc/ --allow-unsupported-compiler $(python3 -m pybind11 --includes) -o {extension_name}$(python3-config --extension-suffix)" 
+    # status = os.system(compile_command)
     # print(compile_command)
-    if status != 0:
-        print("=========\nCompile failed. If you are compiling CUDA ops, please set use_cuda to 1 in the parameters.\n=========")
-    return status
+    # if status != 0:
+    #     print("=========\nCompile failed. If you are compiling CUDA ops, please set use_cuda to 1 in the parameters.\n=========")
+    # return status
 
 def _get_build_directory(extension_name, empty=False):
     return os.path.join(cache_path, extension_name)

@@ -35,6 +35,7 @@ namespace jittor {
         if(!(a)) { \
             printf("wrong line: %d, wrong file %s\n", __LINE__, __FILE__); \
             torch_print(__VA_ARGS__); \
+            exit(-1); \
         }
 
     #define AT_PRIVATE_CASE_TYPE(enum_type, type, ...) \
