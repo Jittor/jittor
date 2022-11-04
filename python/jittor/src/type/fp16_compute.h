@@ -138,7 +138,7 @@ struct float16 {
         this->x = (sign | (exponent << 10) | mantissa);  
     }
 
-    inline operator float() {
+    inline operator float() const {
 
         unsigned sign     = ((x >> 15) & 1);
         unsigned exponent = ((x >> 10) & 0x1f);
