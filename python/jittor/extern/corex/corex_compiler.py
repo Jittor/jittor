@@ -47,6 +47,10 @@ string process_acl(const string& src, const string& name, const map<string,strin
             "if (is_cuda_op && $1 != string::npos)",
             "if (is_cuda_op)");
     }
+    if (name == "where_op.cc") {
+        // default where kernel cannot handle 64 warp size, use cub_where instead
+        new_src = token_replace_all(new_src, "if (cub_where$1) {", "if (cub_where) {");
+    }
     return new_src;
 }
 }''', compiler.cc_flags + " " + " ".join(cc_files) + cc_flags)
