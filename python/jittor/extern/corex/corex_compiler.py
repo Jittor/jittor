@@ -38,6 +38,11 @@ string process_acl(const string& src, const string& name, const map<string,strin
     if (name == "jit_compiler.cc") {
         // remove asm tuner
         new_src = token_replace_all(new_src, "cmd = python_path$1;", "");
+        new_src = token_replace_all(new_src, "JPU(op_compiler($1));", 
+        R"(JPU(op_compiler($1));
+            *extra_flags2 = replace(*extra_flags2, "--extended-lambda", "");
+            *extra_flags2 = replace(*extra_flags2, "--expt-relaxed-constexpr", "");
+        )");
         new_src = token_replace_all(new_src, 
             "if (is_cuda_op && $1 != string::npos)",
             "if (is_cuda_op)");
@@ -57,7 +62,7 @@ string process_acl(const string& src, const string& name, const map<string,strin
     compiler.cc_path = compiler.nvcc_path
     compiler.cc_flags = compiler.cc_flags.replace("-fopenmp", "")
     # compiler.nvcc_flags = cc_flags_to_corex(compiler.cc_flags)
-    compiler.nvcc_flags = compiler.cc_flags + " -x cu -Ofast -DNO_ATOMIC64 "
+    compiler.nvcc_flags = compiler.cc_flags + " -x cu -Ofast -DNO_ATOMIC64 -Wno-c++11-narrowing "
     compiler.convert_nvcc_flags = lambda x:x
     compiler.is_cuda = 0
     os.environ["use_cutt"] = "0"
