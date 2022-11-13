@@ -336,5 +336,12 @@ class TestOther(unittest.TestCase):
         with jt.flag_scope(use_cuda=1):
             self.test_nan()
 
+    def test_dropout2d(self):
+        m = jt.nn.Dropout2d(p=0.2)
+        m.train()
+        input = jt.randn(1, 10, 4, 3)
+        output = m(input)
+        output.sync()
+
 if __name__ == "__main__":
     unittest.main()
