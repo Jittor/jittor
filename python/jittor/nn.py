@@ -572,7 +572,7 @@ class Dropout2d(Module):
         return output
 
 def dropout2d(x,p=0.5,is_train=False):
-    return Dropout(p=p,is_train=is_train)(x)
+    return Dropout2d(p=p,is_train=is_train)(x)
 
 class DropPath(Module):
     '''Drop paths (Stochastic Depth) per sample  (when applied in main path of residual blocks).
