@@ -24,6 +24,9 @@ list<VarHolder*> hold_vars;
 list<VarHolder*>::iterator sync_ptr = hold_vars.end();
 
 void add_hold_vars(VarHolder* self) {
+    static int vh_cnt = 0;
+    vh_cnt ++;
+    self->id = vh_cnt;
     hold_vars.push_front(self);
     self->iter = hold_vars.begin();
     if (lazy_execution && Op::number_of_lived_ops < 100000) return;

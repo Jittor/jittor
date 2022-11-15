@@ -39,6 +39,7 @@ extern uint8 th_mode;
 struct VarHolder {
     Var* var;
     list<VarHolder*>::iterator iter;
+    int id;
     VarHolder(Var* v);
     VarHolder(VarPtr&& v);
     // will move and delete v

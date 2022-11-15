@@ -147,7 +147,7 @@ namespace jittor {
                 if(!jtptr || !jtptr->var) return 0;
                 return jtptr->var->dsize() * (long long) jtptr->numel();
             }
-
+            Tensor& operator=(const Tensor& b);
             at::MemoryFormat suggest_memory_format();
         
             void sync(bool device_sync=true);

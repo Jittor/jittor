@@ -115,10 +115,19 @@ namespace jittor {
 
         Tensor::Tensor(const Tensor& b) {
             if(!b.jtptr) jtptr = nullptr;
-            else
+            else {
                 jtptr = new VarHolder(b.jtptr->var);
+            }
         }
         
+        Tensor& Tensor::operator=(const Tensor& b) {
+            if(!b.jtptr) jtptr = nullptr;
+            else {
+                jtptr = new VarHolder(b.jtptr->var);
+            }
+            return *this;
+        }
+
         NanoVector Tensor::size() {
             if(!jtptr) return 0;
             return jtptr->shape();
@@ -256,9 +265,11 @@ namespace jittor {
         static auto make_empty = get_op_info("empty").get_constructor<VarPtr, NanoVector, NanoString>();
         static auto make_number = get_op_info("number").get_constructor<VarPtr, float, Var*>();
         static auto make_clone = get_op_info("clone").get_constructor<VarPtr, Var*>();
+        static auto make_copy = get_op_info("copy").get_constructor<VarPtr, Var*>();
 
         Tensor Tensor::clone() {
-            VarPtr ptr = VarPtr(make_clone(this->jtptr->var));
+            // VarPtr ptr = VarPtr(make_clone(this->jtptr->var));
+            VarPtr ptr = VarPtr(make_copy(this->jtptr->var));
             return Tensor(ptr);
         }
 
