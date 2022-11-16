@@ -1372,7 +1372,7 @@ class ConvTranspose(Module):
                 b = self.bias.broadcast(y.shape, [0,2,3])
                 y = y + b
             return y
-
+ConvTranspose2d = ConvTranspose
 
 class ConvTranspose3d(Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, \
