@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.5.33'
+__version__ = '1.3.5.34'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -233,6 +233,52 @@ class profile_scope(_call_no_record_scope):
         profiler.stop()
         self.report.extend(profiler.report())
         self.fs.__exit__(*exc)
+
+
+class profile_mark(_call_no_record_scope):
+    def __init__(self, mark_name: str):
+        ''' profiler mark is used for profiling part of code,
+
+        Example::
+
+        a = jt.rand(1000,1000)
+        b = jt.rand(1000,1000)
+        jt.sync_all()
+        results = []
+        with jt.profile_scope() as rep:
+            results.append(jt.matmul(a, b))
+            with jt.profile_mark("mark1"):
+                results.append(jt.matmul(a, b))
+                with jt.profile_mark("mark2"):
+                    results.append(jt.matmul(a, b))
+            with jt.profile_mark("mark3"):
+                results.append(jt.matmul(a, b))
+            results.append(jt.matmul(a, b))
+
+        Output::
+
+        Total time:    46.8ms
+        Total Memory Access:    57.2MB
+        [Mark mark3] time:       9ms
+        [Mark mark2] time:    8.28ms
+        [Mark mark1] time:    17.7ms
+
+        '''
+        self.mark_name = mark_name
+    def __enter__(self):
+        self.options = flags.compile_options
+        new_options = flags.compile_options
+        prev_marks = "_marks:"
+        for x in self.options:
+            if x.startswith(prev_marks):
+                prev_marks = x
+                del new_options[x]
+        new_marks = prev_marks + self.mark_name + ','
+        new_options[new_marks] = 1
+        flags.compile_options = new_options
+        
+    def __exit__(self, *exc):
+        flags.compile_options = self.options
 
 class __single_process_scope:
     def __init__(self, rank=0):
