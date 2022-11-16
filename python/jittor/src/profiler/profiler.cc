@@ -24,6 +24,7 @@
 #include "profiler/memory_checker.h"
 #include "misc/deleter.h"
 #include "executor.h"
+#include "utils/str_utils.h"
 
 namespace jittor {
 
@@ -55,6 +56,7 @@ void Profiler::start(int64 warmup, int64 rerun) {
     if (rerun==0) rerun = profiler_rerun;
     profiler_enable = 1;
     profiler.records.clear();
+    profiler.marks.clear();
     profiler.warmup = warmup;
     profiler.rerun = rerun;
     profiler.relay_extra_cost = 0;
@@ -197,6 +199,34 @@ struct RecordExtraCost {
     }
 };
 
+static string get_marks(Op* op, bool is_fused) {
+    loop_options_t* options = nullptr;
+    if (is_fused) {
+        auto* fop = (FusedOp*)op;
+        options = fop->loop_options;
+    } else {
+        if (op->outputs().size()) {
+            if (op->outputs().front()->loop_options)
+                options = &op->outputs().front()->loop_options.data();
+        }
+    }
+    if (!options) return string();
+    for (auto& kv : *options) {
+        if (startswith(kv.first, "_marks:")) {
+            return kv.first.substr(7);
+        }
+    }
+    return string();
+}
+
+static string origin_key(const string& s) {
+    if (s.size() && s[0]=='[') {
+        auto vs = split(s, "]");
+        return vs[vs.size()-1];
+    }
+    return s;
+}
+
 void Profiler::record_and_run(
     jit_op_entry_t jit_entry,
     Op* op,
@@ -208,6 +238,18 @@ void Profiler::record_and_run(
         auto ikey=jit_key_mapper.find(jit_key);
         const char* key = ikey==jit_key_mapper.end() ?
             jit_key : ikey->second.c_str();
+        bool is_fused = op->name() == string("fused");
+        string marks = get_marks(op, is_fused);
+        string new_key;
+        if (marks.size()) {
+            // add marks into key, for better report
+            new_key = string("[marks:");
+            new_key += marks;
+            new_key += "]";
+            new_key += key;
+            key = new_key.c_str();
+        }
+
         auto iter = profiler.records.find(key);
         uint64_t in, out, compute;
         if (profiler.relay_fop)
@@ -224,7 +266,6 @@ void Profiler::record_and_run(
                 iter->second.stack_info = get_stack_info(op);
             }
         }
-        bool is_fused = op->name() == string("fused");
 
         uint64* shape_time = nullptr;
         if (trace_py_var || profiler_record_shape) {
@@ -306,6 +347,20 @@ void Profiler::record_and_run(
         total_ns = std::max((int64_t)1, total_ns-24);
         iter->second.update(rerun, total_ns, in, out, compute);
         if (shape_time) shape_time[0] += total_ns;
+        
+        // add markers record
+        if ((profiler.relay_fop == op || profiler.relay_fop == nullptr)
+             && marks.size()) {
+            // only record not relay op
+            auto vs = split(marks, ",");
+            for (auto& mark : vs) {
+                if (mark.size()) {
+                    auto& mark_info = profiler.marks[mark];
+                    mark_info.count += 1;
+                    mark_info.time_total += total_ns;
+                }
+            }
+        }
 
         RecordExtraCost rec(profiler.relay_fop && profiler.relay_fop != op);
         if (profiler_record_peek)
@@ -313,7 +368,7 @@ void Profiler::record_and_run(
         LOGvvvv << "Duration" << total_ns >> "ns running" << op;
         if (is_fused && 
             ((FusedOp*)op)->get_loop_option("check_cache")) {
-            auto fname = Op::get_filename_from_jit_key(key, ".so");
+            auto fname = Op::get_filename_from_jit_key(origin_key(key), ".so");
             unique_ptr<MemoryChecker>* mc = load_memory_checker(fname);
             iter->second.cache_info.reset(new CacheInfo(mc));
         }
@@ -337,7 +392,7 @@ vector<vector<string>> Profiler::report(const string& sort_key) {
     for (auto& kv : profiler.records) {
         auto& kinfo = kv.second;
         names.push_back(kv.first);
-        fnames.push_back(Op::get_filename_from_jit_key(kv.first, ".cc"));
+        fnames.push_back(Op::get_filename_from_jit_key(origin_key(kv.first), ".cc"));
         if (kv.second.stack_info.size()) {
             fnames.back() += '\n';
             fnames.back() += kv.second.stack_info.c_str();
@@ -420,6 +475,11 @@ vector<vector<string>> Profiler::report(const string& sort_key) {
     ss << "Total Memory Access:";
     output_float(" KMG", 1024, "B", total_mem_access);
     ss << '\n';
+    for (auto& mark : profiler.marks) {
+        ss << "[Mark " << mark.first << "] time:";
+        output_float("num ", 1000, "s", mark.second.time_total);
+        ss << '\n';
+    }
     double cum_time = 0;
     for (auto i : order) {
         auto& name = names[i];
@@ -491,7 +551,7 @@ vector<vector<string>> Profiler::report_cache(const string& sort_key) {
         if (!kv.second.cache_info)
             continue;
         names.push_back(kv.first);
-        fnames.push_back(Op::get_filename_from_jit_key(kv.first, ".cc"));
+        fnames.push_back(Op::get_filename_from_jit_key(origin_key(kv.first), ".cc"));
         CacheInfo& kinfo = *kv.second.cache_info;
         order.push_back(order.size());
         vector<double> one_info = {(double)kinfo.check_times, ((double)kinfo.tlb_miss_times) / kinfo.check_times};

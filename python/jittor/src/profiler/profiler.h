@@ -61,6 +61,11 @@ struct Profiler {
     int64 relay_extra_cost;
     FusedOp* relay_fop;
 
+    struct MarkInfo {
+        uint64_t count, time_total;
+    };
+    unordered_map<string, Info> marks;
+
     ~Profiler();
 };
 

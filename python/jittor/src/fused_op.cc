@@ -202,8 +202,10 @@ void FusedOp::do_jit_prepare(JK& jk) {
             }
         }
         jk << "«choices:";
-        for (auto& kv : *loop_options)
-            jk << kv.first << ':' << kv.second << ',';
+        for (auto& kv : *loop_options) {
+            if (kv.first.size() && kv.first[0] != '_')
+                jk << kv.first << ':' << kv.second << ',';
+        }
     }
     jk.finilize();
 }
