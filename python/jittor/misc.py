@@ -1977,3 +1977,11 @@ def isneginf(x): return _simple_for(x, "x<0 && isinf(x)")
 jt.Var.isneginf = isneginf
 def isposinf(x): return _simple_for(x, "x>0 && isinf(x)")
 jt.Var.isposinf = isposinf
+
+# fake torch interface
+def contiguous(x): return x.clone()
+jt.Var.contiguous = contiguous
+def cpu(x): return x.clone()
+jt.Var.cpu = cpu
+def to(x, *args, **kargs): return x.clone()
+jt.Var.to = to
