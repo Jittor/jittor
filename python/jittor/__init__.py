@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.5.36'
+__version__ = '1.3.5.37'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -121,7 +121,13 @@ class flag_scope(_call_no_record_scope):
         flags_bk = self.flags_bk = {}
         try:
             for k,v in self.jt_flags.items():
-                flags_bk[k] = getattr(flags, k)
+                origin = getattr(flags, k)
+                flags_bk[k] = origin
+                # merge dict attrs
+                if isinstance(origin, dict):
+                    for ok, ov in origin.items():
+                        if ok not in v:
+                            v[ok] = ov
                 setattr(flags, k, v)
         except:
             self.__exit__()
