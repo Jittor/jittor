@@ -349,6 +349,8 @@ class PReLU(Module):
 #TODO dims is 4 will cause slowly execution
 def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction='mean'):
     target_shape = target.shape
+    if weight is not None:
+        weight /= weight.sum()
     if len(output.shape) == 4:
         c_dim = output.shape[1]
         output = output.transpose((0, 2, 3, 1))
@@ -356,7 +358,7 @@ def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction=
 
     target = target.reshape((-1, ))
     target_weight = jt.ones(target.shape[0], dtype='float32')
-    if weight is not None:
+    if weight is not None and reduction != "mean":
         target_weight = weight[target]
     if ignore_index is not None:
         target_weight = jt.ternary(
@@ -383,8 +385,8 @@ def mse_loss(output, target, reduction="mean"):
 
 def bce_loss(output, target, weight=None, size_average=True):
     loss = - (target * jt.log(jt.maximum(output, 1e-20)) + (1 - target) * jt.log(jt.maximum(1 - output, 1e-20)))
-
     if weight is not None:
+        weight /= weight.sum()
         loss *= weight
     
     if size_average:
