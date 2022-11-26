@@ -550,6 +550,34 @@ class Dropout(Module):
 def dropout(x,p=0.5,is_train=False):
     return Dropout(p=p,is_train=is_train)(x)
 
+class Dropout2d(Module):
+    def __init__(self, p=0.5, is_train=False):
+        '''
+        Randomly zero out entire channels, from "Efficient Object Localization Using Convolutional Networks"
+        input:
+            x: [N,C,H,W] or [N,C,L]
+        output:
+            y: same shape as x
+        '''
+        assert p >= 0 and p <= 1, "dropout probability has to be between 0 and 1, but got {}".format(p)
+        self.p = p
+        self.is_train = is_train
+        #TODO: test model.train() to change self.is_train
+    def execute(self, input):
+        output = input
+        shape = input.shape[:-2]
+        if self.p > 0 and self.is_train:
+            if self.p == 1:
+                output = jt.zeros(input.shape)
+            else:
+                noise = jt.random(shape)
+                noise = (noise > self.p).int()
+                output = output * noise.broadcast(input.shape, dims=[-2,-1]) / (1.0 - self.p) # div keep prob
+        return output
+
+def dropout2d(x,p=0.5,is_train=False):
+    return Dropout2d(p=p,is_train=is_train)(x)
+
 class DropPath(Module):
     '''Drop paths (Stochastic Depth) per sample  (when applied in main path of residual blocks).
     '''
@@ -1348,7 +1376,7 @@ class ConvTranspose(Module):
                 b = self.bias.broadcast(y.shape, [0,2,3])
                 y = y + b
             return y
-
+ConvTranspose2d = ConvTranspose
 
 class ConvTranspose3d(Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, \

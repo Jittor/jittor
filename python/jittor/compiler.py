@@ -235,7 +235,7 @@ def gen_jit_flags():
             jit_declares.append(f"DECLARE_FLAG({type}, {name});")
             alias = []
             if name == "use_cuda":
-                alias = ["use_device", "use_acl", "use_rocm"]
+                alias = ["use_device", "use_acl", "use_rocm", "use_corex"]
             elif name == "auto_mixed_precision_level":
                 alias = ["amp_level"]
             get_names = ",".join(["__get__"+a for a in [name]+alias])
@@ -843,7 +843,7 @@ def compile_extern():
 def check_cuda():
     if not nvcc_path:
         return
-    global cc_flags, has_cuda, core_link_flags, cuda_dir, cuda_lib, cuda_include, cuda_home, cuda_bin
+    global cc_flags, has_cuda, is_cuda, core_link_flags, cuda_dir, cuda_lib, cuda_include, cuda_home, cuda_bin
     cuda_dir = os.path.dirname(get_full_path_of_executable(nvcc_path))
     cuda_bin = cuda_dir
     cuda_home = os.path.abspath(os.path.join(cuda_dir, ".."))
@@ -868,7 +868,7 @@ def check_cuda():
         cc_flags += f" -lcudart -L\"{cuda_lib}\" "
         # ctypes.CDLL(cuda_lib+"/libcudart.so", import_flags)
         ctypes.CDLL(cuda_lib+"/libcudart.so", dlopen_flags)
-    has_cuda = 1
+    is_cuda = has_cuda = 1
 
 def check_cache_compile():
     files = [
@@ -1182,7 +1182,7 @@ check_cache_compile()
 LOG.v(f"Get cache_compile: {jit_utils.cc}")
 
 # check cuda
-has_cuda = 0
+is_cuda = has_cuda = 0
 check_cuda()
 nvcc_flags = os.environ.get("nvcc_flags", "")
 if has_cuda:
@@ -1232,16 +1232,14 @@ if has_cuda:
 # from .acl_compiler import check_acl
 from .extern.acl import acl_compiler
 jit_utils.add_backend(acl_compiler)
-has_acl = False
 from .extern.rocm import rocm_compiler
 jit_utils.add_backend(rocm_compiler)
-has_rocm = False
+from .extern.corex import corex_compiler
+jit_utils.add_backend(corex_compiler)
 
-if not has_cuda:
-    for mod in jit_utils.backends:
-        mod.check()
-        # if mod.check():
-            # break
+for mod in jit_utils.backends:
+    if mod.check():
+        break
 
 # build core
 gen_jit_flags()
@@ -1350,7 +1348,7 @@ with jit_utils.import_scope(import_flags):
 
 flags = core.Flags()
 
-if has_cuda:
+if has_cuda and is_cuda:
     nvcc_flags = " " + os.environ.get("nvcc_flags", "") + " "
     nvcc_flags += convert_nvcc_flags(cc_flags)
     nvcc_version = list(jit_utils.get_int_version(nvcc_path))

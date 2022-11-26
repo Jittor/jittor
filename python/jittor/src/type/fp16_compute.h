@@ -40,34 +40,71 @@ typename std::enable_if<0<nbyte,void>::type
 vload(T* __restrict__ a, T* __restrict__ b) {
     if (nbyte<=0) return;
     if (nbyte>=16) {
-        auto __restrict__ aa = (float4* __restrict__)a;
-        auto __restrict__ bb = (float4* __restrict__)b;
+        auto* __restrict__ aa = (float4* __restrict__)a;
+        auto* __restrict__ bb = (float4* __restrict__)b;
         aa[0] = bb[0];
         return vload<nbyte-16>(aa+1, bb+1);
     }
     if (nbyte>=8) {
-        auto __restrict__ aa = (float2* __restrict__)a;
-        auto __restrict__ bb = (float2* __restrict__)b;
+        auto* __restrict__ aa = (float2* __restrict__)a;
+        auto* __restrict__ bb = (float2* __restrict__)b;
         aa[0] = bb[0];
         return vload<nbyte-8>(aa+1, bb+1);
     }
     if (nbyte>=4) {
-        auto __restrict__ aa = (float* __restrict__)a;
-        auto __restrict__ bb = (float* __restrict__)b;
+        auto* __restrict__ aa = (float* __restrict__)a;
+        auto* __restrict__ bb = (float* __restrict__)b;
         aa[0] = bb[0];
         return vload<nbyte-4>(aa+1, bb+1);
     }
     if (nbyte>=2) {
-        auto __restrict__ aa = (__half* __restrict__)a;
-        auto __restrict__ bb = (__half* __restrict__)b;
+        auto* __restrict__ aa = (__half* __restrict__)a;
+        auto* __restrict__ bb = (__half* __restrict__)b;
         aa[0] = bb[0];
         return vload<nbyte-2>(aa+1, bb+1);
     }
     if (nbyte>=1) {
-        auto __restrict__ aa = (int8_t* __restrict__)a;
-        auto __restrict__ bb = (int8_t* __restrict__)b;
+        auto* __restrict__ aa = (int8_t* __restrict__)a;
+        auto* __restrict__ bb = (int8_t* __restrict__)b;
         aa[0] = bb[0];
         return vload<nbyte-1>(aa+1, bb+1);
+    }
+}
+
+template<int nbyte, class T>
+__device__ inline
+typename std::enable_if<nbyte<=0,void>::type
+vfill(T* __restrict__ a) {}
+
+template<int nbyte, class T>
+__device__ inline
+typename std::enable_if<0<nbyte,void>::type
+vfill(T* __restrict__ a) {
+    if (nbyte<=0) return;
+    if (nbyte>=16) {
+        auto* __restrict__ aa = (int4* __restrict__)a;
+        aa[0] = {0};
+        return vfill<nbyte-16>(aa+1);
+    }
+    if (nbyte>=8) {
+        auto* __restrict__ aa = (int2* __restrict__)a;
+        aa[0] = {0};
+        return vfill<nbyte-8>(aa+1);
+    }
+    if (nbyte>=4) {
+        auto* __restrict__ aa = (int* __restrict__)a;
+        aa[0] = 0;
+        return vfill<nbyte-4>(aa+1);
+    }
+    if (nbyte>=2) {
+        auto* __restrict__ aa = (int16_t* __restrict__)a;
+        aa[0] = 0;
+        return vfill<nbyte-2>(aa+1);
+    }
+    if (nbyte>=1) {
+        auto* __restrict__ aa = (int8_t* __restrict__)a;
+        aa[0] = 0;
+        return vfill<nbyte-1>(aa+1);
     }
 }
 
@@ -138,7 +175,7 @@ struct float16 {
         this->x = (sign | (exponent << 10) | mantissa);  
     }
 
-    inline operator float() {
+    inline operator float() const {
 
         unsigned sign     = ((x >> 15) & 1);
         unsigned exponent = ((x >> 10) & 0x1f);

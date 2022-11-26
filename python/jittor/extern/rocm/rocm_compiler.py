@@ -11,6 +11,7 @@ import tarfile
 
 import jittor_utils
 from jittor_utils import env_or_try_find, run_cmd, cache_path, LOG
+import jittor.compiler as compiler
 
 
 has_rocm = 0
@@ -18,6 +19,7 @@ cc_flags = ""
 hipcc_path = env_or_try_find('hipcc_path', 'hipcc')
 rocm_home = ""
 dlopen_flags = os.RTLD_NOW | os.RTLD_GLOBAL
+compiler.has_rocm = has_rocm
 
 
 def check_gcc_use_cxx11_abi():

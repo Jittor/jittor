@@ -27,7 +27,7 @@ def search_file(dirs, name, prefer_version=()):
         for i in range(len(prefer_version),-1,-1):
             vname = ".".join((fname,)+prefer_version[:i])
             if os.path.isfile(vname):
-                LOG.i(f"found {vname}")
+                LOG.v(f"found {vname}")
                 return vname
     LOG.f(f"file {name} not found in {dirs}")
 
@@ -263,6 +263,8 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
         cuda_include_name = search_file([cuda_include, extra_include_path, "/usr/include"], lib_name+".h")
         # cuda11 prefer cudnn 8
         nvcc_version = get_int_version(nvcc_path)
+        if has_corex:
+            nvcc_version = (10,2,89)
         prefer_version = ()
         if nvcc_version[0] == 11:
             prefer_version = ("8",)

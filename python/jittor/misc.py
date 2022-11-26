@@ -1967,15 +1967,15 @@ def _simple_for(x, func):
         '''
         return jt.code(x.shape, "bool", [x], cpu_src=src, cuda_src=src)
 
-def isnan(x): return _simple_for(x, "isnan(x)")
+def isnan(x): return _simple_for(x, "isnan(float(x))")
 jt.Var.isnan = isnan
-def isfinite(x): return _simple_for(x, "!isnan(x) && !isinf(x)")
+def isfinite(x): return _simple_for(x, "!isnan(float(x)) && !isinf(float(x))")
 jt.Var.isfinite = isfinite
-def isinf(x): return _simple_for(x, "isinf(x)")
+def isinf(x): return _simple_for(x, "isinf(float(x))")
 jt.Var.isinf = isinf
-def isneginf(x): return _simple_for(x, "x<0 && isinf(x)")
+def isneginf(x): return _simple_for(x, "x<0 && isinf(float(x))")
 jt.Var.isneginf = isneginf
-def isposinf(x): return _simple_for(x, "x>0 && isinf(x)")
+def isposinf(x): return _simple_for(x, "x>0 && isinf(float(x))")
 jt.Var.isposinf = isposinf
 
 def scatter_add_(x, dim, indexes, src):
@@ -1985,9 +1985,10 @@ jt.Var.scatter_add_ = scatter_add_
 def lerp(start, end, weight, out=None):
     return start + weight * (end - start)
 
-def atan2(input, other, out=None):
-    atan_res = jt.atan(input / other)
-    atan_res[jt.bitwise_and(input > 0, other < 0)] += np.pi
-    atan_res[jt.bitwise_and(input < 0, other < 0)] -= np.pi
-    return atan_res
-jt.atan2 = atan2
+# fake torch interface
+def contiguous(x): return x.clone()
+jt.Var.contiguous = contiguous
+def cpu(x): return x.clone()
+jt.Var.cpu = cpu
+def to(x, *args, **kargs): return x.clone()
+jt.Var.to = to
