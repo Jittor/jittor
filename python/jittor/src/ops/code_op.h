@@ -9,6 +9,8 @@
 
 namespace jittor {
 
+typedef unordered_map<string,double> DataMap;
+
 struct CodeOp : Op {
     vector<Var*> _inputs;
     vector<Var*> _outputs;
@@ -18,6 +20,7 @@ struct CodeOp : Op {
     string cuda_src;
     vector<string> cuda_grad_src;
     string cuda_header;
+    DataMap data;
     /**
     Code Operator for easily customized op.
 
@@ -154,6 +157,22 @@ struct CodeOp : Op {
         print(b[0])
         # will output 233
 
+    Example-6::
+    
+
+        # This example shows how to pass custom data
+        # into code op kernel without kernel recompiling.
+        # In this example, the data {"x":123} canbe vary
+        # and kernel will not recompile.
+        # NOTE: the data type pass into kernel is float64
+        # cast to int if you want
+
+        a = jt.code([1], "float32", inputs=[], 
+            data = {"x":123},
+            cpu_src='''
+                @out0(0) = data["x"];
+            ''').sync()
+        assert a.item() == 123
 
     CUDA Example-1::
 
@@ -243,13 +262,13 @@ struct CodeOp : Op {
         print(c)
         print(jt.grad(c, [a, b]))
      */
-    CodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs={}, string&& cpu_src="", vector<string>&& cpu_grad_src={}, string&& cpu_header="", string&& cuda_src="", vector<string>&& cuda_grad_src={}, string&& cuda_header="");
+    CodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs={}, string&& cpu_src="", vector<string>&& cpu_grad_src={}, string&& cpu_header="", string&& cuda_src="", vector<string>&& cuda_grad_src={}, string&& cuda_header="", DataMap&& data={});
 
     // @attrs(multiple_outputs)
-    CodeOp(vector<NanoVector>&& shapes, vector<NanoString>&& dtypes, vector<Var*>&& inputs={}, string&& cpu_src="", vector<string>&& cpu_grad_src={}, string&& cpu_header="", string&& cuda_src="", vector<string>&& cuda_grad_src={}, string&& cuda_header="");
+    CodeOp(vector<NanoVector>&& shapes, vector<NanoString>&& dtypes, vector<Var*>&& inputs={}, string&& cpu_src="", vector<string>&& cpu_grad_src={}, string&& cpu_header="", string&& cuda_src="", vector<string>&& cuda_grad_src={}, string&& cuda_header="", DataMap&& data={});
 
     // @attrs(multiple_outputs,replace_outputs)
-    CodeOp(vector<Var*>&& inputs, vector<Var*>&& outputs, string&& cpu_src="", vector<string>&& cpu_grad_src={}, string&& cpu_header="", string&& cuda_src="", vector<string>&& cuda_grad_src={}, string&& cuda_header="");
+    CodeOp(vector<Var*>&& inputs, vector<Var*>&& outputs, string&& cpu_src="", vector<string>&& cpu_grad_src={}, string&& cpu_header="", string&& cuda_src="", vector<string>&& cuda_grad_src={}, string&& cuda_header="", DataMap&& data={});
 
 
     const char* name() const override { return "code"; }

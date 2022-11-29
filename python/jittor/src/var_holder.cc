@@ -155,8 +155,9 @@ VarHolder* VarHolder::_update(VarHolder* v) {
 
 EXTERN_LIB Executor exe;
 
-void VarHolder::sync(bool device_sync, bool weak_sync) {
+VarHolder* VarHolder::sync(bool device_sync, bool weak_sync) {
     jittor::sync({this}, device_sync, weak_sync);
+    return this;
 }
 
 ArrayArgs VarHolder::fetch_sync() {

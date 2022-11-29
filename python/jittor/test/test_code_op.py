@@ -374,6 +374,13 @@ class TestCodeOp(unittest.TestCase):
         assert np.allclose(da.data, b.data)
         assert np.allclose(db.data, a.data)
 
+    def test_simple_var(self):
+        a = jt.code([1], "float32", inputs=[], 
+            data = {"x":123},
+            cpu_src='''
+                @out0(0) = data["x"];
+            ''').sync()
+        assert a.item() == 123
 
 if __name__ == "__main__":
     unittest.main()

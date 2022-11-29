@@ -17,7 +17,7 @@
 namespace jittor {
 
 static auto make_code = get_op_info("code")
-    .get_constructor<VarPtr, NanoVector, NanoString, vector<Var*>&&, string&&, vector<string>&&, string&&, string&&, vector<string>&&, string&&>();
+    .get_constructor<VarPtr, NanoVector, NanoString, vector<Var*>&&, string&&, vector<string>&&, string&&, string&&, vector<string>&&, string&&, DataMap&&>();
     
 static inline void check_vary_shape(NanoVector v) {
     ASSERT(v.size()) << "Vary shape should not be zero dimension";
@@ -28,9 +28,11 @@ static inline void check_vary_shape(NanoVector v) {
 
 CodeOp::CodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs, 
     string&& cpu_src, vector<string>&& cpu_grad_src, string&& cpu_header, 
-    string&& cuda_src, vector<string>&& cuda_grad_src, string&& cuda_header)
+    string&& cuda_src, vector<string>&& cuda_grad_src, string&& cuda_header,
+    DataMap&& data)
     : _inputs(inputs), cpu_src(move(cpu_src)), cpu_grad_src(move(cpu_grad_src)), cpu_header(move(cpu_header)),
-    cuda_src(move(cuda_src)), cuda_grad_src(move(cuda_grad_src)), cuda_header(move(cuda_header))
+    cuda_src(move(cuda_src)), cuda_grad_src(move(cuda_grad_src)), cuda_header(move(cuda_header)), 
+    data(move(data))
 {
     flags.set(NodeFlags::_cpu, !!this->cpu_src.size());
     flags.set(NodeFlags::_cuda, !!this->cuda_src.size());
@@ -48,9 +50,11 @@ CodeOp::CodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs,
 CodeOp::CodeOp(
     vector<NanoVector>&& shapes, vector<NanoString>&& dtypes, vector<Var*>&& inputs, 
     string&& cpu_src, vector<string>&& cpu_grad_src, string&& cpu_header, 
-    string&& cuda_src, vector<string>&& cuda_grad_src, string&& cuda_header)
+    string&& cuda_src, vector<string>&& cuda_grad_src, string&& cuda_header,
+    DataMap&& data)
     : _inputs(inputs), cpu_src(move(cpu_src)), cpu_grad_src(move(cpu_grad_src)), cpu_header(move(cpu_header)),
-    cuda_src(move(cuda_src)), cuda_grad_src(move(cuda_grad_src)), cuda_header(move(cuda_header))
+    cuda_src(move(cuda_src)), cuda_grad_src(move(cuda_grad_src)), cuda_header(move(cuda_header)), 
+    data(move(data))
 {
     flags.set(NodeFlags::_cpu, !!this->cpu_src.size());
     flags.set(NodeFlags::_cuda, !!this->cuda_src.size());
@@ -70,9 +74,11 @@ CodeOp::CodeOp(
 CodeOp::CodeOp(
     vector<Var*>&& inputs, vector<Var*>&& outputs, 
     string&& cpu_src, vector<string>&& cpu_grad_src, string&& cpu_header, 
-    string&& cuda_src, vector<string>&& cuda_grad_src, string&& cuda_header)
+    string&& cuda_src, vector<string>&& cuda_grad_src, string&& cuda_header,
+    DataMap&& data)
     : _inputs(inputs), cpu_src(move(cpu_src)), cpu_grad_src(move(cpu_grad_src)), cpu_header(move(cpu_header)),
-    cuda_src(move(cuda_src)), cuda_grad_src(move(cuda_grad_src)), cuda_header(move(cuda_header))
+    cuda_src(move(cuda_src)), cuda_grad_src(move(cuda_grad_src)), cuda_header(move(cuda_header)), 
+    data(move(data))
 {
     flags.set(NodeFlags::_cpu, !!this->cpu_src.size());
     flags.set(NodeFlags::_cuda, !!this->cuda_src.size());
@@ -115,7 +121,8 @@ VarPtr CodeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
         _inputs[v_index]->dtype(),
         move(inputs),
         move(cpu_src), {}, alias+cpu_header,
-        move(cuda_src), {}, alias+cuda_header
+        move(cuda_src), {}, alias+cuda_header,
+        DataMap(data)
     );
 }
 
@@ -216,8 +223,11 @@ int __tmp
 )
 
 @alias(out, out0)
+#undef out
 
 @HEADER
+
+#define out out0
 
 namespace jittor {
 
