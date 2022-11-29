@@ -221,8 +221,7 @@ static string get_marks(Op* op, bool is_fused) {
 
 static string origin_key(const string& s) {
     if (s.size() && s[0]=='[') {
-        auto vs = split(s, "]");
-        return vs[vs.size()-1];
+        return s.substr(s.find("]")+1);
     }
     return s;
 }
