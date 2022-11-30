@@ -143,9 +143,9 @@ class TestCudnnConvOp(unittest.TestCase):
                 
             y2 = jt.nn.conv3d(x, w, None, stride, padding, dilation, group)
             dx2, dw2 = jt.grad(masky*y2, [x, w])
-            np.testing.assert_allclose(y.data, y2.data, rtol=1e-5, atol=1e-3)
-            np.testing.assert_allclose(dx.data, dx2.data, rtol=1e-5, atol=1e-3)
-            np.testing.assert_allclose(dw.data, dw2.data, rtol=1e-5, atol=1e-3)
+            np.testing.assert_allclose(y.data, y2.data, rtol=1e-3, atol=1e-3)
+            np.testing.assert_allclose(dx.data, dx2.data, rtol=1e-3, atol=1e-3)
+            np.testing.assert_allclose(dw.data, dw2.data, rtol=1e-3, atol=1e-3)
 
         check((2,4,10,10,10), (5,4,3,3,3), (1,1,1), (1,1,1))
         check((2,4,10,10,10), (5,4,3,3,3), (2,2,2), (1,1,1))
@@ -177,9 +177,9 @@ class TestCudnnConvOp(unittest.TestCase):
                 
             dx2, dw2 = jt.grad(masky*y2, [x, w])
             jt.sync_all()
-            np.testing.assert_allclose(y.numpy(), y2.numpy(), rtol=1e-6, atol=1e-4)
-            np.testing.assert_allclose(dx.numpy(), dx2.numpy(), rtol=1e-6, atol=1e-4)
-            np.testing.assert_allclose(dw.numpy(), dw2.numpy(), rtol=1e-5, atol=1e-3)
+            np.testing.assert_allclose(y.numpy(), y2.numpy(), rtol=1e-3, atol=1e-4)
+            np.testing.assert_allclose(dx.numpy(), dx2.numpy(), rtol=1e-3, atol=1e-4)
+            np.testing.assert_allclose(dw.numpy(), dw2.numpy(), rtol=1e-3, atol=1e-3)
 
         check((2,5,10,10,10), (5,4,3,3,3), (1,1,1), (1,1,1))
         check((2,5,10,10,10), (5,4,3,3,3), (2,2,2), (1,1,1))

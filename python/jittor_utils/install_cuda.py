@@ -70,9 +70,11 @@ def check_cuda_env():
         + fix_env("CUDA_HOME")
     if changed:
         try:
-            with open("/proc/self/maps", "r") as f:
-                cudart_loaded = "cudart" in f.read().lower()
-            if cudart_loaded:
+            # LD_LIBRARY_PATH change must triggle restart
+            # because dyloader already setup            
+            # with open("/proc/self/maps", "r") as f:
+            #     cudart_loaded = "cudart" in f.read().lower()
+            # if cudart_loaded:
                 with open("/proc/self/cmdline", "r") as f:
                     argv = f.read().split("\x00")
                     if len(argv[-1]) == 0: del argv[-1]
