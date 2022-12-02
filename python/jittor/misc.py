@@ -1985,3 +1985,9 @@ def cpu(x): return x.clone()
 jt.Var.cpu = cpu
 def to(x, *args, **kargs): return x.clone()
 jt.Var.to = to
+
+def from_torch(x):
+    '''
+    Convert torch Tensor to Jittor Var
+    '''
+    return jt.Var(x.cpu().numpy())
