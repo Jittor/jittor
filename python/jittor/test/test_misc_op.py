@@ -343,5 +343,26 @@ class TestOther(unittest.TestCase):
         output = m(input)
         output.sync()
 
+    def test_tri(self):
+        a = jt.ones(3, 3)
+        b = jt.triu(a)
+        assert jt.all_equal(b, [[1,1,1],[0,1,1],[0,0,1]])
+        
+        b = jt.triu(a, diagonal=1)
+        assert jt.all_equal(b, [[0,1,1],[0,0,1],[0,0,0]])
+        
+        b = jt.triu(a, diagonal=-1)
+        assert jt.all_equal(b, [[1,1,1],[1,1,1],[0,1,1]])
+        
+        a = jt.ones(3, 3)
+        b = jt.tril(a)
+        assert jt.all_equal(b, [[1,0,0],[1,1,0],[1,1,1]])
+        
+        b = jt.tril(a, diagonal=1)
+        assert jt.all_equal(b, [[1,1,0],[1,1,1],[1,1,1]])
+        
+        b = jt.tril(a, diagonal=-1)
+        assert jt.all_equal(b, [[0,0,0],[1,0,0],[1,1,0]])
+
 if __name__ == "__main__":
     unittest.main()
