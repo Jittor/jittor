@@ -1991,3 +1991,55 @@ def from_torch(x):
     Convert torch Tensor to Jittor Var
     '''
     return jt.Var(x.cpu().numpy())
+
+def triu(input: jt.Var, diagonal:int=0) -> jt.Var:
+    ''' Returns the upper triangular part of a matrix (2-D tensor) or batch of matrices input, the other elements of the result tensor out are set to 0.
+
+    :param input: the input tensor.
+    :param diagonal:  the diagonal to consider(int).
+
+    Example::
+
+        a = jt.ones(3, 3)
+        b = jt.triu(a)
+        assert jt.all_equal(b, [[1,1,1],[0,1,1],[0,0,1]])
+        
+        b = jt.triu(a, diagonal=1)
+        assert jt.all_equal(b, [[0,1,1],[0,0,1],[0,0,0]])
+        
+        b = jt.triu(a, diagonal=-1)
+        assert jt.all_equal(b, [[1,1,1],[1,1,1],[0,1,1]])
+
+    '''
+    index = input.index()
+    mask = index[-2] <= index[-1] - diagonal
+    return input*mask
+jt.Var.triu = triu
+
+def tril(input: jt.Var, diagonal:int=0) -> jt.Var:
+    ''' Returns the lower triangular part of a matrix (2-D tensor) or batch of matrices input, the other elements of the result tensor out are set to 0.
+
+    :param input: the input tensor.
+    :param diagonal:  the diagonal to consider(int).
+
+    Example::
+
+        a = jt.ones(3, 3)
+        b = jt.tril(a)
+        assert jt.all_equal(b, [[1,0,0],[1,1,0],[1,1,1]])
+        
+        b = jt.tril(a, diagonal=1)
+        assert jt.all_equal(b, [[1,1,0],[1,1,1],[1,1,1]])
+        
+        b = jt.tril(a, diagonal=-1)
+        assert jt.all_equal(b, [[0,0,0],[1,0,0],[1,1,0]])
+
+    '''
+    index = input.index()
+    mask = index[-2] >= index[-1] - diagonal
+    return input*mask
+jt.Var.tril = tril
+
+def all_equal(a: jt.Var, b: jt.Var) -> bool:
+    return (a == b).all().item()
+jt.all_equal = all_equal
