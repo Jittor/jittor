@@ -133,6 +133,9 @@ string VarHolder::to_string() {
 }
 
 VarHolder* VarHolder::assign(VarHolder* v) {
+    if (th_mode) {
+        v->set_requires_grad(get_requires_grad());
+    }
     assign_var(v->var, var);
     v->var->own_both_liveness();
     var->release_both_liveness();
