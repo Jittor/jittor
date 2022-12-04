@@ -1014,9 +1014,14 @@ if nvcc_path:
 
 def check_clang_latest_supported_cpu():
     output = run_cmd('clang --print-supported-cpus')
-    apple_cpus = [l.strip() for l in output.split('\n') if 'apple-a' in l]
-    apple_cpus_id = max([int(cpu[7:]) for cpu in apple_cpus])
-    return f'apple-a{apple_cpus_id}'
+    def find_latest_chip_version(pattern_prefix):
+        apple_cpus = [l.strip() for l in output.split('\n') if pattern_prefix in l]
+        apple_cpu_id = max([int(cpu[7:]) for cpu in apple_cpus])
+        return pattern_prefix + str(apple_cpu_id)
+    if 'apple-m' in output:
+        return find_latest_chip_version('apple-m')
+    else:
+        return find_latest_chip_version('apple-a')
 
 # cc_flags += " -Wall -Werror -Wno-unknown-pragmas -std=c++14 -fPIC "
 cc_flags += " -Wall -Wno-unknown-pragmas -std=c++14 -fPIC "
@@ -1027,20 +1032,22 @@ elif platform.machine() == 'arm64' and platform.system() == "Darwin":
     cc_flags += f" -mcpu={check_clang_latest_supported_cpu()} "
 cc_flags += " -fdiagnostics-color=always "
 # 2. Non standard include path
-if platform.system() == 'Darwin' and platform.machine() == 'arm64':
-    cc_flags += " -I/opt/homebrew/include "
-# 3. User specified flags
-if "cc_flags" in os.environ:
-    cc_flags += os.environ["cc_flags"] + ' '
-
-cc_flags += " -lstdc++ -ldl -shared "
 if platform.system() == 'Darwin':
     # TODO: if not using apple clang, there is no need to add -lomp
     cc_flags += "-undefined dynamic_lookup -lomp "
     if os.environ.get('CONDA_PREFIX', None):
         cc_flags += f" -L{os.path.join(os.environ['CONDA_PREFIX'], 'lib')} "
     if platform.machine() == "arm64":
-        cc_flags += "  -L/opt/homebrew/lib "
+        cc_flags += " -I/opt/homebrew/include -L/opt/homebrew/lib  "
+        # Homebrew does not symlink the openmp library (libomp >= 15.0.6) into /opt/homebrew/lib
+        if os.path.exists('/opt/homebrew/opt/libomp'):
+            cc_flags += " -I/opt/homebrew/opt/libomp/include -L/opt/homebrew/opt/libomp/lib"  
+
+# 3. User specified flags
+if "cc_flags" in os.environ:
+    cc_flags += os.environ["cc_flags"] + ' '
+
+cc_flags += " -lstdc++ -ldl -shared "
 
 opt_flags = ""
 
