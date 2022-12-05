@@ -562,6 +562,9 @@ if os.name == 'nt' and os.environ.get("cc_path", "")=="":
     msvc_path = os.path.join(home(), ".cache", "jittor", "msvc")
     cc_path = os.path.join(msvc_path, "VC", r"_\_\_\_\_\bin", "cl.exe")
     check_msvc_install = True
+elif platform.system() == "Darwin":
+    # macOS has a fake "g++" which is actually clang++, so we search clang.
+    cc_path = env_or_find('cc_path', 'clang++', silent=True)
 else:
     cc_path = env_or_find('cc_path', 'g++', silent=True)
 os.environ["cc_path"] = cc_path
