@@ -209,7 +209,7 @@ def setitem(x, slices, value):
             else:
                 ss.append(s)
         slices = tuple(ss)
-    return x.assign(x.setitem(slices, value))
+    return x.check_cascade_setitem(x.setitem(slices, value))
 
 jt.Var.__getitem__ = jt.Var.slice_var = getitem
 jt.Var.__setitem__ = setitem
