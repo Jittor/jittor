@@ -58,6 +58,9 @@ struct VarHolder {
     // @pyjt(fetch_sync,numpy)
     ArrayArgs fetch_sync();
 
+    inline void release_holder() {var->holder = nullptr;}
+    inline void own_holder() {var->holder = this;}
+
     /**
      * assign the data from another Var.
      */
@@ -87,7 +90,11 @@ struct VarHolder {
      */ 
     // @pyjt(swap)
     // @attrs(return_self)
-    inline VarHolder* swap(VarHolder* v) { std::swap(var, v->var); return this; };
+    inline VarHolder* swap(VarHolder* v) {
+        std::swap(var, v->var);
+        own_holder(); v->own_holder();
+        return this; 
+    };
     
     void operator=(VarPtr&& v);
 
@@ -330,6 +337,11 @@ struct VarHolder {
         return this;
     }
 
+    /* check a[x][y] = c
+    */
+    // @pyjt(check_cascade_setitem)
+    // @attrs(return_self)
+    VarHolder* check_cascade_setitem(VarHolder* out);
 };
 
 // @pyjt(sync)

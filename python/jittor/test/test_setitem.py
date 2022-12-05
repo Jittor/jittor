@@ -437,7 +437,11 @@ class TestSetitem(unittest.TestCase):
             b.sync(True)
             assert b.item() == 1
 
-        
+    def test_cascade_setitem(self):
+        a = jt.zeros(3,3,3,3)
+        a[1][2][0][0] = 1
+        assert a[1,2,0,0] == 1
+        # TODO: convert a[x] = a[x] + b -> a[x] += b
 
 if __name__ == "__main__":
     unittest.main()
