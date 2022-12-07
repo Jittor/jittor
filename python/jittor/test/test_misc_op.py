@@ -364,5 +364,18 @@ class TestOther(unittest.TestCase):
         b = jt.tril(a, diagonal=-1)
         assert jt.all_equal(b, [[0,0,0],[1,0,0],[1,1,0]])
 
+    def test_ones(self):
+        a = jt.ones(10, "int32")
+        a.sync()
+        assert a.shape == (10,)
+        assert a.dtype == "int32"
+        a = jt.ones((10,), "int32")
+        a.sync()
+        assert a.shape == (10,)
+        assert a.dtype == "int32"
+        
+        a = jt.ones(10,10)
+        assert a.shape == (10,10)
+
 if __name__ == "__main__":
     unittest.main()
