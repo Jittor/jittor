@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.6.2'
+__version__ = '1.3.6.3'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -453,7 +453,7 @@ def ones(*shape, dtype="float32"):
     :return: The output Var.
     :rtype: jittor.Var
     '''
-    if isinstance(shape, tuple) and isinstance(shape[-1], str):
+    if isinstance(shape, tuple) and isinstance(shape[-1], (str, NanoString)):
         dtype = shape[-1]
         shape = shape[:-1]
     if isinstance(shape, tuple) and isinstance(shape[0], (Sequence, NanoVector)):
@@ -480,7 +480,7 @@ def zeros(*shape, dtype="float32"):
     :return: The output Var.
     :rtype: jittor.Var
     '''
-    if isinstance(shape, tuple) and isinstance(shape[-1], str):
+    if isinstance(shape, tuple) and isinstance(shape[-1], (str, NanoString)):
         dtype = shape[-1]
         shape = shape[:-1]
     if isinstance(shape, tuple) and isinstance(shape[0], (Sequence, NanoVector)):
