@@ -377,5 +377,11 @@ class TestOther(unittest.TestCase):
         a = jt.ones(10,10)
         assert a.shape == (10,10)
 
+        a = jt.ones_like(jt.ones([10], "int16"))
+        assert a.dtype == "int16"
+
+        a = jt.ones_like(jt.ones([10], "bool"))
+        assert a.dtype == "bool"
+
 if __name__ == "__main__":
     unittest.main()
