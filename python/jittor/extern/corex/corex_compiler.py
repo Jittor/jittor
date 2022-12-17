@@ -51,6 +51,10 @@ string process_acl(const string& src, const string& name, const map<string,strin
         // default where kernel cannot handle 64 warp size, use cub_where instead
         new_src = token_replace_all(new_src, "if (cub_where$1) {", "if (cub_where) {");
     }
+    if (name == "loop_var_analyze_pass.cc") {
+        new_src = token_replace_all(new_src, "DEFINE_FLAG($1, para_opt_level,$2,$3);", 
+                                             "DEFINE_FLAG($1, para_opt_level, 4,$3);");
+    }
     return new_src;
 }
 }''', compiler.cc_flags + " " + " ".join(cc_files) + cc_flags)
