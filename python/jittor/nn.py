@@ -494,7 +494,7 @@ class BCEWithLogitsLoss(Module):
 
 def softmax(x, dim=None, log=False):
     import jittor.other.code_softmax as code_softmax
-    if code_softmax.can_softmax_v1(x, dim) and not jt.compiler.has_rocm:
+    if code_softmax.can_softmax_v1(x, dim) and jt.compiler.is_cuda:
         return code_softmax.softmax_v1(x, log)
     if dim is None: dim = ()
     if log:
@@ -873,7 +873,7 @@ class Conv(Module):
         self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
         self.groups = groups
         self.is_depthwise_conv = self.groups == self.out_channels and self.groups == self.in_channels
-        if self.is_depthwise_conv and jt.flags.use_cuda:
+        if self.is_depthwise_conv and jt.flags.use_cuda and jt.compiler.is_cuda:
             self.depthwise_conv = DepthwiseConv(stride, padding, dilation)
         assert in_channels % groups == 0, 'in_channels must be divisible by groups'
         assert out_channels % groups == 0, 'out_channels must be divisible by groups'
@@ -2544,7 +2544,7 @@ class RNNBase(Module):
                     copy_to('weight' + param_name, offset_idx + idx, idx)
                 return num_gates
 
-        if jt.flags.use_cuda and jt.cudnn and not jt.compiler.has_rocm:
+        if jt.flags.use_cuda and jt.cudnn and jt.compiler.is_cuda:
             if getattr(self, '_cudnn_weight_size', None) is None:                
                 offset_array = jt.cudnn.cudnn_rnn_weight_offset(
                     cudnn_mode,
@@ -2630,7 +2630,7 @@ class RNNBase(Module):
                 hx = (jt.zeros((num_directions * self.num_layers, input.shape[1], self.hidden_size), dtype=input.dtype),
                       jt.zeros((num_directions * self.num_layers, input.shape[1], self.hidden_size), dtype=input.dtype))
 
-        if jt.flags.use_cuda and jt.cudnn and self.proj_size == 0 and not jt.compiler.has_rocm:
+        if jt.flags.use_cuda and jt.cudnn and self.proj_size == 0 and jt.compiler.is_cuda:
             return self._execute_cudnn_rnn(input, hx)
         else:
             hidden_n = []

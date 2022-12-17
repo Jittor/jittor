@@ -83,12 +83,12 @@ vfill(T* __restrict__ a) {
     if (nbyte<=0) return;
     if (nbyte>=16) {
         auto* __restrict__ aa = (int4* __restrict__)a;
-        aa[0] = {0};
+        aa[0].x = aa[0].y = aa[0].z = aa[0].w = 0;
         return vfill<nbyte-16>(aa+1);
     }
     if (nbyte>=8) {
         auto* __restrict__ aa = (int2* __restrict__)a;
-        aa[0] = {0};
+        aa[0].x = aa[0].y = 0;
         return vfill<nbyte-8>(aa+1);
     }
     if (nbyte>=4) {
