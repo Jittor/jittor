@@ -1246,7 +1246,11 @@ jit_utils.add_backend(corex_compiler)
 for mod in jit_utils.backends:
     if mod.check():
         break
-is_cuda = os.path.basename(nvcc_path) == "nvcc"
+
+if not os.name == 'nt':
+    is_cuda = os.path.basename(nvcc_path) == "nvcc"
+else:
+    is_cuda = os.path.basename(nvcc_path) == "nvcc.exe"
 
 # build core
 gen_jit_flags()
