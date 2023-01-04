@@ -891,7 +891,7 @@ class Conv(Module):
             self.bias = None
 
     def execute(self, x):
-        if self.is_depthwise_conv and jt.flags.use_cuda:
+        if hasattr(self, 'depthwise_conv'):
             y = self.depthwise_conv(x, self.weight)
             if self.bias is not None:
                 b = self.bias.broadcast(y.shape, [0,2,3])
