@@ -102,8 +102,6 @@ void CudnnConv3dOp::jit_run() {
     checkCudaErrors(cudnnCreateFilterDescriptor( &cudnnFdesc ));
     checkCudaErrors(cudnnCreateTensorDescriptor( &cudnnOdesc ));
     checkCudaErrors(cudnnCreateConvolutionDescriptor( &cudnnConvDesc ));
-    checkCudaErrors(cudnnSetConvolutionGroupCount( cudnnConvDesc, groups ));
-
 
     int xn, xc, xd, xh, xw, wd, wh, ww, wci, wco, yn, yc, yd, yh, yw;
     int sx[] = {0,0,0,0,1};
@@ -152,6 +150,8 @@ void CudnnConv3dOp::jit_run() {
         padA, convstrideA, dilationA,
         CUDNN_CROSS_CORRELATION, getDataType<Ty>()
     ));
+    // MIOpen requires groups to be set after descriptor initialization
+    checkCudaErrors(cudnnSetConvolutionGroupCount( cudnnConvDesc, groups ));
 
     // using tensor core
     if(use_tensorcore){
