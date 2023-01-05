@@ -51,6 +51,13 @@ def install_mkl(root_folder):
         # url = "https://github.com/oneapi-src/oneDNN/releases/download/v2.2/dnnl_win_2.2.0_cpu_vcomp.zip"
         filename = "dnnl_win_2.2.0_cpu_vcomp.zip"
         md5 = "fa12c693b2ec07700d174e1e99d60a7e"
+    elif platform.system() == "Darwin":
+        if platform.machine() == "arm64":
+            filename = "dnnl_mac_2.2.0_cpu_omp_arm64.tgz"
+            md5 = "d8fdf56d3cf618685d22d18f08119f88"
+        else:
+            filename = "dnnl_mac_2.2.0_cpu_omp_x86_64.tgz"
+            md5 = "6e2f065d6a589c82081536b684768fe6"
     else:
         raise RuntimeError(f"platform.machine()=={platform.machine()} not support yet,"
         " Please contact us on https://github.com/jittor/jittor ")
@@ -61,7 +68,8 @@ def install_mkl(root_folder):
     dirname = os.path.join(root_folder, filename.rsplit(".",1)[0])
 
     if not (os.path.isfile(os.path.join(dirname, "lib", "libmkldnn.so")) or
-        os.path.isfile(os.path.join(dirname, "bin", "dnnl.dll"))):
+        os.path.isfile(os.path.join(dirname, "bin", "dnnl.dll")) or 
+        os.path.isfile(os.path.join(dirname, "lib", "libmkldnn.dylib"))):
         LOG.i("Downloading mkl...")
         download_url_to_local(url, filename, root_folder, md5)
         if fullname.endswith(".zip"):
@@ -81,6 +89,9 @@ def install_mkl(root_folder):
             
             assert 0 == os.system(cmd)
             assert 0 == os.system(f"{dirname}/examples/test")
+        if platform.system() == "Darwin":
+            assert 0 == os.system(f"cd {dirname}/examples && "
+            f"{cc_path} -std=c++14 cnn_inference_f32.cpp -Ofast -lmkldnn -I ../include -L ../lib -o test && DYLD_LIBRARY_PATH=../lib/ ./test")
         else:
             assert 0 == os.system(f"cd {dirname}/examples && "
             f"{cc_path} -std=c++14 cnn_inference_f32.cpp -Ofast -lmkldnn -I ../include -L ../lib -o test && LD_LIBRARY_PATH=../lib/ ./test")
@@ -105,48 +116,40 @@ def setup_mkl():
     mkl_include_path = os.environ.get("mkl_include_path")
     mkl_lib_path = os.environ.get("mkl_lib_path")
     
-    if platform.system() == 'Linux' or os.name == 'nt':
-        if mkl_lib_path is None or mkl_include_path is None:
-            mkl_install_sh = os.path.join(jittor_path, "script", "install_mkl.sh")
-            LOG.v("setup mkl...")
-            # mkl_path = os.path.join(cache_path, "mkl")
-            # mkl_path decouple with cc_path
-            mkl_path = os.path.join(jit_utils.home(), ".cache", "jittor", "mkl")
-            
-            make_cache_dir(mkl_path)
-            install_mkl(mkl_path)
-            mkl_home = ""
-            for name in os.listdir(mkl_path):
-                if name.startswith("dnnl") and os.path.isdir(os.path.join(mkl_path, name)):
-                    mkl_home = os.path.join(mkl_path, name)
-                    break
-            assert mkl_home!=""
-        mkl_include_path = os.path.join(mkl_home, "include")
-        mkl_lib_path = os.path.join(mkl_home, "lib")
+    if mkl_lib_path is None or mkl_include_path is None:
+        LOG.v("setup mkl...")
+        # mkl_path = os.path.join(cache_path, "mkl")
+        # mkl_path decouple with cc_path
+        mkl_path = os.path.join(jit_utils.home(), ".cache", "jittor", "mkl")
+        
+        make_cache_dir(mkl_path)
+        install_mkl(mkl_path)
+        mkl_home = ""
+        for name in os.listdir(mkl_path):
+            if name.startswith("dnnl") and os.path.isdir(os.path.join(mkl_path, name)):
+                mkl_home = os.path.join(mkl_path, name)
+                break
+        assert mkl_home!=""
+    mkl_include_path = os.path.join(mkl_home, "include")
+    mkl_lib_path = os.path.join(mkl_home, "lib")
 
-        mkl_lib_name = os.path.join(mkl_lib_path, "libmkldnn.so")
-        extra_flags = f" -I\"{mkl_include_path}\" -L\"{mkl_lib_path}\" -lmkldnn "
-        if os.name == 'nt':
-            mkl_lib_name = os.path.join(mkl_home, 'bin', 'dnnl.dll')
-            mkl_bin_path = os.path.join(mkl_home, 'bin')
-            extra_flags = f" -I\"{mkl_include_path}\"  -L\"{mkl_lib_path}\" -L\"{mkl_bin_path}\" -ldnnl "
-        assert os.path.isdir(mkl_include_path)
-        assert os.path.isdir(mkl_lib_path)
-        assert os.path.isfile(mkl_lib_name)
-        LOG.v(f"mkl_include_path: {mkl_include_path}")
-        LOG.v(f"mkl_lib_path: {mkl_lib_path}")
-        LOG.v(f"mkl_lib_name: {mkl_lib_name}")
-        # We do not link manualy, link in custom ops
-        # ctypes.CDLL(mkl_lib_name, dlopen_flags)
+    mkl_lib_name = os.path.join(mkl_lib_path, "libmkldnn.so")
+    extra_flags = f" -I\"{mkl_include_path}\" -L\"{mkl_lib_path}\" -lmkldnn "
+    if os.name == 'nt':
+        mkl_lib_name = os.path.join(mkl_home, 'bin', 'dnnl.dll')
+        mkl_bin_path = os.path.join(mkl_home, 'bin')
+        extra_flags = f" -I\"{mkl_include_path}\"  -L\"{mkl_lib_path}\" -L\"{mkl_bin_path}\" -ldnnl "
+    elif platform.system() == "Darwin":
+        mkl_lib_name = os.path.join(mkl_lib_path, "libmkldnn.dylib")
 
-    elif platform.system() == 'Darwin':
-        mkl_lib_paths = [
-            "/usr/local/lib/libdnnl.dylib",       # x86_64
-            "/opt/homebrew/lib/libdnnl.dylib",    # arm64
-        ]
-        if not any([os.path.exists(lib) for lib in mkl_lib_paths]):
-            raise RuntimeError("Not found onednn, please install it by the command 'brew install onednn'")
-        extra_flags = f" -ldnnl "
+    assert os.path.isdir(mkl_include_path)
+    assert os.path.isdir(mkl_lib_path)
+    assert os.path.isfile(mkl_lib_name)
+    LOG.v(f"mkl_include_path: {mkl_include_path}")
+    LOG.v(f"mkl_lib_path: {mkl_lib_path}")
+    LOG.v(f"mkl_lib_name: {mkl_lib_name}")
+    # We do not link manualy, link in custom ops
+    # ctypes.CDLL(mkl_lib_name, dlopen_flags)
 
     mkl_op_dir = os.path.join(jittor_path, "extern", "mkl", "ops")
     mkl_op_files = [os.path.join(mkl_op_dir, name) for name in os.listdir(mkl_op_dir)]
@@ -585,10 +588,10 @@ setup_nccl()
 
 setup_cutt()
 
-try:
-    setup_mkl()
-except Exception as e:
-    LOG.w("MKL install failed, msg:", e)
+# try:
+setup_mkl()
+# except Exception as e:
+#     LOG.w("MKL install failed, msg:", e)
 
 setup_cuda_extern()
 
