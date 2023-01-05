@@ -56,7 +56,7 @@ def install_mkl(root_folder):
             filename = "dnnl_mac_2.2.0_cpu_omp_arm64.tgz"
             md5 = "d8fdf56d3cf618685d22d18f08119f88"
         else:
-            filename = "dnnl_mac_2.2.0_cpu_omp_x86_64"
+            filename = "dnnl_mac_2.2.0_cpu_omp_x86_64.tgz"
             md5 = "6e2f065d6a589c82081536b684768fe6"
     else:
         raise RuntimeError(f"platform.machine()=={platform.machine()} not support yet,"
