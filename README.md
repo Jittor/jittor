@@ -122,7 +122,7 @@ python3.7 -m jittor.test.test_example
 Please first install additional dependencies with [homebrew](https://brew.sh).
 
 ```bash
-brew install onednn libomp
+brew install libomp
 ```
 
 
@@ -134,7 +134,7 @@ python3.7 -m jittor.test.test_example
 ```
 
 
-Currently jittor only supports CPU in macOS.
+Currently jittor only supports CPU on macOS.
 
 
 ### Windows install
