@@ -73,7 +73,7 @@ def download_url_to_local(url, filename, root_folder, md5):
                 os.remove(file_path)
             raise RuntimeError(msg)
     if not check_file_exist(file_path, md5):
-        raise RuntimeError("File downloads failed.")
+        raise RuntimeError(f"MD5 mismatch between the server and the downloaded file {file_path}")
 
 
 

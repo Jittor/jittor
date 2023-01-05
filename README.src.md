@@ -158,7 +158,7 @@ macOS 请使用 [homebrew](https://brew.sh) 安装额外的依赖。
 Please first install additional dependencies with [homebrew](https://brew.sh).
 
 ```bash
-brew install onednn libomp
+brew install libomp
 ```
 
 之后您可以通过 pip 安装 jittor，并测试是否可以成功运行。
@@ -172,7 +172,7 @@ python3.7 -m jittor.test.test_example
 
 目前在 macOS 中，jittor 只支持 CPU 计算。
 
-Currently jittor only supports CPU in macOS.
+Currently jittor only supports CPU on macOS.
 
 ### Windows安装
 

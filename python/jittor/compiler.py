@@ -1034,14 +1034,19 @@ cc_flags += " -fdiagnostics-color=always "
 # 2. Non standard include path
 if platform.system() == 'Darwin':
     # TODO: if not using apple clang, there is no need to add -lomp
-    cc_flags += "-undefined dynamic_lookup -lomp "
-    if os.environ.get('CONDA_PREFIX', None):
+    cc_flags += " -undefined dynamic_lookup -lomp "
+    if os.environ.get("CONDA_PREFIX", None):
         cc_flags += f" -L{os.path.join(os.environ['CONDA_PREFIX'], 'lib')} "
-    if platform.machine() == "arm64":
-        cc_flags += " -I/opt/homebrew/include -L/opt/homebrew/lib  "
-        # Homebrew does not symlink the openmp library (libomp >= 15.0.6) into /opt/homebrew/lib
-        if os.path.exists('/opt/homebrew/opt/libomp'):
-            cc_flags += " -I/opt/homebrew/opt/libomp/include -L/opt/homebrew/opt/libomp/lib"  
+    # if platform.machine() == "arm64":
+    #     cc_flags += " -I/opt/homebrew/include -L/opt/homebrew/lib  "
+    # Homebrew does not symlink the openmp library (libomp >= 15.0.6) into /opt/homebrew/lib
+    homebrew_openmp_paths = [
+        "/opt/homebrew/opt/libomp",
+        "/usr/local/opt/libomp"
+    ]
+    for openmp_path in homebrew_openmp_paths:
+        if os.path.exists(openmp_path):
+            cc_flags += f" -I{openmp_path}/include -L{openmp_path}/lib"
 
 # 3. User specified flags
 if "cc_flags" in os.environ:
