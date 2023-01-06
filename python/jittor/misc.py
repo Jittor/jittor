@@ -291,7 +291,7 @@ def median(x,dim=None,keepdim=False, keepdims=False):
     if dim is None:
         x = x.reshape(-1)
         dim=0
-    _,x = x.argsort(dim)
+    _,x = jt.argsort(x, dim)
     slices = [slice(None) for i in range(dim-1)]
     k = (x.shape[dim]-1)//2
     if keepdim:

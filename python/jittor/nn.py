@@ -498,9 +498,9 @@ def softmax(x, dim=None, log=False):
         return code_softmax.softmax_v1(x, log)
     if dim is None: dim = ()
     if log:
-        a = x-x.max(dim, keepdims=True)
+        a = x - jt.max(x, dim, keepdims=True)
         return a - a.exp().sum(dim, keepdims=True).log()
-    x = (x-x.max(dim, keepdims=True)).exp()
+    x = (x - jt.max(x, dim, keepdims=True)).exp()
     return x / x.sum(dim, keepdims=True)
 jt.Var.softmax = softmax
 
