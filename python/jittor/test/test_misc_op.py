@@ -391,5 +391,16 @@ class TestOther(unittest.TestCase):
         y = jt.index_select(x, 1, indices)
         assert jt.all_equal(y, x[:, indices])
 
+    def test_multinorm(self):
+        weights = jt.float32([0, 10, 3, 0])
+        x = jt.multinomial(weights, 2)
+        assert jt.all_equal(x, [1, 2]) or jt.all_equal(x, [2, 1])
+        x = jt.multinomial(weights, 4, replacement=True)
+        assert x.shape == (4, )
+
+        weights = jt.float32([[0,0,2],[0,1,0], [0.5,0,0]])
+        x = jt.multinomial(weights, 1)
+        assert jt.all_equal(x, [[2],[1],[0]])
+
 if __name__ == "__main__":
     unittest.main()
