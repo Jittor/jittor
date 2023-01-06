@@ -383,5 +383,13 @@ class TestOther(unittest.TestCase):
         a = jt.ones_like(jt.ones([10], "bool"))
         assert a.dtype == "bool"
 
+    def test_index_select(self):
+        x = jt.randn(3, 4)
+        indices = torch.tensor([2, 1])
+        y = jt.index_select(x, 0, indices)
+        assert jt.all_equal(y, x[indices])
+        y = jt.index_select(x, 1, indices)
+        assert jt.all_equal(y, x[:, indices])
+
 if __name__ == "__main__":
     unittest.main()

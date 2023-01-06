@@ -2043,3 +2043,26 @@ jt.Var.tril = tril
 def all_equal(a: jt.Var, b: jt.Var) -> bool:
     return (a == b).all().item()
 jt.all_equal = all_equal
+
+def index_select(x: jt.Var, dim:int, index: jt.Var) -> jt.Var:
+    '''Returns a new var which indexes the x var along dimension dim using the entries in index.
+
+The returned var has the same number of dimensions as the original var (x). The dimth dimension has the same size as the length of index; other dimensions have the same size as in the original tensor.
+
+    :param x: the input tensor.
+    :param dim:  the dimension to index.
+    :param index:  the 1-D tensor containing the indices to index.
+
+    Example::
+
+        x = jt.randn(3, 4)
+        indices = torch.tensor([2, 1])
+        y = jt.index_select(x, 0, indices)
+        assert jt.all_equal(y, x[indices])
+        y = jt.index_select(x, 1, indices)
+        assert jt.all_equal(y, x[:, indices])
+
+
+    '''
+    return x.getitem(((slice(None),)*dim)+(index,))
+jt.index_select = index_select
