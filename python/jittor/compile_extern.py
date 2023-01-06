@@ -71,7 +71,26 @@ def install_mkl(root_folder):
         else:
             import tarfile
             with tarfile.open(fullname, "r") as tar:
-                tar.extractall(root_folder)
+                def is_within_directory(directory, target):
+                    
+                    abs_directory = os.path.abspath(directory)
+                    abs_target = os.path.abspath(target)
+                
+                    prefix = os.path.commonprefix([abs_directory, abs_target])
+                    
+                    return prefix == abs_directory
+                
+                def safe_extract(tar, path=".", members=None, *, numeric_owner=False):
+                
+                    for member in tar.getmembers():
+                        member_path = os.path.join(path, member.name)
+                        if not is_within_directory(path, member_path):
+                            raise Exception("Attempted Path Traversal in Tar File")
+                
+                    tar.extractall(path, members, numeric_owner) 
+                    
+                
+                safe_extract(tar, root_folder)
         if os.name == 'nt':
             # this env is used for execute example/text
             bin_path = os.path.join(dirname, "bin")
@@ -168,7 +187,26 @@ def install_cub(root_folder):
         import tarfile
     
         with tarfile.open(fullname, "r") as tar:
-            tar.extractall(root_folder)
+            def is_within_directory(directory, target):
+                
+                abs_directory = os.path.abspath(directory)
+                abs_target = os.path.abspath(target)
+            
+                prefix = os.path.commonprefix([abs_directory, abs_target])
+                
+                return prefix == abs_directory
+            
+            def safe_extract(tar, path=".", members=None, *, numeric_owner=False):
+            
+                for member in tar.getmembers():
+                    member_path = os.path.join(path, member.name)
+                    if not is_within_directory(path, member_path):
+                        raise Exception("Attempted Path Traversal in Tar File")
+            
+                tar.extractall(path, members, numeric_owner) 
+                
+            
+            safe_extract(tar, root_folder)
         # assert 0 == os.system(f"cd {dirname}/examples && "
         #             f"{nvcc_path} --cudart=shared -ccbin=\"{cc_path}\"  device/example_device_radix_sort.cu -O2 -I.. -std=c++14 -o test")
         # if core.get_device_count():
@@ -430,7 +468,26 @@ def install_nccl(root_folder):
 
         import tarfile
         with tarfile.open(fullname, "r") as tar:
-            tar.extractall(root_folder)
+            def is_within_directory(directory, target):
+                
+                abs_directory = os.path.abspath(directory)
+                abs_target = os.path.abspath(target)
+            
+                prefix = os.path.commonprefix([abs_directory, abs_target])
+                
+                return prefix == abs_directory
+            
+            def safe_extract(tar, path=".", members=None, *, numeric_owner=False):
+            
+                for member in tar.getmembers():
+                    member_path = os.path.join(path, member.name)
+                    if not is_within_directory(path, member_path):
+                        raise Exception("Attempted Path Traversal in Tar File")
+            
+                tar.extractall(path, members, numeric_owner) 
+                
+            
+            safe_extract(tar, root_folder)
 
         LOG.i("installing nccl...")
         arch_flag = ""
