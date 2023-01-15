@@ -2105,4 +2105,17 @@ def multinomial(weights: jt.Var, num_samples: int, replacement: bool=False) -> j
         _, indices = jt.topk(rand.safe_clip(), num_samples)
         return indices
 
+def histc(input, bins, min=0., max=0., out=None):
+    if min == 0 and max == 0:
+        min, max = input.min(), input.max()
+    assert min < max
+    bin_length = (max - min) / bins
+    histc = jt.floor((input[jt.logical_and(input >= min, input <= max)] - min) / bin_length).int().reshape(-1)
+    hist = jt.ones_like(histc).float().reindex_reduce("add", [bins,], ["@e0(i0)"], extras=[histc])
+    if hist.sum() != histc.shape[0]:
+        hist[-1] += 1
+    return hist
+
+    
+
 
