@@ -2105,7 +2105,20 @@ def multinomial(weights: jt.Var, num_samples: int, replacement: bool=False) -> j
         _, indices = jt.topk(rand.safe_clip(), num_samples)
         return indices
 
-def histc(input, bins, min=0., max=0., out=None):
+def histc(input, bins, min=0., max=0.):
+    ''' Return the histogram of the input N-d array.
+
+    :param input: the input array.
+    :param bins: number of bins.
+    :param min: min of the range.
+    :param max: max of the range.
+
+    Example::
+
+        inputs = jt.randn((40,40))
+        joup = jt.histc(x, bins=10)
+        
+    '''
     if min == 0 and max == 0:
         min, max = input.min(), input.max()
     assert min < max

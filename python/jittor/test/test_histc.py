@@ -22,12 +22,6 @@ try:
 except:
     has_autograd = False
 
-cupy = None
-try:
-    import cupy
-except:
-    pass
-
 @unittest.skipIf(not has_autograd, "No autograd found.")
 class TestHistc(unittest.TestCase):
     def test_histc(self):
