@@ -587,6 +587,15 @@ Example::
                     yield batch_data
 
 def DataLoader(dataset: Dataset, *args, **kargs):
+    """ Simple dataloader.
+    
+    Example::
+
+        train_dir = './data/celebA_train'
+        train_dataset = ImageFolder(train_dir)
+        dataloader = jt.dataset.DataLoader(train_dataset, batch_size=8)
+
+    """
     return dataset.set_attrs(*args, **kargs)
 
 class ImageFolder(Dataset):
