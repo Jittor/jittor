@@ -2,7 +2,7 @@ import jittor as jt
 from jittor import nn
 
 def _weight_norm(v, g, dim):
-    return v * (g / jt.norm(g, 2, dim, keepdim=True))
+    return v * (g / jt.norm(v, 2, dim, keepdim=True))
 
 class WeightNorm(object):
     def __init__(self, name: str, dim: int) -> None:
@@ -79,8 +79,8 @@ def weight_norm(module, name, dim):
     return module
 
 def remove_weight_norm(module, name: str = 'weight'):
-    if hasattr(module, __fhook2__) and isinstance(module.__fhook2__, WeightNorm):
-        delattr(module, __fhook2__)
+    if hasattr(module, "__fhook2__") and isinstance(module.__fhook2__, WeightNorm):
+        delattr(module, "__fhook2__")
         return module
     raise ValueError("weight_norm of '{}' not found in {}"
                      .format(name, module))
