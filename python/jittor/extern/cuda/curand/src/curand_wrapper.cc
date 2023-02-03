@@ -21,6 +21,7 @@ inline curand_initer() {
     if (!get_device_count()) return;
     checkCudaErrors( curandCreateGenerator(&gen, CURAND_RNG_PSEUDO_DEFAULT) );
     add_set_seed_callback([](int seed) {
+        checkCudaErrors( curandSetGeneratorOffset(gen, 0) );
         checkCudaErrors( curandSetPseudoRandomGeneratorSeed(gen, seed) );
     });
     LOGv << "curandCreate finished";

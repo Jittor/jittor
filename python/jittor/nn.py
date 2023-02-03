@@ -606,6 +606,7 @@ class Linear(Module):
         self.weight = init.invariant_uniform((out_features, in_features), "float32")
         bound = 1.0/math.sqrt(in_features)
         self.bias = init.uniform((out_features,), "float32",-bound,bound) if bias else None
+        jt.sync_all(True)
 
     def execute(self, x):
         x = matmul_transpose(x, self.weight)
@@ -889,6 +890,7 @@ class Conv(Module):
             self.bias = init.uniform([out_channels], dtype="float", low=-bound, high=bound)
         else:
             self.bias = None
+        jt.sync_all(True)
 
     def execute(self, x):
         if hasattr(self, 'depthwise_conv'):
@@ -1077,6 +1079,7 @@ class Conv3d(Module):
             self.bias = init.uniform([out_channels], dtype="float", low=-bound, high=bound)
         else:
             self.bias = None
+        jt.sync_all(True)
 
     def execute(self, x):
         return conv3d(x, self.weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
@@ -1307,6 +1310,7 @@ class ConvTranspose(Module):
             self.bias = init.uniform([out_channels], dtype="float", low=-bound, high=bound)
         else:
             self.bias = None
+        jt.sync_all(True)
 
     def execute(self, x):
         if self.groups == 1:
@@ -1409,6 +1413,7 @@ class ConvTranspose3d(Module):
             self.bias = init.uniform([out_channels], dtype="float", low=-bound, high=bound)
         else:
             self.bias = None
+        jt.sync_all(True)
 
     def execute(self, x):
         return conv_transpose3d(x, self.weight, self.bias, self.stride, self.padding, self.output_padding, self.group, self.dilation)
@@ -1687,6 +1692,7 @@ class Embedding(Module):
         self.num = num
         self.dim = dim
         self.weight = jt.init.gauss([num,dim],'float32').stop_grad()
+        jt.sync_all(True)
 
     def execute(self, x):
         res = self.weight[x.flatten()].reshape(x.shape + [self.dim])
@@ -2329,6 +2335,7 @@ class LSTMCell(jt.Module):
         if bias:
             self.bias_ih = init.uniform((4 * hidden_size,), 'float32', -k, k)
             self.bias_hh = init.uniform((4 * hidden_size,), 'float32', -k, k)
+        jt.sync_all(True)
 
     def execute(self, input, hx = None):
         if hx is None:
@@ -2392,6 +2399,7 @@ class RNNCell(jt.Module):
         if bias:
             self.bias_ih = init.uniform((hidden_size,), 'float32', -k, k)
             self.bias_hh = init.uniform((hidden_size,), 'float32', -k, k)
+        jt.sync_all(True)
 
     def execute(self, input, hx = None):
         if hx is None:
@@ -2447,6 +2455,7 @@ class GRUCell(jt.Module):
         if bias:
             self.bias_ih = init.uniform((3*hidden_size,), 'float32', -k, k)
             self.bias_hh = init.uniform((3*hidden_size,), 'float32', -k, k)
+        jt.sync_all(True)
 
     def execute(self, input, hx = None):
         if hx is None:
@@ -2525,6 +2534,7 @@ class RNNBase(Module):
             if bias:
                 build_unit(f'bias_ih_l{layer}', gate_size)
                 build_unit(f'bias_hh_l{layer}', gate_size)
+        jt.sync_all(True)
 
     def _cudnn_flatten_weights(self, cudnn_mode):
         def copy_to_flatten_weight(param_name, offset_idx, num_gates):
@@ -2575,6 +2585,7 @@ class RNNBase(Module):
             return ft_weight
         else:
             raise RuntimeError("Not Cudnn found")
+        
 
     @abstractmethod
     def call_rnn_cell(self, input, hidden, suffix):
@@ -2873,6 +2884,7 @@ class Bilinear(Module):
         self.bias = bias
         if bias:
             self.bias = jt.init.uniform([out_features], dtype, -bound, bound)
+        jt.sync_all(True)
 
     def execute(self, in1, in2):
         return bilinear(in1, in2, self.weight, self.bias)

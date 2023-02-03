@@ -1406,6 +1406,7 @@ def set_global_seed(seed, different_seed_for_mpi=True):
     '''
     if (different_seed_for_mpi):
         seed = seed + jt.rank * 2591
+    jt.sync_all(True) # before set seed sync all to new seed are used for new random
     import random
     random.seed(seed)
     jt.set_seed(seed)
