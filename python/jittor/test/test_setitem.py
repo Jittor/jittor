@@ -428,7 +428,22 @@ class TestSetitem(unittest.TestCase):
             np.arange(4)[None,::-1]]
         np.testing.assert_allclose(nb, b.data)
 
-        
+    def test_cuda_slice_migrate_bug(self):
+        a = jt.array([1,2,3,4,5])
+        jt.sync_all()
+        if not jt.has_cuda: return
+        with jt.flag_scope(use_cuda=1):
+            b = a[0]
+            b.sync(True)
+            assert b.item() == 1
+
+    def test_cascade_setitem(self):
+        a = jt.zeros(3,3,3,3)
+        a[1][2][0][0] = 1
+        assert a[1,2,0,0] == 1
+        # TODO: convert a[x] = a[x] + b -> a[x] += b
+        a[1][2][0][0] += 1
+        assert a[1,2,0,0] == 2
 
 if __name__ == "__main__":
     unittest.main()

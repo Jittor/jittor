@@ -53,10 +53,9 @@ void CudnnConv3dOp::infer_shape() {
 }
 
 void CudnnConv3dOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype();
-    jk << _CS("][Ty:") << y->dtype();
-    jk << _CS("][Tw:") << w->dtype();
-    jk << ']';
+    jk << "«Tx:" << x->dtype();
+    jk << "«Ty:" << y->dtype();
+    jk << "«Tw:" << w->dtype();
 }
 
 static auto make_backwardx = get_op_info("cudnn_conv3d_backward_x")
@@ -103,8 +102,6 @@ void CudnnConv3dOp::jit_run() {
     checkCudaErrors(cudnnCreateFilterDescriptor( &cudnnFdesc ));
     checkCudaErrors(cudnnCreateTensorDescriptor( &cudnnOdesc ));
     checkCudaErrors(cudnnCreateConvolutionDescriptor( &cudnnConvDesc ));
-    checkCudaErrors(cudnnSetConvolutionGroupCount( cudnnConvDesc, groups ));
-
 
     int xn, xc, xd, xh, xw, wd, wh, ww, wci, wco, yn, yc, yd, yh, yw;
     int sx[] = {0,0,0,0,1};
@@ -153,6 +150,8 @@ void CudnnConv3dOp::jit_run() {
         padA, convstrideA, dilationA,
         CUDNN_CROSS_CORRELATION, getDataType<Ty>()
     ));
+    // MIOpen requires groups to be set after descriptor initialization
+    checkCudaErrors(cudnnSetConvolutionGroupCount( cudnnConvDesc, groups ));
 
     // using tensor core
     if(use_tensorcore){

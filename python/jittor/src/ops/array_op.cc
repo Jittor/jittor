@@ -78,7 +78,7 @@ ArrayOp::ArrayOp(ArrayArgs&& args) {
 
 void ArrayOp::jit_prepare(JK& jk) {
     if (output->flags.get(NodeFlags::_force_fuse)) {
-        jk << _CS("[T:") << output->dtype() << ']';
+        jk << "«T:" << output->dtype();
 
         // fill or find cbuffer for const var pass
         if (output->dtype().dsize() == 4) {
@@ -86,7 +86,7 @@ void ArrayOp::jit_prepare(JK& jk) {
             auto y = std::abs(ptr<float32>()[0]);
             auto z = ptr<uint32>()[0];
             if ((x<=2) || (y==1.0f || y==2.0f))
-                jk << _CS("[o:") << z << ']';
+                jk << "«o:" << z;
         }
         // end of fill cbuffer
     }

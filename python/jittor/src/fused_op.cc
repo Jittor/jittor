@@ -159,55 +159,53 @@ void FusedOp::do_jit_prepare(JK& jk) {
     jk.clear();
     for (uint i=0; i<ops.size(); i++) {
         Op* op = ops[i];
-        jk << "[opkey" << i << JK::val;
+        jk << "«opkey" << i << JK::val;
         jk << op->name();
         op->jit_prepare(jk);
-        jk << JK::end;
     }
-    jk << _CS("[JIT:1]");
+    jk << "«JIT:1";
     if (!use_cuda) {
         // only cpu
-        jk << _CS("[JIT_cpu:1]");
+        jk << "«JIT_cpu:1";
         this->flags.set(NodeFlags::_cuda, 0);
         this->flags.set(NodeFlags::_cpu, 1);
     } else {
-        jk << _CS("[JIT_cuda:1]");
+        jk << "«JIT_cuda:1";
         this->flags.set(NodeFlags::_cpu, 0);
         this->flags.set(NodeFlags::_cuda, 1);
     }
-    jk << _CS("[graph:");
+    jk << "«graph:";
     for (auto& t : edges) {
         uint i,j,k,l;
         std::tie(i,j,k,l) = t;
         jk << JK::hex2(i) << JK::hex1(j) << JK::hex2(k) << JK::hex1(l) << ',';
     }
-    jk << _CS("][var_info:") << JK::val;
+    jk << "«var_info:" << JK::val;
     bool use_int64_t = false;
     for (auto& vi : vars) {
         jk << JK::hex1(vi.type) << JK::hex1(vi.var->shape.size());
         if (vi.type != 1 && vi.var->num >= std::numeric_limits<int32_t>::max())
             use_int64_t = true;
     }
-    jk << JK::end;
     if (use_int64_t)
-        jk << _CS("[index_t:int64]");
+        jk << "«index_t:int64";
     else
-        jk << _CS("[index_t:int32]");
+        jk << "«index_t:int32";
     if (loop_options->size()) {
         if (get_loop_option("compile_shapes")) {
-            jk << _CS("[shapes:");
+            jk << "«shapes:";
             for (auto& vi : vars) {
                 jk << '[';
                 for (auto a : vi.var->shape)
                     jk << a << ',';
-                jk << _CS("],");
+                jk << "],";
             }
-            jk << JK::end;
         }
-        jk << _CS("[choices:");
-        for (auto& kv : *loop_options)
-            jk << kv.first << ':' << kv.second << ',';
-        jk << JK::end;
+        jk << "«choices:";
+        for (auto& kv : *loop_options) {
+            if (kv.first.size() && kv.first[0] != '_')
+                jk << kv.first << ':' << kv.second << ',';
+        }
     }
     jk.finilize();
 }

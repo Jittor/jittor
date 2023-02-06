@@ -27,7 +27,7 @@ class TestUnaryOp(unittest.TestCase):
         assert jt.float64(1).data.dtype == "float64"
         assert (jt.abs(-1) == 1).data.all()
         assert (abs(-jt.float64(1)) == 1).data.all()
-        a = np.array([-1,2,3,0])
+        a = np.array([-1,2,3,0], dtype="int32")
         check("abs", a)
         check("negative", a)
         check("logical_not", a)

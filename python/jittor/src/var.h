@@ -13,6 +13,7 @@
 namespace jittor {
 
 constexpr size_t alignment = 32;
+struct VarHolder;
 
 struct Var : Node {
     NanoVector shape;
@@ -25,6 +26,7 @@ struct Var : Node {
     Allocator* allocator = nullptr;
     size_t allocation;
     int64 size, num;
+    VarHolder* holder = nullptr;
     inline bool is_float() const { CHECK_EXIST; return ns.is_float(); }
     inline int dsize() const { CHECK_EXIST; return ns.dsize(); }
     inline NanoString dtype() const { CHECK_EXIST; return ns; }
@@ -77,8 +79,11 @@ struct VarPtr {
     
     inline
     void free_liveness() {
-        if (ptr)
-            ptr->release_both_liveness();
+        if (ptr) {
+            auto tmp = ptr;
+            ptr = nullptr;
+            tmp->release_both_liveness();
+        }
     }
     
     inline Var* operator->() { return ptr; }
@@ -91,6 +96,8 @@ struct VarPtr {
         other.ptr = nullptr;
         return *this;
     }
+
+    void set_stop_grad(bool stop_grad);
 };
 
 std::ostream& operator<<(std::ostream& os, const Var& var);

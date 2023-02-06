@@ -20,6 +20,8 @@ class DepthwiseConv(Function):
         self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
 
     def execute(self, x, weight):
+        if not jt.flags.use_cuda or not jt.compiler.is_cuda:
+            return nn.conv2d(x, weight, None, self.stride, self.padding, self.dilation, x.shape[1])
         self.save_vars = x, weight
         N,C,H,W = x.shape
         o,i,Kh,Kw = weight.shape

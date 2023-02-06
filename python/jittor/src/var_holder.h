@@ -32,6 +32,7 @@ typedef struct _object PyObject;
 
 EXTERN_LIB list<VarHolder*> hold_vars;
 EXTERN_LIB list<VarHolder*>::iterator sync_ptr;
+extern uint8 th_mode;
 
 // @pyjt(Var)
 // @attrs(heaptype)
@@ -48,9 +49,17 @@ struct VarHolder {
     ~VarHolder();
     string to_string();
     // @pyjt(sync)
-    void sync(bool device_sync = false, bool weak_sync = true);
+    // @attrs(return_self)
+    VarHolder* sync(bool device_sync = false, bool weak_sync = true);
+
+    /**
+     * Returns a numpy array copy of the Var.
+     */
     // @pyjt(fetch_sync,numpy)
     ArrayArgs fetch_sync();
+
+    inline void release_holder() {var->holder = nullptr;}
+    inline void own_holder() {var->holder = this;}
 
     /**
      * assign the data from another Var.
@@ -81,7 +90,11 @@ struct VarHolder {
      */ 
     // @pyjt(swap)
     // @attrs(return_self)
-    inline VarHolder* swap(VarHolder* v) { std::swap(var, v->var); return this; };
+    inline VarHolder* swap(VarHolder* v) {
+        std::swap(var, v->var);
+        own_holder(); v->own_holder();
+        return this; 
+    };
     
     void operator=(VarPtr&& v);
 
@@ -187,14 +200,7 @@ struct VarHolder {
      * @see stop_grad
      */ 
     // @pyjt(__set__requires_grad)
-    inline void set_requires_grad(bool flag) {
-        if (flag == get_requires_grad()) return;
-        if (flag)
-            start_grad();
-        else
-            stop_grad(); 
-        return;
-    }
+    void set_requires_grad(bool flag);
 
     /** 
      * enable the gradient calculation for the Var.
@@ -204,7 +210,8 @@ struct VarHolder {
     inline VarHolder* start_grad() {
         if (!var->dtype().is_float())
             LOGw << "cannot enable grad of a non-float value:" << var;
-        _update(this);
+        auto dvar = jittor::detach(var);
+        std::swap(dvar.ptr, var);
         return this;
     }
 
@@ -330,6 +337,11 @@ struct VarHolder {
         return this;
     }
 
+    /* check a[x][y] = c
+    */
+    // @pyjt(check_cascade_setitem)
+    // @attrs(return_self)
+    VarHolder* check_cascade_setitem(VarHolder* out);
 };
 
 // @pyjt(sync)

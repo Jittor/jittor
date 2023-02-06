@@ -185,13 +185,32 @@ print(matmul_transpose(a, b))
         p = x.parameters()
         assert len(p)==0
 
-    # def test_res2net(self):
-    #     import jittor.models
-    #     net = jittor.models.res2net50(True)
-    #     img = jt.random((2,3,224,224))
-    #     out = net(img)
-    #     print(out.shape, out.sum())
-    #     assert out.shape == [2,1000]
+    def test_self_update(self):
+        from jittor.models import resnet18
+        m = resnet18()
+        x = m.state_dict()
+        m.load_state_dict(x)
+
+    def test_res2net(self):
+        import jittor.models
+        net = jittor.models.res2net50(True)
+        img = jt.random((2,3,224,224))
+        out = net(img)
+        print(out.shape, out.sum())
+        jt.display_memory_info()
+        jt.display_memory_info()
+        assert out.shape == [2,1000]
+
+    def test_argmax_memleak(self):
+        a = jt.random([10])
+        _, m = jt.argmax(a, 0)
+        del _
+        m.sync()
+        g = jt.grad(m*10, a)
+        g.sync()
+        del a, g, m
+        jt.display_memory_info()
+        assert jt.liveness_info()["lived_ops"] == 0
 
 
 if __name__ == "__main__":

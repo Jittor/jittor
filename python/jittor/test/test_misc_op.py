@@ -256,14 +256,32 @@ class TestOther(unittest.TestCase):
         assert (x[3]['b'] == np.array([1,2,3])).all()
 
     def test_arctan2(self):
-        a = jt.arctan2(jt.array([1,1.0,0]), jt.array([1,0.0,-1]))
-        np.testing.assert_allclose(a.data, [0.7853982,1.5707964,3.1415927])
-
-        y = jt.random((100,))
-        x = jt.random((100,))
+        x = jt.float32([1,1,-1,-1,  1,-1,0,0,0])
+        y = jt.float32([-1,1,-1,1,  0,0,1,-1,0])
         z = jt.arctan2(y, x)
         z2 = np.arctan2(y.data, x.data)
-        np.testing.assert_allclose(z.data, z2)
+        np.testing.assert_allclose(z.data, z2, atol=1e-6)
+        
+        y = jt.random((100,)) * 2 - 1
+        x = jt.random((100,)) * 2 - 1
+        z = jt.arctan2(y, x)
+        z2 = np.arctan2(y.data, x.data)
+        np.testing.assert_allclose(z.data, z2, atol=1e-6)
+
+        np.testing.assert_allclose(jt.array([1]).arctan().item(), 0.7853982)
+
+    def test_softmax_precision(self):
+        # jt.flags.use_cuda = 1
+        a = -jt.array([1.0,2.0,1e5])
+        b = a.log_softmax(0)
+        assert b.isfinite().all().item()
+        print("test_softmax_precision cpu ok")
+        if not jt.has_cuda: return
+        jt.flags.use_cuda = 1
+        a = -jt.array([1.0,2.0,1e5])
+        b = a.log_softmax(0)
+        assert b.isfinite().all().item()
+        print("test_softmax_precision gpu ok")
 
     def test_code_softmax(self):
         if not jt.has_cuda: return
@@ -317,6 +335,72 @@ class TestOther(unittest.TestCase):
         if not jt.has_cuda: return
         with jt.flag_scope(use_cuda=1):
             self.test_nan()
+
+    def test_dropout2d(self):
+        m = jt.nn.Dropout2d(p=0.2)
+        m.train()
+        input = jt.randn(1, 10, 4, 3)
+        output = m(input)
+        output.sync()
+
+    def test_tri(self):
+        a = jt.ones(3, 3)
+        b = jt.triu(a)
+        assert jt.all_equal(b, [[1,1,1],[0,1,1],[0,0,1]])
+        
+        b = jt.triu(a, diagonal=1)
+        assert jt.all_equal(b, [[0,1,1],[0,0,1],[0,0,0]])
+        
+        b = jt.triu(a, diagonal=-1)
+        assert jt.all_equal(b, [[1,1,1],[1,1,1],[0,1,1]])
+        
+        a = jt.ones(3, 3)
+        b = jt.tril(a)
+        assert jt.all_equal(b, [[1,0,0],[1,1,0],[1,1,1]])
+        
+        b = jt.tril(a, diagonal=1)
+        assert jt.all_equal(b, [[1,1,0],[1,1,1],[1,1,1]])
+        
+        b = jt.tril(a, diagonal=-1)
+        assert jt.all_equal(b, [[0,0,0],[1,0,0],[1,1,0]])
+
+    def test_ones(self):
+        a = jt.ones(10, "int32")
+        a.sync()
+        assert a.shape == (10,)
+        assert a.dtype == "int32"
+        a = jt.ones((10,), "int32")
+        a.sync()
+        assert a.shape == (10,)
+        assert a.dtype == "int32"
+        
+        a = jt.ones(10,10)
+        assert a.shape == (10,10)
+
+        a = jt.ones_like(jt.ones([10], "int16"))
+        assert a.dtype == "int16"
+
+        a = jt.ones_like(jt.ones([10], "bool"))
+        assert a.dtype == "bool"
+
+    def test_index_select(self):
+        x = jt.randn(3, 4)
+        indices = torch.tensor([2, 1])
+        y = jt.index_select(x, 0, indices)
+        assert jt.all_equal(y, x[indices])
+        y = jt.index_select(x, 1, indices)
+        assert jt.all_equal(y, x[:, indices])
+
+    def test_multinorm(self):
+        weights = jt.float32([0, 10, 3, 0])
+        x = jt.multinomial(weights, 2)
+        assert jt.all_equal(x, [1, 2]) or jt.all_equal(x, [2, 1])
+        x = jt.multinomial(weights, 4, replacement=True)
+        assert x.shape == (4, )
+
+        weights = jt.float32([[0,0,2],[0,1,0], [0.5,0,0]])
+        x = jt.multinomial(weights, 1)
+        assert jt.all_equal(x, [[2],[1],[0]])
 
 if __name__ == "__main__":
     unittest.main()

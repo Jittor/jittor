@@ -15,6 +15,8 @@ from jittor import init, Module
 import numpy as np
 import math
 
+pool_use_code_op = True
+
 class Pool(Module):
     def __init__(self, kernel_size, stride=None, padding=0, dilation=None, return_indices=None, ceil_mode=False, count_include_pad=True, op="maximum"):
         assert dilation == None
@@ -40,7 +42,7 @@ class Pool(Module):
             w = (W+self.padding[1]*2-self.kernel_size[1] + self.stride[1] - 1)//self.stride[1]+1
             use_code_op = self.op in ['maximum', 'minimum', 'mean']
 
-        if use_code_op:
+        if use_code_op and pool_use_code_op:
             if self.op == 'mean':
                 if self.count_include_pad:
                     count = f"int count = {self.kernel_size[0]*self.kernel_size[1]};"
@@ -218,7 +220,7 @@ class Pool3d(Module):
             w = (W+self.padding[2]*2-self.kernel_size[2] + self.stride[2] - 1)//self.stride[2]+1
             use_code_op = self.op in ['maximum', 'minimum', 'mean']
 
-        if use_code_op:
+        if use_code_op and pool_use_code_op:
             if self.op == 'mean':
                 if self.count_include_pad:
                     count = f"int count = {self.kernel_size[0]*self.kernel_size[1]*self.kernel_size[2]};"

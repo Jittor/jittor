@@ -13,9 +13,10 @@
 #include "var.h"
 #include "executor.h"
 #include "graph.h"
-#include "update_queue.h"
 #include "mem/allocator/cuda_dual_allocator.h"
 #include "ops/op_register.h"
+#include "ops/getitem_op.h"
+#include "ops/setitem_op.h"
 
 namespace jittor {
 
@@ -27,7 +28,7 @@ list<VarHolder*>::iterator sync_ptr = hold_vars.end();
 void add_hold_vars(VarHolder* self) {
     hold_vars.push_front(self);
     self->iter = hold_vars.begin();
-    if (lazy_execution) return;
+    if (lazy_execution && Op::number_of_lived_ops < 100000) return;
     auto v = self->var;
     for (int i=0; i<5; i++) {
         auto op = v->input();
@@ -46,6 +47,7 @@ void add_hold_vars(VarHolder* self) {
 
 VarHolder::VarHolder(Var* v) : var(v) {
     // Var holder has both forward and backward liveness
+    own_holder();
     var->own_both_liveness();
     add_hold_vars(this);
 }
@@ -53,10 +55,12 @@ VarHolder::VarHolder(Var* v) : var(v) {
 VarHolder::VarHolder(VarPtr&& v) {
     var = v.ptr;
     v.ptr = nullptr;
+    own_holder();
     add_hold_vars(this);
 }
 
 VarHolder::VarHolder(VarHolder* v) : var(v->var) {
+    own_holder();
     iter = v->iter;
     *iter = this;
     // free memory without calling deconstructor
@@ -74,6 +78,7 @@ VarHolder::VarHolder(PyObject* obj, NanoString dtype) {
         vp = make_unary(vp, dtype);
     var = vp.ptr;
     vp.ptr = nullptr;
+    own_holder();
     add_hold_vars(this);
 }
 
@@ -83,6 +88,7 @@ VarHolder::~VarHolder() {
     if (iter == sync_ptr)
         sync_ptr = std::next(sync_ptr);
     hold_vars.erase(iter);
+    release_holder();
     var->release_both_liveness();
 }
 
@@ -93,13 +99,42 @@ static inline void assign_var(Var* a, Var* b) {
         a->set_stop_grad();
     if (b->flags.get(NodeFlags::_stop_fuse))
         a->flags.set(NodeFlags::_stop_fuse);
+    if (b->flags.get(NodeFlags::_th_require_grad))
+        a->flags.set(NodeFlags::_th_require_grad);
 }
 
+extern uint8 th_mode;
 void VarHolder::operator=(VarPtr&& v) {
+    if (th_mode) {
+        if (var->is_stop_grad() != v->is_stop_grad())
+            v.set_stop_grad(var->is_stop_grad());
+        if (var->flags.get(NodeFlags::_th_require_grad))
+            v.ptr->flags.set(NodeFlags::_th_require_grad);
+    }
     assign_var(v.ptr, var);
+    release_holder();
     var->release_both_liveness();
     var = v.ptr;
+    own_holder();
     v.ptr = nullptr;
+}
+
+extern bool no_grad;
+void VarHolder::set_requires_grad(bool flag) {
+    if (flag != get_requires_grad()) {
+        if (flag) {
+            bool no_grad_bk = no_grad;
+            auto th_mode_bk = th_mode;
+            no_grad = 0;
+            th_mode = 0;
+            start_grad();
+            no_grad = no_grad_bk;
+            th_mode = th_mode_bk;
+            var->flags.set(NodeFlags::_th_require_grad, (int)flag);
+        } else
+            stop_grad(); 
+    }
+    return;
 }
 
 string VarHolder::to_string() {
@@ -107,34 +142,38 @@ string VarHolder::to_string() {
 }
 
 VarHolder* VarHolder::assign(VarHolder* v) {
+    if (th_mode) {
+        v->set_requires_grad(get_requires_grad());
+    }
     assign_var(v->var, var);
+    release_holder();
+    v->var->own_both_liveness();
     var->release_both_liveness();
     var = v->var;
-    var->own_both_liveness();
+    own_holder();
     return this;
 }
 
 VarHolder* VarHolder::update(VarHolder* v) {
-    auto dv = jittor::detach(v->var);
-    update_queue.push(dv.ptr, var);
-    *this = move(dv);
-    return this;
+    v->var->flags.set(NodeFlags::_out_hint);
+    return assign(v);
 }
 
 VarHolder* VarHolder::_update(VarHolder* v) {
-    auto dv = jittor::detach(v->var);
-    if (var->flags.get(NodeFlags::_in_update_queue))
-        update_queue.push(dv.ptr, var);
+    release_holder();
+    v->var->own_both_liveness();
     var->release_both_liveness();
-    var = dv.ptr;
-    dv.ptr = nullptr;
+    var = v->var;
+    own_holder();
+    var->flags.set(NodeFlags::_out_hint);
     return this;
 }
 
 EXTERN_LIB Executor exe;
 
-void VarHolder::sync(bool device_sync, bool weak_sync) {
+VarHolder* VarHolder::sync(bool device_sync, bool weak_sync) {
     jittor::sync({this}, device_sync, weak_sync);
+    return this;
 }
 
 ArrayArgs VarHolder::fetch_sync() {
@@ -245,11 +284,53 @@ void migrate_all_to_cpu() {
 #ifdef HAS_CUDA
     for (auto vh : hold_vars) {
         auto v = vh->var;
-        if (v->_outputs.size()) continue;
-        if (v->allocator && !v->allocator->is_cuda())
-            migrate_to_gpu(v, cpu_allocator);
+        // if (v->_outputs.size()) continue;
+        if (v->allocator && v->mem_ptr && !v->allocator->is_cuda())
+            migrate_to_cpu(v, cpu_allocator);
     }
 #endif
+}
+
+static auto make_setitem = get_op_info("setitem")
+    .get_constructor<VarPtr, Var*, VarSlices&&, Var*, NanoString>();
+
+inline static bool fast_strcmp(const char* a, const char* b) {
+    return ((const uint64*)a)[0] == ((const uint64*)b)[0];
+}
+
+VarHolder* VarHolder::check_cascade_setitem(VarHolder* out) {
+    // return this;
+    auto v = var;
+    int n=0;
+    int64 slices[10];
+    while (n<10) {
+        Op* iop = v->input();
+        if (!iop) break;
+        if (!fast_strcmp(iop->name(), "getitem")) break;
+        v = iop->inputs().front();
+        GetitemOp* gop = (GetitemOp*)iop;
+        if (gop->vs.n == 1 && gop->vs.slices[0].is_int()) {
+            slices[n++] = gop->vs.slices[0].i;
+        } else break;
+        if (v->holder) {
+            // found holder var: v
+            // v[a][b][c][d] = y
+            // ^
+            auto* prev_op = (SetitemOp*)out->var->input();
+            VarSlices& old_slices = prev_op->vs;
+            Var* y = prev_op->input(1);
+            VarSlices new_slices(n+old_slices.n);
+            for (int i=n-1; i>=0; i--)
+                new_slices.slices[n-1-i].set_int(slices[i]);
+            for (int i=0; i<old_slices.n; i++)
+                new_slices.slices[n+i] = old_slices.slices[i];
+            // apply new slice
+            // v[a][b][c][d] = y -> v[a,b,c,d] = y
+            (*v->holder) = make_setitem(v, move(new_slices), y, ns_void);
+            break;
+        }
+    }
+    return assign(out);
 }
 
 } // jittor

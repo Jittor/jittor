@@ -33,7 +33,11 @@ TernaryOp::TernaryOp(Var* cond, Var* x, Var* y) : cond(cond), x(x), y(y) {
     set_type(OpType::element);
     flags.set(NodeFlags::_manual_set_vnbb);
     cond->flags.set(NodeFlags::_needed_by_backward);
-    z = create_output(nullptr, dtype_infer(x->ns, y->ns));
+    if (x->dtype() == y->dtype()) {
+        z = create_output(nullptr, x->dtype());
+    } else {
+        z = create_output(nullptr, dtype_infer(x->ns, y->ns));
+    }
 }
 
 VarPtr TernaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
@@ -64,10 +68,10 @@ void TernaryOp::infer_shape() {
 }
 
 void TernaryOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tc:") << cond->dtype();
-    jk << _CS("][Tx:") << x->dtype();
-    jk << _CS("][Ty:") << y->dtype();
-    jk << _CS("][Tz:") << z->dtype() << ']';
+    jk << "«Tc:" << cond->dtype();
+    jk << "«Tx:" << x->dtype();
+    jk << "«Ty:" << y->dtype();
+    jk << "«Tz:" << z->dtype();
 }
 
 #else // JIT

@@ -40,6 +40,44 @@ class TestCodeOp(unittest.TestCase):
         # print(b[0])
         assert b[0].item() == 233
 
+    def test_global_var(self):
+        header = """
+        namespace jittor {
+            extern int a_global_int_var;
+        }
+        """
+        src = """
+        namespace jittor {
+            int a_global_int_var = 123;
+        }
+        """
+        with jt.flag_scope(compile_options={"FLAGS:-DGLOBAL_VAR":1}):
+            jt.code([1], "int", [], cpu_header=header+src, cpu_src=" ").sync()
+
+        # use the global var
+        assert jt.code([1], "int", [], cpu_header=header, 
+            cpu_src="out0_p[0] = ++a_global_int_var; ").item() == 124
+        assert jt.code([1], "int", [], cpu_header=header,
+            cpu_src="out0_p[0] = ++a_global_int_var; ").item() == 125
+    
+    def test_ten_args(self):
+        a = jt.random([10])
+        b = jt.code([a.shape]*11, [a.dtype]*11, [jt.random([10])]*10+[a],
+            cpu_src='''
+                for (int i=0; i<in10_shape0; i++)
+                    @out10(i) = @in10(i)*@in10(i)*2;
+            ''',
+            cpu_grad_src = ['']*10+['''
+                for (int i=0; i<in10_shape0; i++) {
+                    @out0(i) = @dout(i)*@in10(i)*4;
+                }
+            '''])[-1]
+        na, nb = jt.fetch_sync([a,b])
+        assert np.allclose(na*na*2, nb)
+        
+        c = jt.random([10])
+        da = jt.grad(c*b, a)
+        assert np.allclose(c.data*na*4, da.data), (c.data*na*4, da.data)
 
 
     def test_use_func(self):
@@ -336,6 +374,13 @@ class TestCodeOp(unittest.TestCase):
         assert np.allclose(da.data, b.data)
         assert np.allclose(db.data, a.data)
 
+    def test_simple_var(self):
+        a = jt.code([1], "float32", inputs=[], 
+            data = {"x":123},
+            cpu_src='''
+                @out0(0) = data["x"];
+            ''').sync()
+        assert a.item() == 123
 
 if __name__ == "__main__":
     unittest.main()

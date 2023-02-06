@@ -158,7 +158,22 @@ string process_acl(const string& src, const string& name, const map<string,strin
         }
     }
     if (!edit) return src;
-    return join(tokens, "");
+    string new_src = join(tokens, "");
+    if (name == "executor.cc") {
+        new_src = "#include <Python.h>\n#include <pystate.h>\n"+
+        replace(new_src, "op->do_run_after_prepare(jkl);", 
+        R"({
+            auto state = _PyThreadState_UncheckedGet();
+            op->do_run_after_prepare(jkl);
+            if (!_PyThreadState_UncheckedGet()) {
+                PyEval_AcquireThread(state);
+            }
+        })");
+    }
+    if (name == "profiler.cc") {
+        new_src = token_replace_all(new_src, ".cc", ".tikcc");
+    }
+    return new_src;
 }
 
 void acl_jittor_op_compiler(string& filename, string& src, bool is_acl, string& extra_flags) {
@@ -186,10 +201,16 @@ void acl_jittor_op_compiler(string& filename, string& src, bool is_acl, string& 
     src = new_src;
 
     new_src = token_replace_all(new_src, "atomicAdd(&$1,$2);", "$1=$1+$2;");
-    new_src = token_replace_all(new_src, "::max($1,$2);", "($1)>($2)?($1):($2);");
-    // new_src = replace(new_src, "::max", "fmax");
+    // TODO: support max
+    // new_src = token_replace_all(new_src, "::max($1,$2);", "($1)>($2)?($1):($2);");
+    auto ss = split(new_src, ";");
+    for (auto &s : ss) {
+        if (s.find("?") != string::npos) {
+            s = token_replace_all(s+";", "auto $1=$2?$3:$4;", "auto $1=$3;if (!($2)) $1=$4;");
+        }
+    }
+    new_src = join(ss, ";");
     src = new_src;
-    // auto tokens = token_split(new_src);
 }
 
 }

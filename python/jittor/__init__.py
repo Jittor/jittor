@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.3.13'
+__version__ = '1.3.6.10'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -29,6 +29,7 @@ with lock.lock_scope():
     from .compile_extern import cudnn, curand, cublas, cufft
     from .init_cupy import numpy2cupy
 
+from typing import List, Tuple
 import contextlib
 import numpy as np
 from collections import OrderedDict
@@ -87,21 +88,8 @@ def safeunpickle(path):
         download_url_to_local(path, base, compiler.ck_path, None)
         path = fname
     if path.endswith(".pth"):
-        try:
-            dirty_fix_pytorch_runtime_error()
-            import torch
-        except:
-            raise RuntimeError("pytorch need to be installed when load pth format.")
-        model_dict = torch.load(path, map_location='cpu')
-        try:
-            for k, v in model_dict.items():
-                try:
-                    if not isinstance(v, np.ndarray) and hasattr(v, "cpu"):
-                        model_dict[k] = v.cpu().detach().numpy()
-                except:
-                    pass
-        except:
-            pass
+        from jittor_utils.load_pytorch import load_pytorch
+        model_dict = load_pytorch(path)
         return model_dict
     with open(path, "rb") as f:
         s = f.read()
@@ -133,7 +121,13 @@ class flag_scope(_call_no_record_scope):
         flags_bk = self.flags_bk = {}
         try:
             for k,v in self.jt_flags.items():
-                flags_bk[k] = getattr(flags, k)
+                origin = getattr(flags, k)
+                flags_bk[k] = origin
+                # merge dict attrs
+                if isinstance(origin, dict):
+                    for ok, ov in origin.items():
+                        if ok not in v:
+                            v[ok] = ov
                 setattr(flags, k, v)
         except:
             self.__exit__()
@@ -180,7 +174,7 @@ single_log_capture = None
 class log_capture_scope(_call_no_record_scope):
     """log capture scope
 
-    example::
+    Example::
 
         with jt.log_capture_scope(log_v=0) as logs:
             LOG.v("...")
@@ -246,6 +240,52 @@ class profile_scope(_call_no_record_scope):
         self.report.extend(profiler.report())
         self.fs.__exit__(*exc)
 
+
+class profile_mark(_call_no_record_scope):
+    def __init__(self, mark_name: str):
+        ''' profiler mark is used for profiling part of code,
+
+        Example::
+
+        a = jt.rand(1000,1000)
+        b = jt.rand(1000,1000)
+        jt.sync_all()
+        results = []
+        with jt.profile_scope() as rep:
+            results.append(jt.matmul(a, b))
+            with jt.profile_mark("mark1"):
+                results.append(jt.matmul(a, b))
+                with jt.profile_mark("mark2"):
+                    results.append(jt.matmul(a, b))
+            with jt.profile_mark("mark3"):
+                results.append(jt.matmul(a, b))
+            results.append(jt.matmul(a, b))
+
+        Output::
+
+        Total time:    46.8ms
+        Total Memory Access:    57.2MB
+        [Mark mark3] time:       9ms
+        [Mark mark2] time:    8.28ms
+        [Mark mark1] time:    17.7ms
+
+        '''
+        self.mark_name = mark_name
+    def __enter__(self):
+        self.options = flags.compile_options
+        new_options = flags.compile_options
+        prev_marks = "_marks:"
+        for x in self.options:
+            if x.startswith(prev_marks):
+                prev_marks = x
+                del new_options[x]
+        new_marks = prev_marks + self.mark_name + ','
+        new_options[new_marks] = 1
+        flags.compile_options = new_options
+        
+    def __exit__(self, *exc):
+        flags.compile_options = self.options
+
 class __single_process_scope:
     def __init__(self, rank=0):
         self.rank = rank
@@ -303,6 +343,24 @@ cast = unary
 Var.cast = Var.cast
 
 def array(data, dtype=None):
+    ''' Constructs a jittor Var from a number, List, numpy array or another jittor Var.
+
+    :param data: The data to initialize the Var.
+    :type data: number, list, numpy.ndarray, or jittor.Var.
+    :param dtype: The data type of the Var. If None, the data type will be inferred from the data.
+    :type dtype: str, jittor type-cast function, or None.
+
+    ----------------
+
+    Example::
+
+        >>> jt.array(1)
+        jt.Var([1], dtype=int32)
+        >>> jt.array([0, 2.71, 3.14]) 
+        jt.Var([0.   2.71 3.14], dtype=float32)
+        >>> jt.array(np.arange(4, dtype=np.uint8))  
+        jt.Var([0 1 2 3], dtype=uint8)
+    '''
     if isinstance(data, core.Var):
         if dtype is None:
             ret = data.clone()
@@ -329,6 +387,23 @@ def array(data, dtype=None):
     return ret
 
 def random(shape, dtype="float32", type="uniform"):
+    ''' Constructs a random jittor Var.
+
+    :param shape: The shape of the random Var.
+    :type shape: list or tuple.
+    :param dtype: The data type of the random Var.
+    :type dtype: str, jittor type-cast function, or None.
+    :param type: The random distribution, can be 'uniform' or 'normal'.
+    :type type: str
+
+    ----------------
+
+    Example::
+
+        >>> jt.random((2, 3))
+        jt.Var([[0.96788853 0.28334728 0.30482838]
+                [0.46107793 0.62798643 0.03457401]], dtype=float32)
+    '''
     # TODO: move those code to core
     if dtype == "float16":
         # TODO: make curand support fp16
@@ -368,29 +443,95 @@ def liveness_info():
         "lived_ops": core.number_of_lived_ops(),
     }
 
-def ones(shape, dtype="float32"):
-    if not isinstance(shape, (NanoVector, Sequence)):
-        shape = (shape,)
+def ones(*shape, dtype="float32"):
+    ''' Constructs a jittor Var with all elements set to 1.
+    
+    :param shape: The shape of the output Var.
+    :type shape: list or tuple.
+    :param dtype: The data type of the output Var.
+    :type dtype: str, jittor type-cast function, or None.
+    :return: The output Var.
+    :rtype: jittor.Var
+    '''
+    if isinstance(shape, tuple) and isinstance(shape[-1], (str, NanoString)):
+        dtype = shape[-1]
+        shape = shape[:-1]
+    if isinstance(shape, tuple) and isinstance(shape[0], (Sequence, NanoVector)):
+        shape = shape[0]
     return unary(1, dtype).broadcast(shape)
 
 def ones_like(x):
+    ''' Constructs a jittor Var with all elements set to 1 and shape same with x.
+    
+    :param x: The reference jittor Var.
+    :type x: jt.Var
+    :return: The output Var.
+    :rtype: jittor.Var
+    '''
     return ones(x.shape,x.dtype)
 
-def zeros(shape, dtype="float32"):
-    if not isinstance(shape, (NanoVector, Sequence)):
-        shape = (shape,)
+def zeros(*shape, dtype="float32"):
+    ''' Constructs a jittor Var with all elements set to 0. 
+    
+    :param shape: The shape of the output Var.
+    :type shape: list or tuple.
+    :param dtype: The data type of the output Var.
+    :type dtype: str, jittor type-cast function, or None.
+    :return: The output Var.
+    :rtype: jittor.Var
+    '''
+    if isinstance(shape, tuple) and isinstance(shape[-1], (str, NanoString)):
+        dtype = shape[-1]
+        shape = shape[:-1]
+    if isinstance(shape, tuple) and isinstance(shape[0], (Sequence, NanoVector)):
+        shape = shape[0]
     return unary(0, dtype).broadcast(shape)
 
 def full(shape,val,dtype="float32"):
+    ''' Constructs a jittor Var with all elements set to val.
+    
+    :param shape: The shape of the output Var.
+    :type shape: list or tuple.
+    :param val: The value of the output Var.
+    :type val: number.
+    :param dtype: The data type of the output Var. Defaults to jt.float32.
+    :type dtype: str, jittor type-cast function, or None.
+    :return: The output Var.
+    :rtype: jittor.Var    
+    '''
     if not isinstance(shape, (NanoVector, Sequence)):
         shape = (shape,)
     return unary(val, dtype).broadcast(shape)
 
-def full_like(x,val):
-    return full(x.shape,val,x.dtype)
+def full_like(x, val, dtype=None) -> Var:
+    ''' Constructs a jittor Var with all elements set to val and shape same with x. 
+    
+    :param x: The reference jittor Var.
+    :type x: jt.Var.
+    :param val: The value of the output Var.
+    :type val: number.
+    :param dtype: if None, the dtype of the output is the same as x. 
+        Otherwise, use the specified dtype. Defaults to None.
+    :type dtype: str, optional
+    :return: The output Var.
+    :rtype: jittor.Var
+    '''
+    if dtype is None: dtype = x.dtype
+    return full(x.shape, val, dtype)
 
-def zeros_like(x):
-    return zeros(x.shape,x.dtype)
+def zeros_like(x, dtype=None) -> Var:
+    ''' Constructs a jittor Var with all elements set to 0 and shape same with x. 
+    
+    :param x: The reference jittor Var.
+    :type x: jt.Var
+    :param dtype: if None, the dtype of the output is the same as x. 
+        Otherwise, use the specified dtype. Defaults to None.
+    :type dtype: str, optional
+    :return: The output Var.
+    :rtype: jittor.Var
+    '''
+    if dtype is None: dtype = x.dtype
+    return zeros(x.shape, dtype)
 
 flags = core.Flags()
 
@@ -408,7 +549,7 @@ def var(x, dim=None, dims=None, unbiased=False, keepdims=False):
     :param keepdim: if True, the output shape is same as input shape except for the dimension in dim.
     :type keepdim: bool.
 
-    Example:
+    Example::
 
         >>> a = jt.rand(3)
         >>> a
@@ -456,7 +597,8 @@ def std(x):
     return out
 Var.std = std
 
-def norm(x, p=2, dim=-1, keepdim=False, eps=1e-30):
+def norm(x, p=2, dim=-1, keepdims=False, eps=1e-30, keepdim=False):
+    keepdim = keepdim or keepdims
     assert p==1 or p==2
     if p==1:
         return x.abs().sum(dim, keepdim)
@@ -533,6 +675,64 @@ def clamp(x, min_v=None, max_v=None):
 
 Var.clamp = clamp
 
+def clamp_(x, min_v=None, max_v=None):
+    ''' In-place version of clamp().
+
+    Args:
+        x (Jittor Var):
+            the input var
+        min_v ( Number or Var, optional) - lower-bound of clamp range
+        max_v ( Number or Var, optional) - upper-bound of clamp range
+    
+    Return:
+        x itself after clamp.
+    
+    '''
+    return x.assign(x.clamp(min_v=min_v, max_v=max_v))
+Var.clamp_ = clamp_
+
+def erfinv_(x):
+    ''' In-place version of erfinv().
+    '''
+    return x.assign(x.erfinv())
+Var.erfinv_ = erfinv_
+
+def erf_(x):
+    ''' In-place version of erf().
+    '''
+    return x.assign(x.erf())
+Var.erf_ = erf_
+
+def abs_(x):
+    ''' In-place version of abs().
+    '''
+    return x.assign(x.abs())
+Var.abs_ = abs_
+
+def sigmoid_(x):
+    ''' In-place version of sigmoid().
+    '''
+    return x.assign(x.sigmoid())
+Var.sigmoid_ = sigmoid_
+
+def sqrt_(x):
+    ''' In-place version of sqrt().
+    '''
+    return x.assign(x.sqrt())
+Var.sqrt_ = sqrt_
+
+def add_(x, y):
+    ''' In-place version of add().
+    '''
+    return x.assign(x.add(y))
+Var.add_ = add_
+
+def multiply_(x, y):
+    ''' In-place version of multiply().
+    '''
+    return x.assign(x.multiply(y))
+Var.multiply_ = multiply_
+
 def type_as(a, b):
     return a.unary(op=b.dtype)
 Var.type_as = type_as
@@ -563,11 +763,51 @@ def pow(x, y):
     return core.ops.pow(x, y)
 Var.pow = Var.__pow__ = pow
 
-def argmax(x, dim, keepdims:bool=False):
+def argmax(x: Var, dim: int, keepdims:bool=False):
+    ''' Returns the indices and values of the maximum elements along the specified dimension.
+
+    :param x: the input Var.
+    :type x: jt.Var, numpy array, or python sequence.
+    :param dim: the dimension to reduce.
+    :type dim: int.
+    :param keepdims: whether the output Var has dim retained or not. Defaults to False
+    :type keepdims: bool, optional
+    
+    Example::
+
+        >>> a = jt.randn((2, 4))
+        >>> a
+        jt.Var([[-0.33272865 -0.4951588   1.4128606   0.13734372]
+                [-1.633469    0.19593953 -0.7803732  -0.5260756 ]], dtype=float32)
+        >>> a.argmax(dim=0)
+        (jt.Var([0 1 0 0], dtype=int32), jt.Var([-0.33272865  0.19593953  1.4128606   0.13734372], dtype=float32))
+        >>> a.argmax(dim=1)
+        (jt.Var([2 1], dtype=int32), jt.Var([1.4128606  0.19593953], dtype=float32))
+    '''
     return jt.arg_reduce(x, "max", dim, keepdims)
 Var.argmax = argmax
 
-def argmin(x, dim, keepdims:bool=False):
+def argmin(x, dim: int, keepdims:bool=False):
+    ''' Returns the indices and values of the minimum elements along the specified dimension.
+
+    :param x: the input Var.
+    :type x: jt.Var, numpy array, or python sequence.
+    :param dim: the dimension to reduce.
+    :type dim: int.
+    :param keepdims: whether the output Var has dim retained or not. Defaults to False
+    :type keepdims: bool, optional
+
+    Example::
+    
+        >>> a = jt.randn((2, 4))
+        >>> a
+        jt.Var([[-0.33272865 -0.4951588   1.4128606   0.13734372]
+                [-1.633469    0.19593953 -0.7803732  -0.5260756 ]], dtype=float32)
+        >>> a.argmin(dim=0)
+        (jt.Var([1 0 1 1], dtype=int32), jt.Var([-1.633469  -0.4951588 -0.7803732 -0.5260756], dtype=float32))
+        >>> a.argmin(dim=1)
+        (jt.Var([1 0], dtype=int32), jt.Var([-0.4951588 -1.633469 ], dtype=float32))
+    '''
     return jt.arg_reduce(x, "min", dim, keepdims)
 Var.argmin = argmin
 
@@ -583,7 +823,7 @@ def randn(*size, dtype="float32", requires_grad=True) -> Var:
     :param requires_grad: whether to enable gradient back-propgation, defaults to True.
     :type requires_grad: bool, optional
 
-    Example:
+    Example::
 
         >>> jt.randn(3)
         jt.Var([-1.019889   -0.30377278 -1.4948598 ], dtype=float32)
@@ -608,7 +848,7 @@ def rand(*size, dtype="float32", requires_grad=True) -> Var:
     :param requires_grad: whether to enable gradient back-propgation. defaults to True.
     :type requires_grad: bool, optional
 
-    Example:
+    Example::
 
         >>> jt.rand(3)
         jt.Var([0.31005102 0.02765604 0.8150749 ], dtype=float32)
@@ -631,7 +871,7 @@ def rand_like(x, dtype=None) -> Var:
         Otherwise, use the specified dtype. Defaults to None.
     :type dtype: str, optional
     
-    Example:
+    Example::
         
         >>> x = jt.zeros((2, 3))
         >>> jt.rand_like(x)
@@ -639,7 +879,7 @@ def rand_like(x, dtype=None) -> Var:
          [0.58626485 0.35345772 0.5638483 ]], dtype=float32)
     ''' 
     if dtype is None: dtype = x.dtype
-    return jt.random(x.shape, x.dtype)
+    return jt.random(x.shape, dtype)
 
 def randn_like(x, dtype=None) -> Var:
     ''' samples random values from standard normal distribution with the same shape as x.
@@ -651,7 +891,7 @@ def randn_like(x, dtype=None) -> Var:
         Otherwise, use the specified dtype. Defaults to None.
     :type dtype: str, optional
 
-    Example:
+    Example::
         
         >>> x = jt.zeros((2, 3))
         >>> jt.randn_like(x)
@@ -676,16 +916,16 @@ def randint(low, high=None, shape=(1,), dtype="int32") -> Var:
     :param dtype: data type of the output, defaults to "int32".
     :type dtype: str, optional
 
-    Example:
+    Example::
         
         >>> jt.randint(3, shape=(3, 3))
         jt.Var([[2 0 2]
-         [2 1 2]
-         [2 0 1]], dtype=int32)
+                [2 1 2]
+                [2 0 1]], dtype=int32)
         >>> jt.randint(1, 3, shape=(3, 3))
         jt.Var([[2 2 2]
-         [1 1 2]
-         [1 1 1]], dtype=int32)
+                [1 1 2]
+                [1 1 1]], dtype=int32)
     '''
     if high is None: low, high = 0, low
     v = (jt.random(shape) * (high - low) + low).clamp(low, high-0.5)
@@ -704,15 +944,15 @@ def randint_like(x, low, high=None) -> Var:
     :param high: One above the highest integer to be drawn from the distribution.
     :type high: int
 
-    Example:
+    Example::
 
         >>> x = jt.zeros((2, 3))
         >>> jt.randint_like(x, 10)
         jt.Var([[9. 3. 4.]
-         [4. 8. 5.]], dtype=float32)
+                [4. 8. 5.]], dtype=float32)
         >>> jt.randint_like(x, 10, 20)
         jt.Var([[17. 11. 18.]
-        [14. 17. 15.]], dtype=float32)
+                [14. 17. 15.]], dtype=float32)
      ''' 
 
     return randint(low, high, x.shape, x.dtype)
@@ -735,15 +975,15 @@ def normal(mean, std, size=None, dtype="float32") -> Var:
     :param dtype: data type of the output, defaults to "float32".
     :type dtype: str, optional
 
-    Example:
+    Example::
     
         >>> jt.normal(5, 3, size=(2,3))
         jt.Var([[ 8.070848   7.654219  10.252696 ]
-         [ 6.383718   7.8817277  3.0786133]], dtype=float32)
+                [ 6.383718   7.8817277  3.0786133]], dtype=float32)
         >>> mean = jt.randint(low=0, high=10, shape=(10,))
         >>> jt.normal(mean, 0.1)
         jt.Var([1.9524184 1.0749301 7.9864206 5.9407325 8.1596155 4.824019  7.955083
-         8.972998  6.0674286 8.88026  ], dtype=float32)
+                8.972998  6.0674286 8.88026  ], dtype=float32)
     '''
     if size is None:
         if isinstance(mean, Var) and isinstance(std, Var):
@@ -859,7 +1099,12 @@ class Module:
     def __init__(self, *args, **kw):
         pass
     def execute(self, *args, **kw):
+        ''' Executes the module computation. 
+        
+        Raises NotImplementedError if the subclass does not override the method.
+        '''
         raise NotImplementedError("Please implement 'execute' method of "+str(type(self)))
+
     def __call__(self, *args, **kw):
         return self.execute(*args, **kw)
     def __repr__(self):
@@ -870,6 +1115,7 @@ class Module:
         pass
 
     def dfs(self, parents, k, callback, callback_leave=None):
+        ''' An utility function to traverse the module. '''
         n_children = 0
         for v in self.__dict__.values():
             if isinstance(v, Module):
@@ -902,7 +1148,25 @@ class Module:
         self.dfs([], None, callback, callback_leave)
         return "\n".join(ss)
 
-    def parameters(self):
+    def parameters(self) -> List:
+        ''' Returns a list of module parameters.
+
+        ----------------
+
+        Example::
+        
+            >>> net = nn.Sequential(nn.Linear(2, 10), nn.ReLU(), nn.Linear(10, 2))
+            >>> for p in net.parameters():
+            ...     print(p.name)
+            ... 
+            >>> for p in net.parameters():
+            ...     print(p.name())
+            ... 
+            0.weight
+            0.bias
+            2.weight
+            2.bias
+        '''
         ps = []
         stack = []
         def callback(parents, k, v, n):
@@ -982,14 +1246,47 @@ class Module:
                     ps[k] = torch.Tensor(v.numpy())
         return ps
 
-    def named_parameters(self):
+    def named_parameters(self) -> List[Tuple[str, Var]]:
+        ''' Returns a list of module parameters and their names.
+
+        ----------------
+
+        Example::
+
+            >>> net = nn.Linear(2, 5)
+            >>> net.named_parameters() 
+            [('weight', jt.Var([[ 0.5964666  -0.3175258 ]
+            [ 0.41493994 -0.66982657]
+            [-0.32677156  0.49614117]
+            [-0.24102807 -0.08656466]
+            [ 0.15868133 -0.12468725]], dtype=float32)), 
+            ('bias', jt.Var([-0.38282675  0.36271113 -0.7063226   0.02899247  0.52210844], dtype=float32))]
+
+        '''
         state_dict = self.state_dict()
         return list(state_dict.items())
 
-    def load_state_dict(self, params):
+    def load_state_dict(self, params) -> None:
+        '''
+        Loads the module's parameters from a dictionary.
+        '''
         self.load_parameters(params)
 
-    def modules(self):
+    def modules(self) -> List:
+        ''' Returns a list of sub-modules in the module recursively.
+
+        ----------------
+
+        Example::
+
+            >>> net = nn.Sequential(nn.Linear(2, 10), nn.ReLU(), nn.Linear(10, 2))
+            >>> net.modules()
+            [Sequential(
+                0: Linear(2, 10, float32[10,], None)
+                1: relu()
+                2: Linear(10, 2, float32[2,], None)
+            ), Linear(2, 10, float32[10,], None), relu(), Linear(10, 2, float32[2,], None)]
+        '''
         ms = []
         def callback(parents, k, v, n):
             if isinstance(v, Module):
@@ -998,6 +1295,20 @@ class Module:
         return _uniq(ms)
 
     def named_modules(self):
+        ''' Returns a list of sub-modules and their names recursively.
+        
+        ----------------
+
+        Example::
+
+            >>> net = nn.Sequential(nn.Linear(2, 10), nn.ReLU(), nn.Linear(10, 2))
+            >>> net.named_modules() 
+            [('', Sequential(
+                0: Linear(2, 10, float32[10,], None)
+                1: relu()
+                2: Linear(10, 2, float32[2,], None)
+            )), ('0', Linear(2, 10, float32[10,], None)), ('1', relu()), ('2', Linear(10, 2, float32[2,], None))]
+        '''
         ms = []
         stack = []
         def callback(parents, k, v, n):
@@ -1019,6 +1330,7 @@ class Module:
         return { k:v for k,v in self.__dict__.items() if isinstance(v, Var) }
 
     def requires_grad_(self, requires_grad=True):
+        ''' Sets requires_grad for all parameters and sub-modules. '''
         self._requires_grad = requires_grad
         self._place_hooker()
         return self
@@ -1061,18 +1373,37 @@ class Module:
             cls.__hooked_call__, cls.__call__
 
     def register_forward_hook(self, func):
+        ''' Register a forward function hook that will be called after Module.execute. 
+        
+        The hook function will be called with the following arguments::
+
+            hook(module, input_args, output)
+        or::
+            hook(module, input_args, output, input_kwargs)
+        '''
         self.__fhook__ = func
         self._place_hooker()
     
     def remove_forward_hook(self):
+        ''' Removes the current forward hook. '''
         if hasattr(self,"__fhook__"):
             delattr(self,"__fhook__")
 
     def register_pre_forward_hook(self, func):
+        ''' Register a forward function hook that will be called before Module.execute. 
+        
+        The hook function will be called with the following arguments::
+
+            hook(module, input_args)
+        or::
+            hook(module, input_args, input_kwargs)
+
+        '''
         self.__fhook2__ = func
         self._place_hooker()
 
     def remove_pre_forward_hook(self):
+        ''' Removes the current pre-forward hook. '''
         if hasattr(self,"__fhook2__"):
             delattr(self,"__fhook2__")
 
@@ -1094,6 +1425,7 @@ class Module:
 
     def register_backward_hook(self, func):
         ''' hook both input and output on backpropergation of this module.
+
 Arguments of hook are defined as::
 
     hook(module, grad_input:tuple(jt.Var), grad_output:tuple(jt.Var)) -> tuple(jt.Var) or None
@@ -1110,10 +1442,13 @@ Arguments of hook are defined as::
         self.register_output_backward_hook(bohook)
 
     def remove_backward_hook(self):
+        ''' Removes the backward input and output hooks.
+        '''
         self.remove_input_backward_hook()
         self.remove_output_backward_hook()
 
-    def children(self):
+    def children(self) -> List:
+        ''' Returns an List of the children modules. '''
         cd = []
         def callback(parents, k, v, n):
             if len(parents) == 1 and isinstance(v, Module):
@@ -1135,6 +1470,7 @@ Arguments of hook are defined as::
         return ", ".join(ss)
 
     def apply(self, func):
+        ''' Applies a function to all sub-modules recursively. '''
         for m in self.modules():
             func(m)
 
@@ -1185,6 +1521,7 @@ Arguments of hook are defined as::
                 else:
                     n_failed += 1
                     LOG.e(f'load parameter {key} failed: expect the shape of {key} to be {v.shape}, but got {param.shape}')
+        jt.sync_all()
         if n_failed:
             LOG.w(f"load total {len(params)} params, {n_failed} failed")
 
@@ -1194,7 +1531,7 @@ Arguments of hook are defined as::
         :param path: path to save.
         :type path: str
 
-        Example:
+        Example::
 
             >>> class Net(nn.Module):
             >>> ...
@@ -1217,7 +1554,7 @@ Arguments of hook are defined as::
         :param path: path to load.
         :type path: str
         
-        Example:
+        Example::
 
             >>> class Net(nn.Module):
             >>> ...
@@ -1244,6 +1581,7 @@ Arguments of hook are defined as::
         self.load_parameters(load(path))
 
     def eval(self):
+        ''' Sets the module in evaluation mode. '''
         def callback(parents, k, v, n):
             if isinstance(v, Module):
                 v.is_train = False
@@ -1258,6 +1596,7 @@ Arguments of hook are defined as::
             p.stop_grad()
 
     def train(self):
+        ''' Sets the module in training mode. '''
         def callback(parents, k, v, n):
             if isinstance(v, Module):
                 v.is_train = True
@@ -1270,6 +1609,7 @@ Arguments of hook are defined as::
                     p.start_grad()
     
     def is_training(self) -> bool:
+        ''' Returns whether the module is in training mode.'''
         if not hasattr(self, "is_train"):
             self.is_train = True
         return self.is_train
@@ -1443,14 +1783,16 @@ def grad_hooker(args, hook):
 
 def register_hook(v, hook):
     """ register hook of any jittor Variables, if hook return not None,
-the gradient of this variable will be alter, Example::
+the gradient of this variable will be alter, 
 
-    x = jt.array([0.0, 0.0])
-    y = x * [1,2]
-    y.register_hook(lambda g: g*2)
-    dx = jt.grad(y, x)
-    print(dx)
-    # will be [2, 4]
+    Example::
+
+        x = jt.array([0.0, 0.0])
+        y = x * [1,2]
+        y.register_hook(lambda g: g*2)
+        dx = jt.grad(y, x)
+        print(dx)
+        # will be [2, 4]
 
     """
     def _hook(grads):
@@ -1526,12 +1868,15 @@ def jittor_exit():
     elif hooks.exception is not None:
         pass
     else:
-        core.sync_all(True)
+        pass
+        # core.sync_all(True)
     core.cleanup()
 atexit.register(jittor_exit)
 
 def vtos(v):
-    return f"jt.Var({v.data}, dtype={v.dtype})"
+    data_str = f"jt.Var({v.data}, dtype={v.dtype})"
+    data_str = data_str.replace("\n", "\n       ")
+    return data_str
 
 Var.__str__ = vtos
 Var.__repr__ = vtos
@@ -1602,3 +1947,9 @@ from . import sparse
 from . import optim
 from . import dataset
 from . import init
+
+import jittor_utils
+
+for backend in jittor_utils.backends:
+    if hasattr(backend, "post_process"):
+        backend.post_process()

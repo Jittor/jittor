@@ -132,6 +132,7 @@ void SetitemOp::infer_shape() {
 }
 
 void SetitemOp::grads(Var** dout, VarPtr* dins) {
+    if (!dout[0]) return;
     auto outs = make_getitem2(dout[0], VarSlices(vs, true), 0);
     dins[0] = move(outs[1]);
     dins[1] = move(outs[0]);
@@ -200,32 +201,32 @@ void SetitemOp::jit_prepare(JK& jk) {
             break;
         }
     auto data = input(1);
-    jk << _CS("[OP:") << op
-        << _CS("][Td:") << data->dtype()
-        << _CS("][BMASK=") << JK::hex(bmask);
+    jk << "«OP:" << op
+        << "«Td:" << data->dtype()
+        << "«BMASK=" << JK::hex(bmask);
     // TODO: merge code
     auto in = inputs().front();
     int idim = i_to_vs.size();
-    jk << _CS("][Ti:") << in->dtype();
-    jk << _CS("][IDIM=") << JK::hex1(i_to_vs.size());
-    jk << _CS("][ODIM=") << JK::hex1(o_shape.size());
+    jk << "«Ti:" << in->dtype();
+    jk << "«IDIM=" << JK::hex1(i_to_vs.size());
+    jk << "«ODIM=" << JK::hex1(o_shape.size());
     if (first_oid_of_var>=0) {
-        jk << _CS("][FOV=") << JK::hex1(first_oid_of_var);
-        jk << _CS("][VD=") << JK::hex1(var_dim);
+        jk << "«FOV=" << JK::hex1(first_oid_of_var);
+        jk << "«VD=" << JK::hex1(var_dim);
     }
     for (int i=0; i<idim; i++) {
         auto iv = i_to_vs[i];
         auto io = i_to_o[i];
-        jk << _CS("][IV") << JK::hex1(i) << ':' << JK::shex1(iv);
-        jk << _CS("][IO") << JK::hex1(i) << ':' << JK::shex1(io);
+        jk << "«IV" << JK::hex1(i) << ':' << JK::shex1(iv);
+        jk << "«IO" << JK::hex1(i) << ':' << JK::shex1(io);
         auto& v = vs.slices[iv];
         if (iv>=0 && io==-1) {
             if (v.is_int()) {
-                jk << _CS("][VS") << JK::hex1(i) << _CS(":-1");
+                jk << "«VS" << JK::hex1(i) << ":-1";
             } else
             if (v.is_str()) {
-                jk << _CS("][VS") << JK::hex1(i) << _CS(":-5");
-                jk << _CS("][VSS") << JK::hex1(i) << _CS(":") << v.get_str();
+                jk << "«VS" << JK::hex1(i) << ":-5";
+                jk << "«VSS" << JK::hex1(i) << ":" << v.get_str();
             } else {
                 ASSERT(v.is_var());
                 auto var = v.var;
@@ -237,13 +238,13 @@ void SetitemOp::jit_prepare(JK& jk) {
                     if (vshape[j] == o_shape[k])
                         vsmask |= 1<<(j+var_dim-vdim);
                 }
-                jk << _CS("][VS") << JK::hex1(i) << '=' << JK::hex(vsmask);
-                jk << _CS("][VST") << JK::hex1(i) << ':' << var->dtype();
+                jk << "«VS" << JK::hex1(i) << '=' << JK::hex(vsmask);
+                jk << "«VST" << JK::hex1(i) << ':' << var->dtype();
             }
         } else
         if (iv>=0 && io>=0) {
             ASSERT(v.is_slice());
-            jk << _CS("][VS") << JK::hex1(i) << ':';
+            jk << "«VS" << JK::hex1(i) << ':';
             if (std::abs(v.slice.step) <= 1)
                 jk << JK::shex1(v.slice.step);
             else
@@ -257,11 +258,10 @@ void SetitemOp::jit_prepare(JK& jk) {
         int tdims[6];
         cuda_loop_schedule(o_shape, masks, tdims);
         for (int i=0; i<no; i++) {
-            jk << _CS("][LO") << JK::hex1(i) << '=' << JK::hex(masks[i]);
+            jk << "«LO" << JK::hex1(i) << '=' << JK::hex(masks[i]);
         }
     }
     #endif
-    jk << ']';
 }
 
 void SetitemOp::compile_optimize(string& src) {

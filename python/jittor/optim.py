@@ -83,31 +83,80 @@ class Optimizer(object):
     
     @property
     def defaults(self):
-        exclude = set(("defaults", "param_groups", "n_step", "pre_step", "step"))
-        return { k:v for k, v in self.__dict__.items()
-            if k[0] != '_' and k not in exclude and not callable(v) }
+        import copy
+        exclude = set(("defaults", "pre_step", "step"))
+        return copy.deepcopy({ k:v for k, v in self.__dict__.items()
+            if k[0] != '_' and k not in exclude and not callable(v) })
 
     def state_dict(self):
         state = {"defaults": self.defaults}
         return state
 
     def load_state_dict(self, state):
-        for k,v in state["defaults"].items():
-            setattr(self, k, v)
+
+        def dfs(x):
+            if isinstance(x, list):
+                for i in range(len(x)):
+                    x[i] = dfs(x[i])
+            elif isinstance(x, dict):
+                for k in x:
+                    x[k] = dfs(x[k])
+            elif isinstance(x, np.ndarray):
+                return jt.array(x).stop_grad()
+            elif isinstance(x, jt.Var):
+                return x.stop_grad()
+            return x
+            
+        exclude = set(("param_groups",))
+        for k, v in state["defaults"].items():
+            if k not in exclude:
+                setattr(self, k, dfs(v))
+        param_groups = dfs(state["defaults"].get('param_groups', None))
+        if param_groups is not None:
+            exclude = set(("params",))
+            for i in range(len(param_groups)):
+                for k, v in param_groups[i].items():
+                    if k not in exclude:
+                        self.param_groups[i][k] = v
+
+        
 
     def zero_grad(self):
         self.__zero_grad = True
 
-    def pre_step(self, loss, retain_graph=False):
-        """ something should be done before step, such as calc gradients, mpi sync, and so on.
+    def backward(self, loss, retain_graph=False):
+        '''
+        optimize.backward(loss) is used for accumulate multiple step,
+        it can be used as following:
 
-        Example::
+        Origin source code ::
 
-            class MyOptimizer(Optimizer):
-                def step(self, loss):
-                    self.post_step(loss)
-                    ...
-        """
+        n_iter = 10000
+        batch_size = 100
+        ...
+        for i in range(n_iter):
+            ...
+            loss = calc_loss()
+            optimizer.step(loss)
+
+        Accumulation version ::
+
+        n_iter = 10000
+        batch_size = 100
+        accumulation_steps = 10
+        n_iter *= accumulation_steps
+        batch_size //= accumulation_steps
+        ...
+        for i in range(n_iter):
+            ...
+            loss = calc_loss()
+            # if loss is a mean across batch, we need to divide accumulation_steps
+            optimizer.backward(loss / accumulation_steps)
+            if (i+1) % accumulation_steps == 0:
+                optimizer.step()
+
+
+        '''
         # clean prev grads
         params = []
         params_has_grad = []
@@ -116,6 +165,9 @@ class Optimizer(object):
                 params.append(p)
                 if not p.is_stop_grad():
                     params_has_grad.append(p)
+
+        # sync prev params
+        jt.sync(params_has_grad)
 
         # get gradient
         grads = jt.grad(loss, params_has_grad, retain_graph)
@@ -153,50 +205,44 @@ class Optimizer(object):
                     pid += 1
         self.__zero_grad = False
         
-    def backward(self, loss, retain_graph=False):
-        '''
-        optimize.backward(loss) is used for accumulate multiple step,
-        it can be used as following:
+    def pre_step(self, loss, retain_graph=False):
+        """ something should be done before step, such as calc gradients, mpi sync, and so on.
 
-        Origin source code ::
+        Example::
 
-        n_iter = 10000
-        batch_size = 100
-        ...
-        for i in range(n_iter):
-            ...
-            loss = calc_loss()
-            optimizer.step(loss)
+            class MyOptimizer(Optimizer):
+                def step(self, loss):
+                    self.pre_step(loss)
+                    ...
+                    self.post_step()
+        """
+        if loss is not None:
+            self.backward(loss, retain_graph)
+        jt.flags.node_order = 1
 
-        Accumulation version ::
+    def post_step(self):
+        """ something should be done before step, such as zero grad, and so on.
 
-        n_iter = 10000
-        batch_size = 100
-        accumulation_steps = 10
-        n_iter *= accumulation_steps
-        batch_size //= accumulation_steps
-        ...
-        for i in range(n_iter):
-            ...
-            loss = calc_loss()
-            # if loss is a mean across batch, we need to divide accumulation_steps
-            optimizer.backward(loss / accumulation_steps)
-            if (i+1) % accumulation_steps == 0:
-                optimizer.step()
+        Example::
 
+            class MyOptimizer(Optimizer):
+                def step(self, loss):
+                    self.pre_step(loss)
+                    ...
+                    self.post_step()
+        """
+        jt.flags.node_order = 0
+        self.zero_grad()
 
-        '''
-        self.pre_step(loss, retain_graph)
 
     def step(self, loss=None, retain_graph=False):
-        if loss is not None:
-            self.pre_step(loss, retain_graph)
+        self.pre_step(loss, retain_graph)
         for pg in self.param_groups:
             lr = pg.get("lr", self.lr)
             for p, g in zip(pg["params"], pg["grads"]):
                 if p.is_stop_grad(): continue
                 p.update(p - g * lr)
-        self.zero_grad()
+        self.post_step()
 
     def _build_grad_map(self):
         _grad_map = {}
@@ -255,9 +301,9 @@ class SGD(Optimizer):
             values.append(jt.zeros(p.shape, p.dtype).stop_grad())
         self.param_groups.append(group)
 
-    def step(self, loss=None):
-        if loss is not None:
-            self.pre_step(loss)
+    def step(self, loss=None, retain_graph=False):
+        self.pre_step(loss, retain_graph=False)
+        jt.flags.node_order = 1
         for pg in self.param_groups:
             # get arguments from each param_groups
             lr = pg.get("lr", self.lr)
@@ -275,7 +321,7 @@ class SGD(Optimizer):
                     p.update(p - (dp + momentum * v) * lr)
                 else:
                     p.update(p - v * lr)
-        self.zero_grad()
+        self.post_step()
 
 class RMSprop(Optimizer):
     """ RMSprop Optimizer.
@@ -306,9 +352,8 @@ class RMSprop(Optimizer):
             values.append(jt.zeros(p.shape, p.dtype).stop_grad())
         self.param_groups.append(group)
 
-    def step(self, loss=None):
-        if loss is not None:
-            self.pre_step(loss)
+    def step(self, loss=None, retain_graph=False):
+        self.pre_step(loss, retain_graph)
         for pg in self.param_groups:
             # get arguments from each param_groups
             lr = pg.get("lr", self.lr)
@@ -318,7 +363,7 @@ class RMSprop(Optimizer):
                 if p.is_stop_grad(): continue
                 v.update(alpha * v + (1-alpha) * g * g)
                 p.update(p - lr * g / (jt.sqrt(v) + eps))
-        self.zero_grad()
+        self.post_step()
 
 class Adam(Optimizer):
     """ Adam Optimizer.
@@ -351,10 +396,10 @@ class Adam(Optimizer):
             m.append(jt.zeros(p.shape, p.dtype).stop_grad())
         self.param_groups.append(group)
 
-    def step(self, loss=None):
-        if loss is not None:
-            self.pre_step(loss)
+    def step(self, loss=None, retain_graph=False):
+        self.pre_step(loss, retain_graph)
         n = float(self.n_step)
+        jt.flags.node_order = 1
         for pg in self.param_groups:
             # get arguments from each param_groups
             lr = pg.get("lr", self.lr)
@@ -368,7 +413,7 @@ class Adam(Optimizer):
                 v.update(b1 * v + (1-b1) * g * g)
                 step_size = lr * jt.sqrt(1-b1**n) / (1-b0 ** n)
                 p.update(p - m * step_size / (jt.sqrt(v) + eps))
-        self.zero_grad()
+        self.post_step()
 
 
 class AdamW(Optimizer):
@@ -402,9 +447,8 @@ class AdamW(Optimizer):
             m.append(jt.zeros(p.shape, p.dtype).stop_grad())
         self.param_groups.append(group)
 
-    def step(self, loss=None):
-        if loss is not None:
-            self.pre_step(loss)
+    def step(self, loss=None, retain_graph=False):
+        self.pre_step(loss, retain_graph)
         n = float(self.n_step)
         for pg in self.param_groups:
             # get arguments from each param_groups
@@ -422,7 +466,7 @@ class AdamW(Optimizer):
                 denom = jt.sqrt(v) / jt.sqrt(bias_correction2) + eps
                 step_size = lr / bias_correction1
                 p.update(p - step_size * m / denom)
-        self.zero_grad()
+        self.post_step()
 
 
 class LRScheduler:

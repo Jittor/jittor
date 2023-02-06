@@ -71,13 +71,12 @@ void CudnnConvBackwardWOp::infer_shape() {
 }
 
 void CudnnConvBackwardWOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype();
-    jk << _CS("][Ty:") << dy->dtype();
-    jk << _CS("][Tw:") << dw->dtype();
-    jk << _CS("][XFORMAT:") << xformat;
-    jk << _CS("][WFORMAT:") << wformat;
-    jk << _CS("][YFORMAT:") << yformat;
-    jk << ']';
+    jk << "«Tx:" << x->dtype();
+    jk << "«Ty:" << dy->dtype();
+    jk << "«Tw:" << dw->dtype();
+    jk << "«XFORMAT:" << xformat;
+    jk << "«WFORMAT:" << wformat;
+    jk << "«YFORMAT:" << yformat;
 }
 
 static auto make_conv = get_op_info("cudnn_conv")
@@ -130,7 +129,6 @@ void CudnnConvBackwardWOp::jit_run() {
     checkCudaErrors(cudnnCreateFilterDescriptor( &cudnnFdesc ));
     checkCudaErrors(cudnnCreateTensorDescriptor( &cudnnOdesc ));
     checkCudaErrors(cudnnCreateConvolutionDescriptor( &cudnnConvDesc ));
-    checkCudaErrors(cudnnSetConvolutionGroupCount( cudnnConvDesc, groups ));
 
     int dimX[] = {
         (int)x->shape[findc("@XFORMAT", 'a')], // n
@@ -178,6 +176,8 @@ void CudnnConvBackwardWOp::jit_run() {
         padA, convstrideA, dilationA,
         CUDNN_CROSS_CORRELATION, getDataType<Ty>()
     ));
+    // MIOpen requires groups to be set after descriptor initialization
+    checkCudaErrors(cudnnSetConvolutionGroupCount( cudnnConvDesc, groups ));
 
     // using tensor core
     if(use_tensorcore){

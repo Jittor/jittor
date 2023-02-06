@@ -12,7 +12,6 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 from abc import abstractmethod
-from sys import breakpointhook
 import jittor as jt
 from jittor import flatten, init, Module
 import numpy as np
@@ -262,7 +261,8 @@ def sign(x: jt.Var) -> jt.Var:
 def gelu(x):
     r''' Applies the element-wise function:
 
-   .. math:: \text{GELU}(x) = x * \Phi(x)
+    .. math::
+        \text{GELU}(x) = x * \Phi(x)
 
     where :math:`\Phi(x)` is the Cumulative Distribution Function for Gaussian Distribution.
 
@@ -347,7 +347,8 @@ class PReLU(Module):
             return jt.maximum(0, x) + self.weight * jt.minimum(0, x)
 
 #TODO dims is 4 will cause slowly execution
-def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction='sum'):
+def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction='mean'):
+    target_shape = target.shape
     if len(output.shape) == 4:
         c_dim = output.shape[1]
         output = output.transpose((0, 2, 3, 1))
@@ -371,14 +372,14 @@ def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction=
     logsum = output.exp().sum(1).log()
     loss = (logsum - (output*target).sum(1)) * target_weight
     if reduction == 'sum':
-        return loss.sum() / target_weight.sum()
+        return loss.sum()
     elif reduction == 'mean':
         return loss.mean() / target_weight.mean()
     else:
-        return loss / target_weight
+        return loss.reshape(target_shape) 
 
-def mse_loss(output, target):
-    return (output-target).sqr().mean()
+def mse_loss(output, target, reduction="mean"):
+    return (output-target).sqr().reduce(reduction)
 
 def bce_loss(output, target, weight=None, size_average=True):
     loss = - (target * jt.log(jt.maximum(output, 1e-20)) + (1 - target) * jt.log(jt.maximum(1 - output, 1e-20)))
@@ -449,10 +450,10 @@ class CrossEntropyLoss(Module):
         return cross_entropy_loss(output, target, self.weight, self.ignore_index)
 
 class MSELoss(Module):
-    def __init__(self):
-        pass
+    def __init__(self, reduction='mean'):
+        self.reduction = reduction
     def execute(self, output, target):
-        return mse_loss(output, target)
+        return mse_loss(output, target, self.reduction)
 
 class BCELoss(Module):
     def __init__(self, weight=None, size_average=True):
@@ -493,16 +494,14 @@ class BCEWithLogitsLoss(Module):
 
 def softmax(x, dim=None, log=False):
     import jittor.other.code_softmax as code_softmax
-    if code_softmax.can_softmax_v1(x, dim):
+    if code_softmax.can_softmax_v1(x, dim) and jt.compiler.is_cuda:
         return code_softmax.softmax_v1(x, log)
-    if dim is None:
-        x = (x - x.max()).exp()
-        ret = x / x.sum()
-    else:
-        x = (x-x.max(dim, keepdims=True)).exp()
-        ret = x / x.sum(dim, keepdims=True)
-    if log: return ret.log()
-    return ret
+    if dim is None: dim = ()
+    if log:
+        a = x - jt.max(x, dim, keepdims=True)
+        return a - a.exp().sum(dim, keepdims=True).log()
+    x = (x - jt.max(x, dim, keepdims=True)).exp()
+    return x / x.sum(dim, keepdims=True)
 jt.Var.softmax = softmax
 
 def log_softmax(x,dim=None):
@@ -513,8 +512,8 @@ def log_sigmoid(x):
     return jt.log(jt.sigmoid(x))
 jt.Var.log_sigmoid = log_sigmoid
 
-def logsumexp(x, dim, keepdim=False):
-    return x.exp().sum(dim, keepdim).log()
+def logsumexp(x, dim, keepdims=False, keepdim=False):
+    return x.exp().sum(dim, keepdim or keepdims).log()
 jt.Var.logsumexp = logsumexp
 
 class Identity(Module):
@@ -546,6 +545,59 @@ class Dropout(Module):
 
 def dropout(x,p=0.5,is_train=False):
     return Dropout(p=p,is_train=is_train)(x)
+
+class Dropout2d(Module):
+    def __init__(self, p=0.5, is_train=False):
+        '''
+        Randomly zero out entire channels, from "Efficient Object Localization Using Convolutional Networks"
+        input:
+            x: [N,C,H,W] or [N,C,L]
+        output:
+            y: same shape as x
+        '''
+        assert p >= 0 and p <= 1, "dropout probability has to be between 0 and 1, but got {}".format(p)
+        self.p = p
+        self.is_train = is_train
+        #TODO: test model.train() to change self.is_train
+    def execute(self, input):
+        output = input
+        shape = input.shape[:-2]
+        if self.p > 0 and self.is_train:
+            if self.p == 1:
+                output = jt.zeros(input.shape)
+            else:
+                noise = jt.random(shape)
+                noise = (noise > self.p).int()
+                output = output * noise.broadcast(input.shape, dims=[-2,-1]) / (1.0 - self.p) # div keep prob
+        return output
+
+def dropout2d(x,p=0.5,is_train=False):
+    return Dropout2d(p=p,is_train=is_train)(x)
+
+class DropPath(Module):
+    '''Drop paths (Stochastic Depth) per sample  (when applied in main path of residual blocks).
+    '''
+    def __init__(self, p=0.5, is_train=False):
+        '''
+            :param p: Specifies the probability of each batch retention. Defaults to 0.5.
+            :type p: float dtype
+            :param is_train: Specify whether it is a training model. Defaults to False.
+            :type is_train: bool
+        '''
+        self.p = p
+        self.is_train = is_train
+        #TODO: test model.train() to change self.is_train
+    def execute(self, x):
+        if self.p == 0. or not self.is_train:
+            return x
+        keep_prob = 1 - self.p
+        shape = (x.shape[0], ) + (1, ) * (x.ndim - 1)
+        random_tensor = keep_prob + jt.rand(shape, dtype=x.dtype)
+        output = x.divide(keep_prob) * random_tensor.floor()
+        return output
+
+def droppath(x,p=0.5,is_train=False):
+    return DropPath(p=p,is_train=is_train)(x)
 
 class Linear(Module):
     def __init__(self, in_features, out_features, bias=True):
@@ -757,6 +809,23 @@ ReLU6 = jt.make_module(relu6)
 Softmax = jt.make_module(softmax, 2)
 GELU = jt.make_module(gelu)
 
+class Flatten(Module):
+    ''' Flattens the contiguous range of dimensions in a Var.
+
+    :param start_dim: the first dimension to be flattened. Defaults: 1.
+    :type start_dim: int
+
+    :param end_dim: the last dimension to be flattened. Defaults: -1.
+    :type end_dim: int
+    '''
+    def __init__(self, start_dim=1, end_dim=-1):
+        self.start_dim = start_dim
+        self.end_dim = end_dim
+
+    def execute(self, x) -> jt.Var:
+        return x.flatten(self.start_dim, self.end_dim)
+
+
 from jittor.depthwise_conv import DepthwiseConv
 
 class Conv(Module):
@@ -804,7 +873,7 @@ class Conv(Module):
         self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
         self.groups = groups
         self.is_depthwise_conv = self.groups == self.out_channels and self.groups == self.in_channels
-        if self.is_depthwise_conv and jt.flags.use_cuda:
+        if self.is_depthwise_conv and jt.flags.use_cuda and jt.compiler.is_cuda:
             self.depthwise_conv = DepthwiseConv(stride, padding, dilation)
         assert in_channels % groups == 0, 'in_channels must be divisible by groups'
         assert out_channels % groups == 0, 'out_channels must be divisible by groups'
@@ -822,7 +891,7 @@ class Conv(Module):
             self.bias = None
 
     def execute(self, x):
-        if self.is_depthwise_conv and jt.flags.use_cuda:
+        if hasattr(self, 'depthwise_conv'):
             y = self.depthwise_conv(x, self.weight)
             if self.bias is not None:
                 b = self.bias.broadcast(y.shape, [0,2,3])
@@ -1303,7 +1372,7 @@ class ConvTranspose(Module):
                 b = self.bias.broadcast(y.shape, [0,2,3])
                 y = y + b
             return y
-
+ConvTranspose2d = ConvTranspose
 
 class ConvTranspose3d(Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, \
@@ -1744,6 +1813,23 @@ def resize(img, size, mode="nearest", align_corners=False, tf_mode=False):
     elif mode == 'nearest':
         x = hid * (h / H)
         y = wid * (w / W)
+    elif mode == "area":
+        '''
+        Area interpolation uses AdaptivePool2D to resize origin images.
+        '''
+        stride = (h // H, w // W)
+        assert stride[0] > 0 and stride[1] > 0
+        x, y = jt.meshgrid(jt.arange(0, H, 1), jt.arange(0, W, 1))
+        startH = jt.floor(x*h/H).int32()
+        endH = jt.ceil((x+1)*h/H).int32()
+        maxH = int(jt.max(endH - startH).data)
+        startW = jt.floor(y*w/W).int32()
+        endW = jt.ceil((y+1)*w/W).int32()
+        maxW = int(jt.max(endW - startW).data)
+        pixel_count = (endH - startH) * (endW - startW)
+        adaptive_output = img.reindex([img.shape[0], img.shape[1], H, W, maxH, maxW], ["i0", "i1", "@e0(i2, i3) + i4", "@e2(i2, i3) + i5"], extras=[startH, endH, startW, endW], overflow_conditions=["i4 >= @e1(i2, i3) - @e0(i2, i3)", "i5 >= @e3(i2, i3) - @e2(i2, i3)"], overflow_value=0)
+        adaptive_output = adaptive_output.reduce("sum", [4,5]) / pixel_count[None, None, ...]
+        return adaptive_output
     else:
         if (tf_mode):
             x = hid * (h / H)
@@ -2037,7 +2123,7 @@ class Sequential(Module):
             else:
                 self.append(mod)
     def __getitem__(self, idx):
-        if idx not in self.layers:
+        if isinstance(idx, slice) or idx not in self.layers:
             return list(self.layers.values())[idx]
 
         return self.layers[idx]
@@ -2458,7 +2544,7 @@ class RNNBase(Module):
                     copy_to('weight' + param_name, offset_idx + idx, idx)
                 return num_gates
 
-        if jt.flags.use_cuda and jt.cudnn:
+        if jt.flags.use_cuda and jt.cudnn and jt.compiler.is_cuda:
             if getattr(self, '_cudnn_weight_size', None) is None:                
                 offset_array = jt.cudnn.cudnn_rnn_weight_offset(
                     cudnn_mode,
@@ -2544,7 +2630,7 @@ class RNNBase(Module):
                 hx = (jt.zeros((num_directions * self.num_layers, input.shape[1], self.hidden_size), dtype=input.dtype),
                       jt.zeros((num_directions * self.num_layers, input.shape[1], self.hidden_size), dtype=input.dtype))
 
-        if jt.flags.use_cuda and jt.cudnn and self.proj_size == 0:
+        if jt.flags.use_cuda and jt.cudnn and self.proj_size == 0 and jt.compiler.is_cuda:
             return self._execute_cudnn_rnn(input, hx)
         else:
             hidden_n = []
@@ -2800,3 +2886,90 @@ def _fft2(x, inverse=False):
     if inverse:
         y /= x.shape[1] * x.shape[2]
     return y
+
+
+def one_hot(x: jt.Var, num_classes: int=-1) -> jt.Var:
+    ''' Returns the one_hot encoding of inputs.
+
+    :param x: class values of any shape
+    :type x: jt.Var with bool or integer dtype
+
+    :param num_classes: Total number of classes. If set to -1, the number of classes will be inferred as one greater than the largest class value in the input tensor.
+    :type num_classes: int, optional
+
+    :return: a Var with one more dimension with 1 values at the index 
+    of last dimension indicated by the input, and 0 everywhere else.
+    :rtype: jt.Var
+
+    .. note::
+        if the values in x are greater than num_class or less than 0, 
+        the returned one_hot will be all zeros.
+
+    Example:
+        >>> jt.nn.one_hot(jt.arange(5) % 3)
+            jt.Var([[1 0 0]
+                [0 1 0]
+                [0 0 1]
+                [1 0 0]
+                [0 1 0]], dtype=int32)
+        >>> jt.nn.one_hot(jt.arange(5) % 3, num_classes=5)
+            jt.Var([[1 0 0 0 0]
+                [0 1 0 0 0]
+                [0 0 1 0 0]
+                [1 0 0 0 0]
+                [0 1 0 0 0]], dtype=int32)
+        >>> jt.nn.one_hot(jt.arange(6).reshape(3,2) % 3)
+            jt.Var([[[1 0 0]
+                [0 1 0]]
+
+                [[0 0 1]
+                [1 0 0]]
+
+                [[0 1 0]
+                [0 0 1]]], dtype=int32)
+    '''
+
+    assert x.dtype in [jt.bool, jt.int8, jt.int16, jt.int32, jt.int64, jt.uint8, jt.uint16, jt.uint32, jt.uint64]
+    if num_classes == -1:
+        num_classes = x.max().item() + 1
+
+    N = len(x.shape)
+    indices = ["i"+str(i) for i in range(N)]
+    y = jt.ones_like(x).reindex(
+        x.shape + [num_classes],
+        indices, 
+        extras=[x],
+        overflow_conditions=[f"i{N} != @e0({','.join(indices)})"],
+        overflow_value=0)
+    return y
+
+
+class KLDivLoss(Module):
+    ''' Computes the Kullback-Leibler divergence loss.
+    '''
+
+    def __init__(self, reduction: str = 'mean', log_target: bool = False):
+        '''
+            :param reduction: Specifies the reduction to apply to the output. Can be 'mean', 'sum', 'batchmean', or 'none'. Defaults to 'mean'.
+            :type reduction: str, optional
+            :param log_target: Specifies whether target is the log space. Defaults to False.
+            :type log_target: bool, optional
+        '''
+        self.reduction = reduction
+        self.log_target = log_target
+
+    def execute(self, input: jt.Var, target: jt.Var) -> jt.Var:
+        if not self.log_target:
+            loss_pointwise = target * (target.log() - input)
+        else:
+            loss_pointwise = target.exp() * (target - input)
+
+        if self.reduction == "mean":
+            loss = loss_pointwise.mean()
+        elif self.reduction == "batchmean":
+            loss = loss_pointwise.sum() / input.size(0)
+        elif self.reduction == "sum":
+            loss = loss_pointwise.sum()
+        else:
+            loss = loss_pointwise
+        return loss

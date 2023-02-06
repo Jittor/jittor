@@ -29,7 +29,6 @@
 #include "mem/allocator/stat_allocator.h"
 #include "mem/allocator/temp_allocator.h"
 #include "mem/mem_info.h"
-#include "update_queue.h"
 #include "executor.h"
 
 namespace jittor {
@@ -56,6 +55,8 @@ std::ostream& operator<<(std::ostream& os, const FloatOutput& o) {
     return os << o.suffix;
 }
 
+unordered_map<int64, VarPtr>* _grad_backup_ptr = nullptr;
+
 void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
     int p = 3;
     Log log(fileline, red_color?'e':'i', 0);
@@ -67,29 +68,70 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
     log << "hold_vars:" << hold_vars.size()
         << "lived_vars:" << Var::number_of_lived_vars
         << "lived_ops:" << Op::number_of_lived_ops >> '\n';
-    log << "update queue:" << update_queue.queue.size() 
-        >> '/' >> update_queue.map.size() >> '\n';
+    if (_grad_backup_ptr)
+        log << "jtorch_grad_vars:" << _grad_backup_ptr->size() >> '\n';
 
-    #ifdef NODE_MEMCHECK
     // get the oldest var
-    // vector<Node*> queue;
-    // auto t = ++Node::tflag_count;
-    // for (auto& vh : hold_vars)
-    //     if (vh->var->tflag != t) {
-    //         vh->var->tflag = t;
-    //         queue.push_back(vh->var);
-    //     }
-    // bfs_both(queue, [](Node*){return true;});
-    // vector<pair<int64, Node*>> nodes;
-    // nodes.reserve(queue.size());
-    // for (auto* node : queue)
-    //     nodes.push_back({node->__id(), node});
-    // std::sort(nodes.begin(), nodes.end());
-    // log << "list of the oldest nodes:\n";
-    // for (int i=0; i<10 && i<nodes.size(); i++) {
-    //     log << "ID#" >> nodes[i].first >> ":" << nodes[i].second << "\n";
-    // }
-    #endif
+    if (trace_py_var) {
+        vector<Node*> queue;
+        auto t = ++Node::tflag_count;
+        for (auto& vh : hold_vars)
+            if (vh->var->tflag != t) {
+                vh->var->tflag = t;
+                queue.push_back(vh->var);
+            }
+        bfs_both(queue, [](Node*){return true;});
+        static unordered_map<int64, int> cnt;
+        auto cnt_bk = cnt;
+        map<int,int> stat;
+        for (auto* node : queue) {
+            auto &x = cnt[node->id];
+            x++;
+            if (x == 3 && node->is_var()) {
+                LOGe << node;
+            }
+            stat[x]++;
+        }
+        for (auto x : cnt_bk) {
+            if (x.second == cnt[x.first]) {
+                cnt.erase(x.first);
+            }
+        }
+        LOGe << "appear time -> node cnt:" << stat;
+        if (lived_nodes_id.size()) {
+            LOGe << "lived_nodes cnt:" << lived_nodes_id.size();
+            Node* not_found=nullptr;
+            int not_found_cnt = 0;
+            for (auto nid : lived_nodes_id) {
+                if (!cnt.count(nid.first)) {
+                    not_found_cnt ++;
+                    if (!not_found) not_found = nid.second;
+                }
+            }
+            LOGe << "Total not_found:" << not_found_cnt;
+            if (not_found)
+                LOGe << "not found node:" << not_found;
+            if (_grad_backup_ptr) {
+                Node* not_found_grad=nullptr;
+                int parent_id = 0;
+                int not_found_grad_cnt = 0;
+                for (auto& gid : *_grad_backup_ptr) {
+                    if (!lived_nodes_id.count(gid.first)) {
+                        not_found_grad_cnt ++;
+                        if (!not_found_grad) {
+                            not_found_grad = gid.second.ptr;
+                            parent_id = gid.first;
+                        }
+                    }
+                }
+                LOGe << "Grad not found cnt:" << not_found_grad_cnt;
+                if (not_found_grad) {
+                    LOGe << "grad not found node" << not_found_grad;
+                    LOGe << "parent id:" << parent_id;
+                }
+            }
+        }
+    }
 
     if (use_stat_allocator) {
         log << "stat:" << use_stat_allocator;

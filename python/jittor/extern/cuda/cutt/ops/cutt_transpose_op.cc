@@ -59,7 +59,7 @@ VarPtr CuttTransposeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 
 void CuttTransposeOp::jit_prepare(JK& jk) {
     // do nothing
-    jk << _CS("[T:1]");
+    jk << "«T:1";
 }
 
 unordered_map<string, unsigned int> cutt_plan_cache;
@@ -69,6 +69,11 @@ unordered_map<string, unsigned int> cutt_plan_cache;
 EXTERN_LIB unordered_map<string, unsigned int> cutt_plan_cache;
 
 void CuttTransposeOp::jit_run() {
+    // Return if x is empty
+    if (x->num == 0)
+        return;
+
+    cudaGetLastError();
     auto* __restrict__ xp = x->mem_ptr;
     auto* __restrict__ yp = y->mem_ptr;
     StackVector<int> x_shape;

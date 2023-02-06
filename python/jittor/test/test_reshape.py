@@ -75,6 +75,13 @@ class TestReshapeOp(unittest.TestCase):
         a = jt.zeros(10)
         b = a.reshape(a.shape)
 
+    def test_reshape_empty(self):
+        a = jt.array([])
+        b = a.reshape(0, 1, 2)
+        assert b.shape == [0, 1, 2]
+        b = a.reshape(0, -1)
+        assert b.shape == [0, 0]
+
 
 if __name__ == "__main__":
     unittest.main()

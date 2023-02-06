@@ -2,13 +2,13 @@ from jittor_core import *
 from jittor_core.ops import *
 from .misc import *
 from . import attention as attention, contrib as contrib, dataset as dataset, init as init, linalg as linalg, lr_scheduler as lr_scheduler, numpy2cupy as numpy2cupy, optim as optim, sparse as sparse
-from .compile_extern import cublas as cublas, cudnn as cudnn, curand as curand, cufft as cufft, mkl_ops as mkl_ops, mpi_ops as mpi_ops, world_size as world_size
+from .compile_extern import cublas as cublas, cudnn as cudnn, cufft as cufft, curand as curand, mkl_ops as mkl_ops, mpi_ops as mpi_ops, world_size as world_size
 from .compiler import compile_custom_op as compile_custom_op, compile_custom_ops as compile_custom_ops
 from .contrib import concat as concat
 from .nn import bmm as bmm, bmm_transpose as bmm_transpose, matmul as matmul
 from collections import OrderedDict as OrderedDict
 from collections.abc import Mapping as Mapping
-from typing import Any
+from typing import Any, List, Tuple
 
 
 def safepickle(obj, path) -> None: ...
@@ -67,17 +67,18 @@ def array(data, dtype: Any | None = ...): ...
 def random(shape, dtype: str = ..., type: str = ...): ...
 def float_auto(x): ...
 def array64(data, dtype: Any | None = ...): ...
-def grad(loss, targets): ...
+def grad(loss, targets, retain_graph: bool = ...): ...
 def liveness_info(): ...
 def ones(shape, dtype: str = ...): ...
 def ones_like(x): ...
 def zeros(shape, dtype: str = ...): ...
 def full(shape, val, dtype: str = ...): ...
-def full_like(x, val): ...
-def zeros_like(x): ...
+def full_like(x, val, dtype: Any | None = ...) -> Var: ...
+def zeros_like(x, dtype: Any | None = ...) -> Var: ...
 
+def var(x, dim: Any | None = ..., dims: Any | None = ..., unbiased: bool = ..., keepdims: bool = ...): ...
 def std(x): ...
-def norm(x, p: int = ..., dim: int = ..., keepdim: bool = ..., eps: float = ...): ...
+def norm(x, p: int = ..., dim: int = ..., keepdims: bool = ..., eps: float = ..., keepdim: bool = ...): ...
 origin_reshape = reshape
 
 def reshape(x, *shape): ...
@@ -116,11 +117,11 @@ class Module:
     def __call__(self, *args, **kw): ...
     def __name__(self) -> None: ...
     def dfs(self, parents, k, callback, callback_leave: Any | None = ...) -> None: ...
-    def parameters(self): ...
+    def parameters(self) -> List: ...
     def state_dict(self, to: Any | None = ...): ...
-    def named_parameters(self): ...
+    def named_parameters(self) -> List[Tuple[str, Var]]: ...
     def load_state_dict(self, params) -> None: ...
-    def modules(self): ...
+    def modules(self) -> List: ...
     def named_modules(self): ...
     def requires_grad_(self, requires_grad: bool = ...): ...
     def __hooked_call__(self, *args, **kw): ...
@@ -138,7 +139,7 @@ class Module:
     def remove_output_backward_hook(self) -> None: ...
     def register_backward_hook(self, func): ...
     def remove_backward_hook(self) -> None: ...
-    def children(self): ...
+    def children(self) -> List: ...
     def extra_repr(self): ...
     def apply(self, func) -> None: ...
     def load_parameters(self, params) -> None: ...
@@ -152,9 +153,10 @@ class Module:
     def mpi_param_broadcast(self, root: int = ...) -> None: ...
     def __setattr__(self, key, value) -> None: ...
     def __getattr__(self, key): ...
-    def float16(self) -> None: ...
-    def half(self) -> None: ...
-    def float_auto(self) -> None: ...
+    def float64(self): ...
+    def float16(self): ...
+    def half(self): ...
+    def float_auto(self): ...
 
 class Function(Module):
     input_mask: Any
@@ -277,76 +279,8 @@ def reindex(x: Var, shape: Tuple[int], indexes: List[str], overflow_value: float
 @overload
 def reindex(x: Var, indexes: List[Var], overflow_value: float=0, overflow_conditions: List[str]={})-> Var:
 	'''Document:
-	* 
-	    Reindex Operator is a one-to-many map operator.
-	    It performs equivalent Python-pseudo implementation below::
-	
-	        # input is x, output is y
-	        n = len(shape)-1
-	        m = len(x.shape)-1
-	        k = len(overflow_conditions)-1
-	        y = np.zeros(shape, x.dtype)
-	        for i0 in range(shape[0]): # 1-st loop
-	            for i1 in range(shape[1]): # 2-nd loop
-	                ...... # many loops
-	                for in in range(shape[n]) # n+1 -th loop
-	                    if is_overflow(i0,i1,...,in):
-	                        y[i0,i1,...,in] = overflow_value
-	                    else:
-	                        # indexes[i] is a c++ style integer expression consisting of i0,i1,...,in
-	                        y[i0,i1,...,in] = x[indexes[0],indexes[1],...,indexes[m]]
-	
-	        # is_overflow is defined as following
-	        def is_overflow(i0,i1,...,in):
-	            return (
-	                indexes[0] < 0 || indexes[0] >= x.shape[0] ||
-	                indexes[1] < 0 || indexes[1] >= x.shape[1] ||
-	                ......
-	                indexes[m] < 0 || indexes[m] >= x.shape[m] ||
-	
-	                # overflow_conditions[i] is a c++ style boolean expression consisting of i0,i1,...,in
-	                overflow_conditions[0] ||
-	                overflow_conditions[1] ||
-	                ......
-	                overflow_conditions[k]
-	            )
-	    ----------------
-	    * [in] x:	A input jittor Var
-		
-	    * [in] shape:	the output shape, a integer array
-		
-	    * [in] indexes:	array of c++ style integer expression, its length should be the same with the number of dimension of x, some buildin variables it can use are::
-	        
-	             XDIM, xshape0, ..., xshapen, xstride0, ..., xstriden
-	             YDIM, yshape0, ..., yshapem, ystride0, ..., ystridem
-	             i0, i1, ..., in
-	             @e0(...), @e1(...) for extras input index
-	             e0p, e1p , ... for extras input pointer
-				 
-	    * [in] overflow_value:	overflow value
-		
-	    * [in] overflow_conditions:	array of c++ style boolean expression, it length can be vary. the buildin variables it can use are the same with indexes
-			
-	    * [in] extras: extra var used for index
-		
-	    ----------------
-	    Example
-	    Convolution implemented by reindex operation::
-	
-	        def conv(x, w):
-	            N,H,W,C = x.shape
-	            Kh, Kw, _C, Kc = w.shape
-	            assert C==_C
-	            xx = x.reindex([N,H-Kh+1,W-Kw+1,Kh,Kw,C,Kc], [
-	                'i0', # Nid
-	                'i1+i3', # Hid+Khid
-	                'i2+i4', # Wid+KWid
-	                'i5', # Cid
-	            ])
-	            ww = w.broadcast_var(xx)
-	            yy = xx*ww
-	            y = yy.sum([3,4,5]) # Kh, Kw, C
-	            return y, yy'''
+	* Alias x.reindex([i,j,k]) -> 
+	        x.reindex(i.shape, ['@e0(...)','@e1(...)','@e2(...)',], extras=[i,j,k])'''
 	...
 def reindex_var(x: Var, indexes: List[Var], overflow_value: float=0, overflow_conditions: List[str]={})-> Var:
 	'''Document:
@@ -381,7 +315,7 @@ def index(shape: Tuple[int], dim: int, dtype: str="int32")-> Var:
 	        # output: [[0,1],[0,1]]'''
 	...
 @overload
-def index(shape: Tuple[int], dtype: str="int32"):
+def index(shape: Tuple[int], dtype: str="int32")-> Tuple[Var]:
 	'''Document:
 	* 
 	    Index Operator generate index of shape.
@@ -410,56 +344,14 @@ def index(shape: Tuple[int], dtype: str="int32"):
 @overload
 def index(a: Var, dim: int, dtype: str="int32")-> Var:
 	'''Document:
-	* 
-	    Index Operator generate index of shape.
-	    
-	    It performs equivalent Python-pseudo implementation below::
-	    
-	        n = len(shape)-1
-	        x = np.zeros(shape, dtype)
-	        for i0 in range(shape[0]): # 1-st loop
-	            for i1 in range(shape[1]): # 2-nd loop
-	                ...... # many loops
-	                for in in range(shape[n]) # n+1 -th loop
-	                    x[i0,i1,...,in] = i@dim
-	    
-	    * [in] shape:   the output shape, a integer array
-	    * [in] dim: the dim of the index.
-	    * [in] dtype:   the data type string, default int32
-	
-	    Example::
-	
-	        print(jt.index([2,2], 0)())
-	        # output: [[0,0],[1,1]]
-	        print(jt.index([2,2], 1)())
-	        # output: [[0,1],[0,1]]'''
+	* shape dependency version of index op
+	        jt.index_var(a, 1) similar with jt.index(a.shape, 1)'''
 	...
 @overload
-def index(a: Var, dtype: str="int32"):
+def index(a: Var, dtype: str="int32")-> Tuple[Var]:
 	'''Document:
-	* 
-	    Index Operator generate index of shape.
-	    
-	    It performs equivalent Python-pseudo implementation below::
-	    
-	        n = len(shape)-1
-	        x = np.zeros(shape, dtype)
-	        for i0 in range(shape[0]): # 1-st loop
-	            for i1 in range(shape[1]): # 2-nd loop
-	                ...... # many loops
-	                for in in range(shape[n]) # n+1 -th loop
-	                    x[i0,i1,...,in] = i@dim
-	    
-	    * [in] shape:   the output shape, a integer array
-	    * [in] dim: the dim of the index.
-	    * [in] dtype:   the data type string, default int32
-	
-	    Example::
-	
-	        print(jt.index([2,2], 0)())
-	        # output: [[0,0],[1,1]]
-	        print(jt.index([2,2], 1)())
-	        # output: [[0,1],[0,1]]'''
+	* shape dependency version of index op
+	        jt.index_var(a) similar with jt.index(a.shape)'''
 	...
 @overload
 def index_var(a: Var, dim: int, dtype: str="int32")-> Var:
@@ -468,10 +360,10 @@ def index_var(a: Var, dim: int, dtype: str="int32")-> Var:
 	        jt.index_var(a, 1) similar with jt.index(a.shape, 1)'''
 	...
 @overload
-def index_var(a: Var, dtype: str="int32"):
+def index_var(a: Var, dtype: str="int32")-> Tuple[Var]:
 	'''Document:
 	* shape dependency version of index op
-	        jt.index_var(a, 1) similar with jt.index(a.shape, 1)'''
+	        jt.index_var(a) similar with jt.index(a.shape)'''
 	...
 def binary(x: Var, y: Var, p: str)-> Var:
  ...
@@ -831,7 +723,8 @@ def bitwise_xor(x: Var, y: Var)-> Var:
 	...
 def tape(x: Var)-> Var:
  ...
-def where(cond: Var, dtype: str="int32"):
+@overload
+def where(cond: Var, dtype: str="int32")-> Tuple[Var]:
 	'''Document:
 	*
 	    Where Operator generate index of true condition.
@@ -847,7 +740,14 @@ def where(cond: Var, dtype: str="int32"):
 	        jt.where([[0,0,1],[1,0,0]])
 	        # return [jt.Var([0 1], dtype=int32), jt.Var([2 0], dtype=int32)]'''
 	...
-def argsort(x: Var, dim: int=-1, descending: bool=False, dtype: str="int32"):
+@overload
+def where(cond: Var, x: Var, y: Var)-> Var:
+	'''Document:
+	*
+	     * Condition operator, perform cond ? x : y
+	     *'''
+	...
+def argsort(x: Var, dim: int=-1, descending: bool=False, dtype: str="int32")-> Tuple[Var]:
 	'''Document:
 	* 
 	    Argsort Operator Perform an indirect sort by given key or compare function.
@@ -890,7 +790,7 @@ def argsort(x: Var, dim: int=-1, descending: bool=False, dtype: str="int32"):
 	...
 def fetch(inputs: List[Var], func: Callable)-> Var:
  ...
-def arg_reduce(x: Var, op: str, dim: int, keepdims: bool):
+def arg_reduce(x: Var, op: str, dim: int, keepdims: bool)-> Tuple[Var]:
 	'''Document:
 	*
 	    Returns the indices of the maximum / minimum of the input across a dimension.
@@ -903,7 +803,7 @@ def arg_reduce(x: Var, op: str, dim: int, keepdims: bool):
 	
 	    * [in] dim:     int. Specifies which dimension to be reduced.
 	
-	    * [in] keepdim: bool. Whether the output has ``dim`` retained or not.
+	    * [in] keepdims: bool. Whether the output has ``dim`` retained or not.
 	
 	    ----------------
 	
@@ -2270,27 +2170,245 @@ def unary(x: Var, op: str)-> Var:
 def cast(x: Var, op: str)-> Var:
  ...
 def int8(x: Var)-> Var:
- ...
+	'''Document:
+	*
+	    Returns a copy of the input var, casted to int8.
+	
+	    ----------------
+	
+	    * [in] x:   the input jt.Var
+	
+	    ----------------
+	    
+	    Example-1::
+	        >>> x = jt.rand(3) * 10 
+	        >>> x
+	        jt.Var([4.093273  2.0086648 8.474352 ], dtype=float32)
+	        >>> x.int8()
+	        jt.Var([4 2 8], dtype=int8)
+	        >>> jt.int8(x)
+	        jt.Var([4 2 8], dtype=int8)'''
+	...
 def int16(x: Var)-> Var:
- ...
+	'''Document:
+	*
+	    Returns a copy of the input var, casted to int16.
+	
+	    ----------------
+	
+	    * [in] x:   the input jt.Var
+	
+	    ----------------
+	    
+	    Example-1::
+	        >>> x = jt.rand(3) * 10 
+	        >>> x
+	        jt.Var([4.093273  2.0086648 8.474352 ], dtype=float32)
+	        >>> x.int16()
+	        jt.Var([4 2 8], dtype=int16)
+	        >>> jt.int16(x)
+	        jt.Var([4 2 8], dtype=int16)'''
+	...
 def int32(x: Var)-> Var:
- ...
+	'''Document:
+	*
+	    Returns a copy of the input var, casted to int32.
+	
+	    ----------------
+	
+	    * [in] x:   the input jt.Var
+	
+	    ----------------
+	    
+	    Example-1::
+	        >>> x = jt.rand(3) * 10 
+	        >>> x
+	        jt.Var([4.093273  2.0086648 8.474352 ], dtype=float32)
+	        >>> x.int()
+	        jt.Var([4 2 8], dtype=int32)
+	        >>> jt.int(x)
+	        jt.Var([4 2 8], dtype=int32)
+	        >>> x.int32()
+	        jt.Var([4 2 8], dtype=int32)
+	        >>> jt.int32(x)
+	        jt.Var([4 2 8], dtype=int32)
+	        >>> x.long()
+	        jt.Var([4 2 8], dtype=int32)
+	        >>> jt.long(x)
+	        jt.Var([4 2 8], dtype=int32)'''
+	...
 def int64(x: Var)-> Var:
- ...
+	'''Document:
+	*
+	    Returns a copy of the input var, casted to int64.
+	
+	    ----------------
+	
+	    * [in] x:   the input jt.Var
+	
+	    ----------------
+	    
+	    Example-1::
+	        >>> x = jt.rand(3) * 10 
+	        >>> x
+	        jt.Var([4.093273  2.0086648 8.474352 ], dtype=float32)
+	        >>> x.int64()
+	        jt.Var([4 2 8], dtype=int64)
+	        >>> jt.int64(x)
+	        jt.Var([4 2 8], dtype=int64)'''
+	...
 def uint8(x: Var)-> Var:
- ...
+	'''Document:
+	*
+	    Returns a copy of the input var, casted to unsigned int8.
+	
+	    ----------------
+	
+	    * [in] x:   the input jt.Var
+	
+	    ----------------
+	    
+	    Example-1::
+	        >>> x = jt.rand(3) * 10 
+	        >>> x
+	        jt.Var([4.093273  2.0086648 8.474352 ], dtype=float32)
+	        >>> x.uint8()
+	        jt.Var([4 2 8], dtype=uint8)
+	        >>> jt.uint8(x)
+	        jt.Var([4 2 8], dtype=uint8)'''
+	...
 def uint16(x: Var)-> Var:
- ...
+	'''Document:
+	*
+	    Returns a copy of the input var, casted to unsigned int16.
+	
+	    ----------------
+	
+	    * [in] x:   the input jt.Var
+	
+	    ----------------
+	    
+	    Example-1::
+	        >>> x = jt.rand(3) * 10 
+	        >>> x
+	        jt.Var([4.093273  2.0086648 8.474352 ], dtype=float32)
+	        >>> x.uint16()
+	        jt.Var([4 2 8], dtype=uint16)
+	        >>> jt.uint16(x)
+	        jt.Var([4 2 8], dtype=uint16)'''
+	...
 def uint32(x: Var)-> Var:
- ...
+	'''Document:
+	*
+	    Returns a copy of the input var, casted to unsigned int32.
+	
+	    ----------------
+	
+	    * [in] x:   the input jt.Var
+	
+	    ----------------
+	    
+	    Example-1::
+	        >>> x = jt.rand(3) * 10 
+	        >>> x
+	        jt.Var([4.093273  2.0086648 8.474352 ], dtype=float32)
+	        >>> x.uint32()
+	        jt.Var([4 2 8], dtype=uint32)
+	        >>> jt.uint32(x)
+	        jt.Var([4 2 8], dtype=uint32)'''
+	...
 def uint64(x: Var)-> Var:
- ...
+	'''Document:
+	*
+	    Returns a copy of the input var, casted to unsigned int64.
+	
+	    ----------------
+	
+	    * [in] x:   the input jt.Var
+	
+	    ----------------
+	    
+	    Example-1::
+	        >>> x = jt.rand(3) * 10 
+	        >>> x
+	        jt.Var([4.093273  2.0086648 8.474352 ], dtype=float32)
+	        >>> x.uint64()
+	        jt.Var([4 2 8], dtype=uint64)
+	        >>> jt.uint64(x)
+	        jt.Var([4 2 8], dtype=uint64)'''
+	...
 def float16(x: Var)-> Var:
- ...
+	'''Document:
+	*
+	    Returns a copy of the input var, casted to float16 (half-precision float).
+	
+	    ----------------
+	
+	    * [in] x:   the input jt.Var
+	
+	    ----------------
+	    
+	    Example-1::
+	        >>> x = jt.rand(3) * 10 
+	        >>> x
+	        jt.Var([4.093273  2.0086648 8.474352 ], dtype=float32)
+	        >>> x.half()
+	        jt.Var([4.094 2.008 8.48 ], dtype=float16)
+	        >>> jt.half(x)
+	        jt.Var([4.094 2.008 8.48 ], dtype=float16)
+	        >>> x.float16()
+	        jt.Var([4.094 2.008 8.48 ], dtype=float16)
+	        >>> jt.float16(x)
+	        jt.Var([4.094 2.008 8.48 ], dtype=float16)'''
+	...
 def float32(x: Var)-> Var:
- ...
+	'''Document:
+	*
+	    Returns a copy of the input var, casted to float32.
+	
+	    ----------------
+	
+	    * [in] x:   the input jt.Var
+	
+	    ----------------
+	    
+	    Example-1::
+	        >>> x = jt.arange(3)
+	        >>> x
+	        jt.Var([0 1 2], dtype=int32)
+	        >>> x.float()
+	        jt.Var([0. 1. 2.], dtype=float32)
+	        >>> jt.float(x) 
+	        jt.Var([0. 1. 2.], dtype=float32)
+	        >>> x.float32()
+	        jt.Var([0. 1. 2.], dtype=float32)
+	        >>> jt.float32(x) 
+	        jt.Var([0. 1. 2.], dtype=float32)'''
+	...
 def float64(x: Var)-> Var:
- ...
+	'''Document:
+	*
+	    Returns a copy of the input var, casted to float64 (double-precision float).
+	
+	    ----------------
+	
+	    * [in] x:   the input jt.Var
+	
+	    ----------------
+	    
+	    Example-1::
+	        >>> x = jt.arange(3)
+	        >>> x
+	        jt.Var([0 1 2], dtype=int32)
+	        >>> x.double()
+	        jt.Var([0. 1. 2.], dtype=float64)
+	        >>> jt.double(x) 
+	        jt.Var([0. 1. 2.], dtype=float64)
+	        >>> x.float64()
+	        jt.Var([0. 1. 2.], dtype=float64)
+	        >>> jt.float64(x) 
+	        jt.Var([0. 1. 2.], dtype=float64)'''
+	...
 def abs(x: Var)-> Var:
 	'''Document:
 	*
@@ -2365,10 +2483,12 @@ def log(x: Var)-> Var:
 	    ----------------
 	
 	    Example-1::
-	        >>> a = jt.rand(4) * 2
-	        >>> a
+	        >>> x = jt.rand(4) * 2
+	        >>> x
 	        jt.Var([0.02863695 1.30122    1.6048753  1.140261  ], dtype=float32)
-	        >>> jt.log(a)
+	        >>> jt.log(x)
+	        jt.Var([-3.5530574   0.26330233  0.47304606  0.13125724], dtype=float32)
+	        >>> x.log()
 	        jt.Var([-3.5530574   0.26330233  0.47304606  0.13125724], dtype=float32)'''
 	...
 def exp(x: Var)-> Var:
@@ -2383,10 +2503,12 @@ def exp(x: Var)-> Var:
 	    ----------------
 	
 	    Example-1::
-	        >>> a = jt.rand(4) * 2
-	        >>> a
+	        >>> x = jt.rand(4) * 2
+	        >>> x
 	        jt.Var([1.9841381 1.4103996 0.5855549 1.4212812], dtype=float32)
-	        >>> jt.exp(a)
+	        >>> jt.exp(x)
+	        jt.Var([7.2727766 4.0975924 1.7959872 4.1424246], dtype=float32)
+	        >>> x.exp()
 	        jt.Var([7.2727766 4.0975924 1.7959872 4.1424246], dtype=float32)'''
 	...
 def sqrt(x: Var)-> Var:
@@ -2401,10 +2523,12 @@ def sqrt(x: Var)-> Var:
 	    ----------------
 	
 	    Example-1::
-	        >>> a = jt.rand(4) * 2
-	        >>> a
+	        >>> x = jt.rand(4) * 2
+	        >>> x
 	        jt.Var([0.81957287 0.5609612  0.07435933 1.7571875 ], dtype=float32)
-	        >>> jt.sqrt(a)
+	        >>> jt.sqrt(x)
+	        jt.Var([0.90530264 0.7489734  0.27268907 1.3255895 ], dtype=float32)
+	        >>> x.sqrt()
 	        jt.Var([0.90530264 0.7489734  0.27268907 1.3255895 ], dtype=float32)'''
 	...
 def round(x: Var)-> Var:
@@ -2419,10 +2543,12 @@ def round(x: Var)-> Var:
 	    ----------------
 	
 	    Example-1::
-	        >>> a = jt.randn(4)
-	        >>> a
+	        >>> x = jt.randn(4)
+	        >>> x
 	        jt.Var([ 2.101595    0.33055413 -0.44147047 -0.7720668 ], dtype=float32)
-	        >>> jt.round(a)
+	        >>> jt.round(x)
+	        jt.Var([ 2.0  0.0  0.0 -1.0], dtype=float32)
+	        >>> x.round()
 	        jt.Var([ 2.0  0.0  0.0 -1.0], dtype=float32)'''
 	...
 def floor(x: Var)-> Var:
@@ -2436,10 +2562,12 @@ def floor(x: Var)-> Var:
 	
 	    ----------------
 	    Example-1::
-	        >>> a = jt.randn(4)
-	        >>> a
+	        >>> x = jt.randn(4)
+	        >>> x
 	        jt.Var([-1.0339162 -0.7259972 -0.9220003 -0.8449701], dtype=float32)
-	        >>> jt.floor(a)
+	        >>> jt.floor(x)
+	        jt.Var([-2.0 -1.0 -1.0 -1.0], dtype=float32)
+	        >>> x.floor
 	        jt.Var([-2.0 -1.0 -1.0 -1.0], dtype=float32)'''
 	...
 def ceil(x: Var)-> Var:
@@ -2454,10 +2582,12 @@ def ceil(x: Var)-> Var:
 	    ----------------
 	
 	    Example-1::
-	        >>> a = jt.randn(4)
-	        >>> a
+	        >>> x = jt.randn(4)
+	        >>> x
 	        jt.Var([-1.0339162 -0.7259972 -0.9220003 -0.8449701], dtype=float32)
-	        >>> jt.ceil(a)
+	        >>> jt.ceil(x)
+	        jt.Var([-1.0  0.0  0.0  0.0], dtype=float32)
+	        >>> x.ceil()
 	        jt.Var([-1.0  0.0  0.0  0.0], dtype=float32)'''
 	...
 def round_int(x: Var)-> Var:
@@ -2472,10 +2602,12 @@ def round_int(x: Var)-> Var:
 	    ----------------
 	
 	    Example-1::
-	        >>> a = jt.randn(4)
-	        >>> a
+	        >>> x = jt.randn(4)
+	        >>> x
 	        jt.Var([ 2.101595    0.33055413 -0.44147047 -0.7720668 ], dtype=float32)
-	        >>> jt.round_int(a)
+	        >>> jt.round_int(x)
+	        jt.Var([ 2  0  0 -1], dtype=int32)
+	        >>> x.round_int
 	        jt.Var([ 2  0  0 -1], dtype=int32)'''
 	...
 def floor_int(x: Var)-> Var:
@@ -2489,10 +2621,12 @@ def floor_int(x: Var)-> Var:
 	
 	    ----------------
 	    Example-1::
-	        >>> a = jt.randn(4)
-	        >>> a
+	        >>> x = jt.randn(4)
+	        >>> x
 	        jt.Var([-1.0339162 -0.7259972 -0.9220003 -0.8449701], dtype=float32)
-	        >>> jt.floor_int(a)
+	        >>> jt.floor_int(x)
+	        jt.Var([-2 -1 -1 -1], dtype=int32)
+	        >>> x.floor_int
 	        jt.Var([-2 -1 -1 -1], dtype=int32)'''
 	...
 def ceil_int(x: Var)-> Var:
@@ -2507,10 +2641,12 @@ def ceil_int(x: Var)-> Var:
 	    ----------------
 	
 	    Example-1::
-	        >>> a = jt.randn(4)
-	        >>> a
+	        >>> x = jt.randn(4)
+	        >>> x
 	        jt.Var([-1.0339162 -0.7259972 -0.9220003 -0.8449701], dtype=float32)
-	        >>> jt.ceil_int(a)
+	        >>> jt.ceil_int(x)
+	        jt.Var([-1  0  0  0], dtype=int32)
+	        >>> x.ceil_int()
 	        jt.Var([-1  0  0  0], dtype=int32)'''
 	...
 def sin(x: Var)-> Var:
@@ -2525,10 +2661,12 @@ def sin(x: Var)-> Var:
 	    ----------------
 	
 	    Example-1::
-	        >>> a = jt.randn(4)
-	        >>> a
+	        >>> x = jt.randn(4)
+	        >>> x
 	        jt.Var([ 0.32893723 -0.7112559  -0.872391    1.8001337 ], dtype=float32)
-	        >>> jt.sin(a)
+	        >>> jt.sin(x)
+	        jt.Var([ 0.32303742 -0.6527857  -0.76586854  0.9738172 ], dtype=float32)
+	        >>> x.sin()
 	        jt.Var([ 0.32303742 -0.6527857  -0.76586854  0.9738172 ], dtype=float32)'''
 	...
 def asin(x: Var)-> Var:
@@ -2543,10 +2681,12 @@ def asin(x: Var)-> Var:
 	    ----------------
 	
 	    Example-1::
-	        >>> a = jt.randn(4)
-	        >>> a
+	        >>> x = jt.randn(4)
+	        >>> x
 	        jt.Var([ 0.09342023 -0.42522037  0.9264933  -0.785264  ], dtype=float32)
-	        >>> jt.asin(a)
+	        >>> jt.asin(x)
+	        jt.Var([ 0.09355665 -0.43920535  1.1849847  -0.9031224 ], dtype=float32)
+	        >>> x.asin()
 	        jt.Var([ 0.09355665 -0.43920535  1.1849847  -0.9031224 ], dtype=float32)'''
 	...
 def arcsin(x: Var)-> Var:
@@ -2561,10 +2701,12 @@ def arcsin(x: Var)-> Var:
 	    ----------------
 	
 	    Example-1::
-	        >>> a = jt.randn(4)
-	        >>> a
+	        >>> x = jt.randn(4)
+	        >>> x
 	        jt.Var([ 0.09342023 -0.42522037  0.9264933  -0.785264  ], dtype=float32)
-	        >>> jt.asin(a)
+	        >>> jt.asin(x)
+	        jt.Var([ 0.09355665 -0.43920535  1.1849847  -0.9031224 ], dtype=float32)
+	        >>> x.asin()
 	        jt.Var([ 0.09355665 -0.43920535  1.1849847  -0.9031224 ], dtype=float32)'''
 	...
 def sinh(x: Var)-> Var:
@@ -2579,10 +2721,12 @@ def sinh(x: Var)-> Var:
 	    ----------------
 	
 	    Example-1::
-	        >>> a = jt.randn(4)
-	        >>> a
+	        >>> x = jt.randn(4)
+	        >>> x
 	        jt.Var([ 0.32893723 -0.7112559  -0.872391    1.8001337 ], dtype=float32)
-	        >>> jt.sinh(a)
+	        >>> jt.sinh(x)
+	        jt.Var([ 0.3349012  -0.77276015 -0.9873369   2.9425898 ], dtype=float32)
+	        >>> x.sinh
 	        jt.Var([ 0.3349012  -0.77276015 -0.9873369   2.9425898 ], dtype=float32)'''
 	...
 def asinh(x: Var)-> Var:
@@ -2597,10 +2741,12 @@ def asinh(x: Var)-> Var:
 	    ----------------
 	
 	    Example-1::
-	        >>> a = jt.randn(4)
-	        >>> a
+	        >>> x = jt.randn(4)
+	        >>> x
 	        jt.Var([-1.9749726  -0.52341473  0.8906148   1.0338128 ], dtype=float32)
-	        >>> jt.asinh(a)
+	        >>> jt.asinh(x)
+	        jt.Var([-1.4323865  -0.5020559   0.8018747   0.90508187], dtype=float32)
+	        >>> x.asinh()
 	        jt.Var([-1.4323865  -0.5020559   0.8018747   0.90508187], dtype=float32)'''
 	...
 def arcsinh(x: Var)-> Var:
@@ -2615,10 +2761,12 @@ def arcsinh(x: Var)-> Var:
 	    ----------------
 	
 	    Example-1::
-	        >>> a = jt.randn(4)
-	        >>> a
+	        >>> x = jt.randn(4)
+	        >>> x
 	        jt.Var([-1.9749726  -0.52341473  0.8906148   1.0338128 ], dtype=float32)
-	        >>> jt.asinh(a)
+	        >>> jt.asinh(x)
+	        jt.Var([-1.4323865  -0.5020559   0.8018747   0.90508187], dtype=float32)
+	        >>> x.asinh()
 	        jt.Var([-1.4323865  -0.5020559   0.8018747   0.90508187], dtype=float32)'''
 	...
 def tan(x: Var)-> Var:
@@ -2633,10 +2781,12 @@ def tan(x: Var)-> Var:
 	    ----------------
 	
 	    Example-1::
-	        >>> a = jt.randn(4)
-	        >>> a
+	        >>> x = jt.randn(4)
+	        >>> x
 	        jt.Var([ 0.32893723 -0.7112559  -0.872391    1.8001337 ], dtype=float32)
-	        >>> jt.tan(a)
+	        >>> jt.tan(x)
+	        jt.Var([ 0.34133783 -0.8617148  -1.1910915  -4.283673  ], dtype=float32)
+	        >>> x.tan()
 	        jt.Var([ 0.34133783 -0.8617148  -1.1910915  -4.283673  ], dtype=float32)'''
 	...
 def atan(x: Var)-> Var:
@@ -2651,10 +2801,12 @@ def atan(x: Var)-> Var:
 	    ----------------
 	
 	    Example-1::
-	        >>> a = jt.randn(4)
-	        >>> a
+	        >>> x = jt.randn(4)
+	        >>> x
 	        jt.Var([-0.85885596  1.187804    0.47249675  0.95933187], dtype=float32)
-	        >>> jt.atan(a)
+	        >>> jt.atan(x)
+	        jt.Var([-0.70961297  0.87102956  0.44140393  0.76464504], dtype=float32)
+	        >>> x.atan()
 	        jt.Var([-0.70961297  0.87102956  0.44140393  0.76464504], dtype=float32)'''
 	...
 def arctan(x: Var)-> Var:
@@ -2669,10 +2821,12 @@ def arctan(x: Var)-> Var:
 	    ----------------
 	
 	    Example-1::
-	        >>> a = jt.randn(4)
-	        >>> a
+	        >>> x = jt.randn(4)
+	        >>> x
 	        jt.Var([-0.85885596  1.187804    0.47249675  0.95933187], dtype=float32)
-	        >>> jt.atan(a)
+	        >>> jt.atan(x)
+	        jt.Var([-0.70961297  0.87102956  0.44140393  0.76464504], dtype=float32)
+	        >>> x.atan()
 	        jt.Var([-0.70961297  0.87102956  0.44140393  0.76464504], dtype=float32)'''
 	...
 def tanh(x: Var)-> Var:
@@ -2687,10 +2841,12 @@ def tanh(x: Var)-> Var:
 	    ----------------
 	    
 	    Example-1::
-	        >>> a = jt.randn(4)
-	        >>> a
+	        >>> x = jt.randn(4)
+	        >>> x
 	        jt.Var([-0.85885596  1.187804    0.47249675  0.95933187], dtype=float32)
-	        >>> jt.tanh(a)
+	        >>> jt.tanh(x)
+	        jt.Var([-0.6956678   0.82989657  0.4402144   0.7439787 ], dtype=float32)
+	        >>> x.tanh()
 	        jt.Var([-0.6956678   0.82989657  0.4402144   0.7439787 ], dtype=float32)'''
 	...
 def atanh(x: Var)-> Var:
@@ -2705,10 +2861,12 @@ def atanh(x: Var)-> Var:
 	    ----------------
 	
 	    Example-1::
-	        >>> a = jt.rand(4) * 2 - 1
-	        >>> a
+	        >>> x = jt.rand(4) * 2 - 1
+	        >>> x
 	        jt.Var([ 0.9062414  -0.799802   -0.27219176 -0.7274077 ], dtype=float32)
-	        >>> jt.atanh(a)
+	        >>> jt.atanh(x)
+	        jt.Var([ 1.5060828  -1.0980625  -0.27922946 -0.9231999 ], dtype=float32)
+	        >>> x.atanh()
 	        jt.Var([ 1.5060828  -1.0980625  -0.27922946 -0.9231999 ], dtype=float32)'''
 	...
 def arctanh(x: Var)-> Var:
@@ -2723,10 +2881,12 @@ def arctanh(x: Var)-> Var:
 	    ----------------
 	
 	    Example-1::
-	        >>> a = jt.rand(4) * 2 - 1
-	        >>> a
+	        >>> x = jt.rand(4) * 2 - 1
+	        >>> x
 	        jt.Var([ 0.9062414  -0.799802   -0.27219176 -0.7274077 ], dtype=float32)
-	        >>> jt.atanh(a)
+	        >>> jt.atanh(x)
+	        jt.Var([ 1.5060828  -1.0980625  -0.27922946 -0.9231999 ], dtype=float32)
+	        >>> x.atanh()
 	        jt.Var([ 1.5060828  -1.0980625  -0.27922946 -0.9231999 ], dtype=float32)'''
 	...
 def cos(x: Var)-> Var:
@@ -2741,10 +2901,12 @@ def cos(x: Var)-> Var:
 	    ----------------
 	
 	    Example-1::
-	        >>> a = jt.randn(4)
-	        >>> a
+	        >>> x = jt.randn(4)
+	        >>> x
 	        jt.Var([ 0.32893723 -0.7112559  -0.872391    1.8001337 ], dtype=float32)
-	        >>> jt.cos(a)
+	        >>> jt.cos(x)
+	        jt.Var([ 0.9463862  0.7575426  0.6429972 -0.2273323], dtype=float32)
+	        >>> x.cos()
 	        jt.Var([ 0.9463862  0.7575426  0.6429972 -0.2273323], dtype=float32)'''
 	...
 def acos(x: Var)-> Var:
@@ -2759,10 +2921,12 @@ def acos(x: Var)-> Var:
 	    ----------------
 	
 	    Example-1::
-	        >>> a = jt.rand(4) * 2 - 1
-	        >>> a
+	        >>> x = jt.rand(4) * 2 - 1
+	        >>> x
 	        jt.Var([ 0.5876564  0.740723  -0.667666   0.5371753], dtype=float32)
-	        >>> jt.acos(a)
+	        >>> jt.acos(x)
+	        jt.Var([0.9426371 0.7366504 2.3018656 1.0037117], dtype=float32)
+	        >>> x.acos()
 	        jt.Var([0.9426371 0.7366504 2.3018656 1.0037117], dtype=float32)'''
 	...
 def arccos(x: Var)-> Var:
@@ -2777,10 +2941,12 @@ def arccos(x: Var)-> Var:
 	    ----------------
 	
 	    Example-1::
-	        >>> a = jt.rand(4) * 2 - 1
-	        >>> a
+	        >>> x = jt.rand(4) * 2 - 1
+	        >>> x
 	        jt.Var([ 0.5876564  0.740723  -0.667666   0.5371753], dtype=float32)
-	        >>> jt.acos(a)
+	        >>> jt.acos(x)
+	        jt.Var([0.9426371 0.7366504 2.3018656 1.0037117], dtype=float32)
+	        >>> x.acos()
 	        jt.Var([0.9426371 0.7366504 2.3018656 1.0037117], dtype=float32)'''
 	...
 def cosh(x: Var)-> Var:
@@ -2795,10 +2961,12 @@ def cosh(x: Var)-> Var:
 	    ----------------
 	
 	    Example-1::
-	        >>> a = jt.randn(4)
-	        >>> a
+	        >>> x = jt.randn(4)
+	        >>> x
 	        jt.Var([ 0.32893723 -0.7112559  -0.872391    1.8001337 ], dtype=float32)
-	        >>> jt.cosh(a)
+	        >>> jt.cosh(x)
+	        jt.Var([1.0545894 1.2637873 1.405288  3.1078668], dtype=float32)
+	        >>> x.cosh()
 	        jt.Var([1.0545894 1.2637873 1.405288  3.1078668], dtype=float32)'''
 	...
 def acosh(x: Var)-> Var:
@@ -2813,10 +2981,12 @@ def acosh(x: Var)-> Var:
 	    ----------------
 	
 	    Example-1::
-	        >>> a = jt.rand(4) + 1
-	        >>> a
+	        >>> x = jt.rand(4) + 1
+	        >>> x
 	        jt.Var([1.3609099 1.8137748 1.1146184 1.3911307], dtype=float32)
-	        >>> jt.acosh(a)
+	        >>> jt.acosh(x)
+	        jt.Var([0.8259237  1.2020639  0.47432774 0.8579033 ], dtype=float32)
+	        >>> x.acosh()
 	        jt.Var([0.8259237  1.2020639  0.47432774 0.8579033 ], dtype=float32)'''
 	...
 def arccosh(x: Var)-> Var:
@@ -2831,10 +3001,12 @@ def arccosh(x: Var)-> Var:
 	    ----------------
 	
 	    Example-1::
-	        >>> a = jt.rand(4) + 1
-	        >>> a
+	        >>> x = jt.rand(4) + 1
+	        >>> x
 	        jt.Var([1.3609099 1.8137748 1.1146184 1.3911307], dtype=float32)
-	        >>> jt.acosh(a)
+	        >>> jt.acosh(x)
+	        jt.Var([0.8259237  1.2020639  0.47432774 0.8579033 ], dtype=float32)
+	        >>> x.acosh()
 	        jt.Var([0.8259237  1.2020639  0.47432774 0.8579033 ], dtype=float32)'''
 	...
 def sigmoid(x: Var)-> Var:
@@ -2852,10 +3024,12 @@ def sigmoid(x: Var)-> Var:
 	    ----------------
 	
 	    Example-1::
-	        >>> a = jt.randn(4)
-	        >>> a
+	        >>> x = jt.randn(4)
+	        >>> x
 	        jt.Var([ 0.49443012  0.4305426  -1.0364404  -1.2628382 ], dtype=float32)
-	        >>> jt.sigmoid(a)
+	        >>> jt.sigmoid(x)
+	        jt.Var([0.62114954 0.6060032  0.2618374  0.2204857 ], dtype=float32)
+	        >>> x.sigmoid()
 	        jt.Var([0.62114954 0.6060032  0.2618374  0.2204857 ], dtype=float32)'''
 	...
 def erf(x: Var)-> Var:
@@ -2873,14 +3047,32 @@ def erf(x: Var)-> Var:
 	    ----------------
 	
 	    Example-1::
-	        >>> a = jt.randn(4)
-	        >>> a
+	        >>> x = jt.randn(4)
+	        >>> x
 	        jt.Var([ 0.49443012  0.4305426  -1.0364404  -1.2628382 ], dtype=float32)
-	        >>> jt.erf(a)
+	        >>> jt.erf(x)
+	        jt.Var([ 0.51559156  0.45739546 -0.85728306 -0.9258883 ], dtype=float32)
+	        >>> x.erf()
 	        jt.Var([ 0.51559156  0.45739546 -0.85728306 -0.9258883 ], dtype=float32)'''
 	...
 def erfinv(x: Var)-> Var:
- ...
+	'''Document:
+	*
+	    Computes the inverse error function of each element. 
+	
+	    * [in] x: the input jt.Var.
+	
+	    ----------------
+	
+	    Example-1::
+	        >>> x = jt.rand(4) * 2 - 1 
+	        >>> x
+	        jt.Var([ 0.00277209 -0.26642472  0.7869792   0.5415418 ], dtype=float32)
+	        >>> jt.erfinv(x)
+	        jt.Var([ 0.00245671 -0.24068035  0.8805613   0.5242405 ], dtype=float32)
+	        >>> x.erfinv()
+	        jt.Var([ 0.00245671 -0.24068035  0.8805613   0.5242405 ], dtype=float32)'''
+	...
 def transpose(x: Var, axes: Tuple[int]=())-> Var:
  ...
 def fuse_transpose(x: Var, axes: Tuple[int]=())-> Var:
@@ -2898,7 +3090,11 @@ def array_(args: numpy.ndarray)-> Var:
  ...
 def array(obj: float | int | numpy.ndarray | Var)-> Var:
  ...
+@overload
 def getitem(x: Var, slices: slice)-> Var:
+ ...
+@overload
+def getitem(x: Var, slices: slice, _: int)-> Tuple[Var]:
  ...
 def candidate(x: Var, fail_cond: str, dtype: str="int32")-> Var:
 	'''Document:
@@ -3016,7 +3212,7 @@ def numpy_code(shape: Tuple[int], dtype: str, inputs: List[Var], forward: Callab
 	        )'''
 	...
 @overload
-def numpy_code(shapes: List[Tuple[int]], dtypes: List[str], inputs: List[Var], forward: Callable, backward: List[Callable]):
+def numpy_code(shapes: List[Tuple[int]], dtypes: List[str], inputs: List[Var], forward: Callable, backward: List[Callable])-> Tuple[Var]:
 	'''Document:
 	*
 	    Numpy Code Operator for easily customized op.
@@ -3162,7 +3358,7 @@ def numpy_code(shape: Tuple[int], dtype: str, inputs: List[Var], forward: Callab
 	        )'''
 	...
 @overload
-def numpy_code(shapes: List[Tuple[int]], dtypes: List[str], inputs: List[Var], forward: Callable):
+def numpy_code(shapes: List[Tuple[int]], dtypes: List[str], inputs: List[Var], forward: Callable)-> Tuple[Var]:
 	'''Document:
 	*
 	    Numpy Code Operator for easily customized op.
@@ -3463,7 +3659,7 @@ def code(shape: Tuple[int], dtype: str, inputs: List[Var]={}, cpu_src: str="", c
 	        print(jt.grad(c, [a, b]))'''
 	...
 @overload
-def code(shapes: List[Tuple[int]], dtypes: List[str], inputs: List[Var]={}, cpu_src: str="", cpu_grad_src: List[str]={}, cpu_header: str="", cuda_src: str="", cuda_grad_src: List[str]={}, cuda_header: str=""):
+def code(shapes: List[Tuple[int]], dtypes: List[str], inputs: List[Var]={}, cpu_src: str="", cpu_grad_src: List[str]={}, cpu_header: str="", cuda_src: str="", cuda_grad_src: List[str]={}, cuda_header: str="")-> Tuple[Var]:
 	'''Document:
 	*
 	    Code Operator for easily customized op.
@@ -3691,7 +3887,7 @@ def code(shapes: List[Tuple[int]], dtypes: List[str], inputs: List[Var]={}, cpu_
 	        print(jt.grad(c, [a, b]))'''
 	...
 @overload
-def code(inputs: List[Var], outputs: List[Var], cpu_src: str="", cpu_grad_src: List[str]={}, cpu_header: str="", cuda_src: str="", cuda_grad_src: List[str]={}, cuda_header: str=""):
+def code(inputs: List[Var], outputs: List[Var], cpu_src: str="", cpu_grad_src: List[str]={}, cpu_header: str="", cuda_src: str="", cuda_grad_src: List[str]={}, cuda_header: str="")-> Tuple[Var]:
 	'''Document:
 	*
 	    Code Operator for easily customized op.
@@ -3955,24 +4151,35 @@ def broadcast(x: Var, shape: Tuple[int], dims: Tuple[int]=())-> Var:
 def broadcast(x: Var, y: Var, dims: Tuple[int]=())-> Var:
 	'''Document:
 	*
-	    Broadcast ``x`` to a given shape.
+	    Broadcast ``x`` to the same shape as ``y``.
 	
 	    ----------------
 	
 	    * [in] x:       the input jt.Var.
 	
-	    * [in] shape:   the output shape.
+	    * [in] y:       the reference jt.Var.
 	
 	    * [in] dims:    specifies the new dimension in the output shape, an integer array.
 	
 	    ----------------
+	
+	    .. note::
+	      jt.broadcast_var(x, y, dims) is an alias of jt.broadcast(x, y, dims)
 	
 	    Example-1::
 	        >>> x = jt.randint(0, 10, shape=(2, 2))
 	        >>> x
 	        jt.Var([[8 1]
 	         [7 6]], dtype=int32)
-	        >>> jt.broadcast(x, shape=(2, 3, 2), dims=[1])
+	        >>> y = jt.randint(0, 10, shape=(2, 3, 2))
+	        >>> jt.broadcast(x, y, dims=[1])
+	        jt.Var([[[8 1]
+	          [8 1]
+	          [8 1]],
+	         [[7 6]
+	          [7 6]
+	          [7 6]]], dtype=int32)
+	        >>> jt.broadcast_var(x, y, dims=[1])
 	        jt.Var([[[8 1]
 	          [8 1]
 	          [8 1]],
@@ -4197,76 +4404,8 @@ class Var:
 	@overload
 	def reindex(self, indexes: List[Var], overflow_value: float=0, overflow_conditions: List[str]={})-> Var:		
 		'''Document:
-		* 
-		    Reindex Operator is a one-to-many map operator.
-		    It performs equivalent Python-pseudo implementation below::
-		
-		        # input is x, output is y
-		        n = len(shape)-1
-		        m = len(x.shape)-1
-		        k = len(overflow_conditions)-1
-		        y = np.zeros(shape, x.dtype)
-		        for i0 in range(shape[0]): # 1-st loop
-		            for i1 in range(shape[1]): # 2-nd loop
-		                ...... # many loops
-		                for in in range(shape[n]) # n+1 -th loop
-		                    if is_overflow(i0,i1,...,in):
-		                        y[i0,i1,...,in] = overflow_value
-		                    else:
-		                        # indexes[i] is a c++ style integer expression consisting of i0,i1,...,in
-		                        y[i0,i1,...,in] = x[indexes[0],indexes[1],...,indexes[m]]
-		
-		        # is_overflow is defined as following
-		        def is_overflow(i0,i1,...,in):
-		            return (
-		                indexes[0] < 0 || indexes[0] >= x.shape[0] ||
-		                indexes[1] < 0 || indexes[1] >= x.shape[1] ||
-		                ......
-		                indexes[m] < 0 || indexes[m] >= x.shape[m] ||
-		
-		                # overflow_conditions[i] is a c++ style boolean expression consisting of i0,i1,...,in
-		                overflow_conditions[0] ||
-		                overflow_conditions[1] ||
-		                ......
-		                overflow_conditions[k]
-		            )
-		    ----------------
-		    * [in] x:	A input jittor Var
-			
-		    * [in] shape:	the output shape, a integer array
-			
-		    * [in] indexes:	array of c++ style integer expression, its length should be the same with the number of dimension of x, some buildin variables it can use are::
-		        
-		             XDIM, xshape0, ..., xshapen, xstride0, ..., xstriden
-		             YDIM, yshape0, ..., yshapem, ystride0, ..., ystridem
-		             i0, i1, ..., in
-		             @e0(...), @e1(...) for extras input index
-		             e0p, e1p , ... for extras input pointer
-					 
-		    * [in] overflow_value:	overflow value
-			
-		    * [in] overflow_conditions:	array of c++ style boolean expression, it length can be vary. the buildin variables it can use are the same with indexes
-				
-		    * [in] extras: extra var used for index
-			
-		    ----------------
-		    Example
-		    Convolution implemented by reindex operation::
-		
-		        def conv(x, w):
-		            N,H,W,C = x.shape
-		            Kh, Kw, _C, Kc = w.shape
-		            assert C==_C
-		            xx = x.reindex([N,H-Kh+1,W-Kw+1,Kh,Kw,C,Kc], [
-		                'i0', # Nid
-		                'i1+i3', # Hid+Khid
-		                'i2+i4', # Wid+KWid
-		                'i5', # Cid
-		            ])
-		            ww = w.broadcast_var(xx)
-		            yy = xx*ww
-		            y = yy.sum([3,4,5]) # Kh, Kw, C
-		            return y, yy'''
+		* Alias x.reindex([i,j,k]) -> 
+		        x.reindex(i.shape, ['@e0(...)','@e1(...)','@e2(...)',], extras=[i,j,k])'''
 		...
 	def reindex_var(self, indexes: List[Var], overflow_value: float=0, overflow_conditions: List[str]={})-> Var:		
 		'''Document:
@@ -4276,56 +4415,14 @@ class Var:
 	@overload
 	def index(self, dim: int, dtype: str="int32")-> Var:		
 		'''Document:
-		* 
-		    Index Operator generate index of shape.
-		    
-		    It performs equivalent Python-pseudo implementation below::
-		    
-		        n = len(shape)-1
-		        x = np.zeros(shape, dtype)
-		        for i0 in range(shape[0]): # 1-st loop
-		            for i1 in range(shape[1]): # 2-nd loop
-		                ...... # many loops
-		                for in in range(shape[n]) # n+1 -th loop
-		                    x[i0,i1,...,in] = i@dim
-		    
-		    * [in] shape:   the output shape, a integer array
-		    * [in] dim: the dim of the index.
-		    * [in] dtype:   the data type string, default int32
-		
-		    Example::
-		
-		        print(jt.index([2,2], 0)())
-		        # output: [[0,0],[1,1]]
-		        print(jt.index([2,2], 1)())
-		        # output: [[0,1],[0,1]]'''
+		* shape dependency version of index op
+		        jt.index_var(a, 1) similar with jt.index(a.shape, 1)'''
 		...
 	@overload
-	def index(self, dtype: str="int32"):		
+	def index(self, dtype: str="int32")-> Tuple[Var]:		
 		'''Document:
-		* 
-		    Index Operator generate index of shape.
-		    
-		    It performs equivalent Python-pseudo implementation below::
-		    
-		        n = len(shape)-1
-		        x = np.zeros(shape, dtype)
-		        for i0 in range(shape[0]): # 1-st loop
-		            for i1 in range(shape[1]): # 2-nd loop
-		                ...... # many loops
-		                for in in range(shape[n]) # n+1 -th loop
-		                    x[i0,i1,...,in] = i@dim
-		    
-		    * [in] shape:   the output shape, a integer array
-		    * [in] dim: the dim of the index.
-		    * [in] dtype:   the data type string, default int32
-		
-		    Example::
-		
-		        print(jt.index([2,2], 0)())
-		        # output: [[0,0],[1,1]]
-		        print(jt.index([2,2], 1)())
-		        # output: [[0,1],[0,1]]'''
+		* shape dependency version of index op
+		        jt.index_var(a) similar with jt.index(a.shape)'''
 		...
 	@overload
 	def index_var(self, dim: int, dtype: str="int32")-> Var:		
@@ -4334,10 +4431,10 @@ class Var:
 		        jt.index_var(a, 1) similar with jt.index(a.shape, 1)'''
 		...
 	@overload
-	def index_var(self, dtype: str="int32"):		
+	def index_var(self, dtype: str="int32")-> Tuple[Var]:		
 		'''Document:
 		* shape dependency version of index op
-		        jt.index_var(a, 1) similar with jt.index(a.shape, 1)'''
+		        jt.index_var(a) similar with jt.index(a.shape)'''
 		...
 	def binary(self, y: Var, p: str)-> Var: ...
 	def pow(self, y: Var)-> Var:		
@@ -4695,7 +4792,8 @@ class Var:
 		    * [in] y: the second input, jt.Var (integal or boolean).'''
 		...
 	def tape(self)-> Var: ...
-	def where(self, dtype: str="int32"):		
+	@overload
+	def where(self, dtype: str="int32")-> Tuple[Var]:		
 		'''Document:
 		*
 		    Where Operator generate index of true condition.
@@ -4711,7 +4809,14 @@ class Var:
 		        jt.where([[0,0,1],[1,0,0]])
 		        # return [jt.Var([0 1], dtype=int32), jt.Var([2 0], dtype=int32)]'''
 		...
-	def argsort(self, dim: int=-1, descending: bool=False, dtype: str="int32"):		
+	@overload
+	def where(self, x: Var, y: Var)-> Var:		
+		'''Document:
+		*
+		     * Condition operator, perform cond ? x : y
+		     *'''
+		...
+	def argsort(self, dim: int=-1, descending: bool=False, dtype: str="int32")-> Tuple[Var]:		
 		'''Document:
 		* 
 		    Argsort Operator Perform an indirect sort by given key or compare function.
@@ -4753,7 +4858,7 @@ class Var:
 		            # return [[0 1 0],[1 0 1]],  [[11 11 12],[12 13 13]]'''
 		...
 	def fetch(self, func: Callable)-> Var: ...
-	def arg_reduce(self, op: str, dim: int, keepdims: bool):		
+	def arg_reduce(self, op: str, dim: int, keepdims: bool)-> Tuple[Var]:		
 		'''Document:
 		*
 		    Returns the indices of the maximum / minimum of the input across a dimension.
@@ -4766,7 +4871,7 @@ class Var:
 		
 		    * [in] dim:     int. Specifies which dimension to be reduced.
 		
-		    * [in] keepdim: bool. Whether the output has ``dim`` retained or not.
+		    * [in] keepdims: bool. Whether the output has ``dim`` retained or not.
 		
 		    ----------------
 		
@@ -6113,17 +6218,246 @@ class Var:
 	def clone(self)-> Var: ...
 	def unary(self, op: str)-> Var: ...
 	def cast(self, op: str)-> Var: ...
-	def int8(self)-> Var: ...
-	def int16(self)-> Var: ...
-	def int32(self)-> Var: ...
-	def int64(self)-> Var: ...
-	def uint8(self)-> Var: ...
-	def uint16(self)-> Var: ...
-	def uint32(self)-> Var: ...
-	def uint64(self)-> Var: ...
-	def float16(self)-> Var: ...
-	def float32(self)-> Var: ...
-	def float64(self)-> Var: ...
+	def int8(self)-> Var:		
+		'''Document:
+		*
+		    Returns a copy of the input var, casted to int8.
+		
+		    ----------------
+		
+		    * [in] x:   the input jt.Var
+		
+		    ----------------
+		    
+		    Example-1::
+		        >>> x = jt.rand(3) * 10 
+		        >>> x
+		        jt.Var([4.093273  2.0086648 8.474352 ], dtype=float32)
+		        >>> x.int8()
+		        jt.Var([4 2 8], dtype=int8)
+		        >>> jt.int8(x)
+		        jt.Var([4 2 8], dtype=int8)'''
+		...
+	def int16(self)-> Var:		
+		'''Document:
+		*
+		    Returns a copy of the input var, casted to int16.
+		
+		    ----------------
+		
+		    * [in] x:   the input jt.Var
+		
+		    ----------------
+		    
+		    Example-1::
+		        >>> x = jt.rand(3) * 10 
+		        >>> x
+		        jt.Var([4.093273  2.0086648 8.474352 ], dtype=float32)
+		        >>> x.int16()
+		        jt.Var([4 2 8], dtype=int16)
+		        >>> jt.int16(x)
+		        jt.Var([4 2 8], dtype=int16)'''
+		...
+	def int32(self)-> Var:		
+		'''Document:
+		*
+		    Returns a copy of the input var, casted to int32.
+		
+		    ----------------
+		
+		    * [in] x:   the input jt.Var
+		
+		    ----------------
+		    
+		    Example-1::
+		        >>> x = jt.rand(3) * 10 
+		        >>> x
+		        jt.Var([4.093273  2.0086648 8.474352 ], dtype=float32)
+		        >>> x.int()
+		        jt.Var([4 2 8], dtype=int32)
+		        >>> jt.int(x)
+		        jt.Var([4 2 8], dtype=int32)
+		        >>> x.int32()
+		        jt.Var([4 2 8], dtype=int32)
+		        >>> jt.int32(x)
+		        jt.Var([4 2 8], dtype=int32)
+		        >>> x.long()
+		        jt.Var([4 2 8], dtype=int32)
+		        >>> jt.long(x)
+		        jt.Var([4 2 8], dtype=int32)'''
+		...
+	def int64(self)-> Var:		
+		'''Document:
+		*
+		    Returns a copy of the input var, casted to int64.
+		
+		    ----------------
+		
+		    * [in] x:   the input jt.Var
+		
+		    ----------------
+		    
+		    Example-1::
+		        >>> x = jt.rand(3) * 10 
+		        >>> x
+		        jt.Var([4.093273  2.0086648 8.474352 ], dtype=float32)
+		        >>> x.int64()
+		        jt.Var([4 2 8], dtype=int64)
+		        >>> jt.int64(x)
+		        jt.Var([4 2 8], dtype=int64)'''
+		...
+	def uint8(self)-> Var:		
+		'''Document:
+		*
+		    Returns a copy of the input var, casted to unsigned int8.
+		
+		    ----------------
+		
+		    * [in] x:   the input jt.Var
+		
+		    ----------------
+		    
+		    Example-1::
+		        >>> x = jt.rand(3) * 10 
+		        >>> x
+		        jt.Var([4.093273  2.0086648 8.474352 ], dtype=float32)
+		        >>> x.uint8()
+		        jt.Var([4 2 8], dtype=uint8)
+		        >>> jt.uint8(x)
+		        jt.Var([4 2 8], dtype=uint8)'''
+		...
+	def uint16(self)-> Var:		
+		'''Document:
+		*
+		    Returns a copy of the input var, casted to unsigned int16.
+		
+		    ----------------
+		
+		    * [in] x:   the input jt.Var
+		
+		    ----------------
+		    
+		    Example-1::
+		        >>> x = jt.rand(3) * 10 
+		        >>> x
+		        jt.Var([4.093273  2.0086648 8.474352 ], dtype=float32)
+		        >>> x.uint16()
+		        jt.Var([4 2 8], dtype=uint16)
+		        >>> jt.uint16(x)
+		        jt.Var([4 2 8], dtype=uint16)'''
+		...
+	def uint32(self)-> Var:		
+		'''Document:
+		*
+		    Returns a copy of the input var, casted to unsigned int32.
+		
+		    ----------------
+		
+		    * [in] x:   the input jt.Var
+		
+		    ----------------
+		    
+		    Example-1::
+		        >>> x = jt.rand(3) * 10 
+		        >>> x
+		        jt.Var([4.093273  2.0086648 8.474352 ], dtype=float32)
+		        >>> x.uint32()
+		        jt.Var([4 2 8], dtype=uint32)
+		        >>> jt.uint32(x)
+		        jt.Var([4 2 8], dtype=uint32)'''
+		...
+	def uint64(self)-> Var:		
+		'''Document:
+		*
+		    Returns a copy of the input var, casted to unsigned int64.
+		
+		    ----------------
+		
+		    * [in] x:   the input jt.Var
+		
+		    ----------------
+		    
+		    Example-1::
+		        >>> x = jt.rand(3) * 10 
+		        >>> x
+		        jt.Var([4.093273  2.0086648 8.474352 ], dtype=float32)
+		        >>> x.uint64()
+		        jt.Var([4 2 8], dtype=uint64)
+		        >>> jt.uint64(x)
+		        jt.Var([4 2 8], dtype=uint64)'''
+		...
+	def float16(self)-> Var:		
+		'''Document:
+		*
+		    Returns a copy of the input var, casted to float16 (half-precision float).
+		
+		    ----------------
+		
+		    * [in] x:   the input jt.Var
+		
+		    ----------------
+		    
+		    Example-1::
+		        >>> x = jt.rand(3) * 10 
+		        >>> x
+		        jt.Var([4.093273  2.0086648 8.474352 ], dtype=float32)
+		        >>> x.half()
+		        jt.Var([4.094 2.008 8.48 ], dtype=float16)
+		        >>> jt.half(x)
+		        jt.Var([4.094 2.008 8.48 ], dtype=float16)
+		        >>> x.float16()
+		        jt.Var([4.094 2.008 8.48 ], dtype=float16)
+		        >>> jt.float16(x)
+		        jt.Var([4.094 2.008 8.48 ], dtype=float16)'''
+		...
+	def float32(self)-> Var:		
+		'''Document:
+		*
+		    Returns a copy of the input var, casted to float32.
+		
+		    ----------------
+		
+		    * [in] x:   the input jt.Var
+		
+		    ----------------
+		    
+		    Example-1::
+		        >>> x = jt.arange(3)
+		        >>> x
+		        jt.Var([0 1 2], dtype=int32)
+		        >>> x.float()
+		        jt.Var([0. 1. 2.], dtype=float32)
+		        >>> jt.float(x) 
+		        jt.Var([0. 1. 2.], dtype=float32)
+		        >>> x.float32()
+		        jt.Var([0. 1. 2.], dtype=float32)
+		        >>> jt.float32(x) 
+		        jt.Var([0. 1. 2.], dtype=float32)'''
+		...
+	def float64(self)-> Var:		
+		'''Document:
+		*
+		    Returns a copy of the input var, casted to float64 (double-precision float).
+		
+		    ----------------
+		
+		    * [in] x:   the input jt.Var
+		
+		    ----------------
+		    
+		    Example-1::
+		        >>> x = jt.arange(3)
+		        >>> x
+		        jt.Var([0 1 2], dtype=int32)
+		        >>> x.double()
+		        jt.Var([0. 1. 2.], dtype=float64)
+		        >>> jt.double(x) 
+		        jt.Var([0. 1. 2.], dtype=float64)
+		        >>> x.float64()
+		        jt.Var([0. 1. 2.], dtype=float64)
+		        >>> jt.float64(x) 
+		        jt.Var([0. 1. 2.], dtype=float64)'''
+		...
 	def abs(self)-> Var:		
 		'''Document:
 		*
@@ -6198,10 +6532,12 @@ class Var:
 		    ----------------
 		
 		    Example-1::
-		        >>> a = jt.rand(4) * 2
-		        >>> a
+		        >>> x = jt.rand(4) * 2
+		        >>> x
 		        jt.Var([0.02863695 1.30122    1.6048753  1.140261  ], dtype=float32)
-		        >>> jt.log(a)
+		        >>> jt.log(x)
+		        jt.Var([-3.5530574   0.26330233  0.47304606  0.13125724], dtype=float32)
+		        >>> x.log()
 		        jt.Var([-3.5530574   0.26330233  0.47304606  0.13125724], dtype=float32)'''
 		...
 	def exp(self)-> Var:		
@@ -6216,10 +6552,12 @@ class Var:
 		    ----------------
 		
 		    Example-1::
-		        >>> a = jt.rand(4) * 2
-		        >>> a
+		        >>> x = jt.rand(4) * 2
+		        >>> x
 		        jt.Var([1.9841381 1.4103996 0.5855549 1.4212812], dtype=float32)
-		        >>> jt.exp(a)
+		        >>> jt.exp(x)
+		        jt.Var([7.2727766 4.0975924 1.7959872 4.1424246], dtype=float32)
+		        >>> x.exp()
 		        jt.Var([7.2727766 4.0975924 1.7959872 4.1424246], dtype=float32)'''
 		...
 	def sqrt(self)-> Var:		
@@ -6234,10 +6572,12 @@ class Var:
 		    ----------------
 		
 		    Example-1::
-		        >>> a = jt.rand(4) * 2
-		        >>> a
+		        >>> x = jt.rand(4) * 2
+		        >>> x
 		        jt.Var([0.81957287 0.5609612  0.07435933 1.7571875 ], dtype=float32)
-		        >>> jt.sqrt(a)
+		        >>> jt.sqrt(x)
+		        jt.Var([0.90530264 0.7489734  0.27268907 1.3255895 ], dtype=float32)
+		        >>> x.sqrt()
 		        jt.Var([0.90530264 0.7489734  0.27268907 1.3255895 ], dtype=float32)'''
 		...
 	def round(self)-> Var:		
@@ -6252,10 +6592,12 @@ class Var:
 		    ----------------
 		
 		    Example-1::
-		        >>> a = jt.randn(4)
-		        >>> a
+		        >>> x = jt.randn(4)
+		        >>> x
 		        jt.Var([ 2.101595    0.33055413 -0.44147047 -0.7720668 ], dtype=float32)
-		        >>> jt.round(a)
+		        >>> jt.round(x)
+		        jt.Var([ 2.0  0.0  0.0 -1.0], dtype=float32)
+		        >>> x.round()
 		        jt.Var([ 2.0  0.0  0.0 -1.0], dtype=float32)'''
 		...
 	def floor(self)-> Var:		
@@ -6269,10 +6611,12 @@ class Var:
 		
 		    ----------------
 		    Example-1::
-		        >>> a = jt.randn(4)
-		        >>> a
+		        >>> x = jt.randn(4)
+		        >>> x
 		        jt.Var([-1.0339162 -0.7259972 -0.9220003 -0.8449701], dtype=float32)
-		        >>> jt.floor(a)
+		        >>> jt.floor(x)
+		        jt.Var([-2.0 -1.0 -1.0 -1.0], dtype=float32)
+		        >>> x.floor
 		        jt.Var([-2.0 -1.0 -1.0 -1.0], dtype=float32)'''
 		...
 	def ceil(self)-> Var:		
@@ -6287,10 +6631,12 @@ class Var:
 		    ----------------
 		
 		    Example-1::
-		        >>> a = jt.randn(4)
-		        >>> a
+		        >>> x = jt.randn(4)
+		        >>> x
 		        jt.Var([-1.0339162 -0.7259972 -0.9220003 -0.8449701], dtype=float32)
-		        >>> jt.ceil(a)
+		        >>> jt.ceil(x)
+		        jt.Var([-1.0  0.0  0.0  0.0], dtype=float32)
+		        >>> x.ceil()
 		        jt.Var([-1.0  0.0  0.0  0.0], dtype=float32)'''
 		...
 	def round_int(self)-> Var:		
@@ -6305,10 +6651,12 @@ class Var:
 		    ----------------
 		
 		    Example-1::
-		        >>> a = jt.randn(4)
-		        >>> a
+		        >>> x = jt.randn(4)
+		        >>> x
 		        jt.Var([ 2.101595    0.33055413 -0.44147047 -0.7720668 ], dtype=float32)
-		        >>> jt.round_int(a)
+		        >>> jt.round_int(x)
+		        jt.Var([ 2  0  0 -1], dtype=int32)
+		        >>> x.round_int
 		        jt.Var([ 2  0  0 -1], dtype=int32)'''
 		...
 	def floor_int(self)-> Var:		
@@ -6322,10 +6670,12 @@ class Var:
 		
 		    ----------------
 		    Example-1::
-		        >>> a = jt.randn(4)
-		        >>> a
+		        >>> x = jt.randn(4)
+		        >>> x
 		        jt.Var([-1.0339162 -0.7259972 -0.9220003 -0.8449701], dtype=float32)
-		        >>> jt.floor_int(a)
+		        >>> jt.floor_int(x)
+		        jt.Var([-2 -1 -1 -1], dtype=int32)
+		        >>> x.floor_int
 		        jt.Var([-2 -1 -1 -1], dtype=int32)'''
 		...
 	def ceil_int(self)-> Var:		
@@ -6340,10 +6690,12 @@ class Var:
 		    ----------------
 		
 		    Example-1::
-		        >>> a = jt.randn(4)
-		        >>> a
+		        >>> x = jt.randn(4)
+		        >>> x
 		        jt.Var([-1.0339162 -0.7259972 -0.9220003 -0.8449701], dtype=float32)
-		        >>> jt.ceil_int(a)
+		        >>> jt.ceil_int(x)
+		        jt.Var([-1  0  0  0], dtype=int32)
+		        >>> x.ceil_int()
 		        jt.Var([-1  0  0  0], dtype=int32)'''
 		...
 	def sin(self)-> Var:		
@@ -6358,10 +6710,12 @@ class Var:
 		    ----------------
 		
 		    Example-1::
-		        >>> a = jt.randn(4)
-		        >>> a
+		        >>> x = jt.randn(4)
+		        >>> x
 		        jt.Var([ 0.32893723 -0.7112559  -0.872391    1.8001337 ], dtype=float32)
-		        >>> jt.sin(a)
+		        >>> jt.sin(x)
+		        jt.Var([ 0.32303742 -0.6527857  -0.76586854  0.9738172 ], dtype=float32)
+		        >>> x.sin()
 		        jt.Var([ 0.32303742 -0.6527857  -0.76586854  0.9738172 ], dtype=float32)'''
 		...
 	def asin(self)-> Var:		
@@ -6376,10 +6730,12 @@ class Var:
 		    ----------------
 		
 		    Example-1::
-		        >>> a = jt.randn(4)
-		        >>> a
+		        >>> x = jt.randn(4)
+		        >>> x
 		        jt.Var([ 0.09342023 -0.42522037  0.9264933  -0.785264  ], dtype=float32)
-		        >>> jt.asin(a)
+		        >>> jt.asin(x)
+		        jt.Var([ 0.09355665 -0.43920535  1.1849847  -0.9031224 ], dtype=float32)
+		        >>> x.asin()
 		        jt.Var([ 0.09355665 -0.43920535  1.1849847  -0.9031224 ], dtype=float32)'''
 		...
 	def arcsin(self)-> Var:		
@@ -6394,10 +6750,12 @@ class Var:
 		    ----------------
 		
 		    Example-1::
-		        >>> a = jt.randn(4)
-		        >>> a
+		        >>> x = jt.randn(4)
+		        >>> x
 		        jt.Var([ 0.09342023 -0.42522037  0.9264933  -0.785264  ], dtype=float32)
-		        >>> jt.asin(a)
+		        >>> jt.asin(x)
+		        jt.Var([ 0.09355665 -0.43920535  1.1849847  -0.9031224 ], dtype=float32)
+		        >>> x.asin()
 		        jt.Var([ 0.09355665 -0.43920535  1.1849847  -0.9031224 ], dtype=float32)'''
 		...
 	def sinh(self)-> Var:		
@@ -6412,10 +6770,12 @@ class Var:
 		    ----------------
 		
 		    Example-1::
-		        >>> a = jt.randn(4)
-		        >>> a
+		        >>> x = jt.randn(4)
+		        >>> x
 		        jt.Var([ 0.32893723 -0.7112559  -0.872391    1.8001337 ], dtype=float32)
-		        >>> jt.sinh(a)
+		        >>> jt.sinh(x)
+		        jt.Var([ 0.3349012  -0.77276015 -0.9873369   2.9425898 ], dtype=float32)
+		        >>> x.sinh
 		        jt.Var([ 0.3349012  -0.77276015 -0.9873369   2.9425898 ], dtype=float32)'''
 		...
 	def asinh(self)-> Var:		
@@ -6430,10 +6790,12 @@ class Var:
 		    ----------------
 		
 		    Example-1::
-		        >>> a = jt.randn(4)
-		        >>> a
+		        >>> x = jt.randn(4)
+		        >>> x
 		        jt.Var([-1.9749726  -0.52341473  0.8906148   1.0338128 ], dtype=float32)
-		        >>> jt.asinh(a)
+		        >>> jt.asinh(x)
+		        jt.Var([-1.4323865  -0.5020559   0.8018747   0.90508187], dtype=float32)
+		        >>> x.asinh()
 		        jt.Var([-1.4323865  -0.5020559   0.8018747   0.90508187], dtype=float32)'''
 		...
 	def arcsinh(self)-> Var:		
@@ -6448,10 +6810,12 @@ class Var:
 		    ----------------
 		
 		    Example-1::
-		        >>> a = jt.randn(4)
-		        >>> a
+		        >>> x = jt.randn(4)
+		        >>> x
 		        jt.Var([-1.9749726  -0.52341473  0.8906148   1.0338128 ], dtype=float32)
-		        >>> jt.asinh(a)
+		        >>> jt.asinh(x)
+		        jt.Var([-1.4323865  -0.5020559   0.8018747   0.90508187], dtype=float32)
+		        >>> x.asinh()
 		        jt.Var([-1.4323865  -0.5020559   0.8018747   0.90508187], dtype=float32)'''
 		...
 	def tan(self)-> Var:		
@@ -6466,10 +6830,12 @@ class Var:
 		    ----------------
 		
 		    Example-1::
-		        >>> a = jt.randn(4)
-		        >>> a
+		        >>> x = jt.randn(4)
+		        >>> x
 		        jt.Var([ 0.32893723 -0.7112559  -0.872391    1.8001337 ], dtype=float32)
-		        >>> jt.tan(a)
+		        >>> jt.tan(x)
+		        jt.Var([ 0.34133783 -0.8617148  -1.1910915  -4.283673  ], dtype=float32)
+		        >>> x.tan()
 		        jt.Var([ 0.34133783 -0.8617148  -1.1910915  -4.283673  ], dtype=float32)'''
 		...
 	def atan(self)-> Var:		
@@ -6484,10 +6850,12 @@ class Var:
 		    ----------------
 		
 		    Example-1::
-		        >>> a = jt.randn(4)
-		        >>> a
+		        >>> x = jt.randn(4)
+		        >>> x
 		        jt.Var([-0.85885596  1.187804    0.47249675  0.95933187], dtype=float32)
-		        >>> jt.atan(a)
+		        >>> jt.atan(x)
+		        jt.Var([-0.70961297  0.87102956  0.44140393  0.76464504], dtype=float32)
+		        >>> x.atan()
 		        jt.Var([-0.70961297  0.87102956  0.44140393  0.76464504], dtype=float32)'''
 		...
 	def arctan(self)-> Var:		
@@ -6502,10 +6870,12 @@ class Var:
 		    ----------------
 		
 		    Example-1::
-		        >>> a = jt.randn(4)
-		        >>> a
+		        >>> x = jt.randn(4)
+		        >>> x
 		        jt.Var([-0.85885596  1.187804    0.47249675  0.95933187], dtype=float32)
-		        >>> jt.atan(a)
+		        >>> jt.atan(x)
+		        jt.Var([-0.70961297  0.87102956  0.44140393  0.76464504], dtype=float32)
+		        >>> x.atan()
 		        jt.Var([-0.70961297  0.87102956  0.44140393  0.76464504], dtype=float32)'''
 		...
 	def tanh(self)-> Var:		
@@ -6520,10 +6890,12 @@ class Var:
 		    ----------------
 		    
 		    Example-1::
-		        >>> a = jt.randn(4)
-		        >>> a
+		        >>> x = jt.randn(4)
+		        >>> x
 		        jt.Var([-0.85885596  1.187804    0.47249675  0.95933187], dtype=float32)
-		        >>> jt.tanh(a)
+		        >>> jt.tanh(x)
+		        jt.Var([-0.6956678   0.82989657  0.4402144   0.7439787 ], dtype=float32)
+		        >>> x.tanh()
 		        jt.Var([-0.6956678   0.82989657  0.4402144   0.7439787 ], dtype=float32)'''
 		...
 	def atanh(self)-> Var:		
@@ -6538,10 +6910,12 @@ class Var:
 		    ----------------
 		
 		    Example-1::
-		        >>> a = jt.rand(4) * 2 - 1
-		        >>> a
+		        >>> x = jt.rand(4) * 2 - 1
+		        >>> x
 		        jt.Var([ 0.9062414  -0.799802   -0.27219176 -0.7274077 ], dtype=float32)
-		        >>> jt.atanh(a)
+		        >>> jt.atanh(x)
+		        jt.Var([ 1.5060828  -1.0980625  -0.27922946 -0.9231999 ], dtype=float32)
+		        >>> x.atanh()
 		        jt.Var([ 1.5060828  -1.0980625  -0.27922946 -0.9231999 ], dtype=float32)'''
 		...
 	def arctanh(self)-> Var:		
@@ -6556,10 +6930,12 @@ class Var:
 		    ----------------
 		
 		    Example-1::
-		        >>> a = jt.rand(4) * 2 - 1
-		        >>> a
+		        >>> x = jt.rand(4) * 2 - 1
+		        >>> x
 		        jt.Var([ 0.9062414  -0.799802   -0.27219176 -0.7274077 ], dtype=float32)
-		        >>> jt.atanh(a)
+		        >>> jt.atanh(x)
+		        jt.Var([ 1.5060828  -1.0980625  -0.27922946 -0.9231999 ], dtype=float32)
+		        >>> x.atanh()
 		        jt.Var([ 1.5060828  -1.0980625  -0.27922946 -0.9231999 ], dtype=float32)'''
 		...
 	def cos(self)-> Var:		
@@ -6574,10 +6950,12 @@ class Var:
 		    ----------------
 		
 		    Example-1::
-		        >>> a = jt.randn(4)
-		        >>> a
+		        >>> x = jt.randn(4)
+		        >>> x
 		        jt.Var([ 0.32893723 -0.7112559  -0.872391    1.8001337 ], dtype=float32)
-		        >>> jt.cos(a)
+		        >>> jt.cos(x)
+		        jt.Var([ 0.9463862  0.7575426  0.6429972 -0.2273323], dtype=float32)
+		        >>> x.cos()
 		        jt.Var([ 0.9463862  0.7575426  0.6429972 -0.2273323], dtype=float32)'''
 		...
 	def acos(self)-> Var:		
@@ -6592,10 +6970,12 @@ class Var:
 		    ----------------
 		
 		    Example-1::
-		        >>> a = jt.rand(4) * 2 - 1
-		        >>> a
+		        >>> x = jt.rand(4) * 2 - 1
+		        >>> x
 		        jt.Var([ 0.5876564  0.740723  -0.667666   0.5371753], dtype=float32)
-		        >>> jt.acos(a)
+		        >>> jt.acos(x)
+		        jt.Var([0.9426371 0.7366504 2.3018656 1.0037117], dtype=float32)
+		        >>> x.acos()
 		        jt.Var([0.9426371 0.7366504 2.3018656 1.0037117], dtype=float32)'''
 		...
 	def arccos(self)-> Var:		
@@ -6610,10 +6990,12 @@ class Var:
 		    ----------------
 		
 		    Example-1::
-		        >>> a = jt.rand(4) * 2 - 1
-		        >>> a
+		        >>> x = jt.rand(4) * 2 - 1
+		        >>> x
 		        jt.Var([ 0.5876564  0.740723  -0.667666   0.5371753], dtype=float32)
-		        >>> jt.acos(a)
+		        >>> jt.acos(x)
+		        jt.Var([0.9426371 0.7366504 2.3018656 1.0037117], dtype=float32)
+		        >>> x.acos()
 		        jt.Var([0.9426371 0.7366504 2.3018656 1.0037117], dtype=float32)'''
 		...
 	def cosh(self)-> Var:		
@@ -6628,10 +7010,12 @@ class Var:
 		    ----------------
 		
 		    Example-1::
-		        >>> a = jt.randn(4)
-		        >>> a
+		        >>> x = jt.randn(4)
+		        >>> x
 		        jt.Var([ 0.32893723 -0.7112559  -0.872391    1.8001337 ], dtype=float32)
-		        >>> jt.cosh(a)
+		        >>> jt.cosh(x)
+		        jt.Var([1.0545894 1.2637873 1.405288  3.1078668], dtype=float32)
+		        >>> x.cosh()
 		        jt.Var([1.0545894 1.2637873 1.405288  3.1078668], dtype=float32)'''
 		...
 	def acosh(self)-> Var:		
@@ -6646,10 +7030,12 @@ class Var:
 		    ----------------
 		
 		    Example-1::
-		        >>> a = jt.rand(4) + 1
-		        >>> a
+		        >>> x = jt.rand(4) + 1
+		        >>> x
 		        jt.Var([1.3609099 1.8137748 1.1146184 1.3911307], dtype=float32)
-		        >>> jt.acosh(a)
+		        >>> jt.acosh(x)
+		        jt.Var([0.8259237  1.2020639  0.47432774 0.8579033 ], dtype=float32)
+		        >>> x.acosh()
 		        jt.Var([0.8259237  1.2020639  0.47432774 0.8579033 ], dtype=float32)'''
 		...
 	def arccosh(self)-> Var:		
@@ -6664,10 +7050,12 @@ class Var:
 		    ----------------
 		
 		    Example-1::
-		        >>> a = jt.rand(4) + 1
-		        >>> a
+		        >>> x = jt.rand(4) + 1
+		        >>> x
 		        jt.Var([1.3609099 1.8137748 1.1146184 1.3911307], dtype=float32)
-		        >>> jt.acosh(a)
+		        >>> jt.acosh(x)
+		        jt.Var([0.8259237  1.2020639  0.47432774 0.8579033 ], dtype=float32)
+		        >>> x.acosh()
 		        jt.Var([0.8259237  1.2020639  0.47432774 0.8579033 ], dtype=float32)'''
 		...
 	def sigmoid(self)-> Var:		
@@ -6685,10 +7073,12 @@ class Var:
 		    ----------------
 		
 		    Example-1::
-		        >>> a = jt.randn(4)
-		        >>> a
+		        >>> x = jt.randn(4)
+		        >>> x
 		        jt.Var([ 0.49443012  0.4305426  -1.0364404  -1.2628382 ], dtype=float32)
-		        >>> jt.sigmoid(a)
+		        >>> jt.sigmoid(x)
+		        jt.Var([0.62114954 0.6060032  0.2618374  0.2204857 ], dtype=float32)
+		        >>> x.sigmoid()
 		        jt.Var([0.62114954 0.6060032  0.2618374  0.2204857 ], dtype=float32)'''
 		...
 	def erf(self)-> Var:		
@@ -6706,13 +7096,32 @@ class Var:
 		    ----------------
 		
 		    Example-1::
-		        >>> a = jt.randn(4)
-		        >>> a
+		        >>> x = jt.randn(4)
+		        >>> x
 		        jt.Var([ 0.49443012  0.4305426  -1.0364404  -1.2628382 ], dtype=float32)
-		        >>> jt.erf(a)
+		        >>> jt.erf(x)
+		        jt.Var([ 0.51559156  0.45739546 -0.85728306 -0.9258883 ], dtype=float32)
+		        >>> x.erf()
 		        jt.Var([ 0.51559156  0.45739546 -0.85728306 -0.9258883 ], dtype=float32)'''
 		...
-	def erfinv(self)-> Var: ...
+	def erfinv(self)-> Var:		
+		'''Document:
+		*
+		    Computes the inverse error function of each element. 
+		
+		    * [in] x: the input jt.Var.
+		
+		    ----------------
+		
+		    Example-1::
+		        >>> x = jt.rand(4) * 2 - 1 
+		        >>> x
+		        jt.Var([ 0.00277209 -0.26642472  0.7869792   0.5415418 ], dtype=float32)
+		        >>> jt.erfinv(x)
+		        jt.Var([ 0.00245671 -0.24068035  0.8805613   0.5242405 ], dtype=float32)
+		        >>> x.erfinv()
+		        jt.Var([ 0.00245671 -0.24068035  0.8805613   0.5242405 ], dtype=float32)'''
+		...
 	def transpose(self, axes: Tuple[int]=())-> Var: ...
 	def fuse_transpose(self, axes: Tuple[int]=())-> Var: ...
 	def safe_clip(self, left: float, right: float)-> Var:		
@@ -6725,7 +7134,10 @@ class Var:
 		    * [in] right: float64 clip max value.'''
 		...
 	def array(self)-> Var: ...
+	@overload
 	def getitem(self, slices: slice)-> Var: ...
+	@overload
+	def getitem(self, slices: slice, _: int)-> Tuple[Var]: ...
 	def candidate(self, fail_cond: str, dtype: str="int32")-> Var:		
 		'''Document:
 		*
@@ -6769,7 +7181,7 @@ class Var:
 		        #    x[y[0], 1] <= x[y[1], 1] and x[y[1], 1] <= x[y[2], 1] and ... and x[y[m-2], 1] <= x[y[m-1], 1]'''
 		...
 	@overload
-	def code(self, outputs: List[Var], cpu_src: str="", cpu_grad_src: List[str]={}, cpu_header: str="", cuda_src: str="", cuda_grad_src: List[str]={}, cuda_header: str=""):		
+	def code(self, outputs: List[Var], cpu_src: str="", cpu_grad_src: List[str]={}, cpu_header: str="", cuda_src: str="", cuda_grad_src: List[str]={}, cuda_header: str="")-> Tuple[Var]:		
 		'''Document:
 		*
 		    Code Operator for easily customized op.
@@ -7031,24 +7443,35 @@ class Var:
 	def broadcast(self, y: Var, dims: Tuple[int]=())-> Var:		
 		'''Document:
 		*
-		    Broadcast ``x`` to a given shape.
+		    Broadcast ``x`` to the same shape as ``y``.
 		
 		    ----------------
 		
 		    * [in] x:       the input jt.Var.
 		
-		    * [in] shape:   the output shape.
+		    * [in] y:       the reference jt.Var.
 		
 		    * [in] dims:    specifies the new dimension in the output shape, an integer array.
 		
 		    ----------------
+		
+		    .. note::
+		      jt.broadcast_var(x, y, dims) is an alias of jt.broadcast(x, y, dims)
 		
 		    Example-1::
 		        >>> x = jt.randint(0, 10, shape=(2, 2))
 		        >>> x
 		        jt.Var([[8 1]
 		         [7 6]], dtype=int32)
-		        >>> jt.broadcast(x, shape=(2, 3, 2), dims=[1])
+		        >>> y = jt.randint(0, 10, shape=(2, 3, 2))
+		        >>> jt.broadcast(x, y, dims=[1])
+		        jt.Var([[[8 1]
+		          [8 1]
+		          [8 1]],
+		         [[7 6]
+		          [7 6]
+		          [7 6]]], dtype=int32)
+		        >>> jt.broadcast_var(x, y, dims=[1])
 		        jt.Var([[[8 1]
 		          [8 1]
 		          [8 1]],
@@ -7191,9 +7614,17 @@ class Var:
 		                "i3", # Cid
 		            ])'''
 		...
-	def sync(self, device_sync: bool=False): ...
-	def fetch_sync(self)-> numpy.ndarray: ...
-	def numpy(self)-> numpy.ndarray: ...
+	def sync(self, device_sync: bool=False, weak_sync: bool=True): ...
+	def fetch_sync(self)-> numpy.ndarray:		
+		'''Document:
+		*
+		     * Returns a numpy array copy of the Var.'''
+		...
+	def numpy(self)-> numpy.ndarray:		
+		'''Document:
+		*
+		     * Returns a numpy array copy of the Var.'''
+		...
 	def assign(self, v: Var)-> Var:		
 		'''Document:
 		*
@@ -7257,6 +7688,11 @@ class Var:
 		'''Document:
 		*
 		     * return True if operator fusion is stopped.'''
+		...
+	def out_hint(self)-> Var:		
+		'''Document:
+		*
+		     * output hint for training optimization'''
 		...
 	def start_grad(self)-> Var:		
 		'''Document:
@@ -7358,7 +7794,30 @@ class Var:
 		     * enable the gradient calculation for the Var.'''
 		...
 	def astype(self, x: Var, op: str)-> Var: ...
-	def half(self, x: Var)-> Var: ...
+	def half(self, x: Var)-> Var:		
+		'''Document:
+		*
+		    Returns a copy of the input var, casted to float16 (half-precision float).
+		
+		    ----------------
+		
+		    * [in] x:   the input jt.Var
+		
+		    ----------------
+		    
+		    Example-1::
+		        >>> x = jt.rand(3) * 10 
+		        >>> x
+		        jt.Var([4.093273  2.0086648 8.474352 ], dtype=float32)
+		        >>> x.half()
+		        jt.Var([4.094 2.008 8.48 ], dtype=float16)
+		        >>> jt.half(x)
+		        jt.Var([4.094 2.008 8.48 ], dtype=float16)
+		        >>> x.float16()
+		        jt.Var([4.094 2.008 8.48 ], dtype=float16)
+		        >>> jt.float16(x)
+		        jt.Var([4.094 2.008 8.48 ], dtype=float16)'''
+		...
 	def expand_as(self, x: Var, y: Var, dims: Tuple[int]=())-> Var:		
 		'''Document:
 		*
@@ -7402,6 +7861,8 @@ class Flags:
 	'''A set of flags to configure jittor running behaviors'''
 	addr2line_path: str
 	'''Path of addr2line. Default: ""'''
+	amp_level: int
+	'''Auto mixed-precision optimization level, 0: not use fp16, 1-3: preserve level, not use fp16 for now; 4: perfer fp16, but some ops use fp32 e.g. sum,exp; 5: simular with 4, and array op will automatically convert to fp16; 6: all ops prefer fp16. Default: 0'''
 	amp_reg: int
 	'''Auto mixed-precision control registers, bit 0: prefer 32; bit 1: prefer 16; bit 2: keep reduce type; bit 3 keep white list type; bit 4: array like op prefer too. Default: 0'''
 	auto_convert_64_to_32: int
@@ -7464,6 +7925,8 @@ class Flags:
 	'''No fusion optimization for all jittor Var creation. Default: 0'''
 	no_grad: bool
 	'''No grad for all jittor Var creation. Default: 0'''
+	node_order: int
+	'''id prior. Default: 0'''
 	nvcc_flags: str
 	'''Flags of CUDA C++ compiler. Default: ""'''
 	nvcc_path: str
@@ -7486,6 +7949,8 @@ class Flags:
 	'''Profiler warmup. Default: 0'''
 	python_path: str
 	'''Path of python interpreter. Default: ""'''
+	reuse_array: int
+	'''try reuse np.array memory into jt.array. Default: 0'''
 	rewrite_op: int
 	'''Rewrite source file of jit operator or not. Default: 1'''
 	stat_allocator_total_alloc_byte: int
@@ -7496,6 +7961,8 @@ class Flags:
 	'''Total alloc byte. Default: 0'''
 	stat_allocator_total_free_call: int
 	'''Number of alloc function call. Default: 0'''
+	th_mode: int
+	'''th mode. Default: 0'''
 	trace_depth: int
 	'''trace depth for GDB. Default: 10'''
 	trace_py_var: int
@@ -7504,8 +7971,6 @@ class Flags:
 	'''Trace py stack max depth for debug. Default: 0'''
 	try_use_32bit_index: int
 	'''If not overflow, try to use 32 bit type as index type. Default: 0'''
-	update_queue_auto_flush_delay: int
-	'''when size of a update queue is great than this value, update queue trigger auto flush(default 2). Default: 2): when size of a update queue is great than this value, update queue trigger auto flush(default 2'''
 	use_acl: int
 	'''Use cuda or not. 1 for trying to use cuda, 2 for forcing to use cuda. Default: 0'''
 	use_cuda: int
@@ -7516,6 +7981,8 @@ class Flags:
 	'''Enable never free exact fit allocator. Default: 0'''
 	use_parallel_op_compiler: int
 	'''Number of threads that parallel op comiler used, default 16, set this value to 0 will disable parallel op compiler. Default: 16'''
+	use_rocm: int
+	'''Use cuda or not. 1 for trying to use cuda, 2 for forcing to use cuda. Default: 0'''
 	use_sfrl_allocator: int
 	'''Enable sfrl allocator. Default: 1'''
 	use_stat_allocator: int

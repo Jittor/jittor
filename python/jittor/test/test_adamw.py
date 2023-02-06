@@ -83,3 +83,7 @@ class TestAdamw(unittest.TestCase):
                 lj = float(loss_jittor.data)
                 # print(abs(lt - lj))
                 assert abs(lt - lj) < 1e-5
+
+if __name__ == "__main__":
+    unittest.main()
+    

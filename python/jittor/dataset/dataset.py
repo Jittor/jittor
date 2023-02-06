@@ -129,6 +129,7 @@ class Dataset(object):
         self.sampler = None
         self._disable_workers = False
         self._shuffle_rng = np.random.default_rng(1)
+        self.dataset = self
 
     def __getitem__(self, index):
         raise NotImplementedError
@@ -408,7 +409,10 @@ Example::
     def __del__(self):
         if mp_log_v:
             print("dataset deleted")
-        self.terminate()
+        try:
+            self.terminate()
+        except:
+            pass
 
     def __real_len__(self):
         if self.total_len is None:
@@ -582,6 +586,8 @@ Example::
                     self.batch_id += 1
                     yield batch_data
 
+def DataLoader(dataset: Dataset, *args, **kargs):
+    return dataset.set_attrs(*args, **kargs)
 
 class ImageFolder(Dataset):
     """

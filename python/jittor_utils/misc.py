@@ -15,6 +15,13 @@ from jittor_utils import lock, LOG
 import gzip
 import tarfile
 import zipfile
+jittor_offline_path = None
+try:
+    import jittor_offline
+    jittor_offline_path = os.path.dirname(jittor_offline.__file__)
+except:
+    pass
+
 
 def ensure_dir(dir_path):
     if not os.path.isdir(dir_path):
@@ -46,6 +53,13 @@ def download_url_to_local(url, filename, root_folder, md5):
     if check_file_exist(file_path, md5):
         return
     else:
+        if jittor_offline_path:
+            offpath = os.path.join(jittor_offline_path, filename)
+            if check_file_exist(offpath, md5):
+                import shutil
+                print('Using offline jittor', file_path)
+                shutil.copy(offpath, file_path)
+                return
         print('Downloading ' + url + ' to ' + file_path)
         try:
             urllib.request.urlretrieve(
@@ -59,7 +73,7 @@ def download_url_to_local(url, filename, root_folder, md5):
                 os.remove(file_path)
             raise RuntimeError(msg)
     if not check_file_exist(file_path, md5):
-        raise RuntimeError("File downloads failed.")
+        raise RuntimeError(f"MD5 mismatch between the server and the downloaded file {file_path}")
 
 
 

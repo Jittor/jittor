@@ -20,5 +20,23 @@ class TestProfiler(unittest.TestCase):
         y = float(rep[-2][4])
         assert abs(x-y)/x < 1e-3
 
+    def test_marks(self):
+        a = jt.rand(1000,1000)
+        b = jt.rand(1000,1000)
+        jt.sync_all()
+        results = []
+        with jt.profile_scope() as rep:
+            results.append(jt.matmul(a, b))
+            with jt.profile_mark("mark1"):
+                results.append(jt.matmul(a, b))
+                with jt.profile_mark("mark2"):
+                    results.append(jt.matmul(a, b))
+            with jt.profile_mark("mark3"):
+                results.append(jt.matmul(a, b))
+            results.append(jt.matmul(a, b))
+            jt.sync_all()
+        assert len(rep) == 6
+
+
 if __name__ == "__main__":
     unittest.main()

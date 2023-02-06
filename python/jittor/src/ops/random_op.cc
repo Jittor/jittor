@@ -39,8 +39,8 @@ RandomOp::RandomOp(NanoVector shape, NanoString dtype, NanoString type) {
 }
 
 void RandomOp::jit_prepare(JK& jk) {
-    jk << _CS("[T:") << output->dtype();
-    jk << _CS("][R:") << type << ']';
+    jk << "«T:" << output->dtype();
+    jk << "«R:" << type;
 }
 
 #else // JIT

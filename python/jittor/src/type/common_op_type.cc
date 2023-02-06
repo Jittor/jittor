@@ -42,7 +42,12 @@ unordered_map<string,string> common_op_type_cuda_map = {
     {"erf", "(($1) ::erff(($2)))"},
     {"erfinv", "(($1) ::erfinvf(($1)($2)))"},
     {"cast", "(($1)($2))"},
+#ifdef _WIN32
+    // windows don't have pow(float,int), cause undefined reference, fix it
+    {"pow", "::pow(($1)($2),($1)($4))"},
+#else
     {"pow", "::pow(($2),($4))"},
+#endif
     {"maximum", "::max($1($2), $1($4))"},
     {"minimum", "::min($1($2), $1($4))"},
     {"mod", "@if(@strcmp($1,float32)==0,(($2)-::floorf(($2)/($4))*($4)),@if(@strcmp(@Tx,float64)==0,(($2)-::floor(($2)/($4))*($4)),(($2)%($4))))"},

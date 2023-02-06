@@ -47,7 +47,7 @@ def home():
     _home_path = os.environ.get("JITTOR_HOME", default_path)
     
     if not os.path.exists(_home_path):
-        _home_path = default_path
+        os.makedirs(_home_path, exist_ok=True)
     _home_path = os.path.abspath(_home_path)
     
     # LOG.i(f"Use {_home_path} as Jittor Home")
@@ -460,16 +460,26 @@ def get_py3_config_path():
         #   python-config path only from sys.executable.
         #   To address this issue, we add predefined paths to search,
         #       - Linux: /usr/bin/python3.x-config
-        #       - macOS (installed via homebrew): /usr/local/bin/python3.x-config
+        #       - macOS:
+        #           - shiped with macOS 13: /Library/Developer/CommandLineTools/Library/Frameworks/
+        #                                   Python3.framework/Versions/3.x/lib/python3.x/config-3.x-darwin/python-config.py
+        #           - installed via homebrew: /usr/local/bin/python3.x-config
         #   There may be issues under other cases, e.g., installed via conda.
         py3_config_paths = [
             os.path.dirname(sys.executable) + f"/python3.{sys.version_info.minor}-config",
             sys.executable + "-config",
             f"/usr/bin/python3.{sys.version_info.minor}-config",
             f"/usr/local/bin/python3.{sys.version_info.minor}-config",
-            f'/opt/homebrew/bin/python3.{sys.version_info.minor}-config',
             os.path.dirname(sys.executable) + "/python3-config",
         ]
+        if platform.system() == "Darwin":
+            if "homebrew" in sys.executable:
+                py3_config_paths.append(f'/opt/homebrew/bin/python3.{sys.version_info.minor}-config')
+            else:
+                py3_config_paths.append(f'/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/'\
+                                        f'Versions/3.{sys.version_info.minor}/lib/python3.{sys.version_info.minor}/'\
+                                        f'config-3.{sys.version_info.minor}-darwin/python-config.py')
+
         if "python_config_path" in os.environ:
             py3_config_paths.insert(0, os.environ["python_config_path"])
 
@@ -498,6 +508,17 @@ def get_py3_include_path():
         ) + '"'
     else:
         _py3_include_path = run_cmd(get_py3_config_path()+" --includes")
+        
+        # macOS (>=13) is shiped with a fake python3-config which outputs wrong include paths
+        # check the include paths and fix them
+        if platform.system() == "Darwin":
+            is_real_path = False
+            for include_path in _py3_include_path.strip().split():
+                if os.path.exists(include_path[2:]):
+                    is_real_path = True
+            if not is_real_path:
+                _py3_include_path = f"-I/Library/Developer/CommandLineTools/Library/Frameworks/"\
+                                    f"Python3.framework/Versions/3.{sys.version_info.minor}/Headers"
     return _py3_include_path
 
 
@@ -562,6 +583,9 @@ if os.name == 'nt' and os.environ.get("cc_path", "")=="":
     msvc_path = os.path.join(home(), ".cache", "jittor", "msvc")
     cc_path = os.path.join(msvc_path, "VC", r"_\_\_\_\_\bin", "cl.exe")
     check_msvc_install = True
+elif platform.system() == "Darwin":
+    # macOS has a fake "g++" which is actually clang++, so we search clang.
+    cc_path = env_or_find('cc_path', 'clang++', silent=True)
 else:
     cc_path = env_or_find('cc_path', 'g++', silent=True)
 os.environ["cc_path"] = cc_path
@@ -653,7 +677,7 @@ def process_jittor_source(device_type, callback):
         for name in files:
             fname = os.path.join(root, name)
             fname2 = os.path.join(root2, name)
-            if fname.endswith(".h") or fname.endswith(".cc"):
+            if fname.endswith(".h") or fname.endswith(".cc") or fname.endswith(".cu"):
                 with open(fname, 'r', encoding="utf8") as f:
                     src = f.read()
                 src = callback(src, name, {"fname":fname, "fname2":fname2})

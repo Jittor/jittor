@@ -105,6 +105,21 @@ DEF_IS(int64, T) from_py_object(PyObject* obj) {
     return PyLong_AsLongLong(obj);
 }
 
+#ifdef __linux__
+// int64_t
+DEF_IS(int64_t, bool) is_type(PyObject* obj) {
+    return PyLong_CheckExact(obj);
+}
+
+DEF_IS(int64_t, PyObject*) to_py_object(const T& a) {
+    return PyLong_FromLongLong(a);
+}
+
+DEF_IS(int64_t, T) from_py_object(PyObject* obj) {
+    return PyLong_AsLongLong(obj);
+}
+#endif
+
 // float64
 DEF_IS(float64, bool) is_type(PyObject* obj) {
     return PyFloat_CheckExact(obj) || PyLong_CheckExact(obj);
@@ -359,7 +374,10 @@ DEF_IS(ArrayArgs, T) from_py_object(PyObject* obj) {
 // VarHolder
 struct VarHolder;
 EXTERN_LIB PyHeapTypeObject PyjtVarHolder;
-namespace jit_op_maker { EXTERN_LIB VarHolder* array_(ArrayArgs&& args); }
+namespace jit_op_maker { 
+EXTERN_LIB VarHolder* array_(ArrayArgs&&);
+EXTERN_LIB VarHolder* array__(PyObject* obj);
+}
 DEF_IS(VarHolder*, bool) is_type(PyObject* obj) {
     return Py_TYPE(obj) == &PyjtVarHolder.ht_type ||
         is_type<ArrayArgs>(obj);
@@ -382,8 +400,7 @@ DEF_IS(VarHolder*, T) from_py_object(PyObject* obj) {
 DEF_IS(VarHolder*, T) from_py_object(PyObject* obj, unique_ptr<VarHolder>& holder) {
     if (Py_TYPE(obj) == &PyjtVarHolder.ht_type)
         return GET_RAW_PTR(VarHolder, obj);
-    auto args = from_py_object<ArrayArgs>(obj);
-    holder.reset(jit_op_maker::array_(move(args)));
+    holder.reset(jit_op_maker::array__(obj));
     return holder.get();
 }
 
@@ -642,6 +659,25 @@ DEF_IS_1(fast_shared_ptr, PyObject*) to_py_object(const T& a) {
 
 DEF_IS_1(fast_shared_ptr, T) from_py_object(PyObject* obj) {
     return from_py_object<typename T::value_type>(obj);
+}
+
+CHECK_IS_1(Maybe);
+
+DEF_IS_1(Maybe, bool) is_type(PyObject* obj) {
+    return obj == Py_None || 
+        is_type<typename T::value_type*>(obj);
+}
+
+DEF_IS_1(Maybe, PyObject*) to_py_object(T a) {
+    if (a)
+        return to_py_object<typename T::value_type*>(a.ptr);
+    Py_INCREF(Py_None);
+    return Py_None;
+}
+
+DEF_IS_1(Maybe, T) from_py_object(PyObject* obj) {
+    if (obj == Py_None) return T();
+    return T(from_py_object<typename T::value_type*>(obj));
 }
 
 DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj) {

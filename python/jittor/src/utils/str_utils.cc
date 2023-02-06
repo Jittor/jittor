@@ -4,6 +4,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include <cctype>
 #include "utils/str_utils.h"
 
 namespace jittor {
@@ -78,12 +79,26 @@ string replace(const string& a, const string& b, const string& c) {
 
 static inline bool isvar(char x) { return isalnum(x) || x == '_' || x == ':'; }
 
-vector<string> token_split(const string& s) {
+vector<string> token_split(const string& s, bool exclude_comments) {
     vector<string> ss;
     if (!s.size()) return ss;
-    ss.push_back(string()+s[0]);
-    for (int i=1; i<s.size(); i++) {
-        if (isvar(s[i]) != isvar(s[i-1]))
+    ss.push_back("");
+    for (int i = 0; i < s.size(); i++) {
+        if (exclude_comments) {
+            if (s[i] == '/' && s[i+1] == '/') {
+                i = s.find('\n', i);
+                if (i == string::npos)
+                    return ss;
+            }
+            if (s[i] == '/' && s[i+1] == '*') {
+                i = s.find("*/", i);
+                if (i == string::npos)
+                    return ss;
+                i += 1;
+                continue;
+            }
+        }
+        if (i && (isvar(s[i]) != isvar(s[i-1])))
             ss.push_back("");
         ss.back() += s[i];
     }
@@ -92,7 +107,8 @@ vector<string> token_split(const string& s) {
 
 static void parse_reg(const string& src, 
     vector<string>& patterns,
-    vector<int>& arg_id) {
+    vector<int>& arg_id,
+    bool match_whitespace=true) {
     patterns.clear();
     arg_id.clear();
     patterns.push_back("");
@@ -103,11 +119,17 @@ static void parse_reg(const string& src,
             patterns.push_back("");
             continue;
         }
-        patterns.back() += src[j];
+        if (match_whitespace || !isspace(src[j]))
+            patterns.back() += src[j];
     }
 }
 
-int token_replace(vector<string>& tokens, int i, const string& src, const string& dst) {
+int token_replace(vector<string>& tokens, int i, const string& src, const string& dst, bool match_whitespace) {
+    if (!(src.at(0) != '$' && src.at(src.size()-1) != '$' && 
+        src.at(src.size()-2) != '$')) {
+        LOGe << "illegal src:" << src;
+        LOGf << "illegal src:" << src;
+    }
     ASSERT(src.at(0) != '$' && src.at(src.size()-1) != '$' && 
         src.at(src.size()-2) != '$') << "illegal src:" << src;
     vector<string> patterns;
@@ -115,7 +137,7 @@ int token_replace(vector<string>& tokens, int i, const string& src, const string
     vector<string> patterns2;
     vector<int> arg_id2;
     unordered_map<int, string> args;
-    parse_reg(src, patterns, arg_id);
+    parse_reg(src, patterns, arg_id, match_whitespace);
     parse_reg(dst, patterns2, arg_id2);
 
     int start_i, start_pos, end_i, end_pos;
@@ -123,17 +145,24 @@ int token_replace(vector<string>& tokens, int i, const string& src, const string
     int match_i, match_pos;
     string c_arg;
 
+    auto next = [&tokens](int &c_i, int &c_pos) {
+        c_pos ++;
+        if (c_pos >= tokens[c_i].size()) {
+            c_pos = 0;
+            c_i ++;
+            if (c_i >= tokens.size())
+                return false;
+        }
+        return true;
+    };
+
     auto match = [&](int c_i, int c_pos, const string& pat) -> bool {
         for (int i=0; i<pat.size(); i++) {
+            while (!match_whitespace && isspace(tokens[c_i][c_pos])) 
+                next(c_i, c_pos);
             if (tokens[c_i][c_pos] != pat[i])
                 return false;
-            c_pos ++;
-            if (c_pos >= tokens[c_i].size()) {
-                c_pos = 0;
-                c_i ++;
-                if (c_i >= tokens.size())
-                    return false;
-            }
+            next(c_i, c_pos);            
         }
         match_i = c_i;
         match_pos = c_pos;
@@ -189,9 +218,9 @@ int token_replace(vector<string>& tokens, int i, const string& src, const string
     return end_i;
 }
 
-string token_replace(const string& s, const string& src, const string& dst) {
+string token_replace(const string& s, const string& src, const string& dst, bool match_whitespace) {
     vector<string> ss{s};
-    token_replace(ss, 0, src, dst);
+    token_replace(ss, 0, src, dst, match_whitespace);
     return join(ss, "");
 }
 

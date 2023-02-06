@@ -130,12 +130,11 @@ void ArgsortOp::infer_shape() {
 }
 
 void ArgsortOp::jit_prepare(JK& jk) {
-    jk << _CS("[Tx:") << x->dtype();
-    jk << _CS("][Ty:") << y->dtype();
-    jk << _CS("][XDIM=") << JK::hex1(x->shape.size());
-    jk << _CS("][DIM=") << JK::hex1(dim);
-    jk << _CS("][CMP:") << (descending ? '>' : '<');
-    jk << ']';
+    jk << "«Tx:" << x->dtype();
+    jk << "«Ty:" << y->dtype();
+    jk << "«XDIM=" << JK::hex1(x->shape.size());
+    jk << "«DIM=" << JK::hex1(dim);
+    jk << "«CMP:" << (descending ? '>' : '<');
 }
 
 #else // JIT

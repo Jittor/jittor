@@ -149,7 +149,8 @@ namespace jit_compiler {
 
 std::mutex dl_open_mutex;
 
-jit_op_entry_t load_jit_lib(string name, string symbol_name="jit_entry") {
+jit_op_entry_t load_jit_lib(
+    string name, string symbol_name="jit_entry", const string& extra_flags="") {
     std::lock_guard<std::mutex> lock(dl_open_mutex);
     const char* msg = "";
     LOGvv << "Opening jit lib:" << name;
@@ -158,10 +159,16 @@ jit_op_entry_t load_jit_lib(string name, string symbol_name="jit_entry") {
         LOAD_LIBRARY_SEARCH_DEFAULT_DIRS |
         LOAD_LIBRARY_SEARCH_USER_DIRS);
     #elif defined(__linux__)
-    void* handle = dlopen(name.c_str(), RTLD_LAZY | RTLD_DEEPBIND | RTLD_LOCAL);
+    auto flags = RTLD_LAZY | RTLD_DEEPBIND | RTLD_LOCAL;
+    if (extra_flags.find("GLOBAL_VAR") != string::npos)
+        flags = RTLD_LAZY | RTLD_DEEPBIND | RTLD_GLOBAL;
+    void* handle = dlopen(name.c_str(), flags);
     msg = dlerror();
     #else
-    void *handle = dlopen(name.c_str(), RTLD_NOW | RTLD_LOCAL);
+    auto flags = RTLD_LAZY | RTLD_LOCAL;
+    if (extra_flags.find("GLOBAL_VAR") != string::npos)
+        flags = RTLD_LAZY | RTLD_GLOBAL;
+    void *handle = dlopen(name.c_str(), flags);
     msg = dlerror();
     #endif
 
@@ -187,7 +194,7 @@ void run_cmd(string cmd, string cwd="") {
 
 static string get_symbol_name(const string& jit_key) {
     int i=0;
-    while (i<jit_key.size() && jit_key[i]!='[') i++;
+    while (i<jit_key.size() && jit_key[i]>=0 && jit_key[i]<=127) i++;
     string op_name = i ? jit_key.substr(0, i) : "fused";
     op_name = Op::file_name_to_class_name(op_name);
     // _ZN7jittorXyyyyyy7jit_runEv
@@ -204,7 +211,11 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
     LOGvv << "Compile op" << jit_key;
     // compiler do not allowed filename too long
     CHECK(cc_path.size());
-    string jit_src_path = Op::get_filename_from_jit_key(jit_key, ".cc");
+    string jit_src_path;
+    if (is_cuda_op && extra_flags.find("-dc") != string::npos)
+        jit_src_path = Op::get_filename_from_jit_key(jit_key, ".cu");
+    else
+        jit_src_path = Op::get_filename_from_jit_key(jit_key, ".cc");
     string* src2 = (string*)&src;
     string* extra_flags2 = (string*)&extra_flags;
     JPU(op_compiler(jit_src_path, *src2, is_cuda_op, *extra_flags2));
@@ -228,6 +239,9 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
             + " \"" + jit_src_path + "\"" + other_src
             + fix_cl_flags(nvcc_flags + extra_flags, is_cuda_op)
             + " -o \"" + jit_lib_path + "\"";
+        if (cmd.find("-dc") != string::npos) {
+            cmd = python_path+" "+jittor_path+"/utils/dlink_compiler.py " + cmd;
+        }
     } else {
         cmd = "\"" + cc_path + "\""
             + " \"" + jit_src_path + "\"" + other_src
@@ -255,7 +269,7 @@ jit_op_entry_t compile(const string& jit_key, const string& src, const bool is_c
     }
 #endif
     cache_compile(cmd, cache_path, jittor_path);
-    auto jit_entry = load_jit_lib(jit_lib_path, symbol_name);
+    auto jit_entry = load_jit_lib(jit_lib_path, symbol_name, extra_flags);
     return jit_entry;
 }
 
