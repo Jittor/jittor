@@ -121,6 +121,10 @@ Example::
             # bmm
             # a: [..., n, m], b: [..., m, k], c:[..., n, k]
             if jt.flags.use_cuda and jt.compile_extern.cublas_ops:
+                if a.shape[0] != b.shape[0]:
+                    # For a, b with different batch_size
+                    broad_var = (a, b.shape[0]) if a.shape[0] < b.shape[0] else (b, a.shape[0])
+                    broad_var[0].update(broad_var[0].broadcast([broad_var[1]] + broad_var[0].shape[1:]))
                 return jt.compile_extern.cublas_ops.cublas_batched_matmul(a, b, 0, 0)
         shape = []
         len_c = max(len_a, len_b)
