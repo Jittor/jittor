@@ -1604,6 +1604,7 @@ def compile_torch_extensions(extension_name, sources, extra_cflags=None, extra_c
             "-g",
             f"-DTORCH_EXTENSION_NAME={extension_name}",
             "-O3",
+            "-DHAS_CUDA",
             "-shared",
             "-std=c++17",
             "-fPIC"
