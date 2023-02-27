@@ -1625,7 +1625,8 @@ def compile_torch_extensions(extension_name, sources, extra_cflags=None, extra_c
             "-DHAS_CUDA",
             "-shared",
             "-std=c++17",
-            "-fPIC"
+            "-fPIC",
+            "-DHAS_CUDA"
     ] 
     cflags += extra_cflags
     post_cflags = []

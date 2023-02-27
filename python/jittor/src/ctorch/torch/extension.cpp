@@ -170,25 +170,30 @@ namespace jittor {
             if(!jtptr) return;
             int64 prod = 1;
             for(int i=jtptr->shape().size()-1;i>=0;i--) {
-                strides.push_back(prod);
+                _strides.push_back(prod);
                 prod *= jtptr->shape()[i];
             }
         }
 
         NanoVector Tensor::stride(){
-            if(strides.size() == 0) init_stride();
-            return strides;
+            if(_strides.size() == 0) init_stride();
+            return _strides;
         } 
+
+        NanoVector Tensor::strides(){
+            if(_strides.size() == 0) init_stride();
+            return _strides;
+        }
 
         int Tensor::stride(int i) {
             if(!jtptr) {
                 LOGir << "Tensor is None.";
                 return -1;
             }
-            if(strides.size() == 0) init_stride();
+            if(_strides.size() == 0) init_stride();
             if(i == -1)
                 i = 0;
-            return strides[strides.size() - i - 1];
+            return _strides[_strides.size() - i - 1];
         }
 
         Tensor Tensor::contiguous() {

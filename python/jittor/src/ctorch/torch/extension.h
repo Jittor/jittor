@@ -128,6 +128,7 @@ namespace jittor {
             int numel();
             void init_stride();
             NanoVector stride();
+            NanoVector strides();
             int stride(int i);
             int dtype() const;
             int scalar_type();
@@ -169,7 +170,7 @@ namespace jittor {
             VarHolder* jtptr;
             int64 ndim;
             at::MemoryFormat format;
-            NanoVector strides;
+            NanoVector _strides;
         };
 
         Tensor empty(NanoVector shape, Option option, at::MemoryFormat format=at::MemoryFormat::Contiguous);
