@@ -32,10 +32,22 @@ namespace jittor {
 
     namespace at {
         namespace cuda {
+            std::map<int, cudaStream_t> device_streams;
             cudaStream_t getCurrentCUDAStream() {
                 return (cudaStream_t)0;
             }
-
+            cudaStream_t getCurrentCUDAStream(int deviceIdx) {
+                if(deviceIdx==-1)
+                    return getCurrentCUDAStream();
+                auto it = device_streams.find(deviceIdx);
+                if(it == device_streams.end()){
+                    cudaStream_t stream;
+                    cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+                    device_streams[deviceIdx] = stream;
+                } else {
+                    return it->second;
+                }
+            }
             OptionalCUDAGuard::OptionalCUDAGuard() {}
             OptionalCUDAGuard::OptionalCUDAGuard(int x) {}
             
@@ -304,6 +316,15 @@ namespace jittor {
 
         Option TensorOptions() {
             return Option();
+        }
+        
+        bool is_anomaly_enabled() {
+            // TODO: get CHECK_NAN flags from python interface.
+            #ifdef JT_CHECK_NAN
+            return true;
+            #else
+            return false;
+            #endif
         }
 
         // void test_tensor(Tensor a) {

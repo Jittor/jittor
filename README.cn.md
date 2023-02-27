@@ -126,7 +126,7 @@ macOS 请使用 [homebrew](https://brew.sh) 安装额外的依赖。
 
 
 ```bash
-brew install onednn libomp
+brew install libomp
 ```
 
 之后您可以通过 pip 安装 jittor，并测试是否可以成功运行。

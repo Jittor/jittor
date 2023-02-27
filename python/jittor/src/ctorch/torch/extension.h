@@ -9,6 +9,7 @@
 #include <pybind11/pybind11.h>
 #include <iostream>
 #include <vector>
+#include <map>
 #include "var.h"
 #include "var_holder.h"
 #include "executor.h"
@@ -57,8 +58,9 @@ namespace jittor {
 
     namespace at {
         namespace cuda {
+            extern std::map<int, cudaStream_t> device_streams;
             cudaStream_t getCurrentCUDAStream();
-
+            cudaStream_t getCurrentCUDAStream(int deviceIdx);
             struct OptionalCUDAGuard {
                 // todo: supoort device guard.
                 OptionalCUDAGuard();
@@ -175,6 +177,7 @@ namespace jittor {
         Tensor zeros_like(Tensor& refer_tensor);
         Tensor empty_like(Tensor& refer_tensor);
         Option TensorOptions();
+        bool is_anomaly_enabled();
         // void test_tensor(Tensor a) {
         //     // todo: add special support for different formats.
         //     std::cout << "Success!!" << std::endl;

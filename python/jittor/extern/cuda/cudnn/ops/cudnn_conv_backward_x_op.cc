@@ -120,7 +120,6 @@ void CudnnConvBackwardXOp::jit_run() {
     checkCudaErrors(cudnnCreateFilterDescriptor( &cudnnFdesc ));
     checkCudaErrors(cudnnCreateTensorDescriptor( &cudnnOdesc ));
     checkCudaErrors(cudnnCreateConvolutionDescriptor( &cudnnConvDesc ));
-    checkCudaErrors(cudnnSetConvolutionGroupCount( cudnnConvDesc, groups ));
 
     int dimX[] = {
         (int)x->shape[findc("@XFORMAT", 'a')], // n
@@ -169,6 +168,8 @@ void CudnnConvBackwardXOp::jit_run() {
         padA, convstrideA, dilationA,
         CUDNN_CROSS_CORRELATION, getDataType<Ty>()
     ));
+    // MIOpen requires groups to be set after descriptor initialization
+    checkCudaErrors(cudnnSetConvolutionGroupCount( cudnnConvDesc, groups ));
 
     // using tensor core
     if(use_tensorcore){

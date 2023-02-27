@@ -291,7 +291,7 @@ def median(x,dim=None,keepdim=False, keepdims=False):
     if dim is None:
         x = x.reshape(-1)
         dim=0
-    _,x = x.argsort(dim)
+    _,x = jt.argsort(x, dim)
     slices = [slice(None) for i in range(dim-1)]
     k = (x.shape[dim]-1)//2
     if keepdim:
@@ -1978,6 +1978,133 @@ jt.Var.isneginf = isneginf
 def isposinf(x): return _simple_for(x, "x>0 && isinf(float(x))")
 jt.Var.isposinf = isposinf
 
+# fake torch interface
+def contiguous(x): return x.clone()
+jt.Var.contiguous = contiguous
+def cpu(x): return x.clone()
+jt.Var.cpu = cpu
+def to(x, *args, **kargs): return x.clone()
+jt.Var.to = to
+
+def from_torch(x):
+    '''
+    Convert torch Tensor to Jittor Var
+    '''
+    return jt.Var(x.cpu().numpy())
+
+def triu(input: jt.Var, diagonal:int=0) -> jt.Var:
+    ''' Returns the upper triangular part of a matrix (2-D tensor) or batch of matrices input, the other elements of the result tensor out are set to 0.
+
+    :param input: the input tensor.
+    :param diagonal:  the diagonal to consider(int).
+
+    Example::
+
+        a = jt.ones(3, 3)
+        b = jt.triu(a)
+        assert jt.all_equal(b, [[1,1,1],[0,1,1],[0,0,1]])
+        
+        b = jt.triu(a, diagonal=1)
+        assert jt.all_equal(b, [[0,1,1],[0,0,1],[0,0,0]])
+        
+        b = jt.triu(a, diagonal=-1)
+        assert jt.all_equal(b, [[1,1,1],[1,1,1],[0,1,1]])
+
+    '''
+    index = input.index()
+    mask = index[-2] <= index[-1] - diagonal
+    return input*mask
+jt.Var.triu = triu
+
+def tril(input: jt.Var, diagonal:int=0) -> jt.Var:
+    ''' Returns the lower triangular part of a matrix (2-D tensor) or batch of matrices input, the other elements of the result tensor out are set to 0.
+
+    :param input: the input tensor.
+    :param diagonal:  the diagonal to consider(int).
+
+    Example::
+
+        a = jt.ones(3, 3)
+        b = jt.tril(a)
+        assert jt.all_equal(b, [[1,0,0],[1,1,0],[1,1,1]])
+        
+        b = jt.tril(a, diagonal=1)
+        assert jt.all_equal(b, [[1,1,0],[1,1,1],[1,1,1]])
+        
+        b = jt.tril(a, diagonal=-1)
+        assert jt.all_equal(b, [[0,0,0],[1,0,0],[1,1,0]])
+
+    '''
+    index = input.index()
+    mask = index[-2] >= index[-1] - diagonal
+    return input*mask
+jt.Var.tril = tril
+
+def all_equal(a: jt.Var, b: jt.Var) -> bool:
+    return (a == b).all().item()
+jt.all_equal = all_equal
+
+def index_select(x: jt.Var, dim:int, index: jt.Var) -> jt.Var:
+    '''Returns a new var which indexes the x var along dimension dim using the entries in index.
+
+The returned var has the same number of dimensions as the original var (x). The dimth dimension has the same size as the length of index; other dimensions have the same size as in the original tensor.
+
+    :param x: the input tensor.
+    :param dim:  the dimension to index.
+    :param index:  the 1-D tensor containing the indices to index.
+
+    Example::
+
+        x = jt.randn(3, 4)
+        indices = torch.tensor([2, 1])
+        y = jt.index_select(x, 0, indices)
+        assert jt.all_equal(y, x[indices])
+        y = jt.index_select(x, 1, indices)
+        assert jt.all_equal(y, x[:, indices])
+
+
+    '''
+    return x.getitem(((slice(None),)*dim)+(index,))
+jt.index_select = index_select
+
+def multinomial(weights: jt.Var, num_samples: int, replacement: bool=False) -> jt.Var:
+    ''' Returns a var where each row contains num_samples indices sampled from the multinomial probability distribution located in the corresponding row of input weights.
+
+    :param weights: the input probability.
+    :param num_samples: number of samples.
+    :param replacement: whether to draw with replacement or not.
+
+
+    Example::
+
+        weights = jt.float32([0, 10, 3, 0])
+        x = jt.multinomial(weights, 2)
+        assert jt.all_equal(x, [1, 2]) or jt.all_equal(x, [2, 1])
+        x = jt.multinomial(weights, 4, replacement=True)
+        assert x.shape == (4, )
+
+        weights = jt.float32([[0,0,2],[0,1,0], [0.5,0,0]])
+        x = jt.multinomial(weights, 1)
+        assert jt.all_equal(x, [[2],[1],[0]])
+
+    '''
+    if replacement:
+        cum_probs = jt.cumsum(weights)[..., None, :]
+        cum_probs_l = cum_probs[..., :-1]
+        cum_probs_r = cum_probs[..., 1:]
+        shape = weights.shape[:-1] + (num_samples, 1)
+        rand = jt.rand(shape) * cum_probs[..., :1, -1:]
+        one_hot = jt.logical_and(cum_probs_l < rand, rand <= cum_probs_r)
+        index = one_hot.index(one_hot.ndim - 1) + 1
+        return (one_hot * index).sum(-1)
+    else:
+        # A-Res algorithm
+        # Pavlos S. Efraimidis and Paul G. Spirakis, 2006, Weighted random sampling with a reservoir
+        assert num_samples <= weights.shape[-1], "num_samples larger than the input"
+        rand = jt.rand(weights.shape) ** (1/weights)
+        _, indices = jt.topk(rand.safe_clip(), num_samples)
+        return indices
+
 def scatter_add_(x, dim, indexes, src):
     return scatter_(x, dim, indexes, src, reduce='add')
 jt.Var.scatter_add_ = scatter_add_
@@ -1992,3 +2119,10 @@ def cpu(x): return x.clone()
 jt.Var.cpu = cpu
 def to(x, *args, **kargs): return x.clone()
 jt.Var.to = to
+def atan2(input, other, out=None):
+    atan_res = jt.atan(input / other)
+    atan_res[jt.bitwise_and(input > 0, other < 0)] += np.pi
+    atan_res[jt.bitwise_and(input < 0, other < 0)] -= np.pi
+    return atan_res
+jt.atan2 = atan2
+

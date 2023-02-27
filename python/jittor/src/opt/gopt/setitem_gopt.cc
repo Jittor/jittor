@@ -12,8 +12,9 @@
 namespace jittor {
 
 inline static bool fast_strcmp(const char* a, const char* b) {
-    while (*b && *a == *b) a++, b++;
-    return !*b;
+    return ((const uint64*)a)[0] == ((const uint64*)b)[0];
+    // while (*b && *a == *b) a++, b++;
+    // return !*b;
 }
 
 // add dependency b -> a

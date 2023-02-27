@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.5.37'
+__version__ = '1.3.6.10'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -443,7 +443,7 @@ def liveness_info():
         "lived_ops": core.number_of_lived_ops(),
     }
 
-def ones(shape, dtype="float32"):
+def ones(*shape, dtype="float32"):
     ''' Constructs a jittor Var with all elements set to 1.
     
     :param shape: The shape of the output Var.
@@ -453,8 +453,11 @@ def ones(shape, dtype="float32"):
     :return: The output Var.
     :rtype: jittor.Var
     '''
-    if not isinstance(shape, (NanoVector, Sequence)):
-        shape = (shape,)
+    if isinstance(shape, tuple) and isinstance(shape[-1], (str, NanoString)):
+        dtype = shape[-1]
+        shape = shape[:-1]
+    if isinstance(shape, tuple) and isinstance(shape[0], (Sequence, NanoVector)):
+        shape = shape[0]
     return unary(1, dtype).broadcast(shape)
 
 def ones_like(x):
@@ -467,7 +470,7 @@ def ones_like(x):
     '''
     return ones(x.shape,x.dtype)
 
-def zeros(shape, dtype="float32"):
+def zeros(*shape, dtype="float32"):
     ''' Constructs a jittor Var with all elements set to 0. 
     
     :param shape: The shape of the output Var.
@@ -477,8 +480,11 @@ def zeros(shape, dtype="float32"):
     :return: The output Var.
     :rtype: jittor.Var
     '''
-    if not isinstance(shape, (NanoVector, Sequence)):
-        shape = (shape,)
+    if isinstance(shape, tuple) and isinstance(shape[-1], (str, NanoString)):
+        dtype = shape[-1]
+        shape = shape[:-1]
+    if isinstance(shape, tuple) and isinstance(shape[0], (Sequence, NanoVector)):
+        shape = shape[0]
     return unary(0, dtype).broadcast(shape)
 
 def full(shape,val,dtype="float32"):

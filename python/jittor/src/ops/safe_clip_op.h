@@ -22,7 +22,7 @@ struct SafeClipOp : Op {
 
      */
     // @pybind(safe_clip)
-    SafeClipOp(Var* x, float64 left, float64 right);
+    SafeClipOp(Var* x, float64 left=-1e300, float64 right=1e300);
     
     const char* name() const override { return "safe_clip"; }
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;

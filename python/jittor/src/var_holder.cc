@@ -15,6 +15,8 @@
 #include "graph.h"
 #include "mem/allocator/cuda_dual_allocator.h"
 #include "ops/op_register.h"
+#include "ops/getitem_op.h"
+#include "ops/setitem_op.h"
 
 namespace jittor {
 
@@ -48,6 +50,7 @@ void add_hold_vars(VarHolder* self) {
 
 VarHolder::VarHolder(Var* v) : var(v) {
     // Var holder has both forward and backward liveness
+    own_holder();
     var->own_both_liveness();
     add_hold_vars(this);
 }
@@ -55,10 +58,12 @@ VarHolder::VarHolder(Var* v) : var(v) {
 VarHolder::VarHolder(VarPtr&& v) {
     var = v.ptr;
     v.ptr = nullptr;
+    own_holder();
     add_hold_vars(this);
 }
 
 VarHolder::VarHolder(VarHolder* v) : var(v->var) {
+    own_holder();
     iter = v->iter;
     *iter = this;
     // free memory without calling deconstructor
@@ -76,6 +81,7 @@ VarHolder::VarHolder(PyObject* obj, NanoString dtype) {
         vp = make_unary(vp, dtype);
     var = vp.ptr;
     vp.ptr = nullptr;
+    own_holder();
     add_hold_vars(this);
 }
 
@@ -85,6 +91,7 @@ VarHolder::~VarHolder() {
     if (iter == sync_ptr)
         sync_ptr = std::next(sync_ptr);
     hold_vars.erase(iter);
+    release_holder();
     var->release_both_liveness();
 }
 
@@ -108,8 +115,10 @@ void VarHolder::operator=(VarPtr&& v) {
             v.ptr->flags.set(NodeFlags::_th_require_grad);
     }
     assign_var(v.ptr, var);
+    release_holder();
     var->release_both_liveness();
     var = v.ptr;
+    own_holder();
     v.ptr = nullptr;
 }
 
@@ -136,10 +145,15 @@ string VarHolder::to_string() {
 }
 
 VarHolder* VarHolder::assign(VarHolder* v) {
+    if (th_mode) {
+        v->set_requires_grad(get_requires_grad());
+    }
     assign_var(v->var, var);
+    release_holder();
     v->var->own_both_liveness();
     var->release_both_liveness();
     var = v->var;
+    own_holder();
     return this;
 }
 
@@ -149,17 +163,20 @@ VarHolder* VarHolder::update(VarHolder* v) {
 }
 
 VarHolder* VarHolder::_update(VarHolder* v) {
+    release_holder();
     v->var->own_both_liveness();
     var->release_both_liveness();
     var = v->var;
+    own_holder();
     var->flags.set(NodeFlags::_out_hint);
     return this;
 }
 
 EXTERN_LIB Executor exe;
 
-void VarHolder::sync(bool device_sync, bool weak_sync) {
+VarHolder* VarHolder::sync(bool device_sync, bool weak_sync) {
     jittor::sync({this}, device_sync, weak_sync);
+    return this;
 }
 
 ArrayArgs VarHolder::fetch_sync() {
@@ -275,6 +292,48 @@ void migrate_all_to_cpu() {
             migrate_to_cpu(v, cpu_allocator);
     }
 #endif
+}
+
+static auto make_setitem = get_op_info("setitem")
+    .get_constructor<VarPtr, Var*, VarSlices&&, Var*, NanoString>();
+
+inline static bool fast_strcmp(const char* a, const char* b) {
+    return ((const uint64*)a)[0] == ((const uint64*)b)[0];
+}
+
+VarHolder* VarHolder::check_cascade_setitem(VarHolder* out) {
+    // return this;
+    auto v = var;
+    int n=0;
+    int64 slices[10];
+    while (n<10) {
+        Op* iop = v->input();
+        if (!iop) break;
+        if (!fast_strcmp(iop->name(), "getitem")) break;
+        v = iop->inputs().front();
+        GetitemOp* gop = (GetitemOp*)iop;
+        if (gop->vs.n == 1 && gop->vs.slices[0].is_int()) {
+            slices[n++] = gop->vs.slices[0].i;
+        } else break;
+        if (v->holder) {
+            // found holder var: v
+            // v[a][b][c][d] = y
+            // ^
+            auto* prev_op = (SetitemOp*)out->var->input();
+            VarSlices& old_slices = prev_op->vs;
+            Var* y = prev_op->input(1);
+            VarSlices new_slices(n+old_slices.n);
+            for (int i=n-1; i>=0; i--)
+                new_slices.slices[n-1-i].set_int(slices[i]);
+            for (int i=0; i<old_slices.n; i++)
+                new_slices.slices[n+i] = old_slices.slices[i];
+            // apply new slice
+            // v[a][b][c][d] = y -> v[a,b,c,d] = y
+            (*v->holder) = make_setitem(v, move(new_slices), y, ns_void);
+            break;
+        }
+    }
+    return assign(out);
 }
 
 } // jittor

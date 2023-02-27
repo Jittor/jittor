@@ -343,5 +343,64 @@ class TestOther(unittest.TestCase):
         output = m(input)
         output.sync()
 
+    def test_tri(self):
+        a = jt.ones(3, 3)
+        b = jt.triu(a)
+        assert jt.all_equal(b, [[1,1,1],[0,1,1],[0,0,1]])
+        
+        b = jt.triu(a, diagonal=1)
+        assert jt.all_equal(b, [[0,1,1],[0,0,1],[0,0,0]])
+        
+        b = jt.triu(a, diagonal=-1)
+        assert jt.all_equal(b, [[1,1,1],[1,1,1],[0,1,1]])
+        
+        a = jt.ones(3, 3)
+        b = jt.tril(a)
+        assert jt.all_equal(b, [[1,0,0],[1,1,0],[1,1,1]])
+        
+        b = jt.tril(a, diagonal=1)
+        assert jt.all_equal(b, [[1,1,0],[1,1,1],[1,1,1]])
+        
+        b = jt.tril(a, diagonal=-1)
+        assert jt.all_equal(b, [[0,0,0],[1,0,0],[1,1,0]])
+
+    def test_ones(self):
+        a = jt.ones(10, "int32")
+        a.sync()
+        assert a.shape == (10,)
+        assert a.dtype == "int32"
+        a = jt.ones((10,), "int32")
+        a.sync()
+        assert a.shape == (10,)
+        assert a.dtype == "int32"
+        
+        a = jt.ones(10,10)
+        assert a.shape == (10,10)
+
+        a = jt.ones_like(jt.ones([10], "int16"))
+        assert a.dtype == "int16"
+
+        a = jt.ones_like(jt.ones([10], "bool"))
+        assert a.dtype == "bool"
+
+    def test_index_select(self):
+        x = jt.randn(3, 4)
+        indices = torch.tensor([2, 1])
+        y = jt.index_select(x, 0, indices)
+        assert jt.all_equal(y, x[indices])
+        y = jt.index_select(x, 1, indices)
+        assert jt.all_equal(y, x[:, indices])
+
+    def test_multinorm(self):
+        weights = jt.float32([0, 10, 3, 0])
+        x = jt.multinomial(weights, 2)
+        assert jt.all_equal(x, [1, 2]) or jt.all_equal(x, [2, 1])
+        x = jt.multinomial(weights, 4, replacement=True)
+        assert x.shape == (4, )
+
+        weights = jt.float32([[0,0,2],[0,1,0], [0.5,0,0]])
+        x = jt.multinomial(weights, 1)
+        assert jt.all_equal(x, [[2],[1],[0]])
+
 if __name__ == "__main__":
     unittest.main()

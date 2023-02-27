@@ -6,6 +6,7 @@
 #include "misc/nan_checker.h"
 #include "misc/cuda_flags.h"
 #include <cuda_runtime.h>
+#include <cuda_fp16.h>
 #include "helper_cuda.h"
 #include <cassert>
 
@@ -13,6 +14,14 @@ namespace jittor {
 
 
 #ifdef HAS_CUDA
+__global__ void _check_nan_float16(__half* __restrict__ ptr, int64 num) {
+    int64 i = threadIdx.x + blockIdx.x * (int64)blockDim.x;
+    if (i<num) {
+        if (isnan(__half2float(ptr[i])) || __hisinf(ptr[i]))
+            __trap();
+    }
+}
+
 __global__ void _check_nan_float32(float32* __restrict__ ptr, int64 num) {
     int64 i = threadIdx.x + blockIdx.x * (int64)blockDim.x;
     if (i<num) {
@@ -40,6 +49,12 @@ void check_nan_float32(float32* ptr, int64 num) {
     int block_num = std::max((int64)1, (num-1)/1024+1);
     int thread_num = std::min((int64)1024, num);
     _check_nan_float32<<<block_num, thread_num>>>(ptr, num);
+}
+
+void check_nan_float16(__half* ptr, int64 num) {
+    int block_num = std::max((int64)1, (num-1)/1024+1);
+    int thread_num = std::min((int64)1024, num);
+    _check_nan_float16<<<block_num, thread_num>>>(ptr, num);
 }
 
 #endif

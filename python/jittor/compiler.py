@@ -867,6 +867,7 @@ def check_cuda():
     else:
         cc_flags += f" -lcudart -L\"{cuda_lib}\" "
         # ctypes.CDLL(cuda_lib+"/libcudart.so", import_flags)
+        print("cudart: ", cuda_lib+"/libcudart.so")
         ctypes.CDLL(cuda_lib+"/libcudart.so", dlopen_flags)
     is_cuda = has_cuda = 1
 
@@ -1015,9 +1016,14 @@ if nvcc_path:
 
 def check_clang_latest_supported_cpu():
     output = run_cmd('clang --print-supported-cpus')
-    apple_cpus = [l.strip() for l in output.split('\n') if 'apple-a' in l]
-    apple_cpus_id = max([int(cpu[7:]) for cpu in apple_cpus])
-    return f'apple-a{apple_cpus_id}'
+    def find_latest_chip_version(pattern_prefix):
+        apple_cpus = [l.strip() for l in output.split('\n') if pattern_prefix in l]
+        apple_cpu_id = max([int(cpu[7:]) for cpu in apple_cpus])
+        return pattern_prefix + str(apple_cpu_id)
+    if 'apple-m' in output:
+        return find_latest_chip_version('apple-m')
+    else:
+        return find_latest_chip_version('apple-a')
 
 # cc_flags += " -Wall -Werror -Wno-unknown-pragmas -std=c++14 -fPIC "
 cc_flags += " -Wall -Wno-unknown-pragmas -std=c++14 -fPIC "
@@ -1028,20 +1034,27 @@ elif platform.machine() == 'arm64' and platform.system() == "Darwin":
     cc_flags += f" -mcpu={check_clang_latest_supported_cpu()} "
 cc_flags += " -fdiagnostics-color=always "
 # 2. Non standard include path
-if platform.system() == 'Darwin' and platform.machine() == 'arm64':
-    cc_flags += " -I/opt/homebrew/include "
+if platform.system() == 'Darwin':
+    # TODO: if not using apple clang, there is no need to add -lomp
+    cc_flags += " -undefined dynamic_lookup -lomp "
+    if os.environ.get("CONDA_PREFIX", None):
+        cc_flags += f" -L{os.path.join(os.environ['CONDA_PREFIX'], 'lib')} "
+    # if platform.machine() == "arm64":
+    #     cc_flags += " -I/opt/homebrew/include -L/opt/homebrew/lib  "
+    # Homebrew does not symlink the openmp library (libomp >= 15.0.6) into /opt/homebrew/lib
+    homebrew_openmp_paths = [
+        "/opt/homebrew/opt/libomp",
+        "/usr/local/opt/libomp"
+    ]
+    for openmp_path in homebrew_openmp_paths:
+        if os.path.exists(openmp_path):
+            cc_flags += f" -I{openmp_path}/include -L{openmp_path}/lib"
+
 # 3. User specified flags
 if "cc_flags" in os.environ:
     cc_flags += os.environ["cc_flags"] + ' '
 
 cc_flags += " -lstdc++ -ldl -shared "
-if platform.system() == 'Darwin':
-    # TODO: if not using apple clang, there is no need to add -lomp
-    cc_flags += "-undefined dynamic_lookup -lomp "
-    if os.environ.get('CONDA_PREFIX', None):
-        cc_flags += f" -L{os.path.join(os.environ['CONDA_PREFIX'], 'lib')} "
-    if platform.machine() == "arm64":
-        cc_flags += "  -L/opt/homebrew/lib "
 
 opt_flags = ""
 
@@ -1240,6 +1253,11 @@ jit_utils.add_backend(corex_compiler)
 for mod in jit_utils.backends:
     if mod.check():
         break
+
+if not os.name == 'nt':
+    is_cuda = os.path.basename(nvcc_path) == "nvcc"
+else:
+    is_cuda = os.path.basename(nvcc_path) == "nvcc.exe"
 
 # build core
 gen_jit_flags()
@@ -1630,10 +1648,11 @@ def compile_torch_extensions(extension_name, sources, extra_cflags=None, extra_c
     # add jittor lib:
     core_path = jt.flags.cache_path
     util_path = os.path.sep.join(core_path.split(os.path.sep)[:-1])
-    ldflags += [f' -L"{core_path}" -L"{util_path}" -Wl,-rpath "{core_path}" -ljittor_core -Wl,-rpath "{util_path}" -ljit_utils_core']
+    ldflags += [f' -L"{core_path}" -L"{util_path}" -Wl,-rpath "{core_path}" -l:{"jittor_core"+extension_suffix} -Wl,-rpath "{util_path}" -l:{"jit_utils_core"+extension_suffix}']
     # add cuda lib:
     if use_cuda:
-        ldflags += ['-L/usr/local/cuda/lib64 -lcudart -lcusparse']
+        cuda_path = os.path.sep.join(nvcc_path.split(os.path.sep)[:-2]+["lib64"])
+        ldflags += [f'-L{cuda_path} -Wl,-rpath "{cuda_path}" -lcusparse']
     ldflags += extra_ldflags
     pybind_suffix = os.popen("python3-config --extension-suffix").read().strip()
     library_target = f"{extension_name}{pybind_suffix}"
