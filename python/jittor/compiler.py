@@ -1597,7 +1597,7 @@ def _run_ninja_build(build_directory, verbose=False, error_prefix="") -> None:
             message += f": {error.output.decode(*SUBPROCESS_DECODE_ARGS)}"  # type: ignore[union-attr]
         raise RuntimeError(message) from e
 
-def compile_torch_extensions(extension_name, sources, extra_cflags=None, extra_cuda_cflags=None, extra_ldflags=None, use_cuda=0, force_compile=0):
+def compile_torch_extensions(extension_name, sources, extra_cflags=None, extra_cuda_cflags=None, extra_ldflags=None, use_cuda=0, force_compile=0, verbose=False):
     if not use_cuda:
         use_cuda = all(map(_is_cuda_file, sources))
     if use_cuda:
@@ -1644,6 +1644,8 @@ def compile_torch_extensions(extension_name, sources, extra_cflags=None, extra_c
     ] 
     cuda_post_cflags = []
     cuda_cflags += extra_cuda_cflags
+    if verbose:
+        cuda_cflags += ["-keep"]
     python_ldflags = [x if "config" not in x else "" for x in os.popen("python3-config --ldflags").read().split(" ")]
     ldflags = python_ldflags + ["-lomp", "-lgcc"]
     # add jittor lib:
