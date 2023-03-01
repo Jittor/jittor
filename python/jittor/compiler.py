@@ -1647,7 +1647,7 @@ def compile_torch_extensions(extension_name, sources, extra_cflags=None, extra_c
     if verbose:
         cuda_cflags += ["-keep"]
     python_ldflags = [x if "config" not in x else "" for x in os.popen("python3-config --ldflags").read().split(" ")]
-    ldflags = python_ldflags + ["-lomp", "-lgcc"]
+    ldflags = python_ldflags + ["-lgcc"]
     # add jittor lib:
     core_path = jt.flags.cache_path
     util_path = os.path.sep.join(core_path.split(os.path.sep)[:-1])
