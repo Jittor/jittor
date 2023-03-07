@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.6.10'
+__version__ = '1.3.6.11'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -654,12 +654,16 @@ def unsqueeze(x, dim):
     return x.reshape(shape[:dim] + [1] + shape[dim:])
 Var.unsqueeze = unsqueeze
 
-def squeeze(x, dim):
+def squeeze(x, dim=None):
     shape = list(x.shape)
-    if dim < 0: dim += len(shape)
-    assert dim < len(shape) and dim >= 0
-    assert shape[dim] == 1
-    return x.reshape(shape[:dim] + shape[dim+1:])
+    if dim is None:
+        new_shape = [s for s in shape if s > 1]
+        return x.reshape(new_shape)
+    else:
+        if dim < 0: dim += len(shape)
+        assert dim < len(shape) and dim >= 0
+        assert shape[dim] == 1
+        return x.reshape(shape[:dim] + shape[dim+1:])
 Var.squeeze = squeeze
 
 def clamp(x, min_v=None, max_v=None):
