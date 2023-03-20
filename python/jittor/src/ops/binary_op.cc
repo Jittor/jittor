@@ -91,7 +91,7 @@ unordered_set<string> binary_ops = {
     * [in] y: the second input, a python number or jt.Var.
 
      */
-    // @pybind(subtract, __sub__)
+    // @pybind(subtract, __sub__, sub)
     "subtract",
 
     /**
@@ -106,7 +106,7 @@ unordered_set<string> binary_ops = {
     * [in] y: the second input, a python number or jt.Var.
 
      */
-    // @pybind(multiply, __mul__)
+    // @pybind(multiply, __mul__, mul)
     "multiply",
 
     /**
@@ -138,7 +138,7 @@ unordered_set<string> binary_ops = {
     returns float value even if the dtype of input Vars are both integers.
     @see jt.ops.floor_divide() for floor division.
      */
-    // @pybind(divide, __truediv__)
+    // @pybind(divide, __truediv__, div)
     "divide",
 
     /**

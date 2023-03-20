@@ -438,6 +438,8 @@ def einsum(string, *args):
     :return: return values depend on the input string kinds.
     """
     import numpy as np_cpu
+    if string == "i,j->ij":
+        return args[0].broadcast((args[0].shape[0], args[1].shape[0]), dims=[1]).multiply(args[1])
     def forward_code(np, data):
         out = data["outputs"][0]
         npout = np.einsum(string, *data["inputs"])

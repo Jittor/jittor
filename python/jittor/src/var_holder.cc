@@ -17,6 +17,7 @@
 #include "ops/op_register.h"
 #include "ops/getitem_op.h"
 #include "ops/setitem_op.h"
+#include "type/fp16_compute.h"
 
 namespace jittor {
 
@@ -184,6 +185,13 @@ ArrayArgs VarHolder::fetch_sync() {
     return {var->mem_ptr, var->shape, var->dtype()};
 }
 
+inline static void cast_item_data(ItemData& data) {
+    auto* fp16 = (float16*)&data;
+    auto* fp32 = (float32*)&data;
+    fp32[0] = float32(fp16[0]);
+    data.dtype = ns_float32;
+}
+
 ItemData VarHolder::item() {
     sync();
     CHECK(var->num==1) << "Item var size should be 1, but got" << var->num;
@@ -199,6 +207,8 @@ ItemData VarHolder::item() {
     {
         std::memcpy(&data.data, var->mem_ptr, dsize);
     }
+    if (data.dtype == ns_float16)
+        cast_item_data(data);
     return data;
 }
 

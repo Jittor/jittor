@@ -87,7 +87,7 @@ def safeunpickle(path):
         from jittor_utils.misc import download_url_to_local
         download_url_to_local(path, base, compiler.ck_path, None)
         path = fname
-    if path.endswith(".pth"):
+    if path.endswith(".pth") or path.endswith(".pt") or path.endswith(".bin") :
         from jittor_utils.load_pytorch import load_pytorch
         model_dict = load_pytorch(path)
         return model_dict
@@ -371,7 +371,8 @@ def array(data, dtype=None):
             dtype = str(dtype)
         elif callable(dtype):
             dtype = dtype.__name__
-        ret = ops.array(np.array(data, dtype))
+        with jt.flag_scope(auto_convert_64_to_32=0):
+            ret = ops.array(np.array(data, dtype))
     else:
         ret = ops.array(data)
     # TODO: move those code to core
@@ -460,6 +461,10 @@ def ones(*shape, dtype="float32"):
         shape = shape[0]
     return unary(1, dtype).broadcast(shape)
 
+def new_ones(x, size):
+    return ones(size, x.dtype)
+Var.new_ones = new_ones
+
 def ones_like(x):
     ''' Constructs a jittor Var with all elements set to 1 and shape same with x.
     
@@ -487,6 +492,22 @@ def zeros(*shape, dtype="float32"):
         shape = shape[0]
     return unary(0, dtype).broadcast(shape)
 
+def new_zeros(x, size):
+    return zeros(size, x.dtype)
+Var.new_zeros = new_zeros
+
+def empty(*shape, dtype="float32"):
+    if isinstance(shape, tuple) and isinstance(shape[-1], (str, NanoString)):
+        dtype = shape[-1]
+        shape = shape[:-1]
+    if isinstance(shape, tuple) and isinstance(shape[0], (Sequence, NanoVector)):
+        shape = shape[0]
+    return ops.empty(shape, dtype)
+
+def new_empty(x, size):
+    return empty(size, x.dtype)
+Var.new_empty = new_empty
+
 def full(shape,val,dtype="float32"):
     ''' Constructs a jittor Var with all elements set to val.
     
@@ -502,6 +523,10 @@ def full(shape,val,dtype="float32"):
     if not isinstance(shape, (NanoVector, Sequence)):
         shape = (shape,)
     return unary(val, dtype).broadcast(shape)
+
+def new_full(x, size, val):
+    return full(size, val, x.dtype)
+Var.new_full = new_full
 
 def full_like(x, val, dtype=None) -> Var:
     ''' Constructs a jittor Var with all elements set to val and shape same with x. 
@@ -739,8 +764,6 @@ Var.type_as = type_as
 Var.astype = Var.cast
 
 def masked_fill(x, mask, value):
-    assert list(x.shape) == list(mask.shape)
-    # TODO: assert mask = 0 or 1
     return x * (1 - mask) + mask * value
 Var.masked_fill = masked_fill
 
@@ -1271,6 +1294,19 @@ class Module:
         Loads the module's parameters from a dictionary.
         '''
         self.load_parameters(params)
+        
+    def _load_from_state_dict(self, state, prefix="", *args, **kw):
+        if len(prefix):
+            new_state = {}
+            for k,v in state.items():
+                if k.startswith(prefix):
+                    new_state[k[len(prefix):]] = v
+            state = new_state
+        self.load_state_dict(state)
+
+    def cuda(self):
+        flags.use_cuda = 1
+        return self
 
     def modules(self) -> List:
         ''' Returns a list of sub-modules in the module recursively.
@@ -1625,19 +1661,43 @@ Arguments of hook are defined as::
     def __getattr__(self, key):
         return object.__getattribute__(self, key)
 
+    def register_buffer(self, key, value):
+        object.__setattr__(self, key, value)
+        return value
+
     def float64(self):
         '''convert all parameters to float16'''
+        self._amp_level = 0
         for p in self.parameters():
             if p.dtype.is_float():
                 p.assign(p.float64())
         return self
 
+    def float32(self):
+        '''convert all parameters to float16'''
+        self._amp_level = 0
+        for p in self.parameters():
+            if p.dtype.is_float():
+                p.assign(p.float32())
+        return self
+
     def float16(self):
         '''convert all parameters to float16'''
+        self._amp_level = 4
+        cls = self.__class__
+        cls.__call__ = cls.__half_call__
         for p in self.parameters():
             if p.dtype.is_float():
                 p.assign(p.float16())
         return self
+
+    def __half_call__(self, *args, **kw):
+        amp_level = getattr(self, "_amp_level", -1)
+        if amp_level >= 0:
+            with flag_scope(amp_level=amp_level):
+                return self.execute(*args, **kw)
+        else:
+            return self.execute(*args, **kw)
 
     def half(self):
         '''convert all parameters to float16'''
@@ -1646,6 +1706,7 @@ Arguments of hook are defined as::
     def float_auto(self):
         '''convert all parameters to float16 or float32 automatically
         by jt.flags.auto_mixed_precision_level and jt.flags.amp_reg'''
+        self._amp_level = -1
         for p in self.parameters():
             if p.dtype.is_float():
                 p.assign(p.float_auto())
@@ -1890,12 +1951,10 @@ Var.size = size
 
 
 def to_int(v):
-    assert v.dtype.is_int()
-    return v.item()
+    return ori_int(v.item())
 
 def to_float(v):
-    assert v.dtype.is_float()
-    return v.item()
+    return ori_float(v.item())
 
 def to_bool(v):
     assert v.dtype.is_int() or v.dtype.is_bool()
@@ -1937,19 +1996,44 @@ from . import nn
 from . import attention
 from . import lr_scheduler
 from . import linalg
+from .linalg import einsum
 from .nn import matmul, \
-    bmm, bmm_transpose
+    bmm, bmm_transpose, \
+    baddbmm
 from . import contrib
 from . import numpy2cupy
-from .contrib import concat
+from .contrib import concat, cat
 from .misc import *
 from . import sparse
 from . import optim
 from . import dataset
 from . import init
 
+dtype = NanoString
+
 import jittor_utils
 
 for backend in jittor_utils.backends:
     if hasattr(backend, "post_process"):
         backend.post_process()
+
+# impl x.func(...) -> func_(...)
+args = {"x", "input", "self"}
+_white_list = {"mul", "add", "sub"}
+for k,v in list(Var.__dict__.items()):
+    if k.startswith("_"): continue
+    if k.endswith("_"): continue
+    if not callable(v): continue
+
+    if k not in _white_list:
+        if not hasattr(v, "__code__"): continue
+        conames = v.__code__.co_varnames
+        if len(conames) == 0: continue
+        arg_name = conames[0]
+        if arg_name not in args: continue
+
+    new_k = k+"_"
+    if hasattr(Var, new_k): continue
+    def inplace_wrapper(new_k, prev_func):
+        setattr(Var, new_k, lambda x, *args, **kw: x.assign(prev_func(x, *args, **kw)))
+    inplace_wrapper(new_k, v)
