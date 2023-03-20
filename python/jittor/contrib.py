@@ -270,3 +270,5 @@ Example::
         # s = jt.setitem(s, tuple(slices), a)
         cdim += a.shape[dim]
     return s
+
+cat = concat

@@ -128,6 +128,25 @@ def __iter__(x):
     return result.__iter__()
 jt.Var.__iter__ = __iter__
 
+def __contains__(x, key):
+    return bool((x == key).any())
+jt.Var.__contains__ = __contains__
+
+def new(x, *args):
+    if len(args) != 1 or isinstance(args[0], int):
+        return jt.empty(args, x.dtype)
+    return jt.array(args[0]).cast(x.dtype)
+jt.Var.new = new
+
+def __index__(x):
+    return int(x.item())
+jt.Var.__index__ = __index__
+
+def sort(input, dim=-1, descending=False, stable=False):
+    index, value = jt.argsort(input, dim, descending)
+    return value, index
+jt.Var.sort = sort
+
 def all(x, dim=()):
     return x.all_(dim).bool()
 jt.Var.all = all
@@ -787,6 +806,9 @@ jt.Var.nonzero = nonzero
 
 
 def arange(start=0, end=None, step=1,dtype=None):
+    if isinstance(start, jt.Var): start = start.item()
+    if isinstance(end, jt.Var): end = end.item()
+    if isinstance(step, jt.Var): step = step.item()
     if end is None:
         end,start = start,0
     l = round((end-start)//step)+1
@@ -2015,6 +2037,7 @@ def triu(input: jt.Var, diagonal:int=0) -> jt.Var:
     mask = index[-2] <= index[-1] - diagonal
     return input*mask
 jt.Var.triu = triu
+jt.Var.triu_ = lambda x: x.assign(x.triu())
 
 def tril(input: jt.Var, diagonal:int=0) -> jt.Var:
     ''' Returns the lower triangular part of a matrix (2-D tensor) or batch of matrices input, the other elements of the result tensor out are set to 0.
@@ -2039,6 +2062,7 @@ def tril(input: jt.Var, diagonal:int=0) -> jt.Var:
     mask = index[-2] >= index[-1] - diagonal
     return input*mask
 jt.Var.tril = tril
+jt.Var.tril_ = lambda x: x.assign(x.tril())
 
 def all_equal(a: jt.Var, b: jt.Var) -> bool:
     return (a == b).all().item()

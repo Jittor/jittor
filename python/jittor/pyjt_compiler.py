@@ -778,7 +778,7 @@ def compile_src(src, h, basename):
     if submodule_info and "attrs" in submodule_info and "core_name" in submodule_info["attrs"]:
         core_name = submodule_info["attrs"]["core_name"]
     has_map = class_name in ["VarHolder", "NanoVector"]
-    has_seq = class_name == "NanoVector"
+    has_seq = class_name in ["VarHolder", "NanoVector"]
     # add extra include to avoid compile error
     src_code = ""
     if include_name.endswith("var_slices.h"):

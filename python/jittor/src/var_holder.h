@@ -260,7 +260,7 @@ struct VarHolder {
     /**
      * return the number of dimensions.
      */
-    // @pyjt(__get__ndim)
+    // @pyjt(__get__ndim, dim)
     inline int ndim() {
         return var->shape.size();
     }

@@ -73,6 +73,12 @@ Example::
     assert len(a.shape) > 2 and len(b.shape) > 2
     return matmul(a, b)
 
+def baddbmm(input, batch1, batch2, beta=1, alpha=1):
+    res = bmm(batch1, batch2)
+    if alpha != 1: res = res * alpha
+    if beta == 0: return res
+    return beta * input + res
+
 def matmul(a, b):
     ''' matrix multiply, 
 
@@ -1683,14 +1689,17 @@ class Embedding(Module):
              [ 0.14941819  0.57047683 -1.3217674]
              [ 0.14941819  0.57047683 -1.3217674]], dtype=float32)
     '''
-    def __init__(self, num, dim):
-        self.num = num
-        self.dim = dim
-        self.weight = jt.init.gauss([num,dim],'float32').stop_grad()
+    def __init__(self, num_embeddings, embedding_dim, dtype="float32"):
+        self.num = num_embeddings
+        self.dim = embedding_dim
+        self.weight = jt.init.gauss([self.num, self.dim], dtype).stop_grad()
 
     def execute(self, x):
-        res = self.weight[x.flatten()].reshape(x.shape + [self.dim])
+        res = self.weight[x]
         return res
+
+def embedding(input, weight):
+    return weight[input]
 
 class PixelShuffle(Module):
     def __init__(self, upscale_factor):
@@ -2973,3 +2982,19 @@ class KLDivLoss(Module):
         else:
             loss = loss_pointwise
         return loss
+
+class Mish(Module):
+    def __init__(self, inplace=False):
+        '''
+Applies the Mish function, element-wise.
+reference: Mish - A Self Regularized Non-Monotonic Neural Activation Function.
+        '''
+        pass
+    def execute(self, x):
+        return x * jt.tanh(jt.softplus(x))
+
+def mish(x, inplace=False):
+    return x * jt.tanh(jt.softplus(x))
+
+def skip_init(module_cls, *args, **kw):
+    return module_cls(*args, **kw)

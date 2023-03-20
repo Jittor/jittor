@@ -112,6 +112,7 @@ def constant_(var, value=0.0):
     '''
     return var.assign(constant(var.shape, var.dtype, value))
 Var.constant_ = constant_
+fill = Var.fill_ = constant_
 
 def zero(shape, dtype="float32"):
     '''Generate zero Jittor Var.

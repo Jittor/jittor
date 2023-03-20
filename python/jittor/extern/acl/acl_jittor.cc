@@ -163,16 +163,20 @@ string process_acl(const string& src, const string& name, const map<string,strin
         new_src = "#include <Python.h>\n#include <pystate.h>\n"+
         replace(new_src, "op->do_run_after_prepare(jkl);", 
         R"({
-            auto state = _PyThreadState_UncheckedGet();
+            Py_BEGIN_ALLOW_THREADS
             op->do_run_after_prepare(jkl);
-            if (!_PyThreadState_UncheckedGet()) {
-                PyEval_AcquireThread(state);
-            }
+            Py_END_ALLOW_THREADS
         })");
     }
     if (name == "profiler.cc") {
         new_src = token_replace_all(new_src, ".cc", ".tikcc");
     }
+    // LOGir << name << (name == "pass_manager.cc");
+    if (name == "pass_manager.cc") {
+        LOGir << "replace" << name;
+        new_src = token_replace_all(new_src, "run_pass<FloatAtomicFixPass>();", "WTF");
+    }
+    // ????????
     return new_src;
 }
 
@@ -201,13 +205,42 @@ void acl_jittor_op_compiler(string& filename, string& src, bool is_acl, string& 
     src = new_src;
 
     new_src = token_replace_all(new_src, "atomicAdd(&$1,$2);", "$1=$1+$2;");
+    new_src = token_replace_all(new_src, "bool", "int8");
+    new_src = token_replace_all(new_src, "::numeric_min<float32>()", "-1e30");
+    new_src = token_replace_all(new_src, "::numeric_max<float32>()", "1e30");
     // TODO: support max
-    // new_src = token_replace_all(new_src, "::max($1,$2);", "($1)>($2)?($1):($2);");
+    unordered_map<string,string> opmap = {
+        // {"::max","tikcc::scalar_max"}, 
+        {"::sqrtf", "tikcc::scalar_sqrt"}
+    };
     auto ss = split(new_src, ";");
     for (auto &s : ss) {
         if (s.find("?") != string::npos) {
             s = token_replace_all(s+";", "auto $1=$2?$3:$4;", "auto $1=$3;if (!($2)) $1=$4;");
         }
+        if (s.find("::max") != string::npos) {
+            if (s.find("auto") == string::npos) {
+                s = token_replace_all(s+";", " $1=$4::max($2,$3);", " $1=$2;if ($2 < $3) $1=$3;");
+            } else {
+                s = token_replace_all(s+";", "auto $1=$4::max($2,$3);", "auto $1=$2;if ($2 < $3) $1=$3;");
+            }
+        }
+        for (auto& kv : opmap) {
+            if (s.find(kv.first) != string::npos) {
+                if (s.find("auto") == string::npos) {
+                    // $1 = op($2) --> op($1, $2)
+                    s = token_replace_all(s+";", " $1= "+kv.first+"($2);", kv.second+"($1, $2);");
+                } else {
+                    // auto $1 = op($2) --> float32 $1; op($1, $2);
+                    s = token_replace_all(s+";", "auto $1= "+kv.first+"($2);", "float32 $1; " + kv.second+"($1, $2);");
+                }
+            }
+        }
+        // s = token_replace_all(s+";", "auto $1=$2?$3:$4;", "auto $1=$3;if (!($2)) $1=$4;");
+        // s = token_replace_all(s+";", "auto $1=$2?$3:$4;", "auto $1=$3;if (!($2)) $1=$4;");
+        // if (s.find("::max") != string::npos) {
+        //     s = token_replace_all(s+";", " $1= ::max($2);", "tikcc::scalar_max($1, $2);");
+        // }
     }
     new_src = join(ss, ";");
     src = new_src;

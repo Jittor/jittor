@@ -211,7 +211,7 @@ def load_pytorch(fn_name):
     global contents, deserialized_objects, loaded_storages
     loaded_storages = {}
     deserialized_objects = {}
-    if not fn_name.endswith(".pth"):
+    if not (fn_name.endswith(".pth") or fn_name.endswith(".pt") or fn_name.endswith(".bin")):
         print("This function is designed to load pytorch pth format files.")
         return None
     else:

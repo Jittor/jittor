@@ -452,7 +452,7 @@ def to_tensor(pic):
         return np.float32(img) * np.float32(1/255.0)
     else:
         return img
-
+pil_to_tensor = to_tensor
 
 
 def _to_jittor_array(pic):
