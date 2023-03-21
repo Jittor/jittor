@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.6.11'
+__version__ = '1.3.6.12'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -694,6 +694,32 @@ def clamp_(x, min_v=None, max_v=None):
     '''
     return x.assign(x.clamp(min_v=min_v, max_v=max_v))
 Var.clamp_ = clamp_
+
+
+def outer(x, y):
+    ''' Returns the outer product of two 1-D vectors.
+
+    :param x: the input Var.
+    :type x: jt.Var, numpy array, or python sequence.
+    :param y: the input Var.
+    :type y: jt.Var, numpy array, or python sequence.
+
+
+    Example::
+
+    >>> x = jt.arange(3)
+    >>> y = jt.arange(4)
+    >>> jt.outer(x, y)
+    jt.Var([[0 0 0 0]
+            [0 1 2 3]
+            [0 2 4 6]], dtype=int32)
+    >>> x.outer(y)
+    jt.Var([[0 0 0 0]
+            [0 1 2 3]
+            [0 2 4 6]], dtype=int32)
+    '''
+    return jt.multiply(x.unsqueeze(1), y.unsqueeze(0))
+Var.outer = outer
 
 def erfinv_(x):
     ''' In-place version of erfinv().
