@@ -1733,10 +1733,20 @@ can also be None)::
     assert db.data == 0
 
     '''
+    def __init__(self):
+        super().__init__(self)
+        self.saved_tensors = []
+        self.saved_variables = self.saved_tensors
+
+    def save_for_backward(self, *args):
+        self.saved_tensors = list(args)
+        self.saved_variables = self.saved_tensors
+    
     def __call__(self, *args):
         backup = args
         args = list(args)
         taped_inputs = []
+        self.taped_inputs_shape = []
         taped_outputs = []
         input_mask = [-1] * len(args)
         for i,v in enumerate(args):
@@ -1749,6 +1759,7 @@ can also be None)::
                 input_mask[i] = len(taped_inputs)
                 args[i] = v
                 taped_inputs.append(v)
+                self.taped_inputs_shape.append(v.shape)
         ori_res = self.execute(*args)
         if not isinstance(ori_res, Sequence):
             res = [ori_res]
@@ -1760,12 +1771,14 @@ can also be None)::
                 v = v.tape()
                 output_mask[i] = len(taped_outputs)
                 res[i] = v
-                taped_outputs.append(v)
+                if not v.is_stop_grad():
+                    taped_outputs.append(v)
         self.input_mask = input_mask
         self.output_mask = output_mask
         # tape output and input together so
         # backward treat them as one operator
-        tape_together(taped_inputs, taped_outputs, self._grad)
+        if len(taped_outputs) > 0:
+            tape_together(taped_inputs, taped_outputs, self._grad)
         if isinstance(ori_res, Sequence):
             return res
         else:
@@ -1777,6 +1790,7 @@ can also be None)::
         if not isinstance(ret, Sequence):
             ret = (ret,)
         new_ret = []
+        # print("function grad: ", self.__class__, len(ret), len(self.input_mask), self.input_mask)
         for i, r in enumerate(ret):
             j = self.input_mask[i]
             if j<0:
@@ -1784,6 +1798,25 @@ can also be None)::
                 assert r is None or j==-2, f"{type(self)}'s {i}-th returned grad should be None, "\
                     "because the input value is not jittor variable."
             else:
+                # detect if all the input dims are the same
+                if r is not None:
+                    input_shape = self.taped_inputs_shape[j]
+                    same_idx = -1
+                    for i in range(1, len(input_shape) + 1):
+                        if input_shape[-i] == r.shape[-i]:
+                            same_idx = i
+                        else:
+                            break
+                    # print(same_idx, input_shape, r.shape)
+                    if same_idx == -1:
+                        r = r.reshape(input_shape[0], -1).sum(1)
+                    elif same_idx < len(input_shape):
+                        r_shape_prod = np.prod(r.shape[:-same_idx])
+                        input_shape_prod = np.prod(input_shape[:-same_idx])
+                        r = r.reshape(input_shape[:-same_idx] + [ori_int(r_shape_prod // input_shape_prod)] + input_shape[-same_idx:]).sum(len(input_shape) - same_idx)
+                    elif same_idx == len(input_shape) and len(r.shape) > len(input_shape):
+                        while len(r.shape) > len(input_shape):
+                            r = r.sum(0)
                 new_ret.append(r)
         return new_ret
 

@@ -9,6 +9,7 @@ from typing import Any, BinaryIO, cast, Dict, Optional, Type, Tuple, Union, IO, 
 
 loaded_storages = {}
 deserialized_objects = {}
+prefix = ""
 def _is_zipfile(fn):
     f = open(fn, "rb")
     read_bytes = []
@@ -31,7 +32,8 @@ def _maybe_decode_ascii(bytes_str: Union[bytes, str]) -> str:
     return bytes_str
 
 def load_tensor(contents, dtype, numel, key, location):
-    name = os.path.join("archive", "data", str(key))
+    global prefix
+    name = os.path.join(prefix, "data", str(key))
     loaded_storages[key] = np.frombuffer(contents[name], dtype).copy()
 
 def get_dtype_size(dtype):
@@ -208,9 +210,10 @@ def persistent_load_direct(saved_id):
         raise RuntimeError("Unknown saved id type: %s" % saved_id[0])
 
 def load_pytorch(fn_name):
-    global contents, deserialized_objects, loaded_storages
+    global contents, deserialized_objects, loaded_storages, prefix
     loaded_storages = {}
     deserialized_objects = {}
+    prefix = "archive"
     if not fn_name.endswith(".pth"):
         print("This function is designed to load pytorch pth format files.")
         return None
@@ -219,7 +222,11 @@ def load_pytorch(fn_name):
             loaded_storages = {}
             deserialized_objects = {}
             contents = extract_zip(fn_name)
-            data_file = io.BytesIO(contents['archive/data.pkl'])
+            for key in contents.keys():
+                if "data.pkl" in key:
+                    prefix = key.split("/")[0]
+                    break
+            data_file = io.BytesIO(contents[f'{prefix}/data.pkl'])
             pickle_load_args = {'encoding': 'utf-8'}
             unpickler = UnpicklerWrapper(data_file,  **pickle_load_args)
             unpickler.persistent_load = persistent_load
