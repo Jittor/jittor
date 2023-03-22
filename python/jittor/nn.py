@@ -287,6 +287,24 @@ def gelu(x):
     r = erf*x*.5
     return r
 
+def silu(x):
+    r''' Applies the element-wise function:
+
+    .. math::
+        \text{SILU}(x) = x * Sigmoid(x)
+    
+    :param x: the input var
+    :type x: jt.Var
+
+    Example:
+        >>> a = jt.randn(3)
+        >>> a
+        jt.Var([-0.38380373 -1.1338731   2.128115  ], dtype=float32)
+        >>> nn.silu(a)
+        jt.Var([-0.15552104 -0.27603802  1.9016962 ], dtype=float32)
+    '''
+    return x * x.sigmoid()
+
 class ELU(Module):
     r''' Applies the element-wise function:
 
@@ -2151,7 +2169,7 @@ class Sequential(Module):
             else:
                 self.append(mod)
     def __getitem__(self, idx):
-        if idx not in self.layers:
+        if isinstance(idx, slice) or idx not in self.layers:
             return list(self.layers.values())[idx]
 
         return self.layers[idx]

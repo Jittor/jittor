@@ -2035,7 +2035,7 @@ def triu(input: jt.Var, diagonal:int=0) -> jt.Var:
     '''
     index = input.index()
     mask = index[-2] <= index[-1] - diagonal
-    return input*mask
+    return jt.ternary(mask, input, jt.zeros_like(input))
 jt.Var.triu = triu
 jt.Var.triu_ = lambda x: x.assign(x.triu())
 
@@ -2060,7 +2060,7 @@ def tril(input: jt.Var, diagonal:int=0) -> jt.Var:
     '''
     index = input.index()
     mask = index[-2] >= index[-1] - diagonal
-    return input*mask
+    return jt.ternary(mask, input, jt.zeros_like(input))
 jt.Var.tril = tril
 jt.Var.tril_ = lambda x: x.assign(x.tril())
 

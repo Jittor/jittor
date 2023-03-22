@@ -216,6 +216,8 @@ def load_pytorch(fn_name):
         return None
     else:
         if _is_zipfile(fn_name):
+            loaded_storages = {}
+            deserialized_objects = {}
             contents = extract_zip(fn_name)
             data_file = io.BytesIO(contents['archive/data.pkl'])
             pickle_load_args = {'encoding': 'utf-8'}
