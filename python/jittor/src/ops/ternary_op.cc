@@ -21,8 +21,14 @@ static auto make_number = get_op_info("number")
 TernaryOp::TernaryOp(Var* cond, Var* x, Var* y) : cond(cond), x(x), y(y) {
     bool bx = cond->shape.size() > x->shape.size() || cond->num > x->num;
     bool by = cond->shape.size() > y->shape.size() || cond->num > y->num;
-    if (bx || by) {
-        VarPtr xx, yy;
+    bool bx2 = cond->shape.size() < x->shape.size() || cond->num < x->num;
+    bool by2 = cond->shape.size() < y->shape.size() || cond->num < y->num;
+    if (bx || by || bx2 || by2) {
+        VarPtr xx, yy, cc;
+        if (bx2) cc = make_broadcast(cond, x, NanoVector()), cond=cc;
+        if (by2) cc = make_broadcast(cond, y, NanoVector()), cond=cc;
+        bx = cond->shape.size() > x->shape.size() || cond->num > x->num;
+        by = cond->shape.size() > y->shape.size() || cond->num > y->num;
         if (bx) xx = make_broadcast(x, cond, NanoVector()), x = xx;
         if (by) yy = make_broadcast(y, cond, NanoVector()), y = yy;
         forward(make_ternary(cond, x, y));
