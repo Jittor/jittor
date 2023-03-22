@@ -2013,7 +2013,7 @@ def triu(input: jt.Var, diagonal:int=0) -> jt.Var:
     '''
     index = input.index()
     mask = index[-2] <= index[-1] - diagonal
-    return input*mask
+    return jt.ternary(mask, input, jt.zeros_like(input))
 jt.Var.triu = triu
 
 def tril(input: jt.Var, diagonal:int=0) -> jt.Var:
@@ -2037,7 +2037,7 @@ def tril(input: jt.Var, diagonal:int=0) -> jt.Var:
     '''
     index = input.index()
     mask = index[-2] >= index[-1] - diagonal
-    return input*mask
+    return jt.ternary(mask, input, jt.zeros_like(input))
 jt.Var.tril = tril
 
 def all_equal(a: jt.Var, b: jt.Var) -> bool:
