@@ -764,7 +764,7 @@ Var.type_as = type_as
 Var.astype = Var.cast
 
 def masked_fill(x, mask, value):
-    return x * (1 - mask) + mask * value
+    return jt.ternary(mask, value, x)
 Var.masked_fill = masked_fill
 
 
@@ -1137,7 +1137,7 @@ class Module:
     def __name__(self):
         pass
 
-    def dfs(self, parents, k, callback, callback_leave=None):
+    def dfs(self, parents, k, callback, callback_leave=None, recurse=True):
         ''' An utility function to traverse the module. '''
         n_children = 0
         for v in self.__dict__.values():
@@ -1145,12 +1145,13 @@ class Module:
                 n_children += 1
         ret = callback(parents, k, self, n_children)
         if ret == False: return
-        for k,v in self.__dict__.items():
-            if not isinstance(v, Module):
-                continue
-            parents.append(self)
-            v.dfs(parents, k, callback, callback_leave)
-            parents.pop()
+        if recurse:
+            for k,v in self.__dict__.items():
+                if not isinstance(v, Module):
+                    continue
+                parents.append(self)
+                v.dfs(parents, k, callback, callback_leave)
+                parents.pop()
         if callback_leave:
             callback_leave(parents, k, self, n_children)
 
@@ -1171,7 +1172,7 @@ class Module:
         self.dfs([], None, callback, callback_leave)
         return "\n".join(ss)
 
-    def parameters(self) -> List:
+    def parameters(self, recurse=True) -> List:
         ''' Returns a list of module parameters.
 
         ----------------
@@ -1206,10 +1207,10 @@ class Module:
                         p.name(pname)
         def callback_leave(parents, k, v, n):
             stack.pop()
-        self.dfs([], None, callback, callback_leave)
+        self.dfs([], None, callback, callback_leave, recurse)
         return _uniq(ps)
 
-    def state_dict(self, to=None):
+    def state_dict(self, to=None, recurse=True):
         ''' Returns a dictionary containing 
         Jittor Var of the module and its descendants.
         
@@ -1257,7 +1258,7 @@ class Module:
                         p.name(pname)
         def callback_leave(parents, k, v, n):
             stack.pop()
-        self.dfs([], None, callback, callback_leave)
+        self.dfs([], None, callback, callback_leave, recurse)
         if to == "numpy":
             for k,v in ps.items():
                 if isinstance(v, Var):
@@ -1269,7 +1270,7 @@ class Module:
                     ps[k] = torch.Tensor(v.numpy())
         return ps
 
-    def named_parameters(self) -> List[Tuple[str, Var]]:
+    def named_parameters(self, recurse=True) -> List[Tuple[str, Var]]:
         ''' Returns a list of module parameters and their names.
 
         ----------------
@@ -1286,7 +1287,7 @@ class Module:
             ('bias', jt.Var([-0.38282675  0.36271113 -0.7063226   0.02899247  0.52210844], dtype=float32))]
 
         '''
-        state_dict = self.state_dict()
+        state_dict = self.state_dict(recurse=recurse)
         return list(state_dict.items())
 
     def load_state_dict(self, params) -> None:

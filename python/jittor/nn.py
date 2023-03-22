@@ -692,6 +692,23 @@ class InstanceNorm(Module):
 
 InstanceNorm3d = InstanceNorm2d = InstanceNorm1d = InstanceNorm
 
+def fp32_guard(func):
+    def wrapper(*args, **kw):
+        if jt.flags.amp_level == 0:
+            return func(*args, **kw)
+        new_args = []
+        for a in args:
+            if isinstance(a, jt.Var) and a.dtype == "float16":
+                new_args.append(a.float32())
+            else:
+                new_args.append(a)
+        with jt.flag_scope(amp_level=0):
+            a = func(*new_args, **kw)
+            if isinstance(a, jt.Var) and a.dtype == "float32":
+                a = a.float16()
+        return a
+    return wrapper
+
 def instance_norm(x, 
     running_mean = None,
     running_var = None,
@@ -718,6 +735,7 @@ class LayerNorm(Module):
         self.weight = init.constant(normalized_shape, "float32", 1.0) if elementwise_affine else 1.0
         self.bias = init.constant(normalized_shape, "float32", 0.0) if elementwise_affine else 0.0
 
+    @fp32_guard
     def execute(self, x):
         dims = [-i for i in range(len(self.normalized_shape), 0, -1)]
         xmean = jt.mean(x, dims=dims, keepdims=1)
@@ -731,6 +749,7 @@ class LayerNorm(Module):
 
 LayerNorm3d = LayerNorm2d = LayerNorm1d = LayerNorm
 
+@fp32_guard
 def layer_norm(x, 
     normalized_shape, 
     weight = 1,
