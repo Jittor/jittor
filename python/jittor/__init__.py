@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.6.14'
+__version__ = '1.3.6.15'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -1849,7 +1849,7 @@ can also be None)::
                 new_ret.append(r)
         return new_ret
 
-    def dfs(self, parents, k, callback, callback_leave=None):
+    def dfs(self, parents, k, callback, callback_leave=None, recurse=True):
         pass
 
     @classmethod

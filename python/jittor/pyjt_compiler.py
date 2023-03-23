@@ -475,6 +475,7 @@ def compile_src(src, h, basename):
     class_slots_code = []
     submodule_defs_code = []
     def_targets = OrderedDict()
+    has_attr_dict = class_name in ["VarHolder"]
     for df in defs:
         for name in df["pynames"]:
             if df["is_scope_def"] and '.' not in name:
@@ -524,6 +525,8 @@ def compile_src(src, h, basename):
                 // TODO: support kw
                 CHECK(kw==0);
             """
+            if has_attr_dict:
+                func_fill += f"((PyObject**)(((char*)self) + sizeof(PyObject) + sizeof({class_name})))[0] = PyDict_New(); "
 
         elif name == "__repr__":
             slot_name = "tp_repr"
@@ -562,6 +565,8 @@ def compile_src(src, h, basename):
             func_head = "(PyObject* self) -> void"
             func_fill = "int64 n = 0"
             before_return = "Py_TYPE(self)->tp_free((PyObject *) self);"
+            if has_attr_dict:
+                before_return = f"Py_XDECREF(((PyObject**)(((char*)self) + sizeof(PyObject) + sizeof({class_name}))));" + before_return
         
         elif name in binary_number_slots:
             slot_name = "tp_as_number->"+binary_number_slots[name]
@@ -826,6 +831,7 @@ def compile_src(src, h, basename):
         
         tp.tp_name = "{core_name}.{class_info["pynames"][0]}";
         tp.tp_basicsize = GET_OBJ_SIZE({class_name});
+        {f"tp.tp_dictoffset = tp.tp_basicsize; tp.tp_basicsize += sizeof(PyObject*); " if has_attr_dict else ""}
         tp.tp_new = PyType_GenericNew;
         tp.tp_flags = Py_TPFLAGS_DEFAULT;
         {"tp.tp_flags |= Py_TPFLAGS_HEAPTYPE; htp.ht_name = htp.ht_qualname = to_py_object<string>(tp.tp_name);"
