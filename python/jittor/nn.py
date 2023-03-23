@@ -2185,15 +2185,16 @@ class Sequential(Module):
         for k, layer in self.layers.items():
             x = layer(x)
         return x
-    def dfs(self, parents, k, callback, callback_leave):
+    def dfs(self, parents, k, callback, callback_leave, recurse=True):
         n_children = len(self.layers)
         ret = callback(parents, k, self, n_children)
         if ret == False:
             return
         parents.append(self)
-        for k,v in self.layers.items():
-            if isinstance(v, Module):
-                v.dfs(parents, k, callback, callback_leave)
+        if recurse:
+            for k,v in self.layers.items():
+                if isinstance(v, Module):
+                    v.dfs(parents, k, callback, callback_leave)
         parents.pop()
         if callback_leave:
             callback_leave(parents, k, self, n_children)

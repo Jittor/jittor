@@ -386,6 +386,8 @@ DEF_IS(VarHolder*, bool) is_type(PyObject* obj) {
 DEF_IS(VarHolder*, PyObject*) to_py_object(T a) {
     PyObjHolder obj(_PyObject_New(&PyjtVarHolder.ht_type));
     auto ptr = GET_RAW_PTR(T, obj.obj);
+    ((PyObject**)(((char*)obj.obj) + sizeof(PyObject) + sizeof(typename std::remove_pointer<T>::type)))[0] = PyDict_New();
+    // new attr_dict
     // will move and delete a
     new (ptr) typename std::remove_pointer<T>::type (a);
     return obj.release();

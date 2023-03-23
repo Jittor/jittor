@@ -126,6 +126,14 @@ struct VarHolder {
     }
 
     /** 
+     * return the number of bytes of this Var.
+     */
+    // @pyjt(__get__nbytes)
+    inline int64 nbytes() {
+        return var->num * var->dsize();
+    }
+
+    /** 
      * disable the gradient calculation for the Var.
      */
     // @pyjt(stop_grad)

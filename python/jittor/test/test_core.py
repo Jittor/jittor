@@ -251,6 +251,11 @@ class TestCore(unittest.TestCase):
         da = jt.grad(b, a)
         da.sync()
 
+    def test_attr_dict(self):
+        a = jt.array([1,2,3])
+        a.hahaha = 1
+        assert a.hahaha == 1
+
 
 if __name__ == "__main__":
     unittest.main()
