@@ -640,7 +640,7 @@ class Linear(Module):
 def linear(x, weight, bias=None):
     ''' Returns x * weight^T
     '''
-    x = matmul_transpose(input, weight)
+    x = matmul_transpose(x, weight)
     if bias is not None:
         return x + bias
     return x
