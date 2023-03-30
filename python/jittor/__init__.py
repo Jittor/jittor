@@ -2068,3 +2068,5 @@ for k,v in list(Var.__dict__.items()):
     def inplace_wrapper(new_k, prev_func):
         setattr(Var, new_k, lambda x, *args, **kw: x.assign(prev_func(x, *args, **kw)))
     inplace_wrapper(new_k, v)
+
+from . import math_util
