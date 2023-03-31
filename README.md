@@ -16,7 +16,7 @@ Related Links:
 *  [Jittor Tutorials](https://cg.cs.tsinghua.edu.cn/jittor/tutorial/)
 *  [Jittor Models](https://cg.cs.tsinghua.edu.cn/jittor/resources/)
 *  [Jittor Documents](https://cg.cs.tsinghua.edu.cn/jittor/assets/docs/index.html)
-*  [Github](https://github.com/jittor/jittor), [Gitee](https://gitee.com/jittor/jittor)
+*  [Github](https://github.com/jittor/jittor), [GitLink](https://www.gitlink.org.cn/jittor/jittor), [Gitee](https://gitee.com/jittor/jittor)
 *  [Jittor Forum](https://discuss.jittor.org/)
 *  [Awesome Jittor List](https://github.com/Jittor/jittor/blob/master/AWESOME-JITTOR-LIST.md)
 *  IM: QQ Group(761222083)
