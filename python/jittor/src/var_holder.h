@@ -251,11 +251,20 @@ struct VarHolder {
      */
     // @pyjt(__get__data)
     inline DataView data() {
-        sync(true);
+        sync(true, false);
         #ifdef HAS_CUDA
         migrate_to_cpu(var, exe.allocator);
         #endif
         return {this, var->mem_ptr, var->shape, var->dtype()};
+    }
+    
+    // @pyjt(__get__raw_ptr)
+    inline uint64 raw_ptr() {
+        sync(true, false);
+        #ifdef HAS_CUDA
+        migrate_to_cpu(var, exe.allocator);
+        #endif
+        return (uint64)var->mem_ptr;
     }
 
     /**

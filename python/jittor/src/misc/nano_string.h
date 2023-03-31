@@ -195,9 +195,11 @@ constexpr int amp_keep_reduce = 4;
 constexpr int amp_keep_white = 8;
 constexpr int amp_array_prefer = 16;
 
-inline NanoString float_dtype(int dsize_) {
-    if (amp_reg & amp_prefer32) return ns_float32;
-    if (amp_reg & amp_prefer16) return ns_float16;
+inline NanoString float_dtype(int dsize_, bool has_scalar=false) {
+    if (!has_scalar) {
+        if (amp_reg & amp_prefer32) return ns_float32;
+        if (amp_reg & amp_prefer16) return ns_float16;
+    } 
     return (dsize_ == 3) ? ns_float64 : 
         (dsize_ == 2 ) ? ns_float32 : ns_float16;
 }
@@ -208,25 +210,29 @@ inline NanoString int_dtype(int dsize_) {
         (dsize_ == 1) ? ns_int16 : ns_int8;
 }
 
-inline  NanoString dtype_infer(NanoString x, NanoString y) {
+inline  NanoString dtype_infer(NanoString x, NanoString y, bool xscalar=false, bool yscalar=false) {
     int dsize_ = std::max(x.dsize_(), y.dsize_());
+    if (xscalar) dsize_ = y.dsize_();
+    if (yscalar) dsize_ = x.dsize_();
     bool is_float = x.is_float() || y.is_float();
     if (is_float)
-        return float_dtype(dsize_);
+        return float_dtype(dsize_, xscalar||yscalar);
     else {
         return int_dtype(dsize_);
     }
 }
 
-inline NanoString binary_dtype_infer(NanoString op, NanoString x, NanoString y) {
+inline NanoString binary_dtype_infer(NanoString op, NanoString x, NanoString y, bool xscalar=false, bool yscalar=false) {
     if (op.is_bool()) return ns_bool;
     int dsize_ = std::max(x.dsize_(), y.dsize_());
+    if (xscalar) dsize_ = y.dsize_();
+    if (yscalar) dsize_ = x.dsize_();
     bool is_float = !op.is_int() && 
         (x.is_float() || y.is_float() || op.is_float());
     if (is_float) {
         if (op.is_white() && !(amp_reg & amp_keep_white))
             return (dsize_ == 3) ? ns_float64 : ns_float32;
-        return float_dtype(dsize_);
+        return float_dtype(dsize_, xscalar||yscalar);
     } else {
         if (x.is_bool() && y.is_bool()) return ns_bool;
         return int_dtype(dsize_);
