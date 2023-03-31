@@ -119,6 +119,7 @@ ArrayOp::ArrayOp(PyObject* obj) {
     int64 size = output->size;
     if (shape.size() == 1 && shape[0] == 1) {
         output->flags.set(NodeFlags::_force_fuse);
+        output->flags.set(NodeFlags::_is_scalar);
         set_type(OpType::element);
     }
     void* host_ptr = nullptr;

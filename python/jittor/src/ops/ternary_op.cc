@@ -42,7 +42,7 @@ TernaryOp::TernaryOp(Var* cond, Var* x, Var* y) : cond(cond), x(x), y(y) {
     if (x->dtype() == y->dtype()) {
         z = create_output(nullptr, x->dtype());
     } else {
-        z = create_output(nullptr, dtype_infer(x->ns, y->ns));
+        z = create_output(nullptr, dtype_infer(x->ns, y->ns, x->flags.get(NodeFlags::_is_scalar), y->flags.get(NodeFlags::_is_scalar)));
     }
 }
 

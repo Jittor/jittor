@@ -196,6 +196,25 @@ DEF_IS(MemInfo, const T&) from_py_object(PyObject* obj) {
     return GET_RAW_PTR(T, obj);
 }
 
+// MemInfo
+struct ZipFile;
+EXTERN_LIB PyTypeObject PyjtZipFile;
+DEF_IS(ZipFile, bool) is_type(PyObject* obj) {
+    return Py_TYPE(obj) == &PyjtZipFile;
+}
+
+
+DEF_IS(ZipFile, PyObject*) to_py_object(const T& a) {
+    PyObjHolder obj(_PyObject_New(&PyjtZipFile));
+    auto ptr = GET_RAW_PTR(T, obj.obj);
+    new (ptr) T(a);
+    return obj.release();
+}
+
+DEF_IS(ZipFile, const T&) from_py_object(PyObject* obj) {
+    return GET_RAW_PTR(T, obj);
+}
+
 
 // NanoString
 struct NanoString;

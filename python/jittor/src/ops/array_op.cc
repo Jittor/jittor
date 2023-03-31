@@ -53,6 +53,7 @@ ArrayOp::ArrayOp(ArrayArgs&& args) {
     NanoVector shape = output->shape;
     if (shape.size() == 1 && shape[0] == 1) {
         output->flags.set(NodeFlags::_force_fuse);
+        output->flags.set(NodeFlags::_is_scalar);
         set_type(OpType::element);
     }
     #ifdef HAS_CUDA

@@ -45,6 +45,7 @@ struct NodeFlags {
         _needed_by_backward=_n+3,
         _out_hint=_n+4,
         _th_require_grad=_n+5,
+        _is_scalar=_n+5,
 
         // op related flags
         // bit0: support cpu

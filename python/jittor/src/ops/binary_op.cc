@@ -445,7 +445,7 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
     set_type(OpType::element);
     ns = op;
     ASSERT(ns.is_binary());
-    z = create_output(x->shape, binary_dtype_infer(op, x->ns, y->ns));
+    z = create_output(x->shape, binary_dtype_infer(op, x->ns, y->ns, x->flags.get(NodeFlags::_is_scalar), y->flags.get(NodeFlags::_is_scalar)));
     bool bin = ns.get(NanoString::_no_need_back_in);
     bool bout = ns.get(NanoString::_no_need_back_out);
     if (bin || bout) {
