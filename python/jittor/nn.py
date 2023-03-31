@@ -521,7 +521,7 @@ def softmax(x, dim=None, log=False):
     if code_softmax.can_softmax_v1(x, dim) and jt.compiler.is_cuda:
         return code_softmax.softmax_v1(x, log)
     if dim is None: dim = ()
-    dtype, x = x.dtype, x.to_float()
+    dtype, x = x.dtype, x._to_float()
     if log:
         a = x - jt.max(x, dim, keepdims=True)
         ret = a - a.exp().sum(dim, keepdims=True).log()

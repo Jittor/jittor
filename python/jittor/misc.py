@@ -2068,10 +2068,10 @@ def all_equal(a: jt.Var, b: jt.Var) -> bool:
     return (a == b).all().item()
 jt.all_equal = all_equal
 
-def to_float(x: jt.Var) -> jt.Var:
+def _to_float(x: jt.Var) -> jt.Var:
     if x.dtype != "float64": x = x.float()
     return x
-jt.Var.to_float = to_float
+jt.Var._to_float = _to_float
 
 def index_select(x: jt.Var, dim:int, index: jt.Var) -> jt.Var:
     '''Returns a new var which indexes the x var along dimension dim using the entries in index.
