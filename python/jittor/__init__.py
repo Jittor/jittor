@@ -1724,7 +1724,7 @@ Arguments of hook are defined as::
 
     def float16(self):
         '''convert all parameters to float16'''
-        self._amp_level = 4
+        self._amp_level = 3 if flags.th_mode else 4
         cls = self.__class__
         cls.__call__ = cls.__half_call__
         for p in self.parameters():
