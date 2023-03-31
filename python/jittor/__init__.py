@@ -1335,7 +1335,7 @@ class Module:
             state = new_state
         self.load_state_dict(state)
 
-    def cuda(self):
+    def cuda(self, device=None):
         flags.use_cuda = 1
         return self
 
@@ -1585,10 +1585,10 @@ Arguments of hook are defined as::
                 if param.shape == v.shape:
                     LOG.v(f'load parameter {key} success ...')
                     v.update(param)
+                    v.sync(False, False)
                 else:
                     n_failed += 1
                     LOG.e(f'load parameter {key} failed: expect the shape of {key} to be {v.shape}, but got {param.shape}')
-        jt.sync_all()
         if n_failed:
             LOG.w(f"load total {len(params)} params, {n_failed} failed")
 
@@ -1680,6 +1680,16 @@ Arguments of hook are defined as::
         if not hasattr(self, "is_train"):
             self.is_train = True
         return self.is_train
+        
+    @property
+    def training(self):
+        if not hasattr(self, "is_train"):
+            self.is_train = True
+        return self.is_train
+
+    @training.setter
+    def training(self, value):
+        self.is_train = value
 
     def mpi_param_broadcast(self, root=0):
         if not in_mpi: return
@@ -2068,3 +2078,5 @@ for k,v in list(Var.__dict__.items()):
     def inplace_wrapper(new_k, prev_func):
         setattr(Var, new_k, lambda x, *args, **kw: x.assign(prev_func(x, *args, **kw)))
     inplace_wrapper(new_k, v)
+
+from . import math_util

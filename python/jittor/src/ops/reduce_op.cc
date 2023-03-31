@@ -23,8 +23,6 @@ static auto make_ternary = get_op_info("ternary")
 static auto make_number = get_op_info("number")
     .get_constructor<VarPtr, float, Var*>();
 
-NanoString binary_dtype_infer(NanoString op, Var* dx, Var* dy);
-
 unordered_set<string> reduce_ops = {
     /**
     Returns the maximum elements in the input.
@@ -310,6 +308,8 @@ void ReduceOp::infer_shape() {
         keepdims_mask |= 1;
     }
     y->set_shape(yshape);
+    if (yshape.size() == 1 && y->num == 1)
+        y->flags.set(NodeFlags::_is_scalar);
 }
 
 VarPtr ReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {

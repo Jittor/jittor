@@ -280,6 +280,13 @@ class TestFP16(unittest.TestCase):
         a.half()
         assert a.weight.dtype == "float16"
 
+    def test_scalar(self):
+        a = jt.float16([1,2,3])
+        assert (a*1).dtype == "float16"
+        assert (a*jt.float16([1,2,3])).dtype == "float16"
+        assert (a*jt.float32([1,2,3])).dtype == "float32"
+        assert (a*jt.float32([1,2,3]).sum()).dtype == "float16"
+        assert jt.int([0,1,0]).ternary(a, jt.float32(1)).dtype == "float16"
 
 
 @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")

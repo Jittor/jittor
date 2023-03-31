@@ -854,6 +854,7 @@ UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
     } else 
         dtype = unary_dtype_infer(ns, x->ns);
     y = create_output(nullptr, dtype);
+    y->flags.set(NodeFlags::_is_scalar, x->flags.get(NodeFlags::_is_scalar));
     bool bin = ns.get(NanoString::_no_need_back_in);
     bool bout = ns.get(NanoString::_no_need_back_out);
     if (bin || bout) {
