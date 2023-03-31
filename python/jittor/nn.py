@@ -639,6 +639,14 @@ class Linear(Module):
         if self.bias is not None:
             return x + self.bias
         return x
+    
+def linear(x, weight, bias=None):
+    ''' Returns x * weight^T
+    '''
+    x = matmul_transpose(x, weight)
+    if bias is not None:
+        return x + bias
+    return x
 
 class BatchNorm(Module):
     def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True, is_train=True, sync=True):
