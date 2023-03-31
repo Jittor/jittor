@@ -2125,7 +2125,7 @@ def multinomial(weights: jt.Var, num_samples: int, replacement: bool=False) -> j
         # A-Res algorithm
         # Pavlos S. Efraimidis and Paul G. Spirakis, 2006, Weighted random sampling with a reservoir
         assert num_samples <= weights.shape[-1], "num_samples larger than the input"
-        rand = jt.rand(weights.shape) ** (1/weights)
+        rand = jt.rand(weights.shape) ** ((1/weights).safe_clip())
         _, indices = jt.topk(rand.safe_clip(), num_samples)
         return indices
 

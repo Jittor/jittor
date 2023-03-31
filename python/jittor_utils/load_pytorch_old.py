@@ -212,6 +212,7 @@ def load_pytorch(fn_name):
             else:
                 raise RuntimeError(f"zipfile <{fn_name}> format error, data.pkl not found")
             with jt.flag_scope(use_cuda=0):
+                print("load??", fn_name)
                 data_file = contents.read_var(prefix+"data.pkl").data.tobytes()
                 data_file = io.BytesIO(data_file)
                 pickle_load_args = {'encoding': 'utf-8'}

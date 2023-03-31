@@ -163,6 +163,7 @@ void BroadcastToOp::infer_shape() {
     NanoVector zshape;
     for (int i=0; i<zdim; i++) zshape.push_back(zz[i]);
     z->set_shape(zshape);
+    z->flags.set(NodeFlags::_is_scalar, x->flags.get(NodeFlags::_is_scalar));
     LOGvvv << "Broadcast x(" >> x >> ") shape" << yshapes << "-> z(" >> z >> ")"; 
 }
 
