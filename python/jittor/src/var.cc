@@ -31,7 +31,8 @@ DEFINE_FLAG_WITH_SETTER(int, auto_mixed_precision_level, 0, "Auto mixed-precisio
 void (*_var_free_hook)(Var*);
 
 void setter_auto_mixed_precision_level(int value) {
-    if (value <= 3) amp_reg = 0; else
+    if (value <= 2) amp_reg = 0; else
+    if (value == 3) amp_reg = amp_keep_reduce | amp_keep_white; else
     if (value == 4) amp_reg = amp_prefer16; else
     if (value == 5) amp_reg = amp_prefer16 | amp_array_prefer; else
     if (value == 6) amp_reg = amp_prefer16 | amp_array_prefer | amp_keep_reduce | amp_keep_white;

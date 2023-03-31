@@ -205,6 +205,9 @@ struct float16 {
     }
 };
 
+bool operator<(float16 x, float16 y) { return float32(x)<float32(y); }
+bool operator>(float16 x, float16 y) { return float32(x)>float32(y); }
+
 }
 
 #endif
