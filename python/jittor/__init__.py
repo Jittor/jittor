@@ -64,29 +64,35 @@ def _load_pkl(s, path):
                  " and re-download."
         raise RuntimeError(msg)
 
-def _upload(path, url, jk):
-    prefix = "https://cg.cs.tsinghua.edu.cn/jittor/assets"
+def _upload(path, url, jk, tdir=""):
+    tdir = tdir + '/' if tdir != "" else ""
+    prefix = f"https://cg.cs.tsinghua.edu.cn/jittor/{tdir}assets"
     if url.startswith("jittorhub://"):
         url = url.replace("jittorhub://", prefix+"/build/checkpoints/")
     assert url.startswith(prefix)
     suffix = url[len(prefix):]
+    dir_suffix = "/".join(suffix.split("/")[:-1])
     jkey = flags.cache_path+"/_jkey"
     with open(jkey, 'w') as f:
         f.write(jk)
     assert os.system(f"chmod 600 \"{jkey}\"") == 0
-    assert os.system(f"s""c""p"+f" -i \"{jkey}\" \"{path}\" jittor" "@" "166" f".111.68.30:Documents/jittor-blog/assets{suffix}") == 0
+    print(dir_suffix)
+    assert os.system(f"s""s""h"f" -i \"{jkey}\" jittor" "@" "166" f".111.68.30 mkdir -p Documents/jittor-blog/{tdir}assets{dir_suffix}") == 0
+    assert os.system(f"s""c""p"+f" -i \"{jkey}\" \"{path}\" jittor" "@" "166" f".111.68.30:Documents/jittor-blog/{tdir}assets{suffix}") == 0
     assert os.system(f"s""s""h"f" -i \"{jkey}\" jittor" "@" "166" ".111.68.30 Documents/jittor-blog.git/hooks/post-update") == 0
 
 
 def safeunpickle(path):
     if path.startswith("jittorhub://"):
-        path = path.replace("jittorhub://", "https://cg.cs.tsinghua.edu.cn/jittor/assets/build/checkpoints/")
+        path = path.replace("jittorhub://", f"https://cg.cs.tsinghua.edu.cn/jittor/assets/build/checkpoints/")
     if path.startswith("https:") or path.startswith("http:"):
         base = path.split("/")[-1]
         fname = os.path.join(compiler.ck_path, base)
         from jittor_utils.misc import download_url_to_local
         download_url_to_local(path, base, compiler.ck_path, None)
         path = fname
+        if not (path.endswith(".pth") or path.endswith(".pkl") or path.endswith(".pt")):
+            return path
     if path.endswith(".pth") or path.endswith(".pt") or path.endswith(".bin") :
         from jittor_utils.load_pytorch import load_pytorch
         model_dict = load_pytorch(path)
