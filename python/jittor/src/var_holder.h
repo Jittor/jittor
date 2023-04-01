@@ -95,6 +95,17 @@ struct VarHolder {
         own_holder(); v->own_holder();
         return this; 
     };
+
+    // @pyjt(location)
+    inline string location() {
+        if (var->flags.get(NodeFlags::_is_swapped))
+            return "disk";
+        if (var->mem_ptr == nullptr)
+            return "none";
+        if (var->allocator->is_cuda())
+            return "device";
+        return "cpu";
+    }
     
     void operator=(VarPtr&& v);
 

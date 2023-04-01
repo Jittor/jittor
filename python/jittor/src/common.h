@@ -36,3 +36,9 @@ void expect_error(std::function<void()> func);
 #ifdef _MSC_VER
 #define __builtin_popcount __popcnt
 #endif
+
+#ifdef HAS_CUDA
+#define _HAS_CUDA 1
+#else
+#define _HAS_CUDA 0
+#endif

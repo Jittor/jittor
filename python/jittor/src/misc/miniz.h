@@ -1363,8 +1363,7 @@ struct ZipFile {
         size_t key = mz_zip_reader_locate_file(zip_archive.get(), filename.c_str(), nullptr, 0);
         mz_zip_archive_file_stat stat;
         CHECK(mz_zip_reader_file_stat(zip_archive.get(), key, &stat));
-        auto var = make_empty({stat.m_uncomp_size}, ns_uint8);
-        var->ns = dtype;
+        auto var = make_empty({stat.m_uncomp_size >> dtype.dsize_()}, dtype);
         auto vh = std::make_unique<VarHolder>(var);
         void* memptr = (void*)vh->raw_ptr();
         mz_zip_reader_extract_to_mem(zip_archive.get(), key, memptr, stat.m_uncomp_size, 0);

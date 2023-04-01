@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.6.15'
+__version__ = '1.3.7.0'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -1661,6 +1661,7 @@ Arguments of hook are defined as::
             if id(p) not in self.backup_grad_state:
                 self.backup_grad_state[id(p)] = not p.is_stop_grad()
             p.stop_grad()
+        return self
 
     def train(self):
         ''' Sets the module in training mode. '''
@@ -1674,6 +1675,7 @@ Arguments of hook are defined as::
             for p in self.parameters():
                 if id(p) in self.backup_grad_state and self.backup_grad_state[id(p)]:
                     p.start_grad()
+        return self
     
     def is_training(self) -> bool:
         ''' Returns whether the module is in training mode.'''

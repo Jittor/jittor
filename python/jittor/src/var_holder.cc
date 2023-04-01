@@ -18,6 +18,7 @@
 #include "ops/getitem_op.h"
 #include "ops/setitem_op.h"
 #include "type/fp16_compute.h"
+#include "mem/swap.h"
 
 namespace jittor {
 
@@ -179,9 +180,8 @@ VarHolder* VarHolder::sync(bool device_sync, bool weak_sync) {
 
 ArrayArgs VarHolder::fetch_sync() {
     sync(true);
-    #ifdef HAS_CUDA
-    migrate_to_cpu(var, exe.allocator);
-    #endif
+    if (save_mem || _HAS_CUDA)
+        migrate_to_cpu(var, exe.allocator);
     return {var->mem_ptr, var->shape, var->dtype()};
 }
 
@@ -198,8 +198,9 @@ ItemData VarHolder::item() {
     ItemData data;
     data.dtype = var->dtype();
     auto dsize = data.dtype.dsize();
+    if (save_mem || _HAS_CUDA)
+        migrate_to_cpu(var, exe.allocator);
     #ifdef HAS_CUDA
-    migrate_to_cpu(var, exe.allocator);
     if (var->allocator->is_cuda()) {
         checkCudaErrors(cudaMemcpy(&data.data, var->mem_ptr, dsize, cudaMemcpyDeviceToHost));
     } else
@@ -242,9 +243,8 @@ vector<ArrayArgs> fetch_sync(const vector<VarHolder*>& vh) {
     vector<ArrayArgs> ret(vh.size());
     sync(vh, true);
     for (uint i=0; i<vh.size(); i++) {
-        #ifdef HAS_CUDA
-        migrate_to_cpu(vh[i]->var, exe.allocator);
-        #endif
+        if (save_mem || _HAS_CUDA)
+            migrate_to_cpu(vh[i]->var, exe.allocator);
         ret[i].ptr = vh[i]->var->mem_ptr;
         ret[i].shape = vh[i]->var->shape;
         ret[i].dtype = vh[i]->var->dtype();
@@ -291,14 +291,13 @@ VarHolder* ternary_out_hint(VarHolder* cond, VarHolder* x, VarHolder* y) {
 
 void migrate_all_to_cpu() {
     sync_all(true);
-#ifdef HAS_CUDA
-    for (auto vh : hold_vars) {
-        auto v = vh->var;
-        // if (v->_outputs.size()) continue;
-        if (v->allocator && v->mem_ptr && !v->allocator->is_cuda())
-            migrate_to_cpu(v, cpu_allocator);
-    }
-#endif
+    if (save_mem || _HAS_CUDA)
+        for (auto vh : hold_vars) {
+            auto v = vh->var;
+            // if (v->_outputs.size()) continue;
+            if (v->allocator && v->mem_ptr && !v->allocator->is_cuda())
+                migrate_to_cpu(v, cpu_allocator);
+        }
 }
 
 static auto make_setitem = get_op_info("setitem")

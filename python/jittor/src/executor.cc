@@ -32,6 +32,8 @@
 #include "utils/seh.h"
 #include "utils/cache_compile.h"
 #include "var_holder.h"
+#include "mem/swap.h"
+#include "mem/mem_info.h"
 
 namespace jittor {
 
@@ -553,8 +555,22 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
             root = fuse_ops[rr-1];
             load_fused_op(fused_op, fuse_ops, ops, ll, rr, tt);
         }
-        for (auto* var : op->outputs()) {
-            var->alloc(allocator);
+        if (save_mem) {
+            swap_timestamp = ++Node::tflag_count;
+            for (auto* var : op->inputs()) {
+                var->tflag = swap_timestamp;
+            }
+            for (auto* var : op->inputs()) {
+                check_and_swap_out(var, allocator);
+            }
+            for (auto* var : op->outputs()) {
+                alloc_with_swap(var, allocator, true);
+                var->tflag = swap_timestamp;
+            }
+        } else {
+            for (auto* var : op->outputs()) {
+                var->alloc(allocator);
+            }
         }
         if (PREDICT_BRANCH_NOT_TAKEN(profile_memory_enable))
             memory_profiler.check();
@@ -672,7 +688,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
         }
     }
     LOGvv << "All" << op_num << "ops finished, return vars:" << vars;
-    for (Var* v : vars) ASSERT(v->mem_ptr || !v->backward_liveness);
+    for (Var* v : vars) ASSERT(v->mem_ptr || v->flags.get(NodeFlags::_is_swapped) || !v->backward_liveness) << v;
     // clean fetcher free buffer
     fetcher_to_free.clear();
     #ifdef HAS_CUDA

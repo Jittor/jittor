@@ -6,7 +6,6 @@
 // ***************************************************************
 #pragma once
 #include "common.h"
-#include "mem/mem_info.h"
 
 namespace jittor {
 
@@ -15,6 +14,7 @@ struct Allocator {
         _cuda=1,
         _aligned=2
     };
+    int64 used_memory=0, unused_memory=0;
     inline virtual uint64 flags() const { return 0; };
     inline bool is_cuda() const { return flags() & _cuda; }
     inline bool is_aligned() const { return flags() & _aligned; }
@@ -53,9 +53,7 @@ Allocator* get_allocator(bool temp_allocator=false);
 // @pyjt(gc)
 void gc_all();
 
-#ifdef HAS_CUDA
 void migrate_to_cpu(Var* var, Allocator* allocator);
 void migrate_to_gpu(Var* var, Allocator* allocator);
-#endif
 
 } // jittor

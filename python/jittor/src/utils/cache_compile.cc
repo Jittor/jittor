@@ -157,8 +157,6 @@ size_t skip_comments(const string& src, size_t i) {
     return i;
 }
 
-map<string,string> jt_env;
-
 void process(string src, vector<string>& input_names, string& cmd) {
     for (size_t i=0; i<src.size(); i++) {
         i = skip_comments(src, i);
@@ -187,10 +185,6 @@ void process(string src, vector<string>& input_names, string& cmd) {
                 auto env = getenv(inc.c_str());
                 if (env && string(env)!="0") {
                     auto senv = string(env);
-                    if (!jt_env.count(inc)) {
-                        LOGe << "Load JT env ok:" << inc << senv;
-                        jt_env[inc] = senv;
-                    }
                     string dflag = " -D"+inc+"="+senv;
                     if (cmd.find(dflag) == string::npos) {
                         // -D flags should insert before -o flag

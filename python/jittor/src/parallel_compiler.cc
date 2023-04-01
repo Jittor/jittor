@@ -18,6 +18,7 @@
 #include "lock.h"
 #include "opt/jit_searcher.h"
 #include "fused_op.h"
+#include "mem/mem_info.h"
 
 
 namespace jittor {

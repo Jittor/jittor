@@ -18,6 +18,10 @@ struct MemInfo {
     int64 total_cpu_ram;
     // @pyjt(total_cuda_ram)
     int64 total_cuda_ram;
+    // @pyjt(total_cpu_used)
+    int64 total_cpu_used;
+    // @pyjt(total_cuda_used)
+    int64 total_cuda_used;
 
     inline MemInfo(const MemInfo&) = default;
 
@@ -27,6 +31,6 @@ struct MemInfo {
 EXTERN_LIB MemInfo mem_info;
 
 // @pyjt(get_mem_info)
-inline MemInfo get_mem_info() { return mem_info; }
+inline MemInfo get_mem_info() { return MemInfo(); }
 
 } // jittor
