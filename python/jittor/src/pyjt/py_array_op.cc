@@ -20,6 +20,7 @@
 #include "var.h"
 #include "ops/op_register.h"
 #include "var_holder.h"
+#include "mem/swap.h"
 
 namespace jittor {
 
@@ -124,7 +125,7 @@ ArrayOp::ArrayOp(PyObject* obj) {
     }
     void* host_ptr = nullptr;
     #ifdef HAS_CUDA
-    if (use_cuda) {
+    if (use_cuda && !save_mem) {
         flags.set(NodeFlags::_cpu, 0);
         flags.set(NodeFlags::_cuda, 1);
         if (!output->flags.get(NodeFlags::_force_fuse)) {

@@ -29,6 +29,7 @@
 #include "mem/allocator/stat_allocator.h"
 #include "mem/allocator/temp_allocator.h"
 #include "mem/mem_info.h"
+#include "mem/swap.h"
 #include "executor.h"
 
 namespace jittor {
@@ -190,6 +191,10 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
     #endif
     log << "free: cpu(">>FloatOutput{(double)cpu_free, " KMG", 1024, "B"}
         >> ") gpu(">>FloatOutput{(double)gpu_free, " KMG", 1024, "B"} >> ")\n";
+    static int64 swap_total_last = 0;
+    log << "swap: total(">>FloatOutput{(double)swap_total, " KMG", 1024, "B"}
+        >> ") last(">>FloatOutput{(double)(swap_total-swap_total_last), " KMG", 1024, "B"} >> ")\n";
+    swap_total_last = swap_total;
     if (dump_var) {
         vector<Node*> queue;
         unordered_set<Node*> visited;
@@ -276,7 +281,15 @@ MemInfo::MemInfo() {
     cudaMemGetInfo(&gpu_free, &_gpu_total);
     total_cuda_ram = _gpu_total;
 #endif
-    sigquit_callback.push_back(&meminfo_callback);
+    // sigquit_callback.push_back(&meminfo_callback);
+    
+    int64 all_total = 0, gpu_total = 0, cpu_total = 0;
+    for (auto& a : SFRLAllocator::sfrl_allocators) {
+        auto total = a->used_memory + a->unused_memory;
+        a->is_cuda() ? gpu_total += total : cpu_total += total;
+    }
+    total_cpu_used = cpu_total;
+    total_cuda_used = gpu_total;
 }
 
 MemInfo mem_info;

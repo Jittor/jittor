@@ -17,6 +17,7 @@
 #include "ops/array_op.h"
 #include "misc/cuda_flags.h"
 #include "mem/allocator.h"
+#include "mem/swap.h"
 
 namespace jittor {
 
@@ -57,7 +58,7 @@ ArrayOp::ArrayOp(ArrayArgs&& args) {
         set_type(OpType::element);
     }
     #ifdef HAS_CUDA
-    if (use_cuda) {
+    if (use_cuda && !save_mem) {
         flags.set(NodeFlags::_cpu, 0);
         flags.set(NodeFlags::_cuda, 1);
         if (!output->flags.get(NodeFlags::_force_fuse)) {
@@ -107,12 +108,16 @@ void ArrayOp::run() {
     #endif
     // free prev allocation and move into it
     auto o = output;
-    o->allocator->free(o->mem_ptr, o->size, o->allocation);
+    if (save_mem)
+        free_with_swap(o);
+    else
+        o->allocator->free(o->mem_ptr, o->size, o->allocation);
+    
     o->mem_ptr = allocation.ptr;
     allocation.ptr = nullptr;
     o->allocator = allocation.allocator;
     o->allocation = allocation.allocation;
-
+    if (save_mem) registe_swap(o);
 }
 
 } // jittor

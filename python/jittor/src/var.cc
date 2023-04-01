@@ -10,6 +10,7 @@
 #include "op.h"
 #include "mem/allocator.h"
 #include "pybind/py_var_tracer.h"
+#include "mem/swap.h"
 
 namespace jittor {
 
@@ -29,6 +30,37 @@ DEFINE_FLAG(int, amp_reg, 0, "Auto mixed-precision control registers, bit 0: pre
 DEFINE_FLAG_WITH_SETTER(int, auto_mixed_precision_level, 0, "Auto mixed-precision optimization level, 0: not use fp16, 1-3: preserve level, not use fp16 for now; 4: perfer fp16, but some ops use fp32 e.g. sum,exp; 5: simular with 4, and array op will automatically convert to fp16; 6: all ops prefer fp16");
 
 void (*_var_free_hook)(Var*);
+
+void free_var(Var* v) {
+    if (PREDICT_BRANCH_NOT_TAKEN((bool)_var_free_hook)) _var_free_hook(v);
+    Var::number_of_lived_vars--;
+    if (save_mem)
+        free_with_swap(v);
+    else
+    if (v->mem_ptr != nullptr) {
+        auto mem_ptr = v->mem_ptr;
+        auto allocation = v->allocation;
+        auto allocator = v->allocator;
+        v->mem_ptr = nullptr;
+        v->allocator = nullptr;
+        v->allocation = 0;
+        allocator->free(mem_ptr, v->size, allocation);
+    }
+}
+
+void free_var_mem(Var* v) {
+    if (save_mem)
+        free_with_swap(v);
+    else {
+        auto mem_ptr = v->mem_ptr;
+        auto allocation = v->allocation;
+        auto allocator = v->allocator;
+        v->mem_ptr = nullptr;
+        v->allocator = nullptr;
+        v->allocation = 0;
+        allocator->free(mem_ptr, v->size, allocation);
+    }
+}
 
 void setter_auto_mixed_precision_level(int value) {
     if (value <= 2) amp_reg = 0; else

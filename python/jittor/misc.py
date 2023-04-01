@@ -2132,8 +2132,8 @@ def multinomial(weights: jt.Var, num_samples: int, replacement: bool=False) -> j
         assert num_samples <= weights.shape[-1], "num_samples larger than the input"
         # prevent rand generate 1, 1^inf = 1, with override other result
         a = jt.rand(weights.shape).minimum(0.999999)
-        rand = a ** ((1/weights).safe_clip())
-        _, indices = jt.topk(rand.safe_clip(), num_samples)
+        rand = a ** (1/weights)
+        _, indices = jt.topk(rand, num_samples)
         return indices
 
 

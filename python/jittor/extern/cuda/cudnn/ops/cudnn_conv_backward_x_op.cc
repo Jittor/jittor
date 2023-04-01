@@ -13,6 +13,7 @@
 #include "cudnn_wrapper.h"
 #include "executor.h"
 #include "ops/op_register.h"
+#include "mem/mem_info.h"
 
 using namespace std;
 

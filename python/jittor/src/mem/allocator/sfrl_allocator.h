@@ -68,8 +68,6 @@ struct SFRLAllocator : Allocator {
     static const size_t LARGE_ALIGN_SIZE = 2097152;
     float free_ratio, min_free_size;
     static list<SFRLAllocator*> sfrl_allocators;
-    // used_memory/unused_memory size of this allocator.
-    size_t used_memory, unused_memory;
     list<SFRLAllocator*>::iterator iter;
     CachingBlockPool* get_blocks(size_t size);
     size_t align_size(size_t size);
@@ -77,7 +75,7 @@ struct SFRLAllocator : Allocator {
     bool should_split(CachingBlock* block, size_t size);
     void try_merge_two_blocks(CachingBlock* b1, CachingBlock* b2, CachingBlockPool& blocks);
 
-    inline SFRLAllocator(float free_ratio = 1, float min_free_size=0) : free_ratio(free_ratio), min_free_size(min_free_size), used_memory(0), unused_memory(0) { sfrl_allocators.push_front(this); iter = sfrl_allocators.begin(); }
+    inline SFRLAllocator(float free_ratio = 1, float min_free_size=0) : free_ratio(free_ratio), min_free_size(min_free_size) { sfrl_allocators.push_front(this); iter = sfrl_allocators.begin(); }
     inline SFRLAllocator(Allocator* underlying, float free_ratio = 1, float min_free_size=0) : SFRLAllocator(free_ratio, min_free_size) {
         setup(underlying);
     }

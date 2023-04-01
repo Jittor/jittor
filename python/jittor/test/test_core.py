@@ -256,6 +256,59 @@ class TestCore(unittest.TestCase):
         a.hahaha = 1
         assert a.hahaha == 1
 
+    def test_swap(self):
+        # TODO: add skip
+        return
+        jt.gc()
+        jt.display_memory_info()
+        with jt.flag_scope(cpu_mem_limit=50*1024*1024):
+            np_arrays = []
+            jt_arrays = []
+            for i in range(100):
+                jt_arrays.append(jt.randn(1*1024*1024//4))
+                np_arrays.append(jt_arrays[-1].numpy())
+                for j in range(i):
+                    is_swapped = jt_arrays[j].location() == "disk"
+                    assert is_swapped == (j<=i-50), (i,j,jt_arrays[j].debug_msg(), is_swapped,  j<=i-50, jt.display_memory_info())
+            for i in range(len(np_arrays)):
+                np.testing.assert_allclose(jt_arrays[i].numpy(), np_arrays[i])
+            for i in range(len(np_arrays)):
+                np.testing.assert_allclose(jt_arrays[i].numpy(), np_arrays[i])
+
+    def test_swap_cuda(self):
+        # TODO: add skip
+        return
+        jt.gc()
+        jt.display_memory_info()
+        if jt.has_cuda:
+            np_arrays = []
+            jt_arrays = []
+            jt.gc()
+            jt.display_memory_info()
+            cpu_mem_limit=50*1024*1024
+            device_mem_limit=20*1024*1024
+            with jt.flag_scope(use_cuda=1, 
+                cpu_mem_limit=cpu_mem_limit,
+                device_mem_limit=device_mem_limit):
+                for i in range(100):
+                    jt_arrays.append(jt.random([1*1024*1024//4]))
+                    np_arrays.append(jt_arrays[-1].numpy())
+                    jt_arrays[-1].sync().name(str(i))
+                    meminfo = jt.get_mem_info()
+                    assert meminfo.total_cpu_used < cpu_mem_limit + 2*1024*1024
+                    assert meminfo.total_cuda_used < device_mem_limit + 2*1024*1024
+                for i in range(len(np_arrays)):
+                    np.testing.assert_allclose(jt_arrays[i].numpy(), np_arrays[i])
+                    meminfo = jt.get_mem_info()
+                    assert meminfo.total_cpu_used < cpu_mem_limit + 2*1024*1024
+                    assert meminfo.total_cuda_used < device_mem_limit + 2*1024*1024
+                for i in range(len(np_arrays)):
+                    np.testing.assert_allclose(jt_arrays[i].numpy(), np_arrays[i])
+                    meminfo = jt.get_mem_info()
+                    assert meminfo.total_cpu_used < cpu_mem_limit + 2*1024*1024
+                    assert meminfo.total_cuda_used < device_mem_limit + 2*1024*1024
+
+
 
 if __name__ == "__main__":
     unittest.main()
