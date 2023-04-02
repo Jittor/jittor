@@ -89,7 +89,7 @@ def install_mkl(root_folder):
             
             assert 0 == os.system(cmd)
             assert 0 == os.system(f"{dirname}/examples/test")
-        if platform.system() == "Darwin":
+        elif platform.system() == "Darwin":
             assert 0 == os.system(f"cd {dirname}/examples && "
             f"{cc_path} -std=c++14 cnn_inference_f32.cpp -Ofast -lmkldnn -I ../include -L ../lib -o test && DYLD_LIBRARY_PATH=../lib/ ./test")
         else:
