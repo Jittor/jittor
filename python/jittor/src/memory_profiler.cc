@@ -78,7 +78,7 @@ void MemoryProfiler::check() {
         std::vector<std::pair<std::pair<string, vector<Stack>>, size_t>> live_vars;
         vector<Node*> queue, queue2;
 
-        auto t = ++Node::tflag_count;
+        auto t = ++tflag_count;
         for (auto& vh : hold_vars)
             if (vh->var->tflag != t) {
                 vh->var->tflag = t;

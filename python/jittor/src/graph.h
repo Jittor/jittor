@@ -38,7 +38,7 @@ void clean_graph();
 
 template <typename Func>
 void bfs_backward(vector<Node*>& queue, Func&& func) {
-    auto t = ++Node::tflag_count;
+    auto t = ++tflag_count;
     size_t i=0;
     for (Node* node : queue) node->tflag = t;
     while (i < queue.size()) {
@@ -60,7 +60,7 @@ void bfs_backward(vector<Node*>& seed, vector<Node*>& queue, Func&& func) {
 
 template <typename Func>
 void bfs_forward(vector<Node*>& queue, Func&& func) {
-    auto t = ++Node::tflag_count;
+    auto t = ++tflag_count;
     size_t i=0;
     for (Node* node : queue) node->tflag = t;
     while (i < queue.size()) {
@@ -75,7 +75,7 @@ void bfs_forward(vector<Node*>& queue, Func&& func) {
 
 template <typename Func>
 void bfs_both(vector<Node*>& queue, Func&& func) {
-    auto t = ++Node::tflag_count;
+    auto t = ++tflag_count;
     size_t i=0;
     for (Node* node : queue) node->tflag = t;
     while (i < queue.size()) {
@@ -95,7 +95,7 @@ void bfs_both(vector<Node*>& queue, Func&& func) {
 
 template <typename Func>
 void toplogical_sort_forward(vector<Node*>& nodes, vector<Node*>& sorted, Func&& func) {
-    auto t = ++Node::tflag_count;
+    auto t = ++tflag_count;
     sorted.reserve(nodes.size());
     for (auto node : nodes) node->tflag = t;
     for (auto node : nodes) {
@@ -123,7 +123,7 @@ void toplogical_sort_forward(vector<Node*>& nodes, vector<Node*>& sorted, Func&&
 
 template <typename Func>
 void toplogical_sort_backward(vector<Node*>& nodes, vector<Node*>& sorted, Func&& func) {
-    auto t = ++Node::tflag_count;
+    auto t = ++tflag_count;
     sorted.reserve(nodes.size());
     for (auto node : nodes) node->tflag = t;
     for (auto node : nodes) {

@@ -101,7 +101,7 @@ void migrate_to_cpu(Var* var, Allocator* allocator) {
     #endif
     if (save_mem) {
         if (swap_timestamp != var->tflag) {
-            swap_timestamp = ++Node::tflag_count;
+            swap_timestamp = ++tflag_count;
             var->tflag = swap_timestamp;
         }
         move_with_swap(var, cpu_allocator, true);
@@ -134,7 +134,7 @@ void migrate_to_gpu(Var* var, Allocator* allocator) {
     // only happend when not using use_cuda_managed_allocator
     if (save_mem) {
         if (swap_timestamp != var->tflag) {
-            swap_timestamp = ++Node::tflag_count;
+            swap_timestamp = ++tflag_count;
             var->tflag = swap_timestamp;
         }
         if (var->id == 336770)

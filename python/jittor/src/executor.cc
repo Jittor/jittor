@@ -53,7 +53,7 @@ DECLARE_FLAG(int, use_cuda_managed_allocator);
 void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, int ll, int rr, int64 tt) {
     fused_op.ops.clear();
     fused_op.edges.clear();
-    auto ntt = ++Node::tflag_count;
+    auto ntt = ++tflag_count;
     for (int i=ll; i<rr; i++) {
         int opid = fuse_ops[i];
         Op* op = ops[opid];
@@ -174,7 +174,7 @@ void check_op_async_error(Op* op, bool is_fused_op, const std::exception& e, jit
 }
 
 static void top_weak_sync(vector<Var*>& vars) {
-    auto t = ++Node::tflag_count;
+    auto t = ++tflag_count;
     int64 max_id=0;
     for (auto v : vars) {
         max_id = std::max(v->id, max_id);
@@ -212,7 +212,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
         bfs_q.clear();
         // get all nodes need to be executed
         int need_opt = 0;
-        auto t = ++Node::tflag_count;
+        auto t = ++tflag_count;
         int64 max_id = 0;
         for (Var* v : vars)
             if (!v->is_finished() && v->tflag != t) {
@@ -254,7 +254,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
             }
         }
     }
-    auto tt = Node::tflag_count;
+    auto tt = tflag_count;
     vector<Op*> ops;
     vector<Var*> all_vars;
     ops.reserve(op_num);
@@ -556,7 +556,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
             load_fused_op(fused_op, fuse_ops, ops, ll, rr, tt);
         }
         if (save_mem) {
-            swap_timestamp = ++Node::tflag_count;
+            swap_timestamp = ++tflag_count;
             for (auto* var : op->inputs()) {
                 var->tflag = swap_timestamp;
             }
