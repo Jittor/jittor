@@ -102,10 +102,11 @@ bool alloc_with_swap(Var* x, Allocator* allocator, bool force) {
         }
         // if still no space, swap other smaller var
         if (!(allocator->used_memory + allocator->unused_memory + x->size <= limit || allocator->unused_memory >= unused_target)) {
-            auto iter=swap.lived.rbegin(); 
-            while (iter!=swap.lived.rend()) {
-                auto* var = iter->second;
-                iter++;
+            auto iter = swap.lived.end();
+            if (swap.lived.size()) iter = std::prev(iter);
+            while (iter != swap.lived.end()) {
+                auto var = iter->second;
+                iter = iter==swap.lived.begin() ? swap.lived.end() : std::prev(iter);
                 if (var->tflag == swap_timestamp)
                     continue;
                 ASSERT(var->mem_ptr) << x << var;

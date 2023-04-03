@@ -75,7 +75,7 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
     // get the oldest var
     if (trace_py_var) {
         vector<Node*> queue;
-        auto t = ++Node::tflag_count;
+        auto t = ++tflag_count;
         for (auto& vh : hold_vars)
             if (vh->var->tflag != t) {
                 vh->var->tflag = t;

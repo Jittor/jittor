@@ -85,6 +85,8 @@ struct NodeFlags {
     }
 };
 
+EXTERN_LIB int64 tflag_count;
+
 struct Node {
     struct input_t;
     struct output_t;
@@ -110,7 +112,6 @@ struct Node {
         operator Var*() { return (Var*)node; }
         operator var_output_t() { return {(Op*)node, index}; }
     };
-    static int64 tflag_count;
     NodeFlags flags;
     NanoString ns;
     inline bool is_var() const { return flags.get(NodeFlags::_var); }
@@ -221,7 +222,7 @@ bool outside;
 inline SetupFreeBuffer() {
     outside = !nt;
     if (outside) {
-        nt = ++Node::tflag_count;
+        nt = ++tflag_count;
     }
 }
 
