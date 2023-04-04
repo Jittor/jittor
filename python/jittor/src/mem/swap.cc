@@ -9,6 +9,7 @@
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>
 #include <stdio.h>
+#include <unistd.h>
 #endif
 #include "var.h"
 #include "mem/swap.h"
@@ -20,6 +21,7 @@ int64 swap_timestamp;
 int64 swap_total;
 constexpr int64 SWAP_BUF_SIZE = 1<<23; // 8M
 extern string cache_path;
+static int _pid = getpid();
 
 DEFINE_FLAG(int64, cpu_mem_limit, -1, "cpu_mem_limit");
 DEFINE_FLAG(int64, device_mem_limit, -1, "device_mem_limit");
@@ -33,7 +35,7 @@ unordered_map<Allocator*, Swap> swaps;
 void swap_to_disk(Var* x, Swap& swap) {
     swap_total += x->size;
     ASSERT(!x->flags.get(NodeFlags::_is_swapped));
-    string path = cache_path + "/tmp/" + S(x->id) + ".bin";
+    string path = cache_path + "/tmp/" + S(_pid) + "-" + S(x->id) + ".bin";
     #ifdef HAS_CUDA
     if (x->allocator->is_cuda()) {
         static char* buffer = new char[SWAP_BUF_SIZE];
@@ -134,7 +136,7 @@ bool alloc_with_swap(Var* x, Allocator* allocator, bool force) {
 
 void free_with_swap(Var* x) {
     if (x->flags.get(NodeFlags::_is_swapped)) {
-        string path = cache_path + "/tmp/" + S(x->id) + ".bin";
+        string path = cache_path + "/tmp/" + S(_pid) + "-" + S(x->id) + ".bin";
         if (remove(path.c_str()) != 0)
             LOGe << "failed to remove swap file" << path << x->shape << x->dtype();
     } else {
@@ -166,7 +168,7 @@ bool move_with_swap(Var* x, Allocator* allocator, bool force) {
         return false;
     }
     if (x->flags.get(NodeFlags::_is_swapped)) {
-        string path = cache_path + "/tmp/" + S(x->id) + ".bin";
+        string path = cache_path + "/tmp/" + S(_pid) + "-" + S(x->id) + ".bin";
         #ifdef HAS_CUDA
         if (x->allocator->is_cuda()) {
             static char* buffer = new char[SWAP_BUF_SIZE];
