@@ -35,6 +35,11 @@ static PyObject* my_import(const char* module_name, const char* attr) {
 }
 
 static PyObject* find_obj_name(PyFrameObject* f, PyObject* obj, const char* default_name="_model") {
+    #if PY_MINOR_VERSION>=11
+    #pragma message( "PY_MAJOR_VERSION333 " PY_VERSION )
+    LOGf << "python3.11 not supported yet";
+    return nullptr;
+    #else
     auto co = f->f_code;
     auto map = co->co_varnames;
 
@@ -71,6 +76,7 @@ static PyObject* find_obj_name(PyFrameObject* f, PyObject* obj, const char* defa
     }
     // LOGw << "not found name" << map << co->co_cellvars << co->co_freevars << (PyObject*)f;
     return PyUnicode_FromString(default_name);
+    #endif
 }
 
 static string to_string(PyObject* obj) {
@@ -80,6 +86,10 @@ static string to_string(PyObject* obj) {
 }
 
 static vector<Stack> get_stack_info() {
+    #if PY_MINOR_VERSION>=11
+    LOGf << "python3.11 not supported yet";
+    return {};
+    #else
     // cnt ++;
     // if (cnt % 100 != 0) return {};
     vector<Stack> stacks;
@@ -184,6 +194,7 @@ static vector<Stack> get_stack_info() {
         }
     }
     return stacks;
+    #endif
 }
 
 template<class T>
