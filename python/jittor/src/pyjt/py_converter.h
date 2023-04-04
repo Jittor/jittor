@@ -120,6 +120,21 @@ DEF_IS(int64_t, T) from_py_object(PyObject* obj) {
 }
 #endif
 
+#ifdef __APPLE__
+// uint64
+DEF_IS(uint64, bool) is_type(PyObject* obj) {
+    return PyLong_CheckExact(obj);
+}
+
+DEF_IS(uint64, PyObject*) to_py_object(const T& a) {
+    return PyLong_FromUnsignedLongLong(a);
+}
+
+DEF_IS(uint64, T) from_py_object(PyObject* obj) {
+    return PyLong_AsUnsignedLongLong(obj);
+}
+#endif
+
 // float64
 DEF_IS(float64, bool) is_type(PyObject* obj) {
     return PyFloat_CheckExact(obj) || PyLong_CheckExact(obj);
