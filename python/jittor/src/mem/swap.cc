@@ -11,7 +11,9 @@
 #endif
 #include <stdio.h>
 #include <thread>
+#ifndef _MSC_VER
 #include <unistd.h>
+#endif
 #include "var.h"
 #include "mem/swap.h"
 #include "mem/mem_info.h"
