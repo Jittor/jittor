@@ -17,6 +17,7 @@ def _maybe_decode_ascii(bytes_str: Union[bytes, str]) -> str:
 
 def load_tensor(contents, dtype, numel, key, location):
     name = os.path.join(prefix, "data", str(key))
+    name = name.replace("\\", "/")
     loaded_storages[key] = contents.read_var(name, dtype)
 
 def get_dtype_size(dtype):
