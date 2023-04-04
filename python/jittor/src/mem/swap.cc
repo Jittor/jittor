@@ -8,9 +8,9 @@
 // ***************************************************************
 #ifdef HAS_CUDA
 #include <cuda_runtime.h>
-#include <stdio.h>
-#include <unistd.h>
 #endif
+#include <stdio.h>
+#include <thread>
 #include "var.h"
 #include "mem/swap.h"
 #include "mem/mem_info.h"
