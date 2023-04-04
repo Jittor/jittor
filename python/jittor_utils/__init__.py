@@ -445,6 +445,20 @@ def get_cc_type(cc_path):
     if "cl" in bname: return "cl"
     LOG.f(f"Unknown cc type: {bname}")
 
+def get_py3_link_path():
+    py3_link_path = os.path.join(
+            os.path.dirname(sys.executable),
+            "libs",
+    )
+    if not os.path.exists(py3_link_path):
+        candidate = [os.path.dirname(sys.executable)] + sys.path
+        for p in candidate:
+            p = os.path.join(p, "libs")
+            if os.path.exists(p):
+                py3_link_path = p
+                break
+    return py3_link_path
+
 def get_py3_config_path():
     global _py3_config_path
     if _py3_config_path: 
@@ -502,10 +516,14 @@ def get_py3_include_path():
     if os.name == 'nt':
         # Windows
         sys.executable = sys.executable.lower()
-        _py3_include_path = '-I"' + os.path.join(
-            os.path.dirname(sys.executable),
-            "include"
-        ) + '"'
+        candidate = [os.path.dirname(sys.executable)] + sys.path
+        for p in candidate:
+            include_path = os.path.join(p, "include")
+            if os.path.exists(include_path):
+                break
+        else:
+            raise RuntimeError("Python include path not found. please report this bug to us.")
+        _py3_include_path = '-I"' + include_path + '"'
     else:
         _py3_include_path = run_cmd(get_py3_config_path()+" --includes")
         
