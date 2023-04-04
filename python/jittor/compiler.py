@@ -1098,10 +1098,7 @@ if os.name == 'nt':
     if cc_type == 'g++':
         pass
     elif cc_type == 'cl':
-        py3_link_path = os.path.join(
-                os.path.dirname(sys.executable),
-                "libs",
-        )
+        py3_link_path = jit_utils.get_py3_link_path()
         cc_flags = remove_flags(cc_flags, ["-f", "-m"])
         cc_flags = cc_flags.replace("-std=c++14", "-std=c++17")
         cc_flags = cc_flags.replace("-lstdc++", "")
