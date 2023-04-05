@@ -11,6 +11,7 @@
 #endif
 #include <stdio.h>
 #include <thread>
+#include <unistd.h>
 #include "var.h"
 #include "mem/swap.h"
 #include "mem/mem_info.h"
