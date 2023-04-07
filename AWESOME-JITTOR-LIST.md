@@ -1,5 +1,6 @@
 # Awesome Jittor List
 
+- [JittorLLMs](https://github.com/Jittor/JittorLLMs): 随着ChatGPT的推出，大模型正在快速地发展，国内同样涌现出一大批优秀的大模型研究，然而，大模型高昂的配置、复杂的环境要求让人望而却步。非十科技领衔，与清华大学可视媒体研究中心合作，研发了大模型推理库JittorLLMs，希望为国内大模型的研究提供软硬件的支撑。[缩略图](https://cg.cs.tsinghua.edu.cn/jittor/images/download/jittorllms-0.jpg)
 - [GAN](https://github.com/Jittor/gan-jittor): Jittor GAN模型库一共包括了从2014到2019最主流的27种GAN模型。这27个GAN总计被引用60953次，每篇文章平均引用次数为2176。[缩略图](https://cg.cs.tsinghua.edu.cn/jittor/images/resources/jittor-gan/gan-all.png)
 - [实例分割](https://github.com/Jittor/InstanceSegmentation-jittor): Jittor实例分割模型库一共包含了6种Backbone，和11类检测分割模型，包含最经典的Mask RCNN系列，实时实例分割网络以及人体分割网络等等。[缩略图](https://cg.cs.tsinghua.edu.cn/jittor/images/resources/jittor-seg/fenge.png)
 - [语义分割](https://github.com/Jittor/segmentation-jittor): 目前，Jittor已经支持了目前主流的语义分割算法。其中包含了三种经典的 Backbone ，以及六种常见的分割模型。[缩略图](https://cg.cs.tsinghua.edu.cn/jittor/images/resources/jittor-is/fenge.png)
