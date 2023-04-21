@@ -1,1 +1,2 @@
-from .gamma import digamma
+from .gamma import digamma, lgamma
+from .igamma import igamma
