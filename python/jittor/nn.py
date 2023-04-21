@@ -521,11 +521,14 @@ def softmax(x, dim=None, log=False):
     if code_softmax.can_softmax_v1(x, dim) and jt.compiler.is_cuda:
         return code_softmax.softmax_v1(x, log)
     if dim is None: dim = ()
+    dtype, x = x.dtype, x._to_float()
     if log:
         a = x - jt.max(x, dim, keepdims=True)
-        return a - a.exp().sum(dim, keepdims=True).log()
-    x = (x - jt.max(x, dim, keepdims=True)).exp()
-    return x / x.sum(dim, keepdims=True)
+        ret = a - a.exp().sum(dim, keepdims=True).log()
+    else:
+        x = (x - jt.max(x, dim, keepdims=True)).exp()
+        ret = x / x.sum(dim, keepdims=True)
+    return ret.cast(dtype)
 jt.Var.softmax = softmax
 
 def log_softmax(x,dim=None):
@@ -636,6 +639,14 @@ class Linear(Module):
         if self.bias is not None:
             return x + self.bias
         return x
+    
+def linear(x, weight, bias=None):
+    ''' Returns x * weight^T
+    '''
+    x = matmul_transpose(x, weight)
+    if bias is not None:
+        return x + bias
+    return x
 
 class BatchNorm(Module):
     def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True, is_train=True, sync=True):
@@ -715,14 +726,16 @@ def fp32_guard(func):
         if jt.flags.amp_level == 0:
             return func(*args, **kw)
         new_args = []
+        need_cast = False
         for a in args:
             if isinstance(a, jt.Var) and a.dtype == "float16":
                 new_args.append(a.float32())
+                need_cast = True
             else:
                 new_args.append(a)
         with jt.flag_scope(amp_level=0):
             a = func(*new_args, **kw)
-            if isinstance(a, jt.Var) and a.dtype == "float32":
+            if need_cast and isinstance(a, jt.Var) and a.dtype == "float32":
                 a = a.float16()
         return a
     return wrapper

@@ -1098,10 +1098,7 @@ if os.name == 'nt':
     if cc_type == 'g++':
         pass
     elif cc_type == 'cl':
-        py3_link_path = os.path.join(
-                os.path.dirname(sys.executable),
-                "libs",
-        )
+        py3_link_path = jit_utils.get_py3_link_path()
         cc_flags = remove_flags(cc_flags, ["-f", "-m"])
         cc_flags = cc_flags.replace("-std=c++14", "-std=c++17")
         cc_flags = cc_flags.replace("-lstdc++", "")
@@ -1368,7 +1365,7 @@ if has_cuda and is_cuda:
     nvcc_flags = " " + os.environ.get("nvcc_flags", "") + " "
     nvcc_flags += convert_nvcc_flags(cc_flags)
     nvcc_version = list(jit_utils.get_int_version(nvcc_path))
-    max_arch = 1000
+    max_arch = 86
     if nvcc_version < [11,]:
         max_arch = 75
     elif nvcc_version < [11,1]:

@@ -89,7 +89,7 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets, bool retain_graph) {
     bfs_forward(ts, [](Node*){ return true; });
     vector<Node*> gnodes;
     gnodes.reserve(ts.size());
-    auto nt = Node::tflag_count;
+    auto nt = tflag_count;
     if (loss->tflag == nt)
         gnodes.push_back(loss);
     bfs_backward(gnodes, [&](Node* node) {
@@ -103,7 +103,7 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets, bool retain_graph) {
     
     vector<Node*> sorted;
     toplogical_sort_backward(gnodes, sorted, [](Node*){});
-    nt = Node::tflag_count;
+    nt = tflag_count;
     vector<Var*> gvars;
     gvars.reserve(sorted.size());
     for (Node* node : sorted)
@@ -261,7 +261,7 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets, bool retain_graph) {
         }
     }
     if (!retain_graph) {
-        auto t = ++Node::tflag_count;
+        auto t = ++tflag_count;
         for (auto& vh : hold_vars)
             if (vh->var->tflag != t) {
                 vh->var->tflag = t;

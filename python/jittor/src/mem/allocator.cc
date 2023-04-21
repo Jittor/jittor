@@ -17,6 +17,8 @@
 #include "mem/allocator/sfrl_allocator.h"
 #include "mem/allocator/nfef_allocator.h"
 #include "mem/allocator/temp_allocator.h"
+#include "mem/swap.h"
+#include "var.h"
 
 namespace jittor {
 
@@ -92,12 +94,20 @@ void gc_all() {
     for (auto& kv : allocators) kv.second->gc();
 }
 
-
-#ifdef HAS_CUDA
-
 void migrate_to_cpu(Var* var, Allocator* allocator) {
+    #ifdef HAS_CUDA
     if (!use_cuda_managed_allocator)
         allocator = cpu_allocator;
+    #endif
+    if (save_mem) {
+        if (swap_timestamp != var->tflag) {
+            swap_timestamp = ++tflag_count;
+            var->tflag = swap_timestamp;
+        }
+        move_with_swap(var, cpu_allocator, true);
+        return;
+    }
+    #ifdef HAS_CUDA
     if (var->allocator == &delay_free) {
         var->allocator = allocator;
         delay_free.migrate_to_cpu(
@@ -115,11 +125,23 @@ void migrate_to_cpu(Var* var, Allocator* allocator) {
         var->allocator = a.allocator;
         a.ptr = nullptr;
     }
+    #endif
 }
 
 
 void migrate_to_gpu(Var* var, Allocator* allocator) {
+    #ifdef HAS_CUDA
     // only happend when not using use_cuda_managed_allocator
+    if (save_mem) {
+        if (swap_timestamp != var->tflag) {
+            swap_timestamp = ++tflag_count;
+            var->tflag = swap_timestamp;
+        }
+        if (var->id == 336770)
+            LOGir << var;
+        move_with_swap(var, allocator, true);
+        return;
+    }
     Allocation a(allocator, var->size);
     checkCudaErrors(cudaMemcpy(a.ptr, var->mem_ptr, var->size, cudaMemcpyHostToDevice));
     var->allocator->free(var->mem_ptr, var->size, var->allocation);
@@ -127,8 +149,7 @@ void migrate_to_gpu(Var* var, Allocator* allocator) {
     var->allocation = a.allocation;
     var->allocator = a.allocator;
     a.ptr = nullptr;
+    #endif
 }
-
-#endif
 
 } // jittor

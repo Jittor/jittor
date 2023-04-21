@@ -287,7 +287,19 @@ class TestFP16(unittest.TestCase):
         assert (a*jt.float32([1,2,3])).dtype == "float32"
         assert (a*jt.float32([1,2,3]).sum()).dtype == "float16"
         assert jt.int([0,1,0]).ternary(a, jt.float32(1)).dtype == "float16"
+        
+    def test_amp_level3(self):
+        with jt.flag_scope(amp_level = 3):
+            a = jt.float16([1,2,3])
+            assert (a.sum()).dtype == "float16"
+            assert (a.mean()).dtype == "float16"
+            assert (a.log()).dtype == "float16"
+            assert (a.exp()).dtype == "float16"
 
+    def test_safe_clip(self):
+        import math
+        assert not jt.float16(math.inf).isfinite()
+        assert jt.safe_clip(jt.float16(math.inf)).isfinite()
 
 @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
 class TestFP16CUDA(TestFP16):

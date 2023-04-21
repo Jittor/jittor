@@ -36,6 +36,9 @@ def clean_cuda():
 def clean_dataset():
     rmtree(cache_path+"/dataset")
 
+def clean_swap():
+    rmtree(cache_path+"/tmp")
+
 def print_help():
     msg = "|".join(keys)
     print(f"Usage: {sys.executable} -m jittor_utils.clean_cache [{msg}]")

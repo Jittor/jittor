@@ -10,6 +10,7 @@
 #include "op.h"
 #include "mem/allocator.h"
 #include "pybind/py_var_tracer.h"
+#include "mem/swap.h"
 
 namespace jittor {
 
@@ -30,8 +31,40 @@ DEFINE_FLAG_WITH_SETTER(int, auto_mixed_precision_level, 0, "Auto mixed-precisio
 
 void (*_var_free_hook)(Var*);
 
+void free_var(Var* v) {
+    if (PREDICT_BRANCH_NOT_TAKEN((bool)_var_free_hook)) _var_free_hook(v);
+    Var::number_of_lived_vars--;
+    if (save_mem)
+        free_with_swap(v);
+    else
+    if (v->mem_ptr != nullptr) {
+        auto mem_ptr = v->mem_ptr;
+        auto allocation = v->allocation;
+        auto allocator = v->allocator;
+        v->mem_ptr = nullptr;
+        v->allocator = nullptr;
+        v->allocation = 0;
+        allocator->free(mem_ptr, v->size, allocation);
+    }
+}
+
+void free_var_mem(Var* v) {
+    if (save_mem)
+        free_with_swap(v);
+    else {
+        auto mem_ptr = v->mem_ptr;
+        auto allocation = v->allocation;
+        auto allocator = v->allocator;
+        v->mem_ptr = nullptr;
+        v->allocator = nullptr;
+        v->allocation = 0;
+        allocator->free(mem_ptr, v->size, allocation);
+    }
+}
+
 void setter_auto_mixed_precision_level(int value) {
-    if (value <= 3) amp_reg = 0; else
+    if (value <= 2) amp_reg = 0; else
+    if (value == 3) amp_reg = amp_keep_reduce | amp_keep_white; else
     if (value == 4) amp_reg = amp_prefer16; else
     if (value == 5) amp_reg = amp_prefer16 | amp_array_prefer; else
     if (value == 6) amp_reg = amp_prefer16 | amp_array_prefer | amp_keep_reduce | amp_keep_white;

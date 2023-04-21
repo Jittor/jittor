@@ -17,6 +17,7 @@ def _maybe_decode_ascii(bytes_str: Union[bytes, str]) -> str:
 
 def load_tensor(contents, dtype, numel, key, location):
     name = os.path.join(prefix, "data", str(key))
+    name = name.replace("\\", "/")
     loaded_storages[key] = contents.read_var(name, dtype)
 
 def get_dtype_size(dtype):
@@ -247,21 +248,28 @@ def load_pytorch(fn_name):
                 f.read(8)
                 if offset is not None:
                     offset = f.tell()
-            for key, params in result.items():
-                requires_grad = params.requires_grad
-                shape = params.size
-                result[key] = jt.array(params.storage)
-                if shape is not None and len(shape) > 0:
-                    if len(params.stride) > 1:
-                        eval_list = []
-                        for idx in range(len(params.stride)):
-                            eval_list.append(f"@e0({idx}) * i{idx}")
-                        evals = "+".join(eval_list)
-                        result[key] = result[key].reindex(params.size, [evals], extras=[jt.array(params.stride)])
-                    else:
-                        result[key] = result[key].reshape(shape)
-                if requires_grad is not None:
-                    result[key].requires_grad = requires_grad
+            
+            def dfs_results(result):
+                for key, params in result.items():
+                    if isinstance(params, dict):
+                        result[key] = dfs_results(params)
+                    elif isinstance(params, ArrayWrapper):
+                        requires_grad = params.requires_grad
+                        shape = params.size
+                        result[key] = jt.array(params.storage)
+                        if shape is not None and len(shape) > 0:
+                            if len(params.stride) > 1:
+                                eval_list = []
+                                for idx in range(len(params.stride)):
+                                    eval_list.append(f"@e0({idx}) * i{idx}")
+                                evals = "+".join(eval_list)
+                                result[key] = result[key].reindex(params.size, [evals], extras=[jt.array(params.stride)])
+                            else:
+                                result[key] = result[key].reshape(shape)
+                        if requires_grad is not None:
+                            result[key].requires_grad = requires_grad
+                return result
+            result = dfs_results(result)
         return result
 
 if __name__ == "__main__":

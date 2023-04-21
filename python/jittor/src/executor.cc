@@ -32,6 +32,8 @@
 #include "utils/seh.h"
 #include "utils/cache_compile.h"
 #include "var_holder.h"
+#include "mem/swap.h"
+#include "mem/mem_info.h"
 
 namespace jittor {
 
@@ -51,7 +53,7 @@ DECLARE_FLAG(int, use_cuda_managed_allocator);
 void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, int ll, int rr, int64 tt) {
     fused_op.ops.clear();
     fused_op.edges.clear();
-    auto ntt = ++Node::tflag_count;
+    auto ntt = ++tflag_count;
     for (int i=ll; i<rr; i++) {
         int opid = fuse_ops[i];
         Op* op = ops[opid];
@@ -172,7 +174,7 @@ void check_op_async_error(Op* op, bool is_fused_op, const std::exception& e, jit
 }
 
 static void top_weak_sync(vector<Var*>& vars) {
-    auto t = ++Node::tflag_count;
+    auto t = ++tflag_count;
     int64 max_id=0;
     for (auto v : vars) {
         max_id = std::max(v->id, max_id);
@@ -210,7 +212,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
         bfs_q.clear();
         // get all nodes need to be executed
         int need_opt = 0;
-        auto t = ++Node::tflag_count;
+        auto t = ++tflag_count;
         int64 max_id = 0;
         for (Var* v : vars)
             if (!v->is_finished() && v->tflag != t) {
@@ -252,7 +254,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
             }
         }
     }
-    auto tt = Node::tflag_count;
+    auto tt = tflag_count;
     vector<Op*> ops;
     vector<Var*> all_vars;
     ops.reserve(op_num);
@@ -553,8 +555,22 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
             root = fuse_ops[rr-1];
             load_fused_op(fused_op, fuse_ops, ops, ll, rr, tt);
         }
-        for (auto* var : op->outputs()) {
-            var->alloc(allocator);
+        if (save_mem) {
+            swap_timestamp = ++tflag_count;
+            for (auto* var : op->inputs()) {
+                var->tflag = swap_timestamp;
+            }
+            for (auto* var : op->inputs()) {
+                check_and_swap_out(var, allocator);
+            }
+            for (auto* var : op->outputs()) {
+                alloc_with_swap(var, allocator, true);
+                var->tflag = swap_timestamp;
+            }
+        } else {
+            for (auto* var : op->outputs()) {
+                var->alloc(allocator);
+            }
         }
         if (PREDICT_BRANCH_NOT_TAKEN(profile_memory_enable))
             memory_profiler.check();
@@ -672,7 +688,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
         }
     }
     LOGvv << "All" << op_num << "ops finished, return vars:" << vars;
-    for (Var* v : vars) ASSERT(v->mem_ptr || !v->backward_liveness);
+    for (Var* v : vars) ASSERT(v->mem_ptr || v->flags.get(NodeFlags::_is_swapped) || !v->backward_liveness) << v;
     // clean fetcher free buffer
     fetcher_to_free.clear();
     #ifdef HAS_CUDA

@@ -2068,6 +2068,11 @@ def all_equal(a: jt.Var, b: jt.Var) -> bool:
     return (a == b).all().item()
 jt.all_equal = all_equal
 
+def _to_float(x: jt.Var) -> jt.Var:
+    if x.dtype != "float64": x = x.float()
+    return x
+jt.Var._to_float = _to_float
+
 def index_select(x: jt.Var, dim:int, index: jt.Var) -> jt.Var:
     '''Returns a new var which indexes the x var along dimension dim using the entries in index.
 
@@ -2125,8 +2130,36 @@ def multinomial(weights: jt.Var, num_samples: int, replacement: bool=False) -> j
         # A-Res algorithm
         # Pavlos S. Efraimidis and Paul G. Spirakis, 2006, Weighted random sampling with a reservoir
         assert num_samples <= weights.shape[-1], "num_samples larger than the input"
-        rand = jt.rand(weights.shape) ** ((1/weights).safe_clip())
-        _, indices = jt.topk(rand.safe_clip(), num_samples)
+        # prevent rand generate 1, 1^inf = 1, with override other result
+        a = jt.rand(weights.shape).minimum(0.999999)
+        rand = a ** (1/weights)
+        _, indices = jt.topk(rand, num_samples)
         return indices
+
+def histc(input, bins, min=0., max=0.):
+    ''' Return the histogram of the input N-d array.
+
+    :param input: the input array.
+    :param bins: number of bins.
+    :param min: min of the range.
+    :param max: max of the range.
+
+    Example::
+
+        inputs = jt.randn((40,40))
+        joup = jt.histc(x, bins=10)
+        
+    '''
+    if min == 0 and max == 0:
+        min, max = input.min(), input.max()
+    assert min < max
+    bin_length = (max - min) / bins
+    histc = jt.floor((input[jt.logical_and(input >= min, input <= max)] - min) / bin_length).int().reshape(-1)
+    hist = jt.ones_like(histc).float().reindex_reduce("add", [bins,], ["@e0(i0)"], extras=[histc])
+    if hist.sum() != histc.shape[0]:
+        hist[-1] += 1
+    return hist
+
+    
 
 

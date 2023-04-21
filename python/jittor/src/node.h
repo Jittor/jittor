@@ -46,6 +46,7 @@ struct NodeFlags {
         _out_hint=_n+4,
         _th_require_grad=_n+5,
         _is_scalar=_n+5,
+        _is_swapped=_n+6,
 
         // op related flags
         // bit0: support cpu
@@ -84,6 +85,8 @@ struct NodeFlags {
     }
 };
 
+EXTERN_LIB int64 tflag_count;
+
 struct Node {
     struct input_t;
     struct output_t;
@@ -109,7 +112,6 @@ struct Node {
         operator Var*() { return (Var*)node; }
         operator var_output_t() { return {(Op*)node, index}; }
     };
-    static int64 tflag_count;
     NodeFlags flags;
     NanoString ns;
     inline bool is_var() const { return flags.get(NodeFlags::_var); }
@@ -220,7 +222,7 @@ bool outside;
 inline SetupFreeBuffer() {
     outside = !nt;
     if (outside) {
-        nt = ++Node::tflag_count;
+        nt = ++tflag_count;
     }
 }
 
