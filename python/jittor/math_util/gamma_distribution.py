@@ -19,7 +19,7 @@ class GammaDistribution(object):
         return sample_gamma(self.concentration, shape)
     
     def cdf(self, value):
-        return igamma(alpha, value)
+        return igamma(self.concentration, value)
     
     def log_prob(self, value):
         return (self.concentration * jt.log(self.rate) +
@@ -30,16 +30,7 @@ class GammaDistribution(object):
         return self.concentration / self.rate
     
     def mode(self):
-        return jt.clamp((self.concentration - 1) / self.rate, min_v=1)
+        return np.minimum((self.concentration - 1) / self.rate, 1)
     
     def variance(self):
         return self.concentration / (self.rate * self.rate)
-
-if __name__ == "__main__":
-    jt.flags.use_cuda=1
-    alpha = 3.
-    distribute = GammaDistribution(3., 1.)
-    samples = distribute.rsample((6, 6))
-    print(samples.mean())
-    print(distribute.cdf(samples).max())
-    print(distribute.log_prob(samples).mean())
