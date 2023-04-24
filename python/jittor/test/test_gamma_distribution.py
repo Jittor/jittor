@@ -29,12 +29,12 @@ class TestDigamma(unittest.TestCase):
         for i in range(30):
             concentration = np.random.uniform(1, 3)
             rate = np.random.uniform(1, 2)
-            j_gamma = jt.math_util.GammaDistribution(concentration, rate)
+            j_gamma = jt.distributions.GammaDistribution(concentration, rate)
             t_gamma = torch.distributions.gamma.Gamma(torch.tensor([concentration]), torch.tensor([rate]))
             samples = t_gamma.sample((30, i+5))
             j_samples = jt.array(samples.detach().numpy())
             np.testing.assert_allclose(j_gamma.log_prob(j_samples).data, t_gamma.log_prob(samples).detach().numpy(), rtol=1e-4, atol=1e-6)
-            samples = j_gamma.rsample((30,i+5))
+            samples = j_gamma.sample((30,i+5))
             t_samples = torch.tensor(samples.numpy())
             np.testing.assert_allclose(j_gamma.log_prob(samples).data, t_gamma.log_prob(t_samples).detach().numpy(), rtol=1e-4, atol=1e-6)
 
