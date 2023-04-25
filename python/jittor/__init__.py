@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2022 Jittor. All Rights Reserved. 
+# Copyright (c) 2023 Jittor. All Rights Reserved. 
 # Maintainers:
 #   Dun Liang <randonlang@gmail.com>.
 #   Meng-Hao Guo <guomenghao1997@gmail.com>
@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.7.13'
+__version__ = '1.3.7.14'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
