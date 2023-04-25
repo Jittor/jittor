@@ -2091,4 +2091,5 @@ for k,v in list(Var.__dict__.items()):
     inplace_wrapper(new_k, v)
 
 from . import math_util
+from .math_util import *
 from . import distributions

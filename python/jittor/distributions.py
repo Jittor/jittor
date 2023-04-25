@@ -13,7 +13,7 @@ import numpy as np
 import jittor as jt
 from jittor import nn
 from jittor.nn import binary_cross_entropy_with_logits
-from jittor.math_util import lgamma, igamma
+from jittor import lgamma, igamma
 from jittor.math_util.gamma import gamma_grad, sample_gamma
 
 def simple_presum(x):
