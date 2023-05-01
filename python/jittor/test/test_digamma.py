@@ -1,5 +1,5 @@
 # ***************************************************************
-# Copyright (c) 2022 Jittor. All Rights Reserved.
+# Copyright (c) 2023 Jittor. All Rights Reserved.
 # Maintainers:
 #     Haoyang Peng <2247838039@qq.com>
 #     Dun Liang <randonlang@gmail.com>.
@@ -25,7 +25,7 @@ class TestDigamma(unittest.TestCase):
             nx = np.random.uniform(0, 1, (32, 32))
             x = jt.array(nx)
             tx = torch.autograd.Variable(torch.tensor(nx, dtype=torch.float32), requires_grad=True)
-            dx = jt.math_util.gamma.digamma.apply(x)
+            dx = jt.digamma.apply(x)
             tdx = torch.digamma(tx)
             np.testing.assert_allclose(dx.data, tdx.detach().numpy(), rtol=1e-4, atol=1e-6)
             jgdx = jt.grad(dx, x)
