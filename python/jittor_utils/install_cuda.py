@@ -111,7 +111,8 @@ def install_cuda():
             cuda_tgz = "cuda10.2_cudnn7_win.zip"
             md5 = "7dd9963833a91371299a2ba58779dd71"
         else:
-            raise RuntimeError(f"Unsupport cuda driver version: {cuda_driver_version}, at least 10.2")
+            LOG.w(f"Unsupport cuda driver version: {cuda_driver_version}, at least 10.2")
+            return None
     else:
         if cuda_driver_version >= [11,2]:
             cuda_tgz = "cuda11.2_cudnn8_linux.tgz"
@@ -126,7 +127,8 @@ def install_cuda():
             cuda_tgz = "cuda10.0_cudnn7_linux.tgz"
             md5 = "f16d3ff63f081031d21faec3ec8b7dac"
         else:
-            raise RuntimeError(f"Unsupport cuda driver version: {cuda_driver_version}, at least 10.0")
+            LOG.w(f"Unsupport cuda driver version: {cuda_driver_version}, at least 10.0")
+            return None
     jtcuda_path = os.path.join(jit_utils.home(), ".cache", "jittor", "jtcuda")
     nvcc_path = os.path.join(jtcuda_path, cuda_tgz[:-4], "bin", "nvcc")
     if os.name=='nt': nvcc_path += '.exe'
