@@ -519,7 +519,7 @@ def setup_mpi():
     has_mpi = False
     mpicc_path = env_or_try_find('mpicc_path', 'mpicc')
     if mpicc_path == "":
-        LOG.i("mpicc not found, distribution disabled.")
+        # LOG.i("mpicc not found, distribution disabled.")
         use_mpi = False
     else:
         use_mpi = True
