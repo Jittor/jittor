@@ -341,4 +341,76 @@ class digamma(jt.Function):
     def grad(self, grad_d):
         return grad_d * polygamma.apply(self.input, 1)
 
+def gamma_grad(x, alpha):
+    cuda_header = open(os.path.join(os.path.realpath(os.path.dirname(__file__)), "src", "gamma_grad.h"), "r").read()
+    cuda_src = '''
+    @alias(x, in0)
+    @alias(di_x, out0)
+    int block_num = x_stride0 == 1 ? 1 : x_shape0;
+    int batch_shape = x_stride0 == 1 ? x_shape0: x_stride0;
+    float alpha = data["alpha"];
+    gamma_grad_kenrel<<<block_num, 16>>>(x_p, di_x_p, alpha, batch_shape);
+    '''
+    grad = jt.code(x.shape, x.dtype, [x], cuda_header=cuda_header, cuda_src=cuda_src, data={"alpha":alpha})
+    return grad
 
+def sample_gamma(alpha, shape):
+    cuda_header = '''
+    #include <curand_kernel.h>
+
+    template<typename scalar_t, typename accscalar_t>
+    __device__ float sample_gamma(float alpha, curandState& state) {
+        accscalar_t scale = 1.0f;
+
+        // Boost alpha for higher acceptance probability.
+        if (alpha < 1.0f) {
+            if (alpha == 0.f) return 0.f;
+            scale *= pow(1 - curand_uniform(&state), 1.0f / alpha);
+            alpha += 1.0f;
+        }
+
+        // This implements the acceptance-rejection method of Marsaglia and Tsang (2000)
+        // doi:10.1145/358407.358414
+        const accscalar_t d = alpha - 1.0f / 3.0f;
+        const accscalar_t c = 1.0f / sqrt(9.0f * d + 1e-8);
+        for (;;) {
+            accscalar_t x, y;
+            do {
+            x = curand_normal(&state);
+            y = 1.0f + c * x;
+            } while (y <= 0);
+            const accscalar_t v = y * y * y;
+            const accscalar_t u = 1 - curand_uniform(&state);
+            const accscalar_t xx = x * x;
+            if (u < 1.0f - 0.0331f * xx * xx)
+                return static_cast<scalar_t>(scale * d * v);
+            if (log(u) < 0.5f * xx + d * (1.0f - v + log(v)))
+                return static_cast<scalar_t>(scale * d * v);
+        }
+    }
+
+    __global__ void sample_gamma_kernel(float* out,
+                            float alpha,
+                            int seed,
+                            int batch_shape) 
+    {
+        int tidx = threadIdx.x;
+        int start = batch_shape / blockDim.x * tidx;
+        int end = threadIdx.x == blockDim.x - 1 ? batch_shape : start + batch_shape / blockDim.x;
+        if(start > end) 
+            return;
+        float* bout = out + batch_shape * blockIdx.x;
+        curandState state;
+        curand_init(clock64(), threadIdx.x, 0, &state);
+        for(int i=start;i<end;i++) bout[i] = sample_gamma<float, float>(alpha, state);
+    }
+    '''
+    cuda_src = '''
+    @alias(lx ,out0)
+    int batch_size = lx_stride0 == 1 ? 1 : lx_shape0;
+    int batch_shape = lx_shape0 * lx_stride0 / batch_size;
+    float alpha = data["alpha"];
+    sample_gamma_kernel<<<batch_size, 16>>>(lx_p, alpha, time(NULL), batch_shape);
+    '''
+    samples = jt.code(shape, jt.float32, [], cuda_header=cuda_header, cuda_src=cuda_src, data={"alpha":alpha})
+    return samples
