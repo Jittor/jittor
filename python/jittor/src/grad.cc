@@ -16,6 +16,8 @@ namespace jittor {
 
 #define PREVENT_LARGE_FUSED_OP 16
 
+DECLARE_FLAG(int, auto_mixed_precision_level);
+
 static auto make_binary = get_op_info("binary")
     .get_constructor<VarPtr, Var*, Var*, NanoString>();
 static auto make_number = get_op_info("number")
@@ -243,6 +245,9 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets, bool retain_graph) {
                     }
                 }
             }
+        }
+        if (auto_mixed_precision_level == 3 && grad->ns != var->ns) {
+            grad->ns = var->ns;
         }
     }
     trace_grad_op = nullptr;
