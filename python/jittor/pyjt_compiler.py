@@ -175,7 +175,7 @@ def get_def_code(df, scope_name, pyname, self_as_arg0=False):
                                 uint khash = hash(ks);
                                 {"".join([
                                 f'''
-                                if (khash == {get_hash(args[aid][1])}u) {{
+                                if ({get_hash_condition(args[aid][1])}) {{
                                     // hash match {args[aid][1]}
                                     CHECK(({get_pytype_map(args[aid][0],2)}(vo)));
                                     arg{aid} = {pytypes[aid]}(vo{holder_set_array[aid]});
@@ -241,6 +241,10 @@ def get_hash(s):
     hash_to_key_map[v] = s
     return v
 
+def get_hash_condition(s):
+    if s == "keepdims":
+        return f"khash == {get_hash(s)}u || khash == {get_hash('keepdim')}u"
+    return f"khash == {get_hash(s)}u"
 
 reg = re.compile(
     '(/\\*(.*?)\\*/\\s*)?(//\\s*@pyjt\\(([^\\n]*)\\)\\s*)'
@@ -584,6 +588,15 @@ def compile_src(src, h, basename):
             func_head = "(PyObject* self) -> PyObject*"
             func_fill = """
                 int64 n = 1;
+                PyObject* args[] = {self};
+                (void)n, (void)args;
+            """
+        
+        elif name == "__str__":
+            slot_name = "tp_str"
+            func_head = "(PyObject* self) -> PyObject*"
+            func_fill = """
+                int64 n = 0;
                 PyObject* args[] = {self};
                 (void)n, (void)args;
             """

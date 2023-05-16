@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.7.16'
+__version__ = '1.3.8.0'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -1287,6 +1287,8 @@ class Module:
                 if isinstance(k2, str) and k2.startswith("_"): continue
                 if isinstance(p, Var):
                     if id(p) in uniq_set: continue
+                    if not getattr(p, "persistent", True):
+                        continue
                     uniq_set.add(id(p))
                     pname = ".".join(stack[1:]+[str(k2)])
                     ps[pname] = p
@@ -1710,7 +1712,8 @@ Arguments of hook are defined as::
     def __getattr__(self, key):
         return object.__getattribute__(self, key)
 
-    def register_buffer(self, key, value):
+    def register_buffer(self, key, value, persistent=True):
+        value.persistent = persistent
         object.__setattr__(self, key, value)
         return value
 
@@ -1817,6 +1820,8 @@ can also be None)::
 
     '''
     def __call__(self, *args):
+        if flags.no_grad:
+            return self.execute(*args)
         backup = args
         args = list(args)
         taped_inputs = []

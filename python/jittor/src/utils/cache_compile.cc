@@ -167,7 +167,7 @@ void process(string src, vector<string>& input_names, string& cmd) {
             auto j=i+1;
             while (j<src.size() && (src[j] != ' ' && src[j] != '\"' && src[j] != '\n' && src[j] != '\r')) j++;
             if (j>=src.size()) return;
-            if (j-i != 8 && j-i != 6) continue;
+            if (j-i != 8 && j-i != 6 && j-i != 3) continue;
             auto k=src[j] == '\"' ? j : j+1;
             while (k<src.size() && src[k] == ' ') k++;
             if (k>=src.size()) return;
@@ -180,7 +180,7 @@ void process(string src, vector<string>& input_names, string& cmd) {
                     input_names.push_back(inc);
                 }
             }
-            if (l-k>2 && src[k] == 'J' && src[k+1] == 'T' && j-i==6 && src.substr(i,j-i) == "#ifdef") {
+            if (l-k>2 && src[k] == 'J' && src[k+1] == 'T' && (src.substr(i,j-i) == "#ifdef" || src.substr(i,j-i) == "#if")) {
                 auto inc = strip(src.substr(k, l-k));
                 auto env = getenv(inc.c_str());
                 if (env && string(env)!="0") {

@@ -20,6 +20,8 @@ DECLARE_FLAG(int, auto_mixed_precision_level);
 
 static auto make_binary = get_op_info("binary")
     .get_constructor<VarPtr, Var*, Var*, NanoString>();
+static auto make_unary = get_op_info("unary")
+    .get_constructor<VarPtr, Var*, NanoString>();
 static auto make_number = get_op_info("number")
     .get_constructor<VarPtr, float, Var*>();
 
@@ -247,7 +249,7 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets, bool retain_graph) {
             }
         }
         if (auto_mixed_precision_level == 3 && grad->ns != var->ns) {
-            grad->ns = var->ns;
+            grad = make_unary(grad, var->ns);
         }
     }
     trace_grad_op = nullptr;

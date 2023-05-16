@@ -406,7 +406,7 @@ void clear_trace_data() {
     trace_data.node_data.clear();
 }
 
-string _get_stack_info(Node* node) {
+string _get_stack_info(Node* node, const char* change_line) {
     string stack_info = "";
     auto iter = trace_data.id_map.find(node);
     if (iter == trace_data.id_map.end())
@@ -421,12 +421,13 @@ string _get_stack_info(Node* node) {
         stack_info += stack.module_type;
         stack_info += ')';
         stack_info += " -> ";
+        stack_info += change_line;
     }
     return stack_info;
 }
 
 void print_node_trace(const Node* node, std::ostream& os) {
-    os << _get_stack_info((Node*)node);
+    os << _get_stack_info((Node*)node, "\n");
 }
 
 vector<Stack> get_node_trace(Node* node) {

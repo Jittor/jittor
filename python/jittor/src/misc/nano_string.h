@@ -27,6 +27,7 @@ constexpr int ns_max_len = 16;
     m(float16) \
     m(float32) \
     m(float64) \
+    m(bfloat16) \
 \
     m(pow) \
     m(maximum) \

@@ -83,17 +83,18 @@ void do_graph_check() {
 }
 
 DumpGraphs dump_all_graphs() {
+    DumpGraphs graphs;
     vector<Node*> queue;
     auto t = ++tflag_count;
     for (auto& vh : hold_vars)
         if (vh->var->tflag != t) {
             vh->var->tflag = t;
             queue.push_back(vh->var);
+            graphs.hold_vars.emplace_back(ss_convert(vh->var));
         }
     bfs_both(queue, [](Node*){return true;});
     std::sort(queue.begin(), queue.end(),
         [](Node* a, Node* b) { return a->id < b->id;});
-    DumpGraphs graphs;
     for (uint i=0; i<queue.size(); i++)
         queue[i]->custom_data = i;
     for (Node* node : queue) {

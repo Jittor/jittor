@@ -79,6 +79,9 @@ void FloatAtomicFixPass::run() {
             return;
         }
         if (!var->dtype().is_float()) return;
+        if (var->dtype() == ns_float16)
+            // float16 use atomicCAS, because no float16 atomicMax
+            return;
         LOGvvvv << "find var" << var << "op" << op;
         fix_float_atomic(s, var);
     });

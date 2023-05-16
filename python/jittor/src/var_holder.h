@@ -144,6 +144,11 @@ struct VarHolder {
         return var->num * var->dsize();
     }
 
+    // @pyjt(__get__flags)
+    inline int32 flags() {
+        return (int32)(var->flags.flags);
+    }
+
     /** 
      * disable the gradient calculation for the Var.
      */

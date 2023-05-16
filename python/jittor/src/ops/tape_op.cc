@@ -66,7 +66,7 @@ Tapes::Tapes(
     */
     // set tape output
     for (int i=0; i<taped_outputs.size(); i++) {
-        VarPtr out(0, ns_float32);
+        VarPtr out(0, taped_outputs[i]->var->dtype());
         out->add_inputs({this});
         auto v = taped_outputs[i]->var;
         auto op = v->input();

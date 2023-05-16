@@ -14,6 +14,8 @@ DECLARE_FLAG(int, check_graph);
 // this struct is used for debug and visualization
 // @pyjt(DumpGraphs)
 struct DumpGraphs {
+    // @pyjt(hold_vars)
+    vector<string> hold_vars;
     // @pyjt(nodes_info)
     vector<string> nodes_info;
     // @pyjt(inputs)

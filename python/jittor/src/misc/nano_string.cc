@@ -168,6 +168,7 @@ static unordered_set<string> no_need_back_out = {
     "add",
     "subtract",
     "multiply",
+    "divide",
 };
 
 #define DEFINE_NS(T) NanoString ns_##T;
@@ -227,6 +228,7 @@ static void init_ns() {
     __string_to_ns["double"] = ns_float64;
     __string_to_ns["int"] = ns_int32;
     __string_to_ns["uint"] = ns_uint32;
+    __string_to_ns["bool_"] = ns_bool;
     LOGvv << "init __string_to_ns" << __string_to_ns;
     LOGvv << "init __ns_to_string" << __ns_to_string;
 }

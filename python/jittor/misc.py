@@ -2005,8 +2005,19 @@ def contiguous(x): return x.clone()
 jt.Var.contiguous = contiguous
 def cpu(x): return x.clone()
 jt.Var.cpu = cpu
-def to(x, *args, **kargs): return x.clone()
+def to(x, *args, **kargs):
+    if len(args) >= 1:
+        s = args[0]
+        if isinstance(s, jt.NanoString) or callable(s):
+            return x.cast(s)
+        s = str(s)
+        jt.flags.use_cuda = int("cuda" in s)
+    return x.clone()
 jt.Var.to = to
+
+def rsqrt(x):
+    return 1/jt.sqrt(x)
+jt.Var.rsqrt = rsqrt
 
 def from_torch(x):
     '''
@@ -2160,6 +2171,34 @@ def histc(input, bins, min=0., max=0.):
         hist[-1] += 1
     return hist
 
-    
+def peek_s(x):
+    if isinstance(x, jt.Var):
+        return x.peek()
+    if isinstance(x, (list, tuple)):
+        res = "["
+        for a in x:
+            res += peek_s(a)
+            res += ", "
+        res += "]"
+        return res
+    if isinstance(x, dict):
+        res = "{"
+        for a in x:
+            res += a
+            res += ":"
+            res += peek_s(x[a])
+            res += ", "
+        res += "}"
+        return res
+    if isinstance(x, str):
+        return x
+    return x.__class__.__name__
 
+def peek(x):
+    print(peek_s(x))
 
+def finfo(dtype):
+    return np.finfo(str(dtype))
+
+def iinfo(dtype):
+    return np.iinfo(str(dtype))

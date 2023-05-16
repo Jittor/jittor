@@ -101,11 +101,12 @@ void MemoryProfiler::check() {
                     if (stacks.size() == 0) {
                         stacks.push_back(Stack());
                     }
-                    std::stringstream stream;
-                    stream << var;
-                    live_vars.push_back(std::make_pair(std::make_pair(stream.str(), stacks), var->size));
-                    if (!allocations.count(var->mem_ptr)) {
-                        allocations[var->mem_ptr] = 1;
+                    auto alloc = std::make_pair((void*)var->allocator, (void*)var->allocation);
+                    if (!allocations.count(alloc)) {
+                        std::stringstream stream;
+                        stream << var;
+                        live_vars.push_back(std::make_pair(std::make_pair(stream.str(), stacks), var->size));
+                        allocations[alloc] = 1;
                         memory_size += var->size;
                     }
                 }

@@ -28,6 +28,7 @@ CuttTransposeOp::CuttTransposeOp(Var* x, NanoVector axes) : x(x), axes(axes) {
         return;
     }
     y = create_output(nullptr, x->dtype());
+    flags.set(NodeFlags::_manual_set_vnbb);
 }
 
 void CuttTransposeOp::infer_shape() {
