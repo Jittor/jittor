@@ -102,6 +102,10 @@ void CublasBatchedMatmulOp::jit_run() {
     cublasHandle_t& handle_ = cublas_handle;
     const T alpha = 1.0f;
     const T beta  = 0.0f;
+    const float alpha_f = 1.0f;
+    const float beta_f  = 0.0f;
+    void* alpha_p = (void*)&alpha;
+    void* beta_p = (void*)&beta;
 
     const auto& as = a->shape;
     const auto& bs = b->shape;
@@ -132,7 +136,12 @@ void CublasBatchedMatmulOp::jit_run() {
     }
     if (a->dtype() == ns_float16
         || b->dtype() == ns_float16 || c->dtype() == ns_float16) {
-        computeType = CUBLAS_COMPUTE_16F;
+        computeType = use_tensorcore ? CUBLAS_COMPUTE_16F : CUBLAS_COMPUTE_32F;
+        algo = use_tensorcore ? CUBLAS_GEMM_DEFAULT : CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+    }
+    if (computeType == CUBLAS_COMPUTE_32F) {
+        alpha_p = (void*)&alpha_f;
+        beta_p = (void*)&beta_f;
     }
     #else 
     cublasGemmAlgo_t algo = CUBLAS_GEMM_DEFAULT;
@@ -148,9 +157,9 @@ void CublasBatchedMatmulOp::jit_run() {
     #endif
     checkCudaErrors(cublasGemmStridedBatchedEx(handle_,
     CUBLAS_OP_@Trans_b, CUBLAS_OP_@Trans_a,
-    k, n, m, &alpha,
+    k, n, m, alpha_p,
     b->ptr<T>(),get_dtype(b->dtype()), '@Trans_b' == 'N' ? k : m, k * m, 
-    a->ptr<T>(),get_dtype(a->dtype()), '@Trans_a' == 'N' ? m : n, n * m, &beta,
+    a->ptr<T>(),get_dtype(a->dtype()), '@Trans_a' == 'N' ? m : n, n * m, beta_p,
     c->ptr<T>(),get_dtype(c->dtype()), k, k * n,
     batch_size,computeType,algo));
     // checkCudaErrors(cublas@op@@gemmStridedBatched(handle_,

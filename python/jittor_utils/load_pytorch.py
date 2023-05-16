@@ -51,7 +51,8 @@ def _dtype_to_storage_type_map():
         np.int64: 'LongStorage',
         np.int32: 'IntStorage',
         np.int16: 'ShortStorage',
-        np.int8: 'CharStorage'
+        np.int8: 'CharStorage',
+        np.bool_: 'BoolStorage'
     }
 
 def _storage_type_to_dtype_map():
@@ -86,6 +87,8 @@ def jittor_rebuild_var(data, requires_grad, backward_hooks):
 
 class UnpicklerWrapper(pickle.Unpickler):  # type: ignore[name-defined]
     def find_class(self, mod_name, name):
+        if mod_name.startswith("transformers"):
+            return super().find_class("collections", "OrderedDict")
         if type(name) is str and 'Storage' in name:
             try:
                 return StorageType(name)
@@ -120,6 +123,9 @@ def jittor_rebuild_var_direct(data, requires_grad, backward_hooks):
 
 class DirectUnpicklerWrapper(pickle.Unpickler):  # type: ignore[name-defined]
     def find_class(self, mod_name, name):
+        if mod_name.startswith("transformers"):
+            return super().find_class("collections", "OrderedDict")
+
         if type(name) is str and 'Storage' in name:
             try:
                 return StorageType(name)
@@ -192,6 +198,13 @@ def persistent_load_direct(saved_id):
             return storage
     else:
         raise RuntimeError("Unknown saved id type: %s" % saved_id[0])
+
+def clean_globals():
+    global contents, deserialized_objects, loaded_storages, prefix
+    loaded_storages = {}
+    deserialized_objects = {}
+    contents = None
+    prefix = ""
 
 def load_pytorch(fn_name):
     import jittor as jt
@@ -270,6 +283,7 @@ def load_pytorch(fn_name):
                             result[key].requires_grad = requires_grad
                 return result
             result = dfs_results(result)
+        clean_globals()
         return result
 
 if __name__ == "__main__":

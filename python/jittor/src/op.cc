@@ -34,7 +34,7 @@ int64 Op::number_of_lived_ops = 0;
 Op::Op() {
     flags.set(NodeFlags::_var, 0);
     flags.set(NodeFlags::_cpu, 1);
-    flags.flags |= ((amp_reg & 7) << NodeFlags::_prefer_32);
+    flags.flags |= ((amp_reg & 63) << NodeFlags::_prefer_32);
     number_of_lived_ops++;
     if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var)) trace_data.record_node(this);
 }

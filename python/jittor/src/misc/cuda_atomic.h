@@ -5,6 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
+#include <cuda_fp16.h>
 #include "common.h"
 
 namespace jittor {
@@ -95,6 +96,14 @@ template <> struct int_mapper<float> {
     inline static __device__ src from_int(target a) { return __int_as_float(a); }
 };
 
+template <> struct int_mapper<__half> { 
+    typedef __half src;
+    typedef unsigned short target;
+    inline static __device__ target to_int(src a) { return __half_as_ushort(a); }
+    inline static __device__ target* to_intp(src* a) { return (target*)a; }
+    inline static __device__ src from_int(target a) { return __ushort_as_half(a); }
+};
+
 template <> struct int_mapper<double> { 
     typedef double src;
     typedef long long target;
@@ -112,6 +121,37 @@ T cuda_atomic_mul(T* a, T b) {
         auto assume = old;
         old = atomicCAS(a_i, assume, int_mapper<T>::to_int(old_f*b));
         old_f = int_mapper<T>::from_int(old);
+        if (assume==old) break;
+    }
+    return old_f;
+}
+
+
+template<> __device__
+__half cuda_atomic_max(__half* a, __half b) {
+    auto old_f = *a;
+    auto old = int_mapper<__half>::to_int(old_f);
+    auto a_i = int_mapper<__half>::to_intp(a);
+    while (1) {
+        auto assume = old;
+        if (old_f>=b) break;
+        old = atomicCAS(a_i, assume, int_mapper<__half>::to_int(b));
+        old_f = int_mapper<__half>::from_int(old);
+        if (assume==old) break;
+    }
+    return old_f;
+}
+
+template<> __device__
+__half cuda_atomic_min(__half* a, __half b) {
+    auto old_f = *a;
+    auto old = int_mapper<__half>::to_int(old_f);
+    auto a_i = int_mapper<__half>::to_intp(a);
+    while (1) {
+        auto assume = old;
+        if (old_f<=b) break;
+        old = atomicCAS(a_i, assume, int_mapper<__half>::to_int(b));
+        old_f = int_mapper<__half>::from_int(old);
         if (assume==old) break;
     }
     return old_f;

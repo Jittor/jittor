@@ -72,7 +72,7 @@ struct NodeFlags {
         _prefer_16=_prefer_32+1,
         // reduce keep type unchange
         _reduce_keep=_prefer_32+2,
-        _custom_flag = _reduce_keep,
+        _custom_flag = _prefer_32+6,
     };
 
     inline void set(Flags f, int a=1, int nbits=1) {

@@ -182,6 +182,7 @@ DEF_IS(DumpGraphs, PyObject*) to_py_object(T&& a) {
     PyObjHolder obj(_PyObject_New(&PyjtDumpGraphs));
     auto ptr = GET_RAW_PTR(T, obj.obj);
     new (ptr) T();
+    ptr->hold_vars = std::move(a.hold_vars);
     ptr->nodes_info = std::move(a.nodes_info);
     ptr->inputs = std::move(a.inputs);
     ptr->outputs = std::move(a.outputs);

@@ -33,7 +33,9 @@ def softmax_v1(a, log=False):
     if length % tnum != 0:
         for_loop += f"if ((i*{tnum}+threadIdx.x)*{ILP} < len)\n"
 
-    return jt.code(a.shape, a.dtype, [a], cuda_header=f'''
+    class CodeSoftmax(jt.Function):
+        def execute(self, x):
+            self.save_vars = jt.code(x.shape, x.dtype, [x], cuda_header=f'''
 #include <{jt.compile_extern.cub_home}cub/cub.cuh>
 #include <type/fp16_compute.h>
 ''', cuda_src=f'''
@@ -94,8 +96,17 @@ int bnum = in0->numel() / len;
 cudaGetLastError();
 kernel<<<bnum, {tnum}>>>(in0_p, out0_p, len);
 CHECK(0 == cudaGetLastError());
-''', cuda_grad_src=[f"""
-__global__ void kernel(pout0_type* x, dout_type* y, out0_type* z, int len) {{
+''')
+            return self.save_vars
+
+        def grad(self, grad_x):
+            x = self.save_vars
+            return jt.code(x.shape, x.dtype, [x, grad_x], cuda_header=f'''
+#include <{jt.compile_extern.cub_home}cub/cub.cuh>
+#include <type/fp16_compute.h>
+''', 
+                cuda_src=f"""
+__global__ void kernel(in0_type* x, in1_type* y, out0_type* z, int len) {{
     int id = blockIdx.x * len;
     in0_type vx[{per_thread}][{ILP}];
     in0_type vy[{per_thread}][{ILP}];
@@ -132,6 +143,7 @@ __global__ void kernel(pout0_type* x, dout_type* y, out0_type* z, int len) {{
 int len = in0->shape[in0->shape.size()-1];
 int bnum = in0->numel() / len;
 cudaGetLastError();
-kernel<<<bnum, {tnum}>>>(pout0_p, dout_p, out0_p, len);
+kernel<<<bnum, {tnum}>>>(in0_p, in1_p, out0_p, len);
 CHECK(0 == cudaGetLastError());
-"""])
+""")
+    return CodeSoftmax()(a)

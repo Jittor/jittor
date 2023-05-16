@@ -18,6 +18,12 @@ static auto make_broadcast_to = get_op_info("broadcast_to")
     .get_constructor<VarPtr, Var*, Var*, uint, uint>();
 static auto make_binary = get_op_info("binary")
     .get_constructor<VarPtr, Var*, Var*, NanoString>();
+static auto make_unary = get_op_info("unary")
+    .get_constructor<VarPtr, Var*, NanoString>();
+static auto make_reduce = get_op_info("reduce")
+    .get_constructor<VarPtr, Var*, NanoString, NanoVector, bool>();
+static auto make_reduce2 = get_op_info("reduce")
+    .get_constructor<VarPtr, Var*, NanoString, uint, uint>();
 static auto make_ternary = get_op_info("ternary")
     .get_constructor<VarPtr, Var*, Var*, Var*>();
 static auto make_number = get_op_info("number")
@@ -246,8 +252,18 @@ unordered_set<string> reduce_ops = {
     "mean",
 };
 
+EXTERN_LIB int amp_reg;
+
 ReduceOp::ReduceOp(Var* x, NanoString op, NanoVector dims, bool keepdims)
     : x(x) {
+    // improve float16 mean precision
+    if (!(amp_reg & 32) && x->dtype() == ns_float16 && (op == ns_mean || op == ns_add)) {
+        auto x_float32 = make_unary(x, ns_float32);
+        auto mean = make_reduce(x_float32, op, dims, keepdims);
+        mean = make_unary(mean, ns_float16);
+        forward(mean);
+        return;
+    }
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
     set_type(OpType::reduce);
@@ -276,6 +292,14 @@ ReduceOp::ReduceOp(Var* x, NanoString op, NanoVector dims, bool keepdims)
 
 ReduceOp::ReduceOp(Var* x, NanoString op, uint dims_mask, uint keepdims_mask)
     : x(x) {
+    // improve float16 mean precision
+    if (!(amp_reg & 32) && x->dtype() == ns_float16 && (op == ns_mean || op == ns_add)) {
+        auto x_float32 = make_unary(x, ns_float32);
+        auto mean = make_reduce2(x_float32, op, dims_mask, keepdims_mask);
+        mean = make_unary(mean, ns_float16);
+        forward(mean);
+        return;
+    }
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
     set_type(OpType::reduce);

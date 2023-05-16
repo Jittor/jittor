@@ -451,8 +451,10 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
     if (bin || bout) {
         flags.set(NodeFlags::_manual_set_vnbb);
         if (!bin) {
-            x->flags.set(NodeFlags::_needed_by_backward);
-            y->flags.set(NodeFlags::_needed_by_backward);
+            if (!(y->is_stop_grad() && (op==ns_multiply || op==ns_divide)))
+                x->flags.set(NodeFlags::_needed_by_backward);
+            if (!(x->is_stop_grad() && (op==ns_multiply)))
+                y->flags.set(NodeFlags::_needed_by_backward);
         }
         if (!bout) {
             z->flags.set(NodeFlags::_needed_by_backward);

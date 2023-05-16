@@ -23,7 +23,7 @@ void display_max_memory_info();
 string get_max_memory_info();
 
 struct MemoryProfiler {
-    std::map<void*, size_t> allocations;
+    std::map<pair<void*,void*>, size_t> allocations;
     // Max Infos
     vector<std::pair<std::pair<string, vector<Stack>>, size_t>> max_live_vars;
     size_t max_used_memory_size;

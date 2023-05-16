@@ -36,7 +36,7 @@ def matmul_transpose(a, b):
     assert len(a.shape) == 2 and len(b.shape) == 2
 
     shape = list(a.shape)[:-1] + list(b.shape)
-    with jt.flag_scope(amp_reg = jt.flags.amp_reg | 4):
+    with jt.flag_scope(amp_reg = jt.flags.amp_reg | 36):
         a = a.broadcast(shape, [len(shape)-2])
         b = b.broadcast(shape)
         return (a*b).sum(len(shape)-1)
@@ -114,7 +114,7 @@ Example::
     c = jt.matmul(a, b)
     assert c.shape == [8, 10, 3, 5]
     '''
-    with jt.flag_scope(amp_reg = jt.flags.amp_reg | 4):
+    with jt.flag_scope(amp_reg = jt.flags.amp_reg | 36):
         len_a = len(a.shape)
         len_b = len(b.shape)
         if len_b == 1:
@@ -379,7 +379,7 @@ def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction=
         output = output.reshape((-1, c_dim))
 
     target = target.reshape((-1, ))
-    target_weight = jt.ones(target.shape[0], dtype='float32')
+    target_weight = ((target >= 0) & (target < output.shape[1])).float32() 
     if weight is not None:
         target_weight = weight[target]
     if ignore_index is not None:
@@ -960,7 +960,7 @@ class Conv(Module):
             oh = (H+self.padding[0]*2-Kh*self.dilation[0]+self.dilation[0]-1)//self.stride[0]+1
             ow = (W+self.padding[1]*2-Kw*self.dilation[1]+self.dilation[1]-1)//self.stride[1]+1
             assert oh>0 and ow>0
-            with jt.flag_scope(amp_reg = jt.flags.amp_reg | 4):
+            with jt.flag_scope(amp_reg = jt.flags.amp_reg | 36):
                 xx = x.reindex([N,self.out_channels,C,oh,ow,Kh,Kw], [
                     'i0', # Nid
                     'i2', # Cid
@@ -1189,7 +1189,7 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
         Kh, Kw = weight.shape[-2:]
         oh = (H+padding[0]*2-Kh*dilation[0]+dilation[0]-1)//stride[0]+1
         ow = (W+padding[1]*2-Kw*dilation[1]+dilation[1]-1)//stride[1]+1
-        with jt.flag_scope(amp_reg = jt.flags.amp_reg | 4):
+        with jt.flag_scope(amp_reg = jt.flags.amp_reg | 36):
             xx = x.reindex([N,out_channels,C,oh,ow,Kh,Kw], [
                     'i0', # Nid
                     'i2', # Cid
@@ -1739,10 +1739,13 @@ class Embedding(Module):
              [ 0.14941819  0.57047683 -1.3217674]
              [ 0.14941819  0.57047683 -1.3217674]], dtype=float32)
     '''
-    def __init__(self, num_embeddings, embedding_dim, dtype="float32"):
-        self.num = num_embeddings
-        self.dim = embedding_dim
-        self.weight = jt.init.gauss([self.num, self.dim], dtype).stop_grad()
+    def __init__(self, num_embeddings, embedding_dim, padding_idx=None, dtype="float32"):
+        self.num_embeddings = num_embeddings
+        self.embedding_dim = embedding_dim
+        self.padding_idx = padding_idx
+        self.weight = jt.init.gauss([self.num_embeddings, self.embedding_dim], dtype).stop_grad()
+        if padding_idx is not None:
+            self.weight[padding_idx] = 0
 
     def execute(self, x):
         res = self.weight[x]
