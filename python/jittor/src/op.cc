@@ -16,6 +16,7 @@
 #include "pybind/py_var_tracer.h"
 #include "executor.h"
 #include "var_holder.h"
+#include "fused_op.h"
 
 namespace jittor {
 
@@ -319,6 +320,9 @@ std::ostream& operator<<(std::ostream& os, const Op* op) {
         os << '{';
         print_node_trace(op, os);
         os << '}';
+    }
+    if (op->name_ex() == "fused") {
+        os << ((FusedOp*)op)->ops;
     }
     return os;
 }

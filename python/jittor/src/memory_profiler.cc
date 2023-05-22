@@ -56,7 +56,7 @@ void MemoryProfiler::clear() {
 }
 
 std::pair<size_t, size_t> MemoryProfiler::get_memory_info() {
-    ASSERT(profile_memory_enable == 1);
+    ASSERT(profile_memory_enable);
     size_t used = 0;
     size_t unused = 0;
     //TODO add mssfrl allocator
@@ -68,7 +68,7 @@ std::pair<size_t, size_t> MemoryProfiler::get_memory_info() {
 }
 
 void MemoryProfiler::check() {
-    ASSERT(profile_memory_enable == 1);
+    ASSERT(profile_memory_enable);
     std::pair<size_t, size_t> mem_info = get_memory_info();
     if (mem_info.first > max_used_memory_size) {
         max_used_memory_size = mem_info.first;
@@ -93,10 +93,15 @@ void MemoryProfiler::check() {
         for (int i=0; i<queue.size(); i++)
             queue[i]->custom_data = backup_custom_data[i];
         queue.swap(queue2);
+        int64 cpu_sum = 0;
         for (Node* node : queue) {
             if (node->is_var()) {
                 Var* var = (Var*)node;
                 if (var->mem_ptr != nullptr) {
+                    if (profile_memory_enable == 2 && !var->allocator->is_cuda()) {
+                        cpu_sum += var->size;
+                        continue;
+                    }
                     vector<Stack> stacks = get_node_trace(var);
                     if (stacks.size() == 0) {
                         stacks.push_back(Stack());
@@ -122,7 +127,7 @@ bool MemoryProfiler::cmp(const std::pair<std::pair<string, vector<Stack>>, size_
 }
 
 void MemoryProfiler::display_max_memory_info() {
-    ASSERT(profile_memory_enable == 1);
+    ASSERT(profile_memory_enable);
     Log log("", 'i', 0);
     std::sort(max_live_vars.begin(), max_live_vars.end(), cmp);
     log << "\n=====display_max_memory_info=====\n";
@@ -141,12 +146,12 @@ void MemoryProfiler::display_max_memory_info() {
 }
 
 void display_max_memory_info() {
-    ASSERT(profile_memory_enable == 1);
+    ASSERT(profile_memory_enable);
     memory_profiler.display_max_memory_info();
 }
 
 string MemoryProfiler::get_max_memory_info() {
-    ASSERT(profile_memory_enable == 1);
+    ASSERT(profile_memory_enable);
     std::stringstream out;
     string div1 = "[!@#div1!@#]";
     string div2 = "[!@#div2!@#]";
@@ -168,7 +173,7 @@ string MemoryProfiler::get_max_memory_info() {
 }
 
 string get_max_memory_info() {
-    ASSERT(profile_memory_enable == 1);
+    ASSERT(profile_memory_enable);
     return memory_profiler.get_max_memory_info();
 }
 

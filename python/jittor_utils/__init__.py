@@ -675,7 +675,8 @@ PYJT_MODULE_INIT({hash});
         f.write(src + entry_src)
     jittor_path = os.path.join(os.path.dirname(__file__), "..", "jittor")
     jittor_path = os.path.abspath(jittor_path)
-    do_compile([f"\"{cc_path}\" \"{source_name}\" \"{jittor_path}/src/pyjt/py_arg_printer.cc\" {flags} -o \"{cache_path+'/'+lib_name}\" ",
+    from jittor.compiler import fix_cl_flags
+    do_compile([fix_cl_flags(f"\"{cc_path}\" \"{source_name}\" \"{jittor_path}/src/pyjt/py_arg_printer.cc\" {flags} -o \"{cache_path+'/'+lib_name}\" "),
         cache_path, jittor_path])
     with import_scope(os.RTLD_GLOBAL | os.RTLD_NOW):
         exec(f"import {hash}")
