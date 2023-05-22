@@ -344,6 +344,7 @@ def clean():
     import gc
     # make sure python do a full collection
     gc.collect()
+    core.gc()
 
 cast = unary
 Var.cast = Var.cast

@@ -177,6 +177,7 @@ static void top_weak_sync(vector<Var*>& vars) {
     auto t = ++tflag_count;
     int64 max_id=0;
     for (auto v : vars) {
+        if (v->is_finished()) continue;
         max_id = std::max(v->id, max_id);
         v->tflag = t;
     }
