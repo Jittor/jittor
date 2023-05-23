@@ -231,13 +231,7 @@ struct VarHolder {
      */
     // @pyjt(start_grad)
     // @attrs(return_self)
-    inline VarHolder* start_grad() {
-        if (!var->dtype().is_float())
-            LOGw << "cannot enable grad of a non-float value:" << var;
-        auto dvar = jittor::detach(var);
-        std::swap(dvar.ptr, var);
-        return this;
-    }
+    VarHolder* start_grad();
 
     // @pyjt(__get__uncertain_shape)
     inline NanoVector uncertain_shape() {

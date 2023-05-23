@@ -125,18 +125,26 @@ extern bool no_grad;
 void VarHolder::set_requires_grad(bool flag) {
     if (flag != get_requires_grad()) {
         if (flag) {
-            bool no_grad_bk = no_grad;
-            auto th_mode_bk = th_mode;
-            no_grad = 0;
-            th_mode = 0;
             start_grad();
-            no_grad = no_grad_bk;
-            th_mode = th_mode_bk;
-            var->flags.set(NodeFlags::_th_require_grad, (int)flag);
         } else
             stop_grad(); 
     }
     return;
+}
+
+VarHolder* VarHolder::start_grad() {
+    if (!var->dtype().is_float())
+        LOGw << "cannot enable grad of a non-float value:" << var;
+    bool no_grad_bk = no_grad;
+    auto th_mode_bk = th_mode;
+    no_grad = 0;
+    th_mode = 0;
+    auto dvar = jittor::detach(var);
+    std::swap(dvar.ptr, var);
+    no_grad = no_grad_bk;
+    th_mode = th_mode_bk;
+    var->flags.set(NodeFlags::_th_require_grad);
+    return this;
 }
 
 string VarHolder::to_string() {
