@@ -1743,7 +1743,7 @@ class Embedding(Module):
         self.num_embeddings = num_embeddings
         self.embedding_dim = embedding_dim
         self.padding_idx = padding_idx
-        self.weight = jt.init.gauss([self.num_embeddings, self.embedding_dim], dtype).stop_grad()
+        self.weight = jt.init.gauss([self.num_embeddings, self.embedding_dim], dtype)
         if padding_idx is not None:
             self.weight[padding_idx] = 0
 
@@ -2225,6 +2225,9 @@ class Sequential(Module):
 
     def __len__(self):
         return len(self.layers)
+    
+    def named_children(self,):
+        return list(self.layers.items())
 
 
 class ParameterList(Module):

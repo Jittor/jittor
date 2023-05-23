@@ -159,6 +159,11 @@ def zero_(var):
     '''
     return var.assign(zero(var.shape, var.dtype))
 Var.zero_ = zero_
+
+def random_(var):
+    return var.assign(jt.rand(var.shape, var.dtype))
+Var.random_ = random_ 
+
 def one(shape, dtype="float32"):
     '''Generate Jittor Var filled by one.
 

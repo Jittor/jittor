@@ -535,6 +535,10 @@ def new_full(x, size, val):
     return full(size, val, x.dtype)
 Var.new_full = new_full
 
+def ne(x,y):
+    return x!=y 
+Var.ne = ne 
+
 def full_like(x, val, dtype=None) -> Var:
     ''' Constructs a jittor Var with all elements set to val and shape same with x. 
     
@@ -1532,6 +1536,15 @@ Arguments of hook are defined as::
                 return False
         self.dfs([], None, callback, None)
         return cd
+
+    def named_children(self,):
+        ''' Returns an List of the children modules. '''
+        ret = []
+        for k,v in self.__dict__.items():
+            if isinstance(v,Module):
+                ret.append((k,v))
+        return ret
+    
 
     def extra_repr(self):
         ss = []
