@@ -282,7 +282,10 @@ def load_pytorch(fn_name):
                         if requires_grad is not None:
                             result[key].requires_grad = requires_grad
                 return result
-            result = dfs_results(result)
+            if isinstance(result,dict):
+                result = dfs_results(result)
+            else:
+                result = dfs_results({"s":result})['s']
         clean_globals()
         return result
 
