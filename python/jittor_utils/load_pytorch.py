@@ -77,6 +77,12 @@ def jittor_rebuild(storage, storage_offset, size, stride, requires_grad, backwar
     if len(size) == 0:
         return jt.array(storage)
     record_size = np.prod(size)
+    if len(stride) > 1:
+        eval_list = []
+        for idx in range(len(stride)):
+            eval_list.append(f"@e0({idx}) * i{idx}")
+        evals = "+".join(eval_list)
+        return jt.array(storage[:record_size]).reindex(size, [evals], extras=[jt.array(stride)])
     return jt.array(storage[:record_size]).reshape(size)
 
 def jittor_rebuild_var(data, requires_grad, backward_hooks):
@@ -194,6 +200,26 @@ def persistent_load_direct(saved_id):
         raise RuntimeError("Unknown saved id type: %s" % saved_id[0])
 
 def load_pytorch(fn_name):
+    def dfs_results(result):
+        for key, params in result.items():
+            if isinstance(params, dict):
+                result[key] = dfs_results(params)
+            elif isinstance(params, ArrayWrapper):
+                requires_grad = params.requires_grad
+                shape = params.size
+                result[key] = jt.array(params.storage)
+                if shape is not None and len(shape) > 0:
+                    if len(params.stride) > 1:
+                        eval_list = []
+                        for idx in range(len(params.stride)):
+                            eval_list.append(f"@e0({idx}) * i{idx}")
+                        evals = "+".join(eval_list)
+                        result[key] = result[key].reindex(params.size, [evals], extras=[jt.array(params.stride)])
+                    else:
+                        result[key] = result[key].reshape(shape)
+                if requires_grad is not None:
+                    result[key].requires_grad = requires_grad
+        return result
     import jittor as jt
     global contents, deserialized_objects, loaded_storages, prefix
     loaded_storages = {}
@@ -219,6 +245,7 @@ def load_pytorch(fn_name):
                 unpickler = UnpicklerWrapper(data_file,  **pickle_load_args)
                 unpickler.persistent_load = persistent_load
                 result = unpickler.load()
+                result = dfs_results(result)
         else:
             deserialized_objects = {}
             f = open(fn_name, "rb")
@@ -249,26 +276,6 @@ def load_pytorch(fn_name):
                 if offset is not None:
                     offset = f.tell()
             
-            def dfs_results(result):
-                for key, params in result.items():
-                    if isinstance(params, dict):
-                        result[key] = dfs_results(params)
-                    elif isinstance(params, ArrayWrapper):
-                        requires_grad = params.requires_grad
-                        shape = params.size
-                        result[key] = jt.array(params.storage)
-                        if shape is not None and len(shape) > 0:
-                            if len(params.stride) > 1:
-                                eval_list = []
-                                for idx in range(len(params.stride)):
-                                    eval_list.append(f"@e0({idx}) * i{idx}")
-                                evals = "+".join(eval_list)
-                                result[key] = result[key].reindex(params.size, [evals], extras=[jt.array(params.stride)])
-                            else:
-                                result[key] = result[key].reshape(shape)
-                        if requires_grad is not None:
-                            result[key].requires_grad = requires_grad
-                return result
             result = dfs_results(result)
         return result
 
