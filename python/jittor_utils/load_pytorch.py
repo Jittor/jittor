@@ -78,7 +78,7 @@ def jittor_rebuild(storage, storage_offset, size, stride, requires_grad, backwar
     if len(size) == 0:
         return jt.array(storage)
     record_size = np.prod(size)
-    if len(stride) > 1:
+    if len(stride) > 1: # reshape the memory layout based on stride
         eval_list = []
         for idx in range(len(stride)):
             eval_list.append(f"@e0({idx}) * i{idx}")
@@ -210,22 +210,22 @@ def persistent_load_direct(saved_id):
         raise RuntimeError("Unknown saved id type: %s" % saved_id[0])
 
 def load_pytorch(fn_name):
-    def dfs_results(result):
+    def dfs_results(result): # dfs the result dict in case of nested state dicts.
         for key, params in result.items():
-            if isinstance(params, dict):
+            if isinstance(params, dict): # recursive
                 result[key] = dfs_results(params)
-            elif isinstance(params, ArrayWrapper):
+            elif isinstance(params, ArrayWrapper): # process data
                 requires_grad = params.requires_grad
                 shape = params.size
                 result[key] = jt.array(params.storage)
                 if shape is not None and len(shape) > 0:
-                    if len(params.stride) > 1:
+                    if len(params.stride) > 1: # reshape based on stride
                         eval_list = []
                         for idx in range(len(params.stride)):
                             eval_list.append(f"@e0({idx}) * i{idx}")
                         evals = "+".join(eval_list)
                         result[key] = result[key].reindex(params.size, [evals], extras=[jt.array(params.stride)])
-                    else:
+                    else: # no need to reshape if only one dimension
                         result[key] = result[key].reshape(shape)
                 if requires_grad is not None:
                     result[key].requires_grad = requires_grad
