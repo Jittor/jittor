@@ -48,6 +48,7 @@ def _dtype_to_storage_type_map():
     return {
         np.float16: 'HalfStorage',
         np.float32: 'FloatStorage',
+        np.float64: 'DoubleStorage',
         np.int64: 'LongStorage',
         np.int32: 'IntStorage',
         np.int16: 'ShortStorage',
@@ -124,16 +125,25 @@ def jittor_rebuild_var_direct(data, requires_grad, backward_hooks):
     v = ArrayWrapper(storage, requires_grad=requires_grad)
     return v
 
+def jittor_rebuild_direct_v0(storage, storage_offset, size, stride):
+    if len(size) == 0:
+        return ArrayWrapper(storage, stride=stride, size=size)
+    storage.reshape(size)
+    return ArrayWrapper(storage, stride=stride, size=size)
+
 class DirectUnpicklerWrapper(pickle.Unpickler):  # type: ignore[name-defined]
     def find_class(self, mod_name, name):
         if type(name) is str and 'Storage' in name:
             try:
                 return StorageType(name)
             except KeyError:
+                print("wrong type: ", name)
                 pass
         if type(name) is str and '_rebuild_tensor_v2' in name:
             return super().find_class("jittor_utils.load_pytorch", "jittor_rebuild_direct")
-        if type(name) is str and '_rebuild_parameter' in name:
+        elif type(name) is str and '_rebuild_tensor' in name:
+            return super().find_class("jittor_utils.load_pytorch", "jittor_rebuild_direct_v0")
+        elif type(name) is str and '_rebuild_parameter' in name:
             return super().find_class("jittor_utils.load_pytorch", "jittor_rebuild_var_direct")
         return super().find_class(mod_name, name)
 
