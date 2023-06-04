@@ -11,6 +11,7 @@
 #ifdef HAS_CUDA
 #include "mem/allocator/cuda_managed_allocator.h"
 #include "mem/allocator/cuda_device_allocator.h"
+#include "mem/allocator/cuda_host_allocator.h"
 #include "mem/allocator/cuda_dual_allocator.h"
 #endif
 #include "mem/allocator/stat_allocator.h"
@@ -22,6 +23,7 @@
 
 namespace jittor {
 
+DEFINE_FLAG(int, use_cuda_host_allocator, 1, "use cuda host allocator for cpu memory globally");
 
 struct pair_hash {
 	template <class T1, class T2>
@@ -61,7 +63,9 @@ Allocator* get_allocator(bool temp_allocator) {
             LOGvv << "Using cuda_device_allocator";
             allocator = &cuda_device_allocator;
         }
-    }
+    } else
+    if (use_cuda_host_allocator)
+        allocator = &cuda_host_allocator;
 #endif
     if (!allocator) {
         LOGvv << "Using aligned_allocator";
@@ -137,8 +141,6 @@ void migrate_to_gpu(Var* var, Allocator* allocator) {
             swap_timestamp = ++tflag_count;
             var->tflag = swap_timestamp;
         }
-        if (var->id == 336770)
-            LOGir << var;
         move_with_swap(var, allocator, true);
         return;
     }
