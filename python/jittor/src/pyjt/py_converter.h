@@ -616,6 +616,27 @@ DEF_IS(FetchFunc, T) from_py_object(PyObject* obj) {
     return func;
 }
 
+struct SimpleFunc;
+
+DEF_IS(SimpleFunc, bool) is_type(PyObject* obj) {
+    return PyCallable_Check(obj);
+}
+
+DEF_IS(SimpleFunc, T) from_py_object(PyObject* obj) {
+    // PyObject_Call
+    Py_INCREF(obj);
+    T func(
+        // callback
+        [obj](int64 result) {
+            PyObjHolder args(to_py_object(result));
+            PyObjHolder ret(PyObject_CallOneArg(obj, args.obj));
+        },
+        // deleter
+        [obj]() { Py_DECREF(obj); }
+    );
+    return func;
+}
+
 CHECK_IS_2(unordered_map);
 
 DEF_IS_2(unordered_map, bool) is_type(PyObject* obj) {

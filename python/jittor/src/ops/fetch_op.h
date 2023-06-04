@@ -36,6 +36,27 @@ struct FetchFunc {
     void operator =(FetchFunc&& other) { this->~FetchFunc(); new (this) FetchFunc(move(other)); }
 };
 
+
+struct SimpleFunc {
+    std::function<void(int64)> callback;
+    std::function<void()> deleter;
+    SimpleFunc() = default;
+    SimpleFunc(SimpleFunc&& other) : callback(other.callback), deleter(other.deleter) {
+        other.callback = nullptr;
+        other.deleter = nullptr;
+    };
+    SimpleFunc(const SimpleFunc&) = delete;
+    SimpleFunc(std::function<void(int64)>&& callback) : callback(move(callback)) {}
+    SimpleFunc(std::function<void(int64)>&& callback, std::function<void()>&& deleter)
+    : callback(move(callback)), deleter(move(deleter)) {};
+    ~SimpleFunc() {
+        if (deleter) {
+            deleter();
+        }
+    }
+    void operator =(SimpleFunc&& other) { this->~SimpleFunc(); new (this) SimpleFunc(move(other)); }
+};
+
 struct FetchResult {
     FetchFunc func;
     vector<Allocation> allocations;

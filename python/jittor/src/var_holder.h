@@ -144,6 +144,19 @@ struct VarHolder {
         return var->num * var->dsize();
     }
 
+    /** 
+     * return id of this Var.
+     */
+    // @pyjt(__get__id)
+    inline int64 id() {
+        return var->id;
+    }
+
+    // @pyjt(__get__var_ptr)
+    inline int64 var_ptr() {
+        return (int64)var;
+    }
+
     // @pyjt(__get__flags)
     inline int32 flags() {
         return (int32)(var->flags.flags);
