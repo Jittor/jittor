@@ -64,7 +64,6 @@ struct SFRLAllocator : Allocator {
 
     static const size_t ALIGN_SIZE = 512;
     static const size_t SMALL_BLOCK_SIZE = 1048576;
-    static const size_t LARGE_BLOCK_SIZE = 4LL*1024*1024*1024;//20971520;
     static const size_t LARGE_ALIGN_SIZE = 2097152;
     float free_ratio, min_free_size;
     static list<SFRLAllocator*> sfrl_allocators;

@@ -13,7 +13,8 @@
 namespace jittor {
 
 DEFINE_FLAG(int, use_sfrl_allocator, 1, "Enable sfrl allocator");
-
+DEFINE_FLAG(int64, sfrl_large_block_size, 20971520, "sfrl_large_block_size, larger will reduce memory shard");
+#define LARGE_BLOCK_SIZE sfrl_large_block_size
 
 std::vector<size_t> CachingBlockPool::block_ids;
     //start from 1

@@ -2011,7 +2011,10 @@ def to(x, *args, **kargs):
         if isinstance(s, jt.NanoString) or callable(s):
             return x.cast(s)
         s = str(s)
-        jt.flags.use_cuda = int("cuda" in s)
+        if "cuda" in s:
+            jt.flags.use_cuda = 1
+        elif "cpu" in s:
+            jt.flags.use_cuda = 0
     return x.clone()
 jt.Var.to = to
 
