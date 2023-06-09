@@ -414,6 +414,24 @@ Example::
         except:
             pass
 
+    def __deepcopy__(self, memo=None, _nil=[]):
+        from copy import deepcopy
+        if memo is None:
+            memo = {}
+        d = id(self)
+        y = memo.get(d, _nil)
+        if y is not _nil:
+            return y
+
+        obj = self.__class__.__new__(self.__class__)
+        memo[d] = id(obj)
+        exclude_key = {"index_list", "idmap", "gid", "gidc", "num_idle", "num_idle_c", "workers", "index_list_numpy", "dataset", "idqueue", "idqueue_lock"}
+        for k,v in self.__dict__.items():
+            if k in exclude_key: continue
+            obj.__setattr__(k, deepcopy(v))
+        obj.dataset = obj
+        return obj
+
     def __real_len__(self):
         if self.total_len is None:
             self.total_len = len(self)
