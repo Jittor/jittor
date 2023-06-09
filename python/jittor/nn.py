@@ -3048,7 +3048,7 @@ reference: Mish - A Self Regularized Non-Monotonic Neural Activation Function.
         return x * jt.tanh(jt.softplus(x))
 
 def mish(x, inplace=False):
-    return x * jt.tanh(jt.softplus(x))
+    return x * jt.tanh(jt.nn.softplus(x))
 
 def skip_init(module_cls, *args, **kw):
     return module_cls(*args, **kw)
