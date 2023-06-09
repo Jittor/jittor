@@ -1400,6 +1400,10 @@ class Module:
         self.dfs([], "", callback, callback_leave)
         return ms
 
+    def add_module(self, name, module):
+        setattr(self, name ,module)
+        return self
+
     @property
     def _modules(self):
         return { k:v for k,v in self.__dict__.items() if isinstance(v, Module) }
