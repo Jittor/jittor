@@ -2201,7 +2201,7 @@ def peek(x):
     print(peek_s(x))
 
 def finfo(dtype):
-    return np.finfo(str(dtype))
+    return np.finfo(str(dtype).split('.')[-1])
 
 def iinfo(dtype):
-    return np.iinfo(str(dtype))
+    return np.iinfo(str(dtype).split('.')[-1])

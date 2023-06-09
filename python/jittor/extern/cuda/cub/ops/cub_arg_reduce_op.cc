@@ -105,7 +105,7 @@ void CubArgReduceOp::jit_run() {
 
     auto* __restrict__ yp = y->ptr<int>();
     auto* __restrict__ y_keyp = y_key->ptr<Tx>();
-    split<<<max(1,num_segments/1024),1024>>>(d_out, y_keyp, yp, num_segments);
+    split<<<std::max(1,num_segments/1024),1024>>>(d_out, y_keyp, yp, num_segments);
 
     exe.temp_allocator->free(d_temp_storage, temp_storage_bytes, allocation);
     exe.temp_allocator->free(d_out, sizeof(cub::KeyValuePair<int, Tx>) * num_segments, allocation_dout);

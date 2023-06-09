@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.8.0'
+__version__ = '1.3.8.1'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -844,6 +844,9 @@ def argmax(x: Var, dim: int, keepdims:bool=False):
         >>> a.argmax(dim=1)
         (jt.Var([2 1], dtype=int32), jt.Var([1.4128606  0.19593953], dtype=float32))
     '''
+    if dim is None:
+        dim = 0
+        x = x.flatten()
     return jt.arg_reduce(x, "max", dim, keepdims)
 Var.argmax = argmax
 
