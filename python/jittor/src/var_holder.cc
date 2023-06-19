@@ -190,6 +190,8 @@ ArrayArgs VarHolder::fetch_sync() {
     sync(true);
     if (save_mem || _HAS_CUDA)
         migrate_to_cpu(var, exe.allocator);
+    if (var->flags.get(NodeFlags::_is_scalar))
+        return {var->mem_ptr, {}, var->dtype()};
     return {var->mem_ptr, var->shape, var->dtype()};
 }
 

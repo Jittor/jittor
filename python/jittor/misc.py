@@ -2205,3 +2205,9 @@ def finfo(dtype):
 
 def iinfo(dtype):
     return np.iinfo(str(dtype))
+
+
+def index_select(input,dim,indices):
+    return input[(None,)*dim+(indices,)]
+
+jt.Var.index_select = index_select
