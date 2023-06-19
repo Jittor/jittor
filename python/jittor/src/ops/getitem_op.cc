@@ -370,6 +370,8 @@ void GetitemOp::infer_shape() {
     StackVector<> out_shape;
     infer_slices(i_to_vs, i_to_o, out_shape);
 
+    if (out_shape.n == 0)
+        out->flags.set(NodeFlags::_is_scalar);
     // optimized shape (each dim is a loop var)
     StackVector<> o_shape;
     int fov = -1;

@@ -94,9 +94,12 @@ def safeunpickle(path):
         if not (path.endswith(".pth") or path.endswith(".pkl") or path.endswith(".pt")):
             return path
     if path.endswith(".pth") or path.endswith(".pt") or path.endswith(".bin") :
-        from jittor_utils.load_pytorch import load_pytorch
-        model_dict = load_pytorch(path)
-        return model_dict
+        try:
+            from jittor_utils.load_pytorch import load_pytorch
+            model_dict = load_pytorch(path)
+            return model_dict
+        except Exception as e:
+            print("load from torch Error:",e,"try load in jittor")
     with open(path, "rb") as f:
         s = f.read()
     if not s.endswith(b"HCAJSLHD"):
@@ -1730,6 +1733,29 @@ Arguments of hook are defined as::
         value.persistent = persistent
         object.__setattr__(self, key, value)
         return value
+    
+    @property
+    def _buffers(self):
+        buffers = {}
+        for k,v in self.__dict__.items():
+            if isinstance(v, jt.Var):
+                buffers[k] = v
+        return buffers
+    
+    def named_buffers(self,recurse=False):
+        
+        buffers = []
+        for k,v in self.__dict__.items():
+            if isinstance(v, jt.Var):
+                buffers.append((k,v))
+        return buffers
+
+    def named_children(self,):
+        childs = []
+        for k,v in self.__dict__.items():
+            if isinstance(v,Module):
+                childs.append((k,v))
+        return childs
 
     def float64(self):
         '''convert all parameters to float16'''
