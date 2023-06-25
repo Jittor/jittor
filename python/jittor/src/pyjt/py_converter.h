@@ -628,8 +628,11 @@ DEF_IS(SimpleFunc, T) from_py_object(PyObject* obj) {
     T func(
         // callback
         [obj](int64 result) {
+            // check python version macro >= 3.9
+            #if PY_VERSION_HEX >= 0x03090000
             PyObjHolder args(to_py_object(result));
             PyObjHolder ret(PyObject_CallOneArg(obj, args.obj));
+            #endif
         },
         // deleter
         [obj]() { Py_DECREF(obj); }
