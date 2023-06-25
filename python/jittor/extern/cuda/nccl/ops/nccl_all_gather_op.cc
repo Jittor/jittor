@@ -7,7 +7,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include "var.h"
-#include "nccl_broadcast_op.h"
+#include "nccl_all_gather_op.h"
 #include "utils/str_utils.h"
 
 #include <nccl.h>
@@ -18,30 +18,37 @@
 namespace jittor {
 
 #ifndef JIT
-NcclBroadcastOp::NcclBroadcastOp(Var* x, int root) : x(x), root(root) {
+
+static auto nccl_all_gather = 
+    get_op_info("nccl_all_gather").get_constructor<VarPtr, Var*>();
+
+NcclAllGatherOp::NcclAllGatherOp(Var* x) : x(x) {
     flags.set(NodeFlags::_cpu, 0);
     flags.set(NodeFlags::_cuda, 1);
     y = create_output(nullptr, x->dtype());
 }
 
-void NcclBroadcastOp::infer_shape() {
-    y->set_shape(x->shape);
+void NcclAllGatherOp::infer_shape() {
+    NanoVector yshape;
+    yshape.push_back(mpi_world_size * x->shape[0]);
+    for (int i=1; i<x->shape.size(); i++)
+        yshape.push_back(x->shape[i]);
+    y->set_shape(yshape);
 }
 
-VarPtr NcclBroadcastOp::grad(Var* out, Var* dout, Var* v, int v_index) {
-    static auto nccl_reduce = 
-        get_op_info("nccl_reduce").get_constructor<VarPtr, Var*, int>();
-    return nccl_reduce(dout,root);
+VarPtr NcclAllGatherOp::grad(Var* out, Var* dout, Var* v, int v_index) {
+    LOGf << "not implemented";
+    return nullptr;
 }
 
-void NcclBroadcastOp::jit_prepare(JK& jk) {
+void NcclAllGatherOp::jit_prepare(JK& jk) {
     jk << "«Tx:" << x->dtype();
 }
 
 #else // JIT
 #ifdef JIT_cuda
 
-void NcclBroadcastOp::jit_run() {
+void NcclAllGatherOp::jit_run() {
     @define(T_NCCL,
         @if(@strcmp(@Tx,float)==0 || @strcmp(@Tx,float32)==0, ncclFloat)
         @if(@strcmp(@Tx,int)==0 || @strcmp(@Tx,int32)==0, ncclInt)
@@ -52,7 +59,7 @@ void NcclBroadcastOp::jit_run() {
     )
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
-    checkCudaErrors(ncclBroadcast(xp, yp, y->num, @T_NCCL, root, comm, 0));
+    checkCudaErrors(ncclAllGather(xp, yp, x->num, @T_NCCL, comm, 0));
 }
 
 #endif

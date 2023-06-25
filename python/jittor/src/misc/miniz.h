@@ -1315,6 +1315,14 @@ void *mz_zip_extract_archive_file_to_heap_v2(const char *pZip_filename, const ch
 
 #endif /* MINIZ_NO_ARCHIVE_APIS */
 
+} // namespace jittor
+
+#include "common.h"
+#include "misc/cuda_flags.h"
+#include "mem/allocator.h"
+
+namespace jittor {
+
 // @pyjt(ZipFile)
 struct ZipFile {
     std::unique_ptr<mz_zip_archive> zip_archive;
@@ -1358,6 +1366,10 @@ struct ZipFile {
     inline VarHolder* read_var(const string& filename, NanoString dtype=ns_uint8) {
         // static SimpleProfiler _("array");
         // SimpleProfilerGuard __(_);
+        #if HAS_CUDA
+        auto use_cuda_bk = use_cuda;
+        use_cuda = 0;
+        #endif
         static auto make_empty = get_op_info("empty")
             .get_constructor<VarPtr, NanoVector, NanoString>();
         size_t key = mz_zip_reader_locate_file(zip_archive.get(), filename.c_str(), nullptr, 0);
@@ -1367,6 +1379,12 @@ struct ZipFile {
         auto vh = std::make_unique<VarHolder>(var);
         void* memptr = (void*)vh->raw_ptr();
         mz_zip_reader_extract_to_mem(zip_archive.get(), key, memptr, stat.m_uncomp_size, 0);
+        #if HAS_CUDA
+        if (use_cuda_bk) {
+            use_cuda = use_cuda_bk;
+            migrate_to_gpu(vh->var, get_allocator());
+        }
+        #endif
         return vh.release();
     }
 };

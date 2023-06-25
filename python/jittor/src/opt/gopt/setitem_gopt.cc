@@ -18,14 +18,16 @@ inline static bool fast_strcmp(const char* a, const char* b) {
 }
 
 // add dependency b -> a
-static inline void add_dependency(Node* a, const vector<Node*>& b) {
-    a->add_inputs(b);
-    auto edge = a->_inputs.end();
-    for (int i=0; i<b.size(); i++) {
-        edge = std::prev(edge);
-        // set -1 mean this is a control dependency edge
-        edge->back->index = -1;
+static inline void add_dependency(Node* a, Node* b) {
+    // check dependency is not exist
+    for (auto na : a->inputs()) {
+        if (na == b) return;
     }
+    a->add_inputs({b});
+    auto edge = a->_inputs.end();
+    edge = std::prev(edge);
+    // set -1 mean this is a control dependency edge
+    edge->back->index = -1;
 }
 
 static void setitem_inplace(SetitemOp* op) {
@@ -109,7 +111,7 @@ static void setitem_inplace(SetitemOp* op) {
         // This would lead partial setitem
         return;
     }
-    add_dependency(data->input(), {input->node()});
+    add_dependency(data->input(), input->node());
     data->share_with(input, size);
     op->ns.set(GetitemOp::_inplace);
     // LOGir << input->shape << input->dtype() << data->shape << data->dtype() << vs << data->input();

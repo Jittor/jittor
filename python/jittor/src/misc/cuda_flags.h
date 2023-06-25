@@ -16,11 +16,7 @@ namespace jittor {
 DECLARE_FLAG(int, use_cuda);
 
 // @pyjt(get_device_count)
-inline int get_device_count() {
-    int count=0;
-    cudaGetDeviceCount(&count);
-    return count;
-}
+int get_device_count();
 
 } // jittor
 
