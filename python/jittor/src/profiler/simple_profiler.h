@@ -58,6 +58,17 @@ struct SimpleProfiler {
         pns[i] += time;
         last[i] = cnt;
     }
+    
+    inline void reset() {
+        cnt = 0;
+        total_ns = 0;
+        sum = 0;
+        for (int i=0; i<7; i++) {
+            pcnt[i] = 0;
+            pns[i] = 0;
+            last[i] = 0;
+        }
+    }
 };
 
 /*

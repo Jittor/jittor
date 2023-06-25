@@ -35,18 +35,17 @@
 #include "mem/swap.h"
 #include "mem/mem_info.h"
 
+#include <cuda_fp16.h>
+#include "var_holder.h"
+#include "vcompiler.h"
+
 namespace jittor {
 
-Executor exe;
 EXTERN_LIB MemoryProfiler memory_profiler;
 DECLARE_FLAG(int, profile_memory_enable);
-DEFINE_FLAG(int, gopt_disable, 0, "Disable graph optimizer.");
-DEFINE_FLAG(int, use_threading, 0, "Allow to use python threading with jittor.");
+DECLARE_FLAG(int, gopt_disable);
+DECLARE_FLAG(int, use_threading);
 
-DEFINE_FLAG(int, exec_called, 0, "exec sync called");
-
-// from fetch_op.cc
-EXTERN_LIB list<VarPtr> fetcher_to_free;
 // from cuda_managed_allocator
 #ifdef HAS_CUDA
 DECLARE_FLAG(int, use_cuda_managed_allocator);
@@ -197,14 +196,150 @@ static void top_weak_sync(vector<Var*>& vars) {
     }
 }
 
-void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
-    exec_called ++;
+extern void free_var_mem(Var* v);
+
+VarHolder* get_output(Var* x) {
+    ASSERT(x->mem_ptr) << x;
+    VarPtr vp(x->shape, x->dtype());
+    vp->mem_ptr = x->mem_ptr;
+    vp->allocation = x->allocation;
+    vp->allocator = x->allocator;
+    vp->finish_pending_liveness();
+    x->mem_ptr = nullptr;
+    x->allocator = nullptr;
+    x->allocation = 0;
+    return new VarHolder(std::move(vp));
+}
+    
+} // jittor
+
+#include <cuda_runtime.h>
+#include "common.h"
+#include "ops/array_op.h"
+#include "ops/code_op.h"
+#include "ops/getitem_op.h"
+
+namespace jittor {
+
+
+inline static bool fast_strcmp(const char* a, const char* b) {
+    return ((const uint32*)a)[0] == ((const uint32*)b)[0];
+}
+
+inline static void get_shape_value(vector<Node*>& nodes, ShapeValue& k) {
+    auto add_shape = [&](NanoVector shape) {
+        k.values.push_back(shape.data);
+        k.values.push_back(shape.offset);
+    };
+    for (auto* node : nodes) {
+        if (node->is_var()) {
+            Var* v = (Var*)node;
+            add_shape(v->shape);
+            k.values.push_back(v->num);
+            k.values.push_back(v->size);
+            continue;
+        }
+        auto* op = node->op();
+        auto* name = op->name();
+        if (fast_strcmp(name, "array")) {
+            auto* op_ = (ArrayOp*)op;
+            if (op_->output->flags.get(NodeFlags::_force_fuse))
+                k.values.push_back(op_->ptr<uint64>()[0]);
+        } else
+        if (fast_strcmp(name, "code")) {
+            auto* op_ = (CodeOp*)op;
+            for (auto& kv : op_->data) {
+                double v = kv.second;
+                // bitwise copy
+                k.values.push_back(*(uint64*)&v);
+            }
+        } else
+        if (fast_strcmp(name, "getitem") ||
+            fast_strcmp(name, "setitem")) {
+            auto* op_ = (GetitemOp*)op;
+            for (int i=0; i<op_->vs.n; i++) {
+                auto& vs = op_->vs.slices[i];
+                if (vs.is_int() || vs.is_slice()) {
+                    k.values.push_back(vs.slice.start);
+                    k.values.push_back(vs.slice.stop);
+                    k.values.push_back(vs.slice.step);
+                    k.values.push_back(vs.slice.mask);
+                }
+            }
+            add_shape(op_->o_shape);
+        }
+    }
+}
+
+inline static void restore_shape_value(vector<Node*>& nodes, ShapeValue& k) {
+    int iter = 0;
+    auto pop_number = [&]() {
+        ASSERT(iter < k.values.size());
+        return k.values[iter++];
+    };
+    auto pop_shape = [&]() {
+        ASSERT(iter < k.values.size());
+        NanoVector nv;
+        nv.data = k.values[iter++];
+        nv.offset = k.values[iter++];
+        return nv;
+    };
+    
+    for (auto* node : nodes) {
+        if (node->is_var()) {
+            Var* v = (Var*)node;
+            v->shape = pop_shape();
+            v->num = pop_number();
+            v->size = pop_number();
+            continue;
+        }
+        auto* op = node->op();
+        auto* name = op->name();
+        if (fast_strcmp(name, "array")) {
+            auto* op_ = (ArrayOp*)op;
+            if (op_->output->flags.get(NodeFlags::_force_fuse))
+                op_->ptr<uint64>()[0] = pop_number();
+        } else
+        if (fast_strcmp(name, "code")) {
+            auto* op_ = (CodeOp*)op;
+            for (auto& kv : op_->data) {
+                double v = kv.second;
+                // bitwise copy
+                *(uint64*)&v = pop_number();
+            }
+        } else
+        if (fast_strcmp(name, "getitem") ||
+            fast_strcmp(name, "setitem")) {
+            auto* op_ = (GetitemOp*)op;
+            for (int i=0; i<op_->vs.n; i++) {
+                auto& vs = op_->vs.slices[i];
+                if (vs.is_int() || vs.is_slice()) {
+                    vs.slice.start = pop_number();
+                    vs.slice.stop = pop_number();
+                    vs.slice.step = pop_number();
+                    vs.slice.mask = pop_number();
+                }
+            }
+            op_->o_shape = pop_shape();
+            op->graph_optimize();
+        }
+    }
+}
+
+SGraphPtr build_sgraph(const vector<VarHolder*>& outputs, const vector<VarHolder*>& inputs) {
+    vector<Var*> vars;
+    vars.reserve(outputs.size());
+    for (auto* vh : outputs)
+        vars.push_back(vh->var);
+    bool weak_sync = false;
+
     if (weak_sync && !use_threading)
         top_weak_sync(vars);
     auto allocator = get_allocator();
     auto temp_allocator = get_allocator(true);
-    this->allocator = allocator;
-    this->temp_allocator = temp_allocator;
+    exe.allocator = allocator;
+    exe.temp_allocator = temp_allocator;
+    auto& last_is_cuda = exe.last_is_cuda;
     // bfs find all ops need to run
     int op_num = 0;
     vector<Node*> bfs_q;
@@ -273,7 +408,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
             all_vars.push_back(node->var());
         }
     int var_num = all_vars.size();
-    
+
     // father: father of union-find set
     vector<int> father(op_num);
     for (int i=0; i<op_num; i++) {
@@ -538,48 +673,239 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     FusedOp fused_op;
 
     // compile all ops, prevent compiling during running
-    parallel_compile_all_ops(queue, range, fused_op, fuse_ops, ops, tt);
+    parallel_compile_all_ops(queue, range, fused_op, fuse_ops, ops, tt, true);
 
-    // running
-    SetupFreeBuffer setup_free_buffer;
-    vector<Var*> outputs_bk;
-    #ifdef HAS_CUDA
-    int sync_times = 0;
-    #endif
+    // flags
+    std::sort(bfs_q.begin(), bfs_q.end(), [&](Node* x, Node* y) { return x->id<y->id; });
+    unordered_map<Var*,pair<Var*,uint64>> share_map;
+    auto min_id = bfs_q.front()->id;
+    auto max_id = bfs_q.back()->id;
+    vector<char> flags(max_id-min_id+1);
+    constexpr int is_output = 0;
+    constexpr int is_new_var = 1;
+    constexpr int is_share = 2;
+
+    auto lived = [&](Node* n) { return n->id>=min_id && n->id<=max_id; };
+    auto get_flags = [&](Node* n, int f) -> int {
+        if (!lived(n)) return 0;
+        return (flags[n->id-min_id]>>f)&1;
+    };
+    auto set_flags = [&](Node* n, int f) {
+        if (!lived(n)) return;
+        flags[n->id-min_id] |= (1<<f);
+    };
+    
+    for (auto v : vars) {
+        set_flags(v, is_output);
+    }
+    for (auto v : all_vars) {
+        set_flags(v, is_new_var);
+        if (v->allocator) {
+            share_map[v] = std::make_pair((Var*)v->allocator, v->allocation);
+            set_flags(v, is_share);
+        }
+    }
+
+    // build fused ops
+    vector<FusedOp> fused_ops(queue.size());
+    vector<Op*> rid_ops(queue.size());
+    vector<int> v_last_rid(max_id-min_id+1, -1);
+    vector<jit_op_entry_t> jit_entries(queue.size());
+    
     auto& jkl = get_jk();
     for (uint rid=0; rid<queue.size(); rid++) {
         int root = queue[rid];
         Op* op = ops[root];
         bool is_fused_op = false;
-        try {
         if (op->type() != OpType::other) {
+            auto& fused_op = fused_ops[rid];
             op = &fused_op;
             is_fused_op = true;
             int ll = (rid<queue.size()-1)?range[queue.size()-rid-2]:0, rr = range[queue.size()-rid-1];
             root = fuse_ops[rr-1];
             load_fused_op(fused_op, fuse_ops, ops, ll, rr, tt);
-        }
-        if (save_mem) {
-            swap_timestamp = ++tflag_count;
-            for (auto* var : op->inputs()) {
-                var->tflag = swap_timestamp;
-            }
-            for (auto* var : op->inputs()) {
-                check_and_swap_out(var, allocator);
-            }
-            for (auto* var : op->outputs()) {
-                alloc_with_swap(var, allocator, true);
-                var->tflag = swap_timestamp;
-            }
+
+            op->do_prepare(jkl);
+            jit_entries[rid] = (jit_op_entry_t)&FusedOp::do_run;
         } else {
-            for (auto* var : op->outputs()) {
-                var->alloc(allocator);
+            op->do_prepare(jkl);
+            if (!jkl.empty()) {
+                const char* jit_key = jkl.to_cstring();
+                auto iter = jit_ops.find(jit_key);
+                ASSERT(iter != jit_ops.end()) << jit_key << op << rid;
+                jit_entries[rid] = iter->second;
+            } else {
+                jit_entries[rid] = (jit_op_entry_t)&Op::run;
             }
         }
+        rid_ops[rid] = op;
+        for (auto v : op->inputs())
+            if (get_flags(v, is_new_var))
+                v_last_rid[v->id-min_id] = rid;
+    }
+        
+    SGraphPtr sgraph_ptr;
+    sgraph_ptr.ptr = std::make_unique<SGraph>();
+    auto& g = *sgraph_ptr.ptr;
+
+    g.outputs.reserve(outputs.size());
+    for (auto v : outputs) {
+        g.outputs.push_back(v->var);
+    }
+
+    g.inputs.reserve(inputs.size());
+    for (auto v : inputs) {
+        g.inputs.push_back(v->var);
+    }
+
+    g.bfs_q = std::move(bfs_q);
+    g.share_map = std::move(share_map);
+    g.flags = std::move(flags);
+    g.fused_ops = std::move(fused_ops);
+    g.rid_ops = std::move(rid_ops);
+    g.v_last_rid = std::move(v_last_rid);
+
+    ShapeKey key;
+    key.shapes.reserve(inputs.size());
+    for (auto v : inputs) {
+        key.shapes.push_back(v->var->shape);
+    }
+    
+    ShapeValue& value = g.shape_values[key];
+    get_shape_value(g.bfs_q, value);
+    auto prev_size = value.values.size();
+    value.values.resize(value.values.size() + jit_entries.size());
+    memcpy(&value.values[prev_size], &jit_entries[0], jit_entries.size()*sizeof(jit_op_entry_t));
+    g.shape_value_len = value.values.size();
+
+    return sgraph_ptr;
+}
+
+
+bool prob_sgraph(SGraphPtr* sgraph, const vector<VarHolder*>& inputs) {
+    // return true;
+    ShapeKey key;
+    key.shapes.reserve(inputs.size());
+    for (auto v : inputs) {
+        key.shapes.push_back(v->var->shape);
+    }
+    auto& g = *sgraph->ptr;
+    auto it = g.shape_values.find(key);
+    if (it == g.shape_values.end()) return false;
+    return true;
+}
+
+void merge_sgraph(SGraphPtr* sgraph, SGraphPtr* sgraph2) {
+    auto& g1 = *sgraph->ptr;
+    auto& g2 = *sgraph2->ptr;
+    ASSERT(g1.outputs.size() == g2.outputs.size());
+    ASSERT(g1.inputs.size() == g2.inputs.size());
+    ASSERTop(g1.bfs_q.size(),==,g2.bfs_q.size());
+    ASSERT(g1.share_map.size() == g2.share_map.size());
+    ASSERT(g1.flags.size() == g2.flags.size());
+    ASSERT(g1.fused_ops.size() == g2.fused_ops.size());
+    ASSERT(g1.rid_ops.size() == g2.rid_ops.size());
+    ASSERT(g1.v_last_rid.size() == g2.v_last_rid.size());
+    ASSERT(g1.shape_value_len == g2.shape_value_len);
+
+    for (int i=0; i<g1.bfs_q.size(); i++) {
+        auto n1 = g1.bfs_q[i];
+        auto n2 = g2.bfs_q[i];
+        ASSERT(n1->is_var() == n2->is_var());
+        if (n1->is_var()) {
+            ASSERT(n1->var()->shape.size() == n2->var()->shape.size());
+            ASSERT(n1->var()->dtype() == n2->var()->dtype());
+        } else {
+            ASSERT(fast_strcmp(n1->op()->name(), n2->op()->name()) == 1);
+        }
+    }
+    for (auto& kv : g2.shape_values) {
+        g1.shape_values[kv.first] = kv.second;
+    }
+}
+
+vector<VarHolder*> exec_sgraph(SGraphPtr* sgraph, const vector<VarHolder*>& inputs) {
+    ShapeKey key;
+    key.shapes.reserve(inputs.size());
+    for (auto v : inputs) {
+        key.shapes.push_back(v->var->shape);
+    }
+    auto& g = *sgraph->ptr;
+    auto it = g.shape_values.find(key);
+    ASSERT(it != g.shape_values.end());
+    auto& value = it->second;
+    restore_shape_value(g.bfs_q, value);
+
+    vector<jit_op_entry_t> jit_entries(g.rid_ops.size());
+    memcpy(&jit_entries[0], &value.values[value.values.size() - jit_entries.size()], jit_entries.size()*sizeof(jit_op_entry_t));
+
+    ASSERT(inputs.size() == g.inputs.size());
+    for (int i=0; i<inputs.size(); i++) {
+        auto* v2 = inputs[i]->var;
+        auto* v = g.inputs[i];
+        if (v != v2) {
+            if (v->mem_ptr) {
+                free_var_mem(v);
+            }
+            ASSERT(v2->mem_ptr);
+            v->mem_ptr = v2->mem_ptr;
+            v->allocator = v2->allocator;
+            v->allocation = v2->allocation;
+            v->shape = v2->shape;
+            v->num = v2->num;
+            v->size = v2->size;
+            v->allocator->share_with(v->size, v->allocation);
+        }
+    }
+
+    
+    auto allocator = get_allocator();
+    auto temp_allocator = get_allocator(true);
+    exe.allocator = allocator;
+    exe.temp_allocator = temp_allocator;
+    auto& last_is_cuda = exe.last_is_cuda;
+
+    vector<Var*>& vars = g.outputs;
+    vector<Node*>& bfs_q = g.bfs_q;
+    unordered_map<Var*,pair<Var*,uint64>>& share_map = g.share_map;
+    vector<char>& flags = g.flags;
+
+    vector<FusedOp>& fused_ops = g.fused_ops;
+    vector<Op*>& rid_ops = g.rid_ops;
+    vector<int>& v_last_rid = g.v_last_rid;
+
+    constexpr int is_output = 0;
+    constexpr int is_new_var = 1;
+    constexpr int is_share = 2;
+    auto min_id = bfs_q.front()->id;
+    auto max_id = bfs_q.back()->id;
+
+    auto lived = [&](Node* n) { return n->id>=min_id && n->id<=max_id; };
+    auto get_flags = [&](Node* n, int f) -> int {
+        if (!lived(n)) return 0;
+        return (flags[n->id-min_id]>>f)&1;
+    };
+    auto set_flags = [&](Node* n, int f) {
+        if (!lived(n)) return;
+        flags[n->id-min_id] |= (1<<f);
+    };
+
+    // running
+    SetupFreeBuffer setup_free_buffer;
+    #ifdef HAS_CUDA
+    int sync_times = 0;
+    #endif
+    auto& jkl = get_jk();
+    for (uint rid=0; rid<rid_ops.size(); rid++) {
+        Op* op = rid_ops[rid];
+        bool is_fused_op = op->type() != OpType::other;
+        try {
+        for (auto* var : op->outputs())
+            var->alloc(allocator);
         if (PREDICT_BRANCH_NOT_TAKEN(profile_memory_enable))
             memory_profiler.check();
         LOGvvv << "Run" << op << "inputs:" << op->inputs() << "outputs:" << op->outputs();
-        op->do_prepare(jkl);
+        // op->do_prepare(jkl);
         bool is_cuda = op->flags.get(NodeFlags::_cuda);
         #ifdef HAS_CUDA
         if (!is_cuda) {
@@ -609,19 +935,11 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
             }
         }
         #endif
-        #ifdef NODE_MEMCHECK
-        if (is_fused_op) {
-            for (auto& vi : fused_op.vars)
-                if (vi.type == 0)
-                    ASSERT(vi.var->mem_ptr) << vi.var;
-        } else {
-            for (auto* v : op->inputs())
-                ASSERT(v->mem_ptr) << v;
-        }
-        #endif
         last_is_cuda = is_cuda;
         // _JT_SEH_START2;
-        op->do_run_after_prepare(jkl);
+        // op->do_run_after_prepare(jkl);
+        jit_op_entry_t& jit_entry = jit_entries[rid];
+        jit_entry(op);
         // _JT_SEH_END2;
         #ifdef HAS_CUDA
         // migrate to gpu
@@ -631,14 +949,6 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
             }
         }
         #endif
-        // record trace data
-        if (PREDICT_BRANCH_NOT_TAKEN(trace_py_var>=2)) {
-            trace_data.record_execution(op, is_fused_op, jkl);
-            #ifdef HAS_CUDA
-            if (use_cuda)
-                checkCudaErrors(cudaDeviceSynchronize());
-            #endif
-        }
         #ifdef JT_CHECK_NAN
         for (Var* var : op->outputs())
             check_nan(var);
@@ -650,33 +960,17 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
         #endif
         #endif
         LOGvvv << "Finished Op(" >> op->name() << rid >> 
-            "/" >> queue.size() >> ") output:" << op->outputs();
-        if (is_fused_op) {
-            propergate_needed_flags(fused_op);
-            for (Var* var : op->outputs())
-                var->finish_pending_liveness();
-            continue;
-        }
-        // release liveness when op is finished
-        // outputs may change during free, we need to backup it;
-        outputs_bk.clear();
-        for (Var* var : op->outputs()) {
-            /* only free not need_free output var.
-            For example o1, o2 = op1(i1)
-            o2 is not used, so its f:b:p liveness == 0
-            when o1 is freed, op2 will be freed, o2 will be freed too.
-            so no need to free o2 again.
-            */
-            if (!var->need_free())
-                outputs_bk.push_back(var);
-            else {
-                // TODO: will this cause bug?
-                var->flags.set(NodeFlags::_finished);
+            "/" >> rid_ops.size() >> ") output:" << op->outputs();
+        for (Var* v : op->inputs())
+            if (get_flags(v, is_new_var) && !get_flags(v, is_output) && v_last_rid[v->id-min_id] == rid) {
+                free_var_mem(v);
+                if (get_flags(v, is_share)) {
+                    // recover share var
+                    auto kv = share_map.find(v)->second;
+                    v->allocator = (Allocator*)kv.first;
+                    v->allocation = kv.second;
+                }
             }
-        }
-        op->finish_pending_liveness();
-        for (Var* var : outputs_bk)
-            var->finish_pending_liveness();
         } catch (const std::exception& e) {
             // log memory info
             display_memory_info(__FILELINE__, false, true);
@@ -684,58 +978,61 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
             op->do_prepare(jkl);
             string jit_src_path = Op::get_filename_from_jit_key(jkl.to_cstring(), ".cc");
             jittor::Log logf(__FILELINE__, 'f', 0);
-            logf << "\nExecute fused operator(" >> rid >> '/' >> queue.size() >> ")"
+            logf << "\nExecute fused operator(" >> rid >> '/' >> rid_ops.size() >> ")"
                 << "failed.";
             if (jit_compiler::file_exist(jit_src_path))
                 logf << "\n[JIT Source]:" << jit_src_path << "\n";
             check_op_async_error(op, is_fused_op, e, logf);
         }
     }
-    LOGvv << "All" << op_num << "ops finished, return vars:" << vars;
     for (Var* v : vars) ASSERT(v->mem_ptr || v->flags.get(NodeFlags::_is_swapped) || !v->backward_liveness) << v;
     // clean fetcher free buffer
-    fetcher_to_free.clear();
+    // fetcher_to_free.clear();
     #ifdef HAS_CUDA
-    if (device_sync && use_cuda) {
-        last_is_cuda = false;
-        sync_times++;
-        try {
-        // CHECK(EventQueue::OK == event_queue.run_sync([]() {
-            checkCudaErrors(cudaDeviceSynchronize());
-        // }));
-        // TODO: run_sync cause hang, tmp fix it
-        } catch (const std::exception& e) {
-            // log memory info
-            display_memory_info(__FILELINE__, false, true);
-            throw;
-        }
-        event_queue.flush();
-    }
-    LOGvv << "cudaDeviceSynchronize times:" << sync_times << "/" <<queue.size() << "device_sync:" << device_sync;
+    event_queue.flush();
     #endif
+    vector<VarHolder*> ret;
+    ret.reserve(vars.size());
+    for (Var* v : vars) {
+        ASSERT(get_flags(v, is_new_var));
+        ret.push_back(get_output(v));
+        if (get_flags(v, is_share)) {
+            // recover share var
+            auto kv = share_map.find(v)->second;
+            v->allocator = (Allocator*)kv.first;
+            v->allocation = kv.second;
+        }
+    }
+    return ret;
 }
 
-unordered_map<void*, size_t> allocation_map;
-unordered_map<void*, size_t> size_map;
-
-extern "C" void* jittor_cuda_malloc(void*, size_t size, int device_id) {
-    size_t allocation;
-    void* ptr=exe.allocator->alloc(size, allocation);
-    allocation_map[ptr]=allocation;
-    size_map[ptr]=size;
-    return ptr;
-}
-
-extern "C" void jittor_cuda_free(void*, void* ptr, int device_id) {
-    exe.allocator->free(ptr, size_map[ptr], allocation_map[ptr]);
-}
-
-extern "C" void* get_jittor_cuda_malloc() {
-    return (void*)jittor_cuda_malloc;
-}
-
-extern "C" void* get_jittor_cuda_free() {
-    return (void*)jittor_cuda_free;
-}
+vector<VarHolder*> delay_fetch(const vector<VarHolder*>& inputs) {
+    static vector<VarPtr> prev_vars;
+    static cudaEvent_t event;
+    static bool init = false;
+    if (!init) {
+        init = true;
+        checkCudaErrors(cudaEventCreateWithFlags(&event, cudaEventDisableTiming));
+    }
     
-} // jittor
+    sync(inputs);
+    vector<VarHolder*> ret;
+    ret.reserve(prev_vars.size());
+    for (auto& v : prev_vars) {
+        ret.push_back(new VarHolder(move(v)));
+    }
+    prev_vars.clear();
+    prev_vars.reserve(inputs.size());
+    for (auto& v : inputs) {
+        VarPtr vp(v->var->shape, v->var->dtype());
+        vp->alloc(cpu_allocator);
+        vp->finish_pending_liveness();
+        cudaMemcpyAsync(vp->mem_ptr, v->var->mem_ptr, v->var->size, cudaMemcpyDeviceToHost, 0);
+        prev_vars.emplace_back(move(vp));
+    }
+    cudaEventSynchronize(event);
+    cudaEventRecord(event, 0);
+    return ret;
+}
+
+}

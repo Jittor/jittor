@@ -69,6 +69,17 @@ VarHolder::VarHolder(VarHolder* v) : var(v->var) {
     operator delete(v);
 }
 
+void VarHolder::release_from_holders() {
+    if (PREDICT_BRANCH_NOT_TAKEN(!var)) return;
+    if (iter == sync_ptr)
+        sync_ptr = std::next(sync_ptr);
+    if (iter != hold_vars.end()) {
+        hold_vars.erase(iter);
+        release_holder();
+    }
+    iter = hold_vars.end();
+}
+
 static auto make_array_from_pyobj = get_op_info("array")
     .get_constructor<VarPtr, PyObject*>();
 static auto make_unary = get_op_info("unary")
@@ -89,7 +100,8 @@ VarHolder::~VarHolder() {
     if (PREDICT_BRANCH_NOT_TAKEN(!var)) return;
     if (iter == sync_ptr)
         sync_ptr = std::next(sync_ptr);
-    hold_vars.erase(iter);
+    if (iter != hold_vars.end())
+        hold_vars.erase(iter);
     release_holder();
     var->release_both_liveness();
 }
@@ -179,9 +191,11 @@ VarHolder* VarHolder::sync(bool device_sync, bool weak_sync) {
 }
 
 ArrayArgs VarHolder::fetch_sync() {
-    sync(true);
-    if (save_mem || _HAS_CUDA)
-        migrate_to_cpu(var, exe.allocator);
+    if (!(var->mem_ptr && !var->allocator->is_cuda())) {
+        sync(true);
+        if (save_mem || _HAS_CUDA)
+            migrate_to_cpu(var, exe.allocator);
+    }
     return {var->mem_ptr, var->shape, var->dtype()};
 }
 
@@ -193,13 +207,15 @@ inline static void cast_item_data(ItemData& data) {
 }
 
 ItemData VarHolder::item() {
-    sync();
     CHECK(var->num==1) << "Item var size should be 1, but got" << var->num;
     ItemData data;
     data.dtype = var->dtype();
     auto dsize = data.dtype.dsize();
-    if (save_mem || _HAS_CUDA)
-        migrate_to_cpu(var, exe.allocator);
+    if (!(var->mem_ptr && !var->allocator->is_cuda())) {
+        sync();
+        if (save_mem || _HAS_CUDA)
+            migrate_to_cpu(var, exe.allocator);
+    }
     #ifdef HAS_CUDA
     if (var->allocator->is_cuda()) {
         checkCudaErrors(cudaMemcpy(&data.data, var->mem_ptr, dsize, cudaMemcpyDeviceToHost));

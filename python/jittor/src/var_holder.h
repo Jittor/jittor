@@ -223,6 +223,9 @@ struct VarHolder {
         return var->shape;
     }
 
+    // @pyjt(release_from_holders)
+    void release_from_holders();
+
     /** 
      * return True if the Var requires gradient calculation.
      * @see is_stop_grad
@@ -280,10 +283,12 @@ struct VarHolder {
      */
     // @pyjt(__get__data)
     inline DataView data() {
-        sync(true, false);
-        #ifdef HAS_CUDA
-        migrate_to_cpu(var, exe.allocator);
-        #endif
+        if (!(var->mem_ptr && !var->allocator->is_cuda())) {
+            sync(true, false);
+            #ifdef HAS_CUDA
+            migrate_to_cpu(var, exe.allocator);
+            #endif
+        }
         return {this, var->mem_ptr, var->shape, var->dtype()};
     }
     

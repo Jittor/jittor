@@ -23,8 +23,6 @@
 
 namespace jittor {
 
-DEFINE_FLAG(int, use_cuda_host_allocator, 1, "use cuda host allocator for cpu memory globally");
-
 struct pair_hash {
 	template <class T1, class T2>
 	std::size_t operator() (const std::pair<T1, T2> &pair) const {
@@ -51,6 +49,18 @@ Allocator* setup_allocator(Allocator* underlying) {
 }
 
 Allocator* cpu_allocator = setup_allocator<SFRLAllocator>(&aligned_allocator);
+
+DEFINE_FLAG_WITH_SETTER(int, use_cuda_host_allocator, 1, "use cuda host allocator for cpu memory globally");
+
+void setter_use_cuda_host_allocator(int value) {
+    #ifdef HAS_CUDA
+    auto use_cuda_bk = use_cuda;
+    use_cuda = 0;
+    use_cuda_host_allocator = value;
+    cpu_allocator = get_allocator();
+    use_cuda = use_cuda_bk;
+    #endif
+}
 
 Allocator* get_allocator(bool temp_allocator) {
     Allocator* allocator = nullptr;

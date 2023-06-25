@@ -261,14 +261,14 @@ def load_pytorch(fn_name):
                     break
             else:
                 raise RuntimeError(f"zipfile <{fn_name}> format error, data.pkl not found")
-            with jt.flag_scope(use_cuda=0):
-                data_file = contents.read_var(prefix+"data.pkl").data.tobytes()
-                data_file = io.BytesIO(data_file)
-                pickle_load_args = {'encoding': 'utf-8'}
-                unpickler = UnpicklerWrapper(data_file,  **pickle_load_args)
-                unpickler.persistent_load = persistent_load
-                result = unpickler.load()
-                result = dfs_results(result)
+                
+            data_file = contents.read_var(prefix+"data.pkl").data.tobytes()
+            data_file = io.BytesIO(data_file)
+            pickle_load_args = {'encoding': 'utf-8'}
+            unpickler = UnpicklerWrapper(data_file,  **pickle_load_args)
+            unpickler.persistent_load = persistent_load
+            result = unpickler.load()
+            result = dfs_results(result)
         else:
             deserialized_objects = {}
             f = open(fn_name, "rb")

@@ -49,6 +49,8 @@ void NcclAllReduceOp::jit_run() {
         @if(@strcmp(@Tx,int)==0 || @strcmp(@Tx,int32)==0, ncclInt)
         @if(@strcmp(@Tx,float64)==0, ncclFloat64)
         @if(@strcmp(@Tx,int64)==0, ncclInt64)
+        @if(@strcmp(@Tx,uint8)==0, ncclUint8)
+        @if(@strcmp(@Tx,float16)==0, ncclHalf)
     )
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();

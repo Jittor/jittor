@@ -706,3 +706,21 @@ def process_jittor_source(device_type, callback):
                 shutil.copy(fname, fname2)
     compiler.cc_flags = compiler.cc_flags.replace(compiler.jittor_path, djittor_path) + f" -I\"{djittor_path}/extern/cuda/inc\" "
     compiler.jittor_path = djittor_path
+
+import time
+class time_scope:
+    def __init__(self, name):
+        self.name = name
+    def __enter__(self):
+        self.start_time = time.time()
+    def __exit__(self, *exc):
+        self.end_time = time.time()
+        self.execution_time = self.end_time - self.start_time
+        print(f"exec[{self.name}] time: {self.execution_time}s")
+    def __call__(self, func):
+        def inner(*args, **kw):
+            with self:
+                ret = func(*args, **kw)
+            return ret
+        return inner
+
