@@ -278,8 +278,9 @@ struct VarHolder {
         #ifdef HAS_CUDA
         migrate_to_cpu(var, exe.allocator);
         #endif
-        if (var->flags.get(NodeFlags::_is_scalar))
-            return {this, var->mem_ptr, {}, var->dtype()};
+        // this will cause state_dict only has one element
+        // if (var->flags.get(NodeFlags::_is_scalar))
+        //     return {this, var->mem_ptr, {}, var->dtype()};
         return {this, var->mem_ptr, var->shape, var->dtype()};
     }
     
