@@ -13,9 +13,13 @@ import jittor.compiler as compiler
 
 has_acl = 0
 cc_flags = ""
-tikcc_path = env_or_try_find('tikcc_path', 'tikcc')
+tikcc_path = env_or_try_find('tikcc_path', 'ccec')
 dlopen_flags = os.RTLD_NOW | os.RTLD_GLOBAL
 compiler.has_acl = has_acl
+
+# export LD_LIBRARY_PATH=/usr/local/Ascend/ascend-toolkit/latest/tools/aoe/lib64:/usr/local/Ascend/ascend-toolkit/latest/compiler/lib64:/usr/local/Ascend/ascend-toolkit/latest/compiler/lib64/plugin/opskernel:/usr/local/Ascend/ascend-toolkit/latest/compiler/lib64/plugin/nnengine:/usr/local/Ascend/ascend-toolkit/latest/runtime/lib64:/usr/local/Ascend/ascend-toolkit/latest/compiler/lib64/stub:/usr/local/Ascend/ascend-toolkit/latest/tools/tikicpulib/lib/Ascend910A:/usr/local/Ascend/ascend-toolkit/latest/toolkit/tools/simulator/Ascend910A/lib:/opt/AXESMI/lib64:/usr/local/Ascend/driver/lib64/driver/
+# export PYTHONPATH=/home/cjld/new_jittor/jittor/python
+# export tikcc_path=g++
 
 def install():
     import jittor.compiler as compiler
@@ -25,9 +29,10 @@ def install():
     cc_flags += f" -DHAS_CUDA -DIS_ACL  \
     -I/usr/local/Ascend/ascend-toolkit/latest/x86_64-linux/include/ \
     -L/usr/local/Ascend/ascend-toolkit/latest/x86_64-linux/lib64 \
-    -I{acl_compiler_home}  -ltikc_runtime -lascendcl  "
+    -I{acl_compiler_home} -lascendcl -lacl_op_compiler "
     ctypes.CDLL("libascendcl.so", dlopen_flags)
     '''
+    -ltikc_runtime
     -I/usr/local/Ascend/driver/include \
     -L/usr/local/Ascend/compiler/lib64 \
     -L/usr/local/Ascend/runtime/lib64 \
@@ -43,6 +48,7 @@ string process_acl(const string& src, const string& name, const map<string,strin
     jittor_utils.process_jittor_source("acl", mod.process)
 
     has_acl = 1
+    os.environ["use_mkl"] = "0"
 
 
 def install_extern():
@@ -70,3 +76,5 @@ def post_process():
     if has_acl:
         from jittor import pool
         pool.pool_use_code_op = False
+        import jittor as jt
+        jt.flags.use_cuda_host_allocator = 1

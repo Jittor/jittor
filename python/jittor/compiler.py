@@ -223,7 +223,8 @@ def gen_jit_flags():
             type = args[0].strip()
             name = args[1].strip()
             if not has_cuda and "cuda" in name and name!="use_cuda":
-                continue
+                if name != "use_cuda_host_allocator":
+                    continue
             default = args[2].strip()
             doc = ",".join(args[3:])
             doc = eval(f"({doc})")
