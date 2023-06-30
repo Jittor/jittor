@@ -6,7 +6,7 @@
 #include <cfloat>
 #include <cmath>
 #include "misc/nan_checker.h"
-#ifdef HAS_CUDA
+#ifdef IS_CUDA
 #include "misc/cuda_flags.h"
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>

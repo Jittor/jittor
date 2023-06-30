@@ -7,7 +7,7 @@
 #pragma once
 #include "common.h"
 
-#ifdef JIT_cuda
+#if defined(JIT_cuda) && !defined(IS_ACL)
 
 #include <driver_types.h>
 #include <cuda_fp16.h>

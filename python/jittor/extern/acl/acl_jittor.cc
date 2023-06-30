@@ -74,6 +74,9 @@ acl_jittor_initer() {
 } _acl_jittor_initer;
 
 string process_acl(const string& src, const string& name, const map<string,string>& kargs) {
+    if (endswith(name, "_jittor.cc"))
+        return src;
+    try {
     auto tokens = token_split(src);
     int edit = 0;
     for (int i=0; i<tokens.size(); i++) {
@@ -163,9 +166,13 @@ string process_acl(const string& src, const string& name, const map<string,strin
         new_src = "#include <Python.h>\n#include <pystate.h>\n"+
         replace(new_src, "op->do_run_after_prepare(jkl);", 
         R"({
-            Py_BEGIN_ALLOW_THREADS
-            op->do_run_after_prepare(jkl);
-            Py_END_ALLOW_THREADS
+            if (!PyGILState_Check()) {
+                op->do_run_after_prepare(jkl);
+            } else {
+                Py_BEGIN_ALLOW_THREADS
+                op->do_run_after_prepare(jkl);
+                Py_END_ALLOW_THREADS
+            }
         })");
     }
     if (name == "profiler.cc") {
@@ -178,12 +185,17 @@ string process_acl(const string& src, const string& name, const map<string,strin
     }
     // ????????
     return new_src;
+    } catch (const std::exception& e) {
+        LOGe << "process acl error:" << e.what();
+        LOGe << "name:" << name;
+        throw;
+    }
 }
 
 void acl_jittor_op_compiler(string& filename, string& src, bool is_acl, string& extra_flags) {
     if (!is_acl) return;
-    extra_flags += " --tik-soc-version=Ascend910 ";
-    filename = replace(filename, ".cc", ".tikcc");
+    // extra_flags += " --tik-soc-version=Ascend910 ";
+    // filename = replace(filename, ".cc", ".tikcc");
     // LOGir << filename;
     string new_src = process_acl(src, "", {});
     new_src = replace(new_src, R"(#include "misc/cuda_atomic.h")", "");
