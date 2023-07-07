@@ -1318,17 +1318,34 @@ void *mz_zip_extract_archive_file_to_heap_v2(const char *pZip_filename, const ch
 // @pyjt(ZipFile)
 struct ZipFile {
     std::unique_ptr<mz_zip_archive> zip_archive;
+    char mode;
     // @pyjt(__init__)
-    inline ZipFile(const string& filename) {
+    inline ZipFile(const string& filename, const string& mode="r") {
         zip_archive = std::make_unique<mz_zip_archive>();
         memset(zip_archive.get(), 0, sizeof(mz_zip_archive));
-        if (!mz_zip_reader_init_file(zip_archive.get(), filename.c_str(), 0))
-            zip_archive = nullptr;
+        if (mode == "r") {
+            this->mode = 'r';
+            if (!mz_zip_reader_init_file(zip_archive.get(), filename.c_str(), 0))
+                zip_archive = nullptr;
+        } else if (mode == "w") {
+            this->mode = 'w';
+            if (!mz_zip_writer_init_file_v2(zip_archive.get(), filename.c_str(), 0, MZ_ZIP_FLAG_WRITE_ZIP64)) {
+                zip_archive = nullptr;
+            }
+        }
+        if (!zip_archive)
+            throw std::runtime_error("Failed to open zip file: " + filename);
     }
     // @pyjt(__dealloc__)
     inline ~ZipFile() {
-        if (zip_archive)
-            mz_zip_reader_end(zip_archive.get());
+        if (zip_archive) {
+            if (mode == 'w') {
+                mz_zip_writer_finalize_archive(zip_archive.get());
+                mz_zip_writer_end(zip_archive.get());
+            } else {
+                mz_zip_reader_end(zip_archive.get());
+            }
+        }
     }
 
     // @pyjt(valid)
@@ -1352,6 +1369,11 @@ struct ZipFile {
         mz_zip_archive_file_stat stat;
         CHECK(mz_zip_reader_file_stat(zip_archive.get(), key, &stat));
         mz_zip_reader_extract_to_mem(zip_archive.get(), key, (void*)ptr, stat.m_uncomp_size, 0);
+    }
+
+    // @pyjt(write)
+    inline void write(const string& filename, uint64 ptr, uint64 size) {
+        CHECK(mz_zip_writer_add_mem(zip_archive.get(), filename.c_str(), (void*)ptr, size, 0));
     }
 
     // @pyjt(read_var)
