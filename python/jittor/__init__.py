@@ -43,9 +43,25 @@ import traceback
 if "SKEY" in os.environ:
     import jittor_utils.student_queue
 
+def dfs_to_numpy(x):
+    if isinstance(x, list):
+        for i in range(len(x)):
+            x[i] = dfs(x[i])
+    elif isinstance(x, dict):
+        for k in x:
+            x[k] = dfs(x[k])
+    elif isinstance(x, Var):
+        return x.numpy()
+    return x
+
 def safepickle(obj, path):
+    if path.endswith(".pth") or path.endswith(".pt") or path.endswith(".bin"):
+        from jittor_utils.save_pytorch import save_pytorch
+        save_pytorch(path, obj)
+        return
     # Protocol version 4 was added in Python 3.4. It adds support for very large objects, pickling more kinds of objects, and some data format optimizations.
     # ref: <https://docs.python.org/3/library/pickle.html>
+    obj = dfs_to_numpy(obj)
     s = pickle.dumps(obj, 4)
     checksum = hashlib.sha1(s).digest()
     s += bytes(checksum)
@@ -1140,17 +1156,7 @@ def save(params_dict, path: str):
     :param path: file path
     :type path: str
     '''
-    def dfs(x):
-        if isinstance(x, list):
-            for i in range(len(x)):
-                x[i] = dfs(x[i])
-        elif isinstance(x, dict):
-            for k in x:
-                x[k] = dfs(x[k])
-        elif isinstance(x, Var):
-            return x.numpy()
-        return x
-    safepickle(dfs(params_dict), path)
+    safepickle(params_dict, path)
 
 def _uniq(x):
     a = set()
@@ -1632,13 +1638,7 @@ Arguments of hook are defined as::
             >>> net.load('net.pkl')
         '''
         params = self.state_dict()
-        params_dict = {}
-        for k, v in params.items():
-            if isinstance(v, Var):
-                params_dict[k] = v.numpy()
-            else:
-                params_dict[k] = v
-        safepickle(params_dict, path)
+        safepickle(params, path)
 
     def load(self, path: str):
         ''' loads parameters from a file.
