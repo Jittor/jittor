@@ -43,9 +43,25 @@ import traceback
 if "SKEY" in os.environ:
     import jittor_utils.student_queue
 
+def dfs_to_numpy(x):
+    if isinstance(x, list):
+        for i in range(len(x)):
+            x[i] = dfs(x[i])
+    elif isinstance(x, dict):
+        for k in x:
+            x[k] = dfs(x[k])
+    elif isinstance(x, Var):
+        return x.numpy()
+    return x
+
 def safepickle(obj, path):
+    if path.endswith(".pth") or path.endswith(".pt") or path.endswith(".bin"):
+        from jittor_utils.save_pytorch import save_pytorch
+        save_pytorch(path, obj)
+        return
     # Protocol version 4 was added in Python 3.4. It adds support for very large objects, pickling more kinds of objects, and some data format optimizations.
     # ref: <https://docs.python.org/3/library/pickle.html>
+    obj = dfs_to_numpy(obj)
     s = pickle.dumps(obj, 4)
     checksum = hashlib.sha1(s).digest()
     s += bytes(checksum)
@@ -535,6 +551,10 @@ def new_full(x, size, val):
     return full(size, val, x.dtype)
 Var.new_full = new_full
 
+def ne(x,y):
+    return x!=y 
+Var.ne = ne 
+
 def full_like(x, val, dtype=None) -> Var:
     ''' Constructs a jittor Var with all elements set to val and shape same with x. 
     
@@ -818,7 +838,7 @@ def pow(x, y):
     :param y: the second input.
     :type y: a python number or jt.Var.
     '''
-    if isinstance(y, (ori_int, ori_float)) and y == 2:
+    if isinstance(x,Var) and isinstance(y, (ori_int, ori_float)) and y == 2:
         return x.sqr()
     return core.ops.pow(x, y)
 Var.pow = Var.__pow__ = pow
@@ -1136,17 +1156,7 @@ def save(params_dict, path: str):
     :param path: file path
     :type path: str
     '''
-    def dfs(x):
-        if isinstance(x, list):
-            for i in range(len(x)):
-                x[i] = dfs(x[i])
-        elif isinstance(x, dict):
-            for k in x:
-                x[k] = dfs(x[k])
-        elif isinstance(x, Var):
-            return x.numpy()
-        return x
-    safepickle(dfs(params_dict), path)
+    safepickle(params_dict, path)
 
 def _uniq(x):
     a = set()
@@ -1623,13 +1633,7 @@ Arguments of hook are defined as::
             >>> net.load('net.pkl')
         '''
         params = self.state_dict()
-        params_dict = {}
-        for k, v in params.items():
-            if isinstance(v, Var):
-                params_dict[k] = v.numpy()
-            else:
-                params_dict[k] = v
-        safepickle(params_dict, path)
+        safepickle(params, path)
 
     def load(self, path: str):
         ''' loads parameters from a file.
@@ -1724,6 +1728,29 @@ Arguments of hook are defined as::
         value.persistent = persistent
         object.__setattr__(self, key, value)
         return value
+    
+    @property
+    def _buffers(self):
+        buffers = {}
+        for k,v in self.__dict__.items():
+            if isinstance(v, jt.Var):
+                buffers[k] = v
+        return buffers
+    
+    def named_buffers(self,recurse=False):
+        
+        buffers = []
+        for k,v in self.__dict__.items():
+            if isinstance(v, jt.Var):
+                buffers.append((k,v))
+        return buffers
+
+    def named_children(self,):
+        childs = []
+        for k,v in self.__dict__.items():
+            if isinstance(v,Module):
+                childs.append((k,v))
+        return childs
 
     def float64(self):
         '''convert all parameters to float16'''

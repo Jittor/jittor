@@ -19,7 +19,8 @@ namespace jittor {
 #if __cplusplus < 201400L || defined(IS_ACL)
 using string_view = string;
 #elif defined(__clang__)
-using std::string_view;
+// using std::string_view;
+using string_view = string;
 #elif defined(__GNUC__)
 using std::experimental::string_view;
 #else
