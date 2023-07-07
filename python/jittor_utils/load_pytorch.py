@@ -79,13 +79,18 @@ def jittor_rebuild(storage, storage_offset, size, stride, requires_grad, backwar
     if len(size) == 0:
         return jt.array(storage)
     record_size = np.prod(size)
-    if len(stride) > 1: # reshape the memory layout based on stride
-        eval_list = []
-        for idx in range(len(stride)):
-            eval_list.append(f"@e0({idx}) * i{idx}")
-        evals = "+".join(eval_list)
-        return jt.array(storage[:record_size]).reindex(size, [evals], extras=[jt.array(stride)])
-    return jt.array(storage[:record_size]).reshape(size)
+    expect_stride = [1]
+    for i in range(len(size)-1, 0, -1):
+        expect_stride.append(expect_stride[-1]*size[i])
+    expect_stride = tuple(expect_stride[::-1])
+    if stride is not None and stride != expect_stride:
+        if len(stride) > 1: # reshape the memory layout based on stride
+            eval_list = []
+            for idx in range(len(stride)):
+                eval_list.append(f"@e0({idx}) * i{idx}")
+            evals = "+".join(eval_list)
+            return jt.array(storage[storage_offset:storage_offset+record_size]).reindex(size, [evals], extras=[jt.array(stride)])
+    return jt.array(storage[storage_offset:storage_offset+record_size]).reshape(size)
 
 def jittor_rebuild_var(data, requires_grad, backward_hooks):
     v = jt.array(data)

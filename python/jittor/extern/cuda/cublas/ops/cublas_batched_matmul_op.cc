@@ -104,8 +104,8 @@ void CublasBatchedMatmulOp::jit_run() {
     const T beta  = 0.0f;
     const float alpha_f = 1.0f;
     const float beta_f  = 0.0f;
-    void* alpha_p = (void*)&alpha;
-    void* beta_p = (void*)&beta;
+    void* alpha_p = (void*)&alpha_f;
+    void* beta_p = (void*)&beta_f;
 
     const auto& as = a->shape;
     const auto& bs = b->shape;
@@ -139,9 +139,9 @@ void CublasBatchedMatmulOp::jit_run() {
         computeType = use_tensorcore ? CUBLAS_COMPUTE_16F : CUBLAS_COMPUTE_32F;
         algo = use_tensorcore ? CUBLAS_GEMM_DEFAULT : CUBLAS_GEMM_DEFAULT_TENSOR_OP;
     }
-    if (computeType == CUBLAS_COMPUTE_32F) {
-        alpha_p = (void*)&alpha_f;
-        beta_p = (void*)&beta_f;
+    if (computeType == CUBLAS_COMPUTE_16F) {
+        alpha_p = (void*)&alpha;
+        beta_p = (void*)&beta;
     }
     #else 
     cublasGemmAlgo_t algo = CUBLAS_GEMM_DEFAULT;

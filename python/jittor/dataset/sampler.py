@@ -33,10 +33,10 @@ class SequentialSampler(Sampler):
         self.dataset = dataset
 
     def __iter__(self):
-        return iter(range(self.dataset.__real_len__()))
+        return iter(range(self.dataset.__real_len__() if hasattr(self.dataset,"__real_len__") else self.dataset.__len__()))
 
     def __len__(self):
-        return self.dataset.__real_len__()
+        return self.dataset.__real_len__() if hasattr(self.dataset,"__real_len__") else self.dataset.__len__()
 
 
 class RandomSampler(Sampler):
@@ -50,14 +50,14 @@ class RandomSampler(Sampler):
     @property
     def num_samples(self):
         if self._num_samples is None:
-            return self.dataset.__real_len__()
+            return self.dataset.__real_len__() if hasattr(self.dataset,"__real_len__") else self.dataset.__len__()
         return self._num_samples
 
     def __len__(self):
         return self.num_samples
 
     def __iter__(self):
-        n = self.dataset.__real_len__()
+        n = self.dataset.__real_len__() if hasattr(self.dataset,"__real_len__") else self.dataset.__len__()
         if self.rep:
             return iter(np.random.randint(low=0, high=n, size=(self.num_samples,), dtype=np.int64).tolist())
         return iter(np.random.permutation(n).tolist())
@@ -78,7 +78,8 @@ class SubsetRandomSampler(Sampler):
         dataset.sampler = self
         self.dataset = dataset
         self.indices = indice
-        assert indice[0] >= 0 and indice[1] < dataset.__real_len__() and indice[0] < indice[1]
+        dlen = dataset.__real_len__() if hasattr(dataset,"__real_len__") else dataset.__len__()
+        assert indice[0] >= 0 and indice[1] < dlen and indice[0] < indice[1]
 
     def __iter__(self):
         return (int(i) + self.indices[0] for i in np.random.permutation(self.indices[1] - self.indices[0]))

@@ -632,6 +632,8 @@ DEF_IS(SimpleFunc, T) from_py_object(PyObject* obj) {
             #if PY_VERSION_HEX >= 0x03090000
             PyObjHolder args(to_py_object(result));
             PyObjHolder ret(PyObject_CallOneArg(obj, args.obj));
+            #else
+            LOGf << "Not supported python version";
             #endif
         },
         // deleter

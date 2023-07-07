@@ -159,6 +159,11 @@ def zero_(var):
     '''
     return var.assign(zero(var.shape, var.dtype))
 Var.zero_ = zero_
+
+def random_(var):
+    return var.assign(jt.rand(var.shape, var.dtype))
+Var.random_ = random_ 
+
 def one(shape, dtype="float32"):
     '''Generate Jittor Var filled by one.
 
@@ -304,6 +309,7 @@ def gauss_(var, mean=0.0, std=1.0):
     '''
     return var.assign(gauss(var.shape, var.dtype, mean, std))
 Var.gauss_ = gauss_
+Var.normal_ = gauss_
 
 def invariant_uniform(shape, dtype="float32", mode="fan_in"):
     ''' Return Jittor initialized Var by invariant_uniform.

@@ -1743,7 +1743,7 @@ class Embedding(Module):
         self.num_embeddings = num_embeddings
         self.embedding_dim = embedding_dim
         self.padding_idx = padding_idx
-        self.weight = jt.init.gauss([self.num_embeddings, self.embedding_dim], dtype).stop_grad()
+        self.weight = jt.init.gauss([self.num_embeddings, self.embedding_dim], dtype)
         if padding_idx is not None:
             self.weight[padding_idx] = 0
 
@@ -2186,7 +2186,7 @@ class Sequential(Module):
                 self.append(mod)
     def __getitem__(self, idx):
         if isinstance(idx, slice) or idx not in self.layers:
-            return list(self.layers.values())[idx]
+            return list(self.layers.values())[str(idx)]
 
         return self.layers[idx]
     def __iter__(self):
@@ -2217,14 +2217,23 @@ class Sequential(Module):
     def append(self, mod):
         assert callable(mod), f"Module <{type(mod)}> is not callable"
         assert not isinstance(mod, type), f"Module is not a type"
-        self.layers[len(self.layers)]=mod
+        self.layers[str(len(self.layers))]=mod
     def add_module(self, name, mod):
         assert callable(mod), f"Module <{type(mod)}> is not callable"
         assert not isinstance(mod, type), f"Module is not a type"
-        self.layers[name]=mod
+        self.layers[str(name)]=mod
 
     def __len__(self):
         return len(self.layers)
+    
+    def named_children(self,):
+        return list(self.layers.items())
+    
+
+    def __getattr__(self, key):
+        if key in self.layers:
+            return self.layers[key]
+        return super().__getattr__(key)
 
 
 class ParameterList(Module):
