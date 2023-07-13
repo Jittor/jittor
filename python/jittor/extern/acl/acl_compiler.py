@@ -21,11 +21,34 @@ compiler.has_acl = has_acl
 # export PYTHONPATH=/home/cjld/new_jittor/jittor/python
 # export tikcc_path=g++
 
+# conda activate cann
+# source /usr/local/Ascend/ascend-toolkit/set_env.sh
+# export PYTHONPATH=/home/cjld/new_jittor/jittor/python:/home/cjld/new_jittor/jittor/my/jtorch/python:$PYTHONPATH
+# export TASK_QUEUE_ENABLE=0
+# python3 -m jittor.test.test_acl -k array
+# jittor: conda activate cann && source /usr/local/Ascend/ascend-toolkit/set_env.sh && PYTHONPATH=/home/cjld/new_jittor/jittor/python:/home/cjld/new_jittor/jittor/my/jtorch/python:$PYTHONPATH && cd /home/cjld/new_jittor/jittor/my/mm_benchmark
+# python3 -m jittor.test.test_acl -k test_sum
+# export ASCEND_SLOG_PRINT_TO_STDOUT=0
+# ASCEND_GLOBAL_LOG_LEVEL
+
+# build pytorch-npu
+#  bash ./ci/build.sh 
+#  python3 -m pip install ./dist/torch_npu-1.11.0.post1-cp37-cp37m-linux_x86_64.whl  --force-reinstall
+# pytorch: conda activate cann && source /usr/local/Ascend/ascend-toolkit/set_env.sh && export TASK_QUEUE_ENABLE=0  && cd /home/cjld/new_jittor/jittor/my/mm_benchmark
+# python3 ./mm_bench_pt_npu.py
+
 def install():
     import jittor.compiler as compiler
     global has_acl, cc_flags
     acl_compiler_home = os.path.dirname(__file__)
     cc_files = sorted(glob.glob(acl_compiler_home+"/**/*.cc", recursive=True))
+    cc_files2 = []
+    for name in cc_files:
+        if "acl_op_exec" in name:
+            compiler.extra_core_files.append(name)
+        else:
+            cc_files2.append(name)
+    cc_files = cc_files2
     cc_flags += f" -DHAS_CUDA -DIS_ACL  \
     -I/usr/local/Ascend/ascend-toolkit/latest/x86_64-linux/include/ \
     -L/usr/local/Ascend/ascend-toolkit/latest/x86_64-linux/lib64 \
@@ -39,16 +62,20 @@ def install():
     '''
     jittor_utils.LOG.i("ACL detected")
 
+    global mod
     mod = jittor_utils.compile_module('''
 #include "common.h"
 namespace jittor {
 // @pyjt(process)
 string process_acl(const string& src, const string& name, const map<string,string>& kargs);
+// @pyjt(init_acl_ops)
+void init_acl_ops();
 }''', compiler.cc_flags + " " + " ".join(cc_files) + cc_flags)
     jittor_utils.process_jittor_source("acl", mod.process)
 
     has_acl = 1
     os.environ["use_mkl"] = "0"
+    compiler.setup_fake_cuda_lib = True
 
 
 def install_extern():
@@ -78,3 +105,6 @@ def post_process():
         pool.pool_use_code_op = False
         import jittor as jt
         jt.flags.use_cuda_host_allocator = 1
+        jt.flags.use_parallel_op_compiler = 0
+        jt.flags.amp_reg |= 32 + 4 # 32 keep float16, 4 keep reduce type
+        mod.init_acl_ops()

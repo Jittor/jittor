@@ -84,6 +84,7 @@ void CudnnRnnOp::infer_shape() {
         cy->set_shape(NanoVector(num_layers * num_directions, batch_size, hidden_size));
 
     if (reservation) {
+        #ifdef IS_CUDA
         int in_dims[3] = {batch_size, input_size, 1};
         int in_strides[3] = {in_dims[1] * in_dims[2], in_dims[2], 1};
 
@@ -94,6 +95,7 @@ void CudnnRnnOp::infer_shape() {
             checkCudaErrors(cudnnSetTensorNdDescriptor(xDesc[i], CUDNN_DATA_FLOAT, 3, in_dims, in_strides));
         }
         reservation->set_shape(rnn_desc.reserve_space_size(xDesc.data(), seq_length));
+        #endif
     }
 }
 

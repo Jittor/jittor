@@ -166,6 +166,7 @@ struct NanoString {
         { return __ns_to_string+index()*ns_max_len; }
     inline char* to_cstring()
         { return __ns_to_string+index()*ns_max_len; }
+    operator uint32() const { return data; }
 };
 
 // @pyjt(NanoString.__eq__)

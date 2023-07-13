@@ -4,6 +4,8 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include "common.h"
+#include "op.h"
 #include "acl_jittor.h"
 #include "utils/str_utils.h"
 #include <chrono>
@@ -76,12 +78,29 @@ acl_jittor_initer() {
 string process_acl(const string& src, const string& name, const map<string,string>& kargs) {
     if (endswith(name, "_jittor.cc"))
         return src;
+    // static vector<string> dont_compile = {"fp16_emu.cc"};
+    // for (auto& s : dont_compile)
+    //     if (endswith(name, s))
+    //         return " ";
+    static unordered_set<string> cuda_headers = {
+        "cuda_runtime", "cudnn", "driver_types",
+        "cuda_fp16", "cuda_runtime_api", "fp16_emu",
+        "cudnn_rnn_descriptor", "cublas_v2", "cublas_wrapper",
+        "curand", "curand_wrapper", "cufft", "cufftXt",
+        "CudaUtils", "cutt"
+    };
+    static unordered_set<string> fake_class = {
+        "cudnnHandle_t", "cudnnConvolutionBwdFilterAlgo_t",
+        "cudnnConvolutionBwdDataAlgo_t", "cudnnConvolutionFwdAlgo_t",
+        "cufftHandle"
+    };
     try {
     auto tokens = token_split(src);
     int edit = 0;
     for (int i=0; i<tokens.size(); i++) {
         auto& token = tokens[i];
-        if (token == "cuda_runtime") token = "acl_jittor", edit ++; else
+        if (cuda_headers.count(token)) token = "acl_jittor", edit ++; else
+        if (fake_class.count(token)) token = "int", edit ++; else
         if (token == "CUDA") token = "ACL", edit ++; else
         if (startswith(token, "cuda")) {
             if (token.size()>=5 && token[4] >= 'A' && token[4] <= 'Z') {
@@ -162,19 +181,14 @@ string process_acl(const string& src, const string& name, const map<string,strin
     }
     if (!edit) return src;
     string new_src = join(tokens, "");
-    if (name == "executor.cc") {
-        new_src = "#include <Python.h>\n#include <pystate.h>\n"+
-        replace(new_src, "op->do_run_after_prepare(jkl);", 
-        R"({
-            if (!PyGILState_Check()) {
-                op->do_run_after_prepare(jkl);
-            } else {
-                Py_BEGIN_ALLOW_THREADS
-                op->do_run_after_prepare(jkl);
-                Py_END_ALLOW_THREADS
-            }
-        })");
-    }
+    // if (name == "executor.cc") {
+    //     new_src = string("#include <Python.h>\n#include <pystate.h>\n#include <common.h>\n")+
+    //     "namespace jittor { void acl_op_exec(Op*); }\n" + 
+    //     replace(new_src, "op->do_run_after_prepare(jkl);", 
+    //     R"({
+    //         acl_op_exec(op);
+    //     })");
+    // }
     if (name == "profiler.cc") {
         new_src = token_replace_all(new_src, ".cc", ".tikcc");
     }

@@ -2211,3 +2211,9 @@ def index_select(input,dim,indices):
     return input[(None,)*dim+(indices,)]
 
 jt.Var.index_select = index_select
+
+def cuda(x):
+    jt.flags.use_cuda = 1
+    return x
+jt.Var.cuda = cuda
+jt.Var.npu = cuda
