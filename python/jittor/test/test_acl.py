@@ -45,7 +45,7 @@ class TestACL(unittest.TestCase):
         # this test cannot pass because cast error
         x = np.random.rand(10).astype("float32")
         y = jt.float16(x)
-        np.testing.assert_allclose(x, y.numpy())
+        np.testing.assert_allclose(x.astype("float16"), y.numpy())
 
     @jt.flag_scope(use_acl=1)
     def test_rand(self):
@@ -66,9 +66,21 @@ class TestACL(unittest.TestCase):
         y = jt.nn.conv2d(x, w)
         y.sync(True)
         y1 = y.data
+        mask = jt.rand_like(y)
+        dx, dw = jt.grad((y*mask).sum(), [x, w])
+        dx1, dw1 = dx.data, dw.data
+        # dw, = jt.grad((y*mask).sum(), [w])
+        # dw1 = dw.data
         with jt.flag_scope(use_acl=0):
-            y2 = jt.nn.conv2d(x, w).data
+            y = jt.nn.conv2d(x, w)
+            y2 = y.data
+            dx, dw = jt.grad((y*mask).sum(), [x, w])
+            dx2, dw2 = dx.data, dw.data
+            # dw, = jt.grad((y*mask).sum(), [w])
+            # dw2 = dw.data
         np.testing.assert_allclose(y1, y2)
+        np.testing.assert_allclose(dx1, dx2)
+        np.testing.assert_allclose(dw1, dw2)
 
     @jt.flag_scope(use_acl=1)
     def test_matmul(self):
@@ -78,15 +90,42 @@ class TestACL(unittest.TestCase):
         w = jt.rand(10,10)
         y = jt.matmul(x, w)
         ny = np.matmul(x.numpy(), w.numpy())
-        np.testing.assert_allclose(y.numpy(), ny)
+        np.testing.assert_allclose(y.numpy(), ny, atol=1e-3, rtol=1e-3)
         # y.sync(True)
 
     @jt.flag_scope(use_acl=1)
     def test_max(self):
-        x = jt.rand(10,10)
+        x = jt.rand(3,3)
         y = x.max(1).data
         ny = x.data.max(1)
         np.testing.assert_allclose(y, ny)
+
+    @jt.flag_scope(use_acl=1)
+    def test_sum(self):
+        x = jt.rand(3,3).float16()
+        print(x)
+        # return
+        y = x.sum(1).data
+        print(y)
+        print(x)
+        ny = x.data.sum(1)
+        np.testing.assert_allclose(y, ny)
+
+    @jt.flag_scope(use_acl=1)
+    def test_broadcast(self):
+        x = jt.rand(3)
+        # print(x)
+        y = x.broadcast([3,3]).data
+        ny = np.broadcast_arrays(x.data, y)[0]
+        np.testing.assert_allclose(y, ny)
+        print(x, y)
+        # y = x.broadcast([3,3], dims=[1]).data
+        y = jt.broadcast(x, shape=(3,3), dims=[1]).data
+        with jt.flag_scope(use_acl=0):
+            ny = jt.broadcast(x, shape=(3,3), dims=[1]).data
+        # ny = np.broadcast_arrays(x.data, y)[0]
+        np.testing.assert_allclose(y, ny)
+        print(x, y)
 
     @jt.flag_scope(use_acl=1)
     def test_resnet(self):

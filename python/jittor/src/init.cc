@@ -26,6 +26,7 @@ unique_ptr<std::default_random_engine> eng;
 
 vector<set_seed_callback> callbacks;
 int current_seed;
+int64 current_offset;
 
 // fron fetch_op.cc
 EXTERN_LIB list<VarPtr> fetcher;
@@ -76,6 +77,7 @@ void init() {
 
 void set_seed(int seed) {
     current_seed = seed;
+    current_offset = 0;
     eng.reset(new std::default_random_engine(seed));
     for (auto cb : callbacks)
         cb(seed);

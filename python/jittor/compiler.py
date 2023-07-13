@@ -1238,6 +1238,8 @@ if has_cuda:
         return nvcc_flags
     nvcc_flags = convert_nvcc_flags(nvcc_flags)
 
+extra_core_files = []
+setup_fake_cuda_lib = False
 # from .acl_compiler import check_acl
 from .extern.acl import acl_compiler
 jit_utils.add_backend(acl_compiler)
@@ -1302,6 +1304,7 @@ for v in at_last:
 registers = [ name for name in files4 if "register" in name ]
 for name in registers: files4.remove(name)
 files = registers + files2 + files4
+files += extra_core_files
 for file in jit_utils_core_files:
     files.remove(file)
 LOG.vv("compile order:", files)

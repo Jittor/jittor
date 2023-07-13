@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.8.6'
+__version__ = '1.3.8.7'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -1358,6 +1358,10 @@ class Module:
         self.load_state_dict(state)
 
     def cuda(self, device=None):
+        flags.use_cuda = 1
+        return self
+
+    def npu(self, device=None):
         flags.use_cuda = 1
         return self
 

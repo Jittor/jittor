@@ -316,6 +316,44 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
     globals()[lib_name] = culib
     LOG.vv(f"Get {lib_name}_ops: "+str(dir(culib_ops)))
 
+
+def _setup_fake_cuda_lib(lib_name=None, link=True, extra_flags=""):
+    if lib_name is None:
+        lib_names = ["cudnn", "cublas", "curand", "cufft", "cub", "cutt"]
+        for lib_name in lib_names:
+            _setup_fake_cuda_lib(lib_name, link, extra_flags)
+        return
+    arch_key = "x86_64"
+    if platform.machine() not in ["x86_64", "AMD64"]:
+        arch_key = "aarch64"
+    globals()[lib_name+"_ops"] = None
+    globals()[lib_name] = None
+    LOG.v(f"setup {lib_name}...")
+
+    jt_cuda_include = os.path.join(jittor_path, "extern", "cuda", "inc")
+    jt_culib_include = os.path.join(jittor_path, "extern", "cuda", lib_name, "inc")
+
+    # find all source files
+    culib_src_dir = os.path.join(jittor_path, "extern", "cuda", lib_name, "ops")
+    culib_src_files = []
+    for r, _, f in os.walk(culib_src_dir):
+        for fname in f:
+            if fname.endswith("op.cc") or fname.endswith("op.h"):
+                culib_src_files.append(os.path.join(r, fname))
+    if len(culib_src_files) == 0:
+        return
+
+    # compile and get operators
+    culib = compile_custom_ops(culib_src_files, return_module=True,
+        extra_flags=f" -I\"{jt_cuda_include}\" -I\"{jt_culib_include}\" {extra_flags} ")
+    culib_ops = culib.ops
+    globals()[lib_name+"_ops"] = culib_ops
+    globals()[lib_name] = culib
+    LOG.vv(f"Get {lib_name}_ops: "+str(dir(culib_ops)))
+
+if setup_fake_cuda_lib:
+    _setup_fake_cuda_lib()
+
 def install_cutt(root_folder):
     # Modified from: https://github.com/ap-hynninen/cutt
     url = "https://codeload.github.com/Jittor/cutt/zip/v1.2"
