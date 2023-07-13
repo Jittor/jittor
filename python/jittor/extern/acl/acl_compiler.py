@@ -30,6 +30,8 @@ compiler.has_acl = has_acl
 # python3 -m jittor.test.test_acl -k test_sum
 # export ASCEND_SLOG_PRINT_TO_STDOUT=0
 # ASCEND_GLOBAL_LOG_LEVEL
+# export DUMP_GE_GRAPH=1
+# export DUMP_GRAPH_LEVEL=1
 
 # build pytorch-npu
 #  bash ./ci/build.sh 

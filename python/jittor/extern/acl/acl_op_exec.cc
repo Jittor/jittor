@@ -159,6 +159,9 @@ struct AclOpRunner {
     void set_attr(const string& key, string value) {
         CHECK(aclopSetAttrString(attr, key.c_str(), value.c_str())==0);
     }
+    void set_attr(const char* key, const char* value) {
+        CHECK(aclopSetAttrString(attr, key, value)==0);
+    }
 
     void run() {
         LOGv << "run" << name << input_desc.size() << output_desc.size();
@@ -448,24 +451,28 @@ static unordered_map<string, std::function<void(Op*)>> acl_ops = {
     auto _op = (ConvOp*)op;
     _op->run_acl();
 }},
-{"cudnn_conv_backward_x[FIXME]", [&](Op* op) {
+{"cudnn_conv_backward_x", [&](Op* op) {
     struct ConvBackwardXOp : Op {
     Var* w, * dy, * dx;
     int xh, xw, strideh, stridew, paddingh, paddingw, dilationh, dilationw, groups;
     string xformat, wformat, yformat;
         void run_acl() {
             AclOpRunner runner("Conv2DBackpropInput");
-            runner.add_input_host_nv32(dx->shape);
-            runner.add(w, true, ACL_FORMAT_NCHW);
-            runner.add(dy, true, ACL_FORMAT_NCHW);
-            runner.add(dx, false, ACL_FORMAT_NCHW);
+            runner.add_input_host_nv32(dx->shape); // 10,3,50,50
+            // runner.add_input_host_nv32(dy->shape); // 10,3,50,50
+            runner.add(w, true, ACL_FORMAT_NCHW); // 4,3,3,3
+            aclSetTensorDescName(runner.input_desc.back(), "filter");
+            runner.add(dy, true, ACL_FORMAT_NCHW); // 10,4,48,48
+            aclSetTensorDescName(runner.input_desc.back(), "out_backprop");
+            runner.add(dx, false, ACL_FORMAT_NCHW); // 10,3,50,50
+            aclSetTensorDescName(runner.input_desc.back(), "y");
             runner.set_attr("strides", vector<int64_t>{1,1,strideh,stridew});
             runner.set_attr("pads", vector<int64_t>{paddingh,paddingh,paddingw,paddingw});
             runner.set_attr("dilations", vector<int64_t>{1,1,dilationh,dilationw});
             runner.set_attr("groups", groups);
             runner.set_attr("data_format", "NCHW");
-            runner.set_attr("dataFormat", "NCHW");
-            runner.set_attr("data_format", "NCHW");
+            // runner.set_attr("dataFormat", "NCHW");
+            // runner.set_attr("data_format", "NCHW");
             ASSERT(xformat=="abcd" && yformat=="abcd" && wformat=="oihw");
             runner.run();
         }
@@ -473,7 +480,7 @@ static unordered_map<string, std::function<void(Op*)>> acl_ops = {
     auto _op = (ConvBackwardXOp*)op;
     _op->run_acl();
 }},
-{"cudnn_conv_backward_w[FIXME]", [&](Op* op) {
+{"cudnn_conv_backward_w", [&](Op* op) {
     struct ConvBackwardWOp : Op {
     Var* x, * dy, * dw;
     int kh, kw, strideh, stridew, paddingh, paddingw, dilationh, dilationw, groups;
@@ -488,9 +495,10 @@ static unordered_map<string, std::function<void(Op*)>> acl_ops = {
             runner.set_attr("pads", vector<int64_t>{paddingh,paddingh,paddingw,paddingw});
             runner.set_attr("dilations", vector<int64_t>{1,1,dilationh,dilationw});
             runner.set_attr("groups", groups);
-            runner.set_attr("dataFormat", "NCHW");
             runner.set_attr("data_format", "NCHW");
-            runner.set_attr("data_origin_format", "NCHW");
+            // runner.set_attr("dataFormat", "NCHW");
+            // runner.set_attr("data_format", "NCHW");
+            // runner.set_attr("data_origin_format", "NCHW");
             ASSERT(xformat=="abcd" && yformat=="abcd" && wformat=="oihw");
             runner.run();
         }
