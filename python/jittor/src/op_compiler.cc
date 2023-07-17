@@ -1096,7 +1096,7 @@ jit_op_entry_t do_compile_inner(Op* op) {
 jit_op_entry_t OpCompiler::do_compile(Op* op) {
     jittor::lock_guard lg;
     if (do_compile_hook) return do_compile_hook(op);
-    return OpCompiler::do_compile(op);
+    return do_compile_inner(op);
 }
 
 }
