@@ -482,8 +482,9 @@ def install_nccl(root_folder):
     return dirname
 
 def setup_nccl():
-    global nccl_ops, use_nccl
+    global nccl, nccl_ops, use_nccl
     use_nccl = os.environ.get("use_nccl", "1")=="1"
+    nccl = None
     nccl_ops = None
     if not has_cuda or not has_mpi:
         use_nccl = False
@@ -522,8 +523,11 @@ def setup_nccl():
         for fname in f:
             nccl_src_files.append(os.path.join(r, fname))
 
-    nccl_ops = compile_custom_ops(nccl_src_files, 
-        extra_flags=f" -I\"{nccl_include_path}\" {mpi_compile_flags} ")
+    nccl = compile_custom_ops(nccl_src_files, 
+        extra_flags=f" -I\"{nccl_include_path}\" {mpi_compile_flags} ",
+        return_module=True, dlopen_flags=os.RTLD_GLOBAL | os.RTLD_NOW,
+        gen_name_="jittor_nccl_core")
+    nccl_ops = nccl.ops
     LOG.vv("Get nccl_ops: "+str(dir(nccl_ops)))
 
 def manual_link(flags):

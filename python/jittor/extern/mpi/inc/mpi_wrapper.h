@@ -11,6 +11,7 @@
 #define OMPI_SKIP_MPICXX
 #include <common.h>
 #include <mpi.h>
+#include "var_holder.h"
 
 extern void throw_mpi_error(int result, 
     char const *const func, const char *const file, int const line);
@@ -75,5 +76,14 @@ This operation has no gradient, and the input parameter type is numpy array.
 */
 // @pyjt(broadcast)
 void _mpi_broadcast(ArrayArgs&& args, int root);
+
+// @pyjt(var_broadcast)
+void var_broadcast(VarHolder* x, int root=0);
+
+// @pyjt(var_reduce)
+void var_reduce(VarHolder* x, int root=0);
+
+// @pyjt(var_all_reduce)
+void var_all_reduce(VarHolder* x);
 
 } // jittor

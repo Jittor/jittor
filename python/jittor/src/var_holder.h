@@ -422,4 +422,9 @@ VarHolder* ternary_out_hint(VarHolder* cond, VarHolder* x, VarHolder* y);
 // @pyjt(migrate_all_to_cpu)
 void migrate_all_to_cpu();
 
+// @pyjt(wrap_var_addr)
+inline VarHolder* wrap_var_addr(int64 addr) {
+    return new VarHolder((Var*)addr);
+}
+
 } // jittor
