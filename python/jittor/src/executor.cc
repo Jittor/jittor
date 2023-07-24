@@ -641,7 +641,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
         }
         #ifdef JT_CHECK_NAN
         for (Var* var : op->outputs())
-            check_nan(var);
+            check_nan(var, op);
         #endif
         #ifdef JT_SYNC
         #ifdef HAS_CUDA

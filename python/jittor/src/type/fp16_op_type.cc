@@ -67,6 +67,7 @@ struct FP16OpType : OpByType {
             {"mod", "$1(($2)-::hfloor(($2)/($4))*($4))"},
             {"init_maximum", "-32768.0f"},
             {"init_minimum", "32768.0f"},
+            {"equal", "(($2)==($4))"},
         };
 
         static unordered_map<string,string> cpu_map = {
@@ -105,6 +106,7 @@ struct FP16OpType : OpByType {
             {"mod", "$1(($2)-std::floor(($2)/($4))*($4))"},
             {"init_maximum", "-32768.0f"},
             {"init_minimum", "32768.0f"},
+            {"equal", "(float($2)==float($4))"},
         };
 
         static unordered_map<string,string> both_map {
@@ -117,7 +119,6 @@ struct FP16OpType : OpByType {
             {"less_equal", "(($2)<=($4))"},
             {"greater", "(($2)>($4))"},
             {"greater_equal", "(($2)>=($4))"},
-            {"equal", "(($2)==($4))"},
             {"not_equal", "(($2)!=($4))"},
             {"left_shift", "(($2)<<($4))"},
             {"right_shift", "(($2)>>($4))"},

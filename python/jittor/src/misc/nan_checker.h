@@ -4,10 +4,11 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
+#include "op.h"
 #include "var.h"
 
 namespace jittor {
 
-bool check_nan(Var* v);
+bool check_nan(Var* v, Op* op);
 
 }
