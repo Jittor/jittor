@@ -319,7 +319,7 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
 
 def _setup_fake_cuda_lib(lib_name=None, link=True, extra_flags=""):
     if lib_name is None:
-        lib_names = ["cudnn", "cublas", "curand", "cufft", "cub", "cutt"]
+        lib_names = ["cudnn", "cublas", "curand", "cufft", "cub", "cutt", "cutlass"]
         for lib_name in lib_names:
             _setup_fake_cuda_lib(lib_name, link, extra_flags)
         return
@@ -442,6 +442,76 @@ def setup_cutt():
     cutt_ops = compile_custom_ops(cutt_op_files, 
         extra_flags=f" -I\"{cutt_include_path}\" -L\"{cutt_lib_path}\" -llibcutt ")
     LOG.vv("Get cutt_ops: "+str(dir(cutt_ops)))
+
+def install_cutlass(root_folder):
+    # Modified from: https://github.com/ap-hynninen/cutlass
+    url = "https://cloud.tsinghua.edu.cn/f/171e49e5825549548bc4/?dl=1"
+
+    filename = "cutlass.zip"
+    fullname = os.path.join(root_folder, filename)
+    dirname = os.path.join(root_folder, filename.replace(".zip",""))
+    true_md5 = "999ecb7e217e40c497bc3d0ded6643f0"
+
+    if os.path.exists(fullname):
+        from jittor_utils.misc import calculate_md5
+        md5 = calculate_md5(fullname)
+        print(md5)
+        if md5 != true_md5:
+            os.remove(fullname)
+            shutil.rmtree(dirname)
+    CUTLASS_PATH = os.environ.get("CUTLASS_PATH", "")
+    if not os.path.isfile(os.path.join(jit_utils.home(), ".cache/jittor/cutlass/cutlass/include/cutlass/cutlass.h")) or CUTLASS_PATH:
+        if CUTLASS_PATH:
+            dirname = CUTLASS_PATH
+        else:
+            LOG.i("Downloading cutlass...")
+            download_url_to_local(url, filename, root_folder, true_md5)
+
+            import zipfile
+
+            zf = zipfile.ZipFile(fullname)
+            try:
+                zf.extractall(path=root_folder)
+            except RuntimeError as e:
+                print(e)
+                raise
+            zf.close()
+
+        # LOG.i("installing cutlass...")
+        # # -Xptxas -dlcm=ca actually not work
+        # arch_flag = " -Xptxas -dlcm=ca "
+        # if len(flags.cuda_archs):
+        #     arch_flag = f" -arch=compute_{min(flags.cuda_archs)} "
+        #     arch_flag += ''.join(map(lambda x:f' -code=sm_{x} ', flags.cuda_archs))
+        # cutlass_include = f" -I\"{dirname}/include\" -I\"{dirname}/src\" "
+        # files = glob.glob(dirname+"/src/*.c*", recursive=True)
+        # files2 = []
+        # for f in files:
+        #     if f.endswith("cutlass_bench.cpp") or \
+        #         f.endswith("cutlass_test.cpp"):
+        #         continue
+        #     files2.append(f)
+        # cutlass_flags = cc_flags+opt_flags+cutlass_include
+        # compile(cc_path, cutlass_flags, files2, cache_path+"/libcutlass"+so, cuda_flags=arch_flag)
+    return dirname
+
+def setup_cutlass():
+    global cutlass_ops, use_cutlass
+    if not has_cuda:
+        use_cutlass = False
+        return
+    use_cutlass = os.environ.get("use_cutlass", "1")=="1"
+    cutlass_ops = None
+    if not use_cutlass: return
+    cutlass_include_path = os.environ.get("cutlass_include_path")
+    
+    if cutlass_include_path is None:
+        LOG.v("setup cutlass...")
+        # cutlass_path decouple with cc_path
+        cutlass_path = os.path.join(jit_utils.home(), ".cache", "jittor", "cutlass")
+        
+        make_cache_dir(cutlass_path)
+        install_cutlass(cutlass_path)
 
 
 def install_nccl(root_folder):
@@ -629,6 +699,7 @@ world_size = mpi.world_size() if in_mpi else 1
 setup_nccl()
 
 setup_cutt()
+setup_cutlass()
 
 # try:
 setup_mkl()
