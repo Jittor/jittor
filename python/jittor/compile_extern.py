@@ -455,7 +455,6 @@ def install_cutlass(root_folder):
     if os.path.exists(fullname):
         from jittor_utils.misc import calculate_md5
         md5 = calculate_md5(fullname)
-        print(md5)
         if md5 != true_md5:
             os.remove(fullname)
             shutil.rmtree(dirname)
