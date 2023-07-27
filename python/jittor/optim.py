@@ -107,7 +107,7 @@ class Optimizer(object):
                 return x.stop_grad()
             return x
             
-        exclude = set(("param_groups",))
+        exclude = set(("param_groups", "params"))
         for k, v in state["defaults"].items():
             if k not in exclude:
                 setattr(self, k, dfs(v))
