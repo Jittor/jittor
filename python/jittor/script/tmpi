@@ -60,7 +60,7 @@ if [[ ${1} == runmpi ]] ; then
     done
 
     # get all the variables that mpirun starts us with so that we can pass them through.
-    mpi_vars=( $( env | grep -e MPI -e OPAL -e PMIX -e PYTHON -e debug | cut -d '=' -f1 ) )
+    mpi_vars=( $( env | grep -e MPI -e OPAL -e PMIX -e PYTHON -e debug -e PATH | cut -d '=' -f1 ) )
     mpi_vars+=( "${additional_vars[@]}" )
 
     # add the variables to tmux' session environment.
@@ -112,6 +112,6 @@ else
     echo 0 > /tmp/tmpi.lock
 
     # re-execute ourself to spawn of the processes.
-    echo mpirun -np ${processes} ${self} runmpi "${@}"
-    mpirun -np ${processes} ${self} runmpi "${@}"
+    echo mpirun ${HOSTS_ARGS} ${MPI_ARGS} -np ${processes} ${self} runmpi "${@}"
+    mpirun ${HOSTS_ARGS} ${MPI_ARGS} -np ${processes} ${self} runmpi "${@}"
 fi
