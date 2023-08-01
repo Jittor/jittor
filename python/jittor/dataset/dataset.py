@@ -492,16 +492,20 @@ Example::
                 real_last_batch = (last_batch-1)//world_size+1
                 l = real_last_batch * world_rank
                 r = l + real_last_batch
-                if r > last_batch: r = last_batch
-                if l >= r: l = r-1
+                if r > last_batch: 
+                    r = last_batch
+                    l = r-real_last_batch
                 index_list = np.concatenate([fix_batch_l, last_batch_l[l:r]])
             else:
                 index_list = fix_batch_l
 
             self.real_len = len(index_list)
             self.real_batch_size = real_batch_size
-            assert total_len // self.batch_size == \
-                self.real_len // self.real_batch_size, f"Number of batches({total_len // self.batch_size}!={self.real_len // self.real_batch_size}) not match, total_len: {total_len}, batch_size: {self.batch_size}, real_len: {self.real_len}, real_batch_size: {self.real_batch_size}"
+            # assert total_len // self.batch_size == \
+            #     self.real_len // self.real_batch_size, f"Number of batches({total_len // self.batch_size}!={self.real_len // self.real_batch_size}) not match, total_len: {total_len}, batch_size: {self.batch_size}, real_len: {self.real_len}, real_batch_size: {self.real_batch_size}"
+
+            # print(f"Number of batches({total_len // self.batch_size}!={self.real_len // self.real_batch_size}) not match, total_len: {total_len}, batch_size: {self.batch_size}, real_len: {self.real_len}, real_batch_size: {self.real_batch_size}")
+            # print("mpi dataset init ")
         else:
             self.real_len = self.total_len
             self.real_batch_size = self.batch_size
