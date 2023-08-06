@@ -175,6 +175,7 @@ void var_broadcast(VarHolder* x, int root) {
 }
 
 void var_reduce(VarHolder* x, int root) {
+    if (!inside_mpi) return;
     Var* v = x->var;
     ASSERT(v->mem_ptr && !v->allocator->is_cuda());
     MPI_Datatype dtype;
@@ -208,6 +209,7 @@ void var_reduce(VarHolder* x, int root) {
 }
 
 void var_all_reduce(VarHolder* x) {
+    if (!inside_mpi) return;
     Var* v = x->var;
     ASSERT(v->mem_ptr && !v->allocator->is_cuda());
     MPI_Datatype dtype;
@@ -236,5 +238,9 @@ void var_all_reduce(VarHolder* x) {
     }
 }
 
+void mpi_barrier() {
+    if (!inside_mpi) return;
+    MPI_CHECK(MPI_Barrier(MPI_COMM_WORLD));
+}
 
 } // jittor

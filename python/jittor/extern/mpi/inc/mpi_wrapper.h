@@ -86,4 +86,7 @@ void var_reduce(VarHolder* x, int root=0);
 // @pyjt(var_all_reduce)
 void var_all_reduce(VarHolder* x);
 
+// @pyjt(mpi_barrier)
+void mpi_barrier();
+
 } // jittor
