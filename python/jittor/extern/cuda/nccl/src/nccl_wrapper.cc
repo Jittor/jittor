@@ -54,6 +54,7 @@ nccl_initer() {
 ~nccl_initer() {
     if (!get_device_count()) return;
     if (!inside_mpi) return;
+    if (!use_device_mpi) return;
     checkCudaErrors(ncclCommDestroy(comm));
 }
 
