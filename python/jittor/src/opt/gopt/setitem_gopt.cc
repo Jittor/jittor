@@ -96,13 +96,13 @@ static void setitem_inplace(SetitemOp* op) {
     
     int64 size = 0;
     if (s.is_int())
-        size = in_shape[0] == 0 ? 0 : s.i * input->size / in_shape[0];
+        size = in_shape[0] == 0 ? 0 : s.i * (input->size / in_shape[0]);
     else if (s.is_slice()) {
         Slice ss = s.slice;
         // we also need to check the first dim is continuous
         if (ss.step != 1)
             return;
-        size = in_shape[0] == 0 ? 0 : ss.start * input->size / in_shape[0];
+        size = in_shape[0] == 0 ? 0 : ss.start * (input->size / in_shape[0]);
         inplace_size *= ss.stop - ss.start;
     }
     if (inplace_size > data->num) {
@@ -144,11 +144,12 @@ static void getitem_inplace(GetitemOp* op) {
     
     int64 size = 0;
     if (s.is_int())
-        size = in_shape[0] == 0 ? 0 : s.i * in->size / in_shape[0];
+        size = in_shape[0] == 0 ? 0 : s.i * (in->size / in_shape[0]);
     else if (s.is_slice()) {
-        size = in_shape[0] == 0 ? 0 : s.slice.start * in->size / in_shape[0];
+        size = in_shape[0] == 0 ? 0 : s.slice.start * (in->size / in_shape[0]);
         if (s.slice.step != 1) return;
     }
+    ASSERT(size>=0 && size<=in->size);
     ou->share_with(in, size);
     op->ns.set(GetitemOp::_inplace);
     // LOGir << "pass getitem_inplace";
