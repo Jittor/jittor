@@ -971,6 +971,12 @@ vector<VarHolder*> exec_sgraph(SGraphPtr* sgraph, const vector<VarHolder*>& inpu
                     v->allocation = kv.second;
                 }
             }
+        for (Var* v : op->outputs()) {
+            if (!get_flags(v, is_new_var) && !get_flags(v, is_output)) {
+                // this output is not used in this graph, so we free it directly
+                free_var_mem(v);
+            }
+        }
         } catch (const std::exception& e) {
             // log memory info
             display_memory_info(__FILELINE__, false, true);
