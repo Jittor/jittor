@@ -811,6 +811,8 @@ class GroupNorm(Module):
         C = self.num_channels
         output_shape = (N,-1)
 	    # TODO: 3d group norm
+	if x.ndim==3:  
+            output_shape = [x.shape[0],x.shape[1],-1]
         if x.ndim==4:
             output_shape = x.shape
         assert C % self.num_groups == 0
