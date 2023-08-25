@@ -359,6 +359,21 @@ class TestOther(unittest.TestCase):
             else:
                 return loss.reshape(target_shape) 
 
+        with jt.flag_scope(use_cuda = 1):
+            for shape in [(3,3), (1200, 2000), (1200, 2048), (1200, 2049), (16380, 65000)]:
+                print(shape)
+                x = jt.rand(shape)
+                target = jt.randint(0, x.shape[1], (x.shape[0],))
+                b = naive_cross_entropy_loss(x, target)
+                bb = jt.nn.cross_entropy_loss(x, target)
+
+                np.testing.assert_allclose(bb.data, b.data, rtol=1e-3, atol=1e-5)
+
+                d1 = jt.grad(b, x)
+                d2 = jt.grad(bb, x)
+
+                np.testing.assert_allclose(d1.data, d2.data, rtol=1e-3, atol=1e-3)
+
     def test_nan(self):
         a = np.array([1.0,0.0,1.0,-1.0], "float32") / np.array([1.0,0.0,0.0,0.0], "float32")
         np.testing.assert_allclose(jt.isnan(jt.array(a)).data, [0,1,0,0])
