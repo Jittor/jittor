@@ -49,6 +49,38 @@ void get_pyjt_array(PyObject* obj, vector<int64>& shape, string& dtype, void*& d
     data = vh->var->mem_ptr;
 }
 
+VarHolder* reuse_np_array(PyObject* obj) {
+    CHECK(Py_TYPE(obj) == PyArray_Type);
+    auto arr = (PyArray_Proxy*)obj;
+    NanoVector shape;
+    NanoString dtype;
+    if (arr->nd)
+        shape = NanoVector::make(arr->dimensions, arr->nd);
+    else
+        shape.push_back(1);
+    dtype = get_type_str(arr);
+    CHECK(is_c_style(arr));
+
+    VarPtr vp(shape, dtype);
+    vp->finish_pending_liveness();
+    vp->mem_ptr = arr->data;
+
+    Allocation allocation;
+    make_foreign_allocation(allocation, 
+        vp->mem_ptr, vp->size, 
+        [obj]() { 
+            Py_DECREF(obj); 
+        });
+    Py_INCREF(obj);
+    vp->allocator = allocation.allocator;
+    vp->allocation = allocation.allocation;
+    allocation.ptr = nullptr;
+    allocation.allocator = nullptr;
+    allocation.allocation = 0;
+
+    return new VarHolder(std::move(vp));
+}
+
 ArrayOp::ArrayOp(PyObject* obj) {
     ArrayArgs args;
     PyObjHolder holder;
