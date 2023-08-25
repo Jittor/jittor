@@ -389,12 +389,18 @@ def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction=
             target_weight
         )
     
-    target = target.broadcast(output, [1])
-    target = target.index(1) == target
+    import jittor.other.code_cross_entropy as code_cross_entropy
+    if code_cross_entropy.can_cross_entropy(output, -1):
+        cross_entropy = code_cross_entropy.cross_entropy(output, target)
+    else:
+        target = target.broadcast(output, [1])
+        target = target.index(1) == target
+        
+        output = output - output.max([1], keepdims=True)
+        logsum = output.exp().sum(1).log()
+        cross_entropy = (logsum - (output*target).sum(1))
     
-    output = output - output.max([1], keepdims=True)
-    logsum = output.exp().sum(1).log()
-    loss = (logsum - (output*target).sum(1)) * target_weight
+    loss = cross_entropy * target_weight
     if reduction == 'sum':
         return loss.sum()
     elif reduction == 'mean':
