@@ -28,6 +28,8 @@ namespace jittor {
 DEFINE_FLAG(int, auto_convert_64_to_32, 1, "auto convert 64bit numpy array into 32bit jittor array");
 DEFINE_FLAG(uint8, reuse_array, 0, "try reuse np.array memory into jt.array");
 DECLARE_FLAG(int, use_cuda);
+DECLARE_FLAG(int, use_cuda_host_allocator);
+
 
 static auto make_array = get_op_info("array")
     .get_constructor<VarPtr, const void*, NanoVector, NanoString>();
@@ -157,7 +159,7 @@ ArrayOp::ArrayOp(PyObject* obj) {
     }
     void* host_ptr = nullptr;
     #ifdef HAS_CUDA
-    if (use_cuda && !save_mem) {
+    if (use_cuda && !save_mem && !use_cuda_host_allocator) {
         flags.set(NodeFlags::_cpu, 0);
         flags.set(NodeFlags::_cuda, 1);
         if (!output->flags.get(NodeFlags::_force_fuse)) {
