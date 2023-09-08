@@ -291,7 +291,7 @@ class TestOther(unittest.TestCase):
                 x = (x - x.max()).exp()
                 ret = x / x.sum()
             else:
-                x = (x-x.max(dim, keepdims=True)).exp()
+                x = (x-x.max(dim, keepdims=True)[0]).exp()
                 ret = x / x.sum(dim, keepdims=True)
             if log: return ret.log()
             return ret
@@ -358,21 +358,25 @@ class TestOther(unittest.TestCase):
                 return loss.mean() / target_weight.mean()
             else:
                 return loss.reshape(target_shape) 
+            
+
+        jt.set_global_seed(42)
 
         with jt.flag_scope(use_cuda = 1):
-            for shape in [(3,3), (1200, 2000), (1200, 2048), (1200, 2049), (16380, 65000)]:
-                print(shape)
-                x = jt.rand(shape)
-                target = jt.randint(0, x.shape[1], (x.shape[0],))
-                b = naive_cross_entropy_loss(x, target)
-                bb = jt.nn.cross_entropy_loss(x, target)
+            for dtype in ["float16", "float32"]:
+                for shape in [(3, 3), (200, 2000), (200, 2049), (16380, 65000)]:
+                    print(shape)
+                    x = jt.rand(shape, dtype=dtype)
+                    target = jt.randint(0, x.shape[1], (x.shape[0],))
+                    b = naive_cross_entropy_loss(x, target)
+                    d1 = jt.grad(b, x)
+                    bb = jt.nn.cross_entropy_loss(x, target)
+                    d2 = jt.grad(bb, x)
+                    jt.sync_all(True)
 
-                np.testing.assert_allclose(bb.data, b.data, rtol=1e-3, atol=1e-5)
-
-                d1 = jt.grad(b, x)
-                d2 = jt.grad(bb, x)
-
-                np.testing.assert_allclose(d1.data, d2.data, rtol=1e-3, atol=1e-3)
+                    np.testing.assert_allclose(bb.data, b.data, rtol=1e-3, atol=1e-5)
+                    np.testing.assert_allclose(d1.data, d2.data, rtol=1e-3, atol=1e-3)
+            
 
     def test_nan(self):
         a = np.array([1.0,0.0,1.0,-1.0], "float32") / np.array([1.0,0.0,0.0,0.0], "float32")

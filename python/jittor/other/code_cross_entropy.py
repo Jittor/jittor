@@ -73,7 +73,7 @@ __global__ void kernel(in0_type* x, in1_type* target, out0_type* y, int len) {{
 
     auto vsum = BlockReduce(temp_storage).Sum(v1);
     if (threadIdx.x == 0)
-        y[blockIdx.x] = -float(x[id+target[blockIdx.x]] - vmax) + @expand_op(log,@in0_type,vsum);
+        y[blockIdx.x] = -float(x[id+target[blockIdx.x]]) + vmax + float(@expand_op(log,@in0_type,vsum));
 }}
 int len = in0->shape[in0->shape.size()-1];
 int bnum = in0->numel() / len;
@@ -92,7 +92,6 @@ getLastCudaError("Failed to run CodeCrossEntropy forward");
 ''', cuda_src=f'''
 __global__ void kernel(in0_type* x, in1_type* target, in2_type* grad, out0_type* y, int len) {{
     typedef cub::BlockReduce<float, {tnum}> BlockReduce;
-    constexpr int need_log = false;
     __shared__ typename BlockReduce::TempStorage temp_storage;
 
     int id = blockIdx.x * len;
@@ -115,13 +114,8 @@ __global__ void kernel(in0_type* x, in1_type* target, in2_type* grad, out0_type*
     {for_loop}
         #pragma unroll
         for (int j=0; j<{ILP}; j++) {{
-            if (need_log) {{
-                v[i][j] = float(v[i][j]) - vmax;
-                v1 += expf(float(v[i][j]));
-            }} else {{
-                v[i][j] = expf(float(v[i][j]) - vmax);
-                v1 += float(v[i][j]);
-            }}
+            v[i][j] = expf(float(v[i][j]) - vmax);
+            v1 += float(v[i][j]);
         }}
 
     tmp = BlockReduce(temp_storage).Sum(v1);
@@ -132,23 +126,121 @@ __global__ void kernel(in0_type* x, in1_type* target, in2_type* grad, out0_type*
 
     {for_loop}
         #pragma unroll
-        for (int j=0; j<{ILP}; j++) {{
-            if (need_log)
-                v[i][j] = v[i][j] - @expand_op(log,@in0_type,vsum);
-            else
-                v[i][j] = float(v[i][j])/vsum;
-            v[i][j] *= grad[blockIdx.x];
-        }}
-    {for_loop}
-        vload<sizeof(in0_type)*{ILP}>(&y[id+(i*{tnum}+threadIdx.x)*{ILP}], v[i]);
+        for (int j=0; j<{ILP}; j++)
+            v[i][j] = float(v[i][j])/vsum * float(grad[blockIdx.x]);
     
-    if (threadIdx.x == 0)
+    {for_loop}
+        vload<sizeof(out0_type)*{ILP}>(&y[id+(i*{tnum}+threadIdx.x)*{ILP}], v[i]);
+    __syncthreads();
+
+    if (threadIdx.x == blockIdx.x)
         y[id + target[blockIdx.x]] -= grad[blockIdx.x];
 }}
 int len = in0->shape[in0->shape.size()-1];
 int bnum = in0->numel() / len;
 cudaGetLastError();
 kernel<<<bnum, {tnum}>>>(in0_p, in1_p, in2_p, out0_p, len);
+getLastCudaError("Failed to run CodeCrossEntropy backward");
+''')
+    return CodeCrossEntropy()(output, target)
+
+
+def cross_entropy_v2(output, target):
+    class CodeCrossEntropy(jt.Function):
+        def execute(self, x, target):
+            self.save_vars = [x, target]
+            cross_entropy = jt.code(target.shape, x.dtype, [x, target], cuda_header=f'''
+#include <{jt.compile_extern.cub_home}cub/cub.cuh>
+#include <type/fp16_compute.h>
+#include <helper_cuda.h>
+''', cuda_src=f'''
+__global__ void kernel(in0_type* x, in1_type* target, out0_type* y, int len) {{
+    typedef cub::BlockReduce<float, 1024> BlockReduce;
+    __shared__ typename BlockReduce::TempStorage temp_storage;
+
+    int id = blockIdx.x * len;
+
+    float v1 = -1e30;
+    for (int i = threadIdx.x; i < len; i += blockDim.x)
+        v1 = max(v1, float(x[id + i]));
+
+    __shared__ float vmax;
+    auto tmp = BlockReduce(temp_storage).Reduce(v1, cub::Max());
+    if (threadIdx.x == 0)
+        vmax = tmp;
+    __syncthreads();
+
+    v1 = 0;
+    for (int i = threadIdx.x; i < len; i += blockDim.x)
+        v1 += expf(float(float(x[id + i]) - vmax));
+
+    auto vsum = BlockReduce(temp_storage).Sum(v1);
+    if (threadIdx.x == 0)
+        y[blockIdx.x] = -float(x[id+target[blockIdx.x]]) + vmax + float(@expand_op(log,@in0_type,vsum));
+}}
+int len = in0->shape[in0->shape.size()-1];
+int bnum = in0->numel() / len;
+cudaGetLastError();
+kernel<<<bnum, 1024>>>(in0_p, in1_p, out0_p, len);
+getLastCudaError("Failed to run CodeCrossEntropy forward");
+''')
+            return cross_entropy
+
+        def grad(self, grad):
+            x, target = self.save_vars
+            # target = target.broadcast(x, [1])
+            # target = target.index(1) == target
+            # return (jt.nn.softmax(x, dim=1) - target) * grad.broadcast(x, [1])
+            return jt.code(x.shape, x.dtype, [x, target, grad], cuda_header=f'''
+#include <{jt.compile_extern.cub_home}cub/cub.cuh>
+#include <type/fp16_compute.h>
+#include <helper_cuda.h>
+''', cuda_src=f'''
+__global__ void kernel(in0_type* x, in1_type* target, in2_type* grad, out0_type* y, int len) {{
+    typedef cub::BlockReduce<float, 1024> BlockReduce;
+    __shared__ typename BlockReduce::TempStorage temp_storage;
+
+    int id = blockIdx.x * len;
+    float v1 = -1e30;
+    for (int i = threadIdx.x; i < len; i += blockDim.x)
+        v1 = max(v1, float(x[id + i]));
+
+    __shared__ float vmax;
+    auto tmp = BlockReduce(temp_storage).Reduce(v1, cub::Max());
+    if (threadIdx.x == 0)
+        vmax = tmp;
+    __syncthreads();
+
+    v1 = 0;
+    for (int i = threadIdx.x; i < len; i += blockDim.x) {{
+        float _x = expf(float(x[id + i]) - vmax);
+        y[id + i] = _x;
+        v1 += _x;
+    }}
+
+    tmp = BlockReduce(temp_storage).Sum(v1);
+    __shared__ float vsum;
+    if (threadIdx.x == 0) {{
+        vsum = tmp;
+    }}
+    __syncthreads();
+    if (threadIdx.x == 0)
+        if (vsum != vsum)
+            printf("found nan! %d\\n", threadIdx.x);
+
+    for (int i = threadIdx.x; i < len; i += blockDim.x) {{
+        y[id + i] = float(y[id + i]) * float(grad[blockIdx.x]) / vsum;
+    }}
+    __syncthreads();
+    
+    if (threadIdx.x == 0) {{
+        y[id + target[blockIdx.x]] -= (out0_type) grad[blockIdx.x];
+    }}
+}}
+int len = in0->shape[in0->shape.size()-1];
+int bnum = in0->numel() / len;
+cudaGetLastError();
+kernel<<<bnum, 1024>>>(in0_p, in1_p, in2_p, out0_p, len);
 getLastCudaError("Failed to run CodeCrossEntropy backward");
 ''')
     return CodeCrossEntropy()(output, target)
