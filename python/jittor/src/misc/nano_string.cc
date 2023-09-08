@@ -182,6 +182,9 @@ static void init_ns() {
     dsize_map["float16"] = 1;
     is_float_map["float16"] = 1;
     is_unsigned["float16"] = 0;
+    dsize_map["bfloat16"] = 1;
+    is_float_map["bfloat16"] = 1;
+    is_unsigned["bfloat16"] = 0;
     NanoString::ns_t i=0;
     auto func = [&](const char* name, NanoString& ns) {
         ns.set(NanoString::_index, i++, NanoString::_index_nbits);

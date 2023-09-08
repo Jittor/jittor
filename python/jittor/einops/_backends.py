@@ -254,7 +254,7 @@ class JittorBackend(AbstractBackend):
         return self.jittor.unsqueeze(x, new_position)
 
     def is_float_type(self, x):
-        return x.dtype in ["float16", "float32", "float64"]
+        return x.dtype in ["float16", "bfloat16", "float32", "float64"]
 
     def layers(self):
         from jittor.einops.layers import jittor

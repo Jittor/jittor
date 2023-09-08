@@ -6,6 +6,7 @@
 // ***************************************************************
 #pragma once
 #include <cuda_fp16.h>
+#include <cuda_bf16.h>
 #include "common.h"
 
 namespace jittor {
@@ -104,6 +105,14 @@ template <> struct int_mapper<__half> {
     inline static __device__ src from_int(target a) { return __ushort_as_half(a); }
 };
 
+template <> struct int_mapper<__nv_bfloat16> { 
+    typedef __nv_bfloat16 src;
+    typedef unsigned short target;
+    inline static __device__ target to_int(src a) { return __bfloat16_as_ushort(a); }
+    inline static __device__ target* to_intp(src* a) { return (target*)a; }
+    inline static __device__ src from_int(target a) { return __ushort_as_bfloat16(a); }
+};
+
 template <> struct int_mapper<double> { 
     typedef double src;
     typedef long long target;
@@ -152,6 +161,37 @@ __half cuda_atomic_min(__half* a, __half b) {
         if (old_f<=b) break;
         old = atomicCAS(a_i, assume, int_mapper<__half>::to_int(b));
         old_f = int_mapper<__half>::from_int(old);
+        if (assume==old) break;
+    }
+    return old_f;
+}
+
+
+template<> __device__
+__nv_bfloat16 cuda_atomic_max(__nv_bfloat16* a, __nv_bfloat16 b) {
+    auto old_f = *a;
+    auto old = int_mapper<__nv_bfloat16>::to_int(old_f);
+    auto a_i = int_mapper<__nv_bfloat16>::to_intp(a);
+    while (1) {
+        auto assume = old;
+        if (old_f>=b) break;
+        old = atomicCAS(a_i, assume, int_mapper<__nv_bfloat16>::to_int(b));
+        old_f = int_mapper<__nv_bfloat16>::from_int(old);
+        if (assume==old) break;
+    }
+    return old_f;
+}
+
+template<> __device__
+__nv_bfloat16 cuda_atomic_min(__nv_bfloat16* a, __nv_bfloat16 b) {
+    auto old_f = *a;
+    auto old = int_mapper<__nv_bfloat16>::to_int(old_f);
+    auto a_i = int_mapper<__nv_bfloat16>::to_intp(a);
+    while (1) {
+        auto assume = old;
+        if (old_f<=b) break;
+        old = atomicCAS(a_i, assume, int_mapper<__nv_bfloat16>::to_int(b));
+        old_f = int_mapper<__nv_bfloat16>::from_int(old);
         if (assume==old) break;
     }
     return old_f;

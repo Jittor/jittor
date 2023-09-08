@@ -727,8 +727,10 @@ def fp32_guard(func):
             return func(*args, **kw)
         new_args = []
         need_cast = False
+        dtype = None
         for a in args:
-            if isinstance(a, jt.Var) and a.dtype == "float16":
+            if isinstance(a, jt.Var) and (a.dtype == "float16" or a.dtype == "bfloat16"):
+                dtype = a.dtype
                 new_args.append(a.float32())
                 need_cast = True
             else:
@@ -736,7 +738,7 @@ def fp32_guard(func):
         with jt.flag_scope(amp_level=0):
             a = func(*new_args, **kw)
             if need_cast and isinstance(a, jt.Var) and a.dtype == "float32":
-                a = a.float16()
+                a = a.cast(dtype)
         return a
     return wrapper
 

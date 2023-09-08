@@ -21,14 +21,7 @@ def load_tensor(contents, dtype, numel, key, location):
     loaded_storages[key] = contents.read_var(name, dtype)
 
 def get_dtype_size(dtype):
-    dtype = dtype.__str__()
-    if dtype == "float32" or dtype == "int32":
-        return 4
-    if dtype == "float64" or dtype == "int64":
-        return 8
-    if dtype == "float16" or dtype == "int16":
-        return 2
-    return 1
+    return jt.NanoString(dtype).dsize()
 
 def persistent_load(saved_id):
     global contents
@@ -47,6 +40,8 @@ def persistent_load(saved_id):
 def _dtype_to_storage_type_map():
     return {
         np.float16: 'HalfStorage',
+        # just fake np.uint16 as bfloat16
+        np.uint16: 'BFloat16Storage',
         np.float32: 'FloatStorage',
         np.float64: 'DoubleStorage',
         np.int64: 'LongStorage',

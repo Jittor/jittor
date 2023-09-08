@@ -2200,7 +2200,15 @@ def peek_s(x):
 def peek(x):
     print(peek_s(x))
 
+class Finfo:
+    pass
+bfloat16_finfo = Finfo()
+bfloat16_finfo.min = -1e38
+bfloat16_finfo.max = 1e38
+
 def finfo(dtype):
+    if dtype == "bfloat16":
+        return bfloat16_finfo
     return np.finfo(str(dtype).split('.')[-1])
 
 def iinfo(dtype):

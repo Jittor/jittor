@@ -37,9 +37,13 @@ void SafeClipOp::jit_prepare(JK& jk) {
 void SafeClipOp::jit_run() {
     auto* __restrict__ xp = x->ptr<Tx>();
     Tx left_value = (Tx)std::max((float64)
-    @if(@strcmp(@Tx,float16)==0,-65500,std::numeric_limits<Tx>::lowest()), left);
+    @if(@strcmp(@Tx,float16)==0,-65500,
+    @if(@strcmp(@Tx,bfloat16)==0,-1e38,
+    std::numeric_limits<Tx>::lowest())), left);
     Tx right_value = (Tx)std::min((float64)
-    @if(@strcmp(@Tx,float16)==0,65500,std::numeric_limits<Tx>::max()), right);
+    @if(@strcmp(@Tx,float16)==0,65500,
+    @if(@strcmp(@Tx,bfloat16)==0,1e38,
+    std::numeric_limits<Tx>::max())), right);
     auto* __restrict__ yp = y->ptr<Tx>();
     index_t num = y->num;
     for (index_t i=0; i<num; i++)

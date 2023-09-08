@@ -107,10 +107,6 @@ unordered_map<string, cudnnConvolutionFwdAlgo_t> fwd_algo_cache;
 
 EXTERN_LIB unordered_map<string, cudnnConvolutionFwdAlgo_t> fwd_algo_cache;
 
-template <typename T_ELEM> __inline__  cudnnDataType_t getDataType();
-template <> __inline__ cudnnDataType_t getDataType<half1>() { return CUDNN_DATA_HALF;   }
-template <> __inline__ cudnnDataType_t getDataType<float>() { return CUDNN_DATA_FLOAT;  }
-
 void CudnnConvOp::jit_run() {
     cudnnHandle_t& handle_ = cudnn_handle;
 
@@ -178,9 +174,12 @@ void CudnnConvOp::jit_run() {
     if(use_tensorcore){
         checkCudaErrors( cudnnSetConvolutionMathType(cudnnConvDesc, CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION) );
     }
+    bool has_fp16_or_bf16 = x->dtype() == ns_float16
+        || y->dtype() == ns_float16 || w->dtype() == ns_float16
+        || x->dtype() == ns_bfloat16
+        || y->dtype() == ns_bfloat16 || w->dtype() == ns_bfloat16;
     
-    if (x->dtype() == ns_float16
-        || y->dtype() == ns_float16 || w->dtype() == ns_float16) {
+    if (has_fp16_or_bf16) {
         checkCudaErrors( cudnnSetConvolutionMathType(cudnnConvDesc, CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION) );
     }
 

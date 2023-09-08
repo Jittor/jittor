@@ -11,10 +11,12 @@
 
 #include <driver_types.h>
 #include <cuda_fp16.h>
+#include <cuda_bf16.h>
 
 namespace jittor {
 
 typedef __half float16;
+typedef __nv_bfloat16 bfloat16;
 
 #if CUDA_ARCH >= 800
 inline __device__ float16 max(float16 a, float16 b) { return __hmax(a, b); }
@@ -28,6 +30,21 @@ inline __device__ float16 min(float16 a, float16 b) { return float(a)<float(b)?a
 #endif
 
 inline __device__ float16 pow(float16 a, float16 b) { return ::pow(float32(a), float32(b)); }
+
+
+
+#if CUDA_ARCH >= 800
+inline __device__ bfloat16 max(bfloat16 a, bfloat16 b) { return __hmax(a, b); }
+inline __device__ bfloat16 min(bfloat16 a, bfloat16 b) { return __hmin(a, b); }
+#elif CUDA_ARCH >= 610
+inline __device__ bfloat16 max(bfloat16 a, bfloat16 b) { return a<b?b:a; }
+inline __device__ bfloat16 min(bfloat16 a, bfloat16 b) { return a<b?a:b; }
+#else
+inline __device__ bfloat16 max(bfloat16 a, bfloat16 b) { return float(a)<float(b)?b:a; }
+inline __device__ bfloat16 min(bfloat16 a, bfloat16 b) { return float(a)<float(b)?a:b; }
+#endif
+
+inline __device__ bfloat16 pow(bfloat16 a, bfloat16 b) { return ::pow(float32(a), float32(b)); }
 
 template<int nbyte, class T>
 __device__ inline
@@ -208,6 +225,27 @@ struct float16 {
 bool operator<(float16 x, float16 y) { return float32(x)<float32(y); }
 bool operator>(float16 x, float16 y) { return float32(x)>float32(y); }
 bool operator==(float16 x, float16 y) { return float32(x)==float32(y); }
+
+
+struct bfloat16 {
+    uint16 x;
+
+    inline bfloat16(float32 f) {
+        unsigned x = *((int*)(void*)(&f));
+        this->x = x>>16; 
+    }
+
+    inline operator float() const {
+        int temp = x<<16;
+
+        return reinterpret_cast<float&>(temp);
+    }
+};
+
+bool operator<(bfloat16 x, bfloat16 y) { return float32(x)<float32(y); }
+bool operator>(bfloat16 x, bfloat16 y) { return float32(x)>float32(y); }
+bool operator==(bfloat16 x, bfloat16 y) { return float32(x)==float32(y); }
+
 
 }
 
