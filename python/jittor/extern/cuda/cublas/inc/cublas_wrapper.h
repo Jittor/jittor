@@ -25,6 +25,7 @@ static inline cudaDataType get_dtype(NanoString dtype) {
     if (dtype == ns_float32) return CUDA_R_32F;
     if (dtype == ns_float64) return CUDA_R_64F;
     if (dtype == ns_float16) return CUDA_R_16F;
+    if (dtype == ns_bfloat16) return CUDA_R_16BF;
     LOGf << "not support type" << dtype;
     return CUDA_R_32F;
 }

@@ -211,9 +211,15 @@ ArrayArgs VarHolder::fetch_sync() {
 }
 
 inline static void cast_item_data(ItemData& data) {
-    auto* fp16 = (float16*)&data;
-    auto* fp32 = (float32*)&data;
-    fp32[0] = float32(fp16[0]);
+    if (data.dtype == ns_float16) {
+        auto* fp16 = (float16*)&data;
+        auto* fp32 = (float32*)&data;
+        fp32[0] = float32(fp16[0]);
+    } else if (data.dtype == ns_bfloat16) {
+        auto* bf16 = (bfloat16*)&data;
+        auto* fp32 = (float32*)&data;
+        fp32[0] = float32(bf16[0]);
+    }
     data.dtype = ns_float32;
 }
 
@@ -235,7 +241,7 @@ ItemData VarHolder::item() {
     {
         std::memcpy(&data.data, var->mem_ptr, dsize);
     }
-    if (data.dtype == ns_float16)
+    if (data.dtype == ns_float16 || data.dtype == ns_bfloat16)
         cast_item_data(data);
     return data;
 }

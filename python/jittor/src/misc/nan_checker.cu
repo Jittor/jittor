@@ -7,6 +7,7 @@
 #include "misc/cuda_flags.h"
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
+#include <cuda_bf16.h>
 #include "helper_cuda.h"
 #include <cassert>
 
@@ -30,6 +31,20 @@ __global__ void _check_nan_float16(__half* __restrict__ ptr, int64 num, int* cnt
         if (isnan(__half2float(ptr[i])))
         #else
         if (isnan(__half2float(ptr[i])) || __hisinf(ptr[i])
+            // || abs(__half2float(ptr[i])) > 60000.f
+        )
+        #endif
+            print_nan(float(ptr[i]), i, cnt);
+    }
+}
+
+__global__ void _check_nan_bfloat16(__nv_bfloat16* __restrict__ ptr, int64 num, int* cnt) {
+    int64 i = threadIdx.x + blockIdx.x * (int64)blockDim.x;
+    if (i<num) {
+        #if JT_CHECK_NAN == 2
+        if (isnan(float(ptr[i])))
+        #else
+        if (isnan(float(ptr[i])) || isinf(float(ptr[i]))
             // || abs(__half2float(ptr[i])) > 60000.f
         )
         #endif
@@ -96,6 +111,13 @@ vector<int> check_nan_float16(__half* ptr, int64 num) {
     int block_num = std::max((int64)1, (num-1)/1024+1);
     int thread_num = std::min((int64)1024, num);
     _check_nan_float16<<<block_num, thread_num>>>(ptr, num, check_nan_get_device_ptr());
+    return report_nan();
+}
+
+vector<int> check_nan_bfloat16(__nv_bfloat16* ptr, int64 num) {
+    int block_num = std::max((int64)1, (num-1)/1024+1);
+    int thread_num = std::min((int64)1024, num);
+    _check_nan_bfloat16<<<block_num, thread_num>>>(ptr, num, check_nan_get_device_ptr());
     return report_nan();
 }
 
