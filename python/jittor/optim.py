@@ -80,13 +80,11 @@ class Optimizer(object):
                 if p.is_stop_grad(): continue
                 g.update(g*clip_coef)
 
-    
     @property
     def defaults(self):
-        import copy
         exclude = set(("defaults", "pre_step", "step"))
-        return copy.deepcopy({ k:v for k, v in self.__dict__.items()
-            if k[0] != '_' and k not in exclude and not callable(v) })
+        return { k:v for k, v in self.__dict__.items()
+            if k[0] != '_' and k not in exclude and not callable(v) }
 
     def state_dict(self):
         state = {"defaults": self.defaults}
