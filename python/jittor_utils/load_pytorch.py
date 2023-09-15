@@ -16,6 +16,7 @@ def _maybe_decode_ascii(bytes_str: Union[bytes, str]) -> str:
     return bytes_str
 
 def load_tensor(contents, dtype, numel, key, location):
+    if dtype == np.uint16: dtype = "bfloat16"
     name = os.path.join(prefix, "data", str(key))
     name = name.replace("\\", "/")
     loaded_storages[key] = contents.read_var(name, dtype)
@@ -224,6 +225,8 @@ def clean_globals():
 
 def load_pytorch(fn_name):
     def dfs_results(result): # dfs the result dict in case of nested state dicts.
+        if not isinstance(result, dict):
+            return result
         for key, params in result.items():
             if isinstance(params, dict): # recursive
                 result[key] = dfs_results(params)
