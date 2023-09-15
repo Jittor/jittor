@@ -46,6 +46,7 @@ class RandomSampler(Sampler):
         self.dataset = dataset
         self.rep = replacement
         self._num_samples = num_samples
+        self._shuffle_rng = np.random.default_rng(1)
 
     @property
     def num_samples(self):
@@ -59,8 +60,8 @@ class RandomSampler(Sampler):
     def __iter__(self):
         n = self.dataset.__real_len__() if hasattr(self.dataset,"__real_len__") else self.dataset.__len__()
         if self.rep:
-            return iter(np.random.randint(low=0, high=n, size=(self.num_samples,), dtype=np.int64).tolist())
-        return iter(np.random.permutation(n).tolist())
+            return iter(self._shuffle_rng.integers(low=0, high=n, size=(self.num_samples,), dtype=np.int64).tolist())
+        return iter(self._shuffle_rng.permutation(n).tolist())
 
 
 class SubsetRandomSampler(Sampler):
