@@ -5,6 +5,7 @@
 // ***************************************************************
 #include <cfloat>
 #include <cmath>
+#include <fstream>
 #include "misc/nan_checker.h"
 #ifdef IS_CUDA
 #include "misc/cuda_flags.h"
@@ -32,7 +33,11 @@ void dump_var(Var* v, string name) {
     name = ss.str();
     LOGe << "dump" << v << "to" << name;
     char* buffer = new char[v->size];
+    #ifdef HAS_CUDA
     cudaMemcpy(buffer, v->mem_ptr, v->size, cudaMemcpyDefault);
+    #else
+    std::memcpy(buffer, v->mem_ptr, v->size);
+    #endif
     std::fstream file(name, std::ios::out | std::ios::binary);
     file.write(buffer, v->size);
     file.close();
