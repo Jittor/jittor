@@ -258,7 +258,6 @@ class Dataset(object):
                     print(f"#{worker_id} {os.getpid()} load batch", cid*self.real_batch_size, min(self.real_len, (cid+1)*self.real_batch_size))
                 for i in batch_index_list:
                     batch.append(self[i])
-                print('batch_index_list', batch_index_list, self.real_len, self.real_batch_size, self.batch_len)
                 batch = self.collate_batch(batch)
                 now = time.time()
                 data_time = now - start
