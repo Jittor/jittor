@@ -64,7 +64,7 @@ class RandomSampler(Sampler):
         return iter(self._shuffle_rng.permutation(n).tolist())
 
 
-class SkipFirstBachesSampler(Sampler):
+class SkipFirstBatchesSampler(Sampler):
     def __init__(self, sampler, num_skip_batches):
         # MUST set sampler here
         sampler.dataset.sampler = self
