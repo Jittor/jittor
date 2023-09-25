@@ -46,10 +46,10 @@ if "SKEY" in os.environ:
 def dfs_to_numpy(x):
     if isinstance(x, list):
         for i in range(len(x)):
-            x[i] = dfs(x[i])
+            x[i] = dfs_to_numpy(x[i])
     elif isinstance(x, dict):
         for k in x:
-            x[k] = dfs(x[k])
+            x[k] = dfs_to_numpy(x[k])
     elif isinstance(x, Var):
         return x.numpy()
     return x
