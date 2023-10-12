@@ -49,6 +49,8 @@ using namespace array_local;
 ArrayOp::ArrayOp(const void* ptr, NanoVector shape, NanoString dtype)
     : ArrayOp(ArrayArgs{ptr, shape, dtype}) {}
 
+DECLARE_FLAG(int, use_cuda_host_allocator);
+
 ArrayOp::ArrayOp(ArrayArgs&& args) {
     output = create_output(args.shape, args.dtype);
     NanoVector shape = output->shape;
@@ -58,7 +60,7 @@ ArrayOp::ArrayOp(ArrayArgs&& args) {
         set_type(OpType::element);
     }
     #ifdef HAS_CUDA
-    if (use_cuda && !save_mem) {
+    if (use_cuda && !save_mem && !use_cuda_host_allocator) {
         flags.set(NodeFlags::_cpu, 0);
         flags.set(NodeFlags::_cuda, 1);
         if (!output->flags.get(NodeFlags::_force_fuse)) {

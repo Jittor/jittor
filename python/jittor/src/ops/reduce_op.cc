@@ -257,10 +257,10 @@ EXTERN_LIB int amp_reg;
 ReduceOp::ReduceOp(Var* x, NanoString op, NanoVector dims, bool keepdims)
     : x(x) {
     // improve float16 mean precision
-    if (!(amp_reg & 32) && x->dtype() == ns_float16 && (op == ns_mean || op == ns_add)) {
+    if (!(amp_reg & 32) && (x->dtype() == ns_float16 || x->dtype() == ns_bfloat16) && (op == ns_mean || op == ns_add)) {
         auto x_float32 = make_unary(x, ns_float32);
         auto mean = make_reduce(x_float32, op, dims, keepdims);
-        mean = make_unary(mean, ns_float16);
+        mean = make_unary(mean, x->dtype());
         forward(mean);
         return;
     }
@@ -293,10 +293,10 @@ ReduceOp::ReduceOp(Var* x, NanoString op, NanoVector dims, bool keepdims)
 ReduceOp::ReduceOp(Var* x, NanoString op, uint dims_mask, uint keepdims_mask)
     : x(x) {
     // improve float16 mean precision
-    if (!(amp_reg & 32) && x->dtype() == ns_float16 && (op == ns_mean || op == ns_add)) {
+    if (!(amp_reg & 32) && (x->dtype() == ns_float16 || x->dtype() == ns_bfloat16) && (op == ns_mean || op == ns_add)) {
         auto x_float32 = make_unary(x, ns_float32);
         auto mean = make_reduce2(x_float32, op, dims_mask, keepdims_mask);
-        mean = make_unary(mean, ns_float16);
+        mean = make_unary(mean, x->dtype());
         forward(mean);
         return;
     }

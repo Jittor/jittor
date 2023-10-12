@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.8.7'
+__version__ = '1.3.9.0'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -46,10 +46,10 @@ if "SKEY" in os.environ:
 def dfs_to_numpy(x):
     if isinstance(x, list):
         for i in range(len(x)):
-            x[i] = dfs(x[i])
+            x[i] = dfs_to_numpy(x[i])
     elif isinstance(x, dict):
         for k in x:
-            x[k] = dfs(x[k])
+            x[k] = dfs_to_numpy(x[k])
     elif isinstance(x, Var):
         return x.numpy()
     return x
@@ -429,9 +429,9 @@ def random(shape, dtype="float32", type="uniform"):
                 [0.46107793 0.62798643 0.03457401]], dtype=float32)
     '''
     # TODO: move those code to core
-    if dtype == "float16":
+    if dtype in ["float16", "bfloat16"]:
         # TODO: make curand support fp16
-        ret = ops.random(shape, "float32", type).float16()
+        ret = ops.random(shape, "float32", type).cast(dtype)
     else:
         ret = ops.random(shape, dtype, type)
     amp_reg = jt.flags.amp_reg
@@ -1765,7 +1765,7 @@ Arguments of hook are defined as::
         return self
 
     def float32(self):
-        '''convert all parameters to float16'''
+        '''convert all parameters to float32'''
         self._amp_level = 0
         for p in self.parameters():
             if p.dtype.is_float():
@@ -1783,6 +1783,19 @@ Arguments of hook are defined as::
         for p in self.parameters():
             if p.dtype.is_float():
                 p.assign(p.float16())
+        return self
+
+    def bfloat16(self):
+        '''convert all parameters to bfloat16'''
+        # self._amp_level = 3 if flags.th_mode else 4
+        # amp level better set globally
+        self._amp_level = -1
+        if self._amp_level >= 0:
+            cls = self.__class__
+            cls.__call__ = cls.__half_call__
+        for p in self.parameters():
+            if p.dtype.is_float():
+                p.assign(p.bfloat16())
         return self
 
     def __half_call__(self, *args, **kw):
@@ -2031,7 +2044,7 @@ def jittor_exit():
 atexit.register(jittor_exit)
 
 def vtos(v):
-    data_str = f"jt.Var({v.data}, dtype={v.dtype})"
+    data_str = f"jt.Var({v.numpy()}, dtype={v.dtype})"
     data_str = data_str.replace("\n", "\n       ")
     return data_str
 

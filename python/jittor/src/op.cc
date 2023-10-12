@@ -305,6 +305,7 @@ std::ostream& operator<<(std::ostream& os, const Op* op) {
         << ":i" << op->_inputs.size()
         << ":o" << op->_outputs.size()
         << ":s" << op->is_finished()
+        << ":g" << !op->is_stop_grad()
         << "," << op->name_ex();
     if (op->_outputs.size()>1)
         os << "->...";

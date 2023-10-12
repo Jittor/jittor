@@ -15,6 +15,8 @@ struct CachingBlockPool;
 
 struct CachingBlock {
     size_t size;
+    // origin size before split
+    size_t origin_size;
     size_t id;
     size_t share_times;
     void* memory_ptr;
@@ -23,12 +25,12 @@ struct CachingBlock {
     CachingBlock* next;
     bool occupied;
     
-    CachingBlock(size_t size);
-    CachingBlock(size_t size, CachingBlockPool* blocks, void* memory_ptr);
+    CachingBlock(size_t size, size_t origin_size);
+    CachingBlock(size_t size, size_t origin_size, CachingBlockPool* blocks, void* memory_ptr);
 };
 
 struct CachingBlockPool {
-    std::map<unsigned long long, CachingBlock*> blocks;
+    std::map<pair<size_t,size_t>, CachingBlock*> blocks;
     //for recycle block_id
     static std::vector<size_t> block_ids;  
     //start from 1
@@ -36,7 +38,7 @@ struct CachingBlockPool {
     static std::unique_ptr<CachingBlock*[]> occupied_id_mapper;              
     static const size_t ID_LIMIT = 1 << 18;
 
-    unsigned long long get_key(CachingBlock* block);
+    pair<size_t,size_t> get_key(CachingBlock* block);
 
     CachingBlockPool();
     ~CachingBlockPool();
@@ -56,7 +58,7 @@ struct CachingBlockPool {
     size_t free_all_cached_blocks(Allocator* underlying, long long free_size = -1);
 };
 
-// Segrefate fit range list allocator
+// Segregate fit range list allocator
 struct SFRLAllocator : Allocator {
     CachingBlockPool small_blocks, large_blocks;
     std::map<void*, CachingBlock*> occupied_blocks;

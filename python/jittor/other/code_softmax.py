@@ -55,7 +55,7 @@ __global__ void kernel(in0_type* x, out0_type* y, int len) {{
     {for_loop}
         #pragma unroll
         for (int j=0; j<{ILP}; j++) {{
-            v1 = max(v1, float(v[i][j]));
+            v1 = ::max(v1, float(v[i][j]));
         }}
     __shared__ float vmax;
     auto tmp = BlockReduce(temp_storage).Reduce(v1, cub::Max());
