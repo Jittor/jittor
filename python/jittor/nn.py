@@ -370,6 +370,8 @@ class PReLU(Module):
         else:
             return jt.maximum(0, x) + self.weight * jt.minimum(0, x)
 
+import jittor.other.code_cross_entropy as code_cross_entropy
+
 #TODO dims is 4 will cause slowly execution
 def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction='mean'):
     target_shape = target.shape
@@ -379,7 +381,7 @@ def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction=
         output = output.reshape((-1, c_dim))
 
     target = target.reshape((-1, ))
-    target_weight = ((target >= 0) & (target < output.shape[1])).float32() 
+    target_weight = ((target >= 0) & (target < output.shape[1])).astype(output.dtype) 
     if weight is not None:
         target_weight = weight[target]
     if ignore_index is not None:
@@ -389,16 +391,12 @@ def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction=
             target_weight
         )
     
-    import jittor.other.code_cross_entropy as code_cross_entropy
-    if code_cross_entropy.can_cross_entropy(output, -1):
-        cross_entropy = code_cross_entropy.cross_entropy(output, target)
-    else:
-        target = target.broadcast(output, [1])
-        target = target.index(1) == target
-        
-        output = output - output.max([1], keepdims=True)
-        logsum = output.exp().sum(1).log()
-        cross_entropy = (logsum - (output*target).sum(1))
+    target = target.broadcast(output, [1])
+    target = target.index(1) == target
+    
+    output = output - output.max([1], keepdims=True)
+    logsum = output.exp().sum(1).log()
+    cross_entropy = (logsum - (output*target).sum(1))
     
     loss = cross_entropy * target_weight
     if reduction == 'sum':
