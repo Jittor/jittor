@@ -55,6 +55,8 @@ void setter_use_cuda(int value) {
 #endif
     if (use_cuda != value)
         sync_all(0);
+    // jtorch will call this directly
+    use_cuda = value;
 }
 
 void setter_device_id(int value) {
