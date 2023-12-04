@@ -937,9 +937,12 @@ vector<VarHolder*> exec_sgraph(SGraphPtr* sgraph, const vector<VarHolder*>& inpu
         #endif
         last_is_cuda = is_cuda;
         // _JT_SEH_START2;
-        // op->do_run_after_prepare(jkl);
-        jit_op_entry_t& jit_entry = jit_entries[rid];
-        jit_entry(op);
+        if (profiler_enable)
+            op->do_run();
+        else {
+            jit_op_entry_t& jit_entry = jit_entries[rid];
+            jit_entry(op);
+        }
         // _JT_SEH_END2;
         #ifdef HAS_CUDA
         // migrate to gpu
@@ -951,7 +954,7 @@ vector<VarHolder*> exec_sgraph(SGraphPtr* sgraph, const vector<VarHolder*>& inpu
         #endif
         #ifdef JT_CHECK_NAN
         for (Var* var : op->outputs())
-            check_nan(var);
+            check_nan(var, op);
         #endif
         #ifdef JT_SYNC
         #ifdef HAS_CUDA
@@ -971,6 +974,12 @@ vector<VarHolder*> exec_sgraph(SGraphPtr* sgraph, const vector<VarHolder*>& inpu
                     v->allocation = kv.second;
                 }
             }
+        for (Var* v : op->outputs()) {
+            if (!get_flags(v, is_new_var) && !get_flags(v, is_output)) {
+                // this output is not used in this graph, so we free it directly
+                free_var_mem(v);
+            }
+        }
         } catch (const std::exception& e) {
             // log memory info
             display_memory_info(__FILELINE__, false, true);
