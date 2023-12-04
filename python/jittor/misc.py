@@ -211,6 +211,8 @@ def repeat(x, *shape):
     return x
 
 jt.Var.repeat = repeat
+# tile = jt.Var.tile = repeat
+ne = jt.Var.ne = jt.Var.not_equal
 
 def repeat_interleave(x,repeats,dim=None):
     # TODO repeats is jt.Var

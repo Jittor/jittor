@@ -570,7 +570,7 @@ def compile_src(src, h, basename):
             func_fill = "int64 n = 0"
             before_return = "Py_TYPE(self)->tp_free((PyObject *) self);"
             if has_attr_dict:
-                before_return = f"Py_XDECREF(((PyObject**)(((char*)self) + sizeof(PyObject) + sizeof({class_name}))));" + before_return
+                before_return = f"Py_XDECREF(((PyObject**)(((char*)self) + sizeof(PyObject) + sizeof({class_name})))[0]);" + before_return
         
         elif name in binary_number_slots:
             slot_name = "tp_as_number->"+binary_number_slots[name]
