@@ -114,11 +114,11 @@ def build(func, debug=False):
         jt.sync(inputs_var)
         all_key = config_key + inputs_key
         if all_key not in cache:
-            print(f"create graph with key '{all_key[:30]}'...")
+            # print(f"create graph with key '{all_key[:30]}'...")
             cache[all_key] = CachedGraph(func, args, kw)
         graph = cache[all_key]
         if not mod.prob_sgraph(graph.sgraph, inputs_var):
-            print(f"merge graph with key '{all_key[:30]}'...")
+            # print(f"merge graph with key '{all_key[:30]}'...")
             graph2 = CachedGraph(func, args, kw)
             mod.merge_sgraph(graph.sgraph, graph2.sgraph)
         outputs = mod.exec_sgraph(graph.sgraph, inputs_var)

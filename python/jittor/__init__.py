@@ -46,10 +46,10 @@ if "SKEY" in os.environ:
 def dfs_to_numpy(x):
     if isinstance(x, list):
         for i in range(len(x)):
-            x[i] = dfs(x[i])
+            x[i] = dfs_to_numpy(x[i])
     elif isinstance(x, dict):
         for k in x:
-            x[k] = dfs(x[k])
+            x[k] = dfs_to_numpy(x[k])
     elif isinstance(x, Var):
         return x.numpy()
     return x
@@ -61,7 +61,7 @@ def safepickle(obj, path):
         return
     # Protocol version 4 was added in Python 3.4. It adds support for very large objects, pickling more kinds of objects, and some data format optimizations.
     # ref: <https://docs.python.org/3/library/pickle.html>
-    obj = dfs_to_numpy(obj)
+    # obj = dfs_to_numpy(obj)
     s = pickle.dumps(obj, 4)
     checksum = hashlib.sha1(s).digest()
     s += bytes(checksum)

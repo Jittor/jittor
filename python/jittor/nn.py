@@ -2186,7 +2186,7 @@ class Sequential(Module):
                 self.append(mod)
     def __getitem__(self, idx):
         if isinstance(idx, slice) or idx not in self.layers:
-            return list(self.layers.values())[str(idx)]
+            return list(self.layers.values())[idx]
 
         return self.layers[idx]
     def __iter__(self):
