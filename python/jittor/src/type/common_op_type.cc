@@ -118,6 +118,7 @@ struct CommonOpType : OpByType {
         };
 
         static unordered_map<string,string> both_map {
+            {"void", "($4)"},
             {"add", "(($2)+($4))"},
             {"subtract", "(($2)-($4))"},
             {"multiply", "(($2)*($4))"},
@@ -138,6 +139,7 @@ struct CommonOpType : OpByType {
             {"bitwise_or", "(($2)|($4))"},
             {"bitwise_xor", "(($2)^($4))"},
             {"mean", "(($2)+$1($4)*($1(rcount)))"},
+            {"init_void", "$1(0)"},
             {"init_add", "$1(0)"},
             {"init_multiply", "$1(1)"},
             {"init_logical_and", "true"},

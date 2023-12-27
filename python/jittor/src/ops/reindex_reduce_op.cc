@@ -31,7 +31,7 @@ ReindexReduceOp::ReindexReduceOp(Var* y, NanoString op, NanoVector shape, vector
     if (op.get(NanoString::_no_need_back_in))
         flags.set(NodeFlags::_manual_set_vnbb);
     ns = op;
-    ASSERT(ns.is_binary() && ns!=ns_mean);
+    ASSERT((ns.is_binary() && ns!=ns_mean) || ns == ns_void);
     x = create_output(nullptr, y->dtype());
     for (auto e : extras) {
         if (e->shape != y->shape) {
@@ -112,10 +112,13 @@ void ReindexReduceOp::jit_run() {
     @for(i, YDIM-2, -1, -1, auto ystride@i = ystride@{i+1} * yshape@{i+1};)
     // init
 
+    @if(@strcmp(@OP, void)==0,, 
     @for(d, 0, XDIM, for (index_t i@d=0; i@d < xshape@d; i@d++)) {
         auto xid = @for(d, 0, XDIM, + i@d * xstride@d);
         xp[xid] = @expand_op(init_@OP, @Tx);
     }
+    ) // end @if
+    
     // generate d-for loop
     @for(d, 0, YDIM, for (index_t i@d=0; i@d < yshape@d; i@d++)) {
         auto yid = @for(d, 0, YDIM, + i@d * ystride@d);
