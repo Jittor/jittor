@@ -303,7 +303,7 @@ inline static void restore_shape_value(vector<Node*>& nodes, ShapeValue& k) {
         if (fast_strcmp(name, "code")) {
             auto* op_ = (CodeOp*)op;
             for (auto& kv : op_->data) {
-                double v = kv.second;
+                double& v = kv.second;
                 // bitwise copy
                 *(uint64*)&v = pop_number();
             }
@@ -966,7 +966,8 @@ vector<VarHolder*> exec_sgraph(SGraphPtr* sgraph, const vector<VarHolder*>& inpu
             "/" >> rid_ops.size() >> ") output:" << op->outputs();
         for (Var* v : op->inputs())
             if (get_flags(v, is_new_var) && !get_flags(v, is_output) && v_last_rid[v->id-min_id] == rid) {
-                free_var_mem(v);
+                if (v->mem_ptr)
+                    free_var_mem(v);
                 if (get_flags(v, is_share)) {
                     // recover share var
                     auto kv = share_map.find(v)->second;
@@ -975,7 +976,7 @@ vector<VarHolder*> exec_sgraph(SGraphPtr* sgraph, const vector<VarHolder*>& inpu
                 }
             }
         for (Var* v : op->outputs()) {
-            if (!get_flags(v, is_new_var) && !get_flags(v, is_output)) {
+            if (!get_flags(v, is_new_var) && !get_flags(v, is_output) && v->mem_ptr) {
                 // this output is not used in this graph, so we free it directly
                 free_var_mem(v);
             }

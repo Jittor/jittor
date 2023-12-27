@@ -145,7 +145,8 @@ struct NanoString {
     // @pyjt(is_float)
     inline bool is_float() const { return get(_float); }
     inline ns_t is_white() const { return get(_white_list); }
-    inline ns_t dsize() const { return 1<<get(_dsize, _dsize_nbits); }
+    // @pyjt(dsize)
+    inline int dsize() const { return 1<<get(_dsize, _dsize_nbits); }
     inline ns_t dsize_() const { return get(_dsize, _dsize_nbits); }
     inline ns_t is_dtype() const { return get(_type, _type_nbits)==_dtype; }
     inline ns_t is_binary() const { return get(_type, _type_nbits)==_binary; }
