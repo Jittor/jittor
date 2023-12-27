@@ -333,11 +333,21 @@ DEF_IS(ArrayArgs, PyObject*) to_py_object(const T& a) {
     PyObjHolder obj(PyArray_SimpleNew(
         a.shape.size(),
         dims,
-        get_typenum(a.dtype)
+        get_typenum(a.dtype == ns_bfloat16 ? ns_float32 : a.dtype)
     ));
     auto arr = (PyArray_Proxy*)(obj.obj);
     int64 size = PyArray_Size(arr);
-    memcpy((void*)arr->data, (void*)a.ptr, size);
+    if (a.dtype == ns_bfloat16) {
+        // simple cast bfloat16 to float32
+        auto ptr = (uint16*)a.ptr;
+        auto ptr2 = (uint32*)arr->data;
+        int64 num = size/4;
+        for (int64 i=0; i<num; i++) {
+            ptr2[i] = ptr[i]<<16;
+        }
+    } else {
+        memcpy((void*)arr->data, (void*)a.ptr, size);
+    }
     return obj.release();
 }
 

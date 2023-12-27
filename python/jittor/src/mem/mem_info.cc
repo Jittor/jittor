@@ -152,8 +152,33 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
             << "used:" << FloatOutput{(double)a->used_memory, " KMG", 1024, "B"}
                 >> "(" >> std::setprecision(p) >> a->used_memory*100.0 / total >> "%)"
             << "unused:" << FloatOutput{(double)a->unused_memory, " KMG", 1024, "B"} 
-                >> "(" >> std::setprecision(p) >> a->unused_memory*100.0 / total >> "%)"
-            << "total:" << FloatOutput{(double)total, " KMG", 1024, "B"} >> "\n";
+                >> "(" >> std::setprecision(p) >> a->unused_memory*100.0 / total >> "%)";
+                
+            if (a->large_blocks.blocks.size()) {
+                size_t largest_block = 0;
+                auto block = a->large_blocks.blocks.rbegin()->second;
+                largest_block = a->large_blocks.blocks.rbegin()->first.first;
+                // unused largest block
+                log << "ULB:" << FloatOutput{(double)largest_block, " KMG", 1024, "B"};
+                log << "ULBO:" << FloatOutput{(double)block->origin_size, " KMG", 1024, "B"};
+                int dump_block_info = 0;
+                if (a->is_cuda() && dump_block_info) {
+                    unordered_map<void*,int> visited;
+                    for (auto& kv : a->large_blocks.blocks) {
+                        LOGir << "dump block info" << kv.second->size << kv.second->origin_size << kv.second->id;
+                        auto s = kv.second;
+                        while (s->prev != nullptr) s = s->prev;
+                        if (visited.count((void*)s)) continue;
+                        visited[s] = 1;
+                        while (s) {
+                            LOGir << "    " << s->id << s->size << s->occupied;
+                            s = s->next;
+                        }
+                    }
+                }
+            };
+
+            log << "total:" << FloatOutput{(double)total, " KMG", 1024, "B"} >> "\n";
     }
     if (use_temp_allocator && exe.temp_allocator) {
         for (auto& a : TempAllocator::temp_allocators) {

@@ -236,6 +236,26 @@ static unordered_set<string> unary_ops = {
     "float16",
 
     /**
+    Returns a copy of the input var, casted to bfloat16 (brain half-precision float).
+
+    ----------------
+
+    * [in] x:   the input jt.Var
+
+    ----------------
+    
+    Example-1::
+        >>> x = jt.rand(3) * 10 
+        >>> x
+        jt.Var([4.093273  2.0086648 8.474352 ], dtype=float32)
+        >>> x.bfloat16()
+        jt.Var([4.094 2.008 8.48 ], dtype=bfloat16)
+        >>> jt.bfloat16(x)
+        jt.Var([4.094 2.008 8.48 ], dtype=bfloat16)
+     */
+    "bfloat16",
+
+    /**
     Returns a copy of the input var, casted to float32.
 
     ----------------

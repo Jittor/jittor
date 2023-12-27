@@ -7,6 +7,8 @@
 #pragma once
 #include <cuda_runtime.h>
 #include <cudnn.h>
+#include <cuda_fp16.h>
+#include <cuda_bf16.h>
 
 #include "utils/log.h"
 #include "helper_cuda.h"
@@ -24,5 +26,11 @@ void set_algorithm_cache_size(int size);
 
 // @pyjt(set_max_workspace_ratio)
 void set_max_workspace_ratio(float64 ratio);
+
+
+template <typename T_ELEM> __inline__  cudnnDataType_t getDataType();
+template <> __inline__ cudnnDataType_t getDataType<half1>() { return CUDNN_DATA_HALF;   }
+template <> __inline__ cudnnDataType_t getDataType<float>() { return CUDNN_DATA_FLOAT;  }
+template <> __inline__ cudnnDataType_t getDataType<__nv_bfloat16>() { return CUDNN_DATA_BFLOAT16;  }
 
 } // jittor

@@ -727,8 +727,10 @@ def fp32_guard(func):
             return func(*args, **kw)
         new_args = []
         need_cast = False
+        dtype = None
         for a in args:
-            if isinstance(a, jt.Var) and a.dtype == "float16":
+            if isinstance(a, jt.Var) and (a.dtype == "float16" or a.dtype == "bfloat16"):
+                dtype = a.dtype
                 new_args.append(a.float32())
                 need_cast = True
             else:
@@ -736,7 +738,7 @@ def fp32_guard(func):
         with jt.flag_scope(amp_level=0):
             a = func(*new_args, **kw)
             if need_cast and isinstance(a, jt.Var) and a.dtype == "float32":
-                a = a.float16()
+                a = a.cast(dtype)
         return a
     return wrapper
 
@@ -2983,6 +2985,14 @@ class ComplexNumber:
         >>> a.conj()                # ComplexNumber(real, -imag)
         >>> a.fft2()                # cuda only now. len(real.shape) equals 3
         >>> a.ifft2()               # cuda only now. len(real.shape) equals 3
+
+        >>> a = jt.array([[1,1],[1,-1]])
+        >>> b = jt.array([[0,-1],[1,0]])
+        >>> c = ComplexNumber(a,b) / jt.sqrt(3)
+        >>> c @ c.transpose().conj()
+        ComplexNumber(real=jt.Var([[0.99999994 0.        ]
+                [0.         0.99999994]], dtype=float32), imag=jt.Var([[0. 0.]
+                [0. 0.]], dtype=float32))
     '''
     def __init__(self, real: jt.Var, imag: jt.Var=None, is_concat_value=False):
         if is_concat_value:
@@ -3029,8 +3039,11 @@ class ComplexNumber:
     def reshape(self, shape):
         return ComplexNumber(jt.reshape(self.real, shape), jt.reshape(self.imag, shape))
     
-    def permute(self, axes):
-        return ComplexNumber(jt.permute(self.real, axes), jt.permute(self.imag, axes))
+    def permute(self, *axes):
+        return ComplexNumber(jt.permute(self.real, *axes), jt.permute(self.imag, *axes))
+
+    def transpose(self, *axes):
+        return ComplexNumber(jt.transpose(self.real, *axes), jt.transpose(self.imag, *axes))
 
     def exp(self):
         er = jt.exp(self.real)
@@ -3112,6 +3125,24 @@ class ComplexNumber:
                                  (other.imag * self.real - other.real * self.imag) / norm)
         elif isinstance(other, (int, float, jt.Var)):
             return ComplexNumber(other * self.real / norm, - other * self.imag / norm)
+        else:
+            raise NotImplementedError
+
+    def __matmul__(self, other):
+        if isinstance(other, ComplexNumber):
+            return ComplexNumber(self.real @ other.real - self.imag @ other.imag,
+                                 self.real @ other.imag + self.imag @ other.real)
+        elif isinstance(other, jt.Var):
+            return ComplexNumber(self.real @ other, self.imag @ other)
+        else:
+            raise NotImplementedError
+
+    def __imatmul__(self, other):
+        if isinstance(other, ComplexNumber):
+            return ComplexNumber(other.real @ self.real - other.imag @ self.imag,
+                                 other.imag @ self.real + other.real @ self.imag)
+        elif isinstance(other, jt.Var):
+            return ComplexNumber(other @ self.real, other @ self.imag)
         else:
             raise NotImplementedError
 

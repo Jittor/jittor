@@ -6,6 +6,7 @@ import sys
 import torch
 
 class HalfStorage: pass
+class BFloat16Storage: pass
 class FloatStorage: pass
 class LongStorage: pass
 class IntStorage: pass
@@ -13,6 +14,7 @@ class ShortStorage: pass
 class CharStorage: pass
 class BoolStorage: pass
 HalfStorage.__module__ = "torch"
+BFloat16Storage.__module__ = "torch"
 FloatStorage.__module__ = "torch"
 LongStorage.__module__ = "torch"
 IntStorage.__module__ = "torch"
@@ -22,7 +24,7 @@ BoolStorage.__module__ = "torch"
 def _rebuild_tensor_v2(*args): pass
 _rebuild_tensor_v2.__module__ = "torch._utils"
 
-targets = [HalfStorage, FloatStorage, LongStorage, IntStorage, ShortStorage, CharStorage, BoolStorage, _rebuild_tensor_v2]
+targets = [HalfStorage, BFloat16Storage, FloatStorage, LongStorage, IntStorage, ShortStorage, CharStorage, BoolStorage, _rebuild_tensor_v2]
 
 def swap_targets(targets):
     original_targets = []
@@ -57,6 +59,7 @@ class TensorWrapper:
 
 dtype_map = {
     "float16": HalfStorage,
+    "bfloat16": BFloat16Storage,
     "float32": FloatStorage,
     "int64": LongStorage,
     "int32": IntStorage,

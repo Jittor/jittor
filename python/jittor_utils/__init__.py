@@ -344,7 +344,8 @@ def find_cache_path():
     pyv = "py"+platform.python_version()
     # cpu version
     cpuv = get_cpu_version()
-    dirs = [".cache", "jittor", jtv, ccv, pyv, osv, cpuv]
+    jittor_path_key = get_str_hash(__file__)[:4]
+    dirs = [".cache", "jittor", jtv, ccv, pyv, osv, cpuv, jittor_path_key]
     dirs = list(map(short, dirs))
     cache_name = "default"
     try:

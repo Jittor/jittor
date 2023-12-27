@@ -151,6 +151,7 @@ std::ostream& operator<<(std::ostream& os, const Var& var) {
         << ":o" << var._outputs.size()
         << ":s" << var.is_finished()
         << ":n" << var.flags.get(NodeFlags::_needed_by_backward)
+        << ":g" << !var.is_stop_grad()
         << ',' 
         << var.dtype().to_cstring() << ',' << var.name << ',' << std::hex <<(uint64)var.mem_ptr << std::dec
         << ')' << var.shape;
