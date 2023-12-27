@@ -216,19 +216,9 @@ jt.Var.__setitem__ = setitem
 
 
 def _merge_dtypes(dtypes):
-    s = -1
-    e = -1
-    names = ["bool","uint","int","float"]
-    dbytes = ["8","16","32","64"]
-    for d in dtypes:
-        for name in names:
-            if d.startswith(name):
-                s = max(s,names.index(name))
-        for db in dbytes:
-            if d.endswith(db):
-                e = max(e,dbytes.index(db))
-    assert s>=0 and s<4 and e<4
-    dtype = names[s]+("" if e ==-1 else dbytes[e])
+    dtype = dtypes[0]
+    for i in range(1, len(dtypes)):
+        dtype = jt.binary_dtype_infer("add", dtype, dtypes[i])
     return dtype 
 
 @jt.flag_scope(amp_reg=4) # _custom_flag

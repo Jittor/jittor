@@ -63,8 +63,15 @@ void setter_use_cuda_host_allocator(int value) {
     #endif
 }
 
+extern int64 sfrl_large_block_size_device;
+
 Allocator* get_allocator(bool temp_allocator) {
     Allocator* allocator = nullptr;
+    if (use_cuda && sfrl_large_block_size_device >= (1ll<<40)) {
+        // if super large block is used, don't use
+        // temp allocator
+        temp_allocator = false;
+    }
 #ifdef HAS_CUDA
     if (use_cuda && !allocator) {
         if (use_cuda_managed_allocator) {

@@ -214,6 +214,8 @@ class Dataset(object):
     
     def _worker_main(self, worker_id, buffer, status):
         import jittor_utils
+        jt.flags.use_cuda_host_allocator = 0
+
         jittor_utils.cc.init_subprocess()
         jt.jt_init_subprocess()
         seed = jt.get_seed()
@@ -363,7 +365,7 @@ Example::
         for w in self.workers:
             w.buffer.clear()
         self.idqueue.clear()
-        self.gid_obj.value = 0
+        self.gid.value = 0
             
     def _init_workers(self, index_list):
         jt.migrate_all_to_cpu()
@@ -398,7 +400,8 @@ Example::
         self._stop_all_workers()
         self.terminate()
         del self.index_list
-        del self.idmap
+        del self.idqueue
+        del self.idqueue_lock
         del self.gid
         del self.gidc
         del self.num_idle
@@ -425,7 +428,7 @@ Example::
 
         obj = self.__class__.__new__(self.__class__)
         memo[d] = id(obj)
-        exclude_key = {"index_list", "idmap", "gid", "gidc", "num_idle", "num_idle_c", "workers", "index_list_numpy", "dataset", "idqueue", "idqueue_lock"}
+        exclude_key = {"index_list", "idqueue", "idqueue_lock", "gid", "gidc", "num_idle", "num_idle_c", "workers", "index_list_numpy", "dataset", "idqueue", "idqueue_lock"}
         for k,v in self.__dict__.items():
             if k in exclude_key: continue
             obj.__setattr__(k, deepcopy(v))
@@ -507,9 +510,14 @@ Example::
             # print(f"Number of batches({total_len // self.batch_size}!={self.real_len // self.real_batch_size}) not match, total_len: {total_len}, batch_size: {self.batch_size}, real_len: {self.real_len}, real_batch_size: {self.real_batch_size}")
             # print("mpi dataset init ")
         else:
-            self.real_len = self.total_len
+            self.real_len = len(index_list)
             self.real_batch_size = self.batch_size
-        self.batch_len = self.__batch_len__()
+
+        if self.drop_last:
+            self.batch_len = self.real_len // self.real_batch_size
+        else:
+            self.batch_len = (self.real_len-1) // self.real_batch_size + 1
+
         return index_list
 
     def _epochs(self):

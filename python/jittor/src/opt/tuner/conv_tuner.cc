@@ -232,7 +232,7 @@ void ConvTuner::forwardTune(FusedOp* fop) {
 
         // only support float32,float16 currently
         if (use_cuda) {
-            if (bop->z->dtype() != ns_float32 && bop->z->dtype() != ns_float16)
+            if (!bop->z->dtype().is_float())
                 continue;
         } else {
             if (bop->z->dtype() != ns_float32)

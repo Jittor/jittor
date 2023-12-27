@@ -8,13 +8,15 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 
+#include <mutex>
 #include "mem/allocator/sfrl_allocator.h"
+#include "misc/cuda_flags.h"
 
 namespace jittor {
 
 DEFINE_FLAG(int, use_sfrl_allocator, 1, "Enable sfrl allocator");
-DEFINE_FLAG(int64, sfrl_large_block_size, 20971520, "sfrl_large_block_size, larger will reduce memory shard");
-#define LARGE_BLOCK_SIZE sfrl_large_block_size
+DEFINE_FLAG(int64, sfrl_large_block_size_device, 20971520, "sfrl_large_block_size, larger will reduce memory shard, only affect device");
+constexpr int64 sfrl_large_block_size_cpu=20971520;
 
 std::vector<size_t> CachingBlockPool::block_ids;
     //start from 1
@@ -23,11 +25,11 @@ std::unique_ptr<CachingBlock*[]> CachingBlockPool::occupied_id_mapper(
     new CachingBlock*[CachingBlockPool::ID_LIMIT]);
 
 //CachingBlock
-CachingBlock::CachingBlock(size_t size) : 
-    size(size), id(0), share_times(0), memory_ptr(nullptr), blocks(nullptr), prev(nullptr), next(nullptr), occupied(false) {}
+CachingBlock::CachingBlock(size_t size, size_t origin_size) : 
+    size(size), origin_size(origin_size), id(0), share_times(0), memory_ptr(nullptr), blocks(nullptr), prev(nullptr), next(nullptr), occupied(false) {}
 
-CachingBlock::CachingBlock(size_t size, CachingBlockPool* blocks, void* memory_ptr) : 
-    size(size), id(0), share_times(0), memory_ptr(memory_ptr), blocks(blocks), prev(nullptr), next(nullptr), occupied(false) {}
+CachingBlock::CachingBlock(size_t size, size_t origin_size, CachingBlockPool* blocks, void* memory_ptr) : 
+    size(size), origin_size(origin_size), id(0), share_times(0), memory_ptr(memory_ptr), blocks(blocks), prev(nullptr), next(nullptr), occupied(false) {}
 
 //CachingBlockPool
 CachingBlockPool::CachingBlockPool() {
@@ -40,8 +42,8 @@ CachingBlockPool::~CachingBlockPool() {
     }
 }
 
-unsigned long long CachingBlockPool::get_key(CachingBlock* block) {
-    return ((unsigned long long)block->size) * ID_LIMIT + block->id;
+pair<size_t, size_t> CachingBlockPool::get_key(CachingBlock* block) {
+    return std::make_pair((size_t)block->size, (size_t)(block->origin_size * ID_LIMIT + block->id));
 }
 
 void CachingBlockPool::insert(CachingBlock* block) {
@@ -91,7 +93,7 @@ CachingBlock* CachingBlockPool::get_occupied(size_t allocation) {
 }
 
 CachingBlock* CachingBlockPool::pop_block(size_t size) {
-    auto temp = CachingBlock(size);
+    auto temp = CachingBlock(size, 0);
     auto it = blocks.lower_bound(get_key(&temp));
     CachingBlock* block = nullptr;
     if (it != blocks.end()) {
@@ -122,12 +124,43 @@ void SFRLAllocator::setup(Allocator* underlying) {
 }
 
 size_t SFRLAllocator::allocation_size(size_t size) {
+    // #ifdef HAS_CUDA
+    // if (is_cuda() && size >= SMALL_BLOCK_SIZE) {
+    //     // just take all free mem
+    //     size_t gpu_free = 0, _gpu_total = 0;
+    //     cudaMemGetInfo(&gpu_free, &_gpu_total);
+    //     // left 512MB
+    //     size_t left = 1<<29;
+    //     if (gpu_free >= left) {
+    //         gpu_free = (gpu_free - left) / LARGE_ALIGN_SIZE * LARGE_ALIGN_SIZE;
+    //         if (gpu_free >= size)
+    //             return gpu_free;
+    //     }
+    // }
+    // #endif
     if (size <= SMALL_BLOCK_SIZE)
         return SMALL_BLOCK_SIZE;
-    else if (size <= LARGE_BLOCK_SIZE)
-        return LARGE_BLOCK_SIZE;
-    else
-        return (size + LARGE_ALIGN_SIZE - 1) / LARGE_ALIGN_SIZE * LARGE_ALIGN_SIZE;
+    int64 large_block_size = is_cuda() ? sfrl_large_block_size_device : sfrl_large_block_size_cpu;
+    int64 align_size = (size + LARGE_ALIGN_SIZE - 1) / LARGE_ALIGN_SIZE * LARGE_ALIGN_SIZE;
+    if (size <= large_block_size) {
+        #ifdef HAS_CUDA
+        if (is_cuda()) {
+            // just take all free mem
+            int64 gpu_free = 0, _gpu_total = 0;
+            cudaMemGetInfo((size_t*)&gpu_free, (size_t*)&_gpu_total);
+            // left 512MB
+            int64 left = 1<<29;
+            gpu_free = (gpu_free - left) / LARGE_ALIGN_SIZE * LARGE_ALIGN_SIZE;
+            gpu_free = std::min(gpu_free, large_block_size);
+            if (gpu_free >= align_size)
+                return gpu_free;
+            else
+                return align_size;
+        }
+        #endif
+        return large_block_size;
+    } else
+        return align_size;
 }
 
 bool SFRLAllocator::should_split(CachingBlock* block, size_t size) {
@@ -205,7 +238,10 @@ inline void SFRLAllocator::try_free_this_allocators() {
     }
 }
 
+std::mutex sfrl_allocator_mutex;
+
 void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
+    std::unique_lock<std::mutex> lock(sfrl_allocator_mutex);
     size = align_size(size);
     CachingBlockPool* blocks = get_blocks(size);
     //search cached block
@@ -220,14 +256,15 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
         } catch (...) {
             unused_memory -= large_blocks.free_all_cached_blocks(underlying);
             unused_memory -= small_blocks.free_all_cached_blocks(underlying);
+            gc_all();
             ptr = underlying->alloc(alloc_size, allocation);
         }
-        block = new CachingBlock(alloc_size, blocks, ptr);
+        block = new CachingBlock(alloc_size, alloc_size, blocks, ptr);
     } else {
         unused_memory -= block->size;
     }
     if (should_split(block, size)) {
-        CachingBlock* rest = new CachingBlock(block->size - size, block->blocks, static_cast<char*>(block->memory_ptr) + size);
+        CachingBlock* rest = new CachingBlock(block->size - size, block->origin_size, block->blocks, static_cast<char*>(block->memory_ptr) + size);
         block->size = size;
         if (block->next) {
             block->next->prev = rest;
@@ -245,6 +282,7 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
 }
 
 void SFRLAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
+    std::unique_lock<std::mutex> lock(sfrl_allocator_mutex);
     auto* block = CachingBlockPool::occupied_id_mapper[allocation];
     auto* blocks = block->blocks;
     if (block->share_times == 0) {
@@ -267,6 +305,7 @@ void SFRLAllocator::gc() {
 }
 
 bool SFRLAllocator::share_with(size_t size, size_t allocation) {
+    std::unique_lock<std::mutex> lock(sfrl_allocator_mutex);
     auto* block = CachingBlockPool::occupied_id_mapper[allocation];
     ++block->share_times;
     return true;

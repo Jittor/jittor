@@ -427,4 +427,7 @@ inline VarHolder* wrap_var_addr(int64 addr) {
     return new VarHolder((Var*)addr);
 }
 
+// @pyjt(reuse_np_array)
+VarHolder* reuse_np_array(PyObject* obj);
+
 } // jittor

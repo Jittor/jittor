@@ -21,14 +21,18 @@ struct FP16OpType : OpByType {
     FP16OpType() {
         types = {
             "float16",
+            "bfloat16",
         };
     }
 
     string expand_op(const vector<string>& args) {
         bool found_fp16 = 0;
+        bool found_bf16 = 0;
         for (int i=1; i<args.size(); i+=2) {
             if (types.count(args[i]))
                 found_fp16 = 1;
+            if (args[i] == "bfloat16")
+                found_bf16 = 1;
         }
         if (!found_fp16) return "";
         static unordered_map<string,string> cuda_map = {
@@ -65,8 +69,8 @@ struct FP16OpType : OpByType {
             {"maximum", "::max($1($2), $1($4))"},
             {"minimum", "::min($1($2), $1($4))"},
             {"mod", "$1(($2)-::hfloor(($2)/($4))*($4))"},
-            {"init_maximum", "-32768.0f"},
-            {"init_minimum", "32768.0f"},
+            {"init_maximum", "@if(@strcmp($1,float16)==0,-65000.0f,-1e38)"},
+            {"init_minimum", "@if(@strcmp($1,float16)==0,65000.0f,1e38)"},
             {"equal", "(($2)==($4))"},
         };
 
@@ -153,7 +157,10 @@ struct FP16OpType : OpByType {
             if (args[1] == "float32" && !both_map.count(args.at(0))) {
                 ret = common_op_type_cuda_map[args.at(0)];
             }
-            if (args[1] == "float16" || args[1] == "float32") {
+            if (args[1] == "float16" || 
+                args[1] == "bfloat16" || 
+                args[1] == "float32") 
+            {
                 for (int i=3; i<args.size(); i+=2) {
                     if (args[i] != args[1]) {
                         ret = replace(ret, "$"+S(i-1),
@@ -161,15 +168,17 @@ struct FP16OpType : OpByType {
                     }
                 }
             } else {
+                string target = found_bf16 ? "bfloat16" : "float16";
                 for (int i=3; i<args.size(); i+=2) {
-                    if (args[i] != "float16") {
+                    if (args[i] != target) {
                         ret = replace(ret, "$"+S(i-1),
-                            "float16($"+S(i-1)+")");
+                            target+"($"+S(i-1)+")");
                     }
                 }
             }
         }
-        return format(ret, args);
+        auto result = format(ret, args);
+        return result;
     }
 
     void post_pass(OpCompiler* oc) {

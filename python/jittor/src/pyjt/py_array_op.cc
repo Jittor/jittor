@@ -28,6 +28,8 @@ namespace jittor {
 DEFINE_FLAG(int, auto_convert_64_to_32, 1, "auto convert 64bit numpy array into 32bit jittor array");
 DEFINE_FLAG(uint8, reuse_array, 0, "try reuse np.array memory into jt.array");
 DECLARE_FLAG(int, use_cuda);
+DECLARE_FLAG(int, use_cuda_host_allocator);
+
 
 static auto make_array = get_op_info("array")
     .get_constructor<VarPtr, const void*, NanoVector, NanoString>();
@@ -47,6 +49,38 @@ void get_pyjt_array(PyObject* obj, vector<int64>& shape, string& dtype, void*& d
     shape = vh->shape().to_vector();
     dtype = vh->dtype().to_cstring();
     data = vh->var->mem_ptr;
+}
+
+VarHolder* reuse_np_array(PyObject* obj) {
+    CHECK(Py_TYPE(obj) == PyArray_Type);
+    auto arr = (PyArray_Proxy*)obj;
+    NanoVector shape;
+    NanoString dtype;
+    if (arr->nd)
+        shape = NanoVector::make(arr->dimensions, arr->nd);
+    else
+        shape.push_back(1);
+    dtype = get_type_str(arr);
+    CHECK(is_c_style(arr));
+
+    VarPtr vp(shape, dtype);
+    vp->finish_pending_liveness();
+    vp->mem_ptr = arr->data;
+
+    Allocation allocation;
+    make_foreign_allocation(allocation, 
+        vp->mem_ptr, vp->size, 
+        [obj]() { 
+            Py_DECREF(obj); 
+        });
+    Py_INCREF(obj);
+    vp->allocator = allocation.allocator;
+    vp->allocation = allocation.allocation;
+    allocation.ptr = nullptr;
+    allocation.allocator = nullptr;
+    allocation.allocation = 0;
+
+    return new VarHolder(std::move(vp));
 }
 
 ArrayOp::ArrayOp(PyObject* obj) {
@@ -125,7 +159,7 @@ ArrayOp::ArrayOp(PyObject* obj) {
     }
     void* host_ptr = nullptr;
     #ifdef HAS_CUDA
-    if (use_cuda && !save_mem) {
+    if (use_cuda && !save_mem && !use_cuda_host_allocator) {
         flags.set(NodeFlags::_cpu, 0);
         flags.set(NodeFlags::_cuda, 1);
         if (!output->flags.get(NodeFlags::_force_fuse)) {

@@ -49,6 +49,7 @@ void NcclBroadcastOp::jit_run() {
         @if(@strcmp(@Tx,int64)==0, ncclInt64)
         @if(@strcmp(@Tx,uint8)==0, ncclUint8)
         @if(@strcmp(@Tx,float16)==0, ncclHalf)
+        @if(@strcmp(@Tx,bfloat16)==0, ncclBfloat16)
     )
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
