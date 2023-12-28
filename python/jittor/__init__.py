@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.9.1'
+__version__ = '1.3.9.2'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -61,7 +61,7 @@ def safepickle(obj, path):
         return
     # Protocol version 4 was added in Python 3.4. It adds support for very large objects, pickling more kinds of objects, and some data format optimizations.
     # ref: <https://docs.python.org/3/library/pickle.html>
-    obj = dfs_to_numpy(obj)
+    # obj = dfs_to_numpy(obj)
     s = pickle.dumps(obj, 4)
     checksum = hashlib.sha1(s).digest()
     s += bytes(checksum)

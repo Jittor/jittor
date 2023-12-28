@@ -264,7 +264,7 @@ void GetitemOp::_compile_optimize(string& src) {
     auto& func = main.children.back()->children.back();
     // auto& loop = func->children.back();
 
-    func->push_back("void func() {}", &func->before);
+    func->push_back("void slice_func() {}", &func->before);
 
     auto& new_func = func->before.back();
     // auto new_func = func->before.back()->move_out();
@@ -306,7 +306,7 @@ void GetitemOp::_compile_optimize(string& src) {
     int no = o_shape.size();
     STACK_ALLOC(KernelIR*, loops, no);
     if (!no) {
-        func->push_back("func<<<1,1>>>("+arg_call+");");
+        func->push_back("slice_func<<<1,1>>>("+arg_call+");");
     } else {
         bool has_zero = 0;
         loops[0] = loop.get();
@@ -352,7 +352,7 @@ void GetitemOp::_compile_optimize(string& src) {
             func->push_back("cuda_loop_schedule(o_shape, masks, tdims);");
             func->push_back("dim3 grid_dim(tdims[3],tdims[4],tdims[5]);");
             func->push_back("dim3 block_dim(tdims[0],tdims[1],tdims[2]);");
-            func->push_back("func<<<grid_dim, block_dim>>>("+arg_call+");");
+            func->push_back("slice_func<<<grid_dim, block_dim>>>("+arg_call+");");
         }
     }
     src = main.to_string();
