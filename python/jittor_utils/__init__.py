@@ -652,6 +652,28 @@ def add_backend(mod):
 from . import lock
 @lock.lock_scope()
 def compile_module(source, flags):
+    """
+    quick c extension:
+    Example:
+
+        import jittor as jt
+
+        import jittor_utils
+        import jittor.compiler as compiler
+
+
+        mod = jittor_utils.compile_module('''
+        #include "common.h"
+        namespace jittor {
+        // @pyjt(hello)
+        string hello(const string& src) {
+            LOGir << "hello" << src;
+        }
+        }''', compiler.cc_flags)
+
+        mod.hello("aaa")
+
+    """
     tmp_path = os.path.join(cache_path, "tmp")
     os.makedirs(tmp_path, exist_ok=True)
     hash = "hash_" + get_str_hash(source)
