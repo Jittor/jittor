@@ -26,7 +26,7 @@ class MNIST(Dataset):
 
         [in] data_root(str): your data root.
         [in] train(bool): choose model train or val.
-        [in] download(bool): Download data automatically if download is Ture.
+        [in] download(bool): Download data automatically if download is True.
         [in] batch_size(int): Data batch size.
         [in] shuffle(bool): Shuffle data if true.
         [in] transform(jittor.transform): transform data.
@@ -106,7 +106,7 @@ class EMNIST(Dataset):
         [in] data_root(str): your data root.
         [in] split(str): one of 'byclass', 'bymerge', 'balanced', 'letters', 'digits', 'mnist'.
         [in] train(bool): choose model train or val.
-        [in] download(bool): Download data automatically if download is Ture.
+        [in] download(bool): Download data automatically if download is True.
         [in] batch_size(int): Data batch size.
         [in] shuffle(bool): Shuffle data if true.
         [in] transform(jittor.transform): transform data.
