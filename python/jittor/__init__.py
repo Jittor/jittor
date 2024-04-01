@@ -428,12 +428,14 @@ def random(shape, dtype="float32", type="uniform"):
         jt.Var([[0.96788853 0.28334728 0.30482838]
                 [0.46107793 0.62798643 0.03457401]], dtype=float32)
     '''
-    # TODO: move those code to core
-    if dtype in ["float16", "bfloat16"]:
-        # TODO: make curand support fp16
-        ret = ops.random(shape, "float32", type).cast(dtype)
-    else:
-        ret = ops.random(shape, dtype, type)
+
+    ret = ops.random(shape, "float32", type)
+   ## TODO: move those code to core
+   #if dtype in ["float16", "bfloat16"]:
+   #    # TODO: make curand support fp16
+   #    ret = ops.random(shape, "float32", type).cast(dtype)
+   #else:
+   #    ret = ops.random(shape, dtype, type)
     amp_reg = jt.flags.amp_reg
     if amp_reg:
         if amp_reg & 16:
