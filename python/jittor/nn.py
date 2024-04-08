@@ -811,10 +811,11 @@ class GroupNorm(Module):
     def execute(self, x):
         N = x.shape[0]
         C = self.num_channels
-        output_shape = (N,-1)
+        # output_shape = (N,-1)
 	    # TODO: 3d group norm
-        if x.ndim==4:
-            output_shape = x.shape
+        # if x.ndim==4:
+            # output_shape = x.shape
+        output_shape = x.shape
         assert C % self.num_groups == 0
         x = x.reshape((N, self.num_groups, C//self.num_groups, -1))
         xmean = jt.mean(x, dims=[2,3]).reshape((N, self.num_groups, 1))
@@ -866,6 +867,7 @@ LeakyReLU = Leaky_relu
 ReLU6 = jt.make_module(relu6)
 Softmax = jt.make_module(softmax, 2)
 GELU = jt.make_module(gelu)
+SiLU = jt.make_module(silu)
 
 class Flatten(Module):
     ''' Flattens the contiguous range of dimensions in a Var.

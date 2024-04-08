@@ -265,7 +265,13 @@ def load_pytorch(fn_name):
             else:
                 raise RuntimeError(f"zipfile <{fn_name}> format error, data.pkl not found")
                 
-            data_file = contents.read_var(prefix+"data.pkl").data.tobytes()
+            data_file = contents.read_var(prefix+"data.pkl")
+           #import pdb; pdb.set_trace();
+           #print(data_file)
+            if data_file.dtype == "uint8":
+                data_file = data_file.numpy().tobytes()
+            else:
+                data_file = data_file.data.tobytes()
             data_file = io.BytesIO(data_file)
             pickle_load_args = {'encoding': 'utf-8'}
             unpickler = UnpicklerWrapper(data_file,  **pickle_load_args)

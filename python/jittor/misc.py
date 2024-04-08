@@ -347,9 +347,9 @@ def stack(x, dim=0):
     '''
     assert isinstance(x, Sequence)
     if len(x) < 2:
-        return x[0].unsqueeze(dim)
+        return jt.Var(x[0]).unsqueeze(dim)
 
-    res = [x_.unsqueeze(dim) for x_ in x]
+    res = [jt.Var(x_).unsqueeze(dim) for x_ in x]
     return jt.concat(res, dim=dim)
 jt.Var.stack = stack
 
@@ -1069,24 +1069,24 @@ def index_fill_(x,dim,indexs,val):
     indexs = [f'i{i}' for i in range(len(x.shape))]
     return x.reindex(shape = x.shape,indexes = indexs,overflow_conditions=overflow_conditions,overflow_value=val)
 
-def triu_(x,diagonal=0):
-    r'''
-    Returns the upper triangular part of a matrix (2-D tensor) or batch of matrices input, the other elements of the result tensor out are set to 0.
+# def triu_(x,diagonal=0):
+#     r'''
+#     Returns the upper triangular part of a matrix (2-D tensor) or batch of matrices input, the other elements of the result tensor out are set to 0.
 
-    The upper triangular part of the matrix is defined as the elements on and above the diagonal.
+#     The upper triangular part of the matrix is defined as the elements on and above the diagonal.
 
-    Args:
-        x – the input tensor.
+#     Args:
+#         x – the input tensor.
 
-        diagonal – the diagonal to consider,default =0
-    '''
-    l = len(x.shape)
-    assert l>1
-    overflow_conditions=[f'i{l-1}<i{l-2}+{diagonal}']
-    indexs = [f'i{i}' for i in range(l)]
-    return x.reindex(x.shape,indexs,overflow_conditions=overflow_conditions,overflow_value=0)
+#         diagonal – the diagonal to consider,default =0
+#     '''
+#     l = len(x.shape)
+#     assert l>1
+#     overflow_conditions=[f'i{l-1}<i{l-2}+{diagonal}']
+#     indexs = [f'i{i}' for i in range(l)]
+#     return x.reindex(x.shape,indexs,overflow_conditions=overflow_conditions,overflow_value=0)
 
-jt.Var.triu_ = triu_
+# jt.Var.triu_ = triu_
 
 def print_tree(now, max_memory_size, prefix1, prefix2, build_by):
     def format_size(s, end='B'):
@@ -2053,7 +2053,7 @@ def triu(input: jt.Var, diagonal:int=0) -> jt.Var:
     mask = index[-2] <= index[-1] - diagonal
     return jt.ternary(mask, input, jt.zeros_like(input))
 jt.Var.triu = triu
-jt.Var.triu_ = lambda x: x.assign(x.triu())
+jt.Var.triu_ = lambda x,diagonal=0: x.assign(x.triu(diagonal))
 
 def tril(input: jt.Var, diagonal:int=0) -> jt.Var:
     ''' Returns the lower triangular part of a matrix (2-D tensor) or batch of matrices input, the other elements of the result tensor out are set to 0.
@@ -2227,3 +2227,6 @@ def cuda(x):
     return x
 jt.Var.cuda = cuda
 jt.Var.npu = cuda
+
+def expm1(x):
+    return jt.exp(x) - 1
