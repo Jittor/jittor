@@ -142,6 +142,10 @@ struct NanoString {
     // @pyjt(is_int)
     inline bool is_int() const { return get(_int); }
     inline bool is_unsigned() const { return get(_unsigned); }
+    // @pyjt(is_floating_point)
+    inline bool is_floating_point() const { return get(_float); }
+    // @pyjt(is_complex)
+    inline bool is_complex() const { return false; }
     // @pyjt(is_float)
     inline bool is_float() const { return get(_float); }
     inline ns_t is_white() const { return get(_white_list); }
