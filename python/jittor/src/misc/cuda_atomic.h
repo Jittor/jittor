@@ -104,7 +104,7 @@ template <> struct int_mapper<__half> {
     inline static __device__ target* to_intp(src* a) { return (target*)a; }
     inline static __device__ src from_int(target a) { return __ushort_as_half(a); }
 };
-
+#if CUDA_ARCH >= 800
 template <> struct int_mapper<__nv_bfloat16> { 
     typedef __nv_bfloat16 src;
     typedef unsigned short target;
@@ -112,6 +112,7 @@ template <> struct int_mapper<__nv_bfloat16> {
     inline static __device__ target* to_intp(src* a) { return (target*)a; }
     inline static __device__ src from_int(target a) { return __ushort_as_bfloat16(a); }
 };
+#endif
 
 template <> struct int_mapper<double> { 
     typedef double src;
@@ -166,7 +167,7 @@ __half cuda_atomic_min(__half* a, __half b) {
     return old_f;
 }
 
-
+#if CUDA_ARCH >= 800
 template<> __device__
 __nv_bfloat16 cuda_atomic_max(__nv_bfloat16* a, __nv_bfloat16 b) {
     auto old_f = *a;
@@ -196,6 +197,7 @@ __nv_bfloat16 cuda_atomic_min(__nv_bfloat16* a, __nv_bfloat16 b) {
     }
     return old_f;
 }
+#endif
 
 template<typename T>
 __device__ inline T shared_reduce_add(T a, T b) {
