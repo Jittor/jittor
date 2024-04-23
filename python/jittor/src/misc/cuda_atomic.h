@@ -136,7 +136,7 @@ T cuda_atomic_mul(T* a, T b) {
     return old_f;
 }
 
-
+#if CUDA_ARCH >= 800
 template<> __device__
 __half cuda_atomic_max(__half* a, __half b) {
     auto old_f = *a;
@@ -166,7 +166,7 @@ __half cuda_atomic_min(__half* a, __half b) {
     }
     return old_f;
 }
-
+#endif
 #if CUDA_ARCH >= 800
 template<> __device__
 __nv_bfloat16 cuda_atomic_max(__nv_bfloat16* a, __nv_bfloat16 b) {
