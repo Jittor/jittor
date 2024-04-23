@@ -114,7 +114,10 @@ def install_cuda():
             LOG.w(f"Unsupport cuda driver version: {cuda_driver_version}, at least 10.2")
             return None
     else:
-        if cuda_driver_version >= [11,2]:
+        if cuda_driver_version >= [12,2]:
+            cuda_tgz = "cuda12.2_cudnn8_linux.tgz"
+            md5 = "7afda9332a268f29354488f13b489f53"
+        elif cuda_driver_version >= [11,2]:
             cuda_tgz = "cuda11.2_cudnn8_linux.tgz"
             md5 = "b93a1a5d19098e93450ee080509e9836"
         elif cuda_driver_version >= [11,]:
