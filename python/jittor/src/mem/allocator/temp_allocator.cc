@@ -81,6 +81,10 @@ void TempAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
         auto it = cached_blocks.lower_bound(get_key(block));
         if (it == cached_blocks.begin()) {
             can_add = false;
+            underlying->free((void*)block->memory_ptr, block->size, 0);
+            unused_memory -= block->size;
+            block_ids.push_back(block->id);
+            delete block;
         } else {
             --it;
             TempCachingBlock* block = it->second;
