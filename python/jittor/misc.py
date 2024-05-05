@@ -346,10 +346,13 @@ def stack(x, dim=0):
         [[4 5 6]]]
     '''
     assert isinstance(x, Sequence)
+    for x_ in x:
+        if not isinstance(x_, jt.Var):
+           x_ = jt.Var(x_)
     if len(x) < 2:
-        return jt.Var(x[0]).unsqueeze(dim)
+        return x[0].unsqueeze(dim)
 
-    res = [jt.Var(x_).unsqueeze(dim) for x_ in x]
+    res = [x_.unsqueeze(dim) for x_ in x]
     return jt.concat(res, dim=dim)
 jt.Var.stack = stack
 
