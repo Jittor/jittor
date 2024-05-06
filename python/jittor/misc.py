@@ -346,9 +346,8 @@ def stack(x, dim=0):
         [[4 5 6]]]
     '''
     assert isinstance(x, Sequence)
-    for x_ in x:
-        if not isinstance(x_, jt.Var):
-           x_ = jt.Var(x_)
+    for i,x_ in enumerate(x):
+            x[i] = jt.array(x_)
     if len(x) < 2:
         return x[0].unsqueeze(dim)
 
