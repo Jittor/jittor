@@ -10,6 +10,214 @@
 # ***************************************************************
 import jittor as jt
 from functools import partial
+from .nn import ComplexNumber
+
+def complex_inv(x:ComplexNumber):
+    r"""
+    calculate the inverse of x.
+    :param x (...,M,M):
+    :return:x^-1 (...,M,M).
+
+    TODO: Faster Implementation; Check backward.
+    """
+    assert isinstance(x, ComplexNumber), "complex_inv is implemented for nn.ComplexNumber"
+    assert x.real.dtype == jt.float32 and x.imag.dtype == jt.float32, "real and imag in ComplexNumber should be jt.float32"
+    assert x.shape[-2] == x.shape[-1], "only square matrix is supported for complex_inv"
+
+    def forward_code(np, data):
+        def _stack_to_complex(x):
+            return x[..., 0] + 1j * x[..., 1]
+        def _complex_to_stack(x):
+            return np.stack([np.real(x), np.imag(x)], axis=-1)
+
+        a = _stack_to_complex(data["inputs"][0])
+        m_a = data["outputs"][0]
+        t_a = np.linalg.inv(a)
+        np.copyto(m_a, _complex_to_stack(t_a))
+
+
+    def backward_code(np, data):
+        def T(x):
+            return np.conj(np.swapaxes(x, -1, -2))
+        def _stack_to_complex(x):
+            return x[..., 0] + 1j * x[..., 1]
+        def _complex_to_stack(x):
+            return np.stack([np.real(x), np.imag(x)], axis=-1)
+        _dot = partial(np.einsum, '...ij,...jk->...ik')
+        dout = _stack_to_complex(data["dout"])
+        out = data["outputs"][0]
+        mx = _stack_to_complex(data["f_outputs"][0])
+        t = -_dot(_dot(T(mx), dout), T(mx))
+        np.copyto(out, _complex_to_stack(t))
+
+    lmx = jt.numpy_code(
+        x.value.shape,
+        x.value.dtype,
+        [x.value],
+        forward_code,
+        [backward_code],
+    )
+
+    return ComplexNumber(lmx, is_concat_value=True)
+
+def complex_eig(x:ComplexNumber):
+    r"""
+    calculate the eigenvalues and eigenvectors of x.
+    :param x (...,M,M):
+    :return:w, v.
+    w (...,M) : the eigenvalues.
+    v (...,M,M) : normalized eigenvectors.
+    """
+    assert isinstance(x, ComplexNumber), "complex_eig is implemented for nn.ComplexNumber"
+    assert x.real.dtype == jt.float32 and x.imag.dtype == jt.float32, "real and imag in ComplexNumber should be jt.float32"
+    assert x.shape[-2] == x.shape[-1], "only square matrix is supported for complex_eig"
+    def forward_code(np, data):
+        def _stack_to_complex(x):
+            return x[..., 0] + 1j * x[..., 1]
+        def _complex_to_stack(x):
+            return np.stack([np.real(x), np.imag(x)], axis=-1)
+        a = _stack_to_complex(data["inputs"][0])
+        w, v = data["outputs"]
+        tw, tv = np.linalg.eig(a)
+        np.copyto(w, _complex_to_stack(tw))
+        np.copyto(v, _complex_to_stack(tv))
+
+    def backward_code(np, data):
+        raise NotImplementedError
+
+    sw = x.shape[:-2] + x.shape[-1:] + (2,)
+    sv = x.value.shape
+    w, v = jt.numpy_code(
+        [sw, sv],
+        [x.value.dtype, x.value.dtype],
+        [x.value],
+        forward_code,
+        [backward_code],
+    )
+    return ComplexNumber(w, is_concat_value=True), ComplexNumber(v, is_concat_value=True)
+
+def complex_qr(x):
+    r"""
+    do the qr factorization of x in the below formula:
+    x = QR where Q is orthogonal matrix and R is upper-triangle matrix.
+    :param x (...,M,M):
+    :return:q,r as the result of qr factorization.They are both in the shape of (...,M,M).
+    """
+    assert isinstance(x, ComplexNumber), "linalg_qr is implemented for nn.ComplexNumber"
+    assert x.real.dtype == jt.float32 and x.imag.dtype == jt.float32, "real and imag in ComplexNumber should be jt.float32"
+    assert x.shape[-2] == x.shape[-1], "only square matrix is supported for linalg_qr"
+    def forward_code(np, data):
+        def _stack_to_complex(x):
+            return x[..., 0] + 1j * x[..., 1]
+        def _complex_to_stack(x):
+            return np.stack([np.real(x), np.imag(x)], axis=-1)
+        a = _stack_to_complex(data["inputs"][0])
+        qr = data["outputs"][0]
+        Q, R = np.linalg.qr(a)
+        QR = np.stack([Q, R], axis=0)
+        np.copyto(qr, _complex_to_stack(QR))
+
+    def backward_code(np, data):
+        # reference: https://github.com/tencent-quantum-lab/tensorcircuit/blob/master/tensorcircuit/backends/pytorch_ops.py
+        def H(x):
+            return np.conj(np.swapaxes(x, -1, -2))
+        def _TriangularSolve(x, r):
+            return H(np.linalg.solve(r, H(x)))
+        def _stack_to_complex(x):
+            return x[..., 0] + 1j * x[..., 1]
+        def _complex_to_stack(x):
+            return np.stack([np.real(x), np.imag(x)], axis=-1)
+        _dot = partial(np.einsum, '...ij,...jk->...ik')
+        _diag = partial(np.einsum, '...ii->...i')
+
+        dout = data["dout"]
+        out = data["outputs"][0]
+        qr = data["f_outputs"][0]
+        dout = _stack_to_complex(dout)
+        dq, dr = dout[0], dout[1]
+        qr = _stack_to_complex(qr)
+        q, r = qr[0], qr[1]
+
+
+        qdq = _dot(H(q), dq)
+        qdq_ = qdq - H(qdq)
+        rdr = _dot(r, H(dr))
+        rdr_ = rdr - H(rdr)
+        tril = np.tril(qdq_ + rdr_)
+
+        grad_a = _dot(q, dr + _TriangularSolve(tril, r))
+        grad_b = _TriangularSolve(dq - _dot(q, qdq), r)
+        ret = grad_a + grad_b
+
+        m = rdr - H(qdq)
+        eyem = np.zeros_like(m)
+        _diag(eyem)[:] = _diag(m)
+        correction = eyem - np.real(eyem)
+        ret = ret + _TriangularSolve(_dot(q, H(correction)), r)
+        
+        ret = _complex_to_stack(ret)
+        np.copyto(out,ret)
+
+    qr = jt.numpy_code(
+        (2,) + x.value.shape,
+        x.value.dtype,
+        [x.value],
+        forward_code,
+        [backward_code],
+    )
+    q, r = qr[0], qr[1]
+    return ComplexNumber(q, is_concat_value=True), ComplexNumber(r, is_concat_value=True)
+
+def complex_svd(x:ComplexNumber):
+    r'''
+    calculate the Singular Value Decomposition of x.It follows the below fomula:
+    x = usv*
+    only support full matrices == False ver now, which means:
+    x's shape (...,M,K)
+    u's shape (...,M,K)
+    s's shape (...,K)
+    v's shape (...,K,N)
+    where K is min(M,N).
+    :param x:
+    :return:u,s,v.
+    '''
+    def forward_code(np, data):
+        def _stack_to_complex(x):
+            return x[..., 0] + 1j * x[..., 1]
+        def _complex_to_stack(x):
+            return np.stack([np.real(x), np.imag(x)], axis=-1)
+        a = _stack_to_complex(data["inputs"][0])
+        u, s, v = data["outputs"]
+        #TODO:remove copyto
+        tu, ts, tv = np.linalg.svd(a, full_matrices=0)
+        np.copyto(u, _complex_to_stack(tu))
+        np.copyto(s, _complex_to_stack(ts))
+        np.copyto(v, _complex_to_stack(tv))
+
+    def backward_code(np, data):
+        raise NotImplementedError
+
+    m, n = x.shape[-2:]
+    k = min(m, n)
+    s1 = list(x.shape)
+    s1[-1] = k
+    s2 = list(x.shape)
+    s2[-2] = k
+    s3 = list(x.shape)[:-2]
+    s3.append(k)
+    s1.append(2)
+    s2.append(2)
+    s3.append(2)
+    u, s, v = jt.numpy_code(
+        [s1, s3, s2],
+        [x.value.dtype, x.value.dtype, x.value.dtype],
+        [x.value],
+        forward_code,
+        [backward_code],
+    )
+    return ComplexNumber(u, is_concat_value=True), \
+            ComplexNumber(s, is_concat_value=True), \
+            ComplexNumber(v, is_concat_value=True)
 
 #TODO:full_matrices=1
 def svd(x):
@@ -25,6 +233,8 @@ def svd(x):
     :param x:
     :return:u,s,v.
     '''
+    if isinstance(x, ComplexNumber):
+        return complex_svd(x)
     def forward_code(np, data):
         a = data["inputs"][0]
         u, s, v = data["outputs"]
@@ -92,6 +302,17 @@ def svd(x):
     )
     return u, s, v
 
+def eig(x):
+    r"""
+    calculate the eigenvalues and eigenvectors of x.
+    :param x (...,M,M):
+    :return (ComplexNumber):w, v.
+    w (...,M) : the eigenvalues.
+    v (...,M,M) : normalized eigenvectors.
+    """
+    if isinstance(x, ComplexNumber):
+        return complex_eig(x)
+    return complex_eig(ComplexNumber(x))
 
 def eigh(x):
     r"""
@@ -147,6 +368,8 @@ def inv(x):
     :param x (...,M,M):
     :return:x^-1 (...,M,M).
     """
+    if isinstance(x, ComplexNumber):
+        return complex_inv(x)
     def forward_code(np, data):
         a = data["inputs"][0]
         m_a = data["outputs"][0]
@@ -387,6 +610,8 @@ def qr(x):
     :param x (...,M,M):
     :return:q,r as the result of qr factorization.They are both in the shape of (...,M,M).
     """
+    if isinstance(x, ComplexNumber):
+        return complex_qr(x)
     def forward_code(np, data):
         a = data["inputs"][0]
         q, r = data["outputs"]
