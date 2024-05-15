@@ -440,6 +440,17 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
         return;
     }
 
+    #ifdef IS_ACL
+    if (x->dtype() != y->dtype()) {
+        auto dtype = binary_dtype_infer(ns_add, x->ns, y->ns, 0, 0);
+        auto xp = make_unary(x, dtype);
+        auto yp = make_unary(y, dtype);
+        auto zp = make_binary(xp, yp, op);
+        forward(zp);
+        return;
+    }
+    #endif
+
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
     set_type(OpType::element);
