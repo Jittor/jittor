@@ -1631,6 +1631,8 @@ def pad(x,padding, mode='constant', value=0):
 
 class ReflectionPad2d(Module):
     def __init__(self, padding):
+        if padding < 0:
+            raise RuntimeError(f"padding must be > 0, but got {padding}")
         self.padding = padding
         if isinstance(self.padding, int):
             self.pl = self.padding
@@ -1701,6 +1703,8 @@ class ConstantPad2d(Module):
 
 class ReplicationPad2d(Module):
     def __init__(self, padding):
+        if padding < 0:
+            raise RuntimeError(f"padding must be > 0, but got {padding}")
         self.padding = padding
         if isinstance(self.padding, int):
             self.pl = self.padding
