@@ -33,7 +33,7 @@ void dump_var(Var* v, string name) {
     name = ss.str();
     LOGe << "dump" << v << "to" << name;
     char* buffer = new char[v->size];
-    #ifdef HAS_CUDA
+    #ifdef IS_CUDA
     cudaMemcpy(buffer, v->mem_ptr, v->size, cudaMemcpyDefault);
     #else
     std::memcpy(buffer, v->mem_ptr, v->size);

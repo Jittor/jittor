@@ -2152,3 +2152,6 @@ for k,v in list(Var.__dict__.items()):
 from . import math_util
 from .math_util import *
 from . import distributions
+
+from jittor.extern.acl.acl_compiler import change_function
+change_function()

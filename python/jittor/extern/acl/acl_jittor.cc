@@ -16,6 +16,7 @@ namespace jittor {
 uint64_t acl_jittor_tid;
 int acl_jittor_thread_running=0;
 aclrtContext acl_jittor_context;
+aclrtStream aclstream;
 
 #define CHECK_ACL(x) ASSERTop(x,==,0)
 
@@ -28,7 +29,7 @@ static void* acl_jittor_process_callback(void*) {
         // LOGir << "acl_jittor_process_callback";
         auto ret = aclrtProcessReport(1000);
         if (ret) {
-            if (acl_jittor_thread_running && ret != ACL_ERROR_RT_REPORT_TIMEOUT)
+            if (acl_jittor_thread_running && ret != ACL_ERROR_RT_REPORT_TIMEOUT && ret != ACL_ERROR_RT_THREAD_SUBSCRIBE)
                 LOGir << "aclrtProcessReport:" << ret << acl_error_to_string(ret);
             break;
         }
@@ -59,10 +60,9 @@ acl_jittor_initer() {
     CHECK_ACL(aclrtSubscribeReport(acl_jittor_tid,0));
 
     // simple callback test
-    // aclrtStream stream;
-    // CHECK_ACL(aclrtCreateStream(&stream));
-    // CHECK_ACL(aclrtSubscribeReport(acl_jittor_tid,stream));
-    // CHECK_ACL(aclrtLaunchCallback((aclrtCallback)&aaa, 0, ACL_CALLBACK_NO_BLOCK, stream));
+    CHECK_ACL(aclrtCreateStream(&aclstream));
+    // CHECK_ACL(aclrtSubscribeReport(acl_jittor_tid,aclstream));
+    // CHECK_ACL(aclrtLaunchCallback((aclrtCallback)&aaa, 0, ACL_CALLBACK_NO_BLOCK, aclstream));
     // CHECK_ACL(aclrtLaunchCallback((aclrtCallback)&aaa, 0, ACL_CALLBACK_NO_BLOCK, 0));
 }
 
@@ -87,7 +87,7 @@ string process_acl(const string& src, const string& name, const map<string,strin
         "cuda_fp16", "cuda_runtime_api", "fp16_emu",
         "cudnn_rnn_descriptor", "cublas_v2", "cublas_wrapper",
         "curand", "curand_wrapper", "cufft", "cufftXt",
-        "CudaUtils", "cutt"
+        "CudaUtils", "cutt", "cudnn_wrapper", "cuda_bf16"
     };
     static unordered_set<string> fake_class = {
         "cudnnHandle_t", "cudnnConvolutionBwdFilterAlgo_t",
@@ -117,6 +117,7 @@ string process_acl(const string& src, const string& name, const map<string,strin
                     token_replace(tokens, i, "cudaMemcpyAsync($1,$2,$3,",
                         "aclrtMemcpyAsync($1,$3,$2,$3,");
                 else if (token == "cudaMemcpyDeviceToHost") token = "ACL_MEMCPY_DEVICE_TO_HOST";
+                else if (token == "cudaMemcpyDefault") token = "ACL_MEMCPY_HOST_TO_DEVICE";
                 else if (token == "cudaMemcpyHostToDevice") token = "ACL_MEMCPY_HOST_TO_DEVICE";
                 else if (token == "cudaMemcpyDeviceToDevice") token = "ACL_MEMCPY_DEVICE_TO_DEVICE";
                 else if (token == "cudaMallocManaged" || token == "cudaMalloc") {
