@@ -484,6 +484,9 @@ def ones(*shape, dtype="float32"):
         shape = shape[:-1]
     if isinstance(shape, tuple) and isinstance(shape[0], (Sequence, NanoVector)):
         shape = shape[0]
+    for dim in shape:
+        if dim < 0:
+            raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
     return unary(1, dtype).broadcast(shape)
 
 def new_ones(x, size):
@@ -547,6 +550,9 @@ def full(shape,val,dtype="float32"):
     '''
     if not isinstance(shape, (NanoVector, Sequence)):
         shape = (shape,)
+    for dim in shape:
+        if dim < 0:
+            raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
     return unary(val, dtype).broadcast(shape)
 
 def new_full(x, size, val):
@@ -917,6 +923,9 @@ def randn(*size, dtype="float32", requires_grad=True) -> Var:
          [-0.612632   -1.1471151  -1.1879086 ]], dtype=float32)
     '''
     if isinstance(size, tuple) and isinstance(size[0], (tuple, list, NanoVector)): size = size[0]
+    for dim in size:
+        if dim < 0:
+            raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {size}")
     arr = jt.random(size, dtype, "normal")
     if not requires_grad: return arr.stop_grad()
     return arr
