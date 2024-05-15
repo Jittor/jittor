@@ -15,6 +15,8 @@ from collections.abc import Sequence
 
 
 def argmax_pool(x, size, stride, padding=0):
+    if stride<0:
+        raise RuntimeError(f"stride must be > 0, but got {stride}")
     return pool.pool(x, size, 'maximum', padding, stride)
 
 def concat(arr, dim):
