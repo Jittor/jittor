@@ -428,7 +428,9 @@ def random(shape, dtype="float32", type="uniform"):
         jt.Var([[0.96788853 0.28334728 0.30482838]
                 [0.46107793 0.62798643 0.03457401]], dtype=float32)
     '''
-
+    for dim in shape:
+        if dim < 0:
+            raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
     ret = ops.random(shape, "float32", type)
    ## TODO: move those code to core
    #if dtype in ["float16", "bfloat16"]:
@@ -518,6 +520,9 @@ def zeros(*shape, dtype="float32"):
         shape = shape[:-1]
     if isinstance(shape, tuple) and isinstance(shape[0], (Sequence, NanoVector)):
         shape = shape[0]
+    for dim in shape:
+        if dim < 0:
+            raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
     return unary(0, dtype).broadcast(shape)
 
 def new_zeros(x, size):
@@ -1022,6 +1027,9 @@ def randint(low, high=None, shape=(1,), dtype="int32") -> Var:
                 [1 1 1]], dtype=int32)
     '''
     if high is None: low, high = 0, low
+    for dim in shape:
+        if dim < 0:
+            raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
     v = (jt.random(shape) * (high - low) + low).clamp(low, high-0.5)
     v = jt.floor_int(v)
     return v.astype(dtype)
