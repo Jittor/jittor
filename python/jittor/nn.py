@@ -22,6 +22,7 @@ from jittor.pool import *
 from jittor.optim import *
 from jittor.misc import _pair, _triple
 from jittor_utils import LOG
+from functools import partial
 
 
 def matmul_transpose(a, b):
@@ -3047,6 +3048,12 @@ class ComplexNumber:
     def transpose(self, *axes):
         return ComplexNumber(jt.transpose(self.real, *axes), jt.transpose(self.imag, *axes))
 
+    def broadcast(self, shape, dims):
+       return ComplexNumber(self.real.broadcast(shape, dims), self.imag.broadcast(shape, dims))
+
+    def sum(self, dims, keepdims: bool=False):
+        return ComplexNumber(self.real.sum(dims, keepdims=keepdims), self.imag.sum(dims, keepdims=keepdims))
+
     def exp(self):
         er = jt.exp(self.real)
         return ComplexNumber(er * jt.cos(self.imag), er * jt.sin(self.imag))
@@ -3057,7 +3064,7 @@ class ComplexNumber:
     def __add__(self, other):
         if isinstance(other, ComplexNumber):
             return ComplexNumber(self.real + other.real, self.imag + other.imag)
-        elif isinstance(other, (jt.Var, int, float)):
+        elif isinstance(other, (int, float)):
             return ComplexNumber(self.real + other, self.imag)
         else:
             raise NotImplementedError
@@ -3065,7 +3072,7 @@ class ComplexNumber:
     def __radd__(self, other):
         if isinstance(other, ComplexNumber):
             return ComplexNumber(other.real + self.real, other.imag + self.imag)
-        elif isinstance(other, (jt.Var, int, float)):
+        elif isinstance(other, (int, float)):
             return ComplexNumber(other + self.real, self.imag)
         else:
             raise NotImplementedError
@@ -3073,7 +3080,7 @@ class ComplexNumber:
     def __sub__(self, other):
         if isinstance(other, ComplexNumber):
             return ComplexNumber(self.real - other.real, self.imag - other.imag)
-        elif isinstance(other, (jt.Var, int, float)):
+        elif isinstance(other, (int, float)):
             return ComplexNumber(self.real - other, self.imag)
         else:
             raise NotImplementedError
@@ -3081,7 +3088,7 @@ class ComplexNumber:
     def __rsub__(self, other):
         if isinstance(other, ComplexNumber):
             return ComplexNumber(other.real - self.real, other.imag - self.imag)
-        elif isinstance(other, (jt.Var, int, float)):
+        elif isinstance(other, (int, float)):
             return ComplexNumber(other - self.real, self.imag)
         else:
             raise NotImplementedError
@@ -3092,8 +3099,6 @@ class ComplexNumber:
                                  self.real * other.imag + self.imag * other.real)
         elif isinstance(other, (int, float)):
             return ComplexNumber(self.value * other, is_concat_value=True)
-        elif isinstance(other, jt.Var):
-            return ComplexNumber(self.real * other, self.imag * other)
         else:
             raise NotImplementedError
 
@@ -3103,8 +3108,6 @@ class ComplexNumber:
                                  other.imag * self.real + other.real * self.imag)
         elif isinstance(other, (int, float)):
             return ComplexNumber(other * self.value, is_concat_value=True)
-        elif isinstance(other, jt.Var):
-            return ComplexNumber(other * self.real, other * self.imag)
         else:
             raise NotImplementedError
 
@@ -3115,8 +3118,6 @@ class ComplexNumber:
                                  (self.imag * other.real - self.real * other.imag) / norm)
         elif isinstance(other, (int, float)):
             return ComplexNumber(self.value / other, is_concat_value=True)
-        elif isinstance(other, jt.Var):
-            return ComplexNumber(self.real / other, self.imag / other)
         else:
             raise NotImplementedError
 
@@ -3125,7 +3126,7 @@ class ComplexNumber:
         if isinstance(other, ComplexNumber):
             return ComplexNumber((other.real * self.real + other.imag * self.imag) / norm,
                                  (other.imag * self.real - other.real * self.imag) / norm)
-        elif isinstance(other, (int, float, jt.Var)):
+        elif isinstance(other, (int, float)):
             return ComplexNumber(other * self.real / norm, - other * self.imag / norm)
         else:
             raise NotImplementedError
@@ -3134,8 +3135,6 @@ class ComplexNumber:
         if isinstance(other, ComplexNumber):
             return ComplexNumber(self.real @ other.real - self.imag @ other.imag,
                                  self.real @ other.imag + self.imag @ other.real)
-        elif isinstance(other, jt.Var):
-            return ComplexNumber(self.real @ other, self.imag @ other)
         else:
             raise NotImplementedError
 
@@ -3143,8 +3142,6 @@ class ComplexNumber:
         if isinstance(other, ComplexNumber):
             return ComplexNumber(other.real @ self.real - other.imag @ self.imag,
                                  other.imag @ self.real + other.real @ self.imag)
-        elif isinstance(other, jt.Var):
-            return ComplexNumber(other @ self.real, other @ self.imag)
         else:
             raise NotImplementedError
 
