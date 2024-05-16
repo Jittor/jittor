@@ -1475,6 +1475,8 @@ class ConvTranspose3d(Module):
         return conv_transpose3d(x, self.weight, self.bias, self.stride, self.padding, self.output_padding, self.group, self.dilation)
 
 def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding=0, groups=1, dilation=1):
+    if stride <= 0:
+        raise RuntimeError("non-positive stride is not supported")
     if groups == 1:
         x = input
         N,C,H,W = x.shape
@@ -1565,6 +1567,8 @@ def conv_transpose3d(input, weight, bias=None, stride=1, padding=0, output_paddi
     x = input
     N,C,D,H,W = x.shape
     i,o,d,h,w = weight.shape
+    if stride <= 0:
+        raise RuntimeError("non-positive stride is not supported")
     assert C==i
     assert groups==1, "Group conv not supported yet."
     stride = stride if isinstance(stride, tuple) else (stride, stride, stride)
