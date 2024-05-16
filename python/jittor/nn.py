@@ -1767,7 +1767,7 @@ class PixelShuffle(Module):
         n,c,h,w = x.shape
         r = self.upscale_factor
         assert c%(r*r)==0, f"input channel needs to be divided by upscale_factor's square in PixelShuffle"
-        if r<0:
+        if r<=0:
             raise RuntimeError(f"pixel_shuffle expects a positive upscale_factor, but got {r}")
         return x.reindex([n,int(c/r**2),h*r,w*r], [
             "i0",
