@@ -2171,6 +2171,8 @@ def histc(input, bins, min=0., max=0.):
     if min == 0 and max == 0:
         min, max = input.min(), input.max()
     assert min < max
+    if bins <= 0:
+        raise RuntimeError(f"bins must be > 0, but got {bins}")
     bin_length = (max - min) / bins
     histc = jt.floor((input[jt.logical_and(input >= min, input <= max)] - min) / bin_length).int().reshape(-1)
     hist = jt.ones_like(histc).float().reindex_reduce("add", [bins,], ["@e0(i0)"], extras=[histc])
