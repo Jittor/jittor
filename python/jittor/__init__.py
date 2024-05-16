@@ -2153,5 +2153,6 @@ from . import math_util
 from .math_util import *
 from . import distributions
 
-from jittor.extern.acl.acl_compiler import change_function
-change_function()
+if jt.compiler.has_acl:
+    from jittor.extern.acl.acl_compiler import change_function
+    change_function()
