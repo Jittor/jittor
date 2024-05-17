@@ -1061,6 +1061,8 @@ class Conv1d(Module):
         self.dilation = (dilation, 1)
         self.groups = groups
         self.bias = bias
+        if groups <= 0:
+            raise ValueError("groups must be a positive integer")
         assert in_channels % groups == 0, 'in_channels must be divisible by groups'
         assert out_channels % groups == 0, 'out_channels must be divisible by groups'
         # using list to escape module dfs
@@ -1121,6 +1123,8 @@ class Conv3d(Module):
         self.padding = padding if isinstance(padding, tuple) else (padding, padding, padding)
         self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation, dilation)
         self.groups = groups
+        if groups <= 0:
+            raise ValueError("groups must be a positive integer")
         assert in_channels % groups == 0, 'in_channels must be divisible by groups'
         assert out_channels % groups == 0, 'out_channels must be divisible by groups'
         Kh, Kw, Kd = self.kernel_size
@@ -1187,7 +1191,8 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     stride = _pair(stride)
     dilation = _pair(dilation)
     out_channels = weight.shape[0]
-
+    if groups <= 0:
+        raise ValueError("groups must be a positive integer")
     if groups == 1:
         N,C,H,W = x.shape
         Kh, Kw = weight.shape[-2:]
@@ -1276,7 +1281,8 @@ def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     stride = _triple(stride)
     dilation = _triple(dilation)
     out_channels = weight.shape[0]
-
+    if groups <= 0:
+        raise ValueError("groups must be a positive integer")
     if jt.flags.use_cuda and jt.cudnn:
         y = jt.cudnn.ops.cudnn_conv3d(x, weight, *stride, *padding, *dilation, groups)
     elif groups == 1:
@@ -1631,6 +1637,8 @@ def pad(x,padding, mode='constant', value=0):
 
 class ReflectionPad2d(Module):
     def __init__(self, padding):
+        if padding < 0:
+            raise RuntimeError(f"padding must be > 0, but got {padding}")
         self.padding = padding
         if isinstance(self.padding, int):
             self.pl = self.padding
