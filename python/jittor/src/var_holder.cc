@@ -215,11 +215,14 @@ inline static void cast_item_data(ItemData& data) {
         auto* fp16 = (float16*)&data;
         auto* fp32 = (float32*)&data;
         fp32[0] = float32(fp16[0]);
-    } else if (data.dtype == ns_bfloat16) {
+    }
+    #ifndef IS_ROCM 
+    else if (data.dtype == ns_bfloat16) {
         auto* bf16 = (bfloat16*)&data;
         auto* fp32 = (float32*)&data;
         fp32[0] = float32(bf16[0]);
     }
+    #endif
     data.dtype = ns_float32;
 }
 
