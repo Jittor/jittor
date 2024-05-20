@@ -8,8 +8,9 @@
 #include <cuda_runtime.h>
 #include <cudnn.h>
 #include <cuda_fp16.h>
+#ifndef IS_ROCM
 #include <cuda_bf16.h>
-
+#endif
 #include "utils/log.h"
 #include "helper_cuda.h"
 #include "fp16_emu.h"
@@ -31,6 +32,8 @@ void set_max_workspace_ratio(float64 ratio);
 template <typename T_ELEM> __inline__  cudnnDataType_t getDataType();
 template <> __inline__ cudnnDataType_t getDataType<half1>() { return CUDNN_DATA_HALF;   }
 template <> __inline__ cudnnDataType_t getDataType<float>() { return CUDNN_DATA_FLOAT;  }
+#ifndef IS_ROCM
 template <> __inline__ cudnnDataType_t getDataType<__nv_bfloat16>() { return CUDNN_DATA_BFLOAT16;  }
+#endif
 
 } // jittor

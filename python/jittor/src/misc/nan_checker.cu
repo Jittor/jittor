@@ -7,9 +7,13 @@
 #include "misc/cuda_flags.h"
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
-#include <cuda_bf16.h>
+
 #include "helper_cuda.h"
 #include <cassert>
+//TODO:FIX in ROCM
+#ifndef IS_ROCM
+#include <cuda_bf16.h>
+#endif
 
 namespace jittor {
 
@@ -37,7 +41,7 @@ __global__ void _check_nan_float16(__half* __restrict__ ptr, int64 num, int* cnt
             print_nan(float(ptr[i]), i, cnt);
     }
 }
-
+#ifndef IS_ROCM
 __global__ void _check_nan_bfloat16(__nv_bfloat16* __restrict__ ptr, int64 num, int* cnt) {
     int64 i = threadIdx.x + blockIdx.x * (int64)blockDim.x;
     if (i<num) {
@@ -51,6 +55,7 @@ __global__ void _check_nan_bfloat16(__nv_bfloat16* __restrict__ ptr, int64 num, 
             print_nan(float(ptr[i]), i, cnt);
     }
 }
+#endif
 
 __global__ void _check_nan_float32(float32* __restrict__ ptr, int64 num, int* cnt) {
     int64 i = threadIdx.x + blockIdx.x * (int64)blockDim.x;
@@ -113,14 +118,14 @@ vector<int> check_nan_float16(__half* ptr, int64 num) {
     _check_nan_float16<<<block_num, thread_num>>>(ptr, num, check_nan_get_device_ptr());
     return report_nan();
 }
-
+#ifndef IS_ROCM
 vector<int> check_nan_bfloat16(__nv_bfloat16* ptr, int64 num) {
     int block_num = std::max((int64)1, (num-1)/1024+1);
     int thread_num = std::min((int64)1024, num);
     _check_nan_bfloat16<<<block_num, thread_num>>>(ptr, num, check_nan_get_device_ptr());
     return report_nan();
 }
-
+#endif
 #endif
 
 }
