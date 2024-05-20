@@ -99,39 +99,39 @@ class DataLoader(JDataset):
             current_batch = self.collate_batch(current_batch)
             yield self.to_jittor(current_batch)
 
-def get_worker_info():
-    # always return the fake worker info
-    return namedtuple('WorkerInfo', 'id num_workers')(0, 1)
+# def get_worker_info():
+#     # always return the fake worker info
+#     return namedtuple('WorkerInfo', 'id num_workers')(0, 1)
 
-class RandomSampler(jt.dataset.RandomSampler):
-    def __init__(self, dataset, generator=None, **kwargs):
-        super().__init__(dataset, **kwargs)
+# class RandomSampler(jt.dataset.RandomSampler):
+#     def __init__(self, dataset, generator=None, **kwargs):
+#         super().__init__(dataset, **kwargs)
 
-    def __iter__(self):
-        if getattr(self.dataset, "support_random_access", True):
-            return super().__iter__()
-        else:
-            self.dataset.shuffle()
-            return iter(range(self.dataset.__real_len__() if hasattr(self.dataset,"__real_len__") else self.dataset.__len__()))
+#     def __iter__(self):
+#         if getattr(self.dataset, "support_random_access", True):
+#             return super().__iter__()
+#         else:
+#             self.dataset.shuffle()
+#             return iter(range(self.dataset.__real_len__() if hasattr(self.dataset,"__real_len__") else self.dataset.__len__()))
 
-class DistributedSampler(jt.dataset.Sampler):
-    def __init__(self, sampler: RandomSampler):
-        assert(isinstance(sampler, RandomSampler))
-        self.sampler = sampler
+# class DistributedSampler(jt.dataset.Sampler):
+#     def __init__(self, sampler: RandomSampler):
+#         assert(isinstance(sampler, RandomSampler))
+#         self.sampler = sampler
 
-    def set_epoch(self, epoch: int):
-        ### do nothing, let jittor's inner dataset handle 
-        pass
+#     def set_epoch(self, epoch: int):
+#         ### do nothing, let jittor's inner dataset handle 
+#         pass
 
-    def __iter__(self):
-        return self.sampler.__iter__()
+#     def __iter__(self):
+#         return self.sampler.__iter__()
     
-    def __len__(self):
-        return self.sampler.__len__()
+#     def __len__(self):
+#         return self.sampler.__len__()
 
-BatchSampler = jt.dataset.BatchSampler
-Sampler = jt.dataset.Sampler
-SequentialSampler = jt.dataset.SequentialSampler
-SubsetRandomSampler = jt.dataset.SubsetRandomSampler
+# BatchSampler = jt.dataset.BatchSampler
+# Sampler = jt.dataset.Sampler
+# SequentialSampler = jt.dataset.SequentialSampler
+# SubsetRandomSampler = jt.dataset.SubsetRandomSampler
 
-TensorDataset = Dataset
+# TensorDataset = Dataset
