@@ -6,7 +6,9 @@
 // ***************************************************************
 #pragma once
 #include <cuda_fp16.h>
+#ifndef IS_ROCM
 #include <cuda_bf16.h>
+#endif
 #include "common.h"
 
 namespace jittor {
