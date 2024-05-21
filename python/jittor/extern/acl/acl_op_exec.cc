@@ -16,7 +16,9 @@
 #include "ops/reduce_op.h"
 #include "ops/binary_op.h"
 #include "ops/broadcast_to_op.h"
+#include "ops/transpose_op.h"
 #include "ops/array_op.h"
+#include "ops/code_op.h"
 #include "fused_op.h"
 #include "ops/unary_op.h"
 #include "ops/ternary_op.h"
@@ -32,6 +34,44 @@ namespace jittor {
 
 using std::swap;
 
+void printDeviceData(const vector<aclTensorDesc*>& output_desc, const vector<aclDataBuffer*>& output_data, const string& name = "", bool input=true) {
+    LOGir << "name: " << name;
+    if(input)
+        LOGir << "is input";
+    else
+        LOGir << "is ouput";
+    for (size_t i = 0; i < output_desc.size(); ++i) {
+        void* base_addr = aclGetDataBufferAddr(output_data[i]);
+        LOGir << "addr of data[" << i << "] :" << base_addr;
+        size_t num_dims = aclGetTensorDescNumDims(output_desc[i]);
+        size_t total_size = 1;
+        std::vector<int64_t> dims(num_dims);
+        
+        std::cout << "shape of data: ";
+        for (size_t j = 0; j < num_dims; ++j) {
+            aclGetTensorDescDimV2(output_desc[i], j, &dims[j]);
+            total_size *= dims[j];
+            std::cout << dims[j] << ", ";
+        }
+        int evey_batch_size = total_size/dims[0];
+        std::cout << std::endl;
+
+        // for(int i= 0; i < dims[0]; i++) {
+        //     evey_batch_size = 16;
+        //     std::vector<float> host_buffer(evey_batch_size);
+        //     void* offset_addr = static_cast<char*>(base_addr) + i * evey_batch_size * sizeof(float);
+        //     aclrtMemcpy(host_buffer.data(), evey_batch_size * sizeof(float), offset_addr, evey_batch_size * sizeof(float), ACL_MEMCPY_DEVICE_TO_HOST);
+        //     std::cout << "batch[" << i << "]:";
+        //     for (size_t k = 0; k < evey_batch_size; ++k) {
+        //         std::cout << host_buffer[k] << ", ";
+        //     }
+        //     std::cout << std::endl;
+        //     if(i >= 3)
+        //         break;
+        // }
+    }
+}
+
 struct AclOpRunner {
     string name;
     vector<aclTensorDesc*> input_desc;
@@ -40,6 +80,7 @@ struct AclOpRunner {
     vector<aclDataBuffer*> output_data;
     aclopAttr *attr;
     vector<vector<uint64>> input_host;
+    vector<vector<int>> input_host_32;
 
     AclOpRunner(const string& name) : name(name) {
         attr = aclopCreateAttr();
@@ -56,9 +97,14 @@ struct AclOpRunner {
     aclDataType get_dtype(NanoString s) {
         if (s == ns_float32) return ACL_FLOAT;
         if (s == ns_float16) return ACL_FLOAT16;
+        if (s == ns_int64) return ACL_INT64;
         if (s == ns_int32) return ACL_INT32;
         if (s == ns_int8) return ACL_INT8;
+        if (s == ns_int16) return ACL_INT16;
         if (s == ns_uint8) return ACL_UINT8;
+        if (s == ns_uint16) return ACL_UINT16;
+        if (s == ns_uint32) return ACL_UINT32;
+        if (s == ns_bool) return ACL_BOOL;
         LOGf << "Not supported dtype: " << s;
         return ACL_FLOAT;
     }
@@ -138,7 +184,7 @@ struct AclOpRunner {
         auto data = aclCreateDataBuffer(&v[0], v.size()*sizeof(int));
         input_desc.push_back(desc);
         input_data.push_back(data);
-        // input_host.emplace_back(move(v));
+        input_host_32.emplace_back(move(v));
     }
 
     void set_attr(const string& key, bool value) {
@@ -164,18 +210,22 @@ struct AclOpRunner {
     }
 
     void run() {
+        // printDeviceData(input_desc, input_data, name);
+
         LOGv << "run" << name << input_desc.size() << output_desc.size();
         if (!PyGILState_Check()) {
-            ASSERT(0==aclopCompileAndExecuteV2(name.c_str(), input_desc.size(), &input_desc[0], &input_data[0], output_desc.size(), &output_desc[0], &output_data[0], attr, ACL_ENGINE_SYS, ACL_COMPILE_SYS, NULL, NULL));
+            ASSERT(0==aclopCompileAndExecuteV2(name.c_str(), input_desc.size(), &input_desc[0], &input_data[0], output_desc.size(), &output_desc[0], &output_data[0], attr, ACL_ENGINE_SYS, ACL_COMPILE_SYS, NULL, aclstream));
         } else {
             int ret;
             Py_BEGIN_ALLOW_THREADS
-            ret = aclopCompileAndExecuteV2(name.c_str(), input_desc.size(), &input_desc[0], &input_data[0], output_desc.size(), &output_desc[0], &output_data[0], attr, ACL_ENGINE_SYS, ACL_COMPILE_SYS, NULL, NULL);
+            ret = aclopCompileAndExecuteV2(name.c_str(), input_desc.size(), &input_desc[0], &input_data[0], output_desc.size(), &output_desc[0], &output_data[0], attr, ACL_ENGINE_SYS, ACL_COMPILE_SYS, NULL, aclstream);
             Py_END_ALLOW_THREADS
             if (ret != 0)
                 LOGf << "aclopCompileAndExecuteV2" << name << "failed return" << ret;
         }
-        // ASSERT(0==aclrtSynchronizeDevice());
+        ASSERT(0==aclrtSynchronizeDevice());
+
+        // printDeviceData(output_desc, output_data, name, false);
     }
 };
 
@@ -318,6 +368,17 @@ void try_exec_and_fallback_cpu(Op* op) {
                 auto iter = opname_map.find(bop->ns);
                 ASSERT(iter != opname_map.end()) << "op " << bop->ns << " not found";
                 op.name = iter->second;
+                if (bop->x->dtype() == ns_bool and bop->y->dtype() == ns_bool)
+                {
+                    // BitwiseOr, BitwiseAnd, BitwiseXor -> LogicalOr, LogicalAnd, LogicalXor
+                    if (bop->ns == ns_bitwise_or) {
+                        op.name = "LogicalOr";
+                    } else if (bop->ns == ns_bitwise_and) {
+                        op.name = "LogicalAnd";
+                    } else if (bop->ns == ns_bitwise_xor) {
+                        op.name = "LogicalXor";
+                    }
+                }
                 op.run();
             } else
             if (op->name() == string("ternary")) {
@@ -345,7 +406,7 @@ void try_exec_and_fallback_cpu(Op* op) {
                 else if (rop->ns == ns_minimum)
                     op.name = "ReduceMin";
                 else if (rop->ns == ns_mean)
-                    op.name = "Reduce";
+                    op.name = "ReduceMean";
                 else
                     LOGf << "op " << rop->ns << " not supported";
                 op.add(rop->x, true);
@@ -381,6 +442,19 @@ void try_exec_and_fallback_cpu(Op* op) {
                 op.add_input_host_nv(zshape, ACL_INT64);
                 op.add(bop->z, false);
                 op.run();
+            } 
+            else
+            if (op->name() == string("fuse_transpose")) {
+                // replace fuse_transpose with transpose
+                auto top = (TransposeOp*)op;
+                AclOpRunner op("Transpose");
+                op.add(top->x, true);
+                op.add(top->y, false);
+                vector<uint64> axes;
+                for (int i=0; i<top->axes.size(); i++)
+                    axes.push_back(top->axes[i]);
+                op.add_input_host(axes, ACL_INT64);
+                op.run();
             } else
             {
                 LOGf << "op " << op->name() << " not supported";
@@ -388,6 +462,7 @@ void try_exec_and_fallback_cpu(Op* op) {
         }
     } catch (std::exception& e) {
         fallback = 1;
+        LOGir << "fallback cpu" << e.what();
     }
     for (auto v : new_alloced) {
         free_var_mem(v);
@@ -401,7 +476,7 @@ extern int current_seed;
 extern int64 current_offset;
 
 static unordered_map<string, std::function<void(Op*)>> acl_ops = {
-{"curand_random", [&](Op* op) {
+{"curand_random", [&current_seed, &current_offset](Op* op) {
     auto _op = (RandomOp*)op; 
     AclOpRunner runner(_op->type == ns_uniform ? "StatelessRandomUniformV2" : "StatelessRandomNormalV2");
     auto out = op->output(0);
@@ -429,7 +504,21 @@ static unordered_map<string, std::function<void(Op*)>> acl_ops = {
     runner.set_attr("transpose_x2", _op->trans_b);
     runner.run();
 }},
-{"cudnn_conv", [&](Op* op) {
+{"cublas_batched_matmul", [&](Op* op) {
+    struct BatchedMatmulOp : Op {
+        Var* a, *b, *c;
+        bool adj_x1, adj_x2;
+    };
+    auto _op = (BatchedMatmulOp*)op;
+    AclOpRunner runner("BatchMatMul");
+    runner.add(_op->a, true);
+    runner.add(_op->b, true);
+    runner.add(_op->c, false);
+    runner.set_attr("adj_x1", _op->adj_x1);
+    runner.set_attr("adj_x2", _op->adj_x2);
+    runner.run();
+}},
+{"cudnn_conv", [](Op* op) {
     struct ConvOp : Op {
         Var* x, * w, * y;
         int strideh, stridew, paddingh, paddingw, dilationh, dilationw, groups;
@@ -451,7 +540,7 @@ static unordered_map<string, std::function<void(Op*)>> acl_ops = {
     auto _op = (ConvOp*)op;
     _op->run_acl();
 }},
-{"cudnn_conv_backward_x", [&](Op* op) {
+{"cudnn_conv_backward_x", [](Op* op) {
     struct ConvBackwardXOp : Op {
     Var* w, * dy, * dx;
     int xh, xw, strideh, stridew, paddingh, paddingw, dilationh, dilationw, groups;
@@ -480,7 +569,7 @@ static unordered_map<string, std::function<void(Op*)>> acl_ops = {
     auto _op = (ConvBackwardXOp*)op;
     _op->run_acl();
 }},
-{"cudnn_conv_backward_w", [&](Op* op) {
+{"cudnn_conv_backward_w", [](Op* op) {
     struct ConvBackwardWOp : Op {
     Var* x, * dy, * dw;
     int kh, kw, strideh, stridew, paddingh, paddingw, dilationh, dilationw, groups;
@@ -488,7 +577,7 @@ static unordered_map<string, std::function<void(Op*)>> acl_ops = {
         void run_acl() {
             AclOpRunner runner("Conv2DBackpropFilter");
             runner.add(x, true, ACL_FORMAT_NCHW);
-            runner.add_input_host_nv32(x->shape);
+            runner.add_input_host_nv32(dw->shape);
             runner.add(dy, true, ACL_FORMAT_NCHW);
             runner.add(dw, false, ACL_FORMAT_NCHW);
             runner.set_attr("strides", vector<int64_t>{1,1,strideh,stridew});
@@ -538,7 +627,7 @@ static jit_op_entry_t acl_do_compile(Op* op) {
         return oc.compile(op->get_jit_key(get_jk()), *src);
     }
     if (op->name() == string("fused")) {
-        FusedOp* fop = (FusedOp*)op;
+        FusedOp* fop = (FusedOp*)op; 
         // if is a relayed op
         if (fop->context->vrm.relay_groups.size()) {
             LOGv << "relay fused op";
@@ -546,7 +635,17 @@ static jit_op_entry_t acl_do_compile(Op* op) {
         } else {
             return &try_exec_and_fallback_cpu;
         }
-    } else {
+    } else 
+    if (op->name() == string("code")) {
+        CodeOp* cop = (CodeOp*)op;
+        if (cop->cuda_src.find("acl") != string::npos) {
+            LOGv << "compile acl op";
+            return oc.compile(op->get_jit_key(get_jk()), *src);
+        } else {
+            return &exec_mapped_acl_ops;
+        }
+    } else
+    {
         LOGv << "compile finish" << op;
         return &exec_mapped_acl_ops;
     }

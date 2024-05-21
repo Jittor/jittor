@@ -39,7 +39,7 @@ void dump_var(Var* v, string name) {
     char* buffer = new char[v->size];
     #ifdef IS_ROCM
     hipMemcpy(buffer, v->mem_ptr, v->size, hipMemcpyDefault);
-    #elif HAS_CUDA 
+    #elif IS_CUDA 
     cudaMemcpy(buffer, v->mem_ptr, v->size, cudaMemcpyDefault);
     #else
     std::memcpy(buffer, v->mem_ptr, v->size);
