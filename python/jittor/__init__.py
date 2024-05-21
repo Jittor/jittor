@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.9.6'
+__version__ = '1.3.9.8'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -428,7 +428,9 @@ def random(shape, dtype="float32", type="uniform"):
         jt.Var([[0.96788853 0.28334728 0.30482838]
                 [0.46107793 0.62798643 0.03457401]], dtype=float32)
     '''
-
+    for dim in shape:
+        if dim < 0:
+            raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
     ret = ops.random(shape, "float32", type)
    ## TODO: move those code to core
    #if dtype in ["float16", "bfloat16"]:
@@ -484,6 +486,9 @@ def ones(*shape, dtype="float32"):
         shape = shape[:-1]
     if isinstance(shape, tuple) and isinstance(shape[0], (Sequence, NanoVector)):
         shape = shape[0]
+    for dim in shape:
+        if dim < 0:
+            raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
     return unary(1, dtype).broadcast(shape)
 
 def new_ones(x, size):
@@ -515,6 +520,9 @@ def zeros(*shape, dtype="float32"):
         shape = shape[:-1]
     if isinstance(shape, tuple) and isinstance(shape[0], (Sequence, NanoVector)):
         shape = shape[0]
+    for dim in shape:
+        if dim < 0:
+            raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
     return unary(0, dtype).broadcast(shape)
 
 def new_zeros(x, size):
@@ -547,6 +555,9 @@ def full(shape,val,dtype="float32"):
     '''
     if not isinstance(shape, (NanoVector, Sequence)):
         shape = (shape,)
+    for dim in shape:
+        if dim < 0:
+            raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
     return unary(val, dtype).broadcast(shape)
 
 def new_full(x, size, val):
@@ -917,6 +928,9 @@ def randn(*size, dtype="float32", requires_grad=True) -> Var:
          [-0.612632   -1.1471151  -1.1879086 ]], dtype=float32)
     '''
     if isinstance(size, tuple) and isinstance(size[0], (tuple, list, NanoVector)): size = size[0]
+    for dim in size:
+        if dim < 0:
+            raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {size}")
     arr = jt.random(size, dtype, "normal")
     if not requires_grad: return arr.stop_grad()
     return arr
@@ -1013,6 +1027,9 @@ def randint(low, high=None, shape=(1,), dtype="int32") -> Var:
                 [1 1 1]], dtype=int32)
     '''
     if high is None: low, high = 0, low
+    for dim in shape:
+        if dim < 0:
+            raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
     v = (jt.random(shape) * (high - low) + low).clamp(low, high-0.5)
     v = jt.floor_int(v)
     return v.astype(dtype)

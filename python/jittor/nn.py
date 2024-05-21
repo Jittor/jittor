@@ -22,6 +22,7 @@ from jittor.pool import *
 from jittor.optim import *
 from jittor.misc import _pair, _triple
 from jittor_utils import LOG
+from functools import partial
 
 
 def matmul_transpose(a, b):
@@ -1061,6 +1062,8 @@ class Conv1d(Module):
         self.dilation = (dilation, 1)
         self.groups = groups
         self.bias = bias
+        if groups <= 0:
+            raise ValueError("groups must be a positive integer")
         assert in_channels % groups == 0, 'in_channels must be divisible by groups'
         assert out_channels % groups == 0, 'out_channels must be divisible by groups'
         # using list to escape module dfs
@@ -1121,6 +1124,8 @@ class Conv3d(Module):
         self.padding = padding if isinstance(padding, tuple) else (padding, padding, padding)
         self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation, dilation)
         self.groups = groups
+        if groups <= 0:
+            raise ValueError("groups must be a positive integer")
         assert in_channels % groups == 0, 'in_channels must be divisible by groups'
         assert out_channels % groups == 0, 'out_channels must be divisible by groups'
         Kh, Kw, Kd = self.kernel_size
@@ -1187,7 +1192,8 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     stride = _pair(stride)
     dilation = _pair(dilation)
     out_channels = weight.shape[0]
-
+    if groups <= 0:
+        raise ValueError("groups must be a positive integer")
     if groups == 1:
         N,C,H,W = x.shape
         Kh, Kw = weight.shape[-2:]
@@ -1276,7 +1282,8 @@ def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     stride = _triple(stride)
     dilation = _triple(dilation)
     out_channels = weight.shape[0]
-
+    if groups <= 0:
+        raise ValueError("groups must be a positive integer")
     if jt.flags.use_cuda and jt.cudnn:
         y = jt.cudnn.ops.cudnn_conv3d(x, weight, *stride, *padding, *dilation, groups)
     elif groups == 1:
@@ -1474,6 +1481,8 @@ class ConvTranspose3d(Module):
         return conv_transpose3d(x, self.weight, self.bias, self.stride, self.padding, self.output_padding, self.group, self.dilation)
 
 def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding=0, groups=1, dilation=1):
+    if stride <= 0:
+        raise RuntimeError("non-positive stride is not supported")
     if groups == 1:
         x = input
         N,C,H,W = x.shape
@@ -1564,6 +1573,8 @@ def conv_transpose3d(input, weight, bias=None, stride=1, padding=0, output_paddi
     x = input
     N,C,D,H,W = x.shape
     i,o,d,h,w = weight.shape
+    if stride <= 0:
+        raise RuntimeError("non-positive stride is not supported")
     assert C==i
     assert groups==1, "Group conv not supported yet."
     stride = stride if isinstance(stride, tuple) else (stride, stride, stride)
@@ -1631,6 +1642,8 @@ def pad(x,padding, mode='constant', value=0):
 
 class ReflectionPad2d(Module):
     def __init__(self, padding):
+        if padding < 0:
+            raise RuntimeError(f"padding must be > 0, but got {padding}")
         self.padding = padding
         if isinstance(self.padding, int):
             self.pl = self.padding
@@ -1701,6 +1714,8 @@ class ConstantPad2d(Module):
 
 class ReplicationPad2d(Module):
     def __init__(self, padding):
+        if padding < 0:
+            raise RuntimeError(f"padding must be > 0, but got {padding}")
         self.padding = padding
         if isinstance(self.padding, int):
             self.pl = self.padding
@@ -1766,6 +1781,8 @@ class PixelShuffle(Module):
         n,c,h,w = x.shape
         r = self.upscale_factor
         assert c%(r*r)==0, f"input channel needs to be divided by upscale_factor's square in PixelShuffle"
+        if r<=0:
+            raise RuntimeError(f"pixel_shuffle expects a positive upscale_factor, but got {r}")
         return x.reindex([n,int(c/r**2),h*r,w*r], [
             "i0",
             f"i1*{r*r}+i2%{r}*{r}+i3%{r}",
@@ -3047,6 +3064,12 @@ class ComplexNumber:
     def transpose(self, *axes):
         return ComplexNumber(jt.transpose(self.real, *axes), jt.transpose(self.imag, *axes))
 
+    def broadcast(self, shape, dims):
+       return ComplexNumber(self.real.broadcast(shape, dims), self.imag.broadcast(shape, dims))
+
+    def sum(self, dims, keepdims: bool=False):
+        return ComplexNumber(self.real.sum(dims, keepdims=keepdims), self.imag.sum(dims, keepdims=keepdims))
+
     def exp(self):
         er = jt.exp(self.real)
         return ComplexNumber(er * jt.cos(self.imag), er * jt.sin(self.imag))
@@ -3057,7 +3080,7 @@ class ComplexNumber:
     def __add__(self, other):
         if isinstance(other, ComplexNumber):
             return ComplexNumber(self.real + other.real, self.imag + other.imag)
-        elif isinstance(other, (jt.Var, int, float)):
+        elif isinstance(other, (int, float)):
             return ComplexNumber(self.real + other, self.imag)
         else:
             raise NotImplementedError
@@ -3065,7 +3088,7 @@ class ComplexNumber:
     def __radd__(self, other):
         if isinstance(other, ComplexNumber):
             return ComplexNumber(other.real + self.real, other.imag + self.imag)
-        elif isinstance(other, (jt.Var, int, float)):
+        elif isinstance(other, (int, float)):
             return ComplexNumber(other + self.real, self.imag)
         else:
             raise NotImplementedError
@@ -3073,7 +3096,7 @@ class ComplexNumber:
     def __sub__(self, other):
         if isinstance(other, ComplexNumber):
             return ComplexNumber(self.real - other.real, self.imag - other.imag)
-        elif isinstance(other, (jt.Var, int, float)):
+        elif isinstance(other, (int, float)):
             return ComplexNumber(self.real - other, self.imag)
         else:
             raise NotImplementedError
@@ -3081,7 +3104,7 @@ class ComplexNumber:
     def __rsub__(self, other):
         if isinstance(other, ComplexNumber):
             return ComplexNumber(other.real - self.real, other.imag - self.imag)
-        elif isinstance(other, (jt.Var, int, float)):
+        elif isinstance(other, (int, float)):
             return ComplexNumber(other - self.real, self.imag)
         else:
             raise NotImplementedError
@@ -3092,8 +3115,6 @@ class ComplexNumber:
                                  self.real * other.imag + self.imag * other.real)
         elif isinstance(other, (int, float)):
             return ComplexNumber(self.value * other, is_concat_value=True)
-        elif isinstance(other, jt.Var):
-            return ComplexNumber(self.real * other, self.imag * other)
         else:
             raise NotImplementedError
 
@@ -3103,8 +3124,6 @@ class ComplexNumber:
                                  other.imag * self.real + other.real * self.imag)
         elif isinstance(other, (int, float)):
             return ComplexNumber(other * self.value, is_concat_value=True)
-        elif isinstance(other, jt.Var):
-            return ComplexNumber(other * self.real, other * self.imag)
         else:
             raise NotImplementedError
 
@@ -3115,8 +3134,6 @@ class ComplexNumber:
                                  (self.imag * other.real - self.real * other.imag) / norm)
         elif isinstance(other, (int, float)):
             return ComplexNumber(self.value / other, is_concat_value=True)
-        elif isinstance(other, jt.Var):
-            return ComplexNumber(self.real / other, self.imag / other)
         else:
             raise NotImplementedError
 
@@ -3125,7 +3142,7 @@ class ComplexNumber:
         if isinstance(other, ComplexNumber):
             return ComplexNumber((other.real * self.real + other.imag * self.imag) / norm,
                                  (other.imag * self.real - other.real * self.imag) / norm)
-        elif isinstance(other, (int, float, jt.Var)):
+        elif isinstance(other, (int, float)):
             return ComplexNumber(other * self.real / norm, - other * self.imag / norm)
         else:
             raise NotImplementedError
@@ -3134,8 +3151,6 @@ class ComplexNumber:
         if isinstance(other, ComplexNumber):
             return ComplexNumber(self.real @ other.real - self.imag @ other.imag,
                                  self.real @ other.imag + self.imag @ other.real)
-        elif isinstance(other, jt.Var):
-            return ComplexNumber(self.real @ other, self.imag @ other)
         else:
             raise NotImplementedError
 
@@ -3143,8 +3158,6 @@ class ComplexNumber:
         if isinstance(other, ComplexNumber):
             return ComplexNumber(other.real @ self.real - other.imag @ self.imag,
                                  other.imag @ self.real + other.real @ self.imag)
-        elif isinstance(other, jt.Var):
-            return ComplexNumber(other @ self.real, other @ self.imag)
         else:
             raise NotImplementedError
 

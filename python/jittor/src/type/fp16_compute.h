@@ -11,12 +11,17 @@
 
 #include <driver_types.h>
 #include <cuda_fp16.h>
+#ifndef IS_ROCM
 #include <cuda_bf16.h>
+#endif
 
 namespace jittor {
 
 typedef __half float16;
+#ifndef IS_ROCM
 typedef __nv_bfloat16 bfloat16;
+#endif
+
 
 #if CUDA_ARCH >= 800
 inline __device__ float16 max(float16 a, float16 b) { return __hmax(a, b); }
@@ -32,7 +37,7 @@ inline __device__ float16 min(float16 a, float16 b) { return float(a)<float(b)?a
 inline __device__ float16 pow(float16 a, float16 b) { return ::pow(float32(a), float32(b)); }
 
 
-
+#ifndef IS_ROCM
 #if CUDA_ARCH >= 800
 inline __device__ bfloat16 max(bfloat16 a, bfloat16 b) { return __hmax(a, b); }
 inline __device__ bfloat16 min(bfloat16 a, bfloat16 b) { return __hmin(a, b); }
@@ -45,7 +50,7 @@ inline __device__ bfloat16 min(bfloat16 a, bfloat16 b) { return float(a)<float(b
 #endif
 
 inline __device__ bfloat16 pow(bfloat16 a, bfloat16 b) { return ::pow(float32(a), float32(b)); }
-
+#endif
 template<int nbyte, class T>
 __device__ inline
 typename std::enable_if<nbyte<=0,void>::type
