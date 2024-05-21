@@ -11,7 +11,9 @@
 #include "misc/cuda_flags.h"
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
+#ifndef IS_ROCM
 #include <cuda_bf16.h>
+#endif
 #include "helper_cuda.h"
 #endif
 #include "mem/allocator.h"
@@ -22,7 +24,9 @@ namespace jittor {
 
 #ifdef IS_CUDA
 EXTERN_LIB vector<int> check_nan_float16(__half* ptr, int64 num);
+#ifndef IS_ROCM
 EXTERN_LIB vector<int> check_nan_bfloat16(__nv_bfloat16* ptr, int64 num);
+#endif
 EXTERN_LIB vector<int> check_nan_float32(float32* ptr, int64 num);
 EXTERN_LIB vector<int> check_nan_float64(float64* ptr, int64 num);
 #endif
@@ -33,7 +37,9 @@ void dump_var(Var* v, string name) {
     name = ss.str();
     LOGe << "dump" << v << "to" << name;
     char* buffer = new char[v->size];
-    #ifdef IS_CUDA
+    #ifdef IS_ROCM
+    hipMemcpy(buffer, v->mem_ptr, v->size, hipMemcpyDefault);
+    #elif IS_CUDA 
     cudaMemcpy(buffer, v->mem_ptr, v->size, cudaMemcpyDefault);
     #else
     std::memcpy(buffer, v->mem_ptr, v->size);
@@ -57,9 +63,11 @@ bool check_nan(Var* v, Op* op) {
         if (v->dtype() == ns_float16) {
             nan_index = check_nan_float16((__half*)v->mem_ptr, v->num);
         }
+        #ifndef IS_ROCM
         if (v->dtype() == ns_bfloat16) {
             nan_index = check_nan_bfloat16((__nv_bfloat16*)v->mem_ptr, v->num);
         }
+        #endif
         if (v->dtype() == ns_float32) {
             nan_index = check_nan_float32((float32*)v->mem_ptr, v->num);
         } else
@@ -104,14 +112,16 @@ bool check_nan(Var* v, Op* op) {
                         auto* ptr = input->ptr<__half>();
                         __half value;
                         cudaMemcpy(&value, ptr+index, sizeof(__half), cudaMemcpyDeviceToHost);
-                        LOGe << "input" << icnt << "dtype" << input->dtype() << "index" << index << "value" << (float)value;
+                        // LOGe << "input" << icnt << "dtype" << input->dtype() << "index" << index << "value" << (float)value;
                     } else
+                    #ifndef IS_ROCM
                     if (input->dtype() == ns_bfloat16) {
                         auto* ptr = input->ptr<__nv_bfloat16>();
                         __nv_bfloat16 value;
                         cudaMemcpy(&value, ptr+index, sizeof(__nv_bfloat16), cudaMemcpyDeviceToHost);
                         LOGe << "input" << icnt << "dtype" << input->dtype() << "index" << index << "value" << (float)value;
                     } else
+                    #endif
                     if (input->dtype() == ns_float32) {
                         auto* ptr = input->ptr<float32>();
                         float32 value;
