@@ -2010,6 +2010,7 @@ jt.Var.contiguous = contiguous
 def cpu(x): return x.clone()
 jt.Var.cpu = cpu
 def to(x, *args, **kargs):
+    args += tuple(kargs.values())
     if len(args) >= 1:
         s = args[0]
         if isinstance(s, jt.NanoString) or callable(s):
