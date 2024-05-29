@@ -294,9 +294,10 @@ Example::
     if len(shape) == 1 and isinstance(shape[0], (tuple,list,jt.NanoVector)):
         shape = shape[0]
     shape = list(shape)
-    for i in range(len(shape)):
-        if shape[i] == -1:
-            shape[i] = x.shape[i]
+    offset = len(shape) - len(x.shape)
+    for i in range(len(x.shape)):
+        if shape[offset + i] == -1:
+            shape[offset + i] = x.shape[i]
     return x.broadcast(shape)
 jt.Var.expand = expand
 
