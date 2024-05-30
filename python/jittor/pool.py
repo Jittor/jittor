@@ -21,6 +21,12 @@ class Pool(Module):
     def __init__(self, kernel_size, stride=None, padding=0, dilation=None, return_indices=None, ceil_mode=False, count_include_pad=True, op="maximum"):
         assert dilation == None
         assert return_indices == None or op == "maximum"
+        if self.kernel_size[0] <= 0 or self.kernel_size[1] <= 0:
+            raise RuntimeError(f"kernel_size must be greater than zero, but got {kernel_size}")
+        if self.stride[0] <= 0 or self.stride[1] <= 0:
+            raise RuntimeError(f"stride must be greater than zero, but got {stride}")
+        if self.padding[0] < 0 or self.padding[1] < 0:
+            raise RuntimeError(f"padding must be non-negative, but got {padding}")
         self.return_indices = return_indices
         self.kernel_size = kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size)
         self.op = op
@@ -29,12 +35,6 @@ class Pool(Module):
         self.padding = padding if isinstance(padding, tuple) else (padding, padding)
         self.ceil_mode = ceil_mode
         self.count_include_pad = count_include_pad and padding != 0
-        if self.kernel_size[0] <= 0 or self.kernel_size[1] <= 0:
-            raise RuntimeError(f"kernel_size must be greater than zero, but got {kernel_size}")
-        if self.stride[0] <= 0 or self.stride[1] <= 0:
-            raise RuntimeError(f"stride must be greater than zero, but got {stride}")
-        if self.padding[0] < 0 or self.padding[1] < 0:
-            raise RuntimeError(f"padding must be non-negative, but got {padding}")
 
     def execute(self, x):
         N,C,H,W = x.shape
@@ -203,6 +203,12 @@ class Pool3d(Module):
     def __init__(self, kernel_size, stride=None, padding=0, dilation=None, return_indices=None, ceil_mode=False, count_include_pad=True, op="maximum"):
         assert dilation == None
         assert return_indices == None or op == "maximum"
+        if self.kernel_size[0] <= 0 or self.kernel_size[1] <= 0 or self.kernel_size[2] <= 0:
+            raise RuntimeError(f"kernel_size must be greater than zero, but got {kernel_size}")
+        if self.stride[0] <= 0 or self.stride[1] <= 0 or self.stride[2] <= 0:
+            raise RuntimeError(f"stride must be greater than zero, but got {stride}")
+        if self.padding[0] < 0 or self.padding[1] < 0 or self.padding[2] < 0:
+            raise RuntimeError(f"padding must be non-negative, but got {padding}")
         self.return_indices = return_indices
         self.kernel_size = _triple(kernel_size)
         self.op = op
@@ -211,12 +217,6 @@ class Pool3d(Module):
         self.padding = _triple(padding)
         self.ceil_mode = ceil_mode
         self.count_include_pad = count_include_pad and padding != 0
-        if self.kernel_size[0] <= 0 or self.kernel_size[1] <= 0 or self.kernel_size[2] <= 0:
-            raise RuntimeError(f"kernel_size must be greater than zero, but got {kernel_size}")
-        if self.stride[0] <= 0 or self.stride[1] <= 0 or self.stride[2] <= 0:
-            raise RuntimeError(f"stride must be greater than zero, but got {stride}")
-        if self.padding[0] < 0 or self.padding[1] < 0 or self.padding[2] < 0:
-            raise RuntimeError(f"padding must be non-negative, but got {padding}")
 
     def execute(self, x):
         N,C,D,H,W = x.shape
@@ -518,7 +518,7 @@ class AdaptiveMaxPool3d(Module):
             f"i3*{self.sh}+i6", # Hid
             f"i4*{self.sw}+i7", # Wid
         ])
-        return xx.reduce("maximun", [5,6,7])
+        return xx.reduce("maximum", [5,6,7])
 
 def pool(x, kernel_size, op, padding=0, stride=None):
     return Pool(kernel_size, stride, padding, op=op)(x)
