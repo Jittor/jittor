@@ -243,9 +243,17 @@ Example::
     if len(arr) == 0:
         raise ValueError("need at least one array to concat")
     total_dim = 0
-    if dim < 0: dim += len(arr[0].shape)
+    base_dim = len(arr[0].shape)
+    if dim < 0: dim += base_dim
+    if dim < 0 or dim >= base_dim: 
+        raise IndexError(f"Dimension out of range (expected to be in range of [{-base_dim}, {base_dim-1}], but got {dim})")
     dtypes = []
     for a in arr:
+        if len(a.shape) != base_dim:
+            raise RuntimeError(f"get different number of dimensions of {base_dim} and {len(a.shape)}")
+        for i in range(base_dim):
+            if i != dim and a.shape[i] != arr[0].shape[i]:
+                raise RuntimeError(f"Sizes of vars must match except in dimension {dim}. Expected size {arr[0].shape[i]} but got size {a.shape[i]} for dimension number {i} in the list.")
         total_dim += a.shape[dim]
         dtypes.append(str(a.dtype))
     cdim = 0

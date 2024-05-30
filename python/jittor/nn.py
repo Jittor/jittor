@@ -1809,6 +1809,7 @@ def embedding(input, weight):
 
 class PixelShuffle(Module):
     def __init__(self, upscale_factor):
+        assert upscale_factor > 0,f"upscale_factor must be greater than zero,got {upscale_factor}"
         self.upscale_factor = upscale_factor
 
     def execute(self, x):
