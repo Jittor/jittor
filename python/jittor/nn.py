@@ -926,6 +926,42 @@ class Conv(Module):
     >>> output = conv(input)
     '''
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
+        if in_channels <= 0:
+            raise ValueError(f"in_channels must be greater than zero, got {in_channels}")
+        if out_channels <= 0:
+            raise ValueError(f"out_channels must be greater than zero, got {out_channels}")
+        if groups <= 0:
+            raise ValueError(f"groups must must be greater than zero, got {groups}")
+        assert in_channels % groups == 0, 'in_channels must be divisible by groups'
+        assert out_channels % groups == 0, 'out_channels must be divisible by groups'
+        if isinstance(kernel_size, tuple):
+            for size in kernel_size:
+                if size <= 0:
+                    raise ValueError(f"kernel_size must be greater than zero, got {kernel_size}")
+        else:
+            if kernel_size <= 0:
+                raise ValueError(f"kernel_size must be greater than zero, got {kernel_size}")
+        if isinstance(stride, tuple):
+            for size in stride:
+                if size <= 0:
+                    raise ValueError(f"stride must be greater than zero, got {stride}")
+        else:
+            if stride <= 0:
+                raise ValueError(f"stride must be greater than zero, got {stride}")
+        if isinstance(padding, tuple):
+            for size in padding:
+                if size < 0:
+                    raise ValueError(f"padding must be nonnegative, got {padding}")
+        else:
+            if padding < 0:
+                raise ValueError(f"padding must be nonnegative, got {padding}")
+        if isinstance(dilation, tuple):
+            for size in dilation:
+                if size <= 0:
+                    raise ValueError(f"dilation must be greater than zero, got {dilation}")
+        else:
+            if dilation <= 0:
+                raise ValueError(f"dilation must be greater than zero, got {dilation}")
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.kernel_size = kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size)
@@ -936,8 +972,6 @@ class Conv(Module):
         self.is_depthwise_conv = self.groups == self.out_channels and self.groups == self.in_channels
         if self.is_depthwise_conv and jt.flags.use_cuda and jt.compiler.is_cuda:
             self.depthwise_conv = DepthwiseConv(stride, padding, dilation)
-        assert in_channels % groups == 0, 'in_channels must be divisible by groups'
-        assert out_channels % groups == 0, 'out_channels must be divisible by groups'
         Kh, Kw = self.kernel_size
 
         # self.weight = init.relu_invariant_gauss([out_channels, in_channels//groups, Kh, Kw], dtype="float", mode="fan_out")
