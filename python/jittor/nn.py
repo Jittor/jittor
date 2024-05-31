@@ -1865,6 +1865,15 @@ class Softplus(Module):
 class Resize(Module):
     def __init__(self, size, mode="nearest", align_corners=False):
         super().__init__()
+        if isinstance(size,int):
+            if size <= 0:
+                raise ValueError(f"sizes must be positive, got {size}")
+        elif isinstance(size,tuple) or isinstance(size,list):
+            for item in size:
+                if item <= 0:
+                    raise ValueError(f"sizes must be positive, got {item}")
+        else:
+            raise ValueError(f"size must be int or tuple")
         self.size = size
         self.mode = mode
         self.align_corners = align_corners
