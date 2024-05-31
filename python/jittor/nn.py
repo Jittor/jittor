@@ -1688,6 +1688,8 @@ class ReflectionPad2d(Module):
             self.pl, self.pr, self.pt, self.pb = self.padding
         else:
             raise TypeError(f"ReflectionPad2d padding just support int or tuple, but found {type(padding)}")
+        if self.pl < 0 or self.pr < 0 or self.pt < 0 or self.pb < 0:
+            raise ValueError(f"padding must be non-negative")
 
     def execute(self, x):
         n,c,h,w = x.shape
@@ -1716,6 +1718,8 @@ class ZeroPad2d(Module):
             self.pl, self.pr, self.pt, self.pb = self.padding
         else:
             raise TypeError(f"ZeroPad2d padding just support int or tuple, but found {type(padding)}")
+        if self.pl < 0 or self.pr < 0 or self.pt < 0 or self.pb < 0:
+            raise ValueError(f"padding must be non-negative")
 
     def execute(self, x):
         n,c,h,w = x.shape
@@ -1734,6 +1738,8 @@ class ConstantPad2d(Module):
         else:
             raise TypeError(f"ConstantPad2d padding just support int or tuple, but found {type(padding)}")
         self.value = value
+        if self.pl < 0 or self.pr < 0 or self.pt < 0 or self.pb < 0:
+            raise ValueError(f"padding must be non-negative")
 
     def execute(self, x):
         assert len(x.shape) >= 2
@@ -1760,6 +1766,8 @@ class ReplicationPad2d(Module):
             self.pl, self.pr, self.pt, self.pb = self.padding
         else:
             raise TypeError(f"ReplicationPad2d padding just support int or tuple, but found {type(padding)}")
+        if self.pl < 0 or self.pr < 0 or self.pt < 0 or self.pb < 0:
+            raise ValueError(f"padding must be non-negative")
 
     def execute(self, x):
         n,c,h,w = x.shape
