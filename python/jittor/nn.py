@@ -2308,6 +2308,15 @@ class Sequential(Module):
     
     def named_children(self,):
         return list(self.layers.items())
+
+    def __setattr__(self, key, value) -> None:
+        if isinstance(key, str) and key.isdigit():
+            if int(key)<len(self.layers):
+                self.add_module(key, value)
+            else:
+                super().__setattr__(key, value)
+        else:
+            super().__setattr__(key, value)
     
 
     def __getattr__(self, key):
