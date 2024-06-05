@@ -926,6 +926,42 @@ class Conv(Module):
     >>> output = conv(input)
     '''
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
+        if in_channels <= 0:
+            raise ValueError(f"in_channels must be greater than zero, got {in_channels}")
+        if out_channels <= 0:
+            raise ValueError(f"out_channels must be greater than zero, got {out_channels}")
+        if groups <= 0:
+            raise ValueError(f"groups must must be greater than zero, got {groups}")
+        assert in_channels % groups == 0, 'in_channels must be divisible by groups'
+        assert out_channels % groups == 0, 'out_channels must be divisible by groups'
+        if isinstance(kernel_size, tuple):
+            for size in kernel_size:
+                if size <= 0:
+                    raise ValueError(f"kernel_size must be greater than zero, got {kernel_size}")
+        else:
+            if kernel_size <= 0:
+                raise ValueError(f"kernel_size must be greater than zero, got {kernel_size}")
+        if isinstance(stride, tuple):
+            for size in stride:
+                if size <= 0:
+                    raise ValueError(f"stride must be greater than zero, got {stride}")
+        else:
+            if stride <= 0:
+                raise ValueError(f"stride must be greater than zero, got {stride}")
+        if isinstance(padding, tuple):
+            for size in padding:
+                if size < 0:
+                    raise ValueError(f"padding must be nonnegative, got {padding}")
+        else:
+            if padding < 0:
+                raise ValueError(f"padding must be nonnegative, got {padding}")
+        if isinstance(dilation, tuple):
+            for size in dilation:
+                if size <= 0:
+                    raise ValueError(f"dilation must be greater than zero, got {dilation}")
+        else:
+            if dilation <= 0:
+                raise ValueError(f"dilation must be greater than zero, got {dilation}")
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.kernel_size = kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size)
@@ -936,8 +972,6 @@ class Conv(Module):
         self.is_depthwise_conv = self.groups == self.out_channels and self.groups == self.in_channels
         if self.is_depthwise_conv and jt.flags.use_cuda and jt.compiler.is_cuda:
             self.depthwise_conv = DepthwiseConv(stride, padding, dilation)
-        assert in_channels % groups == 0, 'in_channels must be divisible by groups'
-        assert out_channels % groups == 0, 'out_channels must be divisible by groups'
         Kh, Kw = self.kernel_size
 
         # self.weight = init.relu_invariant_gauss([out_channels, in_channels//groups, Kh, Kw], dtype="float", mode="fan_out")
@@ -1359,6 +1393,7 @@ class ConvTranspose(Module):
         self.real_padding = (self.dilation[0] * (self.kernel_size[0] - 1) - self.padding[0],
             self.dilation[1] * (self.kernel_size[1] - 1) - self.padding[1])
         self.output_padding = output_padding if isinstance (output_padding, tuple) else (output_padding, output_padding)
+        assert self.padding[0] >= 0 or self.padding[1] >= 0,"padding must be non-negative"
         assert self.output_padding[0] < max(self.stride[0], self.dilation[0]) and \
             self.output_padding[1] < max(self.stride[1], self.dilation[1]), \
             "output padding must be smaller than max(stride, dilation)"
@@ -1654,6 +1689,8 @@ class ReflectionPad2d(Module):
             self.pl, self.pr, self.pt, self.pb = self.padding
         else:
             raise TypeError(f"ReflectionPad2d padding just support int or tuple, but found {type(padding)}")
+        if self.pl < 0 or self.pr < 0 or self.pt < 0 or self.pb < 0:
+            raise ValueError(f"padding must be non-negative")
 
     def execute(self, x):
         n,c,h,w = x.shape
@@ -1682,6 +1719,8 @@ class ZeroPad2d(Module):
             self.pl, self.pr, self.pt, self.pb = self.padding
         else:
             raise TypeError(f"ZeroPad2d padding just support int or tuple, but found {type(padding)}")
+        if self.pl < 0 or self.pr < 0 or self.pt < 0 or self.pb < 0:
+            raise ValueError(f"padding must be non-negative")
 
     def execute(self, x):
         n,c,h,w = x.shape
@@ -1700,6 +1739,8 @@ class ConstantPad2d(Module):
         else:
             raise TypeError(f"ConstantPad2d padding just support int or tuple, but found {type(padding)}")
         self.value = value
+        if self.pl < 0 or self.pr < 0 or self.pt < 0 or self.pb < 0:
+            raise ValueError(f"padding must be non-negative")
 
     def execute(self, x):
         assert len(x.shape) >= 2
@@ -1726,6 +1767,8 @@ class ReplicationPad2d(Module):
             self.pl, self.pr, self.pt, self.pb = self.padding
         else:
             raise TypeError(f"ReplicationPad2d padding just support int or tuple, but found {type(padding)}")
+        if self.pl < 0 or self.pr < 0 or self.pt < 0 or self.pb < 0:
+            raise ValueError(f"padding must be non-negative")
 
     def execute(self, x):
         n,c,h,w = x.shape
@@ -1775,6 +1818,7 @@ def embedding(input, weight):
 
 class PixelShuffle(Module):
     def __init__(self, upscale_factor):
+        assert upscale_factor > 0,f"upscale_factor must be greater than zero,got {upscale_factor}"
         self.upscale_factor = upscale_factor
 
     def execute(self, x):
@@ -1830,6 +1874,15 @@ class Softplus(Module):
 class Resize(Module):
     def __init__(self, size, mode="nearest", align_corners=False):
         super().__init__()
+        if isinstance(size,int):
+            if size <= 0:
+                raise ValueError(f"sizes must be positive, got {size}")
+        elif isinstance(size,tuple) or isinstance(size,list):
+            for item in size:
+                if item <= 0:
+                    raise ValueError(f"sizes must be positive, got {item}")
+        else:
+            raise ValueError(f"size must be int or tuple")
         self.size = size
         self.mode = mode
         self.align_corners = align_corners
@@ -2175,15 +2228,21 @@ def grid_sample(input, grid, mode='bilinear', padding_mode='zeros', align_corner
 
 class Upsample(Module):
     def __init__(self, scale_factor=None, mode='nearest'):
-        self.scale_factor = scale_factor if isinstance(scale_factor, tuple) else (scale_factor, scale_factor)
+        if isinstance(scale_factor, tuple):
+            self.scale_factor = tuple(float(factor) for factor in scale_factor)
+        else:
+            self.scale_factor = float(scale_factor) if scale_factor else None
         self.mode = mode
     
     def execute(self, x):
-        return upsample(x,
-            size=(
-                int(x.shape[2]*self.scale_factor[0]), 
-                int(x.shape[3]*self.scale_factor[1])),
-            mode=self.mode)
+        if self.scale_factor is None:
+            raise ValueError("scale_factor should be defined")
+        else:
+            return upsample(x,
+                size=(
+                    int(x.shape[2]*self.scale_factor[0]), 
+                    int(x.shape[3]*self.scale_factor[1])),
+                mode=self.mode)
 
 class UpsamplingBilinear2d(Upsample):
     def __init__(self, scale_factor=None):
