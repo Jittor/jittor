@@ -3006,6 +3006,10 @@ class GRU(RNNBase):
         return h, h
 
 def bilinear(in1, in2, weight, bias):
+    if weight.shape[1] != in1.shape[1]:
+        raise RuntimeError(f"bilinear(): input1 size deos not match weight size: got {in1.shape[1]} but expected {weight.shape[1]}")
+    if weight.shape[2] != in2.shape[1]:
+        raise RuntimeError(f"bilinear(): input2 size deos not match weight size: got {in2.shape[1]} but expected {weight.shape[2]}")
     w = weight.transpose((1,0,2))
     w = w.reshape((w.shape[0], -1))
     x = jt.matmul(in1, w)
