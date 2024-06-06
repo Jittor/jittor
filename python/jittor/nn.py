@@ -1183,6 +1183,8 @@ class Conv3d(Module):
 
 class Conv1d_sp(Linear):
     def __init__(self, inchannels, outchannels, kernel_size=1, bias=True):
+        assert inchannels > 0, 'in_channels must be positive'
+        assert outchannels > 0, 'out_channels must be positive'
         super().__init__(inchannels, outchannels, bias=bias)
         assert kernel_size == 1
 
