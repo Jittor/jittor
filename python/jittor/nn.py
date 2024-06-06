@@ -1106,6 +1106,8 @@ class Conv1d(Module):
         self.bias = self._conv[0].bias
 
     def execute(self, x):
+        if x.dim() != 3:
+            raise ValueError("Input shape must be `(N, C, L)`!")
         N,C,D = x.shape
         assert C==self.in_channels
         self._conv[0].weight = self.weight.unsqueeze(-1)
