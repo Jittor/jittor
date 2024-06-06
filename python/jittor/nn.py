@@ -1187,6 +1187,8 @@ class Conv1d_sp(Linear):
         assert kernel_size == 1
 
     def execute(self, x):
+        if x.dim() != 3:
+            raise ValueError("Input shape must be `(N, C, L)`!")
         x = x.transpose(0, 2, 1)
         x = super().execute(x)
         x = x.transpose(0, 2, 1)
