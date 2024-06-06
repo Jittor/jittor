@@ -1088,6 +1088,8 @@ class Conv1d(Module):
     >>> output = conv(input)
     '''
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
+        assert in_channels > 0, 'in_channels must be positive'
+        assert out_channels > 0, 'out_channels must be positive'
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.kernel_size = (kernel_size, 1)
