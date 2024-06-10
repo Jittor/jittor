@@ -1516,14 +1516,16 @@ class ConvTranspose3d(Module):
         return conv_transpose3d(x, self.weight, self.bias, self.stride, self.padding, self.output_padding, self.group, self.dilation)
 
 def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding=0, groups=1, dilation=1):
-    if stride <= 0:
-        raise RuntimeError("non-positive stride is not supported")
     if groups == 1:
         x = input
+        if x.dim() != 4:
+            raise RuntimeError(f'Expected 4D input to conv_transpose, but got input of size: {x.shape}')
         N,C,H,W = x.shape
         i,o,h,w = weight.shape
         assert C==i
         stride = stride if isinstance(stride, tuple) else (stride, stride)
+        if stride[0] <= 0 or stride[1] <= 0:
+            raise RuntimeError("non-positive stride is not supported")
         dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
         # added
         padding = padding if isinstance(padding, tuple) else (padding, padding)
@@ -1555,6 +1557,8 @@ def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding
             assert not bias, "Bias should be none or jittor var"
         return y
     else:
+        if input.dim() != 4:
+            raise RuntimeError(f'Expected 4D input to conv_transpose, but got input of size: {input.shape}')
         N,C,H,W = input.shape
         i,o,h,w = weight.shape
         G = groups
@@ -1563,6 +1567,8 @@ def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding
         assert C % G == 0
         assert C==i, (C, i)
         stride = stride if isinstance(stride, tuple) else (stride, stride)
+        if stride[0] <= 0 or stride[1] <= 0:
+            raise RuntimeError("non-positive stride is not supported")
         dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
         # added
         padding = padding if isinstance(padding, tuple) else (padding, padding)
