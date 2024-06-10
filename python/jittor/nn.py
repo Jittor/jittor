@@ -1608,11 +1608,11 @@ def conv_transpose3d(input, weight, bias=None, stride=1, padding=0, output_paddi
     x = input
     N,C,D,H,W = x.shape
     i,o,d,h,w = weight.shape
-    if stride <= 0:
-        raise RuntimeError("non-positive stride is not supported")
     assert C==i
     assert groups==1, "Group conv not supported yet."
     stride = stride if isinstance(stride, tuple) else (stride, stride, stride)
+    if stride[0] <= 0 or stride[1] <= 0 or stride[2] <= 0:
+        raise RuntimeError("non-positive stride is not supported")
     dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation, dilation)
     # added
     padding = padding if isinstance(padding, tuple) else (padding, padding, padding)
