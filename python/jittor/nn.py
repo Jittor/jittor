@@ -1723,6 +1723,8 @@ class ZeroPad2d(Module):
             raise ValueError(f"padding must be non-negative")
 
     def execute(self, x):
+        if x.dim() != 4:
+            raise RuntimeError("Input shape must be `(N, C, H, W)`!")
         n,c,h,w = x.shape
         return x.reindex([n,c,h+self.pt+self.pb,w+self.pl+self.pr], ["i0","i1",f"i2-{self.pt}",f"i3-{self.pl}"])
 
