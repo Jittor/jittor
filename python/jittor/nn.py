@@ -1393,6 +1393,7 @@ class ConvTranspose(Module):
         self.real_padding = (self.dilation[0] * (self.kernel_size[0] - 1) - self.padding[0],
             self.dilation[1] * (self.kernel_size[1] - 1) - self.padding[1])
         self.output_padding = output_padding if isinstance (output_padding, tuple) else (output_padding, output_padding)
+        assert self.stride[0] > 0 or self.stride[1] > 0,"stride must be positive"
         assert self.padding[0] >= 0 or self.padding[1] >= 0,"padding must be non-negative"
         assert self.output_padding[0] < max(self.stride[0], self.dilation[0]) and \
             self.output_padding[1] < max(self.stride[1], self.dilation[1]), \
@@ -1411,6 +1412,8 @@ class ConvTranspose(Module):
             self.bias = None
 
     def execute(self, x):
+        if x.dim() != 4:
+            raise RuntimeError(f'Expected 4D (batched) input to conv_transpose2d, but got input of size: {x.shape}')
         if self.groups == 1:
             N,C,H,W = x.shape
             i,o,h,w = self.weight.shape
