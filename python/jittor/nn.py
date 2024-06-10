@@ -1412,7 +1412,7 @@ class ConvTranspose(Module):
 
     def execute(self, x):
         if x.dim() != 4:
-            raise RuntimeError(f'Expected 3D (unbatched) or 4D (batched) input to conv_transpose2d, but got input of size: {x.shape}')
+            raise RuntimeError(f'Expected 4D (batched) input to conv_transpose2d, but got input of size: {x.shape}')
         if self.groups == 1:
             N,C,H,W = x.shape
             i,o,h,w = self.weight.shape
