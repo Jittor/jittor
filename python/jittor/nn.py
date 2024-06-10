@@ -589,6 +589,8 @@ class Dropout2d(Module):
         #TODO: test model.train() to change self.is_train
     def execute(self, input):
         output = input
+        if (input.dim() != 4) and (input.dim() != 3):
+            raise RuntimeError(f'Expected 3D (unbatched) or 4D (batched) input to Dropout2d, but got input of size: {input.shape}')
         shape = input.shape[:-2]
         if self.p > 0 and self.is_train:
             if self.p == 1:
