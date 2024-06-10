@@ -1606,6 +1606,8 @@ conv_transpose2d = conv_transpose
 
 def conv_transpose3d(input, weight, bias=None, stride=1, padding=0, output_padding=0, groups=1, dilation=1):
     x = input
+    if x.dim() != 5:
+        raise RuntimeError(f'Expected 5D input to conv_transpose3d, but got input of size: {x.shape}')
     N,C,D,H,W = x.shape
     i,o,d,h,w = weight.shape
     assert C==i
