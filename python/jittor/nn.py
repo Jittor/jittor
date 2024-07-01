@@ -2434,14 +2434,19 @@ def unfold(X, kernel_size, dilation=1, padding=0, stride=1):
 
 def fold(X,output_size,kernel_size,dilation=1,padding=0,stride=1):
     assert X.ndim==3
+    assert output_size[0] > 0 and output_size[1] > 0, "output size must be positive."
     if not isinstance(kernel_size,tuple):
         kernel_size = (kernel_size,kernel_size)
+    assert kernel_size[0] > 0 and kernel_size[1] > 0, "kernel size must be positive"
     if not isinstance(dilation,tuple):
         dilation = (dilation,dilation)
+    assert dilation[0] > 0 and dilation[1] > 0, "dilation must be positive"
     if not isinstance(padding,tuple):
         padding = (padding,padding)
+    assert padding[0] >= 0 and padding[1] >= 0, "padding must be non-negative"
     if not isinstance(stride,tuple):
         stride = (stride,stride)
+    assert stride[0] > 0 and stride[1] > 0, "stride must be positive"
     n,cl,num = X.shape
     area = kernel_size[0] * kernel_size[1]
     block_nums = []
