@@ -364,10 +364,14 @@ class PReLU(Module):
         self.num_parameters = num_parameters
         self.weight = init.constant((num_parameters,), "float32", init_)
 
+    
     def execute(self, x):
         if self.num_parameters != 1:
-            assert self.num_parameters == x.size(1), f"num_parameters does not match input channels in PReLU"
-            return jt.maximum(0, x) + self.weight.broadcast(x, [0,2,3]) * jt.minimum(0, x)
+            assert self.num_parameters == x.shape[1], f"num_parameters does not match input channels in PReLU"
+            # Adjust broadcasting logic to ensure it matches the input dimensions
+            shape = [x.shape[0], self.num_parameters] + [1] * (len(x.shape) - 2)
+            weight_broadcasted = self.weight.broadcast(shape)
+            return jt.maximum(0, x) + weight_broadcasted * jt.minimum(0, x)
         else:
             return jt.maximum(0, x) + self.weight * jt.minimum(0, x)
 
