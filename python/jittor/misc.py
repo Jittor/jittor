@@ -2236,3 +2236,16 @@ jt.Var.npu = cuda
 
 def expm1(x):
     return jt.exp(x) - 1
+
+
+def isin(elements, test_elements, assume_unique=False, invert=False):
+    
+    elements = elements.unsqueeze(-1)
+    test_elements = test_elements.unsqueeze(0)
+    comparison = elements == test_elements
+    result = comparison.any(dim=-1)
+
+    if invert:
+        result = jt.logical_not(result)
+    
+    return result
