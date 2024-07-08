@@ -1189,10 +1189,14 @@ class Conv3d(Module):
 
 class Conv1d_sp(Linear):
     def __init__(self, inchannels, outchannels, kernel_size=1, bias=True):
+        assert inchannels > 0, 'in_channels must be positive'
+        assert outchannels > 0, 'out_channels must be positive'
         super().__init__(inchannels, outchannels, bias=bias)
         assert kernel_size == 1
 
     def execute(self, x):
+        if x.dim() != 3:
+            raise ValueError("Input shape must be `(N, C, L)`!")
         x = x.transpose(0, 2, 1)
         x = super().execute(x)
         x = x.transpose(0, 2, 1)
