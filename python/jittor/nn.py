@@ -1771,6 +1771,8 @@ class ReplicationPad2d(Module):
             raise ValueError(f"padding must be non-negative")
 
     def execute(self, x):
+        if x.dim() != 4:
+            raise RuntimeError("Input shape must be `(N, C, H, W)`!")
         n,c,h,w = x.shape
         oh=h+self.pt+self.pb
         ow=w+self.pl+self.pr
