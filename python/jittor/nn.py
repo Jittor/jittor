@@ -494,6 +494,9 @@ class L1Loss(Module):
         return l1_loss(output, target)
 
 def binary_cross_entropy_with_logits(output, target, weight=None, pos_weight=None, size_average=True):
+    if not (target.shape == output.shape):
+        raise ValueError(f"Target size ({target.shape}) must be the same as output size ({output.shape})")
+    
     max_val = jt.clamp(-output,min_v=0)
     if pos_weight is not None:
         log_weight = (pos_weight-1)*target + 1
