@@ -12,6 +12,7 @@ import glob
 import jittor.compiler as compiler
 import jittor as jt
 
+
 has_acl = 0
 cc_flags = ""
 tikcc_path = env_or_try_find('tikcc_path', 'ccec')
@@ -120,40 +121,52 @@ def post_process():
 
 def acl_cmd(name: str, inputs: list, output_dtypes: list, output_shapes: list,
             attr: dict):
-
+    nchw_op = ['MaxPoolWithArgmaxV1','MaxPoolGradWithArgmaxV1', 'AvgPoolV2']
+    attr_op = ['MaxPoolWithArgmaxV1','MaxPoolGradWithArgmaxV1', 'AvgPoolV2', 'AdaptiveAvgPool2d', 'AdaptiveAvgPool2dGrad']
+    
     input_code = ''
     for i in range(len(inputs)):
-        if name == 'MaxPoolWithArgmaxV1' or name == 'MaxPoolGradWithArgmaxV1':
+        if name in nchw_op:
             input_code += f"op.add(in{i}, true, ACL_FORMAT_NCHW);\n"
         else:    
             input_code += f"op.add(in{i}, true);\n"
 
     output_code = ''
     for i in range(len(output_dtypes)):
-        if name == 'MaxPoolWithArgmaxV1'or name == 'MaxPoolGradWithArgmaxV1':
+        if name in nchw_op:
             output_code += f"op.add(out{i}, false, ACL_FORMAT_NCHW);\n"
         else:    
             output_code += f"op.add(out{i}, false);\n"
 
     # add attr to op
     attr_code = ''
-    if name == 'MaxPoolWithArgmaxV1' or name == 'MaxPoolGradWithArgmaxV1':
+    if name in attr_op:
         for k, v in attr.items():
-            if k == "ceil_mode":
-                v = 'false' if v == False else 'true'
-                attr_code += f"op.set_attr(\"{k}\", {v});\n"
+            if isinstance(v, bool):
+                if v == True:
+                    attr_code += f"op.set_attr(\"{k}\", 1, 1);\n"
+                else:
+                    attr_code += f"op.set_attr(\"{k}\", 1, 0);\n"
+            elif isinstance(v, str):
+                attr_code += f"op.set_attr(\"{k}\", \"{v}\");\n"
+            elif k == 'divisor_override_value':
+                attr_code += f"op.set_attr(\"{k}\", int64_t({v}), 0);\n" 
             else:
                 v = str(v).replace('[', '{').replace(']', '}')
                 attr_code += f"op.set_attr(\"{k}\", vector<int64_t>{v});\n"
     else:
         for k, v in attr.items():
             if isinstance(v, bool):
-                attr_code += f"op.set_attr(\"{k}\", {str(v).lower()});\n"
+                if v == True:
+                    attr_code += f"op.set_attr(\"{k}\", 1, 1);\n"
+                else:
+                    attr_code += f"op.set_attr(\"{k}\", 1, 0);\n"
             elif isinstance(v, str):
                 attr_code += f"op.set_attr(\"{k}\", \"{v}\");\n"
             else:
-                attr_code += f"op.set_attr(\"{k}\", int({v}));\n"
-                
+                attr_code += f"op.set_attr(\"{k}\", int({v}));\n"    
+    
+    # print(attr_code)
     import jittor as jt
     return jt.code(
         output_shapes,
@@ -317,28 +330,44 @@ def acl_cmd(name: str, inputs: list, output_dtypes: list, output_shapes: list,
             input_data.push_back(data);
             input_host_32.emplace_back(move(v));
         }
-
+        
         void set_attr(const string& key, bool value) {
+            // LOGir << "string bool" << "set_attr" << key << value;
             CHECK(aclopSetAttrBool(attr, key.c_str(), value)==0);
         }
+        void set_attr(const string& key, int value, int is_bool) {
+            // LOGir << "string bool" << "set_attr" << key << value << is_bool;
+            CHECK(aclopSetAttrBool(attr, key.c_str(), value==is_bool)==0);
+        }
         void set_attr(const string& key, float value) {
+            // LOGir << "string float" <<"set_attr" << key << value;
             CHECK(aclopSetAttrFloat(attr, key.c_str(), value)==0);
         }
         void set_attr(const string& key, int64_t value) {
+            // LOGir << "string int64" << "set_attr" << key << value;
+            CHECK(aclopSetAttrInt(attr, key.c_str(), value)==0);
+        }
+        void set_attr(const string& key, int64_t value, int placeholder) {
+            // LOGir << "string int64" << "set_attr" << key << value;
             CHECK(aclopSetAttrInt(attr, key.c_str(), value)==0);
         }
         void set_attr(const string& key, int32 value) {
+            // LOGir << "string int32" << "set_attr" << key << value;
             CHECK(aclopSetAttrInt(attr, key.c_str(), value)==0);
         }
         void set_attr(const string& key, vector<int64_t> value) {
+            // LOGir << "string vector" << "set_attr" << key << value;
             CHECK(aclopSetAttrListInt(attr, key.c_str(), value.size(), &value[0])==0);
         }
         void set_attr(const string& key, string value) {
+            // LOGir << "string string" << "set_attr" << key << value;
             CHECK(aclopSetAttrString(attr, key.c_str(), value.c_str())==0);
         }
         void set_attr(const char* key, const char* value) {
+            // LOGir << "char" << "set_attr" << key << value;
             CHECK(aclopSetAttrString(attr, key, value)==0);
         }
+
 
         void run() {
             // printDeviceData(input_desc, input_data, name);
@@ -380,29 +409,63 @@ def change_function():
         def __init__(self):
             super(IndexACL, self).__init__()
 
-        def execute(self, inshape: list, dim: int, dtype="int32"):
+        def execute(self, inshape: list, dim, dtype="int32"):
             # zeros a tensor, shape is inshape, dtype is dtype
-            max_len = inshape[dim]
-            tmp = jt.zeros(max_len, dtype=dtype)
-            result = acl_cmd(
-                "Range",
-                [jt.Var(0), jt.Var(max_len), jt.Var(1)],
-                output_dtypes=[tmp.dtype],
-                output_shapes=[tmp.shape],
-                attr={})[0]
-            broadcast_dim = []
-            for i in range(len(inshape)):
-                if i != dim:
-                    broadcast_dim.append(i)
-            result = jt.broadcast(result, shape=inshape, dims=broadcast_dim)
-            return result
+            if dim == None:
+                dim = [i for i in range(len(inshape))]
+            elif type(dim) == int:
+                dim = [dim]
+            results = []
+            for d in dim:
+                max_len = inshape[d]
+                tmp = jt.zeros(max_len, dtype=dtype)
+                result = acl_cmd(
+                    "Range",
+                    [jt.Var(0), jt.Var(max_len), jt.Var(1)],
+                    output_dtypes=[tmp.dtype],
+                    output_shapes=[tmp.shape],
+                    attr={})[0]
+                broadcast_dim = []
+                for i in range(len(inshape)):
+                    if i != d:
+                        broadcast_dim.append(i)
+                result = jt.broadcast(result, shape=inshape, dims=broadcast_dim)
+                results.append(result)
+            if len(results) != 1:
+                return tuple(results)
+            else:
+                return results[0]
 
         def grad(self, grad_output):
             return grad_output
 
-    
     class PoolACL(Function):
 
+        def get_paddings(self):
+            pad_top = self.padding[0]
+            pad_left = self.padding[1]
+            H = self.input.shape[-2]
+            W = self.input.shape[-1]
+
+            totalH = H + 2 * self.padding[0] - self.kernel_size[0]
+            totalW = W + 2 * self.padding[1] - self.kernel_size[1]
+
+            kH = (totalH + self.stride[0] - 1) // self.stride[0] + 1 if self.attr['ceil_mode'] else totalH // self.stride[0] + 1
+            kW = (totalW + self.stride[1] - 1) // self.stride[1] + 1 if self.attr['ceil_mode'] else totalW // self.stride[1] + 1
+
+            if self.attr['ceil_mode']:
+                if (kH - 1) * self.stride[0] >= H + self.padding[0]:
+                    kH -= 1
+                    need_pad_h = (kH - 1) * self.stride[0] + self.kernel_size[0] - H
+                    pad_top = need_pad_h - self.padding[0]
+                if (kW - 1) * self.stride[1] >= W + self.padding[1]:
+                    kW -= 1
+                    need_pad_w = (kW - 1) * self.stride[1] + self.kernel_size[1] - W
+                    pad_left = need_pad_w - self.padding[1]
+
+            pads = [self.padding[0], pad_top, self.padding[1], pad_left]
+            return pads
+    
         def __init__(self,
                     kernel_size,
                     stride=None,
@@ -410,9 +473,9 @@ def change_function():
                     dilation=None,
                     return_indices=None,
                     ceil_mode=False,
+                    count_include_pad=True,
                     op='maximum'):
             super(PoolACL, self).__init__()
-            import jittor as jt
             # set attr
             self.kernel_size = kernel_size if isinstance(
                 kernel_size, tuple) else (kernel_size, kernel_size)
@@ -424,16 +487,28 @@ def change_function():
             self.dilation = dilation if isinstance(dilation, tuple) else (dilation,
                                                                         dilation)
             attr = {}
-            attr['ksize'] = [1, self.kernel_size[0], self.kernel_size[1], 1]
-            attr['strides'] = [1, self.stride[0], self.stride[1], 1]
-            attr['pads'] = [1, self.padding[0], self.padding[1], 1]
-            attr['dilation'] = [1, self.dilation[0], self.dilation[1], 1]
-            attr['ceil_mode'] = ceil_mode
-
-            self.attr = attr
+            
             self.return_indices = return_indices
             self.uint16 = jt.Var(1).int32().dtype
             self.op = op
+            
+            if op == 'mean':
+                attr['exclusive'] = not count_include_pad
+                attr['global_pooling'] = False
+                attr['divisor_override_value'] = 0
+                attr['ksize'] = [1, 1, self.kernel_size[0], self.kernel_size[1]]
+                attr['strides'] = [1, 1, self.stride[0], self.stride[1]]
+                attr['ceil_mode'] = ceil_mode
+                attr['padding_mode'] = 'CALCULATED'
+                attr['data_format'] = 'NCHW'
+            elif op == 'maximum':
+                attr['ksize'] = [1, self.kernel_size[0], self.kernel_size[1], 1]
+                attr['strides'] = [1, self.stride[0], self.stride[1], 1]
+                attr['pads'] = [1, self.padding[0], self.padding[1], 1]
+                attr['dilation'] = [1, self.dilation[0], self.dilation[1], 1]
+                # attr['ceil_mode'] = ceil_mode
+            
+            self.attr = attr
 
         def execute(self, input):
         
@@ -442,7 +517,6 @@ def change_function():
             input_dtype = input.dtype
             
             self.input = input
-            
             # create output
             output_shape = [
                 input_shape[0], input_shape[1],
@@ -452,22 +526,42 @@ def change_function():
                 (self.kernel_size[1] - 1) - 1) // self.stride[1] + 1
             ]
             output_dtype = input_dtype
-            result = acl_cmd("MaxPoolWithArgmaxV1", [input],
+
+            if self.op == 'mean':
+                self.attr['pads'] = self.get_paddings()
+                result = acl_cmd("AvgPoolV2", [input],
+                            output_dtypes=[output_dtype],
+                            output_shapes=[output_shape],
+                            attr=self.attr)
+            elif self.op == 'maximum':     
+                result = acl_cmd("MaxPoolWithArgmaxV1", [input],
                             output_dtypes=[output_dtype, self.uint16],
                             output_shapes=[output_shape, output_shape],
                             attr=self.attr)
-            self.index = result[1]
+            else:
+                raise ValueError('no this type pool')
+            
+            if self.op == 'maximum':     
+                self.index = result[1]
+            
             if self.return_indices:
                 return result[0], result[1]
             else:
                 return result[0]
         
         def grad(self, grad_output):
-
-            grad_input = acl_cmd("MaxPoolGradWithArgmaxV1", [self.input, grad_output, self.index],
+            if self.op == 'maximum':
+                grad_input = acl_cmd("MaxPoolGradWithArgmaxV1", [self.input, grad_output, self.index],
                                 output_dtypes=[grad_output.dtype],
                                 output_shapes=[self.input.shape],
                                 attr=self.attr)[0]
+            elif self.op == 'mean':
+                grad_input = acl_cmd("AvgPoolV2", [self.input, grad_output, self.index],
+                                output_dtypes=[grad_output.dtype],
+                                output_shapes=[self.input.shape],
+                                attr=self.attr)[0]
+            else:
+                grad_input = None
             return grad_input
     
     class BmmACL(Function):
@@ -791,19 +885,211 @@ def change_function():
         def grad(self, grad_output):
             return grad_output
     
+    class AdaptiveMaxPool2dACL(Function):
+        def __init__(self,
+                     output_size,
+                     return_indices=False,
+                     ):
+            super(AdaptiveMaxPool2dACL, self).__init__()
+            self.output_size = (output_size, output_size) if isinstance(
+                output_size, int) else output_size
+            
+            self.return_indices = return_indices
+            self.uint16 = jt.Var(1).int32().dtype
+            
+            attr = {}
+            attr['ceil_mode'] = False
+            attr['dilations'] = [1,1,1,1]
+            self.attr = attr 
+            
+        
+        def execute(self, input):
+            input_shape = input.shape
+            input_dtype = input.dtype
+            
+            output_shape = [
+                input_shape[0], input_shape[1],
+                self.output_size[0], self.output_size[1]
+            ]
+            output_dtype = input_dtype
+            self.input = input
+            
+            stride_h = input_shape[2] // output_shape[2];
+            stride_w = input_shape[3] // output_shape[3];
+            kernel_size_h = input_shape[2] - (output_shape[2] - 1) * stride_h;
+            kernel_size_w = input_shape[3] - (output_shape[3] - 1) * stride_w;
+            
+            stride = [0, 0]
+            kernel_size = [0, 0]
+            padding = [0, 0]
+            
+            stride[0] = stride_h;
+            stride[1] = stride_w;
+            kernel_size[0] = kernel_size_h;
+            kernel_size[1] = kernel_size_w;
+            padding[0] = padding[1] = 0;
+            kernel_sizes = [1, kernel_size[0], kernel_size[1], 1];
+            strides_size = [1, stride[0], stride[1], 1];
+            paddings = [1, padding[0], padding[1], 1];
+            
+            self.attr['ksize'] = kernel_sizes
+            self.attr['strides'] = strides_size
+            self.attr['pads'] = paddings
+            
+            result = acl_cmd("MaxPoolWithArgmaxV1", [input],
+                            output_dtypes=[output_dtype, self.uint16],
+                            output_shapes=[output_shape, output_shape],
+                            attr=self.attr)
+            
+            self.index = result[1]
+             
+            if self.return_indices:
+                return result[0], result[1]
+            else:
+                return result[0]
+        
+        def grad(self, grad_output):
+            grad_input = acl_cmd("MaxPoolGradWithArgmaxV1", [self.input, grad_output, self.index],
+                                output_dtypes=[grad_output.dtype],
+                                output_shapes=[self.input.shape],
+                                attr=self.attr)[0] 
+            return grad_input
+    
+    class AdaptiveAvgPool2dACL(Function):
+        def __init__(self,
+                     output_size
+                     ):
+            super(AdaptiveAvgPool2dACL, self).__init__()
+            self.output_size = (output_size, output_size) if isinstance(
+                output_size, int) else output_size
+            
+            attr = {}
+            if isinstance(output_size, tuple):
+                output_size = [output_size[0], output_size[1]]
+            attr['output_size'] = output_size
+            self.attr = attr
+        
+        def execute(self, input):
+            input_shape = input.shape
+            input_dtype = input.dtype
+            
+            self.original_shape = input_shape
+            
+            output_shape = [
+                input_shape[0], input_shape[1],
+                self.attr['output_size'][0], self.attr['output_size'][1]
+            ]
+            output_dtype = input_dtype
+            self.input = input
+            
+            result = acl_cmd("AdaptiveAvgPool2d", [input],
+                            output_dtypes=[output_dtype],
+                            output_shapes=[output_shape],
+                            attr=self.attr)
+            
+             
+            return result[0]
+        
+        def grad(self, grad_output):
+            attr = {}
+            attr['orig_input_shape'] = list(self.original_shape)
+            grad_input = acl_cmd("AdaptiveAvgPool2dGrad", [grad_output],
+                                output_dtypes=[grad_output.dtype],
+                                output_shapes=[self.original_shape],
+                                attr=attr)[0] 
+            return grad_input
+    
+    class CumsumACL(Function):
+        def __init__(self):
+            super(CumsumACL, self).__init__()
+        
+        def execute(self, input, dim=-1):
+            self.input = input
+            self.dim = dim
+            result = acl_cmd("Cumsum", [input, jt.Var(dim)],
+                            output_dtypes=[input.dtype],
+                            output_shapes=[input.shape],
+                            attr={})[0]
+            return result
+        
+        def grad(self, grad_output):
+            # TODO flip算子未适配
+            flipped_grad_output = jt.flip(grad_output, dims=[self.dim])
+            cumulative_grad = acl_cmd("Cumsum", [flipped_grad_output, jt.Var(self.dim)],
+                            output_dtypes=[grad_output.dtype],
+                            output_shapes=[grad_output.shape],
+                            attr={})[0]
+            return jt.flip(cumulative_grad, dims=[self.dim])
+        
+    class GatherACL(Function):
+        def __init__(self):
+            super(GatherACL, self).__init__()
+        
+        def execute(self, input, dim, index):
+            self.input = input
+            self.dim = dim
+            self.index = index
+            result = acl_cmd("GatherElements", [input, index],
+                            output_dtypes=[index.dtype],
+                            output_shapes=[index.shape],
+                            attr={'dim':dim})[0]
+            return result
+        
+        def grad(self, grad_output):
+            # TODO
+            grad_input = acl_cmd("ScatterElements", [jt.zeros(self.input.shape, dtype=grad_output.dtype), self.index, grad_output],
+                            output_dtypes=[grad_output.dtype],
+                            output_shapes=[self.input.shape],
+                            attr={'axis':self.dim})[0]
+            return grad_input, None, None
+        
+    class WhereACL(Function):
+        def __init__(self):
+            super(WhereACL, self).__init__()
+        
+        def execute(self, condition, x, y):
+            self.condition = condition
+            
+            if x.dtype != y.dtype:
+                if x.dtype == jt.float32:
+                    y = y.float32()
+                elif y.dtype == jt.float32:
+                    x = x.float32()
+                else:
+                    x = x.to(y.dtype)
+            
+            self.x = x
+            self.y = y
+                    
+            result = acl_cmd("Select", [condition, x, y],
+                            output_dtypes=[x.dtype],
+                            output_shapes=[x.shape],
+                            attr={})[0]
+            return result
+        
+        def grad(self, grad_output):
+            # TODO
+            return grad_output, None, None
+    
     def warp(origin_func, new_func):
         def warpper(*args, **kwargs):
-            if jt.flags.use_acl:
-                return new_func(*args, **kwargs)
             if origin_func == jt.index:
                 if len(args) == 2 and args[1] == None:
                     args = tuple(list(args[0:1]))
+            if jt.flags.use_acl:
+                if isinstance(new_func, IndexACL):
+                    if len(args) == 1:
+                        args = (args[0], None)
+                return new_func(*args, **kwargs)
             return origin_func(*args, **kwargs)
         return warpper
     
+     
     jt.index = warp(jt.index, IndexACL())
     jt.Var.index = lambda x, dim=None: warp(jt.index, IndexACL())(x.shape, dim)
     jt.nn.Pool = warp(jt.nn.Pool, PoolACL)
+    jt.nn.AdaptiveMaxPool2d = warp(jt.nn.AdaptiveMaxPool2d, AdaptiveMaxPool2dACL)
+    jt.nn.AdaptiveAvgPool2d = warp(jt.nn.AdaptiveAvgPool2d, AdaptiveAvgPool2dACL)
     
     jt.triu = warp(jt.triu, TriuACL())
     jt.triu_ = warp(jt.triu, TriuACL())
@@ -815,6 +1101,9 @@ def change_function():
     jt.setitem = warp(jt.setitem, SetItemACL())
     jt.Var.setitem = lambda x, slices, value: warp(jt.setitem, SetItemACL())(x, slices, value)
     
+    jt.cumsum = warp(jt.cumsum, CumsumACL())
+    jt.gather = warp(jt.gather, GatherACL())
+    jt.where = warp(jt.where, WhereACL())
     # jt.nn.bmm = warp(jt.nn.bmm, BmmACL())
     # jt.bmm = warp(jt.bmm, BmmACL())
     # jt.nn.matmul = warp(jt.matmul, MatmulACL())
