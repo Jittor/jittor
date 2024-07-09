@@ -494,6 +494,9 @@ class L1Loss(Module):
         return l1_loss(output, target)
 
 def binary_cross_entropy_with_logits(output, target, weight=None, pos_weight=None, size_average=True):
+    if not (target.shape == output.shape):
+        raise ValueError(f"Target size ({target.shape}) must be the same as output size ({output.shape})")
+    
     max_val = jt.clamp(-output,min_v=0)
     if pos_weight is not None:
         log_weight = (pos_weight-1)*target + 1
@@ -589,6 +592,8 @@ class Dropout2d(Module):
         #TODO: test model.train() to change self.is_train
     def execute(self, input):
         output = input
+        if (input.dim() != 4) and (input.dim() != 3):
+            raise RuntimeError(f'Expected 3D (unbatched) or 4D (batched) input to Dropout2d, but got input of size: {input.shape}')
         shape = input.shape[:-2]
         if self.p > 0 and self.is_train:
             if self.p == 1:
@@ -1088,6 +1093,8 @@ class Conv1d(Module):
     >>> output = conv(input)
     '''
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
+        assert in_channels > 0, 'in_channels must be positive'
+        assert out_channels > 0, 'out_channels must be positive'
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.kernel_size = (kernel_size, 1)
@@ -1106,6 +1113,8 @@ class Conv1d(Module):
         self.bias = self._conv[0].bias
 
     def execute(self, x):
+        if x.dim() != 3:
+            raise ValueError("Input shape must be `(N, C, L)`!")
         N,C,D = x.shape
         assert C==self.in_channels
         self._conv[0].weight = self.weight.unsqueeze(-1)
@@ -1183,10 +1192,14 @@ class Conv3d(Module):
 
 class Conv1d_sp(Linear):
     def __init__(self, inchannels, outchannels, kernel_size=1, bias=True):
+        assert inchannels > 0, 'in_channels must be positive'
+        assert outchannels > 0, 'out_channels must be positive'
         super().__init__(inchannels, outchannels, bias=bias)
         assert kernel_size == 1
 
     def execute(self, x):
+        if x.dim() != 3:
+            raise ValueError("Input shape must be `(N, C, L)`!")
         x = x.transpose(0, 2, 1)
         x = super().execute(x)
         x = x.transpose(0, 2, 1)
@@ -1393,7 +1406,8 @@ class ConvTranspose(Module):
         self.real_padding = (self.dilation[0] * (self.kernel_size[0] - 1) - self.padding[0],
             self.dilation[1] * (self.kernel_size[1] - 1) - self.padding[1])
         self.output_padding = output_padding if isinstance (output_padding, tuple) else (output_padding, output_padding)
-        assert self.padding[0] >= 0 or self.padding[1] >= 0,"padding must be non-negative"
+        assert self.stride[0] > 0 and self.stride[1] > 0,"stride must be positive"
+        assert self.padding[0] >= 0 and self.padding[1] >= 0,"padding must be non-negative"
         assert self.output_padding[0] < max(self.stride[0], self.dilation[0]) and \
             self.output_padding[1] < max(self.stride[1], self.dilation[1]), \
             "output padding must be smaller than max(stride, dilation)"
@@ -1411,6 +1425,8 @@ class ConvTranspose(Module):
             self.bias = None
 
     def execute(self, x):
+        if x.dim() != 4:
+            raise RuntimeError(f'Expected 4D (batched) input to conv_transpose2d, but got input of size: {x.shape}')
         if self.groups == 1:
             N,C,H,W = x.shape
             i,o,h,w = self.weight.shape
@@ -1516,14 +1532,16 @@ class ConvTranspose3d(Module):
         return conv_transpose3d(x, self.weight, self.bias, self.stride, self.padding, self.output_padding, self.group, self.dilation)
 
 def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding=0, groups=1, dilation=1):
-    if stride <= 0:
-        raise RuntimeError("non-positive stride is not supported")
     if groups == 1:
         x = input
+        if x.dim() != 4:
+            raise RuntimeError(f'Expected 4D input to conv_transpose, but got input of size: {x.shape}')
         N,C,H,W = x.shape
         i,o,h,w = weight.shape
         assert C==i
         stride = stride if isinstance(stride, tuple) else (stride, stride)
+        if stride[0] <= 0 or stride[1] <= 0:
+            raise RuntimeError("non-positive stride is not supported")
         dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
         # added
         padding = padding if isinstance(padding, tuple) else (padding, padding)
@@ -1555,6 +1573,8 @@ def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding
             assert not bias, "Bias should be none or jittor var"
         return y
     else:
+        if input.dim() != 4:
+            raise RuntimeError(f'Expected 4D input to conv_transpose, but got input of size: {input.shape}')
         N,C,H,W = input.shape
         i,o,h,w = weight.shape
         G = groups
@@ -1563,6 +1583,8 @@ def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding
         assert C % G == 0
         assert C==i, (C, i)
         stride = stride if isinstance(stride, tuple) else (stride, stride)
+        if stride[0] <= 0 or stride[1] <= 0:
+            raise RuntimeError("non-positive stride is not supported")
         dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
         # added
         padding = padding if isinstance(padding, tuple) else (padding, padding)
@@ -1606,13 +1628,15 @@ conv_transpose2d = conv_transpose
 
 def conv_transpose3d(input, weight, bias=None, stride=1, padding=0, output_padding=0, groups=1, dilation=1):
     x = input
+    if x.dim() != 5:
+        raise RuntimeError(f'Expected 5D input to conv_transpose3d, but got input of size: {x.shape}')
     N,C,D,H,W = x.shape
     i,o,d,h,w = weight.shape
-    if stride <= 0:
-        raise RuntimeError("non-positive stride is not supported")
     assert C==i
     assert groups==1, "Group conv not supported yet."
     stride = stride if isinstance(stride, tuple) else (stride, stride, stride)
+    if stride[0] <= 0 or stride[1] <= 0 or stride[2] <= 0:
+        raise RuntimeError("non-positive stride is not supported")
     dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation, dilation)
     # added
     padding = padding if isinstance(padding, tuple) else (padding, padding, padding)
@@ -1723,6 +1747,8 @@ class ZeroPad2d(Module):
             raise ValueError(f"padding must be non-negative")
 
     def execute(self, x):
+        if x.dim() != 4:
+            raise RuntimeError("Input shape must be `(N, C, H, W)`!")
         n,c,h,w = x.shape
         return x.reindex([n,c,h+self.pt+self.pb,w+self.pl+self.pr], ["i0","i1",f"i2-{self.pt}",f"i3-{self.pl}"])
 
@@ -1771,6 +1797,8 @@ class ReplicationPad2d(Module):
             raise ValueError(f"padding must be non-negative")
 
     def execute(self, x):
+        if x.dim() != 4:
+            raise RuntimeError("Input shape must be `(N, C, H, W)`!")
         n,c,h,w = x.shape
         oh=h+self.pt+self.pb
         ow=w+self.pl+self.pr
@@ -2410,12 +2438,16 @@ def unfold(X, kernel_size, dilation=1, padding=0, stride=1):
     assert X.ndim == 4
     if not isinstance(kernel_size, tuple):
         kernel_size = (kernel_size, kernel_size)
+    assert kernel_size[0] > 0 and kernel_size[1] > 0, "kernel size must be positive"
     if not isinstance(dilation, tuple):
         dilation = (dilation, dilation)
+    assert dilation[0] > 0 and dilation[1] > 0, "dilation must be positive"
     if not isinstance(padding, tuple):
         padding = (padding, padding)
+    assert padding[0] >= 0 and padding[1] >= 0, "padding must be non-negative"
     if not isinstance(stride, tuple):
         stride = (stride, stride)
+    assert stride[0] > 0 and stride[1] > 0, "stride must be positive"
     n, c, h, w = X.shape
     shape = X.shape
     area = kernel_size[0] * kernel_size[1]
