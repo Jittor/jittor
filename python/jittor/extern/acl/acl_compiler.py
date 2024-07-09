@@ -1080,6 +1080,9 @@ def change_function():
                 if isinstance(new_func, IndexACL):
                     if len(args) == 1:
                         args = (args[0], None)
+                if isinstance(new_func, CumsumACL):
+                    args = (args[0], kwargs.get('dim', -1))
+                    kwargs = {}
                 return new_func(*args, **kwargs)
             return origin_func(*args, **kwargs)
         return warpper
