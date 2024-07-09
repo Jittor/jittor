@@ -232,7 +232,7 @@ void acl_jittor_op_compiler(string& filename, string& src, bool is_acl, string& 
     src = new_src;
 
     new_src = token_replace_all(new_src, "atomicAdd(&$1,$2);", "$1=$1+$2;");
-    new_src = token_replace_all(new_src, "bool", "int8");
+    // new_src = token_replace_all(new_src, "bool", "int8");
     new_src = token_replace_all(new_src, "::numeric_min<float32>()", "-1e30");
     new_src = token_replace_all(new_src, "::numeric_max<float32>()", "1e30");
     // TODO: support max
