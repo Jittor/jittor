@@ -2320,8 +2320,8 @@ class Sequential(Module):
     
 
     def __getattr__(self, key):
-        if key in self.layers:
-            return self.layers[key]
+        if 'layers' in self.__dict__ and key in self.__dict__['layers']:
+            return self.__dict__['layers'][key]
         return super().__getattr__(key)
 
 
