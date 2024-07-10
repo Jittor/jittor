@@ -1614,6 +1614,8 @@ Arguments of hook are defined as::
                 else:
                     if hasattr(v, k):
                         v = getattr(v, k)
+                        if v is None:
+                            continue
                         assert isinstance(v, (Module, Var)), \
                             f"expect a jittor Module or Var, but got <{v.__class__.__name__}>, key: {key}"
                     else:
