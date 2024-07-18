@@ -11,7 +11,7 @@ import ctypes
 import glob
 import jittor.compiler as compiler
 import jittor as jt
-
+import pdb
 
 has_acl = 0
 cc_flags = ""
@@ -122,7 +122,7 @@ def post_process():
 def acl_cmd(name: str, inputs: list, output_dtypes: list, output_shapes: list,
             attr: dict):
     nchw_op = ['MaxPoolWithArgmaxV1','MaxPoolGradWithArgmaxV1', 'AvgPoolV2']
-    attr_op = ['MaxPoolWithArgmaxV1','MaxPoolGradWithArgmaxV1', 'AvgPoolV2', 'AdaptiveAvgPool2d', 'AdaptiveAvgPool2dGrad']
+    attr_op = ['MaxPoolWithArgmaxV1','MaxPoolGradWithArgmaxV1', 'AvgPoolV2', 'AdaptiveAvgPool2d', 'AdaptiveAvgPool2dGrad', 'ReverseV2']
     
     input_code = ''
     for i in range(len(inputs)):
@@ -166,7 +166,8 @@ def acl_cmd(name: str, inputs: list, output_dtypes: list, output_shapes: list,
             else:
                 attr_code += f"op.set_attr(\"{k}\", int({v}));\n"    
     
-    # print(attr_code)
+    #print("input_code",input_code)
+    #print("attr_code",attr_code)
     import jittor as jt
     return jt.code(
         output_shapes,
@@ -776,7 +777,7 @@ def change_function():
                 stride *= x.shape[i]
             return stride
 
-        def execute(self, x, slices, value):
+        def execute(self, x, slices, value, reduce = 'void'):
             self.is_tensor = type(value) == jt.Var
             if type(value) != jt.Var:
                 value = jt.array(value)
@@ -1013,14 +1014,19 @@ def change_function():
             return result
         
         def grad(self, grad_output):
-            # TODO flip算子未适配
-            flipped_grad_output = jt.flip(grad_output, dims=[self.dim])
+            flipped_grad_output = acl_cmd("ReverseV2", [grad_output, jt.Var([self.dim])],
+                            output_dtypes=[grad_output.dtype],
+                            output_shapes=[grad_output.shape],
+                            attr={})[0]
             cumulative_grad = acl_cmd("Cumsum", [flipped_grad_output, jt.Var(self.dim)],
                             output_dtypes=[grad_output.dtype],
                             output_shapes=[grad_output.shape],
                             attr={})[0]
-            return jt.flip(cumulative_grad, dims=[self.dim])
-        
+            grad_input = acl_cmd("ReverseV2", [cumulative_grad, jt.Var([self.dim])],
+                            output_dtypes=[grad_output.dtype],
+                            output_shapes=[grad_output.shape],
+                            attr={})[0] 
+            return grad_input
     class GatherACL(Function):
         def __init__(self):
             super(GatherACL, self).__init__()
@@ -1029,20 +1035,43 @@ def change_function():
             self.input = input
             self.dim = dim
             self.index = index
+            
             result = acl_cmd("GatherElements", [input, index],
-                            output_dtypes=[index.dtype],
+                            output_dtypes=[input.dtype],
                             output_shapes=[index.shape],
                             attr={'dim':dim})[0]
             return result
         
         def grad(self, grad_output):
-            # TODO
-            grad_input = acl_cmd("ScatterElements", [jt.zeros(self.input.shape, dtype=grad_output.dtype), self.index, grad_output],
+            tmp = jt.zeros(self.index.shape,dtype=grad_output.dtype)
+            grad_input = acl_cmd("ScatterElements", [tmp, self.index, grad_output],
                             output_dtypes=[grad_output.dtype],
-                            output_shapes=[self.input.shape],
-                            attr={'axis':self.dim})[0]
-            return grad_input, None, None
+                            output_shapes=[self.index.shape],
+                            attr={'axis':self.dim, 'reduction':"add"})[0]
+            return grad_input
+    
+    class ScatterACL(Function):
+        def __init__(self):
+            super(ScatterACL, self).__init__()
         
+        def execute(self, input, dim, index, src, reduce='void'):
+            self.input = input
+            self.dim = dim
+            self.index = index
+            self.reduce = reduce
+            result = acl_cmd("ScatterElements", [input, self.index, src],
+                            output_dtypes=[input.dtype],
+                            output_shapes=[index.shape],
+                            attr={'axis':self.dim, 'reduction':reduce})[0]
+            return result
+
+        def grad(self, grad_output):
+            grad_input = acl_cmd("GatherElements", [grad_output, self.index],
+                            output_dtypes=[grad_output.dtype],
+                            output_shapes=[self.index.shape],
+                            attr={'dim':self.dim})[0] 
+            return grad_output, None, None, grad_input
+             
     class WhereACL(Function):
         def __init__(self):
             super(WhereACL, self).__init__()
@@ -1068,9 +1097,44 @@ def change_function():
             return result
         
         def grad(self, grad_output):
-            # TODO
-            return grad_output, None, None
+            tmp = jt.zeros(grad_output.shape,dtype=grad_output.dtype)
+            grad_x = acl_cmd("Select", [self.condition, grad_output, tmp],
+                            output_dtypes=[self.x.dtype],
+                            output_shapes=[self.x.shape],
+                            attr={})[0] 
+            
+            grad_y = acl_cmd("Select", [self.condition, tmp, grad_output],
+                            output_dtypes=[self.y.dtype],
+                            output_shapes=[self.y.shape],
+                            attr={})[0] 
+            return grad_output, grad_x, grad_y
     
+    class FlipACL(Function):
+        def __init__(self):
+            super(FlipACL, self).__init__()
+        
+        
+        def execute(self, input, dim):
+            self.input = input
+            #if isinstance(dim_vector, tuple): 
+            dim_vector = jt.Var(list(dim))
+            #print(dim_vector.dtype)
+            self.dim_vector = dim_vector
+            #print(input, dim_vector)
+            result = acl_cmd("ReverseV2", [input, dim_vector],
+                            output_dtypes=[input.dtype],
+                            output_shapes=[input.shape],
+                            attr={})[0]
+            return result
+        
+        def grad(self, grad_output):
+            #print(grad_output)
+            grad_input = acl_cmd("ReverseV2", [grad_output, self.dim_vector],
+                            output_dtypes=[grad_output.dtype],
+                            output_shapes=[grad_output.shape],
+                            attr={})[0] 
+            return grad_input
+        
     def warp(origin_func, new_func):
         def warpper(*args, **kwargs):
             if origin_func == jt.index:
@@ -1082,6 +1146,9 @@ def change_function():
                         args = (args[0], None)
                 if isinstance(new_func, CumsumACL):
                     args = (args[0], kwargs.get('dim', -1))
+                    kwargs = {}
+                if isinstance(new_func, ScatterACL):
+                    args = (args[0], args[1], args[2], args[3], kwargs.get('reduce', 'void')) 
                     kwargs = {}
                 return new_func(*args, **kwargs)
             return origin_func(*args, **kwargs)
@@ -1102,11 +1169,16 @@ def change_function():
     jt.getitem = warp(jt.getitem, GetItem())
     jt.Var.getitem = lambda x, slices: warp(jt.getitem, GetItem())(x, slices)
     jt.setitem = warp(jt.setitem, SetItemACL())
-    jt.Var.setitem = lambda x, slices, value: warp(jt.setitem, SetItemACL())(x, slices, value)
+    jt.Var.setitem = lambda x, slices, value, reduce='void': warp(jt.setitem, SetItemACL())(x, slices, value, reduce)
     
+    jt.misc.flip = warp(jt.misc.flip, FlipACL())
+    jt.Var.flip = lambda x, dim_vector: warp(jt.misc.flip, FlipACL())(x, dim_vector)
     jt.cumsum = warp(jt.cumsum, CumsumACL())
     jt.gather = warp(jt.gather, GatherACL())
+    jt.scatter = warp(jt.scatter, ScatterACL())
     jt.where = warp(jt.where, WhereACL())
+    
+    
     # jt.nn.bmm = warp(jt.nn.bmm, BmmACL())
     # jt.bmm = warp(jt.bmm, BmmACL())
     # jt.nn.matmul = warp(jt.matmul, MatmulACL())
