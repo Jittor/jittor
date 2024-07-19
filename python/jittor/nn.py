@@ -386,7 +386,7 @@ def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction=
     if ignore_index is not None:
         target_weight = jt.ternary(
             target==ignore_index,
-            jt.array(0).broadcast(target_weight),
+            jt.array(0).broadcast(target_weight).type_as(target_weight),
             target_weight
         )
     
