@@ -1965,8 +1965,12 @@ def _interpolate(img, x, y, ids, mode):
 
 # TODO: tf_mode to another function
 def resize(img, size, mode="nearest", align_corners=False, tf_mode=False):
+    if img.dim() != 3:
+        raise ValueError("Input shape must be `(N, C, H, W)`!")
     n, c, h, w = img.shape
     H, W = size
+    if h <= 0 or w <= 0 or H <= 0 or W <= 0:
+        raise RuntimeError(f"Input and output sizes should be greater than 0, but got input (H: {h}, W: {w}) output (H: {H}, W: {W})")
     nid, cid, hid, wid = jt.index((n, c, H, W))
     if align_corners:
         x = hid * ((h - 1) / max(1, H - 1))
