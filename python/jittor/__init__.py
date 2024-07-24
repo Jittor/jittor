@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '1.3.9.8'
+__version__ = '1.3.9.10'
 from jittor_utils import lock
 with lock.lock_scope():
     ori_int = int
@@ -698,6 +698,8 @@ def flatten(input, start_dim=0, end_dim=-1):
     start_dim = len(in_shape) + start_dim if start_dim < 0 else start_dim
     end_dim = len(in_shape) + end_dim if end_dim < 0 else end_dim
     assert end_dim >= start_dim, "end_dim should be larger than or equal to start_dim for flatten function"
+    if len(in_shape) <= end_dim:
+        raise IndexError(f"Dimension out of range (expected to be in range of [{-len(in_shape)}, {len(in_shape) - 1}], but got {end_dim})")
     out_shape = []
     for i in range(0,start_dim,1): out_shape.append(in_shape[i])
     dims = 1
@@ -1612,6 +1614,8 @@ Arguments of hook are defined as::
                 else:
                     if hasattr(v, k):
                         v = getattr(v, k)
+                        if v is None:
+                            continue
                         assert isinstance(v, (Module, Var)), \
                             f"expect a jittor Module or Var, but got <{v.__class__.__name__}>, key: {key}"
                     else:

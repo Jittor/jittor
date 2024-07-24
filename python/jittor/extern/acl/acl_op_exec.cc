@@ -188,24 +188,39 @@ struct AclOpRunner {
     }
 
     void set_attr(const string& key, bool value) {
+        // LOGir << "string bool" << "set_attr" << key << value;
         CHECK(aclopSetAttrBool(attr, key.c_str(), value)==0);
     }
+    void set_attr(const string& key, int value, int is_bool) {
+        // LOGir << "string bool" << "set_attr" << key << value << is_bool;
+        CHECK(aclopSetAttrBool(attr, key.c_str(), value==is_bool)==0);
+    }
     void set_attr(const string& key, float value) {
+        // LOGir << "string float" <<"set_attr" << key << value;
         CHECK(aclopSetAttrFloat(attr, key.c_str(), value)==0);
     }
     void set_attr(const string& key, int64_t value) {
+        // LOGir << "string int64" << "set_attr" << key << value;
+        CHECK(aclopSetAttrInt(attr, key.c_str(), value)==0);
+    }
+    void set_attr(const string& key, int64_t value, int placeholder) {
+        // LOGir << "string int64" << "set_attr" << key << value;
         CHECK(aclopSetAttrInt(attr, key.c_str(), value)==0);
     }
     void set_attr(const string& key, int32 value) {
+        // LOGir << "string int32" << "set_attr" << key << value;
         CHECK(aclopSetAttrInt(attr, key.c_str(), value)==0);
     }
     void set_attr(const string& key, vector<int64_t> value) {
+        // LOGir << "string vector" << "set_attr" << key << value;
         CHECK(aclopSetAttrListInt(attr, key.c_str(), value.size(), &value[0])==0);
     }
     void set_attr(const string& key, string value) {
+        // LOGir << "string string" << "set_attr" << key << value;
         CHECK(aclopSetAttrString(attr, key.c_str(), value.c_str())==0);
     }
     void set_attr(const char* key, const char* value) {
+        // LOGir << "char" << "set_attr" << key << value;
         CHECK(aclopSetAttrString(attr, key, value)==0);
     }
 

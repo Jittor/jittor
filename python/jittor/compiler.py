@@ -1002,6 +1002,8 @@ if nvcc_path:
         r, s = sp.getstatusoutput(f"log_v=0 {sys.executable} -m jittor_utils.query_cuda_cc")
         if r==0:
             s = sorted(list(set(s.strip().split())))
+            if len(s)==0:
+                LOG.e("No GPU Device Found!")
             cu += "_sm_" + "_".join(s)
             if "cuda_arch" not in os.environ:
                 os.environ["cuda_arch"] = " ".join(cu)

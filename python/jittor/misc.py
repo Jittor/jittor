@@ -294,9 +294,10 @@ Example::
     if len(shape) == 1 and isinstance(shape[0], (tuple,list,jt.NanoVector)):
         shape = shape[0]
     shape = list(shape)
-    for i in range(len(shape)):
-        if shape[i] == -1:
-            shape[i] = x.shape[i]
+    offset = len(shape) - len(x.shape)
+    for i in range(len(x.shape)):
+        if shape[offset + i] == -1:
+            shape[offset + i] = x.shape[i]
     return x.broadcast(shape)
 jt.Var.expand = expand
 
@@ -881,7 +882,7 @@ def split(d, split_size, dim=0):
     ans = []
     last = 0
     s_last = len(split_size)-1
-    gopt_disable = jt.flags.gopt_disable
+    gopt_disable = jt.flags.gopt_disable or jt.flags.use_acl
     for j, i in enumerate(split_size):
         if i==0:
             shape = list(d.shape)
@@ -2235,3 +2236,16 @@ jt.Var.npu = cuda
 
 def expm1(x):
     return jt.exp(x) - 1
+
+
+def isin(elements, test_elements, assume_unique=False, invert=False):
+    
+    elements = elements.unsqueeze(-1)
+    test_elements = test_elements.unsqueeze(0)
+    comparison = elements == test_elements
+    result = comparison.any(dim=-1)
+
+    if invert:
+        result = jt.logical_not(result)
+    
+    return result
