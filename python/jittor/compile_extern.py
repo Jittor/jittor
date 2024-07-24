@@ -626,6 +626,7 @@ def setup_mpi():
     global mpi_ops, mpi, use_mpi
     global mpicc_path, has_mpi
     use_mpi = os.environ.get("use_mpi", "1")=="1"
+    if not use_mpi: return
     mpi_ops = None
     mpi = None
     has_mpi = False
