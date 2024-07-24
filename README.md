@@ -382,10 +382,10 @@ Email: jittor@qq.com
 
 File an issue: https://github.com/Jittor/jittor/issues
 
-QQ Group: 761222083
+QQ Group: 836860279
 
 
-<img src="https://cg.cs.tsinghua.edu.cn/jittor/images/news/2020-12-8-21-19-1_2_2/fig4.png" width="200"/>
+<img src="https://github.com/Jittor/jittor/assets/62846124/8dd830bd-b31c-4e4f-9a78-5fd7a3409145" width="200"/>
 
 ## The Team
 

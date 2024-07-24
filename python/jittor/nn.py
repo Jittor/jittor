@@ -386,7 +386,7 @@ def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction=
     if ignore_index is not None:
         target_weight = jt.ternary(
             target==ignore_index,
-            jt.array(0).broadcast(target_weight),
+            jt.array(0).broadcast(target_weight).type_as(target_weight),
             target_weight
         )
     
@@ -494,6 +494,9 @@ class L1Loss(Module):
         return l1_loss(output, target)
 
 def binary_cross_entropy_with_logits(output, target, weight=None, pos_weight=None, size_average=True):
+    if not (target.shape == output.shape):
+        raise ValueError(f"Target size ({target.shape}) must be the same as output size ({output.shape})")
+    
     max_val = jt.clamp(-output,min_v=0)
     if pos_weight is not None:
         log_weight = (pos_weight-1)*target + 1
@@ -589,6 +592,8 @@ class Dropout2d(Module):
         #TODO: test model.train() to change self.is_train
     def execute(self, input):
         output = input
+        if (input.dim() != 4) and (input.dim() != 3):
+            raise RuntimeError(f'Expected 3D (unbatched) or 4D (batched) input to Dropout2d, but got input of size: {input.shape}')
         shape = input.shape[:-2]
         if self.p > 0 and self.is_train:
             if self.p == 1:
@@ -926,6 +931,42 @@ class Conv(Module):
     >>> output = conv(input)
     '''
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
+        if in_channels <= 0:
+            raise ValueError(f"in_channels must be greater than zero, got {in_channels}")
+        if out_channels <= 0:
+            raise ValueError(f"out_channels must be greater than zero, got {out_channels}")
+        if groups <= 0:
+            raise ValueError(f"groups must must be greater than zero, got {groups}")
+        assert in_channels % groups == 0, 'in_channels must be divisible by groups'
+        assert out_channels % groups == 0, 'out_channels must be divisible by groups'
+        if isinstance(kernel_size, tuple):
+            for size in kernel_size:
+                if size <= 0:
+                    raise ValueError(f"kernel_size must be greater than zero, got {kernel_size}")
+        else:
+            if kernel_size <= 0:
+                raise ValueError(f"kernel_size must be greater than zero, got {kernel_size}")
+        if isinstance(stride, tuple):
+            for size in stride:
+                if size <= 0:
+                    raise ValueError(f"stride must be greater than zero, got {stride}")
+        else:
+            if stride <= 0:
+                raise ValueError(f"stride must be greater than zero, got {stride}")
+        if isinstance(padding, tuple):
+            for size in padding:
+                if size < 0:
+                    raise ValueError(f"padding must be nonnegative, got {padding}")
+        else:
+            if padding < 0:
+                raise ValueError(f"padding must be nonnegative, got {padding}")
+        if isinstance(dilation, tuple):
+            for size in dilation:
+                if size <= 0:
+                    raise ValueError(f"dilation must be greater than zero, got {dilation}")
+        else:
+            if dilation <= 0:
+                raise ValueError(f"dilation must be greater than zero, got {dilation}")
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.kernel_size = kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size)
@@ -936,8 +977,6 @@ class Conv(Module):
         self.is_depthwise_conv = self.groups == self.out_channels and self.groups == self.in_channels
         if self.is_depthwise_conv and jt.flags.use_cuda and jt.compiler.is_cuda:
             self.depthwise_conv = DepthwiseConv(stride, padding, dilation)
-        assert in_channels % groups == 0, 'in_channels must be divisible by groups'
-        assert out_channels % groups == 0, 'out_channels must be divisible by groups'
         Kh, Kw = self.kernel_size
 
         # self.weight = init.relu_invariant_gauss([out_channels, in_channels//groups, Kh, Kw], dtype="float", mode="fan_out")
@@ -1054,6 +1093,8 @@ class Conv1d(Module):
     >>> output = conv(input)
     '''
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
+        assert in_channels > 0, 'in_channels must be positive'
+        assert out_channels > 0, 'out_channels must be positive'
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.kernel_size = (kernel_size, 1)
@@ -1072,6 +1113,8 @@ class Conv1d(Module):
         self.bias = self._conv[0].bias
 
     def execute(self, x):
+        if x.dim() != 3:
+            raise ValueError("Input shape must be `(N, C, L)`!")
         N,C,D = x.shape
         assert C==self.in_channels
         self._conv[0].weight = self.weight.unsqueeze(-1)
@@ -1149,10 +1192,14 @@ class Conv3d(Module):
 
 class Conv1d_sp(Linear):
     def __init__(self, inchannels, outchannels, kernel_size=1, bias=True):
+        assert inchannels > 0, 'in_channels must be positive'
+        assert outchannels > 0, 'out_channels must be positive'
         super().__init__(inchannels, outchannels, bias=bias)
         assert kernel_size == 1
 
     def execute(self, x):
+        if x.dim() != 3:
+            raise ValueError("Input shape must be `(N, C, L)`!")
         x = x.transpose(0, 2, 1)
         x = super().execute(x)
         x = x.transpose(0, 2, 1)
@@ -1359,6 +1406,8 @@ class ConvTranspose(Module):
         self.real_padding = (self.dilation[0] * (self.kernel_size[0] - 1) - self.padding[0],
             self.dilation[1] * (self.kernel_size[1] - 1) - self.padding[1])
         self.output_padding = output_padding if isinstance (output_padding, tuple) else (output_padding, output_padding)
+        assert self.stride[0] > 0 and self.stride[1] > 0,"stride must be positive"
+        assert self.padding[0] >= 0 and self.padding[1] >= 0,"padding must be non-negative"
         assert self.output_padding[0] < max(self.stride[0], self.dilation[0]) and \
             self.output_padding[1] < max(self.stride[1], self.dilation[1]), \
             "output padding must be smaller than max(stride, dilation)"
@@ -1376,6 +1425,8 @@ class ConvTranspose(Module):
             self.bias = None
 
     def execute(self, x):
+        if x.dim() != 4:
+            raise RuntimeError(f'Expected 4D (batched) input to conv_transpose2d, but got input of size: {x.shape}')
         if self.groups == 1:
             N,C,H,W = x.shape
             i,o,h,w = self.weight.shape
@@ -1481,14 +1532,16 @@ class ConvTranspose3d(Module):
         return conv_transpose3d(x, self.weight, self.bias, self.stride, self.padding, self.output_padding, self.group, self.dilation)
 
 def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding=0, groups=1, dilation=1):
-    if stride <= 0:
-        raise RuntimeError("non-positive stride is not supported")
     if groups == 1:
         x = input
+        if x.dim() != 4:
+            raise RuntimeError(f'Expected 4D input to conv_transpose, but got input of size: {x.shape}')
         N,C,H,W = x.shape
         i,o,h,w = weight.shape
         assert C==i
         stride = stride if isinstance(stride, tuple) else (stride, stride)
+        if stride[0] <= 0 or stride[1] <= 0:
+            raise RuntimeError("non-positive stride is not supported")
         dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
         # added
         padding = padding if isinstance(padding, tuple) else (padding, padding)
@@ -1520,6 +1573,8 @@ def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding
             assert not bias, "Bias should be none or jittor var"
         return y
     else:
+        if input.dim() != 4:
+            raise RuntimeError(f'Expected 4D input to conv_transpose, but got input of size: {input.shape}')
         N,C,H,W = input.shape
         i,o,h,w = weight.shape
         G = groups
@@ -1528,6 +1583,8 @@ def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding
         assert C % G == 0
         assert C==i, (C, i)
         stride = stride if isinstance(stride, tuple) else (stride, stride)
+        if stride[0] <= 0 or stride[1] <= 0:
+            raise RuntimeError("non-positive stride is not supported")
         dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
         # added
         padding = padding if isinstance(padding, tuple) else (padding, padding)
@@ -1571,13 +1628,15 @@ conv_transpose2d = conv_transpose
 
 def conv_transpose3d(input, weight, bias=None, stride=1, padding=0, output_padding=0, groups=1, dilation=1):
     x = input
+    if x.dim() != 5:
+        raise RuntimeError(f'Expected 5D input to conv_transpose3d, but got input of size: {x.shape}')
     N,C,D,H,W = x.shape
     i,o,d,h,w = weight.shape
-    if stride <= 0:
-        raise RuntimeError("non-positive stride is not supported")
     assert C==i
     assert groups==1, "Group conv not supported yet."
     stride = stride if isinstance(stride, tuple) else (stride, stride, stride)
+    if stride[0] <= 0 or stride[1] <= 0 or stride[2] <= 0:
+        raise RuntimeError("non-positive stride is not supported")
     dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation, dilation)
     # added
     padding = padding if isinstance(padding, tuple) else (padding, padding, padding)
@@ -1654,6 +1713,8 @@ class ReflectionPad2d(Module):
             self.pl, self.pr, self.pt, self.pb = self.padding
         else:
             raise TypeError(f"ReflectionPad2d padding just support int or tuple, but found {type(padding)}")
+        if self.pl < 0 or self.pr < 0 or self.pt < 0 or self.pb < 0:
+            raise ValueError(f"padding must be non-negative")
 
     def execute(self, x):
         n,c,h,w = x.shape
@@ -1682,8 +1743,12 @@ class ZeroPad2d(Module):
             self.pl, self.pr, self.pt, self.pb = self.padding
         else:
             raise TypeError(f"ZeroPad2d padding just support int or tuple, but found {type(padding)}")
+        if self.pl < 0 or self.pr < 0 or self.pt < 0 or self.pb < 0:
+            raise ValueError(f"padding must be non-negative")
 
     def execute(self, x):
+        if x.dim() != 4:
+            raise RuntimeError("Input shape must be `(N, C, H, W)`!")
         n,c,h,w = x.shape
         return x.reindex([n,c,h+self.pt+self.pb,w+self.pl+self.pr], ["i0","i1",f"i2-{self.pt}",f"i3-{self.pl}"])
 
@@ -1700,6 +1765,8 @@ class ConstantPad2d(Module):
         else:
             raise TypeError(f"ConstantPad2d padding just support int or tuple, but found {type(padding)}")
         self.value = value
+        if self.pl < 0 or self.pr < 0 or self.pt < 0 or self.pb < 0:
+            raise ValueError(f"padding must be non-negative")
 
     def execute(self, x):
         assert len(x.shape) >= 2
@@ -1726,8 +1793,12 @@ class ReplicationPad2d(Module):
             self.pl, self.pr, self.pt, self.pb = self.padding
         else:
             raise TypeError(f"ReplicationPad2d padding just support int or tuple, but found {type(padding)}")
+        if self.pl < 0 or self.pr < 0 or self.pt < 0 or self.pb < 0:
+            raise ValueError(f"padding must be non-negative")
 
     def execute(self, x):
+        if x.dim() != 4:
+            raise RuntimeError("Input shape must be `(N, C, H, W)`!")
         n,c,h,w = x.shape
         oh=h+self.pt+self.pb
         ow=w+self.pl+self.pr
@@ -1775,6 +1846,7 @@ def embedding(input, weight):
 
 class PixelShuffle(Module):
     def __init__(self, upscale_factor):
+        assert upscale_factor > 0,f"upscale_factor must be greater than zero,got {upscale_factor}"
         self.upscale_factor = upscale_factor
 
     def execute(self, x):
@@ -1830,6 +1902,15 @@ class Softplus(Module):
 class Resize(Module):
     def __init__(self, size, mode="nearest", align_corners=False):
         super().__init__()
+        if isinstance(size,int):
+            if size <= 0:
+                raise ValueError(f"sizes must be positive, got {size}")
+        elif isinstance(size,tuple) or isinstance(size,list):
+            for item in size:
+                if item <= 0:
+                    raise ValueError(f"sizes must be positive, got {item}")
+        else:
+            raise ValueError(f"size must be int or tuple")
         self.size = size
         self.mode = mode
         self.align_corners = align_corners
@@ -2175,15 +2256,21 @@ def grid_sample(input, grid, mode='bilinear', padding_mode='zeros', align_corner
 
 class Upsample(Module):
     def __init__(self, scale_factor=None, mode='nearest'):
-        self.scale_factor = scale_factor if isinstance(scale_factor, tuple) else (scale_factor, scale_factor)
+        if isinstance(scale_factor, tuple):
+            self.scale_factor = tuple(float(factor) for factor in scale_factor)
+        else:
+            self.scale_factor = float(scale_factor) if scale_factor else None
         self.mode = mode
     
     def execute(self, x):
-        return upsample(x,
-            size=(
-                int(x.shape[2]*self.scale_factor[0]), 
-                int(x.shape[3]*self.scale_factor[1])),
-            mode=self.mode)
+        if self.scale_factor is None:
+            raise ValueError("scale_factor should be defined")
+        else:
+            return upsample(x,
+                size=(
+                    int(x.shape[2]*self.scale_factor[0]), 
+                    int(x.shape[3]*self.scale_factor[1])),
+                mode=self.mode)
 
 class UpsamplingBilinear2d(Upsample):
     def __init__(self, scale_factor=None):
@@ -2249,11 +2336,20 @@ class Sequential(Module):
     
     def named_children(self,):
         return list(self.layers.items())
+
+    def __setattr__(self, key, value) -> None:
+        if isinstance(key, str) and key.isdigit():
+            if int(key)<len(self.layers):
+                self.add_module(key, value)
+            else:
+                super().__setattr__(key, value)
+        else:
+            super().__setattr__(key, value)
     
 
     def __getattr__(self, key):
-        if key in self.layers:
-            return self.layers[key]
+        if 'layers' in self.__dict__ and key in self.__dict__['layers']:
+            return self.__dict__['layers'][key]
         return super().__getattr__(key)
 
 
@@ -2342,12 +2438,16 @@ def unfold(X, kernel_size, dilation=1, padding=0, stride=1):
     assert X.ndim == 4
     if not isinstance(kernel_size, tuple):
         kernel_size = (kernel_size, kernel_size)
+    assert kernel_size[0] > 0 and kernel_size[1] > 0, "kernel size must be positive"
     if not isinstance(dilation, tuple):
         dilation = (dilation, dilation)
+    assert dilation[0] > 0 and dilation[1] > 0, "dilation must be positive"
     if not isinstance(padding, tuple):
         padding = (padding, padding)
+    assert padding[0] >= 0 and padding[1] >= 0, "padding must be non-negative"
     if not isinstance(stride, tuple):
         stride = (stride, stride)
+    assert stride[0] > 0 and stride[1] > 0, "stride must be positive"
     n, c, h, w = X.shape
     shape = X.shape
     area = kernel_size[0] * kernel_size[1]
@@ -2366,14 +2466,19 @@ def unfold(X, kernel_size, dilation=1, padding=0, stride=1):
 
 def fold(X,output_size,kernel_size,dilation=1,padding=0,stride=1):
     assert X.ndim==3
+    assert output_size[0] > 0 and output_size[1] > 0, "output size must be positive."
     if not isinstance(kernel_size,tuple):
         kernel_size = (kernel_size,kernel_size)
+    assert kernel_size[0] > 0 and kernel_size[1] > 0, "kernel size must be positive"
     if not isinstance(dilation,tuple):
         dilation = (dilation,dilation)
+    assert dilation[0] > 0 and dilation[1] > 0, "dilation must be positive"
     if not isinstance(padding,tuple):
         padding = (padding,padding)
+    assert padding[0] >= 0 and padding[1] >= 0, "padding must be non-negative"
     if not isinstance(stride,tuple):
         stride = (stride,stride)
+    assert stride[0] > 0 and stride[1] > 0, "stride must be positive"
     n,cl,num = X.shape
     area = kernel_size[0] * kernel_size[1]
     block_nums = []
