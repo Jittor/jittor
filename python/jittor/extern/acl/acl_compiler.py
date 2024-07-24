@@ -1135,7 +1135,23 @@ def change_function():
                             output_shapes=[grad_output.shape],
                             attr={})[0] 
             return grad_input
+    
+    class FloorIntACL(Function):
+        def __init__(self):
+            super(FloorIntACL, self).__init__()
         
+        def execute(self, input):
+            self.input = input
+            self.shape = input.shape
+            result = acl_cmd("Floor", [input],
+                            output_dtypes=[jt.int],
+                            output_shapes=[input.shape],
+                            attr={})[0]
+            return result
+        
+        def grad(self, grad_output):
+            return jt.zeros(self.shape, dtype=grad_output.dtype)
+         
     def warp(origin_func, new_func):
         def warpper(*args, **kwargs):
             if origin_func == jt.index:
@@ -1178,6 +1194,8 @@ def change_function():
     jt.gather = warp(jt.gather, GatherACL())
     jt.scatter = warp(jt.scatter, ScatterACL())
     jt.where = warp(jt.where, WhereACL())
+    jt.floor_int = warp(jt.floor_int, FloorIntACL())
+    jt.Var.floor_int = lambda x: warp(jt.floor_int, FloorIntACL())(x)
     
     
     # jt.nn.bmm = warp(jt.nn.bmm, BmmACL())
