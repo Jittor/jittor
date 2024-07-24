@@ -882,7 +882,7 @@ def split(d, split_size, dim=0):
     ans = []
     last = 0
     s_last = len(split_size)-1
-    gopt_disable = jt.flags.gopt_disable
+    gopt_disable = jt.flags.gopt_disable or jt.flags.use_acl
     for j, i in enumerate(split_size):
         if i==0:
             shape = list(d.shape)
