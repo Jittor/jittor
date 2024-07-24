@@ -626,10 +626,10 @@ def setup_mpi():
     global mpi_ops, mpi, use_mpi
     global mpicc_path, has_mpi
     use_mpi = os.environ.get("use_mpi", "1")=="1"
-    if not use_mpi: return
     mpi_ops = None
     mpi = None
     has_mpi = False
+    if not use_mpi: return
     mpicc_path = env_or_try_find('mpicc_path', 'mpicc')
     if mpicc_path == "":
         # LOG.i("mpicc not found, distribution disabled.")
