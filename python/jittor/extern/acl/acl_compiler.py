@@ -1281,7 +1281,7 @@ def change_function():
 
     jt.getitem = warp(jt.getitem, GetItem())
     jt.Var.getitem = lambda x, slices, return_x=None: warp(
-        jt.getitem, GetItem())(x, slices, return_x)
+        jt.getitem, GetItem())(x, slices)
 
     jt.setitem = warp(jt.setitem, SetItemACL())
     jt.Var.setitem = lambda x, slices, value, reduce='void': warp(
