@@ -55,17 +55,18 @@ def install():
         else:
             cc_files2.append(name)
     cc_files = cc_files2
+    ascend_toolkit_home = os.getenv('ASCEND_TOOLKIT_HOME')
     cc_flags += f" -DHAS_CUDA -DIS_ACL  \
-    -I/usr/local/Ascend/ascend-toolkit/latest/include/ \
-    -L/usr/local/Ascend/ascend-toolkit/latest/lib64/ \
+    -I{ascend_toolkit_home}/include/ \
+    -L{ascend_toolkit_home}/lib64/ \
     -I{acl_compiler_home} -lascendcl -lacl_op_compiler "
 
     ctypes.CDLL("libascendcl.so", dlopen_flags)
-    '''
+    f'''
     -ltikc_runtime
     -I/usr/local/Ascend/driver/include/ \
-    -L/usr/local/Ascend/ascend-toolkit/latest/compiler/lib64/ \
-    -L/usr/local/Ascend/ascend-toolkit/latest/runtime/lib64/ \
+    -L{ascend_toolkit_home}/compiler/lib64/ \
+    -L{ascend_toolkit_home}/runtime/lib64/ \
     '''
     jittor_utils.LOG.i("ACL detected")
 
