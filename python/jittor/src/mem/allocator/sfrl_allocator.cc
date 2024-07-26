@@ -242,7 +242,12 @@ std::mutex sfrl_allocator_mutex;
 
 void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
     std::unique_lock<std::mutex> lock(sfrl_allocator_mutex);
+    #ifdef IS_ACL
+    // output of acl op need additional 32 bytes
+    size = align_size(size+32);
+    #else
     size = align_size(size);
+    #endif
     CachingBlockPool* blocks = get_blocks(size);
     //search cached block
     CachingBlock* block = blocks->pop_block(size);
