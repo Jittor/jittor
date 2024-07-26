@@ -371,7 +371,6 @@ def acl_cmd(name: str, inputs: list, output_dtypes: list, output_shapes: list,
             CHECK(aclopSetAttrString(attr, key, value)==0);
         }
 
-
         void run() {
             // printDeviceData(input_desc, input_data, name);
             
@@ -414,6 +413,7 @@ def change_function():
 
         def execute(self, inshape: list, dim, dtype="int32"):
             # zeros a tensor, shape is inshape, dtype is dtype
+            dim_input = dim
             if dim == None:
                 dim = [i for i in range(len(inshape))]
             elif type(dim) == int:
@@ -436,7 +436,7 @@ def change_function():
                                       shape=inshape,
                                       dims=broadcast_dim)
                 results.append(result)
-            if len(results) != 1:
+            if len(results) != 1 or dim_input == None:
                 return tuple(results)
             else:
                 return results[0]
@@ -663,6 +663,7 @@ def change_function():
 
         def __init__(self):
             super(GetItem, self).__init__()
+            self.type_ = 'index'
 
         def stride(self, x, dim):
             stride = 1
@@ -670,32 +671,34 @@ def change_function():
                 stride *= x.shape[i]
             return stride
 
-        def execute(self, x, slices):
+        def execute(self, x, slices, return_x=None):
             if isinstance(slices, jt.Var) or isinstance(slices, tuple):
                 if isinstance(slices, jt.Var):
                     slices = (slices, )
                 if isinstance(slices[0], jt.Var):
                     slices_len = len(slices)
                     masks = jt.ones(slices_len, dtype=jt.int64)
-
                     output = slices[0].shape
                     output += x.shape[slices_len:]
-
                     input_ = [x, masks, jt.Var(list(output)).int64()]
                     for i in range(slices_len):
                         input_.append(slices[i].int32())
-
                     result = acl_cmd("Index",
                                      input_,
                                      output_dtypes=[x.dtype],
                                      output_shapes=[output],
                                      attr={})[0]
+                    self.shape = x.shape
+                    self.sizes = list(output)
+                    self.type_ = 'index'
+                    self.slices = slices
+                    # self.strides
                     return result
 
             # use AsStrided operator to implement the getitem function
             # get the shape and stride of the input tensor
             x_dim = len(x.shape)
-
+            # int type
             if not isinstance(slices, tuple):
                 slices = (slices, )
 
@@ -732,6 +735,7 @@ def change_function():
             self.strides = strides
             self.offset = offset
             self.shape = x.shape
+            self.type_ = 'as_strided'
             result = acl_cmd(
                 "AsStrided",
                 [x, jt.Var(sizes),
@@ -743,24 +747,62 @@ def change_function():
             return result
 
         def grad(self, grad_output):
-            result = jt.zeros(self.shape, dtype=grad_output.dtype)
-            sizes = list(grad_output.shape)
-            strides = [
-                self.stride(grad_output, dim)
-                for dim in range(len(grad_output.shape))
-            ]
-            result = acl_cmd("ViewCopy", [
-                result,
-                jt.Var(self.sizes),
-                jt.Var(self.strides),
-                jt.Var(self.offset), grad_output,
-                jt.Var(sizes),
-                jt.Var(strides),
-                jt.Var(0)
-            ],
-                             output_dtypes=[result.dtype],
-                             output_shapes=[result.shape],
-                             attr={})[0]
+            if self.type_ == 'as_strided':
+                result = jt.zeros(self.shape, dtype=grad_output.dtype)
+                sizes = list(grad_output.shape)
+                strides = [
+                    self.stride(grad_output, dim)
+                    for dim in range(len(grad_output.shape))
+                ]
+                result = acl_cmd("ViewCopy", [
+                    result,
+                    jt.Var(self.sizes),
+                    jt.Var(self.strides),
+                    jt.Var(self.offset), grad_output,
+                    jt.Var(sizes),
+                    jt.Var(strides),
+                    jt.Var(0)
+                ],
+                                 output_dtypes=[result.dtype],
+                                 output_shapes=[result.shape],
+                                 attr={})[0]
+            elif self.type_ == 'index':
+                #TODO: use IndexPutV2 to implement the grad function
+                assert len(self.slices) == 1
+                index = self.slices[0]
+                input = jt.zeros(self.shape, dtype=grad_output.dtype)
+                input_flatten = input.reshape(input.shape[0], -1)
+                index_flatten = index.reshape(-1).unsqueeze(-1).repeat(
+                    1, input_flatten.shape[1])
+                grad_output_flatten = grad_output.reshape(index.numel(), -1)
+                result = acl_cmd(
+                    "ScatterElements",
+                    [input_flatten, index_flatten, grad_output_flatten],
+                    output_dtypes=[input.dtype],
+                    output_shapes=[input.shape],
+                    attr={
+                        'axis': 0,
+                        'reduction': 'add'
+                    })[0]
+                result = result.reshape(self.shape)
+                # result = jt.zeros(self.shape, dtype=grad_output.dtype)
+                # # masks = jt.ones(len(self.slices), dtype=jt.int64)
+                # masks = jt.array([1,1], dtype=jt.int64)
+                # expand_masks = jt.array([1,1], dtype=jt.int64)
+                # inputs_ = [result,grad_output,masks,expand_masks]
+                # slices_len = len(self.slices)
+                # for  i in range(slices_len):
+                #     inputs_.append(self.slices[i].int64())
+                # # breakpoint()
+                # jt.sync_all(True)
+                # print(inputs_)
+                # result_ = acl_cmd("IndexPutV2", inputs_,
+                #                  output_dtypes=[result.dtype],
+                #                  output_shapes=[result.shape],
+                #                  attr={"accumulate":True})[0]
+                # result = result_
+            else:
+                raise ValueError("Invalid slice type")
             result.sync()
             return result, None
 
@@ -1130,7 +1172,7 @@ def change_function():
             grad_input = acl_cmd("ScatterElements",
                                  [tmp, self.index, grad_output],
                                  output_dtypes=[grad_output.dtype],
-                                 output_shapes=[self.index.shape],
+                                 output_shapes=[tmp.shape],
                                  attr={
                                      'axis': self.dim,
                                      'reduction': "add"
@@ -1149,7 +1191,7 @@ def change_function():
             self.reduce = reduce
             result = acl_cmd("ScatterElements", [input, self.index, src],
                              output_dtypes=[input.dtype],
-                             output_shapes=[index.shape],
+                             output_shapes=[input.shape],
                              attr={
                                  'axis': self.dim,
                                  'reduction': reduce
@@ -1257,10 +1299,12 @@ def change_function():
                 if isinstance(new_func, CumsumACL):
                     args = (args[0], kwargs.get('dim', -1))
                     kwargs = {}
-                if isinstance(new_func, ScatterACL):
+                if isinstance(new_func,
+                              ScatterACL) and kwargs.get('reduce') is not None:
                     args = (args[0], args[1], args[2], args[3],
                             kwargs.get('reduce', 'void'))
                     kwargs = {}
+
                 return new_func(*args, **kwargs)
             return origin_func(*args, **kwargs)
 
@@ -1292,7 +1336,11 @@ def change_function():
         x, dim_vector)
     jt.cumsum = warp(jt.cumsum, CumsumACL())
     jt.gather = warp(jt.gather, GatherACL())
+    jt.Var.gather = lambda x, dim, index: warp(jt.gather, GatherACL())(x, dim,
+                                                                       index)
     jt.scatter = warp(jt.scatter, ScatterACL())
+    jt.Var.scatter = lambda x, dim, index, src, reduce="void": warp(
+        jt.scatter, ScatterACL())(x, dim, index, src, reduce)
     jt.where = warp(jt.where, WhereACL())
     jt.floor_int = warp(jt.floor_int, FloorIntACL())
     jt.Var.floor_int = lambda x: warp(jt.floor_int, FloorIntACL())(x)
