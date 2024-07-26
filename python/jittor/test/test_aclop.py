@@ -17,12 +17,27 @@ class TestACL(unittest.TestCase):
         print("test getitem success")
 
     @jt.flag_scope(use_acl=1)
+    def test_getitem_neg(self):
+        a = jt.ones(2, 3, 2)
+        b = a[0:1,0:-2]
+        np.testing.assert_allclose(b.numpy(), [[[1,1]]])
+        print("test getitem neg success")
+
+    @jt.flag_scope(use_acl=1)
     def test_setitem(self):
         a = jt.ones(2, 2)
         b = jt.Var(0)
         a[0:1, 0:1] = b
         np.testing.assert_allclose(a.numpy(), [[0, 1], [1, 1]])
         print("test setitem success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_setitem_neg(self):
+        a = jt.ones(2, 3, 2)
+        b = jt.Var(0)
+        a[0:1, 0:-2] = b
+        np.testing.assert_allclose(a.numpy(), [[[0,0],[1,1],[1,1]],[[1,1],[1,1],[1,1]]])
+        print("test setitem neg success")
 
     @jt.flag_scope(use_acl=1)
     def test_getitem_grad(self):
@@ -63,8 +78,24 @@ class TestACL(unittest.TestCase):
         print("test concat success")
 
     @jt.flag_scope(use_acl=1)
+    def test_concat_neg(self):    
+        a = jt.ones(2, 2)
+        b = jt.ones(2, 2)
+        c = jt.concat([a, b], -1)
+        np.testing.assert_allclose(c.numpy(), [[1,1,1,1],[1,1,1,1]])
+        print("test concat neg success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_concat_zero_dim(self):    
+        a = jt.ones([])
+        b = jt.zeros([])
+        c = jt.concat([a, b], 0)
+        np.testing.assert_allclose(c.numpy(), [1,0])
+        print("test concat zero dim success")
+
+    @jt.flag_scope(use_acl=1)
     def test_maxpool_grad(self):
-        a = jt.ones(1, 1, 4, 4)
+        a = jt.float32([[[[1,2,3,4],[2,3,4,1],[3,4,1,2],[4,1,2,3]]]])
         max_pool = jt.nn.Pool(2, op='maximum')
         optimizer = jt.optim.SGD([a], 0.1)
         b = max_pool(a)
@@ -75,7 +106,7 @@ class TestACL(unittest.TestCase):
         res = a.opt_grad(optimizer)
         np.testing.assert_allclose(
             res.numpy(),
-            [[[[1, 0, 1, 0], [0, 0, 0, 0], [1, 0, 1, 0], [0, 0, 0, 0]]]])
+            [[[[0, 0, 0, 1], [0, 1, 0, 0], [0, 1, 0, 0], [0, 0, 0, 1]]]])
         print("test maxpool grad success")
 
     @jt.flag_scope(use_acl=1)
@@ -83,47 +114,57 @@ class TestACL(unittest.TestCase):
         a = jt.ones(3, 3)
         b = jt.triu_(a, 0)
         c = jt.triu_(a, 1)
+        d = jt.triu_(a, -1)
         np.testing.assert_allclose(b.numpy(),
                                    [[1, 1, 1], [0, 1, 1], [0, 0, 1]])
         np.testing.assert_allclose(c.numpy(),
                                    [[0, 1, 1], [0, 0, 1], [0, 0, 0]])
+        np.testing.assert_allclose(d.numpy(),
+                                   [[1, 1, 1], [1, 1, 1], [0, 1, 1]])
         print("test triu success")
 
     @jt.flag_scope(use_acl=1)
     def test_bmm(self):
-        a = jt.ones(3, 2, 2).float32()
+        a = jt.float32([[[1,2],[3,4]],[[2,1],[4,3]],[[1,2],[4,3]]])
         b = jt.bmm(a, a)
         np.testing.assert_allclose(
-            b.numpy(), [[[2, 2], [2, 2]], [[2, 2], [2, 2]], [[2, 2], [2, 2]]])
+            b.numpy(), [[[7, 10], [15, 22]], [[8, 5], [20, 13]], [[9, 8], [16, 17]]])
         print("test bmm success")
 
     @jt.flag_scope(use_acl=1)
     def test_matmul(self):
-        a = jt.ones(1, 4, 4)
-        b = jt.ones(4, 2)
+        a = jt.float32([[[1,2,3,4],[5,6,7,8],[9,10,11,12],[13,14,15,16]]])
+        b = jt.float32([[1,1],[1,1],[1,1],[1,1]])
         c = jt.matmul(a, b)
         np.testing.assert_allclose(c.numpy(),
-                                   [[[4, 4], [4, 4], [4, 4], [4, 4]]])
+                                   [[[10, 10], [26, 26], [42, 42], [58, 58]]])
         print("test matmul success")
 
     @jt.flag_scope(use_acl=1)
     def test_maxpool(self):
-        a = jt.ones(1, 1, 4, 4)
+        a = jt.float32([[[[1,2,3,4],[2,3,4,1],[3,4,1,2],[4,1,2,3]]]])
         max_pool = jt.nn.Pool(2, op='maximum')
-        np.testing.assert_allclose(max_pool(a).numpy(), [[[[1, 1], [1, 1]]]])
+        np.testing.assert_allclose(max_pool(a).numpy(), [[[[3, 4], [4, 3]]]])
         print("test maxpool success")
 
     @jt.flag_scope(use_acl=1)
     def test_transpose(self):
-        a = jt.ones(1, 2, 2)
+        a = jt.float32([[[1,2],[3,4]]])
         b = a.transpose(0, 2)
-        np.testing.assert_allclose(b.numpy(), [[[1], [1]], [[1], [1]]])
+        np.testing.assert_allclose(b.numpy(), [[[1], [3]], [[2], [4]]])
         print("test transpose success")
 
     @jt.flag_scope(use_acl=1)
+    def test_transpose_neg(self):
+        a = jt.float32([[[1,2],[3,4]]])
+        b = a.transpose(1, -1)
+        np.testing.assert_allclose(b.numpy(), [[[1,3], [2,4]]])
+        print("test transpose neg success")
+
+    @jt.flag_scope(use_acl=1)
     def test_matmul_grad(self):
-        a = jt.ones(1, 2, 2)
-        b = jt.ones(2, 2)
+        a = jt.float32([[[1,2,3,4],[5,6,7,8],[9,10,11,12],[13,14,15,16]]])
+        b = jt.float32([[1,1],[1,1],[1,1],[1,1]])
         optimizer = jt.optim.SGD([a, b], 0.1)
         loss = jt.matmul(a, b).sum()
         optimizer.zero_grad()
@@ -131,13 +172,13 @@ class TestACL(unittest.TestCase):
         optimizer.step()
         res_a = a.opt_grad(optimizer)
         res_b = b.opt_grad(optimizer)
-        np.testing.assert_allclose(res_a.numpy(), [[[2, 2], [2, 2]]])
-        np.testing.assert_allclose(res_b.numpy(), [[2, 2], [2, 2]])
+        np.testing.assert_allclose(res_a.numpy(), [[[2, 2, 2, 2], [2, 2, 2, 2], [2, 2, 2, 2], [2, 2, 2, 2]]])
+        np.testing.assert_allclose(res_b.numpy(), [[28, 28], [32, 32], [36, 36], [40, 40]])
         print("test matmul grad success")
 
     @jt.flag_scope(use_acl=1)
     def test_bmm_grad(self):
-        a = jt.ones(3, 2, 2).float32()
+        a = jt.float32([[[1,2],[3,4]],[[2,1],[4,3]],[[1,2],[4,3]]])
         optimizer = jt.optim.SGD([a], 0.1)
         c = jt.bmm(a, a)
         loss = c.sum()
@@ -149,15 +190,15 @@ class TestACL(unittest.TestCase):
         res = a.opt_grad(optimizer)
         np.testing.assert_allclose(
             res.numpy(),
-            [[[4, 4], [4, 4]], [[4, 4], [4, 4]], [[4, 4], [4, 4]]])
+            [[[7, 11], [9, 13]], [[9, 13], [7, 11]], [[8, 12], [8, 12]]])
         print("test bmm grad success")
 
     @jt.flag_scope(use_acl=1)
     def test_avgpool(self):
-        a = jt.ones(1, 1, 4, 4)
+        a = jt.float32([[[[1,2,3,4],[2,3,4,1],[3,4,1,2],[4,1,2,3]]]])
         avg_pool = jt.nn.Pool(2, op='mean')
         b = avg_pool(a)
-        np.testing.assert_allclose(b.numpy(), [[[[1, 1], [1, 1]]]])
+        np.testing.assert_allclose(b.numpy(), [[[[2, 3], [3, 2]]]])
         print("test avgpool success")
 
     @jt.flag_scope(use_acl=1)
