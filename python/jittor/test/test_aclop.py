@@ -357,7 +357,7 @@ class TestACL(unittest.TestCase):
         print("test scatter multiply success")
 
     @jt.flag_scope(use_acl=1)
-    def test_scatter_grad(self):
+    def test_scatter_add_grad(self):
         a = jt.float32([[1, 2], [3, 4]])
         b = jt.float32([[0, 0], [0, 0]])
         optimizer = jt.optim.SGD([a, b], 0.1)
@@ -370,7 +370,23 @@ class TestACL(unittest.TestCase):
         res_b = b.opt_grad(optimizer)
         np.testing.assert_allclose(res_a.numpy(), [[0, 0], [0, 1]])
         np.testing.assert_allclose(res_b.numpy(), [[0, 0], [1, 0]])
-        print("test scatter grad success")
+        print("test scatter add grad success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_scatter_mult_grad(self):
+        a = jt.float32([[1, 2], [3, 4]])
+        b = jt.float32([[5, 6], [7, 8]])
+        optimizer = jt.optim.SGD([a, b], 0.1)
+        c = jt.scatter(b, 1, jt.array([[0, 0], [1, 0]]), a, reduce="multiply")
+        loss = c.max()
+        optimizer.zero_grad()
+        optimizer.backward(loss)
+        optimizer.step()
+        res_a = a.opt_grad(optimizer)
+        res_b = b.opt_grad(optimizer)
+        np.testing.assert_allclose(res_a.numpy(), [[0, 6], [0, 6]])
+        np.testing.assert_allclose(res_b.numpy(), [[0, 8], [0, 0]])
+        print("test scatter mult grad success")
 
     @jt.flag_scope(use_acl=1)
     def test_where(self):
@@ -381,7 +397,33 @@ class TestACL(unittest.TestCase):
         print("test where success")
 
     @jt.flag_scope(use_acl=1)
+    def test_where_2(self):
+        a = jt.array([[1, 2], [3, 4]])
+        b = jt.array([[5, 6], [7, 8]])
+        cond = jt.array([[1, 0], [0, 1]])
+        c = jt.where(cond, a, b)
+        np.testing.assert_allclose(c.numpy(), [[1, 6], [7, 4]])
+        print("test where_2 success")
+
+    @jt.flag_scope(use_acl=1)
     def test_where_grad(self):
+        a = jt.array([[1, 2], [3, 4]])
+        b = jt.array([[5, 6], [7, 8]])
+        cond = jt.array([[1, 0], [0, 1]])
+        c = jt.where(cond, a, b)
+        optimizer = jt.optim.SGD([a, b], 0.1)
+        loss = c.sum()
+        optimizer.zero_grad()
+        optimizer.backward(loss)
+        optimizer.step()
+        res_a = a.opt_grad(optimizer)
+        res_b = b.opt_grad(optimizer)
+        np.testing.assert_allclose(res_a.numpy(), [[0, 0], [1, 1]])
+        np.testing.assert_allclose(res_b.numpy(), [[1, 1], [0, 0]])
+        print("test where grad success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_where_grad_2(self):
         a = jt.float32([[1, 2], [3, 4]])
         b = jt.array([[2., 2.], [2., 2.]])
         c = jt.where(a > 2, a, b)
@@ -394,7 +436,7 @@ class TestACL(unittest.TestCase):
         res_b = b.opt_grad(optimizer)
         np.testing.assert_allclose(res_a.numpy(), [[0, 0], [1, 1]])
         np.testing.assert_allclose(res_b.numpy(), [[1, 1], [0, 0]])
-        print("test where grad success")
+        print("test where grad 2 success")
 
     @jt.flag_scope(use_acl=1)
     def test_flip(self):
