@@ -341,12 +341,20 @@ class TestACL(unittest.TestCase):
         print("test gather grad neg success")
 
     @jt.flag_scope(use_acl=1)
-    def test_scatter(self):
+    def test_scatter_add(self):
         a = jt.array([[1, 2], [3, 4]])
         b = jt.array([[0, 0], [0, 0]])
         b = jt.scatter(b, 1, jt.array([[0, 0], [1, 0]]), a, reduce="add")
         np.testing.assert_allclose(b.numpy(), [[3, 0], [4, 3]])
-        print("test scatter success")
+        print("test scatter add success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_scatter_multi(self):
+        a = jt.array([[1, 2], [3, 4]])
+        b = jt.array([[5, 6], [7, 8]])
+        b = jt.scatter(b, 0, jt.array([[0, 0], [1, 0]]), a, reduce="multiply")
+        np.testing.assert_allclose(b.numpy(), [[5, 48], [21, 8]])
+        print("test scatter multiply success")
 
     @jt.flag_scope(use_acl=1)
     def test_scatter_grad(self):
