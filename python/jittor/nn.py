@@ -3276,6 +3276,17 @@ class ComplexNumber:
         return ComplexNumber(_fft2(self.value, inverse=True), is_concat_value=True)
 
 
+def polar(abs:jt.Var, angle: jt.Var) -> ComplexNumber:
+    assert abs.shape == angle.shape
+    return ComplexNumber(abs * angle.cos(),abs * angle.sin())
+
+def view_as_complex(x: jt.Var) -> ComplexNumber:
+    assert x.shape[-1] == 2
+    return ComplexNumber(x[...,0],x[...,1])
+
+def view_as_real(x: ComplexNumber) -> jt.Var:
+    return jt.stack([x.value[...,0],x.value[...,1]],dim=-1)
+
 def one_hot(x: jt.Var, num_classes: int=-1) -> jt.Var:
     ''' Returns the one_hot encoding of inputs.
 
