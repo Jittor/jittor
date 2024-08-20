@@ -2140,6 +2140,7 @@ from . import sparse
 from . import optim
 from . import dataset
 from . import init
+from . import gradfunctional
 
 dtype = NanoString
 
