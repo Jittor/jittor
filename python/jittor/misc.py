@@ -623,6 +623,10 @@ def unique(
             #include <thrust/device_vector.h>
             #include <thrust/sequence.h>
     
+            #include <thrust/sequence.h>
+            #include <thrust/sort.h>
+            #include <thrust/unique.h>
+
             #include <cub/cub.cuh> 
             #include <executor.h>
             ''',
@@ -705,6 +709,11 @@ def unique(
                 #include <thrust/extrema.h>
                 #include <thrust/device_ptr.h>
                 #include <thrust/execution_policy.h>
+
+                #include <thrust/sequence.h>
+                #include <thrust/unique.h>
+                #include <thrust/sort.h>
+
                 #include <thrust/scan.h>
                 #include <executor.h>
 
@@ -922,6 +931,48 @@ def diag(x,diagonal=0):
     else:
         output_shape = (x.shape[0]-d,)
         return x.reindex(output_shape,[f'i0+{d}' if diagonal<=0 else 'i0',f'i0+{d}' if diagonal>=0 else 'i0'])
+
+# reference: https://github.com/pytorch/pytorch/blob/25d5a815f74db80ef19a3f714709b55b05675245/torch/_refs/__init__.py
+def diagonal(x, offset=0, dim1=0, dim2=1):
+    def __normalize_dim(d, rank):
+        if d < 0:
+            d += rank
+        if d < 0 or d >= rank:
+            msg = f"Dimension out of range (expected to be in range of [{-rank}, {rank - 1}], but got {d})"
+            raise IndexError(msg)
+        return d
+    assert x.ndim >= 2, f"diagonal dimensions requires ndim larger than 2, but got {x.ndim}"
+    dim1 = __normalize_dim(dim1, x.ndim)
+    dim2 = __normalize_dim(dim2, x.ndim)
+    assert dim1 != dim2, f"diagonal dimensions cannot be identical {dim1}, {dim2}"
+
+    if offset >= 0:
+        diag_size = max(min(x.shape[dim1], x.shape[dim2] - offset), 0)
+    else:
+        diag_size = max(min(x.shape[dim1] + offset, x.shape[dim2]), 0)
+
+    sizes = []
+    indices = []
+    lsizes = 0
+    dim_diag = x.ndim - 2
+    abs_offset = offset if offset >= 0 else -offset
+    for i, s in enumerate(x.shape):
+        if i == dim1:
+            if offset >= 0:
+                indices.append(f"i{dim_diag}")
+            else:
+                indices.append(f"i{dim_diag}+{abs_offset}")
+        elif i == dim2:
+            if offset >= 0:
+                indices.append(f"i{dim_diag}+{abs_offset}")
+            else:
+                indices.append(f"i{dim_diag}")
+        else:
+            indices.append(f"i{lsizes}")
+            sizes.append(s)
+            lsizes += 1
+    out_shape = tuple(sizes + [diag_size])
+    return x.reindex(out_shape, indices)
 
 jt.Var.diag = diag
         

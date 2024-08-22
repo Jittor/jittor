@@ -2255,22 +2255,30 @@ def grid_sample(input, grid, mode='bilinear', padding_mode='zeros', align_corner
 
 
 class Upsample(Module):
-    def __init__(self, scale_factor=None, mode='nearest'):
+    def __init__(self, scale_factor=None, mode='nearest', align_corners=False):
         if isinstance(scale_factor, tuple):
             self.scale_factor = tuple(float(factor) for factor in scale_factor)
         else:
             self.scale_factor = float(scale_factor) if scale_factor else None
         self.mode = mode
-    
+        self.align_corners = align_corners
+
     def execute(self, x):
         if self.scale_factor is None:
             raise ValueError("scale_factor should be defined")
+        elif isinstance(self.scale_factor, float):
+            return upsample(x, 
+                size=(int(x.shape[2]*self.scale_factor),
+                      int(x.shape[3]*self.scale_factor)),
+                mode=self.mode,
+                align_corners=self.align_corners)
         else:
             return upsample(x,
                 size=(
                     int(x.shape[2]*self.scale_factor[0]), 
                     int(x.shape[3]*self.scale_factor[1])),
-                mode=self.mode)
+                mode=self.mode,
+                align_corners=self.align_cornerss)
 
 class UpsamplingBilinear2d(Upsample):
     def __init__(self, scale_factor=None):
