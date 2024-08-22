@@ -652,14 +652,22 @@ def var(x, dim=None, dims=None, unbiased=False, keepdims=False):
     return sqr
 Var.var = var
 
-def std(x):
-    matsize=1
-    for i in x.shape:
-        matsize *= i
-    out=(x-x.mean()).sqr().sum()
-    out=out/(matsize-1)
-    out=out.maximum(1e-6).sqrt()
-    return out
+def std(x, dim=None, keepdim=False):
+    if dim is None:
+        matsize=1
+        for i in x.shape:
+            matsize *= i
+        out=(x-x.mean()).sqr().sum()
+        out=out/(matsize-1)
+        out=out.maximum(1e-6).sqrt()
+        return out
+    else:
+        dimsize=x.size(dim)
+        mean=jt.mean(x, dim, keepdim=True)
+        out=(x - mean).sqr().sum(dim=dim, keepdim=keepdim)
+        out=out/(dimsize-1)
+        out=out.maximum(1e-6).sqrt()
+        return out
 Var.std = std
 
 def norm(x, p=2, dim=-1, keepdims=False, eps=1e-30, keepdim=False):
@@ -2140,6 +2148,7 @@ from . import sparse
 from . import optim
 from . import dataset
 from . import init
+from . import gradfunctional
 
 dtype = NanoString
 
