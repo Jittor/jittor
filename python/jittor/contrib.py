@@ -68,6 +68,8 @@ def block_diag(*tensors):
         order such that their upper left and lower right corners are
         diagonally adjacent. All other elements are set to 0.
     """
+    requires_grad = tensors[0].requires_grad
+
     rows = 0
     cols = 0
     for tensor in tensors:
@@ -83,7 +85,7 @@ def block_diag(*tensors):
             cols += shape[1]
 
     result = jt.zeros((rows, cols))
-    result.requires_grad = True
+    result.requires_grad = requires_grad
 
     current_row = 0
     current_col = 0
