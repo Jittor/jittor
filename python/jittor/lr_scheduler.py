@@ -32,6 +32,7 @@ class ReduceLROnPlateau(object):
         self.cooldown = cooldown
         self.n_cd = 0
         self.mode = mode
+        self.mode_worse = None  # the worse value for the chosen mode
         self.threshold = threshold
         self.threshold_mode = threshold_mode
         self.loss_best = None
@@ -39,7 +40,22 @@ class ReduceLROnPlateau(object):
         self.eps = eps
         self.last_epoch = 0
         self.loss_best = math.inf if mode=="min" else -math.inf
-        
+
+    @property
+    def defaults(self):
+        exclude = set(("defaults", "optimizer"))
+        return { k:v for k, v in self.__dict__.items()
+            if k[0] != '_' and k not in exclude and not callable(v) }
+
+    def state_dict(self):
+        state = {"defaults": self.defaults}
+        return state
+
+    def load_state_dict(self, state):
+        for k,v in state["defaults"].items():
+            setattr(self, k, v)
+        self.init_is_better(mode=self.mode, threshold=self.threshold, threshold_mode=self.threshold_mode)
+
     def step(self, loss, epoch=None):
         # convert `metrics` to float, in case it's a zero-dim Tensor
         loss_now = float(loss)
@@ -86,6 +102,21 @@ class ReduceLROnPlateau(object):
         else:
             return a > b + self.threshold
 
+    def init_is_better(self, mode, threshold, threshold_mode):
+        if mode not in {'min', 'max'}:
+            raise ValueError('mode ' + mode + ' is unknown!')
+        if threshold_mode not in {'rel', 'abs'}:
+            raise ValueError('threshold mode ' + threshold_mode + ' is unknown!')
+
+        if mode == 'min':
+            self.mode_worse = inf
+        else:  # mode == 'max':
+            self.mode_worse = -inf
+
+        self.mode = mode
+        self.threshold = threshold
+        self.threshold_mode = threshold_mode
+
 class CosineAnnealingLR(object):
     def __init__(self, optimizer, T_max, eta_min=0, last_epoch=-1):
         self.T_max = T_max
@@ -95,6 +126,20 @@ class CosineAnnealingLR(object):
         self.base_lr = optimizer.lr
         self.base_lr_pg = [pg.get("lr") for pg in optimizer.param_groups]
         #TODO set last_epoch is not ready
+
+    @property
+    def defaults(self):
+        exclude = set(("defaults", "optimizer"))
+        return { k:v for k, v in self.__dict__.items()
+            if k[0] != '_' and k not in exclude and not callable(v) }
+
+    def state_dict(self):
+        state = {"defaults": self.defaults}
+        return state
+
+    def load_state_dict(self, state):
+        for k,v in state["defaults"].items():
+            setattr(self, k, v)
 
     def get_lr(self, base_lr, now_lr):
         if self.last_epoch == 0:
@@ -150,7 +195,21 @@ class StepLR(object):
         self.gamma = gamma
         self.last_epoch = last_epoch
         self.cur_epoch = 0
-    
+
+    @property
+    def defaults(self):
+        exclude = set(("defaults", "optimizer"))
+        return { k:v for k, v in self.__dict__.items()
+            if k[0] != '_' and k not in exclude and not callable(v) }
+
+    def state_dict(self):
+        state = {"defaults": self.defaults}
+        return state
+
+    def load_state_dict(self, state):
+        for k,v in state["defaults"].items():
+            setattr(self, k, v)
+
     def get_gamma(self):
         if self.last_epoch < 0:
             if (self.cur_epoch != 0 and (self.cur_epoch + 1) % self.step_size == 0):
@@ -182,7 +241,21 @@ class MultiStepLR(object):
         self.gamma = gamma
         self.last_epoch = last_epoch
         #TODO set last_epoch is not ready
-    
+
+    @property
+    def defaults(self):
+        exclude = set(("defaults", "optimizer"))
+        return { k:v for k, v in self.__dict__.items()
+            if k[0] != '_' and k not in exclude and not callable(v) }
+
+    def state_dict(self):
+        state = {"defaults": self.defaults}
+        return state
+
+    def load_state_dict(self, state):
+        for k,v in state["defaults"].items():
+            setattr(self, k, v)
+
     def get_gamma(self):
         if (self.last_epoch in self.milestones):
             return self.gamma
