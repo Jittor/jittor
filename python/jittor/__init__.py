@@ -1464,9 +1464,17 @@ class Module:
     def __hooked_call__(self, *args, **kw):
         if hasattr(self, "__fhook2__"):
             if len(kw):
-                self.__fhook2__(self, args, kw)
+                args_kw_result = self.__fhook2__(self, args, kw)
             else:
-                self.__fhook2__(self, args)
+                args_kw_result = self.__fhook2__(self, args)
+            if args_kw_result is not None:
+                if isinstance(args_kw_result, tuple) and len(args_kw_result) == 2:
+                    args, kw = args_kw_result
+                else:
+                    raise RuntimeError(
+                        "forward pre-hook must return None or a tuple "
+                        f"of (new_args, new_kwargs), but got {args_kw_result}."
+                    )
         if hasattr(self, "__bihook__"):
             if len(kw):
                 LOG.w("backward hook not support kw")
@@ -1485,9 +1493,11 @@ class Module:
                 ret = grad_hooker(ret, self.__bohook__)
         if hasattr(self, "__fhook__"):
             if len(kw):
-                self.__fhook__(self, args, ret, kw)
+                res = self.__fhook__(self, args, ret, kw)
             else:
-                self.__fhook__(self, args, ret)
+                res = self.__fhook__(self, args, ret)
+            if res is not None:
+                ret = res
         return ret
 
     def _place_hooker(self):
