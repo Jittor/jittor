@@ -1619,12 +1619,6 @@ Arguments of hook are defined as::
                     else:
                         end=1
                         break
-                elif isinstance(v, nn.ParameterList):
-                    if k in v.keys():
-                        v = v[k]
-                    else:
-                        end = 1
-                        break
                 else:
                     if hasattr(v, k):
                         v = getattr(v, k)
