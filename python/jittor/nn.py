@@ -1965,7 +1965,7 @@ def _interpolate(img, x, y, ids, mode):
 
 # TODO: tf_mode to another function
 def resize(img, size, mode="nearest", align_corners=False, tf_mode=False):
-    if img.dim() != 3:
+    if img.dim() != 4:
         raise ValueError("Input shape must be `(N, C, H, W)`!")
     n, c, h, w = img.shape
     H, W = size
