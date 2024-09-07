@@ -77,6 +77,7 @@
 #include "aclnnop/aclnn_strided_slice_assign_v2.h"
 #include "aclnnop/aclnn_slice_v2.h"
 #include "aclnnop/aclnn_index_put_impl.h"
+#include "aclnnop/aclnn_range.h"
 
 #define CHECK_RET(cond, return_expr) \
   do                                 \

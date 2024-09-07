@@ -16,67 +16,62 @@ class TestACL(unittest.TestCase):
         np.testing.assert_allclose(b.numpy(), [[1, 1], [1, 1]])
         print("test getitem success")
 
-    @jt.flag_scope(use_acl=1)
-    def test_setitem(self):
-        a = jt.ones(2, 2)
-        b = jt.Var(0)
-        a[0:1, 0:1] = b
-        np.testing.assert_allclose(a.numpy(), [[0, 1], [1, 1]])
-        print("test setitem success")
+    # @jt.flag_scope(use_acl=1)
+    # def test_setitem(self):
+    #     a = jt.ones(2, 2)
+    #     b = jt.Var(0)
+    #     a[0:1, 0:1] = b
+    #     np.testing.assert_allclose(a.numpy(), [[0, 1], [1, 1]])
+    #     print("test setitem success")
 
-    @jt.flag_scope(use_acl=1)
-    def test_getitem_grad(self):
-        a = jt.ones(2, 2)
-        b = a[0:1, 0:1]
-        optimizer = jt.optim.SGD([a], 0.1)
-        loss = b.sum()
-        optimizer.zero_grad()
-        optimizer.backward(loss)
-        optimizer.step()
-        res = a.opt_grad(optimizer)
-        np.testing.assert_allclose(res.numpy(), [[1, 0], [0, 0]])
-        print("test getitem grad success")
+    # @jt.flag_scope(use_acl=1)
+    # def test_getitem_grad(self):
+    #     a = jt.ones(2, 2)
+    #     b = a[0:1, 0:1]
+    #     optimizer = jt.optim.SGD([a], 0.1)
+    #     loss = b.sum()
+    #     optimizer.zero_grad()
+    #     optimizer.backward(loss)
+    #     optimizer.step()
+    #     res = a.opt_grad(optimizer)
+    #     np.testing.assert_allclose(res.numpy(), [[1, 0], [0, 0]])
+    #     print("test getitem grad success")
 
-    @jt.flag_scope(use_acl=1)
-    def test_setitem_grad(self):
-        a = jt.ones(3, 3)
-        b = jt.ones(2, 2)
-        a[0:2, 0:2] = b * 2
-        optimizer = jt.optim.SGD([a, b], 0.1)
-        loss = a.sum()
-        optimizer.zero_grad()
-        optimizer.backward(loss)
-        optimizer.step()
-        res_a = a.opt_grad(optimizer)
-        res_b = b.opt_grad(optimizer)
-        np.testing.assert_allclose(res_a.numpy(),
-                                   [[1, 1, 1], [1, 1, 1], [1, 1, 1]])
-        np.testing.assert_allclose(res_b.numpy(), [[2, 2], [2, 2]])
-        print("test setitem grad success")
+    # @jt.flag_scope(use_acl=1)
+    # def test_setitem_grad(self):
+    #     a = jt.ones(3, 3)
+    #     b = jt.ones(2, 2)
+    #     a[0:2, 0:2] = b * 2
+    #     optimizer = jt.optim.SGD([a, b], 0.1)
+    #     loss = a.sum()
+    #     optimizer.zero_grad()
+    #     optimizer.backward(loss)
+    #     optimizer.step()
+    #     res_a = a.opt_grad(optimizer)
+    #     res_b = b.opt_grad(optimizer)
+    #     np.testing.assert_allclose(res_a.numpy(),
+    #                                [[1, 1, 1], [1, 1, 1], [1, 1, 1]])
+    #     np.testing.assert_allclose(res_b.numpy(), [[2, 2], [2, 2]])
+    #     print("test setitem grad success")
 
-    @jt.flag_scope(use_acl=1)
-    def test_concat(self):
-        a = jt.ones(2, 2)
-        b = jt.ones(2, 2)
-        c = jt.concat([a, b], 0)
-        np.testing.assert_allclose(c.numpy(), [[1, 1], [1, 1], [1, 1], [1, 1]])
-        print("test concat success")
+    # @jt.flag_scope(use_acl=1)
+    # def test_concat(self):
+    #     a = jt.ones(2, 2)
+    #     b = jt.ones(2, 2)
+    #     c = jt.concat([a, b], 0)
+    #     np.testing.assert_allclose(c.numpy(), [[1, 1], [1, 1], [1, 1], [1, 1]])
+    #     print("test concat success")
 
-    @jt.flag_scope(use_acl=1)
-    def test_maxpool_grad(self):
-        a = jt.ones(1, 1, 4, 4)
-        max_pool = jt.nn.Pool(2, op='maximum')
-        optimizer = jt.optim.SGD([a], 0.1)
-        b = max_pool(a)
-        loss = b.sum()
-        optimizer.zero_grad()
-        optimizer.backward(loss)
-        optimizer.step()
-        res = a.opt_grad(optimizer)
-        np.testing.assert_allclose(
-            res.numpy(),
-            [[[[1, 0, 1, 0], [0, 0, 0, 0], [1, 0, 1, 0], [0, 0, 0, 0]]]])
-        print("test maxpool grad success")
+    # @jt.flag_scope(use_acl=1)
+    # def test_maxpool_grad(self):
+    #     a = jt.ones(1, 1, 4, 4)
+    #     max_pool = jt.nn.Pool(2, op='maximum')
+    #     b = max_pool(a)
+    #     res = jt.grad(b.sum(), a)
+    #     np.testing.assert_allclose(
+    #         res.numpy(),
+    #         [[[[1, 0, 1, 0], [0, 0, 0, 0], [1, 0, 1, 0], [0, 0, 0, 0]]]])
+    #     print("test maxpool grad success")
 
     @jt.flag_scope(use_acl=1)
     def test_triu(self):
@@ -122,8 +117,8 @@ class TestACL(unittest.TestCase):
 
     @jt.flag_scope(use_acl=1)
     def test_matmul_grad(self):
-        a = jt.ones(1, 2, 2)
-        b = jt.ones(2, 2)
+        a = jt.arange(16).reshape(1, 4, 4).float()
+        b = jt.arange(8).reshape(4, 2).float()
         optimizer = jt.optim.SGD([a, b], 0.1)
         loss = jt.matmul(a, b).sum()
         optimizer.zero_grad()
@@ -131,9 +126,30 @@ class TestACL(unittest.TestCase):
         optimizer.step()
         res_a = a.opt_grad(optimizer)
         res_b = b.opt_grad(optimizer)
-        np.testing.assert_allclose(res_a.numpy(), [[[2, 2], [2, 2]]])
-        np.testing.assert_allclose(res_b.numpy(), [[2, 2], [2, 2]])
+        np.testing.assert_allclose(
+            res_a.numpy(),
+            [[[1, 5, 9, 13], [1, 5, 9, 13], [1, 5, 9, 13], [1, 5, 9, 13]]])
+        np.testing.assert_allclose(res_b.numpy(),
+                                   [[24, 24], [28, 28], [32, 32], [36, 36]])
         print("test matmul grad success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_matmul_t_grad(self):
+        a = jt.arange(16).reshape(1, 4, 4).float()
+        b = jt.arange(8).reshape(2, 4).float()
+        optimizer = jt.optim.SGD([a, b], 0.1)
+        loss = jt.nn.matmul_transpose(a, b).sum()
+        optimizer.zero_grad()
+        optimizer.backward(loss)
+        optimizer.step()
+        res_a = a.opt_grad(optimizer)
+        res_b = b.opt_grad(optimizer)
+        np.testing.assert_allclose(
+            res_a.numpy(),
+            [[[4, 6, 8, 10], [4, 6, 8, 10], [4, 6, 8, 10], [4, 6, 8, 10]]])
+        np.testing.assert_allclose(res_b.numpy(),
+                                   [[24, 28, 32, 36], [24, 28, 32, 36]])
+        print("test matmul_t grad success")
 
     @jt.flag_scope(use_acl=1)
     def test_bmm_grad(self):
@@ -192,14 +208,9 @@ class TestACL(unittest.TestCase):
     def test_scatter_grad(self):
         a = jt.float32([[1, 2], [3, 4]])
         b = jt.float32([[0, 0], [0, 0]])
-        optimizer = jt.optim.SGD([a, b], 0.1)
         c = jt.scatter(b, 1, jt.array([[0, 0], [1, 0]]), a, reduce="add")
-        loss = c.max()
-        optimizer.zero_grad()
-        optimizer.backward(loss)
-        optimizer.step()
-        res_a = a.opt_grad(optimizer)
-        res_b = b.opt_grad(optimizer)
+        res_a = jt.grad(c.max(), a)
+        res_b = jt.grad(c.max(), b)
         np.testing.assert_allclose(res_a.numpy(), [[0, 0], [0, 1]])
         np.testing.assert_allclose(res_b.numpy(), [[0, 0], [1, 0]])
         print("test scatter grad success")

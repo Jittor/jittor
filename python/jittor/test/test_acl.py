@@ -11,7 +11,6 @@ import numpy as np
 from jittor import init, Module
 import numpy as np
 
-
 @unittest.skipIf(not jt.compiler.has_acl, "No ACL found")
 class TestACL(unittest.TestCase):
 
@@ -149,8 +148,8 @@ class Linear(Module):
 
     def __init__(self, in_features, out_features, bias=True):
         self.w = (jt.random(
-            (in_features, out_features)) - 0.5) / in_features**0.5
-        self.b = jt.random((out_features, )) - 0.5 if bias else None
+            (in_features, out_features), type='normal') - 0.5) / in_features**0.5
+        self.b = jt.random((out_features, ), type='normal') - 0.5 if bias else None
 
     def execute(self, x):
         x = jt.nn.matmul(x, self.w)
@@ -215,7 +214,7 @@ class TestExample(unittest.TestCase):
             print(
                 f"step {i}, loss = {loss_mean.data.sum()} {jt.liveness_info()}"
             )
-            breakpoint()
+
         possible_results = [
             0.0009948202641680837,
             0.001381353591568768,

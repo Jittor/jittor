@@ -154,6 +154,11 @@ namespace jittor
             // for concat
             aclTensorList *tensor_list = nullptr;
 
+            // for range
+            aclScalar *start = nullptr;
+            aclScalar *end = nullptr;
+            aclScalar *step = nullptr;
+
             if (name == string("Add") || name == string("Sub"))
             {
 
@@ -236,6 +241,18 @@ namespace jittor
                         outputShapes[0] = {};
                 }
             }
+
+            if (jt_name == "range")
+            {
+                auto attr = dynamic_cast<RangeAttr *>(op_attr.get());
+                int64_t startValue = attr->start;
+                int64_t endValue = attr->end;
+                int64_t stepValue = attr->step;
+                start = aclCreateScalar(&startValue, aclDataType::ACL_INT64);
+                end = aclCreateScalar(&endValue, aclDataType::ACL_INT64);
+                step = aclCreateScalar(&stepValue, aclDataType::ACL_INT64);
+            }
+
             if (jt_name == "conv2dbackward")
             {
                 for (int idx = 0; idx < 2; idx++)
@@ -418,6 +435,10 @@ namespace jittor
             {
                 ret = it->second.getWorkspaceSizeFuncStridedSliceAssignV2(outputTensors[0], inputTensors[0], inputTensors[1], inputTensors[2], inputTensors[3], inputTensors[4], &workspaceSize, &executor);
             }
+            else if (jt_name == "range")
+            {
+                ret = it->second.getWorkspaceSizeFuncRange(start, end, step, outputTensors[0], &workspaceSize, &executor);
+            }
             else
                 LOGf << "not supported op " << jt_name;
 
@@ -456,6 +477,9 @@ namespace jittor
             }
             // destroy scalar
             aclDestroyScalar(alpha);
+            aclDestroyScalar(start);
+            aclDestroyScalar(end);
+            aclDestroyScalar(step);
 
             // destroy IntArray
             aclDestroyIntArray(size);
