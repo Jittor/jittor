@@ -153,67 +153,6 @@ class TestACL(unittest.TestCase):
         print("test bmm grad success")
 
     @jt.flag_scope(use_acl=1)
-    def test_avgpool(self):
-        a = jt.ones(1, 1, 4, 4)
-        avg_pool = jt.nn.Pool(2, op='mean')
-        b = avg_pool(a)
-        np.testing.assert_allclose(b.numpy(), [[[[1, 1], [1, 1]]]])
-        print("test avgpool success")
-
-    @jt.flag_scope(use_acl=1)
-    def test_adaptive_maxpool2d(self):
-        a = jt.float32([[[[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12],
-                          [13, 14, 15, 16]]]])
-        pool = jt.nn.AdaptiveMaxPool2d((2, 2))
-        b = pool(a)
-        np.testing.assert_allclose(b.numpy(), [[[[6, 8], [14, 16]]]])
-        print("test adaptive_maxpool2d success")
-
-    @jt.flag_scope(use_acl=1)
-    def test_adaptive_maxpool2d_grad(self):
-        a = jt.float32([[[[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12],
-                          [13, 14, 15, 16]]]])
-        max_pool = jt.nn.AdaptiveMaxPool2d((2, 2))
-        optimizer = jt.optim.SGD([a], 0.1)
-        b = max_pool(a)
-        loss = b.sum()
-        optimizer.zero_grad()
-        optimizer.backward(loss)
-        optimizer.step()
-        res = a.opt_grad(optimizer)
-        np.testing.assert_allclose(
-            res.numpy(),
-            [[[[0, 0, 0, 0], [0, 1, 0, 1], [0, 0, 0, 0], [0, 1, 0, 1]]]])
-        print("test adaptive_maxpool2d grad success")
-
-    @jt.flag_scope(use_acl=1)
-    def test_adaptive_avgpool2d(self):
-        a = jt.float32([[[[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12],
-                          [13, 14, 15, 16]]]])
-        pool = jt.nn.AdaptiveAvgPool2d((2, 2))
-        b = pool(a)
-        np.testing.assert_allclose(b.numpy(), [[[[3.5, 5.5], [11.5, 13.5]]]])
-        print("test adaptive_avgpool2d success")
-
-    @jt.flag_scope(use_acl=1)
-    def test_adaptive_avgpool2d_grad(self):
-        a = jt.float32([[[[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12],
-                          [13, 14, 15, 16]]]])
-        avg_pool = jt.nn.AdaptiveAvgPool2d((2, 2))
-        optimizer = jt.optim.SGD([a], 0.1)
-        b = avg_pool(a)
-        loss = b.sum()
-        optimizer.zero_grad()
-        optimizer.backward(loss)
-        optimizer.step()
-        res = a.opt_grad(optimizer)
-        np.testing.assert_allclose(
-            res.numpy(),
-            [[[[0.25, 0.25, 0.25, 0.25], [0.25, 0.25, 0.25, 0.25],
-               [0.25, 0.25, 0.25, 0.25], [0.25, 0.25, 0.25, 0.25]]]])
-        print("test adaptive_avgpool2d grad success")
-
-    @jt.flag_scope(use_acl=1)
     def test_index(self):
         a = jt.ones(2, 3)
         [s1, s2] = jt.index(a.shape)

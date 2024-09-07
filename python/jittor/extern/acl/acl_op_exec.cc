@@ -169,9 +169,6 @@ namespace jittor
             // for expand
             aclIntArray *size = nullptr;
 
-            // for add and sub
-            float alphaValue = 1.0f;
-
             // for conv
             aclIntArray *strides = nullptr;
             aclIntArray *pads = nullptr;
@@ -179,13 +176,74 @@ namespace jittor
             aclIntArray *dilations = nullptr;
             int ret = -1;
 
+            // for maxpool
+            aclIntArray *kernel_size = nullptr;
+
+            // for concat
+            aclTensorList *tensor_list = nullptr;
+
             if (name == string("Add") || name == string("Sub"))
             {
-                alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
+
+                if (get_dtype(in_[0]->dtype()) == ACL_FLOAT)
+                {
+                    float alphaValue = 1.0;
+                    alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
+                }
+                else if (get_dtype(in_[0]->dtype()) == ACL_FLOAT16)
+                {
+                    float alphaValue = 1.0;
+                    alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
+                }
+                else if (get_dtype(in_[0]->dtype()) == ACL_INT64)
+                {
+                    int64_t alphaValue = 1;
+                    alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
+                }
+                else if (get_dtype(in_[0]->dtype()) == ACL_INT32)
+                {
+                    int alphaValue = 1;
+                    alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
+                }
+                else if (get_dtype(in_[0]->dtype()) == ACL_INT8)
+                {
+                    int8_t alphaValue = 1;
+                    alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
+                }
+                else if (get_dtype(in_[0]->dtype()) == ACL_INT16)
+                {
+                    int16_t alphaValue = 1;
+                    alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
+                }
+                else if (get_dtype(in_[0]->dtype()) == ACL_UINT8)
+                {
+                    uint8_t alphaValue = 1;
+                    alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
+                }
+                else if (get_dtype(in_[0]->dtype()) == ACL_UINT16)
+                {
+                    uint16_t alphaValue = 1;
+                    alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
+                }
+                else if (get_dtype(in_[0]->dtype()) == ACL_UINT32)
+                {
+                    uint32_t alphaValue = 1;
+                    alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
+                }
+                else if (get_dtype(in_[0]->dtype()) == ACL_BOOL)
+                {
+                    bool alphaValue = true;
+                    alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
+                }
+                else
+                {
+                    LOGf << "Not supported dtype: " << in_[0]->dtype();
+                }
+
                 CHECK_RET(alpha != nullptr, return);
             }
 
-            if (jt_name == "conv" || jt_name == "conv2d" || jt_name == "conv2dbackward")
+            if (jt_name == "conv" || jt_name == "conv2d" || jt_name == "conv2dbackward" || jt_name == "maxpool" || jt_name == "maxpoolbackward")
                 use_nchw = true;
 
             for (int idx = 0; idx < input_num; idx++)
@@ -206,11 +264,29 @@ namespace jittor
                         outputShapes[0] = {};
                 }
             }
-            for (int idx = 0; idx < output_num; idx++)
+            if (jt_name == "conv2dbackward")
             {
-                outputTensors.push_back(nullptr);
-                auto ret = CreateAclTensor(outputShapes[idx], out_[idx]->mem_ptr, out_[idx]->size, get_dtype(out_[idx]->dtype()), &outputTensors[idx], use_nchw);
-                CHECK_RET(ret == ACL_SUCCESS, return);
+                for (int idx = 0; idx < 2; idx++)
+                {
+                    outputTensors.push_back(nullptr);
+                    auto ret = CreateAclTensor(outputShapes[idx], out_[idx]->mem_ptr, out_[idx]->size, get_dtype(out_[idx]->dtype()), &outputTensors[idx], use_nchw);
+                    CHECK_RET(ret == ACL_SUCCESS, return);
+                }
+                // biasgrad nd format
+                {
+                    outputTensors.push_back(nullptr);
+                    auto ret = CreateAclTensor(outputShapes[2], out_[2]->mem_ptr, out_[2]->size, get_dtype(out_[2]->dtype()), &outputTensors[2], false);
+                    CHECK_RET(ret == ACL_SUCCESS, return);
+                }
+            }
+            else
+            {
+                for (int idx = 0; idx < output_num; idx++)
+                {
+                    outputTensors.push_back(nullptr);
+                    auto ret = CreateAclTensor(outputShapes[idx], out_[idx]->mem_ptr, out_[idx]->size, get_dtype(out_[idx]->dtype()), &outputTensors[idx], use_nchw);
+                    CHECK_RET(ret == ACL_SUCCESS, return);
+                }
             }
 
             // 2. 调用CANN算子库aclnnxxxGetWorkspaceSize的接口，两段式接口的第一个
@@ -249,7 +325,7 @@ namespace jittor
                 auto attr = dynamic_cast<RandomAttr *>(op_attr.get());
                 ret = it->second.getWorkspaceSizeFuncRandom(outputTensors[0], int64_t(0), int64_t(1), attr->seed, attr->offset, &workspaceSize, &executor);
             }
-            else if (name == string("Select"))
+            else if (name == string("Select") || name == string("Where"))
             {
                 ret = it->second.getWorkspaceSizeFuncSelect(inputTensors[0], inputTensors[1], inputTensors[2], outputTensors[0], &workspaceSize, &executor);
             }
@@ -262,28 +338,114 @@ namespace jittor
             {
                 ret = it->second.getWorkspaceSizeFuncExpand(inputTensors[0], dim, outputTensors[0], &workspaceSize, &executor);
             }
-            // else if (name == string("Conv2d"))
-            // {
-            //     auto attr = dynamic_cast<ConvAttr *>(op_attr.get());
-            //     strides = aclCreateIntArray(attr->convStrides.data(), 2);
-            //     pads = aclCreateIntArray(attr->convPads.data(), 2);
-            //     outPads = aclCreateIntArray(attr->convOutPads.data(), 2);
-            //     dilations = aclCreateIntArray(attr->convDilations.data(), 2);
+            else if (name == string("Conv2d"))
+            {
+                auto attr = dynamic_cast<ConvAttr *>(op_attr.get());
+                strides = aclCreateIntArray(attr->convStrides.data(), 2);
+                pads = aclCreateIntArray(attr->convPads.data(), 2);
+                outPads = aclCreateIntArray(attr->convOutPads.data(), 2);
+                dilations = aclCreateIntArray(attr->convDilations.data(), 2);
+                aclTensor *bias = nullptr;
+                if (input_num == 3)
+                    bias = inputTensors[2];
 
-            //     ret = it->second.getWorkspaceSizeFuncConv(inputTensors[0], inputTensors[1], nullptr, strides, pads, dilations, false, outPads, attr->group, outputTensors[0], 0, &workspaceSize, &executor);
-            // }
-            // else if (name == string("Conv2dBackward"))
-            // {
-            //     auto attr = dynamic_cast<ConvAttr *>(op_attr.get());
-            //     strides = aclCreateIntArray(attr->convStrides.data(), 2);
-            //     pads = aclCreateIntArray(attr->convPads.data(), 2);
-            //     outPads = aclCreateIntArray(attr->convOutPads.data(), 2);
-            //     dilations = aclCreateIntArray(attr->convDilations.data(), 2);
-            //     bool outputMask[3] = {true, true, false};
-            //     LOGir << attr->group;
-            //     aclBoolArray *outMask = aclCreateBoolArray(outputMask, 3);
-            //     ret = it->second.getWorkspaceSizeFuncConvBackward(inputTensors[0], inputTensors[1], inputTensors[2], nullptr, strides, pads, dilations, false, outPads, attr->group, outMask, 0, outputTensors[0], outputTensors[1], nullptr, &workspaceSize, &executor);
-            // }
+                ret = it->second.getWorkspaceSizeFuncConv(inputTensors[0], inputTensors[1], bias, strides, pads, dilations, false, outPads, attr->group, outputTensors[0], 0, &workspaceSize, &executor);
+            }
+            else if (name == string("Conv2dBackward"))
+            {
+                auto attr = dynamic_cast<ConvAttr *>(op_attr.get());
+                strides = aclCreateIntArray(attr->convStrides.data(), 2);
+                pads = aclCreateIntArray(attr->convPads.data(), 2);
+                outPads = aclCreateIntArray(attr->convOutPads.data(), 2);
+                dilations = aclCreateIntArray(attr->convDilations.data(), 2);
+                bool outputMask[3] = {true, true, true};
+                if (input_num == 3)
+                {
+                    outputMask[2] = false;
+                }
+                aclBoolArray *outMask = aclCreateBoolArray(outputMask, 3);
+                auto biasSizes = aclCreateIntArray(&outputShapes[2][0], outputShapes[2].size());
+                ret = it->second.getWorkspaceSizeFuncConvBackward(inputTensors[0], inputTensors[1], inputTensors[2], biasSizes, strides, pads, dilations, false, outPads, attr->group, outMask, 0, outputTensors[0], outputTensors[1], outputTensors[2], &workspaceSize, &executor);
+            }
+            else if (name == string("Maxpool"))
+            {
+                auto attr = dynamic_cast<PoolAttr *>(op_attr.get());
+                kernel_size = aclCreateIntArray(attr->kernel_size.data(), 2);
+                strides = aclCreateIntArray(attr->poolStrides.data(), 2);
+                pads = aclCreateIntArray(attr->poolPads.data(), 2);
+                dilations = aclCreateIntArray(attr->poolDilations.data(), 2);
+                ret = it->second.getWorkspaceSizeFuncMaxPool(inputTensors[0], kernel_size, strides, pads, dilations, attr->poolCeil, outputTensors[0], outputTensors[1], &workspaceSize, &executor);
+            }
+            else if (name == string("MaxpoolBackward"))
+            {
+                auto attr = dynamic_cast<PoolAttr *>(op_attr.get());
+                kernel_size = aclCreateIntArray(attr->kernel_size.data(), 2);
+                strides = aclCreateIntArray(attr->poolStrides.data(), 2);
+                pads = aclCreateIntArray(attr->poolPads.data(), 2);
+                dilations = aclCreateIntArray(attr->poolDilations.data(), 2);
+                ret = it->second.getWorkspaceSizeFuncMaxPoolBackward(inputTensors[0], inputTensors[1], inputTensors[2], kernel_size, strides, pads, dilations, attr->poolCeil, outputTensors[0], &workspaceSize, &executor);
+            }
+            else if (name == string("Flip"))
+            {
+                auto attr = dynamic_cast<ReduceAttr *>(op_attr.get());
+                dim = aclCreateIntArray(attr->axes.data(), attr->axes.size());
+                ret = it->second.getWorkspaceSizeFuncExpand(inputTensors[0], dim, outputTensors[0], &workspaceSize, &executor);
+            }
+            else if (name == string("Concat"))
+            {
+                auto attr = dynamic_cast<ConcatAttr *>(op_attr.get());
+                CHECK_RET(inputTensors.size() == attr->tensorNum, return);
+                std::vector<const aclTensor *> constTensors(inputTensors.begin(), inputTensors.end());
+                tensor_list = aclCreateTensorList(constTensors.data(), attr->tensorNum);
+                ret = it->second.getWorkspaceSizeFuncConcat(tensor_list, attr->dim, outputTensors[0], &workspaceSize, &executor);
+            }
+            else if (name == string("Gather"))
+            {
+                auto attr = dynamic_cast<GatherAttr *>(op_attr.get());
+                ret = it->second.getWorkspaceSizeFuncGather(inputTensors[0], attr->dim, inputTensors[1], outputTensors[0], &workspaceSize, &executor);
+            }
+            else if (name == string("Cumsum"))
+            {
+                auto attr = dynamic_cast<GatherAttr *>(op_attr.get());
+                ret = it->second.getWorkspaceSizeFuncCumsum(inputTensors[0], attr->dim, get_dtype(out_[0]->dtype()), outputTensors[0], &workspaceSize, &executor);
+            }
+            else if (name == string("Scatter"))
+            {
+                auto attr = dynamic_cast<ScatterAttr *>(op_attr.get());
+                ret = it->second.getWorkspaceSizeFuncScatter(inputTensors[0], attr->axis, inputTensors[1], inputTensors[2], attr->reduction, outputTensors[0], &workspaceSize, &executor);
+            }
+            else if (name == string("Floor"))
+            {
+                ret = it->second.getWorkspaceSizeFuncUnary(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
+            }
+            else if (name == string("Index"))
+            {
+                auto indexTensorList = aclCreateTensorList(&inputTensors[1], input_num - 1);
+                ret = it->second.getWorkspaceSizeFuncIndex(inputTensors[0], indexTensorList, outputTensors[0], &workspaceSize, &executor);
+            }
+            else if (name == string("SliceV2"))
+            {
+                auto attr = dynamic_cast<StrideAttr *>(op_attr.get());
+                auto begins = aclCreateIntArray(attr->begins.data(), attr->begins.size());
+                auto ends = aclCreateIntArray(attr->ends.data(), attr->ends.size());
+                auto steps = aclCreateIntArray(attr->steps.data(), attr->steps.size());
+                auto axes = aclCreateIntArray(attr->axes.data(), attr->axes.size());
+                ret = it->second.getWorkspaceSizeFuncSliceV2(inputTensors[0], begins, ends, axes, steps, outputTensors[0], &workspaceSize, &executor);
+            }
+            else if (name == string("IndexPutImpl"))
+            {
+                std::vector<aclTensor *> indexTensorList = {};
+                for (int i = 1; i < input_num; i++)
+                {
+                    indexTensorList.push_back(inputTensors[i]);
+                }
+                auto indexTensorListInput = aclCreateTensorList(&indexTensorList[0], input_num - 1);
+                ret = it->second.getWorkspaceSizeFuncIndexPutImpl(outputTensors[0], indexTensorListInput, inputTensors[0], false, true, &workspaceSize, &executor);
+            }
+            else if (name == string("StridedSliceAssignV2"))
+            {
+                ret = it->second.getWorkspaceSizeFuncStridedSliceAssignV2(outputTensors[0], inputTensors[0], inputTensors[1], inputTensors[2], inputTensors[3], inputTensors[4], &workspaceSize, &executor);
+            }
             else
                 LOGf << "not supported op " << jt_name;
 
@@ -297,11 +459,9 @@ namespace jittor
             CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnxxxGetWorkspaceSize failed. ERROR: %d\n", name.c_str(), ret); return);
 
             // 4. 根据第一段接口计算出的workspaceSize申请device内存
-            void *workspaceAddr = nullptr;
             if (workspaceSize > 0)
             {
-                ret = aclrtMalloc(&workspaceAddr, workspaceSize, ACL_MEM_MALLOC_HUGE_FIRST);
-                CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: allocate workspace failed. ERROR: %d\n", name.c_str(), ret); return);
+                mallocWorkSpace(workspaceSize);
             }
 
             // 5. 调用aclnnxx第二段接口
@@ -332,12 +492,9 @@ namespace jittor
             aclDestroyIntArray(pads);
             aclDestroyIntArray(outPads);
             aclDestroyIntArray(dilations);
+            aclDestroyIntArray(kernel_size);
+            aclDestroyTensorList(tensor_list);
 
-            // 8. 释放device资源
-            if (workspaceSize > 0)
-            {
-                aclrtFree(workspaceAddr);
-            }
             return;
         }
     };
@@ -546,7 +703,7 @@ namespace jittor
                         LOGf << "op " << rop->ns << " not supported";
                     op.jt_name = "reduce";
                     op.add(rop->x, true);
-                        
+
                     ReduceAttr *attr = new ReduceAttr();
                     for (int i = 0; i < rop->x->shape.size(); i++)
                         if (rop->reduce_mask & (1 << i))
@@ -642,130 +799,6 @@ namespace jittor
              runner.run();
              current_offset += out->numel();
          }},
-        {"cublas_matmul", [&](Op *op)
-         {
-             struct MatmulOp : Op
-             {
-                 Var *a, *b, *c;
-                 bool trans_a, trans_b;
-             };
-             auto _op = (MatmulOp *)op;
-             AclOpRunner runner("MatMul");
-             runner.jt_name = "matmul";
-             runner.add(_op->a, true);
-             runner.add(_op->b, true);
-             runner.add(_op->c, false);
-             runner.run();
-         }},
-        {"cublas_batched_matmul", [&](Op *op)
-         {
-             struct BatchedMatmulOp : Op
-             {
-                 Var *a, *b, *c;
-                 bool adj_x1, adj_x2;
-             };
-             auto _op = (BatchedMatmulOp *)op;
-             AclOpRunner runner("BatchMatMul");
-             runner.jt_name = "bmm";
-             runner.add(_op->a, true);
-             runner.add(_op->b, true);
-             runner.add(_op->c, false);
-             runner.run();
-         }},
-        // {"cudnn_conv", [](Op *op)
-        //  {
-        //      struct ConvOp : Op
-        //      {
-        //          Var *x, *w, *y;
-        //          int strideh, stridew, paddingh, paddingw, dilationh, dilationw, groups;
-        //          string xformat, wformat, yformat;
-        //          void run_acl()
-        //          {
-        //              AclOpRunner runner("Conv2D");
-        //              runner.jt_name = "conv";
-        //              runner.add(x, true);
-        //              runner.add(w, true);
-        //              runner.add(y, false);
-        //              ConvAttr *attr = new ConvAttr();
-
-        //              attr->convStrides = {strideh, stridew, 1, 1};
-        //              attr->convPads = {paddingh, paddingh, paddingw, paddingw};
-        //              attr->convOutPads = {1, 1, 1, 1};
-        //              attr->convDilations = {dilationh, dilationw, 1, 1};
-        //              attr->group = groups;
-        //              runner.op_attr.reset(attr);
-
-        //              runner.run();
-        //          }
-        //      };
-        //      auto _op = (ConvOp *)op;
-        //      _op->run_acl();
-        //  }},
-        // {"cudnn_conv_backward_x", [](Op *op)
-        //  {
-        //      struct ConvBackwardXOp : Op
-        //      {
-        //          Var *w, *dy, *dx;
-        //          int xh, xw, strideh, stridew, paddingh, paddingw, dilationh, dilationw, groups;
-        //          string xformat, wformat, yformat;
-        //          void run_acl()
-        //          {
-        //              /*
-        //              AclOpRunner runner("Conv2DBackpropInput");
-        //              runner.add_input_host_nv32(dx->shape); // 10,3,50,50
-        //              // runner.add_input_host_nv32(dy->shape); // 10,3,50,50
-        //              runner.add(w, true, ACL_FORMAT_NCHW); // 4,3,3,3
-        //              aclSetTensorDescName(runner.input_desc.back(), "filter");
-        //              runner.add(dy, true, ACL_FORMAT_NCHW); // 10,4,48,48
-        //              aclSetTensorDescName(runner.input_desc.back(), "out_backprop");
-        //              runner.add(dx, false, ACL_FORMAT_NCHW); // 10,3,50,50
-        //              aclSetTensorDescName(runner.input_desc.back(), "y");
-        //              runner.set_attr("strides", vector<int64_t>{1,1,strideh,stridew});
-        //              runner.set_attr("pads", vector<int64_t>{paddingh,paddingh,paddingw,paddingw});
-        //              runner.set_attr("dilations", vector<int64_t>{1,1,dilationh,dilationw});
-        //              runner.set_attr("groups", groups);
-        //              runner.set_attr("data_format", "NCHW");
-        //              // runner.set_attr("dataFormat", "NCHW");
-        //              // runner.set_attr("data_format", "NCHW");
-        //              ASSERT(xformat=="abcd" && yformat=="abcd" && wformat=="oihw");
-        //              runner.run();*/
-        //          }
-        //      };
-        //      auto _op = (ConvBackwardXOp *)op;
-        //      _op->run_acl();
-        //  }},
-        // {"cudnn_conv_backward_w", [](Op *op)
-        //  {
-        //      struct ConvBackwardWOp : Op
-        //      {
-        //          Var *x, *dy, *dw;
-        //          int kh, kw, strideh, stridew, paddingh, paddingw, dilationh, dilationw, groups;
-        //          string xformat, wformat, yformat;
-        //          void run_acl()
-        //          {
-        //              /*
-        //               AclOpRunner runner("Conv2DBackpropFilter");
-        //               runner.add(x, true, ACL_FORMAT_NCHW);
-        //               runner.add_input_host_nv32(dw->shape);
-        //               runner.add(dy, true, ACL_FORMAT_NCHW);
-        //               runner.add(dw, false, ACL_FORMAT_NCHW);
-        //               runner.set_attr("strides", vector<int64_t>{1, 1, strideh, stridew});
-        //               runner.set_attr("pads", vector<int64_t>{paddingh, paddingh, paddingw, paddingw});
-        //               runner.set_attr("dilations", vector<int64_t>{1, 1, dilationh, dilationw});
-        //               runner.set_attr("groups", groups);
-        //               runner.set_attr("data_format", "NCHW");
-        //               // runner.set_attr("dataFormat", "NCHW");
-        //               // runner.set_attr("data_format", "NCHW");
-        //               // runner.set_attr("data_origin_format", "NCHW");
-        //               ASSERT(xformat == "abcd" && yformat == "abcd" && wformat == "oihw");
-        //               runner.run();
-        //               */
-        //          }
-        //      };
-        //      auto _op = (ConvBackwardWOp *)op;
-        //      _op->run_acl();
-        //  }},
-        // {"cub_arg_reduce", }
     };
 
     static void exec_mapped_acl_ops(Op *op)

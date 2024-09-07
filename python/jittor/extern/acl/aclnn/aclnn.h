@@ -64,7 +64,19 @@
 #include "aclnnop/aclnn_random.h"
 #include "aclnnop/aclnn_normal.h"
 #include "aclnnop/aclnn_permute.h"
-
+#include "aclnnop/aclnn_max_pool2d_with_indices.h"
+#include "aclnnop/aclnn_max_pool2d_with_indices_backward.h"
+#include "aclnnop/aclnn_avgpool2d.h"
+#include "aclnnop/aclnn_flip.h"
+#include "aclnnop/aclnn_cat.h"
+#include "aclnnop/aclnn_gather.h"
+#include "aclnnop/aclnn_cumsum.h"
+#include "aclnnop/aclnn_index.h"
+#include "aclnnop/aclnn_scatter.h"
+#include "aclnnop/aclnn_index.h"
+#include "aclnnop/aclnn_strided_slice_assign_v2.h"
+#include "aclnnop/aclnn_slice_v2.h"
+#include "aclnnop/aclnn_index_put_impl.h"
 
 #define CHECK_RET(cond, return_expr) \
   do                                 \

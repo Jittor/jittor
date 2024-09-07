@@ -15,6 +15,9 @@ namespace jittor
 
     EXTERN_LIB uint64_t acl_jittor_tid;
     EXTERN_LIB aclrtStream aclstream;
+    EXTERN_LIB void *workspaceAddr;
+
+    void mallocWorkSpace(uint64_t size);
 
     void acl_jittor_op_compiler(string &filename, string &src, bool is_acl, string &extra_flags);
 
@@ -28,7 +31,7 @@ namespace jittor
         std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncBinary;
         // for Add and Sub
         std::function<aclnnStatus(aclTensor *, aclTensor *, aclScalar *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncAdd;
-        // for Expand and permute
+        // for Expand, permute, flip
         std::function<aclnnStatus(aclTensor *, aclIntArray *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncExpand;
         // for bmm and matmul
         std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, int8_t, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncMatmul;
@@ -42,10 +45,32 @@ namespace jittor
         std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, aclIntArray *, aclIntArray *, aclIntArray *, aclIntArray *, bool, aclIntArray *, int, aclBoolArray *, int8_t, aclTensor *, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncConvBackward;
         // for proddim
         std::function<aclnnStatus(aclTensor *, int64_t, bool, aclDataType, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncProdDim;
-        // for select
+        // for select, where
         std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncSelect;
         // for random_uniform and random_normal
         std::function<aclnnStatus(aclTensor *, int64_t, int64_t, int64_t, int64_t, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncRandom;
+        // for maxpool
+        std::function<aclnnStatus(aclTensor *, aclIntArray *, aclIntArray *, aclIntArray *, aclIntArray *, bool, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncMaxPool;
+        // for maxpool backward
+        std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, aclIntArray *, aclIntArray *, aclIntArray *, aclIntArray *, bool, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncMaxPoolBackward;
+        // for avgpool
+        std::function<aclnnStatus(aclTensor *, aclIntArray *, aclIntArray *, aclIntArray *, bool, bool, int64_t, int8_t, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncAvgPool;
+        // for concat
+        std::function<aclnnStatus(aclTensorList *, uint64_t, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncConcat;
+        // for gather
+        std::function<aclnnStatus(aclTensor *, uint64_t, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncGather;
+        // for cumsum
+        std::function<aclnnStatus(aclTensor *, uint64_t, aclDataType, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncCumsum;
+        // for scatter
+        std::function<aclnnStatus(aclTensor *, uint64_t, aclTensor *, aclTensor *, uint64_t, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncScatter;
+        // for index
+        std::function<aclnnStatus(aclTensor *, aclTensorList *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncIndex;
+        // for stridesliceassign
+        std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncStridedSliceAssignV2;
+        // for slicev2
+        std::function<aclnnStatus(aclTensor *, aclIntArray *, aclIntArray *, aclIntArray *, aclIntArray *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncSliceV2;
+        // for indexputimpl
+        std::function<aclnnStatus(aclTensor *, aclTensorList *, aclTensor *, bool, bool, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncIndexPutImpl;
 
         std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, aclrtStream)> executeFunc;
 
@@ -71,7 +96,7 @@ namespace jittor
                        std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
             : getWorkspaceSizeFuncAdd(gwsf), executeFunc(execf) {}
 
-        // for Expand
+        // for Expand, flip
         AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclIntArray *, aclTensor *, uint64_t *, aclOpExecutor **)> gwsf,
                        std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
             : getWorkspaceSizeFuncExpand(gwsf), executeFunc(execf) {}
@@ -106,7 +131,7 @@ namespace jittor
                        std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
             : getWorkspaceSizeFuncProdDim(gwsf), executeFunc(execf) {}
 
-        // for select
+        // for select, where
         AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> gwsf,
                        std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
             : getWorkspaceSizeFuncSelect(gwsf), executeFunc(execf) {}
@@ -115,6 +140,61 @@ namespace jittor
         AclOpFunctions(std::function<aclnnStatus(aclTensor *, int64_t, int64_t, int64_t, int64_t, uint64_t *, aclOpExecutor **)> gwsf,
                        std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
             : getWorkspaceSizeFuncRandom(gwsf), executeFunc(execf) {}
+
+        // for maxpool
+        AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclIntArray *, aclIntArray *, aclIntArray *, aclIntArray *, bool, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> gwsf,
+                       std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
+            : getWorkspaceSizeFuncMaxPool(gwsf), executeFunc(execf) {}
+
+        // for maxpool backward
+        AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, aclIntArray *, aclIntArray *, aclIntArray *, aclIntArray *, bool, aclTensor *, uint64_t *, aclOpExecutor **)> gwsf,
+                       std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
+            : getWorkspaceSizeFuncMaxPoolBackward(gwsf), executeFunc(execf) {}
+
+        // for avgpool
+        AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclIntArray *, aclIntArray *, aclIntArray *, bool, bool, int64_t, int8_t, aclTensor *, uint64_t *, aclOpExecutor **)> gwsf,
+                       std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
+            : getWorkspaceSizeFuncAvgPool(gwsf), executeFunc(execf) {}
+
+        // for concat
+        AclOpFunctions(std::function<aclnnStatus(aclTensorList *, int64_t, aclTensor *, uint64_t *, aclOpExecutor **)> gwsf,
+                       std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
+            : getWorkspaceSizeFuncConcat(gwsf), executeFunc(execf) {}
+
+        // for gather
+        AclOpFunctions(std::function<aclnnStatus(aclTensor *, int64_t, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> gwsf,
+                       std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
+            : getWorkspaceSizeFuncGather(gwsf), executeFunc(execf) {}
+
+        // for cumsum
+        AclOpFunctions(std::function<aclnnStatus(aclTensor *, int64_t, aclDataType, aclTensor *, uint64_t *, aclOpExecutor **)> gwsf,
+                       std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
+            : getWorkspaceSizeFuncCumsum(gwsf), executeFunc(execf) {}
+
+        // for scatter
+        AclOpFunctions(std::function<aclnnStatus(aclTensor *, uint64_t, aclTensor *, aclTensor *, uint64_t, aclTensor *, uint64_t *, aclOpExecutor **)> gwsf,
+                       std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
+            : getWorkspaceSizeFuncScatter(gwsf), executeFunc(execf) {}
+
+        // for index
+        AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclTensorList *, aclTensor *, uint64_t *, aclOpExecutor **)> gwsf,
+                       std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
+            : getWorkspaceSizeFuncIndex(gwsf), executeFunc(execf) {}
+
+        // for stridesliceassignv2
+        AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> gwsf,
+                       std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
+            : getWorkspaceSizeFuncStridedSliceAssignV2(gwsf), executeFunc(execf) {}
+
+        // for slicev2
+        AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclIntArray *, aclIntArray *, aclIntArray *, aclIntArray *, aclTensor *, uint64_t *, aclOpExecutor **)> gwsf,
+                       std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
+            : getWorkspaceSizeFuncSliceV2(gwsf), executeFunc(execf) {}
+
+        // for indexputimpl
+        AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclTensorList *, aclTensor *, bool, bool, uint64_t *, aclOpExecutor **)> gwsf,
+                       std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
+            : getWorkspaceSizeFuncIndexPutImpl(gwsf), executeFunc(execf) {}
     };
 
     static std::unordered_map<std::string, AclOpFunctions> aclOpFuncMap = {
@@ -180,6 +260,19 @@ namespace jittor
         {"RandomUniform", AclOpFunctions(aclnnInplaceRandomGetWorkspaceSize, aclnnInplaceRandom)},
         {"RandomNormal", AclOpFunctions(aclnnInplaceNormalGetWorkspaceSize, aclnnInplaceNormal)},
         {"Transpose", AclOpFunctions(aclnnPermuteGetWorkspaceSize, aclnnPermute)},
+        {"Maxpool", AclOpFunctions(aclnnMaxPool2dWithIndicesGetWorkspaceSize, aclnnMaxPool2dWithIndices)},
+        {"MaxpoolBackward", AclOpFunctions(aclnnMaxPool2dWithIndicesBackwardGetWorkspaceSize, aclnnMaxPool2dWithIndicesBackward)},
+        {"Flip", AclOpFunctions(aclnnFlipGetWorkspaceSize, aclnnFlip)},
+        {"Concat", AclOpFunctions(aclnnCatGetWorkspaceSize, aclnnCat)},
+        {"Gather", AclOpFunctions(aclnnGatherGetWorkspaceSize, aclnnGather)},
+        {"Cumsum", AclOpFunctions(aclnnCumsumGetWorkspaceSize, aclnnCumsum)},
+        {"Index", AclOpFunctions(aclnnIndexGetWorkspaceSize, aclnnIndex)},
+        {"Scatter", AclOpFunctions(aclnnScatterGetWorkspaceSize, aclnnScatter)},
+        {"Where", AclOpFunctions(aclnnSWhereGetWorkspaceSize, aclnnSWhere)},
+        {"Floor", AclOpFunctions(aclnnFloorGetWorkspaceSize, aclnnFloor)},
+        {"StridedSliceAssignV2", AclOpFunctions(aclnnStridedSliceAssignV2GetWorkspaceSize, aclnnStridedSliceAssignV2)},
+        {"SliceV2", AclOpFunctions(aclnnSliceV2GetWorkspaceSize, aclnnSliceV2)},
+        {"IndexPutImpl", AclOpFunctions(aclnnIndexPutImplGetWorkspaceSize, aclnnIndexPutImpl)},
     };
 
     struct AclOpAttr
@@ -235,6 +328,68 @@ namespace jittor
 
         ~TriuAttr()
         {
+        }
+    };
+
+    struct PoolAttr : AclOpAttr
+    {
+        vector<int64_t> kernel_size;
+        vector<int64_t> poolStrides;
+        vector<int64_t> poolPads;
+        vector<int64_t> poolDilations;
+        bool poolCeil;
+
+        // 析构函数
+        ~PoolAttr()
+        {
+            kernel_size.clear();
+            poolStrides.clear();
+            poolPads.clear();
+            poolDilations.clear();
+        }
+    };
+
+    struct ConcatAttr : AclOpAttr
+    {
+        int64_t tensorNum;
+        int64_t dim;
+
+        ~ConcatAttr()
+        {
+        }
+    };
+
+    struct GatherAttr : AclOpAttr
+    {
+        int64_t dim;
+
+        ~GatherAttr()
+        {
+        }
+    };
+
+    struct ScatterAttr : AclOpAttr
+    {
+        int64_t axis;
+        int64_t reduction;
+
+        ~ScatterAttr()
+        {
+        }
+    };
+
+    struct StrideAttr : AclOpAttr
+    {
+        vector<int64_t> begins;
+        vector<int64_t> ends;
+        vector<int64_t> steps;
+        vector<int64_t> axes;
+        ~StrideAttr()
+        {
+            begins.clear();
+            ends.clear();
+            steps.clear();
+            axes.clear();
         }
     };
 

@@ -105,11 +105,11 @@ namespace jittor
             // for reduce
             std::vector<int64_t> axes;
             aclIntArray *dim = nullptr;
+            bool keepdims;
 
             bool use_nchw = false;
 
             auto input_num = in_.size();
-
             auto output_num = out_.size();
 
             for (int input_idx = 0; input_idx < input_num; input_idx++)
@@ -141,9 +141,6 @@ namespace jittor
             // for expand
             aclIntArray *size = nullptr;
 
-            // for add and sub
-            float alphaValue = 1.0f;
-
             // for conv
             aclIntArray *strides = nullptr;
             aclIntArray *pads = nullptr;
@@ -151,13 +148,74 @@ namespace jittor
             aclIntArray *dilations = nullptr;
             int ret = -1;
 
+            // for maxpool
+            aclIntArray *kernel_size = nullptr;
+
+            // for concat
+            aclTensorList *tensor_list = nullptr;
+
             if (name == string("Add") || name == string("Sub"))
             {
-                alpha = aclCreateScalar(&alphaValue, aclDataType::ACL_FLOAT);
+
+                if (get_dtype(in_[0]->dtype()) == ACL_FLOAT)
+                {
+                    float alphaValue = 1.0;
+                    alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
+                }
+                else if (get_dtype(in_[0]->dtype()) == ACL_FLOAT16)
+                {
+                    float alphaValue = 1.0;
+                    alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
+                }
+                else if (get_dtype(in_[0]->dtype()) == ACL_INT64)
+                {
+                    int64_t alphaValue = 1;
+                    alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
+                }
+                else if (get_dtype(in_[0]->dtype()) == ACL_INT32)
+                {
+                    int alphaValue = 1;
+                    alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
+                }
+                else if (get_dtype(in_[0]->dtype()) == ACL_INT8)
+                {
+                    int8_t alphaValue = 1;
+                    alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
+                }
+                else if (get_dtype(in_[0]->dtype()) == ACL_INT16)
+                {
+                    int16_t alphaValue = 1;
+                    alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
+                }
+                else if (get_dtype(in_[0]->dtype()) == ACL_UINT8)
+                {
+                    uint8_t alphaValue = 1;
+                    alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
+                }
+                else if (get_dtype(in_[0]->dtype()) == ACL_UINT16)
+                {
+                    uint16_t alphaValue = 1;
+                    alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
+                }
+                else if (get_dtype(in_[0]->dtype()) == ACL_UINT32)
+                {
+                    uint32_t alphaValue = 1;
+                    alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
+                }
+                else if (get_dtype(in_[0]->dtype()) == ACL_BOOL)
+                {
+                    bool alphaValue = true;
+                    alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
+                }
+                else
+                {
+                    LOGf << "Not supported dtype: " << in_[0]->dtype();
+                }
+
                 CHECK_RET(alpha != nullptr, return);
             }
 
-            if (jt_name == "conv" || jt_name == "conv2d" || jt_name == "conv2dbackward")
+            if (jt_name == "conv" || jt_name == "conv2d" || jt_name == "conv2dbackward" || jt_name == "maxpool" || jt_name == "maxpoolbackward")
                 use_nchw = true;
 
             for (int idx = 0; idx < input_num; idx++)
@@ -167,22 +225,40 @@ namespace jittor
                 CHECK_RET(ret == ACL_SUCCESS, return);
             }
 
-            if (jt_name == "reduce")
+            if (jt_name == "reduce" || jt_name == "transpose")
             {
                 auto attr = dynamic_cast<ReduceAttr *>(op_attr.get());
                 dim = aclCreateIntArray(attr->axes.data(), attr->axes.size());
-
+                keepdims = attr->keepdims;
                 if (name == string("ReduceMax") || name == string("ReduceMin") || name == string("ReduceMean") || name == string("ReduceProd"))
                 {
                     if (attr->axes.size() == in_[0]->shape.size())
                         outputShapes[0] = {};
                 }
             }
-            for (int idx = 0; idx < output_num; idx++)
+            if (jt_name == "conv2dbackward")
             {
-                outputTensors.push_back(nullptr);
-                auto ret = CreateAclTensor(outputShapes[idx], out_[idx]->mem_ptr, out_[idx]->size, get_dtype(out_[idx]->dtype()), &outputTensors[idx], use_nchw);
-                CHECK_RET(ret == ACL_SUCCESS, return);
+                for (int idx = 0; idx < 2; idx++)
+                {
+                    outputTensors.push_back(nullptr);
+                    auto ret = CreateAclTensor(outputShapes[idx], out_[idx]->mem_ptr, out_[idx]->size, get_dtype(out_[idx]->dtype()), &outputTensors[idx], use_nchw);
+                    CHECK_RET(ret == ACL_SUCCESS, return);
+                }
+                // biasgrad nd format
+                {
+                    outputTensors.push_back(nullptr);
+                    auto ret = CreateAclTensor(outputShapes[2], out_[2]->mem_ptr, out_[2]->size, get_dtype(out_[2]->dtype()), &outputTensors[2], false);
+                    CHECK_RET(ret == ACL_SUCCESS, return);
+                }
+            }
+            else
+            {
+                for (int idx = 0; idx < output_num; idx++)
+                {
+                    outputTensors.push_back(nullptr);
+                    auto ret = CreateAclTensor(outputShapes[idx], out_[idx]->mem_ptr, out_[idx]->size, get_dtype(out_[idx]->dtype()), &outputTensors[idx], use_nchw);
+                    CHECK_RET(ret == ACL_SUCCESS, return);
+                }
             }
 
             // 2. 调用CANN算子库aclnnxxxGetWorkspaceSize的接口，两段式接口的第一个
@@ -206,17 +282,22 @@ namespace jittor
                 ret = it->second.getWorkspaceSizeFuncMatmul(inputTensors[0], inputTensors[1], outputTensors[0], 1, &workspaceSize, &executor);
             else if (name == string("ReduceSum") || name == string("ReduceMean"))
             {
-                ret = it->second.getWorkspaceSizeFuncReduceSum(inputTensors[0], dim, false, get_dtype(out_[0]->dtype()), outputTensors[0], &workspaceSize, &executor);
+                ret = it->second.getWorkspaceSizeFuncReduceSum(inputTensors[0], dim, keepdims, get_dtype(out_[0]->dtype()), outputTensors[0], &workspaceSize, &executor);
             }
             else if (name == string("ReduceMax") || name == string("ReduceMin"))
             {
-                ret = it->second.getWorkspaceSizeFuncAmax(inputTensors[0], dim, false, outputTensors[0], &workspaceSize, &executor);
+                ret = it->second.getWorkspaceSizeFuncAmax(inputTensors[0], dim, keepdims, outputTensors[0], &workspaceSize, &executor);
             }
             // else if (name == string("ReduceProd"))
             // {
             //     ret = it->second.getWorkspaceSizeFuncReduceProd(inputTensors[0], dim, false, outputTensors[0], &workspaceSize, &executor);
             // }
-            else if (name == string("Select"))
+            else if (name == string("RandomUniform") || name == string("RandomNormal"))
+            {
+                auto attr = dynamic_cast<RandomAttr *>(op_attr.get());
+                ret = it->second.getWorkspaceSizeFuncRandom(outputTensors[0], int64_t(0), int64_t(1), attr->seed, attr->offset, &workspaceSize, &executor);
+            }
+            else if (name == string("Select") || name == string("Where"))
             {
                 ret = it->second.getWorkspaceSizeFuncSelect(inputTensors[0], inputTensors[1], inputTensors[2], outputTensors[0], &workspaceSize, &executor);
             }
@@ -225,6 +306,10 @@ namespace jittor
                 auto attr = dynamic_cast<TriuAttr *>(op_attr.get());
                 ret = it->second.getWorkspaceSizeFuncCast(inputTensors[0], aclDataType(attr->diagonal), outputTensors[0], &workspaceSize, &executor);
             }
+            else if (name == string("Transpose"))
+            {
+                ret = it->second.getWorkspaceSizeFuncExpand(inputTensors[0], dim, outputTensors[0], &workspaceSize, &executor);
+            }
             else if (name == string("Conv2d"))
             {
                 auto attr = dynamic_cast<ConvAttr *>(op_attr.get());
@@ -232,8 +317,11 @@ namespace jittor
                 pads = aclCreateIntArray(attr->convPads.data(), 2);
                 outPads = aclCreateIntArray(attr->convOutPads.data(), 2);
                 dilations = aclCreateIntArray(attr->convDilations.data(), 2);
+                aclTensor *bias = nullptr;
+                if (input_num == 3)
+                    bias = inputTensors[2];
 
-                ret = it->second.getWorkspaceSizeFuncConv(inputTensors[0], inputTensors[1], nullptr, strides, pads, dilations, false, outPads, attr->group, outputTensors[0], 0, &workspaceSize, &executor);
+                ret = it->second.getWorkspaceSizeFuncConv(inputTensors[0], inputTensors[1], bias, strides, pads, dilations, false, outPads, attr->group, outputTensors[0], 0, &workspaceSize, &executor);
             }
             else if (name == string("Conv2dBackward"))
             {
@@ -242,9 +330,93 @@ namespace jittor
                 pads = aclCreateIntArray(attr->convPads.data(), 2);
                 outPads = aclCreateIntArray(attr->convOutPads.data(), 2);
                 dilations = aclCreateIntArray(attr->convDilations.data(), 2);
-                bool outputMask[3] = {true, true, false};
+                bool outputMask[3] = {true, true, true};
+                if (input_num == 3)
+                {
+                    outputMask[2] = false;
+                }
                 aclBoolArray *outMask = aclCreateBoolArray(outputMask, 3);
-                ret = it->second.getWorkspaceSizeFuncConvBackward(inputTensors[0], inputTensors[1], inputTensors[2], nullptr, strides, pads, dilations, false, outPads, attr->group, outMask, 0, outputTensors[0], outputTensors[1], nullptr, &workspaceSize, &executor);
+                auto biasSizes = aclCreateIntArray(&outputShapes[2][0], outputShapes[2].size());
+                ret = it->second.getWorkspaceSizeFuncConvBackward(inputTensors[0], inputTensors[1], inputTensors[2], biasSizes, strides, pads, dilations, false, outPads, attr->group, outMask, 0, outputTensors[0], outputTensors[1], outputTensors[2], &workspaceSize, &executor);
+            }
+            else if (name == string("Maxpool"))
+            {
+                auto attr = dynamic_cast<PoolAttr *>(op_attr.get());
+                kernel_size = aclCreateIntArray(attr->kernel_size.data(), 2);
+                strides = aclCreateIntArray(attr->poolStrides.data(), 2);
+                pads = aclCreateIntArray(attr->poolPads.data(), 2);
+                dilations = aclCreateIntArray(attr->poolDilations.data(), 2);
+                ret = it->second.getWorkspaceSizeFuncMaxPool(inputTensors[0], kernel_size, strides, pads, dilations, attr->poolCeil, outputTensors[0], outputTensors[1], &workspaceSize, &executor);
+            }
+            else if (name == string("MaxpoolBackward"))
+            {
+                auto attr = dynamic_cast<PoolAttr *>(op_attr.get());
+                kernel_size = aclCreateIntArray(attr->kernel_size.data(), 2);
+                strides = aclCreateIntArray(attr->poolStrides.data(), 2);
+                pads = aclCreateIntArray(attr->poolPads.data(), 2);
+                dilations = aclCreateIntArray(attr->poolDilations.data(), 2);
+                ret = it->second.getWorkspaceSizeFuncMaxPoolBackward(inputTensors[0], inputTensors[1], inputTensors[2], kernel_size, strides, pads, dilations, attr->poolCeil, outputTensors[0], &workspaceSize, &executor);
+            }
+            else if (name == string("Flip"))
+            {
+                auto attr = dynamic_cast<ReduceAttr *>(op_attr.get());
+                dim = aclCreateIntArray(attr->axes.data(), attr->axes.size());
+                ret = it->second.getWorkspaceSizeFuncExpand(inputTensors[0], dim, outputTensors[0], &workspaceSize, &executor);
+            }
+            else if (name == string("Concat"))
+            {
+                auto attr = dynamic_cast<ConcatAttr *>(op_attr.get());
+                CHECK_RET(inputTensors.size() == attr->tensorNum, return);
+                std::vector<const aclTensor *> constTensors(inputTensors.begin(), inputTensors.end());
+                tensor_list = aclCreateTensorList(constTensors.data(), attr->tensorNum);
+                ret = it->second.getWorkspaceSizeFuncConcat(tensor_list, attr->dim, outputTensors[0], &workspaceSize, &executor);
+            }
+            else if (name == string("Gather"))
+            {
+                auto attr = dynamic_cast<GatherAttr *>(op_attr.get());
+                ret = it->second.getWorkspaceSizeFuncGather(inputTensors[0], attr->dim, inputTensors[1], outputTensors[0], &workspaceSize, &executor);
+            }
+            else if (name == string("Cumsum"))
+            {
+                auto attr = dynamic_cast<GatherAttr *>(op_attr.get());
+                ret = it->second.getWorkspaceSizeFuncCumsum(inputTensors[0], attr->dim, get_dtype(out_[0]->dtype()), outputTensors[0], &workspaceSize, &executor);
+            }
+            else if (name == string("Scatter"))
+            {
+                auto attr = dynamic_cast<ScatterAttr *>(op_attr.get());
+                ret = it->second.getWorkspaceSizeFuncScatter(inputTensors[0], attr->axis, inputTensors[1], inputTensors[2], attr->reduction, outputTensors[0], &workspaceSize, &executor);
+            }
+            else if (name == string("Floor"))
+            {
+                ret = it->second.getWorkspaceSizeFuncUnary(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
+            }
+            else if (name == string("Index"))
+            {
+                auto indexTensorList = aclCreateTensorList(&inputTensors[1], input_num - 1);
+                ret = it->second.getWorkspaceSizeFuncIndex(inputTensors[0], indexTensorList, outputTensors[0], &workspaceSize, &executor);
+            }
+            else if (name == string("SliceV2"))
+            {
+                auto attr = dynamic_cast<StrideAttr *>(op_attr.get());
+                auto begins = aclCreateIntArray(attr->begins.data(), attr->begins.size());
+                auto ends = aclCreateIntArray(attr->ends.data(), attr->ends.size());
+                auto steps = aclCreateIntArray(attr->steps.data(), attr->steps.size());
+                auto axes = aclCreateIntArray(attr->axes.data(), attr->axes.size());
+                ret = it->second.getWorkspaceSizeFuncSliceV2(inputTensors[0], begins, ends, axes, steps, outputTensors[0], &workspaceSize, &executor);
+            }
+            else if (name == string("IndexPutImpl"))
+            {
+                std::vector<aclTensor *> indexTensorList = {};
+                for (int i = 1; i < input_num; i++)
+                {
+                    indexTensorList.push_back(inputTensors[i]);
+                }
+                auto indexTensorListInput = aclCreateTensorList(&indexTensorList[0], input_num - 1);
+                ret = it->second.getWorkspaceSizeFuncIndexPutImpl(outputTensors[0], indexTensorListInput, inputTensors[0], false, true, &workspaceSize, &executor);
+            }
+            else if (name == string("StridedSliceAssignV2"))
+            {
+                ret = it->second.getWorkspaceSizeFuncStridedSliceAssignV2(outputTensors[0], inputTensors[0], inputTensors[1], inputTensors[2], inputTensors[3], inputTensors[4], &workspaceSize, &executor);
             }
             else
                 LOGf << "not supported op " << jt_name;
@@ -253,17 +425,15 @@ namespace jittor
             if (ret != ACL_SUCCESS)
             {
                 auto tmp_err_msg = aclGetRecentErrMsg();
-                LOGir << tmp_err_msg;
+                LOGir << name << ", " << tmp_err_msg;
             }
 
             CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnxxxGetWorkspaceSize failed. ERROR: %d\n", name.c_str(), ret); return);
 
             // 4. 根据第一段接口计算出的workspaceSize申请device内存
-            void *workspaceAddr = nullptr;
             if (workspaceSize > 0)
             {
-                ret = aclrtMalloc(&workspaceAddr, workspaceSize, ACL_MEM_MALLOC_HUGE_FIRST);
-                CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: allocate workspace failed. ERROR: %d\n", name.c_str(), ret); return);
+                mallocWorkSpace(workspaceSize);
             }
 
             // 5. 调用aclnnxx第二段接口
@@ -294,12 +464,9 @@ namespace jittor
             aclDestroyIntArray(pads);
             aclDestroyIntArray(outPads);
             aclDestroyIntArray(dilations);
+            aclDestroyIntArray(kernel_size);
+            aclDestroyTensorList(tensor_list);
 
-            // 8. 释放device资源
-            if (workspaceSize > 0)
-            {
-                aclrtFree(workspaceAddr);
-            }
             return;
         }
     };

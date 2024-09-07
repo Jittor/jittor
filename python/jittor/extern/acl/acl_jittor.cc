@@ -10,6 +10,7 @@
 #include "utils/str_utils.h"
 #include <chrono>
 #include <thread>
+#include "aclnn/aclnn.h"
 
 namespace jittor
 {
@@ -17,9 +18,23 @@ namespace jittor
     uint64_t acl_jittor_tid;
     int acl_jittor_thread_running = 0;
     aclrtStream aclstream;
+    void *workspaceAddr = nullptr;
+    uint64_t nowWorkSpaceSize = 0;
 
 #define CHECK_ACL(x) ASSERTop(x, ==, 0)
 
+    void mallocWorkSpace(uint64_t size)
+    {
+        uint64_t alloc_size = size + 32;
+        alloc_size = ((alloc_size - 1) / 32 + 1) * 32;
+        if (alloc_size > nowWorkSpaceSize)
+        {
+            aclrtFree(workspaceAddr);
+            nowWorkSpaceSize = alloc_size;
+            auto ret = aclrtMalloc(&workspaceAddr, nowWorkSpaceSize, ACL_MEM_MALLOC_HUGE_FIRST);
+            CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("allocate workspace failed. ERROR: %d\n", ret); return);
+        }
+    }
     static void *acl_jittor_process_callback(void *)
     {
         acl_jittor_thread_running = 1;
@@ -63,6 +78,10 @@ namespace jittor
             aclrtDestroyStream(aclstream);
             aclrtResetDevice(deviceId);
             CHECK_ACL(aclFinalize());
+            if (nowWorkSpaceSize > 0)
+            {
+                aclrtFree(workspaceAddr);
+            }
         }
 
     } _acl_jittor_initer;
