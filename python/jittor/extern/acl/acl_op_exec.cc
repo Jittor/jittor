@@ -179,8 +179,13 @@ namespace jittor
             // for maxpool
             aclIntArray *kernel_size = nullptr;
 
-            // for concat
-            aclTensorList *tensor_list = nullptr;
+            // for range
+            aclScalar *start = nullptr;
+            aclScalar *end = nullptr;
+            aclScalar *step = nullptr;
+
+            // for leaky_relu
+            aclScalar *negativeSlope = nullptr;
 
             if (name == string("Add") || name == string("Sub"))
             {
@@ -243,7 +248,7 @@ namespace jittor
                 CHECK_RET(alpha != nullptr, return);
             }
 
-            if (jt_name == "conv" || jt_name == "conv2d" || jt_name == "conv2dbackward" || jt_name == "maxpool" || jt_name == "maxpoolbackward")
+            if (jt_name == "conv" || jt_name == "conv2d" || jt_name == "conv2dbackward" || jt_name == "maxpool" || jt_name == "maxpoolbackward" || jt_name == "avgpool" || jt_name == "avgpoolbackward")
                 use_nchw = true;
 
             for (int idx = 0; idx < input_num; idx++)
@@ -264,6 +269,18 @@ namespace jittor
                         outputShapes[0] = {};
                 }
             }
+
+            if (jt_name == "range")
+            {
+                auto attr = dynamic_cast<RangeAttr *>(op_attr.get());
+                int64_t startValue = attr->start;
+                int64_t endValue = attr->end;
+                int64_t stepValue = attr->step;
+                start = aclCreateScalar(&startValue, aclDataType::ACL_INT64);
+                end = aclCreateScalar(&endValue, aclDataType::ACL_INT64);
+                step = aclCreateScalar(&stepValue, aclDataType::ACL_INT64);
+            }
+
             if (jt_name == "conv2dbackward")
             {
                 for (int idx = 0; idx < 2; idx++)
@@ -385,6 +402,22 @@ namespace jittor
                 dilations = aclCreateIntArray(attr->poolDilations.data(), 2);
                 ret = it->second.getWorkspaceSizeFuncMaxPoolBackward(inputTensors[0], inputTensors[1], inputTensors[2], kernel_size, strides, pads, dilations, attr->poolCeil, outputTensors[0], &workspaceSize, &executor);
             }
+            else if (name == string("Avgpool"))
+            {
+                auto attr = dynamic_cast<PoolAttr *>(op_attr.get());
+                kernel_size = aclCreateIntArray(attr->kernel_size.data(), 2);
+                strides = aclCreateIntArray(attr->poolStrides.data(), 2);
+                pads = aclCreateIntArray(attr->poolPads.data(), 2);
+                ret = it->second.getWorkspaceSizeFuncAvgPool(inputTensors[0], kernel_size, strides, pads, attr->poolCeil, attr->countIncludePad, attr->divisorOverride, attr->divisorOverride, outputTensors[0], &workspaceSize, &executor);
+            }
+            else if (name == string("AvgpoolBackward"))
+            {
+                auto attr = dynamic_cast<PoolAttr *>(op_attr.get());
+                kernel_size = aclCreateIntArray(attr->kernel_size.data(), 2);
+                strides = aclCreateIntArray(attr->poolStrides.data(), 2);
+                pads = aclCreateIntArray(attr->poolPads.data(), 2);
+                ret = it->second.getWorkspaceSizeFuncAvgPoolBackward(inputTensors[0], inputTensors[1], kernel_size, strides, pads, attr->countIncludePad, attr->divisorOverride, attr->divisorOverride, attr->poolCeil, outputTensors[0], &workspaceSize, &executor);
+            }
             else if (name == string("Flip"))
             {
                 auto attr = dynamic_cast<ReduceAttr *>(op_attr.get());
@@ -393,11 +426,14 @@ namespace jittor
             }
             else if (name == string("Concat"))
             {
+                std::vector<aclTensor *> concatTensorList = {};
+                for (int i = 0; i < input_num; i++)
+                {
+                    concatTensorList.push_back(inputTensors[i]);
+                }
+                auto concatTensorListInput = aclCreateTensorList(&concatTensorList[0], input_num);
                 auto attr = dynamic_cast<ConcatAttr *>(op_attr.get());
-                CHECK_RET(inputTensors.size() == attr->tensorNum, return);
-                std::vector<const aclTensor *> constTensors(inputTensors.begin(), inputTensors.end());
-                tensor_list = aclCreateTensorList(constTensors.data(), attr->tensorNum);
-                ret = it->second.getWorkspaceSizeFuncConcat(tensor_list, attr->dim, outputTensors[0], &workspaceSize, &executor);
+                ret = it->second.getWorkspaceSizeFuncConcat(concatTensorListInput, attr->dim, outputTensors[0], &workspaceSize, &executor);
             }
             else if (name == string("Gather"))
             {
@@ -446,8 +482,34 @@ namespace jittor
             {
                 ret = it->second.getWorkspaceSizeFuncStridedSliceAssignV2(outputTensors[0], inputTensors[0], inputTensors[1], inputTensors[2], inputTensors[3], inputTensors[4], &workspaceSize, &executor);
             }
+            else if (jt_name == "range")
+            {
+                ret = it->second.getWorkspaceSizeFuncRange(start, end, step, outputTensors[0], &workspaceSize, &executor);
+            }
+            else if (jt_name == "leakyrelu")
+            {
+                auto attr = dynamic_cast<LeakyReluAttr *>(op_attr.get());
+                negativeSlope = aclCreateScalar(&attr->negativeSlope, aclDataType::ACL_FLOAT);
+                ret = it->second.getWorkspaceSizeFuncLeakyRelu(inputTensors[0], negativeSlope, outputTensors[0], &workspaceSize, &executor);
+            }
+            else if (jt_name == "leakyrelubackward")
+            {
+                auto attr = dynamic_cast<LeakyReluAttr *>(op_attr.get());
+                negativeSlope = aclCreateScalar(&attr->negativeSlope, aclDataType::ACL_FLOAT);
+                ret = it->second.getWorkspaceSizeFuncLeakyReluBackward(inputTensors[0], inputTensors[1], negativeSlope, attr->selfIsResult, outputTensors[0], &workspaceSize, &executor);
+            }
+            else if (jt_name == "dropout")
+            {
+                auto attr = dynamic_cast<DropoutAttr *>(op_attr.get());
+                ret = it->second.getWorkspaceSizeFuncDropout(inputTensors[0], attr->p, attr->train, attr->seed, attr->offset, outputTensors[0], outputTensors[1], &workspaceSize, &executor);
+            }
+            else if (jt_name == "dropoutbackward")
+            {
+                auto attr = dynamic_cast<DropoutAttr *>(op_attr.get());
+                ret = it->second.getWorkspaceSizeFuncDropoutBackward(inputTensors[0], inputTensors[1], attr->scale, outputTensors[0], &workspaceSize, &executor);
+            }
             else
-                LOGf << "not supported op " << jt_name;
+                LOGir << "not supported op " << jt_name;
 
             // for debug
             if (ret != ACL_SUCCESS)
@@ -468,11 +530,7 @@ namespace jittor
             ret = it->second.executeFunc(workspaceAddr, workspaceSize, executor, aclstream);
             CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnxxx failed. ERROR: %d\n", name.c_str(), ret); return);
 
-            // 6. （固定写法）同步等待任务执行结束
-            ret = aclrtSynchronizeStream(aclstream);
-            CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclrtSynchronizeStream failed. ERROR: %d\n", name.c_str(), ret); return);
-
-            // 7. 释放aclTensor和aclScalar，需要根据具体API的接口定义修改
+            // 6. 释放aclTensor和aclScalar，需要根据具体API的接口定义修改
             // destroy tensor
             for (int idx = 0; idx < input_num; idx++)
             {
@@ -484,6 +542,10 @@ namespace jittor
             }
             // destroy scalar
             aclDestroyScalar(alpha);
+            aclDestroyScalar(start);
+            aclDestroyScalar(end);
+            aclDestroyScalar(step);
+            aclDestroyScalar(negativeSlope);
 
             // destroy IntArray
             aclDestroyIntArray(size);
@@ -493,7 +555,6 @@ namespace jittor
             aclDestroyIntArray(outPads);
             aclDestroyIntArray(dilations);
             aclDestroyIntArray(kernel_size);
-            aclDestroyTensorList(tensor_list);
 
             return;
         }
@@ -624,7 +685,7 @@ namespace jittor
                 {
                     if (out->mem_ptr)
                         continue;
-                    out->alloc(exe.temp_allocator);
+                    out->alloc(exe.allocator);
                     new_alloced.push_back(out);
                 }
                 if (op->name() == string("unary"))

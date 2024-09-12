@@ -486,13 +486,14 @@ def change_function():
         def execute(self, input):
             self.input = input
             attr_code = f"""
-            op.jt_name = "maxpool";
+            op.jt_name  = "{"avgpool" if self.op == 'mean' else "maxpool"}";
             PoolAttr *attr = new PoolAttr();
             attr->kernel_size = {{ {self.kernel_size[0]}, {self.kernel_size[1]} }};
             attr->poolStrides = {{ {self.stride[0]}, {self.stride[1]} }};
             attr->poolPads = {{ {self.padding[0]}, {self.padding[1]} }};
             attr->poolDilations = {{ {self.dilation[0]}, {self.dilation[1]} }};
             attr->poolCeil = {"true" if self.ceil_mode else "false"};
+            attr->countIncludePad = {"true" if self.count_include_pad else "false"};
             op.op_attr.reset(attr);
             """
             input_height, input_width = input.shape[-2:]
@@ -535,26 +536,35 @@ def change_function():
             else:
                 return result[0]
 
-        def grad(self, grad_output, indices=None):
+        def grad(self, grad_output):
             input = self.input
-            inputs = [grad_output, input, indices]
             attr_code = f"""
-            op.jt_name = "maxpoolbackward";
+            op.jt_name = "{"avgpoolbackward" if self.op == 'mean' else "maxpoolbackward"}";
             PoolAttr *attr = new PoolAttr();
             attr->kernel_size = {{ {self.kernel_size[0]}, {self.kernel_size[1]} }};
             attr->poolStrides = {{ {self.stride[0]}, {self.stride[1]} }};
             attr->poolPads = {{ {self.padding[0]}, {self.padding[1]} }};
             attr->poolDilations = {{ {self.dilation[0]}, {self.dilation[1]} }};
             attr->poolCeil = {"true" if self.ceil_mode else "false"};
+            attr->countIncludePad = {"true" if self.count_include_pad else "false"};
             op.op_attr.reset(attr);
             """
             output_shapes = [input.shape]
             output_dtypes = [input.dtype]
-            result = acl_cmd("MaxpoolBackward",
-                             inputs,
-                             output_dtypes=output_dtypes,
-                             output_shapes=output_shapes,
-                             attr_code=attr_code)[0]
+            if self.op == 'maximum':
+                result = acl_cmd("MaxpoolBackward",
+                                 inputs=[grad_output, input, self.index],
+                                 output_dtypes=output_dtypes,
+                                 output_shapes=output_shapes,
+                                 attr_code=attr_code)[0]
+            elif self.op == 'mean':
+                result = acl_cmd("AvgpoolBackward",
+                                 inputs=[grad_output, input],
+                                 output_dtypes=output_dtypes,
+                                 output_shapes=output_shapes,
+                                 attr_code=attr_code)[0]
+            else:
+                raise ValueError('no this type pool')
             return result
 
     class FlipACL(Function):
@@ -622,9 +632,10 @@ def change_function():
                 attr_code=attr_code)[0]
             return result
 
-        """def grad(self, grad_output):
+        def grad(self, grad_output):
+            print("here is grad")
             grad_inputs = self.split_grad(grad_output, self.input, self.axis)
-            return grad_inputs"""
+            return grad_inputs
 
         def calculate_output_shape(self, input_tensors, axis):
             shape = list(input_tensors[0].shape)
@@ -632,17 +643,17 @@ def change_function():
                 shape[axis] += tensor.shape[axis]
             return tuple(shape)
 
-        """def split_grad(self, grad_output, input_tensors, axis):
+        def split_grad(self, grad_output, input_tensors, axis):
             offset = 0
             grad_inputs = []
             for tensor in input_tensors:
-                grad_input = acl_cmd("Slice", [
+                grad_input = acl_cmd("SliceV2", [
                     grad_output, [0] * axis + [offset] + [0] *
                     (len(tensor.shape) - axis - 1), tensor.shape
                 ])
                 grad_inputs.append(grad_input)
                 offset += tensor.shape[axis]
-            return grad_inputs"""
+            return grad_inputs
 
     def concat(x, dim=0):
         return ConcatACL()(x, dim)
@@ -770,7 +781,10 @@ def change_function():
                                       shape=inshape,
                                       dims=broadcast_dim)
                 results.append(result)
-            return tuple(results)
+            if len(results) != 1 or dim == None:
+                return tuple(results)
+            else:
+                return results[0]
 
         def grad(self, grad_output):
             return grad_output
@@ -1144,6 +1158,142 @@ def change_function():
     def matmul_transpose(x1, x2):
         return MatmulACL(True)(x1, x2)
 
+    class ReLUACL(Function):
+
+        def __init__(self):
+            super(ReLUACL, self).__init__()
+
+        def execute(self, x):
+            self.input = x
+            result = acl_cmd("ReLU", [x],
+                             output_dtypes=[x.dtype],
+                             output_shapes=[x.shape],
+                             attr_code="op.jt_name=\"unary\";")[0]
+            return result
+
+        def grad(self, grad_output):
+            mask = acl_cmd("GreaterThan", [self.input, 0],
+                           output_dtypes=[self.input.dtype],
+                           output_shapes=[self.input.shape],
+                           attr_code="op.jt_name=\"binary\";")[0]
+            grad_input = acl_cmd("Multiply", [grad_output, mask],
+                                 output_dtypes=[grad_output.dtype],
+                                 output_shapes=[grad_output.shape],
+                                 attr_code="op.jt_name=\"binary\";")[0]
+            return grad_input
+
+    class ReLU(jt.nn.Module):
+
+        def __init__(self):
+            super(ReLU, self).__init__()
+
+        def execute(self, x):
+            return ReLUACL()(x)
+
+    def relu(x):
+        return ReLUACL()(x)
+
+    class LeakyReLUACL(Function):
+
+        def __init__(self):
+            super(LeakyReLUACL, self).__init__()
+
+        def execute(self, x, negative_slope=0.01):
+            self.input = x
+            attr_code = f"""
+            op.jt_name = "leakyrelu";
+            LeakyReluAttr *attr = new LeakyReluAttr();
+            attr->negativeSlope = {negative_slope};
+            op.op_attr.reset(attr);
+            """
+            result = acl_cmd("LeakyReLU", [x],
+                             output_dtypes=[x.dtype],
+                             output_shapes=[x.shape],
+                             attr_code=attr_code)[0]
+            self.negative_slope = negative_slope
+            return result
+
+        def grad(self, grad_output):
+            attr_code = f"""
+            op.jt_name = "leakyrelubackward";
+            LeakyReluAttr *attr = new LeakyReluAttr();
+            attr->negativeSlope = {self.negative_slope};
+            attr->selfIsResult = false;
+            op.op_attr.reset(attr);
+            """
+            grad_input = acl_cmd("LeakyReLUBackward",
+                                 [grad_output, self.input],
+                                 output_dtypes=[grad_output.dtype],
+                                 output_shapes=[grad_output.shape],
+                                 attr_code=attr_code)[0]
+            return grad_input
+
+    class LeakyReLU(jt.nn.Module):
+
+        def __init__(self, negative_slope=0.01):
+            super(LeakyReLU, self).__init__()
+            self.negative_slope = negative_slope
+
+        def execute(self, x):
+            return LeakyReLUACL()(x, self.negative_slope)
+
+    def leaky_relu(x, scale=0.01):
+        return LeakyReLUACL()(x, scale)
+
+    class DropoutACL(Function):
+
+        def __init__(self):
+            super(DropoutACL, self).__init__()
+
+        def execute(self, x, p=0.5, is_train=False):
+            self.input = x
+            num_elements = x.numel()
+            aligned_elements = (num_elements + 127) // 128 * 128
+            mask_shape = (aligned_elements // 8, )
+            attr_code = f"""
+            op.jt_name = "dropout";
+            DropoutAttr *attr = new DropoutAttr();
+            attr->p = {p};
+            attr->train = {"true" if is_train else "false"};
+            attr->seed = 0;
+            attr->offset = 0;
+            op.op_attr.reset(attr);
+            """
+            result = acl_cmd("Dropout", [x],
+                             output_dtypes=[x.dtype, "uint8"],
+                             output_shapes=[x.shape, mask_shape],
+                             attr_code=attr_code)
+            self.maskout = result[1]
+            print(self.maskout)
+            return result[0]
+
+        def grad(self, grad_output):
+            attr_code = f"""
+            op.jt_name = "dropoutbackward";
+            DropoutAttr *attr = new DropoutAttr();
+            attr->scale = 1.0;
+            op.op_attr.reset(attr);
+            """
+            grad_input = acl_cmd("DropoutBackward",
+                                 [grad_output, self.maskout],
+                                 output_dtypes=[grad_output.dtype],
+                                 output_shapes=[grad_output.shape],
+                                 attr_code=attr_code)[0]
+            return grad_input
+
+    class Dropout(jt.nn.Module):
+
+        def __init__(self, p=0.5, is_train=False):
+            super(Dropout, self).__init__()
+            self.p = p
+            self.is_train = is_train
+
+        def execute(self, x):
+            return DropoutACL()(x, self.p, self.is_train)
+
+    def dropout(x, p=0.5, is_train=False):
+        return DropoutACL()(x, p, is_train)
+
     def warp(origin_func, new_func):
 
         def warpper(*args, **kwargs):
@@ -1190,3 +1340,12 @@ def change_function():
     jt.nn.matmul_transpose = warp(jt.nn.matmul_transpose, matmul_transpose)
     jt.nn.bmm_transpose = warp(jt.nn.bmm_transpose, bmm_transpose)
     jt.bmm_transpose = warp(jt.bmm_transpose, bmm_transpose)
+
+    jt.nn.relu = warp(jt.nn.relu, relu)
+    jt.nn.ReLU = warp(jt.nn.ReLU, ReLU)
+
+    jt.nn.leaky_relu = warp(jt.nn.leaky_relu, leaky_relu)
+    jt.nn.LeakyReLU = warp(jt.nn.LeakyReLU, LeakyReLU)
+
+    jt.nn.dropout = warp(jt.nn.dropout, dropout)
+    jt.nn.Dropout = warp(jt.nn.Dropout, Dropout)

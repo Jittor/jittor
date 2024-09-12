@@ -55,6 +55,8 @@ namespace jittor
         std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, aclIntArray *, aclIntArray *, aclIntArray *, aclIntArray *, bool, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncMaxPoolBackward;
         // for avgpool
         std::function<aclnnStatus(aclTensor *, aclIntArray *, aclIntArray *, aclIntArray *, bool, bool, int64_t, int8_t, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncAvgPool;
+        // for avgpool backward
+        std::function<aclnnStatus(aclTensor *, aclTensor *, aclIntArray *, aclIntArray *, aclIntArray *, bool, bool, int64_t, int8_t, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncAvgPoolBackward;
         // for concat
         std::function<aclnnStatus(aclTensorList *, uint64_t, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncConcat;
         // for gather
@@ -73,7 +75,14 @@ namespace jittor
         std::function<aclnnStatus(aclTensor *, aclTensorList *, aclTensor *, bool, bool, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncIndexPutImpl;
         // for range
         std::function<aclnnStatus(aclScalar *, aclScalar *, aclScalar *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncRange;
-
+        // for leaky_relu
+        std::function<aclnnStatus(aclTensor *, aclScalar *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncLeakyRelu;
+        // for leaky_relu backward
+        std::function<aclnnStatus(aclTensor *, aclTensor *, aclScalar *, bool, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncLeakyReluBackward;
+        // for dropout
+        std::function<aclnnStatus(aclTensor *, double, bool, int64_t, int64_t, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncDropout;
+        // for dropout backward
+        std::function<aclnnStatus(aclTensor *, aclTensor *, double, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncDropoutBackward;
 
         std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, aclrtStream)> executeFunc;
 
@@ -159,6 +168,11 @@ namespace jittor
                        std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
             : getWorkspaceSizeFuncAvgPool(gwsf), executeFunc(execf) {}
 
+        // for avgpool backward
+        AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclTensor *, aclIntArray *, aclIntArray *, aclIntArray *, bool, bool, int64_t, int8_t, aclTensor *, uint64_t *, aclOpExecutor **)> gwsf,
+                       std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
+            : getWorkspaceSizeFuncAvgPoolBackward(gwsf), executeFunc(execf) {}
+
         // for concat
         AclOpFunctions(std::function<aclnnStatus(aclTensorList *, int64_t, aclTensor *, uint64_t *, aclOpExecutor **)> gwsf,
                        std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
@@ -203,6 +217,26 @@ namespace jittor
         AclOpFunctions(std::function<aclnnStatus(aclScalar *, aclScalar *, aclScalar *, aclTensor *, uint64_t *, aclOpExecutor **)> gwsf,
                        std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
             : getWorkspaceSizeFuncRange(gwsf), executeFunc(execf) {}
+
+        // for leaky_relu
+        AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclScalar *, aclTensor *, uint64_t *, aclOpExecutor **)> gwsf,
+                       std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
+            : getWorkspaceSizeFuncLeakyRelu(gwsf), executeFunc(execf) {}
+
+        // for leaky_relu backward
+        AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclTensor *, aclScalar *, bool, aclTensor *, uint64_t *, aclOpExecutor **)> gwsf,
+                       std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
+            : getWorkspaceSizeFuncLeakyReluBackward(gwsf), executeFunc(execf) {}
+
+        // for dropout
+        AclOpFunctions(std::function<aclnnStatus(aclTensor *, double, bool, int64_t, int64_t, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> gwsf,
+                       std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
+            : getWorkspaceSizeFuncDropout(gwsf), executeFunc(execf) {}
+
+        // for dropout backward
+        AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclTensor *, double, aclTensor *, uint64_t *, aclOpExecutor **)> gwsf,
+                       std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
+            : getWorkspaceSizeFuncDropoutBackward(gwsf), executeFunc(execf) {}
     };
 
     static std::unordered_map<std::string, AclOpFunctions> aclOpFuncMap = {
@@ -270,6 +304,8 @@ namespace jittor
         {"Transpose", AclOpFunctions(aclnnPermuteGetWorkspaceSize, aclnnPermute)},
         {"Maxpool", AclOpFunctions(aclnnMaxPool2dWithIndicesGetWorkspaceSize, aclnnMaxPool2dWithIndices)},
         {"MaxpoolBackward", AclOpFunctions(aclnnMaxPool2dWithIndicesBackwardGetWorkspaceSize, aclnnMaxPool2dWithIndicesBackward)},
+        {"Avgpool", AclOpFunctions(aclnnAvgPool2dGetWorkspaceSize, aclnnAvgPool2d)},
+        {"AvgpoolBackward", AclOpFunctions(aclnnAvgPool2dBackwardGetWorkspaceSize, aclnnAvgPool2dBackward)},
         {"Flip", AclOpFunctions(aclnnFlipGetWorkspaceSize, aclnnFlip)},
         {"Concat", AclOpFunctions(aclnnCatGetWorkspaceSize, aclnnCat)},
         {"Gather", AclOpFunctions(aclnnGatherGetWorkspaceSize, aclnnGather)},
@@ -282,6 +318,11 @@ namespace jittor
         {"SliceV2", AclOpFunctions(aclnnSliceV2GetWorkspaceSize, aclnnSliceV2)},
         {"IndexPutImpl", AclOpFunctions(aclnnIndexPutImplGetWorkspaceSize, aclnnIndexPutImpl)},
         {"Range", AclOpFunctions(aclnnRangeGetWorkspaceSize, aclnnRange)},
+        {"ReLU", AclOpFunctions(aclnnReluGetWorkspaceSize, aclnnRelu)},
+        {"LeakyReLU", AclOpFunctions(aclnnLeakyReluGetWorkspaceSize, aclnnLeakyRelu)},
+        {"LeakyReLUBackward", AclOpFunctions(aclnnLeakyReluBackwardGetWorkspaceSize, aclnnLeakyReluBackward)},
+        {"Dropout", AclOpFunctions(aclnnDropoutGetWorkspaceSize, aclnnDropout)},
+        {"DropoutBackward", AclOpFunctions(aclnnDropoutBackwardGetWorkspaceSize, aclnnDropoutBackward)},
     };
 
     struct AclOpAttr
@@ -347,6 +388,19 @@ namespace jittor
         vector<int64_t> poolPads;
         vector<int64_t> poolDilations;
         bool poolCeil;
+        bool countIncludePad;
+
+        // divisorOverride(const int64_t，计算输入): 表示取平均的除数。数据类型支持INT64。divisorOverride配置为默认值0时表示功能不使能。
+        // https://www.hiascend.com/document/detail/zh/canncommercial/80RC2/apiref/appdevgapi/context/aclnnAvgPool2d.md
+        int64_t divisorOverride = 0;
+
+        // cubeMathType(int8_t，计算输入): host侧的整型，判断Cube单元应该使用哪种计算逻辑进行运算，数据类型支持INT8。对于无特殊说明的数据类型，均保持原始输入数据类型计算。支持的枚举值如下：
+        //    0:KEEP_DTYPE，保持输入的数据类型进行计算。当输入是FLOAT，Atlas 训练系列产品和Atlas 推理系列产品（Ascend 310P处理器）暂不支持，取0时会报错。
+        //    1:ALLOW_FP32_DOWN_PRECISION，允许将输入数据降精度计算。当输入是FLOAT，Atlas 训练系列产品和Atlas 推理系列产品（Ascend 310P处理器）允许转换为FLOAT16计算。
+        //    2:USE_FP16，允许转换为数据类型FLOAT16进行计算。当输入数据类型是FLOAT，转换为FLOAT16计算。
+        //    3:USE_HF32，允许转换为数据类型HFLOAT32计算。当输入是FLOAT，Atlas 训练系列产品、Atlas 推理系列产品（Ascend 310P处理器）和Atlas A2训练系列产品/Atlas 800I A2推理产品暂不支持，取3时会报错。
+        // https://www.hiascend.com/document/detail/zh/canncommercial/80RC2/apiref/appdevgapi/context/aclnnAvgPool2d.md
+        int8_t cubeMathType = 0;
 
         // 析构函数
         ~PoolAttr()
@@ -413,4 +467,26 @@ namespace jittor
         }
     };
 
+    struct LeakyReluAttr : AclOpAttr
+    {
+        float negativeSlope;
+        bool selfIsResult;
+
+        ~LeakyReluAttr()
+        {
+        }
+    };
+
+    struct DropoutAttr : AclOpAttr
+    {
+        float p;
+        bool train;
+        int64_t seed;
+        int64_t offset;
+        float scale;
+
+        ~DropoutAttr()
+        {
+        }
+    };
 }

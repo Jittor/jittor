@@ -54,24 +54,24 @@ class TestACL(unittest.TestCase):
     #     np.testing.assert_allclose(res_b.numpy(), [[2, 2], [2, 2]])
     #     print("test setitem grad success")
 
-    # @jt.flag_scope(use_acl=1)
-    # def test_concat(self):
-    #     a = jt.ones(2, 2)
-    #     b = jt.ones(2, 2)
-    #     c = jt.concat([a, b], 0)
-    #     np.testing.assert_allclose(c.numpy(), [[1, 1], [1, 1], [1, 1], [1, 1]])
-    #     print("test concat success")
+    @jt.flag_scope(use_acl=1)
+    def test_concat(self):
+        a = jt.ones(2, 2)
+        b = jt.ones(2, 2)
+        c = jt.concat([a, b], 0)
+        np.testing.assert_allclose(c.numpy(), [[1, 1], [1, 1], [1, 1], [1, 1]])
+        print("test concat success")
 
-    # @jt.flag_scope(use_acl=1)
-    # def test_maxpool_grad(self):
-    #     a = jt.ones(1, 1, 4, 4)
-    #     max_pool = jt.nn.Pool(2, op='maximum')
-    #     b = max_pool(a)
-    #     res = jt.grad(b.sum(), a)
-    #     np.testing.assert_allclose(
-    #         res.numpy(),
-    #         [[[[1, 0, 1, 0], [0, 0, 0, 0], [1, 0, 1, 0], [0, 0, 0, 0]]]])
-    #     print("test maxpool grad success")
+    @jt.flag_scope(use_acl=1)
+    def test_maxpool_grad(self):
+        a = jt.ones(1, 1, 4, 4)
+        max_pool = jt.nn.Pool(2, op='maximum')
+        b = max_pool(a)
+        res = jt.grad(b.sum(), a)
+        np.testing.assert_allclose(
+            res.numpy(),
+            [[[[1, 0, 1, 0], [0, 0, 0, 0], [1, 0, 1, 0], [0, 0, 0, 0]]]])
+        print("test maxpool grad success")
 
     @jt.flag_scope(use_acl=1)
     def test_triu(self):

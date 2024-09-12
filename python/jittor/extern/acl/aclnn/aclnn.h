@@ -67,6 +67,7 @@
 #include "aclnnop/aclnn_max_pool2d_with_indices.h"
 #include "aclnnop/aclnn_max_pool2d_with_indices_backward.h"
 #include "aclnnop/aclnn_avgpool2d.h"
+#include "aclnnop/aclnn_avgpool2d_backward.h"
 #include "aclnnop/aclnn_flip.h"
 #include "aclnnop/aclnn_cat.h"
 #include "aclnnop/aclnn_gather.h"
@@ -78,6 +79,11 @@
 #include "aclnnop/aclnn_slice_v2.h"
 #include "aclnnop/aclnn_index_put_impl.h"
 #include "aclnnop/aclnn_range.h"
+#include "aclnnop/aclnn_relu.h"
+#include "aclnnop/aclnn_dropout.h"
+#include "aclnnop/aclnn_dropout_backward.h"
+#include "aclnnop/aclnn_leaky_relu.h"
+#include "aclnnop/aclnn_leaky_relu_backward.h"
 
 #define CHECK_RET(cond, return_expr) \
   do                                 \
