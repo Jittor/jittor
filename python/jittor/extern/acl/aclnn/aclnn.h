@@ -84,6 +84,7 @@
 #include "aclnnop/aclnn_dropout_backward.h"
 #include "aclnnop/aclnn_leaky_relu.h"
 #include "aclnnop/aclnn_leaky_relu_backward.h"
+#include "aclnnop/aclnn_uniform.h"
 
 #define CHECK_RET(cond, return_expr) \
   do                                 \

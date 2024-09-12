@@ -1341,11 +1341,11 @@ def change_function():
     jt.nn.bmm_transpose = warp(jt.nn.bmm_transpose, bmm_transpose)
     jt.bmm_transpose = warp(jt.bmm_transpose, bmm_transpose)
 
-    jt.nn.relu = warp(jt.nn.relu, relu)
-    jt.nn.ReLU = warp(jt.nn.ReLU, ReLU)
+    # jt.nn.relu = warp(jt.nn.relu, relu)
+    # jt.nn.ReLU = warp(jt.nn.ReLU, ReLU)
 
     jt.nn.leaky_relu = warp(jt.nn.leaky_relu, leaky_relu)
     jt.nn.LeakyReLU = warp(jt.nn.LeakyReLU, LeakyReLU)
 
-    jt.nn.dropout = warp(jt.nn.dropout, dropout)
-    jt.nn.Dropout = warp(jt.nn.Dropout, Dropout)
+    # jt.nn.dropout = warp(jt.nn.dropout, dropout)
+    # jt.nn.Dropout = warp(jt.nn.Dropout, Dropout)

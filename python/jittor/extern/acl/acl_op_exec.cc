@@ -340,7 +340,7 @@ namespace jittor
             else if (name == string("RandomUniform") || name == string("RandomNormal"))
             {
                 auto attr = dynamic_cast<RandomAttr *>(op_attr.get());
-                ret = it->second.getWorkspaceSizeFuncRandom(outputTensors[0], int64_t(0), int64_t(1), attr->seed, attr->offset, &workspaceSize, &executor);
+                ret = it->second.getWorkspaceSizeFuncRandom(outputTensors[0], 0.0, 1.0, attr->seed, attr->offset, &workspaceSize, &executor);
             }
             else if (name == string("Select") || name == string("Where"))
             {

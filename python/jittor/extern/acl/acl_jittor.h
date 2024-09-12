@@ -299,7 +299,7 @@ namespace jittor
         {"ReduceMean", AclOpFunctions(aclnnMeanGetWorkspaceSize, aclnnMean)},
         // {"ReduceProd", AclOpFunctions(aclnnProdDimGetWorkspaceSize, aclnnProdDim)},
         {"Select", AclOpFunctions(aclnnSWhereGetWorkspaceSize, aclnnSWhere)},
-        {"RandomUniform", AclOpFunctions(aclnnInplaceRandomGetWorkspaceSize, aclnnInplaceRandom)},
+        {"RandomUniform", AclOpFunctions(aclnnInplaceUniformGetWorkspaceSize,  aclnnInplaceUniform)},
         {"RandomNormal", AclOpFunctions(aclnnInplaceNormalGetWorkspaceSize, aclnnInplaceNormal)},
         {"Transpose", AclOpFunctions(aclnnPermuteGetWorkspaceSize, aclnnPermute)},
         {"Maxpool", AclOpFunctions(aclnnMaxPool2dWithIndicesGetWorkspaceSize, aclnnMaxPool2dWithIndices)},
