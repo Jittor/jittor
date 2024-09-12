@@ -495,6 +495,32 @@ namespace jittor
                 auto attr = dynamic_cast<DropoutAttr *>(op_attr.get());
                 ret = it->second.getWorkspaceSizeFuncDropoutBackward(inputTensors[0], inputTensors[1], attr->scale, outputTensors[0], &workspaceSize, &executor);
             }
+            else if (name ==string("SiLU"))
+            {
+                ret = it->second.getWorkspaceSizeFuncUnary(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
+            }
+            else if (name == string("SiLUBackward"))
+            {
+                ret = it->second.getWorkspaceSizeFuncBinary(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
+            }
+            else if (name ==string("Sigmoid"))
+            {
+                ret = it->second.getWorkspaceSizeFuncUnary(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
+            }
+            else if (name == string("SigmoidBackward"))
+            {
+                ret = it->second.getWorkspaceSizeFuncBinary(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
+            }
+            else if (name ==string("Embedding"))
+            {
+                ret = it->second.getWorkspaceSizeFuncBinary(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
+            }
+            else if(name==string("EmbeddingBackward"))
+            {
+                auto attr = dynamic_cast<EmbeddingAttr *>(op_attr.get());
+                auto numEmbeddings = attr->numEmbeddings;
+                ret = it->second.getWorkspaceSizeFuncEmbeddingBackward(inputTensors[0], inputTensors[1],numEmbeddings,0,false,outputTensors[0], &workspaceSize, &executor);
+            }
             else
                 LOGir << "not supported op " << jt_name;
 

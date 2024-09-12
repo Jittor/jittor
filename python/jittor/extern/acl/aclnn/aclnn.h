@@ -85,6 +85,12 @@
 #include "aclnnop/aclnn_leaky_relu.h"
 #include "aclnnop/aclnn_leaky_relu_backward.h"
 #include "aclnnop/aclnn_uniform.h"
+#include "aclnnop/aclnn_silu.h"
+#include "aclnnop/aclnn_silu_backward.h"
+#include "aclnnop/aclnn_sigmoid.h"
+#include "aclnnop/aclnn_sigmoid_backward.h"
+#include "aclnnop/aclnn_embedding.h"
+#include "aclnnop/aclnn_embedding_dense_backward.h"
 
 #define CHECK_RET(cond, return_expr) \
   do                                 \

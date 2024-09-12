@@ -1441,7 +1441,94 @@ def change_function():
                                  output_shapes=[grad_output.shape],
                                  attr_code=attr_code)[0]
             return grad_input
-
+    class SiLUACL(Function):
+        def __init__(self):
+            super(SiLUACL, self).__init__()
+        def execute(self,x):
+            inputs = [x]
+            self.input = x
+            outputs = [jt.empty(x.shape)]
+            attr_code = f"""
+            op.jt_name = "silu";
+            """
+            result = acl_cmd("SiLU",inputs=inputs,outputs=outputs,attr_code=attr_code)[0]
+            return result
+        
+        def grad(self,grad_output):
+            attr_code = f"""
+            op.jt_name = "silubackward";
+            """
+            inputs = [grad_output,self.input]
+            outputs = [jt.empty(grad_output.shape)]
+            grad_input = acl_cmd("SiLUBackward",inputs = inputs,outputs = outputs,attr_code=attr_code)[0]
+            return grad_input
+    class SiLU(jt.nn.Module):
+        def __init__(self):
+            super(SiLU,self).__init__()
+        def execute(self,x):
+            return SiLUACL()(x)
+    class SigmoidACL(Function):
+        def __init__(self):
+            super(SigmoidACL, self).__init__()
+        def execute(self,x):
+            inputs = [x]
+            outputs = [jt.empty(x.shape)]
+            attr_code = f"""
+            op.jt_name = "sigmoid";
+            """
+            result = acl_cmd("Sigmoid",inputs=inputs,outputs=outputs,attr_code=attr_code)[0]
+            self.output = result
+            return result
+        def grad(self,grad_output):
+            attr_code = f"""
+            op.jt_name = "sigmoidbackward";
+            """
+            inputs = [grad_output,self.output]
+            outputs = [jt.empty(grad_output.shape)]
+            grad_input = acl_cmd("SigmoidBackward",inputs = inputs,outputs = outputs,attr_code=attr_code)[0]
+            return grad_input
+    class Sigmoid(jt.nn.Module):
+        def __init__(self):
+            super(Sigmoid,self).__init__()
+        def execute(self,x):
+            return SigmoidACL()(x)
+    class EmbeddingACL(Function):
+        def __init__(self):
+            super(EmbeddingACL, self).__init__()
+        def execute(self,indices,weight,):
+            inputs = [weight,indices]
+            self.indices = indices
+            self.weight_shape = weight.shape
+            output_shape = list(indices.shape)+list(weight.shape[1:])
+            outputs = [jt.empty(output_shape)]
+            attr_code = f"""
+            op.jt_name = "embedding";
+            """
+            result = acl_cmd("Embedding",inputs=inputs,outputs=outputs,attr_code=attr_code)[0]
+            return result
+        def grad(self,grad_output):
+            inputs = [grad_output,self.indices]
+            outputs = [jt.empty(self.weight_shape)]
+            attr_code = f"""
+            op.jt_name = "embeddingbackward";
+            EmbeddingAttr *attr = new EmbeddingAttr();
+            attr->numEmbeddings = {self.weight_shape[0]};
+            op.op_attr.reset(attr);
+            """
+            grad_weight = acl_cmd("EmbeddingBackward",inputs=inputs,outputs=outputs,attr_code=attr_code)[0]
+            return None,grad_weight
+        
+    class Embedding(jt.nn.Module):
+        def __init__(self, num_embeddings, embedding_dim, padding_idx=None, dtype="float32"):
+            self.num_embeddings = num_embeddings
+            self.embedding_dim = embedding_dim
+            self.padding_idx = padding_idx
+            self.weight = jt.init.gauss([self.num_embeddings, self.embedding_dim], dtype)
+            if padding_idx is not None:
+                self.weight[padding_idx] = 0
+        def execute(self, x):
+            res = embedding(x,self.weight)
+            return res
     class Dropout(jt.nn.Module):
 
         def __init__(self, p=0.5, is_train=False):
@@ -1509,6 +1596,17 @@ def change_function():
 
     jt.nn.leaky_relu = warp(jt.nn.leaky_relu, leaky_relu)
     jt.nn.LeakyReLU = warp(jt.nn.LeakyReLU, LeakyReLU)
-
+    def silu(x):
+        return SiLUACL()(x)
+    jt.nn.silu = warp(jt.nn.silu, silu)
+    jt.nn.SiLU = warp(jt.nn.SiLU, SiLU)
+    def sigmoid(x):
+        return SigmoidACL()(x)
+    jt.sigmoid = warp(jt.sigmoid, sigmoid)
+    jt.nn.Sigmoid = warp(jt.nn.Sigmoid, Sigmoid)
+    def embedding(indices,weight):
+        return EmbeddingACL()(indices,weight)
+    jt.nn.embedding = warp(jt.nn.embedding, embedding)
+    jt.nn.Embedding = warp(jt.nn.Embedding, Embedding)
     # jt.nn.dropout = warp(jt.nn.dropout, dropout)
     # jt.nn.Dropout = warp(jt.nn.Dropout, Dropout)

@@ -84,6 +84,24 @@ namespace jittor
         // for dropout backward
         std::function<aclnnStatus(aclTensor *, aclTensor *, double, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncDropoutBackward;
 
+        // for silu
+        // std::function<aclnnStatus(aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncSilu;
+
+        // for silu backward
+        // std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncSiluBackward;
+
+        // for sigmoid
+        // std::function<aclnnStatus(aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncSigmoid;
+
+        // for sigmoid backward
+        // std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncSigmoidBackward;
+
+        // for embedding
+        // std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncEmbedding;
+
+        // for embedding backwarda
+        std::function<aclnnStatus(aclTensor *, aclTensor *, uint64_t,uint64_t,bool,aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncEmbeddingBackward;
+        
         std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, aclrtStream)> executeFunc;
 
         // 添加一个默认构造函数
@@ -237,6 +255,11 @@ namespace jittor
         AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclTensor *, double, aclTensor *, uint64_t *, aclOpExecutor **)> gwsf,
                        std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
             : getWorkspaceSizeFuncDropoutBackward(gwsf), executeFunc(execf) {}
+        
+        // for embedding backward
+        AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclTensor *, uint64_t,uint64_t,bool,aclTensor *, uint64_t *, aclOpExecutor **)> gwsf,
+                       std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
+            : getWorkspaceSizeFuncEmbeddingBackward(gwsf), executeFunc(execf) {}
     };
 
     static std::unordered_map<std::string, AclOpFunctions> aclOpFuncMap = {
@@ -324,6 +347,12 @@ namespace jittor
         {"LeakyReLUBackward", AclOpFunctions(aclnnLeakyReluBackwardGetWorkspaceSize, aclnnLeakyReluBackward)},
         {"Dropout", AclOpFunctions(aclnnDropoutGetWorkspaceSize, aclnnDropout)},
         {"DropoutBackward", AclOpFunctions(aclnnDropoutBackwardGetWorkspaceSize, aclnnDropoutBackward)},
+        {"SiLU", AclOpFunctions(aclnnSiluGetWorkspaceSize, aclnnSilu)},
+        {"SiLUBackward", AclOpFunctions(aclnnSiluBackwardGetWorkspaceSize, aclnnSiluBackward)},
+        {"Sigmoid",AclOpFunctions(aclnnSigmoidGetWorkspaceSize, aclnnSigmoid)},
+        {"SigmoidBackward",AclOpFunctions(aclnnSigmoidBackwardGetWorkspaceSize, aclnnSigmoidBackward)},
+        {"Embedding",AclOpFunctions(aclnnEmbeddingGetWorkspaceSize,aclnnEmbedding)},
+        {"EmbeddingBackward",AclOpFunctions(aclnnEmbeddingDenseBackwardGetWorkspaceSize,aclnnEmbeddingDenseBackward)},
     };
 
     struct AclOpAttr
@@ -487,6 +516,21 @@ namespace jittor
         float scale;
 
         ~DropoutAttr()
+        {
+        }
+    };
+
+    struct EmbeddingAttr : AclOpAttr
+    {
+        int64_t numEmbeddings;
+        // int64_t embeddingDim;
+        int64_t paddingIdx;
+        bool scaleGradByFreq;
+        // bool sparse;
+        // bool isSparse;
+        // bool isDense;
+
+        ~EmbeddingAttr()
         {
         }
     };
