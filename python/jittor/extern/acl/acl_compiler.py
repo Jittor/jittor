@@ -990,7 +990,7 @@ def change_function():
                                      output_shapes=[output_shape],
                                      attr_code=attr_code)[0]
                     return result
-
+            assert contains_slice, "slice type error"
             x_dim = len(x.shape)
             if len(slices) < x_dim:
                 slices += (slice(None, None, None), ) * (x_dim - len(slices))
@@ -1000,7 +1000,7 @@ def change_function():
             ends = []
             steps = []
             dims = []
-            squeeze_dims = []
+            squeeze_dims = []          
             for dim, s in enumerate(slices):
                 if isinstance(s, int):
                     s = slice(s, s + 1, 1)
@@ -1009,7 +1009,7 @@ def change_function():
                     assert False, "jt.Var not supported"
                 start, stop, step = s.indices(x.size(dim))
                 size = (stop - start - 1) // step + 1
-                stride = self.stride(x, dim) * step
+                # stride = self.stride(x, dim) * step
                 sizes.append(size)
                 steps.append(step)
                 begins.append(start)
@@ -1023,6 +1023,7 @@ def change_function():
             self.ends = ends
             self.steps = steps
             self.dims = dims
+            self.slices = slices
             attr_code = f"""
             op.jt_name = "slicev2";
             StrideAttr *attr = new StrideAttr();
@@ -1032,7 +1033,6 @@ def change_function():
             attr->axes = {{ {", ".join(map(str, dims))} }};
             op.op_attr.reset(attr);
             """
-
             result = acl_cmd("SliceV2",
                              inputs,
                              output_dtypes=[x.dtype],
@@ -1047,40 +1047,203 @@ def change_function():
                 indices = self.indices
                 inputs = [grad_output] + indices
                 attr_code = f"""
-                op.jt_name = "indexputimpl";
+                op.jt_name = "indexputimplaccumulate";
                 """
                 outputs = [jt.zeros(self.x_shape)]
-                result = acl_cmd("IndexPutImpl",
+                # breakpoint()
+                result = acl_cmd("IndexPutImplAccumulate",
                                  inputs=inputs,
                                  outputs=outputs,
                                  attr_code=attr_code)[0]
                 return result
             elif self.type_ == 'slicev2':
-                #TODO: wait for cann update
-                assert False, f"wait for cann update"
                 begins = self.begins
                 ends = self.ends
                 steps = self.steps
                 dims = self.dims
-                begins = jt.Var(begins).int64()
-                ends = jt.Var(ends).int64()
-                steps = jt.Var(steps).int64()
-                dims = jt.Var(dims).int64()
-                inputs = [grad_output, begins, ends, steps, dims]
+                slices = self.slices
+                #适配华为奇怪的要求，最后一个维度的step必须是1
+                expand_dim = False
+                if slices[-1].stop is not None or slices[-1].step is not 1:
+                    slices = slices + (slice(None, None, None), )
+                    expand_dim = True
+                    # x = x.unsqueeze(-1)
+                if expand_dim:
+                    grad_output = grad_output.unsqueeze(-1)
+                    self.x_shape = self.x_shape + (1, )
+                    sizes = []
+                    begins = []
+                    ends = []
+                    steps = []
+                    dims = []    
+                    for dim, s in enumerate(slices):
+                        if isinstance(s, int):
+                            s = slice(s, s + 1, 1)
+                            # squeeze_dims.append(dim)
+                        if isinstance(s, jt.Var):
+                            assert False, "jt.Var not supported"
+                        start, stop, step = s.indices(self.x_shape[dim])
+                        size = (stop - start - 1) // step + 1
+                        # stride = self.stride(x, dim) * step
+                        sizes.append(size)
+                        steps.append(step)
+                        begins.append(start)
+                        ends.append(stop)
+                        dims.append(dim)
+                    if not sizes:
+                        sizes = [1]
+                        steps = [1]
                 attr_code = f"""
                 op.jt_name = "stridedsliceassignv2";
+                StrideAttr *attr = new StrideAttr();
+                attr->begins = {{ {", ".join(map(str, begins))} }};
+                attr->ends = {{ {", ".join(map(str, ends))} }};
+                attr->steps = {{ {", ".join(map(str, steps))} }};
+                attr->axes = {{ {", ".join(map(str, dims))} }};
+                op.op_attr.reset(attr);
                 """
+                # print()
+                inputs = [grad_output]
+                # attr_code = f"""
+                # op.jt_name = "stridedsliceassignv2";
+                # """
+                outputs = [jt.zeros(self.x_shape)]
                 result = acl_cmd("StridedSliceAssignV2",
                                  inputs=inputs,
                                  outputs=outputs,
                                  attr_code=attr_code)[0]
+                if expand_dim:
+                    result = result.squeeze(-1)
                 return result
             else:
                 assert False, f"grad not implemented for {self.type_}"
 
     def getitem(x, slices, return_x=None):
         return GetItemACL()(x, slices, return_x)
+    class SetItemACL(Function):
+        def __init__(self):
+            self.type_ = 'notype'
 
+        def stride(self, x, dim):
+            stride = 1
+            for i in range(dim + 1, len(x.shape)):
+                stride *= x.shape[i]
+            return stride
+
+        def execute(self, x, slices, value):
+            # breakpoint()
+            self.x_shape = x.shape
+            self.input_slice = slices
+            # assert isinstance(value,jt.Var), "value must be jt.Var"
+            # self.value_shape = value.shape
+            if not isinstance(slices, tuple):
+                slices = (slices, )
+            slices_list = list(slices)
+            #check slices contains slice type
+            contains_slice = False
+            for s in slices:
+                if isinstance(s, slice):
+                    contains_slice = True
+                    break
+            if not contains_slice:
+                indices = []
+                value_shape = []
+                slices_len = len(slices)
+                boardcast_shape = caculate_shape(slices_list[0])
+                for ii in range(1, len(slices)):
+                    dd, boardcast_shape = can_broadcast_and_shape(
+                        boardcast_shape, caculate_shape(slices_list[ii]))
+                    assert dd is True, "can not broadcast"
+                value_shape = boardcast_shape
+                value_shape +=x.shape[slices_len:]
+                if isinstance(value,int):
+                    value = jt.full(value_shape,value)
+                self.value_shape = value_shape
+                for ii in slices:
+                    indices.append(jt.Var(ii))
+                if isinstance(slices[0], jt.Var) or isinstance(
+                        slices[0], int) or isinstance(
+                            slices[0], list) or isinstance(slices[0], tuple):
+                    self.indices = indices
+                    self.type_ = 'index'
+                    attr_code = f"""
+                    op.jt_name = "indexputimpl";
+                    """
+                    inputs = [value]+indices
+                    outputs = [x]
+                    result = acl_cmd("IndexPutImpl",
+                        inputs=inputs,
+                        outputs=outputs,
+                        attr_code=attr_code)[0]
+                    return result
+                assert "not support"
+            assert contains_slice, "slice type error"
+            x_dim = len(x.shape)
+            if len(slices) < x_dim:
+                slices += (slice(None, None, None), ) * (x_dim - len(slices))
+            sizes = []
+            begins = []
+            ends = []
+            steps = []
+            dims = []
+            #适配华为奇怪的要求，最后一个维度的step必须是1
+            expand_dim = False
+            if slices[-1].stop is not None or slices[-1].step is not 1:
+                slices = slices + (slice(None, None, None), )
+                expand_dim = True
+                x = x.unsqueeze(-1)
+                value = value.unsqueeze(-1)
+            for dim, s in enumerate(slices):
+                if isinstance(s, int):
+                    s = slice(s, s + 1, 1)
+                    # squeeze_dims.append(dim)
+                if isinstance(s, jt.Var):
+                    assert False, "jt.Var not supported"
+                start, stop, step = s.indices(x.size(dim))
+                size = (stop - start - 1) // step + 1
+                # stride = self.stride(x, dim) * step
+                sizes.append(size)
+                steps.append(step)
+                begins.append(start)
+                ends.append(stop)
+                dims.append(dim)
+            if not sizes:
+                sizes = [1]
+                steps = [1]
+            if isinstance(value,int):
+                value = jt.full(sizes,value)
+            self.type_ = 'slicev2'
+            attr_code = f"""
+            op.jt_name = "stridedsliceassignv2";
+            StrideAttr *attr = new StrideAttr();
+            attr->begins = {{ {", ".join(map(str, begins))} }};
+            attr->ends = {{ {", ".join(map(str, ends))} }};
+            attr->steps = {{ {", ".join(map(str, steps))} }};
+            attr->axes = {{ {", ".join(map(str, dims))} }};
+            op.op_attr.reset(attr);
+            """
+            self.value_shape = value.shape
+            inputs = [value]
+            outputs = [x]
+            result = acl_cmd("StridedSliceAssignV2",
+                            inputs=inputs,
+                            outputs=outputs,
+                            attr_code=attr_code)[0]
+            if expand_dim:
+                result = result.squeeze(-1)
+            return result
+        def grad(self,grad_output):
+            print("grad")
+            #value_grad
+            value_grad = grad_output[self.input_slice]
+            #x_grad
+            grad_output[self.input_slice] = jt.zeros(self.value_shape)
+            return grad_output, None,value_grad
+    def setitem(x, slices, value):
+        return SetItemACL()(x, slices, value)
+
+
+        
     class BmmACL(Function):
 
         def __init__(self, trans_x2=False):
@@ -1333,6 +1496,8 @@ def change_function():
     jt.Var.getitem = lambda x, slices, return_x=None: warp(
         jt.getitem, getitem)(x, slices)
 
+    jt.setitem = warp(jt.setitem, setitem)
+    jt.Var.setitem = lambda x, slices, value: warp(jt.setitem, setitem)(x, slices, value)
     jt.nn.bmm = warp(jt.nn.bmm, bmm)
     jt.bmm = warp(jt.bmm, bmm)
     jt.nn.matmul = warp(jt.matmul, matmul)

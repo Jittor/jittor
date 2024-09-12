@@ -94,7 +94,7 @@ namespace jittor
             auto it = aclOpFuncMap.find(name);
             if (it == aclOpFuncMap.end())
             {
-                LOGir << "Not supported op: " << name;
+                LOGir << "aclOpFuncMap Not supported op: " << name;
                 throw std::runtime_error("Unsupported operation type.");
             }
 
@@ -450,9 +450,24 @@ namespace jittor
                 auto indexTensorListInput = aclCreateTensorList(&indexTensorList[0], input_num - 1);
                 ret = it->second.getWorkspaceSizeFuncIndexPutImpl(outputTensors[0], indexTensorListInput, inputTensors[0], false, true, &workspaceSize, &executor);
             }
+            else if (name == string("IndexPutImplAccumulate"))
+            {
+                std::vector<aclTensor *> indexTensorList = {};
+                for (int i = 1; i < input_num; i++)
+                {
+                    indexTensorList.push_back(inputTensors[i]);
+                }
+                auto indexTensorListInput = aclCreateTensorList(&indexTensorList[0], input_num - 1);
+                ret = it->second.getWorkspaceSizeFuncIndexPutImpl(outputTensors[0], indexTensorListInput, inputTensors[0], true, true, &workspaceSize, &executor);
+            }
             else if (name == string("StridedSliceAssignV2"))
             {
-                ret = it->second.getWorkspaceSizeFuncStridedSliceAssignV2(outputTensors[0], inputTensors[0], inputTensors[1], inputTensors[2], inputTensors[3], inputTensors[4], &workspaceSize, &executor);
+                auto attr = dynamic_cast<StrideAttr *>(op_attr.get());
+                auto begins = aclCreateIntArray(attr->begins.data(), attr->begins.size());
+                auto ends = aclCreateIntArray(attr->ends.data(), attr->ends.size());
+                auto steps = aclCreateIntArray(attr->steps.data(), attr->steps.size());
+                auto axes = aclCreateIntArray(attr->axes.data(), attr->axes.size());
+                ret = it->second.getWorkspaceSizeFuncStridedSliceAssignV2(outputTensors[0],inputTensors[0], begins, ends, steps,axes, &workspaceSize, &executor);
             }
             else if (jt_name == "range")
             {
