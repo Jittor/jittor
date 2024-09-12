@@ -181,10 +181,8 @@ def acl_cmd(name: str,
     # print(attr_header)
 
     # read the tmp_file.cpp to the cuda_header
-    with open(
-            "/home/ma-user/work/zy/JittorHW/python/jittor/extern/acl/tmp_file.cpp",
-            "r") as f:
-        cuda_header = f.read()
+
+    cuda_header = '#include"acl/acl_op.h"'
     import jittor as jt
     outputs_ = []
     if outputs is not None:
