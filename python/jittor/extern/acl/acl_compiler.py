@@ -1000,7 +1000,7 @@ def change_function():
             ends = []
             steps = []
             dims = []
-            squeeze_dims = []          
+            squeeze_dims = []
             for dim, s in enumerate(slices):
                 if isinstance(s, int):
                     s = slice(s, s + 1, 1)
@@ -1055,6 +1055,7 @@ def change_function():
                                  inputs=inputs,
                                  outputs=outputs,
                                  attr_code=attr_code)[0]
+                result.sync()
                 return result
             elif self.type_ == 'slicev2':
                 begins = self.begins
@@ -1075,7 +1076,7 @@ def change_function():
                     begins = []
                     ends = []
                     steps = []
-                    dims = []    
+                    dims = []
                     for dim, s in enumerate(slices):
                         if isinstance(s, int):
                             s = slice(s, s + 1, 1)
@@ -1120,7 +1121,9 @@ def change_function():
 
     def getitem(x, slices, return_x=None):
         return GetItemACL()(x, slices, return_x)
+
     class SetItemACL(Function):
+
         def __init__(self):
             self.type_ = 'notype'
 
@@ -1155,11 +1158,11 @@ def change_function():
                         boardcast_shape, caculate_shape(slices_list[ii]))
                     assert dd is True, "can not broadcast"
                 value_shape = boardcast_shape
-                value_shape +=x.shape[slices_len:]
+                value_shape += x.shape[slices_len:]
                 if value_shape == []:
                     value_shape = [1]
-                if isinstance(value,int) or isinstance(value,float):
-                    value = jt.full(value_shape,value)
+                if isinstance(value, int) or isinstance(value, float):
+                    value = jt.full(value_shape, value)
                 self.value_shape = value_shape
                 for ii in slices:
                     indices.append(jt.Var(ii))
@@ -1171,12 +1174,13 @@ def change_function():
                     attr_code = f"""
                     op.jt_name = "indexputimpl";
                     """
-                    inputs = [value]+indices
+                    inputs = [value] + indices
                     outputs = [x]
                     result = acl_cmd("IndexPutImpl",
-                        inputs=inputs,
-                        outputs=outputs,
-                        attr_code=attr_code)[0]
+                                     inputs=inputs,
+                                     outputs=outputs,
+                                     attr_code=attr_code)[0]
+                    result.sync()
                     return result
                 assert "not support"
             assert contains_slice, "slice type error"
@@ -1212,8 +1216,8 @@ def change_function():
             if not sizes:
                 sizes = [1]
                 steps = [1]
-            if isinstance(value,int) or isinstance(value,float):
-                value = jt.full(sizes,value)
+            if isinstance(value, int) or isinstance(value, float):
+                value = jt.full(sizes, value)
             self.type_ = 'slicev2'
             attr_code = f"""
             op.jt_name = "stridedsliceassignv2";
@@ -1228,21 +1232,21 @@ def change_function():
             inputs = [value]
             outputs = [x]
             result = acl_cmd("StridedSliceAssignV2",
-                            inputs=inputs,
-                            outputs=outputs,
-                            attr_code=attr_code)[0]
+                             inputs=inputs,
+                             outputs=outputs,
+                             attr_code=attr_code)[0]
             if expand_dim:
                 result = result.squeeze(-1)
             return result
-        def grad(self,grad_output):
+
+        def grad(self, grad_output):
             value_grad = grad_output[self.input_slice]
             grad_output[self.input_slice] = jt.zeros(self.value_shape)
-            return grad_output, None,value_grad
+            return grad_output, None, value_grad
+
     def setitem(x, slices, value):
         return SetItemACL()(x, slices, value)
 
-
-        
     class BmmACL(Function):
 
         def __init__(self, trans_x2=False):
@@ -1268,19 +1272,21 @@ def change_function():
                 output_shapes=[grad_output.shape[:-1] + x1.shape[-1:]],
                 attr_code="op.jt_name=\"bmm\";")[0]
             if self.trans_x2:
-                output_shape = grad_output.shape[:-2] + grad_output.shape[-1:] + x1.shape[-1:]
-                grad_x2 = acl_cmd(
-                    "BatchMatMul", [grad_output.transpose(-2, -1), x1],
-                    output_dtypes=[x2.dtype],
-                    output_shapes=[output_shape],
-                    attr_code="op.jt_name=\"bmm\";")[0]
+                output_shape = grad_output.shape[:-2] + grad_output.shape[
+                    -1:] + x1.shape[-1:]
+                grad_x2 = acl_cmd("BatchMatMul",
+                                  [grad_output.transpose(-2, -1), x1],
+                                  output_dtypes=[x2.dtype],
+                                  output_shapes=[output_shape],
+                                  attr_code="op.jt_name=\"bmm\";")[0]
             else:
-                output_shape = x1.shape[:-2] + x1.shape[-1:] + grad_output.shape[-1:]
-                grad_x2 = acl_cmd(
-                "BatchMatMul", [x1.transpose(-2, -1), grad_output],
-                output_dtypes=[x2.dtype],
-                output_shapes=[output_shape],
-                attr_code="op.jt_name=\"bmm\";")[0]
+                output_shape = x1.shape[:-2] + x1.shape[
+                    -1:] + grad_output.shape[-1:]
+                grad_x2 = acl_cmd("BatchMatMul",
+                                  [x1.transpose(-2, -1), grad_output],
+                                  output_dtypes=[x2.dtype],
+                                  output_shapes=[output_shape],
+                                  attr_code="op.jt_name=\"bmm\";")[0]
             return grad_x1, grad_x2
 
     def bmm(x1, x2):
@@ -1313,19 +1319,21 @@ def change_function():
                 output_shapes=[grad_output.shape[:-1] + x2.shape[-2:-1]],
                 attr_code="op.jt_name=\"matmul\";")[0]
             if self.trans_x2:
-                output_shape = grad_output.shape[:-2] + grad_output.shape[-1:] + x1.shape[-1:]
-                grad_x2 = acl_cmd(
-                    "MatMul", [grad_output.transpose(-2, -1), x1],
-                    output_dtypes=[x2.dtype],
-                    output_shapes=[output_shape],
-                    attr_code="op.jt_name=\"matmul\";")[0]
+                output_shape = grad_output.shape[:-2] + grad_output.shape[
+                    -1:] + x1.shape[-1:]
+                grad_x2 = acl_cmd("MatMul",
+                                  [grad_output.transpose(-2, -1), x1],
+                                  output_dtypes=[x2.dtype],
+                                  output_shapes=[output_shape],
+                                  attr_code="op.jt_name=\"matmul\";")[0]
             else:
-                output_shape = x1.shape[:-2] + x1.shape[-1:] + grad_output.shape[-1:]
-                grad_x2 = acl_cmd(
-                    "MatMul", [x1.transpose(-2, -1), grad_output],
-                    output_dtypes=[x2.dtype],
-                    output_shapes=[output_shape],
-                    attr_code="op.jt_name=\"matmul\";")[0]
+                output_shape = x1.shape[:-2] + x1.shape[
+                    -1:] + grad_output.shape[-1:]
+                grad_x2 = acl_cmd("MatMul",
+                                  [x1.transpose(-2, -1), grad_output],
+                                  output_dtypes=[x2.dtype],
+                                  output_shapes=[output_shape],
+                                  attr_code="op.jt_name=\"matmul\";")[0]
             return grad_x1, grad_x2
 
     def matmul(x1, x2):
@@ -1456,73 +1464,109 @@ def change_function():
                                  output_shapes=[grad_output.shape],
                                  attr_code=attr_code)[0]
             return grad_input
+
     class SiLUACL(Function):
+
         def __init__(self):
             super(SiLUACL, self).__init__()
-        def execute(self,x):
+
+        def execute(self, x):
             inputs = [x]
             self.input = x
             outputs = [jt.empty(x.shape)]
             attr_code = f"""
             op.jt_name = "silu";
             """
-            result = acl_cmd("SiLU",inputs=inputs,outputs=outputs,attr_code=attr_code)[0]
+            result = acl_cmd("SiLU",
+                             inputs=inputs,
+                             outputs=outputs,
+                             attr_code=attr_code)[0]
             return result
-        
-        def grad(self,grad_output):
+
+        def grad(self, grad_output):
             attr_code = f"""
             op.jt_name = "silubackward";
             """
-            inputs = [grad_output,self.input]
+            inputs = [grad_output, self.input]
             outputs = [jt.empty(grad_output.shape)]
-            grad_input = acl_cmd("SiLUBackward",inputs = inputs,outputs = outputs,attr_code=attr_code)[0]
+            grad_input = acl_cmd("SiLUBackward",
+                                 inputs=inputs,
+                                 outputs=outputs,
+                                 attr_code=attr_code)[0]
             return grad_input
+
     class SiLU(jt.nn.Module):
+
         def __init__(self):
-            super(SiLU,self).__init__()
-        def execute(self,x):
+            super(SiLU, self).__init__()
+
+        def execute(self, x):
             return SiLUACL()(x)
+
     class SigmoidACL(Function):
+
         def __init__(self):
             super(SigmoidACL, self).__init__()
-        def execute(self,x):
+
+        def execute(self, x):
             inputs = [x]
             outputs = [jt.empty(x.shape)]
             attr_code = f"""
             op.jt_name = "sigmoid";
             """
-            result = acl_cmd("Sigmoid",inputs=inputs,outputs=outputs,attr_code=attr_code)[0]
+            result = acl_cmd("Sigmoid",
+                             inputs=inputs,
+                             outputs=outputs,
+                             attr_code=attr_code)[0]
             self.output = result
             return result
-        def grad(self,grad_output):
+
+        def grad(self, grad_output):
             attr_code = f"""
             op.jt_name = "sigmoidbackward";
             """
-            inputs = [grad_output,self.output]
+            inputs = [grad_output, self.output]
             outputs = [jt.empty(grad_output.shape)]
-            grad_input = acl_cmd("SigmoidBackward",inputs = inputs,outputs = outputs,attr_code=attr_code)[0]
+            grad_input = acl_cmd("SigmoidBackward",
+                                 inputs=inputs,
+                                 outputs=outputs,
+                                 attr_code=attr_code)[0]
             return grad_input
+
     class Sigmoid(jt.nn.Module):
+
         def __init__(self):
-            super(Sigmoid,self).__init__()
-        def execute(self,x):
+            super(Sigmoid, self).__init__()
+
+        def execute(self, x):
             return SigmoidACL()(x)
+
     class EmbeddingACL(Function):
+
         def __init__(self):
             super(EmbeddingACL, self).__init__()
-        def execute(self,indices,weight,):
-            inputs = [weight,indices]
+
+        def execute(
+            self,
+            indices,
+            weight,
+        ):
+            inputs = [weight, indices]
             self.indices = indices
             self.weight_shape = weight.shape
-            output_shape = list(indices.shape)+list(weight.shape[1:])
+            output_shape = list(indices.shape) + list(weight.shape[1:])
             outputs = [jt.empty(output_shape)]
             attr_code = f"""
             op.jt_name = "embedding";
             """
-            result = acl_cmd("Embedding",inputs=inputs,outputs=outputs,attr_code=attr_code)[0]
+            result = acl_cmd("Embedding",
+                             inputs=inputs,
+                             outputs=outputs,
+                             attr_code=attr_code)[0]
             return result
-        def grad(self,grad_output):
-            inputs = [grad_output,self.indices]
+
+        def grad(self, grad_output):
+            inputs = [grad_output, self.indices]
             outputs = [jt.empty(self.weight_shape)]
             attr_code = f"""
             op.jt_name = "embeddingbackward";
@@ -1530,20 +1574,31 @@ def change_function():
             attr->numEmbeddings = {self.weight_shape[0]};
             op.op_attr.reset(attr);
             """
-            grad_weight = acl_cmd("EmbeddingBackward",inputs=inputs,outputs=outputs,attr_code=attr_code)[0]
-            return None,grad_weight
-        
+            grad_weight = acl_cmd("EmbeddingBackward",
+                                  inputs=inputs,
+                                  outputs=outputs,
+                                  attr_code=attr_code)[0]
+            return None, grad_weight
+
     class Embedding(jt.nn.Module):
-        def __init__(self, num_embeddings, embedding_dim, padding_idx=None, dtype="float32"):
+
+        def __init__(self,
+                     num_embeddings,
+                     embedding_dim,
+                     padding_idx=None,
+                     dtype="float32"):
             self.num_embeddings = num_embeddings
             self.embedding_dim = embedding_dim
             self.padding_idx = padding_idx
-            self.weight = jt.init.gauss([self.num_embeddings, self.embedding_dim], dtype)
+            self.weight = jt.init.gauss(
+                [self.num_embeddings, self.embedding_dim], dtype)
             if padding_idx is not None:
                 self.weight[padding_idx] = 0
+
         def execute(self, x):
-            res = embedding(x,self.weight)
+            res = embedding(x, self.weight)
             return res
+
     class Dropout(jt.nn.Module):
 
         def __init__(self, p=0.5, is_train=False):
@@ -1597,8 +1652,10 @@ def change_function():
         jt.getitem, getitem)(x, slices)
 
     jt.setitem = warp(jt.setitem, setitem)
-    jt.Var.setitem = lambda x, slices, value: warp(jt.Var.setitem, setitem)(x, slices, value)
-    jt.Var.__setitem__ = lambda x, slices, value: warp(jt.Var.__setitem__, setitem)(x, slices, value)
+    jt.Var.setitem = lambda x, slices, value: warp(jt.Var.setitem, setitem)(
+        x, slices, value)
+    jt.Var.__setitem__ = lambda x, slices, value: warp(
+        jt.Var.__setitem__, setitem)(x, slices, value)
 
     jt.nn.bmm = warp(jt.nn.bmm, bmm)
     jt.bmm = warp(jt.bmm, bmm)
@@ -1613,16 +1670,22 @@ def change_function():
 
     jt.nn.leaky_relu = warp(jt.nn.leaky_relu, leaky_relu)
     jt.nn.LeakyReLU = warp(jt.nn.LeakyReLU, LeakyReLU)
+
     def silu(x):
         return SiLUACL()(x)
+
     jt.nn.silu = warp(jt.nn.silu, silu)
     jt.nn.SiLU = warp(jt.nn.SiLU, SiLU)
+
     def sigmoid(x):
         return SigmoidACL()(x)
+
     jt.sigmoid = warp(jt.sigmoid, sigmoid)
     jt.nn.Sigmoid = warp(jt.nn.Sigmoid, Sigmoid)
-    def embedding(indices,weight):
-        return EmbeddingACL()(indices,weight)
+
+    def embedding(indices, weight):
+        return EmbeddingACL()(indices, weight)
+
     jt.nn.embedding = warp(jt.nn.embedding, embedding)
     jt.nn.Embedding = warp(jt.nn.Embedding, Embedding)
     # jt.nn.dropout = warp(jt.nn.dropout, dropout)

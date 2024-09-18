@@ -467,7 +467,7 @@ namespace jittor
                 auto ends = aclCreateIntArray(attr->ends.data(), attr->ends.size());
                 auto steps = aclCreateIntArray(attr->steps.data(), attr->steps.size());
                 auto axes = aclCreateIntArray(attr->axes.data(), attr->axes.size());
-                ret = it->second.getWorkspaceSizeFuncStridedSliceAssignV2(outputTensors[0],inputTensors[0], begins, ends, steps,axes, &workspaceSize, &executor);
+                ret = it->second.getWorkspaceSizeFuncStridedSliceAssignV2(outputTensors[0], inputTensors[0], begins, ends, steps, axes, &workspaceSize, &executor);
             }
             else if (jt_name == "range")
             {
@@ -495,7 +495,7 @@ namespace jittor
                 auto attr = dynamic_cast<DropoutAttr *>(op_attr.get());
                 ret = it->second.getWorkspaceSizeFuncDropoutBackward(inputTensors[0], inputTensors[1], attr->scale, outputTensors[0], &workspaceSize, &executor);
             }
-            else if (name ==string("SiLU"))
+            else if (name == string("SiLU"))
             {
                 ret = it->second.getWorkspaceSizeFuncUnary(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
             }
@@ -503,7 +503,7 @@ namespace jittor
             {
                 ret = it->second.getWorkspaceSizeFuncBinary(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
             }
-            else if (name ==string("Sigmoid"))
+            else if (name == string("Sigmoid"))
             {
                 ret = it->second.getWorkspaceSizeFuncUnary(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
             }
@@ -511,15 +511,15 @@ namespace jittor
             {
                 ret = it->second.getWorkspaceSizeFuncBinary(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
             }
-            else if (name ==string("Embedding"))
+            else if (name == string("Embedding"))
             {
                 ret = it->second.getWorkspaceSizeFuncBinary(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
             }
-            else if(name==string("EmbeddingBackward"))
+            else if (name == string("EmbeddingBackward"))
             {
                 auto attr = dynamic_cast<EmbeddingAttr *>(op_attr.get());
                 auto numEmbeddings = attr->numEmbeddings;
-                ret = it->second.getWorkspaceSizeFuncEmbeddingBackward(inputTensors[0], inputTensors[1],numEmbeddings,0,false,outputTensors[0], &workspaceSize, &executor);
+                ret = it->second.getWorkspaceSizeFuncEmbeddingBackward(inputTensors[0], inputTensors[1], numEmbeddings, 0, false, outputTensors[0], &workspaceSize, &executor);
             }
             else
                 LOGir << "not supported op " << jt_name;
@@ -542,6 +542,10 @@ namespace jittor
             // 5. 调用aclnnxx第二段接口
             ret = it->second.executeFunc(workspaceAddr, workspaceSize, executor, aclstream);
             CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnxxx failed. ERROR: %d\n", name.c_str(), ret); return);
+
+            // 6. （固定写法）同步等待任务执行结束
+            ret = aclrtSynchronizeStream(aclstream);
+            CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclrtSynchronizeStream failed. ERROR: %d\n", name.c_str(), ret); return);
 
             // 6. 释放aclTensor和aclScalar，需要根据具体API的接口定义修改
             // destroy tensor
