@@ -1044,6 +1044,7 @@ def change_function():
                              output_dtypes=[x.dtype],
                              output_shapes=[jt.empty(sizes).shape],
                              attr_code=attr_code)[0]
+            self.squeeze_dims = squeeze_dims
             for dim in squeeze_dims[::-1]:
                 result = jt.squeeze(result, dim)
             return result
@@ -1069,11 +1070,24 @@ def change_function():
                 steps = self.steps
                 dims = self.dims
                 slices = self.slices
+                #注意前向的维数可能会被压缩，所以这里要还原
+                for dim in self.squeeze_dims:
+                    grad_output = jt.unsqueeze(grad_output, dim)
                 #适配华为奇怪的要求，最后一个维度的step必须是1
                 expand_dim = False
-                if slices[-1].stop is not None or slices[-1].step is not 1:
+                if isinstance(slices[-1], slice):
+                    if slices[-1].stop is not None or slices[-1].step is not 1:
+                        slices = slices + (slice(None, None, None), )
+                        expand_dim = True
+                elif isinstance(slices[-1], int):
+                    #注意最后一个维度是数字
+                    slices = list(slices)
+                    slices[-1] = slice(slices[-1], slices[-1] + 1, 1)
+                    slices = tuple(slices)
                     slices = slices + (slice(None, None, None), )
                     expand_dim = True
+                else:
+                    assert False, "not supported"
                     # x = x.unsqueeze(-1)
                 if expand_dim:
                     grad_output = grad_output.unsqueeze(-1)
@@ -1100,6 +1114,7 @@ def change_function():
                     if not sizes:
                         sizes = [1]
                         steps = [1]
+                breakpoint()
                 attr_code = f"""
                 op.jt_name = "stridedsliceassignv2";
                 StrideAttr *attr = new StrideAttr();
@@ -1140,7 +1155,6 @@ def change_function():
             return stride
 
         def execute(self, x, slices, value):
-            # breakpoint()
             self.x_shape = x.shape
             self.input_slice = slices
             # assert isinstance(value,jt.Var), "value must be jt.Var"
@@ -1205,18 +1219,35 @@ def change_function():
             dims = []
             #适配华为奇怪的要求，最后一个维度的step必须是1
             expand_dim = False
-            if slices[-1].stop is not None or slices[-1].step is not 1:
+            if isinstance(slices[-1], slice):
+                if slices[-1].stop is not None or slices[-1].step is not 1:
+                    slices = slices + (slice(None, None, None), )
+                    expand_dim = True
+            elif isinstance(slices[-1], int):
+                #注意最后一个维度是数字
                 slices = slices + (slice(None, None, None), )
                 expand_dim = True
-                x = x.unsqueeze(-1)
-                value = value.unsqueeze(-1)
+            else:
+                assert False, "not supported"
+            x_shape = list(x.shape)
+            if expand_dim:
+                x_shape.append(1)
+            
+            squeeze_dims = []
+            if isinstance(value,jt.Var):
+                for dim, s in enumerate(slices):
+                    if isinstance(s, int):
+                        s = slice(s, s + 1, 1)
+                        squeeze_dims.append(dim)
+                
+                for dim in squeeze_dims:
+                    value = value.unsqueeze(dim)  
             for dim, s in enumerate(slices):
                 if isinstance(s, int):
                     s = slice(s, s + 1, 1)
-                    # squeeze_dims.append(dim)
                 if isinstance(s, jt.Var):
                     assert False, "jt.Var not supported"
-                start, stop, step = s.indices(x.size(dim))
+                start, stop, step = s.indices(x_shape[dim])
                 size = (stop - start - 1) // step + 1
                 # stride = self.stride(x, dim) * step
                 sizes.append(size)
@@ -1246,8 +1277,7 @@ def change_function():
                              inputs=inputs,
                              outputs=outputs,
                              attr_code=attr_code)[0]
-            if expand_dim:
-                result = result.squeeze(-1)
+            result.sync()
             return result
 
         def grad(self, grad_output):
