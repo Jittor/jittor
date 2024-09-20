@@ -1049,7 +1049,7 @@ def change_function():
                 attr_code = f"""
                 op.jt_name = "indexputimplaccumulate";
                 """
-                outputs = [jt.zeros(self.x_shape)]
+                outputs = [jt.zeros(self.x_shape, dtype=grad_output.dtype)]
                 # breakpoint()
                 result = acl_cmd("IndexPutImplAccumulate",
                                  inputs=inputs,
@@ -1108,7 +1108,7 @@ def change_function():
                 # attr_code = f"""
                 # op.jt_name = "stridedsliceassignv2";
                 # """
-                outputs = [jt.zeros(self.x_shape)]
+                outputs = [jt.zeros(self.x_shape, dtype=grad_output.dtype)]
                 result = acl_cmd("StridedSliceAssignV2",
                                  inputs=inputs,
                                  outputs=outputs,
@@ -1473,7 +1473,7 @@ def change_function():
         def execute(self, x):
             inputs = [x]
             self.input = x
-            outputs = [jt.empty(x.shape)]
+            outputs = [jt.empty(x.shape,x.dtype)]
             attr_code = f"""
             op.jt_name = "silu";
             """
@@ -1488,7 +1488,7 @@ def change_function():
             op.jt_name = "silubackward";
             """
             inputs = [grad_output, self.input]
-            outputs = [jt.empty(grad_output.shape)]
+            outputs = [jt.empty(grad_output.shape,grad_output.dtype)]
             grad_input = acl_cmd("SiLUBackward",
                                  inputs=inputs,
                                  outputs=outputs,
@@ -1510,7 +1510,7 @@ def change_function():
 
         def execute(self, x):
             inputs = [x]
-            outputs = [jt.empty(x.shape)]
+            outputs = [jt.empty(x.shape, x.dtype)]
             attr_code = f"""
             op.jt_name = "sigmoid";
             """
@@ -1526,7 +1526,7 @@ def change_function():
             op.jt_name = "sigmoidbackward";
             """
             inputs = [grad_output, self.output]
-            outputs = [jt.empty(grad_output.shape)]
+            outputs = [jt.empty(grad_output.shape, grad_output.dtype)]
             grad_input = acl_cmd("SigmoidBackward",
                                  inputs=inputs,
                                  outputs=outputs,
@@ -1555,7 +1555,7 @@ def change_function():
             self.indices = indices
             self.weight_shape = weight.shape
             output_shape = list(indices.shape) + list(weight.shape[1:])
-            outputs = [jt.empty(output_shape)]
+            outputs = [jt.empty(output_shape, weight.dtype)]
             attr_code = f"""
             op.jt_name = "embedding";
             """
@@ -1567,7 +1567,7 @@ def change_function():
 
         def grad(self, grad_output):
             inputs = [grad_output, self.indices]
-            outputs = [jt.empty(self.weight_shape)]
+            outputs = [jt.empty(self.weight_shape, grad_output.dtype)]
             attr_code = f"""
             op.jt_name = "embeddingbackward";
             EmbeddingAttr *attr = new EmbeddingAttr();
