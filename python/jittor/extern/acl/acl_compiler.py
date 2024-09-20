@@ -950,8 +950,14 @@ def change_function():
 
         def execute(self, x, slices, return_x=None):
             self.x_shape = x.shape
+
             if not isinstance(slices, tuple):
                 slices = (slices, )
+            slices = list(slices)
+            for i, s in enumerate(slices):
+                if isinstance(s,int) and s<0:
+                    slices[i] = s + x.shape[i]
+            slices = tuple(slices)
             slices_list = list(slices)
             # if not isinstance(slices[0], slice):
             #check slices contains slice type
@@ -1141,6 +1147,11 @@ def change_function():
             # self.value_shape = value.shape
             if not isinstance(slices, tuple):
                 slices = (slices, )
+            slices = list(slices)
+            for i, s in enumerate(slices):
+                if isinstance(s, int) and s < 0:
+                    slices[i] = x.shape[i] + s
+            slices = tuple(slices)
             slices_list = list(slices)
             #check slices contains slice type
             contains_slice = False
