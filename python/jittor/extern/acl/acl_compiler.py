@@ -571,6 +571,8 @@ def change_function():
             super(FlipACL, self).__init__()
 
         def execute(self, input, dim):
+            if type(dim) is not list:
+                dim = [dim]
             attr_code = f"""
             op.jt_name = "flip";
             ReduceAttr *attr = new ReduceAttr();
@@ -995,6 +997,7 @@ def change_function():
                                      output_dtypes=[x.dtype],
                                      output_shapes=[output_shape],
                                      attr_code=attr_code)[0]
+                    result.sync()
                     return result
             assert contains_slice, "slice type error"
             x_dim = len(x.shape)
@@ -1047,6 +1050,7 @@ def change_function():
             self.squeeze_dims = squeeze_dims
             for dim in squeeze_dims[::-1]:
                 result = jt.squeeze(result, dim)
+            result.sync()
             return result
 
         def grad(self, grad_output):
@@ -1114,7 +1118,6 @@ def change_function():
                     if not sizes:
                         sizes = [1]
                         steps = [1]
-                breakpoint()
                 attr_code = f"""
                 op.jt_name = "stridedsliceassignv2";
                 StrideAttr *attr = new StrideAttr();
@@ -1124,16 +1127,13 @@ def change_function():
                 attr->axes = {{ {", ".join(map(str, dims))} }};
                 op.op_attr.reset(attr);
                 """
-                # print()
                 inputs = [grad_output]
-                # attr_code = f"""
-                # op.jt_name = "stridedsliceassignv2";
-                # """
                 outputs = [jt.zeros(self.x_shape, dtype=grad_output.dtype)]
                 result = acl_cmd("StridedSliceAssignV2",
                                  inputs=inputs,
                                  outputs=outputs,
                                  attr_code=attr_code)[0]
+                result.sync()
                 if expand_dim:
                     result = result.squeeze(-1)
                 return result
@@ -1672,8 +1672,8 @@ def change_function():
     jt.nn.Pool = warp(jt.nn.Pool, PoolACL)
 
     jt.flip = warp(jt.flip, flip)
-    jt.Var.flip = lambda x, dim_vector: warp(jt.Var.flip, flip)(x, dim_vector)
-    jt.concat = warp(jt.concat, concat)
+    jt.Var.flip = lambda x, dim_vector=0: warp(jt.Var.flip, flip)(x, dim_vector)
+    # jt.concat = warp(jt.concat, concat)
 
     jt.gather = warp(jt.gather, gather)
 
@@ -1709,14 +1709,14 @@ def change_function():
     # jt.nn.relu = warp(jt.nn.relu, relu)
     # jt.nn.ReLU = warp(jt.nn.ReLU, ReLU)
 
-    jt.nn.leaky_relu = warp(jt.nn.leaky_relu, leaky_relu)
-    jt.nn.LeakyReLU = warp(jt.nn.LeakyReLU, LeakyReLU)
+    # jt.nn.leaky_relu = warp(jt.nn.leaky_relu, leaky_relu)
+    # jt.nn.LeakyReLU = warp(jt.nn.LeakyReLU, LeakyReLU)
 
     def silu(x):
         return SiLUACL()(x)
 
-    jt.nn.silu = warp(jt.nn.silu, silu)
-    jt.nn.SiLU = warp(jt.nn.SiLU, SiLU)
+    # jt.nn.silu = warp(jt.nn.silu, silu)
+    # jt.nn.SiLU = warp(jt.nn.SiLU, SiLU)
 
     def sigmoid(x):
         return SigmoidACL()(x)
@@ -1727,7 +1727,7 @@ def change_function():
     def embedding(indices, weight):
         return EmbeddingACL()(indices, weight)
 
-    jt.nn.embedding = warp(jt.nn.embedding, embedding)
-    jt.nn.Embedding = warp(jt.nn.Embedding, Embedding)
+    # jt.nn.embedding = warp(jt.nn.embedding, embedding)
+    # jt.nn.Embedding = warp(jt.nn.Embedding, Embedding)
     # jt.nn.dropout = warp(jt.nn.dropout, dropout)
     # jt.nn.Dropout = warp(jt.nn.Dropout, Dropout)
