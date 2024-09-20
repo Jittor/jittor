@@ -982,7 +982,7 @@ def change_function():
                 if output_shape == []:
                     output_shape = [1]
                 for ii in slices:
-                    indices.append(jt.Var(ii))
+                    indices.append(jt.Var(ii).int32())
                 if isinstance(slices[0], jt.Var) or isinstance(
                         slices[0], int) or isinstance(
                             slices[0], list) or isinstance(slices[0], tuple):
@@ -1190,7 +1190,7 @@ def change_function():
                     value = jt.full(value_shape, value)
                 self.value_shape = value_shape
                 for ii in slices:
-                    indices.append(jt.Var(ii))
+                    indices.append(jt.Var(ii).int32())
                 if isinstance(slices[0], jt.Var) or isinstance(
                         slices[0], int) or isinstance(
                             slices[0], list) or isinstance(slices[0], tuple):
