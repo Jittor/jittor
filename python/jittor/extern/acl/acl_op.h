@@ -169,7 +169,7 @@ namespace jittor
                 }
                 else if (get_dtype(in_[0]->dtype()) == ACL_FLOAT16)
                 {
-                    float alphaValue = 1.0;
+                    __fp16 alphaValue = 1.0;
                     alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
                 }
                 else if (get_dtype(in_[0]->dtype()) == ACL_INT64)
