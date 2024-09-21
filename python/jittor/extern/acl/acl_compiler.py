@@ -633,7 +633,6 @@ def change_function():
             return result
 
         def grad(self, grad_output):
-            print("here is grad")
             grad_inputs = self.split_grad(grad_output, self.input, self.axis)
             return grad_inputs
 
@@ -1067,7 +1066,7 @@ def change_function():
                                  outputs=outputs,
                                  attr_code=attr_code)[0]
                 result.sync()
-                return result
+                return result, None
             elif self.type_ == 'slicev2':
                 begins = self.begins
                 ends = self.ends
@@ -1136,7 +1135,7 @@ def change_function():
                 result.sync()
                 if expand_dim:
                     result = result.squeeze(-1)
-                return result
+                return result, None
             else:
                 assert False, f"grad not implemented for {self.type_}"
 
@@ -1489,7 +1488,6 @@ def change_function():
                              output_shapes=[x.shape, mask_shape],
                              attr_code=attr_code)
             self.maskout = result[1]
-            print(self.maskout)
             return result[0]
 
         def grad(self, grad_output):
@@ -1721,8 +1719,8 @@ def change_function():
     def sigmoid(x):
         return SigmoidACL()(x)
 
-    jt.sigmoid = warp(jt.sigmoid, sigmoid)
-    jt.nn.Sigmoid = warp(jt.nn.Sigmoid, Sigmoid)
+    # jt.sigmoid = warp(jt.sigmoid, sigmoid)
+    # jt.nn.Sigmoid = warp(jt.nn.Sigmoid, Sigmoid)
 
     def embedding(indices, weight):
         return EmbeddingACL()(indices, weight)
