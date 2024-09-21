@@ -99,10 +99,14 @@ namespace jittor
         // for embedding
         // std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncEmbedding;
 
-        // for embedding backwarda
+        // for embedding backward
         std::function<aclnnStatus(aclTensor *, aclTensor *, uint64_t,uint64_t,bool,aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncEmbeddingBackward;
         
+        // for InplaceMaskedScatter MaskedSelect
+        // std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncInplaceMaskedScatter;
         std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, aclrtStream)> executeFunc;
+
+
 
         // 添加一个默认构造函数
         AclOpFunctions() = default;
@@ -353,6 +357,8 @@ namespace jittor
         {"SigmoidBackward",AclOpFunctions(aclnnSigmoidBackwardGetWorkspaceSize, aclnnSigmoidBackward)},
         {"Embedding",AclOpFunctions(aclnnEmbeddingGetWorkspaceSize,aclnnEmbedding)},
         {"EmbeddingBackward",AclOpFunctions(aclnnEmbeddingDenseBackwardGetWorkspaceSize,aclnnEmbeddingDenseBackward)},
+        {"InplaceMaskedScatter",AclOpFunctions(aclnnInplaceMaskedScatterGetWorkspaceSize,aclnnInplaceMaskedScatter)},
+        {"MaskedSelect",AclOpFunctions(aclnnMaskedSelectGetWorkspaceSize,aclnnMaskedSelect)},
     };
 
     struct AclOpAttr

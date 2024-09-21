@@ -950,6 +950,30 @@ def change_function():
             return stride
 
         def execute(self, x, slices, return_x=None):
+            if isinstance(slices,jt.Var) and slices.dtype =='bool':
+                # assert False, "not support bool type now"
+                #TODO:优化
+                assert x.shape == slices.shape, "shape not match"
+                output_len = slices.sum().item()
+                # output = jt.empty((output_len,),dtype=x.dtype)
+                x_len = x.numel()
+                output = jt.empty((x_len),dtype=x.dtype)
+                outputs = [output]
+                inputs = [x,slices]
+                # print(inputs,outputs)
+                # print(output.shape)
+                self.mask = slices
+                self.type_ = 'mask'
+                attr_code = f"""
+                op.jt_name = "maskedselect";
+                """
+                result = acl_cmd("MaskedSelect",
+                                inputs=inputs,
+                                outputs=outputs,
+                                attr_code=attr_code)[0]
+                result = result[:output_len]
+                result.sync()
+                return result
             self.x_shape = x.shape
 
             if not isinstance(slices, tuple):
@@ -1136,6 +1160,9 @@ def change_function():
                 if expand_dim:
                     result = result.squeeze(-1)
                 return result, None
+            elif self.type_ == 'mask':
+                return self.mask.float()
+                pass
             else:
                 assert False, f"grad not implemented for {self.type_}"
 
@@ -1154,6 +1181,28 @@ def change_function():
             return stride
 
         def execute(self, x, slices, value):
+            if isinstance(slices, jt.Var):
+                if slices.dtype == "bool":
+                    if isinstance(value, int) or isinstance(value, float):
+                        value = jt.full(x.shape, value)
+                    assert slices.shape == x.shape, "setitem shape not match"
+                    assert x.shape == value.shape, "setitem shape not match"
+                    self.type_ = 'mask'
+                    inputs = [value,slices]
+                    outputs = [x]
+                    self.mask = slices
+                    attr_code = f"""
+                    op.jt_name = "inplacemaskedscatter";
+                    """
+                    result = acl_cmd("InplaceMaskedScatter",
+                                     inputs=inputs,
+                                     outputs=outputs,
+                                     attr_code=attr_code)[0]
+                    #!!!!!!!!!!!单独跑结果不对
+                    print('warning: there maybe some bugs in inplace masked scatter')
+                    #TODO: 去除sync优化
+                    result.sync()
+                    return result
             self.x_shape = x.shape
             self.input_slice = slices
             # assert isinstance(value,jt.Var), "value must be jt.Var"
@@ -1286,6 +1335,7 @@ def change_function():
 
     def setitem(x, slices, value):
         return SetItemACL()(x, slices, value)
+
 
     class BmmACL(Function):
 
@@ -1689,6 +1739,11 @@ def change_function():
     jt.getitem = warp(jt.getitem, getitem)
     jt.Var.getitem = lambda x, slices, return_x=None: warp(
         jt.getitem, getitem)(x, slices)
+    jt.Var.slice_var = lambda x, slices, return_x=None: warp(
+        jt.getitem, getitem)(x, slices)
+    jt.Var.__getitem__ = lambda x, slices, return_x=None: warp(
+          jt.Var.__getitem__ , getitem)(x, slices)
+    
 
     jt.setitem = warp(jt.setitem, setitem)
     jt.Var.setitem = lambda x, slices, value: warp(jt.Var.setitem, setitem)(

@@ -521,6 +521,16 @@ namespace jittor
                 auto numEmbeddings = attr->numEmbeddings;
                 ret = it->second.getWorkspaceSizeFuncEmbeddingBackward(inputTensors[0], inputTensors[1], numEmbeddings, 0, false, outputTensors[0], &workspaceSize, &executor);
             }
+            else if(name == string("InplaceMaskedScatter"))
+            {
+                ret = it->second.getWorkspaceSizeFuncBinary(outputTensors[0], inputTensors[1], inputTensors[0], &workspaceSize, &executor);
+             
+            }
+            else if(name == string("MaskedSelect"))
+            {
+                ret = it->second.getWorkspaceSizeFuncBinary(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
+       
+            }
             else
                 LOGir << "not supported op " << jt_name;
 

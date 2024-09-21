@@ -91,6 +91,8 @@
 #include "aclnnop/aclnn_sigmoid_backward.h"
 #include "aclnnop/aclnn_embedding.h"
 #include "aclnnop/aclnn_embedding_dense_backward.h"
+#include "aclnnop/aclnn_masked_scatter.h"
+#include "aclnnop/aclnn_masked_select.h"
 
 #define CHECK_RET(cond, return_expr) \
   do                                 \
