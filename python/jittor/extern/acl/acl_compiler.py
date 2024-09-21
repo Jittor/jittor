@@ -1103,7 +1103,7 @@ def change_function():
                 #适配华为奇怪的要求，最后一个维度的step必须是1
                 expand_dim = False
                 if isinstance(slices[-1], slice):
-                    if slices[-1].stop is not None or slices[-1].step is not 1:
+                    if slices[-1].stop is not None and slices[-1].step != 1:
                         slices = slices + (slice(None, None, None), )
                         expand_dim = True
                 elif isinstance(slices[-1], int):
@@ -1268,7 +1268,7 @@ def change_function():
             #适配华为奇怪的要求，最后一个维度的step必须是1
             expand_dim = False
             if isinstance(slices[-1], slice):
-                if slices[-1].stop is not None or slices[-1].step is not 1:
+                if slices[-1].stop is not None and slices[-1].step != 1:
                     slices = slices + (slice(None, None, None), )
                     expand_dim = True
             elif isinstance(slices[-1], int):
