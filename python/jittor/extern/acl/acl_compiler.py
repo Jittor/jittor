@@ -1702,7 +1702,6 @@ def change_function():
         return DropoutACL()(x, p, is_train)
 
     def warp(origin_func, new_func):
-
         def warpper(*args, **kwargs):
             if jt.flags.use_acl:
                 return new_func(*args, **kwargs)
@@ -1712,44 +1711,40 @@ def change_function():
 
     jt.triu = warp(jt.triu, triu)
     jt.triu_ = warp(jt.triu, triu)
-    jt.Var.triu = lambda x: warp(jt.Var.triu, triu)(x)
-    jt.Var.triu_ = lambda x: warp(jt.Var.triu_, triu)(x)
+    jt.Var.triu = lambda x: jt.triu(x)
+    jt.Var.triu_ = lambda x: jt.triu_(x)
     jt.nn.conv2d = warp(jt.nn.conv2d, ConvACL())
     jt.nn.Conv2d = warp(jt.nn.Conv2d, Conv2D)
     jt.nn.Conv = warp(jt.nn.Conv, Conv2D)
     jt.nn.Pool = warp(jt.nn.Pool, PoolACL)
 
     jt.flip = warp(jt.flip, flip)
-    jt.Var.flip = lambda x, dim_vector=0: warp(jt.Var.flip, flip)(x, dim_vector)
+    jt.Var.flip = lambda x, dim_vector=0: jt.flip(x, dim_vector)
     # jt.concat = warp(jt.concat, concat)
 
     jt.gather = warp(jt.gather, gather)
 
     jt.cumsum = warp(jt.cumsum, cumsum)
     jt.index = warp(jt.index, index)
-    jt.Var.index = lambda x, dim=None: warp(jt.index, index)(x.shape, dim)
+    jt.Var.index = lambda x, dim=None: jt.index(x.shape, dim)
 
     jt.scatter = warp(jt.scatter, scatter)
-    jt.Var.scatter = lambda x, dim, index, src, reduce="void": warp(
-        jt.scatter, scatter)(x, dim, index, src, reduce)
+    jt.Var.scatter = lambda x, dim, index, src, reduce="void": jt.scatter(x, dim, index, src, reduce)
 
     jt.floor_int = warp(jt.floor_int, floor_int)
-    jt.Var.floor_int = lambda x: warp(jt.floor_int, floor_int)(x)
+    jt.Var.floor_int = lambda x: jt.floor_int(x)
 
-    jt.getitem = warp(jt.getitem, getitem)
-    jt.Var.getitem = lambda x, slices, return_x=None: warp(
-        jt.getitem, getitem)(x, slices)
-    jt.Var.slice_var = lambda x, slices, return_x=None: warp(
-        jt.getitem, getitem)(x, slices)
-    jt.Var.__getitem__ = lambda x, slices, return_x=None: warp(
-          jt.Var.__getitem__ , getitem)(x, slices)
+    jt.getitem = warp(jt.contrib.getitem, getitem)
+    jt.Var.getitem = lambda x, slices, return_x=None: jt.getitem(x, slices)
+    jt.Var.slice_var = lambda x, slices, return_x=None: jt.getitem(x, slices)
+    jt.Var.__getitem__ = lambda x, slices, return_x=None: jt.getitem(x, slices)
     
 
-    jt.setitem = warp(jt.setitem, setitem)
-    jt.Var.setitem = lambda x, slices, value: warp(jt.Var.setitem, setitem)(
+    jt.setitem = warp(jt.contrib.setitem, setitem)
+    jt.Var.setitem = lambda x, slices, value: jt.setitem(
         x, slices, value)
-    jt.Var.__setitem__ = lambda x, slices, value: warp(
-        jt.Var.__setitem__, setitem)(x, slices, value)
+    jt.Var.__setitem__ = lambda x, slices, value: jt.setitem(
+        x, slices, value)
 
     jt.nn.bmm = warp(jt.nn.bmm, bmm)
     jt.bmm = warp(jt.bmm, bmm)
