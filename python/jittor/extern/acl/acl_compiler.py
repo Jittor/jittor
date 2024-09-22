@@ -242,7 +242,7 @@ def change_function():
         def grad(self, grad_output):
             return grad_output
 
-    def triu(x, k=0):
+    def triu_acl(x, k=0):
         return TriuACL()(x, k)
 
     class ConvACL(Function):
@@ -594,7 +594,7 @@ def change_function():
                                  attr_code=self.attr_code)[0]
             return grad_input
 
-    def flip(x, dim):
+    def flip_acl(x, dim):
         return FlipACL()(x, dim)
 
     class ConcatACL(Function):
@@ -692,7 +692,7 @@ def change_function():
                                  attr_code=attr_code)[0]
             return grad_input
 
-    def gather(input, dim, index):
+    def gather_acl(input, dim, index):
         return GatherACL()(input, dim, index)
 
     class CumsumACL(Function):
@@ -742,7 +742,7 @@ def change_function():
                                  attr_code=flip_attr_code)[0]
             return grad_input
 
-    def cumsum(input, dim=-1):
+    def cumsum_acl(input, dim=-1):
         return CumsumACL()(input, dim)
 
     class IndexACL(Function):
@@ -788,7 +788,7 @@ def change_function():
         def grad(self, grad_output):
             return grad_output
 
-    def index(inshape: list, dim=None, dtype="int32"):
+    def index_acl(inshape: list, dim=None, dtype="int32"):
         return IndexACL()(inshape, dim, dtype)
 
     class ScatterACL(Function):
@@ -826,7 +826,7 @@ def change_function():
                                  attr_code=attr_code)[0]
             return grad_output, None, None, grad_input
 
-    def scatter(input, dim, index, src, reduce='void'):
+    def scatter_acl(input, dim, index, src, reduce='void'):
         return ScatterACL()(input, dim, index, src, reduce)
 
     class WhereACL(Function):
@@ -883,7 +883,7 @@ def change_function():
         def grad(self, grad_output):
             return jt.zeros(self.shape, dtype=grad_output.dtype)
 
-    def floor_int(x):
+    def floor_int_acl(x):
         return FloorIntACL()(x)
 
     def caculate_shape(tensors):
@@ -1166,7 +1166,7 @@ def change_function():
             else:
                 assert False, f"grad not implemented for {self.type_}"
 
-    def getitem(x, slices, return_x=None):
+    def getitem_acl(x, slices, return_x=None):
         return GetItemACL()(x, slices, return_x)
 
     class SetItemACL(Function):
@@ -1333,7 +1333,7 @@ def change_function():
             grad_output[self.input_slice] = jt.zeros(self.value_shape)
             return grad_output, None, value_grad
 
-    def setitem(x, slices, value):
+    def setitem_acl(x, slices, value):
         return SetItemACL()(x, slices, value)
 
 
@@ -1379,10 +1379,10 @@ def change_function():
                                   attr_code="op.jt_name=\"bmm\";")[0]
             return grad_x1, grad_x2
 
-    def bmm(x1, x2):
+    def bmm_acl(x1, x2):
         return BmmACL()(x1, x2)
 
-    def bmm_transpose(x1, x2):
+    def bmm_transpose_acl(x1, x2):
         return BmmACL(True)(x1, x2)
 
     class MatmulACL(Function):
@@ -1426,10 +1426,10 @@ def change_function():
                                   attr_code="op.jt_name=\"matmul\";")[0]
             return grad_x1, grad_x2
 
-    def matmul(x1, x2):
+    def matmul_acl(x1, x2):
         return MatmulACL()(x1, x2)
 
-    def matmul_transpose(x1, x2):
+    def matmul_transpose_acl(x1, x2):
         return MatmulACL(True)(x1, x2)
 
     class ReLUACL(Function):
@@ -1464,7 +1464,7 @@ def change_function():
         def execute(self, x):
             return ReLUACL()(x)
 
-    def relu(x):
+    def reluacl(x):
         return ReLUACL()(x)
 
     class LeakyReLUACL(Function):
@@ -1511,7 +1511,7 @@ def change_function():
         def execute(self, x):
             return LeakyReLUACL()(x, self.negative_slope)
 
-    def leaky_relu(x, scale=0.01):
+    def leaky_reluacl(x, scale=0.01):
         return LeakyReLUACL()(x, scale)
 
     class DropoutACL(Function):
@@ -1698,10 +1698,10 @@ def change_function():
         def execute(self, x):
             return DropoutACL()(x, self.p, self.is_train)
 
-    def dropout(x, p=0.5, is_train=False):
+    def dropoutacl(x, p=0.5, is_train=False):
         return DropoutACL()(x, p, is_train)
 
-    def warp(origin_func, new_func):
+    def warp(origin_func, new_func, name=None):
         def warpper(*args, **kwargs):
             if jt.flags.use_acl:
                 return new_func(*args, **kwargs)
@@ -1709,8 +1709,8 @@ def change_function():
 
         return warpper
 
-    jt.triu = warp(jt.triu, triu)
-    jt.triu_ = warp(jt.triu, triu)
+    jt.triu = warp(jt.triu, triu_acl)
+    jt.triu_ = warp(jt.triu, triu_acl)
     jt.Var.triu = lambda x: jt.triu(x)
     jt.Var.triu_ = lambda x: jt.triu_(x)
     jt.nn.conv2d = warp(jt.nn.conv2d, ConvACL())
@@ -1718,41 +1718,42 @@ def change_function():
     jt.nn.Conv = warp(jt.nn.Conv, Conv2D)
     jt.nn.Pool = warp(jt.nn.Pool, PoolACL)
 
-    jt.flip = warp(jt.flip, flip)
+    jt.flip = warp(jt.flip, flip_acl)
     jt.Var.flip = lambda x, dim_vector=0: jt.flip(x, dim_vector)
     # jt.concat = warp(jt.concat, concat)
 
-    jt.gather = warp(jt.gather, gather)
+    jt.gather = warp(jt.gather, gather_acl)
 
-    jt.cumsum = warp(jt.cumsum, cumsum)
-    jt.index = warp(jt.index, index)
+    jt.cumsum = warp(jt.cumsum, cumsum_acl)
+    jt.index = warp(jt.index, index_acl)
     jt.Var.index = lambda x, dim=None: jt.index(x.shape, dim)
 
-    jt.scatter = warp(jt.scatter, scatter)
+    jt.scatter = warp(jt.scatter, scatter_acl)
     jt.Var.scatter = lambda x, dim, index, src, reduce="void": jt.scatter(x, dim, index, src, reduce)
 
-    jt.floor_int = warp(jt.floor_int, floor_int)
+    jt.floor_int = warp(jt.floor_int, floor_int_acl)
     jt.Var.floor_int = lambda x: jt.floor_int(x)
 
-    jt.getitem = warp(jt.contrib.getitem, getitem)
-    jt.Var.getitem = lambda x, slices, return_x=None: jt.getitem(x, slices)
-    jt.Var.slice_var = lambda x, slices, return_x=None: jt.getitem(x, slices)
-    jt.Var.__getitem__ = lambda x, slices, return_x=None: jt.getitem(x, slices)
+    jt.getitem = warp(jt.contrib.getitem, getitem_acl)
+    fake_getitem = jt.Var.getitem
+    jt.Var.getitem = lambda x, slices, return_x=None: warp(fake_getitem, getitem_acl)(x, slices)
+    jt.Var.slice_var = lambda x, slices, return_x=None: warp(fake_getitem, getitem_acl)(x, slices)
+    jt.Var.__getitem__ = lambda x, slices, return_x=None: warp(fake_getitem, getitem_acl)(x, slices)
     
-
-    jt.setitem = warp(jt.contrib.setitem, setitem)
-    jt.Var.setitem = lambda x, slices, value: jt.setitem(
+    jt.setitem = warp(jt.contrib.setitem, setitem_acl)
+    fake_setitem = jt.Var.setitem
+    jt.Var.setitem = lambda x, slices, value: warp(fake_setitem, setitem_acl)(
         x, slices, value)
-    jt.Var.__setitem__ = lambda x, slices, value: jt.setitem(
+    jt.Var.__setitem__ = lambda x, slices, value: warp(fake_setitem, setitem_acl)(
         x, slices, value)
 
-    jt.nn.bmm = warp(jt.nn.bmm, bmm)
-    jt.bmm = warp(jt.bmm, bmm)
-    jt.nn.matmul = warp(jt.matmul, matmul)
-    jt.matmul = warp(jt.matmul, matmul)
-    jt.nn.matmul_transpose = warp(jt.nn.matmul_transpose, matmul_transpose)
-    jt.nn.bmm_transpose = warp(jt.nn.bmm_transpose, bmm_transpose)
-    jt.bmm_transpose = warp(jt.bmm_transpose, bmm_transpose)
+    jt.nn.bmm = warp(jt.nn.bmm, bmm_acl)
+    jt.bmm = warp(jt.bmm, bmm_acl)
+    jt.nn.matmul = warp(jt.matmul, matmul_acl)
+    jt.matmul = warp(jt.matmul, matmul_acl)
+    jt.nn.matmul_transpose = warp(jt.nn.matmul_transpose, matmul_transpose_acl)
+    jt.nn.bmm_transpose = warp(jt.nn.bmm_transpose, bmm_transpose_acl)
+    jt.bmm_transpose = warp(jt.bmm_transpose, bmm_transpose_acl)
 
     # jt.nn.relu = warp(jt.nn.relu, relu)
     # jt.nn.ReLU = warp(jt.nn.ReLU, ReLU)
