@@ -1173,6 +1173,7 @@ def change_function():
 
         def __init__(self):
             self.type_ = 'notype'
+            self.value_var = True
 
         def stride(self, x, dim):
             stride = 1
@@ -1181,16 +1182,24 @@ def change_function():
             return stride
 
         def execute(self, x, slices, value):
+            self.x_shape = x.shape
+            self.input_slice = slices
+            if not isinstance(value,jt.Var):
+                self.value_var = False
             if isinstance(slices, jt.Var):
                 if slices.dtype == "bool":
+                    slices_len = slices.sum().item()
+                    if slices_len == 0:
+                        return x
                     if isinstance(value, int) or isinstance(value, float):
-                        value = jt.full(x.shape, value)
+                        value = jt.full((slices_len,), value)
                     assert slices.shape == x.shape, "setitem shape not match"
-                    assert x.shape == value.shape, "setitem shape not match"
+                    assert len(value.shape) == 1, "value shape must be 1D"
+                    assert value.shape[0] == slices_len, "value shape length must be equal to slices sum"
                     self.type_ = 'mask'
+                    self.value_shape = value.shape
                     inputs = [value,slices]
-                    outputs = [x]
-                    self.mask = slices
+                    outputs = [x.clone()]
                     attr_code = f"""
                     op.jt_name = "inplacemaskedscatter";
                     """
@@ -1198,13 +1207,8 @@ def change_function():
                                      inputs=inputs,
                                      outputs=outputs,
                                      attr_code=attr_code)[0]
-                    #!!!!!!!!!!!单独跑结果不对
-                    print('warning: there maybe some bugs in inplace masked scatter')
-                    #TODO: 去除sync优化
-                    result.sync()
                     return result
-            self.x_shape = x.shape
-            self.input_slice = slices
+
             # assert isinstance(value,jt.Var), "value must be jt.Var"
             # self.value_shape = value.shape
             if not isinstance(slices, tuple):
@@ -1248,12 +1252,12 @@ def change_function():
                     op.jt_name = "indexputimpl";
                     """
                     inputs = [value] + indices
-                    outputs = [x]
+                    outputs = [x.clone()]
                     result = acl_cmd("IndexPutImpl",
                                      inputs=inputs,
                                      outputs=outputs,
                                      attr_code=attr_code)[0]
-                    result.sync()
+                    # result.sync()
                     return result
                 assert "not support"
             assert contains_slice, "slice type error"
@@ -1320,22 +1324,24 @@ def change_function():
             """
             self.value_shape = value.shape
             inputs = [value]
-            outputs = [x]
+            outputs = [x.clone()]
             result = acl_cmd("StridedSliceAssignV2",
                              inputs=inputs,
                              outputs=outputs,
                              attr_code=attr_code)[0]
-            result.sync()
+            # result.sync()
             return result
 
         def grad(self, grad_output):
-            value_grad = grad_output[self.input_slice]
+            value_grad = None
+            if self.value_var:
+                value_grad = grad_output[self.input_slice]
             grad_output[self.input_slice] = jt.zeros(self.value_shape)
             return grad_output, None, value_grad
 
     def setitem_acl(x, slices, value):
-        return SetItemACL()(x, slices, value)
-
+        res =  SetItemACL()(x, slices, value)
+        return x.assign(res)
 
     class BmmACL(Function):
 
