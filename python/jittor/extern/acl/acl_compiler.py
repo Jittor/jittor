@@ -1389,6 +1389,10 @@ def change_function():
                                   output_dtypes=[x2.dtype],
                                   output_shapes=[output_shape],
                                   attr_code="op.jt_name=\"bmm\";")[0]
+            if len(grad_x1.shape) > len(x1.shape):
+                grad_x1 = grad_x1.sum(0)
+            if len(grad_x2.shape) > len(x2.shape):
+                grad_x2 = grad_x2.sum(0)
             return grad_x1, grad_x2
 
     def bmm_acl(x1, x2):
@@ -1436,6 +1440,10 @@ def change_function():
                                   output_dtypes=[x2.dtype],
                                   output_shapes=[output_shape],
                                   attr_code="op.jt_name=\"matmul\";")[0]
+            if len(grad_x1.shape) > len(x1.shape):
+                grad_x1 = grad_x1.sum(0)
+            if len(grad_x2.shape) > len(x2.shape):
+                grad_x2 = grad_x2.sum(0)
             return grad_x1, grad_x2
 
     def matmul_acl(x1, x2):
