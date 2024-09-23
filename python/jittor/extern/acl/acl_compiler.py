@@ -1717,7 +1717,11 @@ def change_function():
         def warpper(*args, **kwargs):
             if jt.flags.use_acl:
                 return new_func(*args, **kwargs)
-            return origin_func(*args, **kwargs)
+            if name == 'setitem':
+                result = args[0].assign(origin_func(*args, **kwargs))
+            else:
+                result = origin_func(*args, **kwargs)
+            return result
 
         return warpper
 
@@ -1754,9 +1758,9 @@ def change_function():
     
     jt.setitem = warp(jt.contrib.setitem, setitem_acl)
     fake_setitem = jt.Var.setitem
-    jt.Var.setitem = lambda x, slices, value: warp(fake_setitem, setitem_acl)(
+    jt.Var.setitem = lambda x, slices, value: warp(fake_setitem, setitem_acl, name='setitem')(
         x, slices, value)
-    jt.Var.__setitem__ = lambda x, slices, value: warp(fake_setitem, setitem_acl)(
+    jt.Var.__setitem__ = lambda x, slices, value: warp(fake_setitem, setitem_acl, name='setitem')(
         x, slices, value)
 
     jt.nn.bmm = warp(jt.nn.bmm, bmm_acl)
