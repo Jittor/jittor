@@ -272,6 +272,7 @@ namespace jittor
                         op.name = "ReduceSum";
                     else if (rop->ns == ns_multiply)
                         // TODO unsupported the multi dim
+
                         op.name = "ReduceProd";
                     else if (rop->ns == ns_maximum)
                         op.name = "ReduceMax";
