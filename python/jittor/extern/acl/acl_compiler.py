@@ -1284,6 +1284,7 @@ def change_function():
             x_shape = list(x.shape)
             if expand_dim:
                 x_shape.append(1)
+                x = x.unsqueeze(-1)
             
             squeeze_dims = []
             if isinstance(value,jt.Var):
@@ -1329,6 +1330,8 @@ def change_function():
                              inputs=inputs,
                              outputs=outputs,
                              attr_code=attr_code)[0]
+            if expand_dim:
+                result = result.squeeze(-1)
             # result.sync()
             return result
 
