@@ -1370,6 +1370,8 @@ def change_function():
             x1, x2 = self.input
             if len(x1) != len(x2):
                 reshape_grad_x2 = True
+            else:
+                reshape_grad_x2 = False
             grad_x1 = acl_cmd(
                 "BatchMatMul", [grad_output, x2.transpose(-2, -1)],
                 output_dtypes=[x1.dtype],
@@ -1441,6 +1443,8 @@ def change_function():
             x1, x2 = self.input
             if len(x1) != len(x2):
                 reshape_grad_x2 = True
+            else:
+                reshape_grad_x2 = False
             grad_x1 = acl_cmd(
                 "MatMul", [grad_output, x2.transpose(-2, -1)],
                 output_dtypes=[x1.dtype],
