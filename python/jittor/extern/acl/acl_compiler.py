@@ -1368,27 +1368,47 @@ def change_function():
 
         def grad(self, grad_output):
             x1, x2 = self.input
+            if len(x1) != len(x2):
+                reshape_grad_x2 = True
             grad_x1 = acl_cmd(
                 "BatchMatMul", [grad_output, x2.transpose(-2, -1)],
                 output_dtypes=[x1.dtype],
                 output_shapes=[grad_output.shape[:-1] + x1.shape[-1:]],
                 attr_code="op.jt_name=\"bmm\";")[0]
             if self.trans_x2:
-                output_shape = grad_output.shape[:-2] + grad_output.shape[
-                    -1:] + x1.shape[-1:]
-                grad_x2 = acl_cmd("BatchMatMul",
-                                  [grad_output.transpose(-2, -1), x1],
-                                  output_dtypes=[x2.dtype],
-                                  output_shapes=[output_shape],
-                                  attr_code="op.jt_name=\"bmm\";")[0]
+                if reshape_grad_x2:
+                    output_shape = grad_output.shape[1:-2] + grad_output.shape[
+                        -1:] + x1.shape[-1:]
+                    grad_x2 = acl_cmd("BatchMatMul",
+                                      [grad_output.reshape(-1, grad_output.shape[-1]).transpose(-2, -1), x1.reshape(-1, x1.shape[-1])],
+                                      output_dtypes=[x2.dtype],
+                                      output_shapes=[output_shape],
+                                      attr_code="op.jt_name=\"bmm\";")[0]
+                else:
+                    output_shape = grad_output.shape[:-2] + grad_output.shape[
+                        -1:] + x1.shape[-1:]
+                    grad_x2 = acl_cmd("BatchMatMul",
+                                    [grad_output.transpose(-2, -1), x1],
+                                    output_dtypes=[x2.dtype],
+                                    output_shapes=[output_shape],
+                                    attr_code="op.jt_name=\"bmm\";")[0]
             else:
-                output_shape = x1.shape[:-2] + x1.shape[
-                    -1:] + grad_output.shape[-1:]
-                grad_x2 = acl_cmd("BatchMatMul",
-                                  [x1.transpose(-2, -1), grad_output],
+                if reshape_grad_x2:
+                    output_shape = x1.shape[1:-2] + x1.shape[
+                        -1:] + grad_output.shape[-1:]
+                    grad_x2 = acl_cmd("BatchMatMul",
+                                  [x1.reshape(-1, x1.shape[-1]).transpose(-2, -1), grad_output.reshape(-1, grad_output.shape[-1])],
                                   output_dtypes=[x2.dtype],
                                   output_shapes=[output_shape],
                                   attr_code="op.jt_name=\"bmm\";")[0]
+                else:
+                    output_shape = x1.shape[:-2] + x1.shape[
+                        -1:] + grad_output.shape[-1:]
+                    grad_x2 = acl_cmd("BatchMatMul",
+                                    [x1.transpose(-2, -1), grad_output],
+                                    output_dtypes=[x2.dtype],
+                                    output_shapes=[output_shape],
+                                    attr_code="op.jt_name=\"bmm\";")[0]
             if len(grad_x1.shape) > len(x1.shape):
                 grad_x1 = grad_x1.sum(0)
             if len(grad_x2.shape) > len(x2.shape):
@@ -1419,31 +1439,47 @@ def change_function():
 
         def grad(self, grad_output):
             x1, x2 = self.input
+            if len(x1) != len(x2):
+                reshape_grad_x2 = True
             grad_x1 = acl_cmd(
                 "MatMul", [grad_output, x2.transpose(-2, -1)],
                 output_dtypes=[x1.dtype],
                 output_shapes=[grad_output.shape[:-1] + x2.shape[-2:-1]],
                 attr_code="op.jt_name=\"matmul\";")[0]
             if self.trans_x2:
-                output_shape = grad_output.shape[:-2] + grad_output.shape[
-                    -1:] + x1.shape[-1:]
-                grad_x2 = acl_cmd("MatMul",
-                                  [grad_output.transpose(-2, -1), x1],
-                                  output_dtypes=[x2.dtype],
-                                  output_shapes=[output_shape],
-                                  attr_code="op.jt_name=\"matmul\";")[0]
+                if reshape_grad_x2:
+                    output_shape = grad_output.shape[1:-2] + grad_output.shape[
+                        -1:] + x1.shape[-1:]
+                    grad_x2 = acl_cmd("MatMul",
+                                    [grad_output.reshape(-1, grad_output.shape[-1]).transpose(-2, -1), x1.reshape(-1, x1.shape[-1])],
+                                    output_dtypes=[x2.dtype],
+                                    output_shapes=[output_shape],
+                                    attr_code="op.jt_name=\"matmul\";")[0]
+                else:
+                    output_shape = grad_output.shape[:-2] + grad_output.shape[
+                        -1:] + x1.shape[-1:]
+                    grad_x2 = acl_cmd("MatMul",
+                                    [grad_output.transpose(-2, -1), x1],
+                                    output_dtypes=[x2.dtype],
+                                    output_shapes=[output_shape],
+                                    attr_code="op.jt_name=\"matmul\";")[0]
             else:
-                output_shape = x1.shape[:-2] + x1.shape[
-                    -1:] + grad_output.shape[-1:]
-                grad_x2 = acl_cmd("MatMul",
-                                  [x1.transpose(-2, -1), grad_output],
+                if reshape_grad_x2:
+                    output_shape = x1.shape[1:-2] + x1.shape[
+                        -1:] + grad_output.shape[-1:]
+                    grad_x2 = acl_cmd("MatMul",
+                                  [x1.reshape(-1, x1.shape[-1]).transpose(-2, -1), grad_output.reshape(-1, grad_output.shape[-1])],
                                   output_dtypes=[x2.dtype],
                                   output_shapes=[output_shape],
                                   attr_code="op.jt_name=\"matmul\";")[0]
-            if len(grad_x1.shape) > len(x1.shape):
-                grad_x1 = grad_x1.sum(0)
-            if len(grad_x2.shape) > len(x2.shape):
-                grad_x2 = grad_x2.sum(0)
+                else:
+                    output_shape = x1.shape[:-2] + x1.shape[
+                        -1:] + grad_output.shape[-1:]
+                    grad_x2 = acl_cmd("MatMul",
+                                    [x1.transpose(-2, -1), grad_output],
+                                    output_dtypes=[x2.dtype],
+                                    output_shapes=[output_shape],
+                                    attr_code="op.jt_name=\"matmul\";")[0]
             return grad_x1, grad_x2
 
     def matmul_acl(x1, x2):
