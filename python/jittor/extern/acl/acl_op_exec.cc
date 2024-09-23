@@ -9,6 +9,8 @@
 #include <Python.h>
 #include <pystate.h>
 #include <algorithm>
+#include <queue>
+#include <set>
 #include "common.h"
 #include "op.h"
 #include "acl_jittor.h"
@@ -145,21 +147,65 @@ namespace jittor
 
     void try_exec_and_fallback_cpu(Op *op)
     {
-        LOGv << "try_exec_and_fallback_cpu " << op;
         auto fop = (FusedOp *)op;
 
-        vector<Var *> new_alloced;
+        std::set<Var *> new_alloced;
+        map<Op*, int> op_indeg;
+        map<Var*, int> var_outdeg;
+        std::queue<Op *> queue;
+
+        for (Op *op : fop->ops)
+            op_indeg[op] = 0;
+
+        map<Op *, vector<Op *> > out_map;
+        map<Var*, vector<Op *> > from;
+
+        int len = 0;
+        for (Op *v : fop->ops) {
+            for (auto in : v->inputs())
+                from[in].push_back(v);
+            ++len;
+        }
+        for (Op *u : fop->ops) {
+            for (auto out : u->outputs()) {
+                if(from.find(out) != from.end()) {
+                    for (auto v : from[out]) {
+                        ++op_indeg[v];
+                        ++var_outdeg[out];
+                        out_map[u].push_back(v);
+                    }
+                }
+            }
+        }
+        for (Op *op : fop->ops) {
+            if (op_indeg[op] == 0)
+                queue.push(op);
+        }
+
+        int total = 0;
         int fallback = 0;
         try
         {
-            for (Op *op : fop->ops)
+            while (!queue.empty())
             {
+                total ++;
+
+                for(auto in : op->inputs()) {
+                    ASSERT(in->mem_ptr);
+                }
+                auto op = queue.front(); queue.pop();
                 for (auto out : op->outputs())
                 {
                     if (out->mem_ptr)
                         continue;
                     out->alloc(exe.allocator);
-                    new_alloced.push_back(out);
+                    new_alloced.insert(out);
+                }
+                for (auto out : out_map[op])
+                {
+                    --op_indeg[out];
+                    if (op_indeg[out] == 0)
+                        queue.push(out);
                 }
                 if (op->name() == string("unary"))
                 {
@@ -296,6 +342,16 @@ namespace jittor
                 else
                 {
                     LOGf << "op " << op->name() << " not supported";
+                }
+
+                for(auto in : op->inputs()) {
+                    --var_outdeg[in];
+                    if (var_outdeg[in] == 0) {
+                        if (new_alloced.find(in) != new_alloced.end()) {
+                            free_var_mem(in);
+                            new_alloced.erase(in);
+                        }
+                    }
                 }
             }
         }
