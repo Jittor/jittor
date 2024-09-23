@@ -988,7 +988,7 @@ def change_function():
             #check slices contains slice type
             contains_slice = False
             for s in slices:
-                if isinstance(s, slice) or s==Ellipsis:
+                if not isinstance(s, jt.Var) and (isinstance(s, slice) or s==Ellipsis):
                     contains_slice = True
                     break
             if not contains_slice:
@@ -1026,7 +1026,7 @@ def change_function():
             x_dim = len(x.shape)
             slices = list(slices)
             for s in slices:
-                if s == Ellipsis:
+                if not isinstance(s, jt.Var) and s == Ellipsis:
                     slices = slices[:slices.index(s)] + [slice(None, None, None)] * (
                         x_dim - len(slices) + 1) + slices[slices.index(s) + 1:]
                     break
@@ -1231,7 +1231,7 @@ def change_function():
             #check slices contains slice type
             contains_slice = False
             for s in slices:
-                if isinstance(s, slice) or s == Ellipsis:
+                if not isinstance(s, jt.Var) and (isinstance(s, slice) or s==Ellipsis):
                     contains_slice = True
                     break
             if not contains_slice:
@@ -1273,7 +1273,7 @@ def change_function():
             x_dim = len(x.shape)
             slices = list(slices)
             for s in slices:
-                if s == Ellipsis:
+                if not isinstance(s, jt.Var) and s == Ellipsis:
                     slices = slices[:slices.index(s)] + [slice(None, None, None)] * (
                         x_dim - len(slices) + 1) + slices[slices.index(s) + 1:]
                     break
