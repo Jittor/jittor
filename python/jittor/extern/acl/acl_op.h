@@ -566,6 +566,13 @@ namespace jittor
                 ret = it->second.getWorkspaceSizeFuncBinary(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
        
             }
+            else if (name == string("SplitWithSize"))
+            {
+                auto attr = dynamic_cast<SplitWithSizeAttr *>(op_attr.get());
+                auto splitSize = aclCreateIntArray(attr->splitSize.data(), attr->splitSize.size());
+                auto tensorList = aclCreateTensorList(&outputTensors[0], output_num);
+                ret = it->second.getWorkspaceSizeFuncSplitWithSize(inputTensors[0], splitSize, attr->dim, tensorList, &workspaceSize, &executor);
+            }
             else
                 LOGir << "not supported op " << jt_name;
 

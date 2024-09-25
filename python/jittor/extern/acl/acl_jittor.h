@@ -83,6 +83,8 @@ namespace jittor
         std::function<aclnnStatus(aclTensor *, double, bool, int64_t, int64_t, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncDropout;
         // for dropout backward
         std::function<aclnnStatus(aclTensor *, aclTensor *, double, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncDropoutBackward;
+        // for split with size
+        std::function<aclnnStatus(aclTensor *, aclIntArray *, int64_t, aclTensorList *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncSplitWithSize;
 
         // for silu
         // std::function<aclnnStatus(aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncSilu;
@@ -264,6 +266,11 @@ namespace jittor
         AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclTensor *, uint64_t,uint64_t,bool,aclTensor *, uint64_t *, aclOpExecutor **)> gwsf,
                        std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
             : getWorkspaceSizeFuncEmbeddingBackward(gwsf), executeFunc(execf) {}
+
+        // for split with size
+        AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclIntArray *, int64_t, aclTensorList *, uint64_t *, aclOpExecutor **)> gwsf,
+                       std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
+            : getWorkspaceSizeFuncSplitWithSize(gwsf), executeFunc(execf) {}
     };
 
     static std::unordered_map<std::string, AclOpFunctions> aclOpFuncMap = {
@@ -359,6 +366,7 @@ namespace jittor
         {"EmbeddingBackward",AclOpFunctions(aclnnEmbeddingDenseBackwardGetWorkspaceSize,aclnnEmbeddingDenseBackward)},
         {"InplaceMaskedScatter",AclOpFunctions(aclnnInplaceMaskedScatterGetWorkspaceSize,aclnnInplaceMaskedScatter)},
         {"MaskedSelect",AclOpFunctions(aclnnMaskedSelectGetWorkspaceSize,aclnnMaskedSelect)},
+        {"SplitWithSize", AclOpFunctions(aclnnSplitWithSizeGetWorkspaceSize, aclnnSplitWithSize)},
     };
 
     struct AclOpAttr
@@ -538,6 +546,16 @@ namespace jittor
 
         ~EmbeddingAttr()
         {
+        }
+    };
+
+    struct SplitWithSizeAttr : AclOpAttr
+    {
+        vector<int64_t> splitSize;
+        int64_t dim;
+        ~SplitWithSizeAttr()
+        {
+            splitSize.clear();
         }
     };
 }
