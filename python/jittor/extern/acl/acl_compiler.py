@@ -602,6 +602,51 @@ def change_function():
         def __init__(self):
             super(ConcatACL, self).__init__()
 
+        def __call__(self, *args):
+            assert isinstance(args[0], list)
+            assert isinstance(args[1], int)
+            if jt.flags.no_grad:
+                return self.execute(*args)
+            backup = args
+            args = list(args)
+            taped_inputs = []
+            taped_outputs = []
+            input_mask = [-1] * (len(args[0]) + 1)
+            newargs = [list(), args[1]]
+            for i,v in enumerate(args[0]):
+                if isinstance(v, jt.Var):
+                    if v.is_stop_grad():
+                        # -2 in input_mask represents it is stop_grad
+                        input_mask[i] = -2
+                        newargs[0].append(v)
+                        continue
+                    v = v.tape()
+                    newargs[0].append(v)
+                    input_mask[i] = len(taped_inputs)
+                    taped_inputs.append(v)
+
+            ori_res = self.execute(*newargs)
+            if not isinstance(ori_res, Sequence):
+                res = [ori_res]
+            else:
+                res = list(ori_res)
+            output_mask = [-1] * len(res)
+            for i,v in enumerate(res):
+                if isinstance(v, jt.Var):
+                    v = v.tape()
+                    output_mask[i] = len(taped_outputs)
+                    res[i] = v
+                    taped_outputs.append(v)
+            self.input_mask = input_mask
+            self.output_mask = output_mask
+            # tape output and input together so
+            # backward treat them as one operator
+            jt.tape_together(taped_inputs, taped_outputs, self._grad)
+            if isinstance(ori_res, Sequence):
+                return res
+            else:
+                return res[0]
+        
         def execute(self, input_tensors, dim=0):
             self.input = input_tensors
             self.dim = dim
@@ -632,8 +677,22 @@ def change_function():
                 attr_code=attr_code)[0]
             return result
 
+        def _grad(self, *args):
+            new_args = ( (args[i] if i>=0 else None) for i in self.output_mask )
+            ret = self.grad(*new_args)
+            new_ret = []
+            for i, r in enumerate(ret):
+                j = self.input_mask[i]
+                if j<0:
+                    # -2 in input_mask represents it is stop_grad
+                    assert r is None or j==-2, f"{type(self)}'s {i}-th returned grad should be None, "\
+                        "because the input value is not jittor variable."
+                else:
+                    new_ret.append(r)
+            return new_ret
+
         def grad(self, grad_output):
-            grad_inputs = self.split_grad(grad_output, self.input, self.axis)
+            grad_inputs = self.split_grad(grad_output, self.input, self.dim)
             return grad_inputs
 
         def calculate_output_shape(self, input_tensors, axis):
@@ -643,16 +702,28 @@ def change_function():
             return tuple(shape)
 
         def split_grad(self, grad_output, input_tensors, axis):
-            offset = 0
-            grad_inputs = []
+            offset = []
+            shapeVec = []
+            dtypeVec = []
             for tensor in input_tensors:
-                grad_input = acl_cmd("SliceV2", [
-                    grad_output, [0] * axis + [offset] + [0] *
-                    (len(tensor.shape) - axis - 1), tensor.shape
-                ])
-                grad_inputs.append(grad_input)
-                offset += tensor.shape[axis]
-            return grad_inputs
+                offset.append(tensor.shape[axis])
+                dtypeVec.append(tensor.dtype)
+                shapeVec.append(tensor.shape)
+
+            attr_code = f"""
+            op.jt_name = "splitwithsize";
+            auto *attr = new SplitWithSizeAttr();
+            attr->splitSize = {{ {", ".join(map(str, offset))} }};
+            attr->dim = {axis};
+            op.op_attr.reset(attr);
+            """
+
+            result = acl_cmd("SplitWithSize",
+                             [grad_output],
+                             output_dtypes=dtypeVec,
+                             output_shapes=shapeVec,
+                             attr_code=attr_code)
+            return result
 
     def concat(x, dim=0):
         return ConcatACL()(x, dim)
@@ -1801,7 +1872,7 @@ def change_function():
 
     jt.flip = warp(jt.flip, flip_acl)
     jt.Var.flip = lambda x, dim_vector=0: jt.flip(x, dim_vector)
-    # jt.concat = warp(jt.concat, concat)
+    jt.concat = warp(jt.concat, concat)
 
     jt.gather = warp(jt.gather, gather_acl)
 
