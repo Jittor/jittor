@@ -1509,58 +1509,6 @@ def change_function():
     def bmm_transpose_acl(x1, x2):
         return BmmACL(True)(x1, x2)
 
-    def transpose_acl(x, *dim):
-        return TransPoseACL()(x, *dim)
-
-    class TransPoseACL(Function):
-
-        def __init__(self):
-            super(TransPoseACL, self).__init__()
-
-        def execute(self, x, *dim):
-            self.input = x
-            if len(dim) == 1 and isinstance(dim[0], Sequence):
-                dim = dim[0]
-            elif len(dim) == 2:
-                axes = list(range(x.ndim))
-                a, b = dim
-                axes[a], axes[b] = axes[b], axes[a]
-                dim = axes
-
-            attr_code = f"""
-            op.jt_name = "transpose";
-            ReduceAttr *attr = new ReduceAttr();
-            attr->axes = {{ {", ".join(map(str, dim))} }};
-            op.op_attr.reset(attr);
-            """
-            # calculate output shape
-            output_shape = [x.shape[i] for i in dim]
-            output = acl_cmd("Transpose", [x],
-                             output_dtypes=[x.dtype],
-                             output_shapes=[jt.empty(output_shape).shape],
-                             attr_code=attr_code)[0]
-            self.dim = dim
-            import pdb; pdb.set_trace()
-            return output
-
-        def grad(self, grad_output):
-            dim = list(range(grad_output.ndim))
-            for i, p in enumerate(self.dim):
-                dim[i], dim[p] = dim[p], dim[i]
-            output_shape = [grad_output.shape[i] for i in dim]
-            import pdb; pdb.set_trace()
-            attr_code = f"""
-            op.jt_name = "transpose";
-            ReduceAttr *attr = new ReduceAttr();
-            attr->axes = {{ {", ".join(map(str, dim))} }};
-            op.op_attr.reset(attr);
-            """
-            output = acl_cmd("Transpose", [grad_output],
-                             output_dtypes=[grad_output.dtype],
-                             output_shapes=[jt.empty(output_shape).shape],
-                             attr_code=attr_code)[0]
-            return output
-
     class MatmulACL(Function):
 
         def __init__(self, trans_x2=False):
@@ -1628,6 +1576,56 @@ def change_function():
     def matmul_transpose_acl(x1, x2):
         return MatmulACL(True)(x1, x2)
 
+    def transpose_acl(x, *dim):
+        return TransPoseACL()(x, *dim)
+
+    class TransPoseACL(Function):
+
+        def __init__(self):
+            super(TransPoseACL, self).__init__()
+
+        def execute(self, x, *dim):
+            self.input = x
+            if len(dim) == 1 and isinstance(dim[0], Sequence):
+                dim = dim[0]
+            elif len(dim) == 2:
+                axes = list(range(x.ndim))
+                a, b = dim
+                axes[a], axes[b] = axes[b], axes[a]
+                dim = axes
+
+            attr_code = f"""
+            op.jt_name = "transpose";
+            ReduceAttr *attr = new ReduceAttr();
+            attr->axes = {{ {", ".join(map(str, dim))} }};
+            op.op_attr.reset(attr);
+            """
+            # calculate output shape
+            output_shape = [x.shape[i] for i in dim]
+            output = acl_cmd("Transpose", [x],
+                             output_dtypes=[x.dtype],
+                             output_shapes=[jt.empty(output_shape).shape],
+                             attr_code=attr_code)[0]
+            self.dim = dim
+            return output
+
+        def grad(self, grad_output):
+            dim = list(range(grad_output.ndim))
+            for i, p in enumerate(self.dim):
+                dim[i], dim[p] = dim[p], dim[i]
+            output_shape = [grad_output.shape[i] for i in dim]
+            attr_code = f"""
+            op.jt_name = "transpose";
+            ReduceAttr *attr = new ReduceAttr();
+            attr->axes = {{ {", ".join(map(str, dim))} }};
+            op.op_attr.reset(attr);
+            """
+            output = acl_cmd("Transpose", [grad_output],
+                             output_dtypes=[grad_output.dtype],
+                             output_shapes=[jt.empty(output_shape).shape],
+                             attr_code=attr_code)[0]
+            return output
+    
     class ReLUACL(Function):
 
         def __init__(self):
@@ -1955,9 +1953,8 @@ def change_function():
     jt.nn.bmm_transpose = warp(jt.nn.bmm_transpose, bmm_transpose_acl)
     jt.bmm_transpose = warp(jt.bmm_transpose, bmm_transpose_acl)
 
-
     jt.transpose = warp(jt.transpose, transpose_acl)
-    jt.Var.transpose = lambda x, dim: warp(jt.transpose, transpose_acl)(x, dim)
+    jt.Var.transpose = lambda x, *dim: warp(jt.transpose, transpose_acl)(x, *dim)
 
     # jt.nn.relu = warp(jt.nn.relu, relu)
     # jt.nn.ReLU = warp(jt.nn.ReLU, ReLU)
