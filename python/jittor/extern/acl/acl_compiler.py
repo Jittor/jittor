@@ -1576,9 +1576,6 @@ def change_function():
     def matmul_transpose_acl(x1, x2):
         return MatmulACL(True)(x1, x2)
 
-    def transpose_acl(x, *dim):
-        return TransPoseACL()(x, *dim)
-
     class TransPoseACL(Function):
 
         def __init__(self):
@@ -1625,6 +1622,9 @@ def change_function():
                              output_shapes=[jt.empty(output_shape).shape],
                              attr_code=attr_code)[0]
             return output
+    
+    def transpose_acl(x, *dim):
+        return TransPoseACL()(x, *dim)
     
     class ReLUACL(Function):
 
@@ -1954,7 +1954,10 @@ def change_function():
     jt.bmm_transpose = warp(jt.bmm_transpose, bmm_transpose_acl)
 
     jt.transpose = warp(jt.transpose, transpose_acl)
-    jt.Var.transpose = lambda x, *dim: warp(jt.transpose, transpose_acl)(x, *dim)
+    fake_transpose = jt.transpose
+    jt.Var.transpose = lambda x, *dim: warp(fake_transpose, transpose_acl)(x, *dim)
+    jt.Var.permute = lambda x: warp(fake_transpose, transpose_acl)(x)
+    jt.Var.t = lambda x: warp(fake_transpose, transpose_acl)(x)
 
     # jt.nn.relu = warp(jt.nn.relu, relu)
     # jt.nn.ReLU = warp(jt.nn.ReLU, ReLU)
