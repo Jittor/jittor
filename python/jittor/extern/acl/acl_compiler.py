@@ -1444,13 +1444,11 @@ def change_function():
             self.trans_x2 = trans_x2
 
         def execute(self, x1, x2):
-            if self.trans_x2:
-                x2 = x2.transpose(-2, -1)
             self.input = [x1, x2]
             result = acl_cmd("BatchMatMul", [x1, x2],
                              output_dtypes=[x1.dtype],
-                             output_shapes=[x1.shape[:-1] + x2.shape[-1:]],
-                             attr_code="op.jt_name=\"bmm\";")[0]
+                             output_shapes=[x1.shape[:-1] + x2.shape[-2:-1] if self.trans_x2 else x1.shape[:-1] + x2.shape[-1:]],
+                             attr_code="op.jt_name=\"bmm_trans_1\";" if self.trans_x2 else "op.jt_name=\"bmm\";")[0]
 
             return result
 
@@ -1518,13 +1516,11 @@ def change_function():
             self.trans_x2 = trans_x2
 
         def execute(self, x1, x2):
-            if self.trans_x2:
-                x2 = x2.transpose(-2, -1)
             self.input = [x1, x2]
             result = acl_cmd("MatMul", [x1, x2],
                              output_dtypes=[x1.dtype],
-                             output_shapes=[x1.shape[:-1] + x2.shape[-1:]],
-                             attr_code="op.jt_name=\"matmul\";")[0]
+                             output_shapes=[x1.shape[:-1] + x2.shape[-2:-1] if self.trans_x2 else x1.shape[:-1] + x2.shape[-1:]],
+                             attr_code="op.jt_name=\"matmul_trans_1\";" if self.trans_x2 else "op.jt_name=\"matmul\";")[0]
             return result
 
         def grad(self, grad_output):
