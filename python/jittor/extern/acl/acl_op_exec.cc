@@ -150,26 +150,31 @@ namespace jittor
         auto fop = (FusedOp *)op;
 
         std::set<Var *> new_alloced;
-        map<Op*, int> op_indeg;
-        map<Var*, int> var_outdeg;
+        map<Op *, int> op_indeg;
+        map<Var *, int> var_outdeg;
         std::queue<Op *> queue;
 
         for (Op *op : fop->ops)
             op_indeg[op] = 0;
 
-        map<Op *, vector<Op *> > out_map;
-        map<Var*, vector<Op *> > from;
+        map<Op *, vector<Op *>> out_map;
+        map<Var *, vector<Op *>> from;
 
         int len = 0;
-        for (Op *v : fop->ops) {
+        for (Op *v : fop->ops)
+        {
             for (auto in : v->inputs())
                 from[in].push_back(v);
             ++len;
         }
-        for (Op *u : fop->ops) {
-            for (auto out : u->outputs()) {
-                if(from.find(out) != from.end()) {
-                    for (auto v : from[out]) {
+        for (Op *u : fop->ops)
+        {
+            for (auto out : u->outputs())
+            {
+                if (from.find(out) != from.end())
+                {
+                    for (auto v : from[out])
+                    {
                         ++op_indeg[v];
                         ++var_outdeg[out];
                         out_map[u].push_back(v);
@@ -177,7 +182,8 @@ namespace jittor
                 }
             }
         }
-        for (Op *op : fop->ops) {
+        for (Op *op : fop->ops)
+        {
             if (op_indeg[op] == 0)
                 queue.push(op);
         }
@@ -188,12 +194,14 @@ namespace jittor
         {
             while (!queue.empty())
             {
-                total ++;
+                total++;
 
-                for(auto in : op->inputs()) {
+                for (auto in : op->inputs())
+                {
                     ASSERT(in->mem_ptr);
                 }
-                auto op = queue.front(); queue.pop();
+                auto op = queue.front();
+                queue.pop();
                 for (auto out : op->outputs())
                 {
                     if (out->mem_ptr)
@@ -345,10 +353,13 @@ namespace jittor
                     LOGf << "op " << op->name() << " not supported";
                 }
 
-                for(auto in : op->inputs()) {
+                for (auto in : op->inputs())
+                {
                     --var_outdeg[in];
-                    if (var_outdeg[in] == 0) {
-                        if (new_alloced.find(in) != new_alloced.end()) {
+                    if (var_outdeg[in] == 0)
+                    {
+                        if (new_alloced.find(in) != new_alloced.end())
+                        {
                             free_var_mem(in);
                             new_alloced.erase(in);
                         }

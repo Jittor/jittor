@@ -613,7 +613,7 @@ def change_function():
             taped_outputs = []
             input_mask = [-1] * (len(args[0]) + 1)
             newargs = [list(), args[1]]
-            for i,v in enumerate(args[0]):
+            for i, v in enumerate(args[0]):
                 if isinstance(v, jt.Var):
                     if v.is_stop_grad():
                         # -2 in input_mask represents it is stop_grad
@@ -631,7 +631,7 @@ def change_function():
             else:
                 res = list(ori_res)
             output_mask = [-1] * len(res)
-            for i,v in enumerate(res):
+            for i, v in enumerate(res):
                 if isinstance(v, jt.Var):
                     v = v.tape()
                     output_mask[i] = len(taped_outputs)
@@ -646,7 +646,7 @@ def change_function():
                 return res
             else:
                 return res[0]
-        
+
         def execute(self, input_tensors, dim=0):
             self.input = input_tensors
             self.dim = dim
@@ -678,12 +678,13 @@ def change_function():
             return result
 
         def _grad(self, *args):
-            new_args = ( (args[i] if i>=0 else None) for i in self.output_mask )
+            new_args = ((args[i] if i >= 0 else None)
+                        for i in self.output_mask)
             ret = self.grad(*new_args)
             new_ret = []
             for i, r in enumerate(ret):
                 j = self.input_mask[i]
-                if j<0:
+                if j < 0:
                     # -2 in input_mask represents it is stop_grad
                     assert r is None or j==-2, f"{type(self)}'s {i}-th returned grad should be None, "\
                         "because the input value is not jittor variable."
@@ -718,8 +719,7 @@ def change_function():
             op.op_attr.reset(attr);
             """
 
-            result = acl_cmd("SplitWithSize",
-                             [grad_output],
+            result = acl_cmd("SplitWithSize", [grad_output],
                              output_dtypes=dtypeVec,
                              output_shapes=shapeVec,
                              attr_code=attr_code)
@@ -1021,16 +1021,16 @@ def change_function():
             return stride
 
         def execute(self, x, slices, return_x=None):
-            if isinstance(slices,jt.Var) and slices.dtype =='bool':
+            if isinstance(slices, jt.Var) and slices.dtype == 'bool':
                 # assert False, "not support bool type now"
                 #TODO:优化
                 assert x.shape == slices.shape, "shape not match"
                 output_len = slices.sum().item()
                 # output = jt.empty((output_len,),dtype=x.dtype)
                 x_len = x.numel()
-                output = jt.empty((x_len),dtype=x.dtype)
+                output = jt.empty((x_len), dtype=x.dtype)
                 outputs = [output]
-                inputs = [x,slices]
+                inputs = [x, slices]
                 # print(inputs,outputs)
                 # print(output.shape)
                 self.mask = slices
@@ -1039,9 +1039,9 @@ def change_function():
                 op.jt_name = "maskedselect";
                 """
                 result = acl_cmd("MaskedSelect",
-                                inputs=inputs,
-                                outputs=outputs,
-                                attr_code=attr_code)[0]
+                                 inputs=inputs,
+                                 outputs=outputs,
+                                 attr_code=attr_code)[0]
                 result = result[:output_len]
                 result.sync()
                 return result
@@ -1051,7 +1051,7 @@ def change_function():
                 slices = (slices, )
             slices = list(slices)
             for i, s in enumerate(slices):
-                if isinstance(s,int) and s<0:
+                if isinstance(s, int) and s < 0:
                     slices[i] = s + x.shape[i]
             slices = tuple(slices)
             slices_list = list(slices)
@@ -1059,7 +1059,8 @@ def change_function():
             #check slices contains slice type
             contains_slice = False
             for s in slices:
-                if not isinstance(s, jt.Var) and (isinstance(s, slice) or s==Ellipsis):
+                if not isinstance(s, jt.Var) and (isinstance(s, slice)
+                                                  or s == Ellipsis):
                     contains_slice = True
                     break
             if not contains_slice:
@@ -1098,11 +1099,12 @@ def change_function():
             slices = list(slices)
             for s in slices:
                 if not isinstance(s, jt.Var) and s == Ellipsis:
-                    slices = slices[:slices.index(s)] + [slice(None, None, None)] * (
-                        x_dim - len(slices) + 1) + slices[slices.index(s) + 1:]
+                    slices = slices[:slices.index(s)] + [
+                        slice(None, None, None)
+                    ] * (x_dim - len(slices) + 1) + slices[slices.index(s) +
+                                                           1:]
                     break
             slices = tuple(slices)
-
 
             if len(slices) < x_dim:
                 slices += (slice(None, None, None), ) * (x_dim - len(slices))
@@ -1264,7 +1266,7 @@ def change_function():
         def execute(self, x, slices, value):
             self.x_shape = x.shape
             self.input_slice = slices
-            if not isinstance(value,jt.Var):
+            if not isinstance(value, jt.Var):
                 self.value_var = False
             if isinstance(slices, jt.Var):
                 if slices.dtype == "bool":
@@ -1272,13 +1274,14 @@ def change_function():
                     if slices_len == 0:
                         return x
                     if isinstance(value, int) or isinstance(value, float):
-                        value = jt.full((slices_len,), value)
+                        value = jt.full((slices_len, ), value)
                     assert slices.shape == x.shape, "setitem shape not match"
                     assert len(value.shape) == 1, "value shape must be 1D"
-                    assert value.shape[0] == slices_len, "value shape length must be equal to slices sum"
+                    assert value.shape[
+                        0] == slices_len, "value shape length must be equal to slices sum"
                     self.type_ = 'mask'
                     self.value_shape = value.shape
-                    inputs = [value,slices]
+                    inputs = [value, slices]
                     outputs = [x.clone()]
                     attr_code = f"""
                     op.jt_name = "inplacemaskedscatter";
@@ -1302,7 +1305,8 @@ def change_function():
             #check slices contains slice type
             contains_slice = False
             for s in slices:
-                if not isinstance(s, jt.Var) and (isinstance(s, slice) or s==Ellipsis):
+                if not isinstance(s, jt.Var) and (isinstance(s, slice)
+                                                  or s == Ellipsis):
                     contains_slice = True
                     break
             if not contains_slice:
@@ -1345,8 +1349,10 @@ def change_function():
             slices = list(slices)
             for s in slices:
                 if not isinstance(s, jt.Var) and s == Ellipsis:
-                    slices = slices[:slices.index(s)] + [slice(None, None, None)] * (
-                        x_dim - len(slices) + 1) + slices[slices.index(s) + 1:]
+                    slices = slices[:slices.index(s)] + [
+                        slice(None, None, None)
+                    ] * (x_dim - len(slices) + 1) + slices[slices.index(s) +
+                                                           1:]
                     break
             slices = tuple(slices)
             self.input_slice = slices
@@ -1363,7 +1369,7 @@ def change_function():
                 if slices[-1].step is not None and slices[-1].step != 1:
                     slices = slices + (slice(None, None, None), )
                     expand_dim = True
-                    
+
             elif isinstance(slices[-1], int):
                 #注意最后一个维度是数字
                 slices = slices + (slice(None, None, None), )
@@ -1376,16 +1382,16 @@ def change_function():
                 x_shape.append(1)
                 x = x.unsqueeze(-1)
                 value = value.unsqueeze(-1)
-            
+
             squeeze_dims = []
-            if isinstance(value,jt.Var):
+            if isinstance(value, jt.Var):
                 for dim, s in enumerate(slices):
                     if isinstance(s, int):
                         s = slice(s, s + 1, 1)
                         squeeze_dims.append(dim)
-                
+
                 for dim in squeeze_dims:
-                    value = value.unsqueeze(dim)  
+                    value = value.unsqueeze(dim)
             for dim, s in enumerate(slices):
                 if isinstance(s, int):
                     s = slice(s, s + 1, 1)
@@ -1434,7 +1440,7 @@ def change_function():
             return grad_output, None, value_grad
 
     def setitem_acl(x, slices, value):
-        res =  SetItemACL()(x, slices, value)
+        res = SetItemACL()(x, slices, value)
         return x.assign(res)
 
     class BmmACL(Function):
@@ -1445,10 +1451,16 @@ def change_function():
 
         def execute(self, x1, x2):
             self.input = [x1, x2]
-            result = acl_cmd("BatchMatMul", [x1, x2],
-                             output_dtypes=[x1.dtype],
-                             output_shapes=[x1.shape[:-1] + x2.shape[-2:-1] if self.trans_x2 else x1.shape[:-1] + x2.shape[-1:]],
-                             attr_code="op.jt_name=\"bmm_trans_1\";" if self.trans_x2 else "op.jt_name=\"bmm\";")[0]
+            result = acl_cmd(
+                "BatchMatMul", [x1, x2],
+                output_dtypes=[x1.dtype],
+                output_shapes=[
+                    x1.shape[:-1] +
+                    x2.shape[-2:-1] if self.trans_x2 else x1.shape[:-1] +
+                    x2.shape[-1:]
+                ],
+                attr_code="op.jt_name=\"bmm_trans_1\";"
+                if self.trans_x2 else "op.jt_name=\"bmm\";")[0]
 
             return result
 
@@ -1467,36 +1479,42 @@ def change_function():
                 if reshape_grad_x2:
                     output_shape = grad_output.shape[1:-2] + grad_output.shape[
                         -1:] + x1.shape[-1:]
-                    grad_x2 = acl_cmd("BatchMatMul",
-                                      [grad_output.reshape(-1, grad_output.shape[-1]), x1.reshape(-1, x1.shape[-1])],
-                                      output_dtypes=[x2.dtype],
-                                      output_shapes=[output_shape],
-                                      attr_code="op.jt_name=\"bmm_trans_0\";")[0]
+                    grad_x2 = acl_cmd(
+                        "BatchMatMul", [
+                            grad_output.reshape(-1, grad_output.shape[-1]),
+                            x1.reshape(-1, x1.shape[-1])
+                        ],
+                        output_dtypes=[x2.dtype],
+                        output_shapes=[output_shape],
+                        attr_code="op.jt_name=\"bmm_trans_0\";")[0]
                 else:
                     output_shape = grad_output.shape[:-2] + grad_output.shape[
                         -1:] + x1.shape[-1:]
-                    grad_x2 = acl_cmd("BatchMatMul",
-                                    [grad_output, x1],
-                                    output_dtypes=[x2.dtype],
-                                    output_shapes=[output_shape],
-                                    attr_code="op.jt_name=\"bmm_trans_0\";")[0]
+                    grad_x2 = acl_cmd(
+                        "BatchMatMul", [grad_output, x1],
+                        output_dtypes=[x2.dtype],
+                        output_shapes=[output_shape],
+                        attr_code="op.jt_name=\"bmm_trans_0\";")[0]
             else:
                 if reshape_grad_x2:
                     output_shape = x1.shape[1:-2] + x1.shape[
                         -1:] + grad_output.shape[-1:]
-                    grad_x2 = acl_cmd("BatchMatMul",
-                                  [x1.reshape(-1, x1.shape[-1]), grad_output.reshape(-1, grad_output.shape[-1])],
-                                  output_dtypes=[x2.dtype],
-                                  output_shapes=[output_shape],
-                                  attr_code="op.jt_name=\"bmm_trans_0\";")[0]
+                    grad_x2 = acl_cmd(
+                        "BatchMatMul", [
+                            x1.reshape(-1, x1.shape[-1]),
+                            grad_output.reshape(-1, grad_output.shape[-1])
+                        ],
+                        output_dtypes=[x2.dtype],
+                        output_shapes=[output_shape],
+                        attr_code="op.jt_name=\"bmm_trans_0\";")[0]
                 else:
                     output_shape = x1.shape[:-2] + x1.shape[
                         -1:] + grad_output.shape[-1:]
-                    grad_x2 = acl_cmd("BatchMatMul",
-                                    [x1, grad_output],
-                                    output_dtypes=[x2.dtype],
-                                    output_shapes=[output_shape],
-                                    attr_code="op.jt_name=\"bmm_trans_0\";")[0]
+                    grad_x2 = acl_cmd(
+                        "BatchMatMul", [x1, grad_output],
+                        output_dtypes=[x2.dtype],
+                        output_shapes=[output_shape],
+                        attr_code="op.jt_name=\"bmm_trans_0\";")[0]
             if len(grad_x1.shape) > len(x1.shape):
                 grad_x1 = grad_x1.sum(0)
             if len(grad_x2.shape) > len(x2.shape):
@@ -1517,10 +1535,16 @@ def change_function():
 
         def execute(self, x1, x2):
             self.input = [x1, x2]
-            result = acl_cmd("MatMul", [x1, x2],
-                             output_dtypes=[x1.dtype],
-                             output_shapes=[x1.shape[:-1] + x2.shape[-2:-1] if self.trans_x2 else x1.shape[:-1] + x2.shape[-1:]],
-                             attr_code="op.jt_name=\"matmul_trans_1\";" if self.trans_x2 else "op.jt_name=\"matmul\";")[0]
+            result = acl_cmd(
+                "MatMul", [x1, x2],
+                output_dtypes=[x1.dtype],
+                output_shapes=[
+                    x1.shape[:-1] +
+                    x2.shape[-2:-1] if self.trans_x2 else x1.shape[:-1] +
+                    x2.shape[-1:]
+                ],
+                attr_code="op.jt_name=\"matmul_trans_1\";"
+                if self.trans_x2 else "op.jt_name=\"matmul\";")[0]
             return result
 
         def grad(self, grad_output):
@@ -1538,36 +1562,42 @@ def change_function():
                 if reshape_grad_x2:
                     output_shape = grad_output.shape[1:-2] + grad_output.shape[
                         -1:] + x1.shape[-1:]
-                    grad_x2 = acl_cmd("MatMul",
-                                    [grad_output.reshape(-1, grad_output.shape[-1]), x1.reshape(-1, x1.shape[-1])],
-                                    output_dtypes=[x2.dtype],
-                                    output_shapes=[output_shape],
-                                    attr_code="op.jt_name=\"matmul_trans_0\";")[0]
+                    grad_x2 = acl_cmd(
+                        "MatMul", [
+                            grad_output.reshape(-1, grad_output.shape[-1]),
+                            x1.reshape(-1, x1.shape[-1])
+                        ],
+                        output_dtypes=[x2.dtype],
+                        output_shapes=[output_shape],
+                        attr_code="op.jt_name=\"matmul_trans_0\";")[0]
                 else:
                     output_shape = grad_output.shape[:-2] + grad_output.shape[
                         -1:] + x1.shape[-1:]
-                    grad_x2 = acl_cmd("MatMul",
-                                    [grad_output, x1],
-                                    output_dtypes=[x2.dtype],
-                                    output_shapes=[output_shape],
-                                    attr_code="op.jt_name=\"matmul_trans_0\";")[0]
+                    grad_x2 = acl_cmd(
+                        "MatMul", [grad_output, x1],
+                        output_dtypes=[x2.dtype],
+                        output_shapes=[output_shape],
+                        attr_code="op.jt_name=\"matmul_trans_0\";")[0]
             else:
                 if reshape_grad_x2:
                     output_shape = x1.shape[1:-2] + x1.shape[
                         -1:] + grad_output.shape[-1:]
-                    grad_x2 = acl_cmd("MatMul",
-                                  [x1.reshape(-1, x1.shape[-1]), grad_output.reshape(-1, grad_output.shape[-1])],
-                                  output_dtypes=[x2.dtype],
-                                  output_shapes=[output_shape],
-                                  attr_code="op.jt_name=\"matmul_trans_0\";")[0]
+                    grad_x2 = acl_cmd(
+                        "MatMul", [
+                            x1.reshape(-1, x1.shape[-1]),
+                            grad_output.reshape(-1, grad_output.shape[-1])
+                        ],
+                        output_dtypes=[x2.dtype],
+                        output_shapes=[output_shape],
+                        attr_code="op.jt_name=\"matmul_trans_0\";")[0]
                 else:
                     output_shape = x1.shape[:-2] + x1.shape[
                         -1:] + grad_output.shape[-1:]
-                    grad_x2 = acl_cmd("MatMul",
-                                    [x1, grad_output],
-                                    output_dtypes=[x2.dtype],
-                                    output_shapes=[output_shape],
-                                    attr_code="op.jt_name=\"matmul_trans_0\";")[0]
+                    grad_x2 = acl_cmd(
+                        "MatMul", [x1, grad_output],
+                        output_dtypes=[x2.dtype],
+                        output_shapes=[output_shape],
+                        attr_code="op.jt_name=\"matmul_trans_0\";")[0]
             return grad_x1, grad_x2
 
     def matmul_acl(x1, x2):
@@ -1622,26 +1652,25 @@ def change_function():
                              output_shapes=[jt.empty(output_shape).shape],
                              attr_code=attr_code)[0]
             return output
-    
+
     def transpose_acl(x, *dim):
         return TransPoseACL()(x, *dim)
-    
+
     class FlashAttentionACL(Function):
 
         def __init__(self,
                      headnum,
-                     layout = "BNSD",
-                     prefix = None,
-                     qstart = None,
-                     kvstart = None,
-                     scale = 1.0,
-                     prob = 1.0,
-                     pretokens = 2147483647,
-                     nexttokens = 2147483647,
-                     innerprecise = 0,
-                     sparsemode = 0,
-                     psetype = 1
-                     ):
+                     layout="BNSD",
+                     prefix=None,
+                     qstart=None,
+                     kvstart=None,
+                     scale=1.0,
+                     prob=1.0,
+                     pretokens=2147483647,
+                     nexttokens=2147483647,
+                     innerprecise=0,
+                     sparsemode=0,
+                     psetype=1):
             self.headnum = headnum
             self.layout = layout
             self.scale = scale
@@ -1655,32 +1684,36 @@ def change_function():
             self.qstart = qstart
             self.kvstart = kvstart
 
-        def execute(self,q,k,v,
-                    realshift = None,
-                    dropMask = None,
-                    paddingMask = None,
-                    attenMask = None,
-                    ):
+        def execute(
+            self,
+            q,
+            k,
+            v,
+            realshift=None,
+            dropMask=None,
+            paddingMask=None,
+            attenMask=None,
+        ):
             if self.layout == 'BSH':
-                B,SQ,H = q.shape
+                B, SQ, H = q.shape
                 SKV = k.shape[1]
                 N = self.headnum
                 D = H / N
             elif self.layout == 'SBH':
-                SQ,B,H = q.shape
+                SQ, B, H = q.shape
                 SKV = k.shape[0]
                 N = self.headnum
                 D = H / N
             elif self.layout == 'BSND':
-                B,SQ,N,D = q.shape
+                B, SQ, N, D = q.shape
                 SKV = k.shape[1]
             elif self.layout == 'BNSD':
-                B,N,SQ,D = q.shape
+                B, N, SQ, D = q.shape
                 SKV = k.shape[2]
             else:
                 raise ValueError(f"got invalid input layout {self.layout}")
 
-            output_shape = (B,N,SQ,8)
+            output_shape = (B, N, SQ, 8)
 
             self.q = q
             self.k = k
@@ -1688,18 +1721,22 @@ def change_function():
 
             self.prefix = self.prefix if self.prefix else [0 for _ in range(B)]
             self.qstart = self.qstart if self.qstart else [0 for _ in range(B)]
-            self.kvstart = self.kvstart if self.kvstart else [0 for _ in range(B)]
+            self.kvstart = self.kvstart if self.kvstart else [
+                0 for _ in range(B)
+            ]
 
             self.hasRealshift = (not realshift == None)
             self.hasDropmask = (not dropMask == None)
             self.hasPaddingmask = (not paddingMask == None)
             self.hasAttenmask = (not attenMask == None)
 
-            # 待定，目前设为nullptr 
-            self.realshift = realshift if realshift else jt.zeros(B,N,SQ,SKV)
-            self.dropMask = dropMask if dropMask else jt.ones(B,N,SQ,SKV)
-            self.paddingMask = paddingMask if paddingMask else jt.zeros(B,N,SQ,SKV)
-            self.attenMask = attenMask if attenMask else jt.zeros(SQ,SKV)         
+            # 待定，目前设为nullptr
+            self.realshift = realshift if realshift else jt.zeros(
+                B, N, SQ, SKV)
+            self.dropMask = dropMask if dropMask else jt.ones(B, N, SQ, SKV)
+            self.paddingMask = paddingMask if paddingMask else jt.zeros(
+                B, N, SQ, SKV)
+            self.attenMask = attenMask if attenMask else jt.zeros(SQ, SKV)
 
             attr_code = f"""
             op.jt_name = "flashattention";
@@ -1723,13 +1760,17 @@ def change_function():
             op.op_attr.reset(attr);
             """
 
-            inputs = [q, k, v, self.realshift, self.dropMask, self.paddingMask, self.attenMask]
+            inputs = [
+                q, k, v, self.realshift, self.dropMask, self.paddingMask,
+                self.attenMask
+            ]
 
-            result = acl_cmd("FlashAttention",
-                                 inputs,
-                                 output_dtypes=["float","float",q.dtype],
-                                 output_shapes=[output_shape,output_shape,q.shape],
-                                 attr_code=attr_code)
+            result = acl_cmd(
+                "FlashAttention",
+                inputs,
+                output_dtypes=["float", "float", q.dtype],
+                output_shapes=[output_shape, output_shape, q.shape],
+                attr_code=attr_code)
 
             self.maxout = result[0]
             self.sumout = result[1]
@@ -1737,7 +1778,7 @@ def change_function():
 
             return self.attenout
 
-        def grad(self,dy):
+        def grad(self, dy):
             attr_code = f"""
             op.jt_name = "flashattentionbackward";
             FlashAttentionAttr *attr = new FlashAttentionAttr();
@@ -1759,15 +1800,20 @@ def change_function():
             attr->hasAttentmask = {"true" if self.hasAttenmask else "false"};
             op.op_attr.reset(attr);
             """
-            inputs = [self.q, self.k, self.v, dy, self.realshift, self.dropMask, self.paddingMask, self.attenMask, self.maxout, self.sumout, self.attenout]
+            inputs = [
+                self.q, self.k, self.v, dy, self.realshift, self.dropMask,
+                self.paddingMask, self.attenMask, self.maxout, self.sumout,
+                self.attenout
+            ]
 
-            result = acl_cmd("FlashAttentionBackward",
-                                 inputs,
-                                 output_dtypes=[self.q.dtype,self.k.dtype,self.v.dtype],
-                                 output_shapes=[self.q.shape,self.k.shape,self.v.shape],
-                                 attr_code=attr_code)
+            result = acl_cmd(
+                "FlashAttentionBackward",
+                inputs,
+                output_dtypes=[self.q.dtype, self.k.dtype, self.v.dtype],
+                output_shapes=[self.q.shape, self.k.shape, self.v.shape],
+                attr_code=attr_code)
             return result
-    
+
     class ReLUACL(Function):
 
         def __init__(self):
@@ -1898,7 +1944,7 @@ def change_function():
         def execute(self, x):
             inputs = [x]
             self.input = x
-            outputs = [jt.empty(x.shape,x.dtype)]
+            outputs = [jt.empty(x.shape, x.dtype)]
             attr_code = f"""
             op.jt_name = "silu";
             """
@@ -1913,7 +1959,7 @@ def change_function():
             op.jt_name = "silubackward";
             """
             inputs = [grad_output, self.input]
-            outputs = [jt.empty(grad_output.shape,grad_output.dtype)]
+            outputs = [jt.empty(grad_output.shape, grad_output.dtype)]
             grad_input = acl_cmd("SiLUBackward",
                                  inputs=inputs,
                                  outputs=outputs,
@@ -2038,6 +2084,7 @@ def change_function():
         return DropoutACL()(x, p, is_train)
 
     def warp(origin_func, new_func, name=None):
+
         def warpper(*args, **kwargs):
             if jt.flags.use_acl:
                 return new_func(*args, **kwargs)
@@ -2069,23 +2116,27 @@ def change_function():
     jt.Var.index = lambda x, dim=None: jt.index(x.shape, dim)
 
     jt.scatter = warp(jt.scatter, scatter_acl)
-    jt.Var.scatter = lambda x, dim, index, src, reduce="void": jt.scatter(x, dim, index, src, reduce)
+    jt.Var.scatter = lambda x, dim, index, src, reduce="void": jt.scatter(
+        x, dim, index, src, reduce)
 
     jt.floor_int = warp(jt.floor_int, floor_int_acl)
     jt.Var.floor_int = lambda x: jt.floor_int(x)
 
     jt.getitem = warp(jt.contrib.getitem, getitem_acl)
     fake_getitem = jt.Var.getitem
-    jt.Var.getitem = lambda x, slices, return_x=None: warp(fake_getitem, getitem_acl)(x, slices)
-    jt.Var.slice_var = lambda x, slices, return_x=None: warp(fake_getitem, getitem_acl)(x, slices)
-    jt.Var.__getitem__ = lambda x, slices, return_x=None: warp(fake_getitem, getitem_acl)(x, slices)
-    
+    jt.Var.getitem = lambda x, slices, return_x=None: warp(
+        fake_getitem, getitem_acl)(x, slices)
+    jt.Var.slice_var = lambda x, slices, return_x=None: warp(
+        fake_getitem, getitem_acl)(x, slices)
+    jt.Var.__getitem__ = lambda x, slices, return_x=None: warp(
+        fake_getitem, getitem_acl)(x, slices)
+
     jt.setitem = warp(jt.contrib.setitem, setitem_acl)
     fake_setitem = jt.Var.setitem
-    jt.Var.setitem = lambda x, slices, value: warp(fake_setitem, setitem_acl, name='setitem')(
-        x, slices, value)
-    jt.Var.__setitem__ = lambda x, slices, value: warp(fake_setitem, setitem_acl, name='setitem')(
-        x, slices, value)
+    jt.Var.setitem = lambda x, slices, value: warp(
+        fake_setitem, setitem_acl, name='setitem')(x, slices, value)
+    jt.Var.__setitem__ = lambda x, slices, value: warp(
+        fake_setitem, setitem_acl, name='setitem')(x, slices, value)
 
     jt.nn.bmm = warp(jt.nn.bmm, bmm_acl)
     jt.bmm = warp(jt.bmm, bmm_acl)
@@ -2097,7 +2148,8 @@ def change_function():
 
     jt.transpose = warp(jt.transpose, transpose_acl)
     fake_transpose = jt.transpose
-    jt.Var.transpose = lambda x, *dim: warp(fake_transpose, transpose_acl)(x, *dim)
+    jt.Var.transpose = lambda x, *dim: warp(fake_transpose, transpose_acl)(x, *
+                                                                           dim)
     jt.Var.permute = lambda x: warp(fake_transpose, transpose_acl)(x)
     jt.Var.t = lambda x: warp(fake_transpose, transpose_acl)(x)
 
@@ -2127,4 +2179,4 @@ def change_function():
     # jt.nn.dropout = warp(jt.nn.dropout, dropout)
     # jt.nn.Dropout = warp(jt.nn.Dropout, Dropout)
 
-    jt.nn.FlashAttention = warp(jt.nn.FlashAttention,FlashAttentionACL)
+    jt.nn.FlashAttention = warp(jt.nn.FlashAttention, FlashAttentionACL)
