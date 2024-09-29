@@ -108,7 +108,15 @@ namespace jittor
         // std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncInplaceMaskedScatter;
         std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, aclrtStream)> executeFunc;
 
+        // for flashattention
+        std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, 
+        aclIntArray *, aclIntArray *, aclIntArray *, double, double, int64_t, int64_t, int64_t, char *, int64_t, int64_t, int64_t, 
+        aclTensor *, aclTensor *, aclTensor *, aclTensor *,uint64_t *,aclOpExecutor **)> getWorkspaceSizeFuncFalshAttention;
 
+        // for flashattention backward
+        std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, 
+        aclIntArray *, aclIntArray *, aclIntArray *, double, double, int64_t, int64_t, int64_t, char *, int64_t, int64_t, int64_t, 
+        aclTensor *, aclTensor *, aclTensor *, aclTensor *,uint64_t *,aclOpExecutor **)> getWorkspaceSizeFuncFalshAttentionBackward;
 
         // 添加一个默认构造函数
         AclOpFunctions() = default;
@@ -271,6 +279,21 @@ namespace jittor
         AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclIntArray *, int64_t, aclTensorList *, uint64_t *, aclOpExecutor **)> gwsf,
                        std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
             : getWorkspaceSizeFuncSplitWithSize(gwsf), executeFunc(execf) {}
+
+        // for flash attention
+        AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, 
+        aclIntArray *, aclIntArray *, aclIntArray *, double, double, int64_t, int64_t, int64_t, char *, int64_t, int64_t, int64_t, 
+        aclTensor *, aclTensor *, aclTensor *, aclTensor *,uint64_t *,aclOpExecutor **)> gwsf,
+                       std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
+            : getWorkspaceSizeFuncFalshAttention(gwsf), executeFunc(execf) {}  
+
+        // for flash attention backward
+        AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, 
+        aclIntArray *, aclIntArray *, aclIntArray *, double, double, int64_t, int64_t, int64_t, char *, int64_t, int64_t, int64_t, 
+        aclTensor *, aclTensor *, aclTensor *, aclTensor *,uint64_t *,aclOpExecutor **)> gwsf,
+                       std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
+            : getWorkspaceSizeFuncFalshAttentionBackward(gwsf), executeFunc(execf) {}  
+
     };
 
     static std::unordered_map<std::string, AclOpFunctions> aclOpFuncMap = {
@@ -367,6 +390,8 @@ namespace jittor
         {"InplaceMaskedScatter",AclOpFunctions(aclnnInplaceMaskedScatterGetWorkspaceSize,aclnnInplaceMaskedScatter)},
         {"MaskedSelect",AclOpFunctions(aclnnMaskedSelectGetWorkspaceSize,aclnnMaskedSelect)},
         {"SplitWithSize", AclOpFunctions(aclnnSplitWithSizeGetWorkspaceSize, aclnnSplitWithSize)},
+        {"FlashAttention", AclOpFunctions(aclnnFlashAttentionScoreV2GetWorkspaceSize, aclnnFlashAttentionScoreV2)},
+        {"FlashAttentionBackward", AclOpFunctions(aclnnFlashAttentionScoreGradV2GetWorkspaceSize, aclnnFlashAttentionScoreGradV2)},
     };
 
     struct AclOpAttr
@@ -556,6 +581,33 @@ namespace jittor
         ~SplitWithSizeAttr()
         {
             splitSize.clear();
+        }
+    };
+    
+    struct FlashAttentionAttr : AclOpAttr
+    {
+        vector<int64_t> prefix;
+        vector<int64_t> qStartIdx;
+        vector<int64_t> kvStartIdx;
+        float scale;
+        float keepProb;
+        int64_t preToken;
+        int64_t nextToken;
+        int64_t headNum;
+        string inputLayout;
+        int64_t innerPrecise;
+        int64_t sparseMode;
+        int64_t psetype;
+        bool hasRealshift;
+        bool hasDropmask;
+        bool hasPaddingmask;
+        bool hasAttentmask;
+
+        ~FlashAttentionAttr()
+        {
+            prefix.clear();
+            qStartIdx.clear();
+            kvStartIdx.clear();
         }
     };
 }

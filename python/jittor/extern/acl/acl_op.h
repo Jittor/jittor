@@ -573,6 +573,24 @@ namespace jittor
                 auto tensorList = aclCreateTensorList(&outputTensors[0], output_num);
                 ret = it->second.getWorkspaceSizeFuncSplitWithSize(inputTensors[0], splitSize, attr->dim, tensorList, &workspaceSize, &executor);
             }
+            else if (name == string("FlashAttention"))
+            {
+                auto attr = dynamic_cast<FlashAttentionAttr *>(op_attr.get());
+                auto prefix = aclCreateIntArray(attr->prefix.data(),attr->prefix.size());
+                auto qstart = aclCreateIntArray(attr->qStartIdx.data(),attr->qStartIdx.size());
+                auto kvstart = aclCreateIntArray(attr->kvStartIdx.data(),attr->kvStartIdx.size());
+                char * layout = const_cast<char*>(attr->inputLayout.data());
+                ret = it->second.getWorkspaceSizeFuncFalshAttention(inputTensors[0], inputTensors[1], inputTensors[2], attr->hasRealshift ? inputTensors[3] : nullptr, attr->hasDropmask ? inputTensors[4] : nullptr, nullptr, attr->hasAttentmask ? inputTensors[6] : nullptr, prefix, qstart, kvstart, attr->scale, attr->keepProb, attr->preToken, attr->nextToken, attr->headNum, layout , attr->innerPrecise, attr->sparseMode, attr->psetype, outputTensors[0], outputTensors[1], nullptr, outputTensors[2], &workspaceSize, &executor);
+            }
+            else if (name == string("FlashAttentionBackward"))
+            {
+                auto attr = dynamic_cast<FlashAttentionAttr *>(op_attr.get());
+                auto prefix = aclCreateIntArray(attr->prefix.data(),attr->prefix.size());
+                auto qstart = aclCreateIntArray(attr->qStartIdx.data(),attr->qStartIdx.size());
+                auto kvstart = aclCreateIntArray(attr->kvStartIdx.data(),attr->kvStartIdx.size());
+                char * layout = const_cast<char*>(attr->inputLayout.data());
+                ret = it->second.getWorkspaceSizeFuncFalshAttentionBackward(inputTensors[0], inputTensors[1], inputTensors[2], inputTensors[3], attr->hasRealshift ? inputTensors[4] : nullptr, attr->hasDropmask ? inputTensors[5] : nullptr, nullptr, attr->hasAttentmask ? inputTensors[7] : nullptr, inputTensors[8], inputTensors[9], nullptr, inputTensors[10] , prefix , qstart, kvstart , attr->scale, attr->keepProb, attr->preToken, attr->nextToken, attr->headNum, layout, attr->innerPrecise, attr->sparseMode, attr->psetype, outputTensors[0], outputTensors[1], outputTensors[2], nullptr, &workspaceSize, &executor);
+            }
             else
                 LOGir << "not supported op " << jt_name;
 
