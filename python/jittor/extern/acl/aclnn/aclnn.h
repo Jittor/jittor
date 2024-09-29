@@ -94,6 +94,8 @@
 #include "aclnnop/aclnn_masked_scatter.h"
 #include "aclnnop/aclnn_masked_select.h"
 #include "aclnnop/aclnn_split_with_size.h"
+#include "aclnnop/aclnn_flash_attention_score.h"
+#include "aclnnop/aclnn_flash_attention_score_grad.h"
 
 #define CHECK_RET(cond, return_expr) \
   do                                 \
