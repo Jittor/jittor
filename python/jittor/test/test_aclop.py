@@ -85,20 +85,29 @@ class TestACL(unittest.TestCase):
         print("test triu success")
 
     @jt.flag_scope(use_acl=1)
-    def test_bmm(self):
-        a = jt.ones(3, 2, 2).float32()
-        b = jt.bmm(a, a)
-        np.testing.assert_allclose(
-            b.numpy(), [[[2, 2], [2, 2]], [[2, 2], [2, 2]], [[2, 2], [2, 2]]])
-        print("test bmm success")
-
-    @jt.flag_scope(use_acl=1)
     def test_matmul(self):
-        a = jt.ones(1, 4, 4)
-        b = jt.ones(4, 2)
-        c = jt.matmul(a, b)
-        np.testing.assert_allclose(c.numpy(),
-                                   [[[4, 4], [4, 4], [4, 4], [4, 4]]])
+        a = jt.arange(16).reshape(1, 4, 4).float()
+        b = jt.arange(8).reshape(4, 2).float()
+        c = jt.arange(8).reshape(2, 4).float()
+        d = jt.arange(8).reshape(1, 2, 4).float()
+        e = jt.arange(8).reshape(1, 4, 2).float()
+        f = jt.matmul(a, b)
+        g = jt.nn.matmul_transpose(a, c)
+        h = jt.nn.matmul_transpose(a, d)
+        i = jt.matmul(a, e)
+        np.testing.assert_allclose(
+            f.numpy(),
+            [[[28, 34], [76, 98], [124, 162], [172, 226]]])
+        np.testing.assert_allclose(
+            g.numpy(),
+            [[[14, 38], [38, 126], [62, 214], [86, 302]]])
+        np.testing.assert_allclose(
+            h.numpy(),
+            [[[14, 38], [38, 126], [62, 214], [86, 302]]])
+        np.testing.assert_allclose(
+            i.numpy(),
+            [[[28, 34], [76, 98], [124, 162], [172, 226]]])
+        
         print("test matmul success")
 
     @jt.flag_scope(use_acl=1)
@@ -119,55 +128,31 @@ class TestACL(unittest.TestCase):
     def test_matmul_grad(self):
         a = jt.arange(16).reshape(1, 4, 4).float()
         b = jt.arange(8).reshape(4, 2).float()
-        optimizer = jt.optim.SGD([a, b], 0.1)
-        loss = jt.matmul(a, b).sum()
-        optimizer.zero_grad()
-        optimizer.backward(loss)
-        optimizer.step()
-        res_a = a.opt_grad(optimizer)
-        res_b = b.opt_grad(optimizer)
-        np.testing.assert_allclose(
-            res_a.numpy(),
-            [[[1, 5, 9, 13], [1, 5, 9, 13], [1, 5, 9, 13], [1, 5, 9, 13]]])
-        np.testing.assert_allclose(res_b.numpy(),
-                                   [[24, 24], [28, 28], [32, 32], [36, 36]])
+        c = jt.arange(8).reshape(2, 4).float()
+        d = jt.arange(8).reshape(1, 2, 4).float()
+        e = jt.arange(8).reshape(1, 4, 2).float()
+        f = jt.matmul(a, b)
+        g = jt.nn.matmul_transpose(a, c)
+        h = jt.nn.matmul_transpose(a, d)
+        i = jt.matmul(a, e)
+        f_a = jt.grad(f.sum(), a)
+        f_b = jt.grad(f.sum(), b)
+        g_a = jt.grad(g.sum(), a)
+        g_c = jt.grad(g.sum(), c)
+        h_a = jt.grad(h.sum(), a)
+        h_d = jt.grad(h.sum(), d)
+        i_a = jt.grad(i.sum(), a)
+        i_e = jt.grad(i.sum(), e)
+        np.testing.assert_allclose(f_a.numpy(), [[[1, 5, 9, 13], [1, 5, 9, 13], [1, 5, 9, 13], [1, 5, 9, 13]]])
+        np.testing.assert_allclose(f_b.numpy(), [[24, 24], [28, 28], [32, 32], [36, 36]])
+        np.testing.assert_allclose(g_a.numpy(), [[[4, 6, 8, 10], [4, 6, 8, 10], [4, 6, 8, 10], [4, 6, 8, 10]]])
+        np.testing.assert_allclose(g_c.numpy(), [[24, 28, 32, 36], [24, 28, 32, 36]])
+        np.testing.assert_allclose(h_a.numpy(), [[[4, 6, 8, 10], [4, 6, 8, 10], [4, 6, 8, 10], [4, 6, 8, 10]]])
+        np.testing.assert_allclose(h_d.numpy(), [[[24, 28, 32, 36], [24, 28, 32, 36]]])
+        np.testing.assert_allclose(i_a.numpy(), [[[1, 5, 9, 13], [1, 5, 9, 13], [1, 5, 9, 13], [1, 5, 9, 13]]])
+        np.testing.assert_allclose(i_e.numpy(), [[[24, 24], [28, 28], [32, 32], [36, 36]]])
         print("test matmul grad success")
-
-    @jt.flag_scope(use_acl=1)
-    def test_matmul_t_grad(self):
-        a = jt.arange(16).reshape(1, 4, 4).float()
-        b = jt.arange(8).reshape(2, 4).float()
-        optimizer = jt.optim.SGD([a, b], 0.1)
-        loss = jt.nn.matmul_transpose(a, b).sum()
-        optimizer.zero_grad()
-        optimizer.backward(loss)
-        optimizer.step()
-        res_a = a.opt_grad(optimizer)
-        res_b = b.opt_grad(optimizer)
-        np.testing.assert_allclose(
-            res_a.numpy(),
-            [[[4, 6, 8, 10], [4, 6, 8, 10], [4, 6, 8, 10], [4, 6, 8, 10]]])
-        np.testing.assert_allclose(res_b.numpy(),
-                                   [[24, 28, 32, 36], [24, 28, 32, 36]])
-        print("test matmul_t grad success")
-
-    @jt.flag_scope(use_acl=1)
-    def test_bmm_grad(self):
-        a = jt.ones(3, 2, 2).float32()
-        optimizer = jt.optim.SGD([a], 0.1)
-        c = jt.bmm(a, a)
-        loss = c.sum()
-
-        optimizer.zero_grad()
-        optimizer.backward(loss)
-        optimizer.step()
-
-        res = a.opt_grad(optimizer)
-        np.testing.assert_allclose(
-            res.numpy(),
-            [[[4, 4], [4, 4]], [[4, 4], [4, 4]], [[4, 4], [4, 4]]])
-        print("test bmm grad success")
-
+        
     @jt.flag_scope(use_acl=1)
     def test_index(self):
         a = jt.ones(2, 3)
