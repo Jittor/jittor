@@ -1532,8 +1532,9 @@ def change_function():
             grad_x1 = acl_cmd(
                 "MatMul", [grad_output, x2],
                 output_dtypes=[x1.dtype],
-                output_shapes=[grad_output.shape[:-1] + x2.shape[-2:-1]],
-                attr_code="op.jt_name=\"matmul_trans_1\";")[0]
+                output_shapes=[grad_output.shape[:-1] + x2.shape[-2:-1] if not self.trans_x2 else grad_output.shape[:-1] + x2.shape[-1:]],
+                attr_code="op.jt_name=\"matmul_trans_1\";" if not self.trans_x2 else "op.jt_name=\"matmul\";")[0]
+            
             if self.trans_x2:
                 if reshape_grad_x2:
                     output_shape = grad_output.shape[1:-2] + grad_output.shape[
@@ -2095,11 +2096,11 @@ def change_function():
     jt.nn.bmm_transpose = warp(jt.nn.bmm_transpose, bmm_transpose_acl)
     jt.bmm_transpose = warp(jt.bmm_transpose, bmm_transpose_acl)
 
-    jt.transpose = warp(jt.transpose, transpose_acl)
-    fake_transpose = jt.transpose
-    jt.Var.transpose = lambda x, *dim: warp(fake_transpose, transpose_acl)(x, *dim)
-    jt.Var.permute = lambda x: warp(fake_transpose, transpose_acl)(x)
-    jt.Var.t = lambda x: warp(fake_transpose, transpose_acl)(x)
+    # jt.transpose = warp(jt.transpose, transpose_acl)
+    # fake_transpose = jt.transpose
+    # jt.Var.transpose = lambda x, *dim: warp(fake_transpose, transpose_acl)(x, *dim)
+    # jt.Var.permute = lambda x: warp(fake_transpose, transpose_acl)(x)
+    # jt.Var.t = lambda x: warp(fake_transpose, transpose_acl)(x)
 
     # jt.nn.relu = warp(jt.nn.relu, relu)
     # jt.nn.ReLU = warp(jt.nn.ReLU, ReLU)
