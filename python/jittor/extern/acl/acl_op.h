@@ -27,7 +27,7 @@ namespace jittor
     }
 
     int CreateFakeTransAclTensor(std::vector<int64_t> &shape, void *deviceAddr, int64_t size,
-                        aclDataType dataType, aclTensor **tensor, bool use_nchw = false)
+                                 aclDataType dataType, aclTensor **tensor, bool use_nchw = false)
     {
         // 计算连续tensor的strides
         std::vector<int64_t> strides(shape.size(), 1);
@@ -38,9 +38,10 @@ namespace jittor
         if (shape.size() == 0)
             strides = {};
         int n = shape.size();
-        if(n>1){
-            std::swap(shape[n-1], shape[n-2]);
-            std::swap(strides[n-1], strides[n-2]);
+        if (n > 1)
+        {
+            std::swap(shape[n - 1], shape[n - 2]);
+            std::swap(strides[n - 1], strides[n - 2]);
         }
         // 调用aclCreateTensor接口创建aclTensor
         if (use_nchw)
@@ -252,15 +253,15 @@ namespace jittor
             for (int idx = 0; idx < input_num; idx++)
             {
                 inputTensors.push_back(nullptr);
-                if((jt_name == "matmul_trans_1" && idx == 1) || (jt_name == "bmm_trans_1" && idx == 1) || (jt_name == "matmul_trans_0" && idx == 0) || (jt_name == "bmm_trans_0" && idx == 0))
+                if ((jt_name == "matmul_trans_1" && idx == 1) || (jt_name == "bmm_trans_1" && idx == 1) || (jt_name == "matmul_trans_0" && idx == 0) || (jt_name == "bmm_trans_0" && idx == 0))
                 {
                     auto ret = CreateFakeTransAclTensor(inputShapes[idx], in_[idx]->mem_ptr, in_[idx]->size, get_dtype(in_[idx]->dtype()), &inputTensors[idx], use_nchw);
                     CHECK_RET(ret == ACL_SUCCESS, return);
                 }
-                else {
+                else
+                {
                     auto ret = CreateAclTensor(inputShapes[idx], in_[idx]->mem_ptr, in_[idx]->size, get_dtype(in_[idx]->dtype()), &inputTensors[idx], use_nchw);
                     CHECK_RET(ret == ACL_SUCCESS, return);
-
                 }
             }
 
@@ -329,8 +330,8 @@ namespace jittor
                 ret = it->second.getWorkspaceSizeFuncUnary(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
             else if (jt_name == "binary")
                 ret = it->second.getWorkspaceSizeFuncBinary(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
-            else if (jt_name == "bmm" || jt_name == "matmul" || 
-                jt_name == "matmul_trans_0" || jt_name == "matmul_trans_1" ||    jt_name == "bmm_trans_0" || jt_name == "bmm_trans_1")
+            else if (jt_name == "bmm" || jt_name == "matmul" ||
+                     jt_name == "matmul_trans_0" || jt_name == "matmul_trans_1" || jt_name == "bmm_trans_0" || jt_name == "bmm_trans_1")
                 ret = it->second.getWorkspaceSizeFuncMatmul(inputTensors[0], inputTensors[1], outputTensors[0], 1, &workspaceSize, &executor);
             else if (name == string("ReduceSum") || name == string("ReduceMean"))
             {
@@ -556,15 +557,13 @@ namespace jittor
                 auto numEmbeddings = attr->numEmbeddings;
                 ret = it->second.getWorkspaceSizeFuncEmbeddingBackward(inputTensors[0], inputTensors[1], numEmbeddings, 0, false, outputTensors[0], &workspaceSize, &executor);
             }
-            else if(name == string("InplaceMaskedScatter"))
+            else if (name == string("InplaceMaskedScatter"))
             {
                 ret = it->second.getWorkspaceSizeFuncBinary(outputTensors[0], inputTensors[1], inputTensors[0], &workspaceSize, &executor);
-             
             }
-            else if(name == string("MaskedSelect"))
+            else if (name == string("MaskedSelect"))
             {
                 ret = it->second.getWorkspaceSizeFuncBinary(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
-       
             }
             else if (name == string("SplitWithSize"))
             {
@@ -576,20 +575,20 @@ namespace jittor
             else if (name == string("FlashAttention"))
             {
                 auto attr = dynamic_cast<FlashAttentionAttr *>(op_attr.get());
-                auto prefix = aclCreateIntArray(attr->prefix.data(),attr->prefix.size());
-                auto qstart = aclCreateIntArray(attr->qStartIdx.data(),attr->qStartIdx.size());
-                auto kvstart = aclCreateIntArray(attr->kvStartIdx.data(),attr->kvStartIdx.size());
-                char * layout = const_cast<char*>(attr->inputLayout.data());
-                ret = it->second.getWorkspaceSizeFuncFalshAttention(inputTensors[0], inputTensors[1], inputTensors[2], attr->hasRealshift ? inputTensors[3] : nullptr, attr->hasDropmask ? inputTensors[4] : nullptr, nullptr, attr->hasAttentmask ? inputTensors[6] : nullptr, prefix, qstart, kvstart, attr->scale, attr->keepProb, attr->preToken, attr->nextToken, attr->headNum, layout , attr->innerPrecise, attr->sparseMode, attr->psetype, outputTensors[0], outputTensors[1], nullptr, outputTensors[2], &workspaceSize, &executor);
+                auto prefix = aclCreateIntArray(attr->prefix.data(), attr->prefix.size());
+                auto qstart = aclCreateIntArray(attr->qStartIdx.data(), attr->qStartIdx.size());
+                auto kvstart = aclCreateIntArray(attr->kvStartIdx.data(), attr->kvStartIdx.size());
+                char *layout = const_cast<char *>(attr->inputLayout.data());
+                ret = it->second.getWorkspaceSizeFuncFalshAttention(inputTensors[0], inputTensors[1], inputTensors[2], attr->hasRealshift ? inputTensors[3] : nullptr, attr->hasDropmask ? inputTensors[4] : nullptr, nullptr, attr->hasAttentmask ? inputTensors[6] : nullptr, prefix, qstart, kvstart, attr->scale, attr->keepProb, attr->preToken, attr->nextToken, attr->headNum, layout, attr->innerPrecise, attr->sparseMode, attr->psetype, outputTensors[0], outputTensors[1], nullptr, outputTensors[2], &workspaceSize, &executor);
             }
             else if (name == string("FlashAttentionBackward"))
             {
                 auto attr = dynamic_cast<FlashAttentionAttr *>(op_attr.get());
-                auto prefix = aclCreateIntArray(attr->prefix.data(),attr->prefix.size());
-                auto qstart = aclCreateIntArray(attr->qStartIdx.data(),attr->qStartIdx.size());
-                auto kvstart = aclCreateIntArray(attr->kvStartIdx.data(),attr->kvStartIdx.size());
-                char * layout = const_cast<char*>(attr->inputLayout.data());
-                ret = it->second.getWorkspaceSizeFuncFalshAttentionBackward(inputTensors[0], inputTensors[1], inputTensors[2], inputTensors[3], attr->hasRealshift ? inputTensors[4] : nullptr, attr->hasDropmask ? inputTensors[5] : nullptr, nullptr, attr->hasAttentmask ? inputTensors[7] : nullptr, inputTensors[8], inputTensors[9], nullptr, inputTensors[10] , prefix , qstart, kvstart , attr->scale, attr->keepProb, attr->preToken, attr->nextToken, attr->headNum, layout, attr->innerPrecise, attr->sparseMode, attr->psetype, outputTensors[0], outputTensors[1], outputTensors[2], nullptr, &workspaceSize, &executor);
+                auto prefix = aclCreateIntArray(attr->prefix.data(), attr->prefix.size());
+                auto qstart = aclCreateIntArray(attr->qStartIdx.data(), attr->qStartIdx.size());
+                auto kvstart = aclCreateIntArray(attr->kvStartIdx.data(), attr->kvStartIdx.size());
+                char *layout = const_cast<char *>(attr->inputLayout.data());
+                ret = it->second.getWorkspaceSizeFuncFalshAttentionBackward(inputTensors[0], inputTensors[1], inputTensors[2], inputTensors[3], attr->hasRealshift ? inputTensors[4] : nullptr, attr->hasDropmask ? inputTensors[5] : nullptr, nullptr, attr->hasAttentmask ? inputTensors[7] : nullptr, inputTensors[8], inputTensors[9], nullptr, inputTensors[10], prefix, qstart, kvstart, attr->scale, attr->keepProb, attr->preToken, attr->nextToken, attr->headNum, layout, attr->innerPrecise, attr->sparseMode, attr->psetype, outputTensors[0], outputTensors[1], outputTensors[2], nullptr, &workspaceSize, &executor);
             }
             else
                 LOGir << "not supported op " << jt_name;

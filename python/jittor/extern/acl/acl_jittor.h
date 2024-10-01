@@ -102,21 +102,23 @@ namespace jittor
         // std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncEmbedding;
 
         // for embedding backward
-        std::function<aclnnStatus(aclTensor *, aclTensor *, uint64_t,uint64_t,bool,aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncEmbeddingBackward;
-        
+        std::function<aclnnStatus(aclTensor *, aclTensor *, uint64_t, uint64_t, bool, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncEmbeddingBackward;
+
         // for InplaceMaskedScatter MaskedSelect
         // std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncInplaceMaskedScatter;
         std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, aclrtStream)> executeFunc;
 
         // for flashattention
-        std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, 
-        aclIntArray *, aclIntArray *, aclIntArray *, double, double, int64_t, int64_t, int64_t, char *, int64_t, int64_t, int64_t, 
-        aclTensor *, aclTensor *, aclTensor *, aclTensor *,uint64_t *,aclOpExecutor **)> getWorkspaceSizeFuncFalshAttention;
+        std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *,
+                                  aclIntArray *, aclIntArray *, aclIntArray *, double, double, int64_t, int64_t, int64_t, char *, int64_t, int64_t, int64_t,
+                                  aclTensor *, aclTensor *, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)>
+            getWorkspaceSizeFuncFalshAttention;
 
         // for flashattention backward
-        std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, 
-        aclIntArray *, aclIntArray *, aclIntArray *, double, double, int64_t, int64_t, int64_t, char *, int64_t, int64_t, int64_t, 
-        aclTensor *, aclTensor *, aclTensor *, aclTensor *,uint64_t *,aclOpExecutor **)> getWorkspaceSizeFuncFalshAttentionBackward;
+        std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *,
+                                  aclIntArray *, aclIntArray *, aclIntArray *, double, double, int64_t, int64_t, int64_t, char *, int64_t, int64_t, int64_t,
+                                  aclTensor *, aclTensor *, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)>
+            getWorkspaceSizeFuncFalshAttentionBackward;
 
         // 添加一个默认构造函数
         AclOpFunctions() = default;
@@ -269,9 +271,9 @@ namespace jittor
         AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclTensor *, double, aclTensor *, uint64_t *, aclOpExecutor **)> gwsf,
                        std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
             : getWorkspaceSizeFuncDropoutBackward(gwsf), executeFunc(execf) {}
-        
+
         // for embedding backward
-        AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclTensor *, uint64_t,uint64_t,bool,aclTensor *, uint64_t *, aclOpExecutor **)> gwsf,
+        AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclTensor *, uint64_t, uint64_t, bool, aclTensor *, uint64_t *, aclOpExecutor **)> gwsf,
                        std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
             : getWorkspaceSizeFuncEmbeddingBackward(gwsf), executeFunc(execf) {}
 
@@ -281,19 +283,20 @@ namespace jittor
             : getWorkspaceSizeFuncSplitWithSize(gwsf), executeFunc(execf) {}
 
         // for flash attention
-        AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, 
-        aclIntArray *, aclIntArray *, aclIntArray *, double, double, int64_t, int64_t, int64_t, char *, int64_t, int64_t, int64_t, 
-        aclTensor *, aclTensor *, aclTensor *, aclTensor *,uint64_t *,aclOpExecutor **)> gwsf,
+        AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *,
+                                                 aclIntArray *, aclIntArray *, aclIntArray *, double, double, int64_t, int64_t, int64_t, char *, int64_t, int64_t, int64_t,
+                                                 aclTensor *, aclTensor *, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)>
+                           gwsf,
                        std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
-            : getWorkspaceSizeFuncFalshAttention(gwsf), executeFunc(execf) {}  
+            : getWorkspaceSizeFuncFalshAttention(gwsf), executeFunc(execf) {}
 
         // for flash attention backward
-        AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, 
-        aclIntArray *, aclIntArray *, aclIntArray *, double, double, int64_t, int64_t, int64_t, char *, int64_t, int64_t, int64_t, 
-        aclTensor *, aclTensor *, aclTensor *, aclTensor *,uint64_t *,aclOpExecutor **)> gwsf,
+        AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *,
+                                                 aclIntArray *, aclIntArray *, aclIntArray *, double, double, int64_t, int64_t, int64_t, char *, int64_t, int64_t, int64_t,
+                                                 aclTensor *, aclTensor *, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)>
+                           gwsf,
                        std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
-            : getWorkspaceSizeFuncFalshAttentionBackward(gwsf), executeFunc(execf) {}  
-
+            : getWorkspaceSizeFuncFalshAttentionBackward(gwsf), executeFunc(execf) {}
     };
 
     static std::unordered_map<std::string, AclOpFunctions> aclOpFuncMap = {
@@ -356,7 +359,7 @@ namespace jittor
         {"ReduceMean", AclOpFunctions(aclnnMeanGetWorkspaceSize, aclnnMean)},
         // {"ReduceProd", AclOpFunctions(aclnnProdDimGetWorkspaceSize, aclnnProdDim)},
         {"Select", AclOpFunctions(aclnnSWhereGetWorkspaceSize, aclnnSWhere)},
-        {"RandomUniform", AclOpFunctions(aclnnInplaceUniformGetWorkspaceSize,  aclnnInplaceUniform)},
+        {"RandomUniform", AclOpFunctions(aclnnInplaceUniformGetWorkspaceSize, aclnnInplaceUniform)},
         {"RandomNormal", AclOpFunctions(aclnnInplaceNormalGetWorkspaceSize, aclnnInplaceNormal)},
         {"Transpose", AclOpFunctions(aclnnPermuteGetWorkspaceSize, aclnnPermute)},
         {"Maxpool", AclOpFunctions(aclnnMaxPool2dWithIndicesGetWorkspaceSize, aclnnMaxPool2dWithIndices)},
@@ -383,12 +386,12 @@ namespace jittor
         {"DropoutBackward", AclOpFunctions(aclnnDropoutBackwardGetWorkspaceSize, aclnnDropoutBackward)},
         {"SiLU", AclOpFunctions(aclnnSiluGetWorkspaceSize, aclnnSilu)},
         {"SiLUBackward", AclOpFunctions(aclnnSiluBackwardGetWorkspaceSize, aclnnSiluBackward)},
-        {"Sigmoid",AclOpFunctions(aclnnSigmoidGetWorkspaceSize, aclnnSigmoid)},
-        {"SigmoidBackward",AclOpFunctions(aclnnSigmoidBackwardGetWorkspaceSize, aclnnSigmoidBackward)},
-        {"Embedding",AclOpFunctions(aclnnEmbeddingGetWorkspaceSize,aclnnEmbedding)},
-        {"EmbeddingBackward",AclOpFunctions(aclnnEmbeddingDenseBackwardGetWorkspaceSize,aclnnEmbeddingDenseBackward)},
-        {"InplaceMaskedScatter",AclOpFunctions(aclnnInplaceMaskedScatterGetWorkspaceSize,aclnnInplaceMaskedScatter)},
-        {"MaskedSelect",AclOpFunctions(aclnnMaskedSelectGetWorkspaceSize,aclnnMaskedSelect)},
+        {"Sigmoid", AclOpFunctions(aclnnSigmoidGetWorkspaceSize, aclnnSigmoid)},
+        {"SigmoidBackward", AclOpFunctions(aclnnSigmoidBackwardGetWorkspaceSize, aclnnSigmoidBackward)},
+        {"Embedding", AclOpFunctions(aclnnEmbeddingGetWorkspaceSize, aclnnEmbedding)},
+        {"EmbeddingBackward", AclOpFunctions(aclnnEmbeddingDenseBackwardGetWorkspaceSize, aclnnEmbeddingDenseBackward)},
+        {"InplaceMaskedScatter", AclOpFunctions(aclnnInplaceMaskedScatterGetWorkspaceSize, aclnnInplaceMaskedScatter)},
+        {"MaskedSelect", AclOpFunctions(aclnnMaskedSelectGetWorkspaceSize, aclnnMaskedSelect)},
         {"SplitWithSize", AclOpFunctions(aclnnSplitWithSizeGetWorkspaceSize, aclnnSplitWithSize)},
         {"FlashAttention", AclOpFunctions(aclnnFlashAttentionScoreV2GetWorkspaceSize, aclnnFlashAttentionScoreV2)},
         {"FlashAttentionBackward", AclOpFunctions(aclnnFlashAttentionScoreGradV2GetWorkspaceSize, aclnnFlashAttentionScoreGradV2)},
@@ -583,7 +586,7 @@ namespace jittor
             splitSize.clear();
         }
     };
-    
+
     struct FlashAttentionAttr : AclOpAttr
     {
         vector<int64_t> prefix;
