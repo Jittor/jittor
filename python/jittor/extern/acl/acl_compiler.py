@@ -1649,7 +1649,7 @@ def change_function():
         def grad(self, grad_output):
             dim = list(range(grad_output.ndim))
             for i, p in enumerate(self.dim):
-                dim[i], dim[p] = dim[p], dim[i]
+                dim[p] = i
             output_shape = [grad_output.shape[i] for i in dim]
             attr_code = f"""
             op.jt_name = "transpose";
@@ -2156,9 +2156,9 @@ def change_function():
     jt.nn.bmm_transpose = warp(jt.nn.bmm_transpose, bmm_transpose_acl)
     jt.bmm_transpose = warp(jt.bmm_transpose, bmm_transpose_acl)
 
-    # jt.transpose = warp(jt.transpose, transpose_acl)
-    # fake_transpose = jt.transpose
-    # jt.Var.transpose = lambda x, *dim: warp(fake_transpose, transpose_acl)(x, *dim)
+    jt.transpose = warp(jt.transpose, transpose_acl)
+    fake_transpose = jt.transpose
+    jt.Var.transpose = lambda x, *dim: warp(fake_transpose, transpose_acl)(x, *dim)
     # jt.Var.permute = lambda x: warp(fake_transpose, transpose_acl)(x)
     # jt.Var.t = lambda x: warp(fake_transpose, transpose_acl)(x)
 
