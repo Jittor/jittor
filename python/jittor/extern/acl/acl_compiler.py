@@ -816,6 +816,11 @@ def change_function():
     def cumsum_acl(input, dim=-1):
         return CumsumACL()(input, dim)
 
+    def cumprod_acl(x, dim=None):
+        x = jt.log(x)
+        x = cumsum_acl(x,dim=dim)
+        return jt.exp(x)
+
     class IndexACL(Function):
 
         def __init__(self):
@@ -2133,6 +2138,8 @@ def change_function():
     jt.gather = warp(jt.gather, gather_acl)
 
     jt.cumsum = warp(jt.cumsum, cumsum_acl)
+    jt.cub_cumsum = jt.cumsum
+    jt.cumprod = warp(jt.cumprod, cumprod_acl)
     jt.index = warp(jt.index, index_acl)
     jt.Var.index = lambda x, dim=None: jt.index(x.shape, dim)
 
