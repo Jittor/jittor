@@ -2104,7 +2104,18 @@ def change_function():
                 result = origin_func(*args, **kwargs)
             return result
 
-        return warpper
+        if isinstance(origin_func, type):
+            class WrappedClass(origin_func):
+                def __init__(self, *args, **kwargs):
+                    super(WrappedClass, self).__init__(*args, **kwargs)
+
+                def __call__(self, *args, **kwargs):
+                    return warpper(*args, **kwargs)
+
+            return WrappedClass
+
+        else:
+            return warpper
 
     jt.triu = warp(jt.triu, triu_acl)
     jt.triu_ = warp(jt.triu, triu_acl)
