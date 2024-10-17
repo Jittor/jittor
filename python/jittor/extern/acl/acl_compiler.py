@@ -2124,8 +2124,8 @@ def change_function():
 
     jt.triu = warp(jt.triu, triu_acl)
     jt.triu_ = warp(jt.triu, triu_acl)
-    jt.Var.triu = lambda x: jt.triu(x)
-    jt.Var.triu_ = lambda x: jt.triu_(x)
+    jt.Var.triu = lambda x, k=0: jt.triu(x, k)
+    jt.Var.triu_ = lambda x, k=0: jt.triu_(x, k)
     jt.nn.conv2d = warp(jt.nn.conv2d, ConvACL())
     jt.nn.Conv2d = warp(jt.nn.Conv2d, Conv2D)
     jt.nn.Conv = warp(jt.nn.Conv, Conv2D)
