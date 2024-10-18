@@ -13,6 +13,7 @@ import jittor.compiler as compiler
 import jittor as jt
 import math
 
+from typing import Union
 from collections.abc import Sequence, Iterable
 
 
@@ -864,7 +865,9 @@ def change_function():
         def grad(self, grad_output):
             return grad_output
 
-    def index_acl(inshape: list, dim=None, dtype="int32"):
+    def index_acl(inshape: Union[jt.Var, list], dim=None, dtype="int32"):
+        if isinstance(inshape, jt.Var):
+            inshape = inshape.shape
         return IndexACL()(inshape, dim, dtype)
 
     class ScatterACL(Function):
@@ -2141,7 +2144,7 @@ def change_function():
     jt.cub_cumsum = jt.cumsum
     jt.cumprod = warp(jt.cumprod, cumprod_acl)
     jt.index = warp(jt.index, index_acl)
-    jt.Var.index = lambda x, dim=None: jt.index(x.shape, dim)
+    jt.Var.index = jt.index
 
     jt.scatter = warp(jt.scatter, scatter_acl)
     jt.Var.scatter = lambda x, dim, index, src, reduce="void": jt.scatter(
