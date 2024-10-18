@@ -225,11 +225,11 @@ def change_function():
         def __init__(self):
             super(TriuACL, self).__init__()
 
-        def execute(self, input, k):
+        def execute(self, input, diagonal):
             attr_code = f"""
             op.jt_name = "triu";
             TriuAttr *attr = new TriuAttr();
-            attr->diagonal = {k};
+            attr->diagonal = {diagonal};
             op.op_attr.reset(attr);
             """
 
@@ -242,8 +242,8 @@ def change_function():
         def grad(self, grad_output):
             return grad_output
 
-    def triu_acl(x, k=0):
-        return TriuACL()(x, k)
+    def triu_acl(x, diagonal=0):
+        return TriuACL()(x, diagonal)
 
     class ConvACL(Function):
 
@@ -2124,8 +2124,8 @@ def change_function():
 
     jt.triu = warp(jt.triu, triu_acl)
     jt.triu_ = warp(jt.triu, triu_acl)
-    jt.Var.triu = lambda x, k=0: jt.triu(x, k)
-    jt.Var.triu_ = lambda x, k=0: jt.triu_(x, k)
+    jt.Var.triu = jt.triu
+    jt.Var.triu_ = lambda x, diagonal=0: x.assign(x.triu(diagonal))
     jt.nn.conv2d = warp(jt.nn.conv2d, ConvACL())
     jt.nn.Conv2d = warp(jt.nn.Conv2d, Conv2D)
     jt.nn.Conv = warp(jt.nn.Conv, Conv2D)
