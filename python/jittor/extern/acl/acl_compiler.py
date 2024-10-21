@@ -2103,26 +2103,34 @@ def change_function():
 
     def warp(origin_func, new_func, name=None):
 
-        def warpper(*args, **kwargs):
-            if jt.flags.use_acl:
-                return new_func(*args, **kwargs)
-            if name == 'setitem':
-                result = args[0].assign(origin_func(*args, **kwargs))
-            else:
-                result = origin_func(*args, **kwargs)
-            return result
-
         if isinstance(origin_func, type):
-            class WrappedClass(origin_func):
+
+            class WrappedClass(origin_func, new_func):
                 def __init__(self, *args, **kwargs):
-                    super(WrappedClass, self).__init__(*args, **kwargs)
+                    if jt.flags.use_acl:
+                        new_func.__init__(self, *args, **kwargs)
+                    else:
+                        origin_func.__init__(self, *args, **kwargs)
 
                 def __call__(self, *args, **kwargs):
-                    return warpper(*args, **kwargs)
+                    if jt.flags.use_acl:
+                        return new_func.__call__(self, *args, **kwargs)
+                    elif name == 'setitem':
+                        return args[0].assign(origin_func(*args, **kwargs))
+                    else:
+                        return origin_func.__call__(self, *args, **kwargs)
 
             return WrappedClass
 
         else:
+            def warpper(*args, **kwargs):
+                if jt.flags.use_acl:
+                    return new_func(*args, **kwargs)
+                elif name == 'setitem':
+                    return args[0].assign(origin_func(*args, **kwargs))
+                else:
+                    return origin_func(*args, **kwargs)
+
             return warpper
 
     jt.triu = warp(jt.triu, triu_acl)
