@@ -2112,13 +2112,13 @@ def change_function():
                     else:
                         origin_func.__init__(self, *args, **kwargs)
 
-                def __call__(self, *args, **kwargs):
+                def execute(self, *args, **kwargs):
                     if jt.flags.use_acl:
-                        return new_func.__call__(self, *args, **kwargs)
+                        return new_func.execute(self, *args, **kwargs)
                     elif name == 'setitem':
                         return args[0].assign(origin_func(*args, **kwargs))
                     else:
-                        return origin_func.__call__(self, *args, **kwargs)
+                        return origin_func.execute(self, *args, **kwargs)
 
             return WrappedClass
 
