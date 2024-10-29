@@ -32,6 +32,7 @@ Init() {
     if (!get_device_count()) return;
     checkCudaErrors(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
     checkCudaErrors(cudaEventCreate(&event, cudaEventDisableTiming));
+    stream = aclstream;
 }
 ~Init() {
     if (!get_device_count()) return;
