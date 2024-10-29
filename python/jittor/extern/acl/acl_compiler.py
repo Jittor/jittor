@@ -829,6 +829,7 @@ def change_function():
 
         def execute(self, inshape: list, dim=None, dtype="int32"):
             # zeros a tensor, shape is inshape, dtype is dtype
+            dim_input = dim
             if dim == None:
                 dim = [i for i in range(len(inshape))]
             elif type(dim) == int:
@@ -857,10 +858,13 @@ def change_function():
                                       shape=inshape,
                                       dims=broadcast_dim)
                 results.append(result)
-            if len(results) != 1 or dim == None:
+                
+            if len(results) != 1 or dim_input == None:
                 return tuple(results)
+            elif len(results)== 1 and dim_input != None:
+                    return results[0]
             else:
-                return results[0]
+                return results
 
         def grad(self, grad_output):
             return grad_output
