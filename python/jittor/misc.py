@@ -2217,10 +2217,18 @@ bfloat16_finfo.max = 1e38
 def finfo(dtype):
     if dtype == "bfloat16":
         return bfloat16_finfo
-    return np.finfo(str(dtype).split('.')[-1])
+    if callable(dtype) and hasattr(dtype, "__name__"):
+        dtype = dtype.__name__.split('.')[-1]
+    else:
+        dtype = str(dtype).split('.')[-1]
+    return np.finfo(dtype)
 
 def iinfo(dtype):
-    return np.iinfo(str(dtype).split('.')[-1])
+    if callable(dtype) and hasattr(dtype, "__name__"):
+        dtype = dtype.__name__.split('.')[-1]
+    else:
+        dtype = str(dtype).split('.')[-1]
+    return np.iinfo(dtype)
 
 
 def index_select(input,dim,indices):

@@ -13,6 +13,7 @@ import jittor.compiler as compiler
 import jittor as jt
 import math
 
+from typing import Union
 from collections.abc import Sequence, Iterable
 
 
@@ -225,11 +226,11 @@ def change_function():
         def __init__(self):
             super(TriuACL, self).__init__()
 
-        def execute(self, input, k):
+        def execute(self, input, diagonal):
             attr_code = f"""
             op.jt_name = "triu";
             TriuAttr *attr = new TriuAttr();
-            attr->diagonal = {k};
+            attr->diagonal = {diagonal};
             op.op_attr.reset(attr);
             """
 
@@ -242,8 +243,8 @@ def change_function():
         def grad(self, grad_output):
             return grad_output
 
-    def triu_acl(x, k=0):
-        return TriuACL()(x, k)
+    def triu_acl(x, diagonal=0):
+        return TriuACL()(x, diagonal)
 
     class ConvACL(Function):
 
@@ -816,6 +817,11 @@ def change_function():
     def cumsum_acl(input, dim=-1):
         return CumsumACL()(input, dim)
 
+    def cumprod_acl(x, dim=None):
+        x = jt.log(x)
+        x = cumsum_acl(x,dim=dim)
+        return jt.exp(x)
+
     class IndexACL(Function):
 
         def __init__(self):
@@ -863,7 +869,9 @@ def change_function():
         def grad(self, grad_output):
             return grad_output
 
-    def index_acl(inshape: list, dim=None, dtype="int32"):
+    def index_acl(inshape: Union[jt.Var, list], dim=None, dtype="int32"):
+        if isinstance(inshape, jt.Var):
+            inshape = inshape.shape
         return IndexACL()(inshape, dim, dtype)
 
     class ScatterACL(Function):
@@ -2099,21 +2107,40 @@ def change_function():
 
     def warp(origin_func, new_func, name=None):
 
-        def warpper(*args, **kwargs):
-            if jt.flags.use_acl:
-                return new_func(*args, **kwargs)
-            if name == 'setitem':
-                result = args[0].assign(origin_func(*args, **kwargs))
-            else:
-                result = origin_func(*args, **kwargs)
-            return result
+        if isinstance(origin_func, type):
 
-        return warpper
+            class WrappedClass(origin_func, new_func):
+                def __init__(self, *args, **kwargs):
+                    if jt.flags.use_acl:
+                        new_func.__init__(self, *args, **kwargs)
+                    else:
+                        origin_func.__init__(self, *args, **kwargs)
+
+                def execute(self, *args, **kwargs):
+                    if jt.flags.use_acl:
+                        return new_func.execute(self, *args, **kwargs)
+                    elif name == 'setitem':
+                        return args[0].assign(origin_func(*args, **kwargs))
+                    else:
+                        return origin_func.execute(self, *args, **kwargs)
+
+            return WrappedClass
+
+        else:
+            def warpper(*args, **kwargs):
+                if jt.flags.use_acl:
+                    return new_func(*args, **kwargs)
+                elif name == 'setitem':
+                    return args[0].assign(origin_func(*args, **kwargs))
+                else:
+                    return origin_func(*args, **kwargs)
+
+            return warpper
 
     jt.triu = warp(jt.triu, triu_acl)
     jt.triu_ = warp(jt.triu, triu_acl)
-    jt.Var.triu = lambda x: jt.triu(x)
-    jt.Var.triu_ = lambda x: jt.triu_(x)
+    jt.Var.triu = jt.triu
+    jt.Var.triu_ = lambda x, diagonal=0: x.assign(x.triu(diagonal))
     jt.nn.conv2d = warp(jt.nn.conv2d, ConvACL())
     jt.nn.Conv2d = warp(jt.nn.Conv2d, Conv2D)
     jt.nn.Conv = warp(jt.nn.Conv, Conv2D)
@@ -2126,8 +2153,10 @@ def change_function():
     jt.gather = warp(jt.gather, gather_acl)
 
     jt.cumsum = warp(jt.cumsum, cumsum_acl)
+    jt.cub_cumsum = jt.cumsum
+    jt.cumprod = warp(jt.cumprod, cumprod_acl)
     jt.index = warp(jt.index, index_acl)
-    jt.Var.index = lambda x, dim=None: jt.index(x.shape, dim)
+    jt.Var.index = jt.index
 
     jt.scatter = warp(jt.scatter, scatter_acl)
     jt.Var.scatter = lambda x, dim, index, src, reduce="void": jt.scatter(
