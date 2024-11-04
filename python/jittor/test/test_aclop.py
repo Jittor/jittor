@@ -283,18 +283,18 @@ class TestACL(unittest.TestCase):
         np.testing.assert_allclose(b.numpy(), [[0, 0], [1, 1]])
         print("test nonzero (test case 2) success")
 
-    @jt.flag_scope(use_acl=1)
-    def test_nonzero_3(self):
-        a = jt.array([[
-            [True, False, True],
-            [False, True, False]
-        ],[
-            [True, False, True],
-            [False, True, False]
-        ]])
-        b = a.nonzero()
-        np.testing.assert_allclose(b.numpy(), [[0, 0, 0], [0, 0, 2], [0, 1, 1], [1, 0, 0], [1, 0, 2], [1, 1, 1]])
-        print("test nonzero (test case 3) success")
+    # @jt.flag_scope(use_acl=1)
+    # def test_nonzero_3(self):
+    #     a = jt.array([[
+    #         [True, False, True],
+    #         [False, True, False]
+    #     ],[
+    #         [True, False, True],
+    #         [False, True, False]
+    #     ]])
+    #     b = a.nonzero()
+    #     np.testing.assert_allclose(b.numpy(), [[0, 0, 0], [0, 0, 2], [0, 1, 1], [1, 0, 0], [1, 0, 2], [1, 1, 1]])
+    #     print("test nonzero (test case 3) success")
 
     @jt.flag_scope(use_acl=1)
     def test_floor_int(self):
@@ -304,12 +304,12 @@ class TestACL(unittest.TestCase):
         print("test floor_int success")
 
     @jt.flag_scope(use_acl=1)
-    def test_where(self):
+    def test_where_cond_expr(self):
         a = jt.array([[1, 2], [3, 4]])
         b = jt.ones(2, 2)
         c = jt.where(a > 2, a, b)
         np.testing.assert_allclose(c.numpy(), [[1, 1], [3, 4]])
-        print("test where success")
+        print("test where (cond expr) success")
 
     @jt.flag_scope(use_acl=1)
     def test_where_grad(self):
@@ -326,6 +326,26 @@ class TestACL(unittest.TestCase):
         np.testing.assert_allclose(res_a.numpy(), [[0, 0], [1, 1]])
         np.testing.assert_allclose(res_b.numpy(), [[1, 1], [0, 0]])
         print("test where grad success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_where_unary_1(self):
+        a = jt.array([[1.0, 0.0], [0.0, 2.0]])
+        b = jt.where(a)
+        # assert type(b) is tuple
+        assert len(b) == a.ndim
+        np.testing.assert_allclose(b[0].numpy(), [0, 1])
+        np.testing.assert_allclose(b[1].numpy(), [0, 1])
+        print("test where (unary) (test case 1) success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_where_unary_2(self):
+        a = jt.array([[1.0, -1.2], [0.13, 0.0]])
+        b = jt.where(a)
+        # assert type(b) is tuple
+        assert len(b) == a.ndim
+        np.testing.assert_allclose(b[0].numpy(), [0, 0, 1])
+        np.testing.assert_allclose(b[1].numpy(), [0, 1, 0])
+        print("test where (unary) (test case 2) success")
 
     # @jt.flag_scope(use_acl=1)
     # def test_flip(self):

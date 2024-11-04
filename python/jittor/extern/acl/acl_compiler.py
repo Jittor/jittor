@@ -917,38 +917,53 @@ def change_function():
         def __init__(self):
             super(WhereACL, self).__init__()
 
-        def execute(self, condition, x, y):
-            self.condition = condition
+        def execute(self, condition, x=None, y=None):
+            # case 1 (unary)
+            if y is None:
+                self.unary = True
 
-            if x.dtype != y.dtype:
-                if x.dtype == jt.float32:
-                    y = y.float32()
-                elif y.dtype == jt.float32:
-                    x = x.float32()
-                else:
-                    x = x.to(y.dtype)
+                # In this case, `condition` is the input, while `x` is dtype
+                result = nonzero_acl(condition).t()
+                result = [result[i] for i in range(result.size(0))]
+                return result
+                # The return value should be a tuple, but even we set to tuple here, it will be convert to a list in `Function.__call__`.
 
-            self.x = x
-            self.y = y
+            # case 2 (cond ? x : y)
+            else:
+                self.condition = condition
 
-            result = acl_cmd("Where", [condition, x, y],
-                             output_dtypes=[x.dtype],
-                             output_shapes=[x.shape],
-                             attr_code="op.jt_name=\"where\";")[0]
-            return result
+                if x.dtype != y.dtype:
+                    if x.dtype == jt.float32:
+                        y = y.float32()
+                    elif y.dtype == jt.float32:
+                        x = x.float32()
+                    else:
+                        x = x.to(y.dtype)
+
+                self.x = x
+                self.y = y
+
+                result = acl_cmd("Where", [condition, x, y],
+                                 output_dtypes=[x.dtype],
+                                 output_shapes=[x.shape],
+                                 attr_code="op.jt_name=\"where\";")[0]
+                return result
 
         def grad(self, grad_output):
-            tmp = jt.zeros(grad_output.shape, dtype=grad_output.dtype)
-            grad_x = acl_cmd("Where", [self.condition, grad_output, tmp],
-                             output_dtypes=[self.x.dtype],
-                             output_shapes=[self.x.shape],
-                             attr_code="op.jt_name=\"where\";")[0]
+            if hasattr(self, 'unary') and self.unary:
+                return grad_output
+            else:
+                tmp = jt.zeros(grad_output.shape, dtype=grad_output.dtype)
+                grad_x = acl_cmd("Where", [self.condition, grad_output, tmp],
+                                 output_dtypes=[self.x.dtype],
+                                 output_shapes=[self.x.shape],
+                                 attr_code="op.jt_name=\"where\";")[0]
 
-            grad_y = acl_cmd("Where", [self.condition, tmp, grad_output],
-                             output_dtypes=[self.y.dtype],
-                             output_shapes=[self.y.shape],
-                             attr_code="op.jt_name=\"where\";")[0]
-            return grad_output, grad_x, grad_y
+                grad_y = acl_cmd("Where", [self.condition, tmp, grad_output],
+                                 output_dtypes=[self.y.dtype],
+                                 output_shapes=[self.y.shape],
+                                 attr_code="op.jt_name=\"where\";")[0]
+                return grad_output, grad_x, grad_y
 
     def where_acl(condition, x=None, y=None):
         return WhereACL()(condition, x, y)
