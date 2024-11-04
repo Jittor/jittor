@@ -28,6 +28,7 @@
 #include "aclnnop/aclnn_logical_not.h"
 #include "aclnnop/aclnn_bitwise_not.h"
 #include "aclnnop/aclnn_cast.h"
+#include "aclnnop/aclnn_nonzero.h"
 // binary
 #include "aclnnop/aclnn_maximum.h"
 #include "aclnnop/aclnn_minimum.h"

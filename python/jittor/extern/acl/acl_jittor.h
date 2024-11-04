@@ -23,8 +23,8 @@ namespace jittor
 
     struct AclOpFunctions
     {
-        // for Unary
-        std::function<aclnnStatus(aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncUnary;
+        // for Unary and Nonzero
+        std::function<aclnnStatus(aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncUnaryNonzero;
         // for Cast
         std::function<aclnnStatus(aclTensor *, aclDataType, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncCast;
         // for Bianry
@@ -123,10 +123,10 @@ namespace jittor
         // 添加一个默认构造函数
         AclOpFunctions() = default;
 
-        // for Unary
+        // for Unary and Nonzero
         AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> gwsf,
                        std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, aclrtStream)> execf)
-            : getWorkspaceSizeFuncUnary(gwsf), executeFunc(execf) {}
+            : getWorkspaceSizeFuncUnaryNonzero(gwsf), executeFunc(execf) {}
 
         // for Cast
         AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclDataType, aclTensor *, uint64_t *, aclOpExecutor **)> gwsf,
@@ -372,6 +372,7 @@ namespace jittor
         {"Cumsum", AclOpFunctions(aclnnCumsumGetWorkspaceSize, aclnnCumsum)},
         {"Index", AclOpFunctions(aclnnIndexGetWorkspaceSize, aclnnIndex)},
         {"Scatter", AclOpFunctions(aclnnScatterGetWorkspaceSize, aclnnScatter)},
+        {"Nonzero", AclOpFunctions(aclnnNonzeroGetWorkspaceSize, aclnnNonzero)},
         {"Where", AclOpFunctions(aclnnSWhereGetWorkspaceSize, aclnnSWhere)},
         {"Floor", AclOpFunctions(aclnnFloorGetWorkspaceSize, aclnnFloor)},
         {"StridedSliceAssignV2", AclOpFunctions(aclnnStridedSliceAssignV2GetWorkspaceSize, aclnnStridedSliceAssignV2)},

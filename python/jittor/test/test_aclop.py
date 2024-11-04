@@ -270,6 +270,40 @@ class TestACL(unittest.TestCase):
         print("test scatter grad success")
 
     @jt.flag_scope(use_acl=1)
+    def test_nonzero_1(self):
+        a = jt.array([[1, 0], [0, 4]])
+        b = jt.nonzero(a)
+        np.testing.assert_allclose(b.numpy(), [[0, 0], [1, 1]])
+        print("test nonzero (test case 1) success")
+    
+    @jt.flag_scope(use_acl=1)
+    def test_nonzero_2(self):
+        a = jt.array([[1.0, 0.0], [0.0, 2.0]])
+        b = a.nonzero()
+        np.testing.assert_allclose(b.numpy(), [[0, 0], [1, 1]])
+        print("test nonzero (test case 2) success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_nonzero_3(self):
+        a = jt.array([[
+            [True, False, True],
+            [False, True, False]
+        ],[
+            [True, False, True],
+            [False, True, False]
+        ]])
+        b = a.nonzero()
+        np.testing.assert_allclose(b.numpy(), [[0, 0, 0], [0, 0, 2], [0, 1, 1], [1, 0, 0], [1, 0, 2], [1, 1, 1]])
+        print("test nonzero (test case 3) success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_floor_int(self):
+        a = jt.array([[1.2, 0.0], [-0.1, 123.123]])
+        b = jt.floor_int(a)
+        np.testing.assert_allclose(b.numpy(), [[1, 0], [-1, 123]])
+        print("test floor_int success")
+
+    @jt.flag_scope(use_acl=1)
     def test_where(self):
         a = jt.array([[1, 2], [3, 4]])
         b = jt.ones(2, 2)

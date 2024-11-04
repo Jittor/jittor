@@ -950,6 +950,69 @@ def change_function():
                              attr_code="op.jt_name=\"where\";")[0]
             return grad_output, grad_x, grad_y
 
+    def where_acl(condition, x=None, y=None):
+        return WhereACL()(condition, x, y)
+
+    class NonzeroACL(Function):
+
+        def __init__(self):
+            super(NonzeroACL, self).__init__()
+
+        def execute(self, x):
+            """
+            A temporary implementation, very slow.
+
+            Beacuse output shape is unknown before this op is executed, we temporarily set it to full size, i.e. `(x.numel(), x.ndim)` and then use binary search in post-processing.
+
+            Time (input shape = (2,2,3)): 
+                ACL: 3.7822842597961426 ms
+                CPU: 0.06308555603027344 ms
+                Numpy (`np.where(x)`): 0.0017642974853515625 ms
+            """
+
+            attr_code = f"""
+            op.jt_name = "nonzero";
+            """
+            result = acl_cmd("Nonzero", [x],
+                             output_dtypes=['int64'],
+                             output_shapes=[(x.numel(), x.ndim)], # NOTE: shape is unknown before this op is executed
+                             attr_code=attr_code)[0]
+
+            def get_first_element(tensor):
+                if tensor.numel() == 0:
+                    raise ValueError("Tensor is empty")
+                while tensor.ndim > 1:
+                    tensor = tensor[0]
+                return tensor[0].item()
+
+            def truncate_nonzero_elements(tensor, begin=0):
+                low, high = begin, tensor.size(0) - 1
+
+                while low <= high:
+                    mid = (low + high) // 2
+                    if tensor[mid].sum() > 0:
+                        low = mid + 1
+                    else:
+                        high = mid - 1
+
+                truncated_tensor = tensor[:(high + 1)]
+                return truncated_tensor
+
+            if get_first_element(x):
+                result = truncate_nonzero_elements(result, begin=1)
+            else:
+                result = truncate_nonzero_elements(result, begin=0)
+
+            return result
+
+        def grad(self, grad_output):
+            return grad_output
+
+    def nonzero_acl(x):
+        # import numpy as np
+        # return jt.array(np.argwhere(x.numpy()))
+        return NonzeroACL()(x)
+
     class FloorIntACL(Function):
 
         def __init__(self):
@@ -2162,6 +2225,10 @@ def change_function():
     jt.Var.scatter = lambda x, dim, index, src, reduce="void": jt.scatter(
         x, dim, index, src, reduce)
 
+    jt.where = warp(jt.where, where_acl)
+    jt.nonzero = warp(jt.nonzero, nonzero_acl)
+    jt.misc.nonzero = warp(jt.misc.nonzero, nonzero_acl)
+    jt.Var.nonzero = jt.misc.nonzero
     jt.floor_int = warp(jt.floor_int, floor_int_acl)
     jt.Var.floor_int = lambda x: jt.floor_int(x)
 
