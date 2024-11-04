@@ -327,7 +327,7 @@ namespace jittor
             else if (name == string("Cast"))
                 ret = it->second.getWorkspaceSizeFuncCast(inputTensors[0], get_dtype(out_[0]->dtype()), outputTensors[0], &workspaceSize, &executor);
             else if (jt_name == "unary")
-                ret = it->second.getWorkspaceSizeFuncUnary(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
+                ret = it->second.getWorkspaceSizeFuncUnaryNonzero(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
             else if (jt_name == "binary")
                 ret = it->second.getWorkspaceSizeFuncBinary(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
             else if (jt_name == "bmm" || jt_name == "matmul" ||
@@ -349,6 +349,10 @@ namespace jittor
             {
                 auto attr = dynamic_cast<RandomAttr *>(op_attr.get());
                 ret = it->second.getWorkspaceSizeFuncRandom(outputTensors[0], 0.0, 1.0, attr->seed, attr->offset, &workspaceSize, &executor);
+            }
+            else if (name == string("Nonzero"))
+            {
+                ret = it->second.getWorkspaceSizeFuncUnaryNonzero(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
             }
             else if (name == string("Select") || name == string("Where"))
             {
@@ -460,7 +464,7 @@ namespace jittor
             }
             else if (name == string("Floor"))
             {
-                ret = it->second.getWorkspaceSizeFuncUnary(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
+                ret = it->second.getWorkspaceSizeFuncUnaryNonzero(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
             }
             else if (name == string("Index"))
             {
@@ -533,7 +537,7 @@ namespace jittor
             }
             else if (name == string("SiLU"))
             {
-                ret = it->second.getWorkspaceSizeFuncUnary(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
+                ret = it->second.getWorkspaceSizeFuncUnaryNonzero(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
             }
             else if (name == string("SiLUBackward"))
             {
@@ -541,7 +545,7 @@ namespace jittor
             }
             else if (name == string("Sigmoid"))
             {
-                ret = it->second.getWorkspaceSizeFuncUnary(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
+                ret = it->second.getWorkspaceSizeFuncUnaryNonzero(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
             }
             else if (name == string("SigmoidBackward"))
             {
