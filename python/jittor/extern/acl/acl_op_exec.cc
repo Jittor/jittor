@@ -309,12 +309,6 @@ namespace jittor
                 else if (op->name() == string("broadcast_to"))
                 {
                     auto bop = (BroadcastToOp *)op;
-                    
-                    if(bop->x->shape.size() == 1 && bop->x->shape[0] == 1)
-                    {
-                        aclrtSynchronizeStream(aclstream);
-                    }
-                    
                     AclOpRunner op("Expand");
                     op.jt_name = "expand";
 
