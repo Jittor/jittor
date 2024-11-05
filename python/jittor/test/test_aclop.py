@@ -283,18 +283,18 @@ class TestACL(unittest.TestCase):
         np.testing.assert_allclose(b.numpy(), [[0, 0], [1, 1]])
         print("test nonzero (test case 2) success")
 
-    # @jt.flag_scope(use_acl=1)
-    # def test_nonzero_3(self):
-    #     a = jt.array([[
-    #         [True, False, True],
-    #         [False, True, False]
-    #     ],[
-    #         [True, False, True],
-    #         [False, True, False]
-    #     ]])
-    #     b = a.nonzero()
-    #     np.testing.assert_allclose(b.numpy(), [[0, 0, 0], [0, 0, 2], [0, 1, 1], [1, 0, 0], [1, 0, 2], [1, 1, 1]])
-    #     print("test nonzero (test case 3) success")
+    @jt.flag_scope(use_acl=1)
+    def test_nonzero_3(self):
+        a = jt.array([[
+            [True, False, True],
+            [False, True, False]
+        ],[
+            [True, False, True],
+            [False, True, False]
+        ]])
+        b = a.nonzero()
+        np.testing.assert_allclose(b.numpy(), [[0, 0, 0], [0, 0, 2], [0, 1, 1], [1, 0, 0], [1, 0, 2], [1, 1, 1]])
+        print("test nonzero (test case 3) success")
 
     @jt.flag_scope(use_acl=1)
     def test_floor_int(self):
