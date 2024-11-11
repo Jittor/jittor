@@ -247,7 +247,6 @@ def change_function():
         return TriuACL()(x, diagonal)
 
     class ConvACL(Function):
-
         def execute(self,
                     x,
                     weight,
@@ -307,7 +306,6 @@ def change_function():
             weight = self.weight
             bias = self.bias
             inputs = [grad_output, x, weight]
-
             if bias is not None:
                 inputs.append(bias)
             output_shapes = [x.shape, weight.shape]
@@ -341,9 +339,11 @@ def change_function():
                 return results[0], results[1]
 
             return results
+    
+    def conv_acl(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
+        return ConvACL()(x, weight, bias, stride, padding, dilation, groups)
 
     class Conv2D(jt.nn.Module):
-
         def __init__(self,
                      in_channels,
                      out_channels,
@@ -649,15 +649,8 @@ def change_function():
                 return res[0]
 
         def execute(self, input_tensors, dim=0):
-            for _ in input_tensors:
-                if not (-_.ndim <= dim < _.ndim):
-                    print(_.shape, dim)
-                    raise ValueError("dim out of range")
-            if dim < 0:
-                dim += input_tensors[0].ndim
             self.input = input_tensors
             self.dim = dim
-
             for i in range(len(input_tensors)):
                 if input_tensors[i].dtype != input_tensors[0].dtype:
                     raise ValueError(
@@ -2190,7 +2183,7 @@ def change_function():
     jt.triu_ = warp(jt.triu, triu_acl)
     jt.Var.triu = jt.triu
     jt.Var.triu_ = lambda x, diagonal=0: x.assign(x.triu(diagonal))
-    jt.nn.conv2d = warp(jt.nn.conv2d, ConvACL())
+    jt.nn.conv2d = warp(jt.nn.conv2d, conv_acl)
     jt.nn.Conv2d = warp(jt.nn.Conv2d, Conv2D)
     jt.nn.Conv = warp(jt.nn.Conv, Conv2D)
     jt.nn.Pool = warp(jt.nn.Pool, PoolACL)
