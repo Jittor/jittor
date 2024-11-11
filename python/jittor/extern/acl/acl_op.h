@@ -5,6 +5,62 @@
 
 namespace jittor
 {
+
+    static std::unordered_map<string,int>op_idx_map = 
+    {
+        {"Add",1},
+        {"Sub",2},
+        {"Expand",3},
+        {"Cast",4},
+        {"Unary",5},
+        {"Binary",6},
+        {"BatchMatMul",7},
+        {"MatMul",8},
+        {"ReduceSum",9},
+        {"ReduceMean",10},
+        {"ReduceMax",11},
+        {"ReduceMin",12},
+        {"RandomUniform",13},
+        {"RandomNormal",14},
+        {"Nonzero",15},
+        {"Select",16},
+        {"Where",17},
+        {"Triu",18},
+        {"Transpose",19},
+        {"Conv2d",20},
+        {"Conv2dBackward",21},
+        {"Maxpool",22},
+        {"MaxpoolBackward",23},
+        {"Avgpool",24},
+        {"AvgpoolBackward",25},
+        {"Flip",26},
+        {"Concat",27},
+        {"Gather",28},
+        {"Cumsum",29},
+        {"Scatter",30},
+        {"Floor",31},
+        {"Index",32},
+        {"SliceV2",33},
+        {"IndexPutImpl",34},
+        {"IndexPutImplAccumulate",35},
+        {"StridedSliceAssignV2",36},
+        {"Range",37},
+        {"LeakyReLU",38},
+        {"LeakyReLUBackward",39},
+        {"Dropout",40},
+        {"DropoutBackward",41},
+        {"SiLU",42},
+        {"SiLUBackward",43},
+        {"Sigmoid",44},
+        {"SigmoidBackward",45},
+        {"Embedding",46},
+        {"EmbeddingBackward",47},
+        {"InplaceMaskedScatter",48},
+        {"MaskedSelect",49},
+        {"SplitWithSize",50},
+        {"FlashAttention",51},
+        {"FlashAttentionBackward",52} 
+    };
     int CreateAclTensor(const std::vector<int64_t> &shape, void *deviceAddr, int64_t size,
                         aclDataType dataType, aclTensor **tensor, bool use_nchw = false)
     {
@@ -117,7 +173,7 @@ namespace jittor
 
         void run()
         {
-            // LOGir << name << " " << jt_name;
+            //LOGir << name << " " << jt_name;
             auto it = aclOpFuncMap.find(name);
             if (it == aclOpFuncMap.end())
             {
@@ -316,296 +372,289 @@ namespace jittor
             // 2. 调用CANN算子库aclnnxxxGetWorkspaceSize的接口，两段式接口的第一个
             uint64_t workspaceSize = 0;
             aclOpExecutor *executor;
-
-            if (name == string("Add") || name == string("Sub"))
-                ret = it->second.getWorkspaceSizeFuncAdd(inputTensors[0], inputTensors[1], alpha, outputTensors[0], &workspaceSize, &executor);
-            else if (name == string("Expand"))
-            {
-                size = aclCreateIntArray(&outputShapes[0][0], outputShapes[0].size());
-                ret = it->second.getWorkspaceSizeFuncExpand(inputTensors[0], size, outputTensors[0], &workspaceSize, &executor);
-            }
-            else if (name == string("Cast"))
-                ret = it->second.getWorkspaceSizeFuncCast(inputTensors[0], get_dtype(out_[0]->dtype()), outputTensors[0], &workspaceSize, &executor);
-            else if (jt_name == "unary")
-                ret = it->second.getWorkspaceSizeFuncUnaryNonzero(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
-            else if (jt_name == "binary")
-                ret = it->second.getWorkspaceSizeFuncBinary(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
-            else if (jt_name == "bmm" || jt_name == "matmul" ||
-                     jt_name == "matmul_trans_0" || jt_name == "matmul_trans_1" || jt_name == "bmm_trans_0" || jt_name == "bmm_trans_1")
-                ret = it->second.getWorkspaceSizeFuncMatmul(inputTensors[0], inputTensors[1], outputTensors[0], 1, &workspaceSize, &executor);
-            else if (name == string("ReduceSum") || name == string("ReduceMean"))
-            {
-                ret = it->second.getWorkspaceSizeFuncReduceSum(inputTensors[0], dim, keepdims, get_dtype(out_[0]->dtype()), outputTensors[0], &workspaceSize, &executor);
-            }
-            else if (name == string("ReduceMax") || name == string("ReduceMin"))
-            {
-                ret = it->second.getWorkspaceSizeFuncAmax(inputTensors[0], dim, keepdims, outputTensors[0], &workspaceSize, &executor);
-            }
-            // else if (name == string("ReduceProd"))
-            // {
-            //     ret = it->second.getWorkspaceSizeFuncReduceProd(inputTensors[0], dim, false, outputTensors[0], &workspaceSize, &executor);
-            // }
-            else if (name == string("RandomUniform") || name == string("RandomNormal"))
-            {
-                auto attr = dynamic_cast<RandomAttr *>(op_attr.get());
-                ret = it->second.getWorkspaceSizeFuncRandom(outputTensors[0], 0.0, 1.0, attr->seed, attr->offset, &workspaceSize, &executor);
-            }
-            else if (name == string("Nonzero"))
-            {
-                ret = it->second.getWorkspaceSizeFuncUnaryNonzero(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
-            }
-            else if (name == string("Select") || name == string("Where"))
-            {
-                ret = it->second.getWorkspaceSizeFuncSelect(inputTensors[0], inputTensors[1], inputTensors[2], outputTensors[0], &workspaceSize, &executor);
-            }
-            else if (name == string("Triu"))
-            {
-                auto attr = dynamic_cast<TriuAttr *>(op_attr.get());
-                ret = it->second.getWorkspaceSizeFuncCast(inputTensors[0], aclDataType(attr->diagonal), outputTensors[0], &workspaceSize, &executor);
-            }
-            else if (name == string("Transpose"))
-            {
-                ret = it->second.getWorkspaceSizeFuncExpand(inputTensors[0], dim, outputTensors[0], &workspaceSize, &executor);
-            }
-            else if (name == string("Conv2d"))
-            {
-                auto attr = dynamic_cast<ConvAttr *>(op_attr.get());
-                strides = aclCreateIntArray(attr->convStrides.data(), 2);
-                pads = aclCreateIntArray(attr->convPads.data(), 2);
-                outPads = aclCreateIntArray(attr->convOutPads.data(), 2);
-                dilations = aclCreateIntArray(attr->convDilations.data(), 2);
-                aclTensor *bias = nullptr;
-                if (input_num == 3)
-                    bias = inputTensors[2];
-
-                ret = it->second.getWorkspaceSizeFuncConv(inputTensors[0], inputTensors[1], bias, strides, pads, dilations, false, outPads, attr->group, outputTensors[0], 0, &workspaceSize, &executor);
-            }
-            else if (name == string("Conv2dBackward"))
-            {
-                auto attr = dynamic_cast<ConvAttr *>(op_attr.get());
-                strides = aclCreateIntArray(attr->convStrides.data(), 2);
-                pads = aclCreateIntArray(attr->convPads.data(), 2);
-                outPads = aclCreateIntArray(attr->convOutPads.data(), 2);
-                dilations = aclCreateIntArray(attr->convDilations.data(), 2);
-                bool outputMask[3] = {true, true, true};
-                if (input_num == 3)
-                {
-                    outputMask[2] = false;
-                }
-                aclBoolArray *outMask = aclCreateBoolArray(outputMask, 3);
-                auto biasSizes = aclCreateIntArray(&outputShapes[2][0], outputShapes[2].size());
-                ret = it->second.getWorkspaceSizeFuncConvBackward(inputTensors[0], inputTensors[1], inputTensors[2], biasSizes, strides, pads, dilations, false, outPads, attr->group, outMask, 0, outputTensors[0], outputTensors[1], outputTensors[2], &workspaceSize, &executor);
-            }
-            else if (name == string("Maxpool"))
-            {
-                auto attr = dynamic_cast<PoolAttr *>(op_attr.get());
-                kernel_size = aclCreateIntArray(attr->kernel_size.data(), 2);
-                strides = aclCreateIntArray(attr->poolStrides.data(), 2);
-                pads = aclCreateIntArray(attr->poolPads.data(), 2);
-                dilations = aclCreateIntArray(attr->poolDilations.data(), 2);
-                ret = it->second.getWorkspaceSizeFuncMaxPool(inputTensors[0], kernel_size, strides, pads, dilations, attr->poolCeil, outputTensors[0], outputTensors[1], &workspaceSize, &executor);
-            }
-            else if (name == string("MaxpoolBackward"))
-            {
-                auto attr = dynamic_cast<PoolAttr *>(op_attr.get());
-                kernel_size = aclCreateIntArray(attr->kernel_size.data(), 2);
-                strides = aclCreateIntArray(attr->poolStrides.data(), 2);
-                pads = aclCreateIntArray(attr->poolPads.data(), 2);
-                dilations = aclCreateIntArray(attr->poolDilations.data(), 2);
-                ret = it->second.getWorkspaceSizeFuncMaxPoolBackward(inputTensors[0], inputTensors[1], inputTensors[2], kernel_size, strides, pads, dilations, attr->poolCeil, outputTensors[0], &workspaceSize, &executor);
-            }
-            else if (name == string("Avgpool"))
-            {
-                auto attr = dynamic_cast<PoolAttr *>(op_attr.get());
-                kernel_size = aclCreateIntArray(attr->kernel_size.data(), 2);
-                strides = aclCreateIntArray(attr->poolStrides.data(), 2);
-                pads = aclCreateIntArray(attr->poolPads.data(), 2);
-                ret = it->second.getWorkspaceSizeFuncAvgPool(inputTensors[0], kernel_size, strides, pads, attr->poolCeil, attr->countIncludePad, attr->divisorOverride, attr->divisorOverride, outputTensors[0], &workspaceSize, &executor);
-            }
-            else if (name == string("AvgpoolBackward"))
-            {
-                auto attr = dynamic_cast<PoolAttr *>(op_attr.get());
-                kernel_size = aclCreateIntArray(attr->kernel_size.data(), 2);
-                strides = aclCreateIntArray(attr->poolStrides.data(), 2);
-                pads = aclCreateIntArray(attr->poolPads.data(), 2);
-                ret = it->second.getWorkspaceSizeFuncAvgPoolBackward(inputTensors[0], inputTensors[1], kernel_size, strides, pads, attr->countIncludePad, attr->divisorOverride, attr->divisorOverride, attr->poolCeil, outputTensors[0], &workspaceSize, &executor);
-            }
-            else if (name == string("Flip"))
-            {
-                auto attr = dynamic_cast<ReduceAttr *>(op_attr.get());
-                dim = aclCreateIntArray(attr->axes.data(), attr->axes.size());
-                ret = it->second.getWorkspaceSizeFuncExpand(inputTensors[0], dim, outputTensors[0], &workspaceSize, &executor);
-            }
-            else if (name == string("Concat"))
-            {
-                std::vector<aclTensor *> concatTensorList = {};
-                for (int i = 0; i < input_num; i++)
-                {
-                    concatTensorList.push_back(inputTensors[i]);
-                }
-                auto concatTensorListInput = aclCreateTensorList(&concatTensorList[0], input_num);
-                auto attr = dynamic_cast<ConcatAttr *>(op_attr.get());
-                ret = it->second.getWorkspaceSizeFuncConcat(concatTensorListInput, attr->dim, outputTensors[0], &workspaceSize, &executor);
-            }
-            else if (name == string("Gather"))
-            {
-                auto attr = dynamic_cast<GatherAttr *>(op_attr.get());
-                ret = it->second.getWorkspaceSizeFuncGather(inputTensors[0], attr->dim, inputTensors[1], outputTensors[0], &workspaceSize, &executor);
-            }
-            else if (name == string("Cumsum"))
-            {
-                auto attr = dynamic_cast<GatherAttr *>(op_attr.get());
-                ret = it->second.getWorkspaceSizeFuncCumsum(inputTensors[0], attr->dim, get_dtype(out_[0]->dtype()), outputTensors[0], &workspaceSize, &executor);
-            }
-            else if (name == string("Scatter"))
-            {
-                auto attr = dynamic_cast<ScatterAttr *>(op_attr.get());
-                ret = it->second.getWorkspaceSizeFuncScatter(inputTensors[0], attr->axis, inputTensors[1], inputTensors[2], attr->reduction, outputTensors[0], &workspaceSize, &executor);
-            }
-            else if (name == string("Floor"))
-            {
-                ret = it->second.getWorkspaceSizeFuncUnaryNonzero(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
-            }
-            else if (name == string("Index"))
-            {
-                auto indexTensorList = aclCreateTensorList(&inputTensors[1], input_num - 1);
-                ret = it->second.getWorkspaceSizeFuncIndex(inputTensors[0], indexTensorList, outputTensors[0], &workspaceSize, &executor);
-            }
-            else if (name == string("SliceV2"))
-            {
-                auto attr = dynamic_cast<StrideAttr *>(op_attr.get());
-                auto begins = aclCreateIntArray(attr->begins.data(), attr->begins.size());
-                auto ends = aclCreateIntArray(attr->ends.data(), attr->ends.size());
-                auto steps = aclCreateIntArray(attr->steps.data(), attr->steps.size());
-                auto axes = aclCreateIntArray(attr->axes.data(), attr->axes.size());
-                ret = it->second.getWorkspaceSizeFuncSliceV2(inputTensors[0], begins, ends, axes, steps, outputTensors[0], &workspaceSize, &executor);
-            }
-            else if (name == string("IndexPutImpl"))
-            {
-                std::vector<aclTensor *> indexTensorList = {};
-                for (int i = 1; i < input_num; i++)
-                {
-                    indexTensorList.push_back(inputTensors[i]);
-                }
-                auto indexTensorListInput = aclCreateTensorList(&indexTensorList[0], input_num - 1);
-                ret = it->second.getWorkspaceSizeFuncIndexPutImpl(outputTensors[0], indexTensorListInput, inputTensors[0], false, true, &workspaceSize, &executor);
-            }
-            else if (name == string("IndexPutImplAccumulate"))
-            {
-                std::vector<aclTensor *> indexTensorList = {};
-                for (int i = 1; i < input_num; i++)
-                {
-                    indexTensorList.push_back(inputTensors[i]);
-                }
-                auto indexTensorListInput = aclCreateTensorList(&indexTensorList[0], input_num - 1);
-                ret = it->second.getWorkspaceSizeFuncIndexPutImpl(outputTensors[0], indexTensorListInput, inputTensors[0], true, true, &workspaceSize, &executor);
-            }
-            else if (name == string("StridedSliceAssignV2"))
-            {
-                auto attr = dynamic_cast<StrideAttr *>(op_attr.get());
-                auto begins = aclCreateIntArray(attr->begins.data(), attr->begins.size());
-                auto ends = aclCreateIntArray(attr->ends.data(), attr->ends.size());
-                auto steps = aclCreateIntArray(attr->steps.data(), attr->steps.size());
-                auto axes = aclCreateIntArray(attr->axes.data(), attr->axes.size());
-                ret = it->second.getWorkspaceSizeFuncStridedSliceAssignV2(outputTensors[0], inputTensors[0], begins, ends, steps, axes, &workspaceSize, &executor);
-            }
-            else if (jt_name == "range")
-            {
-                ret = it->second.getWorkspaceSizeFuncRange(start, end, step, outputTensors[0], &workspaceSize, &executor);
-            }
-            else if (jt_name == "leakyrelu")
-            {
-                auto attr = dynamic_cast<LeakyReluAttr *>(op_attr.get());
-                negativeSlope = aclCreateScalar(&attr->negativeSlope, aclDataType::ACL_FLOAT);
-                ret = it->second.getWorkspaceSizeFuncLeakyRelu(inputTensors[0], negativeSlope, outputTensors[0], &workspaceSize, &executor);
-            }
-            else if (jt_name == "leakyrelubackward")
-            {
-                auto attr = dynamic_cast<LeakyReluAttr *>(op_attr.get());
-                negativeSlope = aclCreateScalar(&attr->negativeSlope, aclDataType::ACL_FLOAT);
-                ret = it->second.getWorkspaceSizeFuncLeakyReluBackward(inputTensors[0], inputTensors[1], negativeSlope, attr->selfIsResult, outputTensors[0], &workspaceSize, &executor);
-            }
-            else if (jt_name == "dropout")
-            {
-                auto attr = dynamic_cast<DropoutAttr *>(op_attr.get());
-                ret = it->second.getWorkspaceSizeFuncDropout(inputTensors[0], attr->p, attr->train, attr->seed, attr->offset, outputTensors[0], outputTensors[1], &workspaceSize, &executor);
-            }
-            else if (jt_name == "dropoutbackward")
-            {
-                auto attr = dynamic_cast<DropoutAttr *>(op_attr.get());
-                ret = it->second.getWorkspaceSizeFuncDropoutBackward(inputTensors[0], inputTensors[1], attr->scale, outputTensors[0], &workspaceSize, &executor);
-            }
-            else if (name == string("SiLU"))
-            {
-                ret = it->second.getWorkspaceSizeFuncUnaryNonzero(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
-            }
-            else if (name == string("SiLUBackward"))
-            {
-                ret = it->second.getWorkspaceSizeFuncBinary(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
-            }
-            else if (name == string("Sigmoid"))
-            {
-                ret = it->second.getWorkspaceSizeFuncUnaryNonzero(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
-            }
-            else if (name == string("SigmoidBackward"))
-            {
-                ret = it->second.getWorkspaceSizeFuncBinary(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
-            }
-            else if (name == string("Embedding"))
-            {
-                ret = it->second.getWorkspaceSizeFuncBinary(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
-            }
-            else if (name == string("EmbeddingBackward"))
-            {
-                auto attr = dynamic_cast<EmbeddingAttr *>(op_attr.get());
-                auto numEmbeddings = attr->numEmbeddings;
-                ret = it->second.getWorkspaceSizeFuncEmbeddingBackward(inputTensors[0], inputTensors[1], numEmbeddings, 0, false, outputTensors[0], &workspaceSize, &executor);
-            }
-            else if (name == string("InplaceMaskedScatter"))
-            {
-                ret = it->second.getWorkspaceSizeFuncBinary(outputTensors[0], inputTensors[1], inputTensors[0], &workspaceSize, &executor);
-            }
-            else if (name == string("MaskedSelect"))
-            {
-                ret = it->second.getWorkspaceSizeFuncBinary(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
-            }
-            else if (name == string("SplitWithSize"))
-            {
-                auto attr = dynamic_cast<SplitWithSizeAttr *>(op_attr.get());
-                auto splitSize = aclCreateIntArray(attr->splitSize.data(), attr->splitSize.size());
-                auto tensorList = aclCreateTensorList(&outputTensors[0], output_num);
-                ret = it->second.getWorkspaceSizeFuncSplitWithSize(inputTensors[0], splitSize, attr->dim, tensorList, &workspaceSize, &executor);
-            }
-            else if (name == string("FlashAttention"))
-            {
-                auto attr = dynamic_cast<FlashAttentionAttr *>(op_attr.get());
-                auto prefix = aclCreateIntArray(attr->prefix.data(), attr->prefix.size());
-                auto qstart = aclCreateIntArray(attr->qStartIdx.data(), attr->qStartIdx.size());
-                auto kvstart = aclCreateIntArray(attr->kvStartIdx.data(), attr->kvStartIdx.size());
-                char *layout = const_cast<char *>(attr->inputLayout.data());
-                ret = it->second.getWorkspaceSizeFuncFalshAttention(inputTensors[0], inputTensors[1], inputTensors[2], attr->hasRealshift ? inputTensors[3] : nullptr, attr->hasDropmask ? inputTensors[4] : nullptr, nullptr, attr->hasAttentmask ? inputTensors[6] : nullptr, prefix, qstart, kvstart, attr->scale, attr->keepProb, attr->preToken, attr->nextToken, attr->headNum, layout, attr->innerPrecise, attr->sparseMode, attr->psetype, outputTensors[0], outputTensors[1], nullptr, outputTensors[2], &workspaceSize, &executor);
-            }
-            else if (name == string("FlashAttentionBackward"))
-            {
-                auto attr = dynamic_cast<FlashAttentionAttr *>(op_attr.get());
-                auto prefix = aclCreateIntArray(attr->prefix.data(), attr->prefix.size());
-                auto qstart = aclCreateIntArray(attr->qStartIdx.data(), attr->qStartIdx.size());
-                auto kvstart = aclCreateIntArray(attr->kvStartIdx.data(), attr->kvStartIdx.size());
-                char *layout = const_cast<char *>(attr->inputLayout.data());
-                ret = it->second.getWorkspaceSizeFuncFalshAttentionBackward(inputTensors[0], inputTensors[1], inputTensors[2], inputTensors[3], attr->hasRealshift ? inputTensors[4] : nullptr, attr->hasDropmask ? inputTensors[5] : nullptr, nullptr, attr->hasAttentmask ? inputTensors[7] : nullptr, inputTensors[8], inputTensors[9], nullptr, inputTensors[10], prefix, qstart, kvstart, attr->scale, attr->keepProb, attr->preToken, attr->nextToken, attr->headNum, layout, attr->innerPrecise, attr->sparseMode, attr->psetype, outputTensors[0], outputTensors[1], outputTensors[2], nullptr, &workspaceSize, &executor);
-            }
+            int op_idx;
+            if(jt_name == "binary" && name != "Add" && name != "Sub") 
+                op_idx = 6;
+            else if(jt_name == "unary" && name != "Cast")
+                op_idx = 5;
             else
-                LOGir << "not supported op " << jt_name;
+                op_idx = op_idx_map.find(name)->second;
 
-            // for debug
-            if (ret != ACL_SUCCESS)
+            //LOGir << name << " " << jt_name;
+            //LOGir<<op_idx; 
+            switch(op_idx)
             {
-                auto tmp_err_msg = aclGetRecentErrMsg();
-                LOGir << name << ", " << tmp_err_msg;
+                
+                case 1 :{
+                    ret = it->second.getWorkspaceSizeFuncAdd(inputTensors[0], inputTensors[1], alpha, outputTensors[0], &workspaceSize, &executor);
+                    break;}
+                
+                case 2:{
+                    ret = it->second.getWorkspaceSizeFuncAdd(inputTensors[0], inputTensors[1], alpha, outputTensors[0], &workspaceSize, &executor);
+                    break;}
+                
+                case 3:{ 
+                    size = aclCreateIntArray(&outputShapes[0][0], outputShapes[0].size());
+                    ret = it->second.getWorkspaceSizeFuncExpand(inputTensors[0], size, outputTensors[0], &workspaceSize, &executor);
+                    break;} 
+                case 4:{
+                    ret = it->second.getWorkspaceSizeFuncCast(inputTensors[0], get_dtype(out_[0]->dtype()), outputTensors[0], &workspaceSize, &executor);
+                    break;}  
+                case 5:{
+                    ret = it->second.getWorkspaceSizeFuncUnaryNonzero(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
+                    break;} 
+                case 6:{
+                    ret = it->second.getWorkspaceSizeFuncBinary(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
+                    break;} 
+                case 7:{
+                    ret = it->second.getWorkspaceSizeFuncMatmul(inputTensors[0], inputTensors[1], outputTensors[0], 1, &workspaceSize, &executor);
+                    break;}
+                case 8:{
+                    ret = it->second.getWorkspaceSizeFuncMatmul(inputTensors[0], inputTensors[1], outputTensors[0], 1, &workspaceSize, &executor);
+                    break;}  
+                case 9 :{    
+                    ret = it->second.getWorkspaceSizeFuncReduceSum(inputTensors[0], dim, keepdims, get_dtype(out_[0]->dtype()), outputTensors[0], &workspaceSize, &executor);
+                    break;}
+                case 10:{    
+                    ret = it->second.getWorkspaceSizeFuncReduceSum(inputTensors[0], dim, keepdims, get_dtype(out_[0]->dtype()), outputTensors[0], &workspaceSize, &executor);
+                    break;}  
+                case 11 :{
+                    ret = it->second.getWorkspaceSizeFuncAmax(inputTensors[0], dim, keepdims, outputTensors[0], &workspaceSize, &executor);
+                    break;}
+                case 12:{
+                    ret = it->second.getWorkspaceSizeFuncAmax(inputTensors[0], dim, keepdims, outputTensors[0], &workspaceSize, &executor);
+                    break;}    
+                
+                case 13 :{    
+                    auto attr = dynamic_cast<RandomAttr *>(op_attr.get());
+                    ret = it->second.getWorkspaceSizeFuncRandom(outputTensors[0], 0.0, 1.0, attr->seed, attr->offset, &workspaceSize, &executor);
+                    break;}
+                case 14:{    
+                    auto attr = dynamic_cast<RandomAttr *>(op_attr.get());
+                    ret = it->second.getWorkspaceSizeFuncRandom(outputTensors[0], 0.0, 1.0, attr->seed, attr->offset, &workspaceSize, &executor);
+                    break;} 
+                case 15:{ 
+                    ret = it->second.getWorkspaceSizeFuncUnaryNonzero(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
+                    break;} 
+                case 16 :{
+                    ret = it->second.getWorkspaceSizeFuncSelect(inputTensors[0], inputTensors[1], inputTensors[2], outputTensors[0], &workspaceSize, &executor);
+                    break;}
+                case 17:{
+                    ret = it->second.getWorkspaceSizeFuncSelect(inputTensors[0], inputTensors[1], inputTensors[2], outputTensors[0], &workspaceSize, &executor);
+                    break;} 
+                case 18:{
+                    auto attr = dynamic_cast<TriuAttr *>(op_attr.get());
+                    ret = it->second.getWorkspaceSizeFuncCast(inputTensors[0], aclDataType(attr->diagonal), outputTensors[0], &workspaceSize, &executor);
+                    break;} 
+                case 19:{
+                    ret = it->second.getWorkspaceSizeFuncExpand(inputTensors[0], dim, outputTensors[0], &workspaceSize, &executor);
+                    break;} 
+                case 20:{
+                    auto attr = dynamic_cast<ConvAttr *>(op_attr.get());
+                    strides = aclCreateIntArray(attr->convStrides.data(), 2);
+                    pads = aclCreateIntArray(attr->convPads.data(), 2);
+                    outPads = aclCreateIntArray(attr->convOutPads.data(), 2);
+                    dilations = aclCreateIntArray(attr->convDilations.data(), 2);
+                    aclTensor *bias = nullptr;
+                    if (input_num == 3)
+                        bias = inputTensors[2];
+
+                    ret = it->second.getWorkspaceSizeFuncConv(inputTensors[0], inputTensors[1], bias, strides, pads, dilations, false, outPads, attr->group, outputTensors[0], 0, &workspaceSize, &executor);
+                    break;} 
+                case 21:{
+                    auto attr = dynamic_cast<ConvAttr *>(op_attr.get());
+                    strides = aclCreateIntArray(attr->convStrides.data(), 2);
+                    pads = aclCreateIntArray(attr->convPads.data(), 2);
+                    outPads = aclCreateIntArray(attr->convOutPads.data(), 2);
+                    dilations = aclCreateIntArray(attr->convDilations.data(), 2);
+                    bool outputMask[3] = {true, true, true};
+                    if (input_num == 3)
+                    {
+                        outputMask[2] = false;
+                    }
+                    aclBoolArray *outMask = aclCreateBoolArray(outputMask, 3);
+                    auto biasSizes = aclCreateIntArray(&outputShapes[2][0], outputShapes[2].size());
+                    ret = it->second.getWorkspaceSizeFuncConvBackward(inputTensors[0], inputTensors[1], inputTensors[2], biasSizes, strides, pads, dilations, false, outPads, attr->group, outMask, 0, outputTensors[0], outputTensors[1], outputTensors[2], &workspaceSize, &executor);
+                    break;} 
+                case 22:{
+                    auto attr = dynamic_cast<PoolAttr *>(op_attr.get());
+                    kernel_size = aclCreateIntArray(attr->kernel_size.data(), 2);
+                    strides = aclCreateIntArray(attr->poolStrides.data(), 2);
+                    pads = aclCreateIntArray(attr->poolPads.data(), 2);
+                    dilations = aclCreateIntArray(attr->poolDilations.data(), 2);
+                    ret = it->second.getWorkspaceSizeFuncMaxPool(inputTensors[0], kernel_size, strides, pads, dilations, attr->poolCeil, outputTensors[0], outputTensors[1], &workspaceSize, &executor);
+                    break;}  
+                case 23:{
+                    auto attr = dynamic_cast<PoolAttr *>(op_attr.get());
+                    kernel_size = aclCreateIntArray(attr->kernel_size.data(), 2);
+                    strides = aclCreateIntArray(attr->poolStrides.data(), 2);
+                    pads = aclCreateIntArray(attr->poolPads.data(), 2);
+                    dilations = aclCreateIntArray(attr->poolDilations.data(), 2);
+                    ret = it->second.getWorkspaceSizeFuncMaxPoolBackward(inputTensors[0], inputTensors[1], inputTensors[2], kernel_size, strides, pads, dilations, attr->poolCeil, outputTensors[0], &workspaceSize, &executor);
+                    break;} 
+                case 24:{
+                    auto attr = dynamic_cast<PoolAttr *>(op_attr.get());
+                    kernel_size = aclCreateIntArray(attr->kernel_size.data(), 2);
+                    strides = aclCreateIntArray(attr->poolStrides.data(), 2);
+                    pads = aclCreateIntArray(attr->poolPads.data(), 2);
+                    ret = it->second.getWorkspaceSizeFuncAvgPool(inputTensors[0], kernel_size, strides, pads, attr->poolCeil, attr->countIncludePad, attr->divisorOverride, attr->divisorOverride, outputTensors[0], &workspaceSize, &executor);
+                    break;} 
+                case 25:{
+                    auto attr = dynamic_cast<PoolAttr *>(op_attr.get());
+                    kernel_size = aclCreateIntArray(attr->kernel_size.data(), 2);
+                    strides = aclCreateIntArray(attr->poolStrides.data(), 2);
+                    pads = aclCreateIntArray(attr->poolPads.data(), 2);
+                    ret = it->second.getWorkspaceSizeFuncAvgPoolBackward(inputTensors[0], inputTensors[1], kernel_size, strides, pads, attr->countIncludePad, attr->divisorOverride, attr->divisorOverride, attr->poolCeil, outputTensors[0], &workspaceSize, &executor);
+                    break;} 
+                case 26:{
+                    auto attr = dynamic_cast<ReduceAttr *>(op_attr.get());
+                    dim = aclCreateIntArray(attr->axes.data(), attr->axes.size());
+                    ret = it->second.getWorkspaceSizeFuncExpand(inputTensors[0], dim, outputTensors[0], &workspaceSize, &executor);
+                    break;}  
+                case 27:{
+                    std::vector<aclTensor *> concatTensorList = {};
+                    for (int i = 0; i < input_num; i++)
+                    {
+                        concatTensorList.push_back(inputTensors[i]);
+                    }
+                    auto concatTensorListInput = aclCreateTensorList(&concatTensorList[0], input_num);
+                    auto attr = dynamic_cast<ConcatAttr *>(op_attr.get());
+                    ret = it->second.getWorkspaceSizeFuncConcat(concatTensorListInput, attr->dim, outputTensors[0], &workspaceSize, &executor);
+                    break;} 
+                case 28:{
+                    auto attr = dynamic_cast<GatherAttr *>(op_attr.get());
+                    ret = it->second.getWorkspaceSizeFuncGather(inputTensors[0], attr->dim, inputTensors[1], outputTensors[0], &workspaceSize, &executor);
+                    break;} 
+                case 29:{
+                    auto attr = dynamic_cast<GatherAttr *>(op_attr.get());
+                    ret = it->second.getWorkspaceSizeFuncCumsum(inputTensors[0], attr->dim, get_dtype(out_[0]->dtype()), outputTensors[0], &workspaceSize, &executor);
+                    break;} 
+                case 30:{
+                    auto attr = dynamic_cast<ScatterAttr *>(op_attr.get());
+                    ret = it->second.getWorkspaceSizeFuncScatter(inputTensors[0], attr->axis, inputTensors[1], inputTensors[2], attr->reduction, outputTensors[0], &workspaceSize, &executor);
+                    break;} 
+                case 31:{
+                    ret = it->second.getWorkspaceSizeFuncUnaryNonzero(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
+                    break;} 
+                case 32:{
+                    auto indexTensorList = aclCreateTensorList(&inputTensors[1], input_num - 1);
+                    ret = it->second.getWorkspaceSizeFuncIndex(inputTensors[0], indexTensorList, outputTensors[0], &workspaceSize, &executor);
+                    break;} 
+                case 33:{
+                    auto attr = dynamic_cast<StrideAttr *>(op_attr.get());
+                    auto begins = aclCreateIntArray(attr->begins.data(), attr->begins.size());
+                    auto ends = aclCreateIntArray(attr->ends.data(), attr->ends.size());
+                    auto steps = aclCreateIntArray(attr->steps.data(), attr->steps.size());
+                    auto axes = aclCreateIntArray(attr->axes.data(), attr->axes.size());
+                    ret = it->second.getWorkspaceSizeFuncSliceV2(inputTensors[0], begins, ends, axes, steps, outputTensors[0], &workspaceSize, &executor);
+                    break;} 
+                case 34:{
+                    std::vector<aclTensor *> indexTensorList = {};
+                    for (int i = 1; i < input_num; i++)
+                    {
+                        indexTensorList.push_back(inputTensors[i]);
+                    }
+                    auto indexTensorListInput = aclCreateTensorList(&indexTensorList[0], input_num - 1);
+                    ret = it->second.getWorkspaceSizeFuncIndexPutImpl(outputTensors[0], indexTensorListInput, inputTensors[0], false, true, &workspaceSize, &executor);
+                    break;} 
+                case 35:{
+                    std::vector<aclTensor *> indexTensorList = {};
+                    for (int i = 1; i < input_num; i++)
+                    {
+                        indexTensorList.push_back(inputTensors[i]);
+                    }
+                    auto indexTensorListInput = aclCreateTensorList(&indexTensorList[0], input_num - 1);
+                    ret = it->second.getWorkspaceSizeFuncIndexPutImpl(outputTensors[0], indexTensorListInput, inputTensors[0], true, true, &workspaceSize, &executor);
+                    break;} 
+                case 36:{
+                    auto attr = dynamic_cast<StrideAttr *>(op_attr.get());
+                    auto begins = aclCreateIntArray(attr->begins.data(), attr->begins.size());
+                    auto ends = aclCreateIntArray(attr->ends.data(), attr->ends.size());
+                    auto steps = aclCreateIntArray(attr->steps.data(), attr->steps.size());
+                    auto axes = aclCreateIntArray(attr->axes.data(), attr->axes.size());
+                    ret = it->second.getWorkspaceSizeFuncStridedSliceAssignV2(outputTensors[0], inputTensors[0], begins, ends, steps, axes, &workspaceSize, &executor);
+                    break;} 
+                case 37:{
+                    ret = it->second.getWorkspaceSizeFuncRange(start, end, step, outputTensors[0], &workspaceSize, &executor);
+                    break;} 
+                case 38:{
+                    auto attr = dynamic_cast<LeakyReluAttr *>(op_attr.get());
+                    negativeSlope = aclCreateScalar(&attr->negativeSlope, aclDataType::ACL_FLOAT);
+                    ret = it->second.getWorkspaceSizeFuncLeakyRelu(inputTensors[0], negativeSlope, outputTensors[0], &workspaceSize, &executor);
+                    break;} 
+                case 39:{
+                    auto attr = dynamic_cast<LeakyReluAttr *>(op_attr.get());
+                    negativeSlope = aclCreateScalar(&attr->negativeSlope, aclDataType::ACL_FLOAT);
+                    ret = it->second.getWorkspaceSizeFuncLeakyReluBackward(inputTensors[0], inputTensors[1], negativeSlope, attr->selfIsResult, outputTensors[0], &workspaceSize, &executor);
+                    break;} 
+                case  40:{
+                    auto attr = dynamic_cast<DropoutAttr *>(op_attr.get());
+                    ret = it->second.getWorkspaceSizeFuncDropout(inputTensors[0], attr->p, attr->train, attr->seed, attr->offset, outputTensors[0], outputTensors[1], &workspaceSize, &executor);
+                    break;} 
+                case 41:{
+                    auto attr = dynamic_cast<DropoutAttr *>(op_attr.get());
+                    ret = it->second.getWorkspaceSizeFuncDropoutBackward(inputTensors[0], inputTensors[1], attr->scale, outputTensors[0], &workspaceSize, &executor);
+                    break;} 
+                case 42:{
+                    ret = it->second.getWorkspaceSizeFuncUnaryNonzero(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
+                    break;} 
+                case 43:{
+                    ret = it->second.getWorkspaceSizeFuncBinary(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
+                    break;} 
+                case 44:{
+                    ret = it->second.getWorkspaceSizeFuncUnaryNonzero(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
+                    break;} 
+                case 45:{
+                    ret = it->second.getWorkspaceSizeFuncBinary(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
+                    break;} 
+                case 46:{
+                    ret = it->second.getWorkspaceSizeFuncBinary(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
+                    break;} 
+                case 47:{
+                    auto attr = dynamic_cast<EmbeddingAttr *>(op_attr.get());
+                    auto numEmbeddings = attr->numEmbeddings;
+                    ret = it->second.getWorkspaceSizeFuncEmbeddingBackward(inputTensors[0], inputTensors[1], numEmbeddings, 0, false, outputTensors[0], &workspaceSize, &executor);
+                    break;} 
+                case 48:{
+                    ret = it->second.getWorkspaceSizeFuncBinary(outputTensors[0], inputTensors[1], inputTensors[0], &workspaceSize, &executor);
+                    break;} 
+                case 49:{
+                    ret = it->second.getWorkspaceSizeFuncBinary(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
+                    break;} 
+                case 50:{
+                    auto attr = dynamic_cast<SplitWithSizeAttr *>(op_attr.get());
+                    auto splitSize = aclCreateIntArray(attr->splitSize.data(), attr->splitSize.size());
+                    auto tensorList = aclCreateTensorList(&outputTensors[0], output_num);
+                    ret = it->second.getWorkspaceSizeFuncSplitWithSize(inputTensors[0], splitSize, attr->dim, tensorList, &workspaceSize, &executor);
+                    break;} 
+                case 51:{
+                    auto attr = dynamic_cast<FlashAttentionAttr *>(op_attr.get());
+                    auto prefix = aclCreateIntArray(attr->prefix.data(), attr->prefix.size());
+                    auto qstart = aclCreateIntArray(attr->qStartIdx.data(), attr->qStartIdx.size());
+                    auto kvstart = aclCreateIntArray(attr->kvStartIdx.data(), attr->kvStartIdx.size());
+                    char *layout = const_cast<char *>(attr->inputLayout.data());
+                    ret = it->second.getWorkspaceSizeFuncFalshAttention(inputTensors[0], inputTensors[1], inputTensors[2], attr->hasRealshift ? inputTensors[3] : nullptr, attr->hasDropmask ? inputTensors[4] : nullptr, nullptr, attr->hasAttentmask ? inputTensors[6] : nullptr, prefix, qstart, kvstart, attr->scale, attr->keepProb, attr->preToken, attr->nextToken, attr->headNum, layout, attr->innerPrecise, attr->sparseMode, attr->psetype, outputTensors[0], outputTensors[1], nullptr, outputTensors[2], &workspaceSize, &executor);
+                    break;}  
+                case 52:{
+                    auto attr = dynamic_cast<FlashAttentionAttr *>(op_attr.get());
+                    auto prefix = aclCreateIntArray(attr->prefix.data(), attr->prefix.size());
+                    auto qstart = aclCreateIntArray(attr->qStartIdx.data(), attr->qStartIdx.size());
+                    auto kvstart = aclCreateIntArray(attr->kvStartIdx.data(), attr->kvStartIdx.size());
+                    char *layout = const_cast<char *>(attr->inputLayout.data());
+                    ret = it->second.getWorkspaceSizeFuncFalshAttentionBackward(inputTensors[0], inputTensors[1], inputTensors[2], inputTensors[3], attr->hasRealshift ? inputTensors[4] : nullptr, attr->hasDropmask ? inputTensors[5] : nullptr, nullptr, attr->hasAttentmask ? inputTensors[7] : nullptr, inputTensors[8], inputTensors[9], nullptr, inputTensors[10], prefix, qstart, kvstart, attr->scale, attr->keepProb, attr->preToken, attr->nextToken, attr->headNum, layout, attr->innerPrecise, attr->sparseMode, attr->psetype, outputTensors[0], outputTensors[1], outputTensors[2], nullptr, &workspaceSize, &executor);
+                    break;} 
+                default:{
+                    LOGir << "not supported op: " << name;
+                    break;
+                }
+                // for debug
+                if (ret != ACL_SUCCESS)
+                {
+                    auto tmp_err_msg = aclGetRecentErrMsg();
+                    LOGir << name << ", " << tmp_err_msg;
+                }
+                CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnxxxGetWorkspaceSize failed. ERROR: %d\n", name.c_str(), ret); return);
             }
-
-            CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnxxxGetWorkspaceSize failed. ERROR: %d\n", name.c_str(), ret); return);
-
             // 4. 根据第一段接口计算出的workspaceSize申请device内存
             if (workspaceSize > 0)
             {
@@ -617,8 +666,8 @@ namespace jittor
             CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnxxx failed. ERROR: %d\n", name.c_str(), ret); return);
 
             // 6. （固定写法）同步等待任务执行结束
-            ret = aclrtSynchronizeStream(aclstream);
-            CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclrtSynchronizeStream failed. ERROR: %d\n", name.c_str(), ret); return);
+            // ret = aclrtSynchronizeStream(aclstream);
+            // CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclrtSynchronizeStream failed. ERROR: %d\n", name.c_str(), ret); return);
 
             // 6. 释放aclTensor和aclScalar，需要根据具体API的接口定义修改
             // destroy tensor
