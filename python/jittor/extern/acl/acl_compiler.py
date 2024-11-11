@@ -1311,7 +1311,40 @@ def change_function():
                 assert False, f"grad not implemented for {self.type_}"
 
     def getitem_acl(x, slices, return_x=None):
-        return GetItemACL()(x, slices, return_x)
+        if isinstance(slices, int) or isinstance(slices, slice):
+            slices = (slices, )
+
+        def get_insert_positions(slices):
+            result = []
+            pos = 0
+            
+            try:
+                not_none_cnt = len(slices) - slices.count(None)
+            except Exception:
+                import pdb; pdb.set_trace()
+                print(slices)
+            for s in slices:
+                if isinstance(s, int):
+                    continue
+                elif s is None:
+                    result.append(pos)
+                    pos += 1
+                elif s == Ellipsis:
+                    pos += 1 + x.ndim - not_none_cnt
+                else:
+                    pos += 1
+
+            return result
+
+        insert_positions = get_insert_positions(slices)
+        slices = tuple(s for s in slices if s is not None)
+        
+        result = GetItemACL()(x, slices, return_x)
+
+        for i in insert_positions:
+            result = result.unsqueeze(i)
+
+        return result
 
     class SetItemACL(Function):
 

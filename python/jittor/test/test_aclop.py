@@ -10,11 +10,80 @@ import numpy as np
 class TestACL(unittest.TestCase):
 
     @jt.flag_scope(use_acl=1)
-    def test_getitem(self):
+    def test_getitem_1(self):
         a = jt.ones(100, 2)
         b = a[0:2, 0:2]
         np.testing.assert_allclose(b.numpy(), [[1, 1], [1, 1]])
-        print("test getitem success")
+        print("test getitem (test case 1) success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_getitem_2(self):
+        a = jt.ones((2, 3))
+        b = a[:, None, :]
+        assert b.shape == [2, 1, 3]
+        print("test getitem (test case 2) success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_getitem_3(self):
+        a = jt.ones((2, 3, 4, 5, 10))
+        b = a[1, ...]
+        assert b.shape == [3, 4, 5, 10]
+        print("test getitem (test case 3) success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_getitem_4(self):
+        a = jt.ones((2, 3, 4, 5, 10))
+        b = a[..., :2]
+        assert b.shape == [2, 3, 4, 5, 2]
+        print("test getitem (test case 4) success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_getitem_5(self):
+        a = jt.ones((2, 3, 4, 5, 10))
+        b = a[1, ..., :2]
+        assert b.shape == [3, 4, 5, 2]
+        print("test getitem (test case 5) success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_getitem_6(self):
+        a = jt.ones((2, 3, 4, 5, 10))
+        b = a[1, None, :, :, :, :2]
+        assert b.shape == [1, 3, 4, 5, 2]
+        print("test getitem (test case 6) success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_getitem_7(self):
+        a = jt.ones((2, 3, 4, 5, 10))
+        b = a[1, 2, None, :, :, :2]
+        assert b.shape == [1, 4, 5, 2]
+        print("test getitem (test case 7) success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_getitem_8(self):
+        a = jt.ones((2, 3, 4, 5, 10))
+        b = a[1, 2, None, :, :, None, :2] 
+        assert b.shape == [1, 4, 5, 1, 2]
+        print("test getitem (test case 8) success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_getitem_9(self):
+        a = jt.ones((2, 3, 4, 5, 10))
+        b = a[None, ..., None]
+        assert b.shape == [1, 2, 3, 4, 5, 10, 1]
+        print("test getitem (test case 9) success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_getitem_10(self):
+        a = jt.ones((2, 3, 4, 5, 10))
+        b = a[None, ..., None, 1]
+        assert b.shape == [1, 2, 3, 4, 5, 1]
+
+    @jt.flag_scope(use_acl=1)
+    def test_getitem_11(self):
+        a = jt.ones(10)
+        b = a[2:]
+        assert b.shape == [8]
+        print("test getitem (test case 11) success")
 
     # @jt.flag_scope(use_acl=1)
     # def test_setitem(self):
