@@ -649,6 +649,14 @@ def change_function():
                 return res[0]
 
         def execute(self, input_tensors, dim=0):
+            for _ in input_tensors:
+                if not (-_.ndim <= dim < _.ndim):
+                    print(_.shape, dim)
+                    raise ValueError("dim out of range")
+
+            if dim < 0:
+                dim += input_tensors[0].ndim
+            
             self.input = input_tensors
             self.dim = dim
             for i in range(len(input_tensors)):
