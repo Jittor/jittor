@@ -775,6 +775,12 @@ def change_function():
     def gather_acl(input, dim, index):
         return GatherACL()(input, dim, index)
 
+    def any_acl(input):
+        if jt.sum(input != 0).item() > 0:
+            return jt.array([True])
+        else:
+            return jt.array([False])
+
     class CumsumACL(Function):
 
         def __init__(self):
@@ -2234,6 +2240,8 @@ def change_function():
     jt.concat = warp(jt.concat, concat)
 
     jt.gather = warp(jt.gather, gather_acl)
+    jt.any = warp(jt.any, any_acl)
+    jt.Var.any = jt.any
 
     jt.cumsum = warp(jt.cumsum, cumsum_acl)
     jt.cub_cumsum = jt.cumsum
@@ -2303,8 +2311,8 @@ def change_function():
     def embedding(indices, weight):
         return EmbeddingACL()(indices, weight)
 
-    # jt.nn.embedding = warp(jt.nn.embedding, embedding)
-    # jt.nn.Embedding = warp(jt.nn.Embedding, Embedding)
+    jt.nn.embedding = warp(jt.nn.embedding, embedding)
+    jt.nn.Embedding = warp(jt.nn.Embedding, Embedding)
     # jt.nn.dropout = warp(jt.nn.dropout, dropout)
     # jt.nn.Dropout = warp(jt.nn.Dropout, Dropout)
 
