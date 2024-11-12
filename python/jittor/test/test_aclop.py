@@ -320,6 +320,41 @@ class TestACL(unittest.TestCase):
         print("test gather grad success")
 
     @jt.flag_scope(use_acl=1)
+    def test_any_1(self):
+        a = jt.array([[1, 0], [0, 4]])
+        b = jt.any(a)
+        assert b.item() == True
+        print("test any (test case 1) success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_any_2(self):
+        a = jt.array([[1.0, 0.0]])
+        b = jt.any(a)
+        assert b.item() == True
+        print("test any (test case 2) success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_any_3(self):
+        a = jt.array([[0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0]])
+        b = jt.any(a)
+        assert b.item() == False
+        print("test any (test case 3) success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_any_4(self):
+        a = jt.array([[False, False, False], [False, False, False]])
+        b = jt.any(a)
+        assert b.item() == False
+        print("test any (test case 4) success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_any_5(self):
+        a = jt.array([[False, True, False], [False, False, True], [True, True, False]])
+        b = jt.any(a)
+        assert b.item() == True
+        print("test any (test case 5) success")
+
+    @jt.flag_scope(use_acl=1)
     def test_scatter(self):
         a = jt.array([[1, 2], [3, 4]])
         b = jt.array([[0, 0], [0, 0]])
