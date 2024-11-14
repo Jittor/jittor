@@ -347,6 +347,9 @@ def stack(x, dim=0):
         [[4 5 6]]]
     '''
     assert isinstance(x, Sequence)
+    
+    if isinstance(x, tuple):
+        x = list(x)
     for i,x_ in enumerate(x):
             x[i] = jt.array(x_)
     if len(x) < 2:
