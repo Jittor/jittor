@@ -2245,6 +2245,9 @@ def change_function():
 
     jt.cumsum = warp(jt.cumsum, cumsum_acl)
     jt.cub_cumsum = jt.cumsum
+    jt.Var.cumsum = jt.cumsum
+    jt.Var.cub_cumsum = jt.cumsum
+
     jt.cumprod = warp(jt.cumprod, cumprod_acl)
     jt.index = warp(jt.index, index_acl)
     jt.Var.index = jt.index
