@@ -111,6 +111,21 @@ class TestACL(unittest.TestCase):
         print("test getitem (test case 11) success")
 
     @jt.flag_scope(use_acl=1)
+    def test_getitem_12(self):
+        a = jt.array([[1,2,3], [4,5,6], [7,8,9]])
+        b = self.measure_time(lambda: a[[0,1,1]])
+        np.testing.assert_allclose(b.numpy(), [[1, 2, 3], [4, 5, 6], [4, 5, 6]])
+        print("test getitem (test case 12) success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_getitem_13(self):
+        a = jt.array([[1,2,3], [4,5,6], [7,8,9]])
+        index = jt.array([0,1,1])
+        b = self.measure_time(lambda: a[index])
+        np.testing.assert_allclose(b.numpy(), [[1, 2, 3], [4, 5, 6], [4, 5, 6]])
+        print("test getitem (test case 13) success")
+
+    @jt.flag_scope(use_acl=1)
     def test_setitem(self):
         a = jt.ones(2, 2)
         a[0:1, 0:1] = 0
