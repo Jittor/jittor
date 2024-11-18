@@ -1326,9 +1326,16 @@ def change_function():
         if hasattr(np, 'int256') and isinstance(slices, np.int256):
             slices = int(slices)
 
+        ## If not related to `None`, directly use `GetItemACL`
+        if slices is not None and (not isinstance(slices, Iterable) or all([s is not None for s in slices])):
+            return GetItemACL()(x, slices, return_x)
+
+        ## If related to `None`, filter out `None` first, then use `GetItemACL`, and finally insert `None` (new dimensions) back
+
         # Transform to tuple
         if isinstance(slices, int) or isinstance(slices, slice):
             slices = (slices, )
+        assert isinstance(slices, tuple)
 
         def get_insert_positions(slices):
             result = []
@@ -1349,9 +1356,9 @@ def change_function():
             return result
 
         insert_positions = get_insert_positions(slices)
-        slices = tuple(s for s in slices if s is not None)
+        slices_without_none = tuple(s for s in slices if s is not None)
         
-        result = GetItemACL()(x, slices, return_x)
+        result = GetItemACL()(x, slices_without_none, return_x)
 
         for i in insert_positions:
             result = result.unsqueeze(i)
