@@ -12,6 +12,7 @@ import glob
 import jittor.compiler as compiler
 import jittor as jt
 import math
+import numpy as np
 
 from typing import Union
 from collections.abc import Sequence, Iterable
@@ -1317,6 +1318,15 @@ def change_function():
                 assert False, f"grad not implemented for {self.type_}"
 
     def getitem_acl(x, slices, return_x=None):
+        # Transform numpy int to int
+        if isinstance(slices, (np.int8, np.int16, np.int32, np.int64)):
+            slices = int(slices)
+        if hasattr(np, 'int128') and isinstance(slices, np.int128):
+            slices = int(slices)
+        if hasattr(np, 'int256') and isinstance(slices, np.int256):
+            slices = int(slices)
+
+        # Transform to tuple
         if isinstance(slices, int) or isinstance(slices, slice):
             slices = (slices, )
 
@@ -1324,11 +1334,7 @@ def change_function():
             result = []
             pos = 0
             
-            try:
-                not_none_cnt = len(slices) - slices.count(None)
-            except Exception:
-                import pdb; pdb.set_trace()
-                print(slices)
+            not_none_cnt = len(slices) - slices.count(None)
             for s in slices:
                 if isinstance(s, int):
                     continue
