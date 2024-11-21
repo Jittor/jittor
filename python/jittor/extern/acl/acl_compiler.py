@@ -573,6 +573,8 @@ def change_function():
             super(FlipACL, self).__init__()
 
         def execute(self, input, dim):
+            if type(dim) is tuple:
+                dim = list(dim)
             if type(dim) is not list:
                 dim = [dim]
             attr_code = f"""
@@ -1944,6 +1946,7 @@ def change_function():
             super(ReLUACL, self).__init__()
 
         def execute(self, x):
+            x = x.float32()
             self.input = x
             result = acl_cmd("ReLU", [x],
                              output_dtypes=[x.dtype],
@@ -1952,11 +1955,11 @@ def change_function():
             return result
 
         def grad(self, grad_output):
-            mask = acl_cmd("GreaterThan", [self.input, 0],
+            mask = acl_cmd("Greater", [self.input, jt.zeros(self.input.shape)],
                            output_dtypes=[self.input.dtype],
                            output_shapes=[self.input.shape],
                            attr_code="op.jt_name=\"binary\";")[0]
-            grad_input = acl_cmd("Multiply", [grad_output, mask],
+            grad_input = acl_cmd("Mul", [grad_output, mask],
                                  output_dtypes=[grad_output.dtype],
                                  output_shapes=[grad_output.shape],
                                  attr_code="op.jt_name=\"binary\";")[0]
@@ -1970,7 +1973,7 @@ def change_function():
         def execute(self, x):
             return ReLUACL()(x)
 
-    def reluacl(x):
+    def relu(x):
         return ReLUACL()(x)
 
     class LeakyReLUACL(Function):
@@ -1979,6 +1982,7 @@ def change_function():
             super(LeakyReLUACL, self).__init__()
 
         def execute(self, x, negative_slope=0.01):
+            x = x.float32()
             self.input = x
             attr_code = f"""
             op.jt_name = "leakyrelu";
@@ -2017,7 +2021,7 @@ def change_function():
         def execute(self, x):
             return LeakyReLUACL()(x, self.negative_slope)
 
-    def leaky_reluacl(x, scale=0.01):
+    def leaky_relu(x, scale=0.01):
         return LeakyReLUACL()(x, scale)
 
     class DropoutACL(Function):
@@ -2066,6 +2070,7 @@ def change_function():
             super(SiLUACL, self).__init__()
 
         def execute(self, x):
+            x = x.float32()
             inputs = [x]
             self.input = x
             outputs = [jt.empty(x.shape, x.dtype)]
@@ -2104,6 +2109,7 @@ def change_function():
             super(SigmoidACL, self).__init__()
 
         def execute(self, x):
+            x = x.float32()
             inputs = [x]
             outputs = [jt.empty(x.shape, x.dtype)]
             attr_code = f"""
@@ -2204,8 +2210,157 @@ def change_function():
         def execute(self, x):
             return DropoutACL()(x, self.p, self.is_train)
 
-    def dropoutacl(x, p=0.5, is_train=False):
+    def dropout(x, p=0.5, is_train=False):
         return DropoutACL()(x, p, is_train)
+
+    class SoftmaxACL(Function):
+
+        def __init__(self):
+            super(SoftmaxACL, self).__init__()
+
+        def execute(self, x, dim):
+            x = x.float32()
+            inputs = [x]
+            outputs = [jt.empty(x.shape)]
+            self.dim = dim
+            attr_code = f"""
+            op.jt_name = "softmax";
+            SoftmaxAttr *attr = new SoftmaxAttr();
+            attr->dim = {dim};
+            op.op_attr.reset(attr);
+            """
+            result = acl_cmd("Softmax",
+                             inputs=inputs,
+                             outputs=outputs,
+                             attr_code=attr_code)[0]
+            self.output = result
+            return result
+
+        def grad(self, grad_output):
+            attr_code = f"""
+            op.jt_name = "softmax";
+            SoftmaxAttr *attr = new SoftmaxAttr();
+            attr->dim = {self.dim};
+            op.op_attr.reset(attr);
+            """
+            inputs = [grad_output, self.output]
+            outputs = [jt.empty(grad_output.shape)]
+            grad_input = acl_cmd("SoftmaxBackward",
+                                 inputs=inputs,
+                                 outputs=outputs,
+                                 attr_code=attr_code)[0]
+            return grad_input
+
+    class Softmax(jt.nn.Module):
+
+        def __init__(self):
+            super(Softmax, self).__init__()
+
+        def execute(self, x, dim):
+            return SoftmaxACL()(x, dim)
+
+    def softmax(x, dim):
+        return SoftmaxACL()(x, dim)
+    
+    class BatchNormACL(Function):
+        def __init__(self, num_features, eps=1e-05, momentum=0.1, affine=True, is_train=True, sync=True):
+            self.num_features = num_features
+            self.eps = eps
+            self.momentum = momentum
+            self.affine = affine
+            self.is_train = is_train
+            self.sync = sync
+            self.weight = jt.init.constant((num_features,), "float32", 1.0) if affine else 1.0
+            self.bias = jt.init.constant((num_features,), "float32", 0.0) if affine else 0.0
+            self.running_mean = jt.init.constant((num_features,), "float32", 0.0).stop_grad()
+            self.running_var = jt.init.constant((num_features,), "float32", 1.0).stop_grad()
+
+        def execute(self, x):
+            assert self.num_features == x.shape[-1]
+            self.input = x.float32()
+            inputs = [self.input, self.weight, self.bias, self.running_mean, self.running_var]
+            outputs = [jt.empty(x.shape), jt.empty(self.num_features), jt.empty(self.num_features)]
+            attr_code = f"""
+            op.jt_name = "batchnorm";
+            BatchNormAttr *attr = new BatchNormAttr();
+            attr->is_train = {"true" if self.is_train else "false"};
+            attr->momentum = {self.momentum};
+            attr->eps = {self.eps};
+            op.op_attr.reset(attr);
+            """
+            result = acl_cmd("BatchNorm",
+                             inputs=inputs,
+                             outputs=outputs,
+                             attr_code=attr_code)
+            self.output = result[0]
+            self.saveMean = result[1]
+            self.saveInvstd = result[2]
+            return self.output
+
+        def grad(self, grad_output):
+            attr_code = f"""
+            op.jt_name = "batchnorm";
+            BatchNormAttr *attr = new BatchNormAttr();
+            attr->is_train = {"true" if self.is_train else "false"};
+            attr->momentum = {self.momentum};
+            attr->eps = {self.eps};
+            op.op_attr.reset(attr);
+            """
+            inputs = [grad_output, self.input, self.weight, self.running_mean, self.running_var, self.saveMean, self.saveInvstd]
+            outputs = [jt.empty(self.input.shape), jt.empty(self.num_features), jt.empty(self.num_features)]
+            grad_input = acl_cmd("SoftmaxBackward",
+                                 inputs=inputs,
+                                 outputs=outputs,
+                                 attr_code=attr_code)[0]
+            return grad_input
+        
+    class LayerNormACL(Function):
+        def __init__(self, normalized_shape, eps: float = 1e-5, elementwise_affine: bool = True):
+            if isinstance(normalized_shape, int):
+                normalized_shape = (normalized_shape,)
+            self.normalized_shape = tuple(normalized_shape)
+            self.eps = eps
+            self.elementwise_affine = elementwise_affine
+            self.weight = jt.init.constant(normalized_shape, "float32", 1.0) if elementwise_affine else 1.0
+            self.bias = jt.init.constant(normalized_shape, "float32", 0.0) if elementwise_affine else 0.0
+
+        def execute(self, x):
+            self.input = x.float32()
+            inputs = [self.input, self.weight, self.bias]
+            outputs = [jt.empty(x.shape), jt.empty(x.shape), jt.empty(x.shape)]
+            attr_code = f"""
+            op.jt_name = "layernorm";
+            LayerNormAttr *attr = new LayerNormAttr();
+            attr->eps = {self.eps};
+            attr->normalizedShape = {{{', '.join(map(str, (list(self.normalized_shape))))}}};
+            attr->size = {x.shape[-1]};
+            op.op_attr.reset(attr);
+            """
+            result = acl_cmd("LayerNorm",
+                             inputs=inputs,
+                             outputs=outputs,
+                             attr_code=attr_code)
+            self.output = result[0]
+            self.meanout = result[1]
+            self.rstdout = result[2]
+            return self.output
+
+        # def grad(self, grad_output):
+        #     attr_code = f"""
+        #     op.jt_name = "batchnorm";
+        #     BatchNormAttr *attr = new BatchNormAttr();
+        #     attr->is_train = {"true" if self.is_train else "false"};
+        #     attr->momentum = {self.momentum};
+        #     attr->eps = {self.eps};
+        #     op.op_attr.reset(attr);
+        #     """
+        #     inputs = [grad_output, self.input, self.weight, self.running_mean, self.running_var, self.saveMean, self.saveInvstd]
+        #     outputs = [jt.empty(self.input.shape), jt.empty(self.num_features), jt.empty(self.num_features)]
+        #     grad_input = acl_cmd("SoftmaxBackward",
+        #                          inputs=inputs,
+        #                          outputs=outputs,
+        #                          attr_code=attr_code)[0]
+        #     return grad_input
 
     def warp(origin_func, new_func, name=None):
 
@@ -2306,30 +2461,34 @@ def change_function():
     # jt.Var.permute = lambda x: warp(fake_transpose, transpose_acl)(x)
     # jt.Var.t = lambda x: warp(fake_transpose, transpose_acl)(x)
 
-    # jt.nn.relu = warp(jt.nn.relu, relu)
-    # jt.nn.ReLU = warp(jt.nn.ReLU, ReLU)
+    jt.nn.relu = warp(jt.nn.relu, relu)
+    jt.nn.ReLU = warp(jt.nn.ReLU, ReLU)
 
-    # jt.nn.leaky_relu = warp(jt.nn.leaky_relu, leaky_relu)
-    # jt.nn.LeakyReLU = warp(jt.nn.LeakyReLU, LeakyReLU)
+    jt.nn.leaky_relu = warp(jt.nn.leaky_relu, leaky_relu)
+    jt.nn.LeakyReLU = warp(jt.nn.LeakyReLU, LeakyReLU)
 
     def silu(x):
         return SiLUACL()(x)
 
-    # jt.nn.silu = warp(jt.nn.silu, silu)
-    # jt.nn.SiLU = warp(jt.nn.SiLU, SiLU)
+    jt.nn.silu = warp(jt.nn.silu, silu)
+    jt.nn.SiLU = warp(jt.nn.SiLU, SiLU)
 
     def sigmoid(x):
         return SigmoidACL()(x)
 
-    # jt.sigmoid = warp(jt.sigmoid, sigmoid)
-    # jt.nn.Sigmoid = warp(jt.nn.Sigmoid, Sigmoid)
+    jt.sigmoid = warp(jt.sigmoid, sigmoid)
+    jt.nn.Sigmoid = warp(jt.nn.Sigmoid, Sigmoid)
 
     def embedding(indices, weight):
         return EmbeddingACL()(indices, weight)
 
     jt.nn.embedding = warp(jt.nn.embedding, embedding)
     jt.nn.Embedding = warp(jt.nn.Embedding, Embedding)
-    # jt.nn.dropout = warp(jt.nn.dropout, dropout)
-    # jt.nn.Dropout = warp(jt.nn.Dropout, Dropout)
+    jt.nn.dropout = warp(jt.nn.dropout, dropout)
+    jt.nn.Dropout = warp(jt.nn.Dropout, Dropout)
 
+    jt.nn.softmax = warp(jt.nn.softmax, softmax)
+
+    # jt.nn.BatchNorm = warp(jt.nn.BatchNorm, BatchNormACL)
+    # jt.nn.LayerNorm = warp(jt.nn.LayerNorm, LayerNormACL)
     jt.nn.FlashAttention = warp(jt.nn.FlashAttention, FlashAttentionACL)
