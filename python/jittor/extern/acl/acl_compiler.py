@@ -218,6 +218,53 @@ def acl_cmd(name: str,
     op.run();""")
 
 
+def acl_cmd_forward(name: str,
+                    inputs: list,
+                    output_dtypes: list = None,
+                    output_shapes: list = None,
+                    attr_code: str = "",
+                    attr_header: str = "",
+                    outputs: list = None,
+                    extra_data: dict = {}):
+    attr_header = "\nnamespace jittor{" + attr_header + "}\n"
+
+    cuda_header = '''
+    #include"acl/acl_op.h"
+    '''
+    import jittor as jt
+    outputs_ = []
+    if outputs is not None:
+        outputs_ = outputs
+    else:
+        assert output_dtypes is not None
+        assert output_shapes is not None
+        assert len(output_dtypes) == len(output_shapes)
+        # print(f'{name } output_dtypes', output_dtypes)
+        # print(f'{name } output_shapes', output_shapes)
+        for i in range(len(output_shapes)):
+            outputs_.append(jt.empty(output_shapes[i], output_dtypes[i]))
+    # print(f'{name } outputs_', outputs_)
+    input_code = ''
+    for i in range(len(inputs)):
+        input_code += f"op.add(in{i}, true);\n"
+
+    output_code = ''
+    for i in range(len(outputs_)):
+        output_code += f"op.add(out{i}, false);\n"
+
+    return jt.code(outputs=outputs_,
+                   inputs=inputs,
+                   cuda_header=attr_header + cuda_header,
+                   cuda_src=f"""
+    // aclop
+    AclOpRunner op("{name}");
+    {input_code}
+    {output_code}
+    {attr_code}
+    op.run();""",
+                   data=extra_data)
+
+
 def change_function():
     import jittor as jt
     from jittor import Function
@@ -248,6 +295,7 @@ def change_function():
         return TriuACL()(x, diagonal)
 
     class ConvACL(Function):
+
         def execute(self,
                     x,
                     weight,
@@ -340,11 +388,18 @@ def change_function():
                 return results[0], results[1]
 
             return results
-    
-    def conv_acl(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
+
+    def conv_acl(x,
+                 weight,
+                 bias=None,
+                 stride=1,
+                 padding=0,
+                 dilation=1,
+                 groups=1):
         return ConvACL()(x, weight, bias, stride, padding, dilation, groups)
 
     class Conv2D(jt.nn.Module):
+
         def __init__(self,
                      in_channels,
                      out_channels,
@@ -659,7 +714,7 @@ def change_function():
 
             if dim < 0:
                 dim += input_tensors[0].ndim
-            
+
             self.input = input_tensors
             self.dim = dim
             for i in range(len(input_tensors)):
@@ -836,7 +891,7 @@ def change_function():
 
     def cumprod_acl(x, dim=None):
         x = jt.log(x)
-        x = cumsum_acl(x,dim=dim)
+        x = cumsum_acl(x, dim=dim)
         return jt.exp(x)
 
     class IndexACL(Function):
@@ -852,34 +907,41 @@ def change_function():
             elif type(dim) == int:
                 dim = [dim]
             results = []
-            for d in dim:
+            extra_data = {}
+            extra_data["dim_count"] = len(dim)
+
+            for i, d in enumerate(dim):
                 max_len = inshape[d]
+
+                extra_data[f"dim_{i}_start"] = 0
+                extra_data[f"dim_{i}_end"] = max_len
+                extra_data[f"dim_{i}_step"] = 1
+
                 tmp = jt.zeros(max_len, dtype=dtype)
                 range_attr_code = f"""
                 op.jt_name = "range";
                 RangeAttr *attr = new RangeAttr();
-                attr->start = 0;
-                attr->end = {max_len};
-                attr->step = 1;
+                attr->start = data["dim_{i}_start"];
+                attr->end = data["dim_{i}_end"];
+                attr->step = data["dim_{i}_step"];
                 op.op_attr.reset(attr);
                 """
-                result = acl_cmd("Range", [],
-                                 output_dtypes=[tmp.dtype],
-                                 output_shapes=[tmp.shape],
-                                 attr_code=range_attr_code)[0]
-                broadcast_dim = []
-                for i in range(len(inshape)):
-                    if i != d:
-                        broadcast_dim.append(i)
+                result = acl_cmd_forward("Range", [],
+                                         output_dtypes=[tmp.dtype],
+                                         output_shapes=[tmp.shape],
+                                         attr_code=range_attr_code,
+                                         extra_data=extra_data)[0]
+                broadcast_dims = list(range(len(inshape)))
+                broadcast_dims.remove(d)
                 result = jt.broadcast(result,
                                       shape=inshape,
-                                      dims=broadcast_dim)
+                                      dims=broadcast_dims)
                 results.append(result)
-                
+
             if len(results) != 1 or dim_input == None:
                 return tuple(results)
-            elif len(results)== 1 and dim_input != None:
-                    return results[0]
+            elif len(results) == 1 and dim_input != None:
+                return results[0]
             else:
                 return results
 
@@ -995,7 +1057,7 @@ def change_function():
             op.jt_name = "nonzero";
             """
             nonzero_cnt = (x != 0.0).sum().item()
-            
+
             result = acl_cmd("Nonzero", [x],
                              output_dtypes=['int64'],
                              output_shapes=[(nonzero_cnt, x.ndim)],
@@ -1186,43 +1248,76 @@ def change_function():
             steps = []
             dims = []
             squeeze_dims = []
-            for dim, s in enumerate(slices):
-                if isinstance(s, int):
-                    s = slice(s, s + 1, 1)
-                    squeeze_dims.append(dim)
-                if isinstance(s, jt.Var):
-                    assert False, "jt.Var not supported"
-                start, stop, step = s.indices(x.size(dim))
-                size = (stop - start - 1) // step + 1
-                # stride = self.stride(x, dim) * step
-                sizes.append(size)
-                steps.append(step)
-                begins.append(start)
-                ends.append(stop)
-                dims.append(dim)
-            if not sizes:
+
+            extra_data = {}
+            if len(slices):
+                extra_data["a"] = len(slices)
+                for dim, s in enumerate(slices):
+                    if isinstance(s, int):
+                        s = slice(s, s + 1, 1)
+                        squeeze_dims.append(dim)
+                    if isinstance(s, jt.Var):
+                        assert False, "jt.Var not supported"
+                    start, stop, step = s.indices(x.size(dim))
+                    size = (stop - start - 1) // step + 1
+                    # stride = self.stride(x, dim) * step
+                    sizes.append(size)
+                    extra_data[str(dim * 3)] = start
+                    extra_data[str(dim * 3 + 1)] = stop
+                    extra_data[str(dim * 3 + 2)] = step
+
+                    steps.append(step)
+                    begins.append(start)
+                    ends.append(stop)
+                    dims.append(dim)
+            else:
+                extra_data["a"] = -1
                 sizes = [1]
                 steps = [1]
             self.type_ = 'slicev2'
+
+            # for backward
             self.begins = begins
             self.ends = ends
             self.steps = steps
             self.dims = dims
+
             self.slices = slices
-            attr_code = f"""
+            attr_code = """
             op.jt_name = "slicev2";
             StrideAttr *attr = new StrideAttr();
-            attr->begins = {{ {", ".join(map(str, begins))} }};
-            attr->ends = {{ {", ".join(map(str, ends))} }};
-            attr->steps = {{ {", ".join(map(str, steps))} }};
-            attr->axes = {{ {", ".join(map(str, dims))} }};
+            
+            int slice_dim = data["a"];
+            
+            if(slice_dim == -1) {
+                attr->begins = {};
+                attr->ends = {};
+                attr->steps = {1};
+                attr->axes = {};
+            } else {
+                vector<long int> begins;
+                vector<long int> ends;
+                vector<long int> steps;
+                vector<long int> dims;
+                for(int dim = 0; dim < slice_dim; dim++) {
+                    dims.push_back(dim);
+                    begins.push_back(data[std::to_string(dim*3)]);
+                    ends.push_back(data[std::to_string(dim*3+1)]);
+                    steps.push_back(data[std::to_string(dim*3+2)]);
+                }
+                attr->begins = begins;
+                attr->ends = ends;
+                attr->steps = steps;
+                attr->axes = dims;
+            }
             op.op_attr.reset(attr);
             """
-            result = acl_cmd("SliceV2",
-                             inputs,
-                             output_dtypes=[x.dtype],
-                             output_shapes=[jt.empty(sizes).shape],
-                             attr_code=attr_code)[0]
+            result = acl_cmd_forward("SliceV2",
+                                     inputs,
+                                     output_dtypes=[x.dtype],
+                                     output_shapes=[jt.empty(sizes).shape],
+                                     attr_code=attr_code,
+                                     extra_data=extra_data)[0]
             self.squeeze_dims = squeeze_dims
             for dim in squeeze_dims[::-1]:
                 result = jt.squeeze(result, dim)
@@ -1329,7 +1424,8 @@ def change_function():
             slices = int(slices)
 
         ## If not related to `None`, directly use `GetItemACL`
-        if slices is not None and (not isinstance(slices, Iterable) or all([s is not None for s in slices])):
+        if slices is not None and (not isinstance(slices, Iterable)
+                                   or all([s is not None for s in slices])):
             return GetItemACL()(x, slices, return_x)
 
         ## If related to `None`, filter out `None` first, then use `GetItemACL`, and finally insert `None` (new dimensions) back
@@ -1342,7 +1438,7 @@ def change_function():
         def get_insert_positions(slices):
             result = []
             pos = 0
-            
+
             not_none_cnt = len(slices) - slices.count(None)
             for s in slices:
                 if isinstance(s, int):
@@ -1359,7 +1455,7 @@ def change_function():
 
         insert_positions = get_insert_positions(slices)
         slices_without_none = tuple(s for s in slices if s is not None)
-        
+
         result = GetItemACL()(x, slices_without_none, return_x)
 
         for i in insert_positions:
@@ -1475,10 +1571,6 @@ def change_function():
             if len(slices) < x_dim:
                 slices += (slice(None, None, None), ) * (x_dim - len(slices))
             sizes = []
-            begins = []
-            ends = []
-            steps = []
-            dims = []
             #适配华为奇怪的要求，最后一个维度的step必须是1
             expand_dim = False
             if isinstance(slices[-1], slice):
@@ -1508,41 +1600,64 @@ def change_function():
 
                 for dim in squeeze_dims:
                     value = value.unsqueeze(dim)
-            for dim, s in enumerate(slices):
-                if isinstance(s, int):
-                    s = slice(s, s + 1, 1)
-                if isinstance(s, jt.Var):
-                    assert False, "jt.Var not supported"
-                start, stop, step = s.indices(x_shape[dim])
-                size = (stop - start - 1) // step + 1
-                # stride = self.stride(x, dim) * step
-                sizes.append(size)
-                steps.append(step)
-                begins.append(start)
-                ends.append(stop)
-                dims.append(dim)
-            if not sizes:
+
+            extra_data = {}
+            if len(slices):
+                extra_data["a"] = len(slices)
+                for dim, s in enumerate(slices):
+                    if isinstance(s, int):
+                        s = slice(s, s + 1, 1)
+                    if isinstance(s, jt.Var):
+                        assert False, "jt.Var not supported"
+                    start, stop, step = s.indices(x_shape[dim])
+                    size = (stop - start - 1) // step + 1
+                    sizes.append(size)
+                    extra_data[str(dim * 3)] = start
+                    extra_data[str(dim * 3 + 1)] = stop
+                    extra_data[str(dim * 3 + 2)] = step
+            else:
+                extra_data["a"] = -1
                 sizes = [1]
                 steps = [1]
             if isinstance(value, int) or isinstance(value, float):
                 value = jt.full(sizes, value)
             self.type_ = 'slicev2'
-            attr_code = f"""
+            attr_code = """
             op.jt_name = "stridedsliceassignv2";
             StrideAttr *attr = new StrideAttr();
-            attr->begins = {{ {", ".join(map(str, begins))} }};
-            attr->ends = {{ {", ".join(map(str, ends))} }};
-            attr->steps = {{ {", ".join(map(str, steps))} }};
-            attr->axes = {{ {", ".join(map(str, dims))} }};
+            int slice_dim = data["a"];
+            
+            if(slice_dim == -1) {
+                attr->begins = {};
+                attr->ends = {};
+                attr->steps = {1};
+                attr->axes = {};
+            } else {
+                vector<long int> begins;
+                vector<long int> ends;
+                vector<long int> steps;
+                vector<long int> dims;
+                for(int dim = 0; dim < slice_dim; dim++) {
+                    dims.push_back(dim);
+                    begins.push_back(data[std::to_string(dim*3)]);
+                    ends.push_back(data[std::to_string(dim*3+1)]);
+                    steps.push_back(data[std::to_string(dim*3+2)]);
+                }
+                attr->begins = begins;
+                attr->ends = ends;
+                attr->steps = steps;
+                attr->axes = dims;
+            }
             op.op_attr.reset(attr);
             """
             self.value_shape = value.shape
             inputs = [value]
             outputs = [x.clone()]
-            result = acl_cmd("StridedSliceAssignV2",
-                             inputs=inputs,
-                             outputs=outputs,
-                             attr_code=attr_code)[0]
+            result = acl_cmd_forward("StridedSliceAssignV2",
+                                     inputs=inputs,
+                                     outputs=outputs,
+                                     attr_code=attr_code,
+                                     extra_data=extra_data)[0]
             if expand_dim:
                 result = result.squeeze(-1)
             # result.sync()
@@ -1955,7 +2070,8 @@ def change_function():
             return result
 
         def grad(self, grad_output):
-            mask = acl_cmd("Greater", [self.input, jt.zeros(self.input.shape)],
+            mask = acl_cmd("Greater",
+                           [self.input, jt.zeros(self.input.shape)],
                            output_dtypes=[self.input.dtype],
                            output_shapes=[self.input.shape],
                            attr_code="op.jt_name=\"binary\";")[0]
@@ -2095,6 +2211,9 @@ def change_function():
                                  attr_code=attr_code)[0]
             return grad_input
 
+    def silu_acl(x):
+        return SiLUACL()(x)
+
     class SiLU(jt.nn.Module):
 
         def __init__(self):
@@ -2133,6 +2252,9 @@ def change_function():
                                  outputs=outputs,
                                  attr_code=attr_code)[0]
             return grad_input
+
+    def sigmoid_acl(x):
+        return SigmoidACL()(x)
 
     class Sigmoid(jt.nn.Module):
 
@@ -2197,7 +2319,7 @@ def change_function():
                 self.weight[padding_idx] = 0
 
         def execute(self, x):
-            res = embedding(x, self.weight)
+            res = embedding_acl(x, self.weight)
             return res
 
     class Dropout(jt.nn.Module):
@@ -2210,7 +2332,7 @@ def change_function():
         def execute(self, x):
             return DropoutACL()(x, self.p, self.is_train)
 
-    def dropout(x, p=0.5, is_train=False):
+    def dropout_acl(x, p=0.5, is_train=False):
         return DropoutACL()(x, p, is_train)
 
     class SoftmaxACL(Function):
@@ -2259,27 +2381,78 @@ def change_function():
         def execute(self, x, dim):
             return SoftmaxACL()(x, dim)
 
-    def softmax(x, dim):
+    def softmax_acl(x, dim):
         return SoftmaxACL()(x, dim)
-    
+
+    class RopeACL(Function):
+
+        def __init__(self):
+            super(RopeACL, self).__init__()
+
+        def execute(self, xq, xk, freqs_cis, freq_cos, freq_sin):
+            attr_code = f"""
+            op.jt_name = "RotaryPosEmb";
+            """
+            if freqs_cis is not None:
+                freq_cos = freqs_cis[..., 0]
+                freq_sin = freqs_cis[..., 1]
+            else:
+                assert freq_cos is not None and freq_sin is not None
+            inputs = [xq, xk, freq_cos, freq_sin]
+            results = acl_cmd("RotaryPosEmb",
+                              inputs,
+                              output_dtypes=[
+                                  xq.dtype,
+                              ],
+                              output_shapes=[
+                                  xq.shape,
+                              ],
+                              attr_code=attr_code)
+            results[0].sync()
+            return inputs[0], inputs[1]
+
+        def grad(self, grad_output):
+            return grad_output
+
+    def rope_acl(xq, xk, freqs_cis=None, freq_sin=None, freq_cos=None):
+        return RopeACL()(xq, xk, freqs_cis, freq_sin, freq_cos)
+
     class BatchNormACL(Function):
-        def __init__(self, num_features, eps=1e-05, momentum=0.1, affine=True, is_train=True, sync=True):
+
+        def __init__(self,
+                     num_features,
+                     eps=1e-05,
+                     momentum=0.1,
+                     affine=True,
+                     is_train=True,
+                     sync=True):
             self.num_features = num_features
             self.eps = eps
             self.momentum = momentum
             self.affine = affine
             self.is_train = is_train
             self.sync = sync
-            self.weight = jt.init.constant((num_features,), "float32", 1.0) if affine else 1.0
-            self.bias = jt.init.constant((num_features,), "float32", 0.0) if affine else 0.0
-            self.running_mean = jt.init.constant((num_features,), "float32", 0.0).stop_grad()
-            self.running_var = jt.init.constant((num_features,), "float32", 1.0).stop_grad()
+            self.weight = jt.init.constant(
+                (num_features, ), "float32", 1.0) if affine else 1.0
+            self.bias = jt.init.constant(
+                (num_features, ), "float32", 0.0) if affine else 0.0
+            self.running_mean = jt.init.constant((num_features, ), "float32",
+                                                 0.0).stop_grad()
+            self.running_var = jt.init.constant((num_features, ), "float32",
+                                                1.0).stop_grad()
 
         def execute(self, x):
             assert self.num_features == x.shape[-1]
             self.input = x.float32()
-            inputs = [self.input, self.weight, self.bias, self.running_mean, self.running_var]
-            outputs = [jt.empty(x.shape), jt.empty(self.num_features), jt.empty(self.num_features)]
+            inputs = [
+                self.input, self.weight, self.bias, self.running_mean,
+                self.running_var
+            ]
+            outputs = [
+                jt.empty(x.shape),
+                jt.empty(self.num_features),
+                jt.empty(self.num_features)
+            ]
             attr_code = f"""
             op.jt_name = "batchnorm";
             BatchNormAttr *attr = new BatchNormAttr();
@@ -2306,23 +2479,36 @@ def change_function():
             attr->eps = {self.eps};
             op.op_attr.reset(attr);
             """
-            inputs = [grad_output, self.input, self.weight, self.running_mean, self.running_var, self.saveMean, self.saveInvstd]
-            outputs = [jt.empty(self.input.shape), jt.empty(self.num_features), jt.empty(self.num_features)]
+            inputs = [
+                grad_output, self.input, self.weight, self.running_mean,
+                self.running_var, self.saveMean, self.saveInvstd
+            ]
+            outputs = [
+                jt.empty(self.input.shape),
+                jt.empty(self.num_features),
+                jt.empty(self.num_features)
+            ]
             grad_input = acl_cmd("SoftmaxBackward",
                                  inputs=inputs,
                                  outputs=outputs,
                                  attr_code=attr_code)[0]
             return grad_input
-        
+
     class LayerNormACL(Function):
-        def __init__(self, normalized_shape, eps: float = 1e-5, elementwise_affine: bool = True):
+
+        def __init__(self,
+                     normalized_shape,
+                     eps: float = 1e-5,
+                     elementwise_affine: bool = True):
             if isinstance(normalized_shape, int):
-                normalized_shape = (normalized_shape,)
+                normalized_shape = (normalized_shape, )
             self.normalized_shape = tuple(normalized_shape)
             self.eps = eps
             self.elementwise_affine = elementwise_affine
-            self.weight = jt.init.constant(normalized_shape, "float32", 1.0) if elementwise_affine else 1.0
-            self.bias = jt.init.constant(normalized_shape, "float32", 0.0) if elementwise_affine else 0.0
+            self.weight = jt.init.constant(normalized_shape, "float32",
+                                           1.0) if elementwise_affine else 1.0
+            self.bias = jt.init.constant(normalized_shape, "float32",
+                                         0.0) if elementwise_affine else 0.0
 
         def execute(self, x):
             self.input = x.float32()
@@ -2367,6 +2553,7 @@ def change_function():
         if isinstance(origin_func, type):
 
             class WrappedClass(origin_func, new_func):
+
                 def __init__(self, *args, **kwargs):
                     if jt.flags.use_acl:
                         new_func.__init__(self, *args, **kwargs)
@@ -2384,6 +2571,7 @@ def change_function():
             return WrappedClass
 
         else:
+
             def warpper(*args, **kwargs):
                 if jt.flags.use_acl:
                     return new_func(*args, **kwargs)
@@ -2457,7 +2645,8 @@ def change_function():
 
     jt.transpose = warp(jt.transpose, transpose_acl)
     fake_transpose = jt.transpose
-    jt.Var.transpose = lambda x, *dim: warp(fake_transpose, transpose_acl)(x, *dim)
+    jt.Var.transpose = lambda x, *dim: warp(fake_transpose, transpose_acl)(x, *
+                                                                           dim)
     # jt.Var.permute = lambda x: warp(fake_transpose, transpose_acl)(x)
     # jt.Var.t = lambda x: warp(fake_transpose, transpose_acl)(x)
 
@@ -2467,28 +2656,24 @@ def change_function():
     jt.nn.leaky_relu = warp(jt.nn.leaky_relu, leaky_relu)
     jt.nn.LeakyReLU = warp(jt.nn.LeakyReLU, LeakyReLU)
 
-    def silu(x):
-        return SiLUACL()(x)
+    # jt.nn.silu = warp(jt.nn.silu, silu_acl)
+    # jt.nn.SiLU = warp(jt.nn.SiLU, SiLU)
 
-    jt.nn.silu = warp(jt.nn.silu, silu)
-    jt.nn.SiLU = warp(jt.nn.SiLU, SiLU)
-
-    def sigmoid(x):
-        return SigmoidACL()(x)
-
-    jt.sigmoid = warp(jt.sigmoid, sigmoid)
+    jt.sigmoid = warp(jt.sigmoid, sigmoid_acl)
     jt.nn.Sigmoid = warp(jt.nn.Sigmoid, Sigmoid)
 
-    def embedding(indices, weight):
+    def embedding_acl(indices, weight):
         return EmbeddingACL()(indices, weight)
 
-    jt.nn.embedding = warp(jt.nn.embedding, embedding)
+    jt.nn.embedding = warp(jt.nn.embedding, embedding_acl)
     jt.nn.Embedding = warp(jt.nn.Embedding, Embedding)
-    jt.nn.dropout = warp(jt.nn.dropout, dropout)
+    jt.nn.dropout = warp(jt.nn.dropout, dropout_acl)
     jt.nn.Dropout = warp(jt.nn.Dropout, Dropout)
 
-    jt.nn.softmax = warp(jt.nn.softmax, softmax)
+    jt.nn.softmax = warp(jt.nn.softmax, softmax_acl)
 
     # jt.nn.BatchNorm = warp(jt.nn.BatchNorm, BatchNormACL)
     # jt.nn.LayerNorm = warp(jt.nn.LayerNorm, LayerNormACL)
     jt.nn.FlashAttention = warp(jt.nn.FlashAttention, FlashAttentionACL)
+
+    jt.nn.rotary_emb = rope_acl

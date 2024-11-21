@@ -124,10 +124,14 @@ namespace jittor
         std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, bool, double, double, aclTensor *, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncBatchNorm;
 
         // for batchnorm backward
-        std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, bool, double, aclBoolArray *, aclTensor *, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncBatchNormBackward; 
+        std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, bool, double, aclBoolArray *, aclTensor *, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncBatchNormBackward;
 
         // for layernorm
         std::function<aclnnStatus(aclTensor *, aclIntArray *, aclTensor *, aclTensor *, double, aclTensor *, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncLayerNorm;
+
+        // for ROPE
+        std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, aclTensor *, int64_t, uint64_t *, aclOpExecutor **)>
+            getWorkspaceSizeFuncRotaryPosEmb;
 
         // 添加一个默认构造函数
         AclOpFunctions() = default;
@@ -324,6 +328,11 @@ namespace jittor
                            gwsf,
                        std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
             : getWorkspaceSizeFuncLayerNorm(gwsf), executeFunc(execf) {}
+        
+        // for ROPE
+        AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclTensor *, const aclTensor *,const aclTensor *, int64_t, uint64_t *, aclOpExecutor **)> gwsf, 
+                       std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
+            : getWorkspaceSizeFuncRotaryPosEmb(gwsf), executeFunc(execf) {}
     };
 
     static std::unordered_map<std::string, AclOpFunctions> aclOpFuncMap = {
@@ -428,6 +437,7 @@ namespace jittor
         {"BatchNorm", AclOpFunctions(aclnnBatchNormGetWorkspaceSize, aclnnBatchNorm)},
         {"BatchNormBackward", AclOpFunctions(aclnnBatchNormBackwardGetWorkspaceSize, aclnnBatchNormBackward)},
         {"LayerNorm", AclOpFunctions(aclnnLayerNormGetWorkspaceSize, aclnnLayerNorm)},
+        {"RotaryPosEmb", AclOpFunctions(aclnnApplyRotaryPosEmbGetWorkspaceSize, aclnnApplyRotaryPosEmb)},
     };
 
     struct AclOpAttr
@@ -620,7 +630,7 @@ namespace jittor
         }
     };
 
-    struct SoftmaxAttr: AclOpAttr
+    struct SoftmaxAttr : AclOpAttr
     {
         int64_t dim;
         ~SoftmaxAttr()
@@ -628,7 +638,7 @@ namespace jittor
         }
     };
 
-    struct BatchNormAttr: AclOpAttr
+    struct BatchNormAttr : AclOpAttr
     {
         bool is_train;
         float momentum;
@@ -638,7 +648,7 @@ namespace jittor
         }
     };
 
-    struct LayerNormAttr: AclOpAttr
+    struct LayerNormAttr : AclOpAttr
     {
         float eps;
         vector<int64_t> normalizedShape;
