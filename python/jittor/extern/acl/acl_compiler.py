@@ -1955,11 +1955,11 @@ def change_function():
             return result
 
         def grad(self, grad_output):
-            mask = acl_cmd("GreaterThan", [self.input, 0],
+            mask = acl_cmd("Greater", [self.input, jt.zeros(self.input.shape)],
                            output_dtypes=[self.input.dtype],
                            output_shapes=[self.input.shape],
                            attr_code="op.jt_name=\"binary\";")[0]
-            grad_input = acl_cmd("Multiply", [grad_output, mask],
+            grad_input = acl_cmd("Mul", [grad_output, mask],
                                  output_dtypes=[grad_output.dtype],
                                  output_shapes=[grad_output.shape],
                                  attr_code="op.jt_name=\"binary\";")[0]
