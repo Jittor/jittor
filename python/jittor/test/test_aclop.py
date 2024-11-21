@@ -593,12 +593,16 @@ class TestACL(unittest.TestCase):
         np.testing.assert_allclose(b[1].numpy(), [0, 1, 0])
         print("test where (unary) (test case 2) success")
 
-    # @jt.flag_scope(use_acl=1)
-    # def test_flip(self):
-    #     a = jt.array([[1., 2.], [3., 4.]])
-    #     b = self.measure_time(lambda: a.flip((0, 1)))
-    #     np.testing.assert_allclose(b.numpy(), [[4, 3], [2, 1]])
-    #     print("test flip success")
+    @jt.flag_scope(use_acl=1)
+    def test_flip(self):
+        a = jt.array([[1., 2.], [3., 4.]])
+        b = a.flip()
+        c = a.flip(1)
+        d = a.flip((0, 1))
+        np.testing.assert_allclose(b.numpy(), [[3, 4], [1, 2]])
+        np.testing.assert_allclose(c.numpy(), [[2, 1], [4, 3]])
+        np.testing.assert_allclose(d.numpy(), [[4, 3], [2, 1]])
+        print("test flip success")
 
     @jt.flag_scope(use_acl=1)
     def test_flip_grad(self):
@@ -673,6 +677,206 @@ class TestACL(unittest.TestCase):
             ny = jt.broadcast(x, shape=(3, 3)).data
         np.testing.assert_allclose(y.data, ny)
         print("test broadcast success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_flashattention(self):
+        bsz = 1
+        seq = 4
+        headnum = 1
+        headdim = 4
+        xq = jt.ones(bsz,headnum,seq,headdim)
+        xk = jt.ones(bsz,headnum,seq,headdim)
+        xv = jt.ones(bsz,headnum,seq,headdim)
+        attention = jt.nn.FlashAttention(headnum,"BNSD")
+        xo = attention(xq,xk,xv)
+        np.testing.assert_allclose(xo.numpy(), 
+        [[[[1., 1., 1., 1.],
+            [1., 1., 1., 1.],
+            [1., 1., 1., 1.],
+            [1., 1., 1., 1.]]]])
+        print("test flashattention success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_flashattention_grad(self):
+        bsz = 1
+        seq = 4
+        headnum = 1
+        headdim = 4
+        xq = jt.ones(bsz,headnum,seq,headdim)
+        xk = jt.ones(bsz,headnum,seq,headdim)
+        xv = jt.ones(bsz,headnum,seq,headdim)
+        attention = jt.nn.FlashAttention(headnum,"BNSD")
+        optimizer = jt.optim.SGD([xq,xk,xv], 0.1)
+        xo = attention(xq,xk,xv)
+        loss = xo.max()
+        optimizer.zero_grad()
+        optimizer.backward(loss)
+        optimizer.step()
+        dxq = xq.opt_grad(optimizer)
+        dxk = xk.opt_grad(optimizer)
+        dxv = xv.opt_grad(optimizer)
+        np.testing.assert_allclose(dxq.numpy(), 
+        [[[[0., 0., 0., 0.],
+            [0., 0., 0., 0.],
+            [0., 0., 0., 0.],
+            [0., 0., 0., 0.]]]])
+        np.testing.assert_allclose(dxk.numpy(), 
+        [[[[0., 0., 0., 0.],
+            [0., 0., 0., 0.],
+            [0., 0., 0., 0.],
+            [0., 0., 0., 0.]]]])
+        np.testing.assert_allclose(dxv.numpy(), 
+        [[[[1., 1., 1., 1.],
+            [1., 1., 1., 1.],
+            [1., 1., 1., 1.],
+            [1., 1., 1., 1.]]]])
+        print("test flashattention grad success")
+    
+    @jt.flag_scope(use_acl=1)
+    def test_softmax(self):
+        a = jt.array([[1, 2], [3, 4]])
+        res = jt.nn.softmax(a, dim = -1)
+        np.testing.assert_allclose(res.numpy(), [[0.26894143, 0.7310586], [0.26894143, 0.7310586]])
+        print("test softmax success")
+    
+    @jt.flag_scope(use_acl=1)
+    def test_softmax_grad(self):
+        a = jt.float32([[1, 2], [3, 4]])
+        optimizer = jt.optim.SGD([a], 0.1)
+        b = jt.nn.softmax(a, dim = -1)
+        loss = b.max()
+        optimizer.zero_grad()
+        optimizer.backward(loss)
+        optimizer.step()
+        res = a.opt_grad(optimizer)
+        np.testing.assert_allclose(res.numpy(), [[-0.19661194, 0.19661193], [-0.19661194, 0.19661193]])
+        print("test softmax grad success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_relu(self):
+        a = jt.array([[1, -2, 3], [-4, 5, -6]])
+        res = jt.nn.relu(a)
+        np.testing.assert_allclose(res.numpy(), [[1, 0, 3], [0, 5, 0]])
+        print("test relu success")
+    
+    @jt.flag_scope(use_acl=1)
+    def test_relu_grad(self):
+        a = jt.array([[1, -2, 3], [-4, 5, -6]])
+        optimizer = jt.optim.SGD([a], 0.1)
+        b = jt.nn.relu(a)
+        loss = b.max()
+        optimizer.zero_grad()
+        optimizer.backward(loss)
+        optimizer.step()
+        res = a.opt_grad(optimizer)
+        np.testing.assert_allclose(res.numpy(), [[0, 0, 0], [0, 0, 0]])
+        print("test relu grad success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_silu(self):
+        a = jt.array([[1, 2, 3]])
+        res = jt.nn.silu(a)
+        np.testing.assert_allclose(res.numpy(), [[0.7310586, 1.761594, 2.8577225]])
+        print("test silu success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_silu_grad(self):
+        a = jt.float32([[1, 2, 3]])
+        optimizer = jt.optim.SGD([a], 0.1)
+        b = jt.nn.silu(a)
+        loss = b.max()
+        optimizer.zero_grad()
+        optimizer.backward(loss)
+        optimizer.step()
+        res = a.opt_grad(optimizer)
+        np.testing.assert_allclose(res.numpy(), [[0, 0, 1.0881041]])
+        print("test silu grad success")
+        
+    @jt.flag_scope(use_acl=1)
+    def test_sigmoid(self):
+        a = jt.array([[1, 2, 3]])
+        sig = jt.nn.Sigmoid()
+        res = sig(a)
+        np.testing.assert_allclose(res.numpy(), [[0.7310586, 0.880797, 0.95257413]])
+        print("test sigmoid success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_sigmoid_grad(self):
+        a = jt.float32([[1, 2, 3]])
+        optimizer = jt.optim.SGD([a], 0.1)
+        sig = jt.nn.Sigmoid()
+        b = sig(a)
+        loss = b.sum()
+        optimizer.zero_grad()
+        optimizer.backward(loss)
+        optimizer.step()
+        res = a.opt_grad(optimizer)
+        np.testing.assert_allclose(res.numpy(), [[0.19661193, 0.1049936, 0.04517666]], rtol=1e-6, atol=1e-8)
+        print("test sigmoid grad success")
+        
+    @jt.flag_scope(use_acl=1)
+    def test_dropout(self):
+        jt.misc.set_global_seed(0)
+        x = jt.ones(3,3)
+        res = jt.nn.dropout(x, is_train=True)
+        np.testing.assert_allclose(res.numpy(),[[0, 2, 2],[0, 2, 0],[0, 2, 2]])
+        print("test dropout success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_dropout_grad(self):
+        jt.misc.set_global_seed(0)
+        a = jt.ones(3,3)
+        optimizer = jt.optim.SGD([a], 0.1)
+        b = jt.nn.dropout(a, is_train=True)
+        loss = b.sum()
+        optimizer.zero_grad()
+        optimizer.backward(loss)
+        optimizer.step()
+        res = a.opt_grad(optimizer)
+        np.testing.assert_allclose(res.numpy(),[[1, 1, 1],[1, 1, 1],[1, 1, 1]])
+        print("test dropout grad success")
+        
+    @jt.flag_scope(use_acl=1)
+    def test_leakyrelu(self):
+        a = jt.array([[1, -2, 3], [-4, 5, -6]])
+        res = jt.nn.leaky_relu(a)
+        np.testing.assert_allclose(res.numpy(), [[1, -0.02, 3], [-0.04, 5, -0.06]])
+        print("test leakyrelu success")
+    
+    @jt.flag_scope(use_acl=1)
+    def test_leakyrelu_grad(self):
+        a = jt.array([[1, -2, 3], [-4, 5, -6]])
+        optimizer = jt.optim.SGD([a], 0.1)
+        b = jt.nn.leaky_relu(a)
+        loss = b.max()
+        optimizer.zero_grad()
+        optimizer.backward(loss)
+        optimizer.step()
+        res = a.opt_grad(optimizer)
+        np.testing.assert_allclose(res.numpy(), [[0, 0, 0], [0, 0, 0]])
+        print("test leakyrelu grad success")
+        
+    @jt.flag_scope(use_acl=1)
+    def test_embedding(self):
+        weight = jt.array([[0, 0, 3, 1], [2, 0, 3, 1], [0, 0, 0, 0]])
+        input = jt.array([0, 2, 1])  
+        res = jt.nn.embedding(input, weight) 
+        np.testing.assert_allclose(res.numpy(), [[0, 0, 3, 1], [0, 0, 0, 0], [2, 0, 3, 1]])
+        print("test embedding success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_embedding_grad(self):
+        a = jt.array([[0,0,3,1],[2,0,3,1],[0,0,0,0]])
+        input = jt.array([0,2,1])  
+        optimizer = jt.optim.SGD([a], 0.1)
+        b = jt.nn.embedding(input, a) 
+        loss = b.max().float()
+        optimizer.zero_grad()
+        optimizer.backward(loss)
+        optimizer.step()
+        res = a.opt_grad(optimizer)
+        np.testing.assert_allclose(res.numpy(), [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]])
+        print("test embedding grad success")
 
 if __name__ == "__main__":
     unittest.main()

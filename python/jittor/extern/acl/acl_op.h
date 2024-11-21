@@ -59,7 +59,12 @@ namespace jittor
         {"MaskedSelect",49},
         {"SplitWithSize",50},
         {"FlashAttention",51},
-        {"FlashAttentionBackward",52} 
+        {"FlashAttentionBackward",52},
+        {"Softmax",53},
+        {"SoftmaxBackward",54},
+        {"BatchNorm",55},
+        {"BatchNormBackward",56},
+        {"LayerNorm",57},
     };
     int CreateAclTensor(const std::vector<int64_t> &shape, void *deviceAddr, int64_t size,
                         aclDataType dataType, aclTensor **tensor, bool use_nchw = false)
@@ -233,6 +238,9 @@ namespace jittor
 
             // for maxpool
             aclIntArray *kernel_size = nullptr;
+
+            // for layernorm
+            aclIntArray *normalizedShape = nullptr;
 
             // for range
             aclScalar *start = nullptr;
@@ -643,6 +651,29 @@ namespace jittor
                     char *layout = const_cast<char *>(attr->inputLayout.data());
                     ret = it->second.getWorkspaceSizeFuncFalshAttentionBackward(inputTensors[0], inputTensors[1], inputTensors[2], inputTensors[3], attr->hasRealshift ? inputTensors[4] : nullptr, attr->hasDropmask ? inputTensors[5] : nullptr, nullptr, attr->hasAttentmask ? inputTensors[7] : nullptr, inputTensors[8], inputTensors[9], nullptr, inputTensors[10], prefix, qstart, kvstart, attr->scale, attr->keepProb, attr->preToken, attr->nextToken, attr->headNum, layout, attr->innerPrecise, attr->sparseMode, attr->psetype, outputTensors[0], outputTensors[1], outputTensors[2], nullptr, &workspaceSize, &executor);
                     break;} 
+                case 53:{
+                    auto attr = dynamic_cast<SoftmaxAttr *>(op_attr.get());
+                    ret = it->second.getWorkspaceSizeFuncCast(inputTensors[0], aclDataType(attr->dim), outputTensors[0], &workspaceSize, &executor);
+                    break;}
+                case 54:{
+                    auto attr = dynamic_cast<SoftmaxAttr *>(op_attr.get());
+                    ret = it->second.getWorkspaceSizeFuncDropoutBackward(inputTensors[0], inputTensors[1], attr->dim, outputTensors[0], &workspaceSize, &executor);
+                    break;}
+                case 55:{
+                    auto attr = dynamic_cast<BatchNormAttr *>(op_attr.get());
+                    ret = it->second.getWorkspaceSizeFuncBatchNorm(inputTensors[0], inputTensors[1], inputTensors[2], inputTensors[3], inputTensors[4], attr->is_train, attr->momentum, attr->eps,  outputTensors[0], outputTensors[1], outputTensors[2], &workspaceSize, &executor);
+                    break;}
+                case 56:{
+                    auto attr = dynamic_cast<BatchNormAttr *>(op_attr.get());
+                    bool outputMask[3] = {true, true, true};
+                    aclBoolArray *outMask = aclCreateBoolArray(outputMask, 3);
+                    ret = it->second.getWorkspaceSizeFuncBatchNormBackward(inputTensors[0], inputTensors[1], inputTensors[2], inputTensors[3], inputTensors[4], inputTensors[5], inputTensors[6], attr->is_train, attr->eps, outMask, outputTensors[0], outputTensors[1], outputTensors[2], &workspaceSize, &executor);
+                    break;}
+                case 57:{
+                    auto attr = dynamic_cast<LayerNormAttr *>(op_attr.get());
+                    normalizedShape = aclCreateIntArray(attr->normalizedShape.data(), attr->size);
+                    ret = it->second.getWorkspaceSizeFuncLayerNorm(inputTensors[0], normalizedShape, inputTensors[1], inputTensors[2], attr->eps,  outputTensors[0], outputTensors[1], outputTensors[2], &workspaceSize, &executor);
+                    break;}
                 default:{
                     LOGir << "not supported op: " << name;
                     break;
@@ -694,6 +725,7 @@ namespace jittor
             aclDestroyIntArray(outPads);
             aclDestroyIntArray(dilations);
             aclDestroyIntArray(kernel_size);
+            aclDestroyIntArray(normalizedShape);
 
             return;
         }

@@ -120,6 +120,15 @@ namespace jittor
                                   aclTensor *, aclTensor *, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)>
             getWorkspaceSizeFuncFalshAttentionBackward;
 
+        // for batchnorm
+        std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, bool, double, double, aclTensor *, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncBatchNorm;
+
+        // for batchnorm backward
+        std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, bool, double, aclBoolArray *, aclTensor *, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncBatchNormBackward; 
+
+        // for layernorm
+        std::function<aclnnStatus(aclTensor *, aclIntArray *, aclTensor *, aclTensor *, double, aclTensor *, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncLayerNorm;
+
         // 添加一个默认构造函数
         AclOpFunctions() = default;
 
@@ -297,6 +306,24 @@ namespace jittor
                            gwsf,
                        std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
             : getWorkspaceSizeFuncFalshAttentionBackward(gwsf), executeFunc(execf) {}
+
+        // for batchnorm
+        AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, bool, double, double, aclTensor *, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)>
+                           gwsf,
+                       std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
+            : getWorkspaceSizeFuncBatchNorm(gwsf), executeFunc(execf) {}
+
+        // for batchnorm backward
+        AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, aclTensor *, bool, double, aclBoolArray *, aclTensor *, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)>
+                           gwsf,
+                       std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
+            : getWorkspaceSizeFuncBatchNormBackward(gwsf), executeFunc(execf) {}
+
+        // for layernorm
+        AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclIntArray *, aclTensor *, aclTensor *, double, aclTensor *, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)>
+                           gwsf,
+                       std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
+            : getWorkspaceSizeFuncLayerNorm(gwsf), executeFunc(execf) {}
     };
 
     static std::unordered_map<std::string, AclOpFunctions> aclOpFuncMap = {
@@ -394,8 +421,13 @@ namespace jittor
         {"InplaceMaskedScatter", AclOpFunctions(aclnnInplaceMaskedScatterGetWorkspaceSize, aclnnInplaceMaskedScatter)},
         {"MaskedSelect", AclOpFunctions(aclnnMaskedSelectGetWorkspaceSize, aclnnMaskedSelect)},
         {"SplitWithSize", AclOpFunctions(aclnnSplitWithSizeGetWorkspaceSize, aclnnSplitWithSize)},
+        {"Softmax", AclOpFunctions(aclnnSoftmaxGetWorkspaceSize, aclnnSoftmax)},
+        {"SoftmaxBackward", AclOpFunctions(aclnnSoftmaxBackwardGetWorkspaceSize, aclnnSoftmaxBackward)},
         {"FlashAttention", AclOpFunctions(aclnnFlashAttentionScoreV2GetWorkspaceSize, aclnnFlashAttentionScoreV2)},
         {"FlashAttentionBackward", AclOpFunctions(aclnnFlashAttentionScoreGradV2GetWorkspaceSize, aclnnFlashAttentionScoreGradV2)},
+        {"BatchNorm", AclOpFunctions(aclnnBatchNormGetWorkspaceSize, aclnnBatchNorm)},
+        {"BatchNormBackward", AclOpFunctions(aclnnBatchNormBackwardGetWorkspaceSize, aclnnBatchNormBackward)},
+        {"LayerNorm", AclOpFunctions(aclnnLayerNormGetWorkspaceSize, aclnnLayerNorm)},
     };
 
     struct AclOpAttr
@@ -585,6 +617,35 @@ namespace jittor
         ~SplitWithSizeAttr()
         {
             splitSize.clear();
+        }
+    };
+
+    struct SoftmaxAttr: AclOpAttr
+    {
+        int64_t dim;
+        ~SoftmaxAttr()
+        {
+        }
+    };
+
+    struct BatchNormAttr: AclOpAttr
+    {
+        bool is_train;
+        float momentum;
+        float eps;
+        ~BatchNormAttr()
+        {
+        }
+    };
+
+    struct LayerNormAttr: AclOpAttr
+    {
+        float eps;
+        vector<int64_t> normalizedShape;
+        int64_t size;
+        ~LayerNormAttr()
+        {
+            normalizedShape.clear();
         }
     };
 
