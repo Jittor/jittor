@@ -438,6 +438,7 @@ namespace jittor
         {"BatchNormBackward", AclOpFunctions(aclnnBatchNormBackwardGetWorkspaceSize, aclnnBatchNormBackward)},
         {"LayerNorm", AclOpFunctions(aclnnLayerNormGetWorkspaceSize, aclnnLayerNorm)},
         {"RotaryPosEmb", AclOpFunctions(aclnnApplyRotaryPosEmbGetWorkspaceSize, aclnnApplyRotaryPosEmb)},
+        {"Stack", AclOpFunctions(aclnnStackGetWorkspaceSize, aclnnStack)},
     };
 
     struct AclOpAttr
