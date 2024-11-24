@@ -838,6 +838,16 @@ class TestACL(unittest.TestCase):
         res = self.measure_time(lambda: jt.grad(b.max(), a))
         np.testing.assert_allclose(res.numpy(), [[0, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 0]])
         print("test embedding grad success")
+        
+    @jt.flag_scope(use_acl=1)
+    def test_stack(self):
+        a = jt.array([1, 2, 3])
+        b = jt.array([4, 5, 6])
+        c = self.measure_time(lambda: jt.stack([a, b])) 
+        d = self.measure_time(lambda: jt.stack([a, b], dim = 1)) 
+        np.testing.assert_allclose(c.numpy(), [[1, 2, 3], [4, 5, 6]])
+        np.testing.assert_allclose(d.numpy(), [[1, 4], [2, 5], [3, 6]])
+        print("test stack success")
 
 if __name__ == "__main__":
     unittest.main()
