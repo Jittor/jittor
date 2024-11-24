@@ -66,6 +66,7 @@ namespace jittor
             {"BatchNormBackward", 56},
             {"LayerNorm", 57},
             {"RotaryPosEmb", 58},
+            {"Stack", 59},
     };
     int CreateAclTensor(const std::vector<int64_t> &shape, void *deviceAddr, int64_t size,
                         aclDataType dataType, aclTensor **tensor, bool use_nchw = false)
@@ -792,6 +793,18 @@ namespace jittor
             case 58:
             {
                 ret = it->second.getWorkspaceSizeFuncRotaryPosEmb(inputTensors[0], inputTensors[1], inputTensors[2], inputTensors[3], (int64_t)1, &workspaceSize, &executor);
+                break;
+            }
+            case 59:
+            {
+                std::vector<aclTensor *> stackTensorList = {};
+                for (int i = 0; i < input_num; i++)
+                {
+                    stackTensorList.push_back(inputTensors[i]);
+                }
+                auto stackTensorListInput = aclCreateTensorList(&stackTensorList[0], input_num);
+                auto attr = dynamic_cast<ConcatAttr *>(op_attr.get());
+                ret = it->second.getWorkspaceSizeFuncConcat(stackTensorListInput, attr->dim, outputTensors[0], &workspaceSize, &executor);
                 break;
             }
             default:
