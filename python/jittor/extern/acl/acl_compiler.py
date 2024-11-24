@@ -2547,6 +2547,70 @@ def change_function():
         #                          outputs=outputs,
         #                          attr_code=attr_code)[0]
         #     return grad_input
+        
+    class StackACL(Function):
+
+        def __init__(self):
+            super(StackACL, self).__init__()
+
+        def execute(self, input_tensors, dim):
+            if type(input_tensors) is tuple:
+                input_tensors = list(input_tensors)
+            assert type(input_tensors) is list
+            assert -1 * len(input_tensors) - 1 <= dim and dim <= len(input_tensors)
+            for i in range(len(input_tensors)):
+                if input_tensors[i].dtype != input_tensors[0].dtype:
+                    raise ValueError(
+                        "All input tensors must have the same dtype")
+                if input_tensors[i].shape != input_tensors[0].shape:
+                    raise ValueError(
+                        "All input tensors must have the same shape")
+            self.input = input_tensors
+            input_shape = list(input_tensors[0].shape)
+            output_shape = input_shape[:dim] + [len(input_tensors)] + input_shape[dim:]
+            attr_code = f"""
+            op.jt_name = "stack";
+            ConcatAttr *attr = new ConcatAttr();
+            attr->tensorNum = {len(input_tensors)};
+            attr->dim = {dim};
+            op.op_attr.reset(attr);
+            """
+            self.attr_code = attr_code
+            result = acl_cmd("Stack", input_tensors,
+                             output_dtypes=[input_tensors[0].dtype],
+                             output_shapes=[output_shape],
+                             attr_code=self.attr_code)[0]
+            return result
+
+        def grad(self, grad_output):
+            grad_inputs = self.split_grad(grad_output, self.input, self.dim)
+            return grad_inputs
+
+        def split_grad(self, grad_output, input_tensors, axis):
+            offset = []
+            shapeVec = []
+            dtypeVec = []
+            for tensor in input_tensors:
+                offset.append(tensor.shape[axis])
+                dtypeVec.append(tensor.dtype)
+                shapeVec.append(tensor.shape)
+
+            attr_code = f"""
+            op.jt_name = "splitwithsize";
+            auto *attr = new SplitWithSizeAttr();
+            attr->splitSize = {{ {", ".join(map(str, offset))} }};
+            attr->dim = {axis};
+            op.op_attr.reset(attr);
+            """
+
+            result = acl_cmd("SplitWithSize", [grad_output],
+                             output_dtypes=dtypeVec,
+                             output_shapes=shapeVec,
+                             attr_code=attr_code)
+            return result
+
+    def stack_acl(x, dim = 0):
+        return StackACL()(x, dim)
 
     def warp(origin_func, new_func, name=None):
 
@@ -2594,6 +2658,7 @@ def change_function():
     jt.flip = warp(jt.flip, flip_acl)
     jt.Var.flip = lambda x, dim_vector=0: jt.flip(x, dim_vector)
     jt.concat = warp(jt.concat, concat)
+    jt.stack = warp(jt.stack, stack_acl)
 
     jt.gather = warp(jt.gather, gather_acl)
     jt.any = warp(jt.any, any_acl)
@@ -2656,8 +2721,8 @@ def change_function():
     jt.nn.leaky_relu = warp(jt.nn.leaky_relu, leaky_relu)
     jt.nn.LeakyReLU = warp(jt.nn.LeakyReLU, LeakyReLU)
 
-    # jt.nn.silu = warp(jt.nn.silu, silu_acl)
-    # jt.nn.SiLU = warp(jt.nn.SiLU, SiLU)
+    jt.nn.silu = warp(jt.nn.silu, silu_acl)
+    jt.nn.SiLU = warp(jt.nn.SiLU, SiLU)
 
     jt.sigmoid = warp(jt.sigmoid, sigmoid_acl)
     jt.nn.Sigmoid = warp(jt.nn.Sigmoid, Sigmoid)
@@ -2672,7 +2737,7 @@ def change_function():
 
     jt.nn.softmax = warp(jt.nn.softmax, softmax_acl)
 
-    # jt.nn.BatchNorm = warp(jt.nn.BatchNorm, BatchNormACL)
+    jt.nn.BatchNorm = warp(jt.nn.BatchNorm, BatchNormACL)
     # jt.nn.LayerNorm = warp(jt.nn.LayerNorm, LayerNormACL)
     jt.nn.FlashAttention = warp(jt.nn.FlashAttention, FlashAttentionACL)
 
