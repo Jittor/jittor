@@ -2442,7 +2442,7 @@ def change_function():
                                                 1.0).stop_grad()
 
         def execute(self, x):
-            assert self.num_features == x.shape[-1]
+            # assert self.num_features == x.shape[-1]
             self.input = x.float32()
             inputs = [
                 self.input, self.weight, self.bias, self.running_mean,
@@ -2749,8 +2749,8 @@ def change_function():
     jt.nn.leaky_relu = warp(jt.nn.leaky_relu, leaky_relu)
     jt.nn.LeakyReLU = warp(jt.nn.LeakyReLU, LeakyReLU)
 
-    jt.nn.silu = warp(jt.nn.silu, silu_acl)
-    jt.nn.SiLU = warp(jt.nn.SiLU, SiLU)
+    # jt.nn.silu = warp(jt.nn.silu, silu_acl)
+    # jt.nn.SiLU = warp(jt.nn.SiLU, SiLU)
 
     jt.sigmoid = warp(jt.sigmoid, sigmoid_acl)
     jt.nn.Sigmoid = warp(jt.nn.Sigmoid, Sigmoid)
@@ -2758,14 +2758,14 @@ def change_function():
     def embedding_acl(indices, weight):
         return EmbeddingACL()(indices, weight)
 
-    jt.nn.embedding = warp(jt.nn.embedding, embedding_acl)
-    jt.nn.Embedding = warp(jt.nn.Embedding, Embedding)
+    # jt.nn.embedding = warp(jt.nn.embedding, embedding_acl)
+    # jt.nn.Embedding = warp(jt.nn.Embedding, Embedding)
     jt.nn.dropout = warp(jt.nn.dropout, dropout_acl)
     jt.nn.Dropout = warp(jt.nn.Dropout, Dropout)
 
     jt.nn.softmax = warp(jt.nn.softmax, softmax_acl)
 
-    jt.nn.BatchNorm = warp(jt.nn.BatchNorm, BatchNormACL)
+    # jt.nn.BatchNorm = warp(jt.nn.BatchNorm, BatchNormACL)
     # jt.nn.LayerNorm = warp(jt.nn.LayerNorm, LayerNormACL)
     jt.nn.FlashAttention = warp(jt.nn.FlashAttention, FlashAttentionACL)
     jt.isnan = warp(jt.isnan, isnan_acl)
