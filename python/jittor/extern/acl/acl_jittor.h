@@ -44,7 +44,7 @@ namespace jittor
         // for conv backward
         std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, aclIntArray *, aclIntArray *, aclIntArray *, aclIntArray *, bool, aclIntArray *, int, aclBoolArray *, int8_t, aclTensor *, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncConvBackward;
         // for proddim
-        std::function<aclnnStatus(aclTensor *, int64_t, bool, aclDataType, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncProdDim;
+        std::function<aclnnStatus(aclTensor *, float, float, float, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncProdDim;
         // for select, where
         std::function<aclnnStatus(aclTensor *, aclTensor *, aclTensor *, aclTensor *, uint64_t *, aclOpExecutor **)> getWorkspaceSizeFuncSelect;
         // for random_uniform and random_normal
@@ -186,7 +186,7 @@ namespace jittor
             : getWorkspaceSizeFuncConvBackward(gwsf), executeFunc(execf) {}
 
         // for proddim
-        AclOpFunctions(std::function<aclnnStatus(const aclTensor *, int64_t, bool, aclDataType, aclTensor *, uint64_t *, aclOpExecutor **)> gwsf,
+        AclOpFunctions(std::function<aclnnStatus(const aclTensor *, float, float, float, aclTensor *, uint64_t *, aclOpExecutor **)> gwsf,
                        std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
             : getWorkspaceSizeFuncProdDim(gwsf), executeFunc(execf) {}
 
@@ -439,6 +439,7 @@ namespace jittor
         {"LayerNorm", AclOpFunctions(aclnnLayerNormGetWorkspaceSize, aclnnLayerNorm)},
         {"RotaryPosEmb", AclOpFunctions(aclnnApplyRotaryPosEmbGetWorkspaceSize, aclnnApplyRotaryPosEmb)},
         {"Stack", AclOpFunctions(aclnnStackGetWorkspaceSize, aclnnStack)},
+        {"NanToNum", AclOpFunctions(aclnnNanToNumGetWorkspaceSize, aclnnNanToNum)},
     };
 
     struct AclOpAttr
@@ -684,6 +685,16 @@ namespace jittor
             prefix.clear();
             qStartIdx.clear();
             kvStartIdx.clear();
+        }
+    };
+
+    struct NanToNumAttr : AclOpAttr
+    {
+        float nan;
+        float posinf;
+        float neginf;
+        ~NanToNumAttr()
+        {
         }
     };
 }

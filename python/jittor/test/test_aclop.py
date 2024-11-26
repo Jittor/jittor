@@ -848,6 +848,20 @@ class TestACL(unittest.TestCase):
         np.testing.assert_allclose(c.numpy(), [[1, 2, 3], [4, 5, 6]])
         np.testing.assert_allclose(d.numpy(), [[1, 4], [2, 5], [3, 6]])
         print("test stack success")
+    
+    @jt.flag_scope(use_acl=1)
+    def test_is_nan(self):
+        x = jt.array([1.0, float('nan'), float('inf'), float('-inf'), -1.0, 2.0, 0.0])
+        res = self.measure_time(lambda: jt.isnan(x))
+        np.testing.assert_allclose(res.numpy(), [False, True, False, False, False, False, False])
+        print("test is nan success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_is_inf(self):
+        x = jt.array([1.0, float('nan'), float('inf'), float('-inf'), -1.0, 2.0, 0.0])
+        res = self.measure_time(lambda: jt.isinf(x))
+        np.testing.assert_allclose(res.numpy(), [False, False, True, True, False, False, False])
+        print("test is nan success")
 
 if __name__ == "__main__":
     unittest.main()
