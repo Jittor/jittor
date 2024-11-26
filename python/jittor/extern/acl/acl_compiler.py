@@ -2494,42 +2494,42 @@ def change_function():
                                  attr_code=attr_code)[0]
             return grad_input
 
-    class LayerNormACL(Function):
+    # class LayerNormACL(Function):
 
-        def __init__(self,
-                     normalized_shape,
-                     eps: float = 1e-5,
-                     elementwise_affine: bool = True):
-            if isinstance(normalized_shape, int):
-                normalized_shape = (normalized_shape, )
-            self.normalized_shape = tuple(normalized_shape)
-            self.eps = eps
-            self.elementwise_affine = elementwise_affine
-            self.weight = jt.init.constant(normalized_shape, "float32",
-                                           1.0) if elementwise_affine else 1.0
-            self.bias = jt.init.constant(normalized_shape, "float32",
-                                         0.0) if elementwise_affine else 0.0
+    #     def __init__(self,
+    #                  normalized_shape,
+    #                  eps: float = 1e-5,
+    #                  elementwise_affine: bool = True):
+    #         if isinstance(normalized_shape, int):
+    #             normalized_shape = (normalized_shape, )
+    #         self.normalized_shape = tuple(normalized_shape)
+    #         self.eps = eps
+    #         self.elementwise_affine = elementwise_affine
+    #         self.weight = jt.init.constant(normalized_shape, "float32",
+    #                                        1.0) if elementwise_affine else 1.0
+    #         self.bias = jt.init.constant(normalized_shape, "float32",
+    #                                      0.0) if elementwise_affine else 0.0
 
-        def execute(self, x):
-            self.input = x.float32()
-            inputs = [self.input, self.weight, self.bias]
-            outputs = [jt.empty(x.shape), jt.empty(x.shape), jt.empty(x.shape)]
-            attr_code = f"""
-            op.jt_name = "layernorm";
-            LayerNormAttr *attr = new LayerNormAttr();
-            attr->eps = {self.eps};
-            attr->normalizedShape = {{{', '.join(map(str, (list(self.normalized_shape))))}}};
-            attr->size = {x.shape[-1]};
-            op.op_attr.reset(attr);
-            """
-            result = acl_cmd("LayerNorm",
-                             inputs=inputs,
-                             outputs=outputs,
-                             attr_code=attr_code)
-            self.output = result[0]
-            self.meanout = result[1]
-            self.rstdout = result[2]
-            return self.output
+    #     def execute(self, x):
+    #         self.input = x.float32()
+    #         inputs = [self.input, self.weight, self.bias]
+    #         outputs = [jt.empty(x.shape), jt.empty(x.shape), jt.empty(x.shape)]
+    #         attr_code = f"""
+    #         op.jt_name = "layernorm";
+    #         LayerNormAttr *attr = new LayerNormAttr();
+    #         attr->eps = {self.eps};
+    #         attr->normalizedShape = {{{', '.join(map(str, (list(self.normalized_shape))))}}};
+    #         attr->size = {x.shape[-1]};
+    #         op.op_attr.reset(attr);
+    #         """
+    #         result = acl_cmd("LayerNorm",
+    #                          inputs=inputs,
+    #                          outputs=outputs,
+    #                          attr_code=attr_code)
+    #         self.output = result[0]
+    #         self.meanout = result[1]
+    #         self.rstdout = result[2]
+    #         return self.output
 
         # def grad(self, grad_output):
         #     attr_code = f"""
@@ -2611,6 +2611,34 @@ def change_function():
 
     def stack_acl(x, dim = 0):
         return StackACL()(x, dim)
+    
+    class NanToNumACL(Function):
+        def __init__(self):
+            super(NanToNumACL, self).__init__()
+        
+        def execute(self, input, nan_or_inf):
+            attr_code = f"""
+            op.jt_name = "NanToNum";
+            NanToNumAttr *attr = new NanToNumAttr();
+            attr->nan = {nan_or_inf};
+            attr->posinf = {-nan_or_inf};
+            attr->neginf = {-nan_or_inf};
+            op.op_attr.reset(attr);
+            """
+            self.attr_code = attr_code
+            result = acl_cmd("NanToNum", [input],
+                             output_dtypes=[input[0].dtype],
+                             output_shapes=[input.shape],
+                             attr_code=self.attr_code)[0]
+            return result
+        
+    def isnan_acl(x):
+        tonum = NanToNumACL()(x,-1.0)
+        return jt.not_equal(x,tonum).logical_and(jt.not_equal(tonum,jt.ones_like(x)))
+    
+    def isinf_acl(x):
+        tonum = NanToNumACL()(x,1.0)
+        return jt.not_equal(x,tonum).logical_and(jt.not_equal(tonum,jt.ones_like(x)))
 
     def warp(origin_func, new_func, name=None):
 
@@ -2740,5 +2768,7 @@ def change_function():
     jt.nn.BatchNorm = warp(jt.nn.BatchNorm, BatchNormACL)
     # jt.nn.LayerNorm = warp(jt.nn.LayerNorm, LayerNormACL)
     jt.nn.FlashAttention = warp(jt.nn.FlashAttention, FlashAttentionACL)
+    jt.isnan = warp(jt.isnan, isnan_acl)
+    jt.isinf = warp(jt.isinf, isinf_acl)
 
     jt.nn.rotary_emb = rope_acl
