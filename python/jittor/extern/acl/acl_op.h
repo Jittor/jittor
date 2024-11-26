@@ -67,6 +67,7 @@ namespace jittor
             {"LayerNorm", 57},
             {"RotaryPosEmb", 58},
             {"Stack", 59},
+            {"NanToNum", 60},
     };
     int CreateAclTensor(const std::vector<int64_t> &shape, void *deviceAddr, int64_t size,
                         aclDataType dataType, aclTensor **tensor, bool use_nchw = false)
@@ -805,6 +806,12 @@ namespace jittor
                 auto stackTensorListInput = aclCreateTensorList(&stackTensorList[0], input_num);
                 auto attr = dynamic_cast<ConcatAttr *>(op_attr.get());
                 ret = it->second.getWorkspaceSizeFuncConcat(stackTensorListInput, attr->dim, outputTensors[0], &workspaceSize, &executor);
+                break;
+            }
+            case 60:
+            {
+                auto attr = dynamic_cast<NanToNumAttr *>(op_attr.get());
+                ret = it->second.getWorkspaceSizeFuncProdDim(inputTensors[0], attr->nan, attr->posinf, attr->neginf, outputTensors[0], &workspaceSize, &executor);
                 break;
             }
             default:
