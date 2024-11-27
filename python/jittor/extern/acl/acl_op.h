@@ -194,7 +194,7 @@ namespace jittor
             std::vector<std::vector<int64_t>> outputShapes;
 
             // for reduce
-            std::vector<int64_t> axes;
+            // std::vector<int64_t> axes;
             aclIntArray *dim = nullptr;
             bool keepdims;
 
@@ -269,7 +269,8 @@ namespace jittor
                 }
             }
 
-            if (jt_name == "reduce" || jt_name == "transpose")
+            // if (jt_name == "reduce" || jt_name == "transpose")
+            if (jt_name == "transpose")
             {
                 auto attr = dynamic_cast<ReduceAttr *>(op_attr.get());
                 dim = aclCreateIntArray(attr->axes.data(), attr->axes.size());
@@ -363,26 +364,26 @@ namespace jittor
                 ret = it->second.getWorkspaceSizeFuncMatmul(inputTensors[0], inputTensors[1], outputTensors[0], 1, &workspaceSize, &executor);
                 break;
             }
-            case 9:
-            {
-                ret = it->second.getWorkspaceSizeFuncReduceSum(inputTensors[0], dim, keepdims, get_dtype(out_[0]->dtype()), outputTensors[0], &workspaceSize, &executor);
-                break;
-            }
-            case 10:
-            {
-                ret = it->second.getWorkspaceSizeFuncReduceSum(inputTensors[0], dim, keepdims, get_dtype(out_[0]->dtype()), outputTensors[0], &workspaceSize, &executor);
-                break;
-            }
-            case 11:
-            {
-                ret = it->second.getWorkspaceSizeFuncAmax(inputTensors[0], dim, keepdims, outputTensors[0], &workspaceSize, &executor);
-                break;
-            }
-            case 12:
-            {
-                ret = it->second.getWorkspaceSizeFuncAmax(inputTensors[0], dim, keepdims, outputTensors[0], &workspaceSize, &executor);
-                break;
-            }
+            // case 9:
+            // {
+            //     ret = it->second.getWorkspaceSizeFuncReduceSum(inputTensors[0], dim, keepdims, get_dtype(out_[0]->dtype()), outputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
+            // case 10:
+            // {
+            //     ret = it->second.getWorkspaceSizeFuncReduceSum(inputTensors[0], dim, keepdims, get_dtype(out_[0]->dtype()), outputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
+            // case 11:
+            // {
+            //     ret = it->second.getWorkspaceSizeFuncAmax(inputTensors[0], dim, keepdims, outputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
+            // case 12:
+            // {
+            //     ret = it->second.getWorkspaceSizeFuncAmax(inputTensors[0], dim, keepdims, outputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
 
             case 13:
             {

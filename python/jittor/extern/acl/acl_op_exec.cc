@@ -277,22 +277,21 @@ namespace jittor
                 else if (op->name() == string("reduce"))
                 {
                     auto rop = (ReduceOp *)op;
-                    AclOpRunner op("");
+                    // AclOpRunner op("");
+                    ReduceOpRunner op;
                     if (rop->ns == ns_add)
-                        op.name = "ReduceSum";
+                        op.op_idx = 9;
                     else if (rop->ns == ns_multiply)
                         // TODO unsupported the multi dim
-
-                        op.name = "ReduceProd";
+                        op.op_idx = 999;
                     else if (rop->ns == ns_maximum)
-                        op.name = "ReduceMax";
+                        op.op_idx = 11;
                     else if (rop->ns == ns_minimum)
-                        op.name = "ReduceMin";
+                        op.op_idx = 12;
                     else if (rop->ns == ns_mean)
-                        op.name = "ReduceMean";
+                        op.op_idx = 10;
                     else
                         LOGf << "op " << rop->ns << " not supported";
-                    op.jt_name = "reduce";
                     op.add(rop->x, true);
 
                     ReduceAttr *attr = new ReduceAttr();
