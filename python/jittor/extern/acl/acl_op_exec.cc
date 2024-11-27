@@ -32,7 +32,6 @@
 #include "opt/tuner_manager.h"
 #include "utils/str_utils.h"
 #include "aclnn/aclnn.h"
-#include "acl_op.h"
 #include "aclops/aclops.h"
 namespace jittor
 {
@@ -65,7 +64,6 @@ namespace jittor
         {ns_acosh, "Acosh"},
         {ns_atanh, "Atanh"},
         {ns_sigmoid, "Sigmoid"},
-        
         {ns_erf, "Erf"},
         {ns_erfinv, "Erfinv"},
         {ns_logical_not, "LogicalNot"},
@@ -93,8 +91,7 @@ namespace jittor
         {ns_logical_xor, "LogicalXor"},
         {ns_bitwise_and, "BitwiseAnd"},
         {ns_bitwise_or, "BitwiseOr"},
-        {ns_bitwise_xor, "BitwiseXor"},
-
+        {ns_bitwise_xor, "BitwiseXor"},///
     };
 
     void fallback_cpu(Op *op)
