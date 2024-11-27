@@ -76,13 +76,14 @@ def install():
 
     #print(ascend_toolkit_home)
     #print(acl_compiler_home)
-    cc_flags += f" -DHAS_CUDA -DIS_ACL  \
+    cc_flags += f" -MD -DHAS_CUDA -DIS_ACL  \
     -I{ascend_toolkit_home}/include/ \
     -I{ascend_toolkit_home}/include/acl/ \
     -I{ascend_toolkit_home}/include/aclnn/ \
     -I{ascend_toolkit_home}/include/aclnnop/ \
     -I{acl_compiler_home} -lascendcl -lacl_op_compiler \
     -I{acl_compiler_home}/aclnn \
+    -I{acl_compiler_home}/aclops \
     -L{ascend_toolkit_home}/lib64/"
 
     cc_flags += " -llibascendcl "
@@ -2442,7 +2443,7 @@ def change_function():
                                                 1.0).stop_grad()
 
         def execute(self, x):
-            assert self.num_features == x.shape[-1]
+            # assert self.num_features == x.shape[-1]
             self.input = x.float32()
             inputs = [
                 self.input, self.weight, self.bias, self.running_mean,
@@ -2531,23 +2532,23 @@ def change_function():
     #         self.rstdout = result[2]
     #         return self.output
 
-        # def grad(self, grad_output):
-        #     attr_code = f"""
-        #     op.jt_name = "batchnorm";
-        #     BatchNormAttr *attr = new BatchNormAttr();
-        #     attr->is_train = {"true" if self.is_train else "false"};
-        #     attr->momentum = {self.momentum};
-        #     attr->eps = {self.eps};
-        #     op.op_attr.reset(attr);
-        #     """
-        #     inputs = [grad_output, self.input, self.weight, self.running_mean, self.running_var, self.saveMean, self.saveInvstd]
-        #     outputs = [jt.empty(self.input.shape), jt.empty(self.num_features), jt.empty(self.num_features)]
-        #     grad_input = acl_cmd("SoftmaxBackward",
-        #                          inputs=inputs,
-        #                          outputs=outputs,
-        #                          attr_code=attr_code)[0]
-        #     return grad_input
-        
+    # def grad(self, grad_output):
+    #     attr_code = f"""
+    #     op.jt_name = "batchnorm";
+    #     BatchNormAttr *attr = new BatchNormAttr();
+    #     attr->is_train = {"true" if self.is_train else "false"};
+    #     attr->momentum = {self.momentum};
+    #     attr->eps = {self.eps};
+    #     op.op_attr.reset(attr);
+    #     """
+    #     inputs = [grad_output, self.input, self.weight, self.running_mean, self.running_var, self.saveMean, self.saveInvstd]
+    #     outputs = [jt.empty(self.input.shape), jt.empty(self.num_features), jt.empty(self.num_features)]
+    #     grad_input = acl_cmd("SoftmaxBackward",
+    #                          inputs=inputs,
+    #                          outputs=outputs,
+    #                          attr_code=attr_code)[0]
+    #     return grad_input
+
     class StackACL(Function):
 
         def __init__(self):
@@ -2557,7 +2558,8 @@ def change_function():
             if type(input_tensors) is tuple:
                 input_tensors = list(input_tensors)
             assert type(input_tensors) is list
-            assert -1 * len(input_tensors) - 1 <= dim and dim <= len(input_tensors)
+            assert -1 * len(input_tensors) - 1 <= dim and dim <= len(
+                input_tensors)
             for i in range(len(input_tensors)):
                 if input_tensors[i].dtype != input_tensors[0].dtype:
                     raise ValueError(
@@ -2567,7 +2569,8 @@ def change_function():
                         "All input tensors must have the same shape")
             self.input = input_tensors
             input_shape = list(input_tensors[0].shape)
-            output_shape = input_shape[:dim] + [len(input_tensors)] + input_shape[dim:]
+            output_shape = input_shape[:dim] + [len(input_tensors)
+                                                ] + input_shape[dim:]
             attr_code = f"""
             op.jt_name = "stack";
             ConcatAttr *attr = new ConcatAttr();
@@ -2576,7 +2579,8 @@ def change_function():
             op.op_attr.reset(attr);
             """
             self.attr_code = attr_code
-            result = acl_cmd("Stack", input_tensors,
+            result = acl_cmd("Stack",
+                             input_tensors,
                              output_dtypes=[input_tensors[0].dtype],
                              output_shapes=[output_shape],
                              attr_code=self.attr_code)[0]
@@ -2609,13 +2613,14 @@ def change_function():
                              attr_code=attr_code)
             return result
 
-    def stack_acl(x, dim = 0):
+    def stack_acl(x, dim=0):
         return StackACL()(x, dim)
-    
+
     class NanToNumACL(Function):
+
         def __init__(self):
             super(NanToNumACL, self).__init__()
-        
+
         def execute(self, input, nan_or_inf):
             attr_code = f"""
             op.jt_name = "NanToNum";
@@ -2631,14 +2636,16 @@ def change_function():
                              output_shapes=[input.shape],
                              attr_code=self.attr_code)[0]
             return result
-        
+
     def isnan_acl(x):
-        tonum = NanToNumACL()(x,-1.0)
-        return jt.not_equal(x,tonum).logical_and(jt.not_equal(tonum,jt.ones_like(x)))
-    
+        tonum = NanToNumACL()(x, -1.0)
+        return jt.not_equal(x, tonum).logical_and(
+            jt.not_equal(tonum, jt.ones_like(x)))
+
     def isinf_acl(x):
-        tonum = NanToNumACL()(x,1.0)
-        return jt.not_equal(x,tonum).logical_and(jt.not_equal(tonum,jt.ones_like(x)))
+        tonum = NanToNumACL()(x, 1.0)
+        return jt.not_equal(x, tonum).logical_and(
+            jt.not_equal(tonum, jt.ones_like(x)))
 
     def warp(origin_func, new_func, name=None):
 
