@@ -226,9 +226,6 @@ namespace jittor
             std::vector<aclTensor *> inputTensors;
             std::vector<aclTensor *> outputTensors;
 
-            // for add and sub
-            aclScalar *alpha = nullptr;
-
             // for expand
             aclIntArray *size = nullptr;
 
@@ -253,66 +250,6 @@ namespace jittor
             // for leaky_relu
             aclScalar *negativeSlope = nullptr;
 
-            if (name == string("Add") || name == string("Sub"))
-            {
-
-                if (get_dtype(in_[0]->dtype()) == ACL_FLOAT)
-                {
-                    float alphaValue = 1.0;
-                    alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
-                }
-                else if (get_dtype(in_[0]->dtype()) == ACL_FLOAT16)
-                {
-                    __fp16 alphaValue = 1.0;
-                    alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
-                }
-                else if (get_dtype(in_[0]->dtype()) == ACL_INT64)
-                {
-                    int64_t alphaValue = 1;
-                    alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
-                }
-                else if (get_dtype(in_[0]->dtype()) == ACL_INT32)
-                {
-                    int alphaValue = 1;
-                    alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
-                }
-                else if (get_dtype(in_[0]->dtype()) == ACL_INT8)
-                {
-                    int8_t alphaValue = 1;
-                    alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
-                }
-                else if (get_dtype(in_[0]->dtype()) == ACL_INT16)
-                {
-                    int16_t alphaValue = 1;
-                    alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
-                }
-                else if (get_dtype(in_[0]->dtype()) == ACL_UINT8)
-                {
-                    uint8_t alphaValue = 1;
-                    alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
-                }
-                else if (get_dtype(in_[0]->dtype()) == ACL_UINT16)
-                {
-                    uint16_t alphaValue = 1;
-                    alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
-                }
-                else if (get_dtype(in_[0]->dtype()) == ACL_UINT32)
-                {
-                    uint32_t alphaValue = 1;
-                    alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
-                }
-                else if (get_dtype(in_[0]->dtype()) == ACL_BOOL)
-                {
-                    bool alphaValue = true;
-                    alpha = aclCreateScalar(&alphaValue, get_dtype(in_[0]->dtype()));
-                }
-                else
-                {
-                    LOGf << "Not supported dtype: " << in_[0]->dtype();
-                }
-
-                CHECK_RET(alpha != nullptr, return);
-            }
 
             if (jt_name == "conv" || jt_name == "conv2d" || jt_name == "conv2dbackward" || jt_name == "maxpool" || jt_name == "maxpoolbackward" || jt_name == "avgpool" || jt_name == "avgpoolbackward")
                 use_nchw = true;
@@ -395,19 +332,6 @@ namespace jittor
             // LOGir<<op_idx;
             switch (op_idx)
             {
-
-            case 1:
-            {
-                ret = it->second.getWorkspaceSizeFuncAdd(inputTensors[0], inputTensors[1], alpha, outputTensors[0], &workspaceSize, &executor);
-                break;
-            }
-
-            case 2:
-            {
-                ret = it->second.getWorkspaceSizeFuncAdd(inputTensors[0], inputTensors[1], alpha, outputTensors[0], &workspaceSize, &executor);
-                break;
-            }
-
             case 3:
             {
                 size = aclCreateIntArray(&outputShapes[0][0], outputShapes[0].size());
@@ -475,11 +399,6 @@ namespace jittor
             case 15:
             {
                 ret = it->second.getWorkspaceSizeFuncUnaryNonzero(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
-                break;
-            }
-            case 16:
-            {
-                ret = it->second.getWorkspaceSizeFuncSelect(inputTensors[0], inputTensors[1], inputTensors[2], outputTensors[0], &workspaceSize, &executor);
                 break;
             }
             case 17:
@@ -838,8 +757,8 @@ namespace jittor
             CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnxxx failed. ERROR: %d\n", name.c_str(), ret); return);
 
             // 6. （固定写法）同步等待任务执行结束
-            ret = aclrtSynchronizeStream(aclstream);
-            CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclrtSynchronizeStream failed. ERROR: %d\n", name.c_str(), ret); return);
+            // ret = aclrtSynchronizeStream(aclstream);
+            // CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclrtSynchronizeStream failed. ERROR: %d\n", name.c_str(), ret); return);
 
             // 6. 释放aclTensor和aclScalar，需要根据具体API的接口定义修改
             // destroy tensor
@@ -852,7 +771,6 @@ namespace jittor
                 aclDestroyTensor(outputTensors[idx]);
             }
             // destroy scalar
-            aclDestroyScalar(alpha);
             aclDestroyScalar(start);
             aclDestroyScalar(end);
             aclDestroyScalar(step);

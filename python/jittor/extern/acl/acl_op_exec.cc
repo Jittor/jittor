@@ -33,6 +33,7 @@
 #include "utils/str_utils.h"
 #include "aclnn/aclnn.h"
 #include "acl_op.h"
+#include "aclops/aclops.h"
 namespace jittor
 {
     void free_var_mem(Var *v);
@@ -64,6 +65,7 @@ namespace jittor
         {ns_acosh, "Acosh"},
         {ns_atanh, "Atanh"},
         {ns_sigmoid, "Sigmoid"},
+        
         {ns_erf, "Erf"},
         {ns_erfinv, "Erfinv"},
         {ns_logical_not, "LogicalNot"},
@@ -218,7 +220,7 @@ namespace jittor
                 if (op->name() == string("unary"))
                 {
                     auto uop = (UnaryOp *)op;
-                    AclOpRunner op("...");
+                    UnaryOpRunner op;
                     op.add(uop->x, true);
                     op.add(uop->y, false);
                     auto iter = opname_map.find(uop->ns);
@@ -230,7 +232,7 @@ namespace jittor
                 else if (op->name() == string("binary"))
                 {
                     auto bop = (BinaryOp *)op;
-                    AclOpRunner op("...");
+                    BinaryOpRunner op;
                     op.add(bop->x, true);
                     op.add(bop->y, true);
                     op.add(bop->z, false);
@@ -260,7 +262,7 @@ namespace jittor
                 else if (op->name() == string("ternary"))
                 {
                     auto top = (TernaryOp *)op;
-                    AclOpRunner op("Select");
+                    TernaryOpRunner op;
                     op.add(top->cond, true);
                     op.add(top->x, true);
                     op.add(top->y, true);
