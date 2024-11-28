@@ -3,3 +3,5 @@
 #include <acl/aclops/conv_op.h>
 #include <acl/aclops/ternary_op.h>
 #include <acl/aclops/reduce_op.h>
+#include <acl/aclops/acl_op.h>
+
