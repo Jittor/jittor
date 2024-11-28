@@ -185,7 +185,7 @@ def acl_cmd(name: str,
 
     # read the tmp_file.cpp to the cuda_header
 
-    cuda_header = '#include"acl/acl_op.h"'
+    cuda_header = '#include"acl/aclops/aclops.h"'
     import jittor as jt
     outputs_ = []
     if outputs is not None:
