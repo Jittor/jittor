@@ -2776,5 +2776,7 @@ def change_function():
     jt.nn.FlashAttention = warp(jt.nn.FlashAttention, FlashAttentionACL)
     jt.isnan = warp(jt.isnan, isnan_acl)
     jt.isinf = warp(jt.isinf, isinf_acl)
+    jt.Var.isnan = jt.isnan
+    jt.Var.isinf = jt.isinf
 
     jt.nn.rotary_emb = rope_acl
