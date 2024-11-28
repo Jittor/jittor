@@ -137,8 +137,8 @@ void CudnnRnnOp::grads(Var** dout, VarPtr* dins) {
 #pragma clang diagnostic ignored "-Wtautological-compare"
 
 template <typename T_ELEM> __inline__  cudnnDataType_t getDataType();
-template <> __inline__ cudnnDataType_t getDataType<half1>() { return CUDNN_DATA_HALF;   }
-template <> __inline__ cudnnDataType_t getDataType<float>() { return CUDNN_DATA_FLOAT;  }
+// template <> __inline__ cudnnDataType_t getDataType<half1>() { return CUDNN_DATA_HALF;   }
+// template <> __inline__ cudnnDataType_t getDataType<float>() { return CUDNN_DATA_FLOAT;  }
 
 void CudnnRnnOp::jit_run() {
     int num_directions = bidirectional + 1;
