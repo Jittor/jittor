@@ -181,11 +181,10 @@ def acl_cmd(name: str,
     #                cuda_header=cuda_header,
     #                cuda_src=f"""
     attr_header = "\nnamespace jittor{" + attr_header + "}\n"
-    # print(attr_header)
 
     # read the tmp_file.cpp to the cuda_header
 
-    cuda_header = '#include"acl/acl_op.h"'
+    cuda_header = '#include "acl/aclops/aclops.h"'
     import jittor as jt
     outputs_ = []
     if outputs is not None:
@@ -230,7 +229,7 @@ def acl_cmd_forward(name: str,
     attr_header = "\nnamespace jittor{" + attr_header + "}\n"
 
     cuda_header = '''
-    #include"acl/acl_op.h"
+    #include "acl/aclops/aclops.h"
     '''
     import jittor as jt
     outputs_ = []
