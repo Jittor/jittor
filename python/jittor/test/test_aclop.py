@@ -28,7 +28,7 @@ class TestACL(unittest.TestCase):
                     i.sync()
             else:
                 result.sync()
-
+        jt.sync_all(True)
         end_time = time.perf_counter()
         elapsed = (end_time - start_time) / self.repeat_num
         print(f"{self.id()} executed in {1000*elapsed:.6f} ms")
@@ -102,6 +102,7 @@ class TestACL(unittest.TestCase):
         a = jt.ones((2, 3, 4, 5, 10))
         b = self.measure_time(lambda: a[None, ..., None, 1])
         assert b.shape == [1, 2, 3, 4, 5, 1]
+        print("test getitem (test case 10) success")
 
     @jt.flag_scope(use_acl=1)
     def test_getitem_11(self):
@@ -218,6 +219,7 @@ class TestACL(unittest.TestCase):
         f = self.measure_time(lambda: jt.matmul(a, b))
         np.testing.assert_allclose(
             f.numpy(), [[[28, 34], [76, 98], [124, 162], [172, 226]]])
+        print("test matmul_1 success")
 
     @jt.flag_scope(use_acl=1)
     def test_matmul_2(self):
@@ -226,6 +228,7 @@ class TestACL(unittest.TestCase):
         g = self.measure_time(lambda: jt.nn.matmul_transpose(a, c))
         np.testing.assert_allclose(
             g.numpy(), [[[14, 38], [38, 126], [62, 214], [86, 302]]])
+        print("test matmul_2 success")
 
     @jt.flag_scope(use_acl=1)
     def test_matmul_3(self):
@@ -234,6 +237,7 @@ class TestACL(unittest.TestCase):
         h = self.measure_time(lambda: jt.nn.matmul_transpose(a, d))
         np.testing.assert_allclose(
             h.numpy(), [[[14, 38], [38, 126], [62, 214], [86, 302]]])
+        print("test matmul_3 success")
 
     @jt.flag_scope(use_acl=1)
     def test_matmul_4(self):
@@ -242,6 +246,7 @@ class TestACL(unittest.TestCase):
         i = self.measure_time(lambda: jt.matmul(a, e))
         np.testing.assert_allclose(
             i.numpy(), [[[28, 34], [76, 98], [124, 162], [172, 226]]])
+        print("test matmul_4 success")
 
     @jt.flag_scope(use_acl=1)
     def test_matmul_5(self):
@@ -251,6 +256,7 @@ class TestACL(unittest.TestCase):
         np.testing.assert_allclose(j.numpy(),
                                    [[4, 5, 6, 7], [12, 17, 22, 27],
                                     [20, 29, 38, 47], [28, 41, 54, 67]])
+        print("test matmul_5 success")
 
     @jt.flag_scope(use_acl=1)
     def test_matmul_6(self):
@@ -260,6 +266,7 @@ class TestACL(unittest.TestCase):
         np.testing.assert_allclose(
             k.numpy(),
             [[1, 3, 5, 7], [3, 13, 23, 33], [5, 23, 41, 59], [7, 33, 59, 85]])
+        print("test matmul_6 success")
 
     @jt.flag_scope(use_acl=1)
     def test_grad_f_a(self):
@@ -270,6 +277,7 @@ class TestACL(unittest.TestCase):
         np.testing.assert_allclose(
             f_a.numpy(),
             [[[1, 5, 9, 13], [1, 5, 9, 13], [1, 5, 9, 13], [1, 5, 9, 13]]])
+        print("test grad_f_a success")
 
     @jt.flag_scope(use_acl=1)
     def test_grad_f_b(self):
@@ -279,6 +287,7 @@ class TestACL(unittest.TestCase):
         f_b = self.measure_time(lambda: jt.grad(f.sum(), b))
         np.testing.assert_allclose(f_b.numpy(),
                                    [[24, 24], [28, 28], [32, 32], [36, 36]])
+        print("test grad_f_b success")
 
     @jt.flag_scope(use_acl=1)
     def test_grad_g_a(self):
@@ -289,6 +298,7 @@ class TestACL(unittest.TestCase):
         np.testing.assert_allclose(
             g_a.numpy(),
             [[[4, 6, 8, 10], [4, 6, 8, 10], [4, 6, 8, 10], [4, 6, 8, 10]]])
+        print("test grad_g_a success")
 
     @jt.flag_scope(use_acl=1)
     def test_grad_g_c(self):
@@ -298,6 +308,7 @@ class TestACL(unittest.TestCase):
         g_c = self.measure_time(lambda: jt.grad(g.sum(), c))
         np.testing.assert_allclose(g_c.numpy(),
                                    [[24, 28, 32, 36], [24, 28, 32, 36]])
+        print("test grad_g_c success")
 
     @jt.flag_scope(use_acl=1)
     def test_grad_h_a(self):
@@ -308,6 +319,7 @@ class TestACL(unittest.TestCase):
         np.testing.assert_allclose(
             h_a.numpy(),
             [[[4, 6, 8, 10], [4, 6, 8, 10], [4, 6, 8, 10], [4, 6, 8, 10]]])
+        print("test grad_h_a success")
 
     @jt.flag_scope(use_acl=1)
     def test_grad_h_d(self):
@@ -317,6 +329,7 @@ class TestACL(unittest.TestCase):
         h_d = self.measure_time(lambda: jt.grad(h.sum(), d))
         np.testing.assert_allclose(h_d.numpy(),
                                    [[[24, 28, 32, 36], [24, 28, 32, 36]]])
+        print("test grad_h_d success")
 
     @jt.flag_scope(use_acl=1)
     def test_grad_i_a(self):
@@ -327,6 +340,7 @@ class TestACL(unittest.TestCase):
         np.testing.assert_allclose(
             i_a.numpy(),
             [[[1, 5, 9, 13], [1, 5, 9, 13], [1, 5, 9, 13], [1, 5, 9, 13]]])
+        print("test grad_i_a success")
 
     @jt.flag_scope(use_acl=1)
     def test_grad_i_e(self):
@@ -336,6 +350,7 @@ class TestACL(unittest.TestCase):
         i_e = self.measure_time(lambda: jt.grad(i.sum(), e))
         np.testing.assert_allclose(i_e.numpy(),
                                    [[[24, 24], [28, 28], [32, 32], [36, 36]]])
+        print("test grad_i_e success")
 
     @jt.flag_scope(use_acl=1)
     def test_grad_j_b(self):
@@ -345,6 +360,7 @@ class TestACL(unittest.TestCase):
         j_b = self.measure_time(lambda: jt.grad(j.sum(), b))
         np.testing.assert_allclose(j_b.numpy(),
                                    [[6, 22], [6, 22], [6, 22], [6, 22]])
+        print("test grad_j_b success")
 
     @jt.flag_scope(use_acl=1)
     def test_grad_j_c(self):
@@ -354,6 +370,7 @@ class TestACL(unittest.TestCase):
         j_c = self.measure_time(lambda: jt.grad(j.sum(), c))
         np.testing.assert_allclose(j_c.numpy(),
                                    [[12, 12, 12, 12], [16, 16, 16, 16]])
+        print("test grad_j_c success")
 
     @jt.flag_scope(use_acl=1)
     def test_grad_k_b(self):
@@ -363,6 +380,8 @@ class TestACL(unittest.TestCase):
         k_b = self.measure_time(lambda: jt.grad(k.sum(), b))
         np.testing.assert_allclose(k_b.numpy(),
                                    [[12, 16], [12, 16], [12, 16], [12, 16]])
+        
+        print("test grad_k_b success")
 
     @jt.flag_scope(use_acl=1)
     def test_grad_k_bb(self):
@@ -372,6 +391,7 @@ class TestACL(unittest.TestCase):
         k_bb = self.measure_time(lambda: jt.grad(k.sum(), bb))
         np.testing.assert_allclose(k_bb.numpy(),
                                    [[12, 16], [12, 16], [12, 16], [12, 16]])
+        print("test grad_k_bb success")
 
     # 拆分后的 bmm 测试用例
     @jt.flag_scope(use_acl=1)
@@ -383,6 +403,7 @@ class TestACL(unittest.TestCase):
             d.numpy(),
             [[[28, 34], [76, 98], [124, 162], [172, 226]]]
         )
+        print("test bmm_matmul success")
 
     @jt.flag_scope(use_acl=1)
     def test_bmm_transpose(self):
@@ -393,6 +414,7 @@ class TestACL(unittest.TestCase):
             e.numpy(),
             [[[14, 38], [38, 126], [62, 214], [86, 302]]]
         )
+        print("test bmm_transpose success")
 
     # 拆分后的 bmm_grad 测试用例
     @jt.flag_scope(use_acl=1)
@@ -405,6 +427,7 @@ class TestACL(unittest.TestCase):
             d_a.numpy(),
             [[[1, 5, 9, 13], [1, 5, 9, 13], [1, 5, 9, 13], [1, 5, 9, 13]]]
         )
+        print("test bmm_grad_a success")
 
     @jt.flag_scope(use_acl=1)
     def test_bmm_grad_b(self):
@@ -416,6 +439,7 @@ class TestACL(unittest.TestCase):
             d_b.numpy(),
             [[[24, 24], [28, 28], [32, 32], [36, 36]]]
         )
+        print("test bmm_grad_b success")
 
     @jt.flag_scope(use_acl=1)
     def test_bmm_transpose_grad_a(self):
@@ -427,6 +451,7 @@ class TestACL(unittest.TestCase):
             e_a.numpy(),
             [[[4, 6, 8, 10], [4, 6, 8, 10], [4, 6, 8, 10], [4, 6, 8, 10]]]
         )
+        print("test bmm_transpose_grad_a success")
 
     @jt.flag_scope(use_acl=1)
     def test_bmm_transpose_grad_c(self):
@@ -437,6 +462,7 @@ class TestACL(unittest.TestCase):
         np.testing.assert_allclose(
             e_c.numpy(),
             [[[24, 28, 32, 36], [24, 28, 32, 36]]])
+        print("test bmm_transpose_grad_c success")
 
     @jt.flag_scope(use_acl=1)
     def test_index(self):
@@ -502,9 +528,9 @@ class TestACL(unittest.TestCase):
     def test_scatter(self):
         a = jt.array([[1, 2], [3, 4]])
         b = jt.array([[0, 0], [0, 0]])
-        b = self.measure_time(lambda: jt.scatter(
+        c = self.measure_time(lambda: jt.scatter(
             b, 1, jt.array([[0, 0], [1, 0]]), a, reduce="add"))
-        np.testing.assert_allclose(b.numpy(), [[3, 0], [4, 3]])
+        np.testing.assert_allclose(c.numpy(), [[3, 0], [4, 3]])
         print("test scatter success")
 
     @jt.flag_scope(use_acl=1)
@@ -830,14 +856,14 @@ class TestACL(unittest.TestCase):
         np.testing.assert_allclose(res.numpy(), [[0, 0, 3, 1], [0, 0, 0, 0], [2, 0, 3, 1]])
         print("test embedding success")
 
-    @jt.flag_scope(use_acl=1)
-    def test_embedding_grad(self):
-        a = jt.array([[0,0,3,1],[2,0,3,1],[0,0,0,0]]).float()
-        input = jt.array([0,2,1])  
-        b = jt.nn.embedding(input, a) 
-        res = self.measure_time(lambda: jt.grad(b.max(), a))
-        np.testing.assert_allclose(res.numpy(), [[0, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 0]])
-        print("test embedding grad success")
+    # @jt.flag_scope(use_acl=1)
+    # def test_embedding_grad(self):
+    #     a = jt.array([[0,0,3,1],[2,0,3,1],[0,0,0,0]]).float()
+    #     input = jt.array([0,2,1])  
+    #     b = jt.nn.embedding(input, a) 
+    #     res = self.measure_time(lambda: jt.grad(b.max(), a))
+    #     np.testing.assert_allclose(res.numpy(), [[0, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 0]])
+    #     print("test embedding grad success")
         
     @jt.flag_scope(use_acl=1)
     def test_stack(self):

@@ -328,9 +328,9 @@ namespace jittor
                            gwsf,
                        std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
             : getWorkspaceSizeFuncLayerNorm(gwsf), executeFunc(execf) {}
-        
+
         // for ROPE
-        AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclTensor *, const aclTensor *,const aclTensor *, int64_t, uint64_t *, aclOpExecutor **)> gwsf, 
+        AclOpFunctions(std::function<aclnnStatus(aclTensor *, aclTensor *, const aclTensor *, const aclTensor *, int64_t, uint64_t *, aclOpExecutor **)> gwsf,
                        std::function<aclnnStatus(void *, uint64_t, aclOpExecutor *, const aclrtStream)> execf)
             : getWorkspaceSizeFuncRotaryPosEmb(gwsf), executeFunc(execf) {}
     };

@@ -91,7 +91,7 @@ namespace jittor
         {ns_logical_xor, "LogicalXor"},
         {ns_bitwise_and, "BitwiseAnd"},
         {ns_bitwise_or, "BitwiseOr"},
-        {ns_bitwise_xor, "BitwiseXor"},///
+        {ns_bitwise_xor, "BitwiseXor"},
     };
 
     void fallback_cpu(Op *op)
@@ -303,13 +303,13 @@ namespace jittor
                     op.op_attr.reset(attr);
                     op.add(rop->y, false);
                     op.run();
+                    
                 }
                 else if (op->name() == string("broadcast_to"))
                 {
                     auto bop = (BroadcastToOp *)op;
                     AclOpRunner op("Expand");
                     op.jt_name = "expand";
-
                     NanoVector xshape, xshape_bk = bop->x->shape;
                     NanoVector zshape = bop->z->shape;
                     for (int i = 0; i < zshape.size(); i++)
