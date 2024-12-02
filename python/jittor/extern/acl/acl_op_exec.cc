@@ -303,7 +303,6 @@ namespace jittor
                     op.op_attr.reset(attr);
                     op.add(rop->y, false);
                     op.run();
-                    
                 }
                 else if (op->name() == string("broadcast_to"))
                 {

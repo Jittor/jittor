@@ -81,7 +81,7 @@ namespace jittor
             }
         }
 
-        void setupOutputDesc()
+        virtual void setupOutputDesc()
         {
             auto output_num = out_.size();
 
