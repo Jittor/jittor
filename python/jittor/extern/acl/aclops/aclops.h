@@ -1,6 +1,7 @@
-#include <acl/aclops/binary_op.h>
-#include <acl/aclops/unary_op.h>
-#include <acl/aclops/conv_op.h>
-#include <acl/aclops/ternary_op.h>
-#include <acl/aclops/reduce_op.h>
+#pragma once
+#include <acl/aclops/binary_op_acl.h>
+#include <acl/aclops/unary_op_acl.h>
+#include <acl/aclops/conv_op_acl.h>
+#include <acl/aclops/ternary_op_acl.h>
+#include <acl/aclops/reduce_op_acl.h>
 #include <acl/aclops/acl_op.h>
