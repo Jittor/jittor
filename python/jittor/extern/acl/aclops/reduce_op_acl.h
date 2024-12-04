@@ -11,7 +11,6 @@ namespace jittor
         ReduceOpRunner();
 
     protected:
-        bool is_group_op = false;
         ReduceAttr *attr;
         aclIntArray *dim;
         bool keepdims;

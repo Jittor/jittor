@@ -32,6 +32,7 @@ namespace jittor
 {
     BinaryOpRunner::BinaryOpRunner() : BaseOpRunner("binary")
     {
+        is_group_op = true;
     }
 
     void BinaryOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
@@ -99,6 +100,7 @@ namespace jittor
             ret = it->second.getWorkspaceSizeFuncAdd(inputTensors[0], inputTensors[1], alpha, outputTensors[0], &workspaceSize, &executor);
         }
         else
+
         {
             ret = it->second.getWorkspaceSizeFuncBinary(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
         }
