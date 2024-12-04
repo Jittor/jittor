@@ -33,6 +33,7 @@ namespace jittor
 {
     ReduceOpRunner::ReduceOpRunner() : BaseOpRunner("reduce")
     {
+        use_nchw = false;
     }
 
     void ReduceOpRunner::setupOutputDesc()

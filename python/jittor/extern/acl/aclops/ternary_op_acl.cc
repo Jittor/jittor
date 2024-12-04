@@ -32,6 +32,7 @@ namespace jittor
 {
     TernaryOpRunner::TernaryOpRunner() : BaseOpRunner("ternary")
     {
+        use_nchw = false;
     }
 
     void TernaryOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)

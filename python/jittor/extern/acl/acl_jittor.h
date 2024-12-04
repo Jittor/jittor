@@ -385,7 +385,6 @@ namespace jittor
         {"Expand", AclOpFunctions(aclnnExpandGetWorkspaceSize, aclnnExpand)},
         {"MatMul", AclOpFunctions(aclnnMatmulGetWorkspaceSize, aclnnMatmul)},
         {"BatchMatMul", AclOpFunctions(aclnnBatchMatMulGetWorkspaceSize, aclnnBatchMatMul)},
-        {"Conv2D", AclOpFunctions(aclnnConvolutionGetWorkspaceSize, aclnnConvolution)},
         {"ReduceMax", AclOpFunctions(aclnnAmaxGetWorkspaceSize, aclnnAmax)},
         {"ReduceMin", AclOpFunctions(aclnnAminGetWorkspaceSize, aclnnAmin)},
         {"ReduceSum", AclOpFunctions(aclnnReduceSumGetWorkspaceSize, aclnnReduceSum)},

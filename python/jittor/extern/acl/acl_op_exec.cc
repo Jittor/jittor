@@ -154,9 +154,9 @@ namespace jittor
         std::queue<Op *> queue;
 
         for (Op *op : fop->ops)
-            op_indeg[op] = 0;
+            op_indeg[op] = 0; 
 
-        map<Op *, vector<Op *>> out_map;
+        map<Op *, vector<Op *>> out_map;   
         map<Var *, vector<Op *>> from;
 
         int len = 0;

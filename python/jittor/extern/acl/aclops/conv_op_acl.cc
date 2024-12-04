@@ -32,16 +32,16 @@ namespace jittor
 {
     ConvOpRunner::ConvOpRunner() : BaseOpRunner("Conv2d")
     {
+        use_nchw = true;
     }
-
+        
     void ConvOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
     {
-        // for conv
+        // for conv 
         aclIntArray *strides = nullptr;
         aclIntArray *pads = nullptr;
         aclIntArray *outPads = nullptr;
         aclIntArray *dilations = nullptr;
-
         auto attr = dynamic_cast<ConvAttr *>(op_attr.get());
         strides = aclCreateIntArray(attr->convStrides.data(), 2);
         pads = aclCreateIntArray(attr->convPads.data(), 2);
@@ -54,7 +54,7 @@ namespace jittor
         if (input_num == 3)
             bias = inputTensors[2];
 
-        ret = it->second.getWorkspaceSizeFuncConv(inputTensors[0], inputTensors[1], bias, strides, pads, dilations, false, outPads, attr->group, outputTensors[0], 0, &workspaceSize, &executor);
+        ret = aclnnConvolutionGetWorkspaceSize(inputTensors[0], inputTensors[1], bias, strides, pads, dilations, false, outPads, attr->group, outputTensors[0], 0, &workspaceSize, &executor);
 
         checkRet(ret);
 
@@ -63,7 +63,7 @@ namespace jittor
             mallocWorkSpace(workspaceSize);
         }
 
-        ret = it->second.executeFunc(workspaceAddr, workspaceSize, executor, aclstream);
+        ret = aclnnConvolution(workspaceAddr, workspaceSize, executor, aclstream);
         CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnxxx failed. ERROR: %d\n", name.c_str(), ret); return);
 
         syncRun();
