@@ -9,7 +9,6 @@ namespace jittor
         UnaryOpRunner();
 
     protected:
-        bool is_group_op = true;
         void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
     };
 }

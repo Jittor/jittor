@@ -32,6 +32,7 @@ namespace jittor
 {
     ConvOpRunner::ConvOpRunner() : BaseOpRunner("Conv2d")
     {
+        use_nchw = true;
     }
 
     void ConvOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)

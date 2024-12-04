@@ -33,6 +33,7 @@ namespace jittor
 {
     UnaryOpRunner::UnaryOpRunner() : BaseOpRunner("unary")
     {
+        is_group_op = true;
     }
 
     void UnaryOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
