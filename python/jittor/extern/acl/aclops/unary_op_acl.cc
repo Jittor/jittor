@@ -33,6 +33,7 @@ namespace jittor
 {
     UnaryOpRunner::UnaryOpRunner() : BaseOpRunner("unary")
     {
+        use_nchw = false;
     }
 
     void UnaryOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)

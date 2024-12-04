@@ -12,7 +12,6 @@ namespace jittor
         vector<Var *> out_;
 
         int ret = -1;
-        bool use_nchw = false;
         uint64_t workspaceSize = 0;
         aclOpExecutor *executor;
         bool is_group_op = false;
@@ -27,6 +26,7 @@ namespace jittor
         string name;
         string jt_name;
         std::unique_ptr<AclOpAttr> op_attr;
+        bool use_nchw;
 
         BaseOpRunner(const string &name = "") : name(name) {}
         virtual ~BaseOpRunner() = default;
@@ -48,7 +48,6 @@ namespace jittor
         void setupInputDesc()
         {
             auto input_num = in_.size();
-
             for (int input_idx = 0; input_idx < input_num; input_idx++)
             {
                 std::vector<int64_t> shape;
@@ -121,7 +120,7 @@ namespace jittor
         }
 
         // Base run method with common operator lookup logic
-        virtual void run()
+        void run()
         {
             if (is_group_op)
             {
