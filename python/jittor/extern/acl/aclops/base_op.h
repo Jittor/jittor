@@ -26,7 +26,7 @@ namespace jittor
         string name;
         string jt_name;
         std::unique_ptr<AclOpAttr> op_attr;
-        bool use_nchw;
+        bool use_nchw = false;
 
         BaseOpRunner(const string &name = "") : name(name) {}
         virtual ~BaseOpRunner() = default;

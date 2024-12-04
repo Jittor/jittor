@@ -48,11 +48,46 @@ def conv_forward(name: str,
     input_code = ''
     for i in range(len(inputs)):
         input_code += f"op.add(in{i}, true);\n"
+    
+    return jt.code(outputs=outputs_,
+                   inputs=inputs,
+                   cuda_header=attr_header + cuda_header,
+                   cuda_src=f"""
+    // aclop
+    ConvOpRunner op;
+    {input_code}
+    op.add(out0, false);
+    {attr_code}
+    op.run();""",
+    data=extra_data)
 
-    # output_code = ''
-    # for i in range(len(outputs_)):
-    #     output_code += f"op.add(out{i}, false);\n"
+def conv_forward(name: str,
+                    inputs: list,
+                    output_dtypes: list = None,
+                    output_shapes: list = None,
+                    attr_code: str = "",
+                    attr_header: str = "",
+                    outputs: list = None,
+                    extra_data: dict = {}):
+    # TODO: not done for now
+    attr_header = "\nnamespace jittor{" + attr_header + "}\n"
 
+    cuda_header = '''
+    #include "acl/aclops/aclops.h"
+    '''
+    outputs_ = []
+    if outputs is not None:
+        outputs_ = outputs
+    else:
+        assert output_dtypes is not None
+        assert output_shapes is not None
+        assert len(output_dtypes) == len(output_shapes)
+        for i in range(len(output_shapes)):
+            outputs_.append(jt.empty(output_shapes[i], output_dtypes[i]))
+    input_code = ''
+    for i in range(len(inputs)):
+        input_code += f"op.add(in{i}, true);\n"
+    
     return jt.code(outputs=outputs_,
                    inputs=inputs,
                    cuda_header=attr_header + cuda_header,
