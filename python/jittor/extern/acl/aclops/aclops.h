@@ -4,4 +4,6 @@
 #include <acl/aclops/conv_op_acl.h>
 #include <acl/aclops/ternary_op_acl.h>
 #include <acl/aclops/reduce_op_acl.h>
+#include <acl/aclops/getitem_op_acl.h>
+#include <acl/aclops/setitem_op_acl.h>
 #include <acl/aclops/acl_op.h>
