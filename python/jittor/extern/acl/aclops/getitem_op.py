@@ -18,35 +18,11 @@ def getitem_cmd(name: str,
             attr_code: str = "",
             attr_header: str = "",
             outputs: list = None):
-    #         inputs: list,
-    #         output_dtypes: list,
-    #         output_shapes: list,
-    #         attr_code: str = ""):
-    # input_code = ''
-    # for i in range(len(inputs)):
-    #     input_code += f"op.add(in{i}, true);\n"
-
-    # output_code = ''
-    # for i in range(len(output_dtypes)):
-    #     output_code += f"op.add(out{i}, false);\n"
-
-    # # read the tmp_file.cpp to the cuda_header
-    # with open(
-    #         "/home/ma-user/work/zy/JittorHW/python/jittor/extern/acl/tmp_file.cpp",
-    #         "r") as f:
-    #     cuda_header = f.read()
-    # import jittor as jt
-    # return jt.code(output_shapes,
-    #                output_dtypes,
-    #                inputs,
-    #                cuda_header=cuda_header,
-    #                cuda_src=f"""
     attr_header = "\nnamespace jittor{" + attr_header + "}\n"
 
-    # read the tmp_file.cpp to the cuda_header
-
-    cuda_header = '#include "acl/aclops/aclops.h"'
-    import jittor as jt
+    cuda_header = '''
+    #include "acl/aclops/aclops.h"
+    '''
     outputs_ = []
     if outputs is not None:
         outputs_ = outputs
@@ -54,11 +30,8 @@ def getitem_cmd(name: str,
         assert output_dtypes is not None
         assert output_shapes is not None
         assert len(output_dtypes) == len(output_shapes)
-        # print(f'{name } output_dtypes', output_dtypes)
-        # print(f'{name } output_shapes', output_shapes)
         for i in range(len(output_shapes)):
             outputs_.append(jt.empty(output_shapes[i], output_dtypes[i]))
-    # print(f'{name } outputs_', outputs_)
     input_code = ''
     for i in range(len(inputs)):
         input_code += f"op.add(in{i}, true);\n"
@@ -72,7 +45,7 @@ def getitem_cmd(name: str,
                    cuda_src=f"""
    
     // aclop
-    AclOpRunner op("{name}");
+    {name}OpRunner op;
     {input_code}
     {output_code}
     {attr_code}
@@ -91,7 +64,6 @@ def getitem_forward(name: str,
     cuda_header = '''
     #include "acl/aclops/aclops.h"
     '''
-    import jittor as jt
     outputs_ = []
     if outputs is not None:
         outputs_ = outputs
@@ -99,11 +71,8 @@ def getitem_forward(name: str,
         assert output_dtypes is not None
         assert output_shapes is not None
         assert len(output_dtypes) == len(output_shapes)
-        # print(f'{name } output_dtypes', output_dtypes)
-        # print(f'{name } output_shapes', output_shapes)
         for i in range(len(output_shapes)):
             outputs_.append(jt.empty(output_shapes[i], output_dtypes[i]))
-    # print(f'{name } outputs_', outputs_)
     input_code = ''
     for i in range(len(inputs)):
         input_code += f"op.add(in{i}, true);\n"
@@ -111,18 +80,17 @@ def getitem_forward(name: str,
     output_code = ''
     for i in range(len(outputs_)):
         output_code += f"op.add(out{i}, false);\n"
-
     return jt.code(outputs=outputs_,
                    inputs=inputs,
                    cuda_header=attr_header + cuda_header,
                    cuda_src=f"""
     // aclop
-    AclOpRunner op("{name}");
+    {name}OpRunner op;
     {input_code}
-    {output_code}
+    op.add(out0, false);
     {attr_code}
     op.run();""",
-                   data=extra_data)
+    data=extra_data)
 
 def caculate_shape(tensors):
     if isinstance(tensors, jt.Var):
