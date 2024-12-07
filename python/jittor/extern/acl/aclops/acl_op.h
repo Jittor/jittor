@@ -388,54 +388,54 @@ namespace jittor
                 ret = it->second.getWorkspaceSizeFuncUnaryNonzero(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
                 break;
             }
-            case 32:
-            {
-                auto indexTensorList = aclCreateTensorList(&inputTensors[1], input_num - 1);
-                ret = it->second.getWorkspaceSizeFuncIndex(inputTensors[0], indexTensorList, outputTensors[0], &workspaceSize, &executor);
-                break;
-            }
-            case 33:
-            {
-                auto attr = dynamic_cast<StrideAttr *>(op_attr.get());
-                auto begins = aclCreateIntArray(attr->begins.data(), attr->begins.size());
-                auto ends = aclCreateIntArray(attr->ends.data(), attr->ends.size());
-                auto steps = aclCreateIntArray(attr->steps.data(), attr->steps.size());
-                auto axes = aclCreateIntArray(attr->axes.data(), attr->axes.size());
-                ret = it->second.getWorkspaceSizeFuncSliceV2(inputTensors[0], begins, ends, axes, steps, outputTensors[0], &workspaceSize, &executor);
-                break;
-            }
-            case 34:
-            {
-                std::vector<aclTensor *> indexTensorList = {};
-                for (int i = 1; i < input_num; i++)
-                {
-                    indexTensorList.push_back(inputTensors[i]);
-                }
-                auto indexTensorListInput = aclCreateTensorList(&indexTensorList[0], input_num - 1);
-                ret = it->second.getWorkspaceSizeFuncIndexPutImpl(outputTensors[0], indexTensorListInput, inputTensors[0], false, true, &workspaceSize, &executor);
-                break;
-            }
-            case 35:
-            {
-                std::vector<aclTensor *> indexTensorList = {};
-                for (int i = 1; i < input_num; i++)
-                {
-                    indexTensorList.push_back(inputTensors[i]);
-                }
-                auto indexTensorListInput = aclCreateTensorList(&indexTensorList[0], input_num - 1);
-                ret = it->second.getWorkspaceSizeFuncIndexPutImpl(outputTensors[0], indexTensorListInput, inputTensors[0], true, true, &workspaceSize, &executor);
-                break;
-            }
-            case 36:
-            {
-                auto attr = dynamic_cast<StrideAttr *>(op_attr.get());
-                auto begins = aclCreateIntArray(attr->begins.data(), attr->begins.size());
-                auto ends = aclCreateIntArray(attr->ends.data(), attr->ends.size());
-                auto steps = aclCreateIntArray(attr->steps.data(), attr->steps.size());
-                auto axes = aclCreateIntArray(attr->axes.data(), attr->axes.size());
-                ret = it->second.getWorkspaceSizeFuncStridedSliceAssignV2(outputTensors[0], inputTensors[0], begins, ends, steps, axes, &workspaceSize, &executor);
-                break;
-            }
+            // case 32:
+            // {
+            //     auto indexTensorList = aclCreateTensorList(&inputTensors[1], input_num - 1);
+            //     ret = it->second.getWorkspaceSizeFuncIndex(inputTensors[0], indexTensorList, outputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
+            // case 33:
+            // {
+            //     auto attr = dynamic_cast<StrideAttr *>(op_attr.get());
+            //     auto begins = aclCreateIntArray(attr->begins.data(), attr->begins.size());
+            //     auto ends = aclCreateIntArray(attr->ends.data(), attr->ends.size());
+            //     auto steps = aclCreateIntArray(attr->steps.data(), attr->steps.size());
+            //     auto axes = aclCreateIntArray(attr->axes.data(), attr->axes.size());
+            //     ret = it->second.getWorkspaceSizeFuncSliceV2(inputTensors[0], begins, ends, axes, steps, outputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
+            // case 34:
+            // {
+            //     std::vector<aclTensor *> indexTensorList = {};
+            //     for (int i = 1; i < input_num; i++)
+            //     {
+            //         indexTensorList.push_back(inputTensors[i]);
+            //     }
+            //     auto indexTensorListInput = aclCreateTensorList(&indexTensorList[0], input_num - 1);
+            //     ret = it->second.getWorkspaceSizeFuncIndexPutImpl(outputTensors[0], indexTensorListInput, inputTensors[0], false, true, &workspaceSize, &executor);
+            //     break;
+            // }
+            // case 35:
+            // {
+            //     std::vector<aclTensor *> indexTensorList = {};
+            //     for (int i = 1; i < input_num; i++)
+            //     {
+            //         indexTensorList.push_back(inputTensors[i]);
+            //     }
+            //     auto indexTensorListInput = aclCreateTensorList(&indexTensorList[0], input_num - 1);
+            //     ret = it->second.getWorkspaceSizeFuncIndexPutImpl(outputTensors[0], indexTensorListInput, inputTensors[0], true, true, &workspaceSize, &executor);
+            //     break;
+            // }
+            // case 36:
+            // {
+            //     auto attr = dynamic_cast<StrideAttr *>(op_attr.get());
+            //     auto begins = aclCreateIntArray(attr->begins.data(), attr->begins.size());
+            //     auto ends = aclCreateIntArray(attr->ends.data(), attr->ends.size());
+            //     auto steps = aclCreateIntArray(attr->steps.data(), attr->steps.size());
+            //     auto axes = aclCreateIntArray(attr->axes.data(), attr->axes.size());
+            //     ret = it->second.getWorkspaceSizeFuncStridedSliceAssignV2(outputTensors[0], inputTensors[0], begins, ends, steps, axes, &workspaceSize, &executor);
+            //     break;
+            // }
             case 37:
             {
                 ret = it->second.getWorkspaceSizeFuncRange(start, end, step, outputTensors[0], &workspaceSize, &executor);

@@ -1,3 +1,4 @@
+#pragma once
 #include <acl/acl.h>
 #include <acl/acl_op_compiler.h>
 #include <Python.h>
@@ -33,7 +34,7 @@ namespace jittor
     MaskedSelectOpRunner::MaskedSelectOpRunner() : BaseOpRunner("MaskedSelect")
     {
     }
-        
+
     void MaskedSelectOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
     {
         ret = aclnnMaskedSelectGetWorkspaceSize(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
@@ -46,7 +47,7 @@ namespace jittor
         }
 
         ret = aclnnMaskedSelect(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnxxx failed. ERROR: %d\n", name.c_str(), ret); return);
+        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnMaskedSelect failed. ERROR: %d\n", name.c_str(), ret); return);
 
         syncRun();
         return;
@@ -71,13 +72,13 @@ namespace jittor
         }
 
         ret = aclnnIndex(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnxxx failed. ERROR: %d\n", name.c_str(), ret); return);
+        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnIndex failed. ERROR: %d\n", name.c_str(), ret); return);
 
         syncRun();
         return;
     }
 
-    SliceV2OpRunner::SliceV2OpRunner() : BaseOpRunner("Index")
+    SliceV2OpRunner::SliceV2OpRunner() : BaseOpRunner("SliceV2")
     {
     }
         
@@ -98,7 +99,7 @@ namespace jittor
         }
 
         ret = aclnnSliceV2(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnxxx failed. ERROR: %d\n", name.c_str(), ret); return);
+        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnSliceV2 failed. ERROR: %d\n", name.c_str(), ret); return);
 
         syncRun();
 
@@ -129,7 +130,7 @@ namespace jittor
         }
 
         ret = aclnnIndexPutImpl(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnxxx failed. ERROR: %d\n", name.c_str(), ret); return);
+        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnIndexPutImpl failed. ERROR: %d\n", name.c_str(), ret); return);
 
         syncRun();
 
@@ -158,8 +159,8 @@ namespace jittor
             mallocWorkSpace(workspaceSize);
         }
 
-        ret = aclnnIndexPutImpl(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnxxx failed. ERROR: %d\n", name.c_str(), ret); return);
+        ret = aclnnStridedSliceAssignV2(workspaceAddr, workspaceSize, executor, aclstream);
+        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnStridedSliceAssignV2 failed. ERROR: %d\n", name.c_str(), ret); return);
 
         syncRun();
 
