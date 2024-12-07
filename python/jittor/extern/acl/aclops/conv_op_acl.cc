@@ -37,7 +37,7 @@ namespace jittor
         
     void ConvOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
     {
-        // for conv 
+        // for conv
         aclIntArray *strides = nullptr;
         aclIntArray *pads = nullptr;
         aclIntArray *outPads = nullptr;

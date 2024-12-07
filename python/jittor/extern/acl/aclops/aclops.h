@@ -1,4 +1,5 @@
 #pragma once
+#include <acl/aclops/acl_op.h>
 #include <acl/aclops/binary_op_acl.h>
 #include <acl/aclops/unary_op_acl.h>
 #include <acl/aclops/conv_op_acl.h>
@@ -6,4 +7,5 @@
 #include <acl/aclops/reduce_op_acl.h>
 #include <acl/aclops/getitem_op_acl.h>
 #include <acl/aclops/setitem_op_acl.h>
-#include <acl/aclops/acl_op.h>
+#include <acl/aclops/matmul_op_acl.h>
+#include <acl/aclops/bmm_op_acl.h>

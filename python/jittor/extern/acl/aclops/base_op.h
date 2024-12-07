@@ -45,7 +45,7 @@ namespace jittor
             return;
         }
 
-        void setupInputDesc()
+        virtual void setupInputDesc()
         {
             auto input_num = in_.size();
             for (int input_idx = 0; input_idx < input_num; input_idx++)
