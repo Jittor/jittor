@@ -46,7 +46,7 @@ namespace jittor
         }
 
         ret = aclnnInplaceMaskedScatter(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnInplaceMaskedScatter failed. ERROR: %d\n", name.c_str(), ret); return);
+        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnxxx failed. ERROR: %d\n", name.c_str(), ret); return);
 
         syncRun();
         return;
@@ -75,7 +75,7 @@ namespace jittor
         }
 
         ret = aclnnIndexPutImpl(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnIndexPutImpl failed. ERROR: %d\n", name.c_str(), ret); return);
+        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnxxx failed. ERROR: %d\n", name.c_str(), ret); return);
 
         syncRun();
         return;
