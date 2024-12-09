@@ -244,18 +244,18 @@ namespace jittor
                 //     break;
                 // }
 
-            case 13:
-            {
-                auto attr = dynamic_cast<RandomAttr *>(op_attr.get());
-                ret = it->second.getWorkspaceSizeFuncRandom(outputTensors[0], 0.0, 1.0, attr->seed, attr->offset, &workspaceSize, &executor);
-                break;
-            }
-            case 14:
-            {
-                auto attr = dynamic_cast<RandomAttr *>(op_attr.get());
-                ret = it->second.getWorkspaceSizeFuncRandom(outputTensors[0], 0.0, 1.0, attr->seed, attr->offset, &workspaceSize, &executor);
-                break;
-            }
+            // case 13:
+            // {
+            //     auto attr = dynamic_cast<RandomAttr *>(op_attr.get());
+            //     ret = it->second.getWorkspaceSizeFuncRandom(outputTensors[0], 0.0, 1.0, attr->seed, attr->offset, &workspaceSize, &executor);
+            //     break;
+            // }
+            // case 14:
+            // {
+            //     auto attr = dynamic_cast<RandomAttr *>(op_attr.get());
+            //     ret = it->second.getWorkspaceSizeFuncRandom(outputTensors[0], 0.0, 1.0, attr->seed, attr->offset, &workspaceSize, &executor);
+            //     break;
+            // }
             case 15:
             {
                 ret = it->second.getWorkspaceSizeFuncUnaryNonzero(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
@@ -499,16 +499,16 @@ namespace jittor
                 ret = it->second.getWorkspaceSizeFuncEmbeddingBackward(inputTensors[0], inputTensors[1], numEmbeddings, 0, false, outputTensors[0], &workspaceSize, &executor);
                 break;
             }
-            case 48:
-            {
-                ret = it->second.getWorkspaceSizeFuncBinary(outputTensors[0], inputTensors[1], inputTensors[0], &workspaceSize, &executor);
-                break;
-            }
-            case 49:
-            {
-                ret = it->second.getWorkspaceSizeFuncBinary(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
-                break;
-            }
+            // case 48:
+            // {
+            //     ret = it->second.getWorkspaceSizeFuncBinary(outputTensors[0], inputTensors[1], inputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
+            // case 49:
+            // {
+            //     ret = it->second.getWorkspaceSizeFuncBinary(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
             case 50:
             {
                 auto attr = dynamic_cast<SplitWithSizeAttr *>(op_attr.get());
