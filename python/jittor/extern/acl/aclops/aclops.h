@@ -8,4 +8,5 @@
 #include <acl/aclops/getitem_op_acl.h>
 #include <acl/aclops/setitem_op_acl.h>
 #include <acl/aclops/matmul_op_acl.h>
+#include <acl/aclops/random_op_acl.h>
 #include <acl/aclops/bmm_op_acl.h>

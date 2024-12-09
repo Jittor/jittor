@@ -31,49 +31,51 @@
 
 namespace jittor
 {
-    RandomUniformOpRunner::RandomUniformOpRunner() : BaseOpRunner("RandomUniform")
+    RandomOpRunner::RandomOpRunner() : BaseOpRunner("RandomUniform")
     {
+        name = "RandomUniform";
     }
-    void RandomUniformOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+
+    RandomOpRunner::RandomOpRunner(const string &_name) : BaseOpRunner(_name)
     {
-       
+        name = _name;
+    }
+
+    void RandomOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    {
         auto attr = dynamic_cast<RandomAttr *>(op_attr.get());
-        ret = aclnnInplaceUniformGetWorkspaceSize(outputTensors[0], 0.0, 1.0, attr->seed, attr->offset, &workspaceSize, &executor);
-
-        checkRet(ret);
-
-        if (workspaceSize > 0)
+        if(name == "RandomUniform")
         {
-            mallocWorkSpace(workspaceSize);
+            ret = aclnnInplaceUniformGetWorkspaceSize(outputTensors[0], 0.0, 1.0, attr->seed, attr->offset, &workspaceSize, &executor);
+
+            checkRet(ret);
+
+            if (workspaceSize > 0)
+            {
+                mallocWorkSpace(workspaceSize);
+            }
+
+            ret = aclnnInplaceUniform(workspaceAddr, workspaceSize, executor, aclstream);
+            CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnInplaceUniform failed. ERROR: %d\n", name.c_str(), ret); return);
         }
-
-        ret = aclnnInplaceUniform(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnInplaceUniform failed. ERROR: %d\n", name.c_str(), ret); return);
-
-        syncRun();
-        return;
-    }
-
-
-    RandomNormalOpRunner::RandomNormalOpRunner() : BaseOpRunner("RandomNormal")
-    {
-    }
-    void RandomNormalOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
-    {
-       
-        auto attr = dynamic_cast<RandomAttr *>(op_attr.get());
-        ret = aclnnInplaceNormalGetWorkspaceSize(outputTensors[0], 0.0, 1.0, attr->seed, attr->offset, &workspaceSize, &executor);
-
-        checkRet(ret);
-
-        if (workspaceSize > 0)
+        else if(name == "RandomNormal")
         {
-            mallocWorkSpace(workspaceSize);
+            ret = aclnnInplaceNormalGetWorkspaceSize(outputTensors[0], 0.0, 1.0, attr->seed, attr->offset, &workspaceSize, &executor);
+
+            checkRet(ret);
+
+            if (workspaceSize > 0)
+            {
+                mallocWorkSpace(workspaceSize);
+            }
+
+            ret = aclnnInplaceNormal(workspaceAddr, workspaceSize, executor, aclstream);
+            CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnInplaceNormal failed. ERROR: %d\n", name.c_str(), ret); return);
         }
-
-        ret = aclnnInplaceNormal(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnInplaceNormal failed. ERROR: %d\n", name.c_str(), ret); return);
-
+        else
+        {
+            LOGf << "Not supported random type : " << name;
+        }
         syncRun();
         return;
     }
