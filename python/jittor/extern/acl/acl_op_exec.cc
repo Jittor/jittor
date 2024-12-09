@@ -386,7 +386,7 @@ namespace jittor
         {"curand_random", [&current_seed, &current_offset](Op *op)
          {
              auto _op = (RandomOp *)op;
-             AclOpRunner runner(_op->type == ns_uniform ? "RandomUniform" : "RandomNormal");
+             RandomOpRunner runner(_op->type == ns_uniform ? "RandomUniform" : "RandomNormal");
              auto out = op->output(0);
              RandomAttr *attr = new RandomAttr();
              attr->seed = current_seed;
