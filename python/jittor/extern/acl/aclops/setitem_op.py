@@ -167,14 +167,14 @@ class SetItemACL(jt.Function):
                 if slices_len == 0:
                     return x
                 if isinstance(value, int) or isinstance(value, float):
-                    value = jt.full((slices_len, ), value)
+                    value = jt.full((slices_len, ), value, dtype=x.dtype)
                 assert slices.shape == x.shape, "setitem shape not match"
                 assert len(value.shape) == 1, "value shape must be 1D"
                 assert value.shape[
                     0] == slices_len, "value shape length must be equal to slices sum"
                 self.type_ = 'mask'
                 self.value_shape = value.shape
-                inputs = [value, slices]
+                inputs = [slices, value]
                 outputs = [x.clone()]
                 attr_code = f"""
                 op.jt_name = "inplacemaskedscatter";

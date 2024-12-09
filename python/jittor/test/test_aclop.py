@@ -125,21 +125,37 @@ class TestACL(unittest.TestCase):
         b = self.measure_time(lambda: a[index])
         np.testing.assert_allclose(b.numpy(), [[1, 2, 3], [4, 5, 6], [4, 5, 6]])
         print("test getitem (test case 13) success")
+        
+    @jt.flag_scope(use_acl=1)
+    def test_getitem_14(self):
+        a = jt.array([[1, 2], [3, 4]])
+        index = jt.array([[False,True],[True, False]])
+        b = self.measure_time(lambda: a[index])
+        np.testing.assert_allclose(b.numpy(), [2, 3])
+        print("test getitem (test case 14) success")
 
     @jt.flag_scope(use_acl=1)
-    def test_setitem(self):
+    def test_setitem_1(self):
         a = jt.ones(2, 2)
         a[0:1, 0:1] = 0
         np.testing.assert_allclose(a.numpy(), [[0, 1], [1, 1]])
-        print("test setitem success")
+        print("test setitem (test case 1) success")
     
     # @jt.flag_scope(use_acl=1)
-    # def test_setitem_1(self):
+    # def test_setitem_2(self):
     #     a = jt.ones(2, 2)
     #     b = jt.Var(0)
     #     a[0:1, 0:1] = b
     #     np.testing.assert_allclose(a.numpy(), [[0, 1], [1, 1]])
-    #     print("test setitem success")
+    #     print("test setitem (test case 2) success")
+    
+    @jt.flag_scope(use_acl=1)
+    def test_setitem_3(self):
+        a = jt.array([[1, 2], [3, 4]])
+        index = jt.array([[False,True],[True, False]])
+        a[index] = 5
+        np.testing.assert_allclose(a.numpy(), [[1, 5], [5, 4]])
+        print("test setitem (test case 3) success")
 
     @jt.flag_scope(use_acl=1)
     def test_getitem_grad(self):
