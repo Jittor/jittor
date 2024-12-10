@@ -4,7 +4,7 @@
 
 namespace jittor
 {
-
+    extern int sync_run;
     class BaseOpRunner
     {
     protected:
@@ -104,8 +104,10 @@ namespace jittor
 
         void syncRun()
         {
-            ret = aclrtSynchronizeStream(aclstream);
-            CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclrtSynchronizeStream failed. ERROR: %d\n", name.c_str(), ret); return);
+            if(sync_run) {
+                ret = aclrtSynchronizeStream(aclstream);
+                CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclrtSynchronizeStream failed. ERROR: %d\n", name.c_str(), ret); return);
+            }
         }
 
         void checkRet(aclnnStatus ret)
