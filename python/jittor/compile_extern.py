@@ -224,7 +224,7 @@ def setup_cuda_extern():
         line = traceback.format_exc()
         LOG.w(f"CUDA found but cub is not loaded:\n{line}")
 
-    libs = ["cublas", "cudnn", "curand", "cufft"]
+    libs = ["cublas", "cudnn", "curand", "cufft", "cusparse"]
     # in cuda 11.4, module memory comsumptions:
     # default context: 259 MB
     # cublas: 340 MB
@@ -240,6 +240,9 @@ def setup_cuda_extern():
                 msg += """Develop version of CUDNN not found, 
 please refer to CUDA offical tar file installation: 
 https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#installlinux-tar"""
+            if lib_name == "cusparse":
+                msg += """CUSPARSE library is not loaded, 
+please ensure it is installed along with the CUDA toolkit."""
             if platform.machine() in ["x86_64", "AMD64"]:
                 msg += f"""
 or you can let jittor install cuda and cudnn for you:
@@ -299,6 +302,13 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
         # link_flags = f"-l{lib_name} -L\"{cuda_lib}\""
         link_flags = f"-l{lib_name} -L\"{os.path.dirname(culib_path)}\""
         # print("link_flags", link_flags, culib_path)
+
+        if lib_name == "cusparse" :
+            try:
+                cusparse_spmv_path = search_file([cuda_lib, extra_lib_path], "libcusparse.so") # add by lusz
+                ctypes.CDLL(cusparse_spmv_path, dlopen_flags)
+            except:
+                LOG.w("Failed to load cusparse-specific shared libraries.")
 
     # find all source files
     culib_src_dir = os.path.join(jittor_path, "extern", "cuda", lib_name)
@@ -693,7 +703,7 @@ if FIX_TORCH_ERROR:
     except:
         pass
 
-cudnn = cublas = curand = cufft = None
+cudnn = cublas = curand = cufft = cusparse = None
 setup_mpi()
 rank = mpi.world_rank() if in_mpi else 0
 world_size = mpi.world_size() if in_mpi else 1
