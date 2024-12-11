@@ -26,7 +26,7 @@ with lock.lock_scope():
     from .compile_extern import mkl_ops, mpi, mpi_ops, in_mpi, rank, world_size
     if core.get_device_count() == 0:
         has_cuda = compile_extern.has_cuda = compiler.has_cuda = False
-    from .compile_extern import cudnn, curand, cublas, cufft
+    from .compile_extern import cudnn, curand, cublas, cufft, cusparse
     from .init_cupy import numpy2cupy
 
 from typing import List, Tuple
