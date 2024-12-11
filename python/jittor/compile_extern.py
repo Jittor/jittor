@@ -305,7 +305,7 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
 
         if lib_name == "cusparse" :
             try:
-                cusparse_spmv_path = search_file([cuda_lib, extra_lib_path], "libcusparse.so") # add by lusz
+                cusparse_spmv_path = search_file([cuda_lib, extra_lib_path], "libcusparse.so")
                 ctypes.CDLL(cusparse_spmv_path, dlopen_flags)
             except:
                 LOG.w("Failed to load cusparse-specific shared libraries.")
