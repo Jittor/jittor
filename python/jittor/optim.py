@@ -312,6 +312,7 @@ class SGD(Optimizer):
 
             # optimize main body
             for p, g, v in zip(pg["params"], pg["grads"], pg["values"]):
+                # print(p.shape, g.shape, v.shape)
                 if p.is_stop_grad(): continue
                 dp = p * weight_decay + g
                 v.update(momentum * v + dp * (1 - dampening))

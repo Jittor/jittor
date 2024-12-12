@@ -328,6 +328,7 @@ namespace jittor
                     op.add(bop->z, false);
                     op.run();
                     bop->x->shape = xshape_bk;
+                    // aclrtSynchronizeStream(aclstream);
                 }
                 else if (op->name() == string("fuse_transpose"))
                 {

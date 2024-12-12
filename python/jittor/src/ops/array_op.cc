@@ -27,6 +27,7 @@ namespace array_local {
 cudaStream_t stream;
 cudaEvent_t event;
 
+
 struct Init {
 Init() {
     if (!get_device_count()) return;
@@ -103,8 +104,11 @@ void ArrayOp::run() {
         auto host_ptr = cuda_dual_allocator.get_dual_allocation(allocation.allocation).host_ptr;
         checkCudaErrors(cudaMemcpyAsync(
             allocation.ptr, host_ptr, allocation.size, cudaMemcpyHostToDevice, stream));
-        checkCudaErrors(cudaEventRecord(event, stream));
-        checkCudaErrors(cudaStreamWaitEvent(0, event, 0));
+        // checkCudaErrors(aclrtMemcpyAsync(
+        //     allocation.ptr, allocation.size, host_ptr, allocation.size, cudaMemcpyHostToDevice, aclstream));
+        // checkCudaErrors(cudaEventRecord(event, stream));
+        // checkCudaErrors(cudaStreamWaitEvent(0, event, 0));
+        // checkCudaErrors(aclrtSynchronizeStream(aclstream));
         // delay free this allocation
         allocation.allocator = &delay_free;
     }

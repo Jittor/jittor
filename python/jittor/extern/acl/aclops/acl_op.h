@@ -626,14 +626,14 @@ namespace jittor
             
             // 6. 释放aclTensor和aclScalar，需要根据具体API的接口定义修改
             // destroy tensor
-            for (int idx = 0; idx < input_num; idx++)
-            {
-                aclDestroyTensor(inputTensors[idx]);
-            }
-            for (int idx = 0; idx < output_num; idx++)
-            {
-                aclDestroyTensor(outputTensors[idx]);
-            }
+            // for (int idx = 0; idx < input_num; idx++)
+            // {
+            //     aclDestroyTensor(inputTensors[idx]);
+            // }
+            // for (int idx = 0; idx < output_num; idx++)
+            // {
+            //     aclDestroyTensor(outputTensors[idx]);
+            // }
             // destroy scalar
             // aclDestroyScalar(start);
             // aclDestroyScalar(end);
