@@ -72,6 +72,6 @@ namespace jittor
         }
         ret = aclnnMatmul(workspaceAddr, workspaceSize, executor, aclstream);
         CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnMatmul failed. ERROR: %d\n", name.c_str(), ret); return);
-        syncRun();
+        // syncRun();
     }
 }

@@ -619,10 +619,10 @@ namespace jittor
             CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnxxx failed. ERROR: %d\n", name.c_str(), ret); return);
 
             // 6. （固定写法）同步等待任务执行结束
-            if(sync_run) {
-                ret = aclrtSynchronizeStream(aclstream);
-                CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclrtSynchronizeStream failed. ERROR: %d\n", name.c_str(), ret); return);
-            }
+            // if(sync_run) {
+            //     ret = aclrtSynchronizeStream(aclstream);
+            //     CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclrtSynchronizeStream failed. ERROR: %d\n", name.c_str(), ret); return);
+            // }
             
             // 6. 释放aclTensor和aclScalar，需要根据具体API的接口定义修改
             // destroy tensor

@@ -116,7 +116,7 @@ namespace jittor
         ret = it->second.executeFunc(workspaceAddr, workspaceSize, executor, aclstream);
         CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnxxx failed. ERROR: %d\n", name.c_str(), ret); return);
 
-        syncRun();
+        //syncRun();
 
         aclDestroyScalar(alpha);
         return;
