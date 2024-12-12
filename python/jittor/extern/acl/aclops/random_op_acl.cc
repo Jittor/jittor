@@ -76,7 +76,7 @@ namespace jittor
         {
             LOGf << "Not supported random type : " << name;
         }
-        syncRun();
+        // syncRun();
         return;
     }
 }
