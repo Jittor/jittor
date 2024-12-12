@@ -123,8 +123,11 @@ void FetchOp::run() {
             new (&allocation) Allocation(&cuda_dual_allocator, v->size);
             // mostly device to device
             #if IS_CUDA
+            // checkCudaErrors(cudaMemcpyAsync(
+            //     allocation.ptr, v->mem_ptr, v->size, cudaMemcpyDefault, stream));
             checkCudaErrors(cudaMemcpyAsync(
-                allocation.ptr, v->mem_ptr, v->size, cudaMemcpyDefault, stream));
+                allocation.ptr, v->size, v->mem_ptr, v->size, cudaMemcpyDefault, aclstream));
+            checkCudaErrors(aclrtSynchronizeStream(aclstream));
             #else
             checkCudaErrors(cudaMemcpyAsync(
                 allocation.ptr, v->mem_ptr, v->size, cudaMemcpyDeviceToDevice, stream));
@@ -132,8 +135,11 @@ void FetchOp::run() {
             auto host_ptr = cuda_dual_allocator.get_dual_allocation(
                 allocation.allocation).host_ptr;
             // device to host
-            checkCudaErrors(cudaMemcpyAsync(
-                host_ptr, allocation.ptr, v->size, cudaMemcpyDeviceToHost, stream));
+            // checkCudaErrors(cudaMemcpyAsync(
+            //     host_ptr, allocation.ptr, v->size, cudaMemcpyDeviceToHost, stream));
+            checkCudaErrors(aclrtMemcpyAsync(
+                host_ptr, v->size, allocation.ptr, v->size, cudaMemcpyDeviceToHost, aclstream));
+            checkCudaErrors(aclrtSynchronizeStream(aclstream));
             allocation.ptr = host_ptr;
             has_cuda_memcpy = true;
         } else
