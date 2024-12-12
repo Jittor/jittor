@@ -10,3 +10,6 @@
 #include <acl/aclops/matmul_op_acl.h>
 #include <acl/aclops/random_op_acl.h>
 #include <acl/aclops/bmm_op_acl.h>
+#include <acl/aclops/pool_op_acl.h>
+#include <acl/aclops/flip_op_acl.h>
+#include <acl/aclops/concat_op_acl.h>
