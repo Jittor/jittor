@@ -309,63 +309,63 @@ namespace jittor
                 ret = it->second.getWorkspaceSizeFuncConvBackward(inputTensors[0], inputTensors[1], inputTensors[2], biasSizes, strides, pads, dilations, false, outPads, attr->group, outMask, 0, outputTensors[0], outputTensors[1], outputTensors[2], &workspaceSize, &executor);
                 break;
             }
-            case 22:
-            {
-                auto attr = dynamic_cast<PoolAttr *>(op_attr.get());
-                kernel_size = aclCreateIntArray(attr->kernel_size.data(), 2);
-                strides = aclCreateIntArray(attr->poolStrides.data(), 2);
-                pads = aclCreateIntArray(attr->poolPads.data(), 2);
-                dilations = aclCreateIntArray(attr->poolDilations.data(), 2);
-                ret = it->second.getWorkspaceSizeFuncMaxPool(inputTensors[0], kernel_size, strides, pads, dilations, attr->poolCeil, outputTensors[0], outputTensors[1], &workspaceSize, &executor);
-                break;
-            }
-            case 23:
-            {
-                auto attr = dynamic_cast<PoolAttr *>(op_attr.get());
-                kernel_size = aclCreateIntArray(attr->kernel_size.data(), 2);
-                strides = aclCreateIntArray(attr->poolStrides.data(), 2);
-                pads = aclCreateIntArray(attr->poolPads.data(), 2);
-                dilations = aclCreateIntArray(attr->poolDilations.data(), 2);
-                ret = it->second.getWorkspaceSizeFuncMaxPoolBackward(inputTensors[0], inputTensors[1], inputTensors[2], kernel_size, strides, pads, dilations, attr->poolCeil, outputTensors[0], &workspaceSize, &executor);
-                break;
-            }
-            case 24:
-            {
-                auto attr = dynamic_cast<PoolAttr *>(op_attr.get());
-                kernel_size = aclCreateIntArray(attr->kernel_size.data(), 2);
-                strides = aclCreateIntArray(attr->poolStrides.data(), 2);
-                pads = aclCreateIntArray(attr->poolPads.data(), 2);
-                ret = it->second.getWorkspaceSizeFuncAvgPool(inputTensors[0], kernel_size, strides, pads, attr->poolCeil, attr->countIncludePad, attr->divisorOverride, attr->divisorOverride, outputTensors[0], &workspaceSize, &executor);
-                break;
-            }
-            case 25:
-            {
-                auto attr = dynamic_cast<PoolAttr *>(op_attr.get());
-                kernel_size = aclCreateIntArray(attr->kernel_size.data(), 2);
-                strides = aclCreateIntArray(attr->poolStrides.data(), 2);
-                pads = aclCreateIntArray(attr->poolPads.data(), 2);
-                ret = it->second.getWorkspaceSizeFuncAvgPoolBackward(inputTensors[0], inputTensors[1], kernel_size, strides, pads, attr->countIncludePad, attr->divisorOverride, attr->divisorOverride, attr->poolCeil, outputTensors[0], &workspaceSize, &executor);
-                break;
-            }
-            case 26:
-            {
-                auto attr = dynamic_cast<ReduceAttr *>(op_attr.get());
-                dim = aclCreateIntArray(attr->axes.data(), attr->axes.size());
-                ret = it->second.getWorkspaceSizeFuncExpand(inputTensors[0], dim, outputTensors[0], &workspaceSize, &executor);
-                break;
-            }
-            case 27:
-            {
-                std::vector<aclTensor *> concatTensorList = {};
-                for (int i = 0; i < input_num; i++)
-                {
-                    concatTensorList.push_back(inputTensors[i]);
-                }
-                auto concatTensorListInput = aclCreateTensorList(&concatTensorList[0], input_num);
-                auto attr = dynamic_cast<ConcatAttr *>(op_attr.get());
-                ret = it->second.getWorkspaceSizeFuncConcat(concatTensorListInput, attr->dim, outputTensors[0], &workspaceSize, &executor);
-                break;
-            }
+            // case 22:
+            // {
+            //     auto attr = dynamic_cast<PoolAttr *>(op_attr.get());
+            //     kernel_size = aclCreateIntArray(attr->kernel_size.data(), 2);
+            //     strides = aclCreateIntArray(attr->poolStrides.data(), 2);
+            //     pads = aclCreateIntArray(attr->poolPads.data(), 2);
+            //     dilations = aclCreateIntArray(attr->poolDilations.data(), 2);
+            //     ret = it->second.getWorkspaceSizeFuncMaxPool(inputTensors[0], kernel_size, strides, pads, dilations, attr->poolCeil, outputTensors[0], outputTensors[1], &workspaceSize, &executor);
+            //     break;
+            // }
+            // case 23:
+            // {
+            //     auto attr = dynamic_cast<PoolAttr *>(op_attr.get());
+            //     kernel_size = aclCreateIntArray(attr->kernel_size.data(), 2);
+            //     strides = aclCreateIntArray(attr->poolStrides.data(), 2);
+            //     pads = aclCreateIntArray(attr->poolPads.data(), 2);
+            //     dilations = aclCreateIntArray(attr->poolDilations.data(), 2);
+            //     ret = it->second.getWorkspaceSizeFuncMaxPoolBackward(inputTensors[0], inputTensors[1], inputTensors[2], kernel_size, strides, pads, dilations, attr->poolCeil, outputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
+            // case 24:
+            // {
+            //     auto attr = dynamic_cast<PoolAttr *>(op_attr.get());
+            //     kernel_size = aclCreateIntArray(attr->kernel_size.data(), 2);
+            //     strides = aclCreateIntArray(attr->poolStrides.data(), 2);
+            //     pads = aclCreateIntArray(attr->poolPads.data(), 2);
+            //     ret = it->second.getWorkspaceSizeFuncAvgPool(inputTensors[0], kernel_size, strides, pads, attr->poolCeil, attr->countIncludePad, attr->divisorOverride, attr->divisorOverride, outputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
+            // case 25:
+            // {
+            //     auto attr = dynamic_cast<PoolAttr *>(op_attr.get());
+            //     kernel_size = aclCreateIntArray(attr->kernel_size.data(), 2);
+            //     strides = aclCreateIntArray(attr->poolStrides.data(), 2);
+            //     pads = aclCreateIntArray(attr->poolPads.data(), 2);
+            //     ret = it->second.getWorkspaceSizeFuncAvgPoolBackward(inputTensors[0], inputTensors[1], kernel_size, strides, pads, attr->countIncludePad, attr->divisorOverride, attr->divisorOverride, attr->poolCeil, outputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
+            // case 26:
+            // {
+            //     auto attr = dynamic_cast<ReduceAttr *>(op_attr.get());
+            //     dim = aclCreateIntArray(attr->axes.data(), attr->axes.size());
+            //     ret = it->second.getWorkspaceSizeFuncExpand(inputTensors[0], dim, outputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
+            // case 27:
+            // {
+            //     std::vector<aclTensor *> concatTensorList = {};
+            //     for (int i = 0; i < input_num; i++)
+            //     {
+            //         concatTensorList.push_back(inputTensors[i]);
+            //     }
+            //     auto concatTensorListInput = aclCreateTensorList(&concatTensorList[0], input_num);
+            //     auto attr = dynamic_cast<ConcatAttr *>(op_attr.get());
+            //     ret = it->second.getWorkspaceSizeFuncConcat(concatTensorListInput, attr->dim, outputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
             case 28:
             {
                 auto attr = dynamic_cast<GatherAttr *>(op_attr.get());
@@ -510,14 +510,14 @@ namespace jittor
             //     ret = it->second.getWorkspaceSizeFuncBinary(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
             //     break;
             // }
-            case 50:
-            {
-                auto attr = dynamic_cast<SplitWithSizeAttr *>(op_attr.get());
-                auto splitSize = aclCreateIntArray(attr->splitSize.data(), attr->splitSize.size());
-                auto tensorList = aclCreateTensorList(&outputTensors[0], output_num);
-                ret = it->second.getWorkspaceSizeFuncSplitWithSize(inputTensors[0], splitSize, attr->dim, tensorList, &workspaceSize, &executor);
-                break;
-            }
+            // case 50:
+            // {
+            //     auto attr = dynamic_cast<SplitWithSizeAttr *>(op_attr.get());
+            //     auto splitSize = aclCreateIntArray(attr->splitSize.data(), attr->splitSize.size());
+            //     auto tensorList = aclCreateTensorList(&outputTensors[0], output_num);
+            //     ret = it->second.getWorkspaceSizeFuncSplitWithSize(inputTensors[0], splitSize, attr->dim, tensorList, &workspaceSize, &executor);
+            //     break;
+            // }
             case 51:
             {
                 auto attr = dynamic_cast<FlashAttentionAttr *>(op_attr.get());

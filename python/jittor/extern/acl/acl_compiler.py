@@ -500,300 +500,302 @@ def change_function():
                                self.padding, self.dilation, self.groups)
             return ret
 
-    class PoolACL(Function):
+    # class PoolACL(Function):
 
-        def __init__(self,
-                     kernel_size,
-                     stride=None,
-                     padding=0,
-                     dilation=None,
-                     return_indices=None,
-                     ceil_mode=False,
-                     count_include_pad=True,
-                     op='maximum'):
-            self.kernel_size = kernel_size if isinstance(
-                kernel_size, tuple) else (kernel_size, kernel_size)
-            stride = stride if stride else kernel_size
-            self.stride = stride if isinstance(stride, tuple) else (stride,
-                                                                    stride)
-            self.padding = padding if isinstance(padding, tuple) else (padding,
-                                                                       padding)
-            dilation = dilation if dilation else 1
-            assert dilation == 1
-            self.dilation = dilation if isinstance(
-                dilation, tuple) else (dilation, dilation)
-            for item in self.kernel_size:
-                if item <= 0:
-                    raise RuntimeError(
-                        f"kernel_size must be greater than zero, but got {item}"
-                    )
-            for item in self.stride:
-                if item <= 0:
-                    raise RuntimeError(
-                        f"stride must be greater than zero, but got {item}")
-            for item in self.padding:
-                if item < 0:
-                    raise RuntimeError(
-                        f"padding must be non-negative, but got {item}")
-            self.op = op
-            self.return_indices = return_indices
-            self.ceil_mode = ceil_mode
-            self.count_include_pad = count_include_pad
+    #     def __init__(self,
+    #                  kernel_size,
+    #                  stride=None,
+    #                  padding=0,
+    #                  dilation=None,
+    #                  return_indices=None,
+    #                  ceil_mode=False,
+    #                  count_include_pad=True,
+    #                  op='maximum'):
+    #         self.kernel_size = kernel_size if isinstance(
+    #             kernel_size, tuple) else (kernel_size, kernel_size)
+    #         stride = stride if stride else kernel_size
+    #         self.stride = stride if isinstance(stride, tuple) else (stride,
+    #                                                                 stride)
+    #         self.padding = padding if isinstance(padding, tuple) else (padding,
+    #                                                                    padding)
+    #         dilation = dilation if dilation else 1
+    #         assert dilation == 1
+    #         self.dilation = dilation if isinstance(
+    #             dilation, tuple) else (dilation, dilation)
+    #         for item in self.kernel_size:
+    #             if item <= 0:
+    #                 raise RuntimeError(
+    #                     f"kernel_size must be greater than zero, but got {item}"
+    #                 )
+    #         for item in self.stride:
+    #             if item <= 0:
+    #                 raise RuntimeError(
+    #                     f"stride must be greater than zero, but got {item}")
+    #         for item in self.padding:
+    #             if item < 0:
+    #                 raise RuntimeError(
+    #                     f"padding must be non-negative, but got {item}")
+    #         self.op = op
+    #         self.return_indices = return_indices
+    #         self.ceil_mode = ceil_mode
+    #         self.count_include_pad = count_include_pad
 
-        def execute(self, input):
-            self.input = input
-            attr_code = f"""
-            op.jt_name  = "{"avgpool" if self.op == 'mean' else "maxpool"}";
-            PoolAttr *attr = new PoolAttr();
-            attr->kernel_size = {{ {self.kernel_size[0]}, {self.kernel_size[1]} }};
-            attr->poolStrides = {{ {self.stride[0]}, {self.stride[1]} }};
-            attr->poolPads = {{ {self.padding[0]}, {self.padding[1]} }};
-            attr->poolDilations = {{ {self.dilation[0]}, {self.dilation[1]} }};
-            attr->poolCeil = {"true" if self.ceil_mode else "false"};
-            attr->countIncludePad = {"true" if self.count_include_pad else "false"};
-            op.op_attr.reset(attr);
-            """
-            input_height, input_width = input.shape[-2:]
-            kernel_height, kernel_width = self.kernel_size[-2:]
+    #     def execute(self, input):
+    #         self.input = input
+    #         attr_code = f"""
+    #         op.jt_name  = "{"avgpool" if self.op == 'mean' else "maxpool"}";
+    #         PoolAttr *attr = new PoolAttr();
+    #         attr->kernel_size = {{ {self.kernel_size[0]}, {self.kernel_size[1]} }};
+    #         attr->poolStrides = {{ {self.stride[0]}, {self.stride[1]} }};
+    #         attr->poolPads = {{ {self.padding[0]}, {self.padding[1]} }};
+    #         attr->poolDilations = {{ {self.dilation[0]}, {self.dilation[1]} }};
+    #         attr->poolCeil = {"true" if self.ceil_mode else "false"};
+    #         attr->countIncludePad = {"true" if self.count_include_pad else "false"};
+    #         op.op_attr.reset(attr);
+    #         """
+    #         input_height, input_width = input.shape[-2:]
+    #         kernel_height, kernel_width = self.kernel_size[-2:]
 
-            output_height = (input_height + 2 * self.padding[0] -
-                             (kernel_height - 1) - 1) // self.stride[0] + 1
-            output_width = (input_width + 2 * self.padding[1] -
-                            (kernel_width - 1) - 1) // self.stride[1] + 1
+    #         output_height = (input_height + 2 * self.padding[0] -
+    #                          (kernel_height - 1) - 1) // self.stride[0] + 1
+    #         output_width = (input_width + 2 * self.padding[1] -
+    #                         (kernel_width - 1) - 1) // self.stride[1] + 1
 
-            output_shape = (input.shape[0], input.shape[1], output_height,
-                            output_width)
+    #         output_shape = (input.shape[0], input.shape[1], output_height,
+    #                         output_width)
 
-            inputs = [input]
+    #         inputs = [input]
 
-            if self.op == 'maximum':
-                result = acl_cmd(
-                    "Maxpool",
-                    inputs,
-                    output_dtypes=[input.dtype, 'int32'],
-                    output_shapes=[output_shape, output_shape],
-                    attr_code=attr_code,
-                )
-            elif self.op == 'mean':
-                result = acl_cmd(
-                    "Avgpool",
-                    inputs,
-                    output_dtypes=[input.dtype],
-                    output_shapes=[output_shape],
-                    attr_code=attr_code,
-                )
-            else:
-                raise ValueError('no this type pool')
+    #         if self.op == 'maximum':
+    #             result = acl_cmd(
+    #                 "Maxpool",
+    #                 inputs,
+    #                 output_dtypes=[input.dtype, 'int32'],
+    #                 output_shapes=[output_shape, output_shape],
+    #                 attr_code=attr_code,
+    #             )
+    #         elif self.op == 'mean':
+    #             result = acl_cmd(
+    #                 "Avgpool",
+    #                 inputs,
+    #                 output_dtypes=[input.dtype],
+    #                 output_shapes=[output_shape],
+    #                 attr_code=attr_code,
+    #             )
+    #         else:
+    #             raise ValueError('no this type pool')
 
-            if self.op == 'maximum':
-                self.index = result[1]
+    #         if self.op == 'maximum':
+    #             self.index = result[1]
 
-            if self.return_indices:
-                return result[0], result[1]
-            else:
-                return result[0]
+    #         if self.return_indices:
+    #             return result[0], result[1]
+    #         else:
+    #             return result[0]
 
-        def grad(self, grad_output):
-            input = self.input
-            attr_code = f"""
-            op.jt_name = "{"avgpoolbackward" if self.op == 'mean' else "maxpoolbackward"}";
-            PoolAttr *attr = new PoolAttr();
-            attr->kernel_size = {{ {self.kernel_size[0]}, {self.kernel_size[1]} }};
-            attr->poolStrides = {{ {self.stride[0]}, {self.stride[1]} }};
-            attr->poolPads = {{ {self.padding[0]}, {self.padding[1]} }};
-            attr->poolDilations = {{ {self.dilation[0]}, {self.dilation[1]} }};
-            attr->poolCeil = {"true" if self.ceil_mode else "false"};
-            attr->countIncludePad = {"true" if self.count_include_pad else "false"};
-            op.op_attr.reset(attr);
-            """
-            output_shapes = [input.shape]
-            output_dtypes = [input.dtype]
-            if self.op == 'maximum':
-                result = acl_cmd("MaxpoolBackward",
-                                 inputs=[grad_output, input, self.index],
-                                 output_dtypes=output_dtypes,
-                                 output_shapes=output_shapes,
-                                 attr_code=attr_code)[0]
-            elif self.op == 'mean':
-                result = acl_cmd("AvgpoolBackward",
-                                 inputs=[grad_output, input],
-                                 output_dtypes=output_dtypes,
-                                 output_shapes=output_shapes,
-                                 attr_code=attr_code)[0]
-            else:
-                raise ValueError('no this type pool')
-            return result
+    #     def grad(self, grad_output):
+    #         input = self.input
+    #         attr_code = f"""
+    #         op.jt_name = "{"avgpoolbackward" if self.op == 'mean' else "maxpoolbackward"}";
+    #         PoolAttr *attr = new PoolAttr();
+    #         attr->kernel_size = {{ {self.kernel_size[0]}, {self.kernel_size[1]} }};
+    #         attr->poolStrides = {{ {self.stride[0]}, {self.stride[1]} }};
+    #         attr->poolPads = {{ {self.padding[0]}, {self.padding[1]} }};
+    #         attr->poolDilations = {{ {self.dilation[0]}, {self.dilation[1]} }};
+    #         attr->poolCeil = {"true" if self.ceil_mode else "false"};
+    #         attr->countIncludePad = {"true" if self.count_include_pad else "false"};
+    #         op.op_attr.reset(attr);
+    #         """
+    #         output_shapes = [input.shape]
+    #         output_dtypes = [input.dtype]
+    #         if self.op == 'maximum':
+    #             result = acl_cmd("MaxpoolBackward",
+    #                              inputs=[grad_output, input, self.index],
+    #                              output_dtypes=output_dtypes,
+    #                              output_shapes=output_shapes,
+    #                              attr_code=attr_code)[0]
+    #         elif self.op == 'mean':
+    #             result = acl_cmd("AvgpoolBackward",
+    #                              inputs=[grad_output, input],
+    #                              output_dtypes=output_dtypes,
+    #                              output_shapes=output_shapes,
+    #                              attr_code=attr_code)[0]
+    #         else:
+    #             raise ValueError('no this type pool')
+    #         return result
 
-    class FlipACL(Function):
+    # class FlipACL(Function):
 
-        def __init__(self):
-            super(FlipACL, self).__init__()
+    #     def __init__(self):
+    #         super(FlipACL, self).__init__()
 
-        def execute(self, input, dim):
-            if type(dim) is tuple:
-                dim = list(dim)
-            if type(dim) is not list:
-                dim = [dim]
-            attr_code = f"""
-            op.jt_name = "flip";
-            ReduceAttr *attr = new ReduceAttr();
-            attr->axes = {{{', '.join(map(str, (list(dim))))}}};
-            attr->prod_dim = {len(dim)};
-            op.op_attr.reset(attr);
-            """
-            self.attr_code = attr_code
-            result = acl_cmd("Flip", [input],
-                             output_dtypes=[input.dtype],
-                             output_shapes=[input.shape],
-                             attr_code=self.attr_code)[0]
-            return result
+    #     def execute(self, input, dim):
+    #         if type(dim) is tuple:
+    #             dim = list(dim)
+    #         if type(dim) is not list:
+    #             dim = [dim]
+    #         attr_code = f"""
+    #         op.jt_name = "flip";
+    #         ReduceAttr *attr = new ReduceAttr();
+    #         attr->axes = {{{', '.join(map(str, (list(dim))))}}};
+    #         attr->prod_dim = {len(dim)};
+    #         op.op_attr.reset(attr);
+    #         """
+    #         self.attr_code = attr_code
+    #         result = acl_cmd("Flip", [input],
+    #                          output_dtypes=[input.dtype],
+    #                          output_shapes=[input.shape],
+    #                          attr_code=self.attr_code)[0]
+    #         return result
 
-        def grad(self, grad_output):
-            grad_input = acl_cmd("Flip", [grad_output],
-                                 output_dtypes=[grad_output.dtype],
-                                 output_shapes=[grad_output.shape],
-                                 attr_code=self.attr_code)[0]
-            return grad_input
+    #     def grad(self, grad_output):
+    #         grad_input = acl_cmd("Flip", [grad_output],
+    #                              output_dtypes=[grad_output.dtype],
+    #                              output_shapes=[grad_output.shape],
+    #                              attr_code=self.attr_code)[0]
+    #         return grad_input
 
+    from .aclops.flip_op import FlipACL
     def flip_acl(x, dim):
         return FlipACL()(x, dim)
 
-    class ConcatACL(Function):
+    # class ConcatACL(Function):
 
-        def __init__(self):
-            super(ConcatACL, self).__init__()
+    #     def __init__(self):
+    #         super(ConcatACL, self).__init__()
 
-        def __call__(self, *args):
-            assert isinstance(args[0], list)
-            assert isinstance(args[1], int)
-            if jt.flags.no_grad:
-                return self.execute(*args)
-            backup = args
-            args = list(args)
-            taped_inputs = []
-            taped_outputs = []
-            input_mask = [-1] * (len(args[0]) + 1)
-            newargs = [list(), args[1]]
-            for i, v in enumerate(args[0]):
-                if isinstance(v, jt.Var):
-                    if v.is_stop_grad():
-                        # -2 in input_mask represents it is stop_grad
-                        input_mask[i] = -2
-                        newargs[0].append(v)
-                        continue
-                    v = v.tape()
-                    newargs[0].append(v)
-                    input_mask[i] = len(taped_inputs)
-                    taped_inputs.append(v)
+    #     def __call__(self, *args):
+    #         assert isinstance(args[0], list)
+    #         assert isinstance(args[1], int)
+    #         if jt.flags.no_grad:
+    #             return self.execute(*args)
+    #         backup = args
+    #         args = list(args)
+    #         taped_inputs = []
+    #         taped_outputs = []
+    #         input_mask = [-1] * (len(args[0]) + 1)
+    #         newargs = [list(), args[1]]
+    #         for i, v in enumerate(args[0]):
+    #             if isinstance(v, jt.Var):
+    #                 if v.is_stop_grad():
+    #                     # -2 in input_mask represents it is stop_grad
+    #                     input_mask[i] = -2
+    #                     newargs[0].append(v)
+    #                     continue
+    #                 v = v.tape()
+    #                 newargs[0].append(v)
+    #                 input_mask[i] = len(taped_inputs)
+    #                 taped_inputs.append(v)
 
-            ori_res = self.execute(*newargs)
-            if not isinstance(ori_res, Sequence):
-                res = [ori_res]
-            else:
-                res = list(ori_res)
-            output_mask = [-1] * len(res)
-            for i, v in enumerate(res):
-                if isinstance(v, jt.Var):
-                    v = v.tape()
-                    output_mask[i] = len(taped_outputs)
-                    res[i] = v
-                    taped_outputs.append(v)
-            self.input_mask = input_mask
-            self.output_mask = output_mask
-            # tape output and input together so
-            # backward treat them as one operator
-            jt.tape_together(taped_inputs, taped_outputs, self._grad)
-            if isinstance(ori_res, Sequence):
-                return res
-            else:
-                return res[0]
+    #         ori_res = self.execute(*newargs)
+    #         if not isinstance(ori_res, Sequence):
+    #             res = [ori_res]
+    #         else:
+    #             res = list(ori_res)
+    #         output_mask = [-1] * len(res)
+    #         for i, v in enumerate(res):
+    #             if isinstance(v, jt.Var):
+    #                 v = v.tape()
+    #                 output_mask[i] = len(taped_outputs)
+    #                 res[i] = v
+    #                 taped_outputs.append(v)
+    #         self.input_mask = input_mask
+    #         self.output_mask = output_mask
+    #         # tape output and input together so
+    #         # backward treat them as one operator
+    #         jt.tape_together(taped_inputs, taped_outputs, self._grad)
+    #         if isinstance(ori_res, Sequence):
+    #             return res
+    #         else:
+    #             return res[0]
 
-        def execute(self, input_tensors, dim=0):
-            for _ in input_tensors:
-                if not (-_.ndim <= dim < _.ndim):
-                    print(_.shape, dim)
-                    raise ValueError("dim out of range")
+    #     def execute(self, input_tensors, dim=0):
+    #         for _ in input_tensors:
+    #             if not (-_.ndim <= dim < _.ndim):
+    #                 print(_.shape, dim)
+    #                 raise ValueError("dim out of range")
 
-            if dim < 0:
-                dim += input_tensors[0].ndim
+    #         if dim < 0:
+    #             dim += input_tensors[0].ndim
 
-            self.input = input_tensors
-            self.dim = dim
-            for i in range(len(input_tensors)):
-                if input_tensors[i].dtype != input_tensors[0].dtype:
-                    raise ValueError(
-                        "All input tensors must have the same dtype")
-                if input_tensors[i].shape[:dim] != input_tensors[
-                        0].shape[:dim] or input_tensors[i].shape[
-                            dim + 1:] != input_tensors[0].shape[dim + 1:]:
-                    raise ValueError(
-                        "All input tensors must have the same shape")
-            attr_code = f"""
-            op.jt_name = "concat";
-            ConcatAttr *attr = new ConcatAttr();
-            attr->tensorNum = {len(input_tensors)};
-            attr->dim = {dim};
-            op.op_attr.reset(attr);
-            """
-            result = acl_cmd(
-                "Concat",
-                input_tensors,
-                output_dtypes=[input_tensors[0].dtype],
-                output_shapes=[
-                    jt.empty(self.calculate_output_shape(input_tensors,
-                                                         dim)).shape
-                ],
-                attr_code=attr_code)[0]
-            return result
+    #         self.input = input_tensors
+    #         self.dim = dim
+    #         for i in range(len(input_tensors)):
+    #             if input_tensors[i].dtype != input_tensors[0].dtype:
+    #                 raise ValueError(
+    #                     "All input tensors must have the same dtype")
+    #             if input_tensors[i].shape[:dim] != input_tensors[
+    #                     0].shape[:dim] or input_tensors[i].shape[
+    #                         dim + 1:] != input_tensors[0].shape[dim + 1:]:
+    #                 raise ValueError(
+    #                     "All input tensors must have the same shape")
+    #         attr_code = f"""
+    #         op.jt_name = "concat";
+    #         ConcatAttr *attr = new ConcatAttr();
+    #         attr->tensorNum = {len(input_tensors)};
+    #         attr->dim = {dim};
+    #         op.op_attr.reset(attr);
+    #         """
+    #         result = acl_cmd(
+    #             "Concat",
+    #             input_tensors,
+    #             output_dtypes=[input_tensors[0].dtype],
+    #             output_shapes=[
+    #                 jt.empty(self.calculate_output_shape(input_tensors,
+    #                                                      dim)).shape
+    #             ],
+    #             attr_code=attr_code)[0]
+    #         return result
 
-        def _grad(self, *args):
-            new_args = ((args[i] if i >= 0 else None)
-                        for i in self.output_mask)
-            ret = self.grad(*new_args)
-            new_ret = []
-            for i, r in enumerate(ret):
-                j = self.input_mask[i]
-                if j < 0:
-                    # -2 in input_mask represents it is stop_grad
-                    assert r is None or j==-2, f"{type(self)}'s {i}-th returned grad should be None, "\
-                        "because the input value is not jittor variable."
-                else:
-                    new_ret.append(r)
-            return new_ret
+    #     def _grad(self, *args):
+    #         new_args = ((args[i] if i >= 0 else None)
+    #                     for i in self.output_mask)
+    #         ret = self.grad(*new_args)
+    #         new_ret = []
+    #         for i, r in enumerate(ret):
+    #             j = self.input_mask[i]
+    #             if j < 0:
+    #                 # -2 in input_mask represents it is stop_grad
+    #                 assert r is None or j==-2, f"{type(self)}'s {i}-th returned grad should be None, "\
+    #                     "because the input value is not jittor variable."
+    #             else:
+    #                 new_ret.append(r)
+    #         return new_ret
 
-        def grad(self, grad_output):
-            grad_inputs = self.split_grad(grad_output, self.input, self.dim)
-            return grad_inputs
+    #     def grad(self, grad_output):
+    #         grad_inputs = self.split_grad(grad_output, self.input, self.dim)
+    #         return grad_inputs
 
-        def calculate_output_shape(self, input_tensors, axis):
-            shape = list(input_tensors[0].shape)
-            for tensor in input_tensors[1:]:
-                shape[axis] += tensor.shape[axis]
-            return tuple(shape)
+    #     def calculate_output_shape(self, input_tensors, axis):
+    #         shape = list(input_tensors[0].shape)
+    #         for tensor in input_tensors[1:]:
+    #             shape[axis] += tensor.shape[axis]
+    #         return tuple(shape)
 
-        def split_grad(self, grad_output, input_tensors, axis):
-            offset = []
-            shapeVec = []
-            dtypeVec = []
-            for tensor in input_tensors:
-                offset.append(tensor.shape[axis])
-                dtypeVec.append(tensor.dtype)
-                shapeVec.append(tensor.shape)
+    #     def split_grad(self, grad_output, input_tensors, axis):
+    #         offset = []
+    #         shapeVec = []
+    #         dtypeVec = []
+    #         for tensor in input_tensors:
+    #             offset.append(tensor.shape[axis])
+    #             dtypeVec.append(tensor.dtype)
+    #             shapeVec.append(tensor.shape)
 
-            attr_code = f"""
-            op.jt_name = "splitwithsize";
-            auto *attr = new SplitWithSizeAttr();
-            attr->splitSize = {{ {", ".join(map(str, offset))} }};
-            attr->dim = {axis};
-            op.op_attr.reset(attr);
-            """
+    #         attr_code = f"""
+    #         op.jt_name = "splitwithsize";
+    #         auto *attr = new SplitWithSizeAttr();
+    #         attr->splitSize = {{ {", ".join(map(str, offset))} }};
+    #         attr->dim = {axis};
+    #         op.op_attr.reset(attr);
+    #         """
 
-            result = acl_cmd("SplitWithSize", [grad_output],
-                             output_dtypes=dtypeVec,
-                             output_shapes=shapeVec,
-                             attr_code=attr_code)
-            return result
+    #         result = acl_cmd("SplitWithSize", [grad_output],
+    #                          output_dtypes=dtypeVec,
+    #                          output_shapes=shapeVec,
+    #                          attr_code=attr_code)
+    #         return result
 
+    from .aclops.concat_op import ConcatACL
     def concat(x, dim=0):
         return ConcatACL()(x, dim)
 
@@ -2692,6 +2694,8 @@ def change_function():
     jt.nn.conv2d = warp(jt.nn.conv2d, conv_acl)
     jt.nn.Conv2d = warp(jt.nn.Conv2d, Conv2D)
     jt.nn.Conv = warp(jt.nn.Conv, Conv2D)
+    
+    from .aclops.pool_op import PoolACL
     jt.nn.Pool = warp(jt.nn.Pool, PoolACL)
 
     jt.flip = warp(jt.flip, flip_acl)
