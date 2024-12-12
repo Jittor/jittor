@@ -308,6 +308,10 @@ namespace jittor
                 {
                     auto bop = (BroadcastToOp *)op;
                     AclOpRunner op("Expand");
+                    if (bop->x->shape.size() == 1 && bop->x->shape[0] == 1)
+                    {
+                        aclrtSynchronizeStream(aclstream);
+                    }
                     op.jt_name = "expand";
                     NanoVector xshape, xshape_bk = bop->x->shape;
                     NanoVector zshape = bop->z->shape;
