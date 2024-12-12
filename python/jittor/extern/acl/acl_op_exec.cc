@@ -311,6 +311,7 @@ namespace jittor
                     op.jt_name = "expand";
                     NanoVector xshape, xshape_bk = bop->x->shape;
                     NanoVector zshape = bop->z->shape;
+
                     for (int i = 0; i < zshape.size(); i++)
                     {
                         if (bop->bcast_mask & (1 << i))
