@@ -269,7 +269,7 @@ def generate_error_code_from_func_header(func_head, target_scope_name, name, dfs
             help_name = ""+target_scope_name+'.'+name
     else:
         help_name = name
-    if lib_name in ["mpi", "nccl", "cudnn", "curand" "cufft", "cublas", "mkl"]:
+    if lib_name in ["mpi", "nccl", "cudnn", "curand" "cufft", "cublas", "mkl", "cusparse"]:
         help_name = lib_name+'.'+help_name
     help_cmd = f"help(jt.{help_name})"
 
