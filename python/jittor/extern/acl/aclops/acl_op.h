@@ -142,16 +142,16 @@ namespace jittor
                 }
             }
 
-            if (jt_name == "range")
-            {
-                auto attr = dynamic_cast<RangeAttr *>(op_attr.get());
-                int64_t startValue = attr->start;
-                int64_t endValue = attr->end;
-                int64_t stepValue = attr->step;
-                start = aclCreateScalar(&startValue, aclDataType::ACL_INT64);
-                end = aclCreateScalar(&endValue, aclDataType::ACL_INT64);
-                step = aclCreateScalar(&stepValue, aclDataType::ACL_INT64);
-            }
+            // if (jt_name == "range")
+            // {
+            //     auto attr = dynamic_cast<RangeAttr *>(op_attr.get());
+            //     int64_t startValue = attr->start;
+            //     int64_t endValue = attr->end;
+            //     int64_t stepValue = attr->step;
+            //     start = aclCreateScalar(&startValue, aclDataType::ACL_INT64);
+            //     end = aclCreateScalar(&endValue, aclDataType::ACL_INT64);
+            //     step = aclCreateScalar(&stepValue, aclDataType::ACL_INT64);
+            // }
 
             if (jt_name == "conv2dbackward")
             {
@@ -366,24 +366,24 @@ namespace jittor
             //     ret = it->second.getWorkspaceSizeFuncConcat(concatTensorListInput, attr->dim, outputTensors[0], &workspaceSize, &executor);
             //     break;
             // }
-            case 28:
-            {
-                auto attr = dynamic_cast<GatherAttr *>(op_attr.get());
-                ret = it->second.getWorkspaceSizeFuncGather(inputTensors[0], attr->dim, inputTensors[1], outputTensors[0], &workspaceSize, &executor);
-                break;
-            }
-            case 29:
-            {
-                auto attr = dynamic_cast<GatherAttr *>(op_attr.get());
-                ret = it->second.getWorkspaceSizeFuncCumsum(inputTensors[0], attr->dim, get_dtype(out_[0]->dtype()), outputTensors[0], &workspaceSize, &executor);
-                break;
-            }
-            case 30:
-            {
-                auto attr = dynamic_cast<ScatterAttr *>(op_attr.get());
-                ret = it->second.getWorkspaceSizeFuncScatter(inputTensors[0], attr->axis, inputTensors[1], inputTensors[2], attr->reduction, outputTensors[0], &workspaceSize, &executor);
-                break;
-            }
+            // case 28:
+            // {
+            //     auto attr = dynamic_cast<GatherAttr *>(op_attr.get());
+            //     ret = it->second.getWorkspaceSizeFuncGather(inputTensors[0], attr->dim, inputTensors[1], outputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
+            // case 29:
+            // {
+            //     auto attr = dynamic_cast<GatherAttr *>(op_attr.get());
+            //     ret = it->second.getWorkspaceSizeFuncCumsum(inputTensors[0], attr->dim, get_dtype(out_[0]->dtype()), outputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
+            // case 30:
+            // {
+            //     auto attr = dynamic_cast<ScatterAttr *>(op_attr.get());
+            //     ret = it->second.getWorkspaceSizeFuncScatter(inputTensors[0], attr->axis, inputTensors[1], inputTensors[2], attr->reduction, outputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
             case 31:
             {
                 ret = it->second.getWorkspaceSizeFuncUnaryNonzero(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
@@ -437,11 +437,11 @@ namespace jittor
             //     ret = it->second.getWorkspaceSizeFuncStridedSliceAssignV2(outputTensors[0], inputTensors[0], begins, ends, steps, axes, &workspaceSize, &executor);
             //     break;
             // }
-            case 37:
-            {
-                ret = it->second.getWorkspaceSizeFuncRange(start, end, step, outputTensors[0], &workspaceSize, &executor);
-                break;
-            }
+            // case 37:
+            // {
+            //     ret = it->second.getWorkspaceSizeFuncRange(start, end, step, outputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
             case 38:
             {
                 auto attr = dynamic_cast<LeakyReluAttr *>(op_attr.get());

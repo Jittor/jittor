@@ -13,3 +13,6 @@
 #include <acl/aclops/pool_op_acl.h>
 #include <acl/aclops/flip_op_acl.h>
 #include <acl/aclops/concat_op_acl.h>
+#include <acl/aclops/gather_op_acl.h>
+#include <acl/aclops/cumsum_op_acl.h>
+#include <acl/aclops/index_op_acl.h>
