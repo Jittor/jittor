@@ -799,40 +799,42 @@ def change_function():
     def concat(x, dim=0):
         return ConcatACL()(x, dim)
 
-    class GatherACL(Function):
+    # class GatherACL(Function):
 
-        def __init__(self):
-            super(GatherACL, self).__init__()
+    #     def __init__(self):
+    #         super(GatherACL, self).__init__()
 
-        def execute(self, input, dim, index):
-            self.dim = dim
-            self.index = index
-            attr_code = f"""
-            op.jt_name = "gather";
-            GatherAttr *attr = new GatherAttr();
-            attr->dim = {dim};
-            op.op_attr.reset(attr);
-            """
-            result = acl_cmd("Gather", [input, index],
-                             output_dtypes=[input.dtype],
-                             output_shapes=[index.shape],
-                             attr_code=attr_code)[0]
-            return result
+    #     def execute(self, input, dim, index):
+    #         self.dim = dim
+    #         self.index = index
+    #         attr_code = f"""
+    #         op.jt_name = "gather";
+    #         GatherAttr *attr = new GatherAttr();
+    #         attr->dim = {dim};
+    #         op.op_attr.reset(attr);
+    #         """
+    #         result = acl_cmd("Gather", [input, index],
+    #                          output_dtypes=[input.dtype],
+    #                          output_shapes=[index.shape],
+    #                          attr_code=attr_code)[0]
+    #         return result
 
-        def grad(self, grad_output):
-            tmp = jt.zeros(self.index.shape, dtype=grad_output.dtype)
-            attr_code = f"""
-            op.jt_name = "scatter";
-            ScatterAttr *attr = new ScatterAttr();
-            attr->axis = {self.dim};
-            attr->reduction = {1};
-            op.op_attr.reset(attr);
-            """
-            grad_input = acl_cmd("Scatter", [tmp, self.index, grad_output],
-                                 output_dtypes=[grad_output.dtype],
-                                 output_shapes=[tmp.shape],
-                                 attr_code=attr_code)[0]
-            return grad_input
+    #     def grad(self, grad_output):
+    #         tmp = jt.zeros(self.index.shape, dtype=grad_output.dtype)
+    #         attr_code = f"""
+    #         op.jt_name = "scatter";
+    #         ScatterAttr *attr = new ScatterAttr();
+    #         attr->axis = {self.dim};
+    #         attr->reduction = {1};
+    #         op.op_attr.reset(attr);
+    #         """
+    #         grad_input = acl_cmd("Scatter", [tmp, self.index, grad_output],
+    #                              output_dtypes=[grad_output.dtype],
+    #                              output_shapes=[tmp.shape],
+    #                              attr_code=attr_code)[0]
+    #         return grad_input
+
+    from .aclops.gather_op import GatherACL
 
     def gather_acl(input, dim, index):
         return GatherACL()(input, dim, index)
@@ -843,52 +845,54 @@ def change_function():
         else:
             return jt.array([False])
 
-    class CumsumACL(Function):
+    # class CumsumACL(Function):
 
-        def __init__(self):
-            super(CumsumACL, self).__init__()
+    #     def __init__(self):
+    #         super(CumsumACL, self).__init__()
 
-        def execute(self, input, dim=-1):
-            self.dim = dim
-            attr_code = f"""
-            op.jt_name = "cumsum";
-            GatherAttr *attr = new GatherAttr();
-            attr->dim = {dim};
-            op.op_attr.reset(attr);
-            """
-            result = acl_cmd("Cumsum", [input],
-                             output_dtypes=[input.dtype],
-                             output_shapes=[input.shape],
-                             attr_code=attr_code)[0]
-            return result
+    #     def execute(self, input, dim=-1):
+    #         self.dim = dim
+    #         attr_code = f"""
+    #         op.jt_name = "cumsum";
+    #         GatherAttr *attr = new GatherAttr();
+    #         attr->dim = {dim};
+    #         op.op_attr.reset(attr);
+    #         """
+    #         result = acl_cmd("Cumsum", [input],
+    #                          output_dtypes=[input.dtype],
+    #                          output_shapes=[input.shape],
+    #                          attr_code=attr_code)[0]
+    #         return result
 
-        def grad(self, grad_output):
-            cumsum_attr_code = f"""
-            op.jt_name = "cumsum";
-            GatherAttr *attr = new GatherAttr();
-            attr->dim = {self.dim};
-            op.op_attr.reset(attr);
-            """
-            flip_attr_code = f"""
-            op.jt_name = "flip";
-            ReduceAttr *attr = new ReduceAttr();
-            attr->axes = {{{self.dim}}};
-            attr->prod_dim = {{{1}}};
-            op.op_attr.reset(attr);
-            """
-            flipped_grad_output = acl_cmd("Flip", [grad_output],
-                                          output_dtypes=[grad_output.dtype],
-                                          output_shapes=[grad_output.shape],
-                                          attr_code=flip_attr_code)[0]
-            cumulative_grad = acl_cmd("Cumsum", [flipped_grad_output],
-                                      output_dtypes=[grad_output.dtype],
-                                      output_shapes=[grad_output.shape],
-                                      attr_code=cumsum_attr_code)[0]
-            grad_input = acl_cmd("Flip", [cumulative_grad],
-                                 output_dtypes=[grad_output.dtype],
-                                 output_shapes=[grad_output.shape],
-                                 attr_code=flip_attr_code)[0]
-            return grad_input
+    #     def grad(self, grad_output):
+    #         cumsum_attr_code = f"""
+    #         op.jt_name = "cumsum";
+    #         GatherAttr *attr = new GatherAttr();
+    #         attr->dim = {self.dim};
+    #         op.op_attr.reset(attr);
+    #         """
+    #         flip_attr_code = f"""
+    #         op.jt_name = "flip";
+    #         ReduceAttr *attr = new ReduceAttr();
+    #         attr->axes = {{{self.dim}}};
+    #         attr->prod_dim = {{{1}}};
+    #         op.op_attr.reset(attr);
+    #         """
+    #         flipped_grad_output = acl_cmd("Flip", [grad_output],
+    #                                       output_dtypes=[grad_output.dtype],
+    #                                       output_shapes=[grad_output.shape],
+    #                                       attr_code=flip_attr_code)[0]
+    #         cumulative_grad = acl_cmd("Cumsum", [flipped_grad_output],
+    #                                   output_dtypes=[grad_output.dtype],
+    #                                   output_shapes=[grad_output.shape],
+    #                                   attr_code=cumsum_attr_code)[0]
+    #         grad_input = acl_cmd("Flip", [cumulative_grad],
+    #                              output_dtypes=[grad_output.dtype],
+    #                              output_shapes=[grad_output.shape],
+    #                              attr_code=flip_attr_code)[0]
+    #         return grad_input
+
+    from .aclops.cumsum_op import CumsumACL
 
     def cumsum_acl(input, dim=-1):
         return CumsumACL()(input, dim)
@@ -898,59 +902,61 @@ def change_function():
         x = cumsum_acl(x, dim=dim)
         return jt.exp(x)
 
-    class IndexACL(Function):
+    # class IndexACL(Function):
 
-        def __init__(self):
-            super(IndexACL, self).__init__()
+    #     def __init__(self):
+    #         super(IndexACL, self).__init__()
 
-        def execute(self, inshape: list, dim=None, dtype="int32"):
-            # zeros a tensor, shape is inshape, dtype is dtype
-            dim_input = dim
-            if dim == None:
-                dim = [i for i in range(len(inshape))]
-            elif type(dim) == int:
-                dim = [dim]
-            results = []
-            extra_data = {}
-            extra_data["dim_count"] = len(dim)
+    #     def execute(self, inshape: list, dim=None, dtype="int32"):
+    #         # zeros a tensor, shape is inshape, dtype is dtype
+    #         dim_input = dim
+    #         if dim == None:
+    #             dim = [i for i in range(len(inshape))]
+    #         elif type(dim) == int:
+    #             dim = [dim]
+    #         results = []
+    #         extra_data = {}
+    #         extra_data["dim_count"] = len(dim)
 
-            for i, d in enumerate(dim):
-                max_len = inshape[d]
+    #         for i, d in enumerate(dim):
+    #             max_len = inshape[d]
 
-                extra_data[f"dim_{i}_start"] = 0
-                extra_data[f"dim_{i}_end"] = max_len
-                extra_data[f"dim_{i}_step"] = 1
+    #             extra_data[f"dim_{i}_start"] = 0
+    #             extra_data[f"dim_{i}_end"] = max_len
+    #             extra_data[f"dim_{i}_step"] = 1
 
-                tmp = jt.zeros(max_len, dtype=dtype)
-                range_attr_code = f"""
-                op.jt_name = "range";
-                RangeAttr *attr = new RangeAttr();
-                attr->start = data["dim_{i}_start"];
-                attr->end = data["dim_{i}_end"];
-                attr->step = data["dim_{i}_step"];
-                op.op_attr.reset(attr);
-                """
-                result = acl_cmd_forward("Range", [],
-                                         output_dtypes=[tmp.dtype],
-                                         output_shapes=[tmp.shape],
-                                         attr_code=range_attr_code,
-                                         extra_data=extra_data)[0]
-                broadcast_dims = list(range(len(inshape)))
-                broadcast_dims.remove(d)
-                result = jt.broadcast(result,
-                                      shape=inshape,
-                                      dims=broadcast_dims)
-                results.append(result)
+    #             tmp = jt.zeros(max_len, dtype=dtype)
+    #             range_attr_code = f"""
+    #             op.jt_name = "range";
+    #             RangeAttr *attr = new RangeAttr();
+    #             attr->start = data["dim_{i}_start"];
+    #             attr->end = data["dim_{i}_end"];
+    #             attr->step = data["dim_{i}_step"];
+    #             op.op_attr.reset(attr);
+    #             """
+    #             result = acl_cmd_forward("Range", [],
+    #                                      output_dtypes=[tmp.dtype],
+    #                                      output_shapes=[tmp.shape],
+    #                                      attr_code=range_attr_code,
+    #                                      extra_data=extra_data)[0]
+    #             broadcast_dims = list(range(len(inshape)))
+    #             broadcast_dims.remove(d)
+    #             result = jt.broadcast(result,
+    #                                   shape=inshape,
+    #                                   dims=broadcast_dims)
+    #             results.append(result)
 
-            if len(results) != 1 or dim_input == None:
-                return tuple(results)
-            elif len(results) == 1 and dim_input != None:
-                return results[0]
-            else:
-                return results
+    #         if len(results) != 1 or dim_input == None:
+    #             return tuple(results)
+    #         elif len(results) == 1 and dim_input != None:
+    #             return results[0]
+    #         else:
+    #             return results
 
-        def grad(self, grad_output):
-            return grad_output
+    #     def grad(self, grad_output):
+    #         return grad_output
+
+    from .aclops.index_op import IndexACL
 
     def index_acl(inshape: Union[jt.Var, list], dim=None, dtype="int32"):
         if isinstance(inshape, jt.Var):
