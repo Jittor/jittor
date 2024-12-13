@@ -503,6 +503,28 @@ class TestACL(unittest.TestCase):
         res = self.measure_time(lambda: jt.grad(b.sum(), a))
         np.testing.assert_allclose(res.numpy(), [[2, 0], [1, 1]])
         print("test gather grad success")
+    
+    @jt.flag_scope(use_acl=1)
+    def test_cumsum_1(self):
+        a = jt.array([1, 2, 3, 4, 5])
+        b = self.measure_time(lambda: jt.cumsum(a))
+        np.testing.assert_allclose(b.numpy(), [1, 3, 6, 10, 15])
+        print("test cumsum (test case 1) success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_cumsum_2(self):
+        a = jt.array([[1, 2, 3], [4, 5, 6]])
+        b = self.measure_time(lambda: jt.cumsum(a, dim = 0))
+        np.testing.assert_allclose(b.numpy(), [[1, 2, 3], [5, 7, 9]])
+        print("test cumsum (test case 2) success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_cumsum_grad(self):
+        a = jt.array([[1., 2., 3.], [4., 5., 6.]])
+        b = jt.cumsum(a, dim = 0)
+        res = self.measure_time(lambda: jt.grad(b.sum(), a))
+        np.testing.assert_allclose(res.numpy(), [[2., 2., 2.], [1., 1., 1.]])
+        print("test cumsum grad success")
 
     @jt.flag_scope(use_acl=1)
     def test_any_1(self):
