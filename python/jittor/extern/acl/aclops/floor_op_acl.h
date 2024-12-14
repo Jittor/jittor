@@ -4,15 +4,12 @@
 
 namespace jittor
 {
-    class RandomOpRunner : public BaseOpRunner
+    class FloorOpRunner : public BaseOpRunner
     {
 
     protected:
-        string name; // special to random op
         void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
-
     public:
-        RandomOpRunner();
-        RandomOpRunner(const string &name);
+        FloorOpRunner();
     };
 }

@@ -257,16 +257,16 @@ namespace jittor
             //     ret = it->second.getWorkspaceSizeFuncRandom(outputTensors[0], 0.0, 1.0, attr->seed, attr->offset, &workspaceSize, &executor);
             //     break;
             // }
-            case 15:
-            {
-                ret = it->second.getWorkspaceSizeFuncUnaryNonzero(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
-                break;
-            }
-            case 17:
-            {
-                ret = it->second.getWorkspaceSizeFuncSelect(inputTensors[0], inputTensors[1], inputTensors[2], outputTensors[0], &workspaceSize, &executor);
-                break;
-            }
+            // case 15:
+            // {
+            //     ret = it->second.getWorkspaceSizeFuncUnaryNonzero(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
+            // case 17:
+            // {
+            //     ret = it->second.getWorkspaceSizeFuncSelect(inputTensors[0], inputTensors[1], inputTensors[2], outputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
             case 18:
             {
                 auto attr = dynamic_cast<TriuAttr *>(op_attr.get());
@@ -384,11 +384,11 @@ namespace jittor
             //     ret = it->second.getWorkspaceSizeFuncScatter(inputTensors[0], attr->axis, inputTensors[1], inputTensors[2], attr->reduction, outputTensors[0], &workspaceSize, &executor);
             //     break;
             // }
-            case 31:
-            {
-                ret = it->second.getWorkspaceSizeFuncUnaryNonzero(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
-                break;
-            }
+            // case 31:
+            // {
+            //     ret = it->second.getWorkspaceSizeFuncUnaryNonzero(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
             // case 32:
             // {
             //     auto indexTensorList = aclCreateTensorList(&inputTensors[1], input_num - 1);
