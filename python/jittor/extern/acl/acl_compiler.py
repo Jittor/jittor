@@ -834,7 +834,7 @@ def change_function():
     #                              attr_code=attr_code)[0]
     #         return grad_input
 
-    from .aclops.gather_op import GatherACL
+    from .aclops.gather_scatter_op import GatherACL
 
     def gather_acl(input, dim, index):
         return GatherACL()(input, dim, index)
@@ -963,194 +963,201 @@ def change_function():
             inshape = inshape.shape
         return IndexACL()(inshape, dim, dtype)
 
-    class ScatterACL(Function):
+    # class ScatterACL(Function):
 
-        def __init__(self):
-            super(ScatterACL, self).__init__()
+    #     def __init__(self):
+    #         super(ScatterACL, self).__init__()
 
-        def execute(self, input, dim, index, src, reduce='void'):
-            self.dim = dim
-            self.index = index
-            self.reduce = reduce
-            attr_code = f"""
-            op.jt_name = "scatter";
-            ScatterAttr *attr = new ScatterAttr();
-            attr->axis = {dim};
-            attr->reduction = {1 if reduce == 'add' else 2 if reduce == 'mul' else 0};
-            op.op_attr.reset(attr);
-            """
-            result = acl_cmd("Scatter", [input, self.index, src],
-                             output_dtypes=[input.dtype],
-                             output_shapes=[input.shape],
-                             attr_code=attr_code)[0]
-            return result
+    #     def execute(self, input, dim, index, src, reduce='void'):
+    #         self.dim = dim
+    #         self.index = index
+    #         self.reduce = reduce
+    #         attr_code = f"""
+    #         op.jt_name = "scatter";
+    #         ScatterAttr *attr = new ScatterAttr();
+    #         attr->axis = {dim};
+    #         attr->reduction = {1 if reduce == 'add' else 2 if reduce == 'mul' else 0};
+    #         op.op_attr.reset(attr);
+    #         """
+    #         result = acl_cmd("Scatter", [input, self.index, src],
+    #                          output_dtypes=[input.dtype],
+    #                          output_shapes=[input.shape],
+    #                          attr_code=attr_code)[0]
+    #         return result
 
-        def grad(self, grad_output):
-            attr_code = f"""
-            op.jt_name = "gather";
-            GatherAttr *attr = new GatherAttr();
-            attr->dim = {self.dim};
-            op.op_attr.reset(attr);
-            """
-            grad_input = acl_cmd("Gather", [grad_output, self.index],
-                                 output_dtypes=[grad_output.dtype],
-                                 output_shapes=[self.index.shape],
-                                 attr_code=attr_code)[0]
-            return grad_output, None, None, grad_input
+    #     def grad(self, grad_output):
+    #         attr_code = f"""
+    #         op.jt_name = "gather";
+    #         GatherAttr *attr = new GatherAttr();
+    #         attr->dim = {self.dim};
+    #         op.op_attr.reset(attr);
+    #         """
+    #         grad_input = acl_cmd("Gather", [grad_output, self.index],
+    #                              output_dtypes=[grad_output.dtype],
+    #                              output_shapes=[self.index.shape],
+    #                              attr_code=attr_code)[0]
+    #         return grad_output, None, None, grad_input
 
+    from .aclops.gather_scatter_op import ScatterACL
     def scatter_acl(input, dim, index, src, reduce='void'):
         return ScatterACL()(input, dim, index, src, reduce)
 
-    class WhereACL(Function):
+    # class WhereACL(Function):
 
-        def __init__(self):
-            super(WhereACL, self).__init__()
+    #     def __init__(self):
+    #         super(WhereACL, self).__init__()
 
-        def execute(self, condition, x=None, y=None):
-            # case 1 (unary)
-            if y is None:
-                self.unary = True
+    #     def execute(self, condition, x=None, y=None):
+    #         # case 1 (unary)
+    #         if y is None:
+    #             self.unary = True
 
-                # In this case, `condition` is the input, while `x` is dtype
-                result = nonzero_acl(condition).t()
-                result = [result[i] for i in range(result.size(0))]
-                return result
-                # The return value should be a tuple, but even we set to tuple here, it will be convert to a list in `Function.__call__`.
+    #             # In this case, `condition` is the input, while `x` is dtype
+    #             result = nonzero_acl(condition).t()
+    #             result = [result[i] for i in range(result.size(0))]
+    #             return result
+    #             # The return value should be a tuple, but even we set to tuple here, it will be convert to a list in `Function.__call__`.
 
-            # case 2 (cond ? x : y)
-            else:
-                self.condition = condition
+    #         # case 2 (cond ? x : y)
+    #         else:
+    #             self.condition = condition
 
-                if x.dtype != y.dtype:
-                    if x.dtype == jt.float32:
-                        y = y.float32()
-                    elif y.dtype == jt.float32:
-                        x = x.float32()
-                    else:
-                        x = x.to(y.dtype)
+    #             if x.dtype != y.dtype:
+    #                 if x.dtype == jt.float32:
+    #                     y = y.float32()
+    #                 elif y.dtype == jt.float32:
+    #                     x = x.float32()
+    #                 else:
+    #                     x = x.to(y.dtype)
 
-                self.x = x
-                self.y = y
+    #             self.x = x
+    #             self.y = y
 
-                result = acl_cmd("Where", [condition, x, y],
-                                 output_dtypes=[x.dtype],
-                                 output_shapes=[x.shape],
-                                 attr_code="op.jt_name=\"where\";")[0]
-                return result
+    #             result = acl_cmd("Where", [condition, x, y],
+    #                              output_dtypes=[x.dtype],
+    #                              output_shapes=[x.shape],
+    #                              attr_code="op.jt_name=\"where\";")[0]
+    #             return result
 
-        def grad(self, grad_output):
-            if hasattr(self, 'unary') and self.unary:
-                return grad_output
-            else:
-                tmp = jt.zeros(grad_output.shape, dtype=grad_output.dtype)
-                grad_x = acl_cmd("Where", [self.condition, grad_output, tmp],
-                                 output_dtypes=[self.x.dtype],
-                                 output_shapes=[self.x.shape],
-                                 attr_code="op.jt_name=\"where\";")[0]
+    #     def grad(self, grad_output):
+    #         if hasattr(self, 'unary') and self.unary:
+    #             return grad_output
+    #         else:
+    #             tmp = jt.zeros(grad_output.shape, dtype=grad_output.dtype)
+    #             grad_x = acl_cmd("Where", [self.condition, grad_output, tmp],
+    #                              output_dtypes=[self.x.dtype],
+    #                              output_shapes=[self.x.shape],
+    #                              attr_code="op.jt_name=\"where\";")[0]
 
-                grad_y = acl_cmd("Where", [self.condition, tmp, grad_output],
-                                 output_dtypes=[self.y.dtype],
-                                 output_shapes=[self.y.shape],
-                                 attr_code="op.jt_name=\"where\";")[0]
-                return grad_output, grad_x, grad_y
+    #             grad_y = acl_cmd("Where", [self.condition, tmp, grad_output],
+    #                              output_dtypes=[self.y.dtype],
+    #                              output_shapes=[self.y.shape],
+    #                              attr_code="op.jt_name=\"where\";")[0]
+    #             return grad_output, grad_x, grad_y
+
+    from .aclops.where_op import WhereACL
 
     def where_acl(condition, x=None, y=None):
         return WhereACL()(condition, x, y)
 
-    class NonzeroACL(Function):
+    # class NonzeroACL(Function):
 
-        def __init__(self):
-            super(NonzeroACL, self).__init__()
+    #     def __init__(self):
+    #         super(NonzeroACL, self).__init__()
 
-        def execute(self, x):
-            attr_code = f"""
-            op.jt_name = "nonzero";
-            """
-            nonzero_cnt = (x != 0.0).sum().item()
+    #     def execute(self, x):
+    #         attr_code = f"""
+    #         op.jt_name = "nonzero";
+    #         """
+    #         nonzero_cnt = (x != 0.0).sum().item()
 
-            result = acl_cmd("Nonzero", [x],
-                             output_dtypes=['int64'],
-                             output_shapes=[(nonzero_cnt, x.ndim)],
-                             attr_code=attr_code)[0]
+    #         result = acl_cmd("Nonzero", [x],
+    #                          output_dtypes=['int64'],
+    #                          output_shapes=[(nonzero_cnt, x.ndim)],
+    #                          attr_code=attr_code)[0]
 
-            return result
+    #         return result
 
-        def grad(self, grad_output):
-            return grad_output
+    #     def grad(self, grad_output):
+    #         return grad_output
+
+    from .aclops.where_op import NonzeroACL
 
     def nonzero_acl(x):
         return NonzeroACL()(x)
 
-    class FloorIntACL(Function):
+    # class FloorIntACL(Function):
 
-        def __init__(self):
-            super(FloorIntACL, self).__init__()
+    #     def __init__(self):
+    #         super(FloorIntACL, self).__init__()
 
-        def execute(self, input):
-            self.shape = input.shape
-            result = acl_cmd("Floor", [input],
-                             output_dtypes=[input.dtype],
-                             output_shapes=[input.shape],
-                             attr_code="op.jt_name=\"floor\";")[0]
-            return result
+    #     def execute(self, input):
+    #         self.shape = input.shape
+    #         result = acl_cmd("Floor", [input],
+    #                          output_dtypes=[input.dtype],
+    #                          output_shapes=[input.shape],
+    #                          attr_code="op.jt_name=\"floor\";")[0]
+    #         return result
 
-        def grad(self, grad_output):
-            return jt.zeros(self.shape, dtype=grad_output.dtype)
+    #     def grad(self, grad_output):
+    #         return jt.zeros(self.shape, dtype=grad_output.dtype)
+
+    from .aclops.floor_op import FloorIntACL
 
     def floor_int_acl(x):
         return FloorIntACL()(x)
 
-    def caculate_shape(tensors):
-        if isinstance(tensors, jt.Var):
-            # tensors = tensors[0]
-            return tensors.shape
-        elif isinstance(tensors, (int, float)):
-            return []
-        elif isinstance(tensors, (list, tuple)):
-            # return [caculate_shape(tensor) for tensor in tensors]
-            sub_shape = caculate_shape(tensors[0])
-            return [len(tensors)] + sub_shape
-        else:
-            assert False, f"not implemented for {type(tensors)}"
+    # def caculate_shape(tensors):
+    #     if isinstance(tensors, jt.Var):
+    #         # tensors = tensors[0]
+    #         return tensors.shape
+    #     elif isinstance(tensors, (int, float)):
+    #         return []
+    #     elif isinstance(tensors, (list, tuple)):
+    #         # return [caculate_shape(tensor) for tensor in tensors]
+    #         sub_shape = caculate_shape(tensors[0])
+    #         return [len(tensors)] + sub_shape
+    #     else:
+    #         assert False, f"not implemented for {type(tensors)}"
 
-    def can_broadcast_and_shape(shape1, shape2):
-        """
-        检查两个张量是否可以广播，并返回广播后的形状。
+    # def can_broadcast_and_shape(shape1, shape2):
+    #     """
+    #     检查两个张量是否可以广播，并返回广播后的形状。
         
-        参数:
-        - shape1: 第一个张量的形状（tuple 或 list）
-        - shape2: 第二个张量的形状（tuple 或 list）
+    #     参数:
+    #     - shape1: 第一个张量的形状（tuple 或 list）
+    #     - shape2: 第二个张量的形状（tuple 或 list）
         
-        返回:
-        - can_broadcast: 布尔值，表示是否可以广播
-        - broadcast_shape: 如果可以广播，返回广播后的形状；否则返回 None
-        """
-        # 将形状转换为元组，以防输入是列表
-        shape1 = tuple(shape1)
-        shape2 = tuple(shape2)
+    #     返回:
+    #     - can_broadcast: 布尔值，表示是否可以广播
+    #     - broadcast_shape: 如果可以广播，返回广播后的形状；否则返回 None
+    #     """
+    #     # 将形状转换为元组，以防输入是列表
+    #     shape1 = tuple(shape1)
+    #     shape2 = tuple(shape2)
 
-        # 使两个形状的长度一致，通过在前面补1
-        len1, len2 = len(shape1), len(shape2)
-        if len1 < len2:
-            shape1 = (1, ) * (len2 - len1) + shape1
-        elif len2 < len1:
-            shape2 = (1, ) * (len1 - len2) + shape2
+    #     # 使两个形状的长度一致，通过在前面补1
+    #     len1, len2 = len(shape1), len(shape2)
+    #     if len1 < len2:
+    #         shape1 = (1, ) * (len2 - len1) + shape1
+    #     elif len2 < len1:
+    #         shape2 = (1, ) * (len1 - len2) + shape2
 
-        broadcast_shape = []
+    #     broadcast_shape = []
 
-        # 从最后一维开始检查每一维度
-        for dim1, dim2 in zip(shape1, shape2):
-            if dim1 == dim2:
-                broadcast_shape.append(dim1)
-            elif dim1 == 1:
-                broadcast_shape.append(dim2)
-            elif dim2 == 1:
-                broadcast_shape.append(dim1)
-            else:
-                # 如果在某一维度上不兼容，则不能广播
-                return False, None
+    #     # 从最后一维开始检查每一维度
+    #     for dim1, dim2 in zip(shape1, shape2):
+    #         if dim1 == dim2:
+    #             broadcast_shape.append(dim1)
+    #         elif dim1 == 1:
+    #             broadcast_shape.append(dim2)
+    #         elif dim2 == 1:
+    #             broadcast_shape.append(dim1)
+    #         else:
+    #             # 如果在某一维度上不兼容，则不能广播
+    #             return False, None
 
-        return True, tuple(broadcast_shape)
+    #     return True, tuple(broadcast_shape)
 
     # class GetItemACL(Function):
 

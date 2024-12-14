@@ -11,7 +11,7 @@ import numpy as np
 from typing import Union
 from collections.abc import Sequence, Iterable
 
-def gather_cmd(name: str,
+def floor_cmd(name: str,
             inputs: list,
             output_dtypes: list = None,
             output_shapes: list = None,
@@ -51,37 +51,18 @@ def gather_cmd(name: str,
     {attr_code}
     op.run();""")
 
-class GatherACL(jt.Function):
+class FloorIntACL(jt.Function):
 
     def __init__(self):
-        super(GatherACL, self).__init__()
+        super(FloorIntACL, self).__init__()
 
-    def execute(self, input, dim, index):
-        self.dim = dim
-        self.index = index
-        attr_code = f"""
-        op.jt_name = "gather";
-        GatherAttr *attr = new GatherAttr();
-        attr->dim = {dim};
-        op.op_attr.reset(attr);
-        """
-        result = gather_cmd("Gather", [input, index],
+    def execute(self, input):
+        self.shape = input.shape
+        result = floor_cmd("Floor", [input],
                             output_dtypes=[input.dtype],
-                            output_shapes=[index.shape],
-                            attr_code=attr_code)[0]
+                            output_shapes=[input.shape],
+                            attr_code="op.jt_name=\"floor\";")[0]
         return result
 
     def grad(self, grad_output):
-        tmp = jt.zeros(self.index.shape, dtype=grad_output.dtype)
-        attr_code = f"""
-        op.jt_name = "scatter";
-        ScatterAttr *attr = new ScatterAttr();
-        attr->axis = {self.dim};
-        attr->reduction = {1};
-        op.op_attr.reset(attr);
-        """
-        grad_input = gather_cmd("Scatter", [tmp, self.index, grad_output],
-                                output_dtypes=[grad_output.dtype],
-                                output_shapes=[tmp.shape],
-                                attr_code=attr_code)[0]
-        return grad_input
+        return jt.zeros(self.shape, dtype=grad_output.dtype)
