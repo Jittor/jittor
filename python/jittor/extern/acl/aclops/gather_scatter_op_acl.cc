@@ -27,7 +27,7 @@
 #include "opt/tuner_manager.h"
 #include "utils/str_utils.h"
 #include "aclnn/aclnn.h"
-#include "gather_op_acl.h"
+#include "gather_scatter_op_acl.h"
 
 namespace jittor
 {
