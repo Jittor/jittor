@@ -572,6 +572,7 @@ class Dropout(Module):
                 noise = jt.random(input.shape)
                 noise = (noise > self.p).int()
                 output = output * noise / (1.0 - self.p) # div keep prob
+        output = output.to(input.dtype)
         return output
 
 def dropout(x,p=0.5,is_train=False):
