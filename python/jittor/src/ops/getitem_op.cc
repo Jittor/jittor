@@ -572,6 +572,8 @@ void GetitemOp::jit_run() {
                 index_t(vp@d[0 @for(j,0,VD,@if((VS@d>>j)&1, + i@{j+FOV} * vs@d@@s@j,))])
             , ??? ))))));
         )
+        @for(d, 0, IDIM, if (iid@d < 0) iid@d += ishape@d;
+        )
         auto iid = 0 @for(d, 0, IDIM,  + iid@d * istride@d);
         op[oid] = ip[iid];
     }
