@@ -1,10 +1,11 @@
 import os
-from jittor_utils import env_or_try_find
 import jittor_utils
+from jittor_utils import env_or_try_find
 import ctypes
 import glob
-import jittor.compiler as compiler
 import jittor as jt
+import jittor.compiler as compiler
+from jittor.extern.acl.acl_compiler import acl_cmd_forward
 import math
 import numpy as np
 
