@@ -157,11 +157,11 @@ template<class... Args>
 unique_ptr<Expr> make_op(const string& str, Args&&... args) {
     vector<unique_ptr<Expr>> children;
     children.reserve(sizeof...(args));
-    auto f = [&](unique_ptr<Expr>& c) { children.emplace_back(move(c)); };
+    auto f = [&](unique_ptr<Expr>& c) { children.emplace_back(std::move(c)); };
     // Brace-enclosed initializers
     int dummy[] = {(f(args), 0)...};
     (void)dummy;
-    return make(str, move(children));
+    return make(str, std::move(children));
 }
 
 template <typename Func>
