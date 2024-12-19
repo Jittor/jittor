@@ -1867,213 +1867,215 @@ def change_function():
     def matmul_transpose_acl(x1, x2):
         return MatmulACL(True)(x1, x2)
 
-    class TransPoseACL(Function):
+    # class TransPoseACL(Function):
 
-        def __init__(self):
-            super(TransPoseACL, self).__init__()
+    #     def __init__(self):
+    #         super(TransPoseACL, self).__init__()
 
-        def execute(self, x, *dim):
-            self.input = x
-            if len(dim) == 1 and isinstance(dim[0], Sequence):
-                dim = dim[0]
-            elif len(dim) == 2:
-                axes = list(range(x.ndim))
-                a, b = dim
-                axes[a], axes[b] = axes[b], axes[a]
-                dim = axes
+    #     def execute(self, x, *dim):
+    #         self.input = x
+    #         if len(dim) == 1 and isinstance(dim[0], Sequence):
+    #             dim = dim[0]
+    #         elif len(dim) == 2:
+    #             axes = list(range(x.ndim))
+    #             a, b = dim
+    #             axes[a], axes[b] = axes[b], axes[a]
+    #             dim = axes
 
-            attr_code = f"""
-            op.jt_name = "transpose";
-            ReduceAttr *attr = new ReduceAttr();
-            attr->axes = {{ {", ".join(map(str, dim))} }};
-            op.op_attr.reset(attr);
-            """
-            # calculate output shape
-            output_shape = [x.shape[i] for i in dim]
-            output = acl_cmd("Transpose", [x],
-                             output_dtypes=[x.dtype],
-                             output_shapes=[jt.empty(output_shape).shape],
-                             attr_code=attr_code)[0]
-            self.dim = dim
-            return output
+    #         attr_code = f"""
+    #         op.jt_name = "transpose";
+    #         ReduceAttr *attr = new ReduceAttr();
+    #         attr->axes = {{ {", ".join(map(str, dim))} }};
+    #         op.op_attr.reset(attr);
+    #         """
+    #         # calculate output shape
+    #         output_shape = [x.shape[i] for i in dim]
+    #         output = acl_cmd("Transpose", [x],
+    #                          output_dtypes=[x.dtype],
+    #                          output_shapes=[jt.empty(output_shape).shape],
+    #                          attr_code=attr_code)[0]
+    #         self.dim = dim
+    #         return output
 
-        def grad(self, grad_output):
-            dim = list(range(grad_output.ndim))
-            for i, p in enumerate(self.dim):
-                dim[p] = i
-            output_shape = [grad_output.shape[i] for i in dim]
-            attr_code = f"""
-            op.jt_name = "transpose";
-            ReduceAttr *attr = new ReduceAttr();
-            attr->axes = {{ {", ".join(map(str, dim))} }};
-            op.op_attr.reset(attr);
-            """
-            output = acl_cmd("Transpose", [grad_output],
-                             output_dtypes=[grad_output.dtype],
-                             output_shapes=[jt.empty(output_shape).shape],
-                             attr_code=attr_code)[0]
-            return output
+    #     def grad(self, grad_output):
+    #         dim = list(range(grad_output.ndim))
+    #         for i, p in enumerate(self.dim):
+    #             dim[p] = i
+    #         output_shape = [grad_output.shape[i] for i in dim]
+    #         attr_code = f"""
+    #         op.jt_name = "transpose";
+    #         ReduceAttr *attr = new ReduceAttr();
+    #         attr->axes = {{ {", ".join(map(str, dim))} }};
+    #         op.op_attr.reset(attr);
+    #         """
+    #         output = acl_cmd("Transpose", [grad_output],
+    #                          output_dtypes=[grad_output.dtype],
+    #                          output_shapes=[jt.empty(output_shape).shape],
+    #                          attr_code=attr_code)[0]
+    #         return output
+
+    from .aclops.transpose_op import TransPoseACL
 
     def transpose_acl(x, *dim):
         return TransPoseACL()(x, *dim)
 
-    class FlashAttentionACL(Function):
+    # class FlashAttentionACL(Function):
 
-        def __init__(self,
-                     headnum,
-                     layout="BNSD",
-                     prefix=None,
-                     qstart=None,
-                     kvstart=None,
-                     scale=1.0,
-                     prob=1.0,
-                     pretokens=2147483647,
-                     nexttokens=2147483647,
-                     innerprecise=0,
-                     sparsemode=0,
-                     psetype=1):
-            self.headnum = headnum
-            self.layout = layout
-            self.scale = scale
-            self.prob = prob
-            self.pretokens = pretokens
-            self.nexttokens = nexttokens
-            self.innerprecise = innerprecise
-            self.sparsemode = sparsemode
-            self.psetype = psetype
-            self.prefix = prefix
-            self.qstart = qstart
-            self.kvstart = kvstart
+    #     def __init__(self,
+    #                  headnum,
+    #                  layout="BNSD",
+    #                  prefix=None,
+    #                  qstart=None,
+    #                  kvstart=None,
+    #                  scale=1.0,
+    #                  prob=1.0,
+    #                  pretokens=2147483647,
+    #                  nexttokens=2147483647,
+    #                  innerprecise=0,
+    #                  sparsemode=0,
+    #                  psetype=1):
+    #         self.headnum = headnum
+    #         self.layout = layout
+    #         self.scale = scale
+    #         self.prob = prob
+    #         self.pretokens = pretokens
+    #         self.nexttokens = nexttokens
+    #         self.innerprecise = innerprecise
+    #         self.sparsemode = sparsemode
+    #         self.psetype = psetype
+    #         self.prefix = prefix
+    #         self.qstart = qstart
+    #         self.kvstart = kvstart
 
-        def execute(
-            self,
-            q,
-            k,
-            v,
-            realshift=None,
-            dropMask=None,
-            paddingMask=None,
-            attenMask=None,
-        ):
-            if self.layout == 'BSH':
-                B, SQ, H = q.shape
-                SKV = k.shape[1]
-                N = self.headnum
-                D = H / N
-            elif self.layout == 'SBH':
-                SQ, B, H = q.shape
-                SKV = k.shape[0]
-                N = self.headnum
-                D = H / N
-            elif self.layout == 'BSND':
-                B, SQ, N, D = q.shape
-                SKV = k.shape[1]
-            elif self.layout == 'BNSD':
-                B, N, SQ, D = q.shape
-                SKV = k.shape[2]
-            else:
-                raise ValueError(f"got invalid input layout {self.layout}")
+    #     def execute(
+    #         self,
+    #         q,
+    #         k,
+    #         v,
+    #         realshift=None,
+    #         dropMask=None,
+    #         paddingMask=None,
+    #         attenMask=None,
+    #     ):
+    #         if self.layout == 'BSH':
+    #             B, SQ, H = q.shape
+    #             SKV = k.shape[1]
+    #             N = self.headnum
+    #             D = H / N
+    #         elif self.layout == 'SBH':
+    #             SQ, B, H = q.shape
+    #             SKV = k.shape[0]
+    #             N = self.headnum
+    #             D = H / N
+    #         elif self.layout == 'BSND':
+    #             B, SQ, N, D = q.shape
+    #             SKV = k.shape[1]
+    #         elif self.layout == 'BNSD':
+    #             B, N, SQ, D = q.shape
+    #             SKV = k.shape[2]
+    #         else:
+    #             raise ValueError(f"got invalid input layout {self.layout}")
 
-            output_shape = (B, N, SQ, 8)
+    #         output_shape = (B, N, SQ, 8)
 
-            self.q = q
-            self.k = k
-            self.v = v
+    #         self.q = q
+    #         self.k = k
+    #         self.v = v
 
-            self.prefix = self.prefix if self.prefix else [0 for _ in range(B)]
-            self.qstart = self.qstart if self.qstart else [0 for _ in range(B)]
-            self.kvstart = self.kvstart if self.kvstart else [
-                0 for _ in range(B)
-            ]
+    #         self.prefix = self.prefix if self.prefix else [0 for _ in range(B)]
+    #         self.qstart = self.qstart if self.qstart else [0 for _ in range(B)]
+    #         self.kvstart = self.kvstart if self.kvstart else [
+    #             0 for _ in range(B)
+    #         ]
 
-            self.hasRealshift = (not realshift == None)
-            self.hasDropmask = (not dropMask == None)
-            self.hasPaddingmask = (not paddingMask == None)
-            self.hasAttenmask = (not attenMask == None)
+    #         self.hasRealshift = (not realshift == None)
+    #         self.hasDropmask = (not dropMask == None)
+    #         self.hasPaddingmask = (not paddingMask == None)
+    #         self.hasAttenmask = (not attenMask == None)
 
-            # 待定，目前设为nullptr
-            self.realshift = realshift if realshift else jt.zeros(
-                B, N, SQ, SKV)
-            self.dropMask = dropMask if dropMask else jt.ones(B, N, SQ, SKV)
-            self.paddingMask = paddingMask if paddingMask else jt.zeros(
-                B, N, SQ, SKV)
-            self.attenMask = attenMask if attenMask else jt.zeros(SQ, SKV)
+    #         # 待定，目前设为nullptr
+    #         self.realshift = realshift if realshift else jt.zeros(
+    #             B, N, SQ, SKV)
+    #         self.dropMask = dropMask if dropMask else jt.ones(B, N, SQ, SKV)
+    #         self.paddingMask = paddingMask if paddingMask else jt.zeros(
+    #             B, N, SQ, SKV)
+    #         self.attenMask = attenMask if attenMask else jt.zeros(SQ, SKV)
 
-            attr_code = f"""
-            op.jt_name = "flashattention";
-            FlashAttentionAttr *attr = new FlashAttentionAttr();
-            attr->scale = {self.scale};
-            attr->keepProb = {self.prob};
-            attr->preToken = {self.pretokens};
-            attr->nextToken = {self.nexttokens};
-            attr->headNum = {self.headnum};
-            attr->inputLayout = "{self.layout}";
-            attr->innerPrecise = {self.innerprecise};
-            attr->sparseMode = {self.sparsemode};
-            attr->psetype = {self.psetype};
-            attr->prefix = {{ {", ".join(map(str, self.prefix))} }};
-            attr->qStartIdx = {{ {", ".join(map(str, self.qstart))} }};
-            attr->kvStartIdx = {{ {", ".join(map(str, self.kvstart))} }};
-            attr->hasRealshift = {"true" if self.hasRealshift else "false"};
-            attr->hasDropmask = {"true" if self.hasDropmask else "false"};
-            attr->hasPaddingmask = {"true" if self.hasPaddingmask else "false"};
-            attr->hasAttentmask = {"true" if self.hasAttenmask else "false"};
-            op.op_attr.reset(attr);
-            """
+    #         attr_code = f"""
+    #         op.jt_name = "flashattention";
+    #         FlashAttentionAttr *attr = new FlashAttentionAttr();
+    #         attr->scale = {self.scale};
+    #         attr->keepProb = {self.prob};
+    #         attr->preToken = {self.pretokens};
+    #         attr->nextToken = {self.nexttokens};
+    #         attr->headNum = {self.headnum};
+    #         attr->inputLayout = "{self.layout}";
+    #         attr->innerPrecise = {self.innerprecise};
+    #         attr->sparseMode = {self.sparsemode};
+    #         attr->psetype = {self.psetype};
+    #         attr->prefix = {{ {", ".join(map(str, self.prefix))} }};
+    #         attr->qStartIdx = {{ {", ".join(map(str, self.qstart))} }};
+    #         attr->kvStartIdx = {{ {", ".join(map(str, self.kvstart))} }};
+    #         attr->hasRealshift = {"true" if self.hasRealshift else "false"};
+    #         attr->hasDropmask = {"true" if self.hasDropmask else "false"};
+    #         attr->hasPaddingmask = {"true" if self.hasPaddingmask else "false"};
+    #         attr->hasAttentmask = {"true" if self.hasAttenmask else "false"};
+    #         op.op_attr.reset(attr);
+    #         """
 
-            inputs = [
-                q, k, v, self.realshift, self.dropMask, self.paddingMask,
-                self.attenMask
-            ]
+    #         inputs = [
+    #             q, k, v, self.realshift, self.dropMask, self.paddingMask,
+    #             self.attenMask
+    #         ]
 
-            result = acl_cmd(
-                "FlashAttention",
-                inputs,
-                output_dtypes=["float", "float", q.dtype],
-                output_shapes=[output_shape, output_shape, q.shape],
-                attr_code=attr_code)
+    #         result = acl_cmd(
+    #             "FlashAttention",
+    #             inputs,
+    #             output_dtypes=["float", "float", q.dtype],
+    #             output_shapes=[output_shape, output_shape, q.shape],
+    #             attr_code=attr_code)
 
-            self.maxout = result[0]
-            self.sumout = result[1]
-            self.attenout = result[2]
+    #         self.maxout = result[0]
+    #         self.sumout = result[1]
+    #         self.attenout = result[2]
 
-            return self.attenout
+    #         return self.attenout
 
-        def grad(self, dy):
-            attr_code = f"""
-            op.jt_name = "flashattentionbackward";
-            FlashAttentionAttr *attr = new FlashAttentionAttr();
-            attr->scale = {self.scale};
-            attr->keepProb = {self.prob};
-            attr->preToken = {self.pretokens};
-            attr->nextToken = {self.nexttokens};
-            attr->headNum = {self.headnum};
-            attr->inputLayout = "{self.layout}";
-            attr->innerPrecise = {self.innerprecise};
-            attr->sparseMode = {self.sparsemode};
-            attr->psetype = {self.psetype};
-            attr->prefix = {{ {", ".join(map(str, self.prefix))} }};
-            attr->qStartIdx = {{ {", ".join(map(str, self.qstart))} }};
-            attr->kvStartIdx = {{ {", ".join(map(str, self.kvstart))} }};
-            attr->hasRealshift = {"true" if self.hasRealshift else "false"};
-            attr->hasDropmask = {"true" if self.hasDropmask else "false"};
-            attr->hasPaddingmask = {"true" if self.hasPaddingmask else "false"};
-            attr->hasAttentmask = {"true" if self.hasAttenmask else "false"};
-            op.op_attr.reset(attr);
-            """
-            inputs = [
-                self.q, self.k, self.v, dy, self.realshift, self.dropMask,
-                self.paddingMask, self.attenMask, self.maxout, self.sumout,
-                self.attenout
-            ]
+    #     def grad(self, dy):
+    #         attr_code = f"""
+    #         op.jt_name = "flashattentionbackward";
+    #         FlashAttentionAttr *attr = new FlashAttentionAttr();
+    #         attr->scale = {self.scale};
+    #         attr->keepProb = {self.prob};
+    #         attr->preToken = {self.pretokens};
+    #         attr->nextToken = {self.nexttokens};
+    #         attr->headNum = {self.headnum};
+    #         attr->inputLayout = "{self.layout}";
+    #         attr->innerPrecise = {self.innerprecise};
+    #         attr->sparseMode = {self.sparsemode};
+    #         attr->psetype = {self.psetype};
+    #         attr->prefix = {{ {", ".join(map(str, self.prefix))} }};
+    #         attr->qStartIdx = {{ {", ".join(map(str, self.qstart))} }};
+    #         attr->kvStartIdx = {{ {", ".join(map(str, self.kvstart))} }};
+    #         attr->hasRealshift = {"true" if self.hasRealshift else "false"};
+    #         attr->hasDropmask = {"true" if self.hasDropmask else "false"};
+    #         attr->hasPaddingmask = {"true" if self.hasPaddingmask else "false"};
+    #         attr->hasAttentmask = {"true" if self.hasAttenmask else "false"};
+    #         op.op_attr.reset(attr);
+    #         """
+    #         inputs = [
+    #             self.q, self.k, self.v, dy, self.realshift, self.dropMask,
+    #             self.paddingMask, self.attenMask, self.maxout, self.sumout,
+    #             self.attenout
+    #         ]
 
-            result = acl_cmd(
-                "FlashAttentionBackward",
-                inputs,
-                output_dtypes=[self.q.dtype, self.k.dtype, self.v.dtype],
-                output_shapes=[self.q.shape, self.k.shape, self.v.shape],
-                attr_code=attr_code)
-            return result
+    #         result = acl_cmd(
+    #             "FlashAttentionBackward",
+    #             inputs,
+    #             output_dtypes=[self.q.dtype, self.k.dtype, self.v.dtype],
+    #             output_shapes=[self.q.shape, self.k.shape, self.v.shape],
+    #             attr_code=attr_code)
+    #         return result
 
     class ReLUACL(Function):
 
@@ -2112,42 +2114,43 @@ def change_function():
     def relu(x):
         return ReLUACL()(x)
 
-    class LeakyReLUACL(Function):
+    # class LeakyReLUACL(Function):
 
-        def __init__(self):
-            super(LeakyReLUACL, self).__init__()
+    #     def __init__(self):
+    #         super(LeakyReLUACL, self).__init__()
 
-        def execute(self, x, negative_slope=0.01):
-            x = x.float32()
-            self.input = x
-            attr_code = f"""
-            op.jt_name = "leakyrelu";
-            LeakyReluAttr *attr = new LeakyReluAttr();
-            attr->negativeSlope = {negative_slope};
-            op.op_attr.reset(attr);
-            """
-            result = acl_cmd("LeakyReLU", [x],
-                             output_dtypes=[x.dtype],
-                             output_shapes=[x.shape],
-                             attr_code=attr_code)[0]
-            self.negative_slope = negative_slope
-            return result
+    #     def execute(self, x, negative_slope=0.01):
+    #         x = x.float32()
+    #         self.input = x
+    #         attr_code = f"""
+    #         op.jt_name = "leakyrelu";
+    #         LeakyReluAttr *attr = new LeakyReluAttr();
+    #         attr->negativeSlope = {negative_slope};
+    #         op.op_attr.reset(attr);
+    #         """
+    #         result = acl_cmd("LeakyReLU", [x],
+    #                          output_dtypes=[x.dtype],
+    #                          output_shapes=[x.shape],
+    #                          attr_code=attr_code)[0]
+    #         self.negative_slope = negative_slope
+    #         return result
 
-        def grad(self, grad_output):
-            attr_code = f"""
-            op.jt_name = "leakyrelubackward";
-            LeakyReluAttr *attr = new LeakyReluAttr();
-            attr->negativeSlope = {self.negative_slope};
-            attr->selfIsResult = false;
-            op.op_attr.reset(attr);
-            """
-            grad_input = acl_cmd("LeakyReLUBackward",
-                                 [grad_output, self.input],
-                                 output_dtypes=[grad_output.dtype],
-                                 output_shapes=[grad_output.shape],
-                                 attr_code=attr_code)[0]
-            return grad_input
+    #     def grad(self, grad_output):
+    #         attr_code = f"""
+    #         op.jt_name = "leakyrelubackward";
+    #         LeakyReluAttr *attr = new LeakyReluAttr();
+    #         attr->negativeSlope = {self.negative_slope};
+    #         attr->selfIsResult = false;
+    #         op.op_attr.reset(attr);
+    #         """
+    #         grad_input = acl_cmd("LeakyReLUBackward",
+    #                              [grad_output, self.input],
+    #                              output_dtypes=[grad_output.dtype],
+    #                              output_shapes=[grad_output.shape],
+    #                              attr_code=attr_code)[0]
+    #         return grad_input
 
+    from .aclops.relu_op import LeakyReLUACL
     class LeakyReLU(jt.nn.Module):
 
         def __init__(self, negative_slope=0.01):
@@ -2160,45 +2163,45 @@ def change_function():
     def leaky_relu(x, scale=0.01):
         return LeakyReLUACL()(x, scale)
 
-    class DropoutACL(Function):
+    # class DropoutACL(Function):
 
-        def __init__(self):
-            super(DropoutACL, self).__init__()
+    #     def __init__(self):
+    #         super(DropoutACL, self).__init__()
 
-        def execute(self, x, p=0.5, is_train=False):
-            self.input = x
-            num_elements = x.numel()
-            aligned_elements = (num_elements + 127) // 128 * 128
-            mask_shape = (aligned_elements // 8, )
-            attr_code = f"""
-            op.jt_name = "dropout";
-            DropoutAttr *attr = new DropoutAttr();
-            attr->p = {p};
-            attr->train = {"true" if is_train else "false"};
-            attr->seed = 0;
-            attr->offset = 0;
-            op.op_attr.reset(attr);
-            """
-            result = acl_cmd("Dropout", [x],
-                             output_dtypes=[x.dtype, "uint8"],
-                             output_shapes=[x.shape, mask_shape],
-                             attr_code=attr_code)
-            self.maskout = result[1]
-            return result[0]
+    #     def execute(self, x, p=0.5, is_train=False):
+    #         self.input = x
+    #         num_elements = x.numel()
+    #         aligned_elements = (num_elements + 127) // 128 * 128
+    #         mask_shape = (aligned_elements // 8, )
+    #         attr_code = f"""
+    #         op.jt_name = "dropout";
+    #         DropoutAttr *attr = new DropoutAttr();
+    #         attr->p = {p};
+    #         attr->train = {"true" if is_train else "false"};
+    #         attr->seed = 0;
+    #         attr->offset = 0;
+    #         op.op_attr.reset(attr);
+    #         """
+    #         result = acl_cmd("Dropout", [x],
+    #                          output_dtypes=[x.dtype, "uint8"],
+    #                          output_shapes=[x.shape, mask_shape],
+    #                          attr_code=attr_code)
+    #         self.maskout = result[1]
+    #         return result[0]
 
-        def grad(self, grad_output):
-            attr_code = f"""
-            op.jt_name = "dropoutbackward";
-            DropoutAttr *attr = new DropoutAttr();
-            attr->scale = 1.0;
-            op.op_attr.reset(attr);
-            """
-            grad_input = acl_cmd("DropoutBackward",
-                                 [grad_output, self.maskout],
-                                 output_dtypes=[grad_output.dtype],
-                                 output_shapes=[grad_output.shape],
-                                 attr_code=attr_code)[0]
-            return grad_input
+    #     def grad(self, grad_output):
+    #         attr_code = f"""
+    #         op.jt_name = "dropoutbackward";
+    #         DropoutAttr *attr = new DropoutAttr();
+    #         attr->scale = 1.0;
+    #         op.op_attr.reset(attr);
+    #         """
+    #         grad_input = acl_cmd("DropoutBackward",
+    #                              [grad_output, self.maskout],
+    #                              output_dtypes=[grad_output.dtype],
+    #                              output_shapes=[grad_output.shape],
+    #                              attr_code=attr_code)[0]
+    #         return grad_input
 
     class SiLUACL(Function):
 
@@ -2342,6 +2345,7 @@ def change_function():
             res = embedding_acl(x, self.weight)
             return res
 
+    from .aclops.dropout_op import DropoutACL
     class Dropout(jt.nn.Module):
 
         def __init__(self, p=0.5, is_train=False):
@@ -2795,6 +2799,7 @@ def change_function():
 
     # jt.nn.BatchNorm = warp(jt.nn.BatchNorm, BatchNormACL)
     # jt.nn.LayerNorm = warp(jt.nn.LayerNorm, LayerNormACL)
+    from .aclops.flashattention_op import FlashAttentionACL
     jt.nn.FlashAttention = warp(jt.nn.FlashAttention, FlashAttentionACL)
     jt.isnan = warp(jt.isnan, isnan_acl)
     jt.isinf = warp(jt.isinf, isinf_acl)

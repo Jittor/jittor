@@ -273,11 +273,11 @@ namespace jittor
                 ret = it->second.getWorkspaceSizeFuncCast(inputTensors[0], aclDataType(attr->diagonal), outputTensors[0], &workspaceSize, &executor);
                 break;
             }
-            case 19:
-            {
-                ret = it->second.getWorkspaceSizeFuncExpand(inputTensors[0], dim, outputTensors[0], &workspaceSize, &executor);
-                break;
-            }
+            // case 19:
+            // {
+            //     ret = it->second.getWorkspaceSizeFuncExpand(inputTensors[0], dim, outputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
             case 20:
             {
                 auto attr = dynamic_cast<ConvAttr *>(op_attr.get());
@@ -442,32 +442,32 @@ namespace jittor
             //     ret = it->second.getWorkspaceSizeFuncRange(start, end, step, outputTensors[0], &workspaceSize, &executor);
             //     break;
             // }
-            case 38:
-            {
-                auto attr = dynamic_cast<LeakyReluAttr *>(op_attr.get());
-                negativeSlope = aclCreateScalar(&attr->negativeSlope, aclDataType::ACL_FLOAT);
-                ret = it->second.getWorkspaceSizeFuncLeakyRelu(inputTensors[0], negativeSlope, outputTensors[0], &workspaceSize, &executor);
-                break;
-            }
-            case 39:
-            {
-                auto attr = dynamic_cast<LeakyReluAttr *>(op_attr.get());
-                negativeSlope = aclCreateScalar(&attr->negativeSlope, aclDataType::ACL_FLOAT);
-                ret = it->second.getWorkspaceSizeFuncLeakyReluBackward(inputTensors[0], inputTensors[1], negativeSlope, attr->selfIsResult, outputTensors[0], &workspaceSize, &executor);
-                break;
-            }
-            case 40:
-            {
-                auto attr = dynamic_cast<DropoutAttr *>(op_attr.get());
-                ret = it->second.getWorkspaceSizeFuncDropout(inputTensors[0], attr->p, attr->train, attr->seed, attr->offset, outputTensors[0], outputTensors[1], &workspaceSize, &executor);
-                break;
-            }
-            case 41:
-            {
-                auto attr = dynamic_cast<DropoutAttr *>(op_attr.get());
-                ret = it->second.getWorkspaceSizeFuncDropoutBackward(inputTensors[0], inputTensors[1], attr->scale, outputTensors[0], &workspaceSize, &executor);
-                break;
-            }
+            // case 38:
+            // {
+            //     auto attr = dynamic_cast<LeakyReluAttr *>(op_attr.get());
+            //     negativeSlope = aclCreateScalar(&attr->negativeSlope, aclDataType::ACL_FLOAT);
+            //     ret = it->second.getWorkspaceSizeFuncLeakyRelu(inputTensors[0], negativeSlope, outputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
+            // case 39:
+            // {
+            //     auto attr = dynamic_cast<LeakyReluAttr *>(op_attr.get());
+            //     negativeSlope = aclCreateScalar(&attr->negativeSlope, aclDataType::ACL_FLOAT);
+            //     ret = it->second.getWorkspaceSizeFuncLeakyReluBackward(inputTensors[0], inputTensors[1], negativeSlope, attr->selfIsResult, outputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
+            // case 40:
+            // {
+            //     auto attr = dynamic_cast<DropoutAttr *>(op_attr.get());
+            //     ret = it->second.getWorkspaceSizeFuncDropout(inputTensors[0], attr->p, attr->train, attr->seed, attr->offset, outputTensors[0], outputTensors[1], &workspaceSize, &executor);
+            //     break;
+            // }
+            // case 41:
+            // {
+            //     auto attr = dynamic_cast<DropoutAttr *>(op_attr.get());
+            //     ret = it->second.getWorkspaceSizeFuncDropoutBackward(inputTensors[0], inputTensors[1], attr->scale, outputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
             case 42:
             {
                 ret = it->second.getWorkspaceSizeFuncUnaryNonzero(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
@@ -518,26 +518,26 @@ namespace jittor
             //     ret = it->second.getWorkspaceSizeFuncSplitWithSize(inputTensors[0], splitSize, attr->dim, tensorList, &workspaceSize, &executor);
             //     break;
             // }
-            case 51:
-            {
-                auto attr = dynamic_cast<FlashAttentionAttr *>(op_attr.get());
-                auto prefix = aclCreateIntArray(attr->prefix.data(), attr->prefix.size());
-                auto qstart = aclCreateIntArray(attr->qStartIdx.data(), attr->qStartIdx.size());
-                auto kvstart = aclCreateIntArray(attr->kvStartIdx.data(), attr->kvStartIdx.size());
-                char *layout = const_cast<char *>(attr->inputLayout.data());
-                ret = it->second.getWorkspaceSizeFuncFalshAttention(inputTensors[0], inputTensors[1], inputTensors[2], attr->hasRealshift ? inputTensors[3] : nullptr, attr->hasDropmask ? inputTensors[4] : nullptr, nullptr, attr->hasAttentmask ? inputTensors[6] : nullptr, prefix, qstart, kvstart, attr->scale, attr->keepProb, attr->preToken, attr->nextToken, attr->headNum, layout, attr->innerPrecise, attr->sparseMode, attr->psetype, outputTensors[0], outputTensors[1], nullptr, outputTensors[2], &workspaceSize, &executor);
-                break;
-            }
-            case 52:
-            {
-                auto attr = dynamic_cast<FlashAttentionAttr *>(op_attr.get());
-                auto prefix = aclCreateIntArray(attr->prefix.data(), attr->prefix.size());
-                auto qstart = aclCreateIntArray(attr->qStartIdx.data(), attr->qStartIdx.size());
-                auto kvstart = aclCreateIntArray(attr->kvStartIdx.data(), attr->kvStartIdx.size());
-                char *layout = const_cast<char *>(attr->inputLayout.data());
-                ret = it->second.getWorkspaceSizeFuncFalshAttentionBackward(inputTensors[0], inputTensors[1], inputTensors[2], inputTensors[3], attr->hasRealshift ? inputTensors[4] : nullptr, attr->hasDropmask ? inputTensors[5] : nullptr, nullptr, attr->hasAttentmask ? inputTensors[7] : nullptr, inputTensors[8], inputTensors[9], nullptr, inputTensors[10], prefix, qstart, kvstart, attr->scale, attr->keepProb, attr->preToken, attr->nextToken, attr->headNum, layout, attr->innerPrecise, attr->sparseMode, attr->psetype, outputTensors[0], outputTensors[1], outputTensors[2], nullptr, &workspaceSize, &executor);
-                break;
-            }
+            // case 51:
+            // {
+            //     auto attr = dynamic_cast<FlashAttentionAttr *>(op_attr.get());
+            //     auto prefix = aclCreateIntArray(attr->prefix.data(), attr->prefix.size());
+            //     auto qstart = aclCreateIntArray(attr->qStartIdx.data(), attr->qStartIdx.size());
+            //     auto kvstart = aclCreateIntArray(attr->kvStartIdx.data(), attr->kvStartIdx.size());
+            //     char *layout = const_cast<char *>(attr->inputLayout.data());
+            //     ret = it->second.getWorkspaceSizeFuncFalshAttention(inputTensors[0], inputTensors[1], inputTensors[2], attr->hasRealshift ? inputTensors[3] : nullptr, attr->hasDropmask ? inputTensors[4] : nullptr, nullptr, attr->hasAttentmask ? inputTensors[6] : nullptr, prefix, qstart, kvstart, attr->scale, attr->keepProb, attr->preToken, attr->nextToken, attr->headNum, layout, attr->innerPrecise, attr->sparseMode, attr->psetype, outputTensors[0], outputTensors[1], nullptr, outputTensors[2], &workspaceSize, &executor);
+            //     break;
+            // }
+            // case 52:
+            // {
+            //     auto attr = dynamic_cast<FlashAttentionAttr *>(op_attr.get());
+            //     auto prefix = aclCreateIntArray(attr->prefix.data(), attr->prefix.size());
+            //     auto qstart = aclCreateIntArray(attr->qStartIdx.data(), attr->qStartIdx.size());
+            //     auto kvstart = aclCreateIntArray(attr->kvStartIdx.data(), attr->kvStartIdx.size());
+            //     char *layout = const_cast<char *>(attr->inputLayout.data());
+            //     ret = it->second.getWorkspaceSizeFuncFalshAttentionBackward(inputTensors[0], inputTensors[1], inputTensors[2], inputTensors[3], attr->hasRealshift ? inputTensors[4] : nullptr, attr->hasDropmask ? inputTensors[5] : nullptr, nullptr, attr->hasAttentmask ? inputTensors[7] : nullptr, inputTensors[8], inputTensors[9], nullptr, inputTensors[10], prefix, qstart, kvstart, attr->scale, attr->keepProb, attr->preToken, attr->nextToken, attr->headNum, layout, attr->innerPrecise, attr->sparseMode, attr->psetype, outputTensors[0], outputTensors[1], outputTensors[2], nullptr, &workspaceSize, &executor);
+            //     break;
+            // }
             case 53:
             {
                 auto attr = dynamic_cast<SoftmaxAttr *>(op_attr.get());
