@@ -468,26 +468,26 @@ namespace jittor
             //     ret = it->second.getWorkspaceSizeFuncDropoutBackward(inputTensors[0], inputTensors[1], attr->scale, outputTensors[0], &workspaceSize, &executor);
             //     break;
             // }
-            case 42:
-            {
-                ret = it->second.getWorkspaceSizeFuncUnaryNonzero(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
-                break;
-            }
-            case 43:
-            {
-                ret = it->second.getWorkspaceSizeFuncBinary(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
-                break;
-            }
-            case 44:
-            {
-                ret = it->second.getWorkspaceSizeFuncUnaryNonzero(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
-                break;
-            }
-            case 45:
-            {
-                ret = it->second.getWorkspaceSizeFuncBinary(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
-                break;
-            }
+            // case 42:
+            // {
+            //     ret = it->second.getWorkspaceSizeFuncUnaryNonzero(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
+            // case 43:
+            // {
+            //     ret = it->second.getWorkspaceSizeFuncBinary(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
+            // case 44:
+            // {
+            //     ret = it->second.getWorkspaceSizeFuncUnaryNonzero(inputTensors[0], outputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
+            // case 45:
+            // {
+            //     ret = it->second.getWorkspaceSizeFuncBinary(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
             case 46:
             {
                 ret = it->second.getWorkspaceSizeFuncBinary(inputTensors[0], inputTensors[1], outputTensors[0], &workspaceSize, &executor);
@@ -538,18 +538,18 @@ namespace jittor
             //     ret = it->second.getWorkspaceSizeFuncFalshAttentionBackward(inputTensors[0], inputTensors[1], inputTensors[2], inputTensors[3], attr->hasRealshift ? inputTensors[4] : nullptr, attr->hasDropmask ? inputTensors[5] : nullptr, nullptr, attr->hasAttentmask ? inputTensors[7] : nullptr, inputTensors[8], inputTensors[9], nullptr, inputTensors[10], prefix, qstart, kvstart, attr->scale, attr->keepProb, attr->preToken, attr->nextToken, attr->headNum, layout, attr->innerPrecise, attr->sparseMode, attr->psetype, outputTensors[0], outputTensors[1], outputTensors[2], nullptr, &workspaceSize, &executor);
             //     break;
             // }
-            case 53:
-            {
-                auto attr = dynamic_cast<SoftmaxAttr *>(op_attr.get());
-                ret = it->second.getWorkspaceSizeFuncCast(inputTensors[0], aclDataType(attr->dim), outputTensors[0], &workspaceSize, &executor);
-                break;
-            }
-            case 54:
-            {
-                auto attr = dynamic_cast<SoftmaxAttr *>(op_attr.get());
-                ret = it->second.getWorkspaceSizeFuncDropoutBackward(inputTensors[0], inputTensors[1], attr->dim, outputTensors[0], &workspaceSize, &executor);
-                break;
-            }
+            // case 53:
+            // {
+            //     auto attr = dynamic_cast<SoftmaxAttr *>(op_attr.get());
+            //     ret = it->second.getWorkspaceSizeFuncCast(inputTensors[0], aclDataType(attr->dim), outputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
+            // case 54:
+            // {
+            //     auto attr = dynamic_cast<SoftmaxAttr *>(op_attr.get());
+            //     ret = it->second.getWorkspaceSizeFuncDropoutBackward(inputTensors[0], inputTensors[1], attr->dim, outputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
             case 55:
             {
                 auto attr = dynamic_cast<BatchNormAttr *>(op_attr.get());

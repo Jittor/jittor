@@ -2203,36 +2203,53 @@ def change_function():
     #                              attr_code=attr_code)[0]
     #         return grad_input
 
-    class SiLUACL(Function):
+    from .aclops.dropout_op import DropoutACL
+    class Dropout(jt.nn.Module):
 
-        def __init__(self):
-            super(SiLUACL, self).__init__()
+        def __init__(self, p=0.5, is_train=False):
+            super(Dropout, self).__init__()
+            self.p = p
+            self.is_train = is_train
 
         def execute(self, x):
-            x = x.float32()
-            inputs = [x]
-            self.input = x
-            outputs = [jt.empty(x.shape, x.dtype)]
-            attr_code = f"""
-            op.jt_name = "silu";
-            """
-            result = acl_cmd("SiLU",
-                             inputs=inputs,
-                             outputs=outputs,
-                             attr_code=attr_code)[0]
-            return result
+            return DropoutACL()(x, self.p, self.is_train)
 
-        def grad(self, grad_output):
-            attr_code = f"""
-            op.jt_name = "silubackward";
-            """
-            inputs = [grad_output, self.input]
-            outputs = [jt.empty(grad_output.shape, grad_output.dtype)]
-            grad_input = acl_cmd("SiLUBackward",
-                                 inputs=inputs,
-                                 outputs=outputs,
-                                 attr_code=attr_code)[0]
-            return grad_input
+    def dropout_acl(x, p=0.5, is_train=False):
+        return DropoutACL()(x, p, is_train)
+
+    # class SiLUACL(Function):
+
+    #     def __init__(self):
+    #         super(SiLUACL, self).__init__()
+
+    #     def execute(self, x):
+    #         x = x.float32()
+    #         inputs = [x]
+    #         self.input = x
+    #         outputs = [jt.empty(x.shape, x.dtype)]
+    #         attr_code = f"""
+    #         op.jt_name = "silu";
+    #         """
+    #         result = acl_cmd("SiLU",
+    #                          inputs=inputs,
+    #                          outputs=outputs,
+    #                          attr_code=attr_code)[0]
+    #         return result
+
+    #     def grad(self, grad_output):
+    #         attr_code = f"""
+    #         op.jt_name = "silubackward";
+    #         """
+    #         inputs = [grad_output, self.input]
+    #         outputs = [jt.empty(grad_output.shape, grad_output.dtype)]
+    #         grad_input = acl_cmd("SiLUBackward",
+    #                              inputs=inputs,
+    #                              outputs=outputs,
+    #                              attr_code=attr_code)[0]
+    #         return grad_input
+
+
+    from .aclops.silu_op import SiLUACL
 
     def silu_acl(x):
         return SiLUACL()(x)
@@ -2245,37 +2262,40 @@ def change_function():
         def execute(self, x):
             return SiLUACL()(x)
 
-    class SigmoidACL(Function):
+    # class SigmoidACL(Function):
 
-        def __init__(self):
-            super(SigmoidACL, self).__init__()
+    #     def __init__(self):
+    #         super(SigmoidACL, self).__init__()
 
-        def execute(self, x):
-            x = x.float32()
-            inputs = [x]
-            outputs = [jt.empty(x.shape, x.dtype)]
-            attr_code = f"""
-            op.jt_name = "sigmoid";
-            """
-            result = acl_cmd("Sigmoid",
-                             inputs=inputs,
-                             outputs=outputs,
-                             attr_code=attr_code)[0]
-            self.output = result
-            return result
+    #     def execute(self, x):
+    #         x = x.float32()
+    #         inputs = [x]
+    #         outputs = [jt.empty(x.shape, x.dtype)]
+    #         attr_code = f"""
+    #         op.jt_name = "sigmoid";
+    #         """
+    #         result = acl_cmd("Sigmoid",
+    #                          inputs=inputs,
+    #                          outputs=outputs,
+    #                          attr_code=attr_code)[0]
+    #         self.output = result
+    #         return result
 
-        def grad(self, grad_output):
-            attr_code = f"""
-            op.jt_name = "sigmoidbackward";
-            """
-            inputs = [grad_output, self.output]
-            outputs = [jt.empty(grad_output.shape, grad_output.dtype)]
-            grad_input = acl_cmd("SigmoidBackward",
-                                 inputs=inputs,
-                                 outputs=outputs,
-                                 attr_code=attr_code)[0]
-            return grad_input
+    #     def grad(self, grad_output):
+    #         attr_code = f"""
+    #         op.jt_name = "sigmoidbackward";
+    #         """
+    #         inputs = [grad_output, self.output]
+    #         outputs = [jt.empty(grad_output.shape, grad_output.dtype)]
+    #         grad_input = acl_cmd("SigmoidBackward",
+    #                              inputs=inputs,
+    #                              outputs=outputs,
+    #                              attr_code=attr_code)[0]
+    #         return grad_input
 
+
+    from .aclops.sigmoid_op import SigmoidACL
+    
     def sigmoid_acl(x):
         return SigmoidACL()(x)
 
@@ -2345,58 +2365,45 @@ def change_function():
             res = embedding_acl(x, self.weight)
             return res
 
-    from .aclops.dropout_op import DropoutACL
-    class Dropout(jt.nn.Module):
+    # class SoftmaxACL(Function):
 
-        def __init__(self, p=0.5, is_train=False):
-            super(Dropout, self).__init__()
-            self.p = p
-            self.is_train = is_train
+    #     def __init__(self):
+    #         super(SoftmaxACL, self).__init__()
 
-        def execute(self, x):
-            return DropoutACL()(x, self.p, self.is_train)
+    #     def execute(self, x, dim):
+    #         x = x.float32()
+    #         inputs = [x]
+    #         outputs = [jt.empty(x.shape)]
+    #         self.dim = dim
+    #         attr_code = f"""
+    #         op.jt_name = "softmax";
+    #         SoftmaxAttr *attr = new SoftmaxAttr();
+    #         attr->dim = {dim};
+    #         op.op_attr.reset(attr);
+    #         """
+    #         result = acl_cmd("Softmax",
+    #                          inputs=inputs,
+    #                          outputs=outputs,
+    #                          attr_code=attr_code)[0]
+    #         self.output = result
+    #         return result
 
-    def dropout_acl(x, p=0.5, is_train=False):
-        return DropoutACL()(x, p, is_train)
+    #     def grad(self, grad_output):
+    #         attr_code = f"""
+    #         op.jt_name = "softmax";
+    #         SoftmaxAttr *attr = new SoftmaxAttr();
+    #         attr->dim = {self.dim};
+    #         op.op_attr.reset(attr);
+    #         """
+    #         inputs = [grad_output, self.output]
+    #         outputs = [jt.empty(grad_output.shape)]
+    #         grad_input = acl_cmd("SoftmaxBackward",
+    #                              inputs=inputs,
+    #                              outputs=outputs,
+    #                              attr_code=attr_code)[0]
+    #         return grad_input
 
-    class SoftmaxACL(Function):
-
-        def __init__(self):
-            super(SoftmaxACL, self).__init__()
-
-        def execute(self, x, dim):
-            x = x.float32()
-            inputs = [x]
-            outputs = [jt.empty(x.shape)]
-            self.dim = dim
-            attr_code = f"""
-            op.jt_name = "softmax";
-            SoftmaxAttr *attr = new SoftmaxAttr();
-            attr->dim = {dim};
-            op.op_attr.reset(attr);
-            """
-            result = acl_cmd("Softmax",
-                             inputs=inputs,
-                             outputs=outputs,
-                             attr_code=attr_code)[0]
-            self.output = result
-            return result
-
-        def grad(self, grad_output):
-            attr_code = f"""
-            op.jt_name = "softmax";
-            SoftmaxAttr *attr = new SoftmaxAttr();
-            attr->dim = {self.dim};
-            op.op_attr.reset(attr);
-            """
-            inputs = [grad_output, self.output]
-            outputs = [jt.empty(grad_output.shape)]
-            grad_input = acl_cmd("SoftmaxBackward",
-                                 inputs=inputs,
-                                 outputs=outputs,
-                                 attr_code=attr_code)[0]
-            return grad_input
-
+    from .aclops.softmax_op import SoftmaxACL
     class Softmax(jt.nn.Module):
 
         def __init__(self):
