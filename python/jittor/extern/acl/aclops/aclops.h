@@ -22,3 +22,6 @@
 #include <acl/aclops/flashattention_op_acl.h>
 #include <acl/aclops/relu_op_acl.h>
 #include <acl/aclops/dropout_op_acl.h>
+#include <acl/aclops/silu_op_acl.h>
+#include <acl/aclops/sigmoid_op_acl.h>
+#include <acl/aclops/softmax_op_acl.h>
