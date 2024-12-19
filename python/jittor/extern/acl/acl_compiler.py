@@ -2415,36 +2415,37 @@ def change_function():
     def softmax_acl(x, dim):
         return SoftmaxACL()(x, dim)
 
-    class RopeACL(Function):
+    # class RopeACL(Function):
 
-        def __init__(self):
-            super(RopeACL, self).__init__()
+    #     def __init__(self):
+    #         super(RopeACL, self).__init__()
 
-        def execute(self, xq, xk, freqs_cis, freq_cos, freq_sin):
-            attr_code = f"""
-            op.jt_name = "RotaryPosEmb";
-            """
-            if freqs_cis is not None:
-                freq_cos = freqs_cis[..., 0]
-                freq_sin = freqs_cis[..., 1]
-            else:
-                assert freq_cos is not None and freq_sin is not None
-            inputs = [xq, xk, freq_cos, freq_sin]
-            results = acl_cmd("RotaryPosEmb",
-                              inputs,
-                              output_dtypes=[
-                                  xq.dtype,
-                              ],
-                              output_shapes=[
-                                  xq.shape,
-                              ],
-                              attr_code=attr_code)
-            results[0].sync()
-            return inputs[0], inputs[1]
+    #     def execute(self, xq, xk, freqs_cis, freq_cos, freq_sin):
+    #         attr_code = f"""
+    #         op.jt_name = "RotaryPosEmb";
+    #         """
+    #         if freqs_cis is not None:
+    #             freq_cos = freqs_cis[..., 0]
+    #             freq_sin = freqs_cis[..., 1]
+    #         else:
+    #             assert freq_cos is not None and freq_sin is not None
+    #         inputs = [xq, xk, freq_cos, freq_sin]
+    #         results = acl_cmd("RotaryPosEmb",
+    #                           inputs,
+    #                           output_dtypes=[
+    #                               xq.dtype,
+    #                           ],
+    #                           output_shapes=[
+    #                               xq.shape,
+    #                           ],
+    #                           attr_code=attr_code)
+    #         results[0].sync()
+    #         return inputs[0], inputs[1]
 
-        def grad(self, grad_output):
-            return grad_output
+    #     def grad(self, grad_output):
+    #         return grad_output
 
+    from .aclops.rope_op import RopeACL
     def rope_acl(xq, xk, freqs_cis=None, freq_sin=None, freq_cos=None):
         return RopeACL()(xq, xk, freqs_cis, freq_sin, freq_cos)
 
@@ -2579,93 +2580,96 @@ def change_function():
     #                          attr_code=attr_code)[0]
     #     return grad_input
 
-    class StackACL(Function):
+    # class StackACL(Function):
 
-        def __init__(self):
-            super(StackACL, self).__init__()
+    #     def __init__(self):
+    #         super(StackACL, self).__init__()
 
-        def execute(self, input_tensors, dim):
-            if type(input_tensors) is tuple:
-                input_tensors = list(input_tensors)
-            assert type(input_tensors) is list
-            assert -1 * len(input_tensors) - 1 <= dim and dim <= len(
-                input_tensors)
-            for i in range(len(input_tensors)):
-                if input_tensors[i].dtype != input_tensors[0].dtype:
-                    raise ValueError(
-                        "All input tensors must have the same dtype")
-                if input_tensors[i].shape != input_tensors[0].shape:
-                    raise ValueError(
-                        "All input tensors must have the same shape")
-            self.input = input_tensors
-            input_shape = list(input_tensors[0].shape)
-            output_shape = input_shape[:dim] + [len(input_tensors)
-                                                ] + input_shape[dim:]
-            attr_code = f"""
-            op.jt_name = "stack";
-            ConcatAttr *attr = new ConcatAttr();
-            attr->tensorNum = {len(input_tensors)};
-            attr->dim = {dim};
-            op.op_attr.reset(attr);
-            """
-            self.attr_code = attr_code
-            result = acl_cmd("Stack",
-                             input_tensors,
-                             output_dtypes=[input_tensors[0].dtype],
-                             output_shapes=[output_shape],
-                             attr_code=self.attr_code)[0]
-            return result
+    #     def execute(self, input_tensors, dim):
+    #         if type(input_tensors) is tuple:
+    #             input_tensors = list(input_tensors)
+    #         assert type(input_tensors) is list
+    #         assert -1 * len(input_tensors) - 1 <= dim and dim <= len(
+    #             input_tensors)
+    #         for i in range(len(input_tensors)):
+    #             if input_tensors[i].dtype != input_tensors[0].dtype:
+    #                 raise ValueError(
+    #                     "All input tensors must have the same dtype")
+    #             if input_tensors[i].shape != input_tensors[0].shape:
+    #                 raise ValueError(
+    #                     "All input tensors must have the same shape")
+    #         self.input = input_tensors
+    #         input_shape = list(input_tensors[0].shape)
+    #         output_shape = input_shape[:dim] + [len(input_tensors)
+    #                                             ] + input_shape[dim:]
+    #         attr_code = f"""
+    #         op.jt_name = "stack";
+    #         ConcatAttr *attr = new ConcatAttr();
+    #         attr->tensorNum = {len(input_tensors)};
+    #         attr->dim = {dim};
+    #         op.op_attr.reset(attr);
+    #         """
+    #         self.attr_code = attr_code
+    #         result = acl_cmd("Stack",
+    #                          input_tensors,
+    #                          output_dtypes=[input_tensors[0].dtype],
+    #                          output_shapes=[output_shape],
+    #                          attr_code=self.attr_code)[0]
+    #         return result
 
-        def grad(self, grad_output):
-            grad_inputs = self.split_grad(grad_output, self.input, self.dim)
-            return grad_inputs
+    #     def grad(self, grad_output):
+    #         grad_inputs = self.split_grad(grad_output, self.input, self.dim)
+    #         return grad_inputs
 
-        def split_grad(self, grad_output, input_tensors, axis):
-            offset = []
-            shapeVec = []
-            dtypeVec = []
-            for tensor in input_tensors:
-                offset.append(tensor.shape[axis])
-                dtypeVec.append(tensor.dtype)
-                shapeVec.append(tensor.shape)
+    #     def split_grad(self, grad_output, input_tensors, axis):
+    #         offset = []
+    #         shapeVec = []
+    #         dtypeVec = []
+    #         for tensor in input_tensors:
+    #             offset.append(tensor.shape[axis])
+    #             dtypeVec.append(tensor.dtype)
+    #             shapeVec.append(tensor.shape)
 
-            attr_code = f"""
-            op.jt_name = "splitwithsize";
-            auto *attr = new SplitWithSizeAttr();
-            attr->splitSize = {{ {", ".join(map(str, offset))} }};
-            attr->dim = {axis};
-            op.op_attr.reset(attr);
-            """
+    #         attr_code = f"""
+    #         op.jt_name = "splitwithsize";
+    #         auto *attr = new SplitWithSizeAttr();
+    #         attr->splitSize = {{ {", ".join(map(str, offset))} }};
+    #         attr->dim = {axis};
+    #         op.op_attr.reset(attr);
+    #         """
 
-            result = acl_cmd("SplitWithSize", [grad_output],
-                             output_dtypes=dtypeVec,
-                             output_shapes=shapeVec,
-                             attr_code=attr_code)
-            return result
+    #         result = acl_cmd("SplitWithSize", [grad_output],
+    #                          output_dtypes=dtypeVec,
+    #                          output_shapes=shapeVec,
+    #                          attr_code=attr_code)
+    #         return result
 
+    from .aclops.stack_op import StackACL
     def stack_acl(x, dim=0):
         return StackACL()(x, dim)
 
-    class NanToNumACL(Function):
+    # class NanToNumACL(Function):
 
-        def __init__(self):
-            super(NanToNumACL, self).__init__()
+    #     def __init__(self):
+    #         super(NanToNumACL, self).__init__()
 
-        def execute(self, input, nan_or_inf):
-            attr_code = f"""
-            op.jt_name = "NanToNum";
-            NanToNumAttr *attr = new NanToNumAttr();
-            attr->nan = {nan_or_inf};
-            attr->posinf = {-nan_or_inf};
-            attr->neginf = {-nan_or_inf};
-            op.op_attr.reset(attr);
-            """
-            self.attr_code = attr_code
-            result = acl_cmd("NanToNum", [input],
-                             output_dtypes=[input[0].dtype],
-                             output_shapes=[input.shape],
-                             attr_code=self.attr_code)[0]
-            return result
+    #     def execute(self, input, nan_or_inf):
+    #         attr_code = f"""
+    #         op.jt_name = "NanToNum";
+    #         NanToNumAttr *attr = new NanToNumAttr();
+    #         attr->nan = {nan_or_inf};
+    #         attr->posinf = {-nan_or_inf};
+    #         attr->neginf = {-nan_or_inf};
+    #         op.op_attr.reset(attr);
+    #         """
+    #         self.attr_code = attr_code
+    #         result = acl_cmd("NanToNum", [input],
+    #                          output_dtypes=[input[0].dtype],
+    #                          output_shapes=[input.shape],
+    #                          attr_code=self.attr_code)[0]
+    #         return result
+
+    from .aclops.nantonum_op import NanToNumACL
 
     def isnan_acl(x):
         tonum = NanToNumACL()(x, -1.0)

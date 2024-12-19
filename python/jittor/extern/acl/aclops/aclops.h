@@ -25,3 +25,6 @@
 #include <acl/aclops/silu_op_acl.h>
 #include <acl/aclops/sigmoid_op_acl.h>
 #include <acl/aclops/softmax_op_acl.h>
+#include <acl/aclops/stack_op_acl.h>
+#include <acl/aclops/nantonum_op_acl.h>
+#include <acl/aclops/rope_op_acl.h>
