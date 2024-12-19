@@ -18,3 +18,7 @@
 #include <acl/aclops/index_op_acl.h>
 #include <acl/aclops/where_op_acl.h>
 #include <acl/aclops/floor_op_acl.h>
+#include <acl/aclops/transpose_op_acl.h>
+#include <acl/aclops/flashattention_op_acl.h>
+#include <acl/aclops/relu_op_acl.h>
+#include <acl/aclops/dropout_op_acl.h>
