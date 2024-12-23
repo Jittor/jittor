@@ -28,3 +28,6 @@
 #include <acl/aclops/stack_op_acl.h>
 #include <acl/aclops/nantonum_op_acl.h>
 #include <acl/aclops/rope_op_acl.h>
+#include <acl/aclops/triu_op_acl.h>
+#include <acl/aclops/embedding_op_acl.h>
+#include <acl/aclops/norms_op_acl.h>
