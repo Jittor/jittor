@@ -154,9 +154,9 @@ namespace jittor
         std::queue<Op *> queue;
 
         for (Op *op : fop->ops)
-            op_indeg[op] = 0; 
+            op_indeg[op] = 0;
 
-        map<Op *, vector<Op *>> out_map;   
+        map<Op *, vector<Op *>> out_map;
         map<Var *, vector<Op *>> from;
 
         int len = 0;
@@ -303,15 +303,12 @@ namespace jittor
                     op.op_attr.reset(attr);
                     op.add(rop->y, false);
                     op.run();
+                    aclrtSynchronizeStream(aclstream);
                 }
                 else if (op->name() == string("broadcast_to"))
                 {
                     auto bop = (BroadcastToOp *)op;
                     AclOpRunner op("Expand");
-                    if (bop->x->shape.size() == 1 && bop->x->shape[0] == 1)
-                    {
-                        aclrtSynchronizeStream(aclstream);
-                    }
                     op.jt_name = "expand";
                     NanoVector xshape, xshape_bk = bop->x->shape;
                     NanoVector zshape = bop->z->shape;
@@ -333,7 +330,7 @@ namespace jittor
                     op.add(bop->z, false);
                     op.run();
                     bop->x->shape = xshape_bk;
-                    // aclrtSynchronizeStream(aclstream);
+                    aclrtSynchronizeStream(aclstream);
                 }
                 else if (op->name() == string("fuse_transpose"))
                 {

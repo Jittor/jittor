@@ -9,6 +9,7 @@ namespace jittor
 
     protected:
         void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+
     public:
         DropoutOpRunner();
     };
@@ -18,6 +19,7 @@ namespace jittor
 
     protected:
         void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+
     public:
         DropoutBackwardOpRunner();
     };

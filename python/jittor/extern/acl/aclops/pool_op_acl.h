@@ -9,6 +9,7 @@ namespace jittor
 
     protected:
         void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+
     public:
         MaxpoolOpRunner();
     };
@@ -18,16 +19,17 @@ namespace jittor
 
     protected:
         void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+
     public:
         AvgpoolOpRunner();
     };
-
 
     class MaxpoolBackwardOpRunner : public BaseOpRunner
     {
 
     protected:
         void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+
     public:
         MaxpoolBackwardOpRunner();
     };
@@ -37,6 +39,7 @@ namespace jittor
 
     protected:
         void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+
     public:
         AvgpoolBackwardOpRunner();
     };

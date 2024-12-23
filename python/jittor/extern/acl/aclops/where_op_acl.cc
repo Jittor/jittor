@@ -53,7 +53,6 @@ namespace jittor
         return;
     }
 
-
     NonzeroOpRunner::NonzeroOpRunner() : BaseOpRunner("Nonzero")
     {
     }

@@ -71,7 +71,6 @@ namespace jittor
         return;
     }
 
-
     AvgpoolOpRunner::AvgpoolOpRunner() : BaseOpRunner("Avgpool")
     {
         use_nchw = true;
@@ -108,7 +107,6 @@ namespace jittor
 
         return;
     }
-
 
     MaxpoolBackwardOpRunner::MaxpoolBackwardOpRunner() : BaseOpRunner("MaxpoolBackward")
     {
@@ -149,8 +147,6 @@ namespace jittor
 
         return;
     }
-
-
 
     AvgpoolBackwardOpRunner::AvgpoolBackwardOpRunner() : BaseOpRunner("AvgpoolBackward")
     {

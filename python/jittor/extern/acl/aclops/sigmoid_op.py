@@ -11,13 +11,14 @@ import numpy as np
 from typing import Union
 from collections.abc import Sequence, Iterable
 
+
 def sigmoid_cmd(name: str,
-            inputs: list,
-            output_dtypes: list = None,
-            output_shapes: list = None,
-            attr_code: str = "",
-            attr_header: str = "",
-            outputs: list = None):
+                inputs: list,
+                output_dtypes: list = None,
+                output_shapes: list = None,
+                attr_code: str = "",
+                attr_header: str = "",
+                outputs: list = None):
     attr_header = "\nnamespace jittor{" + attr_header + "}\n"
 
     cuda_header = '''
@@ -51,6 +52,7 @@ def sigmoid_cmd(name: str,
     {attr_code}
     op.run();""")
 
+
 class SigmoidACL(jt.Function):
 
     def __init__(self):
@@ -64,9 +66,9 @@ class SigmoidACL(jt.Function):
         op.jt_name = "sigmoid";
         """
         result = sigmoid_cmd("Sigmoid",
-                            inputs=inputs,
-                            outputs=outputs,
-                            attr_code=attr_code)[0]
+                             inputs=inputs,
+                             outputs=outputs,
+                             attr_code=attr_code)[0]
         self.output = result
         return result
 
@@ -77,7 +79,7 @@ class SigmoidACL(jt.Function):
         inputs = [grad_output, self.output]
         outputs = [jt.empty(grad_output.shape, grad_output.dtype)]
         grad_input = sigmoid_cmd("SigmoidBackward",
-                                inputs=inputs,
-                                outputs=outputs,
-                                attr_code=attr_code)[0]
+                                 inputs=inputs,
+                                 outputs=outputs,
+                                 attr_code=attr_code)[0]
         return grad_input

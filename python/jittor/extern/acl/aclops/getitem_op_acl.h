@@ -9,6 +9,7 @@ namespace jittor
 
     protected:
         void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+
     public:
         MaskedSelectOpRunner();
     };
@@ -18,6 +19,7 @@ namespace jittor
 
     protected:
         void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+
     public:
         IndexOpRunner();
     };
@@ -27,6 +29,7 @@ namespace jittor
 
     protected:
         void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+
     public:
         SliceV2OpRunner();
     };
@@ -36,6 +39,7 @@ namespace jittor
 
     protected:
         void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+
     public:
         IndexPutImplAccumulateOpRunner();
     };
@@ -45,6 +49,7 @@ namespace jittor
 
     protected:
         void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+
     public:
         StridedSliceAssignV2OpRunner();
     };

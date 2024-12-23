@@ -53,11 +53,10 @@ namespace jittor
         return;
     }
 
-
     IndexOpRunner::IndexOpRunner() : BaseOpRunner("Index")
     {
     }
-        
+
     void IndexOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
     {
         auto input_num = in_.size();
@@ -81,7 +80,7 @@ namespace jittor
     SliceV2OpRunner::SliceV2OpRunner() : BaseOpRunner("SliceV2")
     {
     }
-        
+
     void SliceV2OpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
     {
         auto attr = dynamic_cast<StrideAttr *>(op_attr.get());
@@ -106,11 +105,10 @@ namespace jittor
         return;
     }
 
-
     IndexPutImplAccumulateOpRunner::IndexPutImplAccumulateOpRunner() : BaseOpRunner("IndexPutImplAccumulate")
     {
     }
-        
+
     void IndexPutImplAccumulateOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
     {
         auto input_num = in_.size();
@@ -137,11 +135,9 @@ namespace jittor
         return;
     }
 
-
     StridedSliceAssignV2OpRunner::StridedSliceAssignV2OpRunner() : BaseOpRunner("StridedSliceAssignV2")
     {
     }
-        
 
     void StridedSliceAssignV2OpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
     {
@@ -162,9 +158,7 @@ namespace jittor
         ret = aclnnStridedSliceAssignV2(workspaceAddr, workspaceSize, executor, aclstream);
         CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnStridedSliceAssignV2 failed. ERROR: %d\n", name.c_str(), ret); return);
 
-        // syncRun(); 
-
-
+        syncRun();
 
         return;
     }

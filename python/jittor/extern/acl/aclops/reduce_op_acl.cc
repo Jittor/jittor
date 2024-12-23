@@ -28,7 +28,6 @@
 #include "aclnn/aclnn.h"
 #include "reduce_op_acl.h"
 
-
 namespace jittor
 {
     ReduceOpRunner::ReduceOpRunner() : BaseOpRunner("reduce")

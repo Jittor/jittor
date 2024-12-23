@@ -44,7 +44,7 @@ namespace jittor
     void RandomOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
     {
         auto attr = dynamic_cast<RandomAttr *>(op_attr.get());
-        if(name == "RandomUniform")
+        if (name == "RandomUniform")
         {
             ret = aclnnInplaceUniformGetWorkspaceSize(outputTensors[0], 0.0, 1.0, attr->seed, attr->offset, &workspaceSize, &executor);
 
@@ -58,7 +58,7 @@ namespace jittor
             ret = aclnnInplaceUniform(workspaceAddr, workspaceSize, executor, aclstream);
             CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnInplaceUniform failed. ERROR: %d\n", name.c_str(), ret); return);
         }
-        else if(name == "RandomNormal")
+        else if (name == "RandomNormal")
         {
             ret = aclnnInplaceNormalGetWorkspaceSize(outputTensors[0], 0.0, 1.0, attr->seed, attr->offset, &workspaceSize, &executor);
 
@@ -76,7 +76,7 @@ namespace jittor
         {
             LOGf << "Not supported random type : " << name;
         }
-        // syncRun();
+        syncRun();
         return;
     }
 }

@@ -33,7 +33,7 @@ namespace jittor
     InplaceMaskedScatterOpRunner::InplaceMaskedScatterOpRunner() : BaseOpRunner("InplaceMaskedScatter")
     {
     }
-        
+
     void InplaceMaskedScatterOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
     {
         ret = aclnnInplaceMaskedScatterGetWorkspaceSize(outputTensors[0], inputTensors[0], inputTensors[1], &workspaceSize, &executor);
@@ -55,7 +55,7 @@ namespace jittor
     IndexPutImplOpRunner::IndexPutImplOpRunner() : BaseOpRunner("IndexPutImpl")
     {
     }
-        
+
     void IndexPutImplOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
     {
         auto input_num = in_.size();
@@ -77,7 +77,7 @@ namespace jittor
         ret = aclnnIndexPutImpl(workspaceAddr, workspaceSize, executor, aclstream);
         CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnIndexPutImpl failed. ERROR: %d\n", name.c_str(), ret); return);
 
-        // syncRun();
+        syncRun();
         return;
     }
 
