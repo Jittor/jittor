@@ -11,13 +11,14 @@ import numpy as np
 from typing import Union
 from collections.abc import Sequence, Iterable
 
+
 def transpose_cmd(name: str,
-            inputs: list,
-            output_dtypes: list = None,
-            output_shapes: list = None,
-            attr_code: str = "",
-            attr_header: str = "",
-            outputs: list = None):
+                  inputs: list,
+                  output_dtypes: list = None,
+                  output_shapes: list = None,
+                  attr_code: str = "",
+                  attr_header: str = "",
+                  outputs: list = None):
     attr_header = "\nnamespace jittor{" + attr_header + "}\n"
 
     cuda_header = '''
@@ -51,6 +52,7 @@ def transpose_cmd(name: str,
     {attr_code}
     op.run();""")
 
+
 class TransPoseACL(jt.Function):
 
     def __init__(self):
@@ -75,9 +77,9 @@ class TransPoseACL(jt.Function):
         # calculate output shape
         output_shape = [x.shape[i] for i in dim]
         output = transpose_cmd("Transpose", [x],
-                            output_dtypes=[x.dtype],
-                            output_shapes=[jt.empty(output_shape).shape],
-                            attr_code=attr_code)[0]
+                               output_dtypes=[x.dtype],
+                               output_shapes=[jt.empty(output_shape).shape],
+                               attr_code=attr_code)[0]
         self.dim = dim
         return output
 
@@ -93,7 +95,7 @@ class TransPoseACL(jt.Function):
         op.op_attr.reset(attr);
         """
         output = transpose_cmd("Transpose", [grad_output],
-                            output_dtypes=[grad_output.dtype],
-                            output_shapes=[jt.empty(output_shape).shape],
-                            attr_code=attr_code)[0]
+                               output_dtypes=[grad_output.dtype],
+                               output_shapes=[jt.empty(output_shape).shape],
+                               attr_code=attr_code)[0]
         return output

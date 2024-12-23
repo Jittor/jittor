@@ -11,13 +11,14 @@ import numpy as np
 from typing import Union
 from collections.abc import Sequence, Iterable
 
+
 def pool_cmd(name: str,
-            inputs: list,
-            output_dtypes: list = None,
-            output_shapes: list = None,
-            attr_code: str = "",
-            attr_header: str = "",
-            outputs: list = None):
+             inputs: list,
+             output_dtypes: list = None,
+             output_shapes: list = None,
+             attr_code: str = "",
+             attr_header: str = "",
+             outputs: list = None):
     attr_header = "\nnamespace jittor{" + attr_header + "}\n"
 
     cuda_header = '''
@@ -51,33 +52,32 @@ def pool_cmd(name: str,
     {attr_code}
     op.run();""")
 
+
 class PoolACL(jt.Function):
 
     def __init__(self,
-                    kernel_size,
-                    stride=None,
-                    padding=0,
-                    dilation=None,
-                    return_indices=None,
-                    ceil_mode=False,
-                    count_include_pad=True,
-                    op='maximum'):
+                 kernel_size,
+                 stride=None,
+                 padding=0,
+                 dilation=None,
+                 return_indices=None,
+                 ceil_mode=False,
+                 count_include_pad=True,
+                 op='maximum'):
         self.kernel_size = kernel_size if isinstance(
             kernel_size, tuple) else (kernel_size, kernel_size)
         stride = stride if stride else kernel_size
-        self.stride = stride if isinstance(stride, tuple) else (stride,
-                                                                stride)
+        self.stride = stride if isinstance(stride, tuple) else (stride, stride)
         self.padding = padding if isinstance(padding, tuple) else (padding,
-                                                                    padding)
+                                                                   padding)
         dilation = dilation if dilation else 1
         assert dilation == 1
-        self.dilation = dilation if isinstance(
-            dilation, tuple) else (dilation, dilation)
+        self.dilation = dilation if isinstance(dilation, tuple) else (dilation,
+                                                                      dilation)
         for item in self.kernel_size:
             if item <= 0:
                 raise RuntimeError(
-                    f"kernel_size must be greater than zero, but got {item}"
-                )
+                    f"kernel_size must be greater than zero, but got {item}")
         for item in self.stride:
             if item <= 0:
                 raise RuntimeError(
@@ -108,7 +108,7 @@ class PoolACL(jt.Function):
         kernel_height, kernel_width = self.kernel_size[-2:]
 
         output_height = (input_height + 2 * self.padding[0] -
-                            (kernel_height - 1) - 1) // self.stride[0] + 1
+                         (kernel_height - 1) - 1) // self.stride[0] + 1
         output_width = (input_width + 2 * self.padding[1] -
                         (kernel_width - 1) - 1) // self.stride[1] + 1
 
@@ -161,16 +161,16 @@ class PoolACL(jt.Function):
         output_dtypes = [input.dtype]
         if self.op == 'maximum':
             result = pool_cmd("MaxpoolBackward",
-                                inputs=[grad_output, input, self.index],
-                                output_dtypes=output_dtypes,
-                                output_shapes=output_shapes,
-                                attr_code=attr_code)[0]
+                              inputs=[grad_output, input, self.index],
+                              output_dtypes=output_dtypes,
+                              output_shapes=output_shapes,
+                              attr_code=attr_code)[0]
         elif self.op == 'mean':
             result = pool_cmd("AvgpoolBackward",
-                                inputs=[grad_output, input],
-                                output_dtypes=output_dtypes,
-                                output_shapes=output_shapes,
-                                attr_code=attr_code)[0]
+                              inputs=[grad_output, input],
+                              output_dtypes=output_dtypes,
+                              output_shapes=output_shapes,
+                              attr_code=attr_code)[0]
         else:
             raise ValueError('no this type pool')
         return result

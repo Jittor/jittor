@@ -9,6 +9,7 @@ namespace jittor
 
     protected:
         void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+
     public:
         FlashAttentionOpRunner();
     };
@@ -18,6 +19,7 @@ namespace jittor
 
     protected:
         void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+
     public:
         FlashAttentionBackwardOpRunner();
     };

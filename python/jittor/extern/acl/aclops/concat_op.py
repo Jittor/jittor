@@ -11,13 +11,14 @@ import numpy as np
 from typing import Union
 from collections.abc import Sequence, Iterable
 
+
 def concat_cmd(name: str,
-            inputs: list,
-            output_dtypes: list = None,
-            output_shapes: list = None,
-            attr_code: str = "",
-            attr_header: str = "",
-            outputs: list = None):
+               inputs: list,
+               output_dtypes: list = None,
+               output_shapes: list = None,
+               attr_code: str = "",
+               attr_header: str = "",
+               outputs: list = None):
     attr_header = "\nnamespace jittor{" + attr_header + "}\n"
 
     cuda_header = '''
@@ -50,6 +51,7 @@ def concat_cmd(name: str,
     {output_code}
     {attr_code}
     op.run();""")
+
 
 class ConcatACL(jt.Function):
 
@@ -114,13 +116,11 @@ class ConcatACL(jt.Function):
         self.dim = dim
         for i in range(len(input_tensors)):
             if input_tensors[i].dtype != input_tensors[0].dtype:
-                raise ValueError(
-                    "All input tensors must have the same dtype")
+                raise ValueError("All input tensors must have the same dtype")
             if input_tensors[i].shape[:dim] != input_tensors[
                     0].shape[:dim] or input_tensors[i].shape[
                         dim + 1:] != input_tensors[0].shape[dim + 1:]:
-                raise ValueError(
-                    "All input tensors must have the same shape")
+                raise ValueError("All input tensors must have the same shape")
         attr_code = f"""
         op.jt_name = "concat";
         ConcatAttr *attr = new ConcatAttr();
@@ -133,15 +133,13 @@ class ConcatACL(jt.Function):
             input_tensors,
             output_dtypes=[input_tensors[0].dtype],
             output_shapes=[
-                jt.empty(self.calculate_output_shape(input_tensors,
-                                                        dim)).shape
+                jt.empty(self.calculate_output_shape(input_tensors, dim)).shape
             ],
             attr_code=attr_code)[0]
         return result
 
     def _grad(self, *args):
-        new_args = ((args[i] if i >= 0 else None)
-                    for i in self.output_mask)
+        new_args = ((args[i] if i >= 0 else None) for i in self.output_mask)
         ret = self.grad(*new_args)
         new_ret = []
         for i, r in enumerate(ret):

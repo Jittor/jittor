@@ -58,7 +58,6 @@ namespace jittor
         return;
     }
 
-
     FlashAttentionBackwardOpRunner::FlashAttentionBackwardOpRunner() : BaseOpRunner("FlashAttentionBackward")
     {
     }

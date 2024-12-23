@@ -49,7 +49,7 @@ namespace jittor
         for (int idx = 0; idx < input_num; idx++)
         {
             inputTensors.push_back(nullptr);
-            if ((jt_name == "matmul_trans_1" && idx == 1) || (jt_name == "matmul_trans_0" && idx == 0) )
+            if ((jt_name == "matmul_trans_1" && idx == 1) || (jt_name == "matmul_trans_0" && idx == 0))
             {
                 auto ret = CreateFakeTransAclTensor(inputShapes[idx], in_[idx]->mem_ptr, in_[idx]->size, get_dtype(in_[idx]->dtype()), &inputTensors[idx], use_nchw);
                 CHECK_RET(ret == ACL_SUCCESS, return);
@@ -63,8 +63,8 @@ namespace jittor
     }
     void MatMulOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
     {
-       
-        ret =  aclnnMatmulGetWorkspaceSize(inputTensors[0], inputTensors[1], outputTensors[0], 1, &workspaceSize, &executor);
+
+        ret = aclnnMatmulGetWorkspaceSize(inputTensors[0], inputTensors[1], outputTensors[0], 1, &workspaceSize, &executor);
         CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnMatmulGetWorkspaceSize failed. ERROR: %d\n", name.c_str(), ret); return);
         if (workspaceSize > 0)
         {
@@ -72,6 +72,6 @@ namespace jittor
         }
         ret = aclnnMatmul(workspaceAddr, workspaceSize, executor, aclstream);
         CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnMatmul failed. ERROR: %d\n", name.c_str(), ret); return);
-        // syncRun();
+        syncRun();
     }
 }

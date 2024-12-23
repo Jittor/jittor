@@ -7,7 +7,7 @@ namespace jittor
     struct TernaryOpRunner : public BaseOpRunner
     {
         TernaryOpRunner();
-        
+
     protected:
         void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
     };

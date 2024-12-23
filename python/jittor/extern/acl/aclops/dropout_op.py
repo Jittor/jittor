@@ -11,13 +11,14 @@ import numpy as np
 from typing import Union
 from collections.abc import Sequence, Iterable
 
+
 def dropout_cmd(name: str,
-            inputs: list,
-            output_dtypes: list = None,
-            output_shapes: list = None,
-            attr_code: str = "",
-            attr_header: str = "",
-            outputs: list = None):
+                inputs: list,
+                output_dtypes: list = None,
+                output_shapes: list = None,
+                attr_code: str = "",
+                attr_header: str = "",
+                outputs: list = None):
     attr_header = "\nnamespace jittor{" + attr_header + "}\n"
 
     cuda_header = '''
@@ -51,6 +52,7 @@ def dropout_cmd(name: str,
     {attr_code}
     op.run();""")
 
+
 class DropoutACL(jt.Function):
 
     def __init__(self):
@@ -71,9 +73,9 @@ class DropoutACL(jt.Function):
         op.op_attr.reset(attr);
         """
         result = dropout_cmd("Dropout", [x],
-                            output_dtypes=[x.dtype, "uint8"],
-                            output_shapes=[x.shape, mask_shape],
-                            attr_code=attr_code)
+                             output_dtypes=[x.dtype, "uint8"],
+                             output_shapes=[x.shape, mask_shape],
+                             attr_code=attr_code)
         self.maskout = result[1]
         return result[0]
 
@@ -85,8 +87,8 @@ class DropoutACL(jt.Function):
         op.op_attr.reset(attr);
         """
         grad_input = dropout_cmd("DropoutBackward",
-                                [grad_output, self.maskout],
-                                output_dtypes=[grad_output.dtype],
-                                output_shapes=[grad_output.shape],
-                                attr_code=attr_code)[0]
+                                 [grad_output, self.maskout],
+                                 output_dtypes=[grad_output.dtype],
+                                 output_shapes=[grad_output.shape],
+                                 attr_code=attr_code)[0]
         return grad_input

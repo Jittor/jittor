@@ -10,6 +10,7 @@ namespace jittor
     protected:
         void setupInputDesc() override;
         void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) override;
+
     public:
         BatchMatMulOpRunner();
     };
