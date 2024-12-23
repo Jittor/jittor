@@ -274,7 +274,6 @@ namespace jittor
                 else if (op->name() == string("reduce"))
                 {
                     auto rop = (ReduceOp *)op;
-                    // AclOpRunner op("");
                     ReduceOpRunner op;
                     if (rop->ns == ns_add)
                         op.op_idx = 9;
@@ -308,7 +307,7 @@ namespace jittor
                 else if (op->name() == string("broadcast_to"))
                 {
                     auto bop = (BroadcastToOp *)op;
-                    AclOpRunner op("Expand");
+                    ExpandOpRunner op;
                     op.jt_name = "expand";
                     NanoVector xshape, xshape_bk = bop->x->shape;
                     NanoVector zshape = bop->z->shape;

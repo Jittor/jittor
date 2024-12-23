@@ -519,32 +519,7 @@ def change_function():
     def transpose_acl(x, *dim):
         return TransPoseACL()(x, *dim)
 
-    class ReLUACL(Function):
-
-        def __init__(self):
-            super(ReLUACL, self).__init__()
-
-        def execute(self, x):
-            x = x.float32()
-            self.input = x
-            result = acl_cmd("ReLU", [x],
-                             output_dtypes=[x.dtype],
-                             output_shapes=[x.shape],
-                             attr_code="op.jt_name=\"unary\";")[0]
-            return result
-
-        def grad(self, grad_output):
-            mask = acl_cmd("Greater",
-                           [self.input, jt.zeros(self.input.shape)],
-                           output_dtypes=[self.input.dtype],
-                           output_shapes=[self.input.shape],
-                           attr_code="op.jt_name=\"binary\";")[0]
-            grad_input = acl_cmd("Mul", [grad_output, mask],
-                                 output_dtypes=[grad_output.dtype],
-                                 output_shapes=[grad_output.shape],
-                                 attr_code="op.jt_name=\"binary\";")[0]
-            return grad_input
-
+    from .aclops.relu_op import ReLUACL
     class ReLU(jt.nn.Module):
 
         def __init__(self):

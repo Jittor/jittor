@@ -5,7 +5,6 @@ import ctypes
 import glob
 import jittor as jt
 import jittor.compiler as compiler
-from jittor.extern.acl.acl_compiler import acl_cmd_forward
 import math
 import numpy as np
 
@@ -26,14 +25,13 @@ def _ntuple(n):
 _pair = _ntuple(2)
 
 
-def conv_forward(name: str,
-                 inputs: list,
-                 output_dtypes: list = None,
-                 output_shapes: list = None,
-                 attr_code: str = "",
-                 attr_header: str = "",
-                 outputs: list = None,
-                 extra_data: dict = {}):
+def conv_cmd(name: str,
+                inputs: list,
+                output_dtypes: list = None,
+                output_shapes: list = None,
+                attr_code: str = "",
+                attr_header: str = "",
+                outputs: list = None):
     attr_header = "\nnamespace jittor{" + attr_header + "}\n"
 
     cuda_header = '''
@@ -52,58 +50,20 @@ def conv_forward(name: str,
     for i in range(len(inputs)):
         input_code += f"op.add(in{i}, true);\n"
 
+    output_code = ''
+    for i in range(len(outputs_)):
+        output_code += f"op.add(out{i}, false);\n"
     return jt.code(outputs=outputs_,
                    inputs=inputs,
                    cuda_header=attr_header + cuda_header,
                    cuda_src=f"""
+   
     // aclop
-    ConvOpRunner op;
+    {name}OpRunner op;
     {input_code}
-    op.add(out0, false);
+    {output_code}
     {attr_code}
-    op.run();""",
-                   data=extra_data)
-
-
-def conv_forward(name: str,
-                 inputs: list,
-                 output_dtypes: list = None,
-                 output_shapes: list = None,
-                 attr_code: str = "",
-                 attr_header: str = "",
-                 outputs: list = None,
-                 extra_data: dict = {}):
-    # TODO: not done for now
-    attr_header = "\nnamespace jittor{" + attr_header + "}\n"
-
-    cuda_header = '''
-    #include "acl/aclops/aclops.h"
-    '''
-    outputs_ = []
-    if outputs is not None:
-        outputs_ = outputs
-    else:
-        assert output_dtypes is not None
-        assert output_shapes is not None
-        assert len(output_dtypes) == len(output_shapes)
-        for i in range(len(output_shapes)):
-            outputs_.append(jt.empty(output_shapes[i], output_dtypes[i]))
-    input_code = ''
-    for i in range(len(inputs)):
-        input_code += f"op.add(in{i}, true);\n"
-
-    return jt.code(outputs=outputs_,
-                   inputs=inputs,
-                   cuda_header=attr_header + cuda_header,
-                   cuda_src=f"""
-    // aclop
-    ConvOpRunner op;
-    {input_code}
-    op.add(out0, false);
-    {attr_code}
-    op.run();""",
-                   data=extra_data)
-
+    op.run();""")
 
 class ConvACL(jt.Function):
 
@@ -151,7 +111,7 @@ class ConvACL(jt.Function):
         inputs = [x, weight]
         if bias is not None:
             inputs.append(bias)
-        result = conv_forward(
+        result = conv_cmd(
             "Conv2d",
             inputs,
             output_dtypes=[x.dtype],
@@ -189,7 +149,7 @@ class ConvACL(jt.Function):
             attr->convOutPads = {{ 1,1}};
             op.op_attr.reset(attr);
             """
-        results = acl_cmd_forward("Conv2dBackward",
+        results = conv_cmd("Conv2dBackward",
                                   inputs,
                                   output_dtypes=output_dtypes,
                                   output_shapes=output_shapes,
