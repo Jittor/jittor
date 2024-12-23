@@ -30,12 +30,12 @@
 
 namespace jittor
 {
-    ConvOpRunner::ConvOpRunner() : BaseOpRunner("Conv2d")
+    Conv2dOpRunner::Conv2dOpRunner() : BaseOpRunner("Conv2d")
     {
         use_nchw = true;
     }
 
-    void ConvOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    void Conv2dOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
     {
         // for conv
         aclIntArray *strides = nullptr;
@@ -64,7 +64,54 @@ namespace jittor
         }
 
         ret = aclnnConvolution(workspaceAddr, workspaceSize, executor, aclstream);
-        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnxxx failed. ERROR: %d\n", name.c_str(), ret); return);
+        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnConvolution failed. ERROR: %d\n", name.c_str(), ret); return);
+
+        syncRun();
+
+        aclDestroyIntArray(strides);
+        aclDestroyIntArray(pads);
+        aclDestroyIntArray(outPads);
+        aclDestroyIntArray(dilations);
+        return;
+    }
+
+
+    Conv2dBackwardOpRunner::Conv2dBackwardOpRunner() : BaseOpRunner("Conv2dBackward")
+    {
+        use_nchw = true;
+    }
+
+    void Conv2dBackwardOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    {
+        // for conv
+        aclIntArray *strides = nullptr;
+        aclIntArray *pads = nullptr;
+        aclIntArray *outPads = nullptr;
+        aclIntArray *dilations = nullptr;
+        auto attr = dynamic_cast<ConvAttr *>(op_attr.get());
+        strides = aclCreateIntArray(attr->convStrides.data(), 2);
+        pads = aclCreateIntArray(attr->convPads.data(), 2);
+        outPads = aclCreateIntArray(attr->convOutPads.data(), 2);
+        dilations = aclCreateIntArray(attr->convDilations.data(), 2);
+        bool outputMask[3] = {true, true, true};
+        auto input_num = in_.size();
+        if (input_num == 3)
+        {
+            outputMask[2] = false;
+        }
+        aclBoolArray *outMask = aclCreateBoolArray(outputMask, 3);
+        auto biasSizes = aclCreateIntArray(&outputShapes[2][0], outputShapes[2].size());
+        ret = aclnnConvolutionBackwardGetWorkspaceSize(inputTensors[0], inputTensors[1], inputTensors[2], biasSizes, strides, pads, dilations, false, outPads, attr->group, outMask, 0, outputTensors[0], outputTensors[1], outputTensors[2], &workspaceSize, &executor);
+
+        checkRet(ret);
+
+        if (workspaceSize > 0)
+        {
+            mallocWorkSpace(workspaceSize);
+        }
+
+        ret = aclnnConvolutionBackward(workspaceAddr, workspaceSize, executor, aclstream);
+        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnConvolutionBackward failed. ERROR: %d\n", name.c_str(), ret); return);
 
         syncRun();
 

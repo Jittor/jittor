@@ -61,24 +61,23 @@ class ReLUACL(jt.Function):
     def execute(self, x):
         x = x.float32()
         self.input = x
-        result = relu_cmd("ReLU", [x],
+        result = relu_cmd("Unary", [x],
                           output_dtypes=[x.dtype],
                           output_shapes=[x.shape],
-                          attr_code="op.jt_name=\"unary\";")[0]
+                          attr_code="op.name=\"ReLU\";")[0]
         return result
 
     def grad(self, grad_output):
-        mask = relu_cmd("Greater",
+        mask = relu_cmd("Binary",
                         [self.input, jt.zeros(self.input.shape)],
                         output_dtypes=[self.input.dtype],
                         output_shapes=[self.input.shape],
-                        attr_code="op.jt_name=\"binary\";")[0]
-        grad_input = relu_cmd("Mul", [grad_output, mask],
+                        attr_code="op.name=\"Greater\";")[0]
+        grad_input = relu_cmd("Binary", [grad_output, mask],
                               output_dtypes=[grad_output.dtype],
                               output_shapes=[grad_output.shape],
-                              attr_code="op.jt_name=\"binary\";")[0]
+                              attr_code="op.name=\"Mul\";")[0]
         return grad_input
-
 
 class LeakyReLUACL(jt.Function):
 
