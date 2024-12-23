@@ -339,7 +339,7 @@ namespace jittor
                 {
                     // replace fuse_transpose with transpose
                     auto top = (TransposeOp *)op;
-                    AclOpRunner op("Transpose");
+                    TransposeOpRunner op;
                     op.add(top->x, true);
                     op.add(top->y, false);
                     op.jt_name = "transpose";
