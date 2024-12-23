@@ -267,30 +267,12 @@ def change_function():
     from .aclops.matmul_op import MatmulACL
     from .aclops.transpose_op import TransPoseACL
 
-    class TriuACL(Function):
-
-        def __init__(self):
-            super(TriuACL, self).__init__()
-
-        def execute(self, input, diagonal):
-            attr_code = f"""
-            op.jt_name = "triu";
-            TriuAttr *attr = new TriuAttr();
-            attr->diagonal = {diagonal};
-            op.op_attr.reset(attr);
-            """
-
-            result = acl_cmd("Triu", [input],
-                             output_dtypes=[input.dtype],
-                             output_shapes=[input.shape],
-                             attr_code=attr_code)[0]
-            return result
-
-        def grad(self, grad_output):
-            return grad_output
+    from .aclops.triu_op import TriuACL
 
     def triu_acl(x, diagonal=0):
         return TriuACL()(x, diagonal)
+
+    from .aclops.conv_op import ConvACL
 
     def conv_acl(x,
                  weight,
@@ -401,11 +383,16 @@ def change_function():
                                self.padding, self.dilation, self.groups)
             return ret
 
+
+    from .aclops.flip_op import FlipACL
     def flip_acl(x, dim):
         return FlipACL()(x, dim)
 
+    from .aclops.concat_op import ConcatACL
     def concat(x, dim=0):
         return ConcatACL()(x, dim)
+
+    from .aclops.gather_scatter_op import GatherACL
 
     def gather_acl(input, dim, index):
         return GatherACL()(input, dim, index)
@@ -416,6 +403,8 @@ def change_function():
         else:
             return jt.array([False])
 
+    from .aclops.cumsum_op import CumsumACL
+
     def cumsum_acl(input, dim=-1):
         return CumsumACL()(input, dim)
 
@@ -424,22 +413,33 @@ def change_function():
         x = cumsum_acl(x, dim=dim)
         return jt.exp(x)
 
+    from .aclops.index_op import IndexACL
+
     def index_acl(inshape: Union[jt.Var, list], dim=None, dtype="int32"):
         if isinstance(inshape, jt.Var):
             inshape = inshape.shape
         return IndexACL()(inshape, dim, dtype)
 
+    from .aclops.gather_scatter_op import ScatterACL
     def scatter_acl(input, dim, index, src, reduce='void'):
         return ScatterACL()(input, dim, index, src, reduce)
+
+    from .aclops.where_op import WhereACL
 
     def where_acl(condition, x=None, y=None):
         return WhereACL()(condition, x, y)
 
+    from .aclops.where_op import NonzeroACL
+
     def nonzero_acl(x):
         return NonzeroACL()(x)
 
+    from .aclops.floor_op import FloorIntACL
+
     def floor_int_acl(x):
         return FloorIntACL()(x)
+
+    from .aclops.getitem_op import GetItemACL
 
     def getitem_acl(x, slices, return_x=None):
         # Transform numpy int to int
@@ -489,9 +489,15 @@ def change_function():
 
         return result
 
+
+    from .aclops.setitem_op import SetItemACL
+
     def setitem_acl(x, slices, value):
         res = SetItemACL()(x, slices, value)
         return x.assign(res)
+
+
+    from .aclops.bmm_op import BmmACL
 
     def bmm_acl(x1, x2):
         return BmmACL()(x1, x2)
@@ -499,11 +505,16 @@ def change_function():
     def bmm_transpose_acl(x1, x2):
         return BmmACL(True)(x1, x2)
 
+
+    from .aclops.matmul_op import MatmulACL
+
     def matmul_acl(x1, x2):
         return MatmulACL()(x1, x2)
 
     def matmul_transpose_acl(x1, x2):
         return MatmulACL(True)(x1, x2)
+
+    from .aclops.transpose_op import TransPoseACL
 
     def transpose_acl(x, *dim):
         return TransPoseACL()(x, *dim)
@@ -545,6 +556,8 @@ def change_function():
     def relu(x):
         return ReLUACL()(x)
 
+    from .aclops.relu_op import LeakyReLUACL
+
     class LeakyReLU(jt.nn.Module):
 
         def __init__(self, negative_slope=0.01):
@@ -556,6 +569,8 @@ def change_function():
 
     def leaky_relu(x, scale=0.01):
         return LeakyReLUACL()(x, scale)
+
+    from .aclops.dropout_op import DropoutACL
 
     class Dropout(jt.nn.Module):
 
@@ -570,6 +585,8 @@ def change_function():
     def dropout_acl(x, p=0.5, is_train=False):
         return DropoutACL()(x, p, is_train)
 
+    from .aclops.silu_op import SiLUACL
+
     def silu_acl(x):
         return SiLUACL()(x)
 
@@ -581,6 +598,8 @@ def change_function():
         def execute(self, x):
             return SiLUACL()(x)
 
+    from .aclops.sigmoid_op import SigmoidACL
+    
     def sigmoid_acl(x):
         return SigmoidACL()(x)
 
@@ -592,64 +611,25 @@ def change_function():
         def execute(self, x):
             return SigmoidACL()(x)
 
-    class EmbeddingACL(Function):
+    # class Embedding(jt.nn.Module):
 
-        def __init__(self):
-            super(EmbeddingACL, self).__init__()
+    #     def __init__(self,
+    #                  num_embeddings,
+    #                  embedding_dim,
+    #                  padding_idx=None,
+    #                  dtype="float32"):
+    #         self.num_embeddings = num_embeddings
+    #         self.embedding_dim = embedding_dim
+    #         self.padding_idx = padding_idx
+    #         self.weight = jt.init.gauss(
+    #             [self.num_embeddings, self.embedding_dim], dtype)
+    #         if padding_idx is not None:
+    #             self.weight[padding_idx] = 0
 
-        def execute(
-            self,
-            indices,
-            weight,
-        ):
-            inputs = [weight, indices]
-            self.indices = indices
-            self.weight_shape = weight.shape
-            output_shape = list(indices.shape) + list(weight.shape[1:])
-            outputs = [jt.empty(output_shape, weight.dtype)]
-            attr_code = f"""
-            op.jt_name = "embedding";
-            """
-            result = acl_cmd("Embedding",
-                             inputs=inputs,
-                             outputs=outputs,
-                             attr_code=attr_code)[0]
-            return result
-
-        def grad(self, grad_output):
-            inputs = [grad_output, self.indices]
-            outputs = [jt.empty(self.weight_shape, grad_output.dtype)]
-            attr_code = f"""
-            op.jt_name = "embeddingbackward";
-            EmbeddingAttr *attr = new EmbeddingAttr();
-            attr->numEmbeddings = {self.weight_shape[0]};
-            op.op_attr.reset(attr);
-            """
-            grad_weight = acl_cmd("EmbeddingBackward",
-                                  inputs=inputs,
-                                  outputs=outputs,
-                                  attr_code=attr_code)[0]
-            return None, grad_weight
-
-    class Embedding(jt.nn.Module):
-
-        def __init__(self,
-                     num_embeddings,
-                     embedding_dim,
-                     padding_idx=None,
-                     dtype="float32"):
-            self.num_embeddings = num_embeddings
-            self.embedding_dim = embedding_dim
-            self.padding_idx = padding_idx
-            self.weight = jt.init.gauss(
-                [self.num_embeddings, self.embedding_dim], dtype)
-            if padding_idx is not None:
-                self.weight[padding_idx] = 0
-
-        def execute(self, x):
-            res = embedding_acl(x, self.weight)
-            return res
-
+    #     def execute(self, x):
+    #         res = embedding_acl(x, self.weight)
+    #         return res
+    
     class Softmax(jt.nn.Module):
 
         def __init__(self):
@@ -661,89 +641,16 @@ def change_function():
     def softmax_acl(x, dim):
         return SoftmaxACL()(x, dim)
 
+    from .aclops.rope_op import RopeACL
     def rope_acl(xq, xk, freqs_cis=None, freq_sin=None, freq_cos=None):
         return RopeACL()(xq, xk, freqs_cis, freq_sin, freq_cos)
 
-    class BatchNormACL(Function):
-
-        def __init__(self,
-                     num_features,
-                     eps=1e-05,
-                     momentum=0.1,
-                     affine=True,
-                     is_train=True,
-                     sync=True):
-            self.num_features = num_features
-            self.eps = eps
-            self.momentum = momentum
-            self.affine = affine
-            self.is_train = is_train
-            self.sync = sync
-            self.weight = jt.init.constant(
-                (num_features, ), "float32", 1.0) if affine else 1.0
-            self.bias = jt.init.constant(
-                (num_features, ), "float32", 0.0) if affine else 0.0
-            self.running_mean = jt.init.constant((num_features, ), "float32",
-                                                 0.0).stop_grad()
-            self.running_var = jt.init.constant((num_features, ), "float32",
-                                                1.0).stop_grad()
-
-        def execute(self, x):
-            # assert self.num_features == x.shape[-1]
-            self.input = x.float32()
-            inputs = [
-                self.input, self.weight, self.bias, self.running_mean,
-                self.running_var
-            ]
-            outputs = [
-                jt.empty(x.shape),
-                jt.empty(self.num_features),
-                jt.empty(self.num_features)
-            ]
-            attr_code = f"""
-            op.jt_name = "batchnorm";
-            BatchNormAttr *attr = new BatchNormAttr();
-            attr->is_train = {"true" if self.is_train else "false"};
-            attr->momentum = {self.momentum};
-            attr->eps = {self.eps};
-            op.op_attr.reset(attr);
-            """
-            result = acl_cmd("BatchNorm",
-                             inputs=inputs,
-                             outputs=outputs,
-                             attr_code=attr_code)
-            self.output = result[0]
-            self.saveMean = result[1]
-            self.saveInvstd = result[2]
-            return self.output
-
-        def grad(self, grad_output):
-            attr_code = f"""
-            op.jt_name = "batchnorm";
-            BatchNormAttr *attr = new BatchNormAttr();
-            attr->is_train = {"true" if self.is_train else "false"};
-            attr->momentum = {self.momentum};
-            attr->eps = {self.eps};
-            op.op_attr.reset(attr);
-            """
-            inputs = [
-                grad_output, self.input, self.weight, self.running_mean,
-                self.running_var, self.saveMean, self.saveInvstd
-            ]
-            outputs = [
-                jt.empty(self.input.shape),
-                jt.empty(self.num_features),
-                jt.empty(self.num_features)
-            ]
-            grad_input = acl_cmd("SoftmaxBackward",
-                                 inputs=inputs,
-                                 outputs=outputs,
-                                 attr_code=attr_code)[0]
-            return grad_input
-
+    from .aclops.stack_op import StackACL
     def stack_acl(x, dim=0):
         return StackACL()(x, dim)
 
+    from .aclops.nantonum_op import NanToNumACL
+    
     def isnan_acl(x):
         tonum = NanToNumACL()(x, -1.0)
         return jt.not_equal(x, tonum).logical_and(
@@ -872,6 +779,7 @@ def change_function():
     jt.sigmoid = warp(jt.sigmoid, sigmoid_acl)
     jt.nn.Sigmoid = warp(jt.nn.Sigmoid, Sigmoid)
 
+    # from .aclops.embedding_op import EmbeddingACL
     # def embedding_acl(indices, weight):
     #     return EmbeddingACL()(indices, weight)
 
@@ -882,6 +790,7 @@ def change_function():
 
     jt.nn.softmax = warp(jt.nn.softmax, softmax_acl)
 
+    # from .aclops.norms_op import BatchNormACL,LayerNormACL
     # jt.nn.BatchNorm = warp(jt.nn.BatchNorm, BatchNormACL)
     # jt.nn.LayerNorm = warp(jt.nn.LayerNorm, LayerNormACL)
 
