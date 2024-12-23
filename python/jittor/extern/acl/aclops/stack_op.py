@@ -11,13 +11,14 @@ import numpy as np
 from typing import Union
 from collections.abc import Sequence, Iterable
 
+
 def stack_cmd(name: str,
-            inputs: list,
-            output_dtypes: list = None,
-            output_shapes: list = None,
-            attr_code: str = "",
-            attr_header: str = "",
-            outputs: list = None):
+              inputs: list,
+              output_dtypes: list = None,
+              output_shapes: list = None,
+              attr_code: str = "",
+              attr_header: str = "",
+              outputs: list = None):
     attr_header = "\nnamespace jittor{" + attr_header + "}\n"
 
     cuda_header = '''
@@ -51,6 +52,7 @@ def stack_cmd(name: str,
     {attr_code}
     op.run();""")
 
+
 class StackACL(jt.Function):
 
     def __init__(self):
@@ -60,15 +62,12 @@ class StackACL(jt.Function):
         if type(input_tensors) is tuple:
             input_tensors = list(input_tensors)
         assert type(input_tensors) is list
-        assert -1 * len(input_tensors) - 1 <= dim and dim <= len(
-            input_tensors)
+        assert -1 * len(input_tensors) - 1 <= dim and dim <= len(input_tensors)
         for i in range(len(input_tensors)):
             if input_tensors[i].dtype != input_tensors[0].dtype:
-                raise ValueError(
-                    "All input tensors must have the same dtype")
+                raise ValueError("All input tensors must have the same dtype")
             if input_tensors[i].shape != input_tensors[0].shape:
-                raise ValueError(
-                    "All input tensors must have the same shape")
+                raise ValueError("All input tensors must have the same shape")
         self.input = input_tensors
         input_shape = list(input_tensors[0].shape)
         output_shape = input_shape[:dim] + [len(input_tensors)
@@ -82,10 +81,10 @@ class StackACL(jt.Function):
         """
         self.attr_code = attr_code
         result = stack_cmd("Stack",
-                            input_tensors,
-                            output_dtypes=[input_tensors[0].dtype],
-                            output_shapes=[output_shape],
-                            attr_code=self.attr_code)[0]
+                           input_tensors,
+                           output_dtypes=[input_tensors[0].dtype],
+                           output_shapes=[output_shape],
+                           attr_code=self.attr_code)[0]
         return result
 
     def grad(self, grad_output):
@@ -110,7 +109,7 @@ class StackACL(jt.Function):
         """
 
         result = stack_cmd("SplitWithSize", [grad_output],
-                            output_dtypes=dtypeVec,
-                            output_shapes=shapeVec,
-                            attr_code=attr_code)
+                           output_dtypes=dtypeVec,
+                           output_shapes=shapeVec,
+                           attr_code=attr_code)
         return result

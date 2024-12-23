@@ -11,13 +11,14 @@ import numpy as np
 from typing import Union
 from collections.abc import Sequence, Iterable
 
+
 def where_cmd(name: str,
-            inputs: list,
-            output_dtypes: list = None,
-            output_shapes: list = None,
-            attr_code: str = "",
-            attr_header: str = "",
-            outputs: list = None):
+              inputs: list,
+              output_dtypes: list = None,
+              output_shapes: list = None,
+              attr_code: str = "",
+              attr_header: str = "",
+              outputs: list = None):
     attr_header = "\nnamespace jittor{" + attr_header + "}\n"
 
     cuda_header = '''
@@ -51,6 +52,7 @@ def where_cmd(name: str,
     {attr_code}
     op.run();""")
 
+
 class NonzeroACL(jt.Function):
 
     def __init__(self):
@@ -63,14 +65,15 @@ class NonzeroACL(jt.Function):
         nonzero_cnt = (x != 0.0).sum().item()
 
         result = where_cmd("Nonzero", [x],
-                            output_dtypes=['int64'],
-                            output_shapes=[(nonzero_cnt, x.ndim)],
-                            attr_code=attr_code)[0]
+                           output_dtypes=['int64'],
+                           output_shapes=[(nonzero_cnt, x.ndim)],
+                           attr_code=attr_code)[0]
 
         return result
 
     def grad(self, grad_output):
         return grad_output
+
 
 class WhereACL(jt.Function):
 
@@ -104,9 +107,9 @@ class WhereACL(jt.Function):
             self.y = y
 
             result = where_cmd("Where", [condition, x, y],
-                                output_dtypes=[x.dtype],
-                                output_shapes=[x.shape],
-                                attr_code="op.jt_name=\"where\";")[0]
+                               output_dtypes=[x.dtype],
+                               output_shapes=[x.shape],
+                               attr_code="op.jt_name=\"where\";")[0]
             return result
 
     def grad(self, grad_output):
@@ -115,12 +118,12 @@ class WhereACL(jt.Function):
         else:
             tmp = jt.zeros(grad_output.shape, dtype=grad_output.dtype)
             grad_x = where_cmd("Where", [self.condition, grad_output, tmp],
-                                output_dtypes=[self.x.dtype],
-                                output_shapes=[self.x.shape],
-                                attr_code="op.jt_name=\"where\";")[0]
+                               output_dtypes=[self.x.dtype],
+                               output_shapes=[self.x.shape],
+                               attr_code="op.jt_name=\"where\";")[0]
 
             grad_y = where_cmd("Where", [self.condition, tmp, grad_output],
-                                output_dtypes=[self.y.dtype],
-                                output_shapes=[self.y.shape],
-                                attr_code="op.jt_name=\"where\";")[0]
+                               output_dtypes=[self.y.dtype],
+                               output_shapes=[self.y.shape],
+                               attr_code="op.jt_name=\"where\";")[0]
             return grad_output, grad_x, grad_y

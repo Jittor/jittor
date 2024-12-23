@@ -33,19 +33,20 @@ namespace jittor
 
         // Common functionality for adding input/output variables
         void add(Var *v, bool is_input);
-        
+
         virtual void setupInputDesc();
-        
+
         void cleanupDesc();
 
         virtual void setupOutputDesc();
-        
+
         virtual void syncRun();
 
         void checkRet(aclnnStatus ret);
-        
+
         // Base run method with common operator lookup logic
         void run();
+
     protected:
         // Virtual method for specific operator execution
         virtual void executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it) = 0;

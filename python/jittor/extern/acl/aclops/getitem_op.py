@@ -11,13 +11,14 @@ import numpy as np
 from typing import Union
 from collections.abc import Sequence, Iterable
 
+
 def getitem_cmd(name: str,
-            inputs: list,
-            output_dtypes: list = None,
-            output_shapes: list = None,
-            attr_code: str = "",
-            attr_header: str = "",
-            outputs: list = None):
+                inputs: list,
+                output_dtypes: list = None,
+                output_shapes: list = None,
+                attr_code: str = "",
+                attr_header: str = "",
+                outputs: list = None):
     attr_header = "\nnamespace jittor{" + attr_header + "}\n"
 
     cuda_header = '''
@@ -50,6 +51,7 @@ def getitem_cmd(name: str,
     {output_code}
     {attr_code}
     op.run();""")
+
 
 def getitem_forward(name: str,
                     inputs: list,
@@ -90,7 +92,8 @@ def getitem_forward(name: str,
     op.add(out0, false);
     {attr_code}
     op.run();""",
-    data=extra_data)
+                   data=extra_data)
+
 
 def caculate_shape(tensors):
     if isinstance(tensors, jt.Var):
@@ -104,6 +107,7 @@ def caculate_shape(tensors):
         return [len(tensors)] + sub_shape
     else:
         assert False, f"not implemented for {type(tensors)}"
+
 
 def can_broadcast_and_shape(shape1, shape2):
     """
@@ -144,6 +148,7 @@ def can_broadcast_and_shape(shape1, shape2):
 
     return True, tuple(broadcast_shape)
 
+
 class GetItemACL(jt.Function):
 
     def __init__(self):
@@ -174,9 +179,9 @@ class GetItemACL(jt.Function):
             op.jt_name = "maskedselect";
             """
             result = getitem_cmd("MaskedSelect",
-                                inputs=inputs,
-                                outputs=outputs,
-                                attr_code=attr_code)[0]
+                                 inputs=inputs,
+                                 outputs=outputs,
+                                 attr_code=attr_code)[0]
             result = result[:output_len]
             result.sync()
             return result
@@ -194,7 +199,7 @@ class GetItemACL(jt.Function):
         contains_slice = False
         for s in slices:
             if not isinstance(s, jt.Var) and (isinstance(s, slice)
-                                                or s == Ellipsis):
+                                              or s == Ellipsis):
                 contains_slice = True
                 break
         if not contains_slice:
@@ -212,9 +217,9 @@ class GetItemACL(jt.Function):
                 output_shape = [1]
             for ii in slices:
                 indices.append(jt.Var(ii).int32())
-            if isinstance(slices[0], jt.Var) or isinstance(
-                    slices[0], int) or isinstance(
-                        slices[0], list) or isinstance(slices[0], tuple):
+            if isinstance(slices[0],
+                          jt.Var) or isinstance(slices[0], int) or isinstance(
+                              slices[0], list) or isinstance(slices[0], tuple):
                 self.indices = indices
                 inputs = [x] + indices
                 attr_code = f"""
@@ -222,10 +227,10 @@ class GetItemACL(jt.Function):
                 """
                 self.type_ = 'index'
                 result = getitem_cmd("Index",
-                                    inputs=inputs,
-                                    output_dtypes=[x.dtype],
-                                    output_shapes=[output_shape],
-                                    attr_code=attr_code)[0]
+                                     inputs=inputs,
+                                     output_dtypes=[x.dtype],
+                                     output_shapes=[output_shape],
+                                     attr_code=attr_code)[0]
                 result.sync()
                 return result
         assert contains_slice, "slice type error"
@@ -235,8 +240,7 @@ class GetItemACL(jt.Function):
             if not isinstance(s, jt.Var) and s == Ellipsis:
                 slices = slices[:slices.index(s)] + [
                     slice(None, None, None)
-                ] * (x_dim - len(slices) + 1) + slices[slices.index(s) +
-                                                        1:]
+                ] * (x_dim - len(slices) + 1) + slices[slices.index(s) + 1:]
                 break
         slices = tuple(slices)
 
@@ -313,11 +317,11 @@ class GetItemACL(jt.Function):
         op.op_attr.reset(attr);
         """
         result = getitem_forward("SliceV2",
-                                    inputs,
-                                    output_dtypes=[x.dtype],
-                                    output_shapes=[jt.empty(sizes).shape],
-                                    attr_code=attr_code,
-                                    extra_data=extra_data)[0]
+                                 inputs,
+                                 output_dtypes=[x.dtype],
+                                 output_shapes=[jt.empty(sizes).shape],
+                                 attr_code=attr_code,
+                                 extra_data=extra_data)[0]
         self.squeeze_dims = squeeze_dims
         for dim in squeeze_dims[::-1]:
             result = jt.squeeze(result, dim)
@@ -334,9 +338,9 @@ class GetItemACL(jt.Function):
             outputs = [jt.zeros(self.x_shape, dtype=grad_output.dtype)]
             # breakpoint()
             result = getitem_cmd("IndexPutImplAccumulate",
-                                inputs=inputs,
-                                outputs=outputs,
-                                attr_code=attr_code)[0]
+                                 inputs=inputs,
+                                 outputs=outputs,
+                                 attr_code=attr_code)[0]
             result.sync()
             return result, None
         elif self.type_ == 'slicev2':
@@ -401,9 +405,9 @@ class GetItemACL(jt.Function):
             inputs = [grad_output]
             outputs = [jt.zeros(self.x_shape, dtype=grad_output.dtype)]
             result = getitem_cmd("StridedSliceAssignV2",
-                                inputs=inputs,
-                                outputs=outputs,
-                                attr_code=attr_code)[0]
+                                 inputs=inputs,
+                                 outputs=outputs,
+                                 attr_code=attr_code)[0]
             result.sync()
             if expand_dim:
                 result = result.squeeze(-1)

@@ -11,13 +11,14 @@ import numpy as np
 from typing import Union
 from collections.abc import Sequence, Iterable
 
+
 def rope_cmd(name: str,
-            inputs: list,
-            output_dtypes: list = None,
-            output_shapes: list = None,
-            attr_code: str = "",
-            attr_header: str = "",
-            outputs: list = None):
+             inputs: list,
+             output_dtypes: list = None,
+             output_shapes: list = None,
+             attr_code: str = "",
+             attr_header: str = "",
+             outputs: list = None):
     attr_header = "\nnamespace jittor{" + attr_header + "}\n"
 
     cuda_header = '''
@@ -51,6 +52,7 @@ def rope_cmd(name: str,
     {attr_code}
     op.run();""")
 
+
 class RopeACL(jt.Function):
 
     def __init__(self):
@@ -67,14 +69,14 @@ class RopeACL(jt.Function):
             assert freq_cos is not None and freq_sin is not None
         inputs = [xq, xk, freq_cos, freq_sin]
         results = rope_cmd("RotaryPosEmb",
-                            inputs,
-                            output_dtypes=[
-                                xq.dtype,
-                            ],
-                            output_shapes=[
-                                xq.shape,
-                            ],
-                            attr_code=attr_code)
+                           inputs,
+                           output_dtypes=[
+                               xq.dtype,
+                           ],
+                           output_shapes=[
+                               xq.shape,
+                           ],
+                           attr_code=attr_code)
         results[0].sync()
         return inputs[0], inputs[1]
 

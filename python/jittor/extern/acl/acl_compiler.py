@@ -158,32 +158,7 @@ def acl_cmd(name: str,
             attr_code: str = "",
             attr_header: str = "",
             outputs: list = None):
-    #         inputs: list,
-    #         output_dtypes: list,
-    #         output_shapes: list,
-    #         attr_code: str = ""):
-    # input_code = ''
-    # for i in range(len(inputs)):
-    #     input_code += f"op.add(in{i}, true);\n"
-
-    # output_code = ''
-    # for i in range(len(output_dtypes)):
-    #     output_code += f"op.add(out{i}, false);\n"
-
-    # # read the tmp_file.cpp to the cuda_header
-    # with open(
-    #         "/home/ma-user/work/zy/JittorHW/python/jittor/extern/acl/tmp_file.cpp",
-    #         "r") as f:
-    #     cuda_header = f.read()
-    # import jittor as jt
-    # return jt.code(output_shapes,
-    #                output_dtypes,
-    #                inputs,
-    #                cuda_header=cuda_header,
-    #                cuda_src=f"""
     attr_header = "\nnamespace jittor{" + attr_header + "}\n"
-
-    # read the tmp_file.cpp to the cuda_header
 
     cuda_header = '#include "acl/aclops/aclops.h"'
     import jittor as jt
@@ -194,11 +169,10 @@ def acl_cmd(name: str,
         assert output_dtypes is not None
         assert output_shapes is not None
         assert len(output_dtypes) == len(output_shapes)
-        # print(f'{name } output_dtypes', output_dtypes)
-        # print(f'{name } output_shapes', output_shapes)
+
         for i in range(len(output_shapes)):
             outputs_.append(jt.empty(output_shapes[i], output_dtypes[i]))
-    # print(f'{name } outputs_', outputs_)
+
     input_code = ''
     for i in range(len(inputs)):
         input_code += f"op.add(in{i}, true);\n"
@@ -240,11 +214,9 @@ def acl_cmd_forward(name: str,
         assert output_dtypes is not None
         assert output_shapes is not None
         assert len(output_dtypes) == len(output_shapes)
-        # print(f'{name } output_dtypes', output_dtypes)
-        # print(f'{name } output_shapes', output_shapes)
         for i in range(len(output_shapes)):
             outputs_.append(jt.empty(output_shapes[i], output_dtypes[i]))
-    # print(f'{name } outputs_', outputs_)
+
     input_code = ''
     for i in range(len(inputs)):
         input_code += f"op.add(in{i}, true);\n"
@@ -269,6 +241,31 @@ def acl_cmd_forward(name: str,
 def change_function():
     import jittor as jt
     from jittor import Function
+    from .aclops.flashattention_op import FlashAttentionACL
+    from .aclops.conv_op import ConvACL
+    from .aclops.pool_op import PoolACL
+    from .aclops.nantonum_op import NanToNumACL
+    from .aclops.stack_op import StackACL
+    from .aclops.rope_op import RopeACL
+    from .aclops.softmax_op import SoftmaxACL
+    from .aclops.sigmoid_op import SigmoidACL
+    from .aclops.silu_op import SiLUACL
+    from .aclops.dropout_op import DropoutACL
+    from .aclops.relu_op import LeakyReLUACL
+    from .aclops.flip_op import FlipACL
+    from .aclops.concat_op import ConcatACL
+    from .aclops.gather_scatter_op import GatherACL
+    from .aclops.cumsum_op import CumsumACL
+    from .aclops.index_op import IndexACL
+    from .aclops.gather_scatter_op import ScatterACL
+    from .aclops.where_op import WhereACL
+    from .aclops.where_op import NonzeroACL
+    from .aclops.floor_op import FloorIntACL
+    from .aclops.getitem_op import GetItemACL
+    from .aclops.setitem_op import SetItemACL
+    from .aclops.bmm_op import BmmACL
+    from .aclops.matmul_op import MatmulACL
+    from .aclops.transpose_op import TransPoseACL
 
     from .aclops.triu_op import TriuACL
 
@@ -276,6 +273,7 @@ def change_function():
         return TriuACL()(x, diagonal)
 
     from .aclops.conv_op import ConvACL
+
     def conv_acl(x,
                  weight,
                  bias=None,
@@ -385,6 +383,7 @@ def change_function():
                                self.padding, self.dilation, self.groups)
             return ret
 
+
     from .aclops.flip_op import FlipACL
     def flip_acl(x, dim):
         return FlipACL()(x, dim)
@@ -441,6 +440,7 @@ def change_function():
         return FloorIntACL()(x)
 
     from .aclops.getitem_op import GetItemACL
+
     def getitem_acl(x, slices, return_x=None):
         # Transform numpy int to int
         if isinstance(slices, (np.int8, np.int16, np.int32, np.int64)):
@@ -489,19 +489,25 @@ def change_function():
 
         return result
 
+
     from .aclops.setitem_op import SetItemACL
+
     def setitem_acl(x, slices, value):
         res = SetItemACL()(x, slices, value)
         return x.assign(res)
 
+
     from .aclops.bmm_op import BmmACL
+
     def bmm_acl(x1, x2):
         return BmmACL()(x1, x2)
 
     def bmm_transpose_acl(x1, x2):
         return BmmACL(True)(x1, x2)
 
+
     from .aclops.matmul_op import MatmulACL
+
     def matmul_acl(x1, x2):
         return MatmulACL()(x1, x2)
 
@@ -512,6 +518,7 @@ def change_function():
 
     def transpose_acl(x, *dim):
         return TransPoseACL()(x, *dim)
+
     class ReLUACL(Function):
 
         def __init__(self):
@@ -550,6 +557,7 @@ def change_function():
         return ReLUACL()(x)
 
     from .aclops.relu_op import LeakyReLUACL
+
     class LeakyReLU(jt.nn.Module):
 
         def __init__(self, negative_slope=0.01):
@@ -563,6 +571,7 @@ def change_function():
         return LeakyReLUACL()(x, scale)
 
     from .aclops.dropout_op import DropoutACL
+
     class Dropout(jt.nn.Module):
 
         def __init__(self, p=0.5, is_train=False):
@@ -620,8 +629,7 @@ def change_function():
     #     def execute(self, x):
     #         res = embedding_acl(x, self.weight)
     #         return res
-
-    from .aclops.softmax_op import SoftmaxACL
+    
     class Softmax(jt.nn.Module):
 
         def __init__(self):
@@ -642,7 +650,7 @@ def change_function():
         return StackACL()(x, dim)
 
     from .aclops.nantonum_op import NanToNumACL
-
+    
     def isnan_acl(x):
         tonum = NanToNumACL()(x, -1.0)
         return jt.not_equal(x, tonum).logical_and(
@@ -694,8 +702,7 @@ def change_function():
     jt.nn.conv2d = warp(jt.nn.conv2d, conv_acl)
     jt.nn.Conv2d = warp(jt.nn.Conv2d, Conv2D)
     jt.nn.Conv = warp(jt.nn.Conv, Conv2D)
-    
-    from .aclops.pool_op import PoolACL
+
     jt.nn.Pool = warp(jt.nn.Pool, PoolACL)
 
     jt.flip = warp(jt.flip, flip_acl)
@@ -743,6 +750,7 @@ def change_function():
     jt.Var.__setitem__ = lambda x, slices, value: warp(
         fake_setitem, setitem_acl, name='setitem')(x, slices, value)
 
+    fake_matmul = jt.Var.matmul
     jt.nn.bmm = warp(jt.nn.bmm, bmm_acl)
     jt.bmm = warp(jt.bmm, bmm_acl)
     jt.nn.matmul = warp(jt.matmul, matmul_acl)
@@ -750,6 +758,7 @@ def change_function():
     jt.nn.matmul_transpose = warp(jt.nn.matmul_transpose, matmul_transpose_acl)
     jt.nn.bmm_transpose = warp(jt.nn.bmm_transpose, bmm_transpose_acl)
     jt.bmm_transpose = warp(jt.bmm_transpose, bmm_transpose_acl)
+    jt.Var.__matmul__ = lambda x, y: warp(fake_matmul, matmul_acl)(x, y)
 
     jt.transpose = warp(jt.transpose, transpose_acl)
     fake_transpose = jt.transpose
@@ -784,7 +793,7 @@ def change_function():
     # from .aclops.norms_op import BatchNormACL,LayerNormACL
     # jt.nn.BatchNorm = warp(jt.nn.BatchNorm, BatchNormACL)
     # jt.nn.LayerNorm = warp(jt.nn.LayerNorm, LayerNormACL)
-    from .aclops.flashattention_op import FlashAttentionACL
+
     jt.nn.FlashAttention = warp(jt.nn.FlashAttention, FlashAttentionACL)
     jt.isnan = warp(jt.isnan, isnan_acl)
     jt.isinf = warp(jt.isinf, isinf_acl)

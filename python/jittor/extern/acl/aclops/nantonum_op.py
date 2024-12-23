@@ -11,13 +11,14 @@ import numpy as np
 from typing import Union
 from collections.abc import Sequence, Iterable
 
+
 def nantonum_cmd(name: str,
-            inputs: list,
-            output_dtypes: list = None,
-            output_shapes: list = None,
-            attr_code: str = "",
-            attr_header: str = "",
-            outputs: list = None):
+                 inputs: list,
+                 output_dtypes: list = None,
+                 output_shapes: list = None,
+                 attr_code: str = "",
+                 attr_header: str = "",
+                 outputs: list = None):
     attr_header = "\nnamespace jittor{" + attr_header + "}\n"
 
     cuda_header = '''
@@ -51,6 +52,7 @@ def nantonum_cmd(name: str,
     {attr_code}
     op.run();""")
 
+
 class NanToNumACL(jt.Function):
 
     def __init__(self):
@@ -67,7 +69,7 @@ class NanToNumACL(jt.Function):
         """
         self.attr_code = attr_code
         result = nantonum_cmd("NanToNum", [input],
-                            output_dtypes=[input[0].dtype],
-                            output_shapes=[input.shape],
-                            attr_code=self.attr_code)[0]
+                              output_dtypes=[input[0].dtype],
+                              output_shapes=[input.shape],
+                              attr_code=self.attr_code)[0]
         return result
