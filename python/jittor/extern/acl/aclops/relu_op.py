@@ -11,13 +11,14 @@ import numpy as np
 from typing import Union
 from collections.abc import Sequence, Iterable
 
+
 def relu_cmd(name: str,
-            inputs: list,
-            output_dtypes: list = None,
-            output_shapes: list = None,
-            attr_code: str = "",
-            attr_header: str = "",
-            outputs: list = None):
+             inputs: list,
+             output_dtypes: list = None,
+             output_shapes: list = None,
+             attr_code: str = "",
+             attr_header: str = "",
+             outputs: list = None):
     attr_header = "\nnamespace jittor{" + attr_header + "}\n"
 
     cuda_header = '''
@@ -51,6 +52,7 @@ def relu_cmd(name: str,
     {attr_code}
     op.run();""")
 
+
 class ReLUACL(jt.Function):
 
     def __init__(self):
@@ -60,9 +62,9 @@ class ReLUACL(jt.Function):
         x = x.float32()
         self.input = x
         result = relu_cmd("ReLU", [x],
-                            output_dtypes=[x.dtype],
-                            output_shapes=[x.shape],
-                            attr_code="op.jt_name=\"unary\";")[0]
+                          output_dtypes=[x.dtype],
+                          output_shapes=[x.shape],
+                          attr_code="op.jt_name=\"unary\";")[0]
         return result
 
     def grad(self, grad_output):
@@ -72,11 +74,11 @@ class ReLUACL(jt.Function):
                         output_shapes=[self.input.shape],
                         attr_code="op.jt_name=\"binary\";")[0]
         grad_input = relu_cmd("Mul", [grad_output, mask],
-                                output_dtypes=[grad_output.dtype],
-                                output_shapes=[grad_output.shape],
-                                attr_code="op.jt_name=\"binary\";")[0]
+                              output_dtypes=[grad_output.dtype],
+                              output_shapes=[grad_output.shape],
+                              attr_code="op.jt_name=\"binary\";")[0]
         return grad_input
-    
+
 
 class LeakyReLUACL(jt.Function):
 
@@ -93,9 +95,9 @@ class LeakyReLUACL(jt.Function):
         op.op_attr.reset(attr);
         """
         result = relu_cmd("LeakyReLU", [x],
-                            output_dtypes=[x.dtype],
-                            output_shapes=[x.shape],
-                            attr_code=attr_code)[0]
+                          output_dtypes=[x.dtype],
+                          output_shapes=[x.shape],
+                          attr_code=attr_code)[0]
         self.negative_slope = negative_slope
         return result
 
@@ -107,9 +109,8 @@ class LeakyReLUACL(jt.Function):
         attr->selfIsResult = false;
         op.op_attr.reset(attr);
         """
-        grad_input = relu_cmd("LeakyReLUBackward",
-                                [grad_output, self.input],
-                                output_dtypes=[grad_output.dtype],
-                                output_shapes=[grad_output.shape],
-                                attr_code=attr_code)[0]
+        grad_input = relu_cmd("LeakyReLUBackward", [grad_output, self.input],
+                              output_dtypes=[grad_output.dtype],
+                              output_shapes=[grad_output.shape],
+                              attr_code=attr_code)[0]
         return grad_input

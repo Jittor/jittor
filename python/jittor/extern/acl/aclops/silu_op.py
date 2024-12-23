@@ -11,13 +11,14 @@ import numpy as np
 from typing import Union
 from collections.abc import Sequence, Iterable
 
+
 def silu_cmd(name: str,
-            inputs: list,
-            output_dtypes: list = None,
-            output_shapes: list = None,
-            attr_code: str = "",
-            attr_header: str = "",
-            outputs: list = None):
+             inputs: list,
+             output_dtypes: list = None,
+             output_shapes: list = None,
+             attr_code: str = "",
+             attr_header: str = "",
+             outputs: list = None):
     attr_header = "\nnamespace jittor{" + attr_header + "}\n"
 
     cuda_header = '''
@@ -51,6 +52,7 @@ def silu_cmd(name: str,
     {attr_code}
     op.run();""")
 
+
 class SiLUACL(jt.Function):
 
     def __init__(self):
@@ -65,9 +67,9 @@ class SiLUACL(jt.Function):
         op.jt_name = "silu";
         """
         result = silu_cmd("SiLU",
-                            inputs=inputs,
-                            outputs=outputs,
-                            attr_code=attr_code)[0]
+                          inputs=inputs,
+                          outputs=outputs,
+                          attr_code=attr_code)[0]
         return result
 
     def grad(self, grad_output):
@@ -77,7 +79,7 @@ class SiLUACL(jt.Function):
         inputs = [grad_output, self.input]
         outputs = [jt.empty(grad_output.shape, grad_output.dtype)]
         grad_input = silu_cmd("SiLUBackward",
-                                inputs=inputs,
-                                outputs=outputs,
-                                attr_code=attr_code)[0]
+                              inputs=inputs,
+                              outputs=outputs,
+                              attr_code=attr_code)[0]
         return grad_input

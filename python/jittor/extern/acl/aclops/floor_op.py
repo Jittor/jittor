@@ -11,13 +11,14 @@ import numpy as np
 from typing import Union
 from collections.abc import Sequence, Iterable
 
+
 def floor_cmd(name: str,
-            inputs: list,
-            output_dtypes: list = None,
-            output_shapes: list = None,
-            attr_code: str = "",
-            attr_header: str = "",
-            outputs: list = None):
+              inputs: list,
+              output_dtypes: list = None,
+              output_shapes: list = None,
+              attr_code: str = "",
+              attr_header: str = "",
+              outputs: list = None):
     attr_header = "\nnamespace jittor{" + attr_header + "}\n"
 
     cuda_header = '''
@@ -51,6 +52,7 @@ def floor_cmd(name: str,
     {attr_code}
     op.run();""")
 
+
 class FloorIntACL(jt.Function):
 
     def __init__(self):
@@ -59,9 +61,9 @@ class FloorIntACL(jt.Function):
     def execute(self, input):
         self.shape = input.shape
         result = floor_cmd("Floor", [input],
-                            output_dtypes=[input.dtype],
-                            output_shapes=[input.shape],
-                            attr_code="op.jt_name=\"floor\";")[0]
+                           output_dtypes=[input.dtype],
+                           output_shapes=[input.shape],
+                           attr_code="op.jt_name=\"floor\";")[0]
         return result
 
     def grad(self, grad_output):

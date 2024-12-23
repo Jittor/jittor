@@ -11,13 +11,14 @@ import numpy as np
 from typing import Union
 from collections.abc import Sequence, Iterable
 
+
 def flip_cmd(name: str,
-            inputs: list,
-            output_dtypes: list = None,
-            output_shapes: list = None,
-            attr_code: str = "",
-            attr_header: str = "",
-            outputs: list = None):
+             inputs: list,
+             output_dtypes: list = None,
+             output_shapes: list = None,
+             attr_code: str = "",
+             attr_header: str = "",
+             outputs: list = None):
     attr_header = "\nnamespace jittor{" + attr_header + "}\n"
 
     cuda_header = '''
@@ -51,6 +52,7 @@ def flip_cmd(name: str,
     {attr_code}
     op.run();""")
 
+
 class FlipACL(jt.Function):
 
     def __init__(self):
@@ -70,14 +72,14 @@ class FlipACL(jt.Function):
         """
         self.attr_code = attr_code
         result = flip_cmd("Flip", [input],
-                         output_dtypes=[input.dtype],
-                         output_shapes=[input.shape],
-                         attr_code=self.attr_code)[0]
+                          output_dtypes=[input.dtype],
+                          output_shapes=[input.shape],
+                          attr_code=self.attr_code)[0]
         return result
 
     def grad(self, grad_output):
         grad_input = flip_cmd("Flip", [grad_output],
-                             output_dtypes=[grad_output.dtype],
-                             output_shapes=[grad_output.shape],
-                             attr_code=self.attr_code)[0]
+                              output_dtypes=[grad_output.dtype],
+                              output_shapes=[grad_output.shape],
+                              attr_code=self.attr_code)[0]
         return grad_input

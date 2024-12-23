@@ -11,13 +11,14 @@ import numpy as np
 from typing import Union
 from collections.abc import Sequence, Iterable
 
+
 def gather_scatter_cmd(name: str,
-            inputs: list,
-            output_dtypes: list = None,
-            output_shapes: list = None,
-            attr_code: str = "",
-            attr_header: str = "",
-            outputs: list = None):
+                       inputs: list,
+                       output_dtypes: list = None,
+                       output_shapes: list = None,
+                       attr_code: str = "",
+                       attr_header: str = "",
+                       outputs: list = None):
     attr_header = "\nnamespace jittor{" + attr_header + "}\n"
 
     cuda_header = '''
@@ -51,6 +52,7 @@ def gather_scatter_cmd(name: str,
     {attr_code}
     op.run();""")
 
+
 class GatherACL(jt.Function):
 
     def __init__(self):
@@ -66,9 +68,9 @@ class GatherACL(jt.Function):
         op.op_attr.reset(attr);
         """
         result = gather_scatter_cmd("Gather", [input, index],
-                            output_dtypes=[input.dtype],
-                            output_shapes=[index.shape],
-                            attr_code=attr_code)[0]
+                                    output_dtypes=[input.dtype],
+                                    output_shapes=[index.shape],
+                                    attr_code=attr_code)[0]
         return result
 
     def grad(self, grad_output):
@@ -80,11 +82,13 @@ class GatherACL(jt.Function):
         attr->reduction = {1};
         op.op_attr.reset(attr);
         """
-        grad_input = gather_scatter_cmd("Scatter", [tmp, self.index, grad_output],
-                                output_dtypes=[grad_output.dtype],
-                                output_shapes=[tmp.shape],
-                                attr_code=attr_code)[0]
+        grad_input = gather_scatter_cmd("Scatter",
+                                        [tmp, self.index, grad_output],
+                                        output_dtypes=[grad_output.dtype],
+                                        output_shapes=[tmp.shape],
+                                        attr_code=attr_code)[0]
         return grad_input
+
 
 class ScatterACL(jt.Function):
 
@@ -103,9 +107,9 @@ class ScatterACL(jt.Function):
         op.op_attr.reset(attr);
         """
         result = gather_scatter_cmd("Scatter", [input, self.index, src],
-                            output_dtypes=[input.dtype],
-                            output_shapes=[input.shape],
-                            attr_code=attr_code)[0]
+                                    output_dtypes=[input.dtype],
+                                    output_shapes=[input.shape],
+                                    attr_code=attr_code)[0]
         return result
 
     def grad(self, grad_output):
@@ -116,7 +120,7 @@ class ScatterACL(jt.Function):
         op.op_attr.reset(attr);
         """
         grad_input = gather_scatter_cmd("Gather", [grad_output, self.index],
-                                output_dtypes=[grad_output.dtype],
-                                output_shapes=[self.index.shape],
-                                attr_code=attr_code)[0]
+                                        output_dtypes=[grad_output.dtype],
+                                        output_shapes=[self.index.shape],
+                                        attr_code=attr_code)[0]
         return grad_output, None, None, grad_input

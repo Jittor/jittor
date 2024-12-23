@@ -11,13 +11,14 @@ import numpy as np
 from typing import Union
 from collections.abc import Sequence, Iterable
 
+
 def cumsum_cmd(name: str,
-            inputs: list,
-            output_dtypes: list = None,
-            output_shapes: list = None,
-            attr_code: str = "",
-            attr_header: str = "",
-            outputs: list = None):
+               inputs: list,
+               output_dtypes: list = None,
+               output_shapes: list = None,
+               attr_code: str = "",
+               attr_header: str = "",
+               outputs: list = None):
     attr_header = "\nnamespace jittor{" + attr_header + "}\n"
 
     cuda_header = '''
@@ -50,6 +51,7 @@ def cumsum_cmd(name: str,
     {output_code}
     {attr_code}
     op.run();""")
+
 
 class CumsumACL(jt.Function):
 
@@ -85,13 +87,13 @@ class CumsumACL(jt.Function):
         op.op_attr.reset(attr);
         """
         flipped_grad_output = cumsum_cmd("Flip", [grad_output],
-                                        output_dtypes=[grad_output.dtype],
-                                        output_shapes=[grad_output.shape],
-                                        attr_code=flip_attr_code)[0]
+                                         output_dtypes=[grad_output.dtype],
+                                         output_shapes=[grad_output.shape],
+                                         attr_code=flip_attr_code)[0]
         cumulative_grad = cumsum_cmd("Cumsum", [flipped_grad_output],
-                                    output_dtypes=[grad_output.dtype],
-                                    output_shapes=[grad_output.shape],
-                                    attr_code=cumsum_attr_code)[0]
+                                     output_dtypes=[grad_output.dtype],
+                                     output_shapes=[grad_output.shape],
+                                     attr_code=cumsum_attr_code)[0]
         grad_input = cumsum_cmd("Flip", [cumulative_grad],
                                 output_dtypes=[grad_output.dtype],
                                 output_shapes=[grad_output.shape],

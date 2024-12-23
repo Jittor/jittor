@@ -224,26 +224,26 @@ namespace jittor
             //     ret = it->second.getWorkspaceSizeFuncMatmul(inputTensors[0], inputTensors[1], outputTensors[0], 1, &workspaceSize, &executor);
             //     break;
             // }
-                // case 9:
-                // {
-                //     ret = it->second.getWorkspaceSizeFuncReduceSum(inputTensors[0], dim, keepdims, get_dtype(out_[0]->dtype()), outputTensors[0], &workspaceSize, &executor);
-                //     break;
-                // }
-                // case 10:
-                // {
-                //     ret = it->second.getWorkspaceSizeFuncReduceSum(inputTensors[0], dim, keepdims, get_dtype(out_[0]->dtype()), outputTensors[0], &workspaceSize, &executor);
-                //     break;
-                // }
-                // case 11:
-                // {
-                //     ret = it->second.getWorkspaceSizeFuncAmax(inputTensors[0], dim, keepdims, outputTensors[0], &workspaceSize, &executor);
-                //     break;
-                // }
-                // case 12:
-                // {
-                //     ret = it->second.getWorkspaceSizeFuncAmax(inputTensors[0], dim, keepdims, outputTensors[0], &workspaceSize, &executor);
-                //     break;
-                // }
+            // case 9:
+            // {
+            //     ret = it->second.getWorkspaceSizeFuncReduceSum(inputTensors[0], dim, keepdims, get_dtype(out_[0]->dtype()), outputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
+            // case 10:
+            // {
+            //     ret = it->second.getWorkspaceSizeFuncReduceSum(inputTensors[0], dim, keepdims, get_dtype(out_[0]->dtype()), outputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
+            // case 11:
+            // {
+            //     ret = it->second.getWorkspaceSizeFuncAmax(inputTensors[0], dim, keepdims, outputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
+            // case 12:
+            // {
+            //     ret = it->second.getWorkspaceSizeFuncAmax(inputTensors[0], dim, keepdims, outputTensors[0], &workspaceSize, &executor);
+            //     break;
+            // }
 
             // case 13:
             // {
@@ -623,7 +623,7 @@ namespace jittor
             //     ret = aclrtSynchronizeStream(aclstream);
             //     CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclrtSynchronizeStream failed. ERROR: %d\n", name.c_str(), ret); return);
             // }
-            
+
             // 6. 释放aclTensor和aclScalar，需要根据具体API的接口定义修改
             // destroy tensor
             // for (int idx = 0; idx < input_num; idx++)

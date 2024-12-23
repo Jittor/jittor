@@ -11,13 +11,14 @@ import numpy as np
 from typing import Union
 from collections.abc import Sequence, Iterable
 
+
 def flashattention_cmd(name: str,
-            inputs: list,
-            output_dtypes: list = None,
-            output_shapes: list = None,
-            attr_code: str = "",
-            attr_header: str = "",
-            outputs: list = None):
+                       inputs: list,
+                       output_dtypes: list = None,
+                       output_shapes: list = None,
+                       attr_code: str = "",
+                       attr_header: str = "",
+                       outputs: list = None):
     attr_header = "\nnamespace jittor{" + attr_header + "}\n"
 
     cuda_header = '''
@@ -51,21 +52,22 @@ def flashattention_cmd(name: str,
     {attr_code}
     op.run();""")
 
+
 class FlashAttentionACL(jt.Function):
 
     def __init__(self,
-                    headnum,
-                    layout="BNSD",
-                    prefix=None,
-                    qstart=None,
-                    kvstart=None,
-                    scale=1.0,
-                    prob=1.0,
-                    pretokens=2147483647,
-                    nexttokens=2147483647,
-                    innerprecise=0,
-                    sparsemode=0,
-                    psetype=1):
+                 headnum,
+                 layout="BNSD",
+                 prefix=None,
+                 qstart=None,
+                 kvstart=None,
+                 scale=1.0,
+                 prob=1.0,
+                 pretokens=2147483647,
+                 nexttokens=2147483647,
+                 innerprecise=0,
+                 sparsemode=0,
+                 psetype=1):
         self.headnum = headnum
         self.layout = layout
         self.scale = scale
@@ -116,9 +118,7 @@ class FlashAttentionACL(jt.Function):
 
         self.prefix = self.prefix if self.prefix else [0 for _ in range(B)]
         self.qstart = self.qstart if self.qstart else [0 for _ in range(B)]
-        self.kvstart = self.kvstart if self.kvstart else [
-            0 for _ in range(B)
-        ]
+        self.kvstart = self.kvstart if self.kvstart else [0 for _ in range(B)]
 
         self.hasRealshift = (not realshift == None)
         self.hasDropmask = (not dropMask == None)
@@ -126,8 +126,7 @@ class FlashAttentionACL(jt.Function):
         self.hasAttenmask = (not attenMask == None)
 
         # 待定，目前设为nullptr
-        self.realshift = realshift if realshift else jt.zeros(
-            B, N, SQ, SKV)
+        self.realshift = realshift if realshift else jt.zeros(B, N, SQ, SKV)
         self.dropMask = dropMask if dropMask else jt.ones(B, N, SQ, SKV)
         self.paddingMask = paddingMask if paddingMask else jt.zeros(
             B, N, SQ, SKV)
