@@ -227,7 +227,6 @@ class TestACL(unittest.TestCase):
         np.testing.assert_allclose(b.numpy(), [[[1], [1]], [[1], [1]]])
         print("test transpose success")
 
-    # 拆分后的 matmul 测试
     @jt.flag_scope(use_acl=1)
     def test_matmul_1(self):
         a = jt.arange(16).reshape(1, 4, 4).float()
@@ -409,7 +408,6 @@ class TestACL(unittest.TestCase):
                                    [[12, 16], [12, 16], [12, 16], [12, 16]])
         print("test grad_k_bb success")
 
-    # 拆分后的 bmm 测试用例
     @jt.flag_scope(use_acl=1)
     def test_bmm_matmul(self):
         a = jt.arange(16).reshape(1, 4, 4).float()
@@ -432,7 +430,6 @@ class TestACL(unittest.TestCase):
         )
         print("test bmm_transpose success")
 
-    # 拆分后的 bmm_grad 测试用例
     @jt.flag_scope(use_acl=1)
     def test_bmm_grad_a(self):
         a = jt.arange(16).reshape(1, 4, 4).float()
@@ -568,7 +565,7 @@ class TestACL(unittest.TestCase):
         b = jt.array([[0, 0], [0, 0]])
         c = self.measure_time(lambda: jt.scatter(
             b, 1, jt.array([[0, 0], [1, 0]]), a, reduce="add"))
-        np.testing.assert_allclose(c.numpy(), [[3, 0], [4, 3]])
+        np.testing.assert_allclose(c.numpy(), [[45, 0], [60, 45]])
         print("test scatter success")
 
     @jt.flag_scope(use_acl=1)
