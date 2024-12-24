@@ -1,5 +1,4 @@
 #pragma once
-#include <acl/aclops/acl_op.h>
 #include <acl/aclops/binary_op_acl.h>
 #include <acl/aclops/unary_op_acl.h>
 #include <acl/aclops/conv_op_acl.h>
