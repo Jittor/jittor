@@ -22,7 +22,7 @@ class TestSpmmCsrOp(unittest.TestCase):
         output = jt.zeros((3, 3), dtype="float32")
         cusparse_ops.cusparse_spmmcsr(
             output, x, col_indices, csr_weight, row_offset,
-            3, 3
+            3, 3 ,False, False
         ).fetch_sync()
         expected_output = np.array([
             [12.0, 8.0, 4.0],
@@ -41,7 +41,7 @@ class TestSpmmCsrOp(unittest.TestCase):
         output = jt.zeros((3, 3), dtype="float16")
         cusparse_ops.cusparse_spmmcsr(
             output, x, col_indices, csr_weight, row_offset,
-            3, 3
+            3, 3,False, False
         ).fetch_sync()
         expected_output = np.array([
             [12.0, 8.0, 4.0],
@@ -60,7 +60,7 @@ class TestSpmmCsrOp(unittest.TestCase):
     #     output = jt.zeros((3, 3), dtype="float64")
     #     cusparse_ops.cusparse_spmmcsr(
     #         output, x, col_indices, csr_weight, row_offset,
-    #         3, 3
+    #         3, 3,False, False
     #     ).fetch_sync()
     #     expected_output = np.array([
     #         [12.0, 8.0, 4.0],
@@ -80,7 +80,7 @@ class TestSpmmCsrOp(unittest.TestCase):
         output = jt.zeros((3, 3), dtype="float32")
         cusparse_ops.cusparse_spmmcsr(
             output, x, col_indices, csr_weight, row_offset,
-            3, 3
+            3, 3,False, False
         ).fetch_sync()
         expected_output = np.array([
             [12.0, 8.0, 4.0],
@@ -96,11 +96,14 @@ class TestSpmmCsrOp(unittest.TestCase):
         edge_index=jt.array([[0,0,1,2],[1,2,2,1]],dtype="int32")
         row_indices=edge_index[0,:]
         col_indices=edge_index[1,:]
+        # print(row_indices)
+        # print(col_indices)
         edge_weight = jt.array([1.0, 1.0, 1.0, 1.0], dtype="float32")
         feature_dim=jt.size(x,1) 
         output=jt.zeros(3,feature_dim)
-        cusparse_ops.cusparse_spmmcoo(output,x,row_indices,col_indices,edge_weight,3,3).fetch_sync()
+        cusparse_ops.cusparse_spmmcoo(output,x,row_indices,col_indices,edge_weight,3,3,False, False).fetch_sync()
         print("Output:", output)
+        # 定义预期的输出，需根据具体运算和实现来调整
         expected_output = np.array([
             [5.0, 4.0, 5.0],
             [1.0, 2.0, 3.0],

@@ -35,5 +35,8 @@ static inline cudaDataType get_dtype(NanoString dtype) {
     LOGf << "not support type" << dtype;
     return CUDA_R_32F;
 }
-
+static inline cusparseOperation_t get_trans_type(bool trans) {
+    if (trans == true) return CUSPARSE_OPERATION_TRANSPOSE;
+    else return CUSPARSE_OPERATION_NON_TRANSPOSE;
+}
 } // jittor
