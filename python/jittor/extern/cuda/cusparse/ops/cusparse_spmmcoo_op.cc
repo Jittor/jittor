@@ -12,8 +12,8 @@ using namespace std;
 namespace jittor {
 #ifndef JIT
 
-CusparseSpmmcooOp::CusparseSpmmcooOp(Var* outputVar_, Var* x_, Var* row_indices_,Var* col_indices_,Var* value_,int A_row_,int A_col_)
-    : outputVar(outputVar_), x(x_),row_indices(row_indices_), col_indices(col_indices_), value(value_),A_row(A_row_),A_col(A_col_) {
+CusparseSpmmcooOp::CusparseSpmmcooOp(Var* outputVar_, Var* x_, Var* row_indices_,Var* col_indices_,Var* value_,int A_row_,int A_col_,bool trans_A_,bool trans_B_)
+    : outputVar(outputVar_), x(x_),row_indices(row_indices_), col_indices(col_indices_), value(value_),A_row(A_row_),A_col(A_col_),trans_A(trans_A_),trans_B(trans_B_) {
     flags.set(NodeFlags::_cuda, 1);
     flags.set(NodeFlags::_cpu, 0); 
     flags.set(NodeFlags::_manual_set_vnbb);
@@ -56,8 +56,8 @@ void CusparseSpmmcooOp::jit_run() {
     //                              CUSPARSE_SPMM_ALG_DEFAULT , &bufferSize) );
     // checkCudaErrors( cudaMalloc(&dBuffer, bufferSize) );
     checkCudaErrors( cusparseSpMM(handle_,
-                                 CUSPARSE_OPERATION_NON_TRANSPOSE,
-                                 CUSPARSE_OPERATION_NON_TRANSPOSE,
+                                 get_trans_type(trans_A),
+                                 get_trans_type(trans_B),
                                  &alpha, matA, matB, &beta, matC, CUDA_R_32F,
                                  CUSPARSE_SPMM_ALG_DEFAULT, NULL) );
     // checkCudaErrors( cudaFree(dBuffer) );
