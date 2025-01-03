@@ -18,7 +18,9 @@ struct CusparseSpmmcsrOp : Op {
     Var* output;
     int A_row;
     int A_col;
-    CusparseSpmmcsrOp(Var* outputVar_, Var* x_, Var* col_indices_,Var* value_,Var* row_offset_,int A_row,int A_col);
+    bool trans_A;
+    bool trans_B;
+    CusparseSpmmcsrOp(Var* outputVar_, Var* x_, Var* col_indices_,Var* value_,Var* row_offset_,int A_row,int A_col,bool trans_A,bool trans_B);
     const char* name() const override { return "cusparse_spmmcsr"; }
     DECLARE_jit_run;
 };

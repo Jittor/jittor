@@ -13,8 +13,8 @@ namespace jittor {
 
 #ifndef JIT
 
-CusparseSpmmcsrOp::CusparseSpmmcsrOp(Var* outputVar_, Var* x_, Var* col_indices_,Var* value_,Var* row_offset_,int A_row_,int A_col_)
-    : outputVar(outputVar_), x(x_), col_indices(col_indices_), value(value_),row_offset(row_offset_),A_row(A_row_),A_col(A_col_){
+CusparseSpmmcsrOp::CusparseSpmmcsrOp(Var* outputVar_, Var* x_, Var* col_indices_,Var* value_,Var* row_offset_,int A_row_,int A_col_,bool trans_A_,bool trans_B_)
+    : outputVar(outputVar_), x(x_), col_indices(col_indices_), value(value_),row_offset(row_offset_),A_row(A_row_),A_col(A_col_),trans_A(trans_A_),trans_B(trans_B_){
     flags.set(NodeFlags::_cuda, 1);
     flags.set(NodeFlags::_cpu, 0); 
     flags.set(NodeFlags::_manual_set_vnbb);
@@ -49,14 +49,22 @@ void CusparseSpmmcsrOp::jit_run() {
     checkCudaErrors( cusparseCreateDnMat(&matC, os[0], os[1],os[1], outputVar->ptr<T>(), dtype_C, CUSPARSE_ORDER_ROW) );
     float alpha = 1.0f;
     float beta  = 0.0f;
+    // checkCudaErrors( cusparseSpMM_bufferSize(
+    //                              handle_,
+    //                              CUSPARSE_OPERATION_NON_TRANSPOSE,
+    //                              CUSPARSE_OPERATION_NON_TRANSPOSE,
+    //                              &alpha, matA, matB, &beta, matC, dtype_C,
+    //                              CUSPARSE_SPMM_CSR_ALG2, &bufferSize) );
     checkCudaErrors( cusparseSpMM_bufferSize(
                                  handle_,
-                                 CUSPARSE_OPERATION_NON_TRANSPOSE,
-                                 CUSPARSE_OPERATION_NON_TRANSPOSE,
+                                 get_trans_type(trans_A),
+                                 get_trans_type(trans_B),
                                  &alpha, matA, matB, &beta, matC, CUDA_R_32F,
                                  CUSPARSE_SPMM_CSR_ALG2, &bufferSize) );
     checkCudaErrors( cudaMalloc(&dBuffer, bufferSize) );
-    checkCudaErrors(cusparseSpMM(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, matA, matB, &beta, matC, CUDA_R_32F, CUSPARSE_SPMM_CSR_ALG2 , dBuffer));
+
+    // checkCudaErrors(cusparseSpMM(handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha, matA, matB, &beta, matC, dtype_C, CUSPARSE_SPMM_CSR_ALG2 , dBuffer));  //CUSPARSE_MM_ALG_DEFAULT, CUSPARSE_SPMM_CSR_ALG2 , CUSPARSE_SPMM_COO_ALG4
+    checkCudaErrors(cusparseSpMM(handle_, get_trans_type(trans_A), get_trans_type(trans_B), &alpha, matA, matB, &beta, matC, CUDA_R_32F, CUSPARSE_SPMM_CSR_ALG2 , dBuffer));
     checkCudaErrors( cudaFree(dBuffer) );
     checkCudaErrors( cusparseDestroySpMat(matA) );
     checkCudaErrors( cusparseDestroyDnMat(matB) );
