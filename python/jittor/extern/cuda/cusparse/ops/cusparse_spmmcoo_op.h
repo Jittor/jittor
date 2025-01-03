@@ -18,7 +18,9 @@ struct CusparseSpmmcooOp : Op {
     Var* output;
     int A_row;
     int A_col;
-    CusparseSpmmcooOp(Var* outputVar_, Var* x_, Var* row_indices_,Var* col_indices_,Var* value_,int A_row,int A_col);
+    bool trans_A;
+    bool trans_B;
+    CusparseSpmmcooOp(Var* outputVar_, Var* x_, Var* row_indices_,Var* col_indices_,Var* value_,int A_row,int A_col,bool trans_A,bool trans_B);
     const char* name() const override { return "cusparse_spmmcoo"; }
     DECLARE_jit_run;
 };
