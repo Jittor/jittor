@@ -67,6 +67,9 @@ def install():
                                 recursive=True))
     cc_files2 = []
     for name in cc_files:
+        # Skip files in hccl directory
+        if "hccl" in name:
+            continue
         # if "acl_op_exec" in name or "_op_acl.cc" in name:
         if "acl_op_exec" in name or "_op_acl.cc" in name or "utils.cc" in name:
             compiler.extra_core_files.append(name)

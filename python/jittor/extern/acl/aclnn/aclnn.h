@@ -125,7 +125,7 @@ int64_t GetShapeSize(const std::vector<int64_t> &shape);
 
 void PrintOutResult(std::vector<int64_t> &shape, void **deviceAddr);
 
-int Init(int32_t deviceId);
+//int Init(int32_t deviceId);
 
 /*
 template <typename T>
