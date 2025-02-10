@@ -38,7 +38,6 @@ namespace jittor
     static void *acl_jittor_process_callback(void *)
     {
         acl_jittor_thread_running = 1;
-        int deviceId = 0;
 
         while (acl_jittor_thread_running)
         {

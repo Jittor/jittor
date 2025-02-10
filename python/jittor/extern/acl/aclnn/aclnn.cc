@@ -21,7 +21,7 @@ void PrintOutResult(std::vector<int64_t> &shape, void** deviceAddr) {
   }
 }
 
-int Init(int32_t deviceId) {
+/*int Init(int32_t deviceId) {
   // 固定写法，AscendCL初始化
   auto ret = aclInit(nullptr);
   CHECK_RET(ret == ACL_SUCCESS or ret == 100002, LOG_PRINT("aclInit failed. ERROR: %d\n", ret); return ret);
@@ -30,7 +30,7 @@ int Init(int32_t deviceId) {
   //ret = aclrtCreateStream(stream);
   //CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("aclrtCreateStream failed. ERROR: %d\n", ret); return ret);
   return 0;
-}
+}*/
 
 /*
 template <typename T>

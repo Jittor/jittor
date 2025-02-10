@@ -146,6 +146,7 @@ namespace jittor
 
     void try_exec_and_fallback_cpu(Op *op)
     {
+        aclrtSynchronizeStream(aclstream);
         auto fop = (FusedOp *)op;
 
         std::set<Var *> new_alloced;
@@ -463,6 +464,11 @@ namespace jittor
             {
                 return &exec_mapped_acl_ops;
             }
+        }
+        else if (strncmp(op->name(), "hccl", 4) == 0)
+        {
+            LOGv << "Compiling HCCL op: " << op->name();
+            return oc.compile(op->get_jit_key(get_jk()), *src);
         }
         else
         {
