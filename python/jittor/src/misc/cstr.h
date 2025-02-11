@@ -27,7 +27,7 @@ struct cstr {
         return *this;
     }
     inline cstr& operator=(cstr&& s) {
-        ptr = move(s.ptr);
+        ptr = std::move(s.ptr);
         return *this;
     }
     inline cstr& operator=(const cstr& s) {
