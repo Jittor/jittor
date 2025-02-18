@@ -312,11 +312,14 @@ def change_function():
     def gather_acl(input, dim, index):
         return GatherACL()(input, dim, index)
 
-    def any_acl(input):
-        if jt.sum(input != 0).item() > 0:
-            return jt.array([True])
+    def any_acl(input, dim=None):
+        if dim is None:
+            if jt.sum(input != 0).item() > 0:
+                return jt.array([True])
+            else:
+                return jt.array([False])
         else:
-            return jt.array([False])
+            return jt.sum(input != 0, dim=dim) > 0
 
     from .aclops.cumsum_op import CumsumACL
 
