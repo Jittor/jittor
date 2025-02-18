@@ -560,6 +560,62 @@ class TestACL(unittest.TestCase):
         print("test any (test case 5) success")
 
     @jt.flag_scope(use_acl=1)
+    def test_any_6(self):
+        a = jt.array([[False, True, False], [False, False, True],
+                      [True, True, False]])
+        b = self.measure_time(lambda: a.any())
+        assert b.item() == True
+        print("test any (test case 6) success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_any_7(self):
+        a = jt.array([[False, False, False], [False, False, True],
+                      [True, True, False]])
+        b = self.measure_time(lambda: jt.any(a, dim=1))
+        assert (b.numpy() == [False, True, True]).all(), "Unexpected result for dim=1"
+        print("test any (test case 7) success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_any_8(self):
+        a = jt.array([[False, True, False], [False, False, True],
+                      [False, True, False]])
+        b = self.measure_time(lambda: jt.any(a, dim=0))
+        assert (b.numpy() == [False, True, True]).all(), "Unexpected result for dim=0"
+        print("test any (test case 8) success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_any_9(self):
+        a = jt.array([[False, True, False], [False, False, True],
+                      [False, True, False]])
+        b = self.measure_time(lambda: a.any(dim=0))
+        assert (b.numpy() == [False, True, True]).all(), "Unexpected result for dim=0"
+        print("test any (test case 9) success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_any_10(self):
+        # 测试在 dim=0 上检查每列是否有非零元素
+        a = jt.array([[0, 1, 0], [0, 0, 0]])
+        b = self.measure_time(lambda: jt.any(a, dim=0))
+        assert (b.numpy() == [False, True, False]).all(), "Unexpected result for dim=0"
+        print("test any (test case 10) success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_any_11(self):
+        # 测试在 dim=0 上检查每列是否有非零元素
+        a = jt.array([[0.0, 1.0, -1.0], [0, 0, 0]])
+        b = self.measure_time(lambda: jt.any(a, dim=0))
+        assert (b.numpy() == [False, True, True]).all(), "Unexpected result for dim=0"
+        print("test any (test case 11) success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_any_12(self):
+        # 测试在 dim=0 上检查每列是否有非零元素
+        a = jt.array([[0.0, 1.0, -1.0], [0, 0, 0]])
+        b = self.measure_time(lambda: jt.any(a, dim=1))
+        assert (b.numpy() == [True, False]).all(), "Unexpected result for dim=0"
+        print("test any (test case 12) success")
+
+    @jt.flag_scope(use_acl=1)
     def test_scatter(self):
         a = jt.array([[1, 2], [3, 4]])
         b = jt.array([[0, 0], [0, 0]])
