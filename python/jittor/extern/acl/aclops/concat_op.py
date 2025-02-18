@@ -59,7 +59,7 @@ class ConcatACL(jt.Function):
         super(ConcatACL, self).__init__()
 
     def __call__(self, *args):
-        assert isinstance(args[0], list)
+        assert isinstance(args[0], (list, tuple))
         assert isinstance(args[1], int)
         if jt.flags.no_grad:
             return self.execute(*args)
