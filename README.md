@@ -96,7 +96,6 @@ Jittor environment requirements:
 | OS                                                     | CPU                                 | Python | Compiler     | (Optional) GPU platform                                |
 |--------------------------------------------------------|-------------------------------------|--------|--------------|---------------------------------------------|
 | Linux<br>(Ubuntu, CentOS, Arch, <br>UOS, KylinOS, ...) | x86 <br>x86_64 <br>ARM <br>loongson | >= 3.7 | g++ >=5.4    | Nvidia CUDA >= 10.0, [cuDNN](https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#installlinux-tar) <br> or [AMD ROCm](https://docs.amd.com/) >= 4.0 <br> or [Hygon DCU DTK](https://tycloud.hpccube.com/doc/1.0.6/11277/general-handbook/software-tutorial/jittor.html) >= 22.04 |
-| macOS <br>(>= 10.14 Mojave)                            | intel<br>Apple Silicon              | >= 3.7 | clang >= 8.0 | -                                           |
 | Windows 10 & 11                                        | x86_64                              | [>= 3.8](https://www.python.org/downloads/windows/) | -            | Nvidia CUDA >= 10.2 [cuDNN](https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#install-windows)                               |
 
 
@@ -116,25 +115,6 @@ python3.7 -m jittor.test.test_example
 
 
 
-### macOS install
-
-
-Please first install additional dependencies with [homebrew](https://brew.sh).
-
-```bash
-brew install libomp
-```
-
-
-Then you can install jittor through pip and run the example.
-
-```bash
-python3.7 -m pip install jittor
-python3.7 -m jittor.test.test_example
-```
-
-
-Currently jittor only supports CPU on macOS.
 
 
 ### Windows install
