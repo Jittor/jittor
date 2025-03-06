@@ -23,7 +23,7 @@ struct TempCachingBlock {
 
 struct TempAllocator : Allocator {
     static const size_t ALIGN_SIZE = 512;
-    static const size_t ID_LIMIT = 1 << 18;
+    static const size_t ID_LIMIT = 1 << 21;
     static vector<TempAllocator*> temp_allocators;
     Allocator* underlying;
     size_t cache_blocks_limit, used_memory, unused_memory;
