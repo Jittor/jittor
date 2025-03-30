@@ -347,6 +347,8 @@ def stack(x, dim=0):
         [[4 5 6]]]
     '''
     assert isinstance(x, Sequence)
+    if isinstance(x, tuple):
+        x = list(x)
     for i,x_ in enumerate(x):
             x[i] = jt.array(x_)
     if len(x) < 2:
@@ -2268,10 +2270,18 @@ bfloat16_finfo.max = 1e38
 def finfo(dtype):
     if dtype == "bfloat16":
         return bfloat16_finfo
-    return np.finfo(str(dtype).split('.')[-1])
+    if callable(dtype) and hasattr(dtype, "__name__"):
+        dtype = dtype.__name__.split('.')[-1]
+    else:
+        dtype = str(dtype).split('.')[-1]
+    return np.finfo(dtype)
 
 def iinfo(dtype):
-    return np.iinfo(str(dtype).split('.')[-1])
+    if callable(dtype) and hasattr(dtype, "__name__"):
+        dtype = dtype.__name__.split('.')[-1]
+    else:
+        dtype = str(dtype).split('.')[-1]
+    return np.iinfo(dtype)
 
 
 def index_select(input,dim,indices):

@@ -1371,7 +1371,7 @@ if has_cuda and is_cuda:
     nvcc_flags = " " + os.environ.get("nvcc_flags", "") + " "
     nvcc_flags += convert_nvcc_flags(cc_flags)
     nvcc_version = list(jit_utils.get_int_version(nvcc_path))
-    max_arch = 89
+    max_arch = 90
     if nvcc_version < [11,]:
         max_arch = 75
     elif nvcc_version < [11,1]:
