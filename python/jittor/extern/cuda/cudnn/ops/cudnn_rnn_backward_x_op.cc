@@ -88,8 +88,8 @@ void CudnnRnnBackwardXOp::jit_prepare(JK& jk) {
 #ifdef JIT_cuda
 
 template <typename T_ELEM> __inline__  cudnnDataType_t getDataType();
-template <> __inline__ cudnnDataType_t getDataType<half1>() { return CUDNN_DATA_HALF;   }
-template <> __inline__ cudnnDataType_t getDataType<float>() { return CUDNN_DATA_FLOAT;  }
+// template <> __inline__ cudnnDataType_t getDataType<half1>() { return CUDNN_DATA_HALF;   }
+// template <> __inline__ cudnnDataType_t getDataType<float>() { return CUDNN_DATA_FLOAT;  }
 
 void CudnnRnnBackwardXOp::jit_run() {
     int num_directions = 1 + bidirectional;

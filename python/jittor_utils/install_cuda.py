@@ -78,8 +78,11 @@ def check_cuda_env():
                 with open("/proc/self/cmdline", "r") as f:
                     argv = f.read().split("\x00")
                     if len(argv[-1]) == 0: del argv[-1]
-                LOG.i(f"restart {sys.executable} {argv[1:]}")
-                os.execl(sys.executable, sys.executable, *argv[1:])
+                if 'ipykernel_launcher' in argv:
+                    LOG.i(f"needed restart but not {sys.executable} {argv[1:]}, you can ignore this warning.")
+                else:
+                    LOG.i(f"restart {sys.executable} {argv[1:]}")
+                    os.execl(sys.executable, sys.executable, *argv[1:])
         except:
             pass
     
