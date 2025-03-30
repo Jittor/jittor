@@ -13,6 +13,7 @@
 # ***************************************************************
 import jittor as jt
 import numpy as np
+from copy import deepcopy
 
 class Optimizer(object):
     """ Basic class of Optimizer.
@@ -38,9 +39,28 @@ class Optimizer(object):
         # so we can omit 0+x
         self.__zero_grad = True
         self._grad_map = {}
+        self.__input_params = []
 
     def add_param_group(self, group):
         self.param_groups.append(group)
+
+    def set_input_into_param_group(self, inputs):
+        """ This function adds inputs to the optimizer as variables that need tuning. 
+            This is to enforce the calculation of gradients from the output to the input, 
+            ensuring that the backward hook is called correctly. 
+
+        Args:
+            inputs: List of the input
+        """
+        self.__input_params = []
+        if isinstance(inputs, jt.Var):
+            self.__input_params.append(inputs)
+        elif isinstance(inputs, (list, tuple)):
+            for v in inputs:
+                if isinstance(v, jt.Var):
+                    self.__input_params.append(v)
+        else:
+            raise NotImplementedError
 
     def clip_grad_norm(self, max_norm:float, norm_type:int=2):
         r"""Clips gradient norm of this optimizer.
@@ -163,6 +183,9 @@ class Optimizer(object):
                 params.append(p)
                 if not p.is_stop_grad():
                     params_has_grad.append(p)
+        for p in self.__input_params:
+            if not p.is_stop_grad():
+                params_has_grad.append(p)
 
         # sync prev params
         jt.sync(params_has_grad)
