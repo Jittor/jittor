@@ -133,7 +133,7 @@ class ConvACL(jt.Function):
             output_shapes.append(bias.shape)
             output_dtypes.append(bias.dtype)
         else:
-            output_shapes.append([1])
+            output_shapes.append([weight.shape[0]])
             output_dtypes.append(x.dtype)
         padding = self.padding
         stride = self.stride
