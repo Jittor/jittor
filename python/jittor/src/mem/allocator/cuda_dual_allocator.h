@@ -30,7 +30,7 @@ EXTERN_LIB bool no_cuda_error_when_free;
 
 struct CudaDualAllocator : Allocator {
     //for recycle block_id
-    static const size_t ID_LIMIT = 1 << 16;
+    static const size_t ID_LIMIT = 1 << 20;
     int n_free_ids;
     int free_ids[ID_LIMIT];
     DualAllocation allocations[ID_LIMIT];
