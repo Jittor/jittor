@@ -79,6 +79,11 @@ struct JitKey {
         uint data;
         explicit dec2(uint data) : data(data) {}
     };
+    
+    struct dec3 {
+        uint data;
+        explicit dec3(uint data) : data(data) {}
+    };
 };
 
 struct __jk_int128 {
@@ -183,6 +188,16 @@ inline JK& operator<<(JK& jk, const JK::Oxhex2& h) {
     return jk << "0x" << JK::hex2(h.data);
 }
 
+inline JK& operator<<(JK& jk, const JK::dec3& h) {
+    uint8 a = h.data % 10;
+    uint8 b = h.data / 10 % 10;
+    uint8 c = h.data / 100;
+    if (c) jk << (char)(c+'0'), jk << (char)(b+'0');
+    else if (b) jk << (char)(b+'0');
+    return jk << (char)(a+'0');
+}
+
+
 inline JK& operator<<(JK& jk, const JK::dec2& h) {
     uint8 a = h.data % 10;
     uint8 b = h.data / 10;
@@ -195,6 +210,14 @@ inline JK& operator<<(JK& jk, const JK::dec1& h) {
     return jk << (char)(a+'0');
 }
 
+inline std::ostream& operator<<(std::ostream& os, const JK::dec3& h) {
+    uint8 a = h.data % 10;
+    uint8 b = h.data / 10 %10;
+    uint8 c = h.data / 100;
+    if (c) os << (char)(c+'0'), os << (char)(b+'0');
+    else if (b) os << (char)(b+'0');
+    return os << (char)(a+'0');
+}
 inline std::ostream& operator<<(std::ostream& os, const JK::dec2& h) {
     uint8 a = h.data % 10;
     uint8 b = h.data / 10;
