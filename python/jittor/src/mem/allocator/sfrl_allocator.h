@@ -36,7 +36,7 @@ struct CachingBlockPool {
     //start from 1
     static size_t tot_block_id;           
     static std::unique_ptr<CachingBlock*[]> occupied_id_mapper;              
-    static const size_t ID_LIMIT = 1 << 21;
+    static const size_t ID_LIMIT = 1 << 18;
 
     pair<size_t,size_t> get_key(CachingBlock* block);
 
