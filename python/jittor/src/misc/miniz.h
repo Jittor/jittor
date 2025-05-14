@@ -1341,8 +1341,8 @@ struct ZipFile {
                 zip_archive = nullptr;
             }
         }
-        // if (!zip_archive)
-            // throw std::runtime_error("Failed to open zip file: " + filename);
+        if (!zip_archive)
+            throw std::runtime_error("Failed to open zip file: " + filename);
     }
     // @pyjt(__dealloc__)
     inline ~ZipFile() {
