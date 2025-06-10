@@ -1333,8 +1333,8 @@ struct ZipFile {
         memset(zip_archive.get(), 0, sizeof(mz_zip_archive));
         if (mode == "r") {
             this->mode = 'r';
-            if (!mz_zip_reader_init_file(zip_archive.get(), filename.c_str(), 0))
-                zip_archive = nullptr;
+        if (!mz_zip_reader_init_file(zip_archive.get(), filename.c_str(), 0))
+            zip_archive = nullptr;
         } else if (mode == "w") {
             this->mode = 'w';
             if (!mz_zip_writer_init_file_v2(zip_archive.get(), filename.c_str(), 0, MZ_ZIP_FLAG_WRITE_ZIP64)) {
