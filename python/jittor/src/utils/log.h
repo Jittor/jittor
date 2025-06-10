@@ -135,7 +135,7 @@ struct Log {
     inline void end() {
         if (g_supports_color) out << color_end;
         out << '\n';
-        send_log(move(out), level, verbose);
+        send_log(std::move(out), level, verbose);
     }
     inline void flush() { flush_log(); }
 

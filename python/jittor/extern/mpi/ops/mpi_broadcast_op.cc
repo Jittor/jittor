@@ -26,8 +26,16 @@ MpiBroadcastOp::MpiBroadcastOp(Var* x, int root) : x(x), root(root) {
         static auto nccl_broadcast = has_op("nccl_broadcast")
             ? get_op_info("nccl_broadcast").get_constructor<VarPtr, Var*, int>()
             : nullptr;
+        static auto hccl_broadcast = has_op("hccl_broadcast")
+            ? get_op_info("hccl_broadcast").get_constructor<VarPtr, Var*, int>()
+            : nullptr;
         if (nccl_broadcast) {
             auto var = nccl_broadcast(x, root);
+            forward(var);
+            return;
+        } else if (hccl_broadcast) {
+            auto var = hccl_broadcast(x, root);
+            //exe.run_sync({var}, true);
             forward(var);
             return;
         }

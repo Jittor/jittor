@@ -330,6 +330,8 @@ void SetitemOp::jit_run() {
     #else
     if (op != ip)
         checkCudaErrors(cudaMemcpyAsync(op, ip, out->size, cudaMemcpyDeviceToDevice, 0));
+        // checkCudaErrors(aclrtMemcpyAsync(op, out->size, ip, out->size, cudaMemcpyDeviceToDevice, aclstream));
+        // checkCudaErrors(aclrtSynchronizeStream(aclstream));
     #endif
 
     if (ns.get(GetitemOp::_inplace) &&
