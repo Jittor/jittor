@@ -41,13 +41,18 @@ MpiReduceOp::MpiReduceOp(Var* x, NanoString op, int root) : x(x), op(op), root(r
         static auto nccl_reduce = has_op("nccl_reduce")
             ? get_op_info("nccl_reduce").get_constructor<VarPtr, Var*, int>()
             : nullptr;
+        static auto hccl_reduce = has_op("hccl_reduce")
+            ? get_op_info("hccl_reduce").get_constructor<VarPtr, Var*, string, int>()
+            : nullptr;
         if (nccl_reduce) {
             auto var = nccl_reduce(x, root);
             forward(var);
             return;
+        } else if (hccl_reduce) {
+            forward(var);
+            return;
         }
     }
-    #endif
     y = create_output(nullptr, x->dtype());
 }
 

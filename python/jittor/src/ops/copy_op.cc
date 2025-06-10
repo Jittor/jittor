@@ -17,6 +17,8 @@
 
 namespace jittor {
 
+EXTERN_LIB aclrtStream aclstream;
+
 CopyOp::CopyOp(Var* x) {
     flags.set(NodeFlags::_cpu);
     flags.set(NodeFlags::_cuda);
@@ -42,6 +44,8 @@ void CopyOp::run() {
     #ifdef HAS_CUDA
     if (flags.get(NodeFlags::_cuda)) {
         checkCudaErrors(cudaMemcpyAsync(y_ptr, x_ptr, size, cudaMemcpyDeviceToDevice, 0));
+        // checkCudaErrors(aclrtMemcpyAsync(y_ptr, size, x_ptr, size, cudaMemcpyDeviceToDevice, aclstream));
+        // checkCudaErrors(aclrtSynchronizeStream(aclstream));
     } else
     #endif
     {

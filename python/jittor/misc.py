@@ -625,10 +625,6 @@ def unique(
             #include <thrust/device_vector.h>
             #include <thrust/sequence.h>
     
-            #include <thrust/sequence.h>
-            #include <thrust/sort.h>
-            #include <thrust/unique.h>
-
             #include <cub/cub.cuh> 
             #include <executor.h>
             ''',
@@ -713,12 +709,9 @@ def unique(
                 #include <thrust/execution_policy.h>
 
                 #include <thrust/sequence.h>
-                #include <thrust/unique.h>
                 #include <thrust/sort.h>
 
                 #include <thrust/scan.h>
-                #include <executor.h>
-
                 @alias(input_sorted, in0)
                 @alias(diff, in1)
                 @alias(indice, in2)
@@ -2229,10 +2222,9 @@ def histc(input, bins, min=0., max=0.):
     if bins <= 0:
         raise RuntimeError(f"bins must be > 0, but got {bins}")
     bin_length = (max - min) / bins
-    histc = jt.floor((input[jt.logical_and(input >= min, input <= max)] - min) / bin_length).int().reshape(-1)
+    histc = jt.floor((input[jt.logical_and(input >= min, input < max)] - min) / bin_length).int().reshape(-1)
     hist = jt.ones_like(histc).float().reindex_reduce("add", [bins,], ["@e0(i0)"], extras=[histc])
-    if hist.sum() != histc.shape[0]:
-        hist[-1] += 1
+    hist[-1] += input[input == max].shape[0]
     return hist
 
 def peek_s(x):

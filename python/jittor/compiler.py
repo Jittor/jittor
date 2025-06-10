@@ -1186,9 +1186,23 @@ make_cache_dir(os.path.join(cache_path, "tmp"))
 ck_path = os.path.join(cache_path, "checkpoints")
 make_cache_dir(ck_path)
 
+
+ascend_toolkit_home = os.getenv('ASCEND_TOOLKIT_HOME')
+
 # build cache_compile
 cc_flags += f" -I\"{os.path.join(jittor_path, 'src')}\" "
+cc_flags += f" -I\"{os.path.join(jittor_path, 'extern')}\" "
+cc_flags += f" -I\"{os.path.join(ascend_toolkit_home, 'include')}\" "
+cc_flags += f" -I\"{os.path.join(ascend_toolkit_home, 'include/acl')}\" "
+cc_flags += f" -I\"{os.path.join(ascend_toolkit_home, 'include/aclnn')}\" "
+cc_flags += f" -I\"{os.path.join(ascend_toolkit_home, 'include/aclnnop')}\" "
+cc_flags += f" -L\"{os.path.join(ascend_toolkit_home, 'lib64')}\" "
+cc_flags += " -llibascendcl "
+cc_flags += " -llibnnopbase "
+cc_flags += " -llibopapi "
+
 cc_flags += py_include
+
 check_cache_compile()
 LOG.v(f"Get cache_compile: {jit_utils.cc}")
 
@@ -1306,6 +1320,10 @@ for v in at_last:
 registers = [ name for name in files4 if "register" in name ]
 for name in registers: files4.remove(name)
 files = registers + files2 + files4
+
+
+#print(extra_core_files)
+#extra_core_files.append("/home/ma-user/work/jittor/python/jittor/extern/acl/aclnn/aclnn.cc")
 files += extra_core_files
 for file in jit_utils_core_files:
     files.remove(file)
@@ -1355,6 +1373,10 @@ else:
     files = [f for f in files 
         if "__data__" not in f or "src" in f.split("__data__")[1]]
 
+
+#print(jittor_path)
+#print(cc_flags)
+#print(files)
 cc_flags += f" -l\"jit_utils_core{lib_suffix}\" "
 compile(cc_path, cc_flags+opt_flags, files, 'jittor_core'+extension_suffix)
 cc_flags += f" -l\"jittor_core{lib_suffix}\" "
