@@ -49,10 +49,13 @@ MpiReduceOp::MpiReduceOp(Var* x, NanoString op, int root) : x(x), op(op), root(r
             forward(var);
             return;
         } else if (hccl_reduce) {
+            auto var = hccl_reduce(x, "sum", root);
+            //exe.run_sync({var}, true);
             forward(var);
             return;
         }
     }
+    #endif
     y = create_output(nullptr, x->dtype());
 }
 
