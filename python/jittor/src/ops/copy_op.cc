@@ -17,7 +17,7 @@
 
 namespace jittor {
 
-EXTERN_LIB aclrtStream aclstream;
+// EXTERN_LIB aclrtStream aclstream;
 
 CopyOp::CopyOp(Var* x) {
     flags.set(NodeFlags::_cpu);

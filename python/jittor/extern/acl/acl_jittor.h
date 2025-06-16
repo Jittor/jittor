@@ -7,6 +7,7 @@
 #pragma once
 #include "common.h"
 #include <acl/acl.h>
+#include "aclnn.h"
 
 std::string acl_error_to_string(aclError error);
 
