@@ -13,7 +13,7 @@ def search_file(dirs, name):
     LOG.f(f"file {name} not found in {dirs}")
 
 if __name__ == "__main__":
-    help_msg = f"Usage: {sys.executable} -m jittor_utils.config --include-flags|--link-flags|--cxx-flags|--cxx-example|--help"
+    help_msg = f"Usage: {sys.executable} -m jittor_utils.config --include-flags|--libs-flags|--cxx-flags|--cxx-example|--help"
     if len(sys.argv) <= 1:
         print(help_msg)
         sys.exit(1)
@@ -38,7 +38,10 @@ if __name__ == "__main__":
             for libbase in libpaths:
                 libpath = os.path.join(libbase, f"lib{base}.{libext}")
                 if os.path.isfile(libpath):
-                    s += f" -L{libbase} -l{base} -ldl "
+                    if os.name == "posix":
+                        s += f" -Wl,-rpath={libbase} -L{libbase} -l{base} -ldl "
+                    else:
+                        s += f" -L{libbase} -l{base} -ldl "
                     break
             else:
                 raise RuntimeError("Python dynamic library not found")
