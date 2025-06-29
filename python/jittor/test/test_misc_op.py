@@ -291,7 +291,7 @@ class TestOther(unittest.TestCase):
                 x = (x - x.max()).exp()
                 ret = x / x.sum()
             else:
-                x = (x-x.max(dim, keepdims=True)).exp()
+                x = (x-x.max(dim, keepdims=True)[0]).exp()
                 ret = x / x.sum(dim, keepdims=True)
             if log: return ret.log()
             return ret
@@ -322,6 +322,57 @@ class TestOther(unittest.TestCase):
                         assert err.item() < 1e-2, (err.item())
                     else:
                         assert err.item() < 1e-5, (err.item())
+
+    def test_code_cross_entropy_loss(self):
+        if not jt.has_cuda: return
+
+        def naive_cross_entropy_loss(output, target, weight=None, ignore_index=None, reduction='mean'):
+            target_shape = target.shape
+            if len(output.shape) == 4:
+                c_dim = output.shape[1]
+                output = output.transpose((0, 2, 3, 1))
+                output = output.reshape((-1, c_dim))
+
+            target = target.reshape((-1, ))
+            target_weight = ((target >= 0) & (target < output.shape[1])).float32() 
+            if weight is not None:
+                target_weight = weight[target]
+            if ignore_index is not None:
+                target_weight = jt.ternary(
+                    target==ignore_index,
+                    jt.array(0).broadcast(target_weight),
+                    target_weight
+                )
+                
+            import jittor.other.code_cross_entropy as code_cross_entropy
+            cross_entropy = code_cross_entropy.cross_entropy(output, target)
+            
+            loss = cross_entropy * target_weight
+            if reduction == 'sum':
+                return loss.sum()
+            elif reduction == 'mean':
+                return loss.mean() / target_weight.mean()
+            else:
+                return loss.reshape(target_shape) 
+            
+
+        jt.set_global_seed(42)
+
+        with jt.flag_scope(use_cuda = 1):
+            for dtype in ["float16", "bfloat16", "float32"]:
+                for shape in [(3, 3), (200, 2000), (200, 2049), (16380, 65000)]:
+                    print(shape)
+                    x = jt.rand(shape, dtype=dtype)
+                    target = jt.randint(0, x.shape[1], (x.shape[0],))
+                    b = naive_cross_entropy_loss(x, target)
+                    d1 = jt.grad(b, x)
+                    bb = jt.nn.cross_entropy_loss(x, target)
+                    d2 = jt.grad(bb, x)
+                    jt.sync_all(True)
+
+                    np.testing.assert_allclose(bb.astype(jt.float32).data, b.astype(jt.float32).data, rtol=1e-3, atol=1e-2)
+                    np.testing.assert_allclose(bb.astype(jt.float32).data, b.astype(jt.float32).data, rtol=1e-3, atol=1e-2)
+            
 
     def test_nan(self):
         a = np.array([1.0,0.0,1.0,-1.0], "float32") / np.array([1.0,0.0,0.0,0.0], "float32")
