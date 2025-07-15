@@ -456,7 +456,8 @@ def setup_cutt():
 
 def install_cutlass(root_folder):
     # Modified from: https://github.com/ap-hynninen/cutlass
-    url = "https://cloud.tsinghua.edu.cn/f/171e49e5825549548bc4/?dl=1"
+    # url = "https://cloud.tsinghua.edu.cn/f/171e49e5825549548bc4/?dl=1"
+    url = "https://cg.cs.tsinghua.edu.cn/jittor/assets/cutlass.zip"
 
     filename = "cutlass.zip"
     fullname = os.path.join(root_folder, filename)
