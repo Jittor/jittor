@@ -106,13 +106,13 @@ VarPtr CodeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     // TODO: remove unused deps
     // dout -> dout
     std::stringstream new_alias;
-    new_alias << "\n@alias(dout,in" << JK::dec3(inputs.size()) << ")\n";
+    new_alias << "\n@alias(dout,in" << JK::dec2(inputs.size()) << ")\n";
     inputs.push_back(dout);
     // _outputs[i] -> poutj
     for (int i=0; i<_outputs.size(); i++) {
-        new_alias << "\n@alias(pout" << JK::dec3(i) << ",in" << JK::dec3(inputs.size()) << ")\n";
+        new_alias << "\n@alias(pout" << JK::dec2(i) << ",in" << JK::dec2(inputs.size()) << ")\n";
         if (_outputs[i] == out)
-            new_alias << "\n@alias(pout,in" << JK::dec3(inputs.size()) << ")\n";
+            new_alias << "\n@alias(pout,in" << JK::dec2(inputs.size()) << ")\n";
         inputs.push_back(_outputs[i]);
     }
     auto alias = new_alias.str();
@@ -130,19 +130,18 @@ void CodeOp::jit_prepare(JK& jk) {
 
     // forward: in0 in1 in2 -> out0 out1
     // backward: in0 in1 in2 in3(pout0) in4(pout1)
-    jk << "«IN_SIZE:" << JK::dec3(_inputs.size());
+    jk << "«IN_SIZE:" << JK::dec2(_inputs.size());
     for (uint i=0; i<_inputs.size(); i++) {
-        //LOGir<<JK::dec3(i);
-        jk << "«in" << JK::dec3(i) << "_dim:"
+        jk << "«in" << JK::dec2(i) << "_dim:"
             << JK::hex1(_inputs[i]->shape.size());
-        jk << "«in" << JK::dec3(i) << "_type:"
+        jk << "«in" << JK::dec2(i) << "_type:"
             << _inputs[i]->dtype();
     }
-    jk << "«OUT_SIZE:" << JK::dec3(_outputs.size());
+    jk << "«OUT_SIZE:" << JK::dec2(_outputs.size());
     for (uint i=0; i<_outputs.size(); i++) {
-        jk << "«out" << JK::dec3(i) << "_dim:"
+        jk << "«out" << JK::dec2(i) << "_dim:"
             << JK::hex1(_outputs[i]->shape.size());
-        jk << "«out" << JK::dec3(i) << "_type:"
+        jk << "«out" << JK::dec2(i) << "_type:"
             << _outputs[i]->dtype();
     }
     string& header = flags.get(NodeFlags::_cuda) ? 
