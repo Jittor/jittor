@@ -625,6 +625,10 @@ def unique(
             #include <thrust/device_vector.h>
             #include <thrust/sequence.h>
     
+            #include <thrust/sequence.h>
+            #include <thrust/sort.h>
+            #include <thrust/unique.h>
+
             #include <cub/cub.cuh> 
             #include <executor.h>
             ''',
@@ -709,9 +713,12 @@ def unique(
                 #include <thrust/execution_policy.h>
 
                 #include <thrust/sequence.h>
+                #include <thrust/unique.h>
                 #include <thrust/sort.h>
 
                 #include <thrust/scan.h>
+                #include <executor.h>
+
                 @alias(input_sorted, in0)
                 @alias(diff, in1)
                 @alias(indice, in2)
