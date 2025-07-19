@@ -1,6 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2023 Jittor. All Rights Reserved. 
-// Maintainers: Dun Liang <randonlang@gmail.com>. 
+// Copyright (c) 2023 Jittor. All Rights Reserved.
+// Maintainers: Dun Liang <randonlang@gmail.com>.
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -11,23 +11,27 @@ using std::unordered_map;
 
 typedef int aclError;
 
-static inline unordered_map<aclError,string> gen_map(string s) {
-    unordered_map<aclError,string> smap;
-    for (int i=0; i<s.size(); i++) {
-        if (s[i] == ';') {
-            int j=s.rfind(" ", i);
-            int code = std::stoi(s.substr(j+1, i-j-1));
-            int k = s.rfind(" ", j-1);
-            int l = s.rfind(" ACL_", k-1);
-            smap[code] = s.substr(l+1, k-l-1);
+static inline unordered_map<aclError, string> gen_map(string s)
+{
+    unordered_map<aclError, string> smap;
+    for (int i = 0; i < s.size(); i++)
+    {
+        if (s[i] == ';')
+        {
+            int j = s.rfind(" ", i);
+            int code = std::stoi(s.substr(j + 1, i - j - 1));
+            int k = s.rfind(" ", j - 1);
+            int l = s.rfind(" ACL_", k - 1);
+            smap[code] = s.substr(l + 1, k - l - 1);
         }
     }
     return smap;
 }
 
-string acl_error_to_string(aclError error) {
+string acl_error_to_string(aclError error)
+{
 
-static unordered_map<aclError,string> acl_error_map = gen_map(R"(
+    static unordered_map<aclError, string> acl_error_map = gen_map(R"(
 // from acl_base.h
 static const int ACL_ERROR_INVALID_PARAM = 100000;
 static const int ACL_ERROR_UNINITIALIZE = 100001;

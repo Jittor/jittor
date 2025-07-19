@@ -7,7 +7,13 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include <cmath>
+#include <limits>
+#include <cstring>
+
+#if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
+#endif
 #include <unistd.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -31,8 +37,80 @@ namespace jittor {
 MPI_Datatype MPI_HALF;
 MPI_Op MPI_HALF_ADD;
 
+#if !defined(__x86_64__) && !defined(_M_X64)
+// ARM架构下的FP16-FP32转换辅助函数
+static inline float fp16_to_fp32_value(uint16_t h) {
+    unsigned sign = ((h >> 15) & 1);
+    unsigned exponent = ((h >> 10) & 0x1f);
+    unsigned mantissa = ((h & 0x3ff) << 13);
+    
+    if (exponent == 0) {
+        if (mantissa == 0) {
+            return sign ? -0.0f : 0.0f;
+        } else {
+            // 非规格化数
+            while (!(mantissa & 0x400000)) {
+                mantissa <<= 1;
+                exponent -= 1;
+            }
+            exponent += 1;
+            mantissa &= ~0x400000;
+        }
+    } else if (exponent == 31) {
+        if (mantissa == 0) {
+            return sign ? -std::numeric_limits<float>::infinity() : std::numeric_limits<float>::infinity();
+        } else {
+            return std::numeric_limits<float>::quiet_NaN();
+        }
+    }
+    
+    exponent += (127 - 15);
+    mantissa <<= 10;
+    
+    unsigned int i = ((sign << 31) | (exponent << 23) | mantissa);
+    float f;
+    std::memcpy(&f, &i, sizeof(float));
+    return f;
+}
+
+static inline uint16_t fp32_to_fp16_value(float f) {
+    unsigned int i;
+    std::memcpy(&i, &f, sizeof(float));
+    
+    unsigned sign = ((i >> 31) & 0x1);
+    unsigned exponent = ((i >> 23) & 0xff);
+    unsigned mantissa = (i & 0x7fffff);
+    
+    unsigned short h = 0;
+    
+    if (exponent == 0) {
+        // 零或非规格化数
+        h = (sign << 15);
+    } else if (exponent == 0xff) {
+        // 无穷大或NaN
+        h = (sign << 15) | 0x7c00;
+        if (mantissa) h |= 0x200;
+    } else {
+        // 规格化数
+        int new_exp = exponent - 127 + 15;
+        if (new_exp < 0) {
+            // 下溢出到零
+            h = (sign << 15);
+        } else if (new_exp > 30) {
+            // 上溢出到无穷大
+            h = (sign << 15) | 0x7c00;
+        } else {
+            // 正常转换
+            h = (sign << 15) | (new_exp << 10) | (mantissa >> 13);
+        }
+    }
+    
+    return h;
+}
+#endif
+
 void HalfAdd(void* invec, void* inoutvec, int* len, MPI_Datatype* type) {
-    // return;
+#if defined(__x86_64__) || defined(_M_X64)
     short* in = (short*)invec;
     short* inout = (short*)inoutvec;
 
@@ -62,8 +140,26 @@ void HalfAdd(void* invec, void* inoutvec, int* len, MPI_Datatype* type) {
         // 将单精度浮点数转换回半精度浮点数，并存储结果
         *(inout + i) = _mm_cvtps_ph(out, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC)[0];
     }
+#else
+    // ARM架构实现：使用基本的半精度浮点数运算
+    uint16_t* in = (uint16_t*)invec;
+    uint16_t* inout = (uint16_t*)inoutvec;
+    int total = *len;
+    
+    // 简单的逐元素相加实现
+    for (int i = 0; i < total; i++) {
+        // 将FP16转换为FP32
+        float in_val = fp16_to_fp32_value(in[i]);
+        float inout_val = fp16_to_fp32_value(inout[i]);
+        
+        // 执行加法
+        float result = in_val + inout_val;
+        
+        // 将结果转回FP16
+        inout[i] = fp32_to_fp16_value(result);
+    }
+#endif
 }
-
 
 int mpi_world_size = 1;
 int mpi_world_rank = 0;

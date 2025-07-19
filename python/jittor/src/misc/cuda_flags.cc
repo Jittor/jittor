@@ -20,6 +20,8 @@ DEFINE_FLAG_WITH_SETTER(int, use_cuda, 0,
     "Use cuda or not. 1 for trying to use cuda, 2 for forcing to use cuda.");
 DEFINE_FLAG_WITH_SETTER(int, device_id, -1,
     "number of the device to used");
+DEFINE_FLAG_WITH_SETTER(int, sync_run, 1,
+    "Enable per-op-sync or not");
 
 EXTERN_LIB void sync_all(bool device_sync);
 
@@ -32,6 +34,10 @@ int get_device_count() {
 }
 #endif
 
+void setter_sync_run(int value) {
+    if(sync_run == value) return;
+    sync_run = value;
+}
 
 void setter_use_cuda(int value) {
     if (use_cuda == value) return;
