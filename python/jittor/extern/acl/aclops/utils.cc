@@ -5,6 +5,7 @@
 #include <Python.h>
 #include <pystate.h>
 #include "utils.h"
+#include "aclnn/aclnn.h"
 
 namespace jittor
 {
