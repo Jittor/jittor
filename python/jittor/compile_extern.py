@@ -457,7 +457,8 @@ def setup_cutt():
 def install_cutlass(root_folder):
     # Modified from: https://github.com/ap-hynninen/cutlass
     # url = "https://cloud.tsinghua.edu.cn/f/171e49e5825549548bc4/?dl=1"
-    url = "https://cg.cs.tsinghua.edu.cn/jittor/assets/cutlass.zip"
+    # url = "https://cg.cs.tsinghua.edu.cn/jittor/assets/cutlass.zip"
+    url = "https://cloud.tsinghua.edu.cn/f/171e49e5825549548bc4/?dl=1"
 
     filename = "cutlass.zip"
     fullname = os.path.join(root_folder, filename)
@@ -611,6 +612,26 @@ def setup_nccl():
     nccl_ops = nccl.ops
     LOG.vv("Get nccl_ops: "+str(dir(nccl_ops)))
 
+def setup_hccl():
+    global hccl_ops
+
+    hccl_src_dir = os.path.join(jittor_path, "extern", "acl", "hccl")
+    hccl_src_files = []
+    for r, _, f in os.walk(hccl_src_dir):
+        for fname in f:
+            hccl_src_files.append(os.path.join(r, fname))
+
+    hccl_include_path = os.path.join(os.environ.get("ASCEND_TOOLKIT_HOME"), "aarch64-linux/include/hccl")
+    hccl_lib_name = os.path.join(os.environ.get("ASCEND_TOOLKIT_HOME"), "aarch64-linux/lib64/libhccl.so")
+    ctypes.CDLL(hccl_lib_name, dlopen_flags)
+
+    hccl = compile_custom_ops(hccl_src_files, 
+        extra_flags=f" -I\"{hccl_include_path}\" {mpi_compile_flags} ",
+        return_module=True, dlopen_flags=os.RTLD_GLOBAL | os.RTLD_NOW,
+        gen_name_="jittor_hccl_core")
+    hccl_ops = hccl.ops
+    LOG.vv("Get hccl_ops: "+str(dir(hccl_ops)))
+
 def manual_link(flags):
     lib_dirs = []
     libs = []
@@ -708,8 +729,14 @@ cudnn = cublas = curand = cufft = cusparse = None
 setup_mpi()
 rank = mpi.world_rank() if in_mpi else 0
 world_size = mpi.world_size() if in_mpi else 1
+# if has_acl:
+#     setup_hccl()
+# elif has_cuda:
+#     setup_nccl()
+#     setup_cutt()
+#     setup_cutlass()
+    
 setup_nccl()
-
 setup_cutt()
 setup_cutlass()
 
