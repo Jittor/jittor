@@ -47,6 +47,7 @@ Init() {
     if (!get_device_count()) return;
     checkCudaErrors(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
     checkCudaErrors(cudaEventCreate(&event, cudaEventDisableTiming));
+    // stream = aclstream;
 }
 ~Init() {
     if (!get_device_count()) return;
@@ -124,6 +125,9 @@ void FetchOp::run() {
             #if IS_CUDA
             checkCudaErrors(cudaMemcpyAsync(
                 allocation.ptr, v->mem_ptr, v->size, cudaMemcpyDefault, stream));
+            // checkCudaErrors(cudaMemcpyAsync(
+            //     allocation.ptr, v->size, v->mem_ptr, v->size, cudaMemcpyDefault, aclstream));
+            // checkCudaErrors(aclrtSynchronizeStream(aclstream));
             #else
             checkCudaErrors(cudaMemcpyAsync(
                 allocation.ptr, v->mem_ptr, v->size, cudaMemcpyDeviceToDevice, stream));
@@ -133,6 +137,9 @@ void FetchOp::run() {
             // device to host
             checkCudaErrors(cudaMemcpyAsync(
                 host_ptr, allocation.ptr, v->size, cudaMemcpyDeviceToHost, stream));
+            // checkCudaErrors(aclrtMemcpyAsync(
+            //     host_ptr, v->size, allocation.ptr, v->size, cudaMemcpyDeviceToHost, aclstream));
+            // checkCudaErrors(aclrtSynchronizeStream(aclstream));
             allocation.ptr = host_ptr;
             has_cuda_memcpy = true;
         } else
