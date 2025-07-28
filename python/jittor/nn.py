@@ -3537,38 +3537,4 @@ def mish(x, inplace=False):
 def skip_init(module_cls, *args, **kw):
     return module_cls(*args, **kw)
 
-'''
-Only for extern/acl
-'''
-class FlashAttention(Module):
-    def __init__(self,headnum,
-                     layout = "BSND",
-                     prefix = None,
-                     qstart = None,
-                     kvstart = None,
-                     scale = 1.0,
-                     prob = 1.0,
-                     pretokens = 2147483647,
-                     nexttokens = 2147483647,
-                     innerprecise = 0,
-                     sparsemode = 0,
-                     psetype = 1):
-        self.headnum = headnum
-        self.layout = layout
-        self.prefix = prefix
-        self.qstart = qstart
-        self.kvstart = kvstart
-        self.scale = scale
-        self.prob = prob
-        self.pretokens = pretokens
-        self.nexttokens = nexttokens
-        self.innerprecise = innerprecise
-        self.sparsemode = sparsemode
-        self.psetype = psetype
 
-    def execute(self,q,k,v,
-                    realshift = None,
-                    dropMask = None,
-                    paddingMask = None,
-                    attenMask = None):
-        pass
