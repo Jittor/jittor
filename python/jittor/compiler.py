@@ -1188,7 +1188,22 @@ make_cache_dir(ck_path)
 
 # build cache_compile
 cc_flags += f" -I\"{os.path.join(jittor_path, 'src')}\" "
+cc_flags += f" -I\"{os.path.join(jittor_path, 'extern')}\" "
+
+ascend_toolkit_home = os.getenv('ASCEND_TOOLKIT_HOME')
+
+if ascend_toolkit_home:
+    cc_flags += f" -I\"{os.path.join(ascend_toolkit_home, 'include')}\" "
+    cc_flags += f" -I\"{os.path.join(ascend_toolkit_home, 'include/acl')}\" "
+    cc_flags += f" -I\"{os.path.join(ascend_toolkit_home, 'include/aclnn')}\" "
+    cc_flags += f" -I\"{os.path.join(ascend_toolkit_home, 'include/aclnnop')}\" "
+    cc_flags += f" -L\"{os.path.join(ascend_toolkit_home, 'lib64')}\" "
+    cc_flags += " -llibascendcl "
+    cc_flags += " -llibnnopbase "
+    cc_flags += " -llibopapi "
+
 cc_flags += py_include
+
 check_cache_compile()
 LOG.v(f"Get cache_compile: {jit_utils.cc}")
 
