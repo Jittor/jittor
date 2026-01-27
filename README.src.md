@@ -22,7 +22,8 @@ Related Links:
 *  [Jittor Documents](https://cg.cs.tsinghua.edu.cn/jittor/assets/docs/index.html)
 *  [Github](https://github.com/jittor/jittor), [GitLink](https://www.gitlink.org.cn/jittor/jittor), [Gitee](https://gitee.com/jittor/jittor)
 *  [Jittor Forum](https://discuss.jittor.org/)
-*  [Awesome Jittor List](https://github.com/Jittor/jittor/blob/master/AWESOME-JITTOR-LIST.md)
+*  [Awesome Jittor List (EN)](https://github.com/Jittor/jittor/blob/master/AWESOME-JITTOR-LIST.md)
+*  [Awesome Jittor List (CN)](https://github.com/Jittor/jittor/blob/master/AWESOME-JITTOR-LIST.cn.md)
 *  IM: QQ Group(761222083)
 
 相关链接：
@@ -32,7 +33,8 @@ Related Links:
 *  [Jittor文档](https://cg.cs.tsinghua.edu.cn/jittor/assets/docs/index.html)
 *  [Github](https://github.com/jittor/jittor)， [GitLink](https://www.gitlink.org.cn/jittor/jittor)， [Gitee](https://gitee.com/jittor/jittor)
 *  [Jittor 论坛](https://discuss.jittor.org/)
-*  [Jittor 精选仓库](https://github.com/Jittor/jittor/blob/master/AWESOME-JITTOR-LIST.cn.md)
+*  [Jittor 精选仓库 (中文)](https://github.com/Jittor/jittor/blob/master/AWESOME-JITTOR-LIST.cn.md)
+*  [Jittor 精选仓库 (English)](https://github.com/Jittor/jittor/blob/master/AWESOME-JITTOR-LIST.md)
 *  即时通信: QQ Group(761222083)
 
 
