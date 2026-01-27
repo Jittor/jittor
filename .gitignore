@@ -23,6 +23,8 @@ venv/
 !README.md
 !README.cn.md
 !CHANGELOG.md
+!AWESOME-JITTOR-LIST.md
+!AWESOME-JITTOR-LIST.cn.md
 python/jittor.egg-info
 dist/
 !doc/source/*
