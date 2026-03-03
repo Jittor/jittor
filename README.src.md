@@ -451,7 +451,7 @@ Jittor还很年轻。 它可能存在错误和问题。 请在我们的错误跟
 
 * 在论文中引用 Jittor
 * 向身边的好朋友推荐 Jittor
-* 贡献代码
+* 贡献代码（详见[CONTRIBUTING.md](CONTRIBUTING.md)）
 * 贡献教程和文档
 * 提出issue
 * 回答 jittor 相关问题
@@ -463,7 +463,7 @@ You can help Jittor in the following ways:
 
 * Citing Jittor in your paper
 * recommend Jittor to your friends
-* Contributing code
+* Contributing code (See [CONTRIBUTING.md](CONTRIBUTING.md) for details)
 * Contributed tutorials and documentation
 * File an issue
 * Answer jittor related questions

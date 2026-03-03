@@ -343,7 +343,7 @@ You can help Jittor in the following ways:
 
 * Citing Jittor in your paper
 * recommend Jittor to your friends
-* Contributing code
+* Contributing code (See [CONTRIBUTING.md](CONTRIBUTING.md) for details)
 * Contributed tutorials and documentation
 * File an issue
 * Answer jittor related questions
