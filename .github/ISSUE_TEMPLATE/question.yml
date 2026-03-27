@@ -1,0 +1,35 @@
+name: Question / 使用咨询
+description: Ask a question about using Jittor / 咨询 Jittor 使用问题
+title: "[Question] "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提问前请先查阅 [Jittor 文档](https://cg.cs.tsinghua.edu.cn/jittor/assets/docs/index.html) 和 [Jittor 论坛](https://discuss.jittor.cn/)。
+        Please check the docs and forum before asking.
+
+  - type: textarea
+    id: question
+    attributes:
+      label: 问题描述 / Your question
+      description: 清晰描述你的问题 / Describe your question clearly
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: 相关代码或截图 / Related code or screenshots
+      description: 如有相关代码请贴出 / Paste related code if applicable
+      render: python
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: 确认 / Confirmation
+      options:
+        - label: 我已经查阅过文档和论坛 / I have checked the docs and forum
+          required: true
