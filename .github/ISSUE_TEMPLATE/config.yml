@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Jittor 论坛
+  - name: Jittor 论坛 / Jittor Forum
     url: https://discuss.jittor.cn/
-    about: 一般性讨论和问答请前往 Jittor 论坛
-  - name: Jittor 文档
+    about: 一般性讨论和问答请前往 Jittor 论坛 / For general discussions and Q&A, please visit the Jittor Forum
+  - name: Jittor 文档 / Jittor Docs
     url: https://cg.cs.tsinghua.edu.cn/jittor/assets/docs/index.html
-    about: 请先查阅官方文档
+    about: 请先查阅官方文档 / Please check the official documentation first
