@@ -1,0 +1,43 @@
+name: Feature Request / 功能建议
+description: Suggest an idea for Jittor / 提交功能建议
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢你的建议！请描述你希望添加的功能。
+        Thanks for your feature request!
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 功能描述 / Description
+      description: 清晰描述你希望添加的功能 / A clear description of the feature
+      placeholder: 希望 Jittor 能支持...
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: 使用场景 / Motivation
+      description: 为什么需要这个功能？解决什么问题？ / Why is this feature needed?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 替代方案 / Alternatives
+      description: 是否有替代方案？ / Have you considered any alternatives?
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: 确认 / Confirmation
+      options:
+        - label: 我已经搜索过现有 issue，没有找到相同的建议 / I have searched existing issues
+          required: true
