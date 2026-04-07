@@ -360,6 +360,9 @@ def change_function():
     from .aclops.getitem_op import GetItemACL
 
     def getitem_acl(x, slices, return_x=None):
+        if isinstance(slices, jt.Var):
+            return GetItemACL()(x, slices, return_x)
+        
         # Transform numpy int to int
         if isinstance(slices, (np.int8, np.int16, np.int32, np.int64)):
             slices = int(slices)
@@ -370,12 +373,13 @@ def change_function():
 
         ## If not related to `None`, directly use `GetItemACL`
         if slices is not None and (not isinstance(slices, Iterable)
-                                   or all([s is not None for s in slices])):
-            return GetItemACL()(x, slices, return_x)
-
-        ## If related to `None`, filter out `None` first, then use `GetItemACL`, and finally insert `None` (new dimensions) back
-
-        # Transform to tuple
+                                   or isinstance(slices, str)):
+            try:
+                result = GetItemACL()(x, slices, return_x)
+                return result
+            except Exception as e:
+                return x[slices]
+        
         if isinstance(slices, int) or isinstance(slices, slice):
             slices = (slices, )
         assert isinstance(slices, tuple)
@@ -400,7 +404,11 @@ def change_function():
 
         insert_positions = get_insert_positions(slices)
         slices_without_none = tuple(s for s in slices if s is not None)
-        result = GetItemACL()(x, slices_without_none, return_x)
+        
+        try:
+            result = GetItemACL()(x, slices_without_none, return_x)
+        except Exception as e:
+            result = x[slices_without_none]
 
         for i in insert_positions:
             result = result.unsqueeze(i)
@@ -687,7 +695,7 @@ def change_function():
     # jt.nn.BatchNorm = warp(jt.nn.BatchNorm, BatchNormACL)
     # jt.nn.LayerNorm = warp(jt.nn.LayerNorm, LayerNormACL)
 
-    jt.nn.FlashAttention = warp(jt.nn.FlashAttention, FlashAttentionACL)
+    # jt.nn.FlashAttention = warp(jt.nn.FlashAttention, FlashAttentionACL)
     jt.isnan = warp(jt.isnan, isnan_acl)
     jt.isinf = warp(jt.isinf, isinf_acl)
     jt.Var.isnan = jt.isnan

@@ -95,7 +95,7 @@ class ConvACL(jt.Function):
             attr->convPads = {{ {padding[0]}, {padding[1]} }};
             attr->convDilations = {{ {dilation[0]}, {dilation[1]} }};
             attr->group = {groups};
-            attr->convOutPads = {{1,1}};
+            attr->convOutPads = {{0,0}};
             op.op_attr.reset(attr);
             """
         input_height, input_width = x.shape[-2:]
@@ -146,7 +146,7 @@ class ConvACL(jt.Function):
             attr->convPads = {{ {padding[0]}, {padding[1]} }};
             attr->convDilations = {{ {dilation[0]}, {dilation[1]} }};
             attr->group = {groups};
-            attr->convOutPads = {{ 1,1}};
+            attr->convOutPads = {{ 0,0}};
             op.op_attr.reset(attr);
             """
         results = conv_cmd("Conv2dBackward",
