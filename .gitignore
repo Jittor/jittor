@@ -28,6 +28,7 @@ venv/
 !CONTRIBUTING.md
 !CODE_OF_CONDUCT.md
 !GOVERNANCE.md
+!.github/**/*.md
 python/jittor.egg-info
 dist/
 !doc/source/*
