@@ -51,7 +51,7 @@ def _none_or_dtype(input: Optional[Var]):
         return None
     elif isinstance(input, jt.Var):
         return input.dtype
-    raise RuntimeError("input to _none_or_dtype() must be None or torch.Tensor")
+    raise RuntimeError("input to _none_or_dtype() must be None or jt.Var")
 
 def baddbmm(input_var:jt.Var, batch1:jt.Var, batch2:jt.Var, beta=1, alpha=1) -> jt.Var:
     # WARNING(514flowey): Check here
