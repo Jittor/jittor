@@ -121,7 +121,7 @@ jittor/
 ├── python/                    # Python source code
 │   ├── jittor/               # Main Jittor package
 │   │   ├── __init__.py       # Package initialization, version info
-│   │   ├── nn.py             # Neural network modules (similar to torch.nn)
+│   │   ├── nn.py             # Neural network modules
 │   │   ├── optim.py          # Optimizers
 │   │   ├── dataset/          # Dataset utilities
 │   │   ├── models/           # Pre-built model implementations
@@ -147,8 +147,8 @@ jittor/
 
 - **JIT Compilation**: Jittor compiles C++/CUDA code at runtime. Source files in `python/jittor/src/` are compiled on-the-fly.
 - **Meta-operators**: Jittor uses meta-operators to generate specialized code for different hardware.
-- **Var**: The basic data type in Jittor (similar to `torch.Tensor`).
-- **Module**: Base class for neural network modules (similar to `torch.nn.Module`), using `execute()` instead of `forward()`.
+- **Var**: The basic data type in Jittor for representing tensors.
+- **Module**: Base class for neural network modules, using `execute()` as the forward computation method.
 
 ## Making Changes
 
@@ -465,7 +465,7 @@ jittor/
 ├── python/                    # Python 源代码
 │   ├── jittor/               # Jittor 主包
 │   │   ├── __init__.py       # 包初始化，版本信息
-│   │   ├── nn.py             # 神经网络模块（类似 torch.nn）
+│   │   ├── nn.py             # 神经网络模块
 │   │   ├── optim.py          # 优化器
 │   │   ├── dataset/          # 数据集工具
 │   │   ├── models/           # 预置模型实现
@@ -491,8 +491,8 @@ jittor/
 
 - **JIT 编译**：Jittor 在运行时编译 C++/CUDA 代码，`python/jittor/src/` 中的源文件会即时编译。
 - **元算子**：Jittor 使用元算子为不同硬件生成专门的代码。
-- **Var**：Jittor 的基本数据类型（类似 `torch.Tensor`）。
-- **Module**：神经网络模块的基类（类似 `torch.nn.Module`），使用 `execute()` 而非 `forward()`。
+- **Var**：Jittor 的基本数据类型，用于表示张量。
+- **Module**：神经网络模块的基类，使用 `execute()` 作为前向计算方法。
 
 ## 进行修改
 
