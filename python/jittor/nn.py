@@ -167,7 +167,7 @@ def relu(x):
     r''' Applies the element-wise function:
 
     .. math::
-        \text{ReLU6}(x) = \max(0,x)
+        \text{ReLU}(x) = \max(0,x)
 
     :param x: the input var
     :type x: jt.Var

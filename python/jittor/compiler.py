@@ -14,7 +14,6 @@ import datetime
 import threading
 import platform
 import ctypes
-import platform
 from ctypes import cdll
 from ctypes.util import find_library
 

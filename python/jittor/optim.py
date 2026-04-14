@@ -323,7 +323,7 @@ class SGD(Optimizer):
         self.param_groups.append(group)
 
     def step(self, loss=None, retain_graph=False):
-        self.pre_step(loss, retain_graph=False)
+        self.pre_step(loss, retain_graph=retain_graph)
         jt.flags.node_order = 1
         for pg in self.param_groups:
             # get arguments from each param_groups

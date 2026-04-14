@@ -1008,7 +1008,7 @@ def randn_like(x, dtype=None) -> Var:
          [ 1.068085   -0.34366122  0.13172573]], dtype=float32)
     ''' 
     if dtype is None: dtype = x.dtype
-    return jt.random(x.shape, x.dtype, "normal")
+    return jt.random(x.shape, dtype, "normal")
 
 def randint(low, high=None, shape=(1,), dtype="int32") -> Var:
     ''' samples random integers from a uniform distribution on the interval [low, high).
@@ -1798,7 +1798,7 @@ Arguments of hook are defined as::
         return childs
 
     def float64(self):
-        '''convert all parameters to float16'''
+        '''convert all parameters to float64'''
         self._amp_level = 0
         for p in self.parameters():
             if p.dtype.is_float():

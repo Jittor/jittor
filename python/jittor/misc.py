@@ -2158,7 +2158,7 @@ The returned var has the same number of dimensions as the original var (x). The 
     Example::
 
         x = jt.randn(3, 4)
-        indices = torch.tensor([2, 1])
+        indices = jt.array([2, 1])
         y = jt.index_select(x, 0, indices)
         assert jt.all_equal(y, x[indices])
         y = jt.index_select(x, 1, indices)
