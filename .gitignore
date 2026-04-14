@@ -25,6 +25,9 @@ venv/
 !CHANGELOG.md
 !AWESOME-JITTOR-LIST.md
 !AWESOME-JITTOR-LIST.cn.md
+!CONTRIBUTING.md
+!CODE_OF_CONDUCT.md
+!GOVERNANCE.md
 python/jittor.egg-info
 dist/
 !doc/source/*

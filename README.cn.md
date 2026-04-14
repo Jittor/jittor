@@ -364,11 +364,13 @@ help(jt.ops)
 
 Jittor还很年轻。 它可能存在错误和问题。 请在我们的错误跟踪系统中报告它们。 我们欢迎您为Jittor做出贡献。 此外，如果您对Jittor有任何想法，请告诉我们。
 
+**在贡献之前，请阅读我们的[贡献指南](CONTRIBUTING.md)。** 同时请所有参与者遵守我们的[行为准则](CODE_OF_CONDUCT.md)。关于项目的治理结构以及贡献者如何在社区中成长，请参阅[治理文档](GOVERNANCE.md)。
+
 您可以用以下方式帮助Jittor：
 
 * 在论文中引用 Jittor
 * 向身边的好朋友推荐 Jittor
-* 贡献代码
+* 贡献代码（请参阅[贡献指南](CONTRIBUTING.md)）
 * 贡献教程和文档
 * 提出issue
 * 回答 jittor 相关问题
