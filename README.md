@@ -336,14 +336,13 @@ Those notebooks can be started in your own computer by `python3.7 -m jittor.note
 
 Jittor is still young. It may contain bugs and issues. Please report them in our bug track system. Contributions are welcome. Besides, if you have any ideas about Jittor, please let us know.
 
-
-
+**Before contributing, please read our [Contributing Guide](CONTRIBUTING.md).** We also ask that all participants follow our [Code of Conduct](CODE_OF_CONDUCT.md). For information about the project's governance structure and how contributors can grow within the community, see our [Governance Document](GOVERNANCE.md).
 
 You can help Jittor in the following ways:
 
 * Citing Jittor in your paper
 * recommend Jittor to your friends
-* Contributing code
+* Contributing code (see [Contributing Guide](CONTRIBUTING.md))
 * Contributed tutorials and documentation
 * File an issue
 * Answer jittor related questions
