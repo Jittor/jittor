@@ -54,7 +54,7 @@ CASES_TERNARY = [
 
 def _rand(shape, seed):
     rng = np.random.RandomState(seed)
-    return rng.randn(*shape).astype(np.float32) if shape else rng.randn().astype(np.float32)
+    return rng.randn(*shape).astype(np.float32) if shape else np.array(rng.randn(), dtype=np.float32)
 
 
 class TestLinalgEinsum(unittest.TestCase):
