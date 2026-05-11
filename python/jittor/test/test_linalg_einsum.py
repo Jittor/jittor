@@ -49,6 +49,13 @@ CASES_TERNARY = [
     ("ij,jk,kl->il", (2, 3), (3, 4), (4, 5)),
     ("bij,bjk,bkl->bil", (2, 3, 4), (2, 4, 5), (2, 5, 6)),
     ("i,j,k->ijk", (2,), (3,), (4,)),
+    # Patterns where a sub-pair contracts to a scalar before the final
+    # operand is consumed. Left-fold without reordering would create a
+    # rank-0 / shape-(1,) intermediate that breaks shape arithmetic.
+    ("i,i,j->j", (3,), (3,), (2,)),
+    ("i,i,j->", (3,), (3,), (2,)),
+    ("i,i,i->", (5,), (5,), (5,)),
+    ("i,i,j,j->", (3,), (3,), (2,), (2,)),
 ]
 
 

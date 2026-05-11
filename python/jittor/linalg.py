@@ -687,15 +687,42 @@ def einsum(equation, *operands):
     in_subs, operands = new_subs, new_ops
 
     while len(operands) > 1:
-        a = operands.pop(0)
-        b = operands.pop(0)
-        sa = in_subs.pop(0)
-        sb = in_subs.pop(0)
+        i, j = _einsum_pick_pair(in_subs, out_sub)
+        # Pop the higher index first so the lower-index pop stays valid.
+        b = operands.pop(j); sb = in_subs.pop(j)
+        a = operands.pop(i); sa = in_subs.pop(i)
         so = _einsum_intermediate_subs(sa, sb, in_subs, out_sub)
         operands.insert(0, _einsum_pair_contract(sa, sb, so, a, b))
         in_subs.insert(0, so)
 
     return _einsum_finalize(in_subs[0], out_sub, operands[0])
+
+
+def _einsum_pick_pair(in_subs, out_sub):
+    # Prefer a pair that shares at least one label, to avoid unnecessary
+    # outer-products. Among shared-label pairs, prefer ones whose contraction
+    # result is non-empty when there are still operands queued — collapsing
+    # to a scalar mid-stream forces the leftover operands through a degenerate
+    # ``scalar * tensor`` path.
+    n = len(in_subs)
+    best = None
+    for i in range(n):
+        for j in range(i + 1, n):
+            sa, sb = in_subs[i], in_subs[j]
+            shared = set(sa) & set(sb)
+            if not shared:
+                continue
+            remaining = [in_subs[k] for k in range(n) if k != i and k != j]
+            keep = set(out_sub)
+            for s in remaining:
+                keep |= set(s)
+            result_chars = (set(sa) | set(sb)) & keep
+            score = (1 if result_chars else 0, len(shared))
+            if best is None or score > best[0]:
+                best = (score, i, j)
+    if best is not None:
+        return best[1], best[2]
+    return 0, 1
 
 
 def _einsum_dedup(s):
@@ -785,6 +812,17 @@ def _einsum_broadcast_axes(op, target_shape):
 
 
 def _einsum_pair_contract(sa, sb, so, a, b):
+    # If either operand is the result of an earlier full contraction (sub == ""),
+    # it has no labelled axes; fall back to a plain element-wise multiply, which
+    # will broadcast a 0-D / shape-(1,) scalar against the remaining operand.
+    if not sa and not sb:
+        out = a * b
+        return _einsum_permute_to("", so, out) if so == "" else out
+    if not sa:
+        return _einsum_finalize_scalar_pair(a, sb, so, b)
+    if not sb:
+        return _einsum_finalize_scalar_pair(b, sa, so, a)
+
     a_set, b_set, o_set = set(sa), set(sb), set(so)
 
     drop_a = [i for i, c in enumerate(sa) if c not in b_set and c not in o_set]
@@ -817,13 +855,24 @@ def _einsum_pair_contract(sa, sb, so, a, b):
     for c in free_b:
         resolved[c] = sizes_b[c]
 
-    if not sa and not sb:
-        return a * b
-
     if not contract:
         return _einsum_outer(sa, sb, so, a, b, batch, free_a, free_b, resolved)
 
     return _einsum_matmul(sa, sb, so, a, b, batch, free_a, free_b, contract, resolved)
+
+
+def _einsum_finalize_scalar_pair(scalar, sb, so, b):
+    # ``scalar`` is the result of a prior full contraction (sub == "").
+    # In jittor that's a shape-(1,) Var; multiply broadcasts it against ``b``.
+    if scalar.ndim > 1:
+        scalar = scalar.reshape([1])
+    out = b * scalar
+    drop = [i for i, c in enumerate(sb) if c not in so]
+    if drop:
+        out = out.sum(drop)
+        ds = set(drop)
+        sb = "".join(c for i, c in enumerate(sb) if i not in ds)
+    return _einsum_permute_to(sb, so, out)
 
 
 def _einsum_outer(sa, sb, so, a, b, batch, free_a, free_b, resolved):
