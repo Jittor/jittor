@@ -656,96 +656,196 @@ def qr(x):
     return q, r
 
 
-def einsum(string, *args):
-    r"""
-    do the einsum operation. Using the implementation in https://github.com/HIPS/autograd
-    :param string, args:
-    :return: return values depend on the input string kinds.
+def einsum(equation, *operands):
+    r"""Evaluate the Einstein summation convention on the operands.
+
+    Native jittor implementation: GEMM-shaped contractions dispatch to
+    ``jt.matmul`` (cublas on GPU), and the generic case lowers to
+    ``reindex`` / element-wise / ``reindex_reduce`` meta-ops which are fused
+    by jittor's JIT into a single kernel. No numpy round-trip, so
+    ``float16`` and ``bfloat16`` operands stay on-device throughout and
+    autograd is provided by the underlying meta-ops.
     """
     import numpy as np_cpu
-    if string == "i,j->ij":
-        return args[0].broadcast((args[0].shape[0], args[1].shape[0]), dims=[1]).multiply(args[1])
-    def forward_code(np, data):
-        out = data["outputs"][0]
-        npout = np.einsum(string, *data["inputs"])
-        np.copyto(out, npout)
+    if len(operands) == 0:
+        raise ValueError("einsum requires at least one operand")
+    # ``_parse_einsum_input`` calls ``asanyarray`` on the operands, so feed
+    # it shape-compatible numpy stand-ins and keep the original jittor Vars.
+    fake_ops = [np_cpu.empty([1] * len(o.shape), dtype=np_cpu.float32)
+                for o in operands]
+    in_subs_str, out_sub, _ = np_cpu.core.einsumfunc._parse_einsum_input(
+        [equation, *fake_ops])
+    in_subs = in_subs_str.split(",")
+    operands = list(operands)
 
-    def backward_code(np, data, argnum=0):
-        real_len = len(data["inputs"]) - 2
-        operands = data["inputs"][:real_len]
-        _ops = operands
-        if np_cpu is not np:
-            # fake a numpy array
-            _ops = [ np_cpu.zeros((1,)*o.ndim) for o in _ops ]
-        in_subs, out_subs, _ = np_cpu.core.einsumfunc._parse_einsum_input([string] + _ops)
-        dout = data["dout"]
-        out_index = data["out_index"]
-        out = data["outputs"][0]
-        inp = data["inputs"][argnum]
-        c = data["f_outputs"]
+    new_subs, new_ops = [], []
+    for i, (s, op) in enumerate(zip(in_subs, operands)):
+        s, op = _einsum_unary_normalize(s, op, in_subs, out_sub, i)
+        new_subs.append(s)
+        new_ops.append(op)
+    in_subs, operands = new_subs, new_ops
 
-        in_subs_list = in_subs.split(',')
-        op_num = argnum
-        subs_wrt = in_subs_list[op_num]
-        rest_of_ops = operands[:op_num] + operands[op_num+1:]
-        rest_of_subs = in_subs_list[:op_num] + in_subs_list[op_num+1:]
-        other_named_subs = set(''.join([out_subs] + rest_of_subs))
-        naked_summed = [(i, sub) for i, sub in enumerate(subs_wrt)
-                        if sub not in other_named_subs]
-        if naked_summed:
-            naked_summed_dims, ones_subs = zip(*naked_summed)
-            ones_subs = ''.join(ones_subs)
-            ones = np_cpu.ones(np_cpu.array(operands[op_num].shape)[list(naked_summed_dims)])
-            new_input_subs = ','.join([out_subs, ones_subs] + rest_of_subs)
-            new_operands = [dout, ones] + rest_of_ops
-        else:
-            new_input_subs = ','.join([out_subs] + rest_of_subs)
-            new_operands = [dout] + rest_of_ops
+    while len(operands) > 1:
+        a = operands.pop(0)
+        b = operands.pop(0)
+        sa = in_subs.pop(0)
+        sb = in_subs.pop(0)
+        so = _einsum_intermediate_subs(sa, sb, in_subs, out_sub)
+        operands.insert(0, _einsum_pair_contract(sa, sb, so, a, b))
+        in_subs.insert(0, so)
 
-        new_subscripts = new_input_subs + '->' + subs_wrt
-        x = np.einsum(new_subscripts, *new_operands)
-        while np.ndim(x) > np.ndim(inp):
-            x = np.sum(x, axis=broadcast_idx)
-            for axis, size in enumerate(inp.shape):
-                if size == 1:
-                    x = np.sum(x, axis=axis, keepdims=True)
-        np.copyto(out, x)
-    
-    def einsum_outshape(einsum_expr, inputs):
-        shps = np_cpu.concatenate([in_.shape for in_ in inputs])
-        p = einsum_expr.replace(" ", "").split(',')
-        s = p[:-1] + p[-1].split('->')
-        rec_shape = []
-        ellip_expr = None
-        const_rep = '1234567890' # assume tensor shape no more than 10 dimensions
-        for idx, expr in enumerate(s[:-1]):
-            if "..." in expr:
-                assert "..." in s[-1]
-            else:
-                continue
-            shp = inputs[idx].shape
-            ellipsis_pos = len(expr.replace("...", ""))
-            nellip_expr = const_rep[0 : len(shp) - ellipsis_pos]
-            if ellip_expr is None:
-                ellip_expr = nellip_expr
-            else:
-                assert ellip_expr == nellip_expr, "Please keep broadcast ellipsis record the same ellipsis."
-            s[idx] = expr.replace("...", ellip_expr)
-        if ellip_expr:
-            s[-1] = s[-1].replace("...", ellip_expr)
-        if s[-1]=='':
-            return ()
-        else:
-            inop = list(map(list,s))
-            return tuple(shps[(np_cpu.concatenate(inop[:-1])[:,None]==inop[-1]).argmax(0)].astype(np_cpu.int64))
+    return _einsum_finalize(in_subs[0], out_sub, operands[0])
 
-    output_shape = [int(x) for x in einsum_outshape(string, args)]
-    backwards = [partial(backward_code, argnum=idx) for idx in range(len(args))]
-    a = jt.numpy_code(
-        [output_shape],
-        [args[0].dtype],
-        args,
-        forward_code,
-        backwards,
-    )[0]
-    return a
+
+def _einsum_dedup(s):
+    seen, out = set(), []
+    for c in s:
+        if c not in seen:
+            seen.add(c)
+            out.append(c)
+    return out
+
+
+def _einsum_permute_to(s_from, s_to, op):
+    if s_from == s_to:
+        return op
+    perm = [s_from.index(c) for c in s_to]
+    if perm == list(range(len(perm))):
+        return op
+    return op.permute(perm)
+
+
+def _einsum_unary_normalize(sub, op, all_subs, out_sub, my_index):
+    # Diagonal extraction: collapse repeated indices via a reindex.
+    if len(set(sub)) != len(sub):
+        unique = _einsum_dedup(sub)
+        out_shape = []
+        for c in unique:
+            sizes = [op.shape[k] for k, ch in enumerate(sub) if ch == c]
+            for sz in sizes[1:]:
+                assert sz == sizes[0], (
+                    f"einsum: repeated index '{c}' has mismatched dim sizes {sizes}")
+            out_shape.append(sizes[0])
+        formulas = [f"i{unique.index(c)}" for c in sub]
+        op = op.reindex(out_shape, formulas)
+        sub = "".join(unique)
+
+    # Sum out indices that don't appear in any other operand or in the output.
+    other_chars = set(out_sub)
+    for k, s in enumerate(all_subs):
+        if k != my_index:
+            other_chars |= set(s)
+    sum_dims = [i for i, c in enumerate(sub) if c not in other_chars]
+    if sum_dims:
+        op = op.sum(sum_dims)
+        drop = set(sum_dims)
+        sub = "".join(c for i, c in enumerate(sub) if i not in drop)
+    return sub, op
+
+
+def _einsum_intermediate_subs(sa, sb, remaining_subs, out_sub):
+    keep = set(out_sub)
+    for s in remaining_subs:
+        keep |= set(s)
+    return "".join(c for c in _einsum_dedup(sa + sb) if c in keep)
+
+
+def _einsum_pair_contract(sa, sb, so, a, b):
+    a_set, b_set, o_set = set(sa), set(sb), set(so)
+
+    drop_a = [i for i, c in enumerate(sa) if c not in b_set and c not in o_set]
+    if drop_a:
+        a = a.sum(drop_a)
+        ds = set(drop_a)
+        sa = "".join(c for i, c in enumerate(sa) if i not in ds)
+        a_set = set(sa)
+    drop_b = [i for i, c in enumerate(sb) if c not in a_set and c not in o_set]
+    if drop_b:
+        b = b.sum(drop_b)
+        ds = set(drop_b)
+        sb = "".join(c for i, c in enumerate(sb) if i not in ds)
+        b_set = set(sb)
+
+    shared = a_set & b_set
+    batch = [c for c in so if c in shared]
+    contract = [c for c in sa if c in shared and c not in o_set]
+    free_a = [c for c in sa if c not in shared]
+    free_b = [c for c in sb if c not in shared]
+
+    if not sa and not sb:
+        return a * b
+
+    if not contract:
+        return _einsum_outer(sa, sb, so, a, b, batch, free_a, free_b)
+
+    return _einsum_matmul(sa, sb, so, a, b, batch, free_a, free_b, contract)
+
+
+def _einsum_outer(sa, sb, so, a, b, batch, free_a, free_b):
+    a_target = "".join(batch + free_a)
+    a_perm = _einsum_permute_to(sa, a_target, a)
+    for _ in free_b:
+        a_perm = a_perm.unsqueeze(-1)
+
+    b_target = "".join(batch + free_b)
+    b_perm = _einsum_permute_to(sb, b_target, b)
+    insert_at = len(batch)
+    for _ in free_a:
+        b_perm = b_perm.unsqueeze(insert_at)
+
+    out = a_perm * b_perm
+    intermediate = "".join(batch + free_a + free_b)
+    return _einsum_permute_to(intermediate, so, out)
+
+
+def _einsum_matmul(sa, sb, so, a, b, batch, free_a, free_b, contract):
+    a_target = "".join(batch + free_a + contract)
+    b_target = "".join(batch + contract + free_b)
+    a_p = _einsum_permute_to(sa, a_target, a)
+    b_p = _einsum_permute_to(sb, b_target, b)
+
+    nb = len(batch)
+    nfa = len(free_a)
+    nc = len(contract)
+
+    a_shape = list(a_p.shape)
+    b_shape = list(b_p.shape)
+    batch_shape = a_shape[:nb]
+    fa_shape = a_shape[nb:nb + nfa]
+    c_shape_a = a_shape[nb + nfa:]
+    c_shape_b = b_shape[nb:nb + nc]
+    fb_shape = b_shape[nb + nc:]
+
+    assert c_shape_a == c_shape_b, (
+        f"einsum: contract dim mismatch {c_shape_a} vs {c_shape_b}")
+
+    fa_size = 1
+    for s in fa_shape: fa_size *= s
+    c_size = 1
+    for s in c_shape_a: c_size *= s
+    fb_size = 1
+    for s in fb_shape: fb_size *= s
+
+    a_flat = a_p.reshape(batch_shape + [fa_size, c_size])
+    b_flat = b_p.reshape(batch_shape + [c_size, fb_size])
+
+    out_flat = jt.matmul(a_flat, b_flat)
+
+    target_shape = batch_shape + fa_shape + fb_shape
+    if target_shape:
+        out = out_flat.reshape(target_shape)
+    else:
+        # Pure dot product: collapse the [1,1] result of the GEMM to a 0-D scalar.
+        out = out_flat.sum()
+
+    intermediate = "".join(batch + free_a + free_b)
+    return _einsum_permute_to(intermediate, so, out)
+
+
+def _einsum_finalize(s_from, out_sub, op):
+    drop = [i for i, c in enumerate(s_from) if c not in out_sub]
+    if drop:
+        op = op.sum(drop)
+        ds = set(drop)
+        s_from = "".join(c for i, c in enumerate(s_from) if i not in ds)
+    return _einsum_permute_to(s_from, out_sub, op)
