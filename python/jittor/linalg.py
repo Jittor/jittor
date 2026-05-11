@@ -766,11 +766,18 @@ def _einsum_resolve_size(label, size_a, size_b):
 def _einsum_broadcast_axes(op, target_shape):
     # Expand size-1 axes of ``op`` to match ``target_shape``. Lengths must match.
     cur_shape = list(op.shape)
-    assert len(cur_shape) == len(target_shape)
+    if len(cur_shape) != len(target_shape):
+        raise ValueError(
+            f"einsum: cannot broadcast shape {tuple(cur_shape)} to "
+            f"{tuple(target_shape)}: rank mismatch")
     needs = False
-    for cs, ts in zip(cur_shape, target_shape):
+    for axis, (cs, ts) in enumerate(zip(cur_shape, target_shape)):
         if cs != ts:
-            assert cs == 1, f"cannot broadcast {cs} to {ts}"
+            if cs != 1:
+                raise ValueError(
+                    f"einsum: cannot broadcast shape {tuple(cur_shape)} to "
+                    f"{tuple(target_shape)}: axis {axis} has size {cs}, "
+                    f"expected {ts} or 1")
             needs = True
     if not needs:
         return op
