@@ -660,11 +660,12 @@ def einsum(equation, *operands):
     r"""Evaluate the Einstein summation convention on the operands.
 
     Native jittor implementation: GEMM-shaped contractions dispatch to
-    ``jt.matmul`` (cublas on GPU), and the generic case lowers to
-    ``reindex`` / element-wise / ``reindex_reduce`` meta-ops which are fused
-    by jittor's JIT into a single kernel. No numpy round-trip, so
-    ``float16`` and ``bfloat16`` operands stay on-device throughout and
-    autograd is provided by the underlying meta-ops.
+    ``jt.matmul`` (cublas on GPU). Other cases are expressed with the
+    existing jittor tensor ops used by this implementation, including
+    ``reindex`` for diagonal handling, element-wise operations, reductions
+    such as ``sum``, and reshapes/transposes as needed. No numpy round-trip,
+    so ``float16`` and ``bfloat16`` operands stay on-device throughout and
+    autograd is provided by the underlying jittor ops.
     """
     import numpy as np_cpu
     if len(operands) == 0:
