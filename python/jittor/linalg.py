@@ -723,8 +723,9 @@ def _einsum_unary_normalize(sub, op, all_subs, out_sub, my_index):
         for c in unique:
             sizes = [op.shape[k] for k, ch in enumerate(sub) if ch == c]
             for sz in sizes[1:]:
-                assert sz == sizes[0], (
-                    f"einsum: repeated index '{c}' has mismatched dim sizes {sizes}")
+                if sz != sizes[0]:
+                    raise ValueError(
+                        f"einsum: repeated index '{c}' has mismatched dim sizes {sizes}")
             out_shape.append(sizes[0])
         formulas = [f"i{unique.index(c)}" for c in sub]
         op = op.reindex(out_shape, formulas)
