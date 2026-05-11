@@ -33,6 +33,16 @@ CASES_BINARY = [
     ("...i,...i->...", (2, 3, 4), (2, 3, 4)),
     ("ij,ij->", (3, 4), (3, 4)),
     ("ijk,ikl->ijl", (2, 3, 4), (2, 4, 5)),
+    # Broadcast cases on shared labels (numpy-style size-1 expansion).
+    ("i,i->", (1,), (5,)),
+    ("i,i->", (5,), (1,)),
+    ("...i,...i->...", (1, 3, 4), (2, 3, 4)),
+    ("...i,...i->...", (2, 1, 4), (2, 3, 4)),
+    ("bij,bjk->bik", (1, 2, 3), (4, 3, 5)),
+    ("bij,bjk->bik", (4, 2, 3), (1, 3, 5)),
+    ("ij,jk->ik", (2, 3), (1, 5)),
+    ("ij,jk->ik", (2, 1), (4, 3)),
+    ("bi,bj->bij", (1, 3), (4, 2)),
 ]
 
 CASES_TERNARY = [
@@ -138,6 +148,12 @@ class TestLinalgEinsum(unittest.TestCase):
         out = jt.linalg.einsum("bij,bjk->bik", a_h, b_h).cast("float32").numpy()
         ref = np.einsum("bij,bjk->bik", a_np, b_np)
         np.testing.assert_allclose(out, ref, rtol=5e-3, atol=5e-3)
+
+    def test_shape_mismatch_raises(self):
+        a = jt.array(_rand((3,), 1))
+        b = jt.array(_rand((4,), 2))
+        with self.assertRaises((ValueError, AssertionError, RuntimeError)):
+            jt.linalg.einsum("i,i->", a, b).sync()
 
 
 @unittest.skipIf(not jt.has_cuda, "no cuda")

@@ -752,6 +752,31 @@ def _einsum_intermediate_subs(sa, sb, remaining_subs, out_sub):
     return "".join(c for c in _einsum_dedup(sa + sb) if c in keep)
 
 
+def _einsum_resolve_size(label, size_a, size_b):
+    # numpy-style broadcasting: 1 ↔ N → N; equal → that size; mismatch → error.
+    if size_a is None: return size_b
+    if size_b is None: return size_a
+    if size_a == size_b: return size_a
+    if size_a == 1: return size_b
+    if size_b == 1: return size_a
+    raise ValueError(
+        f"einsum: shape mismatch for index '{label}': {size_a} vs {size_b}")
+
+
+def _einsum_broadcast_axes(op, target_shape):
+    # Expand size-1 axes of ``op`` to match ``target_shape``. Lengths must match.
+    cur_shape = list(op.shape)
+    assert len(cur_shape) == len(target_shape)
+    needs = False
+    for cs, ts in zip(cur_shape, target_shape):
+        if cs != ts:
+            assert cs == 1, f"cannot broadcast {cs} to {ts}"
+            needs = True
+    if not needs:
+        return op
+    return op.broadcast(target_shape)
+
+
 def _einsum_pair_contract(sa, sb, so, a, b):
     a_set, b_set, o_set = set(sa), set(sb), set(so)
 
@@ -774,23 +799,41 @@ def _einsum_pair_contract(sa, sb, so, a, b):
     free_a = [c for c in sa if c not in shared]
     free_b = [c for c in sb if c not in shared]
 
+    # Resolve broadcasted size per label for shared (batch + contract) axes.
+    sizes_a = {c: a.shape[i] for i, c in enumerate(sa)}
+    sizes_b = {c: b.shape[i] for i, c in enumerate(sb)}
+    resolved = {}
+    for c in shared:
+        resolved[c] = _einsum_resolve_size(c, sizes_a[c], sizes_b[c])
+    for c in free_a:
+        resolved[c] = sizes_a[c]
+    for c in free_b:
+        resolved[c] = sizes_b[c]
+
     if not sa and not sb:
         return a * b
 
     if not contract:
-        return _einsum_outer(sa, sb, so, a, b, batch, free_a, free_b)
+        return _einsum_outer(sa, sb, so, a, b, batch, free_a, free_b, resolved)
 
-    return _einsum_matmul(sa, sb, so, a, b, batch, free_a, free_b, contract)
+    return _einsum_matmul(sa, sb, so, a, b, batch, free_a, free_b, contract, resolved)
 
 
-def _einsum_outer(sa, sb, so, a, b, batch, free_a, free_b):
+def _einsum_outer(sa, sb, so, a, b, batch, free_a, free_b, resolved):
     a_target = "".join(batch + free_a)
     a_perm = _einsum_permute_to(sa, a_target, a)
+    # Broadcast batch axes of A to resolved sizes (free_a comes from A only).
+    a_target_shape = [resolved[c] for c in batch] + [a_perm.shape[len(batch) + i]
+                                                     for i in range(len(free_a))]
+    a_perm = _einsum_broadcast_axes(a_perm, a_target_shape)
     for _ in free_b:
         a_perm = a_perm.unsqueeze(-1)
 
     b_target = "".join(batch + free_b)
     b_perm = _einsum_permute_to(sb, b_target, b)
+    b_target_shape = [resolved[c] for c in batch] + [b_perm.shape[len(batch) + i]
+                                                     for i in range(len(free_b))]
+    b_perm = _einsum_broadcast_axes(b_perm, b_target_shape)
     insert_at = len(batch)
     for _ in free_a:
         b_perm = b_perm.unsqueeze(insert_at)
@@ -800,7 +843,7 @@ def _einsum_outer(sa, sb, so, a, b, batch, free_a, free_b):
     return _einsum_permute_to(intermediate, so, out)
 
 
-def _einsum_matmul(sa, sb, so, a, b, batch, free_a, free_b, contract):
+def _einsum_matmul(sa, sb, so, a, b, batch, free_a, free_b, contract, resolved):
     a_target = "".join(batch + free_a + contract)
     b_target = "".join(batch + contract + free_b)
     a_p = _einsum_permute_to(sa, a_target, a)
@@ -810,21 +853,20 @@ def _einsum_matmul(sa, sb, so, a, b, batch, free_a, free_b, contract):
     nfa = len(free_a)
     nc = len(contract)
 
-    a_shape = list(a_p.shape)
-    b_shape = list(b_p.shape)
-    batch_shape = a_shape[:nb]
-    fa_shape = a_shape[nb:nb + nfa]
-    c_shape_a = a_shape[nb + nfa:]
-    c_shape_b = b_shape[nb:nb + nc]
-    fb_shape = b_shape[nb + nc:]
+    # Broadcast each operand's batch and contract axes to the resolved sizes;
+    # free axes come from a single operand and stay as-is.
+    batch_shape = [resolved[c] for c in batch]
+    fa_shape = [a_p.shape[nb + i] for i in range(nfa)]
+    fb_shape = [b_p.shape[nb + nc + i] for i in range(len(free_b))]
+    contract_shape = [resolved[c] for c in contract]
 
-    assert c_shape_a == c_shape_b, (
-        f"einsum: contract dim mismatch {c_shape_a} vs {c_shape_b}")
+    a_p = _einsum_broadcast_axes(a_p, batch_shape + fa_shape + contract_shape)
+    b_p = _einsum_broadcast_axes(b_p, batch_shape + contract_shape + fb_shape)
 
     fa_size = 1
     for s in fa_shape: fa_size *= s
     c_size = 1
-    for s in c_shape_a: c_size *= s
+    for s in contract_shape: c_size *= s
     fb_size = 1
     for s in fb_shape: fb_size *= s
 
