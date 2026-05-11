@@ -817,7 +817,7 @@ def _einsum_pair_contract(sa, sb, so, a, b):
     # will broadcast a 0-D / shape-(1,) scalar against the remaining operand.
     if not sa and not sb:
         out = a * b
-        return _einsum_permute_to("", so, out) if so == "" else out
+        return out
     if not sa:
         return _einsum_finalize_scalar_pair(a, sb, so, b)
     if not sb:
