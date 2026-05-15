@@ -9,6 +9,7 @@ import os
 import re
 import sys
 import glob
+from jittor_utils import packed_data
 import inspect
 import datetime
 import threading
@@ -1350,19 +1351,48 @@ if use_data_gz:
         with open(data_gz_md5_path, 'r') as f:
             target_md5 = f.read()
     data_o_path = os.path.join(cache_path, "data.o")
-    if target_md5 != md5:
+    windows_patch_md5 = md5
+    if os.name == "nt":
+        windows_patch_md5 = hashlib.md5(
+            (md5 + packed_data.WINDOWS_PACKED_DATA_PATCH_VERSION).encode("utf8")
+        ).hexdigest()
+    if target_md5 != windows_patch_md5:
         data_s_path = os.path.join(cache_path, "data.cc")
-        with open(data_s_path, "w") as f:
-            f.write(data.decode("utf8"))
+        data_src = data.decode("utf8")
         dflags = (cc_flags+opt_flags)\
             .replace("-Wall", "") \
             .replace("-Werror", "") \
             .replace("-shared", "")
-        vdp = os.path.join(jittor_path, "src", "utils", "vdp")
-        run_cmd(fix_cl_flags(f"\"{cc_path}\" {dflags} -include \"{vdp}\" \"{data_s_path}\" -c -o \"{data_o_path}\""))
+        if os.name == "nt":
+            data_raw_path = os.path.join(cache_path, "data_packed.cc")
+            with open(data_raw_path, "w", encoding="utf8") as f:
+                f.write(data_src)
+            vdp = os.path.join(jittor_path, "src", "utils", "vdp")
+            pp_flags = remove_flags(dflags, ["-l", "-L", ".lib"])
+            data_src = run_cmd(
+                fix_cl_flags(
+                    f"\"{cc_path}\" {pp_flags} -include \"{vdp}\" -EP \"{data_raw_path}\""
+                )
+            )
+            data_src = data_src.replace("\r\n", "\n").replace("\r", "\n")
+            data_lines = data_src.splitlines()
+            if data_lines and data_lines[0].strip().lower().endswith(
+                (".c", ".cc", ".cpp", ".cxx")
+            ):
+                data_lines = data_lines[1:]
+            data_src = "\n".join(data_lines)
+            data_src = packed_data.patch_windows_source(data_src)
+            os.remove(data_raw_path)
+        with open(data_s_path, "w", encoding="utf8") as f:
+            f.write(data_src)
+        if os.name == "nt":
+            run_cmd(fix_cl_flags(f"\"{cc_path}\" {dflags} \"{data_s_path}\" -c -o \"{data_o_path}\""))
+        else:
+            vdp = os.path.join(jittor_path, "src", "utils", "vdp")
+            run_cmd(fix_cl_flags(f"\"{cc_path}\" {dflags} -include \"{vdp}\" \"{data_s_path}\" -c -o \"{data_o_path}\""))
         os.remove(data_s_path)
         with open(data_gz_md5_path, 'w') as f:
-            f.write(md5)
+            f.write(windows_patch_md5)
     files.append(data_o_path)
     files = [f for f in files if "__data__" not in f]
 else:
