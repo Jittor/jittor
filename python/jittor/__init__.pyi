@@ -7754,6 +7754,7 @@ class Var:
 		     * return True if the Var requires gradient calculation.
 		     * @see is_stop_grad'''
 		...
+	@property
 	def shape(self)-> Tuple[int]:		
 		'''Document:
 		* 
