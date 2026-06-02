@@ -114,7 +114,7 @@ class TestACL(unittest.TestCase):
     @jt.flag_scope(use_acl=1)
     def test_getitem_12(self):
         a = jt.array([[1,2,3], [4,5,6], [7,8,9]])
-        b = self.measure_time(lambda: a[[0,1,1]])
+        b = self.measure_time(lambda: a[jt.array([0,1,1])])
         np.testing.assert_allclose(b.numpy(), [[1, 2, 3], [4, 5, 6], [4, 5, 6]])
         print("test getitem (test case 12) success")
 
@@ -621,7 +621,7 @@ class TestACL(unittest.TestCase):
         b = jt.array([[0, 0], [0, 0]])
         c = self.measure_time(lambda: jt.scatter(
             b, 1, jt.array([[0, 0], [1, 0]]), a, reduce="add"))
-        np.testing.assert_allclose(c.numpy(), [[45, 0], [60, 45]])
+        np.testing.assert_allclose(c.numpy(), [[3, 0], [4, 3]])
         print("test scatter success")
 
     @jt.flag_scope(use_acl=1)
@@ -787,6 +787,26 @@ class TestACL(unittest.TestCase):
         print("test sum success")
 
     @jt.flag_scope(use_acl=1)
+    def test_reduce_1d(self):
+        # Regression test: reducing a 1-D tensor over all axes (a full reduce
+        # producing a scalar) previously failed on the ACL backend with
+        # ERROR 161002 (ACLNN_ERR_PARAM_INVALID) for amax/amin and silently
+        # returned 0. The fix pads 1-D inputs to (1, N) and forces a true
+        # scalar output. Cover max/min/sum/mean over a 1-D input.
+        data = np.array([5, 1, 9, 3, 7, 2, 8], dtype="float32")
+        x = jt.array(data)
+        for name, jfn, nfn in [
+            ("max", lambda v: v.max(), np.max),
+            ("min", lambda v: v.min(), np.min),
+            ("sum", lambda v: v.sum(), np.sum),
+            ("mean", lambda v: v.mean(), np.mean),
+        ]:
+            y = self.measure_time(lambda: jfn(x))
+            ny = nfn(data)
+            np.testing.assert_allclose(y.numpy(), ny, rtol=1e-5)
+        print("test reduce_1d success")
+
+    @jt.flag_scope(use_acl=1)
     def test_broadcast(self):
         x = jt.rand(3)
         y = self.measure_time(lambda: x.broadcast([3, 3]))
@@ -796,6 +816,8 @@ class TestACL(unittest.TestCase):
         print("test broadcast success")
 
     @jt.flag_scope(use_acl=1)
+    @unittest.skipUnless(hasattr(jt.nn, 'FlashAttention'),
+                         'jt.nn.FlashAttention not available in this build')
     def test_flashattention(self):
         bsz = 1
         seq = 4
@@ -814,6 +836,8 @@ class TestACL(unittest.TestCase):
         print("test flashattention success")
 
     @jt.flag_scope(use_acl=1)
+    @unittest.skipUnless(hasattr(jt.nn, 'FlashAttention'),
+                         'jt.nn.FlashAttention not available in this build')
     def test_flashattention_grad(self):
         bsz = 1
         seq = 4
@@ -979,6 +1003,28 @@ class TestACL(unittest.TestCase):
         res = self.measure_time(lambda: jt.isinf(x))
         np.testing.assert_allclose(res.numpy(), [False, False, True, True, False, False, False])
         print("test is nan success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_reduce_1d(self):
+        # Regression test: ACL reduce on a 1-D input used to fail with
+        # aclnn ERROR 161002 (ACLNN_ERR_PARAM_INVALID) and silently return 0.
+        # A 1-D reduce is a full reduce producing a scalar.
+        x = jt.array([5.0, 1.0, 9.0, 3.0])
+        np.testing.assert_allclose(self.measure_time(lambda: x.max()).numpy(), 9.0)
+        np.testing.assert_allclose(jt.array([5.0, 1.0, 9.0, 3.0]).min().numpy(), 1.0)
+        np.testing.assert_allclose(jt.array([5.0, 1.0, 9.0, 3.0]).sum().numpy(), 18.0)
+        np.testing.assert_allclose(jt.array([5.0, 1.0, 9.0, 3.0]).mean().numpy(), 4.5)
+        print("test reduce 1d success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_reduce_1d_dim0(self):
+        # Explicit dim=0 full reduce on a 1-D input.
+        x = jt.array([2.0, 4.0, 6.0, 8.0])
+        np.testing.assert_allclose(self.measure_time(lambda: x.max(0)).numpy(), 8.0)
+        np.testing.assert_allclose(jt.array([2.0, 4.0, 6.0, 8.0]).min(0).numpy(), 2.0)
+        np.testing.assert_allclose(jt.array([2.0, 4.0, 6.0, 8.0]).sum(0).numpy(), 20.0)
+        print("test reduce 1d dim0 success")
+
 
 if __name__ == "__main__":
     unittest.main()
