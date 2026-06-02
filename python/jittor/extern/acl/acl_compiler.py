@@ -388,14 +388,16 @@ def change_function():
             result = []
             pos = 0
 
-            not_none_cnt = len(slices) - slices.count(None)
+            not_none_cnt = sum(1 for s in slices if s is not None)
             for s in slices:
-                if isinstance(s, int):
+                if isinstance(s, jt.Var):
+                    pos += 1
+                elif isinstance(s, int):
                     continue
                 elif s is None:
                     result.append(pos)
                     pos += 1
-                elif s == Ellipsis:
+                elif s is Ellipsis:
                     pos += 1 + x.ndim - not_none_cnt
                 else:
                     pos += 1
@@ -637,19 +639,53 @@ def change_function():
 
     jt.getitem = warp(jt.contrib.getitem, getitem_acl)
     fake_getitem = jt.Var.getitem
+
+    def _normalize_bool_slice(slices):
+        # A top-level boolean-Var index (x[mask]) is not accepted by this
+        # build's native getitem ("convert bool slice into jt.array"), and the
+        # warp() wrapper only routes to the ACL op when use_acl is set -- so on
+        # the pure-CPU path the bool mask reaches native getitem and fails.
+        # Convert a bool-Var mask to integer indices there. The ACL backend's
+        # GetItemACL handles bool-Var masks natively, so leave them untouched
+        # when use_acl is set (converting to nonzero indices there regresses
+        # the Ascend path with a device-to-host memcpy param error).
+        if (not jt.flags.use_acl) and isinstance(slices, jt.Var) and slices.dtype == "bool":
+            return slices.nonzero().reshape(-1)
+        return slices
+
     jt.Var.getitem = lambda x, slices, return_x=None: warp(
-        fake_getitem, getitem_acl)(x, slices)
+        fake_getitem, getitem_acl)(x, _normalize_bool_slice(slices))
     jt.Var.slice_var = lambda x, slices, return_x=None: warp(
-        fake_getitem, getitem_acl)(x, slices)
+        fake_getitem, getitem_acl)(x, _normalize_bool_slice(slices))
     jt.Var.__getitem__ = lambda x, slices, return_x=None: warp(
-        fake_getitem, getitem_acl)(x, slices)
+        fake_getitem, getitem_acl)(x, _normalize_bool_slice(slices))
 
     jt.setitem = warp(jt.contrib.setitem, setitem_acl)
     fake_setitem = jt.Var.setitem
-    jt.Var.setitem = lambda x, slices, value: warp(
-        fake_setitem, setitem_acl, name='setitem')(x, slices, value)
-    jt.Var.__setitem__ = lambda x, slices, value: warp(
-        fake_setitem, setitem_acl, name='setitem')(x, slices, value)
+
+    # NOTE: jt.misc.scatter calls x.setitem(slices, value, reduce) with a
+    # third "reduce" argument (e.g. reduce='add'). The custom ACL setitem op
+    # does not implement reduction, so when a non-trivial reduce is requested
+    # we must fall back to the native setitem (whose JIT codegen handles the
+    # reduction correctly on both the CPU and ACL backends). Plain assignment
+    # (reduce in (None, 'void')) keeps using the custom ACL op.
+    def _acl_setitem(x, slices, value, reduce=None):
+        if reduce is not None and reduce != 'void':
+            return fake_setitem(x, slices, value, reduce)
+        # A top-level boolean-Var index (x[mask] = v) is not accepted by this
+        # build's native setitem on the pure-CPU path (convert bool slice
+        # into jt.array). The warp() wrapper only routes to the ACL op when
+        # use_acl is set, so on CPU the bool mask reaches native setitem and
+        # fails. Convert the bool mask to a tuple of integer index columns
+        # there. The ACL backend handles bool-Var masks natively, so leave
+        # them untouched when use_acl is set.
+        if (not jt.flags.use_acl) and isinstance(slices, jt.Var) and slices.dtype == "bool":
+            nz = slices.nonzero()
+            slices = tuple(nz[:, d] for d in range(nz.shape[1]))
+        return warp(fake_setitem, setitem_acl, name='setitem')(x, slices, value)
+
+    jt.Var.setitem = _acl_setitem
+    jt.Var.__setitem__ = lambda x, slices, value: _acl_setitem(x, slices, value)
 
     fake_matmul = jt.Var.matmul
     jt.nn.bmm = warp(jt.nn.bmm, bmm_acl)
