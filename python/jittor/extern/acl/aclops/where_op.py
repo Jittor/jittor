@@ -95,6 +95,25 @@ class WhereACL(jt.Function):
         else:
             self.condition = condition
 
+            # ACL Where requires x / y to be Vars of the same shape as condition.
+            # jittor native where() also accepts python scalars (e.g.
+            # jt.where(cond, 0.0, -10000.0)); promote scalars to broadcasted Vars
+            # here so the ACL path matches that behaviour.
+            def _to_var(v, ref):
+                if isinstance(v, jt.Var):
+                    return v
+                dtype = ref.dtype if isinstance(ref, jt.Var) else (
+                    jt.float32 if isinstance(v, float) else jt.int32)
+                return jt.full(condition.shape, v, dtype=dtype)
+            if not isinstance(x, jt.Var) or not isinstance(y, jt.Var):
+                x = _to_var(x, y)
+                y = _to_var(y, x)
+
+            if x.shape != condition.shape:
+                x = x.broadcast(condition.shape)
+            if y.shape != condition.shape:
+                y = y.broadcast(condition.shape)
+
             if x.dtype != y.dtype:
                 if x.dtype == jt.float32:
                     y = y.float32()

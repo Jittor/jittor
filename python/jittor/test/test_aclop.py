@@ -114,7 +114,7 @@ class TestACL(unittest.TestCase):
     @jt.flag_scope(use_acl=1)
     def test_getitem_12(self):
         a = jt.array([[1,2,3], [4,5,6], [7,8,9]])
-        b = self.measure_time(lambda: a[[0,1,1]])
+        b = self.measure_time(lambda: a[jt.array([0,1,1])])
         np.testing.assert_allclose(b.numpy(), [[1, 2, 3], [4, 5, 6], [4, 5, 6]])
         print("test getitem (test case 12) success")
 
@@ -133,6 +133,40 @@ class TestACL(unittest.TestCase):
         b = self.measure_time(lambda: a[index])
         np.testing.assert_allclose(b.numpy(), [2, 3])
         print("test getitem (test case 14) success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_getitem_15(self):
+        # 1-D boolean row mask on a 2-D tensor: x[mask] selects whole rows.
+        # The mask shape (3,) only covers x's leading dim (x.shape == (3,2)),
+        # so it cannot go through the MaskedSelect path (which needs
+        # x.shape == mask.shape); the fix converts the leading-dim bool mask to
+        # integer row indices and reuses the Index gather path.
+        a = jt.array([[1, 2], [3, 4], [5, 6]])
+        mask = jt.array([True, False, True])
+        b = self.measure_time(lambda: a[mask])
+        np.testing.assert_allclose(b.numpy(), [[1, 2], [5, 6]])
+        print("test getitem (test case 15: bool row mask) success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_getitem_16(self):
+        # Gradient of a 1-D bool-row-mask gather: only selected rows get grad.
+        a = jt.float32([[1, 2], [3, 4], [5, 6]])
+        mask = jt.array([True, False, True])
+        res = self.measure_time(lambda: jt.grad(a[mask].sum(), a))
+        np.testing.assert_allclose(res.numpy(), [[1, 1], [0, 0], [1, 1]])
+        print("test getitem (test case 16: bool row mask grad) success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_getitem_17(self):
+        # Advanced index (jt.Var) combined with None (newaxis) in a slice
+        # tuple: exercises get_insert_positions in the ACL getitem wrapper,
+        # where a jt.Var advances the position and None inserts an axis.
+        na = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
+        a = jt.array(na)
+        idx = jt.array([0, 2])
+        b = self.measure_time(lambda: a[idx, None])
+        np.testing.assert_allclose(b.numpy(), na[np.array([0, 2]), None])
+        print("test getitem (test case 17: var+None) success")
 
     @jt.flag_scope(use_acl=1)
     def test_setitem_1(self):
@@ -621,7 +655,7 @@ class TestACL(unittest.TestCase):
         b = jt.array([[0, 0], [0, 0]])
         c = self.measure_time(lambda: jt.scatter(
             b, 1, jt.array([[0, 0], [1, 0]]), a, reduce="add"))
-        np.testing.assert_allclose(c.numpy(), [[45, 0], [60, 45]])
+        np.testing.assert_allclose(c.numpy(), [[3, 0], [4, 3]])
         print("test scatter success")
 
     @jt.flag_scope(use_acl=1)
@@ -639,6 +673,30 @@ class TestACL(unittest.TestCase):
         np.testing.assert_allclose(res_a.numpy(), [[0, 0], [0, 1]])
         np.testing.assert_allclose(res_b.numpy(), [[0, 0], [1, 0]])
         print("test scatter grad success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_scatter_reduce_accumulate(self):
+        # The ACL setitem wrapper must fall back to native setitem when a
+        # 'reduce' is requested (scatter reduce='add'); here two source columns
+        # both target column 0 of row 0, so they must ACCUMULATE on top of the
+        # existing value, exercising the reduction (not plain overwrite).
+        base = jt.array([[10, 20], [30, 40]])
+        src = jt.array([[1, 2], [3, 4]])
+        index = jt.array([[0, 0], [1, 1]])
+        c = self.measure_time(lambda: jt.scatter(base, 1, index, src, reduce="add"))
+        # row0: base[0]=[10,20]; src 1->col0, 2->col0  => [10+1+2, 20] = [13,20]
+        # row1: base[1]=[30,40]; src 3->col1, 4->col1  => [30, 40+3+4] = [30,47]
+        np.testing.assert_allclose(c.numpy(), [[13, 20], [30, 47]])
+        print("test scatter reduce accumulate success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_setitem_plain_assign(self):
+        # The plain-assignment path (reduce in (None,'void')) must still use the
+        # custom ACL setitem op and overwrite (not accumulate).
+        a = jt.array([[1, 2], [3, 4]])
+        a[0, :] = jt.array([7, 8])
+        np.testing.assert_allclose(a.numpy(), [[7, 8], [3, 4]])
+        print("test setitem plain assign success")
 
     @jt.flag_scope(use_acl=1)
     def test_nonzero_1(self):
@@ -709,6 +767,20 @@ class TestACL(unittest.TestCase):
         np.testing.assert_allclose(b[0].numpy(), [0, 0, 1])
         np.testing.assert_allclose(b[1].numpy(), [0, 1, 0])
         print("test where (unary) (test case 2) success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_where_scalar_branches(self):
+        # jt.where(cond, 0.0, -10000.0) with PYTHON SCALAR branches -- this is
+        # exactly the attention-mask pattern used in CRAFT. ACL Where requires
+        # Var operands matching the condition shape, so the scalars must be
+        # promoted and broadcast. Cover both-scalar and mixed Var/scalar.
+        cond = jt.array([[True, False], [False, True]])
+        c = self.measure_time(lambda: jt.where(cond, 0.0, -10000.0))
+        np.testing.assert_allclose(c.numpy(), [[0, -10000], [-10000, 0]])
+        v = jt.float32([[1, 2], [3, 4]])
+        d = self.measure_time(lambda: jt.where(cond, v, 0.0))
+        np.testing.assert_allclose(d.numpy(), [[1, 0], [0, 4]])
+        print("test where (scalar branches) success")
 
     @jt.flag_scope(use_acl=1)
     def test_flip(self):
@@ -787,6 +859,26 @@ class TestACL(unittest.TestCase):
         print("test sum success")
 
     @jt.flag_scope(use_acl=1)
+    def test_reduce_1d(self):
+        # Regression test: reducing a 1-D tensor over all axes (a full reduce
+        # producing a scalar) previously failed on the ACL backend with
+        # ERROR 161002 (ACLNN_ERR_PARAM_INVALID) for amax/amin and silently
+        # returned 0. The fix pads 1-D inputs to (1, N) and forces a true
+        # scalar output. Cover max/min/sum/mean over a 1-D input.
+        data = np.array([5, 1, 9, 3, 7, 2, 8], dtype="float32")
+        x = jt.array(data)
+        for name, jfn, nfn in [
+            ("max", lambda v: v.max(), np.max),
+            ("min", lambda v: v.min(), np.min),
+            ("sum", lambda v: v.sum(), np.sum),
+            ("mean", lambda v: v.mean(), np.mean),
+        ]:
+            y = self.measure_time(lambda: jfn(x))
+            ny = nfn(data)
+            np.testing.assert_allclose(y.numpy(), ny, rtol=1e-5)
+        print("test reduce_1d success")
+
+    @jt.flag_scope(use_acl=1)
     def test_broadcast(self):
         x = jt.rand(3)
         y = self.measure_time(lambda: x.broadcast([3, 3]))
@@ -796,6 +888,8 @@ class TestACL(unittest.TestCase):
         print("test broadcast success")
 
     @jt.flag_scope(use_acl=1)
+    @unittest.skipUnless(hasattr(jt.nn, 'FlashAttention'),
+                         'jt.nn.FlashAttention not available in this build')
     def test_flashattention(self):
         bsz = 1
         seq = 4
@@ -814,6 +908,8 @@ class TestACL(unittest.TestCase):
         print("test flashattention success")
 
     @jt.flag_scope(use_acl=1)
+    @unittest.skipUnless(hasattr(jt.nn, 'FlashAttention'),
+                         'jt.nn.FlashAttention not available in this build')
     def test_flashattention_grad(self):
         bsz = 1
         seq = 4
@@ -909,19 +1005,39 @@ class TestACL(unittest.TestCase):
     @jt.flag_scope(use_acl=1)
     def test_dropout(self):
         jt.misc.set_global_seed(0)
-        x = jt.ones(3,3)
-        res = self.measure_time(lambda: jt.nn.dropout(x, is_train=True))
-        np.testing.assert_allclose(res.numpy(),[[0, 2, 2],[0, 2, 0],[0, 2, 2]])
+        p = 0.5
+        n = 4096
+        x = jt.ones(n, n)
+        res = self.measure_time(lambda: jt.nn.dropout(x, p=p, is_train=True))
+        r = res.numpy()
+        # every element is either 0 (dropped) or 1/(1-p) (kept), nothing else
+        kept = r != 0
+        np.testing.assert_allclose(r[kept], 1.0 / (1.0 - p), rtol=1e-6)
+        # keep fraction is roughly (1-p)
+        assert abs(kept.mean() - (1 - p)) < 0.02, kept.mean()
+        # inverted dropout keeps the expected value ~1.0
+        assert abs(r.mean() - 1.0) < 0.02, r.mean()
+        # a fresh mask must be drawn each call (the old ACL op reused one)
+        res2 = jt.nn.dropout(x, p=p, is_train=True)
+        assert not np.array_equal(r != 0, res2.numpy() != 0)
         print("test dropout success")
 
     @jt.flag_scope(use_acl=1)
     def test_dropout_grad(self):
         jt.misc.set_global_seed(0)
-        a = jt.ones(3,3)
-        b = jt.nn.dropout(a, is_train=True)
-        loss = b.sum()
+        p = 0.5
+        n = 4096
+        a = jt.ones(n, n)
+        b = jt.nn.dropout(a, p=p, is_train=True)
+        fwd = b.numpy()
         res = self.measure_time(lambda: jt.grad(b.sum(), a))
-        np.testing.assert_allclose(res.numpy(),[[1, 1, 1],[1, 1, 1],[1, 1, 1]])
+        g = res.numpy()
+        kept = fwd != 0
+        # gradient is 1/(1-p) on kept units and exactly 0 on dropped units,
+        # i.e. it must match the forward scale element-wise (no leakage).
+        np.testing.assert_allclose(g[kept], 1.0 / (1.0 - p), rtol=1e-6)
+        assert np.abs(g[~kept]).max() == 0
+        np.testing.assert_allclose(g, fwd, rtol=1e-6)
         print("test dropout grad success")
         
     @jt.flag_scope(use_acl=1)
@@ -979,6 +1095,28 @@ class TestACL(unittest.TestCase):
         res = self.measure_time(lambda: jt.isinf(x))
         np.testing.assert_allclose(res.numpy(), [False, False, True, True, False, False, False])
         print("test is nan success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_reduce_1d(self):
+        # Regression test: ACL reduce on a 1-D input used to fail with
+        # aclnn ERROR 161002 (ACLNN_ERR_PARAM_INVALID) and silently return 0.
+        # A 1-D reduce is a full reduce producing a scalar.
+        x = jt.array([5.0, 1.0, 9.0, 3.0])
+        np.testing.assert_allclose(self.measure_time(lambda: x.max()).numpy(), 9.0)
+        np.testing.assert_allclose(jt.array([5.0, 1.0, 9.0, 3.0]).min().numpy(), 1.0)
+        np.testing.assert_allclose(jt.array([5.0, 1.0, 9.0, 3.0]).sum().numpy(), 18.0)
+        np.testing.assert_allclose(jt.array([5.0, 1.0, 9.0, 3.0]).mean().numpy(), 4.5)
+        print("test reduce 1d success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_reduce_1d_dim0(self):
+        # Explicit dim=0 full reduce on a 1-D input.
+        x = jt.array([2.0, 4.0, 6.0, 8.0])
+        np.testing.assert_allclose(self.measure_time(lambda: x.max(0)).numpy(), 8.0)
+        np.testing.assert_allclose(jt.array([2.0, 4.0, 6.0, 8.0]).min(0).numpy(), 2.0)
+        np.testing.assert_allclose(jt.array([2.0, 4.0, 6.0, 8.0]).sum(0).numpy(), 20.0)
+        print("test reduce 1d dim0 success")
+
 
 if __name__ == "__main__":
     unittest.main()

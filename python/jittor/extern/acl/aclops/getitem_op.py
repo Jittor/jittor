@@ -162,6 +162,16 @@ class GetItemACL(jt.Function):
 
     def execute(self, x, slices, return_x=None):
         if isinstance(slices, jt.Var) and slices.dtype == 'bool':
+            # A boolean mask whose shape only covers the leading dims of x
+            # (e.g. a 1-D row mask on a 2-D tensor: x[mask]) is not handled by
+            # the MaskedSelect path below, which requires x.shape == mask.shape.
+            # Convert it to integer indices along the masked dims and reuse the
+            # supported Index gather path (which also has a correct gradient).
+            if list(slices.shape) != list(x.shape) and \
+               list(slices.shape) == list(x.shape[:len(slices.shape)]):
+                idx = slices.nonzero()  # [num_true, mask.ndim]
+                index_list = tuple(idx[:, i] for i in range(len(slices.shape)))
+                return self.execute(x, index_list, return_x)
             # assert False, "not support bool type now"
             #TODO:优化
             assert x.shape == slices.shape, "shape not match"

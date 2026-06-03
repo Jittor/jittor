@@ -35,6 +35,35 @@ namespace jittor
         use_nchw = false;
     }
 
+    void ReduceOpRunner::setupInputDesc()
+    {
+        auto input_num = in_.size();
+        for (int input_idx = 0; input_idx < input_num; input_idx++)
+        {
+            std::vector<int64_t> shape;
+            for (int j = 0; j < in_[input_idx]->shape.size(); j++)
+            {
+                shape.push_back(in_[input_idx]->shape[j]);
+            }
+            // ACL reduce kernels (aclnnAmax/Amin/...) reject 1-D inputs with
+            // ERROR 161002. Pad a 1-D input to 2-D (1, N); axes are shifted by
+            // +1 in setupOutputDesc so the reduction result is unchanged.
+            if (input_idx == 0 && shape.size() == 1)
+            {
+                shape.insert(shape.begin(), 1);
+                input_padded_1d = true;
+            }
+            inputShapes.push_back(shape);
+        }
+
+        for (int idx = 0; idx < input_num; idx++)
+        {
+            inputTensors.push_back(nullptr);
+            auto ret = CreateAclTensor(inputShapes[idx], in_[idx]->mem_ptr, in_[idx]->size, get_dtype(in_[idx]->dtype()), &inputTensors[idx], use_nchw);
+            CHECK_RET(ret == ACL_SUCCESS, return);
+        }
+    }
+
     void ReduceOpRunner::setupOutputDesc()
     {
         auto output_num = out_.size();
@@ -50,12 +79,24 @@ namespace jittor
         }
 
         attr = dynamic_cast<ReduceAttr *>(op_attr.get());
-        dim = aclCreateIntArray(attr->axes.data(), attr->axes.size());
         keepdims = attr->keepdims;
+        // A 1-D reduce is always a full reduce producing a single element.
+        // When the input was padded to (1, N) we reduce over all padded axes
+        // and force a scalar output (keepdims off): ACL rejects the (1,)/keepdims
+        // combination with ERROR 161002 but accepts a true scalar.
+        shifted_axes_.assign(attr->axes.begin(), attr->axes.end());
+        if (input_padded_1d)
+        {
+            shifted_axes_.clear();
+            for (int64_t ax = 0; ax < (int64_t)inputShapes[0].size(); ax++)
+                shifted_axes_.push_back(ax);
+            keepdims = false;
+        }
+        dim = aclCreateIntArray(shifted_axes_.data(), shifted_axes_.size());
 
         if (op_idx < 13)
         {
-            if (attr->axes.size() == in_[0]->shape.size())
+            if (input_padded_1d || attr->axes.size() == in_[0]->shape.size())
                 outputShapes[0] = {};
         }
 
