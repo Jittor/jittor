@@ -475,6 +475,25 @@ def change_function():
 
     from .aclops.dropout_op import DropoutACL
 
+    # NOTE: the custom ACL DropoutACL op is broken on Ascend:
+    #   (1) it hardcodes seed=0/offset=0, so aclnnDropout reuses the SAME mask
+    #       on every forward call (verified: two successive calls give identical
+    #       masks), defeating regularization;
+    #   (2) its backward (aclnnDropoutBackward) is called with scale=1.0 and
+    #       ignores the mask, so gradients pass through DROPPED units unscaled
+    #       (grad==1 everywhere instead of 1/(1-p) on kept units, 0 elsewhere).
+    # Both corrupt training (lower train loss, worse val/test). We replace it
+    # with the same pure-Jittor inverted-dropout used by native nn.Dropout, so a
+    # fresh mask is drawn each call and autodiff computes the correct backward.
+    def _acl_dropout(x, p, is_train):
+        if p <= 0 or not is_train:
+            return x
+        if p >= 1:
+            return x * jt.zeros(x.shape, dtype=x.dtype)
+        noise = jt.random(x.shape)
+        noise = (noise > p).int()
+        return (x * noise / (1.0 - p)).to(x.dtype)
+
     class Dropout(jt.nn.Module):
 
         def __init__(self, p=0.5, is_train=False):
@@ -483,10 +502,10 @@ def change_function():
             self.is_train = is_train
 
         def execute(self, x):
-            return DropoutACL()(x, self.p, self.is_train)
+            return _acl_dropout(x, self.p, self.is_train)
 
     def dropout_acl(x, p=0.5, is_train=False):
-        return DropoutACL()(x, p, is_train)
+        return _acl_dropout(x, p, is_train)
 
     from .aclops.silu_op import SiLUACL
 

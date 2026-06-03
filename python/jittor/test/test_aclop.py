@@ -933,19 +933,39 @@ class TestACL(unittest.TestCase):
     @jt.flag_scope(use_acl=1)
     def test_dropout(self):
         jt.misc.set_global_seed(0)
-        x = jt.ones(3,3)
-        res = self.measure_time(lambda: jt.nn.dropout(x, is_train=True))
-        np.testing.assert_allclose(res.numpy(),[[0, 2, 2],[0, 2, 0],[0, 2, 2]])
+        p = 0.5
+        n = 4096
+        x = jt.ones(n, n)
+        res = self.measure_time(lambda: jt.nn.dropout(x, p=p, is_train=True))
+        r = res.numpy()
+        # every element is either 0 (dropped) or 1/(1-p) (kept), nothing else
+        kept = r != 0
+        np.testing.assert_allclose(r[kept], 1.0 / (1.0 - p), rtol=1e-6)
+        # keep fraction is roughly (1-p)
+        assert abs(kept.mean() - (1 - p)) < 0.02, kept.mean()
+        # inverted dropout keeps the expected value ~1.0
+        assert abs(r.mean() - 1.0) < 0.02, r.mean()
+        # a fresh mask must be drawn each call (the old ACL op reused one)
+        res2 = jt.nn.dropout(x, p=p, is_train=True)
+        assert not np.array_equal(r != 0, res2.numpy() != 0)
         print("test dropout success")
 
     @jt.flag_scope(use_acl=1)
     def test_dropout_grad(self):
         jt.misc.set_global_seed(0)
-        a = jt.ones(3,3)
-        b = jt.nn.dropout(a, is_train=True)
-        loss = b.sum()
+        p = 0.5
+        n = 4096
+        a = jt.ones(n, n)
+        b = jt.nn.dropout(a, p=p, is_train=True)
+        fwd = b.numpy()
         res = self.measure_time(lambda: jt.grad(b.sum(), a))
-        np.testing.assert_allclose(res.numpy(),[[1, 1, 1],[1, 1, 1],[1, 1, 1]])
+        g = res.numpy()
+        kept = fwd != 0
+        # gradient is 1/(1-p) on kept units and exactly 0 on dropped units,
+        # i.e. it must match the forward scale element-wise (no leakage).
+        np.testing.assert_allclose(g[kept], 1.0 / (1.0 - p), rtol=1e-6)
+        assert np.abs(g[~kept]).max() == 0
+        np.testing.assert_allclose(g, fwd, rtol=1e-6)
         print("test dropout grad success")
         
     @jt.flag_scope(use_acl=1)
