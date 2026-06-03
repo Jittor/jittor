@@ -135,6 +135,40 @@ class TestACL(unittest.TestCase):
         print("test getitem (test case 14) success")
 
     @jt.flag_scope(use_acl=1)
+    def test_getitem_15(self):
+        # 1-D boolean row mask on a 2-D tensor: x[mask] selects whole rows.
+        # The mask shape (3,) only covers x's leading dim (x.shape == (3,2)),
+        # so it cannot go through the MaskedSelect path (which needs
+        # x.shape == mask.shape); the fix converts the leading-dim bool mask to
+        # integer row indices and reuses the Index gather path.
+        a = jt.array([[1, 2], [3, 4], [5, 6]])
+        mask = jt.array([True, False, True])
+        b = self.measure_time(lambda: a[mask])
+        np.testing.assert_allclose(b.numpy(), [[1, 2], [5, 6]])
+        print("test getitem (test case 15: bool row mask) success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_getitem_16(self):
+        # Gradient of a 1-D bool-row-mask gather: only selected rows get grad.
+        a = jt.float32([[1, 2], [3, 4], [5, 6]])
+        mask = jt.array([True, False, True])
+        res = self.measure_time(lambda: jt.grad(a[mask].sum(), a))
+        np.testing.assert_allclose(res.numpy(), [[1, 1], [0, 0], [1, 1]])
+        print("test getitem (test case 16: bool row mask grad) success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_getitem_17(self):
+        # Advanced index (jt.Var) combined with None (newaxis) in a slice
+        # tuple: exercises get_insert_positions in the ACL getitem wrapper,
+        # where a jt.Var advances the position and None inserts an axis.
+        na = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
+        a = jt.array(na)
+        idx = jt.array([0, 2])
+        b = self.measure_time(lambda: a[idx, None])
+        np.testing.assert_allclose(b.numpy(), na[np.array([0, 2]), None])
+        print("test getitem (test case 17: var+None) success")
+
+    @jt.flag_scope(use_acl=1)
     def test_setitem_1(self):
         a = jt.ones(2, 2)
         a[0:1, 0:1] = 0
@@ -641,6 +675,30 @@ class TestACL(unittest.TestCase):
         print("test scatter grad success")
 
     @jt.flag_scope(use_acl=1)
+    def test_scatter_reduce_accumulate(self):
+        # The ACL setitem wrapper must fall back to native setitem when a
+        # 'reduce' is requested (scatter reduce='add'); here two source columns
+        # both target column 0 of row 0, so they must ACCUMULATE on top of the
+        # existing value, exercising the reduction (not plain overwrite).
+        base = jt.array([[10, 20], [30, 40]])
+        src = jt.array([[1, 2], [3, 4]])
+        index = jt.array([[0, 0], [1, 1]])
+        c = self.measure_time(lambda: jt.scatter(base, 1, index, src, reduce="add"))
+        # row0: base[0]=[10,20]; src 1->col0, 2->col0  => [10+1+2, 20] = [13,20]
+        # row1: base[1]=[30,40]; src 3->col1, 4->col1  => [30, 40+3+4] = [30,47]
+        np.testing.assert_allclose(c.numpy(), [[13, 20], [30, 47]])
+        print("test scatter reduce accumulate success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_setitem_plain_assign(self):
+        # The plain-assignment path (reduce in (None,'void')) must still use the
+        # custom ACL setitem op and overwrite (not accumulate).
+        a = jt.array([[1, 2], [3, 4]])
+        a[0, :] = jt.array([7, 8])
+        np.testing.assert_allclose(a.numpy(), [[7, 8], [3, 4]])
+        print("test setitem plain assign success")
+
+    @jt.flag_scope(use_acl=1)
     def test_nonzero_1(self):
         a = jt.array([[1, 0], [0, 4]])
         b = self.measure_time(lambda: a.nonzero())
@@ -709,6 +767,20 @@ class TestACL(unittest.TestCase):
         np.testing.assert_allclose(b[0].numpy(), [0, 0, 1])
         np.testing.assert_allclose(b[1].numpy(), [0, 1, 0])
         print("test where (unary) (test case 2) success")
+
+    @jt.flag_scope(use_acl=1)
+    def test_where_scalar_branches(self):
+        # jt.where(cond, 0.0, -10000.0) with PYTHON SCALAR branches -- this is
+        # exactly the attention-mask pattern used in CRAFT. ACL Where requires
+        # Var operands matching the condition shape, so the scalars must be
+        # promoted and broadcast. Cover both-scalar and mixed Var/scalar.
+        cond = jt.array([[True, False], [False, True]])
+        c = self.measure_time(lambda: jt.where(cond, 0.0, -10000.0))
+        np.testing.assert_allclose(c.numpy(), [[0, -10000], [-10000, 0]])
+        v = jt.float32([[1, 2], [3, 4]])
+        d = self.measure_time(lambda: jt.where(cond, v, 0.0))
+        np.testing.assert_allclose(d.numpy(), [[1, 0], [0, 4]])
+        print("test where (scalar branches) success")
 
     @jt.flag_scope(use_acl=1)
     def test_flip(self):
