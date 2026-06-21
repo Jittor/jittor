@@ -29,6 +29,14 @@ namespace jittor
         alloc_size = ((alloc_size - 1) / 32 + 1) * 32;
         if (alloc_size > nowWorkSpaceSize)
         {
+            // The workspace buffer is shared by every aclnn op enqueued on
+            // aclstream. Growing it frees the old buffer, which may still be
+            // in use by a previously-enqueued (async) op. Drain the stream
+            // once here so the free is safe. This path only triggers when the
+            // workspace grows (essentially warmup), so it is not on the hot
+            // path -- which lets us drop the per-op syncs in acl_op_exec.cc.
+            if (workspaceAddr != nullptr)
+                aclrtSynchronizeStream(aclstream);
             aclrtFree(workspaceAddr);
             nowWorkSpaceSize = alloc_size;
             auto ret = aclrtMalloc(&workspaceAddr, nowWorkSpaceSize, ACL_MEM_MALLOC_HUGE_FIRST);
