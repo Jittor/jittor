@@ -165,6 +165,7 @@ def change_function():
     from .aclops.softmax_op import SoftmaxACL
     from .aclops.sigmoid_op import SigmoidACL
     from .aclops.silu_op import SiLUACL
+    from .aclops.norms_op import LayerNormACL
     from .aclops.dropout_op import DropoutACL
     from .aclops.relu_op import LeakyReLUACL
     from .aclops.flip_op import FlipACL
@@ -626,6 +627,20 @@ def change_function():
     jt.nn.Conv = warp(jt.nn.Conv, Conv2D)
 
     jt.nn.Pool = warp(jt.nn.Pool, PoolACL)
+
+    # Route nn.LayerNorm through the native aclnnLayerNorm/LayerNormBackward
+    # ops instead of the elementwise decomposition (mean/var/rsqrt/... = ~8+
+    # kernels fwd + more bwd per call). Patch execute() so the module keeps its
+    # own weight/bias params (grad + DDP broadcast still work). Only the affine
+    # case is routed; non-affine or non-ACL falls back to the original.
+    _orig_layernorm_execute = jt.nn.LayerNorm.execute
+    def _layernorm_execute_acl(self, x):
+        if jt.flags.use_acl and getattr(self, "elementwise_affine", False):
+            fn = LayerNormACL(self.normalized_shape, self.eps,
+                              self.elementwise_affine)
+            return fn(x, self.weight, self.bias)
+        return _orig_layernorm_execute(self, x)
+    jt.nn.LayerNorm.execute = _layernorm_execute_acl
 
     jt.flip = warp(jt.flip, flip_acl)
     jt.Var.flip = lambda x, dim_vector=0: jt.flip(x, dim_vector)

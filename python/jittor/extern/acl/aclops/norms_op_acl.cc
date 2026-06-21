@@ -108,4 +108,40 @@ namespace jittor
         return;
     }
 
+    LayerNormBackwardOpRunner::LayerNormBackwardOpRunner() : BaseOpRunner("LayerNormBackward")
+    {
+    }
+
+    void LayerNormBackwardOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
+    {
+        // inputs : gradOut(0), input(1), mean(2), rstd(3), weight(4), bias(5)
+        // outputs: gradInput(0), gradWeight(1), gradBias(2)
+        auto attr = dynamic_cast<LayerNormAttr *>(op_attr.get());
+        aclIntArray *normalizedShape = aclCreateIntArray(attr->normalizedShape.data(), attr->size);
+        bool outputMask[3] = {true, true, true};
+        aclBoolArray *outMask = aclCreateBoolArray(outputMask, 3);
+
+        ret = aclnnLayerNormBackwardGetWorkspaceSize(
+            inputTensors[0], inputTensors[1], normalizedShape, inputTensors[2],
+            inputTensors[3], inputTensors[4], inputTensors[5], outMask,
+            outputTensors[0], outputTensors[1], outputTensors[2],
+            &workspaceSize, &executor);
+
+        checkRet(ret);
+
+        if (workspaceSize > 0)
+        {
+            mallocWorkSpace(workspaceSize);
+        }
+
+        ret = aclnnLayerNormBackward(workspaceAddr, workspaceSize, executor, aclstream);
+        CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnLayerNormBackward failed. ERROR: %d\n", name.c_str(), ret); return);
+
+        syncRun();
+        aclDestroyIntArray(normalizedShape);
+        aclDestroyBoolArray(outMask);
+
+        return;
+    }
+
 }
