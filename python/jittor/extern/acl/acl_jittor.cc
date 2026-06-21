@@ -73,6 +73,17 @@ namespace jittor
             // 获取可用的Device数量
             CHECK_ACL(aclrtGetDeviceCount(&device_count));
             LOGi << "Found ACL device number:" << device_count;
+            // Multi-card: bind this process to its own NPU at load time, before
+            // any stream is created. The local rank comes from the launcher:
+            // mpirun sets OMPI_COMM_WORLD_LOCAL_RANK; the MPI-free HCCL launcher
+            // sets JT_HCCL_LOCAL_RANK. Single-process runs fall back to 0.
+            const char* lr = getenv("JT_HCCL_LOCAL_RANK");
+            if (lr == nullptr) lr = getenv("OMPI_COMM_WORLD_LOCAL_RANK");
+            if (lr == nullptr) lr = getenv("LOCAL_RANK");
+            if (lr != nullptr && device_count > 0) {
+                deviceId = atoi(lr) % device_count;
+                LOGi << "ACL bind local_rank" << lr << "-> device" << deviceId;
+            }
             CHECK_ACL(aclrtSetDevice(deviceId));
             CHECK_ACL(aclrtCreateStream(&aclstream));
             // pthread_create(&acl_jittor_tid, nullptr, acl_jittor_process_callback, 0);

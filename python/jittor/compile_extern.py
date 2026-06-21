@@ -611,8 +611,20 @@ def setup_nccl():
     nccl_ops = nccl.ops
     LOG.vv("Get nccl_ops: "+str(dir(nccl_ops)))
 
-def setup_hccl():
-    global hccl_ops
+def setup_hccl(no_mpi=False):
+    ''' Build + load the HCCL collective ops module.
+
+    no_mpi=False (default): the original MPI-based path. The communicator is
+        bootstrapped with MPI_Bcast of the HCCL root info. Requires MPI to be
+        set up (mpi_compile_flags) and a working MPI launch. This is the normal
+        N-card path and is unchanged.
+    no_mpi=True: an MPI-free path that bootstraps the communicator via an
+        env/file rendezvous (JT_HCCL_* env vars), so libmpi is never loaded.
+        Used on Ascend where the available OpenMPI build crashes coexisting
+        with CANN. Built as a separate module so it never collides with the
+        MPI build's cache/symbols.
+    '''
+    global hccl_ops, hccl_mod
 
     hccl_src_dir = os.path.join(jittor_path, "extern", "acl", "hccl")
     hccl_src_files = []
@@ -620,15 +632,55 @@ def setup_hccl():
         for fname in f:
             hccl_src_files.append(os.path.join(r, fname))
 
-    hccl_include_path = os.path.join(os.environ.get("ASCEND_TOOLKIT_HOME"), "aarch64-linux/include/hccl")
-    hccl_lib_name = os.path.join(os.environ.get("ASCEND_TOOLKIT_HOME"), "aarch64-linux/lib64/libhccl.so")
+    ascend_home = os.environ.get("ASCEND_TOOLKIT_HOME")
+    # CANN layouts differ across versions: some expose headers/libs under an
+    # <arch>-linux/ subdir, others directly under the toolkit root. Probe both.
+    hccl_include_path = None
+    hccl_lib_name = None
+    for prefix in ("aarch64-linux/", "x86_64-linux/", ""):
+        inc = os.path.join(ascend_home, prefix, "include", "hccl")
+        lib = os.path.join(ascend_home, prefix, "lib64", "libhccl.so")
+        if hccl_include_path is None and os.path.isfile(os.path.join(inc, "hccl.h")):
+            hccl_include_path = inc
+        if hccl_lib_name is None and os.path.isfile(lib):
+            hccl_lib_name = lib
+    assert hccl_include_path is not None, f"hccl.h not found under {ascend_home}"
+    assert hccl_lib_name is not None, f"libhccl.so not found under {ascend_home}"
     ctypes.CDLL(hccl_lib_name, dlopen_flags)
 
-    hccl = compile_custom_ops(hccl_src_files, 
-        extra_flags=f" -I\"{hccl_include_path}\" {mpi_compile_flags} ",
+    # acl backend cc_flags already carry the acl/aclnn includes the hccl ops
+    # need (acl_jittor.h, acl/acl.h); reuse them so the build sees those headers.
+    from jittor import compiler
+    extra = f" -I\"{hccl_include_path}\" "
+    if no_mpi:
+        # MPI-free build: env/file rendezvous, no libmpi linked. BUT jittor's
+        # include scanner does not honor #ifdef, so it still needs to *locate*
+        # mpi_wrapper.h (referenced in the guarded-out #else branch) and the
+        # <mpi.h> it pulls in. Add the include dirs only -- NOT the link flags --
+        # so nothing from libmpi is actually compiled in or linked.
+        extra += " -DJT_HCCL_NO_MPI "
+        mpi_inc = os.path.join(jittor_path, "extern", "mpi", "inc")
+        extra += f" -I\"{mpi_inc}\" "
+        if 'mpi_compile_flags' in globals() and mpi_compile_flags:
+            # reuse just the -I parts of the mpi compile flags (for <mpi.h>)
+            for tok in mpi_compile_flags.split():
+                if tok.startswith("-I"):
+                    extra += f" {tok} "
+        gen_name = "jittor_hccl_core_nompi"
+        LOG.i("setup_hccl: compiling hccl ops (MPI-free)...")
+    else:
+        # Normal MPI path: needs the MPI headers/flags for MPI_Bcast rendezvous.
+        extra += f" {mpi_compile_flags} "
+        gen_name = "jittor_hccl_core"
+        LOG.i("setup_hccl: compiling hccl ops (MPI)...")
+    extra += getattr(compiler, "cc_flags", "")
+    hccl = compile_custom_ops(hccl_src_files,
+        extra_flags=extra,
         return_module=True, dlopen_flags=os.RTLD_GLOBAL | os.RTLD_NOW,
-        gen_name_="jittor_hccl_core")
+        gen_name_=gen_name)
+    LOG.i("setup_hccl: hccl ops compiled+loaded")
     hccl_ops = hccl.ops
+    hccl_mod = hccl
     LOG.vv("Get hccl_ops: "+str(dir(hccl_ops)))
 
 def manual_link(flags):
@@ -692,11 +744,18 @@ def setup_mpi():
     if mpi_version.startswith("(1.") or mpi_version.startswith("(2."):
         # mpi version 1.x need to link like this
         manual_link(mpi_flags)
-    # mpi(4.x) cannot use deepbind, it need to
-    # share the 'environ' symbol.
-    mpi = compile_custom_ops(mpi_src_files, 
+    # On Ascend, the CANN libraries are dlopened RTLD_GLOBAL before this module.
+    # Loading the MPI ops RTLD_GLOBAL too lets the linker interpose libmpi's
+    # internal symbols (opal_*/orte_*/pmix_*) with same-named CANN symbols,
+    # producing a wild jump (SIGBUS) inside MPI_Init. RTLD_DEEPBIND makes the
+    # module prefer its own (libmpi) symbols first, avoiding the collision.
+    # On Ascend, MPI must be brought up (mpi4py) BEFORE the CANN libs load to
+    # avoid an ABI/symbol clash; see jittor/__init__.py. With MPI already
+    # initialized, the normal RTLD_GLOBAL load of our ops module is safe.
+    mpi_dlopen_flags = os.RTLD_GLOBAL | os.RTLD_NOW
+    mpi = compile_custom_ops(mpi_src_files,
         extra_flags=f" {mpi_flags} ", return_module=True,
-        dlopen_flags=os.RTLD_GLOBAL | os.RTLD_NOW, gen_name_="jittor_mpi_core")
+        dlopen_flags=mpi_dlopen_flags, gen_name_="jittor_mpi_core")
     mpi_ops = mpi.ops
     LOG.vv("Get mpi: "+str(mpi.__dict__.keys()))
     LOG.vv("Get mpi_ops: "+str(mpi_ops.__dict__.keys()))
@@ -725,16 +784,56 @@ if FIX_TORCH_ERROR:
         pass
 
 cudnn = cublas = curand = cufft = cusparse = None
+
+# Env/file-based distributed mode (MPI-free) for Ascend. The launcher sets
+# JT_HCCL_* and spawns one plain process per rank. We use this because the
+# available OpenMPI build crashes coexisting with CANN in one process. In this
+# mode we must NOT load jittor's MPI op module / libmpi at all -- so disable
+# the MPI setup before it runs. The normal (MPI) N-card path is untouched when
+# JT_HCCL_WORLD_SIZE is not set.
+_jt_hccl_ws = os.environ.get("JT_HCCL_WORLD_SIZE")
+_jt_hccl_no_mpi = _jt_hccl_ws is not None
+if _jt_hccl_no_mpi:
+    os.environ["use_mpi"] = "0"   # make setup_mpi() a no-op (no libmpi load)
+
 setup_mpi()
 rank = mpi.world_rank() if in_mpi else 0
 world_size = mpi.world_size() if in_mpi else 1
-# if has_acl:
-#     setup_hccl()
-# elif has_cuda:
-#     setup_nccl()
-#     setup_cutt()
-#     setup_cutlass()
-    
+
+if _jt_hccl_no_mpi:
+    in_mpi = True                 # let the optimizer take the distributed path
+    rank = int(os.environ.get("JT_HCCL_RANK", "0"))
+    world_size = int(_jt_hccl_ws)
+
+# Enable the device collective backend used for multi-card data parallel.
+# HCCL on Ascend, NCCL on CUDA.
+#
+# TODO(multi-card refactor): there are now two HCCL bootstrap paths --
+#   (1) MPI: setup_hccl(no_mpi=False) + MPI_Bcast rendezvous (the original
+#       N-card path; requires a working, CANN-compatible MPI).
+#   (2) MPI-free: setup_hccl(no_mpi=True) + JT_HCCL_* env/file rendezvous
+#       (added for Ascend where the available OpenMPI crashes with CANN).
+# Long term these should be unified behind a single launcher + a pluggable
+# rendezvous (env/file, TCPStore, or HCCL rank-table via HcclCommInitClusterInfo
+# -- the device IPs are available via `hccn_tool -i N -ip -g`). For now they are
+# kept as distinct, separately-compiled modules so neither can regress the
+# other. The MPI path's behavior is unchanged when JT_HCCL_WORLD_SIZE is unset.
+hccl_ops = None
+hccl_mod = None
+import jittor.compiler as compiler
+_want_hccl = (getattr(compiler, "has_acl", 0) and
+              (_jt_hccl_no_mpi or (in_mpi and has_mpi)))
+if _want_hccl:
+    try:
+        setup_hccl(no_mpi=_jt_hccl_no_mpi)
+        # Initialize the communicator now, after import is otherwise complete.
+        # (Doing this in a static ctor at dlopen time hung.)
+        LOG.i("setup_hccl: initializing HCCL communicator...")
+        hccl_mod.hccl_init()
+        LOG.i("setup_hccl: HCCL communicator ready")
+    except Exception as e:
+        LOG.w("HCCL setup failed, multi-card on Ascend disabled, msg:", e)
+
 setup_nccl()
 setup_cutt()
 setup_cutlass()

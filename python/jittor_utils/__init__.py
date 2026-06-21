@@ -217,6 +217,18 @@ def pool_initializer():
 
 def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
     global pool_size, p
+    # Under MPI (mpirun), the OpenMPI runtime installs atfork handlers and a
+    # registration cache that make fork() after MPI_Init unsafe -- forking the
+    # compile Pool there triggers SIGBUS. Compile serially in-process instead.
+    # (Compilation under MPI should be rare anyway: warm the cache first.)
+    under_mpi = ("OMPI_COMM_WORLD_SIZE" in os.environ) or ("PMI_SIZE" in os.environ)
+    if under_mpi:
+        n = len(cmds)
+        dp = DelayProgress(msg, n)
+        for i, cmd in enumerate(cmds):
+            do_compile([cmd, cache_path, jittor_path])
+            dp.update(i)
+        return
     bk = mp.current_process()._config.get('daemon')
     mp.current_process()._config['daemon'] = False
     if pool_size == 0:

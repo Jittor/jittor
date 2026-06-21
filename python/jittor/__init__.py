@@ -11,6 +11,24 @@
 
 __version__ = '1.3.11.0'
 from jittor_utils import lock
+
+# On Ascend (NPU), bringing MPI up via mpi4py BEFORE the CANN libraries are
+# loaded avoids a fatal ABI/symbol clash (CANN's globally-loaded libs interpose
+# OpenMPI's internal symbols, causing a wild-jump SIGBUS inside MPI_Init when
+# our own mpi op module is loaded later). Doing it here, first thing, is the
+# only point early enough. Guarded to multi-process launches (mpirun sets
+# OMPI_COMM_WORLD_SIZE); harmless/no-op otherwise. jittor's mpi module detects
+# the already-initialized MPI and skips its own MPI_Init.
+import os as _os
+if _os.environ.get("OMPI_COMM_WORLD_SIZE") and _os.environ.get("use_mpi", "1") != "0":
+    try:
+        import mpi4py
+        mpi4py.rc.initialize = True
+        mpi4py.rc.finalize = False
+        from mpi4py import MPI as _MPI  # triggers MPI_Init before CANN loads
+    except Exception as _e:
+        print("jittor: mpi4py pre-init skipped:", _e)
+
 with lock.lock_scope():
     ori_int = int
     ori_float = float
@@ -2196,3 +2214,22 @@ from . import distributions
 if jt.compiler.has_acl:
     from jittor.extern.acl.acl_compiler import change_function
     change_function()
+
+# MPI-free Ascend multi-card: the optimizer/users call Var.mpi_all_reduce /
+# Var.mpi_broadcast, normally provided by the MPI op module. In the env/file
+# HCCL mode that module isn't loaded, so route those names to the HCCL ops
+# directly (collectives never needed MPI -- only the bootstrap did).
+if compile_extern.hccl_ops is not None and not compile_extern.has_mpi:
+    _hops = compile_extern.hccl_ops
+    def _hccl_all_reduce(self, op="mean"):
+        # HCCL supports sum/prod/max/min; emulate "mean" as sum / world_size.
+        if op == "mean":
+            r = _hops.hccl_all_reduce(self, "sum")
+            return r / compile_extern.world_size
+        return _hops.hccl_all_reduce(self, op)
+    def _hccl_broadcast(self, root=0):
+        return _hops.hccl_broadcast(self, root)
+    core.Var.mpi_all_reduce = _hccl_all_reduce
+    core.Var.mpi_broadcast = _hccl_broadcast
+
+

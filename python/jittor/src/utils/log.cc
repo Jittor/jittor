@@ -293,6 +293,13 @@ int register_sigaction() {
     signal(SIGSEGV, handle_signal);
     signal(SIGFPE, handle_signal);
 #else
+    // Under MPI (mpirun), let the MPI runtime own fault handling. Jittor's
+    // handler both hijacks signals MPI uses internally (SIGBUS/SIGCHLD/SIGILL)
+    // and, worse, forks addr2line/gdb from inside the handler (print_trace ->
+    // wait4), which deadlocks/segfaults a ranked process. Skip entirely.
+    if (getenv("OMPI_COMM_WORLD_SIZE") != nullptr ||
+        getenv("PMI_SIZE") != nullptr)
+        return 0;
     struct sigaction sa;
 
     memset(&sa, 0, sizeof(struct sigaction));
@@ -307,9 +314,16 @@ int register_sigaction() {
     // jupyter use sigint to interp
     if (getenv("JPY_PARENT_PID") == nullptr)
         sigaction(SIGINT, &sa, NULL);
-    sigaction(SIGCHLD, &sa, NULL);
-    sigaction(SIGILL, &sa, NULL);
-    sigaction(SIGBUS, &sa, NULL);
+    // Under MPI (mpirun), the MPI runtime relies on SIGCHLD/SIGBUS/SIGILL for
+    // its own process management and shared-memory transports. Hijacking them
+    // makes a benign signal during MPI_Init look like a fatal fault and abort
+    // the rank. Leave those to MPI when launched under it.
+    if (getenv("OMPI_COMM_WORLD_SIZE") == nullptr &&
+        getenv("PMI_SIZE") == nullptr) {
+        sigaction(SIGCHLD, &sa, NULL);
+        sigaction(SIGILL, &sa, NULL);
+        sigaction(SIGBUS, &sa, NULL);
+    }
     sigaction(SIGQUIT, &sa, NULL);
     // sigaction(SIGABRT, &sa, NULL);
 #endif
