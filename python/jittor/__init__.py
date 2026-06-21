@@ -2233,3 +2233,15 @@ if compile_extern.hccl_ops is not None and not compile_extern.has_mpi:
     core.Var.mpi_broadcast = _hccl_broadcast
 
 
+# torch-compatibility layer: lets `import jittor as torch` run PyTorch code.
+# Additive only -- fills missing torch names/semantics. Safe to fail soft.
+try:
+    from . import torch_compat as _torch_compat
+    import sys as _sys
+    _torch_compat.install(_sys.modules[__name__])
+except Exception as _e:
+    from .compiler import LOG as _LOG
+    _LOG.w(f"torch_compat not fully installed: {_e}")
+
+
+
