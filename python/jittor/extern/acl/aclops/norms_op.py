@@ -140,21 +140,26 @@ class LayerNormACL(jt.Function):
         self.normalized_shape = tuple(normalized_shape)
         self.eps = eps
         self.elementwise_affine = elementwise_affine
-        self.weight = jt.init.constant(normalized_shape, "float32",
-                                        1.0) if elementwise_affine else 1.0
-        self.bias = jt.init.constant(normalized_shape, "float32",
-                                        0.0) if elementwise_affine else 0.0
 
-    def execute(self, x):
+    def execute(self, x, weight, bias):
+        # weight/bias come from the host nn.LayerNorm module so its parameters
+        # stay tracked (grad, DDP broadcast, etc). grad() returns grads for all
+        # three inputs (x, weight, bias) in order.
         self.input = x.float32()
+        self.weight = weight
+        self.bias = bias
         inputs = [self.input, self.weight, self.bias]
-        outputs = [jt.empty(x.shape), jt.empty(x.shape), jt.empty(x.shape)]
+        # aclnnLayerNorm outputs: out (x.shape), mean & rstd (reduced over the
+        # normalized dims -> same leading shape with the normalized dims = 1).
+        nd = len(self.normalized_shape)
+        reduced_shape = list(x.shape[:len(x.shape) - nd]) + [1] * nd
+        outputs = [jt.empty(x.shape), jt.empty(reduced_shape), jt.empty(reduced_shape)]
         attr_code = f"""
         op.jt_name = "layernorm";
         LayerNormAttr *attr = new LayerNormAttr();
         attr->eps = {self.eps};
         attr->normalizedShape = {{{', '.join(map(str, (list(self.normalized_shape))))}}};
-        attr->size = {x.shape[-1]};
+        attr->size = {len(self.normalized_shape)};
         op.op_attr.reset(attr);
         """
         result = norms_cmd("LayerNorm",
@@ -167,18 +172,24 @@ class LayerNormACL(jt.Function):
         return self.output
 
     def grad(self, grad_output):
+        # aclnnLayerNormBackward inputs : gradOut, input, mean, rstd, weight, bias
+        #                        outputs: gradInput, gradWeight, gradBias
         attr_code = f"""
-        op.jt_name = "batchnorm";
-        BatchNormAttr *attr = new BatchNormAttr();
-        attr->is_train = {"true" if self.is_train else "false"};
-        attr->momentum = {self.momentum};
+        op.jt_name = "layernormbackward";
+        LayerNormAttr *attr = new LayerNormAttr();
         attr->eps = {self.eps};
+        attr->normalizedShape = {{{', '.join(map(str, (list(self.normalized_shape))))}}};
+        attr->size = {len(self.normalized_shape)};
         op.op_attr.reset(attr);
         """
-        inputs = [grad_output, self.input, self.weight, self.running_mean, self.running_var, self.saveMean, self.saveInvstd]
-        outputs = [jt.empty(self.input.shape), jt.empty(self.num_features), jt.empty(self.num_features)]
-        grad_input = norms_cmd("SoftmaxBackward",
-                            inputs=inputs,
-                            outputs=outputs,
-                            attr_code=attr_code)[0]
-        return grad_input
+        inputs = [grad_output.float32(), self.input, self.meanout, self.rstdout,
+                  self.weight, self.bias]
+        outputs = [jt.empty(self.input.shape),
+                   jt.empty(self.normalized_shape),
+                   jt.empty(self.normalized_shape)]
+        result = norms_cmd("LayerNormBackward",
+                           inputs=inputs,
+                           outputs=outputs,
+                           attr_code=attr_code)
+        # grads for (x, weight, bias) to match execute()'s inputs
+        return result[0], result[1], result[2]
