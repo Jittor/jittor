@@ -471,7 +471,14 @@ def _install_init_aliases():
     # torch-style in-place initializers, tolerant of torch kwargs (e.g.
     # `generator=`, which jittor ignores). Each writes into `tensor` in place.
     def _assign(tensor, value):
+        # Preserve the tensor's grad-tracking: jittor's .assign() adopts the
+        # source var's stop_grad flag, and our `value` (jt.normal/zeros/...) is
+        # stop_grad, which would silently freeze the parameter. Re-enable grad
+        # unless the param was explicitly stop-grad before.
+        was_trainable = not tensor.is_stop_grad()
         tensor.assign(value)
+        if was_trainable:
+            tensor.start_grad()
         return tensor
 
     def normal_(tensor, mean=0.0, std=1.0, generator=None):
@@ -578,31 +585,38 @@ def _install_cuda(g):
 
 
 def _install_tensor_methods(g, Var):
-    # in-place tensor ops torch code uses heavily (jittor exposes assign())
+    # in-place tensor ops torch code uses heavily (jittor exposes assign()).
+    # _ip() preserves grad-tracking: jittor's assign() adopts the source's
+    # stop_grad flag, which would freeze a trainable parameter.
+    def _ip(self, value):
+        was_trainable = not self.is_stop_grad()
+        self.assign(value)
+        if was_trainable:
+            self.start_grad()
+        return self
     def _copy_(self, other, non_blocking=False):
         src = other if isinstance(other, Var) else jt.array(other)
-        self.assign(src.cast(str(self.dtype)) if hasattr(self, "dtype") else src)
-        return self
+        return _ip(self, src.cast(str(self.dtype)) if hasattr(self, "dtype") else src)
     if not hasattr(Var, "copy_"):
         Var.copy_ = _copy_
     if not hasattr(Var, "fill_"):
-        Var.fill_ = lambda self, val: self.assign(jt.ones(self.shape, self.dtype) * val) or self
+        Var.fill_ = lambda self, val: _ip(self, jt.ones(self.shape, self.dtype) * val)
     if not hasattr(Var, "zero_"):
-        Var.zero_ = lambda self: self.assign(jt.zeros(self.shape, self.dtype)) or self
+        Var.zero_ = lambda self: _ip(self, jt.zeros(self.shape, self.dtype))
     if not hasattr(Var, "add_"):
-        Var.add_ = lambda self, o, alpha=1: self.assign(self + (o * alpha)) or self
+        Var.add_ = lambda self, o, alpha=1: _ip(self, self + (o * alpha))
     if not hasattr(Var, "sub_"):
-        Var.sub_ = lambda self, o, alpha=1: self.assign(self - (o * alpha)) or self
+        Var.sub_ = lambda self, o, alpha=1: _ip(self, self - (o * alpha))
     if not hasattr(Var, "mul_"):
-        Var.mul_ = lambda self, o: self.assign(self * o) or self
+        Var.mul_ = lambda self, o: _ip(self, self * o)
     if not hasattr(Var, "div_"):
-        Var.div_ = lambda self, o: self.assign(self / o) or self
+        Var.div_ = lambda self, o: _ip(self, self / o)
     if not hasattr(Var, "clamp_"):
-        Var.clamp_ = lambda self, min=None, max=None: self.assign(jt.clamp(self, min, max)) or self
+        Var.clamp_ = lambda self, min=None, max=None: _ip(self, jt.clamp(self, min, max))
     if not hasattr(Var, "normal_"):
-        Var.normal_ = lambda self, mean=0.0, std=1.0, generator=None: self.assign(jt.normal(float(mean), float(std), self.shape).cast(str(self.dtype))) or self
+        Var.normal_ = lambda self, mean=0.0, std=1.0, generator=None: _ip(self, jt.normal(float(mean), float(std), self.shape).cast(str(self.dtype)))
     if not hasattr(Var, "uniform_"):
-        Var.uniform_ = lambda self, a=0.0, b=1.0, generator=None: self.assign((jt.rand(self.shape)*(b-a)+a).cast(str(self.dtype))) or self
+        Var.uniform_ = lambda self, a=0.0, b=1.0, generator=None: _ip(self, (jt.rand(self.shape)*(b-a)+a).cast(str(self.dtype)))
 
     if not hasattr(Var, "device"):
         def _device(self):
