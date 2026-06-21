@@ -392,15 +392,15 @@ def _install_reductions(g):
     g.min = lambda x, *a, **k: _maxmin("min", x, *a, **k)
 
     def topk(x, k, dim=-1, largest=True, sorted=True):
-        if _topk is not None:
-            res = _topk(x, k, dim, largest, sorted)
-            if isinstance(res, (tuple, list)):
-                return _TopK(res[0], res[1].int64())
+        # jittor's native topk is unreliable on the ACL backend (internal
+        # getitem "too many slices"); use an argsort-based gather instead.
         idx, _ = _argsort(x, dim=dim, descending=largest)
-        sl = [slice(None)] * x.ndim
-        sl[dim] = slice(0, k)
+        nd = x.ndim
+        d = dim if dim >= 0 else dim + nd
+        sl = [slice(None)] * nd
+        sl[d] = slice(0, k)
         idx = idx[tuple(sl)]
-        val = _gather(x, dim, idx)
+        val = _gather(x, d, idx)
         return _TopK(val, idx.int64())
     g.topk = topk
 
