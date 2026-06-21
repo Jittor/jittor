@@ -180,11 +180,26 @@ def install(torch):
                 "ByteTensor", "BoolTensor"):
         setattr(g, _tn, Var)
 
+    def _array_keep_dtype(data):
+        # jittor's jt.array downcasts numpy int64 -> int32; torch keeps int64.
+        # Preserve the source dtype for (u)int64/float64 so dtypes match torch.
+        import numpy as _np
+        v = jt.array(data)
+        if isinstance(data, _np.ndarray):
+            dn = data.dtype.name
+            if dn in ("int64", "uint64") and str(v.dtype) != "int64":
+                v = v.int64()
+            elif dn == "float64" and str(v.dtype) != "float64":
+                v = v.float64()
+        return v
+
     def tensor(data, dtype=None, device=None, requires_grad=False, **kw):
         if isinstance(data, Var):
             v = data.clone()
         else:
-            v = jt.array(data)
+            import numpy as _np
+            v = _array_keep_dtype(data if isinstance(data, _np.ndarray) else _np.asarray(data)) \
+                if not isinstance(data, (int, float, bool)) else jt.array(data)
         ds = _dtype_to_str(dtype)
         if ds is not None:
             v = v.cast(ds)
@@ -198,7 +213,7 @@ def install(torch):
     g.as_tensor = as_tensor
 
     def from_numpy(arr):
-        return jt.array(arr)
+        return _array_keep_dtype(arr)
     g.from_numpy = from_numpy
 
     class Size(tuple):
@@ -264,6 +279,8 @@ def install(torch):
     # don't accept device=, which torch code passes everywhere.
     _wrap_constructors(g)
 
+    _install_reductions(g)
+
     if not hasattr(nn, "functional"):
         import types as _types
         F = _types.ModuleType("jittor.nn.functional")
@@ -315,6 +332,83 @@ def install(torch):
     _install_cuda(g)
     _install_tensor_methods(g, Var)
     _install_misc(g, Var)
+
+
+import collections as _collections
+_MinMax = _collections.namedtuple("torch_return_types", ["values", "indices"])
+_TopK = _collections.namedtuple("topk", ["values", "indices"])
+_Sort = _collections.namedtuple("sort", ["values", "indices"])
+
+
+def _install_reductions(g):
+    """torch-correct argmax/argmin/max/min/sort/topk (jittor's differ:
+    jittor argmax->(idx,val), jittor max(dim)->values only).
+    NB: g IS the jittor module, so capture the ORIGINAL jittor ops before
+    overwriting (else infinite recursion)."""
+    import jittor as _jt
+    _argmax = _jt.argmax
+    _argmin = _jt.argmin
+    _argsort = _jt.argsort
+    _maximum = _jt.maximum
+    _minimum = _jt.minimum
+    _topk = getattr(_jt, "topk", None)
+    _gather = _jt.gather
+
+    def argmax(x, dim=None, keepdim=False):
+        if dim is None:
+            idx, _ = _argmax(x.reshape(-1), 0)
+            return idx.int64()
+        idx, _ = _argmax(x, dim, keepdims=keepdim)
+        return idx.int64()
+    def argmin(x, dim=None, keepdim=False):
+        if dim is None:
+            idx, _ = _argmin(x.reshape(-1), 0)
+            return idx.int64()
+        idx, _ = _argmin(x, dim, keepdims=keepdim)
+        return idx.int64()
+    g.argmax = argmax
+    g.argmin = argmin
+
+    def _maxmin(which, x, *args, **kwargs):
+        dim = kwargs.get("dim", None)
+        keepdim = kwargs.get("keepdim", False)
+        other = None
+        pos = list(args)
+        if pos:
+            if isinstance(pos[0], _jt.Var):
+                other = pos[0]
+            else:
+                dim = pos[0]
+                if len(pos) > 1:
+                    keepdim = pos[1]
+        if other is not None:
+            return _maximum(x, other) if which == "max" else _minimum(x, other)
+        if dim is None:
+            return x.max() if which == "max" else x.min()
+        af = _argmax if which == "max" else _argmin
+        idx, val = af(x, dim, keepdims=keepdim)
+        return _MinMax(val, idx.int64())
+    g.max = lambda x, *a, **k: _maxmin("max", x, *a, **k)
+    g.min = lambda x, *a, **k: _maxmin("min", x, *a, **k)
+
+    def topk(x, k, dim=-1, largest=True, sorted=True):
+        if _topk is not None:
+            res = _topk(x, k, dim, largest, sorted)
+            if isinstance(res, (tuple, list)):
+                return _TopK(res[0], res[1].int64())
+        idx, _ = _argsort(x, dim=dim, descending=largest)
+        sl = [slice(None)] * x.ndim
+        sl[dim] = slice(0, k)
+        idx = idx[tuple(sl)]
+        val = _gather(x, dim, idx)
+        return _TopK(val, idx.int64())
+    g.topk = topk
+
+    def sort(x, dim=-1, descending=False, **kw):
+        idx, val = _argsort(x, dim=dim, descending=descending)
+        return _Sort(val, idx.int64())
+    g.sort = sort
+    g.argsort = lambda x, dim=-1, descending=False, **kw: _argsort(x, dim=dim, descending=descending)[0].int64()
 
 
 def _wrap_constructors(g):
@@ -419,6 +513,34 @@ def _install_module_methods(nn):
     M.execute = _execute
     if not hasattr(M, "forward"):
         M.forward = _forward_alias
+
+    # torch's Module.train(mode=True)/eval() take a mode arg; jittor's train()
+    # takes none. Wrap to accept it and set jittor's is_training accordingly.
+    _orig_train = M.train
+    def _train(self, mode=True):
+        try:
+            _orig_train(self)        # jittor sets is_training=True recursively
+        except TypeError:
+            pass
+        if not mode:
+            # put into eval: jittor uses .eval() per-module
+            try:
+                # set is_training flag across submodules
+                for m in self.modules() if hasattr(self, "modules") else [self]:
+                    if hasattr(m, "is_training"):
+                        m.is_training = False
+            except Exception:
+                pass
+        else:
+            for m in (self.modules() if hasattr(self, "modules") else [self]):
+                if hasattr(m, "is_training"):
+                    m.is_training = True
+        return self
+    M.train = _train
+    _orig_eval = getattr(M, "eval", None)
+    def _eval(self):
+        return _train(self, False)
+    M.eval = _eval
 
     if not hasattr(M, "to"):
         def _module_to(self, *args, **kwargs):
@@ -617,6 +739,14 @@ def _install_tensor_methods(g, Var):
         Var.normal_ = lambda self, mean=0.0, std=1.0, generator=None: _ip(self, jt.normal(float(mean), float(std), self.shape).cast(str(self.dtype)))
     if not hasattr(Var, "uniform_"):
         Var.uniform_ = lambda self, a=0.0, b=1.0, generator=None: _ip(self, (jt.rand(self.shape)*(b-a)+a).cast(str(self.dtype)))
+
+    # bitwise/logical operators torch supports on tensors
+    if not hasattr(Var, "__invert__"):
+        def _invert(self):
+            if str(self.dtype) == "bool":
+                return self.logical_not()
+            return jt.logical_not(self) if str(self.dtype) == "bool" else (-self - 1)
+        Var.__invert__ = _invert
 
     if not hasattr(Var, "device"):
         def _device(self):
