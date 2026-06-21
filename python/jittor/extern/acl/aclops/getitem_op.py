@@ -341,17 +341,21 @@ class GetItemACL(jt.Function):
     def grad(self, grad_output):
         if self.type_ == 'index':
             indices = self.indices
+            # The C++ runner zeroes the output itself (aclrtMemsetAsync) then
+            # scatter-accumulates grad_output at the indices. Previously the base
+            # was an externally-created jt.zeros passed as a write-only output;
+            # its zero-fill was an untracked dependency, so it could run after
+            # the accumulate or reuse a stale buffer -> wrong, run-order-dependent
+            # gradients (a trailing .sync() did not fix it).
             inputs = [grad_output] + indices
             attr_code = f"""
             op.jt_name = "indexputimplaccumulate";
             """
-            outputs = [jt.zeros(self.x_shape, dtype=grad_output.dtype)]
-            # breakpoint()
+            outputs = [jt.empty(self.x_shape, dtype=grad_output.dtype)]
             result = getitem_cmd("IndexPutImplAccumulate",
                                  inputs=inputs,
                                  outputs=outputs,
                                  attr_code=attr_code)[0]
-            result.sync()
             return result, None
         elif self.type_ == 'slicev2':
             begins = self.begins
