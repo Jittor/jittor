@@ -237,7 +237,7 @@ struct NanoString;
 EXTERN_LIB PyTypeObject PyjtNanoString;
 DEF_IS(NanoString, bool) is_type(PyObject* obj) {
     return Py_TYPE(obj) == &PyjtNanoString ||
-        PyUnicode_CheckExact(obj) ||
+        PyUnicode_Check(obj) ||   // accept str AND str subclasses (e.g. torch_compat.dtype)
         PyType_CheckExact(obj) ||
         // jt.float.__name__
         PyCallable_Check(obj) ||
@@ -255,7 +255,7 @@ DEF_IS(NanoString, PyObject*) to_py_object(T a) {
 DEF_IS(NanoString, T) from_py_object(PyObject* obj) {
     if (Py_TYPE(obj) == &PyjtNanoString)
         return *GET_RAW_PTR(T, obj);
-    if (PyUnicode_CheckExact(obj))
+    if (PyUnicode_Check(obj))   // str or str subclass (e.g. torch_compat.dtype)
         return T(PyUnicode_AsUTF8(obj));
     // PyType
     if (PyType_CheckExact(obj))
