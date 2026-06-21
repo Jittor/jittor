@@ -36,7 +36,16 @@ namespace jittor
 
     void InplaceMaskedScatterOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
     {
-        ret = aclnnInplaceMaskedScatterGetWorkspaceSize(outputTensors[0], inputTensors[0], inputTensors[1], &workspaceSize, &executor);
+        // inputs: base(0), mask(1), value(2); output: out(0).
+        // Copy base -> out on aclstream first (base is a tracked input, so its
+        // data is materialized before this runs), then masked-scatter in place.
+        // Previously the base (x.clone()) was a write-only output whose copy was
+        // an untracked dependency -> non-masked elements could read a stale
+        // buffer (wrong, run-order-dependent results).
+        aclrtMemcpyAsync(out_[0]->mem_ptr, out_[0]->size,
+                         in_[0]->mem_ptr, in_[0]->size,
+                         ACL_MEMCPY_DEVICE_TO_DEVICE, aclstream);
+        ret = aclnnInplaceMaskedScatterGetWorkspaceSize(outputTensors[0], inputTensors[1], inputTensors[2], &workspaceSize, &executor);
 
         checkRet(ret);
 
