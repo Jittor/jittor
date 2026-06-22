@@ -40,3 +40,9 @@ and under the jittor shim (same dev-transformers code, only the backend differs)
 Identical top-5 token predictions; logits agree to ~1e-4 relative (max abs diff
 0.0012 on ~17-magnitude logits) — fp32 cross-hardware variance, not a bug.
 => the real production path (transformers + Qwen3 + jittor) matches PyTorch.
+
+## NVIDIA (N-card) validation
+Same `import torch` code runs on NVIDIA via the shim (jittor CUDA backend):
+- jittor-CUDA GPT-2 xcheck matches real torch (loss/grad above).
+- `import torch`->jittor trains a GPT-2 end-to-end on an RTX 4090 (fwd+bwd+Adam):
+  loss 6.39 -> 1.41 over 8 steps. => both Ascend and NVIDIA backends work.
