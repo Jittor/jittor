@@ -695,12 +695,14 @@ def compile_src(src, h, basename):
         error_log_code = generate_error_code_from_func_header(func_head, target_scope_name, name, dfs, basename ,h, class_info)
         func = f"""
         {func_cast}[]{func_head} {{
+            bool matched_overload=false;
             try {{
                 {func_fill};
                 uint64 arg_filled=0;
                 (void)arg_filled;
                 {"".join([f'''
                 if ({arr_func_quick_check_runable[did]}) {{
+                    matched_overload=true;
                     {arr_func_args_convert[did]};
                     {arr_fill_with_default[did]};
                     {arr_func_return[did]};
@@ -717,9 +719,15 @@ def compile_src(src, h, basename):
                             "%s",
                             ss.str().c_str()
                         );
+                    }} else if (matched_overload) {{
+                        // An overload matched the argument types and its body threw
+                        // at runtime -> this is a real op error, NOT bad arguments.
+                        // Surface jittor's actual message (carries [OP TYPE]/[Input]/
+                        // [Reason]) instead of the misleading "Wrong inputs arguments".
+                        PyErr_Format(PyExc_RuntimeError, "%s", e.what());
                     }} else {{
                         ss {error_log_code};
-                        PyErr_Format(PyExc_RuntimeError, 
+                        PyErr_Format(PyExc_RuntimeError,
                             "%s\\n%s\\nFailed reason:%s",
                             ss.str().c_str(),
                             R""({decs})"",
