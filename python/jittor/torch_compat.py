@@ -198,6 +198,87 @@ class _AutocastContext:
         return wrapper
 
 
+class _GradScaler:
+    """Functional fp16 dynamic loss scaler (matches torch.cuda.amp.GradScaler).
+    Works with the jittor optimizer bridge: scale(loss).backward() routes scaled
+    grads into the optimizer; step() unscales, SKIPS the step on inf/nan, and
+    update() grows/backs off the scale. bf16 doesn't need scaling but this is
+    correct (and required) for fp16 mixed-precision training."""
+    def __init__(self, init_scale=2.0 ** 16, growth_factor=2.0, backoff_factor=0.5,
+                 growth_interval=2000, enabled=True):
+        self._enabled = enabled
+        self._scale = float(init_scale)
+        self._growth_factor = growth_factor
+        self._backoff_factor = backoff_factor
+        self._growth_interval = growth_interval
+        self._growth_tracker = 0
+        self._found_inf = False
+        self._unscaled = False
+
+    def is_enabled(self):
+        return self._enabled
+
+    def get_scale(self):
+        return self._scale if self._enabled else 1.0
+
+    def scale(self, outputs):
+        return outputs * self._scale if self._enabled else outputs
+
+    def _grads(self, opt):
+        gs = []
+        for pg in getattr(opt, "param_groups", []):
+            for g in (pg.get("grads", []) or []):
+                if g is not None:
+                    gs.append(g)
+        return gs
+
+    def unscale_(self, opt):
+        if not self._enabled:
+            return
+        import math as _m
+        inv = 1.0 / self._scale
+        found = False
+        for g in self._grads(opt):
+            g.update(g * inv)
+            m = float(g.abs().max().item()) if g.numel() else 0.0
+            if _m.isinf(m) or _m.isnan(m):
+                found = True
+        self._found_inf = found
+        self._unscaled = True
+
+    def step(self, opt, *a, **k):
+        if not self._enabled:
+            return opt.step(*a, **k)
+        if not self._unscaled:
+            self.unscale_(opt)
+        self._unscaled = False
+        if self._found_inf:
+            return None  # skip optimizer step on overflow
+        return opt.step(*a, **k)
+
+    def update(self, new_scale=None):
+        if not self._enabled:
+            return
+        if new_scale is not None:
+            self._scale = float(new_scale); return
+        if self._found_inf:
+            self._scale = max(1.0, self._scale * self._backoff_factor)
+            self._growth_tracker = 0
+        else:
+            self._growth_tracker += 1
+            if self._growth_tracker >= self._growth_interval:
+                self._scale *= self._growth_factor
+                self._growth_tracker = 0
+        self._found_inf = False
+
+    def state_dict(self):
+        return {"scale": self._scale, "growth_tracker": self._growth_tracker}
+
+    def load_state_dict(self, sd):
+        self._scale = sd.get("scale", self._scale)
+        self._growth_tracker = sd.get("growth_tracker", 0)
+
+
 def install(torch):
     g = torch
     # Critical: jittor dispatches every op to CPU unless flags.use_cuda is set.
@@ -215,6 +296,7 @@ def install(torch):
     _DTYPE_OBJS = _make_dtypes(g)
     g.dtype = dtype
     g.device = device
+    g.GradScaler = _GradScaler        # picked up by torch.amp/torch.cuda.amp in the shim
 
     # torch.no_grad / enable_grad work as bare decorator (@torch.no_grad),
     # called decorator (@torch.no_grad()), and context manager.
@@ -1012,6 +1094,7 @@ def _install_cuda(g):
         @staticmethod
         def autocast(*a, **k):
             return _AutocastContext()
+        GradScaler = _GradScaler
     cuda.amp = _amp
     # stub classes referenced in annotations / guarded paths
     cuda.CUDAGraph = type("CUDAGraph", (), {})

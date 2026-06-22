@@ -895,14 +895,8 @@ globals()["library"] = _library
 # `autocast(model_forward)`); reuse torch_compat's _AutocastContext via _jt.autocast.
 _amp_mod = types.ModuleType("torch.amp")
 _amp_mod.autocast = getattr(_jt, "autocast", lambda *a, **k: contextlib.nullcontext())
-class _GradScaler:
-    def __init__(self, *a, **k): pass
-    def scale(self, loss): return loss
-    def step(self, opt): return opt.step() if hasattr(opt, "step") else None
-    def update(self, *a, **k): pass
-    def unscale_(self, *a, **k): pass
-    def get_scale(self): return 1.0
-_amp_mod.GradScaler = _GradScaler
+# Functional fp16 dynamic loss scaler lives in torch_compat (_GradScaler); reuse it.
+_amp_mod.GradScaler = getattr(_jt, "GradScaler", None) or (lambda *a, **k: None)
 sys.modules["torch.amp"] = _amp_mod
 globals()["amp"] = _amp_mod
 globals()["autocast"] = _amp_mod.autocast
