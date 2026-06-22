@@ -159,5 +159,20 @@ if getattr(jt.compiler, "has_acl", 0):
     ok(str(_bm.dtype) == "bfloat16" and abs(float(_bm.float32().numpy().reshape(-1)[0]) - 8.0) < 1e-2,
        "bf16 matmul on ACL")
 
+# torch.cuda.amp.GradScaler: scale(loss).backward() -> step() -> update() must
+# train through the optimizer bridge (fp16 mixed precision).
+_gs = torch.cuda.amp.GradScaler(init_scale=1024.0)
+_lg = torch.nn.Linear(8, 8)
+_og = torch.optim.Adam(_lg.parameters(), lr=2e-2)
+_xg = jt.randn(16, 8)
+_l0 = _l1 = None
+for _i in range(5):
+    _og.zero_grad(); _ls = (_lg(_xg) ** 2).mean()
+    _gs.scale(_ls).backward(); _gs.step(_og); _gs.update()
+    if _i == 0: _l0 = float(_ls.item())
+    _l1 = float(_ls.item())
+ok(_l1 < _l0, "GradScaler train loop decreases loss")
+ok(_gs.get_scale() == 1024.0, "GradScaler scale stable without overflow")
+
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 import sys; sys.exit(1 if FAIL else 0)
