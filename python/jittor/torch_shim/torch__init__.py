@@ -901,7 +901,41 @@ sys.modules["torch.amp"] = _amp_mod
 globals()["amp"] = _amp_mod
 globals()["autocast"] = _amp_mod.autocast
 if "cuda" in globals():
-    globals()["cuda"].amp.GradScaler = _GradScaler
+    globals()["cuda"].amp.GradScaler = _amp_mod.GradScaler
+
+# ---- readable errors: surface jittor's buried [Reason] instead of the cryptic
+# "Wrong inputs arguments, help(jt.sync)" / "rerun with JT_SYNC=1" noise ----
+def _install_error_clarifier():
+    import re as _re
+    _prev = sys.excepthook
+    def _hook(etype, evalue, tb):
+        try:
+            msg = str(evalue)
+            if any(s in msg for s in ("executor.cc", "Async error", "Wrong inputs arguments", "[Reason]")):
+                reason = _re.search(r"\[Reason\]:\s*([^\n]*)", msg)
+                optype = _re.search(r"\[OP TYPE\]:\s*([^\n]*)", msg)
+                inp = _re.search(r"\[Input\]:\s*([^\n]*)", msg)
+                low = msg.lower()
+                lines = ["", "=== jittor op error (summary) ==="]
+                if optype: lines.append("  op:     " + optype.group(1).strip())
+                if inp:    lines.append("  inputs: " + inp.group(1).strip())
+                if reason: lines.append("  cause:  " + reason.group(1).strip())
+                if "not supported dtype" in low:
+                    lines.append("  hint:   this dtype has no NPU kernel; cast to float32/bfloat16.")
+                elif "unable to alloc" in low or "out of memory" in low or " alloc " in low:
+                    lines.append("  hint:   NPU out of memory; reduce batch size / seqlen / model size.")
+                elif "wrong inputs arguments" in low and "[reason]" not in low:
+                    lines.append("  hint:   an async op failed earlier; rerun with env JT_SYNC=1 to pinpoint it.")
+                lines.append("=== full traceback below ===")
+                print("\n".join(lines), file=sys.stderr)
+        except Exception:
+            pass
+        return _prev(etype, evalue, tb)
+    sys.excepthook = _hook
+try:
+    _install_error_clarifier()
+except Exception:
+    pass
 
 # torch.testing (used in some asserts)
 _testing = types.ModuleType("torch.testing")
