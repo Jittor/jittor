@@ -298,6 +298,24 @@ def install(torch):
     g.device = device
     g.GradScaler = _GradScaler        # picked up by torch.amp/torch.cuda.amp in the shim
 
+    # jt.grad's C-binding only accepts a *plain* list of targets, so passing the
+    # torch-style parameters() iterator/_ParamList (a list subclass) or a single
+    # Var raises a cryptic "Wrong inputs arguments". Coerce to a plain list (and
+    # accept a lone Var, like torch.autograd.grad). Internal jittor callers pass a
+    # plain list -> passthrough, so this never changes their behavior.
+    _native_grad = g.grad
+    def _grad_compat(loss, targets, *a, **k):
+        if type(targets) is not list:
+            if isinstance(targets, jt.Var):
+                targets = [targets]
+            else:
+                try:
+                    targets = list(targets)
+                except Exception:
+                    pass
+        return _native_grad(loss, targets, *a, **k)
+    g.grad = _grad_compat
+
     # torch.no_grad / enable_grad work as bare decorator (@torch.no_grad),
     # called decorator (@torch.no_grad()), and context manager.
     # NB: g IS the jittor module, so capture the originals before overwriting.
