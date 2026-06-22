@@ -35,6 +35,27 @@ After editing `torch_compat.py` (the real API surface), only `torch_compat.py`
 needs reloading — it is imported live from the jittor source tree. After editing
 `torch__init__.py`, re-copy it to site-packages.
 
+## NPU dispatch (performance — read this)
+
+jittor only runs ops on the Ascend NPU when `jt.flags.use_cuda == 1`; otherwise
+everything executes on **CPU** (a 2048³ matmul is ~20s on CPU vs ~2ms on NPU, so
+training appears to "work" but is ~1000× too slow). torch users never set this —
+they call `.cuda()`/`.to(device)`, which here are device-agnostic no-ops. So
+`torch_compat.install()` now forces `jt.flags.use_cuda = 1` whenever
+`jt.compiler.has_acl` is true, making `import jittor as torch` dispatch to the
+NPU by default.
+
+**Sanity check it's really on the NPU:** during training `npu-smi info` must show
+**GB-scale HBM** for the python process. If HBM sits at the ~100 MB context
+baseline, ops are on CPU — something reset `use_cuda`.
+
+Note: ACL has no float64 kernels, so `torch.tensor([1.0])` yields float32 (torch's
+default) and `cumsum`/`cumprod` cast bool→int64 before the native op.
+
+For throughput, prefer **fixed-length sequences** (`packing: true`): each distinct
+input shape triggers a fresh JIT compile (~tens of seconds for the backward+optim
+graph), so variable-length batches recompile every step. Packing compiles once.
+
 ## Running transformers / LlamaFactory
 
 Required environment:
