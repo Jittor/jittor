@@ -1534,8 +1534,91 @@ def _install_misc(g, Var):
             return
         with open(f, "wb") as fh:
             _pickle.dump(portable, fh)
+
+    # ---- load a REAL torch .pt checkpoint (zip archive w/ persistent-id storages) ----
+    # torch.save writes a zip: <name>/data.pkl (object graph; tensors are
+    # persistent_id refs to storages) + <name>/data/<key> (raw storage bytes).
+    # Reconstruct tensors as jittor Vars without needing real torch.
+    import io as _io, zipfile as _zipfile
+    import numpy as _np_pt
+    _TORCH_STORAGE_DTYPE = {
+        "DoubleStorage": "float64", "FloatStorage": "float32", "HalfStorage": "float16",
+        "BFloat16Storage": "bfloat16", "LongStorage": "int64", "IntStorage": "int32",
+        "ShortStorage": "int16", "CharStorage": "int8", "ByteStorage": "uint8",
+        "BoolStorage": "bool",
+    }
+    class _StorageMarker:
+        def __init__(self, dtype_str): self.dtype_str = dtype_str
+    def _np_from_storage(raw, dtype_str, numel):
+        if dtype_str == "bfloat16":
+            u16 = _np_pt.frombuffer(raw, dtype=_np_pt.uint16, count=numel).astype(_np_pt.uint32)
+            return (u16 << 16).view(_np_pt.float32)   # widen bf16 -> f32 (ACL has no bf16 numpy)
+        npd = {"float64": _np_pt.float64, "float32": _np_pt.float32, "float16": _np_pt.float16,
+               "int64": _np_pt.int64, "int32": _np_pt.int32, "int16": _np_pt.int16,
+               "int8": _np_pt.int8, "uint8": _np_pt.uint8, "bool": _np_pt.bool_}[dtype_str]
+        return _np_pt.frombuffer(raw, dtype=npd, count=numel)
+    def _load_torch_pt(path_or_file):
+        zf = _zipfile.ZipFile(path_or_file, "r")
+        names = zf.namelist()
+        pkl_name = next(n for n in names if n.endswith("data.pkl"))
+        data_dir = pkl_name[:-len("data.pkl")] + "data/"
+        cache = {}
+        def _persistent_load(pid):
+            assert pid[0] == "storage", pid
+            marker, key, numel = pid[1], str(pid[2]), int(pid[4])
+            if key not in cache:
+                cache[key] = (zf.read(data_dir + key), marker.dtype_str, numel)
+            return cache[key]
+        def _rebuild_tensor_v2(storage, storage_offset, size, stride,
+                               requires_grad=False, backward_hooks=None, metadata=None):
+            raw, dtype_str, numel = storage
+            arr = _np_from_storage(raw, dtype_str, numel)
+            size = tuple(int(s) for s in size)
+            n = 1
+            for s in size: n *= s
+            sub = arr[storage_offset:storage_offset + n]
+            sub = _np_pt.ascontiguousarray(sub).reshape(size) if size else sub.reshape(())
+            return jt.array(sub)
+        def _rebuild_parameter(data, requires_grad=True, backward_hooks=None, *a, **k):
+            return data
+        class _Unpick(_pickle.Unpickler):
+            def persistent_load(self, pid):
+                return _persistent_load(pid)
+            def find_class(self, module, name):
+                if module == "torch._utils" and name in ("_rebuild_tensor_v2", "_rebuild_tensor"):
+                    return _rebuild_tensor_v2
+                if module == "torch._utils" and name.startswith("_rebuild_parameter"):
+                    return _rebuild_parameter
+                if name.endswith("Storage") and module.startswith("torch"):
+                    return _StorageMarker(_TORCH_STORAGE_DTYPE.get(name, "float32"))
+                if module == "collections" and name == "OrderedDict":
+                    from collections import OrderedDict
+                    return OrderedDict
+                if module == "torch" and name == "Size":
+                    return tuple
+                if module == "torch" and name == "device":
+                    return lambda *a, **k: "cpu"
+                try:
+                    m = __import__(module, fromlist=[name]); return getattr(m, name)
+                except Exception:
+                    return type(name, (), {})
+        return _Unpick(_io.BytesIO(zf.read(pkl_name))).load()
+
+    def _is_zip(f):
+        if hasattr(f, "read"):
+            pos = f.tell(); head = f.read(2); f.seek(pos)
+            return head[:2] == b"PK"
+        with open(f, "rb") as fh:
+            return fh.read(2)[:2] == b"PK"
     def load(f, *a, **k):
-        # accept map_location/weights_only/pickle_module kwargs (ignored)
+        # accept map_location/weights_only/pickle_module kwargs (ignored).
+        # Real torch .pt is a zip archive -> use the torch-format loader;
+        # our own torch.save output is plain pickle -> _from_portable.
+        try:
+            if _is_zip(f):
+                return _load_torch_pt(f)
+        except Exception as _e:
+            pass
         if hasattr(f, "read"):
             obj = _pickle.load(f)
         else:

@@ -46,3 +46,11 @@ Same `import torch` code runs on NVIDIA via the shim (jittor CUDA backend):
 - jittor-CUDA GPT-2 xcheck matches real torch (loss/grad above).
 - `import torch`->jittor trains a GPT-2 end-to-end on an RTX 4090 (fwd+bwd+Adam):
   loss 6.39 -> 1.41 over 8 steps. => both Ascend and NVIDIA backends work.
+
+## torch checkpoint (.pt) migration (#13)
+`torch.load` now reads real torch `.pt` files (zip archive + persistent-id
+storages + _rebuild_tensor_v2), reconstructing tensors as jittor Vars -- no real
+torch needed. Verified on BOTH backends: a real-torch checkpoint (OrderedDict
+state_dict with fp32/fp16/bf16/int64 tensors + nested cfg/list/scalars) loads
+with identical values and key order on Ascend and NVIDIA. Repro: save with real
+torch (`torch.save`), then `import jittor as torch; torch.load(path)`.
