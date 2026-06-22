@@ -178,6 +178,17 @@ class _GradDecoratorCtx:
 
 def install(torch):
     g = torch
+    # Critical: jittor dispatches every op to CPU unless flags.use_cuda is set.
+    # On Ascend the device is the NPU (jt.compiler.has_acl), but use_cuda defaults
+    # to 0 -- so `import torch` + model.to("cuda") (a no-op here) would silently run
+    # the ENTIRE model on CPU, ~10000x slower (a 2048^3 matmul: 20s CPU vs 2ms NPU).
+    # Enable NPU dispatch globally whenever ACL is available so tensors/ops land on
+    # the NPU by default, matching what torch users expect from .cuda()/.to(device).
+    try:
+        if getattr(jt.compiler, "has_acl", 0):
+            jt.flags.use_cuda = 1
+    except Exception:
+        pass
     _DTYPE_OBJS = _make_dtypes(g)
     g.dtype = dtype
     g.device = device
@@ -214,12 +225,19 @@ def install(torch):
         return v
 
     def tensor(data, dtype=None, device=None, requires_grad=False, **kw):
+        import numpy as _np
         if isinstance(data, Var):
             v = data.clone()
+        elif isinstance(data, _np.ndarray):
+            v = _array_keep_dtype(data)          # explicit numpy: preserve dtype (torch does too)
         else:
-            import numpy as _np
-            v = _array_keep_dtype(data if isinstance(data, _np.ndarray) else _np.asarray(data)) \
-                if not isinstance(data, (int, float, bool)) else jt.array(data)
+            # Python scalar/list/tuple: numpy infers float64 from Python floats, but
+            # torch's default float dtype is float32. Match torch (and avoid float64,
+            # which Ascend/ACL does not support) by downcasting inferred float64.
+            arr = _np.asarray(data)
+            if arr.dtype == _np.float64:
+                arr = arr.astype(_np.float32)
+            v = _array_keep_dtype(arr)
         ds = _dtype_to_str(dtype)
         if ds is not None:
             v = v.cast(ds)
@@ -310,7 +328,16 @@ def install(torch):
                 setattr(F, fname, fobj)
         if hasattr(nn, "relu"): F.relu = nn.relu
         if hasattr(nn, "gelu"): F.gelu = nn.gelu
-        if hasattr(nn, "softmax"): F.softmax = nn.softmax
+        if hasattr(nn, "softmax"):
+            # torch: F.softmax(input, dim=None, _stacklevel=3, dtype=None).
+            # When dtype is given, input is cast to it before softmax (used by
+            # transformers' eager attention: F.softmax(scores, dim=-1, dtype=fp32)).
+            _jt_softmax = nn.softmax
+            def _softmax(input, dim=-1, _stacklevel=3, dtype=None):
+                if dtype is not None:
+                    input = input.cast(_dtype_to_str(dtype))
+                return _jt_softmax(input, dim=dim)
+            F.softmax = _softmax
         if hasattr(nn, "linear"): F.linear = nn.linear
         if hasattr(nn, "cross_entropy_loss"): F.cross_entropy = nn.cross_entropy_loss
         if hasattr(nn, "layer_norm"): F.layer_norm = nn.layer_norm
@@ -1135,6 +1162,33 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     if not hasattr(Var, "is_contiguous"):
         Var.is_contiguous = lambda self, *a, **k: True
 
+    # cumsum: ACL's aclnnCumsum SEGFAULTS on bool input (transformers builds
+    # position_ids via mask.cumsum(-1)). torch.cumsum promotes bool/uint8 to
+    # int64 anyway, so cast before the native op to match torch AND avoid the
+    # crash. Override both torch.cumsum and Var.cumsum (g IS the jittor module).
+    _native_cumsum = jt.cumsum
+    def _cumsum(x, dim=-1, dtype=None, out=None, **kw):
+        if isinstance(x, jt.Var) and str(x.dtype) in ("bool", "uint8"):
+            x = x.cast("int64")
+        r = _native_cumsum(x, dim)
+        if dtype is not None:
+            r = r.cast(_dtype_to_str(dtype))
+        return r
+    g.cumsum = _cumsum
+    Var.cumsum = lambda self, dim=-1, dtype=None, **kw: _cumsum(self, dim, dtype)
+    # cumprod has the same ACL fragility; guard it the same way if present.
+    if hasattr(jt, "cumprod"):
+        _native_cumprod = jt.cumprod
+        def _cumprod(x, dim=-1, dtype=None, out=None, **kw):
+            if isinstance(x, jt.Var) and str(x.dtype) in ("bool", "uint8"):
+                x = x.cast("int64")
+            r = _native_cumprod(x, dim)
+            if dtype is not None:
+                r = r.cast(_dtype_to_str(dtype))
+            return r
+        g.cumprod = _cumprod
+        Var.cumprod = lambda self, dim=-1, dtype=None, **kw: _cumprod(self, dim, dtype)
+
     # bitwise/logical operators torch supports on tensors
     if not hasattr(Var, "__invert__"):
         def _invert(self):
@@ -1387,7 +1441,8 @@ def _install_misc(g, Var):
         except Exception:
             return False
     g.equal = _torch_equal
-    _alias("diff", lambda x, dim=-1, n=1: _diff(x, dim, n))
+    _alias("diff", lambda x, n=1, dim=-1, prepend=None, append=None:
+           _diff(x, n=n, dim=dim, prepend=prepend, append=append))
     _alias("repeat_interleave", _repeat_interleave)
     _alias("autocast", lambda *a, **k: __import__("contextlib").nullcontext())
     _alias("vmap", lambda fn, *a, **k: fn)
@@ -1413,7 +1468,19 @@ def _install_misc(g, Var):
         A - (A.mean(0, keepdims=True) if center else 0), q, niter))
 
 
-def _diff(x, dim=-1, n=1):
+def _diff(x, n=1, dim=-1, prepend=None, append=None):
+    # torch.diff(input, n=1, dim=-1, prepend=None, append=None): prepend/append are
+    # concatenated along `dim` before differencing (used by transformers' packed-
+    # sequence detection via torch.diff(position_ids, prepend=..., dim=-1)).
+    import jittor as _jt
+    if prepend is not None or append is not None:
+        parts = []
+        if prepend is not None:
+            parts.append(prepend if isinstance(prepend, _jt.Var) else _jt.array(prepend))
+        parts.append(x)
+        if append is not None:
+            parts.append(append if isinstance(append, _jt.Var) else _jt.array(append))
+        x = _jt.concat(parts, dim=dim)
     for _ in range(n):
         idx = [slice(None)] * x.ndim
         idx0 = list(idx); idx1 = list(idx)
