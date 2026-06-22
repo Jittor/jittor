@@ -124,5 +124,25 @@ ok(_loaded["meta"]["lr"] == 0.1 and _loaded["meta"]["name"] == "x", "torch.save/
 _dt = torch.tensor([1.0]).float().dtype
 ok(_dt in {torch.float16, torch.float32}, "Var.dtype hashable + in dtype set")
 
+# ---- regression: NPU dispatch + ops exposed when moving CPU->Ascend ----
+# On Ascend the compat layer MUST enable jt.flags.use_cuda, else every op runs
+# on CPU (~10000x slower). This was the root cause of pathological 8B step times.
+if getattr(jt.compiler, "has_acl", 0):
+    ok(jt.flags.use_cuda == 1, "NPU dispatch enabled (use_cuda=1) when has_acl")
+
+# cumsum on bool must not segfault (ACL aclnnCumsum crashes on bool input) and
+# must match torch, which promotes bool->int64 then counts.
+_cb = torch.tensor([True, False, True, True]).cumsum(0)
+ok(_cb.numpy().tolist() == [1, 1, 2, 3], "cumsum(bool) counts (no ACL segfault)")
+
+# torch.diff(prepend=...) used by transformers packed-sequence detection
+_pi = torch.tensor([[0, 1, 2, 0, 1]])
+_pd = torch.diff(_pi, prepend=_pi[:, :1], dim=-1)
+ok(_pd.numpy().tolist() == [[0, 1, 1, -2, 1]], "torch.diff prepend dim=-1")
+
+# F.softmax(dtype=) used by eager attention
+_sm = torch.nn.functional.softmax(torch.tensor([1.0, 2.0, 3.0]), dim=-1, dtype=torch.float32)
+ok(abs(float(_sm.sum().numpy()) - 1.0) < 1e-5, "F.softmax(dtype=) normalizes")
+
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 import sys; sys.exit(1 if FAIL else 0)
