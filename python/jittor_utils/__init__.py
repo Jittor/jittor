@@ -715,15 +715,18 @@ PYJT_MODULE_INIT({hash});
     from jittor.compiler import fix_cl_flags
     do_compile([fix_cl_flags(f"\"{cc_path}\" \"{source_name}\" \"{jittor_path}/src/pyjt/py_arg_printer.cc\" {flags} -o \"{cache_path+'/'+lib_name}\" "),
         cache_path, jittor_path])
+    # use __import__ (returns the module object) rather than
+    # `exec("import X"); locals()["X"]`: since Python 3.13 (PEP 667) exec() no
+    # longer leaks names into an optimized function's locals(), so the old
+    # pattern raised KeyError on 3.13.
     with lock.unlock_scope():
         try:
             with import_scope(os.RTLD_GLOBAL | os.RTLD_NOW):
-                exec(f"import {hash}")
+                mod = __import__(hash)
         except Exception as e:
             with import_scope(os.RTLD_GLOBAL | os.RTLD_LAZY):
-                exec(f"import {hash}")
+                mod = __import__(hash)
 
-    mod = locals()[hash]
     return mod
 
 def process_jittor_source(device_type, callback):

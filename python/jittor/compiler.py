@@ -760,10 +760,13 @@ def compile_custom_ops(
     if lib_path not in os.sys.path:
         os.sys.path.append(lib_path)
     # unlock scope when initialize
+    # NOTE: use __import__ (returns the module object) instead of
+    # `exec("import X"); locals()["X"]`. Since Python 3.13 (PEP 667) exec() no
+    # longer writes back into an optimized function's locals(), so the old
+    # pattern raised KeyError and broke `import jittor` from source on 3.13.
     with lock.unlock_scope():
         with jit_utils.import_scope(dlopen_flags):
-            exec(f"import {gen_name}")
-    mod = locals()[gen_name]
+            mod = __import__(gen_name)
     if return_module:
         return mod
     return mod.ops
