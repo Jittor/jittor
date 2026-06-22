@@ -2232,6 +2232,24 @@ if compile_extern.hccl_ops is not None and not compile_extern.has_mpi:
     core.Var.mpi_all_reduce = _hccl_all_reduce
     core.Var.mpi_broadcast = _hccl_broadcast
 
+# MPI-free NVIDIA multi-card: same env/file rendezvous as HCCL, route the
+# collectives to NCCL ops so DDP works without mpirun on NVIDIA too. NCCL
+# all_reduce does ncclSum; emulate "mean" as sum / world_size.
+# NB: condition is "MPI didn't provide the collective" (hasattr), NOT "not
+# has_mpi" -- on a box where MPI is installed but disabled (use_mpi=0 in the
+# env/file mode) has_mpi is still True yet mpi_all_reduce is absent.
+if compile_extern.nccl_ops is not None and not hasattr(core.Var, "mpi_all_reduce"):
+    _nops = compile_extern.nccl_ops
+    def _nccl_all_reduce(self, op="mean"):
+        r = _nops.nccl_all_reduce(self)
+        if op == "mean":
+            return r / compile_extern.world_size
+        return r
+    def _nccl_broadcast(self, root=0):
+        return _nops.nccl_broadcast(self, root)
+    core.Var.mpi_all_reduce = _nccl_all_reduce
+    core.Var.mpi_broadcast = _nccl_broadcast
+
 
 # torch-compatibility layer: lets `import jittor as torch` run PyTorch code.
 # Additive only -- fills missing torch names/semantics. Safe to fail soft.
