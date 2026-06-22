@@ -567,7 +567,11 @@ def setup_nccl():
     use_nccl = os.environ.get("use_nccl", "1")=="1"
     nccl = None
     nccl_ops = None
-    if not has_cuda or not has_mpi:
+    # NCCL is normally only built under MPI; also build it for the MPI-free
+    # env/file rendezvous (JT_NCCL_WORLD_SIZE set by the torchrun-style launcher),
+    # so NVIDIA multi-card DDP works without mpirun (mirrors the Ascend HCCL path).
+    _jt_nccl_envfile = os.environ.get("JT_NCCL_WORLD_SIZE") is not None
+    if not has_cuda or (not has_mpi and not _jt_nccl_envfile):
         use_nccl = False
         return
     if not use_nccl: return
@@ -585,7 +589,10 @@ def setup_nccl():
         nccl_include_path = os.path.join(nccl_home, "build", "include")
         nccl_lib_path = os.path.join(nccl_home, "build", "lib")
         
-    if not inside_mpi():
+    # MPI-free env/file rendezvous: build NCCL ops even without MPI (compile the
+    # MPI bootstrap branch out via -DJT_NCCL_NO_MPI). This is the no-mpirun path.
+    _nccl_envfile = os.environ.get("JT_NCCL_WORLD_SIZE") is not None
+    if not inside_mpi() and not _nccl_envfile:
         return
 
     nccl_lib_name = os.path.join(nccl_lib_path, "libnccl.so")
@@ -604,8 +611,10 @@ def setup_nccl():
         for fname in f:
             nccl_src_files.append(os.path.join(r, fname))
 
-    nccl = compile_custom_ops(nccl_src_files, 
-        extra_flags=f" -I\"{nccl_include_path}\" {mpi_compile_flags} ",
+    # no MPI -> compile out the MPI_Bcast bootstrap and don't need mpi headers.
+    _mpi_flags = "-DJT_NCCL_NO_MPI" if (_nccl_envfile and not inside_mpi()) else mpi_compile_flags
+    nccl = compile_custom_ops(nccl_src_files,
+        extra_flags=f" -I\"{nccl_include_path}\" {_mpi_flags} ",
         return_module=True, dlopen_flags=os.RTLD_GLOBAL | os.RTLD_NOW,
         gen_name_="jittor_nccl_core")
     nccl_ops = nccl.ops
@@ -793,7 +802,11 @@ cudnn = cublas = curand = cufft = cusparse = None
 # JT_HCCL_WORLD_SIZE is not set.
 _jt_hccl_ws = os.environ.get("JT_HCCL_WORLD_SIZE")
 _jt_hccl_no_mpi = _jt_hccl_ws is not None
-if _jt_hccl_no_mpi:
+# Same MPI-free env/file rendezvous for NVIDIA/NCCL (JT_NCCL_*), so DDP works
+# without mpirun on BOTH backends (torchrun-style, one plain process per rank).
+_jt_nccl_ws = os.environ.get("JT_NCCL_WORLD_SIZE")
+_jt_nccl_no_mpi = _jt_nccl_ws is not None
+if _jt_hccl_no_mpi or _jt_nccl_no_mpi:
     os.environ["use_mpi"] = "0"   # make setup_mpi() a no-op (no libmpi load)
 
 setup_mpi()
@@ -804,6 +817,10 @@ if _jt_hccl_no_mpi:
     in_mpi = True                 # let the optimizer take the distributed path
     rank = int(os.environ.get("JT_HCCL_RANK", "0"))
     world_size = int(_jt_hccl_ws)
+elif _jt_nccl_no_mpi:
+    in_mpi = True
+    rank = int(os.environ.get("JT_NCCL_RANK", "0"))
+    world_size = int(_jt_nccl_ws)
 
 # Enable the device collective backend used for multi-card data parallel.
 # HCCL on Ascend, NCCL on CUDA.
