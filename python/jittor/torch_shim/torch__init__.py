@@ -891,8 +891,10 @@ sys.modules["torch.library"] = _library
 globals()["library"] = _library
 
 # torch.amp top-level (autocast / GradScaler)
+# autocast must be a context-manager AND a decorator (accelerate does
+# `autocast(model_forward)`); reuse torch_compat's _AutocastContext via _jt.autocast.
 _amp_mod = types.ModuleType("torch.amp")
-_amp_mod.autocast = lambda *a, **k: contextlib.nullcontext()
+_amp_mod.autocast = getattr(_jt, "autocast", lambda *a, **k: contextlib.nullcontext())
 class _GradScaler:
     def __init__(self, *a, **k): pass
     def scale(self, loss): return loss

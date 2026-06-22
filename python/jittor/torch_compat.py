@@ -176,6 +176,28 @@ class _GradDecoratorCtx:
         return self._scope.__exit__(*exc)
 
 
+class _AutocastContext:
+    """torch.autocast is BOTH a context manager and a decorator -- accelerate does
+    `new_forward = autocast(model_forward)`. On jittor, bf16/fp16 is determined by
+    the actual tensor dtypes (no global autocast state), so this is a no-op that
+    supports `with autocast(...):`, `@autocast(...)`, and `autocast(...)(fn)`."""
+    def __init__(self, *a, **k):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def __call__(self, func):
+        import functools
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            return func(*args, **kwargs)
+        return wrapper
+
+
 def install(torch):
     g = torch
     # Critical: jittor dispatches every op to CPU unless flags.use_cuda is set.
@@ -988,7 +1010,7 @@ def _install_cuda(g):
     class _amp:
         @staticmethod
         def autocast(*a, **k):
-            return contextlib.nullcontext()
+            return _AutocastContext()
     cuda.amp = _amp
     # stub classes referenced in annotations / guarded paths
     cuda.CUDAGraph = type("CUDAGraph", (), {})
@@ -1444,7 +1466,7 @@ def _install_misc(g, Var):
     _alias("diff", lambda x, n=1, dim=-1, prepend=None, append=None:
            _diff(x, n=n, dim=dim, prepend=prepend, append=append))
     _alias("repeat_interleave", _repeat_interleave)
-    _alias("autocast", lambda *a, **k: __import__("contextlib").nullcontext())
+    _alias("autocast", lambda *a, **k: _AutocastContext())
     _alias("vmap", lambda fn, *a, **k: fn)
     _alias("outer", lambda a, b: jt.matmul(a.reshape(-1, 1), b.reshape(1, -1)))
     _alias("isin", _isin)

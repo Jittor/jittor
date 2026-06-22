@@ -144,5 +144,20 @@ ok(_pd.numpy().tolist() == [[0, 1, 1, -2, 1]], "torch.diff prepend dim=-1")
 _sm = torch.nn.functional.softmax(torch.tensor([1.0, 2.0, 3.0]), dim=-1, dtype=torch.float32)
 ok(abs(float(_sm.sum().numpy()) - 1.0) < 1e-5, "F.softmax(dtype=) normalizes")
 
+# torch.autocast must work as BOTH a context manager and a decorator (accelerate
+# does `new_forward = autocast(model_forward)`).
+with torch.autocast("cuda", dtype=torch.bfloat16):
+    _ac = (torch.ones(2) + 1)
+ok(_ac.numpy().tolist() == [2, 2], "autocast as context manager")
+@torch.autocast("cuda", dtype=torch.bfloat16)
+def _acf(x): return x * 3
+ok(_acf(torch.ones(2)).numpy().tolist() == [3, 3], "autocast as decorator")
+
+# bf16 matmul must work on ACL (cube units); was 'Not supported dtype: bfloat16'
+if getattr(jt.compiler, "has_acl", 0):
+    _bm = torch.matmul(torch.ones(8, 8).to(torch.bfloat16), torch.ones(8, 8).to(torch.bfloat16))
+    ok(str(_bm.dtype) == "bfloat16" and abs(float(_bm.float32().numpy().reshape(-1)[0]) - 8.0) < 1e-2,
+       "bf16 matmul on ACL")
+
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 import sys; sys.exit(1 if FAIL else 0)
