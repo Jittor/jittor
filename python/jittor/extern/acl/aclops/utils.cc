@@ -11,6 +11,12 @@ namespace jittor
 {
     aclDataType get_dtype(NanoString s)
     {
+        // bfloat16's NanoString.data is assigned at runtime (not a compile-time
+        // constant), so it cannot be a switch case. 910B3 supports bf16 natively
+        // (ACL_BF16) -- without this, MatMul/etc. on bf16 hit the default and
+        // abort with "Not supported dtype: bfloat16".
+        if (s == ns_bfloat16)
+            return ACL_BF16;
         switch (s.data)
         {
         case 22667:
