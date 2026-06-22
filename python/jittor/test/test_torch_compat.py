@@ -79,5 +79,50 @@ ok((~torch.tensor([True, False])).numpy().tolist() == [False, True], "invert boo
 ok(torch.finfo(torch.float16).max > 0, "finfo")
 ok(torch.cuda.is_available() in (True, False), "cuda.is_available")
 
+# ---- training bridge: backward / optimizer / LR scheduler / save-load ----
+# loss.backward() + optimizer.step() must actually update params
+lin2 = torch.nn.Linear(4, 2)
+opt = torch.optim.AdamW(lin2.parameters(), lr=1e-2)
+w_before = float((lin2.weight*lin2.weight).sum().numpy())
+x = jt.randn(8, 4)
+loss = ((lin2(x))**2).mean()
+opt.zero_grad(); loss.backward()
+gnorm = torch.nn.utils.clip_grad_norm_(lin2.parameters(), 1.0)
+opt.step()
+w_after = float((lin2.weight*lin2.weight).sum().numpy())
+ok(float(gnorm.numpy()) > 0, "backward produces non-zero grad_norm")
+ok(abs(w_after - w_before) > 0, "optimizer.step updates params")
+ok(lin2.weight.grad is not None, "param.grad accessible after backward")
+
+# LR scheduler drives jittor optimizer lr (shim-level; skip if not wired)
+_lrsmod = getattr(torch.optim, "lr_scheduler", None)
+if _lrsmod is not None and hasattr(_lrsmod, "LambdaLR"):
+    opt2 = torch.optim.AdamW(lin2.parameters(), lr=1e-3)
+    sched = _lrsmod.LambdaLR(opt2, lr_lambda=lambda s: max(0.0, 1.0 - s/4.0))
+    lr0 = sched.get_last_lr()[0]
+    for _ in range(2):
+        sched.step()
+    lr2 = sched.get_last_lr()[0]
+    ok(abs(lr0 - 1e-3) < 1e-9, "scheduler initial lr == base lr")
+    ok(lr2 < lr0, "scheduler decays lr")
+
+# load_state_dict must NOT freeze trainable params (accelerate round-trip bug)
+opt3 = torch.optim.AdamW(lin2.parameters(), lr=1e-3)
+opt3.load_state_dict(opt3.state_dict())
+ok(not lin2.weight.is_stop_grad(), "optimizer load_state_dict keeps params trainable")
+
+# torch.save / torch.load round-trips tensors and plain objects
+import tempfile, os as _os
+_tmp = tempfile.mkdtemp()
+_obj = {"w": torch.tensor([1., 2., 3.]), "meta": {"lr": 0.1, "name": "x"}}
+torch.save(_obj, _os.path.join(_tmp, "ckpt.bin"))
+_loaded = torch.load(_os.path.join(_tmp, "ckpt.bin"))
+ok(_loaded["w"].numpy().tolist() == [1, 2, 3], "torch.save/load tensor round-trip")
+ok(_loaded["meta"]["lr"] == 0.1 and _loaded["meta"]["name"] == "x", "torch.save/load object round-trip")
+
+# Var.dtype is hashable & comparable to torch dtype objects
+_dt = torch.tensor([1.0]).float().dtype
+ok(_dt in {torch.float16, torch.float32}, "Var.dtype hashable + in dtype set")
+
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 import sys; sys.exit(1 if FAIL else 0)
