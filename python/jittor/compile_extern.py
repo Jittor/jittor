@@ -611,8 +611,16 @@ def setup_nccl():
         for fname in f:
             nccl_src_files.append(os.path.join(r, fname))
 
-    # no MPI -> compile out the MPI_Bcast bootstrap and don't need mpi headers.
-    _mpi_flags = "-DJT_NCCL_NO_MPI" if (_nccl_envfile and not inside_mpi()) else mpi_compile_flags
+    # no MPI -> compile out the MPI_Bcast bootstrap. jittor's include scanner is
+    # not #ifdef-aware, so it still must LOCATE mpi_wrapper.h (in the compiled-out
+    # #else) and the <mpi.h> it includes; add their dirs + a stub mpi.h WITHOUT
+    # any libmpi link, so no MPI install is required (#15).
+    if _nccl_envfile and not inside_mpi():
+        _mpi_inc = os.path.join(jittor_path, "extern", "mpi", "inc")
+        _stub_inc = os.path.join(jittor_path, "extern", "cuda", "nccl", "nompi_inc")
+        _mpi_flags = f' -DJT_NCCL_NO_MPI -I"{_mpi_inc}" -I"{_stub_inc}" '
+    else:
+        _mpi_flags = mpi_compile_flags
     nccl = compile_custom_ops(nccl_src_files,
         extra_flags=f" -I\"{nccl_include_path}\" {_mpi_flags} ",
         return_module=True, dlopen_flags=os.RTLD_GLOBAL | os.RTLD_NOW,

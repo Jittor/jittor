@@ -24,6 +24,17 @@ namespace jittor {
 ncclComm_t comm;
 ncclUniqueId id;
 int nccl_device_id = 0;
+#ifdef JT_NCCL_NO_MPI
+// Normally defined by mpi_wrapper.cc; provide them for the MPI-free build (the
+// NCCL env/file rendezvous path / other nccl ops reference these). Only defined
+// here when MPI is excluded, so there is no duplicate symbol in the MPI build.
+int mpi_world_size = 1;
+int mpi_world_rank = 0;
+int mpi_local_size = 1;
+int mpi_local_rank = 0;
+bool inside_mpi = false;
+bool use_device_mpi = false;
+#endif
 
 
 struct nccl_initer {
