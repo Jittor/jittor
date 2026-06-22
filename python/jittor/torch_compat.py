@@ -201,13 +201,14 @@ class _AutocastContext:
 def install(torch):
     g = torch
     # Critical: jittor dispatches every op to CPU unless flags.use_cuda is set.
-    # On Ascend the device is the NPU (jt.compiler.has_acl), but use_cuda defaults
-    # to 0 -- so `import torch` + model.to("cuda") (a no-op here) would silently run
-    # the ENTIRE model on CPU, ~10000x slower (a 2048^3 matmul: 20s CPU vs 2ms NPU).
-    # Enable NPU dispatch globally whenever ACL is available so tensors/ops land on
-    # the NPU by default, matching what torch users expect from .cuda()/.to(device).
+    # The accelerator (Ascend NPU via jt.compiler.has_acl, or NVIDIA GPU via
+    # jt.has_cuda) is present, but use_cuda defaults to 0 -- so `import torch` +
+    # model.to("cuda") (a no-op here) would silently run the ENTIRE model on CPU,
+    # ~10000x slower (a 2048^3 matmul: 20s CPU vs 2ms NPU). Enable device dispatch
+    # globally whenever an accelerator exists, so tensors/ops land on it by default,
+    # matching what torch users expect from .cuda()/.to(device).
     try:
-        if getattr(jt.compiler, "has_acl", 0):
+        if getattr(jt.compiler, "has_acl", 0) or getattr(jt, "has_cuda", 0):
             jt.flags.use_cuda = 1
     except Exception:
         pass
