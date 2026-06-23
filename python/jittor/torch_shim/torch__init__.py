@@ -870,12 +870,69 @@ class RemovableHandle:
 _hooks.RemovableHandle = RemovableHandle
 sys.modules["torch.utils.hooks"] = _hooks
 
-# torch.library (custom op registration) -- pass-through decorators
+# torch.library (custom op registration)
 _library = types.ModuleType("torch.library")
-def _custom_op(name=None, *a, **k):
-    def deco(fn): return fn
-    return deco
+
+# torch.ops dispatcher: a small registry for ops registered via
+# torch.library.custom_op("ns::name", ...), delegating every OTHER namespace to
+# jittor's native ops (jittor_core.ops, pulled in by `from jittor import *`).
+# transformers registers its MoE matmul as @custom_op("transformers::grouped_mm_fallback")
+# then calls torch.ops.transformers.grouped_mm_fallback(...); the old no-op custom_op
+# left torch.ops.transformers undefined -> AttributeError.
+class _OpNamespace:
+    def __init__(self, ns):
+        object.__setattr__(self, "_ns", ns)
+        object.__setattr__(self, "_ops", {})
+    def _register(self, name, fn):
+        object.__getattribute__(self, "_ops")[name] = fn
+    def __getattr__(self, name):
+        o = object.__getattribute__(self, "_ops")
+        if name in o: return o[name]
+        raise AttributeError("torch.ops.%s has no op '%s'" % (object.__getattribute__(self, "_ns"), name))
+
+class _OpsDispatcher:
+    def __init__(self, base):
+        object.__setattr__(self, "_base", base)
+        object.__setattr__(self, "_ns", {})
+    def _register(self, ns, name, fn):
+        d = object.__getattribute__(self, "_ns")
+        d.setdefault(ns, _OpNamespace(ns))._register(name, fn)
+    def __getattr__(self, name):
+        d = object.__getattribute__(self, "_ns")
+        if name in d: return d[name]
+        return getattr(object.__getattribute__(self, "_base"), name)
+
+_ops_dispatcher = _OpsDispatcher(globals().get("ops") or getattr(_jt, "ops", None))
+
+# jittor-native segmented (grouped) matmul. transformers' own fallback uses
+# torch.mm(a, b, out=output[start:end]); jittor has no torch.mm AND silently drops
+# writes to a slice VIEW, so we must build the output by DIRECT parent slice-assign.
+#   input: (S, IN) tokens sorted by expert; weight: (E, IN, OUT); offs: (E,) CUMULATIVE
+#   counts per expert. out[i-segment] = input[i-segment] @ weight[i]. Empty/sentinel
+#   segments are skipped; rows past offs[-1] stay zero.
+def _jt_grouped_mm_fallback(input, weight, offs, *a, **k):
+    out = _jt.zeros((input.shape[0], weight.shape[2]), input.dtype)
+    offs_list = offs.numpy().tolist() if hasattr(offs, "numpy") else list(offs)
+    start = 0
+    for i, end in enumerate(offs_list):
+        end = _builtins.int(end)   # `int` is shadowed by jittor's int dtype (star import)
+        if end <= start:
+            start = end
+            continue
+        out[start:end] = _jt.matmul(input[start:end], weight[i])
+        start = end
+    return out
+
+def _custom_op(name=None, fn=None, *a, **k):
+    def deco(impl):
+        if isinstance(name, str) and "::" in name:
+            ns, op = name.split("::", 1)
+            real = _jt_grouped_mm_fallback if name == "transformers::grouped_mm_fallback" else impl
+            _ops_dispatcher._register(ns, op, real)
+        return impl
+    return deco(fn) if fn is not None else deco
 _library.custom_op = _custom_op
+globals()["ops"] = _ops_dispatcher
 _library.register_fake = lambda *a, **k: (lambda f: f)
 _library.register_kernel = lambda *a, **k: (lambda f: f)
 _library.impl = lambda *a, **k: (lambda f: f)
