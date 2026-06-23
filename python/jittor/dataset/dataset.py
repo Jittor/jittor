@@ -128,7 +128,11 @@ class Dataset(object):
                  buffer_size = 512*1024*1024,
                  stop_grad = True,
                  keep_numpy_array = False,
-                 endless = False):
+                 endless = False,
+                 collate_fn = None,
+                 worker_init_fn = None,
+                 pin_memory = False,
+                 persistent_workers = False):
         super().__init__()
         if os.environ.get("DISABLE_MULTIPROCESSING", '0') == '1':
             num_workers = 0
@@ -141,6 +145,14 @@ class Dataset(object):
         self.stop_grad = stop_grad
         self.keep_numpy_array = keep_numpy_array
         self.endless = endless
+        # torch-compatible options (additive). collate_fn overrides the
+        # default collate_batch when provided; worker_init_fn is called
+        # once per worker process after seeding; pin_memory / persistent_workers
+        # mirror torch's DataLoader semantics.
+        self.collate_fn = collate_fn
+        self.worker_init_fn = worker_init_fn
+        self.pin_memory = pin_memory
+        self.persistent_workers = persistent_workers
         self.epoch_id = 0
         self.sampler = None
         self._disable_workers = False
@@ -217,7 +229,12 @@ class Dataset(object):
 
         [in] batch(list): A list of variables, such as jt.var, Image.Image, np.ndarray, int, float, str and so on.
 
+        Note: if a ``collate_fn`` was provided (torch-compatible), it is used
+        instead of the default collate logic.
         '''
+        collate_fn = getattr(self, "collate_fn", None)
+        if collate_fn is not None:
+            return collate_fn(batch)
         return collate_batch(batch)
 
     def terminate(self):
@@ -237,6 +254,11 @@ class Dataset(object):
         seed = jt.get_seed()
         wseed = (seed ^ (worker_id*1167)) ^ 1234
         jt.set_global_seed(wseed)
+        # torch-compatible: run user worker init hook once per worker process,
+        # after seeding so users can re-seed deterministically if desired.
+        worker_init_fn = getattr(self, "worker_init_fn", None)
+        if worker_init_fn is not None:
+            worker_init_fn(worker_id)
         # parallel_op_compiler still problematic,
         # it is not work on ubuntu 16.04. but worked on ubuntu 20.04
         # it seems like the static value of parallel compiler
