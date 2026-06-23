@@ -997,7 +997,8 @@ class GroupNorm(Module):
         # if x.ndim==4:
             # output_shape = x.shape
         output_shape = x.shape
-        assert C % self.num_groups == 0
+        assert C % self.num_groups == 0, \
+            f"GroupNorm: num_channels ({C}) must be divisible by num_groups ({self.num_groups})"
         x = x.reshape((N, self.num_groups, C//self.num_groups, -1))
         xmean = jt.mean(x, dims=[2,3]).reshape((N, self.num_groups, 1))
         x2mean = jt.mean(x*x, dims=[2,3]).reshape((N, self.num_groups, 1))
