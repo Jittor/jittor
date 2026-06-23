@@ -358,14 +358,14 @@ def stack(x, dim=0):
     return jt.concat(res, dim=dim)
 jt.Var.stack = stack
 
-def flip(x, dim=0):
+def flip(x, dim=0, dims=None):
     r'''
     Reverse the order of a n-D var along given axis in dims.
 
     Args:
 
         input (var) – the input var.
- 
+
         dims (a list or tuple) – axis to flip on.
 
     Example:
@@ -375,8 +375,12 @@ def flip(x, dim=0):
         >>> x.flip(1)
         [[4 3 2 1]]
     '''
+    if dims is not None:          # torch spells the flip axis kwarg `dims`
+        dim = dims
     if isinstance(dim, int):
         dim = [dim]
+    else:
+        dim = list(dim)           # copy: the loop below mutates dim in place
     for i in range(len(dim)):
         if dim[i]<0:
             dim[i] += x.ndim

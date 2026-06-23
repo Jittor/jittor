@@ -988,6 +988,11 @@ def einsum(equation, *operands):
     import numpy as np_cpu
     if len(operands) == 0:
         raise ValueError("einsum requires at least one operand")
+    # torch.einsum also accepts the operands packed in a single list/tuple, e.g.
+    # torch.einsum("bcxd,bcyd->bcxy", (query, key)) (used by longformer's windowed
+    # attention). Unpack that form so the operands are individual Vars below.
+    if len(operands) == 1 and isinstance(operands[0], (list, tuple)):
+        operands = tuple(operands[0])
     # ``_parse_einsum_input`` calls ``asanyarray`` on the operands, so feed
     # it shape-compatible numpy stand-ins and keep the original jittor Vars.
     fake_ops = [np_cpu.empty([1] * len(o.shape), dtype=np_cpu.float32)
