@@ -1552,22 +1552,32 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # jittor's native new_ones/new_zeros only take a size, so override to accept
     # torch kwargs (dtype defaults to self's dtype, like torch).
     def _norm_size(args):
-        # torch allows new_ones(2,3) or new_ones((2,3))
-        if len(args) == 1 and isinstance(args[0], (tuple, list)):
-            return tuple(args[0])
-        return tuple(args)
+        # torch allows new_ones(2,3), new_ones((2,3)), or new_ones(<NanoVector/Size>)
+        # -- unwrap any single iterable that isn't itself a scalar int/Var.
+        if len(args) == 1 and not isinstance(args[0], (int, jt.Var)) \
+                and hasattr(args[0], "__len__"):   # tuple/list/NanoVector/Size
+            args = tuple(args[0])
+        # torch accepts 0-d int Vars / numpy ints as sizes (e.g. longformer computes
+        # dims via torch.div); jittor's factories need plain ints -- coerce.
+        return tuple(int(s.item()) if isinstance(s, jt.Var) else int(s) for s in args)
+    def _resolve_size(size, kw):
+        # torch allows new_ones(2,3), new_ones((2,3)) AND the keyword form
+        # new_ones(size=(2,3)) (used by longformer's new_ones(size=mask.size())).
+        if not size and "size" in kw:
+            return (kw["size"],)
+        return size
     def _new_ones(self, *size, dtype=None, device=None, requires_grad=False, **kw):
         dt = _dtype_to_str(dtype) if dtype is not None else str(self.dtype)
-        return jt.ones(_norm_size(size), dt)
+        return jt.ones(_norm_size(_resolve_size(size, kw)), dt)
     def _new_zeros(self, *size, dtype=None, device=None, requires_grad=False, **kw):
         dt = _dtype_to_str(dtype) if dtype is not None else str(self.dtype)
-        return jt.zeros(_norm_size(size), dt)
+        return jt.zeros(_norm_size(_resolve_size(size, kw)), dt)
     def _new_full(self, size, fill_value, dtype=None, device=None, requires_grad=False, **kw):
         dt = _dtype_to_str(dtype) if dtype is not None else str(self.dtype)
         return jt.full(tuple(size) if isinstance(size, (tuple, list)) else (size,), fill_value).cast(dt)
     def _new_empty(self, *size, dtype=None, device=None, requires_grad=False, **kw):
         dt = _dtype_to_str(dtype) if dtype is not None else str(self.dtype)
-        return jt.empty(_norm_size(size), dt)
+        return jt.empty(_norm_size(_resolve_size(size, kw)), dt)
     def _new_tensor(self, data, dtype=None, device=None, requires_grad=False, **kw):
         dt = _dtype_to_str(dtype) if dtype is not None else str(self.dtype)
         return jt.array(data).cast(dt)
@@ -1901,6 +1911,63 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             sl[d] = slice(start, start + length)
             return self[tuple(sl)]
         Var.narrow = _narrow
+
+    # torch's Tensor.stride()/.as_strided(): jittor Vars are always materialized
+    # contiguous (row-major) -- `.contiguous` above is a no-op -- so a Var's strides
+    # are exactly the row-major strides of its shape (this matches torch's strides
+    # right after a `.view()`/`.reshape()`, which is where this is used, e.g.
+    # longformer's `_chunk` sliding-window attention).
+    if not hasattr(Var, "stride"):
+        def _stride(self, dim=None):
+            shape = self.shape
+            st = [1] * len(shape)
+            for i in range(len(shape) - 2, -1, -1):
+                st[i] = st[i + 1] * shape[i + 1]
+            if dim is None:
+                return tuple(st)
+            return st[dim if dim >= 0 else dim + len(shape)]
+        Var.stride = _stride
+    if not hasattr(Var, "storage_offset"):
+        Var.storage_offset = lambda self: 0
+    # as_strided over a contiguous buffer == gather at linear offsets
+    #   out[i0,i1,...] = flat[storage_offset + sum_d i_d * stride[d]]
+    # Built with broadcast arange grids; routed through jittor advanced-indexing so
+    # the backward is the correct scatter-add (overlapping windows read shared inputs).
+    if not hasattr(Var, "as_strided"):
+        def _as_strided(self, size, stride, storage_offset=0):
+            size = [int(s) for s in size]
+            stride = [int(s) for s in stride]
+            flat = self.reshape(-1)
+            idx = None
+            for d in range(len(size)):
+                ar = jt.arange(size[d], dtype="int64") * stride[d]
+                shp = [1] * len(size)
+                shp[d] = size[d]
+                ar = ar.reshape(shp)
+                idx = ar if idx is None else idx + ar
+            if storage_offset:
+                idx = idx + int(storage_offset)
+            return flat[idx.reshape(-1)].reshape(size)
+        Var.as_strided = _as_strided
+
+    # torch's Tensor.where(condition, other): elements of *self* where condition is
+    # True, else from `other`. jittor's native Var.where treats *self* as the condition
+    # (ternary(self, a, b)) -- the opposite role -- so `t.where(cond, other)` silently
+    # returned `cond` cast to t's dtype (breaks e.g. longformer's _mask_invalid_locations
+    # edge masking). Add the torch 2-arg method semantics while preserving jittor's
+    # native 0/1-arg form (nonzero indices), used by contrib.py. No jittor-core caller
+    # uses the 2-arg method form, so this only fixes, never regresses.
+    _jt_var_where = Var.where
+    def _torch_where(self, *args):
+        if len(args) == 2:
+            condition, other = args
+            if not isinstance(other, Var):
+                other = jt.array(other).broadcast(self.shape)
+            # reuse jittor's native ternary with `condition` as the selector
+            return _jt_var_where(condition, self, other)
+        return _jt_var_where(self, *args)
+    Var.where = _torch_where
+
     # torch's Tensor.tile(*dims): like numpy.tile -- when fewer dims than the
     # tensor rank are given, dims are left-padded with 1. jittor's repeat
     # already implements exactly this padding, so route tile through it.
