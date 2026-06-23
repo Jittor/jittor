@@ -163,7 +163,7 @@ jt.Var.__imatmul__ = lambda a,b: a.assign(matmul(a,b))
 def get_init_var_rand(shape, dtype):
     return jt.array(np.random.normal(0.0, 1.0, shape).astype(np.float32))
 
-def relu(x): 
+def relu(x, inplace=False):
     r''' Applies the element-wise function:
 
     .. math::
@@ -171,6 +171,10 @@ def relu(x):
 
     :param x: the input var
     :type x: jt.Var
+
+    :param inplace: can optionally do the operation in-place (accepted for
+        torch compatibility; Jittor computes a new var). Default: ``False``
+    :type inplace: bool
 
     Example:
         >>> a = jt.randn(3)
@@ -380,9 +384,9 @@ def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction=
         output = output.reshape((-1, c_dim))
 
     target = target.reshape((-1, ))
-    target_weight = ((target >= 0) & (target < output.shape[1])).float32() 
+    target_weight = ((target >= 0) & (target < output.shape[1])).float32()
     if weight is not None:
-        target_weight = weight[target]
+        target_weight = target_weight * weight[target]
     if ignore_index is not None:
         target_weight = jt.ternary(
             target==ignore_index,
@@ -399,7 +403,7 @@ def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction=
     if reduction == 'sum':
         return loss.sum()
     elif reduction == 'mean':
-        return loss.mean() / target_weight.mean()
+        return loss.sum() / jt.maximum(target_weight.sum(), 1e-8)
     else:
         return loss.reshape(target_shape) 
 
@@ -575,7 +579,9 @@ class Dropout(Module):
         output = output.to(input.dtype)
         return output
 
-def dropout(x,p=0.5,is_train=False):
+def dropout(x,p=0.5,is_train=False,training=None):
+    if training is not None:
+        is_train = training
     return Dropout(p=p,is_train=is_train)(x)
 
 class Dropout2d(Module):
@@ -2283,7 +2289,7 @@ class Upsample(Module):
                     int(x.shape[2]*self.scale_factor[0]), 
                     int(x.shape[3]*self.scale_factor[1])),
                 mode=self.mode,
-                align_corners=self.align_cornerss)
+                align_corners=self.align_corners)
 
 class UpsamplingBilinear2d(Upsample):
     def __init__(self, scale_factor=None):

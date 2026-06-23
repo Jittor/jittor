@@ -1436,6 +1436,28 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     if not hasattr(Var, "is_cuda"):
         Var.is_cuda = property(lambda self: bool(jt.flags.use_cuda) or bool(getattr(jt.compiler, "has_acl", 0)))
 
+    # torch's Tensor.narrow(dim, start, length): a view of `length` elements
+    # starting at `start` along `dim` (jittor has no narrow; use a slice).
+    if not hasattr(Var, "narrow"):
+        def _narrow(self, dim, start, length):
+            nd = self.ndim
+            d = dim if dim >= 0 else dim + nd
+            if start < 0:
+                start += self.shape[d]
+            sl = [slice(None)] * nd
+            sl[d] = slice(start, start + length)
+            return self[tuple(sl)]
+        Var.narrow = _narrow
+    # torch's Tensor.tile(*dims): like numpy.tile -- when fewer dims than the
+    # tensor rank are given, dims are left-padded with 1. jittor's repeat
+    # already implements exactly this padding, so route tile through it.
+    if not hasattr(Var, "tile"):
+        def _tile(self, *dims):
+            if len(dims) == 1 and isinstance(dims[0], (tuple, list)):
+                dims = tuple(dims[0])
+            return self.repeat(*dims)
+        Var.tile = _tile
+
 
 def _install_misc(g, Var):
     if hasattr(jt, "set_global_seed"):
@@ -1634,6 +1656,17 @@ def _install_misc(g, Var):
             setattr(g, name, fn)
     _alias("rsqrt", lambda x: 1.0 / jt.sqrt(x))
     _alias("empty_like", lambda x, **k: jt.empty(x.shape, x.dtype))
+    # torch.eye(n, m=None, *, dtype=, ...): identity / rectangular-identity
+    # matrix. jittor has no top-level eye (only jt.init.eye), so add one.
+    def _eye(n, m=None, dtype=None, **k):
+        shape = (int(n),) if m is None else (int(n), int(m))
+        import jittor.init as _init
+        return _init.eye(shape, _dtype_to_str(dtype) or "float32")
+    _alias("eye", _eye)
+    # torch.narrow(input, dim, start, length) / torch.tile(input, dims) --
+    # function forms mirroring the Var methods (added in _install_tensor_methods).
+    _alias("narrow", lambda input, dim, start, length: input.narrow(dim, start, length))
+    _alias("tile", lambda input, *dims: input.tile(*dims))
     # torch.equal returns a Python bool (True iff same shape & all elements
     # equal). jittor's native `equal` is elementwise, so force-override.
     def _torch_equal(a, b):

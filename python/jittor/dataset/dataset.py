@@ -15,7 +15,17 @@ import os
 from jittor.dataset.utils import get_random_list, get_order_list, collate_batch, HookTimer
 from collections.abc import Sequence, Mapping
 import pathlib
-from PIL import Image
+try:
+    from PIL import Image
+    _has_pil = True
+except ImportError:
+    class _MissingPIL:
+        def __getattr__(self, name):
+            raise ImportError(
+                "PIL (Pillow) is required for image dataset operations. "
+                "Please install it with `pip install pillow`.")
+    Image = _MissingPIL()
+    _has_pil = False
 import multiprocessing as mp
 import signal
 from jittor_utils import LOG
@@ -26,7 +36,13 @@ import jittor_utils as jit_utils
 dataset_root = os.path.join(jit_utils.home(), ".cache", "jittor", "dataset")
 mp_log_v = os.environ.get("mp_log_v", 0) 
 mpi = jt.mpi
-img_open_hook = HookTimer(Image, "open")
+if _has_pil:
+    img_open_hook = HookTimer(Image, "open")
+else:
+    # PIL is optional; provide a no-op timer so worker status logging still works.
+    class _NoopTimer:
+        duration = 0.0
+    img_open_hook = _NoopTimer()
 CHECK_MEMORY = int(os.environ.get("CHECK_MEMORY", "0"))
 
 if os.name == "nt":
@@ -268,7 +284,7 @@ class Dataset(object):
                     print(f"#{worker_id} {os.getpid()} send", type(batch).__name__, [ type(b).__name__ for b in batch ], buffer)
                 try:
                     buffer.send(batch)
-                except:
+                except Exception:
                     if buffer.is_stop():
                         continue
                     raise
@@ -280,7 +296,7 @@ class Dataset(object):
                     other_time + data_time + send_time, \
                     img_open_hook.duration
                 img_open_hook.duration = 0.0
-        except:
+        except Exception:
             import traceback
             line = traceback.format_exc()
             print(line)
@@ -414,7 +430,7 @@ Example::
             print("dataset deleted")
         try:
             self.terminate()
-        except:
+        except Exception:
             pass
 
     def __deepcopy__(self, memo=None, _nil=[]):
