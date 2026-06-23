@@ -583,6 +583,23 @@ def _install_autograd_function(g):
         def _saved_tensors(self):
             return getattr(self, "_saved_tensors", ())
         Fn.saved_tensors = property(_saved_tensors)
+    # torch.autograd.Function defines `@staticmethod backward(ctx, *grad_outputs)`;
+    # jittor's Function.__call__ tapes self._grad, which calls `self.grad(*grads)`.
+    # The shim maps execute->forward and save_for_backward/saved_tensors, but never
+    # bridged backward->grad, so a torch-style custom Function (e.g. bloom's
+    # GeLUFunction) raised "'GeLUFunction' object has no attribute 'grad'" in the
+    # backward pass. Add a base `grad` that routes to a torch-style `backward` with
+    # the instance as ctx. Gated on the base lacking its own grad; every native
+    # jittor Function subclass (ACL ops, EMD, ...) defines grad(), which MRO-shadows
+    # this, so they're untouched.
+    if "grad" not in getattr(Fn, "__dict__", {}):
+        def grad(self, *grad_outputs):
+            bw = getattr(type(self), "backward", None)
+            if bw is None:
+                raise AttributeError(
+                    f"{type(self).__name__!r} object has no attribute 'grad'")
+            return bw(self, *grad_outputs)
+        Fn.grad = grad
 
 
 def _install_autograd(g):
