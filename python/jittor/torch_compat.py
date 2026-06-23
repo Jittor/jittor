@@ -862,6 +862,53 @@ def _install_reductions(g):
         return self.reindex(out_shape, src)
     Var.diagonal = _diagonal
 
+    # --- elementwise / reduction ops missing as torch methods (all additive) ---
+    if not hasattr(Var, "sign"):
+        # torch sign: -1/0/+1 (nan->nan in torch; this gives 0 for nan, an accepted edge)
+        Var.sign = lambda self: (self > 0).cast(self.dtype) - (self < 0).cast(self.dtype)
+    if not hasattr(Var, "trunc"):
+        Var.trunc = lambda self: _jt.ternary(self >= 0, _jt.floor(self), _jt.ceil(self))
+    if not hasattr(Var, "frac"):
+        Var.frac = lambda self: self - _jt.ternary(self >= 0, _jt.floor(self), _jt.ceil(self))
+    if not hasattr(Var, "nan_to_num"):
+        def _nan_to_num(self, nan=0.0, posinf=None, neginf=None):
+            # Replace nan with one ternary, then clamp to the ±inf replacement bounds.
+            # NB: a jittor JIT codegen bug SEGFAULTS on chained isinf+ternary over a
+            # tensor holding inf/nan (tracked, #11), so we deliberately avoid that and
+            # use a clamp. This is EXACT for the default (float32-max) bounds -- finite
+            # values are untouched and ±inf map to ±max. For *narrow custom* posinf/
+            # neginf it also clamps finite values past them (a rare, documented
+            # deviation accepted to avoid the core segfault).
+            pi = 3.4028234663852886e38 if posinf is None else posinf   # exact float32 max
+            ni = -3.4028234663852886e38 if neginf is None else neginf
+            out = _jt.ternary(_jt.isnan(self), _jt.full_like(self, nan), self)
+            return out.minimum(pi).maximum(ni)
+        Var.nan_to_num = _nan_to_num
+        g.nan_to_num = lambda x, nan=0.0, posinf=None, neginf=None: _nan_to_num(x, nan, posinf, neginf)
+    if not hasattr(Var, "amax"):
+        def _amax(self, dim=None, keepdim=False):
+            d = list(dim) if isinstance(dim, (tuple, list)) else dim
+            return _jt_max(self, d, keepdims=keepdim) if d is not None else self.max()
+        def _amin(self, dim=None, keepdim=False):
+            d = list(dim) if isinstance(dim, (tuple, list)) else dim
+            return _jt_min(self, d, keepdims=keepdim) if d is not None else self.min()
+        Var.amax = _amax
+        Var.amin = _amin
+        g.amax = lambda x, dim=None, keepdim=False: _amax(x, dim, keepdim)
+        g.amin = lambda x, dim=None, keepdim=False: _amin(x, dim, keepdim)
+    if not hasattr(Var, "count_nonzero"):
+        def _count_nonzero(self, dim=None):
+            nz = (self != 0).int32()
+            return nz.sum(dim) if dim is not None else nz.sum()
+        Var.count_nonzero = _count_nonzero
+        g.count_nonzero = lambda x, dim=None: _count_nonzero(x, dim)
+    if not hasattr(g, "logaddexp"):
+        def _logaddexp(a, b):
+            m = _jt.maximum(a, b)                       # numerically stable
+            return m + _jt.log(_jt.exp(a - m) + _jt.exp(b - m))
+        g.logaddexp = _logaddexp
+        Var.logaddexp = _logaddexp
+
 
 def _wrap_constructors(g):
     """Wrap jittor tensor constructors to accept torch kwargs (device=,

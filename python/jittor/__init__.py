@@ -779,7 +779,11 @@ Var.squeeze = squeeze
 def clamp(x, min_v=None, max_v=None):
     if x.shape[0]==0:
         return x
-    if min_v is not None and max_v is not None:
+    # torch allows tensor min/max bounds (and doesn't assert ordering); only do the
+    # scalar ordering sanity-check when both bounds are plain scalars -- a Var bound
+    # can't be reduced to a single bool. maximum/minimum already broadcast tensors.
+    if min_v is not None and max_v is not None \
+            and not isinstance(min_v, Var) and not isinstance(max_v, Var):
         assert min_v <= max_v
     if min_v is not None:
         x = x.maximum(min_v)
