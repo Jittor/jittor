@@ -269,7 +269,7 @@ def sign(x: jt.Var) -> jt.Var:
     x = jt.ternary(x>0, one, x)
     return jt.ternary(x<0, -one, x)
 
-def gelu(x):
+def gelu(x, approximate='none'):
     r''' Applies the element-wise function:
 
     .. math::
@@ -277,8 +277,16 @@ def gelu(x):
 
     where :math:`\Phi(x)` is the Cumulative Distribution Function for Gaussian Distribution.
 
+    When ``approximate='tanh'``, GELU is estimated with:
+
+    .. math::
+        \text{GELU}(x) = 0.5 * x * (1 + \tanh(\sqrt{2/\pi} * (x + 0.044715 * x^3)))
+
     :param x: the input var
     :type x: jt.Var
+    :param approximate: the gelu approximation algorithm to use, either ``'none'``
+        (exact, erf-based) or ``'tanh'``. Default: ``'none'``.
+    :type approximate: str
 
     Example:
         >>> a = jt.randn(3)
@@ -287,10 +295,16 @@ def gelu(x):
         >>> nn.gelu(a)
         jt.Var([-0.134547   0.9882567  6.128115 ], dtype=float32)
     '''
-    _sqrt2 = 1.4142135623730951
-    erf = jt.erf(x/_sqrt2)+1
-    r = erf*x*.5
-    return r
+    if approximate == 'tanh':
+        _sqrt_2_over_pi = 0.7978845608028654
+        return 0.5*x*(1+jt.tanh(_sqrt_2_over_pi*(x+0.044715*(x*x*x))))
+    elif approximate == 'none':
+        _sqrt2 = 1.4142135623730951
+        erf = jt.erf(x/_sqrt2)+1
+        r = erf*x*.5
+        return r
+    else:
+        raise ValueError(f"approximate argument must be either 'none' or 'tanh', got {approximate}")
 
 def silu(x):
     r''' Applies the element-wise function:
