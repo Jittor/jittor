@@ -443,6 +443,8 @@ def install(torch):
             return self
         def seed(self):
             return self._seed
+        def initial_seed(self):
+            return self._seed
     g.Generator = Generator
 
     # numeric / misc top-level constants and small types
@@ -481,6 +483,7 @@ def install(torch):
     # layout=/pin_memory= kwargs and torch dtype objects. jittor's versions
     # don't accept device=, which torch code passes everywhere.
     _wrap_constructors(g)
+    _install_random_and_linspace(g)
 
     _install_reductions(g)
 
@@ -788,6 +791,63 @@ def _wrap_constructors(g):
                  "triu", "normal"):
         wrap(name)
 
+
+def _install_random_and_linspace(g):
+    """torch-compat for linspace(dtype=) and the random samplers' generator= arg.
+
+    Runs AFTER _wrap_constructors, so it wraps the already-kwarg-tolerant
+    versions. jittor's linspace has no `dtype` and its random ops have no
+    `generator`, so torch code passing either currently raises TypeError.
+    """
+    import functools
+
+    # torch.linspace(..., dtype=) -- jittor's linspace has no dtype param. Pop
+    # it and cast the result, matching torch (default float32 stays unchanged).
+    _lin = getattr(g, "linspace", None)
+    if _lin is not None:
+        @functools.wraps(_lin)
+        def linspace(*args, dtype=None, **kwargs):
+            r = _lin(*args, **kwargs)
+            if dtype is not None:
+                r = r.cast(_dtype_to_str(dtype))
+            return r
+        g.linspace = linspace
+
+    # torch.randn/rand/randint(..., generator=) -- jittor samplers seed off the
+    # global RNG and reject `generator`. When a Generator is given, seed the
+    # global RNG from it (initial_seed()/seed) so the draw is reproducible,
+    # then restore nothing (matches torch users who pass a seeded generator for
+    # determinism). Without a generator, behavior is unchanged.
+    def _seed_from(gen):
+        if gen is None:
+            return
+        s = None
+        for attr in ("initial_seed", "seed"):
+            fn = getattr(gen, attr, None)
+            if callable(fn):
+                try:
+                    s = fn()
+                    break
+                except Exception:
+                    s = None
+        if s is None:
+            s = getattr(gen, "_seed", None)
+        if s is not None and hasattr(jt, "set_global_seed"):
+            jt.set_global_seed(int(s))
+
+    def wrap_gen(name):
+        orig = getattr(g, name, None)
+        if orig is None:
+            return
+        @functools.wraps(orig)
+        def wrapped(*args, generator=None, **kwargs):
+            _seed_from(generator)
+            return orig(*args, **kwargs)
+        setattr(g, name, wrapped)
+
+    for name in ("randn", "rand", "randint", "randperm", "normal",
+                 "randn_like", "rand_like", "multinomial", "bernoulli"):
+        wrap_gen(name)
 
 
 def _install_nn_extras(nn):
@@ -1270,6 +1330,15 @@ def _install_init_aliases():
     if not hasattr(_init, "sparse_"):
         _init.sparse_ = lambda t, *a, **k: t  # best-effort no-op
 
+    # torch.nn.init also exposes deprecated non-underscore spellings of the
+    # in-place initializers (normal/xavier_normal/kaiming_uniform/kaiming_normal),
+    # which forward to the `_` versions. Some older model code calls them. Add
+    # each alias only when its `_` target exists and the alias is still missing.
+    for tname in ("normal", "xavier_normal", "kaiming_uniform", "kaiming_normal"):
+        target = tname + "_"
+        if not hasattr(_init, tname) and hasattr(_init, target):
+            setattr(_init, tname, getattr(_init, target))
+
 
 def _install_cuda(g):
     import types as _types, contextlib
@@ -1415,8 +1484,39 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         Var.mul_ = lambda self, o: _ip(self, self * o)
     if not hasattr(Var, "div_"):
         Var.div_ = lambda self, o: _ip(self, self / o)
-    if not hasattr(Var, "clamp_"):
-        Var.clamp_ = lambda self, min=None, max=None: _ip(self, jt.clamp(self, min, max))
+    # torch.clamp(input, min=None, max=None) and Tensor.clamp(min=, max=)
+    # accept min/max as keyword args, either of which may be None. jittor's
+    # native clamp only takes them positionally and rejects the keywords (it
+    # also exposes `low`/`high` names, not `min`/`max`). Wrap both the
+    # top-level op and the method so torch's keyword form works, while plain
+    # positional calls (jittor's own usage) pass straight through unchanged.
+    _native_clamp = jt.clamp
+    def _clamp(input, min=None, max=None):
+        return _native_clamp(input, min, max)
+    g.clamp = _clamp
+    g.clip = _clamp                      # torch.clip is an alias of torch.clamp
+    Var.clamp = lambda self, min=None, max=None: _native_clamp(self, min, max)
+    Var.clip = lambda self, min=None, max=None: _native_clamp(self, min, max)
+    Var.clamp_ = lambda self, min=None, max=None: _ip(self, _native_clamp(self, min, max))
+    Var.clip_ = Var.clamp_
+
+    # torch's Tensor.nonzero(as_tuple=False) returns an (N, ndim) index matrix;
+    # nonzero(as_tuple=True) instead returns a tuple of ndim 1-D index Vars (one
+    # per dimension) -- transformers/diffusers use the tuple form for advanced
+    # indexing. jittor's nonzero only returns the matrix and rejects as_tuple.
+    _native_nonzero = jt.nonzero
+    def _nonzero(self, as_tuple=False, **kw):
+        idx = _native_nonzero(self)
+        if not as_tuple:
+            return idx
+        # idx is (N, ndim); split into one 1-D index Var per dimension. For a
+        # 0/1-D input torch still returns a 1-tuple of the flat indices.
+        ndim = idx.shape[1] if idx.ndim == 2 else 1
+        if idx.ndim != 2:
+            return (idx.reshape(-1),)
+        return tuple(idx[:, d] for d in range(ndim))
+    Var.nonzero = _nonzero
+    g.nonzero = lambda input, as_tuple=False, **kw: _nonzero(input, as_tuple=as_tuple)
     if not hasattr(Var, "normal_"):
         Var.normal_ = lambda self, mean=0.0, std=1.0, generator=None: _ip(self, jt.normal(float(mean), float(std), self.shape).cast(str(self.dtype)))
     if not hasattr(Var, "uniform_"):

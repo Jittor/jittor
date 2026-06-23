@@ -1199,6 +1199,132 @@ sys.modules["torch.jit"] = _jit
 globals()["jit"] = _jit
 
 # ---------------------------------------------------------------------------
+# diffusers import-time stubs
+# ---------------------------------------------------------------------------
+# diffusers 0.38.0 touches a handful of torch attributes purely at *import*
+# time (module/class-def time): accelerator namespaces it never actually runs
+# on jittor (xpu/mps/mtia), sub-byte placeholder dtypes used only to build
+# lookup tables, distributed mesh/process-group types used in (non-future)
+# annotations, top-level Stream/Event used in `|` unions, a TorchFunctionMode
+# base class that gets subclassed, and two private _pytree helpers. These are
+# pure placeholders -- no functionality -- whose sole job is to stop the
+# import from raising AttributeError. Real use is guarded at runtime by
+# diffusers (e.g. behind is_available()/cuda checks).
+
+# torch.xpu / torch.mps / torch.mtia -- accelerator namespaces that report
+# "unavailable" and no-op every entry point diffusers probes.
+def _make_accel_stub(_name):
+    _m = types.ModuleType("torch." + _name)
+    _m.is_available = lambda: False
+    _m.is_initialized = lambda: False
+    _m.device_count = lambda: 0
+    _m.current_device = lambda: 0
+    _m.set_device = lambda *a, **k: None
+    _m.empty_cache = lambda *a, **k: None
+    _m.synchronize = lambda *a, **k: None
+    _m.manual_seed = lambda *a, **k: None
+    _m.manual_seed_all = lambda *a, **k: None
+    _m.seed = lambda *a, **k: None
+    _m.reset_peak_memory_stats = lambda *a, **k: None
+    _m.max_memory_allocated = lambda *a, **k: 0
+    _m.memory_allocated = lambda *a, **k: 0
+    sys.modules["torch." + _name] = _m
+    globals()[_name] = _m
+    return _m
+_xpu = _make_accel_stub("xpu")
+_mps = _make_accel_stub("mps")
+_mtia = _make_accel_stub("mtia")
+
+# torch.uint1 .. torch.uint7 -- sub-byte unsigned placeholder dtypes. jittor
+# has no kernels for these; they only need to exist (as distinct, hashable
+# dtype objects) so diffusers' torchao dtype tables build. Reuse the
+# torch_compat dtype type when present so they print torch-style.
+_dtype_cls = getattr(_jt, "dtype", None)
+for _i in range(1, 8):
+    _dn = "uint%d" % _i
+    if _dn in globals():
+        continue
+    _placeholder = _dn
+    if _dtype_cls is not None:
+        try:
+            _placeholder = _dtype_cls(_dn, False)
+        except Exception:
+            _placeholder = _dn
+    globals()[_dn] = _placeholder
+
+# torch.distributed.device_mesh.DeviceMesh / init_device_mesh and
+# torch.distributed.ProcessGroup -- minimal types/functions. `dist` and its
+# `device_mesh` submodule were created earlier in this file.
+class _DeviceMesh:
+    def __init__(self, device_type=None, mesh=None, *, mesh_dim_names=None, **k):
+        self.device_type = device_type
+        self.mesh = mesh
+        self.mesh_dim_names = mesh_dim_names
+    def __getitem__(self, *a, **k): return self
+    def size(self, *a, **k): return 1
+    def get_rank(self, *a, **k): return 0
+    def get_group(self, *a, **k): return None
+    def get_local_rank(self, *a, **k): return 0
+def _init_device_mesh(device_type=None, mesh_shape=None, *, mesh_dim_names=None, **k):
+    return _DeviceMesh(device_type=device_type, mesh=mesh_shape,
+                       mesh_dim_names=mesh_dim_names)
+dist.device_mesh.DeviceMesh = _DeviceMesh
+dist.device_mesh.init_device_mesh = _init_device_mesh
+dist.DeviceMesh = _DeviceMesh
+dist.init_device_mesh = _init_device_mesh
+class _ProcessGroup:
+    def __init__(self, *a, **k): pass
+    def size(self, *a, **k): return 1
+    def rank(self, *a, **k): return 0
+dist.ProcessGroup = _ProcessGroup
+
+# torch.Stream / torch.Event -- minimal types (used in `|` unions and as bare
+# placeholders; never actually drive computation on the jittor backend).
+class Stream:
+    def __init__(self, *a, **k): pass
+    def synchronize(self, *a, **k): return None
+    def wait_stream(self, *a, **k): return None
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+class Event:
+    def __init__(self, *a, **k): pass
+    def record(self, *a, **k): return None
+    def synchronize(self, *a, **k): return None
+    def wait(self, *a, **k): return None
+    def elapsed_time(self, *a, **k): return 0.0
+    def query(self, *a, **k): return True
+globals()["Stream"] = Stream
+globals()["Event"] = Event
+
+# torch.overrides.TorchFunctionMode (+ BaseTorchFunctionMode alias) -- a
+# minimal context manager. diffusers subclasses it (overriding
+# __torch_function__) and enters it as a `with`-block; on jittor there is no
+# __torch_function__ dispatch, so this is a no-op context that lets the body
+# run normally.
+class TorchFunctionMode:
+    def __init__(self, *a, **k): pass
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+    def __torch_function__(self, func, types, args=(), kwargs=None):
+        return func(*args, **(kwargs or {}))
+_ovr.TorchFunctionMode = TorchFunctionMode
+_ovr.BaseTorchFunctionMode = TorchFunctionMode
+_ovr.get_default_nowrap_functions = lambda: set()
+_ovr.has_torch_function = lambda *a, **k: False
+_ovr.handle_torch_function = lambda func, types, *a, **k: func(*a, **k)
+
+# torch.utils._pytree._dict_flatten / _dict_unflatten -- private helpers
+# diffusers uses to (de)serialize its output dataclasses. Flatten yields the
+# dict's values plus the key list as context; unflatten rebuilds the dict.
+def _dict_flatten(d):
+    keys = list(d.keys())
+    return [d[k] for k in keys], keys
+def _dict_unflatten(values, context):
+    return dict(zip(context, values))
+_pytree._dict_flatten = _dict_flatten
+_pytree._dict_unflatten = _dict_unflatten
+
+# ---------------------------------------------------------------------------
 # safetensors "pt" backend shim
 # ---------------------------------------------------------------------------
 # safetensors' framework="pt" path goes through the Rust binding which builds
