@@ -769,7 +769,10 @@ def squeeze(x, dim=None):
     else:
         if dim < 0: dim += len(shape)
         assert dim < len(shape) and dim >= 0
-        assert shape[dim] == 1
+        # torch (and numpy): squeeze(dim) is a no-op when that dim's size != 1,
+        # not an error (canine's _downsample_attention_mask relies on this).
+        if shape[dim] != 1:
+            return x
         return x.reshape(shape[:dim] + shape[dim+1:])
 Var.squeeze = squeeze
 
