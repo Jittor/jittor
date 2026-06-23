@@ -2406,6 +2406,11 @@ def _install_misc(g, Var):
             setattr(g, name, fn)
     _alias("rsqrt", lambda x: 1.0 / jt.sqrt(x))
     _alias("empty_like", lambda x, **k: jt.empty(x.shape, x.dtype))
+    # torch.softmax / log_softmax / relu top-level function forms (convbert calls
+    # torch.softmax(x, dim=...)). jittor exposes these via nn, not the top level.
+    _alias("softmax", lambda input, dim=None, **k: jt.nn.softmax(input, dim=dim))
+    _alias("log_softmax", lambda input, dim=None, **k: jt.nn.log_softmax(input, dim=dim))
+    _alias("relu", lambda input, **k: jt.nn.relu(input))
     # torch.eye(n, m=None, *, dtype=, ...): identity / rectangular-identity
     # matrix. jittor has no top-level eye (only jt.init.eye), so add one.
     def _eye(n, m=None, dtype=None, **k):
