@@ -172,6 +172,16 @@ _parametrize.is_parametrized = lambda module, *a, **k: False
 _parametrize.type_before_parametrizations = lambda module: type(module)
 _nn_utils.parametrize = _parametrize
 sys.modules["torch.nn.utils.parametrize"] = _parametrize
+# torch.nn.utils.parametrizations (newer API; wav2vec2/hubert/... check
+# `hasattr(nn.utils.parametrizations, "weight_norm")` before falling back to the old
+# nn.utils.weight_norm). Same no-op reparam: the effective weight is unchanged, so
+# forward is correct for freshly-built models.
+_parametrizations = types.ModuleType("torch.nn.utils.parametrizations")
+_parametrizations.weight_norm = lambda module, name="weight", dim=0: module
+_parametrizations.spectral_norm = lambda module, *a, **k: module
+_parametrizations.orthogonal = lambda module, *a, **k: module
+_nn_utils.parametrizations = _parametrizations
+sys.modules["torch.nn.utils.parametrizations"] = _parametrizations
 # torch.nn.utils.rnn (pad/pack helpers)
 _rnn = types.ModuleType("torch.nn.utils.rnn")
 def _pad_sequence(sequences, batch_first=False, padding_value=0.0):
