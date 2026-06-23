@@ -1643,34 +1643,44 @@ _SCATTER_REDUCE_JT = {'sum': 'add', 'add': 'add', 'prod': 'multiply',
                       'multiply': 'multiply', 'amax': 'maximum', 'max': 'maximum',
                       'maximum': 'maximum', 'amin': 'minimum', 'min': 'minimum',
                       'minimum': 'minimum'}
-# reduction identities used to exclude `self` at receiving positions (include_self=False)
-_SCATTER_REDUCE_ID = {'add': 0.0, 'multiply': 1.0, 'maximum': -3.4e38, 'minimum': 3.4e38}
+
+def _segment_reduce(x, dim, index, src, jt_op):
+    ''' contrib[out_cell] = jt_op-reduce over the src elements that scatter into it
+    (cells receiving nothing get the reduce identity: 0/1/-inf/+inf). Uses
+    reindex_reduce (PULL-based, race-free) rather than scatter's setitem-reduce,
+    because jittor's CUDA min/max setitem-reduce is buggy for multi-column index
+    patterns (deterministically drops contributions; tracked core bug). '''
+    d = dim if dim >= 0 else dim + x.ndim
+    nd = src.ndim
+    coords = ",".join(f"i{t}" for t in range(nd))
+    exprs = [("@e0(" + coords + ")") if k == d else f"i{k}" for k in range(nd)]
+    return src.reindex_reduce(jt_op, list(x.shape), exprs, extras=[index])
 
 def scatter_reduce(x, dim, index, src, reduce, include_self=True):
     ''' torch's Tensor.scatter_reduce(dim, index, src, reduce, include_self=True).
-    Supports reduce = sum/prod/mean/amax/amin and BOTH include_self values, out-of-place.
-    include_self=False excludes the original `self` at any receiving position (fill it
-    with the reduction identity first) while leaving non-receiving positions untouched. '''
+    Supports reduce = sum/prod/mean/amax/amin and BOTH include_self values, out-of-place
+    and DUAL-CARD correct (Ascend + CUDA). include_self=False excludes the original
+    `self` at receiving positions while leaving non-receiving positions untouched. '''
     if reduce != 'mean' and reduce not in _SCATTER_REDUCE_JT:
         raise NotImplementedError(f"scatter_reduce reduce='{reduce}' not supported (tracked)")
+    # count of src elements landing in each output cell (race-free reindex_reduce)
     ones_like_src = jt.ones(src.shape, x.dtype)
-    if include_self:
-        if reduce == 'mean':
-            summed = x.clone().scatter(dim, index, src, reduce='add')         # self + sum(src)
-            count = jt.ones(x.shape, x.dtype) + \
-                    jt.zeros(x.shape, x.dtype).scatter(dim, index, ones_like_src, reduce='add')
-            return summed / count
-        return x.clone().scatter(dim, index, src, reduce=_SCATTER_REDUCE_JT[reduce])
-    # include_self=False: exclude self at receiving positions via an identity-fill.
-    count = jt.zeros(x.shape, x.dtype).scatter(dim, index, ones_like_src, reduce='add')
+    count = _segment_reduce(x, dim, index, ones_like_src, "add")
     hit = count > 0
     if reduce == 'mean':
-        base = jt.ternary(hit, jt.zeros(x.shape, x.dtype), x)
-        summed = base.scatter(dim, index, src, reduce='add')
-        return jt.ternary(hit, summed / count.maximum(jt.ones(x.shape, x.dtype)), x)
+        s = _segment_reduce(x, dim, index, src, "add")               # sum of src per cell
+        if include_self:
+            return (x + s) / (count + jt.ones(x.shape, x.dtype))
+        return jt.ternary(hit, s / count.maximum(jt.ones(x.shape, x.dtype)), x)
     jr = _SCATTER_REDUCE_JT[reduce]
-    base = jt.ternary(hit, jt.full_like(x, _SCATTER_REDUCE_ID[jr]), x)
-    return base.scatter(dim, index, src, reduce=jr)
+    contrib = _segment_reduce(x, dim, index, src, jr)               # identity where unreceived
+    if include_self:
+        if jr == 'add':       return x + contrib
+        if jr == 'multiply':  return x * contrib
+        if jr == 'maximum':   return jt.maximum(x, contrib)
+        return jt.minimum(x, contrib)                              # minimum
+    # include_self=False: receiving cells use contrib, non-receiving keep self
+    return jt.ternary(hit, contrib, x)
 jt.Var.scatter_reduce = scatter_reduce
 
 def index_add(x, dim, index, source, alpha=1):
