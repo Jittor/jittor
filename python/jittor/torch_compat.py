@@ -909,6 +909,16 @@ def _install_reductions(g):
         g.logaddexp = _logaddexp
         Var.logaddexp = _logaddexp
 
+    # argmax/argmin METHOD forms: torch returns just the indices; jittor's native
+    # Var.argmax returns (idx, val). Core uses these only in docstrings, so override.
+    Var.argmax = lambda self, dim=None, keepdim=False: argmax(self, dim, keepdim)
+    Var.argmin = lambda self, dim=None, keepdim=False: argmin(self, dim, keepdim)
+    # addcmul/addcdiv: self + value * (t1 (*|/) t2)
+    Var.addcmul = lambda self, t1, t2, value=1: self + value * (t1 * t2)
+    Var.addcdiv = lambda self, t1, t2, value=1: self + value * (t1 / t2)
+    if not hasattr(Var, "broadcast_to"):
+        Var.broadcast_to = lambda self, shape: self.broadcast(shape)
+
 
 def _wrap_constructors(g):
     """Wrap jittor tensor constructors to accept torch kwargs (device=,
@@ -2411,6 +2421,26 @@ def _install_misc(g, Var):
     _alias("softmax", lambda input, dim=None, **k: jt.nn.softmax(input, dim=dim))
     _alias("log_softmax", lambda input, dim=None, **k: jt.nn.log_softmax(input, dim=dim))
     _alias("relu", lambda input, **k: jt.nn.relu(input))
+    # elementwise / functional top-level forms missing from jittor's top level
+    _alias("log1p", lambda x: jt.log(1.0 + x))
+    _alias("reciprocal", lambda x: 1.0 / x)
+    _alias("lerp", lambda input, end, weight: input + weight * (end - input))
+    _alias("isclose", lambda a, b, rtol=1e-5, atol=1e-8, equal_nan=False, **k:
+           jt.abs(a - b) <= (atol + rtol * jt.abs(b)))
+    # torch.take_along_dim(input, indices, dim) == gather along dim (None -> flattened)
+    _alias("take_along_dim", lambda input, indices, dim=None:
+           jt.gather(input, dim, indices) if dim is not None
+           else jt.gather(input.reshape(-1), 0, indices.reshape(-1)))
+    def _movedim(x, source, destination):
+        nd = x.ndim
+        src = [s % nd for s in (source if isinstance(source, (list, tuple)) else [source])]
+        dst = [d % nd for d in (destination if isinstance(destination, (list, tuple)) else [destination])]
+        order = [d for d in range(nd) if d not in src]
+        for d, s in sorted(zip(dst, src)):
+            order.insert(d, s)
+        return x.permute(order)
+    _alias("movedim", _movedim)
+    _alias("moveaxis", _movedim)
     # torch.eye(n, m=None, *, dtype=, ...): identity / rectangular-identity
     # matrix. jittor has no top-level eye (only jt.init.eye), so add one.
     def _eye(n, m=None, dtype=None, **k):
