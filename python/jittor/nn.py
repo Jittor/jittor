@@ -2273,13 +2273,32 @@ class Embedding(Module):
              [ 0.14941819  0.57047683 -1.3217674]
              [ 0.14941819  0.57047683 -1.3217674]], dtype=float32)
     '''
-    def __init__(self, num_embeddings, embedding_dim, padding_idx=None, dtype="float32"):
+    def __init__(self, num_embeddings, embedding_dim, padding_idx=None,
+                 dtype="float32", max_norm=None, norm_type=2.0,
+                 scale_grad_by_freq=False, sparse=False, _weight=None,
+                 _freeze=False, device=None):
+        # torch.nn.Embedding-compatible signature. max_norm/norm_type/
+        # scale_grad_by_freq/sparse/device are accepted for API parity (they
+        # don't affect forward numerics here); _weight provides an initial weight;
+        # _freeze makes the embedding non-trainable (e.g. Pegasus sinusoidal
+        # positions). `dtype` stays the 4th positional for jittor backward-compat.
         self.num_embeddings = num_embeddings
         self.embedding_dim = embedding_dim
         self.padding_idx = padding_idx
-        self.weight = jt.init.gauss([self.num_embeddings, self.embedding_dim], dtype)
-        if padding_idx is not None:
-            self.weight[padding_idx] = 0
+        self.max_norm = max_norm
+        self.norm_type = norm_type
+        if dtype is None:
+            dtype = "float32"
+        elif not isinstance(dtype, str):
+            dtype = str(dtype).replace("torch.", "") or "float32"
+        if _weight is not None:
+            self.weight = _weight if isinstance(_weight, jt.Var) else jt.array(_weight)
+        else:
+            self.weight = jt.init.gauss([self.num_embeddings, self.embedding_dim], dtype)
+            if padding_idx is not None:
+                self.weight[padding_idx] = 0
+        if _freeze:
+            self.weight = self.weight.stop_grad()
 
     def execute(self, x):
         res = self.weight[x]
