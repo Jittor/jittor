@@ -3067,17 +3067,16 @@ jt.Var.backward = backward
 
 def unfold(X, kernel_size, dilation=1, padding=0, stride=1):
     assert X.ndim == 4
-    if not isinstance(kernel_size, tuple):
-        kernel_size = (kernel_size, kernel_size)
+    # accept int OR (tuple/list) pairs -- torch passes lists, e.g. convbert's
+    # nn.functional.unfold(kernel_size=[k, 1], padding=[(k-1)//2, 0]).
+    _pair = lambda v: tuple(v) if isinstance(v, (tuple, list)) else (v, v)
+    kernel_size = _pair(kernel_size)
     assert kernel_size[0] > 0 and kernel_size[1] > 0, "kernel size must be positive"
-    if not isinstance(dilation, tuple):
-        dilation = (dilation, dilation)
+    dilation = _pair(dilation)
     assert dilation[0] > 0 and dilation[1] > 0, "dilation must be positive"
-    if not isinstance(padding, tuple):
-        padding = (padding, padding)
+    padding = _pair(padding)
     assert padding[0] >= 0 and padding[1] >= 0, "padding must be non-negative"
-    if not isinstance(stride, tuple):
-        stride = (stride, stride)
+    stride = _pair(stride)
     assert stride[0] > 0 and stride[1] > 0, "stride must be positive"
     n, c, h, w = X.shape
     shape = X.shape
@@ -3098,17 +3097,14 @@ def unfold(X, kernel_size, dilation=1, padding=0, stride=1):
 def fold(X,output_size,kernel_size,dilation=1,padding=0,stride=1):
     assert X.ndim==3
     assert output_size[0] > 0 and output_size[1] > 0, "output size must be positive."
-    if not isinstance(kernel_size,tuple):
-        kernel_size = (kernel_size,kernel_size)
+    _pair = lambda v: tuple(v) if isinstance(v, (tuple, list)) else (v, v)
+    kernel_size = _pair(kernel_size)
     assert kernel_size[0] > 0 and kernel_size[1] > 0, "kernel size must be positive"
-    if not isinstance(dilation,tuple):
-        dilation = (dilation,dilation)
+    dilation = _pair(dilation)
     assert dilation[0] > 0 and dilation[1] > 0, "dilation must be positive"
-    if not isinstance(padding,tuple):
-        padding = (padding,padding)
+    padding = _pair(padding)
     assert padding[0] >= 0 and padding[1] >= 0, "padding must be non-negative"
-    if not isinstance(stride,tuple):
-        stride = (stride,stride)
+    stride = _pair(stride)
     assert stride[0] > 0 and stride[1] > 0, "stride must be positive"
     n,cl,num = X.shape
     area = kernel_size[0] * kernel_size[1]
@@ -3117,6 +3113,33 @@ def fold(X,output_size,kernel_size,dilation=1,padding=0,stride=1):
         block_nums.append((output_size[i-2]+2*padding[i-2]-dilation[i-2]*(kernel_size[i-2]-1)-1) // stride[i-2]+1)
     output = X.reindex_reduce("add",[n,cl // area,output_size[0]+2*padding[0],output_size[1]+2*padding[1]],["i0",f"i1/{area}",f"i2/{block_nums[1]}*{stride[0]}+(i1%{area})/{kernel_size[1]}*{dilation[0]}",f"i2%{block_nums[1]}*{stride[1]}+(i1%{area})%{kernel_size[1]}*{dilation[1]}"])
     return output[:,:,padding[0]:padding[0]+output_size[0],padding[1]:padding[1]+output_size[1]]
+
+
+class Unfold(Module):
+    ''' torch's nn.Unfold (im2col): extract sliding local blocks from a batched
+    (N, C, H, W) input into (N, C*prod(kernel_size), L). Wraps the functional unfold.
+    (convbert builds its span-based conv with nn.Unfold.) '''
+    def __init__(self, kernel_size, dilation=1, padding=0, stride=1):
+        self.kernel_size = kernel_size
+        self.dilation = dilation
+        self.padding = padding
+        self.stride = stride
+
+    def execute(self, x):
+        return unfold(x, self.kernel_size, self.dilation, self.padding, self.stride)
+
+class Fold(Module):
+    ''' torch's nn.Fold: the inverse of Unfold, combining sliding local blocks back
+    into (N, C, output_size). Wraps the functional fold. '''
+    def __init__(self, output_size, kernel_size, dilation=1, padding=0, stride=1):
+        self.output_size = output_size
+        self.kernel_size = kernel_size
+        self.dilation = dilation
+        self.padding = padding
+        self.stride = stride
+
+    def execute(self, x):
+        return fold(x, self.output_size, self.kernel_size, self.dilation, self.padding, self.stride)
 
 ModuleList = Sequential
 
