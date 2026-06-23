@@ -2286,6 +2286,7 @@ def _install_misc(g, Var):
     _alias("vmap", _vmap)
     _alias("outer", lambda a, b: jt.matmul(a.reshape(-1, 1), b.reshape(1, -1)))
     _alias("isin", _isin)
+    _alias("square", lambda x: x * x)   # torch.square (jittor only had jt.sqr); persimmon
     # torch.addmm(input, mat1, mat2, *, beta=1, alpha=1):
     #   out = beta * input + alpha * (mat1 @ mat2)   (gpt2 uses this for its
     #   Conv1D linear). jittor has no top-level addmm, so add one.

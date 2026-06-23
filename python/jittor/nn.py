@@ -335,6 +335,12 @@ def gelu(x, approximate='none'):
     else:
         raise ValueError(f"approximate argument must be either 'none' or 'tanh', got {approximate}")
 
+def sigmoid(x):
+    ''' Element-wise sigmoid. Exposed as a function (torch.nn.functional.sigmoid /
+    nn.functional.sigmoid) -- jittor only had jt.sigmoid / Var.sigmoid before, so
+    `F.sigmoid(x)` (used by qwen2_moe and others) raised AttributeError.'''
+    return jt.sigmoid(x)
+
 def silu(x):
     r''' Applies the element-wise function:
 
