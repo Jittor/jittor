@@ -1215,6 +1215,24 @@ def _uniq(x):
             b.append(i)
     return b
 
+class _RemovableHandle:
+    ''' torch-compatible handle returned by ``register_forward_hook`` etc.
+
+    Calling ``.remove()`` (idempotent) detaches the hook. Also usable as a
+    context manager, mirroring ``torch.utils.hooks.RemovableHandle``.
+    '''
+    def __init__(self, remove_fn):
+        self._remove_fn = remove_fn
+    def remove(self):
+        if self._remove_fn is not None:
+            self._remove_fn()
+            self._remove_fn = None
+    def __enter__(self):
+        return self
+    def __exit__(self, *a):
+        self.remove()
+        return False
+
 class Module:
     def __init__(self, *args, **kw):
         pass
@@ -1510,8 +1528,15 @@ class Module:
             else:
                 ret = grad_hooker(ret, self.__bohook__)
         if hasattr(self, "__fhook__"):
-            if len(kw):
-                res = self.__fhook__(self, args, ret, kw)
+            # Match torch's forward-hook calling convention:
+            #   default:            hook(module, args, output)
+            #   with_kwargs=True:   hook(module, args, kwargs, output)
+            # (torch passes kwargs *before* output). Older jittor code called
+            # the hook with 4 positional args whenever kwargs were present,
+            # which breaks every plain 3-arg torch hook -- e.g. transformers'
+            # output_hidden_states / output_attentions paths.
+            if getattr(self, "__fhook_with_kwargs__", False):
+                res = self.__fhook__(self, args, kw, ret)
             else:
                 res = self.__fhook__(self, args, ret)
             if res is not None:
@@ -1526,22 +1551,34 @@ class Module:
         cls.__call__, cls.__hooked_call__ = \
             cls.__hooked_call__, cls.__call__
 
-    def register_forward_hook(self, func):
-        ''' Register a forward function hook that will be called after Module.execute. 
-        
-        The hook function will be called with the following arguments::
+    def register_forward_hook(self, func, *, prepend=False, with_kwargs=False, always_call=False):
+        ''' Register a forward function hook that will be called after Module.execute.
+
+        Follows torch's calling convention. By default the hook is called as::
 
             hook(module, input_args, output)
-        or::
-            hook(module, input_args, output, input_kwargs)
+
+        If ``with_kwargs=True`` it is called as (torch passes kwargs before
+        output)::
+
+            hook(module, input_args, input_kwargs, output)
+
+        If the hook returns a value it replaces the module output. Returns a
+        handle with a ``.remove()`` method (torch-compatible).
         '''
         self.__fhook__ = func
+        # NB: don't call bool() here -- the torch-compat layer rebinds the name
+        # ``bool`` in this module's globals to a dtype object; use truthiness.
+        self.__fhook_with_kwargs__ = True if with_kwargs else False
         self._place_hooker()
-    
+        return _RemovableHandle(self.remove_forward_hook)
+
     def remove_forward_hook(self):
         ''' Removes the current forward hook. '''
         if hasattr(self,"__fhook__"):
             delattr(self,"__fhook__")
+        if hasattr(self,"__fhook_with_kwargs__"):
+            delattr(self,"__fhook_with_kwargs__")
 
     def register_pre_forward_hook(self, func):
         ''' Register a forward function hook that will be called before Module.execute. 
