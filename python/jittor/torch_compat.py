@@ -2226,7 +2226,42 @@ def _install_misc(g, Var):
            _diff(x, n=n, dim=dim, prepend=prepend, append=append))
     _alias("repeat_interleave", _repeat_interleave)
     _alias("autocast", lambda *a, **k: _AutocastContext())
-    _alias("vmap", lambda fn, *a, **k: fn)
+    # Real loop-based torch.vmap. The old no-op stub (`lambda fn,*a,**k: fn`)
+    # ignored in_dims/out_dims, so transformers' vmap-based causal-mask builder
+    # (taken when a model passes and_mask/or_mask -- e.g. falcon) collapsed to a
+    # single direct call and produced a wrong all-True (seq,) mask instead of the
+    # (b,1,q,kv) causal triangle -> bidirectional attention -> ~79% forward error.
+    # Map over in_dims and stack along out_dims. jittor has no 0-d tensors, so a
+    # scalar leaf is (1,) where torch has (); collapse that spurious trailing
+    # singleton so the stacked rank matches torch.vmap.
+    def _vmap(func, in_dims=0, out_dims=0, *_a, **_k):
+        def wrapped(*args):
+            ids = (in_dims,) * len(args) if (isinstance(in_dims, int) or in_dims is None) else tuple(in_dims)
+            size = None
+            for a, d in zip(args, ids):
+                if d is not None:
+                    size = int(a.shape[d]); break
+            if size is None:
+                return func(*args)
+            outs = []
+            for i in range(size):
+                sub = []
+                for a, d in zip(args, ids):
+                    if d is None:
+                        sub.append(a)
+                    else:
+                        idx = [slice(None)] * a.ndim; idx[d] = i
+                        sub.append(a[tuple(idx)])
+                r = func(*sub)
+                if not isinstance(r, jt.Var):
+                    r = jt.array(r)
+                outs.append(r)
+            if all(o.ndim >= 1 and o.shape[-1] == 1 for o in outs) and all(o.ndim == outs[0].ndim for o in outs):
+                outs = [o.reshape(o.shape[:-1]) if o.ndim > 1 else o for o in outs]
+            od = out_dims if isinstance(out_dims, int) else (out_dims[0] if out_dims else 0)
+            return jt.stack(outs, dim=od)
+        return wrapped
+    _alias("vmap", _vmap)
     _alias("outer", lambda a, b: jt.matmul(a.reshape(-1, 1), b.reshape(1, -1)))
     _alias("isin", _isin)
     # torch.addmm(input, mat1, mat2, *, beta=1, alpha=1):
