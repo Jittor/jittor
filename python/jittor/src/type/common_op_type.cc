@@ -7,6 +7,7 @@
 #include "common.h"
 #include "utils/str_utils.h"
 #include "ops/op_register.h"
+#include "op_compiler.h"
 
 namespace jittor {
 
@@ -42,12 +43,10 @@ unordered_map<string,string> common_op_type_cuda_map = {
     {"erf", "(($1) ::erff(($2)))"},
     {"erfinv", "(($1) ::erfinvf(($1)($2)))"},
     {"cast", "(($1)($2))"},
-#ifdef _WIN32
-    // windows don't have pow(float,int), cause undefined reference, fix it
-    {"pow", "::pow(($1)($2),($1)($4))"},
-#else
-    {"pow", "::pow(($2),($4))"},
-#endif
+    // sign-aware pow (see type/pow_compute.h): CUDA ::pow returns NaN for a
+    // negative base even with an integer exponent (transformers' tanh-GELU
+    // does pow(x, 3.0)); route through jittor::_signed_pow to match std::pow.
+    {"pow", "(($1)jittor::_signed_pow(($2),($4)))"},
     {"maximum", "::max($1($2), $1($4))"},
     {"minimum", "::min($1($2), $1($4))"},
     {"mod", "@if(@strcmp($1,float32)==0,(($2)-::floorf(($2)/($4))*($4)),@if(@strcmp(@Tx,float64)==0,(($2)-::floor(($2)/($4))*($4)),(($2)%($4))))"},
@@ -162,7 +161,18 @@ struct CommonOpType : OpByType {
         return format(ret, args);
     }
 
-    void post_pass(OpCompiler*) {
+    void post_pass(OpCompiler* oc) {
+        // inject the sign-aware CUDA pow helper when our pow codegen is used
+        string& src = oc->src;
+        if (src.find("_signed_pow") == string::npos)
+            return;
+        if (src.find("type/pow_compute.h") != string::npos)
+            return;
+        int i = src.rfind("#include");
+        if (i<0) i=0;
+        i = src.find('\n', i) + 1;
+        src = src.substr(0, i) + "#include \"type/pow_compute.h\"\n" +
+            src.substr(i);
         return;
     }
 };
