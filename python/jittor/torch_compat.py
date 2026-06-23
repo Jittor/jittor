@@ -210,6 +210,19 @@ class _GradDecoratorCtx:
                 return self._func(*args, **kwargs)
         raise TypeError("no_grad/enable_grad misuse")
 
+    def __get__(self, obj, objtype=None):
+        # Descriptor protocol: when @torch.no_grad wraps a *method*, this instance
+        # replaces the method in the class dict. Without __get__, `inst.method`
+        # returns this object unbound, so `self` is never passed and the first
+        # real arg wrongly binds to the method's `self` (e.g. transformers'
+        # @torch.no_grad ConversionOps.convert -> "missing 'input_dict'"). Bind
+        # the instance like a normal function descriptor. Plain context-manager
+        # instances (no wrapped func) are never class attributes -> return self.
+        if self._func is None or obj is None:
+            return self
+        import types as _types
+        return _types.MethodType(self, obj)
+
     def __enter__(self):
         self._scope = self._scope_factory()
         return self._scope.__enter__()
