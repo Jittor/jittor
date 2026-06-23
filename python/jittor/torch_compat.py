@@ -844,6 +844,44 @@ def _install_module_methods(nn):
     if not hasattr(M, "forward"):
         M.forward = _forward_alias
 
+    # Central dispatch fix: an HF module may SUBCLASS a jittor builtin (e.g.
+    # transformers OPTLearnedPositionalEmbedding(nn.Embedding)) and override
+    # forward() with a different signature. The builtin (Embedding) defines its
+    # own execute(), which MRO-shadows the patched base Module.execute above, so
+    # `module(...)` -> __call__ -> self.execute(...) lands on the builtin's
+    # execute() and never sees the subclass forward() -> TypeError.
+    #
+    # Decide per class whether the OWN forward() override should take precedence
+    # over the inherited builtin execute(): it should iff a real (non-alias)
+    # forward() is defined at an MRO position at least as derived as the nearest
+    # execute(). Conservative: classes that only define execute() (every native
+    # jittor module + jittor-native subclasses of builtins) keep calling
+    # execute() exactly as before; only a genuine, more-derived forward()
+    # override flips dispatch.
+    _dispatch_cache = {}
+    def _prefer_forward(cls):
+        cached = _dispatch_cache.get(cls)
+        if cached is not None:
+            return cached
+        fwd_idx = exec_idx = None
+        for i, c in enumerate(cls.__mro__):
+            d = c.__dict__
+            if fwd_idx is None and "forward" in d and d["forward"] is not _forward_alias:
+                fwd_idx = i
+            if exec_idx is None and "execute" in d and d["execute"] is not _execute:
+                exec_idx = i
+        # forward() wins only if it exists and is no less derived than execute()
+        result = fwd_idx is not None and (exec_idx is None or fwd_idx <= exec_idx)
+        _dispatch_cache[cls] = result
+        return result
+
+    _orig_call = M.__call__
+    def _call(self, *args, **kwargs):
+        if _prefer_forward(type(self)):
+            return type(self).forward(self, *args, **kwargs)
+        return _orig_call(self, *args, **kwargs)
+    M.__call__ = _call
+
     # torch's named_parameters/named_buffers/named_modules accept extra kwargs
     # (remove_duplicate, prefix, recurse) and return iterators; jittor's take
     # only `recurse` and return lists, with named_buffers defaulting recurse=
