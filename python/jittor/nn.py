@@ -310,6 +310,100 @@ def silu(x):
     '''
     return x * x.sigmoid()
 
+def prelu(x, weight):
+    ''' Applies the element-wise PReLU function (functional form):
+
+    .. math::
+        \\text{PReLU}(x) = \\max(0, x) + weight * \\min(0, x)
+
+    :param x: the input var
+    :type x: jt.Var
+    :param weight: the (learnable) slope, either a scalar or a 1-D var with one
+        value per input channel (broadcast over dim 1).
+    :type weight: jt.Var or float
+    '''
+    if isinstance(weight, jt.Var) and weight.numel() != 1:
+        assert weight.numel() == x.size(1), \
+            "weight (number of parameters) does not match input channels in prelu"
+        dims = [i for i in range(x.ndim) if i != 1]
+        w = weight.broadcast(x, dims)
+    else:
+        w = weight
+    return jt.maximum(0, x) + w * jt.minimum(0, x)
+jt.Var.prelu = prelu
+
+def hardswish(x):
+    ''' Applies the element-wise Hardswish function:
+
+    .. math::
+        \\text{Hardswish}(x) = \\begin{cases}
+        0, & x \\le -3 \\\\
+        x, & x \\ge +3 \\\\
+        x \\cdot (x + 3) / 6, & \\text{otherwise}
+        \\end{cases}
+    '''
+    return x * jt.clamp(x + 3, min_v=0, max_v=6) / 6
+jt.Var.hardswish = hardswish
+
+def hardsigmoid(x):
+    ''' Applies the element-wise Hardsigmoid function:
+
+    .. math::
+        \\text{Hardsigmoid}(x) = \\begin{cases}
+        0, & x \\le -3 \\\\
+        1, & x \\ge +3 \\\\
+        x / 6 + 1/2, & \\text{otherwise}
+        \\end{cases}
+    '''
+    return jt.clamp(x / 6 + 0.5, min_v=0.0, max_v=1.0)
+jt.Var.hardsigmoid = hardsigmoid
+
+def rrelu(x, lower=1./8, upper=1./3, training=False):
+    ''' Applies the randomized leaky rectified linear unit function,
+    element-wise, as described in `Empirical Evaluation of Rectified
+    Activations in Convolutional Network`.
+
+    During training the negative slope ``a`` is sampled uniformly from
+    ``[lower, upper]``; during evaluation the fixed slope
+    ``(lower + upper) / 2`` is used (matching torch).
+
+    :param x: the input var
+    :param lower: lower bound of the uniform slope. Default: 1/8
+    :param upper: upper bound of the uniform slope. Default: 1/3
+    :param training: whether to sample the slope (train) or use its mean (eval).
+    '''
+    if training:
+        a = jt.random(x.shape, x.dtype) * (upper - lower) + lower
+    else:
+        a = (lower + upper) / 2
+    return jt.ternary(x >= 0, x, a * x)
+jt.Var.rrelu = rrelu
+
+class RReLU(Module):
+    ''' Applies the randomized leaky rectified linear unit function,
+    element-wise. See :func:`rrelu`.
+
+    :param lower: lower bound of the uniform slope. Default: 1/8
+    :param upper: upper bound of the uniform slope. Default: 1/3
+    '''
+    def __init__(self, lower=1./8, upper=1./3):
+        self.lower = lower
+        self.upper = upper
+        self.is_train = True
+
+    def execute(self, x):
+        return rrelu(x, self.lower, self.upper, getattr(self, "is_train", True))
+
+class Hardswish(Module):
+    ''' Applies the element-wise Hardswish function. See :func:`hardswish`. '''
+    def execute(self, x):
+        return hardswish(x)
+
+class Hardsigmoid(Module):
+    ''' Applies the element-wise Hardsigmoid function. See :func:`hardsigmoid`. '''
+    def execute(self, x):
+        return hardsigmoid(x)
+
 class ELU(Module):
     r''' Applies the element-wise function:
 
@@ -524,11 +618,22 @@ class BCEWithLogitsLoss(Module):
     def execute(self, output, target):
         return binary_cross_entropy_with_logits(output,target,self.weight,self.pos_weight,self.size_average)
 
+def _get_softmax_dim(ndim):
+    # Mirrors torch.nn.functional._get_softmax_dim: when ``dim`` is not given,
+    # torch softmaxes over dim 0 for 0/1/3-D inputs and dim 1 otherwise.
+    if ndim == 0 or ndim == 1 or ndim == 3:
+        return 0
+    return 1
+
 def softmax(x, dim=None, log=False):
+    # torch-compatible default: ``dim=None`` selects a single axis via
+    # ``_get_softmax_dim`` (NOT a reduction over all elements). Passing an
+    # explicit ``dim`` keeps the previous behavior unchanged.
+    if dim is None:
+        dim = _get_softmax_dim(x.ndim)
     import jittor.other.code_softmax as code_softmax
     if code_softmax.can_softmax_v1(x, dim) and jt.compiler.is_cuda:
         return code_softmax.softmax_v1(x, log)
-    if dim is None: dim = ()
     dtype, x = x.dtype, x._to_float()
     if log:
         a = x - jt.max(x, dim, keepdims=True)
@@ -853,10 +958,12 @@ def group_norm(x,
     eps=1e-05):
     N = x.shape[0]
     C = x.shape[1]
-    output_shape = (N,-1)
-    # TODO: 3d group norm
-    if x.ndim==4:
+    # Restore the full input shape for any spatial rank (1d/2d/3d data, i.e.
+    # 3d/4d/5d tensors). Only fall back to (N, C) when there is no spatial dim.
+    if x.ndim >= 3:
         output_shape = x.shape
+    else:
+        output_shape = (N, C)
     assert C % num_groups == 0
     x = x.reshape((N, num_groups, C//num_groups, -1))
     xmean = jt.mean(x, dims=[2,3]).reshape((N, num_groups, 1))
@@ -2131,6 +2238,77 @@ class Embedding(Module):
 
 def embedding(input, weight):
     return weight[input]
+
+def embedding_bag(input, weight, offsets=None, mode="mean", per_sample_weights=None):
+    ''' Computes sums, means or maxes of "bags" of embeddings, without
+    instantiating the intermediate embeddings. Torch-compatible
+    (functional form of :class:`EmbeddingBag`).
+
+    :param input: indices into ``weight``. Either a 2-D var where every row is
+        a bag of fixed length, or a 1-D var of concatenated bags together with
+        ``offsets``.
+    :param weight: the embedding matrix of shape ``(num_embeddings, embedding_dim)``.
+    :param offsets: only used when ``input`` is 1-D. ``offsets[i]`` is the start
+        index of the ``i``-th bag in ``input``.
+    :param mode: one of ``"sum"``, ``"mean"`` or ``"max"``. Default: ``"mean"``.
+    :param per_sample_weights: optional weights for a weighted ``"sum"`` (only
+        valid when ``mode == "sum"``), same shape as ``input``.
+    '''
+    assert mode in ("sum", "mean", "max"), f"unsupported mode {mode} in embedding_bag"
+    input = input if isinstance(input, jt.Var) else jt.array(input)
+    if input.ndim == 1:
+        assert offsets is not None, \
+            "offsets has to be provided when input is 1-D in embedding_bag"
+        offsets = offsets if isinstance(offsets, jt.Var) else jt.array(offsets)
+        ends = jt.concat([offsets[1:], jt.array([input.shape[0]]).cast(offsets.dtype)], dim=0)
+        bags = []
+        n = offsets.shape[0]
+        for i in range(n):
+            s = int(offsets[i].item())
+            e = int(ends[i].item())
+            emb = weight[input[s:e]]
+            if per_sample_weights is not None and mode == "sum":
+                psw = per_sample_weights if isinstance(per_sample_weights, jt.Var) \
+                    else jt.array(per_sample_weights)
+                emb = emb * psw[s:e].reshape((-1, 1))
+            if mode == "max":
+                bag = emb.max(dim=0)
+            elif mode == "mean":
+                bag = emb.mean(dim=0)
+            else:
+                bag = emb.sum(dim=0)
+            bags.append(bag.reshape((1, -1)))
+        return jt.concat(bags, dim=0)
+    else:
+        assert input.ndim == 2, "input must be 1-D or 2-D in embedding_bag"
+        emb = weight[input]  # (B, L, D)
+        if per_sample_weights is not None and mode == "sum":
+            psw = per_sample_weights if isinstance(per_sample_weights, jt.Var) \
+                else jt.array(per_sample_weights)
+            emb = emb * psw.reshape(psw.shape + (1,))
+        if mode == "max":
+            return emb.max(dim=1)
+        elif mode == "mean":
+            return emb.mean(dim=1)
+        else:
+            return emb.sum(dim=1)
+
+class EmbeddingBag(Module):
+    ''' Computes sums, means or maxes of "bags" of embeddings. See
+    :func:`embedding_bag`.
+
+    :param num_embeddings: size of the dictionary of embeddings.
+    :param embedding_dim: the size of each embedding vector.
+    :param mode: one of ``"sum"``, ``"mean"`` or ``"max"``. Default: ``"mean"``.
+    '''
+    def __init__(self, num_embeddings, embedding_dim, mode="mean", dtype="float32"):
+        self.num_embeddings = num_embeddings
+        self.embedding_dim = embedding_dim
+        self.mode = mode
+        self.weight = jt.init.gauss([num_embeddings, embedding_dim], dtype)
+
+    def execute(self, input, offsets=None, per_sample_weights=None):
+        return embedding_bag(input, self.weight, offsets, self.mode, per_sample_weights)
 
 class PixelShuffle(Module):
     def __init__(self, upscale_factor):
