@@ -6,6 +6,10 @@
 // ***************************************************************
 #include <string.h>
 #include <signal.h>
+#ifndef _WIN32
+#include <ucontext.h>
+#include <dlfcn.h>
+#endif
 #include <iomanip>
 #include <thread>
 #include <unordered_map>
@@ -264,6 +268,39 @@ void segfault_sigaction(int signal, siginfo_t *si, void *arg) {
     std::cerr << "Caught segfault at address " << si->si_addr << ", "
         << "thread_name: '" << thread_name << "', flush log..." << std::endl;
     std::cerr.flush();
+#if defined(__linux__) && !defined(_WIN32)
+    // Recover the REAL faulting PC from the ucontext and dladdr-symbolize it.
+    // backtrace() (the [bt] dump below) can't unwind past the signal frame, so it only
+    // shows this handler -- naming the actual crashing function here makes segfault
+    // reports actionable (#11 hardening/diagnostics), independent of gdb being present.
+    if (arg) {
+        ucontext_t* uc = (ucontext_t*)arg;
+        void* fault_pc = nullptr;
+        #if defined(__aarch64__)
+            fault_pc = (void*)uc->uc_mcontext.pc;
+        #elif defined(__x86_64__) && defined(REG_RIP)
+            fault_pc = (void*)uc->uc_mcontext.gregs[REG_RIP];
+        #endif
+        void* caller_pc = nullptr;     // return addr -> the CALLER (revealed when PC==0,
+        #if defined(__aarch64__)       // i.e. a jump through a null function pointer)
+            caller_pc = (void*)uc->uc_mcontext.regs[30];   // x30 / LR
+        #endif
+        auto sym = [](const char* tag, void* pc) {
+            if (!pc) return;
+            Dl_info info;
+            if (dladdr(pc, &info) && info.dli_sname)
+                std::cerr << tag << " " << pc << " in " << info.dli_sname
+                          << " @ " << (info.dli_fname ? info.dli_fname : "?") << std::endl;
+            else
+                std::cerr << tag << " " << pc << " (unresolved)" << std::endl;
+        };
+        if (!fault_pc)
+            std::cerr << "Fault PC is NULL (jump through a null function pointer)" << std::endl;
+        sym("Fault PC", fault_pc);
+        sym("Caller (LR)", caller_pc);
+        std::cerr.flush();
+    }
+#endif
     if (protected_page && 
         si->si_addr>=(void*)protected_page && 
         si->si_addr<(void*)(protected_page+4*1024)) {
