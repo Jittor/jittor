@@ -48,6 +48,24 @@ class dtype(str):
     def __repr__(self):
         return "torch." + self.name
 
+    # transformers' save_pretrained recovers the bare dtype name via
+    # `str(model.dtype).split(".")[1]`, relying on torch's
+    # `str(torch.float32) == "torch.float32"`. We cannot make the underlying str
+    # *value* torch-prefixed: jittor's own Python code (contrib.concat,
+    # linalg, nn) does `str(var.dtype)` and feeds the result straight back into
+    # jittor's C++ dtype dispatch, which only knows the bare names. So instead
+    # `__str__` returns the dtype object itself (a str whose value stays bare,
+    # which jittor accepts), and only a literal `.split(".")` is special-cased
+    # to surface the torch-style ["torch", name]. No jittor dtype name contains
+    # a dot, so every other split is the normal str split.
+    def __str__(self):
+        return self
+
+    def split(self, sep=None, maxsplit=-1):
+        if sep == ".":
+            return ["torch", self.name]
+        return str.split(self, sep, maxsplit)
+
     def __eq__(self, other):
         if isinstance(other, dtype):
             return self.name == other.name
@@ -134,12 +152,36 @@ class device:
         return hash((self.type, self.index))
 
     # torch allows `with torch.device(...):` as a device context manager.
-    # jittor has a single global backend, so this is a no-op scope.
+    # jittor has a single global backend, so for real devices this is a no-op.
+    #
+    # transformers' from_pretrained builds the model under `with
+    # torch.device("meta")` and uses that context to SKIP weight inits (and the
+    # `_is_hf_initialized` marking) -- see modeling_utils.get_torch_context_
+    # manager_or_global_device(), which probes `torch.tensor([]).device`. If the
+    # inits run anyway, modules end up flagged initialized, and the later
+    # `_initialize_missing_keys()` step never recomputes non-persistent buffers
+    # (e.g. RoPE inv_freq), leaving them as the `torch.empty_like` garbage that
+    # `_move_missing_keys_from_meta_to_device` wrote. We can't allocate real
+    # meta tensors in jittor, but we can make the *meta* context observable: push
+    # it on a thread-local stack so Var.device reports "meta" inside it. Tensors
+    # are still really allocated (harmless -- real weights get loaded over them),
+    # but transformers correctly skips the eager init.
     def __enter__(self):
+        if self.type == "meta":
+            _DEVICE_CTX_STACK.append(self)
         return self
 
     def __exit__(self, *exc):
+        if self.type == "meta" and _DEVICE_CTX_STACK and _DEVICE_CTX_STACK[-1] is self:
+            _DEVICE_CTX_STACK.pop()
         return False
+
+
+# Stack of active `torch.device("meta")` contexts (see device.__enter__).
+# Only meta contexts are tracked; real-device `with` blocks stay no-ops.
+# Model construction in from_pretrained is single-threaded, so a plain list
+# is sufficient.
+_DEVICE_CTX_STACK = []
 
 
 import functools as _functools
@@ -1136,6 +1178,25 @@ def _install_module_methods(nn):
     if not hasattr(M, "type"):
         M.type = lambda self, dst_type=None: self
 
+    # torch's nn.Module keeps `_non_persistent_buffers_set`, a set of the
+    # *immediate* (non-recursive) buffer attribute names that were registered
+    # with persistent=False. transformers' from_pretrained reads it via
+    # `named_non_persistent_buffers()` (parent._non_persistent_buffers_set).
+    # jittor instead tags each buffer Var with `.persistent`; derive the set
+    # from that. It's a property so it stays correct as buffers are (de)added.
+    if not isinstance(M.__dict__.get("_non_persistent_buffers_set"), property):
+        import jittor as _jtb
+        def _nonpersist_set(self):
+            out = set()
+            for k, v in self.__dict__.items():
+                if (isinstance(k, str) and not k.startswith("_")
+                        and isinstance(v, _jtb.Var)
+                        and getattr(v, "is_buffer", False)
+                        and not getattr(v, "persistent", True)):
+                    out.add(k)
+            return out
+        M._non_persistent_buffers_set = property(_nonpersist_set)
+
 
 def _install_init_aliases():
     import jittor.init as _init
@@ -1384,6 +1445,21 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     if not hasattr(Var, "nelement"):
         Var.nelement = lambda self: int(self.numel())
 
+    # torch dtype predicates on the tensor itself. transformers computes
+    # model.dtype via `next(p.dtype for p in params if p.is_floating_point())`,
+    # so save_pretrained needs these. jittor has no native complex, so
+    # is_complex is always False here.
+    _FP_DTYPES = {"float16", "float32", "float64", "bfloat16",
+                  "float8_e4m3fn", "float8_e4m3fnuz", "float8_e5m2",
+                  "float8_e5m2fnuz", "float8_e8m0fnu", "float4_e2m1fn_x2"}
+    if not hasattr(Var, "is_floating_point"):
+        Var.is_floating_point = lambda self: str(self.dtype) in _FP_DTYPES
+    if not hasattr(Var, "is_complex"):
+        Var.is_complex = lambda self: str(self.dtype) in ("complex64", "complex128")
+    if not hasattr(Var, "is_signed"):
+        Var.is_signed = lambda self: str(self.dtype) not in (
+            "bool", "uint8", "uint16", "uint32", "uint64")
+
     # torch storage introspection: peft/safetensors call tensor.storage()
     # .data_ptr() / .untyped_storage().nbytes() to detect shared/tied weights.
     # jittor has no exposed storage object; expose identity-based stand-ins so
@@ -1445,6 +1521,11 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
 
     if not hasattr(Var, "device"):
         def _device(self):
+            # Inside a `with torch.device("meta")` block (transformers'
+            # from_pretrained), report "meta" so its meta-context detection
+            # fires and eager weight init is skipped. See device.__enter__.
+            if _DEVICE_CTX_STACK:
+                return _DEVICE_CTX_STACK[-1]
             return device("cuda", 0) if (jt.flags.use_cuda or getattr(jt.compiler, "has_acl", 0)) else device("cpu")
         Var.device = property(_device)
 
