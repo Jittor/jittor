@@ -1054,11 +1054,21 @@ def _install_module_methods(nn):
     _orig_named_modules = M.named_modules
 
     def _named_parameters(self, prefix="", recurse=True, remove_duplicate=True):
+        reg = getattr(jt, "_torch_leaf_params", None)
+        if reg is None:
+            reg = jt._torch_leaf_params = {}
         seen = set()
         for name, v in _orig_named_parameters(self, recurse=recurse):
             if remove_duplicate and id(v) in seen:
                 continue
             seen.add(id(v))
+            # register trainable params as autograd leaves so the no-optimizer
+            # loss.backward() path can populate their .grad (see parameters()).
+            try:
+                if isinstance(v, jt.Var) and not v.is_stop_grad():
+                    reg[id(v)] = v
+            except Exception:
+                pass
             yield (prefix + ("." if prefix else "") + name, v)
     M.named_parameters = _named_parameters
 
@@ -1120,9 +1130,33 @@ def _install_module_methods(nn):
             if it is None:
                 it = self._it = list.__iter__(self)
             return next(it)
+    # Register every trainable parameter as an autograd "leaf" the first time a
+    # module's params are enumerated. torch code reads param.grad only after
+    # enumerating params (optimizer construction, gradient clipping, gradcheck,
+    # manual inspection all call parameters()/named_parameters() first), so this
+    # is the reliable hook that lets the optimizer-free loss.backward() path
+    # (below) populate param.grad. jittor params are trainable-by-default and
+    # almost never pass through the requires_grad setter, which is why the prior
+    # registry stayed empty (bert: 0/39 grads exposed). Enumeration is also the
+    # *leak-safe* hook: only declared parameters are captured -- never transient
+    # forward activations, which a Module.__setattr__ hook would wrongly retain
+    # and leak one Var per step. Idempotent (id-keyed); skips frozen params so
+    # their .grad stays None like torch.
+    def _register_leaf_params(params):
+        try:
+            reg = getattr(jt, "_torch_leaf_params", None)
+            if reg is None:
+                reg = jt._torch_leaf_params = {}
+            for p in params:
+                if isinstance(p, jt.Var) and not p.is_stop_grad():
+                    reg[id(p)] = p
+        except Exception:
+            pass
     _orig_parameters = M.parameters
     def _parameters(self, recurse=True):
-        return _ParamList(_orig_parameters(self, recurse=recurse))
+        pl = _orig_parameters(self, recurse=recurse)
+        _register_leaf_params(pl)
+        return _ParamList(pl)
     M.parameters = _parameters
 
     # torch's Module.train(mode=True)/eval() take a mode arg; jittor's train()
@@ -1180,8 +1214,26 @@ def _install_module_methods(nn):
                 p.assign(p.float32())
             return self
         M.float = _mfloat
-    if not hasattr(M, "zero_grad"):
-        M.zero_grad = lambda self, *a, **k: None
+    # torch's zero_grad() clears each param's .grad so the next backward starts
+    # fresh; the optimizer-free backward path below accumulates with += (matching
+    # torch), so a real reset is required. The prior no-op left grads silently
+    # accumulating across steps. Clear the torch-exposed grad and, when an
+    # optimizer is bridged, delegate to its zero_grad as well.
+    def _zero_grad(self, set_to_none=True):
+        try:
+            for p in self.parameters():
+                if getattr(p, "_torch_grad", None) is not None:
+                    object.__setattr__(p, "_torch_grad", None)
+        except Exception:
+            pass
+        opt = getattr(jt, "_current_optimizer", None)
+        if opt is not None:
+            try:
+                opt.zero_grad()
+            except Exception:
+                pass
+        return None
+    M.zero_grad = _zero_grad
     if not hasattr(M, "buffers"):
         M.buffers = lambda self, recurse=True: [v for _, v in self.named_buffers()]
     if not hasattr(M, "get_submodule"):
