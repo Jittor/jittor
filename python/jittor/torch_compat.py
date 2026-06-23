@@ -793,6 +793,75 @@ def _install_reductions(g):
     g.sort = sort
     g.argsort = lambda x, dim=-1, descending=False, **kw: _argsort(x, dim=dim, descending=descending)[0].int64()
 
+    # --- Tensor METHOD forms. jittor-core uses none of these as Var methods (only
+    # the python list.sort builtin), so installing torch semantics here is safe;
+    # it was verified that .max/.min methods ARE used internally, so those stay
+    # native (values-only) and are intentionally NOT overridden. ---
+    Var = _jt.Var
+    Var.sort = lambda self, dim=-1, descending=False, **kw: sort(self, dim=dim, descending=descending)
+    Var.argsort = lambda self, dim=-1, descending=False, **kw: g.argsort(self, dim=dim, descending=descending)
+    Var.topk = lambda self, k, dim=-1, largest=True, sorted=True: topk(self, k, dim=dim, largest=largest, sorted=sorted)
+
+    # torch's var/std default to UNBIASED (Bessel, correction=1); jittor's native var
+    # defaults to biased (numpy-aligned) -- a silent-wrong divergence for torch code.
+    # Fix in the torch layer only (native jt.var stays numpy-aligned). Support both
+    # the legacy `unbiased=` and modern `correction=` kwargs.
+    _jt_var = Var.var
+    def _correction_to_unbiased(unbiased, correction):
+        if correction is not None:
+            return correction != 0
+        if unbiased is not None:
+            return bool(unbiased)
+        return True                       # torch default
+    def _torch_var(self, dim=None, unbiased=None, keepdim=False, keepdims=None,
+                   correction=None, **kw):
+        ub = _correction_to_unbiased(unbiased, correction)
+        kd = bool(keepdim) or bool(keepdims)
+        return _jt_var(self, dim=dim, unbiased=ub, keepdims=kd)
+    def _torch_std(self, dim=None, unbiased=None, keepdim=False, keepdims=None,
+                   correction=None, **kw):
+        # std == sqrt(var) with the correct bias. jittor's native std is hardcoded
+        # unbiased AND floors at maximum(1e-6) (torch doesn't), so derive from var.
+        return _torch_var(self, dim=dim, unbiased=unbiased, keepdim=keepdim,
+                          keepdims=keepdims, correction=correction).sqrt()
+    Var.var = _torch_var
+    Var.std = _torch_std
+    g.var = lambda x, *a, **k: _torch_var(x, *a, **k)
+    g.std = lambda x, *a, **k: _torch_std(x, *a, **k)
+
+    # missing methods (truly absent on Var -> pure additive)
+    Var.masked_select = lambda self, mask: self[mask]      # torch: 1-D of selected
+
+    def _unfold(self, dimension, size, step):
+        # torch's Tensor.unfold(dim, size, step): sliding windows along `dim`,
+        # appending a new last dim of length `size`. out[...,i,...,j]=x[...,i*step+j,...]
+        nd = self.ndim
+        d = dimension if dimension >= 0 else dimension + nd
+        n = (self.shape[d] - size) // step + 1
+        out_shape = list(self.shape); out_shape[d] = n; out_shape.append(size)
+        src = [f"i{k}" for k in range(nd)]
+        src[d] = f"i{d}*{step}+i{nd}"                       # window pos + within-window
+        return self.reindex(out_shape, src)
+    Var.unfold = _unfold
+
+    def _diagonal(self, offset=0, dim1=0, dim2=1):
+        # torch's Tensor.diagonal: drop dim1,dim2 and append a diagonal dim.
+        nd = self.ndim
+        d1 = dim1 if dim1 >= 0 else dim1 + nd
+        d2 = dim2 if dim2 >= 0 else dim2 + nd
+        s1, s2 = self.shape[d1], self.shape[d2]
+        dl = max(0, min(s1, s2 - offset)) if offset >= 0 else max(0, min(s1 + offset, s2))
+        keep = [k for k in range(nd) if k != d1 and k != d2]
+        out_shape = [self.shape[k] for k in keep] + [dl]
+        last = len(keep)
+        src = [None] * nd
+        for outpos, k in enumerate(keep):
+            src[k] = f"i{outpos}"
+        src[d1] = f"i{last}+{max(0, -offset)}"
+        src[d2] = f"i{last}+{max(0, offset)}"
+        return self.reindex(out_shape, src)
+    Var.diagonal = _diagonal
+
 
 def _wrap_constructors(g):
     """Wrap jittor tensor constructors to accept torch kwargs (device=,
