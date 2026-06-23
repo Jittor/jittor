@@ -1458,6 +1458,29 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             return self.repeat(*dims)
         Var.tile = _tile
 
+    # torch's Tensor.squeeze(dim=None): differs from jittor's in two ways --
+    #   * squeeze(dim) where that dim's size != 1 is a NO-OP in torch, but
+    #     jittor asserts (AssertionError). Models call x.squeeze(d) defensively.
+    #   * torch 2.0+ accepts a tuple/list of dims (squeeze((0,2))); jittor's
+    #     native squeeze only takes a single int (raises TypeError on a tuple).
+    # Wrap to match torch while delegating the actual op to jittor's squeeze.
+    _native_squeeze = Var.squeeze
+    def _squeeze(self, dim=None):
+        if dim is None:
+            return _native_squeeze(self)
+        dims = dim if isinstance(dim, (tuple, list)) else (dim,)
+        nd = self.ndim
+        # normalize negatives and keep only the dims whose size is 1 (torch
+        # silently ignores the rest). Remove from highest index to lowest so
+        # earlier removals don't shift the indices of later ones.
+        norm = sorted({(d if d >= 0 else d + nd) for d in dims}, reverse=True)
+        out = self
+        for d in norm:
+            if 0 <= d < out.ndim and out.shape[d] == 1:
+                out = _native_squeeze(out, d)
+        return out
+    Var.squeeze = _squeeze
+
 
 def _install_misc(g, Var):
     if hasattr(jt, "set_global_seed"):
@@ -1659,7 +1682,10 @@ def _install_misc(g, Var):
     # torch.eye(n, m=None, *, dtype=, ...): identity / rectangular-identity
     # matrix. jittor has no top-level eye (only jt.init.eye), so add one.
     def _eye(n, m=None, dtype=None, **k):
-        shape = (int(n),) if m is None else (int(n), int(m))
+        # torch.eye(n) is the n x n identity; torch.eye(n, m) is n x m.
+        # jittor's init.eye requires a 2-element shape (a bare (n,) asserts),
+        # so always pass (n, n) / (n, m).
+        shape = (int(n), int(n)) if m is None else (int(n), int(m))
         import jittor.init as _init
         return _init.eye(shape, _dtype_to_str(dtype) or "float32")
     _alias("eye", _eye)

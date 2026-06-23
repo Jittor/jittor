@@ -941,24 +941,220 @@ except Exception:
 _testing = types.ModuleType("torch.testing")
 sys.modules["torch.testing"] = _testing
 
-# torch.fft (peft c3a imports fft/ifft at module load) -- numpy-backed
+# torch.fft (peft c3a imports fft/ifft at module load) -- numpy-backed.
+#
+# jittor's native FFT (jittor.nn.ComplexNumber.fft2 -> cufft) is CUDA-only
+# (it asserts jt.flags.use_cuda==1), so it can't run on CPU/Ascend. We back
+# the transforms with numpy.fft, which is correct on every backend.
+#
+# Results are complex. jittor has no complex Var, so we return a
+# jittor.nn.ComplexNumber when available (it carries .real/.imag and
+# .norm() == magnitude spectrum). Full complex-tensor parity is tracked
+# separately (#3); this layer guarantees a real transform (non-identity)
+# with numerically correct values/magnitudes.
 _fft = types.ModuleType("torch.fft")
+import numpy as _np_for_fft
+
+def _get_complex_number():
+    # imported lazily: jittor.nn may still be mid-import while this shim loads.
+    try:
+        from jittor.nn import ComplexNumber as _ComplexNumber
+        return _ComplexNumber
+    except Exception:  # pragma: no cover
+        return None
+
+def _fft_result(res):
+    """Wrap a (possibly complex) numpy fft result as a jittor value.
+
+    Complex output -> ComplexNumber(real, imag) when available, else the
+    real part (legacy fallback). Real output -> plain jittor Var."""
+    if _np_for_fft.iscomplexobj(res):
+        real = _jt.array(_np_for_fft.ascontiguousarray(res.real).astype("float32"))
+        _ComplexNumber = _get_complex_number()
+        if _ComplexNumber is not None:
+            imag = _jt.array(_np_for_fft.ascontiguousarray(res.imag).astype("float32"))
+            return _ComplexNumber(real, imag)
+        return real
+    return _jt.array(_np_for_fft.ascontiguousarray(res).astype("float32"))
+
+def _as_numpy_fft_input(input):
+    if hasattr(input, "value") and hasattr(input, "real") and hasattr(input, "imag"):
+        # a ComplexNumber (e.g. chained fft -> ifft)
+        return input.real.numpy() + 1j * input.imag.numpy()
+    return input.numpy() if hasattr(input, "numpy") else _np_for_fft.asarray(input)
+
 def _np_fft_wrap(np_fn):
     def _f(input, n=None, dim=-1, norm=None, **k):
-        import numpy as _np
-        arr = input.numpy() if hasattr(input, "numpy") else _np.asarray(input)
-        res = np_fn(arr, n=n, axis=dim, norm=norm)
-        return _jt.array(res.real.astype("float32")) if not _np.iscomplexobj(res) else _jt.array(res.real.astype("float32"))
+        arr = _as_numpy_fft_input(input)
+        return _fft_result(np_fn(arr, n=n, axis=dim, norm=norm))
     return _f
-import numpy as _np_for_fft
+
+def _np_fft2_wrap(np_fn):
+    def _f(input, s=None, dim=(-2, -1), norm=None, **k):
+        arr = _as_numpy_fft_input(input)
+        return _fft_result(np_fn(arr, s=s, axes=tuple(dim), norm=norm))
+    return _f
+
 _fft.fft = _np_fft_wrap(_np_for_fft.fft.fft)
 _fft.ifft = _np_fft_wrap(_np_for_fft.fft.ifft)
 _fft.rfft = _np_fft_wrap(_np_for_fft.fft.rfft)
 _fft.irfft = _np_fft_wrap(_np_for_fft.fft.irfft)
-_fft.fft2 = lambda input, *a, **k: input
-_fft.ifft2 = lambda input, *a, **k: input
+_fft.fft2 = _np_fft2_wrap(_np_for_fft.fft.fft2)
+_fft.ifft2 = _np_fft2_wrap(_np_for_fft.fft.ifft2)
+_fft.rfft2 = _np_fft2_wrap(_np_for_fft.fft.rfft2)
+_fft.irfft2 = _np_fft2_wrap(_np_for_fft.fft.irfft2)
+_fft.fftn = lambda input, s=None, dim=None, norm=None, **k: _fft_result(
+    _np_for_fft.fft.fftn(_as_numpy_fft_input(input), s=s,
+                         axes=(tuple(dim) if dim is not None else None), norm=norm))
+_fft.ifftn = lambda input, s=None, dim=None, norm=None, **k: _fft_result(
+    _np_for_fft.fft.ifftn(_as_numpy_fft_input(input), s=s,
+                          axes=(tuple(dim) if dim is not None else None), norm=norm))
+_fft.fftshift = lambda input, dim=None, **k: _jt.array(
+    _np_for_fft.fft.fftshift(_as_numpy_fft_input(input), axes=dim))
+_fft.ifftshift = lambda input, dim=None, **k: _jt.array(
+    _np_for_fft.fft.ifftshift(_as_numpy_fft_input(input), axes=dim))
 sys.modules["torch.fft"] = _fft
 globals()["fft"] = _fft
+
+# ---------------------------------------------------------------------------
+# torch.linalg  -- map to jittor.linalg where it exists, NotImplementedError
+# (never silent) for the rest.
+# ---------------------------------------------------------------------------
+# jittor.linalg already supplies differentiable svd/qr/inv/pinv/det/slogdet/
+# solve/cholesky/eig/eigh/einsum, so we forward to those. norm/matrix_norm/
+# vector_norm are NOT in jittor.linalg (and jt.norm only does *vector* norms
+# along a dim -- it does NOT compute a Frobenius/matrix norm), so we back them
+# with numpy for torch-correct results.
+_linalg = types.ModuleType("torch.linalg")
+try:
+    import jittor.linalg as _jt_linalg
+except Exception:  # pragma: no cover
+    _jt_linalg = None
+
+def _linalg_forward(name):
+    fn = getattr(_jt_linalg, name, None) if _jt_linalg is not None else None
+    if fn is None:
+        def _missing(*a, _n=name, **k):
+            raise NotImplementedError(
+                f"torch.linalg.{_n} is not implemented in the jittor shim "
+                f"(jittor.linalg has no '{_n}'). Available: svd, qr, inv, pinv, "
+                f"det, slogdet, solve, cholesky, eig, eigh, norm, vector_norm, "
+                f"matrix_norm, matrix_power, cross.")
+        return _missing
+    return fn
+
+for _name in ("svd", "qr", "inv", "pinv", "det", "slogdet", "solve",
+              "cholesky", "eig", "eigh"):
+    setattr(_linalg, _name, _linalg_forward(_name))
+
+def _linalg_norm(input, ord=None, dim=None, keepdim=False, **k):
+    import numpy as _np
+    arr = input.numpy() if hasattr(input, "numpy") else _np.asarray(input)
+    axis = tuple(dim) if isinstance(dim, (list, tuple)) else dim
+    res = _np.linalg.norm(arr, ord=ord, axis=axis, keepdims=keepdim)
+    return _jt.array(_np.asarray(res, dtype=arr.dtype))
+
+def _linalg_vector_norm(input, ord=2, dim=None, keepdim=False, **k):
+    import numpy as _np
+    arr = input.numpy() if hasattr(input, "numpy") else _np.asarray(input)
+    if dim is None:
+        arr = arr.reshape(-1)
+        axis = 0
+    else:
+        axis = tuple(dim) if isinstance(dim, (list, tuple)) else dim
+    res = _np.linalg.norm(arr, ord=ord, axis=axis, keepdims=keepdim)
+    return _jt.array(_np.asarray(res, dtype="float32"))
+
+def _linalg_matrix_norm(input, ord="fro", dim=(-2, -1), keepdim=False, **k):
+    import numpy as _np
+    arr = input.numpy() if hasattr(input, "numpy") else _np.asarray(input)
+    res = _np.linalg.norm(arr, ord=ord, axis=tuple(dim), keepdims=keepdim)
+    return _jt.array(_np.asarray(res, dtype="float32"))
+
+def _linalg_matrix_power(input, n, **k):
+    import numpy as _np
+    arr = input.numpy() if hasattr(input, "numpy") else _np.asarray(input)
+    return _jt.array(_np.linalg.matrix_power(arr, n).astype(arr.dtype))
+
+def _linalg_cross(input, other, dim=-1, **k):
+    import numpy as _np
+    a = input.numpy() if hasattr(input, "numpy") else _np.asarray(input)
+    b = other.numpy() if hasattr(other, "numpy") else _np.asarray(other)
+    return _jt.array(_np.cross(a, b, axis=dim).astype(a.dtype))
+
+_linalg.norm = _linalg_norm
+_linalg.vector_norm = _linalg_vector_norm
+_linalg.matrix_norm = _linalg_matrix_norm
+_linalg.matrix_power = _linalg_matrix_power
+_linalg.cross = _linalg_cross
+# explicitly-missing ops: clear NotImplementedError instead of AttributeError
+for _name in ("lstsq", "eigvals", "eigvalsh", "matrix_rank", "multi_dot",
+              "tensorinv", "tensorsolve", "lu", "lu_factor", "ldl_factor",
+              "cond", "svdvals", "householder_product", "solve_triangular"):
+    setattr(_linalg, _name, _linalg_forward(_name))
+sys.modules["torch.linalg"] = _linalg
+globals()["linalg"] = _linalg
+
+# ---------------------------------------------------------------------------
+# torch.special -- map to jittor/numpy where possible, NotImplementedError
+# (never silent) for the rest.
+# ---------------------------------------------------------------------------
+_special = types.ModuleType("torch.special")
+
+def _special_unary(jt_name, np_fallback=None):
+    jt_fn = getattr(_jt, jt_name, None)
+    def _f(input, *a, **k):
+        if jt_fn is not None and hasattr(input, "numpy"):
+            return jt_fn(input, *a, **k)
+        import numpy as _np
+        if np_fallback is None:
+            raise NotImplementedError(
+                f"torch.special: no implementation for '{jt_name}'")
+        arr = input.numpy() if hasattr(input, "numpy") else _np.asarray(input)
+        return _jt.array(_np.asarray(np_fallback(arr), dtype="float32"))
+    return _f
+
+# direct jittor ops (with numpy fallback for ops jittor lacks natively)
+import numpy as _np_for_special
+_special.erf = _special_unary("erf")
+def _np_erfc(x):
+    from math import erfc as _m_erfc
+    return _np_for_special.vectorize(_m_erfc)(x)
+_special.erfc = _special_unary("erfc", _np_erfc)
+_special.exp2 = _special_unary("exp2", lambda x: 2.0 ** x)
+_special.expm1 = _special_unary("expm1", _np_for_special.expm1)
+_special.log1p = _special_unary("log1p", _np_for_special.log1p)
+_special.sigmoid = _special_unary("sigmoid")
+def _np_logit(x):
+    return _np_for_special.log(x / (1.0 - x))
+_special.logit = _special_unary("logit", _np_logit)
+
+def _special_softmax(input, dim, **k):
+    return nn.softmax(input, dim=dim)
+_special.softmax = _special_softmax
+_special.log_softmax = lambda input, dim, **k: nn.log_softmax(input, dim=dim)
+
+def _special_expit(input, **k):
+    return _jt.sigmoid(input)
+_special.expit = _special_expit
+
+def _special_not_impl(name):
+    def _missing(*a, _n=name, **k):
+        raise NotImplementedError(
+            f"torch.special.{_n} is not implemented in the jittor shim.")
+    return _missing
+
+# common special functions jittor/numpy lack a native impl for -- be explicit
+for _name in ("erfinv", "erfcx", "gammaln", "digamma", "polygamma",
+              "multigammaln", "i0", "i0e", "i1", "i1e", "bessel_j0",
+              "bessel_j1", "bessel_y0", "bessel_y1", "entr", "xlogy",
+              "xlog1py", "zeta", "gammainc", "gammaincc", "ndtr", "ndtri",
+              "log_ndtr", "scaled_modified_bessel_k0",
+              "scaled_modified_bessel_k1"):
+    if not hasattr(_special, _name):
+        setattr(_special, _name, _special_not_impl(_name))
+sys.modules["torch.special"] = _special
+globals()["special"] = _special
 
 # torch.profiler (accelerate references ProfilerActivity at class-def time) -- stubs
 _profiler = types.ModuleType("torch.profiler")
