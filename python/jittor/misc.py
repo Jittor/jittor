@@ -931,6 +931,7 @@ jt.Var.tolist = tolist
 def view_as(x,y):
     return x.reshape(y.shape)
 jt.Var.view_as = view_as
+jt.Var.reshape_as = view_as          # torch alias (roformer uses .reshape_as)
 
 def diag(x,diagonal=0):
     assert x.ndim==1 or (x.ndim==2 and x.shape[0]==x.shape[1])

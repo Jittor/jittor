@@ -53,6 +53,7 @@ CFG = {
  'albert':    dict(hidden_size=64,num_hidden_layers=2,num_attention_heads=2,intermediate_size=128,vocab_size=128,max_position_embeddings=64,embedding_size=64),
  'distilbert':dict(dim=64,hidden_dim=128,n_layers=2,n_heads=2,vocab_size=128,max_position_embeddings=64),
  'longformer':dict(hidden_size=64,num_hidden_layers=2,num_attention_heads=2,intermediate_size=128,vocab_size=128,max_position_embeddings=512,attention_window=4,hidden_dropout_prob=0.5,attention_probs_dropout_prob=0.5),  # sliding-window attn (as_strided/where/flip)
+ 'roformer':dict(hidden_size=64,num_hidden_layers=2,num_attention_heads=2,intermediate_size=128,vocab_size=128,max_position_embeddings=128,hidden_dropout_prob=0.5,attention_probs_dropout_prob=0.5),  # rotary encoder (reshape_as)
  # encoder-decoder
  't5':    dict(d_model=64,d_ff=128,num_layers=2,num_heads=2,d_kv=32,vocab_size=128,dropout_rate=0.5),
  'bart':  dict(d_model=64,encoder_layers=2,decoder_layers=2,encoder_attention_heads=2,decoder_attention_heads=2,encoder_ffn_dim=128,decoder_ffn_dim=128,vocab_size=128,max_position_embeddings=128,dropout=0.0),

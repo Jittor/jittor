@@ -809,6 +809,13 @@ def _wrap_constructors(g):
         def wrapped(*args, **kwargs):
             for k in _DROP:
                 kwargs.pop(k, None)
+            # torch allows the shape via the size= keyword: torch.ones(size=(2,3))
+            # (canine's _create_3d_attention_mask_from_input_mask). Only the shape
+            # factories get a size= kwarg, and only with no positional shape, so
+            # this is safe across all wrapped constructors.
+            if "size" in kwargs and not args:
+                sz = kwargs.pop("size")
+                args = (tuple(sz),) if hasattr(sz, "__len__") else (sz,)
             if "dtype" in kwargs and kwargs["dtype"] is not None:
                 kwargs["dtype"] = _dtype_to_str(kwargs["dtype"])
             return orig(*args, **kwargs)

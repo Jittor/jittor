@@ -2250,6 +2250,56 @@ class ConstantPad2d(Module):
         tar_dims.append(f"i{i+2}-{self.pl}")
         return x.reindex(tar_shape, tar_dims, overflow_value=self.value)
 
+class ConstantPad1d(Module):
+    '''Pads the last dim with a constant. torch: ConstantPad1d((left, right), value)
+    (canine downsamples char->molecule sequences with this).'''
+    def __init__(self, padding, value):
+        if isinstance(padding, int):
+            self.pl = self.pr = padding
+        elif isinstance(padding, (tuple, list)):
+            self.pl, self.pr = padding
+        else:
+            raise TypeError(f"ConstantPad1d padding just support int or tuple, but found {type(padding)}")
+        self.value = value
+        if self.pl < 0 or self.pr < 0:
+            raise ValueError("padding must be non-negative")
+
+    def execute(self, x):
+        assert len(x.shape) >= 1
+        shape = x.shape
+        n = len(shape)
+        tar_shape = shape[:-1] + [shape[-1] + self.pl + self.pr]
+        tar_dims = [f"i{i}" for i in range(n - 1)]
+        tar_dims.append(f"i{n-1}-{self.pl}")
+        return x.reindex(tar_shape, tar_dims, overflow_value=self.value)
+
+class ConstantPad3d(Module):
+    '''Pads the last 3 dims with a constant. torch:
+    ConstantPad3d((left, right, top, bottom, front, back), value).'''
+    def __init__(self, padding, value):
+        if isinstance(padding, int):
+            self.pl = self.pr = self.pt = self.pb = self.pf = self.pba = padding
+        elif isinstance(padding, (tuple, list)):
+            self.pl, self.pr, self.pt, self.pb, self.pf, self.pba = padding
+        else:
+            raise TypeError(f"ConstantPad3d padding just support int or tuple, but found {type(padding)}")
+        self.value = value
+        if min(self.pl, self.pr, self.pt, self.pb, self.pf, self.pba) < 0:
+            raise ValueError("padding must be non-negative")
+
+    def execute(self, x):
+        assert len(x.shape) >= 3
+        shape = x.shape
+        n = len(shape)
+        tar_shape = shape[:-3] + [shape[-3] + self.pf + self.pba,
+                                  shape[-2] + self.pt + self.pb,
+                                  shape[-1] + self.pl + self.pr]
+        tar_dims = [f"i{i}" for i in range(n - 3)]
+        tar_dims.append(f"i{n-3}-{self.pf}")
+        tar_dims.append(f"i{n-2}-{self.pt}")
+        tar_dims.append(f"i{n-1}-{self.pl}")
+        return x.reindex(tar_shape, tar_dims, overflow_value=self.value)
+
 class ReplicationPad2d(Module):
     def __init__(self, padding):
         if padding < 0:
