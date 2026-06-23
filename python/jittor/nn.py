@@ -1682,6 +1682,287 @@ def conv_transpose3d(input, weight, bias=None, stride=1, padding=0, output_paddi
 
 conv_transpose2d = conv_transpose
 
+def conv1d(input, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
+    ''' Applies a 1D convolution over an input signal composed of several input
+    planes. Torch-compatible functional interface.
+
+    :param input: the input var of shape ``(N, C_in, L)``
+    :type input: jt.Var
+
+    :param weight: the convolution kernel of shape ``(C_out, C_in//groups, kW)``
+    :type weight: jt.Var
+
+    :param bias: the optional bias of shape ``(C_out,)``. Default: None
+    :type bias: jt.Var, optional
+
+    :param stride: stride of the convolution. Default: 1
+    :param padding: zero-padding added to both sides of the input. Default: 0
+    :param dilation: spacing between kernel elements. Default: 1
+    :param groups: number of blocked connections. Default: 1
+
+    Example:
+        >>> x = jt.randn(4, 8, 100)
+        >>> w = jt.randn(16, 8, 3)
+        >>> y = nn.conv1d(x, w, stride=2, padding=1)
+    '''
+    if input.dim() != 3:
+        raise RuntimeError(f'Expected 3D input to conv1d, but got input of size: {input.shape}')
+    if weight.dim() != 3:
+        raise RuntimeError(f'Expected 3D weight to conv1d, but got weight of size: {weight.shape}')
+    stride = stride[0] if isinstance(stride, (tuple, list)) else stride
+    padding = padding[0] if isinstance(padding, (tuple, list)) else padding
+    dilation = dilation[0] if isinstance(dilation, (tuple, list)) else dilation
+    # reuse the 2D conv by adding a singleton width dimension
+    x = input.unsqueeze(-1)
+    w = weight.unsqueeze(-1)
+    y = conv2d(x, w, bias, (stride, 1), (padding, 0), (dilation, 1), groups)
+    return y.squeeze(-1)
+
+def conv_transpose1d(input, weight, bias=None, stride=1, padding=0, output_padding=0, groups=1, dilation=1):
+    ''' Applies a 1D transposed convolution operator over an input signal.
+    Torch-compatible functional interface.
+
+    :param input: the input var of shape ``(N, C_in, L)``
+    :type input: jt.Var
+
+    :param weight: the kernel of shape ``(C_in, C_out//groups, kW)``
+    :type weight: jt.Var
+
+    :param bias: the optional bias of shape ``(C_out,)``. Default: None
+    :type bias: jt.Var, optional
+
+    :param stride: stride of the convolution. Default: 1
+    :param padding: ``dilation * (kW - 1) - padding`` zero-padding. Default: 0
+    :param output_padding: additional size added to the output. Default: 0
+    :param groups: number of blocked connections. Default: 1
+    :param dilation: spacing between kernel elements. Default: 1
+
+    Example:
+        >>> x = jt.randn(4, 8, 50)
+        >>> w = jt.randn(8, 16, 3)
+        >>> y = nn.conv_transpose1d(x, w, stride=2)
+    '''
+    if input.dim() != 3:
+        raise RuntimeError(f'Expected 3D input to conv_transpose1d, but got input of size: {input.shape}')
+    if weight.dim() != 3:
+        raise RuntimeError(f'Expected 3D weight to conv_transpose1d, but got weight of size: {weight.shape}')
+    stride = stride[0] if isinstance(stride, (tuple, list)) else stride
+    padding = padding[0] if isinstance(padding, (tuple, list)) else padding
+    output_padding = output_padding[0] if isinstance(output_padding, (tuple, list)) else output_padding
+    dilation = dilation[0] if isinstance(dilation, (tuple, list)) else dilation
+    x = input.unsqueeze(-1)
+    w = weight.unsqueeze(-1)
+    y = conv_transpose(x, w, bias, (stride, 1), (padding, 0), (output_padding, 0), groups, (dilation, 1))
+    return y.squeeze(-1)
+
+def adaptive_avg_pool2d(input, output_size):
+    ''' Applies a 2D adaptive average pooling over an input signal composed of
+    several input planes. Torch-compatible functional interface that reuses the
+    :class:`AdaptiveAvgPool2d` module implementation.
+
+    :param input: the input var of shape ``(N, C, H, W)``
+    :type input: jt.Var
+
+    :param output_size: the target output size ``(H_out, W_out)``. A single int
+        ``H_out`` is interpreted as ``(H_out, H_out)``; ``None`` keeps that
+        dimension unchanged.
+    :type output_size: int or tuple
+
+    Example:
+        >>> x = jt.randn(2, 3, 10, 12)
+        >>> y = nn.adaptive_avg_pool2d(x, (5, 6))
+    '''
+    return AdaptiveAvgPool2d(output_size)(input)
+
+def glu(input, dim=-1):
+    r''' Applies the gated linear unit function
+
+    .. math::
+        \text{GLU}(a, b) = a \otimes \sigma(b)
+
+    where ``input`` is split in half along ``dim`` to form ``a`` and ``b``,
+    ``a`` is the first half and ``b`` the second half, and :math:`\sigma` is the
+    sigmoid function. Torch-compatible.
+
+    :param input: the input var
+    :type input: jt.Var
+
+    :param dim: the dimension on which to split the input. Default: -1
+    :type dim: int
+
+    Example:
+        >>> x = jt.randn(4, 6)
+        >>> y = nn.glu(x)   # y.shape == [4, 3]
+    '''
+    ndim = input.ndim
+    if ndim == 0:
+        raise RuntimeError("glu does not support scalars because halving size must be even")
+    if dim < 0:
+        dim += ndim
+    size = input.shape[dim]
+    if size % 2 != 0:
+        raise RuntimeError(f"Halving dimension must be even, but dimension {dim} is size {size}")
+    half = size // 2
+    a, b = input.split([half, half], dim=dim)
+    return a * b.sigmoid()
+
+def normalize(input, p=2, dim=1, eps=1e-12):
+    r''' Performs :math:`L_p` normalization of inputs over a specified dimension.
+
+    .. math::
+        v = \frac{v}{\max(\lVert v \rVert_p, \epsilon)}
+
+    Torch-compatible functional interface. Note the torch-compatible default of
+    ``eps=1e-12`` (clamping the denominator), as opposed to the additive ``eps``
+    used by :func:`jittor.normalize`.
+
+    :param input: input var of any shape
+    :type input: jt.Var
+
+    :param p: the exponent value in the norm formulation. Default: 2
+    :type p: float
+
+    :param dim: the dimension to reduce. Default: 1
+    :type dim: int
+
+    :param eps: small value to avoid division by zero. Default: 1e-12
+    :type eps: float
+
+    Example:
+        >>> x = jt.randn(3, 4)
+        >>> y = nn.normalize(x, dim=1)
+    '''
+    if p == 2:
+        norm = (input * input).sum(dim, keepdims=True).sqrt()
+    elif p == 1:
+        norm = input.abs().sum(dim, keepdims=True)
+    elif p == float("inf"):
+        norm = input.abs().max(dim, keepdims=True)
+    else:
+        norm = (input.abs() ** p).sum(dim, keepdims=True) ** (1.0 / p)
+    return input / norm.maximum(eps)
+
+def cosine_similarity(x1, x2, dim=1, eps=1e-8):
+    r''' Returns the cosine similarity between ``x1`` and ``x2`` along ``dim``.
+
+    .. math::
+        \text{similarity} = \frac{x_1 \cdot x_2}
+            {\max(\lVert x_1 \rVert_2, \epsilon) \cdot \max(\lVert x_2 \rVert_2, \epsilon)}
+
+    Torch-compatible.
+
+    :param x1: first input var
+    :type x1: jt.Var
+
+    :param x2: second input var
+    :type x2: jt.Var
+
+    :param dim: dimension along which cosine similarity is computed. Default: 1
+    :type dim: int
+
+    :param eps: small value to avoid division by zero. Default: 1e-8
+    :type eps: float
+
+    Example:
+        >>> a = jt.randn(4, 8)
+        >>> b = jt.randn(4, 8)
+        >>> sim = nn.cosine_similarity(a, b)   # sim.shape == [4]
+    '''
+    w12 = (x1 * x2).sum(dim)
+    w1 = (x1 * x1).sum(dim)
+    w2 = (x2 * x2).sum(dim)
+    n12 = (w1 * w2).maximum(eps * eps).sqrt()
+    return w12 / n12
+
+def pairwise_distance(x1, x2, p=2.0, eps=1e-6, keepdim=False):
+    r''' Computes the batchwise :math:`p`-norm distance between vectors.
+
+    .. math::
+        \lVert x_1 - x_2 + \epsilon \rVert_p
+
+    Torch-compatible.
+
+    :param x1: first input var
+    :type x1: jt.Var
+
+    :param x2: second input var
+    :type x2: jt.Var
+
+    :param p: the norm degree. Default: 2.0
+    :type p: float
+
+    :param eps: small value added to avoid division by zero. Default: 1e-6
+    :type eps: float
+
+    :param keepdim: whether to keep the reduced (vector) dimension. Default: False
+    :type keepdim: bool
+
+    Example:
+        >>> a = jt.randn(4, 8)
+        >>> b = jt.randn(4, 8)
+        >>> d = nn.pairwise_distance(a, b)   # d.shape == [4]
+    '''
+    diff = (x1 - x2) + eps
+    adiff = diff.abs()
+    if p == 2:
+        out = (diff * diff).sum(-1, keepdims=keepdim).sqrt()
+    elif p == 1:
+        out = adiff.sum(-1, keepdims=keepdim)
+    elif p == float("inf"):
+        out = adiff.max(-1, keepdims=keepdim)
+    else:
+        out = (adiff ** p).sum(-1, keepdims=keepdim) ** (1.0 / p)
+    return out
+
+def softsign(x):
+    r''' Applies the element-wise function
+
+    .. math::
+        \text{SoftSign}(x) = \frac{x}{1 + |x|}
+
+    Torch-compatible.
+
+    :param x: the input var
+    :type x: jt.Var
+
+    Example:
+        >>> a = jt.randn(3)
+        >>> nn.softsign(a)
+    '''
+    return x / (1 + x.abs())
+
+class GLU(Module):
+    r''' Applies the gated linear unit function. See :func:`glu`.
+
+    :param dim: the dimension on which to split the input. Default: -1
+    :type dim: int
+
+    Example:
+        >>> m = nn.GLU()
+        >>> x = jt.randn(4, 6)
+        >>> y = m(x)   # y.shape == [4, 3]
+    '''
+    def __init__(self, dim=-1):
+        super().__init__()
+        self.dim = dim
+
+    def execute(self, x):
+        return glu(x, self.dim)
+
+class Softsign(Module):
+    r''' Applies the element-wise SoftSign function. See :func:`softsign`.
+
+    Example:
+        >>> m = nn.Softsign()
+        >>> x = jt.randn(3)
+        >>> y = m(x)
+    '''
+    def __init__(self):
+        super().__init__()
+
+    def execute(self, x):
+        return softsign(x)
+
 def pad(x,padding, mode='constant', value=0):
     assert mode in ['constant','replicate','reflect','circular'],'only support constant,replicate,reflect,circular pad'
     assert len(padding)%2==0 and len(padding)//2<=x.ndim
