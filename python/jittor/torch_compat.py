@@ -504,6 +504,7 @@ def install(torch):
     _install_misc(g, Var)
     _install_optimizers(g)
     _install_autograd_function(g)
+    _install_autograd(g)
 
 
 def _install_autograd_function(g):
@@ -524,6 +525,66 @@ def _install_autograd_function(g):
         def _saved_tensors(self):
             return getattr(self, "_saved_tensors", ())
         Fn.saved_tensors = property(_saved_tensors)
+
+
+def _install_autograd(g):
+    """Expose torch.autograd.grad / torch.autograd.backward (jittor lacks the
+    `torch.autograd` namespace functions; it only has jt.grad). These wrap
+    jt.grad so `import jittor as torch; torch.autograd.grad(out, inputs)` works.
+    """
+    import types as _types
+    import jittor as _jt
+    autograd = getattr(g, "autograd", None)
+    if autograd is None or not isinstance(autograd, _types.ModuleType):
+        autograd = _types.ModuleType("torch.autograd")
+    # carry over the symbols other layers expect on torch.autograd
+    if not hasattr(autograd, "Function"):
+        autograd.Function = getattr(_jt, "Function", object)
+    if not hasattr(autograd, "no_grad"):
+        autograd.no_grad = getattr(g, "no_grad", _jt.no_grad)
+    if not hasattr(autograd, "enable_grad"):
+        autograd.enable_grad = getattr(g, "enable_grad", _jt.enable_grad)
+
+    def _as_list(x):
+        if isinstance(x, _jt.Var):
+            return [x]
+        return list(x)
+
+    def grad(outputs, inputs, grad_outputs=None, retain_graph=None,
+             create_graph=False, only_inputs=True, allow_unused=False,
+             is_grads_batched=False, materialize_grads=False, **kw):
+        # torch.autograd.grad(outputs, inputs, ...) -> tuple of grads, one per
+        # input. jittor's jt.grad takes a single scalar loss; when several
+        # outputs (or grad_outputs weights) are given, reduce them to one scalar
+        # via sum(grad_outputs * output), matching torch's vector-Jacobian product.
+        outs = _as_list(outputs)
+        ins = _as_list(inputs)
+        if grad_outputs is None:
+            loss = outs[0].sum() if len(outs) == 1 else sum(o.sum() for o in outs)
+        else:
+            gos = _as_list(grad_outputs)
+            loss = sum((o * w).sum() for o, w in zip(outs, gos))
+        rg = True if retain_graph is None else bool(retain_graph)
+        gs = _jt.grad(loss, ins, rg)
+        return tuple(gs)
+    autograd.grad = grad
+
+    def backward(tensors, grad_tensors=None, retain_graph=None,
+                 create_graph=False, inputs=None, **kw):
+        # torch.autograd.backward(tensors, ...) accumulates grads into leaf
+        # .grad. Route each tensor through Var.backward (the optimizer bridge /
+        # no-optimizer leaf path installed on Var).
+        ts = _as_list(tensors)
+        gts = None if grad_tensors is None else _as_list(grad_tensors)
+        for i, t in enumerate(ts):
+            gt = None if gts is None else gts[i]
+            t.backward(gradient=gt, retain_graph=retain_graph)
+        return None
+    autograd.backward = backward
+
+    if not hasattr(autograd, "Variable"):
+        autograd.Variable = g.Tensor
+    g.autograd = autograd
 
 
 def _install_optimizers(g):
@@ -1402,19 +1463,45 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         Var.data = property(_data_get, _data_set)
         Var._data_wrapped = True
 
-    if not hasattr(Var, "requires_grad"):
+    # Leaf registry for the no-optimizer backward() path (below): torch's
+    # loss.backward() accumulates grads into the .grad of every leaf that
+    # requires grad, but jittor has no graph-walk to recover those leaves. So
+    # track Vars whose grad was explicitly enabled through the torch-facing
+    # API (requires_grad=True / requires_grad_()). Keyed by id() to dedupe;
+    # jittor Vars are not weak-referenceable, so we hold strong refs (leaf
+    # params are long-lived anyway) and prune entries that drop stop-grad.
+    if not hasattr(jt, "_torch_leaf_params"):
+        jt._torch_leaf_params = {}
+    def _register_leaf(v):
+        try:
+            if isinstance(v, Var) and not v.is_stop_grad():
+                jt._torch_leaf_params[id(v)] = v
+        except Exception:
+            pass
+
+    # Override requires_grad with a Python property even though jittor exposes a
+    # native getset descriptor: the native setter maps directly to start_grad/
+    # stop_grad (identical semantics), but we additionally register the Var as a
+    # leaf so the no-optimizer loss.backward() path (below) can find it. This is
+    # behavior-preserving for the getter/setter; it only adds leaf bookkeeping.
+    if not isinstance(Var.__dict__.get("requires_grad"), property):
         def _rg_get(self):
             try:
                 return not self.is_stop_grad()
             except Exception:
                 return False
         def _rg_set(self, v):
-            if v: self.start_grad()
-            else: self.stop_grad()
+            if v:
+                self.start_grad()
+                _register_leaf(self)
+            else:
+                self.stop_grad()
         Var.requires_grad = property(_rg_get, _rg_set)
 
     def requires_grad_(self, v=True):
         self.requires_grad = v
+        if v:
+            _register_leaf(self)
         return self
     Var.requires_grad_ = requires_grad_
 
@@ -1430,11 +1517,31 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     #   * param.grad: getter returns the optimizer-held grad Var (so in-place
     #     clipping mutates the very Var that step() consumes); setter stores it.
     def _backward(self, gradient=None, retain_graph=False, create_graph=False, **kw):
+        # torch defaults retain_graph to None (== free the graph); jittor's
+        # core.grad/optimizer.backward require a strict bool, so coerce.
+        retain_graph = bool(retain_graph)
         opt = getattr(jt, "_current_optimizer", None)
         if opt is None:
-            raise RuntimeError(
-                "loss.backward() needs an active optimizer on the jittor backend; "
-                "none was registered (construct a torch.optim optimizer first).")
+            # torch supports loss.backward() with no optimizer: grads accumulate
+            # into each leaf's .grad. jittor has no optimizer-free tensor-level
+            # backward, so compute grads via jt.grad w.r.t. the registered leaf
+            # params (those whose requires_grad was enabled) and publish them on
+            # .grad. Accumulate (+=) like torch when a leaf already has a grad.
+            leaves = [v for v in list(jt._torch_leaf_params.values())
+                      if isinstance(v, Var) and not v.is_stop_grad()]
+            # prune leaves that are no longer trainable to bound the registry
+            for k in [k for k, v in list(jt._torch_leaf_params.items())
+                      if not (isinstance(v, Var) and not v.is_stop_grad())]:
+                jt._torch_leaf_params.pop(k, None)
+            if leaves:
+                grads = jt.grad(self, leaves, retain_graph)
+                for p, gr in zip(leaves, grads):
+                    if gr is None:
+                        continue
+                    prev = getattr(p, "_torch_grad", None)
+                    object.__setattr__(p, "_torch_grad",
+                                       gr if prev is None else (prev + gr))
+            return None
         # compute & accumulate grads into the optimizer (jittor semantics)
         opt.backward(self, retain_graph)
         # publish grads onto params so `param.grad` works for clipping/logging
@@ -1567,6 +1674,56 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             return beta * self + res
         Var.addmm = _addmm_method
 
+    # torch's Tensor.T: reverse ALL dims (a deprecated-but-ubiquitous alias for
+    # x.permute(reversed(range(ndim)))); a no-op for ndim < 2. jittor lacks it.
+    if not isinstance(getattr(Var, "T", None), property):
+        def _T(self):
+            nd = self.ndim
+            if nd < 2:
+                return self
+            return self.permute(*range(nd - 1, -1, -1))
+        Var.T = property(_T)
+    # torch's Tensor.mT: swap the last two dims (batched matrix transpose);
+    # requires ndim >= 2. Used by modern attention code (q.mT @ k etc.).
+    if not isinstance(getattr(Var, "mT", None), property):
+        def _mT(self):
+            return self.transpose(-1, -2)
+        Var.mT = property(_mT)
+
+    # torch's Tensor.norm(p='fro', dim=None, keepdim=False, dtype=None):
+    # default (dim=None) reduces over ALL dims to a 0-dim scalar -- but jittor's
+    # native Var.norm defaults to dim=-1 (per-row). Override to torch semantics
+    # while STAYING compatible with jittor's internal positional convention
+    #   jt.norm(x, p=2, dim=-1, keepdims=False, eps=1e-30, keepdim=False)
+    # which callers like misc.normalize use as input.norm(p, dim, True, eps).
+    # The collision is the 4th positional: torch=dtype, jittor=eps. Disambiguate
+    # by type (a number -> jittor eps; a dtype/str/None -> torch dtype). When dim
+    # is given explicitly (the only way internal callers reach here) behavior is
+    # identical to before; only the dim=None default changes to a full reduce.
+    _norm_via = _torch_norm_impl
+    _native_norm = Var.norm  # jittor's native Var.norm (eps-floored, dim=-1)
+    def _var_norm(self, p="fro", dim=None, keepdims=None, *rest,
+                  keepdim=False, dtype=None, eps=None, **kw):
+        # jittor's internal convention is norm(p, dim, keepdims, eps): when a
+        # 4th positional eps (a non-bool number) or an explicit eps= is present,
+        # this is an internal call -- delegate verbatim to the native op so its
+        # eps-floor (used by misc.normalize/weightnorm to avoid div-by-zero) is
+        # preserved exactly.
+        fourth = rest[0] if rest else None
+        is_internal = eps is not None or (
+            isinstance(fourth, (int, float)) and not isinstance(fourth, bool))
+        if is_internal:
+            kdv = bool(keepdims) if keepdims is not None else keepdim
+            ev = eps if eps is not None else (fourth if fourth is not None else 1e-30)
+            d = -1 if dim is None else dim
+            return _native_norm(self, p if p != "fro" else 2, d, kdv, ev)
+        # torch convention: norm(p='fro', dim=None, keepdim=False, dtype=None)
+        kd = bool(keepdims) if keepdims is not None else keepdim
+        if fourth is not None:
+            dtype = fourth
+        return _norm_via(self, p=p, dim=dim, keepdim=kd, dtype=dtype)
+    Var.norm = _var_norm
+
 
 def _install_misc(g, Var):
     if hasattr(jt, "set_global_seed"):
@@ -1574,6 +1731,15 @@ def _install_misc(g, Var):
     g.is_tensor = lambda x: isinstance(x, Var)
     if not hasattr(g, "numel"):
         g.numel = lambda x: x.numel()
+
+    # torch.norm(input, p='fro', dim=None, keepdim=False, dtype=None, out=None):
+    # default reduces over ALL dims to a 0-dim scalar. jittor's jt.norm defaults
+    # to dim=-1 (per-row), so torch.norm(x)/x.norm() silently returned a vector.
+    # Override the torch-facing top-level norm (NOT jt.norm's internal default,
+    # which jittor relies on) to match torch.
+    def norm(input, p="fro", dim=None, keepdim=False, dtype=None, out=None, **kw):
+        return _torch_norm_impl(input, p=p, dim=dim, keepdim=keepdim, dtype=dtype)
+    g.norm = norm
 
     # autocast / grad-mode query helpers
     g.is_autocast_enabled = lambda *a, **k: False
@@ -1829,6 +1995,73 @@ def _install_misc(g, Var):
     _alias("svd_lowrank", _svd_lowrank)
     _alias("pca_lowrank", lambda A, q=6, center=True, niter=2: _svd_lowrank(
         A - (A.mean(0, keepdims=True) if center else 0), q, niter))
+
+
+def _torch_norm_impl(input, p="fro", dim=None, keepdim=False, dtype=None):
+    # torch.norm / Tensor.norm with torch semantics:
+    #   * dim=None  -> reduce over ALL dims to a 0-dim scalar (the key fix);
+    #   * p='fro' or None -> 2-norm (Frobenius == Euclidean over the flattened
+    #     reduced elements); p may be an int/float (1, 2, inf) or 'fro'/'nuc'.
+    #   * dim may be an int or a tuple of ints.
+    import jittor as _jt
+    import math as _m
+    if dtype is not None:
+        input = input.cast(_dtype_to_str(dtype))
+    # normalize the order p
+    if p is None or p == "fro":
+        pv = 2.0
+    elif p == "nuc":
+        # nuclear norm (sum of singular values) -- rare; fall back to numpy.
+        import numpy as _np
+        arr = input.numpy()
+        return _jt.array(_np.linalg.norm(arr, ord="nuc", axis=dim))
+    else:
+        pv = float(p)
+    if dim is None:
+        # full reduction over a flattened view -> 0-dim scalar
+        x = input.reshape(-1)
+        if pv == float("inf"):
+            r = x.abs().max()
+        elif pv == float("-inf"):
+            r = x.abs().min()
+        elif pv == 1.0:
+            r = x.abs().sum()
+        elif pv == 2.0:
+            r = _jt.sqrt((x.cast("float32") if str(x.dtype) not in ("float32", "float64") else x).sqr().sum())
+        else:
+            r = (x.abs() ** pv).sum() ** (1.0 / pv)
+        return r
+    # per-dim reduction: jittor's native norm handles a single int dim; for a
+    # tuple of dims, compose manually.
+    if isinstance(dim, (tuple, list)):
+        if pv == float("inf"):
+            r = input.abs()
+            for d in sorted(dim, reverse=True):
+                r = r.max(dim=d, keepdims=keepdim)
+            return r
+        if pv == 1.0:
+            r = input.abs()
+            for d in sorted(dim, reverse=True):
+                r = r.sum(dim=d, keepdims=keepdim)
+            return r
+        if pv == 2.0:
+            r = input.sqr()
+            for d in sorted(dim, reverse=True):
+                r = r.sum(dim=d, keepdims=keepdim)
+            return _jt.sqrt(r)
+        r = input.abs() ** pv
+        for d in sorted(dim, reverse=True):
+            r = r.sum(dim=d, keepdims=keepdim)
+        return r ** (1.0 / pv)
+    if pv == float("inf"):
+        return input.abs().max(dim=dim, keepdims=keepdim)
+    if pv == float("-inf"):
+        return input.abs().min(dim=dim, keepdims=keepdim)
+    if pv == 1.0:
+        return input.abs().sum(dim=dim, keepdims=keepdim)
+    if pv == 2.0:
+        return _jt.sqrt(input.sqr().sum(dim=dim, keepdims=keepdim))
+    return (input.abs() ** pv).sum(dim=dim, keepdims=keepdim) ** (1.0 / pv)
 
 
 def _diff(x, n=1, dim=-1, prepend=None, append=None):

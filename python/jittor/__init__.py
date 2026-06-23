@@ -1316,6 +1316,8 @@ class Module:
             for k2, p in dc.items():
                 if isinstance(k2, str) and k2.startswith("_"): continue
                 if isinstance(p, Var):
+                    if not getattr(p, "persistent", True):
+                        continue
                     ps.append(p)
                     pname = ".".join(stack[1:]+[str(k2)])
                     if len(pname) > len(p.name()):
