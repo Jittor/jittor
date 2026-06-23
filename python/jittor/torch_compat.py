@@ -1377,6 +1377,28 @@ def _install_init_aliases():
                      ("zeros_", zeros_), ("ones_", ones_), ("constant_", constant_),
                      ("trunc_normal_", trunc_normal_)]:
         setattr(_init, name, fn)
+    # jittor's native kaiming/xavier/gauss initializers do `var.assign(src)` without
+    # re-enabling grad. Under transformers' @torch.no_grad() weight init, `src` is
+    # stop_grad, so .assign() silently FREEZES the parameter -- Conv2d/Linear inited
+    # with kaiming (resnet/regnet/...) end up stop_grad and get zero weight grads
+    # (forward stays exact, so it's invisible until you train/check gradients). Wrap
+    # them with the same grad-preserving guard used by _assign() above: a no-op for
+    # already-frozen params, so it can't regress anything.
+    def _grad_preserving(fn):
+        def wrapped(tensor, *a, **k):
+            was_trainable = hasattr(tensor, "is_stop_grad") and not tensor.is_stop_grad()
+            r = fn(tensor, *a, **k)
+            if was_trainable and hasattr(tensor, "start_grad"):
+                tensor.start_grad()
+            return r
+        return wrapped
+    for _nm in ("kaiming_normal_", "kaiming_uniform_", "gauss_",
+                "xavier_uniform_", "xavier_gauss_", "xavier_normal_",
+                "relu_invariant_gauss_", "invariant_uniform_"):
+        if hasattr(_init, _nm):
+            setattr(_init, _nm, _grad_preserving(getattr(_init, _nm)))
+            if hasattr(_jt2.Var, _nm):   # keep the Var-bound method spelling in sync
+                setattr(_jt2.Var, _nm, getattr(_init, _nm))
     # keep jittor's good xavier/kaiming; add torch-name aliases for the rest
     aliases = {"xavier_normal_": "xavier_gauss_"}
     for tname, jname in aliases.items():
