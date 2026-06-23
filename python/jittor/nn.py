@@ -25,6 +25,33 @@ from jittor_utils import LOG
 from functools import partial
 
 
+def _broadcast_batch_dims(a, b):
+    ''' Broadcast the leading batch dims of two tensors with equal ndim>=3 to a
+    common shape (torch matmul/bmm semantics), leaving the trailing two (matrix)
+    dims untouched. cublasGemmStridedBatchedEx only supports a single batch
+    stride per operand, so a batch dim of size 1 broadcast against >1 (e.g.
+    Falcon multi-query attention: [b,nh,q,d] @ [b,1,d,k]) must be materialized
+    here before dispatch. '''
+    if a.ndim != b.ndim or a.ndim < 3:
+        return a, b
+    bshape = []
+    need = False
+    for i in range(a.ndim - 2):
+        an, bn = a.shape[i], b.shape[i]
+        if an != bn:
+            assert an == 1 or bn == 1, \
+                f"dimension not match, a.shape:{a.shape}, b.shape:{b.shape}"
+            need = True
+        bshape.append(max(an, bn))
+    if not need:
+        return a, b
+    if list(a.shape[:-2]) != bshape:
+        a = a.expand(bshape + list(a.shape[-2:]))
+    if list(b.shape[:-2]) != bshape:
+        b = b.expand(bshape + list(b.shape[-2:]))
+    return a, b
+
+
 def matmul_transpose(a, b):
     '''
     returns a * b^T
@@ -48,6 +75,7 @@ def bmm_transpose(a, b):
     returns a * b^T
     '''
     if jt.flags.use_cuda and jt.compile_extern.cublas_ops:
+        a, b = _broadcast_batch_dims(a, b)
         return jt.compile_extern.cublas_ops.cublas_batched_matmul(a, b, 0, 1)
     t = list(range(b.ndim))
     t[-1], t[-2] = t[-2], t[-1]
@@ -128,6 +156,7 @@ Example::
             # bmm
             # a: [..., n, m], b: [..., m, k], c:[..., n, k]
             if jt.flags.use_cuda and jt.compile_extern.cublas_ops:
+                a, b = _broadcast_batch_dims(a, b)
                 return jt.compile_extern.cublas_ops.cublas_batched_matmul(a, b, 0, 0)
         shape = []
         len_c = max(len_a, len_b)
