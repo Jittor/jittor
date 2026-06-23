@@ -1316,6 +1316,9 @@ class Module:
             for k2, p in dc.items():
                 if isinstance(k2, str) and k2.startswith("_"): continue
                 if isinstance(p, Var):
+                    # registered buffers are never trainable parameters
+                    if getattr(p, "is_buffer", False):
+                        continue
                     if not getattr(p, "persistent", True):
                         continue
                     ps.append(p)
@@ -1407,7 +1410,10 @@ class Module:
 
         '''
         state_dict = self.state_dict(recurse=recurse)
-        return list(state_dict.items())
+        # registered buffers are kept in state_dict() but are never trainable
+        # parameters, so exclude them here (mirrors parameters()).
+        return [(k, v) for k, v in state_dict.items()
+                if not getattr(v, "is_buffer", False)]
 
     def load_state_dict(self, params) -> None:
         '''
@@ -1828,6 +1834,10 @@ Arguments of hook are defined as::
 
     def register_buffer(self, key, value, persistent=True):
         value.persistent = persistent
+        # mark as a registered buffer so parameters()/named_parameters() can
+        # exclude it: a buffer is never a trainable parameter, regardless of
+        # persistence. state_dict()/named_buffers() still use .persistent.
+        value.is_buffer = True
         object.__setattr__(self, key, value)
         return value
     
@@ -1839,12 +1849,28 @@ Arguments of hook are defined as::
                 buffers[k] = v
         return buffers
     
-    def named_buffers(self,recurse=False):
-        
+    def named_buffers(self, recurse=True):
+        ''' Returns a list of (name, buffer) for all registered buffers.
+
+        Like torch, recurse=True (default) descends into all child modules,
+        prefixing names with the submodule path. Returns every registered
+        buffer regardless of persistence.
+        '''
         buffers = []
-        for k,v in self.__dict__.items():
-            if isinstance(v, jt.Var):
-                buffers.append((k,v))
+        uniq_set = set()
+        stack = []
+        def callback(parents, k, v, n):
+            stack.append(str(k))
+            for k2, p in v.__dict__.items():
+                if isinstance(k2, str) and k2.startswith("_"): continue
+                if isinstance(p, jt.Var) and getattr(p, "is_buffer", False):
+                    if id(p) in uniq_set: continue
+                    uniq_set.add(id(p))
+                    pname = ".".join(stack[1:]+[str(k2)])
+                    buffers.append((pname, p))
+        def callback_leave(parents, k, v, n):
+            stack.pop()
+        self.dfs([], None, callback, callback_leave, recurse)
         return buffers
 
     def named_children(self,):
