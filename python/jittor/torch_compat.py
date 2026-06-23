@@ -503,6 +503,27 @@ def install(torch):
     _install_tensor_methods(g, Var, _DTYPE_OBJS)
     _install_misc(g, Var)
     _install_optimizers(g)
+    _install_autograd_function(g)
+
+
+def _install_autograd_function(g):
+    """torch.autograd.Function exposes ctx.save_for_backward(*tensors) in
+    forward() and a ctx.saved_tensors tuple in backward(). jittor's Function
+    stores backward state via plain `self.<attr> = ...`, so it lacks both
+    (bloom's GeLUFunction calls them). Add them to the Function class.
+    """
+    Fn = getattr(g, "Function", None)
+    if Fn is None:
+        return
+    if not hasattr(Fn, "save_for_backward"):
+        def save_for_backward(self, *tensors):
+            # torch stores a tuple; a single un-tupled call still yields a tuple
+            self._saved_tensors = tuple(tensors)
+        Fn.save_for_backward = save_for_backward
+    if "saved_tensors" not in getattr(Fn, "__dict__", {}):
+        def _saved_tensors(self):
+            return getattr(self, "_saved_tensors", ())
+        Fn.saved_tensors = property(_saved_tensors)
 
 
 def _install_optimizers(g):
@@ -904,29 +925,31 @@ def _install_module_methods(nn):
     M.parameters = _parameters
 
     # torch's Module.train(mode=True)/eval() take a mode arg; jittor's train()
-    # takes none. Wrap to accept it and set jittor's is_training accordingly.
-    _orig_train = M.train
-    def _train(self, mode=True):
+    # takes none. Wrap to accept it and toggle jittor's real training flag.
+    #
+    # The flag that controls layers like Dropout/BatchNorm is `is_train` -- an
+    # instance attribute read by Dropout.execute (nn.py). `is_training` is a
+    # *method* and `training` a *property*, so they must NEVER be assigned a
+    # bool (the old code did `m.is_training = False`, which both shadowed the
+    # method and failed to flip the flag the layers actually read). We set
+    # `is_train` recursively on every submodule. We deliberately do NOT touch
+    # parameter stop-grad state (torch's .eval() leaves requires_grad alone),
+    # so this is purely a mode flip with no gradient side effects.
+    def _set_is_train(self, mode):
+        mode = bool(mode)
         try:
-            _orig_train(self)        # jittor sets is_training=True recursively
-        except TypeError:
-            pass
-        if not mode:
-            # put into eval: jittor uses .eval() per-module
+            mods = self.modules() if hasattr(self, "modules") else [self]
+        except Exception:
+            mods = [self]
+        for m in mods:
             try:
-                # set is_training flag across submodules
-                for m in self.modules() if hasattr(self, "modules") else [self]:
-                    if hasattr(m, "is_training"):
-                        m.is_training = False
+                m.is_train = mode
             except Exception:
                 pass
-        else:
-            for m in (self.modules() if hasattr(self, "modules") else [self]):
-                if hasattr(m, "is_training"):
-                    m.is_training = True
+    def _train(self, mode=True):
+        _set_is_train(self, mode)
         return self
     M.train = _train
-    _orig_eval = getattr(M, "eval", None)
     def _eval(self):
         return _train(self, False)
     M.eval = _eval
@@ -1481,6 +1504,31 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         return out
     Var.squeeze = _squeeze
 
+    # torch's Tensor.baddbmm(batch1, batch2, *, beta=1, alpha=1):
+    #   out = beta * self + alpha * (batch1 @ batch2)   (batched matmul)
+    # jittor exposes a module-level baddbmm but no Var method (bloom calls
+    # the method form). Mirror torch's keyword-only beta/alpha here.
+    if not hasattr(Var, "baddbmm"):
+        def _baddbmm(self, batch1, batch2, *, beta=1, alpha=1):
+            res = jt.matmul(batch1, batch2)
+            if alpha != 1:
+                res = res * alpha
+            if beta == 0:
+                return res
+            return beta * self + res
+        Var.baddbmm = _baddbmm
+    # torch's Tensor.addmm(mat1, mat2, *, beta=1, alpha=1):
+    #   out = beta * self + alpha * (mat1 @ mat2)   (2-D matmul)
+    if not hasattr(Var, "addmm"):
+        def _addmm_method(self, mat1, mat2, *, beta=1, alpha=1):
+            res = jt.matmul(mat1, mat2)
+            if alpha != 1:
+                res = res * alpha
+            if beta == 0:
+                return res
+            return beta * self + res
+        Var.addmm = _addmm_method
+
 
 def _install_misc(g, Var):
     if hasattr(jt, "set_global_seed"):
@@ -1714,6 +1762,17 @@ def _install_misc(g, Var):
     _alias("vmap", lambda fn, *a, **k: fn)
     _alias("outer", lambda a, b: jt.matmul(a.reshape(-1, 1), b.reshape(1, -1)))
     _alias("isin", _isin)
+    # torch.addmm(input, mat1, mat2, *, beta=1, alpha=1):
+    #   out = beta * input + alpha * (mat1 @ mat2)   (gpt2 uses this for its
+    #   Conv1D linear). jittor has no top-level addmm, so add one.
+    def _addmm(input, mat1, mat2, *, beta=1, alpha=1):
+        res = jt.matmul(mat1, mat2)
+        if alpha != 1:
+            res = res * alpha
+        if beta == 0:
+            return res
+        return beta * input + res
+    _alias("addmm", _addmm)
 
     # ---- linalg (peft / lora init need svd_lowrank, svd) ----
     def _svd(x, some=True, compute_uv=True, **kw):
