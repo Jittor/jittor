@@ -915,8 +915,9 @@ def instance_norm(x,
     x2mean = jt.mean(x*x, dims=dims)
 
     xvar = (x2mean-xmean*xmean).maximum(0.0)
+    weight = 1.0 if weight is None else weight
     w = weight / jt.sqrt(xvar+eps)
-    b = bias - xmean * w
+    b = (-xmean * w) if bias is None else (bias - xmean * w)
     return x * w.broadcast(x, dims) + b.broadcast(x, dims)
 
 class LayerNorm(Module):
@@ -936,8 +937,12 @@ class LayerNorm(Module):
         x2mean = jt.mean(x*x, dims=dims, keepdims=1)
 
         xvar = (x2mean-xmean*xmean).maximum(0.0)
-        w = self.weight / jt.sqrt(xvar+self.eps)
-        b = self.bias - xmean * w
+        # torch's LayerNorm/F.layer_norm accept weight=None / bias=None (e.g. MPT
+        # sets norm.bias = None for Hub-weight compat). Treat None as identity/zero
+        # so we don't do `None - Var`. Math is unchanged when they are Var/float.
+        weight = 1.0 if self.weight is None else self.weight
+        w = weight / jt.sqrt(xvar+self.eps)
+        b = (-xmean * w) if self.bias is None else (self.bias - xmean * w)
         return x * w + b
 
 
@@ -955,8 +960,9 @@ def layer_norm(x,
     x2mean = jt.mean(x*x, dims=dims, keepdims=1)
 
     xvar = (x2mean-xmean*xmean).maximum(0.0)
+    weight = 1.0 if weight is None else weight
     w = weight / jt.sqrt(xvar+eps)
-    b = bias - xmean * w
+    b = (-xmean * w) if bias is None else (bias - xmean * w)
     return x * w + b
 
 class GroupNorm(Module):
