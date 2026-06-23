@@ -1629,6 +1629,51 @@ def scatter_(x, dim, index, src, reduce='void'):
 jt.Var.scatter = scatter
 jt.Var.scatter_ = scatter_
 
+def scatter_add(x, dim, index, src):
+    ''' torch's Tensor.scatter_add (out-of-place): accumulate src into a COPY of x
+    at `index` along `dim`. jittor's scatter(reduce='add') accumulates in place, so
+    clone first to keep torch's out-of-place semantics. '''
+    return x.clone().scatter(dim, index, src, reduce='add')
+def scatter_add_(x, dim, index, src):
+    return x.scatter_(dim, index, src, reduce='add')
+jt.Var.scatter_add = scatter_add
+jt.Var.scatter_add_ = scatter_add_
+
+def scatter_reduce(x, dim, index, src, reduce, include_self=True):
+    ''' torch's Tensor.scatter_reduce(dim, index, src, reduce, include_self=True).
+    sum/prod/mean implemented for the default include_self=True (the common case);
+    amax/amin and include_self=False raise (a max-scatter primitive / identity-fill
+    handling is needed) -- a loud error beats a silent-wrong result. Out-of-place. '''
+    if not include_self:
+        raise NotImplementedError(
+            "scatter_reduce(include_self=False) not yet supported (tracked)")
+    if reduce in ('sum', 'add'):
+        return x.clone().scatter(dim, index, src, reduce='add')
+    if reduce in ('prod', 'multiply'):
+        return x.clone().scatter(dim, index, src, reduce='multiply')
+    if reduce == 'mean':
+        summed = x.clone().scatter(dim, index, src, reduce='add')   # self + sum(src)
+        ones_like_src = jt.ones(src.shape, x.dtype)
+        count = jt.ones(x.shape, x.dtype) + \
+                jt.zeros(x.shape, x.dtype).scatter(dim, index, ones_like_src, reduce='add')
+        return summed / count
+    raise NotImplementedError(
+        f"scatter_reduce reduce='{reduce}' (amax/amin) not yet supported (tracked)")
+jt.Var.scatter_reduce = scatter_reduce
+
+def index_add(x, dim, index, source, alpha=1):
+    ''' torch's Tensor.index_add (out-of-place): out[..,index[k],..] += alpha*source[..,k,..],
+    ACCUMULATING duplicate indices. jittor's native index_add_ uses `+=` on an advanced
+    index, which is last-write-wins (does NOT accumulate dups), so route through
+    scatter_add (the proper reduce='add' path) with the 1-D index broadcast to source. '''
+    d = dim if dim >= 0 else dim + x.ndim
+    src = source if alpha == 1 else source * alpha
+    shp = [1] * source.ndim
+    shp[d] = index.shape[0]
+    full_idx = index.reshape(shp).broadcast(source.shape)
+    return x.scatter_add(d, full_idx.int32(), src)
+jt.Var.index_add = index_add
+
 def gather(x, dim, index):
     ''' if x is a 3-D array, reindex x like:
 
