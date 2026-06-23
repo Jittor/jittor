@@ -432,6 +432,28 @@ class AdaptiveAvgPool2d(Module):
         ])
         return xx.reduce("mean", [4,5])
 
+class AdaptiveAvgPool1d(Module):
+    def __init__(self, output_size):
+        self.output_size = output_size
+
+    def execute(self, x):
+        # x: (N, C, L) -> (N, C, output_size); mirrors AdaptiveAvgPool2d for 1d.
+        ol = self.output_size[0] if isinstance(self.output_size, (tuple, list)) else self.output_size
+        if ol is None:
+            ol = x.shape[2]
+        if ol == 1:
+            return x.reduce("mean", [2], keepdims=True)
+        N, C, L = x.shape
+        s = math.floor(L / ol)
+        ks = L - (ol - 1) * s
+        l = (L - ks) // s + 1
+        xx = x.reindex([N, C, l, ks], [
+            "i0",          # Nid
+            "i1",          # Cid
+            f"i2*{s}+i3",  # Lid
+        ])
+        return xx.reduce("mean", [3])
+
 class AdaptiveMaxPool2d(Module):
     def __init__(self, output_size, return_indices=False):
         self.output_size = output_size

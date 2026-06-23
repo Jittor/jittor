@@ -841,10 +841,14 @@ def log2(x):
 
 jt.Var.log2 = log2
 
-def meshgrid(*tensors):
+def meshgrid(*tensors, indexing=None):
     r'''
-    Take N tensors, each of which can be 1-dimensional vector, and create N n-dimensional grids, 
+    Take N tensors, each of which can be 1-dimensional vector, and create N n-dimensional grids,
     where the i th grid is defined by expanding the i th input over dimensions defined by other inputs.
+
+    `indexing` matches torch.meshgrid: 'ij' (default, matrix indexing — jittor's
+    native behavior) or 'xy' (Cartesian, which swaps the first two axes). swin and
+    many vision models call torch.meshgrid(..., indexing='ij').
     '''
     if len(tensors)==1 and isinstance(tensors[0], list):
         tensors = tensors[0]
@@ -860,6 +864,8 @@ def meshgrid(*tensors):
         vs[i]=-1
         grids.append(tensors[i].reshape(vs).expand(shape))
 
+    if indexing == "xy" and size >= 2:
+        grids = [g.transpose(0, 1) for g in grids]
     return grids
 
 
