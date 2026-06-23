@@ -701,6 +701,20 @@ origin_reshape = reshape
 def reshape(x, *shape):
     if len(shape) == 1 and isinstance(shape[0], (Sequence, NanoVector)):
         shape = shape[0]
+    # torch accepts 0-d int tensors / numpy ints as shape elements (e.g. longformer's
+    # `_chunk` passes torch.div(size, n) into .view); jittor's core reshape needs plain
+    # int64. Coerce only when a non-int element is present — plain-int shapes (the hot
+    # path) are untouched, so this can't change existing behavior, only un-break it.
+    # (NB: in this namespace `int`/`all`/`any` are shadowed by jittor's dtype/reductions,
+    # so use an explicit loop and grab the genuine builtin int via `(0).__class__`.)
+    pyint = (0).__class__
+    coerce = False
+    for s in shape:
+        if type(s) is not pyint:
+            coerce = True
+            break
+    if coerce:
+        shape = tuple(pyint(s.item()) if isinstance(s, Var) else pyint(s) for s in shape)
     return origin_reshape(x, shape)
 reshape.__doc__ = origin_reshape.__doc__
 Var.view = Var.reshape = view = reshape
