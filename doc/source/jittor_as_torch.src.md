@@ -12,7 +12,13 @@ import torch.nn as nn
 
 The torch-style API lives in `jittor/torch_compat.py` (installed onto the jittor
 module at import); `jittor/torch_shim/` re-exports it as the `torch` package so
-third-party libraries' internal `import torch` works too.
+third-party libraries' internal `import torch` works too. Deploy that shim into the
+active environment (so `import torch` / `torchvision` resolve to jittor) with:
+
+```bash
+python -m jittor.torch_shim.deploy           # install into the active env's site-packages
+python -m jittor.torch_shim.deploy --check   # verify
+```
 
 ## Quickstart
 
@@ -93,10 +99,33 @@ Required environment:
 Do **not** let pip install the real `torch` into the shim env — it overwrites
 `torch/__init__.py`. Use a separate env for real torch (e.g. as a reference).
 
-## Models
+## Validated model coverage
+
+Run through the `import torch` → jittor stack and checked **layer-by-layer against
+real PyTorch 2.12** (same weights/inputs; forward `last_hidden_state` and per-
+parameter `jt.grad` vs torch `.grad`, network-scaled). Forward **and backward**
+match to ~1e-6 across ~30 `transformers` architectures and the CNN/diffusers stacks:
+
+- **Decoder LLMs:** gpt2, llama, qwen2/qwen3, mistral, gemma/gemma2, phi/phi3, opt,
+  bloom, gpt_neox, gptj, gpt_neo, stablelm, starcoder2, mpt, **falcon** (multi-query),
+  **mixtral** (MoE).
+- **Encoders:** bert, roberta, electra, distilbert, albert.
+- **Encoder-decoder:** t5, bart, mbart, pegasus.
+- **Vision:** vit, deit, swin, convnext (plus `jittor.models` resnet/vgg/... and the
+  native ViT).
+- **diffusers generation:** `UNet2DModel` forward 1.1e-6 / backward 1.5e-6, a DDIM
+  denoising loop 3e-5, `AutoencoderKL` encode+decode 1.4e-6 — i.e. jittor *generates*
+  and the numbers match torch. Build via constructors / `from_config`; see limitations
+  for loading *pretrained* checkpoints.
+
+Real end-to-end training works: `transformers.Trainer` fine-tunes (loss decreases,
+`grad_norm`/`clip_grad_norm_` apply), and CNNs train (every conv weight updates).
+A regression suite covers ~30 architectures (`jittor.test.test_torch_hf_models`) and
+the diffusers generation path (`jittor.test.test_diffusers`).
 
 `jittor.models` provides the CNN classics plus a modern **Vision Transformer**
-(`vit_b_16`/`vit_b_32`/`vit_l_16`). LLMs come from `transformers` directly.
+(`vit_b_16`/`vit_b_32`/`vit_l_16`). LLMs/diffusion models come from
+`transformers`/`diffusers` directly.
 
 ## Error reporting
 
@@ -107,8 +136,19 @@ set `JT_SYNC=1` to pinpoint an async op failure.
 
 ## Status / limitations
 
-Done + verified on both backends: accuracy parity, device dispatch, bf16/mixed
-precision, DDP-without-mpirun, checkpoint/safetensors migration, clear errors,
-ViT. In progress: PP/TP, memory-manager tuning, cuDNN9, complex dtype, full
-pypi-based CUDA/cuDNN dependency resolution, diffusers, a jittor-lightning, and
+Done + verified on both backends: forward/backward/training accuracy parity across
+~30 transformers + CNN + diffusers-generation models, device dispatch, bf16/mixed
+precision, DDP-without-mpirun, checkpoint/safetensors migration, clear errors, ViT.
+
+Known limitation — **loading *pretrained* checkpoints via `from_pretrained` for
+models that use accelerate's fast path** (diffusers, and transformers with
+`low_cpu_mem_usage=True`): accelerate constructs parameters on a `meta` device then
+fills each via `set_module_tensor_to_device`, which jittor doesn't yet emulate
+(jittor params are real, not meta, so some get skipped → wrong weights). Workaround:
+`from_config`/explicit construction works, and a name-keyed `safetensors`/`torch.load`
+state-dict loads correctly; full `from_pretrained` for these models needs jittor
+meta-device parameter emulation (tracked).
+
+In progress: meta-device emulation, PP/TP, memory-manager tuning, cuDNN9, complex
+dtype, full pypi-based CUDA/cuDNN dependency resolution, a jittor-lightning, and
 triton/tilelang custom-op support.
