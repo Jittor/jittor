@@ -810,17 +810,31 @@ def linear(x, weight, bias=None):
     return x
 
 class BatchNorm(Module):
-    def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True, is_train=True, sync=True):
+    def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True, is_train=True, sync=True,
+                 track_running_stats=True, device=None, dtype=None):
+        # track_running_stats/device/dtype accepted for torch.nn.BatchNorm* compat.
         self.sync = sync
         self.num_features = num_features
         self.is_train = is_train
         self.eps = eps
         self.momentum = momentum
         self.affine = affine
+        self.track_running_stats = track_running_stats
         self.weight = init.constant((num_features,), "float32", 1.0) if affine else 1.0
         self.bias = init.constant((num_features,), "float32", 0.0) if affine else 0.0
         self.running_mean = init.constant((num_features,), "float32", 0.0).stop_grad()
         self.running_var = init.constant((num_features,), "float32", 1.0).stop_grad()
+        # torch keeps num_batches_tracked as a buffer; some models read it.
+        self.num_batches_tracked = init.constant((1,), "int32", 0.0).stop_grad()
+        # running stats are BUFFERS, not trainable params (torch semantics):
+        # exclude them from parameters()/named_parameters() so optimizers and the
+        # autograd bridge don't treat them as trainable.
+        for _b in (self.running_mean, self.running_var, self.num_batches_tracked):
+            object.__setattr__(_b, "is_buffer", True)
+        # num_batches_tracked is a non-numeric counter; torch stores it as a 0-d
+        # scalar but jittor has no 0-d tensors (it's (1,)), which mismatches on a
+        # state_dict roundtrip. Keep it non-persistent so it isn't serialized.
+        object.__setattr__(self.num_batches_tracked, "persistent", False)
 
     def execute(self, x):
         dims = [0]+list(range(2,x.ndim))
@@ -1093,7 +1107,13 @@ class Conv(Module):
     >>> input = jt.randn(4, 24, 100, 100)
     >>> output = conv(input)
     '''
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True, padding_mode='zeros', device=None, dtype=None):
+        # padding_mode/device/dtype accepted for torch.nn.Conv2d compatibility.
+        # jittor pads with zeros; non-'zeros' padding_mode is not yet implemented
+        # (warn rather than silently differ).
+        self.padding_mode = padding_mode
+        if padding_mode not in ('zeros',):
+            jt.LOG.w(f"Conv: padding_mode={padding_mode!r} not implemented, using 'zeros'")
         if in_channels <= 0:
             raise ValueError(f"in_channels must be greater than zero, got {in_channels}")
         if out_channels <= 0:
