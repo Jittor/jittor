@@ -2381,7 +2381,15 @@ class Embedding(Module):
         res = self.weight[x]
         return res
 
-def embedding(input, weight):
+def embedding(input, weight, padding_idx=None, max_norm=None, norm_type=2.0,
+              scale_grad_by_freq=False, sparse=False):
+    # Full torch F.embedding signature (ibert's quantized embedding passes all 7
+    # positionally). padding_idx / scale_grad_by_freq / sparse only affect gradient
+    # bookkeeping, not forward values, so they're accepted and ignored. max_norm
+    # renormalizes rows whose p-norm exceeds the bound (rare; None is the hot path).
+    if max_norm is not None:
+        pn = (weight.abs() ** norm_type).sum(dim=-1, keepdims=True) ** (1.0 / norm_type)
+        weight = weight * (jt.minimum(pn, max_norm) / (pn + 1e-12))
     return weight[input]
 
 def embedding_bag(input, weight, offsets=None, mode="mean", per_sample_weights=None):
