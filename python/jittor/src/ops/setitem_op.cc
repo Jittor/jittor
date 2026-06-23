@@ -351,6 +351,16 @@ void SetitemOp::jit_run() {
                 index_t(vp@d[0 @for(j,0,VD,@if((VS@d>>j)&1, + i@{j+FOV} * vs@d@@s@j,))])
             , ??? ))))));
         )
+        // Normalize negative var/list (advanced) indices into the target, mirroring
+        // the getitem kernel (getitem_op.cc). Without this, the gradient of e.g.
+        // x[..., [-2], :] (falcon multi-query _split_heads uses negative advanced
+        // indices) scatters to a negative row -> out of the target buffer: the
+        // indexed rows receive no grad and stray writes corrupt memory. Negative
+        // *int* indices are already host-normalized in infer_slices; only var/list
+        // negative indices reach this kernel. No-op when iid>=0, so positive/slice/
+        // int/bool paths are unchanged.
+        @for(d, 0, IDIM, if (iid@d < 0) iid@d += ishape@d;
+        )
         auto iid = 0 @for(d, 0, IDIM,  + iid@d * istride@d);
 
         @if(@is_def(JIT_cpu),
