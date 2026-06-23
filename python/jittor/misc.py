@@ -1639,26 +1639,38 @@ def scatter_add_(x, dim, index, src):
 jt.Var.scatter_add = scatter_add
 jt.Var.scatter_add_ = scatter_add_
 
+_SCATTER_REDUCE_JT = {'sum': 'add', 'add': 'add', 'prod': 'multiply',
+                      'multiply': 'multiply', 'amax': 'maximum', 'max': 'maximum',
+                      'maximum': 'maximum', 'amin': 'minimum', 'min': 'minimum',
+                      'minimum': 'minimum'}
+# reduction identities used to exclude `self` at receiving positions (include_self=False)
+_SCATTER_REDUCE_ID = {'add': 0.0, 'multiply': 1.0, 'maximum': -3.4e38, 'minimum': 3.4e38}
+
 def scatter_reduce(x, dim, index, src, reduce, include_self=True):
     ''' torch's Tensor.scatter_reduce(dim, index, src, reduce, include_self=True).
-    sum/prod/mean implemented for the default include_self=True (the common case);
-    amax/amin and include_self=False raise (a max-scatter primitive / identity-fill
-    handling is needed) -- a loud error beats a silent-wrong result. Out-of-place. '''
-    if not include_self:
-        raise NotImplementedError(
-            "scatter_reduce(include_self=False) not yet supported (tracked)")
-    if reduce in ('sum', 'add'):
-        return x.clone().scatter(dim, index, src, reduce='add')
-    if reduce in ('prod', 'multiply'):
-        return x.clone().scatter(dim, index, src, reduce='multiply')
+    Supports reduce = sum/prod/mean/amax/amin and BOTH include_self values, out-of-place.
+    include_self=False excludes the original `self` at any receiving position (fill it
+    with the reduction identity first) while leaving non-receiving positions untouched. '''
+    if reduce != 'mean' and reduce not in _SCATTER_REDUCE_JT:
+        raise NotImplementedError(f"scatter_reduce reduce='{reduce}' not supported (tracked)")
+    ones_like_src = jt.ones(src.shape, x.dtype)
+    if include_self:
+        if reduce == 'mean':
+            summed = x.clone().scatter(dim, index, src, reduce='add')         # self + sum(src)
+            count = jt.ones(x.shape, x.dtype) + \
+                    jt.zeros(x.shape, x.dtype).scatter(dim, index, ones_like_src, reduce='add')
+            return summed / count
+        return x.clone().scatter(dim, index, src, reduce=_SCATTER_REDUCE_JT[reduce])
+    # include_self=False: exclude self at receiving positions via an identity-fill.
+    count = jt.zeros(x.shape, x.dtype).scatter(dim, index, ones_like_src, reduce='add')
+    hit = count > 0
     if reduce == 'mean':
-        summed = x.clone().scatter(dim, index, src, reduce='add')   # self + sum(src)
-        ones_like_src = jt.ones(src.shape, x.dtype)
-        count = jt.ones(x.shape, x.dtype) + \
-                jt.zeros(x.shape, x.dtype).scatter(dim, index, ones_like_src, reduce='add')
-        return summed / count
-    raise NotImplementedError(
-        f"scatter_reduce reduce='{reduce}' (amax/amin) not yet supported (tracked)")
+        base = jt.ternary(hit, jt.zeros(x.shape, x.dtype), x)
+        summed = base.scatter(dim, index, src, reduce='add')
+        return jt.ternary(hit, summed / count.maximum(jt.ones(x.shape, x.dtype)), x)
+    jr = _SCATTER_REDUCE_JT[reduce]
+    base = jt.ternary(hit, jt.full_like(x, _SCATTER_REDUCE_ID[jr]), x)
+    return base.scatter(dim, index, src, reduce=jr)
 jt.Var.scatter_reduce = scatter_reduce
 
 def index_add(x, dim, index, source, alpha=1):
