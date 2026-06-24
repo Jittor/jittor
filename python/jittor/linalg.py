@@ -276,13 +276,23 @@ def svd(x):
         elif out_index == 2:
             f = 1 / (s[..., np.newaxis, :] ** 2 - s[..., :, np.newaxis] ** 2 + i)
             gv = dout
-            vtgv = _dot(T(v), gv)
+            # `v` is the (...,n,k) form (transposed above); the upstream grad
+            # `gv` is wrt the (...,k,n) output, i.e. the (n,k)-form grad is T(gv).
+            # The antisymmetric inner term must contract the n (range) axis:
+            #   V^T (gV) = T(v) @ T(gv)   -- mirrors the U branch's T(u) @ gu.
+            # The old `_dot(T(v), gv)` contracted the wrong axis (only shape-
+            # conformable for square v, where it was silently wrong, not a crash).
+            vtgv = _dot(T(v), T(gv))
             t = s[..., :, np.newaxis] * (f * (vtgv - T(vtgv)))
             t = _dot(_dot(u, t), T(v))
             if m < n:
                 i_minus_vvt = (np.reshape(np.eye(n), (1,) * (inp.ndim - 2) + (n, n)) -
                                _dot(v, np.conj(T(v))))
-                t = t + T(_dot(_dot(u / s[..., np.newaxis, :], T(gv)), i_minus_vvt))
+                # extra (range-complement) term, mirror of the m>n U branch:
+                #   U S^-1 (gV)^T (I - V V^T) = (u/s) @ gv @ (I - v v^T)
+                # old code used T(gv) and an outer T(), giving a (m,k)·(n,k)
+                # einsum that crashed for m<n.
+                t = t + _dot(_dot(u / s[..., np.newaxis, :], gv), i_minus_vvt)
             np.copyto(out, t)
 
     m, n = x.shape[-2:]
