@@ -1648,14 +1648,39 @@ def _install_cuda(g):
                                       "elapsed_time": lambda self, o: 0.0})
     cuda.stream = lambda s=None: contextlib.nullcontext()
     cuda.current_stream = lambda *a, **k: _Stream()
-    cuda.memory_allocated = lambda *a, **k: 0
-    cuda.max_memory_allocated = lambda *a, **k: 0
-    cuda.memory_reserved = lambda *a, **k: 0
-    cuda.max_memory_reserved = lambda *a, **k: 0
-    cuda.memory_cached = lambda *a, **k: 0
-    cuda.reset_peak_memory_stats = lambda *a, **k: None
-    cuda.reset_max_memory_allocated = lambda *a, **k: None
-    cuda.memory_stats = lambda *a, **k: {}
+    # report REAL device memory from jittor's MemInfo (was a 0-stub, so training-code
+    # memory logging printed 0). total_cuda_used on an accelerator, else total_cpu_used.
+    # jittor doesn't expose a per-reset peak, so max_* track a process-lifetime high-water
+    # mark we maintain here (still real, monotone -- better than a flat 0).
+    _mem_peak = [0]
+    def _mem_used(*a, **k):
+        try:
+            mi = jt.get_mem_info()
+            used = int(mi.total_cuda_used if jt.flags.use_cuda else mi.total_cpu_used)
+        except Exception:
+            used = 0
+        if used > _mem_peak[0]:
+            _mem_peak[0] = used
+        return used
+    def _mem_max(*a, **k):
+        _mem_used()
+        return _mem_peak[0]
+    cuda.memory_allocated = _mem_used
+    cuda.max_memory_allocated = _mem_max
+    cuda.memory_reserved = _mem_used
+    cuda.max_memory_reserved = _mem_max
+    cuda.memory_cached = _mem_used
+    cuda.max_memory_cached = _mem_max
+    def _reset_peak(*a, **k):
+        try:
+            mi = jt.get_mem_info()
+            _mem_peak[0] = int(mi.total_cuda_used if jt.flags.use_cuda else mi.total_cpu_used)
+        except Exception:
+            _mem_peak[0] = 0
+    cuda.reset_peak_memory_stats = _reset_peak
+    cuda.reset_max_memory_allocated = _reset_peak
+    cuda.memory_stats = lambda *a, **k: {"allocated_bytes.all.current": _mem_used(),
+                                         "allocated_bytes.all.peak": _mem_peak[0]}
     cuda.mem_get_info = lambda *a, **k: (64*1024**3, 64*1024**3)
     # rng state (trainer checkpoints save/restore it). jittor has no portable
     # CUDA rng-state handle, so use a small placeholder Var round-trip.
