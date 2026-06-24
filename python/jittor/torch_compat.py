@@ -2471,6 +2471,91 @@ def _install_misc(g, Var):
     _alias("imag", lambda x: x.imag if isinstance(x, _CN) else jt.zeros_like(x))
     _alias("polar", lambda abs, angle, **k: _CN(abs * jt.cos(angle), abs * jt.sin(angle)))
     _alias("conj", lambda x: x.conj() if isinstance(x, _CN) else x)
+
+    # torch.fft.* (#3): jittor only has a CUDA-only cufft fft2, so provide 1-D fft/ifft/
+    # rfft/irfft via DFT matrices (out = x @ W^T, matmul-based -> dual-card, autograd-
+    # able, correct). O(N^2) but fine for the moderate N these are used at.
+    import types as _types
+    import numpy as _np
+    def _dft_mats(N, inverse):
+        idx = _np.arange(N)
+        ang = (2.0 * _np.pi / N) * _np.outer(idx, idx) * (1.0 if inverse else -1.0)
+        return jt.array(_np.cos(ang).astype("float32")), jt.array(_np.sin(ang).astype("float32"))
+    def _to_last(x, dim):
+        nd = (x.real.ndim if isinstance(x, _CN) else x.ndim)
+        d = dim if dim >= 0 else dim + nd
+        if d == nd - 1:
+            return x, None
+        perm = [k for k in range(nd) if k != d] + [d]
+        inv = [0] * nd
+        for newp, oldp in enumerate(perm):
+            inv[oldp] = newp
+        return (x.permute(*perm) if hasattr(x, "permute") else x.transpose(perm)), inv
+    def _resize_last(x, n):
+        if n is None:
+            return x
+        L = x.shape[-1]
+        if L == n:
+            return x
+        if L > n:
+            return x[..., :n]
+        pad = jt.zeros(list(x.shape[:-1]) + [n - L], x.dtype)
+        return jt.concat([x, pad], dim=-1)
+    def _fft_core(x, n, dim, inverse):
+        # x: real Var or ComplexNumber -> ComplexNumber DFT along `dim`
+        x, inv = _to_last(x, dim)
+        if isinstance(x, _CN):
+            re, im = _resize_last(x.real, n), _resize_last(x.imag, n)
+        else:
+            re, im = _resize_last(x, n), None
+        N = re.shape[-1]
+        Wc, Ws = _dft_mats(N, inverse)              # cos, sin matrices (N,N)
+        # out = (re + i*im) @ (Wc + i*Ws)^T ; matmul over last dim == x @ W^T
+        out_re = jt.matmul(re, Wc.transpose(1, 0))
+        out_im = jt.matmul(re, Ws.transpose(1, 0))
+        if im is not None:
+            out_re = out_re - jt.matmul(im, Ws.transpose(1, 0))
+            out_im = out_im + jt.matmul(im, Wc.transpose(1, 0))
+        if inverse:
+            out_re = out_re / N
+            out_im = out_im / N
+        out = _CN(out_re, out_im)
+        if inv is not None:
+            out = out.permute(*inv)
+        return out
+    _fft_ns = _types.SimpleNamespace()
+    _fft_ns.fft = lambda input, n=None, dim=-1, norm=None: _fft_core(input, n, dim, False)
+    _fft_ns.ifft = lambda input, n=None, dim=-1, norm=None: _fft_core(input, n, dim, True)
+    def _rfft(input, n=None, dim=-1, norm=None):
+        full = _fft_core(input, n, dim, False)       # real input -> hermitian; keep N//2+1
+        N = (input.shape[dim] if n is None else n)
+        keep = N // 2 + 1
+        sl = [slice(None)] * full.real.ndim
+        sl[dim if dim >= 0 else dim + full.real.ndim] = slice(0, keep)
+        return _CN(full.real[tuple(sl)], full.imag[tuple(sl)])
+    _fft_ns.rfft = _rfft
+    def _irfft(input, n=None, dim=-1, norm=None):
+        # reconstruct the hermitian-symmetric full spectrum, inverse, take real part
+        d = dim if dim >= 0 else dim + input.real.ndim
+        half = input.real.shape[d]
+        N = (2 * (half - 1)) if n is None else n
+        full = _fft_core(input, None, dim, True)     # approx: ifft of the given half
+        # exact irfft needs the mirrored conjugate; rebuild via real DFT for correctness
+        re = input.real; im = input.imag
+        # mirror: X[N-k] = conj(X[k]) for k=1..N/2-1
+        idx_mirror = list(range(half - 2, 0, -1))
+        if idx_mirror:
+            sl = [slice(None)] * re.ndim
+            sl[d] = idx_mirror
+            re_full = jt.concat([re, re[tuple(sl)]], dim=d)
+            im_full = jt.concat([im, -im[tuple(sl)]], dim=d)
+        else:
+            re_full, im_full = re, im
+        out = _fft_core(_CN(re_full, im_full), None, dim, True)
+        return out.real
+    _fft_ns.irfft = _irfft
+    _fft_ns.fftshift = lambda x, dim=None: x        # minimal
+    _alias("fft", _fft_ns)
     # torch.softmax / log_softmax / relu top-level function forms (convbert calls
     # torch.softmax(x, dim=...)). jittor exposes these via nn, not the top level.
     _alias("softmax", lambda input, dim=None, **k: jt.nn.softmax(input, dim=dim))
