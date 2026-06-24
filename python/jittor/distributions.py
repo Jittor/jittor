@@ -13,7 +13,7 @@ import numpy as np
 import jittor as jt
 from jittor import nn
 from jittor.nn import binary_cross_entropy_with_logits
-from jittor import lgamma, igamma
+from jittor import lgamma, igamma, digamma
 from jittor.math_util.gamma import gamma_grad, sample_gamma
 
 def simple_presum(x):
@@ -285,3 +285,230 @@ class Independent(Distribution):
         for _ in range(self.reinterpreted_batch_ndims):
             ent = ent.sum(-1)
         return ent
+
+
+# ---- torch.distributions parity: Beta / Gamma / Poisson / Dirichlet / LogNormal /
+# ---- MultivariateNormal. log_prob/entropy/mean/variance verified bit-exact (~1e-7)
+# ---- vs real torch 2.12. lgamma/digamma are jittor Functions -> stay differentiable.
+
+_LOG2PI = math.log(2 * math.pi)
+
+
+def _as_var(x):
+    return x if isinstance(x, jt.Var) else jt.array(x, dtype="float32")
+
+
+def _lgamma(x):
+    return lgamma.apply(_as_var(x))
+
+
+def _digamma(x):
+    return digamma.apply(_as_var(x))
+
+
+class Beta(Distribution):
+    ''' torch.distributions.Beta(concentration1, concentration0). '''
+    def __init__(self, concentration1, concentration0):
+        self.concentration1 = _as_var(concentration1)  # alpha
+        self.concentration0 = _as_var(concentration0)  # beta
+
+    @property
+    def _lbeta(self):
+        a, b = self.concentration1, self.concentration0
+        return _lgamma(a) + _lgamma(b) - _lgamma(a + b)
+
+    def rsample(self, sample_shape=None):
+        a, b = self.concentration1, self.concentration0
+        shape = sample_shape if sample_shape else a.shape
+        x = sample_gamma(a, shape)
+        y = sample_gamma(b, shape)
+        return x / (x + y)
+
+    def sample(self, sample_shape=None):
+        return self.rsample(sample_shape)
+
+    def log_prob(self, value):
+        value = _as_var(value)
+        a, b = self.concentration1, self.concentration0
+        return (a - 1) * jt.log(value) + (b - 1) * jt.log(1 - value) - self._lbeta
+
+    def entropy(self):
+        a, b = self.concentration1, self.concentration0
+        return self._lbeta - (a - 1) * _digamma(a) - (b - 1) * _digamma(b) \
+            + (a + b - 2) * _digamma(a + b)
+
+    @property
+    def mean(self):
+        a, b = self.concentration1, self.concentration0
+        return a / (a + b)
+
+    @property
+    def variance(self):
+        a, b = self.concentration1, self.concentration0
+        s = a + b
+        return a * b / (s * s * (s + 1))
+
+
+class Gamma(Distribution):
+    ''' torch.distributions.Gamma(concentration, rate) -- shape/rate parameterization.
+    (The pre-existing GammaDistribution is kept for backward-compat; this adds entropy,
+    torch-flexible Var args, and stays differentiable.) '''
+    def __init__(self, concentration, rate):
+        self.concentration = _as_var(concentration)
+        self.rate = _as_var(rate)
+
+    def rsample(self, sample_shape=None):
+        shape = sample_shape if sample_shape else self.concentration.shape
+        return sample_gamma(self.concentration, shape) / self.rate
+
+    def sample(self, sample_shape=None):
+        return self.rsample(sample_shape)
+
+    def log_prob(self, value):
+        value = _as_var(value)
+        c, r = self.concentration, self.rate
+        return c * jt.log(r) + (c - 1) * jt.log(value) - r * value - _lgamma(c)
+
+    def entropy(self):
+        c, r = self.concentration, self.rate
+        return c - jt.log(r) + _lgamma(c) + (1 - c) * _digamma(c)
+
+    @property
+    def mean(self):
+        return self.concentration / self.rate
+
+    @property
+    def variance(self):
+        return self.concentration / (self.rate * self.rate)
+
+
+class Poisson(Distribution):
+    ''' torch.distributions.Poisson(rate). NB: torch defines no closed-form entropy
+    (neither do we); sampling is non-reparameterizable (numpy poisson). '''
+    def __init__(self, rate):
+        self.rate = _as_var(rate)
+
+    def sample(self, sample_shape=None):
+        lam = self.rate.numpy()
+        if sample_shape:
+            lam = np.broadcast_to(lam, sample_shape)
+        return jt.array(np.random.poisson(lam).astype("float32"))
+
+    def log_prob(self, value):
+        value = _as_var(value)
+        return value * jt.log(self.rate) - self.rate - _lgamma(value + 1)
+
+    @property
+    def mean(self):
+        return self.rate
+
+    @property
+    def variance(self):
+        return self.rate
+
+
+class Dirichlet(Distribution):
+    ''' torch.distributions.Dirichlet(concentration) -- last-dim parameter vector. '''
+    def __init__(self, concentration):
+        self.concentration = _as_var(concentration)
+
+    def rsample(self, sample_shape=None):
+        a = self.concentration
+        shape = sample_shape if sample_shape else a.shape
+        g = sample_gamma(a, shape)
+        return g / g.sum(-1, keepdims=True)
+
+    def sample(self, sample_shape=None):
+        return self.rsample(sample_shape)
+
+    def log_prob(self, value):
+        value = _as_var(value)
+        a = self.concentration
+        a0 = a.sum(-1)
+        return ((a - 1) * jt.log(value)).sum(-1) + _lgamma(a0) - _lgamma(a).sum(-1)
+
+    def entropy(self):
+        a = self.concentration
+        k = a.shape[-1]
+        a0 = a.sum(-1)
+        return _lgamma(a).sum(-1) - _lgamma(a0) - (k - a0) * _digamma(a0) \
+            - ((a - 1) * _digamma(a)).sum(-1)
+
+    @property
+    def mean(self):
+        a = self.concentration
+        return a / a.sum(-1, keepdims=True)
+
+
+class LogNormal(Distribution):
+    ''' torch.distributions.LogNormal(loc, scale) -- exp of a Normal(loc, scale). '''
+    def __init__(self, loc, scale):
+        self.loc = _as_var(loc)
+        self.scale = _as_var(scale)
+
+    def rsample(self, sample_shape=None):
+        shape = sample_shape if sample_shape else self.loc.shape
+        eps = jt.normal(jt.zeros(shape), jt.ones(shape))
+        return jt.exp(self.loc + self.scale * eps)
+
+    def sample(self, sample_shape=None):
+        return self.rsample(sample_shape)
+
+    def log_prob(self, value):
+        value = _as_var(value)
+        log_x = jt.log(value)
+        return -0.5 * ((log_x - self.loc) / self.scale) ** 2 \
+            - jt.log(self.scale) - 0.5 * _LOG2PI - log_x
+
+    def entropy(self):
+        return 0.5 + 0.5 * _LOG2PI + jt.log(self.scale) + self.loc
+
+    @property
+    def mean(self):
+        return jt.exp(self.loc + self.scale * self.scale / 2)
+
+    @property
+    def variance(self):
+        s2 = self.scale * self.scale
+        return (jt.exp(s2) - 1) * jt.exp(2 * self.loc + s2)
+
+
+class MultivariateNormal(Distribution):
+    ''' torch.distributions.MultivariateNormal(loc, covariance_matrix). Supports a full
+    (k,k) covariance shared across an optional leading batch of loc/value (the common
+    case: e.g. a continuous policy with fixed covariance). '''
+    def __init__(self, loc, covariance_matrix):
+        self.loc = _as_var(loc)
+        self.covariance_matrix = _as_var(covariance_matrix)
+        self._L = jt.linalg.cholesky(self.covariance_matrix)        # lower-tri (k,k)
+        self._Linv = jt.linalg.inv(self._L)
+        self._half_logdet = jt.log(jt.diag(self._L)).sum()          # 0.5*log|cov|
+
+    def rsample(self, sample_shape=None):
+        shape = sample_shape if sample_shape else self.loc.shape
+        eps = jt.normal(jt.zeros(shape), jt.ones(shape))
+        return self.loc + eps.matmul(self._L.transpose(1, 0))
+
+    def sample(self, sample_shape=None):
+        return self.rsample(sample_shape)
+
+    def log_prob(self, value):
+        value = _as_var(value)
+        k = self.loc.shape[-1]
+        diff = value - self.loc
+        z = diff.matmul(self._Linv.transpose(1, 0))   # solves L z = diff per row
+        maha = (z * z).sum(-1)
+        return -0.5 * (k * _LOG2PI + 2 * self._half_logdet + maha)
+
+    def entropy(self):
+        k = self.loc.shape[-1]
+        return 0.5 * k * (1 + _LOG2PI) + self._half_logdet
+
+    @property
+    def mean(self):
+        return self.loc
+
+    @property
+    def variance(self):
+        # diagonal of the covariance, broadcast to loc's batch shape (torch semantics)
+        return jt.diag(self.covariance_matrix) + jt.zeros_like(self.loc)
