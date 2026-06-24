@@ -109,10 +109,19 @@ match to ~1e-6 across ~30 `transformers` architectures and the CNN/diffusers sta
 - **Decoder LLMs:** gpt2, llama, qwen2/qwen3, mistral, gemma/gemma2, phi/phi3, opt,
   bloom, gpt_neox, gptj, gpt_neo, stablelm, starcoder2, mpt, **falcon** (multi-query),
   **mixtral** (MoE).
-- **Encoders:** bert, roberta, electra, distilbert, albert.
-- **Encoder-decoder:** t5, bart, mbart, pegasus.
-- **Vision:** vit, deit, swin, convnext (plus `jittor.models` resnet/vgg/... and the
-  native ViT).
+  Plus (forward-clean, many also backward-checked): cohere, gemma3, granite, olmo/olmo2,
+  persimmon, qwen2_moe, qwen3_moe, glm/glm4, gpt_bigcode, biogpt, ctrl, mpt, xglm,
+  codegen, **longformer** (sliding-window), **roformer** (rotary), **phimoe**, **dbrx**,
+  **nemotron** (MoE / modern-LLM variants).
+- **Encoders:** bert, roberta, electra, distilbert, albert, **deberta/deberta-v2**,
+  mpnet, xlm, flaubert, camembert, ernie, fnet, layoutlm, mobilebert, nystromformer,
+  mra, yoso, **convbert** (span-conv), megatron-bert, rembert, luke, markuplm, **canine**.
+- **Encoder-decoder:** t5, bart, mbart, pegasus, **pegasus_x** (block-local), m2m_100,
+  marian, blenderbot/-small, mvp, plbart, umt5, nllb-moe, fsmt, led, big_bird.
+- **Audio:** wav2vec2, **hubert**, **wavlm** (via `F.multi_head_attention_forward`),
+  sew, unispeech/-sat, data2vec-audio.
+- **Vision:** vit, deit, swin, convnext, **beit**, data2vec-vision, dpt, segformer,
+  **levit** (hardswish) (plus `jittor.models` resnet/vgg/... and the native ViT).
 - **diffusers generation:** `UNet2DModel` forward 1.1e-6 / backward 1.5e-6, a DDIM
   denoising loop 3e-5, `AutoencoderKL` encode+decode 1.4e-6 — i.e. jittor *generates*
   and the numbers match torch. Build via constructors / `from_config`; see limitations
@@ -127,6 +136,37 @@ the diffusers generation path (`jittor.test.test_diffusers`).
 (`vit_b_16`/`vit_b_32`/`vit_l_16`). LLMs/diffusion models come from
 `transformers`/`diffusers` directly.
 
+## Complex numbers & FFT
+
+```python
+c = torch.complex(re, im)                 # -> a ComplexNumber (real/imag pair)
+torch.view_as_complex(x); torch.view_as_real(c)
+torch.polar(abs, angle); torch.real(c); torch.imag(c); torch.conj(c)
+torch.fft.fft(x); torch.fft.ifft(x); torch.fft.rfft(x); torch.fft.irfft(r, n=N)
+torch.fft.fft2(x2); torch.fft.fftn(x, dim=(-2,-1))   # norm='backward'|'forward'|'ortho'
+```
+Complex is represented by `jittor.nn.ComplexNumber` (real/imag pair) with full
+arithmetic; the `torch.fft.*` transforms are DFT-matrix based (so they run and
+backprop on **both** Ascend and CUDA) and match `numpy.fft` to ~1e-4. A true native
+complex `Var` dtype is still emulated, not a first-class dtype.
+
+## Lightning-style training
+
+```python
+import jittor.lightning as pl          # or: import pytorch_lightning as pl (aliased)
+
+class Lit(pl.LightningModule):
+    def training_step(self, batch, idx): ...; return loss
+    def configure_optimizers(self): return torch.optim.Adam(self.parameters(), lr=1e-3)
+
+pl.Trainer(max_epochs=5, gradient_clip_val=1.0,
+           callbacks=[pl.ModelCheckpoint(monitor="val_loss"),
+                      pl.EarlyStopping(monitor="val_loss", patience=3)]).fit(model, train_loader)
+```
+The core training/validation loop is implemented (epochs, gradient accumulation,
+clipping, lr schedulers, `self.log`, `ModelCheckpoint`/`EarlyStopping` callbacks).
+DDP strategies / precision plugins / the full logger ecosystem are not yet covered.
+
 ## Error reporting
 
 Op failures now surface the real cause (op type, input shapes/dtypes, `[Reason]`)
@@ -137,8 +177,13 @@ set `JT_SYNC=1` to pinpoint an async op failure.
 ## Status / limitations
 
 Done + verified on both backends: forward/backward/training accuracy parity across
-~30 transformers + CNN + diffusers-generation models, device dispatch, bf16/mixed
-precision, DDP-without-mpirun, checkpoint/safetensors migration, clear errors, ViT.
+~75 transformers (decoder/encoder/enc-dec/audio/vision/MoE) + CNN + diffusers-generation
+models, device dispatch, bf16/mixed precision, DDP-without-mpirun, gradient checkpointing,
+checkpoint/safetensors migration, `model.save()`/`load()`, real `torch.cuda` memory
+reporting, complex numbers + `torch.fft.*`, `F.multi_head_attention_forward`, a
+Lightning-style training core, and clear errors. The torch op surface is broad — verified
+by an op-level differential battery (`op_parity.py`: ~84 ops vs real torch, plus a
+backward battery) on **both** Ascend and CUDA.
 
 Known limitation — **loading *pretrained* checkpoints via `from_pretrained` for
 models that use accelerate's fast path** (diffusers, and transformers with
@@ -149,6 +194,12 @@ fills each via `set_module_tensor_to_device`, which jittor doesn't yet emulate
 state-dict loads correctly; full `from_pretrained` for these models needs jittor
 meta-device parameter emulation (tracked).
 
-In progress: meta-device emulation, PP/TP, memory-manager tuning, cuDNN9, complex
-dtype, full pypi-based CUDA/cuDNN dependency resolution, a jittor-lightning, and
+A second known limitation — **numpy 2.x**: the data-marshalling ABI fix landed (op
+*values* are correct under numpy 2.x), but a separate flaky heap-corruption crash under
+load remains (needs memory-debugging tooling to pin); **use numpy < 2** for now. Python
+3.13 ships numpy 2.x, so the same guidance applies there.
+
+In progress (deeper/core): a native complex `Var` dtype, meta-device emulation, PP/TP,
+memory-manager tuning, cuDNN9, full pypi-based CUDA/cuDNN dependency resolution, the
+remaining Lightning surface (DDP/precision/loggers), the numpy-2.x stability fix, and
 triton/tilelang custom-op support.
