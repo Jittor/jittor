@@ -102,6 +102,29 @@ class TestTorchHFModels(unittest.TestCase):
                 self.assertTrue(np.isfinite(h1).all(), f"{a} non-finite")
                 self.assertTrue(np.allclose(h1, h2, atol=1e-5), f"{a} eval non-deterministic (Dropout active?)")
 
+    def test_gradient_checkpointing_forward_equivalence(self):
+        # gradient checkpointing (torch.utils.checkpoint, used by every HF model with
+        # gradient_checkpointing=True) must RECOMPUTE the forward identically -- the
+        # checkpointed forward must equal the plain forward. Catches a stubbed/broken
+        # checkpoint. (Backward correctness of checkpoint is covered separately; the
+        # recompute is the part most likely to silently diverge.)
+        for a in ('bert', 'gpt2', 'llama', 'vit'):
+            if a not in CFG:
+                continue
+            with self.subTest(model=a):
+                m = _build(a); m.eval()
+                x = _inp(m)
+                with torch.no_grad():
+                    plain = m(**x).last_hidden_state.float().numpy()
+                if not hasattr(m, 'gradient_checkpointing_enable'):
+                    continue
+                m.gradient_checkpointing_enable()
+                with torch.no_grad():
+                    ckpt = m(**x).last_hidden_state.float().numpy()
+                self.assertTrue(np.isfinite(ckpt).all(), f"{a} checkpointed forward non-finite")
+                self.assertTrue(np.allclose(plain, ckpt, atol=1e-4),
+                                f"{a} gradient-checkpointing changed the forward (broken recompute)")
+
     def test_grad_populated_after_backward(self):
         # Regression for the no-optimizer autograd bridge: enumerating params then
         # loss.backward() must populate param.grad for every trainable param.
