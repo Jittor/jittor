@@ -660,6 +660,31 @@ def install(torch):
         _add_loss_class("CosineEmbeddingLoss", F.cosine_embedding_loss, dict(margin=0.0, reduction="mean"), ("margin", "reduction"))
         _add_loss_class("GaussianNLLLoss", F.gaussian_nll_loss, dict(full=False, eps=1e-6, reduction="mean"), ("full", "eps", "reduction"))
         _add_loss_class("NLLLoss", F.nll_loss, dict(reduction="mean"), ("weight", "size_average", "ignore_index"))
+        # pixel_shuffle / pixel_unshuffle (super-resolution, some VAE decoders): jittor's
+        # functional lacks them. (N, C*r^2, H, W) <-> (N, C, H*r, W*r). Verified vs torch.
+        if not hasattr(F, "pixel_shuffle"):
+            def _pixel_shuffle(input, upscale_factor):
+                r = upscale_factor
+                N, Cr2, H, W = input.shape
+                C = Cr2 // (r * r)
+                return input.reshape((N, C, r, r, H, W)).permute(0, 1, 4, 2, 5, 3).reshape((N, C, H * r, W * r))
+            F.pixel_shuffle = _pixel_shuffle
+            g.pixel_shuffle = _pixel_shuffle
+        if not hasattr(F, "pixel_unshuffle"):
+            def _pixel_unshuffle(input, downscale_factor):
+                r = downscale_factor
+                N, C, H, W = input.shape
+                return input.reshape((N, C, H // r, r, W // r, r)).permute(0, 1, 3, 5, 2, 4).reshape((N, C * r * r, H // r, W // r))
+            F.pixel_unshuffle = _pixel_unshuffle
+            g.pixel_unshuffle = _pixel_unshuffle
+        for _pscn, _psfn in (("PixelShuffle", "pixel_shuffle"), ("PixelUnshuffle", "pixel_unshuffle")):
+            if not hasattr(nn, _pscn):
+                def _mk(fn):
+                    class _PS(nn.Module):
+                        def __init__(self, factor): super().__init__(); self._f = factor
+                        def execute(self, x): return getattr(F, fn)(x, self._f)
+                    return _PS
+                _cls = _mk(_psfn); _cls.__name__ = _pscn; setattr(nn, _pscn, _cls)
         if hasattr(nn, "layer_norm"): F.layer_norm = nn.layer_norm
         if hasattr(nn, "embedding"): F.embedding = nn.embedding
         nn.functional = F
