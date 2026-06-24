@@ -2501,7 +2501,7 @@ def _install_misc(g, Var):
             return x[..., :n]
         pad = jt.zeros(list(x.shape[:-1]) + [n - L], x.dtype)
         return jt.concat([x, pad], dim=-1)
-    def _fft_core(x, n, dim, inverse):
+    def _fft_core(x, n, dim, inverse, norm=None):
         # x: real Var or ComplexNumber -> ComplexNumber DFT along `dim`
         x, inv = _to_last(x, dim)
         if isinstance(x, _CN):
@@ -2516,18 +2516,36 @@ def _install_misc(g, Var):
         if im is not None:
             out_re = out_re - jt.matmul(im, Ws.transpose(1, 0))
             out_im = out_im + jt.matmul(im, Wc.transpose(1, 0))
-        if inverse:
-            out_re = out_re / N
-            out_im = out_im / N
+        # norm: backward (default) -> ifft*1/N; forward -> fft*1/N; ortho -> 1/sqrt(N)
+        if norm == "ortho":
+            scale = 1.0 / (N ** 0.5)
+        elif norm == "forward":
+            scale = (1.0 / N) if not inverse else 1.0
+        else:
+            scale = (1.0 / N) if inverse else 1.0
+        if scale != 1.0:
+            out_re = out_re * scale
+            out_im = out_im * scale
         out = _CN(out_re, out_im)
         if inv is not None:
             out = out.permute(*inv)
         return out
     _fft_ns = _types.SimpleNamespace()
-    _fft_ns.fft = lambda input, n=None, dim=-1, norm=None: _fft_core(input, n, dim, False)
-    _fft_ns.ifft = lambda input, n=None, dim=-1, norm=None: _fft_core(input, n, dim, True)
+    _fft_ns.fft = lambda input, n=None, dim=-1, norm=None: _fft_core(input, n, dim, False, norm)
+    _fft_ns.ifft = lambda input, n=None, dim=-1, norm=None: _fft_core(input, n, dim, True, norm)
+    def _fftn(input, s=None, dim=(-2, -1), norm=None, inverse=False):
+        out = input
+        dims = list(dim)
+        ss = list(s) if s is not None else [None] * len(dims)
+        for d, n in zip(dims, ss):                  # apply 1-D fft along each dim
+            out = _fft_core(out, n, d, inverse, norm)
+        return out
+    _fft_ns.fft2 = lambda input, s=None, dim=(-2, -1), norm=None: _fftn(input, s, dim, norm, False)
+    _fft_ns.ifft2 = lambda input, s=None, dim=(-2, -1), norm=None: _fftn(input, s, dim, norm, True)
+    _fft_ns.fftn = lambda input, s=None, dim=(-2, -1), norm=None: _fftn(input, s, dim, norm, False)
+    _fft_ns.ifftn = lambda input, s=None, dim=(-2, -1), norm=None: _fftn(input, s, dim, norm, True)
     def _rfft(input, n=None, dim=-1, norm=None):
-        full = _fft_core(input, n, dim, False)       # real input -> hermitian; keep N//2+1
+        full = _fft_core(input, n, dim, False, norm)  # real input -> hermitian; keep N//2+1
         N = (input.shape[dim] if n is None else n)
         keep = N // 2 + 1
         sl = [slice(None)] * full.real.ndim
@@ -2551,7 +2569,7 @@ def _install_misc(g, Var):
             im_full = jt.concat([im, -im[tuple(sl)]], dim=d)
         else:
             re_full, im_full = re, im
-        out = _fft_core(_CN(re_full, im_full), None, dim, True)
+        out = _fft_core(_CN(re_full, im_full), None, dim, True, norm)
         return out.real
     _fft_ns.irfft = _irfft
     _fft_ns.fftshift = lambda x, dim=None: x        # minimal
