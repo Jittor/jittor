@@ -361,6 +361,28 @@ ok(abs(float(_ceF(jt.array(_cel), jt.array(_cet)).item()) -
        float(_ceF(jt.array(_cel), jt.array(_cet), label_smoothing=0.0).item())) < 1e-6,
    "F.cross_entropy label_smoothing=0 delegates unchanged")
 
+# Loss functions real workloads use that jittor's functional lacked: kl_div (knowledge
+# distillation), binary_cross_entropy, huber_loss, cosine_embedding/margin_ranking/
+# gaussian_nll. Verified bit-equal to real torch 2.12; class versions wrap the functional.
+_Lf = torch.nn.functional
+np.random.seed(0); _N, _Cc = 4, 6
+_slog = np.log(np.random.dirichlet(np.ones(_Cc), _N).astype("float32") + 1e-9)
+_tpr = np.random.dirichlet(np.ones(_Cc), _N).astype("float32")
+ok(abs(float(_Lf.kl_div(jt.array(_slog), jt.array(_tpr), reduction="batchmean").item()) - 0.741089) < 2e-4,
+   "F.kl_div batchmean matches torch (distillation)")
+ok(abs(float(_Lf.kl_div(jt.array(_slog), jt.array(_tpr), reduction="mean").item()) - 0.123515) < 2e-4,
+   "F.kl_div mean matches torch")
+_bp = np.random.rand(_N, _Cc).astype("float32"); _bt = (np.random.rand(_N, _Cc) > 0.5).astype("float32")
+ok(abs(float(_Lf.binary_cross_entropy(jt.array(_bp), jt.array(_bt)).item()) - 1.225431) < 2e-4,
+   "F.binary_cross_entropy matches torch")
+_ha = jt.array(np.random.randn(_N, _Cc).astype("float32")); _hb = jt.array(np.random.randn(_N, _Cc).astype("float32"))
+ok(abs(float(torch.nn.HuberLoss(delta=0.5)(_ha, _hb).item()) -
+       float(_Lf.huber_loss(_ha, _hb, delta=0.5).item())) < 1e-6, "nn.HuberLoss == F.huber_loss")
+ok(all(hasattr(_Lf, n) for n in ["kl_div", "binary_cross_entropy", "huber_loss",
+       "cosine_embedding_loss", "margin_ranking_loss", "gaussian_nll_loss"]), "F loss set present")
+ok(all(hasattr(torch.nn, n) for n in ["HuberLoss", "SmoothL1Loss", "CosineEmbeddingLoss",
+       "MarginRankingLoss", "GaussianNLLLoss", "NLLLoss"]), "nn loss class set present")
+
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 import sys as _sys
 _sys.exit(1 if FAIL else 0)
