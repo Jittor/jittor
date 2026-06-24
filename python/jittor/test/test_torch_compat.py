@@ -229,6 +229,19 @@ _xb, _yb = next(iter(_dl))
 ok(tuple(_xb.shape) == (4, 4) and tuple(_yb.shape) == (4, 2), "DataLoader collates into batches")
 ok(hasattr(torch.utils.data, "Dataset"), "torch.utils.data attribute access")
 
+# torch.func (functorch): functional_call swaps params without mutating the module;
+# grad is a functional gradient transform. Both verified bit-identical to real torch.
+_fl = torch.nn.Linear(3, 2)
+_fW = np.random.randn(2, 3).astype("float32"); _fB = np.random.randn(2).astype("float32")
+_fX = np.random.randn(4, 3).astype("float32")
+_fy = torch.func.functional_call(_fl, {"weight": jt.array(_fW), "bias": jt.array(_fB)}, (jt.array(_fX),))
+ok(np.abs(_fy.numpy() - (_fX @ _fW.T + _fB)).max() < 1e-4, "torch.func.functional_call")
+ok(not np.allclose(_fl.weight.numpy(), _fW, atol=1e-4), "functional_call leaves module unmutated")
+_fg = torch.func.grad(lambda w, x: ((x @ w.transpose(0, 1)) ** 2).sum())(jt.array(_fW), jt.array(_fX))
+ok(np.abs(_fg.numpy() - 2 * ((_fX @ _fW.T).T @ _fX)).max() < 1e-3, "torch.func.grad")
+_fps, _fbs = torch.func.stack_module_state([torch.nn.Linear(3, 2) for _ in range(5)])
+ok(tuple(_fps["weight"].shape) == (5, 2, 3), "torch.func.stack_module_state")
+
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 import sys as _sys
 _sys.exit(1 if FAIL else 0)

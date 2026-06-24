@@ -2527,6 +2527,106 @@ def _install_misc(g, Var):
                 except Exception:
                     raise AttributeError(name)
         g.utils = _UtilsNS("torch.utils")
+    # torch.func (functorch): functional transforms used by LoRA / meta-learning /
+    # model ensembling (functorch). Jittor's autograd is graph-based, so these are
+    # thin wrappers over jt.grad + temporary parameter rebinding.
+    def _func_resolve(module, name):
+        # navigate module.<a>.<b>.<2>... -> (owner, leaf_attr); supports int (Sequential)
+        owner = module
+        parts = name.split(".")
+        for p in parts[:-1]:
+            if p.isdigit() and hasattr(owner, "__getitem__"):
+                owner = owner[int(p)]
+            else:
+                owner = getattr(owner, p)
+        return owner, parts[-1]
+
+    def _functional_call(module, parameters_and_buffers, args=None, kwargs=None,
+                         *, tie_weights=True, strict=False, **_):
+        # torch.func.functional_call: run module.forward with the given params/buffers
+        # swapped in (then restored), without mutating the module. Accepts a dict or a
+        # sequence of dicts (merged), matching torch.
+        if args is None:
+            args = ()
+        elif isinstance(args, jt.Var) or not isinstance(args, (tuple, list)):
+            args = (args,)
+        else:
+            args = tuple(args)
+        if kwargs is None:
+            kwargs = {}
+        if isinstance(parameters_and_buffers, (list, tuple)):
+            merged = {}
+            for d in parameters_and_buffers:
+                merged.update(d)
+            parameters_and_buffers = merged
+        saved = []
+        try:
+            for name, val in parameters_and_buffers.items():
+                owner, attr = _func_resolve(module, name)
+                saved.append((owner, attr, getattr(owner, attr, None)))
+                setattr(owner, attr, val)
+            return module(*args, **kwargs)
+        finally:
+            for owner, attr, orig in reversed(saved):
+                setattr(owner, attr, orig)
+
+    def _func_grad_core(f, argnums, has_aux, want_value):
+        def wrapped(*args, **kwargs):
+            single = isinstance(argnums, int)
+            nums = (argnums,) if single else tuple(argnums)
+            inputs = [args[i] for i in nums]
+            out = f(*args, **kwargs)
+            aux = None
+            if has_aux:
+                out, aux = out
+            grads = jt.grad(out, inputs)            # list, aligned with inputs
+            g0 = grads[0] if single else tuple(grads)
+            if want_value:
+                val = (out, aux) if has_aux else out
+                return (g0, val)
+            return (g0, aux) if has_aux else g0
+        return wrapped
+
+    def _func_grad(f, argnums=0, has_aux=False):
+        return _func_grad_core(f, argnums, has_aux, want_value=False)
+
+    def _func_grad_and_value(f, argnums=0, has_aux=False):
+        return _func_grad_core(f, argnums, has_aux, want_value=True)
+
+    def _jacrev(f, argnums=0):
+        # reverse-mode Jacobian: one backward pass per scalar output component.
+        def wrapped(*args, **kwargs):
+            x = args[argnums]
+            out = f(*args, **kwargs)
+            flat = out.reshape(-1)
+            rows = [jt.grad(flat[i], [x])[0].reshape(-1) for i in range(int(flat.shape[0]))]
+            J = jt.stack(rows, dim=0)
+            return J.reshape(list(out.shape) + list(x.shape))
+        return wrapped
+
+    def _stack_module_state(models):
+        from collections import OrderedDict
+        models = list(models)
+        ps = [dict(m.named_parameters()) for m in models]
+        bs = [dict(m.named_buffers()) for m in models]
+        params = OrderedDict((k, jt.stack([d[k] for d in ps], dim=0)) for k in ps[0])
+        buffers = OrderedDict((k, jt.stack([d[k] for d in bs], dim=0))
+                              for k in (bs[0] if bs and bs[0] else {}))
+        return params, buffers
+
+    _func_ns = _types2.SimpleNamespace()
+    _func_ns.functional_call = _functional_call
+    _func_ns.grad = _func_grad
+    _func_ns.grad_and_value = _func_grad_and_value
+    _func_ns.vmap = lambda *a, **k: g.vmap(*a, **k)   # _vmap is defined later in this fn
+    _func_ns.jacrev = _jacrev
+    _func_ns.jacfwd = _jacrev          # same numerics; forward-mode falls back to reverse
+    _func_ns.stack_module_state = _stack_module_state
+    _func_ns.functionalize = lambda fn, **k: fn
+    _alias("func", _func_ns)
+    # torch.nn.utils also exposes stateless.functional_call (older API path).
+    if not hasattr(g, "functional_call"):
+        g.functional_call = _functional_call
     # complex-dtype API (#3): jittor represents complex via nn.ComplexNumber (real/imag
     # pair); wire the torch entry points onto it. torch.complex(re,im), view_as_complex
     # (last dim of 2 -> complex), view_as_real (complex -> last dim of 2), polar, real/
