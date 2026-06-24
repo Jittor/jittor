@@ -2496,6 +2496,13 @@ def _install_misc(g, Var):
     _alias("imag", lambda x: x.imag if isinstance(x, _CN) else jt.zeros_like(x))
     _alias("polar", lambda abs, angle, **k: _CN(abs * jt.cos(angle), abs * jt.sin(angle)))
     _alias("conj", lambda x: x.conj() if isinstance(x, _CN) else x)
+    _alias("angle", lambda x: x.angle() if isinstance(x, _CN) else jt.zeros_like(x))
+    # torch.abs of a complex tensor is its magnitude; jittor's abs only takes real Vars.
+    _jt_abs = jt.abs
+    def _abs(x):
+        return x.abs() if isinstance(x, _CN) else _jt_abs(x)
+    g.abs = _abs
+    Var.abs = lambda self: _jt_abs(self)
 
     # torch.fft.* (#3): jittor only has a CUDA-only cufft fft2, so provide 1-D fft/ifft/
     # rfft/irfft via DFT matrices (out = x @ W^T, matmul-based -> dual-card, autograd-

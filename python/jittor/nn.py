@@ -3949,6 +3949,23 @@ class ComplexNumber:
     def conj(self):
         return ComplexNumber(self.real, -self.imag)
 
+    def abs(self):
+        # magnitude |a+bi| = sqrt(a^2+b^2)  (torch.abs of a complex tensor)
+        return self.norm()
+
+    def __abs__(self):
+        return self.norm()
+
+    def angle(self):
+        # phase atan2(imag, real)  (torch.angle)
+        return jt.atan2(self.imag, self.real)
+
+    def __getitem__(self, idx):
+        return ComplexNumber(self.real[idx], self.imag[idx])
+
+    def __neg__(self):
+        return ComplexNumber(-self.real, -self.imag)
+
     def __add__(self, other):
         if isinstance(other, ComplexNumber):
             return ComplexNumber(self.real + other.real, self.imag + other.imag)
