@@ -409,6 +409,14 @@ def install(torch):
         elif isinstance(data, _np.ndarray):
             v = _array_keep_dtype(data)          # explicit numpy: preserve dtype (torch does too)
         else:
+            # torch's tensor/as_tensor([t1, t2, ...]) flattens SCALAR tensors into a
+            # 1-D tensor; jittor has no 0-d scalars (a "scalar" Var is shape (1,)), so
+            # numpy.asarray of a list-of-Vars adds a spurious dim ((1,)->(1,1)). Coerce
+            # contained scalar Vars to Python numbers first (e.g. tapas builds shapes
+            # via torch.as_tensor([index.num_segments])).
+            if isinstance(data, (list, tuple)) and any(isinstance(d, Var) for d in data):
+                data = [(d.item() if isinstance(d, Var) and d.numel() == 1 else d)
+                        for d in data]
             # Python scalar/list/tuple: numpy infers float64 from Python floats, but
             # torch's default float dtype is float32. Match torch (and avoid float64,
             # which Ascend/ACL does not support) by downcasting inferred float64.
