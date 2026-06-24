@@ -1094,9 +1094,20 @@ def cumsum(x, dim=None):
 jt.Var.cumsum = cumsum
 
 def cumprod(x,dim=None):
-    x = jt.log(x)
-    x = cumsum(x,dim=dim)
-    return jt.exp(x)
+    # Sign-aware cumulative product. The old exp(cumsum(log(x))) returns NaN for any
+    # NEGATIVE element (log of a negative) -- torch handles signs. Split into magnitude
+    # and a running sign parity: cumprod = (-1)^(#negatives so far) * exp(cumsum(log|x|)).
+    # Zeros are masked out (mag clamped to 1 for the log so we never hit log(0)=-inf,
+    # which can trip jittor's inf/nan JIT codegen; positions at/after the first zero are
+    # forced to 0). Reduces to the old behaviour for all-positive input.
+    mag = jt.abs(x)
+    is_zero = (mag == 0)
+    mag_safe = jt.ternary(is_zero, jt.ones_like(mag), mag)
+    mag_cp = jt.exp(cumsum(jt.log(mag_safe), dim=dim))
+    zero_seen = cumsum(is_zero.int32(), dim=dim) > 0
+    mag_cp = jt.ternary(zero_seen, jt.zeros_like(mag_cp), mag_cp)
+    sign = (1 - 2 * (cumsum((x < 0).int32(), dim=dim) % 2)).float32()
+    return sign * mag_cp
 
 jt.Var.cumprod=cumprod
 
@@ -1797,17 +1808,23 @@ Examples::
         assert (y.numpy() == [[6,5],[8,7],[2,1],[4,3]]).all()
 
     '''
+    if dims is None:
+        # torch: when dims is None the tensor is FLATTENED, rolled by the (scalar)
+        # shift, then restored to the original shape (NOT rolled along dim 0).
+        s = shifts[0] if isinstance(shifts, (tuple, list)) else shifts
+        return roll(x.reshape((-1,)), s, 0).reshape(x.shape)
     if isinstance(shifts, int):
         shifts = (shifts,)
-    if dims is None:
-        dims = tuple(range(len(shifts)))
-    elif isinstance(dims, int):
+    if isinstance(dims, int):
         dims = (dims,)
     assert len(dims) == len(shifts)
     ids = [ f'i{i}' for i in range(x.ndim) ]
     for i in range(len(dims)):
         shift = shifts[i]
-        d = dims[i]
+        # normalize negative dims: f'i{d}' with d=-1 emits the literal 'i-1' (an
+        # undeclared codegen variable -> "'op0_i' was not declared" compile error).
+        # torch allows dims=-1; map it to a real axis index for the reindex expression.
+        d = dims[i] % x.ndim
         size = x.shape[d]
         shift = shift % size
         if shift<0: shift += size

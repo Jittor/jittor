@@ -397,6 +397,23 @@ _vx = np.random.RandomState(0).randn(1, 2, 4, 4).astype("float32")
 ok(abs(float(torch.nn.functional.interpolate(jt.array(_vx), size=(8, 8), mode="bilinear", align_corners=True).sum().item()) - 47.48457) < 1e-2,
    "F.interpolate bilinear align_corners=True matches torch")
 
+# torch.roll: negative dims previously emitted 'i-1' -> JIT compile error ('op0_i'
+# undeclared); no-dims must flatten (torch), not roll dim 0. torch.cumprod: was
+# exp(cumsum(log)) -> NaN for negatives; now sign-aware (diffusers alphas_cumprod, etc.).
+_rx = np.random.RandomState(0).randn(2, 3, 4).astype("float32")
+ok(np.abs(torch.roll(jt.array(_rx), 1, dims=-1).numpy() - np.roll(_rx, 1, axis=-1)).max() == 0,
+   "torch.roll negative dim (was a JIT compile error)")
+ok(np.abs(torch.roll(jt.array(_rx), (-1, -1), dims=(1, 2)).numpy() - np.roll(np.roll(_rx, -1, 1), -1, 2)).max() == 0,
+   "torch.roll multi-dim (swin window shift)")
+ok(np.abs(torch.roll(jt.array(_rx), 2).numpy() - np.roll(_rx, 2)).max() == 0,
+   "torch.roll no-dims flattens (torch semantics)")
+_cx = np.random.RandomState(1).randn(2, 5).astype("float32")
+ok(np.abs(torch.cumprod(jt.array(_cx), dim=-1).numpy() - np.cumprod(_cx, axis=-1)).max() < 1e-4,
+   "torch.cumprod sign-aware (negatives no longer NaN)")
+_cz = np.array([[2., 0., 3., -1.], [1., -2., 0., 4.]], dtype="float32")
+ok(np.abs(torch.cumprod(jt.array(_cz), dim=-1).numpy() - np.cumprod(_cz, axis=-1)).max() < 1e-5,
+   "torch.cumprod with zeros and negatives")
+
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 import sys as _sys
 _sys.exit(1 if FAIL else 0)
