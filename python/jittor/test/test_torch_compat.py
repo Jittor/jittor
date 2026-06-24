@@ -501,6 +501,21 @@ ok([t.numpy().tolist() for t in jt.array(np.arange(10).astype("float32")).tensor
 ok(jt.array(np.arange(12).reshape(3, 4).astype("float32")).take(jt.array(np.array([0, 5, 11], dtype="int64"))).numpy().tolist()
    == [0., 5., 11.], "Var.take (flat gather)")
 
+# Activations / losses jittor lacked (verified vs real torch; silu/mish/hardswish/glu/elu
+# already correct). selu/celu have specific constants; triplet/poisson specific formulas.
+_F = torch.nn.functional
+np.random.seed(0); _ax = np.random.randn(4, 6).astype("float32")
+ok(abs(float(_F.selu(jt.array(_ax)).sum().item()) - 10.57231) < 2e-3, "F.selu matches torch")
+ok(abs(float(_F.celu(jt.array(_ax), alpha=1.0).sum().item()) - 12.12778) < 2e-3, "F.celu matches torch")
+ok(abs(float(_F.tanhshrink(jt.array(_ax)).sum().item()) - 2.97217) < 2e-3, "F.tanhshrink matches torch")
+ok(abs(float(_F.threshold(jt.array(_ax), 0.0, -1.0).sum().item()) - 8.19585) < 2e-3, "F.threshold matches torch")
+ok(np.allclose(_F.softmin(jt.array(_ax), dim=1).numpy().sum(1), 1.0, atol=1e-5), "F.softmin is a distribution")
+_ta = np.random.randn(3, 4).astype("float32"); _tp = np.random.randn(3, 4).astype("float32"); _tn = np.random.randn(3, 4).astype("float32")
+ok(abs(float(_F.triplet_margin_loss(jt.array(_ta), jt.array(_tp), jt.array(_tn), margin=1.0).item()) - 0.87039) < 2e-3,
+   "F.triplet_margin_loss matches torch")
+_pin = np.abs(np.random.randn(3, 4)).astype("float32"); _ptg = np.abs(np.random.randn(3, 4)).astype("float32")
+ok(abs(float(_F.poisson_nll_loss(jt.array(_pin), jt.array(_ptg)).item()) - 1.84235) < 2e-3, "F.poisson_nll_loss (log_input) matches torch")
+
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 import sys as _sys
 _sys.exit(1 if FAIL else 0)
