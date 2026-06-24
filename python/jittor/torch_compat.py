@@ -685,6 +685,21 @@ def install(torch):
                         def execute(self, x): return getattr(F, fn)(x, self._f)
                     return _PS
                 _cls = _mk(_psfn); _cls.__name__ = _pscn; setattr(nn, _pscn, _cls)
+        # F.logsigmoid (DPO/preference losses), F.gumbel_softmax (discrete/MoE sampling).
+        if not hasattr(F, "logsigmoid"):
+            # stable: log(sigmoid(x)) = min(x,0) - log(1+exp(-|x|))
+            F.logsigmoid = lambda input: jt.minimum(input, 0.0) - jt.log(1.0 + jt.exp(-jt.abs(input)))
+        if not hasattr(F, "gumbel_softmax"):
+            def _gumbel_softmax(logits, tau=1.0, hard=False, eps=1e-10, dim=-1):
+                u = jt.rand(logits.shape)
+                g = -jt.log(-jt.log(u + eps) + eps)             # Gumbel(0,1) noise
+                y = nn.softmax((logits + g) / tau, dim=dim)
+                if hard:
+                    m = y.max(dim, keepdims=True)
+                    y_hard = (y >= m).float32()
+                    y = (y_hard - y).stop_grad() + y            # straight-through estimator
+                return y
+            F.gumbel_softmax = _gumbel_softmax
         if hasattr(nn, "layer_norm"): F.layer_norm = nn.layer_norm
         if hasattr(nn, "embedding"): F.embedding = nn.embedding
         nn.functional = F
@@ -3462,6 +3477,23 @@ def _install_misc(g, Var):
     _alias("vmap", _vmap)
     _alias("outer", lambda a, b: jt.matmul(a.reshape(-1, 1), b.reshape(1, -1)))
     _alias("isin", _isin)
+    # torch.cdist(x1,x2,p): pairwise p-distances (...,P,M),(...,R,M)->(...,P,R). Used by
+    # contrastive/clustering/retrieval. torch.bucketize: indices to insert into sorted
+    # boundaries (samplers / piecewise schedules).
+    def _cdist(x1, x2, p=2.0, compute_mode=None, **k):
+        diff = x1.unsqueeze(-2) - x2.unsqueeze(-3)          # (...,P,R,M)
+        if p == 2:
+            return jt.sqrt((diff * diff).sum(-1))
+        if p == 1:
+            return jt.abs(diff).sum(-1)
+        return (jt.abs(diff) ** p).sum(-1) ** (1.0 / p)
+    _alias("cdist", _cdist)
+    def _bucketize(input, boundaries, out_int32=False, right=False, **k):
+        b = boundaries.reshape((-1,))
+        cmp = (input.unsqueeze(-1) >= b) if right else (input.unsqueeze(-1) > b)
+        r = cmp.int32().sum(-1)
+        return r if out_int32 else r.int64()
+    _alias("bucketize", _bucketize)
     _alias("square", lambda x: x * x)   # torch.square (jittor only had jt.sqr); persimmon
     # torch.addmm(input, mat1, mat2, *, beta=1, alpha=1):
     #   out = beta * input + alpha * (mat1 @ mat2)   (gpt2 uses this for its

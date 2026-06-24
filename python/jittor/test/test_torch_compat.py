@@ -446,6 +446,22 @@ _eg = jt.array(np.random.RandomState(1).randn(2, 5, 16).astype("float32"))
 _egr = jt.grad(_enc(_eg).sum(), [_eg])[0]
 ok(bool(jt.isfinite(_egr).all().item()) and float(jt.abs(_egr).sum().item()) > 0, "TransformerEncoder differentiable")
 
+# Missing functional ops: F.logsigmoid (DPO/preference losses), torch.cdist (pairwise
+# distances), torch.bucketize (samplers), F.gumbel_softmax (discrete/MoE). vs real torch.
+np.random.seed(0)
+_lsx = np.random.randn(3, 4).astype("float32")
+ok(abs(float(torch.nn.functional.logsigmoid(jt.array(_lsx)).sum().item()) - (-5.71869)) < 1e-3,
+   "F.logsigmoid matches torch (DPO)")
+_ca = np.random.randn(3, 4).astype("float32"); _cb = np.random.randn(5, 4).astype("float32")
+ok(abs(float(torch.cdist(jt.array(_ca), jt.array(_cb), p=2).sum().item()) - 46.64838) < 1e-2, "torch.cdist p=2 matches torch")
+ok(abs(float(torch.cdist(jt.array(_ca), jt.array(_cb), p=1).sum().item()) - 81.02102) < 1e-2, "torch.cdist p=1 matches torch")
+_bnd = jt.array(np.array([1., 3., 5., 7.], dtype="float32")); _binp = jt.array(np.array([0.5, 2., 5., 9.], dtype="float32"))
+ok(torch.bucketize(_binp, _bnd).numpy().tolist() == [0, 1, 2, 4] and
+   torch.bucketize(_binp, _bnd, right=True).numpy().tolist() == [0, 1, 3, 4], "torch.bucketize (right=False/True)")
+_gsh = torch.nn.functional.gumbel_softmax(jt.array(np.random.randn(4, 5).astype("float32")), hard=True)
+ok(np.allclose(_gsh.numpy().sum(-1), 1.0) and np.all(np.isin(np.round(_gsh.numpy(), 4), [0, 1])),
+   "F.gumbel_softmax hard is one-hot")
+
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 import sys as _sys
 _sys.exit(1 if FAIL else 0)
