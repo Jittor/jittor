@@ -599,6 +599,15 @@ _fso = np.arange(7).astype("float32")
 ok(np.array_equal(torch.fft.ifftshift(torch.fft.fftshift(jt.array(_fso))).numpy(), _fso), "torch.fft.ifftshift inverts fftshift (odd)")
 ok(np.abs(torch.fft.fftfreq(8, 0.1).numpy() - np.fft.fftfreq(8, 0.1)).max() < 1e-5, "torch.fft.fftfreq")
 ok(np.abs(torch.fft.rfftfreq(8, 0.1).numpy() - np.fft.rfftfreq(8, 0.1)).max() < 1e-5, "torch.fft.rfftfreq")
+# shape ops: unflatten/swapaxes/swapdims/ravel + numpy-style stacking (vstack/hstack/...).
+_ufx = np.random.randn(2, 12).astype("float32")
+ok(np.array_equal(torch.unflatten(jt.array(_ufx), 1, (3, -1)).numpy(), _ufx.reshape(2, 3, 4)), "torch.unflatten (with -1)")
+_sw3 = np.random.randn(2, 3, 4).astype("float32")
+ok(np.array_equal(torch.swapaxes(jt.array(_sw3), 0, 2).numpy(), np.swapaxes(_sw3, 0, 2)), "torch.swapaxes/swapdims")
+ok(np.array_equal(torch.ravel(jt.array(_sw3)).numpy(), _sw3.ravel()), "torch.ravel")
+_va = jt.array(np.array([1, 2, 3], "float32")); _vb = jt.array(np.array([4, 5, 6], "float32"))
+ok(np.array_equal(torch.vstack([_va, _vb]).numpy(), np.vstack([[1, 2, 3], [4, 5, 6]])), "torch.vstack")
+ok(np.array_equal(torch.column_stack([_va, _vb]).numpy(), np.column_stack([[1, 2, 3], [4, 5, 6]])), "torch.column_stack")
 
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 import sys as _sys

@@ -3849,6 +3849,31 @@ def _install_misc(g, Var):
         jj = [j for i in range(N) for j in range(i + 1, N)]
         return d[jt.array(ii), jt.array(jj)]
     _alias("pdist", _pdist)
+    # shape ops: unflatten / swapaxes / swapdims / ravel + numpy-style stacking helpers.
+    def _unflatten(input, dim, sizes):
+        d = dim % input.ndim
+        return input.reshape(list(input.shape[:d]) + list(sizes) + list(input.shape[d + 1:]))
+    _alias("unflatten", _unflatten); Var.unflatten = _unflatten
+    def _swapaxes(input, axis0, axis1):
+        perm = list(range(input.ndim))
+        a, b = axis0 % input.ndim, axis1 % input.ndim
+        perm[a], perm[b] = perm[b], perm[a]
+        return input.permute(perm)
+    _alias("swapaxes", _swapaxes); _alias("swapdims", _swapaxes)
+    Var.swapaxes = _swapaxes; Var.swapdims = _swapaxes
+    _alias("ravel", lambda input: input.reshape((-1,))); Var.ravel = lambda self: self.reshape((-1,))
+    def _vstack(tensors):
+        return jt.concat([t if t.ndim >= 2 else t.reshape((1, -1)) for t in tensors], dim=0)
+    _alias("vstack", _vstack); _alias("row_stack", _vstack)
+    _alias("hstack", lambda tensors: jt.concat(list(tensors), dim=0) if all(t.ndim == 1 for t in tensors)
+           else jt.concat(list(tensors), dim=1))
+    def _dstack(tensors):
+        out = []
+        for t in tensors:
+            out.append(t.reshape((1, -1, 1)) if t.ndim == 1 else (t.unsqueeze(-1) if t.ndim == 2 else t))
+        return jt.concat(out, dim=2)
+    _alias("dstack", _dstack)
+    _alias("column_stack", lambda tensors: jt.concat([t.reshape((-1, 1)) if t.ndim == 1 else t for t in tensors], dim=1))
     # element-wise ops: copysign / xlogy / heaviside / float_power / signbit.
     def _copysign(input, other):
         s = (other >= 0).float32() * 2 - 1                 # +1 where other>=0 (incl +0), -1 else
