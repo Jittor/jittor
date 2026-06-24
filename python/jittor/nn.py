@@ -941,14 +941,16 @@ def instance_norm(x,
     return x * w.broadcast(x, dims) + b.broadcast(x, dims)
 
 class LayerNorm(Module):
-    def __init__(self, normalized_shape, eps: float = 1e-5, elementwise_affine: bool = True) -> None:
+    def __init__(self, normalized_shape, eps: float = 1e-5, elementwise_affine: bool = True, bias: bool = True) -> None:
         if isinstance(normalized_shape, int):
             normalized_shape = (normalized_shape,)
         self.normalized_shape = tuple(normalized_shape)
         self.eps = eps
         self.elementwise_affine = elementwise_affine
         self.weight = init.constant(normalized_shape, "float32", 1.0) if elementwise_affine else 1.0
-        self.bias = init.constant(normalized_shape, "float32", 0.0) if elementwise_affine else 0.0
+        # torch 2.1+ adds `bias`: a learnable bias only when both affine AND bias are on
+        # (e.g. dbrx uses LayerNorm(..., bias=False) -> scale only, no shift param).
+        self.bias = init.constant(normalized_shape, "float32", 0.0) if (elementwise_affine and bias) else 0.0
 
     @fp32_guard
     def execute(self, x):
