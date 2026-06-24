@@ -221,6 +221,14 @@ _lit.training_step = lambda b, i: (_losses.append(float(_orig(b, i).item())) or 
 _pl.Trainer(max_epochs=8).fit(_lit, train_dataloaders=_data)
 ok(_losses[-1] < _losses[0], "jittor.lightning Trainer trains (loss decreases)")
 
+# DataLoader default collation: `for x, y in dl` must yield STACKED batches (was a no-op
+# that returned a raw list of samples). Also torch.utils.data attribute access.
+from torch.utils.data import DataLoader as _DL, TensorDataset as _TD
+_dl = _DL(_TD(jt.randn(10, 4), jt.randn(10, 2)), batch_size=4, shuffle=False)
+_xb, _yb = next(iter(_dl))
+ok(tuple(_xb.shape) == (4, 4) and tuple(_yb.shape) == (4, 2), "DataLoader collates into batches")
+ok(hasattr(torch.utils.data, "Dataset"), "torch.utils.data attribute access")
+
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 import sys as _sys
 _sys.exit(1 if FAIL else 0)
