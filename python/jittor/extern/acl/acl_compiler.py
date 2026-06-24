@@ -566,7 +566,19 @@ def change_function():
         def execute(self, x, dim):
             return SoftmaxACL()(x, dim)
 
-    def softmax_acl(x, dim):
+    def softmax_acl(x, dim=None, log=False):
+        # Mirror native jt.nn.softmax(x, dim=None, log=False). The previous (x, dim)
+        # signature crashed log_softmax -> softmax(x, dim, log=True) with
+        # "softmax_acl() got an unexpected keyword argument 'log'" (breaks cross_entropy
+        # / classification on NPU). For log=True compute a numerically-stable log-softmax
+        # from primitives (aclnn-native, autodiff-correct); else use the aclnn Softmax op.
+        if dim is None:
+            dim = 0 if x.ndim in (0, 1, 3) else 1
+        if log:
+            x = x.float32()
+            m = jt.max(x, dim, keepdims=True)
+            shifted = x - m
+            return shifted - jt.log(jt.exp(shifted).sum(dim, keepdims=True))
         return SoftmaxACL()(x, dim)
 
     from .aclops.rope_op import RopeACL
