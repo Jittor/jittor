@@ -383,6 +383,20 @@ ok(all(hasattr(_Lf, n) for n in ["kl_div", "binary_cross_entropy", "huber_loss",
 ok(all(hasattr(torch.nn, n) for n in ["HuberLoss", "SmoothL1Loss", "CosineEmbeddingLoss",
        "MarginRankingLoss", "GaussianNLLLoss", "NLLLoss"]), "nn loss class set present")
 
+# pixel_shuffle / pixel_unshuffle (super-resolution, some VAE decoders): (N,C*r^2,H,W) <->
+# (N,C,H*r,W*r). Verified vs real torch (flat layout) + roundtrip + nn class. interpolate
+# (bilinear align_corners True/False) and pad(reflect) already match torch.
+_psx = jt.array(np.arange(32).reshape(1, 8, 2, 2).astype("float32"))
+_pso = torch.nn.functional.pixel_shuffle(_psx, 2)
+ok(tuple(_pso.shape) == (1, 2, 4, 4) and _pso.numpy().flatten()[:6].tolist() == [0, 4, 1, 5, 8, 12],
+   "F.pixel_shuffle matches torch layout")
+ok(np.array_equal(torch.nn.functional.pixel_unshuffle(_pso, 2).numpy(), _psx.numpy()),
+   "F.pixel_unshuffle inverts pixel_shuffle")
+ok(np.array_equal(torch.nn.PixelShuffle(2)(_psx).numpy(), _pso.numpy()), "nn.PixelShuffle == functional")
+_vx = np.random.RandomState(0).randn(1, 2, 4, 4).astype("float32")
+ok(abs(float(torch.nn.functional.interpolate(jt.array(_vx), size=(8, 8), mode="bilinear", align_corners=True).sum().item()) - 47.48457) < 1e-2,
+   "F.interpolate bilinear align_corners=True matches torch")
+
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 import sys as _sys
 _sys.exit(1 if FAIL else 0)
