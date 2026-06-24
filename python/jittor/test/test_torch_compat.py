@@ -482,6 +482,25 @@ _tg = jt.array(np.random.RandomState(3).randn(2, 6, 16).astype("float32"))
 _tgr = jt.grad(_tr(_tg, _tgt).sum(), [_tg])[0]
 ok(bool(jt.isfinite(_tgr).all().item()) and float(jt.abs(_tgr).sum().item()) > 0, "nn.Transformer differentiable")
 
+# F.rms_norm (modern LLM norm, torch 2.4+) + tensor methods movedim/index_put_/
+# tensor_split/take. index_put_ accumulate must add ALL duplicate-index contributions.
+np.random.seed(0)
+_rx = np.random.randn(2, 3, 8).astype("float32"); _rw = np.random.randn(8).astype("float32")
+ok(abs(float(torch.nn.functional.rms_norm(jt.array(_rx), (8,), weight=jt.array(_rw)).sum().item()) - (-4.61942)) < 1e-3,
+   "F.rms_norm matches torch (Llama/Qwen)")
+_mvx = np.random.randn(2, 6, 4, 4).astype("float32")
+ok(np.array_equal(jt.array(_mvx).movedim(1, -1).numpy(), np.moveaxis(_mvx, 1, -1)), "Var.movedim")
+_ipa = jt.ones(3)
+_ipa.index_put_((jt.array(np.array([0, 0, 1], dtype="int64")),), jt.array(np.array([2., 3., 4.], dtype="float32")), accumulate=True)
+ok(_ipa.numpy().tolist() == [6.0, 5.0, 1.0], "Var.index_put_ accumulate sums duplicate indices")
+_ipn = jt.zeros((3, 4))
+_ipn.index_put_((jt.array(np.array([0, 2], dtype="int64")), jt.array(np.array([1, 3], dtype="int64"))), jt.array(np.array([5., 7.], dtype="float32")))
+ok(float(_ipn.sum().item()) == 12.0, "Var.index_put_ (non-accumulate)")
+ok([t.numpy().tolist() for t in jt.array(np.arange(10).astype("float32")).tensor_split(3)] ==
+   [[0., 1., 2., 3.], [4., 5., 6.], [7., 8., 9.]], "Var.tensor_split (uneven)")
+ok(jt.array(np.arange(12).reshape(3, 4).astype("float32")).take(jt.array(np.array([0, 5, 11], dtype="int64"))).numpy().tolist()
+   == [0., 5., 11.], "Var.take (flat gather)")
+
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 import sys as _sys
 _sys.exit(1 if FAIL else 0)
