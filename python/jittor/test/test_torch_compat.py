@@ -567,6 +567,13 @@ _ta2 = np.random.randn(2, 3, 4).astype("float32"); _tb2 = np.random.randn(4, 5, 
 ok(np.abs(torch.tensordot(jt.array(_ta2), jt.array(_tb2), dims=1).numpy() - np.tensordot(_ta2, _tb2, axes=1)).max() < 1e-4, "torch.tensordot")
 _pp = np.random.randn(4, 3).astype("float32")
 ok(np.abs(torch.pdist(jt.array(_pp)).numpy() - np.array([np.linalg.norm(_pp[i] - _pp[j]) for i in range(4) for j in range(i + 1, 4)])).max() < 1e-4, "torch.pdist")
+# element-wise: copysign/xlogy/heaviside/float_power/signbit (lerp/hypot/clip/nan_to_num present).
+_ea = np.random.randn(5).astype("float32"); _eb = np.random.randn(5).astype("float32")
+ok(np.abs(torch.copysign(jt.array(np.abs(_ea)), jt.array(_eb)).numpy() - np.copysign(np.abs(_ea), _eb)).max() < 1e-5, "torch.copysign")
+ok(np.abs(torch.xlogy(jt.array(np.abs(_ea) + 0.1), jt.array(np.abs(_eb) + 0.1)).numpy() - (np.abs(_ea) + 0.1) * np.log(np.abs(_eb) + 0.1)).max() < 1e-5, "torch.xlogy")
+ok(float(torch.xlogy(jt.array(np.array([0.], "float32")), jt.array(np.array([0.], "float32"))).item()) == 0.0, "torch.xlogy(0,0)==0")
+ok(np.abs(torch.heaviside(jt.array(_ea), jt.zeros(5)).numpy() - np.heaviside(_ea, 0)).max() < 1e-5, "torch.heaviside")
+ok(np.array_equal(torch.signbit(jt.array(_ea)).numpy().astype(bool), np.signbit(_ea)), "torch.signbit")
 
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 import sys as _sys
