@@ -180,8 +180,10 @@ Done + verified on both backends: forward/backward/training accuracy parity acro
 ~75 transformers (decoder/encoder/enc-dec/audio/vision/MoE) + CNN + diffusers-generation
 models, device dispatch, bf16/mixed precision, DDP-without-mpirun, gradient checkpointing,
 checkpoint/safetensors migration, `model.save()`/`load()`, real `torch.cuda` memory
-reporting, complex numbers + `torch.fft.*`, `F.multi_head_attention_forward`, a
-Lightning-style training core, and clear errors. The torch op surface is broad — verified
+reporting, complex numbers + `torch.fft.*`, `F.multi_head_attention_forward`,
+`torch.func` (functorch: `functional_call`/`grad`/`grad_and_value`/`vmap`/`jacrev`/
+`stack_module_state` — used by LoRA / meta-learning / model ensembling, verified
+bit-identical to real torch), a Lightning-style training core, and clear errors. The torch op surface is broad — verified
 by an op-level differential battery (`op_parity.py`: ~84 ops vs real torch, plus a
 backward battery) on **both** Ascend and CUDA.
 
