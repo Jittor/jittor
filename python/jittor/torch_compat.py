@@ -2510,6 +2510,23 @@ def _install_misc(g, Var):
     _dynamo.reset = lambda *a, **k: None
     if not hasattr(g, "_dynamo"):
         setattr(g, "_dynamo", _dynamo)
+    # `import jittor as torch; torch.utils.data.Dataset` (attribute access, used by some
+    # HF/training code as a base class) needs a `utils` namespace on the jittor module --
+    # the `from torch.utils.data import X` form already resolves via sys.modules. Lazily
+    # resolve torch.utils.<sub> (data/checkpoint/rnn/...) on access.
+    if not hasattr(g, "utils"):
+        import importlib as _il
+        class _UtilsNS(_types2.ModuleType):
+            def __getattr__(self, name):
+                import sys as _sys
+                full = "torch.utils." + name
+                if full in _sys.modules:
+                    return _sys.modules[full]
+                try:
+                    return _il.import_module(full)
+                except Exception:
+                    raise AttributeError(name)
+        g.utils = _UtilsNS("torch.utils")
     # complex-dtype API (#3): jittor represents complex via nn.ComplexNumber (real/imag
     # pair); wire the torch entry points onto it. torch.complex(re,im), view_as_complex
     # (last dim of 2 -> complex), view_as_real (complex -> last dim of 2), polar, real/
