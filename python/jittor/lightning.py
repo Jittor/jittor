@@ -30,6 +30,71 @@ import jittor as jt
 from jittor import nn
 
 
+class Callback:
+    """Base callback. Override the hooks you need; the Trainer calls them at the
+    matching points. Minimal but real: enough for ModelCheckpoint / EarlyStopping."""
+    def on_train_start(self, trainer, model): pass
+    def on_train_end(self, trainer, model): pass
+    def on_train_epoch_start(self, trainer, model): pass
+    def on_train_epoch_end(self, trainer, model): pass
+    def on_train_batch_end(self, trainer, model, loss, batch, batch_idx): pass
+    def on_validation_epoch_end(self, trainer, model): pass
+
+
+class ModelCheckpoint(Callback):
+    """Save the model when `monitor` improves (mode 'min'|'max'). Uses jittor's
+    Module.save (a torch-loadable .pkl)."""
+    def __init__(self, dirpath=".", filename="best", monitor="val_loss", mode="min", save_last=False):
+        self.dirpath = dirpath; self.filename = filename; self.monitor = monitor
+        self.mode = mode; self.save_last = save_last
+        self.best = None; self.best_model_path = None
+
+    def _improved(self, v):
+        if self.best is None:
+            return True
+        return (v < self.best) if self.mode == "min" else (v > self.best)
+
+    def on_validation_epoch_end(self, trainer, model):
+        import os
+        metrics = trainer.logged_metrics
+        if self.monitor not in metrics:
+            return
+        v = metrics[self.monitor]
+        if self._improved(v):
+            self.best = v
+            path = os.path.join(self.dirpath, f"{self.filename}.pkl")
+            try:
+                os.makedirs(self.dirpath, exist_ok=True)
+                # save the state_dict (model.save() can recurse under torch-compat);
+                # this is torch-loadable and what Lightning's checkpoint effectively does.
+                jt.save(model.state_dict(), path)
+                self.best_model_path = path
+            except Exception:
+                pass
+
+
+class EarlyStopping(Callback):
+    """Stop training when `monitor` stops improving for `patience` validations."""
+    def __init__(self, monitor="val_loss", mode="min", patience=3, min_delta=0.0):
+        self.monitor = monitor; self.mode = mode; self.patience = patience
+        self.min_delta = float(min_delta); self.best = None; self.wait = 0
+
+    def on_validation_epoch_end(self, trainer, model):
+        metrics = trainer.logged_metrics
+        if self.monitor not in metrics:
+            return
+        v = metrics[self.monitor]
+        improved = (self.best is None or
+                    (v < self.best - self.min_delta if self.mode == "min"
+                     else v > self.best + self.min_delta))
+        if improved:
+            self.best = v; self.wait = 0
+        else:
+            self.wait += 1
+            if self.wait >= self.patience:
+                trainer.should_stop = True
+
+
 class LightningModule(nn.Module):
     """Subclass and implement training_step + configure_optimizers (and forward)."""
 
@@ -79,6 +144,11 @@ class Trainer:
         self.global_step = 0
         self.current_epoch = 0
         self.logged_metrics = {}
+        self.should_stop = False
+
+    def _cb(self, hook, *args):
+        for c in self.callbacks:
+            getattr(c, hook, lambda *a: None)(self, *args)
 
     def _configure(self, model):
         cfg = model.configure_optimizers()
@@ -97,10 +167,12 @@ class Trainer:
     def fit(self, model, train_dataloaders=None, val_dataloaders=None, **kwargs):
         optimizers, schedulers = self._configure(model)
         model.train()
-        stop = False
+        self.should_stop = False
+        self._cb("on_train_start", model)
         for epoch in range(self.max_epochs):
             self.current_epoch = epoch
             model.on_train_epoch_start()
+            self._cb("on_train_epoch_start", model)
             for opt in optimizers:
                 opt.zero_grad()
             for batch_idx, batch in enumerate(train_dataloaders):
@@ -122,21 +194,24 @@ class Trainer:
                         opt.step()
                         opt.zero_grad()
                     self.global_step += 1
-                    if self.max_steps > 0 and self.global_step >= self.max_steps:
-                        stop = True
-                        break
+                self._cb("on_train_batch_end", model, loss, batch, batch_idx)
+                if self.max_steps > 0 and self.global_step >= self.max_steps:
+                    self.should_stop = True
+                    break
             for sched in schedulers:
                 try:
                     sched.step()
                 except Exception:
                     pass
             model.on_train_epoch_end()
+            self._cb("on_train_epoch_end", model)
             if hasattr(model, "_logged_metrics"):
                 self.logged_metrics = dict(model._logged_metrics)
             if val_dataloaders is not None:
                 self._run_eval(model, val_dataloaders, "validation_step")
-            if stop:
+            if self.should_stop:
                 break
+        self._cb("on_train_end", model)
         return model
 
     def _run_eval(self, model, dataloaders, step_name):
@@ -148,6 +223,10 @@ class Trainer:
                     break
                 step(batch, batch_idx)
         model.on_validation_epoch_end()
+        if hasattr(model, "_logged_metrics"):
+            self.logged_metrics = dict(model._logged_metrics)
+        if step_name == "validation_step":
+            self._cb("on_validation_epoch_end", model)
         model.train()
 
     def validate(self, model, dataloaders=None, **kwargs):
