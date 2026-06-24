@@ -941,7 +941,10 @@ def instance_norm(x,
     return x * w.broadcast(x, dims) + b.broadcast(x, dims)
 
 class LayerNorm(Module):
-    def __init__(self, normalized_shape, eps: float = 1e-5, elementwise_affine: bool = True, bias: bool = True) -> None:
+    def __init__(self, normalized_shape, eps: float = 1e-5, elementwise_affine: bool = True, bias: bool = True, device=None, dtype=None) -> None:
+        # device/dtype: torch's LayerNorm accepts them (factory kwargs); jittor places
+        # params on the active device and uses float32, so they're accepted and ignored
+        # (nemotron passes them positionally).
         if isinstance(normalized_shape, int):
             normalized_shape = (normalized_shape,)
         self.normalized_shape = tuple(normalized_shape)

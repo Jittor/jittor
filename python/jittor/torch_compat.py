@@ -1762,6 +1762,13 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         Var.mul_ = lambda self, o: _ip(self, self * o)
     if not hasattr(Var, "div_"):
         Var.div_ = lambda self, o: _ip(self, self / o)
+    # in-place unary math ops (recurrent_gemma uses x.log_(); common torch idioms)
+    for _name, _fn in (("log_", jt.log), ("exp_", jt.exp), ("sqrt_", jt.sqrt),
+                       ("neg_", lambda x: -x), ("abs_", jt.abs), ("sigmoid_", jt.sigmoid),
+                       ("tanh_", jt.tanh), ("reciprocal_", lambda x: 1.0 / x),
+                       ("rsqrt_", lambda x: 1.0 / jt.sqrt(x))):
+        if not hasattr(Var, _name):
+            setattr(Var, _name, (lambda fn: lambda self: _ip(self, fn(self)))(_fn))
     # torch.clamp(input, min=None, max=None) and Tensor.clamp(min=, max=)
     # accept min/max as keyword args, either of which may be None. jittor's
     # native clamp only takes them positionally and rejects the keywords (it
