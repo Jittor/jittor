@@ -255,8 +255,8 @@ def svd(x):
         u, s, v = data["f_outputs"]
         v = T(v)
         m, n = inp.shape[-2:]
-        k = np.min((m, n))
-        i = np.reshape(np.eye(k), np.concatenate((np.ones(inp.ndim - 2, dtype=int), (k, k))))
+        k = min(m, n)
+        i = np.reshape(np.eye(k), (1,) * (inp.ndim - 2) + (k, k))
         if out_index == 0:
             f = 1 / (s[..., np.newaxis, :] ** 2 - s[..., :, np.newaxis] ** 2 + i)
             gu = dout
@@ -264,7 +264,7 @@ def svd(x):
             t = (f * (utgu - T(utgu))) * s[..., np.newaxis, :]
             t = _dot(_dot(u, t), T(v))
             if m > n:
-                i_minus_uut = (np.reshape(np.eye(m), np.concatenate((np.ones(inp.ndim - 2, dtype=int), (m, m)))) -
+                i_minus_uut = (np.reshape(np.eye(m), (1,) * (inp.ndim - 2) + (m, m)) -
                                _dot(u, np.conj(T(u))))
                 t = t + T(_dot(_dot(v / s[..., np.newaxis, :], T(gu)), i_minus_uut))
             np.copyto(out, t)
@@ -280,7 +280,7 @@ def svd(x):
             t = s[..., :, np.newaxis] * (f * (vtgv - T(vtgv)))
             t = _dot(_dot(u, t), T(v))
             if m < n:
-                i_minus_vvt = (np.reshape(np.eye(n), np.concatenate((np.ones(inp.ndim - 2, dtype=int), (n, n)))) -
+                i_minus_vvt = (np.reshape(np.eye(n), (1,) * (inp.ndim - 2) + (n, n)) -
                                _dot(v, np.conj(T(v))))
                 t = t + T(_dot(_dot(u / s[..., np.newaxis, :], T(gv)), i_minus_vvt))
             np.copyto(out, t)
