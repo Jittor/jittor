@@ -69,7 +69,11 @@ class TestOneHot(unittest.TestCase):
             tn = torch.distributions.Normal(mu,sigma)
             assert np.allclose(jn.entropy().data,tn.entropy().numpy())
             x = np.random.uniform(-1,1)
-            np.testing.assert_allclose(jn.log_prob(x),tn.log_prob(torch.tensor(x)))
+            # jittor computes in float32, torch's ref in float64; the default
+            # assert_allclose(rtol=1e-7, atol=0) is below float32 precision (~1e-6) and
+            # flaked when log_prob landed near 0 / sigma near 0. Use a float32-appropriate
+            # tolerance (this is the underlying math, not a jittor bug).
+            np.testing.assert_allclose(jn.log_prob(x),tn.log_prob(torch.tensor(x)), rtol=1e-4, atol=1e-5)
             mu2 = np.random.uniform(-1,1)
             sigma2 = np.random.uniform(0,2)
             jn2 = jd.Normal(mu2,sigma2)
