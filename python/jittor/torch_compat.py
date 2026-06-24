@@ -700,6 +700,17 @@ def install(torch):
                     y = (y_hard - y).stop_grad() + y            # straight-through estimator
                 return y
             F.gumbel_softmax = _gumbel_softmax
+        if not hasattr(F, "rms_norm"):
+            # F.rms_norm (torch 2.4+): x / sqrt(mean(x^2, over last len(normalized_shape)
+            # dims) + eps) * weight. The norm modern LLMs (Llama/Qwen/Gemma) use.
+            def _rms_norm(input, normalized_shape, weight=None, eps=None):
+                if eps is None:
+                    eps = 1.1920929e-07                          # finfo(float32).eps, torch default
+                ndn = len(normalized_shape) if hasattr(normalized_shape, "__len__") else 1
+                dims = list(range(input.ndim - ndn, input.ndim))
+                out = input * (1.0 / jt.sqrt((input * input).mean(dims, keepdims=True) + eps))
+                return out * weight if weight is not None else out
+            F.rms_norm = _rms_norm
         if hasattr(nn, "layer_norm"): F.layer_norm = nn.layer_norm
         if hasattr(nn, "embedding"): F.embedding = nn.embedding
         nn.functional = F
@@ -3517,6 +3528,62 @@ def _install_misc(g, Var):
         return x.permute(order)
     _alias("movedim", _movedim)
     _alias("moveaxis", _movedim)
+    # Var.movedim/moveaxis (the functions exist but weren't bound as methods), plus
+    # index_put_/index_put (scatter-style assignment), tensor_split (uneven split), take.
+    Var.movedim = lambda self, source, destination: _movedim(self, source, destination)
+    Var.moveaxis = lambda self, source, destination: _movedim(self, source, destination)
+    def _index_put_(self, indices, values, accumulate=False):
+        idx = tuple(indices) if isinstance(indices, (tuple, list)) else (indices,)
+        if not accumulate:
+            self[idx if len(idx) > 1 else idx[0]] = values
+            return self
+        # accumulate=True must add ALL contributions at duplicate indices (a plain
+        # read-add-write keeps only the last). Route through index_add (dup-correct).
+        vals = values if isinstance(values, Var) else jt.array(values)
+        if len(idx) == self.ndim:                          # full advanced index -> linearize
+            shape = self.shape
+            strides = [1] * self.ndim
+            for k in range(self.ndim - 2, -1, -1):
+                strides[k] = strides[k + 1] * int(shape[k + 1])
+            lin = None
+            for k, ind in enumerate(idx):
+                term = (ind if isinstance(ind, Var) else jt.array(ind)).int64().reshape((-1,)) * strides[k]
+                lin = term if lin is None else lin + term
+            vflat = vals.reshape((-1,))
+            if int(vflat.shape[0]) == 1 and int(lin.shape[0]) > 1:
+                vflat = vflat.broadcast(lin.shape)
+            self.assign(self.reshape((-1,)).index_add(0, lin, vflat).reshape(shape))
+            return self
+        if len(idx) == 1:                                  # index along dim 0
+            i0 = (idx[0] if isinstance(idx[0], Var) else jt.array(idx[0])).int64().reshape((-1,))
+            self.assign(self.index_add(0, i0, vals))
+            return self
+        raise NotImplementedError("index_put_(accumulate=True) with a partial multi-dim index")
+    Var.index_put_ = _index_put_
+    Var.index_put = lambda self, indices, values, accumulate=False: _index_put_(self.clone(), indices, values, accumulate)
+    g.index_put = lambda input, indices, values, accumulate=False: _index_put_(input.clone(), indices, values, accumulate)
+    def _tensor_split(self, indices_or_sections, dim=0):
+        d = dim % self.ndim
+        L = int(self.shape[d])
+        def _slice(a, b):
+            ix = [slice(None)] * self.ndim; ix[d] = slice(a, b)
+            return self[tuple(ix)]
+        if isinstance(indices_or_sections, int):
+            n = indices_or_sections
+            base, rem = L // n, L % n
+            sizes = [base + 1] * rem + [base] * (n - rem)
+            out, start = [], 0
+            for s in sizes:
+                out.append(_slice(start, start + s)); start += s
+            return out
+        pts, out, prev = list(indices_or_sections), [], 0
+        for p in pts + [L]:
+            out.append(_slice(prev, p)); prev = p
+        return out
+    Var.tensor_split = _tensor_split
+    g.tensor_split = lambda input, indices_or_sections, dim=0: _tensor_split(input, indices_or_sections, dim)
+    Var.take = lambda self, index: self.reshape((-1,))[index]
+    g.take = lambda input, index: input.reshape((-1,))[index]
     # torch.eye(n, m=None, *, dtype=, ...): identity / rectangular-identity
     # matrix. jittor has no top-level eye (only jt.init.eye), so add one.
     def _eye(n, m=None, dtype=None, **k):
