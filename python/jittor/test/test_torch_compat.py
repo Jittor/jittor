@@ -174,5 +174,54 @@ for _i in range(5):
 ok(_l1 < _l0, "GradScaler train loop decreases loss")
 ok(_gs.get_scale() == 1024.0, "GradScaler scale stable without overflow")
 
+# --- ops/features added later (lock them in) ---
+# scatter family + cummax + new methods
+_b = torch.zeros(3, 4)
+ok(float(_b.scatter_add(0, torch.tensor([[0,1,2,0]]).int32(), torch.ones(1,4)).numpy().sum()) == 4.0, "scatter_add")
+ok(float(torch.zeros(3,4).scatter(0, torch.tensor([[0,1,2,0]]).int32(), 9.0).numpy().sum()) == 36.0, "scalar scatter")
+_cm = torch.tensor([1.,3.,3.,2.,5.]).cummax(dim=0)
+ok(_cm.values.numpy().tolist() == [1,3,3,3,5] and _cm.indices.numpy().tolist() == [0,1,1,1,4], "cummax values+indices")
+ok(np.allclose(torch.tensor([1.,2.,4.]).log_().numpy(), np.log([1.,2.,4.]), atol=1e-5), "in-place log_")
+ok(tuple(torch.tensor([1,2,3]).reshape_as(torch.zeros(3)).shape) == (3,), "reshape_as")
+ok(np.allclose(torch.tensor([[1.,5.],[2.,3.]]).var(dim=1).numpy(), [8.0, 0.5], atol=1e-5), "var unbiased")
+# complex API + FFT
+_c = torch.complex(torch.tensor([1.,2.]), torch.tensor([3.,4.]))
+ok(torch.is_complex(_c) and (_c*_c).real.numpy().tolist() == [-8.,-12.], "complex mul")
+_xf = np.random.RandomState(0).randn(8).astype("float32")
+ok(np.allclose(torch.fft.fft(torch.tensor(_xf)).real.numpy(), np.fft.fft(_xf).real, atol=1e-4), "fft vs numpy")
+ok(np.allclose(torch.fft.irfft(torch.fft.rfft(torch.tensor(_xf)), n=8).numpy(), _xf, atol=1e-4), "rfft/irfft roundtrip")
+# multi_head_attention_forward
+_q = jt.randn(4, 2, 8)
+_o, _w = torch.nn.functional.multi_head_attention_forward(
+    _q, _q, _q, 8, 2, jt.randn(24, 8), jt.zeros(24), None, None, False, 0.0,
+    jt.randn(8, 8), jt.zeros(8), False, need_weights=True)
+ok(tuple(_o.shape) == (4, 2, 8) and np.allclose(_w.numpy().sum(-1), 1, atol=1e-5), "multi_head_attention_forward")
+# torch.cuda memory reports real (non-zero after an allocation)
+_big = jt.randn(2000, 2000); _big.sync()
+ok(torch.cuda.memory_allocated() > 0, "torch.cuda.memory_allocated real")
+# model.save/load round-trip (was a RecursionError)
+import tempfile as _tf, os as _os
+_ml = torch.nn.Linear(4, 3); _w0 = _ml.weight.numpy().copy()
+_mp = _os.path.join(_tf.mkdtemp(), "m.pkl"); _ml.save(_mp)
+_ml2 = torch.nn.Linear(4, 3); _ml2.load(_mp)
+ok(_os.path.exists(_mp) and np.allclose(_ml2.weight.numpy(), _w0), "model.save/load round-trip")
+# jittor.lightning trains
+import jittor.lightning as _pl
+class _Lit(_pl.LightningModule):
+    def __init__(self): super().__init__(); self.net = torch.nn.Linear(4, 1)
+    def forward(self, x): return self.net(x)
+    def training_step(self, b, i): x, y = b; return ((self(x) - y) ** 2).mean()
+    def configure_optimizers(self): return torch.optim.Adam(self.parameters(), lr=0.1)
+_W = np.random.randn(4, 1).astype("float32")
+_data = [(jt.array(np.random.randn(8, 4).astype("float32")),) for _ in range(4)]
+_data = [(d[0], d[0] @ jt.array(_W)) for d in _data]
+_losses = []
+_lit = _Lit(); _orig = _lit.training_step
+_lit.training_step = lambda b, i: (_losses.append(float(_orig(b, i).item())) or _orig(b, i))
+_pl.Trainer(max_epochs=8).fit(_lit, train_dataloaders=_data)
+ok(_losses[-1] < _losses[0], "jittor.lightning Trainer trains (loss decreases)")
+
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
+import sys as _sys
+_sys.exit(1 if FAIL else 0)
 import sys; sys.exit(1 if FAIL else 0)
