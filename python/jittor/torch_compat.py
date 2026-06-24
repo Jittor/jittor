@@ -3658,6 +3658,20 @@ def _install_misc(g, Var):
         raise NotImplementedError("index_put_(accumulate=True) with a partial multi-dim index")
     Var.index_put_ = _index_put_
     Var.index_put = lambda self, indices, values, accumulate=False: _index_put_(self.clone(), indices, values, accumulate)
+    # index_copy_(dim, index, source): self[..,index[i],..] = source[i,..] along dim
+    # (overwrite, NOT accumulate -- cf. index_add).
+    def _index_copy_(self, dim, index, source):
+        d = dim % self.ndim
+        idx = index if isinstance(index, Var) else jt.array(index)
+        if d == 0:
+            self[idx] = source
+        else:
+            sl = [slice(None)] * self.ndim; sl[d] = idx
+            self[tuple(sl)] = source
+        return self
+    Var.index_copy_ = _index_copy_
+    Var.index_copy = lambda self, dim, index, source: _index_copy_(self.clone(), dim, index, source)
+    g.index_copy = lambda input, dim, index, source: _index_copy_(input.clone(), dim, index, source)
     g.index_put = lambda input, indices, values, accumulate=False: _index_put_(input.clone(), indices, values, accumulate)
     def _tensor_split(self, indices_or_sections, dim=0):
         d = dim % self.ndim

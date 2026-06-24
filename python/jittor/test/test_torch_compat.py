@@ -583,6 +583,14 @@ ok(abs(float(torch.nanmean(jt.array(_rxn)).item()) - float(np.nanmean(_rxn))) < 
 _amx = torch.aminmax(jt.array(_rx2))
 ok(abs(float(_amx.min.item()) - float(_rx2.min())) < 1e-5 and abs(float(_amx.max.item()) - float(_rx2.max())) < 1e-5, "torch.aminmax")
 ok(abs(float(torch.quantile(jt.array(_rx2), 0.5).item()) - float(np.quantile(_rx2, 0.5))) < 1e-4, "torch.quantile")
+# Var.index_copy_ (overwrite at indices) + scatter_reduce all modes (graph nets / MoE).
+_ica = jt.zeros((3, 4)); _ica.index_copy_(0, jt.array(np.array([0, 2], dtype="int64")), jt.ones((2, 4)) * 5)
+ok(float(_ica.sum().item()) == 40.0, "Var.index_copy_ (overwrite along dim)")
+_sidx = jt.array(np.array([0, 0, 1, 3, 3, 3], dtype="int64")); _ssrc = jt.array(np.array([2., 3., 5., 1., 2., 4.], dtype="float32"))
+ok(jt.zeros(5).scatter_reduce(0, _sidx, _ssrc, reduce="amax", include_self=False).numpy().tolist() == [3., 5., 0., 4., 0.],
+   "scatter_reduce amax (include_self=False)")
+ok([round(v, 4) for v in jt.zeros(5).scatter_reduce(0, _sidx, _ssrc, reduce="mean", include_self=False).numpy().tolist()] ==
+   [2.5, 5.0, 0.0, 2.3333, 0.0], "scatter_reduce mean")
 
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 import sys as _sys
