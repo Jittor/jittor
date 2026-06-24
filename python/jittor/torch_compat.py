@@ -1649,10 +1649,102 @@ def _install_nn_extras(nn):
                 x = x * _jt2.rsqrt(v + self.eps)
                 return x * self.weight if self.weight is not None else x
         nn.RMSNorm = RMSNorm
-    if not hasattr(nn, "MultiheadAttention"):
+    # nn.MultiheadAttention was an empty stub (no params, no execute -> raised
+    # NotImplementedError). Implement it over the existing functional
+    # multi_head_attention_forward. Plus nn.TransformerEncoderLayer/Encoder/
+    # DecoderLayer/Decoder/Transformer which build on it (used by some models and by
+    # users building transformers directly).
+    import jittor as _jtm
+    if (not hasattr(nn, "MultiheadAttention")) or not hasattr(nn.MultiheadAttention, "execute") \
+            or getattr(nn.MultiheadAttention.execute, "__qualname__", "").endswith("Module.execute"):
         class MultiheadAttention(nn.Module):
-            def __init__(self, *a, **k): super().__init__()
+            def __init__(self, embed_dim, num_heads, dropout=0.0, bias=True,
+                         add_bias_kv=False, add_zero_attn=False, kdim=None, vdim=None,
+                         batch_first=False, device=None, dtype=None):
+                super().__init__()
+                self.embed_dim = embed_dim
+                self.num_heads = num_heads
+                self.dropout = dropout
+                self.batch_first = batch_first
+                self.head_dim = embed_dim // num_heads
+                self.add_zero_attn = add_zero_attn
+                self.in_proj_weight = _jtm.init.invariant_uniform((3 * embed_dim, embed_dim), "float32")
+                self.in_proj_bias = _jtm.zeros((3 * embed_dim,)) if bias else None
+                self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
+                self.bias_k = _jtm.init.invariant_uniform((1, 1, embed_dim), "float32") if add_bias_kv else None
+                self.bias_v = _jtm.init.invariant_uniform((1, 1, embed_dim), "float32") if add_bias_kv else None
+
+            def execute(self, query, key, value, key_padding_mask=None, need_weights=True,
+                        attn_mask=None, average_attn_weights=True, is_causal=False):
+                if self.batch_first:
+                    query, key, value = query.transpose(0, 1), key.transpose(0, 1), value.transpose(0, 1)
+                out, w = nn.multi_head_attention_forward(
+                    query, key, value, self.embed_dim, self.num_heads,
+                    self.in_proj_weight, self.in_proj_bias, self.bias_k, self.bias_v,
+                    self.add_zero_attn, self.dropout if self.is_training() else 0.0,
+                    self.out_proj.weight, self.out_proj.bias, training=self.is_training(),
+                    key_padding_mask=key_padding_mask, need_weights=need_weights,
+                    attn_mask=attn_mask, average_attn_weights=average_attn_weights, is_causal=is_causal)
+                if self.batch_first:
+                    out = out.transpose(0, 1)
+                return out, w
         nn.MultiheadAttention = MultiheadAttention
+
+    def _act_fn(activation):
+        if callable(activation):
+            return activation
+        return {"relu": nn.relu, "gelu": nn.gelu}.get(activation, nn.relu)
+
+    if not hasattr(nn, "TransformerEncoderLayer"):
+        class TransformerEncoderLayer(nn.Module):
+            def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1,
+                         activation="relu", layer_norm_eps=1e-5, batch_first=False,
+                         norm_first=False, bias=True, device=None, dtype=None):
+                super().__init__()
+                self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout,
+                                                       batch_first=batch_first, bias=bias)
+                self.linear1 = nn.Linear(d_model, dim_feedforward, bias=bias)
+                self.linear2 = nn.Linear(dim_feedforward, d_model, bias=bias)
+                self.norm1 = nn.LayerNorm(d_model, eps=layer_norm_eps)
+                self.norm2 = nn.LayerNorm(d_model, eps=layer_norm_eps)
+                self.norm_first = norm_first
+                self.activation = _act_fn(activation)
+
+            def _sa(self, x, attn_mask, kpm, is_causal):
+                return self.self_attn(x, x, x, attn_mask=attn_mask, key_padding_mask=kpm,
+                                      need_weights=False, is_causal=is_causal)[0]
+
+            def _ff(self, x):
+                return self.linear2(self.activation(self.linear1(x)))
+
+            def execute(self, src, src_mask=None, src_key_padding_mask=None, is_causal=False):
+                x = src
+                if self.norm_first:
+                    x = x + self._sa(self.norm1(x), src_mask, src_key_padding_mask, is_causal)
+                    x = x + self._ff(self.norm2(x))
+                else:
+                    x = self.norm1(x + self._sa(x, src_mask, src_key_padding_mask, is_causal))
+                    x = self.norm2(x + self._ff(x))
+                return x
+        nn.TransformerEncoderLayer = TransformerEncoderLayer
+
+    if not hasattr(nn, "TransformerEncoder"):
+        import copy as _copy
+        class TransformerEncoder(nn.Module):
+            def __init__(self, encoder_layer, num_layers, norm=None, **kw):
+                super().__init__()
+                self.layers = nn.ModuleList([_copy.deepcopy(encoder_layer) for _ in range(num_layers)])
+                self.num_layers = num_layers
+                self.norm = norm
+
+            def execute(self, src, mask=None, src_key_padding_mask=None, is_causal=None):
+                out = src
+                for layer in self.layers:
+                    out = layer(out, src_mask=mask, src_key_padding_mask=src_key_padding_mask)
+                if self.norm is not None:
+                    out = self.norm(out)
+                return out
+        nn.TransformerEncoder = TransformerEncoder
 
     _install_module_methods(nn)
 

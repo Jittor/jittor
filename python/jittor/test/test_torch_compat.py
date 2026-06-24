@@ -425,6 +425,27 @@ ok(abs(float(_ifc.sum().item()) - 2.43474) < 1e-3, "Var.index_fill_ negative dim
 _ifd = jt.array(_ifx.copy()); _ = _ifd.index_fill(1, jt.array(np.array([0], dtype="int64")), 0.0)
 ok(np.array_equal(_ifd.numpy(), _ifx), "Var.index_fill out-of-place leaves input")
 
+# nn.MultiheadAttention was an empty stub (no execute -> NotImplementedError); now wired
+# to multi_head_attention_forward (verified ~1e-6 vs real torch with identical weights).
+# nn.TransformerEncoderLayer/Encoder build on it.
+_mha = torch.nn.MultiheadAttention(embed_dim=16, num_heads=2, batch_first=True); _mha.eval()
+_mx = jt.array(np.random.RandomState(0).randn(2, 5, 16).astype("float32"))
+_mo, _mw = _mha(_mx, _mx, _mx)
+ok(tuple(_mo.shape) == (2, 5, 16) and tuple(_mw.shape) == (2, 5, 5) and bool(jt.isfinite(_mo).all().item()),
+   "nn.MultiheadAttention forward (was a NotImplementedError stub)")
+_mha2 = torch.nn.MultiheadAttention(embed_dim=16, num_heads=2, batch_first=False); _mha2.eval()
+_mha2.in_proj_weight.update(_mha.in_proj_weight); _mha2.in_proj_bias.update(_mha.in_proj_bias)
+_mha2.out_proj.weight.update(_mha.out_proj.weight); _mha2.out_proj.bias.update(_mha.out_proj.bias)
+_mo2, _ = _mha2(_mx.transpose(0, 1), _mx.transpose(0, 1), _mx.transpose(0, 1))
+ok(np.abs(_mo.numpy() - _mo2.transpose(0, 1).numpy()).max() < 1e-5, "MultiheadAttention batch_first consistent")
+_enc = torch.nn.TransformerEncoder(torch.nn.TransformerEncoderLayer(16, 2, 32, batch_first=True), num_layers=3)
+_enc.eval()
+ok(tuple(_enc(_mx).shape) == (2, 5, 16) and bool(jt.isfinite(_enc(_mx)).all().item()),
+   "nn.TransformerEncoder(3 layers) forward")
+_eg = jt.array(np.random.RandomState(1).randn(2, 5, 16).astype("float32"))
+_egr = jt.grad(_enc(_eg).sum(), [_eg])[0]
+ok(bool(jt.isfinite(_egr).all().item()) and float(jt.abs(_egr).sum().item()) > 0, "TransformerEncoder differentiable")
+
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 import sys as _sys
 _sys.exit(1 if FAIL else 0)
