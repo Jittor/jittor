@@ -178,6 +178,44 @@ instead of the old "Wrong inputs arguments / help(jt.sync)" noise. Unsupported
 dtypes (e.g. float64 on Ascend) raise a clean Python error instead of aborting;
 set `JT_SYNC=1` to pinpoint an async op failure.
 
+## torch API coverage (verified vs real PyTorch 2.12)
+
+Every entry below is checked **bit-for-bit (or to ~1e-6) against real PyTorch with
+identical inputs/weights, on both CPU/CUDA**, and locked in regression suites
+(`test/test_torch_compat.py` ~140 checks, `test/test_torch_linalg.py`,
+`test/test_distributions.py`, `test/test_torch_hf_models.py`, `test/test_peft.py`,
+`test/test_diffusers.py`).
+
+- **Attention / transformers:** `F.scaled_dot_product_attention` (plain/causal/bool-mask/
+  scale/GQA, fwd+bwd), `F.multi_head_attention_forward`, `nn.MultiheadAttention`,
+  `nn.TransformerEncoderLayer`/`TransformerEncoder`/`TransformerDecoderLayer`/
+  `TransformerDecoder`/`Transformer` (pre/post-norm, `generate_square_subsequent_mask`).
+- **Recurrent:** `nn.LSTM`/`GRU`/`RNN` (+ Cells) — forward bit-matches torch (gate order
+  i/f/g/o), `batch_first` output correctly `(batch,seq,hidden)`, bidirectional, `h_n`/`c_n`.
+- **Norms / activations:** `F.rms_norm` (Llama/Qwen), `group_norm`/`batch_norm`/
+  `instance_norm`/`layer_norm`, `silu`/`mish`/`hardswish`/`hardsigmoid`/`glu`/`elu`/
+  `selu`/`celu`/`softplus`/`tanhshrink`/`softmin`/`threshold`.
+- **Losses:** `cross_entropy` (+ `label_smoothing`/`weight`/`ignore_index`), `kl_div`
+  (distillation, `batchmean`), `ctc_loss` (speech ASR, the CTC forward DP),
+  `F.logsigmoid` (DPO/RLHF), `binary_cross_entropy`(_with_logits), `huber_loss`,
+  `cosine_embedding_loss`, `margin_ranking_loss`, `triplet_margin_loss`,
+  `gaussian_nll_loss`, `poisson_nll_loss`, mse/l1/smooth_l1, + `nn.*Loss` class forms.
+- **`torch.distributions`:** `Categorical` (logits=softmax, differentiable — fixes a
+  silent sigmoid bug that broke PPO), `Normal`, `Bernoulli`, `Exponential`, `Uniform`,
+  `Geometric`, `Independent`, `OneHotCategorical`, `kl_divergence`, `Distribution` base.
+- **`torch.linalg`:** `svd` (`full_matrices`, named `(U,S,Vh)`), `svdvals`, `inv`,
+  `solve`, `cholesky`, `det`/`slogdet`, `eigh`/`eigvalsh`/`eigvals`, `qr`, `pinv`,
+  `matrix_rank`, `multi_dot`, `lstsq`, `norm`/`matrix_norm` (CUDA svd/eigh need `cupy`).
+- **`torch.func`:** `functional_call`, `grad`/`grad_and_value`, `vmap`, `jacrev`,
+  `stack_module_state` (LoRA / meta-learning / ensembling).
+- **Ops / methods:** `einsum`, `take_along_dim` (broadcasting), `roll` (incl. negative
+  dims / flatten), `cumprod` (sign-aware), `index_fill_`, `index_put_` (dup-accumulate),
+  `movedim`/`tensor_split`/`take`, `cdist`, `bucketize`, `searchsorted`, `pixel_shuffle`/
+  `pixel_unshuffle`, `gumbel_softmax`, `interpolate`, `grid_sample`, `all`/`any`(`axis=`).
+- **`nn.utils`:** `weight_norm`/`spectral_norm` (real reparametrizations), `clip_grad_*`,
+  `rnn.pad_sequence`; `torch.optim.lr_scheduler` (LambdaLR/Linear/Cosine/Step/MultiStep/
+  Exponential/Polynomial/Constant/Sequential/ReduceLROnPlateau).
+
 ## Status / limitations
 
 Done + verified on both backends: forward/backward/training accuracy parity across
