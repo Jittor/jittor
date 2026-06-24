@@ -186,7 +186,12 @@ reporting, complex numbers + `torch.fft.*`, `F.multi_head_attention_forward`,
 bit-identical to real torch), `nn.utils.weight_norm`/`spectral_norm` (real
 reparametrizations — `weight`→`weight_g`/`weight_v` recomputed before forward, and
 `weight`/σ via power iteration; verified vs real torch + `np.linalg.svd`) and
-`nn.utils.rnn.pad_sequence`, a Lightning-style training core, and clear errors. The torch op surface is broad — verified
+`nn.utils.rnn.pad_sequence`, a torch-compatible `torch.optim.lr_scheduler`
+(LambdaLR/LinearLR/CosineAnnealingLR/StepLR/MultiStepLR/ExponentialLR/PolynomialLR/
+ConstantLR/SequentialLR/ReduceLROnPlateau — single source on BOTH the `import jittor as
+torch` and deployed-shim paths; the HF `get_*_schedule_with_warmup` helpers wrap
+LambdaLR and produce the exact torch curve), a Lightning-style training core, and clear
+errors. The torch op surface is broad — verified
 by an op-level differential battery (`op_parity.py`: ~84 ops vs real torch, plus a
 backward battery) on **both** Ascend and CUDA.
 
