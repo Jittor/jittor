@@ -63,8 +63,47 @@ try:
                           ("calculate_gain", _calculate_gain)]:
         if not hasattr(_init, _fn_name):
             setattr(_init, _fn_name, _fn)
-    nn.init = _init
-    sys.modules["torch.nn.init"] = _init
+    # torch.nn.init is jittor.nn.init, which IS the `init` module-global that jittor's
+    # own Conv/Linear/...__init__ use to build weights/bias (`init.uniform(...)`, etc.).
+    # transformers/diffusers `no_init_weights()` does setattr(torch.nn.init, name,
+    # _skip_init) for every name in their TORCH_INIT_FUNCTIONS list -- which includes
+    # jittor's own init names ("uniform", "normal", "kaiming_uniform", ...). Because
+    # torch.nn IS jittor.nn, that mutation nulls jittor's real init fns -> jittor's own
+    # construction gets weight/bias = None -> 'NoneType' has no attribute 'shape' during
+    # diffusers/transformers from_pretrained (low_cpu_mem_usage / meta fast path).
+    #
+    # Fix: back torch.nn.init with a module whose __setattr__ REFUSES to null its init
+    # callables. no_init_weights is purely a load-speed optimization ("globally disable
+    # weight initialization to speed up loading"); letting init run is harmless because
+    # from_pretrained overwrites every parameter from the checkpoint right after. So we
+    # keep jittor's construction init intact (correctness + no crash) at the cost of not
+    # skipping the redundant init. Real init fns can still be REPLACED with other real
+    # callables (legitimate monkeypatching); only the null-ing skip-stub is dropped.
+    import types as _types_init
+    class _GuardedInit(_types_init.ModuleType):
+        _protected = set()
+        def __setattr__(self, k, v):
+            if k in self._protected:
+                # drop a non-callable / no-op skip stub that would break jittor's own
+                # Conv/Linear construction; allow real callables through.
+                nm = getattr(v, "__name__", "")
+                if (not callable(v)) or nm in ("_skip_init", "skip_init", "<lambda>"):
+                    return
+            object.__setattr__(self, k, v)
+    _torch_init = _GuardedInit("torch.nn.init")
+    _prot = set()
+    for _k in dir(_init):
+        if not _k.startswith("__"):
+            try:
+                _v = getattr(_init, _k)
+                object.__setattr__(_torch_init, _k, _v)
+                if callable(_v):
+                    _prot.add(_k)
+            except Exception:
+                pass
+    object.__setattr__(_torch_init, "_protected", _prot)
+    nn.init = _torch_init
+    sys.modules["torch.nn.init"] = _torch_init
 except Exception:
     pass
 

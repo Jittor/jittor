@@ -1254,6 +1254,35 @@ class _RemovableHandle:
         self.remove()
         return False
 
+class _WriteThroughDict(dict):
+    ''' A dict view of a Module's Var attributes whose item-assignment writes back
+    to the owning module. jittor's ``_parameters``/``_buffers`` are properties that
+    build a fresh dict each access, so torch/accelerate's idiom
+    ``module._parameters[name] = value`` (used by accelerate's
+    set_module_tensor_to_device on the from_pretrained meta/low_cpu_mem_usage fast
+    path) would write into a throwaway dict and be LOST -> the model keeps its
+    construction-time weights instead of the checkpoint's. Writing through to
+    ``setattr(owner, name, value)`` makes the assignment actually take effect. '''
+    def __init__(self, owner, items):
+        super().__init__(items)
+        object.__setattr__(self, "_owner", owner)
+    def __setitem__(self, k, v):
+        super().__setitem__(k, v)
+        # Preserve the buffer/persistent classification of the attribute being
+        # replaced, so a registered buffer stays a buffer (not reclassified as a
+        # trainable parameter) when accelerate reassigns it from the checkpoint.
+        old = getattr(self._owner, k, None)
+        if old is not None and isinstance(v, Var):
+            for _flag in ("is_buffer", "persistent"):
+                if hasattr(old, _flag):
+                    try: setattr(v, _flag, getattr(old, _flag))
+                    except Exception: pass
+        object.__setattr__(self._owner, k, v)
+    def __delitem__(self, k):
+        super().__delitem__(k)
+        if hasattr(self._owner, k):
+            object.__delattr__(self._owner, k)
+
 class Module:
     def __init__(self, *args, **kw):
         pass
@@ -1518,7 +1547,8 @@ class Module:
 
     @property
     def _parameters(self):
-        return { k:v for k,v in self.__dict__.items() if isinstance(v, Var) }
+        # write-through so accelerate's `module._parameters[name] = value` persists
+        return _WriteThroughDict(self, { k:v for k,v in self.__dict__.items() if isinstance(v, Var) })
 
     def requires_grad_(self, requires_grad=True):
         ''' Sets requires_grad for all parameters and sub-modules. '''
@@ -1873,7 +1903,9 @@ Arguments of hook are defined as::
         for k,v in self.__dict__.items():
             if isinstance(v, jt.Var):
                 buffers[k] = v
-        return buffers
+        # write-through so accelerate's `module._buffers[name] = value` (the is_buffer
+        # branch of set_module_tensor_to_device) persists to the module attribute.
+        return _WriteThroughDict(self, buffers)
     
     def named_buffers(self, recurse=True):
         ''' Returns a list of (name, buffer) for all registered buffers.

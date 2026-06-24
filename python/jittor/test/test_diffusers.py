@@ -3,8 +3,9 @@
 # building blocks (UNet2DModel, AutoencoderKL, a DDIM denoising loop) through
 # `import torch` -> jittor. These were validated to match real torch ~1e-6 (forward
 # 1.1e-6, backward 1.45e-6, denoising loop 3.1e-5, VAE 1.43e-6); this guards against
-# regressions of the diffusers GENERATION path (loading real checkpoints via
-# from_pretrained is a separate, tracked limitation -- see ALL_TODO.md).
+# regressions of the diffusers GENERATION path AND the from_pretrained checkpoint
+# roundtrip (the accelerate meta / low_cpu_mem_usage fast path now reloads exact
+# weights -- see test_unet_from_pretrained_roundtrip).
 #
 #   export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 #   /home/yizhang/miniconda3/envs/jt-torch/bin/python -m jittor.test.test_diffusers
@@ -79,6 +80,28 @@ class TestDiffusers(unittest.TestCase):
         out = s.float().numpy()
         self.assertEqual(out.shape, (1, 3, 16, 16))
         self.assertTrue(np.isfinite(out).all(), "denoised sample non-finite")
+
+    def test_unet_from_pretrained_roundtrip(self):
+        # save_pretrained -> from_pretrained must reload EXACT weights through
+        # accelerate's meta / low_cpu_mem_usage fast path (init_empty_weights +
+        # no_init_weights + set_module_tensor_to_device). Previously broken two ways:
+        # no_init_weights nulled jittor's construction init (crash), and accelerate's
+        # `module._parameters[name]=value` assignment was lost (silent wrong weights).
+        # Now fixed (guarded init + write-through _parameters/_buffers).
+        import tempfile
+        m = _unet(); m.eval()
+        x = torch.tensor(np.random.RandomState(4).randn(1, 3, 16, 16).astype('float32'))
+        t = torch.tensor(np.array([5]).astype('int64'))
+        with torch.no_grad():
+            ref = m(x, t).sample.float().numpy()
+        d = tempfile.mkdtemp(); m.save_pretrained(d)
+        for low_cpu in (True, False):   # meta fast path AND the plain path
+            m2 = UNet2DModel.from_pretrained(d, low_cpu_mem_usage=low_cpu); m2.eval()
+            with torch.no_grad():
+                got = m2(x, t).sample.float().numpy()
+            self.assertTrue(np.allclose(got, ref, atol=1e-5),
+                            f"from_pretrained(low_cpu_mem_usage={low_cpu}) reloaded wrong weights "
+                            f"(max-diff {np.abs(got - ref).max():.4g})")
 
 
 if __name__ == '__main__':
