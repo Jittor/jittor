@@ -1109,6 +1109,30 @@ for _name in ("svd", "qr", "inv", "pinv", "det", "slogdet", "solve",
               "cholesky", "eig", "eigh"):
     setattr(_linalg, _name, _linalg_forward(_name))
 
+# torch.linalg.svd: jittor's svd is the REDUCED form and already returns Vh (A = U @
+# diag(S) @ Vh), i.e. it equals torch's full_matrices=False. But (a) it rejects the
+# `full_matrices=` kwarg (-> TypeError on the common `torch.linalg.svd(A)` call, whose
+# default is full_matrices=True), and (b) torch returns a named tuple (U, S, Vh). Wrap
+# it: keep jittor's differentiable path for full_matrices=False and for square inputs
+# (reduced==full there); for full_matrices=True on a NON-square matrix fall back to numpy
+# for torch-correct full U/Vh shapes. jt.linalg.svd itself is left untouched (jittor-
+# native callers rely on its signature).
+if _jt_linalg is not None and hasattr(_jt_linalg, "svd"):
+    import collections as _coll_la
+    _SVD = _coll_la.namedtuple("svd", ["U", "S", "Vh"])
+    def _svd(A, full_matrices=True, driver=None, out=None):
+        import numpy as _np
+        m, n = _builtins.int(A.shape[-2]), _builtins.int(A.shape[-1])
+        if (not full_matrices) or m == n:
+            U, S, Vh = _jt_linalg.svd(A)
+            return _SVD(U, S, Vh)
+        Un, Sn, Vhn = _np.linalg.svd(A.numpy(), full_matrices=True)
+        return _SVD(_jt.array(Un), _jt.array(Sn), _jt.array(Vhn))
+    _linalg.svd = _svd
+    def _svdvals(A, driver=None):
+        return _jt_linalg.svd(A)[1]
+    _linalg.svdvals = _svdvals
+
 def _linalg_norm(input, ord=None, dim=None, keepdim=False, **k):
     import numpy as _np
     arr = input.numpy() if hasattr(input, "numpy") else _np.asarray(input)
@@ -1149,10 +1173,36 @@ _linalg.vector_norm = _linalg_vector_norm
 _linalg.matrix_norm = _linalg_matrix_norm
 _linalg.matrix_power = _linalg_matrix_power
 _linalg.cross = _linalg_cross
+# Real implementations for several "missing" linalg ops (back with jittor where it has a
+# differentiable primitive, else numpy for torch-correct results).
+if _jt_linalg is not None:
+    if hasattr(_jt_linalg, "eigh"):
+        _linalg.eigvalsh = lambda A, UPLO="L": _jt_linalg.eigh(A)[0]   # symmetric eigenvalues
+    def _matrix_rank(A, tol=None, hermitian=False, **k):
+        import numpy as _np
+        return _jt.array(_np.linalg.matrix_rank(A.numpy() if hasattr(A, "numpy") else _np.asarray(A), tol=tol))
+    _linalg.matrix_rank = _matrix_rank
+    def _multi_dot(tensors, **k):
+        out = tensors[0]
+        for t in tensors[1:]:
+            out = _jt.matmul(out, t)
+        return out
+    _linalg.multi_dot = _multi_dot
+    def _eigvals(A, **k):
+        import numpy as _np
+        w = _np.linalg.eigvals(A.numpy() if hasattr(A, "numpy") else _np.asarray(A))
+        return _jt.array(w.real.astype("float32")) if _np.allclose(w.imag, 0) else _jt.array(w.astype("complex64"))
+    _linalg.eigvals = _eigvals
+    def _lstsq(A, B, rcond=None, driver=None, **k):
+        import numpy as _np
+        sol, res, rnk, sv = _np.linalg.lstsq(A.numpy(), B.numpy(), rcond=rcond)
+        _LSTSQ = __import__("collections").namedtuple("lstsq", ["solution", "residuals", "rank", "singular_values"])
+        return _LSTSQ(_jt.array(sol), _jt.array(res), _jt.array(rnk), _jt.array(sv))
+    _linalg.lstsq = _lstsq
+
 # explicitly-missing ops: clear NotImplementedError instead of AttributeError
-for _name in ("lstsq", "eigvals", "eigvalsh", "matrix_rank", "multi_dot",
-              "tensorinv", "tensorsolve", "lu", "lu_factor", "ldl_factor",
-              "cond", "svdvals", "householder_product", "solve_triangular"):
+for _name in ("tensorinv", "tensorsolve", "lu", "lu_factor", "ldl_factor",
+              "cond", "householder_product", "solve_triangular"):
     setattr(_linalg, _name, _linalg_forward(_name))
 sys.modules["torch.linalg"] = _linalg
 globals()["linalg"] = _linalg
