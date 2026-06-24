@@ -1170,6 +1170,12 @@ def _wrap_constructors(g):
             if "size" in kwargs and not args:
                 sz = kwargs.pop("size")
                 args = (tuple(sz),) if hasattr(sz, "__len__") else (sz,)
+            # torch.full(size, fill_value=...) / full_like(input, fill_value=...):
+            # jittor's full(shape, val) / full_like(x, val) take the value as the 2nd
+            # positional. transformers' beam scorer passes fill_value= as a keyword, so
+            # map it onto the next positional slot (only full/full_like ever get it).
+            if "fill_value" in kwargs:
+                args = tuple(args) + (kwargs.pop("fill_value"),)
             if "dtype" in kwargs and kwargs["dtype"] is not None:
                 kwargs["dtype"] = _dtype_to_str(kwargs["dtype"])
             return orig(*args, **kwargs)
@@ -3087,10 +3093,47 @@ def _install_misc(g, Var):
     _alias("lerp", lambda input, end, weight: input + weight * (end - input))
     _alias("isclose", lambda a, b, rtol=1e-5, atol=1e-8, equal_nan=False, **k:
            jt.abs(a - b) <= (atol + rtol * jt.abs(b)))
-    # torch.take_along_dim(input, indices, dim) == gather along dim (None -> flattened)
-    _alias("take_along_dim", lambda input, indices, dim=None:
-           jt.gather(input, dim, indices) if dim is not None
-           else jt.gather(input.reshape(-1), 0, indices.reshape(-1)))
+    # torch.take_along_dim(input, indices, dim): like gather, but torch BROADCASTS
+    # indices against input on every dim except `dim` first. transformers' beam search
+    # _gather_beams passes indices of shape (batch, k, 1) to gather full sequences of
+    # shape (batch, beams, seq_len) along dim=1 -> expects (batch, k, seq_len). A plain
+    # jt.gather returns the index's shape (batch, k, 1), collapsing seq_len -> beam
+    # search crashed on the next `seq[:, :, cur_len] = ...` setitem. Broadcast first.
+    def _take_along_dim(input, indices, dim=None):
+        if dim is None:
+            return jt.gather(input.reshape(-1), 0, indices.reshape(-1))
+        nd = input.ndim
+        d = dim % nd
+        target = list(input.shape)
+        target[d] = indices.shape[d]            # keep index extent along the gather dim
+        if list(indices.shape) != target:
+            indices = jt.broadcast(indices, target)   # broadcast size-1 dims to input
+        return jt.gather(input, d, indices)
+    _alias("take_along_dim", _take_along_dim)
+    # torch.all/any accept numpy-style axis=/keepdims= aliases (transformers' beam
+    # search _update_finished_beams: torch.all(x, axis=-1, keepdims=True)). jittor's
+    # native all/any take only `dim` and have no keepdims. Wrap to accept both spellings
+    # (dim/axis, keepdim/keepdims) while staying backward-compatible with all(x)/all(x,d).
+    def _reduce_alias(orig):
+        def f(input, dim=None, keepdim=False, *, axis=None, keepdims=None, out=None):
+            d = axis if axis is not None else dim
+            kd = keepdims if keepdims is not None else keepdim
+            if d is None or d == ():
+                return orig(input)
+            r = orig(input, d)
+            if kd:
+                dims = (d,) if isinstance(d, int) else tuple(d)
+                nd = input.ndim
+                for dd in sorted(x % nd for x in dims):
+                    r = r.unsqueeze(dd)
+            return r
+        return f
+    _orig_all = getattr(g, "all", None)
+    _orig_any = getattr(g, "any", None)
+    if callable(_orig_all):
+        g.all = _reduce_alias(_orig_all)
+    if callable(_orig_any):
+        g.any = _reduce_alias(_orig_any)
     def _movedim(x, source, destination):
         nd = x.ndim
         src = [s % nd for s in (source if isinstance(source, (list, tuple)) else [source])]

@@ -129,8 +129,12 @@ match to ~1e-6 across ~30 `transformers` architectures and the CNN/diffusers sta
 
 Real end-to-end training works: `transformers.Trainer` fine-tunes (loss decreases,
 `grad_norm`/`clip_grad_norm_` apply), and CNNs train (every conv weight updates).
-A regression suite covers ~30 architectures (`jittor.test.test_torch_hf_models`) and
-the diffusers generation path (`jittor.test.test_diffusers`).
+Real end-to-end **inference** works too: `model.generate()` runs **greedy** (KV-cached
+decode is bit-identical to a from-scratch recompute — the cache is correct), **beam
+search**, **sampling** (temperature/top-k/top-p) and **batched** generation.
+A regression suite covers ~30 architectures (`jittor.test.test_torch_hf_models`,
+incl. a `generate()` greedy/beam/sampling test) and the diffusers generation path
+(`jittor.test.test_diffusers`).
 
 `jittor.models` provides the CNN classics plus a modern **Vision Transformer**
 (`vit_b_16`/`vit_b_32`/`vit_l_16`). LLMs/diffusion models come from
