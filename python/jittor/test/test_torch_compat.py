@@ -275,6 +275,36 @@ ok(float(_wt.weight.numpy().sum()) == 12.0, "_parameters[name]=v write-through p
 ok(float(_wt.rm.numpy().sum()) == 3.0, "_buffers[name]=v write-through persists")
 ok("rm" not in _wtp and "weight" in _wtp, "write-through preserves buffer/param classification")
 
+# F.scaled_dot_product_attention (SDPA) — the default attention in transformers 5.x.
+# Verify forward against a softmax(QK^T/sqrt(d))V reference (plain/causal/bool-mask/
+# scale) and backward against a numeric gradient. Subtle spots: bool-mask semantics
+# (True=keep, not inverted) and the scale override.
+_sdpa = torch.nn.functional.scaled_dot_product_attention
+np.random.seed(7)
+_q = np.random.randn(1, 2, 4, 8).astype("float32"); _k = np.random.randn(1, 2, 4, 8).astype("float32")
+_v = np.random.randn(1, 2, 4, 8).astype("float32")
+def _ref_sdpa(q, k, v, causal=False, bmask=None, scale=None):
+    sc = scale if scale is not None else 1.0 / np.sqrt(q.shape[-1])
+    s = (q @ np.transpose(k, (0, 1, 3, 2))) * sc
+    if causal:
+        s = np.where(np.triu(np.ones((4, 4)), 1).astype(bool), -1e30, s)
+    if bmask is not None:
+        s = np.where(bmask, s, -1e30)
+    s = s - s.max(-1, keepdims=True); e = np.exp(s)
+    return (e / e.sum(-1, keepdims=True)) @ v
+ok(np.abs(_sdpa(jt.array(_q), jt.array(_k), jt.array(_v)).numpy() - _ref_sdpa(_q, _k, _v)).max() < 1e-5,
+   "SDPA forward (plain)")
+ok(np.abs(_sdpa(jt.array(_q), jt.array(_k), jt.array(_v), is_causal=True).numpy() - _ref_sdpa(_q, _k, _v, causal=True)).max() < 1e-5,
+   "SDPA forward (causal)")
+_bm = np.tril(np.ones((4, 4))).astype(bool)[None, None].repeat(2, 1)
+ok(np.abs(_sdpa(jt.array(_q), jt.array(_k), jt.array(_v), attn_mask=jt.array(_bm)).numpy() - _ref_sdpa(_q, _k, _v, bmask=_bm)).max() < 1e-5,
+   "SDPA forward (bool mask: True=keep)")
+ok(np.abs(_sdpa(jt.array(_q), jt.array(_k), jt.array(_v), scale=0.25).numpy() - _ref_sdpa(_q, _k, _v, scale=0.25)).max() < 1e-5,
+   "SDPA forward (scale override)")
+_qv, _kv, _vv = jt.array(_q), jt.array(_k), jt.array(_v)
+_gq = jt.grad((_sdpa(_qv, _kv, _vv, is_causal=True) ** 2).sum(), [_qv])[0]
+ok(bool(jt.isfinite(_gq).all().item()) and float(jt.abs(_gq).sum().item()) > 0, "SDPA backward grad finite+nonzero")
+
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 import sys as _sys
 _sys.exit(1 if FAIL else 0)
