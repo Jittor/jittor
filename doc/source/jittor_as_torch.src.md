@@ -190,21 +190,25 @@ reparametrizations — `weight`→`weight_g`/`weight_v` recomputed before forwar
 by an op-level differential battery (`op_parity.py`: ~84 ops vs real torch, plus a
 backward battery) on **both** Ascend and CUDA.
 
-Known limitation — **loading *pretrained* checkpoints via `from_pretrained` for
-models that use accelerate's fast path** (diffusers, and transformers with
-`low_cpu_mem_usage=True`): accelerate constructs parameters on a `meta` device then
-fills each via `set_module_tensor_to_device`, which jittor doesn't yet emulate
-(jittor params are real, not meta, so some get skipped → wrong weights). Workaround:
-`from_config`/explicit construction works, and a name-keyed `safetensors`/`torch.load`
-state-dict loads correctly; full `from_pretrained` for these models needs jittor
-meta-device parameter emulation (tracked).
+**Loading *pretrained* checkpoints via `from_pretrained`** — including the accelerate
+fast path (diffusers, and transformers with `low_cpu_mem_usage=True`, which is the
+default) — now works and reloads **exact** weights. accelerate constructs the model
+under `init_empty_weights()` + `no_init_weights()` then fills each parameter via
+`set_module_tensor_to_device`; jittor doesn't use a `meta` device but two fixes make
+this path correct: (1) `torch.nn.init` is guarded so `no_init_weights()` can't null
+jittor's own construction init, and (2) `Module._parameters`/`_buffers` are
+write-through so accelerate's `module._parameters[name] = value` assignment actually
+persists (and keeps the param/buffer classification). Verified: a diffusers
+`UNet2DModel` save→`from_pretrained`→forward roundtrip matches to 0.0 on both the
+meta and plain paths (`test_diffusers.test_unet_from_pretrained_roundtrip`), and a
+transformers `BertModel` roundtrip matches to 0.0.
 
-A second known limitation — **numpy 2.x**: the data-marshalling ABI fix landed (op
+A known limitation — **numpy 2.x**: the data-marshalling ABI fix landed (op
 *values* are correct under numpy 2.x), but a separate flaky heap-corruption crash under
 load remains (needs memory-debugging tooling to pin); **use numpy < 2** for now. Python
 3.13 ships numpy 2.x, so the same guidance applies there.
 
-In progress (deeper/core): a native complex `Var` dtype, meta-device emulation, PP/TP,
+In progress (deeper/core): a native complex `Var` dtype, PP/TP,
 memory-manager tuning, cuDNN9, full pypi-based CUDA/cuDNN dependency resolution, the
 remaining Lightning surface (DDP/precision/loggers), the numpy-2.x stability fix, and
 triton/tilelang custom-op support.

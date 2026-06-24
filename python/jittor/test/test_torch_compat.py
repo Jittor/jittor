@@ -261,6 +261,20 @@ ok(abs(_sig - np.linalg.svd(_Wl, compute_uv=False)[0]) < 1e-3, "spectral_norm si
 _pad = torch.nn.utils.rnn.pad_sequence([jt.ones(3, 2), jt.ones(1, 2) * 2, jt.ones(2, 2) * 3], batch_first=True)
 ok(tuple(_pad.shape) == (3, 3, 2) and _pad.numpy()[1, 1, 0] == 0.0, "rnn.pad_sequence pads ragged batch")
 
+# Write-through _parameters/_buffers: accelerate's set_module_tensor_to_device (the
+# from_pretrained meta / low_cpu_mem_usage fast path used by diffusers + transformers)
+# assigns via `module._parameters[name] = value` / `module._buffers[name] = value`.
+# jittor's properties build a fresh dict per access, so without write-through the
+# assignment is lost -> loaded weights silently ignored (model keeps construction
+# weights). Verify the idiom persists and preserves param/buffer classification.
+_wt = torch.nn.Linear(4, 3); _wt.register_buffer("rm", jt.zeros(3))
+_wt._parameters["weight"] = jt.array(np.ones((3, 4), "float32"))
+_wt._buffers["rm"] = jt.ones(3)
+_wtp = [p.name() for p in _wt.parameters()]
+ok(float(_wt.weight.numpy().sum()) == 12.0, "_parameters[name]=v write-through persists")
+ok(float(_wt.rm.numpy().sum()) == 3.0, "_buffers[name]=v write-through persists")
+ok("rm" not in _wtp and "weight" in _wtp, "write-through preserves buffer/param classification")
+
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 import sys as _sys
 _sys.exit(1 if FAIL else 0)
