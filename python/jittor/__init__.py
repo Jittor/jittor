@@ -1762,6 +1762,11 @@ Arguments of hook are defined as::
             >>> net.load('net.pkl')
         '''
         params = self.state_dict()
+        # Convert Vars to numpy before pickling. Pickling jittor Vars directly recurses
+        # under the torch-compat layer (the Parameter/.grad bridge creates a reference
+        # cycle), so model.save() RecursionError'd on torch-as-jittor. numpy values are
+        # portable and load_state_dict/load() restore them; a fresh dict, model untouched.
+        params = {k: (v.numpy() if isinstance(v, Var) else v) for k, v in params.items()}
         safepickle(params, path)
 
     def load(self, path: str):
