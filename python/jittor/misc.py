@@ -1664,6 +1664,10 @@ Example::
 
     '''
     shape = index.shape
+    # torch allows a SCALAR src: scatter(x, dim, index, value) fills the indexed
+    # positions with a constant (e.g. phimoe masks logits with torch.scatter(.., -inf)).
+    if not isinstance(src, jt.Var):
+        src = jt.array(src).cast(x.dtype).broadcast(shape)
     if src.shape != shape and src.numel() != 1:
         src = src[tuple( slice(None,s) for s in shape )]
     indexes = [ f'i{i}' for i in range(len(shape)) ]
