@@ -3816,6 +3816,22 @@ def _install_misc(g, Var):
         jj = [j for i in range(N) for j in range(i + 1, N)]
         return d[jt.array(ii), jt.array(jj)]
     _alias("pdist", _pdist)
+    # element-wise ops: copysign / xlogy / heaviside / float_power / signbit.
+    def _copysign(input, other):
+        s = (other >= 0).float32() * 2 - 1                 # +1 where other>=0 (incl +0), -1 else
+        return jt.abs(input) * s
+    _alias("copysign", _copysign); Var.copysign = _copysign
+    def _xlogy(input, other):
+        return jt.ternary(input == 0, jt.zeros_like(input), input * jt.log(other))  # xlogy(0,y)=0
+    _alias("xlogy", _xlogy); Var.xlogy = _xlogy
+    def _heaviside(input, values):
+        return (input > 0).float32() + (input == 0).float32() * values
+    _alias("heaviside", _heaviside); Var.heaviside = _heaviside
+    def _float_power(input, exponent):
+        b = exponent.float64() if isinstance(exponent, Var) else exponent
+        return (input.float64() ** b)
+    _alias("float_power", _float_power); Var.float_power = _float_power
+    _alias("signbit", lambda input: input < 0); Var.signbit = lambda self: self < 0
     _alias("square", lambda x: x * x)   # torch.square (jittor only had jt.sqr); persimmon
     # torch.addmm(input, mat1, mat2, *, beta=1, alpha=1):
     #   out = beta * input + alpha * (mat1 @ mat2)   (gpt2 uses this for its
