@@ -3584,7 +3584,12 @@ class RNNBase(Module):
                       jt.zeros((num_directions * self.num_layers, input.shape[1], self.hidden_size), dtype=input.dtype))
 
         if jt.flags.use_cuda and jt.cudnn and self.proj_size == 0 and jt.compiler.is_cuda:
-            return self._execute_cudnn_rnn(input, hx)
+            output, hidden_n = self._execute_cudnn_rnn(input, hx)
+            # batch_first: the input was permuted to (seq,batch,feat) above; permute the
+            # output back to (batch,seq,feat) to match torch (and jittor's own docstring).
+            if self.batch_first:
+                output = output.permute(1, 0, 2)
+            return output, hidden_n
         else:
             hidden_n = []
 
@@ -3619,6 +3624,11 @@ class RNNBase(Module):
             else:
                 hidden_n = jt.stack(hidden_n, dim=0)
 
+            # batch_first: permute output back to (batch, seq, feat) -- it was computed in
+            # (seq, batch, feat) from the permuted input. h_n/c_n stay (layers*dirs, batch,
+            # hidden) regardless, matching torch.
+            if self.batch_first:
+                output = output.permute(1, 0, 2)
             return output, hidden_n
 
 
