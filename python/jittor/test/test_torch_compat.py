@@ -543,6 +543,15 @@ for (_, _p1), (_, _p2) in zip(_lbf.named_parameters(), _lsf.named_parameters()):
 _lo2, _ = _lsf(jt.array(_lx.transpose(1, 0, 2)))
 ok(np.abs(_lo.numpy() - _lo2.numpy().transpose(1, 0, 2)).max() < 1e-5, "nn.LSTM batch_first == batch_second.T invariant")
 ok(tuple(torch.nn.GRU(8, 16, batch_first=True)(jt.array(_lx))[0].shape) == (3, 4, 16), "nn.GRU batch_first output shape")
+# numerical: jittor LSTM matches real torch 2.12 with identical weights (same param names
+# weight_ih_l0/weight_hh_l0/bias_ih_l0/bias_hh_l0, same gate order i/f/g/o).
+np.random.seed(1)
+_lnet = torch.nn.LSTM(4, 5, num_layers=1, batch_first=True); _lnet.eval()
+for _n, _p in _lnet.named_parameters():       # same iteration order as the torch reference
+    _p.update(jt.array((np.random.randn(*_p.shape) * 0.3).astype("float32")))
+_lout, (_lhn, _) = _lnet(jt.array(np.random.randn(2, 3, 4).astype("float32")))
+ok(np.abs(_lout.numpy()[0, 0, :5] - np.array([-0.0574, -0.11792, 0.27221, -0.25979, 0.10486])).max() < 1e-3,
+   "nn.LSTM output bit-matches real torch (gate order/formula)")
 
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 import sys as _sys
