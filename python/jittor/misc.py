@@ -1190,9 +1190,28 @@ def index_fill_(x,dim,indexs,val):
         index – indices of input tensor to fill in
         val – the value to fill with
     '''
-    overflow_conditions = [f'i{dim}=={i}'for i in indexs]
-    indexs = [f'i{i}' for i in range(len(x.shape))]
-    return x.reindex(shape = x.shape,indexes = indexs,overflow_conditions=overflow_conditions,overflow_value=val)
+    # NOTE: the old impl (`overflow_conditions=[f'i{dim}=={i}' for i in indexs]`) was
+    # broken three ways: f'i{dim}' crashed JIT compile for negative dim (emits 'i-1'),
+    # it iterated the index TENSOR into an f-string (only worked for a python int list),
+    # and it overwrote `indexs`. Rewrite mask-based: build a 1-D membership mask along
+    # `dim` and blend. Matches torch.index_fill_ (in-place); index may be a tensor/list.
+    res = index_fill(x, dim, indexs, val)
+    return x.assign(res)
+
+def index_fill(x, dim, index, val):
+    ''' Out-of-place torch.index_fill: fill x along `dim` at the given `index`
+    positions with scalar `val`. '''
+    d = dim % x.ndim
+    size = x.shape[d]
+    idx = index.reshape((-1,)) if isinstance(index, jt.Var) else jt.array(index).reshape((-1,))
+    ar = jt.arange(size).cast(idx.dtype)
+    mask1d = (ar.reshape((-1, 1)) == idx.reshape((1, -1))).any(1)      # (size,) bool
+    shp = [1] * x.ndim; shp[d] = size
+    mask_f = mask1d.reshape(shp).broadcast(x.shape).float32()
+    return x * (1 - mask_f) + float(val) * mask_f
+
+jt.Var.index_fill_ = index_fill_
+jt.Var.index_fill = index_fill
 
 # def triu_(x,diagonal=0):
 #     r'''
