@@ -96,7 +96,17 @@ class Normal:
         self.sigma = sigma
     
     def sample(self, sample_shape=None):
+        # torch semantics: sample() is non-differentiable (detached).
         return jt.normal(jt.array(self.mu), jt.array(self.sigma),size=sample_shape)
+
+    def rsample(self, sample_shape=None):
+        # reparameterized (pathwise) sample: mu + sigma*eps, eps~N(0,1).
+        # Keeps the autodiff graph to mu/sigma (do NOT re-wrap Vars in jt.array,
+        # which would detach). This is what VAEs/VI backprop through.
+        mu = self.mu if isinstance(self.mu, jt.Var) else jt.array(self.mu)
+        sigma = self.sigma if isinstance(self.sigma, jt.Var) else jt.array(self.sigma)
+        shape = sample_shape if sample_shape else (mu + sigma).shape
+        return mu + sigma * jt.randn(shape)
 
     def log_prob(self, x):
         var = self.sigma**2
