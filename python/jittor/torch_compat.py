@@ -3561,7 +3561,26 @@ def _install_misc(g, Var):
         out = _fft_core(_CN(re_full, im_full), None, dim, True, norm)
         return out.real
     _fft_ns.irfft = _irfft
-    _fft_ns.fftshift = lambda x, dim=None: x        # minimal
+    # fftshift/ifftshift: roll the zero-frequency component to/from the centre. The old
+    # `lambda x: x` no-op was silent-wrong. fftshift rolls each dim by n//2; ifftshift by
+    # -(n//2). Works on real Vars and on ComplexNumber (rolls real+imag).
+    def _shift_dims(v, dim, inv):
+        dims = list(range(v.ndim)) if dim is None else ([dim] if isinstance(dim, int) else list(dim))
+        sh = [(-(int(v.shape[d]) // 2) if inv else int(v.shape[d]) // 2) for d in dims]
+        return jt.roll(v, sh, dims)
+    def _fftshift(x, dim=None):
+        if isinstance(x, jt.nn.ComplexNumber):
+            return jt.nn.ComplexNumber(_shift_dims(x.real, dim, False), _shift_dims(x.imag, dim, False))
+        return _shift_dims(x, dim, False)
+    def _ifftshift(x, dim=None):
+        if isinstance(x, jt.nn.ComplexNumber):
+            return jt.nn.ComplexNumber(_shift_dims(x.real, dim, True), _shift_dims(x.imag, dim, True))
+        return _shift_dims(x, dim, True)
+    _fft_ns.fftshift = _fftshift
+    _fft_ns.ifftshift = _ifftshift
+    import numpy as _np_fft
+    _fft_ns.fftfreq = lambda n, d=1.0, **k: jt.array(_np_fft.fft.fftfreq(n, d).astype("float32"))
+    _fft_ns.rfftfreq = lambda n, d=1.0, **k: jt.array(_np_fft.fft.rfftfreq(n, d).astype("float32"))
     _alias("fft", _fft_ns)
     # torch.softmax / log_softmax / relu top-level function forms (convbert calls
     # torch.softmax(x, dim=...)). jittor exposes these via nn, not the top level.

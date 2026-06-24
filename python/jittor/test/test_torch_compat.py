@@ -591,6 +591,14 @@ ok(jt.zeros(5).scatter_reduce(0, _sidx, _ssrc, reduce="amax", include_self=False
    "scatter_reduce amax (include_self=False)")
 ok([round(v, 4) for v in jt.zeros(5).scatter_reduce(0, _sidx, _ssrc, reduce="mean", include_self=False).numpy().tolist()] ==
    [2.5, 5.0, 0.0, 2.3333, 0.0], "scatter_reduce mean")
+# torch.fft.fftshift was a no-op stub (silent-wrong); now rolls zero-freq to centre.
+# + ifftshift/fftfreq/rfftfreq. (fft/rfft/irfft/view_as_complex/polar already correct.)
+_fsx = np.arange(8).astype("float32")
+ok(np.array_equal(torch.fft.fftshift(jt.array(_fsx)).numpy(), np.fft.fftshift(_fsx)), "torch.fft.fftshift (was no-op stub)")
+_fso = np.arange(7).astype("float32")
+ok(np.array_equal(torch.fft.ifftshift(torch.fft.fftshift(jt.array(_fso))).numpy(), _fso), "torch.fft.ifftshift inverts fftshift (odd)")
+ok(np.abs(torch.fft.fftfreq(8, 0.1).numpy() - np.fft.fftfreq(8, 0.1)).max() < 1e-5, "torch.fft.fftfreq")
+ok(np.abs(torch.fft.rfftfreq(8, 0.1).numpy() - np.fft.rfftfreq(8, 0.1)).max() < 1e-5, "torch.fft.rfftfreq")
 
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 import sys as _sys
