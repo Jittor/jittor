@@ -193,3 +193,95 @@ def kl_divergence(cur_dist, old_dist):
         return res
     if isinstance(cur_dist, Geometric):
         return -cur_dist.entropy() - jt.safe_log(-old_dist.prob+1) / cur_dist.prob - old_dist.logits
+    if isinstance(cur_dist, Bernoulli):
+        # KL(p||q) = p*log(p/q) + (1-p)*log((1-p)/(1-q))
+        p, q = cur_dist.probs, old_dist.probs
+        return p * (jt.safe_log(p) - jt.safe_log(q)) + (1 - p) * (jt.safe_log(1 - p) - jt.safe_log(1 - q))
+
+
+def _logsigmoid(z):
+    # stable log(sigmoid(z)) = min(z,0) - log(1+exp(-|z|))
+    return jt.minimum(z, 0.0) - jt.safe_log(1.0 + jt.exp(-jt.abs(z)))
+
+
+class Distribution:
+    ''' Minimal base class for torch.distributions.Distribution (used for isinstance
+    checks and as a common interface). '''
+    def sample(self, sample_shape=None):
+        raise NotImplementedError
+    def rsample(self, sample_shape=None):
+        return self.sample(sample_shape)
+    def log_prob(self, value):
+        raise NotImplementedError
+    def entropy(self):
+        raise NotImplementedError
+
+
+class Bernoulli(Distribution):
+    ''' torch.distributions.Bernoulli. NB: for Bernoulli the logits->probs map IS
+    sigmoid (unlike Categorical, where it is softmax -- see the Categorical fix). '''
+    def __init__(self, probs=None, logits=None):
+        assert (probs is not None) or (logits is not None)
+        if logits is not None:
+            self.logits = logits
+            self.probs = jt.sigmoid(logits)
+        else:
+            self.probs = probs
+            self.logits = jt.safe_log(probs) - jt.safe_log(1 - probs)
+
+    def sample(self, sample_shape=None):
+        shape = self.probs.shape if not sample_shape else sample_shape
+        return (jt.rand(shape) < self.probs).float32()
+
+    def log_prob(self, x):
+        # x*log(p) + (1-x)*log(1-p), stable via logsigmoid of +/- logits
+        return x * _logsigmoid(self.logits) + (1 - x) * _logsigmoid(-self.logits)
+
+    def entropy(self):
+        p = self.probs
+        return -(p * _logsigmoid(self.logits) + (1 - p) * _logsigmoid(-self.logits))
+
+
+class Exponential(Distribution):
+    def __init__(self, rate):
+        self.rate = rate
+
+    def sample(self, sample_shape=None):
+        shape = self.rate.shape if (not sample_shape and hasattr(self.rate, "shape")) else (sample_shape or (1,))
+        u = jt.rand(shape)
+        return -jt.safe_log(1 - u) / self.rate
+
+    def log_prob(self, x):
+        return jt.safe_log(self.rate) - self.rate * x
+
+    def entropy(self):
+        return 1 - jt.safe_log(self.rate)
+
+
+class Independent(Distribution):
+    ''' torch.distributions.Independent: reinterpret the last
+    `reinterpreted_batch_ndims` batch dims of `base_distribution` as event dims, i.e.
+    sum log_prob/entropy over them. Common in RL continuous control:
+    Independent(Normal(mu, sigma), 1). '''
+    def __init__(self, base_distribution, reinterpreted_batch_ndims):
+        self.base_dist = base_distribution
+        self.reinterpreted_batch_ndims = reinterpreted_batch_ndims
+
+    def sample(self, sample_shape=None):
+        return self.base_dist.sample(sample_shape)
+
+    def rsample(self, sample_shape=None):
+        return self.base_dist.rsample(sample_shape) if hasattr(self.base_dist, "rsample") \
+            else self.base_dist.sample(sample_shape)
+
+    def log_prob(self, x):
+        lp = self.base_dist.log_prob(x)
+        for _ in range(self.reinterpreted_batch_ndims):
+            lp = lp.sum(-1)
+        return lp
+
+    def entropy(self):
+        ent = self.base_dist.entropy()
+        for _ in range(self.reinterpreted_batch_ndims):
+            ent = ent.sum(-1)
+        return ent

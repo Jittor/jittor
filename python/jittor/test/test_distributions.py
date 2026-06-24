@@ -147,6 +147,27 @@ class TestOneHot(unittest.TestCase):
             "Categorical log_prob/entropy must be differentiable wrt logits"
 
     @unittest.skipIf(skip_this_test, "No Torch Found")
+    def test_bernoulli_exponential_independent(self):
+        # newly added distributions (Bernoulli/Exponential/Independent/Distribution base).
+        # Bernoulli's logits->probs map is sigmoid (correct, unlike Categorical's softmax).
+        logits = np.random.randn(5).astype('float32')
+        jb, tb = jd.Bernoulli(logits=jt.array(logits)), torch.distributions.Bernoulli(logits=torch.tensor(logits))
+        xb = (np.random.rand(5) > 0.5).astype('float32')
+        np.testing.assert_allclose(jb.log_prob(jt.array(xb)).data, tb.log_prob(torch.tensor(xb)).numpy(), atol=1e-5)
+        np.testing.assert_allclose(jb.entropy().data, tb.entropy().numpy(), atol=1e-5)
+        self.assertTrue(isinstance(jb, jd.Distribution))
+        rate = (np.abs(np.random.randn(4)) + 0.2).astype('float32')
+        je, te = jd.Exponential(jt.array(rate)), torch.distributions.Exponential(torch.tensor(rate))
+        xe = (np.abs(np.random.randn(4)) + 0.1).astype('float32')
+        np.testing.assert_allclose(je.log_prob(jt.array(xe)).data, te.log_prob(torch.tensor(xe)).numpy(), atol=1e-5)
+        np.testing.assert_allclose(je.entropy().data, te.entropy().numpy(), atol=1e-5)
+        mu, sig = np.random.randn(3).astype('float32'), (np.abs(np.random.randn(3)) + 0.2).astype('float32')
+        ji = jd.Independent(jd.Normal(jt.array(mu), jt.array(sig)), 1)
+        ti = torch.distributions.Independent(torch.distributions.Normal(torch.tensor(mu), torch.tensor(sig)), 1)
+        xv = np.random.randn(3).astype('float32')
+        np.testing.assert_allclose(ji.log_prob(jt.array(xv)).data, ti.log_prob(torch.tensor(xv)).numpy(), atol=1e-5)
+
+    @unittest.skipIf(skip_this_test, "No Torch Found")
     def test_uniform(self):
         for _ in range(4):
             low, low2 = np.random.randint(-1,2), np.random.randint(-1,2)
