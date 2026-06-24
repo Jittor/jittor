@@ -2146,7 +2146,10 @@ class Softsign(Module):
     def execute(self, x):
         return softsign(x)
 
-def pad(x,padding, mode='constant', value=0):
+def pad(x,padding=None, mode='constant', value=0, pad=None):
+    # torch spells the amounts arg `pad` (F.pad(x, pad=...)); jittor uses `padding`.
+    if padding is None:
+        padding = pad
     assert mode in ['constant','replicate','reflect','circular'],'only support constant,replicate,reflect,circular pad'
     assert len(padding)%2==0 and len(padding)//2<=x.ndim
 
