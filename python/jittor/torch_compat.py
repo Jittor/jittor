@@ -2483,6 +2483,33 @@ def _install_misc(g, Var):
             setattr(g, name, fn)
     _alias("rsqrt", lambda x: 1.0 / jt.sqrt(x))
     _alias("empty_like", lambda x, **k: jt.empty(x.shape, x.dtype))
+    # torch.compile: jittor already JIT-compiles every op, so this is a pass-through.
+    # Handles torch.compile(model), @torch.compile, and torch.compile(mode=...)(model).
+    def _compile(model=None, *a, **k):
+        return model if model is not None else (lambda m: m)
+    _alias("compile", _compile)
+    # torch.jit: jittor has no TorchScript; the script/trace decorators are pass-throughs
+    # (the eager fn already runs), and is_scripting/is_tracing report False.
+    import types as _types2
+    _jit = _types2.SimpleNamespace()
+    _jit.script = lambda f=None, **k: (f if f is not None else (lambda g: g))
+    _jit.trace = lambda f=None, *a, **k: (f if f is not None else (lambda g: g))
+    _jit.script_if_tracing = lambda f: f
+    _jit.ignore = lambda f=None, **k: (f if callable(f) else (lambda g: g))
+    _jit.unused = lambda f: f
+    _jit.export = lambda f: f
+    _jit.is_scripting = lambda: False
+    _jit.is_tracing = lambda: False
+    _jit.ScriptModule = jt.nn.Module
+    _jit.interface = lambda c: c
+    _alias("jit", _jit)
+    # torch._dynamo: a minimal disable/config stub (some training code probes it).
+    _dynamo = _types2.SimpleNamespace()
+    _dynamo.disable = lambda f=None, **k: (f if f is not None else (lambda g: g))
+    _dynamo.config = _types2.SimpleNamespace()
+    _dynamo.reset = lambda *a, **k: None
+    if not hasattr(g, "_dynamo"):
+        setattr(g, "_dynamo", _dynamo)
     # complex-dtype API (#3): jittor represents complex via nn.ComplexNumber (real/imag
     # pair); wire the torch entry points onto it. torch.complex(re,im), view_as_complex
     # (last dim of 2 -> complex), view_as_real (complex -> last dim of 2), polar, real/
