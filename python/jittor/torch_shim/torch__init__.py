@@ -344,7 +344,18 @@ _b_cuda.sdp_kernel = lambda *a, **k: _SDPKernel()
 _b_cuda.enable_flash_sdp = lambda *a, **k: None
 _b_cuda.enable_mem_efficient_sdp = lambda *a, **k: None
 _b_cuda.enable_math_sdp = lambda *a, **k: None
-_b_cuda.matmul = type("_m", (), {"allow_tf32": False})()
+class _MatmulBackend:
+    # torch.backends.cuda.matmul.allow_tf32 -> drives jittor's NPU matmul precision
+    # (jt.acl_allow_hf32: False=full fp32 / True=HF32). On CUDA it's a no-op flag.
+    @property
+    def allow_tf32(self):
+        import jittor as _jt
+        return bool(getattr(_jt, "acl_allow_hf32", False))
+    @allow_tf32.setter
+    def allow_tf32(self, v):
+        import jittor as _jt
+        _jt.acl_allow_hf32 = bool(v)
+_b_cuda.matmul = _MatmulBackend()
 _b_cpu = types.ModuleType("torch.backends.cpu")
 _b_cpu.get_cpu_capability = lambda: "DEFAULT"
 _b_mkldnn = types.ModuleType("torch.backends.mkldnn")
