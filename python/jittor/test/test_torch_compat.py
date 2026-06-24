@@ -530,6 +530,20 @@ _clg = jt.nn.log_softmax(jt.array(np.random.RandomState(5).randn(6, 2, 5).astype
 _cg = jt.grad(_F.ctc_loss(_clg, _ctgt, _cil, _ctl, blank=0).sum(), [_clg])[0]
 ok(bool(jt.isfinite(_cg).all().item()) and float(jt.abs(_cg).sum().item()) > 0, "F.ctc_loss differentiable")
 
+# nn.LSTM/GRU batch_first: the output must be (batch, seq, hidden) -- jittor permuted the
+# INPUT for batch_first but not the OUTPUT, leaving it (seq, batch, hidden). Verify the
+# shape and the invariant: batch_first(x) == (batch_second(x.T)).T with the same weights.
+_lx = np.random.RandomState(0).randn(3, 4, 8).astype("float32")
+_lbf = torch.nn.LSTM(8, 16, num_layers=2, batch_first=True); _lbf.eval()
+_lo, (_lh, _lc) = _lbf(jt.array(_lx))
+ok(tuple(_lo.shape) == (3, 4, 16) and tuple(_lh.shape) == (2, 3, 16), "nn.LSTM batch_first output is (batch,seq,hidden)")
+_lsf = torch.nn.LSTM(8, 16, num_layers=2, batch_first=False); _lsf.eval()
+for (_, _p1), (_, _p2) in zip(_lbf.named_parameters(), _lsf.named_parameters()):
+    _p2.update(_p1)
+_lo2, _ = _lsf(jt.array(_lx.transpose(1, 0, 2)))
+ok(np.abs(_lo.numpy() - _lo2.numpy().transpose(1, 0, 2)).max() < 1e-5, "nn.LSTM batch_first == batch_second.T invariant")
+ok(tuple(torch.nn.GRU(8, 16, batch_first=True)(jt.array(_lx))[0].shape) == (3, 4, 16), "nn.GRU batch_first output shape")
+
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 import sys as _sys
 _sys.exit(1 if FAIL else 0)
