@@ -815,6 +815,99 @@ def linear(x, weight, bias=None):
         return x + bias
     return x
 
+
+def multi_head_attention_forward(query, key, value, embed_dim_to_check, num_heads,
+        in_proj_weight, in_proj_bias, bias_k, bias_v, add_zero_attn, dropout_p,
+        out_proj_weight, out_proj_bias, training=True, key_padding_mask=None,
+        need_weights=True, attn_mask=None, use_separate_proj_weight=False,
+        q_proj_weight=None, k_proj_weight=None, v_proj_weight=None, static_k=None,
+        static_v=None, average_attn_weights=True, is_causal=False):
+    ''' torch's F.multi_head_attention_forward (the functional behind nn.MultiheadAttention
+    and used directly by fairseq-style models, e.g. wavlm). query/key/value are
+    (L, N, E) = (seq, batch, embed). Returns (attn_output (L,N,E), attn_weights or None).
+    Masked positions use a large finite negative (not -inf) to avoid jittor's inf/nan
+    JIT codegen segfault; softmax drives them to ~0 identically to torch. '''
+    tgt_len, bsz, embed_dim = query.shape
+    head_dim = embed_dim // num_heads
+    scaling = float(head_dim) ** -0.5
+    NEG = -1e30                                                # finite "-inf" for masks
+
+    # q/k/v projections (separate weights or a fused in_proj_weight)
+    if use_separate_proj_weight:
+        b = in_proj_bias
+        bq = b[:embed_dim] if b is not None else None
+        bk = b[embed_dim:embed_dim*2] if b is not None else None
+        bv = b[embed_dim*2:] if b is not None else None
+        q = linear(query, q_proj_weight, bq)
+        k = linear(key,   k_proj_weight, bk)
+        v = linear(value, v_proj_weight, bv)
+    else:
+        w_q = in_proj_weight[:embed_dim]
+        w_k = in_proj_weight[embed_dim:embed_dim*2]
+        w_v = in_proj_weight[embed_dim*2:]
+        if in_proj_bias is not None:
+            bq = in_proj_bias[:embed_dim]; bk = in_proj_bias[embed_dim:embed_dim*2]; bv = in_proj_bias[embed_dim*2:]
+        else:
+            bq = bk = bv = None
+        q = linear(query, w_q, bq); k = linear(key, w_k, bk); v = linear(value, w_v, bv)
+    q = q * scaling
+
+    if static_k is not None: k = static_k
+    if static_v is not None: v = static_v
+
+    # optional bias_k / bias_v: append a learned key/value
+    if bias_k is not None and bias_v is not None:
+        k = jt.concat([k, bias_k.repeat(1, bsz, 1)], dim=0)
+        v = jt.concat([v, bias_v.repeat(1, bsz, 1)], dim=0)
+        if attn_mask is not None:
+            attn_mask = jt.concat([attn_mask, jt.zeros((*attn_mask.shape[:-1], 1), attn_mask.dtype)], dim=-1)
+        if key_padding_mask is not None:
+            key_padding_mask = jt.concat([key_padding_mask, jt.zeros((key_padding_mask.shape[0], 1), key_padding_mask.dtype)], dim=1)
+
+    # (L, N, E) -> (N*H, L, head_dim)
+    q = q.reshape(tgt_len, bsz * num_heads, head_dim).transpose(0, 1)
+    k = k.reshape(-1, bsz * num_heads, head_dim).transpose(0, 1)
+    v = v.reshape(-1, bsz * num_heads, head_dim).transpose(0, 1)
+
+    if add_zero_attn:
+        z = jt.zeros((k.shape[0], 1, k.shape[2]), k.dtype)
+        k = jt.concat([k, z], dim=1)
+        v = jt.concat([v, z], dim=1)
+        if attn_mask is not None:
+            attn_mask = jt.concat([attn_mask, jt.zeros((*attn_mask.shape[:-1], 1), attn_mask.dtype)], dim=-1)
+        if key_padding_mask is not None:
+            key_padding_mask = jt.concat([key_padding_mask, jt.zeros((key_padding_mask.shape[0], 1), key_padding_mask.dtype)], dim=1)
+
+    src_len = k.shape[1]
+    attn = jt.matmul(q, k.transpose(1, 2))                    # (N*H, L, S)
+
+    if attn_mask is not None:
+        # float mask -> additive bias; bool mask -> fill masked with NEG
+        if str(attn_mask.dtype) == "bool":
+            attn = attn + jt.ternary(attn_mask, jt.array(NEG).cast(attn.dtype).broadcast(attn_mask.shape), jt.zeros(attn_mask.shape, attn.dtype))
+        else:
+            attn = attn + attn_mask                           # broadcasts over the N*H dim
+
+    if key_padding_mask is not None:
+        attn = attn.reshape(bsz, num_heads, tgt_len, src_len)
+        kpm = (key_padding_mask != 0).reshape(bsz, 1, 1, src_len).broadcast([bsz, num_heads, tgt_len, src_len])
+        attn = jt.ternary(kpm, jt.array(NEG).cast(attn.dtype).broadcast(attn.shape), attn)
+        attn = attn.reshape(bsz * num_heads, tgt_len, src_len)
+
+    attn = softmax(attn, dim=-1)
+    if dropout_p > 0.0 and training:
+        attn = dropout(attn, p=dropout_p)
+    out = jt.matmul(attn, v)                                  # (N*H, L, head_dim)
+    out = out.transpose(0, 1).reshape(tgt_len, bsz, embed_dim)
+    out = linear(out, out_proj_weight, out_proj_bias)
+
+    attn_weights = None
+    if need_weights:
+        attn_weights = attn.reshape(bsz, num_heads, tgt_len, src_len)
+        if average_attn_weights:
+            attn_weights = attn_weights.mean(dim=1)
+    return out, attn_weights
+
 class BatchNorm(Module):
     def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True, is_train=True, sync=True,
                  track_running_stats=True, device=None, dtype=None):
