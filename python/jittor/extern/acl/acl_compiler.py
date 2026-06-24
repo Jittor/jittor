@@ -341,6 +341,11 @@ def change_function():
 
     from .aclops.gather_scatter_op import ScatterACL
     def scatter_acl(input, dim, index, src, reduce='void'):
+        # torch allows a scalar src (Tensor.scatter(dim, index, value)); the native
+        # jt.scatter broadcasts it, but the ACL ScatterACL op hands src straight to
+        # jt.code which requires a Var -> broadcast scalar to index.shape (input dtype).
+        if not isinstance(src, jt.Var):
+            src = jt.full(index.shape, src, input.dtype)
         return ScatterACL()(input, dim, index, src, reduce)
 
     from .aclops.where_op import WhereACL
