@@ -196,5 +196,94 @@ class TestOneHot(unittest.TestCase):
             # print(jd.kl_divergence(jg,jg2),torch.distributions.kl_divergence(tg,tg2))
             np.testing.assert_allclose(jd.kl_divergence(jg,jg2),torch.distributions.kl_divergence(tg,tg2), atol=1e-4)
 
+# Reference values captured from REAL PyTorch (torch.distributions) in a clean env.
+# Hardcoded on purpose: in a jittor-as-torch deployment the in-process `torch` is the
+# jittor shim (torch.distributions IS jittor.distributions, torch.lgamma IS jittor's),
+# so comparing against it would be a tautology. These constants make this a TRUE oracle.
+_REF = {
+    "beta_lp": [0.5675839185714722, 0.40157508850097656],
+    "beta_ent": [-0.23490619659423828, -0.27300751209259033],
+    "beta_mean": [0.4000000059604645, 0.6666666865348816],
+    "beta_var": [0.03999999910593033, 0.04040404036641121],
+    "gamma_lp": [-1.0945348739624023, -0.9397292137145996],
+    "gamma_ent": [1.5772157907485962, 1.4604358673095703],
+    "gamma_mean": [2.0, 2.5], "gamma_var": [2.0, 1.25],
+    "pois_lp": [-1.3068528175354004, -1.7403020858764648],
+    "pois_mean": [2.0, 5.0], "pois_var": [2.0, 5.0],
+    "dir_lp": [1.504077434539795, 1.4632554054260254],
+    "dir_ent": [-1.2443442344665527, -0.9374915361404419],
+    "dir_mean": [[0.16666667, 0.33333334, 0.5], [0.33333334, 0.33333334, 0.33333334]],
+    "ln_lp": [-0.9189385175704956, -1.2934778928756714],
+    "ln_ent": [1.4189385175704956, 1.5622634887695312],
+    "ln_mean": [1.6487212181091309, 2.1064414978027344],
+    "ln_var": [4.670774459838867, 2.805647373199463],
+    "mvn_lp": -2.828968048095703, "mvn_ent": 3.161428689956665,
+    "mvn_lp_batch": [-2.828968048095703, -2.161428689956665],
+    "mvn_mean": [1.0, -1.0], "mvn_var": [1.9999998807907104, 0.9999999403953552],
+    "lgamma_grad": [0.03648991510272026, 0.7031567692756653, 1.1031566858291626],
+    "beta_ent_grad": [0.019034862518310547, -0.16805529594421387],
+}
+
+
+def _grad1(out, t):
+    r = jt.grad(out, t)
+    return r[0] if isinstance(r, (list, tuple)) else r
+
+
+class TestMoreDistributions(unittest.TestCase):
+    ''' Beta / Gamma / Poisson / Dirichlet / LogNormal / MultivariateNormal parity vs
+    real torch.distributions (log_prob / entropy / mean / variance), plus the lgamma
+    backward fix that makes their parameter-gradients differentiable. Asserts against
+    hardcoded real-torch oracle constants (_REF) -- independent of the in-env torch. '''
+
+    def _ac(self, got, key, atol=1e-5):
+        np.testing.assert_allclose(np.asarray(got.data), np.asarray(_REF[key]), atol=atol)
+
+    def test_beta(self):
+        j = jd.Beta([2.0, 3.0], [3.0, 1.5])
+        self._ac(j.log_prob(jt.array([0.3, 0.6])), "beta_lp")
+        self._ac(j.entropy(), "beta_ent")
+        self._ac(j.mean, "beta_mean"); self._ac(j.variance, "beta_var")
+
+    def test_gamma(self):
+        j = jd.Gamma([2.0, 5.0], [1.0, 2.0])
+        self._ac(j.log_prob(jt.array([1.5, 2.0])), "gamma_lp")
+        self._ac(j.entropy(), "gamma_ent")
+        self._ac(j.mean, "gamma_mean"); self._ac(j.variance, "gamma_var")
+
+    def test_poisson(self):
+        j = jd.Poisson([2.0, 5.0])
+        self._ac(j.log_prob(jt.array([1.0, 4.0])), "pois_lp")
+        self._ac(j.mean, "pois_mean"); self._ac(j.variance, "pois_var")
+
+    def test_dirichlet(self):
+        j = jd.Dirichlet([[1.0, 2.0, 3.0], [2.0, 2.0, 2.0]])
+        self._ac(j.log_prob(jt.array([[0.2, 0.3, 0.5], [0.3, 0.3, 0.4]])), "dir_lp")
+        self._ac(j.entropy(), "dir_ent"); self._ac(j.mean, "dir_mean")
+
+    def test_lognormal(self):
+        j = jd.LogNormal([0.0, 0.5], [1.0, 0.7])
+        self._ac(j.log_prob(jt.array([1.0, 2.0])), "ln_lp")
+        self._ac(j.entropy(), "ln_ent")
+        self._ac(j.mean, "ln_mean"); self._ac(j.variance, "ln_var", atol=1e-4)
+
+    def test_multivariate_normal(self):
+        j = jd.MultivariateNormal([1.0, -1.0], [[2.0, 0.3], [0.3, 1.0]])
+        # jittor has no 0-d scalar -> (1,) vs torch (); assert_allclose broadcasts
+        self._ac(j.log_prob(jt.array([0.5, 0.0])), "mvn_lp")
+        self._ac(j.entropy(), "mvn_ent")
+        self._ac(j.log_prob(jt.array([[0.5, 0.0], [1.0, -1.0]])), "mvn_lp_batch")
+        self._ac(j.mean, "mvn_mean"); self._ac(j.variance, "mvn_var")
+
+    def test_lgamma_backward_parity(self):
+        # jittor's lgamma now defines a backward (= digamma), matching torch -- this is
+        # what makes Gamma/Beta/Dirichlet entropy & log_prob differentiable w.r.t. the
+        # concentration parameters (RL / variational inference need this).
+        jx = jt.array([1.5, 2.5, 3.5])
+        self._ac(_grad1(jt.lgamma.apply(jx).sum(), jx), "lgamma_grad")
+        ja = jt.array([2.0, 3.0])
+        self._ac(_grad1(jd.Beta(ja, jt.array([3.0, 1.5])).entropy().sum(), ja), "beta_ent_grad")
+
+
 if __name__ == "__main__":
     unittest.main()

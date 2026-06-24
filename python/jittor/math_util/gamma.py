@@ -1,6 +1,84 @@
+import math
 import numpy as np
 import jittor as jt
 from jittor import nn
+
+# ---------------------------------------------------------------------------
+# Device-agnostic (CPU/CUDA/NPU) composite implementations of the special
+# functions lgamma / digamma / trigamma, expressed purely with jittor PRIMITIVE
+# ops (log/exp/pow/sin/tan/abs/maximum/ternary/...). These are needed because
+# the fast jt.code() kernels below only target CPU & CUDA -- on the Ascend ACL
+# backend a `code` op raises "op code not supported" (acl_op_exec.cc). Composing
+# from primitives lets these run on the NPU too, and (bonus) stay autodiff-able.
+# Numerics mirror PyTorch's lgamma/digamma so parity holds (target <=1e-5).
+# Used only when jt.flags.use_acl is set; CPU/CUDA keep their kernels.
+# ---------------------------------------------------------------------------
+_HALF_LOG_2PI = 0.5 * math.log(2.0 * math.pi)
+_PI = math.pi
+# Lanczos g=7, n=9 (same constants PyTorch/Numpy use)
+_LANCZOS_G = 7.0
+_LANCZOS_C = [
+    0.99999999999980993, 676.5203681218851, -1259.1392167224028,
+    771.32342877765313, -176.61502916214059, 12.507343278686905,
+    -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7,
+]
+# digamma asymptotic series coeffs (PyTorch calc_digamma)
+_DIGAMMA_A = [
+    8.33333333333333333333e-2, -2.10927960927960927961e-2, 7.57575757575757575758e-3,
+    -4.16666666666666666667e-3, 3.96825396825396825397e-3, -8.33333333333333333333e-3,
+    8.33333333333333333333e-2,
+]
+
+
+def _lgamma_acl(x):
+    """log|Gamma(x)| via Lanczos approx + reflection (x<0.5). Primitive ops only."""
+    reflect = x < 0.5
+    y = jt.ternary(reflect, 1.0 - x, x)   # operand for the series is always >= 0.5
+    z = y - 1.0
+    acc = _LANCZOS_C[0]
+    for i in range(1, 9):
+        acc = acc + _LANCZOS_C[i] / (z + i)
+    t = z + _LANCZOS_G + 0.5
+    lg_y = _HALF_LOG_2PI + (z + 0.5) * jt.log(t) - t + jt.log(acc)
+    # reflection: lgamma(x) = log(pi) - log|sin(pi x)| - lgamma(1-x)
+    reflected = _PI / jt.maximum(jt.abs(jt.sin(_PI * x)), 1e-30)
+    reflected = jt.log(reflected) - lg_y
+    return jt.ternary(reflect, reflected, lg_y)
+
+
+def _digamma_acl(x):
+    """psi(x) via recurrence-to->=10 + asymptotic series + reflection (x<0.5)."""
+    reflect = x < 0.5
+    xr = jt.ternary(reflect, 1.0 - x, x)   # >= 0.5
+    acc = 0.0
+    for _ in range(12):                    # push xr up to >=10 (psi(x)=psi(x+1)-1/x)
+        need = (xr < 10.0).float()
+        acc = acc - need / xr
+        xr = xr + need
+    z = 1.0 / (xr * xr)
+    poly = _DIGAMMA_A[0]
+    for i in range(1, 7):
+        poly = poly * z + _DIGAMMA_A[i]
+    psi = acc + jt.log(xr) - 0.5 / xr - z * poly
+    # reflection: psi(x) = psi(1-x) - pi*cot(pi x)
+    reflected = psi - _PI / jt.tan(_PI * x)
+    return jt.ternary(reflect, reflected, psi)
+
+
+def _trigamma_acl(x):
+    """psi'(x) (= polygamma(1)) via recurrence-to->=10 + asymptotic. For x>0."""
+    acc = 0.0
+    xr = x + 0.0
+    for _ in range(12):                    # trigamma(x)=trigamma(x+1)+1/x^2
+        need = (xr < 10.0).float()
+        acc = acc + need / (xr * xr)
+        xr = xr + need
+    w = 1.0 / xr
+    w2 = w * w
+    # 1/x + 1/(2x^2) + 1/6 x^-3 - 1/30 x^-5 + 1/42 x^-7 - 1/30 x^-9
+    asy = w + 0.5 * w2 + w * w2 * (1.0/6.0 - w2 * (1.0/30.0 - w2 * (1.0/42.0 - w2 * (1.0/30.0))))
+    return acc + asy
+
 
 class lgamma(jt.Function):
     def __init__(self):
@@ -33,10 +111,20 @@ class lgamma(jt.Function):
         '''
 
     def execute(self, x):
-        if jt.flags.use_cuda:
+        self.x = x
+        if jt.flags.use_acl:                      # ACL has no `code` op -> composite
+            return _lgamma_acl(x)
+        elif jt.flags.use_cuda:
             return jt.code(x.shape, x.dtype, [x], cuda_header=self.cuda_header, cuda_src=self.cuda_src)
         else:
             return jt.code(x.shape, x.dtype, [x], cpu_src=self.cpu_src)
+
+    def grad(self, grad_output):
+        # d/dx lgamma(x) = digamma(x). (torch's lgamma is differentiable; this gives
+        # jittor parity -- needed to backprop through Gamma/Beta/Dirichlet log_prob &
+        # entropy w.r.t. their concentration parameters. digamma already defines its
+        # own grad, so this composes for higher-order too.)
+        return grad_output * digamma.apply(self.x)
 
 class polygamma(jt.Function):
     def __init__(self):
@@ -142,6 +230,12 @@ class polygamma(jt.Function):
         '''
 
     def execute(self, x, n):
+        if jt.flags.use_acl:                      # ACL has no `code` op -> composite
+            if n == 1:
+                return _trigamma_acl(x)
+            raise NotImplementedError(
+                f"polygamma(n={n}) not implemented on ACL/NPU; only n=1 (trigamma). "
+                "Add the corresponding composite series in gamma.py:_trigamma_acl.")
         if jt.flags.use_cuda:
             self.cuda_src = f'''
                 @alias(x, in0)
@@ -331,7 +425,9 @@ class digamma(jt.Function):
     
     def execute(self, x):
         self.input = x
-        if jt.flags.use_cuda:
+        if jt.flags.use_acl:                      # ACL has no `code` op -> composite
+            return _digamma_acl(x)
+        elif jt.flags.use_cuda:
             dx = jt.code(x.shape, x.dtype, [x], cuda_header=self.cuda_header, cuda_src=self.cuda_src)
             dx.compile_options = {"FLAGS: --expt-relaxed-constexpr":1}
             return dx
