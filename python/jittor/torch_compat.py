@@ -574,6 +574,92 @@ def install(torch):
                     return loss.reshape(target.shape) if input.ndim > 2 else loss
                 return loss.sum() / norm
             F.cross_entropy = _cross_entropy
+        # Loss functions jittor's functional lacks but real workloads use: kl_div
+        # (knowledge distillation), binary_cross_entropy (non-logits), huber_loss,
+        # cosine_embedding_loss, margin_ranking_loss, gaussian_nll_loss. Verified
+        # bit-equal to real torch 2.12. Use maximum/minimum/ternary (not clamp) to avoid
+        # the torch_compat clamp kwarg overloading.
+        import math as _math_loss
+        def _reduce(loss, reduction):
+            if reduction == "none":
+                return loss
+            if reduction == "sum":
+                return loss.sum()
+            return loss.mean()
+        if not hasattr(F, "kl_div"):
+            def _kl_div(input, target, size_average=None, reduce=None,
+                        reduction="mean", log_target=False):
+                if log_target:
+                    loss = jt.exp(target) * (target - input)
+                else:
+                    # target*(log target - input); target==0 contributes 0 (avoid 0*-inf)
+                    safe = jt.maximum(target, 1e-12)
+                    loss = target * (jt.log(safe) - input)
+                if reduction == "batchmean":
+                    return loss.sum() / input.shape[0]
+                return _reduce(loss, reduction)
+            F.kl_div = _kl_div
+        if not hasattr(F, "binary_cross_entropy"):
+            def _bce(input, target, weight=None, size_average=None, reduce=None,
+                     reduction="mean"):
+                # input are probabilities in [0,1]; torch clamps the logs to >= -100.
+                li = jt.maximum(jt.log(jt.maximum(input, 1e-44)), -100.0)
+                l1 = jt.maximum(jt.log(jt.maximum(1.0 - input, 1e-44)), -100.0)
+                loss = -(target * li + (1.0 - target) * l1)
+                if weight is not None:
+                    loss = loss * weight
+                return _reduce(loss, reduction)
+            F.binary_cross_entropy = _bce
+        if not hasattr(F, "huber_loss"):
+            def _huber(input, target, reduction="mean", delta=1.0):
+                d = (input - target).abs()
+                loss = jt.ternary(d < delta, 0.5 * d * d, delta * (d - 0.5 * delta))
+                return _reduce(loss, reduction)
+            F.huber_loss = _huber
+        if not hasattr(F, "margin_ranking_loss"):
+            def _margin_ranking(input1, input2, target, margin=0.0,
+                                size_average=None, reduce=None, reduction="mean"):
+                loss = jt.maximum(-target * (input1 - input2) + margin, 0.0)
+                return _reduce(loss, reduction)
+            F.margin_ranking_loss = _margin_ranking
+        if not hasattr(F, "cosine_embedding_loss"):
+            def _cosine_embedding(input1, input2, target, margin=0.0,
+                                  size_average=None, reduce=None, reduction="mean"):
+                cos = F.cosine_similarity(input1, input2)
+                loss = jt.ternary(target == 1, 1.0 - cos, jt.maximum(cos - margin, 0.0))
+                return _reduce(loss, reduction)
+            F.cosine_embedding_loss = _cosine_embedding
+        if not hasattr(F, "gaussian_nll_loss"):
+            def _gaussian_nll(input, target, var, full=False, eps=1e-6, reduction="mean"):
+                v = jt.maximum(var, eps)
+                loss = 0.5 * (jt.log(v) + (input - target) ** 2 / v)
+                if full:
+                    loss = loss + 0.5 * _math_loss.log(2 * _math_loss.pi)
+                return _reduce(loss, reduction)
+            F.gaussian_nll_loss = _gaussian_nll
+        # nn.*Loss class versions (criterion = nn.HuberLoss()): thin wrappers over the
+        # functional. KLDivLoss/BCELoss/BCEWithLogitsLoss/CrossEntropyLoss/MSELoss/L1Loss
+        # already exist on jittor.nn (verified correct); add the rest.
+        _Mod = nn.Module
+        def _add_loss_class(cname, fn, defaults, arg_order):
+            if hasattr(nn, cname):
+                return
+            class _L(_Mod):
+                def __init__(self, *a, **k):
+                    super().__init__()
+                    self._kw = dict(defaults); self._kw.update(k)
+                    for nm, val in zip(arg_order, a):
+                        self._kw[nm] = val
+                def execute(self, *inputs):
+                    return fn(*inputs, **self._kw)
+            _L.__name__ = cname
+            setattr(nn, cname, _L)
+        _add_loss_class("HuberLoss", F.huber_loss, dict(reduction="mean", delta=1.0), ("reduction", "delta"))
+        _add_loss_class("SmoothL1Loss", F.smooth_l1_loss, dict(reduction="mean"), ("reduction",))
+        _add_loss_class("MarginRankingLoss", F.margin_ranking_loss, dict(margin=0.0, reduction="mean"), ("margin", "reduction"))
+        _add_loss_class("CosineEmbeddingLoss", F.cosine_embedding_loss, dict(margin=0.0, reduction="mean"), ("margin", "reduction"))
+        _add_loss_class("GaussianNLLLoss", F.gaussian_nll_loss, dict(full=False, eps=1e-6, reduction="mean"), ("full", "eps", "reduction"))
+        _add_loss_class("NLLLoss", F.nll_loss, dict(reduction="mean"), ("weight", "size_average", "ignore_index"))
         if hasattr(nn, "layer_norm"): F.layer_norm = nn.layer_norm
         if hasattr(nn, "embedding"): F.embedding = nn.embedding
         nn.functional = F
