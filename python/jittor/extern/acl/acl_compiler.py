@@ -573,9 +573,21 @@ def change_function():
     def rope_acl(xq, xk, freqs_cis=None, freq_sin=None, freq_cos=None):
         return RopeACL()(xq, xk, freqs_cis, freq_sin, freq_cos)
 
-    from .aclops.stack_op import StackACL
     def stack_acl(x, dim=0):
-        return StackACL()(x, dim)
+        # Implement stack as the autodiff-correct composite unsqueeze+concat (matches
+        # jittor's native jt.stack), instead of the custom StackACL aclnn Function.
+        # StackACL was doubly broken on ACL: (1) it didn't normalize a negative dim, so
+        # jt.stack(dim=-1) built output shape [2,N] while aclnnStack produced [N,2] ->
+        # an "[N,2] != [2,N]" crash (broke ComplexNumber/FFT, since ComplexNumber stores
+        # jt.stack([real,imag], dim=-1)); and (2) its execute takes a LIST of Vars, which
+        # jittor autodiff does not recurse into, so backward returned zero grads.
+        # concat + unsqueeze are ACL-native and backprop correctly (verified on 910B).
+        if isinstance(x, tuple):
+            x = list(x)
+        x = [jt.array(t) for t in x]
+        if len(x) < 2:
+            return x[0].unsqueeze(dim)
+        return jt.concat([t.unsqueeze(dim) for t in x], dim=dim)
 
     from .aclops.nantonum_op import NanToNumACL
     
