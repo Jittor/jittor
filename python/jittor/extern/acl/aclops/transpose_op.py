@@ -60,7 +60,11 @@ class TransPoseACL(jt.Function):
 
     def execute(self, x, *dim):
         self.input = x
-        if len(dim) == 1 and isinstance(dim[0], Sequence):
+        if len(dim) == 0:
+            # no-arg transpose reverses all dims (numpy/jittor .T semantics). Without this
+            # dim stayed () -> output_shape [] -> aclnnPermute "output shape [1]" crash.
+            dim = list(range(x.ndim))[::-1]
+        elif len(dim) == 1 and isinstance(dim[0], Sequence):
             dim = dim[0]
         elif len(dim) == 2:
             axes = list(range(x.ndim))
