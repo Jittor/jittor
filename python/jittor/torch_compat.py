@@ -3832,6 +3832,51 @@ def _install_misc(g, Var):
         return (input.float64() ** b)
     _alias("float_power", _float_power); Var.float_power = _float_power
     _alias("signbit", lambda input: input < 0); Var.signbit = lambda self: self < 0
+    # reductions: logsumexp (attention/MoE/loss/beam), nansum/nanmean, std_mean/var_mean,
+    # aminmax, quantile. NaN handling uses nan_to_num + (x==x) mask to avoid jittor's
+    # isnan+ternary JIT segfault (see jittor-jit-inf-nan-segfault).
+    def _logsumexp(input, dim, keepdim=False):
+        m = input.max(dim, keepdims=True)
+        out = m + jt.log(jt.exp(input - m).sum(dim, keepdims=True))
+        if keepdim:
+            return out
+        return out.squeeze(dim) if isinstance(dim, int) else out.reshape(input.max(dim).shape)
+    _alias("logsumexp", _logsumexp); Var.logsumexp = _logsumexp
+    def _nansum(input, dim=None, keepdim=False, **k):
+        z = jt.nan_to_num(input, nan=0.0)
+        return z.sum() if dim is None else z.sum(dim, keepdims=keepdim)
+    _alias("nansum", _nansum); Var.nansum = _nansum
+    def _nanmean(input, dim=None, keepdim=False, **k):
+        # count of non-NaN. NB: `input == input` (a var vs ITSELF) gets optimized to
+        # all-True by jittor, so it does NOT detect NaN -- use isnan instead.
+        cnt = 1.0 - jt.isnan(input).float32()
+        z = jt.nan_to_num(input, nan=0.0)
+        if dim is None:
+            return z.sum() / cnt.sum()
+        return z.sum(dim, keepdims=keepdim) / cnt.sum(dim, keepdims=keepdim)
+    _alias("nanmean", _nanmean); Var.nanmean = _nanmean
+    def _std_mean(input, dim=None, unbiased=True, keepdim=False, correction=None, **k):
+        mean = input.mean() if dim is None else input.mean(dim, keepdims=keepdim)
+        std = input.std() if dim is None else input.std(dim)  # jittor std is unbiased
+        return (std, mean)
+    _alias("std_mean", _std_mean)
+    def _var_mean(input, dim=None, unbiased=True, keepdim=False, correction=None, **k):
+        s, m = _std_mean(input, dim, unbiased, keepdim)
+        return (s * s, m)
+    _alias("var_mean", _var_mean)
+    _AMinMax = _collections.namedtuple("aminmax", ["min", "max"])
+    def _aminmax(input, dim=None, keepdim=False):
+        if dim is None:
+            return _AMinMax(input.min(), input.max())
+        return _AMinMax(input.min(dim, keepdims=keepdim), input.max(dim, keepdims=keepdim))
+    _alias("aminmax", _aminmax); Var.aminmax = _aminmax
+    def _quantile(input, q, dim=None, keepdim=False, interpolation="linear", **k):
+        import numpy as _np_q
+        arr = input.numpy()
+        qn = q.numpy() if isinstance(q, Var) else q
+        r = _np_q.quantile(arr, qn, axis=dim, keepdims=keepdim)
+        return jt.array(r.astype("float32"))
+    _alias("quantile", _quantile)
     _alias("square", lambda x: x * x)   # torch.square (jittor only had jt.sqr); persimmon
     # torch.addmm(input, mat1, mat2, *, beta=1, alpha=1):
     #   out = beta * input + alpha * (mat1 @ mat2)   (gpt2 uses this for its
