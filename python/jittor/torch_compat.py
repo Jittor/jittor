@@ -569,6 +569,7 @@ def install(torch):
     _install_tensor_methods(g, Var, _DTYPE_OBJS)
     _install_misc(g, Var)
     _install_optimizers(g)
+    _install_lr_scheduler(g)
     _install_autograd_function(g)
     _install_autograd(g)
 
@@ -715,6 +716,214 @@ def _install_optimizers(g):
                 except Exception: pass
             return r
         Base.load_state_dict = _lsd
+
+
+def _install_lr_scheduler(g):
+    """Torch-compatible torch.optim.lr_scheduler over jittor optimizers, on the
+    `import jittor as torch` path (the shim reuses this same namespace). jittor reads
+    lr from pg.get("lr", self.lr), so every step must update BOTH optimizer.lr and each
+    param_group["lr"]. Schedulers follow torch's convention: __init__ applies the
+    epoch-0 lr, last_epoch advances on step(). Covers the schedulers transformers /
+    LlamaFactory / torch users actually use (the warmup helpers wrap LambdaLR)."""
+    import jittor as _jt, types as _types, math as _math
+    try:
+        from jittor import optim as _optim
+    except Exception:
+        return
+    if getattr(_optim, "_torch_lr_installed", False):
+        return
+
+    def _base_lrs(opt):
+        out = []
+        for pg in getattr(opt, "param_groups", []) or []:
+            out.append(pg.get("lr", getattr(opt, "lr", 0.0)))
+        return out or [getattr(opt, "lr", 0.0)]
+
+    def _set_lrs(opt, lrs):
+        for pg, lr in zip(getattr(opt, "param_groups", []) or [], lrs):
+            pg["lr"] = lr
+        try: opt.lr = lrs[0]
+        except Exception: pass
+
+    class LRScheduler:
+        def __init__(self, optimizer, last_epoch=-1, verbose=False):
+            self.optimizer = optimizer
+            if not hasattr(self, "base_lrs"):
+                self.base_lrs = _base_lrs(optimizer)
+            self.last_epoch = last_epoch
+            self._step_count = 0
+            self._last_lr = list(self.base_lrs)
+            self.step()                       # torch: apply epoch-0 lr at construction
+        def get_lr(self):
+            return list(self.base_lrs)
+        def get_last_lr(self):
+            return list(self._last_lr)
+        def state_dict(self):
+            return {k: v for k, v in self.__dict__.items()
+                    if k not in ("optimizer",) and not callable(v)}
+        def load_state_dict(self, sd):
+            self.__dict__.update(sd)
+        def step(self, epoch=None):
+            self.last_epoch = self.last_epoch + 1 if epoch is None else epoch
+            self._step_count += 1
+            lrs = self.get_lr()
+            self._last_lr = list(lrs)
+            _set_lrs(self.optimizer, lrs)
+
+    class LambdaLR(LRScheduler):
+        def __init__(self, optimizer, lr_lambda, last_epoch=-1, verbose=False):
+            self.base_lrs = _base_lrs(optimizer)
+            n = len(self.base_lrs)
+            self.lr_lambdas = list(lr_lambda) if isinstance(lr_lambda, (list, tuple)) else [lr_lambda]*n
+            super().__init__(optimizer, last_epoch, verbose)
+        def get_lr(self):
+            e = max(self.last_epoch, 0)
+            return [b * fn(e) for b, fn in zip(self.base_lrs, self.lr_lambdas)]
+
+    class MultiplicativeLR(LRScheduler):
+        def __init__(self, optimizer, lr_lambda, last_epoch=-1, verbose=False):
+            self.base_lrs = _base_lrs(optimizer)
+            n = len(self.base_lrs)
+            self.lr_lambdas = list(lr_lambda) if isinstance(lr_lambda, (list, tuple)) else [lr_lambda]*n
+            super().__init__(optimizer, last_epoch, verbose)
+        def get_lr(self):
+            if self.last_epoch <= 0:
+                return list(self.base_lrs)
+            return [lr * fn(self.last_epoch) for lr, fn in zip(self._last_lr, self.lr_lambdas)]
+
+    class ConstantLR(LRScheduler):
+        def __init__(self, optimizer, factor=1.0/3, total_iters=5, last_epoch=-1, verbose=False):
+            self.factor = factor; self.total_iters = total_iters
+            self.base_lrs = _base_lrs(optimizer)
+            super().__init__(optimizer, last_epoch, verbose)
+        def get_lr(self):
+            f = self.factor if self.last_epoch < self.total_iters else 1.0
+            return [b * f for b in self.base_lrs]
+
+    class LinearLR(LRScheduler):
+        def __init__(self, optimizer, start_factor=1.0/3, end_factor=1.0, total_iters=5,
+                     last_epoch=-1, verbose=False):
+            self.start_factor = start_factor; self.end_factor = end_factor
+            self.total_iters = total_iters; self.base_lrs = _base_lrs(optimizer)
+            super().__init__(optimizer, last_epoch, verbose)
+        def get_lr(self):
+            t = min(max(self.last_epoch, 0), self.total_iters)
+            frac = t / self.total_iters if self.total_iters else 1.0
+            f = self.start_factor + (self.end_factor - self.start_factor) * frac
+            return [b * f for b in self.base_lrs]
+
+    class StepLR(LRScheduler):
+        def __init__(self, optimizer, step_size, gamma=0.1, last_epoch=-1, verbose=False):
+            self.step_size = step_size; self.gamma = gamma
+            self.base_lrs = _base_lrs(optimizer)
+            super().__init__(optimizer, last_epoch, verbose)
+        def get_lr(self):
+            return [b * self.gamma ** (max(self.last_epoch, 0) // self.step_size) for b in self.base_lrs]
+
+    class MultiStepLR(LRScheduler):
+        def __init__(self, optimizer, milestones, gamma=0.1, last_epoch=-1, verbose=False):
+            self.milestones = sorted(milestones); self.gamma = gamma
+            self.base_lrs = _base_lrs(optimizer)
+            super().__init__(optimizer, last_epoch, verbose)
+        def get_lr(self):
+            n = sum(1 for m in self.milestones if m <= self.last_epoch)
+            return [b * self.gamma ** n for b in self.base_lrs]
+
+    class ExponentialLR(LRScheduler):
+        def __init__(self, optimizer, gamma, last_epoch=-1, verbose=False):
+            self.gamma = gamma; self.base_lrs = _base_lrs(optimizer)
+            super().__init__(optimizer, last_epoch, verbose)
+        def get_lr(self):
+            return [b * self.gamma ** max(self.last_epoch, 0) for b in self.base_lrs]
+
+    class CosineAnnealingLR(LRScheduler):
+        def __init__(self, optimizer, T_max, eta_min=0.0, last_epoch=-1, verbose=False):
+            self.T_max = T_max; self.eta_min = eta_min
+            self.base_lrs = _base_lrs(optimizer)
+            super().__init__(optimizer, last_epoch, verbose)
+        def get_lr(self):
+            e = max(self.last_epoch, 0)
+            return [self.eta_min + (b - self.eta_min) * (1 + _math.cos(_math.pi * e / self.T_max)) / 2
+                    for b in self.base_lrs]
+
+    class PolynomialLR(LRScheduler):
+        def __init__(self, optimizer, total_iters=5, power=1.0, last_epoch=-1, verbose=False):
+            self.total_iters = total_iters; self.power = power
+            self.base_lrs = _base_lrs(optimizer)
+            super().__init__(optimizer, last_epoch, verbose)
+        def get_lr(self):
+            t = min(max(self.last_epoch, 0), self.total_iters)
+            f = (1 - t / self.total_iters) ** self.power if self.total_iters else 1.0
+            return [b * f for b in self.base_lrs]
+
+    class SequentialLR(LRScheduler):
+        def __init__(self, optimizer, schedulers, milestones, last_epoch=-1, verbose=False):
+            self.optimizer = optimizer; self._scheds = list(schedulers)
+            self._milestones = list(milestones); self.last_epoch = last_epoch + 1
+            # torch resets each sub-scheduler's epoch-0; apply the first one's lr
+            self._scheds[0].step(0)
+        def step(self, epoch=None):
+            self.last_epoch += 1
+            idx = sum(1 for m in self._milestones if m <= self.last_epoch)
+            sch = self._scheds[idx]
+            if idx > 0 and self._milestones[idx - 1] == self.last_epoch:
+                sch.step(0)
+            else:
+                sch.step()
+            self._last_lr = sch.get_last_lr()
+        def get_last_lr(self):
+            return list(getattr(self, "_last_lr", _base_lrs(self.optimizer)))
+
+    class ChainedScheduler:
+        def __init__(self, schedulers, optimizer=None):
+            self._scheds = list(schedulers)
+            self.optimizer = optimizer or self._scheds[0].optimizer
+        def step(self):
+            for s in self._scheds: s.step()
+        def get_last_lr(self):
+            return self._scheds[-1].get_last_lr()
+        def state_dict(self): return {}
+        def load_state_dict(self, sd): pass
+
+    class ReduceLROnPlateau:
+        def __init__(self, optimizer, mode="min", factor=0.1, patience=10, threshold=1e-4,
+                     min_lr=0.0, **k):
+            self.optimizer = optimizer; self.mode = mode; self.factor = factor
+            self.patience = patience; self.threshold = threshold; self.min_lr = min_lr
+            self.best = None; self.num_bad = 0
+        def step(self, metric=None, epoch=None):
+            if metric is None: return
+            m = float(metric)
+            better = (self.best is None or
+                      (m < self.best - self.threshold if self.mode == "min"
+                       else m > self.best + self.threshold))
+            if better:
+                self.best = m; self.num_bad = 0
+            else:
+                self.num_bad += 1
+                if self.num_bad > self.patience:
+                    new = max(self.min_lr, getattr(self.optimizer, "lr", 0.0) * self.factor)
+                    _set_lrs(self.optimizer, [new] * len(_base_lrs(self.optimizer)))
+                    self.num_bad = 0
+        def get_last_lr(self):
+            return [getattr(self.optimizer, "lr", 0.0)]
+        def state_dict(self):
+            return {k: v for k, v in self.__dict__.items() if k != "optimizer"}
+        def load_state_dict(self, sd): self.__dict__.update(sd)
+
+    ns = _types.ModuleType("torch.optim.lr_scheduler")
+    for _name, _cls in [("LRScheduler", LRScheduler), ("_LRScheduler", LRScheduler),
+                        ("LambdaLR", LambdaLR), ("MultiplicativeLR", MultiplicativeLR),
+                        ("ConstantLR", ConstantLR), ("LinearLR", LinearLR),
+                        ("StepLR", StepLR), ("MultiStepLR", MultiStepLR),
+                        ("ExponentialLR", ExponentialLR), ("CosineAnnealingLR", CosineAnnealingLR),
+                        ("PolynomialLR", PolynomialLR), ("SequentialLR", SequentialLR),
+                        ("ChainedScheduler", ChainedScheduler), ("ReduceLROnPlateau", ReduceLROnPlateau)]:
+        setattr(ns, _name, _cls)
+    _optim.lr_scheduler = ns
+    _optim._torch_lr_installed = True
+    import sys as _sys
+    _sys.modules.setdefault("jittor.optim.lr_scheduler", ns)
 
 
 import collections as _collections

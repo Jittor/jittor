@@ -465,95 +465,14 @@ if hasattr(_optim, "Adam"):
 if hasattr(_optim, "SGD"):
     _optim.SGD = _make_torch_optim(_optim.SGD, _SGD_KW)
 try:
-    import jittor.lr_scheduler as _lrs
-    # torch-compatible LR schedulers driving jittor optimizers. jittor reads lr
-    # from pg.get("lr", self.lr), so we must update BOTH optimizer.lr and each
-    # param_group["lr"] on every step for the new lr to take effect.
-    def _set_opt_lr(optimizer, lrs):
-        for pg, lr in zip(optimizer.param_groups, lrs):
-            pg["lr"] = lr
-        try:
-            optimizer.lr = lrs[0]
-        except Exception:
-            pass
-    def _base_lrs(optimizer):
-        base = []
-        for pg in optimizer.param_groups:
-            base.append(pg.get("lr", getattr(optimizer, "lr", 0.0)))
-        return base or [getattr(optimizer, "lr", 0.0)]
-
-    class _LRScheduler:
-        """torch-compatible base scheduler over a jittor optimizer."""
-        def __init__(self, optimizer, last_epoch=-1, verbose=False):
-            self.optimizer = optimizer
-            self.base_lrs = _base_lrs(optimizer)
-            self.last_epoch = last_epoch
-            self._step_count = 0
-            self._last_lr = list(self.base_lrs)
-            self.step()   # initialize lr at epoch 0 (torch convention)
-        def get_lr(self):
-            return list(self.base_lrs)
-        def get_last_lr(self):
-            return list(self._last_lr)
-        def state_dict(self):
-            return {k: v for k, v in self.__dict__.items() if k not in ("optimizer",)}
-        def load_state_dict(self, sd):
-            self.__dict__.update(sd)
-        def step(self, epoch=None):
-            self.last_epoch = self.last_epoch + 1 if epoch is None else epoch
-            self._step_count += 1
-            lrs = self.get_lr()
-            self._last_lr = list(lrs)
-            _set_opt_lr(self.optimizer, lrs)
-    _lrs._LRScheduler = _LRScheduler
-    _lrs.LRScheduler = _LRScheduler
-
-    class LambdaLR(_LRScheduler):
-        def __init__(self, optimizer, lr_lambda, last_epoch=-1, verbose=False):
-            self.base_lrs = _base_lrs(optimizer)
-            n = len(self.base_lrs)
-            self.lr_lambdas = list(lr_lambda) if isinstance(lr_lambda, (list, tuple)) else [lr_lambda]*n
-            super().__init__(optimizer, last_epoch, verbose)
-        def get_lr(self):
-            e = _builtins.max(self.last_epoch, 0)
-            return [base * fn(e) for base, fn in zip(self.base_lrs, self.lr_lambdas)]
-    _lrs.LambdaLR = LambdaLR
-
-    class MultiplicativeLR(_LRScheduler):
-        def __init__(self, optimizer, lr_lambda, last_epoch=-1, verbose=False):
-            self.base_lrs = _base_lrs(optimizer)
-            n = len(self.base_lrs)
-            self.lr_lambdas = list(lr_lambda) if isinstance(lr_lambda, (list, tuple)) else [lr_lambda]*n
-            super().__init__(optimizer, last_epoch, verbose)
-        def get_lr(self):
-            if self.last_epoch <= 0:
-                return list(self.base_lrs)
-            return [lr * fn(self.last_epoch) for lr, fn in zip(self._last_lr, self.lr_lambdas)]
-    _lrs.MultiplicativeLR = MultiplicativeLR
-
-    class _ConstantLR(_LRScheduler):
-        def get_lr(self):
-            return list(self.base_lrs)
-    _lrs.ConstantLR = _ConstantLR
-
-    class StepLR(_LRScheduler):
-        def __init__(self, optimizer, step_size, gamma=0.1, last_epoch=-1, verbose=False):
-            self.step_size = step_size; self.gamma = gamma
-            self.base_lrs = _base_lrs(optimizer)
-            super().__init__(optimizer, last_epoch, verbose)
-        def get_lr(self):
-            f = self.gamma ** (_builtins.max(self.last_epoch, 0) // self.step_size)
-            return [base * f for base in self.base_lrs]
-    _lrs.StepLR = StepLR
-
-    if not hasattr(_lrs, "ReduceLROnPlateau"):
-        class ReduceLROnPlateau:
-            def __init__(self, optimizer, *a, **k): self.optimizer = optimizer
-            def step(self, *a, **k): pass
-            def get_last_lr(self): return [getattr(self.optimizer, "lr", 0.0)]
-            def state_dict(self): return {}
-            def load_state_dict(self, sd): pass
-        _lrs.ReduceLROnPlateau = ReduceLROnPlateau
+    # torch_compat (installed at `import jittor`, before this shim) already built the
+    # torch-compatible lr_scheduler namespace on jittor.optim (LambdaLR/LinearLR/
+    # CosineAnnealingLR/StepLR/MultiStepLR/ExponentialLR/PolynomialLR/ConstantLR/
+    # SequentialLR/ReduceLROnPlateau, all verified vs torch formulas). Reuse it as the
+    # single source instead of redefining the schedulers here.
+    _lrs = getattr(_optim, "lr_scheduler", None)
+    if _lrs is None:
+        import jittor.lr_scheduler as _lrs
     _optim.lr_scheduler = _lrs
     sys.modules["torch.optim.lr_scheduler"] = _lrs
 except Exception as _e:

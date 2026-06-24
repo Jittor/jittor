@@ -305,6 +305,28 @@ _qv, _kv, _vv = jt.array(_q), jt.array(_k), jt.array(_v)
 _gq = jt.grad((_sdpa(_qv, _kv, _vv, is_causal=True) ** 2).sum(), [_qv])[0]
 ok(bool(jt.isfinite(_gq).all().item()) and float(jt.abs(_gq).sum().item()) > 0, "SDPA backward grad finite+nonzero")
 
+# torch.optim.lr_scheduler on the `import jittor as torch` path (was entirely missing;
+# the documented primary path). Schedulers drive jittor optimizers by updating both
+# optimizer.lr and each param_group["lr"]; verified against torch's exact formulas.
+import math as _math
+_lrs = torch.optim.lr_scheduler
+def _curve(make, n=8):
+    _l = torch.nn.Linear(2, 2); _o = torch.optim.AdamW(_l.parameters(), lr=1.0)
+    _s = make(_o); seen = []
+    for _ in range(n):
+        seen.append(round(float(_o.param_groups[0]["lr"]), 5)); _s.step()
+    return seen
+ok(_curve(lambda o: _lrs.LambdaLR(o, lr_lambda=lambda e: min(1.0, (e + 1) / 5))) ==
+   [0.2, 0.4, 0.6, 0.8, 1.0, 1.0, 1.0, 1.0], "lr_scheduler.LambdaLR warmup (HF warmup helpers wrap this)")
+ok(_curve(lambda o: _lrs.StepLR(o, step_size=2, gamma=0.5)) ==
+   [1.0, 1.0, 0.5, 0.5, 0.25, 0.25, 0.125, 0.125], "lr_scheduler.StepLR")
+ok(_curve(lambda o: _lrs.CosineAnnealingLR(o, T_max=4)) ==
+   [round((1 + _math.cos(_math.pi * e / 4)) / 2, 5) for e in range(8)], "lr_scheduler.CosineAnnealingLR")
+ok(_curve(lambda o: _lrs.LinearLR(o, start_factor=0.5, end_factor=1.0, total_iters=4)) ==
+   [round(0.5 + 0.5 * min(e, 4) / 4, 5) for e in range(8)], "lr_scheduler.LinearLR")
+ok(all(hasattr(_lrs, n) for n in ["PolynomialLR", "MultiStepLR", "ExponentialLR",
+       "SequentialLR", "ConstantLR", "ReduceLROnPlateau"]), "lr_scheduler common set present")
+
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 import sys as _sys
 _sys.exit(1 if FAIL else 0)
