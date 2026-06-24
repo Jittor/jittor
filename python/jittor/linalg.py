@@ -917,8 +917,15 @@ def solve(a,b):
         np.copyto(out, t)
 
     def backward_code2(np, data):
+        # gradient wrt b: solve(A,b)=A^-1 b  =>  dL/db = A^-T @ dout.
+        # (was a stub writing 0 -> silently zero grad through the RHS, breaking
+        #  any training that backprops into b, e.g. differentiable solves / GP.)
+        def T(x):
+            return np.swapaxes(x, -1, -2)
+        dout = data["dout"]
         out = data["outputs"][0]
-        np.copyto(out, 0)
+        a = data["inputs"][0]
+        np.copyto(out, np.linalg.solve(T(a), dout))
 
     l_ans = jt.numpy_code(
         [b.shape],
@@ -948,35 +955,46 @@ def qr(x):
         np.copyto(r,R)
 
     def backward_code(np, data):
+        # Reduced-QR backward (m>=n). A=QR, Q:(...,m,k), R:(...,k,n), k=min(m,n).
+        # Standard form (mirrors torch): with M = R gR^T - gQ^T Q,
+        #   gA = (gQ + Q copyltu(M)) R^{-T},  copyltu(X)=tril(X)+tril(X,-1)^T.
+        # jittor calls this once per output, so out_index selects the gQ-only /
+        # gR-only contribution (the total is linear in (gQ,gR), summed by autodiff).
+        # The OLD code assumed square R (output shapes were both x.shape) and the
+        # Q term lived entirely in span(Q) — wrong/crash for tall m>n. R was even
+        # allocated (m,n) instead of (k,n).
         def T(x):
             return np.swapaxes(x, -1, -2)
         _dot = partial(np.einsum, '...ij,...jk->...ik')
-        _harmard = partial(np.einsum, '...ij,...ij->...ij')
         dout = data["dout"]
         out = data["outputs"][0]
         q, r = data["f_outputs"]
         out_index = data["out_index"]
-        #pl = np.tril(np.ones((inp.shape[-1],inp.shape[-1])))-diags
-        if out_index == 0: # Q_TERM
-            q_t = _dot(T(q),dout)
-            rhs_solve = q_t - T(q_t)
-            rhs_solve = T(np.tril(rhs_solve,-1))
-            qsolve = np.linalg.solve(r,rhs_solve)
-            qsolve = T(qsolve)
-            tq = _dot(q,qsolve)
-            np.copyto(out,tq)
-        else: #R_TERM
-            r_t = _dot(r ,T(dout))
-            rhs_solve = r_t - T(r_t)
-            rhs_solve = np.tril(rhs_solve,-1)
-            rhs_solve = T(rhs_solve)
-            r_solve = np.linalg.solve(r,rhs_solve)
-            tr = _dot(q,(T(r_solve) + dout))
-            np.copyto(out,tr)
+        m = q.shape[-2]; n = r.shape[-1]
+        if m < n:
+            raise NotImplementedError(
+                "qr backward is only implemented for tall/square inputs (m>=n); "
+                f"got m={m} < n={n}. Forward works for all shapes.")
+        def copyltu(X):
+            return np.tril(X) + T(np.tril(X, -1))
+        def rinvT(X):           # X @ R^{-T}
+            return T(np.linalg.solve(r, T(X)))
+        if out_index == 0:      # contribution from gQ (gR=0)
+            gQ = dout
+            M = -_dot(T(gQ), q)
+            np.copyto(out, rinvT(gQ + _dot(q, copyltu(M))))
+        else:                   # contribution from gR (gQ=0)
+            gR = dout
+            M = _dot(r, T(gR))
+            np.copyto(out, rinvT(_dot(q, copyltu(M))))
 
+    m, n = x.shape[-2:]
+    k = min(m, n)
+    sq = list(x.shape[:-2]) + [m, k]
+    sr = list(x.shape[:-2]) + [k, n]
     q, r = jt.numpy_code(
-        [x.shape,x.shape],
-        [x.dtype,x.dtype],
+        [sq, sr],
+        [x.dtype, x.dtype],
         [x],
         forward_code,
         [backward_code],
