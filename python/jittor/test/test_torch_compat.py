@@ -242,6 +242,25 @@ ok(np.abs(_fg.numpy() - 2 * ((_fX @ _fW.T).T @ _fX)).max() < 1e-3, "torch.func.g
 _fps, _fbs = torch.func.stack_module_state([torch.nn.Linear(3, 2) for _ in range(5)])
 ok(tuple(_fps["weight"].shape) == (5, 2, 3), "torch.func.stack_module_state")
 
+# nn.utils reparametrizations: weight_norm reparametrizes weight->(weight_g,weight_v)
+# and recomputes weight before forward (wav2vec2 positional conv; verified vs real
+# torch to ~1e-5). spectral_norm divides weight by its top singular value (verified
+# vs np.linalg.svd + converged torch). pad_sequence pads a ragged batch.
+_wc = torch.nn.Conv1d(4, 4, 3, padding=1)
+_wc = torch.nn.utils.weight_norm(_wc, name="weight", dim=2)
+ok(sorted(n for n, _ in _wc.named_parameters()) == ["bias", "weight_g", "weight_v"],
+   "weight_norm reparametrizes weight->g/v (not weight)")
+ok(tuple(_wc(jt.randn(2, 4, 8)).shape) == (2, 4, 8), "weight_norm conv forward")
+_Wl = np.random.randn(3, 5).astype("float32")
+_sl = torch.nn.Linear(5, 3); _sl.weight.update(jt.array(_Wl))
+_sl = torch.nn.utils.spectral_norm(_sl, n_power_iterations=30)
+for _ in range(3):
+    _ = _sl(jt.randn(2, 5))
+_sig = float((_sl.weight_orig.numpy() / _sl.weight.numpy()).mean())
+ok(abs(_sig - np.linalg.svd(_Wl, compute_uv=False)[0]) < 1e-3, "spectral_norm sigma == top singular value")
+_pad = torch.nn.utils.rnn.pad_sequence([jt.ones(3, 2), jt.ones(1, 2) * 2, jt.ones(2, 2) * 3], batch_first=True)
+ok(tuple(_pad.shape) == (3, 3, 2) and _pad.numpy()[1, 1, 0] == 0.0, "rnn.pad_sequence pads ragged batch")
+
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 import sys as _sys
 _sys.exit(1 if FAIL else 0)

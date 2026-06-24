@@ -1080,6 +1080,123 @@ def _install_nn_extras(nn):
                 g.update(g.clamp(-clip_value, clip_value))
         _u.clip_grad_norm_ = clip_grad_norm_
         _u.clip_grad_value_ = clip_grad_value_
+
+        # --- weight_norm / spectral_norm (reparametrizations) ---
+        # torch reparametrizes a module's `weight` param into other params/buffers and
+        # recomputes `weight` before each forward via a pre-forward hook. jittor has a
+        # single-slot pre-forward hook, so route every reparametrization through one
+        # dispatcher that calls each registered recompute fn (supports weight_norm +
+        # spectral_norm on the same module, and preserves any pre-existing hook).
+        def _ensure_reparam_hook(module):
+            fns = getattr(module, "_reparam_fns", None)
+            if fns is None:
+                fns = []
+                module._reparam_fns = fns
+                prev = getattr(module, "__fhook2__", None)
+                def _dispatch(mod, *a):
+                    if prev is not None:
+                        prev(mod, *a)
+                    for fn in mod._reparam_fns:
+                        fn(mod)
+                module.register_pre_forward_hook(_dispatch)
+            return fns
+
+        def _norm_except_dim(v, dim):
+            # L2 norm over all dims except `dim`, keepdim (torch._norm_except_dim, pow=2).
+            if dim is None or dim == -1:
+                return _jt.sqrt((v * v).sum())
+            dims = [d for d in range(v.ndim) if d != dim]
+            if not dims:
+                return v.abs()
+            return _jt.sqrt((v * v).sum(dims, keepdims=True))
+
+        def weight_norm(module, name="weight", dim=0):
+            w = getattr(module, name)
+            try: delattr(module, name)
+            except Exception: pass
+            setattr(module, name + "_g", _norm_except_dim(w, dim).clone())
+            setattr(module, name + "_v", w.clone())
+            def _recompute(mod):
+                gg = getattr(mod, name + "_g"); vv = getattr(mod, name + "_v")
+                neww = vv * (gg / _norm_except_dim(vv, dim))
+                neww.persistent = False          # exclude from parameters()/state_dict()
+                setattr(mod, name, neww)
+            _ensure_reparam_hook(module).append(_recompute)
+            _recompute(module)                   # materialize weight before first forward
+            return module
+
+        def remove_weight_norm(module, name="weight"):
+            gg = getattr(module, name + "_g"); vv = getattr(module, name + "_v")
+            # final weight = v * g/||v||; restore it as a plain trainable param
+            dimspec = 0
+            final = vv * (gg / _norm_except_dim(vv, dimspec))
+            for k in (name + "_g", name + "_v"):
+                try: delattr(module, k)
+                except Exception: pass
+            final.persistent = True
+            setattr(module, name, final.clone())
+            module._reparam_fns = []             # drop recompute fns (torch removes the hook)
+            return module
+
+        def _l2_normalize(x, eps):
+            return x / (_jt.sqrt((x * x).sum()) + eps)
+
+        def spectral_norm(module, name="weight", n_power_iterations=1, eps=1e-12, dim=None):
+            w = getattr(module, name)
+            sdim = 0 if dim is None else dim
+            def _to_mat(W):
+                if sdim == 0:
+                    return W.reshape(W.shape[0], -1)
+                perm = [sdim] + [d for d in range(W.ndim) if d != sdim]
+                return W.permute(*perm).reshape(W.shape[sdim], -1)
+            wmat = _to_mat(w)
+            h, wd = int(wmat.shape[0]), int(wmat.shape[1])
+            try: delattr(module, name)
+            except Exception: pass
+            setattr(module, name + "_orig", w.clone())
+            module.register_buffer(name + "_u", _l2_normalize(_jt.randn(h), eps))
+            module.register_buffer(name + "_v", _l2_normalize(_jt.randn(wd), eps))
+            def _recompute(mod):
+                W = getattr(mod, name + "_orig"); Wm = _to_mat(W)
+                uu = getattr(mod, name + "_u"); vv = getattr(mod, name + "_v")
+                for _ in range(max(1, n_power_iterations)):
+                    vv = _l2_normalize(_jt.matmul(Wm.transpose(0, 1), uu), eps)
+                    uu = _l2_normalize(_jt.matmul(Wm, vv), eps)
+                getattr(mod, name + "_u").update(uu)     # warm-start next forward
+                getattr(mod, name + "_v").update(vv)
+                sigma = _jt.matmul(uu.reshape(1, -1), _jt.matmul(Wm, vv.reshape(-1, 1)))
+                neww = W / sigma                          # sigma is 1-element -> scalar divide
+                neww.persistent = False
+                setattr(mod, name, neww)
+            _ensure_reparam_hook(module).append(_recompute)
+            _recompute(module)
+            return module
+
+        _u.weight_norm = weight_norm
+        _u.remove_weight_norm = remove_weight_norm
+        _u.spectral_norm = spectral_norm
+
+        # --- nn.utils.rnn.pad_sequence ---
+        import types as _trnn
+        _rnn = _trnn.ModuleType("torch.nn.utils.rnn")
+        def pad_sequence(sequences, batch_first=False, padding_value=0.0):
+            seqs = list(sequences)
+            max_len = max(int(s.shape[0]) for s in seqs)
+            trailing = tuple(seqs[0].shape[1:])
+            out = []
+            for s in seqs:
+                pl = max_len - int(s.shape[0])
+                if pl > 0:
+                    pad = _jt.ones((pl,) + trailing, dtype=s.dtype) * padding_value
+                    s = _jt.concat([s, pad], dim=0)
+                out.append(s)
+            stacked = _jt.stack(out, dim=0)               # (B, T, *)
+            return stacked if batch_first else stacked.transpose(0, 1)
+        _rnn.pad_sequence = pad_sequence
+        _u.rnn = _rnn
+        import sys as _sysrnn
+        _sysrnn.modules.setdefault("torch.nn.utils.rnn", _rnn)
+
         nn.utils = _u
 
     if not hasattr(nn, "Hardswish"):
