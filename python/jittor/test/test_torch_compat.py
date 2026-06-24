@@ -516,6 +516,20 @@ ok(abs(float(_F.triplet_margin_loss(jt.array(_ta), jt.array(_tp), jt.array(_tn),
 _pin = np.abs(np.random.randn(3, 4)).astype("float32"); _ptg = np.abs(np.random.randn(3, 4)).astype("float32")
 ok(abs(float(_F.poisson_nll_loss(jt.array(_pin), jt.array(_ptg)).item()) - 1.84235) < 2e-3, "F.poisson_nll_loss (log_input) matches torch")
 
+# F.ctc_loss (wav2vec2 / speech ASR): CTC forward (alpha) DP in log space, differentiable.
+# Verified bit-equal to real torch 2.12 (per-sample [7.31635, 5.75243]).
+np.random.seed(0)
+_clp = jt.nn.log_softmax(jt.array(np.random.randn(6, 2, 5).astype("float32")), dim=2)
+_ctgt = jt.array(np.array([[1, 2, 1, 0], [3, 1, 0, 0]], dtype="int64"))
+_cil = jt.array(np.array([6, 5], dtype="int64")); _ctl = jt.array(np.array([3, 2], dtype="int64"))
+_cnone = _F.ctc_loss(_clp, _ctgt, _cil, _ctl, blank=0, reduction="none").numpy().reshape(-1)
+ok(abs(_cnone[0] - 7.31635) < 1e-2 and abs(_cnone[1] - 5.75243) < 1e-2, "F.ctc_loss per-sample matches torch")
+ok(abs(float(_F.ctc_loss(_clp, _ctgt, _cil, _ctl, blank=0, reduction="mean").item()) - 2.6575) < 1e-2,
+   "F.ctc_loss mean (divides by target_length)")
+_clg = jt.nn.log_softmax(jt.array(np.random.RandomState(5).randn(6, 2, 5).astype("float32")), dim=2)
+_cg = jt.grad(_F.ctc_loss(_clg, _ctgt, _cil, _ctl, blank=0).sum(), [_clg])[0]
+ok(bool(jt.isfinite(_cg).all().item()) and float(jt.abs(_cg).sum().item()) > 0, "F.ctc_loss differentiable")
+
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 import sys as _sys
 _sys.exit(1 if FAIL else 0)
