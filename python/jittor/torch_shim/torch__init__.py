@@ -148,9 +148,22 @@ def _clip_grad_value_(parameters, clip_value, foreach=None):
         g.update(g.clamp(-clip_value, clip_value))
 _nn_utils.clip_grad_norm_ = _clip_grad_norm_
 _nn_utils.clip_grad_value_ = _clip_grad_value_
-_nn_utils.weight_norm = lambda module, name="weight", dim=0: module
-_nn_utils.remove_weight_norm = lambda module, name="weight": module
-_nn_utils.spectral_norm = lambda module, *a, **k: module
+# Use jittor's REAL weight_norm/spectral_norm reparametrizations (installed onto
+# jittor's nn.utils by torch_compat at `import jittor`, and still bound here because
+# this shim reassigns nn.utils only below at `nn.utils = _nn_utils`). The previous
+# no-op stubs (`lambda module,...: module`) were silent-wrong: they claimed to apply
+# weight_norm but left the module unchanged, so a weight-normed checkpoint (state_dict
+# keyed by weight_g/weight_v) would mismatch the un-reparametrized module. The real
+# impls reparametrize weight->weight_g/weight_v and recompute weight before forward,
+# verified bit-identical to real torch (wav2vec2 positional conv; spectral_norm sigma
+# == top singular value).
+_real_nn_utils = getattr(nn, "utils", None)
+def _pick(name, fallback):
+    fn = getattr(_real_nn_utils, name, None)
+    return fn if callable(fn) else fallback
+_nn_utils.weight_norm = _pick("weight_norm", lambda module, name="weight", dim=0: module)
+_nn_utils.remove_weight_norm = _pick("remove_weight_norm", lambda module, name="weight": module)
+_nn_utils.spectral_norm = _pick("spectral_norm", lambda module, *a, **k: module)
 def _parameters_to_vector(parameters):
     flats = [p.reshape(-1) for p in parameters]
     return _jt.concat(flats) if flats else _jt.array([])
@@ -177,8 +190,12 @@ sys.modules["torch.nn.utils.parametrize"] = _parametrize
 # nn.utils.weight_norm). Same no-op reparam: the effective weight is unchanged, so
 # forward is correct for freshly-built models.
 _parametrizations = types.ModuleType("torch.nn.utils.parametrizations")
-_parametrizations.weight_norm = lambda module, name="weight", dim=0: module
-_parametrizations.spectral_norm = lambda module, *a, **k: module
+# Newer parametrizations API: same effective reparametrization as the old nn.utils
+# entry points, so route to the real impls (forward correct) rather than no-ops. The
+# state_dict key scheme differs from torch's parametrizations.* keys, but forward is
+# correct and this is strictly better than the silent no-op for freshly-built models.
+_parametrizations.weight_norm = _pick("weight_norm", lambda module, name="weight", dim=0: module)
+_parametrizations.spectral_norm = _pick("spectral_norm", lambda module, *a, **k: module)
 _parametrizations.orthogonal = lambda module, *a, **k: module
 _nn_utils.parametrizations = _parametrizations
 sys.modules["torch.nn.utils.parametrizations"] = _parametrizations

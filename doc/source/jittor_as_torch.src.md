@@ -183,7 +183,10 @@ checkpoint/safetensors migration, `model.save()`/`load()`, real `torch.cuda` mem
 reporting, complex numbers + `torch.fft.*`, `F.multi_head_attention_forward`,
 `torch.func` (functorch: `functional_call`/`grad`/`grad_and_value`/`vmap`/`jacrev`/
 `stack_module_state` — used by LoRA / meta-learning / model ensembling, verified
-bit-identical to real torch), a Lightning-style training core, and clear errors. The torch op surface is broad — verified
+bit-identical to real torch), `nn.utils.weight_norm`/`spectral_norm` (real
+reparametrizations — `weight`→`weight_g`/`weight_v` recomputed before forward, and
+`weight`/σ via power iteration; verified vs real torch + `np.linalg.svd`) and
+`nn.utils.rnn.pad_sequence`, a Lightning-style training core, and clear errors. The torch op surface is broad — verified
 by an op-level differential battery (`op_parity.py`: ~84 ops vs real torch, plus a
 backward battery) on **both** Ascend and CUDA.
 
