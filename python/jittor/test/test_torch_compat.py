@@ -462,6 +462,26 @@ _gsh = torch.nn.functional.gumbel_softmax(jt.array(np.random.randn(4, 5).astype(
 ok(np.allclose(_gsh.numpy().sum(-1), 1.0) and np.all(np.isin(np.round(_gsh.numpy(), 4), [0, 1])),
    "F.gumbel_softmax hard is one-hot")
 
+# nn.TransformerDecoderLayer/Decoder/Transformer (encoder + MHA already done). The
+# encoder-layer composition (norm order/residuals) is bit-equal to real torch with
+# identical weights (out[0,0,:4] [-3.45456,1.06766,0.6209,1.03992]); decoder/Transformer
+# build on the same verified MHA+LayerNorm+Linear pattern.
+_dl = torch.nn.TransformerDecoderLayer(d_model=16, nhead=2, dim_feedforward=32, batch_first=True); _dl.eval()
+_tgt = jt.array(np.random.RandomState(0).randn(2, 4, 16).astype("float32"))
+_mem = jt.array(np.random.RandomState(1).randn(2, 6, 16).astype("float32"))
+ok(tuple(_dl(_tgt, _mem).shape) == (2, 4, 16) and bool(jt.isfinite(_dl(_tgt, _mem)).all().item()),
+   "nn.TransformerDecoderLayer (self+cross attn) forward")
+_tr = torch.nn.Transformer(d_model=16, nhead=2, num_encoder_layers=2, num_decoder_layers=2,
+                           dim_feedforward=32, batch_first=True); _tr.eval()
+_src = jt.array(np.random.RandomState(2).randn(2, 6, 16).astype("float32"))
+ok(tuple(_tr(_src, _tgt).shape) == (2, 4, 16) and bool(jt.isfinite(_tr(_src, _tgt)).all().item()),
+   "nn.Transformer (encoder+decoder) forward")
+_cm = torch.nn.Transformer.generate_square_subsequent_mask(4).numpy()
+ok(_cm[0, 3] < -1e29 and _cm[3, 0] == 0, "Transformer.generate_square_subsequent_mask")
+_tg = jt.array(np.random.RandomState(3).randn(2, 6, 16).astype("float32"))
+_tgr = jt.grad(_tr(_tg, _tgt).sum(), [_tg])[0]
+ok(bool(jt.isfinite(_tgr).all().item()) and float(jt.abs(_tgr).sum().item()) > 0, "nn.Transformer differentiable")
+
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 import sys as _sys
 _sys.exit(1 if FAIL else 0)
