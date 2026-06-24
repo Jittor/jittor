@@ -809,6 +809,17 @@ def _install_reductions(g):
     Var.sort = lambda self, dim=-1, descending=False, **kw: sort(self, dim=dim, descending=descending)
     Var.argsort = lambda self, dim=-1, descending=False, **kw: g.argsort(self, dim=dim, descending=descending)
     Var.topk = lambda self, k, dim=-1, largest=True, sorted=True: topk(self, k, dim=dim, largest=largest, sorted=sorted)
+    # torch's Tensor.max(dim, keepdim=...) / min(...) returns the (values, indices)
+    # namedtuple. jittor's native Var.max(dim) returns values-only and is used by core
+    # (linalg/nn) with a BARE dim or the `keepdims` spelling -- NEVER torch's `keepdim`.
+    # So return the namedtuple ONLY when the torch-spelled `keepdim` kwarg is present
+    # (phimoe: scores.max(dim=-1, keepdim=True)); every other form stays native.
+    _orig_var_max = Var.max
+    _orig_var_min = Var.min
+    Var.max = lambda self, *a, **k: (_maxmin("max", self, *a, **k) if "keepdim" in k
+                                     else _orig_var_max(self, *a, **k))
+    Var.min = lambda self, *a, **k: (_maxmin("min", self, *a, **k) if "keepdim" in k
+                                     else _orig_var_min(self, *a, **k))
 
     # torch's var/std default to UNBIASED (Bessel, correction=1); jittor's native var
     # defaults to biased (numpy-aligned) -- a silent-wrong divergence for torch code.
@@ -1497,17 +1508,29 @@ def _install_init_aliases():
             tensor.start_grad()
         return tensor
 
+    # in-place inits are sometimes called on a NON-Var constant: jittor represents a
+    # disabled affine term (e.g. LayerNorm(bias=False) -> self.bias = 0.0) as a Python
+    # scalar, and a model's _init_weights may still call init.zeros_(module.bias) on it.
+    # Such a constant isn't a learnable parameter, so initializing it is a no-op.
+    def _not_var(t):
+        return not isinstance(t, _jt2.Var)
     def normal_(tensor, mean=0.0, std=1.0, generator=None):
+        if _not_var(tensor): return tensor
         return _assign(tensor, _jt2.normal(float(mean), float(std), tensor.shape).cast(str(tensor.dtype)))
     def uniform_(tensor, a=0.0, b=1.0, generator=None):
+        if _not_var(tensor): return tensor
         return _assign(tensor, (_jt2.rand(tensor.shape) * (b - a) + a).cast(str(tensor.dtype)))
     def zeros_(tensor):
+        if _not_var(tensor): return tensor
         return _assign(tensor, _jt2.zeros(tensor.shape, tensor.dtype))
     def ones_(tensor):
+        if _not_var(tensor): return tensor
         return _assign(tensor, _jt2.ones(tensor.shape, tensor.dtype))
     def constant_(tensor, val):
+        if _not_var(tensor): return tensor
         return _assign(tensor, _jt2.ones(tensor.shape, tensor.dtype) * val)
     def trunc_normal_(tensor, mean=0.0, std=1.0, a=-2.0, b=2.0, generator=None):
+        if _not_var(tensor): return tensor
         import numpy as _np
         # simple clamp of a normal sample (no scipy dependency)
         x = _np.random.normal(mean, std, tensor.shape).astype("float32")
