@@ -2458,6 +2458,19 @@ def _install_misc(g, Var):
             setattr(g, name, fn)
     _alias("rsqrt", lambda x: 1.0 / jt.sqrt(x))
     _alias("empty_like", lambda x, **k: jt.empty(x.shape, x.dtype))
+    # complex-dtype API (#3): jittor represents complex via nn.ComplexNumber (real/imag
+    # pair); wire the torch entry points onto it. torch.complex(re,im), view_as_complex
+    # (last dim of 2 -> complex), view_as_real (complex -> last dim of 2), polar, real/
+    # imag/conj/is_complex. The arithmetic (* / + matmul exp conj) is on ComplexNumber.
+    _CN = jt.nn.ComplexNumber
+    _alias("complex", lambda real, imag, **k: _CN(real, imag))
+    _alias("view_as_complex", lambda x: jt.nn.view_as_complex(x))
+    _alias("view_as_real", lambda x: jt.nn.view_as_real(x))
+    _alias("is_complex", lambda x: isinstance(x, _CN))
+    _alias("real", lambda x: x.real if isinstance(x, _CN) else x)
+    _alias("imag", lambda x: x.imag if isinstance(x, _CN) else jt.zeros_like(x))
+    _alias("polar", lambda abs, angle, **k: _CN(abs * jt.cos(angle), abs * jt.sin(angle)))
+    _alias("conj", lambda x: x.conj() if isinstance(x, _CN) else x)
     # torch.softmax / log_softmax / relu top-level function forms (convbert calls
     # torch.softmax(x, dim=...)). jittor exposes these via nn, not the top level.
     _alias("softmax", lambda input, dim=None, **k: jt.nn.softmax(input, dim=dim))
