@@ -45,3 +45,11 @@ template<> __device__ __inline__ float numeric_min<float>() { return -CUDART_INF
 
 template<> __device__ __inline__ double numeric_max<double>() { return CUDART_INF; };
 template<> __device__ __inline__ double numeric_min<double>() { return -CUDART_INF; };
+
+// narrow integer (8/16-bit) reduce identities — CUDA reduce.maximum/minimum over int8/
+// int16 (e.g. bool() on an int8 tensor in model.generate) needs these; without them
+// nvcc fails with "unresolved extern numeric_min<signed char>".
+template<> __device__ __inline__ signed char numeric_max<signed char>() { return 127; };
+template<> __device__ __inline__ signed char numeric_min<signed char>() { return -128; };
+template<> __device__ __inline__ short numeric_max<short>() { return 32767; };
+template<> __device__ __inline__ short numeric_min<short>() { return -32768; };

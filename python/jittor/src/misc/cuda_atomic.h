@@ -83,6 +83,59 @@ inline double cuda_atomic_min(double* a, double b) {
 }
 #endif
 
+// narrow-int 8/16-bit atomicMax/Min via 32-bit CAS (CUDA has no char/short atomics).
+// Needed for reduce.maximum/minimum over int8/int16 on CUDA (e.g. bool() on an int8
+// tensor inside model.generate -> reduce.maximum<int8>). Read the enclosing aligned
+// 32-bit word, splice the byte/half (sign-correct), atomicCAS. Verified vs numpy.
+template<> __device__ inline int8 cuda_atomic_max(int8* address, int8 val) {
+    unsigned int* base=(unsigned int*)((size_t)address & ~(size_t)0x3);
+    unsigned int shift=(((size_t)address)&0x3)*8;
+    unsigned int mask=((unsigned int)(0xFFu))<<shift;
+    unsigned int old=*base, assumed;
+    do { assumed=old;
+        int8 cur=(int8)(unsigned char)((assumed&mask)>>shift);
+        int8 nv = val > cur ? val : cur;
+        unsigned int merged=(assumed&~mask)|(((unsigned int)(unsigned char)nv&(unsigned int)(0xFFu))<<shift);
+        old=atomicCAS(base,assumed,merged);
+    } while(assumed!=old);
+    return (int8)(unsigned char)((assumed&mask)>>shift); }
+template<> __device__ inline int8 cuda_atomic_min(int8* address, int8 val) {
+    unsigned int* base=(unsigned int*)((size_t)address & ~(size_t)0x3);
+    unsigned int shift=(((size_t)address)&0x3)*8;
+    unsigned int mask=((unsigned int)(0xFFu))<<shift;
+    unsigned int old=*base, assumed;
+    do { assumed=old;
+        int8 cur=(int8)(unsigned char)((assumed&mask)>>shift);
+        int8 nv = val < cur ? val : cur;
+        unsigned int merged=(assumed&~mask)|(((unsigned int)(unsigned char)nv&(unsigned int)(0xFFu))<<shift);
+        old=atomicCAS(base,assumed,merged);
+    } while(assumed!=old);
+    return (int8)(unsigned char)((assumed&mask)>>shift); }
+template<> __device__ inline int16 cuda_atomic_max(int16* address, int16 val) {
+    unsigned int* base=(unsigned int*)((size_t)address & ~(size_t)0x3);
+    unsigned int shift=(((size_t)address)&0x3)*8;
+    unsigned int mask=((unsigned int)(0xFFFFu))<<shift;
+    unsigned int old=*base, assumed;
+    do { assumed=old;
+        int16 cur=(int16)(unsigned short)((assumed&mask)>>shift);
+        int16 nv = val > cur ? val : cur;
+        unsigned int merged=(assumed&~mask)|(((unsigned int)(unsigned short)nv&(unsigned int)(0xFFFFu))<<shift);
+        old=atomicCAS(base,assumed,merged);
+    } while(assumed!=old);
+    return (int16)(unsigned short)((assumed&mask)>>shift); }
+template<> __device__ inline int16 cuda_atomic_min(int16* address, int16 val) {
+    unsigned int* base=(unsigned int*)((size_t)address & ~(size_t)0x3);
+    unsigned int shift=(((size_t)address)&0x3)*8;
+    unsigned int mask=((unsigned int)(0xFFFFu))<<shift;
+    unsigned int old=*base, assumed;
+    do { assumed=old;
+        int16 cur=(int16)(unsigned short)((assumed&mask)>>shift);
+        int16 nv = val < cur ? val : cur;
+        unsigned int merged=(assumed&~mask)|(((unsigned int)(unsigned short)nv&(unsigned int)(0xFFFFu))<<shift);
+        old=atomicCAS(base,assumed,merged);
+    } while(assumed!=old);
+    return (int16)(unsigned short)((assumed&mask)>>shift); }
+
 template <class T> struct int_mapper {
     typedef T src;
     typedef T target;
