@@ -1746,13 +1746,17 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # top-level op and the method so torch's keyword form works, while plain
     # positional calls (jittor's own usage) pass straight through unchanged.
     _native_clamp = jt.clamp
-    def _clamp(input, min=None, max=None):
-        return _native_clamp(input, min, max)
+    def _clamp(input, min=None, max=None, min_v=None, max_v=None):
+        # accept BOTH torch (min/max) and jittor-native (min_v/max_v) kwarg names:
+        # this override REPLACES jt.clamp, and jittor's own ops (e.g. nn.hardswish ->
+        # jt.clamp(x+3, min_v=0, max_v=6)) call it with min_v/max_v.
+        return _native_clamp(input, min if min is not None else min_v,
+                             max if max is not None else max_v)
     g.clamp = _clamp
     g.clip = _clamp                      # torch.clip is an alias of torch.clamp
-    Var.clamp = lambda self, min=None, max=None: _native_clamp(self, min, max)
-    Var.clip = lambda self, min=None, max=None: _native_clamp(self, min, max)
-    Var.clamp_ = lambda self, min=None, max=None: _ip(self, _native_clamp(self, min, max))
+    Var.clamp = lambda self, min=None, max=None, min_v=None, max_v=None: _clamp(self, min, max, min_v, max_v)
+    Var.clip = Var.clamp
+    Var.clamp_ = lambda self, min=None, max=None, min_v=None, max_v=None: _ip(self, _clamp(self, min, max, min_v, max_v))
     Var.clip_ = Var.clamp_
 
     # torch's Tensor.nonzero(as_tuple=False) returns an (N, ndim) index matrix;
