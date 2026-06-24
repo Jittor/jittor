@@ -125,7 +125,27 @@ class TestOneHot(unittest.TestCase):
         check((10,), (4,))
         check((2,3), (4,))
         check((3,4,5,6), (2,))
-            
+
+    @unittest.skipIf(skip_this_test, "No Torch Found")
+    def test_categorical_logits(self):
+        # The logits= path was broken (sigmoid+renorm instead of softmax; raw logits
+        # stored for entropy) -> wrong log_prob/entropy, which breaks PPO/RLHF. It must
+        # match torch AND be differentiable wrt the logits (policy gradient).
+        for shape in [(10,), (2, 3), (3, 4, 5)]:
+            logits = np.random.randn(*shape).astype('float32')
+            jc = jd.Categorical(logits=jt.array(logits))
+            tc = torch.distributions.Categorical(logits=torch.tensor(logits))
+            np.testing.assert_allclose(jc.entropy().data, tc.entropy().numpy(), atol=1e-5)
+            x = np.random.randint(0, shape[-1], shape[:-1] if len(shape) > 1 else (4,))
+            np.testing.assert_allclose(jc.log_prob(x), tc.log_prob(torch.tensor(x)), atol=1e-5)
+        # differentiability (PPO needs grad through log_prob + entropy)
+        L = jt.array(np.random.randn(3, 5).astype('float32'))
+        dc = jd.Categorical(logits=L)
+        loss = dc.log_prob(jt.array(np.array([0, 2, 4], dtype='int64'))).sum() + dc.entropy().sum()
+        g = jt.grad(loss, [L])[0]
+        assert bool(jt.isfinite(g).all().item()) and float(jt.abs(g).sum().item()) > 0, \
+            "Categorical log_prob/entropy must be differentiable wrt logits"
+
     @unittest.skipIf(skip_this_test, "No Torch Found")
     def test_uniform(self):
         for _ in range(4):

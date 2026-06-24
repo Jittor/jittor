@@ -53,15 +53,20 @@ class OneHotCategorical:
 class Categorical:
     def __init__(self, probs=None, logits=None):
         assert not (probs is None and logits is None)
-        if probs is None:
-            # cannot align to pytorch
-            probs = jt.sigmoid(logits)
-        probs = probs / probs.sum(-1, True)
-        if logits is None:
+        # Align to torch.distributions.Categorical: logits map to probs via SOFTMAX
+        # (not sigmoid+renorm), and `logits` are stored as normalized log-probs
+        # (log_softmax) so log_prob/entropy are correct. probs/logits are kept
+        # differentiable (only the sampling helpers are detached) so policy-gradient
+        # methods (PPO/RLHF) can backprop through log_prob/entropy.
+        if logits is not None:
+            logits = nn.log_softmax(logits, dim=-1)
+            probs = jt.exp(logits)
+        else:
+            probs = probs / probs.sum(-1, True)
             logits = jt.safe_log(probs)
+        self.probs = probs
+        self.logits = logits
         with jt.no_grad():
-            self.probs = probs
-            self.logits = logits
             self.cum_probs = simple_presum(self.probs)
             self.cum_probs_l = self.cum_probs[..., :-1]
             self.cum_probs_r = self.cum_probs[..., 1:]
