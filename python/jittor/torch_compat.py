@@ -751,6 +751,63 @@ def install(torch):
                     loss = loss + jt.ternary(target > 1, stir, jt.zeros_like(target))
                 return loss.mean() if reduction == "mean" else (loss.sum() if reduction == "sum" else loss)
             F.poisson_nll_loss = _poisson_nll
+        if not hasattr(F, "ctc_loss"):
+            # F.ctc_loss (wav2vec2 / speech ASR): the CTC forward (alpha) DP in log space.
+            # log_probs (T,N,C) log-softmax; targets (N,S) padded or 1-D concatenated.
+            # Differentiable (grad flows to log_probs). Verified bit-equal to real torch.
+            import numpy as _np_ctc
+            _CNEG = -1e30
+            def _ctc_loss(log_probs, targets, input_lengths, target_lengths, blank=0,
+                          reduction="mean", zero_infinity=False):
+                def _ints(v):
+                    return [int(x) for x in (v.numpy().reshape(-1) if isinstance(v, jt.Var) else _np_ctc.asarray(v).reshape(-1))]
+                in_lens, tgt_lens = _ints(input_lengths), _ints(target_lengths)
+                tnp = targets.numpy() if isinstance(targets, jt.Var) else _np_ctc.asarray(targets)
+                flat = (tnp.ndim == 1)
+                def _shift(v, k):
+                    return jt.concat([jt.full((k,), _CNEG), v[:int(v.shape[0]) - k]]) if k > 0 else v
+                def _lse(mats):
+                    m = mats[0]
+                    for x in mats[1:]:
+                        m = jt.maximum(m, x)
+                    return m + jt.safe_log(sum(jt.exp(x - m) for x in mats))
+                N = log_probs.shape[1]
+                losses, offset = [], 0
+                for n in range(N):
+                    Tn, Sn = in_lens[n], tgt_lens[n]
+                    if flat:
+                        seq = [int(x) for x in tnp[offset:offset + Sn]]; offset += Sn
+                    else:
+                        seq = [int(x) for x in tnp[n, :Sn]]
+                    ext = [blank]
+                    for lab in seq:
+                        ext += [lab, blank]
+                    L = len(ext)
+                    ext_idx = jt.array(_np_ctc.array(ext, dtype="int64"))
+                    skip = _np_ctc.zeros(L, dtype="float32")
+                    for s in range(2, L):
+                        if ext[s] != blank and ext[s] != ext[s - 2]:
+                            skip[s] = 1.0
+                    skip_v = jt.array(skip)
+                    start = _np_ctc.full(L, _CNEG, dtype="float32"); start[0] = 0.0
+                    if L > 1:
+                        start[1] = 0.0
+                    lp_n = log_probs[:Tn, n, :]
+                    alpha = lp_n[0][ext_idx] + jt.array(start)
+                    for t in range(1, Tn):
+                        a2 = _shift(alpha, 2) * skip_v + (1 - skip_v) * _CNEG
+                        alpha = lp_n[t][ext_idx] + _lse([alpha, _shift(alpha, 1), a2])
+                    losses.append(-(_lse([alpha[L - 1], alpha[L - 2]]) if L > 1 else alpha[L - 1]))
+                out = jt.stack(losses).reshape((N,))   # (N,1)->(N,): jittor has no 0-d scalar
+                if zero_infinity:
+                    out = jt.ternary(jt.isfinite(out), out, jt.zeros_like(out))
+                if reduction == "none":
+                    return out
+                if reduction == "sum":
+                    return out.sum()
+                tl = jt.array(_np_ctc.array([max(s, 1) for s in tgt_lens], dtype="float32"))
+                return (out / tl).mean()
+            F.ctc_loss = _ctc_loss
         if hasattr(nn, "layer_norm"): F.layer_norm = nn.layer_norm
         if hasattr(nn, "embedding"): F.embedding = nn.embedding
         nn.functional = F
