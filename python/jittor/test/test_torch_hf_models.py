@@ -153,6 +153,35 @@ class TestTorchHFModels(unittest.TestCase):
         self.assertAlmostEqual(float(torch.norm(x)), float(np.linalg.norm(x.float().numpy())), places=3)
         self.assertEqual(tuple(x.T.shape), (4, 3))
 
+    def test_generate_greedy_kv_cache_and_beam(self):
+        # model.generate(): greedy with KV cache must equal a from-scratch argmax loop
+        # (proves the cache is correct), and beam/sampling/batched must run & produce
+        # valid tokens. Beam search previously crashed on three torch-compat gaps now
+        # fixed: torch.full(fill_value=), take_along_dim broadcast, all/any axis=/keepdims=.
+        m = AutoModelForCausalLM.from_config(AutoConfig.for_model('llama', **CFG['llama']))
+        m.eval()
+        V = CFG['llama']['vocab_size']
+        ids = torch.tensor(np.array([[1, 2, 3, 4]], dtype='int64'))
+        out = m.generate(ids, max_new_tokens=6, do_sample=False, num_beams=1)
+        gen = out.numpy().tolist()[0]
+        seq = ids.numpy().tolist()[0]
+        for _ in range(6):
+            logits = m(torch.tensor(np.array([seq], dtype='int64'))).logits.numpy()[0, -1]
+            seq.append(int(logits.argmax()))
+        self.assertEqual(gen, seq, "greedy KV-cache generation != from-scratch recompute (cache bug)")
+
+        def _valid(o):
+            a = o.numpy(); return bool((a >= 0).all() and (a < V).all())
+        self.assertTrue(_valid(m.generate(ids, max_new_tokens=5, num_beams=3, do_sample=False)),
+                        "beam search produced invalid tokens")
+        jt.set_global_seed(0)
+        self.assertTrue(_valid(m.generate(ids, max_new_tokens=5, do_sample=True, temperature=0.8, top_k=10)),
+                        "sampling produced invalid tokens")
+        ids2 = torch.tensor(np.array([[1, 2, 3, 4], [5, 6, 7, 8]], dtype='int64'))
+        self.assertTrue(_valid(m.generate(ids2, attention_mask=torch.ones(2, 4),
+                                          max_new_tokens=5, do_sample=False)),
+                        "batched generation produced invalid tokens")
+
 
 if __name__ == '__main__':
     unittest.main()

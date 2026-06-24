@@ -327,6 +327,22 @@ ok(_curve(lambda o: _lrs.LinearLR(o, start_factor=0.5, end_factor=1.0, total_ite
 ok(all(hasattr(_lrs, n) for n in ["PolynomialLR", "MultiStepLR", "ExponentialLR",
        "SequentialLR", "ConstantLR", "ReduceLROnPlateau"]), "lr_scheduler common set present")
 
+# model.generate(num_beams=...) path fixes (greedy/sampling worked; beam crashed on
+# three torch-compat gaps): (1) torch.full(fill_value=) keyword, (2) take_along_dim
+# broadcasting size-1 index dims (beam _gather_beams gathers full sequences),
+# (3) torch.all/any numpy-style axis=/keepdims= aliases (beam _update_finished_beams).
+ok(torch.full((2, 2), fill_value=5.0).numpy().tolist() == [[5, 5], [5, 5]], "full(fill_value=) keyword")
+ok(torch.full_like(jt.zeros(3), fill_value=4.0).numpy().tolist() == [4, 4, 4], "full_like(fill_value=) keyword")
+_tad_t = jt.array(np.arange(24).reshape(2, 3, 4).astype("float32"))
+_tad_i = jt.array(np.array([[[1], [0]], [[2], [1]]]).astype("int64"))  # (2,2,1) -> broadcast to (2,2,4)
+_tad_o = torch.take_along_dim(_tad_t, _tad_i, dim=1).numpy()
+_tad_r = np.take_along_axis(_tad_t.numpy(), np.broadcast_to(_tad_i.numpy(), (2, 2, 4)), axis=1)
+ok(_tad_o.shape == (2, 2, 4) and np.array_equal(_tad_o, _tad_r), "take_along_dim broadcasts size-1 index dims")
+_bb = jt.array(np.array([[True, True, False], [True, True, True]]))
+ok(torch.all(_bb, axis=-1, keepdims=True).numpy().tolist() == [[False], [True]], "torch.all(axis=,keepdims=) aliases")
+ok(torch.any(_bb, axis=0).numpy().tolist() == [True, True, True], "torch.any(axis=) alias")
+ok(torch.all(_bb, dim=1).numpy().tolist() == [False, True], "torch.all(dim=) still works")
+
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 import sys as _sys
 _sys.exit(1 if FAIL else 0)
