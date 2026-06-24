@@ -3768,6 +3768,54 @@ def _install_misc(g, Var):
         r = cmp.int32().sum(-1)
         return r if out_int32 else r.int64()
     _alias("bucketize", _bucketize)
+    # trace / diag_embed / diagflat / kron / logcumsumexp / tensordot / pdist.
+    def _trace(input):
+        k = min(int(input.shape[0]), int(input.shape[1]))
+        ar = jt.arange(k)
+        return input[ar, ar].sum()
+    _alias("trace", _trace); Var.trace = _trace
+    def _diag_embed(input, offset=0, dim1=-2, dim2=-1):
+        N = int(input.shape[-1])
+        return input.unsqueeze(-1) * jt.init.eye(N)
+    _alias("diag_embed", _diag_embed); Var.diag_embed = lambda self, offset=0, dim1=-2, dim2=-1: _diag_embed(self)
+    _alias("diagflat", lambda input, offset=0: _diag_embed(input.reshape((-1,))))
+    def _kron(a, b):
+        nd = max(a.ndim, b.ndim)
+        a2 = a.reshape((1,) * (nd - a.ndim) + tuple(a.shape))
+        b2 = b.reshape((1,) * (nd - b.ndim) + tuple(b.shape))
+        aex, bex, fin = [], [], []
+        for i in range(nd):
+            aex += [int(a2.shape[i]), 1]; bex += [1, int(b2.shape[i])]
+            fin.append(int(a2.shape[i]) * int(b2.shape[i]))
+        return (a2.reshape(aex) * b2.reshape(bex)).reshape(fin)
+    _alias("kron", _kron); Var.kron = _kron
+    def _logcumsumexp(input, dim):
+        m = input.max(dim, keepdims=True)
+        return m + jt.log(jt.cumsum(jt.exp(input - m), dim))
+    _alias("logcumsumexp", _logcumsumexp); Var.logcumsumexp = _logcumsumexp
+    def _tensordot(a, b, dims=2):
+        if isinstance(dims, int):
+            adims, bdims = list(range(a.ndim - dims, a.ndim)), list(range(dims))
+        else:
+            adims, bdims = list(dims[0]), list(dims[1])
+        a_free = [i for i in range(a.ndim) if i not in adims]
+        b_free = [i for i in range(b.ndim) if i not in bdims]
+        import numpy as _np_td
+        af = int(_np_td.prod([int(a.shape[i]) for i in a_free])) if a_free else 1
+        cs = int(_np_td.prod([int(a.shape[i]) for i in adims])) if adims else 1
+        bf = int(_np_td.prod([int(b.shape[i]) for i in b_free])) if b_free else 1
+        out = jt.matmul(a.permute(a_free + adims).reshape((af, cs)), b.permute(bdims + b_free).reshape((cs, bf)))
+        fin = [int(a.shape[i]) for i in a_free] + [int(b.shape[i]) for i in b_free]
+        return out.reshape(fin) if fin else out.reshape((1,))   # full contraction -> scalar (jittor (1,))
+    _alias("tensordot", _tensordot)
+    def _pdist(input, p=2.0):
+        N = int(input.shape[0])
+        diff = input.unsqueeze(1) - input.unsqueeze(0)
+        d = ((jt.abs(diff) ** p).sum(-1)) ** (1.0 / p)
+        ii = [i for i in range(N) for j in range(i + 1, N)]
+        jj = [j for i in range(N) for j in range(i + 1, N)]
+        return d[jt.array(ii), jt.array(jj)]
+    _alias("pdist", _pdist)
     _alias("square", lambda x: x * x)   # torch.square (jittor only had jt.sqr); persimmon
     # torch.addmm(input, mat1, mat2, *, beta=1, alpha=1):
     #   out = beta * input + alpha * (mat1 @ mat2)   (gpt2 uses this for its

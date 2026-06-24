@@ -553,6 +553,21 @@ _lout, (_lhn, _) = _lnet(jt.array(np.random.randn(2, 3, 4).astype("float32")))
 ok(np.abs(_lout.numpy()[0, 0, :5] - np.array([-0.0574, -0.11792, 0.27221, -0.25979, 0.10486])).max() < 1e-3,
    "nn.LSTM output bit-matches real torch (gate order/formula)")
 
+# Math/contraction ops: trace, diag_embed, kron, logcumsumexp, tensordot, pdist, diagflat.
+np.random.seed(0)
+_mm = np.random.randn(4, 4).astype("float32")
+ok(abs(float(torch.trace(jt.array(_mm)).item()) - float(np.trace(_mm))) < 1e-3, "torch.trace")
+_dv = np.random.randn(2, 4).astype("float32")
+ok(np.abs(torch.diag_embed(jt.array(_dv)).numpy() - np.stack([np.diag(_dv[i]) for i in range(2)])).max() < 1e-5, "torch.diag_embed")
+_ka = np.random.randn(2, 2).astype("float32"); _kb = np.random.randn(2, 2).astype("float32")
+ok(np.abs(torch.kron(jt.array(_ka), jt.array(_kb)).numpy() - np.kron(_ka, _kb)).max() < 1e-5, "torch.kron")
+_lx2 = np.random.randn(5).astype("float32")
+ok(np.abs(torch.logcumsumexp(jt.array(_lx2), 0).numpy() - np.log(np.cumsum(np.exp(_lx2)))).max() < 1e-4, "torch.logcumsumexp")
+_ta2 = np.random.randn(2, 3, 4).astype("float32"); _tb2 = np.random.randn(4, 5, 2).astype("float32")
+ok(np.abs(torch.tensordot(jt.array(_ta2), jt.array(_tb2), dims=1).numpy() - np.tensordot(_ta2, _tb2, axes=1)).max() < 1e-4, "torch.tensordot")
+_pp = np.random.randn(4, 3).astype("float32")
+ok(np.abs(torch.pdist(jt.array(_pp)).numpy() - np.array([np.linalg.norm(_pp[i] - _pp[j]) for i in range(4) for j in range(i + 1, 4)])).max() < 1e-4, "torch.pdist")
+
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 import sys as _sys
 _sys.exit(1 if FAIL else 0)
