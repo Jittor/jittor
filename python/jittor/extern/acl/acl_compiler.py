@@ -664,6 +664,12 @@ def change_function():
     jt.concat = warp(jt.concat, concat)
     jt.stack = warp(jt.stack, stack_acl)
 
+    # NPU matmul/bmm precision: default to full fp32 (cubeMathType=0) to match torch's
+    # default (TF32/HF32 off) for numerical parity (G3). Set jt.acl_allow_hf32=True to
+    # opt into HF32 (cubeMathType=1, ~5e-4 off, faster) like torch's allow_tf32/allow_hf32.
+    if not hasattr(jt, "acl_allow_hf32"):
+        jt.acl_allow_hf32 = False
+
     jt.gather = warp(jt.gather, gather_acl)
     jt.any = warp(jt.any, any_acl)
     jt.Var.any = jt.any

@@ -27,6 +27,10 @@ namespace jittor
         string jt_name;
         std::unique_ptr<AclOpAttr> op_attr;
         bool use_nchw = false;
+        // aclnn cubeMathType for matmul/bmm: 0 = KEEP_DTYPE (full fp32, matches torch,
+        // default), 1 = ALLOW_FP32_DOWN_PRECISION (HF32, faster, ~5e-4 off). Set from the
+        // op's cuda_src per jt.acl_allow_hf32. Only matmul/bmm executeOp read it.
+        int cube_math_type = 0;
 
         BaseOpRunner(const string &name = "") : name(name) {}
         virtual ~BaseOpRunner() = default;
