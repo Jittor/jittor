@@ -414,6 +414,17 @@ _cz = np.array([[2., 0., 3., -1.], [1., -2., 0., 4.]], dtype="float32")
 ok(np.abs(torch.cumprod(jt.array(_cz), dim=-1).numpy() - np.cumprod(_cz, axis=-1)).max() < 1e-5,
    "torch.cumprod with zeros and negatives")
 
+# Var.index_fill_ was broken (negative-dim crash + iterated the index TENSOR into an
+# f-string) and unexposed. Rewrote mask-based; matches torch (in-place, negative dim,
+# tensor or list index, differentiable).
+_ifx = np.random.RandomState(0).randn(3, 4).astype("float32")
+_ifa = jt.array(_ifx.copy()); _ifa.index_fill_(1, jt.array(np.array([0, 2], dtype="int64")), 9.0)
+ok(abs(float(_ifa.sum().item()) - 57.37729) < 1e-3, "Var.index_fill_ dim=1 matches torch")
+_ifc = jt.array(_ifx.copy()); _ifc.index_fill_(-1, jt.array(np.array([3], dtype="int64")), -1.0)
+ok(abs(float(_ifc.sum().item()) - 2.43474) < 1e-3, "Var.index_fill_ negative dim (was a crash)")
+_ifd = jt.array(_ifx.copy()); _ = _ifd.index_fill(1, jt.array(np.array([0], dtype="int64")), 0.0)
+ok(np.array_equal(_ifd.numpy(), _ifx), "Var.index_fill out-of-place leaves input")
+
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 import sys as _sys
 _sys.exit(1 if FAIL else 0)
