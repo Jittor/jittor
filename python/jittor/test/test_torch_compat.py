@@ -574,6 +574,15 @@ ok(np.abs(torch.xlogy(jt.array(np.abs(_ea) + 0.1), jt.array(np.abs(_eb) + 0.1)).
 ok(float(torch.xlogy(jt.array(np.array([0.], "float32")), jt.array(np.array([0.], "float32"))).item()) == 0.0, "torch.xlogy(0,0)==0")
 ok(np.abs(torch.heaviside(jt.array(_ea), jt.zeros(5)).numpy() - np.heaviside(_ea, 0)).max() < 1e-5, "torch.heaviside")
 ok(np.array_equal(torch.signbit(jt.array(_ea)).numpy().astype(bool), np.signbit(_ea)), "torch.signbit")
+# reductions: logsumexp (attention/MoE/loss), nansum/nanmean (NaN-aware), aminmax, quantile.
+_rx2 = np.random.randn(4, 5).astype("float32"); _rxn = _rx2.copy(); _rxn[0, 0] = np.nan; _rxn[2, 3] = np.nan
+ok(np.abs(torch.logsumexp(jt.array(_rx2), dim=1).numpy() - np.log(np.exp(_rx2).sum(1))).max() < 1e-4, "torch.logsumexp")
+ok(abs(float(torch.nansum(jt.array(_rxn)).item()) - float(np.nansum(_rxn))) < 1e-3, "torch.nansum")
+ok(abs(float(torch.nanmean(jt.array(_rxn)).item()) - float(np.nanmean(_rxn))) < 1e-4,
+   "torch.nanmean (isnan-count, not self-compare which jittor optimizes to True)")
+_amx = torch.aminmax(jt.array(_rx2))
+ok(abs(float(_amx.min.item()) - float(_rx2.min())) < 1e-5 and abs(float(_amx.max.item()) - float(_rx2.max())) < 1e-5, "torch.aminmax")
+ok(abs(float(torch.quantile(jt.array(_rx2), 0.5).item()) - float(np.quantile(_rx2, 0.5))) < 1e-4, "torch.quantile")
 
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 import sys as _sys
