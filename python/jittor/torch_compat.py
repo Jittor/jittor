@@ -711,6 +711,46 @@ def install(torch):
                 out = input * (1.0 / jt.sqrt((input * input).mean(dims, keepdims=True) + eps))
                 return out * weight if weight is not None else out
             F.rms_norm = _rms_norm
+        # Activations / losses jittor's functional lacked (verified vs real torch 2.12).
+        if not hasattr(F, "softmin"):
+            F.softmin = lambda input, dim=-1, _stacklevel=3, dtype=None: nn.softmax(-input, dim=dim)
+        if not hasattr(F, "tanhshrink"):
+            F.tanhshrink = lambda input: input - jt.tanh(input)
+        if not hasattr(F, "celu"):
+            F.celu = lambda input, alpha=1.0, inplace=False: \
+                jt.maximum(input, 0.0) + jt.minimum(0.0, alpha * (jt.exp(input / alpha) - 1))
+        if not hasattr(F, "selu"):
+            def _selu(input, inplace=False):
+                a = 1.6732632423543772848170429916717
+                s = 1.0507009873554804934193349852946
+                return s * (jt.maximum(input, 0.0) + jt.minimum(0.0, a * (jt.exp(input) - 1)))
+            F.selu = _selu
+        if not hasattr(F, "threshold"):
+            def _threshold(input, threshold, value, inplace=False):
+                m = (input > threshold).float32()
+                return m * input + (1 - m) * value
+            F.threshold = _threshold
+        if not hasattr(F, "triplet_margin_loss"):
+            def _triplet(anchor, positive, negative, margin=1.0, p=2.0, eps=1e-6,
+                         swap=False, size_average=None, reduce=None, reduction="mean"):
+                def _d(a, b):
+                    return ((jt.abs(a - b) ** p).sum(-1) + eps) ** (1.0 / p)
+                dp, dn = _d(anchor, positive), _d(anchor, negative)
+                if swap:
+                    dn = jt.minimum(dn, _d(positive, negative))
+                loss = jt.maximum(dp - dn + margin, 0.0)
+                return loss.mean() if reduction == "mean" else (loss.sum() if reduction == "sum" else loss)
+            F.triplet_margin_loss = _triplet
+        if not hasattr(F, "poisson_nll_loss"):
+            def _poisson_nll(input, target, log_input=True, full=False, size_average=None,
+                             eps=1e-8, reduce=None, reduction="mean"):
+                loss = (jt.exp(input) - target * input) if log_input else (input - target * jt.log(input + eps))
+                if full:
+                    import math as _mp
+                    stir = target * jt.log(jt.maximum(target, eps)) - target + 0.5 * jt.log(2 * _mp.pi * jt.maximum(target, eps))
+                    loss = loss + jt.ternary(target > 1, stir, jt.zeros_like(target))
+                return loss.mean() if reduction == "mean" else (loss.sum() if reduction == "sum" else loss)
+            F.poisson_nll_loss = _poisson_nll
         if hasattr(nn, "layer_norm"): F.layer_norm = nn.layer_norm
         if hasattr(nn, "embedding"): F.embedding = nn.embedding
         nn.functional = F
