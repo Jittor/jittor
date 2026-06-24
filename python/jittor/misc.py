@@ -1100,6 +1100,53 @@ def cumprod(x,dim=None):
 
 jt.Var.cumprod=cumprod
 
+import collections as _collections
+_CumMax = _collections.namedtuple("cummax", ["values", "indices"])
+_CumMin = _collections.namedtuple("cummin", ["values", "indices"])
+
+def _cummax_min(x, dim, is_max):
+    ''' prefix max/min + argmax/argmin along dim. O(L^2) masked reduction (fine for
+    typical L): M[...,i,j] = x[...,j] if j<=i else sentinel, reduce over j. Uses a
+    FINITE sentinel (not +/-inf) to dodge jittor's inf/nan JIT codegen segfault, and
+    jt.argmax (which picks the FIRST max -> matches torch's cummax tie behavior). '''
+    if dim is None:
+        dim = x.ndim - 1
+    d = dim if dim >= 0 else dim + x.ndim
+    perm = [k for k in range(x.ndim) if k != d] + [d]      # move dim d to last
+    xt = x.permute(perm)
+    L = xt.shape[-1]
+    tgt = list(xt.shape[:-1]) + [L, L]
+    xe = xt.unsqueeze(-2).broadcast(tgt)                   # [...,i,j] = xt[...,j]
+    ii = jt.index((L, L), dim=0)
+    jj = jt.index((L, L), dim=1)
+    mask = (jj <= ii).broadcast(tgt)                       # valid where j<=i
+    sentinel = -3.4e38 if is_max else 3.4e38
+    sval = jt.array(sentinel).cast(xt.dtype).broadcast(tgt)
+    masked = jt.ternary(mask, xe, sval)
+    # NB: native jt.argmax returns (indices, values); the torch_compat layer overrides
+    # it to indices-only. Handle both so cummax works regardless of install state.
+    def _argidx(am):
+        return am[0] if isinstance(am, (tuple, list)) else am
+    if is_max:
+        vals = masked.max(dim=-1); idxs = _argidx(jt.argmax(masked, -1))
+    else:
+        vals = masked.min(dim=-1); idxs = _argidx(jt.argmin(masked, -1))
+    inv = [0] * x.ndim
+    for newpos, oldpos in enumerate(perm):
+        inv[oldpos] = newpos
+    return vals.permute(inv), idxs.int64().permute(inv)
+
+def cummax(x, dim=None):
+    ''' torch's cummax(input, dim) -> namedtuple(values, indices). '''
+    v, i = _cummax_min(x, dim, True)
+    return _CumMax(v, i)
+def cummin(x, dim=None):
+    ''' torch's cummin(input, dim) -> namedtuple(values, indices). '''
+    v, i = _cummax_min(x, dim, False)
+    return _CumMin(v, i)
+jt.Var.cummax = cummax
+jt.Var.cummin = cummin
+
 def nms(dets,thresh):
     '''
       dets jt.array [x1,y1,x2,y2,score]
