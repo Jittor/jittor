@@ -2215,15 +2215,50 @@ def _simple_for(x, func):
         '''
         return jt.code(x.shape, "bool", [x], cpu_src=src, cuda_src=src)
 
-def isnan(x): return _simple_for(x, "isnan(float(x))")
+# isnan/isfinite/isinf use _simple_for -> a jt.code op, which the Ascend ACL backend
+# does not support ("op code not supported"). On ACL, compute them from primitive
+# comparisons instead (these run as aclnn ops). IEEE rules make this exact:
+#   isfinite(x) = |x| < inf      (nan<inf and inf<inf are both False)
+#   isinf(x)    = |x| == inf
+#   isnan(x)    = NOT((x>=0) or (x<=0))   (nan fails every comparison; avoids the
+#                jittor "x==x optimized to all-True" trap, see self-compare gotcha)
+# Integer dtypes have no nan/inf, so return the trivial constant.
+def _isnan_acl(x):
+    x = x if isinstance(x, jt.Var) else jt.array(x)
+    if "float" not in str(x.dtype): return jt.zeros(x.shape, "bool")
+    return jt.logical_not((x >= 0) | (x <= 0))
+def _isinf_acl(x):
+    x = x if isinstance(x, jt.Var) else jt.array(x)
+    if "float" not in str(x.dtype): return jt.zeros(x.shape, "bool")
+    return x.abs() == float("inf")
+def _isfinite_acl(x):
+    x = x if isinstance(x, jt.Var) else jt.array(x)
+    if "float" not in str(x.dtype): return jt.ones(x.shape, "bool")
+    return x.abs() < float("inf")
+
+def isnan(x):
+    if jt.flags.use_acl: return _isnan_acl(x)
+    return _simple_for(x, "isnan(float(x))")
 jt.Var.isnan = isnan
-def isfinite(x): return _simple_for(x, "!isnan(float(x)) && !isinf(float(x))")
+def isfinite(x):
+    if jt.flags.use_acl: return _isfinite_acl(x)
+    return _simple_for(x, "!isnan(float(x)) && !isinf(float(x))")
 jt.Var.isfinite = isfinite
-def isinf(x): return _simple_for(x, "isinf(float(x))")
+def isinf(x):
+    if jt.flags.use_acl: return _isinf_acl(x)
+    return _simple_for(x, "isinf(float(x))")
 jt.Var.isinf = isinf
-def isneginf(x): return _simple_for(x, "x<0 && isinf(float(x))")
+def isneginf(x):
+    if jt.flags.use_acl:
+        x = x if isinstance(x, jt.Var) else jt.array(x)
+        return (x < 0) & _isinf_acl(x)
+    return _simple_for(x, "x<0 && isinf(float(x))")
 jt.Var.isneginf = isneginf
-def isposinf(x): return _simple_for(x, "x>0 && isinf(float(x))")
+def isposinf(x):
+    if jt.flags.use_acl:
+        x = x if isinstance(x, jt.Var) else jt.array(x)
+        return (x > 0) & _isinf_acl(x)
+    return _simple_for(x, "x>0 && isinf(float(x))")
 jt.Var.isposinf = isposinf
 
 # fake torch interface
