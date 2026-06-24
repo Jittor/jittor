@@ -594,7 +594,7 @@ try:
             self.drop_last = drop_last
             self.num_workers = num_workers
             self.pin_memory = pin_memory
-            self.collate_fn = collate_fn if collate_fn is not None else (lambda b: b)
+            self.collate_fn = collate_fn if collate_fn is not None else _default_collate
             self.worker_init_fn = worker_init_fn
             self.generator = generator
             if batch_sampler is not None:
@@ -624,7 +624,27 @@ try:
     _data.BatchSampler = _BatchSampler
     def _get_worker_info(): return None
     _data.get_worker_info = _get_worker_info
-    def _default_collate(batch): return batch
+    def _default_collate(batch):
+        # torch's default collation: recursively STACK a list of samples into a batched
+        # tensor (was a no-op that returned the raw list, so `for x, y in dl` got a list
+        # of samples instead of (batched_x, batched_y)).
+        import jittor as _jt, numpy as _np
+        # NB: int/float/bool are shadowed by torch dtypes in this namespace -- use the
+        # genuine Python types via type(0)/type(0.0) (bool is an int subclass).
+        _pynum = (type(0), type(0.0))
+        elem = batch[0]
+        if isinstance(elem, _jt.Var):
+            return _jt.stack(list(batch), dim=0)
+        if isinstance(elem, _np.ndarray):
+            return _jt.array(_np.stack(batch))
+        if isinstance(elem, (_pynum[0], _pynum[1], _np.number)):
+            return _jt.array(_np.array(batch))
+        if isinstance(elem, (type(()), type([]))):
+            # transpose [(x0,y0),(x1,y1),...] -> ([x0,x1,..],[y0,y1,..]); collate each field
+            return [_default_collate(list(field)) for field in zip(*batch)]
+        if isinstance(elem, type({})):
+            return {k: _default_collate([d[k] for d in batch]) for k in elem}
+        return batch
     def _default_convert(x): return x
     _data.default_collate = _default_collate
     _data.default_convert = _default_convert
