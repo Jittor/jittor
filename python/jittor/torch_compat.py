@@ -1761,6 +1761,116 @@ def _install_nn_extras(nn):
                 return out
         nn.TransformerEncoder = TransformerEncoder
 
+    if not hasattr(nn, "TransformerDecoderLayer"):
+        class TransformerDecoderLayer(nn.Module):
+            def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1,
+                         activation="relu", layer_norm_eps=1e-5, batch_first=False,
+                         norm_first=False, bias=True, device=None, dtype=None):
+                super().__init__()
+                self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout,
+                                                       batch_first=batch_first, bias=bias)
+                self.multihead_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout,
+                                                            batch_first=batch_first, bias=bias)
+                self.linear1 = nn.Linear(d_model, dim_feedforward, bias=bias)
+                self.linear2 = nn.Linear(dim_feedforward, d_model, bias=bias)
+                self.norm1 = nn.LayerNorm(d_model, eps=layer_norm_eps)
+                self.norm2 = nn.LayerNorm(d_model, eps=layer_norm_eps)
+                self.norm3 = nn.LayerNorm(d_model, eps=layer_norm_eps)
+                self.norm_first = norm_first
+                self.activation = _act_fn(activation)
+
+            def _sa(self, x, m, kpm, ic):
+                return self.self_attn(x, x, x, attn_mask=m, key_padding_mask=kpm,
+                                      need_weights=False, is_causal=ic)[0]
+
+            def _ca(self, x, mem, m, kpm, ic):
+                return self.multihead_attn(x, mem, mem, attn_mask=m, key_padding_mask=kpm,
+                                           need_weights=False, is_causal=ic)[0]
+
+            def _ff(self, x):
+                return self.linear2(self.activation(self.linear1(x)))
+
+            def execute(self, tgt, memory, tgt_mask=None, memory_mask=None,
+                        tgt_key_padding_mask=None, memory_key_padding_mask=None,
+                        tgt_is_causal=False, memory_is_causal=False):
+                x = tgt
+                if self.norm_first:
+                    x = x + self._sa(self.norm1(x), tgt_mask, tgt_key_padding_mask, tgt_is_causal)
+                    x = x + self._ca(self.norm2(x), memory, memory_mask, memory_key_padding_mask, memory_is_causal)
+                    x = x + self._ff(self.norm3(x))
+                else:
+                    x = self.norm1(x + self._sa(x, tgt_mask, tgt_key_padding_mask, tgt_is_causal))
+                    x = self.norm2(x + self._ca(x, memory, memory_mask, memory_key_padding_mask, memory_is_causal))
+                    x = self.norm3(x + self._ff(x))
+                return x
+        nn.TransformerDecoderLayer = TransformerDecoderLayer
+
+    if not hasattr(nn, "TransformerDecoder"):
+        import copy as _copy2
+        class TransformerDecoder(nn.Module):
+            def __init__(self, decoder_layer, num_layers, norm=None, **kw):
+                super().__init__()
+                self.layers = nn.ModuleList([_copy2.deepcopy(decoder_layer) for _ in range(num_layers)])
+                self.num_layers = num_layers
+                self.norm = norm
+
+            def execute(self, tgt, memory, tgt_mask=None, memory_mask=None,
+                        tgt_key_padding_mask=None, memory_key_padding_mask=None,
+                        tgt_is_causal=None, memory_is_causal=False):
+                out = tgt
+                for layer in self.layers:
+                    out = layer(out, memory, tgt_mask=tgt_mask, memory_mask=memory_mask,
+                                tgt_key_padding_mask=tgt_key_padding_mask,
+                                memory_key_padding_mask=memory_key_padding_mask,
+                                memory_is_causal=memory_is_causal)
+                if self.norm is not None:
+                    out = self.norm(out)
+                return out
+        nn.TransformerDecoder = TransformerDecoder
+
+    if not hasattr(nn, "Transformer"):
+        class Transformer(nn.Module):
+            def __init__(self, d_model=512, nhead=8, num_encoder_layers=6,
+                         num_decoder_layers=6, dim_feedforward=2048, dropout=0.1,
+                         activation="relu", custom_encoder=None, custom_decoder=None,
+                         layer_norm_eps=1e-5, batch_first=False, norm_first=False,
+                         bias=True, device=None, dtype=None):
+                super().__init__()
+                self.batch_first = batch_first
+                self.d_model = d_model
+                self.nhead = nhead
+                if custom_encoder is not None:
+                    self.encoder = custom_encoder
+                else:
+                    el = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout,
+                                                    activation, layer_norm_eps, batch_first, norm_first, bias)
+                    self.encoder = nn.TransformerEncoder(el, num_encoder_layers,
+                                                         nn.LayerNorm(d_model, eps=layer_norm_eps))
+                if custom_decoder is not None:
+                    self.decoder = custom_decoder
+                else:
+                    dl = nn.TransformerDecoderLayer(d_model, nhead, dim_feedforward, dropout,
+                                                    activation, layer_norm_eps, batch_first, norm_first, bias)
+                    self.decoder = nn.TransformerDecoder(dl, num_decoder_layers,
+                                                         nn.LayerNorm(d_model, eps=layer_norm_eps))
+
+            def execute(self, src, tgt, src_mask=None, tgt_mask=None, memory_mask=None,
+                        src_key_padding_mask=None, tgt_key_padding_mask=None,
+                        memory_key_padding_mask=None, src_is_causal=None,
+                        tgt_is_causal=None, memory_is_causal=False):
+                memory = self.encoder(src, mask=src_mask, src_key_padding_mask=src_key_padding_mask)
+                return self.decoder(tgt, memory, tgt_mask=tgt_mask, memory_mask=memory_mask,
+                                    tgt_key_padding_mask=tgt_key_padding_mask,
+                                    memory_key_padding_mask=memory_key_padding_mask,
+                                    memory_is_causal=memory_is_causal)
+
+            @staticmethod
+            def generate_square_subsequent_mask(sz, device=None, dtype=None):
+                # upper-triangular -inf mask (additive), like torch
+                m = _jtm.triu(_jtm.ones((sz, sz)), 1) * (-1e30)
+                return m
+        nn.Transformer = Transformer
+
     _install_module_methods(nn)
 
 
