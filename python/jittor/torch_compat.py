@@ -528,7 +528,52 @@ def install(torch):
                 return _jt_softmax(input, dim=dim)
             F.softmax = _softmax
         if hasattr(nn, "linear"): F.linear = nn.linear
-        if hasattr(nn, "cross_entropy_loss"): F.cross_entropy = nn.cross_entropy_loss
+        if hasattr(nn, "cross_entropy_loss"):
+            _jt_ce = nn.cross_entropy_loss
+            # torch.nn.functional.cross_entropy(..., label_smoothing=): jittor's
+            # cross_entropy_loss has no label_smoothing (used by many training recipes:
+            # ImageNet, translation, some SFT). Delegate to jittor for ls=0 (verified
+            # correct incl. weight/ignore_index); implement smoothing to match torch:
+            #   loss_i = (1-ls)*nll_i + (ls/C)*smooth_i,  nll_i = -w[t]*logp[i,t],
+            #   smooth_i = -sum_c(w_c*logp[i,c]);  mean divides by sum(w[t]) (or count).
+            def _cross_entropy(input, target, weight=None, size_average=None,
+                               ignore_index=-100, reduce=None, reduction="mean",
+                               label_smoothing=0.0):
+                if not label_smoothing:
+                    ii = -100 if ignore_index is None else ignore_index
+                    return _jt_ce(input, target, weight=weight, ignore_index=ii,
+                                  reduction=reduction)
+                C = int(input.shape[1]) if input.ndim >= 2 else int(input.shape[-1])
+                if input.ndim > 2:                  # (N,C,d...) -> (M,C)
+                    perm = [0] + list(range(2, input.ndim)) + [1]
+                    x = input.transpose(perm).reshape((-1, C))
+                else:
+                    x = input
+                t = target.reshape((-1,))
+                logp = nn.log_softmax(x, dim=-1)
+                ig = None if ignore_index is None else ignore_index
+                t_safe = t if ig is None else jt.ternary(t == ig, jt.zeros_like(t), t)
+                nll = -logp.gather(1, t_safe.reshape((-1, 1))).reshape((-1,))
+                if weight is not None:
+                    wt = weight[t_safe]
+                    nll = nll * wt
+                    smooth = -(logp * weight.reshape((1, -1))).sum(dim=-1)
+                else:
+                    wt = None
+                    smooth = -logp.sum(dim=-1)
+                loss = (1.0 - label_smoothing) * nll + (label_smoothing / C) * smooth
+                if ig is not None:
+                    keep = (t != ig).float32()
+                    loss = loss * keep
+                    norm = (wt * keep).sum() if wt is not None else keep.sum()
+                else:
+                    norm = wt.sum() if wt is not None else jt.array(float(t.shape[0]))
+                if reduction == "sum":
+                    return loss.sum()
+                if reduction == "none":
+                    return loss.reshape(target.shape) if input.ndim > 2 else loss
+                return loss.sum() / norm
+            F.cross_entropy = _cross_entropy
         if hasattr(nn, "layer_norm"): F.layer_norm = nn.layer_norm
         if hasattr(nn, "embedding"): F.embedding = nn.embedding
         nn.functional = F

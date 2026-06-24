@@ -343,6 +343,24 @@ ok(torch.all(_bb, axis=-1, keepdims=True).numpy().tolist() == [[False], [True]],
 ok(torch.any(_bb, axis=0).numpy().tolist() == [True, True, True], "torch.any(axis=) alias")
 ok(torch.all(_bb, dim=1).numpy().tolist() == [False, True], "torch.all(dim=) still works")
 
+# F.cross_entropy(label_smoothing=) — used by many training recipes (ImageNet,
+# translation, some SFT); jittor's cross_entropy_loss lacked it. Verified bit-equal to
+# real torch 2.12: ls=0.1 -> 1.452645, +weight -> 1.490588, +ignore -> 1.371985.
+_ceF = torch.nn.functional.cross_entropy
+np.random.seed(0)
+_cel = np.random.randn(8, 5).astype("float32"); _cet = np.random.randint(0, 5, (8,)).astype("int64")
+_cew = np.array([0.5, 1.0, 2.0, 1.5, 0.8], dtype="float32")
+ok(abs(float(_ceF(jt.array(_cel), jt.array(_cet), label_smoothing=0.1).item()) - 1.452645) < 1e-4,
+   "F.cross_entropy label_smoothing matches torch")
+ok(abs(float(_ceF(jt.array(_cel), jt.array(_cet), weight=jt.array(_cew), label_smoothing=0.1).item()) - 1.490588) < 1e-4,
+   "F.cross_entropy label_smoothing + weight matches torch")
+_cet2 = _cet.copy(); _cet2[0] = -100; _cet2[3] = -100
+ok(abs(float(_ceF(jt.array(_cel), jt.array(_cet2), ignore_index=-100, label_smoothing=0.1).item()) - 1.371985) < 1e-4,
+   "F.cross_entropy label_smoothing + ignore_index matches torch")
+ok(abs(float(_ceF(jt.array(_cel), jt.array(_cet)).item()) -
+       float(_ceF(jt.array(_cel), jt.array(_cet), label_smoothing=0.0).item())) < 1e-6,
+   "F.cross_entropy label_smoothing=0 delegates unchanged")
+
 print(f"\n==== {PASS} passed, {FAIL} failed ====")
 import sys as _sys
 _sys.exit(1 if FAIL else 0)
