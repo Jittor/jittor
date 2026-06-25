@@ -40,9 +40,18 @@
 - 融合：complex 操作排除出 FusedOp，保持显式。
 - reduce：abs(complex)→float、sum(complex)→complex，在 `reduce_dtype_infer` 分类处理。
 
+## Phase 2 实测铺路（2026-06-26，已撞墙定位）
+Phase 1 后实测：`jt.zeros((3,),"complex64")` 能创建（dsize 生效），但**任何 op（连 .numpy() 的 broadcast_to copy）生成的 kernel 用 `complex64*` 作 C++ 类型 → nvcc/g++ 报 "identifier 'complex64' is undefined"**——jittor 没有 complex64 的 **C++ 类型**。Phase 2 三块（按依赖序）：
+1. **C++ 类型**：新建 `src/type/complex_compute.h` 定义 `struct complex64 { float real, imag; }` + 运算符（`operator+ - *`，其中 `*` 是复数乘 `(ar*br-ai*bi, ar*bi+ai*br)`、`==`、`abs`→float）；CUDA 版用 `cuComplex`/`float2` 或同 struct（`__host__ __device__`）。参照 `src/type/fp16_compute.h`（float16 同样非原生、定义了 struct + typedef）。
+2. **codegen 包含它**：让生成 complex64 kernel 时 include `complex_compute.h`——参照 fp16 的注入机制（`fp16_op_type.cc` 的 post_pass / op_compiler 按用到的 dtype 注入 header）。先让 **copy 类 op（broadcast_to/reshape/getitem）编译过** → 解锁 `.numpy()` 往返。
+3. **OpByType 算术**：新建 `src/type/complex_op_type.cc`（`types={"complex64"}`，`expand_op` 用 `(($2)+($4))` 等靠 struct 运算符；或显式复数公式），注册进 op 派发。binary/unary 才能跑。
+4. **numpy 桥**（已知确切改动）：`numpy.cc` 的 `npy2ns[14]=ns_complex64`（NPY_CFLOAT）+ `ns2npy` 末尾加 `NPY_CFLOAT`（complex64 的 ns.index()=14）。**注意：单独加这个会让 complex64 可创建但 op 崩**（比清晰报错更糟），必须配合上面 1-3 一起上，别单独提交。
+5. grad：先在 binary/unary grad 里 `is_complex()→NotImplementedError`（响亮、非静默）。
+**复用**：现有 `ComplexNumber`(real/imag python 仿真) 仍可用、可作对拍 oracle 验证原生路径。
+
 ## 验收
 ```python
-jt.complex64.dsize()==8 and jt.complex64.is_complex()
-z = jt.zeros((3,), dtype=jt.complex64); (z+z).dtype=='complex64'
+jt.complex64.dsize()==8 and jt.complex64.is_complex()   # ✅ Phase 1 已达
+z = jt.zeros((3,), dtype="complex64"); (z+z).dtype=='complex64'  # Phase 2 目标
 # complex+float→complex；backward 暂报 NotImplementedError（不静默）
 ```
