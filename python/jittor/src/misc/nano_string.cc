@@ -185,15 +185,20 @@ static void init_ns() {
     dsize_map["bfloat16"] = 1;
     is_float_map["bfloat16"] = 1;
     is_unsigned["bfloat16"] = 0;
+    dsize_map["complex64"] = 3;     // 8 bytes = 2^3 (float32 real + float32 imag)
+    is_float_map["complex64"] = 0;  // complex is neither float nor int
+    is_unsigned["complex64"] = 0;
     NanoString::ns_t i=0;
     auto func = [&](const char* name, NanoString& ns) {
         ns.set(NanoString::_index, i++, NanoString::_index_nbits);
         if (dsize_map.count(name)) {
+            bool is_cplx = strstr(name, "complex") != nullptr;
             ns.set(NanoString::_type, NanoString::_dtype, NanoString::_type_nbits);
             ns.set(NanoString::_bool, is_bool.count(name));
-            ns.set(NanoString::_int, !is_float_map.at(name));
+            ns.set(NanoString::_int, !is_float_map.at(name) && !is_cplx);
             ns.set(NanoString::_unsigned, is_unsigned.count(name));
             ns.set(NanoString::_float, is_float_map.at(name));
+            ns.set(NanoString::_complex, is_cplx);
             ns.set(NanoString::_dsize, dsize_map.at(name), NanoString::_dsize_nbits);
         } else
         if (unary_ops.count(name)) {
