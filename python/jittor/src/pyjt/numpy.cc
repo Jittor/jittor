@@ -68,10 +68,19 @@ void numpy_init() {
     fill(PyArray_GetNDArrayCFeatureVersion, 211);
     fill(PyArray_SetBaseObject, 282);
     fill(PyArray_NewCopy, 85);
-    fill(PyArray_CopyInto, 82);
+    // numpy 2.0 moved PyArray_CopyInto from C-API slot 82 -> slot 50;
+    // slot 82 is NULL on numpy>=2, so calling through it segfaults.
+    // GetNDArrayCFeatureVersion returns 0x11 on numpy<2 and >=0x12 on numpy>=2
+    // (NPY_2_0_API_VERSION == 0x12). It is loaded above before this point.
+    fill(PyArray_CopyInto, PyArray_GetNDArrayCFeatureVersion() >= 0x12 ? 50 : 82);
     fill(PyArray_CastScalarToCtype, 63);
 
     ASSERT(PyArray_GetNDArrayCFeatureVersion()>=7);
+    // Fail loudly if a future numpy moves the slot again, instead of a
+    // silent NULL-pointer call (宁可响亮崩也不静默错).
+    CHECK(PyArray_CopyInto != nullptr)
+        << "PyArray_CopyInto C-API slot is NULL (numpy ABI changed); "
+        << "numpy feature version=" << PyArray_GetNDArrayCFeatureVersion();
 }
 
 } // jittor
