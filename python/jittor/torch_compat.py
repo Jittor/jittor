@@ -3219,7 +3219,9 @@ def _install_misc(g, Var):
     def _from_portable(obj):
         if isinstance(obj, dict):
             if obj.get(_VAR_TAG):
-                return jt.array(obj["data"])
+                # from_numpy preserves wide dtypes (float64/int64); jt.array narrows
+                # them to float32/int32 -> torch.save/load silently downcast checkpoints.
+                return g.from_numpy(obj["data"])
             return {k: _from_portable(v) for k, v in obj.items()}
         if isinstance(obj, (list, tuple)):
             t = type(obj)
