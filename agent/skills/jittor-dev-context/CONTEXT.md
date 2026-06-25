@@ -55,6 +55,15 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
 - **🆕 发现真 crash**：parallel 编译器 `VarRelayManager::get_op_relay_info` 堆损坏（编译 MobileNetV3 多独特 kernel 触发，非 GIL bug、2.0 GIL 修复覆盖不到），workaround `use_parallel_op_compiler=0`，已立账待修。
 - **教训**：subagent 的 `isolation:worktree` 从 `origin/master` 分叉（非当前 `2.0`）——worktree 缺 2.0 全部工作、验证基线错；其新文件可移植，但需在 2.0 主树重验。下次代码类 agent 别用 worktree 或改用主树新文件。
 
+### ✅ 本会话增量 Round 2/3（2026-06-26，多 agent 并行 + cache 隔离）
+- **模型库现代化**：MobileNetV3 / EfficientNet b0-b3 / RegNet y·x_400/800mf / ConvNeXt t·s·b·l / Swin t·s·b 全部实现，**可学习参数量逐档精确匹配 torchvision**，CPU+CUDA 前向+反向验证（`6eee7009`/`97c5fc64`/`202cdd09`）。覆盖了 torchvision 主要缺口（剩 MaxViT/ViT 预训练权重）。
+- **torch-grade 单测重写**：7 个结构化 unittest 模块（ops/indexing/reduce_shape/linalg/dtype/nn/autograd），CPU+CUDA vs numpy/解析梯度。
+- **triton**：`import triton` 兼容 shim + **1-D 逐元素 @triton.jit kernel 真执行**（tracing 降到 jittor 算子，add 0.0/silu 2.4e-7，不支持的清晰报错，`ae624ac2`/`12c48730`）。
+- **又修 3 个真 bug**（测试/对拍揪出）：argmax/argmin 负 dim 崩 cutt_transpose（`7f26d693`）、index_select dim>0 用 newaxis 错（`3eb7bc78`）、mse_loss(none) 崩 + l1_loss 缺 reduction（`b35a30c9`）。
+- **测试揪出待修**（已 task）：dtype 提升不按 torch result_type lattice（silent 丢精度，#10）、`.long()`→int32 应 int64、torch_compat 路径缺 linalg svd(full_matrices)/svdvals/eigvalsh（#9）。
+- **🆕 cache 隔离**（用户建议、已验证）：jittor 原生 `cache_name` 环境变量，`CUDA_VISIBLE_DEVICES=N cache_name=cardN` 一卡一 agent → 并发编译互不争用（见 §1.1）。
+- **#8 segfault 调研**：假设 = `do_compile` 的进程级文件锁在 worker 线程被 `_has_lock` 跳过 → 无互斥并发 → 堆损坏（[[design-parallel-compiler-segfault]]）。但**根因仍不确定**（relay_groups 是否 per-FusedOp 存疑、glibc 堆损坏需 TSan 定位），mutex 修复**风险高**（可能死锁/废掉并行/坏多进程缓存）→ **未修，保留 `use_parallel_op_compiler=0` workaround，留待专门排查**。
+
 ### ⬜ 还没做（可直接开展的新任务）
 1. **py3.13 import 修复（PEP-667）**：py3.13 上 `compiler.py` `mod = locals()[gen_name]` 取不到 exec 绑定名 → jittor **根本 import 不了**；一行改 `mod = os.sys.modules[gen_name]`（fix-agent 已临时验证有效，未提交）。修了 py3.13 + numpy2.x 才完整可用。
 2. **根治内核陷阱里的「不合理」项**：#2 `x==x`→all-True（fusion 同指针去重破坏 IEEE NaN）、#3 reindex 负 dim（应自归一化/清晰报错）——见 §4-B。
