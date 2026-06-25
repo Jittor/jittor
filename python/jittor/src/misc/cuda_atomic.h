@@ -191,6 +191,31 @@ T cuda_atomic_mul(T* a, T b) {
     return old_f;
 }
 
+#ifndef IS_ROCM
+// Self-contained bf16 multiply atomic. The generic cuda_atomic_mul template
+// relies on int_mapper<__nv_bfloat16>, which is gated behind `#if CUDA_ARCH>=800`
+// (a macro nvcc does not define) and is therefore compiled out, so the template
+// fails to instantiate for bf16. This non-template overload is an exact match
+// (preferred over the template) and uses __CUDA_ARCH__ directly.
+__device__
+inline __nv_bfloat16 cuda_atomic_mul(__nv_bfloat16* a, __nv_bfloat16 b) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+    auto a_i = (unsigned short*)a;
+    unsigned short old = __bfloat16_as_ushort(*a);
+    while (1) {
+        __nv_bfloat16 old_f = __ushort_as_bfloat16(old);
+        auto assume = old;
+        old = atomicCAS(a_i, assume,
+            __bfloat16_as_ushort(__float2bfloat16(__bfloat162float(old_f) * __bfloat162float(b))));
+        if (assume==old) break;
+    }
+    return __ushort_as_bfloat16(old);
+#else
+    __nv_bfloat16 old = *a; *a = __float2bfloat16(__bfloat162float(old) * __bfloat162float(b)); return old;
+#endif
+}
+#endif
+
 #if CUDA_ARCH >= 800
 template<> __device__
 __half cuda_atomic_max(__half* a, __half b) {
@@ -251,6 +276,175 @@ __nv_bfloat16 cuda_atomic_min(__nv_bfloat16* a, __nv_bfloat16 b) {
         if (assume==old) break;
     }
     return old_f;
+}
+#endif
+
+// ---------------------------------------------------------------------------
+// Self-contained raw-float atomic max/min (the "_rmw" family).
+//
+// IMPORTANT: these are intentionally DIFFERENT from cuda_atomic_max/min above.
+// The cuda_atomic_max/min(float*/double*) overloads use the ORDERED-INT trick
+// and only produce correct results when the whole buffer has been pre-encoded
+// (floatToOrderedInt) and post-decoded (fix_float / float_atomic_fix_pass).
+// That pass runs for reduce_op but NOT for setitem_op (whose output is a raw
+// cudaMemcpyAsync copy of the input). Feeding a raw float buffer to the
+// ordered-int overloads would corrupt it. The _rmw variants below operate on
+// raw IEEE values via atomicCAS and need no encode/decode pass, so they are
+// safe to call directly on setitem's raw output buffer.
+//
+// Do NOT route reduce_op through these; and do NOT change the ordered-int
+// overloads above — float_atomic_fix_pass depends on them.
+// ---------------------------------------------------------------------------
+
+// Generic integral fallback (int32 / int64 etc.): native atomics are already
+// correct on raw values.
+template<class T> __device__
+T cuda_atomic_max_rmw(T* a, T b) {
+    return atomicMax(a, b);
+}
+template<class T> __device__
+T cuda_atomic_min_rmw(T* a, T b) {
+    return atomicMin(a, b);
+}
+
+// float: raw-value CAS loop (no ordered-int encoding).
+template<> __device__
+inline float cuda_atomic_max_rmw(float* a, float b) {
+    auto old_f = *a;
+    auto a_i = int_mapper<float>::to_intp(a);
+    auto old = int_mapper<float>::to_int(old_f);
+    while (1) {
+        if (!(b > old_f)) break; // NaN-safe: keep old when b is not strictly greater
+        auto assume = old;
+        old = atomicCAS(a_i, assume, int_mapper<float>::to_int(b));
+        old_f = int_mapper<float>::from_int(old);
+        if (assume==old) break;
+    }
+    return old_f;
+}
+template<> __device__
+inline float cuda_atomic_min_rmw(float* a, float b) {
+    auto old_f = *a;
+    auto a_i = int_mapper<float>::to_intp(a);
+    auto old = int_mapper<float>::to_int(old_f);
+    while (1) {
+        if (!(b < old_f)) break;
+        auto assume = old;
+        old = atomicCAS(a_i, assume, int_mapper<float>::to_int(b));
+        old_f = int_mapper<float>::from_int(old);
+        if (assume==old) break;
+    }
+    return old_f;
+}
+
+#ifndef NO_ATOMIC64
+// double: 64-bit atomicCAS only has an unsigned-long-long overload, so reinterpret
+// the bit pattern through ull (NOT the ordered-int encoding) and compare on the
+// decoded double values.
+template<> __device__
+inline double cuda_atomic_max_rmw(double* a, double b) {
+    auto a_i = (unsigned long long*)a;
+    auto old = __double_as_longlong(*a);
+    while (1) {
+        double old_f = __longlong_as_double(old);
+        if (!(b > old_f)) break;
+        auto assume = old;
+        old = (long long)atomicCAS(a_i, (unsigned long long)assume,
+                                   (unsigned long long)__double_as_longlong(b));
+        if (assume==old) break;
+    }
+    return __longlong_as_double(old);
+}
+template<> __device__
+inline double cuda_atomic_min_rmw(double* a, double b) {
+    auto a_i = (unsigned long long*)a;
+    auto old = __double_as_longlong(*a);
+    while (1) {
+        double old_f = __longlong_as_double(old);
+        if (!(b < old_f)) break;
+        auto assume = old;
+        old = (long long)atomicCAS(a_i, (unsigned long long)assume,
+                                   (unsigned long long)__double_as_longlong(b));
+        if (assume==old) break;
+    }
+    return __longlong_as_double(old);
+}
+#endif
+
+// half / bf16: self-contained raw-value 16-bit CAS loop. Deliberately does NOT
+// reuse the cuda_atomic_max/min(__half/__nv_bfloat16) specializations above:
+// those are guarded by `#if CUDA_ARCH >= 800`, and CUDA_ARCH is not a macro nvcc
+// defines, so that block is compiled out (use __CUDA_ARCH__ here instead).
+// atomicCAS(unsigned short*) needs sm_70+; on older arches fall back to a
+// (non-atomic) RMW so the build still succeeds.
+template<> __device__
+inline __half cuda_atomic_max_rmw(__half* a, __half b) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700
+    auto a_i = (unsigned short*)a;
+    unsigned short old = __half_as_ushort(*a);
+    while (1) {
+        __half old_f = __ushort_as_half(old);
+        if (!(__half2float(b) > __half2float(old_f))) break;
+        auto assume = old;
+        old = atomicCAS(a_i, assume, __half_as_ushort(b));
+        if (assume==old) break;
+    }
+    return __ushort_as_half(old);
+#else
+    __half old = *a; if (__half2float(b) > __half2float(old)) *a = b; return old;
+#endif
+}
+template<> __device__
+inline __half cuda_atomic_min_rmw(__half* a, __half b) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700
+    auto a_i = (unsigned short*)a;
+    unsigned short old = __half_as_ushort(*a);
+    while (1) {
+        __half old_f = __ushort_as_half(old);
+        if (!(__half2float(b) < __half2float(old_f))) break;
+        auto assume = old;
+        old = atomicCAS(a_i, assume, __half_as_ushort(b));
+        if (assume==old) break;
+    }
+    return __ushort_as_half(old);
+#else
+    __half old = *a; if (__half2float(b) < __half2float(old)) *a = b; return old;
+#endif
+}
+#ifndef IS_ROCM
+template<> __device__
+inline __nv_bfloat16 cuda_atomic_max_rmw(__nv_bfloat16* a, __nv_bfloat16 b) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+    auto a_i = (unsigned short*)a;
+    unsigned short old = __bfloat16_as_ushort(*a);
+    while (1) {
+        __nv_bfloat16 old_f = __ushort_as_bfloat16(old);
+        if (!(__bfloat162float(b) > __bfloat162float(old_f))) break;
+        auto assume = old;
+        old = atomicCAS(a_i, assume, __bfloat16_as_ushort(b));
+        if (assume==old) break;
+    }
+    return __ushort_as_bfloat16(old);
+#else
+    __nv_bfloat16 old = *a; if (__bfloat162float(b) > __bfloat162float(old)) *a = b; return old;
+#endif
+}
+template<> __device__
+inline __nv_bfloat16 cuda_atomic_min_rmw(__nv_bfloat16* a, __nv_bfloat16 b) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+    auto a_i = (unsigned short*)a;
+    unsigned short old = __bfloat16_as_ushort(*a);
+    while (1) {
+        __nv_bfloat16 old_f = __ushort_as_bfloat16(old);
+        if (!(__bfloat162float(b) < __bfloat162float(old_f))) break;
+        auto assume = old;
+        old = atomicCAS(a_i, assume, __bfloat16_as_ushort(b));
+        if (assume==old) break;
+    }
+    return __ushort_as_bfloat16(old);
+#else
+    __nv_bfloat16 old = *a; if (__bfloat162float(b) < __bfloat162float(old)) *a = b; return old;
+#endif
 }
 #endif
 
