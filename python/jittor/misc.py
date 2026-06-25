@@ -2487,7 +2487,10 @@ def iinfo(dtype):
 
 
 def index_select(input,dim,indices):
-    return input[(None,)*dim+(indices,)]
+    # slice(None) (":") for the leading dims, NOT None (newaxis) — None inserts new
+    # axes so x.index_select(1, idx) gave (1,...) with wrong values instead of indexing
+    # dim 1. Matches the correct jt.index_select function above.
+    return input[(slice(None),)*dim+(indices,)]
 
 jt.Var.index_select = index_select
 
