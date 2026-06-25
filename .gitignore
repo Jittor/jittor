@@ -30,6 +30,7 @@ venv/
 !GOVERNANCE.md
 !.github/**/*.md
 !work_docs/*.md
+!agent/**/*.md
 python/jittor.egg-info
 dist/
 !doc/source/*
