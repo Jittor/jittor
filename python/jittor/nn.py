@@ -2480,18 +2480,31 @@ class Embedding(Module):
 
     def execute(self, x):
         res = self.weight[x]
+        if self.padding_idx is not None:
+            # torch parity: the padding_idx row is frozen (its gradient is zeroed,
+            # so it never trains). The padding row only receives gradient from
+            # positions where x==padding_idx, so block the gradient there while
+            # keeping forward values intact. Multiply-mask (NOT ternary: jittor's
+            # ternary with a stop_grad branch zeroes the whole tensor's grad).
+            keep = (x != self.padding_idx).unsqueeze(-1).float32()
+            res = res * keep + (res * (1.0 - keep)).stop_grad()
         return res
 
 def embedding(input, weight, padding_idx=None, max_norm=None, norm_type=2.0,
               scale_grad_by_freq=False, sparse=False):
     # Full torch F.embedding signature (ibert's quantized embedding passes all 7
-    # positionally). padding_idx / scale_grad_by_freq / sparse only affect gradient
-    # bookkeeping, not forward values, so they're accepted and ignored. max_norm
-    # renormalizes rows whose p-norm exceeds the bound (rare; None is the hot path).
+    # positionally). scale_grad_by_freq / sparse only affect gradient bookkeeping,
+    # not forward values, so they're accepted and ignored. max_norm renormalizes
+    # rows whose p-norm exceeds the bound (rare; None is the hot path). padding_idx
+    # freezes the padding row's gradient (torch parity) -- see Embedding.execute.
     if max_norm is not None:
         pn = (weight.abs() ** norm_type).sum(dim=-1, keepdims=True) ** (1.0 / norm_type)
         weight = weight * (jt.minimum(pn, max_norm) / (pn + 1e-12))
-    return weight[input]
+    res = weight[input]
+    if padding_idx is not None:
+        keep = (input != padding_idx).unsqueeze(-1).float32()
+        res = res * keep + (res * (1.0 - keep)).stop_grad()
+    return res
 
 def embedding_bag(input, weight, offsets=None, mode="mean", per_sample_weights=None):
     ''' Computes sums, means or maxes of "bags" of embeddings, without
