@@ -40,8 +40,10 @@
 - 融合：complex 操作排除出 FusedOp，保持显式。
 - reduce：abs(complex)→float、sum(complex)→complex，在 `reduce_dtype_infer` 分类处理。
 
-## Phase 2 实测铺路（2026-06-26，已撞墙定位）
-Phase 1 后实测：`jt.zeros((3,),"complex64")` 能创建（dsize 生效），但**任何 op（连 .numpy() 的 broadcast_to copy）生成的 kernel 用 `complex64*` 作 C++ 类型 → nvcc/g++ 报 "identifier 'complex64' is undefined"**——jittor 没有 complex64 的 **C++ 类型**。Phase 2 三块（按依赖序）：
+## Phase 2 原型已端到端实测（2026-06-26，跑通到只剩 1 个 bug）
+**完整原型写过并实测**（后回退保 Phase 1 干净，因最后一个 bug 是 silent-wrong）：写了 `complex_compute.h`(struct+运算符)+`complex_op_type.cc`(OpByType+post_pass)+dtype_infer complex 规则+numpy 映射 → **全部编译通过（codegen 墙已破）**，且 **`jt.zeros((3,),"complex64").numpy()` 完全正确（[0j,0j,0j]）** → 证明 C++ 类型/OpByType/dsize/alloc/numpy-读取/init 全对。**唯一剩的 bug**：`jt.array(复数numpy)` 的 **ArrayOp memcpy（`array_op.cc:80` `memcpy(allocation.ptr, args.ptr, output->size)`）出垃圾**（第一个元素乱码、其余 0，像复制了错的字节数/源指针）——zeros 对说明 size/alloc 对，所以是 numpy 源 `args.ptr`（`py_array_op.cc` 设置处）或 complex 源数据解释的问题，需字节级调试（打印 args.ptr/output->size/numpy data）。**修掉这一个 memcpy → 原生 complex64 算术(add/sub/mul/div/neg)即全通**（算术 codegen 已写好待验）。下次直接接这里。
+
+原始撞墙记录：Phase 1 后 `complex64*` 无 C++ 类型 → "identifier 'complex64' is undefined"。Phase 2 三块（按依赖序，已全部原型化）：
 1. **C++ 类型**：新建 `src/type/complex_compute.h` 定义 `struct complex64 { float real, imag; }` + 运算符（`operator+ - *`，其中 `*` 是复数乘 `(ar*br-ai*bi, ar*bi+ai*br)`、`==`、`abs`→float）；CUDA 版用 `cuComplex`/`float2` 或同 struct（`__host__ __device__`）。参照 `src/type/fp16_compute.h`（float16 同样非原生、定义了 struct + typedef）。
 2. **codegen 包含它**：让生成 complex64 kernel 时 include `complex_compute.h`——参照 fp16 的注入机制（`fp16_op_type.cc` 的 post_pass / op_compiler 按用到的 dtype 注入 header）。先让 **copy 类 op（broadcast_to/reshape/getitem）编译过** → 解锁 `.numpy()` 往返。
 3. **OpByType 算术**：新建 `src/type/complex_op_type.cc`（`types={"complex64"}`，`expand_op` 用 `(($2)+($4))` 等靠 struct 运算符；或显式复数公式），注册进 op 派发。binary/unary 才能跑。
