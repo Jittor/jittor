@@ -967,8 +967,18 @@ class BatchNorm(Module):
 
             self.running_mean.update(self.running_mean +
                 (xmean.reshape((-1,)) - self.running_mean) * self.momentum)
+            # torch updates running_var with the UNBIASED (Bessel-corrected) batch
+            # variance (var * n/(n-1)) while normalizing with the biased one; match it
+            # so running stats (hence eval-mode outputs) align with torch. n = count
+            # reduced per channel (global across ranks in sync mode).
+            n = 1
+            for _d in dims:
+                n *= x.shape[_d]
+            if sync:
+                n *= jt.world_size
+            run_var = xvar * (n / (n - 1)) if n > 1 else xvar
             self.running_var.update(self.running_var +
-                (xvar.reshape((-1,))-self.running_var)*self.momentum)
+                (run_var.reshape((-1,))-self.running_var)*self.momentum)
             return norm_x
         else:
             w = self.weight / jt.sqrt(self.running_var+self.eps)
