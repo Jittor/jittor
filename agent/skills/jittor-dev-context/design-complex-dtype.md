@@ -1,7 +1,7 @@
 # 设计：原生 complex Var dtype（complex64/complex128）
 
 > Task #5（用户优先级）。现状靠 `ComplexNumber`(real/imag 两个实 Var) 在 python 层仿真（`nn.py:3905-4119`）。目标：让 complex 成为 jittor_core 一等 dtype。多日深核心工程，守 G1（不破坏元算子/统一计算图）。
-> 状态：🟡 设计完成（2026-06-25，subagent 调研），未动工。
+> 状态：🟢 **Phase 1 已实现 + 提交**（2026-06-26）：complex64 成为 jittor_core 一等注册 dtype（`NanoString("complex64")` dsize=8 / is_complex=True / 非 float 非 int），`test_torch_compat` 171/0 无回归。**关键发现：枚举移位安全**——dtype-vs-op 按名字判定非索引（`init_ns` 查 dsize_map/unary_ops/binary_ops），所以给 `FOR_ALL_NS` 加 dtype 不破坏 op 索引。complex128(16B) 需先扩 2-bit `_dsize` 字段（推迟）。**Phase 2+（codegen/ops/grad）待续**。
 
 ## dtype 系统落点（精确 file:line）
 

@@ -28,6 +28,7 @@ constexpr int ns_max_len = 16;
     m(float32) \
     m(float64) \
     m(bfloat16) \
+    m(complex64) \
 \
     m(pow) \
     m(maximum) \
@@ -123,6 +124,8 @@ struct NanoString {
         // bit9: backward opt
         _no_need_back_in=_n+9,
         _no_need_back_out=_n+10,
+        // bit11: is complex (real/imag pair; _float/_int both 0)
+        _complex=_n+11,
     };
     ns_t data=0;
 
@@ -145,7 +148,7 @@ struct NanoString {
     // @pyjt(is_floating_point)
     inline bool is_floating_point() const { return get(_float); }
     // @pyjt(is_complex)
-    inline bool is_complex() const { return false; }
+    inline bool is_complex() const { return get(_complex); }
     // @pyjt(is_float)
     inline bool is_float() const { return get(_float); }
     inline ns_t is_white() const { return get(_white_list); }
