@@ -382,12 +382,35 @@ def install(torch):
 
     Var = jt.Var
     g.Tensor = Var
-    # torch's typed tensor classes are all aliased to Var (jittor is dtype-typed
-    # at the data level, not via tensor subclasses).
-    for _tn in ("FloatTensor", "DoubleTensor", "HalfTensor", "BFloat16Tensor",
-                "LongTensor", "IntTensor", "ShortTensor", "CharTensor",
-                "ByteTensor", "BoolTensor"):
-        setattr(g, _tn, Var)
+    # torch's typed tensor classes (FloatTensor/LongTensor/...). jittor is dtype-typed
+    # at the data level (no tensor subclasses), but we must NOT just alias them all to
+    # Var: that makes isinstance(any_var, torch.LongTensor) always True, so libraries
+    # that detect integer tensors via isinstance break with silent-wrong results
+    # (e.g. diffusers EulerDiscreteScheduler.step rejects every float timestep with
+    # "Passing integer indices ... is not supported"). Instead give each a metaclass
+    # whose isinstance check matches the Var's actual dtype, and whose construction
+    # casts to that dtype (torch.FloatTensor(2,3) / torch.LongTensor([1,2])).
+    _TYPED_TENSOR_DTYPE = {
+        "FloatTensor": "float32", "DoubleTensor": "float64", "HalfTensor": "float16",
+        "BFloat16Tensor": "bfloat16", "LongTensor": "int64", "IntTensor": "int32",
+        "ShortTensor": "int16", "CharTensor": "int8", "ByteTensor": "uint8",
+        "BoolTensor": "bool",
+    }
+    class _TypedTensorMeta(type):
+        def __instancecheck__(cls, obj):
+            return isinstance(obj, Var) and str(obj.dtype) == cls._jdtype
+        def __call__(cls, *args, **kw):
+            if len(args) == 1 and isinstance(args[0], Var):
+                v = args[0]
+            elif len(args) == 1 and not isinstance(args[0], int):
+                v = jt.array(args[0])           # from list/ndarray
+            elif len(args) == 0:
+                v = jt.zeros((0,))
+            else:
+                v = jt.zeros(tuple(int(a) for a in args))  # from sizes
+            return v.cast(cls._jdtype)
+    for _tn, _dt in _TYPED_TENSOR_DTYPE.items():
+        setattr(g, _tn, _TypedTensorMeta(_tn, (), {"_jdtype": _dt}))
 
     def _array_keep_dtype(data):
         # jittor's jt.array downcasts numpy int64 -> int32; torch keeps int64.
