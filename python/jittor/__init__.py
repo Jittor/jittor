@@ -929,6 +929,16 @@ def argmax(x: Var, dim: int, keepdims:bool=False):
     if dim is None:
         dim = 0
         x = x.flatten()
+    elif hasattr(x, "shape"):
+        nd = len(x.shape)
+        if not (-nd <= dim < nd):
+            # clear error instead of the cryptic cutt_transpose "axes != xdim"
+            raise IndexError(f"argmax: dim {dim} out of range for a {nd}-D "
+                             f"input (expected dim in [{-nd}, {nd-1}])")
+        # normalize negative dim: arg_reduce's internal transpose miscomputes the
+        # axes for negative dims other than -1 -> cryptic cutt_transpose crash
+        if dim < 0:
+            dim += nd
     return jt.arg_reduce(x, "max", dim, keepdims)
 Var.argmax = argmax
 
@@ -953,6 +963,13 @@ def argmin(x, dim: int, keepdims:bool=False):
         >>> a.argmin(dim=1)
         (jt.Var([1 0], dtype=int32), jt.Var([-0.4951588 -1.633469 ], dtype=float32))
     '''
+    if dim is not None and hasattr(x, "shape"):
+        nd = len(x.shape)
+        if not (-nd <= dim < nd):
+            raise IndexError(f"argmin: dim {dim} out of range for a {nd}-D "
+                             f"input (expected dim in [{-nd}, {nd-1}])")
+        if dim < 0:
+            dim += nd
     return jt.arg_reduce(x, "min", dim, keepdims)
 Var.argmin = argmin
 

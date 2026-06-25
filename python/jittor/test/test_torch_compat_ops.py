@@ -75,6 +75,23 @@ class TestReductions(Base):
                     msg=f"argmin {dev}")
         both_devices(body)
 
+    def test_argmax_argmin_all_dims(self):
+        # regression: argmax/argmin with negative dims other than -1 used to crash
+        # in arg_reduce's internal transpose (cutt_transpose "axes != xdim").
+        x = self.x
+        def body(dev):
+            for d in [0, 1, 2, -1, -2, -3]:
+                self.ae(torch.argmax(torch.tensor(x), dim=d).numpy(), x.argmax(axis=d),
+                        msg=f"argmax dim={d} {dev}")
+                self.ae(torch.argmin(torch.tensor(x), dim=d).numpy(), x.argmin(axis=d),
+                        msg=f"argmin dim={d} {dev}")
+        both_devices(body)
+
+    def test_argmax_out_of_range_raises(self):
+        x = self.x
+        with self.assertRaises(IndexError):
+            torch.argmax(torch.tensor(x), dim=7)
+
     def test_prod_dim(self):
         x = np.random.RandomState(1).rand(2, 3, 4).astype("float32") + 0.5
         def body(dev):
