@@ -12,6 +12,7 @@
 #ifdef JIT_cuda
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
+#include "misc/cuda_atomic.h"
 #endif
 #else
 #include "ops/op_register.h"
@@ -363,6 +364,11 @@ void SetitemOp::jit_run() {
         )
         auto iid = 0 @for(d, 0, IDIM,  + iid@d * istride@d);
 
+        // CUDA reduce writes must be atomic: many output-loop threads alias the
+        // same iid via the scatter index, so a non-atomic RMW silently drops
+        // colliding contributions. cuda_atomic_*_rmw use raw-IEEE atomics (see
+        // misc/cuda_atomic.h) because setitem's output is a raw memcpy copy with
+        // no fix_float/ordered-int pass.
         @if(@is_def(JIT_cpu),
             @if(@strcmp(@OP,void)==0,
                 op[iid] = (Ti)dp[did],
@@ -371,9 +377,11 @@ void SetitemOp::jit_run() {
         ,
             @if(@strcmp(@OP,void)==0, op[iid] = (Ti)dp[did],
             @if(@strcmp(@OP,add)==0, atomicAdd(&op[iid], (Ti)dp[did]),
+            @if(@strcmp(@OP,maximum)==0, cuda_atomic_max_rmw(&op[iid], (Ti)dp[did]),
+            @if(@strcmp(@OP,minimum)==0, cuda_atomic_min_rmw(&op[iid], (Ti)dp[did]),
+            @if(@strcmp(@OP,multiply)==0, cuda_atomic_mul(&op[iid], (Ti)dp[did]),
                 op[iid] = @expand_op(@OP, @Ti, op[iid], @Ti, dp[did], @Td)
-            )
-            );
+            )))));
         )
     }
 }
