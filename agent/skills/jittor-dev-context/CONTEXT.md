@@ -190,6 +190,7 @@ distributions 提交 `7a063a6f` 在 **CUDA 也全绿**：`test_distributions` **
 - **分卡并行**：本机 **8× 910B**，多个 NPU 任务用 `ASCEND_RT_VISIBLE_DEVICES=0..7` 各占一卡并行跑，互不抢占。
 - **模型矩阵并行**：transformers 不同模型的前向/反向对拍彼此独立 → 一模型一 subagent（或一簇一 subagent）并行铺开；算子级 `op_parity` 同理可切片并行。
 - **首编代价**：NPU/CUDA 首次 JIT 编译昂贵且按 (机器×py 版本×分支) 共享缓存——并行 agent 跑**同一份代码**时缓存可复用，避免每 agent 改不同代码导致缓存雪崩。
+- **🆕 并行编译隔离 cache（用户建议，已验证）**：多个 agent **并发编译会争用同一 cache 目录**（文件锁等待、慢、潜在跨进程冲突）。jittor 原生支持 **`cache_name` 环境变量**隔离 cache：默认取 git 分支名（如 `2.0`），设 `cache_name=cardN` 则用独立目录 `~/.cache/jittor/.../<hash>/cardN/`（实测 `jittor_utils/__init__.py:362-385`）。**并行编译任务务必各给一个 `cache_name`**，配合 `CUDA_VISIBLE_DEVICES=N` 一卡一 agent：`CUDA_VISIBLE_DEVICES=N cache_name=cardN PYTHONPATH=$PWD/python python ...`。代价：每个 cache_name 首次全量重编 jittor_core（不共享基础 build），但互不争用、稳定命名(card0..7)可跨次复用。注意:这隔离的是**跨 agent** 争用，**不**修 §Task#8 的进程内 parallel-compiler segfault（那仍需 `use_parallel_op_compiler=0` 或根治）。
 - 子任务务必**各写各的新文件 / 不碰共享 shim、不并发 git**；回主循环再统一 verify-then-fix + commit。
 
 ### 1.2 机器与环境
