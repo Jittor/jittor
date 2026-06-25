@@ -1,1 +1,0 @@
-- [Ascend vs 4090 perf + LayerNorm opt](ascend-vs-4090-perf-and-layernorm-opt.md) — 910B 单卡比 4090 慢~3x(喂饱后),瓶颈是 ACL 逐元素算子 dispatch;LayerNorm 占25%,可用原生 aclnnLayerNorm 优化
