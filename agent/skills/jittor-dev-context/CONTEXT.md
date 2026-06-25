@@ -45,6 +45,16 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
 - **inf/nan「codegen」段错误（`64de9c07`）**：根因其实是 **GIL 违例**（py_caller 在 JIT 编译 worker 线程上裸调 CPython、无 GIL）。修：py_caller 加 `PyGILState` + parallel_compiler 主线程放锁（**防死锁**）。CPU 复现→修好，stress/60-compile hammer 无崩无死锁，15-op 回归逐位一致。
 - **CUDA scatter min/max（`880cd6ad`）**：setitem reduce=max/min/multiply 非原子 RMW → 碰撞确定性丢贡献。修：per-op 原子派发 + 自包含 raw-IEEE `_rmw` 原子（不动 ordered-int reduce 路径）。RTX4090 实测 BEFORE 40/40 FAIL → AFTER 全 dtype×reduce PASS；**cscg104 今日独立复验 4 dtype×{max,min,mul} 12/12 PASS（对齐 numpy+CPU）**。
 
+### ✅ 本会话增量（2026-06-25，多 agent 并行，5 任务首增量）
+- **🔴 cat/stack regression 根因修复（`afda784b`）**：torch_compat 的 `dtype`(str 子类) 经 jittor 内部 `str(var.dtype)` 喂回 pyjt NanoString，但 `py_converter.h` 用 `PyUnicode_CheckExact` **拒绝 str 子类** → `torch.cat/stack/vstack/column_stack/cumprod` 在普通 float32 张量上全崩（文档旧"171"是 stale、实际坏的）。修：NanoString is_type/from_py_object 改 `PyUnicode_Check`。CUDA 验证 cat 全恢复 + transformers `str(dtype).split('.')` 不变 + `test_torch_compat` **171/0 恢复**。
+- **torch-grade 单测重写起步（`afda784b`）**：新 `test_torch_compat_ops.py`（unittest，CPU+CUDA vs numpy：归约/形状/比较/where/累积/gather）15/15——正是它揪出 cat bug。
+- **triton 兼容 shim（`ae624ac2`）**：`import triton`/`triton.language` 不再崩、guard/fallback 可控、@triton.jit launch 清晰 NotImplementedError（无 kernel 执行，下一步）。
+- **MobileNetV3 large+small + mobilenet_v2/shufflenet_v2 `**kwargs`（`6eee7009`）**：jittor 惯用法、忠实 torchvision（可学习参数量精确匹配 large 5,483,032/small 2,542,856），CPU+CUDA 前向+反向验证。
+- **C++ 报错清晰化（`0b1d8157`）**：binary shape（带 op 名）/broadcast（dim+冲突尺寸）验证可达；arg_reduce/argsort dim 防御性（被 cutt_transpose 遮蔽，follow-up）。
+- **complex dtype 设计（`3063d811`）**：完整方案+分阶段计划（[[design-complex-dtype]]），未实现。
+- **🆕 发现真 crash**：parallel 编译器 `VarRelayManager::get_op_relay_info` 堆损坏（编译 MobileNetV3 多独特 kernel 触发，非 GIL bug、2.0 GIL 修复覆盖不到），workaround `use_parallel_op_compiler=0`，已立账待修。
+- **教训**：subagent 的 `isolation:worktree` 从 `origin/master` 分叉（非当前 `2.0`）——worktree 缺 2.0 全部工作、验证基线错；其新文件可移植，但需在 2.0 主树重验。下次代码类 agent 别用 worktree 或改用主树新文件。
+
 ### ⬜ 还没做（可直接开展的新任务）
 1. **py3.13 import 修复（PEP-667）**：py3.13 上 `compiler.py` `mod = locals()[gen_name]` 取不到 exec 绑定名 → jittor **根本 import 不了**；一行改 `mod = os.sys.modules[gen_name]`（fix-agent 已临时验证有效，未提交）。修了 py3.13 + numpy2.x 才完整可用。
 2. **根治内核陷阱里的「不合理」项**：#2 `x==x`→all-True（fusion 同指针去重破坏 IEEE NaN）、#3 reindex 负 dim（应自归一化/清晰报错）——见 §4-B。
