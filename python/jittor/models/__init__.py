@@ -22,6 +22,8 @@ from . import convnext
 from .convnext import *
 from . import swin_transformer
 from .swin_transformer import *
+from . import maxvit
+from .maxvit import *
 from . import mnasnet
 from .mnasnet import *
 from . import shufflenetv2
