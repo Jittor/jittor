@@ -16,6 +16,12 @@ from . import mobilenet_v3
 from .mobilenet_v3 import *
 from . import efficientnet
 from .efficientnet import *
+from . import regnet
+from .regnet import *
+from . import convnext
+from .convnext import *
+from . import swin_transformer
+from .swin_transformer import *
 from . import mnasnet
 from .mnasnet import *
 from . import shufflenetv2
