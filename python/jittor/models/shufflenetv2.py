@@ -90,26 +90,26 @@ class ShuffleNetV2(nn.Module):
     def execute(self, x):
         return self._forward_impl(x)
 
-def _shufflenetv2(arch, *args):
-    model = ShuffleNetV2(*args)
+def _shufflenetv2(arch, *args, **kwargs):
+    model = ShuffleNetV2(*args, **kwargs)
     return model
 
-def shufflenet_v2_x0_5(pretrained=False):
-    model = _shufflenetv2('shufflenetv2_x0.5', [4, 8, 4], [24, 48, 96, 192, 1024])
+def shufflenet_v2_x0_5(pretrained=False, **kwargs):
+    model = _shufflenetv2('shufflenetv2_x0.5', [4, 8, 4], [24, 48, 96, 192, 1024], **kwargs)
     if pretrained: model.load("jittorhub://shufflenet_v2_x0_5.pkl")
     return model
 
-def shufflenet_v2_x1_0(pretrained=False):
-    model = _shufflenetv2('shufflenetv2_x1.0', [4, 8, 4], [24, 116, 232, 464, 1024])
+def shufflenet_v2_x1_0(pretrained=False, **kwargs):
+    model = _shufflenetv2('shufflenetv2_x1.0', [4, 8, 4], [24, 116, 232, 464, 1024], **kwargs)
     if pretrained: model.load("jittorhub://shufflenet_v2_x1_0.pkl")
     return model
 
-def shufflenet_v2_x1_5(pretrained=False):
-    model = _shufflenetv2('shufflenetv2_x1.5', [4, 8, 4], [24, 176, 352, 704, 1024])
+def shufflenet_v2_x1_5(pretrained=False, **kwargs):
+    model = _shufflenetv2('shufflenetv2_x1.5', [4, 8, 4], [24, 176, 352, 704, 1024], **kwargs)
     if pretrained: model.load("jittorhub://shufflenet_v2_x1_5.pkl")
     return model
 
-def shufflenet_v2_x2_0(pretrained=False):
-    model = _shufflenetv2('shufflenetv2_x2.0', [4, 8, 4], [24, 244, 488, 976, 2048])
+def shufflenet_v2_x2_0(pretrained=False, **kwargs):
+    model = _shufflenetv2('shufflenetv2_x2.0', [4, 8, 4], [24, 244, 488, 976, 2048], **kwargs)
     if pretrained: model.load("jittorhub://shufflenet_v2_x2_0.pkl")
     return model
