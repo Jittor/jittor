@@ -163,6 +163,29 @@ class JITFunction(KernelInterface):
 
     # -- launch -------------------------------------------------------------- #
     def _launch(self, grid, args, kwargs):
+        # First try the naive executor: it can actually *run* a narrow class of
+        # 1-D elementwise kernels by tracing the body once and lowering tl.* to
+        # jittor ops over whole Vars (grid/BLOCK are irrelevant — jittor
+        # vectorises). If the kernel is outside that subset it raises a clear
+        # NotImplementedError/TracingError and we keep the original contract.
+        try:
+            from . import launch as _launch_mod
+        except Exception:
+            _launch_mod = None
+        if _launch_mod is not None:
+            try:
+                return _launch_mod.run_kernel(self, grid, args, kwargs)
+            except _launch_mod.TracingError as e:
+                # unsupported construct -> fall through to the clear stub error,
+                # but surface *why* so the failure is diagnosable, not opaque.
+                raise NotImplementedError(
+                    "triton kernel {0!r} could not be run by the jittor naive "
+                    "triton executor (only 1-D elementwise kernels are "
+                    "supported). Reason: {1} Use the pure-PyTorch path — guard "
+                    "the triton launch behind `is_triton_available()` or a "
+                    "try/except so the library falls back. (grid={2!r})".format(
+                        self.__name__, e, grid)
+                ) from e
         raise NotImplementedError(
             "triton kernel {0!r} cannot be executed on jittor: the jittor "
             "triton shim provides the triton API surface (so `import triton` "
