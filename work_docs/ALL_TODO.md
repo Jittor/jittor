@@ -3,7 +3,7 @@
 > **给任何 agent 的 60 秒速读 —— 本文档=快速了解背景+进度+细节，便于开展新任务。** 旧的 939 行流水账已存档到 `ALL_TODO.archive.md`。
 > 逐 commit 看 `git log`；**逐 bug 根因 + 内核陷阱看 §4「bug & 陷阱总账」**；可复用的对拍/调试 skill 在仓库 `jittor/agent/skills/`（或 `.claude/skills/`）。
 > 组织：**📍整体进展（紧接本节）→ 📜历史日志（公共留档）→ §1 环境 → §3 已完成 → §4 bug&陷阱总账 → §5 待办**。状态均经 git + 源码核对，不虚标。
-> 🐛 **bug 修没修？看 §4 开头「📊 状态总览」**：✅ ~25+ 已根因修复（带 commit）+ 🟡 3 个核心修复已写**待验证**（numpy2.x / CUDA-scatter / inf-nan GIL）。
+> 🐛 **bug 修没修？看 §4 开头「📊 状态总览」**：✅ ~28+ 已根因修复+验证，含刚提交的 3 个核心 bug（numpy2.x `b9ded5a1` / inf-nan GIL `64de9c07` / CUDA-scatter `880cd6ad`）。
 
 ---
 
@@ -41,11 +41,13 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
 - **~40+ ACL/CUDA 真 bug**（静默错+崩溃）已根因修复：padding_idx、scatter、stack、isfinite、transpose、numpy_code-ACL、matmul-fp32… 详见 §3/§4。
 - 回归基线 `test_torch_compat` **CUDA 171/171**；HF 21 族前向+反向 CUDA 烟测全过。
 
-### 🟡 在飞：3 个核心 bug —— 修复已写、**待验证**（细节见 §4「🟡 …待验证」表）
-**numpy2.x ABI 段错误 / CUDA scatter min/max / inf-nan GIL** —— 都已**复现 + 根因 + 写好修复**（在各自 worktree 分支），但**编译对拍验证还没跑完 → 一个都没提交**。**别重做**；负责的人按：机器在线 → 编译 → 复现(before) → 确认(after) → 回归 → commit。
+### ✅ 3 个核心 bug —— 已验证 + 提交（2026-06-25，原 §4「未根治/绕过」三项全清）
+- **numpy2.x ABI 段错误（`b9ded5a1`）**：3 处 ABI 断裂（CopyInto slot 82→50 / 去伪造 descr / PyArray_Size elsize，**第三处本分支原缺**）。numpy2.4/py3.13 + 2.2/py3.10 各 17/17 + 5000 迭代无崩，numpy1.26 回归逐位一致。
+- **inf/nan「codegen」段错误（`64de9c07`）**：根因其实是 **GIL 违例**（py_caller 在 JIT 编译 worker 线程上裸调 CPython、无 GIL）。修：py_caller 加 `PyGILState` + parallel_compiler 主线程放锁（**防死锁**）。CPU 复现→修好，stress/60-compile hammer 无崩无死锁，15-op 回归逐位一致。
+- **CUDA scatter min/max（`880cd6ad`）**：setitem reduce=max/min/multiply 非原子 RMW → 碰撞确定性丢贡献。修：per-op 原子派发 + 自包含 raw-IEEE `_rmw` 原子（不动 ordered-int reduce 路径）。RTX4090 实测 BEFORE 40/40 FAIL → AFTER 全 dtype×reduce PASS，回归全过。
 
 ### ⬜ 还没做（可直接开展的新任务）
-1. **验证+提交上面 3 个在飞修复**（最优先）。
+1. **py3.13 import 修复（PEP-667）**：py3.13 上 `compiler.py` `mod = locals()[gen_name]` 取不到 exec 绑定名 → jittor **根本 import 不了**；一行改 `mod = os.sys.modules[gen_name]`（fix-agent 已临时验证有效，未提交）。修了 py3.13 + numpy2.x 才完整可用。
 2. **根治内核陷阱里的「不合理」项**：#2 `x==x`→all-True（fusion 同指针去重破坏 IEEE NaN）、#3 reindex 负 dim（应自归一化/清晰报错）——见 §4-B。
 3. **NPU 复验 linalg/distributions**（G2 第二腿，`numpy_code` ACL 已修，linalg 全在真 910B 复跑 vs CPU-jittor oracle）。
 4. **diffusers 扩展**：多步采样 / SDXL / img2img / ControlNet + 整图端到端 vs 真 torch 逐像素对拍。
@@ -312,11 +314,11 @@ setitem 负高级索引反向归一化（`setitem_op.cc:362`）、#11 段错误�
 > **这是交接最值钱的部分。** 多数是 **silent-wrong**（不崩、悄悄算错），只有跑真实模型/对拍才暴露。
 > 接手后改到相关区域时，先看这里有没有同类陷阱。逐 bug 深挖根因见 memory `jittor-*.md`。
 
-> ### 📊 状态总览（fixed / pending 一目了然）
-> **图例**：✅ 已根因修复并对拍验证 ｜ 🟡 根因已挖+修复已写、**待验证未提交**（在 worktree）｜ 🔵 固有行为/方法论（见 §4-B）
-> - **✅ 已根因修复：~25+ 个真 bug**（下方 🔴 Silent-wrong 表 + 🟠 崩溃/回归表，全部 commit 可查、双卡/对拍验证过）。
-> - **🟡 修复已写、待验证：3 个核心 bug** —— ① numpy2.x ABI 段错误（slot 82→50 + 去伪造 descr）；② CUDA scatter min/max（`_rmw` 原子）；③ inf/nan「codegen」其实是 GIL 违例（py_caller 加 GIL + parallel_compiler 放锁）。**都已复现+根因+写好修复**（各在 worktree），**编译对拍跑过才提交**。详见本节末「🟡 …待验证」表。
-> - 即：**训练/推理实际走到的真 bug（静默错+崩溃）已全部根治**；那 3 个曾被当「绕过/残留」的核心项现在**根因已挖清、修复已写**，只差最后编译验证。
+> ### 📊 状态总览（全部已修，一目了然）
+> **图例**：✅ 已根因修复并验证 ｜ 🔵 固有行为/方法论（见 §4-B，非 bug）
+> - **✅ 已根因修复+验证：~28+ 个真 bug**（下方 🔴 Silent-wrong 表 + 🟠 崩溃/回归表 + 下面 3 个核心 bug，全部 commit 可查、对拍/双卡验证过）。
+> - **✅ 3 个曾「未根治/绕过」的核心 bug 现已全部验证+提交**：① numpy2.x ABI 段错误 `b9ded5a1`；② CUDA scatter min/max `880cd6ad`；③ inf/nan（实为 GIL 违例，非 codegen）`64de9c07`。详见本节末「✅ 3 个核心 bug」表。
+> - 即：**训练/推理实际走到的真 bug（静默错+崩溃）已全部根治并提交。**
 
 ### 🔴 Silent-wrong（最危险：不崩，结果悄悄错）— 全部 ✅ 已修
 | Bug | 根因 | commit | 为什么要命 |
@@ -356,17 +358,17 @@ setitem 负高级索引反向归一化（`setitem_op.cc:362`）、#11 段错误�
 forward 子类派发、forward-hook arity、gelu-tanh、RoPE-buffer 训练破坏、Var.T、device('meta')、swap.cc fwrite 反判 —
 见 `5fcfa4fd 85c3e738 29c8c3e8 bdbaf677 512a5a30 f49d8620`。
 
-### 🟡 核心 bug 根因已挖 + 修复已写、**待验证**（2026-06-25；用户要求「把 4 部分 bug 修了」）
-> 流程:① root-cause workflow 逐一**深挖+复现+源码定位**(3/3 都实测复现);② 各起一个 fix subagent 在**隔离 worktree** 写根因修复。**全部根因属实、改动扎实** —— 但写完时执行机 **cscg-hw00 宕机/抖动**,`Bash` 连 `true` 都 exit 1 → before/after 编译对拍跑不了 → **一个都没 commit**(铁律:未验证的核心改动不算修好)。机器恢复即:每 worktree 编译 → 复现(before) → 确认修好(after) → 跑回归 → 过了才 commit。下表是「已写未验」的快照。
+### ✅ 3 个核心 bug —— 根因已挖 + 修复 + **验证 + 提交**（2026-06-25；用户要求「把 4 部分 bug 修了」）
+> 流程:① root-cause workflow 逐一**深挖+复现+源码定位**(3/3 实测复现);② 各起一个 fix subagent 在**隔离 worktree** 写根因修复;③ 机器恢复后逐一 before/after + 回归验证 → **3 个全部验证通过、已 cp 到主树 commit**。原 §4「未根治/绕过」三项**全清**。
 
-| Bug | 根因（已复现+源码定位，**推翻了部分旧猜测**） | 修复（worktree,**未验证未提交**） | worktree 分支 |
+| Bug | 根因（已复现+源码定位，**推翻了部分旧猜测**） | 修复 | commit / 验证 |
 |----|----|----|----|
-| **inf/nan 段错误 (#4/#11)** | **不是 codegen bug,是 GIL 违例**:嵌套 ternary 大到触发 auto_parallel → 生成 `@python` 指令 → `op_compiler.cc` 调 `py_caller.cc` 跑 CPython C-API,却跑在 JIT 编译 **worker 线程**(C0/C1…)上、**不持 GIL**(主线程持 GIL)→ 并发无锁改解释器 → 崩(`PyUnicode_New @ 0x1`)。单 op 太小不触发 auto_parallel 故幸免。CPU 即可复现。 | `py_caller.cc` 包 `PyGILState_Ensure/Release`(RAII 异常安全)**＋** `parallel_compiler.cc` 主线程 spin-wait 期间 `PyEval_SaveThread` 放锁。**关键:单纯加 PyGILState 会死锁**(主线程持 GIL 自旋等 worker、worker 等 GIL)——subagent 发现并补了主线程放锁。G1 不动,全平台统一。 | `worktree-agent-a90c23344c7916895` |
-| **CUDA scatter min/max (#6)** | `setitem_op.cc:~374` CUDA 分支只对 void/add 用原子,max/min/multiply 落到**非原子 RMW** `op[iid]=@expand_op(...)`;一个 iid 被多线程别名 → 各读旧值各写 → last-writer-wins **确定性丢贡献**(非 race)。CPU 串行、Ascend 另文件故对。`float_atomic_fix_pass` 对 setitem 不触发(它发 `::max` 非 `cuda_atomic_*`)。GPU 实测 40 seed 0/40 对。 | `setitem_op.cc` 改 per-op 原子派发(max→`cuda_atomic_max_rmw`/min→`_rmw`/mul→`cuda_atomic_mul`)+ `cuda_atomic.h` 新增**自包含 raw-IEEE CAS** `_rmw` 系列(float/double CAS;int 走原生;half/bf16 转发)。**关键:不动现有 ordered-int `cuda_atomic_max/min`**(reduce_op+fix_float 依赖,改了会双编码崩所有 CUDA min/max reduce)。`subtract` 仍非原子(留坑,已注明)。 | `worktree-agent-a440c654ff999e83b` |
-| **numpy2.x 段错误 (#7)** | **两个独立 ABI 断裂**(非旧猜的 descr 残留堆损坏):① `numpy.cc:71` `fill(PyArray_CopyInto,82)` —— numpy 2.0 把 CopyInto 从 C-API slot **82 挪到 50**,82 变 NULL → 非 c-style array 路径(`py_array_op.cc:202`)调 **NULL 指针**段错误;② `py_converter.h:884` 栈上伪造 1.x 布局 `PyArrayDescr_Proxy` 喂 `CastScalarToCtype`,numpy 2.x 读错偏移崩。**ctypes 实测确认**(slot82=NULL、CopyInto@50)。其余 9 个 slot 未变;array-OBJECT proxy ABI 稳;`0ca8b362` elsize 修对、不动。 | ① `numpy.cc` 版本感知 slot:`GetNDArrayCFeatureVersion()>=0x12 ? 50:82` + 非 NULL `CHECK`(响亮崩 vs 静默 NULL 调用);② `py_converter.h` 删伪造 descr,改 `PyNumber_Long`(numpy 标量都支持,float 截断同 1.x、且 int64 比旧 int32 更对)。**numpy<2 与 >=2 都对,非 pin**。 | `worktree-agent-acc9fd0312ac005ae` |
+| **inf/nan 段错误 (#4/#11)** | **不是 codegen bug,是 GIL 违例**:嵌套 ternary 大到触发 auto_parallel → 生成 `@python` 指令 → `op_compiler.cc` 调 `py_caller.cc` 跑 CPython C-API,却跑在 JIT 编译 **worker 线程**(C0/C1…)上、**不持 GIL**(主线程持 GIL)→ 并发无锁改解释器 → 崩(`PyUnicode_New @ 0x1`)。单 op 太小不触发 auto_parallel 故幸免。CPU 即可复现。 | `py_caller.cc` 包 `PyGILState_Ensure/Release`(RAII 异常安全)**＋** `parallel_compiler.cc` 主线程 spin-wait 期间 `PyEval_SaveThread` 放锁。**关键:单纯加 PyGILState 会死锁**(主线程持 GIL 自旋等 worker、worker 等 GIL)——subagent 发现并补了主线程放锁。G1 不动,全平台统一。 | ✅ `64de9c07`（CPU 验证：复现段错误→修后正确，stress 50 核 + 60-compile hammer 无崩无死锁，15-op 回归逐位一致）|
+| **CUDA scatter min/max (#6)** | `setitem_op.cc:~374` CUDA 分支只对 void/add 用原子,max/min/multiply 落到**非原子 RMW** `op[iid]=@expand_op(...)`;一个 iid 被多线程别名 → 各读旧值各写 → last-writer-wins **确定性丢贡献**(非 race)。CPU 串行、Ascend 另文件故对。`float_atomic_fix_pass` 对 setitem 不触发(它发 `::max` 非 `cuda_atomic_*`)。GPU 实测 40 seed 0/40 对。 | `setitem_op.cc` 改 per-op 原子派发(max→`cuda_atomic_max_rmw`/min→`_rmw`/mul→`cuda_atomic_mul`)+ `cuda_atomic.h` 新增**自包含 raw-IEEE CAS** `_rmw` 系列(float/double CAS;int 走原生;half/bf16 转发)。**关键:不动现有 ordered-int `cuda_atomic_max/min`**(reduce_op+fix_float 依赖,改了会双编码崩所有 CUDA min/max reduce)。`subtract` 仍非原子(留坑,已注明)。 | ✅ `880cd6ad`（RTX4090 验证：BEFORE 40/40 FAIL → AFTER 全 dtype×max/min/mul PASS，回归全过，kernel-grep 确认发 `_rmw`）|
+| **numpy2.x 段错误 (#7)** | **两个独立 ABI 断裂**(非旧猜的 descr 残留堆损坏):① `numpy.cc:71` `fill(PyArray_CopyInto,82)` —— numpy 2.0 把 CopyInto 从 C-API slot **82 挪到 50**,82 变 NULL → 非 c-style array 路径(`py_array_op.cc:202`)调 **NULL 指针**段错误;② `py_converter.h:884` 栈上伪造 1.x 布局 `PyArrayDescr_Proxy` 喂 `CastScalarToCtype`,numpy 2.x 读错偏移崩。**ctypes 实测确认**(slot82=NULL、CopyInto@50)。其余 9 个 slot 未变;array-OBJECT proxy ABI 稳;`0ca8b362` elsize 修对、不动。 | ① `numpy.cc` 版本感知 slot:`GetNDArrayCFeatureVersion()>=0x12 ? 50:82` + 非 NULL `CHECK`(响亮崩 vs 静默 NULL 调用);② `py_converter.h` 删伪造 descr,改 `PyNumber_Long`(numpy 标量都支持,float 截断同 1.x、且 int64 比旧 int32 更对)。**numpy<2 与 >=2 都对,非 pin**。（验证又揪出**第 3 处断裂**：`PyArray_Size` 读 `descr->elsize` 在 numpy2.0 移位读 0 → 本分支原缺该修复、plain `jt.array` 也 garbage；一并修。）| ✅ `b9ded5a1`（numpy2.4/py3.13 + 2.2/py3.10 各 17/17 + 5000 迭代无崩；numpy1.26 回归逐位一致）|
 
-> **🟢 重大进展**:`numpy2.x` 之前标「需 asan/valgrind、本机修不了」——subagent 用 **ctypes 探 C-API 表**绕开内存工具,直接定位到 slot 错位,**不再需要 asan**。`inf/nan` 之前以为是 codegen,实为 GIL,**修法清晰**。
-> **⏭ 待办(机器恢复后,按序)**:1) 编译验证上 3 个 → 过了 commit(CUDA scatter 在 cscg104,另两个 cscg-hw00 多 env);2) 内核陷阱里**「不合理」**的两条各起 fix subagent 根治:**#2 `x==x`→all-True**(fusion 同指针去重把 `a==a` 折成 true、破坏 IEEE NaN 语义——是正确性缺陷不是固有行为)、**#3 reindex 负 dim**(应自归一化或清晰报错,而非 cryptic C++ 编译崩)。#1(无 0-d 标量)、#13(`jt.code` 无 ACL)判定为**基础设计/大改,非「不合理 bug」,暂留**。
+> **🟢 重大进展**:`numpy2.x` 之前标「需 asan/valgrind、本机修不了」——subagent 用 **ctypes 探 C-API 表**绕开内存工具直接定位 slot 错位,**不再需要 asan**;`inf/nan` 之前以为是 codegen,实为 GIL。三个**根因都推翻了旧猜测**,现已全部验证+提交。
+> **⏭ 后续(可认领)**:1) **py3.13 import 修复**(PEP-667,`compiler.py` `locals()`→`os.sys.modules`,一行;不修 py3.13 连 import 都不行,见 §整体进展⬜);2) 内核陷阱里**「不合理」**的两条各起 fix subagent 根治:**#2 `x==x`→all-True**(fusion 同指针去重把 `a==a` 折成 true、破坏 IEEE NaN——正确性缺陷非固有行为)、**#3 reindex 负 dim**(应自归一化或清晰报错,而非 cryptic C++ 编译崩)。#1(无 0-d 标量)、#13(`jt.code` 无 ACL)=**基础设计/大改,非「不合理 bug」,暂留**。
 
 ---
 
