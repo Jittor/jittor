@@ -551,7 +551,10 @@ def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction=
         return loss.reshape(target_shape) 
 
 def mse_loss(output, target, reduction="mean"):
-    return (output-target).sqr().reduce(reduction)
+    loss = (output-target).sqr()
+    # reduction='none' returns the per-element loss (torch semantics); Var.reduce only
+    # knows mean/sum, so don't forward 'none' to it (it raised "no such reduce").
+    return loss if reduction == "none" else loss.reduce(reduction)
 
 def bce_loss(output, target, weight=None, size_average=True):
     loss = - (target * jt.log(jt.maximum(output, 1e-20)) + (1 - target) * jt.log(jt.maximum(1 - output, 1e-20)))
@@ -564,8 +567,11 @@ def bce_loss(output, target, weight=None, size_average=True):
     else:
         return loss.sum()
 
-def l1_loss(output, target):
-    return (output-target).abs().mean()
+def l1_loss(output, target, reduction="mean"):
+    loss = (output-target).abs()
+    if reduction == "none": return loss
+    if reduction == "sum": return loss.sum()
+    return loss.mean()
 
 
 def smooth_l1_loss(y_true, y_pred,reduction="mean"):

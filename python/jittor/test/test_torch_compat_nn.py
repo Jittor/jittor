@@ -187,12 +187,9 @@ class TestLosses(Base):
                         ((a - b) ** 2).sum(), places=2, msg=f"mse sum {dev}")
         both_devices(body)
 
-    @unittest.skip("API-GAP / SEMANTIC-DIFF: torch's F.mse_loss(reduction='none') returns "
-                   "the per-element loss, but jittor forwards 'none' to Var.reduce(), which "
-                   "only knows mean/sum/add/... and raises 'Check failed: iter != "
-                   "__string_to_ns.end()'. reduction='mean'/'sum' work (TestLosses.test_mse_"
-                   "loss). verify-then-fix: special-case reduction=='none' in nn.mse_loss.")
     def test_mse_loss_none(self):
+        # fixed: nn.mse_loss now special-cases reduction='none' (was forwarded to
+        # Var.reduce -> "no such reduce" crash)
         rng = np.random.RandomState(20)
         a = rng.randn(3, 4).astype("float32"); b = rng.randn(3, 4).astype("float32")
         def body(dev):
@@ -208,11 +205,8 @@ class TestLosses(Base):
                         msg=f"l1 mean {dev}")
         both_devices(body)
 
-    @unittest.skip("API-GAP: jittor's nn.l1_loss(output, target) has NO reduction kwarg "
-                   "(hard-coded mean), so torch's F.l1_loss(reduction='none'/'sum') raises "
-                   "TypeError: unexpected keyword 'reduction'. mean works (test_l1_loss). "
-                   "verify-then-fix: add reduction= to nn.l1_loss.")
     def test_l1_loss_reduction(self):
+        # fixed: nn.l1_loss now takes reduction= (none/sum/mean); was hard-coded mean
         rng = np.random.RandomState(30)
         a = rng.randn(3, 4).astype("float32"); b = rng.randn(3, 4).astype("float32")
         def body(dev):
