@@ -3140,6 +3140,19 @@ def _install_misc(g, Var):
     g.use_deterministic_algorithms = lambda *a, **k: None
     g.is_floating_point = lambda x: ("float" in str(x.dtype))
 
+    # torch unary math jittor lacks at top level (it has log2 but not exp2/log10/trunc/sign)
+    import math as _math_la
+    _LN2 = _math_la.log(2.0); _INV_LN10 = 1.0 / _math_la.log(10.0)
+    def _sign(x): return (x > 0) * 1.0 - (x < 0) * 1.0   # jittor has no jt.sign
+    g.exp2 = lambda x: jt.exp(x * _LN2)
+    g.log10 = lambda x: jt.log(x) * _INV_LN10
+    g.sign = _sign
+    g.trunc = lambda x: _sign(x) * jt.floor(jt.abs(x))
+    Var.exp2 = lambda self: jt.exp(self * _LN2)
+    Var.log10 = lambda self: jt.log(self) * _INV_LN10
+    if not hasattr(Var, "sign"): Var.sign = lambda self: _sign(self)
+    Var.trunc = lambda self: _sign(self) * jt.floor(jt.abs(self))
+
 
     # ---- finfo / iinfo ----
     import numpy as _np
