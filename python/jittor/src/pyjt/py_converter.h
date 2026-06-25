@@ -237,7 +237,11 @@ struct NanoString;
 EXTERN_LIB PyTypeObject PyjtNanoString;
 DEF_IS(NanoString, bool) is_type(PyObject* obj) {
     return Py_TYPE(obj) == &PyjtNanoString ||
-        PyUnicode_CheckExact(obj) ||
+        // PyUnicode_Check (not CheckExact) so str SUBCLASSES are accepted too:
+        // torch_compat's `dtype` is a str subclass whose underlying value is the
+        // bare jittor name ("float32"), fed back into NanoString params by
+        // jittor's own python (contrib.concat/linalg/nn do str(var.dtype)).
+        PyUnicode_Check(obj) ||
         PyType_CheckExact(obj) ||
         // jt.float.__name__
         PyCallable_Check(obj) ||
@@ -255,7 +259,7 @@ DEF_IS(NanoString, PyObject*) to_py_object(T a) {
 DEF_IS(NanoString, T) from_py_object(PyObject* obj) {
     if (Py_TYPE(obj) == &PyjtNanoString)
         return *GET_RAW_PTR(T, obj);
-    if (PyUnicode_CheckExact(obj))
+    if (PyUnicode_Check(obj))   // str or str subclass (e.g. torch_compat dtype)
         return T(PyUnicode_AsUTF8(obj));
     // PyType
     if (PyType_CheckExact(obj))
