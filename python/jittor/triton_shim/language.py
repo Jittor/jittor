@@ -56,21 +56,39 @@ __triton_shim__ = True
 
 
 def _in_kernel_only(name):
-    """Build a stub callable for an in-kernel-only ``tl`` primitive."""
+    """Build a stub callable for an in-kernel-only ``tl`` primitive.
+
+    Outside a kernel trace it raises the clear "only usable inside @triton.jit"
+    error (unchanged behaviour). *Inside* a trace (i.e. while
+    :func:`jittor.triton_shim.launch.run_kernel` is executing the body), the
+    structural / memory primitives delegate to the active tracer, and the math
+    primitives lower to jittor. Anything the executor doesn't model still raises
+    a clear ``NotImplementedError`` — never a silent wrong result.
+    """
 
     def _stub(*args, **kwargs):
+        from . import launch as _launch
+        tr = _launch._tracer()
+        if tr is not None:
+            handler = getattr(tr, name, None)
+            if handler is not None:
+                # structural / memory ops implemented directly on the tracer
+                return handler(*args, **kwargs)
+            # otherwise it's an elementwise-math op: lower via the math table
+            return _launch.dispatch_math(name, args, kwargs)
         raise NotImplementedError(
             "triton.language.{0} is only usable inside an @triton.jit kernel, "
-            "which the jittor triton shim does not execute. Use the "
-            "pure-PyTorch fallback path (e.g. guard the triton path behind "
-            "`is_triton_available()` / a try-import).".format(name)
+            "which the jittor triton shim does not execute as a triton kernel. "
+            "(The shim can run a narrow 1-D elementwise subset via "
+            "`kernel[grid](var_args...)`; calling tl.{0} on its own is not "
+            "supported.) Use the pure-PyTorch fallback path.".format(name)
         )
 
     _stub.__name__ = name
     _stub.__qualname__ = name
     _stub.__doc__ = (
-        "Stub for triton.language.{0} (in-kernel only; raises "
-        "NotImplementedError if executed on jittor).".format(name)
+        "Stub for triton.language.{0} (in-kernel only; outside an @triton.jit "
+        "trace it raises NotImplementedError on jittor).".format(name)
     )
     _stub.__triton_shim_stub__ = True
     return _stub
