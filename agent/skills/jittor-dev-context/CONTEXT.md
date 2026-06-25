@@ -64,6 +64,13 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
 - **🆕 cache 隔离**（用户建议、已验证）：jittor 原生 `cache_name` 环境变量，`CUDA_VISIBLE_DEVICES=N cache_name=cardN` 一卡一 agent → 并发编译互不争用（见 §1.1）。
 - **#8 segfault 调研**：假设 = `do_compile` 的进程级文件锁在 worker 线程被 `_has_lock` 跳过 → 无互斥并发 → 堆损坏（[[design-parallel-compiler-segfault]]）。但**根因仍不确定**（relay_groups 是否 per-FusedOp 存疑、glibc 堆损坏需 TSan 定位），mutex 修复**风险高**（可能死锁/废掉并行/坏多进程缓存）→ **未修，保留 `use_parallel_op_compiler=0` workaround，留待专门排查**。
 
+### ✅ 本会话增量 Round 4（2026-06-26 续，cache 隔离并行）
+- **模型库齐**：再补 **MaxViT**（`2e33c9c0`，参数量 30,919,624 == torchvision 精确）→ 6 大现代架构全覆盖（MobileNetV3/EfficientNet/RegNet/ConvNeXt/Swin/MaxViT）。
+- **测试模块再 +6**：sort_create / math / serialize / conv_pool / distributions / fft_einsum（共 13 个 torch-grade 模块，CPU+CUDA vs numpy/解析）。
+- **又修 4 个真 bug**（测试揪出）：**save/load 把 float64/int64 降精度**（`25b1d307`，`_from_portable` 用 jt.array 窄化→改 from_numpy，checkpoint 不再丢精度）、torch.exp2/log10/sign/trunc 缺失（`6c8c8d71`，jittor 无→补 torch_compat）、Uniform.sample 崩（jt.uniform 不存在）+ log_prob 出界 +inf 应 -inf（`7fbf01fc`）。
+- **新立账**（测试揪出、未修）：#11 avg_pool count_include_pad / adaptive_pool 非整除；#12 distributions batched-param sample 形状；以及 dtype 提升 lattice(#10)、torch_compat linalg gap(#9)。
+- **本会话累计**：~26 commit；**~9 个真 torch-parity bug 修复**（cat/argmax/index_select/mse-l1/exp2等/save-load/Uniform）；6 架构；13 测试模块；triton kernel 执行；cache 隔离机制（用户建议）。剩余深核心（#5 complex 实现 / #8 segfault / #9-12 各 parity）均精确立账，属多日/高风险专项。
+
 ### ⬜ 还没做（可直接开展的新任务）
 1. **py3.13 import 修复（PEP-667）**：py3.13 上 `compiler.py` `mod = locals()[gen_name]` 取不到 exec 绑定名 → jittor **根本 import 不了**；一行改 `mod = os.sys.modules[gen_name]`（fix-agent 已临时验证有效，未提交）。修了 py3.13 + numpy2.x 才完整可用。
 2. **根治内核陷阱里的「不合理」项**：#2 `x==x`→all-True（fusion 同指针去重破坏 IEEE NaN）、#3 reindex 负 dim（应自归一化/清晰报错）——见 §4-B。
