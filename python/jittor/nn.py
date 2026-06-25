@@ -984,14 +984,15 @@ class InstanceNorm(Module):
         self.bias = init.constant((num_features,), "float32", 0.0) if affine else 0.0
 
     def execute(self, x):
+        # Per-(N,C) normalization over spatial dims with a numerically-stable custom
+        # backward (see _ln_normalize) — the composite E[x^2]-E[x]^2 form loses float32
+        # precision in backward for small-variance inputs (same cancellation as LayerNorm).
         dims = list(range(2,x.ndim))
-        xmean = jt.mean(x, dims=dims)
-        x2mean = jt.mean(x*x, dims=dims)
-
-        xvar = (x2mean-xmean*xmean).maximum(0.0)
-        w = self.weight / jt.sqrt(xvar+self.eps)
-        b = self.bias - xmean * w
-        return x * w.broadcast(x, dims) + b.broadcast(x, dims)
+        xhat = _ln_normalize(x, dims, self.eps)
+        if not self.affine:
+            return xhat
+        sh = [1, self.num_features] + [1]*len(dims)
+        return xhat * self.weight.reshape(sh) + self.bias.reshape(sh)
 
 InstanceNorm3d = InstanceNorm2d = InstanceNorm1d = InstanceNorm
 
@@ -1024,14 +1025,14 @@ def instance_norm(x,
     momentum = 0.1,
     eps = 1e-5):
     dims = list(range(2,x.ndim))
-    xmean = jt.mean(x, dims=dims)
-    x2mean = jt.mean(x*x, dims=dims)
-
-    xvar = (x2mean-xmean*xmean).maximum(0.0)
+    xhat = _ln_normalize(x, dims, eps)   # stable custom backward, see _ln_normalize
     weight = 1.0 if weight is None else weight
-    w = weight / jt.sqrt(xvar+eps)
-    b = (-xmean * w) if bias is None else (bias - xmean * w)
-    return x * w.broadcast(x, dims) + b.broadcast(x, dims)
+    bias = 0.0 if bias is None else bias
+    if isinstance(weight, jt.Var):
+        weight = weight.reshape([1, x.shape[1]] + [1]*len(dims))
+    if isinstance(bias, jt.Var):
+        bias = bias.reshape([1, x.shape[1]] + [1]*len(dims))
+    return xhat * weight + bias
 
 def _ln_normalize(x, dims, eps):
     # Normalize x -> (x-mean)/sqrt(var+eps) over `dims` with a numerically-STABLE
@@ -1122,21 +1123,16 @@ class GroupNorm(Module):
         output_shape = x.shape
         assert C % self.num_groups == 0, \
             f"GroupNorm: num_channels ({C}) must be divisible by num_groups ({self.num_groups})"
-        x = x.reshape((N, self.num_groups, C//self.num_groups, -1))
-        xmean = jt.mean(x, dims=[2,3]).reshape((N, self.num_groups, 1))
-        x2mean = jt.mean(x*x, dims=[2,3]).reshape((N, self.num_groups, 1))
-        xvar = (x2mean-xmean*xmean).maximum(0.0)
-
-        if self.affine:
-            w = self.weight.reshape((1, self.num_groups, -1))
-            b = self.bias.reshape((1, self.num_groups, -1))
-        else:
-            w = 1
-            b = 0
-        w = w / jt.sqrt(xvar+self.eps)
-        b = b - xmean * w
-        x = x * w.broadcast(x, [3]) + b.broadcast(x, [3])
-        return x.reshape(output_shape)
+        # Per-(N,group) normalization with a numerically-stable custom backward (see
+        # _ln_normalize) — the composite E[x^2]-E[x]^2 form loses float32 precision in
+        # backward for small-variance inputs (same cancellation as LayerNorm). Affine is
+        # per-channel and applied after restoring shape (no cancellation).
+        xg = x.reshape((N, self.num_groups, C//self.num_groups, -1))
+        xhat = _ln_normalize(xg, [2,3], self.eps).reshape(output_shape)
+        if not self.affine:
+            return xhat
+        sh = [1, C] + [1]*(x.ndim-2)
+        return xhat * self.weight.reshape(sh) + self.bias.reshape(sh)
 
 def group_norm(x, 
     num_groups, 
@@ -1152,19 +1148,13 @@ def group_norm(x,
     else:
         output_shape = (N, C)
     assert C % num_groups == 0
-    x = x.reshape((N, num_groups, C//num_groups, -1))
-    xmean = jt.mean(x, dims=[2,3]).reshape((N, num_groups, 1))
-    x2mean = jt.mean(x*x, dims=[2,3]).reshape((N, num_groups, 1))
-    xvar = (x2mean-xmean*xmean).maximum(0.0)
-
+    xg = x.reshape((N, num_groups, C//num_groups, -1))
+    xhat = _ln_normalize(xg, [2,3], eps).reshape(output_shape)  # stable custom backward
     if isinstance(weight, jt.Var):
-        weight = weight.reshape((1, num_groups, -1))
+        weight = weight.reshape([1, C] + [1]*(len(output_shape)-2))
     if isinstance(bias, jt.Var):
-        bias = bias.reshape((1, num_groups, -1))
-    weight = weight / jt.sqrt(xvar+eps)
-    bias = bias - xmean * weight
-    x = x * weight.broadcast(x, [3]) + bias.broadcast(x, [3])
-    return x.reshape(output_shape)
+        bias = bias.reshape([1, C] + [1]*(len(output_shape)-2))
+    return xhat * weight + bias
 
 
 Relu = jt.make_module(relu)
