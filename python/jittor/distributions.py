@@ -124,11 +124,14 @@ class Uniform:
         assert high > low
     
     def sample(self,sample_shape):
-        return jt.uniform(self.low,self.high,sample_shape)
-    
+        # jittor has no jt.uniform; draw U[0,1) and affine-map to [low, high)
+        return self.low + (self.high - self.low) * jt.random(sample_shape)
+
     def log_prob(self,x):
+        # outside the support the density is 0 -> log_prob = -inf (torch semantics;
+        # was +inf)
         if x < self.low or x >= self.high:
-            return math.inf
+            return -math.inf
         return -jt.safe_log(self.high - self.low)
     
     def entropy(self):
