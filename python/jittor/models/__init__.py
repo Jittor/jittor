@@ -12,6 +12,8 @@ from . import googlenet
 from .googlenet import *
 from . import mobilenet
 from .mobilenet import *
+from . import mobilenet_v3
+from .mobilenet_v3 import *
 from . import mnasnet
 from .mnasnet import *
 from . import shufflenetv2
