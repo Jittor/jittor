@@ -1033,6 +1033,32 @@ def instance_norm(x,
     b = (-xmean * w) if bias is None else (bias - xmean * w)
     return x * w.broadcast(x, dims) + b.broadcast(x, dims)
 
+def _ln_normalize(x, dims, eps):
+    # Normalize x -> (x-mean)/sqrt(var+eps) over `dims` with a numerically-STABLE
+    # custom backward (the closed form torch's fused LN uses). The composite-autodiff
+    # backward forms huge terms (x * d/dx[1/sqrt(var+eps)] ~ (var+eps)^-1.5) that must
+    # catastrophically cancel to the true input-grad -> float32 error (~1% for small-
+    # variance inputs; negligible for std~1). torch's fused LN avoids it; this matches.
+    # jt.Function: invoked via .apply(); tape_together makes grad() the backward
+    # (overriding the composite path inside execute).
+    class _LN(jt.Function):
+        def execute(self, x):
+            mean = jt.mean(x, dims=dims, keepdims=1)
+            var = jt.mean((x - mean) * (x - mean), dims=dims, keepdims=1)
+            rstd = 1.0 / jt.sqrt(var + eps)
+            xhat = (x - mean) * rstd
+            self.xhat = xhat
+            self.rstd = rstd
+            return xhat
+        def grad(self, g):
+            # dL/dx = rstd*(g - mean(g) - xhat*mean(g*xhat)) over the normalized dims
+            xhat, rstd = self.xhat, self.rstd
+            mg = jt.mean(g, dims=dims, keepdims=1)
+            mgx = jt.mean(g * xhat, dims=dims, keepdims=1)
+            return rstd * (g - mg - xhat * mgx)
+    return _LN.apply(x)
+
+
 class LayerNorm(Module):
     def __init__(self, normalized_shape, eps: float = 1e-5, elementwise_affine: bool = True, bias: bool = True, device=None, dtype=None) -> None:
         # device/dtype: torch's LayerNorm accepts them (factory kwargs); jittor places
@@ -1051,17 +1077,14 @@ class LayerNorm(Module):
     @fp32_guard
     def execute(self, x):
         dims = [-i for i in range(len(self.normalized_shape), 0, -1)]
-        xmean = jt.mean(x, dims=dims, keepdims=1)
-        x2mean = jt.mean(x*x, dims=dims, keepdims=1)
-
-        xvar = (x2mean-xmean*xmean).maximum(0.0)
-        # torch's LayerNorm/F.layer_norm accept weight=None / bias=None (e.g. MPT
-        # sets norm.bias = None for Hub-weight compat). Treat None as identity/zero
-        # so we don't do `None - Var`. Math is unchanged when they are Var/float.
+        # out = weight*(x-mean)/sqrt(var+eps) + bias. Normalization has a stable custom
+        # backward (see _ln_normalize); the affine stays composite (no cancellation).
+        xhat = _ln_normalize(x, dims, self.eps)
+        # torch's LayerNorm/F.layer_norm accept weight=None / bias=None (MPT sets
+        # norm.bias = None for Hub-weight compat). Treat None as identity/zero.
         weight = 1.0 if self.weight is None else self.weight
-        w = weight / jt.sqrt(xvar+self.eps)
-        b = (-xmean * w) if self.bias is None else (self.bias - xmean * w)
-        return x * w + b
+        bias = 0.0 if self.bias is None else self.bias
+        return xhat * weight + bias
 
 
 LayerNorm3d = LayerNorm2d = LayerNorm1d = LayerNorm
@@ -1074,14 +1097,10 @@ def layer_norm(x,
     eps: float = 1e-5, 
     elementwise_affine: bool = True):
     dims = [-i for i in range(len(normalized_shape), 0, -1)]
-    xmean = jt.mean(x, dims=dims, keepdims=1)
-    x2mean = jt.mean(x*x, dims=dims, keepdims=1)
-
-    xvar = (x2mean-xmean*xmean).maximum(0.0)
+    xhat = _ln_normalize(x, dims, eps)   # stable custom backward, see LayerNorm.execute
     weight = 1.0 if weight is None else weight
-    w = weight / jt.sqrt(xvar+eps)
-    b = (-xmean * w) if bias is None else (bias - xmean * w)
-    return x * w + b
+    bias = 0.0 if bias is None else bias
+    return xhat * weight + bias
 
 class GroupNorm(Module):
     def __init__(self, num_groups, num_channels, eps=1e-05, affine=True, is_train=True):
