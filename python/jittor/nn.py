@@ -940,14 +940,30 @@ class BatchNorm(Module):
         if self.is_train:
             xmean = jt.mean(x, dims=dims)
             x2mean = jt.mean(x*x, dims=dims)
-            if self.sync and jt.in_mpi:
+            sync = self.sync and jt.in_mpi
+            if sync:
                 xmean = xmean.mpi_all_reduce("mean")
                 x2mean = x2mean.mpi_all_reduce("mean")
 
             xvar = (x2mean-xmean*xmean).maximum(0.0)
-            w = self.weight / jt.sqrt(xvar+self.eps)
-            b = self.bias - xmean * w
-            norm_x = x * w.broadcast(x, dims) + b.broadcast(x, dims)
+            if sync:
+                # SyncBatchNorm: stats are cross-rank, so normalize with the composite
+                # form (the stable _ln_normalize helper only sees local data and would
+                # break sync semantics). Precision cost is the small-variance backround
+                # cancellation, accepted to preserve correctness across ranks.
+                w = self.weight / jt.sqrt(xvar+self.eps)
+                b = self.bias - xmean * w
+                norm_x = x * w.broadcast(x, dims) + b.broadcast(x, dims)
+            else:
+                # local stats: use the numerically-stable custom-backward normalization
+                # (see _ln_normalize) — avoids the E[x^2]-E[x]^2 fp32 cancellation that
+                # corrupts the backward for small-variance batches; affine applied after.
+                xhat = _ln_normalize(x, dims, self.eps)
+                if self.affine:
+                    sh = [1, self.num_features] + [1]*(x.ndim-2)
+                    norm_x = xhat * self.weight.reshape(sh) + self.bias.reshape(sh)
+                else:
+                    norm_x = xhat
 
             self.running_mean.update(self.running_mean +
                 (xmean.reshape((-1,)) - self.running_mean) * self.momentum)
