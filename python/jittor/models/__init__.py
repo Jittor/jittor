@@ -14,6 +14,8 @@ from . import mobilenet
 from .mobilenet import *
 from . import mobilenet_v3
 from .mobilenet_v3 import *
+from . import efficientnet
+from .efficientnet import *
 from . import mnasnet
 from .mnasnet import *
 from . import shufflenetv2
