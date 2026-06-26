@@ -279,7 +279,9 @@ ReduceOp::ReduceOp(Var* x, NanoString op, NanoVector dims, bool keepdims)
         reduce_mask = 0;
         for (auto dim : dims) {
             if (dim<0) dim += xdim;
-            CHECK(dim>=0 && dim<xdim) << "Wrong dims number:" << dims;
+            CHECK(dim>=0 && dim<xdim) << "Reduce dim out of range: requested dims" << dims
+                << "for a" << (int)xdim >> "-D var; valid dims are" << -(int)xdim
+                << "to" << ((int)xdim-1) >> ".";
             reduce_mask |= 1<<dim;
         }
     }

@@ -76,6 +76,13 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
 - **torch-grade 测试套件成型（17 模块）**：ops/indexing/reduce_shape/linalg/dtype/nn/autograd/sort_create/math/serialize/conv_pool/distributions/fft_einsum/complex64_native/**attention**/**optim**/**rnn**，全 CPU+CUDA vs numpy/解析/torch 规则。attention(SDPA+MHA)/optim(SGD/Adam/StepLR 对解析公式精确)/rnn(LSTM cell 手算对拍) 是 transformer/训练/序列核心面。
 - **本会话累计 ~37 commit**：6 任务全部实质推进（**#5 复数算术可用**/17 测试模块/6 架构/triton 执行/报错高价值点）+ **~12 个真 bug 修复** + 深核心 #8/#9/#10/#11/#12 精确立账。剩余均为多日深核心或本质无界，已精确铺路。
 
+### ✅ 本会话增量 Round 6（2026-06-26 续：complex conj + 报错清晰化 + loss/norm 测试 + efficientnet 补全）
+- **#5 complex Phase 2b 实现（`1dd1de61`+`18359c81`）**：原生 complex64 从"仅算术"推进到 **sum-reduce（加 CUDA `atomicAdd(complex64*)` 拆 real/imag）+ abs→float32 + conj**（新增**原生 unary op `conj`**：6 处同步——FOR_ALL_NS/两 unary_ops set/三 OpByType[real·fp16=identity 符合 torch、complex=jt_conj]/grad；real conj 路径 grad=ones 已验，complex grad 走 `!is_float` 守卫延后）。现可用：create/+−×÷/neg/标量/**sum/abs/conj**。配方+边界见 [[design-complex-dtype]]。CPU+CUDA 精确，171/0。
+- **#2 C++/CUDA 报错清晰化（`74c372e3`+`7244eb22`+reduce-dim）**：审计 10 类常见误用（~70% 本已清晰，诚实不造活），修最毒 3+1 个——(a) **未支持 op×dtype**：`op_compiler.cc` 把内部「No expand op pattern」改成「Op 'exp' is not supported for dtype(s): {complex64}…」（通用，覆盖任何 dtype 缺口）；(b) **Conv2d 通道不符**（原**空** `AssertionError:`）→「expected input with 8 channels…got 3」；(c) **Conv2d 维度错**（原 unpack 报错）→「expected 4-D (N,C,H,W)…」；(d) **bitwise/shift 作用于 float**（原 g++ 模板墙）→ `binary_op.cc` 早查「requires integer or boolean dtypes」；(e) reduce 越界 dim 加合法区间。`test_torch_compat_errors.py`（9）按子串锁定。
+- **#1 loss/norm 测试 + 4 真 bug 修（`018d9863`）**：`test_torch_compat_loss`(27)+`test_torch_compat_norm`(22) CPU+CUDA。修 nll_loss `ignore_index=0` 漏忽略（`>0`→`>=0`+weight.clone()）/ CrossEntropyLoss·BCEWithLogits 丢 `reduction=` / F.cross_entropy 软标签崩。norm 本已 bit 正确。
+- **#3 EfficientNet b4-b7（`1b223f9b`）**：补齐 torchvision b0-b7，参数对 torchvision 常量 **0.0000%**，CPU+CUDA。model-agent 另复验全部 21 个构造器参数精确 + 独立复现 #8 segfault（并发编译下 `VarRelayManager::get_op_relay_info`，非模型 bug）。
+- **本轮 ~7 commit**，全 CPU+CUDA + 171/0；多 agent 并行（test/model/audit/interpolate，各自 `cache_name=cardX CUDA_VISIBLE_DEVICES=N` 隔离，Python-only 不碰 C++ 避免撞编译）。
+
 ### ⬜ 还没做（可直接开展的新任务）
 1. **py3.13 import 修复（PEP-667）**：py3.13 上 `compiler.py` `mod = locals()[gen_name]` 取不到 exec 绑定名 → jittor **根本 import 不了**；一行改 `mod = os.sys.modules[gen_name]`（fix-agent 已临时验证有效，未提交）。修了 py3.13 + numpy2.x 才完整可用。
 2. **根治内核陷阱里的「不合理」项**：#2 `x==x`→all-True（fusion 同指针去重破坏 IEEE NaN）、#3 reindex 负 dim（应自归一化/清晰报错）——见 §4-B。

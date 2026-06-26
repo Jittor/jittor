@@ -72,6 +72,13 @@ class TestTorchCompatErrors(unittest.TestCase):
         r = (jt.array([6, 3, 5]) & jt.array([4, 1, 1])).numpy()
         np.testing.assert_array_equal(np.asarray(r), [4, 1, 1])
 
+    # ---- reduce over an out-of-range dim (now names the valid range) ----
+    def test_reduce_dim_out_of_range(self):
+        name, m = _msg(lambda: jt.array(np.ones((2, 3), "float32")).sum(dim=5).numpy())
+        self.assertIsNotNone(name, "out-of-range reduce dim should raise")
+        self.assertIn("out of range", m)
+        self.assertIn("valid dims", m)
+
     # ---- already-clear messages we must not regress ----
     def test_binary_shape_mismatch_clear(self):
         name, m = _msg(lambda: (jt.array(np.ones((3, 4), "float32"))
