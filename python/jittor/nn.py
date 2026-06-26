@@ -2355,7 +2355,10 @@ def pad(x,padding=None, mode='constant', value=0, pad=None):
 
 class ReflectionPad2d(Module):
     def __init__(self, padding):
-        if padding < 0:
+        # torch.nn.ReflectionPad2d accepts an int OR a 4-tuple (left,right,top,bottom).
+        # The scalar `< 0` guard must not run for tuples (tuple < int -> TypeError);
+        # per-side non-negativity is checked below after unpacking.
+        if isinstance(padding, int) and padding < 0:
             raise RuntimeError(f"padding must be > 0, but got {padding}")
         self.padding = padding
         if isinstance(self.padding, int):
@@ -2485,7 +2488,10 @@ class ConstantPad3d(Module):
 
 class ReplicationPad2d(Module):
     def __init__(self, padding):
-        if padding < 0:
+        # torch.nn.ReplicationPad2d accepts an int OR a 4-tuple (left,right,top,bottom).
+        # The scalar `< 0` guard must not run for tuples (tuple < int -> TypeError);
+        # per-side non-negativity is checked below after unpacking.
+        if isinstance(padding, int) and padding < 0:
             raise RuntimeError(f"padding must be > 0, but got {padding}")
         self.padding = padding
         if isinstance(self.padding, int):
@@ -3101,7 +3107,11 @@ class Upsample(Module):
 
 class UpsamplingBilinear2d(Upsample):
     def __init__(self, scale_factor=None):
-        Upsample.__init__(self, scale_factor, 'bilinear')
+        # torch.nn.UpsamplingBilinear2d is documented as equivalent to
+        # Upsample(mode='bilinear', align_corners=True) (it predates the 0.3.1
+        # default flip to align_corners=False). The base Upsample defaults
+        # align_corners=False, so it must be set True here for torch parity.
+        Upsample.__init__(self, scale_factor, 'bilinear', align_corners=True)
 
 class UpsamplingNearest2d(Upsample):
     def __init__(self, scale_factor=None):

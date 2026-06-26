@@ -104,7 +104,12 @@ def index_add_(x, dim, index, tensor):
     """
     assert len(index.shape) == 1
     assert tensor.shape[0] == index.shape[0]
-    x[(slice(None,),)*dim+(index,)] += tensor
+    # torch parity: index_add_ ACCUMULATES all contributions at DUPLICATE indices
+    # (e.g. index=[0,0] adds both rows to row 0). The old impl used `x[adv_idx] += t`,
+    # which compiles to a read-add-write and is LAST-WRITE-WINS for dups (drops the
+    # earlier contribution). Route through the dup-correct out-of-place index_add
+    # (scatter_add path) and assign back in place. See test_torch_compat_scatter.py.
+    x.assign(x.index_add(dim, index, tensor))
 jt.Var.index_add_ = index_add_
 
 def __copy__(x):
