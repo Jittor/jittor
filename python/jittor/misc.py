@@ -809,9 +809,14 @@ def arctan2(y,x):
     x = (x!=0.0).ternary(x, 1e-30)
     angle = (y/x).arctan()
     mask = (x<0)&(y<0)
-    angle = angle - mask*np.pi
+    # mask is bool; `bool * python-float` promotes to float16 under the torch
+    # dtype lattice, rounding pi to 3.14 (3.140625 after upcast) and breaking
+    # the atol=1e-6 contract. Cast the mask to the angle's float dtype first so
+    # pi keeps full precision (float32 -> 3.1415927) while still honoring a
+    # genuinely float16/float64 input.
+    angle = angle - mask.cast(angle.dtype)*np.pi
     mask = (x<0)&(y>=0)
-    angle = angle + mask*np.pi
+    angle = angle + mask.cast(angle.dtype)*np.pi
     return angle
 atan2 = arctan2
 
