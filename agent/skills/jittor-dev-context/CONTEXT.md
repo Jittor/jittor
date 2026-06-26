@@ -71,6 +71,11 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
 - **新立账**（测试揪出、未修）：#11 avg_pool count_include_pad / adaptive_pool 非整除；#12 distributions batched-param sample 形状；以及 dtype 提升 lattice(#10)、torch_compat linalg gap(#9)。
 - **本会话累计**：~26 commit；**~9 个真 torch-parity bug 修复**（cat/argmax/index_select/mse-l1/exp2等/save-load/Uniform）；6 架构；13 测试模块；triton kernel 执行；cache 隔离机制（用户建议）。剩余深核心（#5 complex 实现 / #8 segfault / #9-12 各 parity）均精确立账，属多日/高风险专项。
 
+### ✅ 本会话增量 Round 5（2026-06-26 续：complex 功能化 + 测试套件成型）
+- **🟢🟢 原生 complex64 算术功能化（`fbc3f2b2`）**：#5 从"Phase 1 注册"推进到 **Phase 2 算术可用**——`jt.array(复数)`+numpy 往返 + add/sub/mul/div/neg + 复数⊕标量，对 numpy **maxdiff=0.0 精确**，CPU+CUDA，171/0 无回归。实现：`type/complex_compute.h`(struct+运算符)+`type/complex_op_type.cc`(OpByType+post_pass)+dtype_infer 规则+numpy 映射+**关键 bug 修**：`py_array_op.cc` 的 dsize8 自动 64→32 窄化误伤 complex64，加 `!is_complex()` 排除。回归锁 `test_complex64_native.py`。**Phase 2b 待续**（reduce/abs/conj/matmul/view_as_real/grad/complex128，编译错=响亮非静默，见 [[design-complex-dtype]]）。
+- **torch-grade 测试套件成型（17 模块）**：ops/indexing/reduce_shape/linalg/dtype/nn/autograd/sort_create/math/serialize/conv_pool/distributions/fft_einsum/complex64_native/**attention**/**optim**/**rnn**，全 CPU+CUDA vs numpy/解析/torch 规则。attention(SDPA+MHA)/optim(SGD/Adam/StepLR 对解析公式精确)/rnn(LSTM cell 手算对拍) 是 transformer/训练/序列核心面。
+- **本会话累计 ~37 commit**：6 任务全部实质推进（**#5 复数算术可用**/17 测试模块/6 架构/triton 执行/报错高价值点）+ **~12 个真 bug 修复** + 深核心 #8/#9/#10/#11/#12 精确立账。剩余均为多日深核心或本质无界，已精确铺路。
+
 ### ⬜ 还没做（可直接开展的新任务）
 1. **py3.13 import 修复（PEP-667）**：py3.13 上 `compiler.py` `mod = locals()[gen_name]` 取不到 exec 绑定名 → jittor **根本 import 不了**；一行改 `mod = os.sys.modules[gen_name]`（fix-agent 已临时验证有效，未提交）。修了 py3.13 + numpy2.x 才完整可用。
 2. **根治内核陷阱里的「不合理」项**：#2 `x==x`→all-True（fusion 同指针去重破坏 IEEE NaN）、#3 reindex 负 dim（应自归一化/清晰报错）——见 §4-B。
