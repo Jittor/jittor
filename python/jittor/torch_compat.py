@@ -562,6 +562,28 @@ def install(torch):
             def _cross_entropy(input, target, weight=None, size_average=None,
                                ignore_index=-100, reduce=None, reduction="mean",
                                label_smoothing=0.0):
+                # torch: a floating-point target with the SAME shape as input is a
+                # class-probability ("soft label") target (mixup / distillation / soft
+                # label-smoothing). jittor's cross_entropy_loss only understands integer
+                # class-index targets, so handle the soft case here.
+                if (isinstance(target, jt.Var) and target.ndim == input.ndim
+                        and "int" not in str(target.dtype)):
+                    Cc = int(input.shape[1]) if input.ndim >= 2 else int(input.shape[-1])
+                    cdim = 1 if input.ndim >= 2 else -1
+                    logp = nn.log_softmax(input, dim=cdim)
+                    tgt = target
+                    if label_smoothing:
+                        tgt = (1.0 - label_smoothing) * tgt + label_smoothing / Cc
+                    if weight is not None:
+                        wsh = [1] * input.ndim; wsh[cdim] = Cc
+                        wloss = -(tgt * logp * weight.reshape(wsh)).sum(dim=cdim)
+                    else:
+                        wloss = -(tgt * logp).sum(dim=cdim)
+                    if reduction == "sum":
+                        return wloss.sum()
+                    if reduction == "none":
+                        return wloss
+                    return wloss.mean()        # torch divides the soft-target loss by N
                 if not label_smoothing:
                     ii = -100 if ignore_index is None else ignore_index
                     return _jt_ce(input, target, weight=weight, ignore_index=ii,

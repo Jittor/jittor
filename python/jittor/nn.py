@@ -602,7 +602,12 @@ def nll_loss(output,target,weight=None,ignore_index=-100,reduction='mean'):
     assert ignore_index<0 or ignore_index<n_classes
     if weight is None:
         weight = jt.ones((n_classes,))
-    if ignore_index>0:
+    # torch ignores the class `ignore_index` (any value >=0 is a valid class id, incl.
+    # 0); the default -100 is a sentinel for "ignore nothing". The old `>0` test silently
+    # let ignore_index=0 through, so class 0 was still counted. Clone before zeroing so a
+    # user-supplied weight Var isn't mutated in place.
+    if ignore_index>=0:
+        weight = weight.clone()
         weight[ignore_index]=0
     if output.ndim==2:
         index = jt.index((output.shape[0],),dim=0)
@@ -620,12 +625,16 @@ def nll_loss(output,target,weight=None,ignore_index=-100,reduction='mean'):
         raise ValueError(f'not support {reduction}')
     
 class CrossEntropyLoss(Module):
-    def __init__(self, weight=None, ignore_index=None):
+    def __init__(self, weight=None, ignore_index=None, reduction='mean'):
+        # torch.nn.CrossEntropyLoss takes a `reduction` arg ('mean'/'sum'/'none');
+        # it was silently dropped before, so reduction='sum'/'none' had no effect.
         self.weight = weight
         self.ignore_index = ignore_index
-        
+        self.reduction = reduction
+
     def execute(self, output, target):
-        return cross_entropy_loss(output, target, self.weight, self.ignore_index)
+        return cross_entropy_loss(output, target, self.weight, self.ignore_index,
+                                  reduction=self.reduction)
 
 class MSELoss(Module):
     def __init__(self, reduction='mean'):
@@ -646,10 +655,10 @@ class L1Loss(Module):
     def execute(self, output, target):
         return l1_loss(output, target)
 
-def binary_cross_entropy_with_logits(output, target, weight=None, pos_weight=None, size_average=True):
+def binary_cross_entropy_with_logits(output, target, weight=None, pos_weight=None, size_average=True, reduction=None):
     if not (target.shape == output.shape):
         raise ValueError(f"Target size ({target.shape}) must be the same as output size ({output.shape})")
-    
+
     max_val = jt.clamp(-output,min_v=0)
     if pos_weight is not None:
         log_weight = (pos_weight-1)*target + 1
@@ -659,19 +668,30 @@ def binary_cross_entropy_with_logits(output, target, weight=None, pos_weight=Non
     if weight is not None:
         loss *=weight
 
+    # torch supports reduction='none'/'sum'/'mean'; the original only had the
+    # size_average bool (no per-element 'none'). When reduction is given it wins.
+    if reduction is not None:
+        if reduction == "none":
+            return loss
+        if reduction == "sum":
+            return loss.sum()
+        if reduction == "mean":
+            return loss.mean()
+        raise ValueError(f'not support {reduction}')
     if size_average:
         return loss.mean()
     else:
         return loss.sum()
 
 class BCEWithLogitsLoss(Module):
-    def __init__(self, weight=None, pos_weight=None, size_average=True):
+    def __init__(self, weight=None, pos_weight=None, size_average=True, reduction=None):
         self.pos_weight = pos_weight
         self.weight = weight
         self.size_average = size_average
+        self.reduction = reduction
 
     def execute(self, output, target):
-        return binary_cross_entropy_with_logits(output,target,self.weight,self.pos_weight,self.size_average)
+        return binary_cross_entropy_with_logits(output,target,self.weight,self.pos_weight,self.size_average,self.reduction)
 
 def _get_softmax_dim(ndim):
     # Mirrors torch.nn.functional._get_softmax_dim: when ``dim`` is not given,
