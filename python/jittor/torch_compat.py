@@ -360,15 +360,24 @@ def install(torch):
     # plain list -> passthrough, so this never changes their behavior.
     _native_grad = g.grad
     def _grad_compat(loss, targets, *a, **k):
+        # A lone Var target must return a lone grad (native jt.grad unwraps it via
+        # core.grad(...)[0]). Wrapping it into [targets] here made jt.grad(loss, var)
+        # return a 1-element LIST instead of a Var, breaking single-target callers
+        # (e.g. softmax/ctc backward in test_misc_op). Remember the single-Var case and
+        # unwrap the result to restore native behavior; list/iterable targets pass through.
+        single = isinstance(targets, jt.Var)
         if type(targets) is not list:
-            if isinstance(targets, jt.Var):
+            if single:
                 targets = [targets]
             else:
                 try:
                     targets = list(targets)
                 except Exception:
                     pass
-        return _native_grad(loss, targets, *a, **k)
+        res = _native_grad(loss, targets, *a, **k)
+        if single and isinstance(res, (list, tuple)) and len(res) == 1:
+            return res[0]
+        return res
     g.grad = _grad_compat
 
     # torch.no_grad / enable_grad work as bare decorator (@torch.no_grad),
