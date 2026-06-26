@@ -155,7 +155,10 @@ Example::
         if len_a>=3 and len_a==len_b:
             # bmm
             # a: [..., n, m], b: [..., m, k], c:[..., n, k]
-            if jt.flags.use_cuda and jt.compile_extern.cublas_ops:
+            # cublas_batched_matmul only supports float dtypes; complex64 falls through to
+            # the reindex path below (broadcast * multiply + sum-reduce), which the native
+            # complex kernels support on both CPU and CUDA.
+            if jt.flags.use_cuda and jt.compile_extern.cublas_ops and "complex" not in str(a.dtype):
                 a, b = _broadcast_batch_dims(a, b)
                 return jt.compile_extern.cublas_ops.cublas_batched_matmul(a, b, 0, 0)
         shape = []
