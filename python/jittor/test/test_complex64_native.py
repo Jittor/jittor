@@ -236,6 +236,41 @@ class TestComplex64Native(unittest.TestCase):
             np.testing.assert_allclose(r, np.abs(a), atol=1e-4, rtol=1e-4, err_msg=f"abs {dev}")
         both_devices(body)
 
+    def test_view_bridge(self):
+        # Phase 6 keystone: native complex64 <-> float32[...,2] bridge, differentiable, both
+        # cards (see design-complex-dtype.md). view_as_real lowers complex64 to its [real,imag]
+        # pair; _real2_to_complex64 rebuilds it; the pair is autograd-transparent.
+        rng = np.random.RandomState(5)
+        a = (rng.randn(3, 4) + 1j * rng.randn(3, 4)).astype("complex64")
+        def body(dev):
+            z = jt.array(a)
+            # view_as_real: complex64 -> float32[...,2] == [real, imag]
+            vr = jt.nn.view_as_real(z)
+            self.assertEqual(str(vr.dtype), "float32", f"view_as_real dtype {dev}")
+            self.assertEqual(tuple(vr.shape), (3, 4, 2), f"view_as_real shape {dev}")
+            np.testing.assert_allclose(np.asarray(vr.numpy()),
+                                       np.stack([a.real, a.imag], axis=-1), atol=1e-6,
+                                       err_msg=f"view_as_real {dev}")
+            # reverse round-trip is exact (bit-identical reinterpret)
+            zc = jt.nn._real2_to_complex64(vr)
+            self.assertEqual(str(zc.dtype), "complex64", f"reverse dtype {dev}")
+            np.testing.assert_array_equal(np.asarray(zc.numpy()), a,
+                                          err_msg=f"bridge roundtrip {dev}")
+            # bridge is autograd-transparent: grad through it == direct grad on |z|.sum()
+            zg = jt.array(a)
+            L = jt.nn._real2_to_complex64(jt.nn.view_as_real(zg)).abs().sum()
+            g = jt.grad(L, zg); g = g[0] if isinstance(g, (list, tuple)) else g
+            zg2 = jt.array(a); L2 = zg2.abs().sum()
+            g2 = jt.grad(L2, zg2); g2 = g2[0] if isinstance(g2, (list, tuple)) else g2
+            np.testing.assert_allclose(np.asarray(g.numpy()), np.asarray(g2.numpy()),
+                                       atol=1e-5, err_msg=f"bridge autograd {dev}")
+            # view_as_real stays polymorphic over the legacy ComplexNumber (real/imag pair)
+            cn = jt.nn.ComplexNumber(jt.array(a.real.copy()), jt.array(a.imag.copy()))
+            np.testing.assert_allclose(np.asarray(jt.nn.view_as_real(cn).numpy()),
+                                       np.stack([a.real, a.imag], axis=-1), atol=1e-6,
+                                       err_msg=f"view_as_real(ComplexNumber) {dev}")
+        both_devices(body)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
