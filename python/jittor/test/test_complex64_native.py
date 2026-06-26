@@ -202,6 +202,26 @@ class TestComplex64Native(unittest.TestCase):
                                                err_msg=f"{name} b-grad {dev}")
         both_devices(body)
 
+    def test_grad_transcendental(self):
+        # holomorphic unary grads: grad = (y/|y|) * conj(f'(a)), verified vs real torch 2.12.
+        a = np.array([0.5 + 0.3j, -0.4 + 0.8j, 1.0 - 0.2j], dtype="complex64")
+        def expected(name):
+            y = {"exp": np.exp(a), "log": np.log(a), "sin": np.sin(a),
+                 "cos": np.cos(a), "sqrt": np.sqrt(a)}[name]
+            fp = {"exp": np.exp(a), "log": 1 / a, "sin": np.cos(a),
+                  "cos": -np.sin(a), "sqrt": 1 / (2 * np.sqrt(a))}[name]
+            return (y / np.abs(y)) * np.conj(fp)
+        def body(dev):
+            for name, jf in [("exp", jt.exp), ("log", jt.log), ("sin", jt.sin),
+                             ("cos", jt.cos), ("sqrt", jt.sqrt)]:
+                ja = jt.array(a)
+                L = jf(ja).abs().sum()
+                ga = jt.grad(L, ja)
+                ga = ga[0] if isinstance(ga, (list, tuple)) else ga
+                np.testing.assert_allclose(np.asarray(ga.numpy()), expected(name),
+                                           atol=1e-3, rtol=1e-3, err_msg=f"{name} grad {dev}")
+        both_devices(body)
+
     def test_reduce_sum_and_abs(self):
         rng = np.random.RandomState(2)
         a = (rng.randn(6) + 1j * rng.randn(6)).astype("complex64")
