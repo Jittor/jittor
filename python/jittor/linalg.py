@@ -219,22 +219,21 @@ def complex_svd(x:ComplexNumber):
             ComplexNumber(s, is_concat_value=True), \
             ComplexNumber(v, is_concat_value=True)
 
-#TODO:full_matrices=1
-def svd(x):
+import collections as _collections
+# torch.linalg.svd / torch.svd both return a named (U, S, Vh) result. We make
+# jittor's svd return one too: it still unpacks as a plain 3-tuple `u, s, v` (so
+# every existing `u, s, v = svd(x)` / `_, s, _ = svd(x)` caller is untouched), but
+# it also exposes `.U`, `.S`, `.Vh` for torch-grade attribute access.
+SVD = _collections.namedtuple("svd", ["U", "S", "Vh"])
+
+
+def _svd_reduced(x):
     r'''
-    calculate the Singular Value Decomposition of x.It follows the below fomula:
-    x = usv*
-    only support full matrices == False ver now, which means:
-    x's shape (...,M,K)
-    u's shape (...,M,K)
-    s's shape (...,K)
-    v's shape (...,K,N)
-    where K is min(M,N).
-    :param x:
-    :return:u,s,v.
+    Reduced (a.k.a. "thin"/"economy") SVD: A = U @ diag(S) @ Vh with
+    U:(...,M,K), S:(...,K), Vh:(...,K,N), K=min(M,N). This is torch's
+    ``full_matrices=False`` form. Differentiable (numpy forward + analytic
+    backward); returns the raw ``(u, s, v)`` tuple.
     '''
-    if isinstance(x, ComplexNumber):
-        return complex_svd(x)
     def forward_code(np, data):
         a = data["inputs"][0]
         u, s, v = data["outputs"]
@@ -312,6 +311,102 @@ def svd(x):
     )
     return u, s, v
 
+
+def _svd_full(x):
+    r'''
+    Full SVD: A = U @ diag(S) @ Vh with U:(...,M,M), S:(...,K), Vh:(...,N,N),
+    K=min(M,N). This is torch's ``full_matrices=True`` form for non-square A
+    (for square A the reduced form already has these shapes, so the caller uses
+    the differentiable reduced path instead). The extra (range-complement)
+    columns of U / rows of Vh have no well-defined gradient, so this path is a
+    numpy forward only (no backward) — matching the project's torch_shim, which
+    likewise falls back to numpy for full non-square SVD. Use ``full_matrices=
+    False`` (or :func:`svdvals`) when you need gradients.
+    '''
+    def forward_code(np, data):
+        a = data["inputs"][0]
+        u, s, v = data["outputs"]
+        tu, ts, tv = np.linalg.svd(a, full_matrices=1)
+        np.copyto(u, tu)
+        np.copyto(s, ts)
+        np.copyto(v, tv)
+
+    m, n = x.shape[-2:]
+    k = min(m, n)
+    su = list(x.shape[:-2]) + [m, m]
+    sv = list(x.shape[:-2]) + [n, n]
+    ss = list(x.shape[:-2]) + [k]
+    u, s, v = jt.numpy_code(
+        [su, ss, sv],
+        [x.dtype, x.dtype, x.dtype],
+        [x],
+        forward_code,
+    )
+    return u, s, v
+
+
+def svd(x, full_matrices=False, *, compute_uv=True, driver=None):
+    r'''
+    Singular Value Decomposition: ``A = U @ diag(S) @ Vh``. Returns the same
+    named ``(U, S, Vh)`` result as ``torch.linalg.svd`` (and it also unpacks as
+    a plain 3-tuple ``u, s, v``, preserving every existing jittor caller).
+
+    For ``A`` of shape ``(...,M,N)`` with ``K = min(M, N)``:
+
+    - ``full_matrices=False`` (default, reduced / "thin"): ``U`` is ``(...,M,K)``,
+      ``Vh`` is ``(...,K,N)``, ``S`` is ``(...,K)``.
+    - ``full_matrices=True``: ``U`` is ``(...,M,M)``, ``Vh`` is ``(...,N,N)``,
+      ``S`` is ``(...,K)``.
+
+    .. note::
+        ``torch.linalg.svd`` defaults to ``full_matrices=True``; this jittor-
+        native entry point keeps the historical reduced default so that the
+        differentiable path and all jittor callers (``matrix_rank``/``cond``/
+        ``matrix_norm``/the native ``test_linalg`` suite) are unchanged. Pass
+        ``full_matrices=True`` explicitly for torch's full shapes. (The torch-
+        facing ``torch.linalg.svd`` default is meant to be supplied at the
+        torch-compat boundary.)
+
+    ``S`` is sorted in descending order. The reduced form (and the square case,
+    where reduced == full) is differentiable; the full form on a *non-square*
+    matrix is computed via numpy without a gradient on ``U``/``Vh`` (the extra
+    orthogonal-complement columns/rows have no unique gradient) — use
+    ``full_matrices=False`` or :func:`svdvals` when gradients are needed.
+
+    :param x: ``(...,M,N)`` real matrix (or ``nn.ComplexNumber``).
+    :param full_matrices (bool): see above. Default ``False`` (reduced).
+    :param compute_uv (bool): if ``False``, only ``S`` is meaningful (``U`` and
+        ``Vh`` are still returned for shape compatibility but may be skipped).
+    :param driver: accepted for torch signature compatibility (ignored).
+    :return: named tuple ``SVD(U, S, Vh)``.
+    '''
+    if isinstance(x, ComplexNumber):
+        # complex_svd is the reduced form; full_matrices for complex is not
+        # supported (would need a complex orthogonal completion).
+        u, s, v = complex_svd(x)
+        return SVD(u, s, v)
+    m, n = x.shape[-2:]
+    if (not full_matrices) or m == n:
+        u, s, v = _svd_reduced(x)
+    else:
+        u, s, v = _svd_full(x)
+    return SVD(u, s, v)
+
+
+def svdvals(x, *, driver=None):
+    r'''
+    Singular values only, matching ``torch.linalg.svdvals``. Returns the
+    ``(...,K)`` tensor ``S`` (``K = min(M, N)``) in descending order. This uses
+    the reduced differentiable path, so ``S`` carries a gradient.
+
+    :param x: ``(...,M,N)`` real matrix.
+    :param driver: accepted for torch signature compatibility (ignored).
+    :return: singular values ``S`` ``(...,K)``.
+    '''
+    if isinstance(x, ComplexNumber):
+        return complex_svd(x)[1]
+    return _svd_reduced(x)[1]
+
 def eig(x):
     r"""
     calculate the eigenvalues and eigenvectors of x.
@@ -370,6 +465,37 @@ def eigh(x):
         [backward_code],
     )
     return w, v
+
+
+def eigvalsh(x, UPLO='L'):
+    r"""
+    Eigenvalues of a symmetric / Hermitian matrix, matching
+    ``torch.linalg.eigvalsh``. Returns only the eigenvalues ``w`` of shape
+    ``(...,M)`` in **ascending** order (the eigenvectors are discarded).
+
+    This reuses the differentiable :func:`eigh`, so ``w`` carries a gradient.
+    Like ``torch.linalg.eigvalsh`` / ``numpy.linalg.eigvalsh`` the matrix is
+    assumed symmetric/Hermitian and only one triangle is referenced; jittor's
+    eigensolver reads the lower (``UPLO='L'``) triangle. For a genuinely
+    symmetric input ``UPLO='U'`` yields the same eigenvalues; when ``'U'`` is
+    requested the upper triangle is mirrored down so the contract still holds.
+
+    :param x: ``(...,M,M)`` symmetric/Hermitian real matrix.
+    :param UPLO ({'L','U'}): which triangle defines the matrix. Default ``'L'``.
+    :return: ascending eigenvalues ``w`` ``(...,M)``.
+    """
+    if UPLO not in ('L', 'U'):
+        raise ValueError(f"eigvalsh: UPLO must be 'L' or 'U', got {UPLO!r}")
+    if UPLO == 'U':
+        # jittor's eigh references the LOWER triangle. To honour UPLO='U', build
+        # the full symmetric matrix from x's upper triangle: the upper part
+        # (incl. diagonal) plus the strict-upper part reflected below the
+        # diagonal. For an already-symmetric input this is a no-op; it only
+        # matters when the two triangles disagree.
+        up = jt.triu(x, 0)                        # upper triangle incl. diagonal
+        x = up + jt.triu(x, 1).transpose(-1, -2)  # mirror strict-upper -> lower
+    w, _ = eigh(x)
+    return w
 
 
 def inv(x):
@@ -520,7 +646,10 @@ def matrix_rank(x, tol=None, hermitian=False):
         w, _ = eigh(x)
         s = jt.abs(w)
     else:
-        _, s, _ = svd(x)
+        # reduced svd keeps S differentiable and is shape-agnostic; the rank
+        # itself is non-differentiable (an integer count), but other callers of
+        # the returned S (matrix_norm/cond) rely on the gradient.
+        _, s, _ = svd(x, full_matrices=False)
 
     smax = s.max(dim=-1)
     if tol is None:
@@ -616,7 +745,8 @@ def _matrix_singular_values(x, d0, d1):
     others = [a for a in range(nd) if a not in (d0, d1)]
     perm = others + [d0, d1]
     xt = x.permute(perm) if perm != list(range(nd)) else x
-    _, s, _ = svd(xt)
+    # reduced form -> differentiable singular values (nuc/2/-2 matrix norms)
+    _, s, _ = svd(xt, full_matrices=False)
     return s
 
 
@@ -752,7 +882,8 @@ def cond(x, p=None):
     """
     import math
     if p is None or p == 2 or p == -2:
-        _, s, _ = svd(x)
+        # reduced form -> differentiable singular values
+        _, s, _ = svd(x, full_matrices=False)
         smax = s.max(dim=-1)
         smin = s.min(dim=-1)
         if p == -2:
