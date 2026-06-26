@@ -21,6 +21,10 @@ from collections import OrderedDict
 from jittor.pool import *
 from jittor.optim import *
 from jittor.misc import _pair, _triple
+# torch exposes CTCLoss (and the functional ctc_loss) under torch.nn; jittor
+# defines them in jittor.misc, so re-export here for `nn.CTCLoss` / the
+# jittor-as-torch shim's `torch.nn.CTCLoss` to resolve.
+from jittor.misc import CTCLoss, ctc_loss
 from jittor_utils import LOG
 from functools import partial
 
