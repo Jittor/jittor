@@ -83,6 +83,15 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
 - **#3 EfficientNet b4-b7（`1b223f9b`）**：补齐 torchvision b0-b7，参数对 torchvision 常量 **0.0000%**，CPU+CUDA。model-agent 另复验全部 21 个构造器参数精确 + 独立复现 #8 segfault（并发编译下 `VarRelayManager::get_op_relay_info`，非模型 bug）。
 - **本轮 ~7 commit**，全 CPU+CUDA + 171/0；多 agent 并行（test/model/audit/interpolate，各自 `cache_name=cardX CUDA_VISIBLE_DEVICES=N` 隔离，Python-only 不碰 C++ 避免撞编译）。
 
+### ✅ 本会话增量 Round 7（2026-06-26 续：complex 补全 + triton + #10/#11 torch-parity）
+- **#5 complex 大幅补全**：在 sum/abs/conj 之上又加 **mean**(`reduce_dtype_infer` 复数守卫，否则 mean∈float_ops 推成 float64 编译崩)、**matmul 2D+bmm 双卡全可用**(bmm 分支 `"complex" not in str(a.dtype)` 绕 cublas 走 reindex)、**prod**(CPU)、结构/比较/ternary、**超越函数 exp/log/sin/cos/sqrt 双卡**(`eb242142`，实测全 OK)。`test_complex64_native` 10/10。边界见 [[design-complex-dtype]]。
+- **#4 triton fused-kernel**（`045245a5`）：triton shim 加 fused-kernel reductions + `test_triton_shim`(10/OK)。
+- **#2 报错清晰化补**：matmul dtype-mismatch 信息点名两边 dtype（`c7adbdce`）。累计本任务 5 个修复 + `test_torch_compat_errors`(9) 锁定。
+- **#10 dtype 提升 lattice**（`f1c400c6`，agent）：`.long()`=int64（原误别名 int32）+ .int/.short/.byte/.char/.type("torch.LongTensor")；`result_type/promote_types/can_cast` 全 torch `_promoteTypesLookup` 表；混合 dtype `Var op Var` 先把两边升到 result_type 再算（int32+int64→int64 等）；truediv 永远出 float。`test_torch_compat_promotion` 23/OK。
+- **#11 avg_pool torch-parity**（`65ca8988`，agent）：`count_include_pad=False`（原 no-op，incl==excl）+ AdaptiveAvgPool2d 非整除变量 bin（8→3 原差 0.337）；前向+反向双卡验证；nn 面 override（pool.py 顶层 jt.AvgPool2d 待移植）。`test_torch_compat_pool_parity` 15/OK + conv_pool 2 个 skip 解封。
+- **本轮多 agent 并行**：test-expansion(loss/norm)、model-audit、#2-error-audit、interpolate/pad/scatter、pool-parity、dtype-promotion —— 各 `cache_name=cardX CUDA_VISIBLE_DEVICES=N` 隔离、Python-only 不碰 C++ 避免撞编译，主线驱动 C++(complex/报错) on card0。本会话累计 **16 commit**，全 CPU+CUDA + `test_torch_compat` 171/0。
+- **附带发现（待查）**：`test_misc_op` 7 个**预存**失败（arctan2/code_softmax/multinorm/ctc_loss/make_grid×3，干净树同样失败，与本次改动无关）。
+
 ### ⬜ 还没做（可直接开展的新任务）
 1. **py3.13 import 修复（PEP-667）**：py3.13 上 `compiler.py` `mod = locals()[gen_name]` 取不到 exec 绑定名 → jittor **根本 import 不了**；一行改 `mod = os.sys.modules[gen_name]`（fix-agent 已临时验证有效，未提交）。修了 py3.13 + numpy2.x 才完整可用。
 2. **根治内核陷阱里的「不合理」项**：#2 `x==x`→all-True（fusion 同指针去重破坏 IEEE NaN）、#3 reindex 负 dim（应自归一化/清晰报错）——见 §4-B。
