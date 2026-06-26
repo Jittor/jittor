@@ -16,6 +16,85 @@ from jittor.nn import binary_cross_entropy_with_logits
 from jittor import lgamma, igamma, digamma
 from jittor.math_util.gamma import gamma_grad, sample_gamma
 
+
+# ---- torch.distributions SHAPE semantics ----------------------------------
+# torch's Distribution.sample(sample_shape) returns
+#     sample_shape + batch_shape + event_shape
+# with the *batch* dims (broadcast of the parameters) preserved and sample_shape
+# PREPENDED. The helpers below give every distribution that contract.
+#
+# NB jittor has NO 0-d (scalar) Var: jt.zeros(()), jt.randn(()) and reshape(())
+# are all rejected at the C++ level (reshape_op.cc), so a scalar parameter -- a
+# python float OR jt.array(0.5) -- always materializes as shape (1,), and is
+# therefore INDISTINGUISHABLE from a genuine 1-element batch. We resolve this the
+# only consistent way jittor can: a parameter with a single element (prod(shape)==1)
+# is treated as a SCALAR, i.e. batch_shape = (). Consequences vs real torch:
+#   * scalar params + sample_shape=()      -> jittor (1,)  where torch gives ()
+#       (jittor has no 0-d, so a length-1 vector is the scalar representation);
+#   * scalar params + sample_shape (n,)/(n,m) -> EXACT match (n,) / (n,m);
+#   * ALL multi-element batched-parameter cases -> EXACT match with torch.
+# The pre-existing code instead used sample_shape AS the whole output shape, which
+# silently DROPPED the batch dims and raised a broadcast error the moment the
+# parameters were batched -- that is the real gap TASK #12 fixes.
+
+def _norm_sample_shape(sample_shape):
+    ''' Normalize a torch-style sample_shape (None / int / tuple / list /
+    jt.NanoVector / torch.Size) to a plain tuple of ints. '''
+    if sample_shape is None:
+        return ()
+    if isinstance(sample_shape, int):
+        return (sample_shape,)
+    return tuple(int(s) for s in sample_shape)
+
+
+def _prod(shape):
+    p = 1
+    for d in shape:
+        p *= d
+    return p
+
+
+def _bshape(*params):
+    ''' Broadcast the parameter shapes to obtain batch_shape (torch semantics).
+    A single-element parameter (python number, or a length-1 Var that jittor uses
+    to stand in for a 0-d scalar) contributes () -- see the module note: jittor has
+    no 0-d Var so a scalar and a 1-element batch are indistinguishable, and we pick
+    the scalar reading so Normal(jt.array(0.5), ...).sample((n,)) is (n,), not (n,1).'''
+    shapes = []
+    for p in params:
+        if hasattr(p, "shape"):
+            s = tuple(p.shape)
+            shapes.append(() if _prod(s) == 1 else s)   # length-1 Var == scalar
+        else:
+            shapes.append(())                            # python number == scalar
+    out = ()
+    for s in shapes:
+        out = _broadcast_two(out, s)
+    return out
+
+
+def _broadcast_two(a, b):
+    ''' numpy/torch broadcast of two shape tuples. '''
+    res = []
+    for i in range(1, max(len(a), len(b)) + 1):
+        da = a[-i] if i <= len(a) else 1
+        db = b[-i] if i <= len(b) else 1
+        if da == 1:
+            res.append(db)
+        elif db == 1 or da == db:
+            res.append(da)
+        else:
+            raise ValueError(f"incompatible parameter shapes for broadcast: {a} vs {b}")
+    return tuple(reversed(res))
+
+
+def _full_shape(sample_shape, batch_shape, event_shape=()):
+    ''' torch's sample_shape + batch_shape + event_shape. A scalar (empty
+    batch+event) collapses to (1,) because jittor has no 0-d Var. '''
+    out = _norm_sample_shape(sample_shape) + tuple(batch_shape) + tuple(event_shape)
+    return out if len(out) > 0 else (1,)
+
+
 def simple_presum(x):
     src = '''
 __inline_static__
@@ -36,14 +115,23 @@ class OneHotCategorical:
         Categorical.__init__(self, probs, logits)
 
     def sample(self, sample_shape=[]):
-        shape = sample_shape + self.probs.shape[:-1] + (1,)
+        # torch parity: sample_shape + batch_shape + event_shape, where for a
+        # one-hot draw event_shape = (num_categories,). The cum_probs comparison
+        # already produces the one-hot over the last (category) axis.
+        shape = _norm_sample_shape(sample_shape) + tuple(self.probs.shape[:-1]) + (1,)
         rand = jt.rand(shape)
         one_hot = jt.logical_and(self.cum_probs_l < rand, rand <= self.cum_probs_r).float()
         return one_hot
     
     def log_prob(self, x):
-        x = jt.argmax(x, dim=-1)[0]
-        return Categorical.log_prob(self, x)
+        # recover the category index from the one-hot, then defer to Categorical.
+        # NB jt.argmax (the torch_compat shim) returns a single index Var of shape
+        # batch_shape; the old `[0]` assumed the jittor-native (idx, val) 2-tuple and
+        # silently grabbed element 0, collapsing the whole result to shape (1,).
+        idx = jt.argmax(x, dim=-1)
+        if isinstance(idx, tuple):       # jittor-native argmax -> (indices, values)
+            idx = idx[0]
+        return Categorical.log_prob(self, idx)
     
     def entropy(self):
         p_log_p = self.logits * self.probs
@@ -72,7 +160,8 @@ class Categorical:
             self.cum_probs_r = self.cum_probs[..., 1:]
 
     def sample(self, sample_shape=()):
-        shape = sample_shape + self.probs.shape[:-1] + (1,)
+        # torch parity: returns sample_shape + batch_shape, batch_shape = probs.shape[:-1].
+        shape = _norm_sample_shape(sample_shape) + tuple(self.probs.shape[:-1]) + (1,)
         rand = jt.rand(shape)
         one_hot = jt.logical_and(self.cum_probs_l < rand, rand <= self.cum_probs_r)
         index = one_hot.index(one_hot.ndim - 1)
@@ -94,10 +183,17 @@ class Normal:
     def __init__(self, mu, sigma):
         self.mu = mu
         self.sigma = sigma
-    
+        # torch parity: batch_shape = broadcast(mu, sigma), event_shape = ()
+        self.batch_shape = _bshape(mu, sigma)
+
     def sample(self, sample_shape=None):
-        # torch semantics: sample() is non-differentiable (detached).
-        return jt.normal(jt.array(self.mu), jt.array(self.sigma),size=sample_shape)
+        # torch semantics: sample() is non-differentiable (detached) and returns
+        # sample_shape + batch_shape. Build eps of the FULL shape, then affine-map
+        # mu + sigma*eps (parameters broadcast in); stop_grad to detach.
+        shape = _full_shape(sample_shape, self.batch_shape)
+        mu = self.mu if isinstance(self.mu, jt.Var) else jt.array(self.mu)
+        sigma = self.sigma if isinstance(self.sigma, jt.Var) else jt.array(self.sigma)
+        return (mu + sigma * jt.randn(shape)).stop_grad()
 
     def rsample(self, sample_shape=None):
         # reparameterized (pathwise) sample: mu + sigma*eps, eps~N(0,1).
@@ -105,7 +201,7 @@ class Normal:
         # which would detach). This is what VAEs/VI backprop through.
         mu = self.mu if isinstance(self.mu, jt.Var) else jt.array(self.mu)
         sigma = self.sigma if isinstance(self.sigma, jt.Var) else jt.array(self.sigma)
-        shape = sample_shape if sample_shape else (mu + sigma).shape
+        shape = _full_shape(sample_shape, self.batch_shape)
         return mu + sigma * jt.randn(shape)
 
     def log_prob(self, x):
@@ -121,19 +217,33 @@ class Uniform:
     def __init__(self,low,high):
         self.low = low
         self.high = high
-        assert high > low
-    
-    def sample(self,sample_shape):
-        # jittor has no jt.uniform; draw U[0,1) and affine-map to [low, high)
-        return self.low + (self.high - self.low) * jt.random(sample_shape)
+        # torch parity: batch_shape = broadcast(low, high), event_shape = ()
+        self.batch_shape = _bshape(low, high)
+        # assert on python scalars only (elementwise high>low not checked for Vars)
+        if not isinstance(low, jt.Var) and not isinstance(high, jt.Var):
+            assert high > low
+
+    def sample(self, sample_shape=None):
+        # torch parity: sample_shape + batch_shape. jittor has no jt.uniform; draw
+        # U[0,1) of the FULL shape and affine-map to [low, high) (params broadcast).
+        shape = _full_shape(sample_shape, self.batch_shape)
+        low = self.low if isinstance(self.low, jt.Var) else jt.array(self.low)
+        high = self.high if isinstance(self.high, jt.Var) else jt.array(self.high)
+        return low + (high - low) * jt.random(shape)
 
     def log_prob(self,x):
-        # outside the support the density is 0 -> log_prob = -inf (torch semantics;
-        # was +inf)
+        # density is 1/(high-low) inside [low,high), else 0 -> log_prob -inf.
+        # Elementwise (torch semantics) so it works for batched x / params; a
+        # scalar python x still reduces to a scalar.
+        if isinstance(x, jt.Var) or isinstance(self.low, jt.Var) or isinstance(self.high, jt.Var):
+            x = x if isinstance(x, jt.Var) else jt.array(x)
+            lb = -jt.safe_log(self.high - self.low) + jt.zeros_like(x)
+            inside = jt.logical_and(x >= self.low, x < self.high)
+            return jt.ternary(inside, lb, jt.full_like(x, -math.inf))
         if x < self.low or x >= self.high:
             return -math.inf
         return -jt.safe_log(self.high - self.low)
-    
+
     def entropy(self):
         return jt.safe_log(self.high - self.low)
 
@@ -141,21 +251,28 @@ class Uniform:
 class Geometric:
     def __init__(self,p=None,logits=None):
         assert (p is not None) or (logits is not None)
-        assert 0 < p and p < 1
         if p is None:
             self.prob = jt.sigmoid(logits)
             self.logits = logits
-        elif logits is None:
+        else:
+            # assert range on python scalars only (batched Var probs allowed)
+            if not isinstance(p, jt.Var):
+                assert 0 < p and p < 1
             self.prob = p
             self.logits = -jt.safe_log(1. / p - 1)
-        
-    def sample(self, sample_shape):
-        u = jt.rand(sample_shape)
-        return (jt.safe_log(u) / (jt.safe_log(-self.probs+1))).floor_int()
-    
+        # torch parity: batch_shape = broadcast(prob), event_shape = ()
+        self.batch_shape = _bshape(self.prob)
+
+    def sample(self, sample_shape=None):
+        # torch parity: sample_shape + batch_shape. inverse-CDF: floor(log(U)/log(1-p))
+        # with U of the FULL shape so prob broadcasts in (was self.probs typo + drop).
+        shape = _full_shape(sample_shape, self.batch_shape)
+        u = jt.rand(shape)
+        return (jt.safe_log(u) / jt.safe_log(-self.prob + 1)).floor_int()
+
     def log_prob(self, x):
         return x*jt.safe_log(-self.prob+1)+jt.safe_log(self.prob)
-    
+
     def entropy(self):
         return binary_cross_entropy_with_logits(jt.array(self.logits),jt.array(self.prob)) / self.prob
 
@@ -241,9 +358,16 @@ class Bernoulli(Distribution):
         else:
             self.probs = probs
             self.logits = jt.safe_log(probs) - jt.safe_log(1 - probs)
+        # torch parity: batch_shape = broadcast(params), event_shape = ().
+        # Compute from the RAW arg so a python scalar -> () (torch 0-d), not the
+        # (1,) that _as_var/jt.array forces (jittor has no 0-d Var).
+        self.batch_shape = _bshape(logits if logits is not None else probs)
 
     def sample(self, sample_shape=None):
-        shape = self.probs.shape if not sample_shape else sample_shape
+        # torch parity: sample_shape + batch_shape. Draw U of the FULL shape so
+        # probs broadcasts in (was: sample_shape used as the whole output shape,
+        # which dropped batch dims and raised a broadcast error for batched probs).
+        shape = _full_shape(sample_shape, self.batch_shape)
         return (jt.rand(shape) < self.probs).float32()
 
     def log_prob(self, x):
@@ -258,9 +382,14 @@ class Bernoulli(Distribution):
 class Exponential(Distribution):
     def __init__(self, rate):
         self.rate = rate
+        # torch parity: batch_shape from the RAW rate (python scalar -> ())
+        self.batch_shape = _bshape(rate)
 
     def sample(self, sample_shape=None):
-        shape = self.rate.shape if (not sample_shape and hasattr(self.rate, "shape")) else (sample_shape or (1,))
+        # torch parity: sample_shape + batch_shape. inverse-CDF -log(1-U)/rate with
+        # U of the FULL shape so rate broadcasts in (was: sample_shape alone, which
+        # dropped batch dims and raised a broadcast error for batched rate).
+        shape = _full_shape(sample_shape, self.batch_shape)
         u = jt.rand(shape)
         return -jt.safe_log(1 - u) / self.rate
 
@@ -324,6 +453,8 @@ class Beta(Distribution):
     def __init__(self, concentration1, concentration0):
         self.concentration1 = _as_var(concentration1)  # alpha
         self.concentration0 = _as_var(concentration0)  # beta
+        # torch parity: batch_shape from the RAW args (python scalar -> ())
+        self.batch_shape = _bshape(concentration1, concentration0)
 
     @property
     def _lbeta(self):
@@ -331,8 +462,11 @@ class Beta(Distribution):
         return _lgamma(a) + _lgamma(b) - _lgamma(a + b)
 
     def rsample(self, sample_shape=None):
+        # torch parity: sample_shape + batch_shape. Draw the two gammas at the FULL
+        # shape (sample_gamma broadcasts the concentration into it) -- was: sample_shape
+        # alone, which dropped the batch dims and crashed for batched concentrations.
         a, b = self.concentration1, self.concentration0
-        shape = sample_shape if sample_shape else a.shape
+        shape = _full_shape(sample_shape, self.batch_shape)
         x = sample_gamma(a, shape)
         y = sample_gamma(b, shape)
         return x / (x + y)
@@ -369,9 +503,13 @@ class Gamma(Distribution):
     def __init__(self, concentration, rate):
         self.concentration = _as_var(concentration)
         self.rate = _as_var(rate)
+        # torch parity: batch_shape from the RAW args (python scalar -> ())
+        self.batch_shape = _bshape(concentration, rate)
 
     def rsample(self, sample_shape=None):
-        shape = sample_shape if sample_shape else self.concentration.shape
+        # torch parity: sample_shape + batch_shape (sample_gamma broadcasts the
+        # concentration into the FULL shape; rate then broadcasts elementwise).
+        shape = _full_shape(sample_shape, self.batch_shape)
         return sample_gamma(self.concentration, shape) / self.rate
 
     def sample(self, sample_shape=None):
@@ -400,11 +538,15 @@ class Poisson(Distribution):
     (neither do we); sampling is non-reparameterizable (numpy poisson). '''
     def __init__(self, rate):
         self.rate = _as_var(rate)
+        # torch parity: batch_shape from the RAW rate (python scalar -> ())
+        self.batch_shape = _bshape(rate)
 
     def sample(self, sample_shape=None):
-        lam = self.rate.numpy()
-        if sample_shape:
-            lam = np.broadcast_to(lam, sample_shape)
+        # torch parity: sample_shape + batch_shape. Broadcast the rate into the FULL
+        # shape before drawing (was: np.broadcast_to(lam, sample_shape), which dropped
+        # the batch dims and raised a numpy broadcast error for batched rate).
+        shape = _full_shape(sample_shape, self.batch_shape)
+        lam = np.broadcast_to(self.rate.numpy(), shape)
         return jt.array(np.random.poisson(lam).astype("float32"))
 
     def log_prob(self, value):
@@ -424,10 +566,17 @@ class Dirichlet(Distribution):
     ''' torch.distributions.Dirichlet(concentration) -- last-dim parameter vector. '''
     def __init__(self, concentration):
         self.concentration = _as_var(concentration)
+        # torch parity: last dim is the event; batch_shape = concentration.shape[:-1],
+        # event_shape = (concentration.shape[-1],)
+        self.batch_shape = tuple(self.concentration.shape[:-1])
+        self.event_shape = (int(self.concentration.shape[-1]),)
 
     def rsample(self, sample_shape=None):
+        # torch parity: sample_shape + batch_shape + event_shape. Gamma-draw at the
+        # FULL shape (concentration broadcasts in) then normalize over the event axis;
+        # was: sample_shape alone, which dropped batch dims and crashed when batched.
         a = self.concentration
-        shape = sample_shape if sample_shape else a.shape
+        shape = _full_shape(sample_shape, self.batch_shape, self.event_shape)
         g = sample_gamma(a, shape)
         return g / g.sum(-1, keepdims=True)
 
@@ -458,10 +607,15 @@ class LogNormal(Distribution):
     def __init__(self, loc, scale):
         self.loc = _as_var(loc)
         self.scale = _as_var(scale)
+        # torch parity: batch_shape from the RAW args (python scalar -> ())
+        self.batch_shape = _bshape(loc, scale)
 
     def rsample(self, sample_shape=None):
-        shape = sample_shape if sample_shape else self.loc.shape
-        eps = jt.normal(jt.zeros(shape), jt.ones(shape))
+        # torch parity: sample_shape + batch_shape. eps of the FULL shape, then
+        # exp(loc + scale*eps) (loc/scale broadcast in) -- was: sample_shape alone,
+        # which dropped batch dims and crashed for batched loc/scale.
+        shape = _full_shape(sample_shape, self.batch_shape)
+        eps = jt.randn(shape)
         return jt.exp(self.loc + self.scale * eps)
 
     def sample(self, sample_shape=None):
@@ -496,10 +650,18 @@ class MultivariateNormal(Distribution):
         self._L = jt.linalg.cholesky(self.covariance_matrix)        # lower-tri (k,k)
         self._Linv = jt.linalg.inv(self._L)
         self._half_logdet = jt.log(jt.diag(self._L)).sum()          # 0.5*log|cov|
+        # torch parity: last dim of loc is the event; batch_shape = loc.shape[:-1],
+        # event_shape = (k,)
+        self.batch_shape = tuple(self.loc.shape[:-1])
+        self.event_shape = (int(self.loc.shape[-1]),)
 
     def rsample(self, sample_shape=None):
-        shape = sample_shape if sample_shape else self.loc.shape
-        eps = jt.normal(jt.zeros(shape), jt.ones(shape))
+        # torch parity: sample_shape + batch_shape + event_shape. eps of the FULL
+        # shape, color by L, then add loc (loc broadcasts over the leading sample
+        # dims) -- was: sample_shape alone, which dropped batch dims and produced a
+        # matmul/broadcast error for sample_shape != () (and any batched loc).
+        shape = _full_shape(sample_shape, self.batch_shape, self.event_shape)
+        eps = jt.randn(shape)
         return self.loc + eps.matmul(self._L.transpose(1, 0))
 
     def sample(self, sample_shape=None):

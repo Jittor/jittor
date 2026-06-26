@@ -165,12 +165,12 @@ class TestBernoulli(Base):
 
     def test_sample_shape_and_values(self):
         def body(dev):
-            # batched probs (3,): sample() (no shape) == batch_shape; for a leading
-            # sample dim you must pass the full (n,3) (see broadcast divergence below).
+            # batched probs (3,): torch sample(sample_shape) -> sample_shape + batch_shape.
+            # sample() -> (3,); sample((1000,)) -> (1000, 3) (sample_shape prepended).
             d = self._dist()
             self.assertEqual(tuple(d.sample().shape), (3,), f"Bernoulli.sample() shape {dev}")
-            s = d.sample((1000, 3))
-            self.assertEqual(tuple(s.shape), (1000, 3), f"Bernoulli.sample((1000,3)) shape {dev}")
+            s = d.sample((1000,))
+            self.assertEqual(tuple(s.shape), (1000, 3), f"Bernoulli.sample((1000,)) shape {dev}")
             vals = set(np.unique(s.numpy()).tolist())
             self.assertTrue(vals <= {0.0, 1.0}, f"Bernoulli sample values {vals} {dev}")
         both_devices(body)
