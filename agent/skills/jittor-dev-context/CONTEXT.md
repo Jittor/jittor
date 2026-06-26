@@ -99,7 +99,7 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
 4. **diffusers 扩展**：多步采样 / SDXL / img2img / ControlNet + 整图端到端 vs 真 torch 逐像素对拍。
 5. **G4 性能**：CUDA 小 matmul + 逐元素 kernel 优化（慢 3–5×）；CUDA matmul 加 TF32 开关（类比 `acl_allow_hf32`）。
 6. **持续主回路**：py3.9/`jittor-npu` 跑 `test_torch_compat` 撞 NPU 缺口 → 修 → 验证 → commit（历史最高产出）。
-7. **ComplexNumber 废弃 / 统一到 native complex64（#5 收尾，立项 2026-06-26 用户决策）**：native dtype 已功能完整（算术/归约/matmul/超越/结构/比较/autograd 双卡），但 **FFT / 复数 linalg(inv·eig·eigh·qr·svd) / angle·polar·view_as_real·view_as_complex / gradfunctional / `torch.fft.*` shim 仍唯一依赖 `ComplexNumber`**（python 层 real/imag 漏抽象）。路线 = **先建 view 桥接层**（complex64⟷float32`[...,2]` 零拷贝，杠杆步：解锁复用现有 FFT/linalg）→ 迁访问器/FFT/linalg/gradfunctional → `DeprecationWarning`+薄 shim → 删类。⚠️ 附带发现：原生 cufft 路径当前编译失败（`std::array` 缺 `<array>`，CUDA-only，疑预存 bug）。完整依赖图 + 6 阶段计划 + 验收见 [[design-complex-dtype]] §Phase 6。
+7. ✅ **ComplexNumber 废弃 / 统一到 native complex64（#5，P1–P6 完成 2026-06-26，主线 + 2 并行 agent）**：**用户面替换完整达成**——native complex64 现覆盖 桥(view_as_real/complex,P1 `8c2f3b71`) / 访问器(real·imag·angle,P2 `65a5b14e`) / `torch.complex`·`view_as_complex`·`polar`(P2) / `torch.fft.*`(P3 `4a742b6f`,DFT-matrix 路吃吐 native) / linalg(inv·svd·svdvals·eig·qr·eigh·pinv,P4 `556eee1f`) / gradfunctional vjp(P5 `de5f9f3b`),**没有任何 public API 再返回 ComplexNumber**;全双卡 + `test_torch_compat` 171/0 不退化(锁:`test_complex64_native`/`_linalg`/`_gradfunctional`/`torch_compat_fft_einsum`)。P6 给 ComplexNumber 加 deprecation docstring(**未加 runtime warning**——它现为 linalg 复数内核的内部桥接 substrate)。**剩余后续专项(非用户面)**：复数 linalg 内核原生重写以**彻底删类** / native 二阶 autograd(解锁 jvp) / `cupy.linalg.eig` CUDA 缺口 / complex128。详见 [[design-complex-dtype]] §Phase 6 总结。
 8. §2「21 条任务」里未起的：模型库现代化、文档重写、多机 DDP、图优化、pypi 依赖。
 
 ### ⚙️ 开工须知（细节见 §1）
