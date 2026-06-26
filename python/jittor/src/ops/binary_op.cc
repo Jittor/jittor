@@ -510,20 +510,36 @@ VarPtr BinaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
             return make_unary(dout, ns_negative);
     }
     if (ns == ns_multiply) {
-        if (v_index == 0) 
-            return make_binary(dirty_clone_broadcast(y), dirty_clone_broadcast(dout), ns_multiply);
-        else
-            return make_binary(dirty_clone_broadcast(x), dirty_clone_broadcast(dout), ns_multiply);
+        Var* other = (v_index == 0) ? y : x;
+        if (!z->dtype().is_complex())
+            return make_binary(dirty_clone_broadcast(other), dirty_clone_broadcast(dout), ns_multiply);
+        // complex (verified vs real torch 2.12): grad_a = dout*conj(b), grad_b = dout*conj(a)
+        auto co = make_unary(dirty_clone_broadcast(other), ns_conj);
+        return make_binary(co, dirty_clone_broadcast(dout), ns_multiply);
     }
     if (ns == ns_divide) {
-        if (v_index == 0) 
-            return make_binary(dout, y, ns_divide);
+        if (!z->dtype().is_complex()) {
+            if (v_index == 0)
+                return make_binary(dout, y, ns_divide);
+            else {
+                // dy = -dz*x / y^2
+                auto ndz = make_unary(dout, ns_negative);
+                auto ndzx = make_binary(ndz, x, ns_multiply);
+                auto y2 = make_binary(y, y, ns_multiply);
+                return make_binary(ndzx, y2, ns_divide);
+            }
+        }
+        // complex (verified vs real torch 2.12): grad_a = dout/conj(y),
+        //   grad_b = -dout*conj(x)/conj(y)^2
+        auto cy = make_unary(y, ns_conj);
+        if (v_index == 0)
+            return make_binary(dout, cy, ns_divide);
         else {
-            // dy = -dz*x / y^2
             auto ndz = make_unary(dout, ns_negative);
-            auto ndzx = make_binary(ndz, x, ns_multiply);
-            auto y2 = make_binary(y, y, ns_multiply);
-            return make_binary(ndzx, y2, ns_divide);
+            auto cx = make_unary(x, ns_conj);
+            auto ndzx = make_binary(ndz, cx, ns_multiply);
+            auto cy2 = make_binary(cy, cy, ns_multiply);
+            return make_binary(ndzx, cy2, ns_divide);
         }
     }
     if (ns == ns_mod) {

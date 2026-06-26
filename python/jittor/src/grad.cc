@@ -85,7 +85,8 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets, bool retain_graph) {
     LOGvv << "loss:" >> loss << "targets:" >> targets;
     CHECK(loss->is_float()) << "Loss should be float";
     for (Var* var : targets)
-        CHECK(var->is_float()) << "Targets of grad should be float";
+        CHECK(var->is_float() || var->dtype().is_complex())
+            << "Targets of grad should be float or complex";
     // successors of targets
     vector<Node*> ts(targets.begin(), targets.end());
     // bfs visit find all successors of targets

@@ -74,7 +74,9 @@ Var::Var(NanoVector shape, NanoString dtype)
     : shape(shape), 
       loop_options(compile_options) {
     flags.set(NodeFlags::_var, 1);
-    flags.set(NodeFlags::_stop_grad, !dtype.is_float() || no_grad);
+    // complex dtypes are differentiable too (Wirtinger autograd), so they must not be
+    // auto-stop_grad like integer/bool vars are. Only non-float AND non-complex stops grad.
+    flags.set(NodeFlags::_stop_grad, (!dtype.is_float() && !dtype.is_complex()) || no_grad);
     flags.set(NodeFlags::_stop_fuse, no_fuse);
     ns = dtype;
     ASSERT(ns.is_dtype());
