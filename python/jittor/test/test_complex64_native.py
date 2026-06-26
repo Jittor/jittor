@@ -129,6 +129,19 @@ class TestComplex64Native(unittest.TestCase):
                                        err_msg=f"ternary {dev}")
         both_devices(body)
 
+    def test_transcendentals(self):
+        rng = np.random.RandomState(11)
+        a = (rng.randn(8) + 1j * rng.randn(8)).astype("complex64")
+        ops = [("exp", np.exp), ("log", np.log), ("sin", np.sin),
+               ("cos", np.cos), ("sqrt", np.sqrt)]
+        def body(dev):
+            for nm, npf in ops:
+                r = np.asarray(getattr(jt, nm)(jt.array(a)).numpy())
+                self.assertEqual(r.dtype.name, "complex64", f"{nm} dtype {dev}")
+                np.testing.assert_allclose(r, npf(a), atol=1e-4, rtol=1e-4,
+                                           err_msg=f"{nm} {dev}")
+        both_devices(body)
+
     def test_conj(self):
         rng = np.random.RandomState(3)
         a = (rng.randn(6) + 1j * rng.randn(6)).astype("complex64")

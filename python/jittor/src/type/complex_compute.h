@@ -41,6 +41,28 @@ inline JT_CPLX_HD bool operator!=(complex64 a, complex64 b) { return !(a==b); }
 inline JT_CPLX_HD complex64 jt_conj(complex64 a) { return complex64(a.real, -a.imag); }
 inline JT_CPLX_HD float jt_cabs(complex64 a) { return ::sqrtf(a.real*a.real + a.imag*a.imag); }
 
+// Complex transcendentals (principal branches), matching numpy/torch. ::expf/::cosf/etc are
+// __host__ __device__ under JIT_cuda (same as jt_cabs's ::sqrtf), so these work on both backends.
+inline JT_CPLX_HD complex64 jt_cexp(complex64 a) {
+    float e = ::expf(a.real);
+    return complex64(e*::cosf(a.imag), e*::sinf(a.imag));        // e^(a+bi)=e^a(cos b + i sin b)
+}
+inline JT_CPLX_HD complex64 jt_clog(complex64 a) {              // log z = ln|z| + i*arg z
+    return complex64(0.5f*::logf(a.real*a.real + a.imag*a.imag), ::atan2f(a.imag, a.real));
+}
+inline JT_CPLX_HD complex64 jt_csin(complex64 a) {
+    return complex64(::sinf(a.real)*::coshf(a.imag), ::cosf(a.real)*::sinhf(a.imag));
+}
+inline JT_CPLX_HD complex64 jt_ccos(complex64 a) {
+    return complex64(::cosf(a.real)*::coshf(a.imag), -::sinf(a.real)*::sinhf(a.imag));
+}
+inline JT_CPLX_HD complex64 jt_csqrt(complex64 a) {             // principal sqrt
+    float r = ::sqrtf(a.real*a.real + a.imag*a.imag);
+    float re = ::sqrtf(0.5f*(r + a.real));
+    float im = ::sqrtf(0.5f*(r - a.real));
+    return complex64(re, a.imag < 0 ? -im : im);
+}
+
 // complex sum/reduce on CUDA needs an atomicAdd overload: decompose into independent
 // real/imag float atomicAdds (sum is commutative per-component, so this is correct).
 #if defined(JIT_cuda) && !defined(IS_ACL)
