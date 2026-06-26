@@ -259,6 +259,7 @@ inline NanoString binary_dtype_infer(NanoString op, NanoString x, NanoString y, 
 
 inline NanoString unary_dtype_infer(NanoString op, NanoString x) {
     if (op.is_bool()) return ns_bool;
+    if (x.is_complex()) return (op==ns_abs) ? ns_float32 : ns_complex64;  // |z|->float
     int dsize_ = x.dsize_();
     if (op.is_float()) {
         if (op.is_white() && !(amp_reg & amp_keep_white))
