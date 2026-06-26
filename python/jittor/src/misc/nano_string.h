@@ -272,6 +272,11 @@ inline NanoString unary_dtype_infer(NanoString op, NanoString x) {
 }
 
 inline NanoString reduce_dtype_infer(NanoString op, NanoString x) {
+    // complex reductions stay complex (sum/mean/prod). Without this, mean -- which is in
+    // float_ops -- forces a float output dtype, so the kernel tries to assign a complex64
+    // accumulator into a double and fails to compile. (sum works already because 'add' is
+    // not a float_op.)
+    if (x.is_complex()) return ns_complex64;
     bool is_float = x.is_float() || op.is_float();
     int dsize_ = x.dsize_();
     if (is_float) {
