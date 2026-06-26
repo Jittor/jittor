@@ -224,6 +224,7 @@ inline NanoString int_dtype(int dsize_) {
 }
 
 inline  NanoString dtype_infer(NanoString x, NanoString y, bool xscalar=false, bool yscalar=false) {
+    if (x.is_complex() || y.is_complex()) return ns_complex64;  // complex propagates
     int dsize_ = std::max(x.dsize_(), y.dsize_());
     if (xscalar) dsize_ = y.dsize_();
     if (yscalar) dsize_ = x.dsize_();
@@ -238,7 +239,8 @@ inline  NanoString dtype_infer(NanoString x, NanoString y, bool xscalar=false, b
 
 // @pyjt(binary_dtype_infer)
 inline NanoString binary_dtype_infer(NanoString op, NanoString x, NanoString y, bool xscalar=false, bool yscalar=false) {
-    if (op.is_bool()) return ns_bool;
+    if (op.is_bool()) return ns_bool;   // comparisons -> bool even for complex
+    if (x.is_complex() || y.is_complex()) return ns_complex64;  // complex arithmetic
     int dsize_ = std::max(x.dsize_(), y.dsize_());
     if (xscalar) dsize_ = y.dsize_();
     if (yscalar) dsize_ = x.dsize_();
