@@ -44,8 +44,14 @@ fp16/bf16, ``@triton.autotune`` — verified in ``test_triton_backend.py``::
 
 The backend uses triton purely as a *compiler* (``triton.compile`` with an
 explicit ``GPUTarget``) and launches the resulting cubin itself via the CUDA
-driver API — it never touches triton's own runtime driver. CUDA only; the shim /
-tracer below remains the fallback when triton or a GPU is absent.
+driver API — it never touches triton's own runtime driver.
+
+This makes triton **torch-compatible** as well: under jittor's torch shim a
+``torch`` tensor *is* a jittor ``Var``, and the bridge additionally duck-types
+any object with ``data_ptr`` / ``dtype`` / ``shape``, so existing ``import torch``
++ triton library code (transformers / unsloth-style fused kernels) launches on
+jittor unmodified. CUDA only; the shim / tracer below remains the fallback when
+triton or a GPU is absent.
 
 Enabling ``import triton``
 --------------------------
@@ -387,13 +393,25 @@ def _detect_real_triton():
 
 
 def _args_have_jittor_var(args, kwargs):
+    """True if any launch arg is a device tensor we should run on jittor.
+
+    Covers a jittor ``Var`` (which is also what jittor's torch shim hands out, so
+    ``import jittor as torch`` code is included) and, duck-typed, any torch-like
+    tensor (has ``data_ptr`` + ``dtype`` + ``shape``) — so real torch+triton code
+    routes through jittor's backend in bridge mode.
+    """
     try:
         import jittor as jt
+        Var = jt.Var
     except Exception:
-        return False
-    Var = jt.Var
-    return any(isinstance(v, Var) for v in args) or \
-        any(isinstance(v, Var) for v in kwargs.values())
+        Var = ()
+
+    def _is_t(v):
+        if Var and isinstance(v, Var):
+            return True
+        return hasattr(v, "data_ptr") and hasattr(v, "dtype") and hasattr(v, "shape")
+
+    return any(_is_t(v) for v in args) or any(_is_t(v) for v in kwargs.values())
 
 
 def activate_bridge(real=None):
