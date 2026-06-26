@@ -268,6 +268,36 @@ def _is_var(v):
     return isinstance(v, jt.Var)
 
 
+def _is_tensor(v):
+    """True for a launchable tensor arg: a jittor ``Var`` *or* any torch-like
+    tensor (duck-typed: has ``data_ptr`` + ``dtype`` + ``shape``).
+
+    Under jittor's torch shim a "torch tensor" *is* a jittor ``Var``, so the
+    isinstance branch already covers ``import jittor as torch`` code; the
+    duck-typed branch additionally accepts a genuine torch.Tensor (or any
+    tensor wrapper) so "torch-compatible triton" works regardless of how the
+    tensor object is presented.
+    """
+    if _is_var(v):
+        return True
+    return hasattr(v, "data_ptr") and hasattr(v, "dtype") and hasattr(v, "shape")
+
+
+def _tensor_ptr(v):
+    """Device base pointer of a tensor arg (``raw_ptr`` for Var, else ``data_ptr``)."""
+    if _is_var(v):
+        return int(v.raw_ptr)
+    return int(v.data_ptr())
+
+
+def _tensor_is_cuda(v):
+    ic = getattr(v, "is_cuda", None)
+    if ic is not None:
+        return bool(ic)
+    dev = getattr(v, "device", None)
+    return dev is not None and "cuda" in str(dev).lower()
+
+
 def _ptr_sig(var):
     name = _dtype_name(var.dtype)
     code = _DT.get(name)
@@ -458,10 +488,10 @@ def run(jitfn, args, kwargs, grid):
         if name in constexpr_names:
             constants[name] = _unwrap_constexpr(val)
             continue
-        if _is_var(val):
-            if not bool(getattr(val, "is_cuda", 0)):
+        if _is_tensor(val):
+            if not _tensor_is_cuda(val):
                 raise JittorTritonError(
-                    "triton kernel %r received a CPU jittor Var argument %r; the "
+                    "triton kernel %r received a CPU tensor argument %r; the "
                     "jittor triton backend launches on CUDA only. Set "
                     "`jt.flags.use_cuda = 1` before allocating the tensors (or "
                     "move them to GPU)." % (kname, name))
@@ -478,10 +508,11 @@ def run(jitfn, args, kwargs, grid):
             signature[name] = sig
             runtime_vals.append((name, sig, val))
 
-    if not any(_is_var(v) for (_, _, v) in runtime_vals):
+    if not any(_is_tensor(v) for (_, _, v) in runtime_vals):
         raise JittorTritonError(
-            "triton kernel %r launched with no jittor Var arguments; the jittor "
-            "triton backend needs the tensor pointers to be jittor Vars." % kname)
+            "triton kernel %r launched with no tensor arguments; the jittor "
+            "triton backend needs at least one device tensor (jittor Var or a "
+            "torch-shim tensor) to launch on." % kname)
 
     # ASTSource needs the JITFunction itself (it reads .cache_key), not fn.
     info = _compile(jitfn, signature, constants, options)
@@ -508,7 +539,7 @@ def run(jitfn, args, kwargs, grid):
     cvals = []
     for (name, sig, val) in runtime_vals:
         if sig.startswith("*"):
-            ptr = 0 if val is None else int(val.raw_ptr)
+            ptr = 0 if val is None else _tensor_ptr(val)
             cv = ctypes.c_uint64(ptr)
         else:
             cv = _pack_scalar(sig, val)
