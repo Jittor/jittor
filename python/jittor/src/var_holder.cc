@@ -145,7 +145,7 @@ void VarHolder::set_requires_grad(bool flag) {
 }
 
 VarHolder* VarHolder::start_grad() {
-    if (!var->dtype().is_float())
+    if (!var->dtype().is_float() && !var->dtype().is_complex())
         LOGw << "cannot enable grad of a non-float value:" << var;
     bool no_grad_bk = no_grad;
     auto th_mode_bk = th_mode;

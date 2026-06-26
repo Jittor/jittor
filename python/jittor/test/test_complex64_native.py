@@ -166,6 +166,42 @@ class TestComplex64Native(unittest.TestCase):
                                           err_msg=f"real conj grad {dev}")
         both_devices(body)
 
+    def test_grad(self):
+        # Native complex64 autograd, verified vs real torch 2.12 (the backward formulas
+        # below are torch's convention for a real loss L = sum(|y|), y = op(a, b)).
+        rng = np.random.RandomState(11)
+        a = (rng.randn(4) + 1j * rng.randn(4)).astype("complex64")
+        b = (rng.randn(4) + 1j * rng.randn(4)).astype("complex64")
+
+        def expected(name):
+            y = {"add": a + b, "mul": a * b, "div": a / b,
+                 "neg": -a, "conj": np.conj(a)}[name]
+            gy = y / np.abs(y)                       # d|y| backward, dout = 1
+            if name == "add":  return gy, gy
+            if name == "mul":  return gy * np.conj(b), gy * np.conj(a)
+            if name == "div":  return gy / np.conj(b), -gy * np.conj(a) / np.conj(b) ** 2
+            if name == "neg":  return -gy, None
+            if name == "conj": return np.conj(gy), None
+
+        def body(dev):
+            for name in ["add", "mul", "div", "neg", "conj"]:
+                ja, jb = jt.array(a), jt.array(b)
+                y = {"add": ja + jb, "mul": ja * jb, "div": ja / jb,
+                     "neg": -ja, "conj": ja.conj()}[name]
+                L = y.abs().sum()
+                ga = jt.grad(L, ja)
+                ga = ga[0] if isinstance(ga, (list, tuple)) else ga
+                self.assertEqual(str(ga.dtype), "complex64", f"{name} grad dtype {dev}")
+                ea, eb = expected(name)
+                np.testing.assert_allclose(np.asarray(ga.numpy()), ea, atol=1e-3, rtol=1e-3,
+                                           err_msg=f"{name} a-grad {dev}")
+                if eb is not None:
+                    gb = jt.grad(L, jb)
+                    gb = gb[0] if isinstance(gb, (list, tuple)) else gb
+                    np.testing.assert_allclose(np.asarray(gb.numpy()), eb, atol=1e-3, rtol=1e-3,
+                                               err_msg=f"{name} b-grad {dev}")
+        both_devices(body)
+
     def test_reduce_sum_and_abs(self):
         rng = np.random.RandomState(2)
         a = (rng.randn(6) + 1j * rng.randn(6)).astype("complex64")

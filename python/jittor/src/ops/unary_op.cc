@@ -905,6 +905,18 @@ UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
 }
 
 VarPtr UnaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
+    if (x->dtype().is_complex()) {
+        // Complex autograd (verified vs real torch 2.12): only the linear / conjugate
+        // unaries are implemented. Others return nullptr (loud no-grad, never silent-wrong).
+        if (ns == ns_negative) return make_unary(dout, ns_negative);  // d(-z) -> -dout
+        if (ns == ns_conj) return make_unary(dout, ns_conj);          // d(conj z) -> conj(dout)
+        if (ns == ns_abs) {
+            // |z| backward (torch): grad_z = dout * z/|z|  (out == |z|, dout is real).
+            auto zoverabs = make_binary(x, out, ns_divide);   // complex z / float |z|
+            return make_binary(dout, zoverabs, ns_multiply);  // float dout * complex -> complex
+        }
+        return nullptr;
+    }
     if (!x->is_float()) return nullptr;
     if (ns == ns_cast) return make_unary(dout, x->dtype());
     if (ns == ns_negative) return make_unary(dout, ns);
