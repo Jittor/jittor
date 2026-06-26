@@ -891,7 +891,7 @@ def install(torch):
     _install_nn_extras(nn)
     _install_cuda(g)
     _install_tensor_methods(g, Var, _DTYPE_OBJS)
-    _install_misc(g, Var)
+    _install_misc(g, Var, _DTYPE_OBJS)
     _install_optimizers(g)
     _install_lr_scheduler(g)
     _install_autograd_function(g)
@@ -2952,6 +2952,125 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         return self
     Var.to = _to
 
+    # ---- integer/float dtype cast methods (torch parity) ----
+    # jittor aliases Var.long = Var.int32 and Var.int = Var.int32, so BOTH
+    # .long() and (from a non-int32 input) the torch dtype is wrong: torch's
+    # .long() is int64, .int() is int32. It also lacks .short()/.byte()/.char().
+    # Pin every cast method to torch's EXACT dtype. (.bool()/.half()/.double()/
+    # .float()/.float32()/.int64()/... were already correct, but reassigning
+    # them through .cast is behavior-identical and keeps the mapping in one place.)
+    _CAST_METHOD_DTYPE = {
+        "byte": "uint8", "char": "int8", "short": "int16", "int": "int32",
+        "long": "int64", "half": "float16", "float": "float32",
+        "double": "float64", "bfloat16": "bfloat16", "bool": "bool",
+    }
+    for _mname, _mdt in _CAST_METHOD_DTYPE.items():
+        setattr(Var, _mname, (lambda dt: lambda self: self.cast(dt))(_mdt))
+
+    # torch's Tensor.type(): with a dtype/typed-tensor-name it casts; with no
+    # argument it returns the torch type-NAME string ('torch.FloatTensor' ...).
+    _DTYPE_TO_TYPENAME = {
+        "float32": "torch.FloatTensor", "float64": "torch.DoubleTensor",
+        "float16": "torch.HalfTensor", "bfloat16": "torch.BFloat16Tensor",
+        "int64": "torch.LongTensor", "int32": "torch.IntTensor",
+        "int16": "torch.ShortTensor", "int8": "torch.CharTensor",
+        "uint8": "torch.ByteTensor", "bool": "torch.BoolTensor",
+    }
+    _TYPENAME_TO_DTYPE = {v: k for k, v in _DTYPE_TO_TYPENAME.items()}
+    _TYPENAME_TO_DTYPE.update({v.replace("torch.", "torch.cuda."): k
+                               for k, v in _DTYPE_TO_TYPENAME.items()})
+    def _var_type(self, dst_type=None, non_blocking=False, **kw):
+        if dst_type is None:
+            return _DTYPE_TO_TYPENAME.get(str(self.dtype), "torch.FloatTensor")
+        if isinstance(dst_type, str) and dst_type in _TYPENAME_TO_DTYPE:
+            return self.cast(_TYPENAME_TO_DTYPE[dst_type])
+        ds = _dtype_to_str(dst_type)
+        return self.cast(ds) if ds is not None else self
+    Var.type = _var_type
+
+    # ---- torch-parity binary-op type promotion ----
+    # jittor's native arithmetic operators keep the LEFT/narrower operand's dtype
+    # for mixed-dtype Var op Var (int32+int64 -> int32, float32+float64 -> float32,
+    # float16+int64 -> float32, uint8+int8 -> int8), silently losing range/precision
+    # vs torch. torch instead promotes BOTH operands to result_type, then computes.
+    # Wrap the affected operators to do exactly that: when the other operand is a Var
+    # of a DIFFERENT dtype, cast both to the promoted dtype and call the original
+    # native op (now same-dtype -> jittor returns the promoted dtype). All other
+    # paths -- matching dtypes, or a Python scalar (jittor already matches torch:
+    # int scalar keeps the int dtype, float scalar lifts int->float32) -- pass
+    # straight through to the native op, so nothing else changes.
+    # True division ('/') has its OWN rule (always float) and is wrapped separately
+    # just below; the operators wrapped here follow the plain promotion lattice.
+    # jittor's native binary ops ALSO corrupt unsigned dtypes even when both
+    # operands match (uint8+uint8 -> int8, uint16+uint16 -> int16) -- a C++
+    # binary_dtype_infer quirk we cannot touch. So the wrapper post-corrects the
+    # native result to the torch-expected dtype whenever they differ, which both
+    # restores unsigned results and double-guards the mixed-dtype promotion.
+    def _make_promoting_op(opname, reflected):
+        native = Var.__dict__.get(opname)
+        if native is None:
+            return None
+        def _op(self, other):
+            if isinstance(other, Var):
+                da, db = str(self.dtype), str(other.dtype)
+                res = g._torch_promote_pair(da, db)
+                a = self if da == res else self.cast(res)
+                b = other if db == res else other.cast(res)
+                out = native(a, b)
+                # native may still mis-infer (unsigned -> signed); fix it up.
+                if isinstance(out, Var) and str(out.dtype) != res:
+                    out = out.cast(res)
+                return out
+            return native(self, other)
+        _op.__name__ = opname
+        return _op
+    # (opname, reflected?) -- reflected ops receive the *other* operand as the left
+    # value, but promotion is symmetric so the same body is correct.
+    for _opn, _refl in [("__add__", False), ("__radd__", True),
+                        ("__sub__", False), ("__rsub__", True),
+                        ("__mul__", False), ("__rmul__", True),
+                        ("__floordiv__", False), ("__rfloordiv__", True),
+                        ("__mod__", False), ("__rmod__", True),
+                        ("__pow__", False), ("__rpow__", True)]:
+        _wrapped = _make_promoting_op(_opn, _refl)
+        if _wrapped is not None:
+            setattr(Var, _opn, _wrapped)
+
+    # True division ('/') is the documented special case: torch ALWAYS yields a
+    # float. The result dtype is result_type(a, b) when that is already floating
+    # (so float16/int64 -> float16, float32/float64 -> float64), otherwise the
+    # default float dtype (so every integral pair, incl. int64/int32 and int8/int8,
+    # -> float32). jittor instead follows numpy's "int -> float of matching width"
+    # (int64/int32 -> float64, int8/int8 -> float16, float16/int64 -> float64),
+    # which loses torch parity. Cast operands to the torch target float, then div.
+    def _truediv_target(da, db):
+        r = g._torch_promote_pair(da, db)
+        if r.startswith(("float", "bfloat", "complex")):
+            return r
+        return _dtype_to_str(g.get_default_dtype()) or "float32"
+    def _make_truediv(opname):
+        native = Var.__dict__.get(opname)
+        if native is None:
+            return None
+        def _op(self, other):
+            if isinstance(other, Var):
+                tgt = _truediv_target(str(self.dtype), str(other.dtype))
+                a = self if str(self.dtype) == tgt else self.cast(tgt)
+                b = other if str(other.dtype) == tgt else other.cast(tgt)
+                out = native(a, b)
+                if isinstance(out, Var) and str(out.dtype) != tgt:
+                    out = out.cast(tgt)
+                return out
+            # tensor / python scalar: jittor already matches torch (int tensor / num
+            # -> float32, float tensor keeps its float), so pass straight through.
+            return native(self, other)
+        _op.__name__ = opname
+        return _op
+    for _opn in ("__truediv__", "__rtruediv__"):
+        _w = _make_truediv(_opn)
+        if _w is not None:
+            setattr(Var, _opn, _w)
+
     if not hasattr(Var, "contiguous"):
         Var.contiguous = lambda self: self
     if not hasattr(Var, "is_cuda"):
@@ -3135,7 +3254,9 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     Var.norm = _var_norm
 
 
-def _install_misc(g, Var):
+def _install_misc(g, Var, _DTYPE_OBJS=None):
+    if _DTYPE_OBJS is None:
+        _DTYPE_OBJS = dtype._registry
     if hasattr(jt, "set_global_seed"):
         g.manual_seed = lambda s: jt.set_global_seed(int(s))
     g.is_tensor = lambda x: isinstance(x, Var)
@@ -3210,6 +3331,111 @@ def _install_misc(g, Var):
             self.min = int(info.min); self.max = int(info.max); self.bits = info.bits
     g.finfo = finfo
     g.iinfo = iinfo
+
+    # ---- type promotion (torch.result_type / promote_types / can_cast) ----
+    # Encodes torch's documented `_promoteTypesLookup` lattice (c10/core/
+    # ScalarType.cpp). Rules, verified against torch's docs:
+    #   * category order  bool < (signed/unsigned int) < float < complex;
+    #   * same-category ints: the wider wins, BUT mixing signed+unsigned of the
+    #     same OR smaller width promotes to a SIGNED type wide enough to hold both
+    #     (uint8+int8 -> int16, uint8+int16 -> int16, uint8+int32 -> int32,
+    #     uint8+int64 -> int64);  uint8+uint8 stays uint8;
+    #   * a float of ANY width absorbs an int of ANY width WITHOUT widening
+    #     (float16+int64 -> float16);  int+bfloat16 -> bfloat16 (torch parity,
+    #     incl. its known low-mantissa caveat);
+    #   * floats: the wider wins, except float16+bfloat16 -> float32 (neither can
+    #     represent the other; matches torch/JAX).
+    # This is the SAME table torch's binary ops consult, so wrapping the Var
+    # arithmetic operators (below, in _install_tensor_methods) to cast both
+    # operands to result_type before the native op reproduces torch exactly.
+    _PROMO_ORDER = ["bool", "uint8", "int8", "int16", "int32", "int64",
+                    "float16", "bfloat16", "float32", "float64"]
+    # The lower-triangular promotion matrix (symmetric); rows/cols in _PROMO_ORDER.
+    # b1 u1 i1 i2 i4 i8 f2 bf f4 f8
+    _PROMO_ROWS = {
+        "bool":     ["bool", "uint8", "int8", "int16", "int32", "int64", "float16", "bfloat16", "float32", "float64"],
+        "uint8":    ["uint8", "uint8", "int16", "int16", "int32", "int64", "float16", "bfloat16", "float32", "float64"],
+        "int8":     ["int8", "int16", "int8", "int16", "int32", "int64", "float16", "bfloat16", "float32", "float64"],
+        "int16":    ["int16", "int16", "int16", "int16", "int32", "int64", "float16", "bfloat16", "float32", "float64"],
+        "int32":    ["int32", "int32", "int32", "int32", "int32", "int64", "float16", "bfloat16", "float32", "float64"],
+        "int64":    ["int64", "int64", "int64", "int64", "int64", "int64", "float16", "bfloat16", "float32", "float64"],
+        "float16":  ["float16", "float16", "float16", "float16", "float16", "float16", "float16", "float32", "float32", "float64"],
+        "bfloat16": ["bfloat16", "bfloat16", "bfloat16", "bfloat16", "bfloat16", "bfloat16", "float32", "bfloat16", "float32", "float64"],
+        "float32":  ["float32", "float32", "float32", "float32", "float32", "float32", "float32", "float32", "float32", "float64"],
+        "float64":  ["float64", "float64", "float64", "float64", "float64", "float64", "float64", "float64", "float64", "float64"],
+    }
+    _PROMO_IDX = {n: i for i, n in enumerate(_PROMO_ORDER)}
+
+    def _promote_pair(a, b):
+        # a, b are bare dtype-name strings. Unknown/complex types fall back to the
+        # wider of the two by category index when possible, else to a.
+        if a == b:
+            return a
+        ia, ib = _PROMO_IDX.get(a), _PROMO_IDX.get(b)
+        if ia is not None and ib is not None:
+            return _PROMO_ROWS[a][ib]
+        # complex (jittor has no native complex compute, but keep the lattice sane)
+        if a.startswith("complex") or b.startswith("complex"):
+            wide = "complex128" if ("128" in a or "128" in b or "float64" in (a, b)) else "complex64"
+            return wide
+        return a if ib is None else b
+
+    def promote_types(t1, t2):
+        return _DTYPE_OBJS.get(_promote_pair(_dtype_to_str(t1), _dtype_to_str(t2)),
+                               _promote_pair(_dtype_to_str(t1), _dtype_to_str(t2)))
+    g.promote_types = promote_types
+
+    def _category(name):
+        # 0 bool, 1 int, 2 float, 3 complex -- torch's scalar-promotion categories.
+        if name == "bool":
+            return 0
+        if name.startswith(("int", "uint")):
+            return 1
+        if name.startswith("complex"):
+            return 3
+        return 2
+
+    def result_type(a, b):
+        # torch.result_type(a, b): a/b may each be a Tensor, a dtype, or a Python
+        # number. Two tensors (or dtypes) -> promote_types. A Python scalar follows
+        # torch's "wrapped number" rule: it only bumps the result if it is a HIGHER
+        # category than the tensor; a same-or-lower-category scalar keeps the
+        # tensor's dtype (an int scalar does NOT widen, a float scalar lifts an int
+        # tensor to the default float).
+        def info(x):
+            if isinstance(x, Var):
+                return (_dtype_to_str(x.dtype), False)
+            if isinstance(x, dtype) or (isinstance(x, str) and _dtype_to_str(x) in _DTYPE_OBJS):
+                return (_dtype_to_str(x), False)
+            if isinstance(x, bool):
+                return ("bool", True)
+            if isinstance(x, int):
+                return ("int64", True)
+            if isinstance(x, float):
+                return (_dtype_to_str(g.get_default_dtype()) or "float32", True)
+            if isinstance(x, complex):
+                return ("complex64", True)
+            return (_dtype_to_str(x) or "float32", False)
+        (na, sa), (nb, sb) = info(a), info(b)
+        if sa and not sb:
+            # scalar a vs tensor b: bump only if a is a strictly higher category
+            res = _promote_pair(na, nb) if _category(na) > _category(nb) else nb
+        elif sb and not sa:
+            res = _promote_pair(na, nb) if _category(nb) > _category(na) else na
+        else:
+            res = _promote_pair(na, nb)
+        return _DTYPE_OBJS.get(res, res)
+    g.result_type = result_type
+
+    def can_cast(from_dtype, to_dtype):
+        # torch.can_cast(from, to): True iff `from` can promote into `to` without
+        # leaving its (or a lower) category -- i.e. promote(from, to) == to.
+        f, t = _dtype_to_str(from_dtype), _dtype_to_str(to_dtype)
+        return _promote_pair(f, t) == t
+    g.can_cast = can_cast
+
+    # Expose the promoter for the operator wrappers installed on Var.
+    g._torch_promote_pair = _promote_pair
 
     # ---- default dtype/device ----
     _state = {"dtype": getattr(g, "float32", "float32")}
