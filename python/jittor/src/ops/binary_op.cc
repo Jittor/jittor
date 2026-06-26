@@ -457,6 +457,18 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
     set_type(OpType::element);
     ns = op;
     ASSERT(ns.is_binary());
+    // Bitwise/shift ops are only defined for integer/boolean dtypes. On a float input the
+    // generated kernel hits a raw C++ "invalid operands ... to binary operator&" g++ wall
+    // (the user never sees the word "dtype"). Guard early with a clear message instead.
+    if (ns==ns_bitwise_and || ns==ns_bitwise_or || ns==ns_bitwise_xor ||
+        ns==ns_left_shift || ns==ns_right_shift) {
+        bool x_ok = x->dtype().is_int() || x->dtype().is_bool();
+        bool y_ok = y->dtype().is_int() || y->dtype().is_bool();
+        CHECK(x_ok && y_ok) << "Binary op '" >> op.to_cstring() >>
+            "' requires integer or boolean dtypes, but got x:" >> x->dtype().to_cstring() <<
+            "y:" >> y->dtype().to_cstring() <<
+            "(bitwise/shift ops are not defined for floating-point or complex types).";
+    }
     z = create_output(x->shape, binary_dtype_infer(op, x->ns, y->ns, x->flags.get(NodeFlags::_is_scalar), y->flags.get(NodeFlags::_is_scalar)));
     bool bin = ns.get(NanoString::_no_need_back_in);
     bool bout = ns.get(NanoString::_no_need_back_out);

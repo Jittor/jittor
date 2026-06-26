@@ -1340,6 +1340,17 @@ class Conv(Module):
             self.bias = None
 
     def execute(self, x):
+        # Clear, torch-grade errors for the two most common Conv2d misuses, instead of an
+        # empty `AssertionError:` (channel mismatch) or a cryptic "not enough values to
+        # unpack" (wrong ndim). Covers all paths (depthwise / groups==1 / grouped) at once.
+        if x.ndim != 4:
+            raise ValueError(
+                f"Conv2d expected a 4-D input (N, C, H, W), but got a {x.ndim}-D input "
+                f"of shape {tuple(x.shape)}.")
+        if x.shape[1] != self.in_channels:
+            raise ValueError(
+                f"Conv2d expected input with {self.in_channels} channels (in_channels), "
+                f"but got {x.shape[1]} channels; input shape {tuple(x.shape)}.")
         if hasattr(self, 'depthwise_conv'):
             y = self.depthwise_conv(x, self.weight)
             if self.bias is not None:
@@ -1352,7 +1363,12 @@ class Conv(Module):
             assert C==self.in_channels
             oh = (H+self.padding[0]*2-Kh*self.dilation[0]+self.dilation[0]-1)//self.stride[0]+1
             ow = (W+self.padding[1]*2-Kw*self.dilation[1]+self.dilation[1]-1)//self.stride[1]+1
-            assert oh>0 and ow>0
+            if oh<=0 or ow<=0:
+                raise ValueError(
+                    f"Conv2d output size is non-positive (oh={oh}, ow={ow}): input "
+                    f"{tuple(x.shape)} is too small for kernel {tuple(self.kernel_size)}, "
+                    f"stride {tuple(self.stride)}, padding {tuple(self.padding)}, "
+                    f"dilation {tuple(self.dilation)}.")
             with jt.flag_scope(amp_reg = jt.flags.amp_reg | 36):
                 xx = x.reindex([N,self.out_channels,C,oh,ow,Kh,Kw], [
                     'i0', # Nid
@@ -1376,7 +1392,12 @@ class Conv(Module):
             oc = self.out_channels
             oh = (H+self.padding[0]*2-Kh*self.dilation[0]+self.dilation[0]-1)//self.stride[0]+1
             ow = (W+self.padding[1]*2-Kw*self.dilation[1]+self.dilation[1]-1)//self.stride[1]+1
-            assert oh>0 and ow>0
+            if oh<=0 or ow<=0:
+                raise ValueError(
+                    f"Conv2d output size is non-positive (oh={oh}, ow={ow}): input "
+                    f"{tuple(x.shape)} is too small for kernel {tuple(self.kernel_size)}, "
+                    f"stride {tuple(self.stride)}, padding {tuple(self.padding)}, "
+                    f"dilation {tuple(self.dilation)}.")
             xx = x.reindex([N,G,oc//G,CpG,oh,ow,Kh,Kw], [
                 'i0', # Nid
                 f'i1*{CpG}+i3', # Gid
