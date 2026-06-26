@@ -271,6 +271,37 @@ class TestComplex64Native(unittest.TestCase):
                                        err_msg=f"view_as_real(ComplexNumber) {dev}")
         both_devices(body)
 
+    def test_accessors(self):
+        # Phase 6 P2: native complex64 .real/.imag/.angle (torch parity), and view_as_complex
+        # / polar now return native complex64. Real-dtype Vars: real->self, imag->zeros.
+        rng = np.random.RandomState(6)
+        re = rng.randn(3, 4).astype("float32")
+        im = rng.randn(3, 4).astype("float32")
+        a = (re + 1j * im).astype("complex64")
+        mag = (np.abs(rng.randn(3, 4)) + 0.1).astype("float32")
+        ang = rng.uniform(-np.pi, np.pi, (3, 4)).astype("float32")
+        def body(dev):
+            z = jt.array(a)
+            np.testing.assert_allclose(np.asarray(z.real.numpy()), re, atol=1e-6, err_msg=f"real {dev}")
+            np.testing.assert_allclose(np.asarray(z.imag.numpy()), im, atol=1e-6, err_msg=f"imag {dev}")
+            np.testing.assert_allclose(np.asarray(z.angle().numpy()), np.angle(a), atol=3e-3,
+                                       err_msg=f"angle {dev}")
+            # view_as_complex now returns native complex64
+            c = jt.nn.view_as_complex(jt.array(np.stack([re, im], axis=-1)))
+            self.assertEqual(str(c.dtype), "complex64", f"view_as_complex dtype {dev}")
+            np.testing.assert_array_equal(np.asarray(c.numpy()), a, err_msg=f"view_as_complex {dev}")
+            # polar -> native complex64
+            p = jt.nn.polar(jt.array(mag), jt.array(ang))
+            self.assertEqual(str(p.dtype), "complex64", f"polar dtype {dev}")
+            np.testing.assert_allclose(np.asarray(p.numpy()), mag * np.exp(1j * ang), atol=1e-4,
+                                       err_msg=f"polar {dev}")
+            # real-dtype parity: real(x)=x, imag(x)=0
+            x = jt.array(re)
+            np.testing.assert_array_equal(np.asarray(x.real.numpy()), re, err_msg=f"real-of-real {dev}")
+            np.testing.assert_array_equal(np.asarray(x.imag.numpy()), np.zeros_like(re),
+                                          err_msg=f"imag-of-real {dev}")
+        both_devices(body)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

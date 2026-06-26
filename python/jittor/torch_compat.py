@@ -3740,15 +3740,22 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
     # (last dim of 2 -> complex), view_as_real (complex -> last dim of 2), polar, real/
     # imag/conj/is_complex. The arithmetic (* / + matmul exp conj) is on ComplexNumber.
     _CN = jt.nn.ComplexNumber
-    _alias("complex", lambda real, imag, **k: _CN(real, imag))
-    _alias("view_as_complex", lambda x: jt.nn.view_as_complex(x))
-    _alias("view_as_real", lambda x: jt.nn.view_as_real(x))
-    _alias("is_complex", lambda x: isinstance(x, _CN))
-    _alias("real", lambda x: x.real if isinstance(x, _CN) else x)
-    _alias("imag", lambda x: x.imag if isinstance(x, _CN) else jt.zeros_like(x))
-    _alias("polar", lambda abs, angle, **k: _CN(abs * jt.cos(angle), abs * jt.sin(angle)))
-    _alias("conj", lambda x: x.conj() if isinstance(x, _CN) else x)
-    _alias("angle", lambda x: x.angle() if isinstance(x, _CN) else jt.zeros_like(x))
+    # A complex value is either the legacy ComplexNumber (still produced by torch.complex and
+    # consumed by torch.fft.* -- migrated in P3) OR the native complex64 dtype (Phase 6). The
+    # accessors below handle both; Var.real/imag/angle are patched in jittor.nn. We force-set
+    # (not _alias) the accessors because _alias skips names that already exist as native ops --
+    # that is why torch.conj(ComplexNumber) used to fall through to the native conj op and crash.
+    def _is_cplx(x):
+        return isinstance(x, _CN) or (isinstance(x, Var) and "complex" in str(x.dtype))
+    _alias("complex", lambda real, imag, **k: _CN(real, imag))      # ComplexNumber (fft -> P3)
+    _alias("view_as_complex", lambda x: jt.nn.view_as_complex(x))   # -> native complex64
+    _alias("view_as_real", lambda x: jt.nn.view_as_real(x))         # polymorphic
+    g.is_complex = lambda x: _is_cplx(x)
+    g.real = lambda x: x.real if isinstance(x, (_CN, Var)) else x
+    g.imag = lambda x: x.imag if isinstance(x, (_CN, Var)) else jt.zeros_like(x)
+    g.polar = lambda abs, angle, **k: jt.nn.polar(abs, angle)       # -> native complex64
+    g.conj = lambda x: x.conj() if isinstance(x, (_CN, Var)) else x
+    g.angle = lambda x: x.angle() if isinstance(x, (_CN, Var)) else jt.zeros_like(x)
     # torch.abs of a complex tensor is its magnitude; jittor's abs only takes real Vars.
     _jt_abs = jt.abs
     def _abs(x):

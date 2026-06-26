@@ -4372,13 +4372,17 @@ def _real2_to_complex64(x):
     return _Real2ToComplex64.apply(x)
 
 
-def polar(abs:jt.Var, angle: jt.Var) -> ComplexNumber:
+def polar(abs:jt.Var, angle: jt.Var) -> jt.Var:
+    # torch.polar: magnitude `abs`, phase `angle` -> native complex64 (Phase 6 migration off
+    # ComplexNumber). Differentiable through the P1 bridge.
     assert abs.shape == angle.shape
-    return ComplexNumber(abs * angle.cos(),abs * angle.sin())
+    return _real2_to_complex64(jt.stack([abs * angle.cos(), abs * angle.sin()], dim=-1))
 
-def view_as_complex(x: jt.Var) -> ComplexNumber:
-    assert x.shape[-1] == 2
-    return ComplexNumber(x[...,0],x[...,1])
+def view_as_complex(x: jt.Var) -> jt.Var:
+    # torch.view_as_complex: real [..., 2] -> native complex64 (Phase 6 migration). Callers that
+    # still need the legacy pair use nn.ComplexNumber(...) directly.
+    assert x.shape[-1] == 2, f"view_as_complex expects last dim 2, got shape {x.shape}"
+    return _real2_to_complex64(x)
 
 def view_as_real(x) -> jt.Var:
     # torch.view_as_real: complex -> real [..., 2]. Polymorphic across the native complex64
@@ -4388,6 +4392,24 @@ def view_as_real(x) -> jt.Var:
     assert "complex" in str(x.dtype), \
         f"view_as_real expects a complex64 Var or ComplexNumber, got dtype {x.dtype}"
     return _complex64_to_real2(x)
+
+
+# Native complex64 accessors (torch parity), patched onto Var so they are available globally
+# after `import jittor` (which imports jittor.nn). dtype-aware: complex64 slices the P1
+# view_as_real bridge; real-dtype Vars match torch (real->self, imag->zeros, angle->0 or pi).
+def _var_real(self):
+    if "complex" in str(self.dtype):
+        return view_as_real(self)[..., 0]
+    return self
+def _var_imag(self):
+    if "complex" in str(self.dtype):
+        return view_as_real(self)[..., 1]
+    return jt.zeros_like(self)
+def _var_angle(self):
+    return jt.atan2(self.imag, self.real)
+jt.Var.real = property(_var_real)
+jt.Var.imag = property(_var_imag)
+jt.Var.angle = _var_angle
 
 # reference: https://github.com/pytorch/pytorch/blob/8ea5b572a63b1acc538a9fc8d3862c73739116e8/torch/functional.py#L1258
 def tensordot(a, b, dims=2):
