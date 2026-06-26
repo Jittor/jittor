@@ -12,6 +12,33 @@ import jittor as jt
 from functools import partial
 from .nn import ComplexNumber
 
+
+# ---------------------------------------------------------------------------
+# Native complex64 <-> nn.ComplexNumber bridge for the complex linalg ops
+# (Phase 6 "P4" of the ComplexNumber deprecation). The complex math itself
+# still lives in the ComplexNumber code paths below (complex_inv / complex_eig
+# / complex_qr / complex_svd / complex_eigh / complex_pinv); these helpers only
+# move a *native* complex64 Var across the P1 bridge (jt.nn.view_as_real /
+# jt.nn._real2_to_complex64) so every public entry point can ALSO take a native
+# complex64 input and return native complex64 output(s). No linear-algebra math
+# is reimplemented here.
+# ---------------------------------------------------------------------------
+def _is_native_complex(x):
+    # A native complex64 Var (NOT an nn.ComplexNumber, which is a plain object).
+    return isinstance(x, jt.Var) and "complex" in str(x.dtype)
+
+
+def _native_to_cn(z):
+    # native complex64 [...]  ->  nn.ComplexNumber (differentiable, via P1 bridge)
+    return ComplexNumber(jt.nn.view_as_real(z), is_concat_value=True)
+
+
+def _cn_to_native(cn):
+    # nn.ComplexNumber  ->  native complex64 [...]  (differentiable, via P1 bridge)
+    # cn.value is the float32 [..., 2] stack; _real2_to_complex64 rebuilds complex64.
+    return jt.nn._real2_to_complex64(cn.value)
+
+
 def complex_inv(x:ComplexNumber):
     r"""
     calculate the inverse of x.
@@ -80,6 +107,49 @@ def complex_eig(x:ComplexNumber):
         w, v = data["outputs"]
         tw, tv = np.linalg.eig(a)
         np.copyto(w, _complex_to_stack(tw))
+        np.copyto(v, _complex_to_stack(tv))
+
+    def backward_code(np, data):
+        raise NotImplementedError
+
+    sw = x.shape[:-2] + x.shape[-1:] + (2,)
+    sv = x.value.shape
+    w, v = jt.numpy_code(
+        [sw, sv],
+        [x.value.dtype, x.value.dtype],
+        [x.value],
+        forward_code,
+        [backward_code],
+    )
+    return ComplexNumber(w, is_concat_value=True), ComplexNumber(v, is_concat_value=True)
+
+def complex_eigh(x:ComplexNumber):
+    r"""
+    Hermitian eigendecomposition of a complex matrix (counterpart of the real
+    :func:`eigh`). ``x`` is assumed Hermitian; only the lower triangle is read
+    (``UPLO='L'``), matching the real ``eigh``. Returns ``(w, v)`` as
+    ``ComplexNumber``\ s for type-consistency with :func:`complex_eig`; the
+    eigenvalues ``w`` are mathematically real (carried with a zero imaginary
+    part). Forward-only (numpy), like ``complex_eig``/``complex_svd``.
+
+    :param x (...,M,M):
+    :return: w (...,M) eigenvalues, v (...,M,M) eigenvectors.
+    """
+    assert isinstance(x, ComplexNumber), "complex_eigh is implemented for nn.ComplexNumber"
+    assert x.real.dtype == jt.float32 and x.imag.dtype == jt.float32, "real and imag in ComplexNumber should be jt.float32"
+    assert x.shape[-2] == x.shape[-1], "only square matrix is supported for complex_eigh"
+    def forward_code(np, data):
+        def _stack_to_complex(x):
+            return x[..., 0] + 1j * x[..., 1]
+        def _complex_to_stack(x):
+            return np.stack([np.real(x), np.imag(x)], axis=-1)
+        a = _stack_to_complex(data["inputs"][0])
+        w, v = data["outputs"]
+        # np.linalg.eigh handles complex Hermitian natively: w real, v complex.
+        tw, tv = np.linalg.eigh(a, UPLO='L')
+        # carry the (real) eigenvalues as a complex stack (imag = 0) so the
+        # ComplexNumber wrapper round-trips cleanly through the P1 bridge.
+        np.copyto(w, _complex_to_stack(tw.astype(a.dtype)))
         np.copyto(v, _complex_to_stack(tv))
 
     def backward_code(np, data):
@@ -218,6 +288,42 @@ def complex_svd(x:ComplexNumber):
     return ComplexNumber(u, is_concat_value=True), \
             ComplexNumber(s, is_concat_value=True), \
             ComplexNumber(v, is_concat_value=True)
+
+def complex_pinv(x:ComplexNumber):
+    r"""
+    Moore-Penrose pseudo-inverse of a complex matrix (counterpart of the real
+    :func:`pinv`). For ``x`` of shape ``(...,M,N)`` returns ``(...,N,M)``.
+    Forward-only (numpy ``np.linalg.pinv`` handles complex natively), wired
+    through the ComplexNumber machinery like ``complex_svd``/``complex_eig``.
+
+    :param x (...,M,N):
+    :return: x's pinv (...,N,M).
+    """
+    assert isinstance(x, ComplexNumber), "complex_pinv is implemented for nn.ComplexNumber"
+    assert x.real.dtype == jt.float32 and x.imag.dtype == jt.float32, "real and imag in ComplexNumber should be jt.float32"
+    def forward_code(np, data):
+        def _stack_to_complex(x):
+            return x[..., 0] + 1j * x[..., 1]
+        def _complex_to_stack(x):
+            return np.stack([np.real(x), np.imag(x)], axis=-1)
+        a = _stack_to_complex(data["inputs"][0])
+        m_a = data["outputs"][0]
+        t_a = np.linalg.pinv(a)
+        np.copyto(m_a, _complex_to_stack(t_a))
+
+    def backward_code(np, data):
+        raise NotImplementedError
+
+    # pinv transposes the last two dims (M,N) -> (N,M); the trailing 2 (re/im) stays.
+    sw = list(x.shape[:-2]) + [x.shape[-1], x.shape[-2]] + [2]
+    lmx = jt.numpy_code(
+        sw,
+        x.value.dtype,
+        [x.value],
+        forward_code,
+        [backward_code],
+    )
+    return ComplexNumber(lmx, is_concat_value=True)
 
 import collections as _collections
 # torch.linalg.svd / torch.svd both return a named (U, S, Vh) result. We make
@@ -380,6 +486,13 @@ def svd(x, full_matrices=False, *, compute_uv=True, driver=None):
     :param driver: accepted for torch signature compatibility (ignored).
     :return: named tuple ``SVD(U, S, Vh)``.
     '''
+    if _is_native_complex(x):
+        # native complex64 -> bridge to the ComplexNumber path, return native.
+        u, s, v = complex_svd(_native_to_cn(x))
+        # s is real (singular values) but complex_svd carries it as a
+        # ComplexNumber (imag=0); _cn_to_native keeps it complex64 for a
+        # uniform native-complex return (callers reconstruct via u@diag(s)@v).
+        return SVD(_cn_to_native(u), _cn_to_native(s), _cn_to_native(v))
     if isinstance(x, ComplexNumber):
         # complex_svd is the reduced form; full_matrices for complex is not
         # supported (would need a complex orthogonal completion).
@@ -403,6 +516,8 @@ def svdvals(x, *, driver=None):
     :param driver: accepted for torch signature compatibility (ignored).
     :return: singular values ``S`` ``(...,K)``.
     '''
+    if _is_native_complex(x):
+        return _cn_to_native(complex_svd(_native_to_cn(x))[1])
     if isinstance(x, ComplexNumber):
         return complex_svd(x)[1]
     return _svd_reduced(x)[1]
@@ -415,6 +530,10 @@ def eig(x):
     w (...,M) : the eigenvalues.
     v (...,M,M) : normalized eigenvectors.
     """
+    if _is_native_complex(x):
+        # native complex64 -> bridge to the ComplexNumber path, return native.
+        w, v = complex_eig(_native_to_cn(x))
+        return _cn_to_native(w), _cn_to_native(v)
     if isinstance(x, ComplexNumber):
         return complex_eig(x)
     return complex_eig(ComplexNumber(x))
@@ -427,6 +546,16 @@ def eigh(x):
     w (...,M) : the eigenvalues.
     v (...,M,M) : normalized eigenvectors.
     """
+    if _is_native_complex(x):
+        # native complex64 Hermitian -> bridge to the ComplexNumber path. The
+        # eigenvalues are real (returned as complex64 with imag~0 for a uniform
+        # native-complex return); eigenvectors are native complex64.
+        w, v = complex_eigh(_native_to_cn(x))
+        return _cn_to_native(w), _cn_to_native(v)
+    if isinstance(x, ComplexNumber):
+        # Hermitian eigendecomposition on the legacy ComplexNumber type. (The
+        # real path below cannot take a ComplexNumber — previously this raised.)
+        return complex_eigh(x)
     def forward_code(np, data):
         a = data["inputs"][0]
         w, v = data["outputs"]
@@ -504,6 +633,9 @@ def inv(x):
     :param x (...,M,M):
     :return:x^-1 (...,M,M).
     """
+    if _is_native_complex(x):
+        # native complex64 -> bridge to the ComplexNumber path, return native.
+        return _cn_to_native(complex_inv(_native_to_cn(x)))
     if isinstance(x, ComplexNumber):
         return complex_inv(x)
     def forward_code(np, data):
@@ -540,6 +672,13 @@ def pinv(x):
     :param x (...,M,N)
     :return: x's pinv (...N,M)
     """
+    if _is_native_complex(x):
+        # native complex64 -> bridge to the ComplexNumber path, return native.
+        return _cn_to_native(complex_pinv(_native_to_cn(x)))
+    if isinstance(x, ComplexNumber):
+        # complex pseudo-inverse on the legacy ComplexNumber type. (The real
+        # path below cannot take a ComplexNumber — previously this raised.)
+        return complex_pinv(x)
     def forward_code(np, data):
         a = data["inputs"][0]
         m_a = data["outputs"][0]
@@ -1076,6 +1215,10 @@ def qr(x):
     :param x (...,M,M):
     :return:q,r as the result of qr factorization.They are both in the shape of (...,M,M).
     """
+    if _is_native_complex(x):
+        # native complex64 -> bridge to the ComplexNumber path, return native.
+        q, r = complex_qr(_native_to_cn(x))
+        return _cn_to_native(q), _cn_to_native(r)
     if isinstance(x, ComplexNumber):
         return complex_qr(x)
     def forward_code(np, data):
