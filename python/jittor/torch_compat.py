@@ -3747,7 +3747,7 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
     # that is why torch.conj(ComplexNumber) used to fall through to the native conj op and crash.
     def _is_cplx(x):
         return isinstance(x, _CN) or (isinstance(x, Var) and "complex" in str(x.dtype))
-    _alias("complex", lambda real, imag, **k: _CN(real, imag))      # ComplexNumber (fft -> P3)
+    _alias("complex", lambda real, imag, **k: jt.nn.view_as_complex(jt.stack([real, imag], dim=-1)))  # native complex64
     _alias("view_as_complex", lambda x: jt.nn.view_as_complex(x))   # -> native complex64
     _alias("view_as_real", lambda x: jt.nn.view_as_real(x))         # polymorphic
     g.is_complex = lambda x: _is_cplx(x)
@@ -3792,13 +3792,23 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
             return x[..., :n]
         pad = jt.zeros(list(x.shape[:-1]) + [n - L], x.dtype)
         return jt.concat([x, pad], dim=-1)
-    def _fft_core(x, n, dim, inverse, norm=None):
-        # x: real Var or ComplexNumber -> ComplexNumber DFT along `dim`
-        x, inv = _to_last(x, dim)
+    def _mk_cplx(re, im):
+        # build a NATIVE complex64 var from real/imag float vars (Phase 6: fft emits native)
+        return jt.nn.view_as_complex(jt.stack([re, im], dim=-1))
+    def _re_im(x):
+        # (real, imag) float vars from a real Var / ComplexNumber / native complex64. A real
+        # Var returns imag=None (skips the imag matmuls); .real/.imag handle CN and native.
         if isinstance(x, _CN):
-            re, im = _resize_last(x.real, n), _resize_last(x.imag, n)
-        else:
-            re, im = _resize_last(x, n), None
+            return x.real, x.imag
+        if isinstance(x, Var) and "complex" in str(x.dtype):
+            return x.real, x.imag
+        return x, None
+    def _fft_core(x, n, dim, inverse, norm=None):
+        # x: real Var / ComplexNumber / native complex64 -> NATIVE complex64 DFT along `dim`
+        x, inv = _to_last(x, dim)
+        re0, im0 = _re_im(x)
+        re = _resize_last(re0, n)
+        im = _resize_last(im0, n) if im0 is not None else None
         N = re.shape[-1]
         Wc, Ws = _dft_mats(N, inverse)              # cos, sin matrices (N,N)
         # out = (re + i*im) @ (Wc + i*Ws)^T ; matmul over last dim == x @ W^T
@@ -3817,7 +3827,7 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
         if scale != 1.0:
             out_re = out_re * scale
             out_im = out_im * scale
-        out = _CN(out_re, out_im)
+        out = _mk_cplx(out_re, out_im)              # NATIVE complex64
         if inv is not None:
             out = out.permute(*inv)
         return out
@@ -3839,9 +3849,10 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
         full = _fft_core(input, n, dim, False, norm)  # real input -> hermitian; keep N//2+1
         N = (input.shape[dim] if n is None else n)
         keep = N // 2 + 1
-        sl = [slice(None)] * full.real.ndim
-        sl[dim if dim >= 0 else dim + full.real.ndim] = slice(0, keep)
-        return _CN(full.real[tuple(sl)], full.imag[tuple(sl)])
+        fr, fi = full.real, full.imag               # full is native complex64
+        sl = [slice(None)] * fr.ndim
+        sl[dim if dim >= 0 else dim + fr.ndim] = slice(0, keep)
+        return _mk_cplx(fr[tuple(sl)], fi[tuple(sl)])
     _fft_ns.rfft = _rfft
     def _irfft(input, n=None, dim=-1, norm=None):
         # reconstruct the hermitian-symmetric full spectrum, inverse, take real part
@@ -3860,7 +3871,7 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
             im_full = jt.concat([im, -im[tuple(sl)]], dim=d)
         else:
             re_full, im_full = re, im
-        out = _fft_core(_CN(re_full, im_full), None, dim, True, norm)
+        out = _fft_core(_mk_cplx(re_full, im_full), None, dim, True, norm)
         return out.real
     _fft_ns.irfft = _irfft
     # fftshift/ifftshift: roll the zero-frequency component to/from the centre. The old

@@ -263,7 +263,9 @@ class TestComplex(Base):
             # torch.abs of a complex tensor is its magnitude.
             self.ac(c.abs().numpy(), np.abs(self.z), atol=1e-5, msg=f"complex.abs {dev}")
             self.ac(torch.abs(c).numpy(), np.abs(self.z), atol=1e-5, msg=f"torch.abs(complex) {dev}")
-            self.ac(c.norm().numpy(), np.abs(self.z), atol=1e-5, msg=f"complex.norm {dev}")
+            # (dropped the old c.norm()==|z| elementwise check: torch.complex now returns the
+            # native complex64 dtype, whose .norm() is a reduction like torch's -- not the
+            # elementwise magnitude that was a ComplexNumber-only idiom; .abs() covers magnitude.)
         both_devices(body)
 
     def test_angle(self):
