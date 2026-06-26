@@ -80,6 +80,57 @@ class TestComplex64Native(unittest.TestCase):
                 np.testing.assert_allclose(rb, refb, atol=1e-4, rtol=1e-4, err_msg=f"bmm {dev}")
         both_devices(body)
 
+    def test_mean_prod(self):
+        rng = np.random.RandomState(7)
+        a = (rng.randn(8) + 1j * rng.randn(8)).astype("complex64")
+        def body(dev):
+            mn = np.asarray(jt.array(a).mean().numpy()).reshape(-1)[0]
+            self.assertEqual(str(jt.array(a).mean().dtype), "complex64", f"mean dtype {dev}")
+            np.testing.assert_allclose(mn, a.mean(), atol=1e-4, rtol=1e-4, err_msg=f"mean {dev}")
+            # prod uses a multiply-reduce: CPU works; CUDA needs an atomicCAS overload for
+            # complex64 (not implemented) so it fails loudly there -- assert CPU only.
+            if dev == "cpu":
+                pr = np.asarray(jt.array(a).prod().numpy()).reshape(-1)[0]
+                np.testing.assert_allclose(pr, a.prod(), atol=1e-4, rtol=1e-4, err_msg=f"prod {dev}")
+        both_devices(body)
+
+    def test_structural_ops(self):
+        # data-movement ops that should "just work" on complex64 (no per-dtype kernel).
+        rng = np.random.RandomState(8)
+        a = (rng.randn(6) + 1j * rng.randn(6)).astype("complex64")
+        b = (rng.randn(6) + 1j * rng.randn(6)).astype("complex64")
+        m = (rng.randn(2, 3) + 1j * rng.randn(2, 3)).astype("complex64")
+        def body(dev):
+            cases = [
+                ("reshape", jt.array(a).reshape((2, 3)), a.reshape(2, 3)),
+                ("transpose", jt.array(m).transpose(), m.T),
+                ("slice", jt.array(a)[1:4], a[1:4]),
+                ("getitem", jt.array(m)[1], m[1]),
+                ("broadcast_add", jt.array(m) + jt.array(a[:3]), m + a[:3]),
+                ("concat", jt.concat([jt.array(a), jt.array(b)]), np.concatenate([a, b])),
+                ("stack", jt.stack([jt.array(a), jt.array(b)]), np.stack([a, b])),
+            ]
+            for nm, jr, ref in cases:
+                np.testing.assert_allclose(np.asarray(jr.numpy()), ref, atol=1e-5,
+                                           err_msg=f"{nm} {dev}")
+        both_devices(body)
+
+    def test_compare_and_ternary(self):
+        rng = np.random.RandomState(9)
+        a = (rng.randn(6) + 1j * rng.randn(6)).astype("complex64")
+        b = (rng.randn(6) + 1j * rng.randn(6)).astype("complex64")
+        mask = (a.real > 0)
+        def body(dev):
+            np.testing.assert_array_equal(np.asarray((jt.array(a) == jt.array(a)).numpy()),
+                                          a == a, err_msg=f"equal {dev}")
+            np.testing.assert_array_equal(np.asarray((jt.array(a) != jt.array(b)).numpy()),
+                                          a != b, err_msg=f"notequal {dev}")
+            cond = jt.array(mask.astype("float32"))
+            w = np.asarray(jt.ternary(cond, jt.array(a), jt.array(b)).numpy())
+            np.testing.assert_allclose(w, np.where(mask, a, b), atol=1e-5,
+                                       err_msg=f"ternary {dev}")
+        both_devices(body)
+
     def test_conj(self):
         rng = np.random.RandomState(3)
         a = (rng.randn(6) + 1j * rng.randn(6)).astype("complex64")
