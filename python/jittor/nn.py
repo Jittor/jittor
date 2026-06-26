@@ -4312,6 +4312,66 @@ class ComplexNumber:
         return ComplexNumber(_fft2(self.value, inverse=True), is_concat_value=True)
 
 
+# ---------------------------------------------------------------------------
+# Native complex64 <-> float32[..., 2] bridge (Phase 6 / ComplexNumber deprecation; see
+# agent/skills/jittor-dev-context/design-complex-dtype.md). This is the keystone that lets
+# FFT / linalg be migrated off nn.ComplexNumber onto the native complex64 dtype:
+#   _complex64_to_real2 : complex64[...]   -> float32[..., 2]   (torch.view_as_real)
+#   _real2_to_complex64 : float32[..., 2]  -> complex64[...]     (torch.view_as_complex)
+# view_as_real reads the (real, imag) of the complex_compute.h struct through an isolated
+# jt.code op (NO new core op); the reverse rebuilds via re + im*1j (mixed float*complex).
+# Both are wrapped as jt.Function with each other as the adjoint backward, so the bridge is
+# autograd-transparent on CPU+CUDA (verified maxdiff 0). Zero new C++; no FusedOp changes.
+_complex64_imag_unit_cache = None
+def _complex64_imag_unit():
+    global _complex64_imag_unit_cache
+    if _complex64_imag_unit_cache is None:
+        _complex64_imag_unit_cache = jt.array(np.array(1j, dtype="complex64"))
+    return _complex64_imag_unit_cache
+
+def _complex64_to_real2_raw(z):
+    # flatten to 1-D so the jt.code kernel is shape-agnostic, then restore the [..., 2] tail.
+    n = 1
+    for s in z.shape:
+        n *= s
+    flat = jt.code([n, 2], "float32", [z.reshape([n])],
+        cpu_src="""
+        for (int i=0; i<in0_shape0; i++) {
+            @out(i,0) = @in0(i).real;
+            @out(i,1) = @in0(i).imag;
+        }""",
+        cuda_src="""
+        __global__ void k(@ARGS_DEF) {
+            @PRECALC
+            int i = blockIdx.x*blockDim.x + threadIdx.x;
+            if (i < in0_shape0) { @out(i,0) = @in0(i).real; @out(i,1) = @in0(i).imag; }
+        }
+        int n = in0_shape0; k<<<(n+63)/64, 64>>>(@ARGS);""")
+    return flat.reshape(list(z.shape) + [2])
+
+def _real2_to_complex64_raw(x):
+    # re + im*1j : float32 + float32*complex64 -> complex64 (native mixed arithmetic)
+    return x[..., 0] + x[..., 1] * _complex64_imag_unit()
+
+class _Complex64ToReal2(jt.Function):
+    def execute(self, z):
+        return _complex64_to_real2_raw(z)
+    def grad(self, g):                       # adjoint of view_as_real is view_as_complex
+        return _real2_to_complex64_raw(g)
+
+class _Real2ToComplex64(jt.Function):
+    def execute(self, x):
+        return _real2_to_complex64_raw(x)
+    def grad(self, g):                       # adjoint of view_as_complex is view_as_real
+        return _complex64_to_real2_raw(g)
+
+def _complex64_to_real2(z):
+    return _Complex64ToReal2.apply(z)
+
+def _real2_to_complex64(x):
+    return _Real2ToComplex64.apply(x)
+
+
 def polar(abs:jt.Var, angle: jt.Var) -> ComplexNumber:
     assert abs.shape == angle.shape
     return ComplexNumber(abs * angle.cos(),abs * angle.sin())
@@ -4320,8 +4380,14 @@ def view_as_complex(x: jt.Var) -> ComplexNumber:
     assert x.shape[-1] == 2
     return ComplexNumber(x[...,0],x[...,1])
 
-def view_as_real(x: ComplexNumber) -> jt.Var:
-    return jt.stack([x.value[...,0],x.value[...,1]],dim=-1)
+def view_as_real(x) -> jt.Var:
+    # torch.view_as_real: complex -> real [..., 2]. Polymorphic across the native complex64
+    # dtype (Phase 6 bridge, differentiable) and the legacy nn.ComplexNumber (real/imag pair).
+    if isinstance(x, ComplexNumber):
+        return jt.stack([x.value[...,0],x.value[...,1]],dim=-1)
+    assert "complex" in str(x.dtype), \
+        f"view_as_real expects a complex64 Var or ComplexNumber, got dtype {x.dtype}"
+    return _complex64_to_real2(x)
 
 # reference: https://github.com/pytorch/pytorch/blob/8ea5b572a63b1acc538a9fc8d3862c73739116e8/torch/functional.py#L1258
 def tensordot(a, b, dims=2):
