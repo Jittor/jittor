@@ -915,6 +915,25 @@ VarPtr UnaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
             auto zoverabs = make_binary(x, out, ns_divide);   // complex z / float |z|
             return make_binary(dout, zoverabs, ns_multiply);  // float dout * complex -> complex
         }
+        // holomorphic unaries: grad = dout * conj(f'(z))  (verified vs real torch 2.12)
+        if (ns == ns_exp)   // f' = exp(z) = out
+            return make_binary(dout, make_unary(out, ns_conj), ns_multiply);
+        if (ns == ns_log)   // f' = 1/z  ->  dout / conj(z)
+            return make_binary(dout, make_unary(x, ns_conj), ns_divide);
+        if (ns == ns_sqrt) {  // f' = 1/(2 sqrt z)  ->  dout / (2 conj(out))
+            auto c = make_unary(out, ns_conj);
+            auto two = make_number(2, dout);
+            return make_binary(dout, make_binary(c, two, ns_multiply), ns_divide);
+        }
+        if (ns == ns_sin) {  // f' = cos z
+            auto cs = make_unary(x, ns_cos);
+            return make_binary(dout, make_unary(cs, ns_conj), ns_multiply);
+        }
+        if (ns == ns_cos) {  // f' = -sin z
+            auto sn = make_unary(x, ns_sin);
+            auto m = make_binary(dout, make_unary(sn, ns_conj), ns_multiply);
+            return make_unary(m, ns_negative);
+        }
         return nullptr;
     }
     if (!x->is_float()) return nullptr;
