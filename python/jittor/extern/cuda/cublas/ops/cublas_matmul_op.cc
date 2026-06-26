@@ -28,9 +28,12 @@ CublasMatmulOp::CublasMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
     a->flags.set(NodeFlags::_needed_by_backward);
     b->flags.set(NodeFlags::_needed_by_backward);
     // TODO: support int8 * int8
-    ASSERT(a->dtype().is_float() && b->dtype().is_float()) << "type of two inputs should be the same";
+    ASSERT(a->dtype().is_float() && b->dtype().is_float())
+        << "cublas matmul requires floating-point inputs (float16/float32/float64), but got a:"
+        << a->dtype() << "b:" << b->dtype();
     // TODO: support diffrent input type
-    ASSERT(a->dtype().dsize() == b->dtype().dsize()) << "type of two inputs should be the same";
+    ASSERT(a->dtype().dsize() == b->dtype().dsize())
+        << "matmul inputs must have the same dtype, but got a:" << a->dtype() << "b:" << b->dtype();
     c = create_output(nullptr, a->dtype());
 }
 
