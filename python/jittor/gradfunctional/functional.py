@@ -4,6 +4,21 @@ import jittor as jt
 __all__ = ["vjp", "jvp", "jacobian", "hessian", "hvp", "vhp"]
 
 # Utility functions
+def _is_native_complex(x):
+    # A native complex64/complex128 jt.Var (the new first-class complex dtype), as
+    # opposed to the legacy jt.nn.ComplexNumber real/imag-pair simulation (not a Var).
+    return isinstance(x, jt.Var) and "complex" in str(x.dtype)
+
+
+def _zeros_seed_like(out):
+    # A grad-output seed full of zeros matching `out`. Used by jvp where the value of
+    # the seed is irrelevant (the backward is linear in it) but it must be finite and
+    # the right kind/shape. Polymorphic over native complex64, ComplexNumber and Vars.
+    if isinstance(out, jt.nn.ComplexNumber):
+        return jt.nn.ComplexNumber(jt.zeros_like(out.value), is_concat_value=True)
+    return jt.zeros_like(out)
+
+
 def _as_tuple_nocheck(x):
     if isinstance(x, tuple):
         return x
@@ -184,10 +199,24 @@ def _autograd_grad(
         acc_loss = None
         for new_output, grad_output in zip(new_outputs, grad_outputs):
             if isinstance(new_output, jt.nn.ComplexNumber):
+                # Legacy ComplexNumber: the value is a real [..., 2] (real, imag) stack,
+                # so the real-valued seeded loss is just <out.value, grad.value>.
                 if grad_output is not None:
                     loss = (new_output.value * grad_output.value).sum()
                 else:
                     loss = new_output.value.sum()
+            elif _is_native_complex(new_output):
+                # Native complex64 Var: jt.grad needs a *real* loss (a complex sum
+                # would raise "Loss should be float"). Build the same real seeded loss
+                # the ComplexNumber path uses: Re(<out, grad>) over the (real, imag) pair,
+                # i.e. sum(out.real*g.real + out.imag*g.imag). This yields, for a real
+                # downstream scalar, exactly torch's conjugate (Wirtinger) input grad.
+                if grad_output is not None:
+                    loss = (new_output.real * grad_output.real
+                            + new_output.imag * grad_output.imag).sum()
+                else:
+                    # grad_output == 1 (+0j): only reachable for a single-element output.
+                    loss = new_output.real.sum()
             else:
                 if grad_output is not None:
                     new_output = new_output * grad_output
@@ -201,11 +230,15 @@ def _autograd_grad(
         var_inputs = []
         for idx, inp in enumerate(inputs):
             if isinstance(inp, jt.nn.ComplexNumber):
+                # ComplexNumber is not a Var: differentiate its real [..., 2] value and
+                # re-wrap the grad afterwards.
                 var_inputs.append(inp.value)
                 complex_inds.append(idx)
             else:
+                # Native complex64 Vars are first-class differentiable Vars: jt.grad
+                # returns a complex64 grad directly, so they flow through untouched.
                 var_inputs.append(inp)
-        
+
         grads = jt.grad(acc_loss, var_inputs, retain_graph=create_graph)
         for complex_ind in complex_inds:
             grads[complex_ind] = jt.nn.ComplexNumber(grads[complex_ind], is_concat_value=True)
@@ -388,13 +421,29 @@ def jvp(func, inputs, v=None, create_graph=False, strict=False):
             outputs, "outputs of the user-provided function", "jvp"
         )
         _check_requires_grad(outputs, "outputs", strict=strict)
+
+        # jvp is implemented with the "double backward trick" (there is no forward-mode
+        # AD in jittor): it differentiates a *first* backward graph a second time. Native
+        # complex64 Vars do not yet support second-order autograd -- the second backward
+        # needs a complex64->float32 cast-backward that the native complex machinery does
+        # not implement, which otherwise surfaces as an opaque C++ compile error deep in
+        # _autograd_grad. Fail loudly and early instead ("宁可响亮崩也不静默错"). The legacy
+        # jt.nn.ComplexNumber path keeps working (its double backward is over the all-real
+        # (real, imag) representation), and native complex64 fully works through vjp.
+        if any(_is_native_complex(x) for x in inputs) or any(
+            _is_native_complex(o) for o in outputs
+        ):
+            raise NotImplementedError(
+                "jvp does not support native complex64 Vars: it relies on the double "
+                "backward trick, and native complex64 has no second-order autograd yet. "
+                "Use vjp (which supports native complex64), or wrap complex tensors in "
+                "jt.nn.ComplexNumber for the legacy real/imag-pair jvp path."
+            )
+
         # The backward is linear so the value of grad_outputs is not important as
         # it won't appear in the double backward graph. We only need to ensure that
         # it does not contain inf or nan.
-        grad_outputs = tuple(
-            jt.nn.ComplexNumber(jt.zeros_like(out.value), is_concat_value=True) if isinstance(out, jt.nn.ComplexNumber) else jt.zeros_like(out)
-            for out in outputs
-        )
+        grad_outputs = tuple(_zeros_seed_like(out) for out in outputs)
 
         grad_inputs = _autograd_grad(outputs, inputs, grad_outputs=grad_outputs, create_graph=True)
         _check_requires_grad(grad_inputs, "grad_inputs", strict=strict)
