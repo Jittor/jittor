@@ -72,12 +72,10 @@ class TestComplex64Native(unittest.TestCase):
             r = np.asarray(jt.matmul(jt.array(A), jt.array(B)).numpy())
             self.assertEqual(r.dtype.name, "complex64", f"matmul dtype {dev}")
             np.testing.assert_allclose(r, ref, atol=1e-4, rtol=1e-4, err_msg=f"matmul {dev}")
-            # Batched matmul: CPU takes the reindex path (works); CUDA routes to
-            # cublas_batched_matmul which only supports float dtypes, so complex bmm on
-            # CUDA fails loudly (known gap — needs a complex->reindex fallback in nn.bmm).
-            if dev == "cpu":
-                rb = np.asarray(jt.matmul(jt.array(Ab), jt.array(Bb)).numpy())
-                np.testing.assert_allclose(rb, refb, atol=1e-4, rtol=1e-4, err_msg=f"bmm {dev}")
+            # Batched matmul (bmm) works on BOTH devices: complex64 routes around
+            # cublas_batched_matmul (float-only) to the reindex path (multiply + sum-reduce).
+            rb = np.asarray(jt.matmul(jt.array(Ab), jt.array(Bb)).numpy())
+            np.testing.assert_allclose(rb, refb, atol=1e-4, rtol=1e-4, err_msg=f"bmm {dev}")
         both_devices(body)
 
     def test_mean_prod(self):
