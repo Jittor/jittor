@@ -22,7 +22,8 @@ namespace jittor {
 MklMatmulOp::MklMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
     : a(a), b(b), trans_a(trans_a), trans_b(trans_b) {
     // TODO: support int8 * int8
-    ASSERT(a->dtype().is_float() && b->dtype().is_float()) << "type of two inputs should be the same";
+    ASSERT(a->dtype().is_float() && b->dtype().is_float())
+        << "mkl matmul requires floating-point inputs, but got a:" << a->dtype() << "b:" << b->dtype();
     // TODO: support diffrent input type
     ASSERT(a->dtype().dsize() == 4 && b->dtype().dsize() == 4) << "support float32 only now.";
     c = create_output(nullptr, a->dtype());
