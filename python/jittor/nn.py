@@ -21,10 +21,14 @@ from collections import OrderedDict
 from jittor.pool import *
 from jittor.optim import *
 from jittor.misc import _pair, _triple
-# torch exposes CTCLoss (and the functional ctc_loss) under torch.nn; jittor
-# defines them in jittor.misc, so re-export here for `nn.CTCLoss` / the
-# jittor-as-torch shim's `torch.nn.CTCLoss` to resolve.
-from jittor.misc import CTCLoss, ctc_loss
+# torch exposes the CTCLoss module under torch.nn; jittor defines it in
+# jittor.misc, so re-export the CLASS for `nn.CTCLoss` / the shim's
+# `torch.nn.CTCLoss` to resolve. We deliberately do NOT re-export the functional
+# `ctc_loss`: torch_compat installs its own torch-faithful F.ctc_loss only when
+# F lacks one, and misc.ctc_loss's reduction='mean' differs from torch (torch
+# divides each sample by its target_length) — re-exporting it would shadow the
+# correct F.ctc_loss.
+from jittor.misc import CTCLoss
 from jittor_utils import LOG
 from functools import partial
 
