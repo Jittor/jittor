@@ -370,10 +370,6 @@ class TestPoolFunctional(Base):
                     msg=f"avgpool ceil {dev}")
         both_devices(body)
 
-    @unittest.skip("REASON: jittor's avg_pool2d ignores count_include_pad=False; "
-                   "output equals count_include_pad=True (verified incl==excl exactly). "
-                   "torch divides by the non-pad element count at padded borders. "
-                   "Semantic gap in jittor's Pool op, not a test artifact.")
     def test_avg_pool2d_count_include_pad_false(self):
         x = self.x
         def body(dev):
@@ -417,10 +413,6 @@ class TestAdaptivePool(Base):
             self.ac(g, adaptive_avg_ref(x, (4, 2)), msg=f"adaptive_avg (4,2) {dev}")
         both_devices(body)
 
-    @unittest.skip("REASON: for non-divisor output (e.g. 8->3) jittor uses uniform "
-                   "stride/kernel pooling, NOT torch's variable-bin algorithm "
-                   "(start=floor(i*H/O), end=ceil((i+1)*H/O)); outputs differ by up to "
-                   "~13x rel. Matches torch only when output_size divides input_size.")
     def test_adaptive_avg_pool2d_nondivisor(self):
         x = self.x
         def body(dev):
