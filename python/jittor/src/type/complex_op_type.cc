@@ -33,6 +33,8 @@ struct ComplexOpType : OpByType {
             {"multiply", "(($2)*($4))"},
             {"divide", "(($2)/($4))"},
             {"negative", "(-($2))"},
+            {"abs", "jittor::jt_cabs($2)"},  // |z| -> float (Tz inferred float32); qualified
+                                             // name so codegen doesn't rename it op0_jt_cabs
             {"cast", "(($1)($2))"},
             {"equal", "(($2)==($4))"},
             {"not_equal", "(($2)!=($4))"},

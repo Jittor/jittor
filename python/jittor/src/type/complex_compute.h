@@ -41,4 +41,14 @@ inline JT_CPLX_HD bool operator!=(complex64 a, complex64 b) { return !(a==b); }
 inline JT_CPLX_HD complex64 jt_conj(complex64 a) { return complex64(a.real, -a.imag); }
 inline JT_CPLX_HD float jt_cabs(complex64 a) { return ::sqrtf(a.real*a.real + a.imag*a.imag); }
 
+// complex sum/reduce on CUDA needs an atomicAdd overload: decompose into independent
+// real/imag float atomicAdds (sum is commutative per-component, so this is correct).
+#if defined(JIT_cuda) && !defined(IS_ACL)
+inline __device__ complex64 atomicAdd(complex64* addr, complex64 v) {
+    // ::atomicAdd forces the global float overload (our complex64 atomicAdd would
+    // otherwise hide it for unqualified lookup inside namespace jittor).
+    return complex64(::atomicAdd(&addr->real, v.real), ::atomicAdd(&addr->imag, v.imag));
+}
+#endif
+
 }

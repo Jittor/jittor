@@ -56,6 +56,20 @@ class TestComplex64Native(unittest.TestCase):
                                            err_msg=f"{nm} {dev}")
         both_devices(body)
 
+    def test_reduce_sum_and_abs(self):
+        rng = np.random.RandomState(2)
+        a = (rng.randn(6) + 1j * rng.randn(6)).astype("complex64")
+        def body(dev):
+            va = jt.array(a)
+            # sum-reduce (complex -> complex)
+            np.testing.assert_allclose(np.asarray(va.sum().numpy()).reshape(-1)[0], a.sum(),
+                                       atol=1e-4, rtol=1e-4, err_msg=f"sum {dev}")
+            # abs (complex -> float32 magnitude)
+            r = np.asarray(va.abs().numpy())
+            self.assertEqual(r.dtype.name, "float32", f"abs dtype {dev}")
+            np.testing.assert_allclose(r, np.abs(a), atol=1e-4, rtol=1e-4, err_msg=f"abs {dev}")
+        both_devices(body)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
