@@ -35,6 +35,7 @@ struct ComplexOpType : OpByType {
             {"negative", "(-($2))"},
             {"abs", "jittor::jt_cabs($2)"},  // |z| -> float (Tz inferred float32); qualified
                                              // name so codegen doesn't rename it op0_jt_cabs
+            {"conj", "jittor::jt_conj($2)"}, // conj(a+bi) = a-bi; qualified for same reason
             {"cast", "(($1)($2))"},
             {"equal", "(($2)==($4))"},
             {"not_equal", "(($2)!=($4))"},

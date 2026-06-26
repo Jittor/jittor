@@ -18,6 +18,7 @@ unordered_map<string,string> common_op_type_cuda_map = {
     {"bitwise_not", "(~($2))"},
     {"negative", "(-($2))"},
     {"abs", "::abs($2)"},
+    {"conj", "($2)"},   // conj(real) is identity (torch parity)
     {"log", "::logf(($1)($2))"},
     {"exp", "::expf(($1)($2))"},
     {"sqrt", "::sqrtf(($1)($2))"},
@@ -83,6 +84,7 @@ struct CommonOpType : OpByType {
             {"bitwise_not", "(~($2))"},
             {"negative", "(-($2))"},
             {"abs", "std::abs($2)"},
+            {"conj", "($2)"},   // conj(real) is identity (torch parity)
             {"log", "std::log(($1)($2))"},
             {"exp", "std::exp(($1)($2))"},
             {"sqrt", "std::sqrt(($1)($2))"},

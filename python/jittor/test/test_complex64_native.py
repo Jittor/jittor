@@ -56,6 +56,30 @@ class TestComplex64Native(unittest.TestCase):
                                            err_msg=f"{nm} {dev}")
         both_devices(body)
 
+    def test_conj(self):
+        rng = np.random.RandomState(3)
+        a = (rng.randn(6) + 1j * rng.randn(6)).astype("complex64")
+        rf = rng.randn(5).astype("float32")
+        def body(dev):
+            # complex conj: negate imaginary part, stays complex64
+            cj = jt.array(a).conj()
+            self.assertEqual(str(cj.dtype), "complex64", f"conj dtype {dev}")
+            np.testing.assert_allclose(np.asarray(cj.numpy()), a.conj(),
+                                       atol=1e-6, err_msg=f"complex conj {dev}")
+            # real conj is identity (torch parity), stays float32
+            rc = jt.array(rf).conj()
+            self.assertEqual(str(rc.dtype), "float32", f"real conj dtype {dev}")
+            np.testing.assert_array_equal(np.asarray(rc.numpy()), rf,
+                                          err_msg=f"real conj identity {dev}")
+            # real conj is differentiable (grad of identity is ones)
+            x = jt.array(rf)
+            g = jt.grad(x.conj().sum(), x)
+            if isinstance(g, (list, tuple)):  # jt.grad returns a list of grads
+                g = g[0]
+            np.testing.assert_array_equal(np.asarray(g.numpy()), np.ones_like(rf),
+                                          err_msg=f"real conj grad {dev}")
+        both_devices(body)
+
     def test_reduce_sum_and_abs(self):
         rng = np.random.RandomState(2)
         a = (rng.randn(6) + 1j * rng.randn(6)).astype("complex64")

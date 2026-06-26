@@ -855,6 +855,22 @@ static unordered_set<string> unary_ops = {
         jt.Var([ 0.00245671 -0.24068035  0.8805613   0.5242405 ], dtype=float32)
      */
     "erfinv",
+
+    /**
+    Returns the complex conjugate of each element. For complex64 inputs this
+    negates the imaginary part (a+bi -> a-bi); for real inputs it is a no-op
+    (identity), matching torch.conj / Tensor.conj semantics.
+
+    * [in] x: the input jt.Var.
+
+    ----------------
+
+    Example-1::
+        >>> x = jt.array(np.array([1+2j, 3-4j], dtype="complex64"))
+        >>> x.conj()
+        jt.Var([1.-2.j 3.+4.j], dtype=complex64)
+     */
+    "conj",
 };
 
 UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
@@ -892,6 +908,10 @@ VarPtr UnaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     if (!x->is_float()) return nullptr;
     if (ns == ns_cast) return make_unary(dout, x->dtype());
     if (ns == ns_negative) return make_unary(dout, ns);
+    // conj is self-adjoint: d/dx conj(x) carries dout back through conj. For real
+    // x (is_float, reaches here) conj is identity so this is just dout; complex x
+    // is filtered out above by the !is_float guard (complex grad deferred).
+    if (ns == ns_conj) return make_unary(dout, ns_conj);
     if (ns == ns_abs) {
         auto neg = make_unary(dout, ns_negative);
         auto zeros = make_number(0, x);

@@ -57,6 +57,7 @@ constexpr int ns_max_len = 16;
 \
     m(abs) \
     m(negative) \
+    m(conj) \
     m(logical_not) \
     m(bitwise_not) \
     m(log) \

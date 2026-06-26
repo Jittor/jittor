@@ -40,6 +40,7 @@ struct FP16OpType : OpByType {
             {"bitwise_not", "(~($2))"},
             {"negative", "(-($2))"},
             {"abs", "::__habs($2)"},
+            {"conj", "($2)"},   // conj(real) is identity (torch parity)
             {"log", "::hlog(($1)($2))"},
             {"exp", "::hexp(($1)($2))"},
             {"sqrt", "::hsqrt(($1)($2))"},
@@ -81,6 +82,7 @@ struct FP16OpType : OpByType {
             {"bitwise_not", "(~($2))"},
             {"negative", "(-($2))"},
             {"abs", "std::abs($2)"},
+            {"conj", "($2)"},   // conj(real) is identity (torch parity)
             {"log", "std::log(($1)($2))"},
             {"exp", "std::exp(($1)($2))"},
             {"sqrt", "std::sqrt(($1)($2))"},
