@@ -368,6 +368,58 @@ class _Tracer:
         vb = b.var if isinstance(b, _Tensor) else _to_value(b)
         return _Tensor(jt.ternary(vc, va, vb))
 
+    # -- whole-block reductions (1-D only; see contract note below) --------- #
+    #
+    # Why this is *safe* despite the executor running the body only once over
+    # the whole Var:  the only kernels this executor can faithfully run are 1-D
+    # elementwise ones where the loaded tensor IS the entire input Var.  For
+    # such a tensor a reduction "over the block axis" (the only axis there is)
+    # IS the reduction over the whole array, which jittor computes exactly, and
+    # the broadcast back in ``x - tl.max(x)`` / ``num / tl.sum(num)`` is the
+    # natural jittor broadcast.  This makes a *single-row / single-program*
+    # fused softmax (load row, sub rowmax, exp, div rowsum) numerically exact.
+    #
+    # The dangerous case is a *multi-row* (2-D) softmax (one program per row):
+    # there the executor collapses the per-row pointer to the WHOLE 2-D Var, so
+    # a block-axis reduction would silently reduce the wrong elements.  We keep
+    # that case LOUD by refusing any reduction whose operand Var is not 1-D —
+    # the 2-D kernel therefore still raises TracingError (clear error beats
+    # silent wrong) instead of returning garbage.
+    def _reduce(self, name, jt_fn, x, axis=None, **kwargs):
+        import jittor as jt
+        v = x.var if isinstance(x, _Tensor) else _to_value(x)
+        if not isinstance(v, jt.Var):
+            raise TracingError(
+                "tl.{0} in kernel {1!r} received a non-tensor operand; the "
+                "naive jittor executor only reduces loaded tensors.".format(
+                    name, self.kernel_name))
+        if v.ndim != 1:
+            raise TracingError(
+                "tl.{0} in kernel {1!r} reduces a {2}-D block, but the jittor "
+                "naive executor can only faithfully reduce a 1-D whole-array "
+                "block (a single-row / single-program kernel). A multi-row "
+                "(per-program-row) reduction would silently reduce the wrong "
+                "elements under the whole-array model, so it is refused. Use "
+                "the pure-pytorch path.".format(name, self.kernel_name, v.ndim))
+        # 1-D operand: the block axis is the whole array; reduce all of it.
+        return _Tensor(jt_fn(v))
+
+    def sum(self, x, axis=None, **kwargs):
+        import jittor as jt
+        return self._reduce("sum", jt.sum, x, axis=axis, **kwargs)
+
+    def max(self, x, axis=None, **kwargs):
+        import jittor as jt
+        return self._reduce("max", jt.max, x, axis=axis, **kwargs)
+
+    def min(self, x, axis=None, **kwargs):
+        import jittor as jt
+        return self._reduce("min", jt.min, x, axis=axis, **kwargs)
+
+    def prod(self, x, axis=None, **kwargs):
+        import jittor as jt
+        return self._reduce("prod", jt.prod, x, axis=axis, **kwargs)
+
 
 # --------------------------------------------------------------------------- #
 #  jittor lowerings for the supported tl.* math namespace
