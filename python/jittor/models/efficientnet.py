@@ -14,6 +14,7 @@
 
 import math
 import copy
+from functools import partial
 
 import jittor as jt
 from jittor import nn
@@ -21,6 +22,7 @@ from jittor import nn
 __all__ = [
     'EfficientNet',
     'efficientnet_b0', 'efficientnet_b1', 'efficientnet_b2', 'efficientnet_b3',
+    'efficientnet_b4', 'efficientnet_b5', 'efficientnet_b6', 'efficientnet_b7',
 ]
 
 
@@ -300,11 +302,17 @@ def _efficientnet_conf(arch, width_mult, depth_mult):
 
 
 # (width_mult, depth_mult, default classifier dropout) per torchvision.
+# b0-b7 all share the same 7 MBConv stages (see ``_efficientnet_conf``); only the
+# width/depth multipliers and the classifier dropout differ.
 _EFFICIENTNET_PARAMS = {
     "efficientnet_b0": (1.0, 1.0, 0.2),
     "efficientnet_b1": (1.0, 1.1, 0.2),
     "efficientnet_b2": (1.1, 1.2, 0.3),
     "efficientnet_b3": (1.2, 1.4, 0.3),
+    "efficientnet_b4": (1.4, 1.8, 0.4),
+    "efficientnet_b5": (1.6, 2.2, 0.4),
+    "efficientnet_b6": (1.8, 2.6, 0.5),
+    "efficientnet_b7": (2.0, 3.1, 0.5),
 }
 
 
@@ -313,6 +321,13 @@ def _efficientnet(arch, **kwargs):
     inverted_residual_setting = _efficientnet_conf(arch, width_mult, depth_mult)
     # allow caller to override dropout via kwargs, else use the per-arch default
     kwargs.setdefault("dropout", dropout)
+    # torchvision uses BN(eps=1e-3, momentum=0.01) for b5/b6/b7 by default; this
+    # only affects the BatchNorm hyper-parameters, never the parameter count. We
+    # mirror it so behaviour matches torchvision out of the box (caller may
+    # override via norm_layer=...).
+    if arch in ("efficientnet_b5", "efficientnet_b6", "efficientnet_b7"):
+        kwargs.setdefault(
+            "norm_layer", partial(nn.BatchNorm, eps=1e-3, momentum=0.01))
     model = EfficientNet(inverted_residual_setting, **kwargs)
     return model
 
@@ -367,3 +382,61 @@ def efficientnet_b3(pretrained=False, **kwargs):
     if pretrained:
         raise NotImplementedError("pretrained weights not yet on jittorhub")
     return _efficientnet("efficientnet_b3", **kwargs)
+
+
+def efficientnet_b4(pretrained=False, **kwargs):
+    """EfficientNet-B4 model architecture (native resolution 380x380).
+
+    Args:
+
+    * pretrained: If True, load pretrained weights. Default: False.
+    * num_classes: Number of classes. Default: 1000.
+    """
+    if pretrained:
+        raise NotImplementedError("pretrained weights not yet on jittorhub")
+    return _efficientnet("efficientnet_b4", **kwargs)
+
+
+def efficientnet_b5(pretrained=False, **kwargs):
+    """EfficientNet-B5 model architecture (native resolution 456x456).
+
+    Uses ``BatchNorm(eps=1e-3, momentum=0.01)`` by default, matching torchvision.
+
+    Args:
+
+    * pretrained: If True, load pretrained weights. Default: False.
+    * num_classes: Number of classes. Default: 1000.
+    """
+    if pretrained:
+        raise NotImplementedError("pretrained weights not yet on jittorhub")
+    return _efficientnet("efficientnet_b5", **kwargs)
+
+
+def efficientnet_b6(pretrained=False, **kwargs):
+    """EfficientNet-B6 model architecture (native resolution 528x528).
+
+    Uses ``BatchNorm(eps=1e-3, momentum=0.01)`` by default, matching torchvision.
+
+    Args:
+
+    * pretrained: If True, load pretrained weights. Default: False.
+    * num_classes: Number of classes. Default: 1000.
+    """
+    if pretrained:
+        raise NotImplementedError("pretrained weights not yet on jittorhub")
+    return _efficientnet("efficientnet_b6", **kwargs)
+
+
+def efficientnet_b7(pretrained=False, **kwargs):
+    """EfficientNet-B7 model architecture (native resolution 600x600).
+
+    Uses ``BatchNorm(eps=1e-3, momentum=0.01)`` by default, matching torchvision.
+
+    Args:
+
+    * pretrained: If True, load pretrained weights. Default: False.
+    * num_classes: Number of classes. Default: 1000.
+    """
+    if pretrained:
+        raise NotImplementedError("pretrained weights not yet on jittorhub")
+    return _efficientnet("efficientnet_b7", **kwargs)
