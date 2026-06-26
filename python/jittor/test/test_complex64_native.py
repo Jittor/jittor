@@ -56,6 +56,30 @@ class TestComplex64Native(unittest.TestCase):
                                            err_msg=f"{nm} {dev}")
         both_devices(body)
 
+    def test_matmul(self):
+        # complex matmul comes "for free": jt.matmul lowers to elementwise multiply +
+        # sum-reduce, both of which the native complex64 path implements. Lock it.
+        rng = np.random.RandomState(1)
+        A = (rng.randn(3, 4) + 1j * rng.randn(3, 4)).astype("complex64")
+        B = (rng.randn(4, 5) + 1j * rng.randn(4, 5)).astype("complex64")
+        ref = A @ B
+        # batched (bmm)
+        Ab = (rng.randn(2, 3, 4) + 1j * rng.randn(2, 3, 4)).astype("complex64")
+        Bb = (rng.randn(2, 4, 5) + 1j * rng.randn(2, 4, 5)).astype("complex64")
+        refb = Ab @ Bb
+        def body(dev):
+            # 2-D matmul works on both devices (lowers to multiply + sum-reduce).
+            r = np.asarray(jt.matmul(jt.array(A), jt.array(B)).numpy())
+            self.assertEqual(r.dtype.name, "complex64", f"matmul dtype {dev}")
+            np.testing.assert_allclose(r, ref, atol=1e-4, rtol=1e-4, err_msg=f"matmul {dev}")
+            # Batched matmul: CPU takes the reindex path (works); CUDA routes to
+            # cublas_batched_matmul which only supports float dtypes, so complex bmm on
+            # CUDA fails loudly (known gap — needs a complex->reindex fallback in nn.bmm).
+            if dev == "cpu":
+                rb = np.asarray(jt.matmul(jt.array(Ab), jt.array(Bb)).numpy())
+                np.testing.assert_allclose(rb, refb, atol=1e-4, rtol=1e-4, err_msg=f"bmm {dev}")
+        both_devices(body)
+
     def test_conj(self):
         rng = np.random.RandomState(3)
         a = (rng.randn(6) + 1j * rng.randn(6)).astype("complex64")
