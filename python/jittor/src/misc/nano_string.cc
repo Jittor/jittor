@@ -60,6 +60,7 @@ static unordered_set<string> is_bool = {
 static unordered_set<string> unary_ops = {
     "abs",
     "negative",
+    "conj",
     "logical_not",
     "bitwise_not",
     "log",
