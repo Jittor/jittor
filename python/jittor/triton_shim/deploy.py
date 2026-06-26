@@ -103,8 +103,13 @@ def deploy(target=None, force=False):
     if _is_real_triton(target) and not force:
         raise RuntimeError(
             "refusing to overwrite what looks like a real triton install in "
-            "{0}/triton (no __jittor_triton_shim__ marker). Pass --force to "
-            "override, or `pip uninstall triton` first.".format(target)
+            "{0}/triton (no __jittor_triton_shim__ marker). You almost certainly "
+            "do NOT want to deploy the shim over a real triton: jittor already "
+            "*bridges* a real triton automatically — `import jittor.triton_shim` "
+            "patches it so real @triton.jit kernels run on jittor Vars (see the "
+            "jittor.triton_shim docstring / backend.py). Deploy is only for envs "
+            "WITHOUT triton. Pass --force to override, or `pip uninstall triton` "
+            "first.".format(target)
         )
     done = []
     for rel, body in _plan(target):
