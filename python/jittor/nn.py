@@ -4097,7 +4097,16 @@ def _fft2(x, inverse=False):
     return y
 
 class ComplexNumber:
-    ''' Applys Complex number class.
+    ''' Complex number helper (real/imag float pair).
+
+        .. deprecated::
+            Prefer the native ``complex64`` dtype. ``jt.array(complex_ndarray)``,
+            ``torch.complex(re, im)``, ``torch.view_as_complex``, ``torch.polar`` and the
+            ``torch.fft.*`` / ``jt.linalg`` complex paths now all produce and consume the native
+            complex64 Var directly (Phase 6 ComplexNumber-deprecation; see
+            agent/skills/jittor-dev-context/design-complex-dtype.md). ComplexNumber is kept only
+            as an INTERNAL bridge substrate for the complex linalg kernels and is no longer
+            returned by any public jittor / torch API.
 
         It's saved as jt.stack(real, imag, dim=-1)
 
