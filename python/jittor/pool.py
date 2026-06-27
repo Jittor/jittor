@@ -41,7 +41,14 @@ class Pool(Module):
 
     def execute(self, x):
         N,C,H,W = x.shape
-        if H <= self.kernel_size[0] or W <= self.kernel_size[1]:
+        # torch only requires the *padded* input to be at least the kernel size
+        # (so the output has size >= 1). The original guard ignored padding, which
+        # wrongly rejected e.g. SPPF's MaxPool2d(kernel=13, padding=6) on an 8x8
+        # feature map (padded 20x20, valid in torch). Make the guard padding-aware;
+        # for padding=0 this only additionally allows the H==kernel boundary, which
+        # torch accepts (output 1), so no previously-passing case regresses.
+        if (H + 2*self.padding[0] < self.kernel_size[0]
+                or W + 2*self.padding[1] < self.kernel_size[1]):
             raise RuntimeError(f"size of var should be larger than kernel_size")
         if self.ceil_mode == False:
             h = (H+self.padding[0]*2-self.kernel_size[0])//self.stride[0]+1
@@ -410,9 +417,10 @@ class AdaptiveAvgPool2d(Module):
         if isinstance(self.output_size, int):
             oh = self.output_size
             ow = self.output_size
-        elif isinstance(self.output_size, tuple) or isinstance(self.output_size, list):
-            oh = x.shape[2] if self.output_size[0] is None else self.output_size[0]
-            ow = x.shape[3] if self.output_size[1] is None else self.output_size[1]
+        elif hasattr(self.output_size, "__len__") and not isinstance(self.output_size, str):
+            # tuple / list / jittor NanoVector (e.g. x.shape[2:] from a semantic head)
+            oh = x.shape[2] if self.output_size[0] is None else int(self.output_size[0])
+            ow = x.shape[3] if self.output_size[1] is None else int(self.output_size[1])
         else:
             raise TypeError(f"AdaptiveAvgPool2d only support int, tuple or list input. Not support {type(self.output_size)} yet.")
         if oh == 1 and ow == 1:
@@ -518,9 +526,10 @@ class AdaptiveMaxPool2d(Module):
         if isinstance(self.output_size, int):
             oh = self.output_size
             ow = self.output_size
-        elif isinstance(self.output_size, tuple) or isinstance(self.output_size, list):
-            oh = x.shape[2] if self.output_size[0] is None else self.output_size[0]
-            ow = x.shape[3] if self.output_size[1] is None else self.output_size[1]
+        elif hasattr(self.output_size, "__len__") and not isinstance(self.output_size, str):
+            # tuple / list / jittor NanoVector (e.g. x.shape[2:] from a semantic head)
+            oh = x.shape[2] if self.output_size[0] is None else int(self.output_size[0])
+            ow = x.shape[3] if self.output_size[1] is None else int(self.output_size[1])
         else:
             raise TypeError(f"AdaptiveMaxPool2d only support int, tuple or list input. Not support {type(self.output_size)} yet.")
         if oh == 1 and ow == 1:
@@ -643,7 +652,8 @@ class MaxPool3d(Module):
     def execute(self, x):
         return self._layer(x)
 
-def max_pool2d(x, kernel_size, stride=None, padding=0, dilation=None, return_indices=None, ceil_mode=False):
+def max_pool2d(x=None, kernel_size=None, stride=None, padding=0, dilation=None, return_indices=None, ceil_mode=False, input=None):
+    if x is None: x = input          # torch uses the keyword `input` (mmdet DropBlock)
     return MaxPool2d(kernel_size, stride, padding, dilation, return_indices, ceil_mode)(x)
 
 

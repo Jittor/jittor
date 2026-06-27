@@ -561,9 +561,10 @@ _quadruple = _ntuple(4)
 
 
 def unique(
-    input: jt.Var, 
-    return_inverse: bool=False, 
-    return_counts: bool=False, 
+    input: jt.Var,
+    sorted: bool=True,          # torch kwarg; jittor's unique is always sorted
+    return_inverse: bool=False,
+    return_counts: bool=False,
     dim: int=None):
 
     r'''
@@ -594,6 +595,39 @@ def unique(
         >>> jittor.unique(jittor.array([[1, 3], [1, 3]]), dim=0)
             jt.Var([[1 3]], dtype=int32)
     '''
+
+    # jittor's CUDA unique kernel (cub::DeviceRadixSort::SortPairs +
+    # thrust::unique) only sorts correctly for 32-bit int keys; for int64 /
+    # float / int8 etc. it silently returns wrong indices (e.g. int64 [0,1,...]
+    # -> [0,0]), which surfaced as a CUDA illegal-address downstream in
+    # Sparse R-CNN's `rois[:,0].long().unique()`. Route the broken dtypes around
+    # it: integer keys that fit int32 are computed via the (correct) int32 CUDA
+    # path; anything else falls back to the (correct) CPU implementation. int32
+    # itself keeps the native fast CUDA path unchanged.
+    if jt.flags.use_cuda and str(input.dtype) != "int32":
+        dt = str(input.dtype)
+        is_int = ("int" in dt)
+        if is_int:
+            # safe to use the int32 CUDA path iff every value fits int32
+            try:
+                fits = bool(((input <= 2147483647).logical_and(input >= -2147483648)).all())
+            except Exception:
+                fits = False
+            if fits:
+                res = unique(input.int32(), sorted=sorted,
+                             return_inverse=return_inverse,
+                             return_counts=return_counts, dim=dim)
+                if isinstance(res, tuple):
+                    return (res[0].cast(dt),) + tuple(res[1:])
+                return res.cast(dt)
+        # float keys, or ints out of int32 range: compute on CPU, move back.
+        with jt.flag_scope(use_cuda=0):
+            res = unique(input.clone(), sorted=sorted,
+                         return_inverse=return_inverse,
+                         return_counts=return_counts, dim=dim)
+        if isinstance(res, tuple):
+            return tuple(r for r in res)
+        return res
 
     temp_shape = None
     if dim == None:
@@ -1022,7 +1056,14 @@ def kthvalue(input, k, dim=None, keepdim=False, keepdims=False):
         dim = -1
     if dim<0:
         dim+=input.ndim
-    index,values = jt.argsort(input,dim=dim)
+    # native jt.argsort returns (index, values); the torch_compat layer overrides
+    # the module-level argsort to torch's indices-only. Handle both.
+    _srt = jt.argsort(input, dim=dim)
+    if isinstance(_srt, tuple):
+        index, values = _srt
+    else:
+        index = _srt
+        values = jt.gather(input, dim, index)
     dims = (slice(None),)*dim+(slice(k-1,k),)
     indices = index[dims]
     values = values[dims]
@@ -1145,13 +1186,17 @@ def _cummax_min(x, dim, is_max):
     sval = jt.array(sentinel).cast(xt.dtype).broadcast(tgt)
     masked = jt.ternary(mask, xe, sval)
     # NB: native jt.argmax returns (indices, values); the torch_compat layer overrides
-    # it to indices-only. Handle both so cummax works regardless of install state.
+    # it to indices-only, and overrides Var.max/min to return a (values, indices)
+    # namedtuple. Handle both so cummax works regardless of install state.
     def _argidx(am):
         return am[0] if isinstance(am, (tuple, list)) else am
+    def _vals(mm):
+        return mm.values if hasattr(mm, "values") else (
+            mm[0] if isinstance(mm, (tuple, list)) else mm)
     if is_max:
-        vals = masked.max(dim=-1); idxs = _argidx(jt.argmax(masked, -1))
+        vals = _vals(masked.max(dim=-1)); idxs = _argidx(jt.argmax(masked, -1))
     else:
-        vals = masked.min(dim=-1); idxs = _argidx(jt.argmin(masked, -1))
+        vals = _vals(masked.min(dim=-1)); idxs = _argidx(jt.argmin(masked, -1))
     inv = [0] * x.ndim
     for newpos, oldpos in enumerate(perm):
         inv[oldpos] = newpos

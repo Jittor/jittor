@@ -399,9 +399,16 @@ def array(data, dtype=None):
         jt.Var([1], dtype=int32)
         >>> jt.array([0, 2.71, 3.14]) 
         jt.Var([0.   2.71 3.14], dtype=float32)
-        >>> jt.array(np.arange(4, dtype=np.uint8))  
+        >>> jt.array(np.arange(4, dtype=np.uint8))
         jt.Var([0 1 2 3], dtype=uint8)
     '''
+    # torch accepts a range/generator in tensor(...); jittor's core array op
+    # rejects them -> materialise to a list first (mmdet pisa_loss: jt.array(range(...))).
+    import types as _types_arr
+    if isinstance(data, (range, _types_arr.GeneratorType, map, filter, zip)):
+        data = list(data)
+    elif isinstance(data, core.NanoVector):     # e.g. jt.array(some_var.shape)
+        data = list(data)                       # NB: `int` is shadowed by the dtype here
     if isinstance(data, core.Var):
         if dtype is None:
             ret = data.clone()
@@ -764,8 +771,11 @@ Var.unsqueeze = unsqueeze
 def squeeze(x, dim=None):
     shape = list(x.shape)
     if dim is None:
-        new_shape = [s for s in shape if s > 1]
-        return x.reshape(new_shape)
+        # squeeze removes ONLY size-1 dims (size-0 dims must be kept, else an empty
+        # tensor like [0,1] reshapes to the wrong size). jittor has no 0-dim tensors,
+        # so an all-ones shape collapses to [1] (mmdet: nonzero(...).squeeze()).
+        new_shape = [s for s in shape if s != 1]
+        return x.reshape(new_shape if new_shape else [1])
     else:
         if dim < 0: dim += len(shape)
         assert dim < len(shape) and dim >= 0
@@ -773,7 +783,8 @@ def squeeze(x, dim=None):
         # not an error (canine's _downsample_attention_mask relies on this).
         if shape[dim] != 1:
             return x
-        return x.reshape(shape[:dim] + shape[dim+1:])
+        new_shape = shape[:dim] + shape[dim+1:]
+        return x.reshape(new_shape if new_shape else [1])
 Var.squeeze = squeeze
 
 def clamp(x, min_v=None, max_v=None):
@@ -2293,8 +2304,14 @@ Var.half = Var.float16
 def is_var(v):
     return isinstance(v, Var)
 
-# __array__ interface is used for np.array(jt_var)
-Var.__array__ = Var.numpy
+# __array__ interface is used for np.array(jt_var). numpy (and scipy, e.g. DETR's
+# linear_sum_assignment) call __array__(dtype=None[, copy=None]); accept and apply.
+def _var__array__(self, dtype=None, copy=None):
+    a = self.numpy()
+    if dtype is not None:
+        a = a.astype(dtype)
+    return a
+Var.__array__ = _var__array__
 Var.__array_priority__ = 2000
 # __reduce__, __module__ is used for pickle.dump and pickle.load
 Var.__module__ = "jittor"

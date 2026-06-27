@@ -180,17 +180,56 @@ def _setitem_old(x, slices, value):
     return x
 
 # PATCH
+def _is_torch_0d(s):
+    # A Var that represents a torch 0-D scalar. jittor has no 0-D tensors, so a
+    # torch scalar is stored as a numel-1 1-D Var; we tag the ones produced by
+    # integer-indexing/iterating a 1-D tensor (the only torch op that yields a
+    # 0-D from a tensor) via `_torch_0d`. Used so that, when such a scalar is
+    # itself used as an index, the dimension is DROPPED -- matching torch, where
+    # `t[scalar]` drops a dim but `t[one_elem_1d_tensor]` (e.g. nonzero()) keeps
+    # it. Both look like [1] Vars in jittor, so provenance is the only signal.
+    return isinstance(s, jt.Var) and getattr(s, "_torch_0d", False)
+
+def _mark_0d(v):
+    try:
+        v._torch_0d = True
+    except Exception:
+        pass
+    return v
+
 def getitem(x, slices):
+    # torch treats a uint8 (byte) index Var as a boolean mask (legacy semantics
+    # still used by e.g. mask-rcnn-c4's bbox_feats[pos_inds], where pos_inds is a
+    # uint8 0/1 vector). jittor reads uint8 as element values -> wrong shape; route
+    # it through the bool-mask path instead. (int8 is *not* a valid torch index.)
+    if isinstance(slices, jt.Var) and slices.dtype == "uint8":
+        slices = slices != 0
     if isinstance(slices, jt.Var) and slices.dtype == "bool":
         return getitem(x, slices.where())
+    if isinstance(slices, range):                       # torch allows tensor[range(n)]
+        slices = jt.array(list(slices))
+    # torch: indexing a 1-D tensor by a single python int returns a 0-D scalar.
+    # jittor returns a [1] Var (no 0-D); tag it so a later use as an index drops
+    # the dim like torch (fixes centernet's heatmap[batch, label] -> [H,W]).
+    # (exclude bool, which is an int subclass but indexes with add-dim semantics.)
+    if (isinstance(slices, int) and not isinstance(slices, bool) and x.ndim == 1):
+        return _mark_0d(x.getitem(slices))
     if isinstance(slices, tuple):
         ss = []
         for s in slices:
-            if isinstance(s, jt.Var) and s.dtype == "bool":
+            if isinstance(s, jt.Var) and s.dtype == "uint8":   # torch byte mask
+                ss.extend((s != 0).where())
+            elif isinstance(s, jt.Var) and s.dtype == "bool":
                 ss.extend(s.where())
+            elif isinstance(s, range):                  # e.g. bbox[range(n), idx]
+                ss.append(jt.array(list(s)))
+            elif _is_torch_0d(s):                       # torch 0-D index -> drop dim
+                ss.append(int(s.item()))
             else:
                 ss.append(s)
         slices = tuple(ss)
+    elif _is_torch_0d(slices):
+        slices = int(slices.item())
     return x.getitem(slices)
 
 def setitem(x, slices, value):

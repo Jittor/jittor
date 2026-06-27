@@ -78,3 +78,40 @@ Validated end-to-end: real Qwen3-0.6B load + generate, and a full LlamaFactory
 Qwen3 LoRA SFT (loss decreases, grads flow, LR schedule applied, adapter saved
 and reloadable via `PeftModel.from_pretrained`). See
 `jittor/test/test_torch_compat.py` for regression coverage.
+
+## mmdetection / computer-vision ops
+
+The shim also covers the **torch operator surface used by mmdetection** (analysed
+against v3.3.0): `torch.*`, `torch.nn.*`, `torch.nn.functional.*` and `Tensor`
+methods. The vast majority were already supported by `torch_compat.py`; the
+detection-specific gaps that were filled:
+
+- **torch.\***: `mm`, `masked_select`, `split_with_sizes`, `nan_to_num_`,
+  `_shape_as_tensor`, and `sparse_coo_tensor` (+ `torch.sparse.sum` / `.to_dense()`,
+  a dense-backed hybrid-COO used by the free-anchor head).
+- **nn / F**: `nn.SyncBatchNorm` (+ `convert_sync_batchnorm`, a single-device
+  no-op), `F._Reduction.get_enum`, `F.adaptive_max_pool2d`, `F.relu_`,
+  `F.upsample_bilinear`.
+- **Tensor methods**: `.relu`, `.eq/.ne/.gt/.ge/.lt/.le`, `.clamp_min/.clamp_max`,
+  `.neg`, `.reciprocal`, `.bmm/.mm`, `.diff`, `.fliplr/.flipud`, `.fmod/.remainder`,
+  `.softplus`.
+- **import-time submodule paths** mmdet pulls layer internals from:
+  `torch.nn.modules.{utils,batchnorm,normalization,activation}` (e.g.
+  `from torch.nn.modules.utils import _pair`, `from torch.nn.modules.batchnorm
+  import _BatchNorm`), plus resolution stubs for the *modules that contain the
+  operators* (`torch.onnx.is_in_onnx_export`, `torch.multiprocessing`,
+  `torch._utils._flatten_dense_tensors`, `torch.hub`).
+
+See `jittor/test/test_mmdet_ops.py` for regression coverage (existence sweep over
+the full extracted surface + numeric/identity correctness checks, CPU and CUDA).
+
+### Out of scope: mmcv native ops (a SEPARATE package, not in this repo)
+
+mmdetection's heavy custom ops come from **`mmcv.ops`** — NMS / `batched_nms`,
+`RoIAlign` / `RoIPool`, `DeformConv` / `ModulatedDeformConv`, `(Modulated)DeformRoIPool`,
+`MaskedConv`, `CARAFE`, `CornerPool`, `MultiScaleDeformableAttention`,
+`point_sample`, `sigmoid_focal_loss`, … These are **not** torch operators (they are
+C++/CUDA kernels mmcv compiles against libtorch's ABI), so they are **intentionally
+NOT part of jittor**. The jittor-native reimplementations live in a separate
+adapter package, `mmcv_jittor` (`mmcv_compat.py` + `mmcv_ops_jt/`), kept outside
+this repo — call `mmcv_compat.install()` before `import mmdet`.

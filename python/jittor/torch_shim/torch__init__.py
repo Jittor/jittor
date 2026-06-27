@@ -274,6 +274,79 @@ _modules_pkg.Module = nn.Module
 _modules_pkg.module = _mod_module
 sys.modules["torch.nn.modules"] = _modules_pkg
 sys.modules["torch.nn.modules.module"] = _mod_module
+
+# nn.modules.{utils,batchnorm,normalization,activation}: torchvision-style code
+# (and mmdetection's backbones/necks) import layer internals and the _ntuple
+# helpers from these private submodule paths, e.g.
+#   from torch.nn.modules.utils import _pair
+#   from torch.nn.modules.batchnorm import _BatchNorm   (resnet/cspnext backbones)
+#   from torch.nn.modules.normalization import GroupNorm
+#   from torch.nn.modules.activation import SiLU
+# `from torch...import` always resolves via sys.modules["torch"] (this shim),
+# regardless of any `import jittor as torch` alias, so these must live here.
+# torch.nn IS jittor.nn, so populate each stub from the live jittor classes
+# (kept in sync) and register it both in sys.modules and as an attribute of the
+# modules package (brick_wrappers.py does `nn.modules.batchnorm.BatchNorm2d`).
+def _mk_nn_submod(name, **attrs):
+    m = types.ModuleType("torch.nn.modules." + name)
+    for k, v in attrs.items():
+        if v is not None:
+            setattr(m, k, v)
+    sys.modules["torch.nn.modules." + name] = m
+    setattr(_modules_pkg, name, m)
+    return m
+
+from jittor.misc import _single, _pair, _triple, _ntuple
+_mk_nn_submod("utils", _single=_single, _pair=_pair, _triple=_triple,
+              _ntuple=_ntuple, _quadruple=_ntuple(4))
+# _BatchNorm is the common base of jittor's BatchNorm{,1d,2d,3d}; isinstance
+# checks (mmengine/mmcv norm-freezing, mmdet's resnet) rely on it.
+_mk_nn_submod("batchnorm",
+              _BatchNorm=nn.BatchNorm, BatchNorm=nn.BatchNorm,
+              BatchNorm1d=getattr(nn, "BatchNorm1d", nn.BatchNorm),
+              BatchNorm2d=getattr(nn, "BatchNorm2d", nn.BatchNorm),
+              BatchNorm3d=getattr(nn, "BatchNorm3d", nn.BatchNorm),
+              SyncBatchNorm=getattr(nn, "SyncBatchNorm", nn.BatchNorm))
+_mk_nn_submod("normalization",
+              GroupNorm=getattr(nn, "GroupNorm", None),
+              LayerNorm=getattr(nn, "LayerNorm", None))
+_mk_nn_submod("activation",
+              ReLU=getattr(nn, "ReLU", None), SiLU=getattr(nn, "SiLU", None),
+              Sigmoid=getattr(nn, "Sigmoid", None), Tanh=getattr(nn, "Tanh", None),
+              GELU=getattr(nn, "GELU", None), LeakyReLU=getattr(nn, "LeakyReLU", None))
+# torch.nn.modules.{conv,pooling,instancenorm}: mmengine's parrots_wrapper does
+# `from torch.nn.modules.conv import _ConvNd, _ConvTransposeMixin` etc. to build
+# its norm/conv/pool type tuples (is_norm/is_conv detection, ConvModule). jittor's
+# layer classes are flat (no shared _XNd base), so expose each private base as an
+# ABC and REGISTER jittor's concrete classes as virtual subclasses -- then
+# isinstance(jittor_conv, _ConvNd) is True and `class X(_ConvNd)` still works.
+import abc as _abc
+def _abc_base(name, *concrete):
+    base = _abc.ABCMeta(name, (object,), {})
+    for c in concrete:
+        if c is not None:
+            base.register(c)
+    return base
+_ConvNd = _abc_base("_ConvNd", getattr(nn, "Conv", None), getattr(nn, "Conv1d", None),
+                    getattr(nn, "Conv3d", None))
+_ConvTransposeNd = _abc_base("_ConvTransposeNd", getattr(nn, "ConvTranspose", None),
+                             getattr(nn, "ConvTranspose1d", None))
+_mk_nn_submod("conv", _ConvNd=_ConvNd, _ConvTransposeMixin=_ConvTransposeNd,
+              _ConvTransposeNd=_ConvTransposeNd,
+              Conv2d=getattr(nn, "Conv2d", None), Conv1d=getattr(nn, "Conv1d", None),
+              Conv3d=getattr(nn, "Conv3d", None))
+_mk_nn_submod("pooling",
+              _MaxPoolNd=_abc_base("_MaxPoolNd", getattr(nn, "MaxPool2d", None),
+                                   getattr(nn, "Pool", None)),
+              _AvgPoolNd=_abc_base("_AvgPoolNd", getattr(nn, "AvgPool2d", None)),
+              _AdaptiveAvgPoolNd=_abc_base("_AdaptiveAvgPoolNd",
+                                           getattr(nn, "AdaptiveAvgPool2d", None)),
+              _AdaptiveMaxPoolNd=_abc_base("_AdaptiveMaxPoolNd",
+                                           getattr(nn, "AdaptiveMaxPool2d", None)))
+_mk_nn_submod("instancenorm",
+              _InstanceNorm=_abc_base("_InstanceNorm", getattr(nn, "InstanceNorm", None),
+                                      getattr(nn, "InstanceNorm2d", None)))
+
 # torch.nn IS jittor.nn here; attribute access torch.nn.modules reads from it,
 # so bind the submodules onto the jittor.nn module object directly.
 nn.modules = _modules_pkg
@@ -323,6 +396,19 @@ _parallel.distributed = _parallel_distrib
 # ---- cuda ----
 if hasattr(_jittor, "cuda"):
     sys.modules["torch.cuda"] = _jittor.cuda
+    # torch.cuda.<Typed>Tensor: mmengine builds Union[torch.LongTensor,
+    # torch.cuda.LongTensor] type aliases at import; mirror the typed tensor
+    # classes (defined by torch_compat on the jittor module) onto torch.cuda.
+    for _tn in ("FloatTensor", "DoubleTensor", "HalfTensor", "BFloat16Tensor",
+                "LongTensor", "IntTensor", "ShortTensor", "CharTensor",
+                "ByteTensor", "BoolTensor"):
+        _cls = getattr(_jittor, _tn, None)
+        if _cls is not None:
+            # DISTINCT subclass (not the same object): mmengine builds
+            # `Union[torch.LongTensor, torch.cuda.LongTensor]`; if both args are the
+            # identical class, typing collapses the Union to a bare class and
+            # `.__args__` (used by InstanceData.__getitem__) disappears.
+            setattr(_jittor.cuda, _tn, type(_tn, (_cls,), {}))
 
 # ---- backends (accelerate/transformers probe torch.backends.*) ----
 _backends = types.ModuleType("torch.backends")
@@ -400,6 +486,100 @@ for _sub in ("tensor", "fsdp", "device_mesh", "_composable", "checkpoint", "algo
 dist.tensor.DTensor = type("DTensor", (), {})
 dist.tensor.Replicate = type("Replicate", (), {})
 dist.tensor.Shard = type("Shard", (), {})
+
+# ---- mmdetection import/runtime resolution stubs (not operators, but the modules
+#      that *contain* the operators import these at load/inference time) ----
+# torch.onnx.is_in_onnx_export(): guarded in many mmdet inference paths
+# (bbox_nms, fcn_mask_head, bbox/transforms, corner_head). Always False here.
+_onnx = types.ModuleType("torch.onnx")
+_onnx.is_in_onnx_export = lambda: False
+def _onnx_export(*a, **k):
+    raise NotImplementedError("ONNX export is not supported on the jittor torch-shim")
+_onnx.export = _onnx_export
+_onnx.OperatorExportTypes = type("OperatorExportTypes", (),
+                                 {"ONNX": 0, "ONNX_ATEN": 1, "ONNX_ATEN_FALLBACK": 2})
+sys.modules["torch.onnx"] = _onnx
+globals()["onnx"] = _onnx
+
+# torch.multiprocessing: mmdet's setup_env uses get/set_start_method; back it with
+# the stdlib module plus the torch-only sharing-strategy no-ops.
+_torch_mp = types.ModuleType("torch.multiprocessing")
+import multiprocessing as _mp_std
+for _k in dir(_mp_std):
+    if not _k.startswith("__"):
+        setattr(_torch_mp, _k, getattr(_mp_std, _k))
+_torch_mp.set_sharing_strategy = lambda *a, **k: None
+_torch_mp.get_sharing_strategy = lambda *a, **k: "file_system"
+_torch_mp.get_all_sharing_strategies = lambda: {"file_system", "file_descriptor"}
+sys.modules["torch.multiprocessing"] = _torch_mp
+globals()["multiprocessing"] = _torch_mp
+
+# torch._utils flatten helpers: mmdet's dist_utils imports these for bucketed
+# all-reduce (only exercised under real DDP; here they just need to be correct).
+_tutils = types.ModuleType("torch._utils")
+def _flatten_dense_tensors(tensors):
+    tensors = list(tensors)
+    if len(tensors) == 1:
+        return tensors[0].reshape(-1).clone()
+    return _jittor.concat([t.reshape(-1) for t in tensors])
+def _unflatten_dense_tensors(flat, tensors):
+    outputs, offset = [], 0
+    for t in tensors:
+        n = 1
+        for s in t.shape:
+            n *= int(s)
+        outputs.append(flat[offset:offset + n].reshape(t.shape))
+        offset += n
+    return outputs
+def _take_tensors(tensors, size_limit):
+    buckets = {}
+    for t in tensors:
+        key = str(t.dtype)
+        b = buckets.setdefault(key, [[], 0])
+        n = 1
+        for s in t.shape:
+            n *= int(s)
+        b[0].append(t); b[1] += n * 4
+        if b[1] >= size_limit:
+            yield b[0]; buckets[key] = [[], 0]
+    for b in buckets.values():
+        if b[0]:
+            yield b[0]
+_tutils._flatten_dense_tensors = _flatten_dense_tensors
+_tutils._unflatten_dense_tensors = _unflatten_dense_tensors
+_tutils._take_tensors = _take_tensors
+sys.modules["torch._utils"] = _tutils
+globals()["_utils"] = _tutils
+
+# torch.hub: mmdet downloads checkpoints/test assets lazily inside functions.
+_hub = types.ModuleType("torch.hub")
+def _download_url_to_file(url, dst, hash_prefix=None, progress=True):
+    import urllib.request
+    urllib.request.urlretrieve(url, dst)
+_hub.download_url_to_file = _download_url_to_file
+def _load_state_dict_from_url(*a, **k):
+    raise NotImplementedError("torch.hub.load_state_dict_from_url is not supported; "
+                              "load the checkpoint via jittor instead")
+_hub.load_state_dict_from_url = _load_state_dict_from_url
+import os as _os_hub
+_hub.get_dir = lambda: _os_hub.path.expanduser("~/.cache/torch/hub")
+import re as _re_hub
+_hub.HASH_REGEX = _re_hub.compile(r'-([a-f0-9]*)\.')   # timm imports this from torch.hub
+_hub.tqdm = None
+import urllib.parse as _up_hub, urllib.request as _ur_hub
+_hub.urlparse = _up_hub.urlparse                        # timm imports these from torch.hub
+_hub.urlopen = _ur_hub.urlopen
+_hub.Request = _ur_hub.Request
+_hub._get_torch_home = _hub.get_dir
+sys.modules["torch.hub"] = _hub
+globals()["hub"] = _hub
+
+# torch.sparse: attribute access (torch.sparse.sum / torch.sparse_coo_tensor) is
+# what mmdet's free_anchor head uses; also register it so `import torch.sparse`
+# resolves. jittor.sparse gains `.sum` from torch_compat at `import jittor`.
+import jittor.sparse as _jt_sparse_mod
+sys.modules["torch.sparse"] = _jt_sparse_mod
+globals()["sparse"] = _jt_sparse_mod
 
 # ---- optim ----
 import jittor.optim as _optim
@@ -649,6 +829,25 @@ try:
     _distm.DistributedSampler = _Sampler
     sys.modules["torch.utils.data.distributed"] = _distm
     _data.distributed = _distm
+    # submodule paths mmengine imports from, e.g.
+    # `from torch.utils.data.dataset import ConcatDataset`.
+    _ds_mod = types.ModuleType("torch.utils.data.dataset")
+    for _n in ("Dataset", "IterableDataset", "TensorDataset", "ConcatDataset", "Subset"):
+        setattr(_ds_mod, _n, getattr(_data, _n))
+    sys.modules["torch.utils.data.dataset"] = _ds_mod
+    _data.dataset = _ds_mod
+    _smp_mod = types.ModuleType("torch.utils.data.sampler")
+    for _n in ("Sampler", "SequentialSampler", "RandomSampler",
+               "SubsetRandomSampler", "BatchSampler"):
+        setattr(_smp_mod, _n, getattr(_data, _n))
+    sys.modules["torch.utils.data.sampler"] = _smp_mod
+    _data.sampler = _smp_mod
+    _dl_mod = types.ModuleType("torch.utils.data.dataloader")
+    _dl_mod.DataLoader = _data.DataLoader
+    _dl_mod.default_collate = _data.default_collate
+    _dl_mod._DatasetKind = type("_DatasetKind", (), {"Iterable": 0, "Map": 1})
+    sys.modules["torch.utils.data.dataloader"] = _dl_mod
+    _data.dataloader = _dl_mod
 except Exception:
     pass
 
@@ -782,10 +981,131 @@ _autograd.no_grad = _jittor.no_grad
 _autograd.enable_grad = _jittor.enable_grad
 sys.modules["torch.autograd"] = _autograd
 globals()["autograd"] = _autograd
+# torch.autograd.function: mmcv's custom ops do
+# `from torch.autograd.function import Function, once_differentiable`.
+# once_differentiable just marks a backward as non-double-differentiable -> passthrough.
+_autograd_fn = types.ModuleType("torch.autograd.function")
+_autograd_fn.Function = _autograd.Function
+_autograd_fn.once_differentiable = lambda fn: fn
+_autograd_fn.FunctionCtx = type("FunctionCtx", (), {})
+_autograd.function = _autograd_fn
+_autograd.once_differentiable = _autograd_fn.once_differentiable
+sys.modules["torch.autograd.function"] = _autograd_fn
+
+# torch.optim.{sgd,adamw,adam}: mmengine registers optimizers by importing their
+# classes from these private module paths. Map to jittor's optimizers.
+import jittor.optim as _jopt
+def _mk_optim_submod(name, **attrs):
+    m = types.ModuleType("torch.optim." + name)
+    for k, v in attrs.items():
+        if v is not None:
+            setattr(m, k, v)
+    sys.modules["torch.optim." + name] = m
+    return m
+_mk_optim_submod("sgd", SGD=getattr(_jopt, "SGD", None))
+_mk_optim_submod("adam", Adam=getattr(_jopt, "Adam", None))
+_mk_optim_submod("adamw", AdamW=getattr(_jopt, "AdamW", getattr(_jopt, "Adam", None)))
+_mk_optim_submod("rmsprop", RMSprop=getattr(_jopt, "RMSprop", None))
+
+# torch.cuda.amp: mixed-precision entry points. autocast/GradScaler come from
+# torch_compat (installed on the jittor module); custom_fwd/custom_bwd decorate
+# autograd.Function methods and are passthroughs on jittor's graph autograd.
+_camp = types.ModuleType("torch.cuda.amp")
+import contextlib as _ctxlib
+_camp.autocast = getattr(_jittor, "autocast", None) or (lambda *a, **k: _ctxlib.nullcontext())
+_camp.GradScaler = getattr(_jittor, "GradScaler", None) or type(
+    "GradScaler", (), {"__init__": lambda self, *a, **k: None,
+                       "scale": lambda self, x: x, "step": lambda self, o, *a, **k: o.step(),
+                       "update": lambda self, *a, **k: None,
+                       "unscale_": lambda self, *a, **k: None})
+_camp.custom_fwd = lambda fwd=None, **k: (fwd if fwd is not None else (lambda f: f))
+_camp.custom_bwd = lambda bwd=None, **k: (bwd if bwd is not None else (lambda f: f))
+sys.modules["torch.cuda.amp"] = _camp
+if "torch.cuda" in sys.modules:
+    sys.modules["torch.cuda"].amp = _camp
+
+# torch.utils.{model_zoo,cpp_extension,tensorboard,_python_dispatch}: import-time
+# resolutions for mmengine/mmcv. cpp_extension is build-time only (stubs); model_zoo
+# falls back to torch.hub; tensorboard SummaryWriter is a lazy visualization backend.
+_mz = types.ModuleType("torch.utils.model_zoo")
+_mz.load_url = lambda *a, **k: (_ for _ in ()).throw(
+    NotImplementedError("torch.utils.model_zoo.load_url not supported on jittor shim"))
+sys.modules["torch.utils.model_zoo"] = _mz
+_cppext = types.ModuleType("torch.utils.cpp_extension")
+for _nm in ("BuildExtension", "CppExtension", "CUDAExtension"):
+    setattr(_cppext, _nm, type(_nm, (), {"__init__": lambda self, *a, **k: None}))
+_cppext.load = lambda *a, **k: None
+_cppext.load_inline = lambda *a, **k: None
+_cppext.CUDA_HOME = None
+sys.modules["torch.utils.cpp_extension"] = _cppext
+_tb = types.ModuleType("torch.utils.tensorboard")
+_tb.SummaryWriter = type("SummaryWriter", (), {
+    "__init__": lambda self, *a, **k: None,
+    "add_scalar": lambda self, *a, **k: None, "add_scalars": lambda self, *a, **k: None,
+    "add_image": lambda self, *a, **k: None, "add_graph": lambda self, *a, **k: None,
+    "add_histogram": lambda self, *a, **k: None, "close": lambda self: None,
+    "flush": lambda self: None})
+sys.modules["torch.utils.tensorboard"] = _tb
+_pydisp = types.ModuleType("torch.utils._python_dispatch")
+_pydisp.TorchDispatchMode = type("TorchDispatchMode", (), {})
+_pydisp._get_current_dispatch_mode = lambda *a, **k: None
+sys.modules["torch.utils._python_dispatch"] = _pydisp
+
+# torch.distributed.{rpc,optim}: single-process stubs. rpc.is_available is imported
+# unconditionally by mmengine (`from torch.distributed.rpc import is_available`) and
+# must exist (-> False). optim is left EMPTY on purpose so that
+# `from torch.distributed.optim import ZeroRedundancyOptimizer` raises ImportError,
+# which mmengine catches and falls back to `object` as the base class.
+_drpc = types.ModuleType("torch.distributed.rpc")
+_drpc.is_available = lambda: False
+_drpc.init_rpc = lambda *a, **k: None
+_drpc.shutdown = lambda *a, **k: None
+sys.modules["torch.distributed.rpc"] = _drpc
+setattr(sys.modules["torch.distributed"], "rpc", _drpc)
+_doptim = types.ModuleType("torch.distributed.optim")   # intentionally empty
+sys.modules["torch.distributed.optim"] = _doptim
+setattr(sys.modules["torch.distributed"], "optim", _doptim)
+
+# torch.distributed.{fsdp,algorithms} deep submodules: mmengine's DDP/FSDP wrappers
+# import config/enum classes from these unconditionally, but they are never used on
+# a single device. Back each path with a permissive stub module whose attributes are
+# stub CLASSES (subclassable, instantiable with any kwargs, and enum-accessible) so
+# `from torch.distributed.fsdp.api import FullStateDictConfig`, `StateDictType.X`,
+# and `class W(FullyShardedDataParallel)` all resolve without ImportError.
+class _StubMeta(type):
+    def __getattr__(cls, name):
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
+        return _StubMeta(name, (), {"__init__": lambda self, *a, **k: None})
+def _stub_cls(name):
+    return _StubMeta(name, (), {"__init__": lambda self, *a, **k: None})
+class _StubPkg(types.ModuleType):
+    def __getattr__(self, name):
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
+        if name.startswith("is_") or name.endswith("_available"):
+            return lambda *a, **k: False
+        v = _stub_cls(name)
+        setattr(self, name, v)
+        return v
+for _p in ("torch.distributed.fsdp", "torch.distributed.fsdp.api",
+           "torch.distributed.fsdp.fully_sharded_data_parallel",
+           "torch.distributed.fsdp.sharded_grad_scaler",
+           "torch.distributed.fsdp._traversal_utils", "torch.distributed.fsdp.wrap",
+           "torch.distributed.algorithms", "torch.distributed.algorithms._checkpoint",
+           "torch.distributed.algorithms._checkpoint.checkpoint_wrapper"):
+    sys.modules[_p] = _StubPkg(_p)
+sys.modules["torch.distributed"].fsdp = sys.modules["torch.distributed.fsdp"]
+sys.modules["torch.distributed"].algorithms = sys.modules["torch.distributed.algorithms"]
+# torch.distributed.ProcessGroup (type hint in mmengine wrappers).
+if not hasattr(sys.modules["torch.distributed"], "ProcessGroup"):
+    sys.modules["torch.distributed"].ProcessGroup = _stub_cls("ProcessGroup")
 
 _fx = types.ModuleType("torch.fx")
 _fx.Graph = type("Graph", (), {})
 _fx.GraphModule = type("GraphModule", (), {})
+_fx.Proxy = type("Proxy", (), {})        # transformers is_torch_fx_proxy() isinstance check
+_fx.Node = type("Node", (), {})
 _fx.wrap = lambda f=None, *a, **k: (f if f is not None else (lambda g: g))
 sys.modules["torch.fx"] = _fx
 globals()["fx"] = _fx
@@ -1318,8 +1638,25 @@ _jit.unused = lambda f: f
 _jit._overload_method = lambda f: f
 _jit.interface = lambda c: c
 _jit.ScriptModule = type("ScriptModule", (), {})
+_jit.annotate = lambda _the_type=None, the_value=None: the_value   # torch.jit.annotate(T, v)
+import typing as _typing_jit0
+_jit.Final = _typing_jit0.Final          # timm/torchvision annotate attrs with torch.jit.Final
+_jit.Attribute = lambda value=None, type=None: value
 sys.modules["torch.jit"] = _jit
 globals()["jit"] = _jit
+
+# torch.jit.annotations submodule (typing stubs; timm / mmpretrain import these)
+_jit_ann = types.ModuleType("torch.jit.annotations")
+import typing as _typing_jit
+for _n in ("Any", "List", "Dict", "Tuple", "Optional", "Union", "Callable"):
+    setattr(_jit_ann, _n, getattr(_typing_jit, _n, object))
+class _BroadcastingList:
+    def __getitem__(self, _x): return _typing_jit.List
+for _i in (1, 2, 3):
+    setattr(_jit_ann, f"BroadcastingList{_i}", _BroadcastingList())
+_jit_ann.Future = _typing_jit.Any
+_jit.annotations = _jit_ann
+sys.modules["torch.jit.annotations"] = _jit_ann
 
 # ---------------------------------------------------------------------------
 # diffusers import-time stubs

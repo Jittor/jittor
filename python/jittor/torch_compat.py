@@ -390,7 +390,32 @@ def install(torch):
     g.inference_mode = lambda func=None: _GradDecoratorCtx(_orig_no_grad, func)
 
     Var = jt.Var
-    g.Tensor = Var
+    # torch.Tensor is both (a) the isinstance target and (b) a legacy constructor:
+    # torch.Tensor(d0, d1, ...) makes an UNINITIALISED tensor of that shape (DETR's
+    # _init_layers: torch.Tensor(num_levels, embed_dims)), while torch.Tensor(data)
+    # builds from data. A metaclass gives us both without breaking isinstance(x, Var).
+    class _TensorMeta(type):
+        def __instancecheck__(cls, inst):
+            return isinstance(inst, Var)
+        def __subclasscheck__(cls, sub):
+            return issubclass(sub, Var)
+        def __call__(cls, *args, **kw):
+            if len(args) == 0:
+                return jt.empty((0,))
+            if all(isinstance(a, int) for a in args):   # torch.Tensor(*sizes)
+                return jt.empty(tuple(args))
+            # torch.Tensor(size) with a shape object (torch.Size / our Size / a
+            # jittor NanoVector, e.g. weight.size()) -> an uninitialized tensor of
+            # that shape, NOT data (mmdet SAConv2d: torch.Tensor(self.weight.size())).
+            if len(args) == 1 and isinstance(args[0], (jt.NanoVector, Size)):
+                return jt.empty(tuple(int(x) for x in args[0]))
+            data = args[0]
+            if isinstance(data, Var):
+                return data.float32()
+            return jt.array(data).float32()
+    class Tensor(metaclass=_TensorMeta):
+        pass
+    g.Tensor = Tensor
     # torch's typed tensor classes (FloatTensor/LongTensor/...). jittor is dtype-typed
     # at the data level (no tensor subclasses), but we must NOT just alias them all to
     # Var: that makes isinstance(any_var, torch.LongTensor) always True, so libraries
@@ -527,7 +552,29 @@ def install(torch):
             return tensors[0]
         if len(nonempty) == 1:
             return nonempty[0]
-        return _jt_concat(nonempty, dim)
+        # torch requires all tensors to share ndim. jittor has no 0-d scalars, so
+        # a torch-scalar `s` (0-d) becomes a [1] Var and `s.unsqueeze(0)` yields
+        # [1,1] instead of torch's [1] -- mixing 2-D and 1-D entries that torch
+        # would see as uniformly 1-D (e.g. SOLO's per-image dice losses). Strip
+        # the spurious LEADING size-1 dims off any over-ranked entry so the ndims
+        # line up the way torch sees them. Only size-1 leading dims are removed;
+        # a genuine ndim/shape mismatch is left for jittor's concat to reject.
+        min_nd = min(t.ndim for t in nonempty)
+        fixed = []
+        for t in nonempty:
+            while t.ndim > min_nd and t.shape[0] == 1:
+                t = t.squeeze(0)
+            fixed.append(t)
+        out_var = _jt_concat(fixed, dim)
+        # jittor's concat downcasts a uniform uint8 input to int8 (e.g. mask-rcnn-c4
+        # builds a uint8 pos_inds mask via torch.cat of uint8 ones/zeros). torch keeps
+        # the common input dtype; restore it so downstream byte-mask indexing works.
+        in_dtypes = {str(t.dtype) for t in fixed}
+        if len(in_dtypes) == 1:
+            d = in_dtypes.pop()
+            if str(out_var.dtype) != d:
+                out_var = out_var.cast(d)
+        return out_var
     g.cat = cat
     g.concat = cat
     g.concatenate = cat
@@ -560,6 +607,25 @@ def install(torch):
                 return _jt_softmax(input, dim=dim)
             F.softmax = _softmax
         if hasattr(nn, "linear"): F.linear = nn.linear
+        if hasattr(nn, "interpolate"):
+            # torch.nn.functional.interpolate defaults to mode='nearest', but
+            # jittor.nn.interpolate defaults to 'bilinear'. Code that omits the
+            # mode (e.g. YOLOV3Neck: F.interpolate(x, scale_factor=2)) silently
+            # gets the wrong upsampling. Wrap so the torch-shim functional matches
+            # torch's default and accepts torch's arg name / extra kwargs. Only
+            # this shim copy is affected, not jittor's native nn.interpolate.
+            _jt_interpolate = nn.interpolate
+            def _interpolate(input=None, size=None, scale_factor=None,
+                             mode="nearest", align_corners=None,
+                             recompute_scale_factor=None, antialias=False,
+                             **_kw):
+                if input is None:
+                    input = _kw.pop("X")
+                ac = False if align_corners is None else align_corners
+                return _jt_interpolate(input, size=size,
+                                       scale_factor=scale_factor, mode=mode,
+                                       align_corners=ac)
+            F.interpolate = _interpolate
         if hasattr(nn, "cross_entropy_loss"):
             _jt_ce = nn.cross_entropy_loss
             # torch.nn.functional.cross_entropy(..., label_smoothing=): jittor's
@@ -925,6 +991,45 @@ def _install_autograd_function(g):
         def _saved_tensors(self):
             return getattr(self, "_saved_tensors", ())
         Fn.saved_tensors = property(_saved_tensors)
+    # torch's autograd engine reduces (sums) each grad a Function.backward returns
+    # down to the shape of the corresponding *input* whenever forward broadcast that
+    # input (e.g. TOOD's SigmoidGeometricMean multiplies cls_logits [N,80,H,W] by
+    # cls_prob [N,1,H,W]; backward returns grad_y at [N,80,H,W]). jittor performs no
+    # such reduction and raises "dvar->num != var->num". Record the forward input
+    # shapes on __call__, then sum-to-shape each returned grad in the grad bridge.
+    def _sum_grad_to(grad, shape):
+        if grad is None or shape is None or not isinstance(grad, jt.Var):
+            return grad
+        gshape = grad.shape
+        if list(gshape) == list(shape):
+            return grad
+        # drop leading dims that the input doesn't have (broadcast prepended them)
+        extra = len(gshape) - len(shape)
+        if extra > 0:
+            grad = grad.sum(dims=tuple(range(extra)))
+            gshape = grad.shape
+        # sum over dims where the input was size-1 but grad is larger (keepdim)
+        reduce_dims = [i for i in range(len(shape))
+                       if int(shape[i]) == 1 and int(gshape[i]) != 1]
+        if reduce_dims:
+            grad = grad.sum(dims=tuple(reduce_dims), keepdims=True)
+        if list(grad.shape) != list(shape):
+            grad = grad.reshape(tuple(int(s) for s in shape))
+        return grad
+
+    _orig_fn_call = Fn.__call__
+    def _call_record_inputs(self, *args, **kw):
+        # capture forward input shapes (positional only -- jittor only tapes those)
+        try:
+            self._fwd_input_shapes = [
+                (tuple(v.shape) if isinstance(v, jt.Var) else None) for v in args]
+        except Exception:
+            self._fwd_input_shapes = None
+        return _orig_fn_call(self, *args, **kw)
+    if getattr(Fn.__call__, "_torch_records_inputs", False) is not True:
+        _call_record_inputs._torch_records_inputs = True
+        Fn.__call__ = _call_record_inputs
+
     # torch.autograd.Function defines `@staticmethod backward(ctx, *grad_outputs)`;
     # jittor's Function.__call__ tapes self._grad, which calls `self.grad(*grads)`.
     # The shim maps execute->forward and save_for_backward/saved_tensors, but never
@@ -940,7 +1045,16 @@ def _install_autograd_function(g):
             if bw is None:
                 raise AttributeError(
                     f"{type(self).__name__!r} object has no attribute 'grad'")
-            return bw(self, *grad_outputs)
+            ret = bw(self, *grad_outputs)
+            shapes = getattr(self, "_fwd_input_shapes", None)
+            if shapes is None:
+                return ret
+            single = not isinstance(ret, (tuple, list))
+            grads = [ret] if single else list(ret)
+            # reduce each input-grad to its forward input shape (torch broadcast bwd)
+            for i in range(min(len(grads), len(shapes))):
+                grads[i] = _sum_grad_to(grads[i], shapes[i])
+            return grads[0] if single else tuple(grads)
         Fn.grad = grad
 
 
@@ -1278,6 +1392,8 @@ def _install_reductions(g):
     _minimum = _jt.minimum
     _jt_max = _jt.max          # jittor-native reductions (values only)
     _jt_min = _jt.min
+    _jt_var_max = _jt.Var.max  # native METHODS (0-dim scalar for full reduction)
+    _jt_var_min = _jt.Var.min
     _topk = getattr(_jt, "topk", None)
     _gather = _jt.gather
 
@@ -1317,7 +1433,9 @@ def _install_reductions(g):
         if other is not None:
             return _maximum(x, other) if which == "max" else _minimum(x, other)
         if dim is None:
-            return x.max() if which == "max" else x.min()
+            # native scalar reduction via the captured METHOD (0-dim scalar);
+            # NOT x.max(), which now routes back into this wrapper (recursion).
+            return _jt_var_max(x) if which == "max" else _jt_var_min(x)
         af = _argmax if which == "max" else _argmin
         idx, val = af(x, dim, keepdims=keepdim)
         return _MinMax(val, idx.int64())
@@ -1351,17 +1469,15 @@ def _install_reductions(g):
     Var.sort = lambda self, dim=-1, descending=False, **kw: sort(self, dim=dim, descending=descending)
     Var.argsort = lambda self, dim=-1, descending=False, **kw: g.argsort(self, dim=dim, descending=descending)
     Var.topk = lambda self, k, dim=-1, largest=True, sorted=True: topk(self, k, dim=dim, largest=largest, sorted=sorted)
-    # torch's Tensor.max(dim, keepdim=...) / min(...) returns the (values, indices)
-    # namedtuple. jittor's native Var.max(dim) returns values-only and is used by core
-    # (linalg/nn) with a BARE dim or the `keepdims` spelling -- NEVER torch's `keepdim`.
-    # So return the namedtuple ONLY when the torch-spelled `keepdim` kwarg is present
-    # (phimoe: scores.max(dim=-1, keepdim=True)); every other form stays native.
-    _orig_var_max = Var.max
-    _orig_var_min = Var.min
-    Var.max = lambda self, *a, **k: (_maxmin("max", self, *a, **k) if "keepdim" in k
-                                     else _orig_var_max(self, *a, **k))
-    Var.min = lambda self, *a, **k: (_maxmin("min", self, *a, **k) if "keepdim" in k
-                                     else _orig_var_min(self, *a, **k))
+    # torch's Tensor.max(dim)/min(dim) returns the (values, indices) namedtuple --
+    # mmdetection relies on this pervasively (`v, i = overlaps.max(dim=0)`). jittor's
+    # native method returns values-only and is used by core/linalg/einops with the
+    # `keepdims=` spelling (handled natively inside _maxmin) or a bare dim. Route
+    # everything through _maxmin: keepdims= -> native values; a bare/torch dim ->
+    # namedtuple; no dim -> native scalar. The few jittor-internal callers that pass
+    # a BARE dim and want values-only extract `.values` at their call site.
+    Var.max = lambda self, *a, **k: _maxmin("max", self, *a, **k)
+    Var.min = lambda self, *a, **k: _maxmin("min", self, *a, **k)
 
     # torch's var/std default to UNBIASED (Bessel, correction=1); jittor's native var
     # defaults to biased (numpy-aligned) -- a silent-wrong divergence for torch code.
@@ -1496,6 +1612,22 @@ def _wrap_constructors(g):
         def wrapped(*args, **kwargs):
             for k in _DROP:
                 kwargs.pop(k, None)
+            # torch accepts numpy integer scalars as shape dims, e.g.
+            # torch.zeros(1, np.int64(49), 512) (mmdet PVT builds pos_shape via
+            # `pretrain_img_size // patch_size`, which yields numpy ints). jittor's
+            # C++ shape converter strictly wants Python int (is_type<int64>), so a
+            # numpy scalar raises. Coerce numpy integer/float scalars (and 0-dim
+            # numpy arrays) in the positional args to plain Python scalars. Only
+            # numpy scalars are touched, so normal int/tuple shape args are untouched.
+            if args and any(isinstance(a, np.generic) for a in args):
+                args = tuple(a.item() if isinstance(a, np.generic) else a
+                             for a in args)
+            # normalize a Size/NanoVector shape arg (e.g. torch.zeros(x.size()))
+            # to a plain tuple — jittor's factories reject tuple subclasses /
+            # NanoVector. transformers BertEmbeddings does torch.zeros(position_ids.size()).
+            if args and (isinstance(args[0], jt.NanoVector) or
+                         (isinstance(args[0], tuple) and type(args[0]) is not tuple)):
+                args = (tuple(int(x) for x in args[0]),) + tuple(args[1:])
             # torch allows the shape via the size= keyword: torch.ones(size=(2,3))
             # (canine's _create_3d_attention_mask_from_input_mask). Only the shape
             # factories get a size= kwarg, and only with no positional shape, so
@@ -1537,6 +1669,15 @@ def _install_random_and_linspace(g):
     if _lin is not None:
         @functools.wraps(_lin)
         def linspace(*args, dtype=None, **kwargs):
+            # torch.linspace(start, end, steps): mmdet (DETR reference points) passes
+            # tensor/float scalars for start/end and a tensor for steps; jittor needs
+            # python float start/end and an int steps.
+            args = list(args)
+            if len(args) >= 1 and hasattr(args[0], "item"): args[0] = float(args[0])
+            if len(args) >= 2 and hasattr(args[1], "item"): args[1] = float(args[1])
+            if len(args) >= 3 and not isinstance(args[2], int): args[2] = int(args[2])
+            if "steps" in kwargs and not isinstance(kwargs["steps"], int):
+                kwargs["steps"] = int(kwargs["steps"])
             r = _lin(*args, **kwargs)
             if dtype is not None:
                 r = r.cast(_dtype_to_str(dtype))
@@ -1752,6 +1893,50 @@ def _install_nn_extras(nn):
             def execute(self, x):
                 return x * _jt.clamp(x + 3, 0, 6) / 6
         nn.Hardswish = Hardswish
+    if not hasattr(nn, "CELU"):           # timm uses nn.CELU
+        class CELU(nn.Module):
+            def __init__(self, alpha=1.0, inplace=False):
+                super().__init__(); self.alpha = alpha
+            def execute(self, x):
+                a = self.alpha
+                return _jt.maximum(x, 0.0) + _jt.minimum(0.0, a * (_jt.exp(x / a) - 1))
+        nn.CELU = CELU
+    # A batch of standard torch activations jittor.nn may lack (timm's act-layer
+    # registry references all of them at import). All are pure elementwise.
+    if not hasattr(nn, "SELU"):
+        _SELU_S, _SELU_A = 1.0507009873554805, 1.6732632423543772
+        class SELU(nn.Module):
+            def __init__(self, inplace=False): super().__init__()
+            def execute(self, x):
+                return _SELU_S * (_jt.maximum(x, 0.0) + _jt.minimum(0.0, _SELU_A * (_jt.exp(x) - 1)))
+        nn.SELU = SELU
+    if not hasattr(nn, "Softsign"):
+        class Softsign(nn.Module):
+            def execute(self, x): return x / (1 + _jt.abs(x))
+        nn.Softsign = Softsign
+    if not hasattr(nn, "Tanhshrink"):
+        class Tanhshrink(nn.Module):
+            def execute(self, x): return x - _jt.tanh(x)
+        nn.Tanhshrink = Tanhshrink
+    if not hasattr(nn, "Softplus"):
+        class Softplus(nn.Module):
+            def __init__(self, beta=1, threshold=20): super().__init__(); self.beta=beta; self.threshold=threshold
+            def execute(self, x):
+                bx = self.beta * x
+                return _jt.ternary(bx > self.threshold, x, _jt.log1p(_jt.exp(bx)) / self.beta)
+        nn.Softplus = Softplus
+    if not hasattr(nn, "Hardshrink"):
+        class Hardshrink(nn.Module):
+            def __init__(self, lambd=0.5): super().__init__(); self.lambd=lambd
+            def execute(self, x): return x * ((x > self.lambd) | (x < -self.lambd)).float()
+        nn.Hardshrink = Hardshrink
+    if not hasattr(nn, "Softshrink"):
+        class Softshrink(nn.Module):
+            def __init__(self, lambd=0.5): super().__init__(); self.lambd=lambd
+            def execute(self, x):
+                l = self.lambd
+                return _jt.maximum(x - l, 0.0) - _jt.maximum(-x - l, 0.0)
+        nn.Softshrink = Softshrink
     if not hasattr(nn, "Hardsigmoid"):
         class Hardsigmoid(nn.Module):
             def execute(self, x):
@@ -1808,7 +1993,42 @@ def _install_nn_extras(nn):
     # isinstance discrimination still works.
     if not hasattr(nn, "ConvTranspose1d"):
         class ConvTranspose1d(nn.Module):
-            def __init__(self, *a, **k): super().__init__()
+            # Real 1D transpose-conv (SABL's side_aware_feature_extractor uses it),
+            # implemented via conv_transpose2d with a unit height dim so it also
+            # rides the cuDNN memory-efficient path.
+            def __init__(self, in_channels, out_channels, kernel_size, stride=1,
+                         padding=0, output_padding=0, groups=1, bias=True,
+                         dilation=1, **k):
+                super().__init__()
+                import jittor as _jt2, math as _math
+                g1 = lambda v: v[0] if isinstance(v, (tuple, list)) else v
+                self.in_channels = in_channels
+                self.out_channels = out_channels
+                self.kernel_size = g1(kernel_size)
+                self.stride = g1(stride)
+                self.padding = g1(padding)
+                self.output_padding = g1(output_padding)
+                self.dilation = g1(dilation)
+                self.groups = groups
+                self.weight = _jt2.init.invariant_uniform(
+                    [in_channels, out_channels // groups, self.kernel_size], dtype="float")
+                if bias:
+                    fan = (in_channels // groups) * self.kernel_size
+                    bound = 1.0 / _math.sqrt(fan) if fan > 0 else 0.0
+                    self.bias = _jt2.init.uniform([out_channels], "float", -bound, bound)
+                else:
+                    self.bias = None
+            def execute(self, x):
+                import jittor as _jt2
+                x2 = x.unsqueeze(2)                       # (N,Cin,1,L)
+                w2 = self.weight.unsqueeze(2)             # (Cin,Cout/g,1,K)
+                y = _jt2.nn.conv_transpose2d(
+                    x2, w2, None, (1, self.stride), (0, self.padding),
+                    (0, self.output_padding), self.groups, (1, self.dilation))
+                y = y.squeeze(2)                          # (N,Cout,Lout)
+                if self.bias is not None:
+                    y = y + self.bias.broadcast(y.shape, [0, 2])
+                return y
         nn.ConvTranspose1d = ConvTranspose1d
     if not hasattr(nn, "RMSNorm"):
         class RMSNorm(nn.Module):
@@ -2032,6 +2252,116 @@ def _install_nn_extras(nn):
                 m = _jtm.triu(_jtm.ones((sz, sz)), 1) * (-1e30)
                 return m
         nn.Transformer = Transformer
+
+    # ---- nn.SyncBatchNorm (single-device: behaves exactly like BatchNorm) ----
+    # mmdetection's rtmdet calls `torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)`;
+    # with no real process group there is nothing to synchronise, so the convert
+    # entry returns the model unchanged (BN already pools over the whole batch here).
+    if not hasattr(nn, "SyncBatchNorm"):
+        class SyncBatchNorm(nn.BatchNorm):
+            def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True,
+                         track_running_stats=True, process_group=None, **kw):
+                super().__init__(num_features, eps=eps, momentum=momentum, affine=affine)
+            @classmethod
+            def convert_sync_batchnorm(cls, module, process_group=None):
+                return module
+        nn.SyncBatchNorm = SyncBatchNorm
+
+    # ---- nn.functional extras used by mmdetection (not auto-copied from jittor.nn) ----
+    F = nn.functional
+    if not hasattr(F, "_Reduction"):
+        # torch's private reduction-string -> enum helper; mmdet's loss utils do
+        # `F._Reduction.get_enum(reduction)` then branch 0/1/2 = none/mean/sum.
+        class _Reduction:
+            @staticmethod
+            def get_enum(reduction):
+                return {"none": 0, "mean": 1, "elementwise_mean": 1,
+                        "sum": 2}.get(reduction, 1)
+            @staticmethod
+            def legacy_get_string(size_average, reduce, emit_warning=True):
+                sa = True if size_average is None else size_average
+                rd = True if reduce is None else reduce
+                if not rd:
+                    return "none"
+                return "mean" if sa else "sum"
+        F._Reduction = _Reduction
+    if not hasattr(F, "adaptive_max_pool2d"):
+        def _adaptive_max_pool2d(input, output_size, return_indices=False):
+            out = nn.AdaptiveMaxPool2d(output_size)(input)
+            return (out, None) if return_indices else out
+        F.adaptive_max_pool2d = _adaptive_max_pool2d
+    if not getattr(F, "_torch_linear_wrapped", False):
+        # torch's F.linear accepts a 1-D weight (matrix-vector product), e.g. GFL's
+        # Integral does F.linear(x[N,K], project[K]) -> [N]; jittor's linear asserts 2-D.
+        _jt_linear = F.linear
+        def _linear(input, weight, bias=None):
+            if hasattr(weight, "ndim") and weight.ndim == 1:
+                out = (input * weight).sum(-1)
+                return out if bias is None else out + bias
+            return _jt_linear(input, weight, bias)
+        F.linear = _linear
+        F._torch_linear_wrapped = True
+    if not hasattr(F, "relu_"):
+        F.relu_ = lambda input: nn.relu(input)   # in-place relu (graph-equivalent)
+    if not hasattr(F, "upsample_bilinear"):
+        # deprecated torch alias == interpolate(mode='bilinear', align_corners=True)
+        def _upsample_bilinear(input, size=None, scale_factor=None):
+            return F.interpolate(input, size=size, scale_factor=scale_factor,
+                                 mode="bilinear", align_corners=True)
+        F.upsample_bilinear = _upsample_bilinear
+    if not hasattr(F, "upsample"):
+        def _upsample(input, size=None, scale_factor=None, mode="nearest",
+                      align_corners=None):
+            return F.interpolate(input, size=size, scale_factor=scale_factor,
+                                 mode=mode, align_corners=align_corners)
+        F.upsample = _upsample
+
+    # torch's nn.Conv2d exposes .transposed / .output_padding (torchvision &
+    # mmcv's ConvModule read them to introspect the layer); jittor's Conv lacks
+    # them. Add torch-compatible class attributes.
+    for _cn in ("Conv", "Conv1d", "Conv3d"):
+        _c = getattr(nn, _cn, None)
+        if _c is not None:
+            if not hasattr(_c, "transposed"):
+                _c.transposed = False
+            if not hasattr(_c, "output_padding"):
+                _c.output_padding = (0, 0)
+    for _cn in ("ConvTranspose", "ConvTranspose1d", "ConvTranspose3d"):
+        _c = getattr(nn, _cn, None)
+        if _c is not None:
+            _c.transposed = True
+            if not hasattr(_c, "output_padding"):
+                _c.output_padding = (0, 0)
+
+    # torch's nn.Dropout/Dropout2d/Dropout3d take an `inplace` kwarg that jittor's
+    # don't (DETR-family configs pass dropout=dict(..., inplace=...)). Make the
+    # constructors tolerate (and ignore) it.
+    for _dn in ("Dropout", "Dropout2d", "Dropout3d"):
+        _dc = getattr(nn, _dn, None)
+        if _dc is not None and not getattr(_dc, "_torch_inplace_patched", False):
+            def _mk_drop_init(orig):
+                def _init(self, p=0.5, inplace=False, *a, **k):
+                    orig(self, p, *a, **k)
+                return _init
+            _dc.__init__ = _mk_drop_init(_dc.__init__)
+            _dc._torch_inplace_patched = True
+
+    # jittor names several activation/layer classes lowercase or snake_case
+    # (nn.ReLU.__name__ == 'relu'); torch code and mmcv's registry key layers by
+    # type(layer).__name__, so normalize them to the torch class names.
+    _TORCH_CLASS_NAMES = [
+        "ReLU", "ReLU6", "LeakyReLU", "PReLU", "RReLU", "ELU", "CELU", "SELU",
+        "GELU", "SiLU", "Mish", "Sigmoid", "Tanh", "Softmax", "Softplus",
+        "Hardswish", "Hardsigmoid", "Hardtanh", "GLU", "Identity",
+    ]
+    for _nm in _TORCH_CLASS_NAMES:
+        _cls = getattr(nn, _nm, None)
+        if isinstance(_cls, type) and getattr(_cls, "__name__", None) != _nm:
+            try:
+                _cls.__name__ = _nm
+                _cls.__qualname__ = _nm
+            except Exception:
+                pass
 
     _install_module_methods(nn)
 
@@ -2630,12 +2960,29 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         return jt.zeros(_norm_size(_resolve_size(size, kw)), dt)
     def _new_full(self, size, fill_value, dtype=None, device=None, requires_grad=False, **kw):
         dt = _dtype_to_str(dtype) if dtype is not None else str(self.dtype)
-        return jt.full(tuple(size) if isinstance(size, (tuple, list)) else (size,), fill_value).cast(dt)
+        # size may be a tuple/list/torch.Size OR a jittor NanoVector (e.g. from
+        # x.new_full(x.shape, v)); both are iterable with __len__.
+        shp = tuple(int(s) for s in size) if hasattr(size, "__len__") else (int(size),)
+        return jt.full(shp, fill_value).cast(dt)
     def _new_empty(self, *size, dtype=None, device=None, requires_grad=False, **kw):
         dt = _dtype_to_str(dtype) if dtype is not None else str(self.dtype)
         return jt.empty(_norm_size(_resolve_size(size, kw)), dt)
     def _new_tensor(self, data, dtype=None, device=None, requires_grad=False, **kw):
         dt = _dtype_to_str(dtype) if dtype is not None else str(self.dtype)
+        # torch's new_tensor accepts a python list whose elements are 0-d tensors
+        # (e.g. centernet_update_head builds start_coord_pre_level by accumulating
+        # `_start = _start + batch * area_per_level[level]`, where the indexed term
+        # is a scalar). jittor has no 0-d tensors, so those scalars are [1] Vars and
+        # jt.array([int, Var, Var, ...]) raises "inhomogeneous shape". Coerce any
+        # numel-1 Var element to a python number first so the list is homogeneous.
+        if isinstance(data, (list, tuple)):
+            def _coerce(v):
+                if isinstance(v, jt.Var):
+                    return v.item() if v.numel() == 1 else v.tolist()
+                if isinstance(v, (list, tuple)):
+                    return [_coerce(e) for e in v]
+                return v
+            data = [_coerce(v) for v in data]
         return jt.array(data).cast(dt)
     Var.new_ones = _new_ones
     Var.new_zeros = _new_zeros
@@ -4260,6 +4607,219 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
             return res
         return beta * input + res
     _alias("addmm", _addmm)
+
+    # ---- torch.* ops used by mmdetection (additive aliases) ----
+    _alias("mm", lambda input, mat2, out=None: jt.matmul(input, mat2))   # 2-D matmul
+    _alias("masked_select", lambda input, mask, out=None: input[mask])   # -> 1-D selected
+    _alias("split_with_sizes",
+           lambda input, split_sizes, dim=0: input.split(split_sizes, dim))
+    _alias("_shape_as_tensor",
+           lambda input: jt.array(np.asarray(input.shape, dtype=np.int64)))
+    def _nan_to_num_inplace(input, nan=0.0, posinf=None, neginf=None):
+        r = g.nan_to_num(input, nan=nan, posinf=posinf, neginf=neginf)
+        try:
+            input.assign(r); return input          # honour in-place semantics
+        except Exception:
+            return r
+    _alias("nan_to_num_", _nan_to_num_inplace)
+    # torch.randint_like(input, low, high=None, *, dtype=...): jittor's native lacks
+    # the dtype kwarg (DINO's denoising uses it). Force-override with torch semantics.
+    def _randint_like(input, low, high=None, dtype=None, device=None,
+                      requires_grad=False, **kw):
+        if high is None:
+            low, high = 0, low
+        r = jt.randint(int(low), int(high), tuple(int(s) for s in input.shape))
+        return r.cast(_dtype_to_str(dtype)) if dtype is not None else r
+    g.randint_like = _randint_like
+
+    # torch.sparse_coo_tensor + torch.sparse.sum: mmdet's free_anchor head builds a
+    # (hybrid) COO tensor then immediately densifies it. Back it with a dense Var
+    # materialised eagerly via index_add_ (COO accumulates duplicate coordinates).
+    class _SparseCOO:
+        def __init__(self, dense): self._dense = dense
+        def to_dense(self): return self._dense
+        @property
+        def shape(self): return self._dense.shape
+        @property
+        def dtype(self): return self._dense.dtype
+        def t(self): return _SparseCOO(self._dense.t())
+        def sum(self, dim=None):
+            return _SparseCOO(self._dense.sum(dim) if dim is not None else self._dense.sum())
+    def _sparse_coo_tensor(indices, values, size=None, dtype=None, device=None,
+                           requires_grad=False, **kw):
+        if not isinstance(indices, jt.Var): indices = jt.array(indices)
+        if not isinstance(values, jt.Var): values = jt.array(values)
+        S = int(indices.shape[0])
+        nnz = int(indices.shape[1]) if indices.ndim == 2 else int(indices.shape[0])
+        tail = [int(d) for d in values.shape[1:]]
+        idx_np = indices.numpy().astype("int64").reshape(S, -1)
+        if size is not None:
+            full = [int(s) for s in size]
+        else:
+            full = [int(idx_np[s].max()) + 1 if nnz > 0 else 0 for s in range(S)] + tail
+        sparse_shape = full[:S]; tail2 = full[S:]
+        prod = 1
+        for d in sparse_shape: prod *= int(d)
+        lin = np.zeros(nnz, dtype="int64"); stride = 1     # row-major linear index
+        for s in range(S - 1, -1, -1):
+            lin = lin + idx_np[s] * stride
+            stride *= int(sparse_shape[s])
+        flat = jt.zeros([prod] + tail2, dtype=str(values.dtype))
+        if nnz > 0:
+            flat.index_add_(0, jt.array(lin), values.reshape([nnz] + tail2))  # in-place
+        return _SparseCOO(flat.reshape(sparse_shape + tail2))
+    _alias("sparse_coo_tensor", _sparse_coo_tensor)
+    import jittor.sparse as _jt_sparse
+    if not hasattr(_jt_sparse, "sum"):
+        def _sparse_sum(x, dim=None):
+            d = x._dense if isinstance(x, _SparseCOO) else x
+            return _SparseCOO(d.sum(dim) if dim is not None else d.sum())
+        _jt_sparse.sum = _sparse_sum
+
+    # torch's Tensor.size() returns a torch.Size (tuple subclass) when called with
+    # no arg, and an int for size(dim); jittor's native size() returns a NanoVector,
+    # which breaks torch idioms like `(n,) + data.size()[1:]` (mmdet's unmap()).
+    _Size = getattr(g, "Size", tuple)
+    def _torch_size(self, dim=None):
+        return self.shape[dim] if dim is not None else _Size(self.shape)
+    Var.size = _torch_size
+
+    # jittor's core reshape/view reject a torch.Size (a tuple SUBCLASS) -> normalize
+    # a single Size/tuple-subclass arg to a plain tuple so `x.reshape(other.size())`
+    # / `x.view(t.size())` works (mmdet queryinst). Only intervene for that case to
+    # keep the (very hot) reshape path otherwise untouched.
+    _orig_reshape = Var.reshape
+    def _torch_reshape(self, *shape):
+        if len(shape) == 1 and isinstance(shape[0], tuple) and type(shape[0]) is not tuple:
+            shape = (tuple(int(s) for s in shape[0]),)
+        return _orig_reshape(self, *shape)
+    Var.reshape = _torch_reshape
+    Var.view = _torch_reshape
+
+    # jittor's CUDA codegen can't emit atomicAdd for uint8/int8 reductions
+    # (yolox/rtmdet SimOTA assigners do mask.sum() on a uint8 match matrix);
+    # torch promotes integer sums to int64 anyway. Cast narrow ints to int32.
+    # torch reductions accept a *tuple* of dims (e.g. loss.mean(dim=(1, 2)) in
+    # yolact_head, x.sum(dim=(2, 3))). jittor splits these into a scalar overload
+    # (kwarg `dim`, single int) and a tuple overload (kwarg `dims`); passing a tuple
+    # under `dim` raises "Not a valid keyword: dim". Normalize: route a tuple/list of
+    # dims to `dims`, a scalar to `dim`, accepting it via `axis`, `dim`, or as the
+    # first positional arg (torch also allows axis as a dim alias).
+    def _norm_reduce_kw(a, k):
+        d = None
+        if "axis" in k:
+            d = k.pop("axis")
+        if "dim" in k:
+            d = k.pop("dim")
+        if "dims" in k:
+            d = k.pop("dims")
+        if d is None and len(a) >= 1 and isinstance(a[0], (tuple, list)):
+            d = a[0]; a = a[1:]                # consume positional tuple-of-dims
+        # torch spells it keepdim; jittor's tuple overload spells it keepdims.
+        keep = k.pop("keepdim", k.pop("keepdims", None))
+        if d is not None:
+            # jittor's scalar `dim` overload rejects keepdims, while its tuple
+            # `dims` overload supports it -> always route through `dims` when a
+            # keepdim was requested (wrap a scalar dim into a 1-tuple).
+            if isinstance(d, (tuple, list)):
+                k["dims"] = tuple(int(x) for x in d)
+            elif keep is not None:
+                k["dims"] = (int(d),)
+            else:
+                k["dim"] = int(d)
+        if keep is not None:
+            k["keepdims"] = bool(keep)
+        return a, k
+
+    _orig_var_sum = Var.sum
+    def _torch_var_sum(self, *a, **k):
+        a, k = _norm_reduce_kw(a, k)
+        if str(self.dtype) in ("uint8", "int8", "uint16"):
+            self = self.int32()
+        return _orig_var_sum(self, *a, **k)
+    Var.sum = _torch_var_sum
+    # Full dim/dims/keepdim normalization for the plain reductions that map onto
+    # jittor's scalar-`dim` / tuple-`dims` overload pair (mean/prod/any/all). mmdet
+    # exercises tuple dims here, e.g. yolact_head's loss.mean(dim=(1, 2)).
+    def _reduce_wrap(orig):
+        def _w(self, *a, **k):
+            a, k = _norm_reduce_kw(a, k)
+            return orig(self, *a, **k)
+        return _w
+    for _rn in ("mean", "prod"):
+        _ro = getattr(Var, _rn, None)
+        if _ro is not None:
+            setattr(Var, _rn, _reduce_wrap(_ro))
+    # any/all: jittor's only accept a scalar `dim` (no `dims` tuple, no keepdims).
+    # Support torch's tuple-of-dims and keepdim by reducing one dim at a time
+    # (descending so earlier dim indices stay valid), keeping a length-1 axis when
+    # keepdim is set. Plain scalar/axis use falls through to the native op.
+    def _anyall_wrap(orig, name):
+        def _w(self, *a, **k):
+            d = None
+            if "axis" in k: d = k.pop("axis")
+            if "dim" in k:  d = k.pop("dim")
+            if "dims" in k: d = k.pop("dims")
+            if d is None and len(a) >= 1 and isinstance(a[0], (tuple, list)):
+                d = a[0]; a = a[1:]
+            keep = k.pop("keepdim", k.pop("keepdims", None))
+            if d is None:
+                return orig(self, *a, **k)
+            dims = [int(x) for x in d] if isinstance(d, (tuple, list)) else [int(d)]
+            ndim = self.ndim
+            dims = sorted((x % ndim for x in dims), reverse=True)
+            out = self
+            for ax in dims:
+                out = orig(out, dim=ax)
+                if keep:
+                    out = out.unsqueeze(ax)
+            return out
+        return _w
+    for _rn in ("any", "all"):
+        _ro = getattr(Var, _rn, None)
+        if _ro is not None:
+            setattr(Var, _rn, _anyall_wrap(_ro, _rn))
+    # max/min/argmax/argmin/amax/amin/cumsum/norm/std/var are already wrapped above
+    # with custom torch-return semantics (value+index tuples, etc.); only translate
+    # torch's `axis` alias for them so we don't disturb that handling.
+    def _axis_to_dim(orig):
+        def _w(self, *a, **k):
+            if "axis" in k:
+                k["dim"] = k.pop("axis")
+            return orig(self, *a, **k)
+        return _w
+    for _rn in ("max", "min", "argmax", "argmin", "amax", "amin", "cumsum",
+                "norm", "std", "var"):
+        _ro = getattr(Var, _rn, None)
+        if _ro is not None:
+            setattr(Var, _rn, _axis_to_dim(_ro))
+
+    # ---- Tensor methods used by mmdetection + cheap torch-standard completeness ----
+    # (.relu 86x, .eq 11x, .gt 12x, .diff, .fliplr are exercised by mmdet; the rest
+    #  are one-line torch standards added to reduce downstream surprises.)
+    if not hasattr(Var, "relu"):        Var.relu = lambda self: nn.relu(self)
+    if not hasattr(Var, "relu_"):       Var.relu_ = lambda self: nn.relu(self)
+    if not hasattr(Var, "eq"):          Var.eq = lambda self, other: self == other
+    if not hasattr(Var, "ne"):          Var.ne = lambda self, other: self != other
+    if not hasattr(Var, "gt"):          Var.gt = lambda self, other: self > other
+    if not hasattr(Var, "ge"):          Var.ge = lambda self, other: self >= other
+    if not hasattr(Var, "lt"):          Var.lt = lambda self, other: self < other
+    if not hasattr(Var, "le"):          Var.le = lambda self, other: self <= other
+    if not hasattr(Var, "neg"):         Var.neg = lambda self: -self
+    if not hasattr(Var, "reciprocal"):  Var.reciprocal = lambda self: 1.0 / self
+    if not hasattr(Var, "clamp_min"):   Var.clamp_min = lambda self, v: jt.maximum(self, v)
+    if not hasattr(Var, "clamp_max"):   Var.clamp_max = lambda self, v: jt.minimum(self, v)
+    if not hasattr(Var, "bmm"):         Var.bmm = lambda self, other: jt.matmul(self, other)
+    if not hasattr(Var, "mm"):          Var.mm = lambda self, other: jt.matmul(self, other)
+    if not hasattr(Var, "fliplr"):      Var.fliplr = lambda self: jt.flip(self, 1)
+    if not hasattr(Var, "flipud"):      Var.flipud = lambda self: jt.flip(self, 0)
+    if not hasattr(Var, "diff"):
+        Var.diff = lambda self, n=1, dim=-1, prepend=None, append=None: _diff(self, n, dim, prepend, append)
+    if not hasattr(Var, "fmod"):        # truncated remainder, sign of dividend
+        Var.fmod = lambda self, other: self - jt.trunc(self / other) * other
+    if not hasattr(Var, "remainder"):   # floored remainder, sign of divisor
+        Var.remainder = lambda self, other: self - jt.floor(self / other) * other
+    if not hasattr(Var, "softplus"):    Var.softplus = lambda self, beta=1, threshold=20: nn.softplus(self)
 
     # ---- linalg (peft / lora init need svd_lowrank, svd) ----
     def _svd(x, some=True, compute_uv=True, **kw):

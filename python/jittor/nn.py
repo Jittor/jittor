@@ -168,6 +168,12 @@ Example::
             # complex kernels support on both CPU and CUDA.
             if jt.flags.use_cuda and jt.compile_extern.cublas_ops and "complex" not in str(a.dtype):
                 a, b = _broadcast_batch_dims(a, b)
+                # cuBLAS strided-batched gemm rejects float64 (CUBLAS_STATUS_NOT_SUPPORTED)
+                # on many GPUs; compute in float32 and cast back (rare path, e.g. a float64
+                # attention mask contaminating a transformer's batched matmul).
+                if str(a.dtype) == "float64" or str(b.dtype) == "float64":
+                    r = jt.compile_extern.cublas_ops.cublas_batched_matmul(a.float32(), b.float32(), 0, 0)
+                    return r.cast("float64") if (str(a.dtype) == "float64" and str(b.dtype) == "float64") else r
                 return jt.compile_extern.cublas_ops.cublas_batched_matmul(a, b, 0, 0)
         shape = []
         len_c = max(len_a, len_b)
@@ -227,7 +233,10 @@ def relu(x, inplace=False):
     return jt.ternary_out_hint(cond, x, 0.0)
 
 
-def leaky_relu(x, scale=0.01): 
+def leaky_relu(x, scale=0.01, negative_slope=None, inplace=False):
+    # torch spells the slope `negative_slope` (+ an `inplace` flag); accept both.
+    if negative_slope is not None:
+        scale = negative_slope
     r''' Applies the element-wise function:
 
     .. math::
@@ -352,7 +361,7 @@ def sigmoid(x):
     `F.sigmoid(x)` (used by qwen2_moe and others) raised AttributeError.'''
     return jt.sigmoid(x)
 
-def silu(x):
+def silu(x, inplace=False):     # inplace: accepted for torch/mmcv compat, ignored
     r''' Applies the element-wise function:
 
     .. math::
@@ -670,6 +679,11 @@ def binary_cross_entropy_with_logits(output, target, weight=None, pos_weight=Non
     if not (target.shape == output.shape):
         raise ValueError(f"Target size ({target.shape}) must be the same as output size ({output.shape})")
 
+    # The stable formula below is exact for any FINITE logit, but literal +/-inf
+    # (e.g. Grounding-DINO's ContrastiveEmbed masks padding logits with -inf) makes
+    # (1-target)*(-inf) and inf-inf produce NaN. Clamp to +/-50 — sigmoid is fully
+    # saturated there, so loss/grad for finite logits are unchanged; only inf is removed.
+    output = jt.clamp(output, -50.0, 50.0)
     max_val = jt.clamp(-output,min_v=0)
     if pos_weight is not None:
         log_weight = (pos_weight-1)*target + 1
@@ -934,6 +948,8 @@ def multi_head_attention_forward(query, key, value, embed_dim_to_check, num_head
     attn = softmax(attn, dim=-1)
     if dropout_p > 0.0 and training:
         attn = dropout(attn, p=dropout_p)
+    if str(attn.dtype) != str(v.dtype):       # a float64 attn_mask can promote attn
+        attn = attn.cast(v.dtype)
     out = jt.matmul(attn, v)                                  # (N*H, L, head_dim)
     out = out.transpose(0, 1).reshape(tgt_len, bsz, embed_dim)
     out = linear(out, out_proj_weight, out_proj_bias)
@@ -1027,7 +1043,21 @@ BatchNorm3d = BatchNorm2d = BatchNorm1d = BatchNorm
 
 def batch_norm(x, running_mean, running_var, weight=1, bias=0, training=False, momentum=0.1, eps=1e-05):
     dims = [0]+list(range(2,x.ndim))
-    assert not training
+    if training:
+        # compute batch statistics (torch F.batch_norm training path; used by timm)
+        xmean = x.mean(dims)
+        x2mean = (x*x).mean(dims)
+        xvar = (x2mean - xmean*xmean).maximum(0.0)
+        w = weight / jt.sqrt(xvar + eps)
+        b = bias - xmean * w
+        norm_x = x * w.broadcast(x, dims) + b.broadcast(x, dims)
+        # update running stats in-place (unbiased var), if real Vars were passed
+        if isinstance(running_mean, jt.Var) and isinstance(running_var, jt.Var):
+            n = x.numel() / x.shape[1]
+            run_var = xvar * (n/(n-1)) if n > 1 else xvar
+            running_mean.update(running_mean + (xmean.reshape((-1,)) - running_mean)*momentum)
+            running_var.update(running_var + (run_var.reshape((-1,)) - running_var)*momentum)
+        return norm_x
     w = weight / jt.sqrt(running_var+eps)
     b = bias - running_mean * w
     norm_x = x * w.broadcast(x, dims) + b.broadcast(x, dims)
@@ -1248,6 +1278,79 @@ class Flatten(Module):
 
 from jittor.depthwise_conv import DepthwiseConv
 
+class _CudnnConv2d(jt.Function):
+    ''' Memory-efficient 2D convolution backed by cuDNN.
+
+    jittor's default conv (reindex + broadcast + reduce) fuses the *forward*
+    fine, but its *backward* materializes a dense ``[N,Cout,Cin,oh,ow,Kh,Kw]``
+    intermediate (e.g. ~30 GB for a 256->256 3x3 conv on a 2x80x80 batch),
+    OOMing two-stage detectors at batch>=2. cuDNN computes both directions in
+    bounded memory. jittor's *autodiff* through the raw ``cudnn_conv`` op is
+    broken in this build (wrong grad shape, grad.cc:232), so we supply the
+    backward explicitly via ``cudnn_conv_backward_{x,w}``. Numerically matches
+    the reindex path to ~1e-7 (cuDNN accumulation order) and aligns with real
+    torch's cuDNN better than the reindex path does. '''
+    def execute(self, x, w, sh, sw, ph, pw, dh, dw, groups):
+        self.saved = (x, w, sh, sw, ph, pw, dh, dw, groups)
+        return jt.cudnn.ops.cudnn_conv(x, w, sh, sw, ph, pw, dh, dw, groups)
+    def grad(self, gy):
+        x, w, sh, sw, ph, pw, dh, dw, groups = self.saved
+        H, W = x.shape[2], x.shape[3]
+        Kh, Kw = w.shape[2], w.shape[3]
+        gx = jt.cudnn.ops.cudnn_conv_backward_x(w, gy, H, W, sh, sw, ph, pw, dh, dw, groups)
+        gw = jt.cudnn.ops.cudnn_conv_backward_w(x, gy, Kh, Kw, sh, sw, ph, pw, dh, dw, groups)
+        return gx, gw, None, None, None, None, None, None, None
+
+def _try_cudnn_conv2d(x, weight, bias, stride, padding, dilation, groups):
+    ''' Return a cuDNN-backed conv2d result, or None if cuDNN isn't applicable
+    (CPU / no cuDNN / non-float32) so the caller falls back to the reindex path. '''
+    if not (jt.flags.use_cuda and getattr(jt, "cudnn", None)):
+        return None
+    if str(x.dtype) != "float32" or str(weight.dtype) != "float32":
+        return None        # keep amp / float16 / complex on the well-tested reindex path
+    sh, sw = stride   if isinstance(stride, tuple)   else (stride, stride)
+    ph, pw = padding  if isinstance(padding, tuple)  else (padding, padding)
+    dh, dw = dilation if isinstance(dilation, tuple) else (dilation, dilation)
+    y = _CudnnConv2d()(x, weight, sh, sw, ph, pw, dh, dw, groups)
+    if bias is not None:
+        y = y + bias.broadcast(y.shape, [0, 2, 3])
+    return y
+
+class _CudnnConvT2d(jt.Function):
+    ''' Memory-efficient 2D transpose-convolution backed by cuDNN. Same rationale
+    as _CudnnConv2d: jittor's reindex transpose-conv backward materializes a dense
+    intermediate. Transpose-conv forward IS the conv-backward-x op; its own
+    backward maps to cudnn_conv (grad input) + cudnn_conv_backward_w (grad weight).
+    Validated to match the reindex path exactly for the mask-head 14->28 deconv. '''
+    def execute(self, x, w, sh, sw, ph, pw, oph, opw, dh, dw, groups):
+        N, C, H, W = x.shape
+        Kh, Kw = w.shape[2], w.shape[3]
+        oH = (H - 1) * sh - 2 * ph + dh * (Kh - 1) + oph + 1
+        oW = (W - 1) * sw - 2 * pw + dw * (Kw - 1) + opw + 1
+        self.saved = (x, w, sh, sw, ph, pw, dh, dw, groups)
+        return jt.cudnn.ops.cudnn_conv_backward_x(w, x, oH, oW, sh, sw, ph, pw, dh, dw, groups)
+    def grad(self, gy):
+        x, w, sh, sw, ph, pw, dh, dw, groups = self.saved
+        Kh, Kw = w.shape[2], w.shape[3]
+        gx = jt.cudnn.ops.cudnn_conv(gy, w, sh, sw, ph, pw, dh, dw, groups)
+        gw = jt.cudnn.ops.cudnn_conv_backward_w(gy, x, Kh, Kw, sh, sw, ph, pw, dh, dw, groups)
+        return gx, gw, None, None, None, None, None, None, None, None, None
+
+def _try_cudnn_conv_transpose2d(x, weight, bias, stride, padding, output_padding, dilation, groups):
+    ''' cuDNN-backed conv_transpose2d, or None to fall back to the reindex path. '''
+    if not (jt.flags.use_cuda and getattr(jt, "cudnn", None)):
+        return None
+    if str(x.dtype) != "float32" or str(weight.dtype) != "float32":
+        return None
+    sh, sw = stride         if isinstance(stride, tuple)         else (stride, stride)
+    ph, pw = padding        if isinstance(padding, tuple)        else (padding, padding)
+    oph, opw = output_padding if isinstance(output_padding, tuple) else (output_padding, output_padding)
+    dh, dw = dilation       if isinstance(dilation, tuple)       else (dilation, dilation)
+    y = _CudnnConvT2d()(x, weight, sh, sw, ph, pw, oph, opw, dh, dw, groups)
+    if isinstance(bias, jt.Var):
+        y = y + bias.broadcast(y.shape, [0, 2, 3])
+    return y
+
 class Conv(Module):
     ''' Applies a 2D convolution over an input signal composed of several input planes.
 
@@ -1368,7 +1471,12 @@ class Conv(Module):
                 b = self.bias.broadcast(y.shape, [0,2,3])
                 y = y + b
             return y
-        elif self.groups == 1:
+        # cuDNN path (memory-efficient fwd+bwd); falls back to reindex below on
+        # CPU / no-cuDNN / non-float32. See _CudnnConv2d.
+        _y = _try_cudnn_conv2d(x, self.weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
+        if _y is not None:
+            return _y
+        if self.groups == 1:
             N,C,H,W = x.shape
             Kh, Kw = self.kernel_size
             assert C==self.in_channels
@@ -1433,7 +1541,14 @@ class Conv(Module):
             if self.bias is not None:
                 b = self.bias.broadcast(y.shape, [0,2,3])
                 y = y + b
-            return y          
+            return y
+
+    def _conv_forward(self, input, weight, bias=None):
+        # torch nn.Conv2d API: apply the conv with an externally supplied weight
+        # (and bias). Used by mmdet's NormedConv2d (seesaw loss / normed heads),
+        # which normalizes the weight then calls self._conv_forward(x, weight_, bias).
+        return conv2d(input, weight, bias, self.stride, self.padding,
+                      self.dilation, self.groups)
 
 Conv2d = Conv
 
@@ -1622,6 +1737,11 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     out_channels = weight.shape[0]
     if groups <= 0:
         raise ValueError("groups must be a positive integer")
+    # cuDNN path (memory-efficient fwd+bwd); falls back to reindex below on
+    # CPU / no-cuDNN / non-float32. See _CudnnConv2d.
+    _y = _try_cudnn_conv2d(x, weight, bias, stride, padding, dilation, groups)
+    if _y is not None:
+        return _y
     if groups == 1:
         N,C,H,W = x.shape
         Kh, Kw = weight.shape[-2:]
@@ -1938,6 +2058,10 @@ def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding
         h_out = (H-1) * stride_h + output_padding[0] - 2*padding_h + 1 + (h-1)*dilation_h
         w_out = (W-1) * stride_w + output_padding[1] - 2*padding_w + 1 + (w-1)*dilation_w
         out_shape = (N, o, h_out, w_out)
+        # cuDNN path (memory-efficient fwd+bwd); falls back to reindex below.
+        _y = _try_cudnn_conv_transpose2d(x, weight, bias, stride, padding, output_padding, dilation, 1)
+        if _y is not None:
+            return _y
         shape = (N, i, o, H, W, h, w)
         xx = x.broadcast(shape, (2, 5, 6)) # i,h,w
         ww = weight.broadcast(shape, (0, 3, 4)) # N,H,W
@@ -2247,9 +2371,10 @@ class AdaptiveAvgPool2d(Module):
     def execute(self, x):
         if isinstance(self.output_size, int):
             oh = ow = self.output_size
-        elif isinstance(self.output_size, (tuple, list)):
-            oh = x.shape[2] if self.output_size[0] is None else self.output_size[0]
-            ow = x.shape[3] if self.output_size[1] is None else self.output_size[1]
+        elif hasattr(self.output_size, "__len__") and not isinstance(self.output_size, str):
+            # tuple / list / jittor NanoVector (e.g. x.shape[2:] from a semantic head)
+            oh = x.shape[2] if self.output_size[0] is None else int(self.output_size[0])
+            ow = x.shape[3] if self.output_size[1] is None else int(self.output_size[1])
         else:
             raise TypeError(f"AdaptiveAvgPool2d only support int, tuple or list "
                             f"input. Not support {type(self.output_size)} yet.")
@@ -3257,11 +3382,17 @@ class UpsamplingNearest2d(Upsample):
 class Sequential(Module):
     def __init__(self, *args):
         self.layers = collections.OrderedDict()
+        import types as _types_ml
         for mod in args:
+            if mod is None:
+                continue                       # torch: ModuleList(None) -> empty
             if isinstance(mod, collections.OrderedDict):
                 for k, m in mod.items():
                     self.add_module(k, m)
-            elif isinstance(mod,list):
+            elif isinstance(mod, (list, tuple, _types_ml.GeneratorType)) or \
+                    (hasattr(mod, "__iter__") and not isinstance(mod, Module)):
+                # torch's ModuleList accepts ANY iterable of modules (incl. a
+                # generator, e.g. DINO: ModuleList(build(l) for l in layers)).
                 for m in mod:
                     self.append(m)
             else:
@@ -3297,9 +3428,34 @@ class Sequential(Module):
         if callback_leave:
             callback_leave(parents, k, self, n_children)
     def append(self, mod):
+        # torch's ModuleList stores None children (e.g. HRNet's _make_fuse_layers
+        # appends None for the identity/same-resolution path and checks `is not None`
+        # in forward). Accept None as a placeholder instead of asserting.
+        if mod is None:
+            self.layers[str(len(self.layers))] = None
+            return self
         assert callable(mod), f"Module <{type(mod)}> is not callable"
         assert not isinstance(mod, type), f"Module is not a type"
         self.layers[str(len(self.layers))]=mod
+        return self
+    def extend(self, mods):
+        # torch.nn.ModuleList.extend: append every module from an iterable
+        # (mmdet PVT does `layers.extend([...])` when assembling backbone stages).
+        for m in mods:
+            self.append(m)
+        return self
+    def insert(self, index, mod):
+        # torch.nn.ModuleList.insert: insert before `index`, shifting the
+        # (string-keyed) tail. Rebuild the OrderedDict with contiguous int keys.
+        assert callable(mod) and not isinstance(mod, type)
+        vals = list(self.layers.values())
+        n = len(vals)
+        if index < 0:
+            index += n
+        index = max(0, min(index, n))
+        vals.insert(index, mod)
+        self.layers = collections.OrderedDict((str(i), v) for i, v in enumerate(vals))
+        return self
     def add_module(self, name, mod):
         assert callable(mod), f"Module <{type(mod)}> is not callable"
         assert not isinstance(mod, type), f"Module is not a type"
