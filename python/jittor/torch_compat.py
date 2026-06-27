@@ -545,7 +545,8 @@ def install(torch):
     # torch.cat: tolerate empty tensors (skip zero-numel inputs) like torch,
     # accept `dim=`/`out=`. jittor's concat trips on an empty leading tensor.
     _jt_concat = jt.concat
-    def cat(tensors, dim=0, out=None):
+    def cat(tensors, dim=0, out=None, axis=None):
+        if axis is not None: dim = axis      # torch accepts axis= (mmrotate PSC head)
         tensors = [t for t in tensors if t is not None]
         nonempty = [t for t in tensors if t.numel() > 0]
         if len(nonempty) == 0:
@@ -2561,7 +2562,34 @@ def _install_module_methods(nn):
             except Exception:
                 pass
     def _train(self, mode=True):
-        _set_is_train(self, mode)
+        # torch semantics: set this module's flag, then recurse into DIRECT
+        # children calling each child's .train(mode) so overridden train()
+        # methods run (e.g. e2cnn's R2Conv.train() rebuilds/discards its cached
+        # filter; a flat is_train sweep silently bypasses it, leaving stale or
+        # empty filters and zero output). For ordinary modules this is
+        # behaviourally identical to the old flat sweep.
+        mode = bool(mode)
+        try:
+            self.is_train = mode
+        except Exception:
+            pass
+        kids = None
+        try:
+            kids = list(self.children())
+        except Exception:
+            kids = None
+        if kids is None:
+            _set_is_train(self, mode)          # fallback: flat sweep
+            return self
+        for child in kids:
+            tr = getattr(child, "train", None)
+            if callable(tr):
+                try:
+                    tr(mode)
+                    continue
+                except Exception:
+                    pass
+            _set_is_train(child, mode)
         return self
     M.train = _train
     def _eval(self):
@@ -3162,7 +3190,13 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # ndarray, breaking `param.data.to(...)`. Override to torch semantics.
     if not getattr(Var, "_data_wrapped", False):
         def _data_get(self):
-            return self.detach() if hasattr(self, "detach") else self
+            # torch's .data SHARES storage with the param: in-place writes
+            # (`p.data[:] = x`, `p.data.copy_(x)`, `p.data.normal_()`) write
+            # through. Returning self preserves that (a detached copy would
+            # silently drop the write — e.g. e2cnn inits weights via
+            # `self.weights.data[:] = ...`). Forward *values* are identical to
+            # detach(); only grad-tracking-on-reads differs (rare in practice).
+            return self
         def _data_set(self, value):
             src = value if isinstance(value, Var) else jt.array(value)
             was_trainable = not self.is_stop_grad()
@@ -4807,6 +4841,8 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
     if not hasattr(Var, "le"):          Var.le = lambda self, other: self <= other
     if not hasattr(Var, "neg"):         Var.neg = lambda self: -self
     if not hasattr(Var, "reciprocal"):  Var.reciprocal = lambda self: 1.0 / self
+    if not hasattr(Var, "square"):      Var.square = lambda self: self * self
+    if not hasattr(Var, "square_"):     Var.square_ = lambda self: self.assign(self * self)
     if not hasattr(Var, "clamp_min"):   Var.clamp_min = lambda self, v: jt.maximum(self, v)
     if not hasattr(Var, "clamp_max"):   Var.clamp_max = lambda self, v: jt.minimum(self, v)
     if not hasattr(Var, "bmm"):         Var.bmm = lambda self, other: jt.matmul(self, other)
@@ -4820,6 +4856,15 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
     if not hasattr(Var, "remainder"):   # floored remainder, sign of divisor
         Var.remainder = lambda self, other: self - jt.floor(self / other) * other
     if not hasattr(Var, "softplus"):    Var.softplus = lambda self, beta=1, threshold=20: nn.softplus(self)
+    # det/inverse on (batched) square matrices (mmrotate GWD/KLD/KFIoU Gaussian losses)
+    def _vdet(self):
+        import jittor.linalg as _la; return _la.det(self)
+    def _vinv(self):
+        import jittor.linalg as _la; return _la.inv(self)
+    if not hasattr(Var, "det"):       Var.det = _vdet
+    if not hasattr(Var, "inverse"):   Var.inverse = _vinv
+    g.det = lambda x: _vdet(x)
+    g.inverse = lambda x: _vinv(x)
 
     # ---- linalg (peft / lora init need svd_lowrank, svd) ----
     def _svd(x, some=True, compute_uv=True, **kw):

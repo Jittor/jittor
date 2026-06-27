@@ -272,6 +272,12 @@ _mod_module._global_forward_pre_hooks = {}
 _modules_pkg = types.ModuleType("torch.nn.modules")
 _modules_pkg.Module = nn.Module
 _modules_pkg.module = _mod_module
+# torch.nn.modules re-exports the layer classes; mmrotate's ORConv2d does
+# `from torch.nn.modules import Conv2d`. Mirror jittor.nn's public classes.
+for _cn in dir(nn):
+    if _cn and _cn[0].isupper() and not hasattr(_modules_pkg, _cn):
+        try: setattr(_modules_pkg, _cn, getattr(nn, _cn))
+        except Exception: pass
 sys.modules["torch.nn.modules"] = _modules_pkg
 sys.modules["torch.nn.modules.module"] = _mod_module
 

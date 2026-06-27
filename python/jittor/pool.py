@@ -638,15 +638,24 @@ class AvgPool3d(Module):
 def avg_pool2d(x, kernel_size, stride=None, padding=0, ceil_mode=False, count_include_pad=True):
     return AvgPool2d(kernel_size, stride, padding, ceil_mode, count_include_pad)(x)
 
+def _no_dilation(dilation):
+    # torch's default dilation=1 (or (1,1)) means *no* dilation, which jittor's
+    # Pool expresses as None. Normalize int/tuple/list all-ones -> None.
+    if dilation is None or dilation == 1: return True
+    if isinstance(dilation, (tuple, list)): return all(d == 1 for d in dilation)
+    return False
+
 class MaxPool2d(Module):
     def __init__(self, kernel_size, stride=None, padding=0, dilation=None, return_indices=None, ceil_mode=False):
+        if _no_dilation(dilation): dilation = None
         self._layer = Pool(kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, return_indices=return_indices, ceil_mode=ceil_mode, op="maximum")
-    
+
     def execute(self, x):
         return self._layer(x)
 
 class MaxPool3d(Module):
     def __init__(self, kernel_size, stride=None, padding=0, dilation=None, return_indices=None, ceil_mode=False):
+        if _no_dilation(dilation): dilation = None
         self._layer = Pool3d(kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, return_indices=return_indices, ceil_mode=ceil_mode, op="maximum")
     
     def execute(self, x):

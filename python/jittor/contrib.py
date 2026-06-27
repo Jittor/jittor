@@ -233,6 +233,12 @@ def getitem(x, slices):
     return x.getitem(slices)
 
 def setitem(x, slices, value):
+    # torch treats a uint8 (byte) index Var as a boolean mask, same legacy
+    # semantics as getitem above (e.g. e2cnn's full_mask[mask] = norms, where
+    # mask is uint8). jittor reads uint8 as element values -> route through the
+    # bool-mask path instead. (int8 is *not* a valid torch index.)
+    if isinstance(slices, jt.Var) and slices.dtype == "uint8":
+        slices = slices != 0
     if isinstance(slices, jt.Var) and slices.dtype == "bool":
         if slices.shape == x.shape:
             if isinstance(value, (int, float)):
@@ -245,7 +251,9 @@ def setitem(x, slices, value):
     elif isinstance(slices, tuple):
         ss = []
         for s in slices:
-            if isinstance(s, jt.Var) and s.dtype == "bool":
+            if isinstance(s, jt.Var) and s.dtype == "uint8":   # torch byte mask
+                ss.extend((s != 0).where())
+            elif isinstance(s, jt.Var) and s.dtype == "bool":
                 ss.extend(s.where())
             else:
                 ss.append(s)
