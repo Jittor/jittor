@@ -216,6 +216,27 @@ inline __nv_bfloat16 cuda_atomic_mul(__nv_bfloat16* a, __nv_bfloat16 b) {
 }
 #endif
 
+// Self-contained int64 multiply atomic. The generic cuda_atomic_mul template
+// instantiates int_mapper<T> (undefined for `long long`) and calls
+// atomicCAS(long long*, ...) (no such CUDA overload -- only int / unsigned int /
+// unsigned long long int exist), so `prod()`/scatter-multiply over an int64 Var
+// fails to COMPILE. Needed because torch metadata like image_grid_thw is int64
+// and `.prod()` runs on it. This non-template overload is an exact match
+// (preferred over the template) and CASes on the unsigned-64 reinterpretation;
+// two's-complement multiply gives the same low-64 bit pattern for signed/unsigned.
+__device__
+inline long long cuda_atomic_mul(long long* a, long long b) {
+    auto a_i = (unsigned long long int*)a;
+    unsigned long long int old = *a_i;
+    while (1) {
+        long long old_f = (long long)old;
+        auto assume = old;
+        old = atomicCAS(a_i, assume, (unsigned long long int)(old_f * b));
+        if (assume==old) break;
+    }
+    return (long long)old;
+}
+
 #if CUDA_ARCH >= 800
 template<> __device__
 __half cuda_atomic_max(__half* a, __half b) {

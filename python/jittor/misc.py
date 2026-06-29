@@ -219,24 +219,46 @@ jt.Var.repeat = repeat
 # tile = jt.Var.tile = repeat
 ne = jt.Var.ne = jt.Var.not_equal
 
-def repeat_interleave(x,repeats,dim=None):
-    # TODO repeats is jt.Var
-    assert isinstance(repeats,int)
-    if dim == None:
+def repeat_interleave(x,repeats,dim=None,output_size=None):
+    # torch-compatible: `repeats` may be a python int (every element repeated the
+    # same number of times) OR a 1-D Var/list giving a per-element repeat count
+    # (len == x.shape[dim]). The per-element form is required by e.g. the Qwen-VL
+    # vision tower (`repeat_interleave(grid_thw[:,1]*grid_thw[:,2], grid_thw[:,0])`).
+    if dim is None:
         x = x.reshape(-1)
-        dim=0
-    if dim<0: dim+=x.ndim
-    
-    tar_shape = list(x.shape)
-    x_shape = list(x.shape)
-    tar_shape[dim] = tar_shape[dim]*repeats 
-    dims = []
-    for i in range(len(tar_shape)):
-        if dim==i:
-            dims.append(f"i{i}/{repeats}")
-        else:
-            dims.append(f"i{i}")
-    return x.reindex(tar_shape,dims)
+        dim = 0
+    if dim < 0:
+        dim += x.ndim
+
+    if isinstance(repeats, int):
+        tar_shape = list(x.shape)
+        tar_shape[dim] = tar_shape[dim]*repeats
+        dims = []
+        for i in range(len(tar_shape)):
+            if dim==i:
+                dims.append(f"i{i}/{repeats}")
+            else:
+                dims.append(f"i{i}")
+        return x.reindex(tar_shape,dims)
+
+    # per-element repeats: build a gather index along `dim` then index_select.
+    if isinstance(repeats, jt.Var):
+        rep_list = [int(c) for c in repeats.numpy().reshape(-1)]
+    else:
+        rep_list = [int(c) for c in repeats]
+    n = x.shape[dim]
+    if len(rep_list) == 1 and n != 1:
+        rep_list = rep_list * n
+    assert len(rep_list) == n, \
+        f"repeat_interleave: repeats length {len(rep_list)} != dim size {n}"
+    idx = []
+    for i, c in enumerate(rep_list):
+        idx.extend([i] * c)
+    index = jt.array(idx).int64()
+    if index.shape[0] == 0:
+        new_shape = list(x.shape); new_shape[dim] = 0
+        return jt.zeros(new_shape, x.dtype)
+    return x.getitem(tuple(slice(None) if d != dim else index for d in range(x.ndim)))
 
 jt.Var.repeat_interleave = repeat_interleave
 
@@ -823,6 +845,74 @@ def unique(
         return output
 
 jt.Var.unique = unique
+
+
+def unique_consecutive(input, return_inverse=False, return_counts=False, dim=None):
+    r'''Eliminates all but the FIRST element from every consecutive group of
+    equivalent elements (torch.unique_consecutive). Unlike ``unique`` this does NOT
+    sort and only collapses runs, so ``[1,1,2,2,1]`` -> ``[1,2,1]``. Needed by the
+    Qwen2.5-VL window-attention index computation.
+    '''
+    if not isinstance(input, jt.Var):
+        input = jt.array(input)
+    if dim is None:
+        flat = input.reshape(-1)
+        n = flat.shape[0]
+        if n == 0:
+            out = flat
+            group = jt.zeros([0], dtype='int64')
+        else:
+            # boundary[i] == True where element i starts a new run.
+            if n == 1:
+                keep = jt.ones([1], dtype='bool')
+            else:
+                diff = flat[1:] != flat[:-1]
+                keep = jt.concat([jt.ones([1], dtype='bool'), diff], dim=0)
+            # group id of each input element = cumulative count of run-starts - 1
+            group = keep.int32().cumsum(0) - 1   # 0-based group index per element
+            out = flat[keep]
+        ret = [out]
+        if return_inverse:
+            ret.append(group.int64() if n else group)
+        if return_counts:
+            if n == 0:
+                counts = jt.zeros([0], dtype='int64')
+            else:
+                num_groups = int(out.shape[0])
+                # scatter-add in int32 (int64 scatter-add fails to compile on this
+                # CUDA build, same atomic limitation as int64 reduce), then widen.
+                counts = jt.zeros([num_groups], dtype='int32')
+                jt.scatter_(counts, 0, group.int32(), jt.ones([n], dtype='int32'), reduce='add')
+                counts = counts.int64()
+            ret.append(counts)
+        return ret[0] if len(ret) == 1 else tuple(ret)
+    # dim-wise: collapse consecutive equal slices along `dim`.
+    if dim < 0:
+        dim += input.ndim
+    moved = input.transpose(0, dim) if dim != 0 else input
+    m = moved.shape[0]
+    flat2 = moved.reshape(m, -1)
+    if m <= 1:
+        keep = jt.ones([m], dtype='bool')
+    else:
+        eq = (flat2[1:] == flat2[:-1]).all(dim=1)
+        keep = jt.concat([jt.ones([1], dtype='bool'), eq.logical_not()], dim=0)
+    out = moved[keep]
+    out = out.transpose(0, dim) if dim != 0 else out
+    if not (return_inverse or return_counts):
+        return out
+    group = keep.int32().cumsum(0) - 1
+    ret = [out]
+    if return_inverse:
+        ret.append(group.int64())
+    if return_counts:
+        num_groups = int(keep.int32().sum().item())
+        counts = jt.zeros([num_groups], dtype='int32')
+        jt.scatter_(counts, 0, group.int32(), jt.ones([m], dtype='int32'), reduce='add')
+        ret.append(counts.int64())
+    return tuple(ret)
+
+jt.Var.unique_consecutive = unique_consecutive
 
 
 def hypot(a,b):

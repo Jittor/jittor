@@ -259,8 +259,22 @@ class _GradScaler:
     grads into the optimizer; step() unscales, SKIPS the step on inf/nan, and
     update() grows/backs off the scale. bf16 doesn't need scaling but this is
     correct (and required) for fp16 mixed-precision training."""
-    def __init__(self, init_scale=2.0 ** 16, growth_factor=2.0, backoff_factor=0.5,
-                 growth_interval=2000, enabled=True):
+    def __init__(self, *args, **kwargs):
+        # torch >=2.3 changed the signature to GradScaler(device="cuda",
+        # init_scale=..., ...); accelerate/transformers call GradScaler("cuda").
+        # The legacy torch.cuda.amp.GradScaler took init_scale first. Detect a
+        # leading device positional (a str like "cuda" or a device object) and
+        # shift it out, so BOTH signatures work.
+        args = list(args)
+        if args and (isinstance(args[0], str) or
+                     args[0].__class__.__name__ in ("device", "_Device")):
+            args = args[1:]                     # drop the device positional
+        kwargs.pop("device", None)
+        init_scale = kwargs.pop("init_scale", args[0] if len(args) > 0 else 2.0 ** 16)
+        growth_factor = kwargs.pop("growth_factor", args[1] if len(args) > 1 else 2.0)
+        backoff_factor = kwargs.pop("backoff_factor", args[2] if len(args) > 2 else 0.5)
+        growth_interval = kwargs.pop("growth_interval", args[3] if len(args) > 3 else 2000)
+        enabled = kwargs.pop("enabled", args[4] if len(args) > 4 else True)
         self._enabled = enabled
         self._scale = float(init_scale)
         self._growth_factor = growth_factor
@@ -450,14 +464,20 @@ def install(torch):
         # jittor's jt.array downcasts numpy int64 -> int32; torch keeps int64.
         # Preserve the source dtype for (u)int64/float64 so dtypes match torch.
         import numpy as _np
-        v = jt.array(data)
+        # jt.array rejects ndarray SUBCLASSES (e.g. the adapter's numpy-backed
+        # buffer tensors) -> coerce to a base ndarray (same data, no copy).
+        if isinstance(data, _np.ndarray) and type(data) is not _np.ndarray:
+            data = _np.asarray(data)
         if isinstance(data, _np.ndarray):
             dn = data.dtype.name
-            if dn in ("int64", "uint64") and str(v.dtype) != "int64":
-                v = v.int64()
-            elif dn == "float64" and str(v.dtype) != "float64":
-                v = v.float64()
-        return v
+            # jt.array(numpy_int64) silently downcasts to int32, OVERFLOWING values
+            # that don't fit in 32 bits (e.g. byte counts ~1e10) BEFORE any later
+            # .int64() cast can recover them. Build the wide-dtype Var directly.
+            if dn in ("int64", "uint64"):
+                return jt.array(data, dtype="int64")
+            if dn == "float64":
+                return jt.array(data, dtype="float64")
+        return jt.array(data)
 
     def tensor(data, dtype=None, device=None, requires_grad=False, **kw):
         import numpy as _np
@@ -579,6 +599,19 @@ def install(torch):
     g.cat = cat
     g.concat = cat
     g.concatenate = cat
+
+    # torch.stack accepts a numpy-style `axis=` alias for `dim=` (and `out=`); jittor's
+    # jt.stack is `stack(x, dim=0)` only, so trl's PPO advantage stacking
+    # `torch.stack(advantages_reversed[::-1], axis=1)` dies on the unexpected kwarg.
+    _jt_stack = jt.stack
+    def stack(tensors, dim=0, *, axis=None, out=None):
+        if axis is not None: dim = axis
+        res = _jt_stack(list(tensors), dim)
+        if out is not None:
+            out.assign(res)
+            return out
+        return res
+    g.stack = stack
 
     # Wrap tensor constructors to tolerate torch's device=/requires_grad=/
     # layout=/pin_memory= kwargs and torch dtype objects. jittor's versions
@@ -1470,6 +1503,17 @@ def _install_reductions(g):
     Var.sort = lambda self, dim=-1, descending=False, **kw: sort(self, dim=dim, descending=descending)
     Var.argsort = lambda self, dim=-1, descending=False, **kw: g.argsort(self, dim=dim, descending=descending)
     Var.topk = lambda self, k, dim=-1, largest=True, sorted=True: topk(self, k, dim=dim, largest=largest, sorted=sorted)
+    # Tensor.softmax/log_softmax accept a `dtype=` (cast before the op) which
+    # jittor's native method rejects (vLLM's sampler: logits.softmax(dim=-1,
+    # dtype=torch.float32)).
+    def _var_softmax(self, dim=-1, dtype=None, **kw):
+        x = self.cast(_dtype_to_str(dtype)) if dtype is not None else self
+        return _jt.nn.softmax(x, dim=dim)
+    Var.softmax = _var_softmax
+    def _var_log_softmax(self, dim=-1, dtype=None, **kw):
+        x = self.cast(_dtype_to_str(dtype)) if dtype is not None else self
+        return _jt.nn.log_softmax(x, dim=dim)
+    Var.log_softmax = _var_log_softmax
     # torch's Tensor.max(dim)/min(dim) returns the (values, indices) namedtuple --
     # mmdetection relies on this pervasively (`v, i = overlaps.max(dim=0)`). jittor's
     # native method returns values-only and is used by core/linalg/einops with the
@@ -1509,6 +1553,37 @@ def _install_reductions(g):
 
     # missing methods (truly absent on Var -> pure additive)
     Var.masked_select = lambda self, mask: self[mask]      # torch: 1-D of selected
+
+    def _masked_scatter(self, mask, source):
+        # torch.Tensor.masked_scatter(mask, source): copy elements of `source`
+        # (consumed in row-major order) into the positions of `self` where `mask`
+        # is True; `mask` broadcasts to self.shape. Out-of-place, and DIFFERENTIABLE
+        # w.r.t. both self and source -- the Qwen-VL path scatters vision-tower
+        # image_embeds into the text inputs_embeds, and grads must reach the ViT.
+        # Implemented as gather(source, running-count-of-True) then where(mask),
+        # avoiding any sliced in-place write (a jittor no-view no-op).
+        m = mask
+        if tuple(m.shape) != tuple(self.shape):
+            m = m.broadcast(self.shape)
+        mb = m.bool()
+        flat_mask = mb.reshape(-1)
+        # index into source.flatten() for each position = (#True strictly before it)
+        sel_idx = flat_mask.int32().cumsum(0) - 1
+        sel_idx = sel_idx.maximum(0).minimum(source.numel() - 1)  # clamp (unused where mask False)
+        src_flat = source.reshape(-1)
+        gathered = src_flat[sel_idx].reshape(self.shape)
+        if str(gathered.dtype) != str(self.dtype):
+            gathered = gathered.cast(str(self.dtype))
+        return jt.ternary(mb, gathered, self)
+    Var.masked_scatter = _masked_scatter
+
+    def _masked_scatter_(self, mask, source):
+        # in-place variant: write the result back through assign() so the same Var
+        # (and any module attribute holding it) reflects the update.
+        out = _masked_scatter(self, mask, source)
+        self.assign(out)
+        return self
+    Var.masked_scatter_ = _masked_scatter_
 
     def _unfold(self, dimension, size, step):
         # torch's Tensor.unfold(dim, size, step): sliding windows along `dim`,
@@ -1601,7 +1676,7 @@ def _install_reductions(g):
 def _wrap_constructors(g):
     """Wrap jittor tensor constructors to accept torch kwargs (device=,
     requires_grad=, layout=, pin_memory=, out=) and torch dtype objects."""
-    import functools
+    import functools, inspect
     _DROP = ("device", "requires_grad", "layout", "pin_memory", "memory_format",
              "out", "non_blocking")
 
@@ -1609,6 +1684,17 @@ def _wrap_constructors(g):
         orig = getattr(g, name, None)
         if orig is None:
             return
+        # A few jittor factories (ones_like, tril, triu) have no `dtype` param at
+        # all, unlike torch where every one of these accepts dtype=. For those we
+        # can't forward dtype= (jittor raises "unexpected keyword argument
+        # 'dtype'"); instead pop it and cast the result. Detect support once here.
+        try:
+            _sig = inspect.signature(orig)
+            _accepts_dtype = ("dtype" in _sig.parameters or
+                              any(p.kind == p.VAR_KEYWORD
+                                  for p in _sig.parameters.values()))
+        except (ValueError, TypeError):
+            _accepts_dtype = True  # builtins w/o introspectable sig: assume ok
         @functools.wraps(orig)
         def wrapped(*args, **kwargs):
             for k in _DROP:
@@ -1642,9 +1728,28 @@ def _wrap_constructors(g):
             # map it onto the next positional slot (only full/full_like ever get it).
             if "fill_value" in kwargs:
                 args = tuple(args) + (kwargs.pop("fill_value"),)
-            if "dtype" in kwargs and kwargs["dtype"] is not None:
-                kwargs["dtype"] = _dtype_to_str(kwargs["dtype"])
-            return orig(*args, **kwargs)
+            _cast_to = None  # for factories whose jittor impl lacks `dtype`
+            if "dtype" in kwargs:
+                if kwargs["dtype"] is None:
+                    # torch.empty/zeros(..., dtype=None) -> the default dtype.
+                    # jittor's factories reject dtype=None, so resolve it.
+                    if _accepts_dtype:
+                        try:
+                            kwargs["dtype"] = _dtype_to_str(g.get_default_dtype())
+                        except Exception:
+                            kwargs.pop("dtype")
+                    else:
+                        kwargs.pop("dtype")
+                elif _accepts_dtype:
+                    kwargs["dtype"] = _dtype_to_str(kwargs["dtype"])
+                else:
+                    # ones_like / tril / triu have no dtype param in jittor; torch
+                    # accepts one. Pop it and cast the result instead.
+                    _cast_to = _dtype_to_str(kwargs.pop("dtype"))
+            out = orig(*args, **kwargs)
+            if _cast_to is not None:
+                out = out.cast(_cast_to)
+            return out
         wrapped._torch_wrapped = True
         setattr(g, name, wrapped)
 
@@ -2420,6 +2525,12 @@ def _install_module_methods(nn):
 
     _orig_call = M.__call__
     def _call(self, *args, **kwargs):
+        # torch lets a module override forward per-INSTANCE (`self.forward = fn`,
+        # used by vLLM's samplers / CustomOp dispatch). Honor an instance-level
+        # forward before the class-level dispatch.
+        inst_fwd = self.__dict__.get("forward", None)
+        if inst_fwd is not None and callable(inst_fwd):
+            return inst_fwd(*args, **kwargs)
         if _prefer_forward(type(self)):
             return type(self).forward(self, *args, **kwargs)
         return _orig_call(self, *args, **kwargs)
@@ -2862,10 +2973,14 @@ def _install_cuda(g):
     # stub classes referenced in annotations / guarded paths
     cuda.CUDAGraph = type("CUDAGraph", (), {})
     class _Stream:
-        def __init__(self, *a, **k): pass
+        def __init__(self, *a, **k): self.cuda_stream = 0
         def __enter__(self): return self
         def __exit__(self, *a): return False
         def synchronize(self): jt.sync_all(True)
+        def wait_stream(self, *a, **k): return None
+        def wait_event(self, *a, **k): return None
+        def record_event(self, *a, **k): return None
+        def query(self): return True
     cuda.Stream = _Stream
     cuda.Event = type("Event", (), {"__init__": lambda self, *a, **k: None,
                                       "record": lambda self, *a, **k: None,
@@ -2951,9 +3066,17 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # _ip() preserves grad-tracking: jittor's assign() adopts the source's
     # stop_grad flag, which would freeze a trainable parameter.
     def _ip(self, value):
+        # In-place op x.OP_(...) -> x becomes `value` (which usually depends on x,
+        # e.g. div_/mul_/add_). assign() ALREADY keeps x grad-connected when `value`
+        # is grad-connected, so grad flows through the in-place op (torch parity).
+        # But start_grad() RESETS x's grad node and SEVERS that just-built graph
+        # (the same start_grad-severing bug behind the DPO/requires_grad fix), which
+        # silently zeroed grads through x.div_()/etc (GRPO temperature scaling).
+        # So only start_grad if assign actually left x stopped (a constant value like
+        # fill_/zero_ on a previously-trainable leaf) -- never on an already-connected x.
         was_trainable = not self.is_stop_grad()
         self.assign(value)
-        if was_trainable:
+        if was_trainable and self.is_stop_grad():
             self.start_grad()
         return self
     def _copy_(self, other, non_blocking=False):
@@ -3234,11 +3357,20 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             except Exception:
                 return False
         def _rg_set(self, v):
+            # CRITICAL: jittor's start_grad()/stop_grad() RESET the Var's grad node,
+            # which SEVERS any already-built autograd graph that depends on it --
+            # even start_grad() on an already-grad Var wipes prior computations
+            # ([2,2,2]->[0,0,0]). torch's requires_grad_ is idempotent and never
+            # severs existing graphs. So only flip when the flag ACTUALLY changes;
+            # a no-op set (the common case, e.g. peft set_adapter re-asserting
+            # requires_grad=True every disable_adapter exit) must NOT touch the node.
             if v:
-                self.start_grad()
+                if self.is_stop_grad():
+                    self.start_grad()
                 _register_leaf(self)
             else:
-                self.stop_grad()
+                if not self.is_stop_grad():
+                    self.stop_grad()
         Var.requires_grad = property(_rg_get, _rg_set)
 
     def requires_grad_(self, v=True):
@@ -3411,6 +3543,14 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                 if isinstance(out, Var) and str(out.dtype) != res:
                     out = out.cast(res)
                 return out
+            # torch defers numeric ops against a Python sequence to the sequence's
+            # own protocol: `Tensor.__mul__([x])` / `__rmul__([x])` return
+            # NotImplemented, so `[x] * t` becomes list-repeat (via Tensor.__index__)
+            # and `t * [x]` raises. jittor's native op would instead broadcast the
+            # list into a Var (e.g. `[tok] * grid.prod()` -> Var, breaking ms-swift's
+            # `_extend_tokens` list concatenation). Match torch: defer to the sequence.
+            if isinstance(other, (list, tuple)):
+                return NotImplemented
             return native(self, other)
         _op.__name__ = opname
         return _op
@@ -3451,6 +3591,10 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                 if isinstance(out, Var) and str(out.dtype) != tgt:
                     out = out.cast(tgt)
                 return out
+            # python sequence: defer to it (torch returns NotImplemented), matching
+            # the integer-op behaviour above.
+            if isinstance(other, (list, tuple)):
+                return NotImplemented
             # tensor / python scalar: jittor already matches torch (int tensor / num
             # -> float32, float tensor keeps its float), so pass straight through.
             return native(self, other)

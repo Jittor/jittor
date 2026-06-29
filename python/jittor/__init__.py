@@ -1391,13 +1391,18 @@ class Module:
             dc = v.__dict__
             if isinstance(v, nn.ParameterList):
                 dc = v.params
+            bufnames = v.__dict__.get("_buffer_names", ())
             for k2, p in dc.items():
                 if isinstance(k2, str) and k2.startswith("_"): continue
                 if isinstance(p, Var):
-                    # registered buffers are never trainable parameters
+                    # registered buffers are never trainable parameters. Check the
+                    # per-Var tags AND the module's buffer-name set (the tags are
+                    # lost when from_pretrained replaces the Var; the name set is not).
                     if getattr(p, "is_buffer", False):
                         continue
                     if not getattr(p, "persistent", True):
+                        continue
+                    if k2 in bufnames:
                         continue
                     ps.append(p)
                     pname = ".".join(stack[1:]+[str(k2)])
@@ -1487,11 +1492,34 @@ class Module:
             ('bias', jt.Var([-0.38282675  0.36271113 -0.7063226   0.02899247  0.52210844], dtype=float32))]
 
         '''
-        state_dict = self.state_dict(recurse=recurse)
-        # registered buffers are kept in state_dict() but are never trainable
-        # parameters, so exclude them here (mirrors parameters()).
-        return [(k, v) for k, v in state_dict.items()
-                if not getattr(v, "is_buffer", False)]
+        # Mirror parameters() exactly (dfs with per-module buffer-name exclusion)
+        # so a buffer whose is_buffer/persistent tag was lost to a dtype-cast Var
+        # replacement (e.g. rope inv_freq after from_pretrained) is still excluded
+        # by NAME -- otherwise it leaks into the optimizer and weight-decay drifts it.
+        ps = []
+        stack = []
+        def callback(parents, k, v, n):
+            stack.append(str(k))
+            dc = v.__dict__
+            if isinstance(v, nn.ParameterList):
+                dc = v.params
+            bufnames = v.__dict__.get("_buffer_names", ())
+            for k2, p in dc.items():
+                if isinstance(k2, str) and k2.startswith("_"): continue
+                if isinstance(p, Var):
+                    if getattr(p, "is_buffer", False): continue
+                    if not getattr(p, "persistent", True): continue
+                    if k2 in bufnames: continue
+                    name = ".".join(stack[1:] + [str(k2)])
+                    ps.append((name, p))
+        def callback_leave(parents, k, v, n):
+            stack.pop()
+        self.dfs([], None, callback, callback_leave, recurse)
+        seen = set(); out = []
+        for nm, p in ps:
+            if nm in seen: continue
+            seen.add(nm); out.append((nm, p))
+        return out
 
     def load_state_dict(self, params) -> None:
         '''
@@ -1579,34 +1607,67 @@ class Module:
         return _WriteThroughDict(self, { k:v for k,v in self.__dict__.items() if isinstance(v, Var) })
 
     def requires_grad_(self, requires_grad=True):
-        ''' Sets requires_grad for all parameters and sub-modules. '''
+        ''' Sets requires_grad for all parameters and sub-modules.
+
+        torch semantics: this toggles every PARAMETER leaf's ``requires_grad`` and
+        does NOT gate the module's forward. The previous jittor behavior of running
+        the whole forward under ``no_grad`` whenever the module flag was False is
+        incompatible with the freeze-then-unfreeze-a-subset pattern used by LoRA /
+        adapters (peft freezes the base model with ``requires_grad_(False)`` and then
+        re-enables only the adapter params): wrapping the forward in ``no_grad``
+        severs the autograd graph, so the re-enabled adapter params -- and any
+        upstream trainable tensors -- receive zero gradient. Toggling the leaves
+        instead keeps frozen weights frozen while letting gradients flow through the
+        module to whatever is still trainable.
+        '''
         self._requires_grad = requires_grad
-        self._place_hooker()
+        # propagate to every parameter leaf (recurse through sub-modules), matching
+        # torch.nn.Module.requires_grad_.
+        for p in self.parameters():
+            try:
+                p.requires_grad = requires_grad
+            except Exception:
+                pass
         return self
 
     def __hooked_call__(self, *args, **kw):
         if hasattr(self, "__fhook2__"):
-            if len(kw):
+            # torch's forward_pre_hook convention:
+            #   default:          hook(module, args) -> None | new_args
+            #   with_kwargs=True: hook(module, args, kwargs) -> None | (new_args, new_kwargs)
+            # When the hook was registered with_kwargs it must ALWAYS get the kwargs
+            # arg (even if empty) -- ms-swift's VL pre_forward_hook has a 3-arg
+            # signature and injects inputs_embeds via the kwargs dict.
+            if getattr(self, "__fhook2_with_kwargs__", False) or len(kw):
                 args_kw_result = self.__fhook2__(self, args, kw)
             else:
                 args_kw_result = self.__fhook2__(self, args)
             if args_kw_result is not None:
-                if isinstance(args_kw_result, tuple) and len(args_kw_result) == 2:
-                    args, kw = args_kw_result
+                if getattr(self, "__fhook2_with_kwargs__", False):
+                    # with_kwargs: torch requires a (new_args, new_kwargs) pair.
+                    if isinstance(args_kw_result, tuple) and len(args_kw_result) == 2:
+                        args, kw = args_kw_result
+                    else:
+                        raise RuntimeError(
+                            "forward pre-hook with kwargs must return None or a tuple "
+                            f"of (new_args, new_kwargs), but got {args_kw_result}."
+                        )
                 else:
-                    raise RuntimeError(
-                        "forward pre-hook must return None or a tuple "
-                        f"of (new_args, new_kwargs), but got {args_kw_result}."
-                    )
+                    # no kwargs: torch replaces args with the return value, wrapping a
+                    # single non-tuple return in a 1-tuple.
+                    if not isinstance(args_kw_result, tuple):
+                        args_kw_result = (args_kw_result,)
+                    args = args_kw_result
         if hasattr(self, "__bihook__"):
             if len(kw):
                 LOG.w("backward hook not support kw")
             args = grad_hooker(args, self.__bihook__)
-        if hasattr(self, "_requires_grad") and not self._requires_grad:
-            with jt.no_grad():
-                ret = self.__hooked_call__(*args, **kw)
-        else:
-            ret = self.__hooked_call__(*args, **kw)
+        # NB: do NOT wrap the forward in no_grad when `_requires_grad` is False.
+        # torch's requires_grad_(False) freezes parameters, it does not stop the
+        # forward from building the autograd graph; gating here severs grad for
+        # re-enabled sub-params (LoRA adapters) and upstream trainables. Freezing is
+        # enforced at the parameter level (see Module.requires_grad_).
+        ret = self.__hooked_call__(*args, **kw)
         if hasattr(self, "__bohook__"):
             if len(kw):
                 LOG.w("backward hook not support kw")
@@ -1668,8 +1729,8 @@ class Module:
             delattr(self,"__fhook_with_kwargs__")
 
     def register_pre_forward_hook(self, func):
-        ''' Register a forward function hook that will be called before Module.execute. 
-        
+        ''' Register a forward function hook that will be called before Module.execute.
+
         The hook function will be called with the following arguments::
 
             hook(module, input_args)
@@ -1678,12 +1739,31 @@ class Module:
 
         '''
         self.__fhook2__ = func
+        self.__fhook2_with_kwargs__ = False
         self._place_hooker()
+
+    def register_forward_pre_hook(self, func, *, prepend=False, with_kwargs=False):
+        ''' torch-compatible alias of the pre-forward hook.
+
+        transformers / peft / ms-swift call ``register_forward_pre_hook`` (torch's
+        spelling) -- notably ms-swift's multimodal template registers one with
+        ``with_kwargs=True`` to swap ``input_ids`` for ``inputs_embeds`` before the
+        forward. Mirrors torch's signature and returns a ``.remove()``-able handle.
+        With ``with_kwargs=True`` the hook is called as ``hook(module, args, kwargs)``
+        and may return ``(new_args, new_kwargs)``; otherwise ``hook(module, args)``
+        returning ``None`` or replacement args.
+        '''
+        self.__fhook2__ = func
+        self.__fhook2_with_kwargs__ = True if with_kwargs else False
+        self._place_hooker()
+        return _RemovableHandle(self.remove_pre_forward_hook)
 
     def remove_pre_forward_hook(self):
         ''' Removes the current pre-forward hook. '''
         if hasattr(self,"__fhook2__"):
             delattr(self,"__fhook2__")
+        if hasattr(self,"__fhook2_with_kwargs__"):
+            delattr(self,"__fhook2_with_kwargs__")
 
     def register_input_backward_hook(self, func):
         self.__bihook__ = func
@@ -1736,15 +1816,28 @@ Arguments of hook are defined as::
         return cd
 
     def extra_repr(self):
-        ss = []
-        n = len(self.__init__.__code__.co_varnames)
-        if self.__init__.__defaults__ is not None:
-            n -= len(self.__init__.__defaults__)
-        for i, k in enumerate(self.__init__.__code__.co_varnames[1:]):
-            v = getattr(self, k) if hasattr(self, k) else None
-            if isinstance(v, Var): v = v.peek()
-            s = f"{k}={v}" if i >= n else str(v)
-            ss.append(s)
+        # Reentrancy guard: extra_repr introspects __init__ args and str()'s their
+        # values. When a value is itself a sub-module (e.g. peft wraps a
+        # `base_layer`, or passes ModuleDicts), str()'ing it re-enters the full
+        # __str__/dfs traversal -- which calls extra_repr again -- re-walking the
+        # subtree at every node => exponential blowup / RecursionError on deep
+        # wrapped models. torch's extra_repr never recurses into sub-modules; mirror
+        # that by short-circuiting any nested extra_repr triggered mid-render.
+        if getattr(Module, "_in_extra_repr", False):
+            return ""
+        Module._in_extra_repr = True
+        try:
+            ss = []
+            n = len(self.__init__.__code__.co_varnames)
+            if self.__init__.__defaults__ is not None:
+                n -= len(self.__init__.__defaults__)
+            for i, k in enumerate(self.__init__.__code__.co_varnames[1:]):
+                v = getattr(self, k) if hasattr(self, k) else None
+                if isinstance(v, Var): v = v.peek()
+                s = f"{k}={v}" if i >= n else str(v)
+                ss.append(s)
+        finally:
+            Module._in_extra_repr = False
         return ", ".join(ss)
 
     def apply(self, func):
@@ -1917,11 +2010,25 @@ Arguments of hook are defined as::
         return object.__getattribute__(self, key)
 
     def register_buffer(self, key, value, persistent=True):
-        value.persistent = persistent
-        # mark as a registered buffer so parameters()/named_parameters() can
-        # exclude it: a buffer is never a trainable parameter, regardless of
-        # persistence. state_dict()/named_buffers() still use .persistent.
-        value.is_buffer = True
+        # torch allows registering a None buffer as a placeholder (e.g. vLLM's
+        # FusedMoE expert_map when there is no expert parallelism). Don't try to
+        # tag attributes on None.
+        # Track buffer attribute NAMES on the module (like torch's _buffers dict).
+        # The per-Var is_buffer/persistent tags are lost when from_pretrained's
+        # dtype cast / weight-load REPLACES the buffer Var with a fresh one, so
+        # parameters()/named_parameters() can no longer tell it's a buffer and it
+        # leaks into the optimizer (then weight-decay corrupts e.g. rope inv_freq).
+        # Name-based tracking survives any Var replacement -- the torch invariant.
+        try:
+            self.__dict__.setdefault("_buffer_names", set()).add(key)
+        except Exception:
+            pass
+        if value is not None:
+            value.persistent = persistent
+            # mark as a registered buffer so parameters()/named_parameters() can
+            # exclude it: a buffer is never a trainable parameter, regardless of
+            # persistence. state_dict()/named_buffers() still use .persistent.
+            value.is_buffer = True
         object.__setattr__(self, key, value)
         return value
     

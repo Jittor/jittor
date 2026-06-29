@@ -1416,14 +1416,14 @@ class Conv(Module):
         else:
             if stride <= 0:
                 raise ValueError(f"stride must be greater than zero, got {stride}")
-        if isinstance(padding, tuple):
+        if isinstance(padding, (tuple, list)):
             for size in padding:
                 if size < 0:
                     raise ValueError(f"padding must be nonnegative, got {padding}")
         else:
             if padding < 0:
                 raise ValueError(f"padding must be nonnegative, got {padding}")
-        if isinstance(dilation, tuple):
+        if isinstance(dilation, (tuple, list)):
             for size in dilation:
                 if size <= 0:
                     raise ValueError(f"dilation must be greater than zero, got {dilation}")
@@ -1432,10 +1432,13 @@ class Conv(Module):
                 raise ValueError(f"dilation must be greater than zero, got {dilation}")
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.kernel_size = kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size)
-        self.stride = stride if isinstance(stride, tuple) else (stride, stride)
-        self.padding = padding if isinstance(padding, tuple) else (padding, padding)
-        self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
+        # torch accepts int OR sequence (list/tuple); _pair normalizes int->2-tuple
+        # and passes sequences through, so a *list* kernel_size no longer falls into
+        # the scalar branch (which produced nested ([k,k],[k,k]) and crashed init).
+        self.kernel_size = _pair(kernel_size)
+        self.stride = _pair(stride)
+        self.padding = _pair(padding)
+        self.dilation = _pair(dilation)
         self.groups = groups
         self.is_depthwise_conv = self.groups == self.out_channels and self.groups == self.in_channels
         if self.is_depthwise_conv and jt.flags.use_cuda and jt.compiler.is_cuda:
@@ -1658,10 +1661,15 @@ class Conv3d(Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.kernel_size = kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size, kernel_size)
-        self.stride = stride if isinstance(stride, tuple) else (stride, stride, stride)
-        self.padding = padding if isinstance(padding, tuple) else (padding, padding, padding)
-        self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation, dilation)
+        # torch accepts int OR any sequence (list/tuple) for these; the old
+        # `isinstance(x, tuple)` test sent a *list* kernel_size (e.g. Qwen2.5-VL's
+        # Conv3d patch_embed uses [t,p,p]) into the scalar branch -> nested
+        # ([k,k,k],...) -> weight-shape build crashes. _triple normalizes int->3-tuple
+        # and passes sequences through (matching torch's _triple).
+        self.kernel_size = _triple(kernel_size)
+        self.stride = _triple(stride)
+        self.padding = _triple(padding)
+        self.dilation = _triple(dilation)
         self.groups = groups
         if groups <= 0:
             raise ValueError("groups must be a positive integer")
@@ -2612,7 +2620,9 @@ def pad(x,padding=None, mode='constant', value=0, pad=None):
         elif mode == 'circular':
             out_dims.append(f"i{i}<{l} ? {n-l}+i{i} : i{i} > {n+l-1} ? i{i}-{n+l} : i{i}-{l}")
 
-    return x.reindex(out_shape,out_dims,overflow_value=value)
+    # reindex's overflow_value must be float64-typed; torch allows a bool/int
+    # fill value (e.g. F.pad(bool_mask, value=True)), so coerce to float.
+    return x.reindex(out_shape,out_dims,overflow_value=float(value))
 
 
 class ReflectionPad2d(Module):

@@ -493,6 +493,40 @@ dist.tensor.DTensor = type("DTensor", (), {})
 dist.tensor.Replicate = type("Replicate", (), {})
 dist.tensor.Shard = type("Shard", (), {})
 
+# torch.distributed.distributed_c10d: trl (grpo_trainer/vllm_client) and accelerate
+# import this submodule directly (`import torch.distributed.distributed_c10d as c10d`,
+# `torch.distributed.distributed_c10d.is_xccl_available()`). Re-export dist's stubs
+# plus the backend-availability probes (all False, single-process) and ProcessGroup.
+_c10d = types.ModuleType("torch.distributed.distributed_c10d")
+for _n in dir(dist):
+    if not _n.startswith("__"):
+        setattr(_c10d, _n, getattr(dist, _n))
+for _bk in ("is_xccl_available", "is_nccl_available", "is_gloo_available",
+            "is_mpi_available", "is_ucc_available"):
+    setattr(_c10d, _bk, (lambda: False))
+_c10d.ProcessGroup = type("ProcessGroup", (), {})
+_c10d._get_default_group = lambda *a, **k: None
+_c10d._get_default_store = lambda *a, **k: None
+_c10d.Work = type("Work", (), {})
+_c10d.default_pg_timeout = None
+dist.distributed_c10d = _c10d
+dist.ProcessGroup = _c10d.ProcessGroup
+sys.modules["torch.distributed.distributed_c10d"] = _c10d
+
+# torch.distributed.fsdp.*: accelerate.utils.fsdp_utils imports these (lazily, inside
+# functions). FSDP itself is unused single-process; provide import-satisfying stubs.
+dist.fsdp.FullyShardedDataParallel = type("FullyShardedDataParallel", (), {})
+dist.fsdp.FSDPModule = type("FSDPModule", (), {})
+dist.fsdp.MixedPrecisionPolicy = type("MixedPrecisionPolicy", (), {})
+dist.fsdp.fully_shard = lambda *a, **k: None
+dist.fsdp.StateDictType = type("StateDictType", (), {
+    "FULL_STATE_DICT": 0, "LOCAL_STATE_DICT": 1, "SHARDED_STATE_DICT": 2})
+_fsdp_full = types.ModuleType("torch.distributed.fsdp.fully_sharded_data_parallel")
+_fsdp_full.FullyShardedDataParallel = dist.fsdp.FullyShardedDataParallel
+_fsdp_full.StateDictType = dist.fsdp.StateDictType
+sys.modules["torch.distributed.fsdp.fully_sharded_data_parallel"] = _fsdp_full
+dist.fsdp.fully_sharded_data_parallel = _fsdp_full
+
 # ---- mmdetection import/runtime resolution stubs (not operators, but the modules
 #      that *contain* the operators import these at load/inference time) ----
 # torch.onnx.is_in_onnx_export(): guarded in many mmdet inference paths
@@ -997,6 +1031,37 @@ _autograd_fn.FunctionCtx = type("FunctionCtx", (), {})
 _autograd.function = _autograd_fn
 _autograd.once_differentiable = _autograd_fn.once_differentiable
 sys.modules["torch.autograd.function"] = _autograd_fn
+
+# torch.autograd.graph: trl's activation_offloading does
+# `from torch.autograd.graph import saved_tensors_hooks` and subclasses it
+# (OffloadActivations/NoOpManager). jittor has no autograd-graph saved-tensor
+# hook mechanism, so provide a no-op context-manager base: it accepts the
+# pack/unpack hooks but never calls them => activation offloading is simply
+# absent (a memory optimization, not a correctness feature).
+_autograd_graph = types.ModuleType("torch.autograd.graph")
+class _saved_tensors_hooks:
+    def __init__(self, pack_hook=None, unpack_hook=None):
+        self.pack_hook = pack_hook
+        self.unpack_hook = unpack_hook
+    def __enter__(self):
+        return self
+    def __exit__(self, *a):
+        return False
+class _save_on_cpu(_saved_tensors_hooks):
+    def __init__(self, pin_memory=False, device_type="cuda"):
+        super().__init__(None, None)
+_autograd_graph.saved_tensors_hooks = _saved_tensors_hooks
+_autograd_graph.save_on_cpu = _save_on_cpu
+_autograd_graph.Node = type("Node", (), {})
+_autograd.graph = _autograd_graph
+sys.modules["torch.autograd.graph"] = _autograd_graph
+# torch.autograd.variable.Variable._execution_engine.queue_callback(...) is used
+# by activation offloading's runtime path (never reached with the no-op hooks).
+_autograd_var = types.ModuleType("torch.autograd.variable")
+_eng = type("_Engine", (), {"queue_callback": staticmethod(lambda *a, **k: None)})()
+_autograd_var.Variable = type("Variable", (), {"_execution_engine": _eng})
+_autograd.variable = _autograd_var
+sys.modules["torch.autograd.variable"] = _autograd_var
 
 # torch.optim.{sgd,adamw,adam}: mmengine registers optimizers by importing their
 # classes from these private module paths. Map to jittor's optimizers.
