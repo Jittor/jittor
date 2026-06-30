@@ -27,7 +27,8 @@ import numpy as np
 import jittor as jt
 
 from jittor.test._internal.common_utils import (
-    JittorTestCase, to_numpy, net_scaled_max_err, HAS_CUDA, HAS_ACL,
+    JittorTestCase, to_numpy, net_scaled_max_err, per_element_max_rel_err,
+    HAS_CUDA, HAS_ACL,
 )
 from jittor.test._internal.common_methods_invocations import op_db
 
@@ -66,15 +67,28 @@ def _normalize_outputs(out):
 #               its CUDA linalg in this venv); skipped with the reason.
 #  * "xfail" -- a REAL jittor finding surfaced by this very test; expectedFailure keeps
 #               the suite green while staying visible and alerting if it gets fixed.
+_LINALG_OPS = ("det", "slogdet", "inv", "solve", "cholesky", "qr", "svd")
+
+
+def _cuda_linalg_works():
+    """Probe whether jittor's CUDA linalg actually runs here, instead of hard-coding a
+    skip. The factorizations route through ``jt.numpy_code`` whose CUDA path uses cupy;
+    on a CUDA-toolkit/cupy mismatch that nvrtc compile can genuinely fail. A blanket
+    ``cupy unavailable`` skip is dishonest when cupy DOES work (it hides ops that pass
+    AND would mask a real future CPU/CUDA linalg divergence) -- so probe once and skip
+    only on a genuine failure, surfacing the real error as the reason."""
+    if _ACCEL != "cuda":
+        return False, f"no CUDA accelerator (_ACCEL={_ACCEL})"
+    try:
+        with jt.flag_scope(use_cuda=1):
+            a = np.eye(3, dtype="float32")[None] + 0.0
+            jt.linalg.det(jt.array(a, dtype="float32")).sync()
+        return True, ""
+    except Exception as e:  # pragma: no cover - only on a broken-cupy env
+        return False, f"cupy CUDA linalg unavailable: {type(e).__name__}: {str(e)[:120]}"
+
+
 _KNOWN_DEVICE_ISSUES = {
-    "det":     ("skip", "linalg via numpy_code uses cupy on CUDA; cupy kernel compile unavailable in this env"),
-    "slogdet": ("skip", "see det (cupy CUDA linalg unavailable here)"),
-    "inv":     ("skip", "see det (cupy)"),
-    "solve":   ("skip", "see det (cupy)"),
-    "cholesky": ("skip", "see det (cupy)"),
-    "qr":      ("skip", "see det (cupy)"),
-    "svd":     ("skip", "see det (cupy)"),
-    "pinv":    ("skip", "see det (cupy)"),
     # KNOWN-BROKEN op (finding #7, also skipped in test_ops): jittor's misc.py::median is
     # broken under the torch-compat layer -- ``_, x = jt.argsort(x, dim)`` (misc.py:321)
     # expects the native (idx,val) 2-tuple but torch-compat's argsort returns indices only,
@@ -89,6 +103,16 @@ _KNOWN_DEVICE_ISSUES = {
     "max_int_reduce":  ("xfail", "FINDING: uint8/int8 reduce-max missing CUDA atomic overload"),
     "min_int_reduce":  ("xfail", "FINDING: uint8/int8 reduce-min missing CUDA atomic overload"),
 }
+
+# Linalg (det/slogdet/inv/solve/cholesky/qr/svd) is NOT hard-skipped: probe whether the
+# cupy-backed CUDA path actually runs here. Where it works (verified CPU-vs-CUDA fwd ~1e-7,
+# bwd ~3e-7 for all seven) the ops run for real; only on a genuinely broken cupy env are
+# they skipped, with the true error as the reason. (The old blanket ``cupy unavailable``
+# skip was factually wrong on this machine and silently dropped 7 passing ops.)
+_LINALG_OK, _LINALG_REASON = _cuda_linalg_works()
+if not _LINALG_OK:
+    for _name in _LINALG_OPS:
+        _KNOWN_DEVICE_ISSUES[_name] = ("skip", _LINALG_REASON)
 
 
 def _run(op, sample, use_cuda):
@@ -127,9 +151,27 @@ class TestDeviceParity(JittorTestCase):
     """One generated test per op: CPU forward/backward == accelerator forward/backward."""
 
     # float32 kernels on CPU vs accelerator: allow accumulation-order round-off but
-    # nothing larger (a real kernel bug is orders of magnitude past this).
+    # nothing larger (a real kernel bug is orders of magnitude past this). TWO metrics,
+    # both must hold -- they fail to different bug classes:
+    #  * net-scaled (global): max|err| / max|ref|. Catches gross / near-peak divergence.
+    #  * per-element: max_i |err_i|/(|ref_i|+atol). Catches a wrong coordinate whose own
+    #    magnitude is a non-trivial fraction of -- but still far BELOW -- the dominant one
+    #    (e.g. a dropped 0.1%-of-peak gradient: net-scaled reads 1e-3 and PASSES at
+    #    GRAD_TOL, per-element reads ~1 and FAILS). This is the scatter/int-reduce/setitem
+    #    silent-wrong class the global metric is too coarse for.
+    # PE_ATOL is the key knob: it is the magnitude below which a coordinate is "negligible"
+    # AND where float32 catastrophic cancellation lives. A near-zero TRUE gradient computed
+    # by cancelling O(1) terms carries absolute reorder noise ~eps*(intermediate scale),
+    # NOT ~eps*(result) -- measured up to ~1.8e-6 for SDPA backward on a 1e-6-magnitude
+    # coord (CPU matches the f64 truth to 1e-9 only by accumulation-order luck; CUDA's
+    # order leaves ~1e-6 -- legitimate reorder, not a kernel bug). PE_ATOL=1e-3 absorbs
+    # that (floor = GRAD_PE_TOL*PE_ATOL = 5e-6 absolute, ~3x over the worst observed noise)
+    # while still catching any drop/corruption of a coordinate above ~1e-3 in magnitude.
     FWD_TOL = 2e-4
     GRAD_TOL = 2e-3
+    FWD_PE_TOL = 2e-3      # per-element relative, forward
+    GRAD_PE_TOL = 5e-3     # per-element relative, backward
+    PE_ATOL = 1e-3         # negligibility/cancellation floor for the per-element metric
 
     def _check(self, op):
         samples = op.sample_inputs("cpu", "float32", requires_grad=True)
@@ -146,6 +188,11 @@ class TestDeviceParity(JittorTestCase):
                 self.assertLess(ferr, self.FWD_TOL,
                                 f"{op.full_name} FORWARD[{j}] differs cpu vs {_ACCEL} "
                                 f"(net-scaled {ferr:.2e}) sample#{i} -- accelerator kernel suspect")
+                fpe = per_element_max_rel_err(fa, fc, atol=self.PE_ATOL)
+                self.assertLess(fpe, self.FWD_PE_TOL,
+                                f"{op.full_name} FORWARD[{j}] per-element divergence cpu vs "
+                                f"{_ACCEL} (max rel {fpe:.2e}) sample#{i} -- a sub-peak output "
+                                f"coordinate is wrong (silent-wrong kernel class)")
             if g_cpu is not None and g_acc is not None:
                 for k, (gc, ga) in enumerate(zip(g_cpu, g_acc)):
                     gerr = net_scaled_max_err(ga, gc)
@@ -153,6 +200,11 @@ class TestDeviceParity(JittorTestCase):
                                     f"{op.full_name} BACKWARD (input {k}) differs cpu vs "
                                     f"{_ACCEL} (net-scaled {gerr:.2e}) sample#{i} -- "
                                     f"accelerator backward kernel suspect")
+                    gpe = per_element_max_rel_err(ga, gc, atol=self.PE_ATOL)
+                    self.assertLess(gpe, self.GRAD_PE_TOL,
+                                    f"{op.full_name} BACKWARD (input {k}) per-element divergence "
+                                    f"cpu vs {_ACCEL} (max rel {gpe:.2e}) sample#{i} -- a sub-peak "
+                                    f"gradient coordinate is wrong (scatter/setitem silent-wrong class)")
             n += 1
         self.assertGreater(n, 0, f"{op.full_name}: no samples")
 

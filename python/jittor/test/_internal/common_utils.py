@@ -250,6 +250,28 @@ def net_scaled_max_err(got, ref):
     return float(np.max(np.abs(g - r))) / (float(np.max(np.abs(r))) + 1e-30)
 
 
+def per_element_max_rel_err(got, ref, atol=1e-4):
+    """``max_i |got_i - ref_i| / (|ref_i| + atol)`` -- the worst PER-ELEMENT relative
+    error, with an ``atol`` floor.
+
+    Complements :func:`net_scaled_max_err`, which normalizes by the GLOBAL ``max|ref|``
+    and therefore goes blind to a wrong coordinate whose own magnitude is far below the
+    dominant one: a dropped sub-peak gradient (the scatter / int-reduce / setitem
+    silent-wrong class this suite exists to catch) reads as a tiny *global* error yet a
+    large *per-element* one. The ``atol`` floor keeps a near-zero coordinate -- where
+    pure float32 round-off (and, worse, catastrophic CANCELLATION) is a huge relative
+    error but numerically meaningless -- from blowing up. NB the floor must dominate the
+    *absolute* cancellation noise, which scales with the intermediate magnitudes not the
+    (near-zero) result: SDPA backward computes ~1e-6 gradients by cancelling O(1) terms
+    and the CPU-vs-CUDA accumulation orders disagree by ~1.8e-6 there -- legitimate
+    reorder, not a kernel bug. Callers pass an ``atol`` at the negligibility scale of the
+    quantity (device_parity uses 1e-3) so that noise is absorbed while a drop/corruption
+    of any coordinate above ``atol`` in magnitude still reads ~1."""
+    g = to_numpy(got).astype(np.float64).ravel()
+    r = to_numpy(ref).astype(np.float64).ravel()
+    return float(np.max(np.abs(g - r) / (np.abs(r) + atol)))
+
+
 class JittorTestCase(unittest.TestCase):
     """``unittest.TestCase`` with a single tensor/dtype-aware equality check.
 
