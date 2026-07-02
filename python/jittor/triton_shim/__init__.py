@@ -414,6 +414,55 @@ def _args_have_jittor_var(args, kwargs):
     return any(_is_t(v) for v in args) or any(_is_t(v) for v in kwargs.values())
 
 
+def _ensure_libcuda_linkable():
+    """Make ``gcc -lcuda`` succeed for triton's *internal* driver compile.
+
+    The jittor backend launches kernels itself (it never needs triton's runtime
+    driver), but some triton versions (e.g. 3.2's ``Autotuner.__init__`` ->
+    ``driver.active.get_benchmarker()``) **eagerly** initialise that driver at
+    *import* time, which compiles a small ``driver.c`` linking ``-lcuda``. On
+    boxes that ship only ``libcuda.so.1`` (the runtime soname) without the
+    ``libcuda.so`` *dev symlink*, that link fails and import blows up before any
+    kernel runs. The CUDA toolkit ships a stub ``libcuda.so`` for exactly this
+    (link against the stub; the real driver is used at runtime), so we prepend a
+    stub dir to ``LIBRARY_PATH`` when no linkable ``libcuda.so`` is found.
+
+    Best-effort and idempotent; never raises.
+    """
+    import os
+    import glob
+    try:
+        # already linkable? (dev symlink present on the default search path)
+        for d in ("/usr/lib/x86_64-linux-gnu", "/lib/x86_64-linux-gnu",
+                  "/usr/lib64", "/usr/lib"):
+            if os.path.exists(os.path.join(d, "libcuda.so")):
+                return
+        for d in os.environ.get("LIBRARY_PATH", "").split(os.pathsep):
+            if d and os.path.exists(os.path.join(d, "libcuda.so")):
+                return
+        # find a stub libcuda.so: jittor's jtcuda first, then CUDA toolkits.
+        cands = []
+        try:
+            import jittor.compiler as _c
+            nv = getattr(_c, "nvcc_path", "") or ""
+            if nv:
+                home = os.path.dirname(os.path.dirname(nv))
+                cands.append(os.path.join(home, "lib64", "stubs", "libcuda.so"))
+        except Exception:
+            pass
+        cands += glob.glob("/usr/local/cuda*/targets/x86_64-linux/lib/stubs/libcuda.so")
+        cands += glob.glob("/usr/local/cuda*/lib64/stubs/libcuda.so")
+        for so in cands:
+            if os.path.isfile(so):
+                d = os.path.dirname(so)
+                cur = os.environ.get("LIBRARY_PATH", "")
+                if d not in cur.split(os.pathsep):
+                    os.environ["LIBRARY_PATH"] = (d + os.pathsep + cur) if cur else d
+                return
+    except Exception:
+        pass
+
+
 def activate_bridge(real=None):
     """Patch a real triton's ``JITFunction.run`` to run on jittor Vars.
 
@@ -435,6 +484,9 @@ def activate_bridge(real=None):
         from . import backend
         if not backend.is_available():
             return False
+        # triton may eagerly init its runtime driver at import (compiling a
+        # -lcuda stub); make that link succeed even without the dev symlink.
+        _ensure_libcuda_linkable()
         JF = real.runtime.jit.JITFunction
         if getattr(JF, "_jittor_bridge", False):
             _bridge_active = True
@@ -460,6 +512,28 @@ def activate_bridge(real=None):
             try:
                 import triton.runtime.autotuner as _at
                 _at.do_bench = bench  # rebind the name already imported there
+            except Exception:
+                pass
+            # Triton >=3.2's Autotuner.__init__ does
+            #   self.do_bench = driver.active.get_benchmarker()
+            # instead of using triton.testing.do_bench directly. The jittor
+            # backend's driver lacks get_benchmarker -> AttributeError at the
+            # first @triton.autotune kernel (flaky: only when autotuning runs).
+            # Provide it (returns our torch-free bench, which Triton calls as
+            # do_bench(kernel_call, quantiles=...)). Patch instance AND class so
+            # it survives driver.active re-resolution.
+            try:
+                from triton.runtime import driver as _drv
+                _active = getattr(_drv, "active", None)
+                if _active is not None and not hasattr(_active, "get_benchmarker"):
+                    try:
+                        _active.get_benchmarker = lambda *a, **k: bench
+                    except Exception:
+                        pass
+                    try:
+                        type(_active).get_benchmarker = lambda self, *a, **k: bench
+                    except Exception:
+                        pass
             except Exception:
                 pass
         except Exception:

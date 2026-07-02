@@ -148,6 +148,22 @@ class TestBooleanMask(Base):
             self.ac(t(y)[t(m)].numpy(), y[m], msg=f"y[mask2d] {dev}")
         both_devices(body)
 
+    def test_mask_setitem_rhs_leading_singleton(self):
+        # PyTorch allows assigning (1, N, C) into x[mask] whose selected region is
+        # (N, C). o_voxel's texture bake hits this through attrs[mask] = samples.
+        mask = np.array([[1, 0, 1, 0],
+                         [0, 1, 0, 1],
+                         [1, 0, 0, 0]], dtype=bool)
+        n = int(mask.sum())
+        rhs = np.arange(n * 2, dtype=np.float32).reshape(1, n, 2)
+        ref = np.zeros((3, 4, 2), dtype=np.float32)
+        ref[mask] = rhs
+        def body(dev):
+            x = torch.zeros((3, 4, 2), dtype=torch.float32)
+            x[t(mask)] = t(rhs)
+            self.ac(x.numpy(), ref, msg=f"bool mask setitem rhs bcast {dev}")
+        both_devices(body)
+
 
 class TestIndexSelect(Base):
     def test_index_select_dim0(self):

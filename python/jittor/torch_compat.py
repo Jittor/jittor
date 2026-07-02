@@ -33,6 +33,19 @@ class dtype(str):
     def is_floating_point(self):
         return self._is_fp
 
+    @property
+    def itemsize(self):
+        # bytes per element (torch.dtype.itemsize); used by vLLM weight transfer.
+        _sz = {"bool": 1, "uint8": 1, "int8": 1, "float8_e4m3fn": 1,
+               "float8_e5m2": 1, "float8_e4m3fnuz": 1, "float8_e5m2fnuz": 1,
+               "float8_e8m0fnu": 1, "qint8": 1, "quint8": 1,
+               "int16": 2, "uint16": 2, "float16": 2, "bfloat16": 2,
+               "int32": 4, "uint32": 4, "float32": 4, "complex32": 4, "qint32": 4,
+               "int64": 8, "uint64": 8, "float64": 8, "complex64": 8,
+               "complex128": 16}
+        return _sz.get(self.name, 4)
+    element_size = itemsize
+
     # NanoString-compatible predicates: jittor internals call x.dtype.is_float()
     # /is_int()/is_bool(). Since we now return this object from Var.dtype, it
     # must answer them too.
@@ -86,7 +99,11 @@ def _make_dtypes(ns):
         ("bool", False),
         # complex types -- jittor has no native complex, but the dtype objects
         # must exist (libraries index size tables by them). Best-effort names.
-        ("complex64", False), ("complex128", False),
+        ("complex64", False), ("complex128", False), ("complex32", False),
+        # quantized dtypes -- no compute support, but tensordict/torch index
+        # dtype tables by them so the objects must exist + be distinct.
+        ("qint8", False), ("quint8", False), ("qint32", False),
+        ("quint4x2", False), ("quint2x4", False),
         # low-precision float8 / float4 -- unsupported for compute, but the
         # dtype objects must exist (transformers/safetensors reference them).
         ("float8_e4m3fn", True), ("float8_e4m3fnuz", True),
@@ -182,6 +199,100 @@ class device:
 # Model construction in from_pretrained is single-threaded, so a plain list
 # is sufficient.
 _DEVICE_CTX_STACK = []
+
+
+# ---- CPU-residency support for the torch device= API -----------------------
+# jittor places a Var on CUDA or host according to the GLOBAL jt.flags.use_cuda
+# flag, with no per-tensor device. But native C++ extensions linked against the
+# jtorch ABI (nvdiffrast's `ranges`, cumesh's xatlas) call TORCH_CHECK on
+# tensor.is_cpu(), and jtorch's is_cpu()/device() read the Var's ACTUAL memory
+# residency (var->allocator->is_cuda(), surfaced to Python as Var.location() ==
+# "cpu" vs "device"). A Var built/computed under `flag_scope(use_cuda=0)` is
+# genuinely host-resident, so torch code that asks for device='cpu' can be
+# honored by routing the allocation through use_cuda=0 -- the C++ shim then
+# correctly sees it as CPU. These helpers implement that bounded device='cpu'
+# support (creation + .cpu()/.cuda()/.to() migration + residency reporting).
+
+def _device_is_cpu(dev):
+    """True if a torch device= argument designates the CPU.
+
+    Accepts the torch_compat `device` class, a torch.device-like object with a
+    `.type`, a "cpu"/"cpu:0" string, or None (None means 'use the global default
+    placement', i.e. NOT an explicit CPU request)."""
+    if dev is None:
+        return False
+    t = getattr(dev, "type", None)
+    if t is not None:
+        return t == "cpu"
+    if isinstance(dev, str):
+        return dev == "cpu" or dev.split(":")[0] == "cpu"
+    return False
+
+
+def _device_is_cuda(dev):
+    """True if a torch device= argument explicitly designates CUDA/GPU."""
+    if dev is None:
+        return False
+    t = getattr(dev, "type", None)
+    if t is not None:
+        return t in ("cuda", "npu")
+    if isinstance(dev, str):
+        return dev.split(":")[0] in ("cuda", "npu")
+    return False
+
+
+def _var_is_cpu_resident(v):
+    """True if a Var's data actually lives in host memory.
+
+    Uses Var.location() (var->allocator->is_cuda()), the same residency that
+    jtorch's C++ is_cpu()/device() report -- NOT the global use_cuda flag. A
+    not-yet-materialized Var reports 'none'; treat that as following the global
+    flag (it will land per use_cuda when realized)."""
+    try:
+        loc = v.location()
+    except Exception:
+        return False
+    if loc == "cpu":
+        return True
+    if loc == "device":
+        return False
+    # 'none' (unmaterialized) / 'disk': fall back to the global placement flag.
+    return not bool(jt.flags.use_cuda)
+
+
+def _make_cpu_resident(v):
+    """Return a host-resident copy of Var `v` (no-op if already on CPU).
+
+    There is no per-Var migrate-to-cpu exposed to Python, so round-trip through
+    numpy and rebuild the Var under use_cuda=0 (the same technique the native
+    data()/raw_ptr() getters use, just initiated from Python). The rebuilt Var's
+    allocator is the host allocator, so Var.location()=='cpu' and jtorch's C++
+    is_cpu() agree."""
+    if not isinstance(v, jt.Var):
+        return v
+    if _var_is_cpu_resident(v):
+        return v
+    arr = v.numpy()
+    with jt.flag_scope(use_cuda=0):
+        out = jt.array(arr)
+        out.sync()
+    return out
+
+
+def _make_cuda_resident(v):
+    """Return a CUDA-resident copy of Var `v` (no-op if CUDA is off or already on
+    device). Rebuild under use_cuda=1 so the device allocator backs it."""
+    if not isinstance(v, jt.Var):
+        return v
+    if not jt.flags.use_cuda:
+        return v
+    if not _var_is_cpu_resident(v):
+        return v
+    arr = v.numpy()
+    with jt.flag_scope(use_cuda=1):
+        out = jt.array(arr)
+        out.sync()
+    return out
 
 
 import functools as _functools
@@ -348,8 +459,86 @@ class _GradScaler:
         self._growth_tracker = sd.get("growth_tracker", 0)
 
 
+class _TorchSize(tuple):
+    """torch.Size stand-in (a tuple with .numel()). MODULE-LEVEL so it pickles by
+    qualified name -- a local class breaks plain pickle of any TensorDict whose
+    batch_size is a torch.Size (e.g. verl's DataProto over the Ray boundary)."""
+    def numel(self):
+        n = 1
+        for d in self:
+            n *= d
+        return n
+
+
+def _rebuild_var_from_numpy(np_arr, dtype_str=None):
+    """Reconstruct a jittor Var from a (numpy array, dtype string) pair.
+
+    Module-level so pickle can reference it by qualified name. Used as the
+    second half of ``Var.__reduce__`` (see _install_tensor_methods): the torch
+    shim makes ``Var.data`` return a *Var* (torch semantics) instead of jittor's
+    native numpy ndarray, which turns jittor's stock ``__reduce__`` -- ``(Var,
+    (self.data,))`` -- into infinite recursion. Serializing via numpy + dtype
+    keeps Vars picklable for Ray / multiprocessing (e.g. verl ships a DataProto
+    of token tensors to a reward actor)."""
+    import jittor as _jt
+    v = _jt.array(np_arr)
+    if dtype_str is not None and str(v.dtype) != dtype_str:
+        # numpy can't represent bfloat16 (.numpy() upcasts to float32); restore
+        # the original dtype. Values are preserved (bf16->fp32 is lossless and
+        # the original was already bf16-representable).
+        try:
+            v = v.astype(dtype_str)
+        except Exception:
+            pass
+    return v
+
+
+def _torch_register_leaf(v):
+    """Track torch-facing leaves so Tensor.backward() can publish .grad.
+
+    Jittor has no Python graph walk to discover every leaf that requires grad.
+    Constructors such as torch.rand(..., requires_grad=True) need to register
+    their result immediately; Var.requires_grad_ also calls this helper later.
+    """
+    try:
+        import jittor as _jt
+        if isinstance(v, _jt.Var) and not v.is_stop_grad():
+            if not hasattr(_jt, "_torch_leaf_params"):
+                _jt._torch_leaf_params = {}
+            _jt._torch_leaf_params[id(v)] = v
+    except Exception:
+        pass
+
+
 def install(torch):
     g = torch
+    if not hasattr(g, "_vj_native_load"):
+        g._vj_native_load = getattr(g, "load", None)
+    if not hasattr(g, "_vj_native_save"):
+        g._vj_native_save = getattr(g, "save", None)
+
+    # Pillow 11 rejects int8 RGB arrays. Some legacy torch projects, including
+    # graphdeco gaussian-splatting, use np.byte as a uint8 alias before
+    # Image.fromarray(..., "RGB"). PyTorch/torchvision environments historically
+    # tolerated that path, so reinterpret int8 image buffers as uint8.
+    try:
+        from PIL import Image as _PILImage
+        _pil_fromarray = _PILImage.fromarray
+        if not getattr(_pil_fromarray, "_jittor_torch_compat", False):
+            def _fromarray_compat(obj, mode=None, *args, **kwargs):
+                if mode in ("RGB", "RGBA", "L") and getattr(obj, "dtype", None) is not None:
+                    try:
+                        import numpy as _np
+                        if obj.dtype == _np.int8:
+                            obj = obj.view(_np.uint8)
+                    except Exception:
+                        pass
+                return _pil_fromarray(obj, mode=mode, *args, **kwargs)
+            _fromarray_compat._jittor_torch_compat = True
+            _PILImage.fromarray = _fromarray_compat
+    except Exception:
+        pass
+
     # Critical: jittor dispatches every op to CPU unless flags.use_cuda is set.
     # The accelerator (Ascend NPU via jt.compiler.has_acl, or NVIDIA GPU via
     # jt.has_cuda) is present, but use_cuda defaults to 0 -- so `import torch` +
@@ -358,7 +547,14 @@ def install(torch):
     # globally whenever an accelerator exists, so tensors/ops land on it by default,
     # matching what torch users expect from .cuda()/.to(device).
     try:
-        if getattr(jt.compiler, "has_acl", 0) or getattr(jt, "has_cuda", 0):
+        # Don't force CUDA when NO device is visible at runtime: an explicit
+        # empty CUDA_VISIBLE_DEVICES (e.g. a CPU-only Ray orchestrator actor,
+        # num_gpus=0) means no GPU -- forcing use_cuda=1 then crashes on the
+        # first CUDA op (cudaErrorNoDevice). Unset/non-empty => devices present.
+        import os as _os
+        _cvd = _os.environ.get("CUDA_VISIBLE_DEVICES", None)
+        _no_gpu = _cvd is not None and _cvd.strip() == ""
+        if (getattr(jt.compiler, "has_acl", 0) or getattr(jt, "has_cuda", 0)) and not _no_gpu:
             jt.flags.use_cuda = 1
     except Exception:
         pass
@@ -504,26 +700,46 @@ def install(torch):
         ds = _dtype_to_str(dtype)
         if ds is not None:
             v = v.cast(ds)
+        # torch.tensor(..., device='cpu') must land in host memory so native
+        # extensions' tensor.is_cpu() checks pass.
+        if _device_is_cpu(device):
+            v = _make_cpu_resident(v)
+        if requires_grad:
+            v.requires_grad_(True)
+            _torch_register_leaf(v)
         return v
     g.tensor = tensor
 
     def as_tensor(data, dtype=None, device=None):
         if isinstance(data, Var):
-            return data if dtype is None else data.cast(_dtype_to_str(dtype))
-        return tensor(data, dtype=dtype)
+            r = data if dtype is None else data.cast(_dtype_to_str(dtype))
+            return _make_cpu_resident(r) if _device_is_cpu(device) else r
+        return tensor(data, dtype=dtype, device=device)
     g.as_tensor = as_tensor
 
-    def from_numpy(arr):
-        return _array_keep_dtype(arr)
+    def from_numpy(arr, *, device=None):
+        v = _array_keep_dtype(arr)
+        return _make_cpu_resident(v) if _device_is_cpu(device) else v
     g.from_numpy = from_numpy
 
-    class Size(tuple):
-        def numel(self):
-            n = 1
-            for d in self:
-                n *= d
-            return n
+    Size = _TorchSize
     g.Size = Size
+
+    # torch.broadcast_shapes(*shapes) -> Size : broadcasted shape of the inputs
+    # (used by verl's advantage/reward broadcasting). numpy implements the same rule.
+    def broadcast_shapes(*shapes):
+        import numpy as _npb
+        norm = [tuple(int(d) for d in s) for s in shapes]
+        return Size(_npb.broadcast_shapes(*norm)) if norm else Size(())
+    g.broadcast_shapes = broadcast_shapes
+
+    # torch.corrcoef(input) -> correlation-coefficient matrix (verl logs the
+    # rollout-vs-recompute logprob correlation as a diagnostic). numpy matches.
+    def corrcoef(x, *a, **k):
+        import numpy as _npc
+        r = _npc.corrcoef(x.float32().numpy())
+        return jt.array(_npc.ascontiguousarray(r))
+    g.corrcoef = corrcoef
 
     # torch.Generator (RNG handle) -- jittor uses a global seed; provide a
     # lightweight stand-in that supports manual_seed and is accepted where a
@@ -562,11 +778,54 @@ def install(torch):
         pass
     g.memory_format = memory_format
 
+    # torch._check family: assertion helpers used by dynamo / TorchScript-friendly
+    # code (e.g. vLLM's sampler does `torch._check(x.shape[0] >= 1)`). The message
+    # may be a zero-arg callable that torch invokes lazily only on failure. The
+    # condition is usually a python bool but can be a bool tensor (_check_tensor_all).
+    def _check_to_pybool(cond):
+        if hasattr(cond, "all") and not isinstance(cond, (bool, int, float)):
+            try:
+                return bool(cond.all().item())
+            except Exception:
+                return bool(cond)
+        return bool(cond)
+    def _check_with(_exc):
+        def _chk(cond, message=None):
+            if not _check_to_pybool(cond):
+                msg = message() if callable(message) else message
+                raise _exc(msg if msg is not None else "Expected cond to be True, but got False")
+        return _chk
+    g._check = _check_with(RuntimeError)
+    g._check_is_size = lambda i, message=None, **k: g._check(int(i) >= 0, message)
+    g._check_index = _check_with(IndexError)
+    g._check_value = _check_with(ValueError)
+    g._check_type = _check_with(TypeError)
+    g._check_not_implemented = _check_with(NotImplementedError)
+    g._check_tensor_all = _check_with(RuntimeError)
+    g._assert_async = lambda t, *a, **k: g._check(_check_to_pybool(t), "torch._assert_async failed")
+
     # torch.cat: tolerate empty tensors (skip zero-numel inputs) like torch,
     # accept `dim=`/`out=`. jittor's concat trips on an empty leading tensor.
     _jt_concat = jt.concat
     def cat(tensors, dim=0, out=None, axis=None):
         if axis is not None: dim = axis      # torch accepts axis= (mmrotate PSC head)
+        # Honor the __torch_function__ protocol: tensordict (and other tensor-likes)
+        # override torch.cat to handle their own structure -- e.g. cat a list of
+        # TensorDicts field-by-field. Without this, jittor's concat treats each
+        # TensorDict as a Var (dtype None) and aborts. Delegate to the first arg
+        # whose type overrides __torch_function__ (Vars are handled normally below).
+        try:
+            _seq = list(tensors)
+        except TypeError:
+            _seq = None
+        if _seq is not None:
+            for _t in _seq:
+                _tf = getattr(type(_t), "__torch_function__", None)
+                if _tf is not None and not isinstance(_t, jt.Var):
+                    _kw = {}
+                    if dim != 0: _kw["dim"] = dim
+                    if out is not None: _kw["out"] = out
+                    return _tf(g.cat, (type(_t),), (_seq,), _kw)
         tensors = [t for t in tensors if t is not None]
         nonempty = [t for t in tensors if t.numel() > 0]
         if len(nonempty) == 0:
@@ -998,13 +1257,22 @@ def install(torch):
     g.scaled_dot_product_attention = nn.functional.scaled_dot_product_attention
 
     _install_nn_extras(nn)
+    import sys as _sys_nn
+    _sys_nn.modules["torch.nn"] = nn
+    if hasattr(nn, "functional"):
+        _sys_nn.modules["torch.nn.functional"] = nn.functional
     _install_cuda(g)
+    _install_version(g)
     _install_tensor_methods(g, Var, _DTYPE_OBJS)
     _install_misc(g, Var, _DTYPE_OBJS)
     _install_optimizers(g)
     _install_lr_scheduler(g)
     _install_autograd_function(g)
     _install_autograd(g)
+    try:
+        _install_flash_attn_shim()
+    except Exception:
+        pass
 
 
 def _install_autograd_function(g):
@@ -1037,6 +1305,19 @@ def _install_autograd_function(g):
         gshape = grad.shape
         if list(gshape) == list(shape):
             return grad
+        # Incompatible element counts: the returned grad does not correspond to
+        # this input's true gradient. A custom Function may return a fully-shaped
+        # grad for an input it actually ignores (3DGS's rasterizer returns a
+        # [P,C] grad for the EMPTY placeholder inputs colors_precomp / cov3Ds_precomp
+        # that aren't requires_grad in torch). torch discards grads for such
+        # inputs; emulate by returning a correctly-shaped zero (jittor still tapes
+        # the placeholder Var, so it needs a shape-matching grad, not None).
+        tgt_items = 1
+        for s in shape: tgt_items *= int(s)
+        g_items = 1
+        for s in gshape: g_items *= int(s)
+        if tgt_items == 0 or (tgt_items != g_items and g_items % max(tgt_items, 1) != 0):
+            return jt.zeros([int(s) for s in shape], dtype=grad.dtype)
         # drop leading dims that the input doesn't have (broadcast prepended them)
         extra = len(gshape) - len(shape)
         if extra > 0:
@@ -1059,7 +1340,28 @@ def _install_autograd_function(g):
                 (tuple(v.shape) if isinstance(v, jt.Var) else None) for v in args]
         except Exception:
             self._fwd_input_shapes = None
-        return _orig_fn_call(self, *args, **kw)
+        # torch.autograd.Function exposes `ctx.needs_input_grad`: a tuple with one
+        # bool per positional forward arg, True iff that arg is a tensor that
+        # requires grad. Custom Functions branch on it (e.g. flex_gemm spconv:
+        # `need_grad = any(ctx.needs_input_grad)`). A non-Var arg, or a Var with
+        # stop-grad, contributes False -- matching torch.
+        try:
+            self.needs_input_grad = tuple(
+                bool(isinstance(v, jt.Var) and not v.is_stop_grad()) for v in args)
+        except Exception:
+            self.needs_input_grad = tuple(isinstance(v, jt.Var) for v in args)
+        out = _orig_fn_call(self, *args, **kw)
+        # Capture each forward OUTPUT's (shape, dtype) so the grad bridge can
+        # materialize a zeros grad for outputs that don't reach the backward'd
+        # scalar (torch's materialize_grads=True; see grad() below).
+        try:
+            outs = out if isinstance(out, (tuple, list)) else (out,)
+            self._fwd_outputs = [
+                (tuple(o.shape), str(o.dtype)) if isinstance(o, jt.Var) else None
+                for o in outs]
+        except Exception:
+            self._fwd_outputs = None
+        return out
     if getattr(Fn.__call__, "_torch_records_inputs", False) is not True:
         _call_record_inputs._torch_records_inputs = True
         Fn.__call__ = _call_record_inputs
@@ -1073,12 +1375,35 @@ def _install_autograd_function(g):
     # the instance as ctx. Gated on the base lacking its own grad; every native
     # jittor Function subclass (ACL ops, EMD, ...) defines grad(), which MRO-shadows
     # this, so they're untouched.
+    # torch.autograd.Function defaults to materialize_grads=True; a Function may
+    # opt out via ctx.set_materialize_grads(False). Store the flag on the ctx.
+    if not hasattr(Fn, "set_materialize_grads"):
+        def set_materialize_grads(self, value):
+            self._materialize_grads = bool(value)
+        Fn.set_materialize_grads = set_materialize_grads
     if "grad" not in getattr(Fn, "__dict__", {}):
         def grad(self, *grad_outputs):
             bw = getattr(type(self), "backward", None)
             if bw is None:
                 raise AttributeError(
                     f"{type(self).__name__!r} object has no attribute 'grad'")
+            # materialize_grads (torch default True): jittor hands None for a taped
+            # output that doesn't reach the backward'd scalar, but torch passes
+            # zeros_like(output) for FLOATING-point outputs (int/bool ones stay
+            # None — non-differentiable). 3DGS's rasterizer returns (color, radii,
+            # depth); a colour-only loss leaves depth's grad None, yet the C++
+            # backward requires a real zero tensor for it.
+            if getattr(self, "_materialize_grads", True) and any(
+                    g is None for g in grad_outputs):
+                outs = getattr(self, "_fwd_outputs", None)
+                if outs is not None:
+                    go = list(grad_outputs)
+                    for i in range(min(len(go), len(outs))):
+                        if go[i] is None and outs[i] is not None:
+                            shp, dt = outs[i]
+                            if not any(t in dt for t in ("int", "bool", "uint")):
+                                go[i] = jt.zeros(shp, dtype=dt)
+                    grad_outputs = tuple(go)
             ret = bw(self, *grad_outputs)
             shapes = getattr(self, "_fwd_input_shapes", None)
             if shapes is None:
@@ -1149,7 +1474,16 @@ def _install_autograd(g):
 
     if not hasattr(autograd, "Variable"):
         autograd.Variable = g.Tensor
+    # torch.autograd.set_detect_anomaly / detect_anomaly — debug hooks jittor
+    # lacks; 3DGS train.py calls set_detect_anomaly(args.detect_anomaly) at start.
+    if not hasattr(autograd, "set_detect_anomaly"):
+        autograd.set_detect_anomaly = lambda *a, **k: None
+    if not hasattr(autograd, "detect_anomaly"):
+        import contextlib as _ctxlib
+        autograd.detect_anomaly = lambda *a, **k: _ctxlib.nullcontext()
     g.autograd = autograd
+    import sys as _sys_autograd
+    _sys_autograd.modules["torch.autograd"] = autograd
 
 
 def _install_optimizers(g):
@@ -1165,16 +1499,96 @@ def _install_optimizers(g):
     Base = getattr(_optim, "Optimizer", None)
     if Base is None or getattr(Base, "_torch_compat_wrapped", False):
         return
+    import weakref as _weakref
     _orig_init = Base.__init__
     def _init(self, *a, **k):
         _orig_init(self, *a, **k)
         _jt._current_optimizer = self
+        # Maintain a registry of ALL live optimizers (not just the last). torch
+        # supports several optimizers active at once (3DGS has a Gaussian Adam +
+        # an exposure Adam); loss.backward() must fill grads for every one. Hold
+        # weakrefs, pruned of dead entries + this same object.
+        reg = getattr(_jt, "_active_optimizers", None)
+        if reg is None:
+            reg = _jt._active_optimizers = []
+        reg[:] = [r for r in reg if r() is not None and r() is not self]
+        reg.append(_weakref.ref(self))
         try:
             for pg in self.param_groups:
                 pg.setdefault("lr", self.lr)
         except Exception:
             pass
     Base.__init__ = _init
+
+    # torch-compatible Optimizer.state: a mapping keyed by the parameter object,
+    # each value a dict {"exp_avg","exp_avg_sq","step"} backed by jittor's
+    # positional per-group state lists pg["m"] (exp_avg) / pg["values"] (exp_avg_sq).
+    # 3DGS densification does surgery on this (read state.get(p), mutate exp_avg/
+    # exp_avg_sq via mask/cat, del old key, set new key after replacing the param).
+    if not hasattr(Base, "_torch_state_installed"):
+        class _OptState:
+            def __init__(self, opt):
+                self._opt = opt
+            def _find(self, param):
+                for pg in self._opt.param_groups:
+                    for i, p in enumerate(pg.get("params", [])):
+                        if p is param:
+                            return pg, i
+                return None, None
+            def get(self, param, default=None):
+                pg, i = self._find(param)
+                if pg is None or "m" not in pg or "values" not in pg:
+                    return default
+                return {"exp_avg": pg["m"][i], "exp_avg_sq": pg["values"][i],
+                        "step": float(getattr(self._opt, "n_step", 0))}
+            def __getitem__(self, param):
+                r = self.get(param, None)
+                if r is None:
+                    raise KeyError(param)
+                return r
+            def __setitem__(self, param, d):
+                pg, i = self._find(param)
+                if pg is None:
+                    return
+                if "m" in pg and isinstance(d, dict) and "exp_avg" in d:
+                    pg["m"][i] = d["exp_avg"]
+                if "values" in pg and isinstance(d, dict) and "exp_avg_sq" in d:
+                    pg["values"][i] = d["exp_avg_sq"]
+            def __delitem__(self, param):
+                # state follows the param slot; the subsequent re-set (after the
+                # param is replaced in-place) overwrites m/values, so this no-ops.
+                pass
+            def __contains__(self, param):
+                pg, _ = self._find(param)
+                return pg is not None
+            def get_state_dict_key(self, param):
+                return self._find(param)
+        Base._OptState = _OptState
+        Base.state = property(lambda self: Base._OptState(self))
+        Base._torch_state_installed = True
+
+    # torch's Optimizer.zero_grad accepts set_to_none=; jittor's rejects the kwarg.
+    if not getattr(Base, "_torch_zero_grad_wrapped", False):
+        _orig_zero = Base.zero_grad
+        def _zero_grad_compat(self, set_to_none=True):
+            return _orig_zero(self)
+        Base.zero_grad = _zero_grad_compat
+        Base._torch_zero_grad_wrapped = True
+
+    # torch's Adam/AdamW default lr=1e-3 (jittor makes lr positional-required).
+    # 3DGS builds the exposure optimizer as torch.optim.Adam([self._exposure]).
+    for _cls_name in ("Adam", "AdamW", "RMSprop", "Adan"):
+        _cls = getattr(_optim, _cls_name, None)
+        if _cls is None or getattr(_cls, "_torch_lr_default", False):
+            continue
+        _ci = _cls.__init__
+        def _mk(_ci):
+            def _init_lr(self, params, lr=1e-3, *a, **k):
+                return _ci(self, params, lr, *a, **k)
+            return _init_lr
+        _cls.__init__ = _mk(_ci)
+        _cls._torch_lr_default = True
+
     Base._torch_compat_wrapped = True
 
     # jittor's load_state_dict runs a dfs that calls .stop_grad() on every Var
@@ -1535,10 +1949,29 @@ def _install_reductions(g):
         if unbiased is not None:
             return bool(unbiased)
         return True                       # torch default
+    def _multidim_var(self, dims, unbiased, keepdim):
+        # torch-compat: var over a LIST/TUPLE of axes. jittor's native var() `dim=`
+        # slot is scalar-only (a list crashes with `is_type<int64>(oi)`), and its
+        # separate `dims=` path returns a WRONG-shaped/value result for partial
+        # multi-axis reductions. Compute directly from mean/sum (which DO accept a
+        # tuple) so every axis subset matches torch exactly, preserving unbiased
+        # (Bessel) + keepdim semantics.
+        dims = [int(d) % self.ndim for d in dims]
+        mean = _jt.mean(self, dims, keepdims=True)
+        sqr = (self - mean) ** 2
+        out = _jt.sum(sqr, dims=dims, keepdims=keepdim)
+        n = 1
+        for d in dims:
+            n *= self.shape[d]
+        if unbiased:
+            n = n - 1
+        return out / n
     def _torch_var(self, dim=None, unbiased=None, keepdim=False, keepdims=None,
                    correction=None, **kw):
         ub = _correction_to_unbiased(unbiased, correction)
         kd = bool(keepdim) or bool(keepdims)
+        if isinstance(dim, (list, tuple)):
+            return _multidim_var(self, dim, ub, kd)
         return _jt_var(self, dim=dim, unbiased=ub, keepdims=kd)
     def _torch_std(self, dim=None, unbiased=None, keepdim=False, keepdims=None,
                    correction=None, **kw):
@@ -1671,6 +2104,10 @@ def _install_reductions(g):
     Var.addcdiv = lambda self, t1, t2, value=1: self + value * (t1 / t2)
     if not hasattr(Var, "broadcast_to"):
         Var.broadcast_to = lambda self, shape: self.broadcast(shape)
+    # torch-compat: module-level torch.broadcast_to(input, shape) (some code calls
+    # the functional form, not the method). Expands `input` to `shape` without copy.
+    if not hasattr(g, "broadcast_to"):
+        g.broadcast_to = lambda input, shape: input.broadcast(shape)
 
 
 def _wrap_constructors(g):
@@ -1695,8 +2132,32 @@ def _wrap_constructors(g):
                                   for p in _sig.parameters.values()))
         except (ValueError, TypeError):
             _accepts_dtype = True  # builtins w/o introspectable sig: assume ok
+        def _shape_dim(v):
+            if isinstance(v, np.generic):
+                return v.item()
+            if isinstance(v, jt.Var):
+                try:
+                    if int(np.prod(tuple(v.shape))) == 1:
+                        return int(v.item())
+                except Exception:
+                    pass
+            return v
+        def _shape_arg(v):
+            if isinstance(v, jt.NanoVector):
+                return tuple(int(x) for x in v)
+            if isinstance(v, tuple):
+                return tuple(_shape_dim(x) for x in v)
+            if isinstance(v, list):
+                return tuple(_shape_dim(x) for x in v)
+            return _shape_dim(v)
         @functools.wraps(orig)
         def wrapped(*args, **kwargs):
+            # torch device='cpu' must produce a host-resident Var (native exts
+            # check tensor.is_cpu()). Capture the device before dropping it and,
+            # when CPU is requested, build the Var under use_cuda=0 so its
+            # allocator is the host allocator (Var.location()=='cpu').
+            _want_cpu = _device_is_cpu(kwargs.get("device"))
+            _requires_grad = bool(kwargs.get("requires_grad", False))
             for k in _DROP:
                 kwargs.pop(k, None)
             # torch accepts numpy integer scalars as shape dims, e.g.
@@ -1706,9 +2167,8 @@ def _wrap_constructors(g):
             # numpy scalar raises. Coerce numpy integer/float scalars (and 0-dim
             # numpy arrays) in the positional args to plain Python scalars. Only
             # numpy scalars are touched, so normal int/tuple shape args are untouched.
-            if args and any(isinstance(a, np.generic) for a in args):
-                args = tuple(a.item() if isinstance(a, np.generic) else a
-                             for a in args)
+            if args:
+                args = tuple(_shape_arg(a) for a in args)
             # normalize a Size/NanoVector shape arg (e.g. torch.zeros(x.size()))
             # to a plain tuple — jittor's factories reject tuple subclasses /
             # NanoVector. transformers BertEmbeddings does torch.zeros(position_ids.size()).
@@ -1746,9 +2206,23 @@ def _wrap_constructors(g):
                     # ones_like / tril / triu have no dtype param in jittor; torch
                     # accepts one. Pop it and cast the result instead.
                     _cast_to = _dtype_to_str(kwargs.pop("dtype"))
+            if _want_cpu and jt.flags.use_cuda:
+                # Build on the host so the result is genuinely CPU-resident.
+                with jt.flag_scope(use_cuda=0):
+                    out = orig(*args, **kwargs)
+                    if _cast_to is not None:
+                        out = out.cast(_cast_to)
+                    out.sync()
+                if _requires_grad:
+                    out.requires_grad_(True)
+                    _torch_register_leaf(out)
+                return out
             out = orig(*args, **kwargs)
             if _cast_to is not None:
                 out = out.cast(_cast_to)
+            if _requires_grad:
+                out.requires_grad_(True)
+                _torch_register_leaf(out)
             return out
         wrapped._torch_wrapped = True
         setattr(g, name, wrapped)
@@ -2944,6 +3418,105 @@ def _install_init_aliases():
             setattr(_init, tname, getattr(_init, target))
 
 
+_cuda_props_cache = {}
+
+
+def _cuda_capability():
+    """(major, minor) compute capability of the active CUDA device.
+
+    Queried once from the CUDA driver (compute-capability of device 0); falls
+    back to (8, 0) when the driver query is unavailable (e.g. Ascend NPU).
+    """
+    cc = _cuda_props_cache.get("cap")
+    if cc is not None:
+        return cc
+    cc = (8, 0)
+    try:
+        import ctypes
+        lib = None
+        for n in ("libcuda.so.1", "libcuda.so"):
+            try:
+                lib = ctypes.CDLL(n); break
+            except OSError:
+                pass
+        if lib is not None:
+            lib.cuInit(0)
+            dev = ctypes.c_int(0)
+            lib.cuDeviceGet(ctypes.byref(dev), 0)
+            maj = ctypes.c_int(0); mino = ctypes.c_int(0)
+            lib.cuDeviceComputeCapability(ctypes.byref(maj), ctypes.byref(mino), dev)
+            if maj.value > 0:
+                cc = (maj.value, mino.value)
+    except Exception:
+        pass
+    _cuda_props_cache["cap"] = cc
+    return cc
+
+
+def _cuda_sm_count():
+    """SM (multiprocessor) count of CUDA device 0, queried via the driver.
+
+    Triton-based libraries (e.g. flex_gemm's autotuner) size their grids by
+    ``get_device_properties(...).multi_processor_count``; a wrong value only
+    affects performance/occupancy, not correctness, so we default to 132 (an
+    H100-class count) when the driver can't be queried.
+    """
+    n = _cuda_props_cache.get("sm")
+    if n is not None:
+        return n
+    n = 132
+    try:
+        import ctypes
+        lib = None
+        for nm in ("libcuda.so.1", "libcuda.so"):
+            try:
+                lib = ctypes.CDLL(nm); break
+            except OSError:
+                pass
+        if lib is not None:
+            lib.cuInit(0)
+            dev = ctypes.c_int(0)
+            lib.cuDeviceGet(ctypes.byref(dev), 0)
+            val = ctypes.c_int(0)
+            CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT = 16
+            lib.cuDeviceGetAttribute(ctypes.byref(val), CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT, dev)
+            if val.value > 0:
+                n = val.value
+    except Exception:
+        pass
+    _cuda_props_cache["sm"] = n
+    return n
+
+
+class _DeviceProps:
+    """torch.cuda.get_device_properties(...) result.
+
+    Exposes the attributes real-torch device props carry that libraries read:
+    ``name``, ``major``/``minor``, ``total_memory``, ``multi_processor_count``
+    (alias ``multiprocessor_count``), ``warp_size``, ``max_threads_per_*``.
+    """
+    def __init__(self):
+        cap = _cuda_capability()
+        self.name = "Ascend910B/NPU"
+        self.major, self.minor = cap
+        self.total_memory = 64 * 1024 ** 3
+        self.multi_processor_count = _cuda_sm_count()
+        self.multiprocessor_count = self.multi_processor_count
+        self.warp_size = 32
+        self.max_threads_per_multi_processor = 2048
+        self.max_threads_per_block = 1024
+        self.is_integrated = 0
+        self.is_multi_gpu_board = 0
+        self.regs_per_multiprocessor = 65536
+        self.shared_memory_per_block = 49152
+        self.shared_memory_per_multiprocessor = 102400
+
+    def __repr__(self):
+        return (f"_DeviceProps(name='{self.name}', major={self.major}, "
+                f"minor={self.minor}, total_memory={self.total_memory}, "
+                f"multi_processor_count={self.multi_processor_count})")
+
+
 def _install_cuda(g):
     import types as _types, contextlib
     cuda = _types.ModuleType("torch.cuda")
@@ -2956,14 +3529,31 @@ def _install_cuda(g):
     cuda.device_count = lambda: 1
     cuda.current_device = lambda: 0
     cuda.set_device = lambda *a, **k: None
-    cuda.empty_cache = lambda: None
+    # torch-compat: torch.cuda.empty_cache() should actually release jittor's
+    # cached GPU memory pools (it was a no-op). Sync outstanding work then run
+    # jittor's garbage collector, matching torch's "free cached blocks" semantics.
+    def _empty_cache():
+        try:
+            jt.sync_all(True)
+        except Exception:
+            pass
+        try:
+            jt.gc()
+        except Exception:
+            pass
+    cuda.empty_cache = _empty_cache
     cuda.synchronize = lambda *a, **k: jt.sync_all(True)
     cuda.manual_seed = lambda s: jt.set_global_seed(int(s))
     cuda.manual_seed_all = lambda s: jt.set_global_seed(int(s))
     cuda.is_bf16_supported = lambda: True
-    cuda.get_device_capability = lambda *a, **k: (8, 0)
-    cuda.get_device_name = lambda *a, **k: "Ascend910B/NPU"
-    cuda.get_device_properties = lambda *a, **k: type("P", (), {"total_memory": 64*1024**3, "name": "Ascend910B"})()
+    cuda.get_device_capability = lambda *a, **k: _cuda_capability()
+    def _device_name(*a, **k):
+        try:
+            return "Ascend910B/NPU" if getattr(jt.compiler, "has_acl", 0) else "CUDA"
+        except Exception:
+            return "CUDA"
+    cuda.get_device_name = _device_name
+    cuda.get_device_properties = lambda *a, **k: _DeviceProps()
     class _amp:
         @staticmethod
         def autocast(*a, **k):
@@ -3046,6 +3636,60 @@ def _install_cuda(g):
     g.cuda = cuda
 
 
+def _install_version(g):
+    """Install torch.version for libraries that probe torch.cuda/hip versions."""
+    import sys as _sys
+    import types as _types
+    version = _types.ModuleType("torch.version")
+    version.__version__ = getattr(g, "__version__", getattr(jt, "__version__", None))
+    try:
+        nv = getattr(getattr(jt, "compiler", None), "nvcc_version", None)
+        version.cuda = ".".join(map(str, nv[:2])) if nv else None
+    except Exception:
+        version.cuda = None
+    version.hip = None
+    version.git_version = "jittor"
+    _sys.modules["torch.version"] = version
+    g.version = version
+
+
+def _install_flash_attn_shim():
+    """Register the Jittor-backed flash_attn stub for the bare jiitor path."""
+    import importlib.util as _ilu
+    import os as _os
+    import sys as _sys
+    torch_mod = _sys.modules.get("torch")
+    if torch_mod is not None and torch_mod is not jt:
+        # When the deployed `import torch` shim imports jittor, the `torch`
+        # package body is still half-built. The optional flash_attn stub imports
+        # torch.nn.functional, so importing it at that point can abort the core
+        # torch_compat install. deploy.py installs a normal flash_attn package
+        # for that path; only register this direct stub for `import jittor as
+        # torch` flows.
+        return
+    mod = _sys.modules.get("flash_attn")
+    if mod is not None and getattr(mod, "_jittor_flash_attn_stub", False):
+        return
+    src = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                        "torch_shim", "stubs", "flash_attn", "__init__.py")
+    if not _os.path.isfile(src):
+        return
+    spec = _ilu.spec_from_file_location("flash_attn", src)
+    shim = _ilu.module_from_spec(spec)
+    old_flash = _sys.modules.get("flash_attn")
+    _sys.modules["flash_attn"] = shim
+    _sys.modules["torch"] = jt
+    try:
+        spec.loader.exec_module(shim)
+    except Exception:
+        if old_flash is None:
+            _sys.modules.pop("flash_attn", None)
+        else:
+            _sys.modules["flash_attn"] = old_flash
+        raise
+    shim._jittor_flash_attn_stub = True
+
+
 def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # Var.dtype natively returns jittor's NanoString, which is unhashable and
     # not == to torch dtype objects. Wrap it to return our hashable `dtype`
@@ -3061,6 +3705,31 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                 Var._dtype_wrapped = True
         except Exception:
             pass
+
+    # torch parity for `x[bool_mask] = value` when the mask has lower rank than
+    # `x` and `value` carries redundant leading size-1 batch axes. Torch assigns
+    # a RHS shaped like (1, N, C) into the selected region shaped (N, C); jittor's
+    # native setitem rejects the extra leading axis. This path is used by
+    # TRELLIS/o_voxel texture baking (`attrs[mask] = grid_sample_3d(...)`).
+    _orig_setitem = Var.__setitem__
+    if not getattr(_orig_setitem, "_torch_mask_bcast", False):
+        def _torch_setitem(self, slices, value):
+            try:
+                mask = slices
+                if isinstance(mask, Var) and mask.dtype in ("bool", "uint8") \
+                        and isinstance(value, Var) \
+                        and len(mask.shape) < len(self.shape):
+                    # Region selected by a lower-rank bool mask has shape
+                    # (N, *self.shape[mask.ndim:]). Drop only provably redundant
+                    # leading singleton axes from value until ranks agree.
+                    region_rank = 1 + (len(self.shape) - len(mask.shape))
+                    while len(value.shape) > region_rank and value.shape[0] == 1:
+                        value = value.squeeze(0)
+            except Exception:
+                pass
+            return _orig_setitem(self, slices, value)
+        _torch_setitem._torch_mask_bcast = True
+        Var.__setitem__ = _torch_setitem
 
     # in-place tensor ops torch code uses heavily (jittor exposes assign()).
     # _ip() preserves grad-tracking: jittor's assign() adopts the source's
@@ -3174,6 +3843,9 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                              max if max is not None else max_v)
     g.clamp = _clamp
     g.clip = _clamp                      # torch.clip is an alias of torch.clamp
+    # torch.clamp_min / clamp_max free functions (3DGS gm:159 clamps distCUDA2)
+    g.clamp_min = lambda input, v: _clamp(input, min=v)
+    g.clamp_max = lambda input, v: _clamp(input, max=v)
     Var.clamp = lambda self, min=None, max=None, min_v=None, max_v=None: _clamp(self, min, max, min_v, max_v)
     Var.clip = Var.clamp
     Var.clamp_ = lambda self, min=None, max=None, min_v=None, max_v=None: _ip(self, _clamp(self, min, max, min_v, max_v))
@@ -3196,6 +3868,12 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         return tuple(idx[:, d] for d in range(ndim))
     Var.nonzero = _nonzero
     g.nonzero = lambda input, as_tuple=False, **kw: _nonzero(input, as_tuple=as_tuple)
+    # torch-compat: torch.argwhere(input) / Tensor.argwhere() -> the indices of the
+    # nonzero elements as an (N, ndim) matrix (identical to nonzero(as_tuple=False)).
+    if not hasattr(g, "argwhere"):
+        g.argwhere = lambda input: _nonzero(input, as_tuple=False)
+    if not hasattr(Var, "argwhere"):
+        Var.argwhere = lambda self: _nonzero(self, as_tuple=False)
     if not hasattr(Var, "normal_"):
         Var.normal_ = lambda self, mean=0.0, std=1.0, generator=None: _ip(self, jt.normal(float(mean), float(std), self.shape).cast(str(self.dtype)))
     if not hasattr(Var, "uniform_"):
@@ -3305,7 +3983,14 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             # fires and eager weight init is skipped. See device.__enter__.
             if _DEVICE_CTX_STACK:
                 return _DEVICE_CTX_STACK[-1]
-            return device("cuda", 0) if (jt.flags.use_cuda or getattr(jt.compiler, "has_acl", 0)) else device("cpu")
+            # Report the Var's ACTUAL memory residency (matches jtorch's C++
+            # is_cpu()/device()): a Var built/migrated to host -- e.g. via
+            # torch.zeros(device='cpu') or .cpu() -- is "cpu" even while the
+            # global use_cuda flag is 1. Only fall back to the global flag when
+            # CUDA is on and the Var is genuinely device-resident.
+            if (jt.flags.use_cuda or getattr(jt.compiler, "has_acl", 0)):
+                return device("cpu") if _var_is_cpu_resident(self) else device("cuda", 0)
+            return device("cpu")
         Var.device = property(_device)
 
     # torch's Tensor.data returns a detached *tensor* (and is assignable:
@@ -3329,6 +4014,16 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         Var.data = property(_data_get, _data_set)
         Var._data_wrapped = True
 
+    # jittor's native Var.__reduce__ is `(Var, (self.data,))`, which assumes
+    # .data is a numpy ndarray. The shim above redefines .data to return a Var,
+    # so the stock reduce recurses forever (pickle re-reduces the Var arg). Make
+    # Vars picklable by serializing through numpy + dtype (needed for Ray to
+    # ship token tensors to reward actors, torch.multiprocessing, etc.).
+    if not getattr(Var, "_reduce_wrapped", False):
+        Var.__reduce__ = lambda self: (
+            _rebuild_var_from_numpy, (self.numpy(), str(self.dtype)))
+        Var._reduce_wrapped = True
+
     # Leaf registry for the no-optimizer backward() path (below): torch's
     # loss.backward() accumulates grads into the .grad of every leaf that
     # requires grad, but jittor has no graph-walk to recover those leaves. So
@@ -3339,11 +4034,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     if not hasattr(jt, "_torch_leaf_params"):
         jt._torch_leaf_params = {}
     def _register_leaf(v):
-        try:
-            if isinstance(v, Var) and not v.is_stop_grad():
-                jt._torch_leaf_params[id(v)] = v
-        except Exception:
-            pass
+        _torch_register_leaf(v)
 
     # Override requires_grad with a Python property even though jittor exposes a
     # native getset descriptor: the native setter maps directly to start_grad/
@@ -3391,63 +4082,146 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     #     which fills pg["grads"]; then expose those grad Vars on each param.
     #   * param.grad: getter returns the optimizer-held grad Var (so in-place
     #     clipping mutates the very Var that step() consumes); setter stores it.
+    def _fill_opt_grads(opt, grad_by_id):
+        # Replicate the grad-storage half of jittor's Optimizer.backward() but
+        # from an already-computed {id(param): grad} map (so a SINGLE jt.grad
+        # pass feeds every optimizer + every leaf — no N-times-repeated backward).
+        # Honors the per-optimizer __zero_grad flag (post_step zeros it, so the
+        # next backward overwrites rather than accumulates) and tolerates a param
+        # whose shape changed (3DGS densify replaces params) by replacing — not
+        # .update()-ing — the stored grad Var.
+        zero = getattr(opt, "_Optimizer__zero_grad", True)
+        for pg in opt.param_groups:
+            grads_list = pg.get("grads")
+            if grads_list is None:
+                grads_list = pg["grads"] = [None] * len(pg["params"])
+            for i, p in enumerate(pg["params"]):
+                if not isinstance(p, Var) or p.is_stop_grad():
+                    continue
+                g = grad_by_id.get(id(p))
+                if g is None:
+                    continue
+                g = g.stop_grad()
+                if (not zero) and i < len(grads_list) and isinstance(grads_list[i], Var) \
+                        and list(grads_list[i].shape) == list(g.shape):
+                    g = g + grads_list[i]
+                while len(grads_list) <= i:
+                    grads_list.append(None)
+                grads_list[i] = g
+                object.__setattr__(p, "_torch_grad", g)
+        opt.n_step += 1
+        object.__setattr__(opt, "_Optimizer__zero_grad", False)
+        try:
+            opt._build_grad_map()
+        except Exception:
+            pass
+
     def _backward(self, gradient=None, retain_graph=False, create_graph=False, **kw):
         # torch defaults retain_graph to None (== free the graph); jittor's
         # core.grad/optimizer.backward require a strict bool, so coerce.
         retain_graph = bool(retain_graph)
-        opt = getattr(jt, "_current_optimizer", None)
-        if opt is None:
-            # torch supports loss.backward() with no optimizer: grads accumulate
-            # into each leaf's .grad. jittor has no optimizer-free tensor-level
-            # backward, so compute grads via jt.grad w.r.t. the registered leaf
-            # params (those whose requires_grad was enabled) and publish them on
-            # .grad. Accumulate (+=) like torch when a leaf already has a grad.
-            leaves = [v for v in list(jt._torch_leaf_params.values())
-                      if isinstance(v, Var) and not v.is_stop_grad()]
-            # prune leaves that are no longer trainable to bound the registry
-            for k in [k for k, v in list(jt._torch_leaf_params.items())
-                      if not (isinstance(v, Var) and not v.is_stop_grad())]:
-                jt._torch_leaf_params.pop(k, None)
-            if leaves:
-                grads = jt.grad(self, leaves, retain_graph)
-                for p, gr in zip(leaves, grads):
-                    if gr is None:
-                        continue
-                    prev = getattr(p, "_torch_grad", None)
-                    object.__setattr__(p, "_torch_grad",
-                                       gr if prev is None else (prev + gr))
-            return None
-        # compute & accumulate grads into the optimizer (jittor semantics)
-        opt.backward(self, retain_graph)
-        # publish grads onto params so `param.grad` works for clipping/logging
+        # Materialize the loss's FORWARD graph before computing gradients. A custom
+        # CUDA-ext Function (3DGS rasterizer / fused-ssim) writes its outputs
+        # out-of-band; if the forward is left lazy, jt.grad recomputes that
+        # subgraph during the backward pass and the ext's lazy "empty/full"
+        # factory op re-runs WITHOUT the kernel's writes -> garbage/NaN loss
+        # (proven: a plain float(loss) before backward makes train.py finite).
+        # Forcing the forward to settle once here decouples it from the grad pass.
         try:
-            opt._build_grad_map()
-            for pg in opt.param_groups:
-                for p, g in zip(pg["params"], pg.get("grads", [])):
-                    object.__setattr__(p, "_torch_grad", g)
+            self.sync()
         except Exception:
             pass
+        # Collect EVERY live optimizer (torch allows several at once — 3DGS uses a
+        # Gaussian Adam + an exposure Adam; routing to just _current_optimizer
+        # left the other's params with .grad=None -> KeyError 'grads' in step()).
+        reg = getattr(jt, "_active_optimizers", None)
+        opts = []
+        if reg:
+            alive = []
+            for r in reg:
+                o = r() if callable(r) else r
+                if o is not None:
+                    alive.append(r)
+                    opts.append(o)
+            reg[:] = alive
+        # The union of grad targets: every optimizer's trainable params + every
+        # registered leaf (requires_grad Vars) + every retain_grad'd non-leaf
+        # (3DGS's screenspace `means2D`, read by densification as .grad). Dedup by
+        # id, preserve first-seen order, single jt.grad over the lot.
+        leaf_map = {}
+        opt_ids = set()
+        for o in opts:
+            for pg in getattr(o, "param_groups", []):
+                for p in pg.get("params", []):
+                    if isinstance(p, Var) and not p.is_stop_grad():
+                        leaf_map.setdefault(id(p), p)
+                        opt_ids.add(id(p))
+        for v in list(jt._torch_leaf_params.values()):
+            if isinstance(v, Var) and not v.is_stop_grad():
+                leaf_map.setdefault(id(v), v)
+        for k in [k for k, v in list(jt._torch_leaf_params.items())
+                  if not (isinstance(v, Var) and not v.is_stop_grad())]:
+            jt._torch_leaf_params.pop(k, None)
+        retained = getattr(jt, "_torch_retained", None)
+        if retained:
+            for v in list(retained.values()):
+                if isinstance(v, Var) and not v.is_stop_grad():
+                    leaf_map.setdefault(id(v), v)
+        if not leaf_map:
+            return None
+        leaves = list(leaf_map.values())
+        grads = jt.grad(self, leaves, retain_graph)
+        grad_by_id = {}
+        for p, gr in zip(leaves, grads):
+            if gr is None:
+                continue
+            grad_by_id[id(p)] = gr
+            if id(p) not in opt_ids:
+                # non-optimizer leaf (retain_grad screenspace etc.): accumulate
+                # onto .grad like torch (zeroed externally / per render).
+                prev = getattr(p, "_torch_grad", None)
+                object.__setattr__(p, "_torch_grad",
+                                   gr if prev is None else (prev + gr))
+        # fill each optimizer's pg["grads"] so its step(loss=None) consumes them
+        for o in opts:
+            _fill_opt_grads(o, grad_by_id)
+        # retain_grad is per-forward in torch; clear so the next iteration's fresh
+        # screenspace tensor doesn't leak (jittor Vars aren't weak-referenceable).
+        if retained:
+            retained.clear()
         return None
     Var.backward = _backward
 
     def _grad_get(self):
-        # prefer the optimizer-held grad Var (mutations propagate to step())
-        opt = getattr(jt, "_current_optimizer", None)
-        if opt is not None:
+        # _backward publishes _torch_grad on every leaf (for optimizer params it
+        # points AT pg["grads"][i], so in-place grad clipping mutates the very Var
+        # step() consumes). Fall back to any live optimizer's grad map if a param
+        # hasn't gone through _backward yet.
+        g = getattr(self, "_torch_grad", None)
+        if g is not None:
+            return g
+        for r in getattr(jt, "_active_optimizers", None) or []:
+            o = r() if callable(r) else r
+            if o is None:
+                continue
             try:
-                return opt.find_grad(self)
+                return o.find_grad(self)
             except Exception:
                 pass
-        return getattr(self, "_torch_grad", None)
+        return None
     def _grad_set(self, value):
         object.__setattr__(self, "_torch_grad", value)
-        # also write through to the optimizer's stored grad so step() uses it
-        opt = getattr(jt, "_current_optimizer", None)
-        if opt is not None and value is not None:
-            try:
-                opt.find_grad(self).update(value)
-            except Exception:
-                pass
+        # write through to any optimizer holding this param so step() uses it
+        if value is not None:
+            for r in getattr(jt, "_active_optimizers", None) or []:
+                o = r() if callable(r) else r
+                if o is None:
+                    continue
+                try:
+                    o.find_grad(self).update(value)
+                    break
+                except Exception:
+                    pass
     Var.grad = property(_grad_get, _grad_set)
 
     # torch's `is_leaf`: True for tensors not produced by a grad-tracked op
@@ -3455,24 +4229,72 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # treat every Var as a leaf so peft's `if param.is_leaf:` guards pass.
     if not hasattr(Var, "is_leaf"):
         Var.is_leaf = property(lambda self: True)
+    # torch's nested-tensor flag; jittor has no nested tensors -> always False.
+    if not hasattr(Var, "is_nested"):
+        Var.is_nested = property(lambda self: False)
     # torch's `grad_fn` is None for leaves; libs check `t.grad_fn is None`.
     if not hasattr(Var, "grad_fn"):
         Var.grad_fn = property(lambda self: None)
-    # `retain_grad()` is a no-op for us (all Vars retain grad)
-    if not hasattr(Var, "retain_grad"):
-        Var.retain_grad = lambda self: self
+    # torch's retain_grad() marks a NON-leaf tensor so its .grad is populated
+    # after backward (normally only leaves keep .grad). 3DGS relies on this for
+    # the screenspace `means2D` tensor (`zeros_like(xyz)+0` then retain_grad()),
+    # whose .grad drives densification. Register into a per-forward set the
+    # _backward pass includes as a grad target; cleared each backward so the
+    # next iteration's fresh tensor doesn't accumulate (jittor Vars can't be
+    # weak-ref'd, so a persistent dict would leak one Var per iteration).
+    if not hasattr(jt, "_torch_retained"):
+        jt._torch_retained = {}
+    def _retain_grad(self):
+        try:
+            jt._torch_retained[id(self)] = self
+        except Exception:
+            pass
+        return self
+    Var.retain_grad = _retain_grad
 
     def _to(self, *args, **kwargs):
         ds = None
+        dev = None
+        # device passed as a keyword (torch's .to(device=..., dtype=...))
+        if "device" in kwargs:
+            dev = kwargs["device"]
         for a in list(args) + list(kwargs.values()):
             if isinstance(a, dtype):
                 ds = a.name
-            elif isinstance(a, str) and a.replace("torch.", "") in dtype._registry:
-                ds = a.replace("torch.", "")
-        if ds is not None:
-            return self.cast(ds)
-        return self
+            elif isinstance(a, device):
+                dev = a
+            elif isinstance(a, Var):
+                # .to(other) copies other's dtype AND device.
+                ds = str(a.dtype)
+                dev = a.device
+            elif isinstance(a, str):
+                bare = a.replace("torch.", "")
+                if bare in dtype._registry:
+                    ds = bare
+                elif bare.split(":")[0] in ("cpu", "cuda", "npu"):
+                    dev = bare
+        out = self.cast(ds) if ds is not None else self
+        # Honor an explicit device= target by migrating residency. device=None
+        # (the common .to(dtype) call) leaves placement on the global default.
+        if _device_is_cpu(dev):
+            out = _make_cpu_resident(out)
+        elif _device_is_cuda(dev):
+            out = _make_cuda_resident(out)
+        return out
     Var.to = _to
+
+    # torch's Tensor.cpu()/.cuda() MIGRATE the tensor's residency (native exts
+    # check tensor.is_cpu()). jittor's base Var.cpu just clones (stays on GPU)
+    # and Var.cuda only flips the global flag, so override both to actually move
+    # the data: .cpu() rebuilds the Var under the host allocator, .cuda() under
+    # the device allocator. Var.location()/jtorch's C++ is_cpu() then agree.
+    def _var_cpu(self, *a, **k):
+        return _make_cpu_resident(self)
+    Var.cpu = _var_cpu
+    def _var_cuda(self, device=None, *a, **k):
+        jt.flags.use_cuda = 1
+        return _make_cuda_resident(self)
+    Var.cuda = _var_cuda
 
     # ---- integer/float dtype cast methods (torch parity) ----
     # jittor aliases Var.long = Var.int32 and Var.int = Var.int32, so BOTH
@@ -3607,8 +4429,21 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
 
     if not hasattr(Var, "contiguous"):
         Var.contiguous = lambda self: self
-    if not hasattr(Var, "is_cuda"):
-        Var.is_cuda = property(lambda self: bool(jt.flags.use_cuda) or bool(getattr(jt.compiler, "has_acl", 0)))
+    # torch's Tensor.is_cuda / .is_cpu report the tensor's ACTUAL residency.
+    # A Var built/migrated to host (torch.zeros(device='cpu'), .cpu()) is on the
+    # CPU even under global use_cuda=1, so read Var.location() rather than the
+    # global flag (matches jtorch's C++ is_cuda()/is_cpu()). When CUDA is off
+    # everything is host-resident.
+    def _is_cuda(self):
+        if not (jt.flags.use_cuda or getattr(jt.compiler, "has_acl", 0)):
+            return False
+        return not _var_is_cpu_resident(self)
+    Var.is_cuda = property(_is_cuda)
+    Var.is_cpu = property(lambda self: not _is_cuda(self))
+    # torch's Tensor.get_device(): CUDA device index, or -1 for CPU tensors.
+    # 3DGS's fallback ssim (utils/loss_utils.py) does window.cuda(img.get_device()).
+    if not hasattr(Var, "get_device"):
+        Var.get_device = lambda self: (0 if _is_cuda(self) else -1)
 
     # torch's Tensor.narrow(dim, start, length): a view of `length` elements
     # starting at `start` along `dim` (jittor has no narrow; use a slice).
@@ -3817,6 +4652,63 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
     g.use_deterministic_algorithms = lambda *a, **k: None
     g.is_floating_point = lambda x: ("float" in str(x.dtype))
 
+    # torch-compat: torch.bincount(input, weights=None, minlength=0). Counts the
+    # occurrences of each non-negative integer in a 1-D `input`; with `weights`,
+    # sums the weights per bin instead. Output length = max(input.max()+1, minlength)
+    # (0 for an empty input, honoring minlength). Implemented with jittor's native
+    # out-of-place scatter_add (reduce='add' accumulates duplicate indices).
+    if not hasattr(g, "bincount"):
+        def bincount(input, weights=None, minlength=0):
+            x = input.reshape(-1).int64()
+            ml = max(int(minlength), 0)
+            if x.numel() == 0:
+                wdtype = weights.dtype if weights is not None else jt.int64
+                return jt.zeros((ml,), dtype=wdtype)
+            n = max(int(x.max().item()) + 1, ml)
+            if weights is not None:
+                out = jt.zeros((n,), dtype=weights.dtype)
+                src = weights.reshape(-1).cast(str(weights.dtype))
+            else:
+                out = jt.zeros((n,), dtype=jt.int64)
+                src = jt.ones((x.shape[0],), dtype=jt.int64)
+            # scatter_add is out-of-place and accumulates at duplicate indices.
+            return out.scatter_add(0, x, src)
+        g.bincount = bincount
+        Var.bincount = lambda self, weights=None, minlength=0: bincount(self, weights, minlength)
+
+    # torch-compat: torch.segment_reduce(data, reduce, *, lengths) -- reduce over
+    # contiguous variable-length segments along dim 0 (lengths-based form). torch
+    # supports reduce in {sum, mean, prod, max/amax, min/amin}; the per-segment
+    # result is stacked back into a (num_segments, *data.shape[1:]) tensor.
+    if not hasattr(g, "segment_reduce"):
+        def segment_reduce(data, reduce="sum", *, lengths=None, **kw):
+            assert lengths is not None, "torch_compat segment_reduce requires lengths="
+            lengths_list = [int(l) for l in lengths]
+            tail = list(data.shape[1:])     # per-element shape; segments reduce dim 0
+            segs = []
+            start = 0
+            for l in lengths_list:
+                chunk = data[start:start + l]
+                start += l
+                if reduce == "sum":
+                    r = chunk.sum(dim=0)
+                elif reduce == "mean":
+                    r = chunk.mean(dim=0)
+                elif reduce == "prod":
+                    r = chunk.prod(dim=0)
+                elif reduce in ("max", "amax"):
+                    r = chunk.amax(dim=0)    # values-only (Var.max here is the (values,idx) shim)
+                elif reduce in ("min", "amin"):
+                    r = chunk.amin(dim=0)
+                else:
+                    raise ValueError(f"Unsupported segment_reduce op: {reduce}")
+                # jittor's reduce over dim 0 leaves a leading size-1 axis; normalise
+                # each segment to (1, *tail) so concat gives torch's output shape:
+                # 1-D data -> (num_segments,), N-D data -> (num_segments, *data[1:]).
+                segs.append(r.reshape([1] + tail))
+            return jt.concat(segs, dim=0)
+        g.segment_reduce = segment_reduce
+
     # torch unary math jittor lacks at top level (it has log2 but not exp2/log10/trunc/sign)
     import math as _math_la
     _LN2 = _math_la.log(2.0); _INV_LN10 = 1.0 / _math_la.log(10.0)
@@ -3987,16 +4879,32 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
     # objects (e.g. TrainingArguments). jittor's jt.save is numpy/pickle based
     # but chokes on live Vars and some objects, so we use standard pickle with
     # Vars converted to a portable (numpy) form and restored on load.
-    import pickle as _pickle
+    import os as _os_pickle, pickle as _pickle
     _VAR_TAG = "__jt_var__"
     def _to_portable(obj, _seen=None):
         if isinstance(obj, jt.Var):
             return {_VAR_TAG: True, "data": obj.numpy(), "dtype": str(obj.dtype)}
+        # Drop non-picklable callables (e.g. an LR scheduler's local lr_lambda
+        # closure in an extra/scheduler state_dict). torch's LambdaLR.state_dict
+        # does the same -- the lambda is rebuilt on load, not restored.
+        import types as _t
+        if isinstance(obj, (_t.FunctionType, _t.LambdaType, _t.MethodType, _t.BuiltinFunctionType)):
+            return None
         if isinstance(obj, dict):
             return {k: _to_portable(v) for k, v in obj.items()}
         if isinstance(obj, (list, tuple)):
-            t = type(obj)
-            return t(_to_portable(v) for v in obj)
+            items = [_to_portable(v) for v in obj]
+            # Coerce list/tuple SUBCLASSES (e.g. the shim's local _ParamList in
+            # an optimizer state_dict) to plain list/tuple -- local classes are
+            # not picklable. Preserve namedtuples.
+            if isinstance(obj, tuple):
+                if hasattr(obj, "_fields"):
+                    try:
+                        return type(obj)(*items)
+                    except Exception:
+                        return tuple(items)
+                return tuple(items)
+            return list(items)
         return obj
     def _from_portable(obj):
         if isinstance(obj, dict):
@@ -4092,15 +5000,38 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
             return head[:2] == b"PK"
         with open(f, "rb") as fh:
             return fh.read(2)[:2] == b"PK"
+    def _is_legacy_torch_pickle(path):
+        # PyTorch's pre-zip serialization starts with three pickles:
+        # MAGIC_NUMBER, PROTOCOL_VERSION and sys_info, then uses persistent
+        # storage records. Plain torch-shim checkpoints are regular pickles and
+        # must continue down the portable-pickle path.
+        try:
+            with open(path, "rb") as fh:
+                magic = _pickle.load(fh, encoding="utf-8")
+        except Exception:
+            return False
+        return magic == 0x1950a86a20f9469cfc6c
     def load(f, *a, **k):
         # accept map_location/weights_only/pickle_module kwargs (ignored).
         # Real torch .pt is a zip archive -> use the torch-format loader;
         # our own torch.save output is plain pickle -> _from_portable.
+        path = None
+        if not hasattr(f, "read"):
+            path = _os_pickle.fspath(f)
+            native_load = getattr(g, "_vj_native_load", None)
+            if native_load is not None and (
+                path.startswith(("jittorhub://", "http://", "https://"))
+                or path.lower().endswith(".pkl")
+            ):
+                return native_load(path)
         try:
             if _is_zip(f):
                 return _load_torch_pt(f)
         except Exception as _e:
             pass
+        if path is not None and path.lower().endswith((".pth", ".pt", ".bin")) and _is_legacy_torch_pickle(path):
+            from jittor_utils.load_pytorch import load_pytorch as _load_pytorch
+            return _load_pytorch(path)
         if hasattr(f, "read"):
             obj = _pickle.load(f)
         else:
@@ -4109,6 +5040,47 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
         return _from_portable(obj)
     g.save = save
     g.load = load
+    # Stash the real pickle loader so adapters can restore it if torch.load gets
+    # shadowed later (the torch_shim exposes cpp_extension.load(name, sources,...)
+    # at the torch top level, which can mask this in some worker processes).
+    g._vj_pickle_load = load
+    g._vj_pickle_save = save
+
+    # ---- torch.hub ----
+    import types as _types_hub, os as _os_hub, urllib.request as _urlreq_hub
+    from urllib.parse import urlparse as _urlparse_hub
+    hub = _types_hub.ModuleType("torch.hub")
+    def _hub_dir():
+        return _os_hub.path.expanduser(_os_hub.environ.get("TORCH_HOME", "~/.cache/torch"))
+    def _hub_checkpoints_dir():
+        path = _os_hub.path.join(_hub_dir(), "hub", "checkpoints")
+        _os_hub.makedirs(path, exist_ok=True)
+        return path
+    def _download_url_to_file(url, dst, hash_prefix=None, progress=True):
+        _urlreq_hub.urlretrieve(url, dst)
+    def _load_state_dict_from_url(url, model_dir=None, map_location=None, progress=True,
+                                  check_hash=False, file_name=None, weights_only=False):
+        if model_dir is None:
+            model_dir = _hub_checkpoints_dir()
+        _os_hub.makedirs(model_dir, exist_ok=True)
+        filename = file_name or _os_hub.path.basename(_urlparse_hub(url).path)
+        cached_file = _os_hub.path.join(model_dir, filename)
+        if not _os_hub.path.isfile(cached_file):
+            _download_url_to_file(url, cached_file, progress=progress)
+        return g.load(cached_file, map_location=map_location, weights_only=weights_only)
+    hub.download_url_to_file = _download_url_to_file
+    hub.load_state_dict_from_url = _load_state_dict_from_url
+    hub.get_dir = lambda: _os_hub.path.join(_hub_dir(), "hub")
+    import re as _re_hub
+    hub.HASH_REGEX = _re_hub.compile(r"-([a-f0-9]*)\\.")
+    hub.tqdm = None
+    hub.urlparse = _urlparse_hub
+    hub.urlopen = _urlreq_hub.urlopen
+    hub.Request = _urlreq_hub.Request
+    hub._get_torch_home = hub.get_dir
+    g.hub = hub
+    import sys as _sys_hub
+    _sys_hub.modules.setdefault("torch.hub", hub)
 
     # ---- elementwise / reduction helpers that may be missing ----
     def _alias(name, fn):
@@ -4116,6 +5088,12 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
             setattr(g, name, fn)
     _alias("rsqrt", lambda x: 1.0 / jt.sqrt(x))
     _alias("empty_like", lambda x, **k: jt.empty(x.shape, x.dtype))
+    # module-level comparison ops (torch.gt(a,b) etc.); .gt methods already exist.
+    _alias("gt", lambda a, b: a > b)
+    _alias("lt", lambda a, b: a < b)
+    _alias("ge", lambda a, b: a >= b)
+    _alias("le", lambda a, b: a <= b)
+    _alias("eq", lambda a, b: a == b)
     # torch.compile: jittor already JIT-compiles every op, so this is a pass-through.
     # Handles torch.compile(model), @torch.compile, and torch.compile(mode=...)(model).
     def _compile(model=None, *a, **k):
@@ -4160,6 +5138,13 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
                 except Exception:
                     raise AttributeError(name)
         g.utils = _UtilsNS("torch.utils")
+    try:
+        from jittor.torch_shim.cpp_extension.torch_utils import install_cpp_extension
+        install_cpp_extension(g.utils)
+    except Exception:
+        # Keep `import jittor as torch` usable in minimal/non-setuptools envs; an
+        # actual extension build will fail with the concrete import/toolchain error.
+        pass
     # torch.func (functorch): functional transforms used by LoRA / meta-learning /
     # model ensembling (functorch). Jittor's autograd is graph-based, so these are
     # thin wrappers over jt.grad + temporary parameter rebinding.
@@ -4736,7 +5721,15 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
         out = m + jt.log(jt.exp(input - m).sum(dim, keepdims=True))
         if keepdim:
             return out
-        return out.squeeze(dim) if isinstance(dim, int) else out.reshape(input.max(dim).shape)
+        # torch removes the reduced dim(s) entirely (1D -> 0-dim scalar). jittor's
+        # squeeze keeps a trailing (1,) for the last remaining dim, so reshape to
+        # the explicit reduced shape instead.
+        dims = [dim] if isinstance(dim, int) else list(dim)
+        nd = input.ndim
+        dims = [d % nd for d in dims]
+        target = [s for i, s in enumerate(input.shape) if i not in dims]
+        # jittor has no 0-dim tensors; a full reduction stays (1,).
+        return out.reshape(target) if target else out.reshape(-1)
     _alias("logsumexp", _logsumexp); Var.logsumexp = _logsumexp
     def _nansum(input, dim=None, keepdim=False, **k):
         z = jt.nan_to_num(input, nan=0.0)
@@ -4867,7 +5860,27 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
     # / `x.view(t.size())` works (mmdet queryinst). Only intervene for that case to
     # keep the (very hot) reshape path otherwise untouched.
     _orig_reshape = Var.reshape
-    def _torch_reshape(self, *shape):
+    _np_view_of = None
+    def _bitcast(self, dt):
+        import numpy as _np
+        nonlocal _np_view_of
+        if _np_view_of is None:
+            _np_view_of = {"uint8": _np.uint8, "int8": _np.int8, "uint16": _np.uint16,
+                           "int16": _np.int16, "int32": _np.int32, "int64": _np.int64,
+                           "float16": _np.float16, "bfloat16": _np.uint16,
+                           "float32": _np.float32, "float64": _np.float64}
+        npd = _np_view_of.get(getattr(dt, "name", str(dt)).replace("torch.", ""), _np.uint8)
+        return jt.array(_np.ascontiguousarray(self.numpy()).view(npd))
+    def _torch_reshape(self, *shape, **_kw):
+        # torch's `.view(dtype)` / `.view(dtype=...)` REINTERPRETS the bytes as
+        # another dtype (bitcast), e.g. weight.view(torch.uint8) for byte-packing
+        # in vLLM weight transfer. jittor has no dtype-view; bitcast via numpy.
+        # (NB: 'dtype' the kwarg must not shadow the `dtype` class used below.)
+        _dt = _kw.get("dtype", None)
+        if _dt is not None:
+            return _bitcast(self, _dt)
+        if len(shape) == 1 and isinstance(shape[0], dtype):
+            return _bitcast(self, shape[0])
         if len(shape) == 1 and isinstance(shape[0], tuple) and type(shape[0]) is not tuple:
             shape = (tuple(int(s) for s in shape[0]),)
         return _orig_reshape(self, *shape)
@@ -4891,10 +5904,15 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
             d = k.pop("dim")
         if "dims" in k:
             d = k.pop("dims")
-        if d is None and len(a) >= 1 and isinstance(a[0], (tuple, list)):
-            d = a[0]; a = a[1:]                # consume positional tuple-of-dims
+        if d is None and len(a) >= 1:
+            if isinstance(a[0], (tuple, list)):
+                d = a[0]; a = a[1:]            # consume positional tuple-of-dims
+            elif isinstance(a[0], (int, np.integer)) and not isinstance(a[0], bool):
+                d = a[0]; a = a[1:]            # consume positional scalar dim
         # torch spells it keepdim; jittor's tuple overload spells it keepdims.
         keep = k.pop("keepdim", k.pop("keepdims", None))
+        if keep is None and d is not None and len(a) >= 1 and isinstance(a[0], bool):
+            keep = a[0]; a = a[1:]             # consume positional keepdim
         if d is not None:
             # jittor's scalar `dim` overload rejects keepdims, while its tuple
             # `dims` overload supports it -> always route through `dims` when a
@@ -4985,6 +6003,8 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
     if not hasattr(Var, "le"):          Var.le = lambda self, other: self <= other
     if not hasattr(Var, "neg"):         Var.neg = lambda self: -self
     if not hasattr(Var, "reciprocal"):  Var.reciprocal = lambda self: 1.0 / self
+    if not hasattr(Var, "expm1"):       Var.expm1 = lambda self: jt.exp(self) - 1
+    if not hasattr(Var, "log1p"):       Var.log1p = lambda self: jt.log(self + 1)
     if not hasattr(Var, "square"):      Var.square = lambda self: self * self
     if not hasattr(Var, "square_"):     Var.square_ = lambda self: self.assign(self * self)
     if not hasattr(Var, "clamp_min"):   Var.clamp_min = lambda self, v: jt.maximum(self, v)
@@ -5138,4 +6158,3 @@ def _isin(elements, test_elements, **kw):
     import numpy as _np
     el = elements.numpy() if hasattr(elements, "numpy") else _np.asarray(elements)
     return _jt.array(_np.isin(el, te))
-

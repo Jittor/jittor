@@ -278,8 +278,12 @@ DEF_IS(NanoString, T) from_py_object(PyObject* obj) {
 struct NanoVector;
 EXTERN_LIB PyTypeObject PyjtNanoVector;
 DEF_IS(NanoVector, bool) is_type(PyObject* obj) {
+    // Accept tuple/list SUBCLASSES too (e.g. torch.Size from the torch-compat
+    // shim is `class Size(tuple)`). Exact-only checks raised on shape compares
+    // (`var.shape != torch.Size(...)`) and rejected torch.Size as a shape arg.
+    // Subclasses share the tuple/list C layout, so PySequence_Fast_ITEMS works.
     return Py_TYPE(obj) == &PyjtNanoVector ||
-        PyList_CheckExact(obj) || PyTuple_CheckExact(obj);
+        PyList_Check(obj) || PyTuple_Check(obj);
 }
 DEF_IS(NanoVector*, bool) is_type(PyObject* obj) {
     return Py_TYPE(obj) == &PyjtNanoVector;

@@ -1804,6 +1804,27 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
         return y
 conv = conv2d
 
+# jittor's cuDNN 3D-convolution backend has NO algorithm for half-precision
+# (fp16 / bf16) tensors: cudnn_conv3d / cudnn_conv3d_backward_x abort algorithm
+# selection with `Check failed: best_algo_idx != -1` (NOT an OOM -- it reproduces
+# with plenty of free memory). PyTorch transparently runs such convolutions, so a
+# half-precision dense Conv3d (e.g. TRELLIS.2's SparseStructure VAE) crashes here.
+# Wrap the cuDNN 3D-conv ops to detect a fp16/bf16 input-or-weight and run the
+# convolution in fp32 (cuDNN has valid fp32 3D algorithms), casting the result back
+# to the original half dtype. Correctness-preserving: only the unsupported
+# half-precision case is rerouted, and the fp32 compute differs from a (nonexistent)
+# native fp16 kernel only by fp16 rounding of the output.
+_CUDNN_3D_HALF_DTYPES = ("float16", "bfloat16")
+
+def _cudnn_conv3d_fp16_safe(op, x, weight, *args):
+    xd, wd = str(x.dtype), str(weight.dtype)
+    half = xd if xd in _CUDNN_3D_HALF_DTYPES else (wd if wd in _CUDNN_3D_HALF_DTYPES else None)
+    if half is None:
+        return op(x, weight, *args)
+    # Run in fp32 (cuDNN has a working fp32 3D-conv algo), then cast back.
+    y = op(x.float32(), weight.float32(), *args)
+    return y.cast(half)
+
 def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     ''' Applies a 3D convolution over an input signal composed of several input planes.
 
@@ -1841,7 +1862,7 @@ def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     if groups <= 0:
         raise ValueError("groups must be a positive integer")
     if jt.flags.use_cuda and jt.cudnn:
-        y = jt.cudnn.ops.cudnn_conv3d(x, weight, *stride, *padding, *dilation, groups)
+        y = _cudnn_conv3d_fp16_safe(jt.cudnn.ops.cudnn_conv3d, x, weight, *stride, *padding, *dilation, groups)
     elif groups == 1:
         N,C,D,H,W = x.shape
         Kd, Kh, Kw = weight.shape[-3:]
@@ -2168,7 +2189,9 @@ def conv_transpose3d(input, weight, bias=None, stride=1, padding=0, output_paddi
     w_out = (W-1) * stride_w + output_padding[2] - 2*padding_w + 1 + (w-1)*dilation_w
     out_shape = (N, o, d_out, h_out, w_out)
     if jt.flags.use_cuda and jt.cudnn:
-        return jt.cudnn.ops.cudnn_conv3d_backward_x(weight, x, *out_shape[2:], *stride, *padding, *dilation, groups)
+        # fp16/bf16 3D transposed-conv hits the same missing-cuDNN-algo wall as
+        # the forward conv3d; reuse the fp32-fallback wrapper.
+        return _cudnn_conv3d_fp16_safe(jt.cudnn.ops.cudnn_conv3d_backward_x, weight, x, *out_shape[2:], *stride, *padding, *dilation, groups)
     shape = (N, i, o, D, H, W, d, h, w)
     xx = x.broadcast(shape, (2, 6, 7, 8)) # i,h,w
     ww = weight.broadcast(shape, (0, 3, 4, 5)) # N,H,W
@@ -2610,7 +2633,9 @@ def pad(x,padding=None, mode='constant', value=0, pad=None):
     out_dims = []
     out_shape = []
     for i,n,l,r in zip(range(x.ndim),x.shape,left,right):
-        out_shape.append(n+l+r)
+        # int(): shape/pad amounts may arrive as numpy ints (e.g. via the
+        # torch-compat nested path); reindex's shape arg must be python int64.
+        out_shape.append(int(n)+int(l)+int(r))
         if mode == 'constant':
             out_dims.append(f'i{i}-{l}')
         elif mode == 'replicate':
@@ -3476,6 +3501,10 @@ class Sequential(Module):
     
     def named_children(self,):
         return list(self.layers.items())
+
+    @property
+    def _modules(self):
+        return self.layers
 
     def __setattr__(self, key, value) -> None:
         if isinstance(key, str) and key.isdigit():
@@ -4810,5 +4839,4 @@ def mish(x, inplace=False):
 
 def skip_init(module_cls, *args, **kw):
     return module_cls(*args, **kw)
-
 

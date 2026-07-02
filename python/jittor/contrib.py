@@ -268,7 +268,7 @@ def _merge_dtypes(dtypes):
     dtype = dtypes[0]
     for i in range(1, len(dtypes)):
         dtype = jt.binary_dtype_infer("add", dtype, dtypes[i])
-    return dtype 
+    return dtype
 
 @jt.flag_scope(amp_reg=4) # _custom_flag
 def concat(arr, dim=0):

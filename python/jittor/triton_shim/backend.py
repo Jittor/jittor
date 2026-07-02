@@ -36,6 +36,7 @@ This module is imported lazily (only when bridge mode is actually used), so
 importing :mod:`jittor.triton_shim` never imports jittor or triton eagerly.
 """
 import ctypes
+import os
 import threading
 
 __all__ = ["is_available", "run", "make_do_bench", "JittorTritonError"]
@@ -114,6 +115,65 @@ class _Driver:
     _inst = None
     _lock = threading.Lock()
 
+    @staticmethod
+    def _load_cudart():
+        """Load the CUDA *runtime* (``libcudart``) for memory ops, or ``None``.
+
+        Why the runtime and not the driver here: jittor initialises the device and
+        its memory pool through the CUDA *runtime* API. On CUDA 12 that leaves the
+        device's primary context in a state where driver-API memory calls
+        (``cuMemAlloc`` / ``cuMemcpyDtoD`` / ``cuMemsetD8``) return
+        ``CUDA_ERROR_INVALID_CONTEXT`` (201) even though the context is current and
+        matches jittor's — yet the *runtime* equivalents (``cudaMalloc`` /
+        ``cudaMemcpy`` / ``cudaMemset``) all succeed (they share jittor's runtime
+        context cleanly). Kernel *launch* via the driver (``cuLaunchKernel``) is
+        unaffected, so we keep the split: driver for module-load+launch, runtime
+        for the bounce-buffer memory ops.
+        """
+        names = ("libcudart.so", "libcudart.so.12", "libcudart.so.11.0",
+                 "libcudart.so.11")
+        rt = None
+        for n in names:
+            try:
+                rt = ctypes.CDLL(n)
+                break
+            except OSError:
+                rt = None
+        if rt is None:
+            # fall back to the cudart shipped beside jittor's bundled nvcc
+            try:
+                import glob
+                import jittor.compiler as _c
+                nv = getattr(_c, "nvcc_path", "") or ""
+                if nv:
+                    home = os.path.dirname(os.path.dirname(nv))
+                    for so in sorted(glob.glob(os.path.join(home, "lib*",
+                                                            "libcudart.so*"))):
+                        try:
+                            rt = ctypes.CDLL(so)
+                            break
+                        except OSError:
+                            rt = None
+            except Exception:
+                rt = None
+        if rt is None:
+            return None
+        try:
+            c_vp, c_vpp = ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)
+            rt.cudaMalloc.argtypes = [c_vpp, ctypes.c_size_t]
+            rt.cudaMalloc.restype = ctypes.c_int
+            rt.cudaFree.argtypes = [c_vp]
+            rt.cudaFree.restype = ctypes.c_int
+            rt.cudaMemset.argtypes = [c_vp, ctypes.c_int, ctypes.c_size_t]
+            rt.cudaMemset.restype = ctypes.c_int
+            rt.cudaMemcpy.argtypes = [c_vp, c_vp, ctypes.c_size_t, ctypes.c_int]
+            rt.cudaMemcpy.restype = ctypes.c_int
+            rt.cudaDeviceSynchronize.argtypes = []
+            rt.cudaDeviceSynchronize.restype = ctypes.c_int
+        except Exception:
+            return None
+        return rt
+
     def __init__(self):
         lib = None
         last = None
@@ -126,6 +186,7 @@ class _Driver:
         if lib is None:
             raise JittorTritonError("could not load libcuda.so.1 (%s)" % last)
         self.lib = lib
+        self.rt = self._load_cudart()      # runtime API for memory ops (see below)
         c_vp, c_vpp = ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)
         c_i, c_u = ctypes.c_int, ctypes.c_uint
         self._sig(lib.cuInit, [c_u])
@@ -141,6 +202,11 @@ class _Driver:
                   [c_vp, c_u, c_u, c_u, c_u, c_u, c_u, c_u, c_vp, c_vpp, c_vpp])
         self._sig(lib.cuFuncSetAttribute, [c_vp, c_i, c_i])
         self._sig(lib.cuMemAlloc, [c_vpp, ctypes.c_size_t])
+        self._sig(lib.cuMemFree, [c_vp])
+        self._sig(lib.cuMemsetD8, [c_vp, ctypes.c_ubyte, ctypes.c_size_t])
+        # device<->device copy (both ptrs are CUdeviceptr-sized integers)
+        self._sig(lib.cuMemcpyDtoD,
+                  [ctypes.c_uint64, ctypes.c_uint64, ctypes.c_size_t])
         lib.cuGetErrorString.argtypes = [c_i, ctypes.POINTER(ctypes.c_char_p)]
 
         self.check(lib.cuInit(0), "cuInit")
@@ -203,11 +269,102 @@ class _Driver:
             self._funcs[fkey] = fn
         return fn
 
+    def ensure_ctx(self):
+        """Make this driver's primary context current on the calling thread.
+
+        Jittor drives the device through the CUDA *runtime* API, which keeps the
+        device's primary context current — the very context we
+        ``cuDevicePrimaryCtxRetain``ed. But the *current* context is thread-local
+        and jittor (or a C++ extension) can leave a different one current, after
+        which raw driver calls like ``cuMemAlloc`` fail with
+        ``CUDA_ERROR_INVALID_CONTEXT`` (201). Re-asserting our context right before
+        a driver op is cheap and idempotent, and keeps us on the same primary
+        context jittor allocates from (so pointers stay mutually valid).
+        """
+        try:
+            self.lib.cuCtxSetCurrent(self.ctx)
+        except Exception:
+            pass
+
     def alloc(self, nbytes):
+        """Allocate device memory via the runtime API (works on jittor's context;
+        the driver ``cuMemAlloc`` does not — see :meth:`_load_cudart`)."""
+        if self.rt is None:
+            # last-resort driver path (kept for completeness; usually fails here)
+            self.ensure_ctx()
+            ptr = ctypes.c_void_p()
+            self.check(self.lib.cuMemAlloc(ctypes.byref(ptr),
+                                           ctypes.c_size_t(nbytes)), "cuMemAlloc")
+            return int(ptr.value or 0)
         ptr = ctypes.c_void_p()
-        self.check(self.lib.cuMemAlloc(ctypes.byref(ptr), ctypes.c_size_t(nbytes)),
-                   "cuMemAlloc")
-        return ptr
+        r = self.rt.cudaMalloc(ctypes.byref(ptr), ctypes.c_size_t(nbytes))
+        if r != 0:
+            raise JittorTritonError("cudaMalloc -> cudaError %d" % r)
+        return int(ptr.value or 0)
+
+    def free(self, ptr_int):
+        try:
+            if self.rt is not None:
+                self.rt.cudaFree(ctypes.c_void_p(int(ptr_int)))
+            else:
+                self.lib.cuMemFree(ctypes.c_void_p(int(ptr_int)))
+        except Exception:
+            pass
+
+    def memset0(self, ptr_int, nbytes):
+        if nbytes <= 0:
+            return
+        r = self.rt.cudaMemset(ctypes.c_void_p(int(ptr_int)), 0,
+                               ctypes.c_size_t(int(nbytes)))
+        if r != 0:
+            raise JittorTritonError("cudaMemset -> cudaError %d" % r)
+
+    #: cudaMemcpyKind.cudaMemcpyDeviceToDevice
+    _MEMCPY_D2D = 3
+
+    def copy_dtod(self, dst_ptr_int, src_ptr_int, nbytes):
+        if nbytes <= 0:
+            return
+        r = self.rt.cudaMemcpy(ctypes.c_void_p(int(dst_ptr_int)),
+                               ctypes.c_void_p(int(src_ptr_int)),
+                               ctypes.c_size_t(int(nbytes)), self._MEMCPY_D2D)
+        if r != 0:
+            raise JittorTritonError("cudaMemcpy(D2D) -> cudaError %d" % r)
+
+    # ------------------------------------------------------------------ #
+    #  guarded bounce-buffer pool (over-read tolerance — see run())
+    # ------------------------------------------------------------------ #
+    #: reusable device buffers keyed by capacity bucket -> list of free device ptrs
+    def _guard_pool(self):
+        p = getattr(self, "_gpool", None)
+        if p is None:
+            p = self._gpool = {}
+        return p
+
+    def guard_acquire(self, payload_bytes, guard_bytes):
+        """A device buffer holding ``payload_bytes`` data + ``guard_bytes`` slack.
+
+        Backed by a runtime ``cudaMalloc`` (the driver ``cuMemAlloc`` fails on
+        jittor's context — see :meth:`_load_cudart`). Buffers are pooled by a
+        power-of-two capacity bucket so an autotuner sweep / a model re-running the
+        same conv reuses allocations instead of churning malloc/free. The guard
+        tail is zeroed so a masked over-read past the payload sees deterministic
+        0.0, never NaN; the payload region is overwritten by the caller's copy-in.
+        """
+        need = int(payload_bytes) + int(guard_bytes)
+        # round capacity up to a power of two (>= 4 KiB) to bound pool fragmentation
+        cap = 4096
+        while cap < need:
+            cap <<= 1
+        pool = self._guard_pool()
+        free = pool.get(cap)
+        base = free.pop() if free else self.alloc(cap)
+        # zero the guard region right after the payload (payload is overwritten)
+        self.memset0(base + int(payload_bytes), cap - int(payload_bytes))
+        return base, cap
+
+    def guard_release(self, base, cap):
+        self._guard_pool().setdefault(cap, []).append(base)
 
     # CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES
     _ATTR_MAX_DYN_SHARED = 8
@@ -244,6 +401,15 @@ class _Driver:
             "cuLaunchKernel")
 
     def synchronize(self):
+        # Prefer the runtime ``cudaDeviceSynchronize``: it shares jittor's runtime
+        # context cleanly and reliably surfaces a launch's async errors, whereas the
+        # driver ``cuCtxSynchronize`` can disagree with the runtime's view on
+        # jittor's context. Fall back to the driver call if the runtime is absent.
+        if self.rt is not None:
+            r = self.rt.cudaDeviceSynchronize()
+            if r != 0:
+                raise JittorTritonError("cudaDeviceSynchronize -> cudaError %d" % r)
+            return
         self.check(self.lib.cuCtxSynchronize(), "cuCtxSynchronize")
 
 
@@ -288,6 +454,36 @@ def _tensor_ptr(v):
     if _is_var(v):
         return int(v.raw_ptr)
     return int(v.data_ptr())
+
+
+#: bytes per element, by triton type code (the value side of ``_DT``)
+_TCODE_BYTES = {
+    "fp64": 8, "fp32": 4, "fp16": 2, "bf16": 2,
+    "i64": 8, "i32": 4, "i16": 2, "i8": 1,
+    "u64": 8, "u32": 4, "u16": 2, "u8": 1, "i1": 1,
+}
+
+
+def _tensor_nbytes(v, ptr_sig):
+    """Byte footprint of a tensor arg, from its element count and dtype width.
+
+    ``ptr_sig`` is the ``"*xx"`` triton pointer signature already computed for the
+    arg; we strip the ``*`` to size one element. Element count comes from the
+    shape (contiguous tensors — which triton requires for these kernels anyway).
+    """
+    try:
+        elsize = _TCODE_BYTES.get(ptr_sig[1:], 0)
+        if elsize == 0:
+            return 0
+        shape = getattr(v, "shape", None)
+        if shape is None:
+            return 0
+        n = 1
+        for s in shape:
+            n *= int(s)
+        return n * elsize
+    except Exception:
+        return 0
 
 
 def _tensor_is_cuda(v):
@@ -346,6 +542,73 @@ def _ptx_param_count(ptx, name):
 _COMPILE_CACHE = {}
 _compile_lock = threading.Lock()
 
+# --------------------------------------------------------------------------- #
+#  over-read guard configuration
+# --------------------------------------------------------------------------- #
+# Many real-world triton GEMM kernels (notably flex_gemm's split-K /
+# masked-implicit-gemm sparse-conv) seed a tile pointer slightly past the end of
+# a *small* operand (e.g. ``weight + k_start * BK`` when ``BK > Ci``) and rely on
+# the load mask to drop the over-hanging lanes. On a torch caching allocator the
+# over-read lands inside the (rounded-up) allocation and is harmless; jittor's
+# Vars are exactly sized, so the same masked over-read crosses into an unmapped
+# page and faults (cudaErrorIllegalAddress) or returns NaN. To match torch's
+# de-facto contract we route every *small* tensor arg through a pooled bounce
+# buffer that carries a zeroed trailing guard, then copy the (masked-store) result
+# back. Large tensors (feature maps / big outputs) are passed straight through:
+# correct kernels never over-read them, and copying them would be wasteful.
+#
+# GUARD_BYTES — slack appended after each bounced tensor. Bounded by the largest
+#   plausible single-tile over-hang: B_tile(<=256) * stride. 256 KiB is generous.
+# GUARD_MAX_PAYLOAD — only tensors at/under this size are bounced. Weights and
+#   index/segment tables (the operands that get over-read) are far smaller; this
+#   keeps multi-MB/GB feature & output tensors on the zero-copy fast path.
+GUARD_BYTES = 256 * 1024
+GUARD_MAX_PAYLOAD = 64 * 1024 * 1024
+#: opt-out hook (set False to disable bounce buffers entirely, e.g. for A/B tests)
+GUARD_ENABLE = True
+
+
+def _make_ast_source(ASTSource, jitfn, signature, constants):
+    """Construct a triton ``ASTSource`` across triton versions.
+
+    triton 3.1 : ``ASTSource(fn, signature, constants, attrs)`` where ``attrs``
+                 is a ``triton.compiler.AttrsDescriptor()`` (an opaque "no
+                 special-case" specialization hint).
+    triton 3.2+ : ``AttrsDescriptor`` was removed from ``triton.compiler``; the
+                 4th positional became ``attrs`` (a plain dict, default {}), and
+                 ``constants`` is passed as the keyword ``constexprs``. The exact
+                 keyword names drifted again across 3.3/3.4, so we probe a few
+                 conservative call forms and use the first that constructs.
+
+    We never assert divisibility / eq-1 specializations (empty attrs) so the
+    compiled kernel matches the conservative arg-passing the jittor launcher
+    does (all pointers treated as un-aligned, all ints as generic).
+    """
+    # 3.1 / 3.2: AttrsDescriptor is re-exported from triton.compiler and
+    # ASTSource(fn, signature, constants, attrs) accepts it positionally.
+    try:
+        from triton.compiler import AttrsDescriptor as _AD
+        return ASTSource(jitfn, signature, constants, _AD())
+    except Exception:
+        pass
+    # 3.2+: attrs defaults to None (ASTSource auto-builds an empty descriptor);
+    # constants stays positional, but the keyword name drifted across releases.
+    last = None
+    try:
+        return ASTSource(jitfn, signature, constants, None)
+    except Exception as e:
+        last = e
+    for kw in ("constexprs", "constants"):
+        try:
+            return ASTSource(jitfn, signature, **{kw: constants})
+        except Exception as e:        # noqa: PERF203
+            last = e
+    raise JittorTritonError(
+        "could not construct triton ASTSource for kernel %r across known "
+        "triton API versions: %s: %s" % (
+            getattr(jitfn, "__name__", "?"),
+            type(last).__name__ if last else "?", last))
+
 
 def _compile(jitfn, signature, constants, options=None):
     """Compile (cached) and return a dict with cubin/name/launch metadata.
@@ -355,7 +618,7 @@ def _compile(jitfn, signature, constants, options=None):
     its defaults.
     """
     triton = real_triton()
-    from triton.compiler import AttrsDescriptor, ASTSource
+    from triton.compiler import ASTSource
 
     drv = _Driver.get()
     opt_items = tuple(sorted((options or {}).items()))
@@ -371,9 +634,8 @@ def _compile(jitfn, signature, constants, options=None):
             return cached
         from triton.backends.compiler import GPUTarget
         target = GPUTarget("cuda", drv.arch, 32)
-        attrs = AttrsDescriptor()  # conservative: no divisibility/eq-1 assumptions
         try:
-            src = ASTSource(jitfn, signature, constants, attrs)
+            src = _make_ast_source(ASTSource, jitfn, signature, constants)
             compiled = triton.compile(src, target=target,
                                       options=dict(options) if options else None)
         except Exception as e:
@@ -444,13 +706,29 @@ def run(jitfn, args, kwargs, grid):
     fn = getattr(jitfn, "fn", jitfn)
     kname = getattr(jitfn, "__name__", getattr(fn, "__name__", "triton_kernel"))
 
+    if os.environ.get("JT_TRITON_PTRTRACE"):
+        import sys as _sys
+        for _a in list(args) + list(kwargs.values()):
+            try:
+                if _is_var(_a) and tuple(_a.shape) == (64,) and "int" in str(_a.dtype):
+                    print("  PTRTRACE run() ENTRY sorted_idx-like rp=%x" % int(_a.raw_ptr),
+                          file=_sys.stderr)
+            except Exception:
+                pass
+
     # -- separate launch-meta kwargs (num_warps/...) from real kernel kwargs --
     kwargs = dict(kwargs)
     options = {}
     for m in ("num_warps", "num_stages"):
         if m in kwargs:
             options[m] = kwargs.pop(m)
-    for m in ("num_ctas", "maxnreg", "warmup", "grid", "extern_libs", "stream"):
+    # triton launch-only kwargs that are NOT kernel parameters: drop them so they
+    # don't get bound to the @triton.jit signature. The set grew across triton
+    # versions (3.2 added Hopper warp-specialisation knobs), so keep it broad.
+    for m in ("num_ctas", "maxnreg", "warmup", "grid", "extern_libs", "stream",
+              "num_buffers_warp_spec", "num_consumer_groups",
+              "reg_dec_producer", "reg_inc_consumer",
+              "launch_cooperative_grid", "launch_pdl", "profile_scratch"):
         kwargs.pop(m, None)
 
     # -- which params are constexpr? (use triton's own param metadata if present)
@@ -489,12 +767,60 @@ def run(jitfn, args, kwargs, grid):
             constants[name] = _unwrap_constexpr(val)
             continue
         if _is_tensor(val):
+            if os.environ.get("JT_TRITON_PTRTRACE") and _is_var(val) and \
+               tuple(getattr(val, "shape", ())) == (64,) and "int" in str(val.dtype):
+                import sys as _sys
+                print("  PTRTRACE arg %s rp=%x is_cuda=%r" % (
+                    name, int(val.raw_ptr), _tensor_is_cuda(val)), file=_sys.stderr)
             if not _tensor_is_cuda(val):
-                raise JittorTritonError(
-                    "triton kernel %r received a CPU tensor argument %r; the "
-                    "jittor triton backend launches on CUDA only. Set "
-                    "`jt.flags.use_cuda = 1` before allocating the tensors (or "
-                    "move them to GPU)." % (kname, name))
+                # A jittor Var can be host-resident even under use_cuda=1 (e.g. a
+                # `jt.array(...)` not yet consumed by a GPU op, or one that a C++
+                # extension or a prior sync_all migrated to CPU — which happens
+                # between an autotuner's benchmark re-launches). The bridge
+                # launches on CUDA and the kernel reads/writes through the arg
+                # pointer, so migrate the operand onto the GPU rather than failing.
+                # Migrate to GPU via a SEPARATE, fully-materialised copy that we
+                # bind to a LOCAL ``val`` only — we do NOT ``val.assign(...)`` the
+                # caller's Var. Two reasons:
+                #
+                #  (1) Correctness of the caller's Var. ``assign(self.cuda())``
+                #      rebinds the held Var to a fresh GPU buffer whose raw
+                #      ``mem_ptr`` is NOT reliably committed (the cuda-copy is a lazy
+                #      graph op; jittor's own ``.numpy()`` re-runs the graph so it
+                #      reads correctly, but a *raw* device read of ``mem_ptr`` — e.g.
+                #      a C++/CUDA extension that reads ``tensor.data_ptr()`` directly,
+                #      like flex_gemm's ``neighbor_map_post_process`` reading a
+                #      ``sorted_idx`` index buffer — sees garbage and dereferences it
+                #      out of bounds → cudaErrorIllegalAddress). A CPU-resident Var
+                #      handed to the bridge (flex_gemm returns its neighbor-cache
+                #      index tensors host-resident) would thus be silently corrupted
+                #      for every later native consumer. Leaving the caller's Var
+                #      untouched and launching on a private copy avoids that entirely.
+                #
+                #  (2) Inputs don't need write-back. A real *output* is always a
+                #      freshly-allocated GPU tensor (under use_cuda=1 ``jt.empty``
+                #      lands on the GPU), so it never reaches this CPU-migration
+                #      branch; the operands that do (weights / index & segment
+                #      tables) are read-only, so a detached GPU copy as the kernel
+                #      arg is exactly correct.
+                moved = False
+                if _is_var(val):
+                    try:
+                        import jittor as _jt
+                        if getattr(_jt.flags, "use_cuda", 0):
+                            gpu = val.detach().cuda()
+                            gpu.sync(True)
+                            if bool(_tensor_is_cuda(gpu)):
+                                val = gpu
+                                moved = True
+                    except Exception:
+                        moved = False
+                if not moved:
+                    raise JittorTritonError(
+                        "triton kernel %r received a CPU tensor argument %r; the "
+                        "jittor triton backend launches on CUDA only. Set "
+                        "`jt.flags.use_cuda = 1` before allocating the tensors (or "
+                        "move them to GPU)." % (kname, name))
             signature[name] = _ptr_sig(val)
             runtime_vals.append((name, signature[name], val))
             out_vars.append(val)
@@ -517,6 +843,25 @@ def run(jitfn, args, kwargs, grid):
     # ASTSource needs the JITFunction itself (it reads .cache_key), not fn.
     info = _compile(jitfn, signature, constants, options)
 
+    if os.environ.get("JT_TRITON_DEBUG"):
+        import sys as _sys
+        print("[JT_TRITON_DEBUG] kernel=%s" % kname, file=_sys.stderr)
+        try:
+            pnames = [getattr(p, "name", "?") for p in (jitfn.params or [])]
+            print("  jitfn.params order: %r" % pnames, file=_sys.stderr)
+        except Exception:
+            pass
+        print("  constexpr_names: %r" % sorted(constexpr_names), file=_sys.stderr)
+        print("  signature (runtime order): %r" % list(signature.items()),
+              file=_sys.stderr)
+        print("  constants: %r" % constants, file=_sys.stderr)
+        print("  runtime_vals order: %r" % [
+            (n, s, ("TENSOR%s" % (tuple(getattr(v, "shape", ())),)) if _is_tensor(v) else v)
+            for (n, s, v) in runtime_vals], file=_sys.stderr)
+        print("  compiled name=%s n_ptx_params=%d num_warps=%d shared=%d scratch=%d" % (
+            info["name"], info["n_ptx_params"], info["num_warps"], info["shared"],
+            info["scratch"]), file=_sys.stderr)
+
     # -- resolve grid (tuple or callable(meta)) ----------------------------- #
     if callable(grid):
         meta = dict(constants)
@@ -531,16 +876,46 @@ def run(jitfn, args, kwargs, grid):
     g = (g + (1, 1, 1))[:3]
 
     # -- materialise all Var memory so raw_ptr is valid + inputs computed ---- #
+    _ptrtrace = os.environ.get("JT_TRITON_PTRTRACE")
+    if _ptrtrace:
+        import sys as _sys
+        def _ptd():
+            return {n: (int(v.raw_ptr) if _is_var(v) else -1)
+                    for (n, s, v) in runtime_vals if _is_tensor(v)}
+        print("  PTRTRACE before sync_all: %r" % {k: hex(x) for k, x in _ptd().items()}, file=_sys.stderr)
     jt.sync_all(True)
+    if _ptrtrace:
+        import sys as _sys
+        print("  PTRTRACE after  sync_all: %r" % {k: hex(x) for k, x in _ptd().items()}, file=_sys.stderr)
 
     # -- pack kernel params (in param order; pointers first only if scratch) - #
     drv = _Driver.get()
     keepalive = []
     cvals = []
+    # bounced tensors to copy back + guard buffers to recycle after the launch:
+    #   (orig_ptr, bounce_ptr, payload_bytes, bounce_cap)
+    bounced = []
     for (name, sig, val) in runtime_vals:
         if sig.startswith("*"):
-            ptr = 0 if val is None else _tensor_ptr(val)
-            cv = ctypes.c_uint64(ptr)
+            if val is None:
+                cv = ctypes.c_uint64(0)
+            else:
+                ptr = _tensor_ptr(val)
+                nbytes = _tensor_nbytes(val, sig) if GUARD_ENABLE else 0
+                if 0 < nbytes <= GUARD_MAX_PAYLOAD:
+                    # bounce through a guarded buffer so a masked over-read past the
+                    # operand's end hits zeroed slack instead of an unmapped page.
+                    try:
+                        bbase, bcap = drv.guard_acquire(nbytes, GUARD_BYTES)
+                        drv.copy_dtod(bbase, ptr, nbytes)
+                        bounced.append((ptr, bbase, nbytes, bcap))
+                        cv = ctypes.c_uint64(bbase)
+                    except Exception:
+                        # never let the guard path turn a working launch into a
+                        # failure — fall back to the raw pointer.
+                        cv = ctypes.c_uint64(ptr)
+                else:
+                    cv = ctypes.c_uint64(ptr)
         else:
             cv = _pack_scalar(sig, val)
         keepalive.append(cv)
@@ -548,10 +923,10 @@ def run(jitfn, args, kwargs, grid):
 
     # global scratch (rare): triton prepends a scratch pointer as param 0
     n_expected = len(cvals)
+    scratch_base = 0
     if info["scratch"] > 0:
-        scratch_ptr = drv.alloc(info["scratch"])
-        keepalive.append(scratch_ptr)
-        cvals = [ctypes.c_uint64(scratch_ptr.value or 0)] + cvals
+        scratch_base = drv.alloc(info["scratch"])
+        cvals = [ctypes.c_uint64(scratch_base)] + cvals
         n_expected += 1
 
     # safety net: refuse to launch if our packing disagrees with the cubin
@@ -570,8 +945,46 @@ def run(jitfn, args, kwargs, grid):
     block = (info["num_warps"] * 32, 1, 1)
     func = drv.get_function(info["cubin"], info["name"])
     drv.ensure_dynamic_shared(func, info["shared"])  # flash-attn etc. need >48KB
+    if os.environ.get("JT_TRITON_DEBUG"):
+        import sys as _sys
+        print("  grid=%r block=%r shared=%d n_cvals=%d bounced=%d" % (
+            g, block, info["shared"], len(cvals), len(bounced)), file=_sys.stderr)
+        _sys.stderr.flush()
     drv.launch(func, g, block, info["shared"], params)
     drv.synchronize()
+    if _ptrtrace:
+        import sys as _sys
+        print("  PTRTRACE after  launch  : %r" % {k: hex(x) for k, x in _ptd().items()}, file=_sys.stderr)
+
+    # Serialise with jittor too. The triton kernel ran on the driver-API default
+    # stream while jittor schedules its own ops (and its allocator's frees) on its
+    # runtime streams; a bare ``cuCtxSynchronize`` waits for the kernel but does
+    # NOT tell jittor the launch is done, so jittor may recycle an arg/output
+    # buffer out from under a *subsequent* back-to-back bridge launch (observed as
+    # a racy cudaErrorIllegalAddress only when launches are tightly packed, e.g.
+    # an autotuner sweep). A second jittor barrier closes that window.
+    jt.sync_all(True)
+
+    # -- copy bounced tensors' results back into their Vars, recycle guards ---- #
+    # The kernel wrote into the bounce buffers' payload region (a masked store
+    # never touches the guard tail), so DtoD the payload back to where the caller
+    # will read it. Inputs copy back byte-identical (a no-op functionally).
+    if bounced:
+        for (orig_ptr, bbase, nbytes, bcap) in bounced:
+            try:
+                drv.copy_dtod(orig_ptr, bbase, nbytes)
+            except Exception:
+                pass
+        drv.synchronize()
+        for (_orig_ptr, bbase, _nbytes, bcap) in bounced:
+            drv.guard_release(bbase, bcap)
+
+    if scratch_base:
+        drv.free(scratch_base)
+
+    if _ptrtrace:
+        import sys as _sys
+        print("  PTRTRACE after  final   : %r" % {k: hex(x) for k, x in _ptd().items()}, file=_sys.stderr)
 
     # keep Vars alive until the (synchronous) launch is done
     del keepalive, out_vars

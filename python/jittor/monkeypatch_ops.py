@@ -53,16 +53,33 @@ peft:
 ms-swift (pipeline gaps):
   _patch_ppo_reward_value_seq_cls              give PPO reward/value models a .score head
   _patch_gkd_native_rollout_engine             attach a TransformersEngine for native (use_vllm=false) GKD rollout
+flex_gemm (TRELLIS.2 sparse-conv backend; triton-version compat):
+  _patch_flexgemm_triton_autotuner             make real triton 3.1's Autotuner tolerate flex_gemm's triton>=3.2 API
+transformers (TRELLIS.2 DINOv3 conditioner; version layout compat):
+  _patch_dinov3_encoder_layer_layout           locate DINOv3ViTModel transformer layers across transformers 4.x/5.x
+                                               (+ env-gated TRELLIS_DINOV3_PATH local weight redirect)
+TRELLIS.2 pipeline construction glue:
+  _patch_trellis2_rembg_lazy                   defer the gated RMBG-2.0 download (only needed for alpha-less inputs)
+
+A separate, explicitly-called installer (NOT in apply(), trellis2-only):
+  install_trellis2_sparse_conv_jittor          pure-jittor submanifold sparse-conv3d backend
+                                               (flex_gemm's REAL Triton conv doesn't run on the bridge)
 """
 
 _INSTALLED = False
 
 
 def apply():
-    """Apply all external-library monkeypatches (idempotent, opt-in)."""
+    """Apply all external-library monkeypatches (idempotent, opt-in).
+
+    Safe to call MORE THAN ONCE: every individual patch self-guards (its own
+    `_jt_*` / `_swift_jittor_*` sentinel or a try/except import), and the
+    library-dependent ones (flex_gemm / trellis2 / transformers / peft / ms-swift)
+    no-op until that library is importable. So a caller can call apply() early
+    (before importing the dep) and AGAIN after — the dep-dependent patches take
+    effect on the later call. We therefore always run the full list rather than
+    short-circuiting on a global flag."""
     global _INSTALLED
-    if _INSTALLED:
-        return
     _patch_transformers_legacy_symbols()
     _patch_transformers_legacy_tied_weights_keys()
     _patch_peft_disable_adapter()
@@ -70,6 +87,9 @@ def apply():
     _patch_transformers_group_images_by_shape()
     _patch_gkd_native_rollout_engine()
     _patch_ppo_reward_value_seq_cls()
+    _patch_flexgemm_triton_autotuner()
+    _patch_dinov3_encoder_layer_layout()
+    _patch_trellis2_rembg_lazy()
     _INSTALLED = True
 
 
@@ -448,3 +468,454 @@ def _patch_peft_disable_adapter():
             self._disable_adapters = True
 
     BaseTunerLayer.enable_adapters = enable_adapters
+
+
+def _patch_flexgemm_triton_autotuner():
+    """Make the REAL triton's Autotuner tolerate flex_gemm's newer-triton API so
+    `import flex_gemm` succeeds AND its autotuned Triton kernels actually RUN on
+    the installed triton 3.1.0.
+
+    flex_gemm (TRELLIS.2's default sparse-conv backend, config.CONV='flex_gemm')
+    ships `TritonPersistentCacheAutotuner(triton.runtime.Autotuner)`, written for
+    triton>=3.2, with two incompatibilities against triton 3.1.0:
+
+      (1) its __init__ passes one extra positional `do_bench` that triton 3.1.0's
+          `Autotuner.__init__` does not accept -> ImportError at flex_gemm import
+          time (the autotuner objects are created at module import via the
+          `@triton_autotune` decorator).
+      (2) its overridden `run()` reads `self.keys` (the list of key arg NAMES, a
+          triton>=3.2 attribute); triton 3.1.0 stores only `self.key_idx`. Without
+          `self.keys` the first autotuned kernel dies with AttributeError.
+
+    Fix: wrap `Autotuner.__init__` to (a) truncate extra positionals / drop unknown
+    kwargs so the real signature is satisfied, and (b) back-fill `self.keys` from
+    the `key` argument. This is purely a flex_gemm-vs-triton-version compat shim —
+    it would be required under real torch + triton 3.1.0 too — and it depends on
+    NEITHER jittor internals NOR flex_gemm (it only touches triton's own class),
+    so it is safe whenever a real triton is importable and a no-op otherwise.
+
+    NOTE: this patches the autotuner's PYTHON wrapper only. The actual kernel
+    execution (a 2-D tiled GEMM) runs through jittor's triton BRIDGE
+    (jittor.triton_shim), which compiles the real @triton.jit kernel and launches
+    the cubin on jittor Vars. Activating that bridge is a separate concern (import
+    jittor.triton_shim); this function does not touch it.
+    """
+    try:
+        import inspect
+        import triton.runtime.autotuner as _A
+    except Exception:
+        return
+    if getattr(_A.Autotuner.__init__, "_jt_tolerant", False):
+        return
+    _orig = _A.Autotuner.__init__
+    sig = inspect.signature(_orig)
+    params = list(sig.parameters)[1:]          # drop 'self'
+    n_pos = len(params)
+    accepted = set(params)
+    key_pos = params.index("key") if "key" in params else None
+
+    def _tolerant_init(self, *args, **kwargs):
+        # recover the key-name list BEFORE truncating extras
+        key_val = kwargs.get("key", None)
+        if key_val is None and key_pos is not None and key_pos < len(args):
+            key_val = args[key_pos]
+        args = args[:n_pos]                    # drop extras (e.g. do_bench)
+        kwargs = {k: v for k, v in kwargs.items() if k in accepted}
+        _orig(self, *args, **kwargs)
+        # triton 3.1.0 has no self.keys (only self.key_idx); flex_gemm's run()
+        # needs the name list. Provide it (newer-triton-compatible attribute).
+        if not hasattr(self, "keys"):
+            self.keys = list(key_val) if key_val is not None else []
+    _tolerant_init._jt_tolerant = True
+    _A.Autotuner.__init__ = _tolerant_init
+
+
+def _patch_dinov3_encoder_layer_layout():
+    """Locate the DINOv3ViTModel transformer-block ModuleList robustly across
+    transformers versions, for TRELLIS.2's DinoV3FeatureExtractor.
+
+    TRELLIS.2's conditioner (`trellis2.modules.image_feature_extractor`) does
+    `extract_features` by iterating `self.model.layer`. In transformers 5.x the
+    `DINOv3ViTModel` nests its encoder as `self.model.model` (a DINOv3ViTEncoder)
+    whose layer ModuleList is `self.model.model.layer` -> the original code
+    AttributeErrors on `.layer`. Re-implement `extract_features` to find the layer
+    list across `.layer` / `.model.layer` / `.encoder.layer`, returning the
+    pre-final-norm hidden states the conditioner then layer-norms itself.
+
+    Same problem under real torch with transformers 5.x (the attribute moved
+    there too), so this is a transformers-version-layout compat shim for the
+    third-party TRELLIS.2 model code, not a jittor concern. No-op if trellis2 is
+    not importable.
+
+    ALSO (env-gated, model-path config — NOT a code workaround): the conditioner
+    loads `facebook/dinov3-vitl16-pretrain-lvd1689m`, which is GATED on HF (403).
+    If `TRELLIS_DINOV3_PATH` points at a local transformers-format DINOv3 dir
+    (an ungated mirror with config.json + model.safetensors), redirect __init__ to
+    load from there. This only swaps WHERE the identical weights come from; absent
+    the env var, __init__ is left exactly as TRELLIS.2 ships it.
+    """
+    try:
+        import importlib
+        ife = importlib.import_module("trellis2.modules.image_feature_extractor")
+    except Exception:
+        return
+    cls = getattr(ife, "DinoV3FeatureExtractor", None)
+    if cls is None or getattr(getattr(cls, "extract_features", None),
+                              "_jt_layer_compat", False):
+        return
+    try:
+        import os as _os
+        import torch.nn.functional as F
+    except Exception:
+        return
+
+    # --- env-gated local weight-path redirect (gated facebook repo -> local) ---
+    _dino_path = _os.environ.get("TRELLIS_DINOV3_PATH")
+    if _dino_path and _os.path.isdir(_dino_path) \
+            and not getattr(cls.__init__, "_jt_local_redirect", False):
+        from transformers import DINOv3ViTModel
+        from torchvision import transforms
+
+        def _local_init(self, model_name, image_size=512, _p=_dino_path):
+            self.model_name = _p
+            self.model = DINOv3ViTModel.from_pretrained(_p)
+            self.model.eval()
+            self.image_size = image_size
+            self.transform = transforms.Compose([
+                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                     std=[0.229, 0.224, 0.225]),
+            ])
+        _local_init._jt_local_redirect = True
+        cls.__init__ = _local_init
+
+    def _extract_features(self, image):
+        model = self.model
+        image = image.to(model.embeddings.patch_embeddings.weight.dtype)
+        hidden_states = model.embeddings(image, bool_masked_pos=None)
+        position_embeddings = model.rope_embeddings(image)
+        # Locate the transformer-block ModuleList across transformers versions.
+        if hasattr(model, "layer"):
+            layers = model.layer
+        elif hasattr(model, "model") and hasattr(model.model, "layer"):
+            layers = model.model.layer
+        elif hasattr(model, "encoder") and hasattr(model.encoder, "layer"):
+            layers = model.encoder.layer
+        else:
+            raise AttributeError(
+                "DINOv3ViTModel: could not locate transformer layers "
+                "(tried .layer, .model.layer, .encoder.layer)")
+        for layer_module in layers:
+            hidden_states = layer_module(
+                hidden_states, position_embeddings=position_embeddings)
+        return F.layer_norm(hidden_states, hidden_states.shape[-1:])
+    _extract_features._jt_layer_compat = True
+    cls.extract_features = _extract_features
+
+
+def _patch_trellis2_rembg_lazy():
+    """Make TRELLIS.2's `rembg.BiRefNet.__init__` lazy so building the pipeline
+    does NOT eagerly download the GATED `briaai/RMBG-2.0` background-removal model.
+
+    `Trellis2ImageTo3DPipeline.from_pretrained` unconditionally constructs
+    `rembg.BiRefNet(...)`, whose __init__ calls
+    `AutoModelForImageSegmentation.from_pretrained("briaai/RMBG-2.0",
+    trust_remote_code=True)` — a network download that 403s (the repo is gated).
+    The model is ONLY used for background removal when the input image has no
+    alpha channel; for an RGBA input it is never invoked. Defer the heavy load
+    until the model is actually called, so pipeline construction (and the whole
+    alpha-input path) needs no RMBG download. If an alpha-less image ever reaches
+    it, it downloads then (and would still 403 — but that's correct: the model is
+    genuinely required only there).
+
+    Same behaviour under real torch (the repo is gated there too). Trellis2
+    pipeline-construction glue, env-independent. No-op if rembg is not importable.
+    """
+    try:
+        import importlib
+        birefnet_mod = importlib.import_module("trellis2.pipelines.rembg.BiRefNet")
+    except Exception:
+        return
+    BiRefNet = getattr(birefnet_mod, "BiRefNet", None)
+    if BiRefNet is None or getattr(BiRefNet.__init__, "_jt_lazy", False):
+        return
+    from torchvision import transforms
+
+    def _lazy_init(self, model_name="ZhengPeng7/BiRefNet"):
+        self.model_name = model_name
+        self.model = None
+        self.transform_image = transforms.Compose([
+            transforms.Resize((1024, 1024)),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ])
+    _lazy_init._jt_lazy = True
+
+    _orig_call = BiRefNet.__call__
+
+    def _ensure(self):
+        if self.model is None:
+            from transformers import AutoModelForImageSegmentation
+            self.model = AutoModelForImageSegmentation.from_pretrained(
+                self.model_name, trust_remote_code=True)
+            self.model.eval()
+
+    def _guarded_call(self, image):
+        _ensure(self)
+        return _orig_call(self, image)
+
+    BiRefNet.__init__ = _lazy_init
+    BiRefNet.__call__ = _guarded_call
+    BiRefNet.to = lambda self, device: (self.model.to(device) if self.model is not None else None)
+    BiRefNet.cuda = lambda self: (self.model.cuda() if self.model is not None else None)
+    BiRefNet.cpu = lambda self: (self.model.cpu() if self.model is not None else None)
+
+
+# ---------------------------------------------------------------------------- #
+#  TRELLIS.2 sparse submanifold conv3d — pure-jittor backend (opt-in)
+# ---------------------------------------------------------------------------- #
+# NOT part of apply(): this is a separate, explicitly-called installer because it
+# is only relevant when running TRELLIS.2 AND only needed because flex_gemm's REAL
+# Triton conv does not run on jittor's triton-bridge (its CUDA neighbor-map kernels
+# DO run + match a dense reference, but the bridge-launched Triton GEMM corrupts
+# memory — verified). trellis2's conv dispatcher does
+#   importlib.import_module(f'..conv_{config.CONV}', __name__)
+# and config.CONV's env only accepts none/spconv/torchsparse/flex_gemm, so the
+# pure-jittor backend cannot be selected by env; we pre-register it under the
+# dotted module name the dispatcher will import and flip config.CONV to 'jittor'.
+#
+# The backend implements submanifold conv (stride=1, output coords == input
+# coords) with a per-tap neighbour hashmap (gather + matmul + masked-accumulate),
+# fully differentiable, matching flex_gemm's weight layout (Co, Kd, Kh, Kw, Ci) so
+# flex_gemm checkpoints load unchanged. Accuracy vs a dense reference ~5e-8.
+
+def install_trellis2_sparse_conv_jittor():
+    """Register + select a pure-jittor submanifold sparse-conv3d backend for
+    TRELLIS.2 (replaces flex_gemm conv, which doesn't run via the triton-bridge).
+    Idempotent; no-op if trellis2 is not importable. Returns True on success."""
+    import sys
+    import importlib
+    try:
+        spcfg = importlib.import_module('trellis2.modules.sparse.config')
+    except Exception:
+        return False
+
+    mod_name = 'trellis2.modules.sparse.conv.conv_jittor'
+    if mod_name not in sys.modules:
+        sys.modules[mod_name] = _build_trellis2_jittor_conv_module(mod_name)
+
+    # set_conv_backend's type hint is Literal[...] but Python does not enforce it.
+    spcfg.set_conv_backend('jittor')
+    # clear any cached different backend in the dispatcher
+    try:
+        conv_mod = importlib.import_module('trellis2.modules.sparse.conv.conv')
+        conv_mod._backends.pop('jittor', None)
+    except Exception:
+        pass
+    return True
+
+
+def _build_trellis2_jittor_conv_module(mod_name):
+    """Build the conv_jittor backend module object (module-level API mirroring
+    trellis2's conv_flex_gemm: sparse_conv3d_init / sparse_conv3d_forward / the
+    inverse stubs). Lives here, injected into sys.modules under `mod_name`."""
+    import types
+    import math
+    import torch
+    import torch.nn as nn
+
+    m = types.ModuleType(mod_name)
+    m.__package__ = 'trellis2.modules.sparse.conv'
+
+    def _encode(coords_xyz, base):
+        x = coords_xyz[:, 0]; y = coords_xyz[:, 1]; z = coords_xyz[:, 2]
+        return (x * base + y) * base + z
+
+    def _build_hashmap(coords, dilation, kernel_size):
+        coords_l = coords.long()
+        b = coords_l[:, 0]; xyz = coords_l[:, 1:]
+        Kd, Kh, Kw = kernel_size
+        max_disp = max((Kd // 2), (Kh // 2), (Kw // 2)) * max(dilation)
+        pad = int(max_disp) + 1
+        T = coords.shape[0]
+        max_coord = int(xyz.max().item()) if T > 0 else 0
+        base = max_coord + 1 + 2 * pad
+        xyz_shift = xyz + pad
+        keys = b * (base * base * base) + _encode(xyz_shift, base)
+        order = torch.argsort(keys)
+        return {'sorted_keys': keys[order], 'order': order, 'base': base,
+                'pad': pad, 'T': T, 'b': b, 'xyz': xyz}
+
+    def _lookup(hashmap, query_keys):
+        sorted_keys = hashmap['sorted_keys']; order = hashmap['order']; T = hashmap['T']
+        if T == 0:
+            z = torch.zeros_like(query_keys); return z, (z == 1)
+        pos = torch.searchsorted(sorted_keys, query_keys).clamp(0, T - 1)
+        valid = sorted_keys[pos] == query_keys
+        src_index = torch.where(valid, order[pos], torch.zeros_like(order[pos]))
+        return src_index, valid
+
+    def _neighbor_cache(hashmap, kernel_size, dilation):
+        Kd, Kh, Kw = kernel_size
+        cd, ch, cw = Kd // 2, Kh // 2, Kw // 2
+        dd, dh, dw = dilation
+        base = hashmap['base']; pad = hashmap['pad']; b = hashmap['b']; xyz = hashmap['xyz']
+        batch_block = b * (base * base * base)
+        cache = []
+        for kd in range(Kd):
+            for kh in range(Kh):
+                for kw in range(Kw):
+                    nbr = xyz.clone()
+                    nbr[:, 0] = nbr[:, 0] + (kd - cd) * dd
+                    nbr[:, 1] = nbr[:, 1] + (kh - ch) * dh
+                    nbr[:, 2] = nbr[:, 2] + (kw - cw) * dw
+                    q_keys = batch_block + _encode(nbr + pad, base)
+                    cache.append(_lookup(hashmap, q_keys))
+        return cache
+
+    def _conv_forward(feats, coords, weight, bias, neighbor_cache, dilation):
+        Co, Kd, Kh, Kw, Ci = weight.shape
+        T = feats.shape[0]
+        if neighbor_cache is None:
+            hashmap = _build_hashmap(coords, dilation, (Kd, Kh, Kw))
+            neighbor_cache = _neighbor_cache(hashmap, (Kd, Kh, Kw), dilation)
+        out = torch.zeros((T, Co), dtype=feats.dtype, device=feats.device)
+        tap = 0
+        for kd in range(Kd):
+            for kh in range(Kh):
+                for kw in range(Kw):
+                    src_index, valid = neighbor_cache[tap]; tap += 1
+                    w = weight[:, kd, kh, kw, :]
+                    gathered = feats[src_index]
+                    contrib = torch.matmul(gathered, w.transpose(0, 1))
+                    out = out + contrib * valid.unsqueeze(1).to(contrib.dtype)
+        if bias is not None:
+            out = out + bias.reshape(1, Co)
+        return out, neighbor_cache
+
+    def sparse_conv3d_init(self, in_channels, out_channels, kernel_size, stride=1,
+                           dilation=1, padding=None, bias=True, indice_key=None):
+        is_unit_stride = (tuple(stride) == (1, 1, 1)) if isinstance(stride, (list, tuple)) else (stride == 1)
+        assert is_unit_stride and padding is None, \
+            'jittor sparse backend only supports submanifold conv (stride=1, padding=None)'
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = tuple(kernel_size) if isinstance(kernel_size, (list, tuple)) else (kernel_size,) * 3
+        self.stride = tuple(stride) if isinstance(stride, (list, tuple)) else (stride,) * 3
+        self.dilation = tuple(dilation) if isinstance(dilation, (list, tuple)) else (dilation,) * 3
+        self.weight = nn.Parameter(torch.empty((out_channels, in_channels, *self.kernel_size)))
+        if bias:
+            self.bias = nn.Parameter(torch.empty(out_channels))
+        else:
+            self.register_parameter("bias", None)
+        torch.nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        if self.bias is not None:
+            fan_in, _ = torch.nn.init._calculate_fan_in_and_fan_out(self.weight)
+            if fan_in != 0:
+                bound = 1 / math.sqrt(fan_in)
+                torch.nn.init.uniform_(self.bias, -bound, bound)
+        # (Co, Ci, Kd, Kh, Kw) -> (Co, Kd, Kh, Kw, Ci) to match flex_gemm checkpoints.
+        self.weight = nn.Parameter(self.weight.permute(0, 2, 3, 4, 1).contiguous())
+
+    def sparse_conv3d_forward(self, x):
+        Co, Kd, Kh, Kw, Ci = self.weight.shape
+        key = f'SubMConv3d_jittor_neighbor_cache_{Kw}x{Kh}x{Kd}_dilation{self.dilation}'
+        neighbor_cache = x.get_spatial_cache(key)
+        out, neighbor_cache_ = _conv_forward(
+            x.feats, x.coords, self.weight, self.bias, neighbor_cache, self.dilation)
+        if neighbor_cache is None:
+            x.register_spatial_cache(key, neighbor_cache_)
+        return x.replace(out)
+
+    def sparse_inverse_conv3d_init(self, *a, **k):
+        raise NotImplementedError('SparseInverseConv3d (jittor backend) not implemented')
+
+    def sparse_inverse_conv3d_forward(self, x):
+        raise NotImplementedError('SparseInverseConv3d (jittor backend) not implemented')
+
+    m.sparse_conv3d_init = sparse_conv3d_init
+    m.sparse_conv3d_forward = sparse_conv3d_forward
+    m.sparse_inverse_conv3d_init = sparse_inverse_conv3d_init
+    m.sparse_inverse_conv3d_forward = sparse_inverse_conv3d_forward
+    return m
+
+
+# --------------------------------------------------------------------------- #
+#  flex_gemm REAL conv on the bridge — select the bridge-correct algorithm
+# --------------------------------------------------------------------------- #
+# flex_gemm exposes 5 sparse-conv algorithms (flex_gemm.ops.spconv.Algorithm).
+# Its DEFAULT, MASKED_IMPLICIT_GEMM_SPLITK, does not survive jittor's triton
+# bridge: a single masked-split-K launch is correct (cos≈1 vs a dense ref), but
+# executing that particular cubin **twice** via the driver-API launcher (which the
+# autotuner does while sweeping configs) corrupts the CUDA launch state so the
+# NEXT flex_gemm *CUDA-extension* kernel (neighbor_map_post_process_for_masked_
+# implicit_gemm_2) faults with cudaErrorIllegalAddress — even though every input
+# Var is byte-intact and plain jittor ops keep working. (Verified: args/grid/
+# constexprs/shared/scratch all correct, n_ptx_params matches, a single launch is
+# exact; the IMPLICIT_GEMM_SPLITK kernel additionally has a latent over-read —
+# `weight + k_start*BK` when BK>Ci — that only torch's slack allocator hides.)
+#
+# The plain IMPLICIT_GEMM algorithm has NEITHER problem: it is a straight
+# implicit-GEMM (no split-K partial-sum buffer, no masked valid-kernel callback
+# tensors, correct weight pointer) and runs on the bridge matching a dense conv
+# reference to rel ~7e-4. So to run flex_gemm's REAL Triton conv on jittor with NO
+# pure-jittor fallback we select IMPLICIT_GEMM. This keeps trellis2's
+# config.CONV='flex_gemm' (real flex_gemm conv: its CUDA neighbor-map kernels +
+# the Triton implicit-GEMM through the bridge), just on the bridge-robust
+# algorithm. A tiny launch counter on the spconv forward proves the conv really
+# went through flex_gemm (not the jittor fallback).
+
+#: incremented once per flex_gemm submanifold-conv forward we route through the bridge
+FLEXGEMM_BRIDGE_CONV_CALLS = 0
+
+
+def force_flexgemm_bridge_algorithm(algorithm="IMPLICIT_GEMM"):
+    """Make flex_gemm's REAL sparse-conv run on jittor's triton bridge by selecting
+    the bridge-correct algorithm (default ``IMPLICIT_GEMM``) and instrumenting the
+    forward with a call counter.
+
+    Returns the algorithm name on success (and leaves ``config.CONV='flex_gemm'``
+    untouched so trellis2 uses flex_gemm's real conv), or ``None`` if flex_gemm is
+    not importable. Idempotent. After this, ``FLEXGEMM_BRIDGE_CONV_CALLS`` counts
+    how many submanifold convs went through flex_gemm — a nonzero value is proof
+    the real flex_gemm conv ran (the pure-jittor fallback never touches it).
+    """
+    try:
+        import flex_gemm.ops.spconv as spconv_ops
+    except Exception:
+        return None
+    Algorithm = spconv_ops.Algorithm
+    alg = getattr(Algorithm, algorithm, None)
+    if alg is None:
+        alg = algorithm  # allow passing the raw string value
+    spconv_ops.set_algorithm(alg)
+
+    # trellis2's conv_flex_gemm re-applies `set_algorithm(config.FLEX_GEMM_ALGO)`
+    # on EVERY forward, so a global set_algorithm alone is reverted on the next
+    # conv. Pin trellis2's own config knob too (the algorithm value is the same
+    # lowercase string the flex_gemm Algorithm enum uses). No-op if trellis2 isn't
+    # importable yet (re-call after importing trellis2, like apply()).
+    try:
+        import trellis2.modules.sparse.conv.config as _t2cfg
+        _t2cfg.FLEX_GEMM_ALGO = alg if isinstance(alg, str) else str(alg)
+    except Exception:
+        pass
+
+    # Instrument the submanifold-conv forward (once) so we can prove flex_gemm ran.
+    try:
+        from flex_gemm.ops.spconv import submanifold_conv3d as _sm
+        fn = _sm.SubMConv3dFunction
+        if not getattr(fn, "_jt_bridge_counted", False):
+            _orig_fwd = fn._sparse_submanifold_conv_forward.__func__ \
+                if hasattr(fn._sparse_submanifold_conv_forward, "__func__") \
+                else fn._sparse_submanifold_conv_forward
+
+            def _counted_fwd(feats, neighbor_cache, weight, bias=None):
+                global FLEXGEMM_BRIDGE_CONV_CALLS
+                FLEXGEMM_BRIDGE_CONV_CALLS += 1
+                return _orig_fwd(feats, neighbor_cache, weight, bias)
+
+            fn._sparse_submanifold_conv_forward = staticmethod(_counted_fwd)
+            fn._jt_bridge_counted = True
+    except Exception:
+        pass
+    return algorithm

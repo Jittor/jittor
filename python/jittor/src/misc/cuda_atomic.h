@@ -11,6 +11,19 @@
 #endif
 #include "common.h"
 
+// CUDA has no atomicAdd(long long*, long long) (only int / unsigned int /
+// unsigned long long int). int64 reduce.add / scatter-add over an int64 Var
+// (e.g. attention_mask.sum(-1) on int64, common in HF/verl) emits a raw
+// atomicAdd(int64*, int64) and fails to COMPILE. Provide a GLOBAL overload
+// (NOT inside namespace jittor -- that would hide CUDA's builtin atomicAdd
+// overloads for float/int) that adds via the unsigned-64 reinterpretation;
+// two's-complement add gives the same low-64 bit pattern signed/unsigned.
+#if defined(__CUDACC__) && !defined(IS_ROCM)
+__device__ inline long long atomicAdd(long long* a, long long b) {
+    return (long long)atomicAdd((unsigned long long int*)a, (unsigned long long int)b);
+}
+#endif
+
 namespace jittor {
 
 __device__ inline static int floatToOrderedInt(float floatVal) {

@@ -293,11 +293,12 @@ def chunk(x, chunks, dim=0):
         for i in range(l):
             res.append(x[(slice(None,),)*dim+([i,],)])
     else:
+        # ceil(l/chunks) per chunk, last may be shorter -- matches torch.chunk.
+        # NB: iterate by start offset, not `range(chunks-1)`; the latter left `i`
+        # unbound (UnboundLocalError) for chunks==1 (e.g. single-GPU dispatch).
         nums = (l-1) // chunks + 1
-        for i in range(chunks-1):
-            res.append(x[(slice(None,),)*dim+(slice(i*nums,(i+1)*nums),)])
-        if (i+1)*nums < l:
-            res.append(x[(slice(None,),)*dim+(slice((i+1)*nums,None),)])
+        for start in range(0, l, nums):
+            res.append(x[(slice(None,),)*dim+(slice(start, min(start+nums, l)),)])
     return res
 jt.Var.chunk = chunk
 
@@ -1990,6 +1991,9 @@ Examples::
         # torch allows dims=-1; map it to a real axis index for the reindex expression.
         d = dims[i] % x.ndim
         size = x.shape[d]
+        if size == 0:
+            # torch.roll is a no-op on an empty dim; avoid modulo-by-zero.
+            continue
         shift = shift % size
         if shift<0: shift += size
         ids[d] = f'(i{d}<{shift}?i{d}+{size-shift}:(i{d}-{shift}))'

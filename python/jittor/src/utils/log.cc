@@ -323,6 +323,14 @@ void segfault_sigaction(int signal, siginfo_t *si, void *arg) {
 #endif
 
 int register_sigaction() {
+    // Allow a host process to keep its own fault handling (e.g. Python's
+    // faulthandler, or a debugger, in a Ray actor / embedded runtime). Jittor's
+    // segfault handler otherwise overrides the host's and -- since it forks
+    // addr2line/gdb from inside the handler and then quick_exits -- can mask the
+    // real crash and leave no usable trace. Opt out entirely with
+    // JT_NO_SIGNAL_HANDLER=1.
+    if (getenv("JT_NO_SIGNAL_HANDLER") != nullptr)
+        return 0;
 #ifdef _WIN32
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
@@ -355,8 +363,17 @@ int register_sigaction() {
     // its own process management and shared-memory transports. Hijacking them
     // makes a benign signal during MPI_Init look like a fatal fault and abort
     // the rank. Leave those to MPI when launched under it.
+    //
+    // Likewise, when jittor is embedded in a host process that manages its own
+    // children -- e.g. a Ray actor running asyncio/aiohttp, which routinely
+    // spawns and reaps HTTP-client / subprocess children -- a process-wide
+    // SIGCHLD handler that fatally exits on any non-clean child death will kill
+    // the host the moment one of ITS unrelated children dies. DISABLE_MULTIPROCESSING
+    // means jittor itself spawns no parallel-compile worker pool to monitor, so
+    // there is nothing for these handlers to watch; skip them and stay embeddable.
     if (getenv("OMPI_COMM_WORLD_SIZE") == nullptr &&
-        getenv("PMI_SIZE") == nullptr) {
+        getenv("PMI_SIZE") == nullptr &&
+        getenv("DISABLE_MULTIPROCESSING") == nullptr) {
         sigaction(SIGCHLD, &sa, NULL);
         sigaction(SIGILL, &sa, NULL);
         sigaction(SIGBUS, &sa, NULL);

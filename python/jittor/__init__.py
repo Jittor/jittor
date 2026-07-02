@@ -44,8 +44,21 @@ with lock.lock_scope():
     from .compile_extern import mkl_ops, mpi, mpi_ops, in_mpi, rank, world_size
     if core.get_device_count() == 0:
         has_cuda = compile_extern.has_cuda = compiler.has_cuda = False
-    from .compile_extern import cudnn, curand, cublas, cufft, cusparse
-    from .init_cupy import numpy2cupy
+    if has_cuda:
+        from .compile_extern import cudnn, curand, cublas, cufft, cusparse
+        from .init_cupy import numpy2cupy
+    else:
+        # No CUDA device visible (e.g. CUDA_VISIBLE_DEVICES="" in a CPU-only Ray
+        # orchestrator). Skip CUDA-library / cupy init (they call into the CUDA
+        # runtime and would raise cudaErrorNoDevice); run CPU-only.
+        cudnn = curand = cublas = cufft = cusparse = None
+        numpy2cupy = None
+        # CPU arrays default to the CUDA pinned-host allocator (cudaMallocHost),
+        # which also fails with no device -- switch to the plain host allocator.
+        try:
+            core.flags.use_cuda_host_allocator = 0
+        except Exception:
+            pass
 
 from typing import List, Tuple
 import contextlib

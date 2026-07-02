@@ -35,6 +35,74 @@ After editing `torch_compat.py` (the real API surface), only `torch_compat.py`
 needs reloading — it is imported live from the jittor source tree. After editing
 `torch__init__.py`, re-copy it to site-packages.
 
+## graphdeco gaussian-splatting
+
+The shim can run the original
+`graphdeco-inria/gaussian-splatting` checkout without editing that repository.
+The helper script deploys `import torch` into a per-project site-packages,
+builds the original PyTorch-style CUDA extensions, and keeps runtime artifacts
+under the gaussian-splatting checkout:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 \
+  python/jittor/torch_shim/scripts/run_gaussian_splatting.sh \
+  /path/to/gaussian-splatting \
+  train.py -s /path/to/data -m /path/to/output --disable_viewer
+```
+
+Useful subcommands:
+
+```bash
+# Show the conda Python, deployed torch shim path, Jittor cache and CUDA state.
+python/jittor/torch_shim/scripts/run_gaussian_splatting.sh /path/to/gaussian-splatting env
+
+# Build the stock submodule extensions in-place:
+#   submodules/simple-knn
+#   submodules/diff-gaussian-rasterization
+#   submodules/fused-ssim
+python/jittor/torch_shim/scripts/run_gaussian_splatting.sh /path/to/gaussian-splatting build_ext
+
+# Smoke-test the three extensions plus rasterizer backward.
+JITTOR_GS_SKIP_EXT_BUILD=1 \
+  python/jittor/torch_shim/scripts/run_gaussian_splatting.sh \
+  /path/to/gaussian-splatting \
+  python/jittor/torch_shim/scripts/check_gaussian_splatting.py
+```
+
+By default the script chooses the active conda Python, or
+`~/miniconda3/envs/jt311/bin/python` when no conda env is active. Runtime state
+defaults to `/path/to/gaussian-splatting/.jittor_gs_runtime`:
+
+- `HOME`, `JITTOR_HOME`, `TORCH_HOME`, `TMPDIR`, `XDG_CACHE_HOME`,
+  `CUDA_CACHE_PATH`
+- the deployed shim `site-packages`
+- `JITTOR_TORCH_EXTENSIONS_DIR`
+
+Set `JITTOR_GS_RUNTIME_ROOT` to choose a different project-local runtime
+directory. If Jittor's bundled CUDA is installed at
+`~/.cache/jittor/jtcuda/cuda12.2_cudnn8_linux`, the script exports `JTCUDA`,
+`CUDA_HOME`, `nvcc_path`, `PATH` and `LD_LIBRARY_PATH` for it automatically.
+
+Validated on a clean gaussian-splatting worktree with the original submodule
+`setup.py` files and original `import torch` sources:
+
+```bash
+run_gaussian_splatting.sh /home/zy/projects/gs-jittor-clean build_ext
+run_gaussian_splatting.sh /home/zy/projects/gs-jittor-clean \
+  train.py -s data/tiny_blender -m output/tiny_jittor_eval_smoke \
+  --iterations 3 --test_iterations 3 --save_iterations 3 \
+  --checkpoint_iterations 3 --disable_viewer --quiet --eval
+run_gaussian_splatting.sh /home/zy/projects/gs-jittor-clean \
+  render.py -m output/tiny_jittor_eval_smoke --quiet
+run_gaussian_splatting.sh /home/zy/projects/gs-jittor-clean \
+  metrics.py -m output/tiny_jittor_eval_smoke
+```
+
+The metrics run produced `results.json` and `per_view.json` with SSIM, PSNR and
+LPIPS values, exercising torchvision transforms/save_image, `torch.hub`
+downloads, legacy PyTorch `.pth` loading, VGG16 feature extraction, and the
+three gaussian-splatting CUDA extensions.
+
 ## NPU dispatch (performance — read this)
 
 jittor only runs ops on the Ascend NPU when `jt.flags.use_cuda == 1`; otherwise

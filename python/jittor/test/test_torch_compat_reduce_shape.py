@@ -112,6 +112,37 @@ class TestVarStd(Base):
                     rtol=1e-5, atol=1e-5, msg=f"std correction=0 {dev}")
         both_devices(body)
 
+    def test_var_std_multi_dim(self):
+        # TRELLIS classifier-free guidance calls x.std(dim=list(range(1, x.ndim)),
+        # keepdim=True). Native jittor only accepts scalar dim= for var/std.
+        x = np.random.RandomState(33).randn(2, 3, 4).astype("float32")
+        def body(dev):
+            tx = t(x)
+            self.ac(torch.var(tx, dim=(1, 2), correction=0).numpy(),
+                    x.var(axis=(1, 2), ddof=0), rtol=1e-5, atol=1e-6,
+                    msg=f"var tuple dims correction0 {dev}")
+            self.ac(torch.std(tx, dim=[1, 2], keepdim=True).numpy(),
+                    x.std(axis=(1, 2), ddof=1, keepdims=True),
+                    rtol=1e-5, atol=1e-5, msg=f"std list dims keepdim {dev}")
+        both_devices(body)
+
+    def test_bincount_argwhere_segment_reduce(self):
+        # Sparse TRELLIS paths use these module-level torch APIs.
+        def body(dev):
+            idx = torch.array([0, 1, 1, 3])
+            self.ae(torch.bincount(idx, minlength=5).numpy(),
+                    np.array([1, 2, 0, 1, 0], dtype=np.int64),
+                    msg=f"bincount minlength {dev}")
+            grid = np.array([[0, 1], [2, 0]], dtype=np.int32)
+            self.ae(torch.argwhere(t(grid)).numpy(), np.argwhere(grid),
+                    msg=f"argwhere {dev}")
+            data = np.arange(6, dtype=np.float32)
+            lengths = torch.array([2, 4])
+            self.ac(torch.segment_reduce(t(data), "sum", lengths=lengths).numpy(),
+                    np.array([1.0, 14.0], dtype=np.float32),
+                    msg=f"segment_reduce sum lengths {dev}")
+        both_devices(body)
+
 
 class TestNorm(Base):
     def setUp(self):

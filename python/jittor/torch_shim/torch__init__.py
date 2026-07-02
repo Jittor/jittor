@@ -17,6 +17,17 @@ for _k in dir(_jittor):
 
 __version__ = "2.11.0"
 
+
+# torch.compiled_with_cxx11_abi(): a generic torch C++/CUDA-extension build probe.
+# A PyTorch extension's setup.py (e.g. flex_gemm) reads it to set
+# -D_GLIBCXX_USE_CXX11_ABI to match the torch it links against. jittor's in-core
+# cpp_extension build defaults the ABI to "1" (the modern libstdc++ ABI jittor
+# core is itself compiled with), so report True for parity. Generic shim, not
+# dep-specific.
+def compiled_with_cxx11_abi():
+    return True
+
+
 # ---- nn / functional ----
 import jittor.nn as nn
 sys.modules["torch.nn"] = nn
@@ -593,16 +604,34 @@ globals()["_utils"] = _tutils
 
 # torch.hub: mmdet downloads checkpoints/test assets lazily inside functions.
 _hub = types.ModuleType("torch.hub")
+def _hub_dir():
+    import os as _os
+    return _os.path.expanduser(_os.environ.get("TORCH_HOME", "~/.cache/torch"))
+def _hub_checkpoints_dir():
+    import os as _os
+    path = _os.path.join(_hub_dir(), "hub", "checkpoints")
+    _os.makedirs(path, exist_ok=True)
+    return path
 def _download_url_to_file(url, dst, hash_prefix=None, progress=True):
     import urllib.request
     urllib.request.urlretrieve(url, dst)
 _hub.download_url_to_file = _download_url_to_file
-def _load_state_dict_from_url(*a, **k):
-    raise NotImplementedError("torch.hub.load_state_dict_from_url is not supported; "
-                              "load the checkpoint via jittor instead")
+def _load_state_dict_from_url(url, model_dir=None, map_location=None, progress=True,
+                              check_hash=False, file_name=None, weights_only=False):
+    import os as _os
+    from urllib.parse import urlparse as _urlparse
+    if model_dir is None:
+        model_dir = _hub_checkpoints_dir()
+    _os.makedirs(model_dir, exist_ok=True)
+    filename = file_name or _os.path.basename(_urlparse(url).path)
+    cached_file = _os.path.join(model_dir, filename)
+    if not _os.path.isfile(cached_file):
+        _download_url_to_file(url, cached_file, progress=progress)
+    loader = globals().get("load", getattr(_jittor, "load", None))
+    return loader(cached_file, map_location=map_location, weights_only=weights_only)
 _hub.load_state_dict_from_url = _load_state_dict_from_url
 import os as _os_hub
-_hub.get_dir = lambda: _os_hub.path.expanduser("~/.cache/torch/hub")
+_hub.get_dir = lambda: _os_hub.path.join(_hub_dir(), "hub")
 import re as _re_hub
 _hub.HASH_REGEX = _re_hub.compile(r'-([a-f0-9]*)\.')   # timm imports this from torch.hub
 _hub.tqdm = None
@@ -1019,6 +1048,20 @@ _autograd = types.ModuleType("torch.autograd")
 _autograd.Function = getattr(_jittor, "Function", object)
 _autograd.no_grad = _jittor.no_grad
 _autograd.enable_grad = _jittor.enable_grad
+# torch.autograd.Variable is the legacy tensor wrapper (now an alias of Tensor);
+# 3DGS's utils/loss_utils.py does `from torch.autograd import Variable`.
+_autograd.Variable = getattr(_jittor, "Var", object)
+# debug hooks jittor lacks -> no-ops (3DGS calls set_detect_anomaly at startup)
+import contextlib as _ctxlib_ag
+_autograd.set_detect_anomaly = lambda *a, **k: None
+_autograd.detect_anomaly = lambda *a, **k: _ctxlib_ag.nullcontext()
+# torch.autograd.grad / backward: reuse the impls torch_compat installed on the
+# jittor module's autograd (import jittor triggers torch_compat before this runs).
+_jt_ag = getattr(_jittor, "autograd", None)
+if _jt_ag is not None:
+    for _n in ("grad", "backward"):
+        if hasattr(_jt_ag, _n):
+            setattr(_autograd, _n, getattr(_jt_ag, _n))
 sys.modules["torch.autograd"] = _autograd
 globals()["autograd"] = _autograd
 # torch.autograd.function: mmcv's custom ops do
@@ -1096,31 +1139,34 @@ if "torch.cuda" in sys.modules:
     sys.modules["torch.cuda"].amp = _camp
 
 # torch.utils.{model_zoo,cpp_extension,tensorboard,_python_dispatch}: import-time
-# resolutions for mmengine/mmcv. cpp_extension is build-time only (stubs); model_zoo
-# falls back to torch.hub; tensorboard SummaryWriter is a lazy visualization backend.
+# resolutions for mmengine/mmcv. model_zoo falls back to torch.hub; tensorboard
+# SummaryWriter is a lazy visualization backend.
 _mz = types.ModuleType("torch.utils.model_zoo")
 _mz.load_url = lambda *a, **k: (_ for _ in ()).throw(
     NotImplementedError("torch.utils.model_zoo.load_url not supported on jittor shim"))
 sys.modules["torch.utils.model_zoo"] = _mz
-_cppext = types.ModuleType("torch.utils.cpp_extension")
-for _nm in ("BuildExtension", "CppExtension", "CUDAExtension"):
-    setattr(_cppext, _nm, type(_nm, (), {"__init__": lambda self, *a, **k: None}))
-_cppext.load = lambda *a, **k: None
-_cppext.load_inline = lambda *a, **k: None
-_cppext.CUDA_HOME = None
-sys.modules["torch.utils.cpp_extension"] = _cppext
+_utils.model_zoo = _mz
+
+# torch.utils.cpp_extension: a REAL build backend shared with the bare
+# `import jittor as torch` path. PyTorch C++/CUDA extensions are compiled against
+# jittor's relocated libtorch-ABI shim with zero libtorch dependency.
+from jittor.torch_shim.cpp_extension.torch_utils import install_cpp_extension
+_cppext = install_cpp_extension(_utils)
 _tb = types.ModuleType("torch.utils.tensorboard")
 _tb.SummaryWriter = type("SummaryWriter", (), {
     "__init__": lambda self, *a, **k: None,
     "add_scalar": lambda self, *a, **k: None, "add_scalars": lambda self, *a, **k: None,
-    "add_image": lambda self, *a, **k: None, "add_graph": lambda self, *a, **k: None,
+    "add_image": lambda self, *a, **k: None, "add_images": lambda self, *a, **k: None,
+    "add_graph": lambda self, *a, **k: None,
     "add_histogram": lambda self, *a, **k: None, "close": lambda self: None,
     "flush": lambda self: None})
 sys.modules["torch.utils.tensorboard"] = _tb
+_utils.tensorboard = _tb
 _pydisp = types.ModuleType("torch.utils._python_dispatch")
 _pydisp.TorchDispatchMode = type("TorchDispatchMode", (), {})
 _pydisp._get_current_dispatch_mode = lambda *a, **k: None
 sys.modules["torch.utils._python_dispatch"] = _pydisp
+_utils._python_dispatch = _pydisp
 
 # torch.distributed.{rpc,optim}: single-process stubs. rpc.is_available is imported
 # unconditionally by mmengine (`from torch.distributed.rpc import is_available`) and
@@ -1227,7 +1273,11 @@ globals()["set_rng_state"] = _random_mod.set_rng_state
 # torch.version submodule (libs probe .cuda / .hip)
 _version = types.ModuleType("torch.version")
 _version.__version__ = __version__
-_version.cuda = None
+try:
+    _nv = getattr(getattr(_jittor, "compiler", None), "nvcc_version", None)
+    _version.cuda = ".".join(map(str, _nv[:2])) if _nv else None
+except Exception:
+    _version.cuda = None
 _version.hip = None
 _version.git_version = "jittor"
 sys.modules["torch.version"] = _version
@@ -1990,3 +2040,44 @@ try:
     _install_safetensors_shim()
 except Exception as _e:
     print("[torch-shim] safetensors shim not installed:", _e)
+
+
+def _install_flash_attn_shim():
+    """Register a jittor-backed `flash_attn` so `import flash_attn` works.
+
+    FlashAttention's CUDA kernels are not built here, but libraries that
+    hard-depend on it (TRELLIS.2 attention defaults to ATTN/BACKEND='flash_attn')
+    must be able to `import flash_attn` and call its var-len / dense entry points.
+    The implementation (per-segment SDPA over cu_seqlens; numerically equivalent
+    to the real var-len kernels) lives in the deployable stub package
+    `jittor/torch_shim/stubs/flash_attn/__init__.py`. We load it from there so the
+    deploy flow and the `PYTHONPATH=.../python` (no-deploy) flow share one source.
+
+    No-op if a real flash_attn is already importable, or if the shim is already
+    registered (e.g. by deploy onto site-packages).
+    """
+    import sys as _s
+    import os as _os
+    import importlib as _il
+    import importlib.util as _ilu
+    if "flash_attn" in _s.modules:
+        return
+    try:                         # respect a real / already-deployed flash_attn
+        _il.import_module("flash_attn")
+        return
+    except Exception:
+        pass
+    src = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                        "stubs", "flash_attn", "__init__.py")
+    if not _os.path.isfile(src):
+        return
+    spec = _ilu.spec_from_file_location("flash_attn", src)
+    mod = _ilu.module_from_spec(spec)
+    _s.modules["flash_attn"] = mod
+    spec.loader.exec_module(mod)
+
+
+try:
+    _install_flash_attn_shim()
+except Exception as _e:
+    print("[torch-shim] flash_attn shim not installed:", _e)
