@@ -295,6 +295,23 @@ class TestTypePromotion(Base):
             self.assertEqual(dts(xf + 1), "float32", dev)      # float tensor + py int
         both_devices(body)
 
+    def test_integer_true_division_promotes_to_default_float(self):
+        def body(dev):
+            x = torch.from_numpy(np.array([1, 2, 3], dtype=np.uint8))
+            y = x / 255.0
+            self.assertEqual(dts(y), "float32", dev)
+            self.ac(y.numpy(),
+                    np.array([1, 2, 3], dtype=np.float32) / np.float32(255.0),
+                    atol=1e-7, rtol=1e-6, msg=dev)
+
+            z = torch.tensor([1, 2, 3], dtype=torch.int32) / 2
+            self.assertEqual(dts(z), "float32", dev)
+            self.ac(z.numpy(), np.array([0.5, 1.0, 1.5], dtype=np.float32), msg=dev)
+
+            xf = torch.tensor([1, 2, 3], dtype=torch.float32)
+            self.assertEqual(dts(xf / 255.0), "float32", dev)
+        both_devices(body)
+
     @unittest.skip("SUSPECTED-BUG / SEMANTIC-DIFF: jittor binary-op type promotion does NOT "
                    "follow torch's result_type lattice for MIXED dtypes. jittor keeps the "
                    "narrower/left operand's type instead of promoting upward, e.g. "

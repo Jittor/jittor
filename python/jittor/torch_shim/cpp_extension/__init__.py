@@ -28,6 +28,7 @@ import glob
 import subprocess
 import sysconfig
 import hashlib
+import json
 
 # --- in-jittor shim locations (was jtorch/include + jtorch/src in the adapter) ---
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -99,7 +100,9 @@ def _jittor_config():
     cuda_home = os.path.dirname(os.path.dirname(nvcc))
 
     # GPU arch: parse jittor's nvcc_flags (e.g. '-arch=compute_89 -code=sm_89'),
-    # else fall back to a reasonable default.
+    # else fall back to a reasonable default. Do not inherit Jittor JIT math
+    # flags here: torch.utils.cpp_extension compiles project kernels with nvcc's
+    # default math behavior unless the project passes extra_cuda_cflags.
     arch_flags = []
     nvf = getattr(c, "nvcc_flags", "") or ""
     for tok in nvf.split():
@@ -167,6 +170,96 @@ def _link_flags(c):
     return flags
 
 
+def _shim_files():
+    files = list(SHIM_SOURCES)
+    for base in (SHIM_INCLUDE,):
+        for root, _dirs, names in os.walk(base):
+            for name in names:
+                if name.endswith((".h", ".hpp", ".cuh")):
+                    files.append(os.path.join(root, name))
+    files = sorted(dict.fromkeys(os.path.abspath(p) for p in files))
+    return files
+
+
+def toolchain_signature():
+    """Small stable signature used to detect stale in-place extension builds."""
+    c = cfg()
+    shim = {}
+    for path in _shim_files():
+        try:
+            st = os.stat(path)
+            shim[os.path.relpath(path, _THIS_DIR)] = int(st.st_mtime_ns)
+        except OSError:
+            shim[os.path.relpath(path, _THIS_DIR)] = None
+    return {
+        "version": 2,
+        "cc_path": c["cc_path"],
+        "nvcc_path": c["nvcc_path"],
+        "ext_suffix": c["ext_suffix"],
+        "arch_flags": list(c["arch_flags"]),
+        "extension_math_policy": "torch_cpp_extension_default",
+        "shim_files": shim,
+    }
+
+
+def stamp_path(output_path):
+    return output_path + ".jittor_torch_build.json"
+
+
+def output_matches_toolchain(output_path):
+    try:
+        with open(stamp_path(output_path), "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except OSError:
+        return False
+    return data.get("toolchain") == toolchain_signature()
+
+
+def write_toolchain_stamp(output_path, payload=None):
+    _write_stamp(output_path, payload or {})
+
+
+def _write_stamp(output_path, payload):
+    data = dict(payload)
+    data["toolchain"] = toolchain_signature()
+    with open(stamp_path(output_path), "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, sort_keys=True)
+
+
+def _object_stamp_path(obj):
+    return obj + ".jittor_torch_build.json"
+
+
+def _object_matches_command(src, obj, cmd):
+    try:
+        if (not os.path.exists(obj)) or os.path.getmtime(obj) < os.path.getmtime(src):
+            return False
+        with open(_object_stamp_path(obj), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        st = os.stat(src)
+    except OSError:
+        return False
+    return data == {
+        "source": os.path.abspath(src),
+        "source_mtime_ns": int(st.st_mtime_ns),
+        "cmd": list(cmd),
+    }
+
+
+def _write_object_stamp(src, obj, cmd):
+    try:
+        st = os.stat(src)
+        data = {
+            "source": os.path.abspath(src),
+            "source_mtime_ns": int(st.st_mtime_ns),
+            "cmd": list(cmd),
+        }
+        with open(_object_stamp_path(obj), "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, sort_keys=True)
+    except OSError:
+        pass
+
+
 def build(name, sources, build_dir, output_path=None,
           include_dirs=None, define_macros=None,
           extra_cflags=None, extra_cuda_cflags=None,
@@ -220,7 +313,7 @@ def build(name, sources, build_dir, output_path=None,
 
     # compile (skip if up-to-date unless force)
     for src, obj, cmd in cmds:
-        if (not force) and os.path.exists(obj) and os.path.getmtime(obj) >= os.path.getmtime(src):
+        if (not force) and _object_matches_command(src, obj, cmd):
             if verbose:
                 print(f"[cpp_extension.build] up-to-date {os.path.basename(obj)}")
             continue
@@ -234,6 +327,7 @@ def build(name, sources, build_dir, output_path=None,
             raise RuntimeError(f"compile failed: {src}")
         elif verbose and r.stderr.strip():
             print(r.stderr[-2000:])
+        _write_object_stamp(src, obj, cmd)
 
     # link with nvcc (handles cuda device link + -l: cores)
     link = [c["nvcc_path"], "-shared", "-o", output_path] + objs
@@ -251,6 +345,15 @@ def build(name, sources, build_dir, output_path=None,
         raise RuntimeError("link failed")
     if verbose:
         print(f"[cpp_extension.build] OK -> {output_path}")
+    _write_stamp(output_path, {
+        "name": name,
+        "sources": [os.path.abspath(s) for s in sources],
+        "include_dirs": list(include_dirs or []),
+        "define_macros": [str(m) for m in (define_macros or [])],
+        "extra_cflags": list(extra_cflags or []),
+        "extra_cuda_cflags": list(extra_cuda_cflags or []),
+        "extra_ldflags": list(extra_ldflags or []),
+    })
     return output_path
 
 

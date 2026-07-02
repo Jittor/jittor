@@ -143,6 +143,17 @@ class TestSaveLoad(Base):
                                  f"wide dtype {dt} preserved {dev}")
         both_devices(body)
 
+    def test_save_syncs_pending_updates(self):
+        def body(dev):
+            p = self.path(f"pending_{dev}.pkl")
+            x = torch.zeros(4)
+            x.update(x + 3)
+            torch.save({"x": x}, p)
+            y = torch.load(p)["x"]
+            self.ac(y.numpy(), np.full(4, 3, dtype=np.float32),
+                    atol=0, rtol=0, msg=f"pending update saved {dev}")
+        both_devices(body)
+
 
 # ---------------------------------------------------------------------------
 # module.state_dict / load_state_dict

@@ -80,6 +80,8 @@ if _jt_torch_runtime_root:
     if _os.environ.get("JITTOR_TORCH_KEEP_TMPDIR", "0").lower() not in ("1", "true", "yes", "on"):
         _os.environ["TMPDIR"] = _os.path.join(_jt_torch_runtime_root, "tmp")
         _os.makedirs(_os.environ["TMPDIR"], exist_ok=True)
+    if _os.environ.get("JITTOR_TORCH_KEEP_FAST_MATH", "0").lower() not in ("1", "true", "yes", "on"):
+        _os.environ["nvcc_flags"] = (_os.environ.get("nvcc_flags", "") + " --fmad=false --prec-div=true --prec-sqrt=true ").strip()
     if not _jt_torch_truthy(_os.environ.get("JITTOR_TORCH_KEEP_CUDA")):
         _jt_torch_jtcuda = _jt_torch_find_jtcuda(_jt_torch_real_home)
         if _jt_torch_jtcuda:

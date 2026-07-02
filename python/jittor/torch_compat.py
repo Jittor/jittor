@@ -1517,6 +1517,7 @@ def _install_optimizers(g):
     construction, and mirror lr into each param_group. This makes the
     `loss.backward()` bridge (Var.backward) and torch-style LR schedulers work
     even when using `import jittor as torch` directly (no torch_shim wrapper)."""
+    import math as _math
     import jittor as _jt
     try:
         from jittor import optim as _optim
@@ -1593,6 +1594,90 @@ def _install_optimizers(g):
         Base.state = property(lambda self: Base._OptState(self))
         Base._torch_state_installed = True
 
+    if not getattr(Base, "_torch_state_dict_wrapped", False):
+        def _state_dict_torch(self):
+            param_ids = {}
+            param_groups = []
+            next_id = 0
+            for pg in self.param_groups:
+                group = {}
+                params = []
+                for p in pg.get("params", []):
+                    pid = param_ids.get(id(p))
+                    if pid is None:
+                        pid = next_id
+                        next_id += 1
+                        param_ids[id(p)] = pid
+                    params.append(pid)
+                for k, v in pg.items():
+                    if k in ("params", "grads", "m", "values"):
+                        continue
+                    group[k] = v
+                group.setdefault("lr", pg.get("lr", getattr(self, "lr", 0.0)))
+                group.setdefault("betas", pg.get("betas", getattr(self, "betas", (0.9, 0.999))))
+                group.setdefault("eps", pg.get("eps", getattr(self, "eps", 1e-8)))
+                group.setdefault("weight_decay", pg.get("weight_decay", getattr(self, "weight_decay", 0)))
+                group.setdefault("amsgrad", False)
+                group.setdefault("maximize", False)
+                group.setdefault("foreach", None)
+                group.setdefault("capturable", False)
+                group.setdefault("differentiable", False)
+                group.setdefault("fused", None)
+                group["params"] = params
+                param_groups.append(group)
+
+            state = {}
+            for pg in self.param_groups:
+                for i, p in enumerate(pg.get("params", [])):
+                    pid = param_ids.get(id(p))
+                    if pid is None:
+                        continue
+                    entry = {}
+                    if "m" in pg and i < len(pg["m"]):
+                        entry["exp_avg"] = pg["m"][i]
+                    if "values" in pg and i < len(pg["values"]):
+                        entry["exp_avg_sq"] = pg["values"][i]
+                    if entry:
+                        entry["step"] = _jt.array(float(getattr(self, "n_step", 0))).float32()
+                        state[pid] = entry
+            return {"state": state, "param_groups": param_groups}
+
+        def _load_state_dict_torch(self, state_dict):
+            if not isinstance(state_dict, dict) or "param_groups" not in state_dict:
+                return None
+            saved_groups = state_dict.get("param_groups", [])
+            saved_state = state_dict.get("state", {})
+            max_step = 0.0
+            for gi, saved_pg in enumerate(saved_groups):
+                if gi >= len(self.param_groups):
+                    break
+                pg = self.param_groups[gi]
+                for k, v in saved_pg.items():
+                    if k == "params":
+                        continue
+                    pg[k] = v
+                for i, pid in enumerate(saved_pg.get("params", [])):
+                    st = saved_state.get(pid, saved_state.get(str(pid), {}))
+                    if "m" in pg and i < len(pg["m"]) and isinstance(st, dict) and "exp_avg" in st:
+                        pg["m"][i] = st["exp_avg"]
+                    if "values" in pg and i < len(pg["values"]) and isinstance(st, dict) and "exp_avg_sq" in st:
+                        pg["values"][i] = st["exp_avg_sq"]
+                    if isinstance(st, dict) and "step" in st:
+                        try:
+                            sv = st["step"]
+                            if isinstance(sv, _jt.Var):
+                                sv = float(sv.item())
+                            max_step = max(max_step, float(sv))
+                        except Exception:
+                            pass
+            if max_step:
+                self.n_step = int(max_step)
+            return None
+
+        Base.state_dict = _state_dict_torch
+        Base.load_state_dict = _load_state_dict_torch
+        Base._torch_state_dict_wrapped = True
+
     # torch's Optimizer.zero_grad accepts set_to_none=; jittor's rejects the kwarg.
     if not getattr(Base, "_torch_zero_grad_wrapped", False):
         _orig_zero = Base.zero_grad
@@ -1614,6 +1699,43 @@ def _install_optimizers(g):
             return _init_lr
         _cls.__init__ = _mk(_ci)
         _cls._torch_lr_default = True
+
+    Adam = getattr(_optim, "Adam", None)
+    if Adam is not None and not getattr(Adam, "_torch_adam_step", False):
+        def _adam_step_torch(self, loss=None, retain_graph=False):
+            prev_step = int(getattr(self, "n_step", 0))
+            self.pre_step(loss, retain_graph)
+            if int(getattr(self, "n_step", 0)) == prev_step:
+                self.n_step = prev_step + 1
+            n = float(self.n_step)
+            _jt.flags.node_order = 1
+            for pg in self.param_groups:
+                lr = pg.get("lr", self.lr)
+                eps = pg.get("eps", self.eps)
+                weight_decay = pg.get("weight_decay", self.weight_decay)
+                b0, b1 = pg.get("betas", self.betas)
+                bias_correction1 = 1 - b0 ** n
+                bias_correction2 = 1 - b1 ** n
+                step_size = lr / bias_correction1
+                bias_correction2_sqrt = _math.sqrt(bias_correction2)
+                for p, g, v, m in zip(pg["params"], pg["grads"], pg["values"], pg["m"]):
+                    was_trainable = not p.is_stop_grad()
+                    if not was_trainable or not isinstance(g, _jt.Var) or list(g.shape) != list(p.shape):
+                        continue
+                    if weight_decay != 0:
+                        g = g + p * weight_decay
+                    m.update(b0 * m + (1 - b0) * g)
+                    v.update(b1 * v + (1 - b1) * g * g)
+                    denom = _jt.sqrt(v) / bias_correction2_sqrt + eps
+                    p.update(p - m * step_size / denom)
+                    try:
+                        if was_trainable and p.is_stop_grad():
+                            p.start_grad()
+                    except Exception:
+                        pass
+            self.post_step()
+        Adam.step = _adam_step_torch
+        Adam._torch_adam_step = True
 
     Base._torch_compat_wrapped = True
 
@@ -4135,7 +4257,6 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                     grads_list.append(None)
                 grads_list[i] = g
                 object.__setattr__(p, "_torch_grad", g)
-        opt.n_step += 1
         object.__setattr__(opt, "_Optimizer__zero_grad", False)
         try:
             opt._build_grad_map()
@@ -4426,6 +4547,16 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         if r.startswith(("float", "bfloat", "complex")):
             return r
         return _dtype_to_str(g.get_default_dtype()) or "float32"
+    def _scalar_dtype_name(x):
+        if isinstance(x, bool):
+            return "bool"
+        if isinstance(x, int):
+            return "int64"
+        if isinstance(x, float):
+            return _dtype_to_str(g.get_default_dtype()) or "float32"
+        if isinstance(x, complex):
+            return "complex64"
+        return None
     def _make_truediv(opname):
         native = Var.__dict__.get(opname)
         if native is None:
@@ -4443,8 +4574,22 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             # the integer-op behaviour above.
             if isinstance(other, (list, tuple)):
                 return NotImplemented
-            # tensor / python scalar: jittor already matches torch (int tensor / num
-            # -> float32, float tensor keeps its float), so pass straight through.
+            sd = _scalar_dtype_name(other)
+            if sd is not None:
+                tgt = _truediv_target(str(self.dtype), sd)
+                src_dt = str(self.dtype)
+                # PyTorch's Python-float scalar division keeps the result dtype
+                # but uses the scalar value with enough precision to differ from
+                # division by a float32 tensor by 1 ulp in common cases. 3DGS hits
+                # both uint8 image normalization and RGB2SH float32/C0 this way.
+                use_wide = sd.startswith("float") and src_dt != "float64"
+                calc_dt = "float64" if use_wide else tgt
+                a = self if src_dt == calc_dt else self.cast(calc_dt)
+                b = jt.array(other, dtype=calc_dt) if use_wide else other
+                out = native(a, b)
+                if isinstance(out, Var) and str(out.dtype) != tgt:
+                    out = out.cast(tgt)
+                return out
             return native(self, other)
         _op.__name__ = opname
         return _op
@@ -4944,6 +5089,10 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
             return t(_from_portable(v) for v in obj)
         return obj
     def save(obj, f, *a, **k):
+        try:
+            jt.sync_all(True)
+        except Exception:
+            pass
         portable = _to_portable(obj)
         if hasattr(f, "write"):
             _pickle.dump(portable, f)

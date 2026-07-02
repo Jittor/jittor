@@ -337,6 +337,24 @@ def _set_env_dir(name: str, path: pathlib.Path, override: bool = False) -> None:
     _ensure_dir(os.environ[name])
 
 
+def _configure_torch_math_flags(jt) -> None:
+    if _is_truthy(os.environ.get("JITTOR_TORCH_KEEP_FAST_MATH")):
+        return
+    extra = "--fmad=false --prec-div=true --prec-sqrt=true"
+    os.environ["nvcc_flags"] = (os.environ.get("nvcc_flags", "") + " " + extra).strip()
+    try:
+        flags = getattr(getattr(jt, "compiler", None), "flags", None)
+        cur = getattr(flags, "nvcc_flags", None)
+        if isinstance(cur, str):
+            cur = cur.replace("--use_fast_math", "")
+            for tok in extra.split():
+                if tok not in cur:
+                    cur += " " + tok
+            flags.nvcc_flags = cur
+    except Exception:
+        pass
+
+
 def _best_jtcuda(real_home: Optional[str]) -> Optional[pathlib.Path]:
     candidates: List[str] = []
     if os.environ.get("JTCUDA"):
@@ -447,6 +465,13 @@ def _needs_build(ext: NativeExtension) -> bool:
     ]
     if not outputs:
         return True
+    try:
+        from jittor.torch_shim import cpp_extension as _cpp_ext
+        for path in outputs:
+            if not _cpp_ext.output_matches_toolchain(path):
+                return True
+    except Exception:
+        return True
     inputs = [p for p in (ext.setup_py, ext.pyproject_toml, ext.cmake_lists) if p]
     inputs += list(ext.sources)
     if not inputs:
@@ -488,6 +513,13 @@ def build_extension_dirs(
         _log(verbose, "build_ext: %s" % ext.root)
         cmd = [sys.executable, os.path.basename(ext.setup_py), "build_ext", "--inplace"]
         subprocess.run(cmd, cwd=ext.root, env=env or os.environ.copy(), check=True)
+        try:
+            from jittor.torch_shim import cpp_extension as _cpp_ext
+            for path in _extension_outputs(ext.root):
+                if os.path.sep + "build" + os.path.sep not in path:
+                    _cpp_ext.write_toolchain_stamp(path, {"root": ext.root})
+        except Exception:
+            pass
         built.append(ext.root)
     return built
 
@@ -560,6 +592,7 @@ def enable(
         _prepend_sys_path(pp.resolve())
 
     import jittor as jt
+    _configure_torch_math_flags(jt)
     try:
         from jittor import torch_compat
         torch_compat.install(jt)

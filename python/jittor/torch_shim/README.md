@@ -63,9 +63,16 @@ importing.
 for native extension build roots (`setup.py`, `pyproject.toml`, `CMakeLists.txt`,
 and declared `.cu/.cpp` sources), registers Jittor as `torch`, prepends the
 discovered extension roots to `sys.path`, and builds setuptools extensions with
-`setup.py build_ext --inplace` when their in-place `.so` outputs are missing or
-older than their source inputs. Set `JITTOR_TORCH_SKIP_EXT_BUILD=1` to skip this
-check on warm runs.
+`setup.py build_ext --inplace` when their in-place `.so` outputs are missing,
+older than their source inputs, or stamped for a different shim/toolchain.
+Set `JITTOR_TORCH_SKIP_EXT_BUILD=1` to skip this check on warm runs.
+
+For PyTorch numerical parity, the bootstrap disables fast-math for Jittor JIT
+CUDA kernels (`--fmad=false --prec-div=true --prec-sqrt=true`) unless
+`JITTOR_TORCH_KEEP_FAST_MATH=1` is set. PyTorch-style project extensions keep
+the same nvcc math policy as `torch.utils.cpp_extension`: the shim passes arch
+and include/link flags, but does not inject Jittor JIT math flags into project
+CUDA files unless the project requested them.
 
 Runtime state defaults to `.jittor_torch_runtime` under the project root:
 
@@ -124,22 +131,14 @@ directory. If Jittor's bundled CUDA is installed at
 `~/.cache/jittor/jtcuda/cuda12.2_cudnn8_linux`, the script exports `JTCUDA`,
 `CUDA_HOME`, `nvcc_path`, `PATH` and `LD_LIBRARY_PATH` for it automatically.
 
-The generic bootstrap was also validated with a direct `python train.py` run on
-the same clean checkout after only adding the two lines above. It scanned exactly
-the three native extension roots (`simple-knn`, `diff-gaussian-rasterization`,
-`fused-ssim`), skipped their already up-to-date in-place `.so` outputs, and
-completed `train.py --iterations 5 --eval`, producing `chkpnt5.pth`,
+The generic bootstrap was validated with direct `python train.py` runs on a
+clean checkout after only adding the two bootstrap lines above. It scanned the
+three native extension roots (`simple-knn`, `diff-gaussian-rasterization`,
+`fused-ssim`), rebuilt stale in-place `.so` outputs when the shim/toolchain stamp
+changed, skipped them on the next warm run, and completed
+`train.py --iterations 5 --eval`, producing `chkpnt5.pth`,
 `point_cloud/iteration_5/point_cloud.ply`, `cameras.json`, `input.ply` and
-`exposure.json`. A cold runtime took `real 324.02s` because Jittor kernel cache
-had to be compiled; a warm `python train.py --iterations 1` check completed in
-`real 11.40s`.
-
-After moving the public bootstrap API under `jittor.torch_shim`, the same clean
-checkout was revalidated with direct `python train.py --iterations 1` using
-`JITTOR_TORCH_RUNTIME_ROOT` set before process startup. The run completed and
-produced `chkpnt1.pth`, `point_cloud/iteration_1/point_cloud.ply`,
-`cameras.json`, `input.ply` and `exposure.json`; the cold runtime for this fresh
-cache was `real 97.91s`.
+`exposure.json`.
 
 Validated on a clean gaussian-splatting worktree with the original submodule
 `setup.py` files and original `import torch` sources:
@@ -168,6 +167,18 @@ Additional CUDA validation on `/home/zy/projects/gs-parity-work`:
   `diff_gaussian_rasterization` wrapper/direct forward/backward. The report
   `/home/zy/projects/gs-parity-work/parity_report.json` passed; rasterizer image,
   depth, radii and gradients matched within the recorded tolerances.
+- One-step train tracing with original GS inputs produced bitwise-identical
+  scaling, opacity, SH DC features, rendered image, and image gradient. The
+  remaining direct rasterizer backward deltas were at native CUDA noise level:
+  xyz grad max abs `2.0463630789890885e-12`; rotation grad max abs
+  `9.316762720470648e-15`.
+- A 5-step checkpoint comparison against PyTorch 2.1.2 matched all saved model
+  and optimizer fields under the validation tolerance except `model.rotation`.
+  The Jittor-vs-PyTorch rotation max abs was `0.0036064726300537586`; two
+  independent PyTorch-vs-PyTorch runs of the unmodified GS CUDA rasterizer
+  differed by `0.004010355216450989` on the same field. The residual rotation
+  drift is therefore inside the original rasterizer's own nondeterministic
+  boundary rather than a shim-specific mismatch.
 - The default one-click command, without `JITTOR_GS_SKIP_EXT_BUILD`, invoked the
   stock `setup.py build_ext --inplace` in all three submodules and completed
   `train.py --iterations 5 --eval`, producing `chkpnt5.pth`, `point_cloud.ply`,
