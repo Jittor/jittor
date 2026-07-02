@@ -37,11 +37,47 @@ needs reloading — it is imported live from the jittor source tree. After editi
 
 ## graphdeco gaussian-splatting
 
-The shim can run the original
-`graphdeco-inria/gaussian-splatting` checkout without editing that repository.
-The helper script deploys `import torch` into a per-project site-packages,
-builds the original PyTorch-style CUDA extensions, and keeps runtime artifacts
-under the gaussian-splatting checkout:
+The shim can run the original `graphdeco-inria/gaussian-splatting` checkout
+from a normal Python entrypoint. Add this generic bootstrap before the first
+`import torch` in the entry script:
+
+```python
+from jittor_torch import enable as _enable_jittor_torch
+_enable_jittor_torch(project_root=__file__)
+```
+
+Then run the stock command:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 \
+  JITTOR_TORCH_RUNTIME_ROOT=/path/to/gaussian-splatting/.jittor_torch_runtime \
+  python train.py -s /path/to/data -m /path/to/output --disable_viewer
+```
+
+`enable()` is not gaussian-splatting-specific. It scans the local project tree
+for native extension build roots (`setup.py`, `pyproject.toml`, `CMakeLists.txt`,
+and declared `.cu/.cpp` sources), registers Jittor as `torch`, prepends the
+discovered extension roots to `sys.path`, and builds setuptools extensions with
+`setup.py build_ext --inplace` when their in-place `.so` outputs are missing or
+older than their source inputs. Set `JITTOR_TORCH_SKIP_EXT_BUILD=1` to skip this
+check on warm runs.
+
+Runtime state defaults to `.jittor_torch_runtime` under the project root:
+
+- `HOME`, `JITTOR_HOME`, `TORCH_HOME`, `TMPDIR`, `XDG_CACHE_HOME`,
+  `CUDA_CACHE_PATH`
+- the deployed shim `site-packages`
+- `JITTOR_TORCH_EXTENSIONS_DIR`
+
+Set `JITTOR_TORCH_RUNTIME_ROOT` to choose another project-local runtime
+directory. If Jittor's bundled CUDA is installed at
+`~/.cache/jittor/jtcuda/cuda12.2_cudnn8_linux`, the bootstrap exports `JTCUDA`,
+`CUDA_HOME`, `nvcc_path`, `PATH` and `LD_LIBRARY_PATH` for it automatically.
+
+The older helper script is still available when you want a no-edit wrapper. It
+deploys `import torch` into a per-project site-packages, builds the original
+PyTorch-style CUDA extensions, and keeps runtime artifacts under the
+gaussian-splatting checkout:
 
 ```bash
 CUDA_VISIBLE_DEVICES=1 \
@@ -82,6 +118,16 @@ Set `JITTOR_GS_RUNTIME_ROOT` to choose a different project-local runtime
 directory. If Jittor's bundled CUDA is installed at
 `~/.cache/jittor/jtcuda/cuda12.2_cudnn8_linux`, the script exports `JTCUDA`,
 `CUDA_HOME`, `nvcc_path`, `PATH` and `LD_LIBRARY_PATH` for it automatically.
+
+The generic bootstrap was also validated with a direct `python train.py` run on
+the same clean checkout after only adding the two lines above. It scanned exactly
+the three native extension roots (`simple-knn`, `diff-gaussian-rasterization`,
+`fused-ssim`), skipped their already up-to-date in-place `.so` outputs, and
+completed `train.py --iterations 5 --eval`, producing `chkpnt5.pth`,
+`point_cloud/iteration_5/point_cloud.ply`, `cameras.json`, `input.ply` and
+`exposure.json`. A cold runtime took `real 324.02s` because Jittor kernel cache
+had to be compiled; a warm `python train.py --iterations 1` check completed in
+`real 11.40s`.
 
 Validated on a clean gaussian-splatting worktree with the original submodule
 `setup.py` files and original `import torch` sources:

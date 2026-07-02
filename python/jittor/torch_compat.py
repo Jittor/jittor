@@ -5154,20 +5154,17 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
     # HF/training code as a base class) needs a `utils` namespace on the jittor module --
     # the `from torch.utils.data import X` form already resolves via sys.modules. Lazily
     # resolve torch.utils.<sub> (data/checkpoint/rnn/...) on access.
-    if not hasattr(g, "utils"):
-        import importlib as _il
+    import sys as _sys_utils
+    if not hasattr(g, "utils") or not isinstance(getattr(g, "utils"), _types2.ModuleType):
         class _UtilsNS(_types2.ModuleType):
             def __getattr__(self, name):
-                import sys as _sys
                 full = "torch.utils." + name
-                if full in _sys.modules:
-                    return _sys.modules[full]
-                try:
-                    return _il.import_module(full)
-                except Exception:
-                    raise AttributeError(name)
+                if full in _sys_utils.modules:
+                    return _sys_utils.modules[full]
+                raise AttributeError(name)
         g.utils = _UtilsNS("torch.utils")
-    import sys as _sys_utils
+    g.utils.__path__ = []
+    g.utils.__package__ = "torch"
     _sys_utils.modules["torch.utils"] = g.utils
     if "torch.utils.checkpoint" not in _sys_utils.modules:
         _ckpt = _types2.ModuleType("torch.utils.checkpoint")
