@@ -6,7 +6,7 @@ import unittest
 
 class TestTorchBootstrap(unittest.TestCase):
     def test_scan_torch_extension_setup(self):
-        from jittor_torch import scan_extension_dirs
+        from jittor.torch_shim import scan_extension_dirs
 
         with tempfile.TemporaryDirectory(dir=os.getcwd()) as d:
             root = os.path.join(d, "pkg")

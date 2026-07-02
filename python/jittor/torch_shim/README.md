@@ -42,8 +42,8 @@ from a normal Python entrypoint. Add this generic bootstrap before the first
 `import torch` in the entry script:
 
 ```python
-from jittor_torch import enable as _enable_jittor_torch
-_enable_jittor_torch(project_root=__file__)
+from jittor.torch_shim import enable as _enable_torch_shim
+_enable_torch_shim(project_root=__file__)
 ```
 
 Then run the stock command:
@@ -53,6 +53,11 @@ CUDA_VISIBLE_DEVICES=1 \
   JITTOR_TORCH_RUNTIME_ROOT=/path/to/gaussian-splatting/.jittor_torch_runtime \
   python train.py -s /path/to/data -m /path/to/output --disable_viewer
 ```
+
+When using the `jittor.torch_shim` entrypoint, set
+`JITTOR_TORCH_RUNTIME_ROOT` before starting Python so Jittor's core cache,
+temporary files and CUDA discovery are configured before `jittor` finishes
+importing.
 
 `enable()` is not gaussian-splatting-specific. It scans the local project tree
 for native extension build roots (`setup.py`, `pyproject.toml`, `CMakeLists.txt`,
@@ -128,6 +133,13 @@ completed `train.py --iterations 5 --eval`, producing `chkpnt5.pth`,
 `exposure.json`. A cold runtime took `real 324.02s` because Jittor kernel cache
 had to be compiled; a warm `python train.py --iterations 1` check completed in
 `real 11.40s`.
+
+After moving the public bootstrap API under `jittor.torch_shim`, the same clean
+checkout was revalidated with direct `python train.py --iterations 1` using
+`JITTOR_TORCH_RUNTIME_ROOT` set before process startup. The run completed and
+produced `chkpnt1.pth`, `point_cloud/iteration_1/point_cloud.ply`,
+`cameras.json`, `input.ply` and `exposure.json`; the cold runtime for this fresh
+cache was `real 97.91s`.
 
 Validated on a clean gaussian-splatting worktree with the original submodule
 `setup.py` files and original `import torch` sources:

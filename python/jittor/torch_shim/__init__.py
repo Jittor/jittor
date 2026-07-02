@@ -1,6 +1,6 @@
 """Torch-compatibility helpers for running PyTorch-oriented code on Jittor."""
 
-from jittor_torch.bootstrap import (
+from .bootstrap import (
     NativeExtension,
     build_extension_dirs,
     enable,

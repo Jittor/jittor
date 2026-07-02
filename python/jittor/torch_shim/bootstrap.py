@@ -47,7 +47,7 @@ class NativeExtension:
 
 def _log(verbose: bool, message: str) -> None:
     if verbose:
-        print("[jittor-torch] " + message)
+        print("[jittor.torch_shim] " + message)
 
 
 def _is_truthy(value: Optional[str]) -> bool:
@@ -71,8 +71,8 @@ def _project_dir(path: Optional[Union[str, os.PathLike]]) -> pathlib.Path:
 
 
 def _jittor_python_root() -> pathlib.Path:
-    # .../python/jittor_torch/bootstrap.py -> .../python
-    return pathlib.Path(__file__).resolve().parents[1]
+    # .../python/jittor/torch_shim/bootstrap.py -> .../python
+    return pathlib.Path(__file__).resolve().parents[2]
 
 
 def _prepend_sys_path(path: Union[str, os.PathLike]) -> None:

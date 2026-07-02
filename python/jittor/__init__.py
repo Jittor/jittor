@@ -10,6 +10,85 @@
 # ***************************************************************
 
 __version__ = '1.3.11.0'
+
+import os as _os
+
+def _jt_torch_truthy(_value):
+    return str(_value or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _jt_torch_prepend_env_path(_name, _path):
+    if not _path:
+        return
+    _old = [_p for _p in _os.environ.get(_name, "").split(_os.pathsep) if _p]
+    _out = [_path]
+    for _p in _old:
+        if _p not in _out:
+            _out.append(_p)
+    _os.environ[_name] = _os.pathsep.join(_out)
+
+
+def _jt_torch_find_jtcuda(_real_home):
+    _candidates = []
+    if _os.environ.get("JTCUDA"):
+        _candidates.append(_os.environ["JTCUDA"])
+    for _home in (_real_home, _os.environ.get("HOME")):
+        if not _home:
+            continue
+        _root = _os.path.join(_home, ".cache", "jittor", "jtcuda")
+        try:
+            _names = _os.listdir(_root)
+        except OSError:
+            continue
+        for _name in _names:
+            if _name.startswith("cuda") and _name.endswith("_linux"):
+                _candidates.append(_os.path.join(_root, _name))
+    _valid = []
+    for _path in dict.fromkeys(_candidates):
+        if _os.path.isfile(_os.path.join(_path, "bin", "nvcc")):
+            _valid.append(_path)
+    if not _valid:
+        return None
+    _valid.sort(key=lambda _path: (
+        not _os.path.isfile(_os.path.join(_path, "include", "cudnn.h")),
+        "cuda12.2" not in _os.path.basename(_path),
+        _path,
+    ))
+    return _valid[0]
+
+
+_jt_torch_real_home = _os.environ.get("REAL_HOME") or _os.environ.get("HOME")
+_jt_torch_runtime_root = _os.environ.get("JITTOR_TORCH_RUNTIME_ROOT")
+if _jt_torch_runtime_root:
+    _jt_torch_runtime_root = _os.path.abspath(_os.path.expanduser(_jt_torch_runtime_root))
+    _os.makedirs(_jt_torch_runtime_root, exist_ok=True)
+    for _name, _subdir in (
+        ("JITTOR_HOME", "jittor_cache"),
+        ("TORCH_HOME", "torch_home"),
+        ("XDG_CACHE_HOME", "xdg_cache"),
+        ("CUDA_CACHE_PATH", "cuda_cache"),
+    ):
+        _os.environ.setdefault(_name, _os.path.join(_jt_torch_runtime_root, _subdir))
+        _os.makedirs(_os.environ[_name], exist_ok=True)
+    if _os.environ.get("JITTOR_TORCH_KEEP_HOME", "0").lower() not in ("1", "true", "yes", "on"):
+        _os.environ.setdefault("REAL_HOME", _jt_torch_real_home or "")
+        _os.environ["HOME"] = _os.environ.get(
+            "JITTOR_TORCH_HOME",
+            _os.path.join(_jt_torch_runtime_root, "home"),
+        )
+        _os.makedirs(_os.environ["HOME"], exist_ok=True)
+    if _os.environ.get("JITTOR_TORCH_KEEP_TMPDIR", "0").lower() not in ("1", "true", "yes", "on"):
+        _os.environ["TMPDIR"] = _os.path.join(_jt_torch_runtime_root, "tmp")
+        _os.makedirs(_os.environ["TMPDIR"], exist_ok=True)
+    if not _jt_torch_truthy(_os.environ.get("JITTOR_TORCH_KEEP_CUDA")):
+        _jt_torch_jtcuda = _jt_torch_find_jtcuda(_jt_torch_real_home)
+        if _jt_torch_jtcuda:
+            _os.environ.setdefault("JTCUDA", _jt_torch_jtcuda)
+            _os.environ.setdefault("nvcc_path", _os.path.join(_jt_torch_jtcuda, "bin", "nvcc"))
+            _os.environ.setdefault("CUDA_HOME", _jt_torch_jtcuda)
+            _jt_torch_prepend_env_path("PATH", _os.path.join(_jt_torch_jtcuda, "bin"))
+            _jt_torch_prepend_env_path("LD_LIBRARY_PATH", _os.path.join(_jt_torch_jtcuda, "lib64"))
+
 from jittor_utils import lock
 
 # On Ascend (NPU), bringing MPI up via mpi4py BEFORE the CANN libraries are
@@ -19,7 +98,6 @@ from jittor_utils import lock
 # only point early enough. Guarded to multi-process launches (mpirun sets
 # OMPI_COMM_WORLD_SIZE); harmless/no-op otherwise. jittor's mpi module detects
 # the already-initialized MPI and skips its own MPI_Init.
-import os as _os
 if _os.environ.get("OMPI_COMM_WORLD_SIZE") and _os.environ.get("use_mpi", "1") != "0":
     try:
         import mpi4py
@@ -2537,6 +2615,4 @@ try:
 except Exception as _e:
     from .compiler import LOG as _LOG
     _LOG.w(f"torch_compat not fully installed: {_e}")
-
-
 
