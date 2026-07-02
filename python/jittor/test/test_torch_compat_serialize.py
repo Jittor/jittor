@@ -326,6 +326,30 @@ class TestFromNumpy(Base):
             self.ac(out, a, atol=0, rtol=0, msg=f"numpy 4d values {dev}")
         both_devices(body)
 
+    def test_frombuffer_common_dtypes_and_offset(self):
+        raw = np.arange(10, dtype=np.int32).tobytes()
+
+        def body(dev):
+            v = torch.frombuffer(raw, dtype=torch.int32, count=4, offset=8)
+            self.assertEqual(v.numpy().dtype.name, "int32",
+                             f"frombuffer dtype {dev}")
+            self.ae(v.numpy(), np.arange(2, 6, dtype=np.int32),
+                    msg=f"frombuffer values {dev}")
+        both_devices(body)
+
+    def test_frombuffer_requires_grad_registers_leaf(self):
+        raw = np.asarray([1.0, 2.0, 3.0], dtype=np.float32).tobytes()
+
+        def body(dev):
+            v = torch.frombuffer(raw, dtype=torch.float32, requires_grad=True)
+            self.assertFalse(v.is_stop_grad(), f"requires_grad leaf {dev}")
+            loss = (v * v).sum()
+            loss.backward()
+            self.assertIsNotNone(v.grad, f"frombuffer grad populated {dev}")
+            self.ac(v.grad.numpy(), np.asarray([2.0, 4.0, 6.0], dtype=np.float32),
+                    msg=f"frombuffer grad {dev}")
+        both_devices(body)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

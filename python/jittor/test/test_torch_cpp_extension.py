@@ -133,11 +133,14 @@ torch::Tensor zeros_like_with_options(torch::Tensor x) {
 
     def test_import_jittor_as_torch_exposes_cpp_extension(self):
         import jittor as torch
+        from torch.utils.checkpoint import checkpoint
 
         self.assertTrue(hasattr(torch, "utils"))
         self.assertTrue(hasattr(torch.utils, "cpp_extension"))
         self.assertTrue(hasattr(torch.utils.cpp_extension, "CUDAExtension"))
         self.assertTrue(hasattr(torch.utils.cpp_extension, "load_inline"))
+        y = checkpoint(lambda x: x * 2, torch.tensor([3.0]))
+        self.assertEqual(float(y.item()), 6.0)
 
     def test_3dgs_style_tensor_ops(self):
         import torch

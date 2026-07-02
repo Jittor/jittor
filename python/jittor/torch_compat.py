@@ -722,6 +722,32 @@ def install(torch):
         return _make_cpu_resident(v) if _device_is_cpu(device) else v
     g.from_numpy = from_numpy
 
+    def frombuffer(buffer, *, dtype, count=-1, offset=0, requires_grad=False):
+        import numpy as _np
+        ds = _dtype_to_str(dtype)
+        np_dtype = {
+            "bool": _np.bool_, "uint8": _np.uint8, "int8": _np.int8,
+            "uint16": _np.uint16, "int16": _np.int16,
+            "uint32": _np.uint32, "int32": _np.int32,
+            "uint64": _np.uint64, "int64": _np.int64,
+            "float16": _np.float16, "float32": _np.float32,
+            "float64": _np.float64,
+        }.get(ds)
+        if ds == "bfloat16":
+            raw = _np.frombuffer(buffer, dtype=_np.uint16, count=count, offset=offset)
+            arr = (raw.astype(_np.uint32) << 16).view(_np.float32)
+            v = from_numpy(_np.ascontiguousarray(arr))
+        else:
+            if np_dtype is None:
+                raise TypeError(f"torch.frombuffer unsupported dtype: {dtype}")
+            arr = _np.frombuffer(buffer, dtype=np_dtype, count=count, offset=offset)
+            v = from_numpy(_np.ascontiguousarray(arr))
+        if requires_grad:
+            v.requires_grad_(True)
+            _torch_register_leaf(v)
+        return v
+    g.frombuffer = frombuffer
+
     Size = _TorchSize
     g.Size = Size
 
@@ -5019,10 +5045,7 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
         if not hasattr(f, "read"):
             path = _os_pickle.fspath(f)
             native_load = getattr(g, "_vj_native_load", None)
-            if native_load is not None and (
-                path.startswith(("jittorhub://", "http://", "https://"))
-                or path.lower().endswith(".pkl")
-            ):
+            if native_load is not None and path.startswith(("jittorhub://", "http://", "https://")):
                 return native_load(path)
         try:
             if _is_zip(f):
@@ -5032,11 +5055,17 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
         if path is not None and path.lower().endswith((".pth", ".pt", ".bin")) and _is_legacy_torch_pickle(path):
             from jittor_utils.load_pytorch import load_pytorch as _load_pytorch
             return _load_pytorch(path)
-        if hasattr(f, "read"):
-            obj = _pickle.load(f)
-        else:
-            with open(f, "rb") as fh:
-                obj = _pickle.load(fh)
+        try:
+            if hasattr(f, "read"):
+                obj = _pickle.load(f)
+            else:
+                with open(f, "rb") as fh:
+                    obj = _pickle.load(fh)
+        except Exception:
+            native_load = getattr(g, "_vj_native_load", None)
+            if native_load is not None and path is not None and path.lower().endswith(".pkl"):
+                return native_load(path)
+            raise
         return _from_portable(obj)
     g.save = save
     g.load = load
@@ -5138,6 +5167,15 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
                 except Exception:
                     raise AttributeError(name)
         g.utils = _UtilsNS("torch.utils")
+    import sys as _sys_utils
+    _sys_utils.modules["torch.utils"] = g.utils
+    if "torch.utils.checkpoint" not in _sys_utils.modules:
+        _ckpt = _types2.ModuleType("torch.utils.checkpoint")
+        def _checkpoint(fn, *args, use_reentrant=None, **kwargs):
+            return fn(*args, **kwargs)
+        _ckpt.checkpoint = _checkpoint
+        _sys_utils.modules["torch.utils.checkpoint"] = _ckpt
+        g.utils.checkpoint = _ckpt
     try:
         from jittor.torch_shim.cpp_extension.torch_utils import install_cpp_extension
         install_cpp_extension(g.utils)

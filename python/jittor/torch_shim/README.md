@@ -103,6 +103,26 @@ LPIPS values, exercising torchvision transforms/save_image, `torch.hub`
 downloads, legacy PyTorch `.pth` loading, VGG16 feature extraction, and the
 three gaussian-splatting CUDA extensions.
 
+Additional CUDA validation on `/home/zy/projects/gs-parity-work`:
+
+- A same-input PyTorch/Jittor parity script compared 3DGS math helpers,
+  `simple_knn._C.distCUDA2`, `fused_ssim` forward/backward, and
+  `diff_gaussian_rasterization` wrapper/direct forward/backward. The report
+  `/home/zy/projects/gs-parity-work/parity_report.json` passed; rasterizer image,
+  depth, radii and gradients matched within the recorded tolerances.
+- The default one-click command, without `JITTOR_GS_SKIP_EXT_BUILD`, invoked the
+  stock `setup.py build_ext --inplace` in all three submodules and completed
+  `train.py --iterations 5 --eval`, producing `chkpnt5.pth`, `point_cloud.ply`,
+  `cameras.json`, `input.ply` and `exposure.json`.
+- With warm Jittor caches, the same 5-iteration tiny-scene training run took
+  `real 3.80s` under the Jittor shim versus `real 3.72s` under PyTorch 2.1.2
+  on the same RTX 4090 and dataset. A cold first run includes one-time Jittor
+  core/kernel compilation and extension build time.
+- `render.py` and `metrics.py` on the Jittor output generated train/test PNGs,
+  `results.json` and `per_view.json`. The `ours_5` metrics were:
+  SSIM `0.009542092680931091`, PSNR `6.742209434509277`, LPIPS
+  `0.6262948513031006`.
+
 ## NPU dispatch (performance — read this)
 
 jittor only runs ops on the Ascend NPU when `jt.flags.use_cuda == 1`; otherwise

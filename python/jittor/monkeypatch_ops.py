@@ -253,6 +253,9 @@ def _patch_ppo_reward_value_seq_cls():
     reward and value models when the checkpoint didn't already resolve to seq_cls.
     This is ms-swift-pipeline-specific (not a torch-compat issue).
     """
+    import sys
+    if "swift" not in sys.modules:
+        return
     try:
         from swift.pipelines.train.rlhf import SwiftRLHF
     except Exception:
@@ -308,6 +311,9 @@ def _patch_gkd_native_rollout_engine():
 
     ms-swift-specific.
     """
+    import sys
+    if "swift" not in sys.modules:
+        return
     try:
         from swift.rlhf_trainers.gkd_trainer import GKDTrainer
         from swift.infer_engine import TransformersEngine
@@ -453,6 +459,9 @@ def _patch_peft_disable_adapter():
     the disable flag (no requires_grad toggle) -- ref output stays correct AND the
     policy graph stays connected.
     """
+    import sys
+    if "peft" not in sys.modules:
+        return
     try:
         from peft.tuners.tuners_utils import BaseTunerLayer
     except Exception:
