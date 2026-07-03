@@ -722,7 +722,7 @@ def enable(
     real_home = os.environ.get("REAL_HOME") or os.environ.get("HOME")
     runtime = pathlib.Path(
         os.environ.get("JITTOR_TORCH_RUNTIME_ROOT")
-        or os.fspath(runtime_root or (project_dir / ".jittor_torch_runtime"))
+        or os.fspath(runtime_root or (project_dir / ".cache" / "jittor_torch"))
     ).expanduser().resolve()
     _ensure_dir(runtime)
 
@@ -734,9 +734,18 @@ def enable(
     _set_env_dir("JITTOR_HOME", runtime / "jittor_cache")
     _set_env_dir("TORCH_HOME", runtime / "torch_home")
     _set_env_dir("JITTOR_TORCH_EXTENSIONS_DIR", runtime / "torch_extensions")
+    _set_env_dir("TORCH_EXTENSIONS_DIR", runtime / "torch_extensions")
     _set_env_dir("TMPDIR", runtime / "tmp", override=not _is_truthy(os.environ.get("JITTOR_TORCH_KEEP_TMPDIR")))
     _set_env_dir("XDG_CACHE_HOME", runtime / "xdg_cache")
     _set_env_dir("CUDA_CACHE_PATH", runtime / "cuda_cache")
+    _set_env_dir("TRITON_HOME", runtime / "triton_home")
+    _set_env_dir("TRITON_CACHE_DIR", runtime / "triton_home" / "cache")
+    _set_env_dir("TRITON_OVERRIDE_DIR", runtime / "triton_home" / "override")
+    _set_env_dir("TRITON_DUMP_DIR", runtime / "triton_home" / "dump")
+    _set_env_dir("PIP_CACHE_DIR", runtime / "pip_cache")
+    flex_cache = runtime / "flex_gemm" / "autotune_cache.json"
+    os.environ.setdefault("FLEX_GEMM_AUTOTUNE_CACHE_PATH", os.fspath(flex_cache))
+    _ensure_dir(pathlib.Path(os.environ["FLEX_GEMM_AUTOTUNE_CACHE_PATH"]).parent)
 
     if configure_cuda:
         _configure_cuda(real_home, verbose=verbose)

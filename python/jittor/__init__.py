@@ -39,6 +39,12 @@ def _jt_torch_add_nvcc_flags(_flags):
 
 
 def _jt_torch_entry_runtime_root():
+    if _os.environ.get("JITTOR_TORCH_PROJECT_ROOT"):
+        return _os.path.join(
+            _os.path.abspath(_os.path.expanduser(_os.environ["JITTOR_TORCH_PROJECT_ROOT"])),
+            ".cache",
+            "jittor_torch",
+        )
     _entry = _sys.argv[0] if _sys.argv else ""
     if not _entry or _entry in ("-c", "-m"):
         return None
@@ -49,10 +55,10 @@ def _jt_torch_entry_runtime_root():
         with open(_entry, "r", encoding="utf-8", errors="ignore") as _f:
             _head = _f.read(65536)
     except OSError:
-        return None
-    if "jittor.torch_shim" not in _head:
-        return None
-    return _os.path.join(_os.path.dirname(_entry), ".jittor_torch_runtime")
+        _head = ""
+    if "jittor.torch_shim" in _head or "torch_shim" in _head or "import jittor as torch" in _head:
+        return _os.path.join(_os.path.dirname(_entry), ".cache", "jittor_torch")
+    return None
 
 
 def _jt_torch_find_jtcuda(_real_home):
@@ -89,6 +95,15 @@ _jt_torch_runtime_root = _os.environ.get("JITTOR_TORCH_RUNTIME_ROOT") or _jt_tor
 if _jt_torch_runtime_root:
     _jt_torch_runtime_root = _os.path.abspath(_os.path.expanduser(_jt_torch_runtime_root))
     _os.environ.setdefault("JITTOR_TORCH_RUNTIME_ROOT", _jt_torch_runtime_root)
+    for _name, _value in (
+        ("FIX_TORCH_ERROR", "0"),
+        ("DISABLE_MULTIPROCESSING", "1"),
+        ("use_cutt", "0"),
+        ("use_cutlass", "0"),
+        ("use_nccl", "0"),
+        ("use_mkl", "0"),
+    ):
+        _os.environ.setdefault(_name, _value)
     _os.makedirs(_jt_torch_runtime_root, exist_ok=True)
     for _name, _subdir in (
         ("JITTOR_HOME", "jittor_cache"),
@@ -97,9 +112,17 @@ if _jt_torch_runtime_root:
         ("TORCH_EXTENSIONS_DIR", "torch_extensions"),
         ("XDG_CACHE_HOME", "xdg_cache"),
         ("CUDA_CACHE_PATH", "cuda_cache"),
+        ("TRITON_HOME", "triton_home"),
+        ("TRITON_CACHE_DIR", "triton_home/cache"),
+        ("TRITON_OVERRIDE_DIR", "triton_home/override"),
+        ("TRITON_DUMP_DIR", "triton_home/dump"),
+        ("PIP_CACHE_DIR", "pip_cache"),
     ):
         _os.environ.setdefault(_name, _os.path.join(_jt_torch_runtime_root, _subdir))
         _os.makedirs(_os.environ[_name], exist_ok=True)
+    _flex_gemm_cache = _os.path.join(_jt_torch_runtime_root, "flex_gemm", "autotune_cache.json")
+    _os.environ.setdefault("FLEX_GEMM_AUTOTUNE_CACHE_PATH", _flex_gemm_cache)
+    _os.makedirs(_os.path.dirname(_os.environ["FLEX_GEMM_AUTOTUNE_CACHE_PATH"]), exist_ok=True)
     if _os.environ.get("JITTOR_TORCH_KEEP_HOME", "0").lower() not in ("1", "true", "yes", "on"):
         _os.environ.setdefault("REAL_HOME", _jt_torch_real_home or "")
         _os.environ["HOME"] = _os.environ.get(
@@ -746,7 +769,94 @@ def zeros_like(x, dtype=None) -> Var:
     if dtype is None: dtype = x.dtype
     return zeros(x.shape, dtype)
 
-flags = core.Flags()
+_core_flags = core.Flags()
+
+
+def _install_torch_shim_runtime(enable=True):
+    if not enable:
+        return None
+    import os as _os_runtime
+    import sys as _sys_runtime
+    def _apply_external_runtime_patches():
+        try:
+            import jittor.triton_shim  # noqa: F401
+        except Exception:
+            pass
+        try:
+            import jittor.monkeypatch_ops as _mp
+            _mp.apply()
+            _mp.force_flexgemm_bridge_algorithm("IMPLICIT_GEMM")
+        except Exception:
+            pass
+    if getattr(_install_torch_shim_runtime, "_installed", False):
+        _apply_external_runtime_patches()
+        _sys_runtime.modules["torch"] = _sys_runtime.modules[__name__]
+        return getattr(_install_torch_shim_runtime, "_result", None)
+
+    _project_root = _os_runtime.environ.get("JITTOR_TORCH_PROJECT_ROOT")
+    if not _project_root:
+        _entry = _sys_runtime.argv[0] if _sys_runtime.argv else ""
+        if _entry and _entry not in ("-c", "-m") and _os_runtime.path.isfile(_entry):
+            _project_root = _os_runtime.path.dirname(_os_runtime.path.abspath(_entry))
+        else:
+            _project_root = _os_runtime.getcwd()
+    _runtime_root = _os_runtime.environ.get(
+        "JITTOR_TORCH_RUNTIME_ROOT",
+        _os_runtime.path.join(_project_root, ".cache", "jittor_torch"),
+    )
+    _os_runtime.environ.setdefault("JITTOR_TORCH_PROJECT_ROOT", _project_root)
+    _os_runtime.environ.setdefault("JITTOR_TORCH_RUNTIME_ROOT", _runtime_root)
+    _os_runtime.environ.setdefault("FIX_TORCH_ERROR", "0")
+
+    result = None
+    try:
+        from jittor.torch_shim import bootstrap as _jt_torch_bootstrap
+        result = _jt_torch_bootstrap.enable(
+            project_root=_project_root,
+            runtime_root=_runtime_root,
+            auto_scan_extensions=True,
+            build_extensions=True,
+            local_home=True,
+            configure_cuda=False,
+            verbose=False,
+        )
+    except Exception as _e:
+        try:
+            from jittor.compiler import LOG as _LOG
+            _LOG.w(f"torch_shim bootstrap skipped: {_e}")
+        except Exception:
+            pass
+
+    _apply_external_runtime_patches()
+    _sys_runtime.modules["torch"] = _sys_runtime.modules[__name__]
+    _install_torch_shim_runtime._installed = True
+    _install_torch_shim_runtime._result = result
+    return result
+
+
+class _TorchShimFlagsProxy:
+    def __init__(self, inner):
+        object.__setattr__(self, "_inner", inner)
+        object.__setattr__(self, "_torch_shim", 0)
+
+    def __getattr__(self, name):
+        if name == "torch_shim":
+            return object.__getattribute__(self, "_torch_shim")
+        return getattr(object.__getattribute__(self, "_inner"), name)
+
+    def __setattr__(self, name, value):
+        if name == "torch_shim":
+            object.__setattr__(self, "_torch_shim", ori_int(ori_bool(value)))
+            if value:
+                _install_torch_shim_runtime(True)
+            return
+        setattr(object.__getattribute__(self, "_inner"), name, value)
+
+    def __repr__(self):
+        return repr(object.__getattribute__(self, "_inner"))
+
+
+flags = _TorchShimFlagsProxy(_core_flags)
 
 def var(x, dim=None, dims=None, unbiased=False, keepdims=False):
     """ return the sample variance. If unbiased is True, Bessel's correction will be used.
@@ -2647,4 +2757,3 @@ try:
 except Exception as _e:
     from .compiler import LOG as _LOG
     _LOG.w(f"torch_compat not fully installed: {_e}")
-
