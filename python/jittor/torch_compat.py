@@ -578,6 +578,9 @@ def _torch_make_parameter(data=None, requires_grad=True):
 
 def install(torch):
     g = torch
+    import sys as _sys_install
+    if _sys_install.modules.get("torch") is None:
+        _sys_install.modules["torch"] = g
     g._torch_make_parameter = _torch_make_parameter
     g._torch_prune_leaf_registry = _torch_prune_leaf_registry
     if not hasattr(g, "_vj_native_load"):
@@ -2390,6 +2393,8 @@ def _install_reductions(g):
         idx = af(x, dim=dim, keepdim=keepdim)
         if keepdim:
             val = _jt.gather(x, dim, idx)
+        elif x.ndim == 1:
+            val = x[idx]
         else:
             val = _jt.gather(x, dim, idx.unsqueeze(dim)).squeeze(dim)
         return _MinMax(val, idx.int64())
