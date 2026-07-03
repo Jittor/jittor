@@ -140,6 +140,8 @@ class _ParameterMeta(type):
         return v
 class Parameter(metaclass=_ParameterMeta):
     pass
+class UninitializedTensorMixin:
+    pass
 class UninitializedParameter:
     pass
 class UninitializedBuffer:
@@ -147,6 +149,7 @@ class UninitializedBuffer:
 nn.Parameter = Parameter
 _param_mod = types.ModuleType("torch.nn.parameter")
 _param_mod.Parameter = Parameter
+_param_mod.UninitializedTensorMixin = UninitializedTensorMixin
 _param_mod.UninitializedParameter = UninitializedParameter
 _param_mod.UninitializedBuffer = UninitializedBuffer
 sys.modules["torch.nn.parameter"] = _param_mod
@@ -232,6 +235,21 @@ def _vector_to_parameters(vec, parameters):
         p.assign(vec[off:off+n].reshape(p.shape))
         off += n
 _nn_utils.vector_to_parameters = _vector_to_parameters
+_named_accessor = types.ModuleType("torch.nn.utils._named_member_accessor")
+def _resolve_named_parent(module, name):
+    parts = str(name).split(".")
+    parent = module
+    for part in parts[:-1]:
+        parent = getattr(parent, part)
+    return parent, parts[-1]
+def _swap_tensor(module, name, tensor):
+    parent, leaf = _resolve_named_parent(module, name)
+    old = getattr(parent, leaf, None)
+    setattr(parent, leaf, tensor)
+    return old
+_named_accessor.swap_tensor = _swap_tensor
+_nn_utils._named_member_accessor = _named_accessor
+sys.modules["torch.nn.utils._named_member_accessor"] = _named_accessor
 sys.modules["torch.nn.utils"] = _nn_utils
 nn.utils = _nn_utils
 # torch.nn.utils.parametrize (peft / some models probe it)
@@ -611,6 +629,12 @@ def _take_tensors(tensors, size_limit):
 _tutils._flatten_dense_tensors = _flatten_dense_tensors
 _tutils._unflatten_dense_tensors = _unflatten_dense_tensors
 _tutils._take_tensors = _take_tensors
+_tutils._get_available_device_type = lambda: "cuda" if cuda.is_available() else None
+_tutils._get_device_module = lambda device_type: globals().get(str(device_type), None)
+_tutils._rebuild_tensor = lambda data, *a, **k: data
+_tutils._rebuild_tensor_v2 = lambda data, *a, **k: data
+_tutils._rebuild_parameter = lambda data, requires_grad=True, *a, **k: _jt._torch_make_parameter(data, requires_grad)
+_tutils._rebuild_parameter_with_state = lambda data, requires_grad=True, backward_hooks=None, state=None: _jt._torch_make_parameter(data, requires_grad)
 sys.modules["torch._utils"] = _tutils
 globals()["_utils"] = _tutils
 
@@ -917,10 +941,18 @@ try:
     # _utils.collate submodule (accelerate/transformers probe it)
     _du = types.ModuleType("torch.utils.data._utils")
     _duc = types.ModuleType("torch.utils.data._utils.collate")
+    _duw = types.ModuleType("torch.utils.data._utils.worker")
+    def _generate_state(base_seed, worker_id):
+        import random as _random_worker
+        rng = _random_worker.Random(int(base_seed) + int(worker_id))
+        return [rng.randrange(0, 2**32) for _ in range(4)]
     _duc.default_collate = _default_collate
     _du.collate = _duc
+    _duw._generate_state = _generate_state
+    _du.worker = _duw
     sys.modules["torch.utils.data._utils"] = _du
     sys.modules["torch.utils.data._utils.collate"] = _duc
+    sys.modules["torch.utils.data._utils.worker"] = _duw
     _data._utils = _du
     # DataLoaderDispatcher placeholder used by accelerate
     sys.modules["torch.utils.data"] = _data
@@ -961,6 +993,27 @@ _utils.checkpoint = _ckpt
 
 # _pytree (used widely) -> minimal impl
 _pytree = types.ModuleType("torch.utils._pytree")
+class MappingKey:
+    def __init__(self, key): self.key = key
+    def __hash__(self): return hash(self.key)
+    def __eq__(self, other): return isinstance(other, MappingKey) and self.key == other.key
+    def __repr__(self): return f"[{self.key!r}]"
+class SequenceKey:
+    def __init__(self, idx): self.idx = idx
+    def __hash__(self): return hash(self.idx)
+    def __eq__(self, other): return isinstance(other, SequenceKey) and self.idx == other.idx
+    def __repr__(self): return f"[{self.idx}]"
+class GetAttrKey:
+    def __init__(self, name): self.name = name
+    def __hash__(self): return hash(self.name)
+    def __eq__(self, other): return isinstance(other, GetAttrKey) and self.name == other.name
+    def __repr__(self): return "." + str(self.name)
+def _list_flatten(x):
+    return list(x), None
+def _list_unflatten(values, context):
+    return list(values)
+def _list_flatten_with_keys(x):
+    return [(i, v) for i, v in enumerate(x)], None
 def _tree_flatten(x):
     leaves = []
     def rec(o):
@@ -975,10 +1028,31 @@ def _tree_flatten(x):
 _pytree.tree_flatten = _tree_flatten
 _pytree.tree_unflatten = lambda leaves, spec: list(leaves)
 _pytree.tree_map = lambda f, x: f(x)
+_pytree.tree_leaves = lambda x: _tree_flatten(x)[0]
+_pytree.Context = object
+_pytree.MappingKey = MappingKey
+_pytree.SequenceKey = SequenceKey
+_pytree.GetAttrKey = GetAttrKey
+_pytree.KeyEntry = (MappingKey, SequenceKey, GetAttrKey)
+_pytree.FlattenFunc = object
+_pytree.UnflattenFunc = object
+_pytree._list_flatten = _list_flatten
+_pytree._list_unflatten = _list_unflatten
+_pytree._list_flatten_with_keys = _list_flatten_with_keys
 _pytree.register_pytree_node = lambda *a, **k: None
 _pytree._register_pytree_node = lambda *a, **k: None
 sys.modules["torch.utils._pytree"] = _pytree
 _utils._pytree = _pytree
+
+_contextlib_mod = types.ModuleType("torch.utils._contextlib")
+class _DecoratorContextManager(contextlib.ContextDecorator):
+    def clone(self):
+        return type(self)()
+    def __call__(self, orig_func):
+        return super().__call__(orig_func)
+_contextlib_mod._DecoratorContextManager = _DecoratorContextManager
+sys.modules["torch.utils._contextlib"] = _contextlib_mod
+_utils._contextlib = _contextlib_mod
 
 # ---- distributions ----
 try:
@@ -996,9 +1070,13 @@ try:
             setattr(_con, _cn, _Constraint())
         _con.Constraint = _Constraint
         _distrib.constraints = _con
-        sys.modules["torch.distributions.constraints"] = _con
+    sys.modules["torch.distributions.constraints"] = _distrib.constraints
     sys.modules["torch.distributions"] = _distrib
     globals()["distributions"] = _distrib
+    _dist_utils = types.ModuleType("torch.distributions.utils")
+    _dist_utils.broadcast_all = getattr(_distrib, "broadcast_all", lambda *values: tuple(values))
+    sys.modules["torch.distributions.utils"] = _dist_utils
+    _distrib.utils = _dist_utils
 
     # torch.distributions is a *package* with importable submodules; jittor's is
     # a flat module. Register the submodules peft/transformers import. We back
@@ -1345,10 +1423,53 @@ class TransformGetItemToIndex:
 _twh.TransformGetItemToIndex = TransformGetItemToIndex
 sys.modules["torch._dynamo._trace_wrapped_higher_order_op"] = _twh
 
+_functorch_pkg = types.ModuleType("torch._functorch")
+_functorch_vmap = types.ModuleType("torch._functorch.vmap")
+_functorch_vmap._maybe_remove_batch_dim = lambda x, *a, **k: x
+_functorch_vmap._add_batch_dim = lambda x, *a, **k: x
+_functorch_vmap._remove_batch_dim = lambda x, *a, **k: x
+def _vmap_tree_flatten(x, *args, **kwargs):
+    return _pytree.tree_flatten(x)
+def _vmap_tree_unflatten(leaves, spec):
+    return _pytree.tree_unflatten(leaves, spec)
+def _vmap_broadcast_to_and_flatten(in_dims, spec):
+    leaves = _pytree.tree_leaves(spec)
+    n = len(leaves) if leaves else 1
+    if isinstance(in_dims, (list, tuple)):
+        flat, _ = _pytree.tree_flatten(in_dims)
+        return flat if len(flat) == n else None
+    return [in_dims] * n
+def _vmap_validate_and_get_batch_size(flat_in_dims, flat_args):
+    for in_dim, arg in zip(flat_in_dims, flat_args):
+        if in_dim is not None and hasattr(arg, "shape"):
+            return int(arg.shape[in_dim])
+    return 0
+_functorch_vmap._broadcast_to_and_flatten = _vmap_broadcast_to_and_flatten
+_functorch_vmap._get_name = lambda func: getattr(func, "__name__", str(func))
+_functorch_vmap._validate_and_get_batch_size = _vmap_validate_and_get_batch_size
+_functorch_vmap.Tensor = Tensor
+_functorch_vmap.tree_flatten = _vmap_tree_flatten
+_functorch_vmap.tree_unflatten = _vmap_tree_unflatten
+_functorch_pkg.vmap = _functorch_vmap
+sys.modules["torch._functorch"] = _functorch_pkg
+sys.modules["torch._functorch.vmap"] = _functorch_vmap
+globals()["_functorch"] = _functorch_pkg
+
 # torch._C internal namespace (some libs probe it) -- minimal stub
 _C = types.ModuleType("torch._C")
 _C._get_tracing_state = lambda: None
+_C._log_api_usage_once = lambda *a, **k: None
+_C._cuda_clearCublasWorkspaces = lambda *a, **k: None
+_C._disabled_torch_function_impl = lambda *a, **k: NotImplemented
+_C._TensorMeta = type(getattr(_jittor, "Var", object))
+_functorch_c = types.ModuleType("torch._C._functorch")
+_functorch_c.get_unwrapped = lambda x: x
+_functorch_c.is_batchedtensor = lambda *a, **k: False
+_functorch_c._add_batch_dim = lambda x, *a, **k: x
+_functorch_c._remove_batch_dim = lambda x, *a, **k: x
+_C._functorch = _functorch_c
 sys.modules["torch._C"] = _C
+sys.modules["torch._C._functorch"] = _functorch_c
 globals()["_C"] = _C
 
 # torch.utils._pytree already set; add torch.utils.hooks stub
