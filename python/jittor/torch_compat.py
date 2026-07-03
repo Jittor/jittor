@@ -494,6 +494,211 @@ class _TorchSize(tuple):
         return n
 
 
+class _NestedTensor:
+    """Small jagged nested-tensor stand-in for torch.nested paths used by verl."""
+
+    is_nested = True
+
+    def __init__(self, tensors, ragged_idx=None):
+        assert len(tensors) > 0, "nested tensor requires at least one tensor"
+        self._tensors = [t if isinstance(t, jt.Var) else jt.array(t) for t in tensors]
+        sample_dim = int(self._tensors[0].ndim)
+        self._ragged_idx = 1 if ragged_idx is None else int(ragged_idx)
+        assert 1 <= self._ragged_idx <= sample_dim, (
+            f"ragged_idx must be in [1, {sample_dim}], got {self._ragged_idx}"
+        )
+        cat_dim = self._ragged_idx - 1
+        self._values = jt.concat(self._tensors, dim=cat_dim)
+        lengths = [int(t.shape[cat_dim]) for t in self._tensors]
+        offs = [0]
+        for length in lengths:
+            offs.append(offs[-1] + length)
+        self._offsets = jt.array(np.asarray(offs, dtype=np.int64)).int64()
+
+    @classmethod
+    def from_tensors(cls, tensors, ragged_idx=None):
+        return cls(list(tensors), ragged_idx=ragged_idx)
+
+    @classmethod
+    def from_jagged(cls, values, offsets, ragged_idx=None):
+        values = values if isinstance(values, jt.Var) else jt.array(values)
+        offsets = offsets if isinstance(offsets, jt.Var) else jt.array(offsets)
+        offs = [int(x) for x in np.asarray(offsets.numpy()).reshape(-1)]
+        if ragged_idx is None:
+            total = offs[-1] if offs else 0
+            matches = [i for i, size in enumerate(values.shape) if int(size) == total]
+            ragged_idx = (matches[0] + 1) if matches else 1
+        else:
+            ragged_idx = int(ragged_idx)
+        cat_dim = ragged_idx - 1
+        tensors = []
+        for start, end in zip(offs[:-1], offs[1:]):
+            sl = [slice(None)] * values.ndim
+            sl[cat_dim] = slice(start, end)
+            tensors.append(values[tuple(sl)])
+        return cls(tensors, ragged_idx=ragged_idx)
+
+    @property
+    def shape(self):
+        sample = list(self._tensors[0].shape)
+        sample[self._ragged_idx - 1] = -1
+        return _TorchSize((len(self._tensors), *sample))
+
+    @property
+    def ndim(self):
+        return len(self.shape)
+
+    @property
+    def dtype(self):
+        return self._values.dtype
+
+    @property
+    def device(self):
+        return self._values.device
+
+    @property
+    def layout(self):
+        return "jagged"
+
+    def dim(self):
+        return self.ndim
+
+    def size(self, dim=None):
+        if dim is None:
+            return self.shape
+        return self.shape[int(dim) % self.ndim]
+
+    def values(self):
+        return self._values
+
+    def offsets(self):
+        return self._offsets
+
+    def is_contiguous(self, *args, **kwargs):
+        return True
+
+    def contiguous(self):
+        return self
+
+    def unbind(self, dim=0):
+        if dim not in (0, None):
+            raise NotImplementedError("nested tensor shim only supports unbind(dim=0)")
+        return tuple(self._tensors)
+
+    def to_padded_tensor(self, padding=0, output_size=None):
+        cat_dim = self._ragged_idx - 1
+        arrays = [np.asarray(t.numpy()) for t in self._tensors]
+        max_len = max(arr.shape[cat_dim] for arr in arrays)
+        sample_shape = list(arrays[0].shape)
+        if output_size is not None:
+            output_size = tuple(int(x) for x in output_size)
+            assert len(output_size) == 1 + len(sample_shape), (
+                f"output_size length {len(output_size)} does not match nested tensor dim {1 + len(sample_shape)}"
+            )
+            assert output_size[0] == len(arrays), (
+                f"output_size batch {output_size[0]} does not match nested tensor batch {len(arrays)}"
+            )
+            sample_shape = list(output_size[1:])
+            assert sample_shape[cat_dim] >= max_len, "output_size is smaller than the longest nested sample"
+        else:
+            sample_shape[cat_dim] = max_len
+        out = np.full((len(arrays), *sample_shape), padding, dtype=arrays[0].dtype)
+        for i, arr in enumerate(arrays):
+            sl = [i] + [slice(None)] * len(sample_shape)
+            sl[1 + cat_dim] = slice(0, arr.shape[cat_dim])
+            out[tuple(sl)] = arr
+        return jt.array(np.ascontiguousarray(out)).cast(str(self.dtype))
+
+    def __len__(self):
+        return len(self._tensors)
+
+    def __iter__(self):
+        return iter(self._tensors)
+
+    def __getitem__(self, item):
+        tail = ()
+        if isinstance(item, tuple):
+            if not item:
+                return self
+            item, tail = item[0], item[1:]
+
+        def _tensor_item(t):
+            return t[tail] if tail else t
+
+        if isinstance(item, jt.Var):
+            arr = np.asarray(item.detach().cpu().numpy())
+            if arr.ndim == 0:
+                return _tensor_item(self._tensors[int(arr)])
+            if arr.dtype == np.bool_:
+                indices = np.flatnonzero(arr).tolist()
+            else:
+                indices = [int(x) for x in arr.reshape(-1)]
+            return _NestedTensor.from_tensors([_tensor_item(self._tensors[i]) for i in indices], self._ragged_idx)
+        if isinstance(item, np.ndarray):
+            if item.ndim == 0:
+                return _tensor_item(self._tensors[int(item)])
+            indices = np.flatnonzero(item).tolist() if item.dtype == np.bool_ else [int(x) for x in item.reshape(-1)]
+            return _NestedTensor.from_tensors([_tensor_item(self._tensors[i]) for i in indices], self._ragged_idx)
+        if isinstance(item, slice):
+            return _NestedTensor.from_tensors([_tensor_item(t) for t in self._tensors[item]], self._ragged_idx)
+        if isinstance(item, (list, tuple)):
+            if item and all(isinstance(x, (bool, np.bool_)) for x in item):
+                indices = [i for i, flag in enumerate(item) if flag]
+            else:
+                indices = [int(x) for x in item]
+            return _NestedTensor.from_tensors([_tensor_item(self._tensors[i]) for i in indices], self._ragged_idx)
+        if isinstance(item, (int, np.integer)):
+            return _tensor_item(self._tensors[int(item)])
+        raise TypeError(f"nested tensor shim does not support indexing with {type(item)}")
+
+    def clone(self):
+        return _NestedTensor.from_tensors([t.clone() for t in self._tensors], self._ragged_idx)
+
+    def detach(self):
+        return _NestedTensor.from_tensors([t.detach() for t in self._tensors], self._ragged_idx)
+
+    def cpu(self):
+        return _NestedTensor.from_tensors([t.cpu() for t in self._tensors], self._ragged_idx)
+
+    def to(self, *args, **kwargs):
+        return _NestedTensor.from_tensors([t.to(*args, **kwargs) for t in self._tensors], self._ragged_idx)
+
+    def unsqueeze(self, dim):
+        sample_dim = self._tensors[0].ndim
+        d = int(dim)
+        if d < 0:
+            d += sample_dim + 1
+        if d == 0:
+            d = 1
+        return _NestedTensor.from_tensors([t.unsqueeze(d - 1 if d > 0 else d) for t in self._tensors], self._ragged_idx)
+
+    def equal(self, other):
+        if not isinstance(other, _NestedTensor) or len(self) != len(other):
+            return False
+        return all(bool((a == b).all().item()) if tuple(a.shape) == tuple(b.shape) else False
+                   for a, b in zip(self._tensors, other._tensors))
+
+    def numel(self):
+        return sum(int(t.numel()) for t in self._tensors)
+
+    def numpy(self):
+        return self.to_padded_tensor(0).numpy()
+
+    def tolist(self):
+        return [t.tolist() for t in self._tensors]
+
+    def __reduce__(self):
+        return (_rebuild_nested_tensor, ([(t.numpy(), str(t.dtype)) for t in self._tensors], self._ragged_idx))
+
+    def __repr__(self):
+        return f"NestedTensor(values={self._values}, offsets={self._offsets})"
+
+
+def _rebuild_nested_tensor(encoded_tensors, ragged_idx):
+    tensors = [_rebuild_var_from_numpy(arr, dtype_str) for arr, dtype_str in encoded_tensors]
+    return _NestedTensor.from_tensors(tensors, ragged_idx=ragged_idx)
+
+
 def _rebuild_var_from_numpy(np_arr, dtype_str=None):
     """Reconstruct a jittor Var from a (numpy array, dtype string) pair.
 
@@ -681,9 +886,9 @@ def install(torch):
     # builds from data. A metaclass gives us both without breaking isinstance(x, Var).
     class _TensorMeta(type):
         def __instancecheck__(cls, inst):
-            return isinstance(inst, Var)
+            return isinstance(inst, (Var, _NestedTensor))
         def __subclasscheck__(cls, sub):
-            return issubclass(sub, Var)
+            return issubclass(sub, (Var, _NestedTensor))
         def __call__(cls, *args, **kw):
             if len(args) == 0:
                 return jt.empty((0,))
@@ -830,7 +1035,7 @@ def install(torch):
     # (used by verl's advantage/reward broadcasting). numpy implements the same rule.
     def broadcast_shapes(*shapes):
         import numpy as _npb
-        norm = [tuple(int(d) for d in s) for s in shapes]
+        norm = [(int(s),) if isinstance(s, (int, np.integer)) else tuple(int(d) for d in s) for s in shapes]
         return Size(_npb.broadcast_shapes(*norm)) if norm else Size(())
     g.broadcast_shapes = broadcast_shapes
 
@@ -869,6 +1074,7 @@ def install(torch):
     g.pi = _math.pi
     g.e = _math.e
     g.strided = "strided"
+    g.jagged = "jagged"
     g.contiguous_format = "contiguous_format"
     g.preserve_format = "preserve_format"
     g.channels_last = "channels_last"
@@ -878,6 +1084,28 @@ def install(torch):
     class memory_format:
         pass
     g.memory_format = memory_format
+
+    import types as _types_nested
+    import sys as _sys_nested
+    nested_mod = _types_nested.ModuleType("torch.nested")
+    nested_mod.__path__ = []
+    def _nested_from_tensors(tensors, *a, layout=None, **k):
+        return _NestedTensor.from_tensors(tensors, ragged_idx=k.pop("ragged_idx", 1))
+    def _nested_from_jagged(values, offsets, *a, **k):
+        return _NestedTensor.from_jagged(values, offsets, ragged_idx=k.pop("ragged_idx", None))
+    nested_mod.as_nested_tensor = _nested_from_tensors
+    nested_mod.nested_tensor = _nested_from_tensors
+    nested_mod.nested_tensor_from_jagged = _nested_from_jagged
+    g.nested = nested_mod
+    _sys_nested.modules["torch.nested"] = nested_mod
+    nested_internal_mod = _types_nested.ModuleType("torch.nested._internal")
+    nested_internal_mod.__path__ = []
+    nested_tensor_mod = _types_nested.ModuleType("torch.nested._internal.nested_tensor")
+    nested_tensor_mod.NestedTensor = _NestedTensor
+    nested_internal_mod.nested_tensor = nested_tensor_mod
+    nested_mod._internal = nested_internal_mod
+    _sys_nested.modules["torch.nested._internal"] = nested_internal_mod
+    _sys_nested.modules["torch.nested._internal.nested_tensor"] = nested_tensor_mod
 
     # torch._check family: assertion helpers used by dynamo / TorchScript-friendly
     # code (e.g. vLLM's sampler does `torch._check(x.shape[0] >= 1)`). The message
@@ -920,6 +1148,21 @@ def install(torch):
         except TypeError:
             _seq = None
         if _seq is not None:
+            if any(isinstance(_t, _NestedTensor) for _t in _seq):
+                assert all(isinstance(_t, _NestedTensor) for _t in _seq), "cannot cat nested and dense tensors together"
+                if dim == 0:
+                    parts = []
+                    for _t in _seq:
+                        parts.extend(list(_t.unbind(0)))
+                    return _NestedTensor.from_tensors(
+                        parts,
+                        ragged_idx=getattr(_seq[0], "_ragged_idx", _seq[0].dim() - 1),
+                    )
+                assert all(len(_t) == len(_seq[0]) for _t in _seq), "nested cat with dim!=0 requires same batch size"
+                return _NestedTensor.from_tensors(
+                    [_jt_concat([_t.unbind(0)[i] for _t in _seq], dim=dim - 1) for i in range(len(_seq[0]))],
+                    ragged_idx=getattr(_seq[0], "_ragged_idx", _seq[0].dim() - 1),
+                )
             for _t in _seq:
                 _tf = getattr(type(_t), "__torch_function__", None)
                 if _tf is not None and not isinstance(_t, jt.Var):
@@ -1376,10 +1619,50 @@ def install(torch):
     _install_lr_scheduler(g)
     _install_autograd_function(g)
     _install_autograd(g)
+    _install_tensordict_compat()
     try:
         _install_flash_attn_shim()
     except Exception:
         pass
+
+
+def _install_tensordict_compat():
+    """Patch tensordict indexing for jittor Vars used as torch-style indices."""
+    try:
+        from tensordict.base import TensorDictBase
+        from tensordict._lazy import LazyStackedTensorDict
+    except Exception:
+        return
+
+    if getattr(TensorDictBase, "_jittor_index_compat", False):
+        return
+
+    def _normalize_index(idx):
+        if isinstance(idx, jt.Var):
+            arr = np.asarray(idx.detach().cpu().numpy())
+            if arr.ndim == 0:
+                return bool(arr.item()) if arr.dtype == np.bool_ else int(arr.item())
+            if arr.dtype == np.bool_:
+                return [int(i) for i in np.flatnonzero(arr)]
+            return [int(x) for x in arr.reshape(-1)]
+        if isinstance(idx, tuple):
+            return tuple(_normalize_index(i) for i in idx)
+        if isinstance(idx, list):
+            return [_normalize_index(i) for i in idx]
+        return idx
+
+    _td_getitem = TensorDictBase.__getitem__
+    def _getitem(self, index):
+        return _td_getitem(self, _normalize_index(index))
+    TensorDictBase.__getitem__ = _getitem
+    TensorDictBase.__getitems__ = _getitem
+
+    _lazy_getitem = LazyStackedTensorDict.__getitem__
+    def _lazy_index(self, index):
+        return _lazy_getitem(self, _normalize_index(index))
+    LazyStackedTensorDict.__getitem__ = _lazy_index
+
+    TensorDictBase._jittor_index_compat = True
 
 
 def _install_autograd_function(g):
@@ -5509,15 +5792,27 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # int64 anyway, so cast before the native op to match torch AND avoid the
     # crash. Override both torch.cumsum and Var.cumsum (g IS the jittor module).
     _native_cumsum = jt.cumsum
+    def _assign_out(out, value):
+        parent = getattr(out, "_torch_index_parent", None)
+        index = getattr(out, "_torch_index_slices", None)
+        if parent is not None:
+            parent[index] = value
+            out.assign(value)
+        else:
+            out.assign(value)
+        return out
+
     def _cumsum(x, dim=-1, dtype=None, out=None, **kw):
         if isinstance(x, jt.Var) and str(x.dtype) in ("bool", "uint8"):
             x = x.cast("int64")
         r = _native_cumsum(x, dim)
         if dtype is not None:
             r = r.cast(_dtype_to_str(dtype))
+        if out is not None:
+            return _assign_out(out, r)
         return r
     g.cumsum = _cumsum
-    Var.cumsum = lambda self, dim=-1, dtype=None, **kw: _cumsum(self, dim, dtype)
+    Var.cumsum = lambda self, dim=-1, dtype=None, out=None, **kw: _cumsum(self, dim, dtype, out=out)
     # cumprod has the same ACL fragility; guard it the same way if present.
     if hasattr(jt, "cumprod"):
         _native_cumprod = jt.cumprod
@@ -5527,9 +5822,11 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             r = _native_cumprod(x, dim)
             if dtype is not None:
                 r = r.cast(_dtype_to_str(dtype))
+            if out is not None:
+                return _assign_out(out, r)
             return r
         g.cumprod = _cumprod
-        Var.cumprod = lambda self, dim=-1, dtype=None, **kw: _cumprod(self, dim, dtype)
+        Var.cumprod = lambda self, dim=-1, dtype=None, out=None, **kw: _cumprod(self, dim, dtype, out=out)
 
     # bitwise/logical operators torch supports on tensors
     if not hasattr(Var, "__invert__"):
@@ -5561,6 +5858,12 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             out = _orig_getitem(self, slices)
             if isinstance(out, Var) and _var_is_cpu_resident(self):
                 out = _mark_cpu_like(out, self)
+            if isinstance(out, Var):
+                try:
+                    out._torch_index_parent = self
+                    out._torch_index_slices = slices
+                except Exception:
+                    pass
             return out
         _torch_getitem._torch_cpu_residency = True
         Var.__getitem__ = _torch_getitem
@@ -8224,6 +8527,8 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
     # equal). jittor's native `equal` is elementwise, so force-override.
     def _torch_equal(a, b):
         try:
+            if isinstance(a, _NestedTensor) or isinstance(b, _NestedTensor):
+                return bool(a.equal(b)) if isinstance(a, _NestedTensor) else False
             if not isinstance(a, jt.Var) or not isinstance(b, jt.Var):
                 return bool(a == b)
             if tuple(a.shape) != tuple(b.shape):
@@ -8234,6 +8539,7 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
         except Exception:
             return False
     g.equal = _torch_equal
+    Var.equal = lambda self, other: _torch_equal(self, other)
     _alias("diff", lambda x, n=1, dim=-1, prepend=None, append=None:
            _diff(x, n=n, dim=dim, prepend=prepend, append=append))
     _alias("trapz", _trapz)
@@ -8605,13 +8911,34 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
             k["keepdims"] = bool(keep)
         return a, k
 
+    def _looks_like_dtype(x):
+        return isinstance(x, dtype) or (isinstance(x, str) and x.replace("torch.", "") in dtype._registry)
+
     _orig_var_sum = Var.sum
+    _orig_module_sum = getattr(g, "sum", None)
     def _torch_var_sum(self, *a, **k):
+        out = k.pop("out", None)
+        dt = k.pop("dtype", None)
         a, k = _norm_reduce_kw(a, k)
-        if str(self.dtype) in ("uint8", "int8", "uint16"):
+        if dt is None and len(a) >= 1 and _looks_like_dtype(a[0]):
+            dt = a[0]
+            a = a[1:]
+        if dt is not None:
+            self = self.cast(_dtype_to_str(dt))
+        elif str(self.dtype) in ("uint8", "int8", "uint16"):
             self = self.int32()
-        return _orig_var_sum(self, *a, **k)
+        result = _orig_var_sum(self, *a, **k)
+        if out is not None:
+            out.assign(result)
+            return out
+        return result
     Var.sum = _torch_var_sum
+    if _orig_module_sum is not None:
+        def _torch_sum(input, *a, **k):
+            if isinstance(input, Var):
+                return _torch_var_sum(input, *a, **k)
+            return _orig_module_sum(input, *a, **k)
+        g.sum = _torch_sum
     # Full dim/dims/keepdim normalization for the plain reductions that map onto
     # jittor's scalar-`dim` / tuple-`dims` overload pair (mean/prod/any/all). mmdet
     # exercises tuple dims here, e.g. yolact_head's loss.mean(dim=(1, 2)).

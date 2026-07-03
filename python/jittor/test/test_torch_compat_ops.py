@@ -48,6 +48,19 @@ class TestReductions(Base):
                             msg=f"sum dim={dim} keep={keep} {dev}")
                 both_devices(body)
 
+    def test_sum_dtype_and_out(self):
+        x = np.array([[1, 1, 0], [1, 1, 1]], dtype="int64")
+
+        def body(dev):
+            t = torch.tensor(x)
+            self.ae(t.sum(dim=-1, dtype=torch.int32).numpy(), x.sum(axis=-1).astype("int32"), msg=f"sum dtype {dev}")
+            out = torch.empty(2, dtype=torch.int32)
+            ret = torch.sum(t, dim=-1, dtype=torch.int32, out=out)
+            self.assertIs(ret, out)
+            self.ae(out.numpy(), x.sum(axis=-1).astype("int32"), msg=f"sum out {dev}")
+
+        both_devices(body)
+
     def test_mean_dim(self):
         x = self.x
         for dim in [0, -1]:
@@ -179,6 +192,16 @@ class TestCumulative(Base):
                     rtol=1e-5, atol=1e-5, msg=f"cumsum {dev}")
         both_devices(body)
 
+    def test_cumsum_out_slice(self):
+        def body(dev):
+            lengths = torch.tensor([2, 5], dtype=torch.long)
+            offsets = torch.zeros(3, dtype=torch.long)
+            ret = torch.cumsum(lengths, dim=0, out=offsets[1:])
+            self.ae(ret.numpy(), np.array([2, 7]), msg=f"cumsum ret {dev}")
+            self.ae(offsets.numpy(), np.array([0, 2, 7]), msg=f"cumsum slice out {dev}")
+
+        both_devices(body)
+
     def test_cumprod(self):
         x = np.random.RandomState(11).rand(3, 4).astype("float32") + 0.5
         def body(dev):
@@ -202,6 +225,37 @@ class TestGather(Base):
         def body(dev):
             g = torch.index_select(torch.tensor(x), 0, torch.tensor(idx)).numpy()
             self.ac(g, x[idx], msg=f"index_select {dev}")
+        both_devices(body)
+
+
+class TestNestedTensor(Base):
+    def test_nested_jagged_basic(self):
+        def body(dev):
+            items = [torch.arange(2), torch.arange(3) + 10, torch.arange(4) + 20]
+            nested = torch.nested.as_nested_tensor(items, layout=torch.jagged)
+
+            self.assertIsInstance(nested, torch.Tensor)
+            self.assertTrue(nested.is_nested)
+            self.assertEqual(nested.layout, torch.jagged)
+            self.assertEqual(tuple(nested.shape), (3, -1))
+            self.ae(nested.values().numpy(), np.array([0, 1, 10, 11, 12, 20, 21, 22, 23]), msg=f"values {dev}")
+            self.ae(nested.offsets().numpy(), np.array([0, 2, 5, 9]), msg=f"offsets {dev}")
+            self.ae(nested[1].numpy(), np.array([10, 11, 12]), msg=f"scalar index {dev}")
+
+            selected = nested[torch.tensor([2, 0])]
+            self.ae(selected.values().numpy(), np.array([20, 21, 22, 23, 0, 1]), msg=f"selected values {dev}")
+            self.ae(selected.offsets().numpy(), np.array([0, 4, 6]), msg=f"selected offsets {dev}")
+            self.ae(nested.to_padded_tensor(-1, output_size=(3, 5)).numpy(),
+                    np.array([[0, 1, -1, -1, -1], [10, 11, 12, -1, -1], [20, 21, 22, 23, -1]]),
+                    msg=f"padded output_size {dev}")
+
+            rebuilt = torch.nested.nested_tensor_from_jagged(nested.values(), nested.offsets())
+            self.assertTrue(torch.equal(nested, rebuilt))
+            via_nested_tensor = torch.nested.nested_tensor(items, layout=torch.jagged)
+            self.assertTrue(torch.equal(nested, via_nested_tensor))
+            from torch.nested._internal.nested_tensor import NestedTensor
+            self.assertIs(NestedTensor, type(nested))
+
         both_devices(body)
 
 
