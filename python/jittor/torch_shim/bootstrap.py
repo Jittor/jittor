@@ -706,6 +706,7 @@ def enable(
     max_scan_depth: int = 5,
     local_home: bool = True,
     configure_cuda: bool = True,
+    inference: bool = False,
     verbose: Optional[bool] = None,
 ):
     """Enable Jittor-backed ``import torch`` for the current Python process.
@@ -776,6 +777,8 @@ def enable(
 
     import jittor as jt
     _configure_torch_math_flags(jt)
+    if inference:
+        jt.flags.no_grad = 1
     try:
         from jittor import torch_compat
         torch_compat.install(jt)

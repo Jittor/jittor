@@ -620,8 +620,22 @@ def _hub_checkpoints_dir():
     _os.makedirs(path, exist_ok=True)
     return path
 def _download_url_to_file(url, dst, hash_prefix=None, progress=True):
-    import urllib.request
-    urllib.request.urlretrieve(url, dst)
+    import os as _os, urllib.request
+    _os.makedirs(_os.path.dirname(_os.path.abspath(dst)), exist_ok=True)
+    tmp = dst + ".partial"
+    if _os.path.exists(tmp):
+        try:
+            _os.remove(tmp)
+        except OSError:
+            pass
+    urllib.request.urlretrieve(url, tmp)
+    if (not _os.path.isfile(tmp)) or _os.path.getsize(tmp) == 0:
+        try:
+            _os.remove(tmp)
+        except OSError:
+            pass
+        raise RuntimeError(f"downloaded empty checkpoint from {url}")
+    _os.replace(tmp, dst)
 _hub.download_url_to_file = _download_url_to_file
 def _load_state_dict_from_url(url, model_dir=None, map_location=None, progress=True,
                               check_hash=False, file_name=None, weights_only=False):
@@ -632,7 +646,12 @@ def _load_state_dict_from_url(url, model_dir=None, map_location=None, progress=T
     _os.makedirs(model_dir, exist_ok=True)
     filename = file_name or _os.path.basename(_urlparse(url).path)
     cached_file = _os.path.join(model_dir, filename)
-    if not _os.path.isfile(cached_file):
+    if (not _os.path.isfile(cached_file)) or _os.path.getsize(cached_file) == 0:
+        if _os.path.exists(cached_file):
+            try:
+                _os.remove(cached_file)
+            except OSError:
+                pass
         _download_url_to_file(url, cached_file, progress=progress)
     loader = globals().get("load", getattr(_jittor, "load", None))
     return loader(cached_file, map_location=map_location, weights_only=weights_only)

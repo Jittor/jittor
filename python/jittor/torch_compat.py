@@ -6369,7 +6369,21 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
         _os_hub.makedirs(path, exist_ok=True)
         return path
     def _download_url_to_file(url, dst, hash_prefix=None, progress=True):
-        _urlreq_hub.urlretrieve(url, dst)
+        _os_hub.makedirs(_os_hub.path.dirname(_os_hub.path.abspath(dst)), exist_ok=True)
+        tmp = dst + ".partial"
+        if _os_hub.path.exists(tmp):
+            try:
+                _os_hub.remove(tmp)
+            except OSError:
+                pass
+        _urlreq_hub.urlretrieve(url, tmp)
+        if (not _os_hub.path.isfile(tmp)) or _os_hub.path.getsize(tmp) == 0:
+            try:
+                _os_hub.remove(tmp)
+            except OSError:
+                pass
+            raise RuntimeError(f"downloaded empty checkpoint from {url}")
+        _os_hub.replace(tmp, dst)
     def _load_state_dict_from_url(url, model_dir=None, map_location=None, progress=True,
                                   check_hash=False, file_name=None, weights_only=False):
         if model_dir is None:
@@ -6377,7 +6391,12 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
         _os_hub.makedirs(model_dir, exist_ok=True)
         filename = file_name or _os_hub.path.basename(_urlparse_hub(url).path)
         cached_file = _os_hub.path.join(model_dir, filename)
-        if not _os_hub.path.isfile(cached_file):
+        if (not _os_hub.path.isfile(cached_file)) or _os_hub.path.getsize(cached_file) == 0:
+            if _os_hub.path.exists(cached_file):
+                try:
+                    _os_hub.remove(cached_file)
+                except OSError:
+                    pass
             _download_url_to_file(url, cached_file, progress=progress)
         return g.load(cached_file, map_location=map_location, weights_only=weights_only)
     hub.download_url_to_file = _download_url_to_file
