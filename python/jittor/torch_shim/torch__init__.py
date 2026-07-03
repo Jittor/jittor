@@ -486,7 +486,7 @@ globals()["backends"] = _backends
 
 # ---- distributed (single-process stubs; HCCL multi-card handled separately) ----
 dist = types.ModuleType("torch.distributed")
-def _is_available(): return False
+def _is_available(): return True
 def _is_initialized(): return False
 dist.is_available = _is_available
 dist.is_initialized = _is_initialized
@@ -544,6 +544,11 @@ _fsdp_full.FullyShardedDataParallel = dist.fsdp.FullyShardedDataParallel
 _fsdp_full.StateDictType = dist.fsdp.StateDictType
 sys.modules["torch.distributed.fsdp.fully_sharded_data_parallel"] = _fsdp_full
 dist.fsdp.fully_sharded_data_parallel = _fsdp_full
+try:
+    from jittor.torch_fsdp2_compat import install as _install_fsdp2_distributed
+    _install_fsdp2_distributed(dist, globals())
+except Exception:
+    pass
 
 # ---- mmdetection import/runtime resolution stubs (not operators, but the modules
 #      that *contain* the operators import these at load/inference time) ----
@@ -1237,7 +1242,8 @@ for _p in ("torch.distributed.fsdp", "torch.distributed.fsdp.api",
            "torch.distributed.fsdp._traversal_utils", "torch.distributed.fsdp.wrap",
            "torch.distributed.algorithms", "torch.distributed.algorithms._checkpoint",
            "torch.distributed.algorithms._checkpoint.checkpoint_wrapper"):
-    sys.modules[_p] = _StubPkg(_p)
+    if _p not in sys.modules:
+        sys.modules[_p] = _StubPkg(_p)
 sys.modules["torch.distributed"].fsdp = sys.modules["torch.distributed.fsdp"]
 sys.modules["torch.distributed"].algorithms = sys.modules["torch.distributed.algorithms"]
 # torch.distributed.ProcessGroup (type hint in mmengine wrappers).
@@ -1875,15 +1881,20 @@ class _DeviceMesh:
 def _init_device_mesh(device_type=None, mesh_shape=None, *, mesh_dim_names=None, **k):
     return _DeviceMesh(device_type=device_type, mesh=mesh_shape,
                        mesh_dim_names=mesh_dim_names)
-dist.device_mesh.DeviceMesh = _DeviceMesh
-dist.device_mesh.init_device_mesh = _init_device_mesh
-dist.DeviceMesh = _DeviceMesh
-dist.init_device_mesh = _init_device_mesh
+if not hasattr(dist.device_mesh, "DeviceMesh"):
+    dist.device_mesh.DeviceMesh = _DeviceMesh
+if not hasattr(dist.device_mesh, "init_device_mesh"):
+    dist.device_mesh.init_device_mesh = _init_device_mesh
+if not hasattr(dist, "DeviceMesh"):
+    dist.DeviceMesh = _DeviceMesh
+if not hasattr(dist, "init_device_mesh"):
+    dist.init_device_mesh = _init_device_mesh
 class _ProcessGroup:
     def __init__(self, *a, **k): pass
     def size(self, *a, **k): return 1
     def rank(self, *a, **k): return 0
-dist.ProcessGroup = _ProcessGroup
+if not hasattr(dist, "ProcessGroup"):
+    dist.ProcessGroup = _ProcessGroup
 
 # torch.Stream / torch.Event -- minimal types (used in `|` unions and as bare
 # placeholders; never actually drive computation on the jittor backend).
