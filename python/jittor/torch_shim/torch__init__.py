@@ -314,8 +314,14 @@ for _cn in dir(nn):
     if _cn and _cn[0].isupper() and not hasattr(_modules_pkg, _cn):
         try: setattr(_modules_pkg, _cn, getattr(nn, _cn))
         except Exception: pass
+_container_mod = types.ModuleType("torch.nn.modules.container")
+for _cn in ("Sequential", "ModuleList", "ModuleDict", "ParameterList", "ParameterDict"):
+    if hasattr(nn, _cn):
+        setattr(_container_mod, _cn, getattr(nn, _cn))
+_modules_pkg.container = _container_mod
 sys.modules["torch.nn.modules"] = _modules_pkg
 sys.modules["torch.nn.modules.module"] = _mod_module
+sys.modules["torch.nn.modules.container"] = _container_mod
 
 # nn.modules.{utils,batchnorm,normalization,activation}: torchvision-style code
 # (and mmdetection's backbones/necks) import layer internals and the _ntuple
