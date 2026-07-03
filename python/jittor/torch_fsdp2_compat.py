@@ -11,6 +11,7 @@ import enum
 import sys
 import types
 
+import numpy as np
 import jittor as jt
 from jittor import nn
 
@@ -61,7 +62,9 @@ class DeviceMesh:
     def __getitem__(self, key):
         return self
 
-    def size(self, dim=None):
+    def size(self, dim=None, *, mesh_dim=None):
+        if mesh_dim is not None:
+            dim = mesh_dim
         if dim is None:
             return _prod(self.shape)
         if isinstance(dim, str) and self.mesh_dim_names and dim in self.mesh_dim_names:
@@ -70,6 +73,12 @@ class DeviceMesh:
             return int(self.shape[int(dim)])
         except Exception:
             return 1
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
 
     def get_rank(self, *args, **kwargs):
         return 0
@@ -225,6 +234,89 @@ def is_dtensor(obj):
     return isinstance(obj, DTensor) or hasattr(obj, "_dtensor_placements")
 
 
+def _shape_from_args(args):
+    if len(args) == 1 and isinstance(args[0], (tuple, list)):
+        return tuple(int(x) for x in args[0])
+    return tuple(int(x) for x in args)
+
+
+def _np_dtype(dtype=None):
+    if dtype is None:
+        return np.float32
+    name = getattr(dtype, "name", None) or str(dtype).split(".")[-1]
+    if name in ("float", "float32"):
+        return np.float32
+    if name in ("double", "float64"):
+        return np.float64
+    if name in ("half", "float16"):
+        return np.float16
+    if name in ("bfloat16",):
+        return np.float32
+    if name in ("long", "int64"):
+        return np.int64
+    if name in ("int", "int32"):
+        return np.int32
+    if name in ("bool", "bool_"):
+        return np.bool_
+    return np.float32
+
+
+def _dtensor_from_array(array, device_mesh=None, placements=None, dtype=None):
+    tensor = jt.array(array)
+    if dtype is not None:
+        try:
+            tensor = tensor.astype(dtype)
+        except Exception:
+            try:
+                tensor = tensor.astype(str(dtype).split(".")[-1])
+            except Exception:
+                pass
+    return _mark_dtensor(tensor, device_mesh, placements)
+
+
+def empty(*size, device_mesh=None, placements=None, dtype=None, **kwargs):
+    return _dtensor_from_array(np.empty(_shape_from_args(size), dtype=_np_dtype(dtype)),
+                               device_mesh, placements, dtype)
+
+
+def ones(*size, device_mesh=None, placements=None, dtype=None, **kwargs):
+    return _dtensor_from_array(np.ones(_shape_from_args(size), dtype=_np_dtype(dtype)),
+                               device_mesh, placements, dtype)
+
+
+def zeros(*size, device_mesh=None, placements=None, dtype=None, **kwargs):
+    return _dtensor_from_array(np.zeros(_shape_from_args(size), dtype=_np_dtype(dtype)),
+                               device_mesh, placements, dtype)
+
+
+def full(size, fill_value, *, device_mesh=None, placements=None, dtype=None, **kwargs):
+    return _dtensor_from_array(np.full(_shape_from_args((size,)), fill_value,
+                                       dtype=_np_dtype(dtype)),
+                               device_mesh, placements, dtype)
+
+
+def rand(*size, device_mesh=None, placements=None, dtype=None, **kwargs):
+    return _dtensor_from_array(np.random.rand(*_shape_from_args(size)).astype(_np_dtype(dtype)),
+                               device_mesh, placements, dtype)
+
+
+def randn(*size, device_mesh=None, placements=None, dtype=None, **kwargs):
+    return _dtensor_from_array(np.random.randn(*_shape_from_args(size)).astype(_np_dtype(dtype)),
+                               device_mesh, placements, dtype)
+
+
+def linspace(start, end, steps, *, device_mesh=None, placements=None, dtype=None, **kwargs):
+    return _dtensor_from_array(np.linspace(start, end, int(steps), dtype=_np_dtype(dtype)),
+                               device_mesh, placements, dtype)
+
+
+def logspace(start, end, steps, *, base=10.0, device_mesh=None, placements=None,
+             dtype=None, **kwargs):
+    return _dtensor_from_array(np.logspace(start, end, int(steps), base=base,
+                                           dtype=_np_dtype(dtype)),
+                               device_mesh, placements, dtype)
+
+
 class StateDictType(enum.Enum):
     FULL_STATE_DICT = "full"
     LOCAL_STATE_DICT = "local"
@@ -255,12 +347,20 @@ class _Config:
             setattr(self, k, v)
 
 
-class FullStateDictConfig(_Config):
+class StateDictConfig(_Config):
+    pass
+
+
+class OptimStateDictConfig(_Config):
+    pass
+
+
+class FullStateDictConfig(StateDictConfig):
     def __init__(self, offload_to_cpu=False, rank0_only=False):
         super().__init__(offload_to_cpu=bool(offload_to_cpu), rank0_only=bool(rank0_only))
 
 
-class LocalStateDictConfig(_Config):
+class LocalStateDictConfig(StateDictConfig):
     def __init__(self, offload_to_cpu=False):
         super().__init__(offload_to_cpu=bool(offload_to_cpu))
 
@@ -269,16 +369,43 @@ class ShardedStateDictConfig(LocalStateDictConfig):
     pass
 
 
-class FullOptimStateDictConfig(FullStateDictConfig):
+class FullOptimStateDictConfig(OptimStateDictConfig):
+    def __init__(self, offload_to_cpu=False, rank0_only=False):
+        super().__init__(offload_to_cpu=bool(offload_to_cpu), rank0_only=bool(rank0_only))
+
+
+class LocalOptimStateDictConfig(OptimStateDictConfig):
+    def __init__(self, offload_to_cpu=False):
+        super().__init__(offload_to_cpu=bool(offload_to_cpu))
+
+
+class ShardedOptimStateDictConfig(LocalOptimStateDictConfig):
     pass
 
 
-class LocalOptimStateDictConfig(LocalStateDictConfig):
-    pass
+class StateDictSettings:
+    def __init__(self, state_dict_type=StateDictType.FULL_STATE_DICT,
+                 state_dict_config=None, optim_state_dict_config=None):
+        self.state_dict_type = state_dict_type
+        self.state_dict_config = state_dict_config
+        self.optim_state_dict_config = optim_state_dict_config
 
 
-class ShardedOptimStateDictConfig(ShardedStateDictConfig):
-    pass
+class OptimStateKeyType(enum.Enum):
+    PARAM_NAME = "param_name"
+    PARAM_ID = "param_id"
+
+
+class FlatParameter:
+    def __new__(cls, data=None, requires_grad=True, *args, **kwargs):
+        maker = getattr(jt, "_torch_make_parameter", None)
+        if data is not None and callable(maker):
+            return maker(data, requires_grad=requires_grad)
+        return object.__new__(cls)
+
+    def __init__(self, data=None, requires_grad=True, *args, **kwargs):
+        self.data = data
+        self.requires_grad = requires_grad
 
 
 class MixedPrecisionPolicy:
@@ -315,6 +442,11 @@ class DataParallelMeshDims:
     def __init__(self, shard=None, replicate=None):
         self.shard = shard
         self.replicate = replicate
+        self.shard_names = tuple(() if shard is None else
+                                 (shard if isinstance(shard, (tuple, list)) else (shard,)))
+        self.replicate_names = tuple(() if replicate is None else
+                                     (replicate if isinstance(replicate, (tuple, list))
+                                      else (replicate,)))
 
 
 class UnshardHandle:
@@ -362,6 +494,9 @@ class FSDPModule(metaclass=_FSDPModuleMeta):
     def reshard(self):
         return None
 
+    def reset_iter_state(self):
+        return _apply_fsdp_attr(self, "iter_state_reset", True, False)
+
     def set_reshard_after_forward(self, value, recurse=True):
         return _apply_fsdp_attr(self, "reshard_after_forward", value, recurse)
 
@@ -384,6 +519,15 @@ class FSDPModule(metaclass=_FSDPModuleMeta):
 
     def set_custom_reduce_scatter(self, comm):
         return _apply_fsdp_attr(self, "custom_reduce_scatter", comm, False)
+
+    def set_reduce_scatter_unused_params(self, value=True):
+        return _apply_fsdp_attr(self, "reduce_scatter_unused_params", bool(value), False)
+
+    def set_reduce_scatter_max_input_buffers(self, value):
+        return _apply_fsdp_attr(self, "reduce_scatter_max_input_buffers", value, False)
+
+    def set_separate_reduce_scatter_group(self, group):
+        return _apply_fsdp_attr(self, "separate_reduce_scatter_group", group, False)
 
     def set_is_last_backward(self, value, recurse=True):
         return _apply_fsdp_attr(self, "is_last_backward", bool(value), recurse)
@@ -420,10 +564,12 @@ class FSDPModule(metaclass=_FSDPModuleMeta):
 
 
 _FSDP_METHODS = (
-    "unshard", "reshard", "set_reshard_after_forward",
+    "unshard", "reshard", "reset_iter_state", "set_reshard_after_forward",
     "set_requires_gradient_sync", "set_requires_all_reduce", "set_is_last_backward",
     "set_all_reduce_hook", "set_allocate_memory_from_process_group_for_comm",
     "set_custom_all_gather", "set_custom_reduce_scatter",
+    "set_reduce_scatter_unused_params", "set_reduce_scatter_max_input_buffers",
+    "set_separate_reduce_scatter_group",
     "set_reshard_after_backward", "set_unshard_in_backward",
     "set_modules_to_forward_prefetch", "set_modules_to_backward_prefetch",
     "set_gradient_divide_factor", "set_reduce_scatter_divide_factor",
@@ -599,6 +745,44 @@ def _get_mesh_info(mesh=None, dp_mesh_dims=None, **kwargs):
                         replicate_mesh_dim=getattr(dp_mesh_dims, "replicate", None))
 
 
+class FSDPState:
+    pass
+
+
+TrainingState = enum.Enum("TrainingState", {"IDLE": "idle", "FORWARD": "forward", "BACKWARD": "backward"})
+FSDP_WRAPPED_MODULE = "_fsdp_wrapped_module"
+
+
+class DTensorSpec:
+    def __init__(self, mesh=None, placements=None, tensor_meta=None, **kwargs):
+        self.mesh = mesh
+        self.device_mesh = mesh
+        self.placements = tuple(placements or ())
+        self.tensor_meta = tensor_meta
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+
+def _get_module_fsdp_state(module):
+    return getattr(module, "_fsdp_state", None)
+
+
+def _get_module_fsdp_state_if_fully_sharded_module(module):
+    return getattr(module, "_fsdp_state", None) if getattr(module, "_is_fsdp_module", False) else None
+
+
+def _is_fsdp_managed_module(module):
+    return bool(getattr(module, "_is_fsdp_managed_module", False))
+
+
+def _lazy_init(state, module=None):
+    return state
+
+
+def _get_post_forward_mesh_info(*args, **kwargs):
+    return _get_mesh_info(*args, **kwargs)
+
+
 class ParallelStyle:
     def __init__(self, *args, **kwargs):
         self.args = args
@@ -611,6 +795,11 @@ def parallelize_module(module, device_mesh=None, parallelize_plan=None,
     object.__setattr__(module, "_parallelize_module_applied", True)
     object.__setattr__(module, "_parallelize_plan", parallelize_plan)
     return module
+
+
+@contextlib.contextmanager
+def loss_parallel(*args, **kwargs):
+    yield
 
 
 def _checkpoint_wrapper(module=None, *args, **kwargs):
@@ -642,25 +831,41 @@ def _install_wrap_helpers(fsdp_wrap_mod):
     fsdp_wrap_mod.lambda_auto_wrap_policy = (
         lambda module, recurse, nonwrapped_numel, lambda_fn=None, *a, **k:
         bool(lambda_fn(module) if callable(lambda_fn) else False))
+    fsdp_wrap_mod._or_policy = (
+        lambda module, recurse, nonwrapped_numel, policies=None, *a, **k:
+        any(policy(module=module, recurse=recurse, nonwrapped_numel=nonwrapped_numel)
+            for policy in (policies or ()) if callable(policy)))
 
 
 def install(dist, torch_module=None):
     tensor_mod = _ensure_module("torch.distributed.tensor", dist, "tensor")
     tensor_legacy_mod = _ensure_module("torch.distributed._tensor", dist, "_tensor")
+    tensor_api_mod = _ensure_module("torch.distributed.tensor._api")
     tensor_placement_mod = _ensure_module("torch.distributed.tensor.placement_types")
+    tensor_spec_mod = _ensure_module("torch.distributed.tensor._dtensor_spec")
     tensor_parallel_mod = _ensure_module("torch.distributed.tensor.parallel")
+    tensor_parallel_api_mod = _ensure_module("torch.distributed.tensor.parallel.api")
+    tensor_parallel_style_mod = _ensure_module("torch.distributed.tensor.parallel.style")
+    tensor_parallel_loss_mod = _ensure_module("torch.distributed.tensor.parallel.loss")
     device_mesh_mod = _ensure_module("torch.distributed.device_mesh", dist, "device_mesh")
+    tensor_legacy_device_mesh_mod = _ensure_module("torch.distributed._tensor.device_mesh")
     fsdp_mod = _ensure_module("torch.distributed.fsdp", dist, "fsdp")
     fsdp_api_mod = _ensure_module("torch.distributed.fsdp.api")
     fsdp_full_mod = _ensure_module("torch.distributed.fsdp.fully_sharded_data_parallel")
     fsdp_wrap_mod = _ensure_module("torch.distributed.fsdp.wrap")
     fsdp_traversal_mod = _ensure_module("torch.distributed.fsdp._traversal_utils")
+    fsdp_runtime_mod = _ensure_module("torch.distributed.fsdp._runtime_utils")
+    fsdp_top_common_mod = _ensure_module("torch.distributed.fsdp._common_utils")
+    fsdp_state_mod = _ensure_module("torch.distributed.fsdp._fsdp_state")
     fsdp_scaler_mod = _ensure_module("torch.distributed.fsdp.sharded_grad_scaler")
     fsdp_fully_pkg = _ensure_module("torch.distributed.fsdp._fully_shard")
     fsdp_fully_mod = _ensure_module("torch.distributed.fsdp._fully_shard._fully_shard")
     fsdp_fully_api_mod = _ensure_module("torch.distributed.fsdp._fully_shard._fsdp_api")
     fsdp_common_mod = _ensure_module("torch.distributed.fsdp._fully_shard._fsdp_common")
     fsdp_init_mod = _ensure_module("torch.distributed.fsdp._fully_shard._fsdp_init")
+    fsdp_fully_state_mod = _ensure_module("torch.distributed.fsdp._fully_shard._fsdp_state")
+    fsdp_param_mod = _ensure_module("torch.distributed.fsdp._fully_shard._fsdp_param")
+    fsdp_collectives_mod = _ensure_module("torch.distributed.fsdp._fully_shard._fsdp_collectives")
     comp_mod = _ensure_module("torch.distributed._composable", dist, "_composable")
     comp_fsdp_mod = _ensure_module("torch.distributed._composable.fsdp", comp_mod, "fsdp")
     comp_fsdp_fully_mod = _ensure_module("torch.distributed._composable.fsdp.fully_shard")
@@ -672,6 +877,30 @@ def install(dist, torch_module=None):
         "torch.distributed.algorithms._checkpoint.checkpoint_wrapper",
         checkpoint_mod, "checkpoint_wrapper")
 
+    for pkg in (tensor_mod, tensor_legacy_mod, tensor_parallel_mod, fsdp_mod,
+                fsdp_fully_pkg, comp_mod, comp_fsdp_mod, algorithms_mod,
+                checkpoint_mod):
+        pkg.__path__ = getattr(pkg, "__path__", [])
+
+    fsdp_mod.api = fsdp_api_mod
+    fsdp_mod.fully_sharded_data_parallel = fsdp_full_mod
+    fsdp_mod.wrap = fsdp_wrap_mod
+    fsdp_mod._traversal_utils = fsdp_traversal_mod
+    fsdp_mod._runtime_utils = fsdp_runtime_mod
+    fsdp_mod._common_utils = fsdp_top_common_mod
+    fsdp_mod._fsdp_state = fsdp_state_mod
+    fsdp_mod.sharded_grad_scaler = fsdp_scaler_mod
+    fsdp_mod._fully_shard = fsdp_fully_pkg
+    fsdp_fully_pkg._fully_shard = fsdp_fully_mod
+    fsdp_fully_pkg._fsdp_api = fsdp_fully_api_mod
+    fsdp_fully_pkg._fsdp_common = fsdp_common_mod
+    fsdp_fully_pkg._fsdp_init = fsdp_init_mod
+    fsdp_fully_pkg._fsdp_state = fsdp_fully_state_mod
+    fsdp_fully_pkg._fsdp_param = fsdp_param_mod
+    fsdp_fully_pkg._fsdp_collectives = fsdp_collectives_mod
+    comp_fsdp_mod.fully_shard = comp_fsdp_fully_mod
+    comp_fsdp_mod._fsdp_api = comp_fsdp_api_mod
+
     exports = dict(
         DeviceMesh=DeviceMesh, init_device_mesh=init_device_mesh,
         DTensor=DTensor, Placement=Placement, Replicate=Replicate, Shard=Shard,
@@ -679,6 +908,7 @@ def install(dist, torch_module=None):
         distribute_module=distribute_module, is_dtensor=is_dtensor,
         StateDictType=StateDictType, ShardingStrategy=ShardingStrategy,
         BackwardPrefetch=BackwardPrefetch, CPUOffload=CPUOffload,
+        StateDictConfig=StateDictConfig, OptimStateDictConfig=OptimStateDictConfig,
         MixedPrecision=MixedPrecision, MixedPrecisionPolicy=MixedPrecisionPolicy,
         OffloadPolicy=OffloadPolicy, CPUOffloadPolicy=CPUOffloadPolicy,
         NoOffloadPolicy=NoOffloadPolicy, DataParallelMeshDims=DataParallelMeshDims,
@@ -688,6 +918,8 @@ def install(dist, torch_module=None):
         FullOptimStateDictConfig=FullOptimStateDictConfig,
         LocalOptimStateDictConfig=LocalOptimStateDictConfig,
         ShardedOptimStateDictConfig=ShardedOptimStateDictConfig,
+        StateDictSettings=StateDictSettings, OptimStateKeyType=OptimStateKeyType,
+        FlatParameter=FlatParameter,
         UnshardHandle=UnshardHandle, FSDPModule=FSDPModule,
         FullyShardedDataParallel=FullyShardedDataParallel,
         ShardedGradScaler=ShardedGradScaler, fully_shard=fully_shard,
@@ -706,21 +938,65 @@ def install(dist, torch_module=None):
         lambda module: [getattr(m, "_fsdp_state") for m in _iter_fsdp_modules(module, True)
                         if hasattr(m, "_fsdp_state")])
     fsdp_traversal_mod._get_fsdp_handles = lambda module: []
+    for mod in (fsdp_runtime_mod, fsdp_top_common_mod, fsdp_state_mod,
+                fsdp_common_mod, fsdp_fully_state_mod):
+        mod.FSDPState = FSDPState
+        mod.TrainingState = TrainingState
+        mod.FSDP_WRAPPED_MODULE = FSDP_WRAPPED_MODULE
+        mod._lazy_init = _lazy_init
+        mod._get_module_fsdp_state = _get_module_fsdp_state
+        mod._get_fsdp_state = _get_module_fsdp_state
+        mod._get_module_fsdp_state_if_fully_sharded_module = (
+            _get_module_fsdp_state_if_fully_sharded_module)
+        mod._is_fsdp_managed_module = _is_fsdp_managed_module
+    fsdp_param_mod.FlatParameter = FlatParameter
+    fsdp_collectives_mod.all_gather = lambda tensor, *a, **k: tensor
+    fsdp_collectives_mod.reduce_scatter = lambda tensor, *a, **k: tensor
     _install_wrap_helpers(fsdp_wrap_mod)
 
-    for mod in (tensor_mod, tensor_legacy_mod, tensor_placement_mod):
+    tensor_factories = {
+        "empty": empty,
+        "ones": ones,
+        "zeros": zeros,
+        "full": full,
+        "rand": rand,
+        "randn": randn,
+        "linspace": linspace,
+        "logspace": logspace,
+    }
+    for mod in (tensor_mod, tensor_legacy_mod, tensor_api_mod, tensor_placement_mod):
         for k in ("DTensor", "Placement", "Replicate", "Shard", "Partial",
                   "DeviceMesh", "init_device_mesh", "distribute_tensor",
                   "distribute_module", "is_dtensor"):
             setattr(mod, k, exports[k])
+        for k, v in tensor_factories.items():
+            setattr(mod, k, v)
+    tensor_spec_mod.DTensorSpec = DTensorSpec
     tensor_mod.placement_types = tensor_placement_mod
+    tensor_mod._api = tensor_api_mod
+    tensor_mod._dtensor_spec = tensor_spec_mod
     tensor_mod.parallel = tensor_parallel_mod
-    tensor_parallel_mod.ParallelStyle = ParallelStyle
-    tensor_parallel_mod.parallelize_module = parallelize_module
+    tensor_mod.DeviceMesh = DeviceMesh
+    tensor_legacy_mod.device_mesh = tensor_legacy_device_mesh_mod
+    for mod in (device_mesh_mod, tensor_legacy_device_mesh_mod):
+        mod.DeviceMesh = DeviceMesh
+        mod.init_device_mesh = init_device_mesh
+    parallel_classes = {}
     for name in ("ColwiseParallel", "RowwiseParallel", "SequenceParallel",
                  "PrepareModuleInput", "PrepareModuleOutput",
                  "PrepareModuleInputOutput"):
-        setattr(tensor_parallel_mod, name, type(name, (ParallelStyle,), {}))
+        parallel_classes[name] = type(name, (ParallelStyle,), {})
+    for mod in (tensor_parallel_mod, tensor_parallel_style_mod):
+        mod.ParallelStyle = ParallelStyle
+        for name, cls in parallel_classes.items():
+            setattr(mod, name, cls)
+    for mod in (tensor_parallel_mod, tensor_parallel_api_mod):
+        mod.parallelize_module = parallelize_module
+    for mod in (tensor_parallel_mod, tensor_parallel_loss_mod):
+        mod.loss_parallel = loss_parallel
+    tensor_parallel_mod.api = tensor_parallel_api_mod
+    tensor_parallel_mod.style = tensor_parallel_style_mod
+    tensor_parallel_mod.loss = tensor_parallel_loss_mod
 
     device_mesh_mod.DeviceMesh = DeviceMesh
     device_mesh_mod.init_device_mesh = init_device_mesh
@@ -731,11 +1007,13 @@ def install(dist, torch_module=None):
     checkpoint_wrapper_mod.checkpoint_wrapper = _checkpoint_wrapper
     checkpoint_wrapper_mod.apply_activation_checkpointing = _apply_activation_checkpointing
     checkpoint_wrapper_mod.offload_wrapper = lambda module, *a, **k: module
+    checkpoint_wrapper_mod._CHECKPOINT_PREFIX = "_checkpoint_wrapped_module."
     checkpoint_wrapper_mod.CheckpointImpl = enum.Enum(
         "CheckpointImpl", {"NO_REENTRANT": "no_reentrant", "REENTRANT": "reentrant"})
     fsdp_common_mod.FSDPMeshInfo = FSDPMeshInfo
     fsdp_common_mod.ShardPlacementResult = ShardPlacementResult
     fsdp_init_mod._get_mesh_info = _get_mesh_info
+    fsdp_init_mod._get_post_forward_mesh_info = _get_post_forward_mesh_info
     if torch_module is not None:
         try:
             torch_module["distributed"] = dist

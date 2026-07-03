@@ -15,8 +15,13 @@ class TestFSDP2Compat(unittest.TestCase):
             CPUOffloadPolicy,
             DataParallelMeshDims,
             FSDPModule,
+            FlatParameter,
+            FullOptimStateDictConfig,
+            FullStateDictConfig,
             MixedPrecisionPolicy,
+            OptimStateKeyType,
             StateDictType,
+            StateDictSettings,
             FullyShardedDataParallel,
             fully_shard,
             share_comm_ctx,
@@ -29,6 +34,10 @@ class TestFSDP2Compat(unittest.TestCase):
         self.assertTrue(torch.distributed.is_available())
         self.assertIs(fully_shard, composable_fully_shard)
         self.assertEqual(mesh.size("dp"), 1)
+        self.assertEqual(mesh.size(mesh_dim=0), 1)
+        with mesh:
+            pass
+        self.assertEqual(DataParallelMeshDims(shard="dp").shard_names, ("dp",))
 
         module = torch.nn.Linear(3, 2)
         x = jt.array(np.random.RandomState(11).randn(4, 3).astype("float32"))
@@ -60,11 +69,15 @@ class TestFSDP2Compat(unittest.TestCase):
         module.set_allocate_memory_from_process_group_for_comm(True)
         module.set_custom_all_gather(lambda *args, **kwargs: None)
         module.set_custom_reduce_scatter(lambda *args, **kwargs: None)
+        module.set_reduce_scatter_unused_params(True)
+        module.set_reduce_scatter_max_input_buffers(2)
+        module.set_separate_reduce_scatter_group(None)
         module.set_reshard_after_backward(False)
         module.set_unshard_in_backward(False)
         module.set_force_sum_reduction_for_comms(True)
         module.set_symm_mem_for_comm("NCCL")
         module.set_post_optim_event(None)
+        module.reset_iter_state()
         with share_comm_ctx([module]):
             pass
         state = module._get_fsdp_state()
@@ -72,12 +85,22 @@ class TestFSDP2Compat(unittest.TestCase):
         self.assertTrue(state.allocate_memory_from_process_group_for_comm)
         self.assertTrue(callable(state.custom_all_gather))
         self.assertTrue(callable(state.custom_reduce_scatter))
+        self.assertTrue(state.reduce_scatter_unused_params)
+        self.assertEqual(state.reduce_scatter_max_input_buffers, 2)
         self.assertEqual(state.symm_mem_for_comm, "NCCL")
         self.assertIs(module._get_fsdp_state(), getattr(module, "_fsdp_state", None))
 
         wrapped = FullyShardedDataParallel(torch.nn.Linear(3, 2))
         self.assertEqual(tuple(wrapped(x).shape), (4, 2))
         self.assertEqual(len(list(StateDictType)), 3)
+        settings = StateDictSettings(
+            StateDictType.FULL_STATE_DICT,
+            FullStateDictConfig(),
+            FullOptimStateDictConfig(),
+        )
+        self.assertIs(settings.state_dict_type, StateDictType.FULL_STATE_DICT)
+        self.assertIs(OptimStateKeyType.PARAM_NAME, OptimStateKeyType.PARAM_NAME)
+        self.assertIsNotNone(FlatParameter(torch.ones(1)))
         self.assertIs(checkpoint_wrapper(module), module)
 
     def test_dtensor_and_private_import_paths(self):
@@ -88,12 +111,26 @@ class TestFSDP2Compat(unittest.TestCase):
             Replicate,
             Shard,
             distribute_tensor,
+            ones,
+            zeros,
+            full,
+            randn,
         )
+        from torch.distributed.tensor._api import empty as api_empty
         from torch.distributed._tensor import distribute_tensor as legacy_distribute_tensor
+        from torch.distributed._tensor import linspace as legacy_linspace
+        from torch.distributed._tensor.device_mesh import init_device_mesh as legacy_init_device_mesh
         from torch.distributed.tensor.placement_types import Partial
         from torch.distributed.tensor.parallel import ParallelStyle, parallelize_module
+        from torch.distributed.tensor.parallel.api import parallelize_module as api_parallelize_module
+        from torch.distributed.tensor.parallel.loss import loss_parallel
+        from torch.distributed.tensor.parallel.style import RowwiseParallel
         from torch.distributed.fsdp._fully_shard import fully_shard as package_fully_shard
         from torch.distributed.fsdp import fully_shard
+        from torch.distributed.fsdp._common_utils import _get_module_fsdp_state
+        from torch.distributed.fsdp._fully_shard._fsdp_state import (
+            _get_module_fsdp_state_if_fully_sharded_module,
+        )
         from torch.distributed.fsdp._fully_shard._fsdp_common import (
             FSDPMeshInfo,
             ShardPlacementResult,
@@ -101,10 +138,21 @@ class TestFSDP2Compat(unittest.TestCase):
         from torch.distributed.fsdp._fully_shard._fsdp_init import _get_mesh_info
 
         mesh = init_device_mesh("cpu", (1,), mesh_dim_names=("dp",))
+        self.assertEqual(legacy_init_device_mesh("cpu", (1,)).size(mesh_dim=0), 1)
         self.assertIs(fully_shard, package_fully_shard)
 
         dt = distribute_tensor(jt.array([1, 2, 3]), mesh, [Replicate()])
         dt2 = legacy_distribute_tensor(jt.array([1, 2, 3]), mesh, [Shard(0)])
+        for tensor in (
+            ones((2, 3), device_mesh=mesh, placements=[Replicate()]),
+            zeros(2, 3, device_mesh=mesh, placements=[Replicate()]),
+            full((2, 3), 7, device_mesh=mesh, placements=[Replicate()]),
+            randn(2, 3, device_mesh=mesh, placements=[Replicate()]),
+            api_empty(2, 3, device_mesh=mesh, placements=[Replicate()]),
+            legacy_linspace(0, 1, 3, device_mesh=mesh, placements=[Replicate()]),
+        ):
+            self.assertIsInstance(tensor, DTensor)
+            self.assertTrue(hasattr(tensor, "to_local"))
         self.assertIsInstance(dt, DTensor)
         self.assertIsInstance(dt2, DTensor)
         self.assertIs(dt.to_local(), dt)
@@ -117,7 +165,17 @@ class TestFSDP2Compat(unittest.TestCase):
 
         module = torch.nn.Linear(2, 2)
         self.assertIs(parallelize_module(module), module)
+        self.assertIs(api_parallelize_module(module), module)
         self.assertIsInstance(ParallelStyle(), ParallelStyle)
+        self.assertIsInstance(RowwiseParallel(), ParallelStyle)
+        with loss_parallel():
+            pass
+        fully_shard(module)
+        self.assertIs(_get_module_fsdp_state(module), module._get_fsdp_state())
+        self.assertIs(
+            _get_module_fsdp_state_if_fully_sharded_module(module),
+            module._get_fsdp_state(),
+        )
 
 
 if __name__ == "__main__":
