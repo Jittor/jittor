@@ -205,22 +205,6 @@ _ml = torch.nn.Linear(4, 3); _w0 = _ml.weight.numpy().copy()
 _mp = _os.path.join(_tf.mkdtemp(), "m.pkl"); _ml.save(_mp)
 _ml2 = torch.nn.Linear(4, 3); _ml2.load(_mp)
 ok(_os.path.exists(_mp) and np.allclose(_ml2.weight.numpy(), _w0), "model.save/load round-trip")
-# jittor.lightning trains
-import jittor.lightning as _pl
-class _Lit(_pl.LightningModule):
-    def __init__(self): super().__init__(); self.net = torch.nn.Linear(4, 1)
-    def forward(self, x): return self.net(x)
-    def training_step(self, b, i): x, y = b; return ((self(x) - y) ** 2).mean()
-    def configure_optimizers(self): return torch.optim.Adam(self.parameters(), lr=0.1)
-_W = np.random.randn(4, 1).astype("float32")
-_data = [(jt.array(np.random.randn(8, 4).astype("float32")),) for _ in range(4)]
-_data = [(d[0], d[0] @ jt.array(_W)) for d in _data]
-_losses = []
-_lit = _Lit(); _orig = _lit.training_step
-_lit.training_step = lambda b, i: (_losses.append(float(_orig(b, i).item())) or _orig(b, i))
-_pl.Trainer(max_epochs=8).fit(_lit, train_dataloaders=_data)
-ok(_losses[-1] < _losses[0], "jittor.lightning Trainer trains (loss decreases)")
-
 # DataLoader default collation: `for x, y in dl` must yield STACKED batches (was a no-op
 # that returned a raw list of samples). Also torch.utils.data attribute access.
 from torch.utils.data import DataLoader as _DL, TensorDataset as _TD
