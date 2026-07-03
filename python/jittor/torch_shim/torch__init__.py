@@ -522,7 +522,15 @@ dist.barrier = lambda *a, **k: None
 dist.all_reduce = lambda *a, **k: None
 dist.all_gather = lambda *a, **k: None
 dist.broadcast = lambda *a, **k: None
-dist.ReduceOp = type("ReduceOp", (), {"SUM": 0, "MEAN": 1, "MAX": 2, "MIN": 3})
+class _ReduceOp:
+    SUM = 0
+    MEAN = 1
+    AVG = 1
+    MAX = 2
+    MIN = 3
+    PRODUCT = 4
+_ReduceOp.RedOpType = _ReduceOp
+dist.ReduceOp = _ReduceOp
 dist.is_torchelastic_launched = lambda: False
 dist.GroupMember = type("GroupMember", (), {"WORLD": None})
 dist.group = type("group", (), {"WORLD": None})
@@ -531,6 +539,14 @@ for _sub in ("tensor", "fsdp", "device_mesh", "_composable", "checkpoint", "algo
     _m = types.ModuleType(f"torch.distributed.{_sub}")
     sys.modules[f"torch.distributed.{_sub}"] = _m
     setattr(dist, _sub, _m)
+_dist_constants = types.ModuleType("torch.distributed.constants")
+try:
+    import datetime as _datetime_dist
+    _dist_constants.default_pg_timeout = _datetime_dist.timedelta(minutes=30)
+except Exception:
+    _dist_constants.default_pg_timeout = None
+sys.modules["torch.distributed.constants"] = _dist_constants
+dist.constants = _dist_constants
 dist.tensor.DTensor = type("DTensor", (), {})
 dist.tensor.Replicate = type("Replicate", (), {})
 dist.tensor.Shard = type("Shard", (), {})
@@ -569,7 +585,7 @@ _fsdp_full.StateDictType = dist.fsdp.StateDictType
 sys.modules["torch.distributed.fsdp.fully_sharded_data_parallel"] = _fsdp_full
 dist.fsdp.fully_sharded_data_parallel = _fsdp_full
 try:
-    from jittor.torch_fsdp2_compat import install as _install_fsdp2_distributed
+    from jittor.torch_compat import _install_fsdp2_distributed as _install_fsdp2_distributed
     _install_fsdp2_distributed(dist, globals())
 except Exception:
     pass

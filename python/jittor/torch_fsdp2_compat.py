@@ -212,6 +212,10 @@ class DTensor(metaclass=_DTensorMeta):
     def __getattr__(self, name):
         return getattr(self._local_tensor, name)
 
+    def __array__(self, dtype=None):
+        arr = self._local_tensor.numpy()
+        return arr.astype(dtype) if dtype is not None else arr
+
 
 def distribute_tensor(tensor, device_mesh=None, placements=None, src_data_rank=0, **kwargs):
     return _mark_dtensor(tensor, device_mesh, placements)
@@ -675,11 +679,36 @@ class FullyShardedDataParallel(nn.Module, FSDPModule):
     def named_parameters(self, *args, **kwargs):
         return self.module.named_parameters(*args, **kwargs)
 
+    def buffers(self, *args, **kwargs):
+        return self.module.buffers(*args, **kwargs)
+
+    def named_buffers(self, *args, **kwargs):
+        return self.module.named_buffers(*args, **kwargs)
+
     @staticmethod
     @contextlib.contextmanager
     def state_dict_type(module, state_dict_type, state_dict_config=None,
                         optim_state_dict_config=None):
-        yield
+        old = getattr(module, "_fsdp_state_dict_type", None)
+        object.__setattr__(module, "_fsdp_state_dict_type",
+                           (state_dict_type, state_dict_config, optim_state_dict_config))
+        try:
+            yield
+        finally:
+            if old is None:
+                try:
+                    delattr(module, "_fsdp_state_dict_type")
+                except Exception:
+                    pass
+            else:
+                object.__setattr__(module, "_fsdp_state_dict_type", old)
+
+    @staticmethod
+    def set_state_dict_type(module, state_dict_type, state_dict_config=None,
+                            optim_state_dict_config=None):
+        object.__setattr__(module, "_fsdp_state_dict_type",
+                           (state_dict_type, state_dict_config, optim_state_dict_config))
+        return module
 
     @staticmethod
     @contextlib.contextmanager
@@ -710,14 +739,26 @@ class FullyShardedDataParallel(nn.Module, FSDPModule):
 
 
 class ShardedGradScaler:
+    def __init__(self, *args, **kwargs):
+        self._enabled = kwargs.get("enabled", True)
+
     def scale(self, loss):
         return loss
+
     def step(self, optimizer, *args, **kwargs):
         return optimizer.step(*args, **kwargs)
+
     def update(self, *args, **kwargs):
         return None
+
     def unscale_(self, optimizer):
         return None
+
+    def state_dict(self):
+        return {"enabled": self._enabled}
+
+    def load_state_dict(self, state_dict):
+        self._enabled = state_dict.get("enabled", self._enabled)
 
 
 class FSDPMeshInfo:
@@ -783,6 +824,12 @@ def _get_post_forward_mesh_info(*args, **kwargs):
     return _get_mesh_info(*args, **kwargs)
 
 
+def compute_local_shape_and_global_offset(global_shape, mesh, placements):
+    shape = tuple(int(x) for x in global_shape)
+    offset = tuple(0 for _ in shape)
+    return shape, offset
+
+
 class ParallelStyle:
     def __init__(self, *args, **kwargs):
         self.args = args
@@ -810,6 +857,26 @@ def _apply_activation_checkpointing(model, *args, **kwargs):
     return model
 
 
+def _checkpoint(module, *args, **kwargs):
+    return module(*args, **kwargs)
+
+
+class ModuleWrapPolicy:
+    def __init__(self, module_classes):
+        self.module_classes = tuple(module_classes)
+
+    def __call__(self, module, recurse, nonwrapped_numel):
+        return isinstance(module, self.module_classes)
+
+
+class CustomPolicy:
+    def __init__(self, lambda_fn):
+        self.lambda_fn = lambda_fn
+
+    def __call__(self, module, recurse, nonwrapped_numel):
+        return bool(self.lambda_fn(module, recurse, nonwrapped_numel))
+
+
 def _install_wrap_helpers(fsdp_wrap_mod):
     @contextlib.contextmanager
     def enable_wrap(*args, **kwargs):
@@ -831,6 +898,8 @@ def _install_wrap_helpers(fsdp_wrap_mod):
     fsdp_wrap_mod.lambda_auto_wrap_policy = (
         lambda module, recurse, nonwrapped_numel, lambda_fn=None, *a, **k:
         bool(lambda_fn(module) if callable(lambda_fn) else False))
+    fsdp_wrap_mod.ModuleWrapPolicy = ModuleWrapPolicy
+    fsdp_wrap_mod.CustomPolicy = CustomPolicy
     fsdp_wrap_mod._or_policy = (
         lambda module, recurse, nonwrapped_numel, policies=None, *a, **k:
         any(policy(module=module, recurse=recurse, nonwrapped_numel=nonwrapped_numel)
@@ -843,6 +912,7 @@ def install(dist, torch_module=None):
     tensor_api_mod = _ensure_module("torch.distributed.tensor._api")
     tensor_placement_mod = _ensure_module("torch.distributed.tensor.placement_types")
     tensor_spec_mod = _ensure_module("torch.distributed.tensor._dtensor_spec")
+    tensor_utils_mod = _ensure_module("torch.distributed.tensor._utils")
     tensor_parallel_mod = _ensure_module("torch.distributed.tensor.parallel")
     tensor_parallel_api_mod = _ensure_module("torch.distributed.tensor.parallel.api")
     tensor_parallel_style_mod = _ensure_module("torch.distributed.tensor.parallel.style")
@@ -870,6 +940,7 @@ def install(dist, torch_module=None):
     comp_fsdp_mod = _ensure_module("torch.distributed._composable.fsdp", comp_mod, "fsdp")
     comp_fsdp_fully_mod = _ensure_module("torch.distributed._composable.fsdp.fully_shard")
     comp_fsdp_api_mod = _ensure_module("torch.distributed._composable.fsdp._fsdp_api")
+    functional_collectives_mod = _ensure_module("torch.distributed._functional_collectives")
     algorithms_mod = _ensure_module("torch.distributed.algorithms", dist, "algorithms")
     checkpoint_mod = _ensure_module("torch.distributed.algorithms._checkpoint",
                                     algorithms_mod, "_checkpoint")
@@ -877,6 +948,7 @@ def install(dist, torch_module=None):
         "torch.distributed.algorithms._checkpoint.checkpoint_wrapper",
         checkpoint_mod, "checkpoint_wrapper")
 
+    dist.__path__ = getattr(dist, "__path__", [])
     for pkg in (tensor_mod, tensor_legacy_mod, tensor_parallel_mod, fsdp_mod,
                 fsdp_fully_pkg, comp_mod, comp_fsdp_mod, algorithms_mod,
                 checkpoint_mod):
@@ -900,6 +972,7 @@ def install(dist, torch_module=None):
     fsdp_fully_pkg._fsdp_collectives = fsdp_collectives_mod
     comp_fsdp_mod.fully_shard = comp_fsdp_fully_mod
     comp_fsdp_mod._fsdp_api = comp_fsdp_api_mod
+    dist._functional_collectives = functional_collectives_mod
 
     exports = dict(
         DeviceMesh=DeviceMesh, init_device_mesh=init_device_mesh,
@@ -964,7 +1037,8 @@ def install(dist, torch_module=None):
         "linspace": linspace,
         "logspace": logspace,
     }
-    for mod in (tensor_mod, tensor_legacy_mod, tensor_api_mod, tensor_placement_mod):
+    for mod in (tensor_mod, tensor_legacy_mod, tensor_api_mod, tensor_placement_mod,
+                tensor_utils_mod):
         for k in ("DTensor", "Placement", "Replicate", "Shard", "Partial",
                   "DeviceMesh", "init_device_mesh", "distribute_tensor",
                   "distribute_module", "is_dtensor"):
@@ -972,9 +1046,11 @@ def install(dist, torch_module=None):
         for k, v in tensor_factories.items():
             setattr(mod, k, v)
     tensor_spec_mod.DTensorSpec = DTensorSpec
+    tensor_utils_mod.compute_local_shape_and_global_offset = compute_local_shape_and_global_offset
     tensor_mod.placement_types = tensor_placement_mod
     tensor_mod._api = tensor_api_mod
     tensor_mod._dtensor_spec = tensor_spec_mod
+    tensor_mod._utils = tensor_utils_mod
     tensor_mod.parallel = tensor_parallel_mod
     tensor_mod.DeviceMesh = DeviceMesh
     tensor_legacy_mod.device_mesh = tensor_legacy_device_mesh_mod
@@ -1003,6 +1079,14 @@ def install(dist, torch_module=None):
     dist.DeviceMesh = DeviceMesh
     dist.init_device_mesh = init_device_mesh
     dist.is_available = lambda *a, **k: True
+    class AsyncCollectiveTensor:
+        def __init__(self, tensor=None):
+            self.tensor = tensor
+        def wait(self):
+            return self.tensor
+        def __getattr__(self, name):
+            return getattr(self.tensor, name)
+    functional_collectives_mod.AsyncCollectiveTensor = AsyncCollectiveTensor
 
     checkpoint_wrapper_mod.checkpoint_wrapper = _checkpoint_wrapper
     checkpoint_wrapper_mod.apply_activation_checkpointing = _apply_activation_checkpointing
@@ -1010,6 +1094,7 @@ def install(dist, torch_module=None):
     checkpoint_wrapper_mod._CHECKPOINT_PREFIX = "_checkpoint_wrapped_module."
     checkpoint_wrapper_mod.CheckpointImpl = enum.Enum(
         "CheckpointImpl", {"NO_REENTRANT": "no_reentrant", "REENTRANT": "reentrant"})
+    checkpoint_wrapper_mod.checkpoint = _checkpoint
     fsdp_common_mod.FSDPMeshInfo = FSDPMeshInfo
     fsdp_common_mod.ShardPlacementResult = ShardPlacementResult
     fsdp_init_mod._get_mesh_info = _get_mesh_info
