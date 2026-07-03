@@ -1822,21 +1822,40 @@ def _install_optimizers(g):
         _cls.__init__ = _mk(_ci)
         _cls._torch_lr_default = True
 
+    def _optimizer_has_ready_grads(opt):
+        for _pg in getattr(opt, "param_groups", []):
+            _grads = _pg.get("grads")
+            if not _grads:
+                continue
+            for _p, _g in zip(_pg.get("params", []), _grads):
+                if isinstance(_p, _jt.Var) and isinstance(_g, _jt.Var) and list(_p.shape) == list(_g.shape):
+                    return True
+        return False
+
+    def _wrap_step_accept_closure(_cls, _marker):
+        if _cls is None or getattr(_cls, _marker, False):
+            return
+        _orig_step = _cls.step
+        def _step_torch_closure(self, loss=None, retain_graph=False, closure=None, **kwargs):
+            called_closure = False
+            if closure is None and callable(loss):
+                closure = loss
+                loss = None
+            if closure is not None:
+                loss = closure()
+                called_closure = True
+            step_loss = None if called_closure and _optimizer_has_ready_grads(self) else loss
+            out = _orig_step(self, step_loss, retain_graph=retain_graph)
+            return loss if called_closure and out is None else out
+        _cls.step = _step_torch_closure
+        setattr(_cls, _marker, True)
+
     def _make_adam_step_torch(decoupled_weight_decay=False):
         def _adam_step_torch(self, loss=None, retain_graph=False, closure=None, **kwargs):
             if closure is not None:
                 loss = closure()
-            def _has_ready_grads():
-                for _pg in self.param_groups:
-                    _grads = _pg.get("grads")
-                    if not _grads:
-                        continue
-                    for _p, _g in zip(_pg.get("params", []), _grads):
-                        if isinstance(_p, _jt.Var) and isinstance(_g, _jt.Var) and list(_p.shape) == list(_g.shape):
-                            return True
-                return False
             prev_step = int(getattr(self, "n_step", 0))
-            self.pre_step(None if closure is not None and _has_ready_grads() else loss, retain_graph)
+            self.pre_step(None if closure is not None and _optimizer_has_ready_grads(self) else loss, retain_graph)
             if int(getattr(self, "n_step", 0)) == prev_step:
                 self.n_step = prev_step + 1
             n = float(self.n_step)
@@ -1880,6 +1899,9 @@ def _install_optimizers(g):
     if AdamW is not None and not getattr(AdamW, "_torch_adamw_step", False):
         AdamW.step = _make_adam_step_torch(True)
         AdamW._torch_adamw_step = True
+
+    for _cls_name in ("SGD", "RMSprop", "Adan"):
+        _wrap_step_accept_closure(getattr(_optim, _cls_name, None), "_torch_closure_step")
 
     Base._torch_compat_wrapped = True
 
@@ -4096,6 +4118,13 @@ def _install_module_methods(nn):
         return _train(self, False)
     M.eval = _eval
 
+    def _module_cast_float_dtype(self, ds):
+        if ds is not None and ds in ("float16", "bfloat16", "float32", "float64"):
+            for p in self.parameters():
+                if p.dtype.is_float() if hasattr(p.dtype, "is_float") else ("float" in str(p.dtype)):
+                    p.assign(p.cast(ds))
+        return self
+
     if not hasattr(M, "to"):
         def _module_to(self, *args, **kwargs):
             # torch Module.to(device/dtype/...) -- cast float params to a dtype
@@ -4106,21 +4135,17 @@ def _install_module_methods(nn):
                     ds = a.name
                 elif isinstance(a, str) and a.replace("torch.", "") in dtype._registry:
                     ds = a.replace("torch.", "")
-            if ds is not None and ds in ("float16", "bfloat16", "float32", "float64"):
-                for p in self.parameters():
-                    if p.dtype.is_float() if hasattr(p.dtype, "is_float") else ("float" in str(p.dtype)):
-                        p.assign(p.cast(ds))
-            return self
+            return _module_cast_float_dtype(self, ds)
         M.to = _module_to
 
     if not hasattr(M, "cpu"):
         M.cpu = lambda self: self
     if not hasattr(M, "float"):
-        def _mfloat(self):
-            for p in self.parameters():
-                p.assign(p.float32())
-            return self
-        M.float = _mfloat
+        M.float = lambda self: _module_cast_float_dtype(self, "float32")
+    if not hasattr(M, "double"):
+        M.double = lambda self: _module_cast_float_dtype(self, "float64")
+    if not hasattr(M, "half"):
+        M.half = lambda self: _module_cast_float_dtype(self, "float16")
     # torch's zero_grad() clears each param's .grad so the next backward starts
     # fresh; the optimizer-free backward path below accumulates with += (matching
     # torch), so a real reset is required. The prior no-op left grads silently
