@@ -716,6 +716,24 @@ def enable(
     runtime, registers Jittor as ``torch`` in-process, scans local native
     extension projects, and builds setuptools extensions through Jittor's
     ``torch.utils.cpp_extension`` facade.
+
+    Typical use in a torch-oriented project entrypoint::
+
+        from jittor.torch_shim import enable as _enable_torch_shim
+        _enable_torch_shim(project_root=__file__)
+        import torch
+
+    For pure evaluation/metrics scripts, pass ``inference=True`` to enable
+    Jittor no-grad mode for the process.
+
+    Dependency rule for Jittor-backed runs: do not install upstream PyTorch
+    environment files as-is. Install Jittor plus the project's non-torch Python
+    dependencies, install torch-dependent pure-Python packages with
+    ``pip install --no-deps`` when needed, and keep local C++/CUDA extension
+    source trees in the project so this bootstrap can build them through the
+    shim. Prebuilt wheels compiled against PyTorch/libtorch ABI are not
+    compatible with the Jittor backend unless a matching shim implementation
+    exists.
     """
 
     verbose = (not _is_truthy(os.environ.get("JITTOR_TORCH_QUIET"))) if verbose is None else bool(verbose)

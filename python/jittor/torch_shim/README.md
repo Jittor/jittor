@@ -46,17 +46,53 @@ from jittor.torch_shim import enable as _enable_torch_shim
 _enable_torch_shim(project_root=__file__)
 ```
 
-Then run the stock command:
+Installation is intentionally different from the upstream gaussian-splatting
+README. The upstream `environment.yml` installs PyTorch, torchvision,
+torchaudio and a PyTorch CUDA runtime. For a Jittor-backed run, install Jittor
+and the non-torch Python dependencies only, then let `enable()` build local
+PyTorch-style CUDA extensions through the shim:
+
+```bash
+python -m pip install -e /path/to/jittor
+python -m pip install numpy pillow tqdm plyfile opencv-python-headless joblib scipy imageio packaging
+```
+
+Do not preinstall the gaussian-splatting extension submodules with the stock
+PyTorch command:
+
+```bash
+# Not needed for Jittor-backed runs:
+# python -m pip install submodules/diff-gaussian-rasterization
+# python -m pip install submodules/simple-knn
+# python -m pip install submodules/fused-ssim
+```
+
+Keep those source directories in the checkout. `enable(project_root=__file__)`
+will scan and build them in place:
+
+- `submodules/diff-gaussian-rasterization`
+- `submodules/simple-knn`
+- `submodules/fused-ssim`
+
+For other torch-dependent Python packages, use this rule:
+
+- pure Python package that imports torch: install it with `pip install --no-deps`
+  and manually install its non-torch dependencies;
+- local C++/CUDA extension source tree using `torch.utils.cpp_extension`: keep
+  the source tree visible to `enable()` via the project root, `PYTHONPATH`, or
+  `extension_dirs=...`;
+- prebuilt wheel compiled against PyTorch/libtorch ABI: do not use it directly
+  with the Jittor backend unless a Jittor shim implementation exists.
+
+After setup, run the stock training command:
 
 ```bash
 CUDA_VISIBLE_DEVICES=1 \
   python train.py -s /path/to/data -m /path/to/output --disable_viewer
 ```
 
-When the Python entry script contains `jittor.torch_shim`, Jittor's early import
-path defaults runtime state to `.jittor_torch_runtime` beside that entry script.
-Set `JITTOR_TORCH_RUNTIME_ROOT` before starting Python only when you want to
-override that project-local default.
+`CUDA_VISIBLE_DEVICES` is only a multi-GPU scheduling choice. It may be omitted
+when the process can use the default visible GPU set.
 
 `enable()` is not gaussian-splatting-specific. It scans the local project tree
 for native extension build roots (`setup.py`, `pyproject.toml`, `CMakeLists.txt`,
@@ -74,12 +110,13 @@ the same nvcc math policy as `torch.utils.cpp_extension`: the shim passes arch
 and include/link flags, but does not inject Jittor JIT math flags into project
 CUDA files unless the project requested them.
 
-Runtime state defaults to `.jittor_torch_runtime` under the project root:
+Runtime state defaults to `.cache/jittor_torch` under the project root:
 
 - `HOME`, `JITTOR_HOME`, `TORCH_HOME`, `TMPDIR`, `XDG_CACHE_HOME`,
   `CUDA_CACHE_PATH`
 - the deployed shim `site-packages`
-- `JITTOR_TORCH_EXTENSIONS_DIR`
+- `JITTOR_TORCH_EXTENSIONS_DIR`, `TORCH_EXTENSIONS_DIR`
+- Triton and pip caches used by torch-oriented dependencies
 
 Set `JITTOR_TORCH_RUNTIME_ROOT` to choose another project-local runtime
 directory. Extension build directories, extension stamps, Jittor caches and
