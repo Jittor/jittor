@@ -317,6 +317,12 @@ def _squeezenet1_1(pretrained=False, weights=None, progress=True, **kwargs):
                          **_drop_classifier_kwargs(kwargs))
 
 
+def _resnet50(pretrained=False, weights=None, progress=True, **kwargs):
+    from jittor.models import resnet50
+    return resnet50(pretrained=bool(weights is not None or pretrained),
+                    **_drop_classifier_kwargs(kwargs))
+
+
 class _WeightEnum(metaclass=_IRMMeta):
     DEFAULT = "default"
     IMAGENET1K_V1 = "imagenet1k_v1"
@@ -326,9 +332,11 @@ class _ModelsModule(types.ModuleType):
     VGG16_Weights = type("VGG16_Weights", (_WeightEnum,), {})
     AlexNet_Weights = type("AlexNet_Weights", (_WeightEnum,), {})
     SqueezeNet1_1_Weights = type("SqueezeNet1_1_Weights", (_WeightEnum,), {})
+    ResNet50_Weights = type("ResNet50_Weights", (_WeightEnum,), {})
     vgg16 = staticmethod(_vgg16)
     alexnet = staticmethod(_alexnet)
     squeezenet1_1 = staticmethod(_squeezenet1_1)
+    resnet50 = staticmethod(_resnet50)
 
 
 class _UtilsModule(types.ModuleType):

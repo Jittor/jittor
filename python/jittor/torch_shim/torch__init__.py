@@ -127,8 +127,11 @@ class _ParameterMeta(type):
     def __instancecheck__(cls, obj):
         return isinstance(obj, _jt.Var)
     def __call__(cls, data=None, requires_grad=True):
+        make_param = getattr(_jt, "_torch_make_parameter", None)
+        if callable(make_param):
+            return make_param(data, requires_grad=requires_grad)
         v = data if isinstance(data, _jt.Var) else _jt.array(data)
-        v = v.clone()
+        v = v.stop_grad()
         if requires_grad:
             try: v.requires_grad = True
             except Exception: v.start_grad()
@@ -137,11 +140,15 @@ class _ParameterMeta(type):
         return v
 class Parameter(metaclass=_ParameterMeta):
     pass
+class UninitializedParameter:
+    pass
+class UninitializedBuffer:
+    pass
 nn.Parameter = Parameter
 _param_mod = types.ModuleType("torch.nn.parameter")
 _param_mod.Parameter = Parameter
-_param_mod.UninitializedParameter = Parameter
-_param_mod.UninitializedBuffer = Parameter
+_param_mod.UninitializedParameter = UninitializedParameter
+_param_mod.UninitializedBuffer = UninitializedBuffer
 sys.modules["torch.nn.parameter"] = _param_mod
 # torch.nn IS jittor.nn here; bind submodule as attribute so `nn.parameter` works
 nn.parameter = _param_mod

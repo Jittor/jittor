@@ -533,9 +533,53 @@ def _torch_register_leaf(v):
     except Exception:
         pass
 
+def _torch_prune_leaf_registry(keep_ids=None):
+    """Drop stale torch-facing leaves from the global backward registry."""
+    try:
+        import jittor as _jt
+        reg = getattr(_jt, "_torch_leaf_params", None)
+        if not isinstance(reg, dict):
+            return
+        keep = None if keep_ids is None else set(keep_ids)
+        for k, v in list(reg.items()):
+            if keep is not None and k not in keep:
+                reg.pop(k, None)
+                continue
+            if not (isinstance(v, _jt.Var) and not v.is_stop_grad()):
+                reg.pop(k, None)
+    except Exception:
+        pass
+
+def _torch_make_parameter(data=None, requires_grad=True):
+    """Create a torch.nn.Parameter-compatible jittor Var.
+
+    PyTorch's Parameter(tensor) is a new leaf and does not keep the tensor's
+    autograd history. 3DGS repeatedly replaces optimizer parameters with
+    Parameter(torch.cat(...)); carrying that history in the shim retains old
+    densification graphs and quickly exhausts GPU memory.
+    """
+    import jittor as _jt
+    v = data if isinstance(data, _jt.Var) else _jt.array(data)
+    if isinstance(v, _jt.Var):
+        v = v.stop_grad()
+    if requires_grad:
+        try:
+            v.requires_grad = True
+        except Exception:
+            v.start_grad()
+            _torch_register_leaf(v)
+    else:
+        try:
+            v.stop_grad()
+        except Exception:
+            pass
+    return v
+
 
 def install(torch):
     g = torch
+    g._torch_make_parameter = _torch_make_parameter
+    g._torch_prune_leaf_registry = _torch_prune_leaf_registry
     if not hasattr(g, "_vj_native_load"):
         g._vj_native_load = getattr(g, "load", None)
     if not hasattr(g, "_vj_native_save"):
@@ -1509,7 +1553,7 @@ def _install_autograd(g):
         else:
             gos = _as_list(grad_outputs)
             loss = sum((o * w).sum() for o, w in zip(outs, gos))
-        rg = True if retain_graph is None else bool(retain_graph)
+        rg = bool(create_graph) if retain_graph is None else bool(retain_graph)
         gs = _jt.grad(loss, ins, rg)
         return tuple(gs)
     autograd.grad = grad
@@ -1531,14 +1575,42 @@ def _install_autograd(g):
         autograd.Variable = g.Tensor
     # torch.autograd.set_detect_anomaly / detect_anomaly — debug hooks jittor
     # lacks; 3DGS train.py calls set_detect_anomaly(args.detect_anomaly) at start.
-    if not hasattr(autograd, "set_detect_anomaly"):
-        autograd.set_detect_anomaly = lambda *a, **k: None
-    if not hasattr(autograd, "detect_anomaly"):
-        import contextlib as _ctxlib
-        autograd.detect_anomaly = lambda *a, **k: _ctxlib.nullcontext()
+    import contextlib as _ctxlib
+    autograd.set_detect_anomaly = lambda *a, **k: _ctxlib.nullcontext()
+    autograd.detect_anomaly = lambda *a, **k: _ctxlib.nullcontext()
     g.autograd = autograd
     import sys as _sys_autograd
     _sys_autograd.modules["torch.autograd"] = autograd
+    autograd.__path__ = getattr(autograd, "__path__", [])
+    if "torch.autograd.profiler" not in _sys_autograd.modules:
+        _prof = _types.ModuleType("torch.autograd.profiler")
+        class EventList(list):
+            def table(self, *args, **kwargs):
+                return ""
+            def export_chrome_trace(self, *args, **kwargs):
+                return None
+        class _RecordFunction:
+            def __init__(self, *args, **kwargs):
+                pass
+            def __enter__(self):
+                return self
+            def __exit__(self, *exc):
+                return False
+        class profile(_RecordFunction):
+            def function_events(self):
+                return EventList()
+            @property
+            def key_averages(self):
+                return lambda *args, **kwargs: EventList()
+            def export_chrome_trace(self, *args, **kwargs):
+                return None
+        _prof.EventList = EventList
+        _prof.record_function = lambda *args, **kwargs: _RecordFunction()
+        _prof.profile = profile
+        _prof.emit_nvtx = lambda *args, **kwargs: _RecordFunction()
+        _prof.kineto_available = lambda: False
+        _sys_autograd.modules["torch.autograd.profiler"] = _prof
+    autograd.profiler = _sys_autograd.modules["torch.autograd.profiler"]
 
 
 def _install_optimizers(g):
@@ -1591,6 +1663,10 @@ def _install_optimizers(g):
                         if p is param:
                             return pg, i
                 return None, None
+            def _params(self):
+                for pg in self._opt.param_groups:
+                    for p in pg.get("params", []):
+                        yield p
             def get(self, param, default=None):
                 pg, i = self._find(param)
                 if pg is None or "m" not in pg or "values" not in pg:
@@ -1617,6 +1693,16 @@ def _install_optimizers(g):
             def __contains__(self, param):
                 pg, _ = self._find(param)
                 return pg is not None
+            def __iter__(self):
+                return self._params()
+            def __len__(self):
+                return sum(len(pg.get("params", [])) for pg in self._opt.param_groups)
+            def keys(self):
+                return list(self._params())
+            def values(self):
+                return [self.get(p, {}) for p in self._params()]
+            def items(self):
+                return [(p, self.get(p, {})) for p in self._params()]
             def get_state_dict_key(self, param):
                 return self._find(param)
         Base._OptState = _OptState
@@ -1731,9 +1817,20 @@ def _install_optimizers(g):
 
     Adam = getattr(_optim, "Adam", None)
     if Adam is not None and not getattr(Adam, "_torch_adam_step", False):
-        def _adam_step_torch(self, loss=None, retain_graph=False):
+        def _adam_step_torch(self, loss=None, retain_graph=False, closure=None, **kwargs):
+            if closure is not None:
+                loss = closure()
+            def _has_ready_grads():
+                for _pg in self.param_groups:
+                    _grads = _pg.get("grads")
+                    if not _grads:
+                        continue
+                    for _p, _g in zip(_pg.get("params", []), _grads):
+                        if isinstance(_p, _jt.Var) and isinstance(_g, _jt.Var) and list(_p.shape) == list(_g.shape):
+                            return True
+                return False
             prev_step = int(getattr(self, "n_step", 0))
-            self.pre_step(loss, retain_graph)
+            self.pre_step(None if closure is not None and _has_ready_grads() else loss, retain_graph)
             if int(getattr(self, "n_step", 0)) == prev_step:
                 self.n_step = prev_step + 1
             n = float(self.n_step)
@@ -1763,10 +1860,39 @@ def _install_optimizers(g):
                     except Exception:
                         pass
             self.post_step()
+            return loss
         Adam.step = _adam_step_torch
         Adam._torch_adam_step = True
 
     Base._torch_compat_wrapped = True
+
+    if not hasattr(_optim, "LBFGS"):
+        class LBFGS(Base):
+            def __init__(self, params, lr=1.0, *args, **kwargs):
+                super().__init__(params, lr)
+
+            def step(self, closure=None):
+                raise NotImplementedError("torch.optim.LBFGS is not implemented by the jittor torch shim")
+
+        _optim.LBFGS = LBFGS
+
+    import sys as _sys_optim
+    import types as _types_optim
+    _optim_mod = _sys_optim.modules.get("torch.optim")
+    if _optim_mod is None:
+        _sys_optim.modules["torch.optim"] = _optim
+        _optim_mod = _optim
+    _optim_mod.__path__ = getattr(_optim_mod, "__path__", [])
+    if not hasattr(_optim_mod, "Optimizer"):
+        _optim_mod.Optimizer = Base
+    if not hasattr(_optim_mod, "LBFGS"):
+        _optim_mod.LBFGS = _optim.LBFGS
+    _optim_sub = _sys_optim.modules.get("torch.optim.optimizer")
+    if _optim_sub is None:
+        _optim_sub = _types_optim.ModuleType("torch.optim.optimizer")
+        _sys_optim.modules["torch.optim.optimizer"] = _optim_sub
+    _optim_sub.Optimizer = Base
+    _optim_sub.ParamsT = object
 
     # jittor's load_state_dict runs a dfs that calls .stop_grad() on every Var
     # it meets -- including params nested under param_groups -- freezing all
@@ -2000,8 +2126,86 @@ def _install_lr_scheduler(g):
     _optim._torch_lr_installed = True
     import sys as _sys
     _sys.modules.setdefault("torch.optim", _optim)
+    _optim.__path__ = getattr(_optim, "__path__", [])
     _sys.modules.setdefault("torch.optim.lr_scheduler", ns)
     _sys.modules.setdefault("jittor.optim.lr_scheduler", ns)
+    swa_utils = _types.ModuleType("torch.optim.swa_utils")
+    class SWALR(LRScheduler):
+        def __init__(self, optimizer, swa_lr, anneal_epochs=10, anneal_strategy="cos",
+                     last_epoch=-1, verbose=False):
+            self.swa_lr = swa_lr
+            self.anneal_epochs = anneal_epochs
+            self.anneal_strategy = anneal_strategy
+            base = _base_lrs(optimizer)
+            if isinstance(swa_lr, (list, tuple)):
+                self.swa_lrs = list(swa_lr)
+            else:
+                self.swa_lrs = [swa_lr] * len(base)
+            self.base_lrs = base
+            super().__init__(optimizer, last_epoch, verbose)
+        def get_lr(self):
+            if self.anneal_epochs <= 0:
+                return list(self.swa_lrs)
+            t = min(max(self.last_epoch, 0), self.anneal_epochs) / self.anneal_epochs
+            if self.anneal_strategy == "linear":
+                alpha = t
+            else:
+                alpha = (1 - _math.cos(_math.pi * t)) / 2
+            return [b + (s - b) * alpha for b, s in zip(self.base_lrs, self.swa_lrs)]
+    swa_utils.SWALR = SWALR
+    def get_swa_avg_fn():
+        return lambda averaged_param, current_param, num_averaged: (
+            averaged_param + (current_param - averaged_param) / (num_averaged + 1)
+        )
+    def get_ema_avg_fn(decay=0.999):
+        return lambda averaged_param, current_param, num_averaged: (
+            decay * averaged_param + (1.0 - decay) * current_param
+        )
+    class AveragedModel(jt.nn.Module):
+        def __init__(self, model, device=None, avg_fn=None, multi_avg_fn=None, use_buffers=False):
+            super().__init__()
+            import copy as _copy
+            self.module = _copy.deepcopy(model)
+            self.n_averaged = jt.array(0).int64()
+            self.avg_fn = avg_fn or get_swa_avg_fn()
+            self.multi_avg_fn = multi_avg_fn
+            self.use_buffers = use_buffers
+            if device is not None and hasattr(self.module, "to"):
+                try:
+                    self.module.to(device)
+                except Exception:
+                    pass
+        def execute(self, *args, **kwargs):
+            return self.module(*args, **kwargs)
+        def update_parameters(self, model):
+            avg_params = list(self.module.parameters())
+            model_params = list(model.parameters())
+            try:
+                n = int(self.n_averaged.item())
+            except Exception:
+                n = 0
+            if n == 0:
+                for ap, mp in zip(avg_params, model_params):
+                    try: ap.update(mp)
+                    except Exception: pass
+            elif self.multi_avg_fn is not None:
+                self.multi_avg_fn(avg_params, model_params, self.n_averaged)
+            else:
+                for ap, mp in zip(avg_params, model_params):
+                    try:
+                        ap.update(self.avg_fn(ap, mp, self.n_averaged))
+                    except Exception:
+                        pass
+            try:
+                self.n_averaged.update(self.n_averaged + 1)
+            except Exception:
+                self.n_averaged = jt.array(n + 1).int64()
+    swa_utils.AveragedModel = AveragedModel
+    swa_utils.get_swa_avg_fn = get_swa_avg_fn
+    swa_utils.get_ema_avg_fn = get_ema_avg_fn
+    swa_utils.update_bn = lambda *args, **kwargs: None
+    _optim.swa_utils = swa_utils
+    _sys.modules["torch.optim.swa_utils"] = swa_utils
 
 
 import collections as _collections
@@ -2369,12 +2573,13 @@ def _wrap_constructors(g):
             # numpy scalar raises. Coerce numpy integer/float scalars (and 0-dim
             # numpy arrays) in the positional args to plain Python scalars. Only
             # numpy scalars are touched, so normal int/tuple shape args are untouched.
-            if args:
+            _is_like_factory = name.endswith("_like")
+            if args and not _is_like_factory:
                 args = tuple(_shape_arg(a) for a in args)
             # normalize a Size/NanoVector shape arg (e.g. torch.zeros(x.size()))
             # to a plain tuple — jittor's factories reject tuple subclasses /
             # NanoVector. transformers BertEmbeddings does torch.zeros(position_ids.size()).
-            if args and (isinstance(args[0], jt.NanoVector) or
+            if (not _is_like_factory) and args and (isinstance(args[0], jt.NanoVector) or
                          (isinstance(args[0], tuple) and type(args[0]) is not tuple)):
                 args = (tuple(int(x) for x in args[0]),) + tuple(args[1:])
             # torch allows the shape via the size= keyword: torch.ones(size=(2,3))
@@ -2526,18 +2731,18 @@ def _install_nn_extras(nn):
             def __instancecheck__(cls, obj):
                 return isinstance(obj, _jt.Var)
             def __call__(cls, data=None, requires_grad=True):
-                if _native_parameter is not None:
-                    return _native_parameter(data, requires_grad=requires_grad)
-                v = data if isinstance(data, _jt.Var) else _jt.array(data)
-                v.requires_grad = requires_grad
-                return v
+                return _torch_make_parameter(data, requires_grad=requires_grad)
         class Parameter(metaclass=_ParameterMeta):
+            pass
+        class UninitializedParameter:
+            pass
+        class UninitializedBuffer:
             pass
         nn.Parameter = Parameter
         param_mod = _types_nn_private.ModuleType("torch.nn.parameter")
         param_mod.Parameter = Parameter
-        param_mod.UninitializedParameter = Parameter
-        param_mod.UninitializedBuffer = Parameter
+        param_mod.UninitializedParameter = UninitializedParameter
+        param_mod.UninitializedBuffer = UninitializedBuffer
         _sys_nn_private.modules["torch.nn.parameter"] = param_mod
         nn.parameter = param_mod
 
@@ -2545,6 +2750,7 @@ def _install_nn_extras(nn):
     if modules_pkg is None:
         modules_pkg = _types_nn_private.ModuleType("torch.nn.modules")
         _sys_nn_private.modules["torch.nn.modules"] = modules_pkg
+    modules_pkg.__path__ = getattr(modules_pkg, "__path__", [])
     module_mod = _sys_nn_private.modules.get("torch.nn.modules.module")
     if module_mod is None:
         module_mod = _types_nn_private.ModuleType("torch.nn.modules.module")
@@ -2568,7 +2774,88 @@ def _install_nn_extras(nn):
                 setattr(modules_pkg, _cn, getattr(nn, _cn))
             except Exception:
                 pass
+    container_mod = _sys_nn_private.modules.get("torch.nn.modules.container")
+    if container_mod is None:
+        container_mod = _types_nn_private.ModuleType("torch.nn.modules.container")
+        _sys_nn_private.modules["torch.nn.modules.container"] = container_mod
+    for _cn in ("Sequential", "ModuleList", "ModuleDict", "ParameterList", "ParameterDict"):
+        if hasattr(nn, _cn):
+            setattr(container_mod, _cn, getattr(nn, _cn))
+    modules_pkg.container = container_mod
+    try:
+        from jittor.misc import _single, _pair, _triple, _ntuple
+    except Exception:
+        _single = lambda x: x if isinstance(x, tuple) else (x,)
+        _pair = lambda x: x if isinstance(x, tuple) else (x, x)
+        _triple = lambda x: x if isinstance(x, tuple) else (x, x, x)
+        def _ntuple(n):
+            return lambda x: x if isinstance(x, tuple) else tuple([x] * n)
+
+    def _mk_nn_submod(_name, **_attrs):
+        _full = "torch.nn.modules." + _name
+        _mod = _sys_nn_private.modules.get(_full)
+        if _mod is None:
+            _mod = _types_nn_private.ModuleType(_full)
+            _sys_nn_private.modules[_full] = _mod
+        for _ak, _av in _attrs.items():
+            if _av is not None:
+                setattr(_mod, _ak, _av)
+        setattr(modules_pkg, _name, _mod)
+        return _mod
+
+    _mk_nn_submod("utils", _single=_single, _pair=_pair, _triple=_triple,
+                  _ntuple=_ntuple, _quadruple=_ntuple(4))
+    _mk_nn_submod("batchnorm",
+                  _BatchNorm=getattr(nn, "BatchNorm", None),
+                  BatchNorm=getattr(nn, "BatchNorm", None),
+                  BatchNorm1d=getattr(nn, "BatchNorm1d", getattr(nn, "BatchNorm", None)),
+                  BatchNorm2d=getattr(nn, "BatchNorm2d", getattr(nn, "BatchNorm", None)),
+                  BatchNorm3d=getattr(nn, "BatchNorm3d", getattr(nn, "BatchNorm", None)),
+                  SyncBatchNorm=getattr(nn, "SyncBatchNorm", getattr(nn, "BatchNorm", None)))
+    _mk_nn_submod("normalization",
+                  GroupNorm=getattr(nn, "GroupNorm", None),
+                  LayerNorm=getattr(nn, "LayerNorm", None),
+                  LocalResponseNorm=getattr(nn, "LocalResponseNorm", None))
+    _mk_nn_submod("activation",
+                  ReLU=getattr(nn, "ReLU", None), SiLU=getattr(nn, "SiLU", None),
+                  Sigmoid=getattr(nn, "Sigmoid", None), Tanh=getattr(nn, "Tanh", None),
+                  GELU=getattr(nn, "GELU", None), LeakyReLU=getattr(nn, "LeakyReLU", None))
     nn.modules = modules_pkg
+
+    parallel_mod = _sys_nn_private.modules.get("torch.nn.parallel")
+    if parallel_mod is None:
+        parallel_mod = _types_nn_private.ModuleType("torch.nn.parallel")
+        _sys_nn_private.modules["torch.nn.parallel"] = parallel_mod
+
+    class _DataParallel(nn.Module):
+        def __init__(self, module, *args, **kwargs):
+            super().__init__()
+            self.module = module
+
+        def execute(self, *args, **kwargs):
+            return self.module(*args, **kwargs)
+
+        def forward(self, *args, **kwargs):
+            return self.module(*args, **kwargs)
+
+    class _DistributedDataParallel(_DataParallel):
+        require_backward_grad_sync = True
+
+        def no_sync(self):
+            import contextlib as _ctxlib
+            return _ctxlib.nullcontext()
+
+    parallel_mod.DataParallel = getattr(parallel_mod, "DataParallel", _DataParallel)
+    parallel_mod.DistributedDataParallel = getattr(
+        parallel_mod, "DistributedDataParallel", _DistributedDataParallel)
+    parallel_distributed_mod = _sys_nn_private.modules.get("torch.nn.parallel.distributed")
+    if parallel_distributed_mod is None:
+        parallel_distributed_mod = _types_nn_private.ModuleType("torch.nn.parallel.distributed")
+        _sys_nn_private.modules["torch.nn.parallel.distributed"] = parallel_distributed_mod
+    parallel_distributed_mod.DistributedDataParallel = parallel_mod.DistributedDataParallel
+    parallel_mod.distributed = parallel_distributed_mod
+    nn.DataParallel = parallel_mod.DataParallel
+    nn.parallel = parallel_mod
 
     # transformers 4.56.x imports torch.nn.attention.flex_attention from
     # masking_utils when torch is reported available. TRELLIS does not execute
@@ -2765,6 +3052,7 @@ def _install_nn_extras(nn):
     import sys as _sys_nn_utils
     import types as _types_nn_utils
     _u = getattr(nn, "utils", None) or _types_nn_utils.ModuleType("torch.nn.utils")
+    _u.__path__ = getattr(_u, "__path__", [])
     _sys_nn_utils.modules.setdefault("torch.nn.utils", _u)
     nn.utils = _u
     if not hasattr(_u, "parametrize"):
@@ -2786,6 +3074,188 @@ def _install_nn_extras(nn):
         _sys_nn_utils.modules["torch.nn.utils.parametrizations"] = _parametrizations
     else:
         _sys_nn_utils.modules.setdefault("torch.nn.utils.parametrizations", _u.parametrizations)
+
+    # torchmetrics imports torch.nn.utils.rnn at module import time. Install the
+    # module unconditionally because some bootstrap paths create nn.utils before
+    # the clip/weight-norm block above runs.
+    import builtins as _builtins_rnn
+    import collections as _collections_rnn
+    _rnn = getattr(_u, "rnn", None)
+    if _rnn is None:
+        _rnn = _types_nn_utils.ModuleType("torch.nn.utils.rnn")
+
+    def _rnn_lengths_to_list(lengths):
+        if isinstance(lengths, _jt.Var):
+            lengths = lengths.numpy()
+        if hasattr(lengths, "tolist"):
+            lengths = lengths.tolist()
+        if isinstance(lengths, (_builtins_rnn.int, _builtins_rnn.float)):
+            lengths = [lengths]
+        return [_builtins_rnn.int(x) for x in list(lengths)]
+
+    def _rnn_index_tensor(x, order, batch_first):
+        order = _rnn_lengths_to_list(order)
+        if not order:
+            return x
+        if batch_first:
+            return _jt.stack([x[i] for i in order], dim=0)
+        return _jt.stack([x[:, i] for i in order], dim=1)
+
+    def _rnn_pad_sequence(sequences, batch_first=False, padding_value=0.0):
+        seqs = list(sequences)
+        if not seqs:
+            raise ValueError("pad_sequence expects a non-empty sequence list")
+        max_len = _builtins_rnn.max(_builtins_rnn.int(s.shape[0]) for s in seqs)
+        trailing = tuple(seqs[0].shape[1:])
+        padded = []
+        for s in seqs:
+            pad_len = max_len - _builtins_rnn.int(s.shape[0])
+            if pad_len > 0:
+                pad = _jt.ones((pad_len,) + trailing, dtype=s.dtype) * padding_value
+                s = _jt.concat([s, pad], dim=0)
+            padded.append(s)
+        out = _jt.stack(padded, dim=0)
+        return out if batch_first else out.transpose(0, 1)
+
+    _PackedSequenceBase = _collections_rnn.namedtuple(
+        "PackedSequence", ("data", "batch_sizes", "sorted_indices", "unsorted_indices"))
+
+    class PackedSequence(_PackedSequenceBase):
+        __slots__ = ()
+
+        def __new__(cls, data, batch_sizes=None, sorted_indices=None, unsorted_indices=None):
+            return _PackedSequenceBase.__new__(cls, data, batch_sizes, sorted_indices, unsorted_indices)
+
+        def to(self, *args, **kwargs):
+            data = self.data.to(*args, **kwargs) if hasattr(self.data, "to") else self.data
+            return type(self)(data, self.batch_sizes, self.sorted_indices, self.unsorted_indices)
+
+        cuda = to
+        cpu = to
+
+    def pack_padded_sequence(input, lengths, batch_first=False, enforce_sorted=True):
+        lengths_list = _rnn_lengths_to_list(lengths)
+        if not enforce_sorted:
+            order = sorted(range(len(lengths_list)), key=lambda i: lengths_list[i], reverse=True)
+            unsorted = [0] * len(order)
+            for sorted_pos, original_pos in enumerate(order):
+                unsorted[original_pos] = sorted_pos
+            input = _rnn_index_tensor(input, order, batch_first)
+            lengths_list = [lengths_list[i] for i in order]
+            sorted_indices = _jt.array(order).int64()
+            unsorted_indices = _jt.array(unsorted).int64()
+        else:
+            sorted_indices = None
+            unsorted_indices = None
+
+        max_len = lengths_list[0] if lengths_list else 0
+        pieces = []
+        batch_sizes = []
+        for t in range(max_len):
+            active = _builtins_rnn.sum(1 for n in lengths_list if n > t)
+            if active <= 0:
+                break
+            batch_sizes.append(active)
+            if batch_first:
+                pieces.append(input[:active, t])
+            else:
+                pieces.append(input[t, :active])
+        if pieces:
+            data = _jt.concat(pieces, dim=0)
+        else:
+            trailing = tuple(input.shape[2:])
+            data = _jt.ones((0,) + trailing, dtype=input.dtype)
+        return PackedSequence(data, _jt.array(batch_sizes).int64(), sorted_indices, unsorted_indices)
+
+    def pad_packed_sequence(sequence, batch_first=False, padding_value=0.0, total_length=None):
+        if not isinstance(sequence, PackedSequence):
+            return sequence, None
+        batch_sizes = _rnn_lengths_to_list(sequence.batch_sizes)
+        max_len = len(batch_sizes)
+        batch_size = _builtins_rnn.max(batch_sizes) if batch_sizes else 0
+        data = sequence.data
+        trailing = tuple(data.shape[1:])
+        steps = []
+        offset = 0
+        for active in batch_sizes:
+            step = data[offset:offset + active]
+            offset += active
+            if active < batch_size:
+                pad = _jt.ones((batch_size - active,) + trailing, dtype=data.dtype) * padding_value
+                step = _jt.concat([step, pad], dim=0)
+            steps.append(step)
+        if steps:
+            out = _jt.stack(steps, dim=0)
+        else:
+            out = _jt.ones((0, batch_size) + trailing, dtype=data.dtype) * padding_value
+        if total_length is not None:
+            total_length = _builtins_rnn.int(total_length)
+            if total_length < max_len:
+                raise ValueError("total_length must be at least the packed sequence length")
+            if total_length > max_len:
+                pad = _jt.ones((total_length - max_len, batch_size) + trailing, dtype=data.dtype) * padding_value
+                out = _jt.concat([out, pad], dim=0)
+        lengths_list = [_builtins_rnn.sum(1 for n in batch_sizes if n > i) for i in range(batch_size)]
+        if sequence.unsorted_indices is not None:
+            out = _rnn_index_tensor(out, sequence.unsorted_indices, batch_first=False)
+            order = _rnn_lengths_to_list(sequence.unsorted_indices)
+            lengths_list = [lengths_list[i] for i in order]
+        if batch_first:
+            out = out.transpose(0, 1)
+        return out, _jt.array(lengths_list).int64()
+
+    _rnn.pad_sequence = _rnn_pad_sequence
+    _rnn.pack_padded_sequence = pack_padded_sequence
+    _rnn.pad_packed_sequence = pad_packed_sequence
+    _rnn.PackedSequence = PackedSequence
+    _u.rnn = _rnn
+    _sys_nn_utils.modules["torch.nn.utils.rnn"] = _rnn
+
+    if "torch.nn.utils.prune" not in _sys_nn_utils.modules:
+        _prune = _types_nn_utils.ModuleType("torch.nn.utils.prune")
+
+        def _unsupported_prune(*args, **kwargs):
+            raise NotImplementedError("torch.nn.utils.prune is not supported on jittor backend")
+
+        class BasePruningMethod:
+            PRUNING_TYPE = "unstructured"
+
+            def __call__(self, module, inputs):
+                return inputs
+
+            @classmethod
+            def apply(cls, module, name, *args, **kwargs):
+                return _unsupported_prune(module, name, *args, **kwargs)
+
+            def remove(self, module):
+                return module
+
+        class L1Unstructured(BasePruningMethod):
+            PRUNING_TYPE = "unstructured"
+
+        class RandomUnstructured(BasePruningMethod):
+            PRUNING_TYPE = "unstructured"
+
+        class LnStructured(BasePruningMethod):
+            PRUNING_TYPE = "structured"
+
+        class RandomStructured(BasePruningMethod):
+            PRUNING_TYPE = "structured"
+
+        _prune.BasePruningMethod = BasePruningMethod
+        _prune.L1Unstructured = L1Unstructured
+        _prune.RandomUnstructured = RandomUnstructured
+        _prune.LnStructured = LnStructured
+        _prune.RandomStructured = RandomStructured
+        _prune.l1_unstructured = _unsupported_prune
+        _prune.random_unstructured = _unsupported_prune
+        _prune.ln_structured = _unsupported_prune
+        _prune.random_structured = _unsupported_prune
+        _prune.global_unstructured = _unsupported_prune
+        _prune.remove = _unsupported_prune
+        _prune.is_pruned = lambda module: False
+        _sys_nn_utils.modules["torch.nn.utils.prune"] = _prune
+    _u.prune = _sys_nn_utils.modules["torch.nn.utils.prune"]
 
     if not hasattr(nn, "Hardswish"):
         class Hardswish(nn.Module):
@@ -4039,6 +4509,117 @@ def _install_cuda(g):
     import sys as _sys_cuda
     _sys_cuda.modules["torch.cuda.random"] = _curandom
     g.cuda = cuda
+    _sys_cuda.modules["torch.cuda"] = cuda
+    if hasattr(cuda, "amp"):
+        _sys_cuda.modules["torch.cuda.amp"] = cuda.amp
+
+    if "torch.multiprocessing" not in _sys_cuda.modules:
+        import multiprocessing as _mp
+        _sys_cuda.modules["torch.multiprocessing"] = _mp
+    g.multiprocessing = _sys_cuda.modules["torch.multiprocessing"]
+
+    if "torch.overrides" not in _sys_cuda.modules:
+        overrides = _types.ModuleType("torch.overrides")
+        class TorchFunctionMode:
+            def __init__(self, *a, **k): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def __torch_function__(self, func, types, args=(), kwargs=None):
+                return func(*args, **(kwargs or {}))
+        overrides.TorchFunctionMode = TorchFunctionMode
+        overrides.BaseTorchFunctionMode = TorchFunctionMode
+        overrides.get_default_nowrap_functions = lambda: set()
+        overrides.has_torch_function = lambda *a, **k: False
+        overrides.handle_torch_function = lambda func, types, *a, **k: func(*a, **k)
+        _sys_cuda.modules["torch.overrides"] = overrides
+    g.overrides = _sys_cuda.modules["torch.overrides"]
+
+    if "torch._C" not in _sys_cuda.modules:
+        c_mod = _types.ModuleType("torch._C")
+        c_mod._TensorMeta = type(getattr(g, "Tensor", jt.Var))
+        c_mod._get_tracing_state = lambda: None
+        c_mod._log_api_usage_once = lambda *a, **k: None
+        c_mod._cuda_clearCublasWorkspaces = lambda *a, **k: None
+        c_mod._distributed_c10d = _types.SimpleNamespace(Reducer=type("Reducer", (), {}))
+        nn_c = _types.ModuleType("torch._C._nn")
+        def _parse_to(*args, **kwargs):
+            dev = kwargs.get("device", None)
+            dtype_arg = kwargs.get("dtype", None)
+            non_blocking = kwargs.get("non_blocking", False)
+            for arg in args:
+                if isinstance(arg, jt.Var):
+                    dev = getattr(arg, "device", dev)
+                    dtype_arg = getattr(arg, "dtype", dtype_arg)
+                    continue
+                if isinstance(arg, dtype) or str(arg).replace("torch.", "") in dtype._registry:
+                    if dtype_arg is None:
+                        dtype_arg = arg
+                    continue
+                if isinstance(arg, str) or hasattr(arg, "type"):
+                    if dev is None:
+                        dev = arg
+                    continue
+                if arg in getattr(dtype, "_registry", {}).values():
+                    if dtype_arg is None:
+                        dtype_arg = arg
+            return dev, dtype_arg, non_blocking, kwargs.get("memory_format", None)
+        nn_c._parse_to = _parse_to
+        c_mod._nn = nn_c
+        _sys_cuda.modules["torch._C"] = c_mod
+        _sys_cuda.modules["torch._C._nn"] = nn_c
+    g._C = _sys_cuda.modules["torch._C"]
+
+    backends = _sys_cuda.modules.get("torch.backends")
+    if backends is None:
+        backends = _types.ModuleType("torch.backends")
+        _sys_cuda.modules["torch.backends"] = backends
+    cudnn = _sys_cuda.modules.get("torch.backends.cudnn")
+    if cudnn is None:
+        cudnn = _types.ModuleType("torch.backends.cudnn")
+        _sys_cuda.modules["torch.backends.cudnn"] = cudnn
+    cudnn.enabled = getattr(cudnn, "enabled", True)
+    cudnn.benchmark = getattr(cudnn, "benchmark", False)
+    cudnn.deterministic = getattr(cudnn, "deterministic", False)
+    cudnn.allow_tf32 = getattr(cudnn, "allow_tf32", True)
+    cudnn.version = getattr(cudnn, "version", lambda: None)
+    cuda_backend = _sys_cuda.modules.get("torch.backends.cuda")
+    if cuda_backend is None:
+        cuda_backend = _types.ModuleType("torch.backends.cuda")
+        _sys_cuda.modules["torch.backends.cuda"] = cuda_backend
+    class _SDPKernel:
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+    cuda_backend.sdp_kernel = getattr(cuda_backend, "sdp_kernel", lambda *a, **k: _SDPKernel())
+    cuda_backend.enable_flash_sdp = getattr(cuda_backend, "enable_flash_sdp", lambda *a, **k: None)
+    cuda_backend.enable_mem_efficient_sdp = getattr(cuda_backend, "enable_mem_efficient_sdp", lambda *a, **k: None)
+    cuda_backend.enable_math_sdp = getattr(cuda_backend, "enable_math_sdp", lambda *a, **k: None)
+    if not hasattr(cuda_backend, "matmul"):
+        class _MatmulBackend:
+            allow_tf32 = False
+        cuda_backend.matmul = _MatmulBackend()
+    mps = _sys_cuda.modules.get("torch.backends.mps")
+    if mps is None:
+        mps = _types.ModuleType("torch.backends.mps")
+        _sys_cuda.modules["torch.backends.mps"] = mps
+    mps.is_available = getattr(mps, "is_available", lambda: False)
+    cpu = _sys_cuda.modules.get("torch.backends.cpu")
+    if cpu is None:
+        cpu = _types.ModuleType("torch.backends.cpu")
+        _sys_cuda.modules["torch.backends.cpu"] = cpu
+    cpu.get_cpu_capability = getattr(cpu, "get_cpu_capability", lambda: "DEFAULT")
+    mkldnn = _sys_cuda.modules.get("torch.backends.mkldnn")
+    if mkldnn is None:
+        mkldnn = _types.ModuleType("torch.backends.mkldnn")
+        _sys_cuda.modules["torch.backends.mkldnn"] = mkldnn
+    mkldnn.is_available = getattr(mkldnn, "is_available", lambda: False)
+    mkldnn.enabled = getattr(mkldnn, "enabled", False)
+    backends.cudnn = cudnn
+    backends.cuda = cuda_backend
+    backends.mps = mps
+    backends.cpu = cpu
+    backends.mkldnn = mkldnn
+    g.backends = backends
 
 
 def _install_version(g):
@@ -4651,9 +5232,9 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             pass
 
     def _backward(self, gradient=None, retain_graph=False, create_graph=False, **kw):
-        # torch defaults retain_graph to None (== free the graph); jittor's
-        # core.grad/optimizer.backward require a strict bool, so coerce.
-        retain_graph = bool(retain_graph)
+        # torch defaults retain_graph to create_graph. In the common
+        # loss.backward() case both are false, so the graph must be freed.
+        retain_graph = bool(create_graph) if retain_graph is None else bool(retain_graph)
         # Materialize the loss's FORWARD graph before computing gradients. A custom
         # CUDA-ext Function (3DGS rasterizer / fused-ssim) writes its outputs
         # out-of-band; if the forward is left lazy, jt.grad recomputes that
@@ -4678,10 +5259,15 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                     alive.append(r)
                     opts.append(o)
             reg[:] = alive
-        # The union of grad targets: every optimizer's trainable params + every
-        # registered leaf (requires_grad Vars) + every retain_grad'd non-leaf
-        # (3DGS's screenspace `means2D`, read by densification as .grad). Dedup by
-        # id, preserve first-seen order, single jt.grad over the lot.
+        # The union of grad targets: every optimizer's trainable params, plus
+        # retain_grad'd non-leaves (3DGS's screenspace `means2D`, read by
+        # densification as .grad). Without optimizers, fall back to the global
+        # leaf registry so standalone Tensor.backward() still works.
+        #
+        # When optimizers are live, their current param_groups are authoritative:
+        # torch code such as 3DGS replaces parameters during densification, and
+        # stale strong refs in the registry would otherwise keep old params and
+        # their Jittor graphs alive until OOM.
         leaf_map = {}
         opt_ids = set()
         for o in opts:
@@ -4690,15 +5276,18 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                     if isinstance(p, Var) and not p.is_stop_grad():
                         leaf_map.setdefault(id(p), p)
                         opt_ids.add(id(p))
-        for v in list(jt._torch_leaf_params.values()):
-            if isinstance(v, Var) and not v.is_stop_grad():
-                leaf_map.setdefault(id(v), v)
-        for k in [k for k, v in list(jt._torch_leaf_params.items())
-                  if not (isinstance(v, Var) and not v.is_stop_grad())]:
-            jt._torch_leaf_params.pop(k, None)
         retained = getattr(jt, "_torch_retained", None)
+        retained_ids = set()
         if retained:
             for v in list(retained.values()):
+                if isinstance(v, Var) and not v.is_stop_grad():
+                    leaf_map.setdefault(id(v), v)
+                    retained_ids.add(id(v))
+        if opts:
+            _torch_prune_leaf_registry(opt_ids | retained_ids)
+        else:
+            _torch_prune_leaf_registry()
+            for v in list(jt._torch_leaf_params.values()):
                 if isinstance(v, Var) and not v.is_stop_grad():
                     leaf_map.setdefault(id(v), v)
         if not leaf_map:
@@ -5186,11 +5775,101 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
 def _install_misc(g, Var, _DTYPE_OBJS=None):
     if _DTYPE_OBJS is None:
         _DTYPE_OBJS = dtype._registry
-    if hasattr(jt, "set_global_seed"):
-        g.manual_seed = lambda s: jt.set_global_seed(int(s))
+    import sys as _sys_misc
+    import types as _types_misc
+
+    if "torch.storage" not in _sys_misc.modules:
+        _storage_mod = _types_misc.ModuleType("torch.storage")
+
+        class UntypedStorage:
+            def __init__(self, *args, **kwargs):
+                self.args = args
+                self.kwargs = kwargs
+
+            def _typed_storage(self):
+                return TypedStorage(wrap_storage=self)
+
+        class TypedStorage:
+            def __init__(self, *args, wrap_storage=None, dtype=None, device=None,
+                         _internal=False, **kwargs):
+                self._untyped_storage = wrap_storage
+                self.dtype = dtype if dtype is not None else getattr(g, "float32", "float32")
+                self.device = device
+                self.args = args
+                self.kwargs = kwargs
+
+            def untyped(self):
+                return self._untyped_storage
+
+        _storage_mod.UntypedStorage = UntypedStorage
+        _storage_mod.TypedStorage = TypedStorage
+        _sys_misc.modules["torch.storage"] = _storage_mod
+    else:
+        _storage_mod = _sys_misc.modules["torch.storage"]
+
+    g.storage = _storage_mod
+    g.UntypedStorage = getattr(_storage_mod, "UntypedStorage")
+    g.TypedStorage = getattr(_storage_mod, "TypedStorage")
+    for _name in (
+        "DoubleStorage", "FloatStorage", "HalfStorage", "BFloat16Storage",
+        "LongStorage", "IntStorage", "ShortStorage", "CharStorage",
+        "ByteStorage", "BoolStorage",
+    ):
+        if not hasattr(g, _name):
+            setattr(g, _name, type(_name, (g.TypedStorage,), {"__module__": "torch"}))
+        if not hasattr(_storage_mod, _name):
+            setattr(_storage_mod, _name, getattr(g, _name))
+
+    import types as _types_random
+    _native_random_fn = getattr(g, "random", None)
+    class _RandomModule(_types_random.ModuleType):
+        def __call__(self, *args, **kwargs):
+            if callable(_native_random_fn):
+                return _native_random_fn(*args, **kwargs)
+            raise TypeError("torch.random is not callable")
+    _random_mod = _RandomModule("torch.random")
+    _random_mod._seed = int(getattr(g, "_torch_initial_seed", 0))
+    def _manual_seed(s):
+        s = int(s)
+        _random_mod._seed = s
+        g._torch_initial_seed = s
+        if hasattr(jt, "set_global_seed"):
+            jt.set_global_seed(s)
+        return g
+    def _get_rng_state():
+        return jt.array([int(getattr(_random_mod, "_seed", 0))], dtype="int64")
+    def _set_rng_state(state):
+        try:
+            if isinstance(state, Var):
+                state = int(state.reshape(-1)[0].item())
+            elif hasattr(state, "__len__"):
+                state = int(list(state)[0])
+            else:
+                state = int(state)
+        except Exception:
+            state = int(getattr(_random_mod, "_seed", 0))
+        _manual_seed(state)
+    g.manual_seed = _manual_seed
+    g.initial_seed = lambda: int(getattr(_random_mod, "_seed", 0))
+    g.seed = lambda: int(getattr(_random_mod, "_seed", 0))
+    g.get_rng_state = _get_rng_state
+    g.set_rng_state = _set_rng_state
+    _random_mod.manual_seed = _manual_seed
+    _random_mod.initial_seed = g.initial_seed
+    _random_mod.seed = g.seed
+    _random_mod.get_rng_state = _get_rng_state
+    _random_mod.set_rng_state = _set_rng_state
+    g.random = _random_mod
+    _sys_misc.modules["torch.random"] = _random_mod
     g.is_tensor = lambda x: isinstance(x, Var)
     if not hasattr(g, "numel"):
         g.numel = lambda x: x.numel()
+    if not hasattr(g, "PyTorchFileReader"):
+        class PyTorchFileReader:
+            def __init__(self, *args, **kwargs):
+                raise NotImplementedError(
+                    "torch.PyTorchFileReader is not implemented by the jittor torch shim; use torch.load instead")
+        g.PyTorchFileReader = PyTorchFileReader
 
     # torch.norm(input, p='fro', dim=None, keepdim=False, dtype=None, out=None):
     # default reduces over ALL dims to a 0-dim scalar. jittor's jt.norm defaults
@@ -5205,7 +5884,7 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
     g.is_autocast_enabled = lambda *a, **k: False
     g.set_autocast_enabled = lambda *a, **k: None
     g.is_grad_enabled = lambda: not bool(getattr(jt.flags, "no_grad", 0))
-    g.set_grad_enabled = lambda mode: None
+    g.set_grad_enabled = lambda mode: (g.enable_grad() if mode else g.no_grad())
     g.get_autocast_dtype = lambda *a, **k: getattr(g, "float32", "float32")
     g.is_autocast_available = lambda *a, **k: False
     g.are_deterministic_algorithms_enabled = lambda: False
@@ -5762,6 +6441,16 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
     _jit.ScriptModule = jt.nn.Module
     _jit.interface = lambda c: c
     _alias("jit", _jit)
+    _alias("ScriptModule", _jit.ScriptModule)
+    _sys_compiler.modules.setdefault("torch.jit", _jit)
+    _fx = _types2.ModuleType("torch.fx")
+    _fx.Graph = type("Graph", (), {})
+    _fx.GraphModule = type("GraphModule", (), {})
+    _fx.Proxy = type("Proxy", (), {})
+    _fx.Node = type("Node", (), {})
+    _fx.wrap = lambda f=None, *a, **k: (f if f is not None and callable(f) else (lambda h: h))
+    _sys_compiler.modules["torch.fx"] = _fx
+    g.fx = _fx
     # torch._dynamo: minimal importable stubs for libraries that probe or
     # decorate with Dynamo APIs. Jittor runs eagerly/JIT through its own stack.
     _dynamo = _types2.ModuleType("torch._dynamo")
@@ -5780,6 +6469,8 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
     setattr(g, "_dynamo", _dynamo)
     _eval_frame = _types2.ModuleType("torch._dynamo.eval_frame")
     _eval_frame.OptimizedModule = type("OptimizedModule", (jt.nn.Module,), {})
+    _eval_frame.is_dynamo_supported = lambda: False
+    _dynamo.OptimizedModule = _eval_frame.OptimizedModule
     _dynamo.eval_frame = _eval_frame
     _sys_compiler.modules["torch._dynamo.eval_frame"] = _eval_frame
     _twh = _types2.ModuleType("torch._dynamo._trace_wrapped_higher_order_op")
@@ -5890,6 +6581,7 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
     _profiler.schedule = lambda *args, **kwargs: (lambda step: _ProfilerAction.NONE)
     _profiler.tensorboard_trace_handler = lambda *args, **kwargs: (lambda *a, **k: None)
     _profiler.record_function = lambda *args, **kwargs: _ProfileContext()
+    _profiler.kineto_available = lambda: False
     _sys_library.modules["torch.profiler"] = _profiler
     g.profiler = _profiler
 
@@ -6021,6 +6713,39 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
             def __len__(self):
                 n = len(self.sampler)
                 return n // self.batch_size if self.drop_last else (n + self.batch_size - 1) // self.batch_size
+        class _DistributedSampler(_Sampler):
+            def __init__(self, dataset, num_replicas=None, rank=None, shuffle=True,
+                         seed=0, drop_last=False):
+                import math as _math
+                self.dataset = dataset
+                self.num_replicas = 1 if num_replicas is None else int(num_replicas)
+                self.rank = 0 if rank is None else int(rank)
+                self.shuffle = bool(shuffle)
+                self.seed = int(seed)
+                self.drop_last = bool(drop_last)
+                self.epoch = 0
+                if self.drop_last and len(self.dataset) % self.num_replicas != 0:
+                    self.num_samples = _math.ceil((len(self.dataset) - self.num_replicas) / self.num_replicas)
+                else:
+                    self.num_samples = _math.ceil(len(self.dataset) / self.num_replicas)
+                self.total_size = self.num_samples * self.num_replicas
+            def __iter__(self):
+                import random as _random
+                indices = list(range(len(self.dataset)))
+                if self.shuffle:
+                    rng = _random.Random(self.seed + self.epoch)
+                    rng.shuffle(indices)
+                if not self.drop_last:
+                    padding = self.total_size - len(indices)
+                    if padding > 0:
+                        indices += (indices * ((padding + len(indices) - 1) // len(indices)))[:padding]
+                else:
+                    indices = indices[:self.total_size]
+                return iter(indices[self.rank:self.total_size:self.num_replicas])
+            def __len__(self):
+                return self.num_samples
+            def set_epoch(self, epoch):
+                self.epoch = int(epoch)
         def _default_collate(batch):
             import numpy as _np
             elem = batch[0]
@@ -6035,6 +6760,22 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
             if isinstance(elem, dict):
                 return {key: _default_collate([d[key] for d in batch]) for key in elem}
             return batch
+        class _BaseDataLoaderIter:
+            def __iter__(self):
+                return self
+
+        class _SingleProcessDataLoaderIter(_BaseDataLoaderIter):
+            def __init__(self, loader):
+                self._loader = loader
+                self._batch_iter = iter(loader.batch_sampler)
+
+            def __next__(self):
+                batch_indices = next(self._batch_iter)
+                return self._loader.collate_fn([self._loader.dataset[i] for i in batch_indices])
+
+        class _MultiProcessingDataLoaderIter(_BaseDataLoaderIter):
+            pass
+
         class _DataLoader:
             def __init__(self, dataset, batch_size=1, shuffle=False, sampler=None,
                          batch_sampler=None, num_workers=0, collate_fn=None,
@@ -6046,6 +6787,11 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
                 self.drop_last = drop_last
                 self.num_workers = num_workers
                 self.pin_memory = pin_memory
+                self.timeout = timeout
+                self.prefetch_factor = prefetch_factor
+                self.persistent_workers = persistent_workers
+                self.multiprocessing_context = kwargs.get("multiprocessing_context", None)
+                self.shuffle = shuffle
                 self.collate_fn = collate_fn if collate_fn is not None else _default_collate
                 self.worker_init_fn = worker_init_fn
                 self.generator = generator
@@ -6057,9 +6803,10 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
                         _RandomSampler(dataset, generator=generator) if shuffle else _SequentialSampler(dataset)
                     )
                     self.batch_sampler = _BatchSampler(self.sampler, batch_size, drop_last)
+                self._iterator = None
             def __iter__(self):
-                for batch_indices in self.batch_sampler:
-                    yield self.collate_fn([self.dataset[i] for i in batch_indices])
+                self._iterator = _SingleProcessDataLoaderIter(self)
+                return self._iterator
             def __len__(self):
                 return len(self.batch_sampler)
         for _name, _value in {
@@ -6073,6 +6820,7 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
             "RandomSampler": _RandomSampler,
             "SubsetRandomSampler": _SubsetRandomSampler,
             "BatchSampler": _BatchSampler,
+            "DistributedSampler": _DistributedSampler,
             "DataLoader": _DataLoader,
             "default_collate": _default_collate,
             "default_convert": lambda x: x,
@@ -6089,7 +6837,7 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
         _sys_utils.modules["torch.utils.data._utils.collate"] = _duc
         _data._utils = _du
         _dist_data = _types2.ModuleType("torch.utils.data.distributed")
-        _dist_data.DistributedSampler = _Sampler
+        _dist_data.DistributedSampler = _DistributedSampler
         _sys_utils.modules["torch.utils.data.distributed"] = _dist_data
         _data.distributed = _dist_data
         _dataset_mod = _types2.ModuleType("torch.utils.data.dataset")
@@ -6098,7 +6846,7 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
         _sys_utils.modules["torch.utils.data.dataset"] = _dataset_mod
         _data.dataset = _dataset_mod
         _sampler_mod = _types2.ModuleType("torch.utils.data.sampler")
-        for _name in ("Sampler", "SequentialSampler", "RandomSampler", "SubsetRandomSampler", "BatchSampler"):
+        for _name in ("Sampler", "SequentialSampler", "RandomSampler", "SubsetRandomSampler", "BatchSampler", "DistributedSampler"):
             setattr(_sampler_mod, _name, getattr(_data, _name))
         _sys_utils.modules["torch.utils.data.sampler"] = _sampler_mod
         _data.sampler = _sampler_mod
@@ -6106,6 +6854,9 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
         _dataloader_mod.DataLoader = _DataLoader
         _dataloader_mod.default_collate = _default_collate
         _dataloader_mod._DatasetKind = type("_DatasetKind", (), {"Iterable": 0, "Map": 1})
+        _dataloader_mod._BaseDataLoaderIter = _BaseDataLoaderIter
+        _dataloader_mod._SingleProcessDataLoaderIter = _SingleProcessDataLoaderIter
+        _dataloader_mod._MultiProcessingDataLoaderIter = _MultiProcessingDataLoaderIter
         _sys_utils.modules["torch.utils.data.dataloader"] = _dataloader_mod
         _data.dataloader = _dataloader_mod
     else:
@@ -6119,21 +6870,61 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
         g.utils.checkpoint = _ckpt
     if "torch.utils._pytree" not in _sys_utils.modules:
         _pytree = _types2.ModuleType("torch.utils._pytree")
+        class LeafSpec:
+            pass
+        class TreeSpec:
+            def __init__(self, type, context, children_specs):
+                self.type = type
+                self.context = context
+                self.children_specs = list(children_specs)
+        _NodeDef = type("_NodeDef", (), {})
+        def _list_flatten(x):
+            return list(x), None
+        def _tuple_flatten(x):
+            return list(x), None
+        def _dict_flatten(x):
+            keys = list(x.keys())
+            return [x[k] for k in keys], keys
+        def _get_node_type(x):
+            return dict if isinstance(x, dict) else type(x)
+        SUPPORTED_NODES = {
+            list: _NodeDef(),
+            tuple: _NodeDef(),
+            dict: _NodeDef(),
+        }
+        SUPPORTED_NODES[list].flatten_fn = _list_flatten
+        SUPPORTED_NODES[tuple].flatten_fn = _tuple_flatten
+        SUPPORTED_NODES[dict].flatten_fn = _dict_flatten
         def _tree_flatten(x):
             leaves = []
             def rec(o):
-                if isinstance(o, (list, tuple)):
-                    for e in o:
-                        rec(e)
-                elif isinstance(o, dict):
-                    for e in o.values():
-                        rec(e)
-                else:
+                node_type = _get_node_type(o)
+                if node_type not in SUPPORTED_NODES:
                     leaves.append(o)
-            rec(x)
-            return leaves, None
+                    return LeafSpec()
+                child_pytrees, context = SUPPORTED_NODES[node_type].flatten_fn(o)
+                child_specs = [rec(c) for c in child_pytrees]
+                return TreeSpec(node_type, context, child_specs)
+            return leaves, rec(x)
+        def _tree_unflatten(leaves, spec):
+            it = iter(leaves)
+            def rec(s):
+                if isinstance(s, LeafSpec):
+                    return next(it)
+                children = [rec(c) for c in s.children_specs]
+                if s.type is tuple:
+                    return tuple(children)
+                if s.type is dict:
+                    return {k: v for k, v in zip(s.context, children)}
+                return list(children)
+            return rec(spec)
+        _pytree.SUPPORTED_NODES = SUPPORTED_NODES
+        _pytree.LeafSpec = LeafSpec
+        _pytree.TreeSpec = TreeSpec
+        _pytree.PyTree = object
+        _pytree._get_node_type = _get_node_type
         _pytree.tree_flatten = _tree_flatten
-        _pytree.tree_unflatten = lambda leaves, spec: list(leaves)
+        _pytree.tree_unflatten = _tree_unflatten
         _pytree.tree_map = lambda f, x: f(x)
         _pytree.register_pytree_node = lambda *a, **k: None
         _pytree._register_pytree_node = lambda *a, **k: None
@@ -6157,6 +6948,27 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
         _hooks.RemovableHandle = RemovableHandle
         _sys_utils.modules["torch.utils.hooks"] = _hooks
     g.utils.hooks = _sys_utils.modules["torch.utils.hooks"]
+    if "torch.utils.flop_counter" not in _sys_utils.modules:
+        _flop_counter = _types2.ModuleType("torch.utils.flop_counter")
+        class FlopCounterMode:
+            def __init__(self, *args, **kwargs):
+                self.args = args
+                self.kwargs = kwargs
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def get_total_flops(self):
+                return 0
+
+            def get_flop_counts(self):
+                return {}
+        _flop_counter.FlopCounterMode = FlopCounterMode
+        _sys_utils.modules["torch.utils.flop_counter"] = _flop_counter
+    g.utils.flop_counter = _sys_utils.modules["torch.utils.flop_counter"]
     try:
         from jittor.torch_shim.cpp_extension.torch_utils import install_cpp_extension
         install_cpp_extension(g.utils)
