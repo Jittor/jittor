@@ -1323,6 +1323,10 @@ def install(torch):
         if hasattr(nn, "embedding"): F.embedding = nn.embedding
         nn.functional = F
     g.nn.functional = nn.functional
+    if not hasattr(nn.functional, "cosine_similarity") and hasattr(nn, "cosine_similarity"):
+        nn.functional.cosine_similarity = nn.cosine_similarity
+    if not hasattr(nn.functional, "pairwise_distance") and hasattr(nn, "pairwise_distance"):
+        nn.functional.pairwise_distance = nn.pairwise_distance
 
     # scaled_dot_product_attention (torch F.sdpa) -- standard math impl with
     # causal masking + attn_mask + GQA support (jittor has no native sdpa).
@@ -1815,8 +1819,7 @@ def _install_optimizers(g):
         _cls.__init__ = _mk(_ci)
         _cls._torch_lr_default = True
 
-    Adam = getattr(_optim, "Adam", None)
-    if Adam is not None and not getattr(Adam, "_torch_adam_step", False):
+    def _make_adam_step_torch(decoupled_weight_decay=False):
         def _adam_step_torch(self, loss=None, retain_graph=False, closure=None, **kwargs):
             if closure is not None:
                 loss = closure()
@@ -1848,7 +1851,9 @@ def _install_optimizers(g):
                     was_trainable = not p.is_stop_grad()
                     if not was_trainable or not isinstance(g, _jt.Var) or list(g.shape) != list(p.shape):
                         continue
-                    if weight_decay != 0:
+                    if weight_decay != 0 and decoupled_weight_decay:
+                        p.update(p * (1 - lr * weight_decay))
+                    elif weight_decay != 0:
                         g = g + p * weight_decay
                     m.update(b0 * m + (1 - b0) * g)
                     v.update(b1 * v + (1 - b1) * g * g)
@@ -1861,8 +1866,17 @@ def _install_optimizers(g):
                         pass
             self.post_step()
             return loss
-        Adam.step = _adam_step_torch
+        return _adam_step_torch
+
+    Adam = getattr(_optim, "Adam", None)
+    if Adam is not None and not getattr(Adam, "_torch_adam_step", False):
+        Adam.step = _make_adam_step_torch(False)
         Adam._torch_adam_step = True
+
+    AdamW = getattr(_optim, "AdamW", None)
+    if AdamW is not None and not getattr(AdamW, "_torch_adamw_step", False):
+        AdamW.step = _make_adam_step_torch(True)
+        AdamW._torch_adamw_step = True
 
     Base._torch_compat_wrapped = True
 
@@ -2058,6 +2072,93 @@ def _install_lr_scheduler(g):
             f = (1 - t / self.total_iters) ** self.power if self.total_iters else 1.0
             return [b * f for b in self.base_lrs]
 
+    def _list_for_groups(value, n, name):
+        if isinstance(value, (list, tuple)):
+            if len(value) != n:
+                raise ValueError(f"{name} length {len(value)} does not match optimizer param groups {n}")
+            return [float(v) for v in value]
+        return [float(value)] * n
+
+    class OneCycleLR(LRScheduler):
+        def __init__(self, optimizer, max_lr, total_steps=None, epochs=None, steps_per_epoch=None,
+                     pct_start=0.3, anneal_strategy="cos", cycle_momentum=True,
+                     base_momentum=0.85, max_momentum=0.95, div_factor=25.0,
+                     final_div_factor=1e4, three_phase=False, last_epoch=-1, verbose=False):
+            if total_steps is None:
+                if epochs is None or steps_per_epoch is None:
+                    raise ValueError("OneCycleLR requires total_steps or both epochs and steps_per_epoch")
+                total_steps = int(epochs) * int(steps_per_epoch)
+            self.total_steps = int(total_steps)
+            if self.total_steps <= 0:
+                raise ValueError("OneCycleLR total_steps must be positive")
+            if anneal_strategy not in ("cos", "linear"):
+                raise ValueError("OneCycleLR anneal_strategy must be 'cos' or 'linear'")
+            self.pct_start = float(pct_start)
+            self.anneal_strategy = anneal_strategy
+            self.cycle_momentum = bool(cycle_momentum)
+            self.three_phase = bool(three_phase)
+            self.div_factor = float(div_factor)
+            self.final_div_factor = float(final_div_factor)
+            n = len(getattr(optimizer, "param_groups", []) or [None])
+            self.max_lrs = _list_for_groups(max_lr, n, "max_lr")
+            self.base_lrs = [lr / self.div_factor for lr in self.max_lrs]
+            self.min_lrs = [lr / self.final_div_factor for lr in self.base_lrs]
+            self.base_momentums = _list_for_groups(base_momentum, n, "base_momentum")
+            self.max_momentums = _list_for_groups(max_momentum, n, "max_momentum")
+            for pg, lr, max_lr_v, min_lr in zip(getattr(optimizer, "param_groups", []) or [],
+                                                self.base_lrs, self.max_lrs, self.min_lrs):
+                pg["initial_lr"] = lr
+                pg["max_lr"] = max_lr_v
+                pg["min_lr"] = min_lr
+            super().__init__(optimizer, last_epoch, verbose)
+
+        def _anneal(self, start, end, pct):
+            pct = min(max(float(pct), 0.0), 1.0)
+            if self.anneal_strategy == "linear":
+                return start + (end - start) * pct
+            return end + (start - end) / 2.0 * (1.0 + _math.cos(_math.pi * pct))
+
+        def _phases(self):
+            first_end = self.pct_start * self.total_steps - 1
+            last_end = self.total_steps - 1
+            if self.three_phase:
+                second_end = first_end * 2 + 1
+                return [
+                    (first_end, self.base_lrs, self.max_lrs, self.max_momentums, self.base_momentums),
+                    (second_end, self.max_lrs, self.base_lrs, self.base_momentums, self.max_momentums),
+                    (last_end, self.base_lrs, self.min_lrs, self.max_momentums, self.max_momentums),
+                ]
+            return [
+                (first_end, self.base_lrs, self.max_lrs, self.max_momentums, self.base_momentums),
+                (last_end, self.max_lrs, self.min_lrs, self.base_momentums, self.max_momentums),
+            ]
+
+        def get_lr(self):
+            step_num = min(max(self.last_epoch, 0), max(self.total_steps - 1, 0))
+            start_step = 0.0
+            selected = self._phases()[-1]
+            for phase in self._phases():
+                if step_num <= phase[0]:
+                    selected = phase
+                    break
+                start_step = phase[0]
+            end_step, start_lrs, end_lrs, start_moms, end_moms = selected
+            denom = end_step - start_step
+            pct = 1.0 if denom <= 0 else (step_num - start_step) / denom
+            lrs = [self._anneal(s, e, pct) for s, e in zip(start_lrs, end_lrs)]
+            if self.cycle_momentum:
+                moms = [self._anneal(s, e, pct) for s, e in zip(start_moms, end_moms)]
+                for pg, mom in zip(getattr(self.optimizer, "param_groups", []) or [], moms):
+                    if "betas" in pg:
+                        b0, b1 = pg.get("betas", (mom, 0.999))
+                        pg["betas"] = (mom, b1)
+                    elif hasattr(self.optimizer, "betas"):
+                        b0, b1 = getattr(self.optimizer, "betas", (mom, 0.999))
+                        pg["betas"] = (mom, b1)
+                    else:
+                        pg["momentum"] = mom
+            return lrs
+
     class SequentialLR(LRScheduler):
         def __init__(self, optimizer, schedulers, milestones, last_epoch=-1, verbose=False):
             self.optimizer = optimizer; self._scheds = list(schedulers)
@@ -2119,7 +2220,8 @@ def _install_lr_scheduler(g):
                         ("ConstantLR", ConstantLR), ("LinearLR", LinearLR),
                         ("StepLR", StepLR), ("MultiStepLR", MultiStepLR),
                         ("ExponentialLR", ExponentialLR), ("CosineAnnealingLR", CosineAnnealingLR),
-                        ("PolynomialLR", PolynomialLR), ("SequentialLR", SequentialLR),
+                        ("PolynomialLR", PolynomialLR), ("OneCycleLR", OneCycleLR),
+                        ("SequentialLR", SequentialLR),
                         ("ChainedScheduler", ChainedScheduler), ("ReduceLROnPlateau", ReduceLROnPlateau)]:
         setattr(ns, _name, _cls)
     _optim.lr_scheduler = ns
@@ -2734,6 +2836,8 @@ def _install_nn_extras(nn):
                 return _torch_make_parameter(data, requires_grad=requires_grad)
         class Parameter(metaclass=_ParameterMeta):
             pass
+        class UninitializedTensorMixin:
+            pass
         class UninitializedParameter:
             pass
         class UninitializedBuffer:
@@ -2741,6 +2845,7 @@ def _install_nn_extras(nn):
         nn.Parameter = Parameter
         param_mod = _types_nn_private.ModuleType("torch.nn.parameter")
         param_mod.Parameter = Parameter
+        param_mod.UninitializedTensorMixin = UninitializedTensorMixin
         param_mod.UninitializedParameter = UninitializedParameter
         param_mod.UninitializedBuffer = UninitializedBuffer
         _sys_nn_private.modules["torch.nn.parameter"] = param_mod
@@ -3256,6 +3361,22 @@ def _install_nn_extras(nn):
         _prune.is_pruned = lambda module: False
         _sys_nn_utils.modules["torch.nn.utils.prune"] = _prune
     _u.prune = _sys_nn_utils.modules["torch.nn.utils.prune"]
+    if "torch.nn.utils._named_member_accessor" not in _sys_nn_utils.modules:
+        _named_accessor = _types_nn_utils.ModuleType("torch.nn.utils._named_member_accessor")
+        def _resolve_parent(module, name):
+            parts = str(name).split(".")
+            parent = module
+            for part in parts[:-1]:
+                parent = getattr(parent, part)
+            return parent, parts[-1]
+        def swap_tensor(module, name, tensor):
+            parent, leaf = _resolve_parent(module, name)
+            old = getattr(parent, leaf, None)
+            setattr(parent, leaf, tensor)
+            return old
+        _named_accessor.swap_tensor = swap_tensor
+        _sys_nn_utils.modules["torch.nn.utils._named_member_accessor"] = _named_accessor
+    _u._named_member_accessor = _sys_nn_utils.modules["torch.nn.utils._named_member_accessor"]
 
     if not hasattr(nn, "Hardswish"):
         class Hardswish(nn.Module):
@@ -4179,6 +4300,14 @@ def _install_init_aliases():
                 rf *= s
             return num_input_fmaps * rf, num_output_fmaps * rf
         _init._calculate_fan_in_and_fan_out = _fan
+    if not hasattr(_init, "_calculate_correct_fan"):
+        def _calculate_correct_fan(tensor, mode):
+            mode = str(mode).lower()
+            if mode not in ("fan_in", "fan_out"):
+                raise ValueError("Mode %s not supported, please use fan_in or fan_out" % mode)
+            fan_in, fan_out = _init._calculate_fan_in_and_fan_out(tensor)
+            return fan_in if mode == "fan_in" else fan_out
+        _init._calculate_correct_fan = _calculate_correct_fan
     if not hasattr(_init, "dirac_"):
         _init.dirac_ = lambda t, *a, **k: t   # best-effort no-op
     if not hasattr(_init, "orthogonal_"):
@@ -4394,14 +4523,32 @@ class _DeviceProps:
 def _install_cuda(g):
     import types as _types, contextlib
     cuda = _types.ModuleType("torch.cuda")
+    def _cuda_visible_devices_empty():
+        import os as _os_cuda
+        _cvd = _os_cuda.environ.get("CUDA_VISIBLE_DEVICES", None)
+        return _cvd is not None and _cvd.strip() == ""
+
     def is_available():
         try:
+            if _cuda_visible_devices_empty():
+                return False
             return bool(getattr(jt, "has_cuda", 0)) or bool(getattr(jt.compiler, "has_cuda", 0)) \
                 or bool(getattr(jt.compiler, "has_acl", 0))
         except Exception:
             return False
+    def device_count():
+        if not is_available():
+            return 0
+        try:
+            import os as _os_cuda
+            _cvd = _os_cuda.environ.get("CUDA_VISIBLE_DEVICES", None)
+            if _cvd is not None:
+                return len([_d for _d in _cvd.split(",") if _d.strip()])
+        except Exception:
+            pass
+        return 1
     cuda.is_available = is_available
-    cuda.device_count = lambda: 1
+    cuda.device_count = device_count
     cuda.current_device = lambda: 0
     cuda.set_device = lambda *a, **k: None
     # torch-compat: torch.cuda.empty_cache() should actually release jittor's
@@ -4487,6 +4634,14 @@ def _install_cuda(g):
     cuda.memory_stats = lambda *a, **k: {"allocated_bytes.all.current": _mem_used(),
                                          "allocated_bytes.all.peak": _mem_peak[0]}
     cuda.mem_get_info = lambda *a, **k: (64*1024**3, 64*1024**3)
+    cuda.ipc_collect = lambda *a, **k: None
+    cuda.memory = _types.ModuleType("torch.cuda.memory")
+    cuda.memory._set_allocator_settings = lambda *a, **k: None
+    cuda.memory.empty_cache = cuda.empty_cache
+    cuda.memory.memory_allocated = cuda.memory_allocated
+    cuda.memory.max_memory_allocated = cuda.max_memory_allocated
+    cuda.memory.memory_reserved = cuda.memory_reserved
+    cuda.memory.max_memory_reserved = cuda.max_memory_reserved
     # rng state (trainer checkpoints save/restore it). jittor has no portable
     # CUDA rng-state handle, so use a small placeholder Var round-trip.
     cuda.get_rng_state = lambda *a, **k: jt.array([0], dtype="uint8")
@@ -4510,13 +4665,37 @@ def _install_cuda(g):
     _sys_cuda.modules["torch.cuda.random"] = _curandom
     g.cuda = cuda
     _sys_cuda.modules["torch.cuda"] = cuda
+    _sys_cuda.modules["torch.cuda.memory"] = cuda.memory
     if hasattr(cuda, "amp"):
         _sys_cuda.modules["torch.cuda.amp"] = cuda.amp
+
+    for _dev_ns in ("mps", "cpu", "npu"):
+        _mod = _sys_cuda.modules.get("torch." + _dev_ns)
+        if _mod is None:
+            _mod = _types.ModuleType("torch." + _dev_ns)
+            _sys_cuda.modules["torch." + _dev_ns] = _mod
+        _mod.is_available = getattr(_mod, "is_available", lambda *a, **k: False)
+        _mod.device_count = getattr(_mod, "device_count", lambda *a, **k: 0)
+        _mod.current_device = getattr(_mod, "current_device", lambda *a, **k: 0)
+        _mod.set_device = getattr(_mod, "set_device", lambda *a, **k: None)
+        _mod.empty_cache = getattr(_mod, "empty_cache", lambda *a, **k: None)
+        _mod.synchronize = getattr(_mod, "synchronize", lambda *a, **k: None)
+        _mod.ipc_collect = getattr(_mod, "ipc_collect", lambda *a, **k: None)
+        setattr(g, _dev_ns, _mod)
 
     if "torch.multiprocessing" not in _sys_cuda.modules:
         import multiprocessing as _mp
         _sys_cuda.modules["torch.multiprocessing"] = _mp
     g.multiprocessing = _sys_cuda.modules["torch.multiprocessing"]
+    _mp_reductions = _types.ModuleType("torch.multiprocessing.reductions")
+    _mp_reductions.reduce_tensor = lambda tensor: (lambda x: x, (tensor,))
+    _mp_reductions.rebuild_cuda_tensor = lambda *a, **k: None
+    _mp_reductions.rebuild_tensor = lambda *a, **k: a[0] if a else None
+    _sys_cuda.modules["torch.multiprocessing.reductions"] = _mp_reductions
+    try:
+        g.multiprocessing.reductions = _mp_reductions
+    except Exception:
+        pass
 
     if "torch.overrides" not in _sys_cuda.modules:
         overrides = _types.ModuleType("torch.overrides")
@@ -4540,6 +4719,12 @@ def _install_cuda(g):
         c_mod._get_tracing_state = lambda: None
         c_mod._log_api_usage_once = lambda *a, **k: None
         c_mod._cuda_clearCublasWorkspaces = lambda *a, **k: None
+        c_mod._disabled_torch_function_impl = lambda *a, **k: NotImplemented
+        functorch_c = _types.ModuleType("torch._C._functorch")
+        functorch_c.get_unwrapped = lambda x: x
+        functorch_c.is_batchedtensor = lambda *a, **k: False
+        functorch_c._add_batch_dim = lambda x, *a, **k: x
+        functorch_c._remove_batch_dim = lambda x, *a, **k: x
         c_mod._distributed_c10d = _types.SimpleNamespace(Reducer=type("Reducer", (), {}))
         nn_c = _types.ModuleType("torch._C._nn")
         def _parse_to(*args, **kwargs):
@@ -4565,9 +4750,16 @@ def _install_cuda(g):
             return dev, dtype_arg, non_blocking, kwargs.get("memory_format", None)
         nn_c._parse_to = _parse_to
         c_mod._nn = nn_c
+        c_mod._functorch = functorch_c
         _sys_cuda.modules["torch._C"] = c_mod
         _sys_cuda.modules["torch._C._nn"] = nn_c
+        _sys_cuda.modules["torch._C._functorch"] = functorch_c
     g._C = _sys_cuda.modules["torch._C"]
+    if not hasattr(g._C, "_autograd"):
+        g._C._autograd = _types.SimpleNamespace()
+    g._C._autograd._push_saved_tensors_default_hooks = lambda *a, **k: None
+    g._C._autograd._pop_saved_tensors_default_hooks = lambda *a, **k: None
+    _sys_cuda.modules["torch._C._autograd"] = g._C._autograd
 
     backends = _sys_cuda.modules.get("torch.backends")
     if backends is None:
@@ -4639,6 +4831,797 @@ def _install_version(g):
     g.version = version
 
 
+def _install_fsdp2_distributed(dist, torch_module=None):
+    """Install a single-process FSDP2/DTensor compatibility surface.
+
+    PyTorch FSDP2 mutates an ``nn.Module`` in-place via ``fully_shard()``.  On a
+    one-rank jittor run there is nothing to shard, so the faithful behaviour is
+    to keep the original parameters/buffers intact while exposing the same
+    control methods and import paths.  This keeps math, state_dicts and autograd
+    exactly on the existing jittor path.
+    """
+    import contextlib as _contextlib
+    import enum as _enum
+    import sys as _sys
+    import types as _types
+
+    def _ensure_module(name, parent=None, attr=None):
+        mod = _sys.modules.get(name)
+        if mod is None:
+            mod = _types.ModuleType(name)
+            _sys.modules[name] = mod
+        if parent is not None and attr:
+            setattr(parent, attr, mod)
+        return mod
+
+    tensor_mod = _ensure_module("torch.distributed.tensor", dist, "tensor")
+    fsdp_mod = _ensure_module("torch.distributed.fsdp", dist, "fsdp")
+    fsdp_api_mod = _ensure_module("torch.distributed.fsdp.api")
+    fsdp_full_mod = _ensure_module("torch.distributed.fsdp.fully_sharded_data_parallel")
+    fsdp_wrap_mod = _ensure_module("torch.distributed.fsdp.wrap")
+    fsdp_traversal_mod = _ensure_module("torch.distributed.fsdp._traversal_utils")
+    fsdp_sharded_scaler_mod = _ensure_module("torch.distributed.fsdp.sharded_grad_scaler")
+    fsdp_fully_pkg = _ensure_module("torch.distributed.fsdp._fully_shard")
+    fsdp_fully_mod = _ensure_module("torch.distributed.fsdp._fully_shard._fully_shard")
+    fsdp_fully_api_mod = _ensure_module("torch.distributed.fsdp._fully_shard._fsdp_api")
+    fsdp_fully_common_mod = _ensure_module("torch.distributed.fsdp._fully_shard._fsdp_common")
+    fsdp_fully_init_mod = _ensure_module("torch.distributed.fsdp._fully_shard._fsdp_init")
+    comp_mod = _ensure_module("torch.distributed._composable", dist, "_composable")
+    comp_fsdp_mod = _ensure_module("torch.distributed._composable.fsdp", comp_mod, "fsdp")
+    comp_fsdp_fully_mod = _ensure_module("torch.distributed._composable.fsdp.fully_shard")
+    comp_fsdp_api_mod = _ensure_module("torch.distributed._composable.fsdp._fsdp_api")
+    tensor_legacy_mod = _ensure_module("torch.distributed._tensor", dist, "_tensor")
+    tensor_placement_mod = _ensure_module("torch.distributed.tensor.placement_types")
+    tensor_parallel_mod = _ensure_module("torch.distributed.tensor.parallel")
+    device_mesh_mod = _ensure_module("torch.distributed.device_mesh", dist, "device_mesh")
+    algorithms_mod = _ensure_module("torch.distributed.algorithms", dist, "algorithms")
+    checkpoint_mod = _ensure_module("torch.distributed.algorithms._checkpoint", algorithms_mod, "_checkpoint")
+    checkpoint_wrapper_mod = _ensure_module(
+        "torch.distributed.algorithms._checkpoint.checkpoint_wrapper",
+        checkpoint_mod, "checkpoint_wrapper")
+    setattr(fsdp_mod, "api", fsdp_api_mod)
+    setattr(fsdp_mod, "fully_sharded_data_parallel", fsdp_full_mod)
+    setattr(fsdp_mod, "wrap", fsdp_wrap_mod)
+    setattr(fsdp_mod, "_traversal_utils", fsdp_traversal_mod)
+    setattr(fsdp_mod, "sharded_grad_scaler", fsdp_sharded_scaler_mod)
+    setattr(fsdp_mod, "_fully_shard", fsdp_fully_pkg)
+    setattr(fsdp_fully_pkg, "_fully_shard", fsdp_fully_mod)
+    setattr(fsdp_fully_pkg, "_fsdp_api", fsdp_fully_api_mod)
+    setattr(fsdp_fully_pkg, "_fsdp_common", fsdp_fully_common_mod)
+    setattr(fsdp_fully_pkg, "_fsdp_init", fsdp_fully_init_mod)
+    setattr(comp_fsdp_mod, "fully_shard", comp_fsdp_fully_mod)
+    setattr(comp_fsdp_mod, "_fsdp_api", comp_fsdp_api_mod)
+
+    def _prod(xs):
+        r = 1
+        for x in xs:
+            try:
+                r *= int(x)
+            except Exception:
+                pass
+        return r
+
+    class DeviceMesh:
+        def __init__(self, device_type=None, mesh=None, *, mesh_dim_names=None, _init_backend=True, **kwargs):
+            self.device_type = device_type or getattr(getattr(jt, "_C", None), "_get_accelerator", lambda: None)()
+            if not isinstance(self.device_type, str):
+                self.device_type = getattr(self.device_type, "type", "cuda" if getattr(jt, "has_cuda", 0) else "cpu")
+            self.mesh = mesh if mesh is not None else (0,)
+            if isinstance(self.mesh, int):
+                self.shape = (int(self.mesh),)
+            else:
+                try:
+                    # A mesh_shape tuple from init_device_mesh is the common FSDP2 path.
+                    self.shape = tuple(int(x) for x in self.mesh)
+                except Exception:
+                    try:
+                        self.shape = tuple(self.mesh.shape)
+                    except Exception:
+                        self.shape = (1,)
+            if not self.shape:
+                self.shape = (1,)
+            self.mesh_dim_names = tuple(mesh_dim_names) if mesh_dim_names is not None else None
+            self.ndim = len(self.shape)
+
+        def __repr__(self):
+            return f"DeviceMesh(device_type={self.device_type!r}, mesh={self.mesh!r}, mesh_dim_names={self.mesh_dim_names!r})"
+
+        def __getitem__(self, key):
+            return self
+
+        def size(self, dim=None):
+            if dim is None:
+                return _prod(self.shape)
+            if isinstance(dim, str) and self.mesh_dim_names and dim in self.mesh_dim_names:
+                dim = self.mesh_dim_names.index(dim)
+            try:
+                return int(self.shape[int(dim)])
+            except Exception:
+                return 1
+
+        def get_rank(self, *args, **kwargs):
+            return 0
+
+        def get_local_rank(self, *args, **kwargs):
+            return 0
+
+        def get_group(self, *args, **kwargs):
+            return getattr(dist, "group", None).WORLD if hasattr(getattr(dist, "group", None), "WORLD") else None
+
+        def get_all_groups(self):
+            return [self.get_group()]
+
+        def get_coordinate(self):
+            return tuple(0 for _ in range(self.ndim))
+
+        def _flatten(self, mesh_dim_name=None):
+            return self
+
+        def _unflatten(self, mesh_dim_names=None):
+            if mesh_dim_names is not None:
+                self.mesh_dim_names = tuple(mesh_dim_names)
+            return self
+
+        @staticmethod
+        def _concatenate(meshes, mesh_dim_name=None):
+            meshes = list(meshes)
+            return meshes[0] if meshes else DeviceMesh("cpu", (1,), mesh_dim_names=(mesh_dim_name,) if mesh_dim_name else None)
+
+        @classmethod
+        def from_group(cls, group, device_type=None, mesh=None, mesh_dim_names=None, **kwargs):
+            return cls(device_type=device_type, mesh=mesh, mesh_dim_names=mesh_dim_names, **kwargs)
+
+    def init_device_mesh(device_type=None, mesh_shape=None, *, mesh_dim_names=None, **kwargs):
+        return DeviceMesh(device_type=device_type, mesh=mesh_shape or (1,),
+                          mesh_dim_names=mesh_dim_names, **kwargs)
+
+    class Placement:
+        def is_shard(self):
+            return isinstance(self, Shard)
+        def is_replicate(self):
+            return isinstance(self, Replicate)
+        def is_partial(self):
+            return isinstance(self, Partial)
+        def __eq__(self, other):
+            return type(self) is type(other) and self.__dict__ == getattr(other, "__dict__", {})
+        def __hash__(self):
+            return hash((type(self), tuple(sorted(self.__dict__.items()))))
+
+    class Replicate(Placement):
+        def __repr__(self):
+            return "Replicate()"
+
+    class Shard(Placement):
+        def __init__(self, dim=0):
+            self.dim = int(dim)
+        def __repr__(self):
+            return f"Shard(dim={self.dim})"
+
+    class Partial(Placement):
+        def __init__(self, reduce_op="sum"):
+            self.reduce_op = reduce_op
+        def __repr__(self):
+            return f"Partial(reduce_op={self.reduce_op!r})"
+
+    def _mark_dtensor(tensor, device_mesh=None, placements=None):
+        try:
+            mesh = device_mesh or DeviceMesh("cuda" if getattr(jt, "has_cuda", 0) else "cpu", (1,))
+            pls = tuple(placements or (Replicate(),))
+            object.__setattr__(tensor, "_dtensor_device_mesh", mesh)
+            object.__setattr__(tensor, "_dtensor_placements", pls)
+            object.__setattr__(tensor, "_local_tensor", tensor)
+            object.__setattr__(tensor, "device_mesh", mesh)
+            object.__setattr__(tensor, "placements", pls)
+            object.__setattr__(tensor, "_spec", _types.SimpleNamespace(mesh=mesh, placements=pls))
+            if not callable(getattr(tensor, "to_local", None)):
+                object.__setattr__(tensor, "to_local", _types.MethodType(lambda self, *a, **k: self, tensor))
+            if not callable(getattr(tensor, "full_tensor", None)):
+                object.__setattr__(tensor, "full_tensor", _types.MethodType(lambda self, *a, **k: self, tensor))
+            if not callable(getattr(tensor, "redistribute", None)):
+                def _redistribute(self, device_mesh=None, placements=None, **kwargs):
+                    return _mark_dtensor(self, device_mesh or getattr(self, "_dtensor_device_mesh", None),
+                                         placements or getattr(self, "_dtensor_placements", None))
+                object.__setattr__(tensor, "redistribute", _types.MethodType(_redistribute, tensor))
+        except Exception:
+            pass
+        return tensor
+
+    class _DTensorMeta(type):
+        def __instancecheck__(cls, obj):
+            return hasattr(obj, "_dtensor_placements") or type.__instancecheck__(cls, obj)
+
+    class DTensor(metaclass=_DTensorMeta):
+        def __init__(self, local_tensor, device_mesh=None, placements=None, **kwargs):
+            self._local_tensor = local_tensor
+            self.device_mesh = device_mesh or DeviceMesh("cuda" if getattr(jt, "has_cuda", 0) else "cpu", (1,))
+            self.placements = tuple(placements or (Replicate(),))
+            self._spec = _types.SimpleNamespace(mesh=self.device_mesh, placements=self.placements)
+
+        @staticmethod
+        def from_local(local_tensor, device_mesh=None, placements=None, run_check=False,
+                       shape=None, stride=None, **kwargs):
+            return _mark_dtensor(local_tensor, device_mesh, placements)
+
+        def to_local(self, *args, **kwargs):
+            return self._local_tensor
+
+        def full_tensor(self, *args, **kwargs):
+            return self._local_tensor
+
+        def redistribute(self, device_mesh=None, placements=None, **kwargs):
+            self.device_mesh = device_mesh or self.device_mesh
+            self.placements = tuple(placements or self.placements)
+            self._spec = _types.SimpleNamespace(mesh=self.device_mesh, placements=self.placements)
+            return self
+
+        @property
+        def shape(self):
+            return self._local_tensor.shape
+
+        @property
+        def dtype(self):
+            return self._local_tensor.dtype
+
+        @property
+        def device(self):
+            return getattr(self._local_tensor, "device", None)
+
+        def __getattr__(self, name):
+            return getattr(self._local_tensor, name)
+
+        def __array__(self, dtype=None):
+            arr = self._local_tensor.numpy()
+            return arr.astype(dtype) if dtype is not None else arr
+
+    def distribute_tensor(tensor, device_mesh=None, placements=None, src_data_rank=0, **kwargs):
+        return _mark_dtensor(tensor, device_mesh, placements)
+
+    def distribute_module(module, device_mesh=None, partition_fn=None, input_fn=None, output_fn=None, **kwargs):
+        if callable(partition_fn):
+            partition_fn("", module, device_mesh)
+        object.__setattr__(module, "_distribute_module_applied", True)
+        object.__setattr__(module, "_dtensor_device_mesh", device_mesh)
+        if callable(input_fn):
+            object.__setattr__(module, "_dtensor_input_fn", input_fn)
+        if callable(output_fn):
+            object.__setattr__(module, "_dtensor_output_fn", output_fn)
+        return module
+
+    def is_dtensor(obj):
+        return isinstance(obj, DTensor) or hasattr(obj, "_dtensor_placements")
+
+    class StateDictType(_enum.Enum):
+        FULL_STATE_DICT = "full"
+        LOCAL_STATE_DICT = "local"
+        SHARDED_STATE_DICT = "sharded"
+
+    class ShardingStrategy(_enum.Enum):
+        FULL_SHARD = "full_shard"
+        SHARD_GRAD_OP = "shard_grad_op"
+        NO_SHARD = "no_shard"
+        HYBRID_SHARD = "hybrid_shard"
+        _HYBRID_SHARD_ZERO2 = "hybrid_shard_zero2"
+
+    class BackwardPrefetch(_enum.Enum):
+        BACKWARD_PRE = "backward_pre"
+        BACKWARD_POST = "backward_post"
+
+    class CPUOffload:
+        def __init__(self, offload_params=False):
+            self.offload_params = bool(offload_params)
+
+    class _Config:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+        def __repr__(self):
+            items = ", ".join(f"{k}={v!r}" for k, v in self.__dict__.items() if k != "args")
+            return f"{type(self).__name__}({items})"
+
+    class FullStateDictConfig(_Config):
+        def __init__(self, offload_to_cpu=False, rank0_only=False):
+            self.offload_to_cpu = bool(offload_to_cpu)
+            self.rank0_only = bool(rank0_only)
+
+    class LocalStateDictConfig(_Config):
+        def __init__(self, offload_to_cpu=False):
+            self.offload_to_cpu = bool(offload_to_cpu)
+
+    class ShardedStateDictConfig(_Config):
+        def __init__(self, offload_to_cpu=False):
+            self.offload_to_cpu = bool(offload_to_cpu)
+
+    class FullOptimStateDictConfig(FullStateDictConfig):
+        pass
+
+    class LocalOptimStateDictConfig(LocalStateDictConfig):
+        pass
+
+    class ShardedOptimStateDictConfig(ShardedStateDictConfig):
+        pass
+
+    class MixedPrecisionPolicy:
+        def __init__(self, param_dtype=None, reduce_dtype=None, output_dtype=None,
+                     cast_forward_inputs=True, **kwargs):
+            self.param_dtype = param_dtype
+            self.reduce_dtype = reduce_dtype
+            self.output_dtype = output_dtype
+            self.cast_forward_inputs = cast_forward_inputs
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+        def __repr__(self):
+            return ("MixedPrecisionPolicy(param_dtype=%r, reduce_dtype=%r, "
+                    "output_dtype=%r, cast_forward_inputs=%r)" %
+                    (self.param_dtype, self.reduce_dtype, self.output_dtype,
+                     self.cast_forward_inputs))
+
+    class MixedPrecision(MixedPrecisionPolicy):
+        pass
+
+    class OffloadPolicy:
+        def __init__(self, **kwargs):
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+
+    class CPUOffloadPolicy(OffloadPolicy):
+        def __init__(self, pin_memory=True, **kwargs):
+            super().__init__(pin_memory=pin_memory, **kwargs)
+
+    class NoOffloadPolicy(OffloadPolicy):
+        pass
+
+    class DataParallelMeshDims:
+        def __init__(self, shard=None, replicate=None):
+            self.shard = shard
+            self.replicate = replicate
+
+    class UnshardHandle:
+        def __init__(self, module=None):
+            self.module = module
+        def wait(self):
+            return None
+
+    def _iter_modules(module, recurse=True):
+        if recurse and hasattr(module, "modules"):
+            try:
+                return list(module.modules())
+            except Exception:
+                pass
+        return [module]
+
+    def _iter_fsdp_modules(module, recurse=True):
+        return [m for m in _iter_modules(module, recurse)
+                if getattr(m, "_is_fsdp_module", False)]
+
+    def _apply_fsdp_attr(module, name, value, recurse=True):
+        targets = _iter_fsdp_modules(module, recurse) or [module]
+        for m in targets:
+            st = getattr(m, "_fsdp_state", None)
+            if st is None:
+                st = _types.SimpleNamespace()
+                object.__setattr__(m, "_fsdp_state", st)
+            setattr(st, name, value)
+        return module
+
+    class _FSDPModuleMeta(type):
+        def __instancecheck__(cls, obj):
+            return bool(getattr(obj, "_is_fsdp_module", False)) or type.__instancecheck__(cls, obj)
+
+    class FSDPModule(metaclass=_FSDPModuleMeta):
+        def unshard(self, async_op=False):
+            return UnshardHandle(self) if async_op else None
+
+        def reshard(self):
+            return None
+
+        def set_reshard_after_forward(self, reshard_after_forward, recurse=True):
+            return _apply_fsdp_attr(self, "reshard_after_forward", reshard_after_forward, recurse)
+
+        def set_requires_gradient_sync(self, requires_gradient_sync, recurse=True):
+            return _apply_fsdp_attr(self, "requires_gradient_sync", bool(requires_gradient_sync), recurse)
+
+        def set_requires_all_reduce(self, requires_all_reduce, recurse=True):
+            return _apply_fsdp_attr(self, "requires_all_reduce", bool(requires_all_reduce), recurse)
+
+        def set_is_last_backward(self, is_last_backward, recurse=True):
+            return _apply_fsdp_attr(self, "is_last_backward", bool(is_last_backward), recurse)
+
+        def set_reshard_after_backward(self, reshard_after_backward, recurse=True):
+            return _apply_fsdp_attr(self, "reshard_after_backward", reshard_after_backward, recurse)
+
+        def set_unshard_in_backward(self, unshard_in_backward, recurse=True):
+            return _apply_fsdp_attr(self, "unshard_in_backward", bool(unshard_in_backward), recurse)
+
+        def set_modules_to_forward_prefetch(self, modules):
+            return _apply_fsdp_attr(self, "modules_to_forward_prefetch", list(modules or ()), False)
+
+        def set_modules_to_backward_prefetch(self, modules):
+            return _apply_fsdp_attr(self, "modules_to_backward_prefetch", list(modules or ()), False)
+
+        def set_gradient_divide_factor(self, factor, recurse=True):
+            return _apply_fsdp_attr(self, "gradient_divide_factor", factor, recurse)
+
+        def set_reduce_scatter_divide_factor(self, factor, recurse=True):
+            return _apply_fsdp_attr(self, "reduce_scatter_divide_factor", factor, recurse)
+
+        def set_force_sum_reduction_for_comms(self, force_sum_reduction_for_comms, recurse=True):
+            return _apply_fsdp_attr(self, "force_sum_reduction_for_comms", bool(force_sum_reduction_for_comms), recurse)
+
+        def set_symm_mem_for_comm(self, symm_mem_for_comm=True, recurse=True):
+            return _apply_fsdp_attr(self, "symm_mem_for_comm", bool(symm_mem_for_comm), recurse)
+
+        def set_post_optim_event(self, event, recurse=True):
+            return _apply_fsdp_attr(self, "post_optim_event", event, recurse)
+
+        def _get_fsdp_state(self):
+            return getattr(self, "_fsdp_state", None)
+
+    _FSDP_INSTANCE_METHODS = (
+        "unshard", "reshard", "set_reshard_after_forward",
+        "set_requires_gradient_sync", "set_requires_all_reduce", "set_is_last_backward",
+        "set_reshard_after_backward", "set_unshard_in_backward",
+        "set_modules_to_forward_prefetch", "set_modules_to_backward_prefetch",
+        "set_gradient_divide_factor", "set_reduce_scatter_divide_factor",
+        "set_force_sum_reduction_for_comms", "set_symm_mem_for_comm",
+        "set_post_optim_event", "_get_fsdp_state",
+    )
+
+    def _inject_fsdp_methods(module):
+        for name in _FSDP_INSTANCE_METHODS:
+            if not callable(getattr(module, name, None)):
+                object.__setattr__(module, name, _types.MethodType(getattr(FSDPModule, name), module))
+        if isinstance(module, FSDPModule):
+            return module
+        cls = type(module)
+        cache = getattr(FSDPModule, "_jittor_class_cache", None)
+        if cache is None:
+            cache = FSDPModule._jittor_class_cache = {}
+        fsdp_cls = cache.get(cls)
+        if fsdp_cls is None:
+            try:
+                fsdp_cls = type(cls.__name__ + "FSDP2Compat", (cls, FSDPModule),
+                                {"__module__": cls.__module__})
+                cache[cls] = fsdp_cls
+            except Exception:
+                fsdp_cls = None
+        if fsdp_cls is not None:
+            try:
+                module.__class__ = fsdp_cls
+            except Exception:
+                pass
+        return module
+
+    def _default_mesh():
+        return DeviceMesh("cuda" if getattr(jt, "has_cuda", 0) else "cpu", (1,))
+
+    def fully_shard(module, *, mesh=None, reshard_after_forward=True,
+                    shard_placement_fn=None, mp_policy=None, offload_policy=None,
+                    ignored_params=None, dp_mesh_dims=None, **kwargs):
+        if isinstance(module, (list, tuple)):
+            for m in module:
+                fully_shard(m, mesh=mesh, reshard_after_forward=reshard_after_forward,
+                            shard_placement_fn=shard_placement_fn, mp_policy=mp_policy,
+                            offload_policy=offload_policy, ignored_params=ignored_params, **kwargs)
+            return module
+        if module is None or not hasattr(module, "parameters"):
+            raise TypeError("fully_shard() expects a torch.nn.Module-compatible object")
+        st = getattr(module, "_fsdp_state", None)
+        if st is None:
+            st = _types.SimpleNamespace()
+            object.__setattr__(module, "_fsdp_state", st)
+        st.mesh = mesh or getattr(st, "mesh", None) or _default_mesh()
+        st.reshard_after_forward = reshard_after_forward
+        st.shard_placement_fn = shard_placement_fn
+        st.mp_policy = mp_policy if mp_policy is not None else MixedPrecisionPolicy()
+        st.offload_policy = offload_policy if offload_policy is not None else NoOffloadPolicy()
+        st.ignored_params = tuple(ignored_params or ())
+        st.dp_mesh_dims = dp_mesh_dims
+        st.kwargs = dict(kwargs)
+        st.world_size = 1
+        try:
+            st.world_size = int(dist.get_world_size())
+        except Exception:
+            pass
+        object.__setattr__(module, "_is_fsdp_module", True)
+        object.__setattr__(module, "_is_fsdp_managed_module", True)
+        object.__setattr__(module, "_fsdp_use_orig_params", True)
+        return _inject_fsdp_methods(module)
+
+    def register_fsdp_forward_method(module, method_name):
+        methods = getattr(module, "_fsdp_forward_methods", None)
+        if methods is None:
+            methods = set()
+            object.__setattr__(module, "_fsdp_forward_methods", methods)
+        methods.add(method_name)
+        return module
+
+    @_contextlib.contextmanager
+    def share_comm_ctx():
+        yield
+
+    class FullyShardedDataParallel(nn.Module, FSDPModule):
+        def __init__(self, module, *args, **kwargs):
+            nn.Module.__init__(self)
+            self.module = fully_shard(module, **kwargs)
+            object.__setattr__(self, "_is_fsdp_module", True)
+            object.__setattr__(self, "_fsdp_state", getattr(self.module, "_fsdp_state", None))
+
+        def execute(self, *args, **kwargs):
+            return self.module(*args, **kwargs)
+
+        forward = execute
+
+        def state_dict(self, *args, **kwargs):
+            return self.module.state_dict(*args, **kwargs)
+
+        def load_state_dict(self, state_dict, *args, **kwargs):
+            return self.module.load_state_dict(state_dict, *args, **kwargs)
+
+        def parameters(self, *args, **kwargs):
+            return self.module.parameters(*args, **kwargs)
+
+        def named_parameters(self, *args, **kwargs):
+            return self.module.named_parameters(*args, **kwargs)
+
+        def buffers(self, *args, **kwargs):
+            return self.module.buffers(*args, **kwargs)
+
+        def named_buffers(self, *args, **kwargs):
+            return self.module.named_buffers(*args, **kwargs)
+
+        @staticmethod
+        @_contextlib.contextmanager
+        def state_dict_type(module, state_dict_type, state_dict_config=None, optim_state_dict_config=None):
+            old = getattr(module, "_fsdp_state_dict_type", None)
+            object.__setattr__(module, "_fsdp_state_dict_type",
+                               (state_dict_type, state_dict_config, optim_state_dict_config))
+            try:
+                yield
+            finally:
+                if old is None:
+                    try:
+                        delattr(module, "_fsdp_state_dict_type")
+                    except Exception:
+                        pass
+                else:
+                    object.__setattr__(module, "_fsdp_state_dict_type", old)
+
+        @staticmethod
+        def set_state_dict_type(module, state_dict_type, state_dict_config=None,
+                                optim_state_dict_config=None):
+            object.__setattr__(module, "_fsdp_state_dict_type",
+                               (state_dict_type, state_dict_config, optim_state_dict_config))
+            return module
+
+        @staticmethod
+        @_contextlib.contextmanager
+        def summon_full_params(module, *args, **kwargs):
+            yield module
+
+        @staticmethod
+        def optim_state_dict(module, optim, *args, **kwargs):
+            return optim.state_dict() if hasattr(optim, "state_dict") else {}
+
+        @staticmethod
+        def optim_state_dict_to_load(module, optim, optim_state_dict, *args, **kwargs):
+            return optim_state_dict
+
+        @staticmethod
+        def full_optim_state_dict(module, optim, *args, **kwargs):
+            return optim.state_dict() if hasattr(optim, "state_dict") else {}
+
+        @staticmethod
+        def shard_full_optim_state_dict(full_optim_state_dict, module, *args, **kwargs):
+            return full_optim_state_dict
+
+        @staticmethod
+        def scatter_full_optim_state_dict(full_optim_state_dict, module, *args, **kwargs):
+            return full_optim_state_dict or {}
+
+        @staticmethod
+        def rekey_optim_state_dict(optim_state_dict, optim_state_key_type, module, *args, **kwargs):
+            return optim_state_dict
+
+    class ShardedGradScaler:
+        def __init__(self, *args, **kwargs):
+            self._enabled = kwargs.get("enabled", True)
+        def scale(self, loss):
+            return loss
+        def step(self, optimizer, *args, **kwargs):
+            return optimizer.step(*args, **kwargs)
+        def update(self, *args, **kwargs):
+            return None
+        def unscale_(self, optimizer):
+            return None
+        def state_dict(self):
+            return {"enabled": self._enabled}
+        def load_state_dict(self, state_dict):
+            self._enabled = state_dict.get("enabled", self._enabled)
+
+    @_contextlib.contextmanager
+    def enable_wrap(*args, **kwargs):
+        yield
+
+    def wrap(module, *args, **kwargs):
+        return fully_shard(module, **{k: v for k, v in kwargs.items()
+                                     if k in ("mesh", "reshard_after_forward", "mp_policy", "offload_policy")})
+
+    def always_wrap_policy(*args, **kwargs):
+        return True
+
+    def size_based_auto_wrap_policy(module, recurse, nonwrapped_numel, min_num_params=1e8, *args, **kwargs):
+        return bool(nonwrapped_numel >= min_num_params)
+
+    def transformer_auto_wrap_policy(*args, **kwargs):
+        return False
+
+    def lambda_auto_wrap_policy(module, recurse, nonwrapped_numel, lambda_fn=None, *args, **kwargs):
+        return bool(lambda_fn(module) if callable(lambda_fn) else False)
+
+    class ModuleWrapPolicy:
+        def __init__(self, module_classes):
+            self.module_classes = tuple(module_classes)
+        def __call__(self, module, recurse, nonwrapped_numel):
+            return isinstance(module, self.module_classes)
+
+    class CustomPolicy:
+        def __init__(self, lambda_fn):
+            self.lambda_fn = lambda_fn
+        def __call__(self, module, recurse, nonwrapped_numel):
+            return bool(self.lambda_fn(module, recurse, nonwrapped_numel))
+
+    def _get_fsdp_states(module):
+        return [getattr(m, "_fsdp_state") for m in _iter_fsdp_modules(module, True)
+                if hasattr(m, "_fsdp_state")]
+
+    def checkpoint_wrapper(module=None, *args, **kwargs):
+        if module is None:
+            return lambda m: m
+        return module
+
+    def apply_activation_checkpointing(model, checkpoint_wrapper_fn=checkpoint_wrapper,
+                                       check_fn=lambda submodule: True, *args, **kwargs):
+        return model
+
+    def checkpoint(module, *args, **kwargs):
+        return module(*args, **kwargs)
+
+    class FSDPMeshInfo:
+        def __init__(self, mesh=None, shard_mesh_dim=None, replicate_mesh_dim=None,
+                     shard_mesh_size=1, replicate_mesh_size=1, **kwargs):
+            self.mesh = mesh
+            self.shard_mesh_dim = shard_mesh_dim
+            self.replicate_mesh_dim = replicate_mesh_dim
+            self.shard_mesh_size = shard_mesh_size
+            self.replicate_mesh_size = replicate_mesh_size
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+
+    class ShardPlacementResult:
+        def __init__(self, shard_dim=None, placements=None, **kwargs):
+            self.shard_dim = shard_dim
+            self.placements = tuple(placements or ())
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+
+    def _get_mesh_info(mesh=None, dp_mesh_dims=None, **kwargs):
+        return FSDPMeshInfo(mesh=mesh, shard_mesh_dim=getattr(dp_mesh_dims, "shard", None),
+                            replicate_mesh_dim=getattr(dp_mesh_dims, "replicate", None))
+
+    class ParallelStyle:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+
+    def parallelize_module(module, device_mesh=None, parallelize_plan=None, src_data_rank=0, **kwargs):
+        object.__setattr__(module, "_parallelize_module_applied", True)
+        object.__setattr__(module, "_parallelize_plan", parallelize_plan)
+        return module
+
+    exports = {
+        "DeviceMesh": DeviceMesh,
+        "init_device_mesh": init_device_mesh,
+        "DTensor": DTensor,
+        "Placement": Placement,
+        "Replicate": Replicate,
+        "Shard": Shard,
+        "Partial": Partial,
+        "distribute_tensor": distribute_tensor,
+        "distribute_module": distribute_module,
+        "is_dtensor": is_dtensor,
+        "StateDictType": StateDictType,
+        "ShardingStrategy": ShardingStrategy,
+        "BackwardPrefetch": BackwardPrefetch,
+        "CPUOffload": CPUOffload,
+        "FullStateDictConfig": FullStateDictConfig,
+        "LocalStateDictConfig": LocalStateDictConfig,
+        "ShardedStateDictConfig": ShardedStateDictConfig,
+        "FullOptimStateDictConfig": FullOptimStateDictConfig,
+        "LocalOptimStateDictConfig": LocalOptimStateDictConfig,
+        "ShardedOptimStateDictConfig": ShardedOptimStateDictConfig,
+        "MixedPrecision": MixedPrecision,
+        "MixedPrecisionPolicy": MixedPrecisionPolicy,
+        "OffloadPolicy": OffloadPolicy,
+        "CPUOffloadPolicy": CPUOffloadPolicy,
+        "NoOffloadPolicy": NoOffloadPolicy,
+        "DataParallelMeshDims": DataParallelMeshDims,
+        "UnshardHandle": UnshardHandle,
+        "FSDPModule": FSDPModule,
+        "FullyShardedDataParallel": FullyShardedDataParallel,
+        "ShardedGradScaler": ShardedGradScaler,
+        "fully_shard": fully_shard,
+        "register_fsdp_forward_method": register_fsdp_forward_method,
+        "share_comm_ctx": share_comm_ctx,
+    }
+    for mod in (fsdp_mod, fsdp_api_mod, fsdp_full_mod, fsdp_fully_pkg, fsdp_fully_mod,
+                fsdp_fully_api_mod, comp_fsdp_mod, comp_fsdp_fully_mod,
+                comp_fsdp_api_mod):
+        for k, v in exports.items():
+            setattr(mod, k, v)
+    fsdp_mod.FSDP = FullyShardedDataParallel
+    fsdp_full_mod.FSDP = FullyShardedDataParallel
+    fsdp_full_mod.StateDictType = StateDictType
+    fsdp_sharded_scaler_mod.ShardedGradScaler = ShardedGradScaler
+    fsdp_traversal_mod._get_fsdp_states = _get_fsdp_states
+    fsdp_traversal_mod._get_fsdp_handles = lambda module: []
+    for k, v in {
+        "enable_wrap": enable_wrap,
+        "wrap": wrap,
+        "always_wrap_policy": always_wrap_policy,
+        "size_based_auto_wrap_policy": size_based_auto_wrap_policy,
+        "transformer_auto_wrap_policy": transformer_auto_wrap_policy,
+        "lambda_auto_wrap_policy": lambda_auto_wrap_policy,
+        "ModuleWrapPolicy": ModuleWrapPolicy,
+        "CustomPolicy": CustomPolicy,
+    }.items():
+        setattr(fsdp_wrap_mod, k, v)
+    for mod in (tensor_mod,):
+        for k in ("DTensor", "Placement", "Replicate", "Shard", "Partial", "DeviceMesh",
+                  "init_device_mesh",
+                  "distribute_tensor", "distribute_module", "is_dtensor"):
+            setattr(mod, k, exports.get(k, locals().get(k)))
+        setattr(mod, "placement_types", tensor_placement_mod)
+    for mod in (tensor_legacy_mod, tensor_placement_mod):
+        for k in ("DTensor", "Placement", "Replicate", "Shard", "Partial", "DeviceMesh",
+                  "init_device_mesh", "distribute_tensor", "distribute_module", "is_dtensor"):
+            setattr(mod, k, exports.get(k, locals().get(k)))
+    tensor_parallel_mod.ParallelStyle = ParallelStyle
+    tensor_parallel_mod.parallelize_module = parallelize_module
+    tensor_parallel_mod.ColwiseParallel = type("ColwiseParallel", (ParallelStyle,), {})
+    tensor_parallel_mod.RowwiseParallel = type("RowwiseParallel", (ParallelStyle,), {})
+    tensor_parallel_mod.SequenceParallel = type("SequenceParallel", (ParallelStyle,), {})
+    tensor_parallel_mod.PrepareModuleInput = type("PrepareModuleInput", (ParallelStyle,), {})
+    tensor_parallel_mod.PrepareModuleOutput = type("PrepareModuleOutput", (ParallelStyle,), {})
+    tensor_parallel_mod.PrepareModuleInputOutput = type("PrepareModuleInputOutput", (ParallelStyle,), {})
+    setattr(tensor_mod, "parallel", tensor_parallel_mod)
+    device_mesh_mod.DeviceMesh = DeviceMesh
+    device_mesh_mod.init_device_mesh = init_device_mesh
+    dist.DeviceMesh = DeviceMesh
+    dist.init_device_mesh = init_device_mesh
+    dist.ProcessGroup = getattr(dist, "ProcessGroup", type("ProcessGroup", (), {
+        "__init__": lambda self, *a, **k: None,
+        "size": lambda self, *a, **k: 1,
+        "rank": lambda self, *a, **k: 0,
+    }))
+    checkpoint_wrapper_mod.checkpoint_wrapper = checkpoint_wrapper
+    checkpoint_wrapper_mod.apply_activation_checkpointing = apply_activation_checkpointing
+    checkpoint_wrapper_mod.offload_wrapper = lambda module, *a, **k: module
+    checkpoint_wrapper_mod.CheckpointImpl = _enum.Enum(
+        "CheckpointImpl", {"NO_REENTRANT": "no_reentrant", "REENTRANT": "reentrant"})
+    checkpoint_wrapper_mod.checkpoint = checkpoint
+    fsdp_fully_common_mod.FSDPMeshInfo = FSDPMeshInfo
+    fsdp_fully_common_mod.ShardPlacementResult = ShardPlacementResult
+    fsdp_fully_init_mod._get_mesh_info = _get_mesh_info
+    if torch_module is not None:
+        try:
+            torch_module["distributed"] = dist
+        except Exception:
+            setattr(torch_module, "distributed", dist)
+    return dist
+
+
 def _install_distributed(g):
     """Install single-process torch.distributed stubs.
 
@@ -4654,7 +5637,7 @@ def _install_distributed(g):
     if dist is None:
         dist = _types.ModuleType("torch.distributed")
         _sys.modules["torch.distributed"] = dist
-    dist.is_available = lambda *a, **k: False
+    dist.is_available = lambda *a, **k: True
     dist.is_initialized = lambda *a, **k: False
     dist.get_rank = lambda *a, **k: 0
     dist.get_world_size = lambda *a, **k: 1
@@ -4664,22 +5647,105 @@ def _install_distributed(g):
     dist.all_reduce = lambda *a, **k: None
     dist.all_gather = lambda *a, **k: None
     dist.broadcast = lambda *a, **k: None
+    def _all_gather_object(object_list, obj, *a, **k):
+        if object_list:
+            object_list[0] = obj
+        return None
+    def _broadcast_object_list(object_list, src=0, *a, **k):
+        return object_list
+    def _all_gather_into_tensor(output_tensor, input_tensor, *a, **k):
+        try:
+            output_tensor.assign(input_tensor.reshape(output_tensor.shape))
+        except Exception:
+            try:
+                output_tensor.assign(input_tensor)
+            except Exception:
+                pass
+        return None
+    dist.all_gather_object = _all_gather_object
+    dist.broadcast_object_list = _broadcast_object_list
+    dist.all_gather_into_tensor = _all_gather_into_tensor
+    dist.gather_object = lambda obj, object_gather_list=None, dst=0, *a, **k: _all_gather_object(object_gather_list or [], obj)
+    dist.new_group = lambda *a, **k: dist.group.WORLD
+    dist.new_subgroups_by_enumeration = lambda *a, **k: ([dist.group.WORLD], dist.group.WORLD)
+    dist.get_global_rank = lambda group=None, group_rank=0: int(group_rank)
     dist.is_torchelastic_launched = lambda *a, **k: False
-    dist.ReduceOp = getattr(dist, "ReduceOp", type("ReduceOp", (), {
-        "SUM": 0, "MEAN": 1, "MAX": 2, "MIN": 3}))
+    class _ReduceOp:
+        SUM = 0
+        MEAN = 1
+        AVG = 1
+        MAX = 2
+        MIN = 3
+        PRODUCT = 4
+    _ReduceOp.RedOpType = _ReduceOp
+    dist.ReduceOp = getattr(dist, "ReduceOp", _ReduceOp)
+    if not hasattr(dist.ReduceOp, "RedOpType"):
+        dist.ReduceOp.RedOpType = dist.ReduceOp
     dist.GroupMember = getattr(dist, "GroupMember", type("GroupMember", (), {"WORLD": None}))
     dist.group = getattr(dist, "group", type("group", (), {"WORLD": None}))
 
-    for sub in ("tensor", "fsdp", "device_mesh", "algorithms"):
+    for sub in ("tensor", "fsdp", "device_mesh", "algorithms", "_composable",
+                "checkpoint", "_shard", "nn"):
         name = "torch.distributed." + sub
         mod = _sys.modules.get(name)
         if mod is None:
             mod = _types.ModuleType(name)
             _sys.modules[name] = mod
         setattr(dist, sub, mod)
-    dist.tensor.DTensor = getattr(dist.tensor, "DTensor", type("DTensor", (), {}))
-    dist.tensor.Replicate = getattr(dist.tensor, "Replicate", type("Replicate", (), {}))
-    dist.tensor.Shard = getattr(dist.tensor, "Shard", type("Shard", (), {}))
+
+    dist.algorithms.__path__ = getattr(dist.algorithms, "__path__", [])
+    const_mod = _sys.modules.get("torch.distributed.constants")
+    if const_mod is None:
+        const_mod = _types.ModuleType("torch.distributed.constants")
+        _sys.modules["torch.distributed.constants"] = const_mod
+    try:
+        import datetime as _datetime_dist
+        const_mod.default_pg_timeout = getattr(
+            const_mod, "default_pg_timeout", _datetime_dist.timedelta(minutes=30)
+        )
+    except Exception:
+        const_mod.default_pg_timeout = getattr(const_mod, "default_pg_timeout", None)
+    dist.constants = const_mod
+    join_mod = _sys.modules.get("torch.distributed.algorithms.join")
+    if join_mod is None:
+        join_mod = _types.ModuleType("torch.distributed.algorithms.join")
+        _sys.modules["torch.distributed.algorithms.join"] = join_mod
+    class JoinHook:
+        def main_hook(self):
+            return None
+        def post_hook(self, is_last_joiner):
+            return None
+    class Joinable:
+        def __init__(self, *a, **k):
+            pass
+        @property
+        def join_hook(self):
+            return JoinHook()
+        @property
+        def join_device(self):
+            return None
+        @property
+        def join_process_group(self):
+            return dist.group.WORLD
+    class Join:
+        def __init__(self, joinables, enable=True, throw_on_early_termination=False, **kwargs):
+            self.joinables = list(joinables) if joinables is not None else []
+            self.enable = enable
+            self.throw_on_early_termination = throw_on_early_termination
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            return False
+        @staticmethod
+        def notify_join_context(joinable):
+            return None
+        @staticmethod
+        def notify_join_context_enabled(joinable):
+            return False
+    join_mod.Join = Join
+    join_mod.Joinable = Joinable
+    join_mod.JoinHook = JoinHook
+    dist.algorithms.join = join_mod
 
     class _DeviceMesh:
         def __init__(self, device_type=None, mesh=None, *, mesh_dim_names=None, **k):
@@ -4736,6 +5802,84 @@ def _install_distributed(g):
         _sys.modules["torch.distributed.optim"] = optim
     dist.optim = optim
 
+    dist.nn.all_reduce = lambda input, *a, **k: input
+    _sys.modules["torch.distributed.nn"] = dist.nn
+
+    futures = _sys.modules.get("torch.futures")
+    if futures is None:
+        futures = _types.ModuleType("torch.futures")
+        _sys.modules["torch.futures"] = futures
+    class Future:
+        def __init__(self, devices=None):
+            self._value = None
+        def set_result(self, value):
+            self._value = value
+            return self
+        def value(self):
+            return self._value
+        def wait(self):
+            return self._value
+        def then(self, callback):
+            return callback(self)
+    futures.Future = Future
+    g.futures = futures
+
+    checkpoint = dist.checkpoint
+    checkpoint.__path__ = getattr(checkpoint, "__path__", [])
+    class FileSystemReader:
+        def __init__(self, path, *a, **k):
+            self.path = path
+    class FileSystemWriter:
+        def __init__(self, path, *a, **k):
+            self.path = path
+    checkpoint.FileSystemReader = FileSystemReader
+    checkpoint.FileSystemWriter = FileSystemWriter
+    checkpoint.load_state_dict = lambda state_dict, *a, **k: state_dict
+    checkpoint.save_state_dict = lambda state_dict, *a, **k: state_dict
+    checkpoint.load = lambda state_dict=None, *a, **k: state_dict
+    checkpoint.save = lambda state_dict=None, *a, **k: state_dict
+    checkpoint_fs = _types.ModuleType("torch.distributed.checkpoint.filesystem")
+    checkpoint_fs.FileSystemReader = FileSystemReader
+    checkpoint_fs.FileSystemWriter = FileSystemWriter
+    _sys.modules["torch.distributed.checkpoint"] = checkpoint
+    _sys.modules["torch.distributed.checkpoint.filesystem"] = checkpoint_fs
+    checkpoint.filesystem = checkpoint_fs
+
+    shard = dist._shard
+    shard.__path__ = getattr(shard, "__path__", [])
+    sharded_tensor = _types.ModuleType("torch.distributed._shard.sharded_tensor")
+    class ShardedTensor:
+        pass
+    sharded_tensor.ShardedTensor = ShardedTensor
+    sharded_tensor.init_from_local_shards = lambda shards, *a, **k: shards[0] if shards else None
+    sharded_tensor.empty = lambda *a, **k: jt.empty(*a, **{kk: vv for kk, vv in k.items() if kk == "dtype"})
+    shard.sharded_tensor = sharded_tensor
+    _sys.modules["torch.distributed._shard"] = shard
+    _sys.modules["torch.distributed._shard.sharded_tensor"] = sharded_tensor
+    for _sub in ("api", "metadata", "reshard", "shard"):
+        _m = _types.ModuleType("torch.distributed._shard.sharded_tensor." + _sub)
+        _m.ShardedTensor = ShardedTensor
+        _sys.modules[_m.__name__] = _m
+
+    class TCPStore:
+        _data = {}
+        def __init__(self, *a, **k):
+            pass
+        def set(self, key, value):
+            self._data[str(key)] = value
+        def get(self, key):
+            return self._data.get(str(key), b"")
+        def add(self, key, num):
+            v = int(self._data.get(str(key), 0)) + int(num)
+            self._data[str(key)] = v
+            return v
+        def wait(self, keys, *a, **k):
+            return None
+        def delete_key(self, key):
+            self._data.pop(str(key), None)
+            return True
+    dist.TCPStore = TCPStore
+
     if not hasattr(g, "_C"):
         class _Accel:
             type = "cuda" if getattr(jt.compiler, "has_cuda", 0) else "cpu"
@@ -4744,6 +5888,7 @@ def _install_distributed(g):
             def _get_accelerator():
                 return _Accel()
         g._C = _CNS()
+    _install_fsdp2_distributed(dist, getattr(g, "__dict__", None))
     g.distributed = dist
 
 
@@ -5592,6 +6737,9 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         return not _var_is_cpu_resident(self)
     Var.is_cuda = property(_is_cuda)
     Var.is_cpu = property(lambda self: not _is_cuda(self))
+    Var.is_mps = property(lambda self: False)
+    Var.is_xpu = property(lambda self: False)
+    Var.is_meta = property(lambda self: getattr(self.device, "type", None) == "meta")
     # torch's Tensor.get_device(): CUDA device index, or -1 for CPU tensors.
     # 3DGS's fallback ssim (utils/loss_utils.py) does window.cuda(img.get_device()).
     if not hasattr(Var, "get_device"):
@@ -5777,6 +6925,7 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
         _DTYPE_OBJS = dtype._registry
     import sys as _sys_misc
     import types as _types_misc
+    _types2 = _types_misc
 
     if "torch.storage" not in _sys_misc.modules:
         _storage_mod = _types_misc.ModuleType("torch.storage")
@@ -5886,6 +7035,7 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
     g.is_grad_enabled = lambda: not bool(getattr(jt.flags, "no_grad", 0))
     g.set_grad_enabled = lambda mode: (g.enable_grad() if mode else g.no_grad())
     g.get_autocast_dtype = lambda *a, **k: getattr(g, "float32", "float32")
+    g.get_autocast_gpu_dtype = lambda *a, **k: getattr(g, "float16", "float16")
     g.is_autocast_available = lambda *a, **k: False
     g.are_deterministic_algorithms_enabled = lambda: False
     g.use_deterministic_algorithms = lambda *a, **k: None
@@ -6312,6 +7462,7 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
     import types as _types_dist, sys as _sys_dist
     try:
         import jittor.distributions as _dist
+        _dist.__path__ = getattr(_dist, "__path__", [])
         if not hasattr(_dist, "constraints"):
             _constraints = _types_dist.ModuleType("torch.distributions.constraints")
             class _Constraint:
@@ -6331,17 +7482,26 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
         _sys_dist.modules["torch.distributions"] = _dist
         _sys_dist.modules["torch.distributions.constraints"] = _dist.constraints
         g.distributions = _dist
+        _dist_utils = _types_dist.ModuleType("torch.distributions.utils")
+        _dist_utils.broadcast_all = getattr(_dist, "broadcast_all")
+        _sys_dist.modules["torch.distributions.utils"] = _dist_utils
+        _dist.utils = _dist_utils
         for _cls_name, _mod_suffix in (
             ("Distribution", "distribution"),
             ("Bernoulli", "bernoulli"),
             ("Categorical", "categorical"),
+            ("OneHotCategorical", "one_hot_categorical"),
             ("Normal", "normal"),
             ("Uniform", "uniform"),
+            ("RelaxedBernoulli", "relaxed_bernoulli"),
+            ("LogitRelaxedBernoulli", "relaxed_bernoulli"),
+            ("RelaxedOneHotCategorical", "relaxed_categorical"),
             ("Beta", "beta"),
             ("Gamma", "gamma"),
             ("Poisson", "poisson"),
             ("Dirichlet", "dirichlet"),
             ("LogNormal", "log_normal"),
+            ("LogisticNormal", "logistic_normal"),
             ("MultivariateNormal", "multivariate_normal"),
         ):
             if hasattr(_dist, _cls_name):
@@ -6349,14 +7509,198 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
                 setattr(_sub, _cls_name, getattr(_dist, _cls_name))
                 _sys_dist.modules["torch.distributions." + _mod_suffix] = _sub
                 setattr(_dist, _mod_suffix, _sub)
+        if hasattr(_dist, "RelaxedBernoulli") or hasattr(_dist, "LogitRelaxedBernoulli"):
+            _relaxed_bernoulli = _types_dist.ModuleType("torch.distributions.relaxed_bernoulli")
+            if hasattr(_dist, "RelaxedBernoulli"):
+                _relaxed_bernoulli.RelaxedBernoulli = _dist.RelaxedBernoulli
+            if hasattr(_dist, "LogitRelaxedBernoulli"):
+                _relaxed_bernoulli.LogitRelaxedBernoulli = _dist.LogitRelaxedBernoulli
+            _sys_dist.modules["torch.distributions.relaxed_bernoulli"] = _relaxed_bernoulli
+            _dist.relaxed_bernoulli = _relaxed_bernoulli
+        if hasattr(_dist, "RelaxedOneHotCategorical"):
+            _relaxed_categorical = _types_dist.ModuleType("torch.distributions.relaxed_categorical")
+            _relaxed_categorical.RelaxedOneHotCategorical = _dist.RelaxedOneHotCategorical
+            _sys_dist.modules["torch.distributions.relaxed_categorical"] = _relaxed_categorical
+            _dist.relaxed_categorical = _relaxed_categorical
         if hasattr(_dist, "kl_divergence"):
             _kl = _types_dist.ModuleType("torch.distributions.kl")
             _kl.kl_divergence = _dist.kl_divergence
             _kl.register_kl = getattr(_dist, "register_kl", lambda *a, **k: (lambda f: f))
             _sys_dist.modules["torch.distributions.kl"] = _kl
             _dist.kl = _kl
+
+        class Gumbel:
+            def __init__(self, loc, scale, validate_args=None):
+                self.loc = loc
+                self.scale = scale
+                self.batch_shape = self._batch_shape(loc, scale)
+            @staticmethod
+            def _batch_shape(*params):
+                shapes = []
+                for p in params:
+                    if hasattr(p, "shape"):
+                        shape = tuple(p.shape)
+                        n = 1
+                        for s in shape:
+                            n *= int(s)
+                        shapes.append(() if n == 1 else shape)
+                    else:
+                        shapes.append(())
+                out = ()
+                for shape in shapes:
+                    res = []
+                    for i in range(1, max(len(out), len(shape)) + 1):
+                        a = out[-i] if i <= len(out) else 1
+                        b = shape[-i] if i <= len(shape) else 1
+                        res.append(b if a == 1 else a if b == 1 or a == b else max(a, b))
+                    out = tuple(reversed(res))
+                return out
+            @staticmethod
+            def _sample_shape(sample_shape, batch_shape=()):
+                if sample_shape is None:
+                    sample_shape = ()
+                elif isinstance(sample_shape, int):
+                    sample_shape = (sample_shape,)
+                else:
+                    sample_shape = tuple(int(s) for s in sample_shape)
+                out = sample_shape + tuple(batch_shape)
+                return out if out else (1,)
+            def rsample(self, sample_shape=None):
+                u = jt.random(self._sample_shape(sample_shape, self.batch_shape))
+                eps = 1e-6
+                u = jt.clamp(u, eps, 1.0 - eps)
+                loc = self.loc if isinstance(self.loc, jt.Var) else jt.array(self.loc)
+                scale = self.scale if isinstance(self.scale, jt.Var) else jt.array(self.scale)
+                return loc - scale * jt.log(-jt.log(u))
+            def sample(self, sample_shape=None):
+                return self.rsample(sample_shape).stop_grad()
+
+        class RelaxedBernoulli:
+            def __init__(self, temperature, probs=None, logits=None, validate_args=None):
+                if probs is None and logits is None:
+                    raise ValueError("Either probs or logits must be specified")
+                self.temperature = temperature
+                if logits is None:
+                    probs_v = probs if isinstance(probs, jt.Var) else jt.array(probs)
+                    self.probs = probs_v
+                    self.logits = jt.log(probs_v) - jt.log(1.0 - probs_v)
+                else:
+                    self.logits = logits if isinstance(logits, jt.Var) else jt.array(logits)
+                    self.probs = jt.sigmoid(self.logits)
+            def rsample(self, sample_shape=None):
+                shape = tuple(self.logits.shape)
+                if sample_shape is None:
+                    sample_shape = ()
+                elif isinstance(sample_shape, int):
+                    sample_shape = (sample_shape,)
+                else:
+                    sample_shape = tuple(int(s) for s in sample_shape)
+                u = jt.random(sample_shape + shape)
+                eps = 1e-6
+                u = jt.clamp(u, eps, 1.0 - eps)
+                temp = self.temperature if isinstance(self.temperature, jt.Var) else jt.array(self.temperature)
+                return jt.sigmoid((self.logits + jt.log(u) - jt.log(1.0 - u)) / temp)
+            def sample(self, sample_shape=None):
+                return self.rsample(sample_shape).stop_grad()
+
+        class RelaxedOneHotCategorical:
+            def __init__(self, temperature, probs=None, logits=None, validate_args=None):
+                if probs is None and logits is None:
+                    raise ValueError("Either probs or logits must be specified")
+                self.temperature = temperature
+                if logits is None:
+                    probs_v = probs if isinstance(probs, jt.Var) else jt.array(probs)
+                    self.probs = probs_v / probs_v.sum(-1, keepdims=True)
+                    self.logits = jt.log(self.probs)
+                else:
+                    self.logits = logits if isinstance(logits, jt.Var) else jt.array(logits)
+                    self.probs = nn.softmax(self.logits, dim=-1)
+            def rsample(self, sample_shape=None):
+                shape = tuple(self.logits.shape)
+                if sample_shape is None:
+                    sample_shape = ()
+                elif isinstance(sample_shape, int):
+                    sample_shape = (sample_shape,)
+                else:
+                    sample_shape = tuple(int(s) for s in sample_shape)
+                u = jt.random(sample_shape + shape)
+                eps = 1e-6
+                u = jt.clamp(u, eps, 1.0 - eps)
+                gumbels = -jt.log(-jt.log(u))
+                temp = self.temperature if isinstance(self.temperature, jt.Var) else jt.array(self.temperature)
+                return nn.softmax((self.logits + gumbels) / temp, dim=-1)
+            def sample(self, sample_shape=None):
+                return self.rsample(sample_shape).stop_grad()
+
+        _dist.Gumbel = getattr(_dist, "Gumbel", Gumbel)
+        _dist.RelaxedBernoulli = getattr(_dist, "RelaxedBernoulli", RelaxedBernoulli)
+        _dist.RelaxedOneHotCategorical = getattr(_dist, "RelaxedOneHotCategorical", RelaxedOneHotCategorical)
+        for _cls_name, _mod_suffix in (
+            ("Gumbel", "gumbel"),
+            ("RelaxedBernoulli", "relaxed_bernoulli"),
+            ("RelaxedOneHotCategorical", "relaxed_categorical"),
+        ):
+            _sub = _types_dist.ModuleType("torch.distributions." + _mod_suffix)
+            setattr(_sub, _cls_name, getattr(_dist, _cls_name))
+            _sys_dist.modules[_sub.__name__] = _sub
+            setattr(_dist, _mod_suffix, _sub)
     except Exception:
         pass
+
+    # ---- torch._utils ----
+    import types as _types2
+    _tutils = _types2.ModuleType("torch._utils")
+    def _flatten_dense_tensors(tensors):
+        tensors = list(tensors)
+        if len(tensors) == 1:
+            return tensors[0].reshape(-1).clone()
+        return jt.concat([t.reshape(-1) for t in tensors]) if tensors else jt.array([])
+    def _unflatten_dense_tensors(flat, tensors):
+        outputs, offset = [], 0
+        for t in tensors:
+            n = 1
+            for s in t.shape:
+                n *= int(s)
+            outputs.append(flat[offset:offset + n].reshape(t.shape))
+            offset += n
+        return outputs
+    def _take_tensors(tensors, size_limit):
+        buckets = {}
+        for t in tensors:
+            key = str(getattr(t, "dtype", "object"))
+            b = buckets.setdefault(key, [[], 0])
+            n = int(t.numel()) if hasattr(t, "numel") else 1
+            b[0].append(t)
+            b[1] += n * 4
+            if b[1] >= size_limit:
+                yield b[0]
+                buckets[key] = [[], 0]
+        for b in buckets.values():
+            if b[0]:
+                yield b[0]
+    def _get_available_device_type():
+        if hasattr(g, "cuda") and g.cuda.is_available():
+            return "cuda"
+        if hasattr(g, "npu") and g.npu.is_available():
+            return "npu"
+        if hasattr(g, "mps") and g.mps.is_available():
+            return "mps"
+        return None
+    def _get_device_module(device_type):
+        if device_type is None:
+            return None
+        return getattr(g, str(device_type), None)
+    _tutils._flatten_dense_tensors = _flatten_dense_tensors
+    _tutils._unflatten_dense_tensors = _unflatten_dense_tensors
+    _tutils._take_tensors = _take_tensors
+    _tutils._get_available_device_type = _get_available_device_type
+    _tutils._get_device_module = _get_device_module
+    _tutils._rebuild_tensor = lambda data, *a, **k: data
+    _tutils._rebuild_tensor_v2 = lambda data, *a, **k: data
+    _tutils._rebuild_parameter = lambda data, requires_grad=True, *a, **k: _torch_make_parameter(data, requires_grad)
+    _tutils._rebuild_parameter_with_state = lambda data, requires_grad=True, backward_hooks=None, state=None: _torch_make_parameter(data, requires_grad)
+    _sys_dist.modules["torch._utils"] = _tutils
+    g._utils = _tutils
 
     # ---- torch.hub ----
     import types as _types_hub, os as _os_hub, urllib.request as _urlreq_hub
@@ -6500,6 +7844,37 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
             return False
     _twh.TransformGetItemToIndex = TransformGetItemToIndex
     _sys_compiler.modules["torch._dynamo._trace_wrapped_higher_order_op"] = _twh
+    _functorch_pkg = _types2.ModuleType("torch._functorch")
+    _functorch_vmap = _types2.ModuleType("torch._functorch.vmap")
+    _functorch_vmap._maybe_remove_batch_dim = lambda x, *a, **k: x
+    _functorch_vmap._add_batch_dim = lambda x, *a, **k: x
+    _functorch_vmap._remove_batch_dim = lambda x, *a, **k: x
+    def _vmap_tree_flatten(x, *args, **kwargs):
+        return g.utils._pytree.tree_flatten(x)
+    def _vmap_tree_unflatten(leaves, spec):
+        return g.utils._pytree.tree_unflatten(leaves, spec)
+    def _vmap_broadcast_to_and_flatten(in_dims, spec):
+        leaves = g.utils._pytree.tree_leaves(spec)
+        n = len(leaves) if leaves else 1
+        if isinstance(in_dims, (list, tuple)):
+            flat, _ = g.utils._pytree.tree_flatten(in_dims)
+            return flat if len(flat) == n else None
+        return [in_dims] * n
+    def _vmap_validate_and_get_batch_size(flat_in_dims, flat_args):
+        for in_dim, arg in zip(flat_in_dims, flat_args):
+            if in_dim is not None and hasattr(arg, "shape"):
+                return int(arg.shape[in_dim])
+        return 0
+    _functorch_vmap._broadcast_to_and_flatten = _vmap_broadcast_to_and_flatten
+    _functorch_vmap._get_name = lambda func: getattr(func, "__name__", str(func))
+    _functorch_vmap._validate_and_get_batch_size = _vmap_validate_and_get_batch_size
+    _functorch_vmap.Tensor = getattr(g, "Tensor", jt.Var)
+    _functorch_vmap.tree_flatten = _vmap_tree_flatten
+    _functorch_vmap.tree_unflatten = _vmap_tree_unflatten
+    _functorch_pkg.vmap = _functorch_vmap
+    _sys_compiler.modules["torch._functorch"] = _functorch_pkg
+    _sys_compiler.modules["torch._functorch.vmap"] = _functorch_vmap
+    setattr(g, "_functorch", _functorch_pkg)
     _library = _types2.ModuleType("torch.library")
     class _OpNamespace:
         def __init__(self, ns):
@@ -6604,6 +7979,33 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
     _sys_library.modules["torch.profiler"] = _profiler
     g.profiler = _profiler
 
+    if "torch.utils.tensorboard" not in _sys_library.modules:
+        _tb = _types2.ModuleType("torch.utils.tensorboard")
+        class SummaryWriter:
+            def __init__(self, log_dir=None, comment="", purge_step=None, max_queue=10,
+                         flush_secs=120, filename_suffix="", *args, **kwargs):
+                self.log_dir = log_dir
+                self.comment = comment
+                self.purge_step = purge_step
+                self.max_queue = max_queue
+                self.flush_secs = flush_secs
+                self.filename_suffix = filename_suffix
+                self.args = args
+                self.kwargs = kwargs
+            def add_scalar(self, *a, **k): return None
+            def add_scalars(self, *a, **k): return None
+            def add_image(self, *a, **k): return None
+            def add_images(self, *a, **k): return None
+            def add_graph(self, *a, **k): return None
+            def add_histogram(self, *a, **k): return None
+            def add_text(self, *a, **k): return None
+            def flush(self): return None
+            def close(self): return None
+            def __enter__(self): return self
+            def __exit__(self, *exc): self.close(); return False
+        _tb.SummaryWriter = SummaryWriter
+        _sys_library.modules["torch.utils.tensorboard"] = _tb
+
     _amp = _types2.ModuleType("torch.amp")
     _amp.autocast = lambda *args, **kwargs: _AutocastContext()
     _amp.GradScaler = _GradScaler
@@ -6635,6 +8037,8 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
     g.utils.__path__ = []
     g.utils.__package__ = "torch"
     _sys_utils.modules["torch.utils"] = g.utils
+    if "torch.utils.tensorboard" in _sys_utils.modules:
+        g.utils.tensorboard = _sys_utils.modules["torch.utils.tensorboard"]
     if "torch.utils.data" not in _sys_utils.modules:
         _data = _types2.ModuleType("torch.utils.data")
         class _TorchDataset:
@@ -6850,10 +8254,18 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
         g.utils.data = _data
         _du = _types2.ModuleType("torch.utils.data._utils")
         _duc = _types2.ModuleType("torch.utils.data._utils.collate")
+        _duw = _types2.ModuleType("torch.utils.data._utils.worker")
+        def _generate_state(base_seed, worker_id):
+            import random as _random_worker
+            rng = _random_worker.Random(int(base_seed) + int(worker_id))
+            return [rng.randrange(0, 2**32) for _ in range(4)]
         _duc.default_collate = _default_collate
         _du.collate = _duc
+        _duw._generate_state = _generate_state
+        _du.worker = _duw
         _sys_utils.modules["torch.utils.data._utils"] = _du
         _sys_utils.modules["torch.utils.data._utils.collate"] = _duc
+        _sys_utils.modules["torch.utils.data._utils.worker"] = _duw
         _data._utils = _du
         _dist_data = _types2.ModuleType("torch.utils.data.distributed")
         _dist_data.DistributedSampler = _DistributedSampler
@@ -6896,9 +8308,40 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
                 self.type = type
                 self.context = context
                 self.children_specs = list(children_specs)
+        class MappingKey:
+            def __init__(self, key):
+                self.key = key
+            def __hash__(self):
+                return hash(self.key)
+            def __eq__(self, other):
+                return isinstance(other, MappingKey) and self.key == other.key
+            def __repr__(self):
+                return f"[{self.key!r}]"
+        class SequenceKey:
+            def __init__(self, idx):
+                self.idx = idx
+            def __hash__(self):
+                return hash(self.idx)
+            def __eq__(self, other):
+                return isinstance(other, SequenceKey) and self.idx == other.idx
+            def __repr__(self):
+                return f"[{self.idx}]"
+        class GetAttrKey:
+            def __init__(self, name):
+                self.name = name
+            def __hash__(self):
+                return hash(self.name)
+            def __eq__(self, other):
+                return isinstance(other, GetAttrKey) and self.name == other.name
+            def __repr__(self):
+                return "." + str(self.name)
         _NodeDef = type("_NodeDef", (), {})
         def _list_flatten(x):
             return list(x), None
+        def _list_unflatten(values, context):
+            return list(values)
+        def _list_flatten_with_keys(x):
+            return [(i, v) for i, v in enumerate(x)], None
         def _tuple_flatten(x):
             return list(x), None
         def _dict_flatten(x):
@@ -6941,14 +8384,36 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
         _pytree.LeafSpec = LeafSpec
         _pytree.TreeSpec = TreeSpec
         _pytree.PyTree = object
+        _pytree.Context = object
+        _pytree.MappingKey = MappingKey
+        _pytree.SequenceKey = SequenceKey
+        _pytree.GetAttrKey = GetAttrKey
+        _pytree.KeyEntry = (MappingKey, SequenceKey, GetAttrKey)
+        _pytree.FlattenFunc = object
+        _pytree.UnflattenFunc = object
         _pytree._get_node_type = _get_node_type
+        _pytree._list_flatten = _list_flatten
+        _pytree._list_unflatten = _list_unflatten
+        _pytree._list_flatten_with_keys = _list_flatten_with_keys
         _pytree.tree_flatten = _tree_flatten
         _pytree.tree_unflatten = _tree_unflatten
         _pytree.tree_map = lambda f, x: f(x)
+        _pytree.tree_leaves = lambda x: _tree_flatten(x)[0]
         _pytree.register_pytree_node = lambda *a, **k: None
         _pytree._register_pytree_node = lambda *a, **k: None
         _sys_utils.modules["torch.utils._pytree"] = _pytree
     g.utils._pytree = _sys_utils.modules["torch.utils._pytree"]
+    if "torch.utils._contextlib" not in _sys_utils.modules:
+        _contextlib_mod = _types2.ModuleType("torch.utils._contextlib")
+        import contextlib as _ctxlib_utils
+        class _DecoratorContextManager(_ctxlib_utils.ContextDecorator):
+            def clone(self):
+                return type(self)()
+            def __call__(self, orig_func):
+                return super().__call__(orig_func)
+        _contextlib_mod._DecoratorContextManager = _DecoratorContextManager
+        _sys_utils.modules["torch.utils._contextlib"] = _contextlib_mod
+    g.utils._contextlib = _sys_utils.modules["torch.utils._contextlib"]
     if "torch.utils.hooks" not in _sys_utils.modules:
         _hooks = _types2.ModuleType("torch.utils.hooks")
         class RemovableHandle:
@@ -6967,6 +8432,23 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
         _hooks.RemovableHandle = RemovableHandle
         _sys_utils.modules["torch.utils.hooks"] = _hooks
     g.utils.hooks = _sys_utils.modules["torch.utils.hooks"]
+    if "torch._subclasses.fake_tensor" not in _sys_utils.modules:
+        _subclasses = _types2.ModuleType("torch._subclasses")
+        _fake_tensor = _types2.ModuleType("torch._subclasses.fake_tensor")
+        _functional_tensor = _types2.ModuleType("torch._subclasses.functional_tensor")
+        _fake_tensor.FakeTensor = type("FakeTensor", (), {})
+        _fake_tensor.FakeTensorMode = type("FakeTensorMode", (), {
+            "__init__": lambda self, *a, **k: None,
+            "__enter__": lambda self: self,
+            "__exit__": lambda self, *a: False,
+        })
+        _functional_tensor.FunctionalTensor = type("FunctionalTensor", (), {})
+        _subclasses.fake_tensor = _fake_tensor
+        _subclasses.functional_tensor = _functional_tensor
+        _sys_utils.modules["torch._subclasses"] = _subclasses
+        _sys_utils.modules["torch._subclasses.fake_tensor"] = _fake_tensor
+        _sys_utils.modules["torch._subclasses.functional_tensor"] = _functional_tensor
+        setattr(g, "_subclasses", _subclasses)
     if "torch.utils.flop_counter" not in _sys_utils.modules:
         _flop_counter = _types2.ModuleType("torch.utils.flop_counter")
         class FlopCounterMode:
@@ -7191,7 +8673,7 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
         if inv is not None:
             out = out.permute(*inv)
         return out
-    _fft_ns = _types.SimpleNamespace()
+    _fft_ns = _types.ModuleType("torch.fft")
     _fft_ns.fft = lambda input, n=None, dim=-1, norm=None: _fft_core(input, n, dim, False, norm)
     _fft_ns.ifft = lambda input, n=None, dim=-1, norm=None: _fft_core(input, n, dim, True, norm)
     def _fftn(input, s=None, dim=(-2, -1), norm=None, inverse=False):
@@ -7255,6 +8737,8 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
     _fft_ns.fftfreq = lambda n, d=1.0, **k: jt.array(_np_fft.fft.fftfreq(n, d).astype("float32"))
     _fft_ns.rfftfreq = lambda n, d=1.0, **k: jt.array(_np_fft.fft.rfftfreq(n, d).astype("float32"))
     _alias("fft", _fft_ns)
+    import sys as _sys_fft
+    _sys_fft.modules["torch.fft"] = _fft_ns
     # torch.softmax / log_softmax / relu top-level function forms (convbert calls
     # torch.softmax(x, dim=...)). jittor exposes these via nn, not the top level.
     _alias("softmax", lambda input, dim=None, **k: jt.nn.softmax(input, dim=dim))
@@ -7264,8 +8748,18 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
     _alias("log1p", lambda x: jt.log(1.0 + x))
     _alias("reciprocal", lambda x: 1.0 / x)
     _alias("lerp", lambda input, end, weight: input + weight * (end - input))
-    _alias("isclose", lambda a, b, rtol=1e-5, atol=1e-8, equal_nan=False, **k:
-           jt.abs(a - b) <= (atol + rtol * jt.abs(b)))
+    def _isclose(a, b, rtol=1e-5, atol=1e-8, equal_nan=False, **k):
+        out = jt.abs(a - b) <= (atol + rtol * jt.abs(b))
+        if equal_nan:
+            out = out | (jt.isnan(a) & jt.isnan(b))
+        return out
+    _alias("isclose", _isclose)
+    def _allclose(a, b, rtol=1e-5, atol=1e-8, equal_nan=False, **k):
+        return bool(_isclose(a, b, rtol=rtol, atol=atol, equal_nan=equal_nan).all().item())
+    _alias("allclose", _allclose)
+    _alias("cosine_similarity", lambda x1, x2, dim=1, eps=1e-8: nn.cosine_similarity(x1, x2, dim=dim, eps=eps))
+    _alias("pairwise_distance", lambda x1, x2, p=2.0, eps=1e-6, keepdim=False:
+           nn.pairwise_distance(x1, x2, p=p, eps=eps, keepdim=keepdim))
     # torch.take_along_dim(input, indices, dim): like gather, but torch BROADCASTS
     # indices against input on every dim except `dim` first. transformers' beam search
     # _gather_beams passes indices of shape (batch, k, 1) to gather full sequences of
@@ -7417,6 +8911,8 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
     g.equal = _torch_equal
     _alias("diff", lambda x, n=1, dim=-1, prepend=None, append=None:
            _diff(x, n=n, dim=dim, prepend=prepend, append=append))
+    _alias("trapz", _trapz)
+    _alias("trapezoid", _trapz)
     _alias("repeat_interleave", _repeat_interleave)
     _alias("autocast", lambda *a, **k: _AutocastContext())
     # Real loop-based torch.vmap. The old no-op stub (`lambda fn,*a,**k: fn`)
@@ -7616,6 +9112,13 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
         r = _np_q.quantile(arr, qn, axis=dim, keepdims=keepdim)
         return jt.array(r.astype("float32"))
     _alias("quantile", _quantile)
+    def _nanquantile(input, q, dim=None, keepdim=False, interpolation="linear", **k):
+        import numpy as _np_q
+        arr = input.numpy()
+        qn = q.numpy() if isinstance(q, Var) else q
+        r = _np_q.nanquantile(arr, qn, axis=dim, keepdims=keepdim)
+        return jt.array(r.astype("float32"))
+    _alias("nanquantile", _nanquantile)
     _alias("square", lambda x: x * x)   # torch.square (jittor only had jt.sqr); persimmon
     # torch.addmm(input, mat1, mat2, *, beta=1, alpha=1):
     #   out = beta * input + alpha * (mat1 @ mat2)   (gpt2 uses this for its
@@ -7859,12 +9362,25 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
     if not hasattr(Var, "square_"):     Var.square_ = lambda self: self.assign(self * self)
     if not hasattr(Var, "clamp_min"):   Var.clamp_min = lambda self, v: jt.maximum(self, v)
     if not hasattr(Var, "clamp_max"):   Var.clamp_max = lambda self, v: jt.minimum(self, v)
+    _orig_index_add_inplace = getattr(Var, "index_add_", None)
+    if _orig_index_add_inplace is not None and not getattr(_orig_index_add_inplace, "_torch_returns_self", False):
+        def _index_add_inplace(self, dim, index, source, *, alpha=1):
+            if alpha != 1:
+                source = source * alpha
+            _orig_index_add_inplace(self, dim, index, source)
+            return self
+        _index_add_inplace._torch_returns_self = True
+        Var.index_add_ = _index_add_inplace
     if not hasattr(Var, "bmm"):         Var.bmm = lambda self, other: jt.matmul(self, other)
     if not hasattr(Var, "mm"):          Var.mm = lambda self, other: jt.matmul(self, other)
     if not hasattr(Var, "fliplr"):      Var.fliplr = lambda self: jt.flip(self, 1)
     if not hasattr(Var, "flipud"):      Var.flipud = lambda self: jt.flip(self, 0)
     if not hasattr(Var, "diff"):
         Var.diff = lambda self, n=1, dim=-1, prepend=None, append=None: _diff(self, n, dim, prepend, append)
+    if not hasattr(Var, "trapz"):
+        Var.trapz = lambda self, x=None, dx=1, dim=-1: _trapz(self, x=x, dx=dx, dim=dim)
+    if not hasattr(Var, "trapezoid"):
+        Var.trapezoid = lambda self, x=None, dx=1, dim=-1: _trapz(self, x=x, dx=dx, dim=dim)
     if not hasattr(Var, "fmod"):        # truncated remainder, sign of dividend
         Var.fmod = lambda self, other: self - jt.trunc(self / other) * other
     if not hasattr(Var, "remainder"):   # floored remainder, sign of divisor
@@ -8018,6 +9534,46 @@ def _diff(x, n=1, dim=-1, prepend=None, append=None):
         idx0[dim] = slice(1, None); idx1[dim] = slice(0, -1)
         x = x[tuple(idx0)] - x[tuple(idx1)]
     return x
+
+
+def _trapz(y, x=None, dx=1, dim=-1, *, out=None):
+    # torch.trapz / torch.trapezoid: composite trapezoidal integration along
+    # `dim`. Torch accepts a 1-D coordinate vector or a coordinate tensor
+    # broadcastable to the pairwise y slices.
+    import jittor as _jt
+    y = y if isinstance(y, _jt.Var) else _jt.array(y)
+    ndim = y.ndim
+    dim = int(dim)
+    if dim < 0:
+        dim += ndim
+    if y.shape[dim] <= 1:
+        out_shape = list(y.shape)
+        out_shape.pop(dim)
+        if not out_shape:
+            out_shape = (1,)
+        return _jt.zeros(tuple(out_shape), dtype=y.dtype)
+    sl0 = [slice(None)] * ndim
+    sl1 = [slice(None)] * ndim
+    sl0[dim] = slice(0, -1)
+    sl1[dim] = slice(1, None)
+    y0 = y[tuple(sl0)]
+    y1 = y[tuple(sl1)]
+    area = (y0 + y1) * 0.5
+    if x is None:
+        area = area * dx
+    else:
+        x = x if isinstance(x, _jt.Var) else _jt.array(x)
+        d = _diff(x, n=1, dim=dim if x.ndim > 1 else 0)
+        if x.ndim == 1 and y.ndim > 1:
+            shape = [1] * y.ndim
+            shape[dim] = d.shape[0]
+            d = d.reshape(shape)
+        area = area * d
+    res = area.sum(dim=dim)
+    if out is not None:
+        out.assign(res)
+        return out
+    return res
 
 
 def _repeat_interleave(x, repeats, dim=None):
