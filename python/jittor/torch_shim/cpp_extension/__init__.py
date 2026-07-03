@@ -202,8 +202,28 @@ def toolchain_signature():
     }
 
 
+def _metadata_root():
+    root = os.environ.get("JITTOR_TORCH_EXTENSIONS_DIR")
+    if root is None:
+        try:
+            import jittor as _jt
+            root = os.path.join(_jt.flags.cache_path, "torch_extensions")
+        except Exception:
+            root = os.path.join(os.path.expanduser("~"), ".cache", "jittor_torch_extensions")
+    root = os.path.join(os.path.abspath(root), "metadata")
+    os.makedirs(root, exist_ok=True)
+    return root
+
+
+def _metadata_stamp_path(kind, path):
+    abspath = os.path.abspath(path)
+    digest = hashlib.sha256(abspath.encode("utf-8")).hexdigest()[:24]
+    name = os.path.basename(path).replace(os.sep, "_")
+    return os.path.join(_metadata_root(), f"{name}.{kind}.{digest}.jittor_torch_build.json")
+
+
 def stamp_path(output_path):
-    return output_path + ".jittor_torch_build.json"
+    return _metadata_stamp_path("so", output_path)
 
 
 def output_matches_toolchain(output_path):
@@ -227,7 +247,7 @@ def _write_stamp(output_path, payload):
 
 
 def _object_stamp_path(obj):
-    return obj + ".jittor_torch_build.json"
+    return _metadata_stamp_path("obj", obj)
 
 
 def _object_matches_command(src, obj, cmd):

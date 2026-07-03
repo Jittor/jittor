@@ -13,6 +13,7 @@ import os
 import sys
 import tempfile
 import types
+import hashlib
 
 
 def _jt_cpp_build_cfg():
@@ -27,8 +28,14 @@ def _default_build_root(*parts):
             import jittor as _jt
             root = os.path.join(_jt.flags.cache_path, "torch_extensions")
         except Exception:
-            root = os.path.join(os.getcwd(), ".jittor_torch_extensions")
+            root = os.path.join(os.path.expanduser("~"), ".cache", "jittor_torch_extensions")
     return os.path.join(root, *parts)
+
+
+def _external_build_dir(kind, ext_name, output_path=None):
+    key = os.path.abspath(output_path or ext_name)
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+    return _default_build_root(kind, ext_name.replace(".", "_"), digest)
 
 
 class _JtTorchExtension:
@@ -100,11 +107,7 @@ def _make_build_extension():
 
             out_path = self.get_ext_fullpath(ext.name)
             os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-            build_dir = os.path.join(
-                self.build_temp or _default_build_root("build_ext"),
-                "jt_cppext",
-                ext.name.replace(".", "_"),
-            )
+            build_dir = _external_build_dir("build_ext", ext.name, out_path)
             _b.build(
                 name=ext.name.split(".")[-1],
                 sources=[os.path.abspath(s) for s in ext.sources],

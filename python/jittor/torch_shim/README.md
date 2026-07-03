@@ -50,19 +50,19 @@ Then run the stock command:
 
 ```bash
 CUDA_VISIBLE_DEVICES=1 \
-  JITTOR_TORCH_RUNTIME_ROOT=/path/to/gaussian-splatting/.jittor_torch_runtime \
   python train.py -s /path/to/data -m /path/to/output --disable_viewer
 ```
 
-When using the `jittor.torch_shim` entrypoint, set
-`JITTOR_TORCH_RUNTIME_ROOT` before starting Python so Jittor's core cache,
-temporary files and CUDA discovery are configured before `jittor` finishes
-importing.
+When the Python entry script contains `jittor.torch_shim`, Jittor's early import
+path defaults runtime state to `.jittor_torch_runtime` beside that entry script.
+Set `JITTOR_TORCH_RUNTIME_ROOT` before starting Python only when you want to
+override that project-local default.
 
 `enable()` is not gaussian-splatting-specific. It scans the local project tree
 for native extension build roots (`setup.py`, `pyproject.toml`, `CMakeLists.txt`,
-and declared `.cu/.cpp` sources), registers Jittor as `torch`, prepends the
-discovered extension roots to `sys.path`, and builds setuptools extensions with
+and declared `.cu/.cpp` sources), registers Jittor as `torch`, places the
+project root before discovered extension roots on `sys.path`, and builds
+setuptools extensions with
 `setup.py build_ext --inplace` when their in-place `.so` outputs are missing,
 older than their source inputs, or stamped for a different shim/toolchain.
 Set `JITTOR_TORCH_SKIP_EXT_BUILD=1` to skip this check on warm runs.
@@ -82,7 +82,8 @@ Runtime state defaults to `.jittor_torch_runtime` under the project root:
 - `JITTOR_TORCH_EXTENSIONS_DIR`
 
 Set `JITTOR_TORCH_RUNTIME_ROOT` to choose another project-local runtime
-directory. If Jittor's bundled CUDA is installed at
+directory. Extension build directories, extension stamps, Jittor caches and
+temporary files are kept under this runtime root. If Jittor's bundled CUDA is installed at
 `~/.cache/jittor/jtcuda/cuda12.2_cudnn8_linux`, the bootstrap exports `JTCUDA`,
 `CUDA_HOME`, `nvcc_path`, `PATH` and `LD_LIBRARY_PATH` for it automatically.
 
@@ -183,6 +184,11 @@ Additional CUDA validation on `/home/zy/projects/gs-parity-work`:
   stock `setup.py build_ext --inplace` in all three submodules and completed
   `train.py --iterations 5 --eval`, producing `chkpnt5.pth`, `point_cloud.ply`,
   `cameras.json`, `input.ply` and `exposure.json`.
+- A direct end-to-end Jittor run trained the tiny Blender scene from scratch and
+  then rendered both view sets with `python render.py -m ... --quiet`. The warm
+  extension check reported all three GS extensions as up-to-date; output files
+  included `train/ours_5/renders/*.png`, `train/ours_5/gt/*.png`,
+  `test/ours_5/renders/*.png`, and `test/ours_5/gt/*.png`.
 - With warm Jittor caches, the same 5-iteration tiny-scene training run took
   `real 3.80s` under the Jittor shim versus `real 3.72s` under PyTorch 2.1.2
   on the same RTX 4090 and dataset. A cold first run includes one-time Jittor

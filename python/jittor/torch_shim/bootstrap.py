@@ -9,6 +9,7 @@ import pathlib
 import subprocess
 import sys
 import ast
+import hashlib
 from typing import Iterable, List, Optional, Sequence, Tuple, Union
 
 
@@ -75,10 +76,18 @@ def _jittor_python_root() -> pathlib.Path:
     return pathlib.Path(__file__).resolve().parents[2]
 
 
-def _prepend_sys_path(path: Union[str, os.PathLike]) -> None:
+def _prepend_sys_path(path: Union[str, os.PathLike], after: Optional[Union[str, os.PathLike]] = None) -> None:
     s = os.fspath(path)
-    if s and s not in sys.path:
-        sys.path.insert(0, s)
+    if not s:
+        return
+    if s in sys.path:
+        sys.path.remove(s)
+    if after is not None:
+        marker = os.fspath(after)
+        if marker in sys.path:
+            sys.path.insert(sys.path.index(marker) + 1, s)
+            return
+    sys.path.insert(0, s)
 
 
 def _prepend_env_path(name: str, paths: Iterable[Union[str, os.PathLike]]) -> None:
@@ -325,6 +334,60 @@ def scan_extension_dirs(
     return _dedupe_extensions(found)
 
 
+def _is_relative_to(path: pathlib.Path, parent: pathlib.Path) -> bool:
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
+def _pythonpath_extension_roots(project_dir: pathlib.Path, runtime: pathlib.Path) -> List[pathlib.Path]:
+    """Return explicit PYTHONPATH entries worth scanning for native extensions.
+
+    TRELLIS-style projects keep torch-extension dependencies as sibling source
+    trees on PYTHONPATH.  Scanning those explicit entries lets ``import jittor as
+    torch`` build unmodified external packages in place, without vendoring their
+    sources into Jittor.  Broad locations such as site-packages, the Jittor source
+    tree and runtime/cache directories are intentionally skipped.
+    """
+
+    raw_paths: List[str] = []
+    for item in os.environ.get("PYTHONPATH", "").split(os.pathsep):
+        if item and item not in raw_paths:
+            raw_paths.append(item)
+
+    jt_root = _jittor_python_root().resolve()
+    prefixes = []
+    for raw_prefix in (sys.prefix, getattr(sys, "base_prefix", "")):
+        if raw_prefix:
+            try:
+                prefixes.append(pathlib.Path(raw_prefix).resolve())
+            except OSError:
+                pass
+    roots: List[pathlib.Path] = []
+    for raw in raw_paths:
+        try:
+            p = pathlib.Path(raw).expanduser().resolve()
+        except OSError:
+            continue
+        if not p.is_dir():
+            continue
+        parts = set(p.parts)
+        if "site-packages" in parts or "dist-packages" in parts:
+            continue
+        if any(p == prefix or _is_relative_to(p, prefix) for prefix in prefixes):
+            continue
+        if p == jt_root or _is_relative_to(p, jt_root):
+            continue
+        if p == runtime or _is_relative_to(p, runtime):
+            continue
+        if p == project_dir:
+            continue
+        roots.append(p)
+    return sorted(dict.fromkeys(roots), key=lambda x: (len(x.parts), os.fspath(x)))
+
+
 def _ensure_dir(path: Union[str, os.PathLike]) -> pathlib.Path:
     p = pathlib.Path(path)
     p.mkdir(parents=True, exist_ok=True)
@@ -341,7 +404,11 @@ def _configure_torch_math_flags(jt) -> None:
     if _is_truthy(os.environ.get("JITTOR_TORCH_KEEP_FAST_MATH")):
         return
     extra = "--fmad=false --prec-div=true --prec-sqrt=true"
-    os.environ["nvcc_flags"] = (os.environ.get("nvcc_flags", "") + " " + extra).strip()
+    env_flags = os.environ.get("nvcc_flags", "")
+    for tok in extra.split():
+        if tok not in env_flags.split():
+            env_flags = (env_flags + " " + tok).strip()
+    os.environ["nvcc_flags"] = env_flags
     try:
         flags = getattr(getattr(jt, "compiler", None), "flags", None)
         cur = getattr(flags, "nvcc_flags", None)
@@ -389,6 +456,39 @@ def _configure_cuda(real_home: Optional[str], verbose: bool) -> None:
     _log(verbose, "CUDA toolkit: %s" % jtcuda)
 
 
+def _configure_runtime_driver_lib(runtime: pathlib.Path) -> None:
+    """Expose an unversioned libcuda.so for Triton's build helper.
+
+    Driver packages often install only ``libcuda.so.1`` for x86_64, while Triton
+    links its small runtime helper with ``-lcuda``.  Keep the compatibility
+    symlink inside Jittor's runtime instead of touching system or dependency
+    directories.
+    """
+
+    candidates = (
+        pathlib.Path("/lib/x86_64-linux-gnu/libcuda.so.1"),
+        pathlib.Path("/usr/lib/x86_64-linux-gnu/libcuda.so.1"),
+    )
+    src = next((p for p in candidates if p.is_file()), None)
+    if src is None:
+        return
+    lib_dir = _ensure_dir(runtime / "lib")
+    dst = lib_dir / "libcuda.so"
+    try:
+        if dst.exists() or dst.is_symlink():
+            cur = pathlib.Path(os.readlink(dst)) if dst.is_symlink() else None
+            if cur == src:
+                _prepend_env_path("LD_LIBRARY_PATH", [lib_dir])
+                os.environ.setdefault("TRITON_LIBCUDA_PATH", os.fspath(lib_dir))
+                return
+            dst.unlink()
+        dst.symlink_to(src)
+    except OSError:
+        return
+    _prepend_env_path("LD_LIBRARY_PATH", [lib_dir])
+    os.environ.setdefault("TRITON_LIBCUDA_PATH", os.fspath(lib_dir))
+
+
 def _deploy_torch_shim(target: pathlib.Path) -> None:
     deploy_py = _jittor_python_root() / "jittor" / "torch_shim" / "deploy.py"
     spec = importlib.util.spec_from_file_location("_jittor_torch_deploy", os.fspath(deploy_py))
@@ -397,6 +497,58 @@ def _deploy_torch_shim(target: pathlib.Path) -> None:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     module.deploy(os.fspath(target))
+
+
+def _write_build_sitecustomize(target: pathlib.Path) -> None:
+    """Install a tiny sitecustomize for extension-build child processes.
+
+    Some editable/package installs add internal package directories to
+    ``sys.path``.  If a directory such as ``.../site-packages/tvm_ffi`` is on the
+    path, stdlib imports like ``import dataclasses`` can resolve to
+    ``tvm_ffi/dataclasses`` during ``setup.py`` startup.  Keep the fix local to
+    Jittor's runtime shim site so the user's conda environment is untouched.
+    """
+
+    path = target / "sitecustomize.py"
+    path.write_text(
+        """
+import importlib.util as _iu
+import os as _os
+import sys as _sys
+import sysconfig as _sc
+
+def _jt_drop_internal_package_paths():
+    _bad = (
+        _os.path.sep + "site-packages" + _os.path.sep + "tvm_ffi",
+    )
+    _sys.path[:] = [
+        _p for _p in _sys.path
+        if not any(_p.endswith(_s) for _s in _bad)
+    ]
+
+def _jt_preload_stdlib_dataclasses():
+    _stdlib = _sc.get_path("stdlib")
+    if not _stdlib:
+        return
+    _path = _os.path.join(_stdlib, "dataclasses.py")
+    if not _os.path.isfile(_path):
+        return
+    _cur = _sys.modules.get("dataclasses")
+    _cur_file = _os.path.abspath(str(getattr(_cur, "__file__", ""))) if _cur else ""
+    if _cur_file == _os.path.abspath(_path):
+        return
+    _spec = _iu.spec_from_file_location("dataclasses", _path)
+    if _spec is None or _spec.loader is None:
+        return
+    _mod = _iu.module_from_spec(_spec)
+    _sys.modules["dataclasses"] = _mod
+    _spec.loader.exec_module(_mod)
+
+_jt_drop_internal_package_paths()
+_jt_preload_stdlib_dataclasses()
+""".lstrip(),
+        encoding="utf-8",
+    )
 
 
 def _pythonpath_for_child(paths: Sequence[Union[str, os.PathLike]]) -> str:
@@ -511,8 +663,28 @@ def build_extension_dirs(
             _log(verbose, "extension up-to-date: %s" % ext.root)
             continue
         _log(verbose, "build_ext: %s" % ext.root)
-        cmd = [sys.executable, os.path.basename(ext.setup_py), "build_ext", "--inplace"]
-        subprocess.run(cmd, cwd=ext.root, env=env or os.environ.copy(), check=True)
+        child_env = (env or os.environ.copy()).copy()
+        ext_root = pathlib.Path(ext.root).resolve()
+        build_root = pathlib.Path(
+            child_env.get("JITTOR_TORCH_EXTENSIONS_DIR")
+            or os.environ.get("JITTOR_TORCH_EXTENSIONS_DIR")
+            or (pathlib.Path.home() / ".cache" / "jittor_torch_extensions")
+        ).expanduser().resolve()
+        digest = hashlib.sha256(os.fspath(ext_root).encode("utf-8")).hexdigest()[:16]
+        build_temp = _ensure_dir(build_root / "setuptools" / ext_root.name / digest / "temp")
+        build_lib = _ensure_dir(build_root / "setuptools" / ext_root.name / digest / "lib")
+        child_env["JITTOR_TORCH_EXTENSIONS_DIR"] = os.fspath(build_root)
+        cmd = [
+            sys.executable,
+            os.path.basename(ext.setup_py),
+            "build_ext",
+            "--inplace",
+            "--build-temp",
+            os.fspath(build_temp),
+            "--build-lib",
+            os.fspath(build_lib),
+        ]
+        subprocess.run(cmd, cwd=ext.root, env=child_env, check=True)
         try:
             from jittor.torch_shim import cpp_extension as _cpp_ext
             for path in _extension_outputs(ext.root):
@@ -568,6 +740,7 @@ def enable(
 
     if configure_cuda:
         _configure_cuda(real_home, verbose=verbose)
+    _configure_runtime_driver_lib(runtime)
 
     for name, value in (
         ("DISABLE_MULTIPROCESSING", "1"),
@@ -581,6 +754,7 @@ def enable(
     shim_site = _ensure_dir(runtime / "site-packages")
     jt_python = _jittor_python_root()
     _deploy_torch_shim(shim_site)
+    _write_build_sitecustomize(shim_site)
 
     _prepend_sys_path(shim_site)
     _prepend_sys_path(jt_python)
@@ -609,6 +783,9 @@ def enable(
     scanned: List[NativeExtension] = []
     if auto_scan_extensions:
         scanned.extend(scan_extension_dirs(project_root=project_dir, max_depth=max_scan_depth))
+        py_roots = _pythonpath_extension_roots(project_dir, runtime)
+        if py_roots:
+            scanned.extend(scan_extension_dirs(roots=py_roots, max_depth=max_scan_depth))
     for item in extension_dirs or ():
         if not isinstance(item, NativeExtension):
             item_path = pathlib.Path(os.fspath(item)).expanduser()
@@ -619,8 +796,8 @@ def enable(
             scanned.append(ext)
     scanned = _dedupe_extensions(scanned)
 
-    for ext in scanned:
-        _prepend_sys_path(ext.root)
+    for ext in reversed(scanned):
+        _prepend_sys_path(ext.root, after=project_dir)
 
     child_paths: List[Union[str, os.PathLike]] = [shim_site, jt_python, project_dir]
     child_paths += [ext.root for ext in scanned]

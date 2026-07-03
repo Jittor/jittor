@@ -1,4 +1,5 @@
 import os
+import pathlib
 import tempfile
 import textwrap
 import unittest
@@ -30,6 +31,33 @@ class TestTorchBootstrap(unittest.TestCase):
             self.assertEqual([e.root for e in exts], [root])
             self.assertEqual(len(exts[0].sources), 2)
             self.assertTrue(exts[0].setup_py.endswith("setup.py"))
+
+    def test_entry_script_runtime_defaults_to_project_dir(self):
+        import jittor as jt
+
+        with tempfile.TemporaryDirectory(dir=os.getcwd()) as d:
+            entry = os.path.join(d, "train.py")
+            with open(entry, "w") as f:
+                f.write("from jittor.torch_shim import enable\n")
+            old_argv0 = jt._sys.argv[0]
+            try:
+                jt._sys.argv[0] = entry
+                self.assertEqual(
+                    jt._jt_torch_entry_runtime_root(),
+                    os.path.join(d, ".jittor_torch_runtime"),
+                )
+            finally:
+                jt._sys.argv[0] = old_argv0
+
+    def test_pythonpath_extension_roots_skip_conda_prefix(self):
+        from jittor.torch_shim.bootstrap import _pythonpath_extension_roots
+
+        project = pathlib.Path(os.getcwd()).resolve()
+        runtime = project / ".jittor_torch_runtime"
+        roots = _pythonpath_extension_roots(project, runtime)
+        for root in roots:
+            self.assertNotIn("site-packages", set(root.parts))
+            self.assertFalse(str(root).startswith(os.path.realpath(os.sys.prefix)))
 
     def test_torch_utils_unknown_submodule_fails_fast(self):
         import importlib

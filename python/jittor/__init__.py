@@ -12,6 +12,7 @@
 __version__ = '1.3.11.0'
 
 import os as _os
+import sys as _sys
 
 def _jt_torch_truthy(_value):
     return str(_value or "").strip().lower() in ("1", "true", "yes", "on")
@@ -26,6 +27,32 @@ def _jt_torch_prepend_env_path(_name, _path):
         if _p not in _out:
             _out.append(_p)
     _os.environ[_name] = _os.pathsep.join(_out)
+
+
+def _jt_torch_add_nvcc_flags(_flags):
+    _cur = _os.environ.get("nvcc_flags", "")
+    _items = _cur.split()
+    for _tok in _flags.split():
+        if _tok not in _items:
+            _items.append(_tok)
+    _os.environ["nvcc_flags"] = " ".join(_items)
+
+
+def _jt_torch_entry_runtime_root():
+    _entry = _sys.argv[0] if _sys.argv else ""
+    if not _entry or _entry in ("-c", "-m"):
+        return None
+    _entry = _os.path.abspath(_os.path.expanduser(_entry))
+    if not _os.path.isfile(_entry):
+        return None
+    try:
+        with open(_entry, "r", encoding="utf-8", errors="ignore") as _f:
+            _head = _f.read(65536)
+    except OSError:
+        return None
+    if "jittor.torch_shim" not in _head:
+        return None
+    return _os.path.join(_os.path.dirname(_entry), ".jittor_torch_runtime")
 
 
 def _jt_torch_find_jtcuda(_real_home):
@@ -58,13 +85,16 @@ def _jt_torch_find_jtcuda(_real_home):
 
 
 _jt_torch_real_home = _os.environ.get("REAL_HOME") or _os.environ.get("HOME")
-_jt_torch_runtime_root = _os.environ.get("JITTOR_TORCH_RUNTIME_ROOT")
+_jt_torch_runtime_root = _os.environ.get("JITTOR_TORCH_RUNTIME_ROOT") or _jt_torch_entry_runtime_root()
 if _jt_torch_runtime_root:
     _jt_torch_runtime_root = _os.path.abspath(_os.path.expanduser(_jt_torch_runtime_root))
+    _os.environ.setdefault("JITTOR_TORCH_RUNTIME_ROOT", _jt_torch_runtime_root)
     _os.makedirs(_jt_torch_runtime_root, exist_ok=True)
     for _name, _subdir in (
         ("JITTOR_HOME", "jittor_cache"),
         ("TORCH_HOME", "torch_home"),
+        ("JITTOR_TORCH_EXTENSIONS_DIR", "torch_extensions"),
+        ("TORCH_EXTENSIONS_DIR", "torch_extensions"),
         ("XDG_CACHE_HOME", "xdg_cache"),
         ("CUDA_CACHE_PATH", "cuda_cache"),
     ):
@@ -81,7 +111,7 @@ if _jt_torch_runtime_root:
         _os.environ["TMPDIR"] = _os.path.join(_jt_torch_runtime_root, "tmp")
         _os.makedirs(_os.environ["TMPDIR"], exist_ok=True)
     if _os.environ.get("JITTOR_TORCH_KEEP_FAST_MATH", "0").lower() not in ("1", "true", "yes", "on"):
-        _os.environ["nvcc_flags"] = (_os.environ.get("nvcc_flags", "") + " --fmad=false --prec-div=true --prec-sqrt=true ").strip()
+        _jt_torch_add_nvcc_flags("--fmad=false --prec-div=true --prec-sqrt=true")
     if not _jt_torch_truthy(_os.environ.get("JITTOR_TORCH_KEEP_CUDA")):
         _jt_torch_jtcuda = _jt_torch_find_jtcuda(_jt_torch_real_home)
         if _jt_torch_jtcuda:
