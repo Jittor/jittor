@@ -4837,6 +4837,8 @@ def _install_version(g):
 
 
 def _install_fsdp2_distributed(dist, torch_module=None):
+    from . import torch_fsdp2_compat as _fsdp2
+    return _fsdp2.install(dist, torch_module)
     """Install a single-process FSDP2/DTensor compatibility surface.
 
     PyTorch FSDP2 mutates an ``nn.Module`` in-place via ``fully_shard()``.  On a

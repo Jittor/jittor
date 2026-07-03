@@ -371,6 +371,20 @@ class FSDPModule(metaclass=_FSDPModuleMeta):
     def set_requires_all_reduce(self, value, recurse=True):
         return _apply_fsdp_attr(self, "requires_all_reduce", bool(value), recurse)
 
+    def set_all_reduce_hook(self, hook, *, stream=None):
+        _apply_fsdp_attr(self, "all_reduce_hook", hook, False)
+        return _apply_fsdp_attr(self, "all_reduce_hook_stream", stream, False)
+
+    def set_allocate_memory_from_process_group_for_comm(self, enable):
+        return _apply_fsdp_attr(self, "allocate_memory_from_process_group_for_comm",
+                                bool(enable), False)
+
+    def set_custom_all_gather(self, comm):
+        return _apply_fsdp_attr(self, "custom_all_gather", comm, False)
+
+    def set_custom_reduce_scatter(self, comm):
+        return _apply_fsdp_attr(self, "custom_reduce_scatter", comm, False)
+
     def set_is_last_backward(self, value, recurse=True):
         return _apply_fsdp_attr(self, "is_last_backward", bool(value), recurse)
 
@@ -395,8 +409,8 @@ class FSDPModule(metaclass=_FSDPModuleMeta):
     def set_force_sum_reduction_for_comms(self, value, recurse=True):
         return _apply_fsdp_attr(self, "force_sum_reduction_for_comms", bool(value), recurse)
 
-    def set_symm_mem_for_comm(self, value=True, recurse=True):
-        return _apply_fsdp_attr(self, "symm_mem_for_comm", bool(value), recurse)
+    def set_symm_mem_for_comm(self, backend="NCCL", recurse=True):
+        return _apply_fsdp_attr(self, "symm_mem_for_comm", backend, recurse)
 
     def set_post_optim_event(self, event, recurse=True):
         return _apply_fsdp_attr(self, "post_optim_event", event, recurse)
@@ -408,6 +422,8 @@ class FSDPModule(metaclass=_FSDPModuleMeta):
 _FSDP_METHODS = (
     "unshard", "reshard", "set_reshard_after_forward",
     "set_requires_gradient_sync", "set_requires_all_reduce", "set_is_last_backward",
+    "set_all_reduce_hook", "set_allocate_memory_from_process_group_for_comm",
+    "set_custom_all_gather", "set_custom_reduce_scatter",
     "set_reshard_after_backward", "set_unshard_in_backward",
     "set_modules_to_forward_prefetch", "set_modules_to_backward_prefetch",
     "set_gradient_divide_factor", "set_reduce_scatter_divide_factor",
@@ -482,7 +498,10 @@ def register_fsdp_forward_method(module, method_name):
 
 
 @contextlib.contextmanager
-def share_comm_ctx():
+def share_comm_ctx(modules=None):
+    if modules is not None:
+        for module in modules:
+            _apply_fsdp_attr(module, "share_comm_ctx", True, False)
     yield
 
 

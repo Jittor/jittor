@@ -19,6 +19,7 @@ class TestFSDP2Compat(unittest.TestCase):
             StateDictType,
             FullyShardedDataParallel,
             fully_shard,
+            share_comm_ctx,
         )
         from torch.distributed._composable.fsdp import fully_shard as composable_fully_shard
         from torch.distributed.device_mesh import init_device_mesh
@@ -55,11 +56,23 @@ class TestFSDP2Compat(unittest.TestCase):
         module.reshard()
         module.set_requires_gradient_sync(False)
         module.set_requires_all_reduce(False)
+        module.set_all_reduce_hook(lambda *args, **kwargs: None, stream=None)
+        module.set_allocate_memory_from_process_group_for_comm(True)
+        module.set_custom_all_gather(lambda *args, **kwargs: None)
+        module.set_custom_reduce_scatter(lambda *args, **kwargs: None)
         module.set_reshard_after_backward(False)
         module.set_unshard_in_backward(False)
         module.set_force_sum_reduction_for_comms(True)
-        module.set_symm_mem_for_comm(False)
+        module.set_symm_mem_for_comm("NCCL")
         module.set_post_optim_event(None)
+        with share_comm_ctx([module]):
+            pass
+        state = module._get_fsdp_state()
+        self.assertTrue(callable(state.all_reduce_hook))
+        self.assertTrue(state.allocate_memory_from_process_group_for_comm)
+        self.assertTrue(callable(state.custom_all_gather))
+        self.assertTrue(callable(state.custom_reduce_scatter))
+        self.assertEqual(state.symm_mem_for_comm, "NCCL")
         self.assertIs(module._get_fsdp_state(), getattr(module, "_fsdp_state", None))
 
         wrapped = FullyShardedDataParallel(torch.nn.Linear(3, 2))
