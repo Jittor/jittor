@@ -24,7 +24,10 @@ ok(torch.long == "int64", "long alias")
 ok(tuple(torch.zeros(2, 3, device="cuda").shape) == (2, 3), "zeros device kwarg")
 ok(tuple(torch.arange(5, device="cuda").shape) == (5,), "arange device kwarg")
 ok(torch.from_numpy(np.zeros(3, dtype=np.int64)).dtype == "int64", "from_numpy int64")
-ok(int(torch.tensor([1,2,3]).numel()) == 3, "tensor numel")
+_numel_t = torch.tensor([1,2,3])
+ok(int(_numel_t.numel()) == 3, "tensor numel")
+ok(_numel_t.is_mps is False and _numel_t.is_xpu is False and _numel_t.is_meta is False,
+   "Tensor device-type boolean properties")
 
 # reductions (torch semantics)
 x = torch.tensor([[1., 5., 2.], [7., 3., 4.]])
@@ -547,6 +550,10 @@ _ka = np.random.randn(2, 2).astype("float32"); _kb = np.random.randn(2, 2).astyp
 ok(np.abs(torch.kron(jt.array(_ka), jt.array(_kb)).numpy() - np.kron(_ka, _kb)).max() < 1e-5, "torch.kron")
 _lx2 = np.random.randn(5).astype("float32")
 ok(np.abs(torch.logcumsumexp(jt.array(_lx2), 0).numpy() - np.log(np.cumsum(np.exp(_lx2)))).max() < 1e-4, "torch.logcumsumexp")
+_try = np.random.randn(3, 5).astype("float32")
+_trx = np.linspace(0.0, 1.0, 5).astype("float32")
+ok(np.abs(torch.trapz(jt.array(_try), jt.array(_trx), dim=1).numpy() - np.trapz(_try, _trx, axis=1)).max() < 1e-5,
+   "torch.trapz/trapezoid")
 _ta2 = np.random.randn(2, 3, 4).astype("float32"); _tb2 = np.random.randn(4, 5, 2).astype("float32")
 ok(np.abs(torch.tensordot(jt.array(_ta2), jt.array(_tb2), dims=1).numpy() - np.tensordot(_ta2, _tb2, axes=1)).max() < 1e-4, "torch.tensordot")
 _pp = np.random.randn(4, 3).astype("float32")
