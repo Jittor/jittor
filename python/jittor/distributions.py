@@ -9,12 +9,105 @@
 # ***************************************************************
 import math
 import os
+import types
 import numpy as np
 import jittor as jt
 from jittor import nn
 from jittor.nn import binary_cross_entropy_with_logits
 from jittor import lgamma, igamma, digamma
 from jittor.math_util.gamma import gamma_grad, sample_gamma
+
+
+class _Constraint:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def check(self, value):
+        if isinstance(value, jt.Var):
+            return jt.ones(value.shape, dtype="bool")
+        return True
+
+
+class _Real(_Constraint):
+    pass
+
+
+class _Interval(_Constraint):
+    def __init__(self, lower_bound, upper_bound):
+        self.lower_bound = lower_bound
+        self.upper_bound = upper_bound
+
+    def check(self, value):
+        return (value >= self.lower_bound) & (value <= self.upper_bound)
+
+
+class _GreaterThan(_Constraint):
+    def __init__(self, lower_bound):
+        self.lower_bound = lower_bound
+
+    def check(self, value):
+        return value > self.lower_bound
+
+
+class _GreaterThanEq(_Constraint):
+    def __init__(self, lower_bound):
+        self.lower_bound = lower_bound
+
+    def check(self, value):
+        return value >= self.lower_bound
+
+
+class _LessThan(_Constraint):
+    def __init__(self, upper_bound):
+        self.upper_bound = upper_bound
+
+    def check(self, value):
+        return value < self.upper_bound
+
+
+class _DependentProperty(property):
+    def __init__(self, fn=None, is_discrete=False, event_dim=None):
+        self.is_discrete = is_discrete
+        self.event_dim = event_dim
+        super().__init__(fn) if fn is not None else super().__init__()
+
+    def __call__(self, fn):
+        return type(self)(fn, self.is_discrete, self.event_dim)
+
+
+def _dependent_property(fn=None, *, is_discrete=False, event_dim=None):
+    prop = _DependentProperty(is_discrete=is_discrete, event_dim=event_dim)
+    return prop(fn) if fn is not None else prop
+
+
+class _ConstraintsModule(types.ModuleType):
+    Constraint = _Constraint
+    _Real = _Real
+    real = _Real()
+    positive = _GreaterThan(0)
+    nonnegative = _GreaterThanEq(0)
+    nonnegative_integer = _GreaterThanEq(0)
+    positive_integer = _GreaterThan(0)
+    unit_interval = _Interval(0, 1)
+    simplex = _Constraint()
+    lower_cholesky = _Constraint()
+    positive_definite = _Constraint()
+    boolean = _Constraint()
+    real_vector = _Constraint()
+    dependent = _Constraint()
+    independent = _Constraint()
+    dependent_property = staticmethod(_dependent_property)
+    greater_than = staticmethod(lambda lower_bound: _GreaterThan(lower_bound))
+    greater_than_eq = staticmethod(lambda lower_bound: _GreaterThanEq(lower_bound))
+    less_than = staticmethod(lambda upper_bound: _LessThan(upper_bound))
+    interval = staticmethod(lambda lower_bound, upper_bound: _Interval(lower_bound, upper_bound))
+    half_open_interval = staticmethod(lambda lower_bound, upper_bound: _Interval(lower_bound, upper_bound))
+    integer_interval = staticmethod(lambda lower_bound, upper_bound: _Interval(lower_bound, upper_bound))
+    cat = staticmethod(lambda constraints, dim=0: _Constraint())
+    stack = staticmethod(lambda constraints, dim=0: _Constraint())
+
+
+constraints = _ConstraintsModule("torch.distributions.constraints")
 
 
 # ---- torch.distributions SHAPE semantics ----------------------------------
@@ -95,6 +188,21 @@ def _full_shape(sample_shape, batch_shape, event_shape=()):
     return out if len(out) > 0 else (1,)
 
 
+def _broadcast_var(value, shape):
+    value = value if isinstance(value, jt.Var) else jt.array(value)
+    cur = tuple(value.shape)
+    if cur == tuple(shape) or not shape:
+        return value
+    if _prod(cur) == 1:
+        value = value.reshape((1,) * len(shape))
+    return value.broadcast(shape)
+
+
+def broadcast_all(*values):
+    batch_shape = _bshape(*values)
+    return tuple(_broadcast_var(value, batch_shape) for value in values)
+
+
 def simple_presum(x):
     src = '''
 __inline_static__
@@ -136,6 +244,10 @@ class OneHotCategorical:
     def entropy(self):
         p_log_p = self.logits * self.probs
         return -p_log_p.sum(-1)
+
+    @property
+    def mode(self):
+        return (self.probs == self.probs.max(-1, keepdims=True)).int64()
     
     
 class Categorical:
@@ -178,6 +290,10 @@ class Categorical:
         p_log_p = self.logits * self.probs
         return -p_log_p.sum(-1)
 
+    @property
+    def mode(self):
+        return self.probs.argmax(dim=-1)
+
 
 class Normal:
     def __init__(self, mu, sigma):
@@ -208,9 +324,20 @@ class Normal:
         var = self.sigma**2
         log_scale = jt.safe_log(self.sigma)
         return -((x-self.mu)**2) / (2*var) - log_scale-np.log(np.sqrt(2*np.pi))
+
+    def cdf(self, x):
+        return 0.5 * (1 + jt.erf((x - self.mu) / (self.sigma * np.sqrt(2.0))))
     
     def entropy(self):
         return 0.5+0.5*np.log(2*np.pi)+jt.safe_log(self.sigma)
+
+    @property
+    def mode(self):
+        return self.mu
+
+    @property
+    def mean(self):
+        return self.mu
 
 
 class Uniform:
@@ -337,6 +464,20 @@ def _logsigmoid(z):
 class Distribution:
     ''' Minimal base class for torch.distributions.Distribution (used for isinstance
     checks and as a common interface). '''
+    has_rsample = False
+    arg_constraints = {}
+
+    def __init__(self, batch_shape=(), event_shape=(), validate_args=None):
+        self.batch_shape = tuple(batch_shape)
+        self.event_shape = tuple(event_shape)
+        self._validate_args = validate_args
+
+    def _extended_shape(self, sample_shape=None):
+        return _full_shape(sample_shape, self.batch_shape, self.event_shape)
+
+    def _validate_sample(self, value):
+        return None
+
     def sample(self, sample_shape=None):
         raise NotImplementedError
     def rsample(self, sample_shape=None):
@@ -377,6 +518,48 @@ class Bernoulli(Distribution):
     def entropy(self):
         p = self.probs
         return -(p * _logsigmoid(self.logits) + (1 - p) * _logsigmoid(-self.logits))
+
+    @property
+    def mode(self):
+        return (self.probs >= 0.5).float32()
+
+    @property
+    def mean(self):
+        return self.probs
+
+
+class RelaxedBernoulli(Bernoulli):
+    def __init__(self, temperature, probs=None, logits=None, validate_args=None):
+        self.temperature = temperature
+        super().__init__(probs=probs, logits=logits)
+
+    def rsample(self, sample_shape=None):
+        shape = _full_shape(sample_shape, self.batch_shape)
+        u = jt.rand(shape)
+        logit = self.logits + jt.safe_log(u) - jt.safe_log(1 - u)
+        return jt.sigmoid(logit / self.temperature)
+
+    def sample(self, sample_shape=None):
+        return self.rsample(sample_shape).stop_grad()
+
+
+LogitRelaxedBernoulli = RelaxedBernoulli
+
+
+class RelaxedOneHotCategorical(OneHotCategorical):
+    def __init__(self, temperature, probs=None, logits=None, validate_args=None):
+        self.temperature = temperature
+        super().__init__(probs=probs, logits=logits)
+        self.base_dist = self
+
+    def rsample(self, sample_shape=None):
+        shape = _norm_sample_shape(sample_shape) + tuple(self.probs.shape)
+        u = jt.rand(shape)
+        g = -jt.safe_log(-jt.safe_log(u + 1e-20) + 1e-20)
+        return nn.softmax((self.logits + g) / self.temperature, dim=-1)
+
+    def sample(self, sample_shape=None):
+        return self.rsample(sample_shape).stop_grad()
 
 
 class Exponential(Distribution):
@@ -638,6 +821,55 @@ class LogNormal(Distribution):
     def variance(self):
         s2 = self.scale * self.scale
         return (jt.exp(s2) - 1) * jt.exp(2 * self.loc + s2)
+
+
+class LogisticNormal(Distribution):
+    ''' torch.distributions.LogisticNormal(loc, scale).
+
+    This is a lightweight transformed Normal for PyTorch-ecosystem import paths
+    (tensordict patches deterministic_sample at import time). For vector events
+    it maps through softmax; for scalar events it maps through sigmoid.
+    '''
+    def __init__(self, loc, scale, validate_args=None):
+        self.loc = _as_var(loc)
+        self.scale = _as_var(scale)
+        self.base_dist = Normal(self.loc, self.scale)
+        self.batch_shape = tuple(self.loc.shape[:-1]) if self.loc.ndim > 1 else ()
+        self.event_shape = (int(self.loc.shape[-1]),) if self.loc.ndim > 0 else ()
+
+        def _logistic_transform(x):
+            if x.ndim > 0 and int(x.shape[-1]) > 1:
+                return nn.softmax(x, dim=-1)
+            return jt.sigmoid(x)
+        self.transforms = [_logistic_transform]
+
+    def rsample(self, sample_shape=None):
+        x = self.base_dist.rsample(sample_shape)
+        for transform in self.transforms:
+            x = transform(x)
+        return x
+
+    def sample(self, sample_shape=None):
+        return self.rsample(sample_shape).stop_grad()
+
+    def log_prob(self, value):
+        # Best-effort inverse transform. This is mainly for compatibility; verl's
+        # DataProto/tensordict import path only needs the class to exist.
+        value = _as_var(value)
+        eps = 1e-6
+        if value.ndim > 0 and int(value.shape[-1]) > 1:
+            z = jt.log(jt.maximum(value, eps))
+        else:
+            v = jt.minimum(jt.maximum(value, eps), 1 - eps)
+            z = jt.log(v) - jt.log(1 - v)
+        return self.base_dist.log_prob(z)
+
+    @property
+    def mean(self):
+        x = self.loc
+        for transform in self.transforms:
+            x = transform(x)
+        return x
 
 
 class MultivariateNormal(Distribution):
