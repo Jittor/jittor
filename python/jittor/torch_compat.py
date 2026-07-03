@@ -249,6 +249,11 @@ def _var_is_cpu_resident(v):
     not-yet-materialized Var reports 'none'; treat that as following the global
     flag (it will land per use_cuda when realized)."""
     try:
+        if getattr(v, "_jittor_torch_force_cpu", False):
+            return True
+    except Exception:
+        pass
+    try:
         loc = v.location()
     except Exception:
         return False
@@ -276,6 +281,10 @@ def _make_cpu_resident(v):
     with jt.flag_scope(use_cuda=0):
         out = jt.array(arr)
         out.sync()
+    try:
+        out._jittor_torch_force_cpu = True
+    except Exception:
+        pass
     return out
 
 
@@ -292,6 +301,21 @@ def _make_cuda_resident(v):
     with jt.flag_scope(use_cuda=1):
         out = jt.array(arr)
         out.sync()
+    try:
+        out._jittor_torch_force_cpu = False
+    except Exception:
+        pass
+    return out
+
+
+def _mark_cpu_like(out, *inputs):
+    try:
+        if isinstance(out, jt.Var) and any(
+            isinstance(x, jt.Var) and _var_is_cpu_resident(x) for x in inputs
+        ):
+            out._jittor_torch_force_cpu = True
+    except Exception:
+        pass
     return out
 
 
@@ -516,6 +540,10 @@ def install(torch):
         g._vj_native_load = getattr(g, "load", None)
     if not hasattr(g, "_vj_native_save"):
         g._vj_native_save = getattr(g, "save", None)
+    if not hasattr(g, "_vj_native_where"):
+        g._vj_native_where = getattr(g, "where", None)
+    if not hasattr(g, "_vj_native_nonzero"):
+        g._vj_native_nonzero = getattr(g, "nonzero", None)
 
     # Pillow 11 rejects int8 RGB arrays. Some legacy torch projects, including
     # graphdeco gaussian-splatting, use np.byte as a uint8 alias before
@@ -1289,6 +1317,7 @@ def install(torch):
         _sys_nn.modules["torch.nn.functional"] = nn.functional
     _install_cuda(g)
     _install_version(g)
+    _install_distributed(g)
     _install_tensor_methods(g, Var, _DTYPE_OBJS)
     _install_misc(g, Var, _DTYPE_OBJS)
     _install_optimizers(g)
@@ -1774,6 +1803,10 @@ def _install_lr_scheduler(g):
     except Exception:
         return
     if getattr(_optim, "_torch_lr_installed", False):
+        import sys as _sys
+        _sys.modules.setdefault("torch.optim", _optim)
+        if hasattr(_optim, "lr_scheduler"):
+            _sys.modules.setdefault("torch.optim.lr_scheduler", _optim.lr_scheduler)
         return
 
     def _base_lrs(opt):
@@ -1966,6 +1999,8 @@ def _install_lr_scheduler(g):
     _optim.lr_scheduler = ns
     _optim._torch_lr_installed = True
     import sys as _sys
+    _sys.modules.setdefault("torch.optim", _optim)
+    _sys.modules.setdefault("torch.optim.lr_scheduler", ns)
     _sys.modules.setdefault("jittor.optim.lr_scheduler", ns)
 
 
@@ -1993,18 +2028,31 @@ def _install_reductions(g):
     _topk = getattr(_jt, "topk", None)
     _gather = _jt.gather
 
-    def argmax(x, dim=None, keepdim=False):
+    def _reduce_index(result):
+        if isinstance(result, (tuple, list)):
+            result = result[0]
+        return result.int64()
+
+    def argmax(x, dim=None, keepdim=False, keepdims=None):
+        if keepdims is not None:
+            keepdim = keepdims
         if dim is None:
-            idx, _ = _argmax(x.reshape(-1), 0)
-            return idx.int64()
-        idx, _ = _argmax(x, dim, keepdims=keepdim)
-        return idx.int64()
-    def argmin(x, dim=None, keepdim=False):
+            return _reduce_index(_argmax(x.reshape(-1), 0))
+        try:
+            res = _argmax(x, dim, keepdims=keepdim)
+        except TypeError:
+            res = _argmax(x, dim, keepdim=keepdim)
+        return _reduce_index(res)
+    def argmin(x, dim=None, keepdim=False, keepdims=None):
+        if keepdims is not None:
+            keepdim = keepdims
         if dim is None:
-            idx, _ = _argmin(x.reshape(-1), 0)
-            return idx.int64()
-        idx, _ = _argmin(x, dim, keepdims=keepdim)
-        return idx.int64()
+            return _reduce_index(_argmin(x.reshape(-1), 0))
+        try:
+            res = _argmin(x, dim, keepdims=keepdim)
+        except TypeError:
+            res = _argmin(x, dim, keepdim=keepdim)
+        return _reduce_index(res)
     g.argmax = argmax
     g.argmin = argmin
 
@@ -2032,8 +2080,12 @@ def _install_reductions(g):
             # native scalar reduction via the captured METHOD (0-dim scalar);
             # NOT x.max(), which now routes back into this wrapper (recursion).
             return _jt_var_max(x) if which == "max" else _jt_var_min(x)
-        af = _argmax if which == "max" else _argmin
-        idx, val = af(x, dim, keepdims=keepdim)
+        af = argmax if which == "max" else argmin
+        idx = af(x, dim=dim, keepdim=keepdim)
+        if keepdim:
+            val = _jt.gather(x, dim, idx)
+        else:
+            val = _jt.gather(x, dim, idx.unsqueeze(dim)).squeeze(dim)
         return _MinMax(val, idx.int64())
     g.max = lambda x, *a, **k: _maxmin("max", x, *a, **k)
     g.min = lambda x, *a, **k: _maxmin("min", x, *a, **k)
@@ -2304,7 +2356,9 @@ def _wrap_constructors(g):
             # check tensor.is_cpu()). Capture the device before dropping it and,
             # when CPU is requested, build the Var under use_cuda=0 so its
             # allocator is the host allocator (Var.location()=='cpu').
-            _want_cpu = _device_is_cpu(kwargs.get("device"))
+            _requested_device = kwargs.get("device")
+            _want_cpu = _device_is_cpu(_requested_device)
+            _want_cuda = _device_is_cuda(_requested_device)
             _requires_grad = bool(kwargs.get("requires_grad", False))
             for k in _DROP:
                 kwargs.pop(k, None)
@@ -2361,6 +2415,10 @@ def _wrap_constructors(g):
                     if _cast_to is not None:
                         out = out.cast(_cast_to)
                     out.sync()
+                try:
+                    out._jittor_torch_ext_mutable = True
+                except Exception:
+                    pass
                 if _requires_grad:
                     out.requires_grad_(True)
                     _torch_register_leaf(out)
@@ -2368,6 +2426,12 @@ def _wrap_constructors(g):
             out = orig(*args, **kwargs)
             if _cast_to is not None:
                 out = out.cast(_cast_to)
+            if _want_cuda:
+                out = _make_cuda_resident(out)
+            try:
+                out._jittor_torch_ext_mutable = True
+            except Exception:
+                pass
             if _requires_grad:
                 out.requires_grad_(True)
                 _torch_register_leaf(out)
@@ -2453,6 +2517,85 @@ def _install_nn_extras(nn):
     # Activation modules torch has that jittor.nn may lack.
     import jittor as _jt
     _install_init_aliases()
+    import sys as _sys_nn_private
+    import types as _types_nn_private
+
+    if not isinstance(getattr(nn, "Parameter", None), type):
+        _native_parameter = getattr(nn, "Parameter", None)
+        class _ParameterMeta(type):
+            def __instancecheck__(cls, obj):
+                return isinstance(obj, _jt.Var)
+            def __call__(cls, data=None, requires_grad=True):
+                if _native_parameter is not None:
+                    return _native_parameter(data, requires_grad=requires_grad)
+                v = data if isinstance(data, _jt.Var) else _jt.array(data)
+                v.requires_grad = requires_grad
+                return v
+        class Parameter(metaclass=_ParameterMeta):
+            pass
+        nn.Parameter = Parameter
+        param_mod = _types_nn_private.ModuleType("torch.nn.parameter")
+        param_mod.Parameter = Parameter
+        param_mod.UninitializedParameter = Parameter
+        param_mod.UninitializedBuffer = Parameter
+        _sys_nn_private.modules["torch.nn.parameter"] = param_mod
+        nn.parameter = param_mod
+
+    modules_pkg = _sys_nn_private.modules.get("torch.nn.modules")
+    if modules_pkg is None:
+        modules_pkg = _types_nn_private.ModuleType("torch.nn.modules")
+        _sys_nn_private.modules["torch.nn.modules"] = modules_pkg
+    module_mod = _sys_nn_private.modules.get("torch.nn.modules.module")
+    if module_mod is None:
+        module_mod = _types_nn_private.ModuleType("torch.nn.modules.module")
+        _sys_nn_private.modules["torch.nn.modules.module"] = module_mod
+    module_mod.Module = nn.Module
+    module_mod._EXTRA_STATE_KEY_SUFFIX = "_extra_state"
+    module_mod._global_backward_hooks = getattr(module_mod, "_global_backward_hooks", {})
+    module_mod._global_forward_hooks = getattr(module_mod, "_global_forward_hooks", {})
+    module_mod._global_forward_pre_hooks = getattr(module_mod, "_global_forward_pre_hooks", {})
+    module_mod._IncompatibleKeys = getattr(module_mod, "_IncompatibleKeys", type(
+        "_IncompatibleKeys", (tuple,), {
+            "__new__": lambda cls, missing_keys, unexpected_keys: tuple.__new__(cls, (missing_keys, unexpected_keys)),
+            "missing_keys": property(lambda self: self[0]),
+            "unexpected_keys": property(lambda self: self[1]),
+        }))
+    modules_pkg.Module = nn.Module
+    modules_pkg.module = module_mod
+    for _cn in dir(nn):
+        if _cn and _cn[0].isupper() and not hasattr(modules_pkg, _cn):
+            try:
+                setattr(modules_pkg, _cn, getattr(nn, _cn))
+            except Exception:
+                pass
+    nn.modules = modules_pkg
+
+    # transformers 4.56.x imports torch.nn.attention.flex_attention from
+    # masking_utils when torch is reported available. TRELLIS does not execute
+    # PyTorch flex attention through this API, but the namespace must exist for
+    # lazy model imports such as DINOv3ViTModel.
+    attn_mod = _sys_nn_private.modules.get("torch.nn.attention")
+    if attn_mod is None:
+        attn_mod = _types_nn_private.ModuleType("torch.nn.attention")
+        _sys_nn_private.modules["torch.nn.attention"] = attn_mod
+    flex_mod = _sys_nn_private.modules.get("torch.nn.attention.flex_attention")
+    if flex_mod is None:
+        flex_mod = _types_nn_private.ModuleType("torch.nn.attention.flex_attention")
+        def _flex_attention(*args, **kwargs):
+            raise NotImplementedError("flex_attention is not supported on jittor backend")
+        flex_mod.flex_attention = _flex_attention
+        flex_mod.create_block_mask = lambda *args, **kwargs: None
+        flex_mod.BlockMask = type("BlockMask", (), {})
+        flex_mod._DEFAULT_SPARSE_BLOCK_SIZE = 128
+        flex_mod.and_masks = lambda *args, **kwargs: None
+        flex_mod.or_masks = lambda *args, **kwargs: None
+        flex_mod.AuxRequest = type("AuxRequest", (), {})
+        flex_mod.AuxOutput = type("AuxOutput", (), {})
+        flex_mod.flex_attention_hop = None
+        flex_mod.noop_mask = lambda *args, **kwargs: None
+        _sys_nn_private.modules["torch.nn.attention.flex_attention"] = flex_mod
+    attn_mod.flex_attention = flex_mod
+    nn.attention = attn_mod
 
     # nn.utils.clip_grad_norm_/clip_grad_value_ (also provided by torch_shim,
     # but needed for the bare `import jittor as torch` path too).
@@ -2615,6 +2758,34 @@ def _install_nn_extras(nn):
         _sysrnn.modules.setdefault("torch.nn.utils.rnn", _rnn)
 
         nn.utils = _u
+
+    # Newer PyTorch exposes torch.nn.utils.parametrize and
+    # torch.nn.utils.parametrizations. transformers 4.56 probes
+    # nn.utils.parametrizations.weight_norm while remapping checkpoint keys.
+    import sys as _sys_nn_utils
+    import types as _types_nn_utils
+    _u = getattr(nn, "utils", None) or _types_nn_utils.ModuleType("torch.nn.utils")
+    _sys_nn_utils.modules.setdefault("torch.nn.utils", _u)
+    nn.utils = _u
+    if not hasattr(_u, "parametrize"):
+        _parametrize = _types_nn_utils.ModuleType("torch.nn.utils.parametrize")
+        _parametrize.register_parametrization = lambda module, *a, **k: module
+        _parametrize.remove_parametrizations = lambda module, *a, **k: module
+        _parametrize.is_parametrized = lambda module, *a, **k: False
+        _parametrize.type_before_parametrizations = lambda module: type(module)
+        _u.parametrize = _parametrize
+        _sys_nn_utils.modules["torch.nn.utils.parametrize"] = _parametrize
+    else:
+        _sys_nn_utils.modules.setdefault("torch.nn.utils.parametrize", _u.parametrize)
+    if not hasattr(_u, "parametrizations"):
+        _parametrizations = _types_nn_utils.ModuleType("torch.nn.utils.parametrizations")
+        _parametrizations.weight_norm = getattr(_u, "weight_norm", lambda module, name="weight", dim=0: module)
+        _parametrizations.spectral_norm = getattr(_u, "spectral_norm", lambda module, *a, **k: module)
+        _parametrizations.orthogonal = lambda module, *a, **k: module
+        _u.parametrizations = _parametrizations
+        _sys_nn_utils.modules["torch.nn.utils.parametrizations"] = _parametrizations
+    else:
+        _sys_nn_utils.modules.setdefault("torch.nn.utils.parametrizations", _u.parametrizations)
 
     if not hasattr(nn, "Hardswish"):
         class Hardswish(nn.Module):
@@ -3565,8 +3736,85 @@ def _install_init_aliases():
         if not hasattr(_init, tname) and hasattr(_init, target):
             setattr(_init, tname, getattr(_init, target))
 
+    # Keep transformers/diffusers no_init_weights() from replacing jittor's
+    # construction-time init functions with no-op stubs. torch.nn is jittor.nn
+    # on the bare `import jiitor as torch` path, and jittor.nn.Conv/Linear call
+    # the same module-global init functions to allocate weights.
+    import types as _types_init
+    import sys as _sys_init
+    class _GuardedInit(_types_init.ModuleType):
+        _protected = set()
+        def __setattr__(self, key, value):
+            if key in self._protected:
+                name = getattr(value, "__name__", "")
+                if (not callable(value)) or name in ("_skip_init", "skip_init", "<lambda>"):
+                    return
+            object.__setattr__(self, key, value)
+    guarded = _GuardedInit("torch.nn.init")
+    protected = set()
+    for key in dir(_init):
+        if not key.startswith("__"):
+            try:
+                value = getattr(_init, key)
+                object.__setattr__(guarded, key, value)
+                if callable(value):
+                    protected.add(key)
+            except Exception:
+                pass
+    object.__setattr__(guarded, "_protected", protected)
+    nn.init = guarded
+    _sys_init.modules["torch.nn.init"] = guarded
+
 
 _cuda_props_cache = {}
+
+
+def _cuda_driver():
+    try:
+        import ctypes
+        for n in ("libcuda.so.1", "libcuda.so"):
+            try:
+                lib = ctypes.CDLL(n)
+                lib.cuInit(0)
+                return lib, ctypes
+            except OSError:
+                pass
+    except Exception:
+        pass
+    return None, None
+
+
+def _cuda_device_index(device=None):
+    if isinstance(device, str) and ":" in device:
+        try:
+            return int(device.split(":", 1)[1])
+        except Exception:
+            return 0
+    if isinstance(device, int):
+        return device
+    idx = getattr(device, "index", None)
+    return int(idx) if idx is not None else 0
+
+
+def _cuda_device_name(device=None):
+    name = _cuda_props_cache.get("name")
+    if name is not None:
+        return name
+    name = "CUDA"
+    try:
+        lib, ctypes = _cuda_driver()
+        if lib is not None:
+            dev = ctypes.c_int(0)
+            lib.cuDeviceGet(ctypes.byref(dev), _cuda_device_index(device))
+            buf = ctypes.create_string_buffer(256)
+            lib.cuDeviceGetName(buf, len(buf), dev)
+            got = buf.value.decode("utf-8", "ignore")
+            if got:
+                name = got
+    except Exception:
+        pass
+    _cuda_props_cache["name"] = name
+    return name
 
 
 def _cuda_capability():
@@ -3580,15 +3828,8 @@ def _cuda_capability():
         return cc
     cc = (8, 0)
     try:
-        import ctypes
-        lib = None
-        for n in ("libcuda.so.1", "libcuda.so"):
-            try:
-                lib = ctypes.CDLL(n); break
-            except OSError:
-                pass
+        lib, ctypes = _cuda_driver()
         if lib is not None:
-            lib.cuInit(0)
             dev = ctypes.c_int(0)
             lib.cuDeviceGet(ctypes.byref(dev), 0)
             maj = ctypes.c_int(0); mino = ctypes.c_int(0)
@@ -3614,15 +3855,8 @@ def _cuda_sm_count():
         return n
     n = 132
     try:
-        import ctypes
-        lib = None
-        for nm in ("libcuda.so.1", "libcuda.so"):
-            try:
-                lib = ctypes.CDLL(nm); break
-            except OSError:
-                pass
+        lib, ctypes = _cuda_driver()
         if lib is not None:
-            lib.cuInit(0)
             dev = ctypes.c_int(0)
             lib.cuDeviceGet(ctypes.byref(dev), 0)
             val = ctypes.c_int(0)
@@ -3636,6 +3870,28 @@ def _cuda_sm_count():
     return n
 
 
+def _cuda_total_memory():
+    total = _cuda_props_cache.get("total_memory")
+    if total is not None:
+        return total
+    total = 64 * 1024 ** 3
+    try:
+        lib, ctypes = _cuda_driver()
+        if lib is not None:
+            dev = ctypes.c_int(0)
+            lib.cuDeviceGet(ctypes.byref(dev), 0)
+            val = ctypes.c_size_t(0)
+            fn = getattr(lib, "cuDeviceTotalMem_v2", None) or getattr(lib, "cuDeviceTotalMem", None)
+            if fn is not None:
+                fn(ctypes.byref(val), dev)
+            if val.value > 0:
+                total = int(val.value)
+    except Exception:
+        pass
+    _cuda_props_cache["total_memory"] = total
+    return total
+
+
 class _DeviceProps:
     """torch.cuda.get_device_properties(...) result.
 
@@ -3645,9 +3901,9 @@ class _DeviceProps:
     """
     def __init__(self):
         cap = _cuda_capability()
-        self.name = "Ascend910B/NPU"
+        self.name = "Ascend910B/NPU" if getattr(jt.compiler, "has_acl", 0) else _cuda_device_name()
         self.major, self.minor = cap
-        self.total_memory = 64 * 1024 ** 3
+        self.total_memory = _cuda_total_memory()
         self.multi_processor_count = _cuda_sm_count()
         self.multiprocessor_count = self.multi_processor_count
         self.warp_size = 32
@@ -3670,7 +3926,8 @@ def _install_cuda(g):
     cuda = _types.ModuleType("torch.cuda")
     def is_available():
         try:
-            return bool(jt.flags.use_cuda) or bool(getattr(jt.compiler, "has_acl", 0))
+            return bool(getattr(jt, "has_cuda", 0)) or bool(getattr(jt.compiler, "has_cuda", 0)) \
+                or bool(getattr(jt.compiler, "has_acl", 0))
         except Exception:
             return False
     cuda.is_available = is_available
@@ -3697,7 +3954,7 @@ def _install_cuda(g):
     cuda.get_device_capability = lambda *a, **k: _cuda_capability()
     def _device_name(*a, **k):
         try:
-            return "Ascend910B/NPU" if getattr(jt.compiler, "has_acl", 0) else "CUDA"
+            return "Ascend910B/NPU" if getattr(jt.compiler, "has_acl", 0) else _cuda_device_name(a[0] if a else None)
         except Exception:
             return "CUDA"
     cuda.get_device_name = _device_name
@@ -3799,6 +4056,114 @@ def _install_version(g):
     version.git_version = "jittor"
     _sys.modules["torch.version"] = version
     g.version = version
+
+
+def _install_distributed(g):
+    """Install single-process torch.distributed stubs.
+
+    Transformers 5 imports torch.distributed at module import time for tensor
+    parallel helpers even when no distributed execution is requested. The jittor
+    torch shim runs TRELLIS.2 as a single process, so report distributed support
+    as unavailable while keeping the imported symbols present.
+    """
+    import sys as _sys
+    import types as _types
+
+    dist = _sys.modules.get("torch.distributed")
+    if dist is None:
+        dist = _types.ModuleType("torch.distributed")
+        _sys.modules["torch.distributed"] = dist
+    dist.is_available = lambda *a, **k: False
+    dist.is_initialized = lambda *a, **k: False
+    dist.get_rank = lambda *a, **k: 0
+    dist.get_world_size = lambda *a, **k: 1
+    dist.init_process_group = lambda *a, **k: None
+    dist.destroy_process_group = lambda *a, **k: None
+    dist.barrier = lambda *a, **k: None
+    dist.all_reduce = lambda *a, **k: None
+    dist.all_gather = lambda *a, **k: None
+    dist.broadcast = lambda *a, **k: None
+    dist.is_torchelastic_launched = lambda *a, **k: False
+    dist.ReduceOp = getattr(dist, "ReduceOp", type("ReduceOp", (), {
+        "SUM": 0, "MEAN": 1, "MAX": 2, "MIN": 3}))
+    dist.GroupMember = getattr(dist, "GroupMember", type("GroupMember", (), {"WORLD": None}))
+    dist.group = getattr(dist, "group", type("group", (), {"WORLD": None}))
+
+    for sub in ("tensor", "fsdp", "device_mesh", "algorithms"):
+        name = "torch.distributed." + sub
+        mod = _sys.modules.get(name)
+        if mod is None:
+            mod = _types.ModuleType(name)
+            _sys.modules[name] = mod
+        setattr(dist, sub, mod)
+    dist.tensor.DTensor = getattr(dist.tensor, "DTensor", type("DTensor", (), {}))
+    dist.tensor.Replicate = getattr(dist.tensor, "Replicate", type("Replicate", (), {}))
+    dist.tensor.Shard = getattr(dist.tensor, "Shard", type("Shard", (), {}))
+
+    class _DeviceMesh:
+        def __init__(self, device_type=None, mesh=None, *, mesh_dim_names=None, **k):
+            self.device_type = device_type
+            self.mesh = mesh
+            self.mesh_dim_names = mesh_dim_names
+        def __getitem__(self, *a, **k): return self
+        def size(self, *a, **k): return 1
+        def get_rank(self, *a, **k): return 0
+        def get_group(self, *a, **k): return None
+        def get_local_rank(self, *a, **k): return 0
+    def _init_device_mesh(device_type=None, mesh_shape=None, *, mesh_dim_names=None, **k):
+        return _DeviceMesh(device_type=device_type, mesh=mesh_shape,
+                           mesh_dim_names=mesh_dim_names)
+    dist.device_mesh.DeviceMesh = getattr(dist.device_mesh, "DeviceMesh", _DeviceMesh)
+    dist.device_mesh.init_device_mesh = getattr(dist.device_mesh, "init_device_mesh", _init_device_mesh)
+    dist.DeviceMesh = getattr(dist, "DeviceMesh", _DeviceMesh)
+    dist.init_device_mesh = getattr(dist, "init_device_mesh", _init_device_mesh)
+    dist.ProcessGroup = getattr(dist, "ProcessGroup", type("ProcessGroup", (), {
+        "__init__": lambda self, *a, **k: None,
+        "size": lambda self, *a, **k: 1,
+        "rank": lambda self, *a, **k: 0,
+    }))
+
+    c10d = _sys.modules.get("torch.distributed.distributed_c10d")
+    if c10d is None:
+        c10d = _types.ModuleType("torch.distributed.distributed_c10d")
+        _sys.modules["torch.distributed.distributed_c10d"] = c10d
+    for name in dir(dist):
+        if not name.startswith("__"):
+            setattr(c10d, name, getattr(dist, name))
+    for name in ("is_xccl_available", "is_nccl_available", "is_gloo_available",
+                 "is_mpi_available", "is_ucc_available"):
+        setattr(c10d, name, lambda *a, **k: False)
+    c10d.ProcessGroup = dist.ProcessGroup
+    c10d._get_default_group = lambda *a, **k: None
+    c10d._get_default_store = lambda *a, **k: None
+    c10d.Work = getattr(c10d, "Work", type("Work", (), {}))
+    c10d.default_pg_timeout = getattr(c10d, "default_pg_timeout", None)
+    dist.distributed_c10d = c10d
+
+    rpc = _sys.modules.get("torch.distributed.rpc")
+    if rpc is None:
+        rpc = _types.ModuleType("torch.distributed.rpc")
+        _sys.modules["torch.distributed.rpc"] = rpc
+    rpc.is_available = lambda *a, **k: False
+    rpc.init_rpc = lambda *a, **k: None
+    rpc.shutdown = lambda *a, **k: None
+    dist.rpc = rpc
+
+    optim = _sys.modules.get("torch.distributed.optim")
+    if optim is None:
+        optim = _types.ModuleType("torch.distributed.optim")
+        _sys.modules["torch.distributed.optim"] = optim
+    dist.optim = optim
+
+    if not hasattr(g, "_C"):
+        class _Accel:
+            type = "cuda" if getattr(jt.compiler, "has_cuda", 0) else "cpu"
+        class _CNS:
+            @staticmethod
+            def _get_accelerator():
+                return _Accel()
+        g._C = _CNS()
+    g.distributed = dist
 
 
 def _install_flash_attn_shim():
@@ -4003,7 +4368,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # nonzero(as_tuple=True) instead returns a tuple of ndim 1-D index Vars (one
     # per dimension) -- transformers/diffusers use the tuple form for advanced
     # indexing. jittor's nonzero only returns the matrix and rejects as_tuple.
-    _native_nonzero = jt.nonzero
+    _native_nonzero = getattr(jt, "_vj_native_nonzero", jt.nonzero)
     def _nonzero(self, as_tuple=False, **kw):
         idx = _native_nonzero(self)
         if not as_tuple:
@@ -4124,22 +4489,44 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             return jt.logical_not(self) if str(self.dtype) == "bool" else (-self - 1)
         Var.__invert__ = _invert
 
-    if not hasattr(Var, "device"):
-        def _device(self):
-            # Inside a `with torch.device("meta")` block (transformers'
-            # from_pretrained), report "meta" so its meta-context detection
-            # fires and eager weight init is skipped. See device.__enter__.
-            if _DEVICE_CTX_STACK:
-                return _DEVICE_CTX_STACK[-1]
-            # Report the Var's ACTUAL memory residency (matches jtorch's C++
-            # is_cpu()/device()): a Var built/migrated to host -- e.g. via
-            # torch.zeros(device='cpu') or .cpu() -- is "cpu" even while the
-            # global use_cuda flag is 1. Only fall back to the global flag when
-            # CUDA is on and the Var is genuinely device-resident.
-            if (jt.flags.use_cuda or getattr(jt.compiler, "has_acl", 0)):
-                return device("cpu") if _var_is_cpu_resident(self) else device("cuda", 0)
-            return device("cpu")
-        Var.device = property(_device)
+    def _device(self):
+        # Inside a `with torch.device("meta")` block (transformers'
+        # from_pretrained), report "meta" so its meta-context detection
+        # fires and eager weight init is skipped. See device.__enter__.
+        if _DEVICE_CTX_STACK:
+            return _DEVICE_CTX_STACK[-1]
+        # Report the Var's ACTUAL memory residency (matches jtorch's C++
+        # is_cpu()/device()): a Var built/migrated to host -- e.g. via
+        # torch.zeros(device='cpu') or .cpu() -- is "cpu" even while the
+        # global use_cuda flag is 1. Only fall back to the global flag when
+        # CUDA is on and the Var is genuinely device-resident.
+        if (jt.flags.use_cuda or getattr(jt.compiler, "has_acl", 0)):
+            return device("cpu") if _var_is_cpu_resident(self) else device("cuda", 0)
+        return device("cpu")
+    Var.device = property(_device)
+
+    _orig_getitem = getattr(Var, "__getitem__", None)
+    if _orig_getitem is not None and not getattr(_orig_getitem, "_torch_cpu_residency", False):
+        def _torch_getitem(self, slices):
+            out = _orig_getitem(self, slices)
+            if isinstance(out, Var) and _var_is_cpu_resident(self):
+                out = _mark_cpu_like(out, self)
+            return out
+        _torch_getitem._torch_cpu_residency = True
+        Var.__getitem__ = _torch_getitem
+
+    for _op_name in ("__add__", "__radd__", "__sub__", "__rsub__", "__mul__", "__rmul__",
+                     "__truediv__", "__rtruediv__", "__floordiv__", "__rfloordiv__"):
+        _orig_op = getattr(Var, _op_name, None)
+        if _orig_op is None or getattr(_orig_op, "_torch_cpu_residency", False):
+            continue
+        def _make_cpu_binary_wrapper(orig):
+            def _wrapped(self, other):
+                out = orig(self, other)
+                return _mark_cpu_like(out, self, other)
+            _wrapped._torch_cpu_residency = True
+            return _wrapped
+        setattr(Var, _op_name, _make_cpu_binary_wrapper(_orig_op))
 
     # torch's Tensor.data returns a detached *tensor* (and is assignable:
     # `param.data = new_tensor`). jittor's native Var.data returns a numpy
@@ -4436,7 +4823,12 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # the data: .cpu() rebuilds the Var under the host allocator, .cuda() under
     # the device allocator. Var.location()/jtorch's C++ is_cpu() then agree.
     def _var_cpu(self, *a, **k):
-        return _make_cpu_resident(self)
+        out = _make_cpu_resident(self)
+        try:
+            out._jittor_torch_force_cpu = True
+        except Exception:
+            pass
+        return out
     Var.cpu = _var_cpu
     def _var_cuda(self, device=None, *a, **k):
         jt.flags.use_cuda = 1
@@ -4678,10 +5070,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     def _torch_where(self, *args):
         if len(args) == 2:
             condition, other = args
-            if not isinstance(other, Var):
-                other = jt.array(other).broadcast(self.shape)
-            # reuse jittor's native ternary with `condition` as the selector
-            return _jt_var_where(condition, self, other)
+            return _torch_where_select(condition, self, other)
         return _jt_var_where(self, *args)
     Var.where = _torch_where
 
@@ -4822,6 +5211,20 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
     g.are_deterministic_algorithms_enabled = lambda: False
     g.use_deterministic_algorithms = lambda *a, **k: None
     g.is_floating_point = lambda x: ("float" in str(x.dtype))
+
+    def where(condition, input=None, other=None, *, out=None):
+        if input is None and other is None:
+            native_where = getattr(jt, "_vj_native_where", None)
+            idx = native_where(condition) if native_where is not None else _native_nonzero(condition)
+            if isinstance(idx, tuple):
+                return idx
+            if getattr(idx, "ndim", 0) == 2:
+                return tuple(idx[:, d] for d in range(idx.shape[1]))
+            return (idx.reshape(-1),)
+        if input is None or other is None:
+            raise TypeError("torch.where expected either 1 or 3 arguments")
+        return _torch_where_select(condition, input, other)
+    g.where = where
 
     # torch-compat: torch.bincount(input, weights=None, minlength=0). Counts the
     # occurrences of each non-negative integer in a 1-D `input`; with `weights`,
@@ -5224,6 +5627,58 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
     g._vj_pickle_load = load
     g._vj_pickle_save = save
 
+    # ---- torch.distributions package layout ----
+    # jittor.distributions already implements the common distribution classes;
+    # expose the PyTorch package/submodule names that transformers imports.
+    import types as _types_dist, sys as _sys_dist
+    try:
+        import jittor.distributions as _dist
+        if not hasattr(_dist, "constraints"):
+            _constraints = _types_dist.ModuleType("torch.distributions.constraints")
+            class _Constraint:
+                def __init__(self, *a, **k): pass
+                def check(self, x):
+                    try:
+                        return jt.ones_like(x).bool()
+                    except Exception:
+                        return True
+            for _cn in ("positive", "real", "nonnegative", "nonnegative_integer",
+                        "positive_integer", "unit_interval", "simplex",
+                        "lower_cholesky", "positive_definite", "boolean",
+                        "real_vector", "dependent", "independent"):
+                setattr(_constraints, _cn, _Constraint())
+            _constraints.Constraint = _Constraint
+            _dist.constraints = _constraints
+        _sys_dist.modules["torch.distributions"] = _dist
+        _sys_dist.modules["torch.distributions.constraints"] = _dist.constraints
+        g.distributions = _dist
+        for _cls_name, _mod_suffix in (
+            ("Distribution", "distribution"),
+            ("Bernoulli", "bernoulli"),
+            ("Categorical", "categorical"),
+            ("Normal", "normal"),
+            ("Uniform", "uniform"),
+            ("Beta", "beta"),
+            ("Gamma", "gamma"),
+            ("Poisson", "poisson"),
+            ("Dirichlet", "dirichlet"),
+            ("LogNormal", "log_normal"),
+            ("MultivariateNormal", "multivariate_normal"),
+        ):
+            if hasattr(_dist, _cls_name):
+                _sub = _types_dist.ModuleType("torch.distributions." + _mod_suffix)
+                setattr(_sub, _cls_name, getattr(_dist, _cls_name))
+                _sys_dist.modules["torch.distributions." + _mod_suffix] = _sub
+                setattr(_dist, _mod_suffix, _sub)
+        if hasattr(_dist, "kl_divergence"):
+            _kl = _types_dist.ModuleType("torch.distributions.kl")
+            _kl.kl_divergence = _dist.kl_divergence
+            _kl.register_kl = getattr(_dist, "register_kl", lambda *a, **k: (lambda f: f))
+            _sys_dist.modules["torch.distributions.kl"] = _kl
+            _dist.kl = _kl
+    except Exception:
+        pass
+
     # ---- torch.hub ----
     import types as _types_hub, os as _os_hub, urllib.request as _urlreq_hub
     from urllib.parse import urlparse as _urlparse_hub
@@ -5280,6 +5735,21 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
     # torch.jit: jittor has no TorchScript; the script/trace decorators are pass-throughs
     # (the eager fn already runs), and is_scripting/is_tracing report False.
     import types as _types2
+    _compiler = getattr(g, "compiler", None) or _types2.ModuleType("torch.compiler")
+    _cid = lambda f=None, *a, **k: (f if f is not None and callable(f) else (lambda h: h))
+    _compiler.is_compiling = lambda: False
+    _compiler.is_dynamo_compiling = lambda: False
+    _compiler.is_exporting = lambda: False
+    _compiler.disable = _cid
+    _compiler.allow_in_graph = _cid
+    _compiler.assume_constant_result = _cid
+    _compiler.wrap_numpy = _cid
+    _compiler.reset = lambda *a, **k: None
+    _compiler.cudagraph_mark_step_begin = lambda *a, **k: None
+    import sys as _sys_compiler
+    _sys_compiler.modules["torch.compiler"] = _compiler
+    if not hasattr(g, "compiler"):
+        g.compiler = _compiler
     _jit = _types2.SimpleNamespace()
     _jit.script = lambda f=None, **k: (f if f is not None else (lambda g: g))
     _jit.trace = lambda f=None, *a, **k: (f if f is not None else (lambda g: g))
@@ -5292,13 +5762,152 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
     _jit.ScriptModule = jt.nn.Module
     _jit.interface = lambda c: c
     _alias("jit", _jit)
-    # torch._dynamo: a minimal disable/config stub (some training code probes it).
-    _dynamo = _types2.SimpleNamespace()
+    # torch._dynamo: minimal importable stubs for libraries that probe or
+    # decorate with Dynamo APIs. Jittor runs eagerly/JIT through its own stack.
+    _dynamo = _types2.ModuleType("torch._dynamo")
     _dynamo.disable = lambda f=None, **k: (f if f is not None else (lambda g: g))
+    _dynamo.allow_in_graph = lambda f=None, **k: (f if f is not None else (lambda g: g))
+    _dynamo.disallow_in_graph = lambda f=None, **k: (f if f is not None else (lambda g: g))
+    _dynamo.assume_constant_result = lambda f=None, **k: (f if f is not None else (lambda g: g))
+    _dynamo.is_compiling = lambda: False
+    _dynamo.is_dynamo_compiling = lambda: False
     _dynamo.config = _types2.SimpleNamespace()
+    _dynamo.mark_static_address = lambda *a, **k: None
+    _dynamo.mark_dynamic = lambda *a, **k: None
+    _dynamo.graph_break = lambda *a, **k: None
     _dynamo.reset = lambda *a, **k: None
-    if not hasattr(g, "_dynamo"):
-        setattr(g, "_dynamo", _dynamo)
+    _sys_compiler.modules["torch._dynamo"] = _dynamo
+    setattr(g, "_dynamo", _dynamo)
+    _eval_frame = _types2.ModuleType("torch._dynamo.eval_frame")
+    _eval_frame.OptimizedModule = type("OptimizedModule", (jt.nn.Module,), {})
+    _dynamo.eval_frame = _eval_frame
+    _sys_compiler.modules["torch._dynamo.eval_frame"] = _eval_frame
+    _twh = _types2.ModuleType("torch._dynamo._trace_wrapped_higher_order_op")
+    class TransformGetItemToIndex:
+        def __enter__(self):
+            return self
+        def __exit__(self, *exc):
+            return False
+    _twh.TransformGetItemToIndex = TransformGetItemToIndex
+    _sys_compiler.modules["torch._dynamo._trace_wrapped_higher_order_op"] = _twh
+    _library = _types2.ModuleType("torch.library")
+    class _OpNamespace:
+        def __init__(self, ns):
+            object.__setattr__(self, "_ns", ns)
+            object.__setattr__(self, "_ops", {})
+        def _register(self, name, fn):
+            object.__getattribute__(self, "_ops")[name] = fn
+        def __getattr__(self, name):
+            ops = object.__getattribute__(self, "_ops")
+            if name in ops:
+                return ops[name]
+            raise AttributeError("torch.ops.%s has no op '%s'" % (
+                object.__getattribute__(self, "_ns"), name))
+    class _OpsDispatcher:
+        def __init__(self, base):
+            object.__setattr__(self, "_base", base)
+            object.__setattr__(self, "_ns", {})
+        def _register(self, ns, name, fn):
+            namespaces = object.__getattribute__(self, "_ns")
+            namespaces.setdefault(ns, _OpNamespace(ns))._register(name, fn)
+        def __getattr__(self, name):
+            namespaces = object.__getattribute__(self, "_ns")
+            if name in namespaces:
+                return namespaces[name]
+            base = object.__getattribute__(self, "_base")
+            if base is not None:
+                return getattr(base, name)
+            raise AttributeError(name)
+    _ops_dispatcher = getattr(g, "ops", None)
+    if not isinstance(_ops_dispatcher, _OpsDispatcher):
+        _ops_dispatcher = _OpsDispatcher(_ops_dispatcher)
+    def _grouped_mm_fallback(input, weight, offs, *a, **k):
+        out = jt.zeros((input.shape[0], weight.shape[2]), dtype=input.dtype)
+        offs_list = offs.numpy().tolist() if hasattr(offs, "numpy") else list(offs)
+        start = 0
+        for i, end in enumerate(offs_list):
+            end = int(end)
+            if end > start:
+                out[start:end] = jt.matmul(input[start:end], weight[i])
+            start = end
+        return out
+    def _custom_op(name=None, fn=None, *a, **k):
+        def deco(impl):
+            if isinstance(name, str) and "::" in name:
+                ns, op = name.split("::", 1)
+                real = _grouped_mm_fallback if name == "transformers::grouped_mm_fallback" else impl
+                _ops_dispatcher._register(ns, op, real)
+            return impl
+        return deco(fn) if fn is not None else deco
+    _library.custom_op = _custom_op
+    _library.register_fake = lambda *a, **k: (lambda f: f)
+    _library.register_kernel = lambda *a, **k: (lambda f: f)
+    _library.impl = lambda *a, **k: (lambda f: f)
+    _library.register_autograd = lambda *a, **k: (lambda f: f)
+    _library.register_torch_dispatch = lambda *a, **k: (lambda f: f)
+    _library.register_vmap = lambda *a, **k: (lambda f: f)
+    _library.opcheck = lambda *a, **k: None
+    _library.get_ctx = lambda: None
+    _library.Library = type("Library", (), {
+        "__init__": lambda self, *a, **k: None,
+        "define": lambda self, *a, **k: None,
+        "impl": lambda self, *a, **k: None,
+    })
+    import sys as _sys_library
+    _sys_library.modules["torch.library"] = _library
+    g.library = _library
+    g.ops = _ops_dispatcher
+
+    # torch.profiler: accelerate/transformers reference this namespace at
+    # import-time for type annotations and optional profiling config. Do not
+    # expose jittor_core.profiler here; it lacks PyTorch's ProfilerActivity API.
+    _profiler = _types2.ModuleType("torch.profiler")
+    class ProfilerActivity:
+        CPU = "cpu"
+        CUDA = "cuda"
+        XPU = "xpu"
+        HPU = "hpu"
+        MTIA = "mtia"
+    class _ProfilerAction:
+        NONE = "none"
+        WARMUP = "warmup"
+        RECORD = "record"
+        RECORD_AND_SAVE = "record_and_save"
+    class _ProfileContext:
+        def __init__(self, *args, **kwargs):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *exc):
+            return False
+        def step(self):
+            pass
+        def export_chrome_trace(self, *args, **kwargs):
+            pass
+    _profiler.ProfilerActivity = ProfilerActivity
+    _profiler.ProfilerAction = _ProfilerAction
+    _profiler.profile = lambda *args, **kwargs: _ProfileContext()
+    _profiler.schedule = lambda *args, **kwargs: (lambda step: _ProfilerAction.NONE)
+    _profiler.tensorboard_trace_handler = lambda *args, **kwargs: (lambda *a, **k: None)
+    _profiler.record_function = lambda *args, **kwargs: _ProfileContext()
+    _sys_library.modules["torch.profiler"] = _profiler
+    g.profiler = _profiler
+
+    _amp = _types2.ModuleType("torch.amp")
+    _amp.autocast = lambda *args, **kwargs: _AutocastContext()
+    _amp.GradScaler = _GradScaler
+    _sys_library.modules["torch.amp"] = _amp
+    g.amp = _amp
+    try:
+        if hasattr(g, "cuda"):
+            if not hasattr(g.cuda, "amp"):
+                g.cuda.amp = _types2.ModuleType("torch.cuda.amp")
+            g.cuda.amp.autocast = _amp.autocast
+            g.cuda.amp.GradScaler = _GradScaler
+            _sys_library.modules["torch.cuda.amp"] = g.cuda.amp
+    except Exception:
+        pass
+
     # `import jittor as torch; torch.utils.data.Dataset` (attribute access, used by some
     # HF/training code as a base class) needs a `utils` namespace on the jittor module --
     # the `from torch.utils.data import X` form already resolves via sys.modules. Lazily
@@ -5315,6 +5924,192 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
     g.utils.__path__ = []
     g.utils.__package__ = "torch"
     _sys_utils.modules["torch.utils"] = g.utils
+    if "torch.utils.data" not in _sys_utils.modules:
+        _data = _types2.ModuleType("torch.utils.data")
+        class _TorchDataset:
+            def __getitem__(self, i):
+                raise NotImplementedError
+            def __add__(self, other):
+                return _ConcatDataset([self, other])
+        class _IterableDataset(_TorchDataset):
+            def __iter__(self):
+                raise NotImplementedError
+        class _TensorDataset(_TorchDataset):
+            def __init__(self, *tensors):
+                self.tensors = tensors
+            def __getitem__(self, i):
+                return tuple(t[i] for t in self.tensors)
+            def __len__(self):
+                return len(self.tensors[0]) if self.tensors else 0
+        class _ConcatDataset(_TorchDataset):
+            def __init__(self, datasets):
+                self.datasets = list(datasets)
+                self.cumulative_sizes = []
+                total = 0
+                for dataset in self.datasets:
+                    total += len(dataset)
+                    self.cumulative_sizes.append(total)
+            def __len__(self):
+                return self.cumulative_sizes[-1] if self.cumulative_sizes else 0
+            def __getitem__(self, idx):
+                import bisect as _bisect
+                dataset_idx = _bisect.bisect_right(self.cumulative_sizes, idx)
+                prev = self.cumulative_sizes[dataset_idx - 1] if dataset_idx else 0
+                return self.datasets[dataset_idx][idx - prev]
+        class _Subset(_TorchDataset):
+            def __init__(self, dataset, indices):
+                self.dataset = dataset
+                self.indices = list(indices)
+            def __len__(self):
+                return len(self.indices)
+            def __getitem__(self, idx):
+                return self.dataset[self.indices[idx]]
+        class _Sampler:
+            def __init__(self, data_source=None):
+                self.data_source = data_source
+            def __iter__(self):
+                raise NotImplementedError
+        class _SequentialSampler(_Sampler):
+            def __iter__(self):
+                return iter(range(len(self.data_source)))
+            def __len__(self):
+                return len(self.data_source)
+        class _RandomSampler(_Sampler):
+            def __init__(self, data_source, replacement=False, num_samples=None, generator=None):
+                self.data_source = data_source
+                self.replacement = replacement
+                self._num_samples = num_samples
+                self.generator = generator
+            @property
+            def num_samples(self):
+                return len(self.data_source) if self._num_samples is None else self._num_samples
+            def __iter__(self):
+                import random as _random
+                n = len(self.data_source)
+                if self.replacement:
+                    return iter(_random.randrange(n) for _ in range(self.num_samples))
+                indices = list(range(n))
+                _random.shuffle(indices)
+                return iter(indices[:self.num_samples])
+            def __len__(self):
+                return self.num_samples
+        class _SubsetRandomSampler(_Sampler):
+            def __init__(self, indices, generator=None):
+                self.indices = list(indices)
+                self.generator = generator
+            def __iter__(self):
+                import random as _random
+                indices = list(self.indices)
+                _random.shuffle(indices)
+                return iter(indices)
+            def __len__(self):
+                return len(self.indices)
+        class _BatchSampler(_Sampler):
+            def __init__(self, sampler, batch_size, drop_last):
+                self.sampler = sampler
+                self.batch_size = int(batch_size)
+                self.drop_last = bool(drop_last)
+            def __iter__(self):
+                batch = []
+                for idx in self.sampler:
+                    batch.append(idx)
+                    if len(batch) == self.batch_size:
+                        yield batch
+                        batch = []
+                if batch and not self.drop_last:
+                    yield batch
+            def __len__(self):
+                n = len(self.sampler)
+                return n // self.batch_size if self.drop_last else (n + self.batch_size - 1) // self.batch_size
+        def _default_collate(batch):
+            import numpy as _np
+            elem = batch[0]
+            if isinstance(elem, jt.Var):
+                return jt.stack(list(batch), dim=0)
+            if isinstance(elem, _np.ndarray):
+                return jt.array(_np.stack(batch))
+            if isinstance(elem, (type(0), type(0.0), _np.number)):
+                return jt.array(_np.array(batch))
+            if isinstance(elem, (tuple, list)):
+                return [_default_collate(list(items)) for items in zip(*batch)]
+            if isinstance(elem, dict):
+                return {key: _default_collate([d[key] for d in batch]) for key in elem}
+            return batch
+        class _DataLoader:
+            def __init__(self, dataset, batch_size=1, shuffle=False, sampler=None,
+                         batch_sampler=None, num_workers=0, collate_fn=None,
+                         pin_memory=False, drop_last=False, timeout=0,
+                         worker_init_fn=None, generator=None, prefetch_factor=None,
+                         persistent_workers=False, **kwargs):
+                self.dataset = dataset
+                self.batch_size = batch_size
+                self.drop_last = drop_last
+                self.num_workers = num_workers
+                self.pin_memory = pin_memory
+                self.collate_fn = collate_fn if collate_fn is not None else _default_collate
+                self.worker_init_fn = worker_init_fn
+                self.generator = generator
+                if batch_sampler is not None:
+                    self.batch_sampler = batch_sampler
+                    self.sampler = None
+                else:
+                    self.sampler = sampler if sampler is not None else (
+                        _RandomSampler(dataset, generator=generator) if shuffle else _SequentialSampler(dataset)
+                    )
+                    self.batch_sampler = _BatchSampler(self.sampler, batch_size, drop_last)
+            def __iter__(self):
+                for batch_indices in self.batch_sampler:
+                    yield self.collate_fn([self.dataset[i] for i in batch_indices])
+            def __len__(self):
+                return len(self.batch_sampler)
+        for _name, _value in {
+            "Dataset": _TorchDataset,
+            "IterableDataset": _IterableDataset,
+            "TensorDataset": _TensorDataset,
+            "ConcatDataset": _ConcatDataset,
+            "Subset": _Subset,
+            "Sampler": _Sampler,
+            "SequentialSampler": _SequentialSampler,
+            "RandomSampler": _RandomSampler,
+            "SubsetRandomSampler": _SubsetRandomSampler,
+            "BatchSampler": _BatchSampler,
+            "DataLoader": _DataLoader,
+            "default_collate": _default_collate,
+            "default_convert": lambda x: x,
+            "get_worker_info": lambda: None,
+        }.items():
+            setattr(_data, _name, _value)
+        _sys_utils.modules["torch.utils.data"] = _data
+        g.utils.data = _data
+        _du = _types2.ModuleType("torch.utils.data._utils")
+        _duc = _types2.ModuleType("torch.utils.data._utils.collate")
+        _duc.default_collate = _default_collate
+        _du.collate = _duc
+        _sys_utils.modules["torch.utils.data._utils"] = _du
+        _sys_utils.modules["torch.utils.data._utils.collate"] = _duc
+        _data._utils = _du
+        _dist_data = _types2.ModuleType("torch.utils.data.distributed")
+        _dist_data.DistributedSampler = _Sampler
+        _sys_utils.modules["torch.utils.data.distributed"] = _dist_data
+        _data.distributed = _dist_data
+        _dataset_mod = _types2.ModuleType("torch.utils.data.dataset")
+        for _name in ("Dataset", "IterableDataset", "TensorDataset", "ConcatDataset", "Subset"):
+            setattr(_dataset_mod, _name, getattr(_data, _name))
+        _sys_utils.modules["torch.utils.data.dataset"] = _dataset_mod
+        _data.dataset = _dataset_mod
+        _sampler_mod = _types2.ModuleType("torch.utils.data.sampler")
+        for _name in ("Sampler", "SequentialSampler", "RandomSampler", "SubsetRandomSampler", "BatchSampler"):
+            setattr(_sampler_mod, _name, getattr(_data, _name))
+        _sys_utils.modules["torch.utils.data.sampler"] = _sampler_mod
+        _data.sampler = _sampler_mod
+        _dataloader_mod = _types2.ModuleType("torch.utils.data.dataloader")
+        _dataloader_mod.DataLoader = _DataLoader
+        _dataloader_mod.default_collate = _default_collate
+        _dataloader_mod._DatasetKind = type("_DatasetKind", (), {"Iterable": 0, "Map": 1})
+        _sys_utils.modules["torch.utils.data.dataloader"] = _dataloader_mod
+        _data.dataloader = _dataloader_mod
+    else:
+        g.utils.data = _sys_utils.modules["torch.utils.data"]
     if "torch.utils.checkpoint" not in _sys_utils.modules:
         _ckpt = _types2.ModuleType("torch.utils.checkpoint")
         def _checkpoint(fn, *args, use_reentrant=None, **kwargs):
@@ -5322,6 +6117,46 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
         _ckpt.checkpoint = _checkpoint
         _sys_utils.modules["torch.utils.checkpoint"] = _ckpt
         g.utils.checkpoint = _ckpt
+    if "torch.utils._pytree" not in _sys_utils.modules:
+        _pytree = _types2.ModuleType("torch.utils._pytree")
+        def _tree_flatten(x):
+            leaves = []
+            def rec(o):
+                if isinstance(o, (list, tuple)):
+                    for e in o:
+                        rec(e)
+                elif isinstance(o, dict):
+                    for e in o.values():
+                        rec(e)
+                else:
+                    leaves.append(o)
+            rec(x)
+            return leaves, None
+        _pytree.tree_flatten = _tree_flatten
+        _pytree.tree_unflatten = lambda leaves, spec: list(leaves)
+        _pytree.tree_map = lambda f, x: f(x)
+        _pytree.register_pytree_node = lambda *a, **k: None
+        _pytree._register_pytree_node = lambda *a, **k: None
+        _sys_utils.modules["torch.utils._pytree"] = _pytree
+    g.utils._pytree = _sys_utils.modules["torch.utils._pytree"]
+    if "torch.utils.hooks" not in _sys_utils.modules:
+        _hooks = _types2.ModuleType("torch.utils.hooks")
+        class RemovableHandle:
+            def __init__(self, hooks_dict=None, *args, **kwargs):
+                self.hooks_dict = hooks_dict
+                try:
+                    self.id = max(hooks_dict.keys(), default=0) + 1 if hooks_dict is not None else 0
+                except Exception:
+                    self.id = 0
+            def remove(self):
+                try:
+                    if self.hooks_dict is not None:
+                        self.hooks_dict.pop(self.id, None)
+                except Exception:
+                    pass
+        _hooks.RemovableHandle = RemovableHandle
+        _sys_utils.modules["torch.utils.hooks"] = _hooks
+    g.utils.hooks = _sys_utils.modules["torch.utils.hooks"]
     try:
         from jittor.torch_shim.cpp_extension.torch_utils import install_cpp_extension
         install_cpp_extension(g.utils)
@@ -6298,6 +7133,39 @@ def _torch_norm_impl(input, p="fro", dim=None, keepdim=False, dtype=None):
     if pv == 2.0:
         return _jt.sqrt(input.sqr().sum(dim=dim, keepdims=keepdim))
     return (input.abs() ** pv).sum(dim=dim, keepdims=keepdim) ** (1.0 / pv)
+
+
+def _torch_where_select(condition, input, other):
+    import jittor as _jt
+    vals = []
+    for x in (condition, input, other):
+        vals.append(x if isinstance(x, _jt.Var) else _jt.array(x))
+    cond, a, b = vals
+
+    shapes = [tuple(int(d) for d in x.shape) for x in (cond, a, b)]
+    out_shape = ()
+    for shape in shapes:
+        res = []
+        for i in range(1, max(len(out_shape), len(shape)) + 1):
+            da = out_shape[-i] if i <= len(out_shape) else 1
+            db = shape[-i] if i <= len(shape) else 1
+            if da == 1:
+                res.append(db)
+            elif db == 1 or da == db:
+                res.append(da)
+            else:
+                raise RuntimeError(f"where operands could not be broadcast: {shapes}")
+        out_shape = tuple(reversed(res))
+    if not out_shape:
+        out_shape = (1,)
+
+    def _bcast(x):
+        shape = tuple(int(d) for d in x.shape)
+        if shape == out_shape:
+            return x
+        return x.broadcast(out_shape)
+
+    return _jt.ternary(_bcast(cond).bool(), _bcast(a), _bcast(b))
 
 
 def _diff(x, n=1, dim=-1, prepend=None, append=None):

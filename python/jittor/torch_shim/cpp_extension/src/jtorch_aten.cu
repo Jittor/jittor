@@ -203,9 +203,87 @@ jittor::VarHolder* clone_holder(jittor::VarHolder* vh) { return new jittor::VarH
 bool is_jittor_var(void* obj) {
     return Py_TYPE((PyObject*)obj) == &jittor::PyjtVarHolder.ht_type;
 }
+bool pyvar_is_ext_mutable(void* obj) {
+    PyObject* pyobj = (PyObject*)obj;
+    if (!pyobj || Py_TYPE(pyobj) != &jittor::PyjtVarHolder.ht_type)
+        return false;
+    PyObject* attr = PyObject_GetAttrString(pyobj, "_jittor_torch_ext_mutable");
+    if (!attr) {
+        PyErr_Clear();
+        return false;
+    }
+    int ok = PyObject_IsTrue(attr);
+    Py_DECREF(attr);
+    return ok == 1;
+}
+static bool pyvar_force_cpu(void* obj) {
+    PyObject* pyobj = (PyObject*)obj;
+    if (!pyobj || Py_TYPE(pyobj) != &jittor::PyjtVarHolder.ht_type)
+        return false;
+    PyObject* attr = PyObject_GetAttrString(pyobj, "_jittor_torch_force_cpu");
+    if (!attr) {
+        PyErr_Clear();
+        return false;
+    }
+    int ok = PyObject_IsTrue(attr);
+    Py_DECREF(attr);
+    return ok == 1;
+}
+void commit_tensor_to_pyvar(void* obj, const Tensor& t) {
+    if (!obj || !t.defined())
+        return;
+#ifdef HAS_CUDA
+    cudaDeviceSynchronize();
+#endif
+    PyObject* pyobj = (PyObject*)obj;
+    if (Py_TYPE(pyobj) != &jittor::PyjtVarHolder.ht_type)
+        return;
+    jittor::VarHolder* dst = jittor::from_py_object<jittor::VarHolder*>(pyobj);
+    Tensor settled = t.clone();
+    jittor::VarHolder* src = settled._vh();
+    if (!src || !src->var || dst->var == src->var)
+        return;
+
+    jittor::Var* old_var = dst->var;
+    jittor::Var* new_var = src->var;
+
+    // Match VarHolder::assign's attribute preservation, but transfer ownership
+    // from the temporary settled holder to the original Python holder.  Calling
+    // assign() with a stack/temporary VarHolder is unsafe: the temporary holder's
+    // destructor would later unlink/release the Var now owned by `dst`.
+    new_var->name = std::move(old_var->name);
+    if (old_var->is_stop_grad())
+        new_var->set_stop_grad();
+    if (old_var->flags.get(jittor::NodeFlags::_stop_fuse))
+        new_var->flags.set(jittor::NodeFlags::_stop_fuse);
+    if (old_var->flags.get(jittor::NodeFlags::_th_require_grad))
+        new_var->flags.set(jittor::NodeFlags::_th_require_grad);
+
+    src->release_from_holders();  // remove temp holder from hold_vars; keep liveness
+    src->var = nullptr;           // transfer the temp holder's liveness to dst
+    dst->release_holder();
+    old_var->release_both_liveness();
+    dst->var = new_var;
+    dst->own_holder();
+}
 Tensor tensor_from_pyvar(void* obj) {
     jittor::VarHolder* vh = jittor::from_py_object<jittor::VarHolder*>((PyObject*)obj);
     Tensor borrowed = adopt(vh, /*owns=*/false);    // python owns it; we borrow
+    if (pyvar_is_ext_mutable(obj))
+        return borrowed;
+    if (pyvar_force_cpu(obj) && borrowed.defined()) {
+        jittor::NanoVector nv = to_nv(borrowed.sizes());
+        if (borrowed.numel() == 0)
+            return adopt(make_var(nv, borrowed.scalar_type(), /*cpu=*/true), true);
+        int64_t nbytes = borrowed.numel() * detail::vh_dsize(borrowed._vh());
+        if (!detail::vh_is_cuda(borrowed._vh()))
+            return var_from_host_dev(detail::vh_device_ptr(borrowed._vh()), nv,
+                                     borrowed.scalar_type(), false);
+        std::unique_ptr<char[]> host(new char[nbytes]);
+        cudaMemcpy(host.get(), detail::vh_device_ptr(borrowed._vh()), nbytes,
+                   cudaMemcpyDeviceToHost);
+        return var_from_host_dev(host.get(), nv, borrowed.scalar_type(), false);
+    }
     // BAKE the input into a SETTLED jittor "array" Var before the ext's kernel
     // reads it. A lazy/intermediate input (e.g. fused-ssim's rendered image =
     // clamp(rasterizer_output), or any value computed several ops before this

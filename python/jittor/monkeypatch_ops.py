@@ -117,7 +117,9 @@ def _patch_transformers_legacy_tied_weights_keys():
         return
     if getattr(PreTrainedModel, "_swift_jittor_tied_keys_patched", False):
         return
-    orig = PreTrainedModel.get_expanded_tied_weights_keys
+    orig = getattr(PreTrainedModel, "get_expanded_tied_weights_keys", None)
+    if orig is None:
+        return
 
     def _input_emb_weight_name(self):
         # Find the parameter name of the input embedding weight (the tie source).
@@ -164,6 +166,46 @@ def _patch_transformers_legacy_symbols():
         import transformers.utils.import_utils as iu
     except Exception:
         return
+    try:
+        import sys as _sys
+        _torch_mod = _sys.modules.get("torch")
+        if getattr(_torch_mod, "__name__", "") == "jittor" and not getattr(iu, "_jt_torch_backend_patched", False):
+            def _jt_is_torch_available():
+                return True
+            def _jt_get_torch_version():
+                # Transformers 5 gates DINOv3 behind torch>=2.4. The active
+                # torch module is jittor's shim, not the real PyTorch package.
+                return "2.4.0"
+            try:
+                iu.is_torch_available.cache_clear()
+            except Exception:
+                pass
+            try:
+                iu.get_torch_version.cache_clear()
+            except Exception:
+                pass
+            iu.is_torch_available = _jt_is_torch_available
+            iu.get_torch_version = _jt_get_torch_version
+            if hasattr(iu, "BACKENDS_MAPPING") and "torch" in iu.BACKENDS_MAPPING:
+                iu.BACKENDS_MAPPING["torch"] = (_jt_is_torch_available, getattr(iu, "PYTORCH_IMPORT_ERROR", ""))
+            try:
+                import transformers.utils as tu
+                tu.is_torch_available = _jt_is_torch_available
+                tu.get_torch_version = _jt_get_torch_version
+            except Exception:
+                pass
+            try:
+                import transformers.utils.generic as tg
+                tg._is_torch_available = True
+            except Exception:
+                pass
+            try:
+                _refresh_transformers_lazy_torch_backend()
+            except Exception:
+                pass
+            iu._jt_torch_backend_patched = True
+    except Exception:
+        pass
     if not hasattr(iu, "is_torch_fx_available"):
         # Original returns whether torch.fx tracing is usable; True whenever a modern
         # torch (with torch.fx) is importable. Mirror that with a lazy probe.
@@ -184,6 +226,43 @@ def _patch_transformers_legacy_symbols():
             pass
 
     _patch_transformers_default_rope_scaling()
+
+
+def _refresh_transformers_lazy_torch_backend():
+    """Refresh already-created transformers LazyModules after enabling the shim.
+
+    transformers 5 builds LazyModule import tables while importing
+    transformers.utils.import_utils. If it decided torch was unavailable at that
+    moment, symbols such as DINOv3ViTModel are cached as Placeholder classes.
+    Once sys.modules["torch"] is the jittor module, remove only the missing
+    "torch" backend mark and any Placeholder cached from it.
+    """
+    import sys
+    try:
+        from transformers.utils.import_utils import _LazyModule
+    except Exception:
+        return
+
+    for mod in list(sys.modules.values()):
+        if not isinstance(mod, _LazyModule):
+            continue
+        missing_map = getattr(mod, "_object_missing_backend", None)
+        if not isinstance(missing_map, dict):
+            continue
+        for name, missing in list(missing_map.items()):
+            if "torch" not in missing:
+                continue
+            rest = [b for b in missing if b != "torch"]
+            if rest:
+                missing_map[name] = rest
+            else:
+                missing_map.pop(name, None)
+            cached = getattr(mod, "__dict__", {}).get(name, None)
+            if getattr(cached, "_backends", None) is not None:
+                try:
+                    delattr(mod, name)
+                except Exception:
+                    mod.__dict__.pop(name, None)
 
 
 def _patch_transformers_default_rope_scaling():
@@ -522,14 +601,29 @@ def _patch_flexgemm_triton_autotuner():
     n_pos = len(params)
     accepted = set(params)
     key_pos = params.index("key") if "key" in params else None
+    do_bench_pos = params.index("do_bench") if "do_bench" in params else None
+
+    def _jt_do_bench():
+        try:
+            from jittor.triton_shim import backend as _jt_triton_backend
+            return _jt_triton_backend.make_do_bench()
+        except Exception:
+            return None
 
     def _tolerant_init(self, *args, **kwargs):
         # recover the key-name list BEFORE truncating extras
         key_val = kwargs.get("key", None)
         if key_val is None and key_pos is not None and key_pos < len(args):
             key_val = args[key_pos]
-        args = args[:n_pos]                    # drop extras (e.g. do_bench)
+        args = list(args[:n_pos])              # drop extras (e.g. do_bench)
         kwargs = {k: v for k, v in kwargs.items() if k in accepted}
+        bench = _jt_do_bench()
+        if bench is not None and do_bench_pos is not None:
+            if do_bench_pos < len(args):
+                if args[do_bench_pos] is None:
+                    args[do_bench_pos] = bench
+            elif kwargs.get("do_bench", None) is None:
+                kwargs["do_bench"] = bench
         _orig(self, *args, **kwargs)
         # triton 3.1.0 has no self.keys (only self.key_idx); flex_gemm's run()
         # needs the name list. Provide it (newer-triton-compatible attribute).
@@ -582,7 +676,7 @@ def _patch_dinov3_encoder_layer_layout():
     _dino_path = _os.environ.get("TRELLIS_DINOV3_PATH")
     if _dino_path and _os.path.isdir(_dino_path) \
             and not getattr(cls.__init__, "_jt_local_redirect", False):
-        from transformers import DINOv3ViTModel
+        from transformers.models.dinov3_vit.modeling_dinov3_vit import DINOv3ViTModel
         from torchvision import transforms
 
         def _local_init(self, model_name, image_size=512, _p=_dino_path):

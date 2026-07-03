@@ -3564,16 +3564,16 @@ class ParameterList(Module):
 ParameterDict = ParameterList
 
 def Parameter(data, requires_grad=True):
-    ''' The `Parameter` interface isn't needed in Jittor, this interface
-does nothings and it is just used for compatible.
-    
-A Jittor Var is a Parameter
-when it is a member of Module, if you don't want a Jittor
-Var menber is treated as a Parameter, just name it startswith
-underscore `_`.
+    '''Torch-compatible Parameter wrapper.
+
+    Jittor treats a Var assigned to a Module as a parameter, so wrapping an
+    existing Var only needs to set the trainable flag. Do not clone here:
+    PyTorch's Parameter is a lightweight wrapper over the supplied tensor data,
+    while cloning can force materialization/JIT work and makes large pretrained
+    model construction unnecessarily slow.
     '''
-    LOG.w(Parameter.__doc__)
-    data = data.clone()
+    if not isinstance(data, jt.Var):
+        data = jt.array(data)
     data.requires_grad = requires_grad
     return data
 
@@ -4839,4 +4839,3 @@ def mish(x, inplace=False):
 
 def skip_init(module_cls, *args, **kw):
     return module_cls(*args, **kw)
-

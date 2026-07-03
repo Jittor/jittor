@@ -161,7 +161,9 @@ namespace detail {
 
     // python bridge
     bool     is_jittor_var(void* pyobj);
+    bool     pyvar_is_ext_mutable(void* pyobj);
     Tensor   tensor_from_pyvar(void* pyobj);           // borrow
+    void     commit_tensor_to_pyvar(void* pyobj, const Tensor& t);
     void*    tensor_to_pyvar(const Tensor& t);         // +1 PyObject*
 
     ScalarType name_to_scalar(const char* n);
@@ -381,12 +383,18 @@ namespace pybind11 { namespace detail {
 template <> struct type_caster<jtorch::Tensor> {
     PYBIND11_TYPE_CASTER(jtorch::Tensor, _("Tensor"));
     object keepalive;
+    bool mutable_arg = false;
     bool load(handle src, bool) {
         if (!src || src.is_none()) return false;
         if (!jtorch::detail::is_jittor_var(src.ptr())) return false;
+        mutable_arg = jtorch::detail::pyvar_is_ext_mutable(src.ptr());
         value = jtorch::detail::tensor_from_pyvar(src.ptr());
         keepalive = reinterpret_borrow<object>(src);
         return true;
+    }
+    ~type_caster() {
+        if (mutable_arg && keepalive && value.defined())
+            jtorch::detail::commit_tensor_to_pyvar(keepalive.ptr(), value);
     }
     static handle cast(const jtorch::Tensor& t, return_value_policy, handle) {
         if (!t.defined()) { Py_RETURN_NONE; }
