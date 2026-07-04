@@ -113,6 +113,45 @@ def _param_numel(v):
     return int(np.prod(tuple(int(x) for x in v.shape)))
 
 
+def _fsdp2_flat_enabled(world_size, total_numel):
+    value = os.environ.get("JITTOR_FSDP2_FLAT", "auto").lower()
+    if value in ("0", "false", "no"):
+        return False
+    if value in ("1", "true", "yes"):
+        return True
+    # Flat sharding removes several tiny NCCL launches and is consistently
+    # faster on 2 ranks. On 4 ranks it helps small models but the extra
+    # flatten/slice work slows medium-size cases, so keep the legacy path there.
+    return int(world_size) <= 2 or int(total_numel) <= 1_000_000
+
+
+def _flat_local_overlap(state, entry):
+    rank_start = int(state.true_fsdp_rank) * int(state.true_fsdp_flat_shard_numel)
+    rank_end = rank_start + int(state.true_fsdp_flat_shard_numel)
+    param_start = int(entry.flat_offset)
+    param_end = param_start + int(entry.numel)
+    overlap_start = max(rank_start, param_start)
+    overlap_end = min(rank_end, param_end)
+    if overlap_end <= overlap_start:
+        return 0, 0
+    return overlap_start - rank_start, overlap_end - overlap_start
+
+
+def _flat_entry_slices(state, flat_var):
+    out = []
+    for entry in state.true_fsdp_params:
+        local_start, local_len = _flat_local_overlap(state, entry)
+        out.append(_slice_flat(flat_var, local_start, local_len))
+    return out
+
+
+def _refresh_flat_entry_shards(state):
+    for entry, shard in zip(state.true_fsdp_params,
+                            _flat_entry_slices(state, state.true_fsdp_flat_shard)):
+        entry.shard = shard
+        entry.shard_numel = int(shard.shape[0]) if len(shard.shape) else int(entry.numel)
+
+
 def _named_parameters_with_owner(module, recurse=True):
     out = []
     seen = set()
@@ -627,7 +666,49 @@ def _init_true_fsdp_state(module, state):
     ws = _world_size()
     rank = _rank()
     entries = []
-    for name, owner, attr, param in _named_parameters_with_owner(module, recurse=True):
+    params = _named_parameters_with_owner(module, recurse=True)
+    total_numel = sum(_param_numel(param) for _, _, _, param in params)
+    if _fsdp2_flat_enabled(ws, total_numel) and params and len({str(param.dtype) for _, _, _, param in params}) == 1:
+        flat_shard_numel = _ceil_div(total_numel, ws)
+        flat_padded_numel = flat_shard_numel * ws
+        flat_full = _pad_flat(jt.concat([_flatten_var(param) for _, _, _, param in params], dim=0),
+                              flat_padded_numel)
+        flat_shard = _slice_flat(flat_full, rank * flat_shard_numel, flat_shard_numel)
+        flat_shard.sync()
+        offset = 0
+        for name, owner, attr, param in params:
+            numel = _param_numel(param)
+            entries.append(types.SimpleNamespace(
+                name=name,
+                owner=owner,
+                attr=attr,
+                shape=tuple(int(x) for x in param.shape),
+                dtype=param.dtype,
+                numel=numel,
+                padded_numel=numel,
+                shard_numel=0,
+                shard=None,
+                full_param=None,
+                flat_offset=offset,
+            ))
+            offset += numel
+        state.true_fsdp_initialized = True
+        state.true_fsdp_rank = rank
+        state.true_fsdp_world_size = ws
+        state.true_fsdp_params = entries
+        state.true_fsdp_flat = True
+        state.true_fsdp_flat_total_numel = total_numel
+        state.true_fsdp_flat_padded_numel = flat_padded_numel
+        state.true_fsdp_flat_shard_numel = flat_shard_numel
+        state.true_fsdp_flat_shard = flat_shard
+        _refresh_flat_entry_shards(state)
+        for entry in entries:
+            object.__setattr__(entry.owner, entry.attr, entry.shard)
+        state.true_fsdp_unsharded = False
+        return state
+
+    state.true_fsdp_flat = False
+    for name, owner, attr, param in params:
         numel = _param_numel(param)
         shard_numel = _ceil_div(numel, ws)
         padded_numel = shard_numel * ws
@@ -661,12 +742,20 @@ def _unshard_module_params(module):
         return module
     if getattr(state, "true_fsdp_unsharded", False):
         return module
-    for entry in state.true_fsdp_params:
-        gathered = _all_gather_shards(entry.shard)
-        full_flat = gathered if entry.padded_numel == entry.numel else _slice_flat(gathered, 0, entry.numel)
-        full = full_flat.reshape(entry.shape)
-        entry.full_param = full
-        object.__setattr__(entry.owner, entry.attr, full)
+    if getattr(state, "true_fsdp_flat", False):
+        full_flat = _all_gather_shards(state.true_fsdp_flat_shard)
+        state.true_fsdp_flat_full_param = full_flat
+        for entry in state.true_fsdp_params:
+            full = _slice_flat(full_flat, entry.flat_offset, entry.numel).reshape(entry.shape)
+            entry.full_param = full
+            object.__setattr__(entry.owner, entry.attr, full)
+    else:
+        for entry in state.true_fsdp_params:
+            gathered = _all_gather_shards(entry.shard)
+            full_flat = gathered if entry.padded_numel == entry.numel else _slice_flat(gathered, 0, entry.numel)
+            full = full_flat.reshape(entry.shape)
+            entry.full_param = full
+            object.__setattr__(entry.owner, entry.attr, full)
     state.true_fsdp_unsharded = True
     return module
 
@@ -737,6 +826,19 @@ def sync_sharded_grads(module, loss=None, *, divide_by_world_size=True):
         _unshard_module_params(module)
     full_params = [entry.full_param for entry in state.true_fsdp_params]
     full_grads = jt.grad(loss, full_params)
+    if getattr(state, "true_fsdp_flat", False):
+        flat_grad = _pad_flat(
+            jt.concat([_flatten_var(grad) for grad in full_grads], dim=0),
+            state.true_fsdp_flat_padded_numel,
+        )
+        flat_shard_grad = _reduce_scatter_padded(flat_grad)
+        if divide_by_world_size:
+            flat_shard_grad = flat_shard_grad / max(int(state.true_fsdp_world_size), 1)
+        flat_shard_grad = flat_shard_grad.stop_grad()
+        state.true_fsdp_last_flat_grad = flat_shard_grad
+        sharded = [grad.stop_grad() for grad in _flat_entry_slices(state, flat_shard_grad)]
+        state.true_fsdp_last_grads = sharded
+        return sharded
     sharded = []
     for entry, grad in zip(state.true_fsdp_params, full_grads):
         flat = _pad_flat(_flatten_var(grad), entry.padded_numel)
@@ -758,6 +860,17 @@ def sharded_sgd_step(module, loss, lr=1e-4, *, divide_by_world_size=True):
             p.assign(p - g * lr)
         return grads
     grads = sync_sharded_grads(module, loss, divide_by_world_size=divide_by_world_size)
+    if getattr(state, "true_fsdp_flat", False):
+        flat_grad = getattr(state, "true_fsdp_last_flat_grad", None)
+        if flat_grad is None:
+            raise RuntimeError("true FSDP2 flat gradient was not produced")
+        state.true_fsdp_flat_shard.assign((state.true_fsdp_flat_shard - flat_grad * lr).stop_grad())
+        _refresh_flat_entry_shards(state)
+        for entry in state.true_fsdp_params:
+            object.__setattr__(entry.owner, entry.attr, entry.shard)
+            entry.full_param = None
+        state.true_fsdp_unsharded = False
+        return grads
     for entry, grad in zip(state.true_fsdp_params, grads):
         entry.shard.assign((entry.shard - grad * lr).stop_grad())
         object.__setattr__(entry.owner, entry.attr, entry.shard)
