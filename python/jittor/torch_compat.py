@@ -265,18 +265,28 @@ def _var_is_cpu_resident(v):
     return not bool(jt.flags.use_cuda)
 
 
-def _make_cpu_resident(v):
-    """Return a host-resident copy of Var `v` (no-op if already on CPU).
+def _make_cpu_resident(v, inplace=False):
+    """Return a host-resident Var.
 
-    There is no per-Var migrate-to-cpu exposed to Python, so round-trip through
-    numpy and rebuild the Var under use_cuda=0 (the same technique the native
-    data()/raw_ptr() getters use, just initiated from Python). The rebuilt Var's
-    allocator is the host allocator, so Var.location()=='cpu' and jtorch's C++
-    is_cpu() agree."""
+    Tensor.cpu() asks for a copy, while Module.cpu()/to("cpu") is in-place. Use
+    the native Var storage migration when available and keep the old NumPy
+    rebuild only as a fallback for older cores.
+    """
     if not isinstance(v, jt.Var):
         return v
     if _var_is_cpu_resident(v):
         return v
+    if hasattr(v, "migrate_to_cpu"):
+        try:
+            out = v if inplace else v.clone()
+            out.migrate_to_cpu()
+            try:
+                out._jittor_torch_force_cpu = True
+            except Exception:
+                pass
+            return out
+        except Exception:
+            pass
     try:
         arr = v.clone().numpy()
     except Exception:
@@ -291,9 +301,12 @@ def _make_cpu_resident(v):
     return out
 
 
-def _make_cuda_resident(v, force=False):
-    """Return a CUDA-resident copy of Var `v` (no-op if CUDA is off or already on
-    device). Rebuild under use_cuda=1 so the device allocator backs it."""
+def _make_cuda_resident(v, force=False, inplace=False):
+    """Return a CUDA-resident Var.
+
+    Prefer native storage migration over a NumPy round-trip. The latter remains
+    as a compatibility fallback for unmaterialized or older-core Vars.
+    """
     if not isinstance(v, jt.Var):
         return v
     if not jt.flags.use_cuda:
@@ -322,6 +335,22 @@ def _make_cuda_resident(v, force=False):
             return v
     except Exception:
         pass
+    if hasattr(v, "migrate_to_gpu"):
+        try:
+            # A lazy clone of a CPU Var may migrate the source when global
+            # use_cuda=1. Keep tensor.cuda() copy semantics by reserving native
+            # CPU->GPU migration for in-place Module.to/cuda paths.
+            if (not inplace) and loc == "cpu":
+                raise RuntimeError("preserve source CPU tensor")
+            out = v if inplace else v.clone()
+            out.migrate_to_gpu()
+            try:
+                out._jittor_torch_force_cpu = False
+            except Exception:
+                pass
+            return out
+        except Exception:
+            pass
     arr = v.numpy()
     with jt.flag_scope(use_cuda=1):
         out = jt.array(arr)
@@ -1793,7 +1822,10 @@ def install(torch):
                 else:
                     scores = scores + attn_mask
             attn = nn.softmax(scores, dim=-1)
-            return jt.matmul(attn, value)
+            out = jt.matmul(attn, value)
+            if str(out.dtype) != str(query.dtype):
+                out = out.cast(str(query.dtype))
+            return out
         nn.functional.scaled_dot_product_attention = scaled_dot_product_attention
     g.scaled_dot_product_attention = nn.functional.scaled_dot_product_attention
 
@@ -3205,7 +3237,7 @@ def _wrap_constructors(g):
             # map it onto the next positional slot (only full/full_like ever get it).
             if "fill_value" in kwargs:
                 args = tuple(args) + (kwargs.pop("fill_value"),)
-            _cast_to = None  # for factories whose jittor impl lacks `dtype`
+            _cast_to = None  # cast after construction when needed for torch dtype semantics
             if "dtype" in kwargs:
                 if kwargs["dtype"] is None:
                     # torch.empty/zeros(..., dtype=None) -> the default dtype.
@@ -3219,6 +3251,7 @@ def _wrap_constructors(g):
                         kwargs.pop("dtype")
                 elif _accepts_dtype:
                     kwargs["dtype"] = _dtype_to_str(kwargs["dtype"])
+                    _cast_to = kwargs["dtype"]
                 else:
                     # ones_like / tril / triu have no dtype param in jittor; torch
                     # accepts one. Pop it and cast the result instead.
@@ -4704,9 +4737,9 @@ def _install_module_methods(nn):
                 if is_float:
                     out = out.cast(ds)
             if _device_is_cpu(dev):
-                out = _make_cpu_resident(out)
+                out = _make_cpu_resident(out, inplace=(out is v))
             elif _device_is_cuda(dev):
-                out = _make_cuda_resident(out, force=True)
+                out = _make_cuda_resident(out, force=True, inplace=(out is v))
             return out
 
         if dev is not None or ds is not None:

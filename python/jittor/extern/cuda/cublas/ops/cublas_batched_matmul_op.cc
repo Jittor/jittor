@@ -127,9 +127,9 @@ void CublasBatchedMatmulOp::jit_run() {
     if ('@Trans_b'=='T') {
         k = bs[adim-2];
     }
-    bool has_fp16_or_bf16 = a->dtype() == ns_float16
-        || b->dtype() == ns_float16 || c->dtype() == ns_float16
-        || a->dtype() == ns_bfloat16
+    bool has_fp16 = a->dtype() == ns_float16
+        || b->dtype() == ns_float16 || c->dtype() == ns_float16;
+    bool has_bf16 = a->dtype() == ns_bfloat16
         || b->dtype() == ns_bfloat16 || c->dtype() == ns_bfloat16;
     // a: [b,n,m], b: [b,m,k], c: [b,n,k]
     #if CUDART_VERSION >= 11000
@@ -142,8 +142,11 @@ void CublasBatchedMatmulOp::jit_run() {
     } else if (use_tensorcore==1) {
         computeType = CUBLAS_COMPUTE_32F_FAST_TF32;
     }
-    if (has_fp16_or_bf16) {
+    if (has_fp16) {
         computeType = use_tensorcore ? CUBLAS_COMPUTE_16F : CUBLAS_COMPUTE_32F;
+        algo = use_tensorcore ? CUBLAS_GEMM_DEFAULT : CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+    } else if (has_bf16) {
+        computeType = use_tensorcore ? CUBLAS_COMPUTE_32F_FAST_16BF : CUBLAS_COMPUTE_32F;
         algo = use_tensorcore ? CUBLAS_GEMM_DEFAULT : CUBLAS_GEMM_DEFAULT_TENSOR_OP;
     }
     if (computeType == CUBLAS_COMPUTE_16F) {
@@ -156,8 +159,11 @@ void CublasBatchedMatmulOp::jit_run() {
     if (use_tensorcore) {
         algo = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
     }
-    if (has_fp16_or_bf16) {
+    if (has_fp16) {
         computeType = CUDA_R_16F;
+        algo = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+    } else if (has_bf16) {
+        computeType = CUDA_R_32F;
         algo = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
     }
     #endif
@@ -180,5 +186,4 @@ void CublasBatchedMatmulOp::jit_run() {
 #endif // JIT
 
 } // jittor
-
 

@@ -9,6 +9,7 @@
 #include "var.h"
 #include "ops/array_op.h"
 #include "executor.h"
+#include "mem/allocator.h"
 #include "mem/allocator/cuda_dual_allocator.h"
 
 namespace jittor {
@@ -105,6 +106,26 @@ struct VarHolder {
         if (var->allocator->is_cuda())
             return "device";
         return "cpu";
+    }
+
+    // @pyjt(migrate_to_cpu)
+    // @attrs(return_self)
+    inline VarHolder* migrate_to_cpu_() {
+        sync(true, false);
+        #ifdef HAS_CUDA
+        migrate_to_cpu(var, exe.allocator);
+        #endif
+        return this;
+    }
+
+    // @pyjt(migrate_to_gpu)
+    // @attrs(return_self)
+    inline VarHolder* migrate_to_gpu_() {
+        sync(true, false);
+        #ifdef HAS_CUDA
+        migrate_to_gpu(var, get_allocator());
+        #endif
+        return this;
     }
     
     void operator=(VarPtr&& v);
