@@ -110,6 +110,13 @@ class TestTorchMetricsCompat(unittest.TestCase):
         self.assertFalse(x.is_xpu)
         self.assertFalse(x.is_meta)
         self.assertEqual(torch.bincount(x, minlength=4).numpy().tolist(), [2, 1, 3, 0])
+        self.assertEqual(torch.bincount(torch.tensor([0, 5], dtype=torch.int64), minlength=3).numpy().tolist(),
+                         [1, 0, 0, 0, 0, 1])
+
+        import torchmetrics.utilities.data as tm_data
+        self.assertTrue(getattr(tm_data, "_jittor_fast_bincount", False))
+        self.assertEqual(tm_data._bincount(torch.tensor([0, 2, 2], dtype=torch.int64), minlength=4).numpy().tolist(),
+                         [1, 0, 2, 0])
 
         y = torch.tensor([[0.0, 1.0, 0.0], [1.0, 2.0, 4.0]], dtype=torch.float32)
         coord = torch.tensor([0.0, 0.5, 2.0], dtype=torch.float32)

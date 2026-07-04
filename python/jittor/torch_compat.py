@@ -1653,6 +1653,7 @@ def install(torch):
     _install_tensor_methods(g, Var, _DTYPE_OBJS)
     _install_misc(g, Var, _DTYPE_OBJS)
     _install_torchdata_stateful_dataloader(g)
+    _install_torchmetrics_fastpaths(g)
     _install_optimizers(g)
     _install_lr_scheduler(g)
     _install_autograd_function(g)
@@ -5354,6 +5355,62 @@ def _install_torchdata_stateful_dataloader(g):
     _sys.modules["torchdata.stateful_dataloader"] = stateful
     _sys.modules["torchdata.stateful_dataloader.sampler"] = sampler_mod
     setattr(torchdata, "stateful_dataloader", stateful)
+
+
+def _install_torchmetrics_fastpaths(g):
+    """Patch TorchMetrics internals with jittor-safe bounded fast paths.
+
+    Public ``torch.bincount`` must keep PyTorch's output-length semantics, which
+    require ``max(input.max()+1, minlength)`` and therefore a GPU->host sync in
+    the generic compatibility implementation. TorchMetrics classification
+    helpers pass a known bounded ``minlength`` (for example ``num_classes**2``)
+    and then immediately reshape to that fixed size. Patch only that internal
+    helper so TorchMetrics avoids the sync without changing user-visible torch
+    semantics.
+    """
+    import builtins as _builtins
+    import sys as _sys
+
+    if getattr(g, "_torchmetrics_fastpaths_installed", False):
+        return
+    g._torchmetrics_fastpaths_installed = True
+
+    def _patch_data_mod(mod):
+        if mod is None or getattr(mod, "_jittor_fast_bincount", False):
+            return mod
+        orig = getattr(mod, "_bincount", None)
+        if orig is None:
+            return mod
+
+        def _bounded_bincount(x, minlength=None):
+            if minlength is None or not isinstance(minlength, (int, np.integer)):
+                return orig(x, minlength=minlength)
+            ml = max(int(minlength), 0)
+            flat = x.reshape(-1).int64()
+            if flat.numel() == 0:
+                return jt.zeros((ml,), dtype=jt.int64)
+            out = jt.zeros((ml,), dtype=jt.int64)
+            src = jt.ones((flat.shape[0],), dtype=jt.int64)
+            return out.scatter_add(0, flat, src)
+
+        mod._bincount = _bounded_bincount
+        mod._jittor_fast_bincount = True
+        return mod
+
+    _patch_data_mod(_sys.modules.get("torchmetrics.utilities.data"))
+
+    orig_import = _builtins.__import__
+    if getattr(orig_import, "_jittor_torchmetrics_fastpaths", False):
+        return
+
+    def _import(name, globals=None, locals=None, fromlist=(), level=0):
+        mod = orig_import(name, globals, locals, fromlist, level)
+        if name == "torchmetrics.utilities.data" or name.startswith("torchmetrics."):
+            _patch_data_mod(_sys.modules.get("torchmetrics.utilities.data"))
+        return mod
+
+    _import._jittor_torchmetrics_fastpaths = True
+    _builtins.__import__ = _import
 
 
 def _install_fsdp2_distributed(dist, torch_module=None):
