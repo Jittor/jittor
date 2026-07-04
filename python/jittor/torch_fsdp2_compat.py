@@ -663,7 +663,7 @@ def _unshard_module_params(module):
         return module
     for entry in state.true_fsdp_params:
         gathered = _all_gather_shards(entry.shard)
-        full_flat = _slice_flat(gathered, 0, entry.numel)
+        full_flat = gathered if entry.padded_numel == entry.numel else _slice_flat(gathered, 0, entry.numel)
         full = full_flat.reshape(entry.shape)
         entry.full_param = full
         object.__setattr__(entry.owner, entry.attr, full)
@@ -743,6 +743,7 @@ def sync_sharded_grads(module, loss=None, *, divide_by_world_size=True):
         shard = _reduce_scatter_padded(flat)
         if divide_by_world_size:
             shard = shard / max(int(state.true_fsdp_world_size), 1)
+        shard = shard.stop_grad()
         sharded.append(shard)
     state.true_fsdp_last_grads = sharded
     return sharded
@@ -758,7 +759,7 @@ def sharded_sgd_step(module, loss, lr=1e-4, *, divide_by_world_size=True):
         return grads
     grads = sync_sharded_grads(module, loss, divide_by_world_size=divide_by_world_size)
     for entry, grad in zip(state.true_fsdp_params, grads):
-        entry.shard = entry.shard - grad * lr
+        entry.shard.assign((entry.shard - grad * lr).stop_grad())
         object.__setattr__(entry.owner, entry.attr, entry.shard)
         entry.full_param = None
     state.true_fsdp_unsharded = False
