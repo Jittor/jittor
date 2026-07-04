@@ -5586,7 +5586,45 @@ def _install_torchmetrics_fastpaths(g):
         mod._jittor_fast_bincount = True
         return mod
 
+    def _patch_bound_safe_divide(orig, fast):
+        for name, mod in list(_sys.modules.items()):
+            if not name.startswith("torchmetrics."):
+                continue
+            if getattr(mod, "_safe_divide", None) is orig:
+                setattr(mod, "_safe_divide", fast)
+
+    def _patch_compute_mod(mod):
+        if mod is None:
+            return mod
+        if getattr(mod, "_jittor_fast_safe_divide", False):
+            fast = getattr(mod, "_safe_divide", None)
+            orig = getattr(fast, "_jittor_orig_safe_divide", None)
+            if orig is not None:
+                _patch_bound_safe_divide(orig, fast)
+            return mod
+        orig = getattr(mod, "_safe_divide", None)
+        if orig is None:
+            return mod
+
+        def _fast_safe_divide(num, denom, zero_division=0.0):
+            if not isinstance(zero_division, (float, int)):
+                return orig(num, denom, zero_division=zero_division)
+            if not hasattr(num, "is_floating_point") or not hasattr(denom, "is_floating_point"):
+                return orig(num, denom, zero_division=zero_division)
+            num = num if num.is_floating_point() else num.float()
+            denom = denom if denom.is_floating_point() else denom.float()
+            div = num / denom
+            fill = jt.zeros_like(div) if zero_division == 0 else jt.zeros_like(div) + zero_division
+            return g.where(denom != 0, div, fill)
+
+        _fast_safe_divide._jittor_orig_safe_divide = orig
+        mod._safe_divide = _fast_safe_divide
+        mod._jittor_fast_safe_divide = True
+        _patch_bound_safe_divide(orig, _fast_safe_divide)
+        return mod
+
     _patch_data_mod(_sys.modules.get("torchmetrics.utilities.data"))
+    _patch_compute_mod(_sys.modules.get("torchmetrics.utilities.compute"))
 
     orig_import = _builtins.__import__
     if getattr(orig_import, "_jittor_torchmetrics_fastpaths", False):
@@ -5596,6 +5634,7 @@ def _install_torchmetrics_fastpaths(g):
         mod = orig_import(name, globals, locals, fromlist, level)
         if name == "torchmetrics.utilities.data" or name.startswith("torchmetrics."):
             _patch_data_mod(_sys.modules.get("torchmetrics.utilities.data"))
+            _patch_compute_mod(_sys.modules.get("torchmetrics.utilities.compute"))
         return mod
 
     _import._jittor_torchmetrics_fastpaths = True

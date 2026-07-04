@@ -118,6 +118,25 @@ class TestTorchMetricsCompat(unittest.TestCase):
         self.assertEqual(tm_data._bincount(torch.tensor([0, 2, 2], dtype=torch.int64), minlength=4).numpy().tolist(),
                          [1, 0, 2, 0])
 
+        import torchmetrics.utilities.compute as tm_compute
+        tm_accuracy = importlib.import_module("torchmetrics.functional.classification.accuracy")
+        self.assertTrue(getattr(tm_compute, "_jittor_fast_safe_divide", False))
+        self.assertIs(tm_accuracy._safe_divide, tm_compute._safe_divide)
+        np.testing.assert_allclose(
+            tm_compute._safe_divide(torch.tensor([1, 2, 3]), torch.tensor([1, 0, 2])).numpy(),
+            np.array([1.0, 0.0, 1.5], dtype=np.float32),
+            rtol=1e-6,
+            atol=1e-6,
+        )
+        np.testing.assert_allclose(
+            tm_compute._safe_divide(
+                torch.tensor([1.0, 2.0]), torch.tensor([0.0, 2.0]), zero_division=1.0
+            ).numpy(),
+            np.array([1.0, 1.0], dtype=np.float32),
+            rtol=1e-6,
+            atol=1e-6,
+        )
+
         y = torch.tensor([[0.0, 1.0, 0.0], [1.0, 2.0, 4.0]], dtype=torch.float32)
         coord = torch.tensor([0.0, 0.5, 2.0], dtype=torch.float32)
         np.testing.assert_allclose(
