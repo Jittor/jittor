@@ -2233,28 +2233,41 @@ def _install_flash_attn_shim():
     `jittor/torch_shim/stubs/flash_attn/__init__.py`. We load it from there so the
     deploy flow and the `PYTHONPATH=.../python` (no-deploy) flow share one source.
 
-    No-op if a real flash_attn is already importable, or if the shim is already
-    registered (e.g. by deploy onto site-packages).
+    No-op only if the shim is already registered. A PyTorch flash_attn wheel is
+    compiled against libtorch and is not a valid backend for this Jittor shim, so
+    it is replaced unless JITTOR_TORCH_ALLOW_REAL_FLASH_ATTN=1 is set.
     """
     import sys as _s
     import os as _os
     import importlib as _il
     import importlib.util as _ilu
-    if "flash_attn" in _s.modules:
+    existing = _s.modules.get("flash_attn")
+    if existing is not None and getattr(existing, "_jittor_flash_attn_stub", False):
         return
-    try:                         # respect a real / already-deployed flash_attn
-        _il.import_module("flash_attn")
-        return
-    except Exception:
-        pass
+    allow_real = str(_os.environ.get("JITTOR_TORCH_ALLOW_REAL_FLASH_ATTN", "")).strip().lower() in ("1", "true", "yes", "on")
+    if allow_real:
+        try:
+            _il.import_module("flash_attn")
+            return
+        except Exception:
+            pass
     src = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
                         "stubs", "flash_attn", "__init__.py")
     if not _os.path.isfile(src):
         return
     spec = _ilu.spec_from_file_location("flash_attn", src)
     mod = _ilu.module_from_spec(spec)
+    old_flash = _s.modules.get("flash_attn")
     _s.modules["flash_attn"] = mod
-    spec.loader.exec_module(mod)
+    try:
+        spec.loader.exec_module(mod)
+    except Exception:
+        if old_flash is None:
+            _s.modules.pop("flash_attn", None)
+        else:
+            _s.modules["flash_attn"] = old_flash
+        raise
+    mod._jittor_flash_attn_stub = True
 
 
 try:

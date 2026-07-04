@@ -1,14 +1,13 @@
 """A jittor-backed `flash_attn` so `import flash_attn` works on the torch-shim.
 
-FlashAttention is a hand-written CUDA kernel that is not built here; libraries
-that hard-depend on it (TRELLIS.2's sparse/dense attention defaults to
-`ATTN='flash_attn'` / `BACKEND='flash_attn'`) would fail at `import flash_attn`.
-
-This shim provides the public entry points TRELLIS.2 (and most torch libraries)
-call, computed by splitting the packed (var-len) tensors per segment via the
-`cu_seqlens` prefix-sums and running jittor's
-`torch.nn.functional.scaled_dot_product_attention` on each segment, then
-re-packing. Block-diagonal attention with NO cross-segment leakage — i.e.
+If a project provides a native ``flashattn_jittor`` implementation, this package
+will discover/compile it through Jittor's torch-extension shim and dispatch the
+standard flash-attn API to that module.  The fused implementation stays outside
+the Jittor repository.  Without such a module, this shim provides the public
+entry points TRELLIS.2 (and most torch libraries) call, computed by splitting the
+packed (var-len) tensors per segment via the `cu_seqlens` prefix-sums and running
+jittor's `torch.nn.functional.scaled_dot_product_attention` on each segment, then
+re-packing. Block-diagonal attention with NO cross-segment leakage, i.e.
 numerically equivalent to the real flash-attn var-len kernels (standard,
 un-fused SDPA math).
 
@@ -32,7 +31,14 @@ from typing import Optional
 import torch
 import torch.nn.functional as F
 
+try:
+    from jittor.torch_shim import flashattn_jittor as _flashattn_jittor
+except Exception:  # pragma: no cover - fallback must remain import-safe
+    _flashattn_jittor = None
+
 __version__ = "2.7.4.post1"
+_jittor_flash_attn_stub = True
+_jittor_flash_attn_backend = "math"
 
 __all__ = [
     "flash_attn_func",
@@ -41,7 +47,53 @@ __all__ = [
     "flash_attn_varlen_func",
     "flash_attn_varlen_qkvpacked_func",
     "flash_attn_varlen_kvpacked_func",
+    "flashattn_jittor_backend",
+    "flashattn_jittor_last_error",
+    "is_flashattn_jittor_available",
 ]
+
+
+def _native_function(name):
+    """Return a flashattn_jittor entry point, or None for math fallback."""
+    global _jittor_flash_attn_backend
+    if _flashattn_jittor is None:
+        return None
+    backend = _flashattn_jittor.load_backend()
+    if backend is None:
+        _jittor_flash_attn_backend = _flashattn_jittor.backend_name()
+        if _flashattn_jittor.required():
+            raise RuntimeError(
+                "JITTOR_FLASH_ATTN_JITTOR_REQUIRED is set, but native "
+                "flashattn_jittor is unavailable: %s"
+                % (_flashattn_jittor.last_error() or "unknown error")
+            )
+        return None
+    _jittor_flash_attn_backend = _flashattn_jittor.backend_name()
+    fn = getattr(backend, name, None)
+    if callable(fn):
+        return fn
+    if _flashattn_jittor.required():
+        raise RuntimeError(
+            "native flashattn_jittor backend %s does not provide %s"
+            % (_jittor_flash_attn_backend, name)
+        )
+    return None
+
+
+def flashattn_jittor_backend():
+    if _flashattn_jittor is None:
+        return "math"
+    return _flashattn_jittor.backend_name()
+
+
+def flashattn_jittor_last_error():
+    if _flashattn_jittor is None:
+        return "jittor.torch_shim.flashattn_jittor could not be imported"
+    return _flashattn_jittor.last_error()
+
+
+def is_flashattn_jittor_available():
+    return _flashattn_jittor is not None and _flashattn_jittor.is_available()
 
 
 def _to_int_list(cu_seqlens):
@@ -92,6 +144,11 @@ def flash_attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_k,
                            dropout_p=0.0, softmax_scale=None, causal=False,
                            *args, **kwargs):
     """q,k,v: [total, H, C]; cu_seqlens_*: [B+1] int32. -> [total, H, Cv]."""
+    fn = _native_function("flash_attn_varlen_func")
+    if fn is not None:
+        return fn(q, k, v, cu_seqlens_q, cu_seqlens_k,
+                  max_seqlen_q, max_seqlen_k, dropout_p,
+                  softmax_scale, causal, *args, **kwargs)
     return _varlen_core(q, k, v, cu_seqlens_q, cu_seqlens_k, causal, softmax_scale)
 
 
@@ -99,6 +156,10 @@ def flash_attn_varlen_qkvpacked_func(qkv, cu_seqlens, max_seqlen,
                                      dropout_p=0.0, softmax_scale=None,
                                      causal=False, *args, **kwargs):
     """qkv: [total, 3, H, C]; cu_seqlens: [B+1] int32. -> [total, H, C]."""
+    fn = _native_function("flash_attn_varlen_qkvpacked_func")
+    if fn is not None:
+        return fn(qkv, cu_seqlens, max_seqlen, dropout_p,
+                  softmax_scale, causal, *args, **kwargs)
     q = qkv[:, 0]
     k = qkv[:, 1]
     v = qkv[:, 2]
@@ -110,6 +171,11 @@ def flash_attn_varlen_kvpacked_func(q, kv, cu_seqlens_q, cu_seqlens_k,
                                     dropout_p=0.0, softmax_scale=None,
                                     causal=False, *args, **kwargs):
     """q: [total_q, H, C]; kv: [total_kv, 2, H, C]. -> [total_q, H, Cv]."""
+    fn = _native_function("flash_attn_varlen_kvpacked_func")
+    if fn is not None:
+        return fn(q, kv, cu_seqlens_q, cu_seqlens_k,
+                  max_seqlen_q, max_seqlen_k, dropout_p,
+                  softmax_scale, causal, *args, **kwargs)
     k = kv[:, 0]
     v = kv[:, 1]
     return _varlen_core(q, k, v, cu_seqlens_q, cu_seqlens_k, causal, softmax_scale)
@@ -130,12 +196,18 @@ def _dense_core(q, k, v, causal, softmax_scale):
 def flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False,
                     *args, **kwargs):
     """q,k,v: [B, L, H, C]. -> [B, L, H, Cv]."""
+    fn = _native_function("flash_attn_func")
+    if fn is not None:
+        return fn(q, k, v, dropout_p, softmax_scale, causal, *args, **kwargs)
     return _dense_core(q, k, v, causal, softmax_scale)
 
 
 def flash_attn_qkvpacked_func(qkv, dropout_p=0.0, softmax_scale=None,
                               causal=False, *args, **kwargs):
     """qkv: [B, L, 3, H, C]. -> [B, L, H, C]."""
+    fn = _native_function("flash_attn_qkvpacked_func")
+    if fn is not None:
+        return fn(qkv, dropout_p, softmax_scale, causal, *args, **kwargs)
     q = qkv[:, :, 0]
     k = qkv[:, :, 1]
     v = qkv[:, :, 2]
@@ -145,6 +217,9 @@ def flash_attn_qkvpacked_func(qkv, dropout_p=0.0, softmax_scale=None,
 def flash_attn_kvpacked_func(q, kv, dropout_p=0.0, softmax_scale=None,
                              causal=False, *args, **kwargs):
     """q: [B, Lq, H, C]; kv: [B, Lkv, 2, H, C]. -> [B, Lq, H, Cv]."""
+    fn = _native_function("flash_attn_kvpacked_func")
+    if fn is not None:
+        return fn(q, kv, dropout_p, softmax_scale, causal, *args, **kwargs)
     k = kv[:, :, 0]
     v = kv[:, :, 1]
     return _dense_core(q, k, v, causal, softmax_scale)
