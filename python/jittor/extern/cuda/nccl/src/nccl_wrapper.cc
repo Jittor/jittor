@@ -54,6 +54,11 @@ nccl_initer() {
         const char* rf = getenv("JT_NCCL_ROOTINFO_FILE");
         int world_rank = env_r ? std::atoi(env_r) : 0;
         int local_rank = env_lr ? std::atoi(env_lr) : 0;
+        mpi_world_size = world_size;
+        mpi_world_rank = world_rank;
+        mpi_local_size = world_size;
+        mpi_local_rank = local_rank;
+        inside_mpi = true;
         nccl_device_id = device_count ? (local_rank % device_count) : 0;
         checkCudaErrors(cudaSetDevice(nccl_device_id));
         event_queue.run_sync([]() {

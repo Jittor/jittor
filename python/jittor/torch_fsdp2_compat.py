@@ -1,13 +1,15 @@
 """FSDP2/DTensor compatibility for the jittor torch shim.
 
-The implementation is intentionally single-rank: with world size 1, PyTorch
-FSDP2 keeps full parameters locally, so jittor should not replace parameters,
-change state_dicts, or insert communication.  This module provides the import
-surface and in-place FSDPModule marker methods expected by Accelerate,
-Transformers, and torchtitan-style code.
+World-size 1 keeps PyTorch FSDP2's original-parameter semantics: parameters stay
+full-size and communication APIs are no-ops.  When Jittor's NCCL launcher has
+initialized a multi-rank process group, this module enables a minimal true FSDP2
+path for dense parameters: parameters are stored as rank-local shards, gathered
+before forward, then resharded.  A small helper synchronizes sharded gradients for
+tests/benchmarks while the broader torch optimizer integration is filled in.
 """
 import contextlib
 import enum
+import os
 import sys
 import types
 
@@ -33,6 +35,132 @@ def _prod(xs):
             out *= int(x)
         except Exception:
             pass
+    return out
+
+
+def _world_size():
+    try:
+        return int(getattr(jt, "world_size", 1))
+    except Exception:
+        return 1
+
+
+def _rank():
+    try:
+        return int(getattr(jt, "rank", 0))
+    except Exception:
+        return 0
+
+
+def _in_true_distributed():
+    return _world_size() > 1 and (
+        os.environ.get("JT_NCCL_WORLD_SIZE") is not None
+        or os.environ.get("OMPI_COMM_WORLD_SIZE") is not None
+        or getattr(jt, "in_mpi", False)
+    )
+
+
+def _nccl_ops():
+    try:
+        return getattr(jt.compile_extern, "nccl_ops", None)
+    except Exception:
+        return None
+
+
+def _flatten_var(v):
+    return v.reshape((-1,))
+
+
+def _ceil_div(a, b):
+    return (int(a) + int(b) - 1) // int(b)
+
+
+def _pad_flat(flat, padded_numel):
+    n = int(flat.numel()) if callable(getattr(flat, "numel", None)) else int(np.prod(flat.shape))
+    if n == int(padded_numel):
+        return flat
+    pad = jt.zeros((int(padded_numel) - n,), dtype=flat.dtype)
+    return jt.concat([flat, pad], dim=0)
+
+
+def _slice_flat(flat, start, length):
+    start = int(start)
+    length = int(length)
+    return flat[start:start + length]
+
+
+def _all_gather_shards(local_shard):
+    ops = _nccl_ops()
+    if ops is not None and callable(getattr(ops, "nccl_all_gather", None)):
+        return ops.nccl_all_gather(local_shard)
+    if callable(getattr(local_shard, "mpi_all_gather", None)):
+        return local_shard.mpi_all_gather()
+    raise RuntimeError("Jittor NCCL all_gather is not available; launch with jittor.distributed.launch and use_nccl=1")
+
+
+def _reduce_scatter_padded(full_grad):
+    ops = _nccl_ops()
+    if ops is not None and callable(getattr(ops, "nccl_reduce_scatter", None)):
+        return ops.nccl_reduce_scatter(full_grad)
+    # Correct fallback for environments with all_reduce but without native
+    # reduce_scatter.  It communicates more than needed, but preserves semantics.
+    reduced = full_grad.mpi_all_reduce("sum")
+    shard = int(reduced.shape[0]) // max(_world_size(), 1)
+    return _slice_flat(reduced, _rank() * shard, shard)
+
+
+def _param_numel(v):
+    return int(np.prod(tuple(int(x) for x in v.shape)))
+
+
+def _named_parameters_with_owner(module, recurse=True):
+    out = []
+    seen = set()
+
+    def child_items(mod):
+        try:
+            items = mod.named_children()
+            if items is not None:
+                return list(items)
+        except Exception:
+            pass
+        try:
+            modules = getattr(mod, "_modules", None)
+            if callable(modules):
+                modules = modules()
+            if isinstance(modules, dict):
+                return list(modules.items())
+        except Exception:
+            pass
+        return []
+
+    def visit(mod, prefix=""):
+        dc = getattr(mod, "__dict__", {})
+        try:
+            from jittor import nn as _nn
+            if isinstance(mod, _nn.ParameterList):
+                dc = mod.params
+        except Exception:
+            pass
+        bufnames = getattr(mod, "__dict__", {}).get("_buffer_names", ())
+        for name, value in list(dc.items()):
+            if isinstance(name, str) and name.startswith("_"):
+                continue
+            if isinstance(value, jt.Var):
+                if id(value) in seen:
+                    continue
+                if getattr(value, "is_buffer", False) or not getattr(value, "persistent", True) or name in bufnames:
+                    continue
+                seen.add(id(value))
+                pname = f"{prefix}.{name}" if prefix else str(name)
+                out.append((pname, mod, name, value))
+        if recurse:
+            for name, value in child_items(mod):
+                if isinstance(value, nn.Module):
+                    child_prefix = f"{prefix}.{name}" if prefix else str(name)
+                    visit(value, child_prefix)
+
+    visit(module)
     return out
 
 
@@ -81,10 +209,14 @@ class DeviceMesh:
         return False
 
     def get_rank(self, *args, **kwargs):
-        return 0
+        return _rank() if self.size() > 1 else 0
 
     def get_local_rank(self, *args, **kwargs):
-        return 0
+        try:
+            return int(os.environ.get("JT_NCCL_LOCAL_RANK",
+                                      os.environ.get("LOCAL_RANK", "0")))
+        except Exception:
+            return 0
 
     def get_group(self, *args, **kwargs):
         return None
@@ -486,6 +618,160 @@ def _apply_fsdp_attr(module, name, value, recurse=True):
     return module
 
 
+def _init_true_fsdp_state(module, state):
+    if getattr(state, "true_fsdp_initialized", False):
+        return state
+    if not _in_true_distributed():
+        state.true_fsdp_initialized = False
+        return state
+    ws = _world_size()
+    rank = _rank()
+    entries = []
+    for name, owner, attr, param in _named_parameters_with_owner(module, recurse=True):
+        numel = _param_numel(param)
+        shard_numel = _ceil_div(numel, ws)
+        padded_numel = shard_numel * ws
+        flat_full = _pad_flat(_flatten_var(param), padded_numel)
+        local = _slice_flat(flat_full, rank * shard_numel, shard_numel)
+        local.sync()
+        entries.append(types.SimpleNamespace(
+            name=name,
+            owner=owner,
+            attr=attr,
+            shape=tuple(int(x) for x in param.shape),
+            dtype=param.dtype,
+            numel=numel,
+            padded_numel=padded_numel,
+            shard_numel=shard_numel,
+            shard=local,
+            full_param=None,
+        ))
+        object.__setattr__(owner, attr, local)
+    state.true_fsdp_initialized = True
+    state.true_fsdp_rank = rank
+    state.true_fsdp_world_size = ws
+    state.true_fsdp_params = entries
+    state.true_fsdp_unsharded = False
+    return state
+
+
+def _unshard_module_params(module):
+    state = getattr(module, "_fsdp_state", None)
+    if state is None or not getattr(state, "true_fsdp_initialized", False):
+        return module
+    if getattr(state, "true_fsdp_unsharded", False):
+        return module
+    for entry in state.true_fsdp_params:
+        gathered = _all_gather_shards(entry.shard)
+        full_flat = _slice_flat(gathered, 0, entry.numel)
+        full = full_flat.reshape(entry.shape)
+        entry.full_param = full
+        object.__setattr__(entry.owner, entry.attr, full)
+    state.true_fsdp_unsharded = True
+    return module
+
+
+def _reshard_module_params(module):
+    state = getattr(module, "_fsdp_state", None)
+    if state is None or not getattr(state, "true_fsdp_initialized", False):
+        return module
+    if not getattr(state, "true_fsdp_unsharded", False):
+        return module
+    for entry in state.true_fsdp_params:
+        object.__setattr__(entry.owner, entry.attr, entry.shard)
+        # Keep the full Var from the just-finished forward alive for
+        # sync_sharded_grads(loss): Jittor's autograd needs the exact Var object
+        # that participated in the forward graph.
+    state.true_fsdp_unsharded = False
+    return module
+
+
+def _execute_with_true_fsdp(module, orig_execute, *args, **kwargs):
+    state = getattr(module, "_fsdp_state", None)
+    if state is None or not getattr(state, "true_fsdp_initialized", False):
+        return orig_execute(*args, **kwargs)
+    _unshard_module_params(module)
+    try:
+        out = orig_execute(*args, **kwargs)
+    finally:
+        if getattr(state, "reshard_after_forward", True):
+            _reshard_module_params(module)
+    return out
+
+
+def _install_true_fsdp_execute(module):
+    state = getattr(module, "_fsdp_state", None)
+    if state is None or not getattr(state, "true_fsdp_initialized", False):
+        return module
+    if getattr(module, "_fsdp_orig_execute", None) is not None:
+        return module
+    orig_execute = getattr(module, "execute", None)
+    if not callable(orig_execute):
+        return module
+    object.__setattr__(module, "_fsdp_orig_execute", orig_execute)
+
+    def _wrapped_execute(self, *args, **kwargs):
+        return _execute_with_true_fsdp(self, self._fsdp_orig_execute, *args, **kwargs)
+
+    object.__setattr__(module, "execute", types.MethodType(_wrapped_execute, module))
+    return module
+
+
+def sync_sharded_grads(module, loss=None, *, divide_by_world_size=True):
+    """Return rank-local sharded gradients for a true-FSDP-managed module.
+
+    The helper computes gradients against gathered full parameters, then
+    reduce-scatters each flattened gradient so optimizers can update local shards.
+    It is intentionally explicit: Jittor's generic optimizer integration does not
+    yet know about FSDP2 sharded parameters.
+    """
+    state = getattr(module, "_fsdp_state", None)
+    if state is None or not getattr(state, "true_fsdp_initialized", False):
+        params = list(module.parameters())
+        return jt.grad(loss, params) if loss is not None else []
+    if loss is None:
+        raise ValueError("sync_sharded_grads() requires a loss for true FSDP2")
+    has_forward_params = all(getattr(entry, "full_param", None) is not None
+                             for entry in state.true_fsdp_params)
+    if not getattr(state, "true_fsdp_unsharded", False) and not has_forward_params:
+        _unshard_module_params(module)
+    full_params = [entry.full_param for entry in state.true_fsdp_params]
+    full_grads = jt.grad(loss, full_params)
+    sharded = []
+    for entry, grad in zip(state.true_fsdp_params, full_grads):
+        flat = _pad_flat(_flatten_var(grad), entry.padded_numel)
+        shard = _reduce_scatter_padded(flat)
+        if divide_by_world_size:
+            shard = shard / max(int(state.true_fsdp_world_size), 1)
+        sharded.append(shard)
+    state.true_fsdp_last_grads = sharded
+    return sharded
+
+
+def sharded_sgd_step(module, loss, lr=1e-4, *, divide_by_world_size=True):
+    state = getattr(module, "_fsdp_state", None)
+    if state is None or not getattr(state, "true_fsdp_initialized", False):
+        params = list(module.parameters())
+        grads = jt.grad(loss, params)
+        for p, g in zip(params, grads):
+            p.assign(p - g * lr)
+        return grads
+    grads = sync_sharded_grads(module, loss, divide_by_world_size=divide_by_world_size)
+    for entry, grad in zip(state.true_fsdp_params, grads):
+        entry.shard = entry.shard - grad * lr
+        object.__setattr__(entry.owner, entry.attr, entry.shard)
+        entry.full_param = None
+    state.true_fsdp_unsharded = False
+    return grads
+
+
+def local_sharded_state_dict(module):
+    state = getattr(module, "_fsdp_state", None)
+    if state is None or not getattr(state, "true_fsdp_initialized", False):
+        return module.state_dict()
+    return {entry.name: entry.shard for entry in state.true_fsdp_params}
+
+
 class _FSDPModuleMeta(type):
     def __instancecheck__(cls, obj):
         return bool(getattr(obj, "_is_fsdp_module", False)) or type.__instancecheck__(cls, obj)
@@ -493,9 +779,11 @@ class _FSDPModuleMeta(type):
 
 class FSDPModule(metaclass=_FSDPModuleMeta):
     def unshard(self, async_op=False):
+        _unshard_module_params(self)
         return UnshardHandle(self) if async_op else None
 
     def reshard(self):
+        _reshard_module_params(self)
         return None
 
     def reset_iter_state(self):
@@ -566,6 +854,15 @@ class FSDPModule(metaclass=_FSDPModuleMeta):
     def _get_fsdp_state(self):
         return getattr(self, "_fsdp_state", None)
 
+    def sync_sharded_grads(self, loss, *, divide_by_world_size=True):
+        return sync_sharded_grads(self, loss, divide_by_world_size=divide_by_world_size)
+
+    def sharded_sgd_step(self, loss, lr=1e-4, *, divide_by_world_size=True):
+        return sharded_sgd_step(self, loss, lr=lr, divide_by_world_size=divide_by_world_size)
+
+    def local_sharded_state_dict(self):
+        return local_sharded_state_dict(self)
+
 
 _FSDP_METHODS = (
     "unshard", "reshard", "reset_iter_state", "set_reshard_after_forward",
@@ -579,6 +876,7 @@ _FSDP_METHODS = (
     "set_gradient_divide_factor", "set_reduce_scatter_divide_factor",
     "set_force_sum_reduction_for_comms", "set_symm_mem_for_comm",
     "set_post_optim_event", "_get_fsdp_state",
+    "sync_sharded_grads", "sharded_sgd_step", "local_sharded_state_dict",
 )
 
 
@@ -635,7 +933,10 @@ def fully_shard(module, *, mesh=None, reshard_after_forward=True,
     object.__setattr__(module, "_is_fsdp_module", True)
     object.__setattr__(module, "_is_fsdp_managed_module", True)
     object.__setattr__(module, "_fsdp_use_orig_params", True)
-    return _inject_fsdp_methods(module)
+    _inject_fsdp_methods(module)
+    _init_true_fsdp_state(module, st)
+    _install_true_fsdp_execute(module)
+    return module
 
 
 def register_fsdp_forward_method(module, method_name):
@@ -998,6 +1299,9 @@ def install(dist, torch_module=None):
         ShardedGradScaler=ShardedGradScaler, fully_shard=fully_shard,
         register_fsdp_forward_method=register_fsdp_forward_method,
         share_comm_ctx=share_comm_ctx,
+        sync_sharded_grads=sync_sharded_grads,
+        sharded_sgd_step=sharded_sgd_step,
+        local_sharded_state_dict=local_sharded_state_dict,
     )
     for mod in (fsdp_mod, fsdp_api_mod, fsdp_full_mod, fsdp_fully_pkg,
                 fsdp_fully_mod, fsdp_fully_api_mod, comp_fsdp_mod,
@@ -1023,8 +1327,10 @@ def install(dist, torch_module=None):
             _get_module_fsdp_state_if_fully_sharded_module)
         mod._is_fsdp_managed_module = _is_fsdp_managed_module
     fsdp_param_mod.FlatParameter = FlatParameter
-    fsdp_collectives_mod.all_gather = lambda tensor, *a, **k: tensor
-    fsdp_collectives_mod.reduce_scatter = lambda tensor, *a, **k: tensor
+    fsdp_collectives_mod.all_gather = lambda tensor, *a, **k: (
+        _all_gather_shards(tensor) if _in_true_distributed() else tensor)
+    fsdp_collectives_mod.reduce_scatter = lambda tensor, *a, **k: (
+        _reduce_scatter_padded(tensor) if _in_true_distributed() else tensor)
     _install_wrap_helpers(fsdp_wrap_mod)
 
     tensor_factories = {

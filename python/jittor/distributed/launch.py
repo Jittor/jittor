@@ -25,6 +25,16 @@ import subprocess
 import sys
 
 
+def _visible_devices_for_rank(rank):
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if not visible:
+        return None
+    devices = [x.strip() for x in visible.split(",") if x.strip()]
+    if rank < len(devices):
+        return devices[rank]
+    return None
+
+
 def _detect_backend():
     try:
         import jittor
@@ -59,10 +69,14 @@ def main():
         env = dict(os.environ)
         env[f"{prefix}_WORLD_SIZE"] = str(a.nproc)
         env[f"{prefix}_RANK"] = str(rank)
-        env[f"{prefix}_LOCAL_RANK"] = str(rank)   # single node: local == global
+        visible_device = _visible_devices_for_rank(rank) if backend == "nccl" else None
+        if visible_device is not None:
+            env["CUDA_VISIBLE_DEVICES"] = visible_device
+            env[f"{prefix}_LOCAL_RANK"] = "0"
+        else:
+            env[f"{prefix}_LOCAL_RANK"] = str(rank)   # single node: local == global
         env[f"{prefix}_ROOTINFO_FILE"] = rootinfo
         env["cache_name"] = f"{backend}{rank}"    # per-rank JIT cache (no .so clash)
-        env["disable_lock"] = "1"
         logf = open(os.path.join(a.logdir, f"rank{rank}.log"), "w")
         print(f"[jt.launch] {backend} rank {rank} -> {' '.join(cmd)}  (log: {logf.name})", flush=True)
         procs.append((subprocess.Popen(cmd, env=env, stdout=logf, stderr=subprocess.STDOUT), logf))
