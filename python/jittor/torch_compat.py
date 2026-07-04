@@ -5547,7 +5547,7 @@ def _install_torchdata_stateful_dataloader(g):
 
 
 def _install_torchmetrics_fastpaths(g):
-    """Patch TorchMetrics internals with jittor-safe bounded fast paths.
+    """Patch TorchMetrics internals with jittor-safe fast paths.
 
     Public ``torch.bincount`` must keep PyTorch's output-length semantics, which
     require ``max(input.max()+1, minlength)`` and therefore a GPU->host sync in
@@ -5564,34 +5564,73 @@ def _install_torchmetrics_fastpaths(g):
         return
     g._torchmetrics_fastpaths_installed = True
 
-    def _patch_data_mod(mod):
-        if mod is None or getattr(mod, "_jittor_fast_bincount", False):
-            return mod
-        orig = getattr(mod, "_bincount", None)
-        if orig is None:
-            return mod
-
-        def _bounded_bincount(x, minlength=None):
-            if minlength is None or not isinstance(minlength, (int, np.integer)):
-                return orig(x, minlength=minlength)
-            ml = max(int(minlength), 0)
-            flat = x.reshape(-1).int64()
-            if flat.numel() == 0:
-                return jt.zeros((ml,), dtype=jt.int64)
-            out = jt.zeros((ml,), dtype=jt.int64)
-            src = jt.ones((flat.shape[0],), dtype=jt.int64)
-            return out.scatter_add(0, flat, src)
-
-        mod._bincount = _bounded_bincount
-        mod._jittor_fast_bincount = True
-        return mod
-
-    def _patch_bound_safe_divide(orig, fast):
+    def _patch_bound_torchmetrics_attr(attr, orig, fast):
         for name, mod in list(_sys.modules.items()):
             if not name.startswith("torchmetrics."):
                 continue
-            if getattr(mod, "_safe_divide", None) is orig:
-                setattr(mod, "_safe_divide", fast)
+            if getattr(mod, attr, None) is orig:
+                setattr(mod, attr, fast)
+
+    def _patch_data_mod(mod):
+        if mod is None:
+            return mod
+
+        if getattr(mod, "_jittor_fast_bincount", False):
+            fast = getattr(mod, "_bincount", None)
+            orig = getattr(fast, "_jittor_orig_bincount", None)
+            if orig is not None:
+                _patch_bound_torchmetrics_attr("_bincount", orig, fast)
+        else:
+            orig = getattr(mod, "_bincount", None)
+            if orig is not None:
+                def _bounded_bincount(x, minlength=None, _orig=orig):
+                    if minlength is None or not isinstance(minlength, (int, np.integer)):
+                        return _orig(x, minlength=minlength)
+                    ml = max(int(minlength), 0)
+                    flat = x.reshape(-1).int64()
+                    if flat.numel() == 0:
+                        return jt.zeros((ml,), dtype=jt.int64)
+                    out = jt.zeros((ml,), dtype=jt.int64)
+                    src = jt.ones((flat.shape[0],), dtype=jt.int64)
+                    return out.scatter_add(0, flat, src)
+
+                _bounded_bincount._jittor_orig_bincount = orig
+                mod._bincount = _bounded_bincount
+                mod._jittor_fast_bincount = True
+                _patch_bound_torchmetrics_attr("_bincount", orig, _bounded_bincount)
+
+        if getattr(mod, "_jittor_fast_dim_zero_cat", False):
+            fast = getattr(mod, "dim_zero_cat", None)
+            orig = getattr(fast, "_jittor_orig_dim_zero_cat", None)
+            if orig is not None:
+                _patch_bound_torchmetrics_attr("dim_zero_cat", orig, fast)
+        else:
+            orig = getattr(mod, "dim_zero_cat", None)
+            if orig is not None:
+                def _fast_dim_zero_cat(x, _orig=orig):
+                    if isinstance(x, jt.Var):
+                        return x
+                    try:
+                        n = len(x)
+                    except TypeError:
+                        return _orig(x)
+                    if n == 0:
+                        raise ValueError("No samples to concatenate")
+                    if n == 1:
+                        y = x[0]
+                        if not isinstance(y, jt.Var):
+                            return _orig(x)
+                        if y.numel() == 1 and getattr(y, "ndim", 0) == 0:
+                            return y.unsqueeze(0)
+                        return y.clone()
+                    return _orig(x)
+
+                _fast_dim_zero_cat._jittor_orig_dim_zero_cat = orig
+                mod.dim_zero_cat = _fast_dim_zero_cat
+                mod._jittor_fast_dim_zero_cat = True
+                _patch_bound_torchmetrics_attr("dim_zero_cat", orig, _fast_dim_zero_cat)
+
+        return mod
 
     def _patch_compute_mod(mod):
         if mod is None:
@@ -5600,7 +5639,7 @@ def _install_torchmetrics_fastpaths(g):
             fast = getattr(mod, "_safe_divide", None)
             orig = getattr(fast, "_jittor_orig_safe_divide", None)
             if orig is not None:
-                _patch_bound_safe_divide(orig, fast)
+                _patch_bound_torchmetrics_attr("_safe_divide", orig, fast)
             return mod
         orig = getattr(mod, "_safe_divide", None)
         if orig is None:
@@ -5620,7 +5659,7 @@ def _install_torchmetrics_fastpaths(g):
         _fast_safe_divide._jittor_orig_safe_divide = orig
         mod._safe_divide = _fast_safe_divide
         mod._jittor_fast_safe_divide = True
-        _patch_bound_safe_divide(orig, _fast_safe_divide)
+        _patch_bound_torchmetrics_attr("_safe_divide", orig, _fast_safe_divide)
         return mod
 
     _patch_data_mod(_sys.modules.get("torchmetrics.utilities.data"))

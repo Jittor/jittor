@@ -114,9 +114,22 @@ class TestTorchMetricsCompat(unittest.TestCase):
                          [1, 0, 0, 0, 0, 1])
 
         import torchmetrics.utilities.data as tm_data
+        tm_confmat = importlib.import_module("torchmetrics.functional.classification.confusion_matrix")
         self.assertTrue(getattr(tm_data, "_jittor_fast_bincount", False))
+        self.assertIs(tm_confmat._bincount, tm_data._bincount)
         self.assertEqual(tm_data._bincount(torch.tensor([0, 2, 2], dtype=torch.int64), minlength=4).numpy().tolist(),
                          [1, 0, 2, 0])
+
+        tm_spearman = importlib.import_module("torchmetrics.regression.spearman")
+        self.assertTrue(getattr(tm_data, "_jittor_fast_dim_zero_cat", False))
+        self.assertIs(tm_spearman.dim_zero_cat, tm_data.dim_zero_cat)
+        cat_src = torch.tensor([1.0, 2.0])
+        cat_out = tm_data.dim_zero_cat([cat_src])
+        self.assertIsNot(cat_out, cat_src)
+        np.testing.assert_array_equal(cat_out.numpy(), cat_src.numpy())
+        self.assertEqual(tm_data.dim_zero_cat([torch.tensor(3.0)]).numpy().tolist(), [3.0])
+        with self.assertRaises(ValueError):
+            tm_data.dim_zero_cat([])
 
         import torchmetrics.utilities.compute as tm_compute
         tm_accuracy = importlib.import_module("torchmetrics.functional.classification.accuracy")
