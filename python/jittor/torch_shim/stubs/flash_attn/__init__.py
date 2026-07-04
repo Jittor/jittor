@@ -146,9 +146,11 @@ def flash_attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_k,
     """q,k,v: [total, H, C]; cu_seqlens_*: [B+1] int32. -> [total, H, Cv]."""
     fn = _native_function("flash_attn_varlen_func")
     if fn is not None:
-        return fn(q, k, v, cu_seqlens_q, cu_seqlens_k,
-                  max_seqlen_q, max_seqlen_k, dropout_p,
-                  softmax_scale, causal, *args, **kwargs)
+        out = fn(q, k, v, cu_seqlens_q, cu_seqlens_k,
+                 max_seqlen_q, max_seqlen_k, dropout_p,
+                 softmax_scale, causal, *args, **kwargs)
+        if out is not None:
+            return out
     return _varlen_core(q, k, v, cu_seqlens_q, cu_seqlens_k, causal, softmax_scale)
 
 
@@ -158,8 +160,10 @@ def flash_attn_varlen_qkvpacked_func(qkv, cu_seqlens, max_seqlen,
     """qkv: [total, 3, H, C]; cu_seqlens: [B+1] int32. -> [total, H, C]."""
     fn = _native_function("flash_attn_varlen_qkvpacked_func")
     if fn is not None:
-        return fn(qkv, cu_seqlens, max_seqlen, dropout_p,
-                  softmax_scale, causal, *args, **kwargs)
+        out = fn(qkv, cu_seqlens, max_seqlen, dropout_p,
+                 softmax_scale, causal, *args, **kwargs)
+        if out is not None:
+            return out
     q = qkv[:, 0]
     k = qkv[:, 1]
     v = qkv[:, 2]
@@ -173,9 +177,11 @@ def flash_attn_varlen_kvpacked_func(q, kv, cu_seqlens_q, cu_seqlens_k,
     """q: [total_q, H, C]; kv: [total_kv, 2, H, C]. -> [total_q, H, Cv]."""
     fn = _native_function("flash_attn_varlen_kvpacked_func")
     if fn is not None:
-        return fn(q, kv, cu_seqlens_q, cu_seqlens_k,
-                  max_seqlen_q, max_seqlen_k, dropout_p,
-                  softmax_scale, causal, *args, **kwargs)
+        out = fn(q, kv, cu_seqlens_q, cu_seqlens_k,
+                 max_seqlen_q, max_seqlen_k, dropout_p,
+                 softmax_scale, causal, *args, **kwargs)
+        if out is not None:
+            return out
     k = kv[:, 0]
     v = kv[:, 1]
     return _varlen_core(q, k, v, cu_seqlens_q, cu_seqlens_k, causal, softmax_scale)
@@ -198,7 +204,9 @@ def flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False,
     """q,k,v: [B, L, H, C]. -> [B, L, H, Cv]."""
     fn = _native_function("flash_attn_func")
     if fn is not None:
-        return fn(q, k, v, dropout_p, softmax_scale, causal, *args, **kwargs)
+        out = fn(q, k, v, dropout_p, softmax_scale, causal, *args, **kwargs)
+        if out is not None:
+            return out
     return _dense_core(q, k, v, causal, softmax_scale)
 
 
@@ -207,7 +215,9 @@ def flash_attn_qkvpacked_func(qkv, dropout_p=0.0, softmax_scale=None,
     """qkv: [B, L, 3, H, C]. -> [B, L, H, C]."""
     fn = _native_function("flash_attn_qkvpacked_func")
     if fn is not None:
-        return fn(qkv, dropout_p, softmax_scale, causal, *args, **kwargs)
+        out = fn(qkv, dropout_p, softmax_scale, causal, *args, **kwargs)
+        if out is not None:
+            return out
     q = qkv[:, :, 0]
     k = qkv[:, :, 1]
     v = qkv[:, :, 2]
@@ -219,7 +229,9 @@ def flash_attn_kvpacked_func(q, kv, dropout_p=0.0, softmax_scale=None,
     """q: [B, Lq, H, C]; kv: [B, Lkv, 2, H, C]. -> [B, Lq, H, Cv]."""
     fn = _native_function("flash_attn_kvpacked_func")
     if fn is not None:
-        return fn(q, kv, dropout_p, softmax_scale, causal, *args, **kwargs)
+        out = fn(q, kv, dropout_p, softmax_scale, causal, *args, **kwargs)
+        if out is not None:
+            return out
     k = kv[:, :, 0]
     v = kv[:, :, 1]
     return _dense_core(q, k, v, causal, softmax_scale)

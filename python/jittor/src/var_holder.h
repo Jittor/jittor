@@ -319,6 +319,16 @@ struct VarHolder {
         return (uint64)var->mem_ptr;
     }
 
+    // @pyjt(__get__device_raw_ptr)
+    inline uint64 device_raw_ptr() {
+        sync(true, false);
+        #ifdef HAS_CUDA
+        if (!var->allocator->is_cuda())
+            migrate_to_gpu(var, get_allocator());
+        #endif
+        return (uint64)var->mem_ptr;
+    }
+
     /**
      * returns the Python number if the Var contains only one element.
      * For other cases, see data().

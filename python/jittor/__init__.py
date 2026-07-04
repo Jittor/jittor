@@ -806,6 +806,7 @@ def _install_torch_shim_runtime(enable=True):
     )
     _os_runtime.environ.setdefault("JITTOR_TORCH_PROJECT_ROOT", _project_root)
     _os_runtime.environ.setdefault("JITTOR_TORCH_RUNTIME_ROOT", _runtime_root)
+    _os_runtime.environ.setdefault("JITTOR_TORCH_SHIM", "1")
     _os_runtime.environ.setdefault("FIX_TORCH_ERROR", "0")
 
     result = None

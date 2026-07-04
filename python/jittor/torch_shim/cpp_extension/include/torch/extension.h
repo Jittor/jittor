@@ -54,7 +54,7 @@ enum class ScalarType : int8_t {
     Byte = 0, Char = 1, Short = 2, Int = 3, Long = 4,
     Half = 5, Float = 6, Double = 7,
     ComplexHalf = 8, ComplexFloat = 9, ComplexDouble = 10,
-    Bool = 11, UInt16 = 27, UInt32 = 28, UInt64 = 29, Undefined = 127,
+    Bool = 11, BFloat16 = 15, UInt16 = 27, UInt32 = 28, UInt64 = 29, Undefined = 127,
 };
 
 struct Dtype {
@@ -112,6 +112,8 @@ struct IntArrayRef {
     IntArrayRef(std::initializer_list<int64_t> l) : v(l) {}
     IntArrayRef(const std::vector<int64_t>& x) : v(x) {}
     IntArrayRef(const int64_t* p, size_t n) : v(p, p + n) {}
+    template <size_t N>
+    IntArrayRef(const int64_t (&x)[N]) : v(x, x + N) {}
     size_t size() const { return v.size(); }
     int64_t operator[](size_t i) const { return v[i]; }
     const int64_t* data() const { return v.data(); }
@@ -143,6 +145,34 @@ struct ArrayRef {
 
 // ------------------------- out-of-line bridge (defined in jtorch_aten.cu) ----
 class Tensor;
+namespace indexing {
+struct NoneType {};
+inline constexpr NoneType None{};
+
+struct Slice {
+    optional<int64_t> start, stop, step;
+    Slice() = default;
+    Slice(NoneType, int64_t stop_) : start(nullopt), stop(stop_), step(nullopt) {}
+    Slice(optional<int64_t> start_, optional<int64_t> stop_, optional<int64_t> step_ = nullopt)
+        : start(start_), stop(stop_), step(step_) {}
+};
+
+struct TensorIndex {
+    enum Kind { kEllipsis, kSlice, kInteger, kNone } kind = kEllipsis;
+    Slice slice;
+    int64_t integer = 0;
+    TensorIndex(const char* s) {
+        if (!s || std::string(s) != "...") {
+            throw std::runtime_error("only ellipsis string is supported in Tensor::index shim");
+        }
+        kind = kEllipsis;
+    }
+    TensorIndex(Slice s) : kind(kSlice), slice(std::move(s)) {}
+    TensorIndex(NoneType) : kind(kNone) {}
+    TensorIndex(int64_t i) : kind(kInteger), integer(i) {}
+};
+} // namespace indexing
+
 namespace detail {
     void*    vh_device_ptr(jittor::VarHolder*);        // device ptr, no cpu-migrate
     int64_t  vh_ndim(jittor::VarHolder*);
@@ -162,6 +192,7 @@ namespace detail {
     // python bridge
     bool     is_jittor_var(void* pyobj);
     bool     pyvar_is_ext_mutable(void* pyobj);
+    bool     pyvar_is_ext_readonly_borrow(void* pyobj);
     Tensor   tensor_from_pyvar(void* pyobj);           // borrow
     void     commit_tensor_to_pyvar(void* pyobj, const Tensor& t);
     void*    tensor_to_pyvar(const Tensor& t);         // +1 PyObject*
@@ -224,6 +255,9 @@ public:
     Tensor view(IntArrayRef shape) const;
     Tensor view(ScalarType st) const;          // bit-reinterpret to same-width dtype
     Tensor reshape(IntArrayRef shape) const { return view(shape); }
+    Tensor transpose(int64_t, int64_t) const {
+        throw std::runtime_error("Tensor::transpose is not implemented in the Jittor torch shim");
+    }
     Tensor clone() const;
     // in-place reallocation (diff-gaussian-rasterization's resizeFunctional grows
     // empty byte buffers to the size the rasterizer computes): swaps the underlying
@@ -231,6 +265,21 @@ public:
     // *this so `t.resize_({N}).data_ptr()` chains.
     Tensor& resize_(IntArrayRef shape);
     Tensor operator[](int64_t index) const;   // row i along dim 0 (copy)
+    Tensor index(std::initializer_list<indexing::TensorIndex>) const {
+        throw std::runtime_error("Tensor::index is not implemented in the Jittor torch shim");
+    }
+    Tensor& zero_() {
+        throw std::runtime_error("Tensor::zero_ is not implemented in the Jittor torch shim");
+    }
+    Tensor& fill_(double) {
+        throw std::runtime_error("Tensor::fill_ is not implemented in the Jittor torch shim");
+    }
+    Tensor& copy_(const Tensor&) {
+        throw std::runtime_error("Tensor::copy_ is not implemented in the Jittor torch shim");
+    }
+    const Tensor& copy_(const Tensor&) const {
+        throw std::runtime_error("Tensor::copy_ is not implemented in the Jittor torch shim");
+    }
 
     // method-form ATen ops (defined in jtorch_aten.cu; wired on first real use)
     Tensor cumsum(int64_t dim) const;
@@ -275,6 +324,10 @@ Tensor cumsum(const Tensor& self, int64_t dim, ScalarType out_dtype);
 Tensor argsort(const Tensor& self, int64_t dim = -1, bool descending = false);
 std::tuple<Tensor, Tensor> sort(const Tensor& self, int64_t dim = -1, bool descending = false);
 Tensor index_select(const Tensor& self, int64_t dim, const Tensor& index);
+inline Tensor reshape(const Tensor& self, IntArrayRef shape) { return self.reshape(shape); }
+inline void sum_out(Tensor&, const Tensor&, IntArrayRef) {
+    throw std::runtime_error("at::sum_out is not implemented in the Jittor torch shim");
+}
 // at::_unique(self, sorted=true, return_inverse=false) -> (unique_values, inverse_indices)
 std::tuple<Tensor, Tensor> _unique(const Tensor& self, bool sorted = true, bool return_inverse = false);
 
@@ -290,6 +343,11 @@ namespace c10 {
     using ScalarType = jtorch::ScalarType; using Device = jtorch::Device; using DeviceType = jtorch::DeviceType;
     template <typename T> using optional = jtorch::optional<T>;
     using jtorch::nullopt;
+    struct TensorOptions : public jtorch::TensorOptions {
+        TensorOptions() = default;
+        using jtorch::TensorOptions::TensorOptions;
+        TensorOptions(const jtorch::TensorOptions& o) : jtorch::TensorOptions(o) {}
+    };
 }
 namespace at {
     using Tensor = jtorch::Tensor; using jtorch::IntArrayRef; using jtorch::TensorOptions;
@@ -301,12 +359,13 @@ namespace at {
     using jtorch::empty_like; using jtorch::zeros_like; using jtorch::from_blob;
     using jtorch::dtype; using jtorch::device; using jtorch::device_of;
     using jtorch::cumsum; using jtorch::argsort; using jtorch::sort; using jtorch::index_select;
-    using jtorch::_unique;
+    using jtorch::reshape; using jtorch::sum_out; using jtorch::_unique;
     // ScalarType constants (exts use at::kInt / at::kFloat / ...)
     constexpr ScalarType kByte=ScalarType::Byte, kChar=ScalarType::Char, kShort=ScalarType::Short;
     constexpr ScalarType kInt=ScalarType::Int, kLong=ScalarType::Long, kHalf=ScalarType::Half;
+    constexpr ScalarType kFloat16=ScalarType::Half, kBFloat16=ScalarType::BFloat16;
     constexpr ScalarType kFloat=ScalarType::Float, kDouble=ScalarType::Double, kBool=ScalarType::Bool;
-    constexpr ScalarType kUInt16=ScalarType::UInt16, kUInt32=ScalarType::UInt32, kUInt64=ScalarType::UInt64;
+    constexpr ScalarType kBFloat=ScalarType::BFloat16, kUInt16=ScalarType::UInt16, kUInt32=ScalarType::UInt32, kUInt64=ScalarType::UInt64;
     constexpr DeviceType kCUDA=DeviceType::CUDA, kCPU=DeviceType::CPU;
 }
 namespace torch {
@@ -323,17 +382,20 @@ namespace torch {
     constexpr ScalarType kInt=ScalarType::Int,     kInt32=ScalarType::Int;
     constexpr ScalarType kLong=ScalarType::Long,   kInt64=ScalarType::Long;
     constexpr ScalarType kHalf=ScalarType::Half,   kFloat16=ScalarType::Half;
+    constexpr ScalarType kBFloat16=ScalarType::BFloat16;
     constexpr ScalarType kFloat=ScalarType::Float, kFloat32=ScalarType::Float;
     constexpr ScalarType kDouble=ScalarType::Double, kFloat64=ScalarType::Double;
     constexpr ScalarType kBool=ScalarType::Bool;
-    constexpr ScalarType kUInt16=ScalarType::UInt16, kUInt32=ScalarType::UInt32, kUInt64=ScalarType::UInt64;
+    constexpr ScalarType kBFloat=ScalarType::BFloat16, kUInt16=ScalarType::UInt16, kUInt32=ScalarType::UInt32, kUInt64=ScalarType::UInt64;
     constexpr DeviceType kCUDA=DeviceType::CUDA, kCPU=DeviceType::CPU;
+
+    namespace indexing = jtorch::indexing;
 
     using jtorch::empty; using jtorch::empty_like; using jtorch::zeros; using jtorch::zeros_like;
     using jtorch::ones; using jtorch::full; using jtorch::from_blob;
     using jtorch::dtype; using jtorch::device;
     using jtorch::cumsum; using jtorch::argsort; using jtorch::sort; using jtorch::index_select;
-    using jtorch::_unique;
+    using jtorch::reshape; using jtorch::sum_out; using jtorch::_unique;
 }
 
 // ---- macros ----------------------------------------------------------------

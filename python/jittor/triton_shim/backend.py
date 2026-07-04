@@ -18,7 +18,7 @@ Instead we:
 2. call :func:`triton.compile` with an **explicit** ``GPUTarget`` (so triton
    never touches its driver / torch), obtaining the **cubin**,
 3. load + launch that cubin ourselves with :mod:`ctypes` over ``libcuda.so.1``,
-   passing each tensor arg's ``Var.raw_ptr`` as a ``CUdeviceptr``.
+   passing each tensor arg's Jittor device pointer as a ``CUdeviceptr``.
 
 Triton kernels write their result **in place** through the output pointer the
 caller passed, so after a launch the caller's pre-allocated output ``Var`` simply
@@ -28,7 +28,7 @@ aliasing tricks.
 Correctness model (phase 1)
 ---------------------------
 The launch is bracketed by ``jt.sync_all(True)`` (so every input/output ``Var``
-is materialised and its ``raw_ptr`` valid) and a ``cuCtxSynchronize`` afterwards.
+is materialised and its device pointer valid) and a ``cuCtxSynchronize`` afterwards.
 This serialises at the boundary — correct but not maximally pipelined; phase 3
 moves the launch onto jittor's own stream as a graph node. See the plan.
 
@@ -450,8 +450,17 @@ def _is_tensor(v):
 
 
 def _tensor_ptr(v):
-    """Device base pointer of a tensor arg (``raw_ptr`` for Var, else ``data_ptr``)."""
+    """Device base pointer of a tensor arg.
+
+    Jittor's legacy ``raw_ptr`` property is CPU-oriented: it materialises and
+    migrates the Var to host before returning a pointer. Triton kernels need a
+    CUDA device pointer, so prefer the torch-shim-only ``device_raw_ptr`` when a
+    Jittor build provides it.
+    """
     if _is_var(v):
+        ptr = getattr(v, "device_raw_ptr", None)
+        if ptr is not None:
+            return int(ptr)
         return int(v.raw_ptr)
     return int(v.data_ptr())
 
@@ -566,6 +575,54 @@ GUARD_BYTES = 256 * 1024
 GUARD_MAX_PAYLOAD = 64 * 1024 * 1024
 #: opt-out hook (set False to disable bounce buffers entirely, e.g. for A/B tests)
 GUARD_ENABLE = True
+
+
+def _truthy_env(name):
+    return str(os.environ.get(name, "")).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _falsey_env(name):
+    return str(os.environ.get(name, "")).strip().lower() in ("0", "false", "no", "off")
+
+
+def _fast_sync_enabled():
+    """Use the torch-shim/TRELLIS fast path for bridge-mode Triton launches.
+
+    The conservative bridge serialises with Jittor both before and after every
+    kernel and copies every guarded bounce buffer back. TRELLIS/FlexGEMM forward
+    kernels pass read-only small operands through guarded buffers and write only
+    to explicit output Vars, so the extra copy-back and second global Jittor sync
+    are avoidable. Keep this gated so other projects can retain the older
+    behaviour by setting ``JITTOR_TRITON_FAST_SYNC=0``.
+    """
+    if _falsey_env("JITTOR_TRITON_FAST_SYNC"):
+        return False
+    return _truthy_env("JITTOR_TRITON_FAST_SYNC") or _truthy_env("JITTOR_TORCH_SHIM")
+
+
+def _copy_bounced_inputs_back():
+    if _truthy_env("JITTOR_TRITON_COPY_BOUNCED_INPUTS_BACK"):
+        return True
+    if _falsey_env("JITTOR_TRITON_COPY_BOUNCED_INPUTS_BACK"):
+        return False
+    return not _fast_sync_enabled()
+
+
+def _sync_after_launch_enabled():
+    if _falsey_env("JITTOR_TRITON_SYNC_AFTER_LAUNCH"):
+        return False
+    return True
+
+
+def _looks_like_output_arg(name):
+    n = str(name).lower()
+    return (
+        n in ("out", "output", "y", "dst", "grad_input", "grad_weight", "grad_bias")
+        or n.endswith("_out")
+        or n.endswith("_output")
+        or n.startswith("out_")
+        or n.startswith("output_")
+    )
 
 
 def _make_ast_source(ASTSource, jitfn, signature, constants):
@@ -711,7 +768,7 @@ def run(jitfn, args, kwargs, grid):
         for _a in list(args) + list(kwargs.values()):
             try:
                 if _is_var(_a) and tuple(_a.shape) == (64,) and "int" in str(_a.dtype):
-                    print("  PTRTRACE run() ENTRY sorted_idx-like rp=%x" % int(_a.raw_ptr),
+                    print("  PTRTRACE run() ENTRY sorted_idx-like rp=%x" % _tensor_ptr(_a),
                           file=_sys.stderr)
             except Exception:
                 pass
@@ -771,7 +828,7 @@ def run(jitfn, args, kwargs, grid):
                tuple(getattr(val, "shape", ())) == (64,) and "int" in str(val.dtype):
                 import sys as _sys
                 print("  PTRTRACE arg %s rp=%x is_cuda=%r" % (
-                    name, int(val.raw_ptr), _tensor_is_cuda(val)), file=_sys.stderr)
+                    name, _tensor_ptr(val), _tensor_is_cuda(val)), file=_sys.stderr)
             if not _tensor_is_cuda(val):
                 # A jittor Var can be host-resident even under use_cuda=1 (e.g. a
                 # `jt.array(...)` not yet consumed by a GPU op, or one that a C++
@@ -875,12 +932,12 @@ def run(jitfn, args, kwargs, grid):
     g = tuple(int(x) for x in g)
     g = (g + (1, 1, 1))[:3]
 
-    # -- materialise all Var memory so raw_ptr is valid + inputs computed ---- #
+    # -- materialise all Var memory so device pointers are valid + inputs computed ---- #
     _ptrtrace = os.environ.get("JT_TRITON_PTRTRACE")
     if _ptrtrace:
         import sys as _sys
         def _ptd():
-            return {n: (int(v.raw_ptr) if _is_var(v) else -1)
+            return {n: (_tensor_ptr(v) if _is_tensor(v) else -1)
                     for (n, s, v) in runtime_vals if _is_tensor(v)}
         print("  PTRTRACE before sync_all: %r" % {k: hex(x) for k, x in _ptd().items()}, file=_sys.stderr)
     jt.sync_all(True)
@@ -902,7 +959,7 @@ def run(jitfn, args, kwargs, grid):
             else:
                 ptr = _tensor_ptr(val)
                 nbytes = _tensor_nbytes(val, sig) if GUARD_ENABLE else 0
-                if 0 < nbytes <= GUARD_MAX_PAYLOAD:
+                if (not _looks_like_output_arg(name)) and 0 < nbytes <= GUARD_MAX_PAYLOAD:
                     # bounce through a guarded buffer so a masked over-read past the
                     # operand's end hits zeroed slack instead of an unmapped page.
                     try:
@@ -951,7 +1008,13 @@ def run(jitfn, args, kwargs, grid):
             g, block, info["shared"], len(cvals), len(bounced)), file=_sys.stderr)
         _sys.stderr.flush()
     drv.launch(func, g, block, info["shared"], params)
-    drv.synchronize()
+    need_sync_after_launch = (
+        _sync_after_launch_enabled()
+        or (scratch_base != 0)
+        or (bounced and _copy_bounced_inputs_back())
+    )
+    if need_sync_after_launch:
+        drv.synchronize()
     if _ptrtrace:
         import sys as _sys
         print("  PTRTRACE after  launch  : %r" % {k: hex(x) for k, x in _ptd().items()}, file=_sys.stderr)
@@ -963,19 +1026,21 @@ def run(jitfn, args, kwargs, grid):
     # buffer out from under a *subsequent* back-to-back bridge launch (observed as
     # a racy cudaErrorIllegalAddress only when launches are tightly packed, e.g.
     # an autotuner sweep). A second jittor barrier closes that window.
-    jt.sync_all(True)
+    if not _fast_sync_enabled():
+        jt.sync_all(True)
 
     # -- copy bounced tensors' results back into their Vars, recycle guards ---- #
     # The kernel wrote into the bounce buffers' payload region (a masked store
     # never touches the guard tail), so DtoD the payload back to where the caller
     # will read it. Inputs copy back byte-identical (a no-op functionally).
     if bounced:
-        for (orig_ptr, bbase, nbytes, bcap) in bounced:
-            try:
-                drv.copy_dtod(orig_ptr, bbase, nbytes)
-            except Exception:
-                pass
-        drv.synchronize()
+        if _copy_bounced_inputs_back():
+            for (orig_ptr, bbase, nbytes, bcap) in bounced:
+                try:
+                    drv.copy_dtod(orig_ptr, bbase, nbytes)
+                except Exception:
+                    pass
+            drv.synchronize()
         for (_orig_ptr, bbase, _nbytes, bcap) in bounced:
             drv.guard_release(bbase, bcap)
 

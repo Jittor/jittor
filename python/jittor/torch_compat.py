@@ -4515,6 +4515,57 @@ def _install_module_methods(nn):
     import collections as _collections2
     _IncompatibleKeys = _collections2.namedtuple("IncompatibleKeys",
                                                   ["missing_keys", "unexpected_keys"])
+    def _find_state_target(root, key):
+        obj = root
+        for part in str(key).split("."):
+            if isinstance(obj, nn.Sequential):
+                if part in obj.layers:
+                    obj = obj.layers[part]
+                elif str(part).isdigit() and int(part) in obj.layers:
+                    obj = obj.layers[int(part)]
+                else:
+                    return None
+            elif hasattr(obj, part):
+                obj = getattr(obj, part)
+            else:
+                return None
+        return obj
+
+    def _state_source_to_var(value):
+        if isinstance(value, jt.Var):
+            return value
+        try:
+            return jt.array(value.cpu().detach().numpy())
+        except Exception:
+            return jt.array(value)
+
+    def _preserve_target_dtypes_for_load(root, state_dict):
+        # torch.load_state_dict(assign=False), the default used by TRELLIS.2,
+        # copies checkpoint values into existing parameters/buffers and keeps
+        # the destination dtype.  Jittor's native load replaces through update(),
+        # so a bf16 target can be widened to fp32 when the loader had to widen a
+        # BF16 safetensor through numpy. Cast the source to the live target dtype
+        # before delegating to native load_state_dict.
+        if not isinstance(state_dict, dict):
+            return state_dict
+        converted = None
+        for key, value in state_dict.items():
+            target = _find_state_target(root, key)
+            if not isinstance(target, jt.Var):
+                continue
+            src = _state_source_to_var(value)
+            if not isinstance(src, jt.Var):
+                continue
+            if src.shape != target.shape:
+                continue
+            target_dtype = str(target.dtype)
+            if str(src.dtype) == target_dtype:
+                continue
+            if converted is None:
+                converted = dict(state_dict)
+            converted[key] = src.cast(target_dtype)
+        return state_dict if converted is None else converted
+
     def _load_state_dict(self, state_dict, strict=True, assign=False):
         # preserve trainable flags: jittor assign can flip stop_grad
         trainable = set()
@@ -4524,7 +4575,8 @@ def _install_module_methods(nn):
                     trainable.add(n)
         except Exception:
             pass
-        _orig_load_state_dict(self, state_dict)
+        load_state = state_dict if assign else _preserve_target_dtypes_for_load(self, state_dict)
+        _orig_load_state_dict(self, load_state)
         try:
             for n, p in self.named_parameters():
                 if n in trainable and p.is_stop_grad():

@@ -21,6 +21,7 @@ import inspect
 import json
 import os
 import pathlib
+import subprocess
 import sys
 import glob
 from types import ModuleType
@@ -57,6 +58,8 @@ _PUBLIC_FUNCS = (
     "flash_attn_varlen_qkvpacked_func",
     "flash_attn_varlen_kvpacked_func",
 )
+_READONLY_BORROW_ATTR = "_jittor_torch_ext_readonly_borrow"
+_MISSING_ATTR = object()
 _HOOK_NAMES = (
     "load_jittor_flash_attn",
     "build_jittor_flash_attn",
@@ -75,15 +78,19 @@ _RELATIVE_SOURCE_DIRS = (
     "flash_attn_jittor",
     "flashattnjittor",
     "flash-attention-jittor",
+    "flash-attention",
     "third_party/flashattn_jittor",
     "third_party/flash_attn_jittor",
     "third_party/flash-attention-jittor",
+    "third_party/flash-attention",
     "extern/flashattn_jittor",
     "extern/flash_attn_jittor",
+    "extern/flash-attention",
     "extensions/flashattn_jittor",
     "extensions/flash_attn_jittor",
+    "extensions/flash-attention",
 )
-_SOURCE_ROOT_NAMES = set(_DEFAULT_MODULE_NAMES + ("flash-attention-jittor",))
+_SOURCE_ROOT_NAMES = set(_DEFAULT_MODULE_NAMES + ("flash-attention-jittor", "flash-attention"))
 
 _UNSET = object()
 _BACKEND = _UNSET
@@ -232,6 +239,8 @@ def explicit_source_roots() -> List[str]:
 
 
 def _looks_like_source_root(root: pathlib.Path, explicit: bool = False) -> bool:
+    if _looks_like_official_flash_attention(root):
+        return True
     if any((root / name).is_file() for name in _MANIFEST_NAMES):
         return True
     if explicit and (root / "setup.py").is_file():
@@ -395,6 +404,457 @@ def _default_build_root(*parts: str) -> str:
     return path
 
 
+def _looks_like_official_flash_attention(root: pathlib.Path) -> bool:
+    return (
+        (root / "csrc" / "flash_attn" / "flash_api.cpp").is_file()
+        and (root / "csrc" / "flash_attn" / "src" / "flash.h").is_file()
+    )
+
+
+def _official_build_dir(root: pathlib.Path) -> str:
+    digest_key = os.fspath(root.resolve())
+    try:
+        head = subprocess.check_output(
+            ["git", "-C", os.fspath(root), "rev-parse", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+        if head:
+            digest_key += "|" + head
+    except Exception:
+        pass
+    digest_key += "|head_dims=" + ",".join(_official_head_dims(root))
+    digest_key += "|dtypes=" + ",".join(_official_dtypes())
+    digest_key += "|missing_forward_stubs=1"
+    digest = hashlib.sha256(digest_key.encode("utf-8")).hexdigest()[:16]
+    return _default_build_root("flashattn_jittor", "official_flash_attn", digest)
+
+
+def _ensure_official_cutlass(root: pathlib.Path) -> bool:
+    cutlass_h = root / "csrc" / "cutlass" / "include" / "cutlass" / "cutlass.h"
+    if cutlass_h.is_file():
+        return True
+    gitmodules = root / ".gitmodules"
+    if (root / ".git").exists() and gitmodules.is_file():
+        try:
+            _log("initializing official flash-attn CUTLASS submodule")
+            subprocess.run(
+                ["git", "-C", os.fspath(root), "submodule", "update", "--init", "csrc/cutlass"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        except Exception as exc:
+            _remember_error("initialize official flash-attn CUTLASS failed: %s" % exc)
+            return False
+    if not cutlass_h.is_file():
+        _remember_error("official flash-attn CUTLASS headers missing: %s" % cutlass_h)
+        return False
+    return True
+
+
+_OFFICIAL_FLASH_ATTN_HEAD_DIMS = ["32", "64", "96", "128", "192", "256"]
+_OFFICIAL_FLASH_ATTN_DTYPES = ["fp16", "bf16"]
+
+
+def _official_head_dims(root: pathlib.Path) -> List[str]:
+    raw = os.environ.get("JITTOR_FLASH_ATTN_HEAD_DIMS") or os.environ.get("FLASH_ATTN_HEAD_DIMS")
+    if raw:
+        if raw.strip().lower() in ("all", "full", "*"):
+            dims = list(_OFFICIAL_FLASH_ATTN_HEAD_DIMS)
+        else:
+            dims = [item.strip() for item in raw.replace(";", ",").split(",") if item.strip()]
+    else:
+        # TRELLIS.2 uses 128-wide attention heads. Other official kernels are
+        # covered by generated runtime stubs unless explicitly requested.
+        dims = ["128"]
+    src_dir = root / "csrc" / "flash_attn" / "src"
+    out = []
+    for dim in dims:
+        if not dim.isdigit():
+            continue
+        if (src_dir / ("flash_fwd_hdim%s_fp16_sm80.cu" % dim)).is_file():
+            out.append(dim)
+    return out or ["128"]
+
+
+def _official_dtypes() -> List[str]:
+    raw = os.environ.get("JITTOR_FLASH_ATTN_DTYPES") or os.environ.get("FLASH_ATTN_DTYPES")
+    if raw:
+        if raw.strip().lower() in ("all", "full", "*"):
+            dtypes = list(_OFFICIAL_FLASH_ATTN_DTYPES)
+        else:
+            dtypes = [item.strip().lower() for item in raw.replace(";", ",").split(",") if item.strip()]
+    else:
+        dtypes = list(_OFFICIAL_FLASH_ATTN_DTYPES)
+    out = [dt for dt in dtypes if dt in ("fp16", "bf16")]
+    return out or ["fp16", "bf16"]
+
+
+def _official_forward_sources(root: pathlib.Path) -> List[str]:
+    src_dir = root / "csrc" / "flash_attn" / "src"
+    sources: List[pathlib.Path] = [root / "csrc" / "flash_attn" / "flash_api.cpp"]
+    for prefix in ("flash_fwd", "flash_fwd_split"):
+        for dim in _official_head_dims(root):
+            for dtype in _official_dtypes():
+                for causal in ("", "_causal"):
+                    path = src_dir / ("%s_hdim%s_%s%s_sm80.cu" % (prefix, dim, dtype, causal))
+                    if path.is_file():
+                        sources.append(path)
+                    else:
+                        _remember_error("official flash-attn source missing: %s" % path)
+    return [os.fspath(p.resolve()) for p in sources]
+
+
+def _official_compiled_forward_specs(root: pathlib.Path) -> set:
+    src_dir = root / "csrc" / "flash_attn" / "src"
+    specs = set()
+    for dim in _official_head_dims(root):
+        for dtype in _official_dtypes():
+            for causal_suffix, causal in (("", False), ("_causal", True)):
+                fwd = src_dir / ("flash_fwd_hdim%s_%s%s_sm80.cu" % (dim, dtype, causal_suffix))
+                split = src_dir / ("flash_fwd_split_hdim%s_%s%s_sm80.cu" % (dim, dtype, causal_suffix))
+                if fwd.is_file():
+                    specs.add(("fwd", dtype, dim, causal))
+                if split.is_file():
+                    specs.add(("split", dtype, dim, causal))
+    return specs
+
+
+def _official_stub_source(build_dir: str, root: pathlib.Path) -> str:
+    path = pathlib.Path(build_dir) / "flashattn_jittor_bwd_stubs.cu"
+    compiled = _official_compiled_forward_specs(root)
+    fwd_lines = []
+    split_lines = []
+    bwd_lines = []
+    for dtype in _OFFICIAL_FLASH_ATTN_DTYPES:
+        ctype = "cutlass::half_t" if dtype == "fp16" else "cutlass::bfloat16_t"
+        for dim in _OFFICIAL_FLASH_ATTN_HEAD_DIMS:
+            for causal in (False, True):
+                cbool = "true" if causal else "false"
+                if ("fwd", dtype, dim, causal) not in compiled:
+                    fwd_lines.append("JT_FLASHATTN_FWD_STUB(%s, %s, %s)" % (ctype, dim, cbool))
+                if ("split", dtype, dim, causal) not in compiled:
+                    split_lines.append("JT_FLASHATTN_SPLIT_FWD_STUB(%s, %s, %s)" % (ctype, dim, cbool))
+                bwd_lines.append("JT_FLASHATTN_BWD_STUB(%s, %s, %s)" % (ctype, dim, cbool))
+
+    body = r'''
+#include <stdexcept>
+#include <cuda_runtime.h>
+#include "namespace_config.h"
+#include <cutlass/numeric_types.h>
+#include "flash.h"
+
+namespace FLASH_NAMESPACE {
+template<typename T, int Headdim, bool Is_causal>
+void run_mha_fwd_(Flash_fwd_params&, cudaStream_t) {
+    throw std::runtime_error("flashattn_jittor official backend was built without this forward kernel; set JITTOR_FLASH_ATTN_HEAD_DIMS=all or include the requested head dimension");
+}
+
+template<typename T, int Headdim, bool Is_causal>
+void run_mha_fwd_splitkv_dispatch(Flash_fwd_params&, cudaStream_t) {
+    throw std::runtime_error("flashattn_jittor official backend was built without this split forward kernel; set JITTOR_FLASH_ATTN_HEAD_DIMS=all or include the requested head dimension");
+}
+
+template<typename T, int Headdim, bool Is_causal>
+void run_mha_bwd_(Flash_bwd_params&, cudaStream_t) {
+    throw std::runtime_error("flashattn_jittor official backend supports forward inference only; backward is not implemented");
+}
+
+#define JT_FLASHATTN_FWD_STUB(DTYPE, HDIM, CAUSAL) \
+template void run_mha_fwd_<DTYPE, HDIM, CAUSAL>(Flash_fwd_params&, cudaStream_t);
+
+#define JT_FLASHATTN_SPLIT_FWD_STUB(DTYPE, HDIM, CAUSAL) \
+template void run_mha_fwd_splitkv_dispatch<DTYPE, HDIM, CAUSAL>(Flash_fwd_params&, cudaStream_t);
+
+#define JT_FLASHATTN_BWD_STUB(DTYPE, HDIM, CAUSAL) \
+template void run_mha_bwd_<DTYPE, HDIM, CAUSAL>(Flash_bwd_params&, cudaStream_t);
+
+%s
+%s
+%s
+#undef JT_FLASHATTN_FWD_STUB
+#undef JT_FLASHATTN_SPLIT_FWD_STUB
+#undef JT_FLASHATTN_BWD_STUB
+} // namespace FLASH_NAMESPACE
+''' % ("\n".join(fwd_lines), "\n".join(split_lines), "\n".join(bwd_lines))
+    try:
+        old = path.read_text(encoding="utf-8")
+    except OSError:
+        old = None
+    if old != body:
+        path.write_text(body, encoding="utf-8")
+    return os.fspath(path)
+
+
+def _official_flags() -> Tuple[List[str], List[str]]:
+    common = [
+        "-O3",
+        "-std=c++17",
+        "-DFLASHATTENTION_DISABLE_BACKWARD",
+        "-DFLASHATTENTION_DISABLE_DROPOUT",
+        "-DFLASHATTENTION_DISABLE_ALIBI",
+        "-DFLASHATTENTION_DISABLE_SOFTCAP",
+    ]
+    cuda = [
+        "-O3",
+        "-std=c++17",
+        "-U__CUDA_NO_HALF_OPERATORS__",
+        "-U__CUDA_NO_HALF_CONVERSIONS__",
+        "-U__CUDA_NO_HALF2_OPERATORS__",
+        "-U__CUDA_NO_BFLOAT16_CONVERSIONS__",
+        "--expt-relaxed-constexpr",
+        "--expt-extended-lambda",
+        "--use_fast_math",
+        "-DFLASHATTENTION_DISABLE_BACKWARD",
+        "-DFLASHATTENTION_DISABLE_DROPOUT",
+        "-DFLASHATTENTION_DISABLE_ALIBI",
+        "-DFLASHATTENTION_DISABLE_SOFTCAP",
+    ]
+    return common, cuda
+
+
+def _window_size_pair(window_size, window_size_left=-1, window_size_right=-1) -> Tuple[int, int]:
+    if window_size is not None:
+        try:
+            return int(window_size[0]), int(window_size[1])
+        except Exception:
+            pass
+    return int(window_size_left), int(window_size_right)
+
+
+def _flashattn_result(result, return_attn_probs: bool = False):
+    if return_attn_probs:
+        return result[0], result[1], result[2]
+    return result[0]
+
+
+def _dtype_name(x) -> str:
+    return str(getattr(x, "dtype", ""))
+
+
+def _native_supported_dtype(x) -> bool:
+    return _dtype_name(x) in ("float16", "bfloat16")
+
+
+def _float32_cast_target():
+    raw = (os.environ.get("JITTOR_FLASH_ATTN_CAST_FLOAT32") or "").strip().lower()
+    if raw in ("1", "true", "yes", "on", "bf16", "bfloat16"):
+        return "bfloat16"
+    if raw in ("fp16", "float16", "half"):
+        return "float16"
+    return None
+
+
+def _maybe_cast_float32_tensor(x, target: Optional[str]):
+    if target and _dtype_name(x) == "float32":
+        return x.to(target)
+    return x
+
+
+def _mark_readonly_borrow(*tensors):
+    saved = []
+    for tensor in tensors:
+        if tensor is None:
+            continue
+        try:
+            old_value = getattr(tensor, _READONLY_BORROW_ATTR)
+        except AttributeError:
+            old_value = _MISSING_ATTR
+        except Exception:
+            continue
+        try:
+            setattr(tensor, _READONLY_BORROW_ATTR, True)
+        except Exception:
+            continue
+        saved.append((tensor, old_value))
+    return saved
+
+
+def _restore_readonly_borrow(saved) -> None:
+    for tensor, old_value in reversed(saved):
+        try:
+            if old_value is _MISSING_ATTR:
+                delattr(tensor, _READONLY_BORROW_ATTR)
+            else:
+                setattr(tensor, _READONLY_BORROW_ATTR, old_value)
+        except Exception:
+            pass
+
+
+def _make_official_backend(low_level: ModuleType, root: pathlib.Path) -> ModuleType:
+    mod = ModuleType("flashattn_jittor_official")
+    mod.__file__ = os.fspath(root)
+    mod._flashattn_jittor_official = True
+    mod._flashattn_jittor_low_level = low_level
+
+    def _check_args(dropout_p, softcap, alibi_slopes, return_attn_probs):
+        if float(dropout_p) != 0.0:
+            raise RuntimeError("flashattn_jittor official backend supports dropout_p=0 only")
+        if float(softcap or 0.0) > 0.0:
+            raise RuntimeError("flashattn_jittor official backend does not support softcap")
+        if alibi_slopes is not None:
+            raise RuntimeError("flashattn_jittor official backend does not support alibi_slopes")
+        if return_attn_probs:
+            raise RuntimeError("flashattn_jittor official backend does not support return_attn_probs with dropout disabled")
+
+    def flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False,
+                        window_size=(-1, -1), softcap=0.0, alibi_slopes=None,
+                        deterministic=False, return_attn_probs=False, *args, **kwargs):
+        _check_args(dropout_p, softcap, alibi_slopes, return_attn_probs)
+        if not (_native_supported_dtype(q) and _native_supported_dtype(k) and _native_supported_dtype(v)):
+            target = _float32_cast_target()
+            if target and _dtype_name(q) == _dtype_name(k) == _dtype_name(v) == "float32":
+                q0 = q
+                q = _maybe_cast_float32_tensor(q, target)
+                k = _maybe_cast_float32_tensor(k, target)
+                v = _maybe_cast_float32_tensor(v, target)
+                return flash_attn_func(q, k, v, dropout_p, softmax_scale, causal,
+                                       window_size, softcap, alibi_slopes,
+                                       deterministic, return_attn_probs,
+                                       *args, **kwargs).to(q0.dtype)
+            return None
+        wl, wr = _window_size_pair(kwargs.get("window_size", window_size))
+        if softmax_scale is None:
+            softmax_scale = q.shape[-1] ** -0.5
+        saved = _mark_readonly_borrow(q, k, v, alibi_slopes)
+        try:
+            result = low_level.fwd(q, k, v, None, alibi_slopes, float(dropout_p),
+                                   float(softmax_scale), bool(causal), wl, wr,
+                                   float(softcap or 0.0), bool(return_attn_probs), None)
+        finally:
+            _restore_readonly_borrow(saved)
+        return _flashattn_result(result, return_attn_probs)
+
+    def flash_attn_qkvpacked_func(qkv, dropout_p=0.0, softmax_scale=None,
+                                  causal=False, window_size=(-1, -1), softcap=0.0,
+                                  alibi_slopes=None, deterministic=False,
+                                  return_attn_probs=False, *args, **kwargs):
+        return flash_attn_func(qkv[:, :, 0], qkv[:, :, 1], qkv[:, :, 2],
+                               dropout_p, softmax_scale, causal, window_size,
+                               softcap, alibi_slopes, deterministic,
+                               return_attn_probs, *args, **kwargs)
+
+    def flash_attn_kvpacked_func(q, kv, dropout_p=0.0, softmax_scale=None,
+                                 causal=False, window_size=(-1, -1), softcap=0.0,
+                                 alibi_slopes=None, deterministic=False,
+                                 return_attn_probs=False, *args, **kwargs):
+        return flash_attn_func(q, kv[:, :, 0], kv[:, :, 1],
+                               dropout_p, softmax_scale, causal, window_size,
+                               softcap, alibi_slopes, deterministic,
+                               return_attn_probs, *args, **kwargs)
+
+    def flash_attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_k,
+                               max_seqlen_q, max_seqlen_k,
+                               dropout_p=0.0, softmax_scale=None, causal=False,
+                               window_size=(-1, -1), softcap=0.0,
+                               alibi_slopes=None, deterministic=False,
+                               return_attn_probs=False, block_table=None,
+                               *args, **kwargs):
+        _check_args(dropout_p, softcap, alibi_slopes, return_attn_probs)
+        if not (_native_supported_dtype(q) and _native_supported_dtype(k) and _native_supported_dtype(v)):
+            target = _float32_cast_target()
+            if target and _dtype_name(q) == _dtype_name(k) == _dtype_name(v) == "float32":
+                q0 = q
+                q = _maybe_cast_float32_tensor(q, target)
+                k = _maybe_cast_float32_tensor(k, target)
+                v = _maybe_cast_float32_tensor(v, target)
+                return flash_attn_varlen_func(
+                    q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k,
+                    dropout_p, softmax_scale, causal, window_size, softcap,
+                    alibi_slopes, deterministic, return_attn_probs, block_table,
+                    *args, **kwargs).to(q0.dtype)
+            return None
+        wl, wr = _window_size_pair(kwargs.get("window_size", window_size))
+        if softmax_scale is None:
+            softmax_scale = q.shape[-1] ** -0.5
+        seqused_k = kwargs.get("seqused_k", None)
+        leftpad_k = kwargs.get("leftpad_k", None)
+        saved = _mark_readonly_borrow(
+            q, k, v, cu_seqlens_q, cu_seqlens_k,
+            seqused_k, leftpad_k, block_table, alibi_slopes,
+        )
+        try:
+            result = low_level.varlen_fwd(
+                q, k, v, None, cu_seqlens_q, cu_seqlens_k,
+                seqused_k, leftpad_k,
+                block_table, alibi_slopes, int(max_seqlen_q), int(max_seqlen_k),
+                float(dropout_p), float(softmax_scale), False, bool(causal),
+                wl, wr, float(softcap or 0.0), bool(return_attn_probs), None)
+        finally:
+            _restore_readonly_borrow(saved)
+        return _flashattn_result(result, return_attn_probs)
+
+    def flash_attn_varlen_qkvpacked_func(qkv, cu_seqlens, max_seqlen,
+                                         dropout_p=0.0, softmax_scale=None,
+                                         causal=False, window_size=(-1, -1),
+                                         softcap=0.0, alibi_slopes=None,
+                                         deterministic=False,
+                                         return_attn_probs=False, *args, **kwargs):
+        return flash_attn_varlen_func(qkv[:, 0], qkv[:, 1], qkv[:, 2],
+                                      cu_seqlens, cu_seqlens, max_seqlen, max_seqlen,
+                                      dropout_p, softmax_scale, causal, window_size,
+                                      softcap, alibi_slopes, deterministic,
+                                      return_attn_probs, *args, **kwargs)
+
+    def flash_attn_varlen_kvpacked_func(q, kv, cu_seqlens_q, cu_seqlens_k,
+                                        max_seqlen_q, max_seqlen_k,
+                                        dropout_p=0.0, softmax_scale=None,
+                                        causal=False, window_size=(-1, -1),
+                                        softcap=0.0, alibi_slopes=None,
+                                        deterministic=False,
+                                        return_attn_probs=False, *args, **kwargs):
+        return flash_attn_varlen_func(q, kv[:, 0], kv[:, 1], cu_seqlens_q,
+                                      cu_seqlens_k, max_seqlen_q, max_seqlen_k,
+                                      dropout_p, softmax_scale, causal, window_size,
+                                      softcap, alibi_slopes, deterministic,
+                                      return_attn_probs, *args, **kwargs)
+
+    mod.flash_attn_func = flash_attn_func
+    mod.flash_attn_qkvpacked_func = flash_attn_qkvpacked_func
+    mod.flash_attn_kvpacked_func = flash_attn_kvpacked_func
+    mod.flash_attn_varlen_func = flash_attn_varlen_func
+    mod.flash_attn_varlen_qkvpacked_func = flash_attn_varlen_qkvpacked_func
+    mod.flash_attn_varlen_kvpacked_func = flash_attn_varlen_kvpacked_func
+    return mod
+
+
+def _load_official_flash_attention(root: pathlib.Path) -> Optional[ModuleType]:
+    if not _looks_like_official_flash_attention(root):
+        return None
+    if not _ensure_official_cutlass(root):
+        return None
+    build_dir = _official_build_dir(root)
+    sources = _official_forward_sources(root)
+    sources.append(_official_stub_source(build_dir, root))
+    include_dirs = [
+        os.fspath((root / "csrc" / "flash_attn").resolve()),
+        os.fspath((root / "csrc" / "flash_attn" / "src").resolve()),
+        os.fspath((root / "csrc" / "cutlass" / "include").resolve()),
+    ]
+    cflags, cuda_cflags = _official_flags()
+    module_name = "flash_attn_2_cuda_jittor"
+    _log("compile official flash-attn forward backend from %s" % root)
+    try:
+        from jittor.torch_shim.cpp_extension.torch_utils import load
+
+        low = load(
+            name=module_name,
+            sources=sources,
+            extra_include_paths=include_dirs,
+            extra_cflags=cflags,
+            extra_cuda_cflags=cuda_cflags,
+            build_directory=build_dir,
+            verbose=_verbose(),
+            force=_truthy(os.environ.get("JITTOR_FLASH_ATTN_FORCE_BUILD")),
+        )
+    except Exception as exc:
+        _remember_error("compile official flash-attn backend failed: %s" % exc)
+        return None
+    return _make_official_backend(low, root)
+
+
 def _manifest_build_dir(root: pathlib.Path, manifest: pathlib.Path, module_name: str) -> str:
     digest_key = os.fspath(root.resolve()) + "|" + os.fspath(manifest.resolve())
     digest = hashlib.sha256(digest_key.encode("utf-8")).hexdigest()[:16]
@@ -540,6 +1000,9 @@ def _load_from_source_root(raw_root: str) -> Optional[ModuleType]:
     root = pathlib.Path(raw_root).expanduser().resolve()
     _add_source_to_sys_path(root)
 
+    if _looks_like_official_flash_attention(root):
+        return _load_official_flash_attention(root)
+
     for manifest in _manifest_paths(root):
         mod = _load_manifest(root, manifest)
         if mod is not None:
@@ -587,12 +1050,14 @@ def load_backend(force: bool = False) -> Optional[ModuleType]:
             if mod is not None:
                 _BACKEND = mod
                 _BACKEND_NAME = "%s:%s" % (getattr(mod, "__name__", "flashattn_jittor"), root)
+                _LAST_ERROR = None
                 return mod
 
         mod = _import_from_known_modules()
         if mod is not None:
             _BACKEND = mod
             _BACKEND_NAME = getattr(mod, "__name__", "flashattn_jittor")
+            _LAST_ERROR = None
             return mod
 
         for root in candidate_source_roots():
@@ -602,6 +1067,7 @@ def load_backend(force: bool = False) -> Optional[ModuleType]:
             if mod is not None:
                 _BACKEND = mod
                 _BACKEND_NAME = "%s:%s" % (getattr(mod, "__name__", "flashattn_jittor"), root)
+                _LAST_ERROR = None
                 return mod
 
         _BACKEND = None

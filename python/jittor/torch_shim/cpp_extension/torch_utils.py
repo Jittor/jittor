@@ -144,7 +144,7 @@ except Exception:  # pragma: no cover - setuptools missing
 
 def load(name, sources, extra_include_paths=None, extra_cflags=None,
          extra_cuda_cflags=None, extra_ldflags=None, build_directory=None,
-         verbose=False, **kw):
+         verbose=False, define_macros=None, force=False, **kw):
     """Compile sources against Jittor's libtorch ABI shim and import the module."""
     from jittor.torch_shim import cpp_extension as _b
     if isinstance(sources, str):
@@ -159,11 +159,12 @@ def load(name, sources, extra_include_paths=None, extra_cflags=None,
         build_dir=build_directory,
         output_path=out_path,
         include_dirs=list(extra_include_paths or []),
-        define_macros=None,
+        define_macros=list(define_macros or []),
         extra_cflags=list(extra_cflags or []),
         extra_cuda_cflags=list(extra_cuda_cflags or []),
         extra_ldflags=list(extra_ldflags or []),
         verbose=verbose,
+        force=force,
     )
     spec = importlib.util.spec_from_file_location(name, out_path)
     mod = importlib.util.module_from_spec(spec)

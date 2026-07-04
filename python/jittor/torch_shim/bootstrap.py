@@ -233,7 +233,20 @@ def _candidate_roots(root: pathlib.Path, max_depth: int) -> List[pathlib.Path]:
     return roots
 
 
+def _is_official_flash_attention_root(root: pathlib.Path) -> bool:
+    cur = root.resolve()
+    for probe in (cur, *cur.parents):
+        if (
+            (probe / "csrc" / "flash_attn" / "flash_api.cpp").is_file()
+            and (probe / "csrc" / "flash_attn" / "src" / "flash.h").is_file()
+        ):
+            return True
+    return False
+
+
 def _extension_from_root(root: pathlib.Path, max_source_depth: int = 4) -> Optional[NativeExtension]:
+    if _is_official_flash_attention_root(root):
+        return None
     setup_py = root / "setup.py"
     pyproject = root / "pyproject.toml"
     cmake = root / "CMakeLists.txt"
@@ -771,6 +784,7 @@ def enable(
     _configure_runtime_driver_lib(runtime)
 
     for name, value in (
+        ("JITTOR_TORCH_SHIM", "1"),
         ("DISABLE_MULTIPROCESSING", "1"),
         ("use_cutt", "0"),
         ("use_cutlass", "0"),

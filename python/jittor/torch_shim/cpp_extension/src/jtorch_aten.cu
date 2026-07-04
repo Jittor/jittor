@@ -2,6 +2,7 @@
 // .so). Compiled by nvcc. The public torch/extension.h stays jittor/CUDA-free so
 // it never drags float3/int3 into extension TUs.
 #include <cuda_runtime.h>
+#include <cuda_bf16.h>
 #include <algorithm>
 #include <cstring>
 #include <vector>
@@ -31,6 +32,7 @@ static const char* scalar_to_jt(ScalarType s) {
         case ScalarType::Int:    return "int32";
         case ScalarType::Long:   return "int64";
         case ScalarType::Half:   return "float16";
+        case ScalarType::BFloat16:return "bfloat16";
         case ScalarType::Float:  return "float32";
         case ScalarType::Double: return "float64";
         case ScalarType::Bool:   return "bool";
@@ -48,6 +50,7 @@ static int64_t scalar_size(ScalarType s) {
             return 1;
         case ScalarType::Short:
         case ScalarType::Half:
+        case ScalarType::BFloat16:
         case ScalarType::UInt16:
             return 2;
         case ScalarType::Int:
@@ -70,6 +73,7 @@ ScalarType detail::name_to_scalar(const char* n) {
     if (s=="int32")  return ScalarType::Int;
     if (s=="int64")  return ScalarType::Long;
     if (s=="float16")return ScalarType::Half;
+    if (s=="bfloat16")return ScalarType::BFloat16;
     if (s=="float32")return ScalarType::Float;
     if (s=="float64")return ScalarType::Double;
     if (s=="bool")   return ScalarType::Bool;
@@ -216,6 +220,19 @@ bool pyvar_is_ext_mutable(void* obj) {
     Py_DECREF(attr);
     return ok == 1;
 }
+bool pyvar_is_ext_readonly_borrow(void* obj) {
+    PyObject* pyobj = (PyObject*)obj;
+    if (!pyobj || Py_TYPE(pyobj) != &jittor::PyjtVarHolder.ht_type)
+        return false;
+    PyObject* attr = PyObject_GetAttrString(pyobj, "_jittor_torch_ext_readonly_borrow");
+    if (!attr) {
+        PyErr_Clear();
+        return false;
+    }
+    int ok = PyObject_IsTrue(attr);
+    Py_DECREF(attr);
+    return ok == 1;
+}
 static bool pyvar_force_cpu(void* obj) {
     PyObject* pyobj = (PyObject*)obj;
     if (!pyobj || Py_TYPE(pyobj) != &jittor::PyjtVarHolder.ht_type)
@@ -269,7 +286,7 @@ void commit_tensor_to_pyvar(void* obj, const Tensor& t) {
 Tensor tensor_from_pyvar(void* obj) {
     jittor::VarHolder* vh = jittor::from_py_object<jittor::VarHolder*>((PyObject*)obj);
     Tensor borrowed = adopt(vh, /*owns=*/false);    // python owns it; we borrow
-    if (pyvar_is_ext_mutable(obj))
+    if (pyvar_is_ext_mutable(obj) || pyvar_is_ext_readonly_borrow(obj))
         return borrowed;
     if (pyvar_force_cpu(obj) && borrowed.defined()) {
         jittor::NanoVector nv = to_nv(borrowed.sizes());
@@ -442,6 +459,17 @@ static Tensor _full_typed(IntArrayRef size, T value, TensorOptions opt, ScalarTy
     }
     return t;
 }
+static Tensor _full_bfloat16(IntArrayRef size, double value, TensorOptions opt) {
+    Tensor t = empty(size, TensorOptions(ScalarType::BFloat16).device(opt_is_cpu(opt)?DeviceType::CPU:DeviceType::CUDA));
+    int64_t n = t.numel();
+    void* p = t.data_ptr_void();
+    std::unique_ptr<__nv_bfloat16[]> host(new __nv_bfloat16[n]);
+    __nv_bfloat16 v = __float2bfloat16((float)value);
+    for (int64_t i = 0; i < n; ++i) host[i] = v;
+    if (detail::vh_is_cuda(t._vh())) cudaMemcpy(p, host.get(), n * sizeof(__nv_bfloat16), cudaMemcpyHostToDevice);
+    else std::memcpy(p, host.get(), n * sizeof(__nv_bfloat16));
+    return t;
+}
 // Saturating double->unsigned cast: the sentinel uint{32,64}_max the flex_gemm
 // hashmap kernels pass through full()'s double `value` rounds above the type max,
 // so clamp at/above-max to the exact max and floor negatives to 0.
@@ -460,6 +488,7 @@ Tensor full(IntArrayRef size, double value, TensorOptions opt) {
         case ScalarType::Int:    return _full_typed<int32_t>(size, (int32_t)value, opt, st);
         case ScalarType::Long:   return _full_typed<int64_t>(size, (int64_t)value, opt, st);
         case ScalarType::Short:  return _full_typed<int16_t>(size, (int16_t)value, opt, st);
+        case ScalarType::BFloat16:return _full_bfloat16(size, value, opt);
         case ScalarType::Byte:   return _full_typed<uint8_t>(size, (uint8_t)value, opt, st);
         case ScalarType::Bool:   return _full_typed<unsigned char>(size, (unsigned char)(value!=0), opt, st);
         // unsigned integer dtypes: flex_gemm's hashmap kernels do

@@ -210,6 +210,22 @@ class TestStateDict(Base):
             self.ac(wb2, wa, atol=0, rtol=0, msg=f"load changed weights {dev}")
         both_devices(body)
 
+    def test_load_state_dict_preserves_target_dtype(self):
+        def body(dev):
+            dst = nn.Linear(4, 3)
+            dst.weight.data = dst.weight.data.bfloat16()
+            dst.bias.data = dst.bias.data.bfloat16()
+            src = {
+                "weight": torch.ones_like(dst.weight.float()),
+                "bias": torch.zeros_like(dst.bias.float()),
+            }
+            dst.load_state_dict(src)
+            params = dict(dst.named_parameters())
+            self.assertEqual(str(params["weight"].dtype), "bfloat16", f"weight dtype {dev}")
+            self.assertEqual(str(params["bias"].dtype), "bfloat16", f"bias dtype {dev}")
+
+        both_devices(body)
+
     def test_state_dict_load_state_dict_multilayer(self):
         # A small Sequential-like stack: keys are dotted submodule paths.
         rs = np.random.RandomState(11)
