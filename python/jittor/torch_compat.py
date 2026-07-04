@@ -277,7 +277,10 @@ def _make_cpu_resident(v):
         return v
     if _var_is_cpu_resident(v):
         return v
-    arr = v.numpy()
+    try:
+        arr = v.clone().numpy()
+    except Exception:
+        arr = v.numpy()
     with jt.flag_scope(use_cuda=0):
         out = jt.array(arr)
         out.sync()
@@ -288,15 +291,37 @@ def _make_cpu_resident(v):
     return out
 
 
-def _make_cuda_resident(v):
+def _make_cuda_resident(v, force=False):
     """Return a CUDA-resident copy of Var `v` (no-op if CUDA is off or already on
     device). Rebuild under use_cuda=1 so the device allocator backs it."""
     if not isinstance(v, jt.Var):
         return v
     if not jt.flags.use_cuda:
         return v
-    if not _var_is_cpu_resident(v):
+    loc = None
+    try:
+        loc = v.location()
+    except Exception:
+        loc = None
+    if loc == "device":
         return v
+    try:
+        if not getattr(v, "_jittor_torch_force_cpu", False) and loc not in ("cpu", "disk"):
+            with jt.flag_scope(use_cuda=1):
+                v.sync()
+            if v.location() == "device":
+                try:
+                    v._jittor_torch_force_cpu = False
+                except Exception:
+                    pass
+                return v
+    except Exception:
+        pass
+    try:
+        if not force and v.location() == "device":
+            return v
+    except Exception:
+        pass
     arr = v.numpy()
     with jt.flag_scope(use_cuda=1):
         out = jt.array(arr)
@@ -984,6 +1009,9 @@ def install(torch):
         # extensions' tensor.is_cpu() checks pass.
         if _device_is_cpu(device):
             v = _make_cpu_resident(v)
+        elif _device_is_cuda(device):
+            jt.flags.use_cuda = 1
+            v = _make_cuda_resident(v, force=True)
         if requires_grad:
             v.requires_grad_(True)
             _torch_register_leaf(v)
@@ -993,13 +1021,23 @@ def install(torch):
     def as_tensor(data, dtype=None, device=None):
         if isinstance(data, Var):
             r = data if dtype is None else data.cast(_dtype_to_str(dtype))
-            return _make_cpu_resident(r) if _device_is_cpu(device) else r
+            if _device_is_cpu(device):
+                return _make_cpu_resident(r)
+            if _device_is_cuda(device):
+                jt.flags.use_cuda = 1
+                return _make_cuda_resident(r, force=True)
+            return r
         return tensor(data, dtype=dtype, device=device)
     g.as_tensor = as_tensor
 
     def from_numpy(arr, *, device=None):
         v = _array_keep_dtype(arr)
-        return _make_cpu_resident(v) if _device_is_cpu(device) else v
+        if _device_is_cpu(device):
+            return _make_cpu_resident(v)
+        if _device_is_cuda(device):
+            jt.flags.use_cuda = 1
+            return _make_cuda_resident(v, force=True)
+        return v
     g.from_numpy = from_numpy
 
     def frombuffer(buffer, *, dtype, count=-1, offset=0, requires_grad=False):
@@ -2976,6 +3014,8 @@ def _wrap_constructors(g):
             _requested_device = kwargs.get("device")
             _want_cpu = _device_is_cpu(_requested_device)
             _want_cuda = _device_is_cuda(_requested_device)
+            if _want_cuda:
+                jt.flags.use_cuda = 1
             _requires_grad = bool(kwargs.get("requires_grad", False))
             for k in _DROP:
                 kwargs.pop(k, None)
@@ -3045,7 +3085,7 @@ def _wrap_constructors(g):
             if _cast_to is not None:
                 out = out.cast(_cast_to)
             if _want_cuda:
-                out = _make_cuda_resident(out)
+                out = _make_cuda_resident(out, force=True)
             try:
                 out._jittor_torch_ext_mutable = True
             except Exception:
@@ -4409,21 +4449,121 @@ def _install_module_methods(nn):
                     p.assign(p.cast(ds))
         return self
 
-    if not hasattr(M, "to"):
-        def _module_to(self, *args, **kwargs):
-            # torch Module.to(device/dtype/...) -- cast float params to a dtype
-            # if one is given; device moves are no-ops on single-device jittor.
-            ds = None
-            for a in list(args) + list(kwargs.values()):
-                if isinstance(a, dtype):
-                    ds = a.name
-                elif isinstance(a, str) and a.replace("torch.", "") in dtype._registry:
-                    ds = a.replace("torch.", "")
-            return _module_cast_float_dtype(self, ds)
-        M.to = _module_to
+    def _module_replace_vars(self, convert):
+        converted = {}
+        try:
+            modules = list(self.modules()) if hasattr(self, "modules") else [self]
+        except Exception:
+            modules = [self]
+        if not modules or modules[0] is not self:
+            modules.insert(0, self)
+        seen = set()
+        for module in modules:
+            mid = id(module)
+            if mid in seen:
+                continue
+            seen.add(mid)
+            attrs = []
+            if hasattr(module, "params"):
+                attrs.append(("params", getattr(module, "params")))
+            attrs.append(("__dict__", getattr(module, "__dict__", {})))
+            for _container_name, container in attrs:
+                if not isinstance(container, dict):
+                    continue
+                buffer_names = getattr(module, "_buffer_names", set())
+                for name, value in list(container.items()):
+                    if isinstance(value, jt.Var):
+                        if _container_name == "__dict__":
+                            is_public_param = not (isinstance(name, str) and name.startswith("_"))
+                            is_buffer = getattr(value, "is_buffer", False) or name in buffer_names
+                            if not (is_public_param or is_buffer):
+                                continue
+                        vid = id(value)
+                        if vid in converted:
+                            new_value = converted[vid]
+                        else:
+                            new_value = convert(value)
+                            converted[vid] = new_value
+                            if new_value is not value:
+                                try:
+                                    new_value.persistent = getattr(value, "persistent")
+                                except Exception:
+                                    pass
+                                try:
+                                    new_value.is_buffer = getattr(value, "is_buffer")
+                                except Exception:
+                                    pass
+                                try:
+                                    new_value._torch_grad = getattr(value, "_torch_grad")
+                                except Exception:
+                                    pass
+                                try:
+                                    if value.is_stop_grad() and not new_value.is_stop_grad():
+                                        new_value.stop_grad()
+                                    elif (not value.is_stop_grad()) and new_value.is_stop_grad():
+                                        new_value.start_grad()
+                                        _torch_register_leaf(new_value)
+                                except Exception:
+                                    pass
+                                try:
+                                    reg = getattr(jt, "_torch_leaf_params", None)
+                                    if isinstance(reg, dict) and vid in reg:
+                                        reg.pop(vid, None)
+                                        if not new_value.is_stop_grad():
+                                            reg[id(new_value)] = new_value
+                                except Exception:
+                                    pass
+                        if new_value is value:
+                            continue
+                        container[name] = new_value
+        return self
 
-    if not hasattr(M, "cpu"):
-        M.cpu = lambda self: self
+    def _module_to(self, *args, **kwargs):
+        # torch Module.to(device/dtype/...) casts floating tensors and migrates
+        # tensor residency when an explicit cpu/cuda device is requested.
+        ds = None
+        dev = kwargs.get("device")
+        for a in list(args) + list(kwargs.values()):
+            if isinstance(a, dtype):
+                ds = a.name
+            elif isinstance(a, device):
+                dev = a
+            elif isinstance(a, jt.Var):
+                ds = str(a.dtype)
+                dev = a.device
+            elif isinstance(a, str):
+                bare = a.replace("torch.", "")
+                if bare in dtype._registry:
+                    ds = bare
+                elif bare.split(":")[0] in ("cpu", "cuda", "npu"):
+                    dev = bare
+        if _device_is_cuda(dev):
+            jt.flags.use_cuda = 1
+
+        def convert(v):
+            out = v
+            if ds is not None and ds in ("float16", "bfloat16", "float32", "float64"):
+                is_float = v.dtype.is_float() if hasattr(v.dtype, "is_float") else ("float" in str(v.dtype))
+                if is_float:
+                    out = out.cast(ds)
+            if _device_is_cpu(dev):
+                out = _make_cpu_resident(out)
+            elif _device_is_cuda(dev):
+                out = _make_cuda_resident(out, force=True)
+            return out
+
+        if dev is not None or ds is not None:
+            return _module_replace_vars(self, convert)
+        return self
+    M.to = _module_to
+
+    def _module_cuda(self, dev=None):
+        return _module_to(self, device("cuda", dev) if isinstance(dev, int) else "cuda")
+    def _module_npu(self, dev=None):
+        return _module_to(self, device("npu", dev) if isinstance(dev, int) else "npu")
+    M.cuda = _module_cuda
+    M.npu = _module_npu
+    M.cpu = lambda self: _module_to(self, "cpu")
     if not hasattr(M, "float"):
         M.float = lambda self: _module_cast_float_dtype(self, "float32")
     if not hasattr(M, "double"):
@@ -4865,6 +5005,16 @@ def _install_cuda(g):
     cuda.device_count = device_count
     cuda.current_device = lambda: 0
     cuda.set_device = lambda *a, **k: None
+    class _CudaDeviceContext:
+        def __init__(self, device=None):
+            self.device = device
+        def __enter__(self):
+            return self
+        def __exit__(self, *exc):
+            return False
+    cuda.device = _CudaDeviceContext
+    cuda.is_initialized = lambda *a, **k: bool(is_available() and getattr(jt.flags, "use_cuda", 0))
+    cuda._is_in_bad_fork = lambda *a, **k: False
     # torch-compat: torch.cuda.empty_cache() should actually release jittor's
     # cached GPU memory pools (it was a no-op). Sync outstanding work then run
     # jittor's garbage collector, matching torch's "free cached blocks" semantics.
@@ -5126,6 +5276,23 @@ def _install_cuda(g):
     backends.cpu = cpu
     backends.mkldnn = mkldnn
     g.backends = backends
+    if not hasattr(g, "_torch_float32_matmul_precision"):
+        g._torch_float32_matmul_precision = "highest"
+    def _get_float32_matmul_precision():
+        return getattr(g, "_torch_float32_matmul_precision", "highest")
+    def _set_float32_matmul_precision(precision):
+        if not isinstance(precision, str):
+            raise TypeError("precision must be a string")
+        precision = precision.lower()
+        if precision not in ("highest", "high", "medium"):
+            raise ValueError("precision must be one of 'highest', 'high', or 'medium'")
+        g._torch_float32_matmul_precision = precision
+        try:
+            cuda_backend.matmul.allow_tf32 = precision in ("high", "medium")
+        except Exception:
+            pass
+    g.get_float32_matmul_precision = _get_float32_matmul_precision
+    g.set_float32_matmul_precision = _set_float32_matmul_precision
 
 
 def _install_version(g):
@@ -5618,21 +5785,31 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         if not size and "size" in kw:
             return (kw["size"],)
         return size
+    def _new_finish(v, device=None, requires_grad=False):
+        if _device_is_cpu(device):
+            v = _make_cpu_resident(v)
+        elif _device_is_cuda(device):
+            jt.flags.use_cuda = 1
+            v = _make_cuda_resident(v, force=True)
+        if requires_grad:
+            v.requires_grad_(True)
+            _torch_register_leaf(v)
+        return v
     def _new_ones(self, *size, dtype=None, device=None, requires_grad=False, **kw):
         dt = _dtype_to_str(dtype) if dtype is not None else str(self.dtype)
-        return jt.ones(_norm_size(_resolve_size(size, kw)), dt)
+        return _new_finish(jt.ones(_norm_size(_resolve_size(size, kw)), dt), device, requires_grad)
     def _new_zeros(self, *size, dtype=None, device=None, requires_grad=False, **kw):
         dt = _dtype_to_str(dtype) if dtype is not None else str(self.dtype)
-        return jt.zeros(_norm_size(_resolve_size(size, kw)), dt)
+        return _new_finish(jt.zeros(_norm_size(_resolve_size(size, kw)), dt), device, requires_grad)
     def _new_full(self, size, fill_value, dtype=None, device=None, requires_grad=False, **kw):
         dt = _dtype_to_str(dtype) if dtype is not None else str(self.dtype)
         # size may be a tuple/list/torch.Size OR a jittor NanoVector (e.g. from
         # x.new_full(x.shape, v)); both are iterable with __len__.
         shp = tuple(int(s) for s in size) if hasattr(size, "__len__") else (int(size),)
-        return jt.full(shp, fill_value).cast(dt)
+        return _new_finish(jt.full(shp, fill_value).cast(dt), device, requires_grad)
     def _new_empty(self, *size, dtype=None, device=None, requires_grad=False, **kw):
         dt = _dtype_to_str(dtype) if dtype is not None else str(self.dtype)
-        return jt.empty(_norm_size(_resolve_size(size, kw)), dt)
+        return _new_finish(jt.empty(_norm_size(_resolve_size(size, kw)), dt), device, requires_grad)
     def _new_tensor(self, data, dtype=None, device=None, requires_grad=False, **kw):
         dt = _dtype_to_str(dtype) if dtype is not None else str(self.dtype)
         # torch's new_tensor accepts a python list whose elements are 0-d tensors
@@ -5649,7 +5826,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                     return [_coerce(e) for e in v]
                 return v
             data = [_coerce(v) for v in data]
-        return jt.array(data).cast(dt)
+        return _new_finish(jt.array(data).cast(dt), device, requires_grad)
     Var.new_ones = _new_ones
     Var.new_zeros = _new_zeros
     Var.new_full = _new_full
@@ -6174,7 +6351,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         if _device_is_cpu(dev):
             out = _make_cpu_resident(out)
         elif _device_is_cuda(dev):
-            out = _make_cuda_resident(out)
+            out = _make_cuda_resident(out, force=True)
         return out
     Var.to = _to
 
@@ -6193,7 +6370,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     Var.cpu = _var_cpu
     def _var_cuda(self, device=None, *a, **k):
         jt.flags.use_cuda = 1
-        return _make_cuda_resident(self)
+        return _make_cuda_resident(self, force=True)
     Var.cuda = _var_cuda
 
     # ---- integer/float dtype cast methods (torch parity) ----
@@ -6913,7 +7090,9 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
     _VAR_TAG = "__jt_var__"
     def _to_portable(obj, _seen=None):
         if isinstance(obj, jt.Var):
-            return {_VAR_TAG: True, "data": obj.numpy(), "dtype": str(obj.dtype)}
+            # Var.numpy() can materialize a CUDA Var on CPU in-place. Checkpoint
+            # serialization must not change the live module/optimizer tensors.
+            return {_VAR_TAG: True, "data": obj.clone().numpy(), "dtype": str(obj.dtype)}
         # Drop non-picklable callables (e.g. an LR scheduler's local lr_lambda
         # closure in an extra/scheduler state_dict). torch's LambdaLR.state_dict
         # does the same -- the lambda is rebuilt on load, not restored.
