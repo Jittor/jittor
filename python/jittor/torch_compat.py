@@ -2355,6 +2355,21 @@ def _install_optimizers(g):
             if closure is not None:
                 loss = closure()
                 called_closure = True
+            try:
+                from . import torch_fsdp2_compat as _fsdp2_step
+            except Exception:
+                _fsdp2_step = None
+            if _fsdp2_step is not None and _fsdp2_step.optimizer_has_fsdp_params(self):
+                if not _fsdp2_step.optimizer_step(self, loss, retain_graph=retain_graph):
+                    raise NotImplementedError(
+                        f"FSDP2 optimizer step is not implemented for {type(self).__name__}")
+                if not _fsdp2_step.optimizer_has_non_fsdp_params(self):
+                    try:
+                        self.post_step()
+                    except Exception:
+                        pass
+                    return loss if called_closure else None
+                _fsdp2_step.clear_fsdp_optimizer_grads(self)
             step_loss = None if called_closure and _optimizer_has_ready_grads(self) else loss
             out = _orig_step(self, step_loss, retain_graph=retain_graph)
             return loss if called_closure and out is None else out
@@ -2365,6 +2380,21 @@ def _install_optimizers(g):
         def _adam_step_torch(self, loss=None, retain_graph=False, closure=None, **kwargs):
             if closure is not None:
                 loss = closure()
+            try:
+                from . import torch_fsdp2_compat as _fsdp2_step
+            except Exception:
+                _fsdp2_step = None
+            if _fsdp2_step is not None and _fsdp2_step.optimizer_has_fsdp_params(self):
+                if not _fsdp2_step.optimizer_step(self, loss, retain_graph=retain_graph):
+                    raise NotImplementedError(
+                        f"FSDP2 optimizer step is not implemented for {type(self).__name__}")
+                if not _fsdp2_step.optimizer_has_non_fsdp_params(self):
+                    try:
+                        self.post_step()
+                    except Exception:
+                        pass
+                    return loss
+                _fsdp2_step.clear_fsdp_optimizer_grads(self)
             prev_step = int(getattr(self, "n_step", 0))
             self.pre_step(None if closure is not None and _optimizer_has_ready_grads(self) else loss, retain_graph)
             if int(getattr(self, "n_step", 0)) == prev_step:
@@ -6250,6 +6280,27 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     Var.clamp_ = lambda self, min=None, max=None, min_v=None, max_v=None: _ip(self, _clamp(self, min, max, min_v, max_v))
     Var.clip_ = Var.clamp_
 
+    def _torch_ne(input, other):
+        a = input if isinstance(input, Var) else jt.array(input)
+        b = other if isinstance(other, Var) else jt.array(other)
+        if str(a.dtype) == "bool":
+            a = a.int32()
+        if isinstance(b, Var) and str(b.dtype) == "bool":
+            b = b.int32()
+        diff = (a - b).abs()
+        out = diff > 0
+        if "float" in str(a.dtype) or (isinstance(b, Var) and "float" in str(b.dtype)):
+            try:
+                out = out | jt.isnan(a) | jt.isnan(b)
+            except Exception:
+                pass
+        return out
+
+    g.ne = _torch_ne
+    g.not_equal = _torch_ne
+    Var.ne = lambda self, other: _torch_ne(self, other)
+    Var.__ne__ = lambda self, other: _torch_ne(self, other)
+
     # torch's Tensor.nonzero(as_tuple=False) returns an (N, ndim) index matrix;
     # nonzero(as_tuple=True) instead returns a tuple of ndim 1-D index Vars (one
     # per dimension) -- transformers/diffusers use the tuple form for advanced
@@ -6593,14 +6644,27 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         # torch code such as 3DGS replaces parameters during densification, and
         # stale strong refs in the registry would otherwise keep old params and
         # their Jittor graphs alive until OOM.
+        try:
+            from . import torch_fsdp2_compat as _fsdp2_backward
+        except Exception:
+            _fsdp2_backward = None
         leaf_map = {}
         opt_ids = set()
         for o in opts:
             for pg in getattr(o, "param_groups", []):
                 for p in pg.get("params", []):
-                    if isinstance(p, Var) and not p.is_stop_grad():
-                        leaf_map.setdefault(id(p), p)
+                    if not isinstance(p, Var) or p.is_stop_grad():
+                        continue
+                    if _fsdp2_backward is not None and _fsdp2_backward.is_fsdp_managed_param(p):
                         opt_ids.add(id(p))
+                        continue
+                    leaf_map.setdefault(id(p), p)
+                    opt_ids.add(id(p))
+        if _fsdp2_backward is not None and opts:
+            for p in _fsdp2_backward.collect_fsdp_full_params_for_backward(opts):
+                if isinstance(p, Var) and not p.is_stop_grad():
+                    leaf_map.setdefault(id(p), p)
+                    opt_ids.add(id(p))
         retained = getattr(jt, "_torch_retained", None)
         retained_ids = set()
         if retained:
@@ -6631,7 +6695,12 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                 object.__setattr__(p, "_torch_grad",
                                    gr if prev is None else (prev + gr))
         # fill each optimizer's pg["grads"] so its step(loss=None) consumes them
+        if _fsdp2_backward is not None and opts:
+            _fsdp2_backward.fill_fsdp_optimizer_grads_from_grad_map(opts, grad_by_id)
         for o in opts:
+            if _fsdp2_backward is not None and _fsdp2_backward.optimizer_has_fsdp_params(o) \
+                    and not _fsdp2_backward.optimizer_has_non_fsdp_params(o):
+                continue
             _fill_opt_grads(o, grad_by_id)
         # retain_grad is per-forward in torch; clear so the next iteration's fresh
         # screenspace tensor doesn't leak (jittor Vars aren't weak-referenceable).

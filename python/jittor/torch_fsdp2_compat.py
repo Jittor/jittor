@@ -62,9 +62,27 @@ def _in_true_distributed():
 
 def _nccl_ops():
     try:
-        return getattr(jt.compile_extern, "nccl_ops", None)
+        ops = getattr(jt.compile_extern, "nccl_ops", None)
+        if ops is not None:
+            return ops
+        if os.environ.get("JT_NCCL_WORLD_SIZE") is not None:
+            os.environ.setdefault("use_nccl", "1")
+            if os.environ.get("nccl_include_path") is None or os.environ.get("nccl_lib_path") is None:
+                root = os.environ.get("JITTOR_TORCH_PROJECT_ROOT")
+                if not root:
+                    root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+                nccl_root = os.path.join(root, "jittor_fsdp2", "torchlatest_nccl")
+                if os.path.isfile(os.path.join(nccl_root, "include", "nccl.h")) \
+                        and os.path.isfile(os.path.join(nccl_root, "lib", "libnccl.so")):
+                    os.environ.setdefault("nccl_include_path", os.path.join(nccl_root, "include"))
+                    os.environ.setdefault("nccl_lib_path", os.path.join(nccl_root, "lib"))
+            setup = getattr(jt.compile_extern, "setup_nccl", None)
+            if callable(setup):
+                setup()
+            return getattr(jt.compile_extern, "nccl_ops", None)
     except Exception:
         return None
+    return None
 
 
 def _flatten_var(v):
@@ -150,6 +168,84 @@ def _refresh_flat_entry_shards(state):
                             _flat_entry_slices(state, state.true_fsdp_flat_shard)):
         entry.shard = shard
         entry.shard_numel = int(shard.shape[0]) if len(shard.shape) else int(entry.numel)
+        _mark_fsdp_param_var(shard, state, entry, "shard")
+
+
+def _mark_fsdp_param_var(var, state, entry, role):
+    try:
+        object.__setattr__(var, "_jittor_fsdp2_state", state)
+        object.__setattr__(var, "_jittor_fsdp2_entry", entry)
+        object.__setattr__(var, "_jittor_fsdp2_module", getattr(state, "true_fsdp_module", None))
+        object.__setattr__(var, "_jittor_fsdp2_role", role)
+        object.__setattr__(var, "_dtensor_device_mesh",
+                           getattr(state, "mesh", None) or DeviceMesh("cuda", (_world_size(),)))
+        object.__setattr__(var, "_dtensor_placements", (Shard(0),))
+        object.__setattr__(var, "device_mesh", getattr(var, "_dtensor_device_mesh"))
+        object.__setattr__(var, "placements", getattr(var, "_dtensor_placements"))
+        object.__setattr__(var, "_spec", types.SimpleNamespace(
+            mesh=getattr(var, "_dtensor_device_mesh"),
+            placements=getattr(var, "_dtensor_placements")))
+        object.__setattr__(var, "_local_tensor", entry.shard if entry is not None else var)
+        object.__setattr__(var, "to_local", types.MethodType(_fsdp_var_to_local, var))
+        object.__setattr__(var, "full_tensor", types.MethodType(_fsdp_var_full_tensor, var))
+        object.__setattr__(var, "redistribute", types.MethodType(_fsdp_var_redistribute, var))
+    except Exception:
+        pass
+    return var
+
+
+def _fsdp_param_entry(param):
+    state = getattr(param, "_jittor_fsdp2_state", None)
+    entry = getattr(param, "_jittor_fsdp2_entry", None)
+    if state is None or entry is None:
+        return None, None
+    if not getattr(state, "true_fsdp_initialized", False):
+        return None, None
+    return state, entry
+
+
+def is_fsdp_managed_param(param):
+    state, entry = _fsdp_param_entry(param)
+    return state is not None and entry is not None
+
+
+def _fsdp_var_to_local(self, *args, **kwargs):
+    state, entry = _fsdp_param_entry(self)
+    if state is None or entry is None:
+        return self
+    return entry.shard
+
+
+def _fsdp_var_full_tensor(self, *args, **kwargs):
+    state, entry = _fsdp_param_entry(self)
+    if state is None or entry is None:
+        if getattr(self, "_jittor_fsdp2_role", None) == "flat_shard":
+            return _all_gather_shards(self)
+        return self
+    if getattr(state, "true_fsdp_unsharded", False) and getattr(entry, "full_param", None) is not None:
+        return entry.full_param
+    if getattr(state, "true_fsdp_flat", False):
+        full_flat = _all_gather_shards(state.true_fsdp_flat_shard)
+        return _slice_flat(full_flat, entry.flat_offset, entry.numel).reshape(entry.shape)
+    gathered = _all_gather_shards(entry.shard)
+    full_flat = gathered if entry.padded_numel == entry.numel else _slice_flat(gathered, 0, entry.numel)
+    return full_flat.reshape(entry.shape)
+
+
+def _fsdp_var_redistribute(self, device_mesh=None, placements=None, **kwargs):
+    try:
+        if device_mesh is not None:
+            object.__setattr__(self, "_dtensor_device_mesh", device_mesh)
+            object.__setattr__(self, "device_mesh", device_mesh)
+        if placements is not None:
+            object.__setattr__(self, "_dtensor_placements", tuple(placements))
+            object.__setattr__(self, "placements", tuple(placements))
+        object.__setattr__(self, "_spec", types.SimpleNamespace(
+            mesh=getattr(self, "_dtensor_device_mesh", None),
+            placements=getattr(self, "_dtensor_placements", ())))
+    except Exception:
+        pass
+    return self
 
 
 def _named_parameters_with_owner(module, recurse=True):
@@ -660,6 +756,7 @@ def _apply_fsdp_attr(module, name, value, recurse=True):
 def _init_true_fsdp_state(module, state):
     if getattr(state, "true_fsdp_initialized", False):
         return state
+    state.true_fsdp_module = module
     if not _in_true_distributed():
         state.true_fsdp_initialized = False
         return state
@@ -700,7 +797,7 @@ def _init_true_fsdp_state(module, state):
         state.true_fsdp_flat_total_numel = total_numel
         state.true_fsdp_flat_padded_numel = flat_padded_numel
         state.true_fsdp_flat_shard_numel = flat_shard_numel
-        state.true_fsdp_flat_shard = flat_shard
+        state.true_fsdp_flat_shard = _mark_fsdp_param_var(flat_shard, state, None, "flat_shard")
         _refresh_flat_entry_shards(state)
         for entry in entries:
             object.__setattr__(entry.owner, entry.attr, entry.shard)
@@ -727,6 +824,7 @@ def _init_true_fsdp_state(module, state):
             shard=local,
             full_param=None,
         ))
+        _mark_fsdp_param_var(local, state, entries[-1], "shard")
         object.__setattr__(owner, attr, local)
     state.true_fsdp_initialized = True
     state.true_fsdp_rank = rank
@@ -748,6 +846,7 @@ def _unshard_module_params(module):
         for entry in state.true_fsdp_params:
             full = _slice_flat(full_flat, entry.flat_offset, entry.numel).reshape(entry.shape)
             entry.full_param = full
+            _mark_fsdp_param_var(full, state, entry, "full")
             object.__setattr__(entry.owner, entry.attr, full)
     else:
         for entry in state.true_fsdp_params:
@@ -755,6 +854,7 @@ def _unshard_module_params(module):
             full_flat = gathered if entry.padded_numel == entry.numel else _slice_flat(gathered, 0, entry.numel)
             full = full_flat.reshape(entry.shape)
             entry.full_param = full
+            _mark_fsdp_param_var(full, state, entry, "full")
             object.__setattr__(entry.owner, entry.attr, full)
     state.true_fsdp_unsharded = True
     return module
@@ -826,6 +926,11 @@ def sync_sharded_grads(module, loss=None, *, divide_by_world_size=True):
         _unshard_module_params(module)
     full_params = [entry.full_param for entry in state.true_fsdp_params]
     full_grads = jt.grad(loss, full_params)
+    return _sync_sharded_grads_from_full_grads(state, full_grads,
+                                               divide_by_world_size=divide_by_world_size)
+
+
+def _sync_sharded_grads_from_full_grads(state, full_grads, *, divide_by_world_size=True):
     if getattr(state, "true_fsdp_flat", False):
         flat_grad = _pad_flat(
             jt.concat([_flatten_var(grad) for grad in full_grads], dim=0),
@@ -849,6 +954,302 @@ def sync_sharded_grads(module, loss=None, *, divide_by_world_size=True):
         sharded.append(shard)
     state.true_fsdp_last_grads = sharded
     return sharded
+
+
+def _fsdp_states_from_optimizers(optimizers):
+    states = []
+    seen = set()
+    for opt in optimizers or ():
+        for pg in getattr(opt, "param_groups", []):
+            for param in pg.get("params", []):
+                state, _ = _fsdp_param_entry(param)
+                if state is None:
+                    continue
+                sid = id(state)
+                if sid in seen:
+                    continue
+                seen.add(sid)
+                states.append(state)
+    return states
+
+
+def optimizer_has_fsdp_params(opt):
+    return bool(_fsdp_states_from_optimizers([opt]))
+
+
+def optimizer_has_non_fsdp_params(opt):
+    for pg in getattr(opt, "param_groups", []):
+        for param in pg.get("params", []):
+            if not is_fsdp_managed_param(param):
+                return True
+    return False
+
+
+def collect_fsdp_full_params_for_backward(optimizers):
+    targets = []
+    for state in _fsdp_states_from_optimizers(optimizers):
+        has_forward_params = all(getattr(entry, "full_param", None) is not None
+                                 for entry in state.true_fsdp_params)
+        if not has_forward_params:
+            module = getattr(state, "true_fsdp_module", None)
+            if module is not None:
+                _unshard_module_params(module)
+        for entry in state.true_fsdp_params:
+            full = getattr(entry, "full_param", None)
+            if full is not None:
+                targets.append(full)
+    return targets
+
+
+def fill_fsdp_optimizer_grads_from_grad_map(optimizers, grad_by_id, *,
+                                            divide_by_world_size=True):
+    states = _fsdp_states_from_optimizers(optimizers)
+    if not states:
+        return False
+    entry_grad = {}
+    for state in states:
+        full_grads = []
+        for entry in state.true_fsdp_params:
+            full = getattr(entry, "full_param", None)
+            grad = grad_by_id.get(id(full)) if full is not None else None
+            if grad is None:
+                grad = jt.zeros(entry.shape, dtype=entry.dtype)
+            full_grads.append(grad)
+        sharded = _sync_sharded_grads_from_full_grads(
+            state, full_grads, divide_by_world_size=divide_by_world_size)
+        for entry, grad in zip(state.true_fsdp_params, sharded):
+            entry.last_grad = grad
+            entry_grad[(id(state), id(entry))] = grad
+
+    for opt in optimizers or ():
+        zero = getattr(opt, "_Optimizer__zero_grad", True)
+        for pg in getattr(opt, "param_groups", []):
+            grads_list = pg.get("grads")
+            if grads_list is None:
+                grads_list = pg["grads"] = [None] * len(pg.get("params", []))
+            while len(grads_list) < len(pg.get("params", [])):
+                grads_list.append(None)
+            for i, param in enumerate(pg.get("params", [])):
+                state, entry = _fsdp_param_entry(param)
+                if state is None:
+                    continue
+                grad = entry_grad.get((id(state), id(entry)))
+                if grad is None:
+                    continue
+                if (not zero) and isinstance(grads_list[i], jt.Var) \
+                        and list(grads_list[i].shape) == list(grad.shape):
+                    grad = grad + grads_list[i]
+                grad = grad.stop_grad()
+                grads_list[i] = grad
+                object.__setattr__(param, "_torch_grad", grad)
+                object.__setattr__(entry.shard, "_torch_grad", grad)
+        object.__setattr__(opt, "_Optimizer__zero_grad", False)
+        try:
+            opt._build_grad_map()
+        except Exception:
+            pass
+    return True
+
+
+def clear_fsdp_optimizer_grads(opt):
+    for pg in getattr(opt, "param_groups", []):
+        grads = pg.get("grads")
+        if grads is None:
+            continue
+        for i, param in enumerate(pg.get("params", [])):
+            if i < len(grads) and is_fsdp_managed_param(param):
+                grads[i] = None
+
+
+def refresh_optimizer_fsdp_params(opt):
+    for pg in getattr(opt, "param_groups", []):
+        params = pg.get("params", [])
+        for i, param in enumerate(list(params)):
+            state, entry = _fsdp_param_entry(param)
+            if state is None:
+                continue
+            params[i] = entry.shard
+
+
+def _sgd_hparams(opt, pg):
+    return (
+        pg.get("lr", getattr(opt, "lr", 0.0)),
+        pg.get("momentum", getattr(opt, "momentum", 0.0)),
+        pg.get("weight_decay", getattr(opt, "weight_decay", 0.0)),
+        pg.get("dampening", getattr(opt, "dampening", 0.0)),
+        pg.get("nesterov", getattr(opt, "nesterov", False)),
+    )
+
+
+def _sgd_update_for_param(opt, pg, state, entry, param, grad, value):
+    lr, momentum, weight_decay, dampening, nesterov = _sgd_hparams(opt, pg)
+    dp = grad
+    if weight_decay != 0:
+        dp = dp + param * weight_decay
+    if momentum != 0:
+        if not isinstance(value, jt.Var) or list(value.shape) != list(dp.shape):
+            value = jt.zeros(dp.shape, dp.dtype).stop_grad()
+        value.update(momentum * value + dp * (1 - dampening))
+        dp = dp + momentum * value if nesterov else value
+    return (param - dp * lr).stop_grad(), value
+
+
+def _adam_hparams(opt, pg):
+    return (
+        pg.get("lr", getattr(opt, "lr", 0.0)),
+        pg.get("eps", getattr(opt, "eps", 1e-8)),
+        pg.get("weight_decay", getattr(opt, "weight_decay", 0.0)),
+        pg.get("betas", getattr(opt, "betas", (0.9, 0.999))),
+    )
+
+
+def _adam_update_for_param(opt, pg, param, grad, value, momentum, *,
+                           decoupled_weight_decay, n_step):
+    lr, eps, weight_decay, betas = _adam_hparams(opt, pg)
+    b0, b1 = betas
+    if not isinstance(value, jt.Var) or list(value.shape) != list(param.shape):
+        value = jt.zeros(param.shape, param.dtype).stop_grad()
+    if not isinstance(momentum, jt.Var) or list(momentum.shape) != list(param.shape):
+        momentum = jt.zeros(param.shape, param.dtype).stop_grad()
+    if weight_decay != 0 and decoupled_weight_decay:
+        param = param * (1 - lr * weight_decay)
+    elif weight_decay != 0:
+        grad = grad + param * weight_decay
+    momentum.update(b0 * momentum + (1 - b0) * grad)
+    value.update(b1 * value + (1 - b1) * grad * grad)
+    bias_correction1 = 1 - b0 ** float(n_step)
+    bias_correction2 = 1 - b1 ** float(n_step)
+    step_size = lr / bias_correction1
+    denom = jt.sqrt(value) / np.sqrt(bias_correction2) + eps
+    return (param - momentum * step_size / denom).stop_grad(), value, momentum
+
+
+def _optimizer_kind(opt):
+    name = type(opt).__name__.lower()
+    if "adamw" in name:
+        return "adamw"
+    if "adam" in name:
+        return "adam"
+    if "sgd" in name:
+        return "sgd"
+    return name
+
+
+def optimizer_step(opt, loss=None, retain_graph=False):
+    """Apply one torch-style optimizer step for FSDP-managed parameters.
+
+    Returns True when the optimizer contained FSDP parameters.  FSDP gradients are
+    consumed from ``loss.backward()`` state when ``loss`` is None; passing a loss
+    keeps Jittor's ``optimizer.step(loss)`` shortcut working for simple scripts.
+    Non-FSDP parameters are intentionally left untouched so the caller can run the
+    original optimizer step for them.
+    """
+    states = _fsdp_states_from_optimizers([opt])
+    if not states:
+        return False
+    if loss is not None:
+        grad_by_id = {}
+        targets = collect_fsdp_full_params_for_backward([opt])
+        if targets:
+            grads = jt.grad(loss, targets, retain_graph)
+            grad_by_id.update({id(p): g for p, g in zip(targets, grads)})
+        fill_fsdp_optimizer_grads_from_grad_map([opt], grad_by_id)
+
+    kind = _optimizer_kind(opt)
+    if kind not in ("sgd", "adam", "adamw"):
+        return False
+    if kind in ("adam", "adamw"):
+        opt.n_step = int(getattr(opt, "n_step", 0)) + 1
+    n_step = int(getattr(opt, "n_step", 1))
+
+    jt.flags.node_order = 1
+    for pg in getattr(opt, "param_groups", []):
+        grads = pg.get("grads") or []
+        values = pg.get("values")
+        if values is None:
+            values = pg["values"] = [None] * len(pg.get("params", []))
+        while len(values) < len(pg.get("params", [])):
+            values.append(None)
+        momentums = pg.get("m")
+        if momentums is None and kind in ("adam", "adamw"):
+            momentums = pg["m"] = [None] * len(pg.get("params", []))
+        if momentums is not None:
+            while len(momentums) < len(pg.get("params", [])):
+                momentums.append(None)
+        for i, param in enumerate(pg.get("params", [])):
+            state, entry = _fsdp_param_entry(param)
+            if state is None:
+                continue
+            grad = grads[i] if i < len(grads) else getattr(entry, "last_grad", None)
+            if not isinstance(grad, jt.Var):
+                continue
+            if getattr(state, "true_fsdp_flat", False):
+                continue
+            if kind == "sgd":
+                new_param, new_value = _sgd_update_for_param(opt, pg, state, entry,
+                                                             entry.shard, grad, values[i])
+                values[i] = new_value
+            else:
+                new_param, new_value, new_momentum = _adam_update_for_param(
+                    opt, pg, entry.shard, grad, values[i], momentums[i],
+                    decoupled_weight_decay=(kind == "adamw"), n_step=n_step)
+                values[i] = new_value
+                momentums[i] = new_momentum
+            entry.shard.assign(new_param)
+            object.__setattr__(entry.owner, entry.attr, entry.shard)
+            entry.full_param = None
+
+    for state in states:
+        if not getattr(state, "true_fsdp_flat", False):
+            continue
+        flat_grad = getattr(state, "true_fsdp_last_flat_grad", None)
+        if not isinstance(flat_grad, jt.Var):
+            continue
+        # Flat mode exposes parameter slices to the optimizer, but only the flat
+        # shard owns storage for all local elements.  Apply the SGD update once to
+        # the flat shard, then refresh per-parameter slices.
+        for pg in getattr(opt, "param_groups", []):
+            break
+        if kind == "sgd":
+            lr, momentum, weight_decay, dampening, nesterov = _sgd_hparams(opt, pg)
+            dp = flat_grad
+            if weight_decay != 0:
+                dp = dp + state.true_fsdp_flat_shard * weight_decay
+            if momentum != 0:
+                key = f"_jittor_fsdp2_sgd_flat_momentum_{id(opt)}"
+                buf = getattr(state, key, None)
+                if not isinstance(buf, jt.Var) or list(buf.shape) != list(dp.shape):
+                    buf = jt.zeros(dp.shape, dp.dtype).stop_grad()
+                buf.update(momentum * buf + dp * (1 - dampening))
+                setattr(state, key, buf)
+                dp = dp + momentum * buf if nesterov else buf
+            new_flat = (state.true_fsdp_flat_shard - dp * lr).stop_grad()
+        else:
+            v_key = f"_jittor_fsdp2_{kind}_flat_v_{id(opt)}"
+            m_key = f"_jittor_fsdp2_{kind}_flat_m_{id(opt)}"
+            value = getattr(state, v_key, None)
+            momentum = getattr(state, m_key, None)
+            new_flat, value, momentum = _adam_update_for_param(
+                opt, pg, state.true_fsdp_flat_shard, flat_grad, value, momentum,
+                decoupled_weight_decay=(kind == "adamw"), n_step=n_step)
+            setattr(state, v_key, value)
+            setattr(state, m_key, momentum)
+        state.true_fsdp_flat_shard.assign(new_flat)
+        _refresh_flat_entry_shards(state)
+        for entry in state.true_fsdp_params:
+            object.__setattr__(entry.owner, entry.attr, entry.shard)
+            entry.full_param = None
+        state.true_fsdp_unsharded = False
+
+    for state in states:
+        state.true_fsdp_unsharded = False
+    refresh_optimizer_fsdp_params(opt)
+    clear_fsdp_optimizer_grads(opt)
+    try:
+        opt._build_grad_map()
+    except Exception:
+        pass
+    return True
 
 
 def sharded_sgd_step(module, loss, lr=1e-4, *, divide_by_world_size=True):
@@ -1128,7 +1529,15 @@ class FullyShardedDataParallel(nn.Module, FSDPModule):
     @staticmethod
     @contextlib.contextmanager
     def summon_full_params(module, *args, **kwargs):
-        yield module
+        state = getattr(module, "_fsdp_state", None)
+        was_unsharded = bool(getattr(state, "true_fsdp_unsharded", False)) if state is not None else False
+        if state is not None and getattr(state, "true_fsdp_initialized", False):
+            _unshard_module_params(module)
+        try:
+            yield module
+        finally:
+            if state is not None and getattr(state, "true_fsdp_initialized", False) and not was_unsharded:
+                _reshard_module_params(module)
 
     @staticmethod
     def optim_state_dict(module, optim, *args, **kwargs):
