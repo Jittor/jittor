@@ -366,7 +366,7 @@ Tensor tensor_from_pyvar(void* obj) {
     jittor::VarHolder* vh = jittor::from_py_object<jittor::VarHolder*>((PyObject*)obj);
     Tensor borrowed = adopt(vh, /*owns=*/false);    // python owns it; we borrow
     if (pyvar_force_cpu(obj) && borrowed.defined()) {
-        if (pyvar_is_ext_mutable(obj) || pyvar_is_ext_readonly_borrow(obj))
+        if (pyvar_is_ext_readonly_borrow(obj) || pyvar_is_ext_mutable(obj))
             return borrowed;
         jittor::NanoVector nv = to_nv(borrowed.sizes());
         if (borrowed.numel() == 0)
@@ -382,7 +382,7 @@ Tensor tensor_from_pyvar(void* obj) {
     }
     if (torch_ext_borrow_inputs_enabled())
         return borrowed;
-    if (pyvar_is_ext_mutable(obj) || pyvar_is_ext_readonly_borrow(obj))
+    if (pyvar_is_ext_readonly_borrow(obj) || pyvar_is_ext_mutable(obj))
         return borrowed;
     // BAKE the input into a SETTLED jittor "array" Var before the ext's kernel
     // reads it. A lazy/intermediate input (e.g. fused-ssim's rendered image =
