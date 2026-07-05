@@ -1736,7 +1736,7 @@ def set_global_seed(seed, different_seed_for_mpi=True):
 import time
 set_global_seed(int(time.time() * 1000000) % 100000007)
 
-def searchsorted(sorted, values, right=False):
+def searchsorted(sorted, values, right=False, out_int32=False, side=None, sorter=None, out=None):
     """
     Find the indices from the innermost dimension of `sorted` for each `values`.
 
@@ -1755,11 +1755,21 @@ Example::
     assert (ret == [[1, 3, 4], [1, 3, 4]]).all(), ret
 
     """
+    if side is not None:
+        if side not in ("left", "right"):
+            raise ValueError("side must be 'left' or 'right'")
+        right = side == "right"
+    if sorter is not None:
+        raise NotImplementedError("searchsorted sorter is not supported")
+    scalar_value = not isinstance(values, jt.Var) and np.isscalar(values)
     if not isinstance(values, jt.Var):
         values = jt.array(values, dtype=sorted.dtype)
-    scalar_value = values.ndim == 0
-    if scalar_value:
+    elif values.dtype != sorted.dtype:
+        values = values.cast(sorted.dtype)
+    if scalar_value or values.ndim == 0:
         values = values.reshape((1,))
+    out_dtype = "int32" if out_int32 else "int64"
+    out_ctype = "int32" if out_int32 else "int64"
     _searchsorted_header = f"""
 namespace jittor {{
 
@@ -1768,7 +1778,7 @@ inline static void searchsorted(
     int batch_num, int batch_id, int value_num, int value_id,
     int sorted_num, int batch_stride,
     {sorted.dtype}* __restrict__  sort_p, {values.dtype}* __restrict__  value_p, 
-    int32* __restrict__ index_p) {{
+    {out_ctype}* __restrict__ index_p) {{
     int32 l = batch_id * batch_stride;
     int32 r = l + sorted_num;
     auto v = value_p[batch_id * value_num + value_id];
@@ -1779,7 +1789,7 @@ inline static void searchsorted(
         else
             r = m;
     }}
-    index_p[batch_id * value_num + value_id] = l - batch_id * batch_stride;
+    index_p[batch_id * value_num + value_id] = ({out_ctype})(l - batch_id * batch_stride);
 }}
 
 }}
@@ -1794,13 +1804,14 @@ inline static void searchsorted(
 
     searchsorted(batch_num2, 0, value_num, 0, sorted_num, batch_stride, in0_p, in1_p, out0_p);
 """
-    ret = jt.code(values.shape, "int32", [sorted, values],
+    ret = jt.code(values.shape, out_dtype, [sorted, values],
         cpu_header=_searchsorted_header,
         cpu_src=_searchsorted_src,
         cuda_header=_searchsorted_header,
         cuda_src=_searchsorted_src)
-    if scalar_value:
-        ret = ret.reshape(())
+    if out is not None:
+        out.assign(ret)
+        return out
     return ret
 
 
