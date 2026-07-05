@@ -115,6 +115,56 @@ class TestSDPA(Base):
         self.assertGreaterEqual(stats.get("casts", {}).get("float32_to_float16", 0), 1)
         self.ac(got, _sdpa_ref(q, k, v), atol=2e-3, rtol=2e-3, msg="sdpa native flash fp32 opt-in cast cuda")
 
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    def test_flash_attn_packed_split_cuda(self):
+        from jittor.torch_shim import flashattn_jittor
+
+        old = os.environ.get("JITTOR_FLASH_ATTN_FUSED_PACKED_SPLIT")
+        os.environ.pop("JITTOR_FLASH_ATTN_FUSED_PACKED_SPLIT", None)
+        try:
+            with jt.flag_scope(use_cuda=1), jt.no_grad():
+                cases = [
+                    (
+                        "qkv_varlen",
+                        jt.array(np.arange(7 * 3 * 2 * 4, dtype=np.float16).reshape(7, 3, 2, 4)),
+                        flashattn_jittor._split_qkvpacked_cuda,
+                        lambda x: (x[:, 0], x[:, 1], x[:, 2]),
+                    ),
+                    (
+                        "qkv_dense",
+                        jt.array(np.arange(2 * 5 * 3 * 2 * 4, dtype=np.float16).reshape(2, 5, 3, 2, 4)),
+                        flashattn_jittor._split_qkvpacked_cuda,
+                        lambda x: (x[:, :, 0], x[:, :, 1], x[:, :, 2]),
+                    ),
+                    (
+                        "kv_varlen",
+                        jt.array(np.arange(7 * 2 * 2 * 4, dtype=np.float16).reshape(7, 2, 2, 4)),
+                        flashattn_jittor._split_kvpacked_cuda,
+                        lambda x: (x[:, 0], x[:, 1]),
+                    ),
+                    (
+                        "kv_dense",
+                        jt.array(np.arange(2 * 5 * 2 * 2 * 4, dtype=np.float16).reshape(2, 5, 2, 2, 4)),
+                        flashattn_jittor._split_kvpacked_cuda,
+                        lambda x: (x[:, :, 0], x[:, :, 1]),
+                    ),
+                ]
+                start = dict(flashattn_jittor._PACKED_SPLIT_STATS)
+                for name, packed, split_fn, ref_fn in cases:
+                    outs = split_fn(packed)
+                    self.assertIsNotNone(outs, name)
+                    vals = jt.fetch_sync(list(outs) + list(ref_fn(packed)))
+                    for i in range(len(outs)):
+                        np.testing.assert_array_equal(vals[i], vals[i + len(outs)], err_msg=name)
+                stats = flashattn_jittor._PACKED_SPLIT_STATS
+                self.assertGreaterEqual(stats["qkv_cuda"] - start.get("qkv_cuda", 0), 2)
+                self.assertGreaterEqual(stats["kv_cuda"] - start.get("kv_cuda", 0), 2)
+        finally:
+            if old is None:
+                os.environ.pop("JITTOR_FLASH_ATTN_FUSED_PACKED_SPLIT", None)
+            else:
+                os.environ["JITTOR_FLASH_ATTN_FUSED_PACKED_SPLIT"] = old
+
 
 class TestMultiheadAttention(Base):
     def test_mha_shapes_and_self_consistency(self):
