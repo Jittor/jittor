@@ -865,6 +865,12 @@ def enable(
     _log(verbose, "runtime: %s" % runtime)
     if scanned:
         _log(verbose, "native extensions: %s" % ", ".join(ext.root for ext in scanned))
+    try:
+        from jittor.torch_shim.readonly_extensions import install_readonly_extension_borrow
+
+        install_readonly_extension_borrow()
+    except Exception:
+        pass
 
     return {
         "torch": jt,

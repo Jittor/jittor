@@ -4,6 +4,7 @@
 #include <cuda_runtime.h>
 #include <cuda_bf16.h>
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <cstdlib>
 #include <vector>
@@ -61,17 +62,17 @@ static bool torch_ext_sync_return_enabled() {
 static bool torch_ext_borrow_inputs_enabled() {
     if (env_truthy("JITTOR_TORCH_EXT_SYNC_BOUNDARY") ||
         env_truthy("JITTOR_TORCH_EXT_COPY_INPUTS") ||
-        env_falsey("JITTOR_TORCH_EXT_BORROW_INPUTS"))
+        env_falsey("JITTOR_TORCH_EXT_UNSAFE_BORROW_INPUTS"))
         return false;
-    return true;
+    return env_truthy("JITTOR_TORCH_EXT_UNSAFE_BORROW_INPUTS");
 }
 
 static bool torch_ext_fast_metadata_enabled() {
     if (env_truthy("JITTOR_TORCH_EXT_SYNC_BOUNDARY") ||
         env_truthy("JITTOR_TORCH_EXT_SYNC_METADATA") ||
-        env_falsey("JITTOR_TORCH_EXT_FAST_METADATA"))
+        env_falsey("JITTOR_TORCH_EXT_UNSAFE_FAST_METADATA"))
         return false;
-    return true;
+    return env_truthy("JITTOR_TORCH_EXT_UNSAFE_FAST_METADATA");
 }
 
 static void sync_for_storage(jittor::VarHolder* vh) {
@@ -257,6 +258,9 @@ bool vh_is_cuda(jittor::VarHolder* vh) {
     sync_for_data_ptr(vh);
     return vh->var->allocator && vh->var->allocator->is_cuda();
 }
+bool vh_allocator_is_cuda(jittor::VarHolder* vh) {
+    return vh && vh->var && vh->var->allocator && vh->var->allocator->is_cuda();
+}
 int vh_device_type(jittor::VarHolder* vh) {
     // Report the Var's CURRENT residency without migrating (torch::Tensor::device()).
     if (torch_ext_fast_metadata_enabled() && vh->var->allocator)
@@ -358,6 +362,8 @@ Tensor tensor_from_pyvar(void* obj) {
     jittor::VarHolder* vh = jittor::from_py_object<jittor::VarHolder*>((PyObject*)obj);
     Tensor borrowed = adopt(vh, /*owns=*/false);    // python owns it; we borrow
     if (pyvar_force_cpu(obj) && borrowed.defined()) {
+        if (pyvar_is_ext_mutable(obj) || pyvar_is_ext_readonly_borrow(obj))
+            return borrowed;
         jittor::NanoVector nv = to_nv(borrowed.sizes());
         if (borrowed.numel() == 0)
             return adopt(make_var(nv, borrowed.scalar_type(), /*cpu=*/true), true);
@@ -500,9 +506,11 @@ Tensor empty_like(const Tensor& t, TensorOptions opt) {
 }
 Tensor zeros(IntArrayRef size, TensorOptions opt) {
     Tensor t = empty(size, opt);
-    void* p = t.data_ptr_void();
     int64_t nbytes = t.numel() * detail::vh_dsize(t._vh());
-    if (detail::vh_is_cuda(t._vh())) cudaMemset(p, 0, nbytes);
+    if (nbytes == 0)
+        return t;
+    void* p = t.data_ptr_void();
+    if (detail::vh_allocator_is_cuda(t._vh())) cudaMemset(p, 0, nbytes);
     else std::memset(p, 0, nbytes);
     return t;
 }
@@ -521,8 +529,10 @@ template <typename T>
 static Tensor _full_typed(IntArrayRef size, T value, TensorOptions opt, ScalarType st) {
     Tensor t = empty(size, TensorOptions(st).device(opt_is_cpu(opt)?DeviceType::CPU:DeviceType::CUDA));
     int64_t n = t.numel();
+    if (n == 0)
+        return t;
     void* p = t.data_ptr_void();
-    if (detail::vh_is_cuda(t._vh())) {
+    if (detail::vh_allocator_is_cuda(t._vh())) {
         std::unique_ptr<T[]> host(new T[n]);
         for (int64_t i = 0; i < n; ++i) host[i] = value;
         cudaMemcpy(p, host.get(), n * sizeof(T), cudaMemcpyHostToDevice);
@@ -534,11 +544,13 @@ static Tensor _full_typed(IntArrayRef size, T value, TensorOptions opt, ScalarTy
 static Tensor _full_bfloat16(IntArrayRef size, double value, TensorOptions opt) {
     Tensor t = empty(size, TensorOptions(ScalarType::BFloat16).device(opt_is_cpu(opt)?DeviceType::CPU:DeviceType::CUDA));
     int64_t n = t.numel();
+    if (n == 0)
+        return t;
     void* p = t.data_ptr_void();
     std::unique_ptr<__nv_bfloat16[]> host(new __nv_bfloat16[n]);
     __nv_bfloat16 v = __float2bfloat16((float)value);
     for (int64_t i = 0; i < n; ++i) host[i] = v;
-    if (detail::vh_is_cuda(t._vh())) cudaMemcpy(p, host.get(), n * sizeof(__nv_bfloat16), cudaMemcpyHostToDevice);
+    if (detail::vh_allocator_is_cuda(t._vh())) cudaMemcpy(p, host.get(), n * sizeof(__nv_bfloat16), cudaMemcpyHostToDevice);
     else std::memcpy(p, host.get(), n * sizeof(__nv_bfloat16));
     return t;
 }
@@ -554,6 +566,8 @@ static inline U _sat_uint(double value) {
 }
 Tensor full(IntArrayRef size, double value, TensorOptions opt) {
     ScalarType st = opt.has_dtype_ ? opt.dtype_ : ScalarType::Float;
+    if (value == 0.0 && !std::signbit(value))
+        return zeros(size, TensorOptions(st).device(opt_is_cpu(opt)?DeviceType::CPU:DeviceType::CUDA));
     switch (st) {
         case ScalarType::Float:  return _full_typed<float>(size, (float)value, opt, st);
         case ScalarType::Double: return _full_typed<double>(size, (double)value, opt, st);
