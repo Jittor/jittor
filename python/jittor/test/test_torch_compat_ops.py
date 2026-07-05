@@ -178,9 +178,33 @@ class TestComparisonWhere(Base):
         def body(dev):
             ta, tb = torch.tensor(a), torch.tensor(b)
             self.ae((ta > tb).numpy(), a > b, msg=f"gt {dev}")
+            self.ae((ta != tb).numpy(), a != b, msg=f"ne {dev}")
             self.ae((ta <= tb).numpy(), a <= b, msg=f"le {dev}")
             self.ac(torch.maximum(ta, tb).numpy(), np.maximum(a, b), msg=f"maximum {dev}")
             self.ac(torch.minimum(ta, tb).numpy(), np.minimum(a, b), msg=f"minimum {dev}")
+        both_devices(body)
+
+    def test_ne_after_detach_shared_graph(self):
+        # Regression for verl CISPO metrics: when a clamped tensor is also used
+        # through detach() in a loss graph, torch-facing != must still compare
+        # the original values, not the stop-grad alias.
+        old = np.array([[-1.0, -1.0, -1.0, -1.0]], dtype="float32")
+        new = old + np.array([[0.0, 0.01, 0.30, -0.40]], dtype="float32")
+        ref_ratio = np.exp(new - old)
+        ref_clipped = np.clip(ref_ratio, 0.82, 1.25)
+        ref_ne = ref_ratio != ref_clipped
+
+        def body(dev):
+            old_t = torch.tensor(old)
+            new_t = torch.tensor(new)
+            new_t.requires_grad_(True)
+            ratio = torch.exp(torch.clamp(new_t - old_t, min=-20.0, max=20.0))
+            clipped = torch.clamp(ratio, 0.82, 1.25)
+            loss = (clipped.detach() * new_t).sum()
+            got = (ratio != clipped).numpy()
+            self.ae(got, ref_ne, msg=f"ne shared detach {dev}")
+            loss.backward()
+
         both_devices(body)
 
 
