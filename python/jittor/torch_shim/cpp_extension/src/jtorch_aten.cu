@@ -99,6 +99,12 @@ static jittor::VarHolder* make_empty_vh(const jittor::NanoVector& shape, ScalarT
     jittor::VarPtr vp = maker(shape, to_ns(st));
     return new jittor::VarHolder(std::move(vp));
 }
+static jittor::VarHolder* make_copy_vh(jittor::Var* src) {
+    static auto maker = jittor::get_op_info("copy")
+        .get_constructor<jittor::VarPtr, jittor::Var*>();
+    jittor::VarPtr vp = maker(src);
+    return new jittor::VarHolder(std::move(vp));
+}
 static jittor::VarHolder* make_var(const jittor::NanoVector& shape, ScalarType st, bool cpu) {
     jittor::VarHolder* vh = make_empty_vh(shape, st);
     if (cpu) {
@@ -315,7 +321,7 @@ Tensor tensor_from_pyvar(void* obj) {
     // their data_ptr must remain null for the ext's `!= nullptr` dispatch.
     if (!borrowed.defined() || borrowed.numel() == 0)
         return borrowed;
-    return borrowed.clone();   // device->host->settled-array-Var, residency kept
+    return borrowed.clone();   // graph-tracked settled copy, residency kept
 }
 void* tensor_to_pyvar(const Tensor& t) {
     // Barrier so the ext's async kernel has finished writing this output before
@@ -363,15 +369,12 @@ Tensor Tensor::operator[](int64_t i) const {
     return var_from_host_dev(host.get(), nv, scalar_type(), true);
 }
 Tensor Tensor::clone() const {
-    int64_t nbytes = numel() * detail::vh_dsize(_vh());
     bool cuda = detail::vh_is_cuda(_vh());
     jittor::NanoVector nv = to_nv(sizes());
     // Settled, graph-tracked clone (survives a later .item()/sync), residency
     // preserved — see operator[] for why a raw empty()+cudaMemcpy(D2D) is unsafe.
+    if (cuda) return detail::adopt(make_copy_vh(_vh()->var), true);
     if (!cuda) return var_from_host_dev(detail::vh_device_ptr(_vh()), nv, scalar_type(), false);
-    std::unique_ptr<char[]> host(new char[nbytes]);
-    cudaMemcpy(host.get(), detail::vh_device_ptr(_vh()), nbytes, cudaMemcpyDeviceToHost);
-    return var_from_host_dev(host.get(), nv, scalar_type(), true);
 }
 Tensor Tensor::view(ScalarType st) const {
     int64_t old_sz = detail::vh_dsize(_vh());
