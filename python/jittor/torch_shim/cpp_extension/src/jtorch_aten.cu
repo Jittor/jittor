@@ -5,6 +5,7 @@
 #include <cuda_bf16.h>
 #include <algorithm>
 #include <cstring>
+#include <cstdlib>
 #include <vector>
 #include <memory>
 #include <map>
@@ -22,6 +23,65 @@
 #include <torch/extension.h>   // interface (forward-declares jittor::VarHolder)
 
 namespace jtorch {
+
+static bool env_truthy(const char* name) {
+    const char* v = std::getenv(name);
+    if (!v || !*v) return false;
+    return std::strcmp(v, "1") == 0 || std::strcmp(v, "true") == 0 ||
+           std::strcmp(v, "TRUE") == 0 || std::strcmp(v, "yes") == 0 ||
+           std::strcmp(v, "YES") == 0 || std::strcmp(v, "on") == 0 ||
+           std::strcmp(v, "ON") == 0;
+}
+
+static bool env_falsey(const char* name) {
+    const char* v = std::getenv(name);
+    if (!v || !*v) return false;
+    return std::strcmp(v, "0") == 0 || std::strcmp(v, "false") == 0 ||
+           std::strcmp(v, "FALSE") == 0 || std::strcmp(v, "no") == 0 ||
+           std::strcmp(v, "NO") == 0 || std::strcmp(v, "off") == 0 ||
+           std::strcmp(v, "OFF") == 0;
+}
+
+static bool torch_ext_sync_data_ptr_enabled() {
+    if (env_truthy("JITTOR_TORCH_EXT_SYNC_BOUNDARY"))
+        return true;
+    if (env_falsey("JITTOR_TORCH_EXT_ASYNC_DATA_PTR"))
+        return true;
+    return env_truthy("JITTOR_TORCH_EXT_SYNC_DATA_PTR");
+}
+
+static bool torch_ext_sync_return_enabled() {
+    if (env_truthy("JITTOR_TORCH_EXT_SYNC_BOUNDARY"))
+        return true;
+    if (env_falsey("JITTOR_TORCH_EXT_ASYNC_RETURN"))
+        return true;
+    return env_truthy("JITTOR_TORCH_EXT_SYNC_RETURN");
+}
+
+static bool torch_ext_borrow_inputs_enabled() {
+    if (env_truthy("JITTOR_TORCH_EXT_SYNC_BOUNDARY") ||
+        env_truthy("JITTOR_TORCH_EXT_COPY_INPUTS") ||
+        env_falsey("JITTOR_TORCH_EXT_BORROW_INPUTS"))
+        return false;
+    return true;
+}
+
+static bool torch_ext_fast_metadata_enabled() {
+    if (env_truthy("JITTOR_TORCH_EXT_SYNC_BOUNDARY") ||
+        env_truthy("JITTOR_TORCH_EXT_SYNC_METADATA") ||
+        env_falsey("JITTOR_TORCH_EXT_FAST_METADATA"))
+        return false;
+    return true;
+}
+
+static void sync_for_storage(jittor::VarHolder* vh) {
+    vh->sync(/*device_sync=*/false, /*weak_sync=*/false);
+}
+
+static void sync_for_data_ptr(jittor::VarHolder* vh) {
+    vh->sync(/*device_sync=*/torch_ext_sync_data_ptr_enabled(),
+             /*weak_sync=*/false);
+}
 
 // --------- dtype mapping ----------------------------------------------------
 static const char* scalar_to_jt(ScalarType s) {
@@ -108,7 +168,7 @@ static jittor::VarHolder* make_copy_vh(jittor::Var* src) {
 static jittor::VarHolder* make_var(const jittor::NanoVector& shape, ScalarType st, bool cpu) {
     jittor::VarHolder* vh = make_empty_vh(shape, st);
     if (cpu) {
-        vh->sync(/*device_sync=*/true, /*weak_sync=*/false);
+        sync_for_storage(vh);
 #ifdef HAS_CUDA
         jittor::migrate_to_cpu(vh->var, jittor::exe.allocator);
 #endif
@@ -141,10 +201,10 @@ static Tensor var_from_host_dev(const void* host, const jittor::NanoVector& shap
     Tensor t = var_from_host(host, shape, st);
 #ifdef HAS_CUDA
     if (to_cuda) {
-        t._vh()->sync(/*device_sync=*/true, /*weak_sync=*/false);
+        sync_for_storage(t._vh());
         jittor::migrate_to_gpu(t._vh()->var, jittor::get_allocator());
     } else {
-        t._vh()->sync(/*device_sync=*/true, /*weak_sync=*/false);
+        sync_for_storage(t._vh());
         jittor::migrate_to_cpu(t._vh()->var, jittor::exe.allocator);
     }
 #endif
@@ -166,7 +226,14 @@ void* vh_device_ptr(jittor::VarHolder* vh) {
     // Return the pointer at the Var's CURRENT location (torch semantics):
     // CUDA var -> device ptr, CPU var -> host ptr. Do NOT force-migrate to GPU,
     // else *_cpu kernels would read a device pointer as host memory and segfault.
-    vh->sync(/*device_sync=*/true, /*weak_sync=*/false);
+    // data_ptr only needs the Jittor graph materialized and queued. Extensions
+    // use stream 0 through the c10 stream shim, so their kernels are ordered
+    // after Jittor stream-0 work without a global device barrier. Set
+    // JITTOR_TORCH_EXT_SYNC_DATA_PTR=1 or JITTOR_TORCH_EXT_SYNC_BOUNDARY=1 for
+    // conservative debugging.
+    if (!torch_ext_sync_data_ptr_enabled() && vh->var->mem_ptr && vh->var->allocator)
+        return vh->var->mem_ptr;
+    sync_for_data_ptr(vh);
     if (vh->var->allocator && vh->var->allocator->is_cuda())
         return vh->var->mem_ptr;
 #ifdef HAS_CUDA
@@ -185,12 +252,16 @@ int64_t vh_numel(jittor::VarHolder* vh) { return vh->var->num; }
 int64_t vh_dsize(jittor::VarHolder* vh) { return vh->var->dtype().dsize(); }
 const char* vh_dtype_name(jittor::VarHolder* vh) { return vh->var->dtype().to_cstring(); }
 bool vh_is_cuda(jittor::VarHolder* vh) {
-    vh->sync(/*device_sync=*/true, /*weak_sync=*/false);
+    if (torch_ext_fast_metadata_enabled() && vh->var->allocator)
+        return vh->var->allocator->is_cuda();
+    sync_for_data_ptr(vh);
     return vh->var->allocator && vh->var->allocator->is_cuda();
 }
 int vh_device_type(jittor::VarHolder* vh) {
     // Report the Var's CURRENT residency without migrating (torch::Tensor::device()).
-    vh->sync(/*device_sync=*/true, /*weak_sync=*/false);
+    if (torch_ext_fast_metadata_enabled() && vh->var->allocator)
+        return vh->var->allocator->is_cuda() ? 1 : 0;
+    sync_for_data_ptr(vh);
     return (vh->var->allocator && vh->var->allocator->is_cuda()) ? 1 : 0;
 }
 double vh_item_double(jittor::VarHolder* vh) {
@@ -307,6 +378,8 @@ Tensor tensor_from_pyvar(void* obj) {
                    cudaMemcpyDeviceToHost);
         return var_from_host_dev(host.get(), nv, borrowed.scalar_type(), false);
     }
+    if (torch_ext_borrow_inputs_enabled())
+        return borrowed;
     // BAKE the input into a SETTLED jittor "array" Var before the ext's kernel
     // reads it. A lazy/intermediate input (e.g. fused-ssim's rendered image =
     // clamp(rasterizer_output), or any value computed several ops before this
@@ -324,14 +397,16 @@ Tensor tensor_from_pyvar(void* obj) {
     return borrowed.clone();   // graph-tracked settled copy, residency kept
 }
 void* tensor_to_pyvar(const Tensor& t) {
-    // Barrier so the ext's async kernel has finished writing this output before
-    // Python/jittor sees it (ext kernels launch on stream 0 and the ext returns
-    // without cudaDeviceSynchronize). Do NOT bake here: baking output[i] runs
-    // jittor ops (array/migrate) mid-return that can disturb the as-yet-unbaked
-    // sibling outputs of a multi-output ext. Downstream stability is handled by
-    // tensor_from_pyvar baking the way IN.
+    // Ext kernels launch on stream 0 through the c10 stream shim. Returning
+    // without a global device barrier lets the next Jittor stream-0 op consume
+    // this output in order. Do NOT bake here: baking output[i] runs jittor ops
+    // mid-return that can disturb sibling outputs. Downstream stability is
+    // handled by tensor_from_pyvar baking the way IN. Set
+    // JITTOR_TORCH_EXT_SYNC_RETURN=1 or JITTOR_TORCH_EXT_SYNC_BOUNDARY=1 for
+    // conservative debugging.
 #ifdef HAS_CUDA
-    cudaDeviceSynchronize();
+    if (torch_ext_sync_return_enabled())
+        cudaDeviceSynchronize();
 #endif
     return (void*)jittor::to_py_object<jittor::VarHolder*>(clone_holder(t._vh()));
 }
@@ -530,10 +605,10 @@ Tensor from_blob(const void* data, IntArrayRef size, TensorOptions opt) {
 // --------- ATen ops (wired on first real use) -------------------------------
 // argsort / cumsum are needed by flex_gemm's neighbor-map post-processing
 // (kernels/cuda/spconv/migemm_neighmap_pp.cu: torch::argsort(binary_code),
-// torch::cumsum(mask, 0, kInt32)). The operands are 1-D index/mask vectors, so
-// we implement them self-contained with Thrust on device (std on host) rather
-// than coupling to jittor's op registry. Stable sort matches torch's argsort
-// tie-breaking (ascending, first-occurrence order).
+// torch::cumsum(mask, 0, kInt32)). The operands are 1-D index/mask vectors; this
+// host fallback stays small and avoids pulling Thrust templates into the default
+// shim object. Stable sort matches torch's argsort tie-breaking (ascending,
+// first-occurrence order).
 
 template <typename K>
 static Tensor _argsort_1d_typed(const Tensor& self, bool descending) {

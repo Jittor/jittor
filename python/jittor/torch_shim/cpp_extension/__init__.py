@@ -181,18 +181,24 @@ def _shim_files():
     return files
 
 
+def _is_shim_source(path):
+    path = os.path.abspath(path)
+    return path in {os.path.abspath(p) for p in SHIM_SOURCES}
+
+
 def toolchain_signature():
     """Small stable signature used to detect stale in-place extension builds."""
     c = cfg()
     shim = {}
     for path in _shim_files():
         try:
-            st = os.stat(path)
-            shim[os.path.relpath(path, _THIS_DIR)] = int(st.st_mtime_ns)
+            with open(path, "rb") as f:
+                digest = hashlib.sha256(f.read()).hexdigest()
+            shim[os.path.relpath(path, _THIS_DIR)] = digest
         except OSError:
             shim[os.path.relpath(path, _THIS_DIR)] = None
     return {
-        "version": 2,
+        "version": 3,
         "cc_path": c["cc_path"],
         "nvcc_path": c["nvcc_path"],
         "ext_suffix": c["ext_suffix"],
@@ -211,6 +217,19 @@ def _metadata_root():
         except Exception:
             root = os.path.join(os.path.expanduser("~"), ".cache", "jittor_torch_extensions")
     root = os.path.join(os.path.abspath(root), "metadata")
+    os.makedirs(root, exist_ok=True)
+    return root
+
+
+def _shared_object_root():
+    root = os.environ.get("JITTOR_TORCH_EXTENSIONS_DIR")
+    if root is None:
+        try:
+            import jittor as _jt
+            root = os.path.join(_jt.flags.cache_path, "torch_extensions")
+        except Exception:
+            root = os.path.join(os.path.expanduser("~"), ".cache", "jittor_torch_extensions")
+    root = os.path.join(os.path.abspath(root), "shared_objects")
     os.makedirs(root, exist_ok=True)
     return root
 
@@ -280,6 +299,27 @@ def _write_object_stamp(src, obj, cmd):
         pass
 
 
+def _file_sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _shared_object_path(src, cmd_without_output):
+    key = {
+        "source": os.path.abspath(src),
+        "source_sha256": _file_sha256(src),
+        "cmd": list(cmd_without_output),
+    }
+    digest = hashlib.sha256(
+        json.dumps(key, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:16]
+    base = os.path.splitext(os.path.basename(src))[0]
+    return os.path.join(_shared_object_root(), f"{base}_{digest}.o")
+
+
 def build(name, sources, build_dir, output_path=None,
           include_dirs=None, define_macros=None,
           extra_cflags=None, extra_cuda_cflags=None,
@@ -298,37 +338,52 @@ def build(name, sources, build_dir, output_path=None,
         output_path = os.path.join(build_dir, name + c["ext_suffix"])
     sources = list(sources) + [s for s in SHIM_SOURCES if s not in sources]
 
-    incs = _common_includes(c, include_dirs)
-    macros = [f'-D{m}' if "=" not in str(m) and not isinstance(m, tuple) else
-              (f'-D{m[0]}={m[1]}' if isinstance(m, tuple) else f'-D{m}')
-              for m in (define_macros or [])]
-    macros += [
-        f'-DTORCH_EXTENSION_NAME={name}',
+    project_macros = [f'-D{m}' if "=" not in str(m) and not isinstance(m, tuple) else
+                      (f'-D{m[0]}={m[1]}' if isinstance(m, tuple) else f'-D{m}')
+                      for m in (define_macros or [])]
+    shim_macros = [
         '-DHAS_CUDA', '-DIS_CUDA',
         f'-D_GLIBCXX_USE_CXX11_ABI={abi}',
         '-DJTORCH_SHIM=1',
     ]
+    extension_macros = project_macros + [f'-DTORCH_EXTENSION_NAME={name}'] + shim_macros
 
     objs = []
     cmds = []
     for src in sources:
         src = os.path.abspath(src)
-        oh = hashlib.md5(src.encode()).hexdigest()[:8]
-        obj = os.path.join(build_dir, os.path.splitext(os.path.basename(src))[0] + "_" + oh + ".o")
-        objs.append(obj)
         is_cu = src.endswith(".cu")
+        is_shim = _is_shim_source(src)
+        incs = _common_includes(c, None if is_shim else include_dirs)
+        macros = shim_macros if is_shim else extension_macros
         if is_cu:
-            cmd = [c["nvcc_path"], "-c", src, "-o", obj,
-                   f"-std={std}", "-Xcompiler", "-fPIC", "-Xcompiler", "-fopenmp",
-                   "--expt-relaxed-constexpr", "--extended-lambda",
-                   "-O3", "-w", "--compiler-bindir", c["cc_path"]]
-            cmd += c["arch_flags"]
-            cmd += (extra_cuda_cflags or [])
+            cmd_without_output = [c["nvcc_path"], "-c", src,
+                                  f"-std={std}", "-Xcompiler", "-fPIC", "-Xcompiler", "-fopenmp",
+                                  "--expt-relaxed-constexpr", "--extended-lambda",
+                                  "-O3", "-w", "--compiler-bindir", c["cc_path"]]
+            cmd_without_output += c["arch_flags"]
+            if not is_shim:
+                cmd_without_output += (extra_cuda_cflags or [])
+            cmd_without_output += incs + macros
+            if is_shim:
+                obj = _shared_object_path(src, cmd_without_output)
+            else:
+                oh = hashlib.md5(src.encode()).hexdigest()[:8]
+                obj = os.path.join(build_dir, os.path.splitext(os.path.basename(src))[0] + "_" + oh + ".o")
+            cmd = [c["nvcc_path"], "-c", src, "-o", obj] + cmd_without_output[3:]
         else:
-            cmd = [c["cc_path"], "-c", src, "-o", obj,
-                   f"-std={std}", "-fPIC", "-fopenmp", "-O3", "-w"]
-            cmd += (extra_cflags or [])
-        cmd += incs + macros
+            cmd_without_output = [c["cc_path"], "-c", src,
+                                  f"-std={std}", "-fPIC", "-fopenmp", "-O3", "-w"]
+            if not is_shim:
+                cmd_without_output += (extra_cflags or [])
+            cmd_without_output += incs + macros
+            if is_shim:
+                obj = _shared_object_path(src, cmd_without_output)
+            else:
+                oh = hashlib.md5(src.encode()).hexdigest()[:8]
+                obj = os.path.join(build_dir, os.path.splitext(os.path.basename(src))[0] + "_" + oh + ".o")
+            cmd = [c["cc_path"], "-c", src, "-o", obj] + cmd_without_output[3:]
+        objs.append(obj)
         cmds.append((src, obj, cmd))
 
     # compile (skip if up-to-date unless force)
