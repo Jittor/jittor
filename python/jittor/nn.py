@@ -1210,8 +1210,11 @@ def _layer_norm_no_grad_cuda(x, normalized_shape, weight, bias, eps):
                 __syncthreads();
             }}
             float inv_std = rsqrtf(buf[0] / in0_shape1 + {eps_value:.9g}f);
-            for (int j = tid; j < in0_shape1; j += blockDim.x)
-                @out(row, j) = (@in0(row, j) - mean) * inv_std * @in1(j) + @in2(j);
+            for (int j = tid; j < in0_shape1; j += blockDim.x) {{
+                float scale = static_cast<float>(@in1(j));
+                float offset = static_cast<float>(@in2(j));
+                @out(row, j) = (@in0(row, j) - mean) * inv_std * scale + offset;
+            }}
         }}
         kernel<<<in0_shape0, 128>>>(@ARGS);
         """,

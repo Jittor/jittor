@@ -16,6 +16,8 @@ for _k in dir(_jittor):
         globals().setdefault(_k, getattr(_jittor, _k))
 
 __version__ = "2.11.0"
+torch = sys.modules[__name__]
+sys.modules.setdefault("torch.torch", torch)
 
 
 # torch.compiled_with_cxx11_abi(): a generic torch C++/CUDA-extension build probe.
@@ -33,6 +35,10 @@ import jittor.nn as nn
 sys.modules["torch.nn"] = nn
 if hasattr(nn, "functional"):
     sys.modules["torch.nn.functional"] = nn.functional
+for _conv_name in ("conv1d", "conv2d", "conv3d",
+                   "conv_transpose1d", "conv_transpose2d", "conv_transpose3d"):
+    if hasattr(nn, _conv_name):
+        globals().setdefault(_conv_name, getattr(nn, _conv_name))
 
 # nn.init -> jittor.init
 try:
@@ -1593,11 +1599,15 @@ _amp_mod = types.ModuleType("torch.amp")
 _amp_mod.autocast = getattr(_jt, "autocast", lambda *a, **k: contextlib.nullcontext())
 # Functional fp16 dynamic loss scaler lives in torch_compat (_GradScaler); reuse it.
 _amp_mod.GradScaler = getattr(_jt, "GradScaler", None) or (lambda *a, **k: None)
+_amp_mod.custom_fwd = lambda fwd=None, **k: (fwd if fwd is not None else (lambda f: f))
+_amp_mod.custom_bwd = lambda bwd=None, **k: (bwd if bwd is not None else (lambda f: f))
 sys.modules["torch.amp"] = _amp_mod
 globals()["amp"] = _amp_mod
 globals()["autocast"] = _amp_mod.autocast
 if "cuda" in globals():
     globals()["cuda"].amp.GradScaler = _amp_mod.GradScaler
+    globals()["cuda"].amp.custom_fwd = _amp_mod.custom_fwd
+    globals()["cuda"].amp.custom_bwd = _amp_mod.custom_bwd
 
 # ---- readable errors: surface jittor's buried [Reason] instead of the cryptic
 # "Wrong inputs arguments, help(jt.sync)" / "rerun with JT_SYNC=1" noise ----

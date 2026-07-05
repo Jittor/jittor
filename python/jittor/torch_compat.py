@@ -448,6 +448,12 @@ class _AutocastContext:
         return wrapper
 
 
+def _amp_passthrough_decorator(fn=None, **kwargs):
+    if fn is not None and callable(fn):
+        return fn
+    return lambda f: f
+
+
 class _GradScaler:
     """Functional fp16 dynamic loss scaler (matches torch.cuda.amp.GradScaler).
     Works with the jittor optimizer bridge: scale(loss).backward() routes scaled
@@ -1001,6 +1007,8 @@ def install(torch):
     import sys as _sys_install
     if _sys_install.modules.get("torch") is None:
         _sys_install.modules["torch"] = g
+    g.torch = g
+    _sys_install.modules.setdefault("torch.torch", g)
     g._torch_make_parameter = _torch_make_parameter
     g._torch_prune_leaf_registry = _torch_prune_leaf_registry
     if not hasattr(g, "_vj_native_load"):
@@ -1057,6 +1065,14 @@ def install(torch):
     g.dtype = dtype
     g.device = device
     g.GradScaler = _GradScaler        # picked up by torch.amp/torch.cuda.amp in the shim
+    try:
+        import jittor.nn as _jt_nn_top
+        for _conv_name in ("conv1d", "conv2d", "conv3d",
+                           "conv_transpose1d", "conv_transpose2d", "conv_transpose3d"):
+            if not hasattr(g, _conv_name) and hasattr(_jt_nn_top, _conv_name):
+                setattr(g, _conv_name, getattr(_jt_nn_top, _conv_name))
+    except Exception:
+        pass
 
     # jt.grad's C-binding only accepts a *plain* list of targets, so passing the
     # torch-style parameters() iterator/_ParamList (a list subclass) or a single
@@ -5331,6 +5347,8 @@ def _install_cuda(g):
         def autocast(*a, **k):
             return _AutocastContext()
         GradScaler = _GradScaler
+        custom_fwd = staticmethod(_amp_passthrough_decorator)
+        custom_bwd = staticmethod(_amp_passthrough_decorator)
     cuda.amp = _amp
     # stub classes referenced in annotations / guarded paths
     cuda.CUDAGraph = type("CUDAGraph", (), {})
@@ -8285,6 +8303,8 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
     _amp = _types2.ModuleType("torch.amp")
     _amp.autocast = lambda *args, **kwargs: _AutocastContext()
     _amp.GradScaler = _GradScaler
+    _amp.custom_fwd = _amp_passthrough_decorator
+    _amp.custom_bwd = _amp_passthrough_decorator
     _sys_library.modules["torch.amp"] = _amp
     g.amp = _amp
     try:
@@ -8293,6 +8313,8 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
                 g.cuda.amp = _types2.ModuleType("torch.cuda.amp")
             g.cuda.amp.autocast = _amp.autocast
             g.cuda.amp.GradScaler = _GradScaler
+            g.cuda.amp.custom_fwd = _amp_passthrough_decorator
+            g.cuda.amp.custom_bwd = _amp_passthrough_decorator
             _sys_library.modules["torch.cuda.amp"] = g.cuda.amp
     except Exception:
         pass

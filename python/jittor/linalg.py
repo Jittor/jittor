@@ -331,6 +331,7 @@ import collections as _collections
 # every existing `u, s, v = svd(x)` / `_, s, _ = svd(x)` caller is untouched), but
 # it also exposes `.U`, `.S`, `.Vh` for torch-grade attribute access.
 SVD = _collections.namedtuple("svd", ["U", "S", "Vh"])
+INVEX = _collections.namedtuple("inv_ex", ["inverse", "info"])
 
 
 def _svd_reduced(x):
@@ -664,6 +665,27 @@ def inv(x):
     )
     mx = lmx[0]
     return mx
+
+
+def inv_ex(x, *, check_errors=False, out=None):
+    r"""
+    Compute a matrix inverse and return ``(inverse, info)`` like
+    ``torch.linalg.inv_ex``.
+
+    Jittor's :func:`inv` path already raises when numpy/Jittor cannot invert the
+    input, so successful calls have a zero ``info`` tensor. This covers the
+    common torch-compat use case where callers import ``inv_ex`` and check
+    ``info == 0`` to build a validity mask.
+    """
+    inverse = inv(x)
+    info_shape = tuple(int(s) for s in x.shape[:-2])
+    info = jt.zeros(info_shape, dtype="int32")
+    if out is not None:
+        out_inverse, out_info = out
+        out_inverse.assign(inverse)
+        out_info.assign(info)
+        inverse, info = out_inverse, out_info
+    return INVEX(inverse, info)
 
 
 def pinv(x):
