@@ -7,6 +7,7 @@ import importlib.abc
 import importlib.machinery
 import os
 import sys
+import contextlib
 from typing import Dict, Iterable, Optional, Set, Tuple
 
 
@@ -30,6 +31,27 @@ _DEFAULT_READONLY_FUNCTIONS: Dict[str, Tuple[str, ...]] = {
         "distCUDA2",
     ),
 }
+
+_DEFAULT_COPY_SCOPE_FUNCTIONS: Dict[str, Tuple[str, ...]] = {
+    # o_voxel's GLB export keeps native mesh/rasterization objects alive across
+    # several pybind calls. Keep TRELLIS inference on the low-overhead extension
+    # path, but use the conservative tensor boundary for this export phase.
+    "o_voxel.postprocess": (
+        "to_glb",
+    ),
+    # nvdiffrast keeps CUDA raster/texture state around Python wrapper calls and
+    # is commonly used after TRELLIS export for preview rendering. Use a stable
+    # extension boundary for its public torch ops while keeping inference fast.
+    "nvdiffrast.torch.ops": (
+        "rasterize",
+        "interpolate",
+        "texture",
+        "texture_construct_mip",
+        "antialias",
+        "antialias_construct_topology_hash",
+    ),
+}
+
 
 def _is_falsey(value: Optional[str]) -> bool:
     return str(value or "").strip().lower() in {"0", "false", "no", "off"}
@@ -111,7 +133,49 @@ def _wrap_readonly_function(fn):
     return wrapped
 
 
-def _patch_module(module, readonly_functions: Iterable[str]) -> None:
+@contextlib.contextmanager
+def _copy_scope():
+    overrides = {
+        "JITTOR_TORCH_EXT_BORROW_INPUTS": "0",
+        "JITTOR_TORCH_EXT_FAST_METADATA": "0",
+    }
+    old = {name: os.environ.get(name) for name in overrides}
+    try:
+        for name, value in overrides.items():
+            os.environ[name] = value
+        yield
+    finally:
+        for name, value in old.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
+def _wrap_copy_scope_function(fn):
+    if getattr(fn, "_jittor_ext_copy_scope_wrapped", False):
+        return fn
+
+    @functools.wraps(fn)
+    def wrapped(*args, **kwargs):
+        with _copy_scope():
+            return fn(*args, **kwargs)
+
+    wrapped._jittor_ext_copy_scope_wrapped = True
+    return wrapped
+
+
+def _patch_module(module, readonly_functions: Iterable[str], copy_scope_functions: Iterable[str]) -> None:
+    for name in copy_scope_functions:
+        try:
+            fn = getattr(module, name)
+        except AttributeError:
+            continue
+        if callable(fn):
+            try:
+                setattr(module, name, _wrap_copy_scope_function(fn))
+            except Exception:
+                pass
     for name in readonly_functions:
         try:
             fn = getattr(module, name)
@@ -125,9 +189,10 @@ def _patch_module(module, readonly_functions: Iterable[str]) -> None:
 
 
 class _ExtensionPolicyLoader(importlib.abc.Loader):
-    def __init__(self, loader, readonly_functions: Tuple[str, ...]):
+    def __init__(self, loader, readonly_functions: Tuple[str, ...], copy_scope_functions: Tuple[str, ...]):
         self.loader = loader
         self.readonly_functions = readonly_functions
+        self.copy_scope_functions = copy_scope_functions
 
     def create_module(self, spec):
         create = getattr(self.loader, "create_module", None)
@@ -137,41 +202,48 @@ class _ExtensionPolicyLoader(importlib.abc.Loader):
 
     def exec_module(self, module) -> None:
         self.loader.exec_module(module)
-        _patch_module(module, self.readonly_functions)
+        _patch_module(module, self.readonly_functions, self.copy_scope_functions)
 
 
 class _ExtensionPolicyFinder(importlib.abc.MetaPathFinder):
-    def __init__(self, readonly_registry: Dict[str, Tuple[str, ...]]):
+    def __init__(self, readonly_registry: Dict[str, Tuple[str, ...]],
+                 copy_scope_registry: Dict[str, Tuple[str, ...]]):
         self.readonly_registry = readonly_registry
+        self.copy_scope_registry = copy_scope_registry
 
     def find_spec(self, fullname, path=None, target=None):
         readonly_functions = self.readonly_registry.get(fullname, ())
-        if not readonly_functions:
+        copy_scope_functions = self.copy_scope_registry.get(fullname, ())
+        if not readonly_functions and not copy_scope_functions:
             return None
         spec = importlib.machinery.PathFinder.find_spec(fullname, path)
         if spec is None or spec.loader is None:
             return None
         if isinstance(spec.loader, _ExtensionPolicyLoader):
             return spec
-        spec.loader = _ExtensionPolicyLoader(spec.loader, readonly_functions)
+        spec.loader = _ExtensionPolicyLoader(spec.loader, readonly_functions, copy_scope_functions)
         return spec
 
 
-def install_readonly_extension_borrow(registry=None) -> None:
+def install_readonly_extension_borrow(registry=None, copy_scope_registry=None) -> None:
     """Install import-time wrappers for native extension boundary policies."""
 
     readonly_reg = {} if _is_falsey(os.environ.get("JITTOR_TORCH_EXT_READONLY_BORROW")) else dict(
         registry or _DEFAULT_READONLY_FUNCTIONS
     )
-    if not readonly_reg:
+    copy_reg = {} if _is_falsey(os.environ.get("JITTOR_TORCH_EXT_COPY_SCOPE")) else dict(
+        copy_scope_registry or _DEFAULT_COPY_SCOPE_FUNCTIONS
+    )
+    if not readonly_reg and not copy_reg:
         return
     for finder in sys.meta_path:
         if isinstance(finder, _ExtensionPolicyFinder):
             finder.readonly_registry.update(readonly_reg)
+            finder.copy_scope_registry.update(copy_reg)
             break
     else:
-        sys.meta_path.insert(0, _ExtensionPolicyFinder(readonly_reg))
-    for name in readonly_reg:
+        sys.meta_path.insert(0, _ExtensionPolicyFinder(readonly_reg, copy_reg))
+    for name in set(readonly_reg) | set(copy_reg):
         module = sys.modules.get(name)
         if module is not None:
-            _patch_module(module, readonly_reg.get(name, ()))
+            _patch_module(module, readonly_reg.get(name, ()), copy_reg.get(name, ()))

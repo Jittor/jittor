@@ -36,7 +36,9 @@ class dtype(str):
     @property
     def itemsize(self):
         # bytes per element (torch.dtype.itemsize); used by vLLM weight transfer.
-        _sz = {"bool": 1, "uint8": 1, "int8": 1, "float8_e4m3fn": 1,
+        _sz = {"bool": 1, "uint8": 1, "uint1": 1, "uint2": 1, "uint3": 1, "uint4": 1,
+               "uint5": 1, "uint6": 1, "uint7": 1,
+               "int8": 1, "float8_e4m3fn": 1,
                "float8_e5m2": 1, "float8_e4m3fnuz": 1, "float8_e5m2fnuz": 1,
                "float8_e8m0fnu": 1, "qint8": 1, "quint8": 1,
                "int16": 2, "uint16": 2, "float16": 2, "bfloat16": 2,
@@ -109,6 +111,10 @@ def _make_dtypes(ns):
         ("float8_e4m3fn", True), ("float8_e4m3fnuz", True),
         ("float8_e5m2", True), ("float8_e5m2fnuz", True),
         ("float8_e8m0fnu", True), ("float4_e2m1fn_x2", True),
+        # sub-byte unsigned dtypes used by torchao/diffusers import-time tables.
+        # They are placeholders only; Jittor kernels do not implement them.
+        ("uint1", False), ("uint2", False), ("uint3", False), ("uint4", False),
+        ("uint5", False), ("uint6", False), ("uint7", False),
     ]
     objs = {}
     for name, is_fp in specs:
@@ -1274,7 +1280,7 @@ def install(torch):
     # generator is passed (it is otherwise ignored).
     class Generator:
         def __init__(self, device=None):
-            self.device = device
+            self.device = globals()["device"](device or "cpu")
             self._seed = 0
         def manual_seed(self, s):
             self._seed = int(s)
@@ -5342,6 +5348,9 @@ def _install_cuda(g):
                                       "record": lambda self, *a, **k: None,
                                       "synchronize": lambda self: None,
                                       "elapsed_time": lambda self, o: 0.0})
+    g.Stream = cuda.Stream
+    g.Event = cuda.Event
+    g.CUDAGraph = cuda.CUDAGraph
     cuda.stream = lambda s=None: contextlib.nullcontext()
     cuda.current_stream = lambda *a, **k: _Stream()
     # report REAL device memory from jittor's MemInfo (was a 0-stub, so training-code
@@ -5413,18 +5422,26 @@ def _install_cuda(g):
     if hasattr(cuda, "amp"):
         _sys_cuda.modules["torch.cuda.amp"] = cuda.amp
 
-    for _dev_ns in ("mps", "cpu", "npu"):
+    for _dev_ns in ("mps", "cpu", "npu", "xpu", "mtia"):
         _mod = _sys_cuda.modules.get("torch." + _dev_ns)
         if _mod is None:
             _mod = _types.ModuleType("torch." + _dev_ns)
             _sys_cuda.modules["torch." + _dev_ns] = _mod
         _mod.is_available = getattr(_mod, "is_available", lambda *a, **k: False)
+        _mod.is_initialized = getattr(_mod, "is_initialized", lambda *a, **k: False)
         _mod.device_count = getattr(_mod, "device_count", lambda *a, **k: 0)
         _mod.current_device = getattr(_mod, "current_device", lambda *a, **k: 0)
         _mod.set_device = getattr(_mod, "set_device", lambda *a, **k: None)
         _mod.empty_cache = getattr(_mod, "empty_cache", lambda *a, **k: None)
         _mod.synchronize = getattr(_mod, "synchronize", lambda *a, **k: None)
         _mod.ipc_collect = getattr(_mod, "ipc_collect", lambda *a, **k: None)
+        _mod.manual_seed = getattr(_mod, "manual_seed", lambda *a, **k: None)
+        _mod.manual_seed_all = getattr(_mod, "manual_seed_all", lambda *a, **k: None)
+        _mod.seed = getattr(_mod, "seed", lambda *a, **k: None)
+        _mod.reset_peak_memory_stats = getattr(_mod, "reset_peak_memory_stats", lambda *a, **k: None)
+        _mod.reset_max_memory_allocated = getattr(_mod, "reset_max_memory_allocated", lambda *a, **k: None)
+        _mod.memory_allocated = getattr(_mod, "memory_allocated", lambda *a, **k: 0)
+        _mod.max_memory_allocated = getattr(_mod, "max_memory_allocated", lambda *a, **k: 0)
         setattr(g, _dev_ns, _mod)
 
     if "torch.multiprocessing" not in _sys_cuda.modules:
@@ -8606,6 +8623,8 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
         def _dict_flatten(x):
             keys = list(x.keys())
             return [x[k] for k in keys], keys
+        def _dict_unflatten(values, context):
+            return {k: v for k, v in zip(context, values)}
         def _get_node_type(x):
             return dict if isinstance(x, dict) else type(x)
         SUPPORTED_NODES = {
@@ -8654,6 +8673,8 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
         _pytree._list_flatten = _list_flatten
         _pytree._list_unflatten = _list_unflatten
         _pytree._list_flatten_with_keys = _list_flatten_with_keys
+        _pytree._dict_flatten = _dict_flatten
+        _pytree._dict_unflatten = _dict_unflatten
         _pytree.tree_flatten = _tree_flatten
         _pytree.tree_unflatten = _tree_unflatten
         _pytree.tree_map = lambda f, x: f(x)
@@ -8692,6 +8713,14 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
         _hooks.RemovableHandle = RemovableHandle
         _sys_utils.modules["torch.utils.hooks"] = _hooks
     g.utils.hooks = _sys_utils.modules["torch.utils.hooks"]
+    if "torch.utils.dlpack" not in _sys_utils.modules:
+        _dlpack = _types2.ModuleType("torch.utils.dlpack")
+        def _dlpack_not_implemented(*args, **kwargs):
+            raise NotImplementedError("torch.utils.dlpack is not implemented by jittor torch_compat")
+        _dlpack.from_dlpack = _dlpack_not_implemented
+        _dlpack.to_dlpack = _dlpack_not_implemented
+        _sys_utils.modules["torch.utils.dlpack"] = _dlpack
+    g.utils.dlpack = _sys_utils.modules["torch.utils.dlpack"]
     if "torch._subclasses.fake_tensor" not in _sys_utils.modules:
         _subclasses = _types2.ModuleType("torch._subclasses")
         _fake_tensor = _types2.ModuleType("torch._subclasses.fake_tensor")

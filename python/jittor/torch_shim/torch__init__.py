@@ -1501,6 +1501,13 @@ class RemovableHandle:
     def remove(self): pass
 _hooks.RemovableHandle = RemovableHandle
 sys.modules["torch.utils.hooks"] = _hooks
+_dlpack = types.ModuleType("torch.utils.dlpack")
+def _dlpack_not_implemented(*args, **kwargs):
+    raise NotImplementedError("torch.utils.dlpack is not implemented by jittor torch shim")
+_dlpack.from_dlpack = _dlpack_not_implemented
+_dlpack.to_dlpack = _dlpack_not_implemented
+sys.modules["torch.utils.dlpack"] = _dlpack
+_utils.dlpack = _dlpack
 
 # torch.library (custom op registration)
 _library = types.ModuleType("torch.library")
@@ -1727,12 +1734,12 @@ def _linalg_forward(name):
             raise NotImplementedError(
                 f"torch.linalg.{_n} is not implemented in the jittor shim "
                 f"(jittor.linalg has no '{_n}'). Available: svd, qr, inv, pinv, "
-                f"det, slogdet, solve, cholesky, eig, eigh, norm, vector_norm, "
+                f"det, slogdet, solve, cholesky, eig, eigh, inv_ex, norm, vector_norm, "
                 f"matrix_norm, matrix_power, cross.")
         return _missing
     return fn
 
-for _name in ("svd", "qr", "inv", "pinv", "det", "slogdet", "solve",
+for _name in ("svd", "qr", "inv", "inv_ex", "pinv", "det", "slogdet", "solve",
               "cholesky", "eig", "eigh"):
     setattr(_linalg, _name, _linalg_forward(_name))
 
