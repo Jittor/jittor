@@ -1811,7 +1811,15 @@ def install(torch):
                 rep = query.shape[-3] // key.shape[-3]
                 key = key.repeat_interleave(rep, dim=-3) if hasattr(key, "repeat_interleave") else key
                 value = value.repeat_interleave(rep, dim=-3) if hasattr(value, "repeat_interleave") else value
-            scores = jt.matmul(query, key.transpose(-1, -2)) * sf
+            q_dtype, k_dtype = str(query.dtype), str(key.dtype)
+            if (jt.flags.use_cuda and jt.compile_extern.cublas_ops
+                    and len(query.shape) >= 3 and len(query.shape) == len(key.shape)
+                    and query.shape[:-2] == key.shape[:-2]
+                    and q_dtype == k_dtype and "float" in q_dtype
+                    and "complex" not in q_dtype and "complex" not in k_dtype):
+                scores = jt.compile_extern.cublas_ops.cublas_batched_matmul(query, key, 0, 1) * sf
+            else:
+                scores = jt.matmul(query, key.transpose(-1, -2)) * sf
             if is_causal:
                 Lq, Lk = query.shape[-2], key.shape[-2]
                 mask = jt.triu(jt.ones((Lq, Lk)), 1) * (-1e30)

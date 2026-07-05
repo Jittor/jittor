@@ -225,6 +225,19 @@ class TestLayerNorm(Base):
                     msg=f"F.layer_norm {dev}")
         both_devices(body)
 
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    def test_ln_no_grad_cuda_3d(self):
+        rng = np.random.RandomState(216)
+        x = rng.randn(2, 8, 32).astype("float32")
+        w = rng.randn(32).astype("float32")
+        b = rng.randn(32).astype("float32")
+        mu = x.mean(-1, keepdims=True); var = x.var(-1, keepdims=True)
+        ref = (x - mu) / np.sqrt(var + 1e-5) * w + b
+        with jt.flag_scope(use_cuda=1), jt.no_grad():
+            ln = nn.LayerNorm(32)
+            ln.weight.update(t(w)); ln.bias.update(t(b))
+            self.ac(ln(t(x)).numpy(), ref, atol=1e-4, msg="ln no_grad cuda 3d")
+
 
 # --------------------------------------------------------------------------- GroupNorm
 

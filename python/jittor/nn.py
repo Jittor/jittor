@@ -70,6 +70,14 @@ def matmul_transpose(a, b):
         cc = matmul_transpose(aa, b)
         return cc.reshape(a.shape[:-1]+(-1,))
     assert len(a.shape) == 2 and len(b.shape) == 2
+    a_dtype, b_dtype = str(a.dtype), str(b.dtype)
+    if (jt.flags.use_cuda and jt.compile_extern.cublas_ops
+            and a_dtype == b_dtype and "float" in a_dtype
+            and "complex" not in a_dtype and "complex" not in b_dtype):
+        if a_dtype == "float64":
+            r = jt.compile_extern.cublas_ops.cublas_matmul(a.float32(), b.float32(), 0, 1)
+            return r.cast("float64")
+        return jt.compile_extern.cublas_ops.cublas_matmul(a, b, 0, 1)
 
     shape = list(a.shape)[:-1] + list(b.shape)
     with jt.flag_scope(amp_reg = jt.flags.amp_reg | 36):
@@ -1153,6 +1161,64 @@ def _ln_normalize(x, dims, eps):
     return _LN.apply(x)
 
 
+def _layer_norm_no_grad_cuda(x, normalized_shape, weight, bias, eps):
+    if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
+        return None
+    if len(normalized_shape) != 1 or str(x.dtype) != "float32":
+        return None
+    if not isinstance(weight, jt.Var) or not isinstance(bias, jt.Var):
+        return None
+    hidden = int(normalized_shape[0])
+    if int(x.shape[-1]) != hidden or int(weight.numel()) != hidden or int(bias.numel()) != hidden:
+        return None
+    rows = 1
+    for size in x.shape[:-1]:
+        rows *= int(size)
+    x2 = x.reshape((rows, hidden))
+    w = weight.reshape((hidden,))
+    b = bias.reshape((hidden,))
+    eps_value = float(eps)
+    y = jt.code(
+        (rows, hidden),
+        x.dtype,
+        [x2, w, b],
+        cuda_src=f"""
+        __global__ static void kernel(@ARGS_DEF) {{
+            @PRECALC
+            int row = blockIdx.x;
+            int tid = threadIdx.x;
+            __shared__ float buf[128];
+            float sum = 0.0f;
+            for (int j = tid; j < in0_shape1; j += blockDim.x)
+                sum += @in0(row, j);
+            buf[tid] = sum;
+            __syncthreads();
+            for (int stride = blockDim.x >> 1; stride > 0; stride >>= 1) {{
+                if (tid < stride) buf[tid] += buf[tid + stride];
+                __syncthreads();
+            }}
+            float mean = buf[0] / in0_shape1;
+            float var = 0.0f;
+            for (int j = tid; j < in0_shape1; j += blockDim.x) {{
+                float d = @in0(row, j) - mean;
+                var += d * d;
+            }}
+            buf[tid] = var;
+            __syncthreads();
+            for (int stride = blockDim.x >> 1; stride > 0; stride >>= 1) {{
+                if (tid < stride) buf[tid] += buf[tid + stride];
+                __syncthreads();
+            }}
+            float inv_std = rsqrtf(buf[0] / in0_shape1 + {eps_value:.9g}f);
+            for (int j = tid; j < in0_shape1; j += blockDim.x)
+                @out(row, j) = (@in0(row, j) - mean) * inv_std * @in1(j) + @in2(j);
+        }}
+        kernel<<<in0_shape0, 128>>>(@ARGS);
+        """,
+    )
+    return y.reshape(x.shape)
+
+
 class LayerNorm(Module):
     def __init__(self, normalized_shape, eps: float = 1e-5, elementwise_affine: bool = True, bias: bool = True, device=None, dtype=None) -> None:
         # device/dtype: torch's LayerNorm accepts them (factory kwargs); jittor places
@@ -1173,11 +1239,14 @@ class LayerNorm(Module):
         dims = [-i for i in range(len(self.normalized_shape), 0, -1)]
         # out = weight*(x-mean)/sqrt(var+eps) + bias. Normalization has a stable custom
         # backward (see _ln_normalize); the affine stays composite (no cancellation).
-        xhat = _ln_normalize(x, dims, self.eps)
         # torch's LayerNorm/F.layer_norm accept weight=None / bias=None (MPT sets
         # norm.bias = None for Hub-weight compat). Treat None as identity/zero.
         weight = 1.0 if self.weight is None else self.weight
         bias = 0.0 if self.bias is None else self.bias
+        fast = _layer_norm_no_grad_cuda(x, self.normalized_shape, weight, bias, self.eps)
+        if fast is not None:
+            return fast
+        xhat = _ln_normalize(x, dims, self.eps)
         return xhat * weight + bias
 
 
@@ -1191,9 +1260,12 @@ def layer_norm(x,
     eps: float = 1e-5, 
     elementwise_affine: bool = True):
     dims = [-i for i in range(len(normalized_shape), 0, -1)]
-    xhat = _ln_normalize(x, dims, eps)   # stable custom backward, see LayerNorm.execute
     weight = 1.0 if weight is None else weight
     bias = 0.0 if bias is None else bias
+    fast = _layer_norm_no_grad_cuda(x, tuple(normalized_shape), weight, bias, eps)
+    if fast is not None:
+        return fast
+    xhat = _ln_normalize(x, dims, eps)   # stable custom backward, see LayerNorm.execute
     return xhat * weight + bias
 
 class GroupNorm(Module):
