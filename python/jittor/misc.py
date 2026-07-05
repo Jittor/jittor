@@ -1754,8 +1754,12 @@ Example::
     ret = jt.searchsorted(sorted_1d, values)
     assert (ret == [[1, 3, 4], [1, 3, 4]]).all(), ret
 
-
     """
+    if not isinstance(values, jt.Var):
+        values = jt.array(values, dtype=sorted.dtype)
+    scalar_value = values.ndim == 0
+    if scalar_value:
+        values = values.reshape((1,))
     _searchsorted_header = f"""
 namespace jittor {{
 
@@ -1790,11 +1794,14 @@ inline static void searchsorted(
 
     searchsorted(batch_num2, 0, value_num, 0, sorted_num, batch_stride, in0_p, in1_p, out0_p);
 """
-    return jt.code(values.shape, "int32", [sorted, values], 
+    ret = jt.code(values.shape, "int32", [sorted, values],
         cpu_header=_searchsorted_header,
         cpu_src=_searchsorted_src,
         cuda_header=_searchsorted_header,
         cuda_src=_searchsorted_src)
+    if scalar_value:
+        ret = ret.reshape(())
+    return ret
 
 
 def scatter(x:jt.Var, dim:int, index:jt.Var, src:jt.Var, reduce='void'):

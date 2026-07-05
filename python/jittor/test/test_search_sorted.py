@@ -39,10 +39,20 @@ class TestSearchSorted(unittest.TestCase):
         ret = jt.searchsorted(sorted_1d, values)
         assert (ret == [[1, 3, 4], [1, 3, 4]]).all(), ret
 
+    def test_scalar_value(self):
+        sorted_1d = jt.array([1.0, 2.0, 3.0])
+        ret = jt.searchsorted(sorted_1d, 1.5)
+        assert ret.dtype == "int32", ret.dtype
+        assert ret.item() == 1, ret
+
+        ret = jt.searchsorted(sorted_1d, jt.array(2.0), right=True)
+        assert ret.item() == 2, ret
+
     @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
     @jt.flag_scope(use_cuda=1)
     def test_cuda(self):
         self.test_origin()
+        self.test_scalar_value()
 
 
     def test_searchsorted_cpu(self):
