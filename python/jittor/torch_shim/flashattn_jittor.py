@@ -97,6 +97,7 @@ _BACKEND = _UNSET
 _BACKEND_NAME = "math"
 _LAST_ERROR: Optional[str] = None
 _LOADING = False
+_BORROW_INPUTS_CACHE = None
 
 
 def _truthy(value: Optional[str]) -> bool:
@@ -653,7 +654,33 @@ def _maybe_cast_float32_tensor(x, target: Optional[str]):
     return x
 
 
+def _torch_ext_borrow_inputs_enabled() -> bool:
+    """Mirror the C++ extension borrow-input gate.
+
+    flash-attn marks q/k/v as readonly-borrow itself after explicit
+    materialization.  This helper only detects the extension-wide borrow mode so
+    we can skip redundant Python tagging in that unsafe opt-in configuration.
+    """
+    global _BORROW_INPUTS_CACHE
+    state = (
+        os.environ.get("JITTOR_TORCH_EXT_SYNC_BOUNDARY"),
+        os.environ.get("JITTOR_TORCH_EXT_COPY_INPUTS"),
+        os.environ.get("JITTOR_TORCH_EXT_UNSAFE_BORROW_INPUTS"),
+        os.environ.get("JITTOR_TORCH_EXT_BORROW_INPUTS"),
+    )
+    if _BORROW_INPUTS_CACHE is not None and _BORROW_INPUTS_CACHE[0] == state:
+        return _BORROW_INPUTS_CACHE[1]
+    enabled = not (
+        _truthy(state[0]) or _truthy(state[1])
+        or _falsey(state[2]) or _falsey(state[3])
+    ) and (_truthy(state[2]) or _truthy(state[3]))
+    _BORROW_INPUTS_CACHE = (state, enabled)
+    return enabled
+
+
 def _mark_readonly_borrow(*tensors):
+    if _torch_ext_borrow_inputs_enabled():
+        return []
     saved = []
     for tensor in tensors:
         if tensor is None:
@@ -688,11 +715,15 @@ def _make_official_backend(low_level: ModuleType, root: pathlib.Path) -> ModuleT
     mod.__file__ = os.fspath(root)
     mod._flashattn_jittor_official = True
     mod._flashattn_jittor_low_level = low_level
+    mod._flashattn_jittor_head_dims = tuple(_official_head_dims(root))
+    mod._flashattn_jittor_dtypes = tuple(_official_dtypes())
+    low_fwd = low_level.fwd
+    low_varlen_fwd = low_level.varlen_fwd
 
     def _check_args(dropout_p, softcap, alibi_slopes, return_attn_probs):
-        if float(dropout_p) != 0.0:
+        if dropout_p not in (0, 0.0, None) and float(dropout_p) != 0.0:
             raise RuntimeError("flashattn_jittor official backend supports dropout_p=0 only")
-        if float(softcap or 0.0) > 0.0:
+        if softcap not in (0, 0.0, None) and float(softcap) > 0.0:
             raise RuntimeError("flashattn_jittor official backend does not support softcap")
         if alibi_slopes is not None:
             raise RuntimeError("flashattn_jittor official backend does not support alibi_slopes")
@@ -720,9 +751,9 @@ def _make_official_backend(low_level: ModuleType, root: pathlib.Path) -> ModuleT
             softmax_scale = q.shape[-1] ** -0.5
         saved = _mark_readonly_borrow(q, k, v, alibi_slopes)
         try:
-            result = low_level.fwd(q, k, v, None, alibi_slopes, float(dropout_p),
-                                   float(softmax_scale), bool(causal), wl, wr,
-                                   float(softcap or 0.0), bool(return_attn_probs), None)
+            result = low_fwd(q, k, v, None, alibi_slopes, 0.0,
+                             float(softmax_scale), bool(causal), wl, wr,
+                             0.0, bool(return_attn_probs), None)
         finally:
             _restore_readonly_borrow(saved)
         return _flashattn_result(result, return_attn_probs)
@@ -776,12 +807,12 @@ def _make_official_backend(low_level: ModuleType, root: pathlib.Path) -> ModuleT
             seqused_k, leftpad_k, block_table, alibi_slopes,
         )
         try:
-            result = low_level.varlen_fwd(
+            result = low_varlen_fwd(
                 q, k, v, None, cu_seqlens_q, cu_seqlens_k,
                 seqused_k, leftpad_k,
                 block_table, alibi_slopes, int(max_seqlen_q), int(max_seqlen_k),
-                float(dropout_p), float(softmax_scale), False, bool(causal),
-                wl, wr, float(softcap or 0.0), bool(return_attn_probs), None)
+                0.0, float(softmax_scale), False, bool(causal),
+                wl, wr, 0.0, bool(return_attn_probs), None)
         finally:
             _restore_readonly_borrow(saved)
         return _flashattn_result(result, return_attn_probs)

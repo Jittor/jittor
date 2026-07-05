@@ -871,6 +871,12 @@ def enable(
         install_readonly_extension_borrow()
     except Exception:
         pass
+    try:
+        from jittor.torch_shim import trellis_runtime
+
+        trellis_runtime.install()
+    except Exception:
+        pass
 
     return {
         "torch": jt,

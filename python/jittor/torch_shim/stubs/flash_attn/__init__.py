@@ -39,6 +39,8 @@ except Exception:  # pragma: no cover - fallback must remain import-safe
 __version__ = "2.7.4.post1"
 _jittor_flash_attn_stub = True
 _jittor_flash_attn_backend = "math"
+_NATIVE_FUNCTION_CACHE = {}
+_NATIVE_MISSING = object()
 
 __all__ = [
     "flash_attn_func",
@@ -56,7 +58,11 @@ __all__ = [
 def _native_function(name):
     """Return a flashattn_jittor entry point, or None for math fallback."""
     global _jittor_flash_attn_backend
+    cached = _NATIVE_FUNCTION_CACHE.get(name, _NATIVE_MISSING)
+    if cached is not _NATIVE_MISSING:
+        return cached
     if _flashattn_jittor is None:
+        _NATIVE_FUNCTION_CACHE[name] = None
         return None
     backend = _flashattn_jittor.load_backend()
     if backend is None:
@@ -67,16 +73,19 @@ def _native_function(name):
                 "flashattn_jittor is unavailable: %s"
                 % (_flashattn_jittor.last_error() or "unknown error")
             )
+        _NATIVE_FUNCTION_CACHE[name] = None
         return None
     _jittor_flash_attn_backend = _flashattn_jittor.backend_name()
     fn = getattr(backend, name, None)
     if callable(fn):
+        _NATIVE_FUNCTION_CACHE[name] = fn
         return fn
     if _flashattn_jittor.required():
         raise RuntimeError(
             "native flashattn_jittor backend %s does not provide %s"
             % (_jittor_flash_attn_backend, name)
         )
+    _NATIVE_FUNCTION_CACHE[name] = None
     return None
 
 
