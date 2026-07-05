@@ -62,17 +62,21 @@ static bool torch_ext_sync_return_enabled() {
 static bool torch_ext_borrow_inputs_enabled() {
     if (env_truthy("JITTOR_TORCH_EXT_SYNC_BOUNDARY") ||
         env_truthy("JITTOR_TORCH_EXT_COPY_INPUTS") ||
+        env_falsey("JITTOR_TORCH_EXT_UNSAFE_BORROW_INPUTS") ||
         env_falsey("JITTOR_TORCH_EXT_BORROW_INPUTS"))
         return false;
-    return true;
+    return env_truthy("JITTOR_TORCH_EXT_UNSAFE_BORROW_INPUTS") ||
+           env_truthy("JITTOR_TORCH_EXT_BORROW_INPUTS");
 }
 
 static bool torch_ext_fast_metadata_enabled() {
     if (env_truthy("JITTOR_TORCH_EXT_SYNC_BOUNDARY") ||
         env_truthy("JITTOR_TORCH_EXT_SYNC_METADATA") ||
+        env_falsey("JITTOR_TORCH_EXT_UNSAFE_FAST_METADATA") ||
         env_falsey("JITTOR_TORCH_EXT_FAST_METADATA"))
         return false;
-    return true;
+    return env_truthy("JITTOR_TORCH_EXT_UNSAFE_FAST_METADATA") ||
+           env_truthy("JITTOR_TORCH_EXT_FAST_METADATA");
 }
 
 static void sync_for_storage(jittor::VarHolder* vh) {

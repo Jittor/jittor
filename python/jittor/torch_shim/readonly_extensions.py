@@ -136,6 +136,8 @@ def _wrap_readonly_function(fn):
 @contextlib.contextmanager
 def _copy_scope():
     overrides = {
+        "JITTOR_TORCH_EXT_UNSAFE_BORROW_INPUTS": "0",
+        "JITTOR_TORCH_EXT_UNSAFE_FAST_METADATA": "0",
         "JITTOR_TORCH_EXT_BORROW_INPUTS": "0",
         "JITTOR_TORCH_EXT_FAST_METADATA": "0",
     }
