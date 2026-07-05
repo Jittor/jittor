@@ -193,7 +193,8 @@ namespace detail {
     bool     is_jittor_var(void* pyobj);
     bool     pyvar_is_ext_mutable(void* pyobj);
     bool     pyvar_is_ext_readonly_borrow(void* pyobj);
-    Tensor   tensor_from_pyvar(void* pyobj);           // borrow
+    Tensor   tensor_from_pyvar(void* pyobj);           // default extension boundary
+    Tensor   tensor_from_pyvar_readonly(void* pyobj);  // explicit readonly borrow
     void     commit_tensor_to_pyvar(void* pyobj, const Tensor& t);
     void*    tensor_to_pyvar(const Tensor& t);         // +1 PyObject*
 

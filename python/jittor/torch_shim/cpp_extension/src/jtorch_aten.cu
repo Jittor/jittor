@@ -400,6 +400,10 @@ Tensor tensor_from_pyvar(void* obj) {
         return borrowed;
     return borrowed.clone();   // graph-tracked settled copy, residency kept
 }
+Tensor tensor_from_pyvar_readonly(void* obj) {
+    jittor::VarHolder* vh = jittor::from_py_object<jittor::VarHolder*>((PyObject*)obj);
+    return adopt(vh, /*owns=*/false);
+}
 void* tensor_to_pyvar(const Tensor& t) {
     // Ext kernels launch on stream 0 through the c10 stream shim. Returning
     // without a global device barrier lets the next Jittor stream-0 op consume
