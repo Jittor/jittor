@@ -7,6 +7,7 @@ CPU+CUDA.
 Run:  python -m jittor.test.test_torch_compat_attention
 """
 import unittest
+import os
 import numpy as np
 import jittor as torch
 import jittor as jt
@@ -66,6 +67,53 @@ class TestSDPA(Base):
                 jt.array(q), jt.array(k), jt.array(v), is_causal=True).numpy()
             self.ac(out, _sdpa_ref(q, k, v, causal), msg=f"sdpa causal {dev}")
         both_devices(body)
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
+                     "native flash-attn source not configured")
+    def test_sdpa_native_flash_attn_fp16_cuda(self):
+        rng = np.random.RandomState(23)
+        q = rng.randn(2, 4, 8, 8).astype("float32")
+        k = rng.randn(2, 4, 8, 8).astype("float32")
+        v = rng.randn(2, 4, 8, 8).astype("float32")
+        with jt.flag_scope(use_cuda=1), jt.no_grad():
+            if hasattr(jt, "_torch_sdpa_flash_stats"):
+                delattr(jt, "_torch_sdpa_flash_stats")
+            out = torch.nn.functional.scaled_dot_product_attention(
+                jt.array(q).float16(), jt.array(k).float16(), jt.array(v).float16())
+            got = out.float32().numpy()
+            stats = getattr(jt, "_torch_sdpa_flash_stats", {})
+        self.assertGreaterEqual(stats.get("hits", 0), 1, "native flash-attn SDPA was not used")
+        self.assertIn("flashattn_jittor", str(stats.get("backend", "")))
+        self.ac(got, _sdpa_ref(q, k, v), atol=2e-3, rtol=2e-3, msg="sdpa native flash fp16 cuda")
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
+                     "native flash-attn source not configured")
+    def test_sdpa_native_flash_attn_float32_opt_in_cast_cuda(self):
+        rng = np.random.RandomState(29)
+        q = rng.randn(2, 4, 8, 8).astype("float32")
+        k = rng.randn(2, 4, 8, 8).astype("float32")
+        v = rng.randn(2, 4, 8, 8).astype("float32")
+        old = os.environ.get("JITTOR_FLASH_ATTN_CAST_FLOAT32")
+        os.environ["JITTOR_FLASH_ATTN_CAST_FLOAT32"] = "fp16"
+        try:
+            with jt.flag_scope(use_cuda=1), jt.no_grad():
+                if hasattr(jt, "_torch_sdpa_flash_stats"):
+                    delattr(jt, "_torch_sdpa_flash_stats")
+                out = torch.nn.functional.scaled_dot_product_attention(
+                    jt.array(q), jt.array(k), jt.array(v))
+                self.assertEqual(str(out.dtype), "float32")
+                got = out.numpy()
+                stats = getattr(jt, "_torch_sdpa_flash_stats", {})
+        finally:
+            if old is None:
+                os.environ.pop("JITTOR_FLASH_ATTN_CAST_FLOAT32", None)
+            else:
+                os.environ["JITTOR_FLASH_ATTN_CAST_FLOAT32"] = old
+        self.assertGreaterEqual(stats.get("hits", 0), 1, "native flash-attn SDPA was not used")
+        self.assertGreaterEqual(stats.get("casts", {}).get("float32_to_float16", 0), 1)
+        self.ac(got, _sdpa_ref(q, k, v), atol=2e-3, rtol=2e-3, msg="sdpa native flash fp32 opt-in cast cuda")
 
 
 class TestMultiheadAttention(Base):

@@ -1818,7 +1818,192 @@ def install(torch):
     if not hasattr(nn.functional, "pairwise_distance") and hasattr(nn, "pairwise_distance"):
         nn.functional.pairwise_distance = nn.pairwise_distance
 
-    # scaled_dot_product_attention (torch F.sdpa) -- standard math impl with
+    import os as _os
+
+    def _sdpa_flash_stats():
+        stats = getattr(jt, "_torch_sdpa_flash_stats", None)
+        if stats is None:
+            stats = {"hits": 0, "misses": {}, "casts": {}, "backend": None}
+            jt._torch_sdpa_flash_stats = stats
+        return stats
+
+    def _sdpa_flash_miss(reason):
+        misses = _sdpa_flash_stats()["misses"]
+        misses[reason] = misses.get(reason, 0) + 1
+
+    def _sdpa_flash_cast(reason):
+        casts = _sdpa_flash_stats()["casts"]
+        casts[reason] = casts.get(reason, 0) + 1
+
+    def _sdpa_flash_hit(backend_name):
+        stats = _sdpa_flash_stats()
+        stats["hits"] += 1
+        stats["backend"] = backend_name
+
+    def _sdpa_flash_template_dim(dim):
+        dim = int(dim)
+        if dim <= 0 or dim > 256 or dim % 8 != 0:
+            return None
+        if dim <= 32:
+            return 32
+        if dim <= 64:
+            return 64
+        if dim <= 96:
+            return 96
+        if dim <= 128:
+            return 128
+        if dim <= 192:
+            return 192
+        return 256
+
+    def _sdpa_flash_float32_cast_target():
+        raw = (_os.environ.get("JITTOR_FLASH_ATTN_CAST_FLOAT32") or "").strip().lower()
+        if raw in ("1", "true", "yes", "on", "fp16", "float16", "half"):
+            return "float16"
+        if raw in ("bf16", "bfloat16"):
+            return "bfloat16"
+        return None
+
+    def _sdpa_flash_merge_env_list(primary, fallback, item):
+        raw = _os.environ.get(primary) or _os.environ.get(fallback)
+        if not raw:
+            _os.environ[primary] = str(item)
+            return
+        if raw.strip().lower() in ("all", "full", "*"):
+            return
+        items = [x.strip() for x in raw.replace(";", ",").split(",") if x.strip()]
+        if str(item) not in items:
+            items.append(str(item))
+            _os.environ[primary] = ",".join(items)
+
+    def _sdpa_flash_ensure_compile_env(template_dim, q_dtype):
+        _sdpa_flash_merge_env_list(
+            "JITTOR_FLASH_ATTN_HEAD_DIMS", "FLASH_ATTN_HEAD_DIMS", template_dim)
+        if q_dtype == "float16":
+            _sdpa_flash_merge_env_list(
+                "JITTOR_FLASH_ATTN_DTYPES", "FLASH_ATTN_DTYPES", "fp16")
+        elif q_dtype == "bfloat16":
+            _sdpa_flash_merge_env_list(
+                "JITTOR_FLASH_ATTN_DTYPES", "FLASH_ATTN_DTYPES", "bf16")
+
+    def _try_flash_scaled_dot_product_attention(query, key, value, attn_mask,
+                                                dropout_p, is_causal, sf):
+        if attn_mask is not None:
+            _sdpa_flash_miss("mask")
+            return None
+        if float(dropout_p or 0.0) != 0.0:
+            _sdpa_flash_miss("dropout")
+            return None
+        if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
+            _sdpa_flash_miss("not_cuda_no_grad")
+            return None
+        q_shape, k_shape, v_shape = tuple(query.shape), tuple(key.shape), tuple(value.shape)
+        if len(q_shape) < 3 or len(q_shape) != len(k_shape) or len(q_shape) != len(v_shape):
+            _sdpa_flash_miss("rank")
+            return None
+        if q_shape[:-3] != k_shape[:-3] or q_shape[:-3] != v_shape[:-3]:
+            _sdpa_flash_miss("batch")
+            return None
+        if q_shape[-3] != k_shape[-3] or q_shape[-3] != v_shape[-3]:
+            _sdpa_flash_miss("heads")
+            return None
+        if q_shape[-1] != k_shape[-1] or q_shape[-1] != v_shape[-1]:
+            _sdpa_flash_miss("head_dim_mismatch")
+            return None
+        template_dim = _sdpa_flash_template_dim(q_shape[-1])
+        if template_dim is None:
+            _sdpa_flash_miss("head_dim")
+            return None
+        q_dtype, k_dtype, v_dtype = str(query.dtype), str(key.dtype), str(value.dtype)
+        original_dtype = q_dtype
+        cast_back = False
+        if not (q_dtype == k_dtype == v_dtype and q_dtype in ("float16", "bfloat16")):
+            cast_target = _sdpa_flash_float32_cast_target()
+            if cast_target is None or not (q_dtype == k_dtype == v_dtype == "float32"):
+                _sdpa_flash_miss("dtype")
+                return None
+            query = query.to(cast_target)
+            key = key.to(cast_target)
+            value = value.to(cast_target)
+            q_dtype = k_dtype = v_dtype = cast_target
+            cast_back = True
+            _sdpa_flash_cast("float32_to_%s" % cast_target)
+        try:
+            from jittor.torch_shim import flashattn_jittor as _fa_jittor
+        except Exception:
+            _sdpa_flash_miss("no_loader")
+            return None
+        _sdpa_flash_ensure_compile_env(template_dim, q_dtype)
+        backend = _fa_jittor.load_backend()
+        if backend is None:
+            if _fa_jittor.required():
+                raise RuntimeError(
+                    "JITTOR_FLASH_ATTN_JITTOR_REQUIRED is set, but native "
+                    "flash-attn backend is unavailable: %s"
+                    % (_fa_jittor.last_error() or "unknown error")
+                )
+            _sdpa_flash_miss("no_backend")
+            return None
+        if getattr(backend, "_flashattn_jittor_official", False):
+            dims = {int(x) for x in getattr(backend, "_flashattn_jittor_head_dims", ())}
+            dtypes = set(getattr(backend, "_flashattn_jittor_dtypes", ()))
+            if dims and template_dim not in dims:
+                _sdpa_flash_miss("backend_head_dim")
+                return None
+            if dtypes and q_dtype == "float16" and "fp16" not in dtypes:
+                _sdpa_flash_miss("backend_dtype")
+                return None
+            if dtypes and q_dtype == "bfloat16" and "bf16" not in dtypes:
+                _sdpa_flash_miss("backend_dtype")
+                return None
+        try:
+            import flash_attn as _flash_attn
+        except Exception as exc:
+            if _fa_jittor.required():
+                raise RuntimeError("flash_attn shim import failed") from exc
+            _sdpa_flash_miss("no_stub")
+            return None
+        fn = getattr(_flash_attn, "flash_attn_func", None)
+        if not callable(fn):
+            if _fa_jittor.required():
+                raise RuntimeError("flash_attn shim has no flash_attn_func")
+            _sdpa_flash_miss("no_func")
+            return None
+        prefix = q_shape[:-3]
+        p = len(prefix)
+        batch = 1
+        for size in prefix:
+            batch *= int(size)
+        heads, lq, head_dim = int(q_shape[-3]), int(q_shape[-2]), int(q_shape[-1])
+        lk = int(k_shape[-2])
+        q_axes = tuple(list(range(p)) + [p + 1, p, p + 2])
+        # Native flash-attn is an external C++/CUDA extension. Crossing that
+        # boundary with a lazy permute/reshape expression can leave the bridge
+        # holding transient metadata; clone materializes a stable row-major
+        # tensor while keeping the kernel path fused.
+        q_dense = query.permute(*q_axes).reshape((batch, lq, heads, head_dim)).clone()
+        k_dense = key.permute(*q_axes).reshape((batch, lk, heads, head_dim)).clone()
+        v_dense = value.permute(*q_axes).reshape((batch, lk, heads, head_dim)).clone()
+        try:
+            out = fn(q_dense, k_dense, v_dense, 0.0, float(sf), bool(is_causal))
+        except Exception:
+            if _fa_jittor.required():
+                raise
+            _sdpa_flash_miss("call_failed")
+            return None
+        if out is None:
+            _sdpa_flash_miss("returned_none")
+            return None
+        out = out.reshape(tuple(prefix) + (lq, heads, head_dim))
+        out_axes = tuple(list(range(p)) + [p + 1, p, p + 2])
+        _sdpa_flash_hit(_fa_jittor.backend_name())
+        out = out.permute(*out_axes)
+        if cast_back and str(out.dtype) != original_dtype:
+            out = out.to(original_dtype)
+        return out
+
+    # scaled_dot_product_attention (torch F.sdpa) -- native flash-attn
+    # inference fast path when available, otherwise standard math impl with
     # causal masking + attn_mask + GQA support (jittor has no native sdpa).
     if not hasattr(nn.functional, "scaled_dot_product_attention"):
         import math as _math
@@ -1833,6 +2018,10 @@ def install(torch):
                 rep = query.shape[-3] // key.shape[-3]
                 key = key.repeat_interleave(rep, dim=-3) if hasattr(key, "repeat_interleave") else key
                 value = value.repeat_interleave(rep, dim=-3) if hasattr(value, "repeat_interleave") else value
+            flash = _try_flash_scaled_dot_product_attention(
+                query, key, value, attn_mask, dropout_p, is_causal, sf)
+            if flash is not None:
+                return flash
             q_dtype, k_dtype = str(query.dtype), str(key.dtype)
             if (jt.flags.use_cuda and jt.compile_extern.cublas_ops
                     and len(query.shape) >= 3 and len(query.shape) == len(key.shape)
