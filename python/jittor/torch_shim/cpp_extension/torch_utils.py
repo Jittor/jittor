@@ -38,6 +38,19 @@ def _external_build_dir(kind, ext_name, output_path=None):
     return _default_build_root(kind, ext_name.replace(".", "_"), digest)
 
 
+def _write_if_changed(path, data):
+    old = None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            old = f.read()
+    except OSError:
+        pass
+    if old == data:
+        return
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(data)
+
+
 class _JtTorchExtension:
     """setuptools.Extension subclass carrying metadata BuildExtension needs."""
 
@@ -166,6 +179,10 @@ def load(name, sources, extra_include_paths=None, extra_cflags=None,
         verbose=verbose,
         force=force,
     )
+    loaded = sys.modules.get(name)
+    if (not force) and loaded is not None and \
+       os.path.abspath(getattr(loaded, "__file__", "") or "") == os.path.abspath(out_path):
+        return loaded
     spec = importlib.util.spec_from_file_location(name, out_path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -200,13 +217,11 @@ def load_inline(name, cpp_sources=None, cuda_sources=None, functions=None,
         )
     if cpp_body.strip():
         p = os.path.join(build_directory, name + "_inline.cpp")
-        with open(p, "w") as f:
-            f.write(cpp_body)
+        _write_if_changed(p, cpp_body)
         srcs.append(p)
     for i, cu in enumerate(cuda_sources or []):
         p = os.path.join(build_directory, f"{name}_inline_{i}.cu")
-        with open(p, "w") as f:
-            f.write(cu)
+        _write_if_changed(p, cu)
         srcs.append(p)
     return load(name, srcs, extra_include_paths=extra_include_paths,
                 extra_cflags=extra_cflags, extra_cuda_cflags=extra_cuda_cflags,

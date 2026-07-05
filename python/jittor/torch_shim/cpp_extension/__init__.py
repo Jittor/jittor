@@ -265,6 +265,31 @@ def _write_stamp(output_path, payload):
         json.dump(data, f, indent=2, sort_keys=True)
 
 
+def _file_state(path):
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return {
+        "path": os.path.abspath(path),
+        "mtime_ns": int(st.st_mtime_ns),
+        "size": int(st.st_size),
+    }
+
+
+def _output_matches_build(output_path, payload):
+    try:
+        if not os.path.exists(output_path):
+            return False
+        with open(stamp_path(output_path), "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except OSError:
+        return False
+    expected = dict(payload)
+    expected["toolchain"] = toolchain_signature()
+    return data == expected
+
+
 def _object_stamp_path(obj):
     return _metadata_stamp_path("obj", obj)
 
@@ -410,6 +435,21 @@ def build(name, sources, build_dir, output_path=None,
     link += c["arch_flags"]
     link += _link_flags(c)
     link += list(extra_ldflags or [])
+    stamp_payload = {
+        "name": name,
+        "sources": [os.path.abspath(s) for s in sources],
+        "objects": [_file_state(o) for o in objs],
+        "include_dirs": list(include_dirs or []),
+        "define_macros": [str(m) for m in (define_macros or [])],
+        "extra_cflags": list(extra_cflags or []),
+        "extra_cuda_cflags": list(extra_cuda_cflags or []),
+        "extra_ldflags": list(extra_ldflags or []),
+        "link": list(link),
+    }
+    if not force and _output_matches_build(output_path, stamp_payload):
+        if verbose:
+            print(f"[cpp_extension.build] up-to-date {os.path.basename(output_path)}")
+        return output_path
     if verbose:
         print(f"[cpp_extension.build] LINK {os.path.basename(output_path)}")
     r = subprocess.run(link, capture_output=True, text=True)
@@ -420,15 +460,7 @@ def build(name, sources, build_dir, output_path=None,
         raise RuntimeError("link failed")
     if verbose:
         print(f"[cpp_extension.build] OK -> {output_path}")
-    _write_stamp(output_path, {
-        "name": name,
-        "sources": [os.path.abspath(s) for s in sources],
-        "include_dirs": list(include_dirs or []),
-        "define_macros": [str(m) for m in (define_macros or [])],
-        "extra_cflags": list(extra_cflags or []),
-        "extra_cuda_cflags": list(extra_cuda_cflags or []),
-        "extra_ldflags": list(extra_ldflags or []),
-    })
+    _write_stamp(output_path, stamp_payload)
     return output_path
 
 

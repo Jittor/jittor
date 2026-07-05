@@ -297,11 +297,11 @@ bool pyvar_is_ext_mutable(void* obj) {
     Py_DECREF(attr);
     return ok == 1;
 }
-bool pyvar_is_ext_readonly_borrow(void* obj) {
+static bool pyvar_flag(void* obj, const char* name) {
     PyObject* pyobj = (PyObject*)obj;
     if (!pyobj || Py_TYPE(pyobj) != &jittor::PyjtVarHolder.ht_type)
         return false;
-    PyObject* attr = PyObject_GetAttrString(pyobj, "_jittor_torch_ext_readonly_borrow");
+    PyObject* attr = PyObject_GetAttrString(pyobj, name);
     if (!attr) {
         PyErr_Clear();
         return false;
@@ -310,24 +310,18 @@ bool pyvar_is_ext_readonly_borrow(void* obj) {
     Py_DECREF(attr);
     return ok == 1;
 }
+bool pyvar_is_ext_readonly_borrow(void* obj) {
+    return pyvar_flag(obj, "_jittor_torch_ext_readonly_borrow");
+}
 static bool pyvar_force_cpu(void* obj) {
-    PyObject* pyobj = (PyObject*)obj;
-    if (!pyobj || Py_TYPE(pyobj) != &jittor::PyjtVarHolder.ht_type)
-        return false;
-    PyObject* attr = PyObject_GetAttrString(pyobj, "_jittor_torch_force_cpu");
-    if (!attr) {
-        PyErr_Clear();
-        return false;
-    }
-    int ok = PyObject_IsTrue(attr);
-    Py_DECREF(attr);
-    return ok == 1;
+    return pyvar_flag(obj, "_jittor_torch_force_cpu");
 }
 void commit_tensor_to_pyvar(void* obj, const Tensor& t) {
     if (!obj || !t.defined())
         return;
 #ifdef HAS_CUDA
-    cudaDeviceSynchronize();
+    if (torch_ext_sync_return_enabled())
+        cudaDeviceSynchronize();
 #endif
     PyObject* pyobj = (PyObject*)obj;
     if (Py_TYPE(pyobj) != &jittor::PyjtVarHolder.ht_type)
@@ -363,8 +357,6 @@ void commit_tensor_to_pyvar(void* obj, const Tensor& t) {
 Tensor tensor_from_pyvar(void* obj) {
     jittor::VarHolder* vh = jittor::from_py_object<jittor::VarHolder*>((PyObject*)obj);
     Tensor borrowed = adopt(vh, /*owns=*/false);    // python owns it; we borrow
-    if (pyvar_is_ext_mutable(obj) || pyvar_is_ext_readonly_borrow(obj))
-        return borrowed;
     if (pyvar_force_cpu(obj) && borrowed.defined()) {
         jittor::NanoVector nv = to_nv(borrowed.sizes());
         if (borrowed.numel() == 0)
@@ -379,6 +371,8 @@ Tensor tensor_from_pyvar(void* obj) {
         return var_from_host_dev(host.get(), nv, borrowed.scalar_type(), false);
     }
     if (torch_ext_borrow_inputs_enabled())
+        return borrowed;
+    if (pyvar_is_ext_mutable(obj) || pyvar_is_ext_readonly_borrow(obj))
         return borrowed;
     // BAKE the input into a SETTLED jittor "array" Var before the ext's kernel
     // reads it. A lazy/intermediate input (e.g. fused-ssim's rendered image =

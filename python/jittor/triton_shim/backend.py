@@ -614,6 +614,14 @@ def _sync_after_launch_enabled():
     return True
 
 
+def _sync_before_launch_enabled():
+    if _truthy_env("JITTOR_TRITON_SYNC_BEFORE_LAUNCH"):
+        return True
+    if _falsey_env("JITTOR_TRITON_SYNC_BEFORE_LAUNCH"):
+        return False
+    return not _fast_sync_enabled()
+
+
 def _looks_like_output_arg(name):
     n = str(name).lower()
     return (
@@ -932,18 +940,19 @@ def run(jitfn, args, kwargs, grid):
     g = tuple(int(x) for x in g)
     g = (g + (1, 1, 1))[:3]
 
-    # -- materialise all Var memory so device pointers are valid + inputs computed ---- #
+    # -- materialise Var memory so device pointers are valid + inputs computed ---- #
     _ptrtrace = os.environ.get("JT_TRITON_PTRTRACE")
     if _ptrtrace:
         import sys as _sys
         def _ptd():
             return {n: (_tensor_ptr(v) if _is_tensor(v) else -1)
                     for (n, s, v) in runtime_vals if _is_tensor(v)}
-        print("  PTRTRACE before sync_all: %r" % {k: hex(x) for k, x in _ptd().items()}, file=_sys.stderr)
-    jt.sync_all(True)
+        print("  PTRTRACE before materialize: %r" % {k: hex(x) for k, x in _ptd().items()}, file=_sys.stderr)
+    if _sync_before_launch_enabled():
+        jt.sync_all(True)
     if _ptrtrace:
         import sys as _sys
-        print("  PTRTRACE after  sync_all: %r" % {k: hex(x) for k, x in _ptd().items()}, file=_sys.stderr)
+        print("  PTRTRACE after  materialize: %r" % {k: hex(x) for k, x in _ptd().items()}, file=_sys.stderr)
 
     # -- pack kernel params (in param order; pointers first only if scratch) - #
     drv = _Driver.get()
