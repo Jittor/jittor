@@ -553,6 +553,17 @@ static Tensor _full_typed(IntArrayRef size, T value, TensorOptions opt, ScalarTy
     }
     return t;
 }
+static Tensor _full_memset(IntArrayRef size, TensorOptions opt, ScalarType st, int byte_value) {
+    Tensor t = empty(size, TensorOptions(st).device(opt_is_cpu(opt)?DeviceType::CPU:DeviceType::CUDA));
+    int64_t nbytes = t.numel() * detail::vh_dsize(t._vh());
+    if (nbytes) {
+        if (opt_is_cpu(opt))
+            std::memset(t.data_ptr_void(), byte_value, nbytes);
+        else
+            cudaMemset(t.data_ptr_void(), byte_value, nbytes);
+    }
+    return t;
+}
 static Tensor _full_bfloat16(IntArrayRef size, double value, TensorOptions opt) {
     Tensor t = empty(size, TensorOptions(ScalarType::BFloat16).device(opt_is_cpu(opt)?DeviceType::CPU:DeviceType::CUDA));
     int64_t n = t.numel();
@@ -580,6 +591,16 @@ Tensor full(IntArrayRef size, double value, TensorOptions opt) {
     ScalarType st = opt.has_dtype_ ? opt.dtype_ : ScalarType::Float;
     if (value == 0.0 && !std::signbit(value))
         return zeros(size, TensorOptions(st).device(opt_is_cpu(opt)?DeviceType::CPU:DeviceType::CUDA));
+    bool explicit_cuda = opt.has_device_ && opt.device_ == DeviceType::CUDA;
+    if (explicit_cuda) {
+        // Sparse kernels commonly initialize unsigned sentinel tensors to max().
+        if (st == ScalarType::UInt16 && _sat_uint<uint16_t>(value) == std::numeric_limits<uint16_t>::max())
+            return _full_memset(size, opt, st, 0xff);
+        if (st == ScalarType::UInt32 && _sat_uint<uint32_t>(value) == std::numeric_limits<uint32_t>::max())
+            return _full_memset(size, opt, st, 0xff);
+        if (st == ScalarType::UInt64 && _sat_uint<uint64_t>(value) == std::numeric_limits<uint64_t>::max())
+            return _full_memset(size, opt, st, 0xff);
+    }
     switch (st) {
         case ScalarType::Float:  return _full_typed<float>(size, (float)value, opt, st);
         case ScalarType::Double: return _full_typed<double>(size, (double)value, opt, st);
