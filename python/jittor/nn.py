@@ -4640,10 +4640,9 @@ class ComplexNumber:
 # FFT / linalg be migrated off nn.ComplexNumber onto the native complex64 dtype:
 #   _complex64_to_real2 : complex64[...]   -> float32[..., 2]   (torch.view_as_real)
 #   _real2_to_complex64 : float32[..., 2]  -> complex64[...]     (torch.view_as_complex)
-# view_as_real reads the (real, imag) of the complex_compute.h struct through an isolated
-# jt.code op (NO new core op); the reverse rebuilds via re + im*1j (mixed float*complex).
-# Both are wrapped as jt.Function with each other as the adjoint backward, so the bridge is
-# autograd-transparent on CPU+CUDA (verified maxdiff 0). Zero new C++; no FusedOp changes.
+# view_as_real/view_as_complex prefer the zero-copy reinterpret_view core op when available,
+# and fall back to isolated jt.code kernels otherwise. Both are wrapped as jt.Function with
+# each other as the adjoint backward, so the bridge is autograd-transparent on CPU+CUDA.
 _complex64_imag_unit_cache = None
 def _complex64_imag_unit():
     global _complex64_imag_unit_cache
@@ -4652,6 +4651,9 @@ def _complex64_imag_unit():
     return _complex64_imag_unit_cache
 
 def _complex64_to_real2_raw(z):
+    reinterpret_view = getattr(jt, "reinterpret_view", None)
+    if reinterpret_view is not None:
+        return reinterpret_view(z, list(z.shape) + [2], "float32")
     # flatten to 1-D so the jt.code kernel is shape-agnostic, then restore the [..., 2] tail.
     n = 1
     for s in z.shape:
@@ -4672,8 +4674,31 @@ def _complex64_to_real2_raw(z):
     return flat.reshape(list(z.shape) + [2])
 
 def _real2_to_complex64_raw(x):
-    # re + im*1j : float32 + float32*complex64 -> complex64 (native mixed arithmetic)
-    return x[..., 0] + x[..., 1] * _complex64_imag_unit()
+    assert x.shape[-1] == 2, f"view_as_complex expects last dim 2, got shape {x.shape}"
+    reinterpret_view = getattr(jt, "reinterpret_view", None)
+    if reinterpret_view is not None:
+        return reinterpret_view(x, list(x.shape[:-1]) or [1], "complex64")
+    # real[..., 2] -> native complex64. Use one code kernel instead of two getitem ops
+    # plus mixed complex arithmetic; this is the hot path for RoPE view_as_complex.
+    n = 1
+    for s in x.shape[:-1]:
+        n *= s
+    out_shape = list(x.shape[:-1]) or [1]
+    flat = jt.code([n], "complex64", [x.reshape([n, 2])],
+        cpu_src="""
+        for (int i=0; i<in0_shape0; i++) {
+            @out(i) = complex64(float(@in0(i,0)), float(@in0(i,1)));
+        }""",
+        cuda_src="""
+        __global__ void k(@ARGS_DEF) {
+            @PRECALC
+            int i = blockIdx.x*blockDim.x + threadIdx.x;
+            if (i < in0_shape0) {
+                @out(i) = complex64(float(@in0(i,0)), float(@in0(i,1)));
+            }
+        }
+        int n = in0_shape0; k<<<(n+63)/64, 64>>>(@ARGS);""")
+    return flat.reshape(out_shape)
 
 class _Complex64ToReal2(jt.Function):
     def execute(self, z):
