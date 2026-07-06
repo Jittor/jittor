@@ -352,6 +352,74 @@ def median(x,dim=None,keepdim=False, keepdims=False):
 
 jt.Var.median = median
 
+def _stack_no_grad_cuda_fast(xs, dim):
+    if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
+        return None
+    n = len(xs)
+    if n not in (2, 3):
+        return None
+    if not xs:
+        return None
+    for x in xs:
+        if not isinstance(x, jt.Var) or getattr(x, "_jittor_torch_force_cpu", False):
+            return None
+    base_shape = list(xs[0].shape)
+    base_dtype = xs[0].dtype
+    for x in xs[1:]:
+        if list(x.shape) != base_shape or x.dtype != base_dtype:
+            return None
+    if dim < 0:
+        dim += len(base_shape) + 1
+    if dim < 0 or dim > len(base_shape):
+        return None
+
+    out_shape = base_shape[:dim] + [n] + base_shape[dim:]
+    suffix = 1
+    for size in base_shape[dim:]:
+        suffix *= int(size)
+    total = 1
+    for size in out_shape:
+        total *= int(size)
+    if total == 0 or suffix == 0:
+        return None
+    flat_inputs = [x.reshape([-1]) for x in xs]
+    in_names = "\n".join(
+        f"            {'else ' if i else ''}if (which == {i}) @out(oid) = @in{i}(iid);"
+        for i in range(n)
+    )
+    cuda_src = f"""
+    __global__ void stack_kernel(@ARGS_DEF) {{
+        @PRECALC
+        index_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+        index_t step = blockDim.x * gridDim.x;
+        const index_t suffix = {suffix};
+        for (index_t oid = tid; oid < out0_shape0; oid += step) {{
+            index_t inner = oid / suffix;
+            index_t rem = oid - inner * suffix;
+            index_t which = inner % {n};
+            index_t prefix = inner / {n};
+            index_t iid = prefix * suffix + rem;
+{in_names}
+        }}
+    }}
+    int block = 256;
+    int grid = (out0_shape0 + block - 1) / block;
+    if (grid > 65535) grid = 65535;
+    stack_kernel<<<grid, block>>>(@ARGS);
+    """
+    cpu_src = f"""
+    const index_t suffix = {suffix};
+    for (index_t oid=0; oid<out0_shape0; ++oid) {{
+        index_t inner = oid / suffix;
+        index_t rem = oid - inner * suffix;
+        index_t which = inner % {n};
+        index_t prefix = inner / {n};
+        index_t iid = prefix * suffix + rem;
+{in_names}
+    }}
+    """
+    return jt.code([total], base_dtype, flat_inputs, cuda_src=cuda_src, cpu_src=cpu_src).reshape(out_shape)
+
 def stack(x, dim=0):
     r'''
     Concatenates sequence of vars along a new dimension.
@@ -381,6 +449,10 @@ def stack(x, dim=0):
             x[i] = jt.array(x_)
     if len(x) < 2:
         return x[0].unsqueeze(dim)
+
+    fast = _stack_no_grad_cuda_fast(x, dim)
+    if fast is not None:
+        return fast
 
     res = [x_.unsqueeze(dim) for x_ in x]
     return jt.concat(res, dim=dim)
