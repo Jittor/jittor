@@ -447,12 +447,15 @@ namespace pybind11 { namespace detail {
 template <> struct type_caster<jtorch::Tensor> {
     PYBIND11_TYPE_CASTER(jtorch::Tensor, _("Tensor"));
     object keepalive;
+    bool readonly_arg = false;
     bool mutable_arg = false;
     bool load(handle src, bool) {
         if (!src || src.is_none()) return false;
         if (!jtorch::detail::is_jittor_var(src.ptr())) return false;
-        mutable_arg = jtorch::detail::pyvar_is_ext_mutable(src.ptr());
-        value = jtorch::detail::tensor_from_pyvar(src.ptr());
+        readonly_arg = jtorch::detail::pyvar_is_ext_readonly_borrow(src.ptr());
+        mutable_arg = readonly_arg ? false : jtorch::detail::pyvar_is_ext_mutable(src.ptr());
+        value = readonly_arg ? jtorch::detail::tensor_from_pyvar_readonly(src.ptr())
+                             : jtorch::detail::tensor_from_pyvar(src.ptr());
         keepalive = reinterpret_borrow<object>(src);
         return true;
     }

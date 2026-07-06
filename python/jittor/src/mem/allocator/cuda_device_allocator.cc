@@ -5,6 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #ifdef HAS_CUDA
+#include <stdexcept>
 #include <cuda_runtime.h>
 #include "mem/mem_info.h"
 #include "helper_cuda.h"
@@ -14,19 +15,22 @@ namespace jittor {
 
 CudaDeviceAllocator cuda_device_allocator;
 EXTERN_LIB bool no_cuda_error_when_free;
+DEFINE_FLAG(int, cuda_device_allocator_managed_fallback, 0,
+    "Fallback to cudaMallocManaged after cudaMalloc OOM. Disabled by default so "
+    "higher-level caching allocators can release cached blocks and retry.");
 
 const char* CudaDeviceAllocator::name() const {return "cuda_device";}
 
 void* CudaDeviceAllocator::alloc(size_t size, size_t& allocation) {
     if (size==0) return (void*)0x10;
     void* ptr;
-    try {
-        checkCudaErrors(cudaMalloc(&ptr, size));
+    cudaError_t err = cudaMalloc(&ptr, size);
+    if (err == cudaSuccess)
         return ptr;
-    } catch (...) {
-        // clean the last error
-        cudaGetLastError();
-    }
+    // Clean the sticky runtime error before a higher-level allocator retries.
+    cudaGetLastError();
+    if (!cuda_device_allocator_managed_fallback)
+        throw std::runtime_error("cudaMalloc failed");
     display_memory_info(__FILELINE__);
     LOGf << "Unable to alloc cuda device memory for size" << size;
     checkCudaErrors(cudaMallocManaged(&ptr, size));

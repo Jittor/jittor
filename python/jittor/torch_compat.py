@@ -271,6 +271,13 @@ def _var_is_cpu_resident(v):
     return not bool(jt.flags.use_cuda)
 
 
+def _var_has_cpu_residency_hint(v):
+    try:
+        return bool(getattr(v, "_jittor_torch_force_cpu", False))
+    except Exception:
+        return False
+
+
 def _make_cpu_resident(v, inplace=False):
     """Return a host-resident Var.
 
@@ -370,10 +377,17 @@ def _make_cuda_resident(v, force=False, inplace=False):
 
 def _mark_cpu_like(out, *inputs):
     try:
-        if isinstance(out, jt.Var) and any(
-            isinstance(x, jt.Var) and _var_is_cpu_resident(x) for x in inputs
-        ):
-            out._jittor_torch_force_cpu = True
+        if not isinstance(out, jt.Var):
+            return out
+        for x in inputs:
+            if not isinstance(x, jt.Var):
+                continue
+            try:
+                if getattr(x, "_jittor_torch_force_cpu", False):
+                    out._jittor_torch_force_cpu = True
+                    break
+            except Exception:
+                pass
     except Exception:
         pass
     return out
@@ -2534,6 +2548,17 @@ def _install_optimizers(g):
     if not getattr(Base, "_torch_zero_grad_wrapped", False):
         _orig_zero = Base.zero_grad
         def _zero_grad_compat(self, set_to_none=True):
+            for _pg in getattr(self, "param_groups", []):
+                for _p in _pg.get("params", []):
+                    if isinstance(_p, _jt.Var) and getattr(_p, "_torch_grad", None) is not None:
+                        try:
+                            object.__setattr__(_p, "_torch_grad", None)
+                        except Exception:
+                            pass
+            try:
+                object.__setattr__(self, "_grad_map", {})
+            except Exception:
+                pass
             return _orig_zero(self)
         Base.zero_grad = _zero_grad_compat
         Base._torch_zero_grad_wrapped = True
@@ -2562,6 +2587,22 @@ def _install_optimizers(g):
                     return True
         return False
 
+    def _optimizer_maybe_has_fsdp_params(opt):
+        for _pg in getattr(opt, "param_groups", []):
+            for _p in _pg.get("params", []):
+                if getattr(_p, "_jittor_fsdp2_state", None) is not None:
+                    return True
+        return False
+
+    def _load_fsdp2_for_optimizer(opt):
+        if not _optimizer_maybe_has_fsdp_params(opt):
+            return None
+        try:
+            from . import torch_fsdp2_compat as _fsdp2_step
+        except Exception:
+            return None
+        return _fsdp2_step
+
     def _wrap_step_accept_closure(_cls, _marker):
         if _cls is None or getattr(_cls, _marker, False):
             return
@@ -2574,10 +2615,7 @@ def _install_optimizers(g):
             if closure is not None:
                 loss = closure()
                 called_closure = True
-            try:
-                from . import torch_fsdp2_compat as _fsdp2_step
-            except Exception:
-                _fsdp2_step = None
+            _fsdp2_step = _load_fsdp2_for_optimizer(self)
             if _fsdp2_step is not None and _fsdp2_step.optimizer_has_fsdp_params(self):
                 if not _fsdp2_step.optimizer_step(self, loss, retain_graph=retain_graph):
                     raise NotImplementedError(
@@ -2599,10 +2637,7 @@ def _install_optimizers(g):
         def _adam_step_torch(self, loss=None, retain_graph=False, closure=None, **kwargs):
             if closure is not None:
                 loss = closure()
-            try:
-                from . import torch_fsdp2_compat as _fsdp2_step
-            except Exception:
-                _fsdp2_step = None
+            _fsdp2_step = _load_fsdp2_for_optimizer(self)
             if _fsdp2_step is not None and _fsdp2_step.optimizer_has_fsdp_params(self):
                 if not _fsdp2_step.optimizer_step(self, loss, retain_graph=retain_graph):
                     raise NotImplementedError(
@@ -3514,6 +3549,7 @@ def _wrap_constructors(g):
                     out.sync()
                 try:
                     out._jittor_torch_ext_mutable = True
+                    out._jittor_torch_force_cpu = True
                 except Exception:
                     pass
                 if _requires_grad:
@@ -5510,21 +5546,22 @@ def _install_cuda(g):
     # synchronization point. TRELLIS calls it inside the inference path before
     # decode; running jt.gc() there costs several seconds. Users that need
     # explicit release can opt in with JITTOR_TORCH_CUDA_EMPTY_CACHE=gc or sync.
+    try:
+        import os as _os_empty_cache
+        _empty_cache_mode = str(_os_empty_cache.environ.get(
+            "JITTOR_TORCH_CUDA_EMPTY_CACHE", "0")).strip().lower()
+    except Exception:
+        _empty_cache_mode = "0"
+
     def _empty_cache():
-        try:
-            import os as _os_empty_cache
-            mode = str(_os_empty_cache.environ.get(
-                "JITTOR_TORCH_CUDA_EMPTY_CACHE", "0")).strip().lower()
-        except Exception:
-            mode = "0"
-        if mode in ("0", "false", "no", "off", "none", "noop"):
+        if _empty_cache_mode in ("0", "false", "no", "off", "none", "noop"):
             return
-        if mode in ("", "1", "true", "yes", "on", "gc"):
+        if _empty_cache_mode in ("", "1", "true", "yes", "on", "gc"):
             try:
                 jt.gc()
             except Exception:
                 pass
-        elif mode in ("sync", "full"):
+        elif _empty_cache_mode in ("sync", "full"):
             try:
                 jt.sync_all(True)
             except Exception:
@@ -6707,7 +6744,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     if _orig_getitem is not None and not getattr(_orig_getitem, "_torch_cpu_residency", False):
         def _torch_getitem(self, slices):
             out = _orig_getitem(self, slices)
-            if isinstance(out, Var) and _var_is_cpu_resident(self):
+            if isinstance(out, Var) and _var_has_cpu_residency_hint(self):
                 out = _mark_cpu_like(out, self)
             if isinstance(out, Var):
                 try:
@@ -6854,6 +6891,13 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         except Exception:
             pass
 
+    def _optimizer_maybe_has_fsdp_params(opt):
+        for _pg in getattr(opt, "param_groups", []):
+            for _p in _pg.get("params", []):
+                if getattr(_p, "_jittor_fsdp2_state", None) is not None:
+                    return True
+        return False
+
     def _backward(self, gradient=None, retain_graph=False, create_graph=False, **kw):
         # torch defaults retain_graph to create_graph. In the common
         # loss.backward() case both are false, so the graph must be freed.
@@ -6891,10 +6935,15 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         # torch code such as 3DGS replaces parameters during densification, and
         # stale strong refs in the registry would otherwise keep old params and
         # their Jittor graphs alive until OOM.
-        try:
-            from . import torch_fsdp2_compat as _fsdp2_backward
-        except Exception:
+        fsdp_opts = [o for o in opts if _optimizer_maybe_has_fsdp_params(o)]
+        if fsdp_opts:
+            try:
+                from . import torch_fsdp2_compat as _fsdp2_backward
+            except Exception:
+                _fsdp2_backward = None
+        else:
             _fsdp2_backward = None
+        fsdp_opt_ids = {id(o) for o in fsdp_opts} if _fsdp2_backward is not None else set()
         leaf_map = {}
         opt_ids = set()
         for o in opts:
@@ -6907,8 +6956,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                         continue
                     leaf_map.setdefault(id(p), p)
                     opt_ids.add(id(p))
-        if _fsdp2_backward is not None and opts:
-            for p in _fsdp2_backward.collect_fsdp_full_params_for_backward(opts):
+        if _fsdp2_backward is not None and fsdp_opts:
+            for p in _fsdp2_backward.collect_fsdp_full_params_for_backward(fsdp_opts):
                 if isinstance(p, Var) and not p.is_stop_grad():
                     leaf_map.setdefault(id(p), p)
                     opt_ids.add(id(p))
@@ -6942,10 +6991,10 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                 object.__setattr__(p, "_torch_grad",
                                    gr if prev is None else (prev + gr))
         # fill each optimizer's pg["grads"] so its step(loss=None) consumes them
-        if _fsdp2_backward is not None and opts:
-            _fsdp2_backward.fill_fsdp_optimizer_grads_from_grad_map(opts, grad_by_id)
+        if _fsdp2_backward is not None and fsdp_opts:
+            _fsdp2_backward.fill_fsdp_optimizer_grads_from_grad_map(fsdp_opts, grad_by_id)
         for o in opts:
-            if _fsdp2_backward is not None and _fsdp2_backward.optimizer_has_fsdp_params(o) \
+            if _fsdp2_backward is not None and id(o) in fsdp_opt_ids \
                     and not _fsdp2_backward.optimizer_has_non_fsdp_params(o):
                 continue
             _fill_opt_grads(o, grad_by_id)
@@ -7126,6 +7175,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         def _op(self, other):
             if isinstance(other, Var):
                 da, db = str(self.dtype), str(other.dtype)
+                if da == db and not da.startswith("uint"):
+                    return native(self, other)
                 res = g._torch_promote_pair(da, db)
                 a = self if da == res else self.cast(res)
                 b = other if db == res else other.cast(res)
@@ -7185,9 +7236,12 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             return None
         def _op(self, other):
             if isinstance(other, Var):
-                tgt = _truediv_target(str(self.dtype), str(other.dtype))
-                a = self if str(self.dtype) == tgt else self.cast(tgt)
-                b = other if str(other.dtype) == tgt else other.cast(tgt)
+                da, db = str(self.dtype), str(other.dtype)
+                if da == db and da.startswith(("float", "bfloat", "complex")):
+                    return native(self, other)
+                tgt = _truediv_target(da, db)
+                a = self if da == tgt else self.cast(tgt)
+                b = other if db == tgt else other.cast(tgt)
                 out = native(a, b)
                 if isinstance(out, Var) and str(out.dtype) != tgt:
                     out = out.cast(tgt)
@@ -7220,8 +7274,12 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         if _w is not None:
             setattr(Var, _opn, _w)
 
-    if not hasattr(Var, "contiguous"):
-        Var.contiguous = lambda self: self
+    # Jittor Vars do not expose PyTorch-style strided non-contiguous storage;
+    # materialized op outputs are already laid out for their logical shape. The
+    # old fake torch hook from misc.py implemented contiguous() as clone(), which
+    # adds avoidable graph nodes and copies in PyTorch code that calls
+    # transpose(...).contiguous() before export or parameter construction.
+    Var.contiguous = lambda self: self
     # torch's Tensor.is_cuda / .is_cpu report the tensor's ACTUAL residency.
     # A Var built/migrated to host (torch.zeros(device='cpu'), .cpu()) is on the
     # CPU even under global use_cuda=1, so read Var.location() rather than the

@@ -1004,6 +1004,12 @@ def enable(
         trellis_runtime.install()
     except Exception:
         pass
+    try:
+        from jittor.torch_shim import gaussian_splatting_runtime
+
+        gaussian_splatting_runtime.install()
+    except Exception:
+        pass
 
     return {
         "torch": jt,

@@ -14,6 +14,7 @@ from typing import Dict, Iterable, Optional, Set, Tuple
 _READONLY_BORROW_ATTR = "_jittor_torch_ext_readonly_borrow"
 _FORCE_CPU_ATTR = "_jittor_torch_force_cpu"
 _MISSING = object()
+_VAR_TYPE = None
 
 _DEFAULT_READONLY_FUNCTIONS: Dict[str, Tuple[str, ...]] = {
     "diff_gaussian_rasterization._C": (
@@ -57,23 +58,36 @@ def _is_falsey(value: Optional[str]) -> bool:
     return str(value or "").strip().lower() in {"0", "false", "no", "off"}
 
 
-def _is_var(obj) -> bool:
-    try:
+def _get_var_type():
+    global _VAR_TYPE
+    if _VAR_TYPE is None:
         import jittor as jt
 
-        return isinstance(obj, jt.Var)
+        _VAR_TYPE = jt.Var
+    return _VAR_TYPE
+
+
+def _is_var(obj) -> bool:
+    try:
+        return isinstance(obj, _get_var_type())
     except Exception:
         return False
 
 
 def _iter_vars(obj, seen: Set[int]):
+    if _is_var(obj):
+        oid = id(obj)
+        if oid in seen:
+            return
+        seen.add(oid)
+        yield obj
+        return
+    if not isinstance(obj, (tuple, list, dict)):
+        return
     oid = id(obj)
     if oid in seen:
         return
     seen.add(oid)
-    if _is_var(obj):
-        yield obj
-        return
     if isinstance(obj, (tuple, list)):
         for item in obj:
             yield from _iter_vars(item, seen)
@@ -83,26 +97,48 @@ def _iter_vars(obj, seen: Set[int]):
             yield from _iter_vars(item, seen)
 
 
+def _mark_readonly_tensor(tensor, saved) -> None:
+    try:
+        if getattr(tensor, _FORCE_CPU_ATTR, False):
+            return
+    except Exception:
+        return
+    try:
+        old_value = getattr(tensor, _READONLY_BORROW_ATTR)
+    except AttributeError:
+        old_value = _MISSING
+    except Exception:
+        return
+    try:
+        setattr(tensor, _READONLY_BORROW_ATTR, True)
+    except Exception:
+        return
+    saved.append((tensor, old_value))
+
+
 def _mark_readonly(args, kwargs):
     saved = []
     seen: Set[int] = set()
-    for tensor in _iter_vars((args, kwargs), seen):
-        try:
-            if getattr(tensor, _FORCE_CPU_ATTR, False):
-                continue
-        except Exception:
-            continue
-        try:
-            old_value = getattr(tensor, _READONLY_BORROW_ATTR)
-        except AttributeError:
-            old_value = _MISSING
-        except Exception:
-            continue
-        try:
-            setattr(tensor, _READONLY_BORROW_ATTR, True)
-        except Exception:
-            continue
-        saved.append((tensor, old_value))
+    try:
+        var_type = _get_var_type()
+    except Exception:
+        var_type = None
+
+    for item in args:
+        if var_type is not None and isinstance(item, var_type):
+            oid = id(item)
+            if oid not in seen:
+                seen.add(oid)
+                _mark_readonly_tensor(item, saved)
+        elif isinstance(item, (tuple, list, dict)):
+            for tensor in _iter_vars(item, seen):
+                _mark_readonly_tensor(tensor, saved)
+
+    if not kwargs:
+        return saved
+
+    for tensor in _iter_vars(kwargs, seen):
+        _mark_readonly_tensor(tensor, saved)
     return saved
 
 
@@ -137,23 +173,27 @@ def _borrow_scope():
 
 
 def _readonly_borrow_mode() -> str:
-    return str(os.environ.get("JITTOR_TORCH_EXT_READONLY_BORROW_MODE", "scope")).strip().lower()
+    return str(os.environ.get("JITTOR_TORCH_EXT_READONLY_BORROW_MODE", "mark")).strip().lower()
 
 
 def _wrap_readonly_function(fn):
     if getattr(fn, "_jittor_readonly_borrow_wrapped", False):
         return fn
 
-    @functools.wraps(fn)
-    def wrapped(*args, **kwargs):
-        if _readonly_borrow_mode() == "scope":
+    mode = _readonly_borrow_mode()
+    if mode == "scope":
+        @functools.wraps(fn)
+        def wrapped(*args, **kwargs):
             with _borrow_scope():
                 return fn(*args, **kwargs)
-        saved = _mark_readonly(args, kwargs)
-        try:
-            return fn(*args, **kwargs)
-        finally:
-            _restore(saved)
+    else:
+        @functools.wraps(fn)
+        def wrapped(*args, **kwargs):
+            saved = _mark_readonly(args, kwargs)
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                _restore(saved)
 
     wrapped._jittor_readonly_borrow_wrapped = True
     return wrapped

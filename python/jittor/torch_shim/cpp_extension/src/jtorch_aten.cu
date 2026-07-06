@@ -384,9 +384,9 @@ Tensor tensor_from_pyvar(void* obj) {
                    cudaMemcpyDeviceToHost);
         return var_from_host_dev(host.get(), nv, borrowed.scalar_type(), false);
     }
-    if (torch_ext_borrow_inputs_enabled())
-        return borrowed;
     if (pyvar_is_ext_readonly_borrow(obj) || pyvar_is_ext_mutable(obj))
+        return borrowed;
+    if (torch_ext_borrow_inputs_enabled())
         return borrowed;
     // BAKE the input into a SETTLED jittor "array" Var before the ext's kernel
     // reads it. A lazy/intermediate input (e.g. fused-ssim's rendered image =
