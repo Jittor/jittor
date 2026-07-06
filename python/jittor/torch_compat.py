@@ -10173,10 +10173,15 @@ def _trapz(y, x=None, dx=1, dim=-1, *, out=None):
     return res
 
 
-def _repeat_interleave(x, repeats, dim=None):
+def _repeat_interleave(x, repeats, dim=None, *, output_size=None):
     import jittor as _jt
     if dim is None:
         x = x.reshape(-1); dim = 0
+    if hasattr(_jt, "repeat_interleave"):
+        try:
+            return _jt.repeat_interleave(x, repeats, dim=dim, output_size=output_size)
+        except TypeError:
+            pass
     if isinstance(repeats, int):
         idx = _jt.arange(x.shape[dim]).reshape(-1, 1).broadcast([x.shape[dim], repeats]).reshape(-1)
     else:

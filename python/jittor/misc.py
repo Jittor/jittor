@@ -241,6 +241,81 @@ def repeat_interleave(x,repeats,dim=None,output_size=None):
                 dims.append(f"i{i}")
         return x.reindex(tar_shape,dims)
 
+    if jt.flags.use_cuda and isinstance(repeats, jt.Var) and dim == 0 and output_size is not None:
+        repeats = repeats.reshape(-1).int32()
+        n = x.shape[0]
+        out0 = int(output_size)
+        assert out0 <= 2147483647, "repeat_interleave: output_size exceeds int32 CUDA fast path limit"
+        assert repeats.shape[0] == n, \
+            f"repeat_interleave: repeats length {repeats.shape[0]} != dim size {n}"
+        if out0 == 0:
+            new_shape = list(x.shape); new_shape[0] = 0
+            return jt.zeros(new_shape, x.dtype)
+        offsets = repeats.cumsum(0)
+        inner = int(np.prod(x.shape[1:])) if x.ndim > 1 else 1
+        out_shape = list(x.shape)
+        out_shape[0] = out0
+        return jt.code(
+            out_shape,
+            x.dtype,
+            [x, offsets],
+            cuda_header='''
+            #include <stdint.h>
+            template <typename X, typename R, typename O>
+            __global__ void repeat_interleave_dim0_kernel(
+                const X* __restrict__ x,
+                const R* __restrict__ offsets,
+                O* __restrict__ out,
+                int64_t total,
+                int n,
+                int inner) {
+                int64_t linear = blockIdx.x * blockDim.x + threadIdx.x;
+                int64_t stride = (int64_t)blockDim.x * gridDim.x;
+                for (; linear < total; linear += stride) {
+                    int out_row = linear / inner;
+                    int lo = 0, hi = n - 1;
+                    while (lo < hi) {
+                        int mid = (lo + hi) >> 1;
+                        if ((int)offsets[mid] > out_row) hi = mid;
+                        else lo = mid + 1;
+                    }
+                    out[linear] = (O)x[(int64_t)lo * inner + (linear % inner)];
+                }
+            }
+            ''',
+            cuda_src=f'''
+            @alias(x, in0)
+            @alias(offsets, in1)
+            @alias(out, out0)
+            const int64_t total = out->num;
+            const int n = x_shape0;
+            const int inner = {inner};
+            int threads = 256;
+            int blocks = (int)((total + threads - 1) / threads);
+            if (blocks > 4096) blocks = 4096;
+            repeat_interleave_dim0_kernel<x_type, offsets_type, out_type>
+                <<<blocks, threads>>>(x_p, offsets_p, out_p, total, n, inner);
+            ''',
+            cpu_src='''
+            @alias(x, in0)
+            @alias(offsets, in1)
+            @alias(out, out0)
+            int64_t total = out->num;
+            int n = x_shape0;
+            int inner = out->num / out_shape0;
+            for (int64_t linear = 0; linear < total; ++linear) {
+                int out_row = linear / inner;
+                int lo = 0, hi = n - 1;
+                while (lo < hi) {
+                    int mid = (lo + hi) >> 1;
+                    if ((int)offsets_p[mid] > out_row) hi = mid;
+                    else lo = mid + 1;
+                }
+                out_p[linear] = (out_type)x_p[(int64_t)lo * inner + (linear % inner)];
+            }
+            '''
+        )
+
     # per-element repeats: build a gather index along `dim` then index_select.
     if isinstance(repeats, jt.Var):
         rep_list = [int(c) for c in repeats.numpy().reshape(-1)]
