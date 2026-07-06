@@ -377,14 +377,14 @@ def _stack_no_grad_cuda_fast(xs, dim):
     suffix = 1
     for size in base_shape[dim:]:
         suffix *= int(size)
-    total = 1
-    for size in out_shape:
-        total *= int(size)
-    if total == 0 or suffix == 0:
+    input_total = 1
+    for size in base_shape:
+        input_total *= int(size)
+    if input_total == 0 or suffix == 0:
         return None
     flat_inputs = [x.reshape([-1]) for x in xs]
-    in_names = "\n".join(
-        f"            {'else ' if i else ''}if (which == {i}) @out(oid) = @in{i}(iid);"
+    write_lines = "\n".join(
+        f"            @out(base_out + {i} * suffix + rem) = @in{i}(iid);"
         for i in range(n)
     )
     cuda_src = f"""
@@ -393,32 +393,98 @@ def _stack_no_grad_cuda_fast(xs, dim):
         index_t tid = blockIdx.x * blockDim.x + threadIdx.x;
         index_t step = blockDim.x * gridDim.x;
         const index_t suffix = {suffix};
-        for (index_t oid = tid; oid < out0_shape0; oid += step) {{
-            index_t inner = oid / suffix;
-            index_t rem = oid - inner * suffix;
-            index_t which = inner % {n};
-            index_t prefix = inner / {n};
-            index_t iid = prefix * suffix + rem;
-{in_names}
+        for (index_t iid = tid; iid < in0_shape0; iid += step) {{
+            index_t prefix = iid / suffix;
+            index_t rem = iid - prefix * suffix;
+            index_t base_out = prefix * ({n} * suffix);
+{write_lines}
         }}
     }}
     int block = 256;
-    int grid = (out0_shape0 + block - 1) / block;
+    int grid = (in0_shape0 + block - 1) / block;
     if (grid > 65535) grid = 65535;
     stack_kernel<<<grid, block>>>(@ARGS);
     """
     cpu_src = f"""
     const index_t suffix = {suffix};
-    for (index_t oid=0; oid<out0_shape0; ++oid) {{
-        index_t inner = oid / suffix;
-        index_t rem = oid - inner * suffix;
-        index_t which = inner % {n};
-        index_t prefix = inner / {n};
-        index_t iid = prefix * suffix + rem;
-{in_names}
+    for (index_t iid=0; iid<in0_shape0; ++iid) {{
+        index_t prefix = iid / suffix;
+        index_t rem = iid - prefix * suffix;
+        index_t base_out = prefix * ({n} * suffix);
+{write_lines}
     }}
     """
-    return jt.code([total], base_dtype, flat_inputs, cuda_src=cuda_src, cpu_src=cpu_src).reshape(out_shape)
+    return jt.code([input_total * n], base_dtype, flat_inputs, cuda_src=cuda_src, cpu_src=cpu_src).reshape(out_shape)
+
+def _unbind_no_grad_cuda_fast(x, dim):
+    if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
+        return None
+    if not isinstance(x, jt.Var) or getattr(x, "_jittor_torch_force_cpu", False):
+        return None
+    shape = list(x.shape)
+    if not shape:
+        return None
+    if dim < 0:
+        dim += len(shape)
+    if dim < 0 or dim >= len(shape):
+        return None
+    n = int(shape[dim])
+    if n not in (2, 3):
+        return None
+    out_shape = shape[:dim] + shape[dim + 1:]
+    suffix = 1
+    for size in shape[dim + 1:]:
+        suffix *= int(size)
+    out_total = 1
+    for size in out_shape:
+        out_total *= int(size)
+    if out_total < 4096 or suffix == 0:
+        return None
+    if n == 2 and out_total < 3 * 1024 * 1024:
+        return None
+
+    flat = x.reshape([-1])
+    write_lines = "\n".join(
+        f"            @out{i}(oid) = @in0(base_in + {i} * suffix);"
+        for i in range(n)
+    )
+    cuda_src = f"""
+    __global__ void unbind_kernel(@ARGS_DEF) {{
+        @PRECALC
+        index_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+        index_t step = blockDim.x * gridDim.x;
+        const index_t suffix = {suffix};
+        const index_t full_stride = suffix * {n};
+        for (index_t oid = tid; oid < out0_shape0; oid += step) {{
+            index_t prefix = oid / suffix;
+            index_t rem = oid - prefix * suffix;
+            index_t base_in = prefix * full_stride + rem;
+{write_lines}
+        }}
+    }}
+    int block = 256;
+    int grid = (out0_shape0 + block - 1) / block;
+    if (grid > 65535) grid = 65535;
+    unbind_kernel<<<grid, block>>>(@ARGS);
+    """
+    cpu_src = f"""
+    const index_t suffix = {suffix};
+    const index_t full_stride = suffix * {n};
+    for (index_t oid=0; oid<out0_shape0; ++oid) {{
+        index_t prefix = oid / suffix;
+        index_t rem = oid - prefix * suffix;
+        index_t base_in = prefix * full_stride + rem;
+{write_lines}
+    }}
+    """
+    outs = jt.code(
+        [[out_total] for _ in range(n)],
+        [x.dtype for _ in range(n)],
+        [flat],
+        cuda_src=cuda_src,
+        cpu_src=cpu_src,
+    )
+    return [out.reshape(out_shape) for out in outs]
 
 def stack(x, dim=0):
     r'''
@@ -601,6 +667,9 @@ def unbind(x, dim=0):
 
     '''
     if dim < 0: dim += len(x.shape)
+    fast = _unbind_no_grad_cuda_fast(x, dim)
+    if fast is not None:
+        return fast
     return [x[(slice(None),)*dim+(i,)] for i in range(x.shape[dim])]
 
 jt.Var.unbind = unbind
