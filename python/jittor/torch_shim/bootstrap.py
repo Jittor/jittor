@@ -19,6 +19,7 @@ _PRUNE_DIRS = {
     ".git",
     ".hg",
     ".svn",
+    ".cache",
     "__pycache__",
     "build",
     "dist",
@@ -297,19 +298,18 @@ def _dedupe_extensions(items: Iterable[NativeExtension]) -> List[NativeExtension
         if key in seen:
             continue
         ext_path = pathlib.Path(key)
-        if not ext.setup_py:
-            skip = False
-            for parent in out:
-                if not parent.setup_py:
-                    continue
-                try:
-                    ext_path.relative_to(os.path.realpath(parent.root))
-                except ValueError:
-                    continue
-                skip = True
-                break
-            if skip:
+        skip = False
+        for parent in out:
+            if not parent.setup_py:
                 continue
+            try:
+                ext_path.relative_to(os.path.realpath(parent.root))
+            except ValueError:
+                continue
+            skip = True
+            break
+        if skip:
+            continue
         seen.add(key)
         out.append(ext)
     return out
@@ -623,37 +623,156 @@ def _extension_outputs(root: str) -> List[str]:
     return outputs
 
 
-def _needs_build(ext: NativeExtension) -> bool:
-    outputs = [
-        p for p in _extension_outputs(ext.root)
-        if os.path.sep + "build" + os.path.sep not in p
-    ]
-    if not outputs:
-        return True
-    try:
-        from jittor.torch_shim import cpp_extension as _cpp_ext
-        for path in outputs:
-            if not _cpp_ext.output_matches_toolchain(path):
-                return True
-    except Exception:
-        return True
+def _extension_inputs(ext: NativeExtension) -> List[str]:
     inputs = [p for p in (ext.setup_py, ext.pyproject_toml, ext.cmake_lists) if p]
     inputs += list(ext.sources)
-    if not inputs:
-        return False
+    return inputs
+
+
+def _newest_mtime(paths: Sequence[str]) -> Optional[float]:
+    if not paths:
+        return None
     newest_input = 0.0
-    for path in inputs:
+    for path in paths:
         try:
             newest_input = max(newest_input, os.path.getmtime(path))
         except OSError:
-            return True
+            return None
+    return newest_input
+
+
+def _same_file_contents(a: str, b: str) -> bool:
+    try:
+        if os.path.getsize(a) != os.path.getsize(b):
+            return False
+        with open(a, "rb") as fa, open(b, "rb") as fb:
+            while True:
+                ca = fa.read(1024 * 1024)
+                cb = fb.read(1024 * 1024)
+                if ca != cb:
+                    return False
+                if not ca:
+                    return True
+    except OSError:
+        return False
+
+
+def _setuptools_build_dirs(
+    ext_root: pathlib.Path,
+    env: Optional[dict] = None,
+) -> Tuple[pathlib.Path, pathlib.Path]:
+    env = env or {}
+    build_root = pathlib.Path(
+        env.get("JITTOR_TORCH_EXTENSIONS_DIR")
+        or os.environ.get("JITTOR_TORCH_EXTENSIONS_DIR")
+        or (pathlib.Path.home() / ".cache" / "jittor_torch_extensions")
+    ).expanduser().resolve()
+    digest = hashlib.sha256(os.fspath(ext_root).encode("utf-8")).hexdigest()[:16]
+    base = build_root / "setuptools" / ext_root.name / digest
+    return base / "temp", base / "lib"
+
+
+def _setuptools_build_root(ext_root: pathlib.Path, env: Optional[dict] = None) -> pathlib.Path:
+    build_temp, _build_lib = _setuptools_build_dirs(ext_root, env)
+    return build_temp.parents[3]
+
+
+def _cached_setuptools_outputs_current(
+    ext: NativeExtension,
+    inputs: Sequence[str],
+    cpp_ext,
+    env: Optional[dict],
+) -> bool:
+    if not ext.setup_py:
+        return False
+    ext_root = pathlib.Path(ext.root).resolve()
+    _build_temp, build_lib = _setuptools_build_dirs(ext_root, env)
+    if not build_lib.is_dir():
+        return False
+    cached_outputs = _extension_outputs(os.fspath(build_lib))
+    if not cached_outputs:
+        return False
+    newest_input = _newest_mtime(inputs)
+    if newest_input is None and inputs:
+        return False
+
+    valid_cached: List[Tuple[str, str]] = []
+    for cached in cached_outputs:
+        if not cpp_ext.output_matches_toolchain(cached):
+            continue
+        try:
+            rel = pathlib.Path(cached).resolve().relative_to(build_lib)
+        except ValueError:
+            return False
+        source_out = ext_root / rel
+        if not source_out.is_file():
+            return False
+        if newest_input is not None and os.path.getmtime(os.fspath(source_out)) < newest_input:
+            return False
+        valid_cached.append((os.fspath(source_out), cached))
+
+    if not valid_cached:
+        return False
+
+    for source_out, cached in valid_cached:
+        if cpp_ext.output_matches_toolchain(source_out):
+            continue
+        if not _same_file_contents(source_out, cached):
+            return False
+        cpp_ext.write_toolchain_stamp(
+            source_out,
+            {"root": ext.root, "mirrored_from": cached},
+        )
+    return True
+
+
+def _source_outputs_current(
+    ext: NativeExtension,
+    outputs: Sequence[str],
+    inputs: Sequence[str],
+    cpp_ext,
+) -> bool:
+    if not outputs:
+        return False
+    for path in outputs:
+        if not cpp_ext.output_matches_toolchain(path):
+            return False
+    newest_input = _newest_mtime(inputs)
+    if newest_input is None:
+        return not inputs
     newest_output = 0.0
     for path in outputs:
         try:
             newest_output = max(newest_output, os.path.getmtime(path))
         except OSError:
-            return True
-    return newest_output < newest_input
+            return False
+    return newest_output >= newest_input
+
+
+def _needs_build(ext: NativeExtension, env: Optional[dict] = None) -> bool:
+    outputs = [
+        p for p in _extension_outputs(ext.root)
+        if os.path.sep + "build" + os.path.sep not in p
+    ]
+    inputs = _extension_inputs(ext)
+    try:
+        from jittor.torch_shim import cpp_extension as _cpp_ext
+    except Exception:
+        return True
+    if _cached_setuptools_outputs_current(ext, inputs, _cpp_ext, env):
+        return False
+    return not _source_outputs_current(ext, outputs, inputs, _cpp_ext)
+
+
+def _build_timeout_seconds() -> Optional[float]:
+    raw = os.environ.get("JITTOR_TORCH_EXT_BUILD_TIMEOUT", "").strip()
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
 
 
 def build_extension_dirs(
@@ -672,20 +791,17 @@ def build_extension_dirs(
         if not ext.setup_py:
             _log(verbose, "skip native extension without setup.py: %s" % ext.root)
             continue
-        if not force and not _needs_build(ext):
+        child_env = (env or os.environ.copy()).copy()
+        ext_root = pathlib.Path(ext.root).resolve()
+        build_temp_path, build_lib_path = _setuptools_build_dirs(ext_root, child_env)
+        build_root = _setuptools_build_root(ext_root, child_env)
+        child_env["JITTOR_TORCH_EXTENSIONS_DIR"] = os.fspath(build_root)
+        if not force and not _needs_build(ext, env=child_env):
             _log(verbose, "extension up-to-date: %s" % ext.root)
             continue
         _log(verbose, "build_ext: %s" % ext.root)
-        child_env = (env or os.environ.copy()).copy()
-        ext_root = pathlib.Path(ext.root).resolve()
-        build_root = pathlib.Path(
-            child_env.get("JITTOR_TORCH_EXTENSIONS_DIR")
-            or os.environ.get("JITTOR_TORCH_EXTENSIONS_DIR")
-            or (pathlib.Path.home() / ".cache" / "jittor_torch_extensions")
-        ).expanduser().resolve()
-        digest = hashlib.sha256(os.fspath(ext_root).encode("utf-8")).hexdigest()[:16]
-        build_temp = _ensure_dir(build_root / "setuptools" / ext_root.name / digest / "temp")
-        build_lib = _ensure_dir(build_root / "setuptools" / ext_root.name / digest / "lib")
+        build_temp = _ensure_dir(build_temp_path)
+        build_lib = _ensure_dir(build_lib_path)
         child_env["JITTOR_TORCH_EXTENSIONS_DIR"] = os.fspath(build_root)
         cmd = [
             sys.executable,
@@ -697,7 +813,18 @@ def build_extension_dirs(
             "--build-lib",
             os.fspath(build_lib),
         ]
-        subprocess.run(cmd, cwd=ext.root, env=child_env, check=True)
+        try:
+            subprocess.run(
+                cmd,
+                cwd=ext.root,
+                env=child_env,
+                check=True,
+                timeout=_build_timeout_seconds(),
+            )
+        except subprocess.TimeoutExpired:
+            if force or _needs_build(ext, env=child_env):
+                raise
+            _log(verbose, "build_ext timed out after usable outputs were produced: %s" % ext.root)
         try:
             from jittor.torch_shim import cpp_extension as _cpp_ext
             for path in _extension_outputs(ext.root):

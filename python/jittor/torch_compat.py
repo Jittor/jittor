@@ -5506,18 +5506,33 @@ def _install_cuda(g):
     cuda.device = _CudaDeviceContext
     cuda.is_initialized = lambda *a, **k: bool(is_available() and getattr(jt.flags, "use_cuda", 0))
     cuda._is_in_bad_fork = lambda *a, **k: False
-    # torch-compat: torch.cuda.empty_cache() should actually release jittor's
-    # cached GPU memory pools (it was a no-op). Sync outstanding work then run
-    # jittor's garbage collector, matching torch's "free cached blocks" semantics.
+    # Match PyTorch's empty_cache() as a memory hint instead of a forced
+    # synchronization point. TRELLIS calls it inside the inference path before
+    # decode; running jt.gc() there costs several seconds. Users that need
+    # explicit release can opt in with JITTOR_TORCH_CUDA_EMPTY_CACHE=gc or sync.
     def _empty_cache():
         try:
-            jt.sync_all(True)
+            import os as _os_empty_cache
+            mode = str(_os_empty_cache.environ.get(
+                "JITTOR_TORCH_CUDA_EMPTY_CACHE", "0")).strip().lower()
         except Exception:
-            pass
-        try:
-            jt.gc()
-        except Exception:
-            pass
+            mode = "0"
+        if mode in ("0", "false", "no", "off", "none", "noop"):
+            return
+        if mode in ("", "1", "true", "yes", "on", "gc"):
+            try:
+                jt.gc()
+            except Exception:
+                pass
+        elif mode in ("sync", "full"):
+            try:
+                jt.sync_all(True)
+            except Exception:
+                pass
+            try:
+                jt.gc()
+            except Exception:
+                pass
     cuda.empty_cache = _empty_cache
     cuda.synchronize = lambda *a, **k: jt.sync_all(True)
     cuda.manual_seed = lambda s: jt.set_global_seed(int(s))
