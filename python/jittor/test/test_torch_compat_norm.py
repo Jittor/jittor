@@ -28,6 +28,7 @@ Notes:
 Run:  python -m jittor.test.test_torch_compat_norm
       python -m pytest python/jittor/test/test_torch_compat_norm.py
 """
+import os
 import unittest
 import numpy as np
 import jittor as torch          # the whole point: jittor IS torch here
@@ -237,6 +238,24 @@ class TestLayerNorm(Base):
             ln = nn.LayerNorm(32)
             ln.weight.update(t(w)); ln.bias.update(t(b))
             self.ac(ln(t(x)).numpy(), ref, atol=1e-4, msg="ln no_grad cuda 3d")
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    def test_ln_no_grad_cuda_scalar_affine_fast(self):
+        rng = np.random.RandomState(217)
+        x = rng.randn(4, 16, 128).astype("float32")
+        old = os.environ.get("JITTOR_LAYERNORM_SCALAR_FAST")
+        try:
+            with jt.flag_scope(use_cuda=1), jt.no_grad():
+                os.environ["JITTOR_LAYERNORM_SCALAR_FAST"] = "0"
+                ref = F.layer_norm(t(x), (128,), 1.0, 0.0, eps=1e-6)
+                os.environ["JITTOR_LAYERNORM_SCALAR_FAST"] = "1"
+                out = F.layer_norm(t(x), (128,), 1.0, 0.0, eps=1e-6)
+                self.ac(out.numpy(), ref.numpy(), atol=1e-4, msg="ln scalar affine fast")
+        finally:
+            if old is None:
+                os.environ.pop("JITTOR_LAYERNORM_SCALAR_FAST", None)
+            else:
+                os.environ["JITTOR_LAYERNORM_SCALAR_FAST"] = old
 
 
 # --------------------------------------------------------------------------- GroupNorm

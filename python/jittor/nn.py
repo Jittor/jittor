@@ -17,6 +17,7 @@ from jittor import flatten, init, Module
 import numpy as np
 import collections
 import math
+import os
 from collections import OrderedDict
 from jittor.pool import *
 from jittor.optim import *
@@ -1209,18 +1210,67 @@ def _layer_norm_no_grad_cuda(x, normalized_shape, weight, bias, eps):
         return None
     if len(normalized_shape) != 1 or str(x.dtype) != "float32":
         return None
-    if not isinstance(weight, jt.Var) or not isinstance(bias, jt.Var):
-        return None
     hidden = int(normalized_shape[0])
-    if int(x.shape[-1]) != hidden or int(weight.numel()) != hidden or int(bias.numel()) != hidden:
+    var_affine = isinstance(weight, jt.Var) and isinstance(bias, jt.Var)
+    scalar_affine = not isinstance(weight, jt.Var) and not isinstance(bias, jt.Var)
+    if not var_affine:
+        if not scalar_affine or os.environ.get("JITTOR_LAYERNORM_SCALAR_FAST", "1") == "0":
+            return None
+    if int(x.shape[-1]) != hidden:
         return None
     rows = 1
     for size in x.shape[:-1]:
         rows *= int(size)
     x2 = x.reshape((rows, hidden))
+    eps_value = float(eps)
+    if scalar_affine:
+        scale_value = float(weight)
+        offset_value = float(bias)
+        scale_literal = f"{scale_value:.9e}f"
+        offset_literal = f"{offset_value:.9e}f"
+        y = jt.code(
+            (rows, hidden),
+            x.dtype,
+            [x2],
+            cuda_src=f"""
+            __global__ static void kernel(@ARGS_DEF) {{
+                @PRECALC
+                int row = blockIdx.x;
+                int tid = threadIdx.x;
+                __shared__ float buf[128];
+                float sum = 0.0f;
+                for (int j = tid; j < in0_shape1; j += blockDim.x)
+                    sum += @in0(row, j);
+                buf[tid] = sum;
+                __syncthreads();
+                for (int stride = blockDim.x >> 1; stride > 0; stride >>= 1) {{
+                    if (tid < stride) buf[tid] += buf[tid + stride];
+                    __syncthreads();
+                }}
+                float mean = buf[0] / in0_shape1;
+                float var = 0.0f;
+                for (int j = tid; j < in0_shape1; j += blockDim.x) {{
+                    float d = @in0(row, j) - mean;
+                    var += d * d;
+                }}
+                buf[tid] = var;
+                __syncthreads();
+                for (int stride = blockDim.x >> 1; stride > 0; stride >>= 1) {{
+                    if (tid < stride) buf[tid] += buf[tid + stride];
+                    __syncthreads();
+                }}
+                float inv_std = rsqrtf(buf[0] / in0_shape1 + {eps_value:.9g}f);
+                for (int j = tid; j < in0_shape1; j += blockDim.x)
+                    @out(row, j) = (@in0(row, j) - mean) * inv_std * {scale_literal} + {offset_literal};
+            }}
+            kernel<<<in0_shape0, 128>>>(@ARGS);
+            """,
+        )
+        return y.reshape(x.shape)
+    if int(weight.numel()) != hidden or int(bias.numel()) != hidden:
+        return None
     w = weight.reshape((hidden,))
     b = bias.reshape((hidden,))
-    eps_value = float(eps)
     y = jt.code(
         (rows, hidden),
         x.dtype,
