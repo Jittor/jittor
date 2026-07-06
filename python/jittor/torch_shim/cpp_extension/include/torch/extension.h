@@ -192,6 +192,7 @@ namespace detail {
     // python bridge
     bool     is_jittor_var(void* pyobj);
     bool     pyvar_is_ext_mutable(void* pyobj);
+    bool     pyvar_ext_borrow_inputs_enabled();
     bool     pyvar_is_ext_readonly_borrow(void* pyobj);
     Tensor   tensor_from_pyvar(void* pyobj);           // default extension boundary
     Tensor   tensor_from_pyvar_readonly(void* pyobj);  // explicit readonly borrow

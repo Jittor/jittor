@@ -117,12 +117,38 @@ def _restore(saved) -> None:
             pass
 
 
+@contextlib.contextmanager
+def _borrow_scope():
+    overrides = {
+        "JITTOR_TORCH_EXT_UNSAFE_BORROW_INPUTS": "1",
+        "JITTOR_TORCH_EXT_BORROW_INPUTS": "1",
+    }
+    old = {name: os.environ.get(name) for name in overrides}
+    try:
+        for name, value in overrides.items():
+            os.environ[name] = value
+        yield
+    finally:
+        for name, value in old.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
+def _readonly_borrow_mode() -> str:
+    return str(os.environ.get("JITTOR_TORCH_EXT_READONLY_BORROW_MODE", "scope")).strip().lower()
+
+
 def _wrap_readonly_function(fn):
     if getattr(fn, "_jittor_readonly_borrow_wrapped", False):
         return fn
 
     @functools.wraps(fn)
     def wrapped(*args, **kwargs):
+        if _readonly_borrow_mode() == "scope":
+            with _borrow_scope():
+                return fn(*args, **kwargs)
         saved = _mark_readonly(args, kwargs)
         try:
             return fn(*args, **kwargs)

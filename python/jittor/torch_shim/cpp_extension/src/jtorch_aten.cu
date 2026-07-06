@@ -69,6 +69,10 @@ static bool torch_ext_borrow_inputs_enabled() {
            env_truthy("JITTOR_TORCH_EXT_BORROW_INPUTS");
 }
 
+bool pyvar_ext_borrow_inputs_enabled() {
+    return torch_ext_borrow_inputs_enabled();
+}
+
 static bool torch_ext_fast_metadata_enabled() {
     if (env_truthy("JITTOR_TORCH_EXT_SYNC_BOUNDARY") ||
         env_truthy("JITTOR_TORCH_EXT_SYNC_METADATA") ||

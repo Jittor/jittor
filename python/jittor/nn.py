@@ -124,6 +124,27 @@ def baddbmm(input, batch1, batch2, beta=1, alpha=1):
     if beta == 0: return res
     return beta * input + res
 
+def _matmul_2d_cublas(a, b, trans_a=0, trans_b=0):
+    a_dtype, b_dtype = str(a.dtype), str(b.dtype)
+    if (jt.flags.use_cuda and jt.compile_extern.cublas_ops
+            and a_dtype == b_dtype and "float" in a_dtype
+            and "complex" not in a_dtype and "complex" not in b_dtype):
+        if a_dtype == "float64":
+            r = jt.compile_extern.cublas_ops.cublas_matmul(
+                a.float32(), b.float32(), trans_a, trans_b)
+            return r.cast("float64")
+        return jt.compile_extern.cublas_ops.cublas_matmul(a, b, trans_a, trans_b)
+    return None
+
+def _transpose_base_last2(x):
+    try:
+        base = getattr(x, "_jittor_transpose_base", None)
+        if base is not None and getattr(x, "_jittor_transpose_last2", False):
+            return base
+    except Exception:
+        pass
+    return None
+
 def matmul(a, b):
     ''' matrix multiply, 
 
@@ -168,6 +189,16 @@ Example::
         if len_a == 1:
             # a: [n], b:[n,k], c:[k]
             return (a.broadcast(b, [-1]) * b).sum(0)
+        if len_a == 2 and len_b == 2:
+            # a: [n, m], b: [m, k], c: [n, k]
+            a_base = _transpose_base_last2(a)
+            b_base = _transpose_base_last2(b)
+            aa = a_base if a_base is not None else a
+            bb = b_base if b_base is not None else b
+            fast = _matmul_2d_cublas(aa, bb, 1 if a_base is not None else 0,
+                                     1 if b_base is not None else 0)
+            if fast is not None:
+                return fast
         if len_a>=3 and len_a==len_b:
             # bmm
             # a: [..., n, m], b: [..., m, k], c:[..., n, k]
@@ -175,14 +206,26 @@ Example::
             # the reindex path below (broadcast * multiply + sum-reduce), which the native
             # complex kernels support on both CPU and CUDA.
             if jt.flags.use_cuda and jt.compile_extern.cublas_ops and "complex" not in str(a.dtype):
+                a_base = _transpose_base_last2(a)
+                b_base = _transpose_base_last2(b)
+                if a_base is not None:
+                    a = a_base
+                if b_base is not None:
+                    b = b_base
                 a, b = _broadcast_batch_dims(a, b)
                 # cuBLAS strided-batched gemm rejects float64 (CUBLAS_STATUS_NOT_SUPPORTED)
                 # on many GPUs; compute in float32 and cast back (rare path, e.g. a float64
                 # attention mask contaminating a transformer's batched matmul).
                 if str(a.dtype) == "float64" or str(b.dtype) == "float64":
-                    r = jt.compile_extern.cublas_ops.cublas_batched_matmul(a.float32(), b.float32(), 0, 0)
+                    r = jt.compile_extern.cublas_ops.cublas_batched_matmul(
+                        a.float32(), b.float32(),
+                        1 if a_base is not None else 0,
+                        1 if b_base is not None else 0)
                     return r.cast("float64") if (str(a.dtype) == "float64" and str(b.dtype) == "float64") else r
-                return jt.compile_extern.cublas_ops.cublas_batched_matmul(a, b, 0, 0)
+                return jt.compile_extern.cublas_ops.cublas_batched_matmul(
+                    a, b,
+                    1 if a_base is not None else 0,
+                    1 if b_base is not None else 0)
         shape = []
         len_c = max(len_a, len_b)
         (n, m), (m_, k) = a.shape[-2:], b.shape[-2:]

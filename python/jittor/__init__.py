@@ -173,6 +173,7 @@ with lock.lock_scope():
     import jittor_core as core
     from jittor_core import *
     from jittor_core.ops import *
+    _core_profiler = core.profiler
     from . import compile_extern
     from .compile_extern import mkl_ops, mpi, mpi_ops, in_mpi, rank, world_size
     if core.get_device_count() == 0:
@@ -415,15 +416,15 @@ class profile_scope(_call_no_record_scope):
         self.report = []
         try:
             self.fs.__enter__()
-            profiler.start(self.warmup, self.rerun)
+            _core_profiler.start(self.warmup, self.rerun)
             return self.report
         except:
-            profiler.stop()
+            _core_profiler.stop()
             raise
 
     def __exit__(self, *exc):
-        profiler.stop()
-        self.report.extend(profiler.report())
+        _core_profiler.stop()
+        self.report.extend(_core_profiler.report())
         self.fs.__exit__(*exc)
 
 
@@ -962,6 +963,7 @@ Var.view = Var.reshape = view = reshape
 
 origin_transpose = transpose
 def transpose(x, *dim):
+    original_dim = dim
     if len(dim) == 1 and isinstance(dim[0], (Sequence, NanoVector)):
         dim = dim[0]
     elif len(dim) == 2:
@@ -969,7 +971,26 @@ def transpose(x, *dim):
         a, b = dim
         axes[a], axes[b] = axes[b], axes[a]
         dim = axes
-    return origin_transpose(x, dim)
+    out = origin_transpose(x, dim)
+    try:
+        pyint = (0).__class__
+        axes_tuple = tuple(pyint(i) for i in dim)
+        last2 = list(range(x.ndim))
+        if x.ndim >= 2:
+            last2[-1], last2[-2] = last2[-2], last2[-1]
+        if x.ndim >= 2 and axes_tuple == tuple(last2):
+            out._jittor_transpose_base = x
+            out._jittor_transpose_axes = axes_tuple
+            out._jittor_transpose_last2 = True
+        elif len(original_dim) == 2:
+            a, b = pyint(original_dim[0]), pyint(original_dim[1])
+            if x.ndim >= 2 and {a % x.ndim, b % x.ndim} == {x.ndim - 2, x.ndim - 1}:
+                out._jittor_transpose_base = x
+                out._jittor_transpose_axes = axes_tuple
+                out._jittor_transpose_last2 = True
+    except Exception:
+        pass
+    return out
 transpose.__doc__ = origin_transpose.__doc__
 Var.transpose = Var.permute = permute = transpose
 
