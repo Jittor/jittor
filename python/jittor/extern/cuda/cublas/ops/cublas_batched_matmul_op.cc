@@ -20,6 +20,7 @@ using namespace std;
 namespace jittor {
 
 extern int use_tensorcore;
+extern int cuda_allow_tf32;
 
 #ifndef JIT
 
@@ -139,7 +140,7 @@ void CublasBatchedMatmulOp::jit_run() {
         computeType = CUBLAS_COMPUTE_32F_FAST_16F;
     } else if (use_tensorcore==2) {
         computeType = CUBLAS_COMPUTE_32F_FAST_16BF;
-    } else if (use_tensorcore==1) {
+    } else if (use_tensorcore==1 || cuda_allow_tf32) {
         computeType = CUBLAS_COMPUTE_32F_FAST_TF32;
     }
     if (has_fp16) {
@@ -186,4 +187,3 @@ void CublasBatchedMatmulOp::jit_run() {
 #endif // JIT
 
 } // jittor
-

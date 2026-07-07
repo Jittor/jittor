@@ -5806,9 +5806,20 @@ def _install_cuda(g):
     cuda_backend.enable_flash_sdp = getattr(cuda_backend, "enable_flash_sdp", lambda *a, **k: None)
     cuda_backend.enable_mem_efficient_sdp = getattr(cuda_backend, "enable_mem_efficient_sdp", lambda *a, **k: None)
     cuda_backend.enable_math_sdp = getattr(cuda_backend, "enable_math_sdp", lambda *a, **k: None)
-    if not hasattr(cuda_backend, "matmul"):
-        class _MatmulBackend:
-            allow_tf32 = False
+    class _MatmulBackend:
+        @property
+        def allow_tf32(self):
+            cuda_tf32 = bool(getattr(jt.flags, "cuda_allow_tf32", 0))
+            acl_hf32 = bool(getattr(jt, "acl_allow_hf32", False))
+            return cuda_tf32 or acl_hf32
+
+        @allow_tf32.setter
+        def allow_tf32(self, value):
+            enabled = bool(value)
+            if hasattr(jt.flags, "cuda_allow_tf32"):
+                jt.flags.cuda_allow_tf32 = int(enabled)
+            jt.acl_allow_hf32 = enabled
+    if not hasattr(cuda_backend, "matmul") or not isinstance(cuda_backend.matmul, _MatmulBackend):
         cuda_backend.matmul = _MatmulBackend()
     mps = _sys_cuda.modules.get("torch.backends.mps")
     if mps is None:
