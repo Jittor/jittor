@@ -270,7 +270,7 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
         cuda_include_name = search_file([cuda_include, extra_include_path, "/usr/include"], lib_name+".h")
         # cuda11 prefer cudnn 8
         nvcc_version = get_int_version(nvcc_path)
-        if has_corex:
+        if globals().get("has_corex", False):
             nvcc_version = (10,2,89)
         prefer_version = ()
         if nvcc_version[0] == 11:

@@ -7,6 +7,8 @@
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
+#include <atomic>
+#include <cstdio>
 #include <vector>
 #include <memory>
 #include <map>
@@ -43,6 +45,136 @@ static bool env_falsey(const char* name) {
            std::strcmp(v, "NO") == 0 || std::strcmp(v, "off") == 0 ||
            std::strcmp(v, "OFF") == 0;
 }
+
+static bool torch_ext_stats_enabled() {
+    static const bool enabled = env_truthy("JITTOR_TORCH_EXT_STATS") ||
+                                env_truthy("JITTOR_TORCH_EXT_PROFILE");
+    return enabled;
+}
+
+#define JT_STRINGIFY_IMPL(x) #x
+#define JT_STRINGIFY(x) JT_STRINGIFY_IMPL(x)
+#ifdef TORCH_EXTENSION_NAME
+static const char* torch_ext_module_name() { return JT_STRINGIFY(TORCH_EXTENSION_NAME); }
+#elif defined(JTORCH_EXTENSION_MODULE_NAME)
+static const char* torch_ext_module_name() { return JT_STRINGIFY(JTORCH_EXTENSION_MODULE_NAME); }
+#else
+static const char* torch_ext_module_name() { return "unknown"; }
+#endif
+
+struct TorchExtStats {
+    std::atomic<long long> input_total{0};
+    std::atomic<long long> input_clone_count{0};
+    std::atomic<long long> input_clone_bytes{0};
+    std::atomic<long long> input_readonly_borrow_count{0};
+    std::atomic<long long> input_readonly_borrow_bytes{0};
+    std::atomic<long long> input_mutable_borrow_count{0};
+    std::atomic<long long> input_mutable_borrow_bytes{0};
+    std::atomic<long long> input_global_borrow_count{0};
+    std::atomic<long long> input_global_borrow_bytes{0};
+    std::atomic<long long> input_empty_count{0};
+    std::atomic<long long> force_cpu_count{0};
+    std::atomic<long long> force_cpu_bytes{0};
+    std::atomic<long long> direct_readonly_count{0};
+    std::atomic<long long> direct_readonly_bytes{0};
+    std::atomic<long long> output_count{0};
+    std::atomic<long long> output_bytes{0};
+    std::atomic<long long> mutable_commit_count{0};
+    std::atomic<long long> mutable_commit_bytes{0};
+    std::atomic<long long> data_ptr_fast_count{0};
+    std::atomic<long long> data_ptr_fast_bytes{0};
+    std::atomic<long long> data_ptr_sync_count{0};
+    std::atomic<long long> data_ptr_sync_bytes{0};
+    std::atomic<long long> metadata_fast_count{0};
+    std::atomic<long long> metadata_sync_count{0};
+    std::atomic<long long> native_scalar_index_count{0};
+    std::atomic<long long> host_scalar_index_count{0};
+    std::atomic<long long> host_scalar_index_bytes{0};
+    std::atomic<long long> dtype_view_host_count{0};
+    std::atomic<long long> dtype_view_host_bytes{0};
+    std::atomic<long long> host_fallback_copy_count{0};
+    std::atomic<long long> host_fallback_copy_bytes{0};
+    std::atomic<long long> full_memset_count{0};
+    std::atomic<long long> full_memset_bytes{0};
+};
+
+static TorchExtStats& torch_ext_stats() {
+    static TorchExtStats* stats = new TorchExtStats();
+    return *stats;
+}
+
+static inline void stat_add(std::atomic<long long>& counter, long long value = 1) {
+    if (__builtin_expect(torch_ext_stats_enabled(), 0))
+        counter.fetch_add(value, std::memory_order_relaxed);
+}
+
+static inline void stat_add_if(bool enabled, std::atomic<long long>& counter, long long value = 1) {
+    if (enabled)
+        counter.fetch_add(value, std::memory_order_relaxed);
+}
+
+static inline long long vh_nbytes_for_stats(jittor::VarHolder* vh) {
+    if (!vh || !vh->var)
+        return 0;
+    return (long long)vh->var->num * (long long)vh->var->dtype().dsize();
+}
+
+#define JT_STAT_LOAD(name) stats.name.load(std::memory_order_relaxed)
+struct TorchExtStatsReporter {
+    ~TorchExtStatsReporter() {
+        if (!torch_ext_stats_enabled())
+            return;
+        TorchExtStats& stats = torch_ext_stats();
+        long long activity =
+            JT_STAT_LOAD(input_total) + JT_STAT_LOAD(direct_readonly_count) +
+            JT_STAT_LOAD(output_count) + JT_STAT_LOAD(data_ptr_fast_count) +
+            JT_STAT_LOAD(data_ptr_sync_count) + JT_STAT_LOAD(host_fallback_copy_count);
+        if (!activity)
+            return;
+        const char* path = std::getenv("JITTOR_TORCH_EXT_STATS_FILE");
+        FILE* fp = (path && *path) ? std::fopen(path, "a") : stderr;
+        if (!fp)
+            fp = stderr;
+        std::fprintf(fp,
+            "[jtorch-ext-stats] module=%s "
+            "input_total=%lld input_clone=%lld input_clone_bytes=%lld "
+            "readonly_borrow=%lld readonly_borrow_bytes=%lld "
+            "mutable_borrow=%lld mutable_borrow_bytes=%lld "
+            "global_borrow=%lld global_borrow_bytes=%lld input_empty=%lld "
+            "force_cpu=%lld force_cpu_bytes=%lld "
+            "direct_readonly=%lld direct_readonly_bytes=%lld "
+            "output=%lld output_bytes=%lld mutable_commit=%lld mutable_commit_bytes=%lld "
+            "data_ptr_fast=%lld data_ptr_fast_bytes=%lld "
+            "data_ptr_sync=%lld data_ptr_sync_bytes=%lld "
+            "metadata_fast=%lld metadata_sync=%lld "
+            "native_scalar_index=%lld host_scalar_index=%lld host_scalar_index_bytes=%lld "
+            "dtype_view_host=%lld dtype_view_host_bytes=%lld "
+            "host_fallback_copy=%lld host_fallback_copy_bytes=%lld "
+            "full_memset=%lld full_memset_bytes=%lld\n",
+            torch_ext_module_name(),
+            JT_STAT_LOAD(input_total), JT_STAT_LOAD(input_clone_count), JT_STAT_LOAD(input_clone_bytes),
+            JT_STAT_LOAD(input_readonly_borrow_count), JT_STAT_LOAD(input_readonly_borrow_bytes),
+            JT_STAT_LOAD(input_mutable_borrow_count), JT_STAT_LOAD(input_mutable_borrow_bytes),
+            JT_STAT_LOAD(input_global_borrow_count), JT_STAT_LOAD(input_global_borrow_bytes),
+            JT_STAT_LOAD(input_empty_count),
+            JT_STAT_LOAD(force_cpu_count), JT_STAT_LOAD(force_cpu_bytes),
+            JT_STAT_LOAD(direct_readonly_count), JT_STAT_LOAD(direct_readonly_bytes),
+            JT_STAT_LOAD(output_count), JT_STAT_LOAD(output_bytes),
+            JT_STAT_LOAD(mutable_commit_count), JT_STAT_LOAD(mutable_commit_bytes),
+            JT_STAT_LOAD(data_ptr_fast_count), JT_STAT_LOAD(data_ptr_fast_bytes),
+            JT_STAT_LOAD(data_ptr_sync_count), JT_STAT_LOAD(data_ptr_sync_bytes),
+            JT_STAT_LOAD(metadata_fast_count), JT_STAT_LOAD(metadata_sync_count),
+            JT_STAT_LOAD(native_scalar_index_count),
+            JT_STAT_LOAD(host_scalar_index_count), JT_STAT_LOAD(host_scalar_index_bytes),
+            JT_STAT_LOAD(dtype_view_host_count), JT_STAT_LOAD(dtype_view_host_bytes),
+            JT_STAT_LOAD(host_fallback_copy_count), JT_STAT_LOAD(host_fallback_copy_bytes),
+            JT_STAT_LOAD(full_memset_count), JT_STAT_LOAD(full_memset_bytes));
+        if (fp != stderr)
+            std::fclose(fp);
+    }
+};
+static TorchExtStatsReporter torch_ext_stats_reporter;
+#undef JT_STAT_LOAD
 
 static bool torch_ext_sync_data_ptr_enabled() {
     if (env_truthy("JITTOR_TORCH_EXT_SYNC_BOUNDARY"))
@@ -230,6 +362,52 @@ static Tensor var_from_host_dev(const void* host, const jittor::NanoVector& shap
 // --------- detail bridge helpers --------------------------------------------
 namespace detail {
 
+void data_ptrs(std::initializer_list<Tensor> tensors, void** out) {
+    std::vector<jittor::VarHolder*> vhs;
+    std::vector<size_t> pending_indices;
+    vhs.reserve(tensors.size());
+    pending_indices.reserve(tensors.size());
+    bool collect_stats = torch_ext_stats_enabled();
+    bool device_sync = torch_ext_sync_data_ptr_enabled();
+    size_t i = 0;
+    for (const auto& t : tensors) {
+        if (!t.defined()) {
+            out[i++] = nullptr;
+            continue;
+        }
+        jittor::VarHolder* vh = t._vh();
+        if (!vh || !vh->var || vh->var->num == 0) {
+            out[i++] = nullptr;
+            continue;
+        }
+        long long nbytes = collect_stats ? vh_nbytes_for_stats(vh) : 0;
+        if (!device_sync && vh->var->mem_ptr && vh->var->allocator) {
+            stat_add_if(collect_stats, torch_ext_stats().data_ptr_fast_count);
+            stat_add_if(collect_stats, torch_ext_stats().data_ptr_fast_bytes, nbytes);
+            out[i++] = vh->var->mem_ptr;
+            continue;
+        }
+        stat_add_if(collect_stats, torch_ext_stats().data_ptr_sync_count);
+        stat_add_if(collect_stats, torch_ext_stats().data_ptr_sync_bytes, nbytes);
+        vhs.push_back(vh);
+        pending_indices.push_back(i++);
+    }
+    if (!vhs.empty())
+        jittor::sync(vhs, device_sync, false);
+    for (size_t j = 0; j < vhs.size(); ++j) {
+        jittor::VarHolder* vh = vhs[j];
+        size_t index = pending_indices[j];
+        if (vh->var->allocator && vh->var->allocator->is_cuda()) {
+            out[index] = vh->var->mem_ptr;
+        } else {
+#ifdef HAS_CUDA
+            jittor::migrate_to_cpu(vh->var, jittor::exe.allocator);
+#endif
+            out[index] = vh->var->mem_ptr;
+        }
+    }
+}
+
 void* vh_device_ptr(jittor::VarHolder* vh) {
     // torch returns a NULL data_ptr for an empty (0-element) tensor, and exts
     // dispatch on it: diff-gaussian-rasterization passes empty cov3D_precomp /
@@ -247,8 +425,15 @@ void* vh_device_ptr(jittor::VarHolder* vh) {
     // after Jittor stream-0 work without a global device barrier. Set
     // JITTOR_TORCH_EXT_SYNC_DATA_PTR=1 or JITTOR_TORCH_EXT_SYNC_BOUNDARY=1 for
     // conservative debugging.
-    if (!torch_ext_sync_data_ptr_enabled() && vh->var->mem_ptr && vh->var->allocator)
+    bool collect_stats = torch_ext_stats_enabled();
+    long long nbytes = collect_stats ? vh_nbytes_for_stats(vh) : 0;
+    if (!torch_ext_sync_data_ptr_enabled() && vh->var->mem_ptr && vh->var->allocator) {
+        stat_add_if(collect_stats, torch_ext_stats().data_ptr_fast_count);
+        stat_add_if(collect_stats, torch_ext_stats().data_ptr_fast_bytes, nbytes);
         return vh->var->mem_ptr;
+    }
+    stat_add_if(collect_stats, torch_ext_stats().data_ptr_sync_count);
+    stat_add_if(collect_stats, torch_ext_stats().data_ptr_sync_bytes, nbytes);
     sync_for_data_ptr(vh);
     if (vh->var->allocator && vh->var->allocator->is_cuda())
         return vh->var->mem_ptr;
@@ -268,8 +453,13 @@ int64_t vh_numel(jittor::VarHolder* vh) { return vh->var->num; }
 int64_t vh_dsize(jittor::VarHolder* vh) { return vh->var->dtype().dsize(); }
 const char* vh_dtype_name(jittor::VarHolder* vh) { return vh->var->dtype().to_cstring(); }
 bool vh_is_cuda(jittor::VarHolder* vh) {
-    if (torch_ext_fast_metadata_enabled() && vh->var->allocator)
+    if (vh->var->allocator && vh->var->mem_ptr)
         return vh->var->allocator->is_cuda();
+    if (torch_ext_fast_metadata_enabled() && vh->var->allocator) {
+        stat_add(torch_ext_stats().metadata_fast_count);
+        return vh->var->allocator->is_cuda();
+    }
+    stat_add(torch_ext_stats().metadata_sync_count);
     sync_for_data_ptr(vh);
     return vh->var->allocator && vh->var->allocator->is_cuda();
 }
@@ -278,8 +468,13 @@ bool vh_allocator_is_cuda(jittor::VarHolder* vh) {
 }
 int vh_device_type(jittor::VarHolder* vh) {
     // Report the Var's CURRENT residency without migrating (torch::Tensor::device()).
-    if (torch_ext_fast_metadata_enabled() && vh->var->allocator)
+    if (vh->var->allocator && vh->var->mem_ptr)
         return vh->var->allocator->is_cuda() ? 1 : 0;
+    if (torch_ext_fast_metadata_enabled() && vh->var->allocator) {
+        stat_add(torch_ext_stats().metadata_fast_count);
+        return vh->var->allocator->is_cuda() ? 1 : 0;
+    }
+    stat_add(torch_ext_stats().metadata_sync_count);
     sync_for_data_ptr(vh);
     return (vh->var->allocator && vh->var->allocator->is_cuda()) ? 1 : 0;
 }
@@ -345,6 +540,11 @@ void commit_tensor_to_pyvar(void* obj, const Tensor& t) {
     PyObject* pyobj = (PyObject*)obj;
     if (Py_TYPE(pyobj) != &jittor::PyjtVarHolder.ht_type)
         return;
+    bool collect_stats = torch_ext_stats_enabled();
+    stat_add_if(collect_stats, torch_ext_stats().mutable_commit_count);
+    if (collect_stats && t.defined())
+        stat_add_if(collect_stats, torch_ext_stats().mutable_commit_bytes,
+                    (long long)t.numel() * t.element_size());
     jittor::VarHolder* dst = jittor::from_py_object<jittor::VarHolder*>(pyobj);
     Tensor settled = t.clone();
     jittor::VarHolder* src = settled._vh();
@@ -376,9 +576,22 @@ void commit_tensor_to_pyvar(void* obj, const Tensor& t) {
 Tensor tensor_from_pyvar(void* obj) {
     jittor::VarHolder* vh = jittor::from_py_object<jittor::VarHolder*>((PyObject*)obj);
     Tensor borrowed = adopt(vh, /*owns=*/false);    // python owns it; we borrow
+    bool collect_stats = torch_ext_stats_enabled();
+    long long nbytes = (collect_stats && borrowed.defined()) ? (long long)borrowed.numel() * borrowed.element_size() : 0;
+    stat_add_if(collect_stats, torch_ext_stats().input_total);
     if (pyvar_force_cpu(obj) && borrowed.defined()) {
-        if (pyvar_is_ext_readonly_borrow(obj) || pyvar_is_ext_mutable(obj))
+        stat_add_if(collect_stats, torch_ext_stats().force_cpu_count);
+        stat_add_if(collect_stats, torch_ext_stats().force_cpu_bytes, nbytes);
+        if (pyvar_is_ext_readonly_borrow(obj)) {
+            stat_add_if(collect_stats, torch_ext_stats().input_readonly_borrow_count);
+            stat_add_if(collect_stats, torch_ext_stats().input_readonly_borrow_bytes, nbytes);
             return borrowed;
+        }
+        if (pyvar_is_ext_mutable(obj)) {
+            stat_add_if(collect_stats, torch_ext_stats().input_mutable_borrow_count);
+            stat_add_if(collect_stats, torch_ext_stats().input_mutable_borrow_bytes, nbytes);
+            return borrowed;
+        }
         jittor::NanoVector nv = to_nv(borrowed.sizes());
         if (borrowed.numel() == 0)
             return adopt(make_var(nv, borrowed.scalar_type(), /*cpu=*/true), true);
@@ -391,10 +604,21 @@ Tensor tensor_from_pyvar(void* obj) {
                    cudaMemcpyDeviceToHost);
         return var_from_host_dev(host.get(), nv, borrowed.scalar_type(), false);
     }
-    if (pyvar_is_ext_readonly_borrow(obj) || pyvar_is_ext_mutable(obj))
+    if (pyvar_is_ext_readonly_borrow(obj)) {
+        stat_add_if(collect_stats, torch_ext_stats().input_readonly_borrow_count);
+        stat_add_if(collect_stats, torch_ext_stats().input_readonly_borrow_bytes, nbytes);
         return borrowed;
-    if (torch_ext_borrow_inputs_enabled())
+    }
+    if (pyvar_is_ext_mutable(obj)) {
+        stat_add_if(collect_stats, torch_ext_stats().input_mutable_borrow_count);
+        stat_add_if(collect_stats, torch_ext_stats().input_mutable_borrow_bytes, nbytes);
         return borrowed;
+    }
+    if (torch_ext_borrow_inputs_enabled()) {
+        stat_add_if(collect_stats, torch_ext_stats().input_global_borrow_count);
+        stat_add_if(collect_stats, torch_ext_stats().input_global_borrow_bytes, nbytes);
+        return borrowed;
+    }
     // BAKE the input into a SETTLED jittor "array" Var before the ext's kernel
     // reads it. A lazy/intermediate input (e.g. fused-ssim's rendered image =
     // clamp(rasterizer_output), or any value computed several ops before this
@@ -407,12 +631,20 @@ Tensor tensor_from_pyvar(void* obj) {
     // so the kernel reading a data-identical settled copy does NOT detach grads.
     // Empty (0-elem, e.g. the rasterizer's placeholder colors/cov3D) stay as-is —
     // their data_ptr must remain null for the ext's `!= nullptr` dispatch.
-    if (!borrowed.defined() || borrowed.numel() == 0)
+    if (!borrowed.defined() || borrowed.numel() == 0) {
+        stat_add_if(collect_stats, torch_ext_stats().input_empty_count);
         return borrowed;
+    }
+    stat_add_if(collect_stats, torch_ext_stats().input_clone_count);
+    stat_add_if(collect_stats, torch_ext_stats().input_clone_bytes, nbytes);
     return borrowed.clone();   // graph-tracked settled copy, residency kept
 }
 Tensor tensor_from_pyvar_readonly(void* obj) {
     jittor::VarHolder* vh = jittor::from_py_object<jittor::VarHolder*>((PyObject*)obj);
+    bool collect_stats = torch_ext_stats_enabled();
+    stat_add_if(collect_stats, torch_ext_stats().direct_readonly_count);
+    stat_add_if(collect_stats, torch_ext_stats().direct_readonly_bytes,
+                collect_stats ? vh_nbytes_for_stats(vh) : 0);
     return adopt(vh, /*owns=*/false);
 }
 void* tensor_to_pyvar(const Tensor& t) {
@@ -427,6 +659,12 @@ void* tensor_to_pyvar(const Tensor& t) {
     if (torch_ext_sync_return_enabled())
         cudaDeviceSynchronize();
 #endif
+    bool collect_stats = torch_ext_stats_enabled();
+    if (collect_stats && t.defined()) {
+        stat_add_if(collect_stats, torch_ext_stats().output_count);
+        stat_add_if(collect_stats, torch_ext_stats().output_bytes,
+                    (long long)t.numel() * t.element_size());
+    }
     return (void*)jittor::to_py_object<jittor::VarHolder*>(clone_holder(t._vh()));
 }
 
@@ -449,6 +687,7 @@ Tensor Tensor::operator[](int64_t i) const {
     int64_t esz = detail::vh_dsize(_vh());
     bool cuda = detail::vh_is_cuda(_vh());
     if (cuda && rest == 1 && torch_ext_native_scalar_index_enabled()) {
+        stat_add(torch_ext_stats().native_scalar_index_count);
         static auto maker = jittor::get_op_info("getitem")
             .get_constructor<jittor::VarPtr, jittor::Var*, jittor::VarSlices&&>();
         jittor::VarSlices vs(1);
@@ -466,6 +705,8 @@ Tensor Tensor::operator[](int64_t i) const {
     // is_cuda on tensors handed to triton kernels).
     int64_t nbytes = rest * esz;
     if (!cuda) return var_from_host_dev(src, nv, scalar_type(), false);
+    stat_add(torch_ext_stats().host_scalar_index_count);
+    stat_add(torch_ext_stats().host_scalar_index_bytes, nbytes);
     std::unique_ptr<char[]> host(new char[nbytes]);
     cudaMemcpy(host.get(), src, nbytes, cudaMemcpyDeviceToHost);
     return var_from_host_dev(host.get(), nv, scalar_type(), true);
@@ -501,6 +742,8 @@ Tensor Tensor::view(ScalarType st) const {
         return detail::adopt(make_var(nv, st, /*cpu=*/!cuda), true);
     if (!cuda)
         return var_from_host_dev(detail::vh_device_ptr(_vh()), nv, st, false);
+    stat_add(torch_ext_stats().dtype_view_host_count);
+    stat_add(torch_ext_stats().dtype_view_host_bytes, bytes);
     std::unique_ptr<char[]> host(new char[bytes]);
     cudaMemcpy(host.get(), detail::vh_device_ptr(_vh()), bytes, cudaMemcpyDeviceToHost);
     return var_from_host_dev(host.get(), nv, st, true);
@@ -572,6 +815,8 @@ static Tensor _full_memset(IntArrayRef size, TensorOptions opt, ScalarType st, i
     Tensor t = empty(size, TensorOptions(st).device(opt_is_cpu(opt)?DeviceType::CPU:DeviceType::CUDA));
     int64_t nbytes = t.numel() * detail::vh_dsize(t._vh());
     if (nbytes) {
+        stat_add(torch_ext_stats().full_memset_count);
+        stat_add(torch_ext_stats().full_memset_bytes, nbytes);
         if (opt_is_cpu(opt))
             std::memset(t.data_ptr_void(), byte_value, nbytes);
         else
@@ -721,8 +966,13 @@ static Tensor _argsort_1d_typed(const Tensor& self, bool descending) {
     // first so any prior write (jittor stream OR a raw <<<>>> kernel) is visible.
     if (cuda) cudaDeviceSynchronize();
     std::unique_ptr<K[]> hk(new K[n]);
-    if (cuda) cudaMemcpy(hk.get(), kp, n * sizeof(K), cudaMemcpyDeviceToHost);
-    else      std::memcpy(hk.get(), kp, n * sizeof(K));
+    if (cuda) {
+        stat_add(torch_ext_stats().host_fallback_copy_count);
+        stat_add(torch_ext_stats().host_fallback_copy_bytes, n * (long long)sizeof(K));
+        cudaMemcpy(hk.get(), kp, n * sizeof(K), cudaMemcpyDeviceToHost);
+    } else {
+        std::memcpy(hk.get(), kp, n * sizeof(K));
+    }
     std::vector<int64_t> v(n); for (int64_t i = 0; i < n; ++i) v[i] = i;
     std::stable_sort(v.begin(), v.end(), [&](int64_t a, int64_t b) {
         return descending ? (hk[a] > hk[b]) : (hk[a] < hk[b]); });
@@ -768,8 +1018,13 @@ template <typename SRC, typename DST>
 static std::unique_ptr<DST[]> _cumsum_host(const SRC* sp, int64_t n, bool cuda) {
     if (cuda) cudaDeviceSynchronize();
     std::unique_ptr<SRC[]> hi(new SRC[n]);
-    if (cuda) cudaMemcpy(hi.get(), sp, n * sizeof(SRC), cudaMemcpyDeviceToHost);
-    else      std::memcpy(hi.get(), sp, n * sizeof(SRC));
+    if (cuda) {
+        stat_add(torch_ext_stats().host_fallback_copy_count);
+        stat_add(torch_ext_stats().host_fallback_copy_bytes, n * (long long)sizeof(SRC));
+        cudaMemcpy(hi.get(), sp, n * sizeof(SRC), cudaMemcpyDeviceToHost);
+    } else {
+        std::memcpy(hi.get(), sp, n * sizeof(SRC));
+    }
     std::unique_ptr<DST[]> ho(new DST[n]);
     DST acc = 0;
     for (int64_t i = 0; i < n; ++i) { acc += (DST)hi[i]; ho[i] = acc; }
@@ -827,6 +1082,8 @@ static std::unique_ptr<T[]> _copy_to_host_typed(const Tensor& self) {
     if (n == 0) return h;
     bool cuda = detail::vh_is_cuda(self._vh());
     if (cuda) {
+        stat_add(torch_ext_stats().host_fallback_copy_count);
+        stat_add(torch_ext_stats().host_fallback_copy_bytes, n * (long long)sizeof(T));
         cudaDeviceSynchronize();
         cudaMemcpy(h.get(), self.data_ptr<T>(), n * sizeof(T), cudaMemcpyDeviceToHost);
     } else {

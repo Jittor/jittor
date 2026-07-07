@@ -451,7 +451,7 @@ def _official_packed_build_dir(root: pathlib.Path) -> str:
         pass
     digest_key += "|head_dims=" + ",".join(_official_head_dims(root))
     digest_key += "|dtypes=" + ",".join(_official_dtypes())
-    digest_key += "|direct_packed_forward=4"
+    digest_key += "|direct_packed_forward=6"
     digest = hashlib.sha256(digest_key.encode("utf-8")).hexdigest()[:16]
     return _default_build_root("flashattn_jittor", "official_flash_attn_packed", digest)
 
@@ -629,6 +629,10 @@ def _official_packed_source(build_dir: str) -> str:
 #include "flash.h"
 #include "static_switch.h"
 
+namespace jtorch { namespace detail {
+void data_ptrs(std::initializer_list<jtorch::Tensor> tensors, void** out);
+}} // namespace jtorch::detail
+
 namespace FLASH_NAMESPACE {
 
 static at::Tensor jt_readonly_tensor(py::handle obj, const char *name) {
@@ -651,9 +655,12 @@ static void jt_run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream) {
     });
 }
 
-static void jt_check_device_dtype(const at::Tensor &x, at::ScalarType dtype, const char *name) {
+static void jt_check_cuda(const at::Tensor &x, const char *name) {
     TORCH_CHECK(x.is_cuda(), name, " must be on CUDA");
-    TORCH_CHECK(x.dtype() == dtype, name, " dtype mismatch");
+}
+
+static at::TensorOptions jt_cuda_options(at::ScalarType dtype) {
+    return torch::dtype(dtype).device(torch::kCUDA);
 }
 
 static void jt_fill_params(
@@ -678,9 +685,11 @@ static void jt_fill_params(
         int64_t k_head_stride,
         int64_t v_head_stride,
         at::Tensor &out,
+        void *out_ptr,
         void *cu_seqlens_q,
         void *cu_seqlens_k,
         at::Tensor &softmax_lse,
+        void *softmax_lse_ptr,
         float softmax_scale,
         bool is_causal,
         int window_size_left,
@@ -700,12 +709,12 @@ static void jt_fill_params(
     params.q_head_stride = q_head_stride;
     params.k_head_stride = k_head_stride;
     params.v_head_stride = v_head_stride;
-    params.o_ptr = out.data_ptr();
+    params.o_ptr = out_ptr;
     params.o_batch_stride = out.stride(0);
     params.o_row_stride = out.stride(-3);
     params.o_head_stride = out.stride(-2);
     params.p_ptr = nullptr;
-    params.softmax_lse_ptr = softmax_lse.data_ptr();
+    params.softmax_lse_ptr = softmax_lse_ptr;
     params.b = batch_size;
     params.h = num_heads;
     params.h_k = num_heads_k;
@@ -738,8 +747,8 @@ static void jt_fill_params(
     params.total_q = unpadded_lse ? out.size(0) : 0;
 }
 
-static void jt_finish_and_run(Flash_fwd_params &params, at::Tensor &rng_state) {
-    params.rng_state = reinterpret_cast<uint64_t *>(rng_state.data_ptr());
+static void jt_finish_and_run(Flash_fwd_params &params, void *rng_state_ptr) {
+    params.rng_state = reinterpret_cast<uint64_t *>(rng_state_ptr);
     auto stream = at::cuda::getCurrentCUDAStream().stream();
     jt_run_mha_fwd(params, stream);
 }
@@ -755,13 +764,13 @@ jt_fwd(py::handle q_obj,
     auto q = jt_readonly_tensor(q_obj, "q");
     auto k = jt_readonly_tensor(k_obj, "k");
     auto v = jt_readonly_tensor(v_obj, "v");
-    at::cuda::CUDAGuard device_guard{q.device()};
+    at::cuda::CUDAGuard device_guard{0};
     TORCH_CHECK(q.dim() == 4, "q must be [batch, seqlen_q, heads, dim]");
     TORCH_CHECK(k.dim() == 4 && v.dim() == 4, "k/v must be [batch, seqlen_k, heads, dim]");
     TORCH_CHECK(q.dtype() == torch::kFloat16 || q.dtype() == torch::kBFloat16,
                 "q must be fp16 or bf16");
-    jt_check_device_dtype(k, q.dtype(), "k");
-    jt_check_device_dtype(v, q.dtype(), "v");
+    TORCH_CHECK(k.dtype() == q.dtype(), "k dtype mismatch");
+    TORCH_CHECK(v.dtype() == q.dtype(), "v dtype mismatch");
     const int batch_size = q.size(0);
     const int seqlen_q = q.size(1);
     const int seqlen_k = k.size(1);
@@ -773,20 +782,25 @@ jt_fwd(py::handle q_obj,
     TORCH_CHECK(k.size(2) == v.size(2), "k/v heads mismatch");
     TORCH_CHECK(head_size == k.size(3) && head_size == v.size(3), "q/k/v head dim mismatch");
     TORCH_CHECK(num_heads % num_heads_k == 0, "Number of heads in key/value must divide query heads");
-    auto opts = q.options();
-    auto out = torch::empty_like(q);
+    auto opts = jt_cuda_options(q.dtype());
+    auto out = torch::empty({batch_size, seqlen_q, num_heads, head_size}, opts);
     auto softmax_lse = torch::empty({batch_size, num_heads, seqlen_q}, opts.dtype(torch::kFloat));
     auto rng_state = torch::empty({2}, opts.dtype(torch::kInt64));
+    void *ptrs[6];
+    ::jtorch::detail::data_ptrs({q, k, v, out, softmax_lse, rng_state}, ptrs);
+    jt_check_cuda(q, "q");
+    jt_check_cuda(k, "k");
+    jt_check_cuda(v, "v");
     Flash_fwd_params params;
     jt_fill_params(params, q.dtype(), batch_size, seqlen_q, seqlen_k,
                    num_heads, num_heads_k, head_size,
-                   q.data_ptr(), k.data_ptr(), v.data_ptr(),
+                   ptrs[0], ptrs[1], ptrs[2],
                    q.stride(0), k.stride(0), v.stride(0),
                    q.stride(1), k.stride(1), v.stride(1),
                    q.stride(2), k.stride(2), v.stride(2),
-                   out, nullptr, nullptr, softmax_lse, softmax_scale,
+                   out, ptrs[3], nullptr, nullptr, softmax_lse, ptrs[4], softmax_scale,
                    is_causal, window_size_left, window_size_right, false);
-    jt_finish_and_run(params, rng_state);
+    jt_finish_and_run(params, ptrs[5]);
     return out;
 }
 
@@ -807,16 +821,15 @@ jt_varlen_fwd(py::handle q_obj,
     auto v = jt_readonly_tensor(v_obj, "v");
     auto cu_seqlens_q = jt_readonly_tensor(cu_seqlens_q_obj, "cu_seqlens_q");
     auto cu_seqlens_k = jt_readonly_tensor(cu_seqlens_k_obj, "cu_seqlens_k");
-    at::cuda::CUDAGuard device_guard{q.device()};
+    at::cuda::CUDAGuard device_guard{0};
     TORCH_CHECK(q.dim() == 3, "q must be [total_q, heads, dim]");
     TORCH_CHECK(k.dim() == 3 && v.dim() == 3, "k/v must be [total_k, heads, dim]");
     TORCH_CHECK(q.dtype() == torch::kFloat16 || q.dtype() == torch::kBFloat16,
                 "q must be fp16 or bf16");
-    jt_check_device_dtype(k, q.dtype(), "k");
-    jt_check_device_dtype(v, q.dtype(), "v");
+    TORCH_CHECK(k.dtype() == q.dtype(), "k dtype mismatch");
+    TORCH_CHECK(v.dtype() == q.dtype(), "v dtype mismatch");
     TORCH_CHECK(cu_seqlens_q.dtype() == torch::kInt32 && cu_seqlens_k.dtype() == torch::kInt32,
                 "cu_seqlens tensors must be int32");
-    TORCH_CHECK(cu_seqlens_q.is_cuda() && cu_seqlens_k.is_cuda(), "cu_seqlens tensors must be CUDA");
     const int batch_size = cu_seqlens_q.numel() - 1;
     const int total_q = q.size(0);
     const int num_heads = q.size(1);
@@ -827,23 +840,31 @@ jt_varlen_fwd(py::handle q_obj,
     TORCH_CHECK(k.size(1) == v.size(1), "k/v heads mismatch");
     TORCH_CHECK(head_size == k.size(2) && head_size == v.size(2), "q/k/v head dim mismatch");
     TORCH_CHECK(num_heads % num_heads_k == 0, "Number of heads in key/value must divide query heads");
-    auto opts = q.options();
-    auto out = torch::empty_like(q);
+    auto opts = jt_cuda_options(q.dtype());
+    auto out = torch::empty({total_q, num_heads, head_size}, opts);
     auto softmax_lse = torch::empty({num_heads, total_q}, opts.dtype(torch::kFloat));
     auto rng_state = torch::empty({2}, opts.dtype(torch::kInt64));
+    void *ptrs[8];
+    ::jtorch::detail::data_ptrs({q, k, v, cu_seqlens_q, cu_seqlens_k,
+                                 out, softmax_lse, rng_state}, ptrs);
+    jt_check_cuda(q, "q");
+    jt_check_cuda(k, "k");
+    jt_check_cuda(v, "v");
+    jt_check_cuda(cu_seqlens_q, "cu_seqlens_q");
+    jt_check_cuda(cu_seqlens_k, "cu_seqlens_k");
     Flash_fwd_params params;
     jt_fill_params(params, q.dtype(), batch_size, max_seqlen_q, max_seqlen_k,
                    num_heads, num_heads_k, head_size,
-                   q.data_ptr(), k.data_ptr(), v.data_ptr(),
+                   ptrs[0], ptrs[1], ptrs[2],
                    0, 0, 0,
                    q.stride(0), k.stride(0), v.stride(0),
                    q.stride(1), k.stride(1), v.stride(1),
-                   out,
-                   const_cast<void *>(cu_seqlens_q.data_ptr()),
-                   const_cast<void *>(cu_seqlens_k.data_ptr()),
-                   softmax_lse, softmax_scale, is_causal,
+                   out, ptrs[5],
+                   ptrs[3],
+                   ptrs[4],
+                   softmax_lse, ptrs[6], softmax_scale, is_causal,
                    window_size_left, window_size_right, true);
-    jt_finish_and_run(params, rng_state);
+    jt_finish_and_run(params, ptrs[7]);
     return out;
 }
 
@@ -857,25 +878,27 @@ jt_varlen_qkvpacked_fwd(py::handle qkv_obj,
                         int window_size_right) {
     auto qkv = jt_readonly_tensor(qkv_obj, "qkv");
     auto cu_seqlens = jt_readonly_tensor(cu_seqlens_obj, "cu_seqlens");
-    at::cuda::CUDAGuard device_guard{qkv.device()};
+    at::cuda::CUDAGuard device_guard{0};
     TORCH_CHECK(qkv.dim() == 4, "qkv must be [total, 3, heads, dim]");
     TORCH_CHECK(qkv.size(1) == 3, "qkv packed dimension must be 3");
     TORCH_CHECK(cu_seqlens.dtype() == torch::kInt32, "cu_seqlens must be int32");
-    jt_check_device_dtype(qkv, qkv.dtype(), "qkv");
     TORCH_CHECK(qkv.dtype() == torch::kFloat16 || qkv.dtype() == torch::kBFloat16,
                 "qkv must be fp16 or bf16");
-    TORCH_CHECK(cu_seqlens.is_cuda(), "cu_seqlens must be on CUDA");
     const int batch_size = cu_seqlens.numel() - 1;
     const int total_q = qkv.size(0);
     const int num_heads = qkv.size(2);
     const int head_size = qkv.size(3);
     TORCH_CHECK(batch_size > 0, "batch size must be positive");
     TORCH_CHECK(head_size <= 256 && head_size % 8 == 0, "unsupported head size");
-    auto opts = qkv.options();
+    auto opts = jt_cuda_options(qkv.dtype());
     auto out = torch::empty({total_q, num_heads, head_size}, opts);
     auto softmax_lse = torch::empty({num_heads, total_q}, opts.dtype(torch::kFloat));
     auto rng_state = torch::empty({2}, opts.dtype(torch::kInt64));
-    char *base = reinterpret_cast<char *>(qkv.data_ptr());
+    void *ptrs[5];
+    ::jtorch::detail::data_ptrs({qkv, cu_seqlens, out, softmax_lse, rng_state}, ptrs);
+    jt_check_cuda(qkv, "qkv");
+    jt_check_cuda(cu_seqlens, "cu_seqlens");
+    char *base = reinterpret_cast<char *>(ptrs[0]);
     const int64_t elem = qkv.element_size();
     const int64_t fused_stride = qkv.stride(1);
     Flash_fwd_params params;
@@ -887,12 +910,12 @@ jt_varlen_qkvpacked_fwd(py::handle qkv_obj,
                    0, 0, 0,
                    qkv.stride(0), qkv.stride(0), qkv.stride(0),
                    qkv.stride(2), qkv.stride(2), qkv.stride(2),
-                   out,
-                   const_cast<void *>(cu_seqlens.data_ptr()),
-                   const_cast<void *>(cu_seqlens.data_ptr()),
-                   softmax_lse, softmax_scale, is_causal,
+                   out, ptrs[2],
+                   ptrs[1],
+                   ptrs[1],
+                   softmax_lse, ptrs[3], softmax_scale, is_causal,
                    window_size_left, window_size_right, true);
-    jt_finish_and_run(params, rng_state);
+    jt_finish_and_run(params, ptrs[4]);
     return out;
 }
 
@@ -911,15 +934,14 @@ jt_varlen_kvpacked_fwd(py::handle q_obj,
     auto kv = jt_readonly_tensor(kv_obj, "kv");
     auto cu_seqlens_q = jt_readonly_tensor(cu_seqlens_q_obj, "cu_seqlens_q");
     auto cu_seqlens_k = jt_readonly_tensor(cu_seqlens_k_obj, "cu_seqlens_k");
-    at::cuda::CUDAGuard device_guard{q.device()};
+    at::cuda::CUDAGuard device_guard{0};
     TORCH_CHECK(q.dim() == 3, "q must be [total_q, heads, dim]");
     TORCH_CHECK(kv.dim() == 4 && kv.size(1) == 2, "kv must be [total_k, 2, heads, dim]");
     TORCH_CHECK(q.dtype() == torch::kFloat16 || q.dtype() == torch::kBFloat16,
                 "q must be fp16 or bf16");
-    jt_check_device_dtype(kv, q.dtype(), "kv");
+    TORCH_CHECK(kv.dtype() == q.dtype(), "kv dtype mismatch");
     TORCH_CHECK(cu_seqlens_q.dtype() == torch::kInt32 && cu_seqlens_k.dtype() == torch::kInt32,
                 "cu_seqlens tensors must be int32");
-    TORCH_CHECK(cu_seqlens_q.is_cuda() && cu_seqlens_k.is_cuda(), "cu_seqlens tensors must be CUDA");
     const int batch_size = cu_seqlens_q.numel() - 1;
     const int total_q = q.size(0);
     const int num_heads = q.size(1);
@@ -927,28 +949,35 @@ jt_varlen_kvpacked_fwd(py::handle q_obj,
     const int head_size = q.size(2);
     TORCH_CHECK(num_heads % num_heads_k == 0, "Number of heads in key/value must divide query heads");
     TORCH_CHECK(head_size == kv.size(3), "q/kv head dim mismatch");
-    auto opts = q.options();
-    auto out = torch::empty_like(q);
+    auto opts = jt_cuda_options(q.dtype());
+    auto out = torch::empty({total_q, num_heads, head_size}, opts);
     auto softmax_lse = torch::empty({num_heads, total_q}, opts.dtype(torch::kFloat));
     auto rng_state = torch::empty({2}, opts.dtype(torch::kInt64));
-    char *kv_base = reinterpret_cast<char *>(kv.data_ptr());
+    void *ptrs[7];
+    ::jtorch::detail::data_ptrs({q, kv, cu_seqlens_q, cu_seqlens_k,
+                                 out, softmax_lse, rng_state}, ptrs);
+    jt_check_cuda(q, "q");
+    jt_check_cuda(kv, "kv");
+    jt_check_cuda(cu_seqlens_q, "cu_seqlens_q");
+    jt_check_cuda(cu_seqlens_k, "cu_seqlens_k");
+    char *kv_base = reinterpret_cast<char *>(ptrs[1]);
     const int64_t elem = kv.element_size();
     const int64_t fused_stride = kv.stride(1);
     Flash_fwd_params params;
     jt_fill_params(params, q.dtype(), batch_size, max_seqlen_q, max_seqlen_k,
                    num_heads, num_heads_k, head_size,
-                   q.data_ptr(),
+                   ptrs[0],
                    kv_base,
                    kv_base + fused_stride * elem,
                    0, 0, 0,
                    q.stride(0), kv.stride(0), kv.stride(0),
                    q.stride(1), kv.stride(2), kv.stride(2),
-                   out,
-                   const_cast<void *>(cu_seqlens_q.data_ptr()),
-                   const_cast<void *>(cu_seqlens_k.data_ptr()),
-                   softmax_lse, softmax_scale, is_causal,
+                   out, ptrs[4],
+                   ptrs[2],
+                   ptrs[3],
+                   softmax_lse, ptrs[5], softmax_scale, is_causal,
                    window_size_left, window_size_right, true);
-    jt_finish_and_run(params, rng_state);
+    jt_finish_and_run(params, ptrs[6]);
     return out;
 }
 
@@ -957,9 +986,9 @@ jt_qkvpacked_fwd(py::handle qkv_obj,
                  float softmax_scale,
                  bool is_causal,
                  int window_size_left,
-                 int window_size_right) {
+    int window_size_right) {
     auto qkv = jt_readonly_tensor(qkv_obj, "qkv");
-    at::cuda::CUDAGuard device_guard{qkv.device()};
+    at::cuda::CUDAGuard device_guard{0};
     TORCH_CHECK(qkv.dim() == 5 && qkv.size(2) == 3, "qkv must be [batch, seqlen, 3, heads, dim]");
     TORCH_CHECK(qkv.dtype() == torch::kFloat16 || qkv.dtype() == torch::kBFloat16,
                 "qkv must be fp16 or bf16");
@@ -967,11 +996,14 @@ jt_qkvpacked_fwd(py::handle qkv_obj,
     const int seqlen = qkv.size(1);
     const int num_heads = qkv.size(3);
     const int head_size = qkv.size(4);
-    auto opts = qkv.options();
+    auto opts = jt_cuda_options(qkv.dtype());
     auto out = torch::empty({batch_size, seqlen, num_heads, head_size}, opts);
     auto softmax_lse = torch::empty({batch_size, num_heads, seqlen}, opts.dtype(torch::kFloat));
     auto rng_state = torch::empty({2}, opts.dtype(torch::kInt64));
-    char *base = reinterpret_cast<char *>(qkv.data_ptr());
+    void *ptrs[4];
+    ::jtorch::detail::data_ptrs({qkv, out, softmax_lse, rng_state}, ptrs);
+    jt_check_cuda(qkv, "qkv");
+    char *base = reinterpret_cast<char *>(ptrs[0]);
     const int64_t elem = qkv.element_size();
     const int64_t fused_stride = qkv.stride(2);
     Flash_fwd_params params;
@@ -983,9 +1015,9 @@ jt_qkvpacked_fwd(py::handle qkv_obj,
                    qkv.stride(0), qkv.stride(0), qkv.stride(0),
                    qkv.stride(1), qkv.stride(1), qkv.stride(1),
                    qkv.stride(3), qkv.stride(3), qkv.stride(3),
-                   out, nullptr, nullptr, softmax_lse, softmax_scale,
+                   out, ptrs[1], nullptr, nullptr, softmax_lse, ptrs[2], softmax_scale,
                    is_causal, window_size_left, window_size_right, false);
-    jt_finish_and_run(params, rng_state);
+    jt_finish_and_run(params, ptrs[3]);
     return out;
 }
 
@@ -995,15 +1027,15 @@ jt_kvpacked_fwd(py::handle q_obj,
                 float softmax_scale,
                 bool is_causal,
                 int window_size_left,
-                int window_size_right) {
+    int window_size_right) {
     auto q = jt_readonly_tensor(q_obj, "q");
     auto kv = jt_readonly_tensor(kv_obj, "kv");
-    at::cuda::CUDAGuard device_guard{q.device()};
+    at::cuda::CUDAGuard device_guard{0};
     TORCH_CHECK(q.dim() == 4, "q must be [batch, seqlen_q, heads, dim]");
     TORCH_CHECK(kv.dim() == 5 && kv.size(2) == 2, "kv must be [batch, seqlen_k, 2, heads, dim]");
     TORCH_CHECK(q.dtype() == torch::kFloat16 || q.dtype() == torch::kBFloat16,
                 "q must be fp16 or bf16");
-    jt_check_device_dtype(kv, q.dtype(), "kv");
+    TORCH_CHECK(kv.dtype() == q.dtype(), "kv dtype mismatch");
     const int batch_size = q.size(0);
     const int seqlen_q = q.size(1);
     const int seqlen_k = kv.size(1);
@@ -1012,25 +1044,29 @@ jt_kvpacked_fwd(py::handle q_obj,
     const int head_size = q.size(3);
     TORCH_CHECK(num_heads % num_heads_k == 0, "Number of heads in key/value must divide query heads");
     TORCH_CHECK(head_size == kv.size(4), "q/kv head dim mismatch");
-    auto opts = q.options();
-    auto out = torch::empty_like(q);
+    auto opts = jt_cuda_options(q.dtype());
+    auto out = torch::empty({batch_size, seqlen_q, num_heads, head_size}, opts);
     auto softmax_lse = torch::empty({batch_size, num_heads, seqlen_q}, opts.dtype(torch::kFloat));
     auto rng_state = torch::empty({2}, opts.dtype(torch::kInt64));
-    char *kv_base = reinterpret_cast<char *>(kv.data_ptr());
+    void *ptrs[5];
+    ::jtorch::detail::data_ptrs({q, kv, out, softmax_lse, rng_state}, ptrs);
+    jt_check_cuda(q, "q");
+    jt_check_cuda(kv, "kv");
+    char *kv_base = reinterpret_cast<char *>(ptrs[1]);
     const int64_t elem = kv.element_size();
     const int64_t fused_stride = kv.stride(2);
     Flash_fwd_params params;
     jt_fill_params(params, q.dtype(), batch_size, seqlen_q, seqlen_k,
                    num_heads, num_heads_k, head_size,
-                   q.data_ptr(),
+                   ptrs[0],
                    kv_base,
                    kv_base + fused_stride * elem,
                    q.stride(0), kv.stride(0), kv.stride(0),
                    q.stride(1), kv.stride(1), kv.stride(1),
                    q.stride(2), kv.stride(3), kv.stride(3),
-                   out, nullptr, nullptr, softmax_lse, softmax_scale,
+                   out, ptrs[2], nullptr, nullptr, softmax_lse, ptrs[3], softmax_scale,
                    is_causal, window_size_left, window_size_right, false);
-    jt_finish_and_run(params, rng_state);
+    jt_finish_and_run(params, ptrs[4]);
     return out;
 }
 

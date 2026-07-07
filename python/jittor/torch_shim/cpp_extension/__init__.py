@@ -370,6 +370,7 @@ def build(name, sources, build_dir, output_path=None,
         '-DHAS_CUDA', '-DIS_CUDA',
         f'-D_GLIBCXX_USE_CXX11_ABI={abi}',
         '-DJTORCH_SHIM=1',
+        f'-DJTORCH_EXTENSION_MODULE_NAME={name}',
     ]
     extension_macros = project_macros + [f'-DTORCH_EXTENSION_NAME={name}'] + shim_macros
 
