@@ -1972,22 +1972,17 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
         return y
 conv = conv2d
 
-# jittor's cuDNN 3D-convolution backend has NO algorithm for half-precision
-# (fp16 / bf16) tensors: cudnn_conv3d / cudnn_conv3d_backward_x abort algorithm
-# selection with `Check failed: best_algo_idx != -1` (NOT an OOM -- it reproduces
-# with plenty of free memory). PyTorch transparently runs such convolutions, so a
-# half-precision dense Conv3d (e.g. TRELLIS.2's SparseStructure VAE) crashes here.
-# Wrap the cuDNN 3D-conv ops to detect a fp16/bf16 input-or-weight and run the
-# convolution in fp32 (cuDNN has valid fp32 3D algorithms), casting the result back
-# to the original half dtype. Correctness-preserving: only the unsupported
-# half-precision case is rerouted, and the fp32 compute differs from a (nonexistent)
-# native fp16 kernel only by fp16 rounding of the output.
+# cuDNN 3D convolution needs fp32 accumulation and tensor-op math enabled for
+# fp16/bf16 descriptors on some CUDA/cuDNN combinations. The C++ op configures
+# that path by default; keep a fallback switch for isolating driver regressions.
 _CUDNN_3D_HALF_DTYPES = ("float16", "bfloat16")
 
 def _cudnn_conv3d_fp16_safe(op, x, weight, *args):
     xd, wd = str(x.dtype), str(weight.dtype)
     half = xd if xd in _CUDNN_3D_HALF_DTYPES else (wd if wd in _CUDNN_3D_HALF_DTYPES else None)
     if half is None:
+        return op(x, weight, *args)
+    if os.environ.get("JITTOR_CUDNN3D_HALF_NATIVE", "1") != "0":
         return op(x, weight, *args)
     # Run in fp32 (cuDNN has a working fp32 3D-conv algo), then cast back.
     y = op(x.float32(), weight.float32(), *args)

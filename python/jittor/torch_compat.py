@@ -4969,11 +4969,20 @@ def _install_module_methods(nn):
         return _train(self, False)
     M.eval = _eval
 
+    _MODULE_FLOAT_DTYPES = ("float16", "bfloat16", "float32", "float64")
+
+    def _module_cast_var_if_needed(v, ds, copy=False):
+        if copy or str(v.dtype) != ds:
+            return v.cast(ds)
+        return v
+
     def _module_cast_float_dtype(self, ds):
-        if ds is not None and ds in ("float16", "bfloat16", "float32", "float64"):
+        if ds is not None and ds in _MODULE_FLOAT_DTYPES:
             for p in self.parameters():
                 if p.dtype.is_float() if hasattr(p.dtype, "is_float") else ("float" in str(p.dtype)):
-                    p.assign(p.cast(ds))
+                    new_p = _module_cast_var_if_needed(p, ds)
+                    if new_p is not p:
+                        p.assign(new_p)
         return self
 
     def _module_replace_vars(self, convert):
@@ -5050,6 +5059,7 @@ def _install_module_methods(nn):
         # tensor residency when an explicit cpu/cuda device is requested.
         ds = None
         dev = kwargs.get("device")
+        copy = bool(kwargs.get("copy", False))
         for a in list(args) + list(kwargs.values()):
             if isinstance(a, dtype):
                 ds = a.name
@@ -5069,10 +5079,10 @@ def _install_module_methods(nn):
 
         def convert(v):
             out = v
-            if ds is not None and ds in ("float16", "bfloat16", "float32", "float64"):
+            if ds is not None and ds in _MODULE_FLOAT_DTYPES:
                 is_float = v.dtype.is_float() if hasattr(v.dtype, "is_float") else ("float" in str(v.dtype))
                 if is_float:
-                    out = out.cast(ds)
+                    out = _module_cast_var_if_needed(out, ds, copy=copy)
             if _device_is_cpu(dev):
                 out = _make_cpu_resident(out, inplace=(out is v))
             elif _device_is_cuda(dev):
@@ -7079,6 +7089,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     def _to(self, *args, **kwargs):
         ds = None
         dev = None
+        copy = bool(kwargs.get("copy", False))
         # device passed as a keyword (torch's .to(device=..., dtype=...))
         if "device" in kwargs:
             dev = kwargs["device"]
@@ -7097,7 +7108,10 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                     ds = bare
                 elif bare.split(":")[0] in ("cpu", "cuda", "npu"):
                     dev = bare
-        out = self.cast(ds) if ds is not None else self
+        if ds is not None:
+            out = self.cast(ds) if copy else _cast_if_needed(self, ds)
+        else:
+            out = self.clone() if copy else self
         # Honor an explicit device= target by migrating residency. device=None
         # (the common .to(dtype) call) leaves placement on the global default.
         if _device_is_cpu(dev):

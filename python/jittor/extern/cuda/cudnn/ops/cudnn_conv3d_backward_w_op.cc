@@ -155,16 +155,21 @@ void CudnnConv3dBackwardWOp::jit_run() {
     // is the kernel rc order
     // currently, No perf difference is observed between
     // this two mode
+    bool has_fp16_or_bf16 = x->dtype() == ns_float16
+        || y->dtype() == ns_float16 || w->dtype() == ns_float16
+        || x->dtype() == ns_bfloat16
+        || y->dtype() == ns_bfloat16 || w->dtype() == ns_bfloat16;
+    cudnnDataType_t conv_compute_type = has_fp16_or_bf16 ? CUDNN_DATA_FLOAT : getDataType<Ty>();
     checkCudaErrors(cudnnSetConvolutionNdDescriptor(
         cudnnConvDesc, 3,
         padA, convstrideA, dilationA,
-        CUDNN_CROSS_CORRELATION, getDataType<Ty>()
+        CUDNN_CROSS_CORRELATION, conv_compute_type
     ));
     // MIOpen requires groups to be set after descriptor initialization
     checkCudaErrors(cudnnSetConvolutionGroupCount( cudnnConvDesc, groups ));
 
     // using tensor core
-    if(use_tensorcore){
+    if(use_tensorcore || has_fp16_or_bf16){
         checkCudaErrors( cudnnSetConvolutionMathType(cudnnConvDesc, CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION) );
     }
 
@@ -200,7 +205,7 @@ void CudnnConv3dBackwardWOp::jit_run() {
     int perf_count;
     STACK_ALLOC(cudnnConvolutionBwdFilterAlgoPerf_t,perf_results,num_algos);
     cudnnConvolutionBwdFilterAlgo_t algo;
-    bool benchmark=true;
+    bool benchmark=!has_fp16_or_bf16;
 
     JK& jk = get_jk();
     jk.clear();
@@ -211,7 +216,8 @@ void CudnnConv3dBackwardWOp::jit_run() {
     
     if (iter!=bwdw_algo_cache.end()) algo = iter->second;
     else {
-        if (bwdw_algo_cache.size()>=max_cache_size) benchmark = false;
+        bool cache_algo = bwdw_algo_cache.size() < max_cache_size;
+        if (!cache_algo) benchmark = false;
         if (benchmark) {
             size_t max_ws_size = 0;
             for (int i = 0; i < num_algos; i++) {
@@ -251,10 +257,10 @@ void CudnnConv3dBackwardWOp::jit_run() {
             if (perf_results[i].status == CUDNN_STATUS_SUCCESS){
                 best_algo_idx=i;
                 break;
-            }
+        }
         ASSERT(best_algo_idx!=-1);
         algo=perf_results[best_algo_idx].algo;
-        if (benchmark) {
+        if (cache_algo) {
             bwdw_algo_cache[jk.to_string()] = algo;
             if (bwdw_algo_cache.size()==max_cache_size)
                 LOGw << "backward w algorithm cache is full";
