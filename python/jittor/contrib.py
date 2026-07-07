@@ -197,6 +197,23 @@ def _mark_0d(v):
         pass
     return v
 
+def _maybe_constant_index_gather(x, slices):
+    if not isinstance(slices, jt.Var) or slices.ndim != 1 or x.ndim < 1:
+        return None
+    const_value = getattr(slices, "_jittor_constant_index_value", None)
+    if const_value is None:
+        return None
+    idx_len = int(slices.shape[0])
+    dim0 = int(x.shape[0])
+    value = int(const_value)
+    if value < 0:
+        value += dim0
+    if value < 0 or value >= dim0:
+        return None
+    out_shape = [idx_len] + list(x.shape[1:])
+    base = x.getitem((slice(value, value + 1),) + (slice(None),) * (x.ndim - 1))
+    return base.broadcast(out_shape)
+
 def getitem(x, slices):
     # torch treats a uint8 (byte) index Var as a boolean mask (legacy semantics
     # still used by e.g. mask-rcnn-c4's bbox_feats[pos_inds], where pos_inds is a
@@ -208,6 +225,9 @@ def getitem(x, slices):
         return getitem(x, slices.where())
     if isinstance(slices, range):                       # torch allows tensor[range(n)]
         slices = jt.array(list(slices))
+    constant_gather = _maybe_constant_index_gather(x, slices)
+    if constant_gather is not None:
+        return constant_gather
     # torch: indexing a 1-D tensor by a single python int returns a 0-D scalar.
     # jittor returns a [1] Var (no 0-D); tag it so a later use as an index drops
     # the dim like torch (fixes centernet's heatmap[batch, label] -> [H,W]).

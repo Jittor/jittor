@@ -333,6 +333,16 @@ def repeat_interleave(x,repeats,dim=None,output_size=None):
     if index.shape[0] == 0:
         new_shape = list(x.shape); new_shape[dim] = 0
         return jt.zeros(new_shape, x.dtype)
+    if dim == 0 and n == 1 and x.ndim == 1 and str(x.dtype) in (
+        "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"
+    ):
+        value = int(x.item())
+        out = jt.full((index.shape[0],), value, x.dtype)
+        try:
+            out._jittor_constant_index_value = value
+        except Exception:
+            pass
+        return out
     return x.getitem(tuple(slice(None) if d != dim else index for d in range(x.ndim)))
 
 jt.Var.repeat_interleave = repeat_interleave

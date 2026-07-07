@@ -336,6 +336,24 @@ class TestRepeatTile(Base):
                     expected, msg=f"jt repeat_interleave var repeats {dev}")
         both_devices(body)
 
+    def test_repeat_interleave_single_value_index(self):
+        x = np.arange(12).reshape(4, 3).astype("float32")
+        repeats_np = np.array([5], dtype="int32")
+        def body(dev):
+            idx = torch.repeat_interleave(t(np.array([2], dtype="int64")), t(repeats_np).int(), dim=0)
+            self.ac(t(x)[idx].numpy(), np.repeat(x[2:3], repeats_np[0], axis=0),
+                    msg=f"constant repeat_interleave index {dev}")
+        both_devices(body)
+
+    def test_repeat_interleave_arange_one_index(self):
+        x = np.arange(6).reshape(1, 6).astype("float32")
+        repeats_np = np.array([7], dtype="int32")
+        def body(dev):
+            idx = torch.repeat_interleave(torch.arange(1), t(repeats_np).int(), dim=0)
+            self.ac(t(x)[idx].numpy(), np.repeat(x, repeats_np[0], axis=0),
+                    msg=f"arange-one repeat_interleave index {dev}")
+        both_devices(body)
+
 
 class TestRollFlip(Base):
     def test_roll_1d(self):
