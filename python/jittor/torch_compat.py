@@ -7137,8 +7137,11 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         "long": "int64", "half": "float16", "float": "float32",
         "double": "float64", "bfloat16": "bfloat16", "bool": "bool",
     }
+    def _cast_if_needed(tensor, dtype):
+        return tensor if str(tensor.dtype) == dtype else tensor.cast(dtype)
+
     for _mname, _mdt in _CAST_METHOD_DTYPE.items():
-        setattr(Var, _mname, (lambda dt: lambda self: self.cast(dt))(_mdt))
+        setattr(Var, _mname, (lambda dt: lambda self: _cast_if_needed(self, dt))(_mdt))
 
     # torch's Tensor.type(): with a dtype/typed-tensor-name it casts; with no
     # argument it returns the torch type-NAME string ('torch.FloatTensor' ...).
@@ -7156,9 +7159,9 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         if dst_type is None:
             return _DTYPE_TO_TYPENAME.get(str(self.dtype), "torch.FloatTensor")
         if isinstance(dst_type, str) and dst_type in _TYPENAME_TO_DTYPE:
-            return self.cast(_TYPENAME_TO_DTYPE[dst_type])
+            return _cast_if_needed(self, _TYPENAME_TO_DTYPE[dst_type])
         ds = _dtype_to_str(dst_type)
-        return self.cast(ds) if ds is not None else self
+        return _cast_if_needed(self, ds) if ds is not None else self
     Var.type = _var_type
 
     # ---- torch-parity binary-op type promotion ----
