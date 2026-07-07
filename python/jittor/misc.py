@@ -525,7 +525,7 @@ def _unbind_no_grad_cuda_fast(x, dim):
         out_total *= int(size)
     if out_total < 4096 or suffix == 0:
         return None
-    if n == 2 and out_total < 3 * 1024 * 1024:
+    if n == 2 and out_total < 1024 * 1024:
         return None
 
     flat = x.reshape([-1])

@@ -38,6 +38,7 @@ class TestStackFast(unittest.TestCase):
                 ((8, 3, 12, 128), 1),
                 ((1, 16, 3, 12, 128), 2),
                 ((8, 2, 12, 128), -3),
+                ((1, 1029, 2, 12, 128), 2),
             ):
                 arr = rng.randn(*shape).astype("float16")
                 outs = jt.unbind(jt.array(arr), dim=dim)
