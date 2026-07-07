@@ -31,6 +31,11 @@ _DEFAULT_READONLY_FUNCTIONS: Dict[str, Tuple[str, ...]] = {
     "simple_knn._C": (
         "distCUDA2",
     ),
+    "flex_gemm.kernels.cuda": (
+        "neighbor_map_post_process_for_masked_implicit_gemm_1_no_bwd",
+        "neighbor_map_post_process_for_masked_implicit_gemm_1",
+        "neighbor_map_post_process_for_masked_implicit_gemm_2",
+    ),
 }
 
 _DEFAULT_COPY_SCOPE_FUNCTIONS: Dict[str, Tuple[str, ...]] = {

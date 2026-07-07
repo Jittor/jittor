@@ -17,6 +17,7 @@
 #include "executor.h"
 #include "ops/op_register.h"
 #include "ops/array_op.h"
+#include "ops/getitem_op.h"
 #include "mem/allocator.h"
 #include "pyjt/py_obj_holder.h"
 #include "pyjt/py_converter.h"
@@ -81,6 +82,12 @@ static bool torch_ext_fast_metadata_enabled() {
         return false;
     return env_truthy("JITTOR_TORCH_EXT_UNSAFE_FAST_METADATA") ||
            env_truthy("JITTOR_TORCH_EXT_FAST_METADATA");
+}
+
+static bool torch_ext_native_scalar_index_enabled() {
+    if (env_truthy("JITTOR_TORCH_EXT_HOST_INDEX"))
+        return false;
+    return !env_falsey("JITTOR_TORCH_EXT_NATIVE_INDEX");
 }
 
 static void sync_for_storage(jittor::VarHolder* vh) {
@@ -441,6 +448,14 @@ Tensor Tensor::operator[](int64_t i) const {
     int64_t rest = 1; for (auto d : sub) rest *= d;
     int64_t esz = detail::vh_dsize(_vh());
     bool cuda = detail::vh_is_cuda(_vh());
+    if (cuda && rest == 1 && torch_ext_native_scalar_index_enabled()) {
+        static auto maker = jittor::get_op_info("getitem")
+            .get_constructor<jittor::VarPtr, jittor::Var*, jittor::VarSlices&&>();
+        jittor::VarSlices vs(1);
+        vs.slices[0].set_int(i);
+        jittor::VarPtr vp = maker(_vh()->var, std::move(vs));
+        return detail::adopt(new jittor::VarHolder(std::move(vp)), true);
+    }
     char* src = (char*)detail::vh_device_ptr(_vh()) + i * rest * esz;
     jittor::NanoVector nv = to_nv(IntArrayRef(sub));
     // Build a graph-tracked Var from the row (NOT empty()+cudaMemcpy(D2D), whose
@@ -644,12 +659,58 @@ Tensor from_blob(const void* data, IntArrayRef size, TensorOptions opt) {
 }
 
 // --------- ATen ops (wired on first real use) -------------------------------
-// argsort / cumsum are needed by flex_gemm's neighbor-map post-processing
-// (kernels/cuda/spconv/migemm_neighmap_pp.cu: torch::argsort(binary_code),
-// torch::cumsum(mask, 0, kInt32)). The operands are 1-D index/mask vectors; this
-// host fallback stays small and avoids pulling Thrust templates into the default
-// shim object. Stable sort matches torch's argsort tie-breaking (ascending,
-// first-occurrence order).
+// argsort / cumsum are needed by libtorch-style sparse extensions such as
+// flex_gemm's neighbor-map post-processing. Prefer graph-tracked Jittor CUDA ops
+// so large vectors stay on-device; keep the host implementations as conservative
+// fallbacks for CPU tensors, missing optional CUDA ops, or unsupported shapes.
+
+static bool torch_ext_native_aten_enabled() {
+    if (env_truthy("JITTOR_TORCH_EXT_HOST_ATEN"))
+        return false;
+    return !env_falsey("JITTOR_TORCH_EXT_NATIVE_ATEN");
+}
+
+static Tensor _tensor_from_varptr(jittor::VarPtr&& vp) {
+    return detail::adopt(new jittor::VarHolder(std::move(vp)), true);
+}
+
+static Tensor _argsort_jittor_op(const Tensor& self, int64_t dim, bool descending) {
+    static auto maker = jittor::get_op_info("argsort")
+        .get_constructor<std::vector<jittor::VarPtr>, jittor::Var*, int, bool, jittor::NanoString>();
+    std::vector<jittor::VarPtr> outs = maker(self._vh()->var, (int)dim, descending,
+                                             to_ns(ScalarType::Long));
+    if (outs.empty())
+        throw std::runtime_error("jtorch::argsort native op returned no outputs");
+    return _tensor_from_varptr(std::move(outs[0]));
+}
+
+static bool _cumsum_dim_supported_by_cub(const Tensor& self, int64_t dim) {
+    int64_t nd = self.dim();
+    if (nd == 1)
+        return dim == 0 || dim == -1;
+    if (nd == 2)
+        return dim == 1 || dim == -1;
+    return false;
+}
+
+static Tensor _cumsum_jittor_op(const Tensor& self, ScalarType out_st) {
+    if (!jittor::has_op("cub_cumsum"))
+        throw std::runtime_error("jtorch::cumsum native cub_cumsum op is unavailable");
+    static auto make_unary = jittor::get_op_info("unary")
+        .get_constructor<jittor::VarPtr, jittor::Var*, jittor::NanoString>();
+    static auto make_cub_cumsum = jittor::get_op_info("cub_cumsum")
+        .get_constructor<jittor::VarPtr, jittor::Var*, bool>();
+
+    jittor::Var* src = self._vh()->var;
+    jittor::VarPtr casted;
+    jittor::NanoString out_ns = to_ns(out_st);
+    if (src->dtype() != out_ns) {
+        casted = make_unary(src, out_ns);
+        src = casted;
+    }
+    jittor::VarPtr out = make_cub_cumsum(src, false);
+    return _tensor_from_varptr(std::move(out));
+}
 
 template <typename K>
 static Tensor _argsort_1d_typed(const Tensor& self, bool descending) {
@@ -672,8 +733,23 @@ static Tensor _argsort_1d_typed(const Tensor& self, bool descending) {
 }
 
 Tensor argsort(const Tensor& self, int64_t dim, bool descending) {
-    if (self.dim() > 1 && !(dim == -1 || dim == self.dim() - 1))
+    int64_t nd = self.dim();
+    if (dim < 0) dim += nd;
+    if (nd > 1 && dim != nd - 1)
         throw std::runtime_error("jtorch::argsort only supports last-dim 1-D sort");
+    bool cuda = detail::vh_is_cuda(self._vh());
+    if (cuda && torch_ext_native_aten_enabled()) {
+        switch (self.scalar_type()) {
+            case ScalarType::Int:
+            case ScalarType::Long:
+            case ScalarType::Float:
+            case ScalarType::UInt32:
+            case ScalarType::UInt64:
+                return _argsort_jittor_op(self, dim, descending);
+            default:
+                break;
+        }
+    }
     switch (self.scalar_type()) {
         case ScalarType::Int:    return _argsort_1d_typed<int32_t>(self, descending);
         case ScalarType::Long:   return _argsort_1d_typed<int64_t>(self, descending);
@@ -701,10 +777,25 @@ static std::unique_ptr<DST[]> _cumsum_host(const SRC* sp, int64_t n, bool cuda) 
 }
 
 Tensor cumsum(const Tensor& self, int64_t dim, ScalarType out_st) {
-    if (self.dim() > 1 && !(dim == 0 || dim == -1 || dim == self.dim() - 1))
+    int64_t nd = self.dim();
+    if (dim < 0) dim += nd;
+    if (nd > 1 && !(dim == 0 || dim == nd - 1))
         throw std::runtime_error("jtorch::cumsum only supports a 1-D / contiguous scan");
     bool cuda = detail::vh_is_cuda(self._vh());
     int64_t n = self.numel();
+    if (cuda && torch_ext_native_aten_enabled() && _cumsum_dim_supported_by_cub(self, dim)) {
+        switch (self.scalar_type()) {
+            case ScalarType::Int:
+            case ScalarType::Long:
+            case ScalarType::Bool:
+            case ScalarType::Byte:
+                if (out_st == ScalarType::Int || out_st == ScalarType::Long)
+                    return _cumsum_jittor_op(self, out_st);
+                break;
+            default:
+                break;
+        }
+    }
     // prefix-sum on the host, then build a graph-tracked Var from the result so a
     // later .item()/.numel()/sync reads the actual values (not a re-run empty op).
 #define _JT_CUMSUM_BUILD(SRC) do { \

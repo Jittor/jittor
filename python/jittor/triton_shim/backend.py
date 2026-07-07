@@ -585,6 +585,32 @@ def _falsey_env(name):
     return str(os.environ.get(name, "")).strip().lower() in ("0", "false", "no", "off")
 
 
+def _int_env(name, default):
+    value = os.environ.get(name)
+    if value is None or str(value).strip() == "":
+        return default
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def _guard_enabled():
+    if _truthy_env("JITTOR_TRITON_GUARD_ENABLE"):
+        return True
+    if _falsey_env("JITTOR_TRITON_GUARD_ENABLE"):
+        return False
+    return GUARD_ENABLE
+
+
+def _guard_bytes():
+    return max(0, _int_env("JITTOR_TRITON_GUARD_BYTES", GUARD_BYTES))
+
+
+def _guard_max_payload():
+    return max(0, _int_env("JITTOR_TRITON_GUARD_MAX_PAYLOAD", GUARD_MAX_PAYLOAD))
+
+
 def _fast_sync_enabled():
     """Use the torch-shim/TRELLIS fast path for bridge-mode Triton launches.
 
@@ -967,12 +993,12 @@ def run(jitfn, args, kwargs, grid):
                 cv = ctypes.c_uint64(0)
             else:
                 ptr = _tensor_ptr(val)
-                nbytes = _tensor_nbytes(val, sig) if GUARD_ENABLE else 0
-                if (not _looks_like_output_arg(name)) and 0 < nbytes <= GUARD_MAX_PAYLOAD:
+                nbytes = _tensor_nbytes(val, sig) if _guard_enabled() else 0
+                if (not _looks_like_output_arg(name)) and 0 < nbytes <= _guard_max_payload():
                     # bounce through a guarded buffer so a masked over-read past the
                     # operand's end hits zeroed slack instead of an unmapped page.
                     try:
-                        bbase, bcap = drv.guard_acquire(nbytes, GUARD_BYTES)
+                        bbase, bcap = drv.guard_acquire(nbytes, _guard_bytes())
                         drv.copy_dtod(bbase, ptr, nbytes)
                         bounced.append((ptr, bbase, nbytes, bcap))
                         cv = ctypes.c_uint64(bbase)

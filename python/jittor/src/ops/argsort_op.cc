@@ -54,7 +54,7 @@ ArgsortOp::ArgsortOp(Var* x, int dim, bool descending, NanoString dtype)
             axes.push_back(dim);
             auto tranpose1 = make_transpose(x, axes);
 
-            auto indexes = make_index(tranpose1->shape, dims - 1, ns_int32);
+            auto indexes = make_index(tranpose1->shape, dims - 1, dtype);
             int m = 1;
             for (int i = 0; i < dims - 1; ++i) {
                 m *= tranpose1->shape[i];
