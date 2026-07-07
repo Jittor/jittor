@@ -18,19 +18,17 @@ ReinterpretViewOp::ReinterpretViewOp(Var* x, NanoVector shape, NanoString dtype)
     flags.set(NodeFlags::_cuda);
     flags.set(NodeFlags::_manual_set_vnbb);
     CHECK(dtype.is_dtype()) << "reinterpret_view expects dtype, got" << dtype;
-    CHECK((x->dtype() == ns_complex64 && dtype == ns_float32) ||
-          (x->dtype() == ns_float32 && dtype == ns_complex64))
-        << "reinterpret_view is currently limited to complex64 <-> float32 pair views, got"
-        << x->dtype() << "to" << dtype;
     y = create_output(nullptr, dtype);
 }
 
 VarPtr ReinterpretViewOp::grad(Var* out, Var* dout, Var* v, int v_index) {
+    if (!((x->dtype() == ns_complex64 && dtype == ns_float32) ||
+          (x->dtype() == ns_float32 && dtype == ns_complex64)))
+        return nullptr;
     return make_reinterpret_view(dout, x->shape, x->dtype());
 }
 
 void ReinterpretViewOp::infer_shape() {
-    CHECK(shape.size() > 0) << "reinterpret_view target shape cannot be empty";
     int64 known_items = 1;
     int infer_dim = -1;
     NanoVector yshape = shape;
@@ -59,8 +57,8 @@ void ReinterpretViewOp::infer_shape() {
     if (x->dtype() == ns_complex64) {
         CHECK(dtype == ns_float32 && yshape.size() && yshape[yshape.size()-1] == 2)
             << "complex64 -> float32 reinterpret_view requires target shape [..., 2]";
-    } else {
-        CHECK(x->dtype() == ns_float32 && dtype == ns_complex64 && x->shape.size() && x->shape[x->shape.size()-1] == 2)
+    } else if (dtype == ns_complex64) {
+        CHECK(x->dtype() == ns_float32 && x->shape.size() && x->shape[x->shape.size()-1] == 2)
             << "float32 -> complex64 reinterpret_view requires input shape [..., 2]";
     }
     y->share_with(x);

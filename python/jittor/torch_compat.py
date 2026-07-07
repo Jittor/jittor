@@ -9818,15 +9818,38 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
     # keep the (very hot) reshape path otherwise untouched.
     _orig_reshape = Var.reshape
     _np_view_of = None
+    def _dtype_itemsize_name(ds):
+        d = dtype._registry.get(ds)
+        if d is not None:
+            return d.itemsize
+        return dtype(ds).itemsize
     def _bitcast(self, dt):
         import numpy as _np
         nonlocal _np_view_of
         if _np_view_of is None:
-            _np_view_of = {"uint8": _np.uint8, "int8": _np.int8, "uint16": _np.uint16,
+            _np_view_of = {"bool": _np.bool_, "uint8": _np.uint8, "int8": _np.int8, "uint16": _np.uint16,
                            "int16": _np.int16, "int32": _np.int32, "int64": _np.int64,
                            "float16": _np.float16, "bfloat16": _np.uint16,
                            "float32": _np.float32, "float64": _np.float64}
-        npd = _np_view_of.get(getattr(dt, "name", str(dt)).replace("torch.", ""), _np.uint8)
+        ds = getattr(dt, "name", str(dt)).replace("torch.", "")
+        itemsize = getattr(dt, "itemsize", None)
+        itemsize = itemsize if isinstance(itemsize, int) else _dtype_itemsize_name(ds)
+        old_itemsize = getattr(getattr(self, "dtype", None), "itemsize", None)
+        if old_itemsize is None:
+            old_itemsize = _dtype_itemsize_name(str(self.dtype))
+        shape = list(self.shape)
+        if len(shape) == 0:
+            if old_itemsize != itemsize:
+                raise RuntimeError("view(dtype) cannot change itemsize on a scalar tensor")
+        else:
+            last_bytes = int(shape[-1]) * int(old_itemsize)
+            if itemsize <= 0 or last_bytes % int(itemsize) != 0:
+                raise RuntimeError("view(dtype) requires the last dimension to be byte-compatible")
+            shape[-1] = last_bytes // int(itemsize)
+        reinterpret_view = getattr(jt, "reinterpret_view", None)
+        npd = _np_view_of.get(ds, _np.uint8)
+        if reinterpret_view is not None and ds in _np_view_of:
+            return reinterpret_view(self, shape, ds)
         return jt.array(_np.ascontiguousarray(self.numpy()).view(npd))
     def _torch_reshape(self, *shape, **_kw):
         # torch's `.view(dtype)` / `.view(dtype=...)` REINTERPRETS the bytes as

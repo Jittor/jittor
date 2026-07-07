@@ -90,6 +90,8 @@ struct TorchExtStats {
     std::atomic<long long> native_scalar_index_count{0};
     std::atomic<long long> host_scalar_index_count{0};
     std::atomic<long long> host_scalar_index_bytes{0};
+    std::atomic<long long> dtype_view_native_count{0};
+    std::atomic<long long> dtype_view_native_bytes{0};
     std::atomic<long long> dtype_view_host_count{0};
     std::atomic<long long> dtype_view_host_bytes{0};
     std::atomic<long long> host_fallback_copy_count{0};
@@ -148,6 +150,7 @@ struct TorchExtStatsReporter {
             "data_ptr_sync=%lld data_ptr_sync_bytes=%lld "
             "metadata_fast=%lld metadata_sync=%lld "
             "native_scalar_index=%lld host_scalar_index=%lld host_scalar_index_bytes=%lld "
+            "dtype_view_native=%lld dtype_view_native_bytes=%lld "
             "dtype_view_host=%lld dtype_view_host_bytes=%lld "
             "host_fallback_copy=%lld host_fallback_copy_bytes=%lld "
             "full_memset=%lld full_memset_bytes=%lld\n",
@@ -166,6 +169,7 @@ struct TorchExtStatsReporter {
             JT_STAT_LOAD(metadata_fast_count), JT_STAT_LOAD(metadata_sync_count),
             JT_STAT_LOAD(native_scalar_index_count),
             JT_STAT_LOAD(host_scalar_index_count), JT_STAT_LOAD(host_scalar_index_bytes),
+            JT_STAT_LOAD(dtype_view_native_count), JT_STAT_LOAD(dtype_view_native_bytes),
             JT_STAT_LOAD(dtype_view_host_count), JT_STAT_LOAD(dtype_view_host_bytes),
             JT_STAT_LOAD(host_fallback_copy_count), JT_STAT_LOAD(host_fallback_copy_bytes),
             JT_STAT_LOAD(full_memset_count), JT_STAT_LOAD(full_memset_bytes));
@@ -220,6 +224,10 @@ static bool torch_ext_native_scalar_index_enabled() {
     if (env_truthy("JITTOR_TORCH_EXT_HOST_INDEX"))
         return false;
     return !env_falsey("JITTOR_TORCH_EXT_NATIVE_INDEX");
+}
+
+static bool torch_ext_dtype_view_native_enabled() {
+    return !env_falsey("JITTOR_TORCH_EXT_DTYPE_VIEW_NATIVE");
 }
 
 static void sync_for_storage(jittor::VarHolder* vh) {
@@ -311,6 +319,12 @@ static jittor::VarHolder* make_copy_vh(jittor::Var* src) {
     static auto maker = jittor::get_op_info("copy")
         .get_constructor<jittor::VarPtr, jittor::Var*>();
     jittor::VarPtr vp = maker(src);
+    return new jittor::VarHolder(std::move(vp));
+}
+static jittor::VarHolder* make_reinterpret_view_vh(jittor::Var* src, const jittor::NanoVector& shape, ScalarType st) {
+    static auto maker = jittor::get_op_info("reinterpret_view")
+        .get_constructor<jittor::VarPtr, jittor::Var*, jittor::NanoVector, jittor::NanoString>();
+    jittor::VarPtr vp = maker(src, shape, to_ns(st));
     return new jittor::VarHolder(std::move(vp));
 }
 static jittor::VarHolder* make_var(const jittor::NanoVector& shape, ScalarType st, bool cpu) {
@@ -740,6 +754,11 @@ Tensor Tensor::view(ScalarType st) const {
     jittor::NanoVector nv = to_nv(sh);
     if (bytes == 0)
         return detail::adopt(make_var(nv, st, /*cpu=*/!cuda), true);
+    if (torch_ext_dtype_view_native_enabled()) {
+        stat_add(torch_ext_stats().dtype_view_native_count);
+        stat_add(torch_ext_stats().dtype_view_native_bytes, bytes);
+        return detail::adopt(make_reinterpret_view_vh(_vh()->var, nv, st), true);
+    }
     if (!cuda)
         return var_from_host_dev(detail::vh_device_ptr(_vh()), nv, st, false);
     stat_add(torch_ext_stats().dtype_view_host_count);
