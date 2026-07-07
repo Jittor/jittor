@@ -5799,11 +5799,24 @@ def _install_cuda(g):
     if cudnn is None:
         cudnn = _types.ModuleType("torch.backends.cudnn")
         _sys_cuda.modules["torch.backends.cudnn"] = cudnn
+    if type(cudnn).__name__ != "_CudnnBackendModule":
+        class _CudnnBackendModule(_types.ModuleType):
+            def __setattr__(self, name, value):
+                if name == "benchmark" and not getattr(self, "_jittor_cudnn_init", False):
+                    try:
+                        if getattr(jt, "cudnn", None) is not None and hasattr(jt.cudnn, "set_benchmark"):
+                            jt.cudnn.set_benchmark(int(bool(value)))
+                    except Exception:
+                        pass
+                return super().__setattr__(name, value)
+        cudnn.__class__ = _CudnnBackendModule
+    cudnn._jittor_cudnn_init = True
     cudnn.enabled = getattr(cudnn, "enabled", True)
     cudnn.benchmark = getattr(cudnn, "benchmark", False)
     cudnn.deterministic = getattr(cudnn, "deterministic", False)
     cudnn.allow_tf32 = getattr(cudnn, "allow_tf32", True)
     cudnn.version = getattr(cudnn, "version", lambda: None)
+    cudnn._jittor_cudnn_init = False
     cuda_backend = _sys_cuda.modules.get("torch.backends.cuda")
     if cuda_backend is None:
         cuda_backend = _types.ModuleType("torch.backends.cuda")

@@ -12,6 +12,7 @@ namespace jittor {
 cudnnHandle_t cudnn_handle;
 int max_cache_size = 100;
 float max_workspace_ratio = 0.25;
+int cudnn_benchmark = -1;
 
 void set_algorithm_cache_size(int size) {
     max_cache_size = size;
@@ -19,6 +20,14 @@ void set_algorithm_cache_size(int size) {
 
 void set_max_workspace_ratio(float64 ratio) {
     max_workspace_ratio = ratio;
+}
+
+void set_benchmark(int enabled) {
+    cudnn_benchmark = enabled < 0 ? -1 : (enabled ? 1 : 0);
+}
+
+int get_benchmark() {
+    return cudnn_benchmark;
 }
 
 struct cudnn_initer {

@@ -86,6 +86,7 @@ VarPtr CudnnConv3dOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 #pragma clang diagnostic ignored "-Wtautological-compare"
 
 EXTERN_LIB unordered_map<string, cudnnConvolutionFwdAlgo_t> fwd_algo_cache;
+EXTERN_LIB int cudnn_benchmark;
 
 template <typename T_ELEM> __inline__  cudnnDataType_t getDataType();
 // template <> __inline__ cudnnDataType_t getDataType<half1>() { return CUDNN_DATA_HALF;   }
@@ -198,7 +199,7 @@ void CudnnConv3dOp::jit_run() {
     int perf_count;
     STACK_ALLOC(cudnnConvolutionFwdAlgoPerf_t,perf_results,num_algos);
     cudnnConvolutionFwdAlgo_t algo;
-    bool benchmark=!has_fp16_or_bf16;
+    bool benchmark = (cudnn_benchmark < 0 || cudnn_benchmark > 0) && !has_fp16_or_bf16;
 
     JK& jk = get_jk();
     jk.clear();

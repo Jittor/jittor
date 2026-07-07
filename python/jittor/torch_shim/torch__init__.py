@@ -469,12 +469,24 @@ _backends = types.ModuleType("torch.backends")
 _b_mps = types.ModuleType("torch.backends.mps")
 _b_mps.is_available = lambda: False
 _b_mps.is_built = lambda: False
-_b_cudnn = types.ModuleType("torch.backends.cudnn")
+class _CudnnBackendModule(types.ModuleType):
+    def __setattr__(self, name, value):
+        if name == "benchmark" and not getattr(self, "_jittor_cudnn_init", False):
+            try:
+                if getattr(_jittor, "cudnn", None) is not None and hasattr(_jittor.cudnn, "set_benchmark"):
+                    _jittor.cudnn.set_benchmark(int(_builtins.bool(value)))
+            except Exception:
+                pass
+        return super().__setattr__(name, value)
+
+_b_cudnn = _CudnnBackendModule("torch.backends.cudnn")
+_b_cudnn._jittor_cudnn_init = True
 _b_cudnn.is_available = lambda: _builtins.bool(getattr(_jittor.flags, "use_cuda", 0))
 _b_cudnn.enabled = True
 _b_cudnn.benchmark = False
 _b_cudnn.deterministic = False
 _b_cudnn.version = lambda: None
+_b_cudnn._jittor_cudnn_init = False
 _b_cuda = types.ModuleType("torch.backends.cuda")
 class _SDPKernel:
     def __init__(self, *a, **k): pass

@@ -106,6 +106,7 @@ unordered_map<string, cudnnConvolutionFwdAlgo_t> fwd_algo_cache;
 #pragma clang diagnostic ignored "-Wtautological-compare"
 
 EXTERN_LIB unordered_map<string, cudnnConvolutionFwdAlgo_t> fwd_algo_cache;
+EXTERN_LIB int cudnn_benchmark;
 
 void CudnnConvOp::jit_run() {
     cudnnHandle_t& handle_ = cudnn_handle;
@@ -216,7 +217,7 @@ void CudnnConvOp::jit_run() {
     int perf_count;
     STACK_ALLOC(cudnnConvolutionFwdAlgoPerf_t,perf_results,num_algos);
     cudnnConvolutionFwdAlgo_t algo;
-    bool benchmark=true;
+    bool benchmark = cudnn_benchmark > 0;
 
     JK& jk = get_jk();
     jk.clear();
