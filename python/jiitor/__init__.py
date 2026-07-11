@@ -11,17 +11,14 @@ import os
 # Jittor is still initializing. Jittor's legacy CUDA runtime workaround probes
 # torch unless this flag is disabled before importing jittor.
 os.environ.setdefault("FIX_TORCH_ERROR", "0")
+os.environ.setdefault("JITTOR_TORCH_STRICT_BOOTSTRAP", "1")
 
 import jittor as _jittor
 
 try:
     _jittor.flags.torch_shim = 1
 except Exception as _e:
-    try:
-        from jittor.compiler import LOG as _LOG
-        _LOG.w(f"jiitor torch bootstrap skipped: {_e}")
-    except Exception:
-        pass
+    raise RuntimeError("jiitor torch bootstrap failed") from _e
 
 sys.modules[__name__] = _jittor
 sys.modules["torch"] = _jittor

@@ -10,6 +10,7 @@ aliases.
 """
 import jittor as jt
 from jittor import nn
+import numbers
 import numpy as np
 
 
@@ -6860,11 +6861,21 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
 
     _orig_getitem = getattr(Var, "__getitem__", None)
     if _orig_getitem is not None and not getattr(_orig_getitem, "_torch_cpu_residency", False):
+        def _is_basic_index(index):
+            if isinstance(index, tuple):
+                return all(_is_basic_index(item) for item in index)
+            if index is None or index is Ellipsis or isinstance(index, slice):
+                return True
+            return isinstance(index, numbers.Integral) and not isinstance(index, (bool, np.bool_))
+
         def _torch_getitem(self, slices):
             out = _orig_getitem(self, slices)
             if isinstance(out, Var) and _var_has_cpu_residency_hint(self):
                 out = _mark_cpu_like(out, self)
-            if isinstance(out, Var):
+            # Only basic indexing returns a view in PyTorch. Retaining the
+            # parent for advanced-index copies creates optimizer-state chains
+            # across Gaussian Splatting densification generations.
+            if isinstance(out, Var) and _is_basic_index(slices):
                 try:
                     out._torch_index_parent = self
                     out._torch_index_slices = slices
@@ -7482,13 +7493,15 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # edge masking). Add the torch 2-arg method semantics while preserving jittor's
     # native 0/1-arg form (nonzero indices), used by contrib.py. No jittor-core caller
     # uses the 2-arg method form, so this only fixes, never regresses.
-    _jt_var_where = Var.where
-    def _torch_where(self, *args):
-        if len(args) == 2:
-            condition, other = args
-            return _torch_where_select(condition, self, other)
-        return _jt_var_where(self, *args)
-    Var.where = _torch_where
+    if not getattr(Var.where, "_torch_where_compat", False):
+        _jt_var_where = Var.where
+        def _torch_where(self, *args):
+            if len(args) == 2:
+                condition, other = args
+                return _torch_where_select(condition, self, other)
+            return _jt_var_where(self, *args)
+        _torch_where._torch_where_compat = True
+        Var.where = _torch_where
 
     # torch's Tensor.tile(*dims): like numpy.tile -- when fewer dims than the
     # tensor rank are given, dims are left-padded with 1. jittor's repeat

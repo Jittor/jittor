@@ -10,6 +10,8 @@ import sys
 
 _FALSEY = {"0", "false", "no", "off"}
 _GAUSSIAN_MODEL_MODULE = "scene.gaussian_model"
+_LPIPS_MODULE = "lpipsPyTorch"
+_PATCH_MODULES = {_GAUSSIAN_MODEL_MODULE, _LPIPS_MODULE}
 
 
 def _is_falsey(value) -> bool:
@@ -84,19 +86,46 @@ def _patch_gaussian_model_module(mod) -> bool:
     return True
 
 
-def _patch_loaded_modules() -> bool:
-    mod = sys.modules.get(_GAUSSIAN_MODEL_MODULE)
-    if mod is None:
+def _patch_lpips_module(mod) -> bool:
+    original = getattr(mod, "lpips", None)
+    criterion_cls = getattr(mod, "LPIPS", None)
+    if original is None or criterion_cls is None or getattr(
+            original, "_jittor_gs_cached_criterion", False):
         return False
-    _patch_gaussian_model_module(mod)
+
+    criteria = {}
+
+    def lpips(x, y, net_type="alex", version="0.1"):
+        device = x.device
+        key = (str(net_type), str(version), str(device))
+        criterion = criteria.get(key)
+        if criterion is None:
+            criterion = criterion_cls(net_type, version).to(device)
+            criteria[key] = criterion
+        return criterion(x, y)
+
+    lpips._jittor_gs_cached_criterion = True
+    lpips._jittor_gs_original = original
+    lpips._jittor_gs_criteria = criteria
+    mod.lpips = lpips
     return True
+
+
+def _patch_loaded_modules() -> bool:
+    patched = False
+    mod = sys.modules.get(_GAUSSIAN_MODEL_MODULE)
+    if mod is not None:
+        patched = _patch_gaussian_model_module(mod) or patched
+    mod = sys.modules.get(_LPIPS_MODULE)
+    if mod is not None:
+        patched = _patch_lpips_module(mod) or patched
+    return patched
 
 
 def install() -> None:
     if not _enabled():
         return
-    if _patch_loaded_modules():
-        return
+    _patch_loaded_modules()
     for finder in sys.meta_path:
         if isinstance(finder, _GaussianSplattingRuntimeFinder):
             return
@@ -117,11 +146,13 @@ class _GaussianSplattingRuntimeLoader(importlib.abc.Loader):
         self.loader.exec_module(module)
         if module.__name__ == _GAUSSIAN_MODEL_MODULE:
             _patch_gaussian_model_module(module)
+        elif module.__name__ == _LPIPS_MODULE:
+            _patch_lpips_module(module)
 
 
 class _GaussianSplattingRuntimeFinder(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        if fullname != _GAUSSIAN_MODEL_MODULE:
+        if fullname not in _PATCH_MODULES:
             return None
         spec = importlib.machinery.PathFinder.find_spec(fullname, path)
         if spec is None or spec.loader is None:

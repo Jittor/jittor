@@ -877,6 +877,7 @@ def enable(
     """
 
     verbose = (not _is_truthy(os.environ.get("JITTOR_TORCH_QUIET"))) if verbose is None else bool(verbose)
+    strict_bootstrap = _is_truthy(os.environ.get("JITTOR_TORCH_STRICT_BOOTSTRAP"))
     project_dir = _project_dir(project_root or pathlib.Path.cwd())
     real_home = os.environ.get("REAL_HOME") or os.environ.get("HOME")
     runtime = pathlib.Path(
@@ -942,12 +943,16 @@ def enable(
         from jittor import torch_compat
         torch_compat.install(jt)
     except Exception:
+        if strict_bootstrap:
+            raise
         pass
     sys.modules["torch"] = jt
     try:
         from jittor.torch_shim.cpp_extension.torch_utils import install_cpp_extension
         install_cpp_extension(getattr(jt, "utils", None))
     except Exception:
+        if strict_bootstrap:
+            raise
         pass
     preloaded = _preload_jittor_cores(verbose=verbose)
 
@@ -997,18 +1002,24 @@ def enable(
 
         install_readonly_extension_borrow()
     except Exception:
+        if strict_bootstrap:
+            raise
         pass
     try:
         from jittor.torch_shim import trellis_runtime
 
         trellis_runtime.install()
     except Exception:
+        if strict_bootstrap:
+            raise
         pass
     try:
         from jittor.torch_shim import gaussian_splatting_runtime
 
         gaussian_splatting_runtime.install()
     except Exception:
+        if strict_bootstrap:
+            raise
         pass
 
     return {

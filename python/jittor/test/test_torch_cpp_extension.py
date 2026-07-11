@@ -13,8 +13,74 @@ Run:
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 import jittor as jt
+
+
+class TestTorchCppExtensionArchFlags(unittest.TestCase):
+    def test_uses_detected_jittor_archs(self):
+        from jittor.torch_shim.cpp_extension import _cuda_arch_flags
+
+        fake_jittor = type("Jittor", (), {
+            "flags": type("Flags", (), {"cuda_archs": [89, 80]})(),
+        })()
+        fake_compiler = type("Compiler", (), {"nvcc_flags": ""})()
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("TORCH_CUDA_ARCH_LIST", None)
+            self.assertEqual(
+                _cuda_arch_flags(fake_jittor, fake_compiler),
+                ["-arch=compute_80", "-code=sm_80", "-code=sm_89"],
+            )
+
+    def test_honors_torch_cuda_arch_list(self):
+        from jittor.torch_shim.cpp_extension import _cuda_arch_flags
+
+        fake_jittor = type("Jittor", (), {
+            "flags": type("Flags", (), {"cuda_archs": [89]})(),
+        })()
+        fake_compiler = type("Compiler", (), {"nvcc_flags": ""})()
+        with mock.patch.dict(os.environ, {"TORCH_CUDA_ARCH_LIST": "8.0;8.6+PTX"}):
+            self.assertEqual(
+                _cuda_arch_flags(fake_jittor, fake_compiler),
+                [
+                    "-gencode=arch=compute_80,code=sm_80",
+                    "-gencode=arch=compute_86,code=sm_86",
+                    "-gencode=arch=compute_86,code=compute_86",
+                ],
+            )
+
+    def test_expands_named_torch_cuda_arches(self):
+        from jittor.torch_shim.cpp_extension import _torch_cuda_arch_flags
+
+        self.assertEqual(
+            _torch_cuda_arch_flags("Ampere;Ada;Hopper"),
+            [
+                "-gencode=arch=compute_80,code=sm_80",
+                "-gencode=arch=compute_86,code=sm_86",
+                "-gencode=arch=compute_86,code=compute_86",
+                "-gencode=arch=compute_89,code=sm_89",
+                "-gencode=arch=compute_89,code=compute_89",
+                "-gencode=arch=compute_90,code=sm_90",
+                "-gencode=arch=compute_90,code=compute_90",
+            ],
+        )
+
+    def test_falls_back_to_compiler_arch_flags(self):
+        from jittor.torch_shim.cpp_extension import _cuda_arch_flags
+
+        fake_jittor = type("Jittor", (), {
+            "flags": type("Flags", (), {"cuda_archs": []})(),
+        })()
+        fake_compiler = type("Compiler", (), {
+            "nvcc_flags": "--fmad=false -arch=compute_75 -code=sm_75",
+        })()
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("TORCH_CUDA_ARCH_LIST", None)
+            self.assertEqual(
+                _cuda_arch_flags(fake_jittor, fake_compiler),
+                ["-arch=compute_75", "-code=sm_75"],
+            )
 
 
 def _torch_cpp_extension_available():

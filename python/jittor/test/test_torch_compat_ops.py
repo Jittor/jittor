@@ -226,6 +226,18 @@ class TestCumulative(Base):
 
         both_devices(body)
 
+    def test_cumsum_out_advanced_index_does_not_write_parent(self):
+        def body(dev):
+            lengths = torch.tensor([2, 5], dtype=torch.long)
+            offsets = torch.zeros(3, dtype=torch.long)
+            out = offsets[torch.tensor([1, 2], dtype=torch.long)]
+            ret = torch.cumsum(lengths, dim=0, out=out)
+            self.ae(ret.numpy(), np.array([2, 7]), msg=f"cumsum advanced ret {dev}")
+            self.ae(offsets.numpy(), np.array([0, 0, 0]), msg=f"cumsum advanced parent {dev}")
+            self.assertIsNone(getattr(out, "_torch_index_parent", None))
+
+        both_devices(body)
+
     def test_cumprod(self):
         x = np.random.RandomState(11).rand(3, 4).astype("float32") + 0.5
         def body(dev):

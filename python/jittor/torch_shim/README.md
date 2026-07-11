@@ -38,13 +38,32 @@ needs reloading — it is imported live from the jittor source tree. After editi
 ## graphdeco gaussian-splatting
 
 The shim can run the original `graphdeco-inria/gaussian-splatting` checkout
-from a normal Python entrypoint. Add this generic bootstrap before the first
-`import torch` in the entry script:
+from a normal Python entrypoint. For a direct source entry, replace the first
+`import torch` in each executable entry script (`train.py`, `render.py`, or
+`metrics.py`) with:
 
 ```python
-from jittor.torch_shim import enable as _enable_torch_shim
-_enable_torch_shim(project_root=__file__)
+import jiitor as torch
 ```
+
+For the long-running `metrics.py` evaluation entrypoint, select inference mode
+before that import:
+
+```python
+import os
+os.environ.setdefault("JITTOR_TORCH_INFERENCE", "1")
+import jiitor as torch
+```
+
+That single import selects a project-local runtime before Jittor initializes,
+registers Jittor as `torch` for the remaining original modules, scans the
+checkout for PyTorch-style C++/CUDA extensions, and builds stale or missing
+extensions automatically. Runtime and build artifacts stay under
+`<gaussian-splatting>/.cache/jittor_torch` by default.
+
+The explicit `jittor.torch_shim.enable()` bootstrap remains available for
+applications that need to customize the project root, runtime root, import
+paths, or extension directories.
 
 Installation is intentionally different from the upstream gaussian-splatting
 README. The upstream `environment.yml` installs PyTorch, torchvision,
@@ -124,10 +143,9 @@ temporary files are kept under this runtime root. If Jittor's bundled CUDA is in
 `~/.cache/jittor/jtcuda/cuda12.2_cudnn8_linux`, the bootstrap exports `JTCUDA`,
 `CUDA_HOME`, `nvcc_path`, `PATH` and `LD_LIBRARY_PATH` for it automatically.
 
-The older helper script is still available when you want a no-edit wrapper. It
-deploys `import torch` into a per-project site-packages, builds the original
-PyTorch-style CUDA extensions, and keeps runtime artifacts under the
-gaussian-splatting checkout:
+For a zero-edit one-command run, the helper script starts the original entry
+through `import jiitor as torch`, builds the original PyTorch-style CUDA
+extensions, and keeps runtime artifacts under the gaussian-splatting checkout:
 
 ```bash
 CUDA_VISIBLE_DEVICES=1 \
@@ -135,6 +153,13 @@ CUDA_VISIBLE_DEVICES=1 \
   /path/to/gaussian-splatting \
   train.py -s /path/to/data -m /path/to/output --disable_viewer
 ```
+
+The helper enables `JITTOR_TORCH_INFERENCE=1` automatically for `metrics.py`.
+It also maps the original densification-time `torch.cuda.empty_cache()` calls
+to Jittor allocator GC. This prevents cached SFRL blocks from starving CUDA
+temporary workspaces; set `JITTOR_TORCH_CUDA_EMPTY_CACHE=0` to override it.
+For `metrics.py`, the Gaussian runtime reuses the LPIPS criterion across views
+instead of rebuilding and reloading VGG for every image.
 
 Useful subcommands:
 
@@ -170,7 +195,7 @@ directory. If Jittor's bundled CUDA is installed at
 `CUDA_HOME`, `nvcc_path`, `PATH` and `LD_LIBRARY_PATH` for it automatically.
 
 The generic bootstrap was validated with direct `python train.py` runs on a
-clean checkout after only adding the two bootstrap lines above. It scanned the
+clean checkout after only adding the single `import jiitor as torch` line above. It scanned the
 three native extension roots (`simple-knn`, `diff-gaussian-rasterization`,
 `fused-ssim`), rebuilt stale in-place `.so` outputs when the shim/toolchain stamp
 changed, skipped them on the next warm run, and completed

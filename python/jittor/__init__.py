@@ -56,9 +56,28 @@ def _jt_torch_entry_runtime_root():
             _head = _f.read(65536)
     except OSError:
         _head = ""
-    if "jittor.torch_shim" in _head or "torch_shim" in _head or "import jittor as torch" in _head:
+    if (
+        "jittor.torch_shim" in _head
+        or "torch_shim" in _head
+        or "import jittor as torch" in _head
+        or "import jiitor as torch" in _head
+    ):
         return _os.path.join(_os.path.dirname(_entry), ".cache", "jittor_torch")
     return None
+
+
+def _jt_torch_is_gaussian_splatting_project(_root):
+    if not _root:
+        return False
+    _root = _os.path.abspath(_os.path.expanduser(_root))
+    for _path in (
+        "train.py",
+        "scene/gaussian_model.py",
+        "gaussian_renderer/__init__.py",
+    ):
+        if not _os.path.exists(_os.path.join(_root, _path)):
+            return False
+    return True
 
 
 def _jt_torch_find_jtcuda(_real_home):
@@ -801,6 +820,11 @@ def _install_torch_shim_runtime(enable=True):
             _project_root = _os_runtime.path.dirname(_os_runtime.path.abspath(_entry))
         else:
             _project_root = _os_runtime.getcwd()
+    if _jt_torch_is_gaussian_splatting_project(_project_root):
+        # The original implementation calls torch.cuda.empty_cache() after
+        # densification. Keep that project-local reclamation point so SFRL's
+        # cached blocks cannot starve CUDA temporary workspaces.
+        _os_runtime.environ.setdefault("JITTOR_TORCH_CUDA_EMPTY_CACHE", "gc")
     _runtime_root = _os_runtime.environ.get(
         "JITTOR_TORCH_RUNTIME_ROOT",
         _os_runtime.path.join(_project_root, ".cache", "jittor_torch"),
@@ -809,6 +833,12 @@ def _install_torch_shim_runtime(enable=True):
     _os_runtime.environ.setdefault("JITTOR_TORCH_RUNTIME_ROOT", _runtime_root)
     _os_runtime.environ.setdefault("JITTOR_TORCH_SHIM", "1")
     _os_runtime.environ.setdefault("FIX_TORCH_ERROR", "0")
+    _inference = str(_os_runtime.environ.get(
+        "JITTOR_TORCH_INFERENCE", "0"
+    )).strip().lower() in ("1", "true", "yes", "on")
+    _strict_bootstrap = str(_os_runtime.environ.get(
+        "JITTOR_TORCH_STRICT_BOOTSTRAP", "0"
+    )).strip().lower() in ("1", "true", "yes", "on")
 
     result = None
     try:
@@ -820,9 +850,12 @@ def _install_torch_shim_runtime(enable=True):
             build_extensions=True,
             local_home=True,
             configure_cuda=False,
+            inference=_inference,
             verbose=False,
         )
     except Exception as _e:
+        if _strict_bootstrap:
+            raise RuntimeError("torch shim bootstrap failed") from _e
         try:
             from jittor.compiler import LOG as _LOG
             _LOG.w(f"torch_shim bootstrap skipped: {_e}")
@@ -2777,5 +2810,7 @@ try:
     import sys as _sys
     _torch_compat.install(_sys.modules[__name__])
 except Exception as _e:
+    if _jt_torch_truthy(_os.environ.get("JITTOR_TORCH_STRICT_BOOTSTRAP")):
+        raise
     from .compiler import LOG as _LOG
     _LOG.w(f"torch_compat not fully installed: {_e}")

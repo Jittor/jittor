@@ -29,11 +29,119 @@ import subprocess
 import sysconfig
 import hashlib
 import json
+import re
+import shlex
 
 # --- in-jittor shim locations (was jtorch/include + jtorch/src in the adapter) ---
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 SHIM_INCLUDE = os.path.join(_THIS_DIR, "include")
 SHIM_SOURCES = [os.path.join(_THIS_DIR, "src", "jtorch_aten.cu")]
+
+_TORCH_NAMED_CUDA_ARCHES = {
+    "kepler+tesla": "3.7",
+    "kepler": "3.5+PTX",
+    "maxwell+tegra": "5.3",
+    "maxwell": "5.0;5.2+PTX",
+    "pascal": "6.0;6.1+PTX",
+    "volta+tegra": "7.2",
+    "volta": "7.0+PTX",
+    "turing": "7.5+PTX",
+    "ampere+tegra": "8.7",
+    "ampere": "8.0;8.6+PTX",
+    "ada": "8.9+PTX",
+    "hopper": "9.0+PTX",
+}
+
+
+def _cuda_arch_number(value):
+    text = str(value).strip().lower()
+    for prefix in ("sm_", "compute_"):
+        if text.startswith(prefix):
+            text = text[len(prefix):]
+    if text.endswith("+ptx"):
+        text = text[:-4]
+    text = text.replace(".", "")
+    return text if text.isdigit() else None
+
+
+def _torch_cuda_arch_flags(value):
+    flags = []
+    items = []
+    for item in re.split(r"[;,\s]+", str(value or "").strip()):
+        expanded = _TORCH_NAMED_CUDA_ARCHES.get(item.lower(), item)
+        items.extend(re.split(r"[;,\s]+", expanded))
+    for item in items:
+        if not item:
+            continue
+        ptx = item.lower().endswith("+ptx")
+        arch = _cuda_arch_number(item)
+        if arch is None:
+            raise RuntimeError(
+                f"unsupported TORCH_CUDA_ARCH_LIST entry: {item!r}"
+            )
+        flag = f"-gencode=arch=compute_{arch},code=sm_{arch}"
+        if flag not in flags:
+            flags.append(flag)
+        if ptx:
+            ptx_flag = f"-gencode=arch=compute_{arch},code=compute_{arch}"
+            if ptx_flag not in flags:
+                flags.append(ptx_flag)
+    return flags
+
+
+def _jittor_cuda_arch_flags(jittor):
+    archs = []
+    for value in getattr(jittor.flags, "cuda_archs", ()):
+        arch = _cuda_arch_number(value)
+        if arch is not None and arch not in archs:
+            archs.append(arch)
+    archs.sort(key=int)
+    if not archs:
+        return []
+    return [f"-arch=compute_{archs[0]}"] + [
+        f"-code=sm_{arch}" for arch in archs
+    ]
+
+
+def _compiler_cuda_arch_flags(value):
+    tokens = shlex.split(str(value or ""))
+    flags = []
+    index = 0
+    options = {
+        "-arch", "--gpu-architecture", "-code", "--gpu-code",
+        "-gencode", "--generate-code",
+    }
+    while index < len(tokens):
+        token = tokens[index]
+        if token in options and index + 1 < len(tokens):
+            flags.extend((token, tokens[index + 1]))
+            index += 2
+            continue
+        if token.startswith((
+                "-arch=", "--gpu-architecture=", "-code=", "--gpu-code=",
+                "-gencode=", "--generate-code=",
+        )):
+            flags.append(token)
+        index += 1
+    return flags
+
+
+def _cuda_arch_flags(jittor, compiler):
+    explicit = os.environ.get("TORCH_CUDA_ARCH_LIST")
+    if explicit:
+        flags = _torch_cuda_arch_flags(explicit)
+        if flags:
+            return flags
+    flags = _jittor_cuda_arch_flags(jittor)
+    if flags:
+        return flags
+    flags = _compiler_cuda_arch_flags(getattr(compiler, "nvcc_flags", ""))
+    if flags:
+        return flags
+    raise RuntimeError(
+        "cannot determine CUDA architecture; make a GPU visible or set "
+        "TORCH_CUDA_ARCH_LIST (for example, 8.9)"
+    )
 
 
 def _find_pybind_include():
@@ -99,17 +207,11 @@ def _jittor_config():
     nvcc = c.nvcc_path
     cuda_home = os.path.dirname(os.path.dirname(nvcc))
 
-    # GPU arch: parse jittor's nvcc_flags (e.g. '-arch=compute_89 -code=sm_89'),
-    # else fall back to a reasonable default. Do not inherit Jittor JIT math
-    # flags here: torch.utils.cpp_extension compiles project kernels with nvcc's
-    # default math behavior unless the project passes extra_cuda_cflags.
-    arch_flags = []
-    nvf = getattr(c, "nvcc_flags", "") or ""
-    for tok in nvf.split():
-        if tok.startswith("-arch=") or tok.startswith("-code=") or tok.startswith("--gpu-architecture") or tok.startswith("-gencode"):
-            arch_flags.append(tok)
-    if not arch_flags:
-        arch_flags = ["-arch=compute_89", "-code=sm_89"]
+    # Match torch cpp_extension's explicit arch override, otherwise compile for
+    # the GPUs Jittor detected in this process. Do not inherit Jittor JIT math
+    # flags: project extensions keep nvcc's default math policy unless their
+    # setup.py supplies extra_cuda_cflags.
+    arch_flags = _cuda_arch_flags(jittor, c)
 
     return {
         "cc_path": c.cc_path,
