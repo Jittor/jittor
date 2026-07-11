@@ -3,8 +3,8 @@
 A modern, PyTorch-style test system for jittor. It exists to **measure real bugs** —
 especially the *silent-wrong backward* bugs that forward-only, jittor-vs-jittor tests
 miss. It is a faithful adaptation of `torch.testing._internal` (OpInfo + gradcheck +
-device-type parametrization); see `agent/skills/jittor-dev-context/design-test-system.md`
-for the full rationale and the audit that motivated it.
+device-type parametrization), with numerical backward checks used as an independent
+oracle for analytical gradients.
 
 ## Pieces
 

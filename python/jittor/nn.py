@@ -4482,10 +4482,9 @@ class ComplexNumber:
             Prefer the native ``complex64`` dtype. ``jt.array(complex_ndarray)``,
             ``torch.complex(re, im)``, ``torch.view_as_complex``, ``torch.polar`` and the
             ``torch.fft.*`` / ``jt.linalg`` complex paths now all produce and consume the native
-            complex64 Var directly (Phase 6 ComplexNumber-deprecation; see
-            agent/skills/jittor-dev-context/design-complex-dtype.md). ComplexNumber is kept only
-            as an INTERNAL bridge substrate for the complex linalg kernels and is no longer
-            returned by any public jittor / torch API.
+            complex64 Var directly. ComplexNumber is kept only as an INTERNAL bridge substrate
+            for the complex linalg kernels and is no longer returned by any public jittor / torch
+            API.
 
         It's saved as jt.stack(real, imag, dim=-1)
 
@@ -4701,9 +4700,8 @@ class ComplexNumber:
 
 
 # ---------------------------------------------------------------------------
-# Native complex64 <-> float32[..., 2] bridge (Phase 6 / ComplexNumber deprecation; see
-# agent/skills/jittor-dev-context/design-complex-dtype.md). This is the keystone that lets
-# FFT / linalg be migrated off nn.ComplexNumber onto the native complex64 dtype:
+# Native complex64 <-> float32[..., 2] bridge. This lets FFT / linalg use the native
+# complex64 dtype while the internal kernels still consume a real/imag float pair:
 #   _complex64_to_real2 : complex64[...]   -> float32[..., 2]   (torch.view_as_real)
 #   _real2_to_complex64 : float32[..., 2]  -> complex64[...]     (torch.view_as_complex)
 # view_as_real/view_as_complex prefer the zero-copy reinterpret_view core op when available,

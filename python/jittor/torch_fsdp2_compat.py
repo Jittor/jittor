@@ -67,15 +67,6 @@ def _nccl_ops():
             return ops
         if os.environ.get("JT_NCCL_WORLD_SIZE") is not None:
             os.environ.setdefault("use_nccl", "1")
-            if os.environ.get("nccl_include_path") is None or os.environ.get("nccl_lib_path") is None:
-                root = os.environ.get("JITTOR_TORCH_PROJECT_ROOT")
-                if not root:
-                    root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-                nccl_root = os.path.join(root, "jittor_fsdp2", "torchlatest_nccl")
-                if os.path.isfile(os.path.join(nccl_root, "include", "nccl.h")) \
-                        and os.path.isfile(os.path.join(nccl_root, "lib", "libnccl.so")):
-                    os.environ.setdefault("nccl_include_path", os.path.join(nccl_root, "include"))
-                    os.environ.setdefault("nccl_lib_path", os.path.join(nccl_root, "lib"))
             setup = getattr(jt.compile_extern, "setup_nccl", None)
             if callable(setup):
                 setup()
