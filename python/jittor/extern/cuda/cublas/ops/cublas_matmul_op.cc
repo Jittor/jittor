@@ -21,6 +21,9 @@ extern int cuda_allow_tf32;
 
 #ifndef JIT
 
+static auto make_cublas_matmul = get_op_info("cublas_matmul")
+    .get_constructor<VarPtr, Var*, Var*, bool, bool>();
+
 CublasMatmulOp::CublasMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
     : a(a), b(b), trans_a(trans_a), trans_b(trans_b) {
     flags.set(NodeFlags::_cuda, 1);
@@ -36,6 +39,19 @@ CublasMatmulOp::CublasMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
     ASSERT(a->dtype().dsize() == b->dtype().dsize())
         << "matmul inputs must have the same dtype, but got a:" << a->dtype() << "b:" << b->dtype();
     c = create_output(nullptr, a->dtype());
+}
+
+VarPtr CublasMatmulOp::grad(Var* out, Var* dout, Var* v, int v_index) {
+    // c = op(a) @ op(b). Return gradients in the original, pre-transpose
+    // layouts so explicit cuBLAS fast paths remain differentiable.
+    if (v_index == 0) {
+        if (trans_a)
+            return make_cublas_matmul(b, dout, trans_b, 1);
+        return make_cublas_matmul(dout, b, 0, trans_b^1);
+    }
+    if (trans_b)
+        return make_cublas_matmul(dout, a, 1, trans_a);
+    return make_cublas_matmul(a, dout, trans_a^1, 0);
 }
 
 void CublasMatmulOp::infer_shape() {

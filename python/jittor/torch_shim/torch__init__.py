@@ -184,29 +184,12 @@ def _collect_grads(parameters):
             out.append(g)
     return out
 def _clip_grad_norm_(parameters, max_norm, norm_type=2.0, error_if_nonfinite=False, foreach=None):
-    import builtins as _b
-    _inf = _b.float("inf")
     if isinstance(parameters, _jt.Var):
         parameters = [parameters]
     grads = _collect_grads(parameters)
-    if not grads:
-        return _jt.array(0.0)
-    if norm_type == _inf:
-        total = _jt.concat([g.abs().reshape(-1) for g in grads]).max()
-    else:
-        sq = _jt.concat([g.cast("float32").sqr().reshape(-1) for g in grads])
-        total = _jt.sqrt(sq.sum())
-    # max_norm may be inf (transformers calls clip with inf just to read norm)
-    try:
-        mn = _b.float(max_norm)
-    except Exception:
-        mn = _inf
-    if mn != _inf:
-        clip_coef = mn / (_b.float(total.item()) + 1e-6)
-        if clip_coef < 1.0:
-            for g in grads:
-                g.update(g * clip_coef)   # .update() -> reflected in optimizer.step()
-    return total
+    from jittor.torch_compat import _clip_grad_norm_device
+    return _clip_grad_norm_device(
+        grads, max_norm, norm_type, error_if_nonfinite)
 def _clip_grad_value_(parameters, clip_value, foreach=None):
     if isinstance(parameters, _jt.Var):
         parameters = [parameters]

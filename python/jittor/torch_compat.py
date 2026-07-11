@@ -468,6 +468,72 @@ def _amp_passthrough_decorator(fn=None, **kwargs):
     return lambda f: f
 
 
+def _clip_grad_norm_device(grads, max_norm, norm_type=2.0,
+                           error_if_nonfinite=False):
+    """Clip a list of gradient Vars without a host-side coefficient branch.
+
+    A per-gradient reduction is mathematically equivalent for finite p-norms,
+    but it creates one small CUDA reduction per parameter tensor. Transformers
+    commonly have hundreds of tensors, making those launches much more costly
+    than the single flat reduction used here. The device coefficient removes
+    the per-step D2H sync previously caused by ``total.item()``.
+    """
+    import math as _math
+
+    grads = [g for g in grads if isinstance(g, jt.Var)]
+    if not grads:
+        return jt.array(0.0)
+    p = float(norm_type)
+    acc_dtype = "float64" if any(str(g.dtype) == "float64" for g in grads) else "float32"
+
+    if p == 0.0:
+        # torch first computes each tensor's zero-norm, then the zero-norm of
+        # those scalars: this counts tensors containing at least one nonzero.
+        nonempty = []
+        for g in grads:
+            x = g.abs() if "complex" in str(g.dtype) else g
+            nonempty.append((x != 0).sum().reshape((1,)))
+        total = (jt.concat(nonempty) != 0).sum().cast(acc_dtype)
+    else:
+        parts = []
+        for g in grads:
+            x = g.abs() if "complex" in str(g.dtype) else g
+            parts.append(x.cast(acc_dtype).reshape((-1,)))
+        flat = jt.concat(parts)
+        ax = flat.abs()
+        if p == float("inf"):
+            total = ax.max()
+        elif p == float("-inf"):
+            total = ax.min()
+        elif p == 1.0:
+            total = ax.sum()
+        elif p == 2.0:
+            total = jt.sqrt((flat * flat).sum())
+        else:
+            total = (ax ** p).sum() ** (1.0 / p)
+
+    if error_if_nonfinite:
+        total_value = float(total.item())
+        if not _math.isfinite(total_value):
+            raise RuntimeError(
+                "The total norm of order %s for gradients is non-finite, so it "
+                "cannot be clipped. To disable this error set "
+                "error_if_nonfinite=False." % norm_type
+            )
+
+    limit = float(max_norm)
+    if limit != float("inf"):
+        scalar_type = np.float64 if acc_dtype == "float64" else np.float32
+        raw_coef = scalar_type(limit) / (total + scalar_type(1e-6))
+        coef = jt.minimum(raw_coef, scalar_type(1.0))
+        # CUDA fmin-style minimum may select the finite operand for NaN. Torch
+        # propagates a NaN total norm into every gradient when errors are disabled.
+        coef = jt.ternary(jt.isnan(raw_coef), raw_coef, coef)
+        for g in grads:
+            g.update(g * coef.cast(str(g.dtype)))
+    return total
+
+
 class _GradScaler:
     """Functional fp16 dynamic loss scaler (matches torch.cuda.amp.GradScaler).
     Works with the jittor optimizer bridge: scale(loss).backward() routes scaled
@@ -519,15 +585,24 @@ class _GradScaler:
     def unscale_(self, opt):
         if not self._enabled:
             return
-        import math as _m
-        inv = 1.0 / self._scale
-        found = False
+        inv = np.float32(1.0 / self._scale)
+        flattened = []
         for g in self._grads(opt):
-            g.update(g * inv)
-            m = float(g.abs().max().item()) if g.numel() else 0.0
-            if _m.isinf(m) or _m.isnan(m):
-                found = True
-        self._found_inf = found
+            if not g.numel():
+                continue
+            unscaled = g * inv
+            if str(unscaled.dtype) != str(g.dtype):
+                unscaled = unscaled.cast(str(g.dtype))
+            g.update(unscaled)
+            flattened.append(unscaled.cast("float32").reshape((-1,)))
+        # Optimizer.step still needs a host decision to skip state updates, but
+        # one flat reduction avoids both per-gradient reductions and per-gradient
+        # D2H syncs. The finite check consumes the values actually assigned back
+        # to the gradients, including any low-precision overflow from unscaling.
+        self._found_inf = (
+            not bool(jt.isfinite(jt.concat(flattened)).all().item())
+            if flattened else False
+        )
         self._unscaled = True
 
     def step(self, opt, *a, **k):
@@ -2045,16 +2120,35 @@ def install(torch):
                 scores = jt.compile_extern.cublas_ops.cublas_batched_matmul(query, key, 0, 1) * sf
             else:
                 scores = jt.matmul(query, key.transpose(-1, -2)) * sf
+            mask_row_valid = None
             if is_causal:
                 Lq, Lk = query.shape[-2], key.shape[-2]
                 mask = jt.triu(jt.ones((Lq, Lk)), 1) * (-1e30)
                 scores = scores + mask
             if attn_mask is not None:
                 if str(attn_mask.dtype) == "bool":
+                    mask_row_valid = attn_mask.sum(-1, keepdims=True) > 0
                     scores = scores + (1 - attn_mask.float32()) * (-1e30)
                 else:
+                    neg_inf = jt.isinf(attn_mask) & (attn_mask < 0)
+                    mask_row_valid = neg_inf.sum(-1, keepdims=True) < attn_mask.shape[-1]
                     scores = scores + attn_mask
+            if mask_row_valid is not None:
+                # Keep the softmax graph finite as well as its final output.
+                # Masking only after softmax would leave NaNs in its backward
+                # for an additive row containing only -inf values.
+                scores = jt.ternary(
+                    mask_row_valid, scores, jt.zeros_like(scores))
             attn = nn.softmax(scores, dim=-1)
+            if mask_row_valid is not None:
+                # PyTorch defines a fully masked query row as all zeros. A
+                # finite sentinel would otherwise produce a uniform row, while
+                # an additive -inf mask produces NaNs in ordinary softmax.
+                attn = jt.ternary(mask_row_valid, attn, jt.zeros_like(attn))
+            if float(dropout_p or 0.0) > 0.0:
+                # torch SDPA always applies the supplied probability. Callers
+                # pass dropout_p=0 in evaluation, so this path is training-only.
+                attn = nn.dropout(attn, p=float(dropout_p), is_train=True)
             out = jt.matmul(attn, value)
             if str(out.dtype) != str(query.dtype):
                 out = out.cast(str(query.dtype))
@@ -3834,23 +3928,13 @@ def _install_nn_extras(nn):
                 if gg is not None:
                     out.append(gg)
             return out
-        def clip_grad_norm_(parameters, max_norm, norm_type=2.0, **k):
+        def clip_grad_norm_(parameters, max_norm, norm_type=2.0,
+                            error_if_nonfinite=False, **k):
             if isinstance(parameters, _jt.Var):
                 parameters = [parameters]
             grads = _grads_of(parameters)
-            if not grads:
-                return _jt.array(0.0)
-            if norm_type == float("inf"):
-                total = _jt.concat([g.abs().reshape(-1) for g in grads]).max()
-            else:
-                total = _jt.sqrt(_jt.concat([g.cast("float32").sqr().reshape(-1) for g in grads]).sum())
-            mn = float(max_norm)
-            if mn != float("inf"):
-                coef = mn / (float(total.item()) + 1e-6)
-                if coef < 1.0:
-                    for g in grads:
-                        g.update(g * coef)
-            return total
+            return _clip_grad_norm_device(
+                grads, max_norm, norm_type, error_if_nonfinite)
         def clip_grad_value_(parameters, clip_value, **k):
             if isinstance(parameters, _jt.Var):
                 parameters = [parameters]

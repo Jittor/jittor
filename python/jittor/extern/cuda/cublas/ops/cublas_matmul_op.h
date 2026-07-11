@@ -9,6 +9,8 @@
 // ***************************************************************
 #pragma once
 #include "op.h"
+#include "ops/op_register.h"
+#include "var.h"
 
 namespace jittor {
 
@@ -18,6 +20,7 @@ struct CublasMatmulOp : Op {
     CublasMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b);
     
     const char* name() const override { return "cublas_matmul"; }
+    VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;
     void infer_shape() override;
     DECLARE_jit_run;
 };

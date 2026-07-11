@@ -1,24 +1,78 @@
 import jittor as jt
 from jittor import nn
+from functools import lru_cache
 
 def can_softmax_v1(a, dim):
     if not jt.flags.use_cuda:
         return False
     if dim != -1 and dim != len(a.shape)-1:
         return False
-    if a.shape[len(a.shape)-1] > 10000:
+    if int(a.shape[-1]) <= 0:
+        return False
+    if str(a.dtype) not in ("float16", "bfloat16", "float32"):
         return False
     return True
 
-def softmax_v1(a, log=False):
-    assert can_softmax_v1(a, -1)
-    length = a.shape[-1]
-    # tnum = 1024
-    tnum = 500 if length % 500 == 0 else 512
-    tnum = 125 if length % 125 == 0 else 128
-    # tnum = 125
-    # tnum = 1000 if length % 1000 == 0 else 1024
-    # tnum = 250
+
+def _softmax_schedule(length):
+    if length < 10000:
+        return "register", (125 if length % 125 == 0 else 128)
+    if length <= 16384:
+        return "register", (500 if length % 500 == 0 else 512)
+    if length <= 65536:
+        return "register", (250 if length % 250 == 0 else 256)
+    return "stream", 512
+
+
+def _softmax_streaming_grad(x, grad_x, threads, log=False):
+    return jt.code(
+        x.shape,
+        x.dtype,
+        [x, grad_x],
+        cuda_header=f'''
+#include <{jt.compile_extern.cub_home}cub/cub.cuh>
+#include <type/fp16_compute.h>
+''',
+        cuda_src=f'''
+__global__ void kernel(in0_type* x, in1_type* g, out0_type* dx, int len) {{
+    typedef cub::BlockReduce<float, {threads}> BlockReduce;
+    constexpr int need_log = {int(log)};
+    __shared__ typename BlockReduce::TempStorage storage;
+    __shared__ float row_sum;
+    int base = blockIdx.x * len;
+
+    float local = 0.0f;
+    for (int col = threadIdx.x; col < len; col += blockDim.x)
+        local += need_log
+            ? float(g[base + col])
+            : float(x[base + col]) * float(g[base + col]);
+    float reduced = BlockReduce(storage).Sum(local);
+    if (threadIdx.x == 0) row_sum = reduced;
+    __syncthreads();
+
+    for (int col = threadIdx.x; col < len; col += blockDim.x) {{
+        float xv = float(x[base + col]);
+        float gv = float(g[base + col]);
+        dx[base + col] = need_log
+            ? out0_type(gv - expf(xv) * row_sum)
+            : out0_type(xv * (gv - row_sum));
+    }}
+}}
+int len = in0->shape[in0->shape.size()-1];
+int rows = in0->numel() / len;
+kernel<<<rows, {threads}>>>(in0_p, in1_p, out0_p, len);
+CHECK(0 == cudaGetLastError());
+''')
+
+
+@lru_cache(maxsize=128)
+def _softmax_v1_cls(length, log=False):
+    # The generated Function class and CUDA source depend only on the reduced
+    # length and log mode. Building both inside every softmax call added tens of
+    # microseconds of Python graph-construction overhead even after the kernel
+    # was compiled, which is material for transformer attention. Cache the
+    # immutable class while still creating a fresh Function instance per call.
+    _, tnum = _softmax_schedule(length)
     per_thread = (length-1) // tnum + 1
     ILP = 1
     for ilp in [8,4,2]:
@@ -49,7 +103,7 @@ __global__ void kernel(in0_type* x, out0_type* y, int len) {{
     {for_loop}
         vload<sizeof(in0_type)*{ILP}>(v[i], &x[id+(i*{tnum}+threadIdx.x)*{ILP}]);
     // v[i] = x[id+i*{tnum}+threadIdx.x];
-    float v1 = -1e30;
+    float v1 = -INFINITY;
     {for_loop}
         #pragma unroll
         for (int j=0; j<{ILP}; j++) {{
@@ -101,6 +155,13 @@ CHECK(0 == cudaGetLastError());
 
         def grad(self, grad_x):
             x = self.save_vars
+            # Non-vectorized register kernels above roughly 48K columns spill
+            # heavily in backward (for example, 255 registers at 65535). Keep
+            # their faster register-resident forward, but use the bounded
+            # streaming reduction for backward. Aligned ILP paths such as
+            # 65536 remain faster with the register kernel.
+            if length > 49152 and ILP == 1:
+                return _softmax_streaming_grad(x, grad_x, 512, log)
             return jt.code(x.shape, x.dtype, [x, grad_x], cuda_header=f'''
 #include <{jt.compile_extern.cub_home}cub/cub.cuh>
 #include <type/fp16_compute.h>
@@ -146,4 +207,72 @@ cudaGetLastError();
 kernel<<<bnum, {tnum}>>>(in0_p, in1_p, out0_p, len);
 CHECK(0 == cudaGetLastError());
 """)
-    return CodeSoftmax()(a)
+    return CodeSoftmax
+
+
+@lru_cache(maxsize=4)
+def _softmax_streaming_cls(threads, log=False):
+    # Large vocabularies cannot keep a complete row in registers without
+    # spilling or exceeding the per-block register limit. Re-read logits for
+    # max, exp-sum and output instead; this remains one launch and bounds
+    # register use independently of vocabulary size.
+    class CodeSoftmaxStreaming(jt.Function):
+        def execute(self, x):
+            self.save_vars = jt.code(
+                x.shape,
+                x.dtype,
+                [x],
+                cuda_header=f'''
+#include <{jt.compile_extern.cub_home}cub/cub.cuh>
+#include <type/fp16_compute.h>
+''',
+                cuda_src=f'''
+__global__ void kernel(in0_type* x, out0_type* y, int len) {{
+    typedef cub::BlockReduce<float, {threads}> BlockReduce;
+    constexpr int need_log = {int(log)};
+    __shared__ typename BlockReduce::TempStorage storage;
+    __shared__ float row_max;
+    __shared__ float row_sum;
+    int base = blockIdx.x * len;
+
+    float local = -INFINITY;
+    for (int col = threadIdx.x; col < len; col += blockDim.x)
+        local = ::max(local, float(x[base + col]));
+    float reduced = BlockReduce(storage).Reduce(local, cub::Max());
+    if (threadIdx.x == 0) row_max = reduced;
+    __syncthreads();
+
+    local = 0.0f;
+    for (int col = threadIdx.x; col < len; col += blockDim.x)
+        local += expf(float(x[base + col]) - row_max);
+    reduced = BlockReduce(storage).Sum(local);
+    if (threadIdx.x == 0) row_sum = reduced;
+    __syncthreads();
+
+    for (int col = threadIdx.x; col < len; col += blockDim.x) {{
+        float shifted = float(x[base + col]) - row_max;
+        y[base + col] = need_log
+            ? out0_type(shifted - logf(row_sum))
+            : out0_type(expf(shifted) / row_sum);
+    }}
+}}
+int len = in0->shape[in0->shape.size()-1];
+int rows = in0->numel() / len;
+kernel<<<rows, {threads}>>>(in0_p, out0_p, len);
+CHECK(0 == cudaGetLastError());
+''')
+            return self.save_vars
+
+        def grad(self, grad_x):
+            x = self.save_vars
+            return _softmax_streaming_grad(x, grad_x, threads, log)
+    return CodeSoftmaxStreaming
+
+
+def softmax_v1(a, log=False):
+    assert can_softmax_v1(a, -1)
+    length = int(a.shape[-1])
+    kind, threads = _softmax_schedule(length)
+    cls = (_softmax_v1_cls(length, bool(log)) if kind == "register"
+           else _softmax_streaming_cls(threads, bool(log)))
+    return cls()(a)

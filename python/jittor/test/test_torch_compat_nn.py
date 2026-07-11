@@ -117,6 +117,54 @@ class TestActivations(Base):
             self.ac(F.gelu(t(x)).numpy(), ref, atol=1e-5, msg=f"gelu erf {dev}")
         both_devices(body)
 
+    def test_gelu_exact_preserves_float_dtype(self):
+        values = np.array([-3.0, -1.0, 0.0, 0.5, 2.0], dtype="float32")
+        ref = 0.5 * values * (1.0 + _verf(values / np.sqrt(2.0)))
+
+        def body(dev):
+            for dtype, atol in (("float16", 2e-3), ("float32", 1e-6),
+                                ("float64", 1e-7), ("bfloat16", 2e-2)):
+                x = jt.array(values, dtype="float32").cast(dtype)
+                out = F.gelu(x)
+                self.assertEqual(str(out.dtype), dtype, f"gelu dtype {dtype} {dev}")
+                got = out.numpy() if dtype == "float64" else out.float32().numpy()
+                expected = ref if dtype == "float64" else ref.astype("float32")
+                self.ac(got, expected, atol=atol, rtol=atol,
+                        msg=f"gelu dtype {dtype} {dev}")
+
+        both_devices(body)
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    def test_large_last_dim_softmax_and_log_softmax(self):
+        rng = np.random.RandomState(17)
+        with jt.flag_scope(use_cuda=1):
+            for cols in (10001, 50257, 128256):
+                x_np = rng.randn(1, cols).astype("float32")
+                g_np = rng.randn(1, cols).astype("float32")
+                shifted = x_np - x_np.max(-1, keepdims=True)
+                exp = np.exp(shifted)
+                soft_ref = exp / exp.sum(-1, keepdims=True)
+                log_ref = shifted - np.log(exp.sum(-1, keepdims=True))
+
+                x = jt.array(x_np)
+                g = jt.array(g_np)
+                soft = F.softmax(x, dim=-1)
+                log_soft = F.log_softmax(x, dim=-1)
+                soft_grad = jt.grad((soft * g).sum(), x)
+                log_grad = jt.grad((log_soft * g).sum(), x)
+                got = jt.fetch_sync([soft, log_soft, soft_grad, log_grad])
+
+                self.ac(got[0], soft_ref, atol=2e-7, rtol=2e-5,
+                        msg=f"large softmax {cols}")
+                self.ac(got[1], log_ref, atol=2e-6, rtol=2e-6,
+                        msg=f"large log_softmax {cols}")
+                soft_grad_ref = soft_ref * (g_np - (soft_ref * g_np).sum(-1, keepdims=True))
+                log_grad_ref = g_np - soft_ref * g_np.sum(-1, keepdims=True)
+                self.ac(got[2], soft_grad_ref, atol=2e-7, rtol=2e-5,
+                        msg=f"large softmax grad {cols}")
+                self.ac(got[3], log_grad_ref, atol=2e-6, rtol=2e-5,
+                        msg=f"large log_softmax grad {cols}")
+
     def test_leaky_relu(self):
         x = self.x
         for slope in [0.01, 0.2]:

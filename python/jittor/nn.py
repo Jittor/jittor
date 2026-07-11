@@ -31,7 +31,7 @@ from jittor.misc import _pair, _triple
 # correct F.ctc_loss.
 from jittor.misc import CTCLoss
 from jittor_utils import LOG
-from functools import partial
+from functools import partial, lru_cache
 
 
 def _broadcast_batch_dims(a, b):
@@ -400,10 +400,22 @@ def gelu(x, approximate='none'):
         _sqrt_2_over_pi = 0.7978845608028654
         return 0.5*x*(1+jt.tanh(_sqrt_2_over_pi*(x+0.044715*(x*x*x))))
     elif approximate == 'none':
-        _sqrt2 = 1.4142135623730951
-        erf = jt.erf(x/_sqrt2)+1
-        r = erf*x*.5
-        return r
+        # Keep the exact GELU kernel in the tensor's compute dtype. Dividing a
+        # float32 Var by a Python float intentionally uses a float64 intermediate
+        # in torch_compat (to match scalar division to the last bit), which made
+        # this elementwise hot path execute a double-precision divide per value.
+        # PyTorch's GELU kernel uses a typed 1/sqrt(2) constant instead. Low
+        # precision inputs compute in fp32 and cast back, matching torch's output
+        # dtype while retaining the existing elementwise fusion opportunity.
+        input_dtype = str(x.dtype)
+        low_precision = input_dtype in ('float16', 'bfloat16')
+        compute_x = x.float32() if low_precision else x
+        scalar_type = np.float64 if input_dtype == 'float64' else np.float32
+        inv_sqrt2 = scalar_type(0.7071067811865476)
+        half = scalar_type(0.5)
+        one = scalar_type(1.0)
+        result = half * compute_x * (one + jt.erf(compute_x * inv_sqrt2))
+        return result.cast(input_dtype) if low_precision else result
     else:
         raise ValueError(f"approximate argument must be either 'none' or 'tanh', got {approximate}")
 
@@ -999,7 +1011,7 @@ def multi_head_attention_forward(query, key, value, embed_dim_to_check, num_head
 
     attn = softmax(attn, dim=-1)
     if dropout_p > 0.0 and training:
-        attn = dropout(attn, p=dropout_p)
+        attn = dropout(attn, p=dropout_p, is_train=True)
     if str(attn.dtype) != str(v.dtype):       # a float64 attn_mask can promote attn
         attn = attn.cast(v.dtype)
     out = jt.matmul(attn, v)                                  # (N*H, L, head_dim)
@@ -1179,7 +1191,8 @@ def instance_norm(x,
         bias = bias.reshape([1, x.shape[1]] + [1]*len(dims))
     return xhat * weight + bias
 
-def _ln_normalize(x, dims, eps):
+@lru_cache(maxsize=128)
+def _ln_function_cls(dims, eps):
     # Normalize x -> (x-mean)/sqrt(var+eps) over `dims` with a numerically-STABLE
     # custom backward (the closed form torch's fused LN uses). The composite-autodiff
     # backward forms huge terms (x * d/dx[1/sqrt(var+eps)] ~ (var+eps)^-1.5) that must
@@ -1191,7 +1204,7 @@ def _ln_normalize(x, dims, eps):
         def execute(self, x):
             mean = jt.mean(x, dims=dims, keepdims=1)
             var = jt.mean((x - mean) * (x - mean), dims=dims, keepdims=1)
-            rstd = 1.0 / jt.sqrt(var + eps)
+            rstd = jt.rsqrt(var + eps)
             xhat = (x - mean) * rstd
             self.xhat = xhat
             self.rstd = rstd
@@ -1202,11 +1215,19 @@ def _ln_normalize(x, dims, eps):
             mg = jt.mean(g, dims=dims, keepdims=1)
             mgx = jt.mean(g * xhat, dims=dims, keepdims=1)
             return rstd * (g - mg - xhat * mgx)
-    return _LN.apply(x)
+    return _LN
+
+
+def _ln_normalize(x, dims, eps):
+    # Cache the immutable Function class by reduction axes and epsilon. A fresh
+    # Function instance/tape is still created by apply() for every invocation.
+    cls = _ln_function_cls(tuple(dims), float(eps))
+    return cls.apply(x)
 
 
 def _layer_norm_no_grad_cuda(x, normalized_shape, weight, bias, eps):
-    if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
+    if not (jt.flags.use_cuda and not getattr(jt.flags, "use_acl", 0)
+            and getattr(jt.flags, "no_grad", 0)):
         return None
     if len(normalized_shape) != 1 or str(x.dtype) != "float32":
         return None
