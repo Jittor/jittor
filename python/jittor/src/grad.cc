@@ -81,7 +81,12 @@ void warn_grad_break(int i, Var* v) {
     LOGw << "grads[">>i>>"] '">> v->name>>"' doesn't have gradient. It will be set to zero:" << v;
 }
 
-vector<VarPtr> grad(Var* loss, vector<Var*> targets, bool retain_graph) {
+vector<VarPtr> grad(
+    Var* loss,
+    vector<Var*> targets,
+    bool retain_graph,
+    bool materialize_grads
+) {
     LOGvv << "loss:" >> loss << "targets:" >> targets;
     CHECK(loss->is_float()) << "Loss should be float";
     for (Var* var : targets)
@@ -261,7 +266,7 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets, bool retain_graph) {
         auto id = target_id[i];
         if (id>=0)
             grad = move(grads[id]);
-        if (!grad) {
+        if (!grad && materialize_grads) {
             // TODO: better warning message
             warn_grad_break(i, var);
             grad = make_number(0.f, var);
@@ -283,6 +288,12 @@ vector<VarPtr> grad(Var* loss, vector<Var*> targets, bool retain_graph) {
                 grads[i]->set_stop_grad();
     }
     return results;
+}
+
+// Preserve the long-standing three-argument C++ symbol for cached extensions
+// and out-of-tree users. The optional binding calls the four-argument overload.
+vector<VarPtr> grad(Var* loss, vector<Var*> targets, bool retain_graph) {
+    return grad(loss, move(targets), retain_graph, true);
 }
 
 } // jittor

@@ -160,6 +160,11 @@ def _refresh_flat_entry_shards(state):
         entry.shard = shard
         entry.shard_numel = int(shard.shape[0]) if len(shard.shape) else int(entry.numel)
         _mark_fsdp_param_var(shard, state, entry, "shard")
+        if getattr(entry, "requires_grad", True):
+            if shard.is_stop_grad():
+                shard.start_grad()
+        elif not shard.is_stop_grad():
+            shard.stop_grad()
 
 
 def _mark_fsdp_param_var(var, state, entry, role):
@@ -778,6 +783,7 @@ def _init_true_fsdp_state(module, state):
                 shard=None,
                 full_param=None,
                 flat_offset=offset,
+                requires_grad=not param.is_stop_grad(),
             ))
             offset += numel
         state.true_fsdp_initialized = True
@@ -789,6 +795,11 @@ def _init_true_fsdp_state(module, state):
         state.true_fsdp_flat_padded_numel = flat_padded_numel
         state.true_fsdp_flat_shard_numel = flat_shard_numel
         state.true_fsdp_flat_shard = _mark_fsdp_param_var(flat_shard, state, None, "flat_shard")
+        if any(entry.requires_grad for entry in entries):
+            if state.true_fsdp_flat_shard.is_stop_grad():
+                state.true_fsdp_flat_shard.start_grad()
+        elif not state.true_fsdp_flat_shard.is_stop_grad():
+            state.true_fsdp_flat_shard.stop_grad()
         _refresh_flat_entry_shards(state)
         for entry in entries:
             object.__setattr__(entry.owner, entry.attr, entry.shard)
@@ -814,8 +825,14 @@ def _init_true_fsdp_state(module, state):
             shard_numel=shard_numel,
             shard=local,
             full_param=None,
+            requires_grad=not param.is_stop_grad(),
         ))
         _mark_fsdp_param_var(local, state, entries[-1], "shard")
+        if entries[-1].requires_grad:
+            if local.is_stop_grad():
+                local.start_grad()
+        elif not local.is_stop_grad():
+            local.stop_grad()
         object.__setattr__(owner, attr, local)
     state.true_fsdp_initialized = True
     state.true_fsdp_rank = rank
@@ -838,6 +855,11 @@ def _unshard_module_params(module):
             full = _slice_flat(full_flat, entry.flat_offset, entry.numel).reshape(entry.shape)
             entry.full_param = full
             _mark_fsdp_param_var(full, state, entry, "full")
+            if getattr(entry, "requires_grad", True):
+                if full.is_stop_grad():
+                    full.start_grad()
+            elif not full.is_stop_grad():
+                full.stop_grad()
             object.__setattr__(entry.owner, entry.attr, full)
     else:
         for entry in state.true_fsdp_params:
@@ -846,6 +868,11 @@ def _unshard_module_params(module):
             full = full_flat.reshape(entry.shape)
             entry.full_param = full
             _mark_fsdp_param_var(full, state, entry, "full")
+            if getattr(entry, "requires_grad", True):
+                if full.is_stop_grad():
+                    full.start_grad()
+            elif not full.is_stop_grad():
+                full.stop_grad()
             object.__setattr__(entry.owner, entry.attr, full)
     state.true_fsdp_unsharded = True
     return module
@@ -947,6 +974,128 @@ def _sync_sharded_grads_from_full_grads(state, full_grads, *, divide_by_world_si
     return sharded
 
 
+def _globally_used_grads(local_used):
+    if _world_size() <= 1:
+        return list(local_used)
+    flags = jt.array(np.asarray(local_used, dtype=np.int32))
+    if not callable(getattr(flags, "mpi_all_reduce", None)):
+        raise RuntimeError("FSDP2 unused-gradient synchronization requires all_reduce")
+    reduced = flags.mpi_all_reduce("sum")
+    return [bool(value) for value in np.asarray(reduced.numpy()).reshape(-1)]
+
+
+def _visible_full_grads_from_shards(state):
+    visible = []
+    for entry in state.true_fsdp_params:
+        full = getattr(entry, "full_param", None)
+        visible.append(
+            full is not None
+            and getattr(entry.owner, entry.attr, None) is full
+            and isinstance(getattr(entry.shard, "_torch_grad", None), jt.Var))
+    if not any(visible):
+        return [None] * len(visible)
+    if getattr(state, "true_fsdp_flat", False):
+        parts = []
+        real_numel = 0
+        for entry, used in zip(state.true_fsdp_params, visible):
+            grad = getattr(entry.shard, "_torch_grad", None)
+            part = grad if used else jt.zeros_like(entry.shard)
+            part_numel = _param_numel(part)
+            if part_numel:
+                parts.append(_flatten_var(part))
+                real_numel += part_numel
+        if real_numel < int(state.true_fsdp_flat_shard_numel):
+            parts.append(jt.zeros(
+                (int(state.true_fsdp_flat_shard_numel) - real_numel,),
+                dtype=state.true_fsdp_flat_shard.dtype))
+        local_flat = parts[0] if len(parts) == 1 else jt.concat(parts, dim=0)
+        full_flat = local_flat if _world_size() <= 1 else _all_gather_shards(local_flat)
+        return [
+            _slice_flat(full_flat, entry.flat_offset, entry.numel).reshape(entry.shape)
+            if used else None
+            for entry, used in zip(state.true_fsdp_params, visible)
+        ]
+    out = []
+    for entry, used in zip(state.true_fsdp_params, visible):
+        if not used:
+            out.append(None)
+            continue
+        local = getattr(entry.shard, "_torch_grad")
+        gathered = local if _world_size() <= 1 else _all_gather_shards(local)
+        gathered = _slice_flat(_flatten_var(gathered), 0, entry.numel)
+        out.append(gathered.reshape(entry.shape))
+    return out
+
+
+def _local_grad_from_visible_full(state, entry, full_grad):
+    flat = _flatten_var(full_grad)
+    if getattr(state, "true_fsdp_flat", False):
+        rank_start = int(state.true_fsdp_rank) * int(state.true_fsdp_flat_shard_numel)
+        param_start = int(entry.flat_offset)
+        param_end = param_start + int(entry.numel)
+        overlap_start = max(rank_start, param_start)
+        overlap_end = min(
+            rank_start + int(state.true_fsdp_flat_shard_numel), param_end)
+        start_in_param = max(overlap_start - param_start, 0)
+        return _slice_flat(flat, start_in_param, max(overlap_end - overlap_start, 0))
+    padded = _pad_flat(flat, entry.padded_numel)
+    return _slice_flat(
+        padded, int(state.true_fsdp_rank) * int(entry.shard_numel),
+        int(entry.shard_numel))
+
+
+def _sync_visible_full_grads_to_optimizer(opt):
+    for pg in getattr(opt, "param_groups", []):
+        params = list(pg.get("params", []))
+        grads = pg.get("grads")
+        for i, param in enumerate(params):
+            state, entry = _fsdp_param_entry(param)
+            if state is None:
+                continue
+            full = getattr(entry, "full_param", None)
+            if full is None or getattr(entry.owner, entry.attr, None) is not full:
+                continue
+            full_grad = getattr(full, "_torch_grad", None)
+            if not isinstance(full_grad, jt.Var):
+                continue
+            if grads is None:
+                grads = pg["grads"] = [None] * len(params)
+            while len(grads) < len(params):
+                grads.append(None)
+            local = _local_grad_from_visible_full(state, entry, full_grad).stop_grad()
+            existing = grads[i]
+            if isinstance(existing, jt.Var) and list(existing.shape) == list(local.shape):
+                existing.update(local)
+                local = existing
+            grads[i] = local
+            entry.last_grad = local
+            object.__setattr__(entry.shard, "_torch_grad", local)
+            object.__setattr__(param, "_torch_grad", local)
+            object.__setattr__(opt, "_Optimizer__zero_grad", False)
+            try:
+                opt._build_grad_map()
+            except Exception:
+                pass
+
+
+def refresh_visible_full_grads(opt):
+    for state in _fsdp_states_from_optimizers([opt]):
+        for entry, full_grad in zip(
+                state.true_fsdp_params, _visible_full_grads_from_shards(state)):
+            full = getattr(entry, "full_param", None)
+            if full is not None and isinstance(full_grad, jt.Var):
+                full_grad = full_grad.stop_grad()
+                existing = getattr(entry, "full_public_grad", None)
+                if not isinstance(existing, jt.Var):
+                    existing = getattr(full, "_torch_grad", None)
+                if isinstance(existing, jt.Var) \
+                        and list(existing.shape) == list(full_grad.shape):
+                    existing.update(full_grad)
+                    full_grad = existing.stop_grad()
+                object.__setattr__(full, "_torch_grad", full_grad)
+                entry.full_public_grad = full_grad
+
+
 def _fsdp_states_from_optimizers(optimizers):
     states = []
     seen = set()
@@ -1000,18 +1149,23 @@ def fill_fsdp_optimizer_grads_from_grad_map(optimizers, grad_by_id, *,
     entry_grad = {}
     for state in states:
         full_grads = []
+        local_used = []
         for entry in state.true_fsdp_params:
             full = getattr(entry, "full_param", None)
             grad = grad_by_id.get(id(full)) if full is not None else None
+            local_used.append(grad is not None)
             if grad is None:
                 grad = jt.zeros(entry.shape, dtype=entry.dtype)
             full_grads.append(grad)
+        globally_used = _globally_used_grads(local_used)
         sharded = _sync_sharded_grads_from_full_grads(
             state, full_grads, divide_by_world_size=divide_by_world_size)
-        for entry, grad in zip(state.true_fsdp_params, sharded):
-            entry.last_grad = grad
-            entry_grad[(id(state), id(entry))] = grad
+        for entry, grad, used in zip(state.true_fsdp_params, sharded, globally_used):
+            entry.last_grad = grad if used else None
+            if used:
+                entry_grad[(id(state), id(entry))] = grad
 
+    filled_entries = set()
     for opt in optimizers or ():
         zero = getattr(opt, "_Optimizer__zero_grad", True)
         for pg in getattr(opt, "param_groups", []):
@@ -1024,21 +1178,37 @@ def fill_fsdp_optimizer_grads_from_grad_map(optimizers, grad_by_id, *,
                 state, entry = _fsdp_param_entry(param)
                 if state is None:
                     continue
+                entry_key = (id(state), id(entry))
+                if entry_key in filled_entries:
+                    stored = getattr(entry.shard, "_torch_grad", None)
+                    grads_list[i] = stored
+                    object.__setattr__(param, "_torch_grad", stored)
+                    continue
                 grad = entry_grad.get((id(state), id(entry)))
                 if grad is None:
                     continue
-                if (not zero) and isinstance(grads_list[i], jt.Var) \
-                        and list(grads_list[i].shape) == list(grad.shape):
-                    grad = grad + grads_list[i]
-                grad = grad.stop_grad()
-                grads_list[i] = grad
-                object.__setattr__(param, "_torch_grad", grad)
-                object.__setattr__(entry.shard, "_torch_grad", grad)
+                existing = grads_list[i]
+                if not isinstance(existing, jt.Var):
+                    existing = getattr(param, "_torch_grad", None)
+                if isinstance(existing, jt.Var) \
+                        and list(existing.shape) == list(grad.shape):
+                    if not zero:
+                        grad = grad + existing
+                    existing.update(grad)
+                    stored = existing.stop_grad()
+                else:
+                    stored = grad.stop_grad()
+                grads_list[i] = stored
+                object.__setattr__(param, "_torch_grad", stored)
+                object.__setattr__(entry.shard, "_torch_grad", stored)
+                filled_entries.add(entry_key)
         object.__setattr__(opt, "_Optimizer__zero_grad", False)
         try:
             opt._build_grad_map()
         except Exception:
             pass
+    for opt in optimizers or ():
+        refresh_visible_full_grads(opt)
     return True
 
 
@@ -1052,14 +1222,50 @@ def clear_fsdp_optimizer_grads(opt):
                 grads[i] = None
 
 
-def refresh_optimizer_fsdp_params(opt):
+def _optimizer_param_steps(pg):
+    params = list(pg.get("params", []))
+    steps = pg.get("_torch_steps")
+    if not isinstance(steps, list):
+        steps = pg["_torch_steps"] = [0] * len(params)
+    while len(steps) < len(params):
+        steps.append(0)
+    if len(steps) > len(params):
+        del steps[len(params):]
+    return steps
+
+
+def _assign_preserve_trainability(target, value, was_trainable=None):
+    if was_trainable is None:
+        was_trainable = not target.is_stop_grad()
+    target.assign(value)
+    if was_trainable and target.is_stop_grad():
+        target.start_grad()
+    elif not was_trainable and not target.is_stop_grad():
+        target.stop_grad()
+    return target
+
+
+def refresh_optimizer_fsdp_params(opt, state_ids=None):
     for pg in getattr(opt, "param_groups", []):
         params = pg.get("params", [])
         for i, param in enumerate(list(params)):
             state, entry = _fsdp_param_entry(param)
-            if state is None:
+            if state is None or state_ids is not None and id(state) not in state_ids:
                 continue
             params[i] = entry.shard
+
+
+def _refresh_all_optimizer_fsdp_params(states, current=None):
+    state_ids = {id(state) for state in states}
+    seen = set()
+    for ref in getattr(jt, "_active_optimizers", None) or ():
+        opt = ref() if callable(ref) else ref
+        if opt is None or id(opt) in seen:
+            continue
+        seen.add(id(opt))
+        refresh_optimizer_fsdp_params(opt, state_ids)
+    if current is not None and id(current) not in seen:
+        refresh_optimizer_fsdp_params(current, state_ids)
 
 
 def _sgd_hparams(opt, pg):
@@ -1142,20 +1348,49 @@ def optimizer_step(opt, loss=None, retain_graph=False):
         grad_by_id = {}
         targets = collect_fsdp_full_params_for_backward([opt])
         if targets:
-            grads = jt.grad(loss, targets, retain_graph)
-            grad_by_id.update({id(p): g for p, g in zip(targets, grads)})
+            grads = jt.core.grad_optional(loss, targets, retain_graph)
+            grad_by_id.update({id(p): g for p, g in zip(targets, grads)
+                               if g is not None})
         fill_fsdp_optimizer_grads_from_grad_map([opt], grad_by_id)
+
+    _sync_visible_full_grads_to_optimizer(opt)
 
     kind = _optimizer_kind(opt)
     if kind not in ("sgd", "adam", "adamw"):
         return False
-    if kind in ("adam", "adamw"):
-        opt.n_step = int(getattr(opt, "n_step", 0)) + 1
-    n_step = int(getattr(opt, "n_step", 1))
-
-    jt.flags.node_order = 1
+    has_fsdp_grad = False
     for pg in getattr(opt, "param_groups", []):
         grads = pg.get("grads") or []
+        for i, param in enumerate(pg.get("params", [])):
+            if not is_fsdp_managed_param(param):
+                continue
+            grad = grads[i] if i < len(grads) else None
+            if not isinstance(grad, jt.Var):
+                grad = getattr(param, "_torch_grad", None)
+            if isinstance(grad, jt.Var):
+                has_fsdp_grad = True
+                break
+        if has_fsdp_grad:
+            break
+    if has_fsdp_grad:
+        if not getattr(opt, "_torch_backward_advanced_n_step", False):
+            opt.n_step = int(getattr(opt, "n_step", 0)) + 1
+        object.__setattr__(opt, "_torch_backward_advanced_n_step", True)
+
+    jt.flags.node_order = 1
+    flat_updates = {}
+    flat_public_grads = {}
+    entry_trainable = {
+        (id(state), id(entry)): not entry.shard.is_stop_grad()
+        for state in states for entry in state.true_fsdp_params
+    }
+    flat_trainable = {
+        id(state): not state.true_fsdp_flat_shard.is_stop_grad()
+        for state in states if getattr(state, "true_fsdp_flat", False)
+    }
+    for pg in getattr(opt, "param_groups", []):
+        grads = pg.get("grads") or []
+        param_steps = _optimizer_param_steps(pg)
         values = pg.get("values")
         if values is None:
             values = pg["values"] = [None] * len(pg.get("params", []))
@@ -1171,11 +1406,12 @@ def optimizer_step(opt, loss=None, retain_graph=False):
             state, entry = _fsdp_param_entry(param)
             if state is None:
                 continue
-            grad = grads[i] if i < len(grads) else getattr(entry, "last_grad", None)
+            grad = grads[i] if i < len(grads) else None
+            if not isinstance(grad, jt.Var):
+                grad = getattr(param, "_torch_grad", None)
             if not isinstance(grad, jt.Var):
                 continue
-            if getattr(state, "true_fsdp_flat", False):
-                continue
+            param_steps[i] = int(param_steps[i]) + 1
             if kind == "sgd":
                 new_param, new_value = _sgd_update_for_param(opt, pg, state, entry,
                                                              entry.shard, grad, values[i])
@@ -1183,59 +1419,59 @@ def optimizer_step(opt, loss=None, retain_graph=False):
             else:
                 new_param, new_value, new_momentum = _adam_update_for_param(
                     opt, pg, entry.shard, grad, values[i], momentums[i],
-                    decoupled_weight_decay=(kind == "adamw"), n_step=n_step)
+                    decoupled_weight_decay=(kind == "adamw"),
+                    n_step=param_steps[i])
                 values[i] = new_value
                 momentums[i] = new_momentum
-            entry.shard.assign(new_param)
-            object.__setattr__(entry.owner, entry.attr, entry.shard)
-            entry.full_param = None
+            if getattr(state, "true_fsdp_flat", False):
+                key = (id(state), id(entry))
+                flat_updates[key] = new_param
+                flat_public_grads[key] = grad
+            else:
+                _assign_preserve_trainability(
+                    entry.shard, new_param,
+                    entry_trainable[(id(state), id(entry))])
+                object.__setattr__(entry.shard, "_torch_grad", grad)
+                object.__setattr__(entry.owner, entry.attr, entry.shard)
+                entry.full_param = None
 
     for state in states:
         if not getattr(state, "true_fsdp_flat", False):
             continue
-        flat_grad = getattr(state, "true_fsdp_last_flat_grad", None)
-        if not isinstance(flat_grad, jt.Var):
-            continue
-        # Flat mode exposes parameter slices to the optimizer, but only the flat
-        # shard owns storage for all local elements.  Apply the SGD update once to
-        # the flat shard, then refresh per-parameter slices.
-        for pg in getattr(opt, "param_groups", []):
-            break
-        if kind == "sgd":
-            lr, momentum, weight_decay, dampening, nesterov = _sgd_hparams(opt, pg)
-            dp = flat_grad
-            if weight_decay != 0:
-                dp = dp + state.true_fsdp_flat_shard * weight_decay
-            if momentum != 0:
-                key = f"_jittor_fsdp2_sgd_flat_momentum_{id(opt)}"
-                buf = getattr(state, key, None)
-                if not isinstance(buf, jt.Var) or list(buf.shape) != list(dp.shape):
-                    buf = jt.zeros(dp.shape, dp.dtype).stop_grad()
-                buf.update(momentum * buf + dp * (1 - dampening))
-                setattr(state, key, buf)
-                dp = dp + momentum * buf if nesterov else buf
-            new_flat = (state.true_fsdp_flat_shard - dp * lr).stop_grad()
-        else:
-            v_key = f"_jittor_fsdp2_{kind}_flat_v_{id(opt)}"
-            m_key = f"_jittor_fsdp2_{kind}_flat_m_{id(opt)}"
-            value = getattr(state, v_key, None)
-            momentum = getattr(state, m_key, None)
-            new_flat, value, momentum = _adam_update_for_param(
-                opt, pg, state.true_fsdp_flat_shard, flat_grad, value, momentum,
-                decoupled_weight_decay=(kind == "adamw"), n_step=n_step)
-            setattr(state, v_key, value)
-            setattr(state, m_key, momentum)
-        state.true_fsdp_flat_shard.assign(new_flat)
-        _refresh_flat_entry_shards(state)
+        parts = []
+        real_numel = 0
         for entry in state.true_fsdp_params:
+            key = (id(state), id(entry))
+            part = flat_updates.get(key, entry.shard)
+            part_numel = _param_numel(part)
+            if part_numel:
+                parts.append(_flatten_var(part))
+                real_numel += part_numel
+        if real_numel < int(state.true_fsdp_flat_shard_numel):
+            parts.append(state.true_fsdp_flat_shard[real_numel:])
+        if parts and flat_updates:
+            new_flat = parts[0] if len(parts) == 1 else jt.concat(parts, dim=0)
+            _assign_preserve_trainability(
+                state.true_fsdp_flat_shard, new_flat.stop_grad(),
+                flat_trainable[id(state)])
+            _refresh_flat_entry_shards(state)
+        for entry in state.true_fsdp_params:
+            key = (id(state), id(entry))
+            was_trainable = entry_trainable[key]
+            if was_trainable and entry.shard.is_stop_grad():
+                entry.shard.start_grad()
+            elif not was_trainable and not entry.shard.is_stop_grad():
+                entry.shard.stop_grad()
+            grad = flat_public_grads.get(key)
+            if isinstance(grad, jt.Var):
+                object.__setattr__(entry.shard, "_torch_grad", grad)
             object.__setattr__(entry.owner, entry.attr, entry.shard)
             entry.full_param = None
         state.true_fsdp_unsharded = False
 
     for state in states:
         state.true_fsdp_unsharded = False
-    refresh_optimizer_fsdp_params(opt)
-    clear_fsdp_optimizer_grads(opt)
+    _refresh_all_optimizer_fsdp_params(states, opt)
     try:
         opt._build_grad_map()
     except Exception:
@@ -1256,15 +1492,24 @@ def sharded_sgd_step(module, loss, lr=1e-4, *, divide_by_world_size=True):
         flat_grad = getattr(state, "true_fsdp_last_flat_grad", None)
         if flat_grad is None:
             raise RuntimeError("true FSDP2 flat gradient was not produced")
-        state.true_fsdp_flat_shard.assign((state.true_fsdp_flat_shard - flat_grad * lr).stop_grad())
+        flat_was_trainable = not state.true_fsdp_flat_shard.is_stop_grad()
+        entry_trainable = [not entry.shard.is_stop_grad()
+                           for entry in state.true_fsdp_params]
+        _assign_preserve_trainability(
+            state.true_fsdp_flat_shard,
+            (state.true_fsdp_flat_shard - flat_grad * lr).stop_grad(),
+            flat_was_trainable)
         _refresh_flat_entry_shards(state)
-        for entry in state.true_fsdp_params:
+        for entry, was_trainable in zip(state.true_fsdp_params, entry_trainable):
+            if was_trainable and entry.shard.is_stop_grad():
+                entry.shard.start_grad()
             object.__setattr__(entry.owner, entry.attr, entry.shard)
             entry.full_param = None
         state.true_fsdp_unsharded = False
         return grads
     for entry, grad in zip(state.true_fsdp_params, grads):
-        entry.shard.assign((entry.shard - grad * lr).stop_grad())
+        _assign_preserve_trainability(
+            entry.shard, (entry.shard - grad * lr).stop_grad())
         object.__setattr__(entry.owner, entry.attr, entry.shard)
         entry.full_param = None
     state.true_fsdp_unsharded = False

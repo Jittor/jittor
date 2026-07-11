@@ -28,6 +28,38 @@ class _FakeOptimizer:
 
 
 class TestGradientManagement(unittest.TestCase):
+    def test_autograd_grad_unused_semantics(self):
+        def make_graph():
+            used = jt.array(np.array([1.0, 2.0], dtype="float32"))
+            unused = jt.array(np.array([3.0, 4.0], dtype="float32"))
+            return used, unused, (used * used).sum()
+
+        used, unused, loss = make_graph()
+        grads = jt.autograd.grad(loss, (used, unused), allow_unused=True)
+        self.assertIsNotNone(grads[0])
+        self.assertIsNone(grads[1])
+
+        used, unused, loss = make_graph()
+        with self.assertRaisesRegex(RuntimeError, "allow_unused=True"):
+            jt.autograd.grad(loss, (used, unused))
+
+        used, unused, loss = make_graph()
+        grads = jt.autograd.grad(
+            loss, (used, unused), materialize_grads=True)
+        np.testing.assert_array_equal(grads[1].numpy(), np.zeros(2, dtype="float32"))
+
+        used, unused, loss = make_graph()
+        with self.assertRaisesRegex(ValueError, "allow_unused"):
+            jt.autograd.grad(
+                loss, (used, unused), allow_unused=False,
+                materialize_grads=True)
+
+        used, unused, loss = make_graph()
+        grads = jt.autograd.grad(
+            loss, (used, unused), create_graph=True,
+            materialize_grads=True)
+        self.assertTrue(grads[1].requires_grad)
+
     def test_clip_grad_norm_values_and_no_item(self):
         def body(dev):
             for p, expected in ((1.0, 10.0), (2.0, math.sqrt(34.0)),

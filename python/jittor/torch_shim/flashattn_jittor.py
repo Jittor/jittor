@@ -23,6 +23,7 @@ import os
 import pathlib
 import subprocess
 import sys
+import threading
 import glob
 from types import ModuleType
 from typing import List, Optional, Sequence, Tuple
@@ -95,8 +96,11 @@ _SOURCE_ROOT_NAMES = set(_DEFAULT_MODULE_NAMES + ("flash-attention-jittor", "fla
 _UNSET = object()
 _BACKEND = _UNSET
 _BACKEND_NAME = "math"
+_BACKEND_CONFIG_KEY = None
+_BACKEND_LOAD_GENERATION = 0
 _LAST_ERROR: Optional[str] = None
 _LOADING = False
+_BACKEND_LOAD_LOCK = threading.RLock()
 _BORROW_INPUTS_CACHE = None
 _PACKED_SPLIT_STATS = {
     "qkv_cuda": 0,
@@ -369,9 +373,41 @@ def _local_module_names(root: pathlib.Path) -> List[str]:
 
 def _import_local_modules(root: pathlib.Path) -> Optional[ModuleType]:
     for name in _local_module_names(root):
-        mod = _try_import_module(name)
-        if mod is not None:
-            return mod
+        def _inside_root(mod):
+            raw = getattr(mod, "__file__", None)
+            if not raw:
+                return False
+            try:
+                pathlib.Path(raw).resolve().relative_to(root.resolve())
+                return True
+            except (OSError, ValueError):
+                return False
+
+        existing = sys.modules.get(name)
+        displaced = {}
+        if existing is not None and not _inside_root(existing):
+            for key in list(sys.modules):
+                if key == name or key.startswith(name + "."):
+                    displaced[key] = sys.modules.pop(key)
+            importlib.invalidate_caches()
+        try:
+            imported = importlib.import_module(name)
+            if not _inside_root(imported):
+                raise ImportError(
+                    "module %s resolved outside explicit source root %s: %s"
+                    % (name, root, getattr(imported, "__file__", None))
+                )
+            selected = _select_backend(imported)
+            if selected is None:
+                raise ImportError(
+                    "module %s has no flash_attn entry points" % name)
+            return selected
+        except Exception as exc:
+            _remember_error("import local %s from %s failed: %s" % (name, root, exc))
+            for key in list(sys.modules):
+                if key == name or key.startswith(name + "."):
+                    sys.modules.pop(key, None)
+            sys.modules.update(displaced)
     return None
 
 
@@ -454,6 +490,18 @@ def _official_packed_build_dir(root: pathlib.Path) -> str:
     digest_key += "|direct_packed_forward=6"
     digest = hashlib.sha256(digest_key.encode("utf-8")).hexdigest()[:16]
     return _default_build_root("flashattn_jittor", "official_flash_attn_packed", digest)
+
+
+def _official_import_identity(kind: str, build_dir: str, module_name: str,
+                              generation: Optional[int] = None) -> str:
+    """Identify one official build without changing its extension name."""
+    if generation is None:
+        generation = _BACKEND_LOAD_GENERATION
+    build_digest = pathlib.Path(build_dir).name
+    safe_kind = "".join(ch if ch.isalnum() else "_" for ch in kind)
+    namespace = "_jittor_flash_%s_%s_g%d" % (
+        safe_kind, build_digest, int(generation))
+    return namespace + "." + module_name
 
 
 def _ensure_official_cutlass(root: pathlib.Path) -> bool:
@@ -1620,6 +1668,8 @@ def _load_official_packed_flash_attention(root: pathlib.Path, low_level: ModuleT
             extra_cuda_cflags=cuda_cflags,
             extra_ldflags=[low_path, "-Xlinker", "-rpath", "-Xlinker", low_dir],
             build_directory=build_dir,
+            import_identity=_official_import_identity(
+                "official-packed", build_dir, module_name),
             verbose=_verbose(),
         )
     except Exception as exc:
@@ -1653,6 +1703,8 @@ def _load_official_flash_attention(root: pathlib.Path) -> Optional[ModuleType]:
             extra_cflags=cflags,
             extra_cuda_cflags=cuda_cflags,
             build_directory=build_dir,
+            import_identity=_official_import_identity(
+                "official-forward", build_dir, module_name),
             verbose=_verbose(),
             force=_truthy(os.environ.get("JITTOR_FLASH_ATTN_FORCE_BUILD")),
         )
@@ -1837,19 +1889,143 @@ def _remember_error(message: str) -> None:
     _log(message)
 
 
+_BACKEND_ENV_NAMES = _SRC_ENVS + (
+    _MODULE_ENV,
+    "JITTOR_FLASH_ATTN_JITTOR",
+    "JITTOR_FLASHATTN_JITTOR",
+    "JITTOR_FLASH_ATTN_JITTOR_PROJECT_ROOT",
+    "JITTOR_TORCH_PROJECT_ROOT",
+    "TRELLIS2_ROOT",
+    "TRELLIS_ROOT",
+    "JITTOR_FLASH_ATTN_HEAD_DIMS",
+    "FLASH_ATTN_HEAD_DIMS",
+    "JITTOR_FLASH_ATTN_DTYPES",
+    "FLASH_ATTN_DTYPES",
+    "JITTOR_FLASH_ATTN_FORCE_BUILD",
+    "JITTOR_FLASH_ATTN_JITTOR_FORCE_BUILD",
+    "JITTOR_FLASH_ATTN_DIRECT_ADAPTER",
+    "JITTOR_FLASH_ATTN_DIRECT_PACKED",
+    "JITTOR_FLASH_ATTN_FUSED_PACKED_SPLIT",
+    "JITTOR_HOME",
+    "JTCUDA",
+    "CUDA_HOME",
+    "nvcc_path",
+    "JITTOR_TORCH_RUNTIME_ROOT",
+    "JITTOR_TORCH_EXTENSIONS_DIR",
+    "TORCH_EXTENSIONS_DIR",
+    "TORCH_CUDA_ARCH_LIST",
+    "CC",
+    "CXX",
+)
+
+
+def _backend_environment_key() -> Tuple[Tuple[str, Optional[str]], ...]:
+    return tuple((name, os.environ.get(name)) for name in _BACKEND_ENV_NAMES)
+
+
+def _backend_config_key() -> Tuple[object, ...]:
+    return (
+        _backend_environment_key(),
+        tuple(candidate_source_roots()),
+    )
+
+
+def backend_capability_miss(backend: Optional[ModuleType], head_dim: int,
+                            dtype: str) -> Optional[str]:
+    if backend is None:
+        return "no_backend"
+    if not getattr(backend, "_flashattn_jittor_official", False):
+        return None
+    dims = {int(x) for x in getattr(backend, "_flashattn_jittor_head_dims", ())}
+    dtypes = set(getattr(backend, "_flashattn_jittor_dtypes", ()))
+    if dims and int(head_dim) not in dims:
+        return "backend_head_dim"
+    expected_dtype = {"float16": "fp16", "bfloat16": "bf16"}.get(str(dtype))
+    if dtypes and expected_dtype is not None and expected_dtype not in dtypes:
+        return "backend_dtype"
+    return None
+
+
+def _merge_capability_env_list(primary: str, fallback: str, item: object) -> None:
+    raw = os.environ.get(primary) or os.environ.get(fallback)
+    if not raw:
+        os.environ[primary] = str(item)
+        return
+    if raw.strip().lower() in ("all", "full", "*"):
+        return
+    items = [part.strip() for part in raw.replace(";", ",").split(",")
+             if part.strip()]
+    if str(item) not in items:
+        items.append(str(item))
+        os.environ[primary] = ",".join(items)
+
+
+def _ensure_capability_compile_env(head_dim: int, dtype: str) -> None:
+    _merge_capability_env_list(
+        "JITTOR_FLASH_ATTN_HEAD_DIMS", "FLASH_ATTN_HEAD_DIMS", int(head_dim))
+    dtype_name = str(dtype).strip().lower()
+    if dtype_name in ("float16", "fp16", "half"):
+        compile_dtype = "fp16"
+    elif dtype_name in ("bfloat16", "bf16"):
+        compile_dtype = "bf16"
+    else:
+        return
+    _merge_capability_env_list(
+        "JITTOR_FLASH_ATTN_DTYPES", "FLASH_ATTN_DTYPES", compile_dtype)
+
+
+def load_backend_for(head_dim: int, dtype: str) -> Tuple[Optional[ModuleType], Optional[str]]:
+    """Load a backend containing the requested official kernel capability."""
+    # Capability env, build digest, source selection, module metadata and cache
+    # key all consume the same process-global environment. Keep the entire
+    # transaction under the loader lock so concurrent first-use requests cannot
+    # publish a partially expanded or internally inconsistent backend.
+    with _BACKEND_LOAD_LOCK:
+        _ensure_capability_compile_env(head_dim, dtype)
+        backend = load_backend()
+        miss = backend_capability_miss(backend, head_dim, dtype)
+        if miss in ("backend_head_dim", "backend_dtype"):
+            # Official build directories include dims/dtypes in their digest,
+            # so a forced reload incrementally builds the expanded module.
+            backend = load_backend(force=True)
+            miss = backend_capability_miss(backend, head_dim, dtype)
+        return backend, miss
+
+
 def load_backend(force: bool = False) -> Optional[ModuleType]:
+    # Extension compilation and sys.modules replacement are process-global.
+    # Other threads wait for the first loader; same-thread recursive hooks use
+    # the RLock and retain the existing _LOADING recursion guard below.
+    with _BACKEND_LOAD_LOCK:
+        return _load_backend_locked(force)
+
+
+def _load_backend_locked(force: bool = False) -> Optional[ModuleType]:
     """Return the optional native flashattn_jittor backend module, if available."""
-    global _BACKEND, _BACKEND_NAME, _LAST_ERROR, _LOADING
+    global _BACKEND, _BACKEND_NAME, _BACKEND_CONFIG_KEY
+    global _BACKEND_LOAD_GENERATION, _LAST_ERROR, _LOADING
     if not enabled():
         _BACKEND = None
         _BACKEND_NAME = "disabled"
+        _BACKEND_CONFIG_KEY = _backend_config_key()
         return None
     if _BACKEND is not _UNSET and not force:
-        return _BACKEND
+        cached_env_key = (
+            _BACKEND_CONFIG_KEY[0] if _BACKEND_CONFIG_KEY is not None else None
+        )
+        if _backend_environment_key() == cached_env_key:
+            if _BACKEND is not None:
+                return _BACKEND
+            # A failed lookup also tracks auto-discovered source roots, so a
+            # source tree appearing later in the process invalidates the miss.
+            if _backend_config_key() == _BACKEND_CONFIG_KEY:
+                return None
+        force = True
     if _LOADING:
         return None
 
     _LOADING = True
+    _BACKEND_LOAD_GENERATION += 1
     _LAST_ERROR = None
     try:
         explicit_roots = explicit_source_roots()
@@ -1886,6 +2062,7 @@ def load_backend(force: bool = False) -> Optional[ModuleType]:
             _LAST_ERROR = "no flashattn_jittor source or module found; last error: " + _LAST_ERROR
         return None
     finally:
+        _BACKEND_CONFIG_KEY = _backend_config_key()
         _LOADING = False
 
 

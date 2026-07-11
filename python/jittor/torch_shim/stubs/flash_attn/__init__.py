@@ -26,6 +26,7 @@ Deployed by `jittor.torch_shim.deploy` like the torchvision/torchaudio stubs,
 and also registered into `sys.modules['flash_attn']` by the torch shim package
 body so the `PYTHONPATH=.../python` (no-deploy) dev flow works too.
 """
+import os
 from typing import Optional
 
 import torch
@@ -41,6 +42,7 @@ _jittor_flash_attn_stub = True
 _jittor_flash_attn_backend = "math"
 _NATIVE_FUNCTION_CACHE = {}
 _NATIVE_MISSING = object()
+_TRUTHY = {"1", "true", "yes", "on"}
 
 __all__ = [
     "flash_attn_func",
@@ -58,13 +60,26 @@ __all__ = [
 def _native_function(name):
     """Return a flashattn_jittor entry point, or None for math fallback."""
     global _jittor_flash_attn_backend
-    cached = _NATIVE_FUNCTION_CACHE.get(name, _NATIVE_MISSING)
-    if cached is not _NATIVE_MISSING:
-        return cached
     if _flashattn_jittor is None:
-        _NATIVE_FUNCTION_CACHE[name] = None
+        if _native_required():
+            raise RuntimeError(
+                "JITTOR_FLASH_ATTN_JITTOR_REQUIRED is set, but "
+                "jittor.torch_shim.flashattn_jittor could not be imported"
+            )
+        _NATIVE_FUNCTION_CACHE[name] = (None, None)
         return None
     backend = _flashattn_jittor.load_backend()
+    cached = _NATIVE_FUNCTION_CACHE.get(name, _NATIVE_MISSING)
+    if cached is not _NATIVE_MISSING and cached[0] is backend:
+        if backend is None and _flashattn_jittor.required():
+            raise RuntimeError(
+                "JITTOR_FLASH_ATTN_JITTOR_REQUIRED is set, but native "
+                "flashattn_jittor is unavailable: %s"
+                % (_flashattn_jittor.last_error() or "unknown error")
+            )
+        current = getattr(backend, name, None) if backend is not None else None
+        if cached[1] is current:
+            return cached[1]
     if backend is None:
         _jittor_flash_attn_backend = _flashattn_jittor.backend_name()
         if _flashattn_jittor.required():
@@ -73,20 +88,45 @@ def _native_function(name):
                 "flashattn_jittor is unavailable: %s"
                 % (_flashattn_jittor.last_error() or "unknown error")
             )
-        _NATIVE_FUNCTION_CACHE[name] = None
+        _NATIVE_FUNCTION_CACHE[name] = (None, None)
         return None
     _jittor_flash_attn_backend = _flashattn_jittor.backend_name()
     fn = getattr(backend, name, None)
     if callable(fn):
-        _NATIVE_FUNCTION_CACHE[name] = fn
+        _NATIVE_FUNCTION_CACHE[name] = (backend, fn)
         return fn
     if _flashattn_jittor.required():
         raise RuntimeError(
             "native flashattn_jittor backend %s does not provide %s"
             % (_jittor_flash_attn_backend, name)
         )
-    _NATIVE_FUNCTION_CACHE[name] = None
+    _NATIVE_FUNCTION_CACHE[name] = (backend, None)
     return None
+
+
+def _native_required():
+    if _flashattn_jittor is not None:
+        return bool(_flashattn_jittor.required())
+    return any(
+        str(os.environ.get(name) or "").strip().lower() in _TRUTHY
+        for name in (
+            "JITTOR_FLASH_ATTN_JITTOR_REQUIRED",
+            "JITTOR_FLASHATTN_JITTOR_REQUIRED",
+        )
+    )
+
+
+def _call_native(name, *args, **kwargs):
+    fn = _native_function(name)
+    if fn is None:
+        return None
+    out = fn(*args, **kwargs)
+    if out is None and _native_required():
+        raise RuntimeError(
+            "native flashattn_jittor backend %s returned no output for %s"
+            % (flashattn_jittor_backend(), name)
+        )
+    return out
 
 
 def flashattn_jittor_backend():
@@ -153,13 +193,12 @@ def flash_attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_k,
                            dropout_p=0.0, softmax_scale=None, causal=False,
                            *args, **kwargs):
     """q,k,v: [total, H, C]; cu_seqlens_*: [B+1] int32. -> [total, H, Cv]."""
-    fn = _native_function("flash_attn_varlen_func")
-    if fn is not None:
-        out = fn(q, k, v, cu_seqlens_q, cu_seqlens_k,
-                 max_seqlen_q, max_seqlen_k, dropout_p,
-                 softmax_scale, causal, *args, **kwargs)
-        if out is not None:
-            return out
+    out = _call_native(
+        "flash_attn_varlen_func", q, k, v, cu_seqlens_q, cu_seqlens_k,
+        max_seqlen_q, max_seqlen_k, dropout_p, softmax_scale, causal,
+        *args, **kwargs)
+    if out is not None:
+        return out
     return _varlen_core(q, k, v, cu_seqlens_q, cu_seqlens_k, causal, softmax_scale)
 
 
@@ -167,12 +206,11 @@ def flash_attn_varlen_qkvpacked_func(qkv, cu_seqlens, max_seqlen,
                                      dropout_p=0.0, softmax_scale=None,
                                      causal=False, *args, **kwargs):
     """qkv: [total, 3, H, C]; cu_seqlens: [B+1] int32. -> [total, H, C]."""
-    fn = _native_function("flash_attn_varlen_qkvpacked_func")
-    if fn is not None:
-        out = fn(qkv, cu_seqlens, max_seqlen, dropout_p,
-                 softmax_scale, causal, *args, **kwargs)
-        if out is not None:
-            return out
+    out = _call_native(
+        "flash_attn_varlen_qkvpacked_func", qkv, cu_seqlens, max_seqlen,
+        dropout_p, softmax_scale, causal, *args, **kwargs)
+    if out is not None:
+        return out
     q = qkv[:, 0]
     k = qkv[:, 1]
     v = qkv[:, 2]
@@ -184,13 +222,12 @@ def flash_attn_varlen_kvpacked_func(q, kv, cu_seqlens_q, cu_seqlens_k,
                                     dropout_p=0.0, softmax_scale=None,
                                     causal=False, *args, **kwargs):
     """q: [total_q, H, C]; kv: [total_kv, 2, H, C]. -> [total_q, H, Cv]."""
-    fn = _native_function("flash_attn_varlen_kvpacked_func")
-    if fn is not None:
-        out = fn(q, kv, cu_seqlens_q, cu_seqlens_k,
-                 max_seqlen_q, max_seqlen_k, dropout_p,
-                 softmax_scale, causal, *args, **kwargs)
-        if out is not None:
-            return out
+    out = _call_native(
+        "flash_attn_varlen_kvpacked_func", q, kv, cu_seqlens_q,
+        cu_seqlens_k, max_seqlen_q, max_seqlen_k, dropout_p,
+        softmax_scale, causal, *args, **kwargs)
+    if out is not None:
+        return out
     k = kv[:, 0]
     v = kv[:, 1]
     return _varlen_core(q, k, v, cu_seqlens_q, cu_seqlens_k, causal, softmax_scale)
@@ -211,22 +248,22 @@ def _dense_core(q, k, v, causal, softmax_scale):
 def flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False,
                     *args, **kwargs):
     """q,k,v: [B, L, H, C]. -> [B, L, H, Cv]."""
-    fn = _native_function("flash_attn_func")
-    if fn is not None:
-        out = fn(q, k, v, dropout_p, softmax_scale, causal, *args, **kwargs)
-        if out is not None:
-            return out
+    out = _call_native(
+        "flash_attn_func", q, k, v, dropout_p, softmax_scale, causal,
+        *args, **kwargs)
+    if out is not None:
+        return out
     return _dense_core(q, k, v, causal, softmax_scale)
 
 
 def flash_attn_qkvpacked_func(qkv, dropout_p=0.0, softmax_scale=None,
                               causal=False, *args, **kwargs):
     """qkv: [B, L, 3, H, C]. -> [B, L, H, C]."""
-    fn = _native_function("flash_attn_qkvpacked_func")
-    if fn is not None:
-        out = fn(qkv, dropout_p, softmax_scale, causal, *args, **kwargs)
-        if out is not None:
-            return out
+    out = _call_native(
+        "flash_attn_qkvpacked_func", qkv, dropout_p, softmax_scale,
+        causal, *args, **kwargs)
+    if out is not None:
+        return out
     q = qkv[:, :, 0]
     k = qkv[:, :, 1]
     v = qkv[:, :, 2]
@@ -236,11 +273,11 @@ def flash_attn_qkvpacked_func(qkv, dropout_p=0.0, softmax_scale=None,
 def flash_attn_kvpacked_func(q, kv, dropout_p=0.0, softmax_scale=None,
                              causal=False, *args, **kwargs):
     """q: [B, Lq, H, C]; kv: [B, Lkv, 2, H, C]. -> [B, Lq, H, Cv]."""
-    fn = _native_function("flash_attn_kvpacked_func")
-    if fn is not None:
-        out = fn(q, kv, dropout_p, softmax_scale, causal, *args, **kwargs)
-        if out is not None:
-            return out
+    out = _call_native(
+        "flash_attn_kvpacked_func", q, kv, dropout_p, softmax_scale,
+        causal, *args, **kwargs)
+    if out is not None:
+        return out
     k = kv[:, :, 0]
     v = kv[:, :, 1]
     return _dense_core(q, k, v, causal, softmax_scale)

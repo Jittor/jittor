@@ -11,8 +11,10 @@ Run:
     python -m jittor.test.test_torch_cpp_extension
 """
 import os
+import sys
 import tempfile
 import unittest
+from types import ModuleType, SimpleNamespace
 from unittest import mock
 
 import jittor as jt
@@ -81,6 +83,85 @@ class TestTorchCppExtensionArchFlags(unittest.TestCase):
                 _cuda_arch_flags(fake_jittor, fake_compiler),
                 ["-arch=compute_75", "-code=sm_75"],
             )
+
+
+class TestTorchCppExtensionImportIdentity(unittest.TestCase):
+    def test_invalid_identity_fails_before_build(self):
+        from jittor.torch_shim import cpp_extension
+        from jittor.torch_shim.cpp_extension import torch_utils
+
+        with mock.patch.object(cpp_extension, "build") as build:
+            with self.assertRaisesRegex(ValueError, "must be a dotted"):
+                torch_utils.load(
+                    name="same_build_name",
+                    sources=["unused.cpp"],
+                    import_identity="invalid_identity",
+                )
+        build.assert_not_called()
+
+    def test_distinct_identities_load_distinct_modules_with_same_build_name(self):
+        from jittor.torch_shim import flashattn_jittor
+        from jittor.torch_shim import cpp_extension
+        from jittor.torch_shim.cpp_extension import torch_utils
+
+        build_name = "flash_attn_2_cuda_jittor"
+        capabilities = (
+            ("h32-fp16", "a1"),
+            ("h32-h64-fp16", "b2"),
+            ("h32-h64-fp16-bf16", "c3"),
+        )
+        imported_names = []
+        created_modules = []
+
+        class Loader:
+            def exec_module(self, module):
+                return None
+
+        def fake_spec(name, path):
+            imported_names.append(name)
+            return SimpleNamespace(name=name, path=path, loader=Loader())
+
+        def fake_module_from_spec(spec):
+            module = ModuleType(spec.name)
+            module.__file__ = spec.path
+            created_modules.append(module)
+            return module
+
+        module_keys = []
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(cpp_extension, "cfg", return_value={"ext_suffix": ".so"}), \
+                mock.patch.object(cpp_extension, "build") as build, \
+                mock.patch.object(torch_utils.importlib.util, "spec_from_file_location",
+                                  side_effect=fake_spec), \
+                mock.patch.object(torch_utils.importlib.util, "module_from_spec",
+                                  side_effect=fake_module_from_spec):
+            try:
+                modules = []
+                for generation, (capability, build_digest) in enumerate(
+                        capabilities, start=1):
+                    build_dir = os.path.join(tmp, build_digest)
+                    identity = flashattn_jittor._official_import_identity(
+                        capability, build_dir, build_name, generation=generation)
+                    import_name = torch_utils._extension_import_name(
+                        build_name, identity)
+                    module_keys.append(import_name)
+                    modules.append(torch_utils.load(
+                        name=build_name,
+                        sources=[os.path.join(tmp, "probe.cpp")],
+                        build_directory=build_dir,
+                        import_identity=identity,
+                    ))
+            finally:
+                for key in module_keys:
+                    sys.modules.pop(key, None)
+
+        self.assertEqual(len({id(module) for module in modules}), 3)
+        self.assertEqual(len({module.__file__ for module in modules}), 3)
+        self.assertEqual(imported_names, module_keys)
+        self.assertTrue(all(name.endswith("." + build_name)
+                            for name in imported_names))
+        self.assertEqual([call.kwargs["name"] for call in build.call_args_list],
+                         [build_name] * 3)
 
 
 def _torch_cpp_extension_available():

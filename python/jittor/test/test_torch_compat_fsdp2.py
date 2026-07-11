@@ -4,12 +4,428 @@ Run:
     python -m jittor.test.test_torch_compat_fsdp2
 """
 import unittest
+import types
+from unittest import mock
 import numpy as np
 import jittor as torch
 import jittor as jt
 
 
 class TestFSDP2Compat(unittest.TestCase):
+    def _fake_fsdp_state(self, values):
+        from jittor import torch_fsdp2_compat as fsdp
+
+        owner = types.SimpleNamespace()
+        entries = []
+        full_params = []
+        state = types.SimpleNamespace(
+            true_fsdp_initialized=True,
+            true_fsdp_flat=False,
+            true_fsdp_rank=0,
+            true_fsdp_world_size=1,
+            true_fsdp_unsharded=False,
+            true_fsdp_module=None,
+        )
+        for i, value in enumerate(values):
+            full = jt.array(np.asarray(value, dtype="float32"))
+            shard = jt.array(np.asarray(value, dtype="float32"))
+            attr = f"param_{i}"
+            entry = types.SimpleNamespace(
+                name=attr,
+                owner=owner,
+                attr=attr,
+                shape=tuple(shard.shape),
+                dtype=shard.dtype,
+                numel=int(shard.numel()),
+                padded_numel=int(shard.numel()),
+                shard_numel=int(shard.numel()),
+                shard=shard,
+                full_param=full,
+                last_grad=None,
+                requires_grad=True,
+            )
+            entries.append(entry)
+            full_params.append(full)
+            setattr(owner, attr, shard)
+        state.true_fsdp_params = entries
+        for entry in entries:
+            fsdp._mark_fsdp_param_var(entry.shard, state, entry, "shard")
+        return fsdp, state, entries, full_params
+
+    def _fake_flat_fsdp_state(self, values):
+        from jittor import torch_fsdp2_compat as fsdp
+
+        owner = types.SimpleNamespace()
+        arrays = [np.asarray(value, dtype="float32") for value in values]
+        flat = jt.array(np.concatenate([value.reshape(-1) for value in arrays]))
+        state = types.SimpleNamespace(
+            true_fsdp_initialized=True,
+            true_fsdp_flat=True,
+            true_fsdp_rank=0,
+            true_fsdp_world_size=1,
+            true_fsdp_unsharded=False,
+            true_fsdp_module=None,
+            true_fsdp_flat_total_numel=int(flat.numel()),
+            true_fsdp_flat_padded_numel=int(flat.numel()),
+            true_fsdp_flat_shard_numel=int(flat.numel()),
+            true_fsdp_flat_shard=flat,
+        )
+        entries = []
+        full_params = []
+        offset = 0
+        for i, value in enumerate(arrays):
+            full = jt.array(value)
+            attr = f"param_{i}"
+            entry = types.SimpleNamespace(
+                name=attr,
+                owner=owner,
+                attr=attr,
+                shape=tuple(value.shape),
+                dtype=full.dtype,
+                numel=int(value.size),
+                padded_numel=int(value.size),
+                shard_numel=int(value.size),
+                shard=None,
+                full_param=full,
+                flat_offset=offset,
+                last_grad=None,
+                requires_grad=True,
+            )
+            offset += int(value.size)
+            entries.append(entry)
+            full_params.append(full)
+        state.true_fsdp_params = entries
+        fsdp._mark_fsdp_param_var(flat, state, None, "flat_shard")
+        fsdp._refresh_flat_entry_shards(state)
+        for entry in entries:
+            setattr(owner, entry.attr, entry.shard)
+        return fsdp, state, entries, full_params
+
+    def test_fsdp_optimizer_skips_unused_and_zero_clears_pending_grad(self):
+        fsdp, _, entries, full = self._fake_fsdp_state(
+            ([1.0, 2.0], [3.0, 4.0]))
+        optimizer = torch.optim.AdamW(
+            [entry.shard for entry in entries], lr=0.01, weight_decay=0.2)
+        unused_before = entries[1].shard.numpy().copy()
+
+        def local_sync(state, grads, **kwargs):
+            return [grad.stop_grad() for grad in grads]
+
+        with mock.patch.object(
+                fsdp, "_sync_sharded_grads_from_full_grads",
+                side_effect=local_sync):
+            fsdp.fill_fsdp_optimizer_grads_from_grad_map(
+                [optimizer], {id(full[0]): jt.ones_like(full[0])})
+
+        self.assertIsNotNone(entries[0].shard.grad)
+        self.assertIsNone(entries[1].shard.grad)
+        optimizer.step()
+        np.testing.assert_array_equal(entries[1].shard.numpy(), unused_before)
+        self.assertNotIn(entries[1].shard, optimizer.state)
+        self.assertIsNotNone(entries[0].shard.grad)
+
+        optimizer.zero_grad(set_to_none=True)
+        self.assertIsNone(entries[0].shard.grad)
+        self.assertIsNone(entries[0].last_grad)
+        used_before_empty = entries[0].shard.numpy().copy()
+        optimizer.step()
+        np.testing.assert_array_equal(entries[0].shard.numpy(), used_before_empty)
+        self.assertEqual(optimizer.n_step, 1)
+        jt.sync_all(True)
+
+    def test_shared_fsdp_parameter_accumulates_once_for_two_optimizers(self):
+        fsdp, _, entries, full = self._fake_fsdp_state(([1.0, 2.0],))
+        first = torch.optim.AdamW([entries[0].shard], lr=0.01)
+        second = torch.optim.AdamW([entries[0].shard], lr=0.01)
+
+        def local_sync(state, grads, **kwargs):
+            return [grad.stop_grad() for grad in grads]
+
+        with mock.patch.object(
+                fsdp, "_sync_sharded_grads_from_full_grads",
+                side_effect=local_sync):
+            grad = jt.ones_like(full[0])
+            fsdp.fill_fsdp_optimizer_grads_from_grad_map(
+                [first, second], {id(full[0]): grad})
+            published = entries[0].shard.grad
+            self.assertIs(first.param_groups[0]["grads"][0], published)
+            self.assertIs(second.param_groups[0]["grads"][0], published)
+            fsdp.fill_fsdp_optimizer_grads_from_grad_map(
+                [first, second], {id(full[0]): grad})
+
+        self.assertIs(entries[0].shard.grad, published)
+        np.testing.assert_allclose(
+            published.numpy(), np.full(2, 2.0, dtype="float32"),
+            atol=0.0, rtol=0.0)
+        self.assertIs(first.param_groups[0]["grads"][0], published)
+        self.assertIs(second.param_groups[0]["grads"][0], published)
+        jt.sync_all(True)
+
+    def test_fsdp_adamw_two_steps_keep_flat_and_nonflat_trainable(self):
+        for factory in (self._fake_fsdp_state, self._fake_flat_fsdp_state):
+            fsdp, state, entries, full = factory(([1.0, 2.0], [3.0, 4.0]))
+            optimizer = torch.optim.AdamW(
+                [entry.shard for entry in entries], lr=0.01)
+
+            def local_sync(current_state, grads, **kwargs):
+                return [grad.reshape(entry.shard.shape).stop_grad()
+                        for entry, grad in zip(current_state.true_fsdp_params, grads)]
+
+            with mock.patch.object(
+                    fsdp, "_sync_sharded_grads_from_full_grads",
+                    side_effect=local_sync):
+                sum((param * param).sum() for param in full).backward()
+                optimizer.step()
+            self.assertTrue(all(not entry.shard.is_stop_grad()
+                                for entry in entries))
+            if state.true_fsdp_flat:
+                self.assertFalse(state.true_fsdp_flat_shard.is_stop_grad())
+
+            optimizer.zero_grad(set_to_none=True)
+            before_second = [entry.shard.numpy().copy() for entry in entries]
+            for entry in entries:
+                entry.full_param = entry.shard.reshape(entry.shape) * 1.0
+            with mock.patch.object(
+                    fsdp, "_sync_sharded_grads_from_full_grads",
+                    side_effect=local_sync):
+                sum((entry.full_param * entry.full_param).sum()
+                    for entry in entries).backward()
+                optimizer.step()
+            self.assertEqual(optimizer.n_step, 2)
+            self.assertTrue(all(not entry.shard.is_stop_grad()
+                                for entry in entries))
+            for before, entry in zip(before_second, entries):
+                self.assertGreater(
+                    float(np.abs(entry.shard.numpy() - before).max()), 0.0)
+            jt.sync_all(True)
+
+    def test_sharded_sgd_helper_keeps_parameters_trainable(self):
+        for factory in (self._fake_fsdp_state, self._fake_flat_fsdp_state):
+            fsdp, state, entries, _ = factory(([1.0, 2.0], [3.0, 4.0]))
+            module = types.SimpleNamespace(_fsdp_state=state)
+
+            def fake_sync(*args, **kwargs):
+                if state.true_fsdp_flat:
+                    state.true_fsdp_last_flat_grad = jt.ones_like(
+                        state.true_fsdp_flat_shard).stop_grad()
+                return [jt.ones_like(entry.shard).stop_grad()
+                        for entry in entries]
+
+            for _ in range(2):
+                before = [entry.shard.numpy().copy() for entry in entries]
+                with mock.patch.object(
+                        fsdp, "sync_sharded_grads", side_effect=fake_sync):
+                    fsdp.sharded_sgd_step(module, jt.array(0.0), lr=0.1)
+                self.assertTrue(all(not entry.shard.is_stop_grad()
+                                    for entry in entries))
+                for old, entry in zip(before, entries):
+                    self.assertGreater(
+                        float(np.abs(entry.shard.numpy() - old).max()), 0.0)
+            jt.sync_all(True)
+
+    def test_fsdp_sgd_momentum_state_is_serialized(self):
+        fsdp, _, entries, full = self._fake_fsdp_state(([1.0, 2.0],))
+        optimizer = torch.optim.SGD(
+            [entries[0].shard], lr=0.1, momentum=0.9)
+
+        def local_sync(state, grads, **kwargs):
+            return [grad.stop_grad() for grad in grads]
+
+        with mock.patch.object(
+                fsdp, "_sync_sharded_grads_from_full_grads",
+                side_effect=local_sync):
+            fsdp.fill_fsdp_optimizer_grads_from_grad_map(
+                [optimizer], {id(full[0]): jt.ones_like(full[0])})
+            optimizer.step()
+        state_dict = optimizer.state_dict()
+        self.assertEqual(set(state_dict["state"]), {0})
+        self.assertIn("momentum_buffer", state_dict["state"][0])
+        self.assertIn(entries[0].shard, optimizer.state)
+        jt.sync_all(True)
+
+    def test_flat_fsdp_preserves_frozen_parameter_state(self):
+        fsdp, state, entries, full = self._fake_flat_fsdp_state(
+            ([1.0, 2.0], [3.0, 4.0]))
+        entries[0].requires_grad = True
+        entries[1].requires_grad = False
+        full[1].stop_grad()
+        fsdp._refresh_flat_entry_shards(state)
+        self.assertFalse(entries[0].shard.is_stop_grad())
+        self.assertTrue(entries[1].shard.is_stop_grad())
+        frozen_before = entries[1].shard.numpy().copy()
+        optimizer = torch.optim.AdamW(
+            [entry.shard for entry in entries], lr=0.01, weight_decay=0.2)
+
+        def local_sync(current_state, grads, **kwargs):
+            return [grad.reshape(entry.shard.shape).stop_grad()
+                    for entry, grad in zip(current_state.true_fsdp_params, grads)]
+
+        with mock.patch.object(
+                fsdp, "_sync_sharded_grads_from_full_grads",
+                side_effect=local_sync):
+            fsdp.fill_fsdp_optimizer_grads_from_grad_map(
+                [optimizer], {id(full[0]): jt.ones_like(full[0])})
+            optimizer.step()
+        self.assertTrue(entries[1].shard.is_stop_grad())
+        np.testing.assert_array_equal(entries[1].shard.numpy(), frozen_before)
+        self.assertNotIn(entries[1].shard, optimizer.state)
+        self.assertEqual(optimizer.param_groups[0]["_torch_steps"], [1, 0])
+        jt.sync_all(True)
+
+    def test_unresharded_full_grad_is_visible_and_controls_step(self):
+        fsdp, state, entries, full = self._fake_fsdp_state(([1.0, 2.0],))
+        state.true_fsdp_unsharded = True
+        fsdp._mark_fsdp_param_var(full[0], state, entries[0], "full")
+        setattr(entries[0].owner, entries[0].attr, full[0])
+        optimizer = torch.optim.SGD([entries[0].shard], lr=0.1)
+
+        def local_sync(current_state, grads, **kwargs):
+            return [grad.stop_grad() for grad in grads]
+
+        with mock.patch.object(
+                fsdp, "_sync_sharded_grads_from_full_grads",
+                side_effect=local_sync):
+            fsdp.fill_fsdp_optimizer_grads_from_grad_map(
+                [optimizer], {id(full[0]): jt.ones_like(full[0])})
+        self.assertIsNotNone(full[0].grad)
+        public_grad = full[0].grad
+        optimizer.zero_grad(set_to_none=False)
+        self.assertIs(full[0].grad, public_grad)
+        np.testing.assert_array_equal(
+            public_grad.numpy(), np.zeros(2, dtype="float32"))
+        with mock.patch.object(
+                fsdp, "_sync_sharded_grads_from_full_grads",
+                side_effect=local_sync):
+            fsdp.fill_fsdp_optimizer_grads_from_grad_map(
+                [optimizer], {id(full[0]): jt.ones_like(full[0])})
+        self.assertIs(full[0].grad, public_grad)
+        full[0].grad.mul_(0.5)
+        optimizer.step()
+        np.testing.assert_allclose(
+            entries[0].shard.numpy(), np.array([0.95, 1.95], dtype="float32"),
+            atol=1e-6, rtol=1e-6)
+        jt.sync_all(True)
+
+    def test_unresharded_full_manual_grad_creates_optimizer_slot(self):
+        fsdp, state, entries, full = self._fake_fsdp_state(([1.0, 2.0],))
+        state.true_fsdp_unsharded = True
+        fsdp._mark_fsdp_param_var(full[0], state, entries[0], "full")
+        setattr(entries[0].owner, entries[0].attr, full[0])
+        optimizer = torch.optim.SGD([entries[0].shard], lr=0.1)
+
+        manual = jt.ones_like(full[0]).stop_grad()
+        full[0].grad = manual
+        self.assertNotIn("grads", optimizer.param_groups[0])
+        optimizer.step()
+        np.testing.assert_allclose(
+            entries[0].shard.numpy(), np.array([0.9, 1.9], dtype="float32"),
+            atol=1e-6, rtol=1e-6)
+        self.assertIs(full[0].grad, manual)
+        jt.sync_all(True)
+
+    def test_flat_fsdp_dynamic_requires_grad_persists_across_refresh(self):
+        fsdp, state, entries, full = self._fake_flat_fsdp_state(
+            ([1.0, 2.0], [3.0, 4.0]))
+        state.true_fsdp_unsharded = True
+        for entry, param in zip(entries, full):
+            entry.full_param = param
+            fsdp._mark_fsdp_param_var(param, state, entry, "full")
+            setattr(entry.owner, entry.attr, param)
+
+        full[0].requires_grad_(False)
+        self.assertFalse(entries[0].requires_grad)
+        self.assertTrue(entries[0].shard.is_stop_grad())
+        self.assertFalse(state.true_fsdp_flat_shard.is_stop_grad())
+        fsdp._refresh_flat_entry_shards(state)
+        self.assertTrue(entries[0].shard.is_stop_grad())
+        self.assertFalse(entries[1].shard.is_stop_grad())
+
+        full[0].requires_grad_(True)
+        self.assertTrue(entries[0].requires_grad)
+        fsdp._refresh_flat_entry_shards(state)
+        self.assertFalse(entries[0].shard.is_stop_grad())
+        self.assertFalse(state.true_fsdp_flat_shard.is_stop_grad())
+        jt.sync_all(True)
+
+    def test_shared_flat_fsdp_refreshes_every_optimizer_parameter(self):
+        fsdp, state, entries, full = self._fake_flat_fsdp_state(([1.0, 2.0],))
+        first = torch.optim.AdamW([entries[0].shard], lr=0.01)
+        second = torch.optim.AdamW([entries[0].shard], lr=0.01)
+
+        def local_sync(current_state, grads, **kwargs):
+            return [grad.reshape(entry.shard.shape).stop_grad()
+                    for entry, grad in zip(current_state.true_fsdp_params, grads)]
+
+        with mock.patch.object(
+                fsdp, "_sync_sharded_grads_from_full_grads",
+                side_effect=local_sync):
+            fsdp.fill_fsdp_optimizer_grads_from_grad_map(
+                [first, second], {id(full[0]): jt.ones_like(full[0])})
+            second.step()
+        second_momentum = second.param_groups[0]["m"][0]
+
+        entries[0].full_param = full[0]
+        with mock.patch.object(
+                fsdp, "_sync_sharded_grads_from_full_grads",
+                side_effect=local_sync):
+            fsdp.fill_fsdp_optimizer_grads_from_grad_map(
+                [first, second], {id(full[0]): jt.ones_like(full[0])})
+            first.step()
+
+        self.assertIs(first.param_groups[0]["params"][0], entries[0].shard)
+        self.assertIs(second.param_groups[0]["params"][0], entries[0].shard)
+        self.assertIs(second.state[entries[0].shard]["exp_avg"], second_momentum)
+        retained = second.param_groups[0]["grads"][0]
+        second.zero_grad(set_to_none=False)
+        self.assertIs(second.param_groups[0]["grads"][0], retained)
+        np.testing.assert_array_equal(
+            retained.numpy(), np.zeros_like(retained.numpy()))
+        jt.sync_all(True)
+
+    def test_mixed_fsdp_and_plain_adamw_advances_once(self):
+        fsdp, _, entries, full = self._fake_fsdp_state(([1.0, 2.0],))
+        plain = jt.array(np.array([3.0, 4.0], dtype="float32"))
+        optimizer = torch.optim.AdamW(
+            [entries[0].shard, plain], lr=0.01, weight_decay=0.1)
+
+        def local_sync(state, grads, **kwargs):
+            return [grad.stop_grad() for grad in grads]
+
+        with mock.patch.object(
+                fsdp, "_sync_sharded_grads_from_full_grads",
+                side_effect=local_sync):
+            ((full[0] * full[0]).sum() + (plain * plain).sum()).backward()
+            optimizer.step()
+
+        self.assertEqual(optimizer.n_step, 1)
+        self.assertEqual(optimizer.param_groups[0]["_torch_steps"], [1, 1])
+        self.assertIsNotNone(entries[0].shard.grad)
+        self.assertIsNotNone(plain.grad)
+        optimizer.zero_grad(set_to_none=True)
+        fsdp_before = entries[0].shard.numpy().copy()
+        plain_before = plain.numpy().copy()
+        optimizer.step()
+        np.testing.assert_array_equal(entries[0].shard.numpy(), fsdp_before)
+        np.testing.assert_array_equal(plain.numpy(), plain_before)
+        self.assertEqual(optimizer.n_step, 1)
+
+        fsdp, _, entries, full = self._fake_fsdp_state(([1.0, 2.0],))
+        plain = jt.array(np.array([3.0, 4.0], dtype="float32"))
+        native_optimizer = torch.optim.AdamW(
+            [entries[0].shard, plain], lr=0.01, weight_decay=0.1)
+        native_loss = (full[0] * full[0]).sum() + (plain * plain).sum()
+        with mock.patch.object(
+                fsdp, "_sync_sharded_grads_from_full_grads",
+                side_effect=local_sync):
+            returned = native_optimizer.step(native_loss)
+        self.assertIs(returned, native_loss)
+        self.assertEqual(native_optimizer.n_step, 1)
+        self.assertEqual(
+            native_optimizer.param_groups[0]["_torch_steps"], [1, 1])
+        self.assertIsNone(entries[0].shard.grad)
+        self.assertIsNone(plain.grad)
+        jt.sync_all(True)
+
     def test_single_rank_fully_shard_preserves_math_and_state(self):
         from torch.distributed.fsdp import (
             CPUOffloadPolicy,

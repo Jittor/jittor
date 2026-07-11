@@ -8,6 +8,12 @@ Run:  python -m jittor.test.test_torch_compat_attention
 """
 import unittest
 import os
+import pathlib
+import sys
+import tempfile
+import threading
+from types import ModuleType
+from unittest import mock
 import numpy as np
 import jittor as torch
 import jittor as jt
@@ -78,6 +84,373 @@ class TestSDPA(Base):
                     msg=f"sdpa dropout p=1 {dev}")
 
         both_devices(body)
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    def test_sdpa_fp16_training_fallback_mask_and_causal(self):
+        rng = np.random.RandomState(53)
+        q = rng.randn(2, 4, 8, 16).astype("float32")
+        k = rng.randn(2, 4, 8, 16).astype("float32")
+        v = rng.randn(2, 4, 8, 16).astype("float32")
+        keep = np.tril(np.ones((8, 8), dtype=bool))
+        additive = np.where(keep, 0.0, -np.inf).astype("float32")
+
+        with jt.flag_scope(use_cuda=1):
+            for name, kwargs, ref_mask in (
+                    ("causal", {"is_causal": True}, additive),
+                    ("bool_mask", {"attn_mask": jt.array(keep)}, additive)):
+                qv = jt.array(q).float16()
+                kv = jt.array(k).float16()
+                vv = jt.array(v).float16()
+                out = torch.nn.functional.scaled_dot_product_attention(
+                    qv, kv, vv, **kwargs)
+                grads = jt.grad(out.float32().sum(), [qv, kv, vv])
+                fetched = jt.fetch_sync([out.float32()] + [grad.float32() for grad in grads])
+                got_out, got_grads = fetched[0], fetched[1:]
+                self.assertEqual(str(out.dtype), "float16")
+                self.ac(got_out, _sdpa_ref(q, k, v, ref_mask),
+                        atol=3e-3, rtol=3e-3, msg="fp16 fallback " + name)
+                for tensor_name, got_grad in zip(("q", "k", "v"), got_grads):
+                    self.assertTrue(np.isfinite(got_grad).all(),
+                                    name + " " + tensor_name + " grad")
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    def test_required_flash_backend_returning_none_raises(self):
+        import flash_attn
+        from jittor.torch_shim import flashattn_jittor
+
+        q = jt.ones((1, 2, 4, 32), dtype="float16")
+        backend = ModuleType("required_flash_backend")
+        with jt.flag_scope(use_cuda=1), jt.no_grad(), \
+                mock.patch.object(flashattn_jittor, "load_backend_for",
+                                  return_value=(backend, None)), \
+                mock.patch.object(flashattn_jittor, "required", return_value=True), \
+                mock.patch.object(flash_attn, "flash_attn_func", return_value=None):
+            with self.assertRaisesRegex(RuntimeError, "returned no output"):
+                torch.nn.functional.scaled_dot_product_attention(q, q, q)
+
+    def test_flash_backend_reloads_for_expanded_capability(self):
+        from jittor.torch_shim import flashattn_jittor
+
+        first = ModuleType("first_flash_backend")
+        first._flashattn_jittor_official = True
+        first._flashattn_jittor_head_dims = (32,)
+        first._flashattn_jittor_dtypes = ("fp16",)
+        expanded = ModuleType("expanded_flash_backend")
+        expanded._flashattn_jittor_official = True
+        expanded._flashattn_jittor_head_dims = (32, 64)
+        expanded._flashattn_jittor_dtypes = ("fp16", "bf16")
+
+        capability_env = {
+            "JITTOR_FLASH_ATTN_HEAD_DIMS": "",
+            "FLASH_ATTN_HEAD_DIMS": "",
+            "JITTOR_FLASH_ATTN_DTYPES": "",
+            "FLASH_ATTN_DTYPES": "",
+        }
+        with mock.patch.dict(os.environ, capability_env, clear=False), \
+                mock.patch.object(
+                    flashattn_jittor, "load_backend",
+                    side_effect=(first, expanded)) as loader:
+            backend, miss = flashattn_jittor.load_backend_for(64, "bfloat16")
+        self.assertIs(backend, expanded)
+        self.assertIsNone(miss)
+        self.assertEqual(loader.call_args_list, [mock.call(), mock.call(force=True)])
+
+    def test_flash_success_cache_invalidates_on_build_environment_change(self):
+        from jittor.torch_shim import flashattn_jittor
+
+        old = ModuleType("cached_flash_backend")
+        replacement = ModuleType("replacement_flash_backend")
+        old_env = (("JTCUDA", "/old/cuda"),)
+        new_env = (("JTCUDA", "/new/cuda"),)
+        cached_key = (old_env, ("/flash/source",))
+        current_key = (new_env, ("/flash/source",))
+        import_identities = []
+
+        def reload_source(root):
+            self.assertEqual(root, "/flash/source")
+            import_identities.append(flashattn_jittor._official_import_identity(
+                "official-forward", "/extensions/0123456789abcdef",
+                "flash_attn_2_cuda_jittor"))
+            return replacement
+
+        with mock.patch.object(flashattn_jittor, "_BACKEND", old), \
+                mock.patch.object(flashattn_jittor, "_BACKEND_NAME", "cached"), \
+                mock.patch.object(flashattn_jittor, "_BACKEND_CONFIG_KEY", cached_key), \
+                mock.patch.object(flashattn_jittor, "_BACKEND_LOAD_GENERATION", 11), \
+                mock.patch.object(flashattn_jittor, "_LOADING", False), \
+                mock.patch.object(flashattn_jittor, "enabled", return_value=True), \
+                mock.patch.object(flashattn_jittor, "_backend_environment_key",
+                                  return_value=new_env), \
+                mock.patch.object(flashattn_jittor, "_backend_config_key",
+                                  return_value=current_key), \
+                mock.patch.object(flashattn_jittor, "explicit_source_roots",
+                                  return_value=["/flash/source"]), \
+                mock.patch.object(flashattn_jittor, "_load_from_source_root",
+                                  side_effect=reload_source) as loader:
+            backend = flashattn_jittor.load_backend()
+            generation = flashattn_jittor._BACKEND_LOAD_GENERATION
+
+        self.assertIs(backend, replacement)
+        self.assertEqual(loader.call_count, 1)
+        self.assertEqual(generation, 12)
+        self.assertEqual(import_identities, [
+            flashattn_jittor._official_import_identity(
+                "official-forward", "/extensions/0123456789abcdef",
+                "flash_attn_2_cuda_jittor", generation=12)
+        ])
+
+    def test_flash_explicit_python_source_switches_module_root(self):
+        from jittor.torch_shim import flashattn_jittor
+
+        module_name = "flashattn_jittor"
+        old_modules = {
+            key: value for key, value in sys.modules.items()
+            if key == module_name or key.startswith(module_name + ".")
+        }
+        old_path = list(sys.path)
+        try:
+            for key in old_modules:
+                sys.modules.pop(key, None)
+            with tempfile.TemporaryDirectory() as tmp:
+                base = pathlib.Path(tmp)
+                roots = []
+                for label in ("A", "B"):
+                    root = base / label
+                    package = root / module_name
+                    package.mkdir(parents=True)
+                    (package / "__init__.py").write_text(
+                        "ORIGIN = %r\n"
+                        "def flash_attn_func(*args, **kwargs):\n"
+                        "    return ORIGIN\n" % label,
+                        encoding="utf-8",
+                    )
+                    roots.append(root)
+
+                with mock.patch.object(flashattn_jittor, "_BACKEND",
+                                       flashattn_jittor._UNSET), \
+                        mock.patch.object(flashattn_jittor, "_BACKEND_NAME", "math"), \
+                        mock.patch.object(flashattn_jittor, "_BACKEND_CONFIG_KEY", None), \
+                        mock.patch.object(flashattn_jittor, "_BACKEND_LOAD_GENERATION", 0), \
+                        mock.patch.object(flashattn_jittor, "_LOADING", False), \
+                        mock.patch.dict(os.environ, {
+                            "JITTOR_FLASH_ATTN_JITTOR_SRC": os.fspath(roots[0]),
+                        }, clear=False):
+                    first = flashattn_jittor.load_backend(force=True)
+                    os.environ["JITTOR_FLASH_ATTN_JITTOR_SRC"] = os.fspath(roots[1])
+                    second = flashattn_jittor.load_backend()
+
+                self.assertEqual(first.ORIGIN, "A")
+                self.assertEqual(second.ORIGIN, "B")
+                self.assertIsNot(first, second)
+                self.assertEqual(
+                    os.path.commonpath((
+                        os.fspath(pathlib.Path(second.__file__).resolve()),
+                        os.fspath(roots[1].resolve()),
+                    )),
+                    os.fspath(roots[1].resolve()),
+                )
+        finally:
+            for key in list(sys.modules):
+                if key == module_name or key.startswith(module_name + "."):
+                    sys.modules.pop(key, None)
+            sys.modules.update(old_modules)
+            sys.path[:] = old_path
+
+    def test_flash_backend_load_is_single_flight(self):
+        from jittor.torch_shim import flashattn_jittor
+
+        backend = ModuleType("single_flight_backend")
+        backend.flash_attn_func = lambda *args, **kwargs: "ok"
+        entered = threading.Event()
+        release = threading.Event()
+        second_started = threading.Event()
+        results = []
+        errors = []
+
+        def slow_load(root):
+            entered.set()
+            if not release.wait(timeout=5):
+                raise RuntimeError("test loader timed out")
+            return backend
+
+        def run(force, started=None):
+            if started is not None:
+                started.set()
+            try:
+                results.append(flashattn_jittor.load_backend(force=force))
+            except Exception as exc:
+                errors.append(exc)
+
+        env_key = (("test", "stable"),)
+        config_key = (env_key, ("/single/source",))
+        with mock.patch.object(flashattn_jittor, "_BACKEND",
+                               flashattn_jittor._UNSET), \
+                mock.patch.object(flashattn_jittor, "_BACKEND_NAME", "math"), \
+                mock.patch.object(flashattn_jittor, "_BACKEND_CONFIG_KEY", None), \
+                mock.patch.object(flashattn_jittor, "_BACKEND_LOAD_GENERATION", 0), \
+                mock.patch.object(flashattn_jittor, "_LOADING", False), \
+                mock.patch.object(flashattn_jittor, "enabled", return_value=True), \
+                mock.patch.object(flashattn_jittor, "_backend_environment_key",
+                                  return_value=env_key), \
+                mock.patch.object(flashattn_jittor, "_backend_config_key",
+                                  return_value=config_key), \
+                mock.patch.object(flashattn_jittor, "explicit_source_roots",
+                                  return_value=["/single/source"]), \
+                mock.patch.object(flashattn_jittor, "_load_from_source_root",
+                                  side_effect=slow_load) as loader:
+            first = threading.Thread(target=run, args=(True,))
+            second = threading.Thread(target=run, args=(False, second_started))
+            first.start()
+            self.assertTrue(entered.wait(timeout=2))
+            second.start()
+            self.assertTrue(second_started.wait(timeout=2))
+            second.join(timeout=0.05)
+            self.assertTrue(second.is_alive(), "second loader must wait")
+            release.set()
+            first.join(timeout=5)
+            second.join(timeout=5)
+
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(loader.call_count, 1)
+        self.assertEqual(len(results), 2)
+        self.assertTrue(all(item is backend for item in results))
+
+    def test_flash_capability_expansion_is_one_locked_transaction(self):
+        from jittor.torch_shim import flashattn_jittor
+
+        entered = threading.Event()
+        release = threading.Event()
+        second_started = threading.Event()
+        snapshots = []
+        results = []
+        errors = []
+
+        def parse(name):
+            return tuple(part for part in os.environ.get(name, "").split(",")
+                         if part)
+
+        def slow_load(force=False):
+            dims = tuple(int(part) for part in parse(
+                "JITTOR_FLASH_ATTN_HEAD_DIMS"))
+            dtypes = parse("JITTOR_FLASH_ATTN_DTYPES")
+            snapshots.append((dims, dtypes, force))
+            backend = ModuleType("capability_" + "_".join(map(str, dims)))
+            backend._flashattn_jittor_official = True
+            backend._flashattn_jittor_head_dims = dims
+            backend._flashattn_jittor_dtypes = dtypes
+            if len(snapshots) == 1:
+                entered.set()
+                if not release.wait(timeout=5):
+                    raise RuntimeError("test capability loader timed out")
+            return backend
+
+        def run(dim, dtype, started=None):
+            if started is not None:
+                started.set()
+            try:
+                results.append(flashattn_jittor.load_backend_for(dim, dtype))
+            except Exception as exc:
+                errors.append(exc)
+
+        capability_env = {
+            "JITTOR_FLASH_ATTN_HEAD_DIMS": "",
+            "FLASH_ATTN_HEAD_DIMS": "",
+            "JITTOR_FLASH_ATTN_DTYPES": "",
+            "FLASH_ATTN_DTYPES": "",
+        }
+        with mock.patch.dict(os.environ, capability_env, clear=False), \
+                mock.patch.object(flashattn_jittor, "load_backend",
+                                  side_effect=slow_load):
+            first = threading.Thread(target=run, args=(32, "float16"))
+            second = threading.Thread(
+                target=run, args=(64, "bfloat16", second_started))
+            first.start()
+            self.assertTrue(entered.wait(timeout=2))
+            second.start()
+            self.assertTrue(second_started.wait(timeout=2))
+            second.join(timeout=0.05)
+            self.assertTrue(second.is_alive(),
+                            "second capability request must wait for the build")
+            self.assertEqual(os.environ["JITTOR_FLASH_ATTN_HEAD_DIMS"], "32")
+            self.assertEqual(os.environ["JITTOR_FLASH_ATTN_DTYPES"], "fp16")
+            release.set()
+            first.join(timeout=5)
+            second.join(timeout=5)
+            final_dims = set(parse("JITTOR_FLASH_ATTN_HEAD_DIMS"))
+            final_dtypes = set(parse("JITTOR_FLASH_ATTN_DTYPES"))
+
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(len(results), 2)
+        self.assertTrue(all(miss is None for _, miss in results))
+        self.assertEqual(final_dims, {"32", "64"})
+        self.assertEqual(final_dtypes, {"fp16", "bf16"})
+        self.assertEqual(snapshots[0][:2], ((32,), ("fp16",)))
+        self.assertEqual(snapshots[1][:2], ((32, 64), ("fp16", "bf16")))
+
+    def test_flash_stub_function_cache_tracks_backend_instance(self):
+        import flash_attn
+
+        first = ModuleType("first_flash_backend")
+        second = ModuleType("second_flash_backend")
+        first.flash_attn_func = lambda *args, **kwargs: "first"
+        second.flash_attn_func = lambda *args, **kwargs: "second"
+        state = {"backend": first}
+        loader = ModuleType("fake_flash_loader")
+        loader.load_backend = lambda: state["backend"]
+        loader.backend_name = lambda: state["backend"].__name__
+        loader.required = lambda: False
+        loader.last_error = lambda: None
+
+        cache = flash_attn._NATIVE_FUNCTION_CACHE
+        old_cache = dict(cache)
+        try:
+            cache.clear()
+            with mock.patch.object(flash_attn, "_flashattn_jittor", loader):
+                self.assertIs(
+                    flash_attn._native_function("flash_attn_func"),
+                    first.flash_attn_func)
+                self.assertIs(
+                    flash_attn._native_function("flash_attn_func"),
+                    first.flash_attn_func)
+                state["backend"] = second
+                self.assertIs(
+                    flash_attn._native_function("flash_attn_func"),
+                    second.flash_attn_func)
+                replacement = lambda *args, **kwargs: "replacement"
+                second.flash_attn_func = replacement
+                self.assertIs(
+                    flash_attn._native_function("flash_attn_func"),
+                    replacement)
+        finally:
+            cache.clear()
+            cache.update(old_cache)
+
+    def test_flash_stub_required_rejects_native_none(self):
+        import flash_attn
+
+        backend = ModuleType("required_none_backend")
+        backend.flash_attn_func = lambda *args, **kwargs: None
+        loader = ModuleType("required_none_loader")
+        loader.load_backend = lambda: backend
+        loader.backend_name = lambda: backend.__name__
+        loader.required = lambda: True
+        loader.last_error = lambda: None
+
+        cache = flash_attn._NATIVE_FUNCTION_CACHE
+        old_cache = dict(cache)
+        try:
+            cache.clear()
+            q = jt.ones((1, 2, 1, 8))
+            with mock.patch.object(flash_attn, "_flashattn_jittor", loader):
+                with self.assertRaisesRegex(RuntimeError, "returned no output"):
+                    flash_attn.flash_attn_func(q, q, q)
+        finally:
+            cache.clear()
+            cache.update(old_cache)
 
     def test_native_sdpa_bool_mask(self):
         from jittor.attention import scaled_dot_product_attention

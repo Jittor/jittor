@@ -155,10 +155,39 @@ except Exception:  # pragma: no cover - setuptools missing
             return cls
 
 
+def _extension_import_name(name, import_identity=None):
+    """Return a cache-isolated import name without changing ``PyInit_*``.
+
+    CPython resolves an extension's initialization symbol from the last
+    component of a dotted module name.  A synthetic parent namespace therefore
+    gives each build a distinct import identity while preserving the compiled
+    extension name and its exported ``PyInit_<name>`` symbol.
+    """
+    if import_identity is None:
+        return name
+    import_name = str(import_identity).strip().strip(".")
+    if not import_name:
+        raise ValueError("import_identity must be a non-empty value")
+    parts = import_name.split(".")
+    if len(parts) < 2 or any(not part.isidentifier() for part in parts):
+        raise ValueError(
+            "import_identity must be a dotted Python module name")
+    if parts[-1] != name:
+        raise ValueError(
+            "import_identity must end with the compiled extension name %r" % name)
+    return import_name
+
+
 def load(name, sources, extra_include_paths=None, extra_cflags=None,
          extra_cuda_cflags=None, extra_ldflags=None, build_directory=None,
-         verbose=False, define_macros=None, force=False, **kw):
-    """Compile sources against Jittor's libtorch ABI shim and import the module."""
+         verbose=False, define_macros=None, force=False,
+         import_identity=None, **kw):
+    """Compile sources against Jittor's libtorch ABI shim and import the module.
+
+    ``import_identity`` isolates Python's extension-module cache.  It does not
+    alter the build name, output filename, or compiled initialization symbol.
+    """
+    import_name = _extension_import_name(name, import_identity)
     from jittor.torch_shim import cpp_extension as _b
     if isinstance(sources, str):
         sources = [sources]
@@ -179,21 +208,21 @@ def load(name, sources, extra_include_paths=None, extra_cflags=None,
         verbose=verbose,
         force=force,
     )
-    loaded = sys.modules.get(name)
+    loaded = sys.modules.get(import_name)
     if (not force) and loaded is not None and \
        os.path.abspath(getattr(loaded, "__file__", "") or "") == os.path.abspath(out_path):
         return loaded
-    spec = importlib.util.spec_from_file_location(name, out_path)
+    spec = importlib.util.spec_from_file_location(import_name, out_path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    sys.modules[name] = mod
+    sys.modules[import_name] = mod
     return mod
 
 
 def load_inline(name, cpp_sources=None, cuda_sources=None, functions=None,
                 extra_include_paths=None, extra_cflags=None,
                 extra_cuda_cflags=None, extra_ldflags=None, build_directory=None,
-                verbose=False, with_cuda=None, **kw):
+                verbose=False, with_cuda=None, import_identity=None, **kw):
     """Write inline sources to files and defer to :func:`load`."""
     if isinstance(cpp_sources, str):
         cpp_sources = [cpp_sources]
@@ -226,7 +255,7 @@ def load_inline(name, cpp_sources=None, cuda_sources=None, functions=None,
     return load(name, srcs, extra_include_paths=extra_include_paths,
                 extra_cflags=extra_cflags, extra_cuda_cflags=extra_cuda_cflags,
                 extra_ldflags=extra_ldflags, build_directory=build_directory,
-                verbose=verbose)
+                verbose=verbose, import_identity=import_identity)
 
 
 def include_paths(cuda=False):

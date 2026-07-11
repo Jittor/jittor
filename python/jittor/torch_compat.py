@@ -10,6 +10,7 @@ aliases.
 """
 import jittor as jt
 from jittor import nn
+from collections.abc import Mapping
 import numbers
 import numpy as np
 
@@ -1954,28 +1955,6 @@ def install(torch):
             return "bfloat16"
         return None
 
-    def _sdpa_flash_merge_env_list(primary, fallback, item):
-        raw = _os.environ.get(primary) or _os.environ.get(fallback)
-        if not raw:
-            _os.environ[primary] = str(item)
-            return
-        if raw.strip().lower() in ("all", "full", "*"):
-            return
-        items = [x.strip() for x in raw.replace(";", ",").split(",") if x.strip()]
-        if str(item) not in items:
-            items.append(str(item))
-            _os.environ[primary] = ",".join(items)
-
-    def _sdpa_flash_ensure_compile_env(template_dim, q_dtype):
-        _sdpa_flash_merge_env_list(
-            "JITTOR_FLASH_ATTN_HEAD_DIMS", "FLASH_ATTN_HEAD_DIMS", template_dim)
-        if q_dtype == "float16":
-            _sdpa_flash_merge_env_list(
-                "JITTOR_FLASH_ATTN_DTYPES", "FLASH_ATTN_DTYPES", "fp16")
-        elif q_dtype == "bfloat16":
-            _sdpa_flash_merge_env_list(
-                "JITTOR_FLASH_ATTN_DTYPES", "FLASH_ATTN_DTYPES", "bf16")
-
     def _try_flash_scaled_dot_product_attention(query, key, value, attn_mask,
                                                 dropout_p, is_causal, sf):
         if attn_mask is not None:
@@ -2023,8 +2002,8 @@ def install(torch):
         except Exception:
             _sdpa_flash_miss("no_loader")
             return None
-        _sdpa_flash_ensure_compile_env(template_dim, q_dtype)
-        backend = _fa_jittor.load_backend()
+        backend, capability_miss = _fa_jittor.load_backend_for(
+            template_dim, q_dtype)
         if backend is None:
             if _fa_jittor.required():
                 raise RuntimeError(
@@ -2034,18 +2013,14 @@ def install(torch):
                 )
             _sdpa_flash_miss("no_backend")
             return None
-        if getattr(backend, "_flashattn_jittor_official", False):
-            dims = {int(x) for x in getattr(backend, "_flashattn_jittor_head_dims", ())}
-            dtypes = set(getattr(backend, "_flashattn_jittor_dtypes", ()))
-            if dims and template_dim not in dims:
-                _sdpa_flash_miss("backend_head_dim")
-                return None
-            if dtypes and q_dtype == "float16" and "fp16" not in dtypes:
-                _sdpa_flash_miss("backend_dtype")
-                return None
-            if dtypes and q_dtype == "bfloat16" and "bf16" not in dtypes:
-                _sdpa_flash_miss("backend_dtype")
-                return None
+        if capability_miss is not None:
+            if _fa_jittor.required():
+                raise RuntimeError(
+                    "native flash-attn backend could not expand for %s: %s"
+                    % (capability_miss, _fa_jittor.last_error() or "unsupported capability")
+                )
+            _sdpa_flash_miss(capability_miss)
+            return None
         try:
             import flash_attn as _flash_attn
         except Exception as exc:
@@ -2082,6 +2057,11 @@ def install(torch):
             _sdpa_flash_miss("call_failed")
             return None
         if out is None:
+            if _fa_jittor.required():
+                raise RuntimeError(
+                    "native flash-attn backend returned no output while "
+                    "JITTOR_FLASH_ATTN_JITTOR_REQUIRED is set"
+                )
             _sdpa_flash_miss("returned_none")
             return None
         out = out.reshape(tuple(prefix) + (lq, heads, head_dim))
@@ -2150,7 +2130,14 @@ def install(torch):
                 # torch SDPA always applies the supplied probability. Callers
                 # pass dropout_p=0 in evaluation, so this path is training-only.
                 attn = nn.dropout(attn, p=float(dropout_p), is_train=True)
-            out = jt.matmul(attn, value)
+            # Masks and causal bias are intentionally accumulated in fp32 for
+            # low-precision inputs. Cast the probabilities back before the
+            # value matmul, matching torch SDPA's output dtype and avoiding a
+            # cublas fp32-by-fp16 dtype mismatch in training fallbacks.
+            value_attn = attn
+            if str(value_attn.dtype) != str(value.dtype):
+                value_attn = value_attn.cast(str(value.dtype))
+            out = jt.matmul(value_attn, value)
             if str(out.dtype) != str(query.dtype):
                 out = out.cast(str(query.dtype))
             return out
@@ -2386,7 +2373,7 @@ def _install_autograd(g):
         return list(x)
 
     def grad(outputs, inputs, grad_outputs=None, retain_graph=None,
-             create_graph=False, only_inputs=True, allow_unused=False,
+             create_graph=False, only_inputs=True, allow_unused=None,
              is_grads_batched=False, materialize_grads=False, **kw):
         # torch.autograd.grad(outputs, inputs, ...) -> tuple of grads, one per
         # input. jittor's jt.grad takes a single scalar loss; when several
@@ -2400,7 +2387,25 @@ def _install_autograd(g):
             gos = _as_list(grad_outputs)
             loss = sum((o * w).sum() for o, w in zip(outs, gos))
         rg = bool(create_graph) if retain_graph is None else bool(retain_graph)
-        gs = _jt.grad(loss, ins, rg)
+        if materialize_grads and allow_unused is False:
+            raise ValueError(
+                "Expected allow_unused to be True or not passed when "
+                "materialize_grads=True, but got: allow_unused=False.")
+        allow_unused = bool(materialize_grads) if allow_unused is None \
+            else bool(allow_unused)
+        gs = list(_jt.core.grad_optional(loss, ins, rg))
+        missing = [i for i, value in enumerate(gs) if value is None]
+        if missing and materialize_grads:
+            for i in missing:
+                gs[i] = _jt.zeros_like(ins[i])
+                if create_graph:
+                    gs[i].start_grad()
+                else:
+                    gs[i].stop_grad()
+        elif missing and not allow_unused:
+            raise RuntimeError(
+                "One of the differentiated Tensors appears to not have been "
+                "used in the graph. Set allow_unused=True if this is desired.")
         return tuple(gs)
     autograd.grad = grad
 
@@ -2494,12 +2499,50 @@ def _install_optimizers(g):
             pass
     Base.__init__ = _init
 
+    def _torch_param_steps(pg):
+        params = list(pg.get("params", []))
+        steps = pg.get("_torch_steps")
+        if not isinstance(steps, list):
+            steps = pg["_torch_steps"] = [0] * len(params)
+        while len(steps) < len(params):
+            steps.append(0)
+        if len(steps) > len(params):
+            del steps[len(params):]
+        return steps
+
+    def _torch_optimizer_kind(opt):
+        name = type(opt).__name__.lower()
+        if "adamw" in name:
+            return "adamw"
+        if "adam" in name:
+            return "adam"
+        if "rmsprop" in name:
+            return "rmsprop"
+        if "sgd" in name:
+            return "sgd"
+        if "adan" in name:
+            return "adan"
+        return name
+
     # torch-compatible Optimizer.state: a mapping keyed by the parameter object,
     # each value a dict {"exp_avg","exp_avg_sq","step"} backed by jittor's
     # positional per-group state lists pg["m"] (exp_avg) / pg["values"] (exp_avg_sq).
     # 3DGS densification does surgery on this (read state.get(p), mutate exp_avg/
     # exp_avg_sq via mask/cat, del old key, set new key after replacing the param).
     if not hasattr(Base, "_torch_state_installed"):
+        class _ParamState(dict):
+            def __init__(self, owner, param, values):
+                dict.__init__(self, values)
+                self._owner = owner
+                self._param = param
+            def __setitem__(self, key, value):
+                self._owner._set_field(self._param, key, value)
+                dict.__setitem__(self, key, value)
+            def update(self, *args, **kwargs):
+                values = dict(*args, **kwargs)
+                for key, value in values.items():
+                    self[key] = value
+
         class _OptState:
             def __init__(self, opt):
                 self._opt = opt
@@ -2512,13 +2555,76 @@ def _install_optimizers(g):
             def _params(self):
                 for pg in self._opt.param_groups:
                     for p in pg.get("params", []):
-                        yield p
+                        marker = object()
+                        if self.get(p, marker) is not marker:
+                            yield p
+            def _reset_slot(self, pg, i):
+                _torch_param_steps(pg)[i] = 0
+                for key in ("m", "values", "v", "d", "pre_grad"):
+                    buffers = pg.get(key)
+                    if not isinstance(buffers, list) or i >= len(buffers):
+                        continue
+                    buffer = buffers[i]
+                    buffers[i] = (_jt.zeros_like(buffer).stop_grad()
+                                  if isinstance(buffer, _jt.Var) else None)
+            def _sync_n_step(self):
+                self._opt.n_step = max(
+                    (int(step) for pg in self._opt.param_groups
+                     for step in _torch_param_steps(pg)), default=0)
+            def _set_field(self, param, key, value):
+                pg, i = self._find(param)
+                if pg is None:
+                    raise KeyError(param)
+                kind = _torch_optimizer_kind(self._opt)
+                if key == "step":
+                    if isinstance(value, _jt.Var):
+                        value = value.item()
+                    _torch_param_steps(pg)[i] = int(value)
+                    self._sync_n_step()
+                    return
+                mappings = {
+                    "adam": {"exp_avg": "m", "exp_avg_sq": "values"},
+                    "adamw": {"exp_avg": "m", "exp_avg_sq": "values"},
+                    "sgd": {"momentum_buffer": "values"},
+                    "rmsprop": {"square_avg": "values"},
+                    "adan": {"exp_avg": "m", "exp_avg_sq": "v",
+                             "exp_avg_diff": "d", "pre_grad": "pre_grad"},
+                }
+                target = mappings.get(kind, {}).get(key)
+                buffers = pg.get(target) if target is not None else None
+                if isinstance(buffers, list) and i < len(buffers):
+                    buffers[i] = value
             def get(self, param, default=None):
                 pg, i = self._find(param)
-                if pg is None or "m" not in pg or "values" not in pg:
+                if pg is None:
                     return default
-                return {"exp_avg": pg["m"][i], "exp_avg_sq": pg["values"][i],
-                        "step": float(getattr(self._opt, "n_step", 0))}
+                steps = _torch_param_steps(pg)
+                if int(steps[i]) <= 0:
+                    return default
+                kind = _torch_optimizer_kind(self._opt)
+                if kind in ("adam", "adamw") and "m" in pg and "values" in pg:
+                    return _ParamState(self, param, {
+                        "exp_avg": pg["m"][i],
+                        "exp_avg_sq": pg["values"][i],
+                        "step": float(steps[i])})
+                if kind == "sgd" and "values" in pg and pg.get(
+                        "momentum", getattr(self._opt, "momentum", 0)):
+                    return _ParamState(self, param, {
+                        "momentum_buffer": pg["values"][i]})
+                if kind == "rmsprop" and "values" in pg:
+                    return _ParamState(self, param, {
+                        "square_avg": pg["values"][i],
+                        "step": float(steps[i])})
+                if kind == "adan":
+                    out = {"step": float(steps[i])}
+                    for source, target in (
+                            ("m", "exp_avg"), ("v", "exp_avg_sq"),
+                            ("d", "exp_avg_diff"),
+                            ("pre_grad", "pre_grad")):
+                        if source in pg and i < len(pg[source]):
+                            out[target] = pg[source][i]
+                    return _ParamState(self, param, out)
+                return default
             def __getitem__(self, param):
                 r = self.get(param, None)
                 if r is None:
@@ -2527,22 +2633,29 @@ def _install_optimizers(g):
             def __setitem__(self, param, d):
                 pg, i = self._find(param)
                 if pg is None:
-                    return
-                if "m" in pg and isinstance(d, dict) and "exp_avg" in d:
-                    pg["m"][i] = d["exp_avg"]
-                if "values" in pg and isinstance(d, dict) and "exp_avg_sq" in d:
-                    pg["values"][i] = d["exp_avg_sq"]
+                    raise KeyError(param)
+                if not isinstance(d, Mapping):
+                    raise TypeError("optimizer state must be a mapping")
+                values = dict(d)
+                self._reset_slot(pg, i)
+                for key, value in values.items():
+                    if key != "step":
+                        self._set_field(param, key, value)
+                self._set_field(param, "step", values.get("step", 1 if values else 0))
             def __delitem__(self, param):
-                # state follows the param slot; the subsequent re-set (after the
-                # param is replaced in-place) overwrites m/values, so this no-ops.
-                pass
+                pg, i = self._find(param)
+                marker = object()
+                if pg is None or self.get(param, marker) is marker:
+                    raise KeyError(param)
+                self._reset_slot(pg, i)
+                self._sync_n_step()
             def __contains__(self, param):
-                pg, _ = self._find(param)
-                return pg is not None
+                marker = object()
+                return self.get(param, marker) is not marker
             def __iter__(self):
                 return self._params()
             def __len__(self):
-                return sum(len(pg.get("params", [])) for pg in self._opt.param_groups)
+                return sum(1 for _ in self._params())
             def keys(self):
                 return list(self._params())
             def values(self):
@@ -2556,7 +2669,9 @@ def _install_optimizers(g):
         Base._torch_state_installed = True
 
     if not getattr(Base, "_torch_state_dict_wrapped", False):
+        _native_load_state_dict = Base.load_state_dict
         def _state_dict_torch(self):
+            kind = _torch_optimizer_kind(self)
             param_ids = {}
             param_groups = []
             next_id = 0
@@ -2571,68 +2686,178 @@ def _install_optimizers(g):
                         param_ids[id(p)] = pid
                     params.append(pid)
                 for k, v in pg.items():
-                    if k in ("params", "grads", "m", "values"):
+                    if k in ("params", "grads", "m", "values", "v", "d",
+                             "pre_grad", "_torch_steps"):
                         continue
                     group[k] = v
                 group.setdefault("lr", pg.get("lr", getattr(self, "lr", 0.0)))
-                group.setdefault("betas", pg.get("betas", getattr(self, "betas", (0.9, 0.999))))
-                group.setdefault("eps", pg.get("eps", getattr(self, "eps", 1e-8)))
-                group.setdefault("weight_decay", pg.get("weight_decay", getattr(self, "weight_decay", 0)))
-                group.setdefault("amsgrad", False)
-                group.setdefault("maximize", False)
-                group.setdefault("foreach", None)
-                group.setdefault("capturable", False)
-                group.setdefault("differentiable", False)
-                group.setdefault("fused", None)
+                if kind in ("adam", "adamw"):
+                    group.setdefault("betas", pg.get(
+                        "betas", getattr(self, "betas", (0.9, 0.999))))
+                    group.setdefault("eps", pg.get(
+                        "eps", getattr(self, "eps", 1e-8)))
+                    group.setdefault("weight_decay", pg.get(
+                        "weight_decay", getattr(self, "weight_decay", 0)))
+                    group.setdefault("amsgrad", False)
+                    group.setdefault("maximize", False)
+                    group.setdefault("foreach", None)
+                    group.setdefault("capturable", False)
+                    group.setdefault("differentiable", False)
+                    group.setdefault("fused", None)
+                elif kind == "sgd":
+                    for key, default in (
+                            ("momentum", 0), ("dampening", 0),
+                            ("weight_decay", 0), ("nesterov", False)):
+                        group.setdefault(key, pg.get(
+                            key, getattr(self, key, default)))
+                    group.setdefault("maximize", False)
+                    group.setdefault("foreach", None)
+                    group.setdefault("differentiable", False)
+                    group.setdefault("fused", None)
+                elif kind == "rmsprop":
+                    group.setdefault("alpha", pg.get(
+                        "alpha", getattr(self, "alpha", 0.99)))
+                    group.setdefault("eps", pg.get(
+                        "eps", getattr(self, "eps", 1e-8)))
+                    group.setdefault("weight_decay", 0)
+                    group.setdefault("momentum", 0)
+                    group.setdefault("centered", False)
+                    group.setdefault("capturable", False)
+                    group.setdefault("foreach", None)
+                    group.setdefault("maximize", False)
+                    group.setdefault("differentiable", False)
                 group["params"] = params
                 param_groups.append(group)
 
             state = {}
             for pg in self.param_groups:
+                steps = _torch_param_steps(pg)
                 for i, p in enumerate(pg.get("params", [])):
                     pid = param_ids.get(id(p))
-                    if pid is None:
+                    if pid is None or int(steps[i]) <= 0:
                         continue
                     entry = {}
-                    if "m" in pg and i < len(pg["m"]):
-                        entry["exp_avg"] = pg["m"][i]
-                    if "values" in pg and i < len(pg["values"]):
-                        entry["exp_avg_sq"] = pg["values"][i]
+                    if kind in ("adam", "adamw"):
+                        if "m" in pg and i < len(pg["m"]):
+                            entry["exp_avg"] = pg["m"][i]
+                        if "values" in pg and i < len(pg["values"]):
+                            entry["exp_avg_sq"] = pg["values"][i]
+                    elif kind == "sgd":
+                        momentum = pg.get(
+                            "momentum", getattr(self, "momentum", 0))
+                        if momentum and "values" in pg and i < len(pg["values"]):
+                            entry["momentum_buffer"] = pg["values"][i]
+                    elif kind == "rmsprop":
+                        if "values" in pg and i < len(pg["values"]):
+                            entry["square_avg"] = pg["values"][i]
+                    elif kind == "adan":
+                        for source, target in (
+                                ("m", "exp_avg"), ("v", "exp_avg_sq"),
+                                ("d", "exp_avg_diff"),
+                                ("pre_grad", "pre_grad")):
+                            values = pg.get(source)
+                            if values is not None and i < len(values):
+                                entry[target] = values[i]
                     if entry:
-                        entry["step"] = _jt.array(float(getattr(self, "n_step", 0))).float32()
+                        if kind != "sgd":
+                            entry["step"] = _jt.array(float(steps[i])).float32()
                         state[pid] = entry
             return {"state": state, "param_groups": param_groups}
 
         def _load_state_dict_torch(self, state_dict):
-            if not isinstance(state_dict, dict) or "param_groups" not in state_dict:
-                return None
+            if not isinstance(state_dict, Mapping) or "param_groups" not in state_dict:
+                return _native_load_state_dict(self, state_dict)
             saved_groups = state_dict.get("param_groups", [])
             saved_state = state_dict.get("state", {})
-            max_step = 0.0
-            for gi, saved_pg in enumerate(saved_groups):
-                if gi >= len(self.param_groups):
-                    break
+            kind = _torch_optimizer_kind(self)
+            if not isinstance(saved_groups, (list, tuple)):
+                raise TypeError("loaded optimizer param_groups must be a sequence")
+            if not isinstance(saved_state, Mapping):
+                raise TypeError("loaded optimizer state must be a mapping")
+            if len(saved_groups) != len(self.param_groups):
+                raise ValueError(
+                    "loaded state dict has a different number of parameter groups")
+            load_plan = []
+            max_step = 0
+            for saved_pg, current_pg in zip(saved_groups, self.param_groups):
+                if not isinstance(saved_pg, Mapping):
+                    raise TypeError("loaded optimizer parameter group must be a mapping")
+                saved_params = saved_pg.get("params", [])
+                if not isinstance(saved_params, (list, tuple)):
+                    raise TypeError("loaded optimizer group params must be a sequence")
+                if len(saved_params) != len(current_pg.get("params", [])):
+                    raise ValueError(
+                        "loaded state dict contains a parameter group that "
+                        "doesn't match the size of optimizer's group")
+                slots = []
+                for pid in saved_params:
+                    missing = object()
+                    try:
+                        st = saved_state.get(pid, missing)
+                        if st is missing:
+                            st = saved_state.get(str(pid), {})
+                    except (TypeError, ValueError) as error:
+                        raise TypeError("loaded optimizer state key is invalid") from error
+                    if not isinstance(st, Mapping):
+                        raise TypeError("loaded optimizer parameter state must be a mapping")
+                    st = dict(st)
+                    step = 1 if st else 0
+                    if "step" in st:
+                        value = st["step"]
+                        if isinstance(value, _jt.Var):
+                            value = value.item()
+                        try:
+                            numeric = float(value)
+                        except (TypeError, ValueError, OverflowError) as error:
+                            raise ValueError("loaded optimizer step must be numeric") from error
+                        if not np.isfinite(numeric) or numeric < 0 or numeric != int(numeric):
+                            raise ValueError(
+                                "loaded optimizer step must be a non-negative integer")
+                        step = int(numeric)
+                    max_step = max(max_step, step)
+                    slots.append((st, step))
+                load_plan.append((dict(saved_pg), slots))
+
+            # Apply only after the complete input has been validated. This keeps
+            # malformed loads atomic instead of leaving half-reset moments.
+            for pg in self.param_groups:
+                steps = _torch_param_steps(pg)
+                for i in range(len(steps)):
+                    steps[i] = 0
+                for key in ("m", "values", "v", "d", "pre_grad"):
+                    buffers = pg.get(key)
+                    if not isinstance(buffers, list):
+                        continue
+                    for i, buffer in enumerate(buffers):
+                        if isinstance(buffer, _jt.Var):
+                            buffers[i] = _jt.zeros_like(buffer).stop_grad()
+            for gi, (saved_pg, slots) in enumerate(load_plan):
                 pg = self.param_groups[gi]
+                steps = _torch_param_steps(pg)
                 for k, v in saved_pg.items():
                     if k == "params":
                         continue
                     pg[k] = v
-                for i, pid in enumerate(saved_pg.get("params", [])):
-                    st = saved_state.get(pid, saved_state.get(str(pid), {}))
-                    if "m" in pg and i < len(pg["m"]) and isinstance(st, dict) and "exp_avg" in st:
-                        pg["m"][i] = st["exp_avg"]
-                    if "values" in pg and i < len(pg["values"]) and isinstance(st, dict) and "exp_avg_sq" in st:
-                        pg["values"][i] = st["exp_avg_sq"]
-                    if isinstance(st, dict) and "step" in st:
-                        try:
-                            sv = st["step"]
-                            if isinstance(sv, _jt.Var):
-                                sv = float(sv.item())
-                            max_step = max(max_step, float(sv))
-                        except Exception:
-                            pass
-            if max_step:
-                self.n_step = int(max_step)
+                for i, (st, step) in enumerate(slots):
+                    if kind in ("adam", "adamw"):
+                        if "m" in pg and i < len(pg["m"]) and "exp_avg" in st:
+                            pg["m"][i] = st["exp_avg"]
+                        if "values" in pg and i < len(pg["values"]) \
+                                and "exp_avg_sq" in st:
+                            pg["values"][i] = st["exp_avg_sq"]
+                    elif kind == "sgd" and "momentum_buffer" in st:
+                        pg["values"][i] = st["momentum_buffer"]
+                    elif kind == "rmsprop" and "square_avg" in st:
+                        pg["values"][i] = st["square_avg"]
+                    elif kind == "adan":
+                        for source, target in (
+                                ("m", "exp_avg"), ("v", "exp_avg_sq"),
+                                ("d", "exp_avg_diff"),
+                                ("pre_grad", "pre_grad")):
+                            if target in st and source in pg and i < len(pg[source]):
+                                pg[source][i] = st[target]
+                    steps[i] = step
+            self.n_step = max_step
             return None
 
         Base.state_dict = _state_dict_torch
@@ -2644,19 +2869,72 @@ def _install_optimizers(g):
         _orig_zero = Base.zero_grad
         def _zero_grad_compat(self, set_to_none=True):
             for _pg in getattr(self, "param_groups", []):
-                for _p in _pg.get("params", []):
-                    if isinstance(_p, _jt.Var) and getattr(_p, "_torch_grad", None) is not None:
-                        try:
-                            object.__setattr__(_p, "_torch_grad", None)
-                        except Exception:
-                            pass
+                _params = list(_pg.get("params", []))
+                _new_grads = []
+                if set_to_none:
+                    _pg.pop("grads", None)
+                else:
+                    _old_grads = list(_pg.get("grads") or [])
+                    _new_grads = []
+                    for _i, _p in enumerate(_params):
+                        _old = _old_grads[_i] if _i < len(_old_grads) else None
+                        _published = (
+                            getattr(_p, "_torch_grad", None)
+                            if isinstance(_p, _jt.Var) else None
+                        )
+                        if isinstance(_p, _jt.Var) and (
+                                isinstance(_old, _jt.Var)
+                                or isinstance(_published, _jt.Var)):
+                            _existing = (
+                                _old if isinstance(_old, _jt.Var)
+                                else _published
+                            )
+                            _existing.update(_jt.zeros_like(_existing))
+                            _existing.stop_grad().stop_fuse()
+                            _new_grads.append(_existing)
+                        else:
+                            _new_grads.append(None)
+                    if any(isinstance(_g, _jt.Var) for _g in _new_grads):
+                        _pg["grads"] = _new_grads
+                    else:
+                        _pg.pop("grads", None)
+                for _i, _p in enumerate(_params):
+                    if not isinstance(_p, _jt.Var):
+                        continue
+                    _value = None
+                    if not set_to_none and _i < len(_new_grads):
+                        _value = _new_grads[_i]
+                    try:
+                        _p.grad = _value
+                    except Exception:
+                        object.__setattr__(_p, "_torch_grad", _value)
             try:
                 object.__setattr__(self, "_grad_map", {})
             except Exception:
                 pass
-            return _orig_zero(self)
+            result = _orig_zero(self)
+            try:
+                from . import torch_fsdp2_compat as _fsdp2_zero
+                if _fsdp2_zero.optimizer_has_fsdp_params(self):
+                    _fsdp2_zero.refresh_visible_full_grads(self)
+            except Exception:
+                pass
+            object.__setattr__(self, "_torch_backward_advanced_n_step", False)
+            return result
         Base.zero_grad = _zero_grad_compat
         Base._torch_zero_grad_wrapped = True
+
+    # Native Optimizer.backward() advances n_step; tensor.backward() below does
+    # not. Record which spelling produced the ready gradient so a subsequent
+    # torch-style step() advances the counter exactly once in either case.
+    if not getattr(Base, "_torch_backward_step_marker", False):
+        _orig_backward = Base.backward
+        def _backward_with_step_marker(self, *args, **kwargs):
+            result = _orig_backward(self, *args, **kwargs)
+            object.__setattr__(self, "_torch_backward_advanced_n_step", True)
+            return result
+        Base.backward = _backward_with_step_marker
+        Base._torch_backward_step_marker = True
 
     # torch's Adam/AdamW default lr=1e-3 (jittor makes lr positional-required).
     # 3DGS builds the exposure optimizer as torch.optim.Adam([self._exposure]).
@@ -2682,6 +2960,22 @@ def _install_optimizers(g):
                     return True
         return False
 
+    def _advance_ready_param_steps(opt):
+        for pg in getattr(opt, "param_groups", []):
+            steps = _torch_param_steps(pg)
+            grads = pg.get("grads") or []
+            for i, (param, grad) in enumerate(zip(pg.get("params", []), grads)):
+                if isinstance(param, _jt.Var) and isinstance(grad, _jt.Var) \
+                        and list(param.shape) == list(grad.shape):
+                    steps[i] = int(steps[i]) + 1
+
+    def _advance_trainable_param_steps(opt):
+        for pg in getattr(opt, "param_groups", []):
+            steps = _torch_param_steps(pg)
+            for i, param in enumerate(pg.get("params", [])):
+                if isinstance(param, _jt.Var) and not param.is_stop_grad():
+                    steps[i] = int(steps[i]) + 1
+
     def _optimizer_maybe_has_fsdp_params(opt):
         for _pg in getattr(opt, "param_groups", []):
             for _p in _pg.get("params", []):
@@ -2704,6 +2998,7 @@ def _install_optimizers(g):
         _orig_step = _cls.step
         def _step_torch_closure(self, loss=None, retain_graph=False, closure=None, **kwargs):
             called_closure = False
+            native_fsdp_loss = None
             if closure is None and callable(loss):
                 closure = loss
                 loss = None
@@ -2712,57 +3007,126 @@ def _install_optimizers(g):
                 called_closure = True
             _fsdp2_step = _load_fsdp2_for_optimizer(self)
             if _fsdp2_step is not None and _fsdp2_step.optimizer_has_fsdp_params(self):
-                if not _fsdp2_step.optimizer_step(self, loss, retain_graph=retain_graph):
+                if loss is not None and not called_closure:
+                    native_fsdp_loss = loss
+                    loss.backward(retain_graph=retain_graph)
+                    loss = None
+                if not _fsdp2_step.optimizer_step(self, None, retain_graph=retain_graph):
                     raise NotImplementedError(
                         f"FSDP2 optimizer step is not implemented for {type(self).__name__}")
                 if not _fsdp2_step.optimizer_has_non_fsdp_params(self):
-                    try:
-                        self.post_step()
-                    except Exception:
-                        pass
+                    if native_fsdp_loss is not None:
+                        try:
+                            self.post_step()
+                        except Exception:
+                            pass
+                    else:
+                        _jt.flags.node_order = 0
+                        object.__setattr__(
+                            self, "_torch_backward_advanced_n_step", False)
                     return loss if called_closure else None
                 _fsdp2_step.clear_fsdp_optimizer_grads(self)
-            step_loss = None if called_closure and _optimizer_has_ready_grads(self) else loss
-            out = _orig_step(self, step_loss, retain_graph=retain_graph)
+            torch_style = native_fsdp_loss is None and (loss is None or called_closure)
+            if torch_style and not _optimizer_has_ready_grads(self):
+                _jt.flags.node_order = 0
+                object.__setattr__(
+                    self, "_torch_backward_advanced_n_step", False)
+                return loss if called_closure else None
+            if not torch_style:
+                if loss is None and not getattr(
+                        self, "_torch_backward_advanced_n_step", False):
+                    self.n_step = int(getattr(self, "n_step", 0)) + 1
+                if loss is None:
+                    _advance_ready_param_steps(self)
+                else:
+                    _advance_trainable_param_steps(self)
+                out = _orig_step(self, loss, retain_graph=retain_graph)
+                object.__setattr__(self, "_torch_backward_advanced_n_step", False)
+                return out
+
+            # Native SGD/RMSprop/Adan always post_step()->zero_grad(). Torch
+            # keeps parameter.grad until the caller explicitly clears it.
+            previous_post = self.__dict__.get("post_step", None)
+            had_post = "post_step" in self.__dict__
+            previous_step = int(getattr(self, "n_step", 0))
+            if not getattr(self, "_torch_backward_advanced_n_step", False):
+                self.n_step = previous_step + 1
+            _advance_ready_param_steps(self)
+            self.post_step = lambda: setattr(_jt.flags, "node_order", 0)
+            try:
+                out = _orig_step(self, None, retain_graph=retain_graph)
+            finally:
+                object.__setattr__(self, "_torch_backward_advanced_n_step", False)
+                if had_post:
+                    self.post_step = previous_post
+                else:
+                    self.__dict__.pop("post_step", None)
             return loss if called_closure and out is None else out
         _cls.step = _step_torch_closure
         setattr(_cls, _marker, True)
 
     def _make_adam_step_torch(decoupled_weight_decay=False):
         def _adam_step_torch(self, loss=None, retain_graph=False, closure=None, **kwargs):
+            native_fsdp_loss = None
+            if closure is None and callable(loss):
+                closure = loss
+                loss = None
             if closure is not None:
                 loss = closure()
             _fsdp2_step = _load_fsdp2_for_optimizer(self)
             if _fsdp2_step is not None and _fsdp2_step.optimizer_has_fsdp_params(self):
-                if not _fsdp2_step.optimizer_step(self, loss, retain_graph=retain_graph):
+                if loss is not None and closure is None:
+                    native_fsdp_loss = loss
+                    loss.backward(retain_graph=retain_graph)
+                    loss = None
+                if not _fsdp2_step.optimizer_step(self, None, retain_graph=retain_graph):
                     raise NotImplementedError(
                         f"FSDP2 optimizer step is not implemented for {type(self).__name__}")
                 if not _fsdp2_step.optimizer_has_non_fsdp_params(self):
-                    try:
-                        self.post_step()
-                    except Exception:
-                        pass
-                    return loss
+                    if native_fsdp_loss is not None:
+                        try:
+                            self.post_step()
+                        except Exception:
+                            pass
+                    else:
+                        _jt.flags.node_order = 0
+                        object.__setattr__(
+                            self, "_torch_backward_advanced_n_step", False)
+                    return native_fsdp_loss if native_fsdp_loss is not None else loss
                 _fsdp2_step.clear_fsdp_optimizer_grads(self)
-            prev_step = int(getattr(self, "n_step", 0))
             self.pre_step(None if closure is not None and _optimizer_has_ready_grads(self) else loss, retain_graph)
-            if int(getattr(self, "n_step", 0)) == prev_step:
-                self.n_step = prev_step + 1
-            n = float(self.n_step)
+            if not _optimizer_has_ready_grads(self):
+                if native_fsdp_loss is not None:
+                    self.post_step()
+                else:
+                    _jt.flags.node_order = 0
+                    object.__setattr__(
+                        self, "_torch_backward_advanced_n_step", False)
+                return native_fsdp_loss if native_fsdp_loss is not None else loss
+            if not getattr(self, "_torch_backward_advanced_n_step", False):
+                self.n_step = int(getattr(self, "n_step", 0)) + 1
             _jt.flags.node_order = 1
             for pg in self.param_groups:
                 lr = pg.get("lr", self.lr)
                 eps = pg.get("eps", self.eps)
                 weight_decay = pg.get("weight_decay", self.weight_decay)
                 b0, b1 = pg.get("betas", self.betas)
-                bias_correction1 = 1 - b0 ** n
-                bias_correction2 = 1 - b1 ** n
-                step_size = lr / bias_correction1
-                bias_correction2_sqrt = _math.sqrt(bias_correction2)
-                for p, g, v, m in zip(pg["params"], pg["grads"], pg["values"], pg["m"]):
+                param_steps = _torch_param_steps(pg)
+                # torch permits optimizers containing frozen or otherwise
+                # unused parameters. loss.backward() then leaves the group
+                # without gradients and step() must be a no-op, not KeyError.
+                grads = pg.get("grads") or [None] * len(pg["params"])
+                for i, (p, g, v, m) in enumerate(zip(
+                        pg["params"], grads, pg["values"], pg["m"])):
                     was_trainable = not p.is_stop_grad()
                     if not was_trainable or not isinstance(g, _jt.Var) or list(g.shape) != list(p.shape):
                         continue
+                    param_steps[i] = int(param_steps[i]) + 1
+                    param_step = float(param_steps[i])
+                    bias_correction1 = 1 - b0 ** param_step
+                    bias_correction2 = 1 - b1 ** param_step
+                    step_size = lr / bias_correction1
+                    bias_correction2_sqrt = _math.sqrt(bias_correction2)
                     if weight_decay != 0 and decoupled_weight_decay:
                         p.update(p * (1 - lr * weight_decay))
                     elif weight_decay != 0:
@@ -2776,8 +3140,15 @@ def _install_optimizers(g):
                             p.start_grad()
                     except Exception:
                         pass
-            self.post_step()
-            return loss
+            # The torch loss.backward(); optimizer.step() spelling keeps grads
+            # until an explicit zero_grad(). Preserve Jittor's historical
+            # step(loss) behavior for callers using that native shorthand.
+            if (loss is not None and closure is None) or native_fsdp_loss is not None:
+                self.post_step()
+            else:
+                _jt.flags.node_order = 0
+            object.__setattr__(self, "_torch_backward_advanced_n_step", False)
+            return native_fsdp_loss if native_fsdp_loss is not None else loss
         return _adam_step_torch
 
     Adam = getattr(_optim, "Adam", None)
@@ -6549,9 +6920,29 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                         value = value.squeeze(0)
             except Exception:
                 pass
-            return _orig_setitem(self, slices, value)
+            result = _orig_setitem(self, slices, value)
+            _write_index_parent(self, self)
+            return result
         _torch_setitem._torch_mask_bcast = True
         Var.__setitem__ = _torch_setitem
+
+    def _write_index_parent(view, value):
+        parent = getattr(view, "_torch_index_parent", None)
+        parent_slices = getattr(view, "_torch_index_slices", None)
+        if not isinstance(parent, Var):
+            return
+        parent_was_trainable = not parent.is_stop_grad()
+        # Bypass the compatibility wrapper here; this helper owns the one
+        # explicit ancestor walk. Calling patched __setitem__ would recurse once
+        # implicitly and once below, duplicating graph nodes at every depth.
+        _orig_setitem(parent, parent_slices, value)
+        if parent_was_trainable and parent.is_stop_grad():
+            parent.start_grad()
+        elif not parent_was_trainable and not parent.is_stop_grad():
+            parent.stop_grad()
+        # Jittor basic indexing materializes a separate Var. Propagate a
+        # mutation through every retained view so x[0][1].zero_() reaches x.
+        _write_index_parent(parent, parent)
 
     # in-place tensor ops torch code uses heavily (jittor exposes assign()).
     # _ip() preserves grad-tracking: jittor's assign() adopts the source's
@@ -6566,9 +6957,12 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         # So only start_grad if assign actually left x stopped (a constant value like
         # fill_/zero_ on a previously-trainable leaf) -- never on an already-connected x.
         was_trainable = not self.is_stop_grad()
+        _write_index_parent(self, value)
         self.assign(value)
         if was_trainable and self.is_stop_grad():
             self.start_grad()
+        elif not was_trainable and not self.is_stop_grad():
+            self.stop_grad()
         return self
     def _copy_(self, other, non_blocking=False):
         src = other if isinstance(other, Var) else jt.array(other)
@@ -6641,18 +7035,16 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     Var.new_full = _new_full
     Var.new_empty = _new_empty
     Var.new_tensor = _new_tensor
-    if not hasattr(Var, "fill_"):
-        Var.fill_ = lambda self, val: _ip(self, jt.ones(self.shape, self.dtype) * val)
-    if not hasattr(Var, "zero_"):
-        Var.zero_ = lambda self: _ip(self, jt.zeros(self.shape, self.dtype))
-    if not hasattr(Var, "add_"):
-        Var.add_ = lambda self, o, alpha=1: _ip(self, self + (o * alpha))
-    if not hasattr(Var, "sub_"):
-        Var.sub_ = lambda self, o, alpha=1: _ip(self, self - (o * alpha))
-    if not hasattr(Var, "mul_"):
-        Var.mul_ = lambda self, o: _ip(self, self * o)
-    if not hasattr(Var, "div_"):
-        Var.div_ = lambda self, o: _ip(self, self / o)
+    # Override the native methods even when they already exist. Transformers
+    # initializes parameters through ``param.data.normal_()/zero_()/fill_()``
+    # inside @torch.no_grad(); Jittor's native bound initializers adopt the
+    # constant source's stop-grad flag and permanently freeze the parameter.
+    Var.fill_ = lambda self, val: _ip(self, jt.ones(self.shape, self.dtype) * val)
+    Var.zero_ = lambda self: _ip(self, jt.zeros(self.shape, self.dtype))
+    Var.add_ = lambda self, o, alpha=1: _ip(self, self + (o * alpha))
+    Var.sub_ = lambda self, o, alpha=1: _ip(self, self - (o * alpha))
+    Var.mul_ = lambda self, o: _ip(self, self * o)
+    Var.div_ = lambda self, o: _ip(self, self / o)
     # in-place unary math ops (recurrent_gemma uses x.log_(); common torch idioms)
     for _name, _fn in (("log_", jt.log), ("exp_", jt.exp), ("sqrt_", jt.sqrt),
                        ("neg_", lambda x: -x), ("abs_", jt.abs), ("sigmoid_", jt.sigmoid),
@@ -6727,10 +7119,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         g.argwhere = lambda input: _nonzero(input, as_tuple=False)
     if not hasattr(Var, "argwhere"):
         Var.argwhere = lambda self: _nonzero(self, as_tuple=False)
-    if not hasattr(Var, "normal_"):
-        Var.normal_ = lambda self, mean=0.0, std=1.0, generator=None: _ip(self, jt.normal(float(mean), float(std), self.shape).cast(str(self.dtype)))
-    if not hasattr(Var, "uniform_"):
-        Var.uniform_ = lambda self, a=0.0, b=1.0, generator=None: _ip(self, (jt.rand(self.shape)*(b-a)+a).cast(str(self.dtype)))
+    Var.normal_ = lambda self, mean=0.0, std=1.0, generator=None: _ip(self, jt.normal(float(mean), float(std), self.shape).cast(str(self.dtype)))
+    Var.uniform_ = lambda self, a=0.0, b=1.0, generator=None: _ip(self, (jt.rand(self.shape)*(b-a)+a).cast(str(self.dtype)))
 
     # torch tensors are hashable by identity (they define __eq__ elementwise but
     # keep an id-based __hash__). jittor's Var defines __eq__ and so becomes
@@ -6800,13 +7190,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # crash. Override both torch.cumsum and Var.cumsum (g IS the jittor module).
     _native_cumsum = jt.cumsum
     def _assign_out(out, value):
-        parent = getattr(out, "_torch_index_parent", None)
-        index = getattr(out, "_torch_index_slices", None)
-        if parent is not None:
-            parent[index] = value
-            out.assign(value)
-        else:
-            out.assign(value)
+        out.assign(value)
+        _write_index_parent(out, out)
         return out
 
     def _cumsum(x, dim=-1, dtype=None, out=None, **kw):
@@ -6960,6 +7345,32 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             # severs existing graphs. So only flip when the flag ACTUALLY changes;
             # a no-op set (the common case, e.g. peft set_adapter re-asserting
             # requires_grad=True every disable_adapter exit) must NOT touch the node.
+            v = bool(v)
+            fsdp_entry = getattr(self, "_jittor_fsdp2_entry", None)
+            fsdp_state = getattr(self, "_jittor_fsdp2_state", None)
+            if fsdp_entry is not None and fsdp_state is not None:
+                fsdp_entry.requires_grad = v
+                for peer in (getattr(fsdp_entry, "shard", None),
+                             getattr(fsdp_entry, "full_param", None)):
+                    if not isinstance(peer, Var) or peer is self:
+                        continue
+                    if v:
+                        if peer.is_stop_grad():
+                            peer.start_grad()
+                        _register_leaf(peer)
+                    elif not peer.is_stop_grad():
+                        peer.stop_grad()
+                if getattr(fsdp_state, "true_fsdp_flat", False):
+                    flat = getattr(fsdp_state, "true_fsdp_flat_shard", None)
+                    any_trainable = any(getattr(entry, "requires_grad", True)
+                                        for entry in fsdp_state.true_fsdp_params)
+                    if isinstance(flat, Var):
+                        if any_trainable:
+                            if flat.is_stop_grad():
+                                flat.start_grad()
+                            _register_leaf(flat)
+                        elif not flat.is_stop_grad():
+                            flat.stop_grad()
             if v:
                 if self.is_stop_grad():
                     self.start_grad()
@@ -6987,7 +7398,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     #     which fills pg["grads"]; then expose those grad Vars on each param.
     #   * param.grad: getter returns the optimizer-held grad Var (so in-place
     #     clipping mutates the very Var that step() consumes); setter stores it.
-    def _fill_opt_grads(opt, grad_by_id):
+    def _fill_opt_grads(opt, grad_by_id, filled_param_ids=None):
         # Replicate the grad-storage half of jittor's Optimizer.backward() but
         # from an already-computed {id(param): grad} map (so a SINGLE jt.grad
         # pass feeds every optimizer + every leaf — no N-times-repeated backward).
@@ -6996,6 +7407,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         # whose shape changed (3DGS densify replaces params) by replacing — not
         # .update()-ing — the stored grad Var.
         zero = getattr(opt, "_Optimizer__zero_grad", True)
+        if filled_param_ids is None:
+            filled_param_ids = set()
         for pg in opt.param_groups:
             grads_list = pg.get("grads")
             if grads_list is None:
@@ -7006,14 +7419,27 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
                 g = grad_by_id.get(id(p))
                 if g is None:
                     continue
+                if id(p) in filled_param_ids:
+                    while len(grads_list) <= i:
+                        grads_list.append(None)
+                    grads_list[i] = getattr(p, "_torch_grad", None)
+                    continue
                 g = g.stop_grad()
-                if (not zero) and i < len(grads_list) and isinstance(grads_list[i], Var) \
-                        and list(grads_list[i].shape) == list(g.shape):
-                    g = g + grads_list[i]
+                existing = grads_list[i] if i < len(grads_list) else None
+                if not isinstance(existing, Var):
+                    existing = getattr(p, "_torch_grad", None)
+                if isinstance(existing, Var) and list(existing.shape) == list(g.shape):
+                    if not zero:
+                        g = g + existing
+                    existing.update(g)
+                    stored = existing
+                else:
+                    stored = g
                 while len(grads_list) <= i:
                     grads_list.append(None)
-                grads_list[i] = g
-                object.__setattr__(p, "_torch_grad", g)
+                grads_list[i] = stored
+                object.__setattr__(p, "_torch_grad", stored)
+                filled_param_ids.add(id(p))
         object.__setattr__(opt, "_Optimizer__zero_grad", False)
         try:
             opt._build_grad_map()
@@ -7075,6 +7501,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         fsdp_opt_ids = {id(o) for o in fsdp_opts} if _fsdp2_backward is not None else set()
         leaf_map = {}
         opt_ids = set()
+        filled_param_ids = set()
         for o in opts:
             for pg in getattr(o, "param_groups", []):
                 for p in pg.get("params", []):
@@ -7107,7 +7534,10 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         if not leaf_map:
             return None
         leaves = list(leaf_map.values())
-        grads = jt.grad(self, leaves, retain_graph)
+        # torch leaves a disconnected target at grad=None. Keep jt.grad's
+        # historical zero-materialization untouched and use the compatibility
+        # core entry point that preserves missing gradients explicitly.
+        grads = jt.core.grad_optional(self, leaves, retain_graph)
         grad_by_id = {}
         for p, gr in zip(leaves, grads):
             if gr is None:
@@ -7126,7 +7556,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             if _fsdp2_backward is not None and id(o) in fsdp_opt_ids \
                     and not _fsdp2_backward.optimizer_has_non_fsdp_params(o):
                 continue
-            _fill_opt_grads(o, grad_by_id)
+            _fill_opt_grads(o, grad_by_id, filled_param_ids)
         # retain_grad is per-forward in torch; clear so the next iteration's fresh
         # screenspace tensor doesn't leak (jittor Vars aren't weak-referenceable).
         if retained:
@@ -7153,15 +7583,59 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         return None
     def _grad_set(self, value):
         object.__setattr__(self, "_torch_grad", value)
-        # write through to any optimizer holding this param so step() uses it
-        if value is not None:
-            for r in getattr(jt, "_active_optimizers", None) or []:
-                o = r() if callable(r) else r
-                if o is None:
-                    continue
+        fsdp_entry = getattr(self, "_jittor_fsdp2_entry", None)
+        fsdp_role = getattr(self, "_jittor_fsdp2_role", None)
+        if fsdp_entry is not None:
+            try:
+                if value is None:
+                    fsdp_entry.last_grad = None
+                    fsdp_entry.full_public_grad = None
+                    object.__setattr__(fsdp_entry.shard, "_torch_grad", None)
+                    full = getattr(fsdp_entry, "full_param", None)
+                    if full is not None and full is not self:
+                        object.__setattr__(full, "_torch_grad", None)
+                elif fsdp_role != "full":
+                    fsdp_entry.last_grad = value
+                    full = getattr(fsdp_entry, "full_param", None)
+                    if full is not None and full is not self:
+                        object.__setattr__(full, "_torch_grad", None)
+            except Exception:
+                pass
+        # Write through by identity so step() sees manual grad assignment and,
+        # critically, p.grad=None cannot leave an old optimizer slot behind.
+        for r in getattr(jt, "_active_optimizers", None) or []:
+            o = r() if callable(r) else r
+            if o is None:
+                continue
+            changed = False
+            for pg in getattr(o, "param_groups", []):
+                params = list(pg.get("params", []))
+                for i, p in enumerate(params):
+                    same_fsdp_entry = fsdp_entry is not None and getattr(
+                        p, "_jittor_fsdp2_entry", None) is fsdp_entry
+                    if p is not self and not same_fsdp_entry:
+                        continue
+                    if fsdp_role == "full" and value is not None and p is not self:
+                        continue
+                    if value is None:
+                        grads = pg.get("grads")
+                        if grads is not None and i < len(grads):
+                            grads[i] = None
+                    else:
+                        grads = pg.get("grads")
+                        if grads is None:
+                            grads = pg["grads"] = [None] * len(params)
+                        while len(grads) < len(params):
+                            grads.append(None)
+                        grads[i] = value
+                    changed = True
+            if changed:
                 try:
-                    o.find_grad(self).update(value)
-                    break
+                    object.__setattr__(o, "_grad_map", {})
+                    if value is None:
+                        object.__setattr__(o, "_torch_backward_advanced_n_step", False)
+                    if value is not None:
+                        object.__setattr__(o, "_Optimizer__zero_grad", False)
                 except Exception:
                     pass
     Var.grad = property(_grad_get, _grad_set)
