@@ -215,7 +215,20 @@ void CudnnConvOp::jit_run() {
     int perf_count;
     STACK_ALLOC(cudnnConvolutionFwdAlgoPerf_t,perf_results,num_algos);
     cudnnConvolutionFwdAlgo_t algo;
-    bool benchmark = cudnn_benchmark > 0;
+    // cuDNN's heuristic can select an order-of-magnitude slower algorithm for
+    // low-precision, non-overlapping ViT/CLIP patch projections. In the
+    // default auto mode, benchmark only this narrow shape family and cache the
+    // result below. Explicit benchmark=0/1 keeps its normal force-off/on
+    // semantics for all convolutions.
+    bool low_precision_patch_projection = has_fp16_or_bf16
+        && groups == 1
+        && dimX[1] <= 4 && dimW[1] == dimX[1]
+        && paddingh == 0 && paddingw == 0
+        && dilationh == 1 && dilationw == 1
+        && dimW[2] >= 8 && dimW[3] >= 8
+        && strideh == dimW[2] && stridew == dimW[3];
+    bool benchmark = cudnn_benchmark > 0
+        || (cudnn_benchmark < 0 && low_precision_patch_projection);
 
     JK& jk = get_jk();
     jk.clear();
@@ -232,7 +245,9 @@ void CudnnConvOp::jit_run() {
     jk << strideh << "," << stridew << ":";
     jk << dilationh << "," << dilationw << ":" << groups << ";";
     jk << "compute=" << static_cast<int>(conv_compute_type) << ":";
-    jk << static_cast<int>(use_tensorcore || has_fp16_or_bf16) << ".";
+    jk << static_cast<int>(use_tensorcore || has_fp16_or_bf16) << ":";
+    // A cached algorithm must still honor a workspace limit changed at runtime.
+    jk << "workspace_ratio=" << max_workspace_ratio << ".";
     auto iter = fwd_algo_cache.find(jk.to_string());
     
     if (iter!=fwd_algo_cache.end()) algo = iter->second;
@@ -241,13 +256,14 @@ void CudnnConvOp::jit_run() {
         if (benchmark) {
             size_t max_ws_size = 0;
             for (int i = 0; i < num_algos; i++) {
-                size_t sz;
+                size_t sz = 0;
                 cudnnStatus_t ret = cudnnGetConvolutionForwardWorkspaceSize(
                     handle_, cudnnIdesc, cudnnFdesc, cudnnConvDesc, 
                     cudnnOdesc, algos[i], &sz);
+                if (ret != CUDNN_STATUS_SUCCESS) continue;
                 // continue if use too much workspace
                 if (sz > mem_info.total_cuda_ram * max_workspace_ratio) continue;
-                if (CUDNN_STATUS_SUCCESS == ret && sz > max_ws_size) max_ws_size = sz;
+                if (sz > max_ws_size) max_ws_size = sz;
             } 
             size_t allocation;
             void* ws = exe.temp_allocator->alloc(max_ws_size, allocation);

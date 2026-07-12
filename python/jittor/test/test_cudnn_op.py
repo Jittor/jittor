@@ -64,13 +64,23 @@ class TestCudnnConvOp(unittest.TestCase):
         ref = (ref + b_np.astype("float32")).reshape(1, 7, 7, 128)
         ref = ref.transpose(0, 3, 1, 2).astype("float16").astype("float32")
 
-        with jt.flag_scope(use_cuda=1), jt.no_grad():
-            out = jt.nn.conv2d(
-                jt.array(x_np), jt.array(w_np), jt.array(b_np), stride=32)
-            self.assertEqual(str(out.dtype), "float16")
-            got = out.float32().numpy()
+        old_benchmark = jt.cudnn.get_benchmark()
+        try:
+            jt.cudnn.set_benchmark(-1)
+            with jt.flag_scope(use_cuda=1), jt.no_grad():
+                x = jt.array(x_np)
+                w = jt.array(w_np)
+                b = jt.array(b_np)
+                out = jt.nn.conv2d(x, w, b, stride=32)
+                self.assertEqual(str(out.dtype), "float16")
+                got = out.float32().numpy()
+                # Exercise the repeated descriptor path after algorithm selection.
+                cached = jt.nn.conv2d(x, w, b, stride=32).float32().numpy()
+        finally:
+            jt.cudnn.set_benchmark(old_benchmark)
 
         np.testing.assert_allclose(got, ref, atol=2e-3, rtol=5e-4)
+        np.testing.assert_allclose(cached, ref, atol=2e-3, rtol=5e-4)
         rel_l2 = np.linalg.norm((got - ref).ravel()) / max(
             np.linalg.norm(ref.ravel()), 1e-30)
         self.assertLessEqual(rel_l2, 5e-4)
