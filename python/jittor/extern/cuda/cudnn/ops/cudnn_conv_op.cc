@@ -163,24 +163,22 @@ void CudnnConvOp::jit_run() {
     // is the kernel rc order
     // currently, No perf difference is observed between
     // this two mode
+    bool has_fp16_or_bf16 = x->dtype() == ns_float16
+        || y->dtype() == ns_float16 || w->dtype() == ns_float16
+        || x->dtype() == ns_bfloat16
+        || y->dtype() == ns_bfloat16 || w->dtype() == ns_bfloat16;
+    cudnnDataType_t conv_compute_type = has_fp16_or_bf16
+        ? CUDNN_DATA_FLOAT : getDataType<Ty>();
     checkCudaErrors(cudnnSetConvolutionNdDescriptor(
         cudnnConvDesc, 2,
         padA, convstrideA, dilationA,
-        CUDNN_CROSS_CORRELATION, getDataType<Ty>()
+        CUDNN_CROSS_CORRELATION, conv_compute_type
     ));
     // MIOpen requires groups to be set after descriptor initialization
     checkCudaErrors(cudnnSetConvolutionGroupCount( cudnnConvDesc, groups ));
 
     // using tensor core
-    if(use_tensorcore){
-        checkCudaErrors( cudnnSetConvolutionMathType(cudnnConvDesc, CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION) );
-    }
-    bool has_fp16_or_bf16 = x->dtype() == ns_float16
-        || y->dtype() == ns_float16 || w->dtype() == ns_float16
-        || x->dtype() == ns_bfloat16
-        || y->dtype() == ns_bfloat16 || w->dtype() == ns_bfloat16;
-    
-    if (has_fp16_or_bf16) {
+    if(use_tensorcore || has_fp16_or_bf16){
         checkCudaErrors( cudnnSetConvolutionMathType(cudnnConvDesc, CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION) );
     }
 
@@ -221,9 +219,20 @@ void CudnnConvOp::jit_run() {
 
     JK& jk = get_jk();
     jk.clear();
-    jk << dimX[0] << "," << dimX[1] << "," << dimX[2] << "," << dimX[3] << ",";
-    jk << dimW[0] << "," << dimW[1] << "," << dimW[2] << "," << dimW[3] << ",";
-    jk << paddingh << paddingw << "," <<strideh <<stridew << "," << dilationh << dilationw << "," << groups << ".";
+    jk << "x=" << x->dtype() << ":";
+    jk << dimX[0] << "," << dimX[1] << "," << dimX[2] << "," << dimX[3] << ":";
+    jk << strideX[0] << "," << strideX[1] << "," << strideX[2] << "," << strideX[3] << ";";
+    jk << "w=" << w->dtype() << ":";
+    jk << dimW[0] << "," << dimW[1] << "," << dimW[2] << "," << dimW[3] << ":";
+    jk << static_cast<int>(filterFormat_@WFORMAT) << ";";
+    jk << "y=" << y->dtype() << ":";
+    jk << dimY[0] << "," << dimY[1] << "," << dimY[2] << "," << dimY[3] << ":";
+    jk << strideY[0] << "," << strideY[1] << "," << strideY[2] << "," << strideY[3] << ";";
+    jk << "conv=" << paddingh << "," << paddingw << ":";
+    jk << strideh << "," << stridew << ":";
+    jk << dilationh << "," << dilationw << ":" << groups << ";";
+    jk << "compute=" << static_cast<int>(conv_compute_type) << ":";
+    jk << static_cast<int>(use_tensorcore || has_fp16_or_bf16) << ".";
     auto iter = fwd_algo_cache.find(jk.to_string());
     
     if (iter!=fwd_algo_cache.end()) algo = iter->second;

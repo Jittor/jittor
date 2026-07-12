@@ -240,6 +240,60 @@ class TestLayerNorm(Base):
             self.ac(ln(t(x)).numpy(), ref, atol=1e-4, msg="ln no_grad cuda 3d")
 
     @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    def test_ln_no_grad_cuda_fast_path_float32_and_float16(self):
+        rng = np.random.RandomState(218)
+        original = nn._ln_normalize
+
+        def reject_composite(*args, **kwargs):
+            raise AssertionError("CUDA no-grad LayerNorm missed its fused path")
+
+        try:
+            nn._ln_normalize = reject_composite
+            with jt.flag_scope(use_cuda=1), jt.no_grad():
+                x = rng.randn(2, 8, 32).astype("float32")
+                w = rng.randn(32).astype("float32")
+                b = rng.randn(32).astype("float32")
+                mu = x.mean(-1, keepdims=True); var = x.var(-1, keepdims=True)
+                ref = (x - mu) / np.sqrt(var + 1e-5) * w + b
+                ln = nn.LayerNorm(32)
+                ln.weight = t(w)
+                ln.bias = t(b)
+                out = ln(t(x))
+                self.assertEqual(str(out.dtype), "float32")
+                self.ac(out.numpy(), ref, atol=1e-4,
+                        msg="ln fused no_grad cuda float32")
+
+                for shape in ((2, 77, 512), (2, 50, 768)):
+                    hidden = shape[-1]
+                    for low_variance in (False, True):
+                        x = rng.randn(*shape).astype("float32")
+                        if low_variance:
+                            x = 1.0 + x * 1e-3
+                        w = rng.randn(hidden).astype("float32")
+                        b = rng.randn(hidden).astype("float32")
+                        x = x.astype("float16").astype("float32")
+                        w = w.astype("float16").astype("float32")
+                        b = b.astype("float16").astype("float32")
+                        mu = x.mean(-1, keepdims=True)
+                        var = x.var(-1, keepdims=True)
+                        ref = (x - mu) / np.sqrt(var + 1e-5) * w + b
+                        ref = ref.astype("float16").astype("float32")
+                        ln = nn.LayerNorm(hidden)
+                        dtype = "float16"
+                        ln.weight = t(w).cast(dtype)
+                        ln.bias = t(b).cast(dtype)
+                        out = ln(t(x).cast(dtype))
+                        got = out.float32().numpy()
+                        label = f"ln fused no_grad cuda fp16 h{hidden} lowvar={low_variance}"
+                        self.assertEqual(str(out.dtype), dtype)
+                        self.ac(got, ref, atol=2e-3, rtol=5e-4, msg=label)
+                        rel_l2 = np.linalg.norm((got - ref).ravel()) / max(
+                            np.linalg.norm(ref.ravel()), 1e-30)
+                        self.assertLessEqual(rel_l2, 5e-4, label)
+        finally:
+            nn._ln_normalize = original
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
     def test_ln_no_grad_cuda_scalar_affine_fast(self):
         rng = np.random.RandomState(217)
         x = rng.randn(4, 16, 128).astype("float32")

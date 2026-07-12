@@ -2001,6 +2001,24 @@ def install(torch):
         if q_shape[-1] != k_shape[-1] or q_shape[-1] != v_shape[-1]:
             _sdpa_flash_miss("head_dim_mismatch")
             return None
+        # For CLIP-style short self-attention, the two cuBLAS matmuls plus the
+        # fused softmax are faster than materializing the three layout copies
+        # required by the separate-QKV FlashAttention wrapper. Keep this
+        # inference-only and narrowly shaped so decoding, GQA and training keep
+        # their existing backend choice.
+        short_square_math = (
+            _sdpa_static_backend_cache_enabled()
+            and not enable_gqa and not is_causal
+            and len(q_shape) == 4 and 0 < int(q_shape[0]) <= 8
+            and query_heads == key_heads == value_heads == 12
+            and int(q_shape[-1]) == 64
+            and int(q_shape[-2]) == int(k_shape[-2]) == int(v_shape[-2])
+            and int(q_shape[-2]) <= 64
+            and str(query.dtype) == str(key.dtype) == str(value.dtype)
+            and str(query.dtype) == "float16")
+        if short_square_math:
+            _sdpa_flash_miss("short_square_math")
+            return None
         template_dim = _sdpa_flash_template_dim(q_shape[-1])
         if template_dim is None:
             _sdpa_flash_miss("head_dim")
@@ -2158,25 +2176,44 @@ def install(torch):
             else:
                 scores = jt.matmul(query, key.transpose(-1, -2)) * sf
             mask_row_valid = None
+            mask_softmax = None
             if is_causal:
                 Lq, Lk = query.shape[-2], key.shape[-2]
                 mask = jt.triu(jt.ones((Lq, Lk)), 1) * (-1e30)
                 scores = scores + mask
             if attn_mask is not None:
+                try:
+                    import jittor.other.code_softmax as _code_softmax
+                    if _code_softmax.can_softmax_v1(scores, -1):
+                        mask_softmax = _code_softmax
+                except Exception:
+                    mask_softmax = None
                 if str(attn_mask.dtype) == "bool":
-                    mask_row_valid = attn_mask.sum(-1, keepdims=True) > 0
-                    scores = scores + (1 - attn_mask.float32()) * (-1e30)
+                    if mask_softmax is not None:
+                        zero_bias = jt.zeros_like(attn_mask, dtype=scores.dtype)
+                        mask_bias = jt.ternary(
+                            attn_mask, zero_bias,
+                            zero_bias + float("-inf"))
+                        scores = scores + mask_bias
+                    else:
+                        mask_row_valid = attn_mask.sum(-1, keepdims=True) > 0
+                        scores = scores + (1 - attn_mask.float32()) * (-1e30)
                 else:
-                    neg_inf = jt.isinf(attn_mask) & (attn_mask < 0)
-                    mask_row_valid = neg_inf.sum(-1, keepdims=True) < attn_mask.shape[-1]
                     scores = scores + attn_mask
+                    if mask_softmax is None:
+                        neg_inf = jt.isinf(attn_mask) & (attn_mask < 0)
+                        mask_row_valid = neg_inf.sum(-1, keepdims=True) < attn_mask.shape[-1]
             if mask_row_valid is not None:
                 # Keep the softmax graph finite as well as its final output.
                 # Masking only after softmax would leave NaNs in its backward
                 # for an additive row containing only -inf values.
                 scores = jt.ternary(
                     mask_row_valid, scores, jt.zeros_like(scores))
-            attn = nn.softmax(scores, dim=-1)
+            if mask_softmax is not None:
+                attn = mask_softmax.softmax_v1(
+                    scores, zero_all_neg_inf=True)
+            else:
+                attn = nn.softmax(scores, dim=-1)
             if mask_row_valid is not None:
                 # PyTorch defines a fully masked query row as all zeros. A
                 # finite sentinel would otherwise produce a uniform row, while

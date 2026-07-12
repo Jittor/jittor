@@ -131,6 +131,34 @@ class TestSDPA(Base):
                                     name + " " + tensor_name + " grad")
 
     @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    def test_sdpa_short_square_inference_prefers_math(self):
+        rng = np.random.RandomState(97)
+        q = rng.randn(1, 12, 50, 64).astype("float32")
+        k = rng.randn(1, 12, 50, 64).astype("float32")
+        v = rng.randn(1, 12, 50, 64).astype("float32")
+        old_inference = os.environ.get("JITTOR_TORCH_INFERENCE")
+        os.environ["JITTOR_TORCH_INFERENCE"] = "1"
+        try:
+            with jt.flag_scope(use_cuda=1), jt.no_grad():
+                if hasattr(jt, "_torch_sdpa_flash_stats"):
+                    delattr(jt, "_torch_sdpa_flash_stats")
+                out = torch.nn.functional.scaled_dot_product_attention(
+                    jt.array(q).float16(), jt.array(k).float16(),
+                    jt.array(v).float16())
+                got = out.float32().numpy()
+                stats = getattr(jt, "_torch_sdpa_flash_stats", {})
+        finally:
+            if old_inference is None:
+                os.environ.pop("JITTOR_TORCH_INFERENCE", None)
+            else:
+                os.environ["JITTOR_TORCH_INFERENCE"] = old_inference
+        self.assertEqual(stats.get("hits", 0), 0)
+        self.assertGreaterEqual(
+            stats.get("misses", {}).get("short_square_math", 0), 1)
+        self.ac(got, _sdpa_ref(q, k, v), atol=3e-3, rtol=3e-3,
+                msg="short square inference math SDPA")
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
     def test_required_flash_backend_returning_none_raises(self):
         from jittor.torch_shim import flashattn_jittor
 

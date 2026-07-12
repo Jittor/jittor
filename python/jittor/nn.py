@@ -1226,10 +1226,10 @@ def _ln_normalize(x, dims, eps):
 
 
 def _layer_norm_no_grad_cuda(x, normalized_shape, weight, bias, eps):
-    if not (jt.flags.use_cuda and not getattr(jt.flags, "use_acl", 0)
+    if not (jt.flags.use_cuda and not getattr(jt.compiler, "has_acl", 0)
             and getattr(jt.flags, "no_grad", 0)):
         return None
-    if len(normalized_shape) != 1 or str(x.dtype) != "float32":
+    if len(normalized_shape) != 1 or str(x.dtype) not in ("float16", "float32"):
         return None
     hidden = int(normalized_shape[0])
     var_affine = isinstance(weight, jt.Var) and isinstance(bias, jt.Var)
@@ -1242,7 +1242,6 @@ def _layer_norm_no_grad_cuda(x, normalized_shape, weight, bias, eps):
     rows = 1
     for size in x.shape[:-1]:
         rows *= int(size)
-    x2 = x.reshape((rows, hidden))
     eps_value = float(eps)
     if scalar_affine:
         scale_value = float(weight)
@@ -1250,90 +1249,126 @@ def _layer_norm_no_grad_cuda(x, normalized_shape, weight, bias, eps):
         scale_literal = f"{scale_value:.9e}f"
         offset_literal = f"{offset_value:.9e}f"
         y = jt.code(
-            (rows, hidden),
+            x.shape,
             x.dtype,
-            [x2],
+            [x],
             cuda_src=f"""
-            __global__ static void kernel(@ARGS_DEF) {{
-                @PRECALC
+            __device__ __forceinline__ float warp_sum(float value) {{
+                for (int offset = 16; offset > 0; offset >>= 1)
+                    value += __shfl_down_sync(0xffffffff, value, offset);
+                return value;
+            }}
+            __global__ static void kernel(
+                    in0_type* x, out0_type* y, int hidden) {{
                 int row = blockIdx.x;
                 int tid = threadIdx.x;
-                __shared__ float buf[128];
+                int lane = tid & 31;
+                int warp = tid >> 5;
+                __shared__ float warp_buf[4];
+                __shared__ float mean_shared;
+                __shared__ float inv_std_shared;
                 float sum = 0.0f;
-                for (int j = tid; j < in0_shape1; j += blockDim.x)
-                    sum += @in0(row, j);
-                buf[tid] = sum;
+                for (int j = tid; j < hidden; j += blockDim.x)
+                    sum += static_cast<float>(x[row * hidden + j]);
+                sum = warp_sum(sum);
+                if (lane == 0) warp_buf[warp] = sum;
                 __syncthreads();
-                for (int stride = blockDim.x >> 1; stride > 0; stride >>= 1) {{
-                    if (tid < stride) buf[tid] += buf[tid + stride];
-                    __syncthreads();
+                if (warp == 0) {{
+                    float total = lane < 4 ? warp_buf[lane] : 0.0f;
+                    total = warp_sum(total);
+                    if (lane == 0) mean_shared = total / hidden;
                 }}
-                float mean = buf[0] / in0_shape1;
+                __syncthreads();
+                float mean = mean_shared;
                 float var = 0.0f;
-                for (int j = tid; j < in0_shape1; j += blockDim.x) {{
-                    float d = @in0(row, j) - mean;
+                for (int j = tid; j < hidden; j += blockDim.x) {{
+                    float d = static_cast<float>(x[row * hidden + j]) - mean;
                     var += d * d;
                 }}
-                buf[tid] = var;
+                var = warp_sum(var);
+                if (lane == 0) warp_buf[warp] = var;
                 __syncthreads();
-                for (int stride = blockDim.x >> 1; stride > 0; stride >>= 1) {{
-                    if (tid < stride) buf[tid] += buf[tid + stride];
-                    __syncthreads();
+                if (warp == 0) {{
+                    float total = lane < 4 ? warp_buf[lane] : 0.0f;
+                    total = warp_sum(total);
+                    if (lane == 0)
+                        inv_std_shared = rsqrtf(total / hidden + {eps_value:.9g}f);
                 }}
-                float inv_std = rsqrtf(buf[0] / in0_shape1 + {eps_value:.9g}f);
-                for (int j = tid; j < in0_shape1; j += blockDim.x)
-                    @out(row, j) = (@in0(row, j) - mean) * inv_std * {scale_literal} + {offset_literal};
+                __syncthreads();
+                float inv_std = inv_std_shared;
+                for (int j = tid; j < hidden; j += blockDim.x)
+                    y[row * hidden + j] = out0_type(
+                        (static_cast<float>(x[row * hidden + j]) - mean)
+                        * inv_std * {scale_literal} + {offset_literal});
             }}
-            kernel<<<in0_shape0, 128>>>(@ARGS);
+            kernel<<<{rows}, 128>>>(in0_p, out0_p, {hidden});
             """,
         )
-        return y.reshape(x.shape)
+        return y
     if int(weight.numel()) != hidden or int(bias.numel()) != hidden:
         return None
-    w = weight.reshape((hidden,))
-    b = bias.reshape((hidden,))
     y = jt.code(
-        (rows, hidden),
+        x.shape,
         x.dtype,
-        [x2, w, b],
+        [x, weight, bias],
         cuda_src=f"""
-        __global__ static void kernel(@ARGS_DEF) {{
-            @PRECALC
+        __device__ __forceinline__ float warp_sum(float value) {{
+            for (int offset = 16; offset > 0; offset >>= 1)
+                value += __shfl_down_sync(0xffffffff, value, offset);
+            return value;
+        }}
+        __global__ static void kernel(
+                in0_type* x, in1_type* weight, in2_type* bias,
+                out0_type* y, int hidden) {{
             int row = blockIdx.x;
             int tid = threadIdx.x;
-            __shared__ float buf[128];
+            int lane = tid & 31;
+            int warp = tid >> 5;
+            __shared__ float warp_buf[4];
+            __shared__ float mean_shared;
+            __shared__ float inv_std_shared;
             float sum = 0.0f;
-            for (int j = tid; j < in0_shape1; j += blockDim.x)
-                sum += @in0(row, j);
-            buf[tid] = sum;
+            for (int j = tid; j < hidden; j += blockDim.x)
+                sum += static_cast<float>(x[row * hidden + j]);
+            sum = warp_sum(sum);
+            if (lane == 0) warp_buf[warp] = sum;
             __syncthreads();
-            for (int stride = blockDim.x >> 1; stride > 0; stride >>= 1) {{
-                if (tid < stride) buf[tid] += buf[tid + stride];
-                __syncthreads();
+            if (warp == 0) {{
+                float total = lane < 4 ? warp_buf[lane] : 0.0f;
+                total = warp_sum(total);
+                if (lane == 0) mean_shared = total / hidden;
             }}
-            float mean = buf[0] / in0_shape1;
+            __syncthreads();
+            float mean = mean_shared;
             float var = 0.0f;
-            for (int j = tid; j < in0_shape1; j += blockDim.x) {{
-                float d = @in0(row, j) - mean;
+            for (int j = tid; j < hidden; j += blockDim.x) {{
+                float d = static_cast<float>(x[row * hidden + j]) - mean;
                 var += d * d;
             }}
-            buf[tid] = var;
+            var = warp_sum(var);
+            if (lane == 0) warp_buf[warp] = var;
             __syncthreads();
-            for (int stride = blockDim.x >> 1; stride > 0; stride >>= 1) {{
-                if (tid < stride) buf[tid] += buf[tid + stride];
-                __syncthreads();
+            if (warp == 0) {{
+                float total = lane < 4 ? warp_buf[lane] : 0.0f;
+                total = warp_sum(total);
+                if (lane == 0)
+                    inv_std_shared = rsqrtf(total / hidden + {eps_value:.9g}f);
             }}
-            float inv_std = rsqrtf(buf[0] / in0_shape1 + {eps_value:.9g}f);
-            for (int j = tid; j < in0_shape1; j += blockDim.x) {{
-                float scale = static_cast<float>(@in1(j));
-                float offset = static_cast<float>(@in2(j));
-                @out(row, j) = (@in0(row, j) - mean) * inv_std * scale + offset;
+            __syncthreads();
+            float inv_std = inv_std_shared;
+            for (int j = tid; j < hidden; j += blockDim.x) {{
+                float scale = static_cast<float>(weight[j]);
+                float offset = static_cast<float>(bias[j]);
+                y[row * hidden + j] = out0_type(
+                    (static_cast<float>(x[row * hidden + j]) - mean)
+                    * inv_std * scale + offset);
             }}
         }}
-        kernel<<<in0_shape0, 128>>>(@ARGS);
+        kernel<<<{rows}, 128>>>(
+            in0_p, in1_p, in2_p, out0_p, {hidden});
         """,
     )
-    return y.reshape(x.shape)
+    return y
 
 
 class LayerNorm(Module):
@@ -1492,11 +1527,18 @@ class _CudnnConv2d(jt.Function):
 
 def _try_cudnn_conv2d(x, weight, bias, stride, padding, dilation, groups):
     ''' Return a cuDNN-backed conv2d result, or None if cuDNN isn't applicable
-    (CPU / no cuDNN / non-float32) so the caller falls back to the reindex path. '''
+    so the caller falls back to the reindex path. Low-precision tensors use
+    cuDNN only for inference; their training backward stays on the established
+    reindex implementation. '''
     if not (jt.flags.use_cuda and getattr(jt, "cudnn", None)):
         return None
-    if str(x.dtype) != "float32" or str(weight.dtype) != "float32":
-        return None        # keep amp / float16 / complex on the well-tested reindex path
+    x_dtype, weight_dtype = str(x.dtype), str(weight.dtype)
+    if x_dtype != weight_dtype:
+        return None
+    if x_dtype != "float32" and not (
+            x_dtype in ("float16", "bfloat16")
+            and getattr(jt.flags, "no_grad", 0)):
+        return None
     sh, sw = stride   if isinstance(stride, tuple)   else (stride, stride)
     ph, pw = padding  if isinstance(padding, tuple)  else (padding, padding)
     dh, dw = dilation if isinstance(dilation, tuple) else (dilation, dilation)

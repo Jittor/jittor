@@ -65,8 +65,8 @@ CHECK(0 == cudaGetLastError());
 ''')
 
 
-@lru_cache(maxsize=128)
-def _softmax_v1_cls(length, log=False):
+@lru_cache(maxsize=256)
+def _softmax_v1_cls(length, log=False, zero_all_neg_inf=False):
     # The generated Function class and CUDA source depend only on the reduced
     # length and log mode. Building both inside every softmax call added tens of
     # microseconds of Python graph-construction overhead even after the kernel
@@ -96,6 +96,7 @@ def _softmax_v1_cls(length, log=False):
 __global__ void kernel(in0_type* x, out0_type* y, int len) {{
     typedef cub::BlockReduce<float, {tnum}> BlockReduce;
     constexpr int need_log = {int(log)};
+    constexpr int zero_neg_inf = {int(zero_all_neg_inf)};
     __shared__ typename BlockReduce::TempStorage temp_storage;
 
     int id = blockIdx.x * len;
@@ -119,7 +120,9 @@ __global__ void kernel(in0_type* x, out0_type* y, int len) {{
     {for_loop}
         #pragma unroll
         for (int j=0; j<{ILP}; j++) {{
-            if (need_log) {{
+            if (zero_neg_inf && !need_log && vmax == -INFINITY) {{
+                v[i][j] = 0.0f;
+            }} else if (need_log) {{
                 v[i][j] = float(v[i][j]) - vmax;
                 v1 += expf(float(v[i][j]));
             }} else {{
@@ -137,7 +140,9 @@ __global__ void kernel(in0_type* x, out0_type* y, int len) {{
     {for_loop}
         #pragma unroll
         for (int j=0; j<{ILP}; j++) {{
-            if (need_log)
+            if (zero_neg_inf && !need_log && vmax == -INFINITY)
+                v[i][j] = 0.0f;
+            else if (need_log)
                 v[i][j] = v[i][j] - @expand_op(log,@in0_type,vsum);
             else
                 v[i][j] = float(v[i][j])/vsum;
@@ -210,8 +215,8 @@ CHECK(0 == cudaGetLastError());
     return CodeSoftmax
 
 
-@lru_cache(maxsize=4)
-def _softmax_streaming_cls(threads, log=False):
+@lru_cache(maxsize=8)
+def _softmax_streaming_cls(threads, log=False, zero_all_neg_inf=False):
     # Large vocabularies cannot keep a complete row in registers without
     # spilling or exceeding the per-block register limit. Re-read logits for
     # max, exp-sum and output instead; this remains one launch and bounds
@@ -230,6 +235,7 @@ def _softmax_streaming_cls(threads, log=False):
 __global__ void kernel(in0_type* x, out0_type* y, int len) {{
     typedef cub::BlockReduce<float, {threads}> BlockReduce;
     constexpr int need_log = {int(log)};
+    constexpr int zero_neg_inf = {int(zero_all_neg_inf)};
     __shared__ typename BlockReduce::TempStorage storage;
     __shared__ float row_max;
     __shared__ float row_sum;
@@ -244,14 +250,16 @@ __global__ void kernel(in0_type* x, out0_type* y, int len) {{
 
     local = 0.0f;
     for (int col = threadIdx.x; col < len; col += blockDim.x)
-        local += expf(float(x[base + col]) - row_max);
+        local += (zero_neg_inf && !need_log && row_max == -INFINITY)
+            ? 0.0f : expf(float(x[base + col]) - row_max);
     reduced = BlockReduce(storage).Sum(local);
     if (threadIdx.x == 0) row_sum = reduced;
     __syncthreads();
 
     for (int col = threadIdx.x; col < len; col += blockDim.x) {{
         float shifted = float(x[base + col]) - row_max;
-        y[base + col] = need_log
+        y[base + col] = (zero_neg_inf && !need_log && row_max == -INFINITY)
+            ? out0_type(0.0f) : need_log
             ? out0_type(shifted - logf(row_sum))
             : out0_type(expf(shifted) / row_sum);
     }}
@@ -269,10 +277,11 @@ CHECK(0 == cudaGetLastError());
     return CodeSoftmaxStreaming
 
 
-def softmax_v1(a, log=False):
+def softmax_v1(a, log=False, zero_all_neg_inf=False):
     assert can_softmax_v1(a, -1)
     length = int(a.shape[-1])
     kind, threads = _softmax_schedule(length)
-    cls = (_softmax_v1_cls(length, bool(log)) if kind == "register"
-           else _softmax_streaming_cls(threads, bool(log)))
+    cls = (_softmax_v1_cls(length, bool(log), bool(zero_all_neg_inf))
+           if kind == "register" else
+           _softmax_streaming_cls(threads, bool(log), bool(zero_all_neg_inf)))
     return cls()(a)
