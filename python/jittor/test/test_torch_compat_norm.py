@@ -240,6 +240,38 @@ class TestLayerNorm(Base):
             self.ac(ln(t(x)).numpy(), ref, atol=1e-4, msg="ln no_grad cuda 3d")
 
     @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    def test_ln_no_grad_cuda_dynamic_rows_share_source(self):
+        rng = np.random.RandomState(219)
+        arrays = [
+            rng.randn(2, 8, 32).astype("float32"),
+            rng.randn(3, 7, 32).astype("float32"),
+        ]
+        sources = []
+        original_code = jt.code
+
+        def capture_code(*args, **kwargs):
+            sources.append(kwargs.get("cuda_src"))
+            return original_code(*args, **kwargs)
+
+        with jt.flag_scope(use_cuda=1), jt.no_grad():
+            ln = nn.LayerNorm(32)
+            inputs = [t(array) for array in arrays]
+            try:
+                jt.code = capture_code
+                outputs = [ln(value) for value in inputs]
+            finally:
+                jt.code = original_code
+
+            self.assertEqual(len(sources), 2)
+            self.assertEqual(sources[0], sources[1])
+            for array, output in zip(arrays, outputs):
+                mean = array.mean(-1, keepdims=True)
+                var = array.var(-1, keepdims=True)
+                ref = (array - mean) / np.sqrt(var + 1e-5)
+                self.ac(output.numpy(), ref, atol=1e-4,
+                        msg="ln dynamic rows shared source")
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
     def test_ln_no_grad_cuda_fast_path_float32_and_float16(self):
         rng = np.random.RandomState(218)
         original = nn._ln_normalize

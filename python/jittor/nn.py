@@ -1239,9 +1239,6 @@ def _layer_norm_no_grad_cuda(x, normalized_shape, weight, bias, eps):
             return None
     if int(x.shape[-1]) != hidden:
         return None
-    rows = 1
-    for size in x.shape[:-1]:
-        rows *= int(size)
     eps_value = float(eps)
     if scalar_affine:
         scale_value = float(weight)
@@ -1301,7 +1298,8 @@ def _layer_norm_no_grad_cuda(x, normalized_shape, weight, bias, eps):
                         (static_cast<float>(x[row * hidden + j]) - mean)
                         * inv_std * {scale_literal} + {offset_literal});
             }}
-            kernel<<<{rows}, 128>>>(in0_p, out0_p, {hidden});
+            int rows = in0->num / {hidden};
+            kernel<<<rows, 128>>>(in0_p, out0_p, {hidden});
             """,
         )
         return y
@@ -1364,7 +1362,8 @@ def _layer_norm_no_grad_cuda(x, normalized_shape, weight, bias, eps):
                     * inv_std * scale + offset);
             }}
         }}
-        kernel<<<{rows}, 128>>>(
+        int rows = in0->num / {hidden};
+        kernel<<<rows, 128>>>(
             in0_p, in1_p, in2_p, out0_p, {hidden});
         """,
     )
