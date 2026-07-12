@@ -13,6 +13,21 @@ keeps the operations from the upstream README and adds only:
 - a two-sample input that actually invokes the class defined by Usage;
 - assertions and explicit success markers.
 
+## Download upstream
+
+Download the official repository from the network and pin the audited commit:
+
+```bash
+mkdir -p /home/zy/projects/jittor/.work_tmp/torchquantum-validation
+git clone --depth 1 https://github.com/mit-han-lab/torchquantum.git \
+  /home/zy/projects/jittor/.work_tmp/torchquantum-validation/upstream
+git -C /home/zy/projects/jittor/.work_tmp/torchquantum-validation/upstream \
+  checkout 8dc3255c51477dd4c28892049571df032c77e2ff
+```
+
+Confirm `git config --get remote.origin.url` is the official URL and compare
+the local SHA with `git ls-remote ... HEAD refs/heads/main` before validation.
+
 ## Environment
 
 TorchQuantum imports its Qiskit, TorchPack, and pulse dependencies eagerly. Put

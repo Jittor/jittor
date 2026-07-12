@@ -15,6 +15,27 @@
 
 TorchQuantum `v0.2.0` 与上述 `main` 的这两个代码块相同。本次选择当前默认分支 HEAD，避免用旧 PyPI `0.1.8` 代替“现在”的上游状态。
 
+## 网络下载来源
+
+TorchQuantum 不是使用本机预存副本或 PyPI 包，而是本次从用户指定的官方仓库网络克隆：
+
+```bash
+git clone --depth 1 https://github.com/mit-han-lab/torchquantum.git \
+  .work_tmp/torchquantum-validation/upstream
+```
+
+完成审计时的证据为：
+
+```text
+remote.origin.url=https://github.com/mit-han-lab/torchquantum.git
+local HEAD=8dc3255c51477dd4c28892049571df032c77e2ff
+remote HEAD=8dc3255c51477dd4c28892049571df032c77e2ff
+remote main=8dc3255c51477dd4c28892049571df032c77e2ff
+worktree=clean, branch main...origin/main
+```
+
+本机 `/home/zy/.gitconfig` 配有 `https://github.com/` 到 `https://gh-proxy.com/https://github.com/` 的 `insteadOf` 网络代理规则，因此 `git remote get-url` 会显示代理展开后的地址；仓库实际保存的 `remote.origin.url` 仍是上面的用户指定 URL。再次对该 URL 执行 `git ls-remote` 得到相同 SHA。
+
 ## 环境
 
 - 主机：`cscg104`，8 张 NVIDIA GeForce RTX 4090；本机没有 NPU/CANN

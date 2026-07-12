@@ -48,7 +48,7 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
 - **文档**：工作记录 `agent/workdocs/2026-07-12-test-example-validation.md`；中文交付文档 `/home/zy/projects/doc/2026-07-12-test-example-validation.md`；完整日志 `agent/worklogs/2026-07-12-test-example.log`。本次按约定只验证和诊断，未修改源码。
 
 ### 🔴 本会话增量（2026-07-12：TorchQuantum README 兼容性验证）
-- **当前不支持**：固定官方 TorchQuantum `main@8dc3255c`（0.3.0），通过 `import jittor as torch` 串行运行 README `Basic Usage`（CUDA、CPU）和 `Usage` 实际前向（CUDA），三次均退出码 1，未达到验收标准。入口已确认 `sys.modules["torch"] is jittor`，不是误用了真 PyTorch。
+- **当前不支持**：从用户指定的 `https://github.com/mit-han-lab/torchquantum.git` 网络克隆官方仓库，固定 `main@8dc3255c`（0.3.0）；本地 HEAD 与 `git ls-remote` 的远端 HEAD/main 完全一致。通过 `import jittor as torch` 串行运行 README `Basic Usage`（CUDA、CPU）和 `Usage` 实际前向（CUDA），三次均退出码 1，未达到验收标准。入口已确认 `sys.modules["torch"] is jittor`，不是误用了真 PyTorch。
 - **首个确定阻断**：TorchQuantum 导入期 `torch.tensor([...1j...], dtype=complex64)` 触发 `torch_compat.tensor()` 先用 NumPy 推断/创建 complex128 Var、后 cast complex64；Jittor 不支持 complex128，报 `Numpy type not support type_char: D`。NumPy 1.26.4 与官方依赖 NumPy 2.4.6 均最小复现。
 - **继续诊断又确认 3 个缺口**：临时仅绕过首项后，`complex64_var[i][j] = Python complex` 报 setitem 参数不支持；Usage `MeasureAll` 所需 `Tensor.mv` 直接 `AttributeError`；Basic 参数链 `float32 -> complex64 -> backward` 在 CUDA 编译 complex64→float32 cast 时失败。这些均已实际复现，不是静态审计误报。
 - **原生 torch 对照通过**：同一 TorchQuantum/依赖下，真 PyTorch 2.12.1+cu130 的 CUDA Basic Usage 退出 0（expval≈0.8776、grad≈-0.4794），Usage 输出 `(2,2)`、finite，排除上游 README 失效。
