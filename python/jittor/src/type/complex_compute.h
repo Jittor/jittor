@@ -39,6 +39,7 @@ inline JT_CPLX_HD complex64 operator/(complex64 a, complex64 b) {
 inline JT_CPLX_HD bool operator==(complex64 a, complex64 b) { return a.real==b.real && a.imag==b.imag; }
 inline JT_CPLX_HD bool operator!=(complex64 a, complex64 b) { return !(a==b); }
 inline JT_CPLX_HD complex64 jt_conj(complex64 a) { return complex64(a.real, -a.imag); }
+inline JT_CPLX_HD float jt_creal(complex64 a) { return a.real; }
 inline JT_CPLX_HD float jt_cabs(complex64 a) { return ::sqrtf(a.real*a.real + a.imag*a.imag); }
 
 // Complex transcendentals (principal branches), matching numpy/torch. ::expf/::cosf/etc are

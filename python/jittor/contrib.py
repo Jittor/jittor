@@ -253,6 +253,11 @@ def getitem(x, slices):
     return x.getitem(slices)
 
 def setitem(x, slices, value):
+    # Native complex64 tensors need a typed Var for scalar assignment. The C++
+    # converter accepts real Python numbers but not Python/NumPy complex scalars,
+    # and an untyped NumPy conversion would infer unsupported complex128.
+    if x.dtype == "complex64" and isinstance(value, (complex, np.complexfloating)):
+        value = jt.array(np.asarray([value], dtype=np.complex64))
     # torch treats a uint8 (byte) index Var as a boolean mask, same legacy
     # semantics as getitem above (e.g. e2cnn's full_mask[mask] = norms, where
     # mask is uint8). jittor reads uint8 as element values -> route through the

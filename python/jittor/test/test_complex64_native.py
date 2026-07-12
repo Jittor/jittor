@@ -43,6 +43,63 @@ class TestComplex64Native(unittest.TestCase):
                                           np.zeros(3, "complex64"), err_msg=f"zeros {dev}")
         both_devices(body)
 
+    def test_python_complex_scalar_setitem(self):
+        def body(dev):
+            z = jt.zeros((2, 2), "complex64")
+            z[0, 1] = 1 + 2j
+            z[1][0] = np.complex64(-3 + 4j)
+            expected = np.array([[0, 1 + 2j], [-3 + 4j, 0]], dtype="complex64")
+            np.testing.assert_array_equal(np.asarray(z.numpy()), expected,
+                                          err_msg=f"complex scalar setitem {dev}")
+        both_devices(body)
+
+    def test_real_complex_cast_and_backward(self):
+        def body(dev):
+            z = jt.array(np.array([1 + 2j, -3 + 4j], dtype="complex64"))
+            np.testing.assert_array_equal(np.asarray(z.cast("float32").numpy()),
+                                          np.array([1, -3], dtype="float32"),
+                                          err_msg=f"complex-to-real cast {dev}")
+            zb = jt.array(np.array([0 + 1j, 0 + 0j, 2 + 0j], dtype="complex64"))
+            np.testing.assert_array_equal(np.asarray(zb.cast("bool").numpy()),
+                                          np.array([True, False, True]),
+                                          err_msg=f"complex-to-bool cast {dev}")
+
+            seed = jt.array(np.array([2.0, -0.5], dtype="float32"))
+            z_for_grad = jt.array(np.array([1 + 2j, -3 + 4j], dtype="complex64"))
+            z_grad = jt.grad((z_for_grad.cast("float32") * seed).sum(), z_for_grad)
+            if isinstance(z_grad, (list, tuple)):
+                z_grad = z_grad[0]
+            np.testing.assert_array_equal(np.asarray(z_grad.numpy()),
+                                          np.array([2 + 0j, -0.5 + 0j], dtype="complex64"),
+                                          err_msg=f"complex-to-real cast backward {dev}")
+
+            x = jt.array(np.array([0.5, -1.25], dtype="float32"))
+            x.start_grad()
+            loss = x.cast("complex64").real.sum()
+            grad = jt.grad(loss, x)
+            if isinstance(grad, (list, tuple)):
+                grad = grad[0]
+            self.assertEqual(str(grad.dtype), "float32", f"cast grad dtype {dev}")
+            np.testing.assert_array_equal(np.asarray(grad.numpy()),
+                                          np.ones(2, dtype="float32"),
+                                          err_msg=f"real-to-complex cast backward {dev}")
+        both_devices(body)
+
+    def test_python_complex_scalar_binary(self):
+        x_np = np.array([0.5, -1.25], dtype="float32")
+        def body(dev):
+            x = jt.array(x_np)
+            for name, got, expected in (
+                ("rmul", 1j * x, 1j * x_np),
+                ("add", x + np.complex64(2 - 3j), x_np + np.complex64(2 - 3j)),
+                ("rdiv", (1 + 2j) / x, (1 + 2j) / x_np),
+            ):
+                self.assertEqual(str(got.dtype), "complex64", f"{name} dtype {dev}")
+                np.testing.assert_allclose(np.asarray(got.numpy()), expected,
+                                           atol=1e-6, rtol=1e-6,
+                                           err_msg=f"complex scalar {name} {dev}")
+        both_devices(body)
+
     def test_arithmetic(self):
         rng = np.random.RandomState(0)
         a = (rng.randn(8) + 1j * rng.randn(8)).astype("complex64")

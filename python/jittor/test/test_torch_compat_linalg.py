@@ -32,6 +32,23 @@ class Base(unittest.TestCase):
 
 
 class TestLinalg(Base):
+    def test_mv(self):
+        A = np.random.RandomState(11).randn(3, 4).astype("float32")
+        v = np.random.RandomState(12).randn(4).astype("float32")
+        ref = A @ v
+        def body(dev):
+            matrix, vector = torch.tensor(A), torch.tensor(v)
+            self.ac(torch.mv(matrix, vector).numpy(), ref, msg=f"torch.mv {dev}")
+            self.ac(matrix.mv(vector).numpy(), ref, msg=f"Tensor.mv {dev}")
+            out = torch.empty((3,), dtype=torch.float32)
+            self.assertIs(torch.mv(matrix, vector, out=out), out, f"torch.mv out identity {dev}")
+            self.ac(out.numpy(), ref, msg=f"torch.mv out value {dev}")
+            with self.assertRaisesRegex(RuntimeError, "2-D matrix"):
+                torch.mv(matrix.reshape(1, 3, 4), vector)
+            with self.assertRaisesRegex(RuntimeError, "size mismatch"):
+                matrix.mv(torch.ones((3,)))
+        both_devices(body)
+
     def test_det_slogdet(self):
         A = self.spd(4, 0)
         def body(dev):

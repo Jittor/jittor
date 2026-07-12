@@ -1279,9 +1279,15 @@ def install(torch):
 
     def tensor(data, dtype=None, device=None, requires_grad=False, **kw):
         import numpy as _np
+        ds = _dtype_to_str(dtype)
         if isinstance(data, Var):
             v = data.clone()
         elif isinstance(data, _np.ndarray):
+            # Respect an explicit complex64 request before constructing the Var.
+            # NumPy otherwise keeps complex literals as unsupported complex128,
+            # so casting only after jt.array() is too late.
+            if ds == "complex64" and data.dtype.name != "complex64":
+                data = _np.asarray(data, dtype=_np.complex64)
             v = _array_keep_dtype(data)          # explicit numpy: preserve dtype (torch does too)
         else:
             # torch's tensor/as_tensor([t1, t2, ...]) flattens SCALAR tensors into a
@@ -1295,11 +1301,14 @@ def install(torch):
             # Python scalar/list/tuple: numpy infers float64 from Python floats, but
             # torch's default float dtype is float32. Match torch (and avoid float64,
             # which Ascend/ACL does not support) by downcasting inferred float64.
-            arr = _np.asarray(data)
+            arr = _np.asarray(data, dtype=_np.complex64 if ds == "complex64" else None)
             if arr.dtype == _np.float64:
                 arr = arr.astype(_np.float32)
+            elif arr.dtype == _np.complex128 and ds != "complex128":
+                # torch's default complex dtype follows its default float dtype,
+                # so Python complex literals default to complex64.
+                arr = arr.astype(_np.complex64)
             v = _array_keep_dtype(arr)
-        ds = _dtype_to_str(dtype)
         if ds is not None:
             v = v.cast(ds)
         # torch.tensor(..., device='cpu') must land in host memory so native
@@ -2481,6 +2490,15 @@ def _install_autograd(g):
     import sys as _sys_autograd
     _sys_autograd.modules["torch.autograd"] = autograd
     autograd.__path__ = getattr(autograd, "__path__", [])
+    functional = _sys_autograd.modules.get("torch.autograd.functional")
+    if functional is None:
+        functional = _types.ModuleType("torch.autograd.functional")
+        from jittor.gradfunctional import jvp as _jvp, vjp as _vjp
+        functional.jvp = _jvp
+        functional.vjp = _vjp
+        functional.__all__ = ["jvp", "vjp"]
+        _sys_autograd.modules["torch.autograd.functional"] = functional
+    autograd.functional = functional
     if "torch.autograd.profiler" not in _sys_autograd.modules:
         _prof = _types.ModuleType("torch.autograd.profiler")
         class EventList(list):
@@ -5718,7 +5736,15 @@ def _install_init_aliases():
         # stop_grad, which would silently freeze the parameter. Re-enable grad
         # unless the param was explicitly stop-grad before.
         was_trainable = not tensor.is_stop_grad()
+        parent = getattr(tensor, "_torch_index_parent", None)
+        parent_slices = getattr(tensor, "_torch_index_slices", None)
         tensor.assign(value)
+        # Basic indexing materializes a Var in Jittor, while torch initializers
+        # mutate a view's underlying storage. Write the initialized value back
+        # through the recorded parent chain (TorchQuantum initializes U3 columns
+        # via init.constant_(parameter[:, k], value)).
+        if isinstance(parent, _jt2.Var):
+            parent[parent_slices] = value
         if was_trainable:
             tensor.start_grad()
         return tensor
@@ -7748,8 +7774,31 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
             out = _make_cpu_resident(out)
         elif _device_is_cuda(dev):
             out = _make_cuda_resident(out, force=True)
+        if getattr(self, "_torch_0d", False):
+            out._torch_0d = True
         return out
     Var.to = _to
+
+    # Jittor stores torch 0-D scalars as one-element Vars. Preserve a lightweight
+    # provenance marker through the copy-like methods used before host export,
+    # then expose the scalar shape only at the Python/NumPy boundary.
+    _native_detach = Var.detach
+    def _var_detach(self):
+        out = _native_detach(self)
+        if getattr(self, "_torch_0d", False):
+            out._torch_0d = True
+        return out
+    Var.detach = _var_detach
+
+    _native_numpy = Var.numpy
+    def _var_numpy(self, *args, **kwargs):
+        out = _native_numpy(self, *args, **kwargs)
+        if getattr(self, "_torch_0d", False) and getattr(out, "size", 0) == 1:
+            return out.reshape(())
+        return out
+    Var.numpy = _var_numpy
+    Var.tolist = lambda self: (self.item() if getattr(self, "_torch_0d", False)
+                               else self.numpy().tolist())
 
     # torch's Tensor.cpu()/.cuda() MIGRATE the tensor's residency (native exts
     # check tensor.is_cpu()). jittor's base Var.cpu just clones (stays on GPU)
@@ -7760,13 +7809,18 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         out = _make_cpu_resident(self)
         try:
             out._jittor_torch_force_cpu = True
+            if getattr(self, "_torch_0d", False):
+                out._torch_0d = True
         except Exception:
             pass
         return out
     Var.cpu = _var_cpu
     def _var_cuda(self, device=None, *a, **k):
         jt.flags.use_cuda = 1
-        return _make_cuda_resident(self, force=True)
+        out = _make_cuda_resident(self, force=True)
+        if getattr(self, "_torch_0d", False):
+            out._torch_0d = True
+        return out
     Var.cuda = _var_cuda
 
     # ---- integer/float dtype cast methods (torch parity) ----
@@ -7826,11 +7880,19 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # binary_dtype_infer quirk we cannot touch. So the wrapper post-corrects the
     # native result to the torch-expected dtype whenever they differ, which both
     # restores unsigned results and double-guards the mixed-dtype promotion.
+    def _complex_scalar_var(value):
+        # Python/NumPy complex scalars are not accepted by Jittor's automatic
+        # Var converter. Materialize the torch-default complex64 scalar first;
+        # the actual arithmetic remains a normal device op.
+        return jt.array(np.asarray([value], dtype=np.complex64))
+
     def _make_promoting_op(opname, reflected):
         native = Var.__dict__.get(opname)
         if native is None:
             return None
         def _op(self, other):
+            if isinstance(other, (complex, np.complexfloating)):
+                other = _complex_scalar_var(other)
             if isinstance(other, Var):
                 da, db = str(self.dtype), str(other.dtype)
                 if da == db and not da.startswith("uint"):
@@ -7893,6 +7955,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         if native is None:
             return None
         def _op(self, other):
+            if isinstance(other, (complex, np.complexfloating)):
+                other = _complex_scalar_var(other)
             if isinstance(other, Var):
                 da, db = str(self.dtype), str(other.dtype)
                 if da == db and da.startswith(("float", "bfloat", "complex")):
@@ -8044,7 +8108,11 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     _native_squeeze = Var.squeeze
     def _squeeze(self, dim=None):
         if dim is None:
-            return _native_squeeze(self)
+            out = _native_squeeze(self)
+            logical_0d = all(int(s) == 1 for s in self.shape)
+            if logical_0d:
+                out._torch_0d = True
+            return out
         dims = dim if isinstance(dim, (tuple, list)) else (dim,)
         nd = self.ndim
         # normalize negatives and keep only the dims whose size is 1 (torch
@@ -8055,6 +8123,9 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         for d in norm:
             if 0 <= d < out.ndim and out.shape[d] == 1:
                 out = _native_squeeze(out, d)
+        removed = {d for d in norm if 0 <= d < nd and self.shape[d] == 1}
+        if len(removed) == nd:
+            out._torch_0d = True
         return out
     Var.squeeze = _squeeze
 
@@ -10370,6 +10441,21 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
 
     # ---- torch.* ops used by mmdetection (additive aliases) ----
     _alias("mm", lambda input, mat2, out=None: jt.matmul(input, mat2))   # 2-D matmul
+    def _mv(input, vec, out=None):
+        if input.ndim != 2 or vec.ndim != 1:
+            raise RuntimeError(
+                f"mv: expected a 2-D matrix and a 1-D vector, got "
+                f"{input.ndim}-D and {vec.ndim}-D tensors")
+        if input.shape[1] != vec.shape[0]:
+            raise RuntimeError(
+                f"mv: size mismatch, matrix has {input.shape[1]} columns but "
+                f"vector has {vec.shape[0]} elements")
+        result = jt.matmul(input, vec)
+        if out is not None:
+            out.assign(result)
+            return out
+        return result
+    _alias("mv", _mv)
     _alias("masked_select", lambda input, mask, out=None: input[mask])   # -> 1-D selected
     _alias("split_with_sizes",
            lambda input, split_sizes, dim=0: input.split(split_sizes, dim))
@@ -10653,6 +10739,7 @@ def _install_misc(g, Var, _DTYPE_OBJS=None):
         Var.index_add_ = _index_add_inplace
     if not hasattr(Var, "bmm"):         Var.bmm = lambda self, other: jt.matmul(self, other)
     if not hasattr(Var, "mm"):          Var.mm = lambda self, other: jt.matmul(self, other)
+    if not hasattr(Var, "mv"):          Var.mv = lambda self, vec: _mv(self, vec)
     if not hasattr(Var, "fliplr"):      Var.fliplr = lambda self: jt.flip(self, 1)
     if not hasattr(Var, "flipud"):      Var.flipud = lambda self: jt.flip(self, 0)
     if not hasattr(Var, "diff"):

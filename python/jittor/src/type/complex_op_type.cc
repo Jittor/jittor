@@ -26,6 +26,14 @@ struct ComplexOpType : OpByType {
         for (int i=1; i<args.size(); i+=2)
             if (types.count(args[i])) found = 1;
         if (!found) return "";
+        if (args.size() >= 4 && args[0] == "cast" &&
+            args[3] == "complex64" && args[1] != "complex64") {
+            // Casting complex to real discards the imaginary component. This is
+            // also the adjoint needed by real->complex cast backward.
+            if (args[1] == "bool")
+                return format("((($2).real != 0) || (($2).imag != 0))", args);
+            return format("(($1)(jittor::jt_creal($2)))", args);
+        }
         static unordered_map<string,string> m = {
             {"void", "($4)"},
             {"add", "(($2)+($4))"},

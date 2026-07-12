@@ -813,6 +813,10 @@ def matrix_rank(x, tol=None, hermitian=False):
         _, s, _ = svd(x, full_matrices=False)
 
     smax = s.max(dim=-1)
+    # torch_compat gives max(dim=...) the torch return type (values, indices),
+    # while this native linalg helper needs only the values tensor.
+    if hasattr(smax, "values"):
+        smax = smax.values
     if tol is None:
         import numpy as _np
         try:

@@ -1201,6 +1201,9 @@ if _jt_ag is not None:
             setattr(_autograd, _n, getattr(_jt_ag, _n))
 sys.modules["torch.autograd"] = _autograd
 globals()["autograd"] = _autograd
+_autograd_functional = sys.modules.get("torch.autograd.functional")
+if _autograd_functional is not None:
+    _autograd.functional = _autograd_functional
 # torch.autograd.function: mmcv's custom ops do
 # `from torch.autograd.function import Function, once_differentiable`.
 # once_differentiable just marks a backward as non-double-differentiable -> passthrough.

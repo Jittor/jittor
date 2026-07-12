@@ -122,6 +122,9 @@ class TestShapeOps(Base):
         def body(dev):
             self.ac(torch.permute(torch.tensor(x), (2, 0, 1)).numpy(),
                     np.transpose(x, (2, 0, 1)), msg=f"permute {dev}")
+            np_axes = list(np.array([2, 0, 1], dtype=np.int64))
+            self.ac(torch.tensor(x).permute(np_axes).numpy(),
+                    np.transpose(x, (2, 0, 1)), msg=f"permute numpy axes {dev}")
             self.ac(torch.transpose(torch.tensor(x), 0, 2).numpy(),
                     np.swapaxes(x, 0, 2), msg=f"transpose {dev}")
         both_devices(body)
@@ -135,6 +138,15 @@ class TestShapeOps(Base):
                     msg=f"flatten {dev}")
             self.ac(torch.flatten(torch.tensor(x), 1).numpy(), x.reshape(2, -1),
                     msg=f"flatten start_dim {dev}")
+        both_devices(body)
+
+    def test_squeeze_scalar_numpy_export(self):
+        def body(dev):
+            scalar = torch.ones((1, 1)).squeeze()
+            exported = scalar.detach().cpu().numpy()
+            self.assertEqual(exported.shape, (), f"squeezed scalar numpy shape {dev}")
+            self.assertEqual(exported.tolist(), 1.0, f"squeezed scalar value {dev}")
+            self.assertEqual(scalar.tolist(), 1.0, f"squeezed Tensor.tolist {dev}")
         both_devices(body)
 
     def test_squeeze_unsqueeze(self):

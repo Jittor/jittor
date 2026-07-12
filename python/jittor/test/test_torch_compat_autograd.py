@@ -144,6 +144,17 @@ class TestAnalyticGrad(Base):
 # -------------------------------------------------------------- autograd.grad / backward
 
 class TestAutogradGradAPI(Base):
+    def test_autograd_functional_vjp_module(self):
+        from torch.autograd.functional import vjp
+        x0 = np.random.RandomState(9).randn(4).astype("float32")
+        seed0 = np.random.RandomState(90).randn(4).astype("float32")
+        def body(dev):
+            out, grad = vjp(lambda x: x * x, jt.array(x0), jt.array(seed0))
+            self.ac(out.numpy(), x0 * x0, atol=1e-6, msg=f"functional.vjp out {dev}")
+            self.ac(grad.numpy(), 2 * x0 * seed0, atol=1e-5,
+                    msg=f"functional.vjp grad {dev}")
+        both_devices(body)
+
     def test_autograd_grad_single(self):
         x0 = np.random.RandomState(10).randn(4).astype("float32")
         def body(dev):

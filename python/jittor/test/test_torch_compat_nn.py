@@ -374,6 +374,16 @@ class TestNorms(Base):
 # ---------------------------------------------------------------------------- modules
 
 class TestModules(Base):
+    def test_init_constant_writes_through_view(self):
+        def body(dev):
+            parameter = nn.Parameter(torch.zeros((1, 3)))
+            torch.nn.init.constant_(parameter[:, 1], 2.0)
+            self.ac(parameter.numpy(), np.array([[0.0, 2.0, 0.0]], dtype="float32"),
+                    atol=0, rtol=0, msg=f"init.constant_ view write-through {dev}")
+            self.assertTrue(parameter.requires_grad,
+                            f"view initializer keeps parent trainable {dev}")
+        both_devices(body)
+
     def test_linear_module(self):
         rng = np.random.RandomState(11)
         x = rng.randn(4, 5).astype("float32")

@@ -117,6 +117,21 @@ class TestDtypeObjects(Base):
 # --------------------------------------------------------------- constructors with dtype=
 
 class TestConstructorDtype(Base):
+    def test_tensor_explicit_complex64(self):
+        expected = np.array([[1 + 2j, 3 - 4j]], dtype="complex64")
+        source128 = expected.astype("complex128")
+        def body(dev):
+            for value in ([[1 + 2j, 3 - 4j]], source128):
+                got = torch.tensor(value, dtype=torch.complex64)
+                self.assertEqual(dts(got), "complex64", dev)
+                self.ac(got.numpy(), expected, atol=0, rtol=0,
+                        msg=f"explicit complex64 {type(value).__name__} {dev}")
+            got = torch.as_tensor(source128, dtype=torch.complex64)
+            self.assertEqual(dts(got), "complex64", dev)
+            self.ac(got.numpy(), expected, atol=0, rtol=0,
+                    msg=f"as_tensor explicit complex64 {dev}")
+        both_devices(body)
+
     def test_zeros_ones_full_dtype(self):
         def body(dev):
             self.assertEqual(dts(torch.zeros(3, dtype=torch.float32)), "float32", dev)

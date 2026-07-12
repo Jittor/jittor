@@ -1004,9 +1004,19 @@ def transpose(x, *dim):
         a, b = dim
         axes[a], axes[b] = axes[b], axes[a]
         dim = axes
+    # NumPy helpers such as np.argsort return numpy.integer axis values.  The
+    # C++ transpose binding requires exact Python ints, while torch accepts any
+    # integral sequence in Tensor.permute().
+    pyint = (0).__class__
+    coerce = False
+    for d in dim:
+        if type(d) is not pyint:
+            coerce = True
+            break
+    if coerce:
+        dim = tuple(pyint(d.item()) if isinstance(d, Var) else pyint(d) for d in dim)
     out = origin_transpose(x, dim)
     try:
-        pyint = (0).__class__
         axes_tuple = tuple(pyint(i) for i in dim)
         last2 = list(range(x.ndim))
         if x.ndim >= 2:

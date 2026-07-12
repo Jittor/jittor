@@ -47,13 +47,16 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
 - **环境前置**：非交互 shell 的 `PATH` 没有 `python`；需使用 `jt311`，并显式配置已有 `cuda12.2_cudnn8_linux`，否则空 `JITTOR_HOME` 会选到缺少 `cudnn.h` 的系统 `/usr/local/cuda`。
 - **文档**：工作记录 `agent/workdocs/2026-07-12-test-example-validation.md`；中文交付文档 `/home/zy/projects/doc/2026-07-12-test-example-validation.md`；完整日志 `agent/worklogs/2026-07-12-test-example.log`。本次按约定只验证和诊断，未修改源码。
 
-### 🔴 本会话增量（2026-07-12：TorchQuantum README 兼容性验证）
-- **当前不支持**：从用户指定的 `https://github.com/mit-han-lab/torchquantum.git` 网络克隆官方仓库，固定 `main@8dc3255c`（0.3.0）；本地 HEAD 与 `git ls-remote` 的远端 HEAD/main 完全一致。通过 `import jittor as torch` 串行运行 README `Basic Usage`（CUDA、CPU）和 `Usage` 实际前向（CUDA），三次均退出码 1，未达到验收标准。入口已确认 `sys.modules["torch"] is jittor`，不是误用了真 PyTorch。
-- **首个确定阻断**：TorchQuantum 导入期 `torch.tensor([...1j...], dtype=complex64)` 触发 `torch_compat.tensor()` 先用 NumPy 推断/创建 complex128 Var、后 cast complex64；Jittor 不支持 complex128，报 `Numpy type not support type_char: D`。NumPy 1.26.4 与官方依赖 NumPy 2.4.6 均最小复现。
-- **继续诊断又确认 3 个缺口**：临时仅绕过首项后，`complex64_var[i][j] = Python complex` 报 setitem 参数不支持；Usage `MeasureAll` 所需 `Tensor.mv` 直接 `AttributeError`；Basic 参数链 `float32 -> complex64 -> backward` 在 CUDA 编译 complex64→float32 cast 时失败。这些均已实际复现，不是静态审计误报。
-- **原生 torch 对照通过**：同一 TorchQuantum/依赖下，真 PyTorch 2.12.1+cu130 的 CUDA Basic Usage 退出 0（expval≈0.8776、grad≈-0.4794），Usage 输出 `(2,2)`、finite，排除上游 README 失效。
-- **安装层冲突**：TorchQuantum 当前要求 `numpy>=2.0`，Jittor `setup.py` 仍声明 `numpy<2.0`；直接带依赖安装还可能用真实 torch 覆盖 shim。本次依赖放项目内隔离目录，未污染 `jt311`。
-- **范围/环境**：本次只验证和诊断，未改 Jittor/TorchQuantum 源码；cscg104 无 NPU，且严格路径在设备创建前已失败。复用 skill `agent/skills/torchquantum-readme-validation/`；细节 `agent/workdocs/2026-07-12-torchquantum-validation.md`；中文交付 `/home/zy/projects/doc/2026-07-12-torchquantum-validation.md`。
+### ✅ 本会话增量（2026-07-12：TorchQuantum README CPU/CUDA 跑通）
+- **验收完成**：固定官方 TorchQuantum `main@8dc3255c`（0.3.0），通过 `import jittor as torch` 运行 README `Basic Usage` 和 `Usage`。严格 CPU（`CUDA_VISIBLE_DEVICES=`、`use_cuda=0`）与 CUDA/GPU1 的四项矩阵全部退出 0，并输出 `TORCH_IS_JITTOR=True` + `BASIC_USAGE_OK`/`USAGE_OK`；未修改 TorchQuantum 上游。
+- **数值/反向**：最终 CUDA Basic 解析 `ZX` 期望值 `0.8775823`、RX 梯度 `-0.47942543`；CPU 为 `0.8775825` / `-0.47942543`，对齐真 PyTorch 对照。QASM 正确包含 `rx(0.5) q[0]`；Usage 输出 `(2,2)`、float32、finite。
+- **复数链修复**：显式 `complex64` 在创建 Var 前生效；Python complex 默认 complex64；complex64 direct/chained setitem、Python/NumPy complex 标量二元运算可用；complex→real/bool cast codegen 与双向一阶 cast 梯度补齐。实际计算仍走 Jittor device op，没有 host 计算 fallback。
+- **导入/API 修复**：注册 `torch.autograd.functional` 的 `vjp/jvp`（解除 TorchQuantum pulse→torchdiffeq 顶层导入阻断）；新增 `torch.mv`/`Tensor.mv`（含 `out=` 和形状检查）；permute 轴接受 NumPy integer。
+- **语义修复**：用 `_torch_0d` 标记在 `detach/to/cpu/cuda` 传播并仅在 `numpy()/tolist()` 导出标量，修复 QASM 参数 `[0.5]`；`nn.init.*_` 对 basic-index parameter view 写回父张量，修复 U3 按列初始化静默丢失。
+- **附带真 bug**：`linalg.matrix_rank` 在 torch compat 下误把 `max(dim)` 的 `(values,indices)` 整体参与阈值计算，现解包 `.values`；完整 linalg 11/11。
+- **回归**：受影响六模块 126 passed + 2 expected skip；`test_torch_compat_linalg` 11/11；主门禁 `test_torch_compat.py` **172 passed / 0 failed**。长组合进程的 CuPy det NVRTC 临时错误在独立进程通过，未形成稳定代码问题。
+- **环境边界**：无新依赖；TorchQuantum `numpy>=2.0` 与 Jittor 安装元数据 `numpy<2.0` 的冲突仍通过项目内隔离依赖规避。cscg104 无 NPU/CANN，且 ACL dtype 映射尚不支持 native complex64，本次不宣称 NPU 全链可用。
+- **文档**：细节 `agent/workdocs/2026-07-12-torchquantum-validation.md`；中文交付 `/home/zy/projects/doc/2026-07-12-torchquantum-validation.md`；复用验证 skill `agent/skills/torchquantum-readme-validation/`。
 
 ### ✅ 本会话增量 Round Complex Audit（2026-07-05：复数 CUDA 可用性 / torch 对齐）
 - **native `complex64` CUDA 主路径确认可用**：源码审计 + 官方测试 + 真 PyTorch CUDA 对拍。已验证创建/roundtrip、`real/imag/angle`、`view_as_real/view_as_complex`、`torch.complex/polar`、四则/neg/conj/abs/sum/mean、matmul/bmm、`exp/log/sin/cos/sqrt`、一阶 autograd，数值通常 `1e-7~1e-6` 对齐。`ComplexNumber` 仍只作为 deprecated internal bridge，聚焦 CUDA 值/桥接验证通过。

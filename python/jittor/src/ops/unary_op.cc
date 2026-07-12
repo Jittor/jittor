@@ -908,6 +908,8 @@ VarPtr UnaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     if (x->dtype().is_complex()) {
         // Complex autograd (verified vs real torch 2.12): only the linear / conjugate
         // unaries are implemented. Others return nullptr (loud no-grad, never silent-wrong).
+        if (ns == ns_cast && y->dtype().is_float())
+            return make_unary(dout, x->dtype());  // d(real-cast z) -> real dout + 0j
         if (ns == ns_negative) return make_unary(dout, ns_negative);  // d(-z) -> -dout
         if (ns == ns_conj) return make_unary(dout, ns_conj);          // d(conj z) -> conj(dout)
         if (ns == ns_abs) {
