@@ -74,6 +74,22 @@ class TestSDPA(Base):
             self.ac(out, _sdpa_ref(q, k, v, causal), msg=f"sdpa causal {dev}")
         both_devices(body)
 
+    def test_sdpa_gqa_math_fallback(self):
+        rng = np.random.RandomState(71)
+        q = rng.randn(1, 4, 3, 8).astype("float32")
+        k = rng.randn(1, 2, 5, 8).astype("float32")
+        v = rng.randn(1, 1, 5, 8).astype("float32")
+        repeated_k = np.repeat(k, 2, axis=1)
+        repeated_v = np.repeat(v, 4, axis=1)
+
+        def body(dev):
+            out = torch.nn.functional.scaled_dot_product_attention(
+                jt.array(q), jt.array(k), jt.array(v), enable_gqa=True).numpy()
+            self.ac(out, _sdpa_ref(q, repeated_k, repeated_v),
+                    msg=f"sdpa gqa fallback {dev}")
+
+        both_devices(body)
+
     def test_sdpa_dropout_one(self):
         q, k, v = self.q, self.k, self.v
 
@@ -115,18 +131,110 @@ class TestSDPA(Base):
 
     @unittest.skipIf(not jt.has_cuda, "No CUDA found")
     def test_required_flash_backend_returning_none_raises(self):
-        import flash_attn
         from jittor.torch_shim import flashattn_jittor
 
         q = jt.ones((1, 2, 4, 32), dtype="float16")
         backend = ModuleType("required_flash_backend")
+        backend.flash_attn_func = lambda *args, **kwargs: None
         with jt.flag_scope(use_cuda=1), jt.no_grad(), \
                 mock.patch.object(flashattn_jittor, "load_backend_for",
                                   return_value=(backend, None)), \
-                mock.patch.object(flashattn_jittor, "required", return_value=True), \
-                mock.patch.object(flash_attn, "flash_attn_func", return_value=None):
+                mock.patch.object(flashattn_jittor, "required", return_value=True):
             with self.assertRaisesRegex(RuntimeError, "returned no output"):
                 torch.nn.functional.scaled_dot_product_attention(q, q, q)
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    def test_native_flash_receives_compact_gqa_kv_heads(self):
+        from jittor.torch_shim import flashattn_jittor
+
+        backend = ModuleType("gqa_flash_backend")
+        seen = {}
+
+        def fake_flash(q, k, v, *args, **kwargs):
+            seen["shapes"] = (tuple(q.shape), tuple(k.shape), tuple(v.shape))
+            return jt.zeros(q.shape, dtype=q.dtype)
+
+        backend.flash_attn_func = fake_flash
+
+        with jt.flag_scope(use_cuda=1), jt.no_grad(), \
+                mock.patch.object(flashattn_jittor, "load_backend_for",
+                                  return_value=(backend, None)), \
+                mock.patch.object(flashattn_jittor, "required", return_value=False), \
+                mock.patch.object(flashattn_jittor, "backend_name",
+                                  return_value="gqa_flash_backend"):
+            q = jt.ones((1, 4, 2, 32), dtype="float16")
+            k = jt.ones((1, 2, 3, 32), dtype="float16")
+            v = jt.ones((1, 2, 3, 32), dtype="float16")
+            out = torch.nn.functional.scaled_dot_product_attention(
+                q, k, v, enable_gqa=True)
+
+        self.assertEqual(tuple(out.shape), (1, 4, 2, 32))
+        self.assertEqual(seen["shapes"], (
+            (1, 2, 4, 32),
+            (1, 3, 2, 32),
+            (1, 3, 2, 32),
+        ))
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    def test_native_flash_rejects_head_mismatch_without_gqa(self):
+        from jittor.torch_shim import flashattn_jittor
+
+        backend = ModuleType("unexpected_gqa_backend")
+        backend.flash_attn_func = mock.Mock()
+        with jt.flag_scope(use_cuda=1), jt.no_grad(), \
+                mock.patch.object(flashattn_jittor, "load_backend_for",
+                                  return_value=(backend, None)) as loader:
+            q = jt.ones((1, 4, 2, 32), dtype="float16")
+            k = jt.ones((1, 2, 3, 32), dtype="float16")
+            v = jt.ones((1, 2, 3, 32), dtype="float16")
+            with self.assertRaises(Exception):
+                torch.nn.functional.scaled_dot_product_attention(
+                    q, k, v, enable_gqa=False).sync()
+        loader.assert_not_called()
+        backend.flash_attn_func.assert_not_called()
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    def test_static_inference_reuses_capability_checked_backend(self):
+        from jittor.torch_shim import flashattn_jittor
+
+        backend = ModuleType("cached_flash_backend")
+        replacement = ModuleType("replacement_flash_backend")
+        backend.flash_attn_func = lambda q, k, v, *args, **kwargs: jt.zeros(
+            q.shape, dtype=q.dtype)
+        replacement.flash_attn_func = backend.flash_attn_func
+        cache = torch._torch_sdpa_flash_backend_cache
+        cache.clear()
+        try:
+            with jt.flag_scope(use_cuda=1), jt.no_grad(), \
+                    mock.patch.dict(os.environ, {
+                        "JITTOR_TORCH_INFERENCE": "1",
+                    }, clear=False), \
+                    mock.patch.object(flashattn_jittor,
+                                      "_BACKEND_LOAD_GENERATION", 37), \
+                    mock.patch.object(
+                        flashattn_jittor, "_backend_environment_key",
+                        side_effect=lambda: ((
+                            "source",
+                            os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
+                        ),)), \
+                    mock.patch.object(flashattn_jittor, "load_backend_for",
+                                      side_effect=((backend, None),
+                                                   (replacement, None),
+                                                   (replacement, None))) as loader, \
+                    mock.patch.object(flashattn_jittor, "backend_name",
+                                      return_value="cached_flash_backend"):
+                q = jt.ones((1, 2, 1, 32), dtype="float16")
+                torch.nn.functional.scaled_dot_product_attention(q, q, q)
+                torch.nn.functional.scaled_dot_product_attention(q, q, q)
+                self.assertEqual(loader.call_count, 1)
+                os.environ["JITTOR_FLASH_ATTN_JITTOR_SRC"] = "/replacement"
+                torch.nn.functional.scaled_dot_product_attention(q, q, q)
+                self.assertEqual(loader.call_count, 2)
+                flashattn_jittor._BACKEND_LOAD_GENERATION = 38
+                torch.nn.functional.scaled_dot_product_attention(q, q, q)
+                self.assertEqual(loader.call_count, 3)
+        finally:
+            cache.clear()
 
     def test_flash_backend_reloads_for_expanded_capability(self):
         from jittor.torch_shim import flashattn_jittor
@@ -520,6 +628,30 @@ class TestSDPA(Base):
         self.assertGreaterEqual(stats.get("hits", 0), 1, "native flash-attn SDPA was not used")
         self.assertIn("flashattn_jittor", str(stats.get("backend", "")))
         self.ac(got, _sdpa_ref(q, k, v), atol=2e-3, rtol=2e-3, msg="sdpa native flash fp16 cuda")
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),
+                     "native flash-attn source not configured")
+    def test_sdpa_native_flash_attn_gqa_fp16_cuda(self):
+        rng = np.random.RandomState(73)
+        q = rng.randn(1, 4, 3, 32).astype("float32")
+        k = rng.randn(1, 2, 5, 32).astype("float32")
+        v = rng.randn(1, 2, 5, 32).astype("float32")
+        with jt.flag_scope(use_cuda=1), jt.no_grad():
+            if hasattr(jt, "_torch_sdpa_flash_stats"):
+                delattr(jt, "_torch_sdpa_flash_stats")
+            torch._torch_sdpa_flash_backend_cache.clear()
+            out = torch.nn.functional.scaled_dot_product_attention(
+                jt.array(q).float16(), jt.array(k).float16(),
+                jt.array(v).float16(), enable_gqa=True)
+            got = out.float32().numpy()
+            stats = getattr(jt, "_torch_sdpa_flash_stats", {})
+        expected = _sdpa_ref(
+            q, np.repeat(k, 2, axis=1), np.repeat(v, 2, axis=1))
+        self.assertGreaterEqual(stats.get("hits", 0), 1)
+        self.assertEqual(stats.get("misses", {}), {})
+        self.ac(got, expected, atol=3e-3, rtol=3e-3,
+                msg="sdpa native flash gqa fp16 cuda")
 
     @unittest.skipIf(not jt.has_cuda, "No CUDA found")
     @unittest.skipIf(not os.environ.get("JITTOR_FLASH_ATTN_JITTOR_SRC"),

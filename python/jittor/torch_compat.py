@@ -1911,6 +1911,12 @@ def install(torch):
 
     import os as _os
 
+    _sdpa_flash_backend_cache = {}
+
+    def _sdpa_static_backend_cache_enabled():
+        return (_os.environ.get("JITTOR_TORCH_INFERENCE") or "").strip().lower() \
+            in ("1", "true", "yes", "on")
+
     def _sdpa_flash_stats():
         stats = getattr(jt, "_torch_sdpa_flash_stats", None)
         if stats is None:
@@ -1956,7 +1962,8 @@ def install(torch):
         return None
 
     def _try_flash_scaled_dot_product_attention(query, key, value, attn_mask,
-                                                dropout_p, is_causal, sf):
+                                                dropout_p, is_causal, sf,
+                                                enable_gqa=False):
         if attn_mask is not None:
             _sdpa_flash_miss("mask")
             return None
@@ -1973,7 +1980,13 @@ def install(torch):
         if q_shape[:-3] != k_shape[:-3] or q_shape[:-3] != v_shape[:-3]:
             _sdpa_flash_miss("batch")
             return None
-        if q_shape[-3] != k_shape[-3] or q_shape[-3] != v_shape[-3]:
+        query_heads = int(q_shape[-3])
+        key_heads = int(k_shape[-3])
+        value_heads = int(v_shape[-3])
+        gqa_heads_ok = (key_heads > 0 and enable_gqa
+                        and query_heads % key_heads == 0)
+        if key_heads != value_heads or not (
+                query_heads == key_heads or gqa_heads_ok):
             _sdpa_flash_miss("heads")
             return None
         if q_shape[-1] != k_shape[-1] or q_shape[-1] != v_shape[-1]:
@@ -2002,8 +2015,25 @@ def install(torch):
         except Exception:
             _sdpa_flash_miss("no_loader")
             return None
-        backend, capability_miss = _fa_jittor.load_backend_for(
-            template_dim, q_dtype)
+        cache_key = (template_dim, q_dtype)
+        generation = getattr(_fa_jittor, "_BACKEND_LOAD_GENERATION", None)
+        environment_key = (_fa_jittor._backend_environment_key()
+                           if _sdpa_static_backend_cache_enabled() else None)
+        cached = (_sdpa_flash_backend_cache.get(cache_key)
+                  if _sdpa_static_backend_cache_enabled() else None)
+        if (cached is not None and cached[0] == generation
+                and cached[1] == environment_key):
+            backend, capability_miss = cached[2], None
+        else:
+            backend, capability_miss = _fa_jittor.load_backend_for(
+                template_dim, q_dtype)
+            if (_sdpa_static_backend_cache_enabled() and backend is not None
+                    and capability_miss is None):
+                _sdpa_flash_backend_cache[cache_key] = (
+                    getattr(_fa_jittor, "_BACKEND_LOAD_GENERATION", None),
+                    _fa_jittor._backend_environment_key(),
+                    backend,
+                )
         if backend is None:
             if _fa_jittor.required():
                 raise RuntimeError(
@@ -2021,14 +2051,10 @@ def install(torch):
                 )
             _sdpa_flash_miss(capability_miss)
             return None
-        try:
-            import flash_attn as _flash_attn
-        except Exception as exc:
-            if _fa_jittor.required():
-                raise RuntimeError("flash_attn shim import failed") from exc
-            _sdpa_flash_miss("no_stub")
-            return None
-        fn = getattr(_flash_attn, "flash_attn_func", None)
+        # load_backend_for() already returned the capability-checked backend.
+        # Calling through the public flash_attn stub would invoke the loader a
+        # second time for every layer and rescan all backend environment keys.
+        fn = getattr(backend, "flash_attn_func", None)
         if not callable(fn):
             if _fa_jittor.required():
                 raise RuntimeError("flash_attn shim has no flash_attn_func")
@@ -2039,7 +2065,7 @@ def install(torch):
         batch = 1
         for size in prefix:
             batch *= int(size)
-        heads, lq, head_dim = int(q_shape[-3]), int(q_shape[-2]), int(q_shape[-1])
+        heads, lq, head_dim = query_heads, int(q_shape[-2]), int(q_shape[-1])
         lk = int(k_shape[-2])
         q_axes = tuple(list(range(p)) + [p + 1, p, p + 2])
         # Native flash-attn is an external C++/CUDA extension. Crossing that
@@ -2047,8 +2073,8 @@ def install(torch):
         # holding transient metadata; clone materializes a stable row-major
         # tensor while keeping the kernel path fused.
         q_dense = query.permute(*q_axes).reshape((batch, lq, heads, head_dim)).clone()
-        k_dense = key.permute(*q_axes).reshape((batch, lk, heads, head_dim)).clone()
-        v_dense = value.permute(*q_axes).reshape((batch, lk, heads, head_dim)).clone()
+        k_dense = key.permute(*q_axes).reshape((batch, lk, key_heads, head_dim)).clone()
+        v_dense = value.permute(*q_axes).reshape((batch, lk, value_heads, head_dim)).clone()
         try:
             out = fn(q_dense, k_dense, v_dense, 0.0, float(sf), bool(is_causal))
         except Exception:
@@ -2083,15 +2109,30 @@ def install(torch):
             # query: (..., Lq, E), key/value: (..., Lk, E)
             d = query.shape[-1]
             sf = (1.0 / _math.sqrt(d)) if scale is None else scale
-            # GQA: repeat kv heads to match query heads
-            if enable_gqa and key.shape[-3] != query.shape[-3]:
-                rep = query.shape[-3] // key.shape[-3]
-                key = key.repeat_interleave(rep, dim=-3) if hasattr(key, "repeat_interleave") else key
-                value = value.repeat_interleave(rep, dim=-3) if hasattr(value, "repeat_interleave") else value
             flash = _try_flash_scaled_dot_product_attention(
-                query, key, value, attn_mask, dropout_p, is_causal, sf)
+                query, key, value, attn_mask, dropout_p, is_causal, sf,
+                enable_gqa=enable_gqa)
             if flash is not None:
                 return flash
+            # The native FlashAttention backend accepts grouped-query attention
+            # directly. Expand K/V only for the math fallback, where matmul
+            # requires the head counts to match.
+            if enable_gqa:
+                query_heads = int(query.shape[-3])
+                key_heads = int(key.shape[-3])
+                value_heads = int(value.shape[-3])
+                if key_heads != query_heads:
+                    if key_heads <= 0 or query_heads % key_heads != 0:
+                        raise RuntimeError(
+                            "key heads must divide query heads for GQA")
+                    key = key.repeat_interleave(
+                        query_heads // key_heads, dim=-3)
+                if value_heads != query_heads:
+                    if value_heads <= 0 or query_heads % value_heads != 0:
+                        raise RuntimeError(
+                            "value heads must divide query heads for GQA")
+                    value = value.repeat_interleave(
+                        query_heads // value_heads, dim=-3)
             q_dtype, k_dtype = str(query.dtype), str(key.dtype)
             if (jt.flags.use_cuda and jt.compile_extern.cublas_ops
                     and len(query.shape) >= 3 and len(query.shape) == len(key.shape)
@@ -2143,6 +2184,7 @@ def install(torch):
             return out
         nn.functional.scaled_dot_product_attention = scaled_dot_product_attention
     g.scaled_dot_product_attention = nn.functional.scaled_dot_product_attention
+    g._torch_sdpa_flash_backend_cache = _sdpa_flash_backend_cache
 
     _install_nn_extras(nn)
     import sys as _sys_nn
