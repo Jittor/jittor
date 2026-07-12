@@ -98,6 +98,7 @@ _BACKEND = _UNSET
 _BACKEND_NAME = "math"
 _BACKEND_CONFIG_KEY = None
 _BACKEND_LOAD_GENERATION = 0
+_BACKEND_PUBLICATION_TOKEN = None
 _LAST_ERROR: Optional[str] = None
 _LOADING = False
 _BACKEND_LOAD_LOCK = threading.RLock()
@@ -1919,8 +1920,117 @@ _BACKEND_ENV_NAMES = _SRC_ENVS + (
 )
 
 
+_BACKEND_ENV_EPOCH_STATE_ATTR = "_jittor_flashattn_backend_env_epoch_state_v1"
+_BACKEND_ENV_EPOCH_PROBE = "jittor.flashattn.backend_env_epoch_probe"
+_BACKEND_MODULE_STATE_ATTR = "_jittor_flashattn_backend_module_state_v1"
+
+
+def _install_backend_environment_epoch_hook():
+    """Install one process-wide watcher for backend-related environment writes."""
+    names = frozenset(_BACKEND_ENV_NAMES)
+    byte_names = frozenset(os.fsencode(name) for name in names)
+    state = getattr(sys, _BACKEND_ENV_EPOCH_STATE_ATTR, None)
+    if isinstance(state, dict) and state.get("version") == 1:
+        if state.get("names") != names or state.get("byte_names") != byte_names:
+            state["names"] = names
+            state["byte_names"] = byte_names
+            state["epoch"] += 1
+        return state if state.get("active") and state.get("reliable") else None
+
+    state = {
+        "version": 1,
+        "epoch": 0,
+        "names": names,
+        "byte_names": byte_names,
+        "active": False,
+        "reliable": True,
+    }
+    setattr(sys, _BACKEND_ENV_EPOCH_STATE_ATTR, state)
+
+    def audit_hook(event, args):
+        try:
+            if event == _BACKEND_ENV_EPOCH_PROBE:
+                state["active"] = True
+                return
+            if event not in ("os.putenv", "os.unsetenv") or not args:
+                return
+            name = args[0]
+            if ((isinstance(name, bytes) and name in state["byte_names"])
+                    or (isinstance(name, str) and name in state["names"])):
+                state["epoch"] += 1
+        except BaseException:
+            # An audit hook exception would abort the environment write. Mark
+            # the token unusable and leave the write itself untouched.
+            state["reliable"] = False
+
+    # Audit hooks cannot be removed. Keep the state on sys so module reloads
+    # reuse this hook rather than installing duplicate watchers.
+    state["hook"] = audit_hook
+    try:
+        sys.addaudithook(audit_hook)
+        sys.audit(_BACKEND_ENV_EPOCH_PROBE)
+    except Exception:
+        pass
+    return state if state["active"] else None
+
+
+_BACKEND_ENV_EPOCH_STATE = _install_backend_environment_epoch_hook()
+
+
+def _next_backend_module_incarnation() -> int:
+    state = getattr(sys, _BACKEND_MODULE_STATE_ATTR, None)
+    if not isinstance(state, dict) or state.get("version") != 1:
+        state = {"version": 1, "incarnation": 0}
+        setattr(sys, _BACKEND_MODULE_STATE_ATTR, state)
+    state["incarnation"] += 1
+    return int(state["incarnation"])
+
+
+_BACKEND_MODULE_INCARNATION = _next_backend_module_incarnation()
+
+
+def backend_environment_epoch() -> Optional[int]:
+    """Return a cheap invalidation token, or None when audit hooks are unavailable."""
+    if (_BACKEND_ENV_EPOCH_STATE is None
+            or not _BACKEND_ENV_EPOCH_STATE.get("reliable")):
+        return None
+    return int(_BACKEND_ENV_EPOCH_STATE["epoch"])
+
+
+def invalidate_backend_environment() -> None:
+    """Invalidate cached backend selection after a non-os.environ config change."""
+    if _BACKEND_ENV_EPOCH_STATE is not None:
+        _BACKEND_ENV_EPOCH_STATE["epoch"] += 1
+
+
+def backend_cache_token() -> Optional[Tuple[int, int, int]]:
+    """Return the process-local backend identity used by inference fast paths."""
+    epoch = backend_environment_epoch()
+    if epoch is None:
+        return None
+    return (_BACKEND_MODULE_INCARNATION, _BACKEND_LOAD_GENERATION, epoch)
+
+
+def backend_publication_token(backend: Optional[ModuleType]) -> Optional[Tuple[int, int, int]]:
+    """Return the token under which *backend* was published by this loader."""
+    if backend is None or backend is not _BACKEND:
+        return None
+    return _BACKEND_PUBLICATION_TOKEN
+
+
 def _backend_environment_key() -> Tuple[Tuple[str, Optional[str]], ...]:
     return tuple((name, os.environ.get(name)) for name in _BACKEND_ENV_NAMES)
+
+
+def _stable_backend_environment_key():
+    """Capture an environment snapshot and its matching audit epoch."""
+    for _ in range(8):
+        epoch_before = backend_environment_epoch()
+        key = _backend_environment_key()
+        epoch_after = backend_environment_epoch()
+        if epoch_before == epoch_after:
+            return key, epoch_after
+    return key, None
 
 
 def _backend_config_key() -> Tuple[object, ...]:
@@ -2003,18 +2113,29 @@ def load_backend(force: bool = False) -> Optional[ModuleType]:
 def _load_backend_locked(force: bool = False) -> Optional[ModuleType]:
     """Return the optional native flashattn_jittor backend module, if available."""
     global _BACKEND, _BACKEND_NAME, _BACKEND_CONFIG_KEY
-    global _BACKEND_LOAD_GENERATION, _LAST_ERROR, _LOADING
+    global _BACKEND_LOAD_GENERATION, _BACKEND_PUBLICATION_TOKEN
+    global _LAST_ERROR, _LOADING
     if not enabled():
         _BACKEND = None
         _BACKEND_NAME = "disabled"
-        _BACKEND_CONFIG_KEY = _backend_config_key()
+        # Do not bind a miss to a snapshot captured after the enabled check;
+        # another thread may have re-enabled the backend in between.
+        _BACKEND_CONFIG_KEY = None
+        _BACKEND_PUBLICATION_TOKEN = None
         return None
     if _BACKEND is not _UNSET and not force:
         cached_env_key = (
             _BACKEND_CONFIG_KEY[0] if _BACKEND_CONFIG_KEY is not None else None
         )
-        if _backend_environment_key() == cached_env_key:
+        environment_key, environment_epoch = _stable_backend_environment_key()
+        if environment_key == cached_env_key:
             if _BACKEND is not None:
+                if environment_epoch is not None:
+                    _BACKEND_PUBLICATION_TOKEN = (
+                        _BACKEND_MODULE_INCARNATION,
+                        _BACKEND_LOAD_GENERATION,
+                        environment_epoch,
+                    )
                 return _BACKEND
             # A failed lookup also tracks auto-discovered source roots, so a
             # source tree appearing later in the process invalidates the miss.
@@ -2026,7 +2147,10 @@ def _load_backend_locked(force: bool = False) -> Optional[ModuleType]:
 
     _LOADING = True
     _BACKEND_LOAD_GENERATION += 1
+    load_environment_epoch = backend_environment_epoch()
+    _BACKEND_PUBLICATION_TOKEN = None
     _LAST_ERROR = None
+    load_completed = False
     try:
         explicit_roots = explicit_source_roots()
         for root in explicit_roots:
@@ -2035,6 +2159,7 @@ def _load_backend_locked(force: bool = False) -> Optional[ModuleType]:
                 _BACKEND = mod
                 _BACKEND_NAME = "%s:%s" % (getattr(mod, "__name__", "flashattn_jittor"), root)
                 _LAST_ERROR = None
+                load_completed = True
                 return mod
 
         mod = _import_from_known_modules()
@@ -2042,6 +2167,7 @@ def _load_backend_locked(force: bool = False) -> Optional[ModuleType]:
             _BACKEND = mod
             _BACKEND_NAME = getattr(mod, "__name__", "flashattn_jittor")
             _LAST_ERROR = None
+            load_completed = True
             return mod
 
         for root in candidate_source_roots():
@@ -2052,6 +2178,7 @@ def _load_backend_locked(force: bool = False) -> Optional[ModuleType]:
                 _BACKEND = mod
                 _BACKEND_NAME = "%s:%s" % (getattr(mod, "__name__", "flashattn_jittor"), root)
                 _LAST_ERROR = None
+                load_completed = True
                 return mod
 
         _BACKEND = None
@@ -2060,10 +2187,32 @@ def _load_backend_locked(force: bool = False) -> Optional[ModuleType]:
             _LAST_ERROR = "no flashattn_jittor source or module found"
         else:
             _LAST_ERROR = "no flashattn_jittor source or module found; last error: " + _LAST_ERROR
+        load_completed = True
         return None
     finally:
-        _BACKEND_CONFIG_KEY = _backend_config_key()
-        _LOADING = False
+        try:
+            if not load_completed:
+                _BACKEND_CONFIG_KEY = None
+                _BACKEND_PUBLICATION_TOKEN = None
+            else:
+                config_key = _backend_config_key()
+                _, publication_epoch = _stable_backend_environment_key()
+            if load_completed and (load_environment_epoch is not None
+                    and publication_epoch != load_environment_epoch):
+                # A concurrent backend configuration write raced the build. Do
+                # not associate the module with config it may not have consumed.
+                _BACKEND_CONFIG_KEY = None
+                _BACKEND_PUBLICATION_TOKEN = None
+            elif load_completed:
+                _BACKEND_CONFIG_KEY = config_key
+                if _BACKEND is not None and publication_epoch is not None:
+                    _BACKEND_PUBLICATION_TOKEN = (
+                        _BACKEND_MODULE_INCARNATION,
+                        _BACKEND_LOAD_GENERATION,
+                        publication_epoch,
+                    )
+        finally:
+            _LOADING = False
 
 
 def is_available() -> bool:

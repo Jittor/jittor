@@ -2016,22 +2016,28 @@ def install(torch):
             _sdpa_flash_miss("no_loader")
             return None
         cache_key = (template_dim, q_dtype)
-        generation = getattr(_fa_jittor, "_BACKEND_LOAD_GENERATION", None)
-        environment_key = (_fa_jittor._backend_environment_key()
-                           if _sdpa_static_backend_cache_enabled() else None)
+        static_cache = _sdpa_static_backend_cache_enabled()
+        token_fn = getattr(_fa_jittor, "backend_cache_token", None)
+        backend_token = (token_fn() if static_cache and callable(token_fn)
+                         else None)
         cached = (_sdpa_flash_backend_cache.get(cache_key)
-                  if _sdpa_static_backend_cache_enabled() else None)
-        if (cached is not None and cached[0] == generation
-                and cached[1] == environment_key):
-            backend, capability_miss = cached[2], None
+                  if static_cache and backend_token is not None else None)
+        if cached is not None and cached[0] == backend_token:
+            backend, capability_miss = cached[1], None
         else:
             backend, capability_miss = _fa_jittor.load_backend_for(
                 template_dim, q_dtype)
-            if (_sdpa_static_backend_cache_enabled() and backend is not None
-                    and capability_miss is None):
+            publication_fn = getattr(
+                _fa_jittor, "backend_publication_token", None)
+            publication_token = (
+                publication_fn(backend) if callable(publication_fn) else None)
+            backend_token = (token_fn() if static_cache and callable(token_fn)
+                             else None)
+            if (static_cache and backend_token is not None
+                    and publication_token == backend_token
+                    and backend is not None and capability_miss is None):
                 _sdpa_flash_backend_cache[cache_key] = (
-                    getattr(_fa_jittor, "_BACKEND_LOAD_GENERATION", None),
-                    _fa_jittor._backend_environment_key(),
+                    backend_token,
                     backend,
                 )
         if backend is None:
