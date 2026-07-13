@@ -109,11 +109,16 @@ EXTERN_LIB void (*PyArray_CastScalarToCtype)(PyObject* scalar, void* ctypeptr, P
 
 #define PyArray_FROM_O(m) PyArray_FromAny(m, NULL, 0, 0, 0, NULL)
 
+// NOTE: do NOT read arr->descr->elsize here. numpy 2.0 reorganized
+// PyArray_Descr and moved `elsize` out of the legacy struct layout that
+// PyArrayDescr_Proxy mirrors, so `arr->descr->elsize` reads 0 on numpy>=2,
+// which silently yields size==0 (memcpy copies nothing -> garbage data).
+// Derive the item size from the (ABI-stable) type_num instead.
 inline int64 PyArray_Size(PyArray_Proxy* arr) {
     int64 size = 1;
     for (int i=0; i<arr->nd; i++)
         size *= arr->dimensions[i];
-    size *= arr->descr->elsize;
+    size *= get_type_str(arr).dsize();
     return size;
 }
 

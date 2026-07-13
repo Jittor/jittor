@@ -49,7 +49,7 @@ void swap_to_disk(Var* x, Swap& swap) {
             int64 cp_size = std::min(x->size-i, SWAP_BUF_SIZE);
             cudaMemcpy(buffer, memptr+i, cp_size, cudaMemcpyDeviceToHost);
             auto res = fwrite(buffer, cp_size, 1, fd);
-            if (res==1) {
+            if (res!=1) {
                 fclose(fd);
                 LOGf << "swap file write failed" << path << x;
             }
@@ -59,6 +59,7 @@ void swap_to_disk(Var* x, Swap& swap) {
     #endif
     {
         auto* fd = fopen(path.c_str(), "wb");
+        CHECK(fd) << "swap file open failed:" << path << x;
         auto res = fwrite(x->mem_ptr, x->size, 1, fd);
         CHECK(res==1) << "failed to write swap file" << path << res << x->size << x;
         fclose(fd); 
@@ -192,6 +193,7 @@ bool move_with_swap(Var* x, Allocator* allocator, bool force) {
         #endif
         {
             auto* fd = fopen(path.c_str(), "rb");
+            CHECK(fd) << "swap file open failed:" << path << x;
             auto res = fread(x->mem_ptr, x->size, 1, fd);
             CHECK(res==1);
             fclose(fd); 

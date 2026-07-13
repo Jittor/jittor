@@ -49,7 +49,16 @@ void* TempAllocator::alloc(size_t size, size_t& allocation) {
         cached_blocks.erase(it);
         unused_memory -= block->size;
     } else {
-        void* ptr = underlying->alloc(size, allocation);
+        void* ptr = nullptr;
+        try {
+            ptr = underlying->alloc(size, allocation);
+        } catch (...) {
+            // Temporary workspaces use a distinct allocator. Another caching
+            // allocator may own most free device memory, so reclaim all idle
+            // pools and retry just as SFRLAllocator does on allocation failure.
+            gc_all();
+            ptr = underlying->alloc(size, allocation);
+        }
         block = new TempCachingBlock(size, ptr);
         size_t id;
         if (!block_ids.empty()) {
@@ -118,4 +127,3 @@ bool TempAllocator::share_with(size_t size, size_t allocation) {
 }
 
 } // jittor
-

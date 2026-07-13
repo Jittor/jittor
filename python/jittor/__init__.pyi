@@ -7881,6 +7881,8 @@ class Flags:
 	'''Unify graph sanity check. Default: 0'''
 	compile_options: Any
 	'''Override the default loop transfrom options. Default: {}'''
+	cuda_allow_tf32: int
+	'''Allow TF32 compute for CUDA float32 matmul. Default: 0'''
 	disable_lock: bool
 	'''Disable file lock. Default: 0'''
 	enable_tuner: int

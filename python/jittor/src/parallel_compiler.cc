@@ -4,10 +4,11 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include <Python.h>
 #include <atomic>
 #include <chrono>
 #include <thread>
-#include <tuple> 
+#include <tuple>
 #include <mutex>
 #include <condition_variable>
 #include <iomanip>
@@ -27,6 +28,30 @@ DEFINE_FLAG(int, use_parallel_op_compiler, 16, "Number of threads that parallel 
 
 // from log.cc
 EXTERN_LIB int segfault_happen;
+
+// RAII: release the Python GIL on the main thread while the parallel op
+// compiler runs, and reacquire it on scope exit (incl. exception unwind).
+//
+// The main thread reaches parallel_compile_all_ops from a pybind call and
+// therefore holds the GIL. It then spin-waits for the compile worker
+// threads to finish. Those workers may call py_caller() (the `@python`
+// JIT pass), which now takes the GIL via PyGILState_Ensure. If the main
+// thread kept the GIL during its spin-wait, the workers could never
+// acquire it -> deadlock. Dropping the GIL here lets the workers take it
+// one at a time (serialized), which is exactly what fixes the original
+// concurrent-CPython corruption. Guarded by Py_IsInitialized() so a pure
+// C++ embedding (no interpreter) is unaffected.
+struct GILReleaseScope {
+    PyThreadState* save = nullptr;
+    inline GILReleaseScope() {
+        if (Py_IsInitialized())
+            save = PyEval_SaveThread();
+    }
+    inline ~GILReleaseScope() {
+        if (save)
+            PyEval_RestoreThread(save);
+    }
+};
 
 // simple thread used for parallel compilation
 struct SimpleThread {
@@ -290,6 +315,11 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
     typedef std::chrono::high_resolution_clock Time;
     auto start = Time::now();
     int active_threads = std::min(thread_num, (int)op_needs_compile.size());
+    // Drop the GIL so compile workers can take it inside py_caller (see
+    // GILReleaseScope). Reacquired when this block exits, including the
+    // LOGf-throw / exception-unwind path below.
+    {
+    GILReleaseScope gil_release;
     threads.launch_all(active_threads, func);
     int prev_i = 0;
     bool change_line = false;
@@ -330,7 +360,8 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
         threads.wait_all();
         LOGf << "Error happend during compilation:\n" << error_msg;
     }
-    
+    } // end GILReleaseScope: GIL reacquired on the main thread here
+
     // fill all op entry
     for (int i=0; i<active_threads; i++) {
         auto& v = op_entrys[i];

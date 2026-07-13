@@ -64,7 +64,7 @@ namespace jittor
     void BatchMatMulOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
     {
 
-        ret = aclnnBatchMatMulGetWorkspaceSize(inputTensors[0], inputTensors[1], outputTensors[0], 1, &workspaceSize, &executor);
+        ret = aclnnBatchMatMulGetWorkspaceSize(inputTensors[0], inputTensors[1], outputTensors[0], cube_math_type, &workspaceSize, &executor);
         CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("%s: aclnnBatchMatmulGetWorkspaceSize failed. ERROR: %d\n", name.c_str(), ret); return);
         if (workspaceSize > 0)
         {

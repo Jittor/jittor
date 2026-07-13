@@ -165,6 +165,7 @@ def change_function():
     from .aclops.softmax_op import SoftmaxACL
     from .aclops.sigmoid_op import SigmoidACL
     from .aclops.silu_op import SiLUACL
+    from .aclops.norms_op import LayerNormACL
     from .aclops.dropout_op import DropoutACL
     from .aclops.relu_op import LeakyReLUACL
     from .aclops.flip_op import FlipACL
@@ -340,6 +341,11 @@ def change_function():
 
     from .aclops.gather_scatter_op import ScatterACL
     def scatter_acl(input, dim, index, src, reduce='void'):
+        # torch allows a scalar src (Tensor.scatter(dim, index, value)); the native
+        # jt.scatter broadcasts it, but the ACL ScatterACL op hands src straight to
+        # jt.code which requires a Var -> broadcast scalar to index.shape (input dtype).
+        if not isinstance(src, jt.Var):
+            src = jt.full(index.shape, src, input.dtype)
         return ScatterACL()(input, dim, index, src, reduce)
 
     from .aclops.where_op import WhereACL
@@ -560,16 +566,40 @@ def change_function():
         def execute(self, x, dim):
             return SoftmaxACL()(x, dim)
 
-    def softmax_acl(x, dim):
+    def softmax_acl(x, dim=None, log=False):
+        # Mirror native jt.nn.softmax(x, dim=None, log=False). The previous (x, dim)
+        # signature crashed log_softmax -> softmax(x, dim, log=True) with
+        # "softmax_acl() got an unexpected keyword argument 'log'" (breaks cross_entropy
+        # / classification on NPU). For log=True compute a numerically-stable log-softmax
+        # from primitives (aclnn-native, autodiff-correct); else use the aclnn Softmax op.
+        if dim is None:
+            dim = 0 if x.ndim in (0, 1, 3) else 1
+        if log:
+            x = x.float32()
+            m = jt.max(x, dim, keepdims=True)
+            shifted = x - m
+            return shifted - jt.log(jt.exp(shifted).sum(dim, keepdims=True))
         return SoftmaxACL()(x, dim)
 
     from .aclops.rope_op import RopeACL
     def rope_acl(xq, xk, freqs_cis=None, freq_sin=None, freq_cos=None):
         return RopeACL()(xq, xk, freqs_cis, freq_sin, freq_cos)
 
-    from .aclops.stack_op import StackACL
     def stack_acl(x, dim=0):
-        return StackACL()(x, dim)
+        # Implement stack as the autodiff-correct composite unsqueeze+concat (matches
+        # jittor's native jt.stack), instead of the custom StackACL aclnn Function.
+        # StackACL was doubly broken on ACL: (1) it didn't normalize a negative dim, so
+        # jt.stack(dim=-1) built output shape [2,N] while aclnnStack produced [N,2] ->
+        # an "[N,2] != [2,N]" crash (broke ComplexNumber/FFT, since ComplexNumber stores
+        # jt.stack([real,imag], dim=-1)); and (2) its execute takes a LIST of Vars, which
+        # jittor autodiff does not recurse into, so backward returned zero grads.
+        # concat + unsqueeze are ACL-native and backprop correctly (verified on 910B).
+        if isinstance(x, tuple):
+            x = list(x)
+        x = [jt.array(t) for t in x]
+        if len(x) < 2:
+            return x[0].unsqueeze(dim)
+        return jt.concat([t.unsqueeze(dim) for t in x], dim=dim)
 
     from .aclops.nantonum_op import NanToNumACL
     
@@ -627,10 +657,30 @@ def change_function():
 
     jt.nn.Pool = warp(jt.nn.Pool, PoolACL)
 
+    # Route nn.LayerNorm through the native aclnnLayerNorm/LayerNormBackward
+    # ops instead of the elementwise decomposition (mean/var/rsqrt/... = ~8+
+    # kernels fwd + more bwd per call). Patch execute() so the module keeps its
+    # own weight/bias params (grad + DDP broadcast still work). Only the affine
+    # case is routed; non-affine or non-ACL falls back to the original.
+    _orig_layernorm_execute = jt.nn.LayerNorm.execute
+    def _layernorm_execute_acl(self, x):
+        if jt.flags.use_acl and getattr(self, "elementwise_affine", False):
+            fn = LayerNormACL(self.normalized_shape, self.eps,
+                              self.elementwise_affine)
+            return fn(x, self.weight, self.bias)
+        return _orig_layernorm_execute(self, x)
+    jt.nn.LayerNorm.execute = _layernorm_execute_acl
+
     jt.flip = warp(jt.flip, flip_acl)
     jt.Var.flip = lambda x, dim_vector=0: jt.flip(x, dim_vector)
     jt.concat = warp(jt.concat, concat)
     jt.stack = warp(jt.stack, stack_acl)
+
+    # NPU matmul/bmm precision: default to full fp32 (cubeMathType=0) to match torch's
+    # default (TF32/HF32 off) for numerical parity (G3). Set jt.acl_allow_hf32=True to
+    # opt into HF32 (cubeMathType=1, ~5e-4 off, faster) like torch's allow_tf32/allow_hf32.
+    if not hasattr(jt, "acl_allow_hf32"):
+        jt.acl_allow_hf32 = False
 
     jt.gather = warp(jt.gather, gather_acl)
     jt.any = warp(jt.any, any_acl)

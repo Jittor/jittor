@@ -303,7 +303,7 @@ static void pyjt_def_core(PyObject* m) {
             LOGf << "Not a valid call.";
         } catch (const std::exception& e) {
             if (!PyErr_Occurred()) {
-                PyErr_Format(PyExc_RuntimeError, e.what());
+                PyErr_Format(PyExc_RuntimeError, "%s", e.what());
             }
         }
         return nullptr;
@@ -390,7 +390,7 @@ bool cache_compile(const string& cmd, const string& cache_path="", const string&
             LOGf << "Not a valid call.";
         } catch (const std::exception& e) {
             if (!PyErr_Occurred()) {
-                PyErr_Format(PyExc_RuntimeError, e.what());
+                PyErr_Format(PyExc_RuntimeError, "%s", e.what());
             }
         }
         return nullptr;
@@ -419,7 +419,7 @@ void log(const std::string& fileline, const char* level, int verbose, const std:
             LOGf << "Not a valid call.";
         } catch (const std::exception& e) {
             if (!PyErr_Occurred()) {
-                PyErr_Format(PyExc_RuntimeError, e.what());
+                PyErr_Format(PyExc_RuntimeError, "%s", e.what());
             }
         }
         return nullptr;
@@ -448,7 +448,7 @@ void init_subprocess()
             LOGf << "Not a valid call.";
         } catch (const std::exception& e) {
             if (!PyErr_Occurred()) {
-                PyErr_Format(PyExc_RuntimeError, e.what());
+                PyErr_Format(PyExc_RuntimeError, "%s", e.what());
             }
         }
         return nullptr;
@@ -477,7 +477,7 @@ void log_capture_start()
             LOGf << "Not a valid call.";
         } catch (const std::exception& e) {
             if (!PyErr_Occurred()) {
-                PyErr_Format(PyExc_RuntimeError, e.what());
+                PyErr_Format(PyExc_RuntimeError, "%s", e.what());
             }
         }
         return nullptr;
@@ -508,7 +508,7 @@ void log_capture_stop()
             LOGf << "Not a valid call.";
         } catch (const std::exception& e) {
             if (!PyErr_Occurred()) {
-                PyErr_Format(PyExc_RuntimeError, e.what());
+                PyErr_Format(PyExc_RuntimeError, "%s", e.what());
             }
         }
         return nullptr;
@@ -573,7 +573,7 @@ void log_capture_read()
             LOGf << "Not a valid call.";
         } catch (const std::exception& e) {
             if (!PyErr_Occurred()) {
-                PyErr_Format(PyExc_RuntimeError, e.what());
+                PyErr_Format(PyExc_RuntimeError, "%s", e.what());
             }
         }
         return nullptr;

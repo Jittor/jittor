@@ -21,12 +21,19 @@ namespace jittor {
 EXTERN_LIB cudnnHandle_t cudnn_handle;
 EXTERN_LIB int max_cache_size;
 EXTERN_LIB float max_workspace_ratio;
+EXTERN_LIB int cudnn_benchmark;
 
 // @pyjt(set_algorithm_cache_size)
 void set_algorithm_cache_size(int size);
 
 // @pyjt(set_max_workspace_ratio)
 void set_max_workspace_ratio(float64 ratio);
+
+// @pyjt(set_benchmark)
+void set_benchmark(int enabled);
+
+// @pyjt(get_benchmark)
+int get_benchmark();
 
 
 template <typename T_ELEM> __inline__  cudnnDataType_t getDataType();

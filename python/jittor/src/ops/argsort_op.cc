@@ -54,7 +54,7 @@ ArgsortOp::ArgsortOp(Var* x, int dim, bool descending, NanoString dtype)
             axes.push_back(dim);
             auto tranpose1 = make_transpose(x, axes);
 
-            auto indexes = make_index(tranpose1->shape, dims - 1, ns_int32);
+            auto indexes = make_index(tranpose1->shape, dims - 1, dtype);
             int m = 1;
             for (int i = 0; i < dims - 1; ++i) {
                 m *= tranpose1->shape[i];
@@ -123,8 +123,12 @@ VarPtr ArgsortOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 }
 
 void ArgsortOp::infer_shape() {
-    ASSERTop(dim,>=,0);
-    ASSERTop(dim,<,(int)x->shape.size());
+    CHECKop(dim,>=,0) << "Invalid dim for argsort op: dim out of range, expected dim in ["
+        >> -(int)x->shape.size() >> ", " >> (int)x->shape.size()-1
+        >> "] for input with shape" << x->shape >> ".";
+    CHECKop(dim,<,(int)x->shape.size()) << "Invalid dim for argsort op: dim out of range, expected dim in ["
+        >> -(int)x->shape.size() >> ", " >> (int)x->shape.size()-1
+        >> "] for input with shape" << x->shape >> ".";
     y->set_shape(x->shape);
     y_key->set_shape(x->shape);
 }

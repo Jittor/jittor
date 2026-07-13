@@ -124,9 +124,10 @@ ArrayOp::ArrayOp(PyObject* obj) {
             ori_ptr = arr->data;
         }
 
-        // use 32-bit by default
-        if ((auto_convert_64_to_32 || holder.obj) 
-            && args.dtype.dsize() == 8 && args.ptr) {
+        // use 32-bit by default. complex64 is also dsize 8 but must NOT be narrowed
+        // to 32-bit (it's a float32 real/imag pair, not a 64-bit scalar) -> exclude it.
+        if ((auto_convert_64_to_32 || holder.obj)
+            && args.dtype.dsize() == 8 && args.ptr && !args.dtype.is_complex()) {
             auto size = PyArray_Size(arr);
             args.buffer.reset(new char[size]);
             auto pre_data = args.ptr;

@@ -17,12 +17,48 @@ from jittor import flatten, init, Module
 import numpy as np
 import collections
 import math
+import os
 from collections import OrderedDict
 from jittor.pool import *
 from jittor.optim import *
 from jittor.misc import _pair, _triple
+# torch exposes the CTCLoss module under torch.nn; jittor defines it in
+# jittor.misc, so re-export the CLASS for `nn.CTCLoss` / the shim's
+# `torch.nn.CTCLoss` to resolve. We deliberately do NOT re-export the functional
+# `ctc_loss`: torch_compat installs its own torch-faithful F.ctc_loss only when
+# F lacks one, and misc.ctc_loss's reduction='mean' differs from torch (torch
+# divides each sample by its target_length) — re-exporting it would shadow the
+# correct F.ctc_loss.
+from jittor.misc import CTCLoss
 from jittor_utils import LOG
-from functools import partial
+from functools import partial, lru_cache
+
+
+def _broadcast_batch_dims(a, b):
+    ''' Broadcast the leading batch dims of two tensors with equal ndim>=3 to a
+    common shape (torch matmul/bmm semantics), leaving the trailing two (matrix)
+    dims untouched. cublasGemmStridedBatchedEx only supports a single batch
+    stride per operand, so a batch dim of size 1 broadcast against >1 (e.g.
+    Falcon multi-query attention: [b,nh,q,d] @ [b,1,d,k]) must be materialized
+    here before dispatch. '''
+    if a.ndim != b.ndim or a.ndim < 3:
+        return a, b
+    bshape = []
+    need = False
+    for i in range(a.ndim - 2):
+        an, bn = a.shape[i], b.shape[i]
+        if an != bn:
+            assert an == 1 or bn == 1, \
+                f"dimension not match, a.shape:{a.shape}, b.shape:{b.shape}"
+            need = True
+        bshape.append(max(an, bn))
+    if not need:
+        return a, b
+    if list(a.shape[:-2]) != bshape:
+        a = a.expand(bshape + list(a.shape[-2:]))
+    if list(b.shape[:-2]) != bshape:
+        b = b.expand(bshape + list(b.shape[-2:]))
+    return a, b
 
 
 def matmul_transpose(a, b):
@@ -35,6 +71,14 @@ def matmul_transpose(a, b):
         cc = matmul_transpose(aa, b)
         return cc.reshape(a.shape[:-1]+(-1,))
     assert len(a.shape) == 2 and len(b.shape) == 2
+    a_dtype, b_dtype = str(a.dtype), str(b.dtype)
+    if (jt.flags.use_cuda and jt.compile_extern.cublas_ops
+            and a_dtype == b_dtype and "float" in a_dtype
+            and "complex" not in a_dtype and "complex" not in b_dtype):
+        if a_dtype == "float64":
+            r = jt.compile_extern.cublas_ops.cublas_matmul(a.float32(), b.float32(), 0, 1)
+            return r.cast("float64")
+        return jt.compile_extern.cublas_ops.cublas_matmul(a, b, 0, 1)
 
     shape = list(a.shape)[:-1] + list(b.shape)
     with jt.flag_scope(amp_reg = jt.flags.amp_reg | 36):
@@ -48,6 +92,7 @@ def bmm_transpose(a, b):
     returns a * b^T
     '''
     if jt.flags.use_cuda and jt.compile_extern.cublas_ops:
+        a, b = _broadcast_batch_dims(a, b)
         return jt.compile_extern.cublas_ops.cublas_batched_matmul(a, b, 0, 1)
     t = list(range(b.ndim))
     t[-1], t[-2] = t[-2], t[-1]
@@ -79,6 +124,27 @@ def baddbmm(input, batch1, batch2, beta=1, alpha=1):
     if alpha != 1: res = res * alpha
     if beta == 0: return res
     return beta * input + res
+
+def _matmul_2d_cublas(a, b, trans_a=0, trans_b=0):
+    a_dtype, b_dtype = str(a.dtype), str(b.dtype)
+    if (jt.flags.use_cuda and jt.compile_extern.cublas_ops
+            and a_dtype == b_dtype and "float" in a_dtype
+            and "complex" not in a_dtype and "complex" not in b_dtype):
+        if a_dtype == "float64":
+            r = jt.compile_extern.cublas_ops.cublas_matmul(
+                a.float32(), b.float32(), trans_a, trans_b)
+            return r.cast("float64")
+        return jt.compile_extern.cublas_ops.cublas_matmul(a, b, trans_a, trans_b)
+    return None
+
+def _transpose_base_last2(x):
+    try:
+        base = getattr(x, "_jittor_transpose_base", None)
+        if base is not None and getattr(x, "_jittor_transpose_last2", False):
+            return base
+    except Exception:
+        pass
+    return None
 
 def matmul(a, b):
     ''' matrix multiply, 
@@ -124,11 +190,43 @@ Example::
         if len_a == 1:
             # a: [n], b:[n,k], c:[k]
             return (a.broadcast(b, [-1]) * b).sum(0)
+        if len_a == 2 and len_b == 2:
+            # a: [n, m], b: [m, k], c: [n, k]
+            a_base = _transpose_base_last2(a)
+            b_base = _transpose_base_last2(b)
+            aa = a_base if a_base is not None else a
+            bb = b_base if b_base is not None else b
+            fast = _matmul_2d_cublas(aa, bb, 1 if a_base is not None else 0,
+                                     1 if b_base is not None else 0)
+            if fast is not None:
+                return fast
         if len_a>=3 and len_a==len_b:
             # bmm
             # a: [..., n, m], b: [..., m, k], c:[..., n, k]
-            if jt.flags.use_cuda and jt.compile_extern.cublas_ops:
-                return jt.compile_extern.cublas_ops.cublas_batched_matmul(a, b, 0, 0)
+            # cublas_batched_matmul only supports float dtypes; complex64 falls through to
+            # the reindex path below (broadcast * multiply + sum-reduce), which the native
+            # complex kernels support on both CPU and CUDA.
+            if jt.flags.use_cuda and jt.compile_extern.cublas_ops and "complex" not in str(a.dtype):
+                a_base = _transpose_base_last2(a)
+                b_base = _transpose_base_last2(b)
+                if a_base is not None:
+                    a = a_base
+                if b_base is not None:
+                    b = b_base
+                a, b = _broadcast_batch_dims(a, b)
+                # cuBLAS strided-batched gemm rejects float64 (CUBLAS_STATUS_NOT_SUPPORTED)
+                # on many GPUs; compute in float32 and cast back (rare path, e.g. a float64
+                # attention mask contaminating a transformer's batched matmul).
+                if str(a.dtype) == "float64" or str(b.dtype) == "float64":
+                    r = jt.compile_extern.cublas_ops.cublas_batched_matmul(
+                        a.float32(), b.float32(),
+                        1 if a_base is not None else 0,
+                        1 if b_base is not None else 0)
+                    return r.cast("float64") if (str(a.dtype) == "float64" and str(b.dtype) == "float64") else r
+                return jt.compile_extern.cublas_ops.cublas_batched_matmul(
+                    a, b,
+                    1 if a_base is not None else 0,
+                    1 if b_base is not None else 0)
         shape = []
         len_c = max(len_a, len_b)
         (n, m), (m_, k) = a.shape[-2:], b.shape[-2:]
@@ -163,7 +261,7 @@ jt.Var.__imatmul__ = lambda a,b: a.assign(matmul(a,b))
 def get_init_var_rand(shape, dtype):
     return jt.array(np.random.normal(0.0, 1.0, shape).astype(np.float32))
 
-def relu(x): 
+def relu(x, inplace=False):
     r''' Applies the element-wise function:
 
     .. math::
@@ -171,6 +269,10 @@ def relu(x):
 
     :param x: the input var
     :type x: jt.Var
+
+    :param inplace: can optionally do the operation in-place (accepted for
+        torch compatibility; Jittor computes a new var). Default: ``False``
+    :type inplace: bool
 
     Example:
         >>> a = jt.randn(3)
@@ -183,7 +285,10 @@ def relu(x):
     return jt.ternary_out_hint(cond, x, 0.0)
 
 
-def leaky_relu(x, scale=0.01): 
+def leaky_relu(x, scale=0.01, negative_slope=None, inplace=False):
+    # torch spells the slope `negative_slope` (+ an `inplace` flag); accept both.
+    if negative_slope is not None:
+        scale = negative_slope
     r''' Applies the element-wise function:
 
     .. math::
@@ -265,7 +370,7 @@ def sign(x: jt.Var) -> jt.Var:
     x = jt.ternary(x>0, one, x)
     return jt.ternary(x<0, -one, x)
 
-def gelu(x):
+def gelu(x, approximate='none'):
     r''' Applies the element-wise function:
 
     .. math::
@@ -273,8 +378,16 @@ def gelu(x):
 
     where :math:`\Phi(x)` is the Cumulative Distribution Function for Gaussian Distribution.
 
+    When ``approximate='tanh'``, GELU is estimated with:
+
+    .. math::
+        \text{GELU}(x) = 0.5 * x * (1 + \tanh(\sqrt{2/\pi} * (x + 0.044715 * x^3)))
+
     :param x: the input var
     :type x: jt.Var
+    :param approximate: the gelu approximation algorithm to use, either ``'none'``
+        (exact, erf-based) or ``'tanh'``. Default: ``'none'``.
+    :type approximate: str
 
     Example:
         >>> a = jt.randn(3)
@@ -283,12 +396,36 @@ def gelu(x):
         >>> nn.gelu(a)
         jt.Var([-0.134547   0.9882567  6.128115 ], dtype=float32)
     '''
-    _sqrt2 = 1.4142135623730951
-    erf = jt.erf(x/_sqrt2)+1
-    r = erf*x*.5
-    return r
+    if approximate == 'tanh':
+        _sqrt_2_over_pi = 0.7978845608028654
+        return 0.5*x*(1+jt.tanh(_sqrt_2_over_pi*(x+0.044715*(x*x*x))))
+    elif approximate == 'none':
+        # Keep the exact GELU kernel in the tensor's compute dtype. Dividing a
+        # float32 Var by a Python float intentionally uses a float64 intermediate
+        # in torch_compat (to match scalar division to the last bit), which made
+        # this elementwise hot path execute a double-precision divide per value.
+        # PyTorch's GELU kernel uses a typed 1/sqrt(2) constant instead. Low
+        # precision inputs compute in fp32 and cast back, matching torch's output
+        # dtype while retaining the existing elementwise fusion opportunity.
+        input_dtype = str(x.dtype)
+        low_precision = input_dtype in ('float16', 'bfloat16')
+        compute_x = x.float32() if low_precision else x
+        scalar_type = np.float64 if input_dtype == 'float64' else np.float32
+        inv_sqrt2 = scalar_type(0.7071067811865476)
+        half = scalar_type(0.5)
+        one = scalar_type(1.0)
+        result = half * compute_x * (one + jt.erf(compute_x * inv_sqrt2))
+        return result.cast(input_dtype) if low_precision else result
+    else:
+        raise ValueError(f"approximate argument must be either 'none' or 'tanh', got {approximate}")
 
-def silu(x):
+def sigmoid(x):
+    ''' Element-wise sigmoid. Exposed as a function (torch.nn.functional.sigmoid /
+    nn.functional.sigmoid) -- jittor only had jt.sigmoid / Var.sigmoid before, so
+    `F.sigmoid(x)` (used by qwen2_moe and others) raised AttributeError.'''
+    return jt.sigmoid(x)
+
+def silu(x, inplace=False):     # inplace: accepted for torch/mmcv compat, ignored
     r''' Applies the element-wise function:
 
     .. math::
@@ -305,6 +442,100 @@ def silu(x):
         jt.Var([-0.15552104 -0.27603802  1.9016962 ], dtype=float32)
     '''
     return x * x.sigmoid()
+
+def prelu(x, weight):
+    ''' Applies the element-wise PReLU function (functional form):
+
+    .. math::
+        \\text{PReLU}(x) = \\max(0, x) + weight * \\min(0, x)
+
+    :param x: the input var
+    :type x: jt.Var
+    :param weight: the (learnable) slope, either a scalar or a 1-D var with one
+        value per input channel (broadcast over dim 1).
+    :type weight: jt.Var or float
+    '''
+    if isinstance(weight, jt.Var) and weight.numel() != 1:
+        assert weight.numel() == x.size(1), \
+            "weight (number of parameters) does not match input channels in prelu"
+        dims = [i for i in range(x.ndim) if i != 1]
+        w = weight.broadcast(x, dims)
+    else:
+        w = weight
+    return jt.maximum(0, x) + w * jt.minimum(0, x)
+jt.Var.prelu = prelu
+
+def hardswish(x):
+    ''' Applies the element-wise Hardswish function:
+
+    .. math::
+        \\text{Hardswish}(x) = \\begin{cases}
+        0, & x \\le -3 \\\\
+        x, & x \\ge +3 \\\\
+        x \\cdot (x + 3) / 6, & \\text{otherwise}
+        \\end{cases}
+    '''
+    return x * jt.clamp(x + 3, min_v=0, max_v=6) / 6
+jt.Var.hardswish = hardswish
+
+def hardsigmoid(x):
+    ''' Applies the element-wise Hardsigmoid function:
+
+    .. math::
+        \\text{Hardsigmoid}(x) = \\begin{cases}
+        0, & x \\le -3 \\\\
+        1, & x \\ge +3 \\\\
+        x / 6 + 1/2, & \\text{otherwise}
+        \\end{cases}
+    '''
+    return jt.clamp(x / 6 + 0.5, min_v=0.0, max_v=1.0)
+jt.Var.hardsigmoid = hardsigmoid
+
+def rrelu(x, lower=1./8, upper=1./3, training=False):
+    ''' Applies the randomized leaky rectified linear unit function,
+    element-wise, as described in `Empirical Evaluation of Rectified
+    Activations in Convolutional Network`.
+
+    During training the negative slope ``a`` is sampled uniformly from
+    ``[lower, upper]``; during evaluation the fixed slope
+    ``(lower + upper) / 2`` is used (matching torch).
+
+    :param x: the input var
+    :param lower: lower bound of the uniform slope. Default: 1/8
+    :param upper: upper bound of the uniform slope. Default: 1/3
+    :param training: whether to sample the slope (train) or use its mean (eval).
+    '''
+    if training:
+        a = jt.random(x.shape, x.dtype) * (upper - lower) + lower
+    else:
+        a = (lower + upper) / 2
+    return jt.ternary(x >= 0, x, a * x)
+jt.Var.rrelu = rrelu
+
+class RReLU(Module):
+    ''' Applies the randomized leaky rectified linear unit function,
+    element-wise. See :func:`rrelu`.
+
+    :param lower: lower bound of the uniform slope. Default: 1/8
+    :param upper: upper bound of the uniform slope. Default: 1/3
+    '''
+    def __init__(self, lower=1./8, upper=1./3):
+        self.lower = lower
+        self.upper = upper
+        self.is_train = True
+
+    def execute(self, x):
+        return rrelu(x, self.lower, self.upper, getattr(self, "is_train", True))
+
+class Hardswish(Module):
+    ''' Applies the element-wise Hardswish function. See :func:`hardswish`. '''
+    def execute(self, x):
+        return hardswish(x)
+
+class Hardsigmoid(Module):
+    ''' Applies the element-wise Hardsigmoid function. See :func:`hardsigmoid`. '''
+    def execute(self, x):
+        return hardsigmoid(x)
 
 class ELU(Module):
     r''' Applies the element-wise function:
@@ -380,9 +611,9 @@ def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction=
         output = output.reshape((-1, c_dim))
 
     target = target.reshape((-1, ))
-    target_weight = ((target >= 0) & (target < output.shape[1])).float32() 
+    target_weight = ((target >= 0) & (target < output.shape[1])).float32()
     if weight is not None:
-        target_weight = weight[target]
+        target_weight = target_weight * weight[target]
     if ignore_index is not None:
         target_weight = jt.ternary(
             target==ignore_index,
@@ -399,12 +630,15 @@ def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction=
     if reduction == 'sum':
         return loss.sum()
     elif reduction == 'mean':
-        return loss.mean() / target_weight.mean()
+        return loss.sum() / jt.maximum(target_weight.sum(), 1e-8)
     else:
         return loss.reshape(target_shape) 
 
 def mse_loss(output, target, reduction="mean"):
-    return (output-target).sqr().reduce(reduction)
+    loss = (output-target).sqr()
+    # reduction='none' returns the per-element loss (torch semantics); Var.reduce only
+    # knows mean/sum, so don't forward 'none' to it (it raised "no such reduce").
+    return loss if reduction == "none" else loss.reduce(reduction)
 
 def bce_loss(output, target, weight=None, size_average=True):
     loss = - (target * jt.log(jt.maximum(output, 1e-20)) + (1 - target) * jt.log(jt.maximum(1 - output, 1e-20)))
@@ -417,8 +651,11 @@ def bce_loss(output, target, weight=None, size_average=True):
     else:
         return loss.sum()
 
-def l1_loss(output, target):
-    return (output-target).abs().mean()
+def l1_loss(output, target, reduction="mean"):
+    loss = (output-target).abs()
+    if reduction == "none": return loss
+    if reduction == "sum": return loss.sum()
+    return loss.mean()
 
 
 def smooth_l1_loss(y_true, y_pred,reduction="mean"):
@@ -449,7 +686,12 @@ def nll_loss(output,target,weight=None,ignore_index=-100,reduction='mean'):
     assert ignore_index<0 or ignore_index<n_classes
     if weight is None:
         weight = jt.ones((n_classes,))
-    if ignore_index>0:
+    # torch ignores the class `ignore_index` (any value >=0 is a valid class id, incl.
+    # 0); the default -100 is a sentinel for "ignore nothing". The old `>0` test silently
+    # let ignore_index=0 through, so class 0 was still counted. Clone before zeroing so a
+    # user-supplied weight Var isn't mutated in place.
+    if ignore_index>=0:
+        weight = weight.clone()
         weight[ignore_index]=0
     if output.ndim==2:
         index = jt.index((output.shape[0],),dim=0)
@@ -467,12 +709,16 @@ def nll_loss(output,target,weight=None,ignore_index=-100,reduction='mean'):
         raise ValueError(f'not support {reduction}')
     
 class CrossEntropyLoss(Module):
-    def __init__(self, weight=None, ignore_index=None):
+    def __init__(self, weight=None, ignore_index=None, reduction='mean'):
+        # torch.nn.CrossEntropyLoss takes a `reduction` arg ('mean'/'sum'/'none');
+        # it was silently dropped before, so reduction='sum'/'none' had no effect.
         self.weight = weight
         self.ignore_index = ignore_index
-        
+        self.reduction = reduction
+
     def execute(self, output, target):
-        return cross_entropy_loss(output, target, self.weight, self.ignore_index)
+        return cross_entropy_loss(output, target, self.weight, self.ignore_index,
+                                  reduction=self.reduction)
 
 class MSELoss(Module):
     def __init__(self, reduction='mean'):
@@ -493,10 +739,15 @@ class L1Loss(Module):
     def execute(self, output, target):
         return l1_loss(output, target)
 
-def binary_cross_entropy_with_logits(output, target, weight=None, pos_weight=None, size_average=True):
+def binary_cross_entropy_with_logits(output, target, weight=None, pos_weight=None, size_average=True, reduction=None):
     if not (target.shape == output.shape):
         raise ValueError(f"Target size ({target.shape}) must be the same as output size ({output.shape})")
-    
+
+    # The stable formula below is exact for any FINITE logit, but literal +/-inf
+    # (e.g. Grounding-DINO's ContrastiveEmbed masks padding logits with -inf) makes
+    # (1-target)*(-inf) and inf-inf produce NaN. Clamp to +/-50 — sigmoid is fully
+    # saturated there, so loss/grad for finite logits are unchanged; only inf is removed.
+    output = jt.clamp(output, -50.0, 50.0)
     max_val = jt.clamp(-output,min_v=0)
     if pos_weight is not None:
         log_weight = (pos_weight-1)*target + 1
@@ -506,25 +757,47 @@ def binary_cross_entropy_with_logits(output, target, weight=None, pos_weight=Non
     if weight is not None:
         loss *=weight
 
+    # torch supports reduction='none'/'sum'/'mean'; the original only had the
+    # size_average bool (no per-element 'none'). When reduction is given it wins.
+    if reduction is not None:
+        if reduction == "none":
+            return loss
+        if reduction == "sum":
+            return loss.sum()
+        if reduction == "mean":
+            return loss.mean()
+        raise ValueError(f'not support {reduction}')
     if size_average:
         return loss.mean()
     else:
         return loss.sum()
 
 class BCEWithLogitsLoss(Module):
-    def __init__(self, weight=None, pos_weight=None, size_average=True):
+    def __init__(self, weight=None, pos_weight=None, size_average=True, reduction=None):
         self.pos_weight = pos_weight
         self.weight = weight
         self.size_average = size_average
+        self.reduction = reduction
 
     def execute(self, output, target):
-        return binary_cross_entropy_with_logits(output,target,self.weight,self.pos_weight,self.size_average)
+        return binary_cross_entropy_with_logits(output,target,self.weight,self.pos_weight,self.size_average,self.reduction)
+
+def _get_softmax_dim(ndim):
+    # Mirrors torch.nn.functional._get_softmax_dim: when ``dim`` is not given,
+    # torch softmaxes over dim 0 for 0/1/3-D inputs and dim 1 otherwise.
+    if ndim == 0 or ndim == 1 or ndim == 3:
+        return 0
+    return 1
 
 def softmax(x, dim=None, log=False):
+    # torch-compatible default: ``dim=None`` selects a single axis via
+    # ``_get_softmax_dim`` (NOT a reduction over all elements). Passing an
+    # explicit ``dim`` keeps the previous behavior unchanged.
+    if dim is None:
+        dim = _get_softmax_dim(x.ndim)
     import jittor.other.code_softmax as code_softmax
     if code_softmax.can_softmax_v1(x, dim) and jt.compiler.is_cuda:
         return code_softmax.softmax_v1(x, log)
-    if dim is None: dim = ()
     dtype, x = x.dtype, x._to_float()
     if log:
         a = x - jt.max(x, dim, keepdims=True)
@@ -575,7 +848,9 @@ class Dropout(Module):
         output = output.to(input.dtype)
         return output
 
-def dropout(x,p=0.5,is_train=False):
+def dropout(x,p=0.5,is_train=False,training=None):
+    if training is not None:
+        is_train = training
     return Dropout(p=p,is_train=is_train)(x)
 
 class Dropout2d(Module):
@@ -655,37 +930,172 @@ def linear(x, weight, bias=None):
         return x + bias
     return x
 
+
+def multi_head_attention_forward(query, key, value, embed_dim_to_check, num_heads,
+        in_proj_weight, in_proj_bias, bias_k, bias_v, add_zero_attn, dropout_p,
+        out_proj_weight, out_proj_bias, training=True, key_padding_mask=None,
+        need_weights=True, attn_mask=None, use_separate_proj_weight=False,
+        q_proj_weight=None, k_proj_weight=None, v_proj_weight=None, static_k=None,
+        static_v=None, average_attn_weights=True, is_causal=False):
+    ''' torch's F.multi_head_attention_forward (the functional behind nn.MultiheadAttention
+    and used directly by fairseq-style models, e.g. wavlm). query/key/value are
+    (L, N, E) = (seq, batch, embed). Returns (attn_output (L,N,E), attn_weights or None).
+    Masked positions use a large finite negative (not -inf) to avoid jittor's inf/nan
+    JIT codegen segfault; softmax drives them to ~0 identically to torch. '''
+    tgt_len, bsz, embed_dim = query.shape
+    head_dim = embed_dim // num_heads
+    scaling = float(head_dim) ** -0.5
+    NEG = -1e30                                                # finite "-inf" for masks
+
+    # q/k/v projections (separate weights or a fused in_proj_weight)
+    if use_separate_proj_weight:
+        b = in_proj_bias
+        bq = b[:embed_dim] if b is not None else None
+        bk = b[embed_dim:embed_dim*2] if b is not None else None
+        bv = b[embed_dim*2:] if b is not None else None
+        q = linear(query, q_proj_weight, bq)
+        k = linear(key,   k_proj_weight, bk)
+        v = linear(value, v_proj_weight, bv)
+    else:
+        w_q = in_proj_weight[:embed_dim]
+        w_k = in_proj_weight[embed_dim:embed_dim*2]
+        w_v = in_proj_weight[embed_dim*2:]
+        if in_proj_bias is not None:
+            bq = in_proj_bias[:embed_dim]; bk = in_proj_bias[embed_dim:embed_dim*2]; bv = in_proj_bias[embed_dim*2:]
+        else:
+            bq = bk = bv = None
+        q = linear(query, w_q, bq); k = linear(key, w_k, bk); v = linear(value, w_v, bv)
+    q = q * scaling
+
+    if static_k is not None: k = static_k
+    if static_v is not None: v = static_v
+
+    # optional bias_k / bias_v: append a learned key/value
+    if bias_k is not None and bias_v is not None:
+        k = jt.concat([k, bias_k.repeat(1, bsz, 1)], dim=0)
+        v = jt.concat([v, bias_v.repeat(1, bsz, 1)], dim=0)
+        if attn_mask is not None:
+            attn_mask = jt.concat([attn_mask, jt.zeros((*attn_mask.shape[:-1], 1), attn_mask.dtype)], dim=-1)
+        if key_padding_mask is not None:
+            key_padding_mask = jt.concat([key_padding_mask, jt.zeros((key_padding_mask.shape[0], 1), key_padding_mask.dtype)], dim=1)
+
+    # (L, N, E) -> (N*H, L, head_dim)
+    q = q.reshape(tgt_len, bsz * num_heads, head_dim).transpose(0, 1)
+    k = k.reshape(-1, bsz * num_heads, head_dim).transpose(0, 1)
+    v = v.reshape(-1, bsz * num_heads, head_dim).transpose(0, 1)
+
+    if add_zero_attn:
+        z = jt.zeros((k.shape[0], 1, k.shape[2]), k.dtype)
+        k = jt.concat([k, z], dim=1)
+        v = jt.concat([v, z], dim=1)
+        if attn_mask is not None:
+            attn_mask = jt.concat([attn_mask, jt.zeros((*attn_mask.shape[:-1], 1), attn_mask.dtype)], dim=-1)
+        if key_padding_mask is not None:
+            key_padding_mask = jt.concat([key_padding_mask, jt.zeros((key_padding_mask.shape[0], 1), key_padding_mask.dtype)], dim=1)
+
+    src_len = k.shape[1]
+    attn = jt.matmul(q, k.transpose(1, 2))                    # (N*H, L, S)
+
+    if attn_mask is not None:
+        # float mask -> additive bias; bool mask -> fill masked with NEG
+        if str(attn_mask.dtype) == "bool":
+            attn = attn + jt.ternary(attn_mask, jt.array(NEG).cast(attn.dtype).broadcast(attn_mask.shape), jt.zeros(attn_mask.shape, attn.dtype))
+        else:
+            attn = attn + attn_mask                           # broadcasts over the N*H dim
+
+    if key_padding_mask is not None:
+        attn = attn.reshape(bsz, num_heads, tgt_len, src_len)
+        kpm = (key_padding_mask != 0).reshape(bsz, 1, 1, src_len).broadcast([bsz, num_heads, tgt_len, src_len])
+        attn = jt.ternary(kpm, jt.array(NEG).cast(attn.dtype).broadcast(attn.shape), attn)
+        attn = attn.reshape(bsz * num_heads, tgt_len, src_len)
+
+    attn = softmax(attn, dim=-1)
+    if dropout_p > 0.0 and training:
+        attn = dropout(attn, p=dropout_p, is_train=True)
+    if str(attn.dtype) != str(v.dtype):       # a float64 attn_mask can promote attn
+        attn = attn.cast(v.dtype)
+    out = jt.matmul(attn, v)                                  # (N*H, L, head_dim)
+    out = out.transpose(0, 1).reshape(tgt_len, bsz, embed_dim)
+    out = linear(out, out_proj_weight, out_proj_bias)
+
+    attn_weights = None
+    if need_weights:
+        attn_weights = attn.reshape(bsz, num_heads, tgt_len, src_len)
+        if average_attn_weights:
+            attn_weights = attn_weights.mean(dim=1)
+    return out, attn_weights
+
 class BatchNorm(Module):
-    def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True, is_train=True, sync=True):
+    def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True, is_train=True, sync=True,
+                 track_running_stats=True, device=None, dtype=None):
+        # track_running_stats/device/dtype accepted for torch.nn.BatchNorm* compat.
         self.sync = sync
         self.num_features = num_features
         self.is_train = is_train
         self.eps = eps
         self.momentum = momentum
         self.affine = affine
+        self.track_running_stats = track_running_stats
         self.weight = init.constant((num_features,), "float32", 1.0) if affine else 1.0
         self.bias = init.constant((num_features,), "float32", 0.0) if affine else 0.0
         self.running_mean = init.constant((num_features,), "float32", 0.0).stop_grad()
         self.running_var = init.constant((num_features,), "float32", 1.0).stop_grad()
+        # torch keeps num_batches_tracked as a buffer; some models read it.
+        self.num_batches_tracked = init.constant((1,), "int32", 0.0).stop_grad()
+        # running stats are BUFFERS, not trainable params (torch semantics):
+        # exclude them from parameters()/named_parameters() so optimizers and the
+        # autograd bridge don't treat them as trainable.
+        for _b in (self.running_mean, self.running_var, self.num_batches_tracked):
+            object.__setattr__(_b, "is_buffer", True)
+        # num_batches_tracked is a non-numeric counter; torch stores it as a 0-d
+        # scalar but jittor has no 0-d tensors (it's (1,)), which mismatches on a
+        # state_dict roundtrip. Keep it non-persistent so it isn't serialized.
+        object.__setattr__(self.num_batches_tracked, "persistent", False)
 
     def execute(self, x):
         dims = [0]+list(range(2,x.ndim))
         if self.is_train:
             xmean = jt.mean(x, dims=dims)
             x2mean = jt.mean(x*x, dims=dims)
-            if self.sync and jt.in_mpi:
+            sync = self.sync and jt.in_mpi
+            if sync:
                 xmean = xmean.mpi_all_reduce("mean")
                 x2mean = x2mean.mpi_all_reduce("mean")
 
             xvar = (x2mean-xmean*xmean).maximum(0.0)
-            w = self.weight / jt.sqrt(xvar+self.eps)
-            b = self.bias - xmean * w
-            norm_x = x * w.broadcast(x, dims) + b.broadcast(x, dims)
+            if sync:
+                # SyncBatchNorm: stats are cross-rank, so normalize with the composite
+                # form (the stable _ln_normalize helper only sees local data and would
+                # break sync semantics). Precision cost is the small-variance backround
+                # cancellation, accepted to preserve correctness across ranks.
+                w = self.weight / jt.sqrt(xvar+self.eps)
+                b = self.bias - xmean * w
+                norm_x = x * w.broadcast(x, dims) + b.broadcast(x, dims)
+            else:
+                # local stats: use the numerically-stable custom-backward normalization
+                # (see _ln_normalize) — avoids the E[x^2]-E[x]^2 fp32 cancellation that
+                # corrupts the backward for small-variance batches; affine applied after.
+                xhat = _ln_normalize(x, dims, self.eps)
+                if self.affine:
+                    sh = [1, self.num_features] + [1]*(x.ndim-2)
+                    norm_x = xhat * self.weight.reshape(sh) + self.bias.reshape(sh)
+                else:
+                    norm_x = xhat
 
             self.running_mean.update(self.running_mean +
                 (xmean.reshape((-1,)) - self.running_mean) * self.momentum)
+            # torch updates running_var with the UNBIASED (Bessel-corrected) batch
+            # variance (var * n/(n-1)) while normalizing with the biased one; match it
+            # so running stats (hence eval-mode outputs) align with torch. n = count
+            # reduced per channel (global across ranks in sync mode).
+            n = 1
+            for _d in dims:
+                n *= x.shape[_d]
+            if sync:
+                n *= jt.world_size
+            run_var = xvar * (n / (n - 1)) if n > 1 else xvar
             self.running_var.update(self.running_var +
-                (xvar.reshape((-1,))-self.running_var)*self.momentum)
+                (run_var.reshape((-1,))-self.running_var)*self.momentum)
             return norm_x
         else:
             w = self.weight / jt.sqrt(self.running_var+self.eps)
@@ -697,7 +1107,21 @@ BatchNorm3d = BatchNorm2d = BatchNorm1d = BatchNorm
 
 def batch_norm(x, running_mean, running_var, weight=1, bias=0, training=False, momentum=0.1, eps=1e-05):
     dims = [0]+list(range(2,x.ndim))
-    assert not training
+    if training:
+        # compute batch statistics (torch F.batch_norm training path; used by timm)
+        xmean = x.mean(dims)
+        x2mean = (x*x).mean(dims)
+        xvar = (x2mean - xmean*xmean).maximum(0.0)
+        w = weight / jt.sqrt(xvar + eps)
+        b = bias - xmean * w
+        norm_x = x * w.broadcast(x, dims) + b.broadcast(x, dims)
+        # update running stats in-place (unbiased var), if real Vars were passed
+        if isinstance(running_mean, jt.Var) and isinstance(running_var, jt.Var):
+            n = x.numel() / x.shape[1]
+            run_var = xvar * (n/(n-1)) if n > 1 else xvar
+            running_mean.update(running_mean + (xmean.reshape((-1,)) - running_mean)*momentum)
+            running_var.update(running_var + (run_var.reshape((-1,)) - running_var)*momentum)
+        return norm_x
     w = weight / jt.sqrt(running_var+eps)
     b = bias - running_mean * w
     norm_x = x * w.broadcast(x, dims) + b.broadcast(x, dims)
@@ -717,14 +1141,15 @@ class InstanceNorm(Module):
         self.bias = init.constant((num_features,), "float32", 0.0) if affine else 0.0
 
     def execute(self, x):
+        # Per-(N,C) normalization over spatial dims with a numerically-stable custom
+        # backward (see _ln_normalize) — the composite E[x^2]-E[x]^2 form loses float32
+        # precision in backward for small-variance inputs (same cancellation as LayerNorm).
         dims = list(range(2,x.ndim))
-        xmean = jt.mean(x, dims=dims)
-        x2mean = jt.mean(x*x, dims=dims)
-
-        xvar = (x2mean-xmean*xmean).maximum(0.0)
-        w = self.weight / jt.sqrt(xvar+self.eps)
-        b = self.bias - xmean * w
-        return x * w.broadcast(x, dims) + b.broadcast(x, dims)
+        xhat = _ln_normalize(x, dims, self.eps)
+        if not self.affine:
+            return xhat
+        sh = [1, self.num_features] + [1]*len(dims)
+        return xhat * self.weight.reshape(sh) + self.bias.reshape(sh)
 
 InstanceNorm3d = InstanceNorm2d = InstanceNorm1d = InstanceNorm
 
@@ -757,34 +1182,223 @@ def instance_norm(x,
     momentum = 0.1,
     eps = 1e-5):
     dims = list(range(2,x.ndim))
-    xmean = jt.mean(x, dims=dims)
-    x2mean = jt.mean(x*x, dims=dims)
+    xhat = _ln_normalize(x, dims, eps)   # stable custom backward, see _ln_normalize
+    weight = 1.0 if weight is None else weight
+    bias = 0.0 if bias is None else bias
+    if isinstance(weight, jt.Var):
+        weight = weight.reshape([1, x.shape[1]] + [1]*len(dims))
+    if isinstance(bias, jt.Var):
+        bias = bias.reshape([1, x.shape[1]] + [1]*len(dims))
+    return xhat * weight + bias
 
-    xvar = (x2mean-xmean*xmean).maximum(0.0)
-    w = weight / jt.sqrt(xvar+eps)
-    b = bias - xmean * w
-    return x * w.broadcast(x, dims) + b.broadcast(x, dims)
+@lru_cache(maxsize=128)
+def _ln_function_cls(dims, eps):
+    # Normalize x -> (x-mean)/sqrt(var+eps) over `dims` with a numerically-STABLE
+    # custom backward (the closed form torch's fused LN uses). The composite-autodiff
+    # backward forms huge terms (x * d/dx[1/sqrt(var+eps)] ~ (var+eps)^-1.5) that must
+    # catastrophically cancel to the true input-grad -> float32 error (~1% for small-
+    # variance inputs; negligible for std~1). torch's fused LN avoids it; this matches.
+    # jt.Function: invoked via .apply(); tape_together makes grad() the backward
+    # (overriding the composite path inside execute).
+    class _LN(jt.Function):
+        def execute(self, x):
+            mean = jt.mean(x, dims=dims, keepdims=1)
+            var = jt.mean((x - mean) * (x - mean), dims=dims, keepdims=1)
+            rstd = jt.rsqrt(var + eps)
+            xhat = (x - mean) * rstd
+            self.xhat = xhat
+            self.rstd = rstd
+            return xhat
+        def grad(self, g):
+            # dL/dx = rstd*(g - mean(g) - xhat*mean(g*xhat)) over the normalized dims
+            xhat, rstd = self.xhat, self.rstd
+            mg = jt.mean(g, dims=dims, keepdims=1)
+            mgx = jt.mean(g * xhat, dims=dims, keepdims=1)
+            return rstd * (g - mg - xhat * mgx)
+    return _LN
+
+
+def _ln_normalize(x, dims, eps):
+    # Cache the immutable Function class by reduction axes and epsilon. A fresh
+    # Function instance/tape is still created by apply() for every invocation.
+    cls = _ln_function_cls(tuple(dims), float(eps))
+    return cls.apply(x)
+
+
+def _layer_norm_no_grad_cuda(x, normalized_shape, weight, bias, eps):
+    if not (jt.flags.use_cuda and not getattr(jt.compiler, "has_acl", 0)
+            and getattr(jt.flags, "no_grad", 0)):
+        return None
+    if len(normalized_shape) != 1 or str(x.dtype) not in ("float16", "float32"):
+        return None
+    hidden = int(normalized_shape[0])
+    var_affine = isinstance(weight, jt.Var) and isinstance(bias, jt.Var)
+    scalar_affine = not isinstance(weight, jt.Var) and not isinstance(bias, jt.Var)
+    if not var_affine:
+        if not scalar_affine or os.environ.get("JITTOR_LAYERNORM_SCALAR_FAST", "1") == "0":
+            return None
+    if int(x.shape[-1]) != hidden:
+        return None
+    eps_value = float(eps)
+    if scalar_affine:
+        scale_value = float(weight)
+        offset_value = float(bias)
+        scale_literal = f"{scale_value:.9e}f"
+        offset_literal = f"{offset_value:.9e}f"
+        y = jt.code(
+            x.shape,
+            x.dtype,
+            [x],
+            cuda_src=f"""
+            __device__ __forceinline__ float warp_sum(float value) {{
+                for (int offset = 16; offset > 0; offset >>= 1)
+                    value += __shfl_down_sync(0xffffffff, value, offset);
+                return value;
+            }}
+            __global__ static void kernel(
+                    in0_type* x, out0_type* y, int hidden) {{
+                int row = blockIdx.x;
+                int tid = threadIdx.x;
+                int lane = tid & 31;
+                int warp = tid >> 5;
+                __shared__ float warp_buf[4];
+                __shared__ float mean_shared;
+                __shared__ float inv_std_shared;
+                float sum = 0.0f;
+                for (int j = tid; j < hidden; j += blockDim.x)
+                    sum += static_cast<float>(x[row * hidden + j]);
+                sum = warp_sum(sum);
+                if (lane == 0) warp_buf[warp] = sum;
+                __syncthreads();
+                if (warp == 0) {{
+                    float total = lane < 4 ? warp_buf[lane] : 0.0f;
+                    total = warp_sum(total);
+                    if (lane == 0) mean_shared = total / hidden;
+                }}
+                __syncthreads();
+                float mean = mean_shared;
+                float var = 0.0f;
+                for (int j = tid; j < hidden; j += blockDim.x) {{
+                    float d = static_cast<float>(x[row * hidden + j]) - mean;
+                    var += d * d;
+                }}
+                var = warp_sum(var);
+                if (lane == 0) warp_buf[warp] = var;
+                __syncthreads();
+                if (warp == 0) {{
+                    float total = lane < 4 ? warp_buf[lane] : 0.0f;
+                    total = warp_sum(total);
+                    if (lane == 0)
+                        inv_std_shared = rsqrtf(total / hidden + {eps_value:.9g}f);
+                }}
+                __syncthreads();
+                float inv_std = inv_std_shared;
+                for (int j = tid; j < hidden; j += blockDim.x)
+                    y[row * hidden + j] = out0_type(
+                        (static_cast<float>(x[row * hidden + j]) - mean)
+                        * inv_std * {scale_literal} + {offset_literal});
+            }}
+            int rows = in0->num / {hidden};
+            kernel<<<rows, 128>>>(in0_p, out0_p, {hidden});
+            """,
+        )
+        return y
+    if int(weight.numel()) != hidden or int(bias.numel()) != hidden:
+        return None
+    y = jt.code(
+        x.shape,
+        x.dtype,
+        [x, weight, bias],
+        cuda_src=f"""
+        __device__ __forceinline__ float warp_sum(float value) {{
+            for (int offset = 16; offset > 0; offset >>= 1)
+                value += __shfl_down_sync(0xffffffff, value, offset);
+            return value;
+        }}
+        __global__ static void kernel(
+                in0_type* x, in1_type* weight, in2_type* bias,
+                out0_type* y, int hidden) {{
+            int row = blockIdx.x;
+            int tid = threadIdx.x;
+            int lane = tid & 31;
+            int warp = tid >> 5;
+            __shared__ float warp_buf[4];
+            __shared__ float mean_shared;
+            __shared__ float inv_std_shared;
+            float sum = 0.0f;
+            for (int j = tid; j < hidden; j += blockDim.x)
+                sum += static_cast<float>(x[row * hidden + j]);
+            sum = warp_sum(sum);
+            if (lane == 0) warp_buf[warp] = sum;
+            __syncthreads();
+            if (warp == 0) {{
+                float total = lane < 4 ? warp_buf[lane] : 0.0f;
+                total = warp_sum(total);
+                if (lane == 0) mean_shared = total / hidden;
+            }}
+            __syncthreads();
+            float mean = mean_shared;
+            float var = 0.0f;
+            for (int j = tid; j < hidden; j += blockDim.x) {{
+                float d = static_cast<float>(x[row * hidden + j]) - mean;
+                var += d * d;
+            }}
+            var = warp_sum(var);
+            if (lane == 0) warp_buf[warp] = var;
+            __syncthreads();
+            if (warp == 0) {{
+                float total = lane < 4 ? warp_buf[lane] : 0.0f;
+                total = warp_sum(total);
+                if (lane == 0)
+                    inv_std_shared = rsqrtf(total / hidden + {eps_value:.9g}f);
+            }}
+            __syncthreads();
+            float inv_std = inv_std_shared;
+            for (int j = tid; j < hidden; j += blockDim.x) {{
+                float scale = static_cast<float>(weight[j]);
+                float offset = static_cast<float>(bias[j]);
+                y[row * hidden + j] = out0_type(
+                    (static_cast<float>(x[row * hidden + j]) - mean)
+                    * inv_std * scale + offset);
+            }}
+        }}
+        int rows = in0->num / {hidden};
+        kernel<<<rows, 128>>>(
+            in0_p, in1_p, in2_p, out0_p, {hidden});
+        """,
+    )
+    return y
+
 
 class LayerNorm(Module):
-    def __init__(self, normalized_shape, eps: float = 1e-5, elementwise_affine: bool = True) -> None:
+    def __init__(self, normalized_shape, eps: float = 1e-5, elementwise_affine: bool = True, bias: bool = True, device=None, dtype=None) -> None:
+        # device/dtype: torch's LayerNorm accepts them (factory kwargs); jittor places
+        # params on the active device and uses float32, so they're accepted and ignored
+        # (nemotron passes them positionally).
         if isinstance(normalized_shape, int):
             normalized_shape = (normalized_shape,)
         self.normalized_shape = tuple(normalized_shape)
         self.eps = eps
         self.elementwise_affine = elementwise_affine
         self.weight = init.constant(normalized_shape, "float32", 1.0) if elementwise_affine else 1.0
-        self.bias = init.constant(normalized_shape, "float32", 0.0) if elementwise_affine else 0.0
+        # torch 2.1+ adds `bias`: a learnable bias only when both affine AND bias are on
+        # (e.g. dbrx uses LayerNorm(..., bias=False) -> scale only, no shift param).
+        self.bias = init.constant(normalized_shape, "float32", 0.0) if (elementwise_affine and bias) else 0.0
 
     @fp32_guard
     def execute(self, x):
         dims = [-i for i in range(len(self.normalized_shape), 0, -1)]
-        xmean = jt.mean(x, dims=dims, keepdims=1)
-        x2mean = jt.mean(x*x, dims=dims, keepdims=1)
-
-        xvar = (x2mean-xmean*xmean).maximum(0.0)
-        w = self.weight / jt.sqrt(xvar+self.eps)
-        b = self.bias - xmean * w
-        return x * w + b
+        # out = weight*(x-mean)/sqrt(var+eps) + bias. Normalization has a stable custom
+        # backward (see _ln_normalize); the affine stays composite (no cancellation).
+        # torch's LayerNorm/F.layer_norm accept weight=None / bias=None (MPT sets
+        # norm.bias = None for Hub-weight compat). Treat None as identity/zero.
+        weight = 1.0 if self.weight is None else self.weight
+        bias = 0.0 if self.bias is None else self.bias
+        fast = _layer_norm_no_grad_cuda(x, self.normalized_shape, weight, bias, self.eps)
+        if fast is not None:
+            return fast
+        xhat = _ln_normalize(x, dims, self.eps)
+        return xhat * weight + bias
 
 
 LayerNorm3d = LayerNorm2d = LayerNorm1d = LayerNorm
@@ -797,13 +1411,13 @@ def layer_norm(x,
     eps: float = 1e-5, 
     elementwise_affine: bool = True):
     dims = [-i for i in range(len(normalized_shape), 0, -1)]
-    xmean = jt.mean(x, dims=dims, keepdims=1)
-    x2mean = jt.mean(x*x, dims=dims, keepdims=1)
-
-    xvar = (x2mean-xmean*xmean).maximum(0.0)
-    w = weight / jt.sqrt(xvar+eps)
-    b = bias - xmean * w
-    return x * w + b
+    weight = 1.0 if weight is None else weight
+    bias = 0.0 if bias is None else bias
+    fast = _layer_norm_no_grad_cuda(x, tuple(normalized_shape), weight, bias, eps)
+    if fast is not None:
+        return fast
+    xhat = _ln_normalize(x, dims, eps)   # stable custom backward, see LayerNorm.execute
+    return xhat * weight + bias
 
 class GroupNorm(Module):
     def __init__(self, num_groups, num_channels, eps=1e-05, affine=True, is_train=True):
@@ -823,22 +1437,18 @@ class GroupNorm(Module):
         # if x.ndim==4:
             # output_shape = x.shape
         output_shape = x.shape
-        assert C % self.num_groups == 0
-        x = x.reshape((N, self.num_groups, C//self.num_groups, -1))
-        xmean = jt.mean(x, dims=[2,3]).reshape((N, self.num_groups, 1))
-        x2mean = jt.mean(x*x, dims=[2,3]).reshape((N, self.num_groups, 1))
-        xvar = (x2mean-xmean*xmean).maximum(0.0)
-
-        if self.affine:
-            w = self.weight.reshape((1, self.num_groups, -1))
-            b = self.bias.reshape((1, self.num_groups, -1))
-        else:
-            w = 1
-            b = 0
-        w = w / jt.sqrt(xvar+self.eps)
-        b = b - xmean * w
-        x = x * w.broadcast(x, [3]) + b.broadcast(x, [3])
-        return x.reshape(output_shape)
+        assert C % self.num_groups == 0, \
+            f"GroupNorm: num_channels ({C}) must be divisible by num_groups ({self.num_groups})"
+        # Per-(N,group) normalization with a numerically-stable custom backward (see
+        # _ln_normalize) — the composite E[x^2]-E[x]^2 form loses float32 precision in
+        # backward for small-variance inputs (same cancellation as LayerNorm). Affine is
+        # per-channel and applied after restoring shape (no cancellation).
+        xg = x.reshape((N, self.num_groups, C//self.num_groups, -1))
+        xhat = _ln_normalize(xg, [2,3], self.eps).reshape(output_shape)
+        if not self.affine:
+            return xhat
+        sh = [1, C] + [1]*(x.ndim-2)
+        return xhat * self.weight.reshape(sh) + self.bias.reshape(sh)
 
 def group_norm(x, 
     num_groups, 
@@ -847,24 +1457,20 @@ def group_norm(x,
     eps=1e-05):
     N = x.shape[0]
     C = x.shape[1]
-    output_shape = (N,-1)
-    # TODO: 3d group norm
-    if x.ndim==4:
+    # Restore the full input shape for any spatial rank (1d/2d/3d data, i.e.
+    # 3d/4d/5d tensors). Only fall back to (N, C) when there is no spatial dim.
+    if x.ndim >= 3:
         output_shape = x.shape
+    else:
+        output_shape = (N, C)
     assert C % num_groups == 0
-    x = x.reshape((N, num_groups, C//num_groups, -1))
-    xmean = jt.mean(x, dims=[2,3]).reshape((N, num_groups, 1))
-    x2mean = jt.mean(x*x, dims=[2,3]).reshape((N, num_groups, 1))
-    xvar = (x2mean-xmean*xmean).maximum(0.0)
-
+    xg = x.reshape((N, num_groups, C//num_groups, -1))
+    xhat = _ln_normalize(xg, [2,3], eps).reshape(output_shape)  # stable custom backward
     if isinstance(weight, jt.Var):
-        weight = weight.reshape((1, num_groups, -1))
+        weight = weight.reshape([1, C] + [1]*(len(output_shape)-2))
     if isinstance(bias, jt.Var):
-        bias = bias.reshape((1, num_groups, -1))
-    weight = weight / jt.sqrt(xvar+eps)
-    bias = bias - xmean * weight
-    x = x * weight.broadcast(x, [3]) + bias.broadcast(x, [3])
-    return x.reshape(output_shape)
+        bias = bias.reshape([1, C] + [1]*(len(output_shape)-2))
+    return xhat * weight + bias
 
 
 Relu = jt.make_module(relu)
@@ -894,6 +1500,86 @@ class Flatten(Module):
 
 
 from jittor.depthwise_conv import DepthwiseConv
+
+class _CudnnConv2d(jt.Function):
+    ''' Memory-efficient 2D convolution backed by cuDNN.
+
+    jittor's default conv (reindex + broadcast + reduce) fuses the *forward*
+    fine, but its *backward* materializes a dense ``[N,Cout,Cin,oh,ow,Kh,Kw]``
+    intermediate (e.g. ~30 GB for a 256->256 3x3 conv on a 2x80x80 batch),
+    OOMing two-stage detectors at batch>=2. cuDNN computes both directions in
+    bounded memory. jittor's *autodiff* through the raw ``cudnn_conv`` op is
+    broken in this build (wrong grad shape, grad.cc:232), so we supply the
+    backward explicitly via ``cudnn_conv_backward_{x,w}``. Numerically matches
+    the reindex path to ~1e-7 (cuDNN accumulation order) and aligns with real
+    torch's cuDNN better than the reindex path does. '''
+    def execute(self, x, w, sh, sw, ph, pw, dh, dw, groups):
+        self.saved = (x, w, sh, sw, ph, pw, dh, dw, groups)
+        return jt.cudnn.ops.cudnn_conv(x, w, sh, sw, ph, pw, dh, dw, groups)
+    def grad(self, gy):
+        x, w, sh, sw, ph, pw, dh, dw, groups = self.saved
+        H, W = x.shape[2], x.shape[3]
+        Kh, Kw = w.shape[2], w.shape[3]
+        gx = jt.cudnn.ops.cudnn_conv_backward_x(w, gy, H, W, sh, sw, ph, pw, dh, dw, groups)
+        gw = jt.cudnn.ops.cudnn_conv_backward_w(x, gy, Kh, Kw, sh, sw, ph, pw, dh, dw, groups)
+        return gx, gw, None, None, None, None, None, None, None
+
+def _try_cudnn_conv2d(x, weight, bias, stride, padding, dilation, groups):
+    ''' Return a cuDNN-backed conv2d result, or None if cuDNN isn't applicable
+    so the caller falls back to the reindex path. Low-precision tensors use
+    cuDNN only for inference; their training backward stays on the established
+    reindex implementation. '''
+    if not (jt.flags.use_cuda and getattr(jt, "cudnn", None)):
+        return None
+    x_dtype, weight_dtype = str(x.dtype), str(weight.dtype)
+    if x_dtype != weight_dtype:
+        return None
+    if x_dtype != "float32" and not (
+            x_dtype in ("float16", "bfloat16")
+            and getattr(jt.flags, "no_grad", 0)):
+        return None
+    sh, sw = stride   if isinstance(stride, tuple)   else (stride, stride)
+    ph, pw = padding  if isinstance(padding, tuple)  else (padding, padding)
+    dh, dw = dilation if isinstance(dilation, tuple) else (dilation, dilation)
+    y = _CudnnConv2d()(x, weight, sh, sw, ph, pw, dh, dw, groups)
+    if bias is not None:
+        y = y + bias.broadcast(y.shape, [0, 2, 3])
+    return y
+
+class _CudnnConvT2d(jt.Function):
+    ''' Memory-efficient 2D transpose-convolution backed by cuDNN. Same rationale
+    as _CudnnConv2d: jittor's reindex transpose-conv backward materializes a dense
+    intermediate. Transpose-conv forward IS the conv-backward-x op; its own
+    backward maps to cudnn_conv (grad input) + cudnn_conv_backward_w (grad weight).
+    Validated to match the reindex path exactly for the mask-head 14->28 deconv. '''
+    def execute(self, x, w, sh, sw, ph, pw, oph, opw, dh, dw, groups):
+        N, C, H, W = x.shape
+        Kh, Kw = w.shape[2], w.shape[3]
+        oH = (H - 1) * sh - 2 * ph + dh * (Kh - 1) + oph + 1
+        oW = (W - 1) * sw - 2 * pw + dw * (Kw - 1) + opw + 1
+        self.saved = (x, w, sh, sw, ph, pw, dh, dw, groups)
+        return jt.cudnn.ops.cudnn_conv_backward_x(w, x, oH, oW, sh, sw, ph, pw, dh, dw, groups)
+    def grad(self, gy):
+        x, w, sh, sw, ph, pw, dh, dw, groups = self.saved
+        Kh, Kw = w.shape[2], w.shape[3]
+        gx = jt.cudnn.ops.cudnn_conv(gy, w, sh, sw, ph, pw, dh, dw, groups)
+        gw = jt.cudnn.ops.cudnn_conv_backward_w(gy, x, Kh, Kw, sh, sw, ph, pw, dh, dw, groups)
+        return gx, gw, None, None, None, None, None, None, None, None, None
+
+def _try_cudnn_conv_transpose2d(x, weight, bias, stride, padding, output_padding, dilation, groups):
+    ''' cuDNN-backed conv_transpose2d, or None to fall back to the reindex path. '''
+    if not (jt.flags.use_cuda and getattr(jt, "cudnn", None)):
+        return None
+    if str(x.dtype) != "float32" or str(weight.dtype) != "float32":
+        return None
+    sh, sw = stride         if isinstance(stride, tuple)         else (stride, stride)
+    ph, pw = padding        if isinstance(padding, tuple)        else (padding, padding)
+    oph, opw = output_padding if isinstance(output_padding, tuple) else (output_padding, output_padding)
+    dh, dw = dilation       if isinstance(dilation, tuple)       else (dilation, dilation)
+    y = _CudnnConvT2d()(x, weight, sh, sw, ph, pw, oph, opw, dh, dw, groups)
+    if isinstance(bias, jt.Var):
+        y = y + bias.broadcast(y.shape, [0, 2, 3])
+    return y
 
 class Conv(Module):
     ''' Applies a 2D convolution over an input signal composed of several input planes.
@@ -931,7 +1617,13 @@ class Conv(Module):
     >>> input = jt.randn(4, 24, 100, 100)
     >>> output = conv(input)
     '''
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True, padding_mode='zeros', device=None, dtype=None):
+        # padding_mode/device/dtype accepted for torch.nn.Conv2d compatibility.
+        # jittor pads with zeros; non-'zeros' padding_mode is not yet implemented
+        # (warn rather than silently differ).
+        self.padding_mode = padding_mode
+        if padding_mode not in ('zeros',):
+            jt.LOG.w(f"Conv: padding_mode={padding_mode!r} not implemented, using 'zeros'")
         if in_channels <= 0:
             raise ValueError(f"in_channels must be greater than zero, got {in_channels}")
         if out_channels <= 0:
@@ -954,14 +1646,14 @@ class Conv(Module):
         else:
             if stride <= 0:
                 raise ValueError(f"stride must be greater than zero, got {stride}")
-        if isinstance(padding, tuple):
+        if isinstance(padding, (tuple, list)):
             for size in padding:
                 if size < 0:
                     raise ValueError(f"padding must be nonnegative, got {padding}")
         else:
             if padding < 0:
                 raise ValueError(f"padding must be nonnegative, got {padding}")
-        if isinstance(dilation, tuple):
+        if isinstance(dilation, (tuple, list)):
             for size in dilation:
                 if size <= 0:
                     raise ValueError(f"dilation must be greater than zero, got {dilation}")
@@ -970,10 +1662,13 @@ class Conv(Module):
                 raise ValueError(f"dilation must be greater than zero, got {dilation}")
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.kernel_size = kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size)
-        self.stride = stride if isinstance(stride, tuple) else (stride, stride)
-        self.padding = padding if isinstance(padding, tuple) else (padding, padding)
-        self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation)
+        # torch accepts int OR sequence (list/tuple); _pair normalizes int->2-tuple
+        # and passes sequences through, so a *list* kernel_size no longer falls into
+        # the scalar branch (which produced nested ([k,k],[k,k]) and crashed init).
+        self.kernel_size = _pair(kernel_size)
+        self.stride = _pair(stride)
+        self.padding = _pair(padding)
+        self.dilation = _pair(dilation)
         self.groups = groups
         self.is_depthwise_conv = self.groups == self.out_channels and self.groups == self.in_channels
         if self.is_depthwise_conv and jt.flags.use_cuda and jt.compiler.is_cuda:
@@ -992,19 +1687,40 @@ class Conv(Module):
             self.bias = None
 
     def execute(self, x):
+        # Clear, torch-grade errors for the two most common Conv2d misuses, instead of an
+        # empty `AssertionError:` (channel mismatch) or a cryptic "not enough values to
+        # unpack" (wrong ndim). Covers all paths (depthwise / groups==1 / grouped) at once.
+        if x.ndim != 4:
+            raise ValueError(
+                f"Conv2d expected a 4-D input (N, C, H, W), but got a {x.ndim}-D input "
+                f"of shape {tuple(x.shape)}.")
+        if x.shape[1] != self.in_channels:
+            raise ValueError(
+                f"Conv2d expected input with {self.in_channels} channels (in_channels), "
+                f"but got {x.shape[1]} channels; input shape {tuple(x.shape)}.")
         if hasattr(self, 'depthwise_conv'):
             y = self.depthwise_conv(x, self.weight)
             if self.bias is not None:
                 b = self.bias.broadcast(y.shape, [0,2,3])
                 y = y + b
             return y
-        elif self.groups == 1:
+        # cuDNN path (memory-efficient fwd+bwd); falls back to reindex below on
+        # CPU / no-cuDNN / non-float32. See _CudnnConv2d.
+        _y = _try_cudnn_conv2d(x, self.weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
+        if _y is not None:
+            return _y
+        if self.groups == 1:
             N,C,H,W = x.shape
             Kh, Kw = self.kernel_size
             assert C==self.in_channels
             oh = (H+self.padding[0]*2-Kh*self.dilation[0]+self.dilation[0]-1)//self.stride[0]+1
             ow = (W+self.padding[1]*2-Kw*self.dilation[1]+self.dilation[1]-1)//self.stride[1]+1
-            assert oh>0 and ow>0
+            if oh<=0 or ow<=0:
+                raise ValueError(
+                    f"Conv2d output size is non-positive (oh={oh}, ow={ow}): input "
+                    f"{tuple(x.shape)} is too small for kernel {tuple(self.kernel_size)}, "
+                    f"stride {tuple(self.stride)}, padding {tuple(self.padding)}, "
+                    f"dilation {tuple(self.dilation)}.")
             with jt.flag_scope(amp_reg = jt.flags.amp_reg | 36):
                 xx = x.reindex([N,self.out_channels,C,oh,ow,Kh,Kw], [
                     'i0', # Nid
@@ -1028,7 +1744,12 @@ class Conv(Module):
             oc = self.out_channels
             oh = (H+self.padding[0]*2-Kh*self.dilation[0]+self.dilation[0]-1)//self.stride[0]+1
             ow = (W+self.padding[1]*2-Kw*self.dilation[1]+self.dilation[1]-1)//self.stride[1]+1
-            assert oh>0 and ow>0
+            if oh<=0 or ow<=0:
+                raise ValueError(
+                    f"Conv2d output size is non-positive (oh={oh}, ow={ow}): input "
+                    f"{tuple(x.shape)} is too small for kernel {tuple(self.kernel_size)}, "
+                    f"stride {tuple(self.stride)}, padding {tuple(self.padding)}, "
+                    f"dilation {tuple(self.dilation)}.")
             xx = x.reindex([N,G,oc//G,CpG,oh,ow,Kh,Kw], [
                 'i0', # Nid
                 f'i1*{CpG}+i3', # Gid
@@ -1053,7 +1774,14 @@ class Conv(Module):
             if self.bias is not None:
                 b = self.bias.broadcast(y.shape, [0,2,3])
                 y = y + b
-            return y          
+            return y
+
+    def _conv_forward(self, input, weight, bias=None):
+        # torch nn.Conv2d API: apply the conv with an externally supplied weight
+        # (and bias). Used by mmdet's NormedConv2d (seesaw loss / normed heads),
+        # which normalizes the weight then calls self._conv_forward(x, weight_, bias).
+        return conv2d(input, weight, bias, self.stride, self.padding,
+                      self.dilation, self.groups)
 
 Conv2d = Conv
 
@@ -1163,10 +1891,15 @@ class Conv3d(Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True):
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.kernel_size = kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size, kernel_size)
-        self.stride = stride if isinstance(stride, tuple) else (stride, stride, stride)
-        self.padding = padding if isinstance(padding, tuple) else (padding, padding, padding)
-        self.dilation = dilation if isinstance(dilation, tuple) else (dilation, dilation, dilation)
+        # torch accepts int OR any sequence (list/tuple) for these; the old
+        # `isinstance(x, tuple)` test sent a *list* kernel_size (e.g. Qwen2.5-VL's
+        # Conv3d patch_embed uses [t,p,p]) into the scalar branch -> nested
+        # ([k,k,k],...) -> weight-shape build crashes. _triple normalizes int->3-tuple
+        # and passes sequences through (matching torch's _triple).
+        self.kernel_size = _triple(kernel_size)
+        self.stride = _triple(stride)
+        self.padding = _triple(padding)
+        self.dilation = _triple(dilation)
         self.groups = groups
         if groups <= 0:
             raise ValueError("groups must be a positive integer")
@@ -1242,6 +1975,11 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     out_channels = weight.shape[0]
     if groups <= 0:
         raise ValueError("groups must be a positive integer")
+    # cuDNN path (memory-efficient fwd+bwd); falls back to reindex below on
+    # CPU / no-cuDNN / non-float32. See _CudnnConv2d.
+    _y = _try_cudnn_conv2d(x, weight, bias, stride, padding, dilation, groups)
+    if _y is not None:
+        return _y
     if groups == 1:
         N,C,H,W = x.shape
         Kh, Kw = weight.shape[-2:]
@@ -1296,6 +2034,22 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
         return y
 conv = conv2d
 
+# cuDNN 3D convolution needs fp32 accumulation and tensor-op math enabled for
+# fp16/bf16 descriptors on some CUDA/cuDNN combinations. The C++ op configures
+# that path by default; keep a fallback switch for isolating driver regressions.
+_CUDNN_3D_HALF_DTYPES = ("float16", "bfloat16")
+
+def _cudnn_conv3d_fp16_safe(op, x, weight, *args):
+    xd, wd = str(x.dtype), str(weight.dtype)
+    half = xd if xd in _CUDNN_3D_HALF_DTYPES else (wd if wd in _CUDNN_3D_HALF_DTYPES else None)
+    if half is None:
+        return op(x, weight, *args)
+    if os.environ.get("JITTOR_CUDNN3D_HALF_NATIVE", "1") != "0":
+        return op(x, weight, *args)
+    # Run in fp32 (cuDNN has a working fp32 3D-conv algo), then cast back.
+    y = op(x.float32(), weight.float32(), *args)
+    return y.cast(half)
+
 def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     ''' Applies a 3D convolution over an input signal composed of several input planes.
 
@@ -1333,7 +2087,7 @@ def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     if groups <= 0:
         raise ValueError("groups must be a positive integer")
     if jt.flags.use_cuda and jt.cudnn:
-        y = jt.cudnn.ops.cudnn_conv3d(x, weight, *stride, *padding, *dilation, groups)
+        y = _cudnn_conv3d_fp16_safe(jt.cudnn.ops.cudnn_conv3d, x, weight, *stride, *padding, *dilation, groups)
     elif groups == 1:
         N,C,D,H,W = x.shape
         Kd, Kh, Kw = weight.shape[-3:]
@@ -1558,6 +2312,10 @@ def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding
         h_out = (H-1) * stride_h + output_padding[0] - 2*padding_h + 1 + (h-1)*dilation_h
         w_out = (W-1) * stride_w + output_padding[1] - 2*padding_w + 1 + (w-1)*dilation_w
         out_shape = (N, o, h_out, w_out)
+        # cuDNN path (memory-efficient fwd+bwd); falls back to reindex below.
+        _y = _try_cudnn_conv_transpose2d(x, weight, bias, stride, padding, output_padding, dilation, 1)
+        if _y is not None:
+            return _y
         shape = (N, i, o, H, W, h, w)
         xx = x.broadcast(shape, (2, 5, 6)) # i,h,w
         ww = weight.broadcast(shape, (0, 3, 4)) # N,H,W
@@ -1656,7 +2414,9 @@ def conv_transpose3d(input, weight, bias=None, stride=1, padding=0, output_paddi
     w_out = (W-1) * stride_w + output_padding[2] - 2*padding_w + 1 + (w-1)*dilation_w
     out_shape = (N, o, d_out, h_out, w_out)
     if jt.flags.use_cuda and jt.cudnn:
-        return jt.cudnn.ops.cudnn_conv3d_backward_x(weight, x, *out_shape[2:], *stride, *padding, *dilation, groups)
+        # fp16/bf16 3D transposed-conv hits the same missing-cuDNN-algo wall as
+        # the forward conv3d; reuse the fp32-fallback wrapper.
+        return _cudnn_conv3d_fp16_safe(jt.cudnn.ops.cudnn_conv3d_backward_x, weight, x, *out_shape[2:], *stride, *padding, *dilation, groups)
     shape = (N, i, o, D, H, W, d, h, w)
     xx = x.broadcast(shape, (2, 6, 7, 8)) # i,h,w
     ww = weight.broadcast(shape, (0, 3, 4, 5)) # N,H,W
@@ -1676,7 +2436,418 @@ def conv_transpose3d(input, weight, bias=None, stride=1, padding=0, output_paddi
 
 conv_transpose2d = conv_transpose
 
-def pad(x,padding, mode='constant', value=0):
+def conv1d(input, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
+    ''' Applies a 1D convolution over an input signal composed of several input
+    planes. Torch-compatible functional interface.
+
+    :param input: the input var of shape ``(N, C_in, L)``
+    :type input: jt.Var
+
+    :param weight: the convolution kernel of shape ``(C_out, C_in//groups, kW)``
+    :type weight: jt.Var
+
+    :param bias: the optional bias of shape ``(C_out,)``. Default: None
+    :type bias: jt.Var, optional
+
+    :param stride: stride of the convolution. Default: 1
+    :param padding: zero-padding added to both sides of the input. Default: 0
+    :param dilation: spacing between kernel elements. Default: 1
+    :param groups: number of blocked connections. Default: 1
+
+    Example:
+        >>> x = jt.randn(4, 8, 100)
+        >>> w = jt.randn(16, 8, 3)
+        >>> y = nn.conv1d(x, w, stride=2, padding=1)
+    '''
+    if input.dim() != 3:
+        raise RuntimeError(f'Expected 3D input to conv1d, but got input of size: {input.shape}')
+    if weight.dim() != 3:
+        raise RuntimeError(f'Expected 3D weight to conv1d, but got weight of size: {weight.shape}')
+    stride = stride[0] if isinstance(stride, (tuple, list)) else stride
+    padding = padding[0] if isinstance(padding, (tuple, list)) else padding
+    dilation = dilation[0] if isinstance(dilation, (tuple, list)) else dilation
+    # reuse the 2D conv by adding a singleton width dimension
+    x = input.unsqueeze(-1)
+    w = weight.unsqueeze(-1)
+    y = conv2d(x, w, bias, (stride, 1), (padding, 0), (dilation, 1), groups)
+    return y.squeeze(-1)
+
+def conv_transpose1d(input, weight, bias=None, stride=1, padding=0, output_padding=0, groups=1, dilation=1):
+    ''' Applies a 1D transposed convolution operator over an input signal.
+    Torch-compatible functional interface.
+
+    :param input: the input var of shape ``(N, C_in, L)``
+    :type input: jt.Var
+
+    :param weight: the kernel of shape ``(C_in, C_out//groups, kW)``
+    :type weight: jt.Var
+
+    :param bias: the optional bias of shape ``(C_out,)``. Default: None
+    :type bias: jt.Var, optional
+
+    :param stride: stride of the convolution. Default: 1
+    :param padding: ``dilation * (kW - 1) - padding`` zero-padding. Default: 0
+    :param output_padding: additional size added to the output. Default: 0
+    :param groups: number of blocked connections. Default: 1
+    :param dilation: spacing between kernel elements. Default: 1
+
+    Example:
+        >>> x = jt.randn(4, 8, 50)
+        >>> w = jt.randn(8, 16, 3)
+        >>> y = nn.conv_transpose1d(x, w, stride=2)
+    '''
+    if input.dim() != 3:
+        raise RuntimeError(f'Expected 3D input to conv_transpose1d, but got input of size: {input.shape}')
+    if weight.dim() != 3:
+        raise RuntimeError(f'Expected 3D weight to conv_transpose1d, but got weight of size: {weight.shape}')
+    stride = stride[0] if isinstance(stride, (tuple, list)) else stride
+    padding = padding[0] if isinstance(padding, (tuple, list)) else padding
+    output_padding = output_padding[0] if isinstance(output_padding, (tuple, list)) else output_padding
+    dilation = dilation[0] if isinstance(dilation, (tuple, list)) else dilation
+    x = input.unsqueeze(-1)
+    w = weight.unsqueeze(-1)
+    y = conv_transpose(x, w, bias, (stride, 1), (padding, 0), (output_padding, 0), groups, (dilation, 1))
+    return y.squeeze(-1)
+
+def adaptive_avg_pool2d(input, output_size):
+    ''' Applies a 2D adaptive average pooling over an input signal composed of
+    several input planes. Torch-compatible functional interface that reuses the
+    :class:`AdaptiveAvgPool2d` module implementation.
+
+    :param input: the input var of shape ``(N, C, H, W)``
+    :type input: jt.Var
+
+    :param output_size: the target output size ``(H_out, W_out)``. A single int
+        ``H_out`` is interpreted as ``(H_out, H_out)``; ``None`` keeps that
+        dimension unchanged.
+    :type output_size: int or tuple
+
+    Example:
+        >>> x = jt.randn(2, 3, 10, 12)
+        >>> y = nn.adaptive_avg_pool2d(x, (5, 6))
+    '''
+    return AdaptiveAvgPool2d(output_size)(input)
+
+
+# ---------------------------------------------------------------------------
+# torch-grade overrides for the average-pooling family.
+#
+# ``jittor.pool`` (imported above via ``from jittor.pool import *``) ships
+# correct ``MaxPool*`` and an ``AvgPool``/``AdaptiveAvgPool2d`` that match
+# PyTorch only in the easy cases.  Two documented torch behaviours were missing:
+#
+#   1. ``avg_pool2d(..., count_include_pad=False)`` -- pool.py's mean path divides
+#      every window by ``kernel_size`` regardless of the flag (verified: incl == excl
+#      bit-for-bit), so padded borders use the wrong denominator.  torch divides by
+#      the count of *real* (in-bounds) input elements when count_include_pad=False.
+#   2. ``AdaptiveAvgPool2d`` with a non-divisor output (e.g. 8 -> 3) -- pool.py uses a
+#      single uniform stride/kernel, whereas torch uses variable-width overlapping
+#      bins ``[floor(i*H/O), ceil((i+1)*H/O))``.  These agree only when O | H.
+#
+# Both are fixed below in pure jittor (reindex + reduce), so forward AND backward
+# stay differentiable and run identically on CPU and CUDA.  The implementations are
+# numpy/torch-formula validated in test_torch_compat_pool_parity.py.  The same gaps
+# remain in jittor.pool for the top-level ``jt.AvgPool2d`` / ``jt.AdaptiveAvgPool2d``
+# symbols; only the ``nn``-surface names are corrected here.
+# ---------------------------------------------------------------------------
+class AvgPool2d(Module):
+    '''2D average pooling, torch-compatible (N,C,H,W) -> (N,C,Hout,Wout).
+
+    Unlike ``jittor.pool.AvgPool2d`` this honours ``count_include_pad`` exactly as
+    PyTorch documents it: when ``True`` (default) padded zeros are counted in the
+    averaging denominator; when ``False`` only real input elements are.  ``ceil_mode``
+    overshoot beyond the input is never counted as padding (matches torch).
+    '''
+    def __init__(self, kernel_size, stride=None, padding=0, ceil_mode=False,
+                 count_include_pad=True):
+        self.kernel_size = kernel_size
+        self.stride = stride if stride is not None else kernel_size
+        self.padding = padding
+        self.ceil_mode = ceil_mode
+        self.count_include_pad = count_include_pad
+
+    def execute(self, x):
+        kh, kw = _pair(self.kernel_size)
+        sh, sw = _pair(self.stride)
+        ph, pw = _pair(self.padding)
+        N, C, H, W = x.shape
+        if self.ceil_mode:
+            Ho = (H + 2 * ph - kh + sh - 1) // sh + 1
+            Wo = (W + 2 * pw - kw + sw - 1) // sw + 1
+            # torch drops the last window if it would start in the right padding.
+            if (Ho - 1) * sh >= H + ph:
+                Ho -= 1
+            if (Wo - 1) * sw >= W + pw:
+                Wo -= 1
+        else:
+            Ho = (H + 2 * ph - kh) // sh + 1
+            Wo = (W + 2 * pw - kw) // sw + 1
+        idx = ["i0", "i1", f"i2*{sh}+i4-{ph}", f"i3*{sw}+i5-{pw}"]
+        summed = x.reindex([N, C, Ho, Wo, kh, kw], idx,
+                           overflow_value=0.0).reduce("add", [4, 5])
+        # Fast path: no padding and no ceil overshoot -> every window is full kh*kw.
+        if self.count_include_pad and ph == 0 and pw == 0 and not self.ceil_mode:
+            return summed / (kh * kw)
+        i2 = jt.index((Ho,), dim=0).reshape(Ho, 1).float32()
+        i3 = jt.index((Wo,), dim=0).reshape(1, Wo).float32()
+        if self.count_include_pad:
+            # Divisor = window area clamped to the *padded* input [-pad, dim+pad);
+            # ceil_mode overshoot past dim+pad is excluded (torch semantics).
+            h_lo = (i2 * sh - ph).maximum(-float(ph))
+            h_hi = (i2 * sh - ph + kh).minimum(float(H + ph))
+            w_lo = (i3 * sw - pw).maximum(-float(pw))
+            w_hi = (i3 * sw - pw + kw).minimum(float(W + pw))
+        else:
+            # Divisor = window area clamped to the *real* input [0, dim).
+            h_lo = (i2 * sh - ph).maximum(0.0)
+            h_hi = (i2 * sh - ph + kh).minimum(float(H))
+            w_lo = (i3 * sw - pw).maximum(0.0)
+            w_hi = (i3 * sw - pw + kw).minimum(float(W))
+        denom = ((h_hi - h_lo) * (w_hi - w_lo)).reshape(1, 1, Ho, Wo)
+        return summed / denom
+
+
+def avg_pool2d(x, kernel_size, stride=None, padding=0, ceil_mode=False,
+               count_include_pad=True):
+    '''Functional 2D average pooling, torch-compatible (see :class:`AvgPool2d`).'''
+    return AvgPool2d(kernel_size, stride, padding, ceil_mode, count_include_pad)(x)
+
+
+class AdaptiveAvgPool2d(Module):
+    '''2D adaptive average pooling, torch-compatible (N,C,H,W) -> (N,C,Oh,Ow).
+
+    Uses torch's variable-width overlapping bins
+    ``hstart=floor(i*H/Oh)``, ``hend=ceil((i+1)*H/Oh)`` (and likewise for W) and
+    divides by the real bin size, so it matches PyTorch even when the output size
+    does not divide the input size (the common diffusers / classifier-head case).
+    '''
+    def __init__(self, output_size):
+        self.output_size = output_size
+
+    def execute(self, x):
+        if isinstance(self.output_size, int):
+            oh = ow = self.output_size
+        elif hasattr(self.output_size, "__len__") and not isinstance(self.output_size, str):
+            # tuple / list / jittor NanoVector (e.g. x.shape[2:] from a semantic head)
+            oh = x.shape[2] if self.output_size[0] is None else int(self.output_size[0])
+            ow = x.shape[3] if self.output_size[1] is None else int(self.output_size[1])
+        else:
+            raise TypeError(f"AdaptiveAvgPool2d only support int, tuple or list "
+                            f"input. Not support {type(self.output_size)} yet.")
+        N, C, H, W = x.shape
+        if oh == 1 and ow == 1:
+            return x.reduce("mean", [2, 3], keepdims=True)
+        yy, xx = jt.meshgrid(jt.arange(0, oh, 1), jt.arange(0, ow, 1))   # (oh, ow)
+        startH = jt.floor(yy * H / oh).int32()
+        endH = jt.ceil((yy + 1) * H / oh).int32()
+        startW = jt.floor(xx * W / ow).int32()
+        endW = jt.ceil((xx + 1) * W / ow).int32()
+        maxH = int(jt.max(endH - startH).data)
+        maxW = int(jt.max(endW - startW).data)
+        pixel_count = (endH - startH) * (endW - startW)
+        out = x.reindex(
+            [N, C, oh, ow, maxH, maxW],
+            ["i0", "i1", "@e0(i2, i3) + i4", "@e2(i2, i3) + i5"],
+            extras=[startH, endH, startW, endW],
+            overflow_conditions=["i4 >= @e1(i2, i3) - @e0(i2, i3)",
+                                 "i5 >= @e3(i2, i3) - @e2(i2, i3)"],
+            overflow_value=0)
+        return out.reduce("sum", [4, 5]) / pixel_count[None, None, ...]
+
+
+def glu(input, dim=-1):
+    r''' Applies the gated linear unit function
+
+    .. math::
+        \text{GLU}(a, b) = a \otimes \sigma(b)
+
+    where ``input`` is split in half along ``dim`` to form ``a`` and ``b``,
+    ``a`` is the first half and ``b`` the second half, and :math:`\sigma` is the
+    sigmoid function. Torch-compatible.
+
+    :param input: the input var
+    :type input: jt.Var
+
+    :param dim: the dimension on which to split the input. Default: -1
+    :type dim: int
+
+    Example:
+        >>> x = jt.randn(4, 6)
+        >>> y = nn.glu(x)   # y.shape == [4, 3]
+    '''
+    ndim = input.ndim
+    if ndim == 0:
+        raise RuntimeError("glu does not support scalars because halving size must be even")
+    if dim < 0:
+        dim += ndim
+    size = input.shape[dim]
+    if size % 2 != 0:
+        raise RuntimeError(f"Halving dimension must be even, but dimension {dim} is size {size}")
+    half = size // 2
+    a, b = input.split([half, half], dim=dim)
+    return a * b.sigmoid()
+
+def normalize(input, p=2, dim=1, eps=1e-12):
+    r''' Performs :math:`L_p` normalization of inputs over a specified dimension.
+
+    .. math::
+        v = \frac{v}{\max(\lVert v \rVert_p, \epsilon)}
+
+    Torch-compatible functional interface. Note the torch-compatible default of
+    ``eps=1e-12`` (clamping the denominator), as opposed to the additive ``eps``
+    used by :func:`jittor.normalize`.
+
+    :param input: input var of any shape
+    :type input: jt.Var
+
+    :param p: the exponent value in the norm formulation. Default: 2
+    :type p: float
+
+    :param dim: the dimension to reduce. Default: 1
+    :type dim: int
+
+    :param eps: small value to avoid division by zero. Default: 1e-12
+    :type eps: float
+
+    Example:
+        >>> x = jt.randn(3, 4)
+        >>> y = nn.normalize(x, dim=1)
+    '''
+    if p == 2:
+        norm = (input * input).sum(dim, keepdims=True).sqrt()
+    elif p == 1:
+        norm = input.abs().sum(dim, keepdims=True)
+    elif p == float("inf"):
+        norm = input.abs().max(dim, keepdims=True)
+    else:
+        norm = (input.abs() ** p).sum(dim, keepdims=True) ** (1.0 / p)
+    return input / norm.maximum(eps)
+
+def cosine_similarity(x1, x2, dim=1, eps=1e-8):
+    r''' Returns the cosine similarity between ``x1`` and ``x2`` along ``dim``.
+
+    .. math::
+        \text{similarity} = \frac{x_1 \cdot x_2}
+            {\max(\lVert x_1 \rVert_2, \epsilon) \cdot \max(\lVert x_2 \rVert_2, \epsilon)}
+
+    Torch-compatible.
+
+    :param x1: first input var
+    :type x1: jt.Var
+
+    :param x2: second input var
+    :type x2: jt.Var
+
+    :param dim: dimension along which cosine similarity is computed. Default: 1
+    :type dim: int
+
+    :param eps: small value to avoid division by zero. Default: 1e-8
+    :type eps: float
+
+    Example:
+        >>> a = jt.randn(4, 8)
+        >>> b = jt.randn(4, 8)
+        >>> sim = nn.cosine_similarity(a, b)   # sim.shape == [4]
+    '''
+    w12 = (x1 * x2).sum(dim)
+    w1 = (x1 * x1).sum(dim)
+    w2 = (x2 * x2).sum(dim)
+    n12 = (w1 * w2).maximum(eps * eps).sqrt()
+    return w12 / n12
+
+def pairwise_distance(x1, x2, p=2.0, eps=1e-6, keepdim=False):
+    r''' Computes the batchwise :math:`p`-norm distance between vectors.
+
+    .. math::
+        \lVert x_1 - x_2 + \epsilon \rVert_p
+
+    Torch-compatible.
+
+    :param x1: first input var
+    :type x1: jt.Var
+
+    :param x2: second input var
+    :type x2: jt.Var
+
+    :param p: the norm degree. Default: 2.0
+    :type p: float
+
+    :param eps: small value added to avoid division by zero. Default: 1e-6
+    :type eps: float
+
+    :param keepdim: whether to keep the reduced (vector) dimension. Default: False
+    :type keepdim: bool
+
+    Example:
+        >>> a = jt.randn(4, 8)
+        >>> b = jt.randn(4, 8)
+        >>> d = nn.pairwise_distance(a, b)   # d.shape == [4]
+    '''
+    diff = (x1 - x2) + eps
+    adiff = diff.abs()
+    if p == 2:
+        out = (diff * diff).sum(-1, keepdims=keepdim).sqrt()
+    elif p == 1:
+        out = adiff.sum(-1, keepdims=keepdim)
+    elif p == float("inf"):
+        out = adiff.max(-1, keepdims=keepdim)
+    else:
+        out = (adiff ** p).sum(-1, keepdims=keepdim) ** (1.0 / p)
+    return out
+
+def softsign(x):
+    r''' Applies the element-wise function
+
+    .. math::
+        \text{SoftSign}(x) = \frac{x}{1 + |x|}
+
+    Torch-compatible.
+
+    :param x: the input var
+    :type x: jt.Var
+
+    Example:
+        >>> a = jt.randn(3)
+        >>> nn.softsign(a)
+    '''
+    return x / (1 + x.abs())
+
+class GLU(Module):
+    r''' Applies the gated linear unit function. See :func:`glu`.
+
+    :param dim: the dimension on which to split the input. Default: -1
+    :type dim: int
+
+    Example:
+        >>> m = nn.GLU()
+        >>> x = jt.randn(4, 6)
+        >>> y = m(x)   # y.shape == [4, 3]
+    '''
+    def __init__(self, dim=-1):
+        super().__init__()
+        self.dim = dim
+
+    def execute(self, x):
+        return glu(x, self.dim)
+
+class Softsign(Module):
+    r''' Applies the element-wise SoftSign function. See :func:`softsign`.
+
+    Example:
+        >>> m = nn.Softsign()
+        >>> x = jt.randn(3)
+        >>> y = m(x)
+    '''
+    def __init__(self):
+        super().__init__()
+
+    def execute(self, x):
+        return softsign(x)
+
+def pad(x,padding=None, mode='constant', value=0, pad=None):
+    # torch spells the amounts arg `pad` (F.pad(x, pad=...)); jittor uses `padding`.
+    if padding is None:
+        padding = pad
     assert mode in ['constant','replicate','reflect','circular'],'only support constant,replicate,reflect,circular pad'
     assert len(padding)%2==0 and len(padding)//2<=x.ndim
 
@@ -1687,7 +2858,9 @@ def pad(x,padding, mode='constant', value=0):
     out_dims = []
     out_shape = []
     for i,n,l,r in zip(range(x.ndim),x.shape,left,right):
-        out_shape.append(n+l+r)
+        # int(): shape/pad amounts may arrive as numpy ints (e.g. via the
+        # torch-compat nested path); reindex's shape arg must be python int64.
+        out_shape.append(int(n)+int(l)+int(r))
         if mode == 'constant':
             out_dims.append(f'i{i}-{l}')
         elif mode == 'replicate':
@@ -1697,12 +2870,17 @@ def pad(x,padding, mode='constant', value=0):
         elif mode == 'circular':
             out_dims.append(f"i{i}<{l} ? {n-l}+i{i} : i{i} > {n+l-1} ? i{i}-{n+l} : i{i}-{l}")
 
-    return x.reindex(out_shape,out_dims,overflow_value=value)
+    # reindex's overflow_value must be float64-typed; torch allows a bool/int
+    # fill value (e.g. F.pad(bool_mask, value=True)), so coerce to float.
+    return x.reindex(out_shape,out_dims,overflow_value=float(value))
 
 
 class ReflectionPad2d(Module):
     def __init__(self, padding):
-        if padding < 0:
+        # torch.nn.ReflectionPad2d accepts an int OR a 4-tuple (left,right,top,bottom).
+        # The scalar `< 0` guard must not run for tuples (tuple < int -> TypeError);
+        # per-side non-negativity is checked below after unpacking.
+        if isinstance(padding, int) and padding < 0:
             raise RuntimeError(f"padding must be > 0, but got {padding}")
         self.padding = padding
         if isinstance(self.padding, int):
@@ -1780,9 +2958,62 @@ class ConstantPad2d(Module):
         tar_dims.append(f"i{i+2}-{self.pl}")
         return x.reindex(tar_shape, tar_dims, overflow_value=self.value)
 
+class ConstantPad1d(Module):
+    '''Pads the last dim with a constant. torch: ConstantPad1d((left, right), value)
+    (canine downsamples char->molecule sequences with this).'''
+    def __init__(self, padding, value):
+        if isinstance(padding, int):
+            self.pl = self.pr = padding
+        elif isinstance(padding, (tuple, list)):
+            self.pl, self.pr = padding
+        else:
+            raise TypeError(f"ConstantPad1d padding just support int or tuple, but found {type(padding)}")
+        self.value = value
+        if self.pl < 0 or self.pr < 0:
+            raise ValueError("padding must be non-negative")
+
+    def execute(self, x):
+        assert len(x.shape) >= 1
+        shape = x.shape
+        n = len(shape)
+        tar_shape = shape[:-1] + [shape[-1] + self.pl + self.pr]
+        tar_dims = [f"i{i}" for i in range(n - 1)]
+        tar_dims.append(f"i{n-1}-{self.pl}")
+        return x.reindex(tar_shape, tar_dims, overflow_value=self.value)
+
+class ConstantPad3d(Module):
+    '''Pads the last 3 dims with a constant. torch:
+    ConstantPad3d((left, right, top, bottom, front, back), value).'''
+    def __init__(self, padding, value):
+        if isinstance(padding, int):
+            self.pl = self.pr = self.pt = self.pb = self.pf = self.pba = padding
+        elif isinstance(padding, (tuple, list)):
+            self.pl, self.pr, self.pt, self.pb, self.pf, self.pba = padding
+        else:
+            raise TypeError(f"ConstantPad3d padding just support int or tuple, but found {type(padding)}")
+        self.value = value
+        if min(self.pl, self.pr, self.pt, self.pb, self.pf, self.pba) < 0:
+            raise ValueError("padding must be non-negative")
+
+    def execute(self, x):
+        assert len(x.shape) >= 3
+        shape = x.shape
+        n = len(shape)
+        tar_shape = shape[:-3] + [shape[-3] + self.pf + self.pba,
+                                  shape[-2] + self.pt + self.pb,
+                                  shape[-1] + self.pl + self.pr]
+        tar_dims = [f"i{i}" for i in range(n - 3)]
+        tar_dims.append(f"i{n-3}-{self.pf}")
+        tar_dims.append(f"i{n-2}-{self.pt}")
+        tar_dims.append(f"i{n-1}-{self.pl}")
+        return x.reindex(tar_shape, tar_dims, overflow_value=self.value)
+
 class ReplicationPad2d(Module):
     def __init__(self, padding):
-        if padding < 0:
+        # torch.nn.ReplicationPad2d accepts an int OR a 4-tuple (left,right,top,bottom).
+        # The scalar `< 0` guard must not run for tuples (tuple < int -> TypeError);
+        # per-side non-negativity is checked below after unpacking.
+        if isinstance(padding, int) and padding < 0:
             raise RuntimeError(f"padding must be > 0, but got {padding}")
         self.padding = padding
         if isinstance(self.padding, int):
@@ -1830,20 +3061,131 @@ class Embedding(Module):
              [ 0.14941819  0.57047683 -1.3217674]
              [ 0.14941819  0.57047683 -1.3217674]], dtype=float32)
     '''
-    def __init__(self, num_embeddings, embedding_dim, padding_idx=None, dtype="float32"):
+    def __init__(self, num_embeddings, embedding_dim, padding_idx=None,
+                 dtype="float32", max_norm=None, norm_type=2.0,
+                 scale_grad_by_freq=False, sparse=False, _weight=None,
+                 _freeze=False, device=None):
+        # torch.nn.Embedding-compatible signature. max_norm/norm_type/
+        # scale_grad_by_freq/sparse/device are accepted for API parity (they
+        # don't affect forward numerics here); _weight provides an initial weight;
+        # _freeze makes the embedding non-trainable (e.g. Pegasus sinusoidal
+        # positions). `dtype` stays the 4th positional for jittor backward-compat.
         self.num_embeddings = num_embeddings
         self.embedding_dim = embedding_dim
         self.padding_idx = padding_idx
-        self.weight = jt.init.gauss([self.num_embeddings, self.embedding_dim], dtype)
-        if padding_idx is not None:
-            self.weight[padding_idx] = 0
+        self.max_norm = max_norm
+        self.norm_type = norm_type
+        if dtype is None:
+            dtype = "float32"
+        elif not isinstance(dtype, str):
+            dtype = str(dtype).replace("torch.", "") or "float32"
+        if _weight is not None:
+            self.weight = _weight if isinstance(_weight, jt.Var) else jt.array(_weight)
+        else:
+            self.weight = jt.init.gauss([self.num_embeddings, self.embedding_dim], dtype)
+            if padding_idx is not None:
+                self.weight[padding_idx] = 0
+        if _freeze:
+            self.weight = self.weight.stop_grad()
 
     def execute(self, x):
         res = self.weight[x]
+        if self.padding_idx is not None:
+            # torch parity: the padding_idx row is frozen (its gradient is zeroed,
+            # so it never trains). The padding row only receives gradient from
+            # positions where x==padding_idx, so block the gradient there while
+            # keeping forward values intact. Multiply-mask (NOT ternary: jittor's
+            # ternary with a stop_grad branch zeroes the whole tensor's grad).
+            keep = (x != self.padding_idx).unsqueeze(-1).float32()
+            res = res * keep + (res * (1.0 - keep)).stop_grad()
         return res
 
-def embedding(input, weight):
-    return weight[input]
+def embedding(input, weight, padding_idx=None, max_norm=None, norm_type=2.0,
+              scale_grad_by_freq=False, sparse=False):
+    # Full torch F.embedding signature (ibert's quantized embedding passes all 7
+    # positionally). scale_grad_by_freq / sparse only affect gradient bookkeeping,
+    # not forward values, so they're accepted and ignored. max_norm renormalizes
+    # rows whose p-norm exceeds the bound (rare; None is the hot path). padding_idx
+    # freezes the padding row's gradient (torch parity) -- see Embedding.execute.
+    if max_norm is not None:
+        pn = (weight.abs() ** norm_type).sum(dim=-1, keepdims=True) ** (1.0 / norm_type)
+        weight = weight * (jt.minimum(pn, max_norm) / (pn + 1e-12))
+    res = weight[input]
+    if padding_idx is not None:
+        keep = (input != padding_idx).unsqueeze(-1).float32()
+        res = res * keep + (res * (1.0 - keep)).stop_grad()
+    return res
+
+def embedding_bag(input, weight, offsets=None, mode="mean", per_sample_weights=None):
+    ''' Computes sums, means or maxes of "bags" of embeddings, without
+    instantiating the intermediate embeddings. Torch-compatible
+    (functional form of :class:`EmbeddingBag`).
+
+    :param input: indices into ``weight``. Either a 2-D var where every row is
+        a bag of fixed length, or a 1-D var of concatenated bags together with
+        ``offsets``.
+    :param weight: the embedding matrix of shape ``(num_embeddings, embedding_dim)``.
+    :param offsets: only used when ``input`` is 1-D. ``offsets[i]`` is the start
+        index of the ``i``-th bag in ``input``.
+    :param mode: one of ``"sum"``, ``"mean"`` or ``"max"``. Default: ``"mean"``.
+    :param per_sample_weights: optional weights for a weighted ``"sum"`` (only
+        valid when ``mode == "sum"``), same shape as ``input``.
+    '''
+    assert mode in ("sum", "mean", "max"), f"unsupported mode {mode} in embedding_bag"
+    input = input if isinstance(input, jt.Var) else jt.array(input)
+    if input.ndim == 1:
+        assert offsets is not None, \
+            "offsets has to be provided when input is 1-D in embedding_bag"
+        offsets = offsets if isinstance(offsets, jt.Var) else jt.array(offsets)
+        ends = jt.concat([offsets[1:], jt.array([input.shape[0]]).cast(offsets.dtype)], dim=0)
+        bags = []
+        n = offsets.shape[0]
+        for i in range(n):
+            s = int(offsets[i].item())
+            e = int(ends[i].item())
+            emb = weight[input[s:e]]
+            if per_sample_weights is not None and mode == "sum":
+                psw = per_sample_weights if isinstance(per_sample_weights, jt.Var) \
+                    else jt.array(per_sample_weights)
+                emb = emb * psw[s:e].reshape((-1, 1))
+            if mode == "max":
+                bag = emb.max(dim=0)
+            elif mode == "mean":
+                bag = emb.mean(dim=0)
+            else:
+                bag = emb.sum(dim=0)
+            bags.append(bag.reshape((1, -1)))
+        return jt.concat(bags, dim=0)
+    else:
+        assert input.ndim == 2, "input must be 1-D or 2-D in embedding_bag"
+        emb = weight[input]  # (B, L, D)
+        if per_sample_weights is not None and mode == "sum":
+            psw = per_sample_weights if isinstance(per_sample_weights, jt.Var) \
+                else jt.array(per_sample_weights)
+            emb = emb * psw.reshape(psw.shape + (1,))
+        if mode == "max":
+            return emb.max(dim=1)
+        elif mode == "mean":
+            return emb.mean(dim=1)
+        else:
+            return emb.sum(dim=1)
+
+class EmbeddingBag(Module):
+    ''' Computes sums, means or maxes of "bags" of embeddings. See
+    :func:`embedding_bag`.
+
+    :param num_embeddings: size of the dictionary of embeddings.
+    :param embedding_dim: the size of each embedding vector.
+    :param mode: one of ``"sum"``, ``"mean"`` or ``"max"``. Default: ``"mean"``.
+    '''
+    def __init__(self, num_embeddings, embedding_dim, mode="mean", dtype="float32"):
+        self.num_embeddings = num_embeddings
+        self.embedding_dim = embedding_dim
+        self.mode = mode
+        self.weight = jt.init.gauss([num_embeddings, embedding_dim], dtype)
+
+    def execute(self, input, offsets=None, per_sample_weights=None):
+        return embedding_bag(input, self.weight, offsets, self.mode, per_sample_weights)
 
 class PixelShuffle(Module):
     def __init__(self, upscale_factor):
@@ -2283,11 +3625,15 @@ class Upsample(Module):
                     int(x.shape[2]*self.scale_factor[0]), 
                     int(x.shape[3]*self.scale_factor[1])),
                 mode=self.mode,
-                align_corners=self.align_cornerss)
+                align_corners=self.align_corners)
 
 class UpsamplingBilinear2d(Upsample):
     def __init__(self, scale_factor=None):
-        Upsample.__init__(self, scale_factor, 'bilinear')
+        # torch.nn.UpsamplingBilinear2d is documented as equivalent to
+        # Upsample(mode='bilinear', align_corners=True) (it predates the 0.3.1
+        # default flip to align_corners=False). The base Upsample defaults
+        # align_corners=False, so it must be set True here for torch parity.
+        Upsample.__init__(self, scale_factor, 'bilinear', align_corners=True)
 
 class UpsamplingNearest2d(Upsample):
     def __init__(self, scale_factor=None):
@@ -2296,11 +3642,17 @@ class UpsamplingNearest2d(Upsample):
 class Sequential(Module):
     def __init__(self, *args):
         self.layers = collections.OrderedDict()
+        import types as _types_ml
         for mod in args:
+            if mod is None:
+                continue                       # torch: ModuleList(None) -> empty
             if isinstance(mod, collections.OrderedDict):
                 for k, m in mod.items():
                     self.add_module(k, m)
-            elif isinstance(mod,list):
+            elif isinstance(mod, (list, tuple, _types_ml.GeneratorType)) or \
+                    (hasattr(mod, "__iter__") and not isinstance(mod, Module)):
+                # torch's ModuleList accepts ANY iterable of modules (incl. a
+                # generator, e.g. DINO: ModuleList(build(l) for l in layers)).
                 for m in mod:
                     self.append(m)
             else:
@@ -2336,9 +3688,34 @@ class Sequential(Module):
         if callback_leave:
             callback_leave(parents, k, self, n_children)
     def append(self, mod):
+        # torch's ModuleList stores None children (e.g. HRNet's _make_fuse_layers
+        # appends None for the identity/same-resolution path and checks `is not None`
+        # in forward). Accept None as a placeholder instead of asserting.
+        if mod is None:
+            self.layers[str(len(self.layers))] = None
+            return self
         assert callable(mod), f"Module <{type(mod)}> is not callable"
         assert not isinstance(mod, type), f"Module is not a type"
         self.layers[str(len(self.layers))]=mod
+        return self
+    def extend(self, mods):
+        # torch.nn.ModuleList.extend: append every module from an iterable
+        # (mmdet PVT does `layers.extend([...])` when assembling backbone stages).
+        for m in mods:
+            self.append(m)
+        return self
+    def insert(self, index, mod):
+        # torch.nn.ModuleList.insert: insert before `index`, shifting the
+        # (string-keyed) tail. Rebuild the OrderedDict with contiguous int keys.
+        assert callable(mod) and not isinstance(mod, type)
+        vals = list(self.layers.values())
+        n = len(vals)
+        if index < 0:
+            index += n
+        index = max(0, min(index, n))
+        vals.insert(index, mod)
+        self.layers = collections.OrderedDict((str(i), v) for i, v in enumerate(vals))
+        return self
     def add_module(self, name, mod):
         assert callable(mod), f"Module <{type(mod)}> is not callable"
         assert not isinstance(mod, type), f"Module is not a type"
@@ -2349,6 +3726,10 @@ class Sequential(Module):
     
     def named_children(self,):
         return list(self.layers.items())
+
+    @property
+    def _modules(self):
+        return self.layers
 
     def __setattr__(self, key, value) -> None:
         if isinstance(key, str) and key.isdigit():
@@ -2408,16 +3789,16 @@ class ParameterList(Module):
 ParameterDict = ParameterList
 
 def Parameter(data, requires_grad=True):
-    ''' The `Parameter` interface isn't needed in Jittor, this interface
-does nothings and it is just used for compatible.
-    
-A Jittor Var is a Parameter
-when it is a member of Module, if you don't want a Jittor
-Var menber is treated as a Parameter, just name it startswith
-underscore `_`.
+    '''Torch-compatible Parameter wrapper.
+
+    Jittor treats a Var assigned to a Module as a parameter, so wrapping an
+    existing Var only needs to set the trainable flag. Do not clone here:
+    PyTorch's Parameter is a lightweight wrapper over the supplied tensor data,
+    while cloning can force materialization/JIT work and makes large pretrained
+    model construction unnecessarily slow.
     '''
-    LOG.w(Parameter.__doc__)
-    data = data.clone()
+    if not isinstance(data, jt.Var):
+        data = jt.array(data)
     data.requires_grad = requires_grad
     return data
 
@@ -2449,17 +3830,16 @@ jt.Var.backward = backward
 
 def unfold(X, kernel_size, dilation=1, padding=0, stride=1):
     assert X.ndim == 4
-    if not isinstance(kernel_size, tuple):
-        kernel_size = (kernel_size, kernel_size)
+    # accept int OR (tuple/list) pairs -- torch passes lists, e.g. convbert's
+    # nn.functional.unfold(kernel_size=[k, 1], padding=[(k-1)//2, 0]).
+    _pair = lambda v: tuple(v) if isinstance(v, (tuple, list)) else (v, v)
+    kernel_size = _pair(kernel_size)
     assert kernel_size[0] > 0 and kernel_size[1] > 0, "kernel size must be positive"
-    if not isinstance(dilation, tuple):
-        dilation = (dilation, dilation)
+    dilation = _pair(dilation)
     assert dilation[0] > 0 and dilation[1] > 0, "dilation must be positive"
-    if not isinstance(padding, tuple):
-        padding = (padding, padding)
+    padding = _pair(padding)
     assert padding[0] >= 0 and padding[1] >= 0, "padding must be non-negative"
-    if not isinstance(stride, tuple):
-        stride = (stride, stride)
+    stride = _pair(stride)
     assert stride[0] > 0 and stride[1] > 0, "stride must be positive"
     n, c, h, w = X.shape
     shape = X.shape
@@ -2480,17 +3860,14 @@ def unfold(X, kernel_size, dilation=1, padding=0, stride=1):
 def fold(X,output_size,kernel_size,dilation=1,padding=0,stride=1):
     assert X.ndim==3
     assert output_size[0] > 0 and output_size[1] > 0, "output size must be positive."
-    if not isinstance(kernel_size,tuple):
-        kernel_size = (kernel_size,kernel_size)
+    _pair = lambda v: tuple(v) if isinstance(v, (tuple, list)) else (v, v)
+    kernel_size = _pair(kernel_size)
     assert kernel_size[0] > 0 and kernel_size[1] > 0, "kernel size must be positive"
-    if not isinstance(dilation,tuple):
-        dilation = (dilation,dilation)
+    dilation = _pair(dilation)
     assert dilation[0] > 0 and dilation[1] > 0, "dilation must be positive"
-    if not isinstance(padding,tuple):
-        padding = (padding,padding)
+    padding = _pair(padding)
     assert padding[0] >= 0 and padding[1] >= 0, "padding must be non-negative"
-    if not isinstance(stride,tuple):
-        stride = (stride,stride)
+    stride = _pair(stride)
     assert stride[0] > 0 and stride[1] > 0, "stride must be positive"
     n,cl,num = X.shape
     area = kernel_size[0] * kernel_size[1]
@@ -2499,6 +3876,33 @@ def fold(X,output_size,kernel_size,dilation=1,padding=0,stride=1):
         block_nums.append((output_size[i-2]+2*padding[i-2]-dilation[i-2]*(kernel_size[i-2]-1)-1) // stride[i-2]+1)
     output = X.reindex_reduce("add",[n,cl // area,output_size[0]+2*padding[0],output_size[1]+2*padding[1]],["i0",f"i1/{area}",f"i2/{block_nums[1]}*{stride[0]}+(i1%{area})/{kernel_size[1]}*{dilation[0]}",f"i2%{block_nums[1]}*{stride[1]}+(i1%{area})%{kernel_size[1]}*{dilation[1]}"])
     return output[:,:,padding[0]:padding[0]+output_size[0],padding[1]:padding[1]+output_size[1]]
+
+
+class Unfold(Module):
+    ''' torch's nn.Unfold (im2col): extract sliding local blocks from a batched
+    (N, C, H, W) input into (N, C*prod(kernel_size), L). Wraps the functional unfold.
+    (convbert builds its span-based conv with nn.Unfold.) '''
+    def __init__(self, kernel_size, dilation=1, padding=0, stride=1):
+        self.kernel_size = kernel_size
+        self.dilation = dilation
+        self.padding = padding
+        self.stride = stride
+
+    def execute(self, x):
+        return unfold(x, self.kernel_size, self.dilation, self.padding, self.stride)
+
+class Fold(Module):
+    ''' torch's nn.Fold: the inverse of Unfold, combining sliding local blocks back
+    into (N, C, output_size). Wraps the functional fold. '''
+    def __init__(self, output_size, kernel_size, dilation=1, padding=0, stride=1):
+        self.output_size = output_size
+        self.kernel_size = kernel_size
+        self.dilation = dilation
+        self.padding = padding
+        self.stride = stride
+
+    def execute(self, x):
+        return fold(x, self.output_size, self.kernel_size, self.dilation, self.padding, self.stride)
 
 ModuleList = Sequential
 
@@ -2842,7 +4246,12 @@ class RNNBase(Module):
                       jt.zeros((num_directions * self.num_layers, input.shape[1], self.hidden_size), dtype=input.dtype))
 
         if jt.flags.use_cuda and jt.cudnn and self.proj_size == 0 and jt.compiler.is_cuda:
-            return self._execute_cudnn_rnn(input, hx)
+            output, hidden_n = self._execute_cudnn_rnn(input, hx)
+            # batch_first: the input was permuted to (seq,batch,feat) above; permute the
+            # output back to (batch,seq,feat) to match torch (and jittor's own docstring).
+            if self.batch_first:
+                output = output.permute(1, 0, 2)
+            return output, hidden_n
         else:
             hidden_n = []
 
@@ -2877,6 +4286,11 @@ class RNNBase(Module):
             else:
                 hidden_n = jt.stack(hidden_n, dim=0)
 
+            # batch_first: permute output back to (batch, seq, feat) -- it was computed in
+            # (seq, batch, feat) from the permuted input. h_n/c_n stay (layers*dirs, batch,
+            # hidden) regardless, matching torch.
+            if self.batch_first:
+                output = output.permute(1, 0, 2)
             return output, hidden_n
 
 
@@ -3103,7 +4517,15 @@ def _fft2(x, inverse=False):
     return y
 
 class ComplexNumber:
-    ''' Applys Complex number class.
+    ''' Complex number helper (real/imag float pair).
+
+        .. deprecated::
+            Prefer the native ``complex64`` dtype. ``jt.array(complex_ndarray)``,
+            ``torch.complex(re, im)``, ``torch.view_as_complex``, ``torch.polar`` and the
+            ``torch.fft.*`` / ``jt.linalg`` complex paths now all produce and consume the native
+            complex64 Var directly. ComplexNumber is kept only as an INTERNAL bridge substrate
+            for the complex linalg kernels and is no longer returned by any public jittor / torch
+            API.
 
         It's saved as jt.stack(real, imag, dim=-1)
 
@@ -3207,6 +4629,23 @@ class ComplexNumber:
     def conj(self):
         return ComplexNumber(self.real, -self.imag)
 
+    def abs(self):
+        # magnitude |a+bi| = sqrt(a^2+b^2)  (torch.abs of a complex tensor)
+        return self.norm()
+
+    def __abs__(self):
+        return self.norm()
+
+    def angle(self):
+        # phase atan2(imag, real)  (torch.angle)
+        return jt.atan2(self.imag, self.real)
+
+    def __getitem__(self, idx):
+        return ComplexNumber(self.real[idx], self.imag[idx])
+
+    def __neg__(self):
+        return ComplexNumber(-self.real, -self.imag)
+
     def __add__(self, other):
         if isinstance(other, ComplexNumber):
             return ComplexNumber(self.real + other.real, self.imag + other.imag)
@@ -3301,16 +4740,128 @@ class ComplexNumber:
         return ComplexNumber(_fft2(self.value, inverse=True), is_concat_value=True)
 
 
-def polar(abs:jt.Var, angle: jt.Var) -> ComplexNumber:
+# ---------------------------------------------------------------------------
+# Native complex64 <-> float32[..., 2] bridge. This lets FFT / linalg use the native
+# complex64 dtype while the internal kernels still consume a real/imag float pair:
+#   _complex64_to_real2 : complex64[...]   -> float32[..., 2]   (torch.view_as_real)
+#   _real2_to_complex64 : float32[..., 2]  -> complex64[...]     (torch.view_as_complex)
+# view_as_real/view_as_complex prefer the zero-copy reinterpret_view core op when available,
+# and fall back to isolated jt.code kernels otherwise. Both are wrapped as jt.Function with
+# each other as the adjoint backward, so the bridge is autograd-transparent on CPU+CUDA.
+_complex64_imag_unit_cache = None
+def _complex64_imag_unit():
+    global _complex64_imag_unit_cache
+    if _complex64_imag_unit_cache is None:
+        _complex64_imag_unit_cache = jt.array(np.array(1j, dtype="complex64"))
+    return _complex64_imag_unit_cache
+
+def _complex64_to_real2_raw(z):
+    reinterpret_view = getattr(jt, "reinterpret_view", None)
+    if reinterpret_view is not None:
+        return reinterpret_view(z, list(z.shape) + [2], "float32")
+    # flatten to 1-D so the jt.code kernel is shape-agnostic, then restore the [..., 2] tail.
+    n = 1
+    for s in z.shape:
+        n *= s
+    flat = jt.code([n, 2], "float32", [z.reshape([n])],
+        cpu_src="""
+        for (int i=0; i<in0_shape0; i++) {
+            @out(i,0) = @in0(i).real;
+            @out(i,1) = @in0(i).imag;
+        }""",
+        cuda_src="""
+        __global__ void k(@ARGS_DEF) {
+            @PRECALC
+            int i = blockIdx.x*blockDim.x + threadIdx.x;
+            if (i < in0_shape0) { @out(i,0) = @in0(i).real; @out(i,1) = @in0(i).imag; }
+        }
+        int n = in0_shape0; k<<<(n+63)/64, 64>>>(@ARGS);""")
+    return flat.reshape(list(z.shape) + [2])
+
+def _real2_to_complex64_raw(x):
+    assert x.shape[-1] == 2, f"view_as_complex expects last dim 2, got shape {x.shape}"
+    reinterpret_view = getattr(jt, "reinterpret_view", None)
+    if reinterpret_view is not None:
+        return reinterpret_view(x, list(x.shape[:-1]) or [1], "complex64")
+    # real[..., 2] -> native complex64. Use one code kernel instead of two getitem ops
+    # plus mixed complex arithmetic; this is the hot path for RoPE view_as_complex.
+    n = 1
+    for s in x.shape[:-1]:
+        n *= s
+    out_shape = list(x.shape[:-1]) or [1]
+    flat = jt.code([n], "complex64", [x.reshape([n, 2])],
+        cpu_src="""
+        for (int i=0; i<in0_shape0; i++) {
+            @out(i) = complex64(float(@in0(i,0)), float(@in0(i,1)));
+        }""",
+        cuda_src="""
+        __global__ void k(@ARGS_DEF) {
+            @PRECALC
+            int i = blockIdx.x*blockDim.x + threadIdx.x;
+            if (i < in0_shape0) {
+                @out(i) = complex64(float(@in0(i,0)), float(@in0(i,1)));
+            }
+        }
+        int n = in0_shape0; k<<<(n+63)/64, 64>>>(@ARGS);""")
+    return flat.reshape(out_shape)
+
+class _Complex64ToReal2(jt.Function):
+    def execute(self, z):
+        return _complex64_to_real2_raw(z)
+    def grad(self, g):                       # adjoint of view_as_real is view_as_complex
+        return _real2_to_complex64_raw(g)
+
+class _Real2ToComplex64(jt.Function):
+    def execute(self, x):
+        return _real2_to_complex64_raw(x)
+    def grad(self, g):                       # adjoint of view_as_complex is view_as_real
+        return _complex64_to_real2_raw(g)
+
+def _complex64_to_real2(z):
+    return _Complex64ToReal2.apply(z)
+
+def _real2_to_complex64(x):
+    return _Real2ToComplex64.apply(x)
+
+
+def polar(abs:jt.Var, angle: jt.Var) -> jt.Var:
+    # torch.polar: magnitude `abs`, phase `angle` -> native complex64 (Phase 6 migration off
+    # ComplexNumber). Differentiable through the P1 bridge.
     assert abs.shape == angle.shape
-    return ComplexNumber(abs * angle.cos(),abs * angle.sin())
+    return _real2_to_complex64(jt.stack([abs * angle.cos(), abs * angle.sin()], dim=-1))
 
-def view_as_complex(x: jt.Var) -> ComplexNumber:
-    assert x.shape[-1] == 2
-    return ComplexNumber(x[...,0],x[...,1])
+def view_as_complex(x: jt.Var) -> jt.Var:
+    # torch.view_as_complex: real [..., 2] -> native complex64 (Phase 6 migration). Callers that
+    # still need the legacy pair use nn.ComplexNumber(...) directly.
+    assert x.shape[-1] == 2, f"view_as_complex expects last dim 2, got shape {x.shape}"
+    return _real2_to_complex64(x)
 
-def view_as_real(x: ComplexNumber) -> jt.Var:
-    return jt.stack([x.value[...,0],x.value[...,1]],dim=-1)
+def view_as_real(x) -> jt.Var:
+    # torch.view_as_real: complex -> real [..., 2]. Polymorphic across the native complex64
+    # dtype (Phase 6 bridge, differentiable) and the legacy nn.ComplexNumber (real/imag pair).
+    if isinstance(x, ComplexNumber):
+        return jt.stack([x.value[...,0],x.value[...,1]],dim=-1)
+    assert "complex" in str(x.dtype), \
+        f"view_as_real expects a complex64 Var or ComplexNumber, got dtype {x.dtype}"
+    return _complex64_to_real2(x)
+
+
+# Native complex64 accessors (torch parity), patched onto Var so they are available globally
+# after `import jittor` (which imports jittor.nn). dtype-aware: complex64 slices the P1
+# view_as_real bridge; real-dtype Vars match torch (real->self, imag->zeros, angle->0 or pi).
+def _var_real(self):
+    if "complex" in str(self.dtype):
+        return view_as_real(self)[..., 0]
+    return self
+def _var_imag(self):
+    if "complex" in str(self.dtype):
+        return view_as_real(self)[..., 1]
+    return jt.zeros_like(self)
+def _var_angle(self):
+    return jt.atan2(self.imag, self.real)
+jt.Var.real = property(_var_real)
+jt.Var.imag = property(_var_imag)
+jt.Var.angle = _var_angle
 
 # reference: https://github.com/pytorch/pytorch/blob/8ea5b572a63b1acc538a9fc8d3862c73739116e8/torch/functional.py#L1258
 def tensordot(a, b, dims=2):
@@ -3536,5 +5087,3 @@ def mish(x, inplace=False):
 
 def skip_init(module_cls, *args, **kw):
     return module_cls(*args, **kw)
-
-

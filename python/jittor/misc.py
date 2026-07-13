@@ -104,7 +104,12 @@ def index_add_(x, dim, index, tensor):
     """
     assert len(index.shape) == 1
     assert tensor.shape[0] == index.shape[0]
-    x[(slice(None,),)*dim+(index,)] += tensor
+    # torch parity: index_add_ ACCUMULATES all contributions at DUPLICATE indices
+    # (e.g. index=[0,0] adds both rows to row 0). The old impl used `x[adv_idx] += t`,
+    # which compiles to a read-add-write and is LAST-WRITE-WINS for dups (drops the
+    # earlier contribution). Route through the dup-correct out-of-place index_add
+    # (scatter_add path) and assign back in place. See test_torch_compat_scatter.py.
+    x.assign(x.index_add(dim, index, tensor))
 jt.Var.index_add_ = index_add_
 
 def __copy__(x):
@@ -214,24 +219,131 @@ jt.Var.repeat = repeat
 # tile = jt.Var.tile = repeat
 ne = jt.Var.ne = jt.Var.not_equal
 
-def repeat_interleave(x,repeats,dim=None):
-    # TODO repeats is jt.Var
-    assert isinstance(repeats,int)
-    if dim == None:
+def repeat_interleave(x,repeats,dim=None,output_size=None):
+    # torch-compatible: `repeats` may be a python int (every element repeated the
+    # same number of times) OR a 1-D Var/list giving a per-element repeat count
+    # (len == x.shape[dim]). The per-element form is required by e.g. the Qwen-VL
+    # vision tower (`repeat_interleave(grid_thw[:,1]*grid_thw[:,2], grid_thw[:,0])`).
+    if dim is None:
         x = x.reshape(-1)
-        dim=0
-    if dim<0: dim+=x.ndim
-    
-    tar_shape = list(x.shape)
-    x_shape = list(x.shape)
-    tar_shape[dim] = tar_shape[dim]*repeats 
-    dims = []
-    for i in range(len(tar_shape)):
-        if dim==i:
-            dims.append(f"i{i}/{repeats}")
-        else:
-            dims.append(f"i{i}")
-    return x.reindex(tar_shape,dims)
+        dim = 0
+    if dim < 0:
+        dim += x.ndim
+
+    if isinstance(repeats, int):
+        tar_shape = list(x.shape)
+        tar_shape[dim] = tar_shape[dim]*repeats
+        dims = []
+        for i in range(len(tar_shape)):
+            if dim==i:
+                dims.append(f"i{i}/{repeats}")
+            else:
+                dims.append(f"i{i}")
+        return x.reindex(tar_shape,dims)
+
+    if jt.flags.use_cuda and isinstance(repeats, jt.Var) and dim == 0 and output_size is not None:
+        repeats = repeats.reshape(-1).int32()
+        n = x.shape[0]
+        out0 = int(output_size)
+        assert out0 <= 2147483647, "repeat_interleave: output_size exceeds int32 CUDA fast path limit"
+        assert repeats.shape[0] == n, \
+            f"repeat_interleave: repeats length {repeats.shape[0]} != dim size {n}"
+        if out0 == 0:
+            new_shape = list(x.shape); new_shape[0] = 0
+            return jt.zeros(new_shape, x.dtype)
+        offsets = repeats.cumsum(0)
+        inner = int(np.prod(x.shape[1:])) if x.ndim > 1 else 1
+        out_shape = list(x.shape)
+        out_shape[0] = out0
+        return jt.code(
+            out_shape,
+            x.dtype,
+            [x, offsets],
+            cuda_header='''
+            #include <stdint.h>
+            template <typename X, typename R, typename O>
+            __global__ void repeat_interleave_dim0_kernel(
+                const X* __restrict__ x,
+                const R* __restrict__ offsets,
+                O* __restrict__ out,
+                int64_t total,
+                int n,
+                int inner) {
+                int64_t linear = blockIdx.x * blockDim.x + threadIdx.x;
+                int64_t stride = (int64_t)blockDim.x * gridDim.x;
+                for (; linear < total; linear += stride) {
+                    int out_row = linear / inner;
+                    int lo = 0, hi = n - 1;
+                    while (lo < hi) {
+                        int mid = (lo + hi) >> 1;
+                        if ((int)offsets[mid] > out_row) hi = mid;
+                        else lo = mid + 1;
+                    }
+                    out[linear] = (O)x[(int64_t)lo * inner + (linear % inner)];
+                }
+            }
+            ''',
+            cuda_src=f'''
+            @alias(x, in0)
+            @alias(offsets, in1)
+            @alias(out, out0)
+            const int64_t total = out->num;
+            const int n = x_shape0;
+            const int inner = {inner};
+            int threads = 256;
+            int blocks = (int)((total + threads - 1) / threads);
+            if (blocks > 4096) blocks = 4096;
+            repeat_interleave_dim0_kernel<x_type, offsets_type, out_type>
+                <<<blocks, threads>>>(x_p, offsets_p, out_p, total, n, inner);
+            ''',
+            cpu_src='''
+            @alias(x, in0)
+            @alias(offsets, in1)
+            @alias(out, out0)
+            int64_t total = out->num;
+            int n = x_shape0;
+            int inner = out->num / out_shape0;
+            for (int64_t linear = 0; linear < total; ++linear) {
+                int out_row = linear / inner;
+                int lo = 0, hi = n - 1;
+                while (lo < hi) {
+                    int mid = (lo + hi) >> 1;
+                    if ((int)offsets_p[mid] > out_row) hi = mid;
+                    else lo = mid + 1;
+                }
+                out_p[linear] = (out_type)x_p[(int64_t)lo * inner + (linear % inner)];
+            }
+            '''
+        )
+
+    # per-element repeats: build a gather index along `dim` then index_select.
+    if isinstance(repeats, jt.Var):
+        rep_list = [int(c) for c in repeats.numpy().reshape(-1)]
+    else:
+        rep_list = [int(c) for c in repeats]
+    n = x.shape[dim]
+    if len(rep_list) == 1 and n != 1:
+        rep_list = rep_list * n
+    assert len(rep_list) == n, \
+        f"repeat_interleave: repeats length {len(rep_list)} != dim size {n}"
+    idx = []
+    for i, c in enumerate(rep_list):
+        idx.extend([i] * c)
+    index = jt.array(idx).int64()
+    if index.shape[0] == 0:
+        new_shape = list(x.shape); new_shape[dim] = 0
+        return jt.zeros(new_shape, x.dtype)
+    if dim == 0 and n == 1 and x.ndim == 1 and str(x.dtype) in (
+        "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"
+    ):
+        value = int(x.item())
+        out = jt.full((index.shape[0],), value, x.dtype)
+        try:
+            out._jittor_constant_index_value = value
+        except Exception:
+            pass
+        return out
+    return x.getitem(tuple(slice(None) if d != dim else index for d in range(x.ndim)))
 
 jt.Var.repeat_interleave = repeat_interleave
 
@@ -266,11 +378,12 @@ def chunk(x, chunks, dim=0):
         for i in range(l):
             res.append(x[(slice(None,),)*dim+([i,],)])
     else:
+        # ceil(l/chunks) per chunk, last may be shorter -- matches torch.chunk.
+        # NB: iterate by start offset, not `range(chunks-1)`; the latter left `i`
+        # unbound (UnboundLocalError) for chunks==1 (e.g. single-GPU dispatch).
         nums = (l-1) // chunks + 1
-        for i in range(chunks-1):
-            res.append(x[(slice(None,),)*dim+(slice(i*nums,(i+1)*nums),)])
-        if (i+1)*nums < l:
-            res.append(x[(slice(None,),)*dim+(slice((i+1)*nums,None),)])
+        for start in range(0, l, nums):
+            res.append(x[(slice(None,),)*dim+(slice(start, min(start+nums, l)),)])
     return res
 jt.Var.chunk = chunk
 
@@ -324,6 +437,140 @@ def median(x,dim=None,keepdim=False, keepdims=False):
 
 jt.Var.median = median
 
+def _stack_no_grad_cuda_fast(xs, dim):
+    if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
+        return None
+    n = len(xs)
+    if n not in (2, 3):
+        return None
+    if not xs:
+        return None
+    for x in xs:
+        if not isinstance(x, jt.Var) or getattr(x, "_jittor_torch_force_cpu", False):
+            return None
+    base_shape = list(xs[0].shape)
+    base_dtype = xs[0].dtype
+    for x in xs[1:]:
+        if list(x.shape) != base_shape or x.dtype != base_dtype:
+            return None
+    if dim < 0:
+        dim += len(base_shape) + 1
+    if dim < 0 or dim > len(base_shape):
+        return None
+
+    out_shape = base_shape[:dim] + [n] + base_shape[dim:]
+    suffix = 1
+    for size in base_shape[dim:]:
+        suffix *= int(size)
+    input_total = 1
+    for size in base_shape:
+        input_total *= int(size)
+    if input_total == 0 or suffix == 0:
+        return None
+    flat_inputs = [x.reshape([-1]) for x in xs]
+    write_lines = "\n".join(
+        f"            @out(base_out + {i} * suffix + rem) = @in{i}(iid);"
+        for i in range(n)
+    )
+    cuda_src = f"""
+    __global__ void stack_kernel(@ARGS_DEF) {{
+        @PRECALC
+        index_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+        index_t step = blockDim.x * gridDim.x;
+        const index_t suffix = {suffix};
+        for (index_t iid = tid; iid < in0_shape0; iid += step) {{
+            index_t prefix = iid / suffix;
+            index_t rem = iid - prefix * suffix;
+            index_t base_out = prefix * ({n} * suffix);
+{write_lines}
+        }}
+    }}
+    int block = 256;
+    int grid = (in0_shape0 + block - 1) / block;
+    if (grid > 65535) grid = 65535;
+    stack_kernel<<<grid, block>>>(@ARGS);
+    """
+    cpu_src = f"""
+    const index_t suffix = {suffix};
+    for (index_t iid=0; iid<in0_shape0; ++iid) {{
+        index_t prefix = iid / suffix;
+        index_t rem = iid - prefix * suffix;
+        index_t base_out = prefix * ({n} * suffix);
+{write_lines}
+    }}
+    """
+    return jt.code([input_total * n], base_dtype, flat_inputs, cuda_src=cuda_src, cpu_src=cpu_src).reshape(out_shape)
+
+def _unbind_no_grad_cuda_fast(x, dim):
+    if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
+        return None
+    if not isinstance(x, jt.Var) or getattr(x, "_jittor_torch_force_cpu", False):
+        return None
+    shape = list(x.shape)
+    if not shape:
+        return None
+    if dim < 0:
+        dim += len(shape)
+    if dim < 0 or dim >= len(shape):
+        return None
+    n = int(shape[dim])
+    if n not in (2, 3):
+        return None
+    out_shape = shape[:dim] + shape[dim + 1:]
+    suffix = 1
+    for size in shape[dim + 1:]:
+        suffix *= int(size)
+    out_total = 1
+    for size in out_shape:
+        out_total *= int(size)
+    if out_total < 4096 or suffix == 0:
+        return None
+    if n == 2 and out_total < 1024 * 1024:
+        return None
+
+    flat = x.reshape([-1])
+    write_lines = "\n".join(
+        f"            @out{i}(oid) = @in0(base_in + {i} * suffix);"
+        for i in range(n)
+    )
+    cuda_src = f"""
+    __global__ void unbind_kernel(@ARGS_DEF) {{
+        @PRECALC
+        index_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+        index_t step = blockDim.x * gridDim.x;
+        const index_t suffix = {suffix};
+        const index_t full_stride = suffix * {n};
+        for (index_t oid = tid; oid < out0_shape0; oid += step) {{
+            index_t prefix = oid / suffix;
+            index_t rem = oid - prefix * suffix;
+            index_t base_in = prefix * full_stride + rem;
+{write_lines}
+        }}
+    }}
+    int block = 256;
+    int grid = (out0_shape0 + block - 1) / block;
+    if (grid > 65535) grid = 65535;
+    unbind_kernel<<<grid, block>>>(@ARGS);
+    """
+    cpu_src = f"""
+    const index_t suffix = {suffix};
+    const index_t full_stride = suffix * {n};
+    for (index_t oid=0; oid<out0_shape0; ++oid) {{
+        index_t prefix = oid / suffix;
+        index_t rem = oid - prefix * suffix;
+        index_t base_in = prefix * full_stride + rem;
+{write_lines}
+    }}
+    """
+    outs = jt.code(
+        [[out_total] for _ in range(n)],
+        [x.dtype for _ in range(n)],
+        [flat],
+        cuda_src=cuda_src,
+        cpu_src=cpu_src,
+    )
+    return [out.reshape(out_shape) for out in outs]
+
 def stack(x, dim=0):
     r'''
     Concatenates sequence of vars along a new dimension.
@@ -354,18 +601,22 @@ def stack(x, dim=0):
     if len(x) < 2:
         return x[0].unsqueeze(dim)
 
+    fast = _stack_no_grad_cuda_fast(x, dim)
+    if fast is not None:
+        return fast
+
     res = [x_.unsqueeze(dim) for x_ in x]
     return jt.concat(res, dim=dim)
 jt.Var.stack = stack
 
-def flip(x, dim=0):
+def flip(x, dim=0, dims=None):
     r'''
     Reverse the order of a n-D var along given axis in dims.
 
     Args:
 
         input (var) – the input var.
- 
+
         dims (a list or tuple) – axis to flip on.
 
     Example:
@@ -375,8 +626,12 @@ def flip(x, dim=0):
         >>> x.flip(1)
         [[4 3 2 1]]
     '''
+    if dims is not None:          # torch spells the flip axis kwarg `dims`
+        dim = dims
     if isinstance(dim, int):
         dim = [dim]
+    else:
+        dim = list(dim)           # copy: the loop below mutates dim in place
     for i in range(len(dim)):
         if dim[i]<0:
             dim[i] += x.ndim
@@ -497,6 +752,9 @@ def unbind(x, dim=0):
 
     '''
     if dim < 0: dim += len(x.shape)
+    fast = _unbind_no_grad_cuda_fast(x, dim)
+    if fast is not None:
+        return fast
     return [x[(slice(None),)*dim+(i,)] for i in range(x.shape[dim])]
 
 jt.Var.unbind = unbind
@@ -552,9 +810,10 @@ _quadruple = _ntuple(4)
 
 
 def unique(
-    input: jt.Var, 
-    return_inverse: bool=False, 
-    return_counts: bool=False, 
+    input: jt.Var,
+    sorted: bool=True,          # torch kwarg; jittor's unique is always sorted
+    return_inverse: bool=False,
+    return_counts: bool=False,
     dim: int=None):
 
     r'''
@@ -585,6 +844,39 @@ def unique(
         >>> jittor.unique(jittor.array([[1, 3], [1, 3]]), dim=0)
             jt.Var([[1 3]], dtype=int32)
     '''
+
+    # jittor's CUDA unique kernel (cub::DeviceRadixSort::SortPairs +
+    # thrust::unique) only sorts correctly for 32-bit int keys; for int64 /
+    # float / int8 etc. it silently returns wrong indices (e.g. int64 [0,1,...]
+    # -> [0,0]), which surfaced as a CUDA illegal-address downstream in
+    # Sparse R-CNN's `rois[:,0].long().unique()`. Route the broken dtypes around
+    # it: integer keys that fit int32 are computed via the (correct) int32 CUDA
+    # path; anything else falls back to the (correct) CPU implementation. int32
+    # itself keeps the native fast CUDA path unchanged.
+    if jt.flags.use_cuda and str(input.dtype) != "int32":
+        dt = str(input.dtype)
+        is_int = ("int" in dt)
+        if is_int:
+            # safe to use the int32 CUDA path iff every value fits int32
+            try:
+                fits = bool(((input <= 2147483647).logical_and(input >= -2147483648)).all())
+            except Exception:
+                fits = False
+            if fits:
+                res = unique(input.int32(), sorted=sorted,
+                             return_inverse=return_inverse,
+                             return_counts=return_counts, dim=dim)
+                if isinstance(res, tuple):
+                    return (res[0].cast(dt),) + tuple(res[1:])
+                return res.cast(dt)
+        # float keys, or ints out of int32 range: compute on CPU, move back.
+        with jt.flag_scope(use_cuda=0):
+            res = unique(input.clone(), sorted=sorted,
+                         return_inverse=return_inverse,
+                         return_counts=return_counts, dim=dim)
+        if isinstance(res, tuple):
+            return tuple(r for r in res)
+        return res
 
     temp_shape = None
     if dim == None:
@@ -782,6 +1074,74 @@ def unique(
 jt.Var.unique = unique
 
 
+def unique_consecutive(input, return_inverse=False, return_counts=False, dim=None):
+    r'''Eliminates all but the FIRST element from every consecutive group of
+    equivalent elements (torch.unique_consecutive). Unlike ``unique`` this does NOT
+    sort and only collapses runs, so ``[1,1,2,2,1]`` -> ``[1,2,1]``. Needed by the
+    Qwen2.5-VL window-attention index computation.
+    '''
+    if not isinstance(input, jt.Var):
+        input = jt.array(input)
+    if dim is None:
+        flat = input.reshape(-1)
+        n = flat.shape[0]
+        if n == 0:
+            out = flat
+            group = jt.zeros([0], dtype='int64')
+        else:
+            # boundary[i] == True where element i starts a new run.
+            if n == 1:
+                keep = jt.ones([1], dtype='bool')
+            else:
+                diff = flat[1:] != flat[:-1]
+                keep = jt.concat([jt.ones([1], dtype='bool'), diff], dim=0)
+            # group id of each input element = cumulative count of run-starts - 1
+            group = keep.int32().cumsum(0) - 1   # 0-based group index per element
+            out = flat[keep]
+        ret = [out]
+        if return_inverse:
+            ret.append(group.int64() if n else group)
+        if return_counts:
+            if n == 0:
+                counts = jt.zeros([0], dtype='int64')
+            else:
+                num_groups = int(out.shape[0])
+                # scatter-add in int32 (int64 scatter-add fails to compile on this
+                # CUDA build, same atomic limitation as int64 reduce), then widen.
+                counts = jt.zeros([num_groups], dtype='int32')
+                jt.scatter_(counts, 0, group.int32(), jt.ones([n], dtype='int32'), reduce='add')
+                counts = counts.int64()
+            ret.append(counts)
+        return ret[0] if len(ret) == 1 else tuple(ret)
+    # dim-wise: collapse consecutive equal slices along `dim`.
+    if dim < 0:
+        dim += input.ndim
+    moved = input.transpose(0, dim) if dim != 0 else input
+    m = moved.shape[0]
+    flat2 = moved.reshape(m, -1)
+    if m <= 1:
+        keep = jt.ones([m], dtype='bool')
+    else:
+        eq = (flat2[1:] == flat2[:-1]).all(dim=1)
+        keep = jt.concat([jt.ones([1], dtype='bool'), eq.logical_not()], dim=0)
+    out = moved[keep]
+    out = out.transpose(0, dim) if dim != 0 else out
+    if not (return_inverse or return_counts):
+        return out
+    group = keep.int32().cumsum(0) - 1
+    ret = [out]
+    if return_inverse:
+        ret.append(group.int64())
+    if return_counts:
+        num_groups = int(keep.int32().sum().item())
+        counts = jt.zeros([num_groups], dtype='int32')
+        jt.scatter_(counts, 0, group.int32(), jt.ones([m], dtype='int32'), reduce='add')
+        ret.append(counts.int64())
+    return tuple(ret)
+
+jt.Var.unique_consecutive = unique_consecutive
+
+
 def hypot(a,b):
     return jt.sqrt(a.sqr()+b.sqr())
 
@@ -800,9 +1160,14 @@ def arctan2(y,x):
     x = (x!=0.0).ternary(x, 1e-30)
     angle = (y/x).arctan()
     mask = (x<0)&(y<0)
-    angle = angle - mask*np.pi
+    # mask is bool; `bool * python-float` promotes to float16 under the torch
+    # dtype lattice, rounding pi to 3.14 (3.140625 after upcast) and breaking
+    # the atol=1e-6 contract. Cast the mask to the angle's float dtype first so
+    # pi keeps full precision (float32 -> 3.1415927) while still honoring a
+    # genuinely float16/float64 input.
+    angle = angle - mask.cast(angle.dtype)*np.pi
     mask = (x<0)&(y>=0)
-    angle = angle + mask*np.pi
+    angle = angle + mask.cast(angle.dtype)*np.pi
     return angle
 atan2 = arctan2
 
@@ -841,10 +1206,14 @@ def log2(x):
 
 jt.Var.log2 = log2
 
-def meshgrid(*tensors):
+def meshgrid(*tensors, indexing=None):
     r'''
-    Take N tensors, each of which can be 1-dimensional vector, and create N n-dimensional grids, 
+    Take N tensors, each of which can be 1-dimensional vector, and create N n-dimensional grids,
     where the i th grid is defined by expanding the i th input over dimensions defined by other inputs.
+
+    `indexing` matches torch.meshgrid: 'ij' (default, matrix indexing — jittor's
+    native behavior) or 'xy' (Cartesian, which swaps the first two axes). swin and
+    many vision models call torch.meshgrid(..., indexing='ij').
     '''
     if len(tensors)==1 and isinstance(tensors[0], list):
         tensors = tensors[0]
@@ -860,6 +1229,8 @@ def meshgrid(*tensors):
         vs[i]=-1
         grids.append(tensors[i].reshape(vs).expand(shape))
 
+    if indexing == "xy" and size >= 2:
+        grids = [g.transpose(0, 1) for g in grids]
     return grids
 
 
@@ -921,6 +1292,7 @@ jt.Var.tolist = tolist
 def view_as(x,y):
     return x.reshape(y.shape)
 jt.Var.view_as = view_as
+jt.Var.reshape_as = view_as          # torch alias (roformer uses .reshape_as)
 
 def diag(x,diagonal=0):
     assert x.ndim==1 or (x.ndim==2 and x.shape[0]==x.shape[1])
@@ -1001,7 +1373,14 @@ def kthvalue(input, k, dim=None, keepdim=False, keepdims=False):
         dim = -1
     if dim<0:
         dim+=input.ndim
-    index,values = jt.argsort(input,dim=dim)
+    # native jt.argsort returns (index, values); the torch_compat layer overrides
+    # the module-level argsort to torch's indices-only. Handle both.
+    _srt = jt.argsort(input, dim=dim)
+    if isinstance(_srt, tuple):
+        index, values = _srt
+    else:
+        index = _srt
+        values = jt.gather(input, dim, index)
     dims = (slice(None),)*dim+(slice(k-1,k),)
     indices = index[dims]
     values = values[dims]
@@ -1083,11 +1462,73 @@ def cumsum(x, dim=None):
 jt.Var.cumsum = cumsum
 
 def cumprod(x,dim=None):
-    x = jt.log(x)
-    x = cumsum(x,dim=dim)
-    return jt.exp(x)
+    # Sign-aware cumulative product. The old exp(cumsum(log(x))) returns NaN for any
+    # NEGATIVE element (log of a negative) -- torch handles signs. Split into magnitude
+    # and a running sign parity: cumprod = (-1)^(#negatives so far) * exp(cumsum(log|x|)).
+    # Zeros are masked out (mag clamped to 1 for the log so we never hit log(0)=-inf,
+    # which can trip jittor's inf/nan JIT codegen; positions at/after the first zero are
+    # forced to 0). Reduces to the old behaviour for all-positive input.
+    mag = jt.abs(x)
+    is_zero = (mag == 0)
+    mag_safe = jt.ternary(is_zero, jt.ones_like(mag), mag)
+    mag_cp = jt.exp(cumsum(jt.log(mag_safe), dim=dim))
+    zero_seen = cumsum(is_zero.int32(), dim=dim) > 0
+    mag_cp = jt.ternary(zero_seen, jt.zeros_like(mag_cp), mag_cp)
+    sign = (1 - 2 * (cumsum((x < 0).int32(), dim=dim) % 2)).float32()
+    return sign * mag_cp
 
 jt.Var.cumprod=cumprod
+
+import collections as _collections
+_CumMax = _collections.namedtuple("cummax", ["values", "indices"])
+_CumMin = _collections.namedtuple("cummin", ["values", "indices"])
+
+def _cummax_min(x, dim, is_max):
+    ''' prefix max/min + argmax/argmin along dim. O(L^2) masked reduction (fine for
+    typical L): M[...,i,j] = x[...,j] if j<=i else sentinel, reduce over j. Uses a
+    FINITE sentinel (not +/-inf) to dodge jittor's inf/nan JIT codegen segfault, and
+    jt.argmax (which picks the FIRST max -> matches torch's cummax tie behavior). '''
+    if dim is None:
+        dim = x.ndim - 1
+    d = dim if dim >= 0 else dim + x.ndim
+    perm = [k for k in range(x.ndim) if k != d] + [d]      # move dim d to last
+    xt = x.permute(perm)
+    L = xt.shape[-1]
+    tgt = list(xt.shape[:-1]) + [L, L]
+    xe = xt.unsqueeze(-2).broadcast(tgt)                   # [...,i,j] = xt[...,j]
+    ii = jt.index((L, L), dim=0)
+    jj = jt.index((L, L), dim=1)
+    mask = (jj <= ii).broadcast(tgt)                       # valid where j<=i
+    sentinel = -3.4e38 if is_max else 3.4e38
+    sval = jt.array(sentinel).cast(xt.dtype).broadcast(tgt)
+    masked = jt.ternary(mask, xe, sval)
+    # NB: native jt.argmax returns (indices, values); the torch_compat layer overrides
+    # it to indices-only, and overrides Var.max/min to return a (values, indices)
+    # namedtuple. Handle both so cummax works regardless of install state.
+    def _argidx(am):
+        return am[0] if isinstance(am, (tuple, list)) else am
+    def _vals(mm):
+        return mm.values if hasattr(mm, "values") else (
+            mm[0] if isinstance(mm, (tuple, list)) else mm)
+    if is_max:
+        vals = _vals(masked.max(dim=-1)); idxs = _argidx(jt.argmax(masked, -1))
+    else:
+        vals = _vals(masked.min(dim=-1)); idxs = _argidx(jt.argmin(masked, -1))
+    inv = [0] * x.ndim
+    for newpos, oldpos in enumerate(perm):
+        inv[oldpos] = newpos
+    return vals.permute(inv), idxs.int64().permute(inv)
+
+def cummax(x, dim=None):
+    ''' torch's cummax(input, dim) -> namedtuple(values, indices). '''
+    v, i = _cummax_min(x, dim, True)
+    return _CumMax(v, i)
+def cummin(x, dim=None):
+    ''' torch's cummin(input, dim) -> namedtuple(values, indices). '''
+    v, i = _cummax_min(x, dim, False)
+    return _CumMin(v, i)
+jt.Var.cummax = cummax
+jt.Var.cummin = cummin
 
 def nms(dets,thresh):
     '''
@@ -1121,9 +1562,28 @@ def index_fill_(x,dim,indexs,val):
         index – indices of input tensor to fill in
         val – the value to fill with
     '''
-    overflow_conditions = [f'i{dim}=={i}'for i in indexs]
-    indexs = [f'i{i}' for i in range(len(x.shape))]
-    return x.reindex(shape = x.shape,indexes = indexs,overflow_conditions=overflow_conditions,overflow_value=val)
+    # NOTE: the old impl (`overflow_conditions=[f'i{dim}=={i}' for i in indexs]`) was
+    # broken three ways: f'i{dim}' crashed JIT compile for negative dim (emits 'i-1'),
+    # it iterated the index TENSOR into an f-string (only worked for a python int list),
+    # and it overwrote `indexs`. Rewrite mask-based: build a 1-D membership mask along
+    # `dim` and blend. Matches torch.index_fill_ (in-place); index may be a tensor/list.
+    res = index_fill(x, dim, indexs, val)
+    return x.assign(res)
+
+def index_fill(x, dim, index, val):
+    ''' Out-of-place torch.index_fill: fill x along `dim` at the given `index`
+    positions with scalar `val`. '''
+    d = dim % x.ndim
+    size = x.shape[d]
+    idx = index.reshape((-1,)) if isinstance(index, jt.Var) else jt.array(index).reshape((-1,))
+    ar = jt.arange(size).cast(idx.dtype)
+    mask1d = (ar.reshape((-1, 1)) == idx.reshape((1, -1))).any(1)      # (size,) bool
+    shp = [1] * x.ndim; shp[d] = size
+    mask_f = mask1d.reshape(shp).broadcast(x.shape).float32()
+    return x * (1 - mask_f) + float(val) * mask_f
+
+jt.Var.index_fill_ = index_fill_
+jt.Var.index_fill = index_fill
 
 # def triu_(x,diagonal=0):
 #     r'''
@@ -1472,7 +1932,10 @@ def linspace(start, end, steps):
 
 def randperm(n, dtype="int32"):
     key = jt.random((n,))
-    index, _ = jt.argsort(key)
+    res = jt.argsort(key)
+    # jt.argsort may return either the index Var directly or a
+    # (index, value) tuple depending on the build; handle both.
+    index = res[0] if isinstance(res, (tuple, list)) else res
     return index.cast(dtype)
 
 def set_global_seed(seed, different_seed_for_mpi=True):
@@ -1499,7 +1962,7 @@ def set_global_seed(seed, different_seed_for_mpi=True):
 import time
 set_global_seed(int(time.time() * 1000000) % 100000007)
 
-def searchsorted(sorted, values, right=False):
+def searchsorted(sorted, values, right=False, out_int32=False, side=None, sorter=None, out=None):
     """
     Find the indices from the innermost dimension of `sorted` for each `values`.
 
@@ -1517,8 +1980,22 @@ Example::
     ret = jt.searchsorted(sorted_1d, values)
     assert (ret == [[1, 3, 4], [1, 3, 4]]).all(), ret
 
-
     """
+    if side is not None:
+        if side not in ("left", "right"):
+            raise ValueError("side must be 'left' or 'right'")
+        right = side == "right"
+    if sorter is not None:
+        raise NotImplementedError("searchsorted sorter is not supported")
+    scalar_value = not isinstance(values, jt.Var) and np.isscalar(values)
+    if not isinstance(values, jt.Var):
+        values = jt.array(values, dtype=sorted.dtype)
+    elif values.dtype != sorted.dtype:
+        values = values.cast(sorted.dtype)
+    if scalar_value or values.ndim == 0:
+        values = values.reshape((1,))
+    out_dtype = "int32" if out_int32 else "int64"
+    out_ctype = "int32" if out_int32 else "int64"
     _searchsorted_header = f"""
 namespace jittor {{
 
@@ -1527,7 +2004,7 @@ inline static void searchsorted(
     int batch_num, int batch_id, int value_num, int value_id,
     int sorted_num, int batch_stride,
     {sorted.dtype}* __restrict__  sort_p, {values.dtype}* __restrict__  value_p, 
-    int32* __restrict__ index_p) {{
+    {out_ctype}* __restrict__ index_p) {{
     int32 l = batch_id * batch_stride;
     int32 r = l + sorted_num;
     auto v = value_p[batch_id * value_num + value_id];
@@ -1538,7 +2015,7 @@ inline static void searchsorted(
         else
             r = m;
     }}
-    index_p[batch_id * value_num + value_id] = l - batch_id * batch_stride;
+    index_p[batch_id * value_num + value_id] = ({out_ctype})(l - batch_id * batch_stride);
 }}
 
 }}
@@ -1553,11 +2030,15 @@ inline static void searchsorted(
 
     searchsorted(batch_num2, 0, value_num, 0, sorted_num, batch_stride, in0_p, in1_p, out0_p);
 """
-    return jt.code(values.shape, "int32", [sorted, values], 
+    ret = jt.code(values.shape, out_dtype, [sorted, values],
         cpu_header=_searchsorted_header,
         cpu_src=_searchsorted_src,
         cuda_header=_searchsorted_header,
         cuda_src=_searchsorted_src)
+    if out is not None:
+        out.assign(ret)
+        return out
+    return ret
 
 
 def scatter(x:jt.Var, dim:int, index:jt.Var, src:jt.Var, reduce='void'):
@@ -1603,6 +2084,10 @@ Example::
 
     '''
     shape = index.shape
+    # torch allows a SCALAR src: scatter(x, dim, index, value) fills the indexed
+    # positions with a constant (e.g. phimoe masks logits with torch.scatter(.., -inf)).
+    if not isinstance(src, jt.Var):
+        src = jt.array(src).cast(x.dtype).broadcast(shape)
     if src.shape != shape and src.numel() != 1:
         src = src[tuple( slice(None,s) for s in shape )]
     indexes = [ f'i{i}' for i in range(len(shape)) ]
@@ -1614,6 +2099,73 @@ def scatter_(x, dim, index, src, reduce='void'):
 
 jt.Var.scatter = scatter
 jt.Var.scatter_ = scatter_
+
+def scatter_add(x, dim, index, src):
+    ''' torch's Tensor.scatter_add (out-of-place): accumulate src into a COPY of x
+    at `index` along `dim`. jittor's scatter(reduce='add') accumulates in place, so
+    clone first to keep torch's out-of-place semantics. '''
+    return x.clone().scatter(dim, index, src, reduce='add')
+def scatter_add_(x, dim, index, src):
+    return x.scatter_(dim, index, src, reduce='add')
+jt.Var.scatter_add = scatter_add
+jt.Var.scatter_add_ = scatter_add_
+
+_SCATTER_REDUCE_JT = {'sum': 'add', 'add': 'add', 'prod': 'multiply',
+                      'multiply': 'multiply', 'amax': 'maximum', 'max': 'maximum',
+                      'maximum': 'maximum', 'amin': 'minimum', 'min': 'minimum',
+                      'minimum': 'minimum'}
+
+def _segment_reduce(x, dim, index, src, jt_op):
+    ''' contrib[out_cell] = jt_op-reduce over the src elements that scatter into it
+    (cells receiving nothing get the reduce identity: 0/1/-inf/+inf). Uses
+    reindex_reduce (PULL-based, race-free) rather than scatter's setitem-reduce,
+    because jittor's CUDA min/max setitem-reduce is buggy for multi-column index
+    patterns (deterministically drops contributions; tracked core bug). '''
+    d = dim if dim >= 0 else dim + x.ndim
+    nd = src.ndim
+    coords = ",".join(f"i{t}" for t in range(nd))
+    exprs = [("@e0(" + coords + ")") if k == d else f"i{k}" for k in range(nd)]
+    return src.reindex_reduce(jt_op, list(x.shape), exprs, extras=[index])
+
+def scatter_reduce(x, dim, index, src, reduce, include_self=True):
+    ''' torch's Tensor.scatter_reduce(dim, index, src, reduce, include_self=True).
+    Supports reduce = sum/prod/mean/amax/amin and BOTH include_self values, out-of-place
+    and DUAL-CARD correct (Ascend + CUDA). include_self=False excludes the original
+    `self` at receiving positions while leaving non-receiving positions untouched. '''
+    if reduce != 'mean' and reduce not in _SCATTER_REDUCE_JT:
+        raise NotImplementedError(f"scatter_reduce reduce='{reduce}' not supported (tracked)")
+    # count of src elements landing in each output cell (race-free reindex_reduce)
+    ones_like_src = jt.ones(src.shape, x.dtype)
+    count = _segment_reduce(x, dim, index, ones_like_src, "add")
+    hit = count > 0
+    if reduce == 'mean':
+        s = _segment_reduce(x, dim, index, src, "add")               # sum of src per cell
+        if include_self:
+            return (x + s) / (count + jt.ones(x.shape, x.dtype))
+        return jt.ternary(hit, s / count.maximum(jt.ones(x.shape, x.dtype)), x)
+    jr = _SCATTER_REDUCE_JT[reduce]
+    contrib = _segment_reduce(x, dim, index, src, jr)               # identity where unreceived
+    if include_self:
+        if jr == 'add':       return x + contrib
+        if jr == 'multiply':  return x * contrib
+        if jr == 'maximum':   return jt.maximum(x, contrib)
+        return jt.minimum(x, contrib)                              # minimum
+    # include_self=False: receiving cells use contrib, non-receiving keep self
+    return jt.ternary(hit, contrib, x)
+jt.Var.scatter_reduce = scatter_reduce
+
+def index_add(x, dim, index, source, alpha=1):
+    ''' torch's Tensor.index_add (out-of-place): out[..,index[k],..] += alpha*source[..,k,..],
+    ACCUMULATING duplicate indices. jittor's native index_add_ uses `+=` on an advanced
+    index, which is last-write-wins (does NOT accumulate dups), so route through
+    scatter_add (the proper reduce='add' path) with the 1-D index broadcast to source. '''
+    d = dim if dim >= 0 else dim + x.ndim
+    src = source if alpha == 1 else source * alpha
+    shp = [1] * source.ndim
+    shp[d] = index.shape[0]
+    full_idx = index.reshape(shp).broadcast(source.shape)
+    return x.scatter_add(d, full_idx.int32(), src)
+jt.Var.index_add = index_add
 
 def gather(x, dim, index):
     ''' if x is a 3-D array, reindex x like:
@@ -1665,18 +2217,27 @@ Examples::
         assert (y.numpy() == [[6,5],[8,7],[2,1],[4,3]]).all()
 
     '''
+    if dims is None:
+        # torch: when dims is None the tensor is FLATTENED, rolled by the (scalar)
+        # shift, then restored to the original shape (NOT rolled along dim 0).
+        s = shifts[0] if isinstance(shifts, (tuple, list)) else shifts
+        return roll(x.reshape((-1,)), s, 0).reshape(x.shape)
     if isinstance(shifts, int):
         shifts = (shifts,)
-    if dims is None:
-        dims = tuple(range(len(shifts)))
-    elif isinstance(dims, int):
+    if isinstance(dims, int):
         dims = (dims,)
     assert len(dims) == len(shifts)
     ids = [ f'i{i}' for i in range(x.ndim) ]
     for i in range(len(dims)):
         shift = shifts[i]
-        d = dims[i]
+        # normalize negative dims: f'i{d}' with d=-1 emits the literal 'i-1' (an
+        # undeclared codegen variable -> "'op0_i' was not declared" compile error).
+        # torch allows dims=-1; map it to a real axis index for the reindex expression.
+        d = dims[i] % x.ndim
         size = x.shape[d]
+        if size == 0:
+            # torch.roll is a no-op on an empty dim; avoid modulo-by-zero.
+            continue
         shift = shift % size
         if shift<0: shift += size
         ids[d] = f'(i{d}<{shift}?i{d}+{size-shift}:(i{d}-{shift}))'
@@ -2047,15 +2608,50 @@ def _simple_for(x, func):
         '''
         return jt.code(x.shape, "bool", [x], cpu_src=src, cuda_src=src)
 
-def isnan(x): return _simple_for(x, "isnan(float(x))")
+# isnan/isfinite/isinf use _simple_for -> a jt.code op, which the Ascend ACL backend
+# does not support ("op code not supported"). On ACL, compute them from primitive
+# comparisons instead (these run as aclnn ops). IEEE rules make this exact:
+#   isfinite(x) = |x| < inf      (nan<inf and inf<inf are both False)
+#   isinf(x)    = |x| == inf
+#   isnan(x)    = NOT((x>=0) or (x<=0))   (nan fails every comparison; avoids the
+#                jittor "x==x optimized to all-True" trap, see self-compare gotcha)
+# Integer dtypes have no nan/inf, so return the trivial constant.
+def _isnan_acl(x):
+    x = x if isinstance(x, jt.Var) else jt.array(x)
+    if "float" not in str(x.dtype): return jt.zeros(x.shape, "bool")
+    return jt.logical_not((x >= 0) | (x <= 0))
+def _isinf_acl(x):
+    x = x if isinstance(x, jt.Var) else jt.array(x)
+    if "float" not in str(x.dtype): return jt.zeros(x.shape, "bool")
+    return x.abs() == float("inf")
+def _isfinite_acl(x):
+    x = x if isinstance(x, jt.Var) else jt.array(x)
+    if "float" not in str(x.dtype): return jt.ones(x.shape, "bool")
+    return x.abs() < float("inf")
+
+def isnan(x):
+    if jt.flags.use_acl: return _isnan_acl(x)
+    return _simple_for(x, "isnan(float(x))")
 jt.Var.isnan = isnan
-def isfinite(x): return _simple_for(x, "!isnan(float(x)) && !isinf(float(x))")
+def isfinite(x):
+    if jt.flags.use_acl: return _isfinite_acl(x)
+    return _simple_for(x, "!isnan(float(x)) && !isinf(float(x))")
 jt.Var.isfinite = isfinite
-def isinf(x): return _simple_for(x, "isinf(float(x))")
+def isinf(x):
+    if jt.flags.use_acl: return _isinf_acl(x)
+    return _simple_for(x, "isinf(float(x))")
 jt.Var.isinf = isinf
-def isneginf(x): return _simple_for(x, "x<0 && isinf(float(x))")
+def isneginf(x):
+    if jt.flags.use_acl:
+        x = x if isinstance(x, jt.Var) else jt.array(x)
+        return (x < 0) & _isinf_acl(x)
+    return _simple_for(x, "x<0 && isinf(float(x))")
 jt.Var.isneginf = isneginf
-def isposinf(x): return _simple_for(x, "x>0 && isinf(float(x))")
+def isposinf(x):
+    if jt.flags.use_acl:
+        x = x if isinstance(x, jt.Var) else jt.array(x)
+        return (x > 0) & _isinf_acl(x)
+    return _simple_for(x, "x>0 && isinf(float(x))")
 jt.Var.isposinf = isposinf
 
 # fake torch interface
@@ -2284,7 +2880,10 @@ def iinfo(dtype):
 
 
 def index_select(input,dim,indices):
-    return input[(None,)*dim+(indices,)]
+    # slice(None) (":") for the leading dims, NOT None (newaxis) — None inserts new
+    # axes so x.index_select(1, idx) gave (1,...) with wrong values instead of indexing
+    # dim 1. Matches the correct jt.index_select function above.
+    return input[(slice(None),)*dim+(indices,)]
 
 jt.Var.index_select = index_select
 
@@ -2307,5 +2906,161 @@ def isin(elements, test_elements, assume_unique=False, invert=False):
 
     if invert:
         result = jt.logical_not(result)
-    
+
     return result
+
+
+def atleast_1d(*tensors):
+    r'''
+    Returns a 1-dimensional view (or the original) of each input that has zero
+    dimensions. Inputs with one or more dimensions are returned unchanged.
+
+    Mirrors ``torch.atleast_1d``: a single input returns a single Var, multiple
+    inputs return a tuple of Vars.
+
+    Args:
+
+        tensors – one or more Vars (or values castable to Var).
+    '''
+    res = []
+    for t in tensors:
+        if not isinstance(t, jt.Var):
+            t = jt.array(t)
+        if t.ndim == 0:
+            t = t.reshape(1)
+        res.append(t)
+    if len(res) == 1:
+        return res[0]
+    return tuple(res)
+
+
+def atleast_2d(*tensors):
+    r'''
+    Returns a view (or the original) of each input with at least 2 dimensions.
+
+    Scalars become shape ``(1, 1)`` and 1-D inputs of shape ``(N,)`` become
+    ``(1, N)``. Mirrors ``torch.atleast_2d``: a single input returns a single
+    Var, multiple inputs return a tuple of Vars.
+
+    Args:
+
+        tensors – one or more Vars (or values castable to Var).
+    '''
+    res = []
+    for t in tensors:
+        if not isinstance(t, jt.Var):
+            t = jt.array(t)
+        if t.ndim == 0:
+            t = t.reshape(1, 1)
+        elif t.ndim == 1:
+            t = t.reshape(1, t.shape[0])
+        res.append(t)
+    if len(res) == 1:
+        return res[0]
+    return tuple(res)
+
+
+def atleast_3d(*tensors):
+    r'''
+    Returns a view (or the original) of each input with at least 3 dimensions.
+
+    Following ``torch.atleast_3d``: scalars become shape ``(1, 1, 1)``, 1-D
+    inputs of shape ``(N,)`` become ``(1, N, 1)``, and 2-D inputs of shape
+    ``(M, N)`` become ``(M, N, 1)``. A single input returns a single Var,
+    multiple inputs return a tuple of Vars.
+
+    Args:
+
+        tensors – one or more Vars (or values castable to Var).
+    '''
+    res = []
+    for t in tensors:
+        if not isinstance(t, jt.Var):
+            t = jt.array(t)
+        if t.ndim == 0:
+            t = t.reshape(1, 1, 1)
+        elif t.ndim == 1:
+            t = t.reshape(1, t.shape[0], 1)
+        elif t.ndim == 2:
+            t = t.reshape(t.shape[0], t.shape[1], 1)
+        res.append(t)
+    if len(res) == 1:
+        return res[0]
+    return tuple(res)
+
+
+def cartesian_prod(*tensors):
+    r'''
+    Do cartesian product of the given sequence of 1-D Vars. Equivalent to
+    ``itertools.product`` on the inputs. Mirrors ``torch.cartesian_prod``.
+
+    Args:
+
+        tensors – one or more 1-D Vars.
+
+    Returns:
+
+        A Var of shape ``(prod(len_i), N)`` where ``N`` is the number of inputs.
+        With a single 1-D input, a 1-D Var is returned (matching torch).
+    '''
+    norm = []
+    for t in tensors:
+        if not isinstance(t, jt.Var):
+            t = jt.array(t)
+        assert t.ndim == 1, "cartesian_prod only accepts 1-D Vars"
+        norm.append(t)
+    if len(norm) == 1:
+        return norm[0]
+    grids = meshgrid(norm)
+    cols = [g.reshape(-1, 1) for g in grids]
+    return jt.concat(cols, dim=1)
+
+
+def block_diag(*tensors):
+    r'''
+    Create a block diagonal matrix from the provided Vars. Mirrors
+    ``torch.block_diag``: each input may be 0-D, 1-D or 2-D; 0-D/1-D inputs are
+    treated as a single row, and the result is a 2-D matrix whose diagonal
+    blocks are the inputs (off-diagonal entries are zero).
+
+    Args:
+
+        tensors – one or more Vars with at most 2 dimensions.
+    '''
+    norm = []
+    for t in tensors:
+        if not isinstance(t, jt.Var):
+            t = jt.array(t)
+        if t.ndim == 0:
+            t = t.reshape(1, 1)
+        elif t.ndim == 1:
+            t = t.reshape(1, t.shape[0])
+        elif t.ndim > 2:
+            raise ValueError(
+                "block_diag: input tensors must have at most 2 dimensions, "
+                f"got {t.ndim}")
+        norm.append(t)
+
+    total_rows = sum(t.shape[0] for t in norm)
+    total_cols = sum(t.shape[1] for t in norm)
+    if total_rows == 0 or total_cols == 0:
+        dtype = norm[0].dtype if norm else "float32"
+        return jt.zeros((total_rows, total_cols), dtype)
+
+    rows = []
+    col_offset = 0
+    for t in norm:
+        r, c = t.shape
+        left = col_offset
+        right = total_cols - col_offset - c
+        pieces = []
+        if left > 0:
+            pieces.append(jt.zeros((r, left), t.dtype))
+        pieces.append(t)
+        if right > 0:
+            pieces.append(jt.zeros((r, right), t.dtype))
+        row = pieces[0] if len(pieces) == 1 else jt.concat(pieces, dim=1)
+        rows.append(row)
+        col_offset += c
+
+    return rows[0] if len(rows) == 1 else jt.concat(rows, dim=0)

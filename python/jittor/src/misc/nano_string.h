@@ -28,6 +28,7 @@ constexpr int ns_max_len = 16;
     m(float32) \
     m(float64) \
     m(bfloat16) \
+    m(complex64) \
 \
     m(pow) \
     m(maximum) \
@@ -56,6 +57,7 @@ constexpr int ns_max_len = 16;
 \
     m(abs) \
     m(negative) \
+    m(conj) \
     m(logical_not) \
     m(bitwise_not) \
     m(log) \
@@ -123,6 +125,8 @@ struct NanoString {
         // bit9: backward opt
         _no_need_back_in=_n+9,
         _no_need_back_out=_n+10,
+        // bit11: is complex (real/imag pair; _float/_int both 0)
+        _complex=_n+11,
     };
     ns_t data=0;
 
@@ -145,7 +149,7 @@ struct NanoString {
     // @pyjt(is_floating_point)
     inline bool is_floating_point() const { return get(_float); }
     // @pyjt(is_complex)
-    inline bool is_complex() const { return false; }
+    inline bool is_complex() const { return get(_complex); }
     // @pyjt(is_float)
     inline bool is_float() const { return get(_float); }
     inline ns_t is_white() const { return get(_white_list); }
@@ -160,6 +164,14 @@ struct NanoString {
     // @pyjt(__init__)
     inline NanoString(const char* s) {
         auto iter = __string_to_ns.find(s);
+        if (iter == __string_to_ns.end() && s &&
+            s[0]=='t'&&s[1]=='o'&&s[2]=='r'&&s[3]=='c'&&s[4]=='h'&&s[5]=='.') {
+            // Tolerate torch-style dtype names that the torch-compat shim
+            // (`import jittor as torch`) leaks into jittor internals via
+            // str(Var.dtype), e.g. "torch.bfloat16" -> "bfloat16". Only a
+            // subset resolved before; strip the prefix uniformly.
+            iter = __string_to_ns.find(s+6);
+        }
         ASSERT(iter != __string_to_ns.end()) << s;
         data = iter->second.data;
     }
@@ -221,6 +233,7 @@ inline NanoString int_dtype(int dsize_) {
 }
 
 inline  NanoString dtype_infer(NanoString x, NanoString y, bool xscalar=false, bool yscalar=false) {
+    if (x.is_complex() || y.is_complex()) return ns_complex64;  // complex propagates
     int dsize_ = std::max(x.dsize_(), y.dsize_());
     if (xscalar) dsize_ = y.dsize_();
     if (yscalar) dsize_ = x.dsize_();
@@ -235,7 +248,8 @@ inline  NanoString dtype_infer(NanoString x, NanoString y, bool xscalar=false, b
 
 // @pyjt(binary_dtype_infer)
 inline NanoString binary_dtype_infer(NanoString op, NanoString x, NanoString y, bool xscalar=false, bool yscalar=false) {
-    if (op.is_bool()) return ns_bool;
+    if (op.is_bool()) return ns_bool;   // comparisons -> bool even for complex
+    if (x.is_complex() || y.is_complex()) return ns_complex64;  // complex arithmetic
     int dsize_ = std::max(x.dsize_(), y.dsize_());
     if (xscalar) dsize_ = y.dsize_();
     if (yscalar) dsize_ = x.dsize_();
@@ -254,6 +268,7 @@ inline NanoString binary_dtype_infer(NanoString op, NanoString x, NanoString y, 
 
 inline NanoString unary_dtype_infer(NanoString op, NanoString x) {
     if (op.is_bool()) return ns_bool;
+    if (x.is_complex()) return (op==ns_abs) ? ns_float32 : ns_complex64;  // |z|->float
     int dsize_ = x.dsize_();
     if (op.is_float()) {
         if (op.is_white() && !(amp_reg & amp_keep_white))
@@ -265,6 +280,11 @@ inline NanoString unary_dtype_infer(NanoString op, NanoString x) {
 }
 
 inline NanoString reduce_dtype_infer(NanoString op, NanoString x) {
+    // complex reductions stay complex (sum/mean/prod). Without this, mean -- which is in
+    // float_ops -- forces a float output dtype, so the kernel tries to assign a complex64
+    // accumulator into a double and fails to compile. (sum works already because 'add' is
+    // not a float_op.)
+    if (x.is_complex()) return ns_complex64;
     bool is_float = x.is_float() || op.is_float();
     int dsize_ = x.dsize_();
     if (is_float) {

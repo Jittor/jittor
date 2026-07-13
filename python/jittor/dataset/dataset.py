@@ -15,7 +15,17 @@ import os
 from jittor.dataset.utils import get_random_list, get_order_list, collate_batch, HookTimer
 from collections.abc import Sequence, Mapping
 import pathlib
-from PIL import Image
+try:
+    from PIL import Image
+    _has_pil = True
+except ImportError:
+    class _MissingPIL:
+        def __getattr__(self, name):
+            raise ImportError(
+                "PIL (Pillow) is required for image dataset operations. "
+                "Please install it with `pip install pillow`.")
+    Image = _MissingPIL()
+    _has_pil = False
 import multiprocessing as mp
 import signal
 from jittor_utils import LOG
@@ -26,7 +36,13 @@ import jittor_utils as jit_utils
 dataset_root = os.path.join(jit_utils.home(), ".cache", "jittor", "dataset")
 mp_log_v = os.environ.get("mp_log_v", 0) 
 mpi = jt.mpi
-img_open_hook = HookTimer(Image, "open")
+if _has_pil:
+    img_open_hook = HookTimer(Image, "open")
+else:
+    # PIL is optional; provide a no-op timer so worker status logging still works.
+    class _NoopTimer:
+        duration = 0.0
+    img_open_hook = _NoopTimer()
 CHECK_MEMORY = int(os.environ.get("CHECK_MEMORY", "0"))
 
 if os.name == "nt":
@@ -112,7 +128,11 @@ class Dataset(object):
                  buffer_size = 512*1024*1024,
                  stop_grad = True,
                  keep_numpy_array = False,
-                 endless = False):
+                 endless = False,
+                 collate_fn = None,
+                 worker_init_fn = None,
+                 pin_memory = False,
+                 persistent_workers = False):
         super().__init__()
         if os.environ.get("DISABLE_MULTIPROCESSING", '0') == '1':
             num_workers = 0
@@ -125,6 +145,14 @@ class Dataset(object):
         self.stop_grad = stop_grad
         self.keep_numpy_array = keep_numpy_array
         self.endless = endless
+        # torch-compatible options (additive). collate_fn overrides the
+        # default collate_batch when provided; worker_init_fn is called
+        # once per worker process after seeding; pin_memory / persistent_workers
+        # mirror torch's DataLoader semantics.
+        self.collate_fn = collate_fn
+        self.worker_init_fn = worker_init_fn
+        self.pin_memory = pin_memory
+        self.persistent_workers = persistent_workers
         self.epoch_id = 0
         self.sampler = None
         self._disable_workers = False
@@ -201,7 +229,12 @@ class Dataset(object):
 
         [in] batch(list): A list of variables, such as jt.var, Image.Image, np.ndarray, int, float, str and so on.
 
+        Note: if a ``collate_fn`` was provided (torch-compatible), it is used
+        instead of the default collate logic.
         '''
+        collate_fn = getattr(self, "collate_fn", None)
+        if collate_fn is not None:
+            return collate_fn(batch)
         return collate_batch(batch)
 
     def terminate(self):
@@ -221,6 +254,11 @@ class Dataset(object):
         seed = jt.get_seed()
         wseed = (seed ^ (worker_id*1167)) ^ 1234
         jt.set_global_seed(wseed)
+        # torch-compatible: run user worker init hook once per worker process,
+        # after seeding so users can re-seed deterministically if desired.
+        worker_init_fn = getattr(self, "worker_init_fn", None)
+        if worker_init_fn is not None:
+            worker_init_fn(worker_id)
         # parallel_op_compiler still problematic,
         # it is not work on ubuntu 16.04. but worked on ubuntu 20.04
         # it seems like the static value of parallel compiler
@@ -268,7 +306,7 @@ class Dataset(object):
                     print(f"#{worker_id} {os.getpid()} send", type(batch).__name__, [ type(b).__name__ for b in batch ], buffer)
                 try:
                     buffer.send(batch)
-                except:
+                except Exception:
                     if buffer.is_stop():
                         continue
                     raise
@@ -280,7 +318,7 @@ class Dataset(object):
                     other_time + data_time + send_time, \
                     img_open_hook.duration
                 img_open_hook.duration = 0.0
-        except:
+        except Exception:
             import traceback
             line = traceback.format_exc()
             print(line)
@@ -414,7 +452,7 @@ Example::
             print("dataset deleted")
         try:
             self.terminate()
-        except:
+        except Exception:
             pass
 
     def __deepcopy__(self, memo=None, _nil=[]):

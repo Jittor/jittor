@@ -429,8 +429,9 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
             need_broadcast = true;
             continue;
         }
-        CHECKop(xshape,==,yshape) << "Shape not match, x:" >> x->to_string()
-            << " y:" >> y->to_string();
+        CHECKop(xshape,==,yshape) << "Shape not match for binary op '" >> op.to_cstring()
+            >> "', x:" >> x->to_string() << " y:" >> y->to_string()
+            << "(broadcasting requires matching dims or one of them to be 1).";
     }
     if (need_broadcast) {
         auto xp = make_broadcast_to(x, y, {});
@@ -456,6 +457,18 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
     set_type(OpType::element);
     ns = op;
     ASSERT(ns.is_binary());
+    // Bitwise/shift ops are only defined for integer/boolean dtypes. On a float input the
+    // generated kernel hits a raw C++ "invalid operands ... to binary operator&" g++ wall
+    // (the user never sees the word "dtype"). Guard early with a clear message instead.
+    if (ns==ns_bitwise_and || ns==ns_bitwise_or || ns==ns_bitwise_xor ||
+        ns==ns_left_shift || ns==ns_right_shift) {
+        bool x_ok = x->dtype().is_int() || x->dtype().is_bool();
+        bool y_ok = y->dtype().is_int() || y->dtype().is_bool();
+        CHECK(x_ok && y_ok) << "Binary op '" >> op.to_cstring() >>
+            "' requires integer or boolean dtypes, but got x:" >> x->dtype().to_cstring() <<
+            "y:" >> y->dtype().to_cstring() <<
+            "(bitwise/shift ops are not defined for floating-point or complex types).";
+    }
     z = create_output(x->shape, binary_dtype_infer(op, x->ns, y->ns, x->flags.get(NodeFlags::_is_scalar), y->flags.get(NodeFlags::_is_scalar)));
     bool bin = ns.get(NanoString::_no_need_back_in);
     bool bout = ns.get(NanoString::_no_need_back_out);
@@ -497,20 +510,36 @@ VarPtr BinaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
             return make_unary(dout, ns_negative);
     }
     if (ns == ns_multiply) {
-        if (v_index == 0) 
-            return make_binary(dirty_clone_broadcast(y), dirty_clone_broadcast(dout), ns_multiply);
-        else
-            return make_binary(dirty_clone_broadcast(x), dirty_clone_broadcast(dout), ns_multiply);
+        Var* other = (v_index == 0) ? y : x;
+        if (!z->dtype().is_complex())
+            return make_binary(dirty_clone_broadcast(other), dirty_clone_broadcast(dout), ns_multiply);
+        // complex (verified vs real torch 2.12): grad_a = dout*conj(b), grad_b = dout*conj(a)
+        auto co = make_unary(dirty_clone_broadcast(other), ns_conj);
+        return make_binary(co, dirty_clone_broadcast(dout), ns_multiply);
     }
     if (ns == ns_divide) {
-        if (v_index == 0) 
-            return make_binary(dout, y, ns_divide);
+        if (!z->dtype().is_complex()) {
+            if (v_index == 0)
+                return make_binary(dout, y, ns_divide);
+            else {
+                // dy = -dz*x / y^2
+                auto ndz = make_unary(dout, ns_negative);
+                auto ndzx = make_binary(ndz, x, ns_multiply);
+                auto y2 = make_binary(y, y, ns_multiply);
+                return make_binary(ndzx, y2, ns_divide);
+            }
+        }
+        // complex (verified vs real torch 2.12): grad_a = dout/conj(y),
+        //   grad_b = -dout*conj(x)/conj(y)^2
+        auto cy = make_unary(y, ns_conj);
+        if (v_index == 0)
+            return make_binary(dout, cy, ns_divide);
         else {
-            // dy = -dz*x / y^2
             auto ndz = make_unary(dout, ns_negative);
-            auto ndzx = make_binary(ndz, x, ns_multiply);
-            auto y2 = make_binary(y, y, ns_multiply);
-            return make_binary(ndzx, y2, ns_divide);
+            auto cx = make_unary(x, ns_conj);
+            auto ndzx = make_binary(ndz, cx, ns_multiply);
+            auto cy2 = make_binary(cy, cy, ns_multiply);
+            return make_binary(ndzx, cy2, ns_divide);
         }
     }
     if (ns == ns_mod) {

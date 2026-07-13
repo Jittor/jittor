@@ -34,7 +34,14 @@ inline __device__ float16 max(float16 a, float16 b) { return float(a)<float(b)?b
 inline __device__ float16 min(float16 a, float16 b) { return float(a)<float(b)?a:b; }
 #endif
 
-inline __device__ float16 pow(float16 a, float16 b) { return ::pow(float32(a), float32(b)); }
+// sign-aware pow: CUDA ::pow returns NaN for a negative base even when the
+// exponent is integer-valued (and fast-math makes it worse). Match std::pow.
+inline __device__ float32 _signed_powf(float32 x, float32 y) {
+    if (x < 0 && ::floorf(y) == y)
+        return ::powf(-x, y) * (::fmodf(y, 2.0f) != 0.0f ? -1.0f : 1.0f);
+    return ::powf(x, y);
+}
+inline __device__ float16 pow(float16 a, float16 b) { return float16(_signed_powf(float32(a), float32(b))); }
 
 
 #ifndef IS_ROCM
@@ -49,7 +56,7 @@ inline __device__ bfloat16 max(bfloat16 a, bfloat16 b) { return float(a)<float(b
 inline __device__ bfloat16 min(bfloat16 a, bfloat16 b) { return float(a)<float(b)?a:b; }
 #endif
 
-inline __device__ bfloat16 pow(bfloat16 a, bfloat16 b) { return ::pow(float32(a), float32(b)); }
+inline __device__ bfloat16 pow(bfloat16 a, bfloat16 b) { return bfloat16(_signed_powf(float32(a), float32(b))); }
 #endif
 template<int nbyte, class T>
 __device__ inline

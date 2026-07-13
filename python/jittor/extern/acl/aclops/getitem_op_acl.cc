@@ -111,7 +111,15 @@ namespace jittor
 
     void IndexPutImplAccumulateOpRunner::executeOp(std::unordered_map<string, AclOpFunctions>::iterator &it)
     {
+        // inputs: values(0), index0(1), index1(2), ...
+        // output: out(0)  -- scatter-accumulate `values` into a zeroed `out` at
+        // the indices. We zero `out` ourselves (aclrtMemsetAsync on aclstream)
+        // instead of relying on an externally-zeroed output buffer: that buffer
+        // was a write-only `output` whose zero-fill Jittor did not track as a
+        // dependency, so it could be ordered after this accumulate or reuse a
+        // stale buffer -> wrong, run-order-dependent gradients.
         auto input_num = in_.size();
+        aclrtMemsetAsync(out_[0]->mem_ptr, out_[0]->size, 0, out_[0]->size, aclstream);
         std::vector<aclTensor *> indexTensorList = {};
         for (int i = 1; i < input_num; i++)
         {

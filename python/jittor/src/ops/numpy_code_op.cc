@@ -9,6 +9,7 @@
 // ***************************************************************
 #include <cmath>
 #include "var.h"
+#include "mem/allocator.h"
 #include "ops/numpy_code_op.h"
 #include "ops/op_register.h"
 
@@ -126,7 +127,26 @@ void NumpyCodeOp::run() {
     result.varrays = _results.varrays;
     result.ints = _results.ints;
     result.arrays = _results.arrays;
-    
+
+#ifdef IS_ACL
+    // On Ascend ACL the numpy callback runs on the HOST, but a Var's mem_ptr is a device
+    // address the host cannot dereference -> migrate every operand to host first (mirrors
+    // fallback_cpu in extern/acl/acl_op_exec.cc). Outputs then live in host (cpu) memory
+    // and jittor re-migrates them to device for downstream ACL ops. Gated #ifdef IS_ACL so
+    // the CUDA build (host-accessible managed memory) is unchanged. Unblocks all
+    // jt.numpy_code consumers on NPU (linalg cholesky/inv/svd/eigh/solve/det, MVN, ...).
+    auto _acl_to_host = [](Var* v) {
+        if (v && v->mem_ptr && v->allocator && v->allocator->is_cuda())
+            migrate_to_cpu(v, cpu_allocator);
+    };
+    for (auto v : _inputs) _acl_to_host(v);
+    for (auto v : _outputs) _acl_to_host(v);
+    if (result.arrays.count("dout") > 0)
+        _acl_to_host((Var*)result.arrays["dout"].ptr);
+    if (result.varrays.count("f_outputs") > 0)
+        for (auto& dv : result.varrays["f_outputs"]) _acl_to_host((Var*)dv.ptr);
+#endif
+
     if (result.arrays.count("dout") > 0) {
         auto &ptr = result.arrays["dout"].ptr;
         ptr = ((Var*)ptr)->mem_ptr;

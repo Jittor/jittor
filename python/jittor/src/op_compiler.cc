@@ -229,7 +229,23 @@ string expand_op_search(const vector<string>& args) {
         if (ret.size())
             return ret;
     }
-    LOGf << "No expand op pattern found for args:" << args;
+    // No registered OpByType provides a kernel for this op on these dtypes.
+    // Emit a clear, user-facing message — this most commonly means the op is not
+    // yet implemented for a particular dtype (e.g. complex64 / float16 / bfloat16)
+    // — rather than the internal "No expand op pattern" wording, which reads like
+    // an unrelated compiler bug once it is wrapped by the JIT compile error.
+    string op = args.size() ? args[0] : string("?");
+    unordered_set<string> seen;
+    string dts;
+    for (size_t i=1; i<args.size(); i+=2) {  // args = [op, T0,e0, T1,e1, ...]: dtypes at odd indices
+        if (!seen.insert(args[i]).second) continue;
+        if (dts.size()) dts += ", ";
+        dts += args[i];
+    }
+    LOGf << "Op '" + op + "' is not supported for dtype(s): {" + dts + "}."
+            " No compute kernel is registered for this operation on this dtype"
+            " (it is most likely not implemented yet for this dtype)."
+            " Internal codegen args:" << args;
     return "";
 }
 

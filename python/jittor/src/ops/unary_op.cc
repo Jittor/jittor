@@ -855,6 +855,22 @@ static unordered_set<string> unary_ops = {
         jt.Var([ 0.00245671 -0.24068035  0.8805613   0.5242405 ], dtype=float32)
      */
     "erfinv",
+
+    /**
+    Returns the complex conjugate of each element. For complex64 inputs this
+    negates the imaginary part (a+bi -> a-bi); for real inputs it is a no-op
+    (identity), matching torch.conj / Tensor.conj semantics.
+
+    * [in] x: the input jt.Var.
+
+    ----------------
+
+    Example-1::
+        >>> x = jt.array(np.array([1+2j, 3-4j], dtype="complex64"))
+        >>> x.conj()
+        jt.Var([1.-2.j 3.+4.j], dtype=complex64)
+     */
+    "conj",
 };
 
 UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
@@ -889,9 +905,46 @@ UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
 }
 
 VarPtr UnaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
+    if (x->dtype().is_complex()) {
+        // Complex autograd (verified vs real torch 2.12): only the linear / conjugate
+        // unaries are implemented. Others return nullptr (loud no-grad, never silent-wrong).
+        if (ns == ns_cast && y->dtype().is_float())
+            return make_unary(dout, x->dtype());  // d(real-cast z) -> real dout + 0j
+        if (ns == ns_negative) return make_unary(dout, ns_negative);  // d(-z) -> -dout
+        if (ns == ns_conj) return make_unary(dout, ns_conj);          // d(conj z) -> conj(dout)
+        if (ns == ns_abs) {
+            // |z| backward (torch): grad_z = dout * z/|z|  (out == |z|, dout is real).
+            auto zoverabs = make_binary(x, out, ns_divide);   // complex z / float |z|
+            return make_binary(dout, zoverabs, ns_multiply);  // float dout * complex -> complex
+        }
+        // holomorphic unaries: grad = dout * conj(f'(z))  (verified vs real torch 2.12)
+        if (ns == ns_exp)   // f' = exp(z) = out
+            return make_binary(dout, make_unary(out, ns_conj), ns_multiply);
+        if (ns == ns_log)   // f' = 1/z  ->  dout / conj(z)
+            return make_binary(dout, make_unary(x, ns_conj), ns_divide);
+        if (ns == ns_sqrt) {  // f' = 1/(2 sqrt z)  ->  dout / (2 conj(out))
+            auto c = make_unary(out, ns_conj);
+            auto two = make_number(2, dout);
+            return make_binary(dout, make_binary(c, two, ns_multiply), ns_divide);
+        }
+        if (ns == ns_sin) {  // f' = cos z
+            auto cs = make_unary(x, ns_cos);
+            return make_binary(dout, make_unary(cs, ns_conj), ns_multiply);
+        }
+        if (ns == ns_cos) {  // f' = -sin z
+            auto sn = make_unary(x, ns_sin);
+            auto m = make_binary(dout, make_unary(sn, ns_conj), ns_multiply);
+            return make_unary(m, ns_negative);
+        }
+        return nullptr;
+    }
     if (!x->is_float()) return nullptr;
     if (ns == ns_cast) return make_unary(dout, x->dtype());
     if (ns == ns_negative) return make_unary(dout, ns);
+    // conj is self-adjoint: d/dx conj(x) carries dout back through conj. For real
+    // x (is_float, reaches here) conj is identity so this is just dout; complex x
+    // is filtered out above by the !is_float guard (complex grad deferred).
+    if (ns == ns_conj) return make_unary(dout, ns_conj);
     if (ns == ns_abs) {
         auto neg = make_unary(dout, ns_negative);
         auto zeros = make_number(0, x);

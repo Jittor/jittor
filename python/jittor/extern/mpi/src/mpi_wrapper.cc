@@ -216,7 +216,14 @@ mpi_initer() {
     if (!inside_mpi) return;
     mpi_enabled = true;
     LOGvv << "MPI init...";
-    MPI_CHECK(MPI_Init(NULL, NULL));
+    // MPI may already be initialized by another component in the process
+    // (e.g. mpi4py, used on Ascend to bring MPI up BEFORE the CANN libs load
+    // and avoid an ABI/symbol clash). Double MPI_Init is a fatal error, so
+    // only initialize if needed.
+    int already_inited = 0;
+    MPI_Initialized(&already_inited);
+    if (!already_inited)
+        MPI_CHECK(MPI_Init(NULL, NULL));
     MPI_CHECK(MPI_Comm_size(MPI_COMM_WORLD, &mpi_world_size));
     MPI_CHECK(MPI_Comm_rank(MPI_COMM_WORLD, &mpi_world_rank));
 

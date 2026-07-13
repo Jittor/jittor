@@ -62,6 +62,7 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
     L, S = query.size(-2), key.size(-2)
     scale_factor = 1 / math.sqrt(query.size(-1)) if scale is None else scale
     attn_bias = jt.zeros(L, S, dtype=query.dtype)
+    mask_row_valid = None
     if is_causal:
         assert attn_mask is None
         temp_mask = jt.ones(L, S, dtype=jt.bool).tril(diagonal=0)
@@ -71,12 +72,24 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
 
     if attn_mask is not None:
         if attn_mask.dtype == jt.bool:
-            attn_bias[jt.logical_not(temp_mask)] = float("-inf")
+            mask_row_valid = attn_mask.sum(-1, keepdims=True) > 0
+            zero_bias = jt.zeros_like(attn_mask, dtype=query.dtype)
+            mask_bias = jt.ternary(
+                attn_mask, zero_bias, zero_bias + float("-inf"))
+            attn_bias = attn_bias + mask_bias
         else:
-            attn_bias += attn_mask
+            neg_inf = jt.isinf(attn_mask) & (attn_mask < 0)
+            mask_row_valid = neg_inf.sum(-1, keepdims=True) < attn_mask.shape[-1]
+            attn_bias = attn_bias + attn_mask
     attn_weight = query @ key.transpose(-2, -1) * scale_factor
     attn_weight += attn_bias
+    if mask_row_valid is not None:
+        attn_weight = jt.ternary(
+            mask_row_valid, attn_weight, jt.zeros_like(attn_weight))
     attn_weight = softmax(attn_weight, dim=-1)
+    if mask_row_valid is not None:
+        attn_weight = jt.ternary(
+            mask_row_valid, attn_weight, jt.zeros_like(attn_weight))
     attn_weight = dropout(attn_weight, dropout_p, is_train=True)
     return attn_weight @ value
 
@@ -388,7 +401,7 @@ def multi_head_attention_forward(
             attn_output_weights = jt.bmm(q_scaled, k.transpose(-2, -1))
         attn_output_weights = softmax(attn_output_weights, dim=-1)
         if dropout_p > 0.0:
-            attn_output_weights = dropout(attn_output_weights, p=dropout_p)
+            attn_output_weights = dropout(attn_output_weights, p=dropout_p, is_train=True)
 
         attn_output = jt.bmm(attn_output_weights, v)
 

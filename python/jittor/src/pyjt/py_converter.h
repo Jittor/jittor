@@ -237,7 +237,11 @@ struct NanoString;
 EXTERN_LIB PyTypeObject PyjtNanoString;
 DEF_IS(NanoString, bool) is_type(PyObject* obj) {
     return Py_TYPE(obj) == &PyjtNanoString ||
-        PyUnicode_CheckExact(obj) ||
+        // PyUnicode_Check (not CheckExact) so str SUBCLASSES are accepted too:
+        // torch_compat's `dtype` is a str subclass whose underlying value is the
+        // bare jittor name ("float32"), fed back into NanoString params by
+        // jittor's own python (contrib.concat/linalg/nn do str(var.dtype)).
+        PyUnicode_Check(obj) ||
         PyType_CheckExact(obj) ||
         // jt.float.__name__
         PyCallable_Check(obj) ||
@@ -255,7 +259,7 @@ DEF_IS(NanoString, PyObject*) to_py_object(T a) {
 DEF_IS(NanoString, T) from_py_object(PyObject* obj) {
     if (Py_TYPE(obj) == &PyjtNanoString)
         return *GET_RAW_PTR(T, obj);
-    if (PyUnicode_CheckExact(obj))
+    if (PyUnicode_Check(obj))   // str or str subclass (e.g. torch_compat dtype)
         return T(PyUnicode_AsUTF8(obj));
     // PyType
     if (PyType_CheckExact(obj))
@@ -274,8 +278,12 @@ DEF_IS(NanoString, T) from_py_object(PyObject* obj) {
 struct NanoVector;
 EXTERN_LIB PyTypeObject PyjtNanoVector;
 DEF_IS(NanoVector, bool) is_type(PyObject* obj) {
+    // Accept tuple/list SUBCLASSES too (e.g. torch.Size from the torch-compat
+    // shim is `class Size(tuple)`). Exact-only checks raised on shape compares
+    // (`var.shape != torch.Size(...)`) and rejected torch.Size as a shape arg.
+    // Subclasses share the tuple/list C layout, so PySequence_Fast_ITEMS works.
     return Py_TYPE(obj) == &PyjtNanoVector ||
-        PyList_CheckExact(obj) || PyTuple_CheckExact(obj);
+        PyList_Check(obj) || PyTuple_Check(obj);
 }
 DEF_IS(NanoVector*, bool) is_type(PyObject* obj) {
     return Py_TYPE(obj) == &PyjtNanoVector;
@@ -882,11 +890,15 @@ void load_var_slice(PyObject* obj, T* var_slice, vector<unique_ptr<VarHolder>>& 
         var_slice->set_none();
     } else
     if (PyObject_TypeCheck(obj, PyNumberArrType_Type)) {
-        PyArrayDescr_Proxy array_descr;
-        array_descr.type_num = 5; // 5: int32
-        int value;
-        PyArray_CastScalarToCtype(obj, &value, &array_descr);
-        var_slice->set_int(value);
+        // numpy scalar index (np.int64/np.int32/np.float64/np.bool_ ...).
+        // Old code fabricated a numpy-1.x PyArrayDescr_Proxy on the stack and
+        // called PyArray_CastScalarToCtype, which faults on numpy>=2 because the
+        // PyArray_Descr layout changed. All numpy number scalars support
+        // PyNumber_Long, which matches the old int32-cast semantics (float
+        // scalars truncate toward zero like numpy-1.x did), without depending on
+        // numpy's internal Descr ABI.
+        PyObjHolder l(PyNumber_Long(obj));
+        var_slice->set_int(PyLong_AsLong(l.obj));
     } else {
         holders.emplace_back();
         auto* vh = from_py_object<VarHolder*>(obj, holders.back());

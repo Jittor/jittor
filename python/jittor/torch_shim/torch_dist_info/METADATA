@@ -1,0 +1,4 @@
+Metadata-Version: 2.1
+Name: torch
+Version: 2.11.0
+Summary: jittor torch-compat shim (import jittor as torch)

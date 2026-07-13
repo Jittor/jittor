@@ -12,8 +12,20 @@ namespace jittor {
 unordered_map<string, OpInfo> op_info_map;
 
 void op_registe(const OpInfo& op_info) {
-    ASSERT(!has_op(op_info.name)) << "Op" << op_info.name << "is already registed, "
-        << "source_path:" << op_info.source_path << "extra_flags" << op_info.extra_flags;
+    if (has_op(op_info.name)) {
+        string op_file_name = Op::op_name_to_file_name(op_info.name);
+        auto iter = op_info_map.find(op_file_name);
+        if (iter != op_info_map.end() && iter->second.source_path == op_info.source_path) {
+            LOGvv << "replace duplicated op registration" << op_info.name
+                << "\nsource_path:" << op_info.source_path
+                << "\nextra_flags:" << op_info.extra_flags
+                << "\nold_extra_flags:" << iter->second.extra_flags;
+            iter->second = op_info;
+            return;
+        }
+        ASSERT(false) << "Op" << op_info.name << "is already registed, "
+            << "source_path:" << op_info.source_path << "extra_flags" << op_info.extra_flags;
+    }
     LOGvv << "registe op" << op_info.name
         << "\nsource_path:" << op_info.source_path
         << "\nextra_flags:" << op_info.extra_flags

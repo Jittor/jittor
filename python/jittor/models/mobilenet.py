@@ -94,8 +94,8 @@ class MobileNetV2(nn.Module):
     def execute(self, x):
         return self._forward_impl(x)
 
-def mobilenet_v2(pretrained=False):
-    model = MobileNetV2()
+def mobilenet_v2(pretrained=False, **kwargs):
+    model = MobileNetV2(**kwargs)
     if pretrained: model.load("jittorhub://mobilenet_v2.pkl")
     return model
 

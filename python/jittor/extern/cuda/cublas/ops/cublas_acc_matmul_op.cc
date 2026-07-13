@@ -17,6 +17,7 @@ using namespace std;
 namespace jittor {
 
 extern int use_tensorcore;
+extern int cuda_allow_tf32;
 
 #ifndef JIT
 
@@ -28,9 +29,12 @@ CublasAccMatmulOp::CublasAccMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b,
     a->flags.set(NodeFlags::_needed_by_backward);
     b->flags.set(NodeFlags::_needed_by_backward);
     // TODO: support int8 * int8
-    ASSERT(a->dtype().is_float() && b->dtype().is_float()) << "type of two inputs should be the same";
+    ASSERT(a->dtype().is_float() && b->dtype().is_float())
+        << "cublas matmul requires floating-point inputs (float16/float32/float64), but got a:"
+        << a->dtype() << "b:" << b->dtype();
     // TODO: support diffrent input type
-    ASSERT(a->dtype().dsize() == b->dtype().dsize()) << "type of two inputs should be the same";
+    ASSERT(a->dtype().dsize() == b->dtype().dsize())
+        << "matmul inputs must have the same dtype, but got a:" << a->dtype() << "b:" << b->dtype();
     c = create_output(nullptr, a->dtype());
 }
 
@@ -80,9 +84,9 @@ void CublasAccMatmulOp::jit_run() {
     if ('@Trans_b'=='T') {
         k = bs[0];
     }
-    bool has_fp16_or_bf16 = a->dtype() == ns_float16
-        || b->dtype() == ns_float16 || c->dtype() == ns_float16
-        || a->dtype() == ns_bfloat16
+    bool has_fp16 = a->dtype() == ns_float16
+        || b->dtype() == ns_float16 || c->dtype() == ns_float16;
+    bool has_bf16 = a->dtype() == ns_bfloat16
         || b->dtype() == ns_bfloat16 || c->dtype() == ns_bfloat16;
 
     // a: [n,m], b: [m,k], c: [n,k]
@@ -93,11 +97,13 @@ void CublasAccMatmulOp::jit_run() {
         computeType = CUBLAS_COMPUTE_32F_FAST_16F;
     } else if (use_tensorcore==2) {
         computeType = CUBLAS_COMPUTE_32F_FAST_16BF;
-    } else if (use_tensorcore==1) {
+    } else if (use_tensorcore==1 || cuda_allow_tf32) {
         computeType = CUBLAS_COMPUTE_32F_FAST_TF32;
     }
-    if (has_fp16_or_bf16) {
+    if (has_fp16) {
         computeType = CUBLAS_COMPUTE_16F;
+    } else if (has_bf16) {
+        computeType = use_tensorcore ? CUBLAS_COMPUTE_32F_FAST_16BF : CUBLAS_COMPUTE_32F;
     }
     #else
     cublasGemmAlgo_t algo = CUBLAS_GEMM_DEFAULT;
@@ -105,8 +111,11 @@ void CublasAccMatmulOp::jit_run() {
     if (use_tensorcore) {
         algo = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
     }
-    if (has_fp16_or_bf16) {
+    if (has_fp16) {
         computeType = CUDA_R_16F;
+        algo = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+    } else if (has_bf16) {
+        computeType = CUDA_R_32F;
         algo = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
     }
     #endif

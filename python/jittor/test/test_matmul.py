@@ -222,6 +222,16 @@ class TestMatmul(unittest.TestCase):
             test_matmul2([500,500],[50,500], False, True)
 
     @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
+    def test_matmul_transpose_cuda_float(self):
+        with jt.flag_scope(use_cuda=1):
+            a = jt.random([16, 32])
+            b = jt.random([64, 32])
+            expected = np.matmul(a.data, b.data.transpose())
+            c = nn.matmul_transpose(a, b)
+            got = c.data
+            np.testing.assert_allclose(got, expected, atol=1e-5)
+
+    @unittest.skipIf(not jt.compiler.has_cuda, "No CUDA found")
     def test_backward_cuda(self):
         with jt.flag_scope(use_cuda=1):
             np.random.seed(0)

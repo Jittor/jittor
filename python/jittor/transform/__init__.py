@@ -10,7 +10,15 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-from PIL import Image
+try:
+    from PIL import Image
+except ImportError:
+    class _MissingPIL:
+        def __getattr__(self, name):
+            raise ImportError(
+                "PIL (Pillow) is required for jittor.transform image operations. "
+                "Please install it with `pip install pillow`.")
+    Image = _MissingPIL()
 import random
 import math
 import numpy as np
@@ -393,7 +401,7 @@ class CenterCrop:
         if not isinstance(img, Image.Image):
             img = to_pil_image(img)
         width, height = img.size
-        return crop(img, (height - self.size[0]) / 2, (width - self.size[1]) / 2, self.size[0], self.size[1])
+        return crop(img, int((height - self.size[0]) / 2), int((width - self.size[1]) / 2), self.size[0], self.size[1])
 
 def to_tensor(pic):
     """
@@ -413,7 +421,7 @@ def to_tensor(pic):
     
     if isinstance(pic, tuple):
         # try convert ten crop tuple
-        pic = ( to_tensor(pic) for p in pic )
+        pic = [ to_tensor(p) for p in pic ]
         pic = np.array(pic)
         return pic
     if not(F_pil._is_pil_image(pic) or _is_numpy(pic)):

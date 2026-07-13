@@ -12,6 +12,33 @@ import jittor as jt
 from functools import partial
 from .nn import ComplexNumber
 
+
+# ---------------------------------------------------------------------------
+# Native complex64 <-> nn.ComplexNumber bridge for the complex linalg ops
+# (Phase 6 "P4" of the ComplexNumber deprecation). The complex math itself
+# still lives in the ComplexNumber code paths below (complex_inv / complex_eig
+# / complex_qr / complex_svd / complex_eigh / complex_pinv); these helpers only
+# move a *native* complex64 Var across the P1 bridge (jt.nn.view_as_real /
+# jt.nn._real2_to_complex64) so every public entry point can ALSO take a native
+# complex64 input and return native complex64 output(s). No linear-algebra math
+# is reimplemented here.
+# ---------------------------------------------------------------------------
+def _is_native_complex(x):
+    # A native complex64 Var (NOT an nn.ComplexNumber, which is a plain object).
+    return isinstance(x, jt.Var) and "complex" in str(x.dtype)
+
+
+def _native_to_cn(z):
+    # native complex64 [...]  ->  nn.ComplexNumber (differentiable, via P1 bridge)
+    return ComplexNumber(jt.nn.view_as_real(z), is_concat_value=True)
+
+
+def _cn_to_native(cn):
+    # nn.ComplexNumber  ->  native complex64 [...]  (differentiable, via P1 bridge)
+    # cn.value is the float32 [..., 2] stack; _real2_to_complex64 rebuilds complex64.
+    return jt.nn._real2_to_complex64(cn.value)
+
+
 def complex_inv(x:ComplexNumber):
     r"""
     calculate the inverse of x.
@@ -80,6 +107,49 @@ def complex_eig(x:ComplexNumber):
         w, v = data["outputs"]
         tw, tv = np.linalg.eig(a)
         np.copyto(w, _complex_to_stack(tw))
+        np.copyto(v, _complex_to_stack(tv))
+
+    def backward_code(np, data):
+        raise NotImplementedError
+
+    sw = x.shape[:-2] + x.shape[-1:] + (2,)
+    sv = x.value.shape
+    w, v = jt.numpy_code(
+        [sw, sv],
+        [x.value.dtype, x.value.dtype],
+        [x.value],
+        forward_code,
+        [backward_code],
+    )
+    return ComplexNumber(w, is_concat_value=True), ComplexNumber(v, is_concat_value=True)
+
+def complex_eigh(x:ComplexNumber):
+    r"""
+    Hermitian eigendecomposition of a complex matrix (counterpart of the real
+    :func:`eigh`). ``x`` is assumed Hermitian; only the lower triangle is read
+    (``UPLO='L'``), matching the real ``eigh``. Returns ``(w, v)`` as
+    ``ComplexNumber``\ s for type-consistency with :func:`complex_eig`; the
+    eigenvalues ``w`` are mathematically real (carried with a zero imaginary
+    part). Forward-only (numpy), like ``complex_eig``/``complex_svd``.
+
+    :param x (...,M,M):
+    :return: w (...,M) eigenvalues, v (...,M,M) eigenvectors.
+    """
+    assert isinstance(x, ComplexNumber), "complex_eigh is implemented for nn.ComplexNumber"
+    assert x.real.dtype == jt.float32 and x.imag.dtype == jt.float32, "real and imag in ComplexNumber should be jt.float32"
+    assert x.shape[-2] == x.shape[-1], "only square matrix is supported for complex_eigh"
+    def forward_code(np, data):
+        def _stack_to_complex(x):
+            return x[..., 0] + 1j * x[..., 1]
+        def _complex_to_stack(x):
+            return np.stack([np.real(x), np.imag(x)], axis=-1)
+        a = _stack_to_complex(data["inputs"][0])
+        w, v = data["outputs"]
+        # np.linalg.eigh handles complex Hermitian natively: w real, v complex.
+        tw, tv = np.linalg.eigh(a, UPLO='L')
+        # carry the (real) eigenvalues as a complex stack (imag = 0) so the
+        # ComplexNumber wrapper round-trips cleanly through the P1 bridge.
+        np.copyto(w, _complex_to_stack(tw.astype(a.dtype)))
         np.copyto(v, _complex_to_stack(tv))
 
     def backward_code(np, data):
@@ -219,22 +289,58 @@ def complex_svd(x:ComplexNumber):
             ComplexNumber(s, is_concat_value=True), \
             ComplexNumber(v, is_concat_value=True)
 
-#TODO:full_matrices=1
-def svd(x):
+def complex_pinv(x:ComplexNumber):
+    r"""
+    Moore-Penrose pseudo-inverse of a complex matrix (counterpart of the real
+    :func:`pinv`). For ``x`` of shape ``(...,M,N)`` returns ``(...,N,M)``.
+    Forward-only (numpy ``np.linalg.pinv`` handles complex natively), wired
+    through the ComplexNumber machinery like ``complex_svd``/``complex_eig``.
+
+    :param x (...,M,N):
+    :return: x's pinv (...,N,M).
+    """
+    assert isinstance(x, ComplexNumber), "complex_pinv is implemented for nn.ComplexNumber"
+    assert x.real.dtype == jt.float32 and x.imag.dtype == jt.float32, "real and imag in ComplexNumber should be jt.float32"
+    def forward_code(np, data):
+        def _stack_to_complex(x):
+            return x[..., 0] + 1j * x[..., 1]
+        def _complex_to_stack(x):
+            return np.stack([np.real(x), np.imag(x)], axis=-1)
+        a = _stack_to_complex(data["inputs"][0])
+        m_a = data["outputs"][0]
+        t_a = np.linalg.pinv(a)
+        np.copyto(m_a, _complex_to_stack(t_a))
+
+    def backward_code(np, data):
+        raise NotImplementedError
+
+    # pinv transposes the last two dims (M,N) -> (N,M); the trailing 2 (re/im) stays.
+    sw = list(x.shape[:-2]) + [x.shape[-1], x.shape[-2]] + [2]
+    lmx = jt.numpy_code(
+        sw,
+        x.value.dtype,
+        [x.value],
+        forward_code,
+        [backward_code],
+    )
+    return ComplexNumber(lmx, is_concat_value=True)
+
+import collections as _collections
+# torch.linalg.svd / torch.svd both return a named (U, S, Vh) result. We make
+# jittor's svd return one too: it still unpacks as a plain 3-tuple `u, s, v` (so
+# every existing `u, s, v = svd(x)` / `_, s, _ = svd(x)` caller is untouched), but
+# it also exposes `.U`, `.S`, `.Vh` for torch-grade attribute access.
+SVD = _collections.namedtuple("svd", ["U", "S", "Vh"])
+INVEX = _collections.namedtuple("inv_ex", ["inverse", "info"])
+
+
+def _svd_reduced(x):
     r'''
-    calculate the Singular Value Decomposition of x.It follows the below fomula:
-    x = usv*
-    only support full matrices == False ver now, which means:
-    x's shape (...,M,K)
-    u's shape (...,M,K)
-    s's shape (...,K)
-    v's shape (...,K,N)
-    where K is min(M,N).
-    :param x:
-    :return:u,s,v.
+    Reduced (a.k.a. "thin"/"economy") SVD: A = U @ diag(S) @ Vh with
+    U:(...,M,K), S:(...,K), Vh:(...,K,N), K=min(M,N). This is torch's
+    ``full_matrices=False`` form. Differentiable (numpy forward + analytic
+    backward); returns the raw ``(u, s, v)`` tuple.
     '''
-    if isinstance(x, ComplexNumber):
-        return complex_svd(x)
     def forward_code(np, data):
         a = data["inputs"][0]
         u, s, v = data["outputs"]
@@ -255,8 +361,8 @@ def svd(x):
         u, s, v = data["f_outputs"]
         v = T(v)
         m, n = inp.shape[-2:]
-        k = np.min((m, n))
-        i = np.reshape(np.eye(k), np.concatenate((np.ones(inp.ndim - 2, dtype=int), (k, k))))
+        k = min(m, n)
+        i = np.reshape(np.eye(k), (1,) * (inp.ndim - 2) + (k, k))
         if out_index == 0:
             f = 1 / (s[..., np.newaxis, :] ** 2 - s[..., :, np.newaxis] ** 2 + i)
             gu = dout
@@ -264,7 +370,7 @@ def svd(x):
             t = (f * (utgu - T(utgu))) * s[..., np.newaxis, :]
             t = _dot(_dot(u, t), T(v))
             if m > n:
-                i_minus_uut = (np.reshape(np.eye(m), np.concatenate((np.ones(inp.ndim - 2, dtype=int), (m, m)))) -
+                i_minus_uut = (np.reshape(np.eye(m), (1,) * (inp.ndim - 2) + (m, m)) -
                                _dot(u, np.conj(T(u))))
                 t = t + T(_dot(_dot(v / s[..., np.newaxis, :], T(gu)), i_minus_uut))
             np.copyto(out, t)
@@ -276,13 +382,23 @@ def svd(x):
         elif out_index == 2:
             f = 1 / (s[..., np.newaxis, :] ** 2 - s[..., :, np.newaxis] ** 2 + i)
             gv = dout
-            vtgv = _dot(T(v), gv)
+            # `v` is the (...,n,k) form (transposed above); the upstream grad
+            # `gv` is wrt the (...,k,n) output, i.e. the (n,k)-form grad is T(gv).
+            # The antisymmetric inner term must contract the n (range) axis:
+            #   V^T (gV) = T(v) @ T(gv)   -- mirrors the U branch's T(u) @ gu.
+            # The old `_dot(T(v), gv)` contracted the wrong axis (only shape-
+            # conformable for square v, where it was silently wrong, not a crash).
+            vtgv = _dot(T(v), T(gv))
             t = s[..., :, np.newaxis] * (f * (vtgv - T(vtgv)))
             t = _dot(_dot(u, t), T(v))
             if m < n:
-                i_minus_vvt = (np.reshape(np.eye(n), np.concatenate((np.ones(inp.ndim - 2, dtype=int), (n, n)))) -
+                i_minus_vvt = (np.reshape(np.eye(n), (1,) * (inp.ndim - 2) + (n, n)) -
                                _dot(v, np.conj(T(v))))
-                t = t + T(_dot(_dot(u / s[..., np.newaxis, :], T(gv)), i_minus_vvt))
+                # extra (range-complement) term, mirror of the m>n U branch:
+                #   U S^-1 (gV)^T (I - V V^T) = (u/s) @ gv @ (I - v v^T)
+                # old code used T(gv) and an outer T(), giving a (m,k)·(n,k)
+                # einsum that crashed for m<n.
+                t = t + _dot(_dot(u / s[..., np.newaxis, :], gv), i_minus_vvt)
             np.copyto(out, t)
 
     m, n = x.shape[-2:]
@@ -302,6 +418,111 @@ def svd(x):
     )
     return u, s, v
 
+
+def _svd_full(x):
+    r'''
+    Full SVD: A = U @ diag(S) @ Vh with U:(...,M,M), S:(...,K), Vh:(...,N,N),
+    K=min(M,N). This is torch's ``full_matrices=True`` form for non-square A
+    (for square A the reduced form already has these shapes, so the caller uses
+    the differentiable reduced path instead). The extra (range-complement)
+    columns of U / rows of Vh have no well-defined gradient, so this path is a
+    numpy forward only (no backward) — matching the project's torch_shim, which
+    likewise falls back to numpy for full non-square SVD. Use ``full_matrices=
+    False`` (or :func:`svdvals`) when you need gradients.
+    '''
+    def forward_code(np, data):
+        a = data["inputs"][0]
+        u, s, v = data["outputs"]
+        tu, ts, tv = np.linalg.svd(a, full_matrices=1)
+        np.copyto(u, tu)
+        np.copyto(s, ts)
+        np.copyto(v, tv)
+
+    m, n = x.shape[-2:]
+    k = min(m, n)
+    su = list(x.shape[:-2]) + [m, m]
+    sv = list(x.shape[:-2]) + [n, n]
+    ss = list(x.shape[:-2]) + [k]
+    u, s, v = jt.numpy_code(
+        [su, ss, sv],
+        [x.dtype, x.dtype, x.dtype],
+        [x],
+        forward_code,
+    )
+    return u, s, v
+
+
+def svd(x, full_matrices=False, *, compute_uv=True, driver=None):
+    r'''
+    Singular Value Decomposition: ``A = U @ diag(S) @ Vh``. Returns the same
+    named ``(U, S, Vh)`` result as ``torch.linalg.svd`` (and it also unpacks as
+    a plain 3-tuple ``u, s, v``, preserving every existing jittor caller).
+
+    For ``A`` of shape ``(...,M,N)`` with ``K = min(M, N)``:
+
+    - ``full_matrices=False`` (default, reduced / "thin"): ``U`` is ``(...,M,K)``,
+      ``Vh`` is ``(...,K,N)``, ``S`` is ``(...,K)``.
+    - ``full_matrices=True``: ``U`` is ``(...,M,M)``, ``Vh`` is ``(...,N,N)``,
+      ``S`` is ``(...,K)``.
+
+    .. note::
+        ``torch.linalg.svd`` defaults to ``full_matrices=True``; this jittor-
+        native entry point keeps the historical reduced default so that the
+        differentiable path and all jittor callers (``matrix_rank``/``cond``/
+        ``matrix_norm``/the native ``test_linalg`` suite) are unchanged. Pass
+        ``full_matrices=True`` explicitly for torch's full shapes. (The torch-
+        facing ``torch.linalg.svd`` default is meant to be supplied at the
+        torch-compat boundary.)
+
+    ``S`` is sorted in descending order. The reduced form (and the square case,
+    where reduced == full) is differentiable; the full form on a *non-square*
+    matrix is computed via numpy without a gradient on ``U``/``Vh`` (the extra
+    orthogonal-complement columns/rows have no unique gradient) — use
+    ``full_matrices=False`` or :func:`svdvals` when gradients are needed.
+
+    :param x: ``(...,M,N)`` real matrix (or ``nn.ComplexNumber``).
+    :param full_matrices (bool): see above. Default ``False`` (reduced).
+    :param compute_uv (bool): if ``False``, only ``S`` is meaningful (``U`` and
+        ``Vh`` are still returned for shape compatibility but may be skipped).
+    :param driver: accepted for torch signature compatibility (ignored).
+    :return: named tuple ``SVD(U, S, Vh)``.
+    '''
+    if _is_native_complex(x):
+        # native complex64 -> bridge to the ComplexNumber path, return native.
+        u, s, v = complex_svd(_native_to_cn(x))
+        # s is real (singular values) but complex_svd carries it as a
+        # ComplexNumber (imag=0); _cn_to_native keeps it complex64 for a
+        # uniform native-complex return (callers reconstruct via u@diag(s)@v).
+        return SVD(_cn_to_native(u), _cn_to_native(s), _cn_to_native(v))
+    if isinstance(x, ComplexNumber):
+        # complex_svd is the reduced form; full_matrices for complex is not
+        # supported (would need a complex orthogonal completion).
+        u, s, v = complex_svd(x)
+        return SVD(u, s, v)
+    m, n = x.shape[-2:]
+    if (not full_matrices) or m == n:
+        u, s, v = _svd_reduced(x)
+    else:
+        u, s, v = _svd_full(x)
+    return SVD(u, s, v)
+
+
+def svdvals(x, *, driver=None):
+    r'''
+    Singular values only, matching ``torch.linalg.svdvals``. Returns the
+    ``(...,K)`` tensor ``S`` (``K = min(M, N)``) in descending order. This uses
+    the reduced differentiable path, so ``S`` carries a gradient.
+
+    :param x: ``(...,M,N)`` real matrix.
+    :param driver: accepted for torch signature compatibility (ignored).
+    :return: singular values ``S`` ``(...,K)``.
+    '''
+    if _is_native_complex(x):
+        return _cn_to_native(complex_svd(_native_to_cn(x))[1])
+    if isinstance(x, ComplexNumber):
+        return complex_svd(x)[1]
+    return _svd_reduced(x)[1]
+
 def eig(x):
     r"""
     calculate the eigenvalues and eigenvectors of x.
@@ -310,6 +531,10 @@ def eig(x):
     w (...,M) : the eigenvalues.
     v (...,M,M) : normalized eigenvectors.
     """
+    if _is_native_complex(x):
+        # native complex64 -> bridge to the ComplexNumber path, return native.
+        w, v = complex_eig(_native_to_cn(x))
+        return _cn_to_native(w), _cn_to_native(v)
     if isinstance(x, ComplexNumber):
         return complex_eig(x)
     return complex_eig(ComplexNumber(x))
@@ -322,6 +547,16 @@ def eigh(x):
     w (...,M) : the eigenvalues.
     v (...,M,M) : normalized eigenvectors.
     """
+    if _is_native_complex(x):
+        # native complex64 Hermitian -> bridge to the ComplexNumber path. The
+        # eigenvalues are real (returned as complex64 with imag~0 for a uniform
+        # native-complex return); eigenvectors are native complex64.
+        w, v = complex_eigh(_native_to_cn(x))
+        return _cn_to_native(w), _cn_to_native(v)
+    if isinstance(x, ComplexNumber):
+        # Hermitian eigendecomposition on the legacy ComplexNumber type. (The
+        # real path below cannot take a ComplexNumber — previously this raised.)
+        return complex_eigh(x)
     def forward_code(np, data):
         a = data["inputs"][0]
         w, v = data["outputs"]
@@ -362,12 +597,46 @@ def eigh(x):
     return w, v
 
 
+def eigvalsh(x, UPLO='L'):
+    r"""
+    Eigenvalues of a symmetric / Hermitian matrix, matching
+    ``torch.linalg.eigvalsh``. Returns only the eigenvalues ``w`` of shape
+    ``(...,M)`` in **ascending** order (the eigenvectors are discarded).
+
+    This reuses the differentiable :func:`eigh`, so ``w`` carries a gradient.
+    Like ``torch.linalg.eigvalsh`` / ``numpy.linalg.eigvalsh`` the matrix is
+    assumed symmetric/Hermitian and only one triangle is referenced; jittor's
+    eigensolver reads the lower (``UPLO='L'``) triangle. For a genuinely
+    symmetric input ``UPLO='U'`` yields the same eigenvalues; when ``'U'`` is
+    requested the upper triangle is mirrored down so the contract still holds.
+
+    :param x: ``(...,M,M)`` symmetric/Hermitian real matrix.
+    :param UPLO ({'L','U'}): which triangle defines the matrix. Default ``'L'``.
+    :return: ascending eigenvalues ``w`` ``(...,M)``.
+    """
+    if UPLO not in ('L', 'U'):
+        raise ValueError(f"eigvalsh: UPLO must be 'L' or 'U', got {UPLO!r}")
+    if UPLO == 'U':
+        # jittor's eigh references the LOWER triangle. To honour UPLO='U', build
+        # the full symmetric matrix from x's upper triangle: the upper part
+        # (incl. diagonal) plus the strict-upper part reflected below the
+        # diagonal. For an already-symmetric input this is a no-op; it only
+        # matters when the two triangles disagree.
+        up = jt.triu(x, 0)                        # upper triangle incl. diagonal
+        x = up + jt.triu(x, 1).transpose(-1, -2)  # mirror strict-upper -> lower
+    w, _ = eigh(x)
+    return w
+
+
 def inv(x):
     r"""
     calculate the inverse of x.
     :param x (...,M,M):
     :return:x^-1 (...,M,M).
     """
+    if _is_native_complex(x):
+        # native complex64 -> bridge to the ComplexNumber path, return native.
+        return _cn_to_native(complex_inv(_native_to_cn(x)))
     if isinstance(x, ComplexNumber):
         return complex_inv(x)
     def forward_code(np, data):
@@ -398,12 +667,40 @@ def inv(x):
     return mx
 
 
+def inv_ex(x, *, check_errors=False, out=None):
+    r"""
+    Compute a matrix inverse and return ``(inverse, info)`` like
+    ``torch.linalg.inv_ex``.
+
+    Jittor's :func:`inv` path already raises when numpy/Jittor cannot invert the
+    input, so successful calls have a zero ``info`` tensor. This covers the
+    common torch-compat use case where callers import ``inv_ex`` and check
+    ``info == 0`` to build a validity mask.
+    """
+    inverse = inv(x)
+    info_shape = tuple(int(s) for s in x.shape[:-2])
+    info = jt.zeros(info_shape, dtype="int32")
+    if out is not None:
+        out_inverse, out_info = out
+        out_inverse.assign(inverse)
+        out_info.assign(info)
+        inverse, info = out_inverse, out_info
+    return INVEX(inverse, info)
+
+
 def pinv(x):
     r"""
     calculate the pseudo-inverse of a x.
     :param x (...,M,N)
     :return: x's pinv (...N,M)
     """
+    if _is_native_complex(x):
+        # native complex64 -> bridge to the ComplexNumber path, return native.
+        return _cn_to_native(complex_pinv(_native_to_cn(x)))
+    if isinstance(x, ComplexNumber):
+        # complex pseudo-inverse on the legacy ComplexNumber type. (The real
+        # path below cannot take a ComplexNumber — previously this raised.)
+        return complex_pinv(x)
     def forward_code(np, data):
         a = data["inputs"][0]
         m_a = data["outputs"][0]
@@ -435,6 +732,333 @@ def pinv(x):
     )
     mx = lmx[0]
     return mx
+
+
+def matrix_power(x, n):
+    r"""
+    Compute the ``n``-th power of a (batch of) square matrix.
+
+    Equivalent to ``torch.linalg.matrix_power`` / ``numpy.linalg.matrix_power``.
+    The power is formed entirely from existing jittor ops (``jt.matmul`` and
+    :func:`inv`), so the result is differentiable on-device with no numpy
+    round-trip.
+
+    :param x (...,M,M): batch of square matrices.
+    :param n (int): integer exponent. ``n == 0`` returns identity matrices,
+        ``n < 0`` uses the matrix inverse ``x^{-1}`` raised to ``-n``.
+    :return: ``x ** n`` (...,M,M).
+    """
+    if not isinstance(n, int):
+        # mirror numpy/torch: only integer exponents are supported
+        if hasattr(n, "__index__"):
+            n = n.__index__()
+        else:
+            raise TypeError("matrix_power: exponent 'n' must be an integer")
+    assert x.shape[-2] == x.shape[-1], \
+        "matrix_power expects square matrices (last two dims equal)"
+
+    if n == 0:
+        # batched identity, broadcast to x's batch shape and dtype
+        m = x.shape[-1]
+        eye = jt.init.eye(m, dtype=x.dtype)
+        batch = list(x.shape[:-2])
+        if batch:
+            eye = eye.broadcast(batch + [m, m])
+        return eye
+    if n < 0:
+        x = inv(x)
+        n = -n
+
+    # binary exponentiation to keep the matmul count at O(log n)
+    result = None
+    base = x
+    e = n
+    while e > 0:
+        if e & 1:
+            result = base if result is None else jt.matmul(result, base)
+        e >>= 1
+        if e > 0:
+            base = jt.matmul(base, base)
+    return result
+
+
+def matrix_rank(x, tol=None, hermitian=False):
+    r"""
+    Return the numerical rank of a (batch of) matrix.
+
+    Equivalent to ``torch.linalg.matrix_rank`` / ``numpy.linalg.matrix_rank``:
+    the rank is the number of singular values greater than ``tol``. When ``tol``
+    is ``None`` the default threshold ``S.max(-1) * max(M, N) * eps`` is used
+    (``eps`` is the machine epsilon of the input dtype), matching numpy/torch.
+
+    The singular values are obtained from the existing differentiable
+    :func:`svd`; the rank itself is an integer count and therefore has no
+    gradient (matching numpy/torch).
+
+    :param x (...,M,N): batch of matrices.
+    :param tol (float, optional): explicit singular-value threshold.
+    :param hermitian (bool): if ``True``, use the symmetric eigensolver
+        (eigenvalue magnitudes) instead of the SVD; ``x`` must be square.
+    :return: integer rank tensor with shape ``x.shape[:-2]``.
+    """
+    if hermitian:
+        assert x.shape[-2] == x.shape[-1], \
+            "matrix_rank(hermitian=True) expects square matrices"
+        w, _ = eigh(x)
+        s = jt.abs(w)
+    else:
+        # reduced svd keeps S differentiable and is shape-agnostic; the rank
+        # itself is non-differentiable (an integer count), but other callers of
+        # the returned S (matrix_norm/cond) rely on the gradient.
+        _, s, _ = svd(x, full_matrices=False)
+
+    smax = s.max(dim=-1)
+    # torch_compat gives max(dim=...) the torch return type (values, indices),
+    # while this native linalg helper needs only the values tensor.
+    if hasattr(smax, "values"):
+        smax = smax.values
+    if tol is None:
+        import numpy as _np
+        try:
+            eps = float(_np.finfo(_np.dtype(str(x.dtype))).eps)
+        except Exception:
+            eps = float(_np.finfo(_np.float32).eps)
+        m, n = x.shape[-2], x.shape[-1]
+        tol_v = smax * (max(m, n) * eps)
+    else:
+        tol_v = jt.array(tol).broadcast(smax.shape) if not isinstance(tol, (int, float)) \
+            else smax * 0 + float(tol)
+    # count singular values strictly greater than the threshold
+    keep = (s > tol_v.unsqueeze(-1)).int32()
+    return keep.sum(dim=-1)
+
+
+def matrix_norm(x, ord='fro', dim=(-2, -1), keepdim=False):
+    r"""
+    Compute a matrix norm of a (batch of) matrix.
+
+    Matches ``torch.linalg.matrix_norm`` / ``numpy.linalg.norm`` for the
+    matrix-valued orders:
+
+    - ``'fro'`` (default): Frobenius norm ``sqrt(sum(|x|**2))`` (native jittor).
+    - ``'nuc'``: nuclear norm, the sum of singular values (via :func:`svd`).
+    - ``2`` / ``-2``: largest / smallest singular value (via :func:`svd`).
+    - ``1`` / ``-1``: max / min absolute column sum (native jittor).
+    - ``inf`` / ``-inf``: max / min absolute row sum (native jittor).
+
+    The Frobenius and the ``1/inf`` family are built from native jittor ops and
+    stay differentiable on-device; the spectral (``2``/``-2``/``'nuc'``) orders
+    use the existing differentiable :func:`svd`.
+
+    :param x (...,M,N): batch of matrices.
+    :param ord: matrix order, see above. Default ``'fro'``.
+    :param dim (tuple[int, int]): the two dims that form each matrix.
+    :param keepdim (bool): keep the reduced dims as size-1.
+    :return: matrix norm with the two ``dim`` axes reduced.
+    """
+    import math
+    d0, d1 = dim
+    nd = len(x.shape)
+    d0 = d0 % nd
+    d1 = d1 % nd
+    assert d0 != d1, "matrix_norm: dim must reference two distinct axes"
+
+    def _restore(res, reduced_axes):
+        # re-insert size-1 axes so keepdim=True lines up with the input rank
+        if not keepdim:
+            return res
+        out = res
+        for ax in sorted(reduced_axes):
+            out = out.unsqueeze(ax)
+        return out
+
+    if ord == 'fro':
+        res = jt.sqrt((x * x).sum(dims=[d0, d1]))
+        return _restore(res, [d0, d1])
+    if ord == 'nuc':
+        # move matrix dims to the end, take sum of singular values
+        s = _matrix_singular_values(x, d0, d1)
+        res = s.sum(dim=-1)
+        return _restore(res, [d0, d1])
+    if ord in (2, -2):
+        s = _matrix_singular_values(x, d0, d1)
+        res = s.max(dim=-1) if ord == 2 else s.min(dim=-1)
+        return _restore(res, [d0, d1])
+    if ord in (1, -1):
+        # absolute column sums (reduce the row dim d0), then max/min over cols
+        col_sums = jt.abs(x).sum(dim=d0)
+        # after reducing d0, the column axis d1 shifts left if d0 < d1
+        col_axis = d1 - 1 if d0 < d1 else d1
+        res = col_sums.max(dim=col_axis) if ord == 1 else col_sums.min(dim=col_axis)
+        return _restore(res, [d0, d1])
+    if ord in (math.inf, -math.inf, float('inf'), float('-inf')):
+        # absolute row sums (reduce the column dim d1), then max/min over rows
+        row_sums = jt.abs(x).sum(dim=d1)
+        row_axis = d0 - 1 if d1 < d0 else d0
+        if ord > 0:
+            res = row_sums.max(dim=row_axis)
+        else:
+            res = row_sums.min(dim=row_axis)
+        return _restore(res, [d0, d1])
+    raise ValueError(f"matrix_norm: unsupported matrix order {ord!r}")
+
+
+def _matrix_singular_values(x, d0, d1):
+    # Bring the two matrix axes to the last two positions, run the existing
+    # differentiable svd, and return the singular values (shape batch + [k]).
+    nd = len(x.shape)
+    others = [a for a in range(nd) if a not in (d0, d1)]
+    perm = others + [d0, d1]
+    xt = x.permute(perm) if perm != list(range(nd)) else x
+    # reduced form -> differentiable singular values (nuc/2/-2 matrix norms)
+    _, s, _ = svd(xt, full_matrices=False)
+    return s
+
+
+def vector_norm(x, ord=2, dim=None, keepdim=False):
+    r"""
+    Compute a vector norm, matching ``torch.linalg.vector_norm``.
+
+    The whole tensor (``dim=None``) or the given ``dim`` axes are treated as a
+    flat vector. Supported orders:
+
+    - ``2`` (default): Euclidean norm ``sqrt(sum(|x|**2))``.
+    - ``1``: sum of absolute values.
+    - ``0``: number of non-zero entries.
+    - any finite ``p``: ``(sum(|x|**p))**(1/p)``.
+    - ``inf`` / ``-inf``: max / min absolute value.
+
+    Built entirely from native jittor ops, so it is differentiable on-device.
+
+    :param x: input tensor.
+    :param ord: vector order, see above. Default ``2``.
+    :param dim (int | tuple[int] | None): axis/axes to reduce; ``None`` flattens.
+    :param keepdim (bool): keep reduced dims as size-1 (ignored when ``dim`` is
+        ``None`` and the whole tensor is flattened).
+    :return: the requested vector norm.
+    """
+    import math
+    if dim is None:
+        flat = x.reshape([-1])
+        ax = 0
+        out = _vector_norm_reduce(flat, ord, ax)
+        return out
+    if isinstance(dim, int):
+        dims = [dim]
+    else:
+        dims = list(dim)
+    return _vector_norm_reduce(x, ord, dims, keepdim=keepdim)
+
+
+def _vector_norm_reduce(x, ord, dims, keepdim=False):
+    import math
+    ax = dims
+    absx = jt.abs(x)
+    if ord == 2:
+        res = jt.sqrt((absx * absx).sum(dims=ax) if isinstance(ax, list)
+                      else (absx * absx).sum(dim=ax))
+    elif ord == 1:
+        res = absx.sum(dims=ax) if isinstance(ax, list) else absx.sum(dim=ax)
+    elif ord == 0:
+        nz = (x != 0).float32()
+        res = nz.sum(dims=ax) if isinstance(ax, list) else nz.sum(dim=ax)
+    elif ord in (math.inf, float('inf')):
+        res = _reduce_axes(absx, ax, reduce='max')
+    elif ord in (-math.inf, float('-inf')):
+        res = _reduce_axes(absx, ax, reduce='min')
+    else:
+        p = float(ord)
+        powed = absx ** p
+        s = powed.sum(dims=ax) if isinstance(ax, list) else powed.sum(dim=ax)
+        res = s ** (1.0 / p)
+    if keepdim and isinstance(ax, list):
+        for a in sorted(a % len(x.shape) for a in ax):
+            res = res.unsqueeze(a)
+    return res
+
+
+def _reduce_axes(x, ax, reduce='max'):
+    # max/min over possibly several axes (jittor reduces one axis at a time
+    # for the index-returning variants, but the value reductions accept lists).
+    if isinstance(ax, int):
+        ax = [ax]
+    # reduce from the highest axis down so earlier indices stay valid
+    out = x
+    for a in sorted((a % len(x.shape) for a in ax), reverse=True):
+        out = out.max(dim=a) if reduce == 'max' else out.min(dim=a)
+    return out
+
+
+def norm(x, ord=None, dim=None, keepdim=False):
+    r"""
+    General ``torch.linalg.norm`` / ``numpy.linalg.norm`` dispatcher.
+
+    Behaviour (matching torch/numpy):
+
+    - ``dim`` is a 2-tuple, or ``dim is None`` and ``x`` is 2-D: matrix norm
+      (default ``ord`` is the Frobenius norm), see :func:`matrix_norm`.
+    - ``dim`` is an int, or ``dim is None`` and ``x`` is 1-D, or ``ord`` is set
+      with ``dim is None``: vector norm (default ``ord`` is 2), see
+      :func:`vector_norm`.
+    - ``dim is None`` and ``ord is None``: the 2-norm of the flattened tensor
+      (Frobenius), built from native jittor ops.
+
+    :param x: input tensor.
+    :param ord: order of the norm; meaning depends on whether a matrix or a
+        vector norm is selected (see :func:`matrix_norm` / :func:`vector_norm`).
+    :param dim (int | tuple | None): axis/axes defining the norm.
+    :param keepdim (bool): keep reduced dims as size-1.
+    :return: the requested norm.
+    """
+    if dim is None:
+        if ord is None:
+            # flatten and take the 2-norm (== Frobenius for matrices)
+            return vector_norm(x, ord=2, dim=None)
+        if len(x.shape) == 2:
+            # ord given, 2-D input, dim=None -> matrix norm (torch/numpy rule)
+            return matrix_norm(x, ord=ord, dim=(-2, -1), keepdim=keepdim)
+        # 1-D, or higher-rank with ord set but no dim -> vector norm over the
+        # flattened input (matches numpy.linalg.norm).
+        return vector_norm(x, ord=ord, dim=None)
+    if isinstance(dim, (tuple, list)) and len(dim) == 2:
+        m_ord = 'fro' if ord is None else ord
+        return matrix_norm(x, ord=m_ord, dim=tuple(dim), keepdim=keepdim)
+    v_ord = 2 if ord is None else ord
+    return vector_norm(x, ord=v_ord, dim=dim, keepdim=keepdim)
+
+
+def cond(x, p=None):
+    r"""
+    Condition number of a (batch of) matrix, matching
+    ``torch.linalg.cond`` / ``numpy.linalg.cond``.
+
+    - ``p`` in ``{None, 2}``: ratio of largest to smallest singular value
+      (via the existing differentiable :func:`svd`).
+    - ``p == -2``: smallest over largest singular value.
+    - ``p`` in ``{1, -1, inf, -inf}``: ``norm(x, p) * norm(inv(x), p)`` using the
+      matrix-norm definitions above; ``x`` must be invertible.
+    - ``p == 'fro'``: ``norm(x, 'fro') * norm(inv(x), 'fro')``.
+
+    :param x (...,M,M): batch of square matrices (square required for all ``p``
+        except the ``None/2/-2`` singular-value forms, which also accept the
+        general case numpy/torch allow).
+    :param p: order of the norm used for the condition number.
+    :return: condition number with shape ``x.shape[:-2]``.
+    """
+    import math
+    if p is None or p == 2 or p == -2:
+        # reduced form -> differentiable singular values
+        _, s, _ = svd(x, full_matrices=False)
+        smax = s.max(dim=-1)
+        smin = s.min(dim=-1)
+        if p == -2:
+            return smin / smax
+        return smax / smin
+    # p in {1, -1, inf, -inf, 'fro'} -> norm(x, p) * norm(inv(x), p)
+    assert x.shape[-2] == x.shape[-1], \
+        f"cond(p={p!r}) expects square matrices"
+    xi = inv(x)
+    return matrix_norm(x, ord=p, dim=(-2, -1)) * matrix_norm(xi, ord=p, dim=(-2, -1))
 
 
 def det(x):
@@ -589,8 +1213,15 @@ def solve(a,b):
         np.copyto(out, t)
 
     def backward_code2(np, data):
+        # gradient wrt b: solve(A,b)=A^-1 b  =>  dL/db = A^-T @ dout.
+        # (was a stub writing 0 -> silently zero grad through the RHS, breaking
+        #  any training that backprops into b, e.g. differentiable solves / GP.)
+        def T(x):
+            return np.swapaxes(x, -1, -2)
+        dout = data["dout"]
         out = data["outputs"][0]
-        np.copyto(out, 0)
+        a = data["inputs"][0]
+        np.copyto(out, np.linalg.solve(T(a), dout))
 
     l_ans = jt.numpy_code(
         [b.shape],
@@ -610,6 +1241,10 @@ def qr(x):
     :param x (...,M,M):
     :return:q,r as the result of qr factorization.They are both in the shape of (...,M,M).
     """
+    if _is_native_complex(x):
+        # native complex64 -> bridge to the ComplexNumber path, return native.
+        q, r = complex_qr(_native_to_cn(x))
+        return _cn_to_native(q), _cn_to_native(r)
     if isinstance(x, ComplexNumber):
         return complex_qr(x)
     def forward_code(np, data):
@@ -620,35 +1255,46 @@ def qr(x):
         np.copyto(r,R)
 
     def backward_code(np, data):
+        # Reduced-QR backward (m>=n). A=QR, Q:(...,m,k), R:(...,k,n), k=min(m,n).
+        # Standard form (mirrors torch): with M = R gR^T - gQ^T Q,
+        #   gA = (gQ + Q copyltu(M)) R^{-T},  copyltu(X)=tril(X)+tril(X,-1)^T.
+        # jittor calls this once per output, so out_index selects the gQ-only /
+        # gR-only contribution (the total is linear in (gQ,gR), summed by autodiff).
+        # The OLD code assumed square R (output shapes were both x.shape) and the
+        # Q term lived entirely in span(Q) — wrong/crash for tall m>n. R was even
+        # allocated (m,n) instead of (k,n).
         def T(x):
             return np.swapaxes(x, -1, -2)
         _dot = partial(np.einsum, '...ij,...jk->...ik')
-        _harmard = partial(np.einsum, '...ij,...ij->...ij')
         dout = data["dout"]
         out = data["outputs"][0]
         q, r = data["f_outputs"]
         out_index = data["out_index"]
-        #pl = np.tril(np.ones((inp.shape[-1],inp.shape[-1])))-diags
-        if out_index == 0: # Q_TERM
-            q_t = _dot(T(q),dout)
-            rhs_solve = q_t - T(q_t)
-            rhs_solve = T(np.tril(rhs_solve,-1))
-            qsolve = np.linalg.solve(r,rhs_solve)
-            qsolve = T(qsolve)
-            tq = _dot(q,qsolve)
-            np.copyto(out,tq)
-        else: #R_TERM
-            r_t = _dot(r ,T(dout))
-            rhs_solve = r_t - T(r_t)
-            rhs_solve = np.tril(rhs_solve,-1)
-            rhs_solve = T(rhs_solve)
-            r_solve = np.linalg.solve(r,rhs_solve)
-            tr = _dot(q,(T(r_solve) + dout))
-            np.copyto(out,tr)
+        m = q.shape[-2]; n = r.shape[-1]
+        if m < n:
+            raise NotImplementedError(
+                "qr backward is only implemented for tall/square inputs (m>=n); "
+                f"got m={m} < n={n}. Forward works for all shapes.")
+        def copyltu(X):
+            return np.tril(X) + T(np.tril(X, -1))
+        def rinvT(X):           # X @ R^{-T}
+            return T(np.linalg.solve(r, T(X)))
+        if out_index == 0:      # contribution from gQ (gR=0)
+            gQ = dout
+            M = -_dot(T(gQ), q)
+            np.copyto(out, rinvT(gQ + _dot(q, copyltu(M))))
+        else:                   # contribution from gR (gQ=0)
+            gR = dout
+            M = _dot(r, T(gR))
+            np.copyto(out, rinvT(_dot(q, copyltu(M))))
 
+    m, n = x.shape[-2:]
+    k = min(m, n)
+    sq = list(x.shape[:-2]) + [m, k]
+    sr = list(x.shape[:-2]) + [k, n]
     q, r = jt.numpy_code(
-        [x.shape,x.shape],
-        [x.dtype,x.dtype],
+        [sq, sr],
+        [x.dtype, x.dtype],
         [x],
         forward_code,
         [backward_code],
@@ -670,6 +1316,11 @@ def einsum(equation, *operands):
     import numpy as np_cpu
     if len(operands) == 0:
         raise ValueError("einsum requires at least one operand")
+    # torch.einsum also accepts the operands packed in a single list/tuple, e.g.
+    # torch.einsum("bcxd,bcyd->bcxy", (query, key)) (used by longformer's windowed
+    # attention). Unpack that form so the operands are individual Vars below.
+    if len(operands) == 1 and isinstance(operands[0], (list, tuple)):
+        operands = tuple(operands[0])
     # ``_parse_einsum_input`` calls ``asanyarray`` on the operands, so feed
     # it shape-compatible numpy stand-ins and keep the original jittor Vars.
     fake_ops = [np_cpu.empty([1] * len(o.shape), dtype=np_cpu.float32)

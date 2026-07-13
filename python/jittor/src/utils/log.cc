@@ -6,6 +6,10 @@
 // ***************************************************************
 #include <string.h>
 #include <signal.h>
+#ifndef _WIN32
+#include <ucontext.h>
+#include <dlfcn.h>
+#endif
 #include <iomanip>
 #include <thread>
 #include <unordered_map>
@@ -264,6 +268,39 @@ void segfault_sigaction(int signal, siginfo_t *si, void *arg) {
     std::cerr << "Caught segfault at address " << si->si_addr << ", "
         << "thread_name: '" << thread_name << "', flush log..." << std::endl;
     std::cerr.flush();
+#if defined(__linux__) && !defined(_WIN32)
+    // Recover the REAL faulting PC from the ucontext and dladdr-symbolize it.
+    // backtrace() (the [bt] dump below) can't unwind past the signal frame, so it only
+    // shows this handler -- naming the actual crashing function here makes segfault
+    // reports actionable (#11 hardening/diagnostics), independent of gdb being present.
+    if (arg) {
+        ucontext_t* uc = (ucontext_t*)arg;
+        void* fault_pc = nullptr;
+        #if defined(__aarch64__)
+            fault_pc = (void*)uc->uc_mcontext.pc;
+        #elif defined(__x86_64__) && defined(REG_RIP)
+            fault_pc = (void*)uc->uc_mcontext.gregs[REG_RIP];
+        #endif
+        void* caller_pc = nullptr;     // return addr -> the CALLER (revealed when PC==0,
+        #if defined(__aarch64__)       // i.e. a jump through a null function pointer)
+            caller_pc = (void*)uc->uc_mcontext.regs[30];   // x30 / LR
+        #endif
+        auto sym = [](const char* tag, void* pc) {
+            if (!pc) return;
+            Dl_info info;
+            if (dladdr(pc, &info) && info.dli_sname)
+                std::cerr << tag << " " << pc << " in " << info.dli_sname
+                          << " @ " << (info.dli_fname ? info.dli_fname : "?") << std::endl;
+            else
+                std::cerr << tag << " " << pc << " (unresolved)" << std::endl;
+        };
+        if (!fault_pc)
+            std::cerr << "Fault PC is NULL (jump through a null function pointer)" << std::endl;
+        sym("Fault PC", fault_pc);
+        sym("Caller (LR)", caller_pc);
+        std::cerr.flush();
+    }
+#endif
     if (protected_page && 
         si->si_addr>=(void*)protected_page && 
         si->si_addr<(void*)(protected_page+4*1024)) {
@@ -286,6 +323,14 @@ void segfault_sigaction(int signal, siginfo_t *si, void *arg) {
 #endif
 
 int register_sigaction() {
+    // Allow a host process to keep its own fault handling (e.g. Python's
+    // faulthandler, or a debugger, in a Ray actor / embedded runtime). Jittor's
+    // segfault handler otherwise overrides the host's and -- since it forks
+    // addr2line/gdb from inside the handler and then quick_exits -- can mask the
+    // real crash and leave no usable trace. Opt out entirely with
+    // JT_NO_SIGNAL_HANDLER=1.
+    if (getenv("JT_NO_SIGNAL_HANDLER") != nullptr)
+        return 0;
 #ifdef _WIN32
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
@@ -293,6 +338,13 @@ int register_sigaction() {
     signal(SIGSEGV, handle_signal);
     signal(SIGFPE, handle_signal);
 #else
+    // Under MPI (mpirun), let the MPI runtime own fault handling. Jittor's
+    // handler both hijacks signals MPI uses internally (SIGBUS/SIGCHLD/SIGILL)
+    // and, worse, forks addr2line/gdb from inside the handler (print_trace ->
+    // wait4), which deadlocks/segfaults a ranked process. Skip entirely.
+    if (getenv("OMPI_COMM_WORLD_SIZE") != nullptr ||
+        getenv("PMI_SIZE") != nullptr)
+        return 0;
     struct sigaction sa;
 
     memset(&sa, 0, sizeof(struct sigaction));
@@ -307,9 +359,25 @@ int register_sigaction() {
     // jupyter use sigint to interp
     if (getenv("JPY_PARENT_PID") == nullptr)
         sigaction(SIGINT, &sa, NULL);
-    sigaction(SIGCHLD, &sa, NULL);
-    sigaction(SIGILL, &sa, NULL);
-    sigaction(SIGBUS, &sa, NULL);
+    // Under MPI (mpirun), the MPI runtime relies on SIGCHLD/SIGBUS/SIGILL for
+    // its own process management and shared-memory transports. Hijacking them
+    // makes a benign signal during MPI_Init look like a fatal fault and abort
+    // the rank. Leave those to MPI when launched under it.
+    //
+    // Likewise, when jittor is embedded in a host process that manages its own
+    // children -- e.g. a Ray actor running asyncio/aiohttp, which routinely
+    // spawns and reaps HTTP-client / subprocess children -- a process-wide
+    // SIGCHLD handler that fatally exits on any non-clean child death will kill
+    // the host the moment one of ITS unrelated children dies. DISABLE_MULTIPROCESSING
+    // means jittor itself spawns no parallel-compile worker pool to monitor, so
+    // there is nothing for these handlers to watch; skip them and stay embeddable.
+    if (getenv("OMPI_COMM_WORLD_SIZE") == nullptr &&
+        getenv("PMI_SIZE") == nullptr &&
+        getenv("DISABLE_MULTIPROCESSING") == nullptr) {
+        sigaction(SIGCHLD, &sa, NULL);
+        sigaction(SIGILL, &sa, NULL);
+        sigaction(SIGBUS, &sa, NULL);
+    }
     sigaction(SIGQUIT, &sa, NULL);
     // sigaction(SIGABRT, &sa, NULL);
 #endif

@@ -20,6 +20,7 @@ using namespace std;
 namespace jittor {
 
 extern int use_tensorcore;
+extern int cuda_allow_tf32;
 
 #ifndef JIT
 
@@ -29,9 +30,13 @@ static auto make_cublas_batched_matmul = get_op_info("cublas_batched_matmul")
 CublasBatchedMatmulOp::CublasBatchedMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
     : a(a), b(b), trans_a(trans_a), trans_b(trans_b) {
     // TODO: support int8 * int8
-    ASSERT(a->dtype().is_float() && b->dtype().is_float()) << "type of two inputs should be the same";
+    ASSERT(a->dtype().is_float() && b->dtype().is_float())
+        << "cublas batched matmul requires floating-point inputs (float16/float32/float64),"
+           " but got a:" << a->dtype() << "b:" << b->dtype()
+        << "(complex64 batched matmul routes through the reindex path in nn.matmul instead).";
     // TODO: support diffrent input type
-    ASSERT(a->dtype().dsize() == b->dtype().dsize()) << "type of two inputs should be the same";
+    ASSERT(a->dtype().dsize() == b->dtype().dsize())
+        << "matmul inputs must have the same dtype, but got a:" << a->dtype() << "b:" << b->dtype();
     c = create_output(nullptr, a->dtype());
     flags.set(NodeFlags::_cpu, 0);
     flags.set(NodeFlags::_cuda, 1);
@@ -123,9 +128,9 @@ void CublasBatchedMatmulOp::jit_run() {
     if ('@Trans_b'=='T') {
         k = bs[adim-2];
     }
-    bool has_fp16_or_bf16 = a->dtype() == ns_float16
-        || b->dtype() == ns_float16 || c->dtype() == ns_float16
-        || a->dtype() == ns_bfloat16
+    bool has_fp16 = a->dtype() == ns_float16
+        || b->dtype() == ns_float16 || c->dtype() == ns_float16;
+    bool has_bf16 = a->dtype() == ns_bfloat16
         || b->dtype() == ns_bfloat16 || c->dtype() == ns_bfloat16;
     // a: [b,n,m], b: [b,m,k], c: [b,n,k]
     #if CUDART_VERSION >= 11000
@@ -135,11 +140,14 @@ void CublasBatchedMatmulOp::jit_run() {
         computeType = CUBLAS_COMPUTE_32F_FAST_16F;
     } else if (use_tensorcore==2) {
         computeType = CUBLAS_COMPUTE_32F_FAST_16BF;
-    } else if (use_tensorcore==1) {
+    } else if (use_tensorcore==1 || cuda_allow_tf32) {
         computeType = CUBLAS_COMPUTE_32F_FAST_TF32;
     }
-    if (has_fp16_or_bf16) {
+    if (has_fp16) {
         computeType = use_tensorcore ? CUBLAS_COMPUTE_16F : CUBLAS_COMPUTE_32F;
+        algo = use_tensorcore ? CUBLAS_GEMM_DEFAULT : CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+    } else if (has_bf16) {
+        computeType = use_tensorcore ? CUBLAS_COMPUTE_32F_FAST_16BF : CUBLAS_COMPUTE_32F;
         algo = use_tensorcore ? CUBLAS_GEMM_DEFAULT : CUBLAS_GEMM_DEFAULT_TENSOR_OP;
     }
     if (computeType == CUBLAS_COMPUTE_16F) {
@@ -152,8 +160,11 @@ void CublasBatchedMatmulOp::jit_run() {
     if (use_tensorcore) {
         algo = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
     }
-    if (has_fp16_or_bf16) {
+    if (has_fp16) {
         computeType = CUDA_R_16F;
+        algo = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+    } else if (has_bf16) {
+        computeType = CUDA_R_32F;
         algo = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
     }
     #endif
@@ -176,5 +187,3 @@ void CublasBatchedMatmulOp::jit_run() {
 #endif // JIT
 
 } // jittor
-
-

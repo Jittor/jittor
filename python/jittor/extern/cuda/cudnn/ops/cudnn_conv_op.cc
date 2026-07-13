@@ -106,6 +106,7 @@ unordered_map<string, cudnnConvolutionFwdAlgo_t> fwd_algo_cache;
 #pragma clang diagnostic ignored "-Wtautological-compare"
 
 EXTERN_LIB unordered_map<string, cudnnConvolutionFwdAlgo_t> fwd_algo_cache;
+EXTERN_LIB int cudnn_benchmark;
 
 void CudnnConvOp::jit_run() {
     cudnnHandle_t& handle_ = cudnn_handle;
@@ -162,24 +163,22 @@ void CudnnConvOp::jit_run() {
     // is the kernel rc order
     // currently, No perf difference is observed between
     // this two mode
+    bool has_fp16_or_bf16 = x->dtype() == ns_float16
+        || y->dtype() == ns_float16 || w->dtype() == ns_float16
+        || x->dtype() == ns_bfloat16
+        || y->dtype() == ns_bfloat16 || w->dtype() == ns_bfloat16;
+    cudnnDataType_t conv_compute_type = has_fp16_or_bf16
+        ? CUDNN_DATA_FLOAT : getDataType<Ty>();
     checkCudaErrors(cudnnSetConvolutionNdDescriptor(
         cudnnConvDesc, 2,
         padA, convstrideA, dilationA,
-        CUDNN_CROSS_CORRELATION, getDataType<Ty>()
+        CUDNN_CROSS_CORRELATION, conv_compute_type
     ));
     // MIOpen requires groups to be set after descriptor initialization
     checkCudaErrors(cudnnSetConvolutionGroupCount( cudnnConvDesc, groups ));
 
     // using tensor core
-    if(use_tensorcore){
-        checkCudaErrors( cudnnSetConvolutionMathType(cudnnConvDesc, CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION) );
-    }
-    bool has_fp16_or_bf16 = x->dtype() == ns_float16
-        || y->dtype() == ns_float16 || w->dtype() == ns_float16
-        || x->dtype() == ns_bfloat16
-        || y->dtype() == ns_bfloat16 || w->dtype() == ns_bfloat16;
-    
-    if (has_fp16_or_bf16) {
+    if(use_tensorcore || has_fp16_or_bf16){
         checkCudaErrors( cudnnSetConvolutionMathType(cudnnConvDesc, CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION) );
     }
 
@@ -216,13 +215,39 @@ void CudnnConvOp::jit_run() {
     int perf_count;
     STACK_ALLOC(cudnnConvolutionFwdAlgoPerf_t,perf_results,num_algos);
     cudnnConvolutionFwdAlgo_t algo;
-    bool benchmark=true;
+    // cuDNN's heuristic can select an order-of-magnitude slower algorithm for
+    // low-precision, non-overlapping ViT/CLIP patch projections. In the
+    // default auto mode, benchmark only this narrow shape family and cache the
+    // result below. Explicit benchmark=0/1 keeps its normal force-off/on
+    // semantics for all convolutions.
+    bool low_precision_patch_projection = has_fp16_or_bf16
+        && groups == 1
+        && dimX[1] <= 4 && dimW[1] == dimX[1]
+        && paddingh == 0 && paddingw == 0
+        && dilationh == 1 && dilationw == 1
+        && dimW[2] >= 8 && dimW[3] >= 8
+        && strideh == dimW[2] && stridew == dimW[3];
+    bool benchmark = cudnn_benchmark > 0
+        || (cudnn_benchmark < 0 && low_precision_patch_projection);
 
     JK& jk = get_jk();
     jk.clear();
-    jk << dimX[0] << "," << dimX[1] << "," << dimX[2] << "," << dimX[3] << ",";
-    jk << dimW[0] << "," << dimW[1] << "," << dimW[2] << "," << dimW[3] << ",";
-    jk << paddingh << paddingw << "," <<strideh <<stridew << "," << dilationh << dilationw << "," << groups << ".";
+    jk << "x=" << x->dtype() << ":";
+    jk << dimX[0] << "," << dimX[1] << "," << dimX[2] << "," << dimX[3] << ":";
+    jk << strideX[0] << "," << strideX[1] << "," << strideX[2] << "," << strideX[3] << ";";
+    jk << "w=" << w->dtype() << ":";
+    jk << dimW[0] << "," << dimW[1] << "," << dimW[2] << "," << dimW[3] << ":";
+    jk << static_cast<int>(filterFormat_@WFORMAT) << ";";
+    jk << "y=" << y->dtype() << ":";
+    jk << dimY[0] << "," << dimY[1] << "," << dimY[2] << "," << dimY[3] << ":";
+    jk << strideY[0] << "," << strideY[1] << "," << strideY[2] << "," << strideY[3] << ";";
+    jk << "conv=" << paddingh << "," << paddingw << ":";
+    jk << strideh << "," << stridew << ":";
+    jk << dilationh << "," << dilationw << ":" << groups << ";";
+    jk << "compute=" << static_cast<int>(conv_compute_type) << ":";
+    jk << static_cast<int>(use_tensorcore || has_fp16_or_bf16) << ":";
+    // A cached algorithm must still honor a workspace limit changed at runtime.
+    jk << "workspace_ratio=" << max_workspace_ratio << ".";
     auto iter = fwd_algo_cache.find(jk.to_string());
     
     if (iter!=fwd_algo_cache.end()) algo = iter->second;
@@ -231,13 +256,14 @@ void CudnnConvOp::jit_run() {
         if (benchmark) {
             size_t max_ws_size = 0;
             for (int i = 0; i < num_algos; i++) {
-                size_t sz;
+                size_t sz = 0;
                 cudnnStatus_t ret = cudnnGetConvolutionForwardWorkspaceSize(
                     handle_, cudnnIdesc, cudnnFdesc, cudnnConvDesc, 
                     cudnnOdesc, algos[i], &sz);
+                if (ret != CUDNN_STATUS_SUCCESS) continue;
                 // continue if use too much workspace
                 if (sz > mem_info.total_cuda_ram * max_workspace_ratio) continue;
-                if (CUDNN_STATUS_SUCCESS == ret && sz > max_ws_size) max_ws_size = sz;
+                if (sz > max_ws_size) max_ws_size = sz;
             } 
             size_t allocation;
             void* ws = exe.temp_allocator->alloc(max_ws_size, allocation);

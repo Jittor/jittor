@@ -40,6 +40,7 @@ struct FP16OpType : OpByType {
             {"bitwise_not", "(~($2))"},
             {"negative", "(-($2))"},
             {"abs", "::__habs($2)"},
+            {"conj", "($2)"},   // conj(real) is identity (torch parity)
             {"log", "::hlog(($1)($2))"},
             {"exp", "::hexp(($1)($2))"},
             {"sqrt", "::hsqrt(($1)($2))"},
@@ -65,6 +66,8 @@ struct FP16OpType : OpByType {
             {"erf", "(($1) ::erff(($2)))"},
             {"erfinv", "(($1) ::erfinvf(($1)($2)))"},
             {"cast", "(($1)($2))"},
+            // pow dispatches to the jittor::pow(float16/bfloat16) helper in
+            // type/fp16_compute.h, which is sign-aware for negative bases.
             {"pow", "::pow(($2),($4))"},
             {"maximum", "::max($1($2), $1($4))"},
             {"minimum", "::min($1($2), $1($4))"},
@@ -79,6 +82,7 @@ struct FP16OpType : OpByType {
             {"bitwise_not", "(~($2))"},
             {"negative", "(-($2))"},
             {"abs", "std::abs($2)"},
+            {"conj", "($2)"},   // conj(real) is identity (torch parity)
             {"log", "std::log(($1)($2))"},
             {"exp", "std::exp(($1)($2))"},
             {"sqrt", "std::sqrt(($1)($2))"},

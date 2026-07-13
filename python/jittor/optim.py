@@ -15,6 +15,9 @@ import jittor as jt
 import numpy as np
 from copy import deepcopy
 
+def _grad_matches_param(p, g):
+    return isinstance(g, jt.Var) and list(g.shape) == list(p.shape)
+
 class Optimizer(object):
     """ Basic class of Optimizer.
 
@@ -90,14 +93,14 @@ class Optimizer(object):
         grads = []
         for pg in self.param_groups:
             for p, g in zip(pg["params"], pg["grads"]):
-                if p.is_stop_grad(): continue
+                if p.is_stop_grad() or not _grad_matches_param(p, g): continue
                 grads.append(g.flatten())
         if len(grads) == 0: return
         total_norm = jt.norm(jt.concat(grads), norm_type)
         clip_coef = jt.minimum(max_norm / (total_norm + 1e-6), 1.0)
         for pg in self.param_groups:
             for p, g in zip(pg["params"], pg["grads"]):
-                if p.is_stop_grad(): continue
+                if p.is_stop_grad() or not _grad_matches_param(p, g): continue
                 g.update(g*clip_coef)
 
     @property
@@ -261,7 +264,7 @@ class Optimizer(object):
         for pg in self.param_groups:
             lr = pg.get("lr", self.lr)
             for p, g in zip(pg["params"], pg["grads"]):
-                if p.is_stop_grad(): continue
+                if p.is_stop_grad() or not _grad_matches_param(p, g): continue
                 p.update(p - g * lr)
         self.post_step()
 
@@ -269,6 +272,8 @@ class Optimizer(object):
         _grad_map = {}
         for pg in self.param_groups:
             for p, g in zip(pg["params"], pg["grads"]):
+                if not _grad_matches_param(p, g):
+                    continue
                 _grad_map[id(p)] = g
         self._grad_map = _grad_map
 
@@ -335,7 +340,7 @@ class SGD(Optimizer):
 
             # optimize main body
             for p, g, v in zip(pg["params"], pg["grads"], pg["values"]):
-                if p.is_stop_grad(): continue
+                if p.is_stop_grad() or not _grad_matches_param(p, g): continue
                 dp = p * weight_decay + g
                 v.update(momentum * v + dp * (1 - dampening))
                 if nesterov:
@@ -381,7 +386,7 @@ class RMSprop(Optimizer):
             eps = pg.get("eps", self.eps)
             alpha = pg.get("alpha", self.alpha)
             for p, g, v in zip(pg["params"], pg["grads"], pg["values"]):
-                if p.is_stop_grad(): continue
+                if p.is_stop_grad() or not _grad_matches_param(p, g): continue
                 v.update(alpha * v + (1-alpha) * g * g)
                 p.update(p - lr * g / (jt.sqrt(v) + eps))
         self.post_step()
@@ -428,7 +433,7 @@ class Adam(Optimizer):
             weight_decay = pg.get("weight_decay", self.weight_decay)
             b0, b1 = pg.get("betas", self.betas)
             for p, g, v, m in zip(pg["params"], pg["grads"], pg["values"], pg["m"]):
-                if p.is_stop_grad(): continue
+                if p.is_stop_grad() or not _grad_matches_param(p, g): continue
                 g = p * weight_decay + g
                 m.update(b0 * m + (1-b0) * g)
                 v.update(b1 * v + (1-b1) * g * g)
@@ -478,7 +483,7 @@ class AdamW(Optimizer):
             weight_decay = pg.get("weight_decay", self.weight_decay)
             b0, b1 = pg.get("betas", self.betas)
             for p, g, v, m in zip(pg["params"], pg["grads"], pg["values"], pg["m"]):
-                if p.is_stop_grad(): continue
+                if p.is_stop_grad() or not _grad_matches_param(p, g): continue
                 p.update(p * (1 - lr * weight_decay))
                 bias_correction1 = 1 - b0 ** n
                 bias_correction2 = 1 - b1 ** n
@@ -573,7 +578,7 @@ class Adan(Optimizer):
                                             pg["v"], 
                                             pg["d"], 
                                             pg["pre_grad"]):
-                if p.is_stop_grad(): continue
+                if p.is_stop_grad() or not _grad_matches_param(p, g): continue
 
                 if self.n_step>0:
                     pre_g.update(g - pre_g)  # Update pre_g as grad_diff

@@ -27,7 +27,16 @@ struct Slice {
             else if (stop<0)
                 stop = std::max((int64)0, stop+size);
         }
-        if (start<0) start += size;
+        if (start<0) {
+            start += size;
+            if (start<0) {
+                // over-negative start (e.g. start=-100 on size=8): the single
+                // start+=size above cannot make it non-negative. Clamp like
+                // numpy/torch: forward slices start at 0, reverse slices start
+                // "before the beginning" (-1) -> empty range.
+                start = step>0 ? 0 : -1;
+            }
+        }
         mask = 0;
         ASSERT(start==stop || (start>=0 && stop>=-1 && start<size && stop<=size))
             << "slice overflow:" << start << stop << step;

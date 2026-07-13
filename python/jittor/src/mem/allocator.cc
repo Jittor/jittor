@@ -82,8 +82,19 @@ Allocator* get_allocator(bool temp_allocator) {
             allocator = &cuda_device_allocator;
         }
     } else
-    if (use_cuda_host_allocator)
-        allocator = &cuda_host_allocator;
+    if (use_cuda_host_allocator) {
+        // The cuda host allocator (pinned memory via cudaMallocHost) requires a
+        // real CUDA device; with none visible (e.g. CUDA_VISIBLE_DEVICES="" in a
+        // CPU-only Ray actor) it aborts with cudaErrorNoDevice. The flag defaults
+        // to 1 even in a .so built with HAS_CUDA, and the import-time reset isn't
+        // always reliable, so gate on the actual device count here and fall back
+        // to the plain aligned CPU allocator when there is no device -- keeping
+        // jittor usable as a pure-CPU runtime. Cached: device visibility is fixed
+        // for a process's lifetime.
+        static int _cuda_dev_cnt = get_device_count();
+        if (_cuda_dev_cnt > 0)
+            allocator = &cuda_host_allocator;
+    }
 #endif
     if (!allocator) {
         LOGvv << "Using aligned_allocator";

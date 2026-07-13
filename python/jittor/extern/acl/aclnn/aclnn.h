@@ -102,6 +102,7 @@
 #include "aclnnop/aclnn_batch_norm.h"
 #include "aclnnop/aclnn_batch_norm_backward.h"
 #include "aclnnop/aclnn_layer_norm.h"
+#include "aclnnop/aclnn_layer_norm_backward.h"
 #include "aclnnop/aclnn_apply_rotary_pos_emb.h"
 #include "aclnnop/aclnn_stack.h"
 #include "aclnnop/aclnn_nan_to_num.h"

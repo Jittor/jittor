@@ -445,7 +445,7 @@ def calculate_std(var, mode, nonlinearity, param=0.01):
     return std
 
 
-def kaiming_uniform_(var, a=0, mode='fan_in', nonlinearity='leaky_relu'):
+def kaiming_uniform_(var, a=0, mode='fan_in', nonlinearity='leaky_relu', generator=None):
     ''' Inplace initialize Jittor Var by kaiming_uniform.
 
     Args:
@@ -476,7 +476,7 @@ def kaiming_uniform_(var, a=0, mode='fan_in', nonlinearity='leaky_relu'):
     return uniform_(var,-bound, bound)
 Var.kaiming_uniform_ = kaiming_uniform_
 
-def kaiming_normal_(var, a=0, mode='fan_in', nonlinearity='leaky_relu'):
+def kaiming_normal_(var, a=0, mode='fan_in', nonlinearity='leaky_relu', generator=None):
     ''' Inplace initialize Jittor Var by kaiming_normal.
 
     Args:

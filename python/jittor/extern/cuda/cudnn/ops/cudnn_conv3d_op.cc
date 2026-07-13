@@ -86,6 +86,7 @@ VarPtr CudnnConv3dOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 #pragma clang diagnostic ignored "-Wtautological-compare"
 
 EXTERN_LIB unordered_map<string, cudnnConvolutionFwdAlgo_t> fwd_algo_cache;
+EXTERN_LIB int cudnn_benchmark;
 
 template <typename T_ELEM> __inline__  cudnnDataType_t getDataType();
 // template <> __inline__ cudnnDataType_t getDataType<half1>() { return CUDNN_DATA_HALF;   }
@@ -146,16 +147,21 @@ void CudnnConv3dOp::jit_run() {
     // is the kernel rc order
     // currently, No perf difference is observed between
     // this two mode
+    bool has_fp16_or_bf16 = x->dtype() == ns_float16
+        || y->dtype() == ns_float16 || w->dtype() == ns_float16
+        || x->dtype() == ns_bfloat16
+        || y->dtype() == ns_bfloat16 || w->dtype() == ns_bfloat16;
+    cudnnDataType_t conv_compute_type = has_fp16_or_bf16 ? CUDNN_DATA_FLOAT : getDataType<Ty>();
     checkCudaErrors(cudnnSetConvolutionNdDescriptor(
         cudnnConvDesc, 3,
         padA, convstrideA, dilationA,
-        CUDNN_CROSS_CORRELATION, getDataType<Ty>()
+        CUDNN_CROSS_CORRELATION, conv_compute_type
     ));
     // MIOpen requires groups to be set after descriptor initialization
     checkCudaErrors(cudnnSetConvolutionGroupCount( cudnnConvDesc, groups ));
 
     // using tensor core
-    if(use_tensorcore){
+    if(use_tensorcore || has_fp16_or_bf16){
         checkCudaErrors( cudnnSetConvolutionMathType(cudnnConvDesc, CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION) );
     }
 
@@ -193,7 +199,7 @@ void CudnnConv3dOp::jit_run() {
     int perf_count;
     STACK_ALLOC(cudnnConvolutionFwdAlgoPerf_t,perf_results,num_algos);
     cudnnConvolutionFwdAlgo_t algo;
-    bool benchmark=true;
+    bool benchmark = (cudnn_benchmark < 0 || cudnn_benchmark > 0) && !has_fp16_or_bf16;
 
     JK& jk = get_jk();
     jk.clear();
@@ -204,7 +210,8 @@ void CudnnConv3dOp::jit_run() {
     
     if (iter!=fwd_algo_cache.end()) algo = iter->second;
     else {
-        if (fwd_algo_cache.size()>=max_cache_size) benchmark = false;
+        bool cache_algo = fwd_algo_cache.size() < max_cache_size;
+        if (!cache_algo) benchmark = false;
         if (benchmark) {
             size_t max_ws_size = 0;
             for (int i = 0; i < num_algos; i++) {
@@ -246,10 +253,10 @@ void CudnnConv3dOp::jit_run() {
             if (perf_results[i].status == CUDNN_STATUS_SUCCESS){
                 best_algo_idx=i;
                 break;
-            }
+        }
         ASSERT(best_algo_idx!=-1);
         algo=perf_results[best_algo_idx].algo;
-        if (benchmark) {
+        if (cache_algo) {
             fwd_algo_cache[jk.to_string()] = algo;
             if (fwd_algo_cache.size()==max_cache_size)
                 LOGw << "forward_ algorithm cache is full";

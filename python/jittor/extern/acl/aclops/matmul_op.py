@@ -47,6 +47,7 @@ def matmul_forward(name: str,
     {input_code}
     op.add(out0, false);
     {attr_code}
+    op.cube_math_type = {1 if getattr(jt, "acl_allow_hf32", False) else 0};
     op.run();""",
                    data=extra_data)
 

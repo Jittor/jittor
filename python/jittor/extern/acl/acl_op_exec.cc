@@ -303,7 +303,10 @@ namespace jittor
                     op.op_attr.reset(attr);
                     op.add(rop->y, false);
                     op.run();
-                    aclrtSynchronizeStream(aclstream);
+                    // sync removed: aclstream is in-order and the shared
+                    // workspace is guarded in mallocWorkSpace(). Draining here
+                    // stalled the pipeline on every reduce (LayerNorm/softmax
+                    // backward/Adam), which dominated NPU step time.
                 }
                 else if (op->name() == string("broadcast_to"))
                 {
@@ -329,8 +332,11 @@ namespace jittor
                     // bop->x->shape = xshape_bk;
                     op.add(bop->z, false);
                     op.run();
+                    // shape is copied into the aclTensor synchronously during
+                    // op.run() (CreateAclTensor), so restoring it right after
+                    // is safe without draining the stream. sync removed for the
+                    // same reason as the reduce case above.
                     bop->x->shape = xshape_bk;
-                    aclrtSynchronizeStream(aclstream);
                 }
                 else if (op->name() == string("fuse_transpose"))
                 {

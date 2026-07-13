@@ -10,7 +10,177 @@
 # ***************************************************************
 
 __version__ = '1.3.11.0'
+
+import os as _osW
+import sys as _sys
+
+def _jt_torch_truthy(_value):
+    return str(_value or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _jt_torch_prepend_env_path(_name, _path):
+    if not _path:
+        return
+    _old = [_p for _p in _os.environ.get(_name, "").split(_os.pathsep) if _p]
+    _out = [_path]
+    for _p in _old:
+        if _p not in _out:
+            _out.append(_p)
+    _os.environ[_name] = _os.pathsep.join(_out)
+
+
+def _jt_torch_add_nvcc_flags(_flags):
+    _cur = _os.environ.get("nvcc_flags", "")
+    _items = _cur.split()
+    for _tok in _flags.split():
+        if _tok not in _items:
+            _items.append(_tok)
+    _os.environ["nvcc_flags"] = " ".join(_items)
+
+
+def _jt_torch_entry_runtime_root():
+    if _os.environ.get("JITTOR_TORCH_PROJECT_ROOT"):
+        return _os.path.join(
+            _os.path.abspath(_os.path.expanduser(_os.environ["JITTOR_TORCH_PROJECT_ROOT"])),
+            ".cache",
+            "jittor_torch",
+        )
+    _entry = _sys.argv[0] if _sys.argv else ""
+    if not _entry or _entry in ("-c", "-m"):
+        return None
+    _entry = _os.path.abspath(_os.path.expanduser(_entry))
+    if not _os.path.isfile(_entry):
+        return None
+    try:
+        with open(_entry, "r", encoding="utf-8", errors="ignore") as _f:
+            _head = _f.read(65536)
+    except OSError:
+        _head = ""
+    if (
+        "jittor.torch_shim" in _head
+        or "torch_shim" in _head
+        or "import jittor as torch" in _head
+        or "import jiitor as torch" in _head
+    ):
+        return _os.path.join(_os.path.dirname(_entry), ".cache", "jittor_torch")
+    return None
+
+
+def _jt_torch_is_gaussian_splatting_project(_root):
+    if not _root:
+        return False
+    _root = _os.path.abspath(_os.path.expanduser(_root))
+    for _path in (
+        "train.py",
+        "scene/gaussian_model.py",
+        "gaussian_renderer/__init__.py",
+    ):
+        if not _os.path.exists(_os.path.join(_root, _path)):
+            return False
+    return True
+
+
+def _jt_torch_find_jtcuda(_real_home):
+    _candidates = []
+    if _os.environ.get("JTCUDA"):
+        _candidates.append(_os.environ["JTCUDA"])
+    for _home in (_real_home, _os.environ.get("HOME")):
+        if not _home:
+            continue
+        _root = _os.path.join(_home, ".cache", "jittor", "jtcuda")
+        try:
+            _names = _os.listdir(_root)
+        except OSError:
+            continue
+        for _name in _names:
+            if _name.startswith("cuda") and _name.endswith("_linux"):
+                _candidates.append(_os.path.join(_root, _name))
+    _valid = []
+    for _path in dict.fromkeys(_candidates):
+        if _os.path.isfile(_os.path.join(_path, "bin", "nvcc")):
+            _valid.append(_path)
+    if not _valid:
+        return None
+    _valid.sort(key=lambda _path: (
+        not _os.path.isfile(_os.path.join(_path, "include", "cudnn.h")),
+        "cuda12.2" not in _os.path.basename(_path),
+        _path,
+    ))
+    return _valid[0]
+
+
+_jt_torch_real_home = _os.environ.get("REAL_HOME") or _os.environ.get("HOME")
+_jt_torch_runtime_root = _os.environ.get("JITTOR_TORCH_RUNTIME_ROOT") or _jt_torch_entry_runtime_root()
+if _jt_torch_runtime_root:
+    _jt_torch_runtime_root = _os.path.abspath(_os.path.expanduser(_jt_torch_runtime_root))
+    _os.environ.setdefault("JITTOR_TORCH_RUNTIME_ROOT", _jt_torch_runtime_root)
+    for _name, _value in (
+        ("FIX_TORCH_ERROR", "0"),
+        ("DISABLE_MULTIPROCESSING", "1"),
+        ("use_cutt", "0"),
+        ("use_cutlass", "0"),
+        ("use_nccl", "0"),
+        ("use_mkl", "0"),
+    ):
+        _os.environ.setdefault(_name, _value)
+    _os.makedirs(_jt_torch_runtime_root, exist_ok=True)
+    for _name, _subdir in (
+        ("JITTOR_HOME", "jittor_cache"),
+        ("TORCH_HOME", "torch_home"),
+        ("JITTOR_TORCH_EXTENSIONS_DIR", "torch_extensions"),
+        ("TORCH_EXTENSIONS_DIR", "torch_extensions"),
+        ("XDG_CACHE_HOME", "xdg_cache"),
+        ("CUDA_CACHE_PATH", "cuda_cache"),
+        ("TRITON_HOME", "triton_home"),
+        ("TRITON_CACHE_DIR", "triton_home/cache"),
+        ("TRITON_OVERRIDE_DIR", "triton_home/override"),
+        ("TRITON_DUMP_DIR", "triton_home/dump"),
+        ("PIP_CACHE_DIR", "pip_cache"),
+    ):
+        _os.environ.setdefault(_name, _os.path.join(_jt_torch_runtime_root, _subdir))
+        _os.makedirs(_os.environ[_name], exist_ok=True)
+    _flex_gemm_cache = _os.path.join(_jt_torch_runtime_root, "flex_gemm", "autotune_cache.json")
+    _os.environ.setdefault("FLEX_GEMM_AUTOTUNE_CACHE_PATH", _flex_gemm_cache)
+    _os.makedirs(_os.path.dirname(_os.environ["FLEX_GEMM_AUTOTUNE_CACHE_PATH"]), exist_ok=True)
+    if _os.environ.get("JITTOR_TORCH_KEEP_HOME", "0").lower() not in ("1", "true", "yes", "on"):
+        _os.environ.setdefault("REAL_HOME", _jt_torch_real_home or "")
+        _os.environ["HOME"] = _os.environ.get(
+            "JITTOR_TORCH_HOME",
+            _os.path.join(_jt_torch_runtime_root, "home"),
+        )
+        _os.makedirs(_os.environ["HOME"], exist_ok=True)
+    if _os.environ.get("JITTOR_TORCH_KEEP_TMPDIR", "0").lower() not in ("1", "true", "yes", "on"):
+        _os.environ["TMPDIR"] = _os.path.join(_jt_torch_runtime_root, "tmp")
+        _os.makedirs(_os.environ["TMPDIR"], exist_ok=True)
+    if _os.environ.get("JITTOR_TORCH_KEEP_FAST_MATH", "0").lower() not in ("1", "true", "yes", "on"):
+        _jt_torch_add_nvcc_flags("--fmad=false --prec-div=true --prec-sqrt=true")
+    if not _jt_torch_truthy(_os.environ.get("JITTOR_TORCH_KEEP_CUDA")):
+        _jt_torch_jtcuda = _jt_torch_find_jtcuda(_jt_torch_real_home)
+        if _jt_torch_jtcuda:
+            _os.environ.setdefault("JTCUDA", _jt_torch_jtcuda)
+            _os.environ.setdefault("nvcc_path", _os.path.join(_jt_torch_jtcuda, "bin", "nvcc"))
+            _os.environ.setdefault("CUDA_HOME", _jt_torch_jtcuda)
+            _jt_torch_prepend_env_path("PATH", _os.path.join(_jt_torch_jtcuda, "bin"))
+            _jt_torch_prepend_env_path("LD_LIBRARY_PATH", _os.path.join(_jt_torch_jtcuda, "lib64"))
+
 from jittor_utils import lock
+
+# On Ascend (NPU), bringing MPI up via mpi4py BEFORE the CANN libraries are
+# loaded avoids a fatal ABI/symbol clash (CANN's globally-loaded libs interpose
+# OpenMPI's internal symbols, causing a wild-jump SIGBUS inside MPI_Init when
+# our own mpi op module is loaded later). Doing it here, first thing, is the
+# only point early enough. Guarded to multi-process launches (mpirun sets
+# OMPI_COMM_WORLD_SIZE); harmless/no-op otherwise. jittor's mpi module detects
+# the already-initialized MPI and skips its own MPI_Init.
+if _os.environ.get("OMPI_COMM_WORLD_SIZE") and _os.environ.get("use_mpi", "1") != "0":
+    try:
+        import mpi4py
+        mpi4py.rc.initialize = True
+        mpi4py.rc.finalize = False
+        from mpi4py import MPI as _MPI  # triggers MPI_Init before CANN loads
+    except Exception as _e:
+        print("jittor: mpi4py pre-init skipped:", _e)
+
 with lock.lock_scope():
     ori_int = int
     ori_float = float
@@ -22,12 +192,26 @@ with lock.lock_scope():
     import jittor_core as core
     from jittor_core import *
     from jittor_core.ops import *
+    _core_profiler = core.profiler
     from . import compile_extern
     from .compile_extern import mkl_ops, mpi, mpi_ops, in_mpi, rank, world_size
     if core.get_device_count() == 0:
         has_cuda = compile_extern.has_cuda = compiler.has_cuda = False
-    from .compile_extern import cudnn, curand, cublas, cufft, cusparse
-    from .init_cupy import numpy2cupy
+    if has_cuda:
+        from .compile_extern import cudnn, curand, cublas, cufft, cusparse
+        from .init_cupy import numpy2cupy
+    else:
+        # No CUDA device visible (e.g. CUDA_VISIBLE_DEVICES="" in a CPU-only Ray
+        # orchestrator). Skip CUDA-library / cupy init (they call into the CUDA
+        # runtime and would raise cudaErrorNoDevice); run CPU-only.
+        cudnn = curand = cublas = cufft = cusparse = None
+        numpy2cupy = None
+        # CPU arrays default to the CUDA pinned-host allocator (cudaMallocHost),
+        # which also fails with no device -- switch to the plain host allocator.
+        try:
+            core.flags.use_cuda_host_allocator = 0
+        except Exception:
+            pass
 
 from typing import List, Tuple
 import contextlib
@@ -251,15 +435,15 @@ class profile_scope(_call_no_record_scope):
         self.report = []
         try:
             self.fs.__enter__()
-            profiler.start(self.warmup, self.rerun)
+            _core_profiler.start(self.warmup, self.rerun)
             return self.report
         except:
-            profiler.stop()
+            _core_profiler.stop()
             raise
 
     def __exit__(self, *exc):
-        profiler.stop()
-        self.report.extend(profiler.report())
+        _core_profiler.stop()
+        self.report.extend(_core_profiler.report())
         self.fs.__exit__(*exc)
 
 
@@ -381,9 +565,16 @@ def array(data, dtype=None):
         jt.Var([1], dtype=int32)
         >>> jt.array([0, 2.71, 3.14]) 
         jt.Var([0.   2.71 3.14], dtype=float32)
-        >>> jt.array(np.arange(4, dtype=np.uint8))  
+        >>> jt.array(np.arange(4, dtype=np.uint8))
         jt.Var([0 1 2 3], dtype=uint8)
     '''
+    # torch accepts a range/generator in tensor(...); jittor's core array op
+    # rejects them -> materialise to a list first (mmdet pisa_loss: jt.array(range(...))).
+    import types as _types_arr
+    if isinstance(data, (range, _types_arr.GeneratorType, map, filter, zip)):
+        data = list(data)
+    elif isinstance(data, core.NanoVector):     # e.g. jt.array(some_var.shape)
+        data = list(data)                       # NB: `int` is shadowed by the dtype here
     if isinstance(data, core.Var):
         if dtype is None:
             ret = data.clone()
@@ -598,7 +789,109 @@ def zeros_like(x, dtype=None) -> Var:
     if dtype is None: dtype = x.dtype
     return zeros(x.shape, dtype)
 
-flags = core.Flags()
+_core_flags = core.Flags()
+
+
+def _install_torch_shim_runtime(enable=True):
+    if not enable:
+        return None
+    import os as _os_runtime
+    import sys as _sys_runtime
+    def _apply_external_runtime_patches():
+        try:
+            import jittor.triton_shim  # noqa: F401
+        except Exception:
+            pass
+        try:
+            import jittor.monkeypatch_ops as _mp
+            _mp.apply()
+            _mp.force_flexgemm_bridge_algorithm("IMPLICIT_GEMM")
+        except Exception:
+            pass
+    if getattr(_install_torch_shim_runtime, "_installed", False):
+        _apply_external_runtime_patches()
+        _sys_runtime.modules["torch"] = _sys_runtime.modules[__name__]
+        return getattr(_install_torch_shim_runtime, "_result", None)
+
+    _project_root = _os_runtime.environ.get("JITTOR_TORCH_PROJECT_ROOT")
+    if not _project_root:
+        _entry = _sys_runtime.argv[0] if _sys_runtime.argv else ""
+        if _entry and _entry not in ("-c", "-m") and _os_runtime.path.isfile(_entry):
+            _project_root = _os_runtime.path.dirname(_os_runtime.path.abspath(_entry))
+        else:
+            _project_root = _os_runtime.getcwd()
+    if _jt_torch_is_gaussian_splatting_project(_project_root):
+        # The original implementation calls torch.cuda.empty_cache() after
+        # densification. Keep that project-local reclamation point so SFRL's
+        # cached blocks cannot starve CUDA temporary workspaces.
+        _os_runtime.environ.setdefault("JITTOR_TORCH_CUDA_EMPTY_CACHE", "gc")
+    _runtime_root = _os_runtime.environ.get(
+        "JITTOR_TORCH_RUNTIME_ROOT",
+        _os_runtime.path.join(_project_root, ".cache", "jittor_torch"),
+    )
+    _os_runtime.environ.setdefault("JITTOR_TORCH_PROJECT_ROOT", _project_root)
+    _os_runtime.environ.setdefault("JITTOR_TORCH_RUNTIME_ROOT", _runtime_root)
+    _os_runtime.environ.setdefault("JITTOR_TORCH_SHIM", "1")
+    _os_runtime.environ.setdefault("FIX_TORCH_ERROR", "0")
+    _inference = str(_os_runtime.environ.get(
+        "JITTOR_TORCH_INFERENCE", "0"
+    )).strip().lower() in ("1", "true", "yes", "on")
+    _strict_bootstrap = str(_os_runtime.environ.get(
+        "JITTOR_TORCH_STRICT_BOOTSTRAP", "0"
+    )).strip().lower() in ("1", "true", "yes", "on")
+
+    result = None
+    try:
+        from jittor.torch_shim import bootstrap as _jt_torch_bootstrap
+        result = _jt_torch_bootstrap.enable(
+            project_root=_project_root,
+            runtime_root=_runtime_root,
+            auto_scan_extensions=True,
+            build_extensions=True,
+            local_home=True,
+            configure_cuda=False,
+            inference=_inference,
+            verbose=False,
+        )
+    except Exception as _e:
+        if _strict_bootstrap:
+            raise RuntimeError("torch shim bootstrap failed") from _e
+        try:
+            from jittor.compiler import LOG as _LOG
+            _LOG.w(f"torch_shim bootstrap skipped: {_e}")
+        except Exception:
+            pass
+
+    _apply_external_runtime_patches()
+    _sys_runtime.modules["torch"] = _sys_runtime.modules[__name__]
+    _install_torch_shim_runtime._installed = True
+    _install_torch_shim_runtime._result = result
+    return result
+
+
+class _TorchShimFlagsProxy:
+    def __init__(self, inner):
+        object.__setattr__(self, "_inner", inner)
+        object.__setattr__(self, "_torch_shim", 0)
+
+    def __getattr__(self, name):
+        if name == "torch_shim":
+            return object.__getattribute__(self, "_torch_shim")
+        return getattr(object.__getattribute__(self, "_inner"), name)
+
+    def __setattr__(self, name, value):
+        if name == "torch_shim":
+            object.__setattr__(self, "_torch_shim", ori_int(ori_bool(value)))
+            if value:
+                _install_torch_shim_runtime(True)
+            return
+        setattr(object.__getattribute__(self, "_inner"), name, value)
+
+    def __repr__(self):
+        return repr(object.__getattribute__(self, "_inner"))
+
+
+flags = _TorchShimFlagsProxy(_core_flags)
 
 def var(x, dim=None, dims=None, unbiased=False, keepdims=False):
     """ return the sample variance. If unbiased is True, Bessel's correction will be used.
@@ -683,12 +976,27 @@ origin_reshape = reshape
 def reshape(x, *shape):
     if len(shape) == 1 and isinstance(shape[0], (Sequence, NanoVector)):
         shape = shape[0]
+    # torch accepts 0-d int tensors / numpy ints as shape elements (e.g. longformer's
+    # `_chunk` passes torch.div(size, n) into .view); jittor's core reshape needs plain
+    # int64. Coerce only when a non-int element is present — plain-int shapes (the hot
+    # path) are untouched, so this can't change existing behavior, only un-break it.
+    # (NB: in this namespace `int`/`all`/`any` are shadowed by jittor's dtype/reductions,
+    # so use an explicit loop and grab the genuine builtin int via `(0).__class__`.)
+    pyint = (0).__class__
+    coerce = False
+    for s in shape:
+        if type(s) is not pyint:
+            coerce = True
+            break
+    if coerce:
+        shape = tuple(pyint(s.item()) if isinstance(s, Var) else pyint(s) for s in shape)
     return origin_reshape(x, shape)
 reshape.__doc__ = origin_reshape.__doc__
 Var.view = Var.reshape = view = reshape
 
 origin_transpose = transpose
 def transpose(x, *dim):
+    original_dim = dim
     if len(dim) == 1 and isinstance(dim[0], (Sequence, NanoVector)):
         dim = dim[0]
     elif len(dim) == 2:
@@ -696,7 +1004,36 @@ def transpose(x, *dim):
         a, b = dim
         axes[a], axes[b] = axes[b], axes[a]
         dim = axes
-    return origin_transpose(x, dim)
+    # NumPy helpers such as np.argsort return numpy.integer axis values.  The
+    # C++ transpose binding requires exact Python ints, while torch accepts any
+    # integral sequence in Tensor.permute().
+    pyint = (0).__class__
+    coerce = False
+    for d in dim:
+        if type(d) is not pyint:
+            coerce = True
+            break
+    if coerce:
+        dim = tuple(pyint(d.item()) if isinstance(d, Var) else pyint(d) for d in dim)
+    out = origin_transpose(x, dim)
+    try:
+        axes_tuple = tuple(pyint(i) for i in dim)
+        last2 = list(range(x.ndim))
+        if x.ndim >= 2:
+            last2[-1], last2[-2] = last2[-2], last2[-1]
+        if x.ndim >= 2 and axes_tuple == tuple(last2):
+            out._jittor_transpose_base = x
+            out._jittor_transpose_axes = axes_tuple
+            out._jittor_transpose_last2 = True
+        elif len(original_dim) == 2:
+            a, b = pyint(original_dim[0]), pyint(original_dim[1])
+            if x.ndim >= 2 and {a % x.ndim, b % x.ndim} == {x.ndim - 2, x.ndim - 1}:
+                out._jittor_transpose_base = x
+                out._jittor_transpose_axes = axes_tuple
+                out._jittor_transpose_last2 = True
+    except Exception:
+        pass
+    return out
 transpose.__doc__ = origin_transpose.__doc__
 Var.transpose = Var.permute = permute = transpose
 
@@ -732,19 +1069,30 @@ Var.unsqueeze = unsqueeze
 def squeeze(x, dim=None):
     shape = list(x.shape)
     if dim is None:
-        new_shape = [s for s in shape if s > 1]
-        return x.reshape(new_shape)
+        # squeeze removes ONLY size-1 dims (size-0 dims must be kept, else an empty
+        # tensor like [0,1] reshapes to the wrong size). jittor has no 0-dim tensors,
+        # so an all-ones shape collapses to [1] (mmdet: nonzero(...).squeeze()).
+        new_shape = [s for s in shape if s != 1]
+        return x.reshape(new_shape if new_shape else [1])
     else:
         if dim < 0: dim += len(shape)
         assert dim < len(shape) and dim >= 0
-        assert shape[dim] == 1
-        return x.reshape(shape[:dim] + shape[dim+1:])
+        # torch (and numpy): squeeze(dim) is a no-op when that dim's size != 1,
+        # not an error (canine's _downsample_attention_mask relies on this).
+        if shape[dim] != 1:
+            return x
+        new_shape = shape[:dim] + shape[dim+1:]
+        return x.reshape(new_shape if new_shape else [1])
 Var.squeeze = squeeze
 
 def clamp(x, min_v=None, max_v=None):
     if x.shape[0]==0:
         return x
-    if min_v is not None and max_v is not None:
+    # torch allows tensor min/max bounds (and doesn't assert ordering); only do the
+    # scalar ordering sanity-check when both bounds are plain scalars -- a Var bound
+    # can't be reduced to a single bool. maximum/minimum already broadcast tensors.
+    if min_v is not None and max_v is not None \
+            and not isinstance(min_v, Var) and not isinstance(max_v, Var):
         assert min_v <= max_v
     if min_v is not None:
         x = x.maximum(min_v)
@@ -890,6 +1238,16 @@ def argmax(x: Var, dim: int, keepdims:bool=False):
     if dim is None:
         dim = 0
         x = x.flatten()
+    elif hasattr(x, "shape"):
+        nd = len(x.shape)
+        if not (-nd <= dim < nd):
+            # clear error instead of the cryptic cutt_transpose "axes != xdim"
+            raise IndexError(f"argmax: dim {dim} out of range for a {nd}-D "
+                             f"input (expected dim in [{-nd}, {nd-1}])")
+        # normalize negative dim: arg_reduce's internal transpose miscomputes the
+        # axes for negative dims other than -1 -> cryptic cutt_transpose crash
+        if dim < 0:
+            dim += nd
     return jt.arg_reduce(x, "max", dim, keepdims)
 Var.argmax = argmax
 
@@ -914,6 +1272,13 @@ def argmin(x, dim: int, keepdims:bool=False):
         >>> a.argmin(dim=1)
         (jt.Var([1 0], dtype=int32), jt.Var([-0.4951588 -1.633469 ], dtype=float32))
     '''
+    if dim is not None and hasattr(x, "shape"):
+        nd = len(x.shape)
+        if not (-nd <= dim < nd):
+            raise IndexError(f"argmin: dim {dim} out of range for a {nd}-D "
+                             f"input (expected dim in [{-nd}, {nd-1}])")
+        if dim < 0:
+            dim += nd
     return jt.arg_reduce(x, "min", dim, keepdims)
 Var.argmin = argmin
 
@@ -1197,6 +1562,53 @@ def _uniq(x):
             b.append(i)
     return b
 
+class _RemovableHandle:
+    ''' torch-compatible handle returned by ``register_forward_hook`` etc.
+
+    Calling ``.remove()`` (idempotent) detaches the hook. Also usable as a
+    context manager, mirroring ``torch.utils.hooks.RemovableHandle``.
+    '''
+    def __init__(self, remove_fn):
+        self._remove_fn = remove_fn
+    def remove(self):
+        if self._remove_fn is not None:
+            self._remove_fn()
+            self._remove_fn = None
+    def __enter__(self):
+        return self
+    def __exit__(self, *a):
+        self.remove()
+        return False
+
+class _WriteThroughDict(dict):
+    ''' A dict view of a Module's Var attributes whose item-assignment writes back
+    to the owning module. jittor's ``_parameters``/``_buffers`` are properties that
+    build a fresh dict each access, so torch/accelerate's idiom
+    ``module._parameters[name] = value`` (used by accelerate's
+    set_module_tensor_to_device on the from_pretrained meta/low_cpu_mem_usage fast
+    path) would write into a throwaway dict and be LOST -> the model keeps its
+    construction-time weights instead of the checkpoint's. Writing through to
+    ``setattr(owner, name, value)`` makes the assignment actually take effect. '''
+    def __init__(self, owner, items):
+        super().__init__(items)
+        object.__setattr__(self, "_owner", owner)
+    def __setitem__(self, k, v):
+        super().__setitem__(k, v)
+        # Preserve the buffer/persistent classification of the attribute being
+        # replaced, so a registered buffer stays a buffer (not reclassified as a
+        # trainable parameter) when accelerate reassigns it from the checkpoint.
+        old = getattr(self._owner, k, None)
+        if old is not None and isinstance(v, Var):
+            for _flag in ("is_buffer", "persistent"):
+                if hasattr(old, _flag):
+                    try: setattr(v, _flag, getattr(old, _flag))
+                    except Exception: pass
+        object.__setattr__(self._owner, k, v)
+    def __delitem__(self, k):
+        super().__delitem__(k)
+        if hasattr(self._owner, k):
+            object.__delattr__(self._owner, k)
+
 class Module:
     def __init__(self, *args, **kw):
         pass
@@ -1277,9 +1689,19 @@ class Module:
             dc = v.__dict__
             if isinstance(v, nn.ParameterList):
                 dc = v.params
+            bufnames = v.__dict__.get("_buffer_names", ())
             for k2, p in dc.items():
                 if isinstance(k2, str) and k2.startswith("_"): continue
                 if isinstance(p, Var):
+                    # registered buffers are never trainable parameters. Check the
+                    # per-Var tags AND the module's buffer-name set (the tags are
+                    # lost when from_pretrained replaces the Var; the name set is not).
+                    if getattr(p, "is_buffer", False):
+                        continue
+                    if not getattr(p, "persistent", True):
+                        continue
+                    if k2 in bufnames:
+                        continue
                     ps.append(p)
                     pname = ".".join(stack[1:]+[str(k2)])
                     if len(pname) > len(p.name()):
@@ -1368,8 +1790,34 @@ class Module:
             ('bias', jt.Var([-0.38282675  0.36271113 -0.7063226   0.02899247  0.52210844], dtype=float32))]
 
         '''
-        state_dict = self.state_dict(recurse=recurse)
-        return list(state_dict.items())
+        # Mirror parameters() exactly (dfs with per-module buffer-name exclusion)
+        # so a buffer whose is_buffer/persistent tag was lost to a dtype-cast Var
+        # replacement (e.g. rope inv_freq after from_pretrained) is still excluded
+        # by NAME -- otherwise it leaks into the optimizer and weight-decay drifts it.
+        ps = []
+        stack = []
+        def callback(parents, k, v, n):
+            stack.append(str(k))
+            dc = v.__dict__
+            if isinstance(v, nn.ParameterList):
+                dc = v.params
+            bufnames = v.__dict__.get("_buffer_names", ())
+            for k2, p in dc.items():
+                if isinstance(k2, str) and k2.startswith("_"): continue
+                if isinstance(p, Var):
+                    if getattr(p, "is_buffer", False): continue
+                    if not getattr(p, "persistent", True): continue
+                    if k2 in bufnames: continue
+                    name = ".".join(stack[1:] + [str(k2)])
+                    ps.append((name, p))
+        def callback_leave(parents, k, v, n):
+            stack.pop()
+        self.dfs([], None, callback, callback_leave, recurse)
+        seen = set(); out = []
+        for nm, p in ps:
+            if nm in seen: continue
+            seen.add(nm); out.append((nm, p))
+        return out
 
     def load_state_dict(self, params) -> None:
         '''
@@ -1453,37 +1901,71 @@ class Module:
 
     @property
     def _parameters(self):
-        return { k:v for k,v in self.__dict__.items() if isinstance(v, Var) }
+        # write-through so accelerate's `module._parameters[name] = value` persists
+        return _WriteThroughDict(self, { k:v for k,v in self.__dict__.items() if isinstance(v, Var) })
 
     def requires_grad_(self, requires_grad=True):
-        ''' Sets requires_grad for all parameters and sub-modules. '''
+        ''' Sets requires_grad for all parameters and sub-modules.
+
+        torch semantics: this toggles every PARAMETER leaf's ``requires_grad`` and
+        does NOT gate the module's forward. The previous jittor behavior of running
+        the whole forward under ``no_grad`` whenever the module flag was False is
+        incompatible with the freeze-then-unfreeze-a-subset pattern used by LoRA /
+        adapters (peft freezes the base model with ``requires_grad_(False)`` and then
+        re-enables only the adapter params): wrapping the forward in ``no_grad``
+        severs the autograd graph, so the re-enabled adapter params -- and any
+        upstream trainable tensors -- receive zero gradient. Toggling the leaves
+        instead keeps frozen weights frozen while letting gradients flow through the
+        module to whatever is still trainable.
+        '''
         self._requires_grad = requires_grad
-        self._place_hooker()
+        # propagate to every parameter leaf (recurse through sub-modules), matching
+        # torch.nn.Module.requires_grad_.
+        for p in self.parameters():
+            try:
+                p.requires_grad = requires_grad
+            except Exception:
+                pass
         return self
 
     def __hooked_call__(self, *args, **kw):
         if hasattr(self, "__fhook2__"):
-            if len(kw):
+            # torch's forward_pre_hook convention:
+            #   default:          hook(module, args) -> None | new_args
+            #   with_kwargs=True: hook(module, args, kwargs) -> None | (new_args, new_kwargs)
+            # When the hook was registered with_kwargs it must ALWAYS get the kwargs
+            # arg (even if empty) -- ms-swift's VL pre_forward_hook has a 3-arg
+            # signature and injects inputs_embeds via the kwargs dict.
+            if getattr(self, "__fhook2_with_kwargs__", False) or len(kw):
                 args_kw_result = self.__fhook2__(self, args, kw)
             else:
                 args_kw_result = self.__fhook2__(self, args)
             if args_kw_result is not None:
-                if isinstance(args_kw_result, tuple) and len(args_kw_result) == 2:
-                    args, kw = args_kw_result
+                if getattr(self, "__fhook2_with_kwargs__", False):
+                    # with_kwargs: torch requires a (new_args, new_kwargs) pair.
+                    if isinstance(args_kw_result, tuple) and len(args_kw_result) == 2:
+                        args, kw = args_kw_result
+                    else:
+                        raise RuntimeError(
+                            "forward pre-hook with kwargs must return None or a tuple "
+                            f"of (new_args, new_kwargs), but got {args_kw_result}."
+                        )
                 else:
-                    raise RuntimeError(
-                        "forward pre-hook must return None or a tuple "
-                        f"of (new_args, new_kwargs), but got {args_kw_result}."
-                    )
+                    # no kwargs: torch replaces args with the return value, wrapping a
+                    # single non-tuple return in a 1-tuple.
+                    if not isinstance(args_kw_result, tuple):
+                        args_kw_result = (args_kw_result,)
+                    args = args_kw_result
         if hasattr(self, "__bihook__"):
             if len(kw):
                 LOG.w("backward hook not support kw")
             args = grad_hooker(args, self.__bihook__)
-        if hasattr(self, "_requires_grad") and not self._requires_grad:
-            with jt.no_grad():
-                ret = self.__hooked_call__(*args, **kw)
-        else:
-            ret = self.__hooked_call__(*args, **kw)
+        # NB: do NOT wrap the forward in no_grad when `_requires_grad` is False.
+        # torch's requires_grad_(False) freezes parameters, it does not stop the
+        # forward from building the autograd graph; gating here severs grad for
+        # re-enabled sub-params (LoRA adapters) and upstream trainables. Freezing is
+        # enforced at the parameter level (see Module.requires_grad_).
+        ret = self.__hooked_call__(*args, **kw)
         if hasattr(self, "__bohook__"):
             if len(kw):
                 LOG.w("backward hook not support kw")
@@ -1492,8 +1974,15 @@ class Module:
             else:
                 ret = grad_hooker(ret, self.__bohook__)
         if hasattr(self, "__fhook__"):
-            if len(kw):
-                res = self.__fhook__(self, args, ret, kw)
+            # Match torch's forward-hook calling convention:
+            #   default:            hook(module, args, output)
+            #   with_kwargs=True:   hook(module, args, kwargs, output)
+            # (torch passes kwargs *before* output). Older jittor code called
+            # the hook with 4 positional args whenever kwargs were present,
+            # which breaks every plain 3-arg torch hook -- e.g. transformers'
+            # output_hidden_states / output_attentions paths.
+            if getattr(self, "__fhook_with_kwargs__", False):
+                res = self.__fhook__(self, args, kw, ret)
             else:
                 res = self.__fhook__(self, args, ret)
             if res is not None:
@@ -1508,26 +1997,38 @@ class Module:
         cls.__call__, cls.__hooked_call__ = \
             cls.__hooked_call__, cls.__call__
 
-    def register_forward_hook(self, func):
-        ''' Register a forward function hook that will be called after Module.execute. 
-        
-        The hook function will be called with the following arguments::
+    def register_forward_hook(self, func, *, prepend=False, with_kwargs=False, always_call=False):
+        ''' Register a forward function hook that will be called after Module.execute.
+
+        Follows torch's calling convention. By default the hook is called as::
 
             hook(module, input_args, output)
-        or::
-            hook(module, input_args, output, input_kwargs)
+
+        If ``with_kwargs=True`` it is called as (torch passes kwargs before
+        output)::
+
+            hook(module, input_args, input_kwargs, output)
+
+        If the hook returns a value it replaces the module output. Returns a
+        handle with a ``.remove()`` method (torch-compatible).
         '''
         self.__fhook__ = func
+        # NB: don't call bool() here -- the torch-compat layer rebinds the name
+        # ``bool`` in this module's globals to a dtype object; use truthiness.
+        self.__fhook_with_kwargs__ = True if with_kwargs else False
         self._place_hooker()
-    
+        return _RemovableHandle(self.remove_forward_hook)
+
     def remove_forward_hook(self):
         ''' Removes the current forward hook. '''
         if hasattr(self,"__fhook__"):
             delattr(self,"__fhook__")
+        if hasattr(self,"__fhook_with_kwargs__"):
+            delattr(self,"__fhook_with_kwargs__")
 
     def register_pre_forward_hook(self, func):
-        ''' Register a forward function hook that will be called before Module.execute. 
-        
+        ''' Register a forward function hook that will be called before Module.execute.
+
         The hook function will be called with the following arguments::
 
             hook(module, input_args)
@@ -1536,12 +2037,31 @@ class Module:
 
         '''
         self.__fhook2__ = func
+        self.__fhook2_with_kwargs__ = False
         self._place_hooker()
+
+    def register_forward_pre_hook(self, func, *, prepend=False, with_kwargs=False):
+        ''' torch-compatible alias of the pre-forward hook.
+
+        transformers / peft / ms-swift call ``register_forward_pre_hook`` (torch's
+        spelling) -- notably ms-swift's multimodal template registers one with
+        ``with_kwargs=True`` to swap ``input_ids`` for ``inputs_embeds`` before the
+        forward. Mirrors torch's signature and returns a ``.remove()``-able handle.
+        With ``with_kwargs=True`` the hook is called as ``hook(module, args, kwargs)``
+        and may return ``(new_args, new_kwargs)``; otherwise ``hook(module, args)``
+        returning ``None`` or replacement args.
+        '''
+        self.__fhook2__ = func
+        self.__fhook2_with_kwargs__ = True if with_kwargs else False
+        self._place_hooker()
+        return _RemovableHandle(self.remove_pre_forward_hook)
 
     def remove_pre_forward_hook(self):
         ''' Removes the current pre-forward hook. '''
         if hasattr(self,"__fhook2__"):
             delattr(self,"__fhook2__")
+        if hasattr(self,"__fhook2_with_kwargs__"):
+            delattr(self,"__fhook2_with_kwargs__")
 
     def register_input_backward_hook(self, func):
         self.__bihook__ = func
@@ -1594,15 +2114,28 @@ Arguments of hook are defined as::
         return cd
 
     def extra_repr(self):
-        ss = []
-        n = len(self.__init__.__code__.co_varnames)
-        if self.__init__.__defaults__ is not None:
-            n -= len(self.__init__.__defaults__)
-        for i, k in enumerate(self.__init__.__code__.co_varnames[1:]):
-            v = getattr(self, k) if hasattr(self, k) else None
-            if isinstance(v, Var): v = v.peek()
-            s = f"{k}={v}" if i >= n else str(v)
-            ss.append(s)
+        # Reentrancy guard: extra_repr introspects __init__ args and str()'s their
+        # values. When a value is itself a sub-module (e.g. peft wraps a
+        # `base_layer`, or passes ModuleDicts), str()'ing it re-enters the full
+        # __str__/dfs traversal -- which calls extra_repr again -- re-walking the
+        # subtree at every node => exponential blowup / RecursionError on deep
+        # wrapped models. torch's extra_repr never recurses into sub-modules; mirror
+        # that by short-circuiting any nested extra_repr triggered mid-render.
+        if getattr(Module, "_in_extra_repr", False):
+            return ""
+        Module._in_extra_repr = True
+        try:
+            ss = []
+            n = len(self.__init__.__code__.co_varnames)
+            if self.__init__.__defaults__ is not None:
+                n -= len(self.__init__.__defaults__)
+            for i, k in enumerate(self.__init__.__code__.co_varnames[1:]):
+                v = getattr(self, k) if hasattr(self, k) else None
+                if isinstance(v, Var): v = v.peek()
+                s = f"{k}={v}" if i >= n else str(v)
+                ss.append(s)
+        finally:
+            Module._in_extra_repr = False
         return ", ".join(ss)
 
     def apply(self, func):
@@ -1678,6 +2211,11 @@ Arguments of hook are defined as::
             >>> net.load('net.pkl')
         '''
         params = self.state_dict()
+        # Convert Vars to numpy before pickling. Pickling jittor Vars directly recurses
+        # under the torch-compat layer (the Parameter/.grad bridge creates a reference
+        # cycle), so model.save() RecursionError'd on torch-as-jittor. numpy values are
+        # portable and load_state_dict/load() restore them; a fresh dict, model untouched.
+        params = {k: (v.numpy() if isinstance(v, Var) else v) for k, v in params.items()}
         safepickle(params, path)
 
     def load(self, path: str):
@@ -1770,7 +2308,25 @@ Arguments of hook are defined as::
         return object.__getattribute__(self, key)
 
     def register_buffer(self, key, value, persistent=True):
-        value.persistent = persistent
+        # torch allows registering a None buffer as a placeholder (e.g. vLLM's
+        # FusedMoE expert_map when there is no expert parallelism). Don't try to
+        # tag attributes on None.
+        # Track buffer attribute NAMES on the module (like torch's _buffers dict).
+        # The per-Var is_buffer/persistent tags are lost when from_pretrained's
+        # dtype cast / weight-load REPLACES the buffer Var with a fresh one, so
+        # parameters()/named_parameters() can no longer tell it's a buffer and it
+        # leaks into the optimizer (then weight-decay corrupts e.g. rope inv_freq).
+        # Name-based tracking survives any Var replacement -- the torch invariant.
+        try:
+            self.__dict__.setdefault("_buffer_names", set()).add(key)
+        except Exception:
+            pass
+        if value is not None:
+            value.persistent = persistent
+            # mark as a registered buffer so parameters()/named_parameters() can
+            # exclude it: a buffer is never a trainable parameter, regardless of
+            # persistence. state_dict()/named_buffers() still use .persistent.
+            value.is_buffer = True
         object.__setattr__(self, key, value)
         return value
     
@@ -1780,14 +2336,32 @@ Arguments of hook are defined as::
         for k,v in self.__dict__.items():
             if isinstance(v, jt.Var):
                 buffers[k] = v
-        return buffers
+        # write-through so accelerate's `module._buffers[name] = value` (the is_buffer
+        # branch of set_module_tensor_to_device) persists to the module attribute.
+        return _WriteThroughDict(self, buffers)
     
-    def named_buffers(self,recurse=False):
-        
+    def named_buffers(self, recurse=True):
+        ''' Returns a list of (name, buffer) for all registered buffers.
+
+        Like torch, recurse=True (default) descends into all child modules,
+        prefixing names with the submodule path. Returns every registered
+        buffer regardless of persistence.
+        '''
         buffers = []
-        for k,v in self.__dict__.items():
-            if isinstance(v, jt.Var):
-                buffers.append((k,v))
+        uniq_set = set()
+        stack = []
+        def callback(parents, k, v, n):
+            stack.append(str(k))
+            for k2, p in v.__dict__.items():
+                if isinstance(k2, str) and k2.startswith("_"): continue
+                if isinstance(p, jt.Var) and getattr(p, "is_buffer", False):
+                    if id(p) in uniq_set: continue
+                    uniq_set.add(id(p))
+                    pname = ".".join(stack[1:]+[str(k2)])
+                    buffers.append((pname, p))
+        def callback_leave(parents, k, v, n):
+            stack.pop()
+        self.dfs([], None, callback, callback_leave, recurse)
         return buffers
 
     def named_children(self,):
@@ -2135,8 +2709,14 @@ Var.half = Var.float16
 def is_var(v):
     return isinstance(v, Var)
 
-# __array__ interface is used for np.array(jt_var)
-Var.__array__ = Var.numpy
+# __array__ interface is used for np.array(jt_var). numpy (and scipy, e.g. DETR's
+# linear_sum_assignment) call __array__(dtype=None[, copy=None]); accept and apply.
+def _var__array__(self, dtype=None, copy=None):
+    a = self.numpy()
+    if dtype is not None:
+        a = a.astype(dtype)
+    return a
+Var.__array__ = _var__array__
 Var.__array_priority__ = 2000
 # __reduce__, __module__ is used for pickle.dump and pickle.load
 Var.__module__ = "jittor"
@@ -2196,3 +2776,51 @@ from . import distributions
 if jt.compiler.has_acl:
     from jittor.extern.acl.acl_compiler import change_function
     change_function()
+
+# MPI-free Ascend multi-card: the optimizer/users call Var.mpi_all_reduce /
+# Var.mpi_broadcast, normally provided by the MPI op module. In the env/file
+# HCCL mode that module isn't loaded, so route those names to the HCCL ops
+# directly (collectives never needed MPI -- only the bootstrap did).
+if compile_extern.hccl_ops is not None and not compile_extern.has_mpi:
+    _hops = compile_extern.hccl_ops
+    def _hccl_all_reduce(self, op="mean"):
+        # HCCL supports sum/prod/max/min; emulate "mean" as sum / world_size.
+        if op == "mean":
+            r = _hops.hccl_all_reduce(self, "sum")
+            return r / compile_extern.world_size
+        return _hops.hccl_all_reduce(self, op)
+    def _hccl_broadcast(self, root=0):
+        return _hops.hccl_broadcast(self, root)
+    core.Var.mpi_all_reduce = _hccl_all_reduce
+    core.Var.mpi_broadcast = _hccl_broadcast
+
+# MPI-free NVIDIA multi-card: same env/file rendezvous as HCCL, route the
+# collectives to NCCL ops so DDP works without mpirun on NVIDIA too. NCCL
+# all_reduce does ncclSum; emulate "mean" as sum / world_size.
+# NB: condition is "MPI didn't provide the collective" (hasattr), NOT "not
+# has_mpi" -- on a box where MPI is installed but disabled (use_mpi=0 in the
+# env/file mode) has_mpi is still True yet mpi_all_reduce is absent.
+if compile_extern.nccl_ops is not None and not hasattr(core.Var, "mpi_all_reduce"):
+    _nops = compile_extern.nccl_ops
+    def _nccl_all_reduce(self, op="mean"):
+        r = _nops.nccl_all_reduce(self)
+        if op == "mean":
+            return r / compile_extern.world_size
+        return r
+    def _nccl_broadcast(self, root=0):
+        return _nops.nccl_broadcast(self, root)
+    core.Var.mpi_all_reduce = _nccl_all_reduce
+    core.Var.mpi_broadcast = _nccl_broadcast
+
+
+# torch-compatibility layer: lets `import jittor as torch` run PyTorch code.
+# Additive only -- fills missing torch names/semantics. Safe to fail soft.
+try:
+    from . import torch_compat as _torch_compat
+    import sys as _sys
+    _torch_compat.install(_sys.modules[__name__])
+except Exception as _e:
+    if _jt_torch_truthy(_os.environ.get("JITTOR_TORCH_STRICT_BOOTSTRAP")):
+        raise
+    from .compiler import LOG as _LOG
+    _LOG.w(f"torch_compat not fully installed: {_e}")

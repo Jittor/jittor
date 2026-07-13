@@ -30,6 +30,26 @@ vector<VarHolder*> _grad(VarHolder* loss, const vector<VarHolder*>& targets, boo
    return grads_hold;
 }
 
+vector<Maybe<VarHolder>> _grad_optional(
+    VarHolder* loss,
+    const vector<VarHolder*>& targets,
+    bool retain_graph
+) {
+   vector<Var*> vs;
+   vs.reserve(targets.size());
+   for (auto* v : targets) vs.push_back(v->var);
+   auto grads = grad(loss->var, vs, retain_graph, false);
+   vector<Maybe<VarHolder>> grads_hold;
+   grads_hold.reserve(targets.size());
+   for (auto& grad : grads) {
+       if (grad)
+           grads_hold.emplace_back(new VarHolder(move(grad)));
+       else
+           grads_hold.emplace_back(nullptr);
+   }
+   return grads_hold;
+}
+
 } // jittor
 
 static void init_module(PyModuleDef* mdef, PyObject* m) {

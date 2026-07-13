@@ -53,6 +53,63 @@ def conv(x, w, stride, padding):
 
 @unittest.skipIf(cudnn_ops==None, "Not use cudnn, Skip")
 class TestCudnnConvOp(unittest.TestCase):
+    def test_fp16_patch_conv_uses_fp32_accumulation(self):
+        rng = np.random.RandomState(20260712)
+        x_np = rng.randn(1, 3, 224, 224).astype("float16")
+        w_np = (rng.randn(128, 3, 32, 32) * 0.02).astype("float16")
+        b_np = (rng.randn(128) * 0.02).astype("float16")
+        patches = x_np.reshape(1, 3, 7, 32, 7, 32)
+        patches = patches.transpose(0, 2, 4, 1, 3, 5).reshape(49, -1)
+        ref = patches.astype("float32") @ w_np.reshape(128, -1).astype("float32").T
+        ref = (ref + b_np.astype("float32")).reshape(1, 7, 7, 128)
+        ref = ref.transpose(0, 3, 1, 2).astype("float16").astype("float32")
+
+        old_benchmark = jt.cudnn.get_benchmark()
+        try:
+            jt.cudnn.set_benchmark(-1)
+            with jt.flag_scope(use_cuda=1), jt.no_grad():
+                x = jt.array(x_np)
+                w = jt.array(w_np)
+                b = jt.array(b_np)
+                out = jt.nn.conv2d(x, w, b, stride=32)
+                self.assertEqual(str(out.dtype), "float16")
+                got = out.float32().numpy()
+                # Exercise the repeated descriptor path after algorithm selection.
+                cached = jt.nn.conv2d(x, w, b, stride=32).float32().numpy()
+        finally:
+            jt.cudnn.set_benchmark(old_benchmark)
+
+        np.testing.assert_allclose(got, ref, atol=2e-3, rtol=5e-4)
+        np.testing.assert_allclose(cached, ref, atol=2e-3, rtol=5e-4)
+        rel_l2 = np.linalg.norm((got - ref).ravel()) / max(
+            np.linalg.norm(ref.ravel()), 1e-30)
+        self.assertLessEqual(rel_l2, 5e-4)
+
+    def test_bfloat16_conv_uses_fp32_accumulation(self):
+        rng = np.random.RandomState(20260713)
+        x_np = rng.randn(1, 3, 32, 32).astype("float32")
+        w_np = (rng.randn(16, 3, 8, 8) * 0.03).astype("float32")
+        b_np = (rng.randn(16) * 0.03).astype("float32")
+
+        with jt.flag_scope(use_cuda=1), jt.no_grad():
+            x = jt.array(x_np).cast("bfloat16")
+            w = jt.array(w_np).cast("bfloat16")
+            b = jt.array(b_np).cast("bfloat16")
+            xq, wq, bq = jt.fetch_sync(
+                [x.float32(), w.float32(), b.float32()])
+            out = jt.nn.conv2d(x, w, b, stride=8)
+            self.assertEqual(str(out.dtype), "bfloat16")
+            got = out.float32().numpy()
+
+        patches = xq.reshape(1, 3, 4, 8, 4, 8)
+        patches = patches.transpose(0, 2, 4, 1, 3, 5).reshape(16, -1)
+        ref = patches @ wq.reshape(16, -1).T
+        ref = (ref + bq).reshape(1, 4, 4, 16).transpose(0, 3, 1, 2)
+        np.testing.assert_allclose(got, ref, atol=1e-2, rtol=1e-2)
+        rel_l2 = np.linalg.norm((got - ref).ravel()) / max(
+            np.linalg.norm(ref.ravel()), 1e-30)
+        self.assertLessEqual(rel_l2, 5e-3)
+
     def test(self):
         def check(xshape, wshape, stride=1, padding=0, dilation=1):
             with jt.log_capture_scope(use_cuda=1, enable_tuner=1,

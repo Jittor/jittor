@@ -28,8 +28,14 @@ EXTERN_LIB void sync_all(bool device_sync);
 #ifdef HAS_CUDA
 int get_device_count() {
     static int count=-1;
-    if (count==-1)
-        cudaGetDeviceCount(&count);
+    if (count==-1) {
+        // cudaGetDeviceCount returns cudaErrorNoDevice (and may leave `count`
+        // untouched at -1) when no GPU is visible (e.g. CUDA_VISIBLE_DEVICES="").
+        // Treat any error as 0 devices so callers (the array_op static Init,
+        // setter_use_cuda) take the CPU path instead of aborting on a CUDA call.
+        if (cudaGetDeviceCount(&count) != cudaSuccess)
+            count = 0;
+    }
     return count;
 }
 #endif
@@ -46,13 +52,15 @@ void setter_use_cuda(int value) {
         int count=0;
         cudaGetDeviceCount(&count);
         if (count == 0) {
-            if (getenv("CUDA_VISIBLE_DEVICES")) {
-                LOGf << "No device found, please unset your "
-                "enviroment variable 'CUDA_VISIBLE_DEVICES'";
-            } else
-                LOGf << "No device found";
+            // No CUDA device visible at runtime (e.g. CUDA_VISIBLE_DEVICES="" in
+            // a CPU-only process such as a Ray orchestrator actor with
+            // num_gpus=0). Fall back to CPU instead of aborting, so importing
+            // jittor / the torch-shim does not crash where there is no GPU.
+            LOGw << "No CUDA device available; falling back to CPU (use_cuda=0).";
+            value = 0;
+        } else {
+            LOGi << "CUDA enabled.";
         }
-        LOGi << "CUDA enabled.";
     } else {
         LOGv << "CUDA disabled.";
     }

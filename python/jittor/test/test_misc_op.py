@@ -256,8 +256,8 @@ class TestOther(unittest.TestCase):
         assert (x[3]['b'] == np.array([1,2,3])).all()
 
     def test_arctan2(self):
-        x = jt.float32([1,1,-1,-1,  1,-1,0,0,0])
-        y = jt.float32([-1,1,-1,1,  0,0,1,-1,0])
+        x = jt.array([1,1,-1,-1,  1,-1,0,0,0], dtype="float32")
+        y = jt.array([-1,1,-1,1,  0,0,1,-1,0], dtype="float32")
         z = jt.arctan2(y, x)
         z2 = np.arctan2(y.data, x.data)
         np.testing.assert_allclose(z.data, z2, atol=1e-6)
@@ -392,13 +392,13 @@ class TestOther(unittest.TestCase):
         assert jt.all_equal(y, x[:, indices])
 
     def test_multinorm(self):
-        weights = jt.float32([0, 10, 3, 0])
+        weights = jt.array([0, 10, 3, 0], dtype="float32")
         x = jt.multinomial(weights, 2)
         assert jt.all_equal(x, [1, 2]) or jt.all_equal(x, [2, 1])
         x = jt.multinomial(weights, 4, replacement=True)
         assert x.shape == (4, )
 
-        weights = jt.float32([[0,0,2],[0,1,0], [0.5,0,0]])
+        weights = jt.array([[0,0,2],[0,1,0], [0.5,0,0]], dtype="float32")
         x = jt.multinomial(weights, 1)
         assert jt.all_equal(x, [[2],[1],[0]])
 

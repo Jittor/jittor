@@ -41,7 +41,14 @@ class Pool(Module):
 
     def execute(self, x):
         N,C,H,W = x.shape
-        if H <= self.kernel_size[0] or W <= self.kernel_size[1]:
+        # torch only requires the *padded* input to be at least the kernel size
+        # (so the output has size >= 1). The original guard ignored padding, which
+        # wrongly rejected e.g. SPPF's MaxPool2d(kernel=13, padding=6) on an 8x8
+        # feature map (padded 20x20, valid in torch). Make the guard padding-aware;
+        # for padding=0 this only additionally allows the H==kernel boundary, which
+        # torch accepts (output 1), so no previously-passing case regresses.
+        if (H + 2*self.padding[0] < self.kernel_size[0]
+                or W + 2*self.padding[1] < self.kernel_size[1]):
             raise RuntimeError(f"size of var should be larger than kernel_size")
         if self.ceil_mode == False:
             h = (H+self.padding[0]*2-self.kernel_size[0])//self.stride[0]+1
@@ -410,9 +417,10 @@ class AdaptiveAvgPool2d(Module):
         if isinstance(self.output_size, int):
             oh = self.output_size
             ow = self.output_size
-        elif isinstance(self.output_size, tuple) or isinstance(self.output_size, list):
-            oh = x.shape[2] if self.output_size[0] is None else self.output_size[0]
-            ow = x.shape[3] if self.output_size[1] is None else self.output_size[1]
+        elif hasattr(self.output_size, "__len__") and not isinstance(self.output_size, str):
+            # tuple / list / jittor NanoVector (e.g. x.shape[2:] from a semantic head)
+            oh = x.shape[2] if self.output_size[0] is None else int(self.output_size[0])
+            ow = x.shape[3] if self.output_size[1] is None else int(self.output_size[1])
         else:
             raise TypeError(f"AdaptiveAvgPool2d only support int, tuple or list input. Not support {type(self.output_size)} yet.")
         if oh == 1 and ow == 1:
@@ -432,6 +440,83 @@ class AdaptiveAvgPool2d(Module):
         ])
         return xx.reduce("mean", [4,5])
 
+class AdaptiveAvgPool1d(Module):
+    def __init__(self, output_size):
+        self.output_size = output_size
+
+    def execute(self, x):
+        # x: (N, C, L) -> (N, C, output_size); mirrors AdaptiveAvgPool2d for 1d.
+        ol = self.output_size[0] if isinstance(self.output_size, (tuple, list)) else self.output_size
+        if ol is None:
+            ol = x.shape[2]
+        if ol == 1:
+            return x.reduce("mean", [2], keepdims=True)
+        N, C, L = x.shape
+        s = math.floor(L / ol)
+        ks = L - (ol - 1) * s
+        l = (L - ks) // s + 1
+        xx = x.reindex([N, C, l, ks], [
+            "i0",          # Nid
+            "i1",          # Cid
+            f"i2*{s}+i3",  # Lid
+        ])
+        return xx.reduce("mean", [3])
+
+class MaxPool1d(Module):
+    '''1D max pooling, (N,C,L) -> (N,C,Lout). torch-compatible.
+
+    Implemented with reindex+reduce rather than the 2D Pool because Pool rejects a
+    size-1 spatial dim. Padding positions map out-of-bounds -> -inf so they never win
+    a max (matches torch, which pads with -inf for max pooling).'''
+    def __init__(self, kernel_size, stride=None, padding=0, dilation=1,
+                 return_indices=None, ceil_mode=False):
+        assert dilation == 1, "MaxPool1d: dilation>1 not supported"
+        self.kernel_size = kernel_size
+        self.stride = stride if stride else kernel_size
+        self.padding = padding
+        self.ceil_mode = ceil_mode
+        self.return_indices = return_indices
+
+    def execute(self, x):
+        N, C, L = x.shape
+        k, s, p = self.kernel_size, self.stride, self.padding
+        if self.ceil_mode:
+            lo = (L + 2 * p - k + s - 1) // s + 1
+        else:
+            lo = (L + 2 * p - k) // s + 1
+        xx = x.reindex([N, C, lo, k], ["i0", "i1", f"i2*{s}+i3-{p}"],
+                       overflow_value=float("-inf"))
+        return xx.reduce("maximum", [3])
+
+class AvgPool1d(Module):
+    '''1D average pooling, (N,C,L) -> (N,C,Lout). torch-compatible.
+
+    count_include_pad=True (torch default) divides every window by kernel_size, so
+    padded (out-of-bounds) positions contribute 0 to the sum but still count in the
+    denominator; =False divides by the number of real (non-pad) elements.'''
+    def __init__(self, kernel_size, stride=None, padding=0, ceil_mode=False,
+                 count_include_pad=True):
+        self.kernel_size = kernel_size
+        self.stride = stride if stride else kernel_size
+        self.padding = padding
+        self.ceil_mode = ceil_mode
+        self.count_include_pad = count_include_pad
+
+    def execute(self, x):
+        N, C, L = x.shape
+        k, s, p = self.kernel_size, self.stride, self.padding
+        if self.ceil_mode:
+            lo = (L + 2 * p - k + s - 1) // s + 1
+        else:
+            lo = (L + 2 * p - k) // s + 1
+        idx = ["i0", "i1", f"i2*{s}+i3-{p}"]
+        summed = x.reindex([N, C, lo, k], idx, overflow_value=0.0).reduce("add", [3])
+        if self.count_include_pad:
+            return summed / k
+        # denominator = count of real (non-pad) elements per window
+        ones = jt.ones([N, C, L]).reindex([N, C, lo, k], idx, overflow_value=0.0)
+        return summed / ones.reduce("add", [3]).maximum(1.0)
+
 class AdaptiveMaxPool2d(Module):
     def __init__(self, output_size, return_indices=False):
         self.output_size = output_size
@@ -441,9 +526,10 @@ class AdaptiveMaxPool2d(Module):
         if isinstance(self.output_size, int):
             oh = self.output_size
             ow = self.output_size
-        elif isinstance(self.output_size, tuple) or isinstance(self.output_size, list):
-            oh = x.shape[2] if self.output_size[0] is None else self.output_size[0]
-            ow = x.shape[3] if self.output_size[1] is None else self.output_size[1]
+        elif hasattr(self.output_size, "__len__") and not isinstance(self.output_size, str):
+            # tuple / list / jittor NanoVector (e.g. x.shape[2:] from a semantic head)
+            oh = x.shape[2] if self.output_size[0] is None else int(self.output_size[0])
+            ow = x.shape[3] if self.output_size[1] is None else int(self.output_size[1])
         else:
             raise TypeError(f"AdaptiveMaxPool2d only support int, tuple or list input. Not support {type(self.output_size)} yet.")
         if oh == 1 and ow == 1:
@@ -552,21 +638,31 @@ class AvgPool3d(Module):
 def avg_pool2d(x, kernel_size, stride=None, padding=0, ceil_mode=False, count_include_pad=True):
     return AvgPool2d(kernel_size, stride, padding, ceil_mode, count_include_pad)(x)
 
+def _no_dilation(dilation):
+    # torch's default dilation=1 (or (1,1)) means *no* dilation, which jittor's
+    # Pool expresses as None. Normalize int/tuple/list all-ones -> None.
+    if dilation is None or dilation == 1: return True
+    if isinstance(dilation, (tuple, list)): return all(d == 1 for d in dilation)
+    return False
+
 class MaxPool2d(Module):
     def __init__(self, kernel_size, stride=None, padding=0, dilation=None, return_indices=None, ceil_mode=False):
+        if _no_dilation(dilation): dilation = None
         self._layer = Pool(kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, return_indices=return_indices, ceil_mode=ceil_mode, op="maximum")
-    
+
     def execute(self, x):
         return self._layer(x)
 
 class MaxPool3d(Module):
     def __init__(self, kernel_size, stride=None, padding=0, dilation=None, return_indices=None, ceil_mode=False):
+        if _no_dilation(dilation): dilation = None
         self._layer = Pool3d(kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, return_indices=return_indices, ceil_mode=ceil_mode, op="maximum")
     
     def execute(self, x):
         return self._layer(x)
 
-def max_pool2d(x, kernel_size, stride=None, padding=0, dilation=None, return_indices=None, ceil_mode=False):
+def max_pool2d(x=None, kernel_size=None, stride=None, padding=0, dilation=None, return_indices=None, ceil_mode=False, input=None):
+    if x is None: x = input          # torch uses the keyword `input` (mmdet DropBlock)
     return MaxPool2d(kernel_size, stride, padding, dilation, return_indices, ceil_mode)(x)
 
 

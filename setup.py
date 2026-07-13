@@ -57,7 +57,16 @@ setuptools.setup(
     # packages=setuptools.find_packages(),
     python_requires='>=3.7',
 
-    packages=["jittor", "jittor.test", "jittor.models", "jittor.utils", "jittor_utils"],
+    packages=[
+        "jittor",
+        "jittor.test",
+        "jittor.models",
+        "jittor.utils",
+        "jittor.torch_shim",
+        "jittor.torch_shim.cpp_extension",
+        "jittor_utils",
+        "jiitor",
+    ],
     package_dir={'': 'python'},
     package_data={'': ['*', '*/*', '*/*/*','*/*/*/*','*/*/*/*/*','*/*/*/*/*/*']},
     # include_package_data=True,

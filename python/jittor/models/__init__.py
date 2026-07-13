@@ -12,6 +12,18 @@ from . import googlenet
 from .googlenet import *
 from . import mobilenet
 from .mobilenet import *
+from . import mobilenet_v3
+from .mobilenet_v3 import *
+from . import efficientnet
+from .efficientnet import *
+from . import regnet
+from .regnet import *
+from . import convnext
+from .convnext import *
+from . import swin_transformer
+from .swin_transformer import *
+from . import maxvit
+from .maxvit import *
 from . import mnasnet
 from .mnasnet import *
 from . import shufflenetv2
@@ -19,3 +31,5 @@ from .shufflenetv2 import *
 from .res2net import res2net50, res2net101
 from . import densenet
 from .densenet import *
+from . import vision_transformer
+from .vision_transformer import *

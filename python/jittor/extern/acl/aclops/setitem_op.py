@@ -179,8 +179,10 @@ class SetItemACL(jt.Function):
                     0] == slices_len, "value shape length must be equal to slices sum"
                 self.type_ = 'mask'
                 self.value_shape = value.shape
-                inputs = [slices, value]
-                outputs = [x.clone()]
+                # base x is an explicit input so its data is materialized before
+                # the in-place masked-scatter (the runner copies base->out first).
+                inputs = [x, slices, value]
+                outputs = [jt.empty(x.shape, x.dtype)]
                 attr_code = f"""
                 op.jt_name = "inplacemaskedscatter";
                 """

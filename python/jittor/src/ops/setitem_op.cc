@@ -12,6 +12,7 @@
 #ifdef JIT_cuda
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
+#include "misc/cuda_atomic.h"
 #endif
 #else
 #include "ops/op_register.h"
@@ -351,8 +352,23 @@ void SetitemOp::jit_run() {
                 index_t(vp@d[0 @for(j,0,VD,@if((VS@d>>j)&1, + i@{j+FOV} * vs@d@@s@j,))])
             , ??? ))))));
         )
+        // Normalize negative var/list (advanced) indices into the target, mirroring
+        // the getitem kernel (getitem_op.cc). Without this, the gradient of e.g.
+        // x[..., [-2], :] (falcon multi-query _split_heads uses negative advanced
+        // indices) scatters to a negative row -> out of the target buffer: the
+        // indexed rows receive no grad and stray writes corrupt memory. Negative
+        // *int* indices are already host-normalized in infer_slices; only var/list
+        // negative indices reach this kernel. No-op when iid>=0, so positive/slice/
+        // int/bool paths are unchanged.
+        @for(d, 0, IDIM, if (iid@d < 0) iid@d += ishape@d;
+        )
         auto iid = 0 @for(d, 0, IDIM,  + iid@d * istride@d);
 
+        // CUDA reduce writes must be atomic: many output-loop threads alias the
+        // same iid via the scatter index, so a non-atomic RMW silently drops
+        // colliding contributions. cuda_atomic_*_rmw use raw-IEEE atomics (see
+        // misc/cuda_atomic.h) because setitem's output is a raw memcpy copy with
+        // no fix_float/ordered-int pass.
         @if(@is_def(JIT_cpu),
             @if(@strcmp(@OP,void)==0,
                 op[iid] = (Ti)dp[did],
@@ -361,9 +377,11 @@ void SetitemOp::jit_run() {
         ,
             @if(@strcmp(@OP,void)==0, op[iid] = (Ti)dp[did],
             @if(@strcmp(@OP,add)==0, atomicAdd(&op[iid], (Ti)dp[did]),
+            @if(@strcmp(@OP,maximum)==0, cuda_atomic_max_rmw(&op[iid], (Ti)dp[did]),
+            @if(@strcmp(@OP,minimum)==0, cuda_atomic_min_rmw(&op[iid], (Ti)dp[did]),
+            @if(@strcmp(@OP,multiply)==0, cuda_atomic_mul(&op[iid], (Ti)dp[did]),
                 op[iid] = @expand_op(@OP, @Ti, op[iid], @Ti, dp[did], @Td)
-            )
-            );
+            )))));
         )
     }
 }
