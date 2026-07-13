@@ -7,6 +7,8 @@ and its native extension dependencies can stay unmodified.
 It requires eval/no-grad execution and immutable condition tensors and weights
 for the duration of ``FlowEulerSampler.sample``. Concurrent samplers must not
 share the same model instance while this opt-in cache is active.
+``JITTOR_TRELLIS_PROCESSED_KV_CACHE=0`` keeps the projection cache active while
+disabling reuse of the reshaped and normalized cross-attention keys.
 
 ``JITTOR_TRELLIS_C2S_TOPOLOGY_CACHE=1`` opts into reusing topology between
 adjacent paired ``SparseChannel2Spatial`` calls. The flexible-grid mesh
@@ -31,10 +33,12 @@ _CU_SEQLENS_CACHE: Dict[Tuple[str, Tuple[int, ...], str], object] = {}
 _DENSE_ATTENTION_MODULE = "trellis2.modules.attention.full_attn"
 _ATTENTION_MODULE = "trellis2.modules.attention.modules"
 _SPARSE_ATTENTION_MODULE = "trellis2.modules.sparse.attention.full_attn"
+_SPARSE_ATTENTION_API_MODULE = "trellis2.modules.sparse.attention.modules"
 _FLOW_EULER_MODULE = "trellis2.pipelines.samplers.flow_euler"
 _C2S_MODULE = "trellis2.modules.sparse.spatial.spatial2channel"
 _C2S_BLOCK_MODULE = "trellis2.models.sc_vaes.sparse_unet_vae"
 _FLEXIBLE_GRID_MODULE = "o_voxel.convert.flexible_dual_grid"
+_NORM_MODULE = "trellis2.modules.norm"
 _DINOV3_MODULE = "transformers.models.dinov3_vit.modeling_dinov3_vit"
 _LAYOUT_INFO_KEY = "_jittor_torch_layout_info"
 _CU_SEQLENS_KEY = "_jittor_torch_cu_seqlens_int32"
@@ -46,15 +50,19 @@ _FLEXIBLE_GRID_OFFSETS = {}
 
 
 class _CrossKVCacheState:
-    def __init__(self, model, contexts, allowed):
+    def __init__(self, model, contexts, allowed, attention_allowed=None):
         self.model = model
         self.contexts = tuple(contexts)
         self.allowed = dict(allowed)
+        self.attention_allowed = dict(attention_allowed or {})
         self.kv_cache = {}
+        self.processed_kv_cache = {}
 
     def clear(self):
         self.allowed.clear()
+        self.attention_allowed.clear()
         self.kv_cache.clear()
+        self.processed_kv_cache.clear()
 
 
 class _C2SPairCacheState:
@@ -747,38 +755,121 @@ def _patch_flexible_grid_module(mod) -> bool:
     return True
 
 
+def _trellis_layer_norm32_fast_path(layer, x):
+    if _is_falsey(os.environ.get("JITTOR_TRELLIS_FP16_LAYERNORM")):
+        return None
+    try:
+        import jittor as jt
+        from jittor import nn
+
+        signature = _tensor_signature(x)
+        normalized_shape = tuple(
+            int(size) for size in layer.normalized_shape)
+        eps = float(layer.eps)
+        weight = layer.weight
+        bias = layer.bias
+    except Exception:
+        return None
+
+    if not (
+            isinstance(x, jt.Var)
+            and _module_is_eval(layer)
+            and jt.flags.use_cuda
+            and getattr(jt.flags, "no_grad", 0)
+            and not getattr(jt.compiler, "has_acl", 0)
+            and signature is not None
+            and len(signature[0]) == 2
+            and signature[0][0] > 0
+            and signature[0][1] in (64, 128, 256, 512, 1024)
+            and signature[1] == "float16"
+            and signature[2] >= 0
+            and normalized_shape == (signature[0][1],)
+            and eps == 1e-6):
+        return None
+    try:
+        if bool(jt.is_autocast_enabled()):
+            return None
+    except Exception:
+        return None
+
+    if isinstance(weight, jt.Var) or isinstance(bias, jt.Var):
+        if not (isinstance(weight, jt.Var) and isinstance(bias, jt.Var)):
+            return None
+        expected = (normalized_shape, "float32", signature[2])
+        if (_tensor_signature(weight) != expected
+                or _tensor_signature(bias) != expected):
+            return None
+    else:
+        try:
+            if float(weight) != 1.0 or float(bias) != 0.0:
+                return None
+        except Exception:
+            return None
+    return nn._layer_norm_no_grad_cuda(
+        x, normalized_shape, weight, bias, eps)
+
+
+def _patch_norm_module(mod) -> bool:
+    cls = getattr(mod, "LayerNorm32", None)
+    original = getattr(cls, "forward", None) if cls is not None else None
+    if original is None:
+        return False
+    if getattr(original, "_jittor_torch_fast_fp16_layer_norm32", False):
+        mod._jittor_torch_fast_fp16_layer_norm32 = True
+        return True
+
+    def forward(self, x, *args, **kwargs):
+        if not args and not kwargs:
+            fast = _trellis_layer_norm32_fast_path(self, x)
+            if fast is not None:
+                return fast
+        return original(self, x, *args, **kwargs)
+
+    forward._jittor_torch_fast_fp16_layer_norm32 = True
+    forward._jittor_torch_original = original
+    cls.forward = forward
+    mod._jittor_torch_fast_fp16_layer_norm32 = True
+    return True
+
+
+def _cross_kv_record_is_active(state, record, context) -> bool:
+    try:
+        import jittor as jt
+    except Exception:
+        return False
+
+    attention = record["attention"]
+    projection = record["projection"]
+    weight = getattr(projection, "weight", None)
+    bias = getattr(projection, "bias", None)
+    if (state.allowed.get(id(projection)) is not record
+            or record["weight"] is not weight
+            or record["bias"] is not bias):
+        state.kv_cache.pop((id(projection), id(context)), None)
+        state.processed_kv_cache.pop((id(attention), id(context)), None)
+        return False
+    if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
+        state.clear()
+        return False
+    if getattr(jt.compiler, "has_acl", 0):
+        state.clear()
+        return False
+    if not (_module_is_eval(state.model)
+            and _module_is_eval(attention)
+            and _module_is_eval(projection)):
+        state.clear()
+        return False
+    return any(value is context for value in state.contexts)
+
+
 def _trellis_cached_cross_kv_projection(
         original, attention, projection, context):
     state = _CROSS_KV_CACHE_SCOPE.get()
     if state is None:
         return original(context)
-    try:
-        import jittor as jt
-    except Exception:
-        return original(context)
-
-    allowed = state.allowed.get(id(projection))
-    weight = getattr(projection, "weight", None)
-    bias = getattr(projection, "bias", None)
-    if (allowed is None
-            or allowed[0] is not attention
-            or allowed[1] is not projection
-            or allowed[2] is not weight
-            or allowed[3] is not bias):
-        state.kv_cache.pop((id(projection), id(context)), None)
-        return original(context)
-    if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
-        state.clear()
-        return original(context)
-    if getattr(jt.compiler, "has_acl", 0):
-        state.clear()
-        return original(context)
-    if not (_module_is_eval(state.model)
-            and _module_is_eval(attention)
-            and _module_is_eval(projection)):
-        state.clear()
-        return original(context)
-    if not any(value is context for value in state.contexts):
+    record = state.allowed.get(id(projection))
+    if (record is None or record["attention"] is not attention
+            or not _cross_kv_record_is_active(state, record, context)):
         return original(context)
 
     key = (id(projection), id(context))
@@ -794,6 +885,59 @@ def _trellis_cached_cross_kv_projection(
         return output
     state.kv_cache[key] = output
     return output
+
+
+def _cross_attention_fast_spec(attention, device):
+    if _is_falsey(os.environ.get("JITTOR_TRELLIS_PROCESSED_KV_CACHE")):
+        return None
+    if "forward" in getattr(attention, "__dict__", {}):
+        return None
+    module_name = type(attention).__module__
+    class_name = type(attention).__name__
+    if (module_name == _ATTENTION_MODULE
+            and class_name == "MultiHeadAttention"):
+        kind = "dense"
+        function_name = "scaled_dot_product_attention"
+    elif (module_name == _SPARSE_ATTENTION_API_MODULE
+            and class_name == "SparseMultiHeadAttention"):
+        kind = "sparse"
+        function_name = "sparse_scaled_dot_product_attention"
+    else:
+        return None
+    module = sys.modules.get(module_name)
+    attention_func = getattr(module, function_name, None)
+    k_norm = getattr(attention, "k_rms_norm", None)
+    gamma = getattr(k_norm, "gamma", None)
+    original = getattr(attention, "forward", None)
+    if (attention_func is None or original is None
+            or getattr(attention, "qk_rms_norm", None) is not True
+            or not _module_is_eval(k_norm)):
+        return None
+    try:
+        import jittor as jt
+
+        if not isinstance(gamma, jt.Var):
+            return None
+        if (_tensor_signature(gamma) != ((12, 128), "float32", device)
+                or abs(float(k_norm.scale) - math.sqrt(128.0)) > 1e-6):
+            return None
+    except Exception:
+        return None
+    call_original = (
+        getattr(original, "_jittor_torch_original", original)
+        if getattr(
+            original, "_jittor_torch_trellis_cross_attention_cache", False)
+        else original
+    )
+    return {
+        "kind": kind,
+        "attention_func": attention_func,
+        "k_norm": k_norm,
+        "gamma": gamma,
+        "original": call_original,
+        "had_forward": "forward" in getattr(attention, "__dict__", {}),
+        "old_forward": getattr(attention, "__dict__", {}).get("forward"),
+    }
 
 
 def _cross_attention_projection_record(attention, device):
@@ -817,8 +961,6 @@ def _cross_attention_projection_record(attention, device):
             return None
         if not all(isinstance(value, jt.Var) for value in (weight, bias)):
             return None
-        if not all(value.is_stop_grad() for value in (weight, bias)):
-            return None
         if (_tensor_signature(weight) != ((3072, 1024), "bfloat16", device)
                 or _tensor_signature(bias) != ((3072,), "bfloat16", device)):
             return None
@@ -832,15 +974,24 @@ def _cross_attention_projection_record(attention, device):
         if getattr(original, "_jittor_torch_trellis_cross_kv_cache", False)
         else original
     )
-    return (
-        attention, projection, weight, bias, call_original,
-        "forward" in getattr(projection, "__dict__", {}),
-        getattr(projection, "__dict__", {}).get("forward"),
-    )
+    return {
+        "attention": attention,
+        "projection": projection,
+        "weight": weight,
+        "bias": bias,
+        "projection_original": call_original,
+        "projection_had_forward": (
+            "forward" in getattr(projection, "__dict__", {})),
+        "projection_old_forward": getattr(
+            projection, "__dict__", {}).get("forward"),
+        "fast": _cross_attention_fast_spec(attention, device),
+    }
 
 
 def _install_cross_attention_projection(record):
-    attention, projection, _, _, original, had_forward, old_forward = record
+    attention = record["attention"]
+    projection = record["projection"]
+    original = record["projection_original"]
     def forward(context, *args, **kwargs):
         if args or kwargs:
             return original(context, *args, **kwargs)
@@ -850,7 +1001,10 @@ def _install_cross_attention_projection(record):
     forward._jittor_torch_trellis_cross_kv_cache = True
     forward._jittor_torch_original = original
     projection.forward = forward
-    return projection, forward, had_forward, old_forward
+    return (
+        projection, forward, record["projection_had_forward"],
+        record["projection_old_forward"],
+    )
 
 
 def _restore_cross_attention_projection(installed) -> None:
@@ -861,6 +1015,122 @@ def _restore_cross_attention_projection(installed) -> None:
         projection.forward = old_forward
     else:
         delattr(projection, "forward")
+
+
+def _trellis_cached_cross_attention(record, x, context):
+    state = _CROSS_KV_CACHE_SCOPE.get()
+    fast = record["fast"]
+    attention = record["attention"]
+    projection = record["projection"]
+    if (state is None or fast is None
+            or state.attention_allowed.get(id(attention)) is not record
+            or not _cross_kv_record_is_active(state, record, context)):
+        return None
+    if (getattr(attention, "k_rms_norm", None) is not fast["k_norm"]
+            or getattr(fast["k_norm"], "gamma", None) is not fast["gamma"]
+            or getattr(attention, "qk_rms_norm", None) is not True):
+        state.processed_kv_cache.pop(
+            (id(attention), id(context)), None)
+        return None
+    try:
+        if abs(float(fast["k_norm"].scale) - math.sqrt(128.0)) > 1e-6:
+            return None
+    except Exception:
+        return None
+
+    context_signature = _tensor_signature(context)
+    if (context_signature is None
+            or context_signature[:2] != ((1, 1029, 1024), "bfloat16")
+            or context_signature[2] < 0):
+        return None
+    device = context_signature[2]
+    try:
+        if fast["kind"] == "dense":
+            x_signature = _tensor_signature(x)
+            if not (x_signature is not None
+                    and len(x_signature[0]) == 3
+                    and x_signature[0][0] == 1
+                    and x_signature[0][1] > 0
+                    and x_signature[0][2] == 1536
+                    and x_signature[1:] == ("bfloat16", device)):
+                return None
+            batch, length, _ = x_signature[0]
+            q = attention.to_q(x).reshape(
+                batch, length, 12, 128)
+        else:
+            feats_signature = _tensor_signature(getattr(x, "feats", None))
+            if not (feats_signature is not None
+                    and len(feats_signature[0]) == 2
+                    and feats_signature[0][0] > 0
+                    and feats_signature[0][1] == 1536
+                    and feats_signature[1:] == ("bfloat16", device)):
+                return None
+            q = attention._linear(attention.to_q, x)
+            q = attention._reshape_chs(q, (12, -1))
+
+        key = (id(attention), id(context))
+        cached = state.processed_kv_cache.get(key)
+        if cached is None:
+            if fast["kind"] == "dense":
+                kv = attention.to_kv(context).reshape(
+                    1, 1029, 2, 12, 128)
+            else:
+                kv = attention._linear(attention.to_kv, context)
+                kv = attention._fused_pre(kv, num_fused=2)
+            k, v = kv.unbind(dim=-3)
+            k = attention.k_rms_norm(k)
+            expected = ((1, 1029, 12, 128), "bfloat16", device)
+            if (_tensor_signature(k) != expected
+                    or _tensor_signature(v) != expected):
+                return None
+            state.kv_cache.pop((id(projection), id(context)), None)
+            cached = (k, v)
+            state.processed_kv_cache[key] = cached
+        k, v = cached
+
+        q = attention.q_rms_norm(q)
+        h = fast["attention_func"](q, k, v)
+        if fast["kind"] == "dense":
+            h = h.reshape(batch, length, -1)
+            return attention.to_out(h)
+        h = attention._reshape_chs(h, (-1,))
+        return attention._linear(attention.to_out, h)
+    except Exception:
+        state.kv_cache.pop((id(projection), id(context)), None)
+        state.processed_kv_cache.pop((id(attention), id(context)), None)
+        return None
+
+
+def _install_cross_attention_forward(record):
+    fast = record["fast"]
+    if fast is None:
+        return None
+    attention = record["attention"]
+    original = fast["original"]
+
+    def forward(x, context=None, *args, **kwargs):
+        if context is not None and not args and not kwargs:
+            output = _trellis_cached_cross_attention(record, x, context)
+            if output is not None:
+                return output
+        return original(x, context, *args, **kwargs)
+
+    forward._jittor_torch_trellis_cross_attention_cache = True
+    forward._jittor_torch_original = original
+    attention.forward = forward
+    return (
+        attention, forward, fast["had_forward"], fast["old_forward"],
+    )
+
+
+def _restore_cross_attention_forward(installed) -> None:
+    attention, forward, had_forward, old_forward = installed
+    if getattr(attention, "__dict__", {}).get("forward") is not forward:
+        return
+    if had_forward:
+        attention.forward = old_forward
+    else:
+        delattr(attention, "forward")
 
 
 def _patch_flow_euler_module(mod) -> bool:
@@ -922,22 +1192,39 @@ def _patch_flow_euler_module(mod) -> bool:
         if kwargs.get("neg_cond") is not None:
             cached_kwargs["neg_cond"] = context_by_source[id(kwargs["neg_cond"])]
 
-        allowed = {id(record[1]): record[:4] for record in records}
-        state = _CrossKVCacheState(model, contexts, allowed)
+        allowed = {
+            id(record["projection"]): record for record in records
+        }
+        attention_allowed = {
+            id(record["attention"]): record for record in records
+            if record["fast"] is not None
+        }
+        state = _CrossKVCacheState(
+            model, contexts, allowed, attention_allowed)
         token = _CROSS_KV_CACHE_SCOPE.set(state)
-        installed = []
+        installed_projections = []
+        installed_attentions = []
         try:
             for record in records:
-                installed.append(_install_cross_attention_projection(record))
+                installed_projections.append(
+                    _install_cross_attention_projection(record))
+            for record in records:
+                installed = _install_cross_attention_forward(record)
+                if installed is not None:
+                    installed_attentions.append(installed)
             return original(
                 self, model, noise, cached_cond, *args, **cached_kwargs)
         finally:
             try:
-                for item in reversed(installed):
-                    _restore_cross_attention_projection(item)
+                for item in reversed(installed_attentions):
+                    _restore_cross_attention_forward(item)
             finally:
-                state.clear()
-                _CROSS_KV_CACHE_SCOPE.reset(token)
+                try:
+                    for item in reversed(installed_projections):
+                        _restore_cross_attention_projection(item)
+                finally:
+                    state.clear()
+                    _CROSS_KV_CACHE_SCOPE.reset(token)
 
     sample._jittor_torch_trellis_cross_kv_scope = True
     sample._jittor_torch_original = original
@@ -1184,6 +1471,11 @@ def _patch_loaded_flexible_grid() -> bool:
     return mod is not None and _patch_flexible_grid_module(mod)
 
 
+def _patch_loaded_norm() -> bool:
+    mod = sys.modules.get(_NORM_MODULE)
+    return mod is not None and _patch_norm_module(mod)
+
+
 def _patch_loaded_dinov3() -> bool:
     mod = sys.modules.get(_DINOV3_MODULE)
     return mod is not None and _patch_dinov3_module(mod)
@@ -1199,10 +1491,11 @@ def install() -> None:
     c2s_done = _patch_loaded_c2s()
     c2s_block_done = _patch_loaded_c2s_block()
     flexible_grid_done = _patch_loaded_flexible_grid()
+    norm_done = _patch_loaded_norm()
     dinov3_done = _patch_loaded_dinov3()
     if (dense_done and attention_done and sparse_done
             and sampler_done and c2s_done and c2s_block_done
-            and flexible_grid_done
+            and flexible_grid_done and norm_done
             and dinov3_done):
         return
     for finder in sys.meta_path:
@@ -1237,6 +1530,8 @@ class _TrellisRuntimeLoader(importlib.abc.Loader):
             _patch_c2s_block_module(module)
         if module.__name__ == _FLEXIBLE_GRID_MODULE:
             _patch_flexible_grid_module(module)
+        if module.__name__ == _NORM_MODULE:
+            _patch_norm_module(module)
         if module.__name__ == _DINOV3_MODULE:
             _patch_dinov3_module(module)
 
@@ -1247,6 +1542,7 @@ class _TrellisRuntimeFinder(importlib.abc.MetaPathFinder):
                 _DENSE_ATTENTION_MODULE, _ATTENTION_MODULE,
                 _SPARSE_ATTENTION_MODULE, _FLOW_EULER_MODULE,
                 _C2S_MODULE, _C2S_BLOCK_MODULE, _FLEXIBLE_GRID_MODULE,
+                _NORM_MODULE,
                 _DINOV3_MODULE):
             return None
         spec = importlib.machinery.PathFinder.find_spec(fullname, path)

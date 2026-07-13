@@ -243,6 +243,92 @@ class TestSDPA(Base):
         self.assertIsNot(replacement.MultiHeadRMSNorm.forward, original)
 
     @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    def test_trellis_runtime_uses_fp16_layer_norm32_kernel(self):
+        from jittor.torch_shim import trellis_runtime
+
+        calls = []
+
+        class LayerNorm32:
+            training = False
+
+            def __init__(self, weight, bias):
+                self.normalized_shape = (64,)
+                self.eps = 1e-6
+                self.weight = weight
+                self.bias = bias
+
+            def forward(self, x, *args, **kwargs):
+                calls.append((args, kwargs))
+                dtype = str(x.dtype)
+                value = x.float32()
+                mean = value.mean(dim=-1, keepdim=True)
+                variance = ((value - mean) * (value - mean)).mean(
+                    dim=-1, keepdim=True)
+                out = (value - mean) * jt.rsqrt(variance + self.eps)
+                return (out * self.weight + self.bias).cast(dtype)
+
+        module = ModuleType(trellis_runtime._NORM_MODULE)
+        module.LayerNorm32 = LayerNorm32
+        self.assertTrue(trellis_runtime._patch_norm_module(module))
+        patched = LayerNorm32.forward
+        self.assertTrue(trellis_runtime._patch_norm_module(module))
+        self.assertIs(patched, LayerNorm32.forward)
+
+        rng = np.random.RandomState(149)
+        x_np = rng.randn(37, 64).astype(np.float16)
+        weight_np = (1 + 0.1 * rng.randn(64)).astype(np.float32)
+        bias_np = (0.1 * rng.randn(64)).astype(np.float32)
+        with jt.flag_scope(use_cuda=1), jt.no_grad():
+            x = jt.array(x_np)
+            weight = jt.array(weight_np)
+            bias = jt.array(bias_np)
+            weight.start_grad()
+            bias.start_grad()
+            self.assertFalse(weight.is_stop_grad())
+            self.assertFalse(bias.is_stop_grad())
+            layer = LayerNorm32(weight, bias)
+            expected = patched._jittor_torch_original(layer, x)
+            call_count = len(calls)
+            actual = patched(layer, x)
+            self.assertEqual(len(calls), call_count)
+
+            scalar = LayerNorm32(1.0, 0.0)
+            scalar_expected = patched._jittor_torch_original(scalar, x)
+            call_count = len(calls)
+            scalar_actual = patched(scalar, x)
+            self.assertEqual(len(calls), call_count)
+            fetched = jt.fetch_sync([
+                expected, actual, scalar_expected, scalar_actual,
+            ])
+        np.testing.assert_array_equal(fetched[1], fetched[0])
+        np.testing.assert_array_equal(fetched[3], fetched[2])
+
+        call_count = len(calls)
+        with jt.flag_scope(use_cuda=1), jt.no_grad():
+            patched(layer, jt.array(x_np).float32())
+        self.assertEqual(len(calls), call_count + 1)
+
+        layer.training = True
+        call_count = len(calls)
+        with jt.flag_scope(use_cuda=1), jt.no_grad():
+            patched(layer, jt.array(x_np))
+        self.assertEqual(len(calls), call_count + 1)
+        layer.training = False
+
+        call_count = len(calls)
+        with jt.flag_scope(use_cuda=1), jt.no_grad(), mock.patch.dict(
+                os.environ, {"JITTOR_TRELLIS_FP16_LAYERNORM": "0"},
+                clear=False):
+            patched(layer, jt.array(x_np))
+        self.assertEqual(len(calls), call_count + 1)
+
+        call_count = len(calls)
+        with jt.flag_scope(use_cuda=1), jt.no_grad():
+            patched(layer, jt.array(x_np), future_option=True)
+        self.assertEqual(len(calls), call_count + 1)
+        self.assertEqual(calls[-1][1], {"future_option": True})
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
     def test_trellis_cross_kv_cache_is_opt_in_and_sampler_scoped(self):
         from jittor.torch_shim import trellis_runtime
 
@@ -252,8 +338,10 @@ class TestSDPA(Base):
         class Projection(nn.Linear):
             def __init__(self):
                 super().__init__(1024, 3072)
-                self.weight = self.weight.bfloat16().stop_grad()
-                self.bias = self.bias.bfloat16().stop_grad()
+                self.weight = self.weight.bfloat16()
+                self.bias = self.bias.bfloat16()
+                self.weight.start_grad()
+                self.bias.start_grad()
                 self.is_train = False
 
             def execute(self, context):
@@ -375,6 +463,437 @@ class TestSDPA(Base):
                 sampler.sample(model, None, source, neg_source)
             self.assertEqual(received_dtypes[-1], ("float32", "float32"))
             self.assertEqual(len(projection_calls), 26)
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    def test_trellis_cross_kv_cache_reuses_processed_keys(self):
+        from jittor.torch_shim import trellis_runtime
+
+        projection_calls = []
+        key_norm_calls = []
+        query_norm_calls = []
+        original_attention_calls = []
+
+        class Projection(nn.Linear):
+            def __init__(self):
+                super().__init__(1024, 3072)
+                self.weight = self.weight.bfloat16()
+                self.bias = self.bias.bfloat16()
+                self.weight.start_grad()
+                self.bias.start_grad()
+                self.is_train = False
+
+            def execute(self, context):
+                projection_calls.append(context)
+                return super().execute(context)
+
+        class Identity:
+            training = False
+
+            def __call__(self, value):
+                return value
+
+        class RMSNorm:
+            training = False
+
+            def __init__(self, calls):
+                self.calls = calls
+                self.scale = 128 ** 0.5
+                self.gamma = jt.ones((12, 128))
+                self.gamma.start_grad()
+
+            def __call__(self, value):
+                self.calls.append(value)
+                dtype = str(value.dtype)
+                fp32 = value.float32()
+                norm = (fp32 * fp32).sum(
+                    dim=-1, keepdim=True).sqrt().maximum(1e-12)
+                return (fp32 / norm * self.gamma * self.scale).cast(dtype)
+
+        def scaled_dot_product_attention(q, k, v):
+            return q + k.mean(dim=1, keepdim=True) + v.mean(
+                dim=1, keepdim=True)
+
+        class MultiHeadAttention:
+            _type = "cross"
+            channels = 1536
+            ctx_channels = 1024
+            num_heads = 12
+            head_dim = 128
+            qk_rms_norm = True
+            training = False
+
+            def __init__(self):
+                self.to_q = Identity()
+                self.to_kv = Projection()
+                self.q_rms_norm = RMSNorm(query_norm_calls)
+                self.k_rms_norm = RMSNorm(key_norm_calls)
+                self.to_out = Identity()
+
+            def __call__(self, *args, **kwargs):
+                return self.forward(*args, **kwargs)
+
+            def forward(self, x, context=None):
+                original_attention_calls.append(context)
+                batch, length, _ = x.shape
+                q = self.to_q(x).reshape(batch, length, 12, 128)
+                kv = self.to_kv(context).reshape(1, 1029, 2, 12, 128)
+                q = self.q_rms_norm(q)
+                k, v = kv.unbind(dim=-3)
+                k = self.k_rms_norm(k)
+                h = scaled_dot_product_attention(q, k, v)
+                return self.to_out(h.reshape(batch, length, -1))
+
+        MultiHeadAttention.__module__ = trellis_runtime._ATTENTION_MODULE
+        attention_module = ModuleType(trellis_runtime._ATTENTION_MODULE)
+        attention_module.MultiHeadAttention = MultiHeadAttention
+        attention_module.scaled_dot_product_attention = (
+            scaled_dot_product_attention)
+
+        class Model:
+            training = False
+            dtype = "bfloat16"
+
+            def modules(self):
+                return [attention]
+
+        class FlowEulerSampler:
+            fail = False
+
+            def sample(self, model, noise, cond=None, *args, **kwargs):
+                outputs = []
+                for context in (cond, kwargs["neg_cond"]):
+                    context = context.bfloat16()
+                    outputs.append(attention(x, context))
+                    outputs.append(attention(x, context))
+                if self.fail:
+                    raise RuntimeError("expected processed cache failure")
+                return outputs
+
+        sampler_module = ModuleType(trellis_runtime._FLOW_EULER_MODULE)
+        sampler_module.FlowEulerSampler = FlowEulerSampler
+        self.assertTrue(trellis_runtime._patch_flow_euler_module(sampler_module))
+
+        with jt.flag_scope(use_cuda=1), jt.no_grad(), mock.patch.dict(
+                sys.modules, {
+                    trellis_runtime._ATTENTION_MODULE: attention_module,
+                }, clear=False):
+            attention = MultiHeadAttention()
+            self.assertFalse(attention.to_kv.weight.is_stop_grad())
+            self.assertFalse(attention.to_kv.bias.is_stop_grad())
+            self.assertFalse(attention.k_rms_norm.gamma.is_stop_grad())
+            model = Model()
+            sampler = FlowEulerSampler()
+            x = jt.randn((1, 2, 1536)).bfloat16().stop_grad()
+            cond = jt.randn((1, 1029, 1024)).stop_grad()
+            neg_cond = jt.randn((1, 1029, 1024)).stop_grad()
+            device = trellis_runtime._tensor_signature(cond.bfloat16())[2]
+            custom_attention = MultiHeadAttention()
+            custom_attention.forward = lambda x, context=None: x
+            self.assertIsNone(trellis_runtime._cross_attention_fast_spec(
+                custom_attention, device))
+
+            with mock.patch.dict(os.environ, {
+                    "JITTOR_TRELLIS_CROSS_KV_CACHE": "0",
+            }, clear=False):
+                expected = sampler.sample(
+                    model, None, cond, neg_cond=neg_cond)
+            self.assertEqual(len(projection_calls), 4)
+            self.assertEqual(len(key_norm_calls), 4)
+            self.assertEqual(len(original_attention_calls), 4)
+
+            with mock.patch.dict(os.environ, {
+                    "JITTOR_TRELLIS_CROSS_KV_CACHE": "1",
+                    "JITTOR_TRELLIS_CROSS_KV_CACHE_MB": "384",
+                    "JITTOR_TRELLIS_PROCESSED_KV_CACHE": "0",
+            }, clear=False):
+                raw_cached = sampler.sample(
+                    model, None, cond, neg_cond=neg_cond)
+            self.assertEqual(len(projection_calls), 6)
+            self.assertEqual(len(key_norm_calls), 8)
+            self.assertEqual(len(query_norm_calls), 8)
+            self.assertEqual(len(original_attention_calls), 8)
+
+            with mock.patch.dict(os.environ, {
+                    "JITTOR_TRELLIS_CROSS_KV_CACHE": "1",
+                    "JITTOR_TRELLIS_CROSS_KV_CACHE_MB": "384",
+                    "JITTOR_TRELLIS_PROCESSED_KV_CACHE": "1",
+            }, clear=False):
+                actual = sampler.sample(
+                    model, None, cond, neg_cond=neg_cond)
+            self.assertEqual(len(projection_calls), 8)
+            self.assertEqual(len(key_norm_calls), 10)
+            self.assertEqual(len(query_norm_calls), 12)
+            self.assertEqual(len(original_attention_calls), 8)
+            self.assertIsNone(trellis_runtime._CROSS_KV_CACHE_SCOPE.get())
+            self.assertNotIn("forward", attention.__dict__)
+            self.assertNotIn("forward", attention.to_kv.__dict__)
+            fetched = jt.fetch_sync(expected + raw_cached + actual)
+
+            sampler.fail = True
+            with mock.patch.dict(os.environ, {
+                    "JITTOR_TRELLIS_CROSS_KV_CACHE": "1",
+                    "JITTOR_TRELLIS_CROSS_KV_CACHE_MB": "384",
+                    "JITTOR_TRELLIS_PROCESSED_KV_CACHE": "1",
+            }, clear=False), self.assertRaisesRegex(
+                    RuntimeError, "expected processed cache failure"):
+                sampler.sample(model, None, cond, neg_cond=neg_cond)
+            self.assertIsNone(trellis_runtime._CROSS_KV_CACHE_SCOPE.get())
+            self.assertNotIn("forward", attention.__dict__)
+            self.assertNotIn("forward", attention.to_kv.__dict__)
+
+        for offset in (4, 8):
+            for expected_value, actual_value in zip(
+                    fetched[:4], fetched[offset:offset + 4]):
+                np.testing.assert_array_equal(actual_value, expected_value)
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    def test_trellis_cross_kv_cache_reuses_sparse_processed_keys(self):
+        from jittor.torch_shim import trellis_runtime
+
+        projection_calls = []
+        key_norm_calls = []
+        query_norm_calls = []
+        original_attention_calls = []
+
+        class Projection(nn.Linear):
+            def __init__(self):
+                super().__init__(1024, 3072)
+                self.weight = self.weight.bfloat16()
+                self.bias = self.bias.bfloat16()
+                self.weight.start_grad()
+                self.bias.start_grad()
+                self.is_train = False
+
+            def execute(self, context):
+                projection_calls.append(context)
+                return super().execute(context)
+
+        class Identity:
+            training = False
+
+            def __call__(self, value):
+                return value
+
+        class SparseTensor:
+            def __init__(self, feats, coords, shape, layout, scale,
+                         spatial_cache, tag):
+                self.feats = feats
+                self.coords = coords
+                self._shape = shape
+                self.layout = layout
+                self._scale = scale
+                self._spatial_cache = spatial_cache
+                self.tag = tag
+
+            def replace(self, feats, coords=None):
+                shape = (self._shape[0],) + tuple(
+                    int(size) for size in feats.shape[1:])
+                return SparseTensor(
+                    feats, self.coords if coords is None else coords, shape,
+                    self.layout, self._scale, self._spatial_cache, self.tag)
+
+            def reshape(self, *shape):
+                return self.replace(
+                    self.feats.reshape(int(self.feats.shape[0]), *shape))
+
+            def unbind(self, dim):
+                return [self.replace(value) for value in self.feats.unbind(dim)]
+
+        class RMSNorm:
+            training = False
+
+            def __init__(self, calls):
+                self.calls = calls
+                self.scale = 128 ** 0.5
+                gamma = np.linspace(
+                    0.75, 1.25, 12 * 128, dtype=np.float32).reshape(12, 128)
+                self.gamma = jt.array(gamma)
+                self.gamma.start_grad()
+
+            def __call__(self, value):
+                feats = value.feats if isinstance(value, SparseTensor) else value
+                dtype = str(feats.dtype)
+                fp32 = feats.float32()
+                norm = (fp32 * fp32).sum(
+                    dim=-1, keepdim=True).sqrt().maximum(1e-12)
+                result = (fp32 / norm * self.gamma * self.scale).cast(dtype)
+                self.calls.append((feats, result))
+                return value.replace(result) if isinstance(
+                    value, SparseTensor) else result
+
+        def sparse_scaled_dot_product_attention(q, k, v):
+            self.assertIsInstance(q, SparseTensor)
+            return q.replace(
+                q.feats + k.mean(dim=1) + v.mean(dim=1))
+
+        class SparseMultiHeadAttention:
+            _type = "cross"
+            channels = 1536
+            ctx_channels = 1024
+            num_heads = 12
+            head_dim = 128
+            qk_rms_norm = True
+            training = False
+
+            def __init__(self):
+                self.to_q = Identity()
+                self.to_kv = Projection()
+                self.q_rms_norm = RMSNorm(query_norm_calls)
+                self.k_rms_norm = RMSNorm(key_norm_calls)
+                self.to_out = Identity()
+
+            def __call__(self, *args, **kwargs):
+                return self.forward(*args, **kwargs)
+
+            @staticmethod
+            def _linear(module, value):
+                return value.replace(module(value.feats)) if isinstance(
+                    value, SparseTensor) else module(value)
+
+            @staticmethod
+            def _reshape_chs(value, shape):
+                return value.reshape(*shape) if isinstance(
+                    value, SparseTensor) else value.reshape(
+                        *value.shape[:2], *shape)
+
+            def _fused_pre(self, value, num_fused):
+                feats = value.feats.unsqueeze(0) if isinstance(
+                    value, SparseTensor) else value
+                feats = feats.reshape(
+                    *feats.shape[:2], num_fused, self.num_heads, -1)
+                return value.replace(feats.squeeze(0)) if isinstance(
+                    value, SparseTensor) else feats
+
+            def forward(self, x, context=None):
+                original_attention_calls.append(context)
+                q = self._reshape_chs(self._linear(self.to_q, x), (12, -1))
+                kv = self._fused_pre(self._linear(self.to_kv, context), 2)
+                q = self.q_rms_norm(q)
+                k, v = kv.unbind(dim=-3)
+                k = self.k_rms_norm(k)
+                h = sparse_scaled_dot_product_attention(q, k, v)
+                return self._linear(
+                    self.to_out, self._reshape_chs(h, (-1,)))
+
+        SparseMultiHeadAttention.__module__ = (
+            trellis_runtime._SPARSE_ATTENTION_API_MODULE)
+        attention_module = ModuleType(
+            trellis_runtime._SPARSE_ATTENTION_API_MODULE)
+        attention_module.SparseMultiHeadAttention = SparseMultiHeadAttention
+        attention_module.sparse_scaled_dot_product_attention = (
+            sparse_scaled_dot_product_attention)
+
+        class Model:
+            training = False
+            dtype = "bfloat16"
+
+            def modules(self):
+                return [attention]
+
+        class FlowEulerSampler:
+            fail = False
+
+            def sample(self, model, noise, cond=None, *args, **kwargs):
+                outputs = []
+                for context in (cond, kwargs["neg_cond"]):
+                    context = context.bfloat16()
+                    outputs.extend((attention(x, context), attention(x, context)))
+                if self.fail:
+                    raise RuntimeError("expected sparse processed cache failure")
+                return outputs
+
+        sampler_module = ModuleType(trellis_runtime._FLOW_EULER_MODULE)
+        sampler_module.FlowEulerSampler = FlowEulerSampler
+        self.assertTrue(trellis_runtime._patch_flow_euler_module(sampler_module))
+
+        with jt.flag_scope(use_cuda=1), jt.no_grad(), mock.patch.dict(
+                sys.modules, {
+                    trellis_runtime._SPARSE_ATTENTION_API_MODULE:
+                        attention_module,
+                }, clear=False):
+            attention = SparseMultiHeadAttention()
+            self.assertFalse(attention.to_kv.weight.is_stop_grad())
+            self.assertFalse(attention.to_kv.bias.is_stop_grad())
+            self.assertFalse(attention.k_rms_norm.gamma.is_stop_grad())
+            model = Model()
+            sampler = FlowEulerSampler()
+            coords = jt.array(np.array([
+                [0, 1, 2, 3], [0, 2, 3, 4], [0, 3, 4, 5],
+            ], dtype=np.int32)).stop_grad()
+            layout = (slice(0, 3),)
+            spatial_cache = {"sentinel": object()}
+            x = SparseTensor(
+                jt.randn((3, 1536)).bfloat16().stop_grad(), coords,
+                (1, 1536), layout, (1, 2, 4), spatial_cache, "metadata")
+            cond = jt.randn((1, 1029, 1024)).stop_grad()
+            neg_cond = jt.randn((1, 1029, 1024)).stop_grad()
+            device = trellis_runtime._tensor_signature(cond.bfloat16())[2]
+            self.assertEqual(
+                trellis_runtime._cross_attention_fast_spec(
+                    attention, device)["kind"], "sparse")
+            WrongClass = type(
+                "SparseAttentionAlias", (SparseMultiHeadAttention,), {
+                    "__module__": trellis_runtime._SPARSE_ATTENTION_API_MODULE,
+                })
+            WrongModule = type(
+                "SparseMultiHeadAttention", (SparseMultiHeadAttention,), {
+                    "__module__": __name__,
+                })
+            self.assertIsNone(trellis_runtime._cross_attention_fast_spec(
+                object.__new__(WrongClass), device))
+            self.assertIsNone(trellis_runtime._cross_attention_fast_spec(
+                object.__new__(WrongModule), device))
+
+            with mock.patch.dict(os.environ, {
+                    "JITTOR_TRELLIS_CROSS_KV_CACHE": "0",
+            }, clear=False):
+                expected = sampler.sample(
+                    model, None, cond, neg_cond=neg_cond)
+            self.assertEqual(len(projection_calls), 4)
+            self.assertEqual(len(key_norm_calls), 4)
+            self.assertEqual(len(query_norm_calls), 4)
+            self.assertEqual(len(original_attention_calls), 4)
+
+            with mock.patch.dict(os.environ, {
+                    "JITTOR_TRELLIS_CROSS_KV_CACHE": "1",
+                    "JITTOR_TRELLIS_CROSS_KV_CACHE_MB": "384",
+                    "JITTOR_TRELLIS_PROCESSED_KV_CACHE": "1",
+            }, clear=False):
+                actual = sampler.sample(
+                    model, None, cond, neg_cond=neg_cond)
+            self.assertEqual(len(projection_calls), 6)
+            self.assertEqual(len(key_norm_calls), 6)
+            self.assertEqual(len(query_norm_calls), 8)
+            self.assertEqual(len(original_attention_calls), 4)
+            self.assertIsNone(trellis_runtime._CROSS_KV_CACHE_SCOPE.get())
+            self.assertNotIn("forward", attention.__dict__)
+            self.assertNotIn("forward", attention.to_kv.__dict__)
+            for output in expected + actual:
+                self.assertIs(output.coords, coords)
+                self.assertIs(output.layout, layout)
+                self.assertIs(output._spatial_cache, spatial_cache)
+                self.assertEqual(output._scale, (1, 2, 4))
+                self.assertEqual(output._shape, (1, 1536))
+                self.assertEqual(output.tag, "metadata")
+            fetched = jt.fetch_sync(
+                [value.feats for value in expected + actual] +
+                list(key_norm_calls[0]))
+
+            sampler.fail = True
+            with mock.patch.dict(os.environ, {
+                    "JITTOR_TRELLIS_CROSS_KV_CACHE": "1",
+                    "JITTOR_TRELLIS_CROSS_KV_CACHE_MB": "384",
+                    "JITTOR_TRELLIS_PROCESSED_KV_CACHE": "1",
+            }, clear=False), self.assertRaisesRegex(
+                    RuntimeError, "expected sparse processed cache failure"):
+                sampler.sample(model, None, cond, neg_cond=neg_cond)
+            self.assertIsNone(trellis_runtime._CROSS_KV_CACHE_SCOPE.get())
+            self.assertNotIn("forward", attention.__dict__)
+            self.assertNotIn("forward", attention.to_kv.__dict__)
+
+        for expected_value, actual_value in zip(fetched[:4], fetched[4:8]):
+            np.testing.assert_array_equal(actual_value, expected_value)
+        self.assertFalse(np.array_equal(fetched[8], fetched[9]))
 
     @unittest.skipIf(not jt.has_cuda, "No CUDA found")
     def test_trellis_c2s_topology_cache_is_opt_in_and_pair_scoped(self):
