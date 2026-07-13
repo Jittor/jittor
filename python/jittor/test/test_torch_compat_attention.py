@@ -161,6 +161,87 @@ class TestSDPA(Base):
         self.assertTrue(trellis_runtime._patch_dinov3_module(replacement))
         self.assertIsNot(replacement.apply_rotary_pos_emb, reference)
 
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    def test_trellis_runtime_fuses_bf16_multihead_rms_norm(self):
+        from jittor.torch_shim import trellis_runtime
+
+        calls = []
+
+        class MultiHeadRMSNorm:
+            def __init__(self, gamma):
+                self.gamma = gamma
+                self.scale = 128 ** 0.5
+
+            def forward(self, x, **kwargs):
+                calls.append(kwargs)
+                value = x.float32()
+                norm = (value * value).sum(-1, keepdims=True).sqrt()
+                return (value / norm.maximum(1e-12)
+                        * self.gamma * self.scale).cast(str(x.dtype))
+
+        module = ModuleType(trellis_runtime._ATTENTION_MODULE)
+        module.MultiHeadRMSNorm = MultiHeadRMSNorm
+        self.assertTrue(trellis_runtime._patch_attention_module(module))
+        patched = MultiHeadRMSNorm.forward
+        self.assertTrue(trellis_runtime._patch_attention_module(module))
+        self.assertIs(patched, MultiHeadRMSNorm.forward)
+
+        rng = np.random.RandomState(127)
+        x_np = rng.randn(2, 7, 12, 128).astype("float32")
+        gamma_np = (1.0 + 0.1 * rng.randn(12, 128)).astype("float32")
+        with jt.flag_scope(use_cuda=1), jt.no_grad():
+            x = jt.array(x_np).bfloat16()
+            gamma = jt.array(gamma_np)
+            instance = MultiHeadRMSNorm(gamma)
+            expected = patched._jittor_torch_original(instance, x)
+            call_count = len(calls)
+            actual = patched(instance, x)
+            self.assertEqual(len(calls), call_count)
+            expected_np, actual_np = jt.fetch_sync([
+                expected.float32(), actual.float32(),
+            ])
+        np.testing.assert_allclose(
+            actual_np, expected_np, atol=0.016, rtol=0.008)
+
+        call_count = len(calls)
+        with jt.flag_scope(use_cuda=1), jt.no_grad():
+            patched(instance, jt.array(x_np))
+        self.assertEqual(len(calls), call_count + 1)
+        self.assertEqual(calls[-1], {})
+
+        call_count = len(calls)
+        with jt.flag_scope(use_cuda=1), jt.no_grad():
+            patched(instance, jt.array(x_np).bfloat16(), future_option=True)
+        self.assertEqual(len(calls), call_count + 1)
+        self.assertEqual(calls[-1], {"future_option": True})
+
+        call_count = len(calls)
+        with jt.flag_scope(use_cuda=1):
+            patched(instance, jt.array(x_np).bfloat16())
+        self.assertEqual(len(calls), call_count + 1)
+
+        for unsupported_scale in (-128 ** 0.5, float("nan")):
+            call_count = len(calls)
+            instance.scale = unsupported_scale
+            with jt.flag_scope(use_cuda=1), jt.no_grad():
+                patched(instance, jt.array(x_np).bfloat16())
+            self.assertEqual(len(calls), call_count + 1)
+        instance.scale = 128 ** 0.5
+
+        call_count = len(calls)
+        with jt.flag_scope(use_cuda=1), jt.no_grad(), mock.patch.dict(
+                os.environ, {"JITTOR_TRELLIS_FUSED_RMS_NORM": "0"}, clear=False):
+            patched(instance, jt.array(x_np).bfloat16())
+        self.assertEqual(len(calls), call_count + 1)
+
+        replacement = ModuleType(trellis_runtime._ATTENTION_MODULE)
+        replacement._jittor_torch_fast_trellis_rms_norm = True
+        replacement.MultiHeadRMSNorm = type(
+            "MultiHeadRMSNorm", (), {"forward": lambda self, x: x})
+        original = replacement.MultiHeadRMSNorm.forward
+        self.assertTrue(trellis_runtime._patch_attention_module(replacement))
+        self.assertIsNot(replacement.MultiHeadRMSNorm.forward, original)
+
     def test_sdpa_causal(self):
         q, k, v = self.q, self.k, self.v
         seq = q.shape[-2]

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.abc
 import importlib.machinery
+import math
 import os
 import sys
 from typing import Dict, Tuple
@@ -16,6 +17,7 @@ from typing import Dict, Tuple
 _FALSEY = {"0", "false", "no", "off"}
 _CU_SEQLENS_CACHE: Dict[Tuple[str, Tuple[int, ...], str], object] = {}
 _DENSE_ATTENTION_MODULE = "trellis2.modules.attention.full_attn"
+_ATTENTION_MODULE = "trellis2.modules.attention.modules"
 _SPARSE_ATTENTION_MODULE = "trellis2.modules.sparse.attention.full_attn"
 _DINOV3_MODULE = "transformers.models.dinov3_vit.modeling_dinov3_vit"
 _LAYOUT_INFO_KEY = "_jittor_torch_layout_info"
@@ -278,6 +280,102 @@ def _patch_sparse_attention_module(mod) -> bool:
     return True
 
 
+def _trellis_multihead_rms_norm_fast_path(x, gamma, scale):
+    if _is_falsey(os.environ.get("JITTOR_TRELLIS_FUSED_RMS_NORM")):
+        return None
+    try:
+        import jittor as jt
+    except Exception:
+        return None
+
+    if not isinstance(x, jt.Var) or not isinstance(gamma, jt.Var):
+        return None
+    if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
+        return None
+    if getattr(jt.compiler, "has_acl", 0):
+        return None
+    if str(x.dtype) != "bfloat16" or str(gamma.dtype) != "float32":
+        return None
+    try:
+        devices = (int(x.get_device()), int(gamma.get_device()))
+        if any(index < 0 for index in devices) or devices[0] != devices[1]:
+            return None
+        scale_value = float(scale)
+    except Exception:
+        return None
+
+    x_shape = tuple(int(size) for size in x.shape)
+    gamma_shape = tuple(int(size) for size in gamma.shape)
+    if len(x_shape) != 4 or x_shape[-2:] != (12, 128):
+        return None
+    if x_shape[0] <= 0 or x_shape[1] <= 0 or gamma_shape != (12, 128):
+        return None
+    if (not math.isfinite(scale_value)
+            or abs(scale_value - math.sqrt(128.0)) > 1e-6):
+        return None
+
+    cuda_src = r"""
+    __device__ __forceinline__ float warp_sum(float value) {
+        for (int offset = 16; offset > 0; offset >>= 1)
+            value += __shfl_down_sync(0xffffffff, value, offset);
+        return value;
+    }
+    __global__ static void jt_trellis_multihead_rms_norm_bf16(
+            const in0_type* x, const in1_type* gamma, out0_type* y) {
+        int row = blockIdx.x;
+        int dim = threadIdx.x;
+        int lane = dim & 31;
+        int warp = dim >> 5;
+        __shared__ float warp_buf[4];
+        __shared__ float denominator;
+        float value = static_cast<float>(x[row * 128 + dim]);
+        float sum = warp_sum(value * value);
+        if (lane == 0) warp_buf[warp] = sum;
+        __syncthreads();
+        if (warp == 0) {
+            float total = lane < 4 ? warp_buf[lane] : 0.0f;
+            total = warp_sum(total);
+            if (lane == 0)
+                denominator = fmaxf(sqrtf(total), 1.0e-12f);
+        }
+        __syncthreads();
+        int head = row % 12;
+        float weight = static_cast<float>(gamma[head * 128 + dim]);
+        y[row * 128 + dim] = out0_type(
+            value / denominator * weight * 11.313708498984761f);
+    }
+    int rows = in0->num / 128;
+    jt_trellis_multihead_rms_norm_bf16<<<rows, 128>>>(
+        in0_p, in1_p, out0_p);
+    CHECK(0 == cudaGetLastError());
+    """
+    return jt.code(x.shape, x.dtype, [x, gamma], cuda_src=cuda_src)
+
+
+def _patch_attention_module(mod) -> bool:
+    cls = getattr(mod, "MultiHeadRMSNorm", None)
+    original = getattr(cls, "forward", None) if cls is not None else None
+    if original is None:
+        return False
+    if getattr(original, "_jittor_torch_fast_trellis_rms_norm", False):
+        mod._jittor_torch_fast_trellis_rms_norm = True
+        return True
+
+    def forward(self, x, *args, **kwargs):
+        if not args and not kwargs:
+            fast = _trellis_multihead_rms_norm_fast_path(
+                x, getattr(self, "gamma", None), getattr(self, "scale", None))
+            if fast is not None:
+                return fast
+        return original(self, x, *args, **kwargs)
+
+    forward._jittor_torch_fast_trellis_rms_norm = True
+    forward._jittor_torch_original = original
+    cls.forward = forward
+    mod._jittor_torch_fast_trellis_rms_norm = True
+    return True
+
+
 def _dinov3_rotary_fast_path(q, k, cos, sin):
     if _is_falsey(os.environ.get("JITTOR_DINOV3_FUSED_ROPE")):
         return None
@@ -391,6 +489,11 @@ def _patch_loaded_dense_attention() -> bool:
     return mod is not None and _patch_dense_attention_module(mod)
 
 
+def _patch_loaded_attention() -> bool:
+    mod = sys.modules.get(_ATTENTION_MODULE)
+    return mod is not None and _patch_attention_module(mod)
+
+
 def _patch_loaded_sparse_attention() -> bool:
     mod = sys.modules.get(_SPARSE_ATTENTION_MODULE)
     return mod is not None and _patch_sparse_attention_module(mod)
@@ -405,9 +508,10 @@ def install() -> None:
     if _is_falsey(os.environ.get("JITTOR_TRELLIS_RUNTIME_PATCHES")):
         return
     dense_done = _patch_loaded_dense_attention()
+    attention_done = _patch_loaded_attention()
     sparse_done = _patch_loaded_sparse_attention()
     dinov3_done = _patch_loaded_dinov3()
-    if dense_done and sparse_done and dinov3_done:
+    if dense_done and attention_done and sparse_done and dinov3_done:
         return
     for finder in sys.meta_path:
         if isinstance(finder, _TrellisRuntimeFinder):
@@ -429,6 +533,8 @@ class _TrellisRuntimeLoader(importlib.abc.Loader):
         self.loader.exec_module(module)
         if module.__name__ == _DENSE_ATTENTION_MODULE:
             _patch_dense_attention_module(module)
+        if module.__name__ == _ATTENTION_MODULE:
+            _patch_attention_module(module)
         if module.__name__ == _SPARSE_ATTENTION_MODULE:
             _patch_sparse_attention_module(module)
         if module.__name__ == _DINOV3_MODULE:
@@ -438,8 +544,8 @@ class _TrellisRuntimeLoader(importlib.abc.Loader):
 class _TrellisRuntimeFinder(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
         if fullname not in (
-                _DENSE_ATTENTION_MODULE, _SPARSE_ATTENTION_MODULE,
-                _DINOV3_MODULE):
+                _DENSE_ATTENTION_MODULE, _ATTENTION_MODULE,
+                _SPARSE_ATTENTION_MODULE, _DINOV3_MODULE):
             return None
         spec = importlib.machinery.PathFinder.find_spec(fullname, path)
         if spec is None or spec.loader is None:
