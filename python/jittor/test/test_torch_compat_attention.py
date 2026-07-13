@@ -242,6 +242,140 @@ class TestSDPA(Base):
         self.assertTrue(trellis_runtime._patch_attention_module(replacement))
         self.assertIsNot(replacement.MultiHeadRMSNorm.forward, original)
 
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    def test_trellis_cross_kv_cache_is_opt_in_and_sampler_scoped(self):
+        from jittor.torch_shim import trellis_runtime
+
+        projection_calls = []
+        received_dtypes = []
+
+        class Projection(nn.Linear):
+            def __init__(self):
+                super().__init__(1024, 3072)
+                self.weight = self.weight.bfloat16().stop_grad()
+                self.bias = self.bias.bfloat16().stop_grad()
+                self.is_train = False
+
+            def execute(self, context):
+                projection_calls.append(context)
+                return super().execute(context)
+
+        class Attention:
+            _type = "cross"
+            channels = 1536
+            ctx_channels = 1024
+            num_heads = 12
+            head_dim = 128
+            training = False
+
+            def __init__(self):
+                self.to_kv = Projection()
+
+        class Model:
+            training = False
+            dtype = "bfloat16"
+
+            def modules(self):
+                return [attention]
+
+        class FlowEulerSampler:
+            def __init__(self):
+                self.fail = False
+                self.replace_weight = False
+
+            def sample(self, model, noise, cond=None, *args, **kwargs):
+                contexts = [cond, kwargs.get("neg_cond")]
+                received_dtypes.append(tuple(str(value.dtype) for value in contexts))
+                contexts = [value.bfloat16() for value in contexts]
+                outputs = []
+                for index, context in enumerate(contexts):
+                    outputs.append(attention.to_kv(context))
+                    if self.replace_weight and index == 0:
+                        attention.to_kv.weight = jt.ones(
+                            (3072, 1024), dtype="bfloat16").stop_grad()
+                    outputs.append(attention.to_kv(context))
+                if self.fail:
+                    raise RuntimeError("expected test failure")
+                return contexts, outputs
+
+        class FlowEulerGuidanceIntervalSampler(FlowEulerSampler):
+            def sample(self, model, noise, cond, neg_cond, steps=12):
+                return super().sample(
+                    model, noise, cond, steps, neg_cond=neg_cond)
+
+        sampler_module = ModuleType(trellis_runtime._FLOW_EULER_MODULE)
+        sampler_module.FlowEulerSampler = FlowEulerSampler
+        self.assertTrue(trellis_runtime._patch_flow_euler_module(sampler_module))
+        patched_sample = FlowEulerSampler.sample
+        self.assertTrue(trellis_runtime._patch_flow_euler_module(sampler_module))
+        self.assertIs(patched_sample, FlowEulerSampler.sample)
+
+        model = Model()
+        sampler = FlowEulerGuidanceIntervalSampler()
+        with jt.flag_scope(use_cuda=1), jt.no_grad():
+            attention = Attention()
+            source = jt.randn((1, 1029, 1024)).stop_grad()
+            neg_source = jt.randn((1, 1029, 1024)).stop_grad()
+            with mock.patch.dict(os.environ, {
+                    "JITTOR_TRELLIS_CROSS_KV_CACHE": "1",
+                    "JITTOR_TRELLIS_CROSS_KV_CACHE_MB": "1",
+            }, clear=False):
+                sampler.sample(model, None, source, neg_source)
+            self.assertEqual(received_dtypes[-1], ("float32", "float32"))
+            self.assertEqual(len(projection_calls), 4)
+            self.assertNotIn("forward", attention.to_kv.__dict__)
+
+            with mock.patch.dict(os.environ, {
+                    "JITTOR_TRELLIS_CROSS_KV_CACHE": "1",
+                    "JITTOR_TRELLIS_CROSS_KV_CACHE_MB": "384",
+            }, clear=False):
+                result = sampler.sample(model, None, source, neg_source)
+                self.assertEqual(received_dtypes[-1], ("bfloat16", "bfloat16"))
+                self.assertIs(result[1][0], result[1][1])
+                self.assertIs(result[1][2], result[1][3])
+                self.assertEqual(len(projection_calls), 6)
+                self.assertIsNone(trellis_runtime._CROSS_KV_CACHE_SCOPE.get())
+                self.assertNotIn("forward", attention.to_kv.__dict__)
+
+                sampler.sample(model, None, source, neg_source)
+                self.assertEqual(len(projection_calls), 8)
+
+                attention.to_kv.weight = attention.to_kv.weight.float32().stop_grad()
+                sampler.sample(model, None, source, neg_source)
+                self.assertEqual(received_dtypes[-1], ("float32", "float32"))
+                self.assertEqual(len(projection_calls), 12)
+                self.assertNotIn("forward", attention.to_kv.__dict__)
+                attention.to_kv.weight = attention.to_kv.weight.bfloat16().stop_grad()
+
+                sampler.replace_weight = True
+                result = sampler.sample(model, None, source, neg_source)
+                self.assertIsNot(result[1][0], result[1][1])
+                self.assertEqual(len(projection_calls), 16)
+                sampler.replace_weight = False
+
+                sampler.fail = True
+                with self.assertRaisesRegex(RuntimeError, "expected test failure"):
+                    sampler.sample(model, None, source, neg_source)
+                self.assertIsNone(trellis_runtime._CROSS_KV_CACHE_SCOPE.get())
+                self.assertNotIn("forward", attention.to_kv.__dict__)
+                sampler.fail = False
+                self.assertEqual(len(projection_calls), 18)
+
+            with mock.patch.dict(os.environ, {
+                    "JITTOR_TRELLIS_CROSS_KV_CACHE": "0",
+            }, clear=False):
+                sampler.sample(model, None, source, neg_source)
+            self.assertEqual(received_dtypes[-1], ("float32", "float32"))
+            self.assertEqual(len(projection_calls), 22)
+
+            model.training = True
+            with mock.patch.dict(os.environ, {
+                    "JITTOR_TRELLIS_CROSS_KV_CACHE": "1",
+            }, clear=False):
+                sampler.sample(model, None, source, neg_source)
+            self.assertEqual(received_dtypes[-1], ("float32", "float32"))
+            self.assertEqual(len(projection_calls), 26)
+
     def test_sdpa_causal(self):
         q, k, v = self.q, self.k, self.v
         seq = q.shape[-2]

@@ -2,6 +2,11 @@
 
 These patches live in Jittor rather than in TRELLIS.2 so the upstream project
 and its native extension dependencies can stay unmodified.
+
+``JITTOR_TRELLIS_CROSS_KV_CACHE=1`` opts into a sampler-scoped inference cache.
+It requires eval/no-grad execution and immutable condition tensors and weights
+for the duration of ``FlowEulerSampler.sample``. Concurrent samplers must not
+share the same model instance while this opt-in cache is active.
 """
 
 from __future__ import annotations
@@ -11,21 +16,83 @@ import importlib.machinery
 import math
 import os
 import sys
+from contextvars import ContextVar
 from typing import Dict, Tuple
 
 
 _FALSEY = {"0", "false", "no", "off"}
+_TRUTHY = {"1", "true", "yes", "on"}
 _CU_SEQLENS_CACHE: Dict[Tuple[str, Tuple[int, ...], str], object] = {}
 _DENSE_ATTENTION_MODULE = "trellis2.modules.attention.full_attn"
 _ATTENTION_MODULE = "trellis2.modules.attention.modules"
 _SPARSE_ATTENTION_MODULE = "trellis2.modules.sparse.attention.full_attn"
+_FLOW_EULER_MODULE = "trellis2.pipelines.samplers.flow_euler"
 _DINOV3_MODULE = "transformers.models.dinov3_vit.modeling_dinov3_vit"
 _LAYOUT_INFO_KEY = "_jittor_torch_layout_info"
 _CU_SEQLENS_KEY = "_jittor_torch_cu_seqlens_int32"
+_CROSS_KV_CONTEXT_BYTES = 1 * 1029 * 1024 * 2
+_CROSS_KV_ENTRY_BYTES = 1 * 1029 * 3072 * 2
+_CROSS_KV_CACHE_SCOPE = ContextVar("jittor_trellis_cross_kv_cache", default=None)
+
+
+class _CrossKVCacheState:
+    def __init__(self, model, contexts, allowed):
+        self.model = model
+        self.contexts = tuple(contexts)
+        self.allowed = dict(allowed)
+        self.kv_cache = {}
+
+    def clear(self):
+        self.allowed.clear()
+        self.kv_cache.clear()
 
 
 def _is_falsey(value) -> bool:
     return str(value or "").strip().lower() in _FALSEY
+
+
+def _is_truthy(value) -> bool:
+    return str(value or "").strip().lower() in _TRUTHY
+
+
+def _cross_kv_cache_budget() -> int:
+    try:
+        value = float(os.environ.get("JITTOR_TRELLIS_CROSS_KV_CACHE_MB", "384"))
+    except (TypeError, ValueError):
+        value = 384.0
+    if not math.isfinite(value) or value <= 0:
+        return 0
+    return int(min(value, 4096.0) * 1024 * 1024)
+
+
+def _module_is_eval(module) -> bool:
+    try:
+        return not bool(module.training)
+    except Exception:
+        return False
+
+
+def _tensor_signature(value):
+    try:
+        return (
+            tuple(int(size) for size in value.shape),
+            str(value.dtype),
+            int(value.get_device()),
+        )
+    except Exception:
+        return None
+
+
+def _is_inference_source(jt, value) -> bool:
+    if not isinstance(value, jt.Var):
+        return False
+    signature = _tensor_signature(value)
+    if signature is None or signature[:2] != ((1, 1029, 1024), "float32"):
+        return False
+    try:
+        return signature[2] >= 0 and bool(value.is_stop_grad())
+    except Exception:
+        return False
 
 
 def _cached_cu_seqlens(torch, lengths, device):
@@ -280,6 +347,204 @@ def _patch_sparse_attention_module(mod) -> bool:
     return True
 
 
+def _trellis_cached_cross_kv_projection(
+        original, attention, projection, context):
+    state = _CROSS_KV_CACHE_SCOPE.get()
+    if state is None:
+        return original(context)
+    try:
+        import jittor as jt
+    except Exception:
+        return original(context)
+
+    allowed = state.allowed.get(id(projection))
+    weight = getattr(projection, "weight", None)
+    bias = getattr(projection, "bias", None)
+    if (allowed is None
+            or allowed[0] is not attention
+            or allowed[1] is not projection
+            or allowed[2] is not weight
+            or allowed[3] is not bias):
+        state.kv_cache.pop((id(projection), id(context)), None)
+        return original(context)
+    if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
+        state.clear()
+        return original(context)
+    if getattr(jt.compiler, "has_acl", 0):
+        state.clear()
+        return original(context)
+    if not (_module_is_eval(state.model)
+            and _module_is_eval(attention)
+            and _module_is_eval(projection)):
+        state.clear()
+        return original(context)
+    if not any(value is context for value in state.contexts):
+        return original(context)
+
+    key = (id(projection), id(context))
+    cached = state.kv_cache.get(key)
+    if cached is not None:
+        return cached
+
+    output = original(context)
+    context_signature = _tensor_signature(context)
+    if (context_signature is None
+            or _tensor_signature(output) != (
+                (1, 1029, 3072), "bfloat16", context_signature[2])):
+        return output
+    state.kv_cache[key] = output
+    return output
+
+
+def _cross_attention_projection_record(attention, device):
+    if (getattr(attention, "_type", None) != "cross"
+            or getattr(attention, "channels", None) != 1536
+            or getattr(attention, "ctx_channels", None) != 1024
+            or getattr(attention, "num_heads", None) != 12
+            or getattr(attention, "head_dim", None) != 128):
+        return None
+    projection = getattr(attention, "to_kv", None)
+    if (projection is None
+            or getattr(projection, "in_features", None) != 1024
+            or getattr(projection, "out_features", None) != 3072):
+        return None
+    try:
+        import jittor as jt
+
+        weight = projection.weight
+        bias = projection.bias
+        if not (_module_is_eval(attention) and _module_is_eval(projection)):
+            return None
+        if not all(isinstance(value, jt.Var) for value in (weight, bias)):
+            return None
+        if not all(value.is_stop_grad() for value in (weight, bias)):
+            return None
+        if (_tensor_signature(weight) != ((3072, 1024), "bfloat16", device)
+                or _tensor_signature(bias) != ((3072,), "bfloat16", device)):
+            return None
+    except Exception:
+        return None
+    original = getattr(projection, "forward", None)
+    if original is None:
+        return None
+    call_original = (
+        getattr(original, "_jittor_torch_original", original)
+        if getattr(original, "_jittor_torch_trellis_cross_kv_cache", False)
+        else original
+    )
+    return (
+        attention, projection, weight, bias, call_original,
+        "forward" in getattr(projection, "__dict__", {}),
+        getattr(projection, "__dict__", {}).get("forward"),
+    )
+
+
+def _install_cross_attention_projection(record):
+    attention, projection, _, _, original, had_forward, old_forward = record
+    def forward(context, *args, **kwargs):
+        if args or kwargs:
+            return original(context, *args, **kwargs)
+        return _trellis_cached_cross_kv_projection(
+            original, attention, projection, context)
+
+    forward._jittor_torch_trellis_cross_kv_cache = True
+    forward._jittor_torch_original = original
+    projection.forward = forward
+    return projection, forward, had_forward, old_forward
+
+
+def _restore_cross_attention_projection(installed) -> None:
+    projection, forward, had_forward, old_forward = installed
+    if getattr(projection, "__dict__", {}).get("forward") is not forward:
+        return
+    if had_forward:
+        projection.forward = old_forward
+    else:
+        delattr(projection, "forward")
+
+
+def _patch_flow_euler_module(mod) -> bool:
+    cls = getattr(mod, "FlowEulerSampler", None)
+    original = getattr(cls, "sample", None) if cls is not None else None
+    if original is None:
+        return False
+    if getattr(original, "_jittor_torch_trellis_cross_kv_scope", False):
+        return True
+
+    def sample(self, model, noise, cond=None, *args, **kwargs):
+        if not _is_truthy(os.environ.get("JITTOR_TRELLIS_CROSS_KV_CACHE")):
+            return original(self, model, noise, cond, *args, **kwargs)
+        budget = _cross_kv_cache_budget()
+        try:
+            import jittor as jt
+        except Exception:
+            return original(self, model, noise, cond, *args, **kwargs)
+        sources = [cond]
+        if kwargs.get("neg_cond") is not None:
+            sources.append(kwargs["neg_cond"])
+        sources = list({id(value): value for value in sources}.values())
+        if (budget <= 0
+                or not all(_is_inference_source(jt, value) for value in sources)
+                or not _module_is_eval(model)
+                or str(getattr(model, "dtype", "")) != "bfloat16"):
+            return original(self, model, noise, cond, *args, **kwargs)
+        try:
+            if bool(jt.is_autocast_enabled()):
+                return original(self, model, noise, cond, *args, **kwargs)
+        except Exception:
+            pass
+        device = _tensor_signature(sources[0])[2]
+        if any(_tensor_signature(value)[2] != device for value in sources):
+            return original(self, model, noise, cond, *args, **kwargs)
+        try:
+            modules = model.modules()
+        except Exception:
+            modules = ()
+        records = []
+        for module in modules:
+            record = _cross_attention_projection_record(module, device)
+            if record is not None:
+                records.append(record)
+        required = len(sources) * (
+            _CROSS_KV_CONTEXT_BYTES + len(records) * _CROSS_KV_ENTRY_BYTES)
+        if not records or budget < required:
+            return original(self, model, noise, cond, *args, **kwargs)
+
+        contexts = [value.bfloat16() for value in sources]
+        if any(_tensor_signature(value) != (
+                (1, 1029, 1024), "bfloat16", device) for value in contexts):
+            return original(self, model, noise, cond, *args, **kwargs)
+        context_by_source = {
+            id(source): context for source, context in zip(sources, contexts)
+        }
+        cached_cond = context_by_source[id(cond)]
+        cached_kwargs = dict(kwargs)
+        if kwargs.get("neg_cond") is not None:
+            cached_kwargs["neg_cond"] = context_by_source[id(kwargs["neg_cond"])]
+
+        allowed = {id(record[1]): record[:4] for record in records}
+        state = _CrossKVCacheState(model, contexts, allowed)
+        token = _CROSS_KV_CACHE_SCOPE.set(state)
+        installed = []
+        try:
+            for record in records:
+                installed.append(_install_cross_attention_projection(record))
+            return original(
+                self, model, noise, cached_cond, *args, **cached_kwargs)
+        finally:
+            try:
+                for item in reversed(installed):
+                    _restore_cross_attention_projection(item)
+            finally:
+                state.clear()
+                _CROSS_KV_CACHE_SCOPE.reset(token)
+
+    sample._jittor_torch_trellis_cross_kv_scope = True
+    sample._jittor_torch_original = original
+    cls.sample = sample
+    return True
+
+
 def _trellis_multihead_rms_norm_fast_path(x, gamma, scale):
     if _is_falsey(os.environ.get("JITTOR_TRELLIS_FUSED_RMS_NORM")):
         return None
@@ -499,6 +764,11 @@ def _patch_loaded_sparse_attention() -> bool:
     return mod is not None and _patch_sparse_attention_module(mod)
 
 
+def _patch_loaded_flow_euler() -> bool:
+    mod = sys.modules.get(_FLOW_EULER_MODULE)
+    return mod is not None and _patch_flow_euler_module(mod)
+
+
 def _patch_loaded_dinov3() -> bool:
     mod = sys.modules.get(_DINOV3_MODULE)
     return mod is not None and _patch_dinov3_module(mod)
@@ -510,8 +780,10 @@ def install() -> None:
     dense_done = _patch_loaded_dense_attention()
     attention_done = _patch_loaded_attention()
     sparse_done = _patch_loaded_sparse_attention()
+    sampler_done = _patch_loaded_flow_euler()
     dinov3_done = _patch_loaded_dinov3()
-    if dense_done and attention_done and sparse_done and dinov3_done:
+    if (dense_done and attention_done and sparse_done
+            and sampler_done and dinov3_done):
         return
     for finder in sys.meta_path:
         if isinstance(finder, _TrellisRuntimeFinder):
@@ -537,6 +809,8 @@ class _TrellisRuntimeLoader(importlib.abc.Loader):
             _patch_attention_module(module)
         if module.__name__ == _SPARSE_ATTENTION_MODULE:
             _patch_sparse_attention_module(module)
+        if module.__name__ == _FLOW_EULER_MODULE:
+            _patch_flow_euler_module(module)
         if module.__name__ == _DINOV3_MODULE:
             _patch_dinov3_module(module)
 
@@ -545,7 +819,8 @@ class _TrellisRuntimeFinder(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
         if fullname not in (
                 _DENSE_ATTENTION_MODULE, _ATTENTION_MODULE,
-                _SPARSE_ATTENTION_MODULE, _DINOV3_MODULE):
+                _SPARSE_ATTENTION_MODULE, _FLOW_EULER_MODULE,
+                _DINOV3_MODULE):
             return None
         spec = importlib.machinery.PathFinder.find_spec(fullname, path)
         if spec is None or spec.loader is None:
