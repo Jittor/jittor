@@ -168,6 +168,8 @@ class TestSDPA(Base):
         calls = []
 
         class MultiHeadRMSNorm:
+            training = False
+
             def __init__(self, gamma):
                 self.gamma = gamma
                 self.scale = 128 ** 0.5
@@ -241,6 +243,138 @@ class TestSDPA(Base):
         original = replacement.MultiHeadRMSNorm.forward
         self.assertTrue(trellis_runtime._patch_attention_module(replacement))
         self.assertIsNot(replacement.MultiHeadRMSNorm.forward, original)
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    def test_trellis_runtime_fuses_sparse_bf16_multihead_rms_norm(self):
+        from jittor.torch_shim import trellis_runtime
+
+        calls = []
+
+        class VarLenTensor:
+            def __init__(self, feats, layout=None, cache=None):
+                self.feats = feats
+                self.layout = layout if layout is not None else [
+                    slice(0, int(feats.shape[0]))]
+                self._cache = cache if cache is not None else {}
+
+            @property
+            def dtype(self):
+                return self.feats.dtype
+
+            def replace(self, feats):
+                return VarLenTensor(feats, self.layout, self._cache)
+
+        class SparseMultiHeadRMSNorm:
+            training = False
+
+            def __init__(self, gamma):
+                self.gamma = gamma
+                self.scale = 128 ** 0.5
+
+            def forward(self, x, **kwargs):
+                calls.append(kwargs)
+                wrapped = isinstance(x, VarLenTensor)
+                value = x.feats if wrapped else x
+                dtype = str(value.dtype)
+                value = value.float32()
+                norm = (value * value).sum(-1, keepdims=True).sqrt()
+                out = (value / norm.maximum(1e-12)
+                       * self.gamma * self.scale).cast(dtype)
+                return x.replace(out) if wrapped else out
+
+        module = ModuleType(trellis_runtime._SPARSE_ATTENTION_API_MODULE)
+        module.VarLenTensor = VarLenTensor
+        module.SparseMultiHeadRMSNorm = SparseMultiHeadRMSNorm
+        self.assertTrue(
+            trellis_runtime._patch_sparse_attention_api_module(module))
+        patched = SparseMultiHeadRMSNorm.forward
+        self.assertTrue(
+            trellis_runtime._patch_sparse_attention_api_module(module))
+        self.assertIs(patched, SparseMultiHeadRMSNorm.forward)
+
+        rng = np.random.RandomState(137)
+        sparse_np = rng.randn(37, 12, 128).astype("float32")
+        sparse_np[0] = 0
+        dense_np = rng.randn(1, 29, 12, 128).astype("float32")
+        gamma_np = (1.0 + 0.1 * rng.randn(12, 128)).astype("float32")
+        with jt.flag_scope(use_cuda=1), jt.no_grad():
+            gamma = jt.array(gamma_np)
+            instance = SparseMultiHeadRMSNorm(gamma)
+            layout = [slice(0, 11), slice(11, 37)]
+            cache = {"seqlen": object()}
+            wrapped = VarLenTensor(
+                jt.array(sparse_np).bfloat16(), layout, cache)
+            expected = patched._jittor_torch_original(instance, wrapped)
+            call_count = len(calls)
+            actual = patched(instance, wrapped)
+            self.assertEqual(len(calls), call_count)
+            self.assertIs(actual.layout, layout)
+            self.assertIs(actual._cache, cache)
+
+            dense = jt.array(dense_np).bfloat16()
+            expected_dense = patched._jittor_torch_original(instance, dense)
+            call_count = len(calls)
+            actual_dense = patched(instance, dense)
+            self.assertEqual(len(calls), call_count)
+            fetched = jt.fetch_sync([
+                expected.feats.float32(), actual.feats.float32(),
+                expected_dense.float32(), actual_dense.float32(),
+            ])
+        for expected_np, actual_np in zip(fetched[::2], fetched[1::2]):
+            np.testing.assert_allclose(
+                actual_np, expected_np, atol=0.016, rtol=0.008)
+
+        nonfinite_np = sparse_np[:2].copy()
+        nonfinite_np[1, 0, 0] = np.nan
+        with jt.flag_scope(use_cuda=1), jt.no_grad():
+            actual = patched(instance, VarLenTensor(
+                jt.array(nonfinite_np).bfloat16()))
+            actual_np = actual.feats.float32().numpy()
+        self.assertTrue(np.isnan(actual_np[1, 0]).all())
+        self.assertFalse(np.isnan(actual_np[1, 1:]).any())
+
+        def assert_fallback(value, **kwargs):
+            call_count = len(calls)
+            patched(instance, value, **kwargs)
+            self.assertEqual(len(calls), call_count + 1)
+            self.assertEqual(calls[-1], kwargs)
+
+        with jt.flag_scope(use_cuda=1), jt.no_grad():
+            assert_fallback(VarLenTensor(jt.array(sparse_np)))
+            assert_fallback(jt.array(sparse_np).bfloat16(), future_option=True)
+            assert_fallback(jt.array(sparse_np[0]).bfloat16())
+
+            instance.training = True
+            assert_fallback(VarLenTensor(jt.array(sparse_np).bfloat16()))
+            instance.training = False
+
+            with mock.patch.object(
+                    jt, "is_autocast_enabled", return_value=True, create=True):
+                assert_fallback(VarLenTensor(
+                    jt.array(sparse_np).bfloat16()))
+
+            for toggle in (
+                    "JITTOR_TRELLIS_FUSED_RMS_NORM",
+                    "JITTOR_TRELLIS_FUSED_SPARSE_RMS_NORM"):
+                with mock.patch.dict(
+                        os.environ, {toggle: "0"}, clear=False):
+                    assert_fallback(VarLenTensor(
+                        jt.array(sparse_np).bfloat16()))
+
+        with jt.flag_scope(use_cuda=1):
+            assert_fallback(VarLenTensor(
+                jt.array(sparse_np).bfloat16()))
+
+        replacement = ModuleType(trellis_runtime._SPARSE_ATTENTION_API_MODULE)
+        replacement.VarLenTensor = VarLenTensor
+        replacement._jittor_torch_fast_sparse_trellis_rms_norm = True
+        replacement.SparseMultiHeadRMSNorm = type(
+            "SparseMultiHeadRMSNorm", (), {"forward": lambda self, x: x})
+        original = replacement.SparseMultiHeadRMSNorm.forward
+        self.assertTrue(
+            trellis_runtime._patch_sparse_attention_api_module(replacement))
+        self.assertIsNot(
+            replacement.SparseMultiHeadRMSNorm.forward, original)
 
     @unittest.skipIf(not jt.has_cuda, "No CUDA found")
     def test_trellis_runtime_uses_fp16_layer_norm32_kernel(self):

@@ -14,6 +14,10 @@ disabling reuse of the reshaped and normalized cross-attention keys.
 adjacent paired ``SparseChannel2Spatial`` calls. The flexible-grid mesh
 finalizer is enabled for the exact TRELLIS.2 inference signature and can be
 disabled with ``JITTOR_TRELLIS_FUSED_MESH=0``.
+
+The inference RMSNorm kernels are enabled by default. Set
+``JITTOR_TRELLIS_FUSED_RMS_NORM=0`` to disable both dense and sparse kernels,
+or ``JITTOR_TRELLIS_FUSED_SPARSE_RMS_NORM=0`` to disable only the sparse path.
 """
 
 from __future__ import annotations
@@ -1246,6 +1250,11 @@ def _trellis_multihead_rms_norm_fast_path(x, gamma, scale):
         return None
     if getattr(jt.compiler, "has_acl", 0):
         return None
+    try:
+        if bool(jt.is_autocast_enabled()):
+            return None
+    except Exception:
+        return None
     if str(x.dtype) != "bfloat16" or str(gamma.dtype) != "float32":
         return None
     try:
@@ -1258,9 +1267,10 @@ def _trellis_multihead_rms_norm_fast_path(x, gamma, scale):
 
     x_shape = tuple(int(size) for size in x.shape)
     gamma_shape = tuple(int(size) for size in gamma.shape)
-    if len(x_shape) != 4 or x_shape[-2:] != (12, 128):
+    if len(x_shape) not in (3, 4) or x_shape[-2:] != (12, 128):
         return None
-    if x_shape[0] <= 0 or x_shape[1] <= 0 or gamma_shape != (12, 128):
+    if (any(size <= 0 for size in x_shape[:-2])
+            or gamma_shape != (12, 128)):
         return None
     if (not math.isfinite(scale_value)
             or abs(scale_value - math.sqrt(128.0)) > 1e-6):
@@ -1287,8 +1297,11 @@ def _trellis_multihead_rms_norm_fast_path(x, gamma, scale):
         if (warp == 0) {
             float total = lane < 4 ? warp_buf[lane] : 0.0f;
             total = warp_sum(total);
-            if (lane == 0)
-                denominator = fmaxf(sqrtf(total), 1.0e-12f);
+            if (lane == 0) {
+                denominator = sqrtf(total);
+                if (denominator < 1.0e-12f)
+                    denominator = 1.0e-12f;
+            }
         }
         __syncthreads();
         int head = row % 12;
@@ -1314,7 +1327,7 @@ def _patch_attention_module(mod) -> bool:
         return True
 
     def forward(self, x, *args, **kwargs):
-        if not args and not kwargs:
+        if not args and not kwargs and _module_is_eval(self):
             fast = _trellis_multihead_rms_norm_fast_path(
                 x, getattr(self, "gamma", None), getattr(self, "scale", None))
             if fast is not None:
@@ -1325,6 +1338,41 @@ def _patch_attention_module(mod) -> bool:
     forward._jittor_torch_original = original
     cls.forward = forward
     mod._jittor_torch_fast_trellis_rms_norm = True
+    return True
+
+
+def _patch_sparse_attention_api_module(mod) -> bool:
+    cls = getattr(mod, "SparseMultiHeadRMSNorm", None)
+    varlen_cls = getattr(mod, "VarLenTensor", None)
+    original = getattr(cls, "forward", None) if cls is not None else None
+    if original is None or not isinstance(varlen_cls, type):
+        return False
+    if getattr(original, "_jittor_torch_fast_sparse_trellis_rms_norm", False):
+        mod._jittor_torch_fast_sparse_trellis_rms_norm = True
+        return True
+
+    def forward(self, x, *args, **kwargs):
+        if (not args and not kwargs and _module_is_eval(self)
+                and not _is_falsey(os.environ.get(
+                    "JITTOR_TRELLIS_FUSED_SPARSE_RMS_NORM"))):
+            wrapped = isinstance(x, varlen_cls)
+            value = getattr(x, "feats", None) if wrapped else x
+            fast = _trellis_multihead_rms_norm_fast_path(
+                value, getattr(self, "gamma", None),
+                getattr(self, "scale", None))
+            if fast is not None:
+                if not wrapped:
+                    return fast
+                try:
+                    return x.replace(fast)
+                except Exception:
+                    pass
+        return original(self, x, *args, **kwargs)
+
+    forward._jittor_torch_fast_sparse_trellis_rms_norm = True
+    forward._jittor_torch_original = original
+    cls.forward = forward
+    mod._jittor_torch_fast_sparse_trellis_rms_norm = True
     return True
 
 
@@ -1451,6 +1499,11 @@ def _patch_loaded_sparse_attention() -> bool:
     return mod is not None and _patch_sparse_attention_module(mod)
 
 
+def _patch_loaded_sparse_attention_api() -> bool:
+    mod = sys.modules.get(_SPARSE_ATTENTION_API_MODULE)
+    return mod is not None and _patch_sparse_attention_api_module(mod)
+
+
 def _patch_loaded_flow_euler() -> bool:
     mod = sys.modules.get(_FLOW_EULER_MODULE)
     return mod is not None and _patch_flow_euler_module(mod)
@@ -1487,13 +1540,14 @@ def install() -> None:
     dense_done = _patch_loaded_dense_attention()
     attention_done = _patch_loaded_attention()
     sparse_done = _patch_loaded_sparse_attention()
+    sparse_api_done = _patch_loaded_sparse_attention_api()
     sampler_done = _patch_loaded_flow_euler()
     c2s_done = _patch_loaded_c2s()
     c2s_block_done = _patch_loaded_c2s_block()
     flexible_grid_done = _patch_loaded_flexible_grid()
     norm_done = _patch_loaded_norm()
     dinov3_done = _patch_loaded_dinov3()
-    if (dense_done and attention_done and sparse_done
+    if (dense_done and attention_done and sparse_done and sparse_api_done
             and sampler_done and c2s_done and c2s_block_done
             and flexible_grid_done and norm_done
             and dinov3_done):
@@ -1522,6 +1576,8 @@ class _TrellisRuntimeLoader(importlib.abc.Loader):
             _patch_attention_module(module)
         if module.__name__ == _SPARSE_ATTENTION_MODULE:
             _patch_sparse_attention_module(module)
+        if module.__name__ == _SPARSE_ATTENTION_API_MODULE:
+            _patch_sparse_attention_api_module(module)
         if module.__name__ == _FLOW_EULER_MODULE:
             _patch_flow_euler_module(module)
         if module.__name__ == _C2S_MODULE:
@@ -1540,7 +1596,8 @@ class _TrellisRuntimeFinder(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
         if fullname not in (
                 _DENSE_ATTENTION_MODULE, _ATTENTION_MODULE,
-                _SPARSE_ATTENTION_MODULE, _FLOW_EULER_MODULE,
+                _SPARSE_ATTENTION_MODULE, _SPARSE_ATTENTION_API_MODULE,
+                _FLOW_EULER_MODULE,
                 _C2S_MODULE, _C2S_BLOCK_MODULE, _FLEXIBLE_GRID_MODULE,
                 _NORM_MODULE,
                 _DINOV3_MODULE):
