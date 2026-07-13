@@ -17,6 +17,7 @@ _FALSEY = {"0", "false", "no", "off"}
 _CU_SEQLENS_CACHE: Dict[Tuple[str, Tuple[int, ...], str], object] = {}
 _DENSE_ATTENTION_MODULE = "trellis2.modules.attention.full_attn"
 _SPARSE_ATTENTION_MODULE = "trellis2.modules.sparse.attention.full_attn"
+_DINOV3_MODULE = "transformers.models.dinov3_vit.modeling_dinov3_vit"
 _LAYOUT_INFO_KEY = "_jittor_torch_layout_info"
 _CU_SEQLENS_KEY = "_jittor_torch_cu_seqlens_int32"
 
@@ -277,6 +278,114 @@ def _patch_sparse_attention_module(mod) -> bool:
     return True
 
 
+def _dinov3_rotary_fast_path(q, k, cos, sin):
+    if _is_falsey(os.environ.get("JITTOR_DINOV3_FUSED_ROPE")):
+        return None
+    try:
+        import jittor as jt
+    except Exception:
+        return None
+
+    tensors = (q, k, cos, sin)
+    if not all(isinstance(value, jt.Var) for value in tensors):
+        return None
+    if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
+        return None
+    if getattr(jt.compiler, "has_acl", 0):
+        return None
+    if not all(str(value.dtype) == "float32" for value in tensors):
+        return None
+    try:
+        devices = tuple(int(value.get_device()) for value in tensors)
+        if any(index < 0 for index in devices) or len(set(devices)) != 1:
+            return None
+    except Exception:
+        return None
+
+    q_shape = tuple(int(size) for size in q.shape)
+    k_shape = tuple(int(size) for size in k.shape)
+    cos_shape = tuple(int(size) for size in cos.shape)
+    sin_shape = tuple(int(size) for size in sin.shape)
+    if q_shape != k_shape or len(q_shape) != 4:
+        return None
+    if q_shape[0] <= 0 or q_shape[1] != 16 or q_shape[-1] != 64:
+        return None
+    if cos_shape != sin_shape or len(cos_shape) != 2:
+        return None
+    patch_count, head_dim = cos_shape
+    token_count = q_shape[-2]
+    if head_dim != 64 or patch_count <= 0 or patch_count > token_count:
+        return None
+    if int(cos.numel()) != patch_count * head_dim:
+        return None
+
+    cuda_src = r"""
+    __global__ static void jt_dinov3_rope_fp32(
+            const float* q, const float* k,
+            const float* cos, const float* sin,
+            float* out_q, float* out_k,
+            int token_count, int patch_count) {
+        int row = blockIdx.x;
+        int dim = threadIdx.x;
+        int index = row * 64 + dim;
+        int token = row % token_count;
+        int prefix_count = token_count - patch_count;
+        if (token < prefix_count) {
+            out_q[index] = q[index];
+            out_k[index] = k[index];
+            return;
+        }
+
+        int position = token - prefix_count;
+        int other_dim = dim ^ 32;
+        int other_index = row * 64 + other_dim;
+        float sign = dim < 32 ? -1.0f : 1.0f;
+        float cos_value = cos[position * 64 + dim];
+        float sin_value = sin[position * 64 + dim];
+        out_q[index] = q[index] * cos_value
+            + sign * q[other_index] * sin_value;
+        out_k[index] = k[index] * cos_value
+            + sign * k[other_index] * sin_value;
+    }
+
+    int rows = in0->num / 64;
+    int token_count = in0->shape[in0->shape.size() - 2];
+    int patch_count = in2->shape[0];
+    jt_dinov3_rope_fp32<<<rows, 64>>>(
+        (const float*)in0_p, (const float*)in1_p,
+        (const float*)in2_p, (const float*)in3_p,
+        (float*)out0_p, (float*)out1_p,
+        token_count, patch_count);
+    CHECK(0 == cudaGetLastError());
+    """
+    return jt.code(
+        [q.shape, k.shape], [q.dtype, k.dtype], [q, k, cos, sin],
+        cuda_src=cuda_src,
+    )
+
+
+def _patch_dinov3_module(mod) -> bool:
+    original = getattr(mod, "apply_rotary_pos_emb", None)
+    if original is None:
+        return False
+    if getattr(original, "_jittor_torch_fast_dinov3_rope", False):
+        mod._jittor_torch_fast_dinov3_rope = True
+        return True
+
+    def apply_rotary_pos_emb(q, k, cos, sin, **kwargs):
+        if not kwargs:
+            fast = _dinov3_rotary_fast_path(q, k, cos, sin)
+            if fast is not None:
+                return fast
+        return original(q, k, cos, sin, **kwargs)
+
+    apply_rotary_pos_emb._jittor_torch_fast_dinov3_rope = True
+    apply_rotary_pos_emb._jittor_torch_original = original
+    mod.apply_rotary_pos_emb = apply_rotary_pos_emb
+    mod._jittor_torch_fast_dinov3_rope = True
+    return True
+
+
 def _patch_loaded_dense_attention() -> bool:
     mod = sys.modules.get(_DENSE_ATTENTION_MODULE)
     return mod is not None and _patch_dense_attention_module(mod)
@@ -287,12 +396,18 @@ def _patch_loaded_sparse_attention() -> bool:
     return mod is not None and _patch_sparse_attention_module(mod)
 
 
+def _patch_loaded_dinov3() -> bool:
+    mod = sys.modules.get(_DINOV3_MODULE)
+    return mod is not None and _patch_dinov3_module(mod)
+
+
 def install() -> None:
     if _is_falsey(os.environ.get("JITTOR_TRELLIS_RUNTIME_PATCHES")):
         return
     dense_done = _patch_loaded_dense_attention()
     sparse_done = _patch_loaded_sparse_attention()
-    if dense_done and sparse_done:
+    dinov3_done = _patch_loaded_dinov3()
+    if dense_done and sparse_done and dinov3_done:
         return
     for finder in sys.meta_path:
         if isinstance(finder, _TrellisRuntimeFinder):
@@ -316,11 +431,15 @@ class _TrellisRuntimeLoader(importlib.abc.Loader):
             _patch_dense_attention_module(module)
         if module.__name__ == _SPARSE_ATTENTION_MODULE:
             _patch_sparse_attention_module(module)
+        if module.__name__ == _DINOV3_MODULE:
+            _patch_dinov3_module(module)
 
 
 class _TrellisRuntimeFinder(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        if fullname not in (_DENSE_ATTENTION_MODULE, _SPARSE_ATTENTION_MODULE):
+        if fullname not in (
+                _DENSE_ATTENTION_MODULE, _SPARSE_ATTENTION_MODULE,
+                _DINOV3_MODULE):
             return None
         spec = importlib.machinery.PathFinder.find_spec(fullname, path)
         if spec is None or spec.loader is None:

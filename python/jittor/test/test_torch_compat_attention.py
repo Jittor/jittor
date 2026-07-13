@@ -65,6 +65,102 @@ class TestSDPA(Base):
             self.ac(out, _sdpa_ref(q, k, v), msg=f"sdpa {dev}")
         both_devices(body)
 
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    def test_dinov3_runtime_fuses_fp32_inference_rope(self):
+        from jittor.torch_shim import trellis_runtime
+
+        module = ModuleType(trellis_runtime._DINOV3_MODULE)
+        calls = []
+
+        def rotate_half(value):
+            half = int(value.shape[-1]) // 2
+            return jt.concat((-value[..., half:], value[..., :half]), dim=-1)
+
+        def reference(q, k, cos, sin, **kwargs):
+            calls.append(kwargs)
+            patch_count = int(sin.shape[-2])
+            prefix_count = int(q.shape[-2]) - patch_count
+            q_prefix, q_patch = q[..., :prefix_count, :], q[..., prefix_count:, :]
+            k_prefix, k_patch = k[..., :prefix_count, :], k[..., prefix_count:, :]
+            q_patch = q_patch * cos + rotate_half(q_patch) * sin
+            k_patch = k_patch * cos + rotate_half(k_patch) * sin
+            return (
+                jt.concat((q_prefix, q_patch), dim=-2),
+                jt.concat((k_prefix, k_patch), dim=-2),
+            )
+
+        module.apply_rotary_pos_emb = reference
+        self.assertTrue(trellis_runtime._patch_dinov3_module(module))
+        patched = module.apply_rotary_pos_emb
+        self.assertIs(patched, module.apply_rotary_pos_emb)
+        self.assertTrue(trellis_runtime._patch_dinov3_module(module))
+
+        rng = np.random.RandomState(109)
+        q_base_np = rng.randn(2, 13, 16, 64).astype("float32")
+        k_base_np = rng.randn(2, 13, 16, 64).astype("float32")
+        q_np = q_base_np.transpose(0, 2, 1, 3)
+        k_np = k_base_np.transpose(0, 2, 1, 3)
+        cos_np = rng.randn(8, 64).astype("float32")
+        sin_np = rng.randn(8, 64).astype("float32")
+        with jt.flag_scope(use_cuda=1), jt.no_grad():
+            q = jt.array(q_base_np).view(2, 13, 16, 64).transpose(1, 2)
+            k = jt.array(k_base_np).view(2, 13, 16, 64).transpose(1, 2)
+            cos, sin = jt.array(cos_np), jt.array(sin_np)
+            expected = reference(q, k, cos, sin)
+            call_count = len(calls)
+            actual = patched(q, k, cos, sin)
+            self.assertEqual(len(calls), call_count)
+            fetched = jt.fetch_sync(list(expected) + list(actual))
+
+        np.testing.assert_allclose(
+            fetched[2], fetched[0], atol=1e-6, rtol=1e-6)
+        np.testing.assert_allclose(
+            fetched[3], fetched[1], atol=1e-6, rtol=1e-6)
+        np.testing.assert_array_equal(fetched[2][..., :5, :], q_np[..., :5, :])
+        np.testing.assert_array_equal(fetched[3][..., :5, :], k_np[..., :5, :])
+
+        call_count = len(calls)
+        with jt.flag_scope(use_cuda=1), jt.no_grad():
+            patched(
+                jt.array(q_np).float16(), jt.array(k_np).float16(),
+                jt.array(cos_np).float16(), jt.array(sin_np).float16(),
+            )
+        self.assertEqual(len(calls), call_count + 1)
+        self.assertEqual(calls[-1], {})
+
+        call_count = len(calls)
+        with jt.flag_scope(use_cuda=1):
+            patched(
+                jt.array(q_np), jt.array(k_np),
+                jt.array(cos_np), jt.array(sin_np),
+            )
+        self.assertEqual(len(calls), call_count + 1)
+        self.assertEqual(calls[-1], {})
+
+        with jt.flag_scope(use_cuda=1), jt.no_grad():
+            patched(
+                jt.array(q_np), jt.array(k_np),
+                jt.array(cos_np), jt.array(sin_np),
+                future_option=True,
+            )
+        self.assertEqual(calls[-1], {"future_option": True})
+
+        call_count = len(calls)
+        with jt.flag_scope(use_cuda=1), jt.no_grad(), mock.patch.dict(
+                os.environ, {"JITTOR_DINOV3_FUSED_ROPE": "0"}, clear=False):
+            patched(
+                jt.array(q_np), jt.array(k_np),
+                jt.array(cos_np), jt.array(sin_np),
+            )
+        self.assertEqual(len(calls), call_count + 1)
+        self.assertEqual(calls[-1], {})
+
+        replacement = ModuleType(trellis_runtime._DINOV3_MODULE)
+        replacement._jittor_torch_fast_dinov3_rope = True
+        replacement.apply_rotary_pos_emb = reference
+        self.assertTrue(trellis_runtime._patch_dinov3_module(replacement))
+        self.assertIsNot(replacement.apply_rotary_pos_emb, reference)
+
     def test_sdpa_causal(self):
         q, k, v = self.q, self.k, self.v
         seq = q.shape[-2]
