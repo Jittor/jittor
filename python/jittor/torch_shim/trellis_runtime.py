@@ -18,6 +18,9 @@ disabled with ``JITTOR_TRELLIS_FUSED_MESH=0``.
 The inference RMSNorm kernels are enabled by default. Set
 ``JITTOR_TRELLIS_FUSED_RMS_NORM=0`` to disable both dense and sparse kernels,
 or ``JITTOR_TRELLIS_FUSED_SPARSE_RMS_NORM=0`` to disable only the sparse path.
+The LayerNorm32 kernel keeps its historical total opt-out
+``JITTOR_TRELLIS_FP16_LAYERNORM=0``; use
+``JITTOR_TRELLIS_BF16_LAYERNORM=0`` to disable only its BF16 path.
 """
 
 from __future__ import annotations
@@ -775,6 +778,19 @@ def _trellis_layer_norm32_fast_path(layer, x):
     except Exception:
         return None
 
+    shape, input_dtype, device = signature or ((), "", -1)
+    hidden = shape[-1] if shape else -1
+    supported_signature = (
+        input_dtype == "float16"
+        and len(shape) == 2
+        and hidden in (64, 128, 256, 512, 1024)
+    ) or (
+        input_dtype == "bfloat16"
+        and len(shape) in (2, 3)
+        and hidden == 1536
+        and not _is_falsey(os.environ.get(
+            "JITTOR_TRELLIS_BF16_LAYERNORM"))
+    )
     if not (
             isinstance(x, jt.Var)
             and _module_is_eval(layer)
@@ -782,12 +798,10 @@ def _trellis_layer_norm32_fast_path(layer, x):
             and getattr(jt.flags, "no_grad", 0)
             and not getattr(jt.compiler, "has_acl", 0)
             and signature is not None
-            and len(signature[0]) == 2
-            and signature[0][0] > 0
-            and signature[0][1] in (64, 128, 256, 512, 1024)
-            and signature[1] == "float16"
-            and signature[2] >= 0
-            and normalized_shape == (signature[0][1],)
+            and supported_signature
+            and all(size > 0 for size in shape[:-1])
+            and device >= 0
+            and normalized_shape == (hidden,)
             and eps == 1e-6):
         return None
     try:
@@ -799,7 +813,7 @@ def _trellis_layer_norm32_fast_path(layer, x):
     if isinstance(weight, jt.Var) or isinstance(bias, jt.Var):
         if not (isinstance(weight, jt.Var) and isinstance(bias, jt.Var)):
             return None
-        expected = (normalized_shape, "float32", signature[2])
+        expected = (normalized_shape, "float32", device)
         if (_tensor_signature(weight) != expected
                 or _tensor_signature(bias) != expected):
             return None
@@ -810,7 +824,8 @@ def _trellis_layer_norm32_fast_path(layer, x):
         except Exception:
             return None
     return nn._layer_norm_no_grad_cuda(
-        x, normalized_shape, weight, bias, eps)
+        x, normalized_shape, weight, bias, eps,
+        allow_bfloat16=input_dtype == "bfloat16")
 
 
 def _patch_norm_module(mod) -> bool:

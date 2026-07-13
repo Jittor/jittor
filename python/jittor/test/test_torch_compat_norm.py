@@ -272,6 +272,64 @@ class TestLayerNorm(Base):
                         msg="ln dynamic rows shared source")
 
     @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    def test_ln_no_grad_cuda_bfloat16_private_opt_in(self):
+        rng = np.random.RandomState(220)
+        x_np = rng.randn(2, 5, 1536).astype("float32")
+        weight_np = (1 + 0.1 * rng.randn(1536)).astype("float32")
+        bias_np = (0.1 * rng.randn(1536)).astype("float32")
+        with jt.flag_scope(use_cuda=1), jt.no_grad():
+            x = t(x_np).bfloat16()
+            weight = t(weight_np)
+            bias = t(bias_np)
+            self.assertIsNone(nn._layer_norm_no_grad_cuda(
+                x, (1536,), weight, bias, 1e-6))
+            out = nn._layer_norm_no_grad_cuda(
+                x, (1536,), weight, bias, 1e-6,
+                allow_bfloat16=True)
+            value = x.float32()
+            mean = value.mean(dim=-1, keepdim=True)
+            variance = ((value - mean) * (value - mean)).mean(
+                dim=-1, keepdim=True)
+            ref = ((value - mean) * jt.rsqrt(variance + 1e-6)
+                   * weight + bias).bfloat16()
+            out_np, ref_np = jt.fetch_sync([
+                out.float32(), ref.float32(),
+            ])
+        self.assertEqual(str(out.dtype), "bfloat16")
+        np.testing.assert_allclose(
+            out_np, ref_np, atol=0.016, rtol=0.008)
+
+        extreme_np = np.empty((4, 1536), dtype="float32")
+        extreme_np[0] = 1e38
+        extreme_np[1, 0::2] = 1e38
+        extreme_np[1, 1::2] = -1e38
+        extreme_np[2] = 0
+        extreme_np[2, 0] = np.nan
+        extreme_np[3] = 0
+        extreme_np[3, 0] = np.inf
+        with jt.flag_scope(use_cuda=1), jt.no_grad():
+            extreme = t(extreme_np).bfloat16()
+            out = nn._layer_norm_no_grad_cuda(
+                extreme, (1536,), 1.0, 0.0, 1e-6,
+                allow_bfloat16=True)
+            affine_out = nn._layer_norm_no_grad_cuda(
+                extreme, (1536,), jt.ones(1536), jt.zeros(1536), 1e-6,
+                allow_bfloat16=True)
+            out_np, affine_np = jt.fetch_sync([
+                out.float32(), affine_out.float32(),
+            ])
+        self.assertTrue(np.isfinite(out_np[:2]).all())
+        np.testing.assert_array_equal(out_np[0], np.zeros(1536))
+        np.testing.assert_allclose(
+            out_np[1, 0::2], 1.0, atol=0.008, rtol=0)
+        np.testing.assert_allclose(
+            out_np[1, 1::2], -1.0, atol=0.008, rtol=0)
+        self.assertTrue(np.isnan(out_np[2:]).all())
+        np.testing.assert_array_equal(affine_np[:2], out_np[:2])
+        np.testing.assert_array_equal(
+            np.isnan(affine_np[2:]), np.ones((2, 1536), dtype=bool))
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
     def test_ln_no_grad_cuda_fast_path_float32_and_float16(self):
         rng = np.random.RandomState(218)
         original = nn._ln_normalize

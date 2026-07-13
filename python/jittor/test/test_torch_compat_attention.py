@@ -463,6 +463,112 @@ class TestSDPA(Base):
         self.assertEqual(calls[-1][1], {"future_option": True})
 
     @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    def test_trellis_runtime_uses_bf16_layer_norm32_kernel(self):
+        from jittor.torch_shim import trellis_runtime
+
+        calls = []
+
+        class LayerNorm32:
+            training = False
+
+            def __init__(self, weight, bias, hidden=1536):
+                self.normalized_shape = (hidden,)
+                self.eps = 1e-6
+                self.weight = weight
+                self.bias = bias
+
+            def forward(self, x, *args, **kwargs):
+                calls.append((args, kwargs))
+                dtype = str(x.dtype)
+                value = x.float32()
+                mean = value.mean(dim=-1, keepdim=True)
+                variance = ((value - mean) * (value - mean)).mean(
+                    dim=-1, keepdim=True)
+                out = (value - mean) * jt.rsqrt(variance + self.eps)
+                return (out * self.weight + self.bias).cast(dtype)
+
+        module = ModuleType(trellis_runtime._NORM_MODULE)
+        module.LayerNorm32 = LayerNorm32
+        self.assertTrue(trellis_runtime._patch_norm_module(module))
+        patched = LayerNorm32.forward
+        self.assertTrue(trellis_runtime._patch_norm_module(module))
+        self.assertIs(patched, LayerNorm32.forward)
+
+        rng = np.random.RandomState(151)
+        inputs = [
+            rng.randn(7, 1536).astype("float32"),
+            (1 + 1e-3 * rng.randn(1, 5, 1536)).astype("float32"),
+        ]
+        weight_np = (1 + 0.1 * rng.randn(1536)).astype("float32")
+        bias_np = (0.1 * rng.randn(1536)).astype("float32")
+        pairs = []
+        with jt.flag_scope(use_cuda=1), jt.no_grad():
+            weight = jt.array(weight_np)
+            bias = jt.array(bias_np)
+            weight.start_grad()
+            bias.start_grad()
+            layer = LayerNorm32(weight, bias)
+            for value_np in inputs:
+                value = jt.array(value_np).bfloat16()
+                expected = patched._jittor_torch_original(layer, value)
+                call_count = len(calls)
+                actual = patched(layer, value)
+                self.assertEqual(len(calls), call_count)
+                self.assertEqual(str(actual.dtype), "bfloat16")
+                pairs.extend((expected.float32(), actual.float32()))
+
+            scalar = LayerNorm32(1.0, 0.0)
+            value = jt.array(inputs[0]).bfloat16()
+            expected = patched._jittor_torch_original(scalar, value)
+            call_count = len(calls)
+            actual = patched(scalar, value)
+            self.assertEqual(len(calls), call_count)
+            pairs.extend((expected.float32(), actual.float32()))
+            fetched = jt.fetch_sync(pairs)
+        for expected_np, actual_np in zip(fetched[::2], fetched[1::2]):
+            np.testing.assert_allclose(
+                actual_np, expected_np, atol=0.016, rtol=0.008)
+
+        def assert_fallback(target, value, *args, **kwargs):
+            call_count = len(calls)
+            patched(target, value, *args, **kwargs)
+            self.assertEqual(len(calls), call_count + 1)
+            self.assertEqual(calls[-1], (args, kwargs))
+
+        with jt.flag_scope(use_cuda=1), jt.no_grad():
+            assert_fallback(layer, jt.array(inputs[0]))
+            assert_fallback(
+                LayerNorm32(weight[:128], bias[:128], hidden=128),
+                jt.array(inputs[0][:, :128]).bfloat16())
+            assert_fallback(
+                layer, jt.array(inputs[0][None, None]).bfloat16())
+            assert_fallback(
+                LayerNorm32(weight.bfloat16(), bias.bfloat16()),
+                jt.array(inputs[0]).bfloat16())
+            assert_fallback(
+                layer, jt.array(inputs[0]).bfloat16(),
+                future_option=True)
+
+            layer.training = True
+            assert_fallback(layer, jt.array(inputs[0]).bfloat16())
+            layer.training = False
+
+            with mock.patch.object(
+                    jt, "is_autocast_enabled", return_value=True, create=True):
+                assert_fallback(layer, jt.array(inputs[0]).bfloat16())
+
+            for toggle in (
+                    "JITTOR_TRELLIS_FP16_LAYERNORM",
+                    "JITTOR_TRELLIS_BF16_LAYERNORM"):
+                with mock.patch.dict(
+                        os.environ, {toggle: "0"}, clear=False):
+                    assert_fallback(
+                        layer, jt.array(inputs[0]).bfloat16())
+
+        with jt.flag_scope(use_cuda=1):
+            assert_fallback(layer, jt.array(inputs[0]).bfloat16())
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
     def test_trellis_cross_kv_cache_is_opt_in_and_sampler_scoped(self):
         from jittor.torch_shim import trellis_runtime
 
@@ -1026,7 +1132,8 @@ class TestSDPA(Base):
             self.assertNotIn("forward", attention.to_kv.__dict__)
 
         for expected_value, actual_value in zip(fetched[:4], fetched[4:8]):
-            np.testing.assert_array_equal(actual_value, expected_value)
+            np.testing.assert_allclose(
+                actual_value, expected_value, atol=0.008, rtol=0.008)
         self.assertFalse(np.array_equal(fetched[8], fetched[9]))
 
     @unittest.skipIf(not jt.has_cuda, "No CUDA found")
