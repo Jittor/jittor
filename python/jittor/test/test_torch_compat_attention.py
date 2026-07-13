@@ -376,6 +376,175 @@ class TestSDPA(Base):
             self.assertEqual(received_dtypes[-1], ("float32", "float32"))
             self.assertEqual(len(projection_calls), 26)
 
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    def test_trellis_c2s_topology_cache_is_opt_in_and_pair_scoped(self):
+        from jittor.torch_shim import trellis_runtime
+
+        calls = []
+
+        class SparseTensor:
+            def __init__(self, feats, coords, shape=None):
+                self.feats = feats
+                self.coords = coords
+                self._shape = shape
+                self._scale = (1, 1, 1)
+                self._spatial_cache = {}
+
+            @property
+            def device(self):
+                return self.coords.device
+
+            def get_spatial_cache(self, key=None):
+                bucket = self._spatial_cache.get(str(self._scale), {})
+                return bucket if key is None else bucket.get(key)
+
+        class SparseChannel2Spatial:
+            factor = 2
+            training = False
+
+            def forward(self, x, subdivision=None):
+                calls.append((x, subdivision))
+                return x
+
+        module = ModuleType(trellis_runtime._C2S_MODULE)
+        module.torch = torch
+        module.SparseTensor = SparseTensor
+        module.SparseChannel2Spatial = SparseChannel2Spatial
+        self.assertTrue(trellis_runtime._patch_c2s_module(module))
+        patched = SparseChannel2Spatial.forward
+        self.assertTrue(trellis_runtime._patch_c2s_module(module))
+        self.assertIs(patched, SparseChannel2Spatial.forward)
+
+        class SparseResBlockC2S3d:
+            training = False
+
+            def __init__(self, updown):
+                self.updown = updown
+
+            def _forward(self, first, second, subdivision, fail=False):
+                out1 = self.updown.forward(first, subdivision)
+                if fail:
+                    raise RuntimeError("expected block failure")
+                return out1, self.updown.forward(second, subdivision)
+
+        block_module = ModuleType(trellis_runtime._C2S_BLOCK_MODULE)
+        block_module.SparseResBlockC2S3d = SparseResBlockC2S3d
+        self.assertTrue(trellis_runtime._patch_c2s_block_module(block_module))
+        patched_block = SparseResBlockC2S3d._forward
+        self.assertTrue(trellis_runtime._patch_c2s_block_module(block_module))
+        self.assertIs(patched_block, SparseResBlockC2S3d._forward)
+
+        coords_np = np.array([
+            [0, 1, 2, 3],
+            [0, 4, 5, 6],
+            [1, 0, 1, 2],
+        ], dtype=np.int32)
+        subdivision_np = np.array([
+            [1, 0, 0, 1, 0, 0, 0, 1],
+            [0, 1, 0, 0, 1, 0, 0, 0],
+            [0, 0, 1, 0, 0, 1, 1, 0],
+        ], dtype=np.bool_)
+        feats1_np = np.arange(48, dtype=np.float16).reshape(3, 16)
+        feats2_np = (100 + np.arange(24)).astype(np.float16).reshape(3, 8)
+
+        layer = SparseChannel2Spatial()
+        with jt.flag_scope(use_cuda=1), jt.no_grad():
+            coords = jt.array(coords_np)
+            shared_cache = {}
+            subdivision = SparseTensor(
+                jt.array(subdivision_np), coords)
+            first = SparseTensor(jt.array(feats1_np), coords)
+            second = SparseTensor(jt.array(feats2_np), coords)
+            first._spatial_cache = shared_cache
+            second._spatial_cache = shared_cache
+
+            with mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("JITTOR_TRELLIS_C2S_TOPOLOGY_CACHE", None)
+                self.assertIs(patched(layer, first, subdivision), first)
+            self.assertEqual(len(calls), 1)
+
+            with mock.patch.dict(os.environ, {
+                    "JITTOR_TRELLIS_C2S_TOPOLOGY_CACHE": "1",
+            }, clear=False):
+                self.assertIs(patched(layer, first, subdivision), first)
+                block = SparseResBlockC2S3d(layer)
+                out1, out2 = block._forward(first, second, subdivision)
+                self.assertIs(out1.coords, out2.coords)
+                self.assertIsNone(trellis_runtime._C2S_PAIR_SCOPE.get())
+                self.assertEqual(shared_cache, {})
+                fetched = jt.fetch_sync([
+                    out1.coords, out1.feats, out2.coords, out2.feats,
+                ])
+                with self.assertRaisesRegex(
+                        RuntimeError, "expected block failure"):
+                    block._forward(first, second, subdivision, fail=True)
+                self.assertIsNone(trellis_runtime._C2S_PAIR_SCOPE.get())
+        self.assertEqual(len(calls), 2)
+
+        rows, subidx = np.nonzero(subdivision_np)
+        expected_coords = np.repeat(coords_np, subdivision_np.sum(1), axis=0)
+        expected_coords[:, 1:] *= 2
+        for index in range(3):
+            expected_coords[:, index + 1] += subidx // (2 ** index) % 2
+        expected1 = feats1_np.reshape(3 * 8, -1)[rows * 8 + subidx]
+        expected2 = feats2_np.reshape(3 * 8, -1)[rows * 8 + subidx]
+        np.testing.assert_array_equal(fetched[0], expected_coords)
+        np.testing.assert_array_equal(fetched[2], expected_coords)
+        np.testing.assert_array_equal(fetched[1], expected1)
+        np.testing.assert_array_equal(fetched[3], expected2)
+
+    @unittest.skipIf(not jt.has_cuda, "No CUDA found")
+    def test_trellis_flexible_mesh_finalizer_matches_reference(self):
+        from jittor.torch_shim import trellis_runtime
+
+        coords_np = np.array([
+            [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
+            [2, 0, 0], [3, 0, 0], [3, 1, 0], [2, 1, 0],
+        ], dtype=np.int32)
+        dual_np = np.array([
+            [0.1, 0.2, 0.3], [0.2, 0.3, 0.4],
+            [0.3, 0.4, 0.5], [0.4, 0.5, 0.6],
+            [0.5, 0.6, 0.7], [0.6, 0.7, 0.8],
+            [0.7, 0.8, 0.9], [0.8, 0.9, 1.0],
+        ], dtype=np.float32)
+        quads_np = np.array([
+            [0, 1, 2, 3],
+            [-1, -1, -1, -1],
+            [4, 5, 6, 7],
+        ], dtype=np.int32)
+        rows_np = np.array([0, 2], dtype=np.int32)
+        weights_np = np.array(
+            [[1], [1], [1], [1], [2], [1], [3], [1]],
+            dtype=np.float32)
+        voxel_np = np.array([0.125, 0.25, 0.5], dtype=np.float32)
+        aabb_np = np.array([
+            [-0.5, -0.25, 0.125], [0.5, 0.75, 1.125],
+        ], dtype=np.float32)
+
+        with jt.flag_scope(use_cuda=1), jt.no_grad():
+            vertices, faces = trellis_runtime._trellis_finalize_flexible_mesh(
+                jt.array(coords_np), jt.array(dual_np), jt.array(quads_np),
+                jt.array(rows_np), jt.array(weights_np), jt.array(voxel_np),
+                jt.array(aabb_np),
+            )
+            vertices_np, faces_np = jt.fetch_sync([vertices, faces])
+            _, empty_faces = trellis_runtime._trellis_finalize_flexible_mesh(
+                jt.array(coords_np), jt.array(dual_np), jt.array(quads_np),
+                jt.array(np.empty((0,), dtype=np.int32)),
+                jt.array(weights_np), jt.array(voxel_np), jt.array(aabb_np),
+            )
+            empty_faces_np = empty_faces.numpy()
+
+        expected_vertices = (
+            (coords_np.astype(np.float32) + dual_np) * voxel_np + aabb_np[0])
+        expected_faces = np.array([
+            [0, 1, 3], [3, 1, 2],
+            [4, 5, 6], [4, 6, 7],
+        ], dtype=np.int32)
+        np.testing.assert_array_equal(vertices_np, expected_vertices)
+        np.testing.assert_array_equal(faces_np, expected_faces)
+        self.assertEqual(empty_faces_np.shape, (0, 3))
+
     def test_sdpa_causal(self):
         q, k, v = self.q, self.k, self.v
         seq = q.shape[-2]

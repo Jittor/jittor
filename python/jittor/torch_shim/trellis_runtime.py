@@ -7,6 +7,11 @@ and its native extension dependencies can stay unmodified.
 It requires eval/no-grad execution and immutable condition tensors and weights
 for the duration of ``FlowEulerSampler.sample``. Concurrent samplers must not
 share the same model instance while this opt-in cache is active.
+
+``JITTOR_TRELLIS_C2S_TOPOLOGY_CACHE=1`` opts into reusing topology between
+adjacent paired ``SparseChannel2Spatial`` calls. The flexible-grid mesh
+finalizer is enabled for the exact TRELLIS.2 inference signature and can be
+disabled with ``JITTOR_TRELLIS_FUSED_MESH=0``.
 """
 
 from __future__ import annotations
@@ -27,12 +32,17 @@ _DENSE_ATTENTION_MODULE = "trellis2.modules.attention.full_attn"
 _ATTENTION_MODULE = "trellis2.modules.attention.modules"
 _SPARSE_ATTENTION_MODULE = "trellis2.modules.sparse.attention.full_attn"
 _FLOW_EULER_MODULE = "trellis2.pipelines.samplers.flow_euler"
+_C2S_MODULE = "trellis2.modules.sparse.spatial.spatial2channel"
+_C2S_BLOCK_MODULE = "trellis2.models.sc_vaes.sparse_unet_vae"
+_FLEXIBLE_GRID_MODULE = "o_voxel.convert.flexible_dual_grid"
 _DINOV3_MODULE = "transformers.models.dinov3_vit.modeling_dinov3_vit"
 _LAYOUT_INFO_KEY = "_jittor_torch_layout_info"
 _CU_SEQLENS_KEY = "_jittor_torch_cu_seqlens_int32"
 _CROSS_KV_CONTEXT_BYTES = 1 * 1029 * 1024 * 2
 _CROSS_KV_ENTRY_BYTES = 1 * 1029 * 3072 * 2
 _CROSS_KV_CACHE_SCOPE = ContextVar("jittor_trellis_cross_kv_cache", default=None)
+_C2S_PAIR_SCOPE = ContextVar("jittor_trellis_c2s_pair_cache", default=None)
+_FLEXIBLE_GRID_OFFSETS = {}
 
 
 class _CrossKVCacheState:
@@ -45,6 +55,16 @@ class _CrossKVCacheState:
     def clear(self):
         self.allowed.clear()
         self.kv_cache.clear()
+
+
+class _C2SPairCacheState:
+    def __init__(self, layer):
+        self.layer = layer
+        self.entry = None
+
+    def clear(self):
+        self.layer = None
+        self.entry = None
 
 
 def _is_falsey(value) -> bool:
@@ -344,6 +364,386 @@ def _patch_sparse_attention_module(mod) -> bool:
             refs.sparse_scaled_dot_product_attention = sparse_scaled_dot_product_attention
         except Exception:
             pass
+    return True
+
+
+def _same_c2s_signature(left, right) -> bool:
+    return (
+        left[0] is right[0]
+        and left[1] is right[1]
+        and left[2] is right[2]
+        and left[3] == right[3]
+    )
+
+
+def _trellis_c2s_pair_fast_path(mod, layer, x, subdivision):
+    if not _is_truthy(os.environ.get("JITTOR_TRELLIS_C2S_TOPOLOGY_CACHE")):
+        return None
+    state = _C2S_PAIR_SCOPE.get()
+    if state is None or state.layer is not layer:
+        return None
+    try:
+        import jittor as jt
+
+        sparse_tensor = mod.SparseTensor
+        torch = mod.torch
+        factor = int(layer.factor)
+        coords_signature = _tensor_signature(x.coords)
+        feats_signature = _tensor_signature(x.feats)
+        sub_signature = _tensor_signature(subdivision.feats)
+        scale = tuple(x._scale)
+    except Exception:
+        return None
+
+    if not (
+            isinstance(x, sparse_tensor)
+            and isinstance(subdivision, sparse_tensor)
+            and factor == 2
+            and _module_is_eval(layer)
+            and jt.flags.use_cuda
+            and getattr(jt.flags, "no_grad", 0)
+            and not getattr(jt.compiler, "has_acl", 0)
+            and coords_signature is not None
+            and coords_signature[:2] == (
+                (int(x.coords.shape[0]), 4), "int32")
+            and feats_signature is not None
+            and len(feats_signature[0]) == 2
+            and feats_signature[0][0] == coords_signature[0][0]
+            and feats_signature[0][1] > 0
+            and feats_signature[0][1] % 8 == 0
+            and feats_signature[1] == "float16"
+            and sub_signature == (
+                (coords_signature[0][0], 8), "bool", coords_signature[2])
+            and feats_signature[2] == coords_signature[2]
+            and coords_signature[2] >= 0):
+        return None
+    try:
+        if x.get_spatial_cache("channel2spatial_2") is not None:
+            return None
+    except Exception:
+        return None
+
+    signature = (layer, x.coords, subdivision.feats, scale)
+    entry = state.entry
+    state.entry = None
+    try:
+        if entry is not None and _same_c2s_signature(entry[0], signature):
+            new_coords, idx, subidx = entry[1]
+        elif entry is not None:
+            return None
+        else:
+            sub = subdivision.feats
+            n_leaf = sub.sum(dim=-1)
+            subidx = sub.nonzero()[:, -1]
+            new_coords = x.coords.clone().detach()
+            new_coords[:, 1:] *= factor
+            new_coords = torch.repeat_interleave(
+                new_coords, n_leaf, dim=0, output_size=subidx.shape[0])
+            for index in range(3):
+                new_coords[:, index + 1] += (
+                    subidx // factor ** index % factor)
+            idx = torch.repeat_interleave(
+                torch.arange(x.coords.shape[0], device=x.device),
+                n_leaf, dim=0, output_size=subidx.shape[0])
+            state.entry = (signature, (new_coords, idx, subidx))
+
+        x_feats = x.feats.reshape(x.feats.shape[0] * 8, -1)
+        new_feats = x_feats[idx * 8 + subidx]
+        out = sparse_tensor(
+            new_feats,
+            new_coords,
+            None if x._shape is None
+            else torch.Size([x._shape[0], x._shape[1] // 8]),
+        )
+        out._scale = tuple(value / 2 for value in scale)
+        return out
+    except Exception:
+        state.entry = None
+        return None
+
+
+def _patch_c2s_module(mod) -> bool:
+    cls = getattr(mod, "SparseChannel2Spatial", None)
+    original = getattr(cls, "forward", None) if cls is not None else None
+    if original is None or not hasattr(mod, "SparseTensor"):
+        return False
+    if getattr(original, "_jittor_torch_fast_c2s_pair", False):
+        mod._jittor_torch_fast_c2s_pair = True
+        return True
+
+    def forward(self, x, subdivision=None):
+        if subdivision is not None:
+            fast = _trellis_c2s_pair_fast_path(
+                mod, self, x, subdivision)
+            if fast is not None:
+                return fast
+        return original(self, x, subdivision)
+
+    forward._jittor_torch_fast_c2s_pair = True
+    forward._jittor_torch_original = original
+    cls.forward = forward
+    mod._jittor_torch_fast_c2s_pair = True
+    return True
+
+
+def _patch_c2s_block_module(mod) -> bool:
+    cls = getattr(mod, "SparseResBlockC2S3d", None)
+    original = getattr(cls, "_forward", None) if cls is not None else None
+    if original is None:
+        return False
+    if getattr(original, "_jittor_torch_c2s_pair_scope", False):
+        mod._jittor_torch_c2s_pair_scope = True
+        return True
+
+    def _forward(self, *args, **kwargs):
+        if not (_is_truthy(os.environ.get(
+                "JITTOR_TRELLIS_C2S_TOPOLOGY_CACHE"))
+                and _module_is_eval(self)):
+            return original(self, *args, **kwargs)
+        try:
+            import jittor as jt
+
+            if (not jt.flags.use_cuda or not getattr(jt.flags, "no_grad", 0)
+                    or getattr(jt.compiler, "has_acl", 0)):
+                return original(self, *args, **kwargs)
+        except Exception:
+            return original(self, *args, **kwargs)
+
+        state = _C2SPairCacheState(getattr(self, "updown", None))
+        token = _C2S_PAIR_SCOPE.set(state)
+        try:
+            return original(self, *args, **kwargs)
+        finally:
+            state.clear()
+            _C2S_PAIR_SCOPE.reset(token)
+
+    _forward._jittor_torch_c2s_pair_scope = True
+    _forward._jittor_torch_original = original
+    cls._forward = _forward
+    mod._jittor_torch_c2s_pair_scope = True
+    return True
+
+
+def _trellis_finalize_flexible_mesh(
+        coords, dual_vertices, quad_indices, valid_rows,
+        split_weight, voxel_size, aabb):
+    import jittor as jt
+
+    vertex_count = int(coords.shape[0])
+    valid_count = int(valid_rows.shape[0])
+    cuda_header = r"""
+    template <typename C, typename V, typename S, typename A, typename O>
+    __global__ void jt_trellis_flexible_vertices(
+            const C* coords, const V* vertices,
+            const S* voxel_size, const A* aabb, O* out,
+            int64_t total) {
+        int64_t index = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+        int64_t stride = (int64_t)blockDim.x * gridDim.x;
+        for (; index < total; index += stride) {
+            int column = (int)(index % 3);
+            out[index] = (O)(((float)coords[index] + (float)vertices[index])
+                * (float)voxel_size[column] + (float)aabb[column]);
+        }
+    }
+
+    template <typename Q, typename R, typename W, typename O>
+    __global__ void jt_trellis_flexible_faces(
+            const Q* quads, const R* rows, const W* weights, O* out,
+            int64_t total) {
+        int64_t index = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+        int64_t stride = (int64_t)blockDim.x * gridDim.x;
+        for (; index < total; index += stride) {
+            int64_t row = index / 6;
+            int lane = (int)(index - row * 6);
+            int64_t base = (int64_t)rows[row] * 4;
+            int q0 = (int)quads[base];
+            int q1 = (int)quads[base + 1];
+            int q2 = (int)quads[base + 2];
+            int q3 = (int)quads[base + 3];
+            float weight02 = (float)weights[q0] * (float)weights[q2];
+            float weight13 = (float)weights[q1] * (float)weights[q3];
+            int split1[6] = {0, 1, 2, 0, 2, 3};
+            int split2[6] = {0, 1, 3, 3, 1, 2};
+            int corner = weight02 > weight13 ? split1[lane] : split2[lane];
+            out[index] = (O)quads[base + corner];
+        }
+    }
+    """
+    cuda_src = r"""
+    @alias(coords, in0)
+    @alias(vertices, in1)
+    @alias(quads, in2)
+    @alias(rows, in3)
+    @alias(weights, in4)
+    @alias(voxel_size, in5)
+    @alias(aabb, in6)
+    @alias(out_vertices, out0)
+    @alias(out_faces, out1)
+    int threads = 256;
+    int64_t vertex_total = out_vertices->num;
+    if (vertex_total) {
+        int blocks = (int)((vertex_total + threads - 1) / threads);
+        if (blocks > 4096) blocks = 4096;
+        jt_trellis_flexible_vertices<
+            coords_type, vertices_type, voxel_size_type,
+            aabb_type, out_vertices_type><<<blocks, threads>>>(
+            coords_p, vertices_p, voxel_size_p, aabb_p,
+            out_vertices_p, vertex_total);
+        CHECK(0 == cudaGetLastError());
+    }
+    int64_t face_total = out_faces->num;
+    if (face_total) {
+        int blocks = (int)((face_total + threads - 1) / threads);
+        if (blocks > 4096) blocks = 4096;
+        jt_trellis_flexible_faces<
+            quads_type, rows_type, weights_type,
+            out_faces_type><<<blocks, threads>>>(
+            quads_p, rows_p, weights_p, out_faces_p, face_total);
+        CHECK(0 == cudaGetLastError());
+    }
+    """
+    return jt.code(
+        [[vertex_count, 3], [valid_count * 2, 3]],
+        [dual_vertices.dtype, quad_indices.dtype],
+        [
+            coords, dual_vertices, quad_indices, valid_rows,
+            split_weight, voxel_size, aabb,
+        ],
+        cuda_header=cuda_header,
+        cuda_src=cuda_src,
+    )
+
+
+def _trellis_flexible_mesh_fast_path(
+        mod, coords, dual_vertices, intersected_flag, split_weight,
+        aabb, voxel_size=None, grid_size=None, train=False):
+    if _is_falsey(os.environ.get("JITTOR_TRELLIS_FUSED_MESH")):
+        return None
+    if (train is not False or voxel_size is not None
+            or type(grid_size) is not int or grid_size != 512
+            or type(aabb) not in (list, tuple)):
+        return None
+    try:
+        normalized_aabb = tuple(
+            tuple(float(value) for value in row) for row in aabb)
+    except Exception:
+        return None
+    if normalized_aabb != (
+            (-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)):
+        return None
+
+    try:
+        import jittor as jt
+
+        torch = mod.torch
+        native = mod._C
+        tensors = (coords, dual_vertices, intersected_flag, split_weight)
+        if not all(isinstance(value, jt.Var) for value in tensors):
+            return None
+        signatures = tuple(_tensor_signature(value) for value in tensors)
+        vertex_count = int(coords.shape[0])
+    except Exception:
+        return None
+    if not (
+            jt.flags.use_cuda
+            and getattr(jt.flags, "no_grad", 0)
+            and not getattr(jt.compiler, "has_acl", 0)
+            and all(signature is not None for signature in signatures)
+            and 0 < vertex_count < (1 << 30)
+            and signatures[0][:2] == ((vertex_count, 3), "int32")
+            and signatures[1][:2] == ((vertex_count, 3), "float32")
+            and signatures[2][:2] == ((vertex_count, 3), "bool")
+            and signatures[3][:2] == ((vertex_count, 1), "float32")
+            and signatures[0][2] >= 0
+            and len({signature[2] for signature in signatures}) == 1):
+        return None
+
+    device = coords.device
+    aabb_tensor = torch.tensor(
+        normalized_aabb, dtype=torch.float32, device=device)
+    grid_values = (grid_size, grid_size, grid_size)
+    grid_tensor = torch.tensor(
+        grid_values, dtype=torch.int32, device=device)
+    voxel_size = (aabb_tensor[1] - aabb_tensor[0]) / grid_tensor
+
+    hashmap = (
+        torch.full(
+            (2 * vertex_count,), torch.iinfo(torch.uint32).max,
+            dtype=torch.uint32, device=device),
+        torch.empty(
+            (2 * vertex_count,), dtype=torch.uint32, device=device),
+    )
+    native.hashmap_insert_3d_idx_as_val_cuda(
+        *hashmap,
+        torch.cat([torch.zeros_like(coords[:, :1]), coords], dim=-1),
+        *grid_values,
+    )
+
+    offset_key = signatures[0][2]
+    edge_offset = _FLEXIBLE_GRID_OFFSETS.get(offset_key)
+    if edge_offset is None:
+        edge_offset = torch.tensor([
+            [[0, 0, 0], [0, 0, 1], [0, 1, 1], [0, 1, 0]],
+            [[0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1]],
+            [[0, 0, 0], [0, 1, 0], [1, 1, 0], [1, 0, 0]],
+        ], dtype=torch.int, device=device).unsqueeze(0)
+        _FLEXIBLE_GRID_OFFSETS[offset_key] = edge_offset
+
+    edge_neighbor_voxel = (
+        coords.reshape(vertex_count, 1, 1, 3) + edge_offset)
+    connected_voxel = edge_neighbor_voxel[intersected_flag]
+    connected_count = int(connected_voxel.shape[0])
+    if connected_count:
+        connected_key = torch.cat([
+            torch.zeros(
+                (connected_count * 4, 1), dtype=torch.int, device=device),
+            connected_voxel.reshape(-1, 3),
+        ], dim=1)
+        connected_indices = native.hashmap_lookup_3d_cuda(
+            *hashmap, connected_key, *grid_values,
+        ).reshape(connected_count, 4).int()
+        valid_rows = (
+            (connected_indices != 0xffffffff).all(dim=1).nonzero()[:, 0])
+    else:
+        connected_indices = torch.empty(
+            (0, 4), dtype=torch.int32, device=device)
+        valid_rows = torch.empty((0,), dtype=torch.int32, device=device)
+    return _trellis_finalize_flexible_mesh(
+        coords, dual_vertices, connected_indices, valid_rows,
+        split_weight, voxel_size, aabb_tensor,
+    )
+
+
+def _patch_flexible_grid_module(mod) -> bool:
+    original = getattr(mod, "flexible_dual_grid_to_mesh", None)
+    if original is None or not hasattr(mod, "_C") or not hasattr(mod, "torch"):
+        return False
+    if getattr(original, "_jittor_torch_fast_flexible_mesh", False):
+        mod._jittor_torch_fast_flexible_mesh = True
+        return True
+
+    def flexible_dual_grid_to_mesh(
+            coords, dual_vertices, intersected_flag, split_weight, aabb,
+            voxel_size=None, grid_size=None, train=False):
+        fast = _trellis_flexible_mesh_fast_path(
+            mod, coords, dual_vertices, intersected_flag, split_weight,
+            aabb, voxel_size=voxel_size, grid_size=grid_size, train=train)
+        if fast is not None:
+            return fast
+        return original(
+            coords, dual_vertices, intersected_flag, split_weight, aabb,
+            voxel_size=voxel_size, grid_size=grid_size, train=train)
+
+    flexible_dual_grid_to_mesh._jittor_torch_fast_flexible_mesh = True
+    flexible_dual_grid_to_mesh._jittor_torch_original = original
+    mod.flexible_dual_grid_to_mesh = flexible_dual_grid_to_mesh
+    mod._jittor_torch_fast_flexible_mesh = True
+
+    for name in ("o_voxel.convert", "trellis2.models.sc_vaes.fdg_vae"):
+        refs = sys.modules.get(name)
+        if refs is not None and getattr(
+                refs, "flexible_dual_grid_to_mesh", None) is original:
+            refs.flexible_dual_grid_to_mesh = flexible_dual_grid_to_mesh
     return True
 
 
@@ -769,6 +1169,21 @@ def _patch_loaded_flow_euler() -> bool:
     return mod is not None and _patch_flow_euler_module(mod)
 
 
+def _patch_loaded_c2s() -> bool:
+    mod = sys.modules.get(_C2S_MODULE)
+    return mod is not None and _patch_c2s_module(mod)
+
+
+def _patch_loaded_c2s_block() -> bool:
+    mod = sys.modules.get(_C2S_BLOCK_MODULE)
+    return mod is not None and _patch_c2s_block_module(mod)
+
+
+def _patch_loaded_flexible_grid() -> bool:
+    mod = sys.modules.get(_FLEXIBLE_GRID_MODULE)
+    return mod is not None and _patch_flexible_grid_module(mod)
+
+
 def _patch_loaded_dinov3() -> bool:
     mod = sys.modules.get(_DINOV3_MODULE)
     return mod is not None and _patch_dinov3_module(mod)
@@ -781,9 +1196,14 @@ def install() -> None:
     attention_done = _patch_loaded_attention()
     sparse_done = _patch_loaded_sparse_attention()
     sampler_done = _patch_loaded_flow_euler()
+    c2s_done = _patch_loaded_c2s()
+    c2s_block_done = _patch_loaded_c2s_block()
+    flexible_grid_done = _patch_loaded_flexible_grid()
     dinov3_done = _patch_loaded_dinov3()
     if (dense_done and attention_done and sparse_done
-            and sampler_done and dinov3_done):
+            and sampler_done and c2s_done and c2s_block_done
+            and flexible_grid_done
+            and dinov3_done):
         return
     for finder in sys.meta_path:
         if isinstance(finder, _TrellisRuntimeFinder):
@@ -811,6 +1231,12 @@ class _TrellisRuntimeLoader(importlib.abc.Loader):
             _patch_sparse_attention_module(module)
         if module.__name__ == _FLOW_EULER_MODULE:
             _patch_flow_euler_module(module)
+        if module.__name__ == _C2S_MODULE:
+            _patch_c2s_module(module)
+        if module.__name__ == _C2S_BLOCK_MODULE:
+            _patch_c2s_block_module(module)
+        if module.__name__ == _FLEXIBLE_GRID_MODULE:
+            _patch_flexible_grid_module(module)
         if module.__name__ == _DINOV3_MODULE:
             _patch_dinov3_module(module)
 
@@ -820,6 +1246,7 @@ class _TrellisRuntimeFinder(importlib.abc.MetaPathFinder):
         if fullname not in (
                 _DENSE_ATTENTION_MODULE, _ATTENTION_MODULE,
                 _SPARSE_ATTENTION_MODULE, _FLOW_EULER_MODULE,
+                _C2S_MODULE, _C2S_BLOCK_MODULE, _FLEXIBLE_GRID_MODULE,
                 _DINOV3_MODULE):
             return None
         spec = importlib.machinery.PathFinder.find_spec(fullname, path)
