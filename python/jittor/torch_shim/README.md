@@ -43,7 +43,10 @@ from a normal Python entrypoint. For a direct source entry, replace the first
 `metrics.py`) with:
 
 ```python
-import jiitor as torch
+import os
+os.environ.setdefault("JITTOR_TORCH_STRICT_BOOTSTRAP", "1")
+import jittor as torch
+torch.flags.torch_shim = 1
 ```
 
 For the long-running `metrics.py` evaluation entrypoint, select inference mode
@@ -52,10 +55,12 @@ before that import:
 ```python
 import os
 os.environ.setdefault("JITTOR_TORCH_INFERENCE", "1")
-import jiitor as torch
+os.environ.setdefault("JITTOR_TORCH_STRICT_BOOTSTRAP", "1")
+import jittor as torch
+torch.flags.torch_shim = 1
 ```
 
-That single import selects a project-local runtime before Jittor initializes,
+That entry sequence selects a project-local runtime before Jittor initializes,
 registers Jittor as `torch` for the remaining original modules, scans the
 checkout for PyTorch-style C++/CUDA extensions, and builds stale or missing
 extensions automatically. Runtime and build artifacts stay under
@@ -144,8 +149,9 @@ temporary files are kept under this runtime root. If Jittor's bundled CUDA is in
 `CUDA_HOME`, `nvcc_path`, `PATH` and `LD_LIBRARY_PATH` for it automatically.
 
 For a zero-edit one-command run, the helper script starts the original entry
-through `import jiitor as torch`, builds the original PyTorch-style CUDA
-extensions, and keeps runtime artifacts under the gaussian-splatting checkout:
+through the canonical Jittor package with the torch shim enabled, builds the
+original PyTorch-style CUDA extensions, and keeps runtime artifacts under the
+gaussian-splatting checkout:
 
 ```bash
 CUDA_VISIBLE_DEVICES=1 \
@@ -195,7 +201,7 @@ directory. If Jittor's bundled CUDA is installed at
 `CUDA_HOME`, `nvcc_path`, `PATH` and `LD_LIBRARY_PATH` for it automatically.
 
 The generic bootstrap was validated with direct `python train.py` runs on a
-clean checkout after only adding the single `import jiitor as torch` line above. It scanned the
+clean checkout after adding the canonical Jittor torch-shim entry above. It scanned the
 three native extension roots (`simple-knn`, `diff-gaussian-rasterization`,
 `fused-ssim`), rebuilt stale in-place `.so` outputs when the shim/toolchain stamp
 changed, skipped them on the next warm run, and completed

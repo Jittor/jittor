@@ -65,7 +65,6 @@ setuptools.setup(
         "jittor.torch_shim",
         "jittor.torch_shim.cpp_extension",
         "jittor_utils",
-        "jiitor",
     ],
     package_dir={'': 'python'},
     package_data={'': ['*', '*/*', '*/*/*','*/*/*/*','*/*/*/*/*','*/*/*/*/*/*']},

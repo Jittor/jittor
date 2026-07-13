@@ -5895,7 +5895,7 @@ def _install_init_aliases():
 
     # Keep transformers/diffusers no_init_weights() from replacing jittor's
     # construction-time init functions with no-op stubs. torch.nn is jittor.nn
-    # on the bare `import jiitor as torch` path, and jittor.nn.Conv/Linear call
+    # on the bare `import jittor as torch` path, and jittor.nn.Conv/Linear call
     # the same module-global init functions to allocate weights.
     import types as _types_init
     import sys as _sys_init
@@ -6958,7 +6958,7 @@ def _install_distributed(g):
 
 
 def _install_flash_attn_shim():
-    """Register the Jittor-backed flash_attn stub for the bare jiitor path."""
+    """Register the Jittor-backed flash_attn stub for the bare jittor path."""
     import importlib.util as _ilu
     import os as _os
     import sys as _sys

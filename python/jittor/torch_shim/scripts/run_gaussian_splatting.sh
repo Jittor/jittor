@@ -60,6 +60,7 @@ export use_cutlass="${use_cutlass:-0}"
 export use_nccl="${use_nccl:-0}"
 export use_mkl="${use_mkl:-0}"
 export JITTOR_TORCH_CUDA_EMPTY_CACHE="${JITTOR_TORCH_CUDA_EMPTY_CACHE:-gc}"
+export JITTOR_TORCH_STRICT_BOOTSTRAP="${JITTOR_TORCH_STRICT_BOOTSTRAP:-1}"
 
 export PYTHONPATH="$JT_PY_ROOT:${PYTHONPATH:-}"
 echo "[jittor-gs] python: $PYTHON_BIN"
@@ -96,7 +97,8 @@ build_exts() {
 if [[ "${1:-}" == "env" ]]; then
   JITTOR_TORCH_SKIP_EXT_BUILD=1 "$PYTHON_BIN" - <<'PY'
 import os, sys
-import jiitor as torch
+import jittor as torch
+torch.flags.torch_shim = 1
 import jittor as jt
 print("python", sys.executable)
 print("jittor", jt.__version__, jt.__file__)
@@ -121,7 +123,7 @@ if [[ "${JITTOR_GS_SKIP_EXT_BUILD:-0}" != "1" ]]; then
   build_exts
 fi
 # The explicit builds above are fail-fast and use the same generic Jittor
-# cpp_extension backend. Avoid launching a second setup.py scan when jiitor
+# cpp_extension backend. Avoid launching a second setup.py scan when Jittor
 # bootstraps the entrypoint.
 export JITTOR_TORCH_SKIP_EXT_BUILD="${JITTOR_TORCH_SKIP_EXT_BUILD:-1}"
 
@@ -154,6 +156,7 @@ import sys
 
 entry = os.path.abspath(sys.argv[1])
 sys.argv = [entry, *sys.argv[2:]]
-import jiitor as torch
+import jittor as torch
+torch.flags.torch_shim = 1
 runpy.run_path(entry, run_name="__main__")
 ' "$ENTRY" "$@"

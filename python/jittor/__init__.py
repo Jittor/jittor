@@ -60,7 +60,6 @@ def _jt_torch_entry_runtime_root():
         "jittor.torch_shim" in _head
         or "torch_shim" in _head
         or "import jittor as torch" in _head
-        or "import jiitor as torch" in _head
     ):
         return _os.path.join(_os.path.dirname(_entry), ".cache", "jittor_torch")
     return None

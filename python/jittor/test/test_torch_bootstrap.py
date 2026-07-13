@@ -71,7 +71,6 @@ class TestTorchBootstrap(unittest.TestCase):
                 for source in (
                     "from jittor.torch_shim import enable\n",
                     "import jittor as torch\n",
-                    "import jiitor as torch\n",
                 ):
                     with self.subTest(source=source.strip()):
                         with open(entry, "w") as f:
@@ -84,7 +83,7 @@ class TestTorchBootstrap(unittest.TestCase):
             finally:
                 jt._sys.argv[0] = old_argv0
 
-    def test_jiitor_entry_bootstraps_in_subprocess(self):
+    def test_jittor_entry_bootstraps_in_subprocess(self):
         with tempfile.TemporaryDirectory() as d:
             entry = os.path.join(d, "probe.py")
             os.makedirs(os.path.join(d, "scene"))
@@ -98,7 +97,9 @@ class TestTorchBootstrap(unittest.TestCase):
                     import json
                     import os
                     import sys
-                    import jiitor as torch
+                    os.environ.setdefault("JITTOR_TORCH_STRICT_BOOTSTRAP", "1")
+                    import jittor as torch
+                    torch.flags.torch_shim = 1
                     import jittor as jt
 
                     print("RESULT=" + json.dumps({
