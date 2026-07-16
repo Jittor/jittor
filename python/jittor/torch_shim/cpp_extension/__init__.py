@@ -206,6 +206,14 @@ def _jittor_config():
     # CUDA toolkit dir that jittor uses (parent of nvcc)
     nvcc = c.nvcc_path
     cuda_home = os.path.dirname(os.path.dirname(nvcc))
+    cuda_includes = list(getattr(c, "cuda_include_dirs", ()))
+    cuda_libs = list(getattr(c, "cuda_lib_dirs", ()))
+    if not cuda_includes:
+        cuda_includes = [os.path.join(cuda_home, "include")]
+    if not cuda_libs:
+        cuda_libs = [os.path.join(cuda_home, "lib64")]
+    cudart_lib = c.find_cuda_library("cudart")
+    cuda_wheel_stack = getattr(c, "cuda_wheel_stack", None)
 
     # Match torch cpp_extension's explicit arch override, otherwise compile for
     # the GPUs Jittor detected in this process. Do not inherit Jittor JIT math
@@ -221,8 +229,14 @@ def _jittor_config():
         "src_inc": os.path.join(jittor_path, "src"),
         "extern_inc": os.path.join(jittor_path, "extern"),
         "extern_cuda_inc": os.path.join(jittor_path, "extern", "cuda", "inc"),
-        "cuda_inc": os.path.join(cuda_home, "include"),
-        "cuda_lib": os.path.join(cuda_home, "lib64"),
+        "cuda_inc": cuda_includes[0],
+        "cuda_lib": cuda_libs[0],
+        "cuda_includes": cuda_includes,
+        "cuda_libs": cuda_libs,
+        "cudart_lib": cudart_lib,
+        "cuda_wheel_fingerprint": (
+            cuda_wheel_stack.fingerprint if cuda_wheel_stack else None
+        ),
         "cuda_home": cuda_home,
         "py_inc": py_inc,
         "pybind_inc": pybind_inc,
@@ -250,9 +264,9 @@ def _common_includes(c, extra):
         c["src_inc"],          # jittor core headers
         c["extern_inc"],
         c["extern_cuda_inc"],
-        c["cuda_inc"],
         c["py_inc"],
     ]
+    incs += list(c["cuda_includes"])
     if c["pybind_inc"]:
         incs.append(c["pybind_inc"])
     incs += list(c["core_dirs"])   # jittor generated headers (cu12.2.140 etc.)
@@ -264,11 +278,18 @@ def _link_flags(c):
     flags = []
     for d in c["core_dirs"]:
         flags.append(f'-L{d}')
-    flags.append(f'-L{c["cuda_lib"]}')
+        flags += ["-Xlinker", f"-rpath={d}"]
+    for d in c["cuda_libs"]:
+        flags.append(f'-L{d}')
+        flags += ["-Xlinker", f"-rpath={d}"]
     # exact-name link (no 'lib' prefix on jittor cores) -> -l:name.so
     for base, path in c["cores"].items():
         flags.append("-l:" + os.path.basename(path))
-    flags += ["-lcudart", "-lstdc++", "-ldl"]
+    if c["cudart_lib"] and os.name != "nt":
+        flags.append("-l:" + os.path.basename(c["cudart_lib"]))
+    else:
+        flags.append("-lcudart")
+    flags += ["-lstdc++", "-ldl"]
     return flags
 
 
@@ -300,11 +321,14 @@ def toolchain_signature():
         except OSError:
             shim[os.path.relpath(path, _THIS_DIR)] = None
     return {
-        "version": 3,
+        "version": 4,
         "cc_path": c["cc_path"],
         "nvcc_path": c["nvcc_path"],
         "ext_suffix": c["ext_suffix"],
         "arch_flags": list(c["arch_flags"]),
+        "cuda_libs": [os.path.realpath(path) for path in c["cuda_libs"]],
+        "cudart_lib": os.path.realpath(c["cudart_lib"]) if c["cudart_lib"] else None,
+        "cuda_wheel_fingerprint": c["cuda_wheel_fingerprint"],
         "extension_math_policy": "torch_cpp_extension_default",
         "shim_files": shim,
     }

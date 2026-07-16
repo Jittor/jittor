@@ -267,7 +267,7 @@ def include_paths(cuda=False):
         inc.append(c["pybind_inc"])
     inc += list(c["core_dirs"])
     if cuda:
-        inc.append(c["cuda_inc"])
+        inc += list(c.get("cuda_includes", (c["cuda_inc"],)))
     return [p for p in inc if p]
 
 
@@ -276,7 +276,7 @@ def library_paths(cuda=False):
     c = _b.cfg()
     libs = list(c["core_dirs"])
     if cuda:
-        libs.append(c["cuda_lib"])
+        libs += list(c.get("cuda_libs", (c["cuda_lib"],)))
     return libs
 
 

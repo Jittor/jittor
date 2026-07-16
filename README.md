@@ -115,6 +115,25 @@ python3.7 -m jittor.test.test_example
 ```
 
 
+### CUDA 12 dependencies from pip (Linux x86_64)
+
+Jittor can install and use the CUDA runtime, cuBLAS, cuDNN, cuFFT, cuRAND,
+cuSPARSE, NVTX, and NCCL from NVIDIA component wheels:
+
+```bash
+python -m pip install "jittor[cuda12]"
+python -m jittor.test.test_cuda
+```
+
+The `cuda12` extra is a reproducible CUDA 12.2/cuDNN 8 stack. Use a separate
+environment if another framework pins a different CUDA component version.
+NVIDIA's CUDA 12 pip packages do not contain the `nvcc` compiler driver, which
+Jittor needs for JIT compilation. Install CUDA 12.2 `nvcc` on the system, or let
+Jittor use its automatic JTCUDA fallback. Set `JITTOR_CUDA_WHEEL_STRICT=1` to
+turn an incomplete or mismatched component stack into an immediate error, or
+`JITTOR_CUDA_WHEEL_DISABLE=1` to use the original system/JTCUDA libraries.
+
+
 
 
 
@@ -392,5 +411,4 @@ Jittor is currently maintained by the [Tsinghua CSCG Group](https://cg.cs.tsingh
 
 
 Jittor is Apache 2.0 licensed, as found in the LICENSE.txt file.
-
 

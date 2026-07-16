@@ -10,7 +10,39 @@ import subprocess as sp
 import jittor_utils as jit_utils
 from jittor_utils import LOG
 from jittor_utils.misc import download_url_to_local
+from jittor_utils import cuda_wheel
 import pathlib
+
+
+_cuda_wheel_stacks = {}
+
+
+def _truthy(value):
+    return str(value or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _prepend_env_path(name, path):
+    paths = [p for p in os.environ.get(name, "").split(os.pathsep) if p]
+    paths = [path] + [p for p in paths if os.path.abspath(p) != os.path.abspath(path)]
+    os.environ[name] = os.pathsep.join(paths)
+
+
+def get_cuda_wheel_stack(nvcc_version=None, refresh=False):
+    """Resolve and activate Jittor's supported NVIDIA component-wheel stack."""
+
+    key = str(nvcc_version or "")
+    if not refresh and key in _cuda_wheel_stacks:
+        return _cuda_wheel_stacks[key]
+    strict = _truthy(os.environ.get("JITTOR_CUDA_WHEEL_STRICT"))
+    stack = cuda_wheel.discover_cuda_wheel_stack(nvcc_version, strict=strict)
+    _cuda_wheel_stacks[key] = stack
+    if stack:
+        # This affects compiler subprocesses and future child processes.  The
+        # current process loads every selected library by absolute path.
+        for lib_dir in reversed(stack.lib_dirs()):
+            _prepend_env_path("LD_LIBRARY_PATH", lib_dir)
+        LOG.i("Using NVIDIA CUDA pip wheels: ", stack.fingerprint)
+    return stack
 
 def get_cuda_driver_win():
     try:
@@ -56,13 +88,16 @@ def check_cuda_env():
         changed = False
         for cp in env:
             x = cp.lower()
+            if cuda_wheel.is_nvidia_wheel_path(cp):
+                new_env.append(cp)
+                continue
             if "cuda" in x and "jtcuda" not in x:
                 changed = True
                 continue
             if "jtcuda" in x:
-                new_env.insert(0, x)
+                new_env.insert(0, cp)
             else:
-                new_env.append(x)
+                new_env.append(cp)
         os.environ[key] = ":".join(new_env)
         return changed
     changed = fix_env("PATH") \

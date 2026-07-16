@@ -74,8 +74,19 @@ setuptools.setup(
         "tqdm",
         "pillow",
         "astunparse",
+        'importlib-metadata; python_version<"3.8"',
         'pywin32 >= 1.0 ; platform_system=="Windows"'
     ],
+    extras_require={
+        # NVIDIA's CUDA 11/12 pip packages provide component headers and
+        # libraries, but not the nvcc driver required by Jittor's JIT.  Keep
+        # this stack aligned with JTCUDA 12.2 and use system/JTCUDA for nvcc.
+        "cuda12": [
+            'cuda-toolkit[cublas,cudart,cufft,curand,cusparse,nvjitlink,nvrtc,nvtx]==12.2.2; sys_platform=="linux" and platform_machine=="x86_64"',
+            'nvidia-cudnn-cu12==8.9.7.29; sys_platform=="linux" and platform_machine=="x86_64"',
+            'nvidia-nccl-cu12==2.18.3; sys_platform=="linux" and platform_machine=="x86_64"',
+        ],
+    },
  )
 
 # upload to pip:

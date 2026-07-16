@@ -11,7 +11,9 @@ import jittor as jt
 import os
 import ctypes
 
-nvtx_lib_path = os.path.join(jt.compiler.cuda_lib, "libnvToolsExt.so")
+nvtx_lib_path = jt.compiler.find_cuda_library("nvToolsExt")
+if not nvtx_lib_path:
+    raise RuntimeError("NVTX library was not found in the active CUDA installation")
 nvtx_lib = ctypes.CDLL(nvtx_lib_path, jt.compiler.dlopen_flags)
 
 nvtxRangePushA = nvtx_lib.nvtxRangePushA

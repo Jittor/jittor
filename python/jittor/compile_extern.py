@@ -4,7 +4,7 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-import os, sys, shutil
+import os, sys, shutil, re
 import platform
 from .compiler import *
 from jittor_utils import run_cmd, get_version, get_int_version
@@ -15,6 +15,7 @@ def search_file(dirs, name, prefer_version=()):
     if os.name == 'nt':
         if name.startswith("lib"):
             name = name[3:].replace(".so", "64*.dll")
+    prefer_version = tuple(str(p) for p in prefer_version)
     for d in dirs:
         fname = os.path.join(d, name)
         if os.name == 'nt':
@@ -23,12 +24,21 @@ def search_file(dirs, name, prefer_version=()):
             if len(names):
                 return names[0]
             continue
-        prefer_version = tuple( str(p) for p in prefer_version )
         for i in range(len(prefer_version),-1,-1):
             vname = ".".join((fname,)+prefer_version[:i])
             if os.path.isfile(vname):
                 LOG.v(f"found {vname}")
                 return vname
+        versioned = glob.glob(fname + ".*") if ".so" in name else []
+        versioned = [path for path in versioned if os.path.isfile(path)]
+        if versioned:
+            versioned.sort(key=lambda path: (
+                os.path.basename(path).count("."),
+                len(os.path.basename(path)),
+                os.path.basename(path),
+            ))
+            LOG.v(f"found {versioned[0]}")
+            return versioned[0]
     LOG.f(f"file {name} not found in {dirs}")
 
 def install_mkl(root_folder):
@@ -86,7 +96,7 @@ def install_mkl(root_folder):
             sys.path.append(bin_path)
             os.environ["PATH"] = os.environ.get("PATH", "") + ";" + bin_path
             cmd = f"cd /d {dirname}/examples && {cc_path} {dirname}/examples/cnn_inference_f32.cpp -I{dirname}/include -Fe: {dirname}/examples/test.exe {fix_cl_flags(cc_flags).replace('-LD', '')} {dirname}/lib/mkldnn.lib"
-            
+
             assert 0 == os.system(cmd)
             assert 0 == os.system(f"{dirname}/examples/test")
         elif platform.system() == "Darwin":
@@ -196,6 +206,8 @@ def setup_cuda_extern():
     check_ld_path = split(os.environ.get("LD_LIBRARY_PATH", "")) + \
         split(os.environ.get("PATH", ""))
     for cp in check_ld_path:
+        if cuda_wheel_stack and cuda_wheel_stack.owns_path(cp):
+            continue
         cp = cp.lower()
         if "cuda" in cp and \
             "lib" in cp and \
@@ -267,7 +279,18 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
     if link:
         extra_include_path = os.path.abspath(os.path.join(cuda_include, "..", f"targets/{arch_key}-linux/include"))
         extra_lib_path = os.path.abspath(os.path.join(cuda_lib, "..", f"targets/{arch_key}-linux/lib"))
-        cuda_include_name = search_file([cuda_include, extra_include_path, "/usr/include"], lib_name+".h")
+        component_include_dirs = []
+        component_lib_dirs = []
+        if cuda_wheel_stack:
+            component_include_dirs = cuda_wheel_stack.include_dirs(lib_name)
+            component_lib_dirs = cuda_wheel_stack.lib_dirs(lib_name)
+        include_search_dirs = component_include_dirs + [cuda_include, extra_include_path, "/usr/include"]
+        library_search_dirs = component_lib_dirs + [
+            cuda_bin, cuda_lib, extra_lib_path,
+            f"/usr/lib/{arch_key}-linux-gnu", "/usr/lib",
+        ]
+        cuda_include_name = search_file(include_search_dirs, lib_name+".h")
+        extra_flags = f' -I"{os.path.dirname(cuda_include_name)}" ' + extra_flags
         # cuda11 prefer cudnn 8
         nvcc_version = get_int_version(nvcc_path)
         if globals().get("has_corex", False):
@@ -275,12 +298,14 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
         prefer_version = ()
         if nvcc_version[0] == 11:
             prefer_version = ("8",)
-        culib_path = search_file([cuda_bin, cuda_lib, extra_lib_path, f"/usr/lib/{arch_key}-linux-gnu", "/usr/lib"], f"lib{lib_name}.so", prefer_version)
+        culib_path = search_file(library_search_dirs, f"lib{lib_name}.so", prefer_version)
+        if cuda_wheel_stack:
+            preload_cuda_library(lib_name, required=True)
 
         if lib_name == "cublas" and nvcc_version[0] >= 10:
             # manual link libcublasLt.so
             try:
-                cublas_lt_lib_path = search_file([cuda_bin, cuda_lib, extra_lib_path, f"/usr/lib/{arch_key}-linux-gnu", "/usr/lib"], f"libcublasLt.so", nvcc_version)
+                cublas_lt_lib_path = search_file(library_search_dirs, f"libcublasLt.so", nvcc_version)
                 ctypes.CDLL(cublas_lt_lib_path, dlopen_flags)
             except:
                 # some aarch64 os, such as uos with FT2000 cpu,
@@ -290,22 +315,51 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
 
 
         if lib_name == "cudnn":
-            # cudnn cannot found libcudnn_cnn_train.so.8, we manual link for it.
-            if nvcc_version >= (11,0,0):
-                libs = ["libcudnn_ops_infer.so", "libcudnn_ops_train.so", "libcudnn_cnn_infer.so", "libcudnn_cnn_train.so"]
+            match = re.search(
+                r"\.so\.(\d+)", os.path.basename(os.path.realpath(culib_path))
+            )
+            cudnn_major = int(match.group(1)) if match else None
+            if cudnn_major is None:
+                version_header = os.path.join(
+                    os.path.dirname(cuda_include_name), "cudnn_version.h"
+                )
+                try:
+                    with open(version_header, "r", encoding="utf-8") as f:
+                        version_text = f.read()
+                    match = re.search(
+                        r"^\s*#\s*define\s+CUDNN_MAJOR\s+(\d+)",
+                        version_text,
+                        re.MULTILINE,
+                    )
+                    cudnn_major = int(match.group(1)) if match else None
+                except OSError:
+                    pass
+            if cudnn_major and cudnn_major >= 9:
+                raise RuntimeError(
+                    "Jittor currently requires cuDNN 8; cuDNN %s uses removed legacy RNN APIs. "
+                    "Install jittor[cuda12] for cuDNN 8.9.7." % cudnn_major
+                )
+            # cuDNN 8 wheels contain only versioned split libraries.  Load all
+            # six before the public library so RNN and convolution symbols are
+            # available without relying on LD_LIBRARY_PATH.
+            if nvcc_version >= (11,0,0) and not cuda_wheel_stack:
+                libs = [
+                    "libcudnn_ops_infer.so", "libcudnn_ops_train.so",
+                    "libcudnn_cnn_infer.so", "libcudnn_cnn_train.so",
+                    "libcudnn_adv_infer.so", "libcudnn_adv_train.so",
+                ]
                 for l in libs:
-                    ex_cudnn_path = search_file([cuda_bin, cuda_lib, extra_lib_path, f"/usr/lib/{arch_key}-linux-gnu", "/usr/lib"], l, prefer_version)
+                    ex_cudnn_path = search_file(library_search_dirs, l, ("8",))
                     ctypes.CDLL(ex_cudnn_path, dlopen_flags)
 
-        # dynamic link cuda library
-        # ctypes.CDLL(culib_path, dlopen_flags)
-        # link_flags = f"-l{lib_name} -L\"{cuda_lib}\""
-        link_flags = f"-l{lib_name} -L\"{os.path.dirname(culib_path)}\""
+        if not cuda_wheel_stack:
+            ctypes.CDLL(culib_path, dlopen_flags)
+        link_flags = cuda_library_link_flags(lib_name, culib_path)
         # print("link_flags", link_flags, culib_path)
 
         if lib_name == "cusparse" :
             try:
-                cusparse_spmv_path = search_file([cuda_lib, extra_lib_path], "libcusparse.so")
+                cusparse_spmv_path = search_file(library_search_dirs, "libcusparse.so")
                 ctypes.CDLL(cusparse_spmv_path, dlopen_flags)
             except:
                 LOG.w("Failed to load cusparse-specific shared libraries.")
@@ -577,17 +631,23 @@ def setup_nccl():
     if not use_nccl: return
     nccl_include_path = os.environ.get("nccl_include_path")
     nccl_lib_path = os.environ.get("nccl_lib_path")
+    nccl_lib_name = None
     
     if nccl_lib_path is None or nccl_include_path is None:
-        LOG.v("setup nccl...")
-        # nccl_path decouple with cc_path
-        nccl_path = os.path.join(jit_utils.home(), ".cache", "jittor", "nccl")
-        
-        make_cache_dir(nccl_path)
-        nccl_home = install_nccl(nccl_path)
-        if nccl_home is None: return
-        nccl_include_path = os.path.join(nccl_home, "build", "include")
-        nccl_lib_path = os.path.join(nccl_home, "build", "lib")
+        if cuda_wheel_stack:
+            nccl_include_path = cuda_wheel_stack.include_dirs("nccl")[0]
+            nccl_lib_path = cuda_wheel_stack.lib_dirs("nccl")[0]
+            nccl_lib_name = cuda_wheel_stack.find_library("nccl")
+        else:
+            LOG.v("setup nccl...")
+            # nccl_path decouple with cc_path
+            nccl_path = os.path.join(jit_utils.home(), ".cache", "jittor", "nccl")
+
+            make_cache_dir(nccl_path)
+            nccl_home = install_nccl(nccl_path)
+            if nccl_home is None: return
+            nccl_include_path = os.path.join(nccl_home, "build", "include")
+            nccl_lib_path = os.path.join(nccl_home, "build", "lib")
         
     # MPI-free env/file rendezvous: build NCCL ops even without MPI (compile the
     # MPI bootstrap branch out via -DJT_NCCL_NO_MPI). This is the no-mpirun path.
@@ -595,7 +655,8 @@ def setup_nccl():
     if not inside_mpi() and not _nccl_envfile:
         return
 
-    nccl_lib_name = os.path.join(nccl_lib_path, "libnccl.so")
+    if nccl_lib_name is None:
+        nccl_lib_name = search_file([nccl_lib_path], "libnccl.so")
     assert os.path.isdir(nccl_include_path)
     assert os.path.isdir(nccl_lib_path)
     assert os.path.isfile(nccl_lib_name), nccl_lib_name
@@ -603,7 +664,10 @@ def setup_nccl():
     LOG.v(f"nccl_lib_path: {nccl_lib_path}")
     LOG.v(f"nccl_lib_name: {nccl_lib_name}")
     # We do not link manualy, link in custom ops
-    ctypes.CDLL(nccl_lib_name, dlopen_flags)
+    if cuda_wheel_stack:
+        preload_cuda_library("nccl", required=True)
+    else:
+        ctypes.CDLL(nccl_lib_name, dlopen_flags)
 
     nccl_src_dir = os.path.join(jittor_path, "extern", "cuda", "nccl")
     nccl_src_files = []
@@ -622,7 +686,10 @@ def setup_nccl():
     else:
         _mpi_flags = mpi_compile_flags
     nccl = compile_custom_ops(nccl_src_files,
-        extra_flags=f" -I\"{nccl_include_path}\" {_mpi_flags} ",
+        extra_flags=(
+            f" -I\"{nccl_include_path}\" {_mpi_flags} "
+            + cuda_library_link_flags("nccl", nccl_lib_name)
+        ),
         return_module=True, dlopen_flags=os.RTLD_GLOBAL | os.RTLD_NOW,
         gen_name_="jittor_nccl_core")
     nccl_ops = nccl.ops

@@ -842,10 +842,76 @@ def compile_extern():
             break
     LOG.vv(f"Compile extern llvm passes: {str(files)}")
 
+
+cuda_wheel_stack = None
+cuda_include_dirs = []
+cuda_lib_dirs = []
+cuda_runtime_lib = ""
+_loaded_cuda_libraries = {}
+
+
+def _cuda_library_sort_key(path):
+    name = os.path.basename(path)
+    return (name.count("."), len(name), name)
+
+
+def find_cuda_library(name, component=None):
+    """Find a CUDA library, including wheel-only versioned SONAME files."""
+
+    if cuda_wheel_stack:
+        path = cuda_wheel_stack.find_library(name, component)
+        if path:
+            return path
+    dirs = cuda_lib_dirs or [globals().get("cuda_lib", ""), globals().get("cuda_bin", "")]
+    if os.name == "nt":
+        patterns = (name + "64*.dll", name + "*.dll")
+    elif platform.system() == "Darwin":
+        patterns = ("lib" + name + ".dylib", "lib" + name + ".*.dylib")
+    else:
+        patterns = ("lib" + name + ".so", "lib" + name + ".so.*")
+    matches = []
+    for directory in dirs:
+        if not directory:
+            continue
+        for pattern in patterns:
+            matches.extend(glob.glob(os.path.join(directory, pattern)))
+    matches = [os.path.abspath(path) for path in matches if os.path.isfile(path)]
+    if not matches:
+        return None
+    matches.sort(key=_cuda_library_sort_key)
+    return matches[0]
+
+
+def cuda_library_link_flags(name, path=None):
+    path = path or find_cuda_library(name)
+    if not path:
+        raise RuntimeError("CUDA library lib%s was not found" % name)
+    directory = os.path.dirname(path)
+    if os.name == "nt":
+        return '-L"%s" -l%s' % (directory, name)
+    return '-L"%s" -l:%s' % (directory, os.path.basename(path))
+
+
+def preload_cuda_library(name, required=False):
+    """Load a CUDA library and its wheel dependencies into the global scope."""
+
+    if cuda_wheel_stack:
+        paths = cuda_wheel_stack.preload_paths(name)
+    else:
+        path = find_cuda_library(name)
+        paths = [path] if path else []
+    if required and not paths:
+        raise RuntimeError("CUDA library lib%s was not found" % name)
+    for path in paths:
+        if path not in _loaded_cuda_libraries:
+            _loaded_cuda_libraries[path] = ctypes.CDLL(path, dlopen_flags)
+    return _loaded_cuda_libraries.get(paths[-1]) if paths else None
+
 def check_cuda():
     if not nvcc_path:
         return
     global cc_flags, has_cuda, is_cuda, core_link_flags, cuda_dir, cuda_lib, cuda_include, cuda_home, cuda_bin
+    global cuda_include_dirs, cuda_lib_dirs, cuda_runtime_lib
     cuda_dir = os.path.dirname(get_full_path_of_executable(nvcc_path))
     cuda_bin = cuda_dir
     cuda_home = os.path.abspath(os.path.join(cuda_dir, ".."))
@@ -856,8 +922,21 @@ def check_cuda():
     if nvcc_path == "/usr/bin/nvcc":
         # this nvcc is install by package manager
         cuda_lib = "/usr/lib/x86_64-linux-gnu"
+    cuda_include_dirs = [cuda_include]
+    cuda_lib_dirs = [cuda_lib, cuda_bin]
+    if cuda_wheel_stack:
+        cuda_include_dirs = cuda_wheel_stack.include_dirs() + cuda_include_dirs
+        cuda_lib_dirs = cuda_wheel_stack.lib_dirs() + cuda_lib_dirs
+    cuda_include_dirs = list(dict.fromkeys(
+        path for path in cuda_include_dirs if os.path.isdir(path)
+    ))
+    cuda_lib_dirs = list(dict.fromkeys(
+        path for path in cuda_lib_dirs if os.path.isdir(path)
+    ))
     cuda_include2 = os.path.join(jittor_path, "extern","cuda","inc")
-    cc_flags += f" -DHAS_CUDA -DIS_CUDA -I\"{cuda_include}\" -I\"{cuda_include2}\" "
+    cc_flags += " -DHAS_CUDA -DIS_CUDA "
+    cc_flags += "".join(f' -I"{path}"' for path in cuda_include_dirs)
+    cc_flags += f" -I\"{cuda_include2}\" "
     if os.name == 'nt':
         cuda_lib = os.path.abspath(os.path.join(cuda_dir, "..", "lib", "x64"))
         # cc_flags += f" \"{cuda_lib}\\cudart.lib\" "
@@ -867,9 +946,14 @@ def check_cuda():
         ret = dll.cudaDeviceSynchronize()
         assert ret == 0
     else:
-        cc_flags += f" -lcudart -L\"{cuda_lib}\" "
-        # ctypes.CDLL(cuda_lib+"/libcudart.so", import_flags)
-        ctypes.CDLL(cuda_lib+"/libcudart.so", dlopen_flags)
+        cuda_runtime_lib = find_cuda_library("cudart")
+        if not cuda_runtime_lib:
+            raise RuntimeError(
+                "CUDA compiler was found, but libcudart was not found in %s"
+                % cuda_lib_dirs
+            )
+        cc_flags += " " + cuda_library_link_flags("cudart", cuda_runtime_lib) + " "
+        preload_cuda_library("cudart", required=True)
     is_cuda = has_cuda = 1
 
 def check_cache_compile():
@@ -1000,6 +1084,9 @@ if nvcc_path:
     v = jit_utils.get_version(nvcc_path)[1:-1]
     nvcc_version = list(map(int,v.split('.')))
     cu += v
+    cuda_wheel_stack = install_cuda.get_cuda_wheel_stack(v)
+    if cuda_wheel_stack:
+        cu += "_" + cuda_wheel_stack.fingerprint
     try:
         r, s = sp.getstatusoutput(f"log_v=0 {sys.executable} -m jittor_utils.query_cuda_cc")
         if r==0:
@@ -1080,7 +1167,9 @@ def fix_cl_flags(cmd):
     output2 = []
     libpaths = []
     for s in output:
-        if s.startswith("-l") and ("cpython" in s or "lib" in s):
+        if s.startswith("-l:"):
+            output2.append(s)
+        elif s.startswith("-l") and ("cpython" in s or "lib" in s):
             if platform.system() == 'Darwin':
                 fname = s[2:] + ".so"
                 for path in reversed(libpaths):

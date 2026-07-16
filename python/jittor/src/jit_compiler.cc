@@ -104,7 +104,10 @@ string fix_cl_flags(const string& cmd, bool is_cuda) {
     #endif
     
     for (auto& f : flags) {
-        if (startswith(f, "-l") && 
+        if (startswith(f, "-l:")) {
+            output.push_back(f);
+        }
+        else if (startswith(f, "-l") &&
             (f.find("cpython") != string::npos ||
              f.find("lib") != string::npos)) {
             #ifdef __APPLE__
