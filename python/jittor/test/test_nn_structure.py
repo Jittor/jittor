@@ -22,6 +22,7 @@ from jittor._nn import layer_norm_cuda
 from jittor._nn import losses
 from jittor._nn import normalization
 from jittor._nn import padding
+from jittor._nn import pooling
 from jittor._nn import recurrent_base
 from jittor._nn import recurrent_cells
 from jittor._nn import recurrent_layers
@@ -32,7 +33,7 @@ from jittor._nn import vector
 _IMPLEMENTATION_MODULES = (
     activations, convolution, convolution_3d_layers, convolution_cudnn,
     convolution_layers, convolution_transpose, convolution_transpose_layers,
-    layer_norm_cuda, losses, normalization, padding, recurrent_base,
+    layer_norm_cuda, losses, normalization, padding, pooling, recurrent_base,
     recurrent_cells, recurrent_layers, softmax, vector,
 )
 _ACL_PATCHED_SYMBOLS = {"Conv", "conv2d", "relu", "leaky_relu", "softmax"}
@@ -622,6 +623,174 @@ class TestNNStructure(unittest.TestCase):
                 self.assertEqual(tuple(instance.state_dict()), ())
                 self.assertEqual(tuple(restored.state_dict()), ())
 
+    def test_pooling_public_contracts_remain_stable(self):
+        from jittor import pool
+
+        function_signatures = (
+            (
+                "adaptive_avg_pool2d",
+                "(input, output_size)",
+            ),
+            (
+                "avg_pool2d",
+                "(x, kernel_size, stride=None, padding=0, ceil_mode=False, "
+                "count_include_pad=True)",
+            ),
+        )
+        for name, signature in function_signatures:
+            implementation = getattr(pooling, name)
+            with self.subTest(function=name):
+                self.assertIs(getattr(nn, name), implementation)
+                self.assertIs(getattr(nn.functional, name), implementation)
+                self.assertEqual(str(inspect.signature(implementation)), signature)
+                self.assertEqual(implementation.__module__, "jittor.nn")
+                self.assertEqual(implementation.__qualname__, name)
+                self.assertIs(pickle.loads(pickle.dumps(implementation)), implementation)
+
+        class_signatures = (
+            (
+                pooling.AvgPool2d,
+                "(kernel_size, stride=None, padding=0, ceil_mode=False, "
+                "count_include_pad=True)",
+            ),
+            (pooling.AdaptiveAvgPool2d, "(output_size)"),
+        )
+        for cls, signature in class_signatures:
+            with self.subTest(cls=cls.__name__):
+                self.assertIs(getattr(nn, cls.__name__), cls)
+                self.assertIs(getattr(nn.modules, cls.__name__), cls)
+                self.assertIs(cls.__mro__[1], nn.Module)
+                self.assertEqual(str(inspect.signature(cls)), signature)
+                self.assertEqual(cls.__module__, "jittor.nn")
+                self.assertEqual(cls.__qualname__, cls.__name__)
+                self.assertEqual(cls.__init__.__module__, "jittor.nn")
+                self.assertEqual(cls.execute.__module__, "jittor.nn")
+                self.assertIs(pickle.loads(pickle.dumps(cls)), cls)
+
+        self.assertIsNot(nn.AvgPool2d, pool.AvgPool2d)
+        self.assertIsNot(nn.AdaptiveAvgPool2d, pool.AdaptiveAvgPool2d)
+        self.assertIsNot(nn.avg_pool2d, pool.avg_pool2d)
+
+        pool_reexports = (
+            "AdaptiveAvgPool1d", "AdaptiveAvgPool3d", "AdaptiveMaxPool2d",
+            "AdaptiveMaxPool3d", "AvgPool1d", "AvgPool3d", "MaxPool1d",
+            "MaxPool2d", "MaxPool3d", "MaxUnpool2d", "MaxUnpool3d",
+            "Pool", "Pool3d", "max_pool2d", "max_pool3d", "pool",
+            "pool2d", "pool3d",
+        )
+        for name in pool_reexports:
+            with self.subTest(pool_reexport=name):
+                public = getattr(nn, name)
+                source = getattr(pool, name)
+                if name == "Pool" and public is not source:
+                    self.assertTrue(_is_acl_wrapper(public))
+                else:
+                    self.assertIs(public, source)
+        self.assertIsInstance(nn.pool_use_code_op, bool)
+        if not jittor.compiler.has_acl:
+            self.assertIs(nn.pool_use_code_op, pool.pool_use_code_op)
+        self.assertIs(nn.pool2d, nn.pool)
+        self.assertIs(nn.pool.__globals__["Pool"], pool.Pool)
+        self.assertIs(nn.max_pool2d.__globals__["MaxPool2d"], pool.MaxPool2d)
+
+        instance_contracts = (
+            (
+                pooling.AvgPool2d(2),
+                (
+                    ("kernel_size", 2), ("stride", 2), ("padding", 0),
+                    ("ceil_mode", False), ("count_include_pad", True),
+                ),
+            ),
+            (
+                pooling.AdaptiveAvgPool2d(2),
+                (("output_size", 2),),
+            ),
+        )
+        for instance, attributes in instance_contracts:
+            restored = pickle.loads(pickle.dumps(instance))
+            with self.subTest(instance=type(instance).__name__):
+                self.assertIs(type(restored), type(instance))
+                self.assertEqual(tuple(instance.__dict__.items()), attributes)
+                self.assertEqual(tuple(restored.__dict__.items()), attributes)
+                self.assertEqual(tuple(instance.state_dict()), ())
+                self.assertEqual(tuple(restored.state_dict()), ())
+
+    def test_pooling_implementations_dispatch_through_public_facade(self):
+        marker = object()
+
+        average_calls = []
+        original_average = nn.AvgPool2d
+
+        class FakeAverage:
+            def __init__(self, *args):
+                average_calls.append(args)
+
+            def __call__(self, value):
+                average_calls.append(value)
+                return marker
+
+        nn.AvgPool2d = FakeAverage
+        try:
+            self.assertIs(
+                pooling.avg_pool2d("input", 3, 2, 1, True, False),
+                marker,
+            )
+        finally:
+            nn.AvgPool2d = original_average
+        self.assertEqual(average_calls, [(3, 2, 1, True, False), "input"])
+
+        adaptive_calls = []
+        original_adaptive = nn.AdaptiveAvgPool2d
+
+        class FakeAdaptive:
+            def __init__(self, output_size):
+                adaptive_calls.append(output_size)
+
+            def __call__(self, value):
+                adaptive_calls.append(value)
+                return marker
+
+        nn.AdaptiveAvgPool2d = FakeAdaptive
+        try:
+            self.assertIs(pooling.adaptive_avg_pool2d("input", (2, 3)), marker)
+        finally:
+            nn.AdaptiveAvgPool2d = original_adaptive
+        self.assertEqual(adaptive_calls, [(2, 3), "input"])
+
+        pair_calls = []
+        original_pair = nn._pair
+
+        def replacement_pair(value):
+            pair_calls.append(value)
+            return (value, value)
+
+        class FakeTensor:
+            shape = (1, 1, 5, 5)
+
+            def reindex(self, *args, **kwargs):
+                return self
+
+            def reduce(self, *args, **kwargs):
+                return self
+
+            def __truediv__(self, value):
+                return self
+
+        holder = python_types.SimpleNamespace(
+            kernel_size=2,
+            stride=3,
+            padding=0,
+            ceil_mode=False,
+            count_include_pad=True,
+        )
+        fake_tensor = FakeTensor()
+        nn._pair = replacement_pair
+        try:
+            self.assertIs(pooling.AvgPool2d.execute(holder, fake_tensor), fake_tensor)
+        finally:
+            nn._pair = original_pair
+        self.assertEqual(pair_calls, [2, 3, 0])
+
     def test_recurrent_implementations_dispatch_through_public_facade(self):
         class Marker:
             def __add__(self, other):
@@ -747,7 +916,7 @@ class TestNNStructure(unittest.TestCase):
 
     def test_source_files_stay_within_architecture_budgets(self):
         facade_path = Path(nn.__file__).resolve()
-        self.assertLessEqual(len(facade_path.read_text(encoding="utf-8").splitlines()), 2600)
+        self.assertLessEqual(len(facade_path.read_text(encoding="utf-8").splitlines()), 2500)
         for module in _IMPLEMENTATION_MODULES:
             path = Path(module.__file__).resolve()
             with self.subTest(path=path.name):
