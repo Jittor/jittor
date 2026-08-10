@@ -10,12 +10,16 @@ import unittest
 import jittor
 import jittor.nn as nn
 from jittor._nn import activations
+from jittor._nn import layer_norm_cuda
 from jittor._nn import losses
+from jittor._nn import normalization
 from jittor._nn import softmax
 from jittor._nn import vector
 
 
-_IMPLEMENTATION_MODULES = (activations, losses, softmax, vector)
+_IMPLEMENTATION_MODULES = (
+    activations, layer_norm_cuda, losses, normalization, softmax, vector,
+)
 _ACL_PATCHED_FUNCTIONS = {"relu", "leaky_relu", "softmax"}
 
 
@@ -104,6 +108,77 @@ class TestNNStructure(unittest.TestCase):
             nn.softmax = original
         self.assertEqual(calls, [(('input',), {'dim': 3, 'log': True})])
 
+    def test_normalization_helpers_dispatch_through_public_facade(self):
+        class Marker:
+            ndim = 3
+            shape = (1, 2, 3)
+
+            def reshape(self, *args):
+                return self
+
+            def __mul__(self, other):
+                return self
+
+            __rmul__ = __mul__
+
+            def __add__(self, other):
+                return self
+
+            __radd__ = __add__
+
+        marker = Marker()
+        original_normalize = nn._ln_normalize
+        normalize_calls = []
+
+        def replacement_normalize(x, dims, eps):
+            normalize_calls.append((x, dims, eps))
+            return marker
+
+        nn._ln_normalize = replacement_normalize
+        try:
+            self.assertIs(
+                nn.instance_norm(marker, weight=None, bias=None),
+                marker,
+            )
+            self.assertIs(nn.group_norm(marker, 1), marker)
+        finally:
+            nn._ln_normalize = original_normalize
+        self.assertEqual([call[1] for call in normalize_calls], [[2], [2, 3]])
+
+        original_factory = nn._ln_function_cls
+
+        class FakeFunction:
+            @staticmethod
+            def apply(value):
+                return value
+
+        nn._ln_function_cls = lambda dims, eps: FakeFunction
+        try:
+            self.assertIs(nn._ln_normalize(marker, [2], 1e-5), marker)
+        finally:
+            nn._ln_function_cls = original_factory
+
+    def test_normalization_public_contracts_remain_stable(self):
+        for name in ("batch_norm", "instance_norm", "layer_norm", "group_norm"):
+            with self.subTest(function=name):
+                self.assertIs(getattr(nn.functional, name), getattr(nn, name))
+
+        for cls in (nn.BatchNorm, nn.InstanceNorm, nn.LayerNorm, nn.GroupNorm):
+            with self.subTest(cls=cls.__name__):
+                self.assertEqual(cls.__module__, "jittor.nn")
+                self.assertEqual(cls.__init__.__module__, "jittor.nn")
+                if cls is nn.LayerNorm and _is_acl_wrapper(cls.execute):
+                    pass
+                else:
+                    self.assertEqual(cls.execute.__module__, "jittor.nn")
+                self.assertIs(pickle.loads(pickle.dumps(cls)), cls)
+
+        cached_cls = nn._ln_function_cls((-1,), 1e-5)
+        self.assertEqual(nn._ln_function_cls.__wrapped__.__module__, "jittor.nn")
+        self.assertEqual(cached_cls.__module__, "jittor.nn")
+        self.assertEqual(cached_cls.execute.__module__, "jittor.nn")
+        self.assertEqual(cached_cls.grad.__module__, "jittor.nn")
+
     def test_tensor_method_bindings_remain_on_public_functions(self):
         for name in ("prelu", "hardswish", "hardsigmoid", "rrelu"):
             with self.subTest(name=name):
@@ -128,6 +203,9 @@ class TestNNStructure(unittest.TestCase):
         self.assertIs(nn.InstanceNorm1d, nn.InstanceNorm)
         self.assertIs(nn.InstanceNorm2d, nn.InstanceNorm)
         self.assertIs(nn.InstanceNorm3d, nn.InstanceNorm)
+        self.assertIs(nn.LayerNorm1d, nn.LayerNorm)
+        self.assertIs(nn.LayerNorm2d, nn.LayerNorm)
+        self.assertIs(nn.LayerNorm3d, nn.LayerNorm)
         if nn.Conv2d is not nn.Conv:
             self.assertTrue(_is_acl_wrapper(nn.Conv2d))
             self.assertTrue(_is_acl_wrapper(nn.Conv))
@@ -188,7 +266,7 @@ class TestNNStructure(unittest.TestCase):
 
     def test_source_files_stay_within_architecture_budgets(self):
         facade_path = Path(nn.__file__).resolve()
-        self.assertLessEqual(len(facade_path.read_text(encoding="utf-8").splitlines()), 4800)
+        self.assertLessEqual(len(facade_path.read_text(encoding="utf-8").splitlines()), 4400)
         for module in _IMPLEMENTATION_MODULES:
             path = Path(module.__file__).resolve()
             with self.subTest(path=path.name):

@@ -127,17 +127,26 @@ stdlib
 移动根 `Module`；CUDA LayerNorm 快路径、cuDNN RNN 和 convolution 后端必须随各自
 领域整体审计，不能只搬 Python 类壳。
 
-### 第三批：继续收敛 `nn.py`
+### 第三批：normalization
 
-按 normalization、RNN、convolution 顺序继续迁移，仍保持每批可独立回归。纯函数
-拆分已经建立的 `_nn.runtime`、元数据恢复和结构预算应直接复用，不再创建第二套机制。
+已将 `batch_norm`、`instance_norm`、`group_norm`、稳定反向 helper 和完整 CUDA
+LayerNorm no-grad kernel 拆到 `_nn/normalization.py` 与
+`_nn/layer_norm_cuda.py`。四个 `Module` 类、别名、`fp32_guard` 和装饰后的
+`layer_norm` 留在 facade，保留 ACL 对 `LayerNorm.execute` 的原位补丁、Torch shim
+类身份、MPI 状态和公开 helper monkeypatch 行为。
 
-### 第四批：`misc.py` 与 `torch_shim/torch__init__.py`
+### 第四批：RNN 与 convolution
+
+RNN 应连同递推、参数布局和 cuDNN 路径整体迁移；convolution 最后处理 backend、
+depthwise、transpose 和别名网络。仍保持每批可独立回归，复用现有 runtime、元数据
+恢复和结构预算机制。
+
+### 第五批：`misc.py` 与 `torch_shim/torch__init__.py`
 
 按 shape/indexing、reduction/scatter、序列操作拆 `misc.py`；按 nn、optim、cuda、
 distributed、data 和 stub 注册拆 shim。每批只移动一个可独立回归的领域。
 
-### 第五批：启动与运行时
+### 第六批：启动与运行时
 
 抽出 `_version.py` 和仅标准库的 `_bootstrap/`，再逐步分离 core loader、compiler
 和 backend controller。根 `__init__.py` 最后收敛为严格排序的 composition root。

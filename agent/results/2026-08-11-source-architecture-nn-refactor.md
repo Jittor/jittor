@@ -1,5 +1,8 @@
 # 2026-08-11 源码架构重构第二批：`nn.py`
 
+> 后续进展：normalization functional 与 CUDA fast path 已在
+> [第三批报告](2026-08-11-source-architecture-normalization-refactor.md)完成并验证。
+
 ## 结论
 
 完成源码现代化第二批：`python/jittor/nn.py` 从 5,220 行降到 4,675 行，29 个低耦合

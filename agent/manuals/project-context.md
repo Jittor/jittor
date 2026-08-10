@@ -41,6 +41,13 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
 > **分支**：所有人/agent 都在 **`2.0`**（= 原 `acl-perf-and-fixes` 推到远程；动手前 `git branch --show-current` 确认）。分叉前的所有进展/日志现在都是**公共知识**。
 
 ### ✅ 已完成并验证（在 `2.0`）
+- **源码架构重构第三批**：normalization functional、稳定反向 helper 和完整 CUDA
+  LayerNorm no-grad kernel 拆入 `_nn/normalization.py` 与
+  `_nn/layer_norm_cuda.py`；四个公开类继续留在 facade，保住 ACL、Torch shim、MPI
+  和 monkeypatch 契约。`nn.py` 从 4,675 行降到 4,306 行，CUDA 50/50、CPU
+  结构/行为/OpInfo 76 项中 69 通过、7 项按环境或能力跳过，隔离 wheel 51 项通过
+  43 项、跳过 8 项。详见
+  [第三批报告](../results/2026-08-11-source-architecture-normalization-refactor.md)。
 - **源码架构重构第二批**：`nn.py` 从 5,220 行降到 4,675 行，29 个纯函数按
   activation、loss、softmax、vector 拆入 6 文件的 `_nn` 私有包；公开模块身份、
   pickle、`Var` 绑定、历史别名和 ACL 动态重绑均由结构契约保护。CPU 新增/兼容/
