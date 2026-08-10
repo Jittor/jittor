@@ -41,6 +41,14 @@ transformers / LlamaFactory / diffusers，**NVIDIA 与华为昇腾（910B）双�
 > **分支**：所有人/agent 都在 **`2.0`**（= 原 `acl-perf-and-fixes` 推到远程；动手前 `git branch --show-current` 确认）。分叉前的所有进展/日志现在都是**公共知识**。
 
 ### ✅ 已完成并验证（在 `2.0`）
+- **源码架构重构第一批**：最大 Python 文件 `torch_compat.py` 从 11,008 行降到
+  8,683 行，类型/设备、梯度、nested tensor、序列化、纯函数、optimizer 和
+  scheduler 拆入 9 个 `_torch_compat` 私有模块；公开 facade 身份、pickle、安装
+  顺序和导入方向有结构契约。测试 runner 同步拆分并修复假绿退出码。CPU 共 145 项
+  （143 通过、2 skip）；CUDA 主兼容 172/172、隔离 wheel 导入均通过。详见
+  [源码架构重构报告](../results/2026-08-11-source-architecture-refactor.md)和
+  [源码架构规范](design/source-architecture.md)。后续继续拆 `nn.py`、`misc.py` 和
+  torch shim，本项不代表整体重构完成。
 - **CUDA 12 pip component wheels**：新增 `jittor[cuda12]`，固定 CUDA
   12.2/cuDNN 8/NCCL 版本；分散 include/lib、versioned SONAME、RPATH、
   RTLD_GLOBAL 预加载、cache fingerprint 已接入。JTCUDA 回归和隔离 wheel

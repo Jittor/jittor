@@ -5,6 +5,7 @@
 - [复数 dtype 设计](design/complex-dtype.md)
 - [并行编译段错误分析](design/parallel-compiler-segfault.md)
 - [测试系统设计](design/test-system.md)
+- [源码架构与渐进式拆分规范](design/source-architecture.md)
 
 新增设计说明放入 `design/`，文件名使用稳定的主题名；阶段性执行结果应写入
 `../results/`，不要继续把报告混入 skill 目录。

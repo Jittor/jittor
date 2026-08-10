@@ -59,6 +59,7 @@ setuptools.setup(
 
     packages=[
         "jittor",
+        "jittor._torch_compat",
         "jittor.test",
         "jittor.models",
         "jittor.utils",
